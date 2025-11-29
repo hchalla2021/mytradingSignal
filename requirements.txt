@@ -1,0 +1,3 @@
+# Redirect to backend requirements
+# This file is for Render deployment only
+-r backend/requirements.txt
