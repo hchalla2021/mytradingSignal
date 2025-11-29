@@ -3,6 +3,8 @@
 import { useEffect } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 
+const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+
 export default function AuthCallback() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -13,7 +15,7 @@ export default function AuthCallback() {
 
     if (status === 'success' && requestToken) {
       // Send token to backend
-      fetch(`http://localhost:8000/api/auth/set-token?request_token=${requestToken}`, {
+      fetch(`${API_URL}/api/auth/set-token?request_token=${requestToken}`, {
         method: 'POST',
       })
         .then(response => response.json())
