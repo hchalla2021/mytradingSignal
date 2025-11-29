@@ -151,50 +151,16 @@ export default function Home() {
   const handleLogin = async () => {
     try {
       const response = await axios.get(`${API_URL}/api/auth/login-url`);
-      const width = 600;
-      const height = 700;
-      const left = (window.screen.width / 2) - (width / 2);
-      const top = (window.screen.height / 2) - (height / 2);
       
-      const loginWindow = window.open(
-        response.data.login_url,
-        'Zerodha Login',
-        `width=${width},height=${height},left=${left},top=${top}`
-      );
+      // Store current symbol in sessionStorage to restore after auth
+      sessionStorage.setItem('selectedSymbol', selectedSymbol);
       
-      // Check for redirect in popup
-      const checkAuth = setInterval(() => {
-        try {
-          if (loginWindow && loginWindow.location.href.includes('request_token=')) {
-            const urlParams = new URLSearchParams(loginWindow.location.search);
-            const requestToken = urlParams.get('request_token');
-            
-            if (requestToken) {
-              clearInterval(checkAuth);
-              loginWindow.close();
-              
-              // Set the token
-              axios.post(`${API_URL}/api/auth/set-token?request_token=${requestToken}`)
-                .then(() => {
-                  setIsAuthenticated(true);
-                  setError(null);
-                  fetchSignals(selectedSymbol);
-                })
-                .catch(() => setError('Failed to set access token'));
-            }
-          }
-        } catch (e) {
-          // Cross-origin error - expected until redirect
-        }
-        
-        if (loginWindow && loginWindow.closed) {
-          clearInterval(checkAuth);
-          setError('Login window closed. Please try again or manually copy the request token from the Zerodha redirect URL and refresh the page.');
-        }
-      }, 500);
+      // Full page redirect to Zerodha login
+      window.location.href = response.data.login_url;
       
-    } catch (err) {
-      setError('Failed to get login URL');
+    } catch (err: any) {
+      console.error('Login error:', err);
+      setError(err.response?.data?.detail || 'Failed to get login URL. Please check backend is running.');
     }
   };
 

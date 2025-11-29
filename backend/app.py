@@ -490,9 +490,11 @@ async def test_signals():
 async def get_login_url():
     """Get Zerodha login URL for authentication"""
     try:
-        login_url = kite.login_url()
+        # Generate login URL with redirect
+        login_url = f"https://kite.zerodha.com/connect/login?api_key={API_KEY}&v=3"
         return {"login_url": login_url}
     except Exception as e:
+        print(f"[ERROR] Login URL generation failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
