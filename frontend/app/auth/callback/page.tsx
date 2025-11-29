@@ -21,29 +21,51 @@ export default function AuthCallback() {
         .then(response => response.json())
         .then(data => {
           if (data.status === 'success') {
-            // If opened in popup, close it, otherwise redirect
-            if (window.opener) {
-              window.opener.postMessage({ type: 'AUTH_SUCCESS' }, '*');
-              window.close();
-            } else {
-              // Not a popup, redirect to main page
-              setTimeout(() => {
-                router.push('/');
-              }, 1000);
-            }
+            // Success! Redirect to main page
+            console.log('Authentication successful!');
+            setTimeout(() => {
+              router.push('/');
+            }, 1500);
           } else {
+            console.error('Auth failed:', data);
             alert('Authentication failed. Please try again.');
             router.push('/');
           }
         })
         .catch(err => {
           console.error('Error setting token:', err);
-          alert('Failed to authenticate. Please try again.');
+          alert('Failed to authenticate. Please check backend is running.');
+          router.push('/');
+        });
+    } else if (requestToken && !status) {
+      // Zerodha doesn't send status=success, just request_token
+      fetch(`${API_URL}/api/auth/set-token?request_token=${requestToken}`, {
+        method: 'POST',
+      })
+        .then(response => response.json())
+        .then(data => {
+          if (data.status === 'success') {
+            console.log('Authentication successful!');
+            setTimeout(() => {
+              router.push('/');
+            }, 1500);
+          } else {
+            console.error('Auth failed:', data);
+            alert('Authentication failed. Please try again.');
+            router.push('/');
+          }
+        })
+        .catch(err => {
+          console.error('Error setting token:', err);
+          alert('Failed to authenticate. Please check backend is running.');
           router.push('/');
         });
     } else {
+      console.error('No request token found');
       alert('Authentication failed or was cancelled.');
-      window.close();
+      setTimeout(() => {
+        router.push('/');
+      }, 2000);
     }
   }, [searchParams, router]);
 
