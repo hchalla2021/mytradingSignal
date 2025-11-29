@@ -1,0 +1,33 @@
+services:
+  # Backend Service
+  - type: web
+    name: options-trading-backend
+    env: python
+    region: singapore
+    buildCommand: "cd backend && pip install -r requirements.txt"
+    startCommand: "cd backend && python app.py"
+    envVars:
+      - key: PORT
+        value: 8000
+      - key: ZERODHA_API_KEY
+        sync: false
+      - key: ZERODHA_API_SECRET
+        sync: false
+      - key: ZERODHA_ACCESS_TOKEN
+        sync: false
+    healthCheckPath: /
+
+  # Frontend Service
+  - type: web
+    name: options-trading-frontend
+    env: node
+    region: singapore
+    buildCommand: "cd frontend && npm install && npm run build"
+    startCommand: "cd frontend && npm start"
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: NEXT_PUBLIC_API_URL
+        value: https://options-trading-backend.onrender.com
+      - key: PORT
+        value: 3000
