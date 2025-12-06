@@ -1,3 +1,4 @@
-# This file is for Render auto-detection only
-# Actual backend dependencies are in backend/requirements.txt
-# For proper deployment, use Render Blueprint with render.yaml
+# Root requirements.txt - references backend dependencies
+# This allows Render to detect Python project while keeping deps organized
+
+-r backend/requirements.txt
