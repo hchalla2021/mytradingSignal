@@ -4,7 +4,8 @@ services:
     name: options-trading-backend
     env: python
     region: singapore
-    buildCommand: "cd backend && pip install -r requirements.txt"
+    pythonVersion: "3.11"
+    buildCommand: "cd backend && pip install --upgrade pip && pip install --only-binary=:all: --no-cache-dir -r requirements.txt || pip install --no-cache-dir -r requirements.txt"
     startCommand: "cd backend && python app.py"
     envVars:
       - key: PORT
