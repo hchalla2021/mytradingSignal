@@ -4,7 +4,7 @@ services:
     name: options-trading-backend
     env: python
     region: singapore
-    buildCommand: "cd backend && pip install --upgrade pip setuptools wheel && pip install --no-cache-dir -r requirements.txt"
+    buildCommand: "chmod +x build.sh && ./build.sh"
     startCommand: "cd backend && uvicorn app:app --host 0.0.0.0 --port $PORT"
     envVars:
       - key: PORT
