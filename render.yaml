@@ -24,7 +24,7 @@ services:
     name: options-trading-frontend
     env: node
     region: singapore
-    buildCommand: "cd frontend && npm ci && npm run build"
+    buildCommand: "cd frontend && npm install && npm run build"
     startCommand: "cd frontend && npm start"
     envVars:
       - key: NODE_ENV
