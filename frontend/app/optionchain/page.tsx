@@ -37,31 +37,8 @@ export default function OptionChainPage() {
     </div>
   );
 }
-    delta: number;
-    gamma: number;
-    theta: number;
-    vega: number;
-  };
-}
 
-interface StrikeData {
-  strike: number;
-  CE?: OptionData;
-  PE?: OptionData;
-}
-
-interface OptionChainData {
-  symbol: string;
-  spot_price: number;
-  atm_strike: number;
-  pcr: number;
-  market_direction: string;
-  total_ce_oi: number;
-  total_pe_oi: number;
-  option_chain: StrikeData[];
-  timestamp: string;
-}
-
+/* Commented out for future implementation
 function OriginalOptionChainPage() {
   const [selectedSymbol, setSelectedSymbol] = useState<'NIFTY' | 'BANKNIFTY' | 'SENSEX'>('NIFTY');
   const [chainData, setChainData] = useState<Record<string, OptionChainData>>({});
