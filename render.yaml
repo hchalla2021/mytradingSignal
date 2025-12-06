@@ -5,10 +5,12 @@ services:
     env: python
     region: singapore
     buildCommand: "chmod +x build.sh && ./build.sh"
-    startCommand: "chmod +x start.sh && ./start.sh"
+    startCommand: "PYTHONPATH=/opt/render/project/src/backend python -m uvicorn app:app --host 0.0.0.0 --port $PORT"
     envVars:
       - key: PORT
         value: 8000
+      - key: PYTHONPATH
+        value: /opt/render/project/src/backend
       - key: ZERODHA_API_KEY
         sync: false
       - key: ZERODHA_API_SECRET
