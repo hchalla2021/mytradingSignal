@@ -585,13 +585,90 @@ class SignalGenerator:
 
 @app.get("/")
 async def root():
-    try:
-        return {"message": "Options Trading Signals API", "status": "running"}
-    except Exception as e:
-        print(f"[ERROR] Root endpoint error: {e}")
-        import traceback
-        traceback.print_exc()
-        return {"message": "API is running", "status": "error"}
+    """Root endpoint - returns HTML redirect to frontend"""
+    from fastapi.responses import HTMLResponse
+    
+    html_content = """
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Options Trading Signals API</title>
+        <style>
+            body {
+                font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                color: white;
+                display: flex;
+                justify-content: center;
+                align-items: center;
+                height: 100vh;
+                margin: 0;
+                text-align: center;
+            }
+            .container {
+                background: rgba(255, 255, 255, 0.1);
+                backdrop-filter: blur(10px);
+                padding: 3rem;
+                border-radius: 20px;
+                box-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.37);
+                border: 1px solid rgba(255, 255, 255, 0.18);
+                max-width: 500px;
+            }
+            h1 { margin: 0 0 1rem 0; font-size: 2.5rem; }
+            .status { 
+                display: inline-block;
+                background: #10b981;
+                padding: 0.5rem 1rem;
+                border-radius: 50px;
+                font-weight: bold;
+                margin: 1rem 0;
+            }
+            .link-button {
+                display: inline-block;
+                background: white;
+                color: #667eea;
+                text-decoration: none;
+                padding: 1rem 2rem;
+                border-radius: 10px;
+                font-weight: bold;
+                margin-top: 2rem;
+                transition: transform 0.2s;
+            }
+            .link-button:hover {
+                transform: scale(1.05);
+            }
+            .api-links {
+                margin-top: 2rem;
+                font-size: 0.9rem;
+            }
+            .api-links a {
+                color: white;
+                text-decoration: underline;
+                margin: 0 0.5rem;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <h1>🚀 Options Trading Signals</h1>
+            <div class="status">✓ API Running</div>
+            <p>Backend API is operational and ready to serve trading signals.</p>
+            <a href="https://options-trading-frontend.onrender.com" class="link-button">
+                Open Trading Dashboard →
+            </a>
+            <div class="api-links">
+                <strong>API Endpoints:</strong><br>
+                <a href="/api/market/status" target="_blank">Market Status</a>
+                <a href="/api/signals/NIFTY" target="_blank">NIFTY Signals</a>
+                <a href="/api/signals/BANKNIFTY" target="_blank">BANKNIFTY</a>
+            </div>
+        </div>
+    </body>
+    </html>
+    """
+    return HTMLResponse(content=html_content)
 
 
 @app.get("/api/market/status")
