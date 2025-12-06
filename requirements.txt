@@ -1,0 +1,3 @@
+# This file is for Render auto-detection only
+# Actual backend dependencies are in backend/requirements.txt
+# For proper deployment, use Render Blueprint with render.yaml
