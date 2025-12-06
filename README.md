@@ -1,6 +1,15 @@
-# Options Trading Signals - Live Zerodha Data
+# 📊 Options Trading Signals - Live Zerodha Data
 
 A real-time options trading signals application that fetches live data from Zerodha Kite Connect API, calculates Greeks (Delta, Gamma, Theta, Vega), and provides strong buy signals for NIFTY, BANK NIFTY, and SENSEX options.
+
+## 📚 Documentation
+
+All documentation files are organized in the [`docs/`](docs/) folder:
+
+- **[Deployment Guide](docs/DEPLOYMENT.md)** - Step-by-step deployment instructions
+- **[Deployment Readiness](docs/DEPLOYMENT_READINESS.md)** - Pre-deployment checklist & security review
+- **[Security Guidelines](docs/SECURITY.md)** - Best practices for API keys and secrets
+- **[Folder Structure](docs/FOLDER_STRUCTURE.md)** - Complete project structure overview
 
 ## Features
 

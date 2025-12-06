@@ -2,16 +2,20 @@ from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect, Back
 from fastapi.middleware.cors import CORSMiddleware
 from kiteconnect import KiteConnect
 import numpy as np
-from scipy.stats import norm
 from datetime import datetime, timedelta
 import asyncio
 import json
 from typing import Dict, List, Optional
-import os
-from dotenv import load_dotenv
 import time
+import os
+import pytz
 
-load_dotenv()
+from config.settings import settings
+from utils.math_helpers import norm
+from services.whatsapp_service import get_alert_service
+from services.ai_analysis_service import get_ai_service
+
+# Configurations loaded from config/settings.py
 
 app = FastAPI(title="Options Trading Signals API")
 
@@ -24,14 +28,14 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Zerodha Kite Connect Configuration
-API_KEY = os.getenv("ZERODHA_API_KEY", "g5tyrnn1mlckrb6f")
-API_SECRET = os.getenv("ZERODHA_API_SECRET", "9qlzwmum5f7pami0gacyxc7uxa6w823s")
-ACCESS_TOKEN = os.getenv("ZERODHA_ACCESS_TOKEN", "")
-REDIRECT_URL = os.getenv("REDIRECT_URL", "http://localhost:3000/auth/callback")
+# Zerodha Kite Connect Configuration (from settings)
+kite = KiteConnect(api_key=settings.ZERODHA_API_KEY)
 
-kite = KiteConnect(api_key=API_KEY)
-kite.set_access_token(ACCESS_TOKEN) if ACCESS_TOKEN else None
+# Global access token (can be updated via authentication endpoint)
+ACCESS_TOKEN = settings.ZERODHA_ACCESS_TOKEN
+
+if ACCESS_TOKEN:
+    kite.set_access_token(ACCESS_TOKEN)
 
 # Active WebSocket connections
 active_connections: List[WebSocket] = []
@@ -39,17 +43,120 @@ active_connections: List[WebSocket] = []
 # Cache for storing signals data - ultra-fast refresh
 CACHE: Dict[str, Dict] = {}
 CACHE_EXPIRY: Dict[str, float] = {}
-CACHE_DURATION = 0.5  # Cache for 0.5 seconds for ultra-fast updates
 
 # Cache for instruments (refreshed every 5 minutes)
 INSTRUMENTS_CACHE: Dict[str, List] = {}
 INSTRUMENTS_CACHE_EXPIRY: Dict[str, float] = {}
-INSTRUMENTS_CACHE_DURATION = 300  # 5 minutes
 
 # Cache for spot prices (refreshed every 0.5 second for real-time feel)
 SPOT_PRICE_CACHE: Dict[str, float] = {}
 SPOT_PRICE_CACHE_EXPIRY: Dict[str, float] = {}
-SPOT_PRICE_CACHE_DURATION = 0.5  # 0.5 second for ultra-fast spot price updates
+
+# Rate limiting for API calls
+LAST_API_CALL: Dict[str, float] = {}
+MIN_API_DELAY = 0.5  # Minimum 500ms between API calls
+
+# Market hours configuration (IST timezone)
+IST = pytz.timezone('Asia/Kolkata')
+MARKET_OPEN_TIME = (9, 15)  # 9:15 AM
+MARKET_CLOSE_TIME = (15, 30)  # 3:30 PM
+MARKET_HOLIDAYS = [
+    # 2025 NSE Holidays (add more as needed)
+    datetime(2025, 1, 26).date(),  # Republic Day
+    datetime(2025, 3, 14).date(),  # Holi
+    datetime(2025, 3, 31).date(),  # Id-ul-Fitr
+    datetime(2025, 4, 10).date(),  # Mahavir Jayanti
+    datetime(2025, 4, 14).date(),  # Dr. Ambedkar Jayanti
+    datetime(2025, 4, 18).date(),  # Good Friday
+    datetime(2025, 5, 1).date(),   # Maharashtra Day
+    datetime(2025, 8, 15).date(),  # Independence Day
+    datetime(2025, 8, 27).date(),  # Ganesh Chaturthi
+    datetime(2025, 10, 2).date(),  # Gandhi Jayanti
+    datetime(2025, 10, 21).date(), # Dussehra
+    datetime(2025, 11, 5).date(),  # Diwali Laxmi Pujan
+    datetime(2025, 11, 6).date(),  # Diwali Balipratipada
+    datetime(2025, 11, 24).date(), # Gurunanak Jayanti
+    datetime(2025, 12, 25).date(), # Christmas
+]
+
+def is_market_open() -> bool:
+    """Check if market is currently open (9:15 AM - 3:30 PM IST, excluding holidays)"""
+    now = datetime.now(IST)
+    current_time = now.time()
+    current_date = now.date()
+    
+    # Check if today is a weekend
+    if now.weekday() >= 5:  # Saturday = 5, Sunday = 6
+        return False
+    
+    # Check if today is a holiday
+    if current_date in MARKET_HOLIDAYS:
+        return False
+    
+    # Check if within market hours
+    market_open = current_time >= datetime.strptime(f"{MARKET_OPEN_TIME[0]}:{MARKET_OPEN_TIME[1]}", "%H:%M").time()
+    market_close = current_time <= datetime.strptime(f"{MARKET_CLOSE_TIME[0]}:{MARKET_CLOSE_TIME[1]}", "%H:%M").time()
+    
+    return market_open and market_close
+
+def get_mock_market_closed_data(symbol: str) -> Dict:
+    """Return data when market is closed - with last traded spot price"""
+    # Fetch last traded spot price from Zerodha even when market closed
+    symbol_map = {
+        "NIFTY": {"name": "NIFTY 50", "quote_symbol": "NIFTY 50", "exchange": "NSE"},
+        "BANKNIFTY": {"name": "NIFTY BANK", "quote_symbol": "NIFTY BANK", "exchange": "NSE"},
+        "SENSEX": {"name": "SENSEX", "quote_symbol": "SENSEX", "exchange": "BSE"}
+    }
+    
+    spot_price = 0
+    symbol_info = symbol_map.get(symbol.upper())
+    
+    if symbol_info:
+        index_symbol = f"{symbol_info['exchange']}:{symbol_info['quote_symbol']}"
+        try:
+            # Try to get last traded price even when market is closed
+            quote = kite.quote([index_symbol])
+            quote_data = list(quote.values())[0]
+            spot_price = (
+                quote_data.get('last_price') or 
+                quote_data.get('ohlc', {}).get('close') or 
+                quote_data.get('last_traded_price') or 
+                0
+            )
+            print(f"[MARKET CLOSED] Got last traded {symbol.upper()} spot: {spot_price}")
+        except Exception as e:
+            print(f"[MARKET CLOSED] Error fetching {symbol.upper()} spot: {e}")
+            # Use fallback values if API fails
+            spot_price = 26150 if symbol.upper() == "NIFTY" else (59700 if symbol.upper() == "BANKNIFTY" else 85600)
+    
+    # Use fallback if still 0
+    if spot_price == 0:
+        spot_price = 26150 if symbol.upper() == "NIFTY" else (59700 if symbol.upper() == "BANKNIFTY" else 85600)
+    
+    return {
+        'symbol': symbol.upper(),
+        'spot_price': spot_price,
+        'signals': [],
+        'pcr': 1.0,
+        'market_direction': 'CLOSED',
+        'direction_percentage': 0,
+        'probability_bullish': 50,
+        'probability_range': 0,
+        'probability_bearish': 50,
+        'bullish_percentage': 50,
+        'bearish_percentage': 50,
+        'component_scores': {
+            'pcr_score': 50,
+            'oi_score': 50,
+            'delta_score': 50,
+            'price_action_score': 50,
+            'vix_score': 50
+        },
+        'total_ce_oi': 0,
+        'total_pe_oi': 0,
+        'timestamp': datetime.now().isoformat(),
+        'market_status': 'CLOSED'
+    }
 
 
 class GreeksCalculator:
@@ -215,16 +322,16 @@ class SignalGenerator:
     def analyze_signal(greeks: Dict, oi_data: Dict, option_type: str, strike_type: str, 
                       market_metrics: Dict, spot_price: float, strike_price: float) -> Dict:
         """
-        Advanced Signal Analysis - O(1) per option
+        BUYER FOCUSED Signal Analysis - 90%+ Threshold - Expert Stock Market Logic
         
-        Professional Parameters:
-        1. PCR Analysis (Put-Call Ratio)
-        2. OI & OI Change Analysis
-        3. Greeks (Delta, Gamma, Theta, Vega)
-        4. Strike Price Position (ATM/ITM/OTM)
-        5. Market Direction Alignment
-        6. Volume Analysis
-        7. IV Analysis
+        Enhanced Parameters (Buyer's Perspective Only):
+        1. PCR + OI Change Analysis (35 points) - Strong money flow detection
+        2. Delta Analysis (25 points) - Directional confidence
+        3. OI Build Analysis (20 points) - Fresh institutional positioning
+        4. Gamma + Vega (15 points) - Explosive potential
+        5. Strike Position (5 points) - Entry timing
+        
+        Total: 100 points. Signal only if 90%+
         """
         delta = greeks['delta']
         gamma = greeks['gamma']
@@ -234,99 +341,141 @@ class SignalGenerator:
         score = 0
         reasons = []
         
-        # === 1. MARKET DIRECTION & PCR ANALYSIS (30 points) ===
+        # Get market metrics
         market_dir = market_metrics.get('market_direction', 'NEUTRAL')
         pcr = market_metrics.get('pcr', 1.0)
+        total_ce_oi_chg = market_metrics.get('total_ce_oi_chg', 0)
+        total_pe_oi_chg = market_metrics.get('total_pe_oi_chg', 0)
         
+        # === 1. PCR + OI CHANGE ANALYSIS (35 points) - Most Critical ===
+        # BUYER FOCUS: Look for strong directional bias with fresh money
         if option_type == 'CE':
-            if market_dir == "STRONG BULLISH":
-                score += 30
-                reasons.append(f"📈 Strong Bullish Market (PCR: {pcr:.2f})")
-            elif market_dir == "BULLISH":
-                score += 20
+            # For CE buyers: Want BULLISH market (PCR > 1.0) + PE OI building (resistance breaking)
+            if market_dir == "STRONG BULLISH" and pcr > 1.2:
+                score += 35
+                reasons.append(f"🔥 Strong Bullish + High PCR ({pcr:.2f})")
+            elif market_dir == "BULLISH" and pcr > 1.05:
+                score += 25
                 reasons.append(f"📈 Bullish Market (PCR: {pcr:.2f})")
+            elif pcr > 1.0:
+                score += 15
+                reasons.append(f"📊 Mildly Bullish (PCR: {pcr:.2f})")
+            
+            # Additional bonus: If PE OI building faster than CE (sellers trapped)
+            if total_pe_oi_chg > total_ce_oi_chg and total_pe_oi_chg > 0:
+                oi_ratio = total_pe_oi_chg / max(total_ce_oi_chg, 1)
+                if oi_ratio > 1.5:
+                    score += 5
+                    reasons.append(f"💎 PE Sellers Trapped (Ratio: {oi_ratio:.1f}x)")
         else:  # PE
-            if market_dir == "STRONG BEARISH":
-                score += 30
-                reasons.append(f"📉 Strong Bearish Market (PCR: {pcr:.2f})")
-            elif market_dir == "BEARISH":
-                score += 20
+            # For PE buyers: Want BEARISH market (PCR < 0.9) + CE OI building (support breaking)
+            if market_dir == "STRONG BEARISH" and pcr < 0.8:
+                score += 35
+                reasons.append(f"🔥 Strong Bearish + Low PCR ({pcr:.2f})")
+            elif market_dir == "BEARISH" and pcr < 0.95:
+                score += 25
                 reasons.append(f"📉 Bearish Market (PCR: {pcr:.2f})")
+            elif pcr < 1.0:
+                score += 15
+                reasons.append(f"📊 Mildly Bearish (PCR: {pcr:.2f})")
+            
+            # Additional bonus: If CE OI building faster than PE (buyers trapped)
+            if total_ce_oi_chg > total_pe_oi_chg and total_ce_oi_chg > 0:
+                oi_ratio = total_ce_oi_chg / max(total_pe_oi_chg, 1)
+                if oi_ratio > 1.5:
+                    score += 5
+                    reasons.append(f"💎 CE Buyers Trapped (Ratio: {oi_ratio:.1f}x)")
         
-        # === 2. DELTA ANALYSIS - Directional Strength (25 points) ===
+        # === 2. DELTA ANALYSIS - Directional Conviction (25 points) ===
         if option_type == 'CE':
-            if delta > 0.7:
+            if delta > 0.75:
                 score += 25
                 reasons.append(f"⚡ Excellent Delta ({delta:.3f})")
-            elif delta > 0.5:
-                score += 15
-                reasons.append(f"✓ Good Delta ({delta:.3f})")
+            elif delta > 0.6:
+                score += 18
+                reasons.append(f"✓ Strong Delta ({delta:.3f})")
+            elif delta > 0.45:
+                score += 10
+                reasons.append(f"→ Moderate Delta ({delta:.3f})")
         else:  # PE
-            if delta < -0.7:
+            if delta < -0.75:
                 score += 25
                 reasons.append(f"⚡ Excellent Delta ({delta:.3f})")
-            elif delta < -0.5:
-                score += 15
-                reasons.append(f"✓ Good Delta ({delta:.3f})")
+            elif delta < -0.6:
+                score += 18
+                reasons.append(f"✓ Strong Delta ({delta:.3f})")
+            elif delta < -0.45:
+                score += 10
+                reasons.append(f"→ Moderate Delta ({delta:.3f})")
         
-        # === 3. GAMMA ANALYSIS - Leverage Potential (20 points) ===
-        if gamma > 0.02:
-            score += 20
-            reasons.append(f"🚀 High Gamma ({gamma:.4f})")
-        elif gamma > 0.01:
-            score += 12
-            reasons.append(f"↗ Good Gamma ({gamma:.4f})")
-        
-        # === 4. OI ANALYSIS - Fresh Positions (20 points) ===
+        # === 3. OI BUILD ANALYSIS - Institutional Money (20 points) ===
         oi_change = oi_data.get('oi_change_percent', 0)
         oi = oi_data.get('oi', 0)
+        volume = oi_data.get('volume', 0)
         
-        if oi_change > 20:
+        if oi_change > 30:
             score += 20
-            reasons.append(f"💪 Strong OI Build ({oi_change:.1f}%)")
+            reasons.append(f"💪 Massive OI Build ({oi_change:.1f}%)")
+        elif oi_change > 20:
+            score += 15
+            reasons.append(f"📈 Strong OI Build ({oi_change:.1f}%)")
         elif oi_change > 10:
-            score += 12
+            score += 10
             reasons.append(f"📊 Good OI Build ({oi_change:.1f}%)")
-        elif oi > 100000:  # High absolute OI shows liquidity
-            score += 8
-            reasons.append(f"💧 High Liquidity (OI: {oi:,})")
         
-        # === 5. STRIKE POSITION - ATM/ITM Premium (15 points) ===
+        if oi > 500000 and volume > 10000:
+            score += 3
+            reasons.append(f"💧 Excellent Liquidity (OI: {oi:,}, Vol: {volume:,})")
+        elif oi > 200000:
+            score += 2
+            reasons.append(f"💧 Good Liquidity (OI: {oi:,})")
+        
+        # === 4. GAMMA + VEGA ANALYSIS - Explosive Potential (15 points) ===
+        if gamma > 0.025:
+            score += 10
+            reasons.append(f"🚀 Explosive Gamma ({gamma:.4f})")
+        elif gamma > 0.015:
+            score += 7
+            reasons.append(f"↗ High Gamma ({gamma:.4f})")
+        elif gamma > 0.008:
+            score += 4
+            reasons.append(f"→ Good Gamma ({gamma:.4f})")
+        
+        if vega > 15:
+            score += 5
+            reasons.append(f"🌊 High Vega ({vega:.2f})")
+        elif vega > 10:
+            score += 3
+            reasons.append(f"~ Good Vega ({vega:.2f})")
+        
+        # === 5. STRIKE POSITION - Entry Timing (5 points) ===
         moneyness = abs(spot_price - strike_price) / spot_price * 100
         
-        if strike_type == 'ATM' and moneyness < 1:
-            score += 15
-            reasons.append("🎯 Perfect ATM Strike")
+        if strike_type == 'ATM' and moneyness < 0.5:
+            score += 5
+            reasons.append("🎯 Perfect ATM Entry")
         elif strike_type == 'ATM':
-            score += 10
+            score += 3
             reasons.append("🎯 ATM Strike")
-        elif strike_type == 'ITM' and moneyness < 3:
-            score += 12
-            reasons.append("💎 Near ITM Strike")
-        elif strike_type == 'ITM':
-            score += 7
-            reasons.append("💎 ITM Strike")
+        elif strike_type == 'ITM' and moneyness < 2:
+            score += 4
+            reasons.append("💎 Near ITM")
         
-        # === 6. VEGA ANALYSIS - Volatility Benefit (10 points) ===
-        if vega > 15:
-            score += 10
-            reasons.append(f"🌊 High Vega ({vega:.2f})")
-        elif vega > 8:
-            score += 6
-            reasons.append(f"~ Moderate Vega ({vega:.2f})")
-        
-        # === 7. THETA PENALTY - Time Decay Check (Negative scoring) ===
+        # === PENALTY: THETA DECAY ===
         if abs(theta) > 50:
             score -= 5
-            reasons.append(f"⏰ High Decay ({theta:.2f}/day)")
+            reasons.append(f"⚠️ High Time Decay ({theta:.2f}/day)")
+        elif abs(theta) > 30:
+            score -= 3
+            reasons.append(f"⏰ Moderate Decay ({theta:.2f}/day)")
         
-        # === SIGNAL CLASSIFICATION ===
-        if score >= 85:
+        # === SIGNAL CLASSIFICATION (STRICT 90%+) ===
+        if score >= 90:
             signal = "STRONG BUY"
-            signal_strength = "STRONG"
-        elif score >= 75:
+            signal_strength = "EXTREME"
+        elif score >= 80:
             signal = "BUY"
-            signal_strength = "MODERATE"
+            signal_strength = "STRONG"
         else:
             signal = "NO SIGNAL"
             signal_strength = "WEAK"
@@ -445,54 +594,38 @@ async def root():
         return {"message": "API is running", "status": "error"}
 
 
-def get_mock_signals_data(symbol: str):
-    """Generate mock trading signals data for all symbols"""
-    spot_prices = {
-        'NIFTY': 25959,
-        'BANKNIFTY': 51500,
-        'SENSEX': 81500
-    }
-    
-    spot_price = spot_prices.get(symbol.upper(), 25959)
+@app.get("/api/market/status")
+async def get_market_status():
+    """Get current market status (OPEN/CLOSED) with timing info"""
+    market_open = is_market_open()
+    ist_now = datetime.now(IST)
     
     return {
-        'symbol': symbol.upper(),
-        'spot_price': spot_price,
-        'signals': [],
-        'pcr': 1.18,
-        'market_direction': 'BULLISH',
-        'direction_percentage': 12.5,
-        'probability_bullish': 65.2,
-        'probability_range': 28.3,
-        'probability_bearish': 6.5,
-        'bullish_percentage': 62.5,
-        'bearish_percentage': 37.5,
-        'component_scores': {
-            'pcr_score': 75.0,
-            'oi_score': 54.1,
-            'delta_score': 60.0,
-            'price_action_score': 70.0,
-            'vix_score': 55.0
-        },
-        'total_ce_oi': 916500000 if symbol.upper() == 'NIFTY' else (1200000000 if symbol.upper() == 'BANKNIFTY' else 450000000),
-        'total_pe_oi': 1081200000 if symbol.upper() == 'NIFTY' else (1400000000 if symbol.upper() == 'BANKNIFTY' else 520000000),
-        'timestamp': datetime.now().isoformat()
+        "status": "OPEN" if market_open else "CLOSED",
+        "current_time": ist_now.strftime("%I:%M %p IST"),
+        "market_hours": "9:15 AM - 3:30 PM IST (Mon-Fri)",
+        "day": ist_now.strftime("%A"),
+        "date": ist_now.strftime("%B %d, %Y"),
+        "is_weekend": ist_now.weekday() >= 5,
+        "is_holiday": ist_now.date() in MARKET_HOLIDAYS
     }
-
-
-@app.get("/api/test-signals")
-async def test_signals():
-    """Test endpoint with mock data to verify market_bias is returned properly"""
-    return get_mock_signals_data('NIFTY')
 
 
 @app.get("/api/auth/login-url")
 async def get_login_url():
-    """Get Zerodha login URL for authentication"""
+    """Get Zerodha login URL for authentication - supports mobile app redirection"""
     try:
         # Generate login URL with redirect
-        login_url = f"https://kite.zerodha.com/connect/login?api_key={API_KEY}&v=3"
-        return {"login_url": login_url}
+        # For mobile: kite://connect/login?api_key=xxx redirects to app if installed
+        # For web: https://kite.zerodha.com/connect/login?api_key=xxx
+        login_url = f"https://kite.zerodha.com/connect/login?api_key={settings.ZERODHA_API_KEY}&v=3"
+        mobile_login_url = f"kite://kite.zerodha.com/connect/login?api_key={settings.ZERODHA_API_KEY}&v=3"
+        
+        return {
+            "login_url": login_url,
+            "mobile_login_url": mobile_login_url,
+            "api_key": settings.ZERODHA_API_KEY
+        }
     except Exception as e:
         print(f"[ERROR] Login URL generation failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
@@ -503,11 +636,161 @@ async def set_access_token(request_token: str):
     """Set access token after Zerodha authentication"""
     global ACCESS_TOKEN
     try:
-        data = kite.generate_session(request_token, api_secret=API_SECRET)
+        print(f"[AUTH] Received request_token: {request_token[:20]}...")
+        print(f"[AUTH] API_KEY: {settings.ZERODHA_API_KEY}")
+        print(f"[AUTH] API_SECRET exists: {bool(settings.ZERODHA_API_SECRET)}")
+        
+        data = kite.generate_session(request_token, api_secret=settings.ZERODHA_API_SECRET)
+        print(f"[AUTH] Session generated successfully")
+        print(f"[AUTH] Response data keys: {data.keys()}")
+        
         ACCESS_TOKEN = data["access_token"]
         kite.set_access_token(ACCESS_TOKEN)
+        
+        print(f"[AUTH] Access token set successfully: {ACCESS_TOKEN[:20]}...")
         return {"status": "success", "access_token": ACCESS_TOKEN}
     except Exception as e:
+        print(f"[AUTH ERROR] Failed to generate session: {str(e)}")
+        print(f"[AUTH ERROR] Error type: {type(e).__name__}")
+
+
+@app.get("/api/alerts/status")
+async def check_alert_status():
+    """Check WhatsApp alert service configuration and status"""
+    try:
+        alert_service = get_alert_service()
+        
+        return {
+            "status": "success",
+            "enabled": alert_service.enabled,
+            "configuration": {
+                "threshold": alert_service.threshold if alert_service.enabled else None,
+                "cooldown_minutes": alert_service.cooldown_minutes if alert_service.enabled else None,
+                "from_phone": alert_service.from_phone if alert_service.enabled else None,
+                "to_phone": alert_service.to_phone if alert_service.enabled else None,
+                "has_account_sid": bool(alert_service.account_sid) if alert_service.enabled else False,
+                "has_auth_token": bool(alert_service.auth_token) if alert_service.enabled else False
+            },
+            "message": "WhatsApp alerts are active" if alert_service.enabled else "WhatsApp alerts disabled - configure credentials in .env"
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": str(e)
+        }
+
+
+@app.post("/api/alerts/test")
+async def send_test_alert(phone_number: str):
+    """Send a test WhatsApp alert to verify Twilio configuration"""
+    try:
+        print(f"[TEST ALERT] Attempting to send test WhatsApp to {phone_number}")
+        alert_service = get_alert_service()
+        
+        # Check if service is enabled
+        if not alert_service.enabled:
+            error_msg = "WhatsApp alerts disabled. Missing Twilio credentials in .env file."
+            print(f"[TEST ALERT ERROR] {error_msg}")
+            return {
+                "status": "error",
+                "message": error_msg
+            }
+        
+        # Validate Twilio configuration
+        if not alert_service.account_sid or not alert_service.auth_token:
+            error_msg = "Twilio Account SID or Auth Token is missing"
+            print(f"[TEST ALERT ERROR] {error_msg}")
+            return {
+                "status": "error",
+                "message": error_msg
+            }
+        
+        if not alert_service.from_phone or alert_service.from_phone == "+12345678900":
+            error_msg = "Please update TWILIO_PHONE_NUMBER in .env file with your real Twilio phone number"
+            print(f"[TEST ALERT ERROR] {error_msg}")
+            return {
+                "status": "error",
+                "message": error_msg
+            }
+        
+        # Create a test signal
+        test_signal = {
+            "symbol": "NIFTY",
+            "strike": 25900,
+            "option_type": "CE",
+            "score": 85.5,
+            "ltp": 125.50,
+            "tradingsymbol": "NIFTY25900CE",
+            "signal": "STRONG BUY"
+        }
+        
+        print(f"[TEST ALERT] Sending test message from {alert_service.from_phone} to {phone_number}")
+        
+        # Temporarily override the phone number for testing
+        original_phone = alert_service.to_phone
+        alert_service.to_phone = phone_number
+        
+        # Temporarily disable cooldown check for testing
+        alert_key = f"{test_signal['symbol']}_{test_signal['option_type']}_{test_signal['strike']}"
+        if alert_key in alert_service.last_alert_time:
+            del alert_service.last_alert_time[alert_key]
+        
+        # Update test signal score to trigger 90% threshold
+        test_signal["score"] = 92.5  # Must be 90%+ for alerts
+        test_signal["reasons"] = [
+            "🔥 Test Signal - Strong Market",
+            "⚡ High Momentum Detected",
+            "💪 Heavy OI Build"
+        ]
+        
+        print(f"[TEST ALERT] Attempting to send WhatsApp message...")
+        print(f"[TEST ALERT] Signal score: {test_signal['score']}% (threshold: {alert_service.threshold}%)")
+        
+        # Send the test alert
+        message_sid = alert_service.send_alert(test_signal)
+        
+        # Restore original phone number
+        alert_service.to_phone = original_phone
+        
+        if message_sid:
+            success_msg = f"✅ WhatsApp SENT to {phone_number}! Message SID: {message_sid}"
+            print(f"[TEST ALERT] {success_msg}")
+            return {
+                "status": "success",
+                "message": success_msg,
+                "message_sid": message_sid,
+                "details": "Check your WhatsApp for the test signal message"
+            }
+        else:
+            # Get more specific error from logs
+            error_msg = """❌ WhatsApp message failed. Common issues:
+
+1. **WhatsApp Sandbox Not Joined**:
+   - Go to: https://www.twilio.com/console/sms/whatsapp/sandbox
+   - Send "join <your-code>" to +14155238886 from WhatsApp
+   
+2. **Phone Number Not Verified**:
+   - Verify +{phone} in Twilio Console
+   
+3. **Check Backend Logs** for detailed error message
+   
+4. **Try Regular SMS** (change TWILIO_PHONE_NUMBER to regular SMS number)"""
+            
+            print(f"[TEST ALERT ERROR] Failed to send. Check logs above for Twilio API response")
+            return {
+                "status": "error",
+                "message": error_msg.format(phone=phone_number),
+                "troubleshooting_url": "https://www.twilio.com/console/sms/whatsapp/sandbox"
+            }
+    except Exception as e:
+        error_msg = f"❌ Error: {str(e)}"
+        print(f"[TEST ALERT ERROR] {error_msg}")
+        import traceback
+        traceback.print_exc()
+        return {
+            "status": "error",
+            "message": error_msg
+        }
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -555,7 +838,7 @@ async def get_option_chain(symbol: str):
                     )
                     if spot_price > 0:
                         SPOT_PRICE_CACHE[symbol.upper()] = spot_price
-                        SPOT_PRICE_CACHE_EXPIRY[symbol.upper()] = current_time + SPOT_PRICE_CACHE_DURATION
+                        SPOT_PRICE_CACHE_EXPIRY[symbol.upper()] = current_time + settings.SPOT_PRICE_CACHE_DURATION
                         print(f"[SPOT] Fetched fresh {symbol.upper()} spot: {spot_price}")
                     else:
                         spot_price = 25959 if symbol.upper() == "NIFTY" else (54200 if symbol.upper() == "BANKNIFTY" else 85400)
@@ -577,7 +860,7 @@ async def get_option_chain(symbol: str):
                 )
                 if spot_price > 0:
                     SPOT_PRICE_CACHE[symbol.upper()] = spot_price
-                    SPOT_PRICE_CACHE_EXPIRY[symbol.upper()] = current_time + SPOT_PRICE_CACHE_DURATION
+                    SPOT_PRICE_CACHE_EXPIRY[symbol.upper()] = current_time + settings.SPOT_PRICE_CACHE_DURATION
                 else:
                     spot_price = 25959 if symbol.upper() == "NIFTY" else (54200 if symbol.upper() == "BANKNIFTY" else 85400)
             except Exception as e:
@@ -595,11 +878,11 @@ async def get_option_chain(symbol: str):
             else:
                 instruments = kite.instruments(exchange)
                 INSTRUMENTS_CACHE[exchange] = instruments
-                INSTRUMENTS_CACHE_EXPIRY[exchange] = current_time + INSTRUMENTS_CACHE_DURATION
+                INSTRUMENTS_CACHE_EXPIRY[exchange] = current_time + settings.INSTRUMENTS_CACHE_DURATION
         else:
             instruments = kite.instruments(exchange)
             INSTRUMENTS_CACHE[exchange] = instruments
-            INSTRUMENTS_CACHE_EXPIRY[exchange] = current_time + INSTRUMENTS_CACHE_DURATION
+            INSTRUMENTS_CACHE_EXPIRY[exchange] = current_time + settings.INSTRUMENTS_CACHE_DURATION
         
         # Filter for this week's expiry options
         today = datetime.now().date()
@@ -959,7 +1242,15 @@ async def get_full_option_chain(symbol: str):
 
 @app.get("/api/signals/{symbol}")
 async def get_strong_signals(symbol: str):
-    """Get only strong buy signals for a symbol with caching"""
+    """Get only strong buy signals for a symbol with caching and SMS alerts"""
+    
+    # Check if market is open
+    market_open = is_market_open()
+    ist_now = datetime.now(IST)
+    
+    # If market is closed, still fetch last traded data but don't send alerts
+    if not market_open:
+        print(f"[MARKET CLOSED] Fetching last traded data for {symbol.upper()}")
     
     # Check cache first
     current_time = time.time()
@@ -968,17 +1259,24 @@ async def get_strong_signals(symbol: str):
     if cache_key in CACHE and cache_key in CACHE_EXPIRY:
         if current_time < CACHE_EXPIRY[cache_key]:
             # Return cached data immediately
-            return CACHE[cache_key]
+            cached = CACHE[cache_key]
+            cached['market_status'] = 'OPEN'
+            return cached
+    
+    # Rate limiting: Wait before making API call if needed
+    if cache_key in LAST_API_CALL:
+        time_since_last = current_time - LAST_API_CALL[cache_key]
+        if time_since_last < MIN_API_DELAY:
+            wait_time = MIN_API_DELAY - time_since_last
+            time.sleep(wait_time)
+    
+    LAST_API_CALL[cache_key] = time.time()
     
     try:
         option_data = await get_option_chain(symbol)
     except Exception as e:
         print(f"Error fetching option chain for {symbol}: {e}")
-        # Return mock signals data instead
-        result = get_mock_signals_data(symbol)
-        CACHE[cache_key] = result
-        CACHE_EXPIRY[cache_key] = current_time + CACHE_DURATION
-        return result
+        raise HTTPException(status_code=500, detail=f"Failed to fetch option chain: {str(e)}")
     
     try:
         strong_signals = []
@@ -987,9 +1285,9 @@ async def get_strong_signals(symbol: str):
             for option_type in ['CE', 'PE']:
                 if option_type in strike_data:
                     opt = strike_data[option_type]
-                    # Only include signals with 75%+ score
-                    if opt['signal'] == 'STRONG BUY' and opt['score'] >= 75:
-                        strong_signals.append({
+                    # Only include signals with 90%+ score (BUYER FOCUSED)
+                    if opt['signal'] in ['STRONG BUY', 'BUY'] and opt['score'] >= 90:
+                        signal = {
                             'symbol': symbol,
                             'strike': strike_data['strike'],
                             'option_type': option_type,
@@ -1000,8 +1298,87 @@ async def get_strong_signals(symbol: str):
                             'ltp': opt['ltp'],
                             'greeks': opt['greeks'],
                             'oi': opt['oi'],
-                            'tradingsymbol': opt['tradingsymbol']
-                        })
+                            'volume': opt.get('volume', 0),
+                            'tradingsymbol': opt['tradingsymbol'],
+                            'pcr': option_data.get('pcr', 1.0)
+                        }
+                        strong_signals.append(signal)
+                        
+                        # AI-POWERED ANALYSIS: Detect sudden OI movements & big player entry
+                        try:
+                            ai_service = get_ai_service()
+                            
+                            if ai_service.enabled:
+                                # Track OI changes for spike detection
+                                ai_service.track_oi_change(
+                                    symbol=symbol,
+                                    strike=strike_data['strike'],
+                                    option_type=option_type,
+                                    current_oi=opt['oi']
+                                )
+                                
+                                # Detect sudden OI spike
+                                spike_info = ai_service.detect_sudden_spike(
+                                    symbol=symbol,
+                                    strike=strike_data['strike'],
+                                    option_type=option_type,
+                                    current_oi=opt['oi']
+                                )
+                                
+                                # Only run AI analysis if spike detected or score >= 92%
+                                ai_analysis = None
+                                if spike_info['spike_detected'] or opt['score'] >= 92:
+                                    print(f"[AI] Analyzing {symbol} {strike_data['strike']} {option_type}")
+                                    
+                                    # ENHANCED: Add ALL strikes data for comprehensive analysis
+                                    enhanced_signal = signal.copy()
+                                    enhanced_signal['spot_price'] = option_data.get('spot_price', 0)
+                                    enhanced_signal['all_strikes_data'] = []
+                                    
+                                    # Collect all strikes with their OI, volume, OI changes
+                                    for s_data in option_data['option_chain']:
+                                        strike_info = {
+                                            'strike': s_data['strike'],
+                                            'ce_oi': s_data.get('CE', {}).get('oi', 0),
+                                            'ce_volume': s_data.get('CE', {}).get('volume', 0),
+                                            'ce_oi_change': s_data.get('CE', {}).get('oi_change_pct', 0),
+                                            'pe_oi': s_data.get('PE', {}).get('oi', 0),
+                                            'pe_volume': s_data.get('PE', {}).get('volume', 0),
+                                            'pe_oi_change': s_data.get('PE', {}).get('oi_change_pct', 0),
+                                        }
+                                        enhanced_signal['all_strikes_data'].append(strike_info)
+                                    
+                                    ai_analysis = ai_service.analyze_sudden_movement(
+                                        signal_data=enhanced_signal,
+                                        spike_info=spike_info
+                                    )
+                                    
+                                    if ai_analysis:
+                                        print(f"[AI] Big Player: {ai_analysis['analysis'].get('big_player_detected', False)}")
+                                        print(f"[AI] Confidence: {ai_analysis['analysis'].get('confidence', 0)}%")
+                                
+                                # Send WhatsApp alert with AI insights (ONLY if market is open)
+                                if market_open:
+                                    alert_service = get_alert_service()
+                                    
+                                    # Use AI-enhanced message if available
+                                    if ai_analysis and ai_analysis['analysis'].get('big_player_detected'):
+                                        enhanced_message = ai_service.enhance_whatsapp_alert(signal, ai_analysis)
+                                        alert_service.send_alert(signal, custom_message=enhanced_message)
+                                    else:
+                                        alert_service.send_alert(signal)
+                                else:
+                                    print(f"[MARKET CLOSED] Skipping alert for {symbol} {strike_data['strike']} {option_type}")
+                            else:
+                                # Fallback: Send regular alert if AI disabled (ONLY if market is open)
+                                if market_open:
+                                    alert_service = get_alert_service()
+                                    alert_service.send_alert(signal)
+                                else:
+                                    print(f"[MARKET CLOSED] Skipping alert")
+                                
+                        except Exception as alert_error:
+                            print(f"[ALERT ERROR] Failed to send SMS: {alert_error}")
         
         # Sort by score
         strong_signals.sort(key=lambda x: x['score'], reverse=True)
@@ -1009,7 +1386,7 @@ async def get_strong_signals(symbol: str):
         result = {
             'symbol': symbol,
             'spot_price': option_data['spot_price'],
-            'signals': strong_signals,
+            'signals': strong_signals if market_open else [],  # No signals when market closed
             'pcr': option_data.get('pcr'),
             'market_direction': option_data.get('market_direction'),
             'direction_percentage': option_data.get('direction_percentage'),
@@ -1021,21 +1398,27 @@ async def get_strong_signals(symbol: str):
             'component_scores': option_data.get('component_scores'),
             'total_ce_oi': option_data.get('total_ce_oi'),
             'total_pe_oi': option_data.get('total_pe_oi'),
-            'timestamp': datetime.now().isoformat()
+            'timestamp': datetime.now().isoformat(),
+            'market_status': 'OPEN' if market_open else 'CLOSED'
         }
         
-        # Cache the result
+        # Add market closed message if needed
+        if not market_open:
+            result['message'] = f'Market is closed. Showing last traded values. Trading hours: 9:15 AM - 3:30 PM IST (Mon-Fri). Current time: {ist_now.strftime("%I:%M %p IST")}'
+        
+        # Cache the result for 3 seconds (reduced from 1 to reduce API calls)
         CACHE[cache_key] = result
-        CACHE_EXPIRY[cache_key] = current_time + CACHE_DURATION
+        CACHE_EXPIRY[cache_key] = current_time + 3
         
         return result
         
     except Exception as e:
         print(f"Error processing signals: {e}")
         # Return mock data on any error
-        result = get_mock_signals_data(symbol)
+        result = get_mock_market_closed_data(symbol)
+        result['message'] = f'Error fetching data: {str(e)}'
         CACHE[cache_key] = result
-        CACHE_EXPIRY[cache_key] = current_time + CACHE_DURATION
+        CACHE_EXPIRY[cache_key] = current_time + 3
         return result
 
 

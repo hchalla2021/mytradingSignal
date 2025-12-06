@@ -1,3 +1,10 @@
+# Environment & Credentials - NEVER COMMIT THESE
+.env
+config/.env
+frontend/.env.local
+*.pem
+*.key
+
 # Python
 __pycache__/
 *.py[cod]
@@ -22,7 +29,6 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
-.env
 
 # Next.js
 frontend/.next/
@@ -49,3 +55,4 @@ yarn-error.log*
 
 # Misc
 .vercel
+node_modules

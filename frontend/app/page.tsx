@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
-import { TrendingUp, TrendingDown, Activity, RefreshCw, AlertCircle } from 'lucide-react';
+import { TrendingUp, TrendingDown, Activity, RefreshCw, AlertCircle, Bell } from 'lucide-react';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
@@ -53,7 +53,6 @@ interface SignalData {
 }
 
 export default function Home() {
-  const [selectedSymbol, setSelectedSymbol] = useState<'NIFTY' | 'BANKNIFTY' | 'SENSEX'>('NIFTY');
   const [signalData, setSignalData] = useState<Record<string, SignalData>>({});
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -62,6 +61,12 @@ export default function Home() {
   const [useTestData, setUseTestData] = useState(false);
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [showTestAlert, setShowTestAlert] = useState(false);
+  const [testPhoneNumber, setTestPhoneNumber] = useState('+919177242623');
+  const [testAlertLoading, setTestAlertLoading] = useState(false);
+  const [testAlertResult, setTestAlertResult] = useState<{status: string, message: string} | null>(null);
+  const [marketStatus, setMarketStatus] = useState<{status: string, current_time: string, message?: string} | null>(null);
+  const symbols = ['NIFTY', 'BANKNIFTY', 'SENSEX'] as const;
 
   const loadTestData = useCallback(() => {
     console.log('loadTestData called'); // Debug log
@@ -102,42 +107,60 @@ export default function Home() {
     setError(null);
   }, []);
 
-  const fetchSignals = useCallback(async (symbol: string, showLoading = true, retryCount = 0) => {
+  const fetchAllSignals = useCallback(async (showLoading = true) => {
     if (useTestData) return; // Skip if using test data
-    console.log(`[FETCH] Fetching ${symbol} data...`); // Debug log
+    console.log(`[FETCH] Fetching all symbols data...`);
     if (showLoading) setLoading(true);
-    if (!showLoading) setIsRefreshing(true); // Show refresh indicator for background updates
+    if (!showLoading) setIsRefreshing(true);
     setError(null);
     
     try {
-      const response = await axios.get(`${API_URL}/api/signals/${symbol}`, {
-        timeout: 15000, // 15 second timeout for initial fetch (Zerodha API can be slow)
-        headers: {
-          'Cache-Control': 'no-cache',
-          'Pragma': 'no-cache'
+      // Fetch market status first
+      const statusResponse = await axios.get(`${API_URL}/api/market/status`);
+      setMarketStatus(statusResponse.data);
+      
+      // Fetch all three symbols in parallel
+      const promises = symbols.map(symbol => 
+        axios.get(`${API_URL}/api/signals/${symbol}`, {
+          timeout: 15000,
+          headers: {
+            'Cache-Control': 'no-cache',
+            'Pragma': 'no-cache'
+          }
+        }).catch(err => {
+          console.error(`Error fetching ${symbol}:`, err);
+          return null;
+        })
+      );
+      
+      const responses = await Promise.all(promises);
+      
+      // Update signal data for all symbols
+      const newData: Record<string, SignalData> = {};
+      let marketMessage = null;
+      responses.forEach((response, index) => {
+        if (response) {
+          newData[symbols[index]] = response.data;
+          console.log(`[FETCH] ${symbols[index]} spot: ${response.data.spot_price}`);
+          if (response.data.message) {
+            marketMessage = response.data.message;
+          }
         }
       });
-      console.log(`[FETCH] ${symbol} spot price: ${response.data.spot_price}`); // Debug log
       
-      // Cache the data per symbol
-      setSignalData(prev => ({
-        ...prev,
-        [symbol]: response.data
-      }));
+      setSignalData(prev => ({ ...prev, ...newData }));
       setIsAuthenticated(true);
-      setError(null); // Clear any previous errors
-      setLastUpdate(new Date()); // Track last successful update
+      
+      // Don't show market closed as error - it's already in header status
+      setError(null);
+      
+      setLastUpdate(new Date());
     } catch (err: any) {
       console.error('API Error:', err);
-      
-      // Skip retry for faster performance - just log and continue
-      
-      // Only show critical errors, ignore timeouts during auto-refresh
       if (err.response?.status === 401) {
         setIsAuthenticated(false);
         setError('Please authenticate with Zerodha first');
       } else if (!showLoading) {
-        // Silently fail on background refresh - don't disrupt UI
         console.log('Background refresh failed, will retry in 1s');
       } else {
         setError('Failed to fetch data - Check if backend is running');
@@ -146,49 +169,70 @@ export default function Home() {
       setLoading(false);
       setIsRefreshing(false);
     }
-  }, [useTestData]);
+  }, [useTestData, symbols]);
 
   const handleLogin = async () => {
     try {
+      console.log('[LOGIN] Starting login process...'); // Debug log
+      console.log('[LOGIN] API URL:', API_URL); // Debug log
+      
       const response = await axios.get(`${API_URL}/api/auth/login-url`);
+      console.log('[LOGIN] Received response:', response.data); // Debug log
       
-      // Store current symbol in sessionStorage to restore after auth
-      sessionStorage.setItem('selectedSymbol', selectedSymbol);
+      const loginUrl = response.data.login_url;
+      console.log('[LOGIN] Redirecting to:', loginUrl); // Debug log
       
-      // Full page redirect to Zerodha login
-      window.location.href = response.data.login_url;
+      // Detect mobile device
+      const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+      console.log('[LOGIN] Is mobile:', isMobile); // Debug log
+      
+      if (isMobile) {
+        // Try to open Zerodha Kite app first (if installed)
+        const mobileUrl = response.data.mobile_login_url || `kite://kite.zerodha.com/connect/login?api_key=${response.data.api_key}&v=3`;
+        console.log('[LOGIN] Trying mobile app URL:', mobileUrl); // Debug log
+        
+        // Create a hidden iframe to test if app is available
+        const iframe = document.createElement('iframe');
+        iframe.style.display = 'none';
+        iframe.src = mobileUrl;
+        document.body.appendChild(iframe);
+        
+        // Fallback to browser after 2 seconds if app doesn't open
+        setTimeout(() => {
+          document.body.removeChild(iframe);
+          console.log('[LOGIN] Mobile app didn\'t open, redirecting to browser...'); // Debug log
+          window.location.href = loginUrl;
+        }, 2000);
+      } else {
+        // Desktop: Full page redirect to Zerodha login
+        console.log('[LOGIN] Desktop detected, redirecting to:', loginUrl); // Debug log
+        window.location.href = loginUrl;
+      }
       
     } catch (err: any) {
-      console.error('Login error:', err);
+      console.error('[LOGIN ERROR]:', err); // Debug log
+      console.error('[LOGIN ERROR] Details:', err.response?.data); // Debug log
       setError(err.response?.data?.detail || 'Failed to get login URL. Please check backend is running.');
     }
   };
 
   useEffect(() => {
-    // Fetch live data on startup for the selected symbol
+    // Fetch live data on startup for all symbols
     if (!useTestData) {
-      fetchSignals(selectedSymbol, true);
+      fetchAllSignals(true);
     }
   }, []);
 
-  // Fetch data when selected symbol changes
-  useEffect(() => {
-    if (!useTestData && !signalData[selectedSymbol]) {
-      // If this symbol doesn't have data yet, fetch it
-      fetchSignals(selectedSymbol, true);
-    }
-  }, [selectedSymbol, useTestData, signalData, fetchSignals]);
-
   // Auto-refresh polling for live data - ultra-fast 1 second updates
   useEffect(() => {
-    if (!autoRefresh || useTestData) return; // Skip if test data
+    if (!autoRefresh || useTestData) return;
     
     const interval = setInterval(() => {
-      fetchSignals(selectedSymbol, false); // Don't show loading on auto-refresh
+      fetchAllSignals(false); // Don't show loading on auto-refresh
     }, 1000); // Refresh every 1 second for live data
     
     return () => clearInterval(interval);
-  }, [autoRefresh, selectedSymbol, useTestData, fetchSignals]);
+  }, [autoRefresh, useTestData, fetchAllSignals]);
 
   const getSignalColor = (signal: string) => {
     switch (signal) {
@@ -220,39 +264,47 @@ export default function Home() {
               <Activity className="w-8 h-8 text-blue-400" />
               <div>
                 <h1 className="text-2xl font-bold">Options Trading Signals</h1>
-                {autoRefresh && lastUpdate && (
-                  <p className="text-xs text-slate-400 flex items-center gap-1">
-                    <span className={`inline-block w-2 h-2 rounded-full ${isRefreshing ? 'bg-yellow-400 animate-pulse' : 'bg-green-400'}`}></span>
-                    Live • Updated {lastUpdate.toLocaleTimeString()}
-                  </p>
-                )}
+                <div className="flex items-center gap-3">
+                  {marketStatus && (
+                    <p className="text-xs flex items-center gap-1">
+                      <span className={`inline-block w-2 h-2 rounded-full ${marketStatus.status === 'OPEN' ? 'bg-green-400 animate-pulse' : 'bg-red-400'}`}></span>
+                      <span className={marketStatus.status === 'OPEN' ? 'text-green-400 font-semibold' : 'text-red-400 font-semibold'}>
+                        {marketStatus.status === 'OPEN' ? 'LIVE' : 'OFFLINE'}
+                      </span>
+                      <span className="text-slate-400">• {marketStatus.current_time}</span>
+                      <span className="text-slate-500 text-[10px]">
+                        {marketStatus.status === 'OPEN' ? '(Market Open)' : '(Market Closed)'}
+                      </span>
+                    </p>
+                  )}
+                  {autoRefresh && lastUpdate && (
+                    <p className="text-xs text-slate-400 flex items-center gap-1">
+                      <span className={`inline-block w-2 h-2 rounded-full ${isRefreshing ? 'bg-yellow-400 animate-pulse' : 'bg-blue-400'}`}></span>
+                      Updated {lastUpdate.toLocaleTimeString()}
+                    </p>
+                  )}
+                </div>
               </div>
             </div>
             
             <div className="flex items-center gap-4">
-              <a
-                href="/optionchain"
-                className="px-4 py-2 bg-purple-600 hover:bg-purple-700 rounded-lg transition-colors font-semibold"
-              >
-                Full Option Chain
-              </a>
-              
               {!isAuthenticated && (
-                <>
-                  <button
-                    onClick={handleLogin}
-                    className="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors"
-                  >
-                    Login to Zerodha
-                  </button>
-                  <button
-                    onClick={loadTestData}
-                    className="px-4 py-2 bg-green-600 hover:bg-green-700 rounded-lg transition-colors text-sm"
-                  >
-                    Load Test Data
-                  </button>
-                </>
+                <button
+                  onClick={handleLogin}
+                  className="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors"
+                >
+                  Login to Zerodha
+                </button>
               )}
+              
+              <button
+                onClick={() => setShowTestAlert(true)}
+                className="px-4 py-2 rounded-lg bg-purple-600 hover:bg-purple-700 transition-colors flex items-center gap-2"
+                title="Test SMS Alert"
+              >
+                <Bell className="w-4 h-4" />
+                Test Alert
+              </button>
               
               <button
                 onClick={() => setAutoRefresh(!autoRefresh)}
@@ -270,30 +322,8 @@ export default function Home() {
 
       {/* Main Content */}
       <main className="container mx-auto px-4 py-8">
-        {/* Symbol Selection */}
-        <div className="flex gap-4 mb-8">
-          {(['NIFTY', 'BANKNIFTY', 'SENSEX'] as const).map((symbol) => (
-            <button
-              key={symbol}
-              onClick={() => {
-                if (symbol !== selectedSymbol) {
-                  setLoading(true); // Show loading immediately
-                  setSelectedSymbol(symbol);
-                }
-              }}
-              className={`flex-1 px-6 py-4 rounded-xl font-semibold transition-all ${
-                selectedSymbol === symbol
-                  ? 'bg-blue-600 text-white shadow-lg shadow-blue-500/50 scale-105'
-                  : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
-              }`}
-            >
-              {symbol}
-            </button>
-          ))}
-        </div>
-
-        {/* Error Message */}
-        {error && (
+        {/* Error Message - Only for actual errors, not market status */}
+        {error && !error.includes('Market is closed') && (
           <div className="mb-6 p-4 bg-red-500/10 border border-red-500 rounded-lg flex items-center gap-3">
             <AlertCircle className="w-5 h-5 text-red-500" />
             <p className="text-red-400">{error}</p>
@@ -301,417 +331,517 @@ export default function Home() {
         )}
 
         {/* Loading State */}
-        {loading && !signalData[selectedSymbol] && (
+        {loading && Object.keys(signalData).length === 0 && (
           <div className="flex items-center justify-center py-20">
             <RefreshCw className="w-8 h-8 animate-spin text-blue-400" />
           </div>
         )}
 
         {/* No Data State */}
-        {!loading && !signalData[selectedSymbol] && (
+        {!loading && Object.keys(signalData).length === 0 && (
           <div className="flex flex-col items-center justify-center py-20">
-            <p className="text-slate-400 mb-4">No data loaded. Click "Load Test Data" to begin.</p>
+            <p className="text-slate-400 mb-4">Please authenticate with Zerodha to view live data.</p>
             {!isAuthenticated && (
               <button
-                onClick={loadTestData}
-                className="px-6 py-2 bg-green-600 hover:bg-green-700 rounded-lg transition-colors font-semibold"
+                onClick={handleLogin}
+                className="px-6 py-2 bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors font-semibold"
               >
-                Load Test Data
+                Login to Zerodha
               </button>
             )}
           </div>
         )}
 
-        {/* Spot Price & Market Metrics */}
-        {signalData[selectedSymbol] && (
+        {/* All Indices Overview - Unified View */}
+        {Object.keys(signalData).length > 0 && (
           <>
-            <div className="mb-6 p-6 bg-slate-800 rounded-xl border border-slate-700 relative overflow-hidden">
-              {isRefreshing && (
-                <div className="absolute top-0 left-0 right-0 h-1 bg-gradient-to-r from-transparent via-blue-500 to-transparent animate-pulse"></div>
-              )}
-              <div className="flex items-center justify-between">
-                <div>
-                  <div className="flex items-center gap-2">
-                    <h2 className="text-3xl font-bold text-blue-400">{signalData[selectedSymbol].symbol}</h2>
-                    {autoRefresh && (
-                      <span className="px-2 py-1 bg-green-500/20 text-green-400 text-xs rounded-full border border-green-500/30 animate-pulse">
-                        LIVE
-                      </span>
+            <div className="mb-8 grid grid-cols-1 lg:grid-cols-3 gap-6">
+              {symbols.map((symbol) => {
+                const data = signalData[symbol];
+                if (!data) return null;
+                
+                const direction = data.bullish_percentage !== undefined 
+                  ? (data.bullish_percentage > 50 ? 'UP' : data.bullish_percentage < 50 ? 'DOWN' : 'NEUTRAL')
+                  : (data.pcr && data.pcr > 1.2 ? 'UP' : data.pcr && data.pcr < 0.8 ? 'DOWN' : 'NEUTRAL');
+                
+                const directionColor = direction === 'UP' ? 'border-green-500/50 bg-green-500/5' : 
+                                       direction === 'DOWN' ? 'border-red-500/50 bg-red-500/5' : 
+                                       'border-yellow-500/50 bg-yellow-500/5';
+                
+                const directionIcon = direction === 'UP' ? '📈' : direction === 'DOWN' ? '📉' : '➡️';
+                const directionTextColor = direction === 'UP' ? 'text-green-400' : 
+                                          direction === 'DOWN' ? 'text-red-400' : 
+                                          'text-yellow-400';
+
+                return (
+                  <div 
+                    key={symbol}
+                    className={`p-6 bg-slate-800 rounded-xl border-2 ${directionColor} relative overflow-hidden group hover:shadow-2xl hover:scale-105 transition-all duration-300`}
+                  >
+                    {/* Symbol Header */}
+                    <div className="flex items-start justify-between mb-4">
+                      <div>
+                        <div className="flex items-center gap-2 mb-2">
+                          <h2 className="text-2xl font-bold text-blue-400">{symbol}</h2>
+                          {marketStatus && (
+                            <span className={`px-2 py-1 ${marketStatus.status === 'OPEN' ? 'bg-green-500/20 text-green-400 border-green-500/30 animate-pulse' : 'bg-red-500/20 text-red-400 border-red-500/30'} text-[10px] rounded-full border font-semibold`}>
+                              {marketStatus.status === 'OPEN' ? 'LIVE' : 'OFFLINE'}
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-3xl font-bold">₹{data.spot_price.toFixed(2)}</p>
+                      </div>
+                      
+                      <div className="text-right">
+                        <div className={`text-4xl mb-1`}>{directionIcon}</div>
+                        <p className={`text-xl font-bold ${directionTextColor}`}>{direction}</p>
+                      </div>
+                    </div>
+
+                    {/* Direction Percentage */}
+                    {data.bullish_percentage !== undefined && (
+                      <div className="mb-4 p-3 bg-slate-900/50 rounded-lg">
+                        <div className="flex items-center justify-between mb-2">
+                          <p className="text-xs text-slate-400">Market Bias</p>
+                          <p className={`text-lg font-bold ${directionTextColor}`}>
+                            {data.bullish_percentage > 50 
+                              ? `+${(data.bullish_percentage - 50).toFixed(1)}%` 
+                              : `${(data.bullish_percentage - 50).toFixed(1)}%`}
+                          </p>
+                        </div>
+                        <div className="w-full bg-slate-700 rounded-full h-2">
+                          <div
+                            className={`h-2 rounded-full transition-all duration-500 ${
+                              data.bullish_percentage > 50 ? 'bg-green-500' : 'bg-red-500'
+                            }`}
+                            style={{ width: `${Math.abs(data.bullish_percentage - 50) * 2}%` }}
+                          />
+                        </div>
+                      </div>
                     )}
+
+                    {/* PCR & OI */}
+                    <div className="grid grid-cols-2 gap-3 mb-4">
+                      <div className="p-3 bg-slate-900/50 rounded-lg">
+                        <p className="text-xs text-slate-400 mb-1">PCR</p>
+                        <p className={`text-lg font-bold ${
+                          data.pcr && data.pcr > 1.2 ? 'text-green-400' : 
+                          data.pcr && data.pcr < 0.8 ? 'text-red-400' : 
+                          'text-yellow-400'
+                        }`}>
+                          {data.pcr?.toFixed(2) || 'N/A'}
+                        </p>
+                      </div>
+                      <div className="p-3 bg-slate-900/50 rounded-lg">
+                        <p className="text-xs text-slate-400 mb-1">Signals</p>
+                        <p className="text-lg font-bold text-blue-400">
+                          {data.signals.length}
+                        </p>
+                      </div>
+                    </div>
+
+                    {/* OI Breakdown */}
+                    {data.total_ce_oi && data.total_pe_oi && (
+                      <div className="flex justify-between items-center text-xs pt-3 border-t border-slate-700">
+                        <div>
+                          <p className="text-slate-500">CE OI</p>
+                          <p className="text-red-400 font-semibold">{(data.total_ce_oi / 100000).toFixed(1)}L</p>
+                        </div>
+                        <div className="text-right">
+                          <p className="text-slate-500">PE OI</p>
+                          <p className="text-green-400 font-semibold">{(data.total_pe_oi / 100000).toFixed(1)}L</p>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Updated timestamp */}
+                    <div className="flex items-center gap-1 text-xs text-slate-500 mt-3 pt-3 border-t border-slate-700">
+                      <span className={`inline-block w-1.5 h-1.5 rounded-full ${isRefreshing ? 'bg-yellow-400 animate-pulse' : 'bg-green-400'}`}></span>
+                      {new Date(data.timestamp).toLocaleTimeString()}
+                    </div>
                   </div>
-                  <p className="text-2xl mt-2">Spot: ₹{signalData[selectedSymbol].spot_price.toFixed(2)}</p>
-                </div>
-                <div className="text-right">
-                  <p className="text-sm text-slate-400">Last Updated</p>
-                  <p className="text-sm flex items-center gap-1 justify-end">
-                    <span className={`inline-block w-2 h-2 rounded-full ${isRefreshing ? 'bg-yellow-400 animate-pulse' : 'bg-green-400'}`}></span>
-                    {new Date(signalData[selectedSymbol].timestamp).toLocaleTimeString()}
-                  </p>
-                  <p className="text-sm text-slate-400 mt-1">
-                    {signalData[selectedSymbol].signals.length} Signals Found
-                  </p>
-                </div>
-              </div>
+                );
+              })}
             </div>
 
-            {/* PCR & Market Direction */}
-            {signalData[selectedSymbol].pcr && (
-              <div className="mb-6 grid grid-cols-1 md:grid-cols-4 gap-4">
-                <div className="p-4 bg-slate-800 rounded-xl border border-slate-700 transition-all duration-300">
-                  <p className="text-sm text-slate-400 mb-1">Put-Call Ratio (PCR)</p>
-                  <p className={`text-2xl font-bold transition-colors duration-300 ${
-                    signalData[selectedSymbol].pcr! > 1.2 ? 'text-green-500' : 
-                    signalData[selectedSymbol].pcr! < 0.8 ? 'text-red-500' : 
-                    'text-yellow-500'
-                  }`}>
-                    {signalData[selectedSymbol].pcr!.toFixed(2)}
-                  </p>
-                  <p className="text-xs text-slate-500 mt-1">
-                    {signalData[selectedSymbol].pcr! > 1.2 ? 'Bullish' : 
-                     signalData[selectedSymbol].pcr! < 0.8 ? 'Bearish' : 'Neutral'}
-                  </p>
-                </div>
-
-                <div className="p-4 bg-slate-800 rounded-xl border border-slate-700">
-                  <p className="text-sm text-slate-400 mb-1">Market Direction</p>
-                  <p className={`text-lg font-bold ${
-                    signalData[selectedSymbol].market_direction?.includes('BULLISH') ? 'text-green-500' : 
-                    signalData[selectedSymbol].market_direction?.includes('BEARISH') ? 'text-red-500' : 
-                    'text-yellow-500'
-                  }`}>
-                    {signalData[selectedSymbol].market_direction}
-                  </p>
-                  <p className="text-xs text-slate-400 mt-2">
-                    PCR: {signalData[selectedSymbol].pcr?.toFixed(2)} | CE OI: {(signalData[selectedSymbol].total_ce_oi! / 100000).toFixed(1)}L | PE OI: {(signalData[selectedSymbol].total_pe_oi! / 100000).toFixed(1)}L
-                  </p>
-                </div>
-
-                <div className="p-4 bg-slate-800 rounded-xl border border-slate-700">
-                  <p className="text-sm text-slate-400 mb-1">Direction %</p>
-                  <p className={`text-2xl font-bold ${
-                    (signalData[selectedSymbol].bullish_percentage !== undefined && signalData[selectedSymbol].bullish_percentage > 50) ? 'text-green-500' :
-                    (signalData[selectedSymbol].bullish_percentage !== undefined && signalData[selectedSymbol].bullish_percentage < 50) ? 'text-red-500' :
-                    'text-yellow-500'
-                  }`}>
-                    {(signalData[selectedSymbol].bullish_percentage !== undefined && signalData[selectedSymbol].bullish_percentage > 50) ? '📈' : 
-                     (signalData[selectedSymbol].bullish_percentage !== undefined && signalData[selectedSymbol].bullish_percentage < 50) ? '📉' : 
-                     '➡️'} 
-                    {signalData[selectedSymbol].bullish_percentage !== undefined ? (signalData[selectedSymbol].bullish_percentage > 50 ? (signalData[selectedSymbol].bullish_percentage - 50).toFixed(1) : (-(50 - signalData[selectedSymbol].bullish_percentage)).toFixed(1)) : '0'}%
-                  </p>
-                  <p className="text-xs text-slate-500 mt-1">
-                    {(signalData[selectedSymbol].bullish_percentage !== undefined && signalData[selectedSymbol].bullish_percentage > 50) ? 'UP' : 
-                     (signalData[selectedSymbol].bullish_percentage !== undefined && signalData[selectedSymbol].bullish_percentage < 50) ? 'DOWN' : 'NEUTRAL'}
-                  </p>
-                  <p className="text-xs text-slate-400 mt-2 pt-2 border-t border-slate-600">
-                    📊 Weighted: {signalData[selectedSymbol].bullish_percentage !== undefined ? signalData[selectedSymbol].bullish_percentage : 'N/A'}% Bullish
-                  </p>
-                </div>
-
-                <div className="p-4 bg-slate-800 rounded-xl border border-slate-700">
-                  <p className="text-sm text-slate-400 mb-1">Total Open Interest</p>
-                  <div className="flex justify-between mt-2">
-                    <div>
-                      <p className="text-xs text-slate-500">CE</p>
-                      <p className="text-sm font-semibold text-red-400">
-                        {(signalData[selectedSymbol].total_ce_oi! / 100000).toFixed(1)}L
-                      </p>
-                    </div>
-                    <div className="text-right">
-                      <p className="text-xs text-slate-500">PE</p>
-                      <p className="text-sm font-semibold text-green-400">
-                        {(signalData[selectedSymbol].total_pe_oi! / 100000).toFixed(1)}L
-                      </p>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* Probability Analysis */}
-            {signalData[selectedSymbol].probability_bullish && (
-              <div className="mb-6 p-6 bg-slate-800 rounded-xl border border-slate-700">
-                <div className="flex items-center justify-between mb-4">
-                  <h3 className="text-lg font-bold text-slate-200">Probability (Today)</h3>
-                  <p className="text-xs text-slate-400">Based on PCR & OI Data</p>
-                </div>
-                
-                <div className="space-y-4">
-                  {/* Bullish Continuation */}
-                  <div>
-                    <div className="flex items-center justify-between mb-2">
-                      <p className="text-sm font-semibold text-slate-300">
-                        📈 Bullish Continuation
-                      </p>
-                      <p className="text-sm font-bold text-green-400">
-                        ~{signalData[selectedSymbol].probability_bullish}%
-                      </p>
-                    </div>
-                    <div className="w-full bg-slate-700 rounded-full h-2">
-                      <div
-                        className="bg-green-500 h-2 rounded-full transition-all"
-                        style={{ width: `${signalData[selectedSymbol].probability_bullish}%` }}
-                      />
-                    </div>
+            {/* Detailed Analysis Sections - Show for each symbol with signals */}
+            {symbols.map((symbol) => {
+              const data = signalData[symbol];
+              if (!data) return null;
+              
+              return (
+                <div key={`${symbol}-details`} className="mb-8">
+                  {/* Symbol Section Header */}
+                  <div className="mb-4 flex items-center gap-3">
+                    <div className="h-1 flex-1 bg-gradient-to-r from-transparent via-blue-500/50 to-transparent"></div>
+                    <h3 className="text-2xl font-bold text-blue-400">{symbol} Analysis</h3>
+                    <div className="h-1 flex-1 bg-gradient-to-r from-transparent via-blue-500/50 to-transparent"></div>
                   </div>
 
-                  {/* Range / Pullback */}
-                  <div>
-                    <div className="flex items-center justify-between mb-2">
-                      <p className="text-sm font-semibold text-slate-300">
-                        ➡️ Range / Pullback
-                      </p>
-                      <p className="text-sm font-bold text-yellow-400">
-                        ~{signalData[selectedSymbol].probability_range}%
-                      </p>
-                    </div>
-                    <div className="w-full bg-slate-700 rounded-full h-2">
-                      <div
-                        className="bg-yellow-500 h-2 rounded-full transition-all"
-                        style={{ width: `${signalData[selectedSymbol].probability_range}%` }}
-                      />
-                    </div>
-                  </div>
+                  {/* PCR & Market Direction */}
+                  {data.pcr && (
+                    <div className="mb-6 grid grid-cols-1 md:grid-cols-4 gap-4">
+                      <div className="p-4 bg-slate-800 rounded-xl border border-slate-700 transition-all duration-300">
+                        <p className="text-sm text-slate-400 mb-1">Put-Call Ratio (PCR)</p>
+                        <p className={`text-2xl font-bold transition-colors duration-300 ${
+                          data.pcr! > 1.2 ? 'text-green-500' : 
+                          data.pcr! < 0.8 ? 'text-red-500' : 
+                          'text-yellow-500'
+                        }`}>
+                          {data.pcr!.toFixed(2)}
+                        </p>
+                        <p className="text-xs text-slate-500 mt-1">
+                          {data.pcr! > 1.2 ? 'Bullish' : 
+                           data.pcr! < 0.8 ? 'Bearish' : 'Neutral'}
+                        </p>
+                      </div>
 
-                  {/* Bearish Reversal */}
-                  <div>
-                    <div className="flex items-center justify-between mb-2">
-                      <p className="text-sm font-semibold text-slate-300">
-                        📉 Sharp Bearish Reversal
-                      </p>
-                      <p className="text-sm font-bold text-red-400">
-                        ~{signalData[selectedSymbol].probability_bearish}%
-                      </p>
-                    </div>
-                    <div className="w-full bg-slate-700 rounded-full h-2">
-                      <div
-                        className="bg-red-500 h-2 rounded-full transition-all"
-                        style={{ width: `${signalData[selectedSymbol].probability_bearish}%` }}
-                      />
-                    </div>
-                  </div>
-                </div>
+                      <div className="p-4 bg-slate-800 rounded-xl border border-slate-700">
+                        <p className="text-sm text-slate-400 mb-1">Market Direction</p>
+                        <p className={`text-lg font-bold ${
+                          data.market_direction?.includes('BULLISH') ? 'text-green-500' : 
+                          data.market_direction?.includes('BEARISH') ? 'text-red-500' : 
+                          'text-yellow-500'
+                        }`}>
+                          {data.market_direction}
+                        </p>
+                        <p className="text-xs text-slate-400 mt-2">
+                          PCR: {data.pcr?.toFixed(2)} | CE OI: {(data.total_ce_oi! / 100000).toFixed(1)}L | PE OI: {(data.total_pe_oi! / 100000).toFixed(1)}L
+                        </p>
+                      </div>
 
-                <p className="text-xs text-slate-500 mt-4 border-t border-slate-600 pt-4">
-                  💡 PE OI: {(signalData[selectedSymbol].total_pe_oi! / 100000).toFixed(1)}L | CE OI: {(signalData[selectedSymbol].total_ce_oi! / 100000).toFixed(1)}L | Ratio: {(signalData[selectedSymbol].total_pe_oi! / signalData[selectedSymbol].total_ce_oi!).toFixed(2)}
-                </p>
-              </div>
-            )}
+                      <div className="p-4 bg-slate-800 rounded-xl border border-slate-700">
+                        <p className="text-sm text-slate-400 mb-1">Direction %</p>
+                        <p className={`text-2xl font-bold ${
+                          (data.bullish_percentage !== undefined && data.bullish_percentage > 50) ? 'text-green-500' :
+                          (data.bullish_percentage !== undefined && data.bullish_percentage < 50) ? 'text-red-500' :
+                          'text-yellow-500'
+                        }`}>
+                          {(data.bullish_percentage !== undefined && data.bullish_percentage > 50) ? '📈' : 
+                           (data.bullish_percentage !== undefined && data.bullish_percentage < 50) ? '📉' : 
+                           '➡️'} 
+                          {data.bullish_percentage !== undefined ? (data.bullish_percentage > 50 ? (data.bullish_percentage - 50).toFixed(1) : (-(50 - data.bullish_percentage)).toFixed(1)) : '0'}%
+                        </p>
+                        <p className="text-xs text-slate-500 mt-1">
+                          {(data.bullish_percentage !== undefined && data.bullish_percentage > 50) ? 'UP' : 
+                           (data.bullish_percentage !== undefined && data.bullish_percentage < 50) ? 'DOWN' : 'NEUTRAL'}
+                        </p>
+                        <p className="text-xs text-slate-400 mt-2 pt-2 border-t border-slate-600">
+                          📊 Weighted: {data.bullish_percentage !== undefined ? data.bullish_percentage : 'N/A'}% Bullish
+                        </p>
+                      </div>
 
-            {/* Weighted Market Bias Analysis */}
-            {signalData[selectedSymbol].bullish_percentage !== undefined && (
-              <div className="mb-6 p-6 bg-slate-800 rounded-xl border border-slate-700">
-                <div className="flex items-center justify-between mb-4">
-                  <h3 className="text-lg font-bold text-slate-200">Market Bias (Weighted Analysis)</h3>
-                  <p className="text-xs text-slate-400">5 Parameter Formula</p>
-                </div>
-
-                {/* Main Bullish vs Bearish */}
-                <div className="grid grid-cols-2 gap-4 mb-6">
-                  <div className="p-4 bg-slate-900 rounded-lg border border-green-500/30">
-                    <p className="text-sm text-slate-400 mb-2">Bullish Bias</p>
-                    <p className="text-3xl font-bold text-green-400">
-                      {signalData[selectedSymbol].bullish_percentage}%
-                    </p>
-                  </div>
-                  <div className="p-4 bg-slate-900 rounded-lg border border-red-500/30">
-                    <p className="text-sm text-slate-400 mb-2">Bearish Bias</p>
-                    <p className="text-3xl font-bold text-red-400">
-                      {signalData[selectedSymbol].bearish_percentage}%
-                    </p>
-                  </div>
-                </div>
-
-                {/* Component Scores Breakdown */}
-                {signalData[selectedSymbol].component_scores && (
-                  <div>
-                    <p className="text-sm font-semibold text-slate-300 mb-3">Component Scores (Weights):</p>
-                    <div className="space-y-3">
-                      {/* PCR Score (35%) */}
-                      <div>
-                        <div className="flex items-center justify-between mb-1">
-                          <p className="text-xs font-medium text-slate-400">
-                            📊 PCR Score
-                            <span className="text-slate-500 ml-1">(35%)</span>
-                          </p>
-                          <p className="text-sm font-bold text-blue-400">
-                            {signalData[selectedSymbol].component_scores?.pcr_score?.toFixed(1)}/100
-                          </p>
+                      <div className="p-4 bg-slate-800 rounded-xl border border-slate-700">
+                        <p className="text-sm text-slate-400 mb-1">Total Open Interest</p>
+                        <div className="flex justify-between mt-2">
+                          <div>
+                            <p className="text-xs text-slate-500">CE</p>
+                            <p className="text-sm font-semibold text-red-400">
+                              {(data.total_ce_oi! / 100000).toFixed(1)}L
+                            </p>
+                          </div>
+                          <div className="text-right">
+                            <p className="text-xs text-slate-500">PE</p>
+                            <p className="text-sm font-semibold text-green-400">
+                              {(data.total_pe_oi! / 100000).toFixed(1)}L
+                            </p>
+                          </div>
                         </div>
-                        <div className="w-full bg-slate-700 rounded-full h-2">
-                          <div
-                            className="bg-blue-500 h-2 rounded-full"
-                            style={{ width: `${signalData[selectedSymbol].component_scores?.pcr_score}%` }}
-                          />
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Probability Analysis */}
+                  {data.probability_bullish && (
+                    <div className="mb-6 p-6 bg-slate-800 rounded-xl border border-slate-700">
+                      <div className="flex items-center justify-between mb-4">
+                        <h3 className="text-lg font-bold text-slate-200">Probability (Today)</h3>
+                        <p className="text-xs text-slate-400">Based on PCR & OI Data</p>
+                      </div>
+                      
+                      <div className="space-y-4">
+                        {/* Bullish Continuation */}
+                        <div>
+                          <div className="flex items-center justify-between mb-2">
+                            <p className="text-sm font-semibold text-slate-300">
+                              📈 Bullish Continuation
+                            </p>
+                            <p className="text-sm font-bold text-green-400">
+                              ~{data.probability_bullish}%
+                            </p>
+                          </div>
+                          <div className="w-full bg-slate-700 rounded-full h-2">
+                            <div
+                              className="bg-green-500 h-2 rounded-full transition-all"
+                              style={{ width: `${data.probability_bullish}%` }}
+                            />
+                          </div>
+                        </div>
+
+                        {/* Range / Pullback */}
+                        <div>
+                          <div className="flex items-center justify-between mb-2">
+                            <p className="text-sm font-semibold text-slate-300">
+                              ➡️ Range / Pullback
+                            </p>
+                            <p className="text-sm font-bold text-yellow-400">
+                              ~{data.probability_range}%
+                            </p>
+                          </div>
+                          <div className="w-full bg-slate-700 rounded-full h-2">
+                            <div
+                              className="bg-yellow-500 h-2 rounded-full transition-all"
+                              style={{ width: `${data.probability_range}%` }}
+                            />
+                          </div>
+                        </div>
+
+                        {/* Bearish Reversal */}
+                        <div>
+                          <div className="flex items-center justify-between mb-2">
+                            <p className="text-sm font-semibold text-slate-300">
+                              📉 Sharp Bearish Reversal
+                            </p>
+                            <p className="text-sm font-bold text-red-400">
+                              ~{data.probability_bearish}%
+                            </p>
+                          </div>
+                          <div className="w-full bg-slate-700 rounded-full h-2">
+                            <div
+                              className="bg-red-500 h-2 rounded-full transition-all"
+                              style={{ width: `${data.probability_bearish}%` }}
+                            />
+                          </div>
                         </div>
                       </div>
 
-                      {/* OI Score (30%) */}
-                      <div>
-                        <div className="flex items-center justify-between mb-1">
-                          <p className="text-xs font-medium text-slate-400">
-                            🔄 OI Score
-                            <span className="text-slate-500 ml-1">(30%)</span>
-                          </p>
-                          <p className="text-sm font-bold text-purple-400">
-                            {signalData[selectedSymbol].component_scores?.oi_score?.toFixed(1)}/100
-                          </p>
-                        </div>
-                        <div className="w-full bg-slate-700 rounded-full h-2">
-                          <div
-                            className="bg-purple-500 h-2 rounded-full"
-                            style={{ width: `${signalData[selectedSymbol].component_scores?.oi_score}%` }}
-                          />
-                        </div>
+                      <p className="text-xs text-slate-500 mt-4 border-t border-slate-600 pt-4">
+                        💡 PE OI: {(data.total_pe_oi! / 100000).toFixed(1)}L | CE OI: {(data.total_ce_oi! / 100000).toFixed(1)}L | Ratio: {(data.total_pe_oi! / data.total_ce_oi!).toFixed(2)}
+                      </p>
+                    </div>
+                  )}
+
+                  {/* Weighted Market Bias Analysis */}
+                  {data.bullish_percentage !== undefined && (
+                    <div className="mb-6 p-6 bg-slate-800 rounded-xl border border-slate-700">
+                      <div className="flex items-center justify-between mb-4">
+                        <h3 className="text-lg font-bold text-slate-200">Market Bias (Weighted Analysis)</h3>
+                        <p className="text-xs text-slate-400">5 Parameter Formula</p>
                       </div>
 
-                      {/* Delta Score (20%) */}
-                      <div>
-                        <div className="flex items-center justify-between mb-1">
-                          <p className="text-xs font-medium text-slate-400">
-                            ⚡ Delta Score
-                            <span className="text-slate-500 ml-1">(20%)</span>
-                          </p>
-                          <p className="text-sm font-bold text-cyan-400">
-                            {signalData[selectedSymbol].component_scores?.delta_score?.toFixed(1)}/100
+                      {/* Main Bullish vs Bearish */}
+                      <div className="grid grid-cols-2 gap-4 mb-6">
+                        <div className="p-4 bg-slate-900 rounded-lg border border-green-500/30">
+                          <p className="text-sm text-slate-400 mb-2">Bullish Bias</p>
+                          <p className="text-3xl font-bold text-green-400">
+                            {data.bullish_percentage}%
                           </p>
                         </div>
-                        <div className="w-full bg-slate-700 rounded-full h-2">
-                          <div
-                            className="bg-cyan-500 h-2 rounded-full"
-                            style={{ width: `${signalData[selectedSymbol].component_scores?.delta_score}%` }}
-                          />
-                        </div>
-                      </div>
-
-                      {/* Price Action Score (10%) */}
-                      <div>
-                        <div className="flex items-center justify-between mb-1">
-                          <p className="text-xs font-medium text-slate-400">
-                            💹 Price Action
-                            <span className="text-slate-500 ml-1">(10%)</span>
-                          </p>
-                          <p className="text-sm font-bold text-orange-400">
-                            {signalData[selectedSymbol].component_scores?.price_action_score}
+                        <div className="p-4 bg-slate-900 rounded-lg border border-red-500/30">
+                          <p className="text-sm text-slate-400 mb-2">Bearish Bias</p>
+                          <p className="text-3xl font-bold text-red-400">
+                            {data.bearish_percentage}%
                           </p>
                         </div>
                       </div>
 
-                      {/* VIX Score (5%) */}
-                      <div>
-                        <div className="flex items-center justify-between mb-1">
-                          <p className="text-xs font-medium text-slate-400">
-                            📈 VIX Score
-                            <span className="text-slate-500 ml-1">(5%)</span>
-                          </p>
-                          <p className="text-sm font-bold text-indigo-400">
-                            {signalData[selectedSymbol].component_scores?.vix_score}
-                          </p>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                )}
+                      {/* Component Scores Breakdown */}
+                      {data.component_scores && (
+                        <div>
+                          <p className="text-sm font-semibold text-slate-300 mb-3">Component Scores (Weights):</p>
+                          <div className="space-y-3">
+                            {/* PCR Score (35%) */}
+                            <div>
+                              <div className="flex items-center justify-between mb-1">
+                                <p className="text-xs font-medium text-slate-400">
+                                  📊 PCR Score
+                                  <span className="text-slate-500 ml-1">(35%)</span>
+                                </p>
+                                <p className="text-sm font-bold text-blue-400">
+                                  {data.component_scores?.pcr_score?.toFixed(1)}/100
+                                </p>
+                              </div>
+                              <div className="w-full bg-slate-700 rounded-full h-2">
+                                <div
+                                  className="bg-blue-500 h-2 rounded-full"
+                                  style={{ width: `${data.component_scores?.pcr_score}%` }}
+                                />
+                              </div>
+                            </div>
 
-                <p className="text-xs text-slate-400 mt-4 pt-4 border-t border-slate-600">
-                  ✅ Formula: (0.35×PCR) + (0.30×OI) + (0.20×Delta) + (0.10×Price) + (0.05×VIX)
-                </p>
-              </div>
-            )}
+                            {/* OI Score (30%) */}
+                            <div>
+                              <div className="flex items-center justify-between mb-1">
+                                <p className="text-xs font-medium text-slate-400">
+                                  🔄 OI Score
+                                  <span className="text-slate-500 ml-1">(30%)</span>
+                                </p>
+                                <p className="text-sm font-bold text-purple-400">
+                                  {data.component_scores?.oi_score?.toFixed(1)}/100
+                                </p>
+                              </div>
+                              <div className="w-full bg-slate-700 rounded-full h-2">
+                                <div
+                                  className="bg-purple-500 h-2 rounded-full"
+                                  style={{ width: `${data.component_scores?.oi_score}%` }}
+                                />
+                              </div>
+                            </div>
+
+                            {/* Delta Score (20%) */}
+                            <div>
+                              <div className="flex items-center justify-between mb-1">
+                                <p className="text-xs font-medium text-slate-400">
+                                  ⚡ Delta Score
+                                  <span className="text-slate-500 ml-1">(20%)</span>
+                                </p>
+                                <p className="text-sm font-bold text-cyan-400">
+                                  {data.component_scores?.delta_score?.toFixed(1)}/100
+                                </p>
+                              </div>
+                              <div className="w-full bg-slate-700 rounded-full h-2">
+                                <div
+                                  className="bg-cyan-500 h-2 rounded-full"
+                                  style={{ width: `${data.component_scores?.delta_score}%` }}
+                                />
+                              </div>
+                            </div>
+
+                            {/* Price Action Score (10%) */}
+                            <div>
+                              <div className="flex items-center justify-between mb-1">
+                                <p className="text-xs font-medium text-slate-400">
+                                  💹 Price Action
+                                  <span className="text-slate-500 ml-1">(10%)</span>
+                                </p>
+                                <p className="text-sm font-bold text-orange-400">
+                                  {data.component_scores?.price_action_score}
+                                </p>
+                              </div>
+                            </div>
+
+                            {/* VIX Score (5%) */}
+                            <div>
+                              <div className="flex items-center justify-between mb-1">
+                                <p className="text-xs font-medium text-slate-400">
+                                  📈 VIX Score
+                                  <span className="text-slate-500 ml-1">(5%)</span>
+                                </p>
+                                <p className="text-sm font-bold text-indigo-400">
+                                  {data.component_scores?.vix_score}
+                                </p>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+
+                      <p className="text-xs text-slate-400 mt-4 pt-4 border-t border-slate-600">
+                        ✅ Formula: (0.35×PCR) + (0.30×OI) + (0.20×Delta) + (0.10×Price) + (0.05×VIX)
+                      </p>
+                    </div>
+                  )}
+
+                  {/* Signals for this symbol */}
+                  {data.signals.length > 0 && (
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+                      {data.signals.map((signal, index) => (
+                        <div
+                          key={`${symbol}-${index}`}
+                          className="bg-slate-800 rounded-xl border border-slate-700 p-6 hover:shadow-xl hover:shadow-blue-500/10 transition-all"
+                        >
+                          {/* Signal Header */}
+                          <div className="flex items-start justify-between mb-4">
+                            <div className="flex items-center gap-3">
+                              {signal.option_type === 'CE' ? (
+                                <TrendingUp className="w-8 h-8 text-green-400" />
+                              ) : (
+                                <TrendingDown className="w-8 h-8 text-red-400" />
+                              )}
+                              <div>
+                                <h3 className="text-xl font-bold">
+                                  {signal.strike} {signal.option_type}
+                                </h3>
+                                <p className="text-sm text-slate-400">{signal.tradingsymbol}</p>
+                              </div>
+                            </div>
+                            
+                            <div className="text-right">
+                              <span className={`px-3 py-1 rounded-full text-sm font-semibold ${getSignalColor(signal.signal)}`}>
+                                {signal.signal}
+                              </span>
+                              <p className={`text-2xl font-bold mt-2 ${getScoreColor(signal.score)}`}>
+                                {signal.score}%
+                              </p>
+                              <p className="text-xs text-slate-400 mt-1">Signal Strength</p>
+                            </div>
+                          </div>
+
+                          {/* Price Info */}
+                          <div className="grid grid-cols-2 gap-4 mb-4 p-4 bg-slate-900/50 rounded-lg">
+                            <div>
+                              <p className="text-sm text-slate-400">LTP</p>
+                              <p className="text-xl font-bold text-blue-400">₹{signal.ltp.toFixed(2)}</p>
+                            </div>
+                            <div>
+                              <p className="text-sm text-slate-400">Open Interest</p>
+                              <p className="text-xl font-bold">{signal.oi.toLocaleString()}</p>
+                            </div>
+                          </div>
+
+                          {/* Greeks */}
+                          <div className="grid grid-cols-4 gap-3 mb-4">
+                            <div className="p-3 bg-slate-900/50 rounded-lg">
+                              <p className="text-xs text-slate-400">Delta</p>
+                              <p className="text-lg font-semibold">{signal.greeks.delta.toFixed(3)}</p>
+                            </div>
+                            <div className="p-3 bg-slate-900/50 rounded-lg">
+                              <p className="text-xs text-slate-400">Gamma</p>
+                              <p className="text-lg font-semibold">{signal.greeks.gamma.toFixed(4)}</p>
+                            </div>
+                            <div className="p-3 bg-slate-900/50 rounded-lg">
+                              <p className="text-xs text-slate-400">Theta</p>
+                              <p className="text-lg font-semibold">{signal.greeks.theta.toFixed(2)}</p>
+                            </div>
+                            <div className="p-3 bg-slate-900/50 rounded-lg">
+                              <p className="text-xs text-slate-400">Vega</p>
+                              <p className="text-lg font-semibold">{signal.greeks.vega.toFixed(2)}</p>
+                            </div>
+                          </div>
+
+                          {/* Reasons */}
+                          <div className="space-y-2">
+                            <p className="text-sm font-semibold text-slate-300">Signal Reasons:</p>
+                            <div className="flex flex-wrap gap-2">
+                              {signal.reasons.map((reason, idx) => (
+                                <span
+                                  key={idx}
+                                  className="px-3 py-1 bg-blue-500/20 text-blue-300 rounded-full text-xs"
+                                >
+                                  {reason}
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
           </>
         )}
 
-        {/* Signals Grid */}
-        {signalData[selectedSymbol] && signalData[selectedSymbol].signals.length > 0 ? (
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            {signalData[selectedSymbol].signals.map((signal, index) => (
-              <div
-                key={index}
-                className="bg-slate-800 rounded-xl border border-slate-700 p-6 hover:shadow-xl hover:shadow-blue-500/10 transition-all"
-              >
-                {/* Signal Header */}
-                <div className="flex items-start justify-between mb-4">
-                  <div className="flex items-center gap-3">
-                    {signal.option_type === 'CE' ? (
-                      <TrendingUp className="w-8 h-8 text-green-400" />
-                    ) : (
-                      <TrendingDown className="w-8 h-8 text-red-400" />
-                    )}
-                    <div>
-                      <h3 className="text-xl font-bold">
-                        {signal.strike} {signal.option_type}
-                      </h3>
-                      <p className="text-sm text-slate-400">{signal.tradingsymbol}</p>
-                    </div>
-                  </div>
-                  
-                  <div className="text-right">
-                    <span className={`px-3 py-1 rounded-full text-sm font-semibold ${getSignalColor(signal.signal)}`}>
-                      {signal.signal}
-                    </span>
-                    <p className={`text-2xl font-bold mt-2 ${getScoreColor(signal.score)}`}>
-                      {signal.score}%
-                    </p>
-                    <p className="text-xs text-slate-400 mt-1">Signal Strength</p>
-                  </div>
-                </div>
-
-                {/* Price Info */}
-                <div className="grid grid-cols-2 gap-4 mb-4 p-4 bg-slate-900/50 rounded-lg">
-                  <div>
-                    <p className="text-sm text-slate-400">LTP</p>
-                    <p className="text-xl font-bold text-blue-400">₹{signal.ltp.toFixed(2)}</p>
-                  </div>
-                  <div>
-                    <p className="text-sm text-slate-400">Open Interest</p>
-                    <p className="text-xl font-bold">{signal.oi.toLocaleString()}</p>
-                  </div>
-                </div>
-
-                {/* Greeks */}
-                <div className="grid grid-cols-4 gap-3 mb-4">
-                  <div className="p-3 bg-slate-900/50 rounded-lg">
-                    <p className="text-xs text-slate-400">Delta</p>
-                    <p className="text-lg font-semibold">{signal.greeks.delta.toFixed(3)}</p>
-                  </div>
-                  <div className="p-3 bg-slate-900/50 rounded-lg">
-                    <p className="text-xs text-slate-400">Gamma</p>
-                    <p className="text-lg font-semibold">{signal.greeks.gamma.toFixed(4)}</p>
-                  </div>
-                  <div className="p-3 bg-slate-900/50 rounded-lg">
-                    <p className="text-xs text-slate-400">Theta</p>
-                    <p className="text-lg font-semibold">{signal.greeks.theta.toFixed(2)}</p>
-                  </div>
-                  <div className="p-3 bg-slate-900/50 rounded-lg">
-                    <p className="text-xs text-slate-400">Vega</p>
-                    <p className="text-lg font-semibold">{signal.greeks.vega.toFixed(2)}</p>
-                  </div>
-                </div>
-
-                {/* Reasons */}
-                <div className="space-y-2">
-                  <p className="text-sm font-semibold text-slate-300">Signal Reasons:</p>
-                  <div className="flex flex-wrap gap-2">
-                    {signal.reasons.map((reason, idx) => (
-                      <span
-                        key={idx}
-                        className="px-3 py-1 bg-blue-500/20 text-blue-300 rounded-full text-xs"
-                      >
-                        {reason}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            ))}
+        {/* No Signals State */}
+        {!loading && Object.keys(signalData).length > 0 && 
+         Object.values(signalData).every(data => data.signals.length === 0) && (
+          <div className="text-center py-20 text-slate-400">
+            <AlertCircle className="w-16 h-16 mx-auto mb-4 opacity-50" />
+            <p className="text-xl">No strong signals found (90%+ strength required)</p>
+            <p className="text-sm mt-2">🎯 BUYER FOCUSED: Only showing HIGH CONFIDENCE options with 90%+ signal strength. These are rare but highly profitable opportunities.</p>
+            <p className="text-sm mt-1">💡 When market moves strongly in one direction with heavy OI build, signals will appear here.</p>
           </div>
-        ) : (
-          !loading && signalData[selectedSymbol] && (
-            <div className="text-center py-20 text-slate-400">
-              <AlertCircle className="w-16 h-16 mx-auto mb-4 opacity-50" />
-              <p className="text-xl">No strong signals found (75%+ strength required)</p>
-              <p className="text-sm mt-2">Only showing options with 75%+ signal strength. Try checking another symbol or wait for market conditions to improve.</p>
-            </div>
-          )
         )}
       </main>
 
@@ -720,6 +850,106 @@ export default function Home() {
         <p>Live data from Zerodha • Greeks calculated using Black-Scholes model</p>
         <p className="mt-1">⚠️ For educational purposes only • Not financial advice</p>
       </footer>
+
+      {/* Test Alert Modal */}
+      {showTestAlert && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50">
+          <div className="bg-slate-800 rounded-xl p-6 max-w-md w-full mx-4 border border-slate-700">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-xl font-bold flex items-center gap-2">
+                <Bell className="w-6 h-6 text-purple-400" />
+                Test SMS Alert
+              </h3>
+              <button
+                onClick={() => {
+                  setShowTestAlert(false);
+                  setTestAlertResult(null);
+                }}
+                className="text-slate-400 hover:text-white"
+              >
+                ✕
+              </button>
+            </div>
+
+            <p className="text-sm text-slate-400 mb-4">
+              Send a test SMS to verify your Twilio configuration is working correctly.
+            </p>
+
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-slate-300 mb-2">
+                  Phone Number (with country code)
+                </label>
+                <input
+                  type="tel"
+                  value={testPhoneNumber}
+                  onChange={(e) => setTestPhoneNumber(e.target.value)}
+                  placeholder="+919177242623"
+                  className="w-full px-4 py-2 bg-slate-900 border border-slate-700 rounded-lg text-white focus:outline-none focus:border-purple-500"
+                />
+                <p className="text-xs text-slate-500 mt-1">
+                  Format: +[country code][number] (e.g., +919177242623)
+                </p>
+              </div>
+
+              {testAlertResult && (
+                <div className={`p-3 rounded-lg ${
+                  testAlertResult.status === 'success' 
+                    ? 'bg-green-500/10 border border-green-500 text-green-400' 
+                    : 'bg-red-500/10 border border-red-500 text-red-400'
+                }`}>
+                  <p className="text-sm">{testAlertResult.message}</p>
+                </div>
+              )}
+
+              <div className="bg-slate-900 border border-slate-700 rounded-lg p-4">
+                <p className="text-sm text-slate-400 mb-2">Test message preview:</p>
+                <div className="text-xs text-slate-300 whitespace-pre-line font-mono">
+                  🚨 STRONG BUY Alert!{'\n'}
+                  NIFTY 25900 CE{'\n'}
+                  Score: 85.5%{'\n'}
+                  LTP: ₹125.50{'\n'}
+                  Symbol: NIFTY25900CE
+                </div>
+              </div>
+
+              <button
+                onClick={async () => {
+                  setTestAlertLoading(true);
+                  setTestAlertResult(null);
+                  try {
+                    const response = await axios.post(
+                      `${API_URL}/api/alerts/test?phone_number=${encodeURIComponent(testPhoneNumber)}`
+                    );
+                    setTestAlertResult(response.data);
+                  } catch (err: any) {
+                    setTestAlertResult({
+                      status: 'error',
+                      message: err.response?.data?.message || 'Failed to send test SMS'
+                    });
+                  } finally {
+                    setTestAlertLoading(false);
+                  }
+                }}
+                disabled={testAlertLoading || !testPhoneNumber}
+                className="w-full px-4 py-3 bg-purple-600 hover:bg-purple-700 disabled:bg-slate-700 disabled:cursor-not-allowed rounded-lg font-semibold transition-colors flex items-center justify-center gap-2"
+              >
+                {testAlertLoading ? (
+                  <>
+                    <RefreshCw className="w-4 h-4 animate-spin" />
+                    Sending...
+                  </>
+                ) : (
+                  <>
+                    <Bell className="w-4 h-4" />
+                    Send Test SMS
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
