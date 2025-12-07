@@ -206,57 +206,11 @@ export default function Home() {
       
       console.log('[LOGIN] Device detection:', { isIOS, isAndroid, isMobile, isTablet, isTouchDevice });
       
-      // 🎯 WORLD-CLASS SOLUTION: iPhone Kite App Deep Linking
-      if (isIOS && apiKey) {
-        // Extract redirect URL from login URL
-        const redirectUrl = loginUrl.split('redirect_url=')[1] || window.location.origin + '/auth/callback';
-        
-        // iOS Zerodha Kite app deep link (Universal Link)
-        const kiteAppUrl = `kite://login?api_key=${apiKey}&redirect_url=${encodeURIComponent(redirectUrl)}`;
-        
-        console.log('[LOGIN] 🚀 iPhone detected! Attempting Kite app deep link:', kiteAppUrl);
-        console.log('[LOGIN] Redirect URL:', redirectUrl);
-        
-        // Attempt to open Kite app
-        window.location.href = kiteAppUrl;
-        
-        // Fallback to browser if app doesn't open within 2 seconds
-        setTimeout(() => {
-          console.log('[LOGIN] ⏱️ Kite app didn\'t respond, falling back to browser');
-          window.location.href = loginUrl;
-        }, 2000);
-        
-        return; // Stop execution after attempting app deep link
-      }
-      
-      // Android Kite app handling
-      if (isAndroid && apiKey) {
-        const redirectUrl = loginUrl.split('redirect_url=')[1] || window.location.origin + '/auth/callback';
-        const kiteIntentUrl = `intent://login?api_key=${apiKey}&redirect_url=${encodeURIComponent(redirectUrl)}#Intent;scheme=kite;package=com.zerodha.kite3;end`;
-        
-        console.log('[LOGIN] 🤖 Android detected! Attempting Kite app intent:', kiteIntentUrl);
-        
-        try {
-          window.location.href = kiteIntentUrl;
-          
-          // Fallback after 2 seconds
-          setTimeout(() => {
-            console.log('[LOGIN] ⏱️ Kite app didn\'t respond, falling back to browser');
-            window.location.href = loginUrl;
-          }, 2000);
-        } catch (e) {
-          console.error('[LOGIN] Intent failed, using browser:', e);
-          window.location.href = loginUrl;
-        }
-        
-        return;
-      }
-      
-      // Desktop or fallback: Use regular browser login
+      // Mobile & Desktop: Stay in same browser, no app switching
       if (isMobile || (isTablet && isTouchDevice)) {
-        // Mobile browser without app
+        // Mobile browser - use mobile-optimized URL if available
         const mobileUrl = response.data.mobile_login_url || loginUrl;
-        console.log('[LOGIN] 📱 Mobile browser login');
+        console.log('[LOGIN] 📱 Mobile browser - staying in same browser');
         window.location.href = mobileUrl;
       } else {
         // Desktop: Direct browser redirect
