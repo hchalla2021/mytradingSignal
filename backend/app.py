@@ -27,22 +27,22 @@ app = FastAPI(
 # Supports localhost, Vercel, Render, and custom domains
 allowed_origins = [
     "http://localhost:3000",
+    "http://localhost:3001",
     "http://localhost:8000",
     "http://127.0.0.1:3000",
+    "http://127.0.0.1:3001",
     # Local network for mobile device testing (iPhone, Android)
     "http://192.168.1.13:3000",
     "http://192.168.1.13:3001",
     "http://192.168.1.13:8000",
-    "https://*.vercel.app",
-    "https://*.onrender.com",
-    "https://*.netlify.app",
-    # Add your custom domain here when ready
-    # "https://yourdomain.com",
+    # Production domain
+    "https://www.mydailytradesignals.com",
+    "https://mydailytradesignals.com",
 ]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, replace with allowed_origins list
+    allow_origins=["*"],  # Allows all origins for development - restrict in production
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
