@@ -9,6 +9,7 @@ Uses direct HTTP requests instead of the Twilio SDK to avoid Windows path length
 import logging
 import base64
 import json
+import os
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 import requests

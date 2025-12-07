@@ -173,46 +173,77 @@ export default function Home() {
 
   const handleLogin = async () => {
     try {
-      console.log('[LOGIN] Starting login process...'); // Debug log
-      console.log('[LOGIN] API URL:', API_URL); // Debug log
+      setError(null);
+      console.log('[LOGIN] Starting login process...');
+      console.log('[LOGIN] API URL:', API_URL);
       
-      const response = await axios.get(`${API_URL}/api/auth/login-url`);
-      console.log('[LOGIN] Received response:', response.data); // Debug log
+      // Add timeout to request
+      const response = await axios.get(`${API_URL}/api/auth/login-url`, {
+        timeout: 10000,
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json',
+        }
+      });
+      
+      console.log('[LOGIN] Received response:', response.data);
+      
+      if (!response.data || !response.data.login_url) {
+        throw new Error('Invalid response from server');
+      }
       
       const loginUrl = response.data.login_url;
-      console.log('[LOGIN] Redirecting to:', loginUrl); // Debug log
+      console.log('[LOGIN] Redirecting to:', loginUrl);
       
-      // Detect mobile device
+      // Enhanced mobile detection
       const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
-      console.log('[LOGIN] Is mobile:', isMobile); // Debug log
+      const isTablet = /(tablet|ipad|playbook|silk)|(android(?!.*mobi))/i.test(navigator.userAgent);
+      const isTouchDevice = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
       
-      if (isMobile) {
-        // Try to open Zerodha Kite app first (if installed)
+      console.log('[LOGIN] Device detection:', { isMobile, isTablet, isTouchDevice });
+      
+      if (isMobile || (isTablet && isTouchDevice)) {
+        // Mobile/Tablet: Try Kite app first, fallback to mobile browser
         const mobileUrl = response.data.mobile_login_url || `kite://kite.zerodha.com/connect/login?api_key=${response.data.api_key}&v=3`;
-        console.log('[LOGIN] Trying mobile app URL:', mobileUrl); // Debug log
+        console.log('[LOGIN] Attempting mobile app deep link:', mobileUrl);
         
-        // Create a hidden iframe to test if app is available
-        const iframe = document.createElement('iframe');
-        iframe.style.display = 'none';
-        iframe.src = mobileUrl;
-        document.body.appendChild(iframe);
+        // Attempt to open Kite app
+        const appAttempt = window.open(mobileUrl, '_blank');
         
-        // Fallback to browser after 2 seconds if app doesn't open
+        // If app doesn't open, redirect to mobile web after 1.5 seconds
         setTimeout(() => {
-          document.body.removeChild(iframe);
-          console.log('[LOGIN] Mobile app didn\'t open, redirecting to browser...'); // Debug log
+          if (appAttempt) {
+            appAttempt.close();
+          }
+          console.log('[LOGIN] Fallback to mobile browser login');
           window.location.href = loginUrl;
-        }, 2000);
+        }, 1500);
       } else {
-        // Desktop: Full page redirect to Zerodha login
-        console.log('[LOGIN] Desktop detected, redirecting to:', loginUrl); // Debug log
+        // Desktop: Direct browser redirect
+        console.log('[LOGIN] Desktop browser redirect');
         window.location.href = loginUrl;
       }
       
     } catch (err: any) {
-      console.error('[LOGIN ERROR]:', err); // Debug log
-      console.error('[LOGIN ERROR] Details:', err.response?.data); // Debug log
-      setError(err.response?.data?.detail || 'Failed to get login URL. Please check backend is running.');
+      console.error('[LOGIN ERROR]:', err);
+      console.error('[LOGIN ERROR] Response:', err.response);
+      console.error('[LOGIN ERROR] Message:', err.message);
+      
+      let errorMessage = 'Failed to connect to backend server.';
+      
+      if (err.code === 'ECONNABORTED') {
+        errorMessage = 'Connection timeout. Please check if backend server is running.';
+      } else if (err.response) {
+        // Server responded with error
+        errorMessage = err.response.data?.detail || `Server error: ${err.response.status}`;
+      } else if (err.request) {
+        // Request made but no response
+        errorMessage = `Cannot reach backend at ${API_URL}. Please check:\n1. Backend is running\n2. CORS is configured\n3. Firewall/network settings`;
+      } else {
+        errorMessage = err.message || 'Unknown error occurred';
+      }
+      
+      setError(errorMessage);
     }
   };
 
@@ -258,12 +289,12 @@ export default function Home() {
     <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 text-white">
       {/* Header */}
       <header className="bg-slate-800/50 border-b border-slate-700 backdrop-blur-sm sticky top-0 z-50">
-        <div className="container mx-auto px-4 py-4">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <Activity className="w-8 h-8 text-blue-400" />
+        <div className="container mx-auto px-2 sm:px-4 py-3 sm:py-4">
+          <div className="flex items-center justify-between flex-wrap gap-2">
+            <div className="flex items-center gap-2 sm:gap-3">
+              <Activity className="w-6 h-6 sm:w-8 sm:h-8 text-blue-400" />
               <div>
-                <h1 className="text-2xl font-bold">Options Trading Signals</h1>
+                <h1 className="text-lg sm:text-2xl font-bold">Trading Signals</h1>
                 <div className="flex items-center gap-3">
                   {marketStatus && (
                     <p className="text-xs flex items-center gap-1">
@@ -287,33 +318,36 @@ export default function Home() {
               </div>
             </div>
             
-            <div className="flex items-center gap-4">
+            <div className="flex items-center gap-2 sm:gap-4 flex-wrap">
               {!isAuthenticated && (
                 <button
                   onClick={handleLogin}
-                  className="px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors"
+                  className="px-3 sm:px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors text-sm sm:text-base whitespace-nowrap"
                 >
-                  Login to Zerodha
+                  <span className="hidden sm:inline">Login to Zerodha</span>
+                  <span className="sm:hidden">Login</span>
                 </button>
               )}
               
               <button
                 onClick={() => setShowTestAlert(true)}
-                className="px-4 py-2 rounded-lg bg-purple-600 hover:bg-purple-700 transition-colors flex items-center gap-2"
+                className="px-3 sm:px-4 py-2 rounded-lg bg-purple-600 hover:bg-purple-700 transition-colors flex items-center gap-1 sm:gap-2 text-sm sm:text-base"
                 title="Test SMS Alert"
               >
-                <Bell className="w-4 h-4" />
-                Test Alert
+                <Bell className="w-3 h-3 sm:w-4 sm:h-4" />
+                <span className="hidden sm:inline">Test Alert</span>
+                <span className="sm:hidden">Alert</span>
               </button>
               
               <button
                 onClick={() => setAutoRefresh(!autoRefresh)}
-                className={`px-4 py-2 rounded-lg transition-colors flex items-center gap-2 ${
+                className={`px-3 sm:px-4 py-2 rounded-lg transition-colors flex items-center gap-1 sm:gap-2 text-sm sm:text-base whitespace-nowrap ${
                   autoRefresh ? 'bg-green-600 hover:bg-green-700' : 'bg-gray-600 hover:bg-gray-700'
                 }`}
               >
                 {autoRefresh && <span className="inline-block w-2 h-2 bg-white rounded-full animate-pulse"></span>}
-                Auto Refresh: {autoRefresh ? 'ON (1s)' : 'OFF'}
+                <span className="hidden sm:inline">Auto: {autoRefresh ? 'ON (1s)' : 'OFF'}</span>
+                <span className="sm:hidden">{autoRefresh ? 'ON' : 'OFF'}</span>
               </button>
             </div>
           </div>
@@ -321,7 +355,7 @@ export default function Home() {
       </header>
 
       {/* Main Content */}
-      <main className="container mx-auto px-4 py-8">
+      <main className="container mx-auto px-2 sm:px-4 py-4 sm:py-8">
         {/* Error Message - Only for actual errors, not market status */}
         {error && !error.includes('Market is closed') && (
           <div className="mb-6 p-4 bg-red-500/10 border border-red-500 rounded-lg flex items-center gap-3">
@@ -355,7 +389,7 @@ export default function Home() {
         {/* All Indices Overview - Unified View */}
         {Object.keys(signalData).length > 0 && (
           <>
-            <div className="mb-8 grid grid-cols-1 lg:grid-cols-3 gap-6">
+            <div className="mb-6 sm:mb-8 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6">
               {symbols.map((symbol) => {
                 const data = signalData[symbol];
                 if (!data) return null;
@@ -376,34 +410,34 @@ export default function Home() {
                 return (
                   <div 
                     key={symbol}
-                    className={`p-6 bg-slate-800 rounded-xl border-2 ${directionColor} relative overflow-hidden group hover:shadow-2xl hover:scale-105 transition-all duration-300`}
+                    className={`p-4 sm:p-6 bg-slate-800 rounded-xl border-2 ${directionColor} relative overflow-hidden hover:shadow-2xl transition-all duration-300`}
                   >
                     {/* Symbol Header */}
-                    <div className="flex items-start justify-between mb-4">
+                    <div className="flex items-start justify-between mb-3 sm:mb-4">
                       <div>
-                        <div className="flex items-center gap-2 mb-2">
-                          <h2 className="text-2xl font-bold text-blue-400">{symbol}</h2>
+                        <div className="flex items-center gap-2 mb-1 sm:mb-2">
+                          <h2 className="text-xl sm:text-2xl font-bold text-blue-400">{symbol}</h2>
                           {marketStatus && (
-                            <span className={`px-2 py-1 ${marketStatus.status === 'OPEN' ? 'bg-green-500/20 text-green-400 border-green-500/30 animate-pulse' : 'bg-red-500/20 text-red-400 border-red-500/30'} text-[10px] rounded-full border font-semibold`}>
+                            <span className={`px-1.5 sm:px-2 py-0.5 sm:py-1 ${marketStatus.status === 'OPEN' ? 'bg-green-500/20 text-green-400 border-green-500/30 animate-pulse' : 'bg-red-500/20 text-red-400 border-red-500/30'} text-[9px] sm:text-[10px] rounded-full border font-semibold`}>
                               {marketStatus.status === 'OPEN' ? 'LIVE' : 'OFFLINE'}
                             </span>
                           )}
                         </div>
-                        <p className="text-3xl font-bold">₹{data.spot_price.toFixed(2)}</p>
+                        <p className="text-2xl sm:text-3xl font-bold">₹{data.spot_price.toFixed(2)}</p>
                       </div>
                       
                       <div className="text-right">
-                        <div className={`text-4xl mb-1`}>{directionIcon}</div>
-                        <p className={`text-xl font-bold ${directionTextColor}`}>{direction}</p>
+                        <div className={`text-3xl sm:text-4xl mb-1`}>{directionIcon}</div>
+                        <p className={`text-lg sm:text-xl font-bold ${directionTextColor}`}>{direction}</p>
                       </div>
                     </div>
 
                     {/* Direction Percentage */}
                     {data.bullish_percentage !== undefined && (
-                      <div className="mb-4 p-3 bg-slate-900/50 rounded-lg">
-                        <div className="flex items-center justify-between mb-2">
-                          <p className="text-xs text-slate-400">Market Bias</p>
-                          <p className={`text-lg font-bold ${directionTextColor}`}>
+                      <div className="mb-3 sm:mb-4 p-2.5 sm:p-3 bg-slate-900/50 rounded-lg">
+                        <div className="flex items-center justify-between mb-1.5 sm:mb-2">
+                          <p className="text-[10px] sm:text-xs text-slate-400">Market Bias</p>
+                          <p className={`text-base sm:text-lg font-bold ${directionTextColor}`}>
                             {data.bullish_percentage > 50 
                               ? `+${(data.bullish_percentage - 50).toFixed(1)}%` 
                               : `${(data.bullish_percentage - 50).toFixed(1)}%`}
@@ -421,10 +455,10 @@ export default function Home() {
                     )}
 
                     {/* PCR & OI */}
-                    <div className="grid grid-cols-2 gap-3 mb-4">
-                      <div className="p-3 bg-slate-900/50 rounded-lg">
-                        <p className="text-xs text-slate-400 mb-1">PCR</p>
-                        <p className={`text-lg font-bold ${
+                    <div className="grid grid-cols-2 gap-2 sm:gap-3 mb-3 sm:mb-4">
+                      <div className="p-2.5 sm:p-3 bg-slate-900/50 rounded-lg">
+                        <p className="text-[10px] sm:text-xs text-slate-400 mb-1">PCR</p>
+                        <p className={`text-base sm:text-lg font-bold ${
                           data.pcr && data.pcr > 1.2 ? 'text-green-400' : 
                           data.pcr && data.pcr < 0.8 ? 'text-red-400' : 
                           'text-yellow-400'
@@ -432,9 +466,9 @@ export default function Home() {
                           {data.pcr?.toFixed(2) || 'N/A'}
                         </p>
                       </div>
-                      <div className="p-3 bg-slate-900/50 rounded-lg">
-                        <p className="text-xs text-slate-400 mb-1">Signals</p>
-                        <p className="text-lg font-bold text-blue-400">
+                      <div className="p-2.5 sm:p-3 bg-slate-900/50 rounded-lg">
+                        <p className="text-[10px] sm:text-xs text-slate-400 mb-1">Signals</p>
+                        <p className="text-base sm:text-lg font-bold text-blue-400">
                           {data.signals.length}
                         </p>
                       </div>
@@ -442,20 +476,20 @@ export default function Home() {
 
                     {/* OI Breakdown */}
                     {data.total_ce_oi && data.total_pe_oi && (
-                      <div className="flex justify-between items-center text-xs pt-3 border-t border-slate-700">
+                      <div className="flex justify-between items-center text-[10px] sm:text-xs pt-2.5 sm:pt-3 border-t border-slate-700">
                         <div>
                           <p className="text-slate-500">CE OI</p>
-                          <p className="text-red-400 font-semibold">{(data.total_ce_oi / 100000).toFixed(1)}L</p>
+                          <p className="text-sm sm:text-base text-red-400 font-semibold">{(data.total_ce_oi / 100000).toFixed(1)}L</p>
                         </div>
                         <div className="text-right">
                           <p className="text-slate-500">PE OI</p>
-                          <p className="text-green-400 font-semibold">{(data.total_pe_oi / 100000).toFixed(1)}L</p>
+                          <p className="text-sm sm:text-base text-green-400 font-semibold">{(data.total_pe_oi / 100000).toFixed(1)}L</p>
                         </div>
                       </div>
                     )}
 
                     {/* Updated timestamp */}
-                    <div className="flex items-center gap-1 text-xs text-slate-500 mt-3 pt-3 border-t border-slate-700">
+                    <div className="flex items-center gap-1 text-[10px] sm:text-xs text-slate-500 mt-2.5 sm:mt-3 pt-2.5 sm:pt-3 border-t border-slate-700">
                       <span className={`inline-block w-1.5 h-1.5 rounded-full ${isRefreshing ? 'bg-yellow-400 animate-pulse' : 'bg-green-400'}`}></span>
                       {new Date(data.timestamp).toLocaleTimeString()}
                     </div>
@@ -472,16 +506,16 @@ export default function Home() {
               return (
                 <div key={`${symbol}-details`} className="mb-8">
                   {/* Symbol Section Header */}
-                  <div className="mb-4 flex items-center gap-3">
-                    <div className="h-1 flex-1 bg-gradient-to-r from-transparent via-blue-500/50 to-transparent"></div>
-                    <h3 className="text-2xl font-bold text-blue-400">{symbol} Analysis</h3>
-                    <div className="h-1 flex-1 bg-gradient-to-r from-transparent via-blue-500/50 to-transparent"></div>
+                  <div className="mb-3 sm:mb-4 flex items-center gap-2 sm:gap-3">
+                    <div className="h-0.5 sm:h-1 flex-1 bg-gradient-to-r from-transparent via-blue-500/50 to-transparent"></div>
+                    <h3 className="text-xl sm:text-2xl font-bold text-blue-400">{symbol} Analysis</h3>
+                    <div className="h-0.5 sm:h-1 flex-1 bg-gradient-to-r from-transparent via-blue-500/50 to-transparent"></div>
                   </div>
 
                   {/* PCR & Market Direction */}
                   {data.pcr && (
-                    <div className="mb-6 grid grid-cols-1 md:grid-cols-4 gap-4">
-                      <div className="p-4 bg-slate-800 rounded-xl border border-slate-700 transition-all duration-300">
+                    <div className="mb-4 sm:mb-6 grid grid-cols-2 md:grid-cols-4 gap-3 sm:gap-4">
+                      <div className="p-3 sm:p-4 bg-slate-800 rounded-xl border border-slate-700 transition-all duration-300">
                         <p className="text-sm text-slate-400 mb-1">Put-Call Ratio (PCR)</p>
                         <p className={`text-2xl font-bold transition-colors duration-300 ${
                           data.pcr! > 1.2 ? 'text-green-500' : 
@@ -744,11 +778,11 @@ export default function Home() {
 
                   {/* Signals for this symbol */}
                   {data.signals.length > 0 && (
-                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6 mb-6 sm:mb-8">
                       {data.signals.map((signal, index) => (
                         <div
                           key={`${symbol}-${index}`}
-                          className="bg-slate-800 rounded-xl border border-slate-700 p-6 hover:shadow-xl hover:shadow-blue-500/10 transition-all"
+                          className="bg-slate-800 rounded-xl border border-slate-700 p-4 sm:p-6 hover:shadow-xl hover:shadow-blue-500/10 transition-all"
                         >
                           {/* Signal Header */}
                           <div className="flex items-start justify-between mb-4">
@@ -846,15 +880,15 @@ export default function Home() {
       </main>
 
       {/* Footer */}
-      <footer className="mt-12 py-6 border-t border-slate-700 text-center text-slate-400 text-sm">
+      <footer className="mt-8 sm:mt-12 py-4 sm:py-6 border-t border-slate-700 text-center text-slate-400 text-xs sm:text-sm px-4">
         <p>Live data from Zerodha • Greeks calculated using Black-Scholes model</p>
         <p className="mt-1">⚠️ For educational purposes only • Not financial advice</p>
       </footer>
 
       {/* Test Alert Modal */}
       {showTestAlert && (
-        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50">
-          <div className="bg-slate-800 rounded-xl p-6 max-w-md w-full mx-4 border border-slate-700">
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-slate-800 rounded-xl p-4 sm:p-6 max-w-md w-full border border-slate-700 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-xl font-bold flex items-center gap-2">
                 <Bell className="w-6 h-6 text-purple-400" />

@@ -17,15 +17,32 @@ from services.ai_analysis_service import get_ai_service
 
 # Configurations loaded from config/settings.py
 
-app = FastAPI(title="Options Trading Signals API")
+app = FastAPI(
+    title="Options Trading Signals API",
+    description="Real-time options trading signals with Zerodha integration",
+    version="2.0.0"
+)
 
-# CORS middleware
+# Enhanced CORS middleware for production
+# Supports localhost, Vercel, Render, and custom domains
+allowed_origins = [
+    "http://localhost:3000",
+    "http://localhost:8000",
+    "http://127.0.0.1:3000",
+    "https://*.vercel.app",
+    "https://*.onrender.com",
+    "https://*.netlify.app",
+    # Add your custom domain here when ready
+    # "https://yourdomain.com",
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["*"],  # In production, replace with allowed_origins list
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["*"],
 )
 
 # Zerodha Kite Connect Configuration (from settings)
@@ -692,20 +709,44 @@ async def get_market_status():
 async def get_login_url():
     """Get Zerodha login URL for authentication - supports mobile app redirection"""
     try:
+        # Validate API key is configured
+        if not settings.ZERODHA_API_KEY:
+            print("[ERROR] ZERODHA_API_KEY not configured in environment")
+            raise HTTPException(
+                status_code=500, 
+                detail="Server configuration error: ZERODHA_API_KEY not set. Please configure environment variables."
+            )
+        
+        # Log for debugging
+        print(f"[AUTH] Generating login URL with API key: {settings.ZERODHA_API_KEY[:8]}...")
+        print(f"[AUTH] Redirect URL: {settings.ZERODHA_REDIRECT_URL}")
+        
         # Generate login URL with redirect
         # For mobile: kite://connect/login?api_key=xxx redirects to app if installed
         # For web: https://kite.zerodha.com/connect/login?api_key=xxx
         login_url = f"https://kite.zerodha.com/connect/login?api_key={settings.ZERODHA_API_KEY}&v=3"
         mobile_login_url = f"kite://kite.zerodha.com/connect/login?api_key={settings.ZERODHA_API_KEY}&v=3"
         
-        return {
+        response_data = {
             "login_url": login_url,
             "mobile_login_url": mobile_login_url,
-            "api_key": settings.ZERODHA_API_KEY
+            "api_key": settings.ZERODHA_API_KEY,
+            "redirect_url": settings.ZERODHA_REDIRECT_URL
         }
+        
+        print(f"[AUTH] Login URL generated successfully")
+        return response_data
+        
+    except HTTPException:
+        raise
     except Exception as e:
         print(f"[ERROR] Login URL generation failed: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(
+            status_code=500, 
+            detail=f"Failed to generate login URL: {str(e)}"
+        )
 
 
 @app.post("/api/auth/set-token")
@@ -1521,11 +1562,50 @@ async def websocket_signals(websocket: WebSocket, symbol: str):
         active_connections.remove(websocket)
 
 
+@app.get("/health")
+@app.get("/api/health")
+async def health_check():
+    """Health check endpoint for monitoring and debugging"""
+    return {
+        "status": "healthy",
+        "service": "Options Trading Signals API",
+        "version": "2.0.0",
+        "timestamp": datetime.now().isoformat(),
+        "config": {
+            "zerodha_api_key_configured": bool(settings.ZERODHA_API_KEY),
+            "zerodha_api_secret_configured": bool(settings.ZERODHA_API_SECRET),
+            "redirect_url": settings.ZERODHA_REDIRECT_URL,
+            "twilio_configured": bool(settings.TWILIO_ACCOUNT_SID and settings.TWILIO_AUTH_TOKEN),
+        }
+    }
+
+
+@app.get("/")
+async def root():
+    """Root endpoint with API information"""
+    return {
+        "message": "Options Trading Signals API",
+        "version": "2.0.0",
+        "status": "running",
+        "docs": "/docs",
+        "health": "/health",
+        "endpoints": {
+            "market_status": "/api/market/status",
+            "signals": "/api/signals/{symbol}",
+            "auth_login": "/api/auth/login-url",
+        }
+    }
+
+
 if __name__ == "__main__":
     import uvicorn
     print("[STARTUP] Starting backend server...")
+    print(f"[STARTUP] Zerodha API Key: {settings.ZERODHA_API_KEY[:8] if settings.ZERODHA_API_KEY else 'NOT SET'}...")
+    print(f"[STARTUP] Redirect URL: {settings.ZERODHA_REDIRECT_URL}")
     port = int(os.getenv("PORT", 8000))
     print(f"[STARTUP] Server running on http://0.0.0.0:{port}")
+    print(f"[STARTUP] Health check: http://0.0.0.0:{port}/health")
+    print(f"[STARTUP] API docs: http://0.0.0.0:{port}/docs")
     try:
         uvicorn.run(app, host="0.0.0.0", port=port, log_level="info")
     except Exception as e:
