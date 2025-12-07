@@ -12,6 +12,10 @@ const nextConfig = {
       },
     ];
   },
+  // Enable access from mobile devices on same network
+  typescript: {
+    ignoreBuildErrors: false,
+  },
 };
 
 module.exports = nextConfig;

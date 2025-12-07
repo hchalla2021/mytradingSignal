@@ -193,34 +193,74 @@ export default function Home() {
       }
       
       const loginUrl = response.data.login_url;
+      const apiKey = response.data.api_key;
       console.log('[LOGIN] Redirecting to:', loginUrl);
       
-      // Enhanced mobile detection
-      const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
-      const isTablet = /(tablet|ipad|playbook|silk)|(android(?!.*mobi))/i.test(navigator.userAgent);
+      // Enhanced device detection with iOS-specific handling
+      const userAgent = navigator.userAgent;
+      const isIOS = /iPhone|iPad|iPod/i.test(userAgent);
+      const isAndroid = /Android/i.test(userAgent);
+      const isMobile = isIOS || isAndroid;
+      const isTablet = /(tablet|ipad|playbook|silk)|(android(?!.*mobi))/i.test(userAgent);
       const isTouchDevice = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
       
-      console.log('[LOGIN] Device detection:', { isMobile, isTablet, isTouchDevice });
+      console.log('[LOGIN] Device detection:', { isIOS, isAndroid, isMobile, isTablet, isTouchDevice });
       
-      if (isMobile || (isTablet && isTouchDevice)) {
-        // Mobile/Tablet: Try Kite app first, fallback to mobile browser
-        const mobileUrl = response.data.mobile_login_url || `kite://kite.zerodha.com/connect/login?api_key=${response.data.api_key}&v=3`;
-        console.log('[LOGIN] Attempting mobile app deep link:', mobileUrl);
+      // 🎯 WORLD-CLASS SOLUTION: iPhone Kite App Deep Linking
+      if (isIOS && apiKey) {
+        // Extract redirect URL from login URL
+        const redirectUrl = loginUrl.split('redirect_url=')[1] || window.location.origin + '/auth/callback';
+        
+        // iOS Zerodha Kite app deep link (Universal Link)
+        const kiteAppUrl = `kite://login?api_key=${apiKey}&redirect_url=${encodeURIComponent(redirectUrl)}`;
+        
+        console.log('[LOGIN] 🚀 iPhone detected! Attempting Kite app deep link:', kiteAppUrl);
+        console.log('[LOGIN] Redirect URL:', redirectUrl);
         
         // Attempt to open Kite app
-        const appAttempt = window.open(mobileUrl, '_blank');
+        window.location.href = kiteAppUrl;
         
-        // If app doesn't open, redirect to mobile web after 1.5 seconds
+        // Fallback to browser if app doesn't open within 2 seconds
         setTimeout(() => {
-          if (appAttempt) {
-            appAttempt.close();
-          }
-          console.log('[LOGIN] Fallback to mobile browser login');
+          console.log('[LOGIN] ⏱️ Kite app didn\'t respond, falling back to browser');
           window.location.href = loginUrl;
-        }, 1500);
+        }, 2000);
+        
+        return; // Stop execution after attempting app deep link
+      }
+      
+      // Android Kite app handling
+      if (isAndroid && apiKey) {
+        const redirectUrl = loginUrl.split('redirect_url=')[1] || window.location.origin + '/auth/callback';
+        const kiteIntentUrl = `intent://login?api_key=${apiKey}&redirect_url=${encodeURIComponent(redirectUrl)}#Intent;scheme=kite;package=com.zerodha.kite3;end`;
+        
+        console.log('[LOGIN] 🤖 Android detected! Attempting Kite app intent:', kiteIntentUrl);
+        
+        try {
+          window.location.href = kiteIntentUrl;
+          
+          // Fallback after 2 seconds
+          setTimeout(() => {
+            console.log('[LOGIN] ⏱️ Kite app didn\'t respond, falling back to browser');
+            window.location.href = loginUrl;
+          }, 2000);
+        } catch (e) {
+          console.error('[LOGIN] Intent failed, using browser:', e);
+          window.location.href = loginUrl;
+        }
+        
+        return;
+      }
+      
+      // Desktop or fallback: Use regular browser login
+      if (isMobile || (isTablet && isTouchDevice)) {
+        // Mobile browser without app
+        const mobileUrl = response.data.mobile_login_url || loginUrl;
+        console.log('[LOGIN] 📱 Mobile browser login');
+        window.location.href = mobileUrl;
       } else {
         // Desktop: Direct browser redirect
-        console.log('[LOGIN] Desktop browser redirect');
+        console.log('[LOGIN] 💻 Desktop browser redirect');
         window.location.href = loginUrl;
       }
       
