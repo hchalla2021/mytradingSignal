@@ -24,15 +24,10 @@ services:
     name: options-trading-frontend
     env: node
     region: singapore
-    nodeVersion: "18.20.0"
-    buildCommand: "cd frontend && npm install && npm run build"
-    startCommand: "cd frontend && npm start"
+    buildCommand: "cd frontend && npm ci && npm run build"
+    startCommand: "cd frontend && npm start -- -p $PORT -H 0.0.0.0"
     envVars:
       - key: NODE_ENV
         value: production
       - key: NEXT_PUBLIC_API_URL
         value: https://options-trading-backend.onrender.com
-      - key: PORT
-        generateValue: true
-      - key: HOSTNAME
-        value: "0.0.0.0"
