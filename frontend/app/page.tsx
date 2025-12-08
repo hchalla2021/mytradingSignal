@@ -174,70 +174,46 @@ export default function Home() {
   const handleLogin = async () => {
     try {
       setError(null);
-      console.log('[LOGIN] Starting login process...');
-      console.log('[LOGIN] API URL:', API_URL);
+      setLoading(true);
+      console.log('[LOGIN] Starting login...');
       
-      // Add timeout to request
+      // Fast request with reduced timeout
       const response = await axios.get(`${API_URL}/api/auth/login-url`, {
-        timeout: 10000,
-        headers: {
-          'Content-Type': 'application/json',
-          'Accept': 'application/json',
-        }
+        timeout: 5000,
+        headers: { 'Accept': 'application/json' }
       });
       
       console.log('[LOGIN] Received response:', response.data);
       
-      if (!response.data || !response.data.login_url) {
+      if (!response.data?.login_url) {
         throw new Error('Invalid response from server');
       }
       
       const loginUrl = response.data.login_url;
-      const apiKey = response.data.api_key;
-      console.log('[LOGIN] Redirecting to:', loginUrl);
+      console.log('[LOGIN] Redirecting to Zerodha...');
       
-      // Enhanced device detection with iOS-specific handling
-      const userAgent = navigator.userAgent;
-      const isIOS = /iPhone|iPad|iPod/i.test(userAgent);
-      const isAndroid = /Android/i.test(userAgent);
-      const isMobile = isIOS || isAndroid;
-      const isTablet = /(tablet|ipad|playbook|silk)|(android(?!.*mobi))/i.test(userAgent);
-      const isTouchDevice = 'ontouchstart' in window || navigator.maxTouchPoints > 0;
-      
-      console.log('[LOGIN] Device detection:', { isIOS, isAndroid, isMobile, isTablet, isTouchDevice });
-      
-      // Mobile & Desktop: Stay in same browser, no app switching
-      if (isMobile || (isTablet && isTouchDevice)) {
-        // Mobile browser - use mobile-optimized URL if available
-        const mobileUrl = response.data.mobile_login_url || loginUrl;
-        console.log('[LOGIN] 📱 Mobile browser - staying in same browser');
-        window.location.href = mobileUrl;
-      } else {
-        // Desktop: Direct browser redirect
-        console.log('[LOGIN] 💻 Desktop browser redirect');
-        window.location.href = loginUrl;
-      }
+      // Fast redirect for all devices - no complex detection needed
+      // Zerodha Kite Connect handles mobile/desktop automatically
+      window.location.href = loginUrl;
       
     } catch (err: any) {
       console.error('[LOGIN ERROR]:', err);
-      console.error('[LOGIN ERROR] Response:', err.response);
-      console.error('[LOGIN ERROR] Message:', err.message);
+      setLoading(false);
       
-      let errorMessage = 'Failed to connect to backend server.';
+      let errorMessage = '❌ Cannot connect to backend';
       
       if (err.code === 'ECONNABORTED') {
-        errorMessage = 'Connection timeout. Please check if backend server is running.';
+        errorMessage = '⏱️ Connection timeout. Backend not responding.';
       } else if (err.response) {
-        // Server responded with error
-        errorMessage = err.response.data?.detail || `Server error: ${err.response.status}`;
+        errorMessage = `❌ Server error: ${err.response.status}`;
       } else if (err.request) {
-        // Request made but no response
-        errorMessage = `Cannot reach backend at ${API_URL}. Please check:\n1. Backend is running\n2. CORS is configured\n3. Firewall/network settings`;
+        errorMessage = '❌ Backend offline. Check if it\'s running on port 8001.';
       } else {
-        errorMessage = err.message || 'Unknown error occurred';
+        errorMessage = err.message || '❌ Unknown error';
       }
       
       setError(errorMessage);
+      alert(errorMessage);
     }
   };
 
@@ -287,13 +263,13 @@ export default function Home() {
     return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
   }, [useTestData, fetchAllSignals]);
 
-  // Auto-refresh polling for live data - ultra-fast 1 second updates
+  // Auto-refresh polling for live data - optimized 3 second updates
   useEffect(() => {
     if (!autoRefresh || useTestData) return;
     
     const interval = setInterval(() => {
       fetchAllSignals(false); // Don't show loading on auto-refresh
-    }, 1000); // Refresh every 1 second for live data
+    }, 3000); // Refresh every 3 seconds - fast but efficient
     
     return () => clearInterval(interval);
   }, [autoRefresh, useTestData, fetchAllSignals]);

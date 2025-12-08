@@ -9,7 +9,9 @@ from dotenv import load_dotenv
 # Load environment variables from global config/.env file
 root_dir = Path(__file__).parent.parent.parent
 env_path = root_dir / "config" / ".env"
-load_dotenv(dotenv_path=env_path)
+
+# Force UTF-8 encoding to avoid 'charmap' codec errors on Windows
+load_dotenv(dotenv_path=env_path, encoding='utf-8')
 
 class Settings:
     """Application settings from environment variables"""

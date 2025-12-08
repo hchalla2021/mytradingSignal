@@ -769,15 +769,17 @@ async def set_access_token(request_token: str):
         ACCESS_TOKEN = data["access_token"]
         kite.set_access_token(ACCESS_TOKEN)
         
-        # Save token to .env file for persistence
+        # Save token to .env file for persistence (with UTF-8 encoding)
         env_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'config', '.env')
         print(f"[AUTH] Saving token to: {env_path}")
         
         if os.path.exists(env_path):
-            with open(env_path, 'r') as f:
+            # Read with UTF-8 encoding to avoid charmap errors
+            with open(env_path, 'r', encoding='utf-8') as f:
                 lines = f.readlines()
             
-            with open(env_path, 'w') as f:
+            # Write with UTF-8 encoding
+            with open(env_path, 'w', encoding='utf-8') as f:
                 token_found = False
                 for line in lines:
                     if line.startswith('ZERODHA_ACCESS_TOKEN='):
@@ -789,7 +791,7 @@ async def set_access_token(request_token: str):
                 if not token_found:
                     f.write(f'\nZERODHA_ACCESS_TOKEN={ACCESS_TOKEN}\n')
             
-            print(f"[AUTH] Token saved to .env file")
+            print(f"[AUTH] Token saved to .env file with UTF-8 encoding")
         
         print(f"[AUTH] Access token set successfully: {ACCESS_TOKEN[:20]}...")
         return {"status": "success", "access_token": ACCESS_TOKEN}

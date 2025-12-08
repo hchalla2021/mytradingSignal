@@ -30,21 +30,29 @@ export default function AuthCallback() {
         .then(data => {
           console.log('[CALLBACK] Response data:', data); // Debug
           if (data.status === 'success') {
-            // Success! Redirect to main page
+            // Success! Redirect to main page with full reload
             console.log('[CALLBACK] Authentication successful!');
             alert('✅ Authentication successful! Redirecting...');
             setTimeout(() => {
-              router.push('/');
-            }, 1500);
+              window.location.href = '/';
+            }, 1000);
           } else {
             console.error('[CALLBACK] Auth failed:', data);
-            alert(`❌ Authentication failed: ${data.detail || 'Unknown error'}`);
+            // Show detailed error message
+            const errorMsg = data.detail || 'Unknown error';
+            if (errorMsg.includes('charmap') || errorMsg.includes('codec')) {
+              alert('❌ Authentication failed: File encoding error. Backend needs restart with UTF-8 encoding fix.');
+            } else if (errorMsg.includes('expired')) {
+              alert('❌ Authentication failed: Token expired. Please try logging in again.');
+            } else {
+              alert(`❌ Authentication failed: ${errorMsg}`);
+            }
             router.push('/');
           }
         })
         .catch(err => {
           console.error('[CALLBACK] Error setting token:', err);
-          alert('❌ Failed to authenticate. Please check backend is running.');
+          alert('❌ Failed to authenticate. Please check backend is running on port 8001.');
           router.push('/');
         });
     } else if (requestToken && !status) {
@@ -63,17 +71,25 @@ export default function AuthCallback() {
             console.log('[CALLBACK] Authentication successful!');
             alert('✅ Authentication successful! Redirecting...');
             setTimeout(() => {
-              router.push('/');
-            }, 1500);
+              window.location.href = '/';
+            }, 1000);
           } else {
             console.error('[CALLBACK] Auth failed:', data);
-            alert(`❌ Authentication failed: ${data.detail || 'Unknown error'}`);
+            // Show detailed error message
+            const errorMsg = data.detail || 'Unknown error';
+            if (errorMsg.includes('charmap') || errorMsg.includes('codec')) {
+              alert('❌ Authentication failed: File encoding error. Backend needs restart with UTF-8 encoding fix.');
+            } else if (errorMsg.includes('expired')) {
+              alert('❌ Authentication failed: Token expired. Please try logging in again.');
+            } else {
+              alert(`❌ Authentication failed: ${errorMsg}`);
+            }
             router.push('/');
           }
         })
         .catch(err => {
           console.error('[CALLBACK] Error setting token:', err);
-          alert('❌ Failed to authenticate. Please check backend is running.');
+          alert('❌ Failed to authenticate. Please check backend is running on port 8001.');
           router.push('/');
         });
     } else {
@@ -81,8 +97,8 @@ export default function AuthCallback() {
       console.error('[CALLBACK] URL:', window.location.href); // Debug
       alert('❌ Authentication failed or was cancelled.');
       setTimeout(() => {
-        router.push('/');
-      }, 2000);
+        window.location.href = '/';
+      }, 1500);
     }
   }, [searchParams, router]);
 
