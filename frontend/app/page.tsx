@@ -241,12 +241,51 @@ export default function Home() {
     }
   };
 
+  // Check authentication status on mount
   useEffect(() => {
-    // Fetch live data on startup for all symbols
-    if (!useTestData) {
-      fetchAllSignals(true);
-    }
+    const checkAuth = async () => {
+      try {
+        const response = await axios.get(`${API_URL}/api/auth/status`);
+        console.log('[AUTH CHECK] Status:', response.data);
+        if (response.data.is_authenticated) {
+          setIsAuthenticated(true);
+          console.log('[AUTH CHECK] User is authenticated, fetching data...');
+          fetchAllSignals(true);
+        } else {
+          console.log('[AUTH CHECK] User not authenticated');
+          setIsAuthenticated(false);
+        }
+      } catch (err) {
+        console.error('[AUTH CHECK] Failed to check auth status:', err);
+        // Try to fetch data anyway - if it fails due to auth, we'll handle it
+        if (!useTestData) {
+          fetchAllSignals(true);
+        }
+      }
+    };
+    
+    checkAuth();
   }, []);
+
+  // Refresh data when page becomes visible (e.g., after returning from auth)
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible' && !useTestData) {
+        console.log('[VISIBILITY] Page visible, checking auth and refreshing data...');
+        axios.get(`${API_URL}/api/auth/status`)
+          .then(response => {
+            if (response.data.is_authenticated) {
+              setIsAuthenticated(true);
+              fetchAllSignals(false);
+            }
+          })
+          .catch(err => console.error('[VISIBILITY] Auth check failed:', err));
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+  }, [useTestData, fetchAllSignals]);
 
   // Auto-refresh polling for live data - ultra-fast 1 second updates
   useEffect(() => {

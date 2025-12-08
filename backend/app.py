@@ -769,11 +769,72 @@ async def set_access_token(request_token: str):
         ACCESS_TOKEN = data["access_token"]
         kite.set_access_token(ACCESS_TOKEN)
         
+        # Save token to .env file for persistence
+        env_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'config', '.env')
+        print(f"[AUTH] Saving token to: {env_path}")
+        
+        if os.path.exists(env_path):
+            with open(env_path, 'r') as f:
+                lines = f.readlines()
+            
+            with open(env_path, 'w') as f:
+                token_found = False
+                for line in lines:
+                    if line.startswith('ZERODHA_ACCESS_TOKEN='):
+                        f.write(f'ZERODHA_ACCESS_TOKEN={ACCESS_TOKEN}\n')
+                        token_found = True
+                    else:
+                        f.write(line)
+                
+                if not token_found:
+                    f.write(f'\nZERODHA_ACCESS_TOKEN={ACCESS_TOKEN}\n')
+            
+            print(f"[AUTH] Token saved to .env file")
+        
         print(f"[AUTH] Access token set successfully: {ACCESS_TOKEN[:20]}...")
         return {"status": "success", "access_token": ACCESS_TOKEN}
     except Exception as e:
         print(f"[AUTH ERROR] Failed to generate session: {str(e)}")
         print(f"[AUTH ERROR] Error type: {type(e).__name__}")
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@app.get("/api/auth/status")
+async def check_auth_status():
+    """Check if user is authenticated with Zerodha"""
+    global ACCESS_TOKEN
+    is_authenticated = bool(ACCESS_TOKEN)
+    
+    print(f"[AUTH STATUS] Checking authentication status")
+    print(f"[AUTH STATUS] Has ACCESS_TOKEN: {is_authenticated}")
+    
+    if is_authenticated:
+        print(f"[AUTH STATUS] Token exists: {ACCESS_TOKEN[:20]}...")
+        # Try to make a simple API call to verify token is valid
+        try:
+            profile = kite.profile()
+            print(f"[AUTH STATUS] Token is valid, user: {profile.get('user_name', 'Unknown')}")
+            return {
+                "status": "authenticated",
+                "is_authenticated": True,
+                "user_name": profile.get('user_name'),
+                "user_id": profile.get('user_id'),
+                "email": profile.get('email')
+            }
+        except Exception as e:
+            print(f"[AUTH STATUS] Token exists but is invalid: {str(e)}")
+            return {
+                "status": "token_invalid",
+                "is_authenticated": False,
+                "message": "Token expired or invalid. Please login again."
+            }
+    else:
+        print(f"[AUTH STATUS] No token found")
+        return {
+            "status": "not_authenticated",
+            "is_authenticated": False,
+            "message": "Please authenticate with Zerodha"
+        }
 
 
 @app.get("/api/alerts/status")
