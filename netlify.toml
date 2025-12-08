@@ -1,10 +1,10 @@
 [build]
   base = "frontend"
-  command = "npm install && npm run build"
+  command = "npm install --legacy-peer-deps && npm run build"
   publish = ".next"
 
 [build.environment]
-  NODE_VERSION = "18"
+  NODE_VERSION = "18.17.0"
   NEXT_PUBLIC_API_URL = "https://options-trading-backend.onrender.com"
 
 [[redirects]]

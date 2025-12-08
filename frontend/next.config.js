@@ -10,11 +10,6 @@ const nextConfig = {
   // Mobile device optimization
   output: 'standalone',
   
-  // Fast refresh for development
-  experimental: {
-    optimizeCss: true,
-  },
-  
   // TypeScript configuration
   typescript: {
     ignoreBuildErrors: false,
