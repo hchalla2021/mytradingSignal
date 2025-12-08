@@ -7,22 +7,17 @@ const nextConfig = {
     NEXT_PUBLIC_API_URL: process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8001',
   },
   
-  // Mobile device optimization
-  output: 'standalone',
+  // Static export for Netlify deployment
+  output: 'export',
+  
+  // Disable image optimization for static export
+  images: {
+    unoptimized: true,
+  },
   
   // TypeScript configuration
   typescript: {
     ignoreBuildErrors: false,
-  },
-  
-  // Proxy API requests to backend
-  async rewrites() {
-    return [
-      {
-        source: '/api/:path*',
-        destination: `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8001'}/api/:path*`,
-      },
-    ];
   },
 };
 
