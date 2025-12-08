@@ -41,7 +41,7 @@ class Settings:
     OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
     
     # Server Settings
-    PORT: int = int(os.getenv("PORT", "8000"))
+    PORT: int = int(os.getenv("PORT", "8001"))
     HOST: str = os.getenv("HOST", "0.0.0.0")
     
     @classmethod

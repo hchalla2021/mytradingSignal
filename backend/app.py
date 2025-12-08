@@ -1669,7 +1669,7 @@ if __name__ == "__main__":
     print("[STARTUP] Starting backend server...")
     print(f"[STARTUP] Zerodha API Key: {settings.ZERODHA_API_KEY[:8] if settings.ZERODHA_API_KEY else 'NOT SET'}...")
     print(f"[STARTUP] Redirect URL: {settings.ZERODHA_REDIRECT_URL}")
-    port = int(os.getenv("PORT", 8000))
+    port = int(os.getenv("PORT", 8001))
     print(f"[STARTUP] Server running on http://0.0.0.0:{port}")
     print(f"[STARTUP] Health check: http://0.0.0.0:{port}/health")
     print(f"[STARTUP] API docs: http://0.0.0.0:{port}/docs")
