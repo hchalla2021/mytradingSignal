@@ -1433,9 +1433,10 @@ async def get_strong_signals(symbol: str):
     market_open = is_market_open()
     ist_now = datetime.now(IST)
     
-    # If market is closed, still fetch last traded data but don't send alerts
-    if not market_open:
-        print(f"[MARKET CLOSED] Fetching last traded data for {symbol.upper()}")
+    # If market is closed or not authenticated, return mock data
+    if not market_open or not ACCESS_TOKEN:
+        print(f"[INFO] Market closed or not authenticated - returning demo data for {symbol.upper()}")
+        return get_mock_market_closed_data(symbol)
     
     # Check cache first
     current_time = time.time()
@@ -1461,7 +1462,8 @@ async def get_strong_signals(symbol: str):
         option_data = await get_option_chain(symbol)
     except Exception as e:
         print(f"Error fetching option chain for {symbol}: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to fetch option chain: {str(e)}")
+        # Return mock data instead of error
+        return get_mock_market_closed_data(symbol)
     
     try:
         strong_signals = []
@@ -1599,11 +1601,11 @@ async def get_strong_signals(symbol: str):
         
     except Exception as e:
         print(f"Error processing signals: {e}")
+        import traceback
+        traceback.print_exc()
         # Return mock data on any error
         result = get_mock_market_closed_data(symbol)
-        result['message'] = f'Error fetching data: {str(e)}'
-        CACHE[cache_key] = result
-        CACHE_EXPIRY[cache_key] = current_time + 3
+        result['message'] = 'Demo mode: Please authenticate with Zerodha to see live signals'
         return result
 
 

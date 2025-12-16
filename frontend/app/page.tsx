@@ -350,7 +350,7 @@ export default function Home() {
               
               <button
                 onClick={() => setAutoRefresh(!autoRefresh)}
-                className={`px-3 sm:px-4 py-2 rounded-lg transition-colors flex items-center gap-1 sm:gap-2 text-sm sm:text-base whitespace-nowrap ${
+                className={`hidden px-3 sm:px-4 py-2 rounded-lg transition-colors flex items-center gap-1 sm:gap-2 text-sm sm:text-base whitespace-nowrap ${
                   autoRefresh ? 'bg-green-600 hover:bg-green-700' : 'bg-gray-600 hover:bg-gray-700'
                 }`}
               >
