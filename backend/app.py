@@ -154,6 +154,32 @@ def get_mock_market_closed_data(symbol: str) -> Dict:
     if spot_price == 0:
         spot_price = 26150 if symbol.upper() == "NIFTY" else (59700 if symbol.upper() == "BANKNIFTY" else 85600)
     
+    # Calculate ATM strike based on spot price
+    strike_step = 100 if symbol.upper() == 'SENSEX' else 50
+    atm_strike = round(spot_price / strike_step) * strike_step
+    
+    # Generate mock option chain with ATM ± 2 strikes
+    mock_chain = []
+    for i in range(-2, 3):
+        strike = atm_strike + (i * strike_step)
+        mock_chain.append({
+            'strike': strike,
+            'CE': {
+                'ltp': max(1.0, spot_price - strike) if strike < spot_price else abs(i) * 10 + 5,
+                'volume': 50000 + (abs(i) * 10000),
+                'oi': 100000 + (abs(i) * 20000),
+                'change': 0,
+                'change_percent': 0
+            },
+            'PE': {
+                'ltp': max(1.0, strike - spot_price) if strike > spot_price else abs(i) * 10 + 5,
+                'volume': 45000 + (abs(i) * 10000),
+                'oi': 95000 + (abs(i) * 20000),
+                'change': 0,
+                'change_percent': 0
+            }
+        })
+    
     return {
         'symbol': symbol.upper(),
         'spot_price': spot_price,
@@ -175,6 +201,8 @@ def get_mock_market_closed_data(symbol: str) -> Dict:
         },
         'total_ce_oi': 0,
         'total_pe_oi': 0,
+        'atm_strike': atm_strike,
+        'option_chain': mock_chain,
         'timestamp': datetime.now().isoformat(),
         'market_status': 'CLOSED'
     }
@@ -343,7 +371,9 @@ class SignalGenerator:
     def analyze_signal(greeks: Dict, oi_data: Dict, option_type: str, strike_type: str, 
                       market_metrics: Dict, spot_price: float, strike_price: float) -> Dict:
         """
-        BUYER FOCUSED Signal Analysis - 90%+ Threshold - Expert Stock Market Logic
+        BUYER FOCUSED Signal Analysis - 80%+ Threshold - Expert Stock Market Logic
+        
+        STRONG BUY FORMULA: Price Action ↑ + Volume ↑ + OI ↓ + Premium ↑
         
         Enhanced Parameters (Buyer's Perspective Only):
         1. PCR + OI Change Analysis (35 points) - Strong money flow detection
@@ -352,21 +382,45 @@ class SignalGenerator:
         4. Gamma + Vega (15 points) - Explosive potential
         5. Strike Position (5 points) - Entry timing
         
-        Total: 100 points. Signal only if 90%+
+        Total: 100 points. Signal only if 80%+
         """
         delta = greeks['delta']
         gamma = greeks['gamma']
         vega = greeks['vega']
         theta = greeks['theta']
+        ltp = greeks.get('price', 0)
         
         score = 0
         reasons = []
+        strong_buy_triggered = False
         
-        # Get market metrics
+        # Get market metrics and OI data
         market_dir = market_metrics.get('market_direction', 'NEUTRAL')
         pcr = market_metrics.get('pcr', 1.0)
         total_ce_oi_chg = market_metrics.get('total_ce_oi_chg', 0)
         total_pe_oi_chg = market_metrics.get('total_pe_oi_chg', 0)
+        
+        # Get OI and volume data
+        volume = oi_data.get('volume', 0)
+        oi_change_pct = oi_data.get('oi_change_percent', 0)
+        change_pct = oi_data.get('change_percent', 0) if 'change_percent' in oi_data else 0
+        
+        # === STRONG BUY FORMULA CHECK: Price↑ + Volume↑ + OI↓ + Premium↑ ===
+        # This indicates short covering or panic buying - extremely bullish
+        price_rising = change_pct > 2  # Price/Premium increasing by 2%+
+        volume_high = volume > (50000 if option_type == 'CE' else 40000)  # High volume activity
+        oi_falling = oi_change_pct < -5  # OI decreasing (covering/unwinding)
+        premium_rising = ltp > 50 if strike_type == 'ATM' else ltp > 20  # Premium is substantial
+        
+        if price_rising and volume_high and oi_falling and premium_rising:
+            score += 40  # Massive bonus for STRONG BUY pattern
+            strong_buy_triggered = True
+            reasons.insert(0, f"🔥🔥 STRONG BUY PATTERN: Price↑{change_pct:.1f}% + Vol↑{volume/1000:.0f}K + OI↓{oi_change_pct:.1f}% + Premium↑₹{ltp:.0f}")
+        
+        # Alternative: High volume with price rising (even if OI not falling)
+        elif price_rising and volume_high and change_pct > 5:
+            score += 25
+            reasons.insert(0, f"🚀 Explosive Move: Price↑{change_pct:.1f}% + Vol↑{volume/1000:.0f}K")
         
         # === 1. PCR + OI CHANGE ANALYSIS (35 points) - Most Critical ===
         # BUYER FOCUS: Look for strong directional bias with fresh money
@@ -490,8 +544,8 @@ class SignalGenerator:
             score -= 3
             reasons.append(f"⏰ Moderate Decay ({theta:.2f}/day)")
         
-        # === SIGNAL CLASSIFICATION (STRICT 90%+) ===
-        if score >= 90:
+        # === SIGNAL CLASSIFICATION (80%+ for quality signals) ===
+        if score >= 80:
             signal = "STRONG BUY"
             signal_strength = "EXTREME"
         elif score >= 80:
@@ -920,8 +974,8 @@ async def send_test_alert(phone_number: str):
         if alert_key in alert_service.last_alert_time:
             del alert_service.last_alert_time[alert_key]
         
-        # Update test signal score to trigger 90% threshold
-        test_signal["score"] = 92.5  # Must be 90%+ for alerts
+        # Update test signal score to trigger 80% threshold
+        test_signal["score"] = 85.0  # Must be 80%+ for alerts
         test_signal["reasons"] = [
             "🔥 Test Signal - Strong Market",
             "⚡ High Momentum Detected",
@@ -1472,8 +1526,8 @@ async def get_strong_signals(symbol: str):
             for option_type in ['CE', 'PE']:
                 if option_type in strike_data:
                     opt = strike_data[option_type]
-                    # Only include signals with 90%+ score (BUYER FOCUSED)
-                    if opt['signal'] in ['STRONG BUY', 'BUY'] and opt['score'] >= 90:
+                    # Only include signals with 80%+ score (BUYER FOCUSED)
+                    if opt['signal'] in ['STRONG BUY', 'BUY'] and opt['score'] >= 80:
                         signal = {
                             'symbol': symbol,
                             'strike': strike_data['strike'],
@@ -1585,6 +1639,8 @@ async def get_strong_signals(symbol: str):
             'component_scores': option_data.get('component_scores'),
             'total_ce_oi': option_data.get('total_ce_oi'),
             'total_pe_oi': option_data.get('total_pe_oi'),
+            'atm_strike': option_data.get('atm_strike'),
+            'option_chain': option_data.get('option_chain'),
             'timestamp': datetime.now().isoformat(),
             'market_status': 'OPEN' if market_open else 'CLOSED'
         }

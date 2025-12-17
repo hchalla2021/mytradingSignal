@@ -50,6 +50,8 @@ interface SignalData {
   };
   total_ce_oi?: number;
   total_pe_oi?: number;
+  atm_strike?: number;
+  option_chain?: any[];
 }
 
 export default function Home() {
@@ -263,13 +265,13 @@ export default function Home() {
     return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
   }, [useTestData, fetchAllSignals]);
 
-  // Auto-refresh polling for live data - optimized 3 second updates
+  // Auto-refresh polling for live data - 1 second silent updates (values only)
   useEffect(() => {
     if (!autoRefresh || useTestData) return;
     
     const interval = setInterval(() => {
-      fetchAllSignals(false); // Don't show loading on auto-refresh
-    }, 3000); // Refresh every 3 seconds - fast but efficient
+      fetchAllSignals(false); // Silent refresh - no loading indicator, only values update
+    }, 1000); // Refresh every 1 second - instant real-time updates from Zerodha
     
     return () => clearInterval(interval);
   }, [autoRefresh, useTestData, fetchAllSignals]);
@@ -295,34 +297,60 @@ export default function Home() {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 text-white">
+    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-950 text-white relative overflow-hidden">
+      {/* Animated Background Overlay */}
+      <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top_right,_var(--tw-gradient-stops))] from-indigo-900/10 via-transparent to-cyan-900/10 pointer-events-none"></div>
+      <div className="absolute inset-0 bg-[radial-gradient(circle_at_bottom_left,_var(--tw-gradient-stops))] from-purple-900/10 via-transparent to-transparent pointer-events-none"></div>
+      
       {/* Header */}
-      <header className="bg-slate-800/50 border-b border-slate-700 backdrop-blur-sm sticky top-0 z-50">
-        <div className="container mx-auto px-2 sm:px-4 py-3 sm:py-4">
-          <div className="flex items-center justify-between flex-wrap gap-2">
-            <div className="flex items-center gap-2 sm:gap-3">
-              <Activity className="w-6 h-6 sm:w-8 sm:h-8 text-blue-400" />
+      <header className="bg-gradient-to-r from-slate-900/80 via-indigo-950/70 to-slate-900/80 border-b-2 border-indigo-500/30 backdrop-blur-xl sticky top-0 z-50 shadow-2xl">
+        <div className="container mx-auto px-2 sm:px-4 py-4 sm:py-5">
+          <div className="flex items-center justify-between flex-wrap gap-3">
+            <div className="flex items-center gap-3 sm:gap-4">
+              <Activity className="w-8 h-8 sm:w-10 sm:h-10 text-cyan-400 drop-shadow-lg" />
               <div>
-                <h1 className="text-lg sm:text-2xl font-bold">Trading Signals</h1>
+                <h1 className="text-2xl sm:text-4xl font-black bg-gradient-to-r from-cyan-400 via-blue-500 to-purple-600 bg-clip-text text-transparent tracking-tight">Daily Trading Signals</h1>
                 <div className="flex items-center gap-3">
                   {marketStatus && (
-                    <p className="text-xs flex items-center gap-1">
-                      <span className={`inline-block w-2 h-2 rounded-full ${marketStatus.status === 'OPEN' ? 'bg-green-400 animate-pulse' : 'bg-red-400'}`}></span>
-                      <span className={marketStatus.status === 'OPEN' ? 'text-green-400 font-semibold' : 'text-red-400 font-semibold'}>
-                        {marketStatus.status === 'OPEN' ? 'LIVE' : 'OFFLINE'}
+                    <p className="text-xs sm:text-sm flex items-center gap-2">
+                      <span className={`inline-block w-3 h-3 rounded-full ${marketStatus.status === 'OPEN' ? 'bg-green-400 animate-pulse shadow-lg shadow-green-400/50' : 'bg-red-400 shadow-lg shadow-red-400/50'}`}></span>
+                      <span className={marketStatus.status === 'OPEN' ? 'text-green-300 font-black uppercase tracking-wider' : 'text-red-300 font-black uppercase tracking-wider'}>
+                        {marketStatus.status === 'OPEN' ? '🟢 LIVE' : 'OFFLINE'}
                       </span>
-                      <span className="text-slate-400">• {marketStatus.current_time}</span>
-                      <span className="text-slate-500 text-[10px]">
+                      <span className="text-slate-300">• {marketStatus.current_time}</span>
+                      <span className="text-slate-400 text-[10px] sm:text-xs font-semibold">
                         {marketStatus.status === 'OPEN' ? '(Market Open)' : '(Market Closed)'}
                       </span>
                     </p>
                   )}
-                  {autoRefresh && lastUpdate && (
-                    <p className="text-xs text-slate-400 flex items-center gap-1">
+                  {autoRefresh && lastUpdate && (() => {
+                    // Market crash detection - check all symbols for extreme conditions
+                    const isCrashing = symbols.some(symbol => {
+                      const data = signalData[symbol];
+                      if (!data) return false;
+                      
+                      // Extreme bearish conditions: PCR < 0.6 OR direction < -40% OR strong bearish signals
+                      const extremePCR = data.pcr && data.pcr < 0.6;
+                      const extremeBearish = data.direction_percentage && data.direction_percentage < -40;
+                      const strongBearishSignals = data.signals && data.signals.filter((s: any) => 
+                        s.option_type === 'PE' && s.score >= 90
+                      ).length >= 2;
+                      
+                      return extremePCR || extremeBearish || strongBearishSignals;
+                    });
+                    
+                    return (
+                    <p className="text-xs text-slate-400 flex items-center gap-1.5">
                       <span className={`inline-block w-2 h-2 rounded-full ${isRefreshing ? 'bg-yellow-400 animate-pulse' : 'bg-blue-400'}`}></span>
                       Updated {lastUpdate.toLocaleTimeString()}
+                      {isCrashing && (
+                        <span className="ml-1 text-2xl animate-pulse flex items-center gap-0.5" title="Market Crash Alert!">
+                          🔥🔥🔥
+                        </span>
+                      )}
                     </p>
-                  )}
+                    );
+                  })()}
                 </div>
               </div>
             </div>
@@ -465,14 +493,37 @@ export default function Home() {
 
                     {/* PCR & OI */}
                     <div className="grid grid-cols-2 gap-2 sm:gap-3 mb-3 sm:mb-4">
-                      <div className="p-2.5 sm:p-3 bg-slate-900/50 rounded-lg">
-                        <p className="text-[10px] sm:text-xs text-slate-400 mb-1">PCR</p>
+                      <div className={`p-2.5 sm:p-3 rounded-lg ${
+                        data.pcr && data.pcr > 1.3
+                          ? 'bg-gradient-to-br from-green-500/30 to-green-600/20 border-2 border-green-500/70 animate-pulse ring-2 ring-green-400/50' 
+                          : data.pcr && data.pcr < 0.7
+                          ? 'bg-gradient-to-br from-red-500/30 to-red-600/20 border-2 border-red-500/70 animate-pulse ring-2 ring-red-400/50'
+                          : 'bg-slate-900/50'
+                      }`}>
+                        <p className="text-[10px] sm:text-xs text-slate-400 mb-1 flex items-center justify-between">
+                          <span>PCR</span>
+                          {data.pcr && data.pcr > 1.3 && (
+                            <span className="text-[8px] text-green-400 font-bold">STRONG BULLISH</span>
+                          )}
+                          {data.pcr && data.pcr < 0.7 && (
+                            <span className="text-[8px] text-red-400 font-bold">STRONG BEARISH</span>
+                          )}
+                        </p>
                         <p className={`text-base sm:text-lg font-bold ${
-                          data.pcr && data.pcr > 1.2 ? 'text-green-400' : 
-                          data.pcr && data.pcr < 0.8 ? 'text-red-400' : 
+                          data.pcr && data.pcr > 1.3 ? 'text-green-400' : 
+                          data.pcr && data.pcr > 1.2 ? 'text-green-300' :
+                          data.pcr && data.pcr < 0.7 ? 'text-red-400' : 
+                          data.pcr && data.pcr < 0.75 ? 'text-red-300' :
+                          data.pcr && data.pcr < 0.8 ? 'text-orange-400' :
                           'text-yellow-400'
                         }`}>
                           {data.pcr?.toFixed(2) || 'N/A'}
+                          {data.pcr && data.pcr > 1.3 && (
+                            <span className="ml-1 text-xs">🔔📈</span>
+                          )}
+                          {data.pcr && data.pcr < 0.7 && (
+                            <span className="ml-1 text-xs">🔔📉</span>
+                          )}
                         </p>
                       </div>
                       <div className="p-2.5 sm:p-3 bg-slate-900/50 rounded-lg">
@@ -483,9 +534,139 @@ export default function Home() {
                       </div>
                     </div>
 
+                    {/* Quick Strike View - ATM, ITM, OTM */}
+                    {data.option_chain && data.atm_strike && (() => {
+                      const atmStrike = data.atm_strike;
+                      const strikeStep = symbol === 'SENSEX' ? 100 : 50;
+                      
+                      // Get ATM, slight ITM, and slight OTM strikes
+                      const atmData = data.option_chain.find((s: any) => s.strike === atmStrike);
+                      const itmStrike = atmStrike - strikeStep; // One strike ITM
+                      const otmStrike = atmStrike + strikeStep; // One strike OTM
+                      const itmData = data.option_chain.find((s: any) => s.strike === itmStrike);
+                      const otmData = data.option_chain.find((s: any) => s.strike === otmStrike);
+
+                      if (!atmData) return null;
+
+                      return (
+                        <div className="mt-3 sm:mt-4 pt-3 sm:pt-4 border-t border-slate-700">
+                          <p className="text-sm sm:text-base font-bold text-slate-300 mb-3 uppercase tracking-wide flex items-center gap-2">
+                            <span className="text-base">📊</span> Live Strike Data
+                          </p>
+                          
+                          <div className="space-y-3">
+                            {/* ITM Strike - ONE BOX */}
+                            {itmData && (() => {
+                              const ceVolHighlight = itmData.CE?.volume > 100000; // Only highlight when volume > 1 lakh
+                              const peVolHighlight = itmData.PE?.volume > 100000; // Only highlight when volume > 1 lakh
+                              return (
+                              <div className="p-3 bg-gradient-to-br from-green-950/40 via-slate-900/50 to-emerald-950/30 backdrop-blur-md border border-green-400/40 rounded-lg shadow-lg transition-all duration-300">
+                                <div className="text-xs sm:text-sm text-green-300 mb-2 font-bold uppercase tracking-wide flex items-center gap-1.5">
+                                  <span className="text-sm">🟢</span> ITM {itmStrike}
+                                </div>
+                                <div className="grid grid-cols-2 gap-2">
+                                  {/* CE - Green Box */}
+                                  <div className={`bg-gradient-to-br from-green-600/30 to-emerald-700/20 backdrop-blur-sm border border-green-300/60 p-2.5 rounded-lg shadow-lg transition-transform duration-200 ${ceVolHighlight ? 'animate-pulse ring-2 ring-yellow-300/60' : ''}`}>
+                                    <div className="text-[10px] sm:text-xs text-green-100 font-bold mb-1.5 flex items-center gap-1.5 uppercase tracking-wide">
+                                      <span>CE ✓</span>
+                                      {ceVolHighlight && <span className="text-yellow-200 text-sm animate-bounce">🔥</span>}
+                                    </div>
+                                    <div className="text-sm sm:text-base text-white font-bold mb-1">₹{itmData.CE?.ltp?.toFixed(2) || '-'}</div>
+                                    <div className={`text-[10px] sm:text-xs font-semibold ${ceVolHighlight ? 'text-yellow-200' : 'text-green-200'}`}>Vol: {itmData.CE?.volume ? (itmData.CE.volume / 1000).toFixed(0) + 'K' : '-'}</div>
+                                  </div>
+                                  {/* PE - Light Red Box */}
+                                  <div className={`bg-gradient-to-br from-slate-700/30 to-gray-800/20 backdrop-blur-sm border border-slate-400/40 p-2.5 rounded-lg shadow-lg transition-transform duration-200 ${peVolHighlight ? 'animate-pulse ring-2 ring-yellow-300/60' : ''}`}>
+                                    <div className="text-[10px] sm:text-xs text-slate-300 font-bold mb-1.5 flex items-center gap-1.5 uppercase tracking-wide">
+                                      <span>PE</span>
+                                      {peVolHighlight && <span className="text-yellow-200 text-sm animate-bounce">🔥</span>}
+                                    </div>
+                                    <div className="text-sm sm:text-base text-white font-bold mb-1">₹{itmData.PE?.ltp?.toFixed(2) || '-'}</div>
+                                    <div className={`text-[10px] sm:text-xs font-semibold ${peVolHighlight ? 'text-yellow-200' : 'text-slate-300'}`}>Vol: {itmData.PE?.volume ? (itmData.PE.volume / 1000).toFixed(0) + 'K' : '-'}</div>
+                                  </div>
+                                </div>
+                              </div>
+                              );
+                            })()}
+
+                            {/* ATM Strike - ONE BOX */}
+                            {(() => {
+                              const ceVolHighlight = atmData.CE?.volume > 100000; // Only highlight when volume > 1 lakh
+                              const peVolHighlight = atmData.PE?.volume > 100000; // Only highlight when volume > 1 lakh
+                              return (
+                            <div className="p-3 bg-gradient-to-br from-blue-900/30 via-cyan-950/30 to-blue-900/30 backdrop-blur-sm border border-cyan-400/50 rounded-lg shadow-lg transition-all duration-300">
+                              <div className="text-xs sm:text-sm text-cyan-200 mb-2 font-bold uppercase tracking-wide flex items-center gap-1.5">
+                                <span className="text-sm">🎯</span> ATM {atmStrike}
+                              </div>
+                              <div className="grid grid-cols-2 gap-2">
+                                {/* CE - Green Box */}
+                                <div className={`bg-gradient-to-br from-green-600/30 to-emerald-700/20 backdrop-blur-sm border border-green-300/60 p-2.5 rounded-lg shadow-lg transition-transform duration-200 ${ceVolHighlight ? 'animate-pulse ring-2 ring-yellow-300/60' : ''}`}>
+                                  <div className="text-[10px] sm:text-xs text-green-100 font-bold mb-1.5 flex items-center gap-1.5 uppercase tracking-wide">
+                                    <span>CE</span>
+                                    {ceVolHighlight && <span className="text-yellow-200 text-sm animate-bounce">🔥</span>}
+                                  </div>
+                                  <div className="text-sm sm:text-base text-white font-bold mb-1">₹{atmData.CE?.ltp?.toFixed(2) || '-'}</div>
+                                  <div className={`text-[10px] sm:text-xs font-semibold ${ceVolHighlight ? 'text-yellow-200' : 'text-green-200'}`}>Vol: {atmData.CE?.volume ? (atmData.CE.volume / 1000).toFixed(0) + 'K' : '-'}</div>
+                                </div>
+                                {/* PE - Red Box */}
+                                <div className={`bg-gradient-to-br from-red-600/30 to-rose-700/20 backdrop-blur-sm border border-red-300/60 p-2.5 rounded-lg shadow-lg transition-transform duration-200 ${peVolHighlight ? 'animate-pulse ring-2 ring-yellow-300/60' : ''}`}>
+                                  <div className="text-[10px] sm:text-xs text-red-100 font-bold mb-1.5 flex items-center gap-1.5 uppercase tracking-wide">
+                                    <span>PE</span>
+                                    {peVolHighlight && <span className="text-yellow-200 text-sm animate-bounce">🔥</span>}
+                                  </div>
+                                  <div className="text-sm sm:text-base text-white font-bold mb-1">₹{atmData.PE?.ltp?.toFixed(2) || '-'}</div>
+                                  <div className={`text-[10px] sm:text-xs font-semibold ${peVolHighlight ? 'text-yellow-200' : 'text-red-200'}`}>Vol: {atmData.PE?.volume ? (atmData.PE.volume / 1000).toFixed(0) + 'K' : '-'}</div>
+                                </div>
+                              </div>
+                            </div>
+                              );
+                            })()}
+
+                            {/* OTM Strike - ONE BOX */}
+                            {otmData && (() => {
+                              const ceVolHighlight = otmData.CE?.volume > 100000; // Only highlight when volume > 1 lakh
+                              const peVolHighlight = otmData.PE?.volume > 100000; // Only highlight when volume > 1 lakh
+                              return (
+                              <div className="p-3 bg-gradient-to-br from-slate-900/50 via-gray-900/40 to-slate-950/50 backdrop-blur-md border border-slate-300/30 rounded-lg shadow-lg transition-all duration-300">
+                                <div className="text-xs sm:text-sm text-slate-200 mb-2 font-bold uppercase tracking-wide flex items-center gap-1.5">
+                                  <span className="text-sm">⚪</span> OTM {otmStrike}
+                                </div>
+                                <div className="grid grid-cols-2 gap-2">
+                                  {/* CE - Green Box */}
+                                  <div className={`bg-gradient-to-br from-green-600/25 to-emerald-700/15 backdrop-blur-sm border border-green-300/50 p-2.5 rounded-lg shadow-lg transition-transform duration-200 ${ceVolHighlight ? 'animate-pulse ring-2 ring-yellow-300/60' : ''}`}>
+                                    <div className="text-[10px] sm:text-xs text-green-100 font-bold mb-1.5 flex items-center gap-1.5 uppercase tracking-wide">
+                                      <span>CE</span>
+                                      {ceVolHighlight && <span className="text-yellow-300 text-sm animate-bounce">🔥</span>}
+                                    </div>
+                                    <div className="text-sm sm:text-base text-white font-bold mb-1">₹{otmData.CE?.ltp?.toFixed(2) || '-'}</div>
+                                    <div className={`text-[10px] sm:text-xs font-semibold ${ceVolHighlight ? 'text-yellow-200' : 'text-green-200'}`}>Vol: {otmData.CE?.volume ? (otmData.CE.volume / 1000).toFixed(0) + 'K' : '-'}</div>
+                                  </div>
+                                  {/* PE - Red Box */}
+                                  <div className={`bg-gradient-to-br from-red-600/25 to-rose-700/15 backdrop-blur-sm border border-red-300/50 p-2.5 rounded-lg shadow-lg transition-transform duration-200 ${peVolHighlight ? 'animate-pulse ring-2 ring-yellow-300/60' : ''}`}>
+                                    <div className="text-[10px] sm:text-xs text-red-100 font-bold mb-1.5 flex items-center gap-1.5 uppercase tracking-wide">
+                                      <span>PE ✓</span>
+                                      {peVolHighlight && <span className="text-yellow-200 text-sm animate-bounce">🔥</span>}
+                                    </div>
+                                    <div className="text-sm sm:text-base text-white font-bold mb-1">₹{otmData.PE?.ltp?.toFixed(2) || '-'}</div>
+                                    <div className={`text-[10px] sm:text-xs font-semibold ${peVolHighlight ? 'text-yellow-200' : 'text-red-200'}`}>Vol: {otmData.PE?.volume ? (otmData.PE.volume / 1000).toFixed(0) + 'K' : '-'}</div>
+                                  </div>
+                                </div>
+                              </div>
+                              );
+                            })()}
+                          </div>
+
+                          {/* Legend */}
+                          <div className="flex justify-between text-[10px] sm:text-xs mt-3 pt-2 border-t border-slate-700">
+                            <span className="text-green-300 font-semibold">✓ ITM</span>
+                            <span className="text-yellow-300 font-semibold">🔥 Vol &gt;1L</span>
+                          </div>
+                        </div>
+                      );
+                    })()}
+
                     {/* OI Breakdown */}
                     {data.total_ce_oi && data.total_pe_oi && (
-                      <div className="flex justify-between items-center text-[10px] sm:text-xs pt-2.5 sm:pt-3 border-t border-slate-700">
+                      <div className="flex justify-between items-center text-[10px] sm:text-xs pt-2.5 sm:pt-3 border-t border-slate-700 mt-3">
                         <div>
                           <p className="text-slate-500">CE OI</p>
                           <p className="text-sm sm:text-base text-red-400 font-semibold">{(data.total_ce_oi / 100000).toFixed(1)}L</p>
@@ -496,12 +677,6 @@ export default function Home() {
                         </div>
                       </div>
                     )}
-
-                    {/* Updated timestamp */}
-                    <div className="flex items-center gap-1 text-[10px] sm:text-xs text-slate-500 mt-2.5 sm:mt-3 pt-2.5 sm:pt-3 border-t border-slate-700">
-                      <span className={`inline-block w-1.5 h-1.5 rounded-full ${isRefreshing ? 'bg-yellow-400 animate-pulse' : 'bg-green-400'}`}></span>
-                      {new Date(data.timestamp).toLocaleTimeString()}
-                    </div>
                   </div>
                 );
               })}
@@ -881,8 +1056,8 @@ export default function Home() {
          Object.values(signalData).every(data => data.signals.length === 0) && (
           <div className="text-center py-20 text-slate-400">
             <AlertCircle className="w-16 h-16 mx-auto mb-4 opacity-50" />
-            <p className="text-xl">No strong signals found (90%+ strength required)</p>
-            <p className="text-sm mt-2">🎯 BUYER FOCUSED: Only showing HIGH CONFIDENCE options with 90%+ signal strength. These are rare but highly profitable opportunities.</p>
+            <p className="text-xl">No strong signals found (80%+ strength required)</p>
+            <p className="text-sm mt-2">🎯 BUYER FOCUSED: Only showing HIGH CONFIDENCE options with 80%+ signal strength. Quality opportunities with strong probability.</p>
             <p className="text-sm mt-1">💡 When market moves strongly in one direction with heavy OI build, signals will appear here.</p>
           </div>
         )}

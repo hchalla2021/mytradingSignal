@@ -12,6 +12,9 @@ import json
 from openai import OpenAI
 from dotenv import load_dotenv
 
+# Import settings to access OPENAI_API_KEY
+from config.settings import settings
+
 load_dotenv()
 
 logging.basicConfig(level=logging.INFO)
