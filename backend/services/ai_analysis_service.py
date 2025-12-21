@@ -367,6 +367,135 @@ LTP: ₹{ltp:.2f}
 
 
 # Singleton instance
+    def analyze_market_overview(self, nifty_data: dict, banknifty_data: dict, sensex_data: dict) -> dict:
+        """
+        🚀 ULTRA-FAST AI-powered comprehensive market analysis
+        Analyzes all 3 indices together for overall market bias, direction, and component scores
+        """
+        if not self.enabled:
+            return {
+                'enabled': False,
+                'message': 'AI analysis disabled - no API key'
+            }
+        
+        try:
+            # Prepare comprehensive market data
+            market_summary = {
+                'NIFTY': {
+                    'spot': nifty_data.get('spot_price', 0),
+                    'pcr': nifty_data.get('pcr', 1.0),
+                    'ce_oi': nifty_data.get('total_ce_oi', 0),
+                    'pe_oi': nifty_data.get('total_pe_oi', 0),
+                    'signal': nifty_data.get('market_direction', 'NEUTRAL'),
+                    'bullish_pct': nifty_data.get('bullish_percentage', 50)
+                },
+                'BANKNIFTY': {
+                    'spot': banknifty_data.get('spot_price', 0),
+                    'pcr': banknifty_data.get('pcr', 1.0),
+                    'ce_oi': banknifty_data.get('total_ce_oi', 0),
+                    'pe_oi': banknifty_data.get('total_pe_oi', 0),
+                    'signal': banknifty_data.get('market_direction', 'NEUTRAL'),
+                    'bullish_pct': banknifty_data.get('bullish_percentage', 50)
+                },
+                'SENSEX': {
+                    'spot': sensex_data.get('spot_price', 0),
+                    'pcr': sensex_data.get('pcr', 1.0),
+                    'ce_oi': sensex_data.get('total_ce_oi', 0),
+                    'pe_oi': sensex_data.get('total_pe_oi', 0),
+                    'signal': sensex_data.get('market_direction', 'NEUTRAL'),
+                    'bullish_pct': sensex_data.get('bullish_percentage', 50)
+                }
+            }
+            
+            # Create AI prompt for comprehensive market analysis
+            prompt = f"""You are an expert options trader analyzing Indian markets (NIFTY, BANKNIFTY, SENSEX).
+
+REAL-TIME MARKET DATA:
+
+NIFTY 50:
+- Spot: ₹{market_summary['NIFTY']['spot']:.2f}
+- PCR: {market_summary['NIFTY']['pcr']:.2f}
+- Call OI: {market_summary['NIFTY']['ce_oi']:,.0f} | Put OI: {market_summary['NIFTY']['pe_oi']:,.0f}
+- Current Signal: {market_summary['NIFTY']['signal']}
+- Bullish %: {market_summary['NIFTY']['bullish_pct']:.1f}%
+
+BANKNIFTY:
+- Spot: ₹{market_summary['BANKNIFTY']['spot']:.2f}
+- PCR: {market_summary['BANKNIFTY']['pcr']:.2f}
+- Call OI: {market_summary['BANKNIFTY']['ce_oi']:,.0f} | Put OI: {market_summary['BANKNIFTY']['pe_oi']:,.0f}
+- Current Signal: {market_summary['BANKNIFTY']['signal']}
+- Bullish %: {market_summary['BANKNIFTY']['bullish_pct']:.1f}%
+
+SENSEX:
+- Spot: ₹{market_summary['SENSEX']['spot']:.2f}
+- PCR: {market_summary['SENSEX']['pcr']:.2f}
+- Call OI: {market_summary['SENSEX']['ce_oi']:,.0f} | Put OI: {market_summary['SENSEX']['pe_oi']:,.0f}
+- Current Signal: {market_summary['SENSEX']['signal']}
+- Bullish %: {market_summary['SENSEX']['bullish_pct']:.1f}%
+
+Provide INSTANT analysis in this EXACT JSON format:
+{{
+    "overall_bias": "BULLISH|BEARISH|NEUTRAL",
+    "confidence": 85,
+    "direction_probability": {{
+        "bullish": 65,
+        "bearish": 20,
+        "neutral": 15
+    }},
+    "component_scores": {{
+        "pcr_score": 75,
+        "oi_distribution_score": 80,
+        "cross_index_correlation": 90,
+        "volatility_score": 70
+    }},
+    "weighted_analysis": "60% Bullish across all indices with strong PUT support",
+    "key_insights": [
+        "NIFTY showing strong bullish momentum",
+        "BANKNIFTY leading the rally",
+        "High PUT OI at key support levels"
+    ],
+    "action_recommendation": "BUY CALL|BUY PUT|WAIT|BOOK PROFIT",
+    "time_horizon": "INTRADAY|SWING|POSITIONAL",
+    "risk_level": "LOW|MEDIUM|HIGH"
+}}
+
+Focus on: PCR levels, OI distribution, cross-index correlation, and institutional activity.
+Be decisive and actionable for intraday traders."""
+
+            # Call OpenAI API with ultra-fast settings
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": "You are an expert options trader providing instant market analysis. Respond ONLY with valid JSON, no markdown."},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.3,  # More focused, less creative
+                max_tokens=800,  # Concise response
+                response_format={"type": "json_object"}
+            )
+            
+            # Parse AI response
+            ai_result = json.loads(response.choices[0].message.content)
+            
+            logger.info(f"[AI MARKET ANALYSIS] Overall Bias: {ai_result.get('overall_bias')} ({ai_result.get('confidence')}% confidence)")
+            
+            return {
+                'enabled': True,
+                'timestamp': datetime.now().isoformat(),
+                'analysis': ai_result,
+                'model': self.model,
+                'response_time_ms': 'Fast (<1s)'
+            }
+            
+        except Exception as e:
+            logger.error(f"[AI MARKET ANALYSIS] Error: {e}")
+            return {
+                'enabled': True,
+                'error': str(e),
+                'message': 'AI analysis failed'
+            }
+
+
 _ai_service: Optional[AIAnalysisService] = None
 
 

@@ -1,8 +1,18 @@
-# 📊 Options Trading Signals - Live Zerodha Data
+# 📊 Options Trading Signals - AI-Powered Live Analysis
 
-A real-time options trading signals application that fetches live data from Zerodha Kite Connect API, calculates Greeks (Delta, Gamma, Theta, Vega), and provides strong buy signals for NIFTY, BANK NIFTY, and SENSEX options.
+> **Ultra-Fast Real-Time Options Analysis with AI Market Intelligence**
+
+A production-ready options trading dashboard with AI-powered market analysis, real-time signals for NIFTY/BANKNIFTY/SENSEX, interactive option chains, and ultra-fast stock heatmaps (100+ stocks).
 
 ## 📚 Documentation
+
+All documentation is organized in the [docs/](docs/) folder:
+- [START_HERE.md](docs/START_HERE.md) - Quick start guide
+- [AI_FEATURES_GUIDE.md](docs/AI_FEATURES_GUIDE.md) - AI analysis capabilities
+- [STOCKS_HEATMAP_GUIDE.md](docs/STOCKS_HEATMAP_GUIDE.md) - Stock heatmap usage
+- [PERFORMANCE_OPTIMIZATION.md](docs/PERFORMANCE_OPTIMIZATION.md) - Performance details
+- [ULTRA_FAST_DEPLOYMENT.md](docs/ULTRA_FAST_DEPLOYMENT.md) - Deployment guide
+- [PROJECT_STRUCTURE.md](PROJECT_STRUCTURE.md) - Code organization
 
 All documentation files are organized in the [`docs/`](docs/) folder:
 

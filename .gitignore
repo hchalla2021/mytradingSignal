@@ -1,7 +1,5 @@
 # Environment & Credentials - NEVER COMMIT THESE
 .env
-config/.env
-frontend/.env.local
 *.pem
 *.key
 
@@ -34,7 +32,6 @@ wheels/
 frontend/.next/
 frontend/out/
 frontend/node_modules/
-frontend/.env*.local
 
 # IDEs
 .vscode/

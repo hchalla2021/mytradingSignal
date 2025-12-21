@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
+import Link from 'next/link';
 import { TrendingUp, TrendingDown, Activity, RefreshCw, AlertCircle, Bell } from 'lucide-react';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8001';
@@ -26,6 +27,20 @@ interface Signal {
   greeks: Greeks;
   oi: number;
   tradingsymbol: string;
+  ai_prediction?: {
+    direction: string;
+    predicted_move: number;
+    confidence: number;
+    big_player: boolean;
+    action: string;
+    recommended_strike: number;
+    entry_price: number;
+    target: number;
+    stop_loss: number;
+    win_probability: number;
+    time_to_move: string;
+    key_reasons: string[];
+  };
 }
 
 interface SignalData {
@@ -54,13 +69,31 @@ interface SignalData {
   option_chain?: any[];
 }
 
+interface AIMarketOverview {
+  overall_bias: string;
+  confidence: number;
+  direction_probability: {
+    bullish: number;
+    bearish: number;
+    neutral: number;
+  };
+  component_scores: {
+    pcr_score: number;
+    oi_distribution_score: number;
+    cross_index_correlation: number;
+    volatility_score: number;
+  };
+  weighted_analysis: string;
+  key_insights: string[];
+  action_recommendation: string;
+}
+
 export default function Home() {
   const [signalData, setSignalData] = useState<Record<string, SignalData>>({});
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [autoRefresh, setAutoRefresh] = useState(true);
-  const [useTestData, setUseTestData] = useState(false);
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [showTestAlert, setShowTestAlert] = useState(false);
@@ -68,51 +101,33 @@ export default function Home() {
   const [testAlertLoading, setTestAlertLoading] = useState(false);
   const [testAlertResult, setTestAlertResult] = useState<{status: string, message: string} | null>(null);
   const [marketStatus, setMarketStatus] = useState<{status: string, current_time: string, message?: string} | null>(null);
+  const [aiMarketOverview, setAiMarketOverview] = useState<AIMarketOverview | null>(null);
   const symbols = ['NIFTY', 'BANKNIFTY', 'SENSEX'] as const;
 
-  const loadTestData = useCallback(() => {
-    console.log('loadTestData called'); // Debug log
-    setUseTestData(true);
-    setAutoRefresh(false); // Disable auto-refresh for test data
-    const testData: SignalData = {
-      symbol: 'NIFTY',
-      spot_price: 25959,
-      signals: [],
-      timestamp: new Date().toISOString(),
-      pcr: 1.18,
-      market_direction: 'BULLISH',
-      direction_percentage: 12.5,
-      probability_bullish: 65.2,
-      probability_range: 28.3,
-      probability_bearish: 6.5,
-      bullish_percentage: 62.5,
-      bearish_percentage: 37.5,
-      component_scores: {
-        pcr_score: 75.0,
-        oi_score: 54.1,
-        delta_score: 60.0,
-        price_action_score: 70.0,
-        vix_score: 55.0
-      },
-      total_ce_oi: 916500000,
-      total_pe_oi: 1081200000
-    };
-    console.log('Setting signal data:', testData); // Debug log
-    console.log('Bullish percentage:', testData.bullish_percentage); // Debug log
-    console.log('Component scores:', testData.component_scores); // Debug log
-    setSignalData({
-      'NIFTY': testData,
-      'BANKNIFTY': testData,
-      'SENSEX': testData
-    });
-    setIsAuthenticated(true);
-    setError(null);
+  const fetchAIMarketOverview = useCallback(async () => {
+    try {
+      console.log('[AI] Fetching market overview...');
+      const response = await axios.get(`${API_URL}/api/market/ai-overview`, {
+        timeout: 3000,
+        headers: {
+          'Cache-Control': 'no-cache',
+          'Pragma': 'no-cache'
+        }
+      });
+      if (response.data && response.data.direction_probability) {
+        setAiMarketOverview(response.data);
+        console.log('[AI] Market overview loaded:', response.data.overall_bias);
+      }
+    } catch (err: any) {
+      console.log('[AI] Skipping AI overview (optional feature)');
+      // Silently skip - AI overview is optional and shouldn't block UI
+    }
   }, []);
 
   const fetchAllSignals = useCallback(async (showLoading = true) => {
-    if (useTestData) return; // Skip if using test data
     console.log(`[FETCH] Fetching all symbols data...`);
-    if (showLoading) setLoading(true);
+    // Only show loading if we have no data yet
+    if (showLoading && Object.keys(signalData).length === 0) setLoading(true);
     if (!showLoading) setIsRefreshing(true);
     setError(null);
     
@@ -153,6 +168,13 @@ export default function Home() {
       setSignalData(prev => ({ ...prev, ...newData }));
       setIsAuthenticated(true);
       
+      // Cache successful session for instant next load
+      if (Object.keys(newData).length > 0) {
+        localStorage.setItem('zerodha_session_active', 'true'); // Enable instant load
+        setIsAuthenticated(true); // Confirmed authenticated
+        fetchAIMarketOverview();
+      }
+      
       // Don't show market closed as error - it's already in header status
       setError(null);
       
@@ -162,6 +184,7 @@ export default function Home() {
       if (err.response?.status === 401) {
         setIsAuthenticated(false);
         setError('Please authenticate with Zerodha first');
+        localStorage.removeItem('zerodha_session_active'); // Clear session cache
       } else if (!showLoading) {
         console.log('Background refresh failed, will retry in 1s');
       } else {
@@ -171,7 +194,7 @@ export default function Home() {
       setLoading(false);
       setIsRefreshing(false);
     }
-  }, [useTestData, symbols]);
+  }, [symbols]);
 
   const handleLogin = async () => {
     try {
@@ -219,36 +242,44 @@ export default function Home() {
     }
   };
 
-  // Check authentication status on mount
+  // ULTRA-FAST LOAD: Skip blocking auth check, fetch data immediately
+  // Optimistic loading with session cache for instant subsequent visits
   useEffect(() => {
-    const checkAuth = async () => {
-      try {
-        const response = await axios.get(`${API_URL}/api/auth/status`);
-        console.log('[AUTH CHECK] Status:', response.data);
-        if (response.data.is_authenticated) {
-          setIsAuthenticated(true);
-          console.log('[AUTH CHECK] User is authenticated, fetching data...');
-          fetchAllSignals(true);
-        } else {
-          console.log('[AUTH CHECK] User not authenticated');
-          setIsAuthenticated(false);
-        }
-      } catch (err) {
-        console.error('[AUTH CHECK] Failed to check auth status:', err);
-        // Try to fetch data anyway - if it fails due to auth, we'll handle it
-        if (!useTestData) {
-          fetchAllSignals(true);
-        }
-      }
-    };
+    // Check if user had successful data before (localStorage cache)
+    const hadDataBefore = localStorage.getItem('zerodha_session_active') === 'true';
     
-    checkAuth();
+    if (hadDataBefore) {
+      // Optimistic: assume session still valid, fetch IMMEDIATELY
+      console.log('[⚡ INSTANT LOAD] Cached session detected, loading data now...');
+      setIsAuthenticated(true); // Optimistic state
+      fetchAllSignals(false); // Parallel instant fetch
+    } else {
+      // First visit or expired session: attempt fetch anyway
+      console.log('[⚡ FAST LOAD] Attempting optimistic data fetch...');
+      fetchAllSignals(false); // Backend will return auth status
+    }
+    
+    // Parallel auth check (non-blocking) - only for UI sync, doesn't block data
+    axios.get(`${API_URL}/api/auth/status`, { timeout: 1500 })
+      .then(res => {
+        if (res.data.is_authenticated) {
+          setIsAuthenticated(true);
+          localStorage.setItem('zerodha_session_active', 'true');
+        } else {
+          setIsAuthenticated(false);
+          localStorage.removeItem('zerodha_session_active');
+        }
+      })
+      .catch(() => {
+        // Silent fail - data fetch reveals true auth status
+        console.log('[⚡ FAST LOAD] Auth check skipped (timeout/offline)');
+      });
   }, []);
 
   // Refresh data when page becomes visible (e.g., after returning from auth)
   useEffect(() => {
     const handleVisibilityChange = () => {
-      if (document.visibilityState === 'visible' && !useTestData) {
+      if (document.visibilityState === 'visible') {
         console.log('[VISIBILITY] Page visible, checking auth and refreshing data...');
         axios.get(`${API_URL}/api/auth/status`)
           .then(response => {
@@ -263,18 +294,18 @@ export default function Home() {
 
     document.addEventListener('visibilitychange', handleVisibilityChange);
     return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
-  }, [useTestData, fetchAllSignals]);
+  }, [fetchAllSignals]);
 
   // Auto-refresh polling for live data - 1 second silent updates (values only)
   useEffect(() => {
-    if (!autoRefresh || useTestData) return;
+    if (!autoRefresh) return;
     
     const interval = setInterval(() => {
       fetchAllSignals(false); // Silent refresh - no loading indicator, only values update
     }, 1000); // Refresh every 1 second - instant real-time updates from Zerodha
     
     return () => clearInterval(interval);
-  }, [autoRefresh, useTestData, fetchAllSignals]);
+  }, [autoRefresh, fetchAllSignals]);
 
   const getSignalColor = (signal: string) => {
     switch (signal) {
@@ -356,15 +387,16 @@ export default function Home() {
             </div>
             
             <div className="flex items-center gap-2 sm:gap-4 flex-wrap">
-              {!isAuthenticated && (
-                <button
-                  onClick={handleLogin}
-                  className="px-3 sm:px-4 py-2 bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors text-sm sm:text-base whitespace-nowrap"
-                >
-                  <span className="hidden sm:inline">Login to Zerodha</span>
-                  <span className="sm:hidden">Login</span>
-                </button>
-              )}
+              {/* ⚡ PERFORMANCE: Next.js Link for instant navigation */}
+              <Link
+                href="/stocks"
+                className="px-3 sm:px-4 py-2 rounded-lg bg-cyan-600 hover:bg-cyan-700 transition-colors flex items-center gap-1 sm:gap-2 text-sm sm:text-base"
+                title="View Stock Heatmap"
+                prefetch={true}
+              >
+                <Activity className="w-3 h-3 sm:w-4 sm:h-4" />
+                <span>Stocks</span>
+              </Link>
               
               <button
                 onClick={() => setShowTestAlert(true)}
@@ -401,10 +433,16 @@ export default function Home() {
           </div>
         )}
 
-        {/* Loading State */}
+        {/* Loading State - Show minimal skeleton */}
         {loading && Object.keys(signalData).length === 0 && (
-          <div className="flex items-center justify-center py-20">
-            <RefreshCw className="w-8 h-8 animate-spin text-blue-400" />
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-6">
+            {[1, 2, 3].map(i => (
+              <div key={i} className="p-4 sm:p-6 bg-slate-800 rounded-xl border-2 border-slate-700/50 animate-pulse">
+                <div className="h-8 bg-slate-700 rounded w-1/2 mb-4"></div>
+                <div className="h-12 bg-slate-700 rounded mb-2"></div>
+                <div className="h-6 bg-slate-700 rounded w-3/4"></div>
+              </div>
+            ))}
           </div>
         )}
 
@@ -420,6 +458,130 @@ export default function Home() {
                 Login to Zerodha
               </button>
             )}
+          </div>
+        )}
+
+        {/* AI Market Overview Dashboard - Ultra Fast AI Analysis */}
+        {aiMarketOverview?.direction_probability && Object.keys(signalData).length > 0 && (
+          <div className="mb-6 sm:mb-8 p-4 sm:p-6 bg-gradient-to-br from-purple-900/30 via-blue-900/30 to-indigo-900/30 border-2 border-purple-500/50 rounded-xl shadow-2xl">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="text-3xl">🤖</div>
+              <h2 className="text-2xl font-bold bg-gradient-to-r from-purple-400 via-blue-400 to-indigo-400 bg-clip-text text-transparent">
+                AI Market Intelligence
+              </h2>
+              <span className="px-3 py-1 bg-green-500/20 text-green-400 border border-green-500/30 text-xs rounded-full font-semibold animate-pulse">
+                LIVE ANALYSIS
+              </span>
+            </div>
+
+            {/* Overall Market Bias */}
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-4">
+              <div className="p-4 bg-slate-800/50 rounded-lg border border-slate-700">
+                <div className="text-sm text-slate-400 mb-2">Market Bias</div>
+                <div className={`text-3xl font-bold ${
+                  aiMarketOverview.overall_bias === 'BULLISH' ? 'text-green-400' :
+                  aiMarketOverview.overall_bias === 'BEARISH' ? 'text-red-400' :
+                  'text-yellow-400'
+                }`}>
+                  {aiMarketOverview.overall_bias === 'BULLISH' ? '📈 BULLISH' :
+                   aiMarketOverview.overall_bias === 'BEARISH' ? '📉 BEARISH' :
+                   '➡️ NEUTRAL'}
+                </div>
+                <div className="text-sm text-slate-400 mt-2">
+                  Confidence: <span className="text-blue-400 font-semibold">{aiMarketOverview.confidence || 0}%</span>
+                </div>
+              </div>
+
+              {/* Direction Probability */}
+              <div className="p-4 bg-slate-800/50 rounded-lg border border-slate-700">
+                <div className="text-sm text-slate-400 mb-3">Direction Probability</div>
+                <div className="space-y-2">
+                  <div>
+                    <div className="flex justify-between text-xs mb-1">
+                      <span className="text-green-400">Bullish</span>
+                      <span className="text-green-400 font-semibold">{(aiMarketOverview.direction_probability?.bullish || 0).toFixed(1)}%</span>
+                    </div>
+                    <div className="w-full bg-slate-700 rounded-full h-2">
+                      <div className="bg-green-500 h-2 rounded-full" style={{width: `${aiMarketOverview.direction_probability?.bullish || 0}%`}}></div>
+                    </div>
+                  </div>
+                  <div>
+                    <div className="flex justify-between text-xs mb-1">
+                      <span className="text-red-400">Bearish</span>
+                      <span className="text-red-400 font-semibold">{(aiMarketOverview.direction_probability?.bearish || 0).toFixed(1)}%</span>
+                    </div>
+                    <div className="w-full bg-slate-700 rounded-full h-2">
+                      <div className="bg-red-500 h-2 rounded-full" style={{width: `${aiMarketOverview.direction_probability?.bearish || 0}%`}}></div>
+                    </div>
+                  </div>
+                  <div>
+                    <div className="flex justify-between text-xs mb-1">
+                      <span className="text-yellow-400">Neutral</span>
+                      <span className="text-yellow-400 font-semibold">{(aiMarketOverview.direction_probability?.neutral || 0).toFixed(1)}%</span>
+                    </div>
+                    <div className="w-full bg-slate-700 rounded-full h-2">
+                      <div className="bg-yellow-500 h-2 rounded-full" style={{width: `${aiMarketOverview.direction_probability?.neutral || 0}%`}}></div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Component Scores */}
+              <div className="p-4 bg-slate-800/50 rounded-lg border border-slate-700">
+                <div className="text-sm text-slate-400 mb-3">Component Scores</div>
+                <div className="grid grid-cols-2 gap-3 text-xs">
+                  <div>
+                    <div className="text-slate-400">PCR Score</div>
+                    <div className="text-lg font-bold text-blue-400">{aiMarketOverview.component_scores?.pcr_score || 0}/100</div>
+                  </div>
+                  <div>
+                    <div className="text-slate-400">OI Distribution</div>
+                    <div className="text-lg font-bold text-purple-400">{aiMarketOverview.component_scores?.oi_distribution_score || 0}/100</div>
+                  </div>
+                  <div>
+                    <div className="text-slate-400">Correlation</div>
+                    <div className="text-lg font-bold text-cyan-400">{aiMarketOverview.component_scores?.cross_index_correlation || 0}/100</div>
+                  </div>
+                  <div>
+                    <div className="text-slate-400">Volatility</div>
+                    <div className="text-lg font-bold text-orange-400">{aiMarketOverview.component_scores?.volatility_score || 0}/100</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Weighted Analysis */}
+            <div className="mb-4 p-4 bg-slate-800/50 rounded-lg border border-slate-700">
+              <div className="text-sm text-slate-400 mb-2">📊 Weighted Analysis</div>
+              <div className="text-lg font-semibold text-blue-300">{aiMarketOverview.weighted_analysis || 'Analyzing...'}</div>
+            </div>
+
+            {/* Key Insights */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+              <div className="p-4 bg-slate-800/50 rounded-lg border border-slate-700">
+                <div className="text-sm text-slate-400 mb-3">💡 Key Insights</div>
+                <ul className="space-y-2">
+                  {(aiMarketOverview.key_insights || []).map((insight, index) => (
+                    <li key={index} className="flex items-start gap-2 text-sm text-slate-300">
+                      <span className="text-blue-400 mt-0.5">•</span>
+                      <span>{insight}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+
+              {/* Action Recommendation */}
+              <div className="p-4 bg-slate-800/50 rounded-lg border border-slate-700">
+                <div className="text-sm text-slate-400 mb-3">🎯 Action Recommendation</div>
+                <div className={`text-base font-semibold p-3 rounded-lg ${
+                  (aiMarketOverview.action_recommendation || '').includes('BUY') || (aiMarketOverview.action_recommendation || '').includes('LONG') ? 'bg-green-500/20 text-green-400 border border-green-500/30' :
+                  (aiMarketOverview.action_recommendation || '').includes('SELL') || (aiMarketOverview.action_recommendation || '').includes('SHORT') ? 'bg-red-500/20 text-red-400 border border-red-500/30' :
+                  'bg-yellow-500/20 text-yellow-400 border border-yellow-500/30'
+                }`}>
+                  {aiMarketOverview.action_recommendation || 'Analyzing market conditions...'}
+                </div>
+              </div>
+            </div>
           </div>
         )}
 
@@ -1041,6 +1203,92 @@ export default function Home() {
                               ))}
                             </div>
                           </div>
+                          
+                          {/* 🤖 AI PREDICTION */}
+                          {signal.ai_prediction && signal.ai_prediction.confidence > 60 && (
+                            <div className="mt-4 p-4 bg-gradient-to-r from-yellow-900/30 to-orange-900/30 border-2 border-yellow-500/50 rounded-lg">
+                              <div className="flex items-center justify-between mb-3">
+                                <div className="flex items-center gap-2">
+                                  <span className="text-2xl">🤖</span>
+                                  <h4 className="text-lg font-bold text-yellow-300">AI Analysis</h4>
+                                  {signal.ai_prediction.big_player && (
+                                    <span className="px-2 py-1 bg-yellow-500 text-black text-xs font-black rounded-full animate-pulse">
+                                      💰 BIG PLAYER
+                                    </span>
+                                  )}
+                                </div>
+                                <span className="text-2xl font-black text-yellow-400">
+                                  {signal.ai_prediction.confidence}%
+                                </span>
+                              </div>
+                              
+                              <div className="grid grid-cols-2 gap-3 mb-3">
+                                <div className="bg-black/30 rounded-lg p-2">
+                                  <p className="text-xs text-slate-400">Action</p>
+                                  <p className={`text-sm font-bold ${
+                                    signal.ai_prediction.action.includes('BUY') ? 'text-green-400' : 
+                                    signal.ai_prediction.action === 'EXIT' ? 'text-red-400' : 
+                                    'text-yellow-300'
+                                  }`}>
+                                    {signal.ai_prediction.action}
+                                  </p>
+                                </div>
+                                <div className="bg-black/30 rounded-lg p-2">
+                                  <p className="text-xs text-slate-400">Direction</p>
+                                  <p className="text-sm font-bold text-white">
+                                    {signal.ai_prediction.direction}
+                                  </p>
+                                </div>
+                                <div className="bg-black/30 rounded-lg p-2">
+                                  <p className="text-xs text-slate-400">Timing</p>
+                                  <p className={`text-sm font-bold ${
+                                    signal.ai_prediction.time_to_move === 'IMMEDIATE' ? 'text-red-400 animate-pulse' :
+                                    signal.ai_prediction.time_to_move === '30SEC' ? 'text-orange-400' :
+                                    'text-yellow-300'
+                                  }`}>
+                                    ⏰ {signal.ai_prediction.time_to_move}
+                                  </p>
+                                </div>
+                                <div className="bg-black/30 rounded-lg p-2">
+                                  <p className="text-xs text-slate-400">Win Rate</p>
+                                  <p className="text-sm font-bold text-green-400">
+                                    {signal.ai_prediction.win_probability}%
+                                  </p>
+                                </div>
+                              </div>
+                              
+                              {signal.ai_prediction.target > 0 && (
+                                <div className="grid grid-cols-3 gap-2 mb-3">
+                                  <div className="bg-green-900/30 rounded p-2">
+                                    <p className="text-[10px] text-slate-400">Entry</p>
+                                    <p className="text-xs font-bold text-green-400">₹{signal.ai_prediction.entry_price.toFixed(1)}</p>
+                                  </div>
+                                  <div className="bg-blue-900/30 rounded p-2">
+                                    <p className="text-[10px] text-slate-400">Target</p>
+                                    <p className="text-xs font-bold text-blue-400">₹{signal.ai_prediction.target.toFixed(1)}</p>
+                                  </div>
+                                  <div className="bg-red-900/30 rounded p-2">
+                                    <p className="text-[10px] text-slate-400">Stop Loss</p>
+                                    <p className="text-xs font-bold text-red-400">₹{signal.ai_prediction.stop_loss.toFixed(1)}</p>
+                                  </div>
+                                </div>
+                              )}
+                              
+                              {signal.ai_prediction.key_reasons.length > 0 && (
+                                <div>
+                                  <p className="text-xs font-semibold text-yellow-300 mb-1">Key Insights:</p>
+                                  <div className="space-y-1">
+                                    {signal.ai_prediction.key_reasons.slice(0, 3).map((reason, idx) => (
+                                      <div key={idx} className="flex items-start gap-1 text-xs text-slate-300">
+                                        <span className="text-yellow-400">✓</span>
+                                        <span>{reason}</span>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          )}
                         </div>
                       ))}
                     </div>
