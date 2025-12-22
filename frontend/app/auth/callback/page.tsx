@@ -1,11 +1,11 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8001';
 
-export default function AuthCallback() {
+function AuthCallbackContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [status, setStatus] = useState('Processing...');
@@ -111,5 +111,17 @@ export default function AuthCallback() {
         )}
       </div>
     </div>
+  );
+}
+
+export default function AuthCallback() {
+  return (
+    <Suspense fallback={
+      <div className="min-h-screen flex items-center justify-center bg-slate-900 text-white">
+        <div className="animate-spin rounded-full h-16 w-16 border-b-4 border-blue-500"></div>
+      </div>
+    }>
+      <AuthCallbackContent />
+    </Suspense>
   );
 }
