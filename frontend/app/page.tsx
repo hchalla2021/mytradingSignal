@@ -415,25 +415,7 @@ export default function Home() {
             
             <div className="flex items-center gap-2 sm:gap-4 flex-wrap">
               {/* Show Login Button if not authenticated */}
-              {!isAuthenticated && (
-                <button
-                  onClick={handleLogin}
-                  disabled={loading}
-                  className="px-4 py-2 rounded-lg bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-700 hover:to-emerald-700 transition-all flex items-center gap-2 text-sm sm:text-base font-semibold shadow-lg animate-pulse"
-                >
-                  {loading ? (
-                    <>
-                      <RefreshCw className="w-4 h-4 animate-spin" />
-                      <span>Connecting...</span>
-                    </>
-                  ) : (
-                    <>
-                      <span>🔑</span>
-                      <span>Login to Zerodha</span>
-                    </>
-                  )}
-                </button>
-              )}
+              {/* Login button hidden - user can login from center message if needed */}
               
               {/* ⚡ PERFORMANCE: Next.js Link for instant navigation */}
               <Link
