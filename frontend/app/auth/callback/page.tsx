@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8001';
@@ -8,106 +8,107 @@ const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8001';
 export default function AuthCallback() {
   const router = useRouter();
   const searchParams = useSearchParams();
+  const [status, setStatus] = useState('Processing...');
+  const [error, setError] = useState('');
 
   useEffect(() => {
     const requestToken = searchParams.get('request_token');
-    const status = searchParams.get('status');
+    const authStatus = searchParams.get('status');
 
-    console.log('[CALLBACK] Request Token:', requestToken); // Debug
-    console.log('[CALLBACK] Status:', status); // Debug
-    console.log('[CALLBACK] All params:', Object.fromEntries(searchParams.entries())); // Debug
+    console.log('[CALLBACK] Request Token:', requestToken);
+    console.log('[CALLBACK] Status:', authStatus);
 
-    if (status === 'success' && requestToken) {
-      // Send token to backend
-      console.log('[CALLBACK] Sending token to backend...'); // Debug
-      fetch(`${API_URL}/api/auth/set-token?request_token=${requestToken}`, {
-        method: 'POST',
-      })
-        .then(response => {
-          console.log('[CALLBACK] Response status:', response.status); // Debug
-          return response.json();
-        })
-        .then(data => {
-          console.log('[CALLBACK] Response data:', data); // Debug
-          if (data.status === 'success') {
-            // Success! Redirect to main page with full reload
-            console.log('[CALLBACK] Authentication successful!');
-            alert('✅ Authentication successful! Redirecting...');
-            setTimeout(() => {
-              window.location.href = '/';
-            }, 1000);
-          } else {
-            console.error('[CALLBACK] Auth failed:', data);
-            // Show detailed error message
-            const errorMsg = data.detail || 'Unknown error';
-            if (errorMsg.includes('charmap') || errorMsg.includes('codec')) {
-              alert('❌ Authentication failed: File encoding error. Backend needs restart with UTF-8 encoding fix.');
-            } else if (errorMsg.includes('expired')) {
-              alert('❌ Authentication failed: Token expired. Please try logging in again.');
-            } else {
-              alert(`❌ Authentication failed: ${errorMsg}`);
+    if (!requestToken && !authStatus) {
+      setError('No request token found. Login was cancelled or failed.');
+      setTimeout(() => window.location.href = '/', 2000);
+      return;
+    }
+
+    if ((authStatus === 'success' && requestToken) || requestToken) {
+      setStatus('Connecting to backend...');
+      
+      // Retry logic for backend connection
+      const sendTokenWithRetry = async (retries = 3) => {
+        for (let i = 0; i < retries; i++) {
+          try {
+            setStatus(`Authenticating... (Attempt ${i + 1}/${retries})`);
+            
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
+            
+            const response = await fetch(`${API_URL}/api/auth/set-token?request_token=${requestToken}`, {
+              method: 'POST',
+              signal: controller.signal,
+            });
+            
+            clearTimeout(timeoutId);
+            
+            if (!response.ok) {
+              throw new Error(`Backend returned ${response.status}`);
             }
-            router.push('/');
-          }
-        })
-        .catch(err => {
-          console.error('[CALLBACK] Error setting token:', err);
-          alert('❌ Failed to authenticate. Please check backend is running on port 8001.');
-          router.push('/');
-        });
-    } else if (requestToken && !status) {
-      // Zerodha doesn't send status=success, just request_token
-      console.log('[CALLBACK] No status param, but request_token exists. Proceeding...'); // Debug
-      fetch(`${API_URL}/api/auth/set-token?request_token=${requestToken}`, {
-        method: 'POST',
-      })
-        .then(response => {
-          console.log('[CALLBACK] Response status:', response.status); // Debug
-          return response.json();
-        })
-        .then(data => {
-          console.log('[CALLBACK] Response data:', data); // Debug
-          if (data.status === 'success') {
-            console.log('[CALLBACK] Authentication successful!');
-            alert('✅ Authentication successful! Redirecting...');
-            setTimeout(() => {
-              window.location.href = '/';
-            }, 1000);
-          } else {
-            console.error('[CALLBACK] Auth failed:', data);
-            // Show detailed error message
-            const errorMsg = data.detail || 'Unknown error';
-            if (errorMsg.includes('charmap') || errorMsg.includes('codec')) {
-              alert('❌ Authentication failed: File encoding error. Backend needs restart with UTF-8 encoding fix.');
-            } else if (errorMsg.includes('expired')) {
-              alert('❌ Authentication failed: Token expired. Please try logging in again.');
+            
+            const data = await response.json();
+            console.log('[CALLBACK] Response:', data);
+            
+            if (data.status === 'success') {
+              setStatus('✅ Success! Redirecting...');
+              setTimeout(() => window.location.href = '/', 1000);
+              return;
             } else {
-              alert(`❌ Authentication failed: ${errorMsg}`);
+              throw new Error(data.detail || 'Authentication failed');
             }
-            router.push('/');
+          } catch (err: any) {
+            console.error(`[CALLBACK] Attempt ${i + 1} failed:`, err);
+            
+            if (i === retries - 1) {
+              // Last retry failed
+              if (err.name === 'AbortError') {
+                setError('⏱️ Backend timeout. Please ensure backend is running on port 8001.');
+              } else if (err.message.includes('fetch')) {
+                setError('❌ Cannot connect to backend. Is it running on http://localhost:8001?');
+              } else {
+                setError(`❌ ${err.message}`);
+              }
+              setTimeout(() => window.location.href = '/', 3000);
+            } else {
+              // Wait before retry
+              await new Promise(resolve => setTimeout(resolve, 2000));
+            }
           }
-        })
-        .catch(err => {
-          console.error('[CALLBACK] Error setting token:', err);
-          alert('❌ Failed to authenticate. Please check backend is running on port 8001.');
-          router.push('/');
-        });
+        }
+      };
+      
+      sendTokenWithRetry();
     } else {
-      console.error('[CALLBACK] No request token found');
-      console.error('[CALLBACK] URL:', window.location.href); // Debug
-      alert('❌ Authentication failed or was cancelled.');
-      setTimeout(() => {
-        window.location.href = '/';
-      }, 1500);
+      setError('Authentication cancelled or failed');
+      setTimeout(() => window.location.href = '/', 2000);
     }
   }, [searchParams, router]);
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-slate-900 text-white">
-      <div className="text-center">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500 mx-auto mb-4"></div>
-        <p className="text-lg">Completing authentication...</p>
-        <p className="text-sm text-slate-400 mt-2">This window will close automatically.</p>
+    <div className="min-h-screen flex items-center justify-center bg-slate-900 text-white px-4">
+      <div className="text-center max-w-md">
+        {!error ? (
+          <>
+            <div className="animate-spin rounded-full h-16 w-16 border-b-4 border-blue-500 mx-auto mb-6"></div>
+            <p className="text-xl font-semibold mb-2">{status}</p>
+            <p className="text-sm text-slate-400">Please wait...</p>
+          </>
+        ) : (
+          <>
+            <div className="text-6xl mb-4">⚠️</div>
+            <p className="text-xl font-semibold mb-4 text-red-400">{error}</p>
+            <p className="text-sm text-slate-400">Redirecting to home...</p>
+            <div className="mt-6 p-4 bg-slate-800 rounded-lg text-left text-xs">
+              <p className="font-semibold mb-2">Troubleshooting:</p>
+              <ul className="list-disc list-inside space-y-1 text-slate-300">
+                <li>Ensure backend is running: http://localhost:8001</li>
+                <li>Check backend terminal for errors</li>
+                <li>Try running: <code className="bg-slate-700 px-1">.\START-SERVERS.ps1</code></li>
+              </ul>
+            </div>
+          </>
+        )}
       </div>
     </div>
   );

@@ -6,9 +6,9 @@ import os
 from pathlib import Path
 from dotenv import load_dotenv
 
-# Load environment variables from root .env file
-root_dir = Path(__file__).parent.parent.parent
-env_path = root_dir / ".env"
+# Load environment variables from config/.env file
+config_dir = Path(__file__).parent.parent.parent / "config"
+env_path = config_dir / ".env"
 
 # Force UTF-8 encoding to avoid 'charmap' codec errors on Windows
 load_dotenv(dotenv_path=env_path, encoding='utf-8')

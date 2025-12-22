@@ -872,9 +872,9 @@ async def set_access_token(request_token: str):
         ACCESS_TOKEN = data["access_token"]
         kite.set_access_token(ACCESS_TOKEN)
         
-        # Save token to .env file for persistence (with UTF-8 encoding)
-        # Use root .env file (go up 2 levels from backend/app.py to project root)
-        env_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), '.env')
+        # Save token to config/.env file for persistence (with UTF-8 encoding)
+        # Path: backend/app.py -> mytradingSignal/ -> config/.env
+        env_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'config', '.env')
         print(f"[AUTH] Saving token to: {env_path}")
         
         if os.path.exists(env_path):
@@ -895,7 +895,10 @@ async def set_access_token(request_token: str):
                 if not token_found:
                     f.write(f'\nZERODHA_ACCESS_TOKEN={ACCESS_TOKEN}\n')
             
-            print(f"[AUTH] Token saved to .env file with UTF-8 encoding")
+            print(f"[AUTH] ✅ Token saved to config/.env successfully!")
+            print(f"[AUTH] ✅ Token is now active and will persist across restarts")
+        else:
+            print(f"[AUTH] ⚠️ Warning: config/.env not found at {env_path}")
         
         print(f"[AUTH] Access token set successfully: {ACCESS_TOKEN[:20]}...")
         return {"status": "success", "access_token": ACCESS_TOKEN}
@@ -1537,9 +1540,16 @@ async def get_strong_signals(symbol: str):
     market_open = is_market_open()
     ist_now = datetime.now(IST)
     
-    # If market is closed or not authenticated, return mock data
-    if not market_open or not ACCESS_TOKEN:
-        print(f"[INFO] Market closed or not authenticated - returning demo data for {symbol.upper()}")
+    # Check authentication first
+    if not ACCESS_TOKEN:
+        raise HTTPException(
+            status_code=401, 
+            detail="Not authenticated. Please login with Zerodha first."
+        )
+    
+    # If market is closed, return mock data but still authenticated
+    if not market_open:
+        print(f"[INFO] Market closed - returning last traded data for {symbol.upper()}")
         return get_mock_market_closed_data(symbol)
     
     # Check cache first
@@ -1564,9 +1574,17 @@ async def get_strong_signals(symbol: str):
     
     try:
         option_data = await get_option_chain(symbol)
+    except HTTPException:
+        raise
     except Exception as e:
         print(f"Error fetching option chain for {symbol}: {e}")
-        # Return mock data instead of error
+        # Check if it's an authentication error
+        if 'api_key' in str(e).lower() or 'access_token' in str(e).lower():
+            raise HTTPException(
+                status_code=401,
+                detail="Zerodha token expired. Tokens are valid for 1 day. Please login again."
+            )
+        # Return mock data for other errors
         return get_mock_market_closed_data(symbol)
     
     try:

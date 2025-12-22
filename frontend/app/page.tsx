@@ -96,6 +96,8 @@ export default function Home() {
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [showLoginPrompt, setShowLoginPrompt] = useState(false);
+  const [tokenExpired, setTokenExpired] = useState(false);
   const [showTestAlert, setShowTestAlert] = useState(false);
   const [testPhoneNumber, setTestPhoneNumber] = useState('+919177242623');
   const [testAlertLoading, setTestAlertLoading] = useState(false);
@@ -139,7 +141,7 @@ export default function Home() {
       // Fetch all three symbols in parallel
       const promises = symbols.map(symbol => 
         axios.get(`${API_URL}/api/signals/${symbol}`, {
-          timeout: 15000,
+          timeout: 30000,
           headers: {
             'Cache-Control': 'no-cache',
             'Pragma': 'no-cache'
@@ -183,8 +185,16 @@ export default function Home() {
       console.error('API Error:', err);
       if (err.response?.status === 401) {
         setIsAuthenticated(false);
-        setError('Please authenticate with Zerodha first');
+        setTokenExpired(true);
+        setShowLoginPrompt(true);
+        setError('🔑 Zerodha token expired! Please login again to fetch live data.');
         localStorage.removeItem('zerodha_session_active'); // Clear session cache
+      } else if (err.response?.data?.detail?.includes('api_key') || err.response?.data?.detail?.includes('access_token')) {
+        setIsAuthenticated(false);
+        setTokenExpired(true);
+        setShowLoginPrompt(true);
+        setError('🔑 Zerodha token expired! Zerodha tokens are valid for 1 day. Please login again.');
+        localStorage.removeItem('zerodha_session_active');
       } else if (!showLoading) {
         console.log('Background refresh failed, will retry in 1s');
       } else {
@@ -202,9 +212,9 @@ export default function Home() {
       setLoading(true);
       console.log('[LOGIN] Starting login...');
       
-      // Fast request with reduced timeout
+      // Request with reasonable timeout
       const response = await axios.get(`${API_URL}/api/auth/login-url`, {
-        timeout: 5000,
+        timeout: 10000,
         headers: { 'Accept': 'application/json' }
       });
       
@@ -242,38 +252,49 @@ export default function Home() {
     }
   };
 
-  // ULTRA-FAST LOAD: Skip blocking auth check, fetch data immediately
-  // Optimistic loading with session cache for instant subsequent visits
+  // Check authentication status on mount - don't assume optimistically
   useEffect(() => {
-    // Check if user had successful data before (localStorage cache)
-    const hadDataBefore = localStorage.getItem('zerodha_session_active') === 'true';
-    
-    if (hadDataBefore) {
-      // Optimistic: assume session still valid, fetch IMMEDIATELY
-      console.log('[⚡ INSTANT LOAD] Cached session detected, loading data now...');
-      setIsAuthenticated(true); // Optimistic state
-      fetchAllSignals(false); // Parallel instant fetch
-    } else {
-      // First visit or expired session: attempt fetch anyway
-      console.log('[⚡ FAST LOAD] Attempting optimistic data fetch...');
-      fetchAllSignals(false); // Backend will return auth status
-    }
-    
-    // Parallel auth check (non-blocking) - only for UI sync, doesn't block data
-    axios.get(`${API_URL}/api/auth/status`, { timeout: 1500 })
-      .then(res => {
-        if (res.data.is_authenticated) {
+    const checkAuth = async (retries = 3) => {
+      try {
+        console.log('[AUTH] Checking authentication status...');
+        const response = await axios.get(`${API_URL}/api/auth/status`, { 
+          timeout: 10000,
+          headers: { 'Cache-Control': 'no-cache' }
+        });
+        
+        if (response.data.is_authenticated) {
+          console.log('[AUTH] ✅ Authenticated - fetching data');
           setIsAuthenticated(true);
+          setTokenExpired(false);
+          setShowLoginPrompt(false);
+          setError(null);
           localStorage.setItem('zerodha_session_active', 'true');
+          fetchAllSignals(true);
         } else {
+          console.log('[AUTH] ❌ Not authenticated - showing login');
           setIsAuthenticated(false);
+          setShowLoginPrompt(true);
+          setError(null);
           localStorage.removeItem('zerodha_session_active');
         }
-      })
-      .catch(() => {
-        // Silent fail - data fetch reveals true auth status
-        console.log('[⚡ FAST LOAD] Auth check skipped (timeout/offline)');
-      });
+      } catch (err: any) {
+        console.error('[AUTH] Error checking status:', err);
+        
+        // Retry if connection failed and we have retries left
+        if (retries > 0 && (err.code === 'ECONNABORTED' || err.code === 'ERR_NETWORK')) {
+          console.log(`[AUTH] Retrying... (${retries} attempts left)`);
+          await new Promise(resolve => setTimeout(resolve, 2000));
+          return checkAuth(retries - 1);
+        }
+        
+        setIsAuthenticated(false);
+        setShowLoginPrompt(true);
+        setError('⚠️ Backend not responding. Please check if backend server is running on port 8001.');
+        localStorage.removeItem('zerodha_session_active');
+      }
+    };
+    
+    checkAuth();
   }, []);
 
   // Refresh data when page becomes visible (e.g., after returning from auth)
@@ -285,7 +306,13 @@ export default function Home() {
           .then(response => {
             if (response.data.is_authenticated) {
               setIsAuthenticated(true);
+              setTokenExpired(false);
+              setShowLoginPrompt(false);
+              localStorage.setItem('zerodha_session_active', 'true');
               fetchAllSignals(false);
+            } else {
+              setIsAuthenticated(false);
+              setShowLoginPrompt(true);
             }
           })
           .catch(err => console.error('[VISIBILITY] Auth check failed:', err));
@@ -387,6 +414,27 @@ export default function Home() {
             </div>
             
             <div className="flex items-center gap-2 sm:gap-4 flex-wrap">
+              {/* Show Login Button if not authenticated */}
+              {!isAuthenticated && (
+                <button
+                  onClick={handleLogin}
+                  disabled={loading}
+                  className="px-4 py-2 rounded-lg bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-700 hover:to-emerald-700 transition-all flex items-center gap-2 text-sm sm:text-base font-semibold shadow-lg animate-pulse"
+                >
+                  {loading ? (
+                    <>
+                      <RefreshCw className="w-4 h-4 animate-spin" />
+                      <span>Connecting...</span>
+                    </>
+                  ) : (
+                    <>
+                      <span>🔑</span>
+                      <span>Login to Zerodha</span>
+                    </>
+                  )}
+                </button>
+              )}
+              
               {/* ⚡ PERFORMANCE: Next.js Link for instant navigation */}
               <Link
                 href="/stocks"
@@ -423,10 +471,39 @@ export default function Home() {
         </div>
       </header>
 
+      {/* Token Expired Modal/Banner - Prominent and persistent */}
+      {tokenExpired && showLoginPrompt && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-md flex items-center justify-center z-[100] p-4">
+          <div className="bg-gradient-to-br from-slate-900 via-red-900/30 to-slate-900 rounded-2xl p-6 sm:p-8 max-w-md w-full border-2 border-red-500/50 shadow-2xl animate-pulse">
+            <div className="text-center">
+              <div className="text-6xl mb-4">🔑</div>
+              <h2 className="text-2xl sm:text-3xl font-bold text-red-400 mb-3">Token Expired!</h2>
+              <p className="text-slate-300 mb-6">
+                Your Zerodha session has expired. Tokens are valid for 24 hours only.
+                <br /><br />
+                <strong className="text-white">Please login again to continue fetching live data.</strong>
+              </p>
+              <button
+                onClick={() => {
+                  setShowLoginPrompt(false);
+                  handleLogin();
+                }}
+                className="w-full px-6 py-3 bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-700 hover:to-emerald-700 rounded-lg font-bold text-lg transition-all shadow-lg"
+              >
+                🚀 Login to Zerodha Now
+              </button>
+              <p className="text-xs text-slate-500 mt-4">
+                After login, live data will resume automatically
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Main Content */}
       <main className="container mx-auto px-2 sm:px-4 py-4 sm:py-8">
         {/* Error Message - Only for actual errors, not market status */}
-        {error && !error.includes('Market is closed') && (
+        {error && !error.includes('Market is closed') && !tokenExpired && (
           <div className="mb-6 p-4 bg-red-500/10 border border-red-500 rounded-lg flex items-center gap-3">
             <AlertCircle className="w-5 h-5 text-red-500" />
             <p className="text-red-400">{error}</p>
@@ -447,15 +524,28 @@ export default function Home() {
         )}
 
         {/* No Data State */}
-        {!loading && Object.keys(signalData).length === 0 && (
+        {!loading && Object.keys(signalData).length === 0 && !tokenExpired && (
           <div className="flex flex-col items-center justify-center py-20">
-            <p className="text-slate-400 mb-4">Please authenticate with Zerodha to view live data.</p>
+            <div className="text-6xl mb-6">🔐</div>
+            <p className="text-slate-300 text-xl mb-2">Authentication Required</p>
+            <p className="text-slate-400 mb-6">Please authenticate with Zerodha to view live data.</p>
             {!isAuthenticated && (
               <button
                 onClick={handleLogin}
-                className="px-6 py-2 bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors font-semibold"
+                disabled={loading}
+                className="px-8 py-3 bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-700 hover:to-emerald-700 rounded-lg transition-all font-bold text-lg shadow-lg flex items-center gap-2"
               >
-                Login to Zerodha
+                {loading ? (
+                  <>
+                    <RefreshCw className="w-5 h-5 animate-spin" />
+                    <span>Connecting...</span>
+                  </>
+                ) : (
+                  <>
+                    <span>🔑</span>
+                    <span>Login to Zerodha</span>
+                  </>
+                )}
               </button>
             )}
           </div>

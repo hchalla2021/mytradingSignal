@@ -69,80 +69,48 @@ MyTradeSignals/
 └── README.md
 ```
 
-## Setup Instructions
+## 🚀 Quick Start
 
 ### Prerequisites
 - Python 3.11 or higher
 - Node.js 18 or higher
 - Zerodha Kite Connect API credentials
 
-### 1. Zerodha API Setup
+### One-Click Launch
 
-1. Create a Kite Connect app at https://developers.kite.trade/
-2. Note down your:
-   - API Key: `g5tyrnn1mlckrb6f`
-   - API Secret: `9qlzwmum5f7pami0gacyxc7uxa6w823s`
-   - Redirect URL: `http://localhost:8080/redirect`
-
-### 2. Backend Setup
-
-```bash
-# Navigate to backend directory
-cd backend
-
-# Create virtual environment
-python -m venv venv
-
-# Activate virtual environment
-# On Windows:
-venv\Scripts\activate
-# On macOS/Linux:
-source venv/bin/activate
-
-# Install dependencies
-pip install -r requirements.txt
-
-# Create .env file
-copy .env.example .env
-
-# Edit .env and add your Zerodha credentials
-# ZERODHA_API_KEY=g5tyrnn1mlckrb6f
-# ZERODHA_API_SECRET=9qlzwmum5f7pami0gacyxc7uxa6w823s
-
-# Run the backend
-python app.py
+```powershell
+# Run from project root
+.\start.ps1
 ```
 
-Backend will run on http://localhost:8000
+This single script will:
+1. Clean up any existing processes
+2. Start Backend server (http://localhost:8001)
+3. Start Frontend server (http://localhost:3000)
 
-### 3. Frontend Setup
+### First Time Setup
 
-```bash
-# Open new terminal and navigate to frontend
-cd frontend
+1. **Zerodha API Setup**
+   - Create app at https://developers.kite.trade/
+   - Add your credentials to `config/.env`
 
-# Install dependencies
-npm install
-
-# Create .env.local file
-copy .env.local.example .env.local
-
-# Run development server
-npm run dev
-```
-
-Frontend will run on http://localhost:3000
-
-### 4. Authentication Flow
-
-1. Open http://localhost:3000
-2. Click "Login to Zerodha"
-3. Complete Zerodha login in the popup window
-4. After login, you'll be redirected with a `request_token` in URL
-5. Copy the request_token and use it to set access token via API:
+2. **Install Dependencies**
+   ```bash
+   # Python dependencies
+   pip install -r requirements.txt
+   
+   # Node dependencies
+   cd frontend && npm install
    ```
-   POST http://localhost:8000/api/auth/set-token?request_token=YOUR_TOKEN
+
+3. **Launch**
+   ```powershell
+   .\start.ps1
    ```
+
+4. **Login**
+   - Open http://localhost:3000
+   - Complete Zerodha authentication
 
 ## How It Works
 

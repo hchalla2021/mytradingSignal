@@ -1,0 +1,4 @@
+# Root requirements.txt - references backend dependencies
+# This allows Render to detect Python project while keeping deps organized
+
+-r backend/requirements.txt
