@@ -3,102 +3,72 @@
 @tailwind utilities;
 
 :root {
-  --foreground-rgb: 0, 0, 0;
-  --background-rgb: 255, 255, 255;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --foreground-rgb: 255, 255, 255;
-    --background-rgb: 15, 23, 42;
-  }
+  --bg-primary: #0d0d12;
+  --bg-card: #13131a;
+  --border-color: #252530;
+  --text-primary: #e8e8ef;
+  --text-muted: #7a7a8c;
+  --bullish: #22c55e;
+  --bearish: #ef4444;
+  --neutral: #eab308;
+  --accent-glow: rgba(99, 102, 241, 0.15);
 }
 
 * {
   box-sizing: border-box;
-  margin: 0;
   padding: 0;
+  margin: 0;
 }
 
-html {
-  font-size: 16px;
-  -webkit-text-size-adjust: 100%;
+html,
+body {
+  max-width: 100vw;
+  overflow-x: hidden;
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  font-size: 14px;
 }
 
-body {
-  color: rgb(var(--foreground-rgb));
-  background: rgb(var(--background-rgb));
-  overflow-x: hidden;
-  width: 100%;
-  min-height: 100vh;
-  -webkit-overflow-scrolling: touch;
+/* Smooth transitions for price updates */
+.price-update {
+  transition: color 0.2s ease;
 }
 
-/* Mobile-specific optimizations */
-@media only screen and (max-width: 640px) {
-  html {
-    font-size: 14px;
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--border-color);
+  border-radius: 4px;
+}
+
+/* Mobile touch optimization */
+@media (max-width: 640px) {
+  * {
+    -webkit-tap-highlight-color: transparent;
   }
   
   body {
-    padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+    touch-action: manipulation;
+  }
+  
+  html {
+    font-size: 13px;
   }
 }
 
-/* Tablet optimizations */
-@media only screen and (min-width: 641px) and (max-width: 1024px) {
+@media (min-width: 1536px) {
   html {
     font-size: 15px;
-  }
-}
-
-/* Prevent text inflation on mobile */
-input, textarea, select, button {
-  font-size: 16px !important;
-}
-
-/* Better tap targets for mobile */
-button, a, [role="button"] {
-  min-height: 44px;
-  min-width: 44px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-}
-
-/* Smooth scrolling */
-html {
-  scroll-behavior: smooth;
-}
-
-/* Fix for iOS Safari viewport height */
-@supports (-webkit-touch-callout: none) {
-  body {
-    min-height: -webkit-fill-available;
-  }
-}
-
-@layer utilities {
-  .text-balance {
-    text-wrap: balance;
-  }
-  
-  /* Safe area utilities for notched devices */
-  .safe-top {
-    padding-top: env(safe-area-inset-top);
-  }
-  
-  .safe-bottom {
-    padding-bottom: env(safe-area-inset-bottom);
-  }
-  
-  .safe-left {
-    padding-left: env(safe-area-inset-left);
-  }
-  
-  .safe-right {
-    padding-right: env(safe-area-inset-right);
   }
 }

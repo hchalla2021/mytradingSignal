@@ -1,255 +1,222 @@
-# 📊 Options Trading Signals - AI-Powered Live Analysis
+# 📊 MyDailyTradingSignals
 
-> **Ultra-Fast Real-Time Options Analysis with AI Market Intelligence**
+Real-time trading signals dashboard for **NIFTY**, **BANKNIFTY**, and **SENSEX** with Zerodha Kite API integration.
 
-A production-ready options trading dashboard with AI-powered market analysis, real-time signals for NIFTY/BANKNIFTY/SENSEX, interactive option chains, and ultra-fast stock heatmaps (100+ stocks).
+![License](https://img.shields.io/badge/license-MIT-blue.svg)
+![Python](https://img.shields.io/badge/python-3.10+-blue.svg)
+![Node](https://img.shields.io/badge/node-20+-green.svg)
+![Docker](https://img.shields.io/badge/docker-ready-blue.svg)
 
-## 📚 Documentation
+## 🚀 Features
 
-All documentation is organized in the [docs/](docs/) folder:
-- [START_HERE.md](docs/START_HERE.md) - Quick start guide
-- [AI_FEATURES_GUIDE.md](docs/AI_FEATURES_GUIDE.md) - AI analysis capabilities
-- [STOCKS_HEATMAP_GUIDE.md](docs/STOCKS_HEATMAP_GUIDE.md) - Stock heatmap usage
-- [PERFORMANCE_OPTIMIZATION.md](docs/PERFORMANCE_OPTIMIZATION.md) - Performance details
-- [ULTRA_FAST_DEPLOYMENT.md](docs/ULTRA_FAST_DEPLOYMENT.md) - Deployment guide
-- [PROJECT_STRUCTURE.md](PROJECT_STRUCTURE.md) - Code organization
+- **Live Market Data** - Real-time price updates via WebSocket
+- **Zerodha Integration** - Direct feed from Kite Ticker
+- **Ultra-Fast Updates** - Sub-second latency with Redis caching
+- **Beautiful Dark UI** - Trader-friendly interface
+- **Responsive Design** - Works on desktop and mobile
+- **Demo Mode** - Works without Zerodha credentials
 
-All documentation files are organized in the [`docs/`](docs/) folder:
-
-- **[Deployment Guide](docs/DEPLOYMENT.md)** - Step-by-step deployment instructions
-- **[Deployment Readiness](docs/DEPLOYMENT_READINESS.md)** - Pre-deployment checklist & security review
-- **[Security Guidelines](docs/SECURITY.md)** - Best practices for API keys and secrets
-- **[Folder Structure](docs/FOLDER_STRUCTURE.md)** - Complete project structure overview
-
-## Features
-
-- 🔴 **Live Market Data** from Zerodha Kite Connect
-- 📊 **Option Chain Display** with real-time prices
-- 📈 **Greeks Calculation** using Black-Scholes model
-- 🎯 **Strong Buy Signals** based on Greeks and Open Interest analysis
-- ⚡ **Real-time Updates** every 10 seconds
-- 🎨 **Clean, Modern UI** with Next.js and Tailwind CSS
-- 🚀 **Ready for Render Deployment**
-
-## Technology Stack
-
-### Frontend
-- **Next.js 14** - React framework
-- **TypeScript** - Type safety
-- **Tailwind CSS** - Styling
-- **Axios** - API calls
-- **Lucide React** - Icons
-
-### Backend
-- **Python 3.11+**
-- **FastAPI** - Modern async web framework
-- **Kite Connect** - Zerodha API client
-- **NumPy & SciPy** - Greeks calculations
-- **WebSockets** - Real-time data streaming
-
-## Project Structure
+## 🏗️ Project Structure
 
 ```
-MyTradeSignals/
-├── backend/
-│   ├── app.py              # FastAPI application
+MyDailyTradingSignals/
+├── 📁 backend/              # Python FastAPI Backend
+│   ├── routers/            # API endpoints (auth, market, health)
+│   ├── services/           # Business logic (market feed, cache, auth)
+│   ├── config.py           # App configuration
+│   ├── main.py             # Entry point
+│   └── requirements.txt    # Dependencies
+│
+├── 📁 frontend/             # Next.js Frontend
+│   ├── app/                # Pages (dashboard, login)
+│   ├── components/         # React components
+│   ├── hooks/              # Custom hooks (WebSocket)
+│   └── package.json        # Dependencies
+│
+├── 📁 scripts/              # Startup & deployment scripts
+│   ├── start.bat           # Windows quick start
+│   ├── start.ps1           # PowerShell script
+│   ├── start.sh            # Linux/Mac script
+│   └── deploy-to-do.*      # Digital Ocean deployment
+│
+├── 📁 docs/                 # Documentation
+│   ├── DEPLOYMENT.md       # Deployment guide
+│   ├── GITHUB_TO_DO.md     # GitHub to DO workflow
+│   └── LOGIN_FLOW.md       # OAuth flow
+│
+├── docker-compose.yml       # Container orchestration
+├── .env.example            # Environment template
+└── README.md               # This file
+```
+         ↓
+Redis Cache (In-Memory)
+         ↓
+WebSocket Server
+         ↓
+Next.js Frontend
+```
+
+## 📁 Project Structure
+
+```
+MyDailyTradingSignals/
+├── backend/                 # Python FastAPI Backend
+│   ├── main.py             # Application entry point
+│   ├── config.py           # Configuration settings
 │   ├── requirements.txt    # Python dependencies
-│   └── .env.example       # Environment variables template
-├── frontend/
+│   ├── services/
+│   │   ├── market_feed.py  # Zerodha KiteTicker service
+│   │   ├── cache.py        # Redis cache service
+│   │   ├── auth.py         # JWT authentication
+│   │   └── websocket_manager.py
+│   └── routers/
+│       ├── auth.py         # Auth endpoints
+│       ├── market.py       # WebSocket endpoint
+│       └── health.py       # Health checks
+├── frontend/               # Next.js Frontend
 │   ├── app/
-│   │   ├── page.tsx       # Main trading dashboard
-│   │   ├── layout.tsx     # App layout
+│   │   ├── page.tsx       # Main dashboard
+│   │   ├── layout.tsx     # Root layout
 │   │   └── globals.css    # Global styles
-│   ├── package.json       # Node dependencies
-│   ├── next.config.js     # Next.js configuration
-│   ├── tailwind.config.js # Tailwind configuration
-│   └── tsconfig.json      # TypeScript configuration
-├── render.yaml            # Render deployment config
-├── .gitignore
-└── README.md
+│   ├── components/
+│   │   ├── Header.tsx     # Header component
+│   │   ├── IndexCard.tsx  # Market index card
+│   │   └── LiveStatus.tsx # Connection status
+│   └── hooks/
+│       └── useMarketSocket.ts  # WebSocket hook
+└── docker-compose.yml      # Docker configuration
 ```
 
-## 🚀 Quick Start
+## 🛠️ Quick Start
 
 ### Prerequisites
-- Python 3.11 or higher
-- Node.js 18 or higher
-- Zerodha Kite Connect API credentials
 
-### One-Click Launch
+- Python 3.10+
+- Node.js 18+
+- Redis (optional, has fallback)
+- Zerodha Kite API credentials (optional for demo)
 
-```powershell
-# Run from project root
-.\start.ps1
+### Backend Setup
+
+```bash
+cd backend
+
+# Create virtual environment
+python -m venv venv
+venv\Scripts\activate  # Windows
+# source venv/bin/activate  # Linux/Mac
+
+# Install dependencies
+pip install -r requirements.txt
+
+# Copy environment file
+copy .env.example .env  # Windows
+# cp .env.example .env  # Linux/Mac
+
+# Edit .env with your Zerodha credentials (optional)
+
+# Start server
+uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ```
 
-This single script will:
-1. Clean up any existing processes
-2. Start Backend server (http://localhost:8001)
-3. Start Frontend server (http://localhost:3000)
+### Frontend Setup
 
-### First Time Setup
+```bash
+cd frontend
 
-1. **Zerodha API Setup**
-   - Create app at https://developers.kite.trade/
-   - Add your credentials to `config/.env`
+# Install dependencies
+npm install
 
-2. **Install Dependencies**
-   ```bash
-   # Python dependencies
-   pip install -r requirements.txt
-   
-   # Node dependencies
-   cd frontend && npm install
-   ```
+# Start development server
+npm run dev
+```
 
-3. **Launch**
-   ```powershell
-   .\start.ps1
-   ```
+### Docker Setup (Recommended)
 
-4. **Login**
-   - Open http://localhost:3000
-   - Complete Zerodha authentication
+```bash
+# Start all services
+docker-compose up --build
 
-## How It Works
+# Access:
+# - Frontend: http://localhost:3000
+# - Backend: http://localhost:8000
+# - API Docs: http://localhost:8000/docs
+```
 
-### Signal Generation Algorithm
+## ⚙️ Configuration
 
-The application generates strong buy signals based on multiple factors:
+### Backend Environment Variables (.env)
 
-1. **Delta Analysis**
-   - CE options: Delta > 0.6 (Strong), > 0.4 (Good)
-   - PE options: Delta < -0.6 (Strong), < -0.4 (Good)
+```env
+# Zerodha API (Optional - runs in demo mode without)
+ZERODHA_API_KEY=your_api_key
+ZERODHA_API_SECRET=your_api_secret
+ZERODHA_ACCESS_TOKEN=your_access_token
 
-2. **Gamma Analysis**
-   - High Gamma (> 0.015): Excellent leverage potential
-   - Good Gamma (> 0.008): Decent leverage
+# Redis (Optional - uses memory fallback)
+REDIS_URL=redis://localhost:6379
 
-3. **Vega Analysis**
-   - High Vega (> 10): Benefits from volatility increase
-   - Moderate Vega (> 5): Some volatility benefit
+# JWT
+JWT_SECRET=your-super-secret-key
+```
 
-4. **Open Interest Analysis**
-   - Strong OI buildup (> 15% change): Strong signal
-   - Positive OI (> 5% change): Good signal
+### Frontend Environment Variables (.env.local)
 
-5. **Strike Type**
-   - ATM (At The Money): Preferred
-   - ITM (In The Money): Good
+```env
+NEXT_PUBLIC_WS_URL=ws://localhost:8000/ws/market
+NEXT_PUBLIC_API_URL=http://localhost:8000
+```
 
-### Scoring System
+## 📡 API Endpoints
 
-- **70+ Score**: STRONG BUY 🟢
-- **50-69 Score**: BUY 🟡
-- **30-49 Score**: WEAK BUY 🟠
-- **Below 30**: NO SIGNAL ⚪
+| Endpoint | Description |
+|----------|-------------|
+| `GET /` | API info |
+| `GET /health` | Health check |
+| `WS /ws/market` | Market data WebSocket |
+| `GET /api/auth/login-url` | Zerodha login URL |
+| `POST /api/auth/callback` | OAuth callback |
+| `POST /api/auth/refresh` | Refresh token |
 
-## Deployment on Render
+## 🎨 UI Features
 
-### Prerequisites
-- GitHub account
-- Render account (free tier available)
+- **Dark Theme** - Easy on the eyes for long trading sessions
+- **Color Coding**
+  - 🟢 Green = Bullish / Up
+  - 🔴 Red = Bearish / Down
+  - 🟡 Yellow = Neutral
+- **Live Status Indicator** - Shows connection health
+- **Price Flash Animation** - Visual feedback on price changes
+- **OHLC Display** - Open, High, Low, Close for each index
 
-### Steps
+## 🔒 Security
 
-1. **Push to GitHub**
-   ```bash
-   git init
-   git add .
-   git commit -m "Initial commit"
-   git remote add origin YOUR_GITHUB_REPO_URL
-   git push -u origin main
-   ```
+- JWT authentication with refresh tokens
+- HTTP-only cookies for refresh tokens
+- CORS configured for frontend origin
+- WebSocket authentication support
 
-2. **Deploy on Render**
-   - Go to https://render.com
-   - Click "New +" → "Blueprint"
-   - Connect your GitHub repository
-   - Render will automatically detect `render.yaml`
-   - Add environment variables:
-     - `ZERODHA_API_KEY`
-     - `ZERODHA_API_SECRET`
-     - `ZERODHA_ACCESS_TOKEN` (optional, can set after first login)
-   - Click "Apply"
+## 📈 Future Enhancements
 
-3. **Update Frontend API URL**
-   - After backend deploys, note the URL (e.g., https://options-trading-backend.onrender.com)
-   - Update frontend environment variable `NEXT_PUBLIC_API_URL` in Render dashboard
+- [ ] Options chain data
+- [ ] OI & Volume heatmap
+- [ ] AI-based trading signals
+- [ ] Mobile app
+- [ ] Multi-broker support
+- [ ] Historical data charts
 
-## API Endpoints
+## 🤝 Contributing
 
-### Authentication
-- `GET /api/auth/login-url` - Get Zerodha login URL
-- `POST /api/auth/set-token` - Set access token after login
+1. Fork the repository
+2. Create feature branch (`git checkout -b feature/amazing`)
+3. Commit changes (`git commit -m 'Add amazing feature'`)
+4. Push to branch (`git push origin feature/amazing`)
+5. Open a Pull Request
 
-### Data Endpoints
-- `GET /api/instruments/{symbol}` - Get full option chain
-  - Symbols: NIFTY, BANKNIFTY, SENSEX
-- `GET /api/signals/{symbol}` - Get strong buy signals only
-- `WebSocket /ws/signals` - Real-time signal updates
+## 📝 License
 
-## Features Explained
-
-### Greeks Calculation
-- **Delta**: Rate of change of option price relative to underlying
-- **Gamma**: Rate of change of delta
-- **Theta**: Time decay of option
-- **Vega**: Sensitivity to volatility changes
-
-### Option Chain Display
-- Shows strikes around ATM (±5 strikes)
-- Displays both CE and PE for each strike
-- Real-time LTP, OI, and IV
-- Color-coded signals
-
-### Auto-Refresh
-- Updates every 10 seconds
-- Can be toggled on/off
-- Shows last update timestamp
-
-## Important Notes
-
-⚠️ **Disclaimer**: This application is for educational purposes only. Not financial advice. Always do your own research before trading.
-
-⚠️ **API Limits**: Zerodha Kite Connect has rate limits. Free tier allows 3 requests/second.
-
-⚠️ **Market Hours**: Live data only available during market hours (9:15 AM - 3:30 PM IST).
-
-⚠️ **Access Token**: Zerodha access tokens expire daily. You need to login every day.
-
-## Troubleshooting
-
-### Backend Issues
-- **401 Error**: Not authenticated. Login to Zerodha first.
-- **500 Error**: Check if access token is valid and not expired.
-- **No data**: Ensure markets are open.
-
-### Frontend Issues
-- **Connection Error**: Check if backend is running.
-- **CORS Error**: Ensure backend CORS is configured correctly.
-
-### Deployment Issues
-- **Build Failed**: Check build logs in Render dashboard.
-- **Environment Variables**: Ensure all required env vars are set.
-
-## Future Enhancements
-
-- [ ] Historical signal tracking
-- [ ] Backtesting feature
-- [ ] Multiple strategy support
-- [ ] Alert notifications
-- [ ] Portfolio tracking
-- [ ] More technical indicators
-
-## License
-
-MIT License
-
-## Support
-
-For issues and questions, please create an issue on GitHub.
+MIT License - feel free to use for your trading projects!
 
 ---
 
-**Happy Trading! 📈**
+**Built with ❤️ for Traders**

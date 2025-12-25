@@ -1,25 +1,22 @@
+# MyTradingSignal Backend Requirements
+# =====================================
+# Python 3.10+
+
 # Core Framework
-fastapi==0.109.0
-uvicorn==0.27.0
-pydantic==2.5.3
+fastapi
+uvicorn[standard]
+pydantic
 
 # HTTP Clients
-httpx==0.26.0
-requests==2.31.0
+httpx
+requests
 
 # WebSockets
-websockets==12.0
-
-# Scientific Computing - pinned versions with wheels for Python 3.11
-numpy==1.26.4
-scipy==1.11.4
-
-# AI/ML
-openai==1.54.0
+websockets
 
 # Utilities
-python-dotenv==1.0.0
-pytz==2024.1
+python-dotenv
+pytz
 
 # Trading API
-kiteconnect==4.2.0
+kiteconnect

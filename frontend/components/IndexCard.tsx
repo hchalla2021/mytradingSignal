@@ -1,0 +1,353 @@
+'use client';
+
+import React, { memo, useEffect, useState, useRef, useMemo } from 'react';
+import { TrendingUp, TrendingDown, Minus, Activity } from 'lucide-react';
+import { MarketTick } from '@/hooks/useMarketSocket';
+
+interface IndexCardProps {
+  symbol: string;
+  name: string;
+  data: MarketTick | null;
+  isConnected: boolean;
+}
+
+// Reusable market analysis utilities
+const MarketUtils = {
+  formatPrice: (price: number): string => {
+    return new Intl.NumberFormat('en-IN', {
+      maximumFractionDigits: 2,
+      minimumFractionDigits: 2,
+    }).format(price);
+  },
+
+  formatChange: (change: number): string => {
+    const sign = change >= 0 ? '+' : '';
+    return `${sign}${MarketUtils.formatPrice(change)}`;
+  },
+
+  formatPercent: (percent: number): string => {
+    const sign = percent >= 0 ? '+' : '';
+    return `${sign}${percent.toFixed(2)}%`;
+  },
+
+  formatVolume: (vol: number): string => {
+    if (vol >= 10000000) return `${(vol / 10000000).toFixed(2)} Cr`;
+    if (vol >= 100000) return `${(vol / 100000).toFixed(2)} L`;
+    if (vol >= 1000) return `${(vol / 1000).toFixed(1)} K`;
+    return vol.toString();
+  },
+
+  formatOI: (oi: number): string => {
+    if (oi >= 10000000) return `${(oi / 10000000).toFixed(2)} Cr`;
+    if (oi >= 100000) return `${(oi / 100000).toFixed(2)} L`;
+    if (oi >= 1000) return `${(oi / 1000).toFixed(1)} K`;
+    return oi.toString();
+  },
+
+  // Calculate intraday range position (0-100%)
+  getRangePosition: (price: number, low: number, high: number): number => {
+    if (high === low) return 50;
+    return Math.round(((price - low) / (high - low)) * 100);
+  },
+
+  // PCR Analysis - Put Call Ratio interpretation
+  analyzePCR: (pcr: number) => {
+    if (!pcr || pcr === 0) {
+      return { label: 'N/A', sentiment: 'neutral', color: 'text-dark-muted', bg: 'bg-dark-border', emoji: '⏸️' };
+    }
+    
+    // PCR interpretation (contrarian view - high PCR = bullish)
+    if (pcr >= 1.5) return { label: 'Very Bullish', sentiment: 'bullish', color: 'text-bullish', bg: 'bg-bullish', emoji: '🚀' };
+    if (pcr >= 1.2) return { label: 'Bullish', sentiment: 'bullish', color: 'text-bullish', bg: 'bg-bullish', emoji: '📈' };
+    if (pcr >= 1.0) return { label: 'Mild Bullish', sentiment: 'bullish', color: 'text-bullish', bg: 'bg-bullish', emoji: '🟢' };
+    if (pcr >= 0.8) return { label: 'Neutral', sentiment: 'neutral', color: 'text-neutral', bg: 'bg-neutral', emoji: '➖' };
+    if (pcr >= 0.6) return { label: 'Mild Bearish', sentiment: 'bearish', color: 'text-bearish', bg: 'bg-bearish', emoji: '🔴' };
+    if (pcr >= 0.4) return { label: 'Bearish', sentiment: 'bearish', color: 'text-bearish', bg: 'bg-bearish', emoji: '📉' };
+    return { label: 'Very Bearish', sentiment: 'bearish', color: 'text-bearish', bg: 'bg-bearish', emoji: '💥' };
+  },
+
+  // Advanced trend analysis with proper market direction
+  analyzeTrend: (data: MarketTick | null) => {
+    if (!data) {
+      return { 
+        direction: 'neutral' as const, 
+        strength: 0, 
+        label: 'No Data', 
+        emoji: '⏸️',
+        color: 'text-dark-muted', 
+        bg: 'bg-dark-border',
+        bgLight: 'bg-dark-border/20'
+      };
+    }
+    
+    const pct = data.changePercent;
+    const absPct = Math.abs(pct);
+    const isBullish = pct > 0;
+    const isBearish = pct < 0;
+    
+    // Strength calculation: 0-100 based on percentage move
+    const strength = Math.min(absPct * 50, 100);
+    
+    // Determine trend label based on direction AND strength
+    let label: string;
+    let emoji: string;
+    
+    if (absPct < 0.05) {
+      label = 'Flat'; emoji = '➖';
+    } else if (isBullish) {
+      if (absPct >= 2) { label = 'Rally'; emoji = '🚀'; }
+      else if (absPct >= 1) { label = 'Strong Bullish'; emoji = '📈'; }
+      else if (absPct >= 0.5) { label = 'Bullish'; emoji = '↗️'; }
+      else if (absPct >= 0.2) { label = 'Mild Bullish'; emoji = '🟢'; }
+      else { label = 'Slight Up'; emoji = '⬆️'; }
+    } else {
+      if (absPct >= 2) { label = 'Crash'; emoji = '💥'; }
+      else if (absPct >= 1) { label = 'Strong Bearish'; emoji = '📉'; }
+      else if (absPct >= 0.5) { label = 'Bearish'; emoji = '↘️'; }
+      else if (absPct >= 0.2) { label = 'Mild Bearish'; emoji = '🔴'; }
+      else { label = 'Slight Down'; emoji = '⬇️'; }
+    }
+    
+    return {
+      direction: isBullish ? 'bullish' as const : isBearish ? 'bearish' as const : 'neutral' as const,
+      strength: Math.round(strength),
+      label,
+      emoji,
+      color: isBullish ? 'text-bullish' : isBearish ? 'text-bearish' : 'text-neutral',
+      bg: isBullish ? 'bg-bullish' : isBearish ? 'bg-bearish' : 'bg-neutral',
+      bgLight: isBullish ? 'bg-bullish/20' : isBearish ? 'bg-bearish/20' : 'bg-neutral/20',
+    };
+  },
+};
+
+const IndexCard: React.FC<IndexCardProps> = memo(({ symbol, name, data, isConnected }) => {
+  const [flash, setFlash] = useState<'green' | 'red' | null>(null);
+  const prevPriceRef = useRef<number | null>(null);
+
+  // Memoized calculations
+  const analysis = useMemo(() => MarketUtils.analyzeTrend(data), [data]);
+  const pcrAnalysis = useMemo(() => MarketUtils.analyzePCR(data?.pcr || 0), [data?.pcr]);
+  const rangePos = useMemo(() => 
+    data ? MarketUtils.getRangePosition(data.price, data.low, data.high) : 50
+  , [data]);
+  const intradayChange = useMemo(() => 
+    data ? ((data.price - data.open) / data.open * 100) : 0
+  , [data]);
+
+  // Flash animation on price change
+  useEffect(() => {
+    if (data?.price && prevPriceRef.current !== null) {
+      if (data.price > prevPriceRef.current) {
+        setFlash('green');
+      } else if (data.price < prevPriceRef.current) {
+        setFlash('red');
+      }
+      
+      const timeout = setTimeout(() => setFlash(null), 500);
+      return () => clearTimeout(timeout);
+    }
+    prevPriceRef.current = data?.price ?? null;
+  }, [data?.price]);
+
+  const getTrendIcon = (size = 5) => {
+    const cls = `w-${size} h-${size}`;
+    if (!data) return <Minus className={cls} />;
+    return data.trend === 'bullish' ? <TrendingUp className={cls} /> : 
+           data.trend === 'bearish' ? <TrendingDown className={cls} /> : 
+           <Minus className={cls} />;
+  };
+
+  const getStatusBadge = () => {
+    if (!isConnected) {
+      return <span className="px-2 py-0.5 text-xs font-medium bg-bearish/20 text-bearish rounded-full">OFFLINE</span>;
+    }
+    if (data?.status === 'OFFLINE') {
+      return <span className="px-2 py-0.5 text-xs font-medium bg-neutral/20 text-neutral rounded-full">CLOSED</span>;
+    }
+    return (
+      <span className="px-2 py-0.5 text-xs font-medium bg-bullish/20 text-bullish rounded-full flex items-center gap-1">
+        <span className="w-1.5 h-1.5 bg-bullish rounded-full animate-pulse" />LIVE
+      </span>
+    );
+  };
+
+  return (
+    <div className={`
+      relative overflow-hidden
+      bg-dark-card
+      rounded-lg sm:rounded-xl
+      border-2 border-bullish/25
+      p-3 sm:p-4 lg:p-5
+      transition-all duration-200
+      hover:border-bullish/50
+      hover:shadow-lg hover:shadow-bullish/10
+      shadow-md shadow-black/20
+      ${flash === 'green' ? 'animate-flash-green' : ''}
+      ${flash === 'red' ? 'animate-flash-red' : ''}
+    `}>
+      {/* Header */}
+      <div className="flex items-center justify-between mb-3 sm:mb-4">
+        <div className="flex items-center gap-2.5">
+          <div className={`p-2 sm:p-2.5 rounded-lg ${analysis.bg}/15 border border-${analysis.direction === 'bullish' ? 'bullish' : analysis.direction === 'bearish' ? 'bearish' : 'dark-border'}/20`}>
+            <Activity className={`w-4 h-4 sm:w-5 sm:h-5 ${analysis.color}`} />
+          </div>
+          <div>
+            <h3 className="font-bold text-white text-sm sm:text-base tracking-tight">{name}</h3>
+            <p className="text-[10px] sm:text-xs text-dark-muted font-medium">{symbol}</p>
+          </div>
+        </div>
+        {getStatusBadge()}
+      </div>
+
+      {/* Price */}
+      <div className="mb-3 sm:mb-4">
+        <div className={`text-xl sm:text-2xl lg:text-3xl font-extrabold price-update ${analysis.color} tracking-tight drop-shadow-sm`}>
+          ₹{data ? MarketUtils.formatPrice(data.price) : '—'}
+        </div>
+      </div>
+
+      {/* Change */}
+      <div className="flex flex-wrap items-center gap-2 sm:gap-2.5 mb-3 sm:mb-4">
+        <div className={`flex items-center gap-1.5 ${analysis.color}`}>
+          {getTrendIcon()}
+          <span className="font-bold text-xs sm:text-sm">{data ? MarketUtils.formatChange(data.change) : '—'}</span>
+        </div>
+        <div className={`px-2 sm:px-2.5 py-0.5 sm:py-1 rounded-md text-[10px] sm:text-xs font-bold ${analysis.bg}/15 ${analysis.color} border border-${analysis.direction === 'bullish' ? 'bullish' : analysis.direction === 'bearish' ? 'bearish' : 'neutral'}/20`}>
+          {data ? MarketUtils.formatPercent(data.changePercent) : '—'}
+        </div>
+      </div>
+
+      {/* OHLC Grid */}
+      <div className="grid grid-cols-2 gap-1.5 text-[10px] sm:text-xs bg-dark-surface/60 rounded-lg p-2 sm:p-2.5 border-2 border-bullish/20">
+        <div className="flex justify-between items-center py-1 px-1.5 bg-dark-bg/30 rounded">
+          <span className="text-dark-muted font-medium">Open</span>
+          <span className="text-white font-semibold">{data ? MarketUtils.formatPrice(data.open) : '—'}</span>
+        </div>
+        <div className="flex justify-between items-center py-1 px-1.5 bg-dark-bg/30 rounded">
+          <span className="text-dark-muted font-medium">High</span>
+          <span className="text-bullish font-semibold">{data ? MarketUtils.formatPrice(data.high) : '—'}</span>
+        </div>
+        <div className="flex justify-between items-center py-1 px-1.5 bg-dark-bg/30 rounded">
+          <span className="text-dark-muted font-medium">Close</span>
+          <span className="text-white font-semibold">{data ? MarketUtils.formatPrice(data.close) : '—'}</span>
+        </div>
+        <div className="flex justify-between items-center py-1 px-1.5 bg-dark-bg/30 rounded">
+          <span className="text-dark-muted font-medium">Low</span>
+          <span className="text-bearish font-semibold">{data ? MarketUtils.formatPrice(data.low) : '—'}</span>
+        </div>
+      </div>
+
+      {/* Trend Section */}
+      <div className="mt-3 sm:mt-4 pt-3 sm:pt-4 border-t-2 border-bullish/25 space-y-2 sm:space-y-2.5">
+        {/* Trend Label */}
+        <div className="flex items-center justify-between">
+          <span className="text-[10px] sm:text-xs text-dark-muted font-medium">Trend</span>
+          <div className={`flex items-center gap-1.5 sm:gap-2 ${analysis.color}`}>
+            <span className="text-sm sm:text-base">{analysis.emoji}</span>
+            <span className="font-bold text-xs sm:text-sm">{analysis.label}</span>
+            <span className={`text-[9px] sm:text-[10px] px-1.5 py-0.5 rounded-md font-semibold ${analysis.bgLight} border border-${analysis.direction === 'bullish' ? 'bullish' : analysis.direction === 'bearish' ? 'bearish' : 'neutral'}/20`}>
+              {analysis.strength}%
+            </span>
+          </div>
+        </div>
+
+        {/* Trend Bar */}
+        <div className="relative h-1.5 sm:h-2 bg-dark-border/40 rounded-full overflow-hidden">
+          <div 
+            className={`absolute left-0 top-0 h-full ${analysis.bg} rounded-full transition-all duration-500 shadow-sm`}
+            style={{ width: `${analysis.strength}%` }}
+          />
+        </div>
+
+        {/* Day Range */}
+        <div className="flex items-center justify-between text-[10px] sm:text-xs">
+          <span className="text-dark-muted font-medium">Range</span>
+          <div className="flex items-center gap-1.5">
+            <span className="text-bearish font-semibold">{data ? MarketUtils.formatPrice(data.low) : '—'}</span>
+            <div className="relative w-12 sm:w-14 h-1.5 bg-dark-border/40 rounded-full">
+              <div 
+                className={`absolute w-2.5 h-2.5 rounded-full ${analysis.bg} -top-0.5 transition-all duration-300 shadow-sm`}
+                style={{ left: `calc(${rangePos}% - 5px)` }}
+              />
+            </div>
+            <span className="text-bullish font-semibold">{data ? MarketUtils.formatPrice(data.high) : '—'}</span>
+          </div>
+        </div>
+
+        {/* From Open */}
+        <div className="flex items-center justify-between text-[10px] sm:text-xs">
+          <span className="text-dark-muted font-medium">From Open</span>
+          <span className={`font-bold ${intradayChange >= 0 ? 'text-bullish' : 'text-bearish'}`}>
+            {data ? MarketUtils.formatPercent(intradayChange) : '—'}
+          </span>
+        </div>
+      </div>
+
+      {/* Volume & OI */}
+      <div className="mt-2 sm:mt-3 pt-2 sm:pt-3 border-t-2 border-bullish/25">
+        <div className="grid grid-cols-2 gap-2">
+          <div className="bg-dark-surface/60 rounded-lg p-2 text-center border-2 border-bullish/20">
+            <p className="text-[9px] sm:text-[10px] text-dark-muted font-medium">Volume</p>
+            <p className="text-xs sm:text-sm text-white font-bold">{data?.volume ? MarketUtils.formatVolume(data.volume) : '—'}</p>
+          </div>
+          <div className="bg-dark-surface/60 rounded-lg p-2 text-center border-2 border-bullish/20">
+            <p className="text-[9px] sm:text-[10px] text-dark-muted font-medium">Total OI</p>
+            <p className="text-xs sm:text-sm text-white font-bold">{data?.oi ? MarketUtils.formatOI(data.oi) : '—'}</p>
+          </div>
+        </div>
+      </div>
+
+      {/* PCR Section */}
+      <div className="mt-2 sm:mt-3 pt-2 sm:pt-3 border-t-2 border-bullish/25 space-y-2">
+        <div className="flex items-center justify-between">
+          <span className="text-[10px] sm:text-xs text-dark-muted font-medium">PCR</span>
+          <div className={`flex items-center gap-1.5 ${pcrAnalysis.color}`}>
+            <span className="text-sm">{pcrAnalysis.emoji}</span>
+            <span className="font-extrabold text-base sm:text-lg">{data?.pcr?.toFixed(2) || '—'}</span>
+          </div>
+        </div>
+        
+        {/* PCR Bar */}
+        <div className="relative h-2 bg-dark-border/40 rounded-full overflow-hidden">
+          <div className="absolute inset-0 flex">
+            <div className="w-1/2 bg-bearish/25" />
+            <div className="w-1/2 bg-bullish/25" />
+          </div>
+          {data?.pcr ? (
+            <div 
+              className={`absolute w-2.5 h-2.5 rounded-full ${pcrAnalysis.bg} -top-[1px] transition-all duration-500 shadow-sm`}
+              style={{ left: `calc(${Math.min(Math.max((data.pcr / 2) * 100, 5), 95)}% - 5px)` }}
+            />
+          ) : null}
+        </div>
+        <div className="flex justify-between text-[9px] sm:text-[10px] text-dark-muted font-medium">
+          <span>Bearish</span>
+          <span className="text-white/70">1.0</span>
+          <span>Bullish</span>
+        </div>
+
+        {/* PCR Signal */}
+        <div className="flex items-center justify-between text-[10px] sm:text-xs">
+          <span className="text-dark-muted font-medium">Signal</span>
+          <span className={`font-bold ${pcrAnalysis.color}`}>{pcrAnalysis.label}</span>
+        </div>
+
+        {/* Call vs Put OI */}
+        <div className="grid grid-cols-2 gap-2">
+          <div className="bg-dark-surface/60 rounded-lg p-1.5 text-center border-2 border-bullish/20">
+            <p className="text-[9px] sm:text-[10px] text-dark-muted font-medium">Call OI</p>
+            <p className="text-[10px] sm:text-xs text-bearish font-bold">{data?.callOI ? MarketUtils.formatOI(data.callOI) : '—'}</p>
+          </div>
+          <div className="bg-dark-surface/60 rounded-lg p-1.5 text-center border-2 border-bullish/20">
+            <p className="text-[9px] sm:text-[10px] text-dark-muted font-medium">Put OI</p>
+            <p className="text-[10px] sm:text-xs text-bullish font-bold">{data?.putOI ? MarketUtils.formatOI(data.putOI) : '—'}</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+});
+
+IndexCard.displayName = 'IndexCard';
+
+export default IndexCard;
