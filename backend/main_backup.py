@@ -31,33 +31,17 @@ async def lifespan(app: FastAPI):
     # Initialize market feed
     market_feed = MarketFeedService(cache, manager)
     
-    # Initialize AI scheduler with error handling
-    try:
-        ai_scheduler = AIScheduler(market_feed, cache, manager)
-        ai_router.set_ai_scheduler(ai_scheduler)
-        print("✅ AI Engine initialized successfully")
-    except Exception as e:
-        print(f"⚠️ AI Engine initialization failed:")
-        print(f"   Error: {str(e)}")
-        import traceback
-        traceback.print_exc()
-        print("   Continuing without AI features...")
-        ai_scheduler = None
+    # Initialize AI scheduler
+    ai_scheduler = AIScheduler(cache, manager)
+    ai_router.set_ai_scheduler(ai_scheduler)
     
     # Start services in background
     feed_task = asyncio.create_task(market_feed.start())
-    
-    # Start AI scheduler if available
-    ai_task = None
-    if ai_scheduler:
-        try:
-            ai_task = asyncio.create_task(ai_scheduler.start())
-            print("🤖 AI Engine: ENABLED (3-min analysis loop)")
-        except Exception as e:
-            print(f"⚠️ AI Engine start failed: {e}")
+    ai_task = asyncio.create_task(ai_scheduler.start())
     
     print("🚀 MyDailyTradingSignals Backend Started")
     print(f"📡 WebSocket: ws://{settings.host}:{settings.port}/ws/market")
+    print(f"🤖 AI Engine: Enabled (3-min analysis loop)")
     
     yield
     
@@ -66,8 +50,7 @@ async def lifespan(app: FastAPI):
         ai_scheduler.running = False
     if market_feed:
         await market_feed.stop()
-    if ai_task:
-        ai_task.cancel()
+    ai_task.cancel()
     feed_task.cancel()
     await cache.disconnect()
     print("👋 Backend shutdown complete")

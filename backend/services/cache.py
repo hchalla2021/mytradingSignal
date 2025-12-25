@@ -1,6 +1,6 @@
 """In-memory cache service for ultra-fast data access."""
 import json
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 
 from config import get_settings
 
@@ -8,6 +8,7 @@ settings = get_settings()
 
 # Shared in-memory cache (module-level singleton)
 _SHARED_CACHE: Dict[str, str] = {}
+_cache_instance: Optional['CacheService'] = None
 
 
 class CacheService:
@@ -62,3 +63,59 @@ class CacheService:
             if data:
                 result[symbol] = data
         return result
+    
+    async def setex(self, key: str, expire: int, value: str):
+        """Set a value with expiration (Redis-compatible API)."""
+        _SHARED_CACHE[key] = value
+    
+    async def lrange(self, key: str, start: int, end: int) -> List[str]:
+        """Get range from list (Redis-compatible API)."""
+        # Simple implementation - store as JSON array
+        value = _SHARED_CACHE.get(key)
+        if value:
+            try:
+                items = json.loads(value)
+                if isinstance(items, list):
+                    return items[start:end+1] if end >= 0 else items[start:]
+            except:
+                pass
+        return []
+    
+    async def lpush(self, key: str, value: str):
+        """Push to list (Redis-compatible API)."""
+        existing = _SHARED_CACHE.get(key)
+        if existing:
+            try:
+                items = json.loads(existing)
+                if isinstance(items, list):
+                    items.insert(0, value)
+                    _SHARED_CACHE[key] = json.dumps(items)
+                    return
+            except:
+                pass
+        _SHARED_CACHE[key] = json.dumps([value])
+    
+    async def ltrim(self, key: str, start: int, end: int):
+        """Trim list (Redis-compatible API)."""
+        existing = _SHARED_CACHE.get(key)
+        if existing:
+            try:
+                items = json.loads(existing)
+                if isinstance(items, list):
+                    _SHARED_CACHE[key] = json.dumps(items[start:end+1] if end >= 0 else items[start:])
+            except:
+                pass
+    
+    async def expire(self, key: str, seconds: int):
+        """Set expiration (Redis-compatible API) - no-op for in-memory."""
+        pass
+
+
+# Global cache instance getter
+async def get_redis() -> CacheService:
+    """Get or create cache instance."""
+    global _cache_instance
+    if _cache_instance is None:
+        _cache_instance = CacheService()
+        await _cache_instance.connect()
+    return _cache_instance

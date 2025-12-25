@@ -7,6 +7,10 @@ fastapi
 uvicorn[standard]
 pydantic
 
+# Data Analysis
+pandas
+numpy
+
 # HTTP Clients
 httpx
 requests

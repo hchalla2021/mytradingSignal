@@ -75,12 +75,8 @@ TOKEN_SYMBOL_MAP = {
     settings.sensex_token: "SENSEX"
 }
 
-# Previous close prices (fallback values - actual values come from tick data)
-PREV_CLOSE = {
-    "NIFTY": 24150.0,
-    "BANKNIFTY": 52000.0,
-    "SENSEX": 79800.0
-}
+# Previous close prices - ONLY from live Zerodha tick data
+PREV_CLOSE = {}
 
 
 class MarketFeedService:
@@ -141,6 +137,10 @@ class MarketFeedService:
                 data = self._normalize_tick(tick)
                 symbol = data["symbol"]
                 
+                # Log first tick received for each symbol
+                if symbol not in self.last_prices:
+                    print(f"🟢 First tick received for {symbol}: Price={data['price']}, Change={data['changePercent']}%")
+                
                 # Only process if price changed
                 if self.last_prices.get(symbol) != data["price"]:
                     self.last_prices[symbol] = data["price"]
@@ -149,6 +149,8 @@ class MarketFeedService:
                     
             except Exception as e:
                 print(f"❌ Error processing tick: {e}")
+                import traceback
+                traceback.print_exc()
     
     async def _update_and_broadcast(self, data: Dict[str, Any]):
         """Update cache and broadcast to WebSocket clients."""
@@ -163,15 +165,113 @@ class MarketFeedService:
         except Exception as e:
             print(f"⚠️ PCR fetch failed for {data['symbol']}: {e}")
         
+        # Store current tick data
         await self.cache.set_market_data(data["symbol"], data)
+        
+        # Store historical candle data for analysis (1-minute candles)
+        candle_key = f"analysis_candles:{data['symbol']}"
+        candle_data = {
+            'timestamp': data['timestamp'],
+            'open': data['open'],
+            'high': data['high'],
+            'low': data['low'],
+            'close': data['price'],
+            'volume': data['volume']
+        }
+        
+        # Add candle to list (newest first) and keep last 100 candles
+        import json
+        await self.cache.lpush(candle_key, json.dumps(candle_data))
+        await self.cache.ltrim(candle_key, 0, 99)  # Keep 100 candles
+        
+        # Broadcast to WebSocket
         await self.ws_manager.broadcast({
             "type": "tick",
             "data": data
         })
     
+    async def _fetch_and_cache_last_data(self):
+        """Fetch last traded data from Zerodha and cache it - works even when market is closed."""
+        try:
+            from kiteconnect import KiteConnect
+            print("📊 Fetching last traded data from Zerodha...")
+            
+            kite = KiteConnect(api_key=settings.zerodha_api_key)
+            kite.set_access_token(settings.zerodha_access_token)
+            
+            # Index symbols for quote API
+            index_symbols = {
+                settings.nifty_token: "NSE:NIFTY 50",
+                settings.banknifty_token: "NSE:NIFTY BANK",
+                settings.sensex_token: "BSE:SENSEX"
+            }
+            
+            # Fetch quotes (works even when market is closed)
+            quotes = kite.quote(list(index_symbols.values()))
+            
+            # Process and cache each symbol's data
+            for token, symbol_name in TOKEN_SYMBOL_MAP.items():
+                idx_symbol = index_symbols.get(token)
+                if idx_symbol and idx_symbol in quotes:
+                    quote = quotes[idx_symbol]
+                    ohlc = quote['ohlc']
+                    ltp = quote['last_price']
+                    prev_close = ohlc['close']
+                    
+                    # Calculate change
+                    change = ltp - prev_close
+                    change_percent = (change / prev_close * 100) if prev_close else 0
+                    
+                    # Determine trend
+                    if change > 0:
+                        trend = "bullish"
+                    elif change < 0:
+                        trend = "bearish"
+                    else:
+                        trend = "neutral"
+                    
+                    # Create normalized data
+                    data = {
+                        "symbol": symbol_name,
+                        "price": round(ltp, 2),
+                        "change": round(change, 2),
+                        "changePercent": round(change_percent, 2),
+                        "high": round(ohlc['high'], 2),
+                        "low": round(ohlc['low'], 2),
+                        "open": round(ohlc['open'], 2),
+                        "close": round(prev_close, 2),
+                        "volume": quote.get('volume', 0),
+                        "oi": quote.get('oi', 0),
+                        "pcr": 0.0,  # Will be updated by PCR service
+                        "callOI": 0,
+                        "putOI": 0,
+                        "trend": trend,
+                        "timestamp": datetime.now(IST).isoformat(),
+                        "status": get_market_status()
+                    }
+                    
+                    # Update PREV_CLOSE
+                    PREV_CLOSE[symbol_name] = prev_close
+                    
+                    # Cache the data
+                    await self.cache.set_market_data(symbol_name, data)
+                    
+                    print(f"✅ {symbol_name}: ₹{ltp:,.2f} ({change_percent:+.2f}%) - Last traded data cached")
+            
+            print(f"✅ All last traded data cached and ready for display")
+            return True
+            
+        except Exception as e:
+            print(f"❌ Failed to fetch last traded data: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+    
     def _on_connect(self, ws, response):
         """Callback when connected to Zerodha."""
         print("✅ Connected to Zerodha KiteTicker")
+        print(f"📊 Connection response: {response}")
+        
         # Fetch real previous close prices using KiteConnect
         try:
             from kiteconnect import KiteConnect
@@ -186,6 +286,7 @@ class MarketFeedService:
                 settings.banknifty_token: "NSE:BANKNIFTY",
                 settings.sensex_token: "BSE:SENSEX"
             }
+            print(f"📊 Fetching quotes for: {list(index_symbols.values())}")
             quotes = kite.quote(list(index_symbols.values()))
             # Update PREV_CLOSE with real values
             for token, symbol in token_to_symbol.items():
@@ -193,14 +294,18 @@ class MarketFeedService:
                 if idx_symbol and idx_symbol in quotes:
                     close_val = quotes[idx_symbol]['ohlc']['close']
                     PREV_CLOSE[symbol] = close_val
+                    print(f"💹 {symbol} previous close: {close_val}")
             print(f"🔄 Updated PREV_CLOSE: {PREV_CLOSE}")
         except Exception as e:
             print(f"⚠️ Failed to fetch real previous close: {e}")
+            
         # Subscribe to instrument tokens
         tokens = list(TOKEN_SYMBOL_MAP.keys())
+        print(f"📊 Subscribing to tokens: {tokens}")
         ws.subscribe(tokens)
         ws.set_mode(ws.MODE_FULL, tokens)
         print(f"📊 Subscribed to: {list(TOKEN_SYMBOL_MAP.values())}")
+        print("✅ Market feed is now LIVE - Waiting for ticks...")
     
     def _on_close(self, ws, code, reason):
         """Callback when connection is closed."""
@@ -225,19 +330,27 @@ class MarketFeedService:
         
         # Check if we have valid credentials
         if not settings.zerodha_api_key or not settings.zerodha_access_token:
-            print("⚠️ Zerodha credentials not configured")
-            print("📝 Starting in DEMO mode with simulated data")
-            await self._run_demo_mode()
+            print("❌ Zerodha credentials not configured")
+            print("⚠️ Set ZERODHA_API_KEY and ZERODHA_ACCESS_TOKEN in .env file")
             return
+        
+        # ALWAYS fetch and cache last traded data first (works even when market is closed)
+        print("🔄 Fetching last available market data...")
+        await self._fetch_and_cache_last_data()
         
         try:
             # Initialize KiteTicker
+            print("🔧 Initializing KiteTicker...")
+            print(f"   API Key: {settings.zerodha_api_key[:10]}...")
+            print(f"   Token: {settings.zerodha_access_token[:20]}...")
+            
             self.kws = KiteTicker(
                 settings.zerodha_api_key,
                 settings.zerodha_access_token
             )
             
             # Assign callbacks
+            print("🔌 Setting up callbacks...")
             self.kws.on_ticks = self._on_ticks
             self.kws.on_connect = self._on_connect
             self.kws.on_close = self._on_close
@@ -247,9 +360,12 @@ class MarketFeedService:
             
             # Connect (blocking call in thread)
             print("🔗 Connecting to Zerodha KiteTicker...")
+            print("⏳ This may take 5-10 seconds...")
             self.kws.connect(threaded=True)
+            print("✅ Connection thread started")
             
             # Process tick queue in async loop
+            print("🔄 Starting tick processing loop...")
             while self.running:
                 # Process any pending ticks from the queue
                 while not self._tick_queue.empty():
@@ -262,83 +378,69 @@ class MarketFeedService:
                 await asyncio.sleep(0.1)  # Small sleep to prevent busy loop
                 
         except Exception as e:
-            print(f"❌ Market feed error: {e}")
-            print("⚠️ Live data unavailable - showing last cached data")
-            # Don't run demo mode - just wait and retry connection
+            error_msg = str(e)
+            print(f"❌ Market feed error: {error_msg}")
+            
+            # Provide helpful error messages
+            if "TokenError" in error_msg or "token" in error_msg.lower():
+                print("⚠️ ACCESS TOKEN ERROR - Token may be expired or invalid")
+                print("💡 Generate new token: https://kite.trade/connect/login?api_key=YOUR_API_KEY")
+            elif "connection" in error_msg.lower():
+                print("⚠️ CONNECTION ERROR - Check internet connection")
+            elif "market" in error_msg.lower():
+                print("⚠️ Market may be closed (9:15 AM - 3:30 PM IST)")
+            
             await self._wait_and_retry()
     
-    async def _run_demo_mode(self):
-        """Run in demo mode with simulated market data."""
-        import random
-        
-        print("🎮 Demo mode active - Simulating market data")
-        
-        # Base prices and demo PCR
-        prices = {
-            "NIFTY": 24150.50,
-            "BANKNIFTY": 52340.75,
-            "SENSEX": 79850.25
-        }
-        demo_pcr = {
-            "NIFTY": {"pcr": 0.95, "callOI": 12500000, "putOI": 11875000},
-            "BANKNIFTY": {"pcr": 1.15, "callOI": 8500000, "putOI": 9775000},
-            "SENSEX": {"pcr": 0.88, "callOI": 450000, "putOI": 396000},
-        }
-        
-        while self.running:
-            for symbol, base_price in prices.items():
-                # Simulate price movement
-                change_pct = random.uniform(-0.1, 0.1)
-                prices[symbol] = base_price * (1 + change_pct / 100)
-                
-                prev_close = PREV_CLOSE.get(symbol, base_price)
-                change = prices[symbol] - prev_close
-                change_percent = (change / prev_close * 100)
-                
-                trend = "bullish" if change > 0 else "bearish" if change < 0 else "neutral"
-                
-                # Simulate PCR variation
-                pcr_base = demo_pcr[symbol]
-                pcr_var = random.uniform(-0.05, 0.05)
-                
-                data = {
-                    "symbol": symbol,
-                    "price": round(prices[symbol], 2),
-                    "change": round(change, 2),
-                    "changePercent": round(change_percent, 2),
-                    "high": round(prices[symbol] * 1.005, 2),
-                    "low": round(prices[symbol] * 0.995, 2),
-                    "open": round(prev_close, 2),
-                    "close": round(prev_close, 2),
-                    "volume": random.randint(1000000, 5000000),
-                    "oi": pcr_base["callOI"] + pcr_base["putOI"],
-                    "pcr": round(pcr_base["pcr"] + pcr_var, 2),
-                    "callOI": pcr_base["callOI"],
-                    "putOI": pcr_base["putOI"],
-                    "trend": trend,
-                    "timestamp": datetime.now(IST).isoformat(),
-                    "status": "DEMO"
-                }
-                
-                await self.cache.set_market_data(symbol, data)
-                await self.ws_manager.broadcast({
-                    "type": "tick",
-                    "data": data
-                })
-            
-            await asyncio.sleep(1)  # Update every second
-    
     async def _wait_and_retry(self):
-        """Wait and retry connection instead of showing demo data."""
+        """Wait and retry connection."""
         retry_interval = 30  # seconds
-        while self.running:
-            print(f"🔄 Retrying Zerodha connection in {retry_interval} seconds...")
-            await asyncio.sleep(retry_interval)
+        print(f"⏰ Will retry connection in {retry_interval} seconds...")
+        print("💡 TIP: Make sure market is open (9:15 AM - 3:30 PM IST on trading days)")
+        print("💡 TIP: Check your access token is valid (expires daily)")
+        await asyncio.sleep(retry_interval)
+        
+        if self.running:
+            print("🔄 Retrying Zerodha connection now...")
+            # Restart the connection attempt
             try:
-                await self.start()
-                break
+                if self.kws:
+                    self.kws.close()
+                    self.kws = None
+                    await asyncio.sleep(2)
+                
+                # Re-initialize connection
+                self.kws = KiteTicker(
+                    settings.zerodha_api_key,
+                    settings.zerodha_access_token
+                )
+                
+                # Assign callbacks
+                self.kws.on_ticks = self._on_ticks
+                self.kws.on_connect = self._on_connect
+                self.kws.on_close = self._on_close
+                self.kws.on_error = self._on_error
+                self.kws.on_reconnect = self._on_reconnect
+                self.kws.on_noreconnect = self._on_noreconnect
+                
+                # Connect
+                print("🔗 Attempting reconnection to Zerodha KiteTicker...")
+                self.kws.connect(threaded=True)
+                
+                # Process tick queue
+                while self.running:
+                    while not self._tick_queue.empty():
+                        try:
+                            data = self._tick_queue.get_nowait()
+                            await self._update_and_broadcast(data)
+                        except Exception as e:
+                            print(f"❌ Error broadcasting tick: {e}")
+                    await asyncio.sleep(0.1)
+                    
             except Exception as e:
-                print(f"❌ Retry failed: {e}")
+                print(f"❌ Reconnection failed: {e}")
+                # Try again
+                await self._wait_and_retry()
     
     async def stop(self):
         """Stop the market feed service."""

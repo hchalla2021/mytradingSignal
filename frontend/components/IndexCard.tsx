@@ -3,12 +3,15 @@
 import React, { memo, useEffect, useState, useRef, useMemo } from 'react';
 import { TrendingUp, TrendingDown, Minus, Activity } from 'lucide-react';
 import { MarketTick } from '@/hooks/useMarketSocket';
+import AIAlertTooltip from './AIAlertTooltip';
+import type { AIAlertTooltipData } from '@/types/ai';
 
 interface IndexCardProps {
   symbol: string;
   name: string;
   data: MarketTick | null;
   isConnected: boolean;
+  aiAlertData?: AIAlertTooltipData;
 }
 
 // Reusable market analysis utilities
@@ -120,9 +123,17 @@ const MarketUtils = {
   },
 };
 
-const IndexCard: React.FC<IndexCardProps> = memo(({ symbol, name, data, isConnected }) => {
+const IndexCard: React.FC<IndexCardProps> = memo(({ symbol, name, data, isConnected, aiAlertData }) => {
   const [flash, setFlash] = useState<'green' | 'red' | null>(null);
+  const [showAlert, setShowAlert] = useState(false);
   const prevPriceRef = useRef<number | null>(null);
+
+  // Update alert visibility when AI data changes
+  useEffect(() => {
+    if (aiAlertData?.showAlert) {
+      setShowAlert(true);
+    }
+  }, [aiAlertData]);
 
   // Memoized calculations
   const analysis = useMemo(() => MarketUtils.analyzeTrend(data), [data]);
@@ -176,19 +187,27 @@ const IndexCard: React.FC<IndexCardProps> = memo(({ symbol, name, data, isConnec
       relative overflow-hidden
       bg-dark-card
       rounded-lg sm:rounded-xl
-      border-2 border-bullish/25
+      bordAI Alert Tooltip - Fire Symbol for Crash/Strong Signals */}
+      {aiAlertData && showAlert && (
+        <AIAlertTooltip 
+          data={aiAlertData} 
+          onDismiss={() => setShowAlert(false)}
+        />
+      )}
+
+      {/* er-2 border-green-500/30
       p-3 sm:p-4 lg:p-5
       transition-all duration-200
-      hover:border-bullish/50
-      hover:shadow-lg hover:shadow-bullish/10
-      shadow-md shadow-black/20
+      hover:border-green-500/50
+      hover:shadow-lg hover:shadow-green-500/20
+      shadow-md shadow-green-500/10
       ${flash === 'green' ? 'animate-flash-green' : ''}
       ${flash === 'red' ? 'animate-flash-red' : ''}
     `}>
       {/* Header */}
       <div className="flex items-center justify-between mb-3 sm:mb-4">
         <div className="flex items-center gap-2.5">
-          <div className={`p-2 sm:p-2.5 rounded-lg ${analysis.bg}/15 border border-${analysis.direction === 'bullish' ? 'bullish' : analysis.direction === 'bearish' ? 'bearish' : 'dark-border'}/20`}>
+          <div className={`p-2 sm:p-2.5 rounded-lg ${analysis.color} border-2 border-green-500/40 bg-green-950/10 shadow-sm shadow-green-500/10`}>
             <Activity className={`w-4 h-4 sm:w-5 sm:h-5 ${analysis.color}`} />
           </div>
           <div>
@@ -201,18 +220,18 @@ const IndexCard: React.FC<IndexCardProps> = memo(({ symbol, name, data, isConnec
 
       {/* Price */}
       <div className="mb-3 sm:mb-4">
-        <div className={`text-xl sm:text-2xl lg:text-3xl font-extrabold price-update ${analysis.color} tracking-tight drop-shadow-sm`}>
+        <div className={`text-xl sm:text-2xl lg:text-3xl font-extrabold price-update ${analysis.color} tracking-tight drop-shadow-sm border-2 border-green-500/40 rounded-lg px-3 py-2 bg-green-950/10 shadow-sm shadow-green-500/10 inline-block`}>
           ₹{data ? MarketUtils.formatPrice(data.price) : '—'}
         </div>
       </div>
 
       {/* Change */}
       <div className="flex flex-wrap items-center gap-2 sm:gap-2.5 mb-3 sm:mb-4">
-        <div className={`flex items-center gap-1.5 ${analysis.color}`}>
+        <div className={`flex items-center gap-1.5 ${analysis.color} border-2 border-green-500/40 rounded-lg px-2.5 py-1 bg-green-950/10 shadow-sm shadow-green-500/10`}>
           {getTrendIcon()}
           <span className="font-bold text-xs sm:text-sm">{data ? MarketUtils.formatChange(data.change) : '—'}</span>
         </div>
-        <div className={`px-2 sm:px-2.5 py-0.5 sm:py-1 rounded-md text-[10px] sm:text-xs font-bold ${analysis.bg}/15 ${analysis.color} border border-${analysis.direction === 'bullish' ? 'bullish' : analysis.direction === 'bearish' ? 'bearish' : 'neutral'}/20`}>
+        <div className={`px-2.5 py-1 rounded-lg text-[10px] sm:text-xs font-bold ${analysis.color} border-2 border-green-500/40 bg-green-950/10 shadow-sm shadow-green-500/10`}>
           {data ? MarketUtils.formatPercent(data.changePercent) : '—'}
         </div>
       </div>
@@ -245,7 +264,7 @@ const IndexCard: React.FC<IndexCardProps> = memo(({ symbol, name, data, isConnec
           <div className={`flex items-center gap-1.5 sm:gap-2 ${analysis.color}`}>
             <span className="text-sm sm:text-base">{analysis.emoji}</span>
             <span className="font-bold text-xs sm:text-sm">{analysis.label}</span>
-            <span className={`text-[9px] sm:text-[10px] px-1.5 py-0.5 rounded-md font-semibold ${analysis.bgLight} border border-${analysis.direction === 'bullish' ? 'bullish' : analysis.direction === 'bearish' ? 'bearish' : 'neutral'}/20`}>
+            <span className={`text-[9px] sm:text-[10px] px-1.5 py-0.5 rounded-lg font-semibold ${analysis.color} border-2 border-green-500/40 bg-green-950/10 shadow-sm shadow-green-500/10`}>
               {analysis.strength}%
             </span>
           </div>

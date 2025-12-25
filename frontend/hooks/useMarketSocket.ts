@@ -61,7 +61,11 @@ export function useMarketSocket() {
   const pingIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
   const connect = useCallback(() => {
-    if (wsRef.current?.readyState === WebSocket.OPEN) return;
+    // Prevent multiple connections
+    if (wsRef.current?.readyState === WebSocket.OPEN || 
+        wsRef.current?.readyState === WebSocket.CONNECTING) {
+      return;
+    }
 
     setConnectionStatus('connecting');
     
@@ -121,20 +125,29 @@ export function useMarketSocket() {
       };
 
       ws.onclose = (event) => {
-        console.log('🔌 WebSocket disconnected:', event.code, event.reason);
+        // Only log if not a clean close (1000) or HMR-related
+        if (event.code !== 1000 && event.code !== 1001) {
+          console.log('🔌 WebSocket disconnected:', event.code);
+        }
         setIsConnected(false);
-        setConnectionStatus('disconnected');
         
         // Clear ping interval
         if (pingIntervalRef.current) {
           clearInterval(pingIntervalRef.current);
         }
 
-        // Auto-reconnect after 3 seconds
-        reconnectTimeoutRef.current = setTimeout(() => {
-          console.log('🔄 Attempting to reconnect...');
-          connect();
-        }, 3000);
+        // Auto-reconnect after 3 seconds (unless it's a clean close)
+        if (event.code !== 1000) {
+          setConnectionStatus('connecting'); // Show "Connecting..." instead of "Disconnected"
+          reconnectTimeoutRef.current = setTimeout(() => {
+            if (!wsRef.current || wsRef.current.readyState === WebSocket.CLOSED) {
+              console.log('🔄 Reconnecting...');
+              connect();
+            }
+          }, 3000);
+        } else {
+          setConnectionStatus('disconnected');
+        }
       };
 
       ws.onerror = (error) => {

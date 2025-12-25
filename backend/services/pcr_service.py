@@ -167,3 +167,9 @@ def get_pcr_service() -> PCRService:
     if _pcr_service is None:
         _pcr_service = PCRService()
     return _pcr_service
+
+
+async def get_pcr_data(symbol: str) -> Dict[str, Any]:
+    """Helper function to get PCR data for a symbol."""
+    service = get_pcr_service()
+    return await service.get_pcr_data(symbol)
