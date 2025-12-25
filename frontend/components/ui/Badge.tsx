@@ -4,8 +4,27 @@
  */
 
 import React from 'react';
-import { BORDERS, SHADOWS, BACKGROUNDS } from '@/lib/constants/theme';
+const BACKGROUNDS = {
+  success: 'bg-green-600',
+  warning: 'bg-yellow-500',
+  error: 'bg-red-600',
+  info: 'bg-blue-600',
+  neutral: 'bg-gray-600',
+};
 
+const BORDERS = {
+  success: 'border-green-700',
+  warning: 'border-yellow-600',
+  error: 'border-red-700',
+  info: 'border-blue-700',
+  neutral: 'border-gray-700',
+};
+
+const SHADOWS = {
+  sm: 'shadow-sm',
+  md: 'shadow',
+  lg: 'shadow-lg',
+};
 export type BadgeVariant = 'success' | 'warning' | 'error' | 'info' | 'neutral';
 export type BadgeSize = 'sm' | 'md' | 'lg';
 
