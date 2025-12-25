@@ -79,7 +79,10 @@ class AIScheduler:
             risk_score = self.risk_engine.get_risk_score(features)
             
             # Step 4: LLM analysis (<300ms)
-            ai_analysis = await self.llm_client.analyze_market_async(features)
+            if self.llm_client.enabled:
+                ai_analysis = await self.llm_client.analyze_market_async(features)
+            else:
+                ai_analysis = self.llm_client._get_fallback_analysis(features)
             
             # Step 5: Build decision (<10ms)
             result = self.decision_engine.build_ui_response(

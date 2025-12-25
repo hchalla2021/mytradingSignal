@@ -66,7 +66,7 @@ export function useAnalysis(options: UseAnalysisOptions = {}): UseAnalysisReturn
         setError(`HTTP ${response.status}`);
       }
     } catch (err) {
-      if (err.name === 'AbortError') {
+      if (err instanceof Error && err.name === 'AbortError') {
         console.warn('⏱️ REST API timeout - falling back to WebSocket');
       } else {
         console.error('❌ Error fetching initial data:', err);

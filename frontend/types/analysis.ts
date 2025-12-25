@@ -34,6 +34,9 @@ export enum VWAPPosition {
 export interface TechnicalIndicators {
   // Price & Trend
   price: number;
+  high: number;
+  low: number;
+  open: number;
   vwap: number;
   vwap_position: VWAPPosition;
   ema_9: number;

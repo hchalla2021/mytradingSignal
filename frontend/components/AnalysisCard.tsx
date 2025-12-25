@@ -129,9 +129,9 @@ export const AnalysisCard: React.FC<AnalysisCardProps> = ({ analysis, isLoading 
               value={indicators.vwap_position || 'N/A'}
               status={
                 indicators.vwap_position === VWAPPosition.ABOVE_VWAP
-                  ? 'bullish'
+                  ? 'positive'
                   : indicators.vwap_position === VWAPPosition.BELOW_VWAP
-                  ? 'bearish'
+                  ? 'negative'
                   : 'neutral'
               }
             />
@@ -163,7 +163,14 @@ export const AnalysisCard: React.FC<AnalysisCardProps> = ({ analysis, isLoading 
         {/* Support & Resistance */}
         <div className="border-2 border-green-500/40 rounded-lg p-3 bg-black/20 shadow-sm shadow-green-500/10">
           <h3 className="text-xs font-bold text-gray-100 mb-2">SUPPORT & RESISTANCE</h3>
-          <SupportResistance resistance={indicators.resistance} support={indicators.support} />
+          <SupportResistance
+            currentPrice={indicators.price}
+            resistance={indicators.resistance}
+            support={indicators.support}
+            prevDayHigh={indicators.prev_day_high}
+            prevDayLow={indicators.prev_day_low}
+            prevDayClose={indicators.prev_day_close}
+          />
         </div>
 
         {/* Momentum & Volume */}
@@ -176,9 +183,9 @@ export const AnalysisCard: React.FC<AnalysisCardProps> = ({ analysis, isLoading 
               status={
                 indicators.rsi !== null && indicators.rsi !== undefined
                   ? indicators.rsi > 70
-                    ? 'bearish'
+                    ? 'negative'
                     : indicators.rsi < 30
-                    ? 'bullish'
+                    ? 'positive'
                     : 'neutral'
                   : 'neutral'
               }
@@ -188,7 +195,7 @@ export const AnalysisCard: React.FC<AnalysisCardProps> = ({ analysis, isLoading 
               value={indicators.volume ? indicators.volume.toLocaleString('en-IN') : 'N/A'}
               status={
                 indicators.volume_strength === VolumeStrength.STRONG_VOLUME
-                  ? 'bullish'
+                  ? 'positive'
                   : 'neutral'
               }
             />
@@ -205,9 +212,9 @@ export const AnalysisCard: React.FC<AnalysisCardProps> = ({ analysis, isLoading 
               status={
                 indicators.pcr !== null && indicators.pcr !== undefined
                   ? indicators.pcr > 1.2
-                    ? 'bullish'
+                    ? 'positive'
                     : indicators.pcr < 0.8
-                    ? 'bearish'
+                    ? 'negative'
                     : 'neutral'
                   : 'neutral'
               }
@@ -222,8 +229,8 @@ export const AnalysisCard: React.FC<AnalysisCardProps> = ({ analysis, isLoading 
               status={
                 indicators.oi_change !== null && indicators.oi_change !== undefined
                   ? indicators.oi_change > 0
-                    ? 'bullish'
-                    : 'bearish'
+                    ? 'positive'
+                    : 'negative'
                   : 'neutral'
               }
             />

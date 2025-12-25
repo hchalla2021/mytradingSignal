@@ -50,6 +50,16 @@ class ConnectionManager:
         except Exception:
             await self.disconnect(websocket)
     
+    async def broadcast_ai_update(self, symbol: str, analysis: Dict[str, Any]):
+        """Broadcast AI analysis update to all clients."""
+        message = {
+            "type": "ai_update",
+            "symbol": symbol,
+            "data": analysis,
+            "timestamp": analysis.get('meta', {}).get('timestamp')
+        }
+        await self.broadcast(message)
+    
     @property
     def connection_count(self) -> int:
         """Get the number of active connections."""
