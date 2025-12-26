@@ -1,12 +1,29 @@
 """Market data WebSocket endpoint."""
 import asyncio
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, HTTPException
 from datetime import datetime
 
 from services.websocket_manager import manager
 from services.cache import CacheService
 
 router = APIRouter()
+
+
+@router.get("/cache/{symbol}")
+async def get_cache_data(symbol: str):
+    """Debug endpoint to check raw cache data for a symbol"""
+    cache = CacheService()
+    await cache.connect()
+    try:
+        data = await cache.get_market_data(symbol)
+        return {
+            "symbol": symbol,
+            "data": data,
+            "has_data": data is not None,
+            "timestamp": datetime.now().isoformat()
+        }
+    finally:
+        await cache.disconnect()
 
 
 @router.websocket("/market")
@@ -73,7 +90,9 @@ async def market_websocket(websocket: WebSocket):
     except WebSocketDisconnect:
         pass
     except Exception as e:
-        print(f"WebSocket error: {e}")
+        print(f"❌ WebSocket error: {e}")
+        import traceback
+        traceback.print_exc()
     finally:
         heartbeat_task.cancel()
         await manager.disconnect(websocket)

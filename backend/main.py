@@ -1,4 +1,11 @@
 """Main FastAPI application entry point."""
+# Fix Windows console encoding for emoji characters
+import sys
+import io
+if sys.platform == "win32":
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
+
 import asyncio
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
@@ -31,28 +38,43 @@ async def lifespan(app: FastAPI):
     # Initialize market feed
     market_feed = MarketFeedService(cache, manager)
     
-    # Initialize AI scheduler with error handling
+    # Initialize AI scheduler with FULL ERROR ISOLATION
     try:
         ai_scheduler = AIScheduler(market_feed, cache, manager)
         ai_router.set_ai_scheduler(ai_scheduler)
-        print("✅ AI Engine initialized successfully")
+        print("✅ AI Engine initialized with error isolation")
+        print("   - OpenAI errors won't crash backend")
+        print("   - Circuit breaker: auto-disable on repeated failures")
+        print("   - InstantSignal always works independently")
     except Exception as e:
         print(f"⚠️ AI Engine initialization failed:")
         print(f"   Error: {str(e)}")
+        print(f"   Backend continues with InstantSignal only")
         import traceback
         traceback.print_exc()
-        print("   Continuing without AI features...")
         ai_scheduler = None
     
-    # Start services in background
+    # Start services in background with error isolation
     feed_task = asyncio.create_task(market_feed.start())
     
-    # Start AI scheduler if available
+    # Start AI scheduler if available - WRAPPED TO PREVENT CRASHES
     ai_task = None
     if ai_scheduler:
         try:
-            ai_task = asyncio.create_task(ai_scheduler.start())
+            # Wrap AI task to catch all errors
+            async def safe_ai_task():
+                try:
+                    await ai_scheduler.start()
+                except Exception as e:
+                    print(f"❌ AI Engine crashed (isolated): {str(e)[:100]}")
+                    print(f"   Backend continues running normally")
+                    print(f"   InstantSignal still working")
+                    import traceback
+                    traceback.print_exc()
+            
+            ai_task = asyncio.create_task(safe_ai_task())
             print("🤖 AI Engine: ENABLED (3-min analysis loop)")
+            print("   Fully isolated - errors won't crash backend")
         except Exception as e:
             print(f"⚠️ AI Engine start failed: {e}")
     
@@ -83,7 +105,7 @@ app = FastAPI(
 # CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=settings.cors_origins_list,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

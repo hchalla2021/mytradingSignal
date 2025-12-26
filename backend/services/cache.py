@@ -24,7 +24,7 @@ class CacheService:
     
     async def connect(self):
         """Initialize cache."""
-        print("✅ In-memory cache initialized")
+        print("[OK] In-memory cache initialized")
         self.connected = True
     
     async def disconnect(self):

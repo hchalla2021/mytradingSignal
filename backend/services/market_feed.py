@@ -88,6 +88,7 @@ class MarketFeedService:
         self.kws: Optional[KiteTicker] = None
         self.running = False
         self.last_prices: Dict[str, float] = {}
+        self.last_oi: Dict[str, int] = {}  # Track last OI for change calculation
         self._tick_queue: Queue = Queue()
         self._loop: Optional[asyncio.AbstractEventLoop] = None
     
@@ -120,7 +121,7 @@ class MarketFeedService:
             "low": round(tick.get("ohlc", {}).get("low", ltp), 2),
             "open": round(tick.get("ohlc", {}).get("open", ltp), 2),
             "close": round(tick.get("ohlc", {}).get("close", prev_close), 2),
-            "volume": tick.get("volume_traded", 0),
+            "volume": tick.get("volume_traded", 0),  # Usually 0 for indices in ticks
             "oi": tick.get("oi", 0),
             "pcr": 0.0,      # Will be updated by PCR service
             "callOI": 0,     # Will be updated by PCR service
@@ -154,19 +155,51 @@ class MarketFeedService:
     
     async def _update_and_broadcast(self, data: Dict[str, Any]):
         """Update cache and broadcast to WebSocket clients."""
-        # Fetch PCR data
+        symbol = data["symbol"]
+        
+        # SMART: Fetch PCR with staggered timing to avoid rate limits
         try:
             pcr_service = get_pcr_service()
-            pcr_data = await pcr_service.get_pcr_data(data["symbol"])
+            
+            # Add small delay based on symbol to stagger requests
+            import time
+            current_second = int(time.time()) % 30
+            stagger_map = {"NIFTY": 0, "BANKNIFTY": 10, "SENSEX": 20}
+            expected_second = stagger_map.get(symbol, 0)
+            
+            # Only fetch if it's this symbol's turn (within 5 second window)
+            if abs(current_second - expected_second) <= 5 or current_second < 5:
+                pcr_data = await pcr_service.get_pcr_data(symbol)
+            else:
+                # Use cached data if not this symbol's turn
+                from services.pcr_service import _PCR_CACHE
+                pcr_data = _PCR_CACHE.get(symbol, {})
+                if not pcr_data:
+                    pcr_data = await pcr_service.get_pcr_data(symbol)
             data["pcr"] = pcr_data.get("pcr", 0.0)
             data["callOI"] = pcr_data.get("callOI", 0)
             data["putOI"] = pcr_data.get("putOI", 0)
-            data["oi"] = pcr_data.get("oi", data.get("oi", 0))
+            current_oi = pcr_data.get("oi", data.get("oi", 0))
+            data["oi"] = current_oi
+            
+            # Calculate OI Change
+            prev_oi = self.last_oi.get(symbol, current_oi)
+            oi_change = current_oi - prev_oi
+            oi_change_percent = (oi_change / prev_oi * 100) if prev_oi > 0 else 0
+            data["oi_change"] = round(oi_change_percent, 2)
+            self.last_oi[symbol] = current_oi
+            
+            # Debug PCR updates
+            if data["pcr"] > 0:
+                print(f"[PCR UPDATE] {symbol}: PCR={data['pcr']:.2f}, CallOI={data['callOI']:,}, PutOI={data['putOI']:,}, OI Change={data['oi_change']:.2f}%")
+            else:
+                print(f"[WARN] WARNING: PCR is 0 for {symbol} - likely fetch failed or token expired")
         except Exception as e:
-            print(f"⚠️ PCR fetch failed for {data['symbol']}: {e}")
-        
-        # Store current tick data
-        await self.cache.set_market_data(data["symbol"], data)
+            print(f"[ERROR] PCR fetch FAILED for {symbol}: {type(e).__name__}: {e}")
+            data["pcr"] = 0.0
+            data["callOI"] = 0
+            data["putOI"] = 0
+            data["oi_change"] = 0.0
         
         # Store historical candle data for analysis (1-minute candles)
         candle_key = f"analysis_candles:{data['symbol']}"
@@ -184,7 +217,27 @@ class MarketFeedService:
         await self.cache.lpush(candle_key, json.dumps(candle_data))
         await self.cache.ltrim(candle_key, 0, 99)  # Keep 100 candles
         
-        # Broadcast to WebSocket
+        # Generate instant analysis for this tick
+        try:
+            from services.instant_analysis import InstantSignal
+            print(f"🔍 Attempting analysis for {data['symbol']} - Price: {data.get('price', 'NO PRICE')}")
+            analysis_result = InstantSignal.analyze_tick(data)
+            if analysis_result:
+                data["analysis"] = analysis_result  # Add analysis to tick data
+                print(f"✅ Analysis added for {data['symbol']}: {list(analysis_result.keys())}")
+            else:
+                print(f"⚠️ Analysis returned None for {data['symbol']}")
+                data["analysis"] = None
+        except Exception as e:
+            print(f"❌ Instant analysis FAILED for {data['symbol']}: {e}")
+            import traceback
+            traceback.print_exc()
+            data["analysis"] = None
+        
+        # ✅ CRITICAL FIX: Store data WITH analysis to cache (after analysis is added)
+        await self.cache.set_market_data(data["symbol"], data)
+        
+        # Broadcast to WebSocket with analysis included
         await self.ws_manager.broadcast({
             "type": "tick",
             "data": data
@@ -394,7 +447,9 @@ class MarketFeedService:
     
     async def _wait_and_retry(self):
         """Wait and retry connection."""
-        retry_interval = 30  # seconds
+        from config import get_settings
+        settings = get_settings()
+        retry_interval = settings.market_feed_retry_interval
         print(f"⏰ Will retry connection in {retry_interval} seconds...")
         print("💡 TIP: Make sure market is open (9:15 AM - 3:30 PM IST on trading days)")
         print("💡 TIP: Check your access token is valid (expires daily)")

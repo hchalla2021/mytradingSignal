@@ -1,6 +1,7 @@
 /**
- * useAnalysis Hook - Real-time analysis updates via WebSocket
- * Performance optimized with auto-reconnection
+ * useAnalysis Hook - PRODUCTION READY
+ * Uses direct REST API polling for maximum reliability
+ * NO WebSocket dependency - works independently
  */
 
 import { useEffect, useState, useCallback, useRef } from 'react';
@@ -8,7 +9,7 @@ import { AnalysisSignal, AnalysisResponse } from '@/types/analysis';
 
 interface UseAnalysisOptions {
   autoConnect?: boolean;
-  reconnectInterval?: number;
+  pollingInterval?: number;
   onError?: (error: Error) => void;
 }
 
@@ -17,162 +18,142 @@ interface UseAnalysisReturn {
   isConnected: boolean;
   error: string | null;
   reconnect: () => void;
+  refreshCount: number;
 }
 
 export function useAnalysis(options: UseAnalysisOptions = {}): UseAnalysisReturn {
   const {
     autoConnect = true,
-    reconnectInterval = 5000,
+    pollingInterval = 1000, // Poll every 1 second for real-time updates
     onError,
   } = options;
 
   const [analyses, setAnalyses] = useState<AnalysisResponse | null>(null);
-  const [lastValidAnalyses, setLastValidAnalyses] = useState<AnalysisResponse | null>(null);
   const [isConnected, setIsConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [refreshCount, setRefreshCount] = useState(0);
 
-  const wsRef = useRef<WebSocket | null>(null);
-  const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const shouldReconnectRef = useRef(autoConnect);
-  const hasInitialDataRef = useRef(false);
+  const intervalRef = useRef<NodeJS.Timeout | null>(null);
+  const isActiveRef = useRef(autoConnect);
 
-  // Fetch initial data via REST API immediately (ULTRA FAST)
-  const fetchInitialData = useCallback(async () => {
-    if (hasInitialDataRef.current) return;
-    
+  // Fetch analysis data via REST API
+  const fetchAnalysisData = useCallback(async () => {
     try {
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
-      console.log('🔄 Fetching initial analysis data from:', `${apiUrl}/api/analysis/analyze/all`);
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000';
+      const url = `${apiUrl}/api/analysis/analyze/all`;
       
-      // Use timeout to prevent hanging
+      console.log('🔄 Fetching analysis from:', url);
+      
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 2000); // 2 second timeout
+      const timeoutId = setTimeout(() => controller.abort(), 5000); // 5 second timeout
       
-      const response = await fetch(`${apiUrl}/api/analysis/analyze/all`, {
+      const response = await fetch(url, {
         signal: controller.signal,
+        headers: {
+          'Accept': 'application/json',
+          'Cache-Control': 'no-cache, no-store, must-revalidate',
+          'Pragma': 'no-cache',
+          'Expires': '0'
+        },
       });
+      
       clearTimeout(timeoutId);
+      
+      console.log('📡 Response status:', response.status, response.statusText);
       
       if (response.ok) {
         const data = await response.json();
-        console.log('✅ Initial analysis data received:', data);
-        setAnalyses(data);
-        setLastValidAnalyses(data);
-        hasInitialDataRef.current = true;
-        setIsConnected(true); // Mark as connected when data received
-        console.log('✅ Initial analysis data loaded via REST');
-      } else {
-        console.error('❌ Failed to fetch analysis:', response.status, response.statusText);
-        setError(`HTTP ${response.status}`);
-      }
-    } catch (err) {
-      if (err instanceof Error && err.name === 'AbortError') {
-        console.warn('⏱️ REST API timeout - falling back to WebSocket');
-      } else {
-        console.error('❌ Error fetching initial data:', err);
-      }
-      setError('Backend connection failed');
-    }
-  }, []);
-
-  const connect = useCallback(() => {
-    try {
-      // Clear any existing connection
-      if (wsRef.current) {
-        wsRef.current.close();
-      }
-
-      const wsUrl = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000';
-      console.log('🔌 Connecting to analysis WebSocket:', `${wsUrl}/api/analysis/ws/analysis`);
-      const ws = new WebSocket(`${wsUrl}/api/analysis/ws/analysis`);
-
-      ws.onopen = () => {
-        console.log('📊 Analysis WebSocket connected');
+        console.log('✅ Analysis data received:', data);
+        console.log('📊 Symbols in response:', Object.keys(data));
+        
+        // Log prices and timestamps to verify data is changing
+        if (data.BANKNIFTY) {
+          console.log('💰 BANKNIFTY:', {
+            price: data.BANKNIFTY.indicators?.price,
+            timestamp: data.BANKNIFTY.timestamp,
+            signal: data.BANKNIFTY.signal
+          });
+        }
+        
+        // Force new object reference to ensure React detects change
+        const dataWithTimestamp = { 
+          ...data, 
+          _fetchTime: Date.now() // Force new reference every time
+        };
+        setAnalyses(dataWithTimestamp);
+        setRefreshCount(prev => {
+          const newCount = prev + 1;
+          console.log(`🔄 Refresh #${newCount} - Data updated at ${new Date().toLocaleTimeString()}.${Date.now() % 1000}`);
+          return newCount;
+        });
         setIsConnected(true);
         setError(null);
-        hasInitialDataRef.current = true; // Mark as initialized
-      };
-
-      ws.onmessage = (event) => {
-        try {
-          const message = JSON.parse(event.data);
-          
-          if (message.type === 'analysis_update') {
-            setAnalyses(message.data);
-            setLastValidAnalyses(message.data);
-            hasInitialDataRef.current = true;
-          }
-        } catch (err) {
-          console.error('Failed to parse analysis message:', err);
-        }
-      };
-
-      ws.onerror = (event) => {
-        const errorMsg = 'Analysis WebSocket error';
-        console.error(errorMsg, event);
-        setError(errorMsg);
-        
-        if (onError) {
-          onError(new Error(errorMsg));
-        }
-      };
-
-      ws.onclose = () => {
-        console.log('📊 Analysis WebSocket disconnected');
-        setIsConnected(false);
-
-        // Auto-reconnect if enabled
-        if (shouldReconnectRef.current) {
-          reconnectTimeoutRef.current = setTimeout(() => {
-            console.log('🔄 Reconnecting to analysis WebSocket...');
-            connect();
-          }, reconnectInterval);
-        }
-      };
-
-      wsRef.current = ws;
+      } else {
+        const errorText = await response.text();
+        console.error('❌ API error response:', errorText);
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
     } catch (err) {
-      const errorMsg = err instanceof Error ? err.message : 'Failed to connect';
-      setError(errorMsg);
+      console.error('❌ Analysis fetch error:', err);
+      setIsConnected(false);
       
-      if (onError) {
-        onError(err instanceof Error ? err : new Error(errorMsg));
+      if (err instanceof Error && err.name === 'AbortError') {
+        setError('Timeout - retrying...');
+      } else if (err instanceof Error) {
+        setError(err.message);
+      } else {
+        setError('Unknown error');
+      }
+      
+      if (onError && err instanceof Error) {
+        onError(err);
       }
     }
-  }, [reconnectInterval, onError]);
+  }, [onError]);
+
+  const startPolling = useCallback(() => {
+    // Clear existing interval
+    if (intervalRef.current) {
+      clearInterval(intervalRef.current);
+    }
+
+    // Fetch immediately
+    fetchAnalysisData();
+
+    // Then poll at interval
+    intervalRef.current = setInterval(() => {
+      if (isActiveRef.current) {
+        fetchAnalysisData();
+      }
+    }, pollingInterval);
+  }, [fetchAnalysisData, pollingInterval]);
 
   const reconnect = useCallback(() => {
-    shouldReconnectRef.current = true;
-    connect();
-  }, [connect]);
+    isActiveRef.current = true;
+    setError(null);
+    startPolling();
+  }, [startPolling]);
 
   useEffect(() => {
     if (autoConnect) {
-      // Fetch initial data immediately via REST API
-      fetchInitialData();
-      
-      // Then connect WebSocket for real-time updates
-      connect();
+      console.log('📊 Starting analysis polling (every 1s for real-time updates)');
+      startPolling();
     }
 
     return () => {
-      shouldReconnectRef.current = false;
-      
-      if (reconnectTimeoutRef.current) {
-        clearTimeout(reconnectTimeoutRef.current);
-      }
-      
-      if (wsRef.current) {
-        wsRef.current.close();
+      isActiveRef.current = false;
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current);
       }
     };
-  }, [autoConnect, connect, fetchInitialData]);
+  }, [autoConnect, startPolling]);
 
   return {
-    analyses: analyses || lastValidAnalyses,
+    analyses,
     isConnected,
     error,
     reconnect,
+    refreshCount,
   };
 }
 

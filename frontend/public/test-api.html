@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>API Test - Real-time Updates</title>
+    <style>
+        body { 
+            background: #0d0d12; 
+            color: white; 
+            font-family: monospace; 
+            padding: 20px;
+        }
+        .price {
+            font-size: 48px;
+            font-weight: bold;
+            margin: 20px 0;
+            padding: 20px;
+            border: 2px solid #22c55e;
+            border-radius: 10px;
+            transition: all 0.3s;
+        }
+        .flash-green {
+            background-color: rgba(34, 197, 94, 0.2);
+            transform: scale(1.05);
+        }
+        .flash-red {
+            background-color: rgba(239, 68, 68, 0.2);
+            transform: scale(1.05);
+        }
+        .log {
+            background: #1a1a24;
+            padding: 10px;
+            margin: 10px 0;
+            border-left: 3px solid #22c55e;
+            font-size: 12px;
+        }
+    </style>
+</head>
+<body>
+    <h1>🔥 Live API Test - Analysis Data</h1>
+    <div id="status">Connecting...</div>
+    
+    <h2>NIFTY</h2>
+    <div id="nifty-price" class="price">Loading...</div>
+    
+    <h2>BANKNIFTY</h2>
+    <div id="banknifty-price" class="price">Loading...</div>
+    
+    <h2>SENSEX</h2>
+    <div id="sensex-price" class="price">Loading...</div>
+    
+    <h3>Debug Logs:</h3>
+    <div id="logs"></div>
+
+    <script>
+        let prevPrices = { NIFTY: null, BANKNIFTY: null, SENSEX: null };
+        let refreshCount = 0;
+
+        function addLog(message) {
+            const logsDiv = document.getElementById('logs');
+            const logEntry = document.createElement('div');
+            logEntry.className = 'log';
+            logEntry.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+            logsDiv.insertBefore(logEntry, logsDiv.firstChild);
+            
+            // Keep only last 20 logs
+            while (logsDiv.children.length > 20) {
+                logsDiv.removeChild(logsDiv.lastChild);
+            }
+        }
+
+        function flashElement(elementId, isUp) {
+            const el = document.getElementById(elementId);
+            el.classList.remove('flash-green', 'flash-red');
+            void el.offsetWidth; // Force reflow
+            el.classList.add(isUp ? 'flash-green' : 'flash-red');
+            setTimeout(() => {
+                el.classList.remove('flash-green', 'flash-red');
+            }, 500);
+        }
+
+        async function fetchData() {
+            try {
+                refreshCount++;
+                const response = await fetch('http://127.0.0.1:8000/api/analysis/analyze/all', {
+                    headers: {
+                        'Cache-Control': 'no-cache, no-store, must-revalidate',
+                        'Pragma': 'no-cache'
+                    }
+                });
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}`);
+                }
+                
+                const data = await response.json();
+                
+                // Update status
+                document.getElementById('status').textContent = `✅ Connected - Refresh #${refreshCount}`;
+                
+                // Update each symbol
+                ['NIFTY', 'BANKNIFTY', 'SENSEX'].forEach(symbol => {
+                    const price = data[symbol].indicators.price;
+                    const priceEl = document.getElementById(`${symbol.toLowerCase()}-price`);
+                    
+                    // Update display
+                    priceEl.textContent = `₹${price.toLocaleString('en-IN', { maximumFractionDigits: 2 })}`;
+                    
+                    // Check for price change
+                    if (prevPrices[symbol] !== null && prevPrices[symbol] !== price) {
+                        const isUp = price > prevPrices[symbol];
+                        flashElement(`${symbol.toLowerCase()}-price`, isUp);
+                        addLog(`${symbol}: ₹${prevPrices[symbol]} → ₹${price} (${isUp ? '📈' : '📉'})`);
+                    }
+                    
+                    prevPrices[symbol] = price;
+                });
+                
+            } catch (error) {
+                document.getElementById('status').textContent = `❌ Error: ${error.message}`;
+                addLog(`ERROR: ${error.message}`);
+            }
+        }
+
+        // Fetch immediately
+        addLog('Starting real-time updates (every 1 second)...');
+        fetchData();
+
+        // Then every 1 second
+        setInterval(fetchData, 1000);
+    </script>
+</body>
+</html>

@@ -1,7 +1,7 @@
 """PCR (Put-Call Ratio) calculation service using Zerodha API."""
 import asyncio
-from datetime import datetime
-from typing import Dict, Any, Optional
+from datetime import datetime, timedelta, date
+from typing import Dict, Any, Optional, List
 from kiteconnect import KiteConnect
 import pytz
 
@@ -13,6 +13,14 @@ IST = pytz.timezone('Asia/Kolkata')
 # Cache for PCR data
 _PCR_CACHE: Dict[str, Dict[str, Any]] = {}
 _LAST_UPDATE: Dict[str, datetime] = {}
+
+# SMART CACHING: Cache instruments for entire day (they don't change)
+_INSTRUMENTS_CACHE: Dict[str, List] = {}  # {"NFO": [...], "BFO": [...]}
+_INSTRUMENTS_CACHE_DATE: Dict[str, date] = {}  # Track when cached
+
+# Rate limit handling
+_RATE_LIMITED_UNTIL: Dict[str, datetime] = {}  # Track when rate limited
+_FETCH_DELAYS: Dict[str, int] = {"NIFTY": 0, "BANKNIFTY": 10, "SENSEX": 20}  # Stagger fetches
 
 
 class PCRService:
@@ -29,8 +37,11 @@ class PCRService:
                 self.kite = KiteConnect(api_key=settings.zerodha_api_key)
                 self.kite.set_access_token(settings.zerodha_access_token)
                 self._initialized = True
+                print(f"✅ PCR Service: KiteConnect initialized successfully")
             except Exception as e:
                 print(f"❌ Failed to initialize KiteConnect for PCR: {e}")
+        elif not settings.zerodha_api_key or not settings.zerodha_access_token:
+            print(f"⚠️ PCR Service: Missing API key or access token")
     
     async def get_pcr_data(self, symbol: str) -> Dict[str, Any]:
         """
@@ -39,11 +50,12 @@ class PCRService:
         """
         self._init_kite()
         
-        # Check cache (update every 60 seconds)
+        # Check cache (update every 10 seconds for real-time PCR)
         now = datetime.now(IST)
         if symbol in _PCR_CACHE and symbol in _LAST_UPDATE:
             elapsed = (now - _LAST_UPDATE[symbol]).total_seconds()
-            if elapsed < 60:
+            if elapsed < 30:  # Increased to 30 seconds to avoid rate limits
+                print(f"[CACHE] Using cached PCR for {symbol} (age: {elapsed:.1f}s)")
                 return _PCR_CACHE[symbol]
         
         # Default values
@@ -56,32 +68,112 @@ class PCRService:
         }
         
         if not self.kite:
+            print(f"[ERROR] CRITICAL: PCR Service not initialized! Kite object is None")
+            print(f"        Check if ZERODHA_API_KEY and ZERODHA_API_SECRET are set in .env")
             return default_data
         
+        # SMART: Check if we're rate limited
+        if symbol in _RATE_LIMITED_UNTIL:
+            until = _RATE_LIMITED_UNTIL[symbol]
+            if now < until:
+                wait_seconds = (until - now).total_seconds()
+                print(f"[RATE-LIMIT] {symbol} rate limited, skipping (retry in {wait_seconds:.0f}s)")
+                # Return stale cache if available
+                if symbol in _PCR_CACHE:
+                    return _PCR_CACHE[symbol]
+                return default_data
+        
         try:
+            print(f"[FETCH] Fetching fresh PCR data for {symbol}...")
             # Get options chain data
             pcr_data = await asyncio.to_thread(self._fetch_pcr_from_zerodha, symbol)
             _PCR_CACHE[symbol] = pcr_data
+            
+            # Clear rate limit flag on success
+            if symbol in _RATE_LIMITED_UNTIL:
+                del _RATE_LIMITED_UNTIL[symbol]
+                print(f"[RECOVERED] {symbol} rate limit cleared")
             _LAST_UPDATE[symbol] = now
+            
+            # Log successful PCR fetch
+            if pcr_data.get("pcr", 0) > 0:
+                print(f"[OK] PCR Fetched for {symbol}: {pcr_data['pcr']:.2f} (Call:{pcr_data.get('callOI', 0):,}, Put:{pcr_data.get('putOI', 0):,})")
+            
             return pcr_data
         except Exception as e:
-            print(f"❌ Error fetching PCR for {symbol}: {e}")
-            return _PCR_CACHE.get(symbol, default_data)
+            error_msg = str(e).lower()
+            
+            # SMART: Detect rate limiting
+            if "too many requests" in error_msg or "429" in error_msg:
+                # Exponential backoff: 60s, 120s, 180s...
+                backoff_seconds = 60 * (1 + len([k for k in _RATE_LIMITED_UNTIL.keys()]))
+                retry_time = now + timedelta(seconds=backoff_seconds)
+                _RATE_LIMITED_UNTIL[symbol] = retry_time
+                print(f"[RATE-LIMIT] {symbol} detected! Backing off for {backoff_seconds}s")
+            else:
+                print(f"[ERROR] PCR fetch error for {symbol}: {type(e).__name__}: {e}")
+            
+            # Return cached data if available
+            if symbol in _PCR_CACHE:
+                age = (now - _LAST_UPDATE.get(symbol, now)).total_seconds()
+                print(f"[FALLBACK] Using stale PCR for {symbol} (age: {age:.0f}s)")
+                return _PCR_CACHE[symbol]
+            
+            print(f"[ERROR] No cached PCR for {symbol}, returning zeros")
+            return default_data
+    
+    def _get_cached_instruments(self, exchange: str) -> List:
+        """Get instruments with smart daily caching."""
+        today = datetime.now(IST).date()
+        
+        # Check if we have fresh cache (same day)
+        if exchange in _INSTRUMENTS_CACHE and exchange in _INSTRUMENTS_CACHE_DATE:
+            if _INSTRUMENTS_CACHE_DATE[exchange] == today:
+                print(f"[CACHE-HIT] Using cached instruments for {exchange} (today's cache)")
+                return _INSTRUMENTS_CACHE[exchange]
+        
+        # Fetch fresh instruments
+        print(f"[FETCH-INST] Fetching instruments for {exchange}...")
+        instruments = self.kite.instruments(exchange)
+        
+        # Cache for entire day
+        _INSTRUMENTS_CACHE[exchange] = instruments
+        _INSTRUMENTS_CACHE_DATE[exchange] = today
+        print(f"[CACHE-SAVE] Cached {len(instruments)} instruments for {exchange}")
+        
+        return instruments
     
     def _fetch_pcr_from_zerodha(self, symbol: str) -> Dict[str, Any]:
         """Fetch PCR from Zerodha (blocking call, run in thread)."""
         try:
-            # Map symbol to Zerodha index name
-            index_map = {
-                "NIFTY": "NIFTY",
-                "BANKNIFTY": "BANKNIFTY",
-                "SENSEX": "SENSEX"
+            # Map symbol to Zerodha index name AND exchange
+            index_config = {
+                "NIFTY": {"name": "NIFTY", "exchange": "NFO"},
+                "BANKNIFTY": {"name": "BANKNIFTY", "exchange": "NFO"},
+                "SENSEX": {"name": "SENSEX", "exchange": "BFO"}  # SENSEX is on BSE!
             }
             
-            index_name = index_map.get(symbol, symbol)
+            config = index_config.get(symbol)
+            if not config:
+                print(f"[WARN] Unknown index: {symbol}")
+                return {"pcr": 0.0, "callOI": 0, "putOI": 0, "oi": 0, "sentiment": "neutral"}
             
-            # Get current expiry options instruments
-            instruments = self.kite.instruments("NFO")
+            index_name = config["name"]
+            exchange = config["exchange"]
+            
+            print(f"[PCR] Fetching PCR for {symbol} from {exchange} exchange...")
+            
+            # SMART: Get instruments from cache (daily cache)
+            try:
+                instruments = self._get_cached_instruments(exchange)
+                print(f"[INST] Using {len(instruments)} instruments from {exchange}")
+            except Exception as e:
+                error_msg = str(e).lower()
+                if "too many requests" in error_msg:
+                    print(f"[RATE-LIMIT] Instruments fetch rate limited for {exchange}")
+                else:
+                    print(f"[ERROR] Failed to fetch instruments from {exchange}: {e}")
+                raise
             
             # Filter for current week/month expiry options
             today = datetime.now(IST).date()
@@ -105,8 +197,10 @@ class PCRService:
                 nearest_expiry = min(set(c.get("expiry") for c in calls if c.get("expiry")))
                 calls = [c for c in calls if c.get("expiry") == nearest_expiry]
                 puts = [p for p in puts if p.get("expiry") == nearest_expiry]
+                print(f"[OPTIONS] {symbol}: Found {len(calls)} calls and {len(puts)} puts for expiry {nearest_expiry}")
             
             if not calls or not puts:
+                print(f"[WARN] No options found for {symbol} on {exchange}")
                 return {"pcr": 0.0, "callOI": 0, "putOI": 0, "oi": 0, "sentiment": "neutral"}
             
             # Get OI data for options (batch of 500 max)
@@ -119,7 +213,13 @@ class PCRService:
                 return {"pcr": 0.0, "callOI": 0, "putOI": 0, "oi": 0, "sentiment": "neutral"}
             
             # Zerodha quote needs instrument tokens as strings
-            quotes = self.kite.quote([str(t) for t in all_tokens[:200]])
+            try:
+                quotes = self.kite.quote([str(t) for t in all_tokens[:200]])
+                print(f"[QUOTES] Fetched quotes for {len(quotes)} instruments")
+            except Exception as e:
+                print(f"[ERROR] Failed to fetch quotes: {e}")
+                print(f"        This usually means Zerodha session expired")
+                raise
             
             # Sum OI
             total_call_oi = 0
@@ -135,6 +235,8 @@ class PCRService:
             
             # Calculate PCR
             pcr = round(total_put_oi / total_call_oi, 2) if total_call_oi > 0 else 0.0
+            
+            print(f"[PCR] {symbol} PCR Calculated: {pcr:.2f} (CallOI:{total_call_oi:,}, PutOI:{total_put_oi:,})")
             
             # Determine sentiment
             if pcr > 1.2:
@@ -153,7 +255,9 @@ class PCRService:
             }
             
         except Exception as e:
-            print(f"❌ PCR fetch error: {e}")
+            print(f"❌ PCR fetch error for {symbol}: {e}")
+            import traceback
+            traceback.print_exc()
             return {"pcr": 0.0, "callOI": 0, "putOI": 0, "oi": 0, "sentiment": "neutral"}
 
 

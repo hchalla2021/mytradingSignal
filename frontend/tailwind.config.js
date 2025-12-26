@@ -8,25 +8,50 @@ module.exports = {
   theme: {
     extend: {
       colors: {
-        // Dark theme colors - improved contrast
+        // Professional Trading App Theme
         'dark': {
-          'bg': '#0d0d12',
-          'card': '#13131a',
-          'border': '#2a2a38',
-          'text': '#e8e8ef',
-          'muted': '#8888a0',
-          'surface': '#1a1a24',
+          'bg': '#0a0e1a',
+          'card': '#1a2332',
+          'surface': '#0f1421',
+          'elevated': '#1f2937',
+          'border': '#334155',
+          'border-subtle': '#1e293b',
+          'text': '#f1f5f9',
+          'secondary': '#cbd5e1',
+          'tertiary': '#94a3b8',
+          'muted': '#64748b',
         },
-        // Trading colors - vibrant
-        'bullish': '#22c55e',
-        'bearish': '#ef4444',
-        'neutral': '#eab308',
-        'accent': '#6366f1',
+        // Trading colors - vibrant & professional
+        'bullish': {
+          DEFAULT: '#10b981',
+          light: '#34d399',
+          dark: '#059669',
+          glow: 'rgba(16, 185, 129, 0.2)',
+        },
+        'bearish': {
+          DEFAULT: '#ef4444',
+          light: '#f87171',
+          dark: '#dc2626',
+          glow: 'rgba(239, 68, 68, 0.2)',
+        },
+        'neutral': {
+          DEFAULT: '#f59e0b',
+          light: '#fbbf24',
+        },
+        'accent': {
+          DEFAULT: '#3b82f6',
+          secondary: '#8b5cf6',
+        },
+      },
+      fontFamily: {
+        sans: ['Inter', 'system-ui', 'sans-serif'],
+        mono: ['JetBrains Mono', 'SF Mono', 'Monaco', 'monospace'],
       },
       animation: {
         'pulse-slow': 'pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite',
         'flash-green': 'flashGreen 0.4s ease-out',
         'flash-red': 'flashRed 0.4s ease-out',
+        'fadeIn': 'fadeIn 0.3s ease-in',
       },
       keyframes: {
         flashGreen: {
@@ -36,6 +61,10 @@ module.exports = {
         flashRed: {
           '0%': { backgroundColor: 'rgba(239, 68, 68, 0.15)' },
           '100%': { backgroundColor: 'transparent' },
+        },
+        fadeIn: {
+          '0%': { opacity: '0.8' },
+          '100%': { opacity: '1' },
         },
       },
       screens: {

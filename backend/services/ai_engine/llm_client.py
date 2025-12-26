@@ -29,9 +29,14 @@ Your analysis must be:
 - Explainable and transparent
 - Risk-aware"""
 
-    def __init__(self, api_key: Optional[str] = None):
-        """Initialize OpenAI client."""
-        self.api_key = api_key or os.getenv("OPENAI_API_KEY")
+    def __init__(self, api_key: Optional[str] = None, model: Optional[str] = None, 
+                 temperature: Optional[float] = None, max_tokens: Optional[int] = None,
+                 timeout: Optional[int] = None):
+        """Initialize OpenAI client with configurable parameters."""
+        from config import get_settings
+        settings = get_settings()
+        
+        self.api_key = api_key or settings.openai_api_key
         self.enabled = bool(self.api_key)
         
         if not self.enabled:
@@ -41,11 +46,11 @@ Your analysis must be:
             return
         
         try:
-            self.client = OpenAI(api_key=self.api_key)
-            self.model = "gpt-4o-mini"  # Fast and cost-effective
-            self.temperature = 0.2  # Low for consistency
-            self.max_tokens = 500  # Keep responses concise
-            print("✅ OpenAI GPT-4 enabled")
+            self.client = OpenAI(api_key=self.api_key, timeout=timeout or settings.openai_timeout)
+            self.model = model or settings.openai_model
+            self.temperature = temperature if temperature is not None else settings.openai_temperature
+            self.max_tokens = max_tokens or settings.openai_max_tokens
+            print(f"✅ OpenAI {self.model} enabled")
         except Exception as e:
             print(f"⚠️ OpenAI initialization failed: {e}")
             self.enabled = False

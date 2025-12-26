@@ -26,65 +26,91 @@ class TokenResponse(BaseModel):
 
 @router.get("/login-url")
 async def get_login_url():
-    """Get Zerodha login URL."""
-    login_url = f"https://kite.zerodha.com/connect/login?v=3&api_key={settings.zerodha_api_key}"
+    """Get Zerodha login URL with redirect configuration."""
+    login_url = f"{settings.zerodha_api_base_url}/connect/login?v=3&api_key={settings.zerodha_api_key}"
     return {
         "login_url": login_url,
-        "api_key": settings.zerodha_api_key
+        "api_key": settings.zerodha_api_key,
+        "redirect_url": settings.redirect_url,
+        "instructions": f"Set this redirect_url in your Zerodha app settings at {settings.zerodha_developers_url}"
     }
 
 
 @router.get("/login")
 async def redirect_to_zerodha():
     """Redirect to Zerodha login page."""
-    login_url = f"https://kite.zerodha.com/connect/login?v=3&api_key={settings.zerodha_api_key}"
+    login_url = f"{settings.zerodha_api_base_url}/connect/login?v=3&api_key={settings.zerodha_api_key}"
     return RedirectResponse(url=login_url)
 
 
 @router.get("/callback")
-async def zerodha_callback(request_token: str = Query(...), status: str = Query(None)):
+async def zerodha_callback(request_token: str = Query(...), status: str = Query(None), action: str = Query(None)):
     """
     Handle Zerodha OAuth callback (GET request from redirect).
     Exchange request_token for access_token and redirect back to frontend.
     """
+    print(f"\n{'='*60}")
+    print(f"🔐 ZERODHA CALLBACK RECEIVED")
+    print(f"   Request Token: {request_token[:20]}...")
+    print(f"   Status: {status}")
+    print(f"   Action: {action}")
+    print(f"{'='*60}\n")
+    
     if status == "error":
-        # Redirect to frontend with error
-        return RedirectResponse(url=f"http://localhost:3000/login?status=error")
+        print("❌ Zerodha returned error status")
+        return RedirectResponse(url=f"{settings.frontend_url}/login?status=error")
     
     try:
         from kiteconnect import KiteConnect
         
+        print("📡 Initializing KiteConnect...")
         kite = KiteConnect(api_key=settings.zerodha_api_key)
+        
+        print("🔄 Generating session with request token...")
         data = kite.generate_session(request_token, api_secret=settings.zerodha_api_secret)
         
         access_token = data["access_token"]
         user_id = data["user_id"]
+        user_name = data.get("user_name", "Unknown")
+        
+        print(f"\n✅ SESSION GENERATED SUCCESSFULLY")
+        print(f"   User ID: {user_id}")
+        print(f"   User Name: {user_name}")
+        print(f"   Access Token: {access_token[:20]}...")
         
         # Save access token to .env file for persistence
         env_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env")
         update_env_file(env_path, "ZERODHA_ACCESS_TOKEN", access_token)
+        print(f"💾 Access token saved to .env file")
         
         # Update settings
         settings.zerodha_access_token = access_token
         
-        print(f"✅ Zerodha authenticated! User: {user_id}")
-        print(f"🔑 Access Token: {access_token[:20]}...")
-        
         # Trigger market feed reconnection
         try:
             from services.market_feed import market_feed_service
-            print("🔄 Reconnecting to Zerodha with new token...")
+            print("🔄 Triggering market feed reconnection...")
             await market_feed_service.reconnect_with_new_token(access_token)
+            print("✅ Market feed reconnected successfully")
         except Exception as e:
-            print(f"⚠️ Auto-reconnect failed: {e}. Please restart backend manually.")
+            print(f"⚠️ Auto-reconnect failed: {e}")
+            print("   Backend will use new token on next restart")
+        
+        print(f"\n🎉 AUTHENTICATION COMPLETE - Redirecting to frontend...\n")
         
         # Redirect back to frontend login page with success status and user info
-        return RedirectResponse(url=f"http://localhost:3000/login?status=success&user_id={user_id}")
+        return RedirectResponse(url=f"{settings.frontend_url}/login?status=success&user_id={user_id}&user_name={user_name}")
         
     except Exception as e:
-        print(f"❌ Auth error: {e}")
+        print(f"\n❌ AUTHENTICATION FAILED")
+        print(f"   Error: {e}")
+        print(f"   Error Type: {type(e).__name__}")
+        import traceback
+        print(f"   Traceback:\n{traceback.format_exc()}")
+        print(f"\n")
         # Redirect to frontend with error
-        return RedirectResponse(url=f"http://localhost:3000/login?status=error&message={str(e)}")
+        error_msg = str(e).replace(' ', '+')  # URL encode spaces
+        return RedirectResponse(url=f"{settings.frontend_url}/login?status=error&message={error_msg}")
 
 
 def update_env_file(env_path: str, key: str, value: str):

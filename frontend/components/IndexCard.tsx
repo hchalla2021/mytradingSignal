@@ -145,6 +145,13 @@ const IndexCard: React.FC<IndexCardProps> = memo(({ symbol, name, data, isConnec
     data ? ((data.price - data.open) / data.open * 100) : 0
   , [data]);
 
+  // Track PCR updates for debugging
+  useEffect(() => {
+    if (data?.pcr) {
+      console.log(`[${symbol}] PCR Update: ${data.pcr.toFixed(2)} | Call: ${data.callOI?.toLocaleString() || 'N/A'} | Put: ${data.putOI?.toLocaleString() || 'N/A'} | ${new Date().toLocaleTimeString()}`);
+    }
+  }, [symbol, data?.pcr, data?.callOI, data?.putOI]);
+
   // Flash animation on price change
   useEffect(() => {
     if (data?.price && prevPriceRef.current !== null) {
@@ -307,7 +314,12 @@ const IndexCard: React.FC<IndexCardProps> = memo(({ symbol, name, data, isConnec
         <div className="grid grid-cols-2 gap-2">
           <div className="bg-dark-surface/60 rounded-lg p-2 text-center border-2 border-bullish/20">
             <p className="text-[9px] sm:text-[10px] text-dark-muted font-medium">Volume</p>
-            <p className="text-xs sm:text-sm text-white font-bold">{data?.volume ? MarketUtils.formatVolume(data.volume) : '—'}</p>
+            <p className="text-xs sm:text-sm text-white font-bold">
+              {data?.volume && data.volume > 0 
+                ? MarketUtils.formatVolume(data.volume) 
+                : <span className="text-gray-500 text-[10px]">Live Ticks</span>
+              }
+            </p>
           </div>
           <div className="bg-dark-surface/60 rounded-lg p-2 text-center border-2 border-bullish/20">
             <p className="text-[9px] sm:text-[10px] text-dark-muted font-medium">Total OI</p>
@@ -319,7 +331,7 @@ const IndexCard: React.FC<IndexCardProps> = memo(({ symbol, name, data, isConnec
       {/* PCR Section */}
       <div className="mt-2 sm:mt-3 pt-2 sm:pt-3 border-t-2 border-bullish/25 space-y-2">
         <div className="flex items-center justify-between">
-          <span className="text-[10px] sm:text-xs text-dark-muted font-medium">PCR</span>
+          <span className="text-[10px] sm:text-xs text-dark-muted font-medium">PCR {data?.pcr ? <span className="text-bullish text-[8px]">●</span> : ''}</span>
           <div className={`flex items-center gap-1.5 ${pcrAnalysis.color}`}>
             <span className="text-sm">{pcrAnalysis.emoji}</span>
             <span className="font-extrabold text-base sm:text-lg">{data?.pcr?.toFixed(2) || '—'}</span>

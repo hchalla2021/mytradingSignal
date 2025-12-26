@@ -55,6 +55,7 @@ export interface TechnicalIndicators {
   volume: number;
   volume_strength: VolumeStrength;
   rsi: number;
+  momentum?: number;  // Momentum score 0-100
   candle_strength: number;
 
   // Options Data

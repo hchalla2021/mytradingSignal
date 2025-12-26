@@ -19,6 +19,7 @@ export interface MarketTick {
   trend: 'bullish' | 'bearish' | 'neutral';
   timestamp: string;
   status: 'LIVE' | 'OFFLINE' | 'DEMO';
+  analysis?: any;       // ✅ Technical analysis data from backend
 }
 
 export interface MarketData {
