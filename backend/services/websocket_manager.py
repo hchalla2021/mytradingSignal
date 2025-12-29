@@ -28,6 +28,11 @@ class ConnectionManager:
     async def broadcast(self, data: Dict[str, Any]):
         """Broadcast data to all connected clients."""
         if not self.active_connections:
+            # ✅ DEBUG: Warn if no clients connected
+            if data.get('type') == 'tick':
+                tick_data = data.get('data', {})
+                symbol = tick_data.get('symbol', 'UNKNOWN')
+                print(f"⚠️ No clients to broadcast {symbol} tick to")
             return
         
         message = json.dumps(data)
@@ -37,7 +42,8 @@ class ConnectionManager:
             for connection in self.active_connections:
                 try:
                     await connection.send_text(message)
-                except Exception:
+                except Exception as e:
+                    print(f"❌ Failed to send to client: {e}")
                     disconnected.add(connection)
             
             # Remove disconnected clients

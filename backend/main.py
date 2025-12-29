@@ -15,8 +15,18 @@ from config import get_settings
 from services.websocket_manager import manager
 from services.market_feed import MarketFeedService
 from services.cache import CacheService
-from services.ai_engine.scheduler import AIScheduler
-from routers import auth, market, health, analysis, ai as ai_router
+
+# Try to import AI engine (optional - may not be available without openai package)
+try:
+    from services.ai_engine.scheduler import AIScheduler
+    AI_ENGINE_AVAILABLE = True
+except ImportError as e:
+    print(f"⚠️ AI Engine not available: {e}")
+    print("   Backend will run without AI analysis (InstantSignal still works)")
+    AIScheduler = None
+    AI_ENGINE_AVAILABLE = False
+
+from routers import auth, market, health, analysis, ai as ai_router, buy_on_dip, advanced_analysis
 
 
 settings = get_settings()
@@ -38,20 +48,26 @@ async def lifespan(app: FastAPI):
     # Initialize market feed
     market_feed = MarketFeedService(cache, manager)
     
-    # Initialize AI scheduler with FULL ERROR ISOLATION
-    try:
-        ai_scheduler = AIScheduler(market_feed, cache, manager)
-        ai_router.set_ai_scheduler(ai_scheduler)
-        print("✅ AI Engine initialized with error isolation")
-        print("   - OpenAI errors won't crash backend")
-        print("   - Circuit breaker: auto-disable on repeated failures")
-        print("   - InstantSignal always works independently")
-    except Exception as e:
-        print(f"⚠️ AI Engine initialization failed:")
-        print(f"   Error: {str(e)}")
-        print(f"   Backend continues with InstantSignal only")
-        import traceback
-        traceback.print_exc()
+    # Initialize AI scheduler with FULL ERROR ISOLATION (only if available)
+    if AI_ENGINE_AVAILABLE and AIScheduler:
+        try:
+            ai_scheduler = AIScheduler(market_feed, cache, manager)
+            ai_router.set_ai_scheduler(ai_scheduler)
+            print("✅ AI Engine initialized with error isolation")
+            print("   - OpenAI errors won't crash backend")
+            print("   - Circuit breaker: auto-disable on repeated failures")
+            print("   - InstantSignal always works independently")
+        except Exception as e:
+            print(f"⚠️ AI Engine initialization failed:")
+            print(f"   Error: {str(e)}")
+            print(f"   Backend continues with InstantSignal only")
+            import traceback
+            traceback.print_exc()
+            ai_scheduler = None
+    else:
+        print("⚠️ AI Engine not available (OpenAI not installed)")
+        print("   Backend running with InstantSignal analysis only")
+        print("   To enable: pip install openai")
         ai_scheduler = None
     
     # Start services in background with error isolation
@@ -117,6 +133,8 @@ app.include_router(auth.router, prefix="/api/auth", tags=["Authentication"])
 app.include_router(market.router, prefix="/ws", tags=["Market Data"])
 app.include_router(analysis.router, tags=["Analysis"])
 app.include_router(ai_router.router, tags=["AI Engine"])
+app.include_router(buy_on_dip.router, tags=["Buy-on-Dip"])
+app.include_router(advanced_analysis.router, tags=["Advanced Technical Analysis"])
 
 
 @app.get("/")

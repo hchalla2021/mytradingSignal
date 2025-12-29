@@ -28,12 +28,8 @@ class ProductionConfig:
     REDIS_URL: Optional[str] = os.getenv("REDIS_URL")
     CACHE_EXPIRE_TIME: int = int(os.getenv("CACHE_EXPIRE_TIME", "300"))  # 5 minutes
     
-    # Market Data Configuration
-    MARKET_INSTRUMENTS = {
-        "NIFTY": 256265,
-        "BANKNIFTY": 260105,
-        "SENSEX": 265,
-    }
+    # Market Data Configuration - Loaded from env file via main config.py
+    # See backend/.env for NIFTY_TOKEN, BANKNIFTY_TOKEN, SENSEX_TOKEN, etc.
     
     # WebSocket Configuration
     WS_PING_INTERVAL: int = 25  # seconds

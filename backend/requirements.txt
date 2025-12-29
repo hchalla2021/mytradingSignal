@@ -10,6 +10,7 @@ pydantic
 # Data Analysis
 pandas
 numpy
+scipy  # For optimized swing point detection
 
 # HTTP Clients
 httpx

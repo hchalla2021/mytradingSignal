@@ -34,7 +34,7 @@ class Settings(BaseSettings):
     # ==================== SERVER ====================
     host: str = "0.0.0.0"
     port: int = 8000
-    debug: bool = True
+    debug: bool = False  # Production mode
     cors_origins: str = "*"  # Comma-separated: http://localhost:3000,https://example.com
     
     # ==================== AI / LLM ====================
@@ -43,6 +43,14 @@ class Settings(BaseSettings):
     openai_temperature: float = 0.2
     openai_max_tokens: int = 500
     openai_timeout: int = 30  # seconds
+    
+    # ==================== NEWS API ====================
+    news_api_key: Optional[str] = None
+    news_api_base_url: str = "https://newsapi.org/v2/everything"
+    news_api_page_size: int = 10
+    news_api_lookback_hours: int = 24
+    news_api_rate_limit_cooldown: int = 3600  # 1 hour in seconds
+    news_http_timeout: int = 10  # seconds
     
     # Alternative AI providers (future support)
     anthropic_api_key: Optional[str] = None
@@ -63,9 +71,24 @@ class Settings(BaseSettings):
     alert_email_to: str = ""  # Comma-separated emails
     
     # ==================== INSTRUMENT TOKENS ====================
-    nifty_token: int = 256265      # NIFTY 50 (NSE)
-    banknifty_token: int = 260105  # BANK NIFTY (NSE)
-    sensex_token: int = 265        # SENSEX (BSE)
+    nifty_token: int = 256265      # NIFTY 50 (NSE) - for price
+    banknifty_token: int = 260105  # BANK NIFTY (NSE) - for price
+    sensex_token: int = 265        # SENSEX (BSE) - for price
+    finnifty_token: int = 257801   # FINNIFTY (NSE)
+    midcpnifty_token: int = 288009 # MIDCPNIFTY (NSE)
+    
+    # FUTURES TOKENS - FOR VOLUME DATA (indices don't have volume!)
+    # Note: These need to be updated monthly when contracts expire!
+    # Format: NFO:SYMBOL25JANFUT (JAN 2025 expiry example)
+    nifty_fut_token: int = 12683010       # NIFTY Current Month Future (update monthly!)
+    banknifty_fut_token: int = 12674050   # BANKNIFTY Current Month Future (update monthly!)
+    sensex_fut_token: int = 12683010      # Using NIFTY futures as proxy (SENSEX futures on BFO)
+    
+    # ==================== BUY-ON-DIP SETTINGS ====================
+    buy_on_dip_update_interval: int = 60  # seconds between WebSocket updates
+    buy_on_dip_signal_threshold: int = 70  # minimum score for BUY-ON-DIP signal (0-100)
+    buy_on_dip_lookback_days: int = 2  # days of historical data to fetch
+    buy_on_dip_default_interval: str = "5minute"  # default candle interval
     
     # ==================== PERFORMANCE & TIMING ====================
     # WebSocket settings
@@ -86,6 +109,7 @@ class Settings(BaseSettings):
     pcr_cache_ttl: int = 30  # seconds
     market_data_cache_ttl: int = 5  # seconds
     instruments_cache_days: int = 1  # days
+    advanced_analysis_cache_ttl: int = 5  # seconds for Volume Pulse, Trend Base, News
     
     # PCR fetch delays (stagger to avoid rate limits)
     pcr_delay_nifty: int = 0  # seconds

@@ -75,7 +75,6 @@ export function useMarketSocket() {
       wsRef.current = ws;
 
       ws.onopen = () => {
-        console.log('✅ WebSocket connected');
         setIsConnected(true);
         setConnectionStatus('connected');
 
@@ -121,15 +120,11 @@ export function useMarketSocket() {
               break;
           }
         } catch (error) {
-          console.error('Failed to parse message:', error);
+          // Silent error handling for production
         }
       };
 
       ws.onclose = (event) => {
-        // Only log if not a clean close (1000) or HMR-related
-        if (event.code !== 1000 && event.code !== 1001) {
-          console.log('🔌 WebSocket disconnected:', event.code);
-        }
         setIsConnected(false);
         
         // Clear ping interval
@@ -142,7 +137,6 @@ export function useMarketSocket() {
           setConnectionStatus('connecting'); // Show "Connecting..." instead of "Disconnected"
           reconnectTimeoutRef.current = setTimeout(() => {
             if (!wsRef.current || wsRef.current.readyState === WebSocket.CLOSED) {
-              console.log('🔄 Reconnecting...');
               connect();
             }
           }, 3000);

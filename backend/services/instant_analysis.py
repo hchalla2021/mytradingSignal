@@ -36,9 +36,6 @@ class InstantSignal:
             trend = tick_data.get('trend', 'neutral')
             symbol = tick_data.get('symbol', 'UNKNOWN')
             
-            # Debug log
-            print(f"[INSTANT ANALYSIS] {symbol}: Price={price}, Change%={change_percent:.2f}, Volume={volume}, PCR={pcr}, Trend={trend}")
-            
             # ============================================
             # MULTI-FACTOR SCORING SYSTEM - WORLD CLASS
             # ============================================

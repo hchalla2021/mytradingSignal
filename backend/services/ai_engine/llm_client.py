@@ -2,7 +2,16 @@
 LLM Client - OpenAI GPT-4 Integration
 Zero Hallucination, Data-Driven Analysis
 """
-from openai import OpenAI
+# Make OpenAI optional - backend can run without it
+try:
+    from openai import OpenAI
+    OPENAI_AVAILABLE = True
+except ImportError:
+    OPENAI_AVAILABLE = False
+    OpenAI = None
+    print("⚠️ OpenAI not installed - AI analysis will use fallback logic")
+    print("   Install: pip install openai")
+
 from typing import Dict, Any, Optional
 import json
 import os
@@ -35,6 +44,14 @@ Your analysis must be:
         """Initialize OpenAI client with configurable parameters."""
         from config import get_settings
         settings = get_settings()
+        
+        # Check if OpenAI is available
+        if not OPENAI_AVAILABLE:
+            print("⚠️ OpenAI module not installed - AI analysis using fallback logic")
+            print("   To enable: pip install openai")
+            self.enabled = False
+            self.client = None
+            return
         
         self.api_key = api_key or settings.openai_api_key
         self.enabled = bool(self.api_key)

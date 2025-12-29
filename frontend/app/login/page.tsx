@@ -132,14 +132,6 @@ export default function LoginPage() {
             <li>• Secure OAuth 2.0 flow</li>
           </ul>
         </div>
-
-        {/* Skip Demo Button */}
-        <button
-          onClick={() => router.push("/")}
-          className="w-full mt-4 text-gray-400 hover:text-white text-sm py-2 transition-colors"
-        >
-          Continue with Demo Data →
-        </button>
       </div>
     </div>
   );

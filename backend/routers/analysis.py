@@ -13,14 +13,16 @@ from services.zerodha_direct_analysis import get_zerodha_analysis
 from services.instant_analysis import get_instant_analysis, get_all_instant_analysis
 from services.cache import get_redis
 from services.websocket_manager import manager
+from config import get_settings
 
 router = APIRouter(prefix="/api/analysis", tags=["analysis"])
+settings = get_settings()
 
-# Symbol mapping
+# Symbol mapping from settings
 SYMBOL_MAPPING = {
-    "NIFTY": {"token": 256265, "name": "NIFTY 50"},
-    "BANKNIFTY": {"token": 260105, "name": "NIFTY BANK"},
-    "SENSEX": {"token": 265, "name": "BSE SENSEX"},
+    "NIFTY": {"token": settings.nifty_token, "name": "NIFTY 50"},
+    "BANKNIFTY": {"token": settings.banknifty_token, "name": "NIFTY BANK"},
+    "SENSEX": {"token": settings.sensex_token, "name": "BSE SENSEX"},
 }
 
 

@@ -101,10 +101,7 @@ class MarketFeedService:
         prev_close = tick.get("ohlc", {}).get("close") or PREV_CLOSE.get(symbol, ltp)
         change = ltp - prev_close
         change_percent = (change / prev_close * 100) if prev_close else 0
-        # Debug logging for BANKNIFTY
-        if symbol == "BANKNIFTY":
-            print(f"[BANKNIFTY DEBUG] token={token}, ltp={ltp}, prev_close={prev_close}, change={change}, change_percent={change_percent}")
-            print(f"[BANKNIFTY DEBUG] tick: {tick}")
+        
         # Determine trend
         if change > 0:
             trend = "bullish"
@@ -156,6 +153,9 @@ class MarketFeedService:
     async def _update_and_broadcast(self, data: Dict[str, Any]):
         """Update cache and broadcast to WebSocket clients."""
         symbol = data["symbol"]
+        
+        # ✅ DEBUG: Log every broadcast
+        print(f"[BROADCAST] {symbol}: ₹{data['price']} ({data['changePercent']:+.2f}%) → {self.ws_manager.connection_count} clients")
         
         # SMART: Fetch PCR with staggered timing to avoid rate limits
         try:
@@ -388,8 +388,14 @@ class MarketFeedService:
             return
         
         # ALWAYS fetch and cache last traded data first (works even when market is closed)
-        print("🔄 Fetching last available market data...")
-        await self._fetch_and_cache_last_data()
+        print("🔄 Fetching last available market data (works 24/7)...")
+        data_cached = await self._fetch_and_cache_last_data()
+        
+        if data_cached:
+            print("✅ Last market data cached successfully")
+            print("   → UI will show last traded prices even when market is closed")
+        else:
+            print("⚠️ Could not fetch last market data")
         
         try:
             # Initialize KiteTicker
@@ -419,7 +425,16 @@ class MarketFeedService:
             
             # Process tick queue in async loop
             print("🔄 Starting tick processing loop...")
+            last_refresh_time = datetime.now(IST)
+            
             while self.running:
+                # Refresh last traded data every 5 minutes (keeps data fresh even after market)
+                current_time = datetime.now(IST)
+                if (current_time - last_refresh_time).total_seconds() > 300:  # 5 minutes
+                    print("🔄 Refreshing last market data...")
+                    await self._fetch_and_cache_last_data()
+                    last_refresh_time = current_time
+                
                 # Process any pending ticks from the queue
                 while not self._tick_queue.empty():
                     try:

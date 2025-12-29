@@ -29,11 +29,11 @@ class ZerodhaDirectAnalysis:
         else:
             print("⚠️ No access token - using fallback mode")
         
-        # Symbol tokens
+        # Symbol tokens from settings
         self.symbols = {
-            "NIFTY": {"token": 256265, "name": "NIFTY 50", "exchange": "NSE"},
-            "BANKNIFTY": {"token": 260105, "name": "BANK NIFTY", "exchange": "NSE"},
-            "SENSEX": {"token": 265, "name": "SENSEX", "exchange": "BSE"},
+            "NIFTY": {"token": settings.nifty_token, "name": "NIFTY 50", "exchange": "NSE"},
+            "BANKNIFTY": {"token": settings.banknifty_token, "name": "BANK NIFTY", "exchange": "NSE"},
+            "SENSEX": {"token": settings.sensex_token, "name": "SENSEX", "exchange": "BSE"},
         }
     
     def get_live_quote(self, symbol: str) -> Optional[Dict[str, Any]]:
@@ -216,23 +216,18 @@ class ZerodhaDirectAnalysis:
         }
     
     def _fallback_analysis(self, symbol: str, error: str = None) -> Dict[str, Any]:
-        """Fallback when API unavailable - provides valid structure with demo data"""
+        """Fallback when API unavailable - provides valid structure"""
         
-        # Generate realistic demo data if token expired
-        demo_prices = {
-            "NIFTY": 23900,
-            "BANKNIFTY": 51500,
-            "SENSEX": 79000,
-        }
-        
-        base_price = demo_prices.get(symbol, 20000)
+        # Use last known price from settings or reasonable defaults
+        # In production, these should be populated from last successful API call
+        base_price = 20000  # Generic fallback
         
         return {
             "symbol": symbol,
             "symbol_name": self.symbols.get(symbol, {}).get("name", symbol),
             "signal": "WAIT",
             "confidence": 0.0,
-            "reasons": ["⚠️ Zerodha token expired - Please re-authenticate", "Showing demo data for UI testing"] if error and "token" in str(error).lower() else ["Waiting for market data..."],
+            "reasons": ["⚠️ Zerodha token expired - Please re-authenticate"] if error and "token" in str(error).lower() else ["Waiting for market data..."],
             "warnings": [f"TOKEN EXPIRED: {settings.redirect_url.rsplit('/', 1)[0]}/login-url"] if error and "token" in str(error).lower() else [error] if error else ["API connection issue"],
             "entry_price": None,
             "stop_loss": None,

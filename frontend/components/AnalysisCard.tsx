@@ -89,6 +89,7 @@ const AnalysisCardContent = memo<AnalysisCardProps>(({ analysis }) => {
   // Extract indicators with safe fallbacks and proper typing
   const indicators = analysis.indicators || {} as any;
   const displayPrice = indicators?.price || analysis.entry_price || 0;
+  const changePercent = indicators?.changePercent || 0;
   const symbol_name = analysis.symbol_name || analysis.symbol || 'UNKNOWN';
   const signal = analysis.signal || SignalType.NO_TRADE;
   const confidence = analysis.confidence || 0;
@@ -121,7 +122,7 @@ const AnalysisCardContent = memo<AnalysisCardProps>(({ analysis }) => {
       return `${base} border-bullish/40 shadow-lg shadow-bullish/10`;
     }
     if (signal === SignalType.STRONG_SELL || signal === SignalType.SELL_SIGNAL) {
-      return `${base} border-bearish/40 shadow-lg shadow-bearish/10`;
+      return `${base} border-emerald-500/40 shadow-lg shadow-emerald-500/10`;
     }
     if (signal === SignalType.NO_TRADE) {
       return `${base} border-dark-border/50`;
@@ -129,7 +130,7 @@ const AnalysisCardContent = memo<AnalysisCardProps>(({ analysis }) => {
     return `${base} border-neutral/40 shadow-lg shadow-neutral/10`;
   }, [signal]);
 
-  const flashClasses = flash === 'green' ? 'animate-flash-green border-bullish/80' : flash === 'red' ? 'animate-flash-red border-bearish/80' : '';
+  const flashClasses = flash === 'green' ? 'animate-flash-green border-bullish/80' : flash === 'red' ? 'animate-flash-red border-emerald-500/80' : '';
   
   const formattedPrice = displayPrice > 0 ? displayPrice.toLocaleString('en-IN', { maximumFractionDigits: 2 }) : '0.00';
 
@@ -143,11 +144,11 @@ const AnalysisCardContent = memo<AnalysisCardProps>(({ analysis }) => {
             {symbol_name}
           </h3>
           <div className={`text-2xl sm:text-3xl font-mono font-bold border-2 rounded-xl px-4 py-2.5 shadow-lg inline-block transition-all duration-200 ${
-            flash === 'green' 
-              ? 'text-bullish border-bullish/60 bg-bullish/10 shadow-bullish/20' 
-              : flash === 'red'
-              ? 'text-bearish border-bearish/60 bg-bearish/10 shadow-bearish/20'
-              : 'text-dark-text border-accent/30 bg-accent/5'
+            changePercent > 0
+              ? 'text-bullish border-emerald-500/60 bg-emerald-500/10 shadow-emerald-500/20'
+              : changePercent < 0
+              ? 'text-bearish border-emerald-500/60 bg-emerald-500/10 shadow-emerald-500/20'
+              : 'text-dark-text border-emerald-500/30 bg-emerald-500/5'
           }`}>
             ₹{formattedPrice}
           </div>

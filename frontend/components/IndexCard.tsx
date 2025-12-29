@@ -126,6 +126,7 @@ const MarketUtils = {
 const IndexCard: React.FC<IndexCardProps> = memo(({ symbol, name, data, isConnected, aiAlertData }) => {
   const [flash, setFlash] = useState<'green' | 'red' | null>(null);
   const [showAlert, setShowAlert] = useState(false);
+  const [lastUpdate, setLastUpdate] = useState<string>('');
   const prevPriceRef = useRef<number | null>(null);
 
   // Update alert visibility when AI data changes
@@ -145,27 +146,25 @@ const IndexCard: React.FC<IndexCardProps> = memo(({ symbol, name, data, isConnec
     data ? ((data.price - data.open) / data.open * 100) : 0
   , [data]);
 
-  // Track PCR updates for debugging
-  useEffect(() => {
-    if (data?.pcr) {
-      console.log(`[${symbol}] PCR Update: ${data.pcr.toFixed(2)} | Call: ${data.callOI?.toLocaleString() || 'N/A'} | Put: ${data.putOI?.toLocaleString() || 'N/A'} | ${new Date().toLocaleTimeString()}`);
-    }
-  }, [symbol, data?.pcr, data?.callOI, data?.putOI]);
-
   // Flash animation on price change
   useEffect(() => {
-    if (data?.price && prevPriceRef.current !== null) {
-      if (data.price > prevPriceRef.current) {
-        setFlash('green');
-      } else if (data.price < prevPriceRef.current) {
-        setFlash('red');
-      }
+    if (data?.price) {
+      // Update timestamp on every data change
+      setLastUpdate(new Date().toLocaleTimeString());
       
-      const timeout = setTimeout(() => setFlash(null), 500);
-      return () => clearTimeout(timeout);
+      if (prevPriceRef.current !== null) {
+        if (data.price > prevPriceRef.current) {
+          setFlash('green');
+        } else if (data.price < prevPriceRef.current) {
+          setFlash('red');
+        }
+        
+        const timeout = setTimeout(() => setFlash(null), 500);
+        return () => clearTimeout(timeout);
+      }
+      prevPriceRef.current = data.price;
     }
-    prevPriceRef.current = data?.price ?? null;
-  }, [data?.price]);
+  }, [data?.price, data?.timestamp, symbol]);
 
   const getTrendIcon = (size = 5) => {
     const cls = `w-${size} h-${size}`;
@@ -183,9 +182,14 @@ const IndexCard: React.FC<IndexCardProps> = memo(({ symbol, name, data, isConnec
       return <span className="px-2 py-0.5 text-xs font-medium bg-neutral/20 text-neutral rounded-full">CLOSED</span>;
     }
     return (
-      <span className="px-2 py-0.5 text-xs font-medium bg-bullish/20 text-bullish rounded-full flex items-center gap-1">
-        <span className="w-1.5 h-1.5 bg-bullish rounded-full animate-pulse" />LIVE
-      </span>
+      <div className="flex flex-col items-end gap-0.5">
+        <span className="px-2 py-0.5 text-xs font-medium bg-bullish/20 text-bullish rounded-full flex items-center gap-1">
+          <span className="w-1.5 h-1.5 bg-bullish rounded-full animate-pulse" />LIVE
+        </span>
+        {lastUpdate && (
+          <span className="text-[8px] text-dark-muted font-mono">{lastUpdate}</span>
+        )}
+      </div>
     );
   };
 
@@ -194,23 +198,22 @@ const IndexCard: React.FC<IndexCardProps> = memo(({ symbol, name, data, isConnec
       relative overflow-hidden
       bg-dark-card
       rounded-lg sm:rounded-xl
-      bordAI Alert Tooltip - Fire Symbol for Crash/Strong Signals */}
+      border-2 border-emerald-500/30
+      p-3 sm:p-4 lg:p-5
+      transition-all duration-200
+      hover:border-emerald-500/50
+      hover:shadow-lg hover:shadow-emerald-500/20
+      shadow-md shadow-emerald-500/10
+      ${flash === 'green' ? 'animate-flash-green' : ''}
+      ${flash === 'red' ? 'animate-flash-red' : ''}
+    `}>
+      {/* AI Alert Tooltip - Fire Symbol for Crash/Strong Signals */}
       {aiAlertData && showAlert && (
         <AIAlertTooltip 
           data={aiAlertData} 
           onDismiss={() => setShowAlert(false)}
         />
       )}
-
-      {/* er-2 border-green-500/30
-      p-3 sm:p-4 lg:p-5
-      transition-all duration-200
-      hover:border-green-500/50
-      hover:shadow-lg hover:shadow-green-500/20
-      shadow-md shadow-green-500/10
-      ${flash === 'green' ? 'animate-flash-green' : ''}
-      ${flash === 'red' ? 'animate-flash-red' : ''}
-    `}>
       {/* Header */}
       <div className="flex items-center justify-between mb-3 sm:mb-4">
         <div className="flex items-center gap-2.5">
@@ -227,7 +230,13 @@ const IndexCard: React.FC<IndexCardProps> = memo(({ symbol, name, data, isConnec
 
       {/* Price */}
       <div className="mb-3 sm:mb-4">
-        <div className={`text-xl sm:text-2xl lg:text-3xl font-extrabold price-update ${analysis.color} tracking-tight drop-shadow-sm border-2 border-green-500/40 rounded-lg px-3 py-2 bg-green-950/10 shadow-sm shadow-green-500/10 inline-block`}>
+        <div className={`text-2xl sm:text-3xl font-mono font-bold border-2 rounded-xl px-4 py-2.5 shadow-lg inline-block transition-all duration-200 ${analysis.color} ${
+          analysis.color === 'text-bullish' 
+            ? 'border-bullish/60 bg-bullish/10 shadow-bullish/20' 
+            : analysis.color === 'text-bearish'
+            ? 'border-emerald-500/60 bg-emerald-500/10 shadow-emerald-500/20'
+            : 'border-accent/30 bg-accent/5'
+        }`}>
           ₹{data ? MarketUtils.formatPrice(data.price) : '—'}
         </div>
       </div>
@@ -244,7 +253,7 @@ const IndexCard: React.FC<IndexCardProps> = memo(({ symbol, name, data, isConnec
       </div>
 
       {/* OHLC Grid */}
-      <div className="grid grid-cols-2 gap-1.5 text-[10px] sm:text-xs bg-dark-surface/60 rounded-lg p-2 sm:p-2.5 border-2 border-bullish/20">
+      <div className="grid grid-cols-2 gap-1.5 text-[10px] sm:text-xs bg-dark-surface/60 rounded-lg p-2 sm:p-2.5 border-2 border-emerald-500/20">
         <div className="flex justify-between items-center py-1 px-1.5 bg-dark-bg/30 rounded">
           <span className="text-dark-muted font-medium">Open</span>
           <span className="text-white font-semibold">{data ? MarketUtils.formatPrice(data.open) : '—'}</span>
@@ -264,7 +273,7 @@ const IndexCard: React.FC<IndexCardProps> = memo(({ symbol, name, data, isConnec
       </div>
 
       {/* Trend Section */}
-      <div className="mt-3 sm:mt-4 pt-3 sm:pt-4 border-t-2 border-bullish/25 space-y-2 sm:space-y-2.5">
+      <div className="mt-3 sm:mt-4 pt-3 sm:pt-4 border-t-2 border-emerald-500/25 space-y-2 sm:space-y-2.5">
         {/* Trend Label */}
         <div className="flex items-center justify-between">
           <span className="text-[10px] sm:text-xs text-dark-muted font-medium">Trend</span>
@@ -310,9 +319,9 @@ const IndexCard: React.FC<IndexCardProps> = memo(({ symbol, name, data, isConnec
       </div>
 
       {/* Volume & OI */}
-      <div className="mt-2 sm:mt-3 pt-2 sm:pt-3 border-t-2 border-bullish/25">
+      <div className="mt-2 sm:mt-3 pt-2 sm:pt-3 border-t-2 border-emerald-500/25">
         <div className="grid grid-cols-2 gap-2">
-          <div className="bg-dark-surface/60 rounded-lg p-2 text-center border-2 border-bullish/20">
+          <div className="bg-dark-surface/60 rounded-lg p-2 text-center border-2 border-emerald-500/20">
             <p className="text-[9px] sm:text-[10px] text-dark-muted font-medium">Volume</p>
             <p className="text-xs sm:text-sm text-white font-bold">
               {data?.volume && data.volume > 0 
@@ -321,7 +330,7 @@ const IndexCard: React.FC<IndexCardProps> = memo(({ symbol, name, data, isConnec
               }
             </p>
           </div>
-          <div className="bg-dark-surface/60 rounded-lg p-2 text-center border-2 border-bullish/20">
+          <div className="bg-dark-surface/60 rounded-lg p-2 text-center border-2 border-emerald-500/20">
             <p className="text-[9px] sm:text-[10px] text-dark-muted font-medium">Total OI</p>
             <p className="text-xs sm:text-sm text-white font-bold">{data?.oi ? MarketUtils.formatOI(data.oi) : '—'}</p>
           </div>
@@ -329,7 +338,7 @@ const IndexCard: React.FC<IndexCardProps> = memo(({ symbol, name, data, isConnec
       </div>
 
       {/* PCR Section */}
-      <div className="mt-2 sm:mt-3 pt-2 sm:pt-3 border-t-2 border-bullish/25 space-y-2">
+      <div className="mt-2 sm:mt-3 pt-2 sm:pt-3 border-t-2 border-emerald-500/25 space-y-2">
         <div className="flex items-center justify-between">
           <span className="text-[10px] sm:text-xs text-dark-muted font-medium">PCR {data?.pcr ? <span className="text-bullish text-[8px]">●</span> : ''}</span>
           <div className={`flex items-center gap-1.5 ${pcrAnalysis.color}`}>
@@ -365,11 +374,11 @@ const IndexCard: React.FC<IndexCardProps> = memo(({ symbol, name, data, isConnec
 
         {/* Call vs Put OI */}
         <div className="grid grid-cols-2 gap-2">
-          <div className="bg-dark-surface/60 rounded-lg p-1.5 text-center border-2 border-bullish/20">
+          <div className="bg-dark-surface/60 rounded-lg p-1.5 text-center border-2 border-emerald-500/20">
             <p className="text-[9px] sm:text-[10px] text-dark-muted font-medium">Call OI</p>
             <p className="text-[10px] sm:text-xs text-bearish font-bold">{data?.callOI ? MarketUtils.formatOI(data.callOI) : '—'}</p>
           </div>
-          <div className="bg-dark-surface/60 rounded-lg p-1.5 text-center border-2 border-bullish/20">
+          <div className="bg-dark-surface/60 rounded-lg p-1.5 text-center border-2 border-emerald-500/20">
             <p className="text-[9px] sm:text-[10px] text-dark-muted font-medium">Put OI</p>
             <p className="text-[10px] sm:text-xs text-bullish font-bold">{data?.putOI ? MarketUtils.formatOI(data.putOI) : '—'}</p>
           </div>

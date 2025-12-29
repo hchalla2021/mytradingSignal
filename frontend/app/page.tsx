@@ -3,14 +3,20 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useMarketSocket } from '@/hooks/useMarketSocket';
 import { useAIAnalysis } from '@/hooks/useAIAnalysis';
+import { useBuyOnDip } from '@/hooks/useBuyOnDip';
 import Header from '@/components/Header';
 import IndexCard from '@/components/IndexCard';
 import LiveStatus from '@/components/LiveStatus';
 import { AnalysisCard } from '@/components/AnalysisCard';
+import { BuyOnDipCard } from '@/components/BuyOnDipCard';
+import VolumePulseCard from '@/components/VolumePulseCard';
+import TrendBaseCard from '@/components/TrendBaseCard';
+import NewsDetectionCard from '@/components/NewsDetectionCard';
 
 export default function Home() {
   const { marketData, isConnected, connectionStatus } = useMarketSocket();
   const { alertData, loading: aiLoading, error: aiError } = useAIAnalysis();
+  const { signals: buyOnDipSignals, isConnected: buyOnDipConnected, getSignal } = useBuyOnDip();
   const [currentTime, setCurrentTime] = useState<string>('');
   const [updateCounter, setUpdateCounter] = useState(0);
 
@@ -59,28 +65,30 @@ export default function Home() {
       </div>
 
       {/* Main Dashboard - Full Width */}
-      <div className="w-full px-2 sm:px-4 lg:px-6 xl:px-8 py-4 sm:py-6">
-        {/* Section Header */}
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-5 sm:mb-6">
-          <div>
-            <h2 className="text-lg sm:text-xl lg:text-2xl font-bold text-dark-text flex items-center gap-3 tracking-tight">
-              <span className="w-1.5 h-6 sm:h-7 bg-gradient-to-b from-bullish to-bullish-dark rounded-full shadow-lg shadow-bullish/30" />
-              Live Market Indices
-              <span className="relative ml-2 px-4 py-1.5 text-xs sm:text-sm font-bold bg-gradient-to-r from-accent via-accent-secondary to-accent rounded-xl shadow-xl animate-pulse-slow border border-accent/30">
-                <span className="relative z-10 flex items-center gap-2">
-                  <span className="text-base sm:text-lg">🤖</span>
-                  <span className="bg-gradient-to-r from-white via-cyan-100 to-white bg-clip-text text-transparent font-extrabold tracking-wide">AI POWERED</span>
-                  <span className="text-base sm:text-lg">✨</span>
+      <div className="w-full px-2 sm:px-4 lg:px-6 xl:px-8 py-3 sm:py-4">
+        {/* Live Market Indices - With Border */}
+        <div className="border-2 border-emerald-500/30 rounded-2xl p-3 sm:p-4 bg-gradient-to-br from-emerald-950/20 via-dark-card/50 to-dark-elevated/40 backdrop-blur-sm shadow-xl shadow-emerald-500/10">
+          {/* Section Header */}
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-3 sm:mb-4">
+            <div>
+              <h2 className="text-lg sm:text-xl lg:text-2xl font-bold text-dark-text flex items-center gap-3 tracking-tight">
+                <span className="w-1.5 h-6 sm:h-7 bg-gradient-to-b from-bullish to-bullish-dark rounded-full shadow-lg shadow-bullish/30" />
+                Live Market Indices
+                <span className="relative ml-2 px-4 py-1.5 text-xs sm:text-sm font-bold bg-gradient-to-r from-accent via-accent-secondary to-accent rounded-xl shadow-xl animate-pulse-slow border border-accent/30">
+                  <span className="relative z-10 flex items-center gap-2">
+                    <span className="text-base sm:text-lg">🤖</span>
+                    <span className="bg-gradient-to-r from-white via-cyan-100 to-white bg-clip-text text-transparent font-extrabold tracking-wide">AI POWERED</span>
+                    <span className="text-base sm:text-lg">✨</span>
+                  </span>
+                  <span className="absolute inset-0 bg-gradient-to-r from-accent via-accent-secondary to-accent blur-xl opacity-40 rounded-xl"></span>
                 </span>
-                <span className="absolute inset-0 bg-gradient-to-r from-accent via-accent-secondary to-accent blur-xl opacity-40 rounded-xl"></span>
-              </span>
-            </h2>
-            <p className="text-dark-tertiary text-xs sm:text-sm mt-1.5 ml-4 sm:ml-5 font-medium tracking-wide">Real-time NSE & BSE Index Data with GPT-4 Intelligence</p>
+              </h2>
+              <p className="text-dark-tertiary text-xs sm:text-sm mt-1.5 ml-4 sm:ml-5 font-medium tracking-wide">Real-time NSE & BSE Index Data with GPT-4 Intelligence</p>
+            </div>
           </div>
-        </div>
         
-        {/* Index Cards Grid - Full Width Responsive */}
-        <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 sm:gap-4 lg:gap-5">
+          {/* Index Cards Grid - Full Width Responsive */}
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 sm:gap-3">
           <IndexCard
             symbol="NIFTY"
             name="NIFTY 50"
@@ -103,12 +111,12 @@ export default function Home() {
             aiAlertData={alertData.SENSEX}
           />
         </div>
+        </div>
 
-        {/* Intraday Analysis Section */}
-        <div className="mt-10 sm:mt-12 lg:mt-14">
-          
+        {/* Intraday Analysis Section - With Border */}
+        <div className="mt-6 sm:mt-6 border-2 border-emerald-500/30 rounded-2xl p-3 sm:p-4 bg-gradient-to-br from-emerald-950/20 via-dark-card/50 to-dark-elevated/40 backdrop-blur-sm shadow-xl shadow-emerald-500/10">
           {/* Section Header */}
-          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 mb-5 sm:mb-7">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-3 sm:mb-4">
             <div>
               <h2 className="text-lg sm:text-xl lg:text-2xl font-bold text-dark-text flex items-center gap-3 tracking-tight">
                 <span className="w-1.5 h-6 sm:h-7 bg-gradient-to-b from-accent to-accent-secondary rounded-full shadow-lg shadow-accent/30" />
@@ -131,36 +139,143 @@ export default function Home() {
           </div>
 
           {/* Analysis Cards Grid - ULTRA-FAST RENDER */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 2xl:grid-cols-3 gap-4 sm:gap-5 lg:gap-6 xl:gap-7">
+          <div className="grid grid-cols-1 lg:grid-cols-2 2xl:grid-cols-3 gap-3 sm:gap-3">
             <AnalysisCard analysis={analyses?.NIFTY || null} />
             <AnalysisCard analysis={analyses?.BANKNIFTY || null} />
             <AnalysisCard analysis={analyses?.SENSEX || null} />
           </div>
+        </div>
 
-          {/* Analysis Info Banner */}
-          <div className="mt-6 p-5 bg-black/40 border-2 border-green-500/40 rounded-xl shadow-lg shadow-green-500/20">
-            <div className="flex items-start gap-4">
-              <div className="text-3xl flex-shrink-0">�</div>
-              <div className="flex-1">
-                <h3 className="text-base font-bold text-white mb-2 flex items-center gap-2.5">
-                  LIVE Market Data Analysis
-                  <span className={`text-xs px-2.5 py-1 rounded-full font-extrabold shadow-md ${
-                    marketStatus === 'LIVE' 
-                      ? 'bg-cyan-900/60 text-cyan-300 border-2 border-cyan-500/60 shadow-cyan-500/40 animate-pulse' 
-                      : 'bg-red-900/60 text-red-300 border-2 border-red-500/60 shadow-red-500/40'
-                  }`}>
-                    {marketStatus === 'LIVE' ? '● LIVE' : '● OFFLINE'}
-                  </span>
-                </h3>
-                <p className="text-xs text-gray-300 leading-relaxed mb-2.5">
-                  Real-time analysis using <strong className="text-cyan-400 font-bold">LIVE market data from Zerodha KiteTicker</strong>. 
-                  All technical indicators are calculated on actual price movements, volume, and order flow.
-                </p>
-                <p className="text-xs text-gray-300 leading-relaxed">
-                  <strong className="text-cyan-400 font-bold">Data Source:</strong> Direct integration with Zerodha Kite API - NO dummy or simulated data. 
-                  All prices are actual traded values from NSE/BSE exchanges.
-                </p>
+        {/* Volume Pulse Section - NEW */}
+        <div className="mt-6 sm:mt-6 border-2 border-purple-500/30 rounded-2xl p-3 sm:p-4 bg-gradient-to-br from-purple-950/20 via-dark-card/50 to-dark-elevated/40 backdrop-blur-sm shadow-xl shadow-purple-500/10">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-3 sm:mb-4">
+            <div>
+              <h3 className="text-base sm:text-lg lg:text-xl font-bold text-dark-text flex items-center gap-3 tracking-tight">
+                <span className="w-1.5 h-5 sm:h-6 bg-gradient-to-b from-purple-500 to-purple-600 rounded-full shadow-lg shadow-purple-500/30" />
+                Volume Pulse (Candle Volume)
+              </h3>
+              <p className="text-dark-tertiary text-xs sm:text-sm mt-1.5 ml-4 sm:ml-5 font-medium tracking-wide">
+                Real-time buying/selling pressure • Green vs Red candle volume tracking
+              </p>
+            </div>
+          </div>
+
+          {/* Volume Pulse Cards Grid */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 2xl:grid-cols-3 gap-3 sm:gap-3">
+            <VolumePulseCard symbol="NIFTY" name="NIFTY 50" />
+            <VolumePulseCard symbol="BANKNIFTY" name="BANK NIFTY" />
+            <VolumePulseCard symbol="SENSEX" name="SENSEX" />
+          </div>
+        </div>
+
+        {/* Trend Base Section - NEW */}
+        <div className="mt-6 sm:mt-6 border-2 border-blue-500/30 rounded-2xl p-3 sm:p-4 bg-gradient-to-br from-blue-950/20 via-dark-card/50 to-dark-elevated/40 backdrop-blur-sm shadow-xl shadow-blue-500/10">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-3 sm:mb-4">
+            <div>
+              <h3 className="text-base sm:text-lg lg:text-xl font-bold text-dark-text flex items-center gap-3 tracking-tight">
+                <span className="w-1.5 h-5 sm:h-6 bg-gradient-to-b from-blue-500 to-blue-600 rounded-full shadow-lg shadow-blue-500/30" />
+                Trend Base (Higher-Low Structure)
+              </h3>
+              <p className="text-dark-tertiary text-xs sm:text-sm mt-1.5 ml-4 sm:ml-5 font-medium tracking-wide">
+                Advanced swing structure analysis • Higher-high/higher-low detection
+              </p>
+            </div>
+          </div>
+
+          {/* Trend Base Cards Grid */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 2xl:grid-cols-3 gap-3 sm:gap-3">
+            <TrendBaseCard symbol="NIFTY" name="NIFTY 50" />
+            <TrendBaseCard symbol="BANKNIFTY" name="BANK NIFTY" />
+            <TrendBaseCard symbol="SENSEX" name="SENSEX" />
+          </div>
+        </div>
+
+        {/* Buy-on-Dip Section - With Border */}
+        <div className="mt-6 sm:mt-6 border-2 border-emerald-500/30 rounded-2xl p-3 sm:p-4 bg-gradient-to-br from-emerald-950/20 via-dark-card/50 to-dark-elevated/40 backdrop-blur-sm shadow-xl shadow-emerald-500/10">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-3 sm:mb-4">
+            <div>
+              <h3 className="text-base sm:text-lg lg:text-xl font-bold text-dark-text flex items-center gap-3 tracking-tight">
+                <span className="w-1.5 h-5 sm:h-6 bg-gradient-to-b from-emerald-500 to-green-600 rounded-full shadow-lg shadow-emerald-500/30" />
+                Buy-on-Dip Detection
+              </h3>
+              <p className="text-dark-tertiary text-xs sm:text-sm mt-1.5 ml-4 sm:ml-5 font-medium tracking-wide">
+                Intelligent dip-buying opportunities based on EMA, RSI, VWAP & Volume
+              </p>
+            </div>
+            <div className="flex items-center gap-2 ml-4 sm:ml-0">
+              <div className={`flex items-center gap-2 text-xs sm:text-sm px-4 py-2 rounded-xl border-2 font-bold shadow-lg transition-all duration-300 ${
+                buyOnDipConnected 
+                  ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400 shadow-emerald-500/20' 
+                  : 'bg-gray-700/10 border-gray-700/30 text-gray-400 shadow-gray-700/20'
+              }`}>
+                <span className={`w-2.5 h-2.5 rounded-full ${buyOnDipConnected ? 'bg-emerald-500' : 'bg-gray-600'} animate-pulse`} />
+                <span className="tracking-wide">{buyOnDipConnected ? 'Monitoring' : 'Offline'}</span>
               </div>
+            </div>
+          </div>
+
+          {/* Buy-on-Dip Cards Grid */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 2xl:grid-cols-3 gap-3 sm:gap-3">
+            <BuyOnDipCard
+              symbol="NIFTY"
+              signal={getSignal('NIFTY')}
+            />
+            <BuyOnDipCard
+              symbol="BANKNIFTY"
+              signal={getSignal('BANKNIFTY')}
+            />
+            <BuyOnDipCard
+              symbol="SENSEX"
+              signal={getSignal('SENSEX')}
+            />
+          </div>
+        </div>
+
+        {/* News/Event Detection Section - Orange Theme */}
+        <div className="mt-6 sm:mt-6 border-2 border-orange-500/30 rounded-2xl p-3 sm:p-4 bg-gradient-to-br from-orange-950/20 via-dark-card/50 to-dark-elevated/40 backdrop-blur-sm shadow-xl shadow-orange-500/10">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-3 sm:mb-4">
+            <div>
+              <h3 className="text-base sm:text-lg lg:text-xl font-bold text-dark-text flex items-center gap-3 tracking-tight">
+                <span className="w-1.5 h-5 sm:h-6 bg-gradient-to-b from-orange-500 to-red-600 rounded-full shadow-lg shadow-orange-500/30" />
+                News/Event Detection
+              </h3>
+              <p className="text-dark-tertiary text-xs sm:text-sm mt-1.5 ml-4 sm:ml-5 font-medium tracking-wide">
+                Real-time market news with sentiment analysis & shock event alerts
+              </p>
+            </div>
+          </div>
+
+          {/* News Detection Cards Grid */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 2xl:grid-cols-3 gap-3 sm:gap-3">
+            <NewsDetectionCard symbol="NIFTY" name="NIFTY 50" />
+            <NewsDetectionCard symbol="BANKNIFTY" name="BANK NIFTY" />
+            <NewsDetectionCard symbol="SENSEX" name="SENSEX" />
+          </div>
+        </div>
+
+        {/* Analysis Info Banner */}
+        <div className="mt-4 p-4 bg-black/40 border-2 border-green-500/40 rounded-xl shadow-lg shadow-green-500/20">
+          <div className="flex items-start gap-4">
+            <div className="text-3xl flex-shrink-0">�</div>
+            <div className="flex-1">
+              <h3 className="text-base font-bold text-white mb-2 flex items-center gap-2.5">
+                LIVE Market Data Analysis
+                <span className={`text-xs px-2.5 py-1 rounded-full font-extrabold shadow-md ${
+                  marketStatus === 'LIVE' 
+                    ? 'bg-cyan-900/60 text-cyan-300 border-2 border-cyan-500/60 shadow-cyan-500/40 animate-pulse' 
+                    : 'bg-red-900/60 text-red-300 border-2 border-red-500/60 shadow-red-500/40'
+                }`}>
+                  {marketStatus === 'LIVE' ? '● LIVE' : '● OFFLINE'}
+                </span>
+              </h3>
+              <p className="text-xs text-gray-300 leading-relaxed mb-2.5">
+                Real-time analysis using <strong className="text-cyan-400 font-bold">LIVE market data from Zerodha KiteTicker</strong>. 
+                All technical indicators are calculated on actual price movements, volume, and order flow.
+              </p>
+              <p className="text-xs text-gray-300 leading-relaxed">
+                <strong className="text-cyan-400 font-bold">Data Source:</strong> Direct integration with Zerodha Kite API - NO dummy or simulated data. 
+                All prices are actual traded values from NSE/BSE exchanges.
+              </p>
             </div>
           </div>
         </div>
