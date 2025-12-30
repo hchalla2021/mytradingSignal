@@ -18,7 +18,7 @@ export interface MarketTick {
   putOI: number;        // Put Open Interest
   trend: 'bullish' | 'bearish' | 'neutral';
   timestamp: string;
-  status: 'LIVE' | 'OFFLINE' | 'DEMO';
+  status: 'LIVE' | 'OFFLINE' | 'DEMO' | 'CLOSED' | 'PRE_OPEN';
   analysis?: any;       // ✅ Technical analysis data from backend
 }
 
