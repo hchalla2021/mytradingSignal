@@ -3,9 +3,10 @@
 # Python 3.10+
 
 # Core Framework
-fastapi
-uvicorn[standard]
-pydantic
+fastapi>=0.104.0
+uvicorn[standard]>=0.24.0
+pydantic>=2.0.0
+pydantic-settings>=2.0.0  # Required for BaseSettings
 
 # Data Analysis
 pandas
@@ -20,9 +21,9 @@ requests
 websockets
 
 # Utilities
-python-dotenv
-pytz
-watchdog  # For auto-reload token changes
+python-dotenv>=1.0.0
+pytz>=2023.3
+watchdog>=3.0.0  # For auto-reload token changes
 
 # Trading API
 kiteconnect
