@@ -28,20 +28,26 @@ export const TechnicalIndicator: React.FC<TechnicalIndicatorProps> = ({
     switch (status) {
       case 'positive':
         return {
-          color: 'text-green-500',
+          color: 'text-green-400',
           bg: 'bg-green-950/30',
+          border: 'border-green-500/40',
+          shadow: 'shadow-green-500/20',
           arrow: '▲',
         };
       case 'negative':
         return {
-          color: 'text-red-500',
+          color: 'text-red-400',
           bg: 'bg-red-950/30',
+          border: 'border-red-500/40',
+          shadow: 'shadow-red-500/20',
           arrow: '▼',
         };
       default:
         return {
-          color: 'text-gray-500',
+          color: 'text-gray-400',
           bg: 'bg-gray-950/30',
+          border: 'border-gray-500/40',
+          shadow: 'shadow-gray-500/20',
           arrow: '━',
         };
     }
@@ -53,7 +59,7 @@ export const TechnicalIndicator: React.FC<TechnicalIndicatorProps> = ({
   return (
     <div className={`flex items-center justify-between ${sizeClasses} p-2 rounded ${config.bg}`}>
       <span className="text-gray-500 font-medium">{label}</span>
-      <div className={`flex items-center gap-1 ${config.color} font-bold`}>
+      <div className={`flex items-center gap-1.5 ${config.color} font-bold px-3 py-1.5 rounded-lg border-2 ${config.border} shadow-md ${config.shadow}`}>
         {showArrow && status !== 'neutral' && (
           <span className="text-xs">{config.arrow}</span>
         )}

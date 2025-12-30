@@ -3,20 +3,17 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useMarketSocket } from '@/hooks/useMarketSocket';
 import { useAIAnalysis } from '@/hooks/useAIAnalysis';
-import { useBuyOnDip } from '@/hooks/useBuyOnDip';
 import Header from '@/components/Header';
 import IndexCard from '@/components/IndexCard';
 import LiveStatus from '@/components/LiveStatus';
 import { AnalysisCard } from '@/components/AnalysisCard';
-import { BuyOnDipCard } from '@/components/BuyOnDipCard';
 import VolumePulseCard from '@/components/VolumePulseCard';
 import TrendBaseCard from '@/components/TrendBaseCard';
-import NewsDetectionCard from '@/components/NewsDetectionCard';
+import ZoneControlCard from '@/components/ZoneControlCard';
 
 export default function Home() {
   const { marketData, isConnected, connectionStatus } = useMarketSocket();
   const { alertData, loading: aiLoading, error: aiError } = useAIAnalysis();
-  const { signals: buyOnDipSignals, isConnected: buyOnDipConnected, getSignal } = useBuyOnDip();
   const [currentTime, setCurrentTime] = useState<string>('');
   const [updateCounter, setUpdateCounter] = useState(0);
 
@@ -128,12 +125,16 @@ export default function Home() {
             </div>
             <div className="flex items-center gap-2 ml-4 sm:ml-0">
               <div className={`flex items-center gap-2 text-xs sm:text-sm px-4 py-2 rounded-xl border-2 font-bold shadow-lg transition-all duration-300 ${
-                isConnected 
+                isConnected && analyses
                   ? 'bg-bullish/10 border-bullish/30 text-bullish shadow-bullish/20 hover:shadow-bullish/30' 
+                  : isConnected && !analyses
+                  ? 'bg-yellow-500/10 border-yellow-500/30 text-yellow-400 shadow-yellow-500/20'
                   : 'bg-bearish/10 border-bearish/30 text-bearish shadow-bearish/20'
               }`}>
-                <span className={`w-2.5 h-2.5 rounded-full ${isConnected ? 'bg-bullish' : 'bg-bearish'} animate-pulse`} />
-                <span className="tracking-wide">{isConnected ? 'Analysis Live' : 'Disconnected'}</span>
+                <span className={`w-2.5 h-2.5 rounded-full ${isConnected && analyses ? 'bg-bullish' : isConnected ? 'bg-yellow-500' : 'bg-bearish'} animate-pulse`} />
+                <span className="tracking-wide">
+                  {isConnected && analyses ? 'Analysis Live' : isConnected ? 'Loading Data...' : 'Disconnected'}
+                </span>
               </div>
             </div>
           </div>
@@ -143,6 +144,28 @@ export default function Home() {
             <AnalysisCard analysis={analyses?.NIFTY || null} />
             <AnalysisCard analysis={analyses?.BANKNIFTY || null} />
             <AnalysisCard analysis={analyses?.SENSEX || null} />
+          </div>
+        </div>
+
+        {/* Zone Control Section - NEW */}
+        <div className="mt-6 sm:mt-6 border-2 border-orange-500/30 rounded-2xl p-3 sm:p-4 bg-gradient-to-br from-orange-950/20 via-dark-card/50 to-dark-elevated/40 backdrop-blur-sm shadow-xl shadow-orange-500/10">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-3 sm:mb-4">
+            <div>
+              <h3 className="text-base sm:text-lg lg:text-xl font-bold text-dark-text flex items-center gap-3 tracking-tight">
+                <span className="w-1.5 h-5 sm:h-6 bg-gradient-to-b from-orange-500 to-orange-600 rounded-full shadow-lg shadow-orange-500/30" />
+                Zone Control & Breakdown Risk
+              </h3>
+              <p className="text-dark-tertiary text-xs sm:text-sm mt-1.5 ml-4 sm:ml-5 font-medium tracking-wide">
+                Advanced support/resistance zones • Breakdown risk assessment • Key levels
+              </p>
+            </div>
+          </div>
+
+          {/* Zone Control Cards Grid */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 2xl:grid-cols-3 gap-3 sm:gap-3">
+            <ZoneControlCard symbol="NIFTY" name="NIFTY 50" />
+            <ZoneControlCard symbol="BANKNIFTY" name="BANK NIFTY" />
+            <ZoneControlCard symbol="SENSEX" name="SENSEX" />
           </div>
         </div>
 
@@ -187,69 +210,6 @@ export default function Home() {
             <TrendBaseCard symbol="NIFTY" name="NIFTY 50" />
             <TrendBaseCard symbol="BANKNIFTY" name="BANK NIFTY" />
             <TrendBaseCard symbol="SENSEX" name="SENSEX" />
-          </div>
-        </div>
-
-        {/* Buy-on-Dip Section - With Border */}
-        <div className="mt-6 sm:mt-6 border-2 border-emerald-500/30 rounded-2xl p-3 sm:p-4 bg-gradient-to-br from-emerald-950/20 via-dark-card/50 to-dark-elevated/40 backdrop-blur-sm shadow-xl shadow-emerald-500/10">
-          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-3 sm:mb-4">
-            <div>
-              <h3 className="text-base sm:text-lg lg:text-xl font-bold text-dark-text flex items-center gap-3 tracking-tight">
-                <span className="w-1.5 h-5 sm:h-6 bg-gradient-to-b from-emerald-500 to-green-600 rounded-full shadow-lg shadow-emerald-500/30" />
-                Buy-on-Dip Detection
-              </h3>
-              <p className="text-dark-tertiary text-xs sm:text-sm mt-1.5 ml-4 sm:ml-5 font-medium tracking-wide">
-                Intelligent dip-buying opportunities based on EMA, RSI, VWAP & Volume
-              </p>
-            </div>
-            <div className="flex items-center gap-2 ml-4 sm:ml-0">
-              <div className={`flex items-center gap-2 text-xs sm:text-sm px-4 py-2 rounded-xl border-2 font-bold shadow-lg transition-all duration-300 ${
-                buyOnDipConnected 
-                  ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400 shadow-emerald-500/20' 
-                  : 'bg-gray-700/10 border-gray-700/30 text-gray-400 shadow-gray-700/20'
-              }`}>
-                <span className={`w-2.5 h-2.5 rounded-full ${buyOnDipConnected ? 'bg-emerald-500' : 'bg-gray-600'} animate-pulse`} />
-                <span className="tracking-wide">{buyOnDipConnected ? 'Monitoring' : 'Offline'}</span>
-              </div>
-            </div>
-          </div>
-
-          {/* Buy-on-Dip Cards Grid */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 2xl:grid-cols-3 gap-3 sm:gap-3">
-            <BuyOnDipCard
-              symbol="NIFTY"
-              signal={getSignal('NIFTY')}
-            />
-            <BuyOnDipCard
-              symbol="BANKNIFTY"
-              signal={getSignal('BANKNIFTY')}
-            />
-            <BuyOnDipCard
-              symbol="SENSEX"
-              signal={getSignal('SENSEX')}
-            />
-          </div>
-        </div>
-
-        {/* News/Event Detection Section - Orange Theme */}
-        <div className="mt-6 sm:mt-6 border-2 border-orange-500/30 rounded-2xl p-3 sm:p-4 bg-gradient-to-br from-orange-950/20 via-dark-card/50 to-dark-elevated/40 backdrop-blur-sm shadow-xl shadow-orange-500/10">
-          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-3 sm:mb-4">
-            <div>
-              <h3 className="text-base sm:text-lg lg:text-xl font-bold text-dark-text flex items-center gap-3 tracking-tight">
-                <span className="w-1.5 h-5 sm:h-6 bg-gradient-to-b from-orange-500 to-red-600 rounded-full shadow-lg shadow-orange-500/30" />
-                News/Event Detection
-              </h3>
-              <p className="text-dark-tertiary text-xs sm:text-sm mt-1.5 ml-4 sm:ml-5 font-medium tracking-wide">
-                Real-time market news with sentiment analysis & shock event alerts
-              </p>
-            </div>
-          </div>
-
-          {/* News Detection Cards Grid */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 2xl:grid-cols-3 gap-3 sm:gap-3">
-            <NewsDetectionCard symbol="NIFTY" name="NIFTY 50" />
-            <NewsDetectionCard symbol="BANKNIFTY" name="BANK NIFTY" />
-            <NewsDetectionCard symbol="SENSEX" name="SENSEX" />
           </div>
         </div>
 

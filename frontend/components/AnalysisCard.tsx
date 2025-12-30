@@ -169,7 +169,17 @@ const AnalysisCardContent = memo<AnalysisCardProps>(({ analysis }) => {
         <QuickStat
           label="VOLUME STRENGTH"
           icon={indicators.volume_strength === VolumeStrength.STRONG_VOLUME ? '🚀' : indicators.volume_strength === VolumeStrength.MODERATE_VOLUME ? '📊' : '📉'}
-          value={indicators.volume_strength === VolumeStrength.STRONG_VOLUME ? 'Strong' : indicators.volume_strength === VolumeStrength.MODERATE_VOLUME ? 'Moderate' : 'Low Activity'}
+          value={(() => {
+            const vol = indicators.volume || 0;
+            const strength = indicators.volume_strength;
+            const strengthLabel = strength === VolumeStrength.STRONG_VOLUME ? 'Strong' : strength === VolumeStrength.MODERATE_VOLUME ? 'Moderate' : 'Low';
+            if (vol === 0) return `${strengthLabel} • N/A`;
+            // Format volume: 1M, 10M, 100M, 1B etc.
+            if (vol >= 1e9) return `${strengthLabel} • ${(vol / 1e9).toFixed(2)}B`;
+            if (vol >= 1e6) return `${strengthLabel} • ${(vol / 1e6).toFixed(1)}M`;
+            if (vol >= 1e3) return `${strengthLabel} • ${(vol / 1e3).toFixed(1)}K`;
+            return `${strengthLabel} • ${vol.toLocaleString()}`;
+          })()}
           colorClass={indicators.volume_strength === VolumeStrength.STRONG_VOLUME ? 'text-bullish' : indicators.volume_strength === VolumeStrength.MODERATE_VOLUME ? 'text-neutral' : 'text-dark-tertiary'}
         />
       </div>

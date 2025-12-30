@@ -108,6 +108,13 @@ class VolumePulseEngine:
             # === TREND CLASSIFICATION ===
             trend = self._classify_trend(pulse_score, ratio)
             
+            # DEBUG LOGGING - Show actual values for troubleshooting
+            print(f"[VOLUME-PULSE] {symbol} Analysis:")
+            print(f"   → Green Vol: {green_vol:,} | Red Vol: {red_vol:,}")
+            print(f"   → Green%: {green_pct:.1f}% | Red%: {red_pct:.1f}%")
+            print(f"   → Ratio: {ratio} | Pulse Score: {pulse_score}")
+            print(f"   → Signal: {signal} ({confidence}% conf) | Trend: {trend}")
+            
             # Cache for next iteration (prevent recalculation)
             self._cache[symbol] = (green_vol, red_vol)
             
@@ -137,13 +144,20 @@ class VolumePulseEngine:
         """
         Calculate buying pressure score (0-100)
         Higher = More buying pressure
+        
+        SIMPLIFIED FORMULA:
+        - 70% weight on green/red volume ratio
+        - 30% weight on recent momentum
         """
         score = 0
         
-        # 1. Base score from volume ratio (50 points max)
-        score += int(green_pct / 2)  # Direct percentage mapping
+        # 1. Base score from volume percentage (70 points max)
+        # If 70% green volume → score = 70
+        # If 50% green volume → score = 35
+        # If 30% green volume → score = 21
+        score += int(green_pct * 0.7)  # Direct scaling
         
-        # 2. Recent momentum (30 points max)
+        # 2. Recent momentum bonus (30 points max)
         # Check last 5 candles for acceleration
         if len(recent_df) >= 5:
             last_5 = recent_df.tail(5)
@@ -157,29 +171,19 @@ class VolumePulseEngine:
             if (green_last_5 + red_last_5) > 0:
                 recent_green_pct = green_last_5 / (green_last_5 + red_last_5) * 100
                 
-                # Acceleration bonus
-                if recent_green_pct > green_pct + 10:
-                    score += 30  # Strong acceleration
-                elif recent_green_pct > green_pct + 5:
-                    score += 20  # Moderate acceleration
-                elif recent_green_pct > green_pct:
-                    score += 10  # Slight acceleration
+                # Momentum bonus/penalty
+                momentum_diff = recent_green_pct - green_pct
+                if momentum_diff > 10:
+                    score += 30  # Strong positive momentum
+                elif momentum_diff > 5:
+                    score += 20  # Moderate positive momentum
+                elif momentum_diff > 0:
+                    score += 10  # Slight positive momentum
+                elif momentum_diff < -10:
+                    score -= 10  # Negative momentum (selling pressure increasing)
         
-        # 3. Volume strength (20 points max)
-        total_vol = green_vol + red_vol
-        avg_vol = recent_df['volume'].mean()
-        
-        if avg_vol > 0:
-            vol_strength = (total_vol / len(recent_df)) / avg_vol
-            
-            if vol_strength > 1.5:
-                score += 20  # Very strong volume
-            elif vol_strength > 1.2:
-                score += 15  # Strong volume
-            elif vol_strength > 1.0:
-                score += 10  # Above average
-        
-        return min(max(score, 0), 100)  # Clamp to 0-100
+        # Clamp to 0-100 range
+        return min(max(score, 0), 100)
     
     def _generate_signal(
         self, 
@@ -191,30 +195,34 @@ class VolumePulseEngine:
         """
         Generate trading signal with confidence
         Returns: (signal, confidence)
+        
+        REVISED THRESHOLDS for better signal generation:
+        - BUY: pulse_score >= 55 (was 63)
+        - SELL: pulse_score <= 45 (was 37)
         """
         confidence = 0
         
         # === STRONG BUY CONDITIONS ===
-        if pulse_score >= 75 and ratio > 1.5:
+        if pulse_score >= 70 and ratio > 1.4:
             signal = "BUY"
             confidence = min(pulse_score, 95)
         
-        # === MODERATE BUY ===
-        elif pulse_score >= self._signal_threshold and ratio > 1.2:
+        # === MODERATE BUY (LOWERED THRESHOLD) ===
+        elif pulse_score >= 55 and ratio > 1.1:  # Was 63 and 1.2
             signal = "BUY"
             confidence = pulse_score
         
         # === STRONG SELL CONDITIONS ===
-        elif pulse_score <= 25 and ratio < 0.67:
+        elif pulse_score <= 30 and ratio < 0.7:
             signal = "SELL"
             confidence = min(100 - pulse_score, 95)
         
-        # === MODERATE SELL ===
-        elif pulse_score <= (100 - self._signal_threshold) and ratio < 0.83:
+        # === MODERATE SELL (ADJUSTED THRESHOLD) ===
+        elif pulse_score <= 45 and ratio < 0.9:  # Was 37 and 0.83
             signal = "SELL"
             confidence = 100 - pulse_score
         
-        # === NEUTRAL ===
+        # === NEUTRAL (Narrower band now) ===
         else:
             signal = "NEUTRAL"
             confidence = max(0, 50 - abs(50 - pulse_score))
@@ -222,10 +230,10 @@ class VolumePulseEngine:
         return signal, confidence
     
     def _classify_trend(self, pulse_score: int, ratio: float) -> str:
-        """Classify overall trend"""
-        if pulse_score >= 65 and ratio > 1.3:
+        """Classify overall trend - ADJUSTED for better trend detection"""
+        if pulse_score >= 58 and ratio > 1.15:  # Was 65 and 1.3
             return "BULLISH"
-        elif pulse_score <= 35 and ratio < 0.77:
+        elif pulse_score <= 42 and ratio < 0.87:  # Was 35 and 0.77
             return "BEARISH"
         else:
             return "NEUTRAL"

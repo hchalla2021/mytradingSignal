@@ -17,9 +17,11 @@ settings = get_settings()
 # Indian timezone
 IST = pytz.timezone('Asia/Kolkata')
 
-# Market hours (IST)
-MARKET_OPEN = time(9, 15)   # 9:15 AM
-MARKET_CLOSE = time(15, 30) # 3:30 PM
+# Market hours (IST) - Detailed phases
+PRE_OPEN_START = time(9, 0)      # 9:00 AM - Pre-open session starts
+PRE_OPEN_END = time(9, 15)       # 9:15 AM - Pre-open session ends
+MARKET_OPEN = time(9, 15)        # 9:15 AM - Live trading starts
+MARKET_CLOSE = time(15, 30)      # 3:30 PM - Market closes
 
 # NSE Holidays 2025 (add more as needed)
 NSE_HOLIDAYS_2025 = {
@@ -42,30 +44,46 @@ NSE_HOLIDAYS_2025 = {
 }
 
 
-def is_market_open() -> bool:
-    """Check if Indian stock market is currently open."""
+def get_market_status() -> str:
+    """Get current market status with detailed phases.
+    
+    Returns:
+        - PRE_OPEN: Pre-open session (9:00-9:15 AM) - auction matching
+        - LIVE: Live market trading (9:15 AM - 3:30 PM)
+        - CLOSED: Market closed (after 3:30 PM, weekends, holidays)
+    
+    Note: Data should flow even during PRE_OPEN to show auction prices.
+    """
     now = datetime.now(IST)
+    current_time = now.time()
     
     # Check if weekend (Saturday=5, Sunday=6)
     if now.weekday() >= 5:
-        return False
+        return "CLOSED"
     
     # Check if holiday
     date_str = now.strftime("%Y-%m-%d")
     if date_str in NSE_HOLIDAYS_2025:
-        return False
+        return "CLOSED"
     
-    # Check if within market hours
-    current_time = now.time()
+    # Check market phases
+    if PRE_OPEN_START <= current_time < PRE_OPEN_END:
+        return "PRE_OPEN"
+    
     if MARKET_OPEN <= current_time <= MARKET_CLOSE:
-        return True
+        return "LIVE"
     
-    return False
+    return "CLOSED"
 
 
-def get_market_status() -> str:
-    """Get current market status: LIVE or OFFLINE."""
-    return "LIVE" if is_market_open() else "OFFLINE"
+def is_market_open() -> bool:
+    """Check if market is open (includes PRE_OPEN and LIVE).
+    
+    Returns True during both pre-open (9:00-9:15) and live trading (9:15-15:30).
+    This ensures data continues to flow during auction period.
+    """
+    status = get_market_status()
+    return status in ("PRE_OPEN", "LIVE")
 
 
 # Instrument token to symbol mapping
@@ -77,6 +95,9 @@ TOKEN_SYMBOL_MAP = {
 
 # Previous close prices - ONLY from live Zerodha tick data
 PREV_CLOSE = {}
+
+# Quote volumes - Preserved for indices (since tick volume_traded is 0 for indices)
+QUOTE_VOLUMES = {}
 
 
 class MarketFeedService:
@@ -109,6 +130,16 @@ class MarketFeedService:
             trend = "bearish"
         else:
             trend = "neutral"
+        
+        # Get tick volume (usually 0 for indices)
+        tick_volume = tick.get("volume_traded", 0)
+        
+        # 🔥 FIX: For indices, use preserved quote volume if tick volume is 0
+        volume = tick_volume
+        if tick_volume == 0 and symbol in ["NIFTY", "BANKNIFTY", "SENSEX"]:
+            # Use quote volume from cache (set during startup/refresh)
+            volume = QUOTE_VOLUMES.get(symbol, 0)
+        
         return {
             "symbol": symbol,
             "price": round(ltp, 2),
@@ -118,14 +149,14 @@ class MarketFeedService:
             "low": round(tick.get("ohlc", {}).get("low", ltp), 2),
             "open": round(tick.get("ohlc", {}).get("open", ltp), 2),
             "close": round(tick.get("ohlc", {}).get("close", prev_close), 2),
-            "volume": tick.get("volume_traded", 0),  # Usually 0 for indices in ticks
+            "volume": volume,  # ✅ Uses quote volume for indices
             "oi": tick.get("oi", 0),
             "pcr": 0.0,      # Will be updated by PCR service
             "callOI": 0,     # Will be updated by PCR service
             "putOI": 0,      # Will be updated by PCR service
             "trend": trend,
             "timestamp": datetime.now(IST).isoformat(),
-            "status": get_market_status()
+            "status": get_market_status()  # PRE_OPEN, LIVE, or CLOSED
         }
     
     def _on_ticks(self, ws, ticks):
@@ -252,15 +283,60 @@ class MarketFeedService:
             kite = KiteConnect(api_key=settings.zerodha_api_key)
             kite.set_access_token(settings.zerodha_access_token)
             
-            # Index symbols for quote API
+            # Index symbols for quote API (for price)
             index_symbols = {
                 settings.nifty_token: "NSE:NIFTY 50",
                 settings.banknifty_token: "NSE:NIFTY BANK",
                 settings.sensex_token: "BSE:SENSEX"
             }
             
-            # Fetch quotes (works even when market is closed)
+            # Futures instrument tokens for volume data (indices don't have volume, but futures do!)
+            futures_tokens = {
+                "NIFTY": settings.nifty_fut_token,
+                "BANKNIFTY": settings.banknifty_fut_token,
+                "SENSEX": settings.sensex_fut_token
+            }
+            
+            # Fetch quotes for spot prices (works even when market is closed)
             quotes = kite.quote(list(index_symbols.values()))
+            
+            # 🔥 Fetch futures quotes for volume data
+            # Need to get trading symbols from instruments first, then fetch quotes
+            futures_quotes = {}
+            try:
+                # Fetch all NFO instruments to get trading symbols
+                print("📥 Fetching instruments to find futures trading symbols...")
+                nfo_instruments = kite.instruments("NFO")
+                bfo_instruments = kite.instruments("BFO") if "SENSEX" in futures_tokens else []
+                
+                # Map tokens to trading symbols
+                token_to_symbol = {}
+                for inst in nfo_instruments + bfo_instruments:
+                    token_to_symbol[inst['instrument_token']] = {
+                        'tradingsymbol': inst['tradingsymbol'],
+                        'exchange': inst['exchange']
+                    }
+                
+                # Build quote keys using trading symbols
+                quote_keys = []
+                for symbol, token in futures_tokens.items():
+                    if token and token in token_to_symbol:
+                        inst = token_to_symbol[token]
+                        quote_key = f"{inst['exchange']}:{inst['tradingsymbol']}"
+                        quote_keys.append(quote_key)
+                        print(f"🎯 {symbol} futures: {quote_key} (token={token})")
+                
+                # Fetch quotes
+                if quote_keys:
+                    futures_quotes = kite.quote(quote_keys)
+                    print(f"📊 Fetched futures quotes: {list(futures_quotes.keys())}")
+                else:
+                    print("⚠️ No valid futures trading symbols found")
+                    
+            except Exception as e:
+                print(f"❌ Error fetching futures quotes: {e}")
+                futures_quotes = {}
+            
             
             # Process and cache each symbol's data
             for token, symbol_name in TOKEN_SYMBOL_MAP.items():
@@ -283,6 +359,42 @@ class MarketFeedService:
                     else:
                         trend = "neutral"
                     
+                    # 🔥 FIX: Get volume from futures (indices don't have spot volume)
+                    volume = 0
+                    matched_key = None
+                    
+                    # CRITICAL: Use exact symbol matching with word boundaries
+                    # "NIFTY" should NOT match "BANKNIFTY", "FINNIFTY", etc.
+                    # Look for "NFO:NIFTY25" or "BFO:SENSEX26" at the START after exchange prefix
+                    for fut_key, fut_quote in futures_quotes.items():
+                        # Extract symbol after exchange (NFO: or BFO:)
+                        if ':' in fut_key:
+                            exchange_symbol = fut_key.split(':', 1)[1]  # e.g., "NIFTY25DECFUT" or "SENSEX26JANFUT"
+                            
+                            # Exact match: symbol must be at START of trading symbol
+                            # Check for both 25 (Dec 2025) and 26 (Jan 2026+) contracts
+                            # NIFTY25 matches "NIFTY25DECFUT" but NOT "BANKNIFTY25DECFUT"
+                            # SENSEX26 matches "SENSEX26JANFUT"
+                            if (exchange_symbol.startswith(f"{symbol_name}25") or 
+                                exchange_symbol.startswith(f"{symbol_name}26")) and 'FUT' in exchange_symbol:
+                                volume = fut_quote.get('volume', 0)
+                                matched_key = fut_key
+                                print(f"💹 {symbol_name} futures volume from {fut_key}: {volume:,}")
+                                break
+                    
+                    # Log if no futures contract matched
+                    if volume == 0 and symbol_name == "SENSEX":
+                        print(f"⚠️ SENSEX futures volume not found - check if BFO:SENSEX26JANFUT is in quotes")
+                        print(f"   Configured token: {futures_tokens.get('sensex_fut_token', 'NOT SET')}")
+                    
+                    if volume == 0 and not matched_key and symbol_name != "SENSEX":
+                        print(f"⚠️ No futures contract found for {symbol_name}")
+                        print(f"   Expected: {symbol_name}25DECFUT or {symbol_name}26JANFUT")
+                    
+                    # Store volume in QUOTE_VOLUMES cache for later use
+                    QUOTE_VOLUMES[symbol_name] = volume
+                    print(f"💾 Stored futures volume for {symbol_name}: {volume:,}")
+                    
                     # Create normalized data
                     data = {
                         "symbol": symbol_name,
@@ -293,7 +405,7 @@ class MarketFeedService:
                         "low": round(ohlc['low'], 2),
                         "open": round(ohlc['open'], 2),
                         "close": round(prev_close, 2),
-                        "volume": quote.get('volume', 0),
+                        "volume": volume,  # ✅ From futures, not spot!
                         "oi": quote.get('oi', 0),
                         "pcr": 0.0,  # Will be updated by PCR service
                         "callOI": 0,
@@ -376,6 +488,21 @@ class MarketFeedService:
         """Callback when reconnect fails."""
         print("❌ Reconnect failed")
     
+    async def _fetch_and_cache_last_data_safe(self):
+        """Safely fetch data in background without blocking startup."""
+        try:
+            print("🔄 Fetching last available market data in background...")
+            data_cached = await self._fetch_and_cache_last_data()
+            
+            if data_cached:
+                print("✅ Last market data cached successfully")
+                print("   → UI will show last traded prices even when market is closed")
+            else:
+                print("⚠️ Could not fetch last market data")
+        except Exception as e:
+            print(f"⚠️ Background data fetch failed: {e}")
+            print("   → Will continue with live WebSocket data")
+    
     async def start(self):
         """Start the market feed service."""
         self.running = True
@@ -387,21 +514,13 @@ class MarketFeedService:
             print("⚠️ Set ZERODHA_API_KEY and ZERODHA_ACCESS_TOKEN in .env file")
             return
         
-        # ALWAYS fetch and cache last traded data first (works even when market is closed)
-        print("🔄 Fetching last available market data (works 24/7)...")
-        data_cached = await self._fetch_and_cache_last_data()
-        
-        if data_cached:
-            print("✅ Last market data cached successfully")
-            print("   → UI will show last traded prices even when market is closed")
-        else:
-            print("⚠️ Could not fetch last market data")
+        # ASYNC: Fetch last traded data in background (don't block startup)
+        print("🔄 Starting background data fetch (non-blocking)...")
+        asyncio.create_task(self._fetch_and_cache_last_data_safe())
         
         try:
             # Initialize KiteTicker
             print("🔧 Initializing KiteTicker...")
-            print(f"   API Key: {settings.zerodha_api_key[:10]}...")
-            print(f"   Token: {settings.zerodha_access_token[:20]}...")
             
             self.kws = KiteTicker(
                 settings.zerodha_api_key,
@@ -409,7 +528,6 @@ class MarketFeedService:
             )
             
             # Assign callbacks
-            print("🔌 Setting up callbacks...")
             self.kws.on_ticks = self._on_ticks
             self.kws.on_connect = self._on_connect
             self.kws.on_close = self._on_close
@@ -417,14 +535,12 @@ class MarketFeedService:
             self.kws.on_reconnect = self._on_reconnect
             self.kws.on_noreconnect = self._on_noreconnect
             
-            # Connect (blocking call in thread)
+            # Connect (non-blocking in thread)
             print("🔗 Connecting to Zerodha KiteTicker...")
-            print("⏳ This may take 5-10 seconds...")
             self.kws.connect(threaded=True)
-            print("✅ Connection thread started")
+            print("✅ Connection initiated (running in background)")
             
             # Process tick queue in async loop
-            print("🔄 Starting tick processing loop...")
             last_refresh_time = datetime.now(IST)
             
             while self.running:

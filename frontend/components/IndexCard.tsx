@@ -178,8 +178,20 @@ const IndexCard: React.FC<IndexCardProps> = memo(({ symbol, name, data, isConnec
     if (!isConnected) {
       return <span className="px-2 py-0.5 text-xs font-medium bg-bearish/20 text-bearish rounded-full">OFFLINE</span>;
     }
-    if (data?.status === 'OFFLINE') {
+    if (data?.status === 'CLOSED' || data?.status === 'OFFLINE') {
       return <span className="px-2 py-0.5 text-xs font-medium bg-neutral/20 text-neutral rounded-full">CLOSED</span>;
+    }
+    if (data?.status === 'PRE_OPEN') {
+      return (
+        <div className="flex flex-col items-end gap-0.5">
+          <span className="px-2 py-0.5 text-xs font-medium bg-yellow-500/20 text-yellow-400 rounded-full flex items-center gap-1">
+            <span className="w-1.5 h-1.5 bg-yellow-400 rounded-full animate-pulse" />PRE-OPEN
+          </span>
+          {lastUpdate && (
+            <span className="text-[8px] text-dark-muted font-mono">{lastUpdate}</span>
+          )}
+        </div>
+      );
     }
     return (
       <div className="flex flex-col items-end gap-0.5">
@@ -343,7 +355,15 @@ const IndexCard: React.FC<IndexCardProps> = memo(({ symbol, name, data, isConnec
           <span className="text-[10px] sm:text-xs text-dark-muted font-medium">PCR {data?.pcr ? <span className="text-bullish text-[8px]">●</span> : ''}</span>
           <div className={`flex items-center gap-1.5 ${pcrAnalysis.color}`}>
             <span className="text-sm">{pcrAnalysis.emoji}</span>
-            <span className="font-extrabold text-base sm:text-lg">{data?.pcr?.toFixed(2) || '—'}</span>
+            <span className={`font-extrabold text-base sm:text-lg px-2.5 py-1 rounded-lg border-2 shadow-md ${
+              pcrAnalysis.sentiment === 'bullish' 
+                ? 'bg-green-950/30 border-green-500/40 shadow-green-500/20' 
+                : pcrAnalysis.sentiment === 'bearish'
+                ? 'bg-red-950/30 border-red-500/40 shadow-red-500/20'
+                : 'bg-gray-950/30 border-gray-500/40 shadow-gray-500/20'
+            }`}>
+              {data?.pcr?.toFixed(2) || '—'}
+            </span>
           </div>
         </div>
         

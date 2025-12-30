@@ -79,11 +79,12 @@ export function useMarketSocket() {
         setConnectionStatus('connected');
 
         // Start ping interval
+        const pingInterval = parseInt(process.env.NEXT_PUBLIC_WS_PING_INTERVAL || '25000', 10);
         pingIntervalRef.current = setInterval(() => {
           if (ws.readyState === WebSocket.OPEN) {
             ws.send('ping');
           }
-        }, 25000);
+        }, pingInterval);
       };
 
       ws.onmessage = (event) => {
@@ -132,14 +133,15 @@ export function useMarketSocket() {
           clearInterval(pingIntervalRef.current);
         }
 
-        // Auto-reconnect after 3 seconds (unless it's a clean close)
+        // Auto-reconnect after delay (unless it's a clean close)
         if (event.code !== 1000) {
           setConnectionStatus('connecting'); // Show "Connecting..." instead of "Disconnected"
+          const reconnectDelay = parseInt(process.env.NEXT_PUBLIC_WS_RECONNECT_DELAY || '3000', 10);
           reconnectTimeoutRef.current = setTimeout(() => {
             if (!wsRef.current || wsRef.current.readyState === WebSocket.CLOSED) {
               connect();
             }
-          }, 3000);
+          }, reconnectDelay);
         } else {
           setConnectionStatus('disconnected');
         }
@@ -171,20 +173,21 @@ export function useMarketSocket() {
 
   useEffect(() => {
     // Load cached data from localStorage on mount (client-side only)
+    // This makes the UI instant - shows last data immediately
     try {
       const saved = localStorage.getItem(STORAGE_KEY);
       if (saved) {
         const parsed = JSON.parse(saved) as MarketData;
-        // Mark as offline since this is cached data
-        if (parsed.NIFTY) parsed.NIFTY.status = 'OFFLINE';
-        if (parsed.BANKNIFTY) parsed.BANKNIFTY.status = 'OFFLINE';
-        if (parsed.SENSEX) parsed.SENSEX.status = 'OFFLINE';
+        // Show cached data immediately for instant UI
         setMarketData(parsed);
+        console.log('📊 Loaded cached market data - UI ready instantly');
       }
     } catch (e) {
       console.error('Failed to load cached market data:', e);
     }
     
+    // Connect to WebSocket in background (non-blocking)
+    console.log('🔌 Connecting to market feed in background...');
     connect();
 
     return () => {

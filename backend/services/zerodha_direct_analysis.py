@@ -171,8 +171,13 @@ class ZerodhaDirectAnalysis:
         elif change_pct < -0.3:
             trend = "DOWNTREND"
         
-        # Volume strength
-        vol_strength = "STRONG_VOLUME" if volume > 1000000 else "MODERATE_VOLUME"
+        # Volume strength (different thresholds for indices vs stocks)
+        if symbol in ["NIFTY", "BANKNIFTY", "SENSEX"]:
+            # Index volume thresholds (aggregate volume from quote API)
+            vol_strength = "STRONG_VOLUME" if volume > 200000000 else "MODERATE_VOLUME" if volume > 50000000 else "WEAK_VOLUME"
+        else:
+            # Stock volume thresholds
+            vol_strength = "STRONG_VOLUME" if volume > 5000000 else "MODERATE_VOLUME" if volume > 1000000 else "WEAK_VOLUME"
         
         # VWAP position (simplified)
         vwap_pos = "ABOVE_VWAP" if change_pct > 0 else "BELOW_VWAP"

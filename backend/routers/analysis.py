@@ -15,6 +15,8 @@ from services.cache import get_redis
 from services.websocket_manager import manager
 from config import get_settings
 
+settings = get_settings()
+
 router = APIRouter(prefix="/api/analysis", tags=["analysis"])
 settings = get_settings()
 
@@ -182,8 +184,8 @@ async def websocket_analysis_endpoint(websocket: WebSocket):
         )
         
         while True:
-            # Wait 3 seconds before next update
-            await asyncio.sleep(3)
+            # Wait before next update
+            await asyncio.sleep(settings.analysis_update_interval)
             
             # Get instant analysis for all symbols
             analyses = await get_all_instant_analysis(cache)

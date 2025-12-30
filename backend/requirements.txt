@@ -22,6 +22,7 @@ websockets
 # Utilities
 python-dotenv
 pytz
+watchdog  # For auto-reload token changes
 
 # Trading API
 kiteconnect

@@ -45,7 +45,8 @@ export function useAnalysis(options: UseAnalysisOptions = {}): UseAnalysisReturn
       console.log('🔄 Fetching analysis from:', url);
       
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 5000); // 5 second timeout
+      const timeout = parseInt(process.env.NEXT_PUBLIC_API_TIMEOUT || '5000', 10);
+      const timeoutId = setTimeout(() => controller.abort(), timeout);
       
       const response = await fetch(url, {
         signal: controller.signal,

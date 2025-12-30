@@ -26,6 +26,8 @@ class InstantSignal:
             
             change_percent = float(tick_data.get('changePercent', 0))
             volume = int(tick_data.get('volume', 0))
+            symbol = tick_data.get('symbol', 'UNKNOWN')
+            print(f"[VOLUME-DEBUG] {symbol}: Raw volume from tick_data = {volume:,}")
             high = float(tick_data.get('high', price))
             low = float(tick_data.get('low', price))
             open_price = float(tick_data.get('open', price))
@@ -210,7 +212,21 @@ class InstantSignal:
             else:
                 vwap_pos = 'AT_VWAP'
             
-            vol_strength = 'STRONG_VOLUME' if volume > 5000000 else 'MODERATE_VOLUME' if volume > 1000000 else 'WEAK_VOLUME'
+            # Volume strength classification (different thresholds for indices vs stocks)
+            # NSE INDICES (NFO): Daily futures volume typically 500K-2M contracts
+            # BSE INDICES (BFO): Daily futures volume typically 10K-100K contracts (lower liquidity)
+            # STOCKS: Daily volume typically 1M-50M shares
+            if symbol == "SENSEX":
+                # SENSEX futures (BFO) have lower volume than NSE indices
+                # Strong: >50K, Moderate: >20K, Low: <=20K
+                vol_strength = 'STRONG_VOLUME' if volume > 50000 else 'MODERATE_VOLUME' if volume > 20000 else 'WEAK_VOLUME'
+            elif symbol in ["NIFTY", "BANKNIFTY"]:
+                # NIFTY/BANKNIFTY futures (NFO) have higher volume
+                # Strong: >1M, Moderate: >500K, Low: <=500K
+                vol_strength = 'STRONG_VOLUME' if volume > 1000000 else 'MODERATE_VOLUME' if volume > 500000 else 'WEAK_VOLUME'
+            else:
+                # Stock volume thresholds
+                vol_strength = 'STRONG_VOLUME' if volume > 5000000 else 'MODERATE_VOLUME' if volume > 1000000 else 'WEAK_VOLUME'
             
             # ============================================
             # CALCULATE MOMENTUM INDICATORS - PROFESSIONAL

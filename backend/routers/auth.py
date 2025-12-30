@@ -38,9 +38,39 @@ async def get_login_url():
 
 @router.get("/login")
 async def redirect_to_zerodha():
-    """Redirect to Zerodha login page."""
+    """Redirect to Zerodha login page instantly."""
     login_url = f"{settings.zerodha_api_base_url}/connect/login?v=3&api_key={settings.zerodha_api_key}"
     return RedirectResponse(url=login_url)
+
+
+@router.get("/validate")
+async def validate_token():
+    """Check if current access token is configured.
+    
+    Returns INSTANTLY without making external API calls.
+    WebSocket will handle actual Zerodha connection validation.
+    
+    Returns:
+        - valid: True if token exists
+        - authenticated: True if token is set
+        - message: Status message
+    """
+    if not settings.zerodha_access_token:
+        return {
+            "valid": False,
+            "authenticated": False,
+            "message": "No access token configured"
+        }
+    
+    # Token exists - return immediately without calling Zerodha
+    # Actual validation happens when WebSocket connects
+    return {
+        "valid": True,
+        "authenticated": True,
+        "user_id": "user",  # Placeholder - real validation via WebSocket
+        "user_name": "Authenticated User",
+        "message": "Token configured"
+    }
 
 
 @router.get("/callback")
@@ -58,7 +88,7 @@ async def zerodha_callback(request_token: str = Query(...), status: str = Query(
     
     if status == "error":
         print("❌ Zerodha returned error status")
-        return RedirectResponse(url=f"{settings.frontend_url}/login?status=error")
+        return RedirectResponse(url=f"{settings.frontend_url}/?auth=error&message=Authentication cancelled")
     
     try:
         from kiteconnect import KiteConnect
@@ -96,10 +126,10 @@ async def zerodha_callback(request_token: str = Query(...), status: str = Query(
             print(f"⚠️ Auto-reconnect failed: {e}")
             print("   Backend will use new token on next restart")
         
-        print(f"\n🎉 AUTHENTICATION COMPLETE - Redirecting to frontend...\n")
+        print(f"\n🎉 AUTHENTICATION COMPLETE - Redirecting to dashboard...\n")
         
-        # Redirect back to frontend login page with success status and user info
-        return RedirectResponse(url=f"{settings.frontend_url}/login?status=success&user_id={user_id}&user_name={user_name}")
+        # Redirect to dashboard (home page) with success notification
+        return RedirectResponse(url=f"{settings.frontend_url}/?auth=success&user_id={user_id}&user_name={user_name}")
         
     except Exception as e:
         print(f"\n❌ AUTHENTICATION FAILED")
@@ -108,18 +138,19 @@ async def zerodha_callback(request_token: str = Query(...), status: str = Query(
         import traceback
         print(f"   Traceback:\n{traceback.format_exc()}")
         print(f"\n")
-        # Redirect to frontend with error
+        # Redirect to dashboard with error notification
         error_msg = str(e).replace(' ', '+')  # URL encode spaces
-        return RedirectResponse(url=f"{settings.frontend_url}/login?status=error&message={error_msg}")
+        return RedirectResponse(url=f"{settings.frontend_url}/?auth=error&message={error_msg}")
 
 
 def update_env_file(env_path: str, key: str, value: str):
-    """Update a key in .env file."""
+    """Update a key in .env file with UTF-8 encoding to prevent charmap errors."""
     lines = []
     found = False
     
+    # Use UTF-8 encoding to prevent Windows charmap codec errors
     if os.path.exists(env_path):
-        with open(env_path, 'r') as f:
+        with open(env_path, 'r', encoding='utf-8') as f:
             lines = f.readlines()
     
     for i, line in enumerate(lines):
@@ -131,7 +162,8 @@ def update_env_file(env_path: str, key: str, value: str):
     if not found:
         lines.append(f"{key}={value}\n")
     
-    with open(env_path, 'w') as f:
+    # Write with UTF-8 encoding
+    with open(env_path, 'w', encoding='utf-8') as f:
         f.writelines(lines)
 
 

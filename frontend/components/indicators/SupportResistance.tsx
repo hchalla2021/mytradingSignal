@@ -36,7 +36,9 @@ export const SupportResistance: React.FC<SupportResistanceProps> = ({
       {/* Resistance */}
       <div className="flex items-center justify-between text-xs">
         <span className="text-red-500 font-semibold">RESISTANCE</span>
-        <span className="text-red-500 font-bold">{formatPrice(resistance)}</span>
+        <span className="text-red-400 font-bold px-3 py-1.5 rounded-lg bg-red-950/30 border-2 border-red-500/40 shadow-md shadow-red-500/20">
+          {formatPrice(resistance)}
+        </span>
       </div>
 
       {/* Visual Price Bar */}
@@ -68,7 +70,9 @@ export const SupportResistance: React.FC<SupportResistanceProps> = ({
       {/* Support */}
       <div className="flex items-center justify-between text-xs">
         <span className="text-green-500 font-semibold">SUPPORT</span>
-        <span className="text-green-500 font-bold">{formatPrice(support)}</span>
+        <span className="text-green-400 font-bold px-3 py-1.5 rounded-lg bg-green-950/30 border-2 border-green-500/40 shadow-md shadow-green-500/20">
+          {formatPrice(support)}
+        </span>
       </div>
 
       {/* Previous Day Levels */}

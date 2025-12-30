@@ -1,0 +1,316 @@
+'use client';
+
+import React, { memo, useEffect, useState } from 'react';
+import { Target, Shield, AlertOctagon, TrendingDown, TrendingUp, CircleDot } from 'lucide-react';
+
+interface Zone {
+  level: number;
+  touches: number;
+  volume_strength: number;
+  distance_pct: number;
+  strength: number;
+  active: boolean;
+}
+
+interface ZoneControlData {
+  symbol: string;
+  current_price: number;
+  zones: {
+    support: Zone[];
+    resistance: Zone[];
+  };
+  nearest_zones: {
+    support: {
+      level: number | null;
+      distance_pct: number | null;
+      strength: number;
+      touches: number;
+    };
+    resistance: {
+      level: number | null;
+      distance_pct: number | null;
+      strength: number;
+      touches: number;
+    };
+  };
+  risk_metrics: {
+    breakdown_risk: number;
+    bounce_probability: number;
+    zone_strength: string;
+  };
+  signal: string;
+  confidence: number;
+  recommendation: string;
+  timestamp: string;
+  status?: string;  // LIVE, HISTORICAL, ERROR
+  message?: string;  // Status message
+  candles_analyzed?: number;
+}
+
+interface ZoneControlCardProps {
+  symbol: string;
+  name: string;
+}
+
+const ZoneControlCard = memo<ZoneControlCardProps>(({ symbol, name }) => {
+  const [data, setData] = useState<ZoneControlData | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const fetchData = async () => {
+      try {
+        const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000';
+        const response = await fetch(`${apiUrl}/api/advanced/zone-control/${symbol}`);
+        if (!response.ok) throw new Error('Failed to fetch');
+        const result = await response.json();
+        setData(result);
+        setError(null);
+      } catch (err) {
+        setError('Data unavailable');
+        console.error(`[ZONE-CONTROL] Error fetching ${symbol}:`, err);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchData();
+    const refreshInterval = parseInt(process.env.NEXT_PUBLIC_REFRESH_INTERVAL || '5000', 10);
+    const interval = setInterval(fetchData, refreshInterval);
+
+    return () => clearInterval(interval);
+  }, [symbol]);
+
+  const getSignalColor = (signal: string) => {
+    if (signal === 'BUY_ZONE') return 'text-emerald-400';
+    if (signal === 'SELL_ZONE') return 'text-rose-400';
+    return 'text-amber-400';
+  };
+
+  const getSignalBg = (signal: string) => {
+    if (signal === 'BUY_ZONE') return 'bg-emerald-500/10 border-emerald-500/30';
+    if (signal === 'SELL_ZONE') return 'bg-rose-500/10 border-rose-500/30';
+    return 'bg-amber-500/10 border-amber-500/30';
+  };
+
+  const getRiskColor = (risk: number) => {
+    if (risk >= 70) return 'text-rose-500';
+    if (risk >= 50) return 'text-amber-500';
+    return 'text-emerald-500';
+  };
+
+  const getBounceColor = (prob: number) => {
+    if (prob >= 70) return 'text-emerald-500';
+    if (prob >= 50) return 'text-amber-500';
+    return 'text-rose-500';
+  };
+
+  const getZoneStrengthColor = (strength: string) => {
+    if (strength === 'STRONG') return 'text-emerald-400';
+    if (strength === 'MODERATE') return 'text-amber-400';
+    return 'text-rose-400';
+  };
+
+  const formatPrice = (price: number | null): string => {
+    if (price === null) return 'N/A';
+    return `₹${price.toFixed(2)}`;
+  };
+
+  if (loading) {
+    return (
+      <div className="bg-dark-card border-2 border-emerald-500/30 rounded-lg p-3 sm:p-4 animate-pulse shadow-lg shadow-emerald-500/10">
+        <div className="h-32 bg-dark-border rounded"></div>
+      </div>
+    );
+  }
+
+  if (error || !data) {
+    return (
+      <div className="bg-dark-card border-2 border-emerald-500/30 rounded-lg p-3 sm:p-4 shadow-lg shadow-emerald-500/10">
+        <div className="flex items-center gap-2 text-dark-muted text-sm">
+          <AlertOctagon className="w-4 h-4" />
+          <span>{name} - {error}</span>
+        </div>
+      </div>
+    );
+  }
+
+  const { current_price, nearest_zones, risk_metrics, signal, confidence, recommendation, status, message, candles_analyzed } = data;
+
+  return (
+    <div className="bg-dark-card border-2 border-emerald-500/30 rounded-lg p-3 sm:p-4 hover:border-emerald-400/50 hover:shadow-emerald-500/20 transition-all shadow-lg shadow-emerald-500/10">
+      {/* Header with unique styling */}
+      <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center gap-2">
+          <Target className="w-4 h-4 text-emerald-400 animate-pulse" />
+          <h3 className="text-xs sm:text-sm font-black text-emerald-400 tracking-wide">{name}</h3>
+        </div>
+        <div className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-black border ${getSignalBg(signal)} ${getSignalColor(signal)}`}>
+          {signal === 'BUY_ZONE' && <Shield className="w-3.5 h-3.5" />}
+          {signal === 'SELL_ZONE' && <AlertOctagon className="w-3.5 h-3.5" />}
+          {signal === 'NEUTRAL' && <CircleDot className="w-3.5 h-3.5" />}
+          <span>{signal.replace('_', ' ')}</span>
+        </div>
+      </div>
+
+      {/* Status Message - Show if market is closed or data is historical */}
+      {status && status !== 'LIVE' && (
+        <div className={`mb-3 p-2 rounded-lg text-[10px] font-bold ${
+          status === 'HISTORICAL' ? 'bg-amber-500/10 text-amber-400 border border-amber-500/30' : 
+          'bg-rose-500/10 text-rose-400 border border-rose-500/30'
+        }`}>
+          {status === 'HISTORICAL' && '📊 Last available data - Market closed'}
+          {status === 'ERROR' && '⚠️ Unable to fetch data'}
+          {candles_analyzed && candles_analyzed > 0 && ` • ${candles_analyzed} candles analyzed`}
+        </div>
+      )}
+
+      {/* Live Status Indicator */}
+      {status === 'LIVE' && (
+        <div className="mb-3 p-2 rounded-lg bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 text-[10px] font-bold flex items-center gap-2">
+          <span className="w-2 h-2 bg-emerald-400 rounded-full animate-pulse"></span>
+          LIVE DATA • {candles_analyzed} candles
+        </div>
+      )}
+
+      {/* Current Price - Bold Display */}
+      <div className="mb-4 p-3 bg-gradient-to-br from-emerald-500/5 to-emerald-500/10 rounded-lg border border-emerald-500/20">
+        <p className="text-[10px] text-emerald-400 font-black mb-1">💰 CURRENT PRICE</p>
+        <p className="text-xl sm:text-2xl font-black text-white tracking-tight">{formatPrice(current_price)}</p>
+      </div>
+
+      {/* Zone Information - Dual Panel */}
+      <div className="grid grid-cols-2 gap-3 mb-4">
+        {/* Support Zone */}
+        <div className="bg-dark-bg rounded-lg p-3 border border-emerald-500/20">
+          <div className="flex items-center gap-1.5 mb-2">
+            <Shield className="w-3.5 h-3.5 text-emerald-400" />
+            <p className="text-[9px] sm:text-[10px] text-emerald-400 font-black">SUPPORT</p>
+          </div>
+          {nearest_zones.support.level !== null ? (
+            <>
+              <p className="text-base sm:text-lg font-black text-emerald-400 mb-1">
+                {formatPrice(nearest_zones.support.level)}
+              </p>
+              <div className="space-y-1">
+                <div className="flex justify-between items-center">
+                  <span className="text-[8px] text-dark-muted font-bold">Distance</span>
+                  <span className="text-[9px] font-black text-white">
+                    {Math.abs(nearest_zones.support.distance_pct || 0).toFixed(2)}%
+                  </span>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-[8px] text-dark-muted font-bold">Strength</span>
+                  <span className="text-[9px] font-black text-emerald-400">
+                    {nearest_zones.support.strength}
+                  </span>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-[8px] text-dark-muted font-bold">Touches</span>
+                  <span className="text-[9px] font-black text-white">
+                    {nearest_zones.support.touches}x
+                  </span>
+                </div>
+              </div>
+            </>
+          ) : (
+            <p className="text-xs text-dark-muted font-semibold">No active support</p>
+          )}
+        </div>
+
+        {/* Resistance Zone */}
+        <div className="bg-dark-bg rounded-lg p-3 border border-rose-500/20">
+          <div className="flex items-center gap-1.5 mb-2">
+            <AlertOctagon className="w-3.5 h-3.5 text-rose-400" />
+            <p className="text-[9px] sm:text-[10px] text-rose-400 font-black">RESISTANCE</p>
+          </div>
+          {nearest_zones.resistance.level !== null ? (
+            <>
+              <p className="text-base sm:text-lg font-black text-rose-400 mb-1">
+                {formatPrice(nearest_zones.resistance.level)}
+              </p>
+              <div className="space-y-1">
+                <div className="flex justify-between items-center">
+                  <span className="text-[8px] text-dark-muted font-bold">Distance</span>
+                  <span className="text-[9px] font-black text-white">
+                    {Math.abs(nearest_zones.resistance.distance_pct || 0).toFixed(2)}%
+                  </span>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-[8px] text-dark-muted font-bold">Strength</span>
+                  <span className="text-[9px] font-black text-rose-400">
+                    {nearest_zones.resistance.strength}
+                  </span>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span className="text-[8px] text-dark-muted font-bold">Touches</span>
+                  <span className="text-[9px] font-black text-white">
+                    {nearest_zones.resistance.touches}x
+                  </span>
+                </div>
+              </div>
+            </>
+          ) : (
+            <p className="text-xs text-dark-muted font-semibold">No active resistance</p>
+          )}
+        </div>
+      </div>
+
+      {/* Risk Metrics - Triple Display */}
+      <div className="grid grid-cols-3 gap-2 mb-3 p-3 bg-gradient-to-r from-emerald-500/5 via-amber-500/5 to-rose-500/5 rounded-lg border border-emerald-500/20">
+        <div className="text-center">
+          <div className="flex items-center justify-center gap-1 mb-1">
+            <TrendingDown className={`w-3 h-3 ${getRiskColor(risk_metrics.breakdown_risk)}`} />
+            <p className="text-[8px] sm:text-[9px] text-dark-muted font-black">BREAKDOWN</p>
+          </div>
+          <p className={`text-sm sm:text-base font-black ${getRiskColor(risk_metrics.breakdown_risk)}`}>
+            {risk_metrics.breakdown_risk}%
+          </p>
+        </div>
+
+        <div className="text-center border-x border-emerald-500/20">
+          <div className="flex items-center justify-center gap-1 mb-1">
+            <TrendingUp className={`w-3 h-3 ${getBounceColor(risk_metrics.bounce_probability)}`} />
+            <p className="text-[8px] sm:text-[9px] text-dark-muted font-black">BOUNCE</p>
+          </div>
+          <p className={`text-sm sm:text-base font-black ${getBounceColor(risk_metrics.bounce_probability)}`}>
+            {risk_metrics.bounce_probability}%
+          </p>
+        </div>
+
+        <div className="text-center">
+          <p className="text-[8px] sm:text-[9px] text-dark-muted font-black mb-1">ZONE</p>
+          <p className={`text-xs sm:text-sm font-black ${getZoneStrengthColor(risk_metrics.zone_strength)}`}>
+            {risk_metrics.zone_strength}
+          </p>
+        </div>
+      </div>
+
+      {/* Bottom Stats with Confidence */}
+      <div className="flex items-center justify-between pt-3 border-t border-emerald-500/20">
+        <div>
+          <p className="text-[9px] text-emerald-400 font-black mb-0.5">CONFIDENCE</p>
+          <div className="flex items-center gap-2">
+            <p className="text-base font-black text-white">{confidence}%</p>
+            <div className="w-16 bg-dark-border rounded-full h-1.5 overflow-hidden">
+              <div
+                className={`h-full ${confidence >= 70 ? 'bg-emerald-500' : confidence >= 50 ? 'bg-amber-500' : 'bg-rose-500'}`}
+                style={{ width: `${confidence}%` }}
+              ></div>
+            </div>
+          </div>
+        </div>
+        <div className="text-right max-w-[60%]">
+          <p className="text-[8px] text-dark-muted font-black mb-0.5">RECOMMENDATION</p>
+          <p className="text-[9px] font-bold text-emerald-400 line-clamp-2">
+            {recommendation}
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+});
+
+ZoneControlCard.displayName = 'ZoneControlCard';
+
+export default ZoneControlCard;

@@ -3,10 +3,12 @@ import asyncio
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, HTTPException
 from datetime import datetime
 
+from config import get_settings
 from services.websocket_manager import manager
 from services.cache import CacheService
 
 router = APIRouter()
+settings = get_settings()
 
 
 @router.get("/cache/{symbol}")
@@ -44,6 +46,22 @@ async def market_websocket(websocket: WebSocket):
     try:
         # Send initial market data snapshot
         initial_data = await cache.get_all_market_data()
+        
+        # ✅ INSTANT FIX: Generate analysis for cached data if missing
+        try:
+            from services.instant_analysis import InstantSignal
+            for symbol, data in initial_data.items():
+                if data and not data.get("analysis"):
+                    print(f"🔍 Generating analysis for cached {symbol} data...")
+                    analysis_result = InstantSignal.analyze_tick(data)
+                    if analysis_result:
+                        data["analysis"] = analysis_result
+                        # Update cache with analysis
+                        await cache.set_market_data(symbol, data)
+                        print(f"✅ Analysis generated and cached for {symbol}")
+        except Exception as e:
+            print(f"⚠️ Could not generate analysis for cached data: {e}")
+        
         await manager.send_personal(websocket, {
             "type": "snapshot",
             "data": initial_data,
@@ -53,7 +71,7 @@ async def market_websocket(websocket: WebSocket):
         # Start heartbeat task
         async def heartbeat():
             while True:
-                await asyncio.sleep(30)
+                await asyncio.sleep(settings.ws_ping_interval)
                 try:
                     await manager.send_personal(websocket, {
                         "type": "heartbeat",
@@ -70,7 +88,7 @@ async def market_websocket(websocket: WebSocket):
             try:
                 data = await asyncio.wait_for(
                     websocket.receive_text(),
-                    timeout=60.0
+                    timeout=float(settings.ws_timeout)
                 )
                 
                 # Handle ping from client

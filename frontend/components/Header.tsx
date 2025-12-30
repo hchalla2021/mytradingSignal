@@ -1,16 +1,18 @@
 'use client';
 
 import React, { useState, useEffect, memo } from 'react';
-import { Activity, TrendingUp } from 'lucide-react';
+import { Activity, TrendingUp, Loader2 } from 'lucide-react';
+import { useAuth } from '@/hooks/useAuth';
 
 interface HeaderProps {
   isConnected: boolean;
-  marketStatus: 'LIVE' | 'OFFLINE' | 'DEMO';
+  marketStatus: 'LIVE' | 'PRE_OPEN' | 'CLOSED' | 'OFFLINE' | 'DEMO';
 }
 
 const Header: React.FC<HeaderProps> = memo(({ isConnected, marketStatus }) => {
   const [currentTime, setCurrentTime] = useState<string>('');
   const [currentDate, setCurrentDate] = useState<string>('');
+  const { isAuthenticated, isValidating, user, login } = useAuth();
 
   useEffect(() => {
     const updateTime = () => {
@@ -73,21 +75,40 @@ const Header: React.FC<HeaderProps> = memo(({ isConnected, marketStatus }) => {
 
           {/* Live Status - Based on actual market data from Zerodha */}
           <div className="flex items-center gap-1.5 sm:gap-2 flex-shrink-0">
-            {/* Zerodha Login Button */}
-            {!isConnected && (
-              <a 
-                href="/login"
-                className="flex items-center gap-1 px-2 py-1.5 sm:px-2.5 sm:py-1.5 rounded-lg border-2 bg-gradient-to-r from-blue-500/10 to-indigo-500/10 border-blue-400/30 hover:border-blue-400/50 transition-all"
+            {/* Zerodha Login Button - Shows only when not authenticated */}
+            {!isAuthenticated && !isValidating && (
+              <button
+                onClick={login}
+                className="flex items-center gap-1.5 px-2.5 py-1.5 sm:px-3 sm:py-2 rounded-lg border-2 bg-gradient-to-r from-blue-500/10 to-indigo-500/10 border-blue-400/30 hover:border-blue-400/50 hover:bg-blue-500/20 transition-all active:scale-95 shadow-lg shadow-blue-500/10"
               >
                 <span className="text-[9px] sm:text-xs font-bold tracking-wider text-blue-300">
                   🔑 LOGIN
                 </span>
-              </a>
+              </button>
+            )}
+            
+            {/* Validating State */}
+            {isValidating && (
+              <div className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border-2 border-blue-400/20 bg-blue-500/5">
+                <Loader2 className="w-3 h-3 sm:w-3.5 sm:h-3.5 animate-spin text-blue-400" />
+                <span className="text-[8px] sm:text-[10px] font-medium text-blue-300/80">Checking...</span>
+              </div>
+            )}
+            
+            {/* Authenticated User Badge */}
+            {isAuthenticated && user && (
+              <div className="hidden sm:flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border-2 border-green-400/30 bg-green-500/10">
+                <div className="w-2 h-2 rounded-full bg-green-400 animate-pulse" />
+                <span className="text-[10px] font-semibold text-green-300 truncate max-w-[100px]">
+                  {user.userName || user.userId}
+                </span>
+              </div>
             )}
             
             {(() => {
               const isMarketLive = marketStatus === 'LIVE' && isConnected;
-              const isMarketClosed = marketStatus === 'OFFLINE';
+              const isPreOpen = marketStatus === 'PRE_OPEN' && isConnected;
+              const isMarketClosed = marketStatus === 'CLOSED' || marketStatus === 'OFFLINE';
               const isDemo = marketStatus === 'DEMO';
               const isDisconnected = !isConnected;
 
@@ -114,6 +135,14 @@ const Header: React.FC<HeaderProps> = memo(({ isConnected, marketStatus }) => {
                   dotClass: 'bg-teal-400 animate-pulse shadow-lg shadow-teal-400/50',
                   textClass: 'text-teal-300',
                   label: 'LIVE'
+                };
+              } else if (isPreOpen) {
+                statusConfig = {
+                  bgClass: 'bg-gradient-to-r from-yellow-500/10 to-amber-500/10',
+                  borderClass: 'border-yellow-400/30 shadow-lg shadow-yellow-500/10',
+                  dotClass: 'bg-yellow-400 animate-pulse shadow-lg shadow-yellow-400/50',
+                  textClass: 'text-yellow-300',
+                  label: 'PRE-OPEN'
                 };
               } else if (isMarketClosed) {
                 statusConfig = {
