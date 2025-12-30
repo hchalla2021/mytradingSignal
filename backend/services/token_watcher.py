@@ -7,6 +7,7 @@ import asyncio
 import os
 from datetime import datetime
 from pathlib import Path
+from threading import Thread
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 import pytz
@@ -28,7 +29,28 @@ class TokenWatcher(FileSystemEventHandler):
     def on_modified(self, event):
         """Called when .env file is modified"""
         if event.src_path.endswith('.env'):
-            asyncio.create_task(self._check_and_reload_token())
+            # Run async task in a thread-safe way
+            Thread(target=self._trigger_token_check).start()
+    
+    def _trigger_token_check(self):
+        """Thread-safe wrapper to trigger async token check"""
+        try:
+            # Get or create event loop
+            try:
+                loop = asyncio.get_event_loop()
+            except RuntimeError:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+            
+            # Run the async check
+            if loop.is_running():
+                # If loop is already running, schedule the task
+                asyncio.run_coroutine_threadsafe(self._check_and_reload_token(), loop)
+            else:
+                # If no loop is running, run it directly
+                loop.run_until_complete(self._check_and_reload_token())
+        except Exception as e:
+            print(f"⚠️ Error triggering token check: {e}")
     
     async def _check_and_reload_token(self):
         """Check if token changed and reload if needed"""
