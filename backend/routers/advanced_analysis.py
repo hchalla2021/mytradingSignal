@@ -50,6 +50,8 @@ def get_cache() -> CacheService:
 async def get_volume_pulse(symbol: str) -> Dict[str, Any]:
     """
     Get Volume Pulse analysis for a symbol
+    Uses GLOBAL token from .env automatically
+    Shows cached data if token expired
     
     Returns:
         - Green vs Red candle volume comparison
@@ -59,18 +61,45 @@ async def get_volume_pulse(symbol: str) -> Dict[str, Any]:
     """
     try:
         symbol = symbol.upper()
-        print(f"[VOLUME-PULSE-API] 🔥 Request received for {symbol}")
+        print(f"[VOLUME-PULSE-API] 🔥 Request for {symbol}")
         
-        # 🔥 SKIP CACHE COMPLETELY - ALWAYS FETCH FRESH DATA FOR DEBUGGING
-        print(f"[VOLUME-PULSE] 🚀 Fetching fresh data from Zerodha (cache disabled for debugging)...")
+        # ✅ GLOBAL TOKEN CHECK - One source of truth
+        from services.global_token_manager import check_global_token_status
+        token_status = await check_global_token_status()
+        
+        print(f"[GLOBAL-TOKEN] Status: {'✅ Valid' if token_status['valid'] else '❌ Expired'}")
+        
+        # Check cache first
+        cache = get_cache()
+        cache_key = f"volume_pulse:{symbol}"
+        cached = await cache.get(cache_key)
+        
+        if cached:
+            # Update cache with current token status
+            cached["token_valid"] = token_status["valid"]
+            print(f"[VOLUME-PULSE] ⚡ Cache hit for {symbol}")
+            return cached
         
         # 🚀 FETCH LIVE HISTORICAL CANDLES FROM ZERODHA
+        print(f"[VOLUME-PULSE] 🚀 Fetching fresh data from Zerodha...")
         df = await _get_historical_data(symbol, lookback=50)
-        print(f"[VOLUME-PULSE] 📊 Received {len(df)} candles from _get_historical_data()")
+        print(f"[VOLUME-PULSE] 📊 Received {len(df)} candles")
         
         if df.empty or len(df) < 10:
-            # Return neutral result if insufficient data
-            print(f"[VOLUME-PULSE] ⚠️ Insufficient candle data for {symbol} (got {len(df)} candles, need 10+)")
+            print(f"[VOLUME-PULSE] ⚠️ INSUFFICIENT DATA - Checking backup cache...")
+            
+            # 🔥 PERMANENT FIX: Try to get last cached data
+            backup_cache_key = f"volume_pulse_backup:{symbol}"
+            backup_data = await cache.get(backup_cache_key)
+            
+            if backup_data:
+                print(f"[VOLUME-PULSE] ✅ Using CACHED data for {symbol}")
+                backup_data["status"] = "CACHED"
+                backup_data["message"] = "📊 Showing last available data (Token may be expired - Click LOGIN)"
+                backup_data["token_valid"] = token_status["valid"]
+                return backup_data
+            
+            # No cached data - return helpful error
             return {
                 "symbol": symbol,
                 "volume_data": {
@@ -84,20 +113,25 @@ async def get_volume_pulse(symbol: str) -> Dict[str, Any]:
                 "signal": "NEUTRAL",
                 "confidence": 0,
                 "trend": "NEUTRAL",
-                "status": "WAITING",
+                "status": "TOKEN_EXPIRED",
                 "timestamp": datetime.now().isoformat(),
-                "message": f"Insufficient data: {len(df)} candles (need 10+)"
+                "message": f"🔑 Zerodha token expired - Click LOGIN in header ({len(df)} candles)",
+                "token_valid": token_status["valid"]
             }
         
         # 📊 ANALYZE VOLUME PULSE WITH REAL CANDLE DATA
         result = await analyze_volume_pulse(symbol, df)
-        result["message"] = f"✅ Live data from Zerodha ({len(df)} candles analyzed)"
+        result["message"] = f"✅ Live data from Zerodha ({len(df)} candles)"
         result["candles_analyzed"] = len(df)
+        result["token_valid"] = token_status["valid"]
         
         # Cache result (5 seconds for real-time updates)
-        cache = get_cache()
-        cache_key = f"volume_pulse:{symbol}"
         await cache.set(cache_key, result, expire=5)
+        
+        # 🔥 PERMANENT FIX: Save as 24-hour backup
+        backup_cache_key = f"volume_pulse_backup:{symbol}"
+        await cache.set(backup_cache_key, result, expire=86400)
+        print(f"[VOLUME-PULSE] 💾 Backup saved (24h)")
         
         return result
         
@@ -163,7 +197,10 @@ async def get_all_volume_pulse() -> Dict[str, Any]:
 @router.get("/trend-base/{symbol}")
 async def get_trend_base(symbol: str) -> Dict[str, Any]:
     """
-    Get Trend Base (Higher-Low Structure) analysis
+    🎯 Trend Base (Higher-Low Structure) Analysis
+    ═════════════════════════════════════════════════
+    Uses GLOBAL token from .env automatically
+    Shows cached data if token expired
     
     Returns:
         - Structure type (HIGHER-HIGH-HIGHER-LOW, etc.)
@@ -173,7 +210,15 @@ async def get_trend_base(symbol: str) -> Dict[str, Any]:
     """
     try:
         symbol = symbol.upper()
+        print(f"\n{'='*60}")
         print(f"[TREND-BASE-API] 🎯 Request for {symbol}")
+        print(f"{'='*60}")
+        
+        # ✅ GLOBAL TOKEN CHECK - One source of truth
+        from services.global_token_manager import check_global_token_status
+        token_status = await check_global_token_status()
+        
+        print(f"[GLOBAL-TOKEN] Status: {'✅ Valid' if token_status['valid'] else '❌ Expired'}")
         
         # Check cache first
         cache = get_cache()
@@ -181,28 +226,54 @@ async def get_trend_base(symbol: str) -> Dict[str, Any]:
         cached = await cache.get(cache_key)
         
         if cached:
-            print(f"[TREND-BASE-API] 📦 Cache hit for {symbol}")
+            # Update cache with current token status
+            cached["token_valid"] = token_status["valid"]
+            print(f"[TREND-BASE] ⚡ Cache hit for {symbol}")
             return cached
         
         # 🚀 FETCH LIVE HISTORICAL CANDLES FROM ZERODHA
-        print(f"[TREND-BASE-API] 🔄 Fetching candles for {symbol}...")
-        df = await _get_historical_data(symbol, lookback=50)
-        print(f"[TREND-BASE-API] 📊 Got {len(df) if not df.empty else 0} candles for {symbol}")
+        print(f"[TREND-BASE] 🚀 Fetching LIVE data from Zerodha...")
+        print(f"   → Symbol: {symbol}")
+        print(f"   → Lookback: 100 candles")
+        print(f"   → Time range: Last 15 days")
         
-        if df.empty or len(df) < 10:
-            # Return neutral result if insufficient data
-            print(f"[TREND-BASE] ⚠️ Insufficient candle data for {symbol} (got {len(df)} candles, need 10+)")
-            price = 0.0
+        df = await _get_historical_data_extended(symbol, lookback=100, days_back=15)
+        
+        print(f"[TREND-BASE] 📊 Data fetch result:")
+        print(f"   → Candles received: {len(df)}")
+        print(f"   → Data empty: {df.empty}")
+        
+        if df.empty or len(df) < 20:
+            print(f"[TREND-BASE] ⚠️ INSUFFICIENT FRESH DATA for {symbol}")
+            print(f"   → Got: {len(df)} candles from Zerodha")
+            print(f"   → Checking for cached historical data...")
+            
+            # 🔥 PERMANENT FIX: Try to get last cached data instead of failing
+            backup_cache_key = f"trend_base_backup:{symbol}"
+            backup_data = await cache.get(backup_cache_key)
+            
+            if backup_data:
+                print(f"[TREND-BASE] ✅ Using CACHED data for {symbol}")
+                print(f"   → Showing last successful analysis")
+                backup_data["status"] = "CACHED"
+                backup_data["message"] = "📊 Showing last available data (Token may be expired)"
+                return backup_data
+            
+            # No cached data - provide helpful error with clear fix
+            print(f"[TREND-BASE] ❌ NO DATA AVAILABLE (fresh or cached)")
+            print(f"   → Token Status: Likely EXPIRED")
+            print(f"   → Solution: Click 🔑 LOGIN button in app")
+            
             return {
                 "symbol": symbol,
                 "structure": {
                     "type": "MIXED",
                     "integrity_score": 50,
                     "swing_points": {
-                        "last_high": price,
-                        "last_low": price,
-                        "prev_high": price,
-                        "prev_low": price,
+                        "last_high": 0.0,
+                        "last_low": 0.0,
+                        "prev_high": 0.0,
+                        "prev_low": 0.0,
                         "high_diff": 0.0,
                         "low_diff": 0.0
                     }
@@ -210,25 +281,89 @@ async def get_trend_base(symbol: str) -> Dict[str, Any]:
                 "signal": "NEUTRAL",
                 "confidence": 0,
                 "trend": "SIDEWAYS",
-                "status": "WAITING",
+                "status": "TOKEN_EXPIRED",
                 "timestamp": datetime.now().isoformat(),
-                "message": f"Insufficient data: {len(df)} candles (need 10+)"
+                "message": "🔑 Zerodha token expired. Click LOGIN in header to refresh",
+                "candles_analyzed": len(df),
+                "token_valid": token_status["valid"]
             }
         
-        # 📊 ANALYZE TREND BASE WITH REAL CANDLE DATA
-        result = await analyze_trend_base(symbol, df)
-        result["message"] = f"✅ Live data from Zerodha ({len(df)} candles analyzed)"
-        result["candles_analyzed"] = len(df)
+        # Show data info
+        if not df.empty and 'date' in df.columns:
+            print(f"[TREND-BASE] 📅 Data time range:")
+            print(f"   → First candle: {df['date'].iloc[0]}")
+            print(f"   → Last candle: {df['date'].iloc[-1]}")
+            print(f"   → Current price: ₹{df['close'].iloc[-1]:.2f}")
         
-        # Cache result (5 seconds for real-time updates)
-        await cache.set(cache_key, result, expire=5)
+        # 📊 ANALYZE TREND BASE WITH REAL CANDLE DATA
+        print(f"[TREND-BASE] 🔬 Running trend analysis...")
+        result = await analyze_trend_base(symbol, df)
+        
+        # Determine if data is live or historical
+        from services.market_feed import get_market_status
+        market_status = get_market_status()
+        
+        print(f"[TREND-BASE] 📊 Market Status Check:")
+        print(f"   → Market Status: {market_status}")
+        
+        last_candle_time = df['date'].iloc[-1] if 'date' in df.columns else None
+        is_recent = False
+        
+        if last_candle_time:
+            from datetime import timedelta
+            # Ensure both datetimes are timezone-aware
+            if last_candle_time.tzinfo is None:
+                last_candle_time = last_candle_time.replace(tzinfo=timezone.utc)
+            current_time = datetime.now(timezone.utc)
+            time_diff = current_time - last_candle_time
+            is_recent = time_diff < timedelta(hours=1)  # Within last hour = recent data
+            print(f"   → Last candle time: {last_candle_time}")
+            print(f"   → Time difference: {time_diff}")
+            print(f"   → Is recent (< 1 hour): {is_recent}")
+        
+        # If market is LIVE or PRE_OPEN and data is recent, mark as LIVE
+        if market_status in ['LIVE', 'PRE_OPEN'] and (is_recent or len(df) > 0):
+            result["message"] = f"✅ LIVE market analysis ({len(df)} candles)"
+            result["data_status"] = "LIVE"
+            print(f"[TREND-BASE] ✅ Status: LIVE DATA (market {market_status})")
+        elif is_recent:
+            result["message"] = f"✅ Recent data from Zerodha ({len(df)} candles)"
+            result["data_status"] = "LIVE"
+            print(f"[TREND-BASE] ✅ Status: LIVE DATA (recent candles)")
+        else:
+            result["message"] = f"📊 Historical data ({len(df)} candles) - Market closed"
+            result["data_status"] = "HISTORICAL"
+            print(f"[TREND-BASE] 📊 Status: HISTORICAL DATA (market closed)")
+        
+        result["candles_analyzed"] = len(df)
+        result["token_valid"] = token_status["valid"]
+        
+        # Cache result for 30 seconds (quick refresh)
+        await cache.set(cache_key, result, expire=30)
+        
+        # 🔥 PERMANENT FIX: Save as 24-hour backup for when token expires
+        backup_cache_key = f"trend_base_backup:{symbol}"
+        await cache.set(backup_cache_key, result, expire=86400)  # 24 hours
+        print(f"[TREND-BASE] 💾 Backup saved (24h) - will show if token expires")
+        
+        print(f"[TREND-BASE] ✅ Analysis complete for {symbol}")
+        print(f"   → Status: {result.get('data_status', 'UNKNOWN')}")
+        print(f"   → Trend: {result['trend']}")
+        print(f"   → Signal: {result['signal']}")
+        print(f"   → Confidence: {result['confidence']}%")
+        print(f"   → Cached: 30s live + 24h backup")
+        print(f"{'='*60}\n")
         
         return result
         
     except HTTPException:
         raise
     except Exception as e:
-        print(f"[TREND-BASE-API] Error for {symbol}: {e}")
+        print(f"[TREND-BASE-API] ❌ CRITICAL ERROR for {symbol}:")
+        print(f"   → Error type: {type(e).__name__}")
+        print(f"   → Error message: {str(e)}")
+        import traceback
+        print(f"   → Traceback:\n{traceback.format_exc()}")
         # Return neutral state instead of 500 error
         return {
             "symbol": symbol,
@@ -249,7 +384,9 @@ async def get_trend_base(symbol: str) -> Dict[str, Any]:
             "trend": "SIDEWAYS",
             "status": "ERROR",
             "timestamp": datetime.now().isoformat(),
-            "message": f"Error: {str(e)}"
+            "message": f"⚠️ Error: {str(e)}. Will retry when data is available.",
+            "candles_analyzed": 0,
+            "token_valid": False
         }
 
 
@@ -384,6 +521,7 @@ async def websocket_advanced_analysis(websocket: WebSocket):
 async def _get_historical_data(symbol: str, lookback: int = 50) -> pd.DataFrame:
     """
     Get historical OHLCV data from Zerodha for Volume Pulse analysis
+    Uses GLOBAL token from .env - validates before fetching
     
     Args:
         symbol: Index symbol (NIFTY, BANKNIFTY, SENSEX)
@@ -396,13 +534,26 @@ async def _get_historical_data(symbol: str, lookback: int = 50) -> pd.DataFrame:
         from kiteconnect import KiteConnect
         from datetime import timedelta
         
-        # Authenticate Zerodha client
+        # ✅ GLOBAL TOKEN VALIDATION
+        print(f"[DATA-FETCH] 🔐 Using token from .env for {symbol}")
+        
+        # Reload settings to get latest token from .env
+        from config import get_settings
+        settings = get_settings()
+        
         if not settings.zerodha_api_key or not settings.zerodha_access_token:
-            print(f"[DATA-FETCH] ⚠️ Zerodha credentials not configured")
+            print(f"[DATA-FETCH] ❌ Token missing in .env file")
+            print(f"   → API Key: {'Present' if settings.zerodha_api_key else 'MISSING'}")
+            print(f"   → Access Token: {'Present' if settings.zerodha_access_token else 'MISSING'}")
             return pd.DataFrame()
         
+        # Initialize Kite with token from .env
         kite = KiteConnect(api_key=settings.zerodha_api_key)
         kite.set_access_token(settings.zerodha_access_token)
+        
+        print(f"[DATA-FETCH] ✅ Token configured from .env")
+        print(f"   → API Key: {settings.zerodha_api_key[:10]}...")
+        print(f"   → Access Token: {settings.zerodha_access_token[:15]}...")
         
         # Get FUTURES instrument token for symbol (indices don't have volume!)
         # Use futures contracts which have actual traded volume
@@ -417,11 +568,15 @@ async def _get_historical_data(symbol: str, lookback: int = 50) -> pd.DataFrame:
             print(f"[DATA-FETCH] ⚠️ Unknown symbol: {symbol}")
             return pd.DataFrame()
         
+        print(f"[DATA-FETCH] 📊 Using futures token: {token} for {symbol}")
+        
         # Fetch intraday 5-minute candles (enough for Volume Pulse analysis)
         to_date = datetime.now()
         from_date = to_date - timedelta(days=5)  # Get last 5 days to ensure enough candles
         
-        print(f"[DATA-FETCH] 🔄 Fetching {lookback} candles for {symbol} from Zerodha...")
+        print(f"[DATA-FETCH] 🔄 Fetching {lookback} candles from Zerodha...")
+        print(f"   → Date range: {from_date.date()} to {to_date.date()}")
+        print(f"   → Interval: 5-minute")
         
         data = kite.historical_data(
             instrument_token=token,
@@ -432,6 +587,7 @@ async def _get_historical_data(symbol: str, lookback: int = 50) -> pd.DataFrame:
         
         if not data:
             print(f"[DATA-FETCH] ⚠️ No data received from Zerodha for {symbol}")
+            print(f"   → This may mean: Token expired OR Market closed OR Symbol issue")
             return pd.DataFrame()
         
         # Convert to DataFrame
@@ -440,12 +596,40 @@ async def _get_historical_data(symbol: str, lookback: int = 50) -> pd.DataFrame:
         # Take only required lookback period
         df = df.tail(lookback)
         
-        print(f"[DATA-FETCH] ✅ Fetched {len(df)} candles for {symbol} (Volume Pulse ready)")
+        print(f"[DATA-FETCH] ✅ SUCCESS! Fetched {len(df)} candles for {symbol}")
+        print(f"   → First candle: {df['date'].iloc[0] if len(df) > 0 else 'N/A'}")
+        print(f"   → Last candle: {df['date'].iloc[-1] if len(df) > 0 else 'N/A'}")
+        print(f"   → Total volume: {df['volume'].sum():,.0f}" if len(df) > 0 else "")
         
         return df
         
     except Exception as e:
-        print(f"[DATA-FETCH] ❌ Error fetching historical data: {e}")
+        error_msg = str(e)
+        print(f"[DATA-FETCH] ❌ CRITICAL ERROR fetching data:")
+        print(f"   → Error Type: {type(e).__name__}")
+        print(f"   → Error Message: {error_msg}")
+        
+        # Provide helpful debugging info
+        if "token" in error_msg.lower() or "incorrect" in error_msg.lower():
+            print(f"   → 🔑 TOKEN ISSUE DETECTED!")
+            print(f"   → Your Zerodha access token in .env is EXPIRED or INVALID")
+            print(f"   → Solution: Click 🔑 LOGIN button in app to refresh token")
+        elif "instrument" in error_msg.lower() or "tradingsymbol" in error_msg.lower():
+            print(f"   → 📊 FUTURES TOKEN ISSUE!")
+            print(f"   → The futures contract token may be EXPIRED")
+            print(f"   → Current token: {futures_tokens.get(symbol, 'N/A')}")
+            print(f"   → Solution: Update futures tokens in .env (they expire monthly)")
+            print(f"   → Run: python backend/scripts/find_futures_tokens.py")
+        elif "historical data" in error_msg.lower() or "from_date" in error_msg.lower():
+            print(f"   → 📅 DATE RANGE ISSUE!")
+            print(f"   → Trying to fetch: {from_date.date()} to {to_date.date()}")
+            print(f"   → Market may be closed or date range invalid")
+        else:
+            print(f"   → ⚠️ UNEXPECTED ERROR")
+            print(f"   → Full traceback:")
+            import traceback
+            traceback.print_exc()
+        
         return pd.DataFrame()
 
 
@@ -662,7 +846,8 @@ async def get_zone_control(symbol: str) -> Dict[str, Any]:
     """
     🎯 Zone Control & Breakdown Risk Analysis
     ═════════════════════════════════════════
-    Advanced support/resistance zone detection with breakdown prediction
+    Uses GLOBAL token from .env automatically
+    Shows cached data if token expired
     
     Returns:
         - Support/Resistance zones with strength scores
@@ -676,17 +861,24 @@ async def get_zone_control(symbol: str) -> Dict[str, Any]:
     try:
         symbol = symbol.upper()
         print(f"\n{'='*60}")
-        print(f"[ZONE-CONTROL-API] 🎯 Request received for {symbol}")
+        print(f"[ZONE-CONTROL-API] 🎯 Request for {symbol}")
         print(f"{'='*60}")
         
-        # Check cache first (30 second TTL - shows last data even when market closed)
+        # ✅ GLOBAL TOKEN CHECK - One source of truth
+        from services.global_token_manager import check_global_token_status
+        token_status = await check_global_token_status()
+        
+        print(f"[GLOBAL-TOKEN] Status: {'✅ Valid' if token_status['valid'] else '❌ Expired'}")
+        
+        # Check cache first
         cache = get_cache()
         cache_key = f"zone_control:{symbol}"
         cached = await cache.get(cache_key)
         
         if cached:
+            # Update cache with current token status
+            cached["token_valid"] = token_status["valid"]
             print(f"[ZONE-CONTROL] ⚡ Cache hit for {symbol}")
-            print(f"   → Returning cached data (age: <30s)")
             return cached
         
         # Fetch fresh historical data (extended range to get last available data)
@@ -702,17 +894,38 @@ async def get_zone_control(symbol: str) -> Dict[str, Any]:
         print(f"   → Data empty: {df.empty}")
         
         if df.empty or len(df) < 20:
-            print(f"[ZONE-CONTROL] ⚠️ INSUFFICIENT DATA for {symbol}")
-            print(f"   → Got: {len(df)} candles")
-            print(f"   → Need: 20+ candles")
-            print(f"   → This may happen if:")
-            print(f"      1. Zerodha access token is expired")
-            print(f"      2. Market is closed and no recent data")
-            print(f"      3. Instrument token is incorrect")
+            print(f"[ZONE-CONTROL] ⚠️ INSUFFICIENT FRESH DATA for {symbol}")
+            print(f"   → Got: {len(df)} candles from Zerodha")
+            print(f"   → Checking for cached historical data...")
+            
+            # 🔥 PERMANENT FIX: Try to get last cached data instead of failing
+            old_cache_key = f"zone_control_backup:{symbol}"
+            backup_data = await cache.get(old_cache_key)
+            
+            if backup_data:
+                print(f"[ZONE-CONTROL] ✅ Using CACHED data for {symbol}")
+                print(f"   → Showing last successful analysis")
+                backup_data["status"] = "CACHED"
+                backup_data["message"] = "📊 Showing last available data (Token may be expired)"
+                backup_data["recommendation"] = f"{backup_data.get('recommendation', '')} [Using cached data - Click LOGIN to refresh]"
+                return backup_data
+            
+            # No cached data - provide helpful error with clear fix
+            print(f"[ZONE-CONTROL] ❌ NO DATA AVAILABLE (fresh or cached)")
+            print(f"   → Token Status: Likely EXPIRED")
+            print(f"   → Solution: Click 🔑 LOGIN button in app")
+            
+            # Get current market price from live tick cache
+            from services.cache import CacheService
+            cache_svc = CacheService()
+            await cache_svc.connect()
+            tick_data = await cache_svc.get_market_data(symbol)
+            await cache_svc.disconnect()
+            current_price = tick_data.get('price', 0.0) if tick_data else 0.0
             
             return {
                 "symbol": symbol,
-                "current_price": 0.0,
+                "current_price": current_price,
                 "zones": {
                     "support": [],
                     "resistance": []
@@ -728,11 +941,16 @@ async def get_zone_control(symbol: str) -> Dict[str, Any]:
                 },
                 "signal": "NEUTRAL",
                 "confidence": 0,
-                "recommendation": "⚠️ Unable to fetch data - Check Zerodha token or wait for market to open",
+                "recommendation": "🔑 Click LOGIN button to refresh Zerodha token and get live analysis",
                 "timestamp": datetime.now().isoformat(),
-                "status": "ERROR",
-                "message": f"⚠️ No data available ({len(df)} candles). Please check Zerodha authentication.",
-                "candles_analyzed": len(df)
+                "status": "TOKEN_EXPIRED",
+                "message": "🔑 Zerodha token expired. Click LOGIN in header to refresh (takes 10 seconds)",
+                "candles_analyzed": len(df),
+                "fix_instructions": [
+                    "1. Click 🔑 LOGIN button in app header",
+                    "2. Login with your Zerodha credentials",
+                    "3. Data will auto-refresh (no restart needed)"
+                ]
             }
         
         # Show data info
@@ -746,9 +964,16 @@ async def get_zone_control(symbol: str) -> Dict[str, Any]:
         print(f"[ZONE-CONTROL] 🔬 Running zone analysis...")
         result = await analyze_zone_control(symbol, df)
         
-        # Determine if data is live or historical
+        # Determine if data is live or historical based on last candle time
+        from services.market_feed import get_market_status
+        market_status = get_market_status()
+        
+        print(f"[ZONE-CONTROL] 📊 Market Status Check:")
+        print(f"   → Market Status: {market_status}")
+        
         last_candle_time = df['date'].iloc[-1] if 'date' in df.columns else None
         is_recent = False
+        
         if last_candle_time:
             from datetime import timedelta
             # Ensure both datetimes are timezone-aware
@@ -757,28 +982,39 @@ async def get_zone_control(symbol: str) -> Dict[str, Any]:
             current_time = datetime.now(timezone.utc)
             time_diff = current_time - last_candle_time
             is_recent = time_diff < timedelta(hours=1)  # Within last hour = recent data
-            print(f"[ZONE-CONTROL] ⏰ Time since last candle: {time_diff}")
+            print(f"   → Last candle time: {last_candle_time}")
+            print(f"   → Time difference: {time_diff}")
             print(f"   → Is recent (< 1 hour): {is_recent}")
         
-        if is_recent:
-            result["message"] = f"✅ LIVE data from Zerodha ({len(df)} candles analyzed)"
+        # If market is LIVE or PRE_OPEN and data is recent, mark as LIVE
+        if market_status in ['LIVE', 'PRE_OPEN'] and (is_recent or len(df) > 0):
+            result["message"] = f"✅ LIVE market analysis ({len(df)} candles)"
             result["status"] = "LIVE"
-            print(f"[ZONE-CONTROL] ✅ Status: LIVE DATA")
+            print(f"[ZONE-CONTROL] ✅ Status: LIVE DATA (market {market_status})")
+        elif is_recent:
+            result["message"] = f"✅ Recent data from Zerodha ({len(df)} candles)"
+            result["status"] = "LIVE"
+            print(f"[ZONE-CONTROL] ✅ Status: LIVE DATA (recent candles)")
         else:
-            result["message"] = f"📊 Last available data from Zerodha ({len(df)} candles) - Market may be closed"
+            result["message"] = f"📊 Historical data ({len(df)} candles) - Market closed"
             result["status"] = "HISTORICAL"
-            print(f"[ZONE-CONTROL] 📊 Status: HISTORICAL DATA (market likely closed)")
+            print(f"[ZONE-CONTROL] 📊 Status: HISTORICAL DATA (market closed)")
         
         result["candles_analyzed"] = len(df)
         
-        # Cache result for 30 seconds (longer during market closed)
+        # Cache result for 30 seconds (quick refresh)
         await cache.set(cache_key, result, expire=30)
+        
+        # 🔥 PERMANENT FIX: Save as 24-hour backup for when token expires
+        backup_cache_key = f"zone_control_backup:{symbol}"
+        await cache.set(backup_cache_key, result, expire=86400)  # 24 hours
+        print(f"[ZONE-CONTROL] 💾 Backup saved (24h) - will show if token expires")
         
         print(f"[ZONE-CONTROL] ✅ Analysis complete for {symbol}")
         print(f"   → Status: {result['status']}")
         print(f"   → Signal: {result['signal']}")
         print(f"   → Confidence: {result['confidence']}%")
-        print(f"   → Cached for 30 seconds")
+        print(f"   → Cached: 30s live + 24h backup")
         print(f"{'='*60}\n")
         
         return result

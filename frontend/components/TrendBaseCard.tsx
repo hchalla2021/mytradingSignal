@@ -113,7 +113,7 @@ const TrendBaseCard = memo<TrendBaseCardProps>(({ symbol, name }) => {
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-2">
           <GitBranch className="w-4 h-4 text-accent" />
-          <h3 className="text-xs sm:text-sm font-bold text-white">{name}</h3>
+          <h3 className="text-sm sm:text-base font-bold text-white">{name}</h3>
         </div>
         <div className={`flex items-center gap-1 px-2 py-1 rounded text-xs font-bold ${getSignalBg(signal)} ${getSignalColor(signal)}`}>
           {getSignalIcon(signal)}
@@ -157,7 +157,7 @@ const TrendBaseCard = memo<TrendBaseCardProps>(({ symbol, name }) => {
       {/* Swing Points */}
       <div className="grid grid-cols-2 gap-2 mb-3">
         {/* Highs */}
-        <div className="bg-dark-bg rounded p-2">
+        <div className="bg-dark-bg rounded-lg p-2 border-2 border-emerald-500/30 shadow-sm shadow-emerald-500/10">
           <p className="text-[10px] sm:text-xs text-dark-muted font-bold mb-1.5">📍 HIGHS</p>
           <div className="flex items-center gap-1.5">
             <p className="text-sm sm:text-base font-bold text-white px-2 py-1 rounded-lg bg-blue-950/30 border-2 border-blue-500/40 shadow-md shadow-blue-500/20 inline-block">{formatPrice(structure.swing_points.last_high)}</p>
@@ -171,7 +171,7 @@ const TrendBaseCard = memo<TrendBaseCardProps>(({ symbol, name }) => {
         </div>
 
         {/* Lows */}
-        <div className="bg-dark-bg rounded p-2">
+        <div className="bg-dark-bg rounded-lg p-2 border-2 border-emerald-500/30 shadow-sm shadow-emerald-500/10">
           <p className="text-[10px] sm:text-xs text-dark-muted font-bold mb-1.5">📍 LOWS</p>
           <div className="flex items-center gap-1.5">
             <p className="text-sm sm:text-base font-bold text-white px-2 py-1 rounded-lg bg-blue-950/30 border-2 border-blue-500/40 shadow-md shadow-blue-500/20 inline-block">{formatPrice(structure.swing_points.last_low)}</p>

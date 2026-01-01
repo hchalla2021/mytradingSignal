@@ -117,6 +117,24 @@ export function useMarketSocket() {
             case 'heartbeat':
             case 'pong':
             case 'keepalive':
+              // 🔥 FIX: Update market status from heartbeat if provided
+              // This ensures status updates even when no ticks are coming
+              if (message.type === 'heartbeat' && (message as any).marketStatus) {
+                const newStatus = (message as any).marketStatus;
+                // Update all symbols with current market status
+                setMarketData((prev) => {
+                  const updated = { ...prev };
+                  Object.keys(updated).forEach(symbol => {
+                    if (updated[symbol]) {
+                      updated[symbol] = { ...updated[symbol]!, status: newStatus };
+                    }
+                  });
+                  if (Object.keys(updated).length > 0) {
+                    saveMarketData(updated);
+                  }
+                  return updated;
+                });
+              }
               // Connection is alive
               break;
           }
@@ -180,7 +198,7 @@ export function useMarketSocket() {
         const parsed = JSON.parse(saved) as MarketData;
         // Show cached data immediately for instant UI
         setMarketData(parsed);
-        console.log('📊 Loaded cached market data - UI ready instantly');
+
       }
     } catch (e) {
       console.error('Failed to load cached market data:', e);

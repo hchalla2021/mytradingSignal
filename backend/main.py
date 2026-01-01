@@ -33,6 +33,10 @@ async def lifespan(app: FastAPI):
     
     print("⚡ FastAPI: Starting up (optimized for speed)...")
     
+    # 🔥 AUTO-UPDATE FUTURES TOKENS (if needed)
+    from services.auto_futures_updater import check_and_update_futures_on_startup
+    await check_and_update_futures_on_startup()
+    
     # Initialize cache (in-memory, instant)
     cache = CacheService()
     await cache.connect()

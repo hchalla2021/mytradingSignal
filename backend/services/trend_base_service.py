@@ -58,12 +58,12 @@ class TrendBaseEngine:
     
     __slots__ = ('_cache', '_lookback', '_swing_order', '_min_candles', '_signal_threshold')
     
-    def __init__(self, lookback_period: int = 50, swing_order: int = 3, signal_threshold: int = 63):
+    def __init__(self, lookback_period: int = 50, swing_order: int = 3, signal_threshold: int = 50):
         """
         Args:
             lookback_period: Candles to analyze (default: 50)
             swing_order: Swing detection sensitivity (3 = medium)
-            signal_threshold: Minimum score for signal (0-100)
+            signal_threshold: Minimum score for signal (0-100) - lowered to 50 for better responsiveness
         """
         self._cache: Dict[str, Tuple[float, float]] = {}  # (last_high, last_low)
         self._lookback = lookback_period
@@ -200,22 +200,32 @@ class TrendBaseEngine:
         if is_higher_high and is_higher_low:
             structure = "HIGHER-HIGH-HIGHER-LOW"
             
-            # Calculate strength
+            # Calculate strength (OPTIMIZED FOR INTRADAY TRADING!)
+            # Using higher multiplier (×100 instead of ×10) for intraday sensitivity
             high_gain = (last_high.price - prev_high.price) / prev_high.price * 100
             low_gain = (last_low.price - prev_low.price) / prev_low.price * 100
             
-            score = 50 + int(min(high_gain * 10, 25)) + int(min(low_gain * 10, 25))
+            # For intraday: 0.1% gain = 10 points, 0.2% = 20 points, etc.
+            high_contribution = min(high_gain * 100, 35)  # Max 35 points from highs
+            low_contribution = min(low_gain * 100, 35)    # Max 35 points from lows
+            
+            score = 50 + int(high_contribution) + int(low_contribution)
             score = min(score, 100)
         
         # === BEARISH STRUCTURE (Lower-High, Lower-Low) ===
         elif is_lower_high and is_lower_low:
             structure = "LOWER-HIGH-LOWER-LOW"
             
-            # Calculate weakness
+            # Calculate weakness (OPTIMIZED FOR INTRADAY TRADING!)
+            # Using higher multiplier (×100 instead of ×10) for intraday sensitivity
             high_loss = (prev_high.price - last_high.price) / prev_high.price * 100
             low_loss = (prev_low.price - last_low.price) / prev_low.price * 100
             
-            score = 50 - int(min(high_loss * 10, 25)) - int(min(low_loss * 10, 25))
+            # For intraday: 0.1% loss = -10 points, 0.2% = -20 points, etc.
+            high_penalty = min(high_loss * 100, 35)  # Max 35 points penalty
+            low_penalty = min(low_loss * 100, 35)    # Max 35 points penalty
+            
+            score = 50 - int(high_penalty) - int(low_penalty)
             score = max(score, 0)
         
         # === MIXED STRUCTURE ===
@@ -248,21 +258,21 @@ class TrendBaseEngine:
         confidence = 0
         
         # === STRONG BUY (Higher-Low structure + near support) ===
-        if structure == "HIGHER-HIGH-HIGHER-LOW" and integrity_score >= 75:
+        if structure == "HIGHER-HIGH-HIGHER-LOW" and integrity_score >= 65:
             # Check if price is near the higher-low
             distance_to_low = ((current_price - last_low.price) / last_low.price) * 100
             
             if distance_to_low < 2:  # Within 2% of higher-low
                 signal = "BUY"
-                confidence = min(integrity_score, 95)
+                confidence = min(integrity_score + 10, 95)
             elif distance_to_low < 5:
                 signal = "BUY"
-                confidence = integrity_score - 10
+                confidence = integrity_score
             else:
-                signal = "NEUTRAL"
-                confidence = 50
+                signal = "BUY"
+                confidence = max(integrity_score - 10, 55)
         
-        # === MODERATE BUY ===
+        # === MODERATE BUY (Lower threshold for better detection) ===
         elif structure == "HIGHER-HIGH-HIGHER-LOW" and integrity_score >= self._signal_threshold:
             signal = "BUY"
             confidence = integrity_score
@@ -285,11 +295,14 @@ class TrendBaseEngine:
         return signal, confidence
     
     def _classify_trend(self, structure: str, integrity_score: int) -> str:
-        """Classify overall trend"""
-        if "HIGHER-HIGH-HIGHER-LOW" in structure and integrity_score >= 65:
+        """Classify overall trend - More responsive thresholds for real trading"""
+        # If clear bullish structure detected (even with moderate integrity), it's UPTREND
+        if "HIGHER-HIGH-HIGHER-LOW" in structure and integrity_score >= 52:
             return "UPTREND"
-        elif "LOWER-HIGH-LOWER-LOW" in structure and integrity_score <= 35:
+        # If clear bearish structure detected
+        elif "LOWER-HIGH-LOWER-LOW" in structure and integrity_score <= 48:
             return "DOWNTREND"
+        # Mixed signals or weak structure
         else:
             return "SIDEWAYS"
     
@@ -341,10 +354,10 @@ _engine_instance: Optional[TrendBaseEngine] = None
 
 
 def get_trend_base_engine() -> TrendBaseEngine:
-    """Get or create singleton engine instance"""
+    """Get or create singleton engine instance with optimized thresholds"""
     global _engine_instance
     if _engine_instance is None:
-        _engine_instance = TrendBaseEngine(lookback_period=50, swing_order=3, signal_threshold=63)
+        _engine_instance = TrendBaseEngine(lookback_period=50, swing_order=3, signal_threshold=50)
     return _engine_instance
 
 

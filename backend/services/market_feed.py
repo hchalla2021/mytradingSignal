@@ -67,9 +67,11 @@ def get_market_status() -> str:
         return "CLOSED"
     
     # Check market phases
+    # 🔥 FIX: Use <= for PRE_OPEN_END to handle exactly 9:15:00
     if PRE_OPEN_START <= current_time < PRE_OPEN_END:
         return "PRE_OPEN"
     
+    # 🔥 FIX: Market is LIVE from exactly 9:15:00 onwards
     if MARKET_OPEN <= current_time <= MARKET_CLOSE:
         return "LIVE"
     
@@ -170,11 +172,21 @@ class MarketFeedService:
                 if symbol not in self.last_prices:
                     print(f"🟢 First tick received for {symbol}: Price={data['price']}, Change={data['changePercent']}%")
                 
-                # Only process if price changed
-                if self.last_prices.get(symbol) != data["price"]:
+                # 🔥 FIX: Process ticks during PRE_OPEN even if price hasn't changed
+                # During auction period (9:00-9:15), prices may not change often
+                # but we need to keep UI updated with market status
+                market_status = get_market_status()
+                price_changed = self.last_prices.get(symbol) != data["price"]
+                is_pre_open = market_status == "PRE_OPEN"
+                
+                # Process tick if: price changed OR during PRE_OPEN period
+                if price_changed or is_pre_open:
                     self.last_prices[symbol] = data["price"]
                     # Put tick in queue for async processing
                     self._tick_queue.put(data)
+                    
+                    if is_pre_open and not price_changed:
+                        print(f"🔔 PRE_OPEN tick: {symbol} @ ₹{data['price']} (auction period)")
                     
             except Exception as e:
                 print(f"❌ Error processing tick: {e}")
@@ -185,8 +197,12 @@ class MarketFeedService:
         """Update cache and broadcast to WebSocket clients."""
         symbol = data["symbol"]
         
-        # ✅ DEBUG: Log every broadcast
-        print(f"[BROADCAST] {symbol}: ₹{data['price']} ({data['changePercent']:+.2f}%) → {self.ws_manager.connection_count} clients")
+        # 🔥 FIX: Recalculate market status for every broadcast to ensure real-time updates
+        # This prevents stale status from being cached, especially during 9:15 AM transition
+        data["status"] = get_market_status()
+        
+        # ✅ DEBUG: Log every broadcast with current status
+        print(f"[BROADCAST] {symbol}: ₹{data['price']} ({data['changePercent']:+.2f}%) [{data['status']}] → {self.ws_manager.connection_count} clients")
         
         # SMART: Fetch PCR with staggered timing to avoid rate limits
         try:

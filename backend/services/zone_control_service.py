@@ -428,41 +428,80 @@ class ZoneControlEngine:
         confidence = 0
         recommendation = "Wait for clearer signal"
         
+        # Debug logging
+        print(f"\n[ZONE-SIGNAL-DEBUG] Signal Generation:")
+        print(f"   → Nearest Support: {nearest_support.level if nearest_support else None}")
+        print(f"   → Support Distance: {nearest_support.distance_pct if nearest_support else None}%")
+        print(f"   → Nearest Resistance: {nearest_resistance.level if nearest_resistance else None}")
+        print(f"   → Resistance Distance: {nearest_resistance.distance_pct if nearest_resistance else None}%")
+        print(f"   → Breakdown Risk: {breakdown_risk}%")
+        print(f"   → Bounce Probability: {bounce_probability}%")
+        print(f"   → Zone Strength: {zone_strength}")
+        
         # === BUY ZONE CONDITIONS ===
         # Price near strong support with high bounce probability
         if nearest_support and abs(nearest_support.distance_pct) < 1.0:
+            print(f"[ZONE-SIGNAL] Near support zone condition met")
             if bounce_probability > 70 and breakdown_risk < 30:
                 signal = "BUY_ZONE"
                 confidence = bounce_probability
                 recommendation = f"Strong buy zone at ₹{nearest_support.level:.2f} - High bounce probability"
+                print(f"   ✅ Strong BUY signal - confidence: {confidence}%")
             
             elif bounce_probability > 50 and zone_strength == "STRONG":
                 signal = "BUY_ZONE"
                 confidence = bounce_probability - 10
                 recommendation = f"Moderate buy zone at ₹{nearest_support.level:.2f} - Watch for confirmation"
+                print(f"   ✅ Moderate BUY signal - confidence: {confidence}%")
+            else:
+                # Still near support but conditions not strong enough
+                confidence = max(30, bounce_probability - 20)
+                recommendation = f"Approaching support at ₹{nearest_support.level:.2f} - Watch closely"
+                print(f"   ⚠️ Near support but weak - confidence: {confidence}%")
         
         # === SELL ZONE CONDITIONS ===
         # Price near resistance or breakdown imminent
         elif nearest_resistance and abs(nearest_resistance.distance_pct) < 1.0:
+            print(f"[ZONE-SIGNAL] Near resistance zone condition met")
             if nearest_resistance.strength_score > 60:
                 signal = "SELL_ZONE"
                 confidence = nearest_resistance.strength_score
                 recommendation = f"Resistance zone at ₹{nearest_resistance.level:.2f} - Consider profit booking"
+                print(f"   ✅ SELL signal - confidence: {confidence}%")
+            else:
+                # Near resistance but not strong enough
+                confidence = max(30, nearest_resistance.strength_score - 10)
+                recommendation = f"Approaching resistance at ₹{nearest_resistance.level:.2f} - Watch for rejection"
+                print(f"   ⚠️ Near resistance but weak - confidence: {confidence}%")
         
         # High breakdown risk
         elif breakdown_risk > 70:
             signal = "SELL_ZONE"
             confidence = breakdown_risk
             recommendation = f"High breakdown risk ({breakdown_risk}%) - Exit longs"
+            print(f"   ✅ High breakdown risk SELL - confidence: {confidence}%")
         
         # === NEUTRAL CONDITIONS ===
         else:
+            # Calculate confidence based on zone positioning
+            # Higher confidence when balanced or good setup forming
             confidence = max(0, 50 - abs(50 - bounce_probability))
+            
+            # Boost confidence if zones are clearly defined
+            if nearest_support and nearest_resistance:
+                if zone_strength == "STRONG":
+                    confidence = min(75, confidence + 25)
+                elif zone_strength == "MODERATE":
+                    confidence = min(60, confidence + 15)
+            
             if nearest_support:
                 recommendation = f"Price between zones - Next support at ₹{nearest_support.level:.2f}"
             elif nearest_resistance:
                 recommendation = f"Price between zones - Next resistance at ₹{nearest_resistance.level:.2f}"
+            
+            print(f"   ℹ️ NEUTRAL signal - confidence: {confidence}%")
         
+        print(f"[ZONE-SIGNAL] Final: {signal} with {confidence}% confidence")
         return signal, confidence, recommendation
     
     def _create_neutral_result(self, symbol: str, price: float, 

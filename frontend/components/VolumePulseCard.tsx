@@ -106,7 +106,7 @@ const VolumePulseCard = memo<VolumePulseCardProps>(({ symbol, name }) => {
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-2">
           <Activity className="w-4 h-4 text-accent" />
-          <h3 className="text-xs sm:text-sm font-bold text-white">{name}</h3>
+          <h3 className="text-sm sm:text-base font-bold text-white">{name}</h3>
         </div>
         <div className={`flex items-center gap-1 px-2 py-1 rounded text-xs font-bold ${getSignalBg(signal)} ${getSignalColor(signal)}`}>
           {getSignalIcon(signal)}
@@ -138,7 +138,7 @@ const VolumePulseCard = memo<VolumePulseCardProps>(({ symbol, name }) => {
       {/* Volume Breakdown */}
       <div className="grid grid-cols-2 gap-2 mb-3">
         {/* Green Candle Volume */}
-        <div className="bg-dark-bg rounded p-2">
+        <div className="bg-dark-bg rounded-lg p-2 border-2 border-emerald-500/30 shadow-sm shadow-emerald-500/10">
           <p className="text-[9px] sm:text-[10px] text-dark-muted font-bold mb-1">🟢 GREEN VOL</p>
           <p className="text-xs sm:text-sm font-bold text-green-400 px-2 py-1 rounded-lg bg-green-950/30 border-2 border-green-500/40 shadow-md shadow-green-500/20 inline-block">
             {formatVolume(volume_data.green_candle_volume)}
@@ -147,7 +147,7 @@ const VolumePulseCard = memo<VolumePulseCardProps>(({ symbol, name }) => {
         </div>
 
         {/* Red Candle Volume */}
-        <div className="bg-dark-bg rounded p-2">
+        <div className="bg-dark-bg rounded-lg p-2 border-2 border-emerald-500/30 shadow-sm shadow-emerald-500/10">
           <p className="text-[9px] sm:text-[10px] text-dark-muted font-bold mb-1">🔴 RED VOL</p>
           <p className="text-xs sm:text-sm font-bold text-red-400 px-2 py-1 rounded-lg bg-red-950/30 border-2 border-red-500/40 shadow-md shadow-red-500/20 inline-block">
             {formatVolume(volume_data.red_candle_volume)}

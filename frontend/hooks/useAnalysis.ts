@@ -42,8 +42,6 @@ export function useAnalysis(options: UseAnalysisOptions = {}): UseAnalysisReturn
       const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000';
       const url = `${apiUrl}/api/analysis/analyze/all`;
       
-      console.log('🔄 Fetching analysis from:', url);
-      
       const controller = new AbortController();
       const timeout = parseInt(process.env.NEXT_PUBLIC_API_TIMEOUT || '5000', 10);
       const timeoutId = setTimeout(() => controller.abort(), timeout);
@@ -60,21 +58,8 @@ export function useAnalysis(options: UseAnalysisOptions = {}): UseAnalysisReturn
       
       clearTimeout(timeoutId);
       
-      console.log('📡 Response status:', response.status, response.statusText);
-      
       if (response.ok) {
         const data = await response.json();
-        console.log('✅ Analysis data received:', data);
-        console.log('📊 Symbols in response:', Object.keys(data));
-        
-        // Log prices and timestamps to verify data is changing
-        if (data.BANKNIFTY) {
-          console.log('💰 BANKNIFTY:', {
-            price: data.BANKNIFTY.indicators?.price,
-            timestamp: data.BANKNIFTY.timestamp,
-            signal: data.BANKNIFTY.signal
-          });
-        }
         
         // Force new object reference to ensure React detects change
         const dataWithTimestamp = { 
@@ -82,11 +67,7 @@ export function useAnalysis(options: UseAnalysisOptions = {}): UseAnalysisReturn
           _fetchTime: Date.now() // Force new reference every time
         };
         setAnalyses(dataWithTimestamp);
-        setRefreshCount(prev => {
-          const newCount = prev + 1;
-          console.log(`🔄 Refresh #${newCount} - Data updated at ${new Date().toLocaleTimeString()}.${Date.now() % 1000}`);
-          return newCount;
-        });
+        setRefreshCount(prev => prev + 1);
         setIsConnected(true);
         setError(null);
       } else {
@@ -137,7 +118,6 @@ export function useAnalysis(options: UseAnalysisOptions = {}): UseAnalysisReturn
 
   useEffect(() => {
     if (autoConnect) {
-      console.log('📊 Starting analysis polling (every 1s for real-time updates)');
       startPolling();
     }
 

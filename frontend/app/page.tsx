@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useMarketSocket } from '@/hooks/useMarketSocket';
 import { useAIAnalysis } from '@/hooks/useAIAnalysis';
+import { useAuth } from '@/hooks/useAuth';
 import Header from '@/components/Header';
 import IndexCard from '@/components/IndexCard';
 import LiveStatus from '@/components/LiveStatus';
@@ -14,6 +15,7 @@ import ZoneControlCard from '@/components/ZoneControlCard';
 export default function Home() {
   const { marketData, isConnected, connectionStatus } = useMarketSocket();
   const { alertData, loading: aiLoading, error: aiError } = useAIAnalysis();
+  const { isAuthenticated } = useAuth();
   const [currentTime, setCurrentTime] = useState<string>('');
   const [updateCounter, setUpdateCounter] = useState(0);
 
@@ -55,6 +57,31 @@ export default function Home() {
     <main className="min-h-screen">
       {/* Header */}
       <Header isConnected={isConnected} marketStatus={marketStatus} />
+      
+      {/* 🔥 GLOBAL TOKEN ALERT - Shows when token expired for ALL sections */}
+      {!isAuthenticated && (
+        <div className="bg-gradient-to-r from-amber-500/20 to-orange-500/20 border-b-2 border-amber-500/50 py-3 px-4 sm:px-6 backdrop-blur-sm sticky top-[72px] z-40">
+          <div className="flex items-center justify-between gap-3 max-w-7xl mx-auto">
+            <div className="flex items-center gap-2">
+              <span className="text-2xl">🔑</span>
+              <div>
+                <p className="text-sm font-bold text-amber-300">Token Expired - All Features Using Cached Data</p>
+                <p className="text-[10px] text-amber-200/80">Click LOGIN to refresh from .env • Takes 10 seconds • No restart needed</p>
+              </div>
+            </div>
+            <button
+              onClick={() => {
+                const loginUrl = `${process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000'}/api/auth/login`;
+                window.open(loginUrl, '_blank', 'width=600,height=700');
+                setTimeout(() => window.location.reload(), 15000);
+              }}
+              className="flex-shrink-0 px-4 py-2 bg-gradient-to-r from-blue-500 to-indigo-500 hover:from-blue-600 hover:to-indigo-600 text-white font-bold rounded-lg transition-all active:scale-95 shadow-lg text-xs whitespace-nowrap"
+            >
+              🔑 LOGIN NOW
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Connection Status Bar */}
       <div className="w-full px-2 sm:px-4 lg:px-6 xl:px-8 py-2">

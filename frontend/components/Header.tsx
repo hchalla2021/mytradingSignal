@@ -13,6 +13,13 @@ const Header: React.FC<HeaderProps> = memo(({ isConnected, marketStatus }) => {
   const [currentTime, setCurrentTime] = useState<string>('');
   const [currentDate, setCurrentDate] = useState<string>('');
   const { isAuthenticated, isValidating, user, login } = useAuth();
+  
+  // Expose login function globally for token refresh banner
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      (window as any).authLogin = login;
+    }
+  }, [login]);
 
   useEffect(() => {
     const updateTime = () => {

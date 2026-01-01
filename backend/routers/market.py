@@ -68,15 +68,19 @@ async def market_websocket(websocket: WebSocket):
             "timestamp": datetime.now().isoformat()
         })
         
-        # Start heartbeat task
+        # Start heartbeat task with market status refresh
         async def heartbeat():
+            from services.market_feed import get_market_status
             while True:
                 await asyncio.sleep(settings.ws_ping_interval)
                 try:
+                    # 🔥 FIX: Include market status in heartbeat to ensure UI always has current status
+                    current_status = get_market_status()
                     await manager.send_personal(websocket, {
                         "type": "heartbeat",
                         "timestamp": datetime.now().isoformat(),
-                        "connections": manager.connection_count
+                        "connections": manager.connection_count,
+                        "marketStatus": current_status  # Add current market status
                     })
                 except Exception:
                     break

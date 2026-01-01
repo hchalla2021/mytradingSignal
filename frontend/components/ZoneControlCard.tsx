@@ -75,8 +75,8 @@ const ZoneControlCard = memo<ZoneControlCardProps>(({ symbol, name }) => {
     };
 
     fetchData();
-    const refreshInterval = parseInt(process.env.NEXT_PUBLIC_REFRESH_INTERVAL || '5000', 10);
-    const interval = setInterval(fetchData, refreshInterval);
+    // Refresh every 10 seconds for live updates (faster than other cards)
+    const interval = setInterval(fetchData, 10000);
 
     return () => clearInterval(interval);
   }, [symbol]);
@@ -126,11 +126,12 @@ const ZoneControlCard = memo<ZoneControlCardProps>(({ symbol, name }) => {
 
   if (error || !data) {
     return (
-      <div className="bg-dark-card border-2 border-emerald-500/30 rounded-lg p-3 sm:p-4 shadow-lg shadow-emerald-500/10">
-        <div className="flex items-center gap-2 text-dark-muted text-sm">
+      <div className="bg-dark-card border-2 border-rose-500/30 rounded-lg p-3 sm:p-4 shadow-lg shadow-rose-500/10">
+        <div className="flex items-center gap-2 text-rose-400 text-sm font-bold">
           <AlertOctagon className="w-4 h-4" />
-          <span>{name} - {error}</span>
+          <span>{name} - Connection Error</span>
         </div>
+        <p className="text-[10px] text-dark-muted mt-2">Retrying...</p>
       </div>
     );
   }
@@ -143,7 +144,7 @@ const ZoneControlCard = memo<ZoneControlCardProps>(({ symbol, name }) => {
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-2">
           <Target className="w-4 h-4 text-emerald-400 animate-pulse" />
-          <h3 className="text-xs sm:text-sm font-black text-emerald-400 tracking-wide">{name}</h3>
+          <h3 className="text-sm sm:text-base font-bold text-white tracking-wide">{name}</h3>
         </div>
         <div className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-black border ${getSignalBg(signal)} ${getSignalColor(signal)}`}>
           {signal === 'BUY_ZONE' && <Shield className="w-3.5 h-3.5" />}
@@ -153,23 +154,27 @@ const ZoneControlCard = memo<ZoneControlCardProps>(({ symbol, name }) => {
         </div>
       </div>
 
-      {/* Status Message - Show if market is closed or data is historical */}
-      {status && status !== 'LIVE' && (
-        <div className={`mb-3 p-2 rounded-lg text-[10px] font-bold ${
-          status === 'HISTORICAL' ? 'bg-amber-500/10 text-amber-400 border border-amber-500/30' : 
-          'bg-rose-500/10 text-rose-400 border border-rose-500/30'
-        }`}>
-          {status === 'HISTORICAL' && '📊 Last available data - Market closed'}
-          {status === 'ERROR' && '⚠️ Unable to fetch data'}
-          {candles_analyzed && candles_analyzed > 0 && ` • ${candles_analyzed} candles analyzed`}
-        </div>
-      )}
-
-      {/* Live Status Indicator */}
+      {/* Live Status Indicator - Always show when data is live */}
       {status === 'LIVE' && (
         <div className="mb-3 p-2 rounded-lg bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 text-[10px] font-bold flex items-center gap-2">
           <span className="w-2 h-2 bg-emerald-400 rounded-full animate-pulse"></span>
-          LIVE DATA • {candles_analyzed} candles
+          LIVE MARKET DATA
+          {candles_analyzed && candles_analyzed > 0 && ` • ${candles_analyzed} candles`}
+        </div>
+      )}
+      
+      {/* Historical Data - Only show if market is closed */}
+      {status && status === 'HISTORICAL' && (
+        <div className="mb-3 p-2 rounded-lg text-[10px] font-bold bg-blue-500/10 text-blue-400 border border-blue-500/30">
+          📊 Last session data - Market closed
+          {candles_analyzed && candles_analyzed > 0 && ` • ${candles_analyzed} candles`}
+        </div>
+      )}
+
+      {/* Token Expired Warning - Only show if token actually expired */}
+      {status && status === 'TOKEN_EXPIRED' && (
+        <div className="mb-3 p-2 rounded-lg bg-rose-500/10 text-rose-400 border border-rose-500/30 text-[10px] font-bold">
+          🔑 Token expired - Click LOGIN in header to refresh
         </div>
       )}
 
@@ -182,7 +187,7 @@ const ZoneControlCard = memo<ZoneControlCardProps>(({ symbol, name }) => {
       {/* Zone Information - Dual Panel */}
       <div className="grid grid-cols-2 gap-3 mb-4">
         {/* Support Zone */}
-        <div className="bg-dark-bg rounded-lg p-3 border border-emerald-500/20">
+        <div className="bg-dark-bg rounded-lg p-3 border-2 border-emerald-500/30 shadow-sm shadow-emerald-500/10">
           <div className="flex items-center gap-1.5 mb-2">
             <Shield className="w-3.5 h-3.5 text-emerald-400" />
             <p className="text-[9px] sm:text-[10px] text-emerald-400 font-black">SUPPORT</p>
@@ -194,20 +199,20 @@ const ZoneControlCard = memo<ZoneControlCardProps>(({ symbol, name }) => {
               </p>
               <div className="space-y-1">
                 <div className="flex justify-between items-center">
-                  <span className="text-[8px] text-dark-muted font-bold">Distance</span>
-                  <span className="text-[9px] font-black text-white">
+                  <span className="text-[9px] text-dark-muted font-bold">Distance</span>
+                  <span className="text-xs sm:text-sm font-extrabold text-white">
                     {Math.abs(nearest_zones.support.distance_pct || 0).toFixed(2)}%
                   </span>
                 </div>
                 <div className="flex justify-between items-center">
-                  <span className="text-[8px] text-dark-muted font-bold">Strength</span>
-                  <span className="text-[9px] font-black text-emerald-400">
+                  <span className="text-[9px] text-dark-muted font-bold">Strength</span>
+                  <span className="text-xs sm:text-sm font-extrabold text-emerald-400">
                     {nearest_zones.support.strength}
                   </span>
                 </div>
                 <div className="flex justify-between items-center">
-                  <span className="text-[8px] text-dark-muted font-bold">Touches</span>
-                  <span className="text-[9px] font-black text-white">
+                  <span className="text-[9px] text-dark-muted font-bold">Touches</span>
+                  <span className="text-xs sm:text-sm font-extrabold text-white">
                     {nearest_zones.support.touches}x
                   </span>
                 </div>
@@ -219,7 +224,7 @@ const ZoneControlCard = memo<ZoneControlCardProps>(({ symbol, name }) => {
         </div>
 
         {/* Resistance Zone */}
-        <div className="bg-dark-bg rounded-lg p-3 border border-rose-500/20">
+        <div className="bg-dark-bg rounded-lg p-3 border-2 border-emerald-500/30 shadow-sm shadow-emerald-500/10">
           <div className="flex items-center gap-1.5 mb-2">
             <AlertOctagon className="w-3.5 h-3.5 text-rose-400" />
             <p className="text-[9px] sm:text-[10px] text-rose-400 font-black">RESISTANCE</p>
@@ -231,20 +236,20 @@ const ZoneControlCard = memo<ZoneControlCardProps>(({ symbol, name }) => {
               </p>
               <div className="space-y-1">
                 <div className="flex justify-between items-center">
-                  <span className="text-[8px] text-dark-muted font-bold">Distance</span>
-                  <span className="text-[9px] font-black text-white">
+                  <span className="text-[9px] text-dark-muted font-bold">Distance</span>
+                  <span className="text-xs sm:text-sm font-extrabold text-white">
                     {Math.abs(nearest_zones.resistance.distance_pct || 0).toFixed(2)}%
                   </span>
                 </div>
                 <div className="flex justify-between items-center">
-                  <span className="text-[8px] text-dark-muted font-bold">Strength</span>
-                  <span className="text-[9px] font-black text-rose-400">
+                  <span className="text-[9px] text-dark-muted font-bold">Strength</span>
+                  <span className="text-xs sm:text-sm font-extrabold text-rose-400">
                     {nearest_zones.resistance.strength}
                   </span>
                 </div>
                 <div className="flex justify-between items-center">
-                  <span className="text-[8px] text-dark-muted font-bold">Touches</span>
-                  <span className="text-[9px] font-black text-white">
+                  <span className="text-[9px] text-dark-muted font-bold">Touches</span>
+                  <span className="text-xs sm:text-sm font-extrabold text-white">
                     {nearest_zones.resistance.touches}x
                   </span>
                 </div>

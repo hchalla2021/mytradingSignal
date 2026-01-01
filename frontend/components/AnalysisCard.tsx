@@ -140,7 +140,7 @@ const AnalysisCardContent = memo<AnalysisCardProps>(({ analysis }) => {
       {/* Header */}
       <div className="flex items-start justify-between mb-5">
         <div className="min-w-0 flex-1">
-          <h3 className="text-xl sm:text-2xl font-bold text-dark-text mb-2 truncate">
+          <h3 className="text-sm sm:text-base font-bold text-white mb-2 truncate">
             {symbol_name}
           </h3>
           <div className={`text-2xl sm:text-3xl font-mono font-bold border-2 rounded-xl px-4 py-2.5 shadow-lg inline-block transition-all duration-200 ${
@@ -187,89 +187,114 @@ const AnalysisCardContent = memo<AnalysisCardProps>(({ analysis }) => {
       {/* Technical Indicators */}
       <div className="space-y-3">
         {/* Price Action & VWAP */}
-        <IndicatorSection title="PRICE ACTION & VWAP">
-          <TechnicalIndicator 
-            label="High" 
-            value={`₹${(indicators.high || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })}`} 
-            status="neutral" 
-          />
-          <TechnicalIndicator 
-            label="Low" 
-            value={`₹${(indicators.low || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })}`} 
-            status="neutral" 
-          />
-          <TechnicalIndicator 
-            label="Open" 
-            value={`₹${(indicators.open || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })}`} 
-            status="neutral" 
-          />
-          <TechnicalIndicator 
-            label="VWAP" 
-            value={indicators.vwap_position || 'N/A'} 
-            status={indicators.vwap_position === VWAPPosition.ABOVE_VWAP ? 'positive' : indicators.vwap_position === VWAPPosition.BELOW_VWAP ? 'negative' : 'neutral'} 
-          />
-        </IndicatorSection>
-
-        {/* EMA Trend Filter */}
-        <IndicatorSection title="EMA TREND FILTER (9/21/50)">
-          <TechnicalIndicator 
-            label="EMA 9" 
-            value={indicators.ema_9 ? `₹${indicators.ema_9.toFixed(2)}` : 'N/A'} 
-            status="neutral" 
-          />
-          <TechnicalIndicator 
-            label="EMA 21" 
-            value={indicators.ema_21 ? `₹${indicators.ema_21.toFixed(2)}` : 'N/A'} 
-            status="neutral" 
-          />
-          <TechnicalIndicator 
-            label="EMA 50" 
-            value={indicators.ema_50 ? `₹${indicators.ema_50.toFixed(2)}` : 'N/A'} 
-            status="neutral" 
-          />
-        </IndicatorSection>
-
-        {/* Support & Resistance */}
-        <IndicatorSection title="SUPPORT & RESISTANCE">
-          <div className="col-span-2">
-            <SupportResistance
-              currentPrice={indicators.price}
-              resistance={indicators.resistance}
-              support={indicators.support}
-              prevDayHigh={indicators.prev_day_high}
-              prevDayLow={indicators.prev_day_low}
-              prevDayClose={indicators.prev_day_close}
+        <div className="border-2 border-emerald-500/30 rounded-xl p-3 bg-dark-surface/40 backdrop-blur-sm shadow-sm shadow-emerald-500/10">
+          <h4 className="text-[10px] sm:text-xs font-bold text-dark-secondary mb-2 uppercase tracking-wider">PRICE ACTION & VWAP</h4>
+          <div className="grid grid-cols-2 gap-2">
+            <TechnicalIndicator 
+              label="Open" 
+              value={`₹${(indicators.open || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })}`} 
+              status="neutral" 
+              showArrow={false}
+            />
+            <TechnicalIndicator 
+              label="High" 
+              value={`₹${(indicators.high || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })}`} 
+              status="neutral" 
+              showArrow={false}
+            />
+            <TechnicalIndicator 
+              label="Low" 
+              value={`₹${(indicators.low || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })}`} 
+              status="neutral" 
+              showArrow={false}
+            />
+            <TechnicalIndicator 
+              label="VWAP" 
+              value={indicators.vwap ? `₹${indicators.vwap.toLocaleString('en-IN', { maximumFractionDigits: 2 })}` : 'N/A'} 
+              status="neutral"
+              showArrow={false}
+            />
+            <TechnicalIndicator 
+              label="Position" 
+              value={indicators.vwap_position === VWAPPosition.ABOVE_VWAP ? 'ABOVE VWAP' : indicators.vwap_position === VWAPPosition.BELOW_VWAP ? 'BELOW VWAP' : indicators.vwap_position === VWAPPosition.AT_VWAP ? 'AT VWAP' : 'N/A'} 
+              status={indicators.vwap_position === VWAPPosition.ABOVE_VWAP ? 'positive' : indicators.vwap_position === VWAPPosition.BELOW_VWAP ? 'negative' : 'neutral'} 
+              showArrow={true}
             />
           </div>
-        </IndicatorSection>
+        </div>
+
+        {/* EMA Trend Filter */}
+        <div className="border-2 border-emerald-500/30 rounded-xl p-3 bg-dark-surface/40 backdrop-blur-sm shadow-sm shadow-emerald-500/10">
+          <h4 className="text-[10px] sm:text-xs font-bold text-dark-secondary mb-2 uppercase tracking-wider">EMA TREND FILTER (9/21/50)</h4>
+          <div className="grid grid-cols-2 gap-2">
+            <TechnicalIndicator 
+              label="EMA 9" 
+              value={indicators.ema_9 ? `₹${indicators.ema_9.toFixed(2)}` : 'N/A'} 
+              status="neutral" 
+            />
+            <TechnicalIndicator 
+              label="EMA 21" 
+              value={indicators.ema_21 ? `₹${indicators.ema_21.toFixed(2)}` : 'N/A'} 
+              status="neutral" 
+            />
+            <TechnicalIndicator 
+              label="EMA 50" 
+              value={indicators.ema_50 ? `₹${indicators.ema_50.toFixed(2)}` : 'N/A'} 
+              status="neutral" 
+            />
+          </div>
+        </div>
+
+        {/* Support & Resistance */}
+        <div className="border-2 border-emerald-500/30 rounded-xl p-3 bg-dark-surface/40 backdrop-blur-sm shadow-sm shadow-emerald-500/10">
+          <h4 className="text-[10px] sm:text-xs font-bold text-dark-secondary mb-2 uppercase tracking-wider">SUPPORT & RESISTANCE</h4>
+          <div className="grid grid-cols-2 gap-2">
+            <div className="col-span-2">
+              <SupportResistance
+                currentPrice={indicators.price}
+                resistance={indicators.resistance}
+                support={indicators.support}
+                prevDayHigh={indicators.prev_day_high}
+                prevDayLow={indicators.prev_day_low}
+                prevDayClose={indicators.prev_day_close}
+              />
+            </div>
+          </div>
+        </div>
 
         {/* Momentum & Volume */}
-        <IndicatorSection title="MOMENTUM & VOLUME">
-          <TechnicalIndicator
-            label="RSI"
-            value={indicators.rsi ? indicators.rsi.toFixed(0) : 'N/A'}
-            status={indicators.rsi > 70 ? 'negative' : indicators.rsi < 30 ? 'positive' : 'neutral'}
-          />
-          <TechnicalIndicator
-            label="Momentum"
-            value={indicators.momentum ? `${indicators.momentum.toFixed(0)}/100` : indicators.candle_strength ? `${(indicators.candle_strength * 100).toFixed(0)}%` : 'N/A'}
-            status={indicators.momentum > 70 ? 'positive' : indicators.momentum < 30 ? 'negative' : 'neutral'}
-          />
-        </IndicatorSection>
+        <div className="border-2 border-emerald-500/30 rounded-xl p-3 bg-dark-surface/40 backdrop-blur-sm shadow-sm shadow-emerald-500/10">
+          <h4 className="text-[10px] sm:text-xs font-bold text-dark-secondary mb-2 uppercase tracking-wider">MOMENTUM & VOLUME</h4>
+          <div className="grid grid-cols-2 gap-2">
+            <TechnicalIndicator
+              label="RSI"
+              value={indicators.rsi ? indicators.rsi.toFixed(0) : 'N/A'}
+              status={indicators.rsi > 70 ? 'negative' : indicators.rsi < 30 ? 'positive' : 'neutral'}
+            />
+            <TechnicalIndicator
+              label="Momentum"
+              value={indicators.momentum ? `${indicators.momentum.toFixed(0)}/100` : indicators.candle_strength ? `${(indicators.candle_strength * 100).toFixed(0)}%` : 'N/A'}
+              status={indicators.momentum > 70 ? 'positive' : indicators.momentum < 30 ? 'negative' : 'neutral'}
+            />
+          </div>
+        </div>
 
         {/* Options Data (PCR & OI) */}
-        <IndicatorSection title="OPTIONS DATA (PCR & OI)">
-          <TechnicalIndicator
-            label="PCR"
-            value={indicators.pcr ? indicators.pcr.toFixed(2) : 'N/A'}
-            status={indicators.pcr > 1.2 ? 'positive' : indicators.pcr < 0.8 ? 'negative' : 'neutral'}
-          />
-          <TechnicalIndicator
-            label="OI Change"
-            value={indicators.oi_change !== null ? `${indicators.oi_change > 0 ? '+' : ''}${indicators.oi_change.toFixed(2)}%` : 'N/A'}
-            status={indicators.oi_change > 0 ? 'positive' : 'negative'}
-          />
-        </IndicatorSection>
+        <div className="border-2 border-emerald-500/30 rounded-xl p-3 bg-dark-surface/40 backdrop-blur-sm shadow-sm shadow-emerald-500/10">
+          <h4 className="text-[10px] sm:text-xs font-bold text-dark-secondary mb-2 uppercase tracking-wider">OPTIONS DATA (PCR & OI)</h4>
+          <div className="grid grid-cols-2 gap-2">
+            <TechnicalIndicator
+              label="PCR"
+              value={indicators.pcr ? indicators.pcr.toFixed(2) : 'N/A'}
+              status={indicators.pcr > 1.2 ? 'positive' : indicators.pcr < 0.8 ? 'negative' : 'neutral'}
+            />
+            <TechnicalIndicator
+              label="OI Change"
+              value={indicators.oi_change !== null ? `${indicators.oi_change > 0 ? '+' : ''}${indicators.oi_change.toFixed(2)}%` : 'N/A'}
+              status={indicators.oi_change > 0 ? 'positive' : 'negative'}
+            />
+          </div>
+        </div>
       </div>
     </div>
   );
