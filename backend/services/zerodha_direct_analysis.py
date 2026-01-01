@@ -25,7 +25,6 @@ class ZerodhaDirectAnalysis:
         
         if self.access_token:
             self.kite.set_access_token(self.access_token)
-            print("✅ Zerodha Direct API initialized")
         else:
             print("⚠️ No access token - using fallback mode")
         

@@ -153,9 +153,6 @@ const AnalysisCardContent = memo<AnalysisCardProps>(({ analysis }) => {
             ₹{formattedPrice}
           </div>
         </div>
-        
-        {/* Signal Badge */}
-        <SignalBadge signal={signal} confidence={confidence} />
       </div>
 
       {/* Quick Stats Grid */}

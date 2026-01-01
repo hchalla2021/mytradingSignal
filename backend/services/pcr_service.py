@@ -37,7 +37,6 @@ class PCRService:
                 self.kite = KiteConnect(api_key=settings.zerodha_api_key)
                 self.kite.set_access_token(settings.zerodha_access_token)
                 self._initialized = True
-                print(f"✅ PCR Service: KiteConnect initialized successfully")
             except Exception as e:
                 print(f"❌ Failed to initialize KiteConnect for PCR: {e}")
         elif not settings.zerodha_api_key or not settings.zerodha_access_token:
@@ -55,7 +54,6 @@ class PCRService:
         if symbol in _PCR_CACHE and symbol in _LAST_UPDATE:
             elapsed = (now - _LAST_UPDATE[symbol]).total_seconds()
             if elapsed < 30:  # Increased to 30 seconds to avoid rate limits
-                print(f"[CACHE] Using cached PCR for {symbol} (age: {elapsed:.1f}s)")
                 return _PCR_CACHE[symbol]
         
         # Default values
@@ -77,14 +75,12 @@ class PCRService:
             until = _RATE_LIMITED_UNTIL[symbol]
             if now < until:
                 wait_seconds = (until - now).total_seconds()
-                print(f"[RATE-LIMIT] {symbol} rate limited, skipping (retry in {wait_seconds:.0f}s)")
-                # Return stale cache if available
+                # Rate limited, return cached data if available
                 if symbol in _PCR_CACHE:
                     return _PCR_CACHE[symbol]
                 return default_data
         
         try:
-            print(f"[FETCH] Fetching fresh PCR data for {symbol}...")
             # Get options chain data
             pcr_data = await asyncio.to_thread(self._fetch_pcr_from_zerodha, symbol)
             _PCR_CACHE[symbol] = pcr_data
@@ -92,12 +88,7 @@ class PCRService:
             # Clear rate limit flag on success
             if symbol in _RATE_LIMITED_UNTIL:
                 del _RATE_LIMITED_UNTIL[symbol]
-                print(f"[RECOVERED] {symbol} rate limit cleared")
             _LAST_UPDATE[symbol] = now
-            
-            # Log successful PCR fetch
-            if pcr_data.get("pcr", 0) > 0:
-                print(f"[OK] PCR Fetched for {symbol}: {pcr_data['pcr']:.2f} (Call:{pcr_data.get('callOI', 0):,}, Put:{pcr_data.get('putOI', 0):,})")
             
             return pcr_data
         except Exception as e:
@@ -116,7 +107,6 @@ class PCRService:
             # Return cached data if available
             if symbol in _PCR_CACHE:
                 age = (now - _LAST_UPDATE.get(symbol, now)).total_seconds()
-                print(f"[FALLBACK] Using stale PCR for {symbol} (age: {age:.0f}s)")
                 return _PCR_CACHE[symbol]
             
             print(f"[ERROR] No cached PCR for {symbol}, returning zeros")

@@ -99,6 +99,48 @@ const ZoneControlCard = memo<ZoneControlCardProps>(({ symbol, name }) => {
     return 'text-emerald-500';
   };
 
+  const getConfidenceColor = (confidence: number) => {
+    if (confidence >= 80) return 'text-emerald-400 bg-emerald-950/30 border-emerald-500/50';
+    if (confidence >= 60) return 'text-green-400 bg-green-950/30 border-green-500/40';
+    if (confidence >= 40) return 'text-yellow-400 bg-yellow-950/30 border-yellow-500/40';
+    if (confidence >= 20) return 'text-orange-400 bg-orange-950/30 border-orange-500/40';
+    return 'text-red-400 bg-red-950/30 border-red-500/40';
+  };
+
+  const getSignalColorEnhanced = (signal: string) => {
+    const upperSignal = signal.toUpperCase();
+    // EXTREME BUY - Brightest Green
+    if (upperSignal.includes('EXTREME') && (upperSignal.includes('BUY') || upperSignal.includes('BULLISH'))) {
+      return 'bg-green-900/40 text-green-300 border-green-400/70 shadow-lg shadow-green-500/20';
+    }
+    // STRONG BUY - Strong Green
+    if (upperSignal.includes('STRONG') && (upperSignal.includes('BUY') || upperSignal.includes('BULLISH'))) {
+      return 'bg-emerald-950/35 text-emerald-300 border-emerald-500/60';
+    }
+    // BUY - Standard Green
+    if (upperSignal.includes('BUY') || upperSignal === 'BULLISH' || upperSignal === 'BUY_ZONE') {
+      return 'bg-emerald-950/30 text-emerald-400 border-emerald-500/50';
+    }
+    // EXTREME SELL - Brightest Red
+    if (upperSignal.includes('EXTREME') && (upperSignal.includes('SELL') || upperSignal.includes('BEARISH'))) {
+      return 'bg-red-900/40 text-red-300 border-red-400/70 shadow-lg shadow-red-500/20';
+    }
+    // STRONG SELL - Strong Red
+    if (upperSignal.includes('STRONG') && (upperSignal.includes('SELL') || upperSignal.includes('BEARISH'))) {
+      return 'bg-rose-950/35 text-rose-300 border-rose-500/60';
+    }
+    // SELL - Standard Red
+    if (upperSignal.includes('SELL') || upperSignal === 'BEARISH' || upperSignal === 'SELL_ZONE') {
+      return 'bg-rose-950/30 text-rose-400 border-rose-500/50';
+    }
+    // NEUTRAL/WAIT - Gray
+    if (upperSignal === 'NEUTRAL' || upperSignal === 'WAIT' || upperSignal === 'NO_TRADE') {
+      return 'bg-gray-950/30 text-gray-400 border-gray-500/40';
+    }
+    // Other - Amber
+    return 'bg-amber-950/30 text-amber-400 border-amber-500/40';
+  };
+
   const getBounceColor = (prob: number) => {
     if (prob >= 70) return 'text-emerald-500';
     if (prob >= 50) return 'text-amber-500';

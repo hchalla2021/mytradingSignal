@@ -63,22 +63,12 @@ class TokenWatcher(FileSystemEventHandler):
             new_token = settings.zerodha_access_token
             
             if new_token and new_token != self.last_token:
-                now = datetime.now(IST)
-                print("\n" + "=" * 80)
-                print(f"🔄 TOKEN CHANGE DETECTED at {now.strftime('%Y-%m-%d %H:%M:%S')}")
-                print("=" * 80)
-                print(f"   Old Token: {self.last_token[:20] if self.last_token else 'None'}...")
-                print(f"   New Token: {new_token[:20]}...")
-                print("   🔌 Auto-reconnecting to Zerodha (NO RESTART NEEDED)...")
-                
                 # Update stored token
                 self.last_token = new_token
                 
                 # Trigger reconnection with new token
                 if self.market_feed:
                     await self.market_feed.reconnect_with_new_token(new_token)
-                    print("   ✅ Reconnection initiated - Live data will resume shortly")
-                    print("=" * 80 + "\n")
                 
         except Exception as e:
             print(f"⚠️ Error reloading token: {e}")
@@ -93,10 +83,5 @@ def start_token_watcher(market_feed_service):
     watch_path = Path(__file__).parent.parent
     observer.schedule(event_handler, str(watch_path), recursive=False)
     observer.start()
-    
-    print("✅ Token Auto-Reload Service started")
-    print("   → Watches .env file for token changes")
-    print("   → Auto-reconnects to Zerodha (no restart needed)")
-    print("   → Updates every time you refresh token via login\n")
     
     return observer

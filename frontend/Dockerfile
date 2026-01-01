@@ -14,5 +14,8 @@ COPY . .
 # Expose port
 EXPOSE 3000
 
-# Run development server
-CMD ["npm", "run", "dev"]
+# Build the application for production
+RUN npm run build
+
+# Run production server
+CMD ["npm", "start"]

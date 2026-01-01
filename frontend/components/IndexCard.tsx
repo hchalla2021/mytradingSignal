@@ -6,12 +6,20 @@ import { MarketTick } from '@/hooks/useMarketSocket';
 import AIAlertTooltip from './AIAlertTooltip';
 import type { AIAlertTooltipData } from '@/types/ai';
 
+interface SymbolOutlook {
+  overallConfidence: number;
+  overallSignal: 'STRONG_BUY' | 'BUY' | 'NEUTRAL' | 'SELL' | 'STRONG_SELL';
+  tradeRecommendation: string;
+  riskLevel: 'LOW' | 'MEDIUM' | 'HIGH';
+}
+
 interface IndexCardProps {
   symbol: string;
   name: string;
   data: MarketTick | null;
   isConnected: boolean;
   aiAlertData?: AIAlertTooltipData;
+  outlookData?: SymbolOutlook | null;
 }
 
 // Reusable market analysis utilities
@@ -123,7 +131,7 @@ const MarketUtils = {
   },
 };
 
-const IndexCard: React.FC<IndexCardProps> = memo(({ symbol, name, data, isConnected, aiAlertData }) => {
+const IndexCard = ({ symbol, name, data, isConnected, aiAlertData, outlookData }: IndexCardProps) => {
   const [flash, setFlash] = useState<'green' | 'red' | null>(null);
   const [showAlert, setShowAlert] = useState(false);
   const [lastUpdate, setLastUpdate] = useState<string>('');
@@ -139,12 +147,12 @@ const IndexCard: React.FC<IndexCardProps> = memo(({ symbol, name, data, isConnec
   // Memoized calculations
   const analysis = useMemo(() => MarketUtils.analyzeTrend(data), [data]);
   const pcrAnalysis = useMemo(() => MarketUtils.analyzePCR(data?.pcr || 0), [data?.pcr]);
-  const rangePos = useMemo(() => 
-    data ? MarketUtils.getRangePosition(data.price, data.low, data.high) : 50
-  , [data]);
-  const intradayChange = useMemo(() => 
-    data ? ((data.price - data.open) / data.open * 100) : 0
-  , [data]);
+  const rangePos = useMemo(() => {
+    return data ? MarketUtils.getRangePosition(data.price, data.low, data.high) : 50;
+  }, [data]);
+  const intradayChange = useMemo(() => {
+    return data ? ((data.price - data.open) / data.open * 100) : 0;
+  }, [data]);
 
   // Flash animation on price change
   useEffect(() => {
@@ -169,9 +177,9 @@ const IndexCard: React.FC<IndexCardProps> = memo(({ symbol, name, data, isConnec
   const getTrendIcon = (size = 5) => {
     const cls = `w-${size} h-${size}`;
     if (!data) return <Minus className={cls} />;
-    return data.trend === 'bullish' ? <TrendingUp className={cls} /> : 
-           data.trend === 'bearish' ? <TrendingDown className={cls} /> : 
-           <Minus className={cls} />;
+    if (data.trend === 'bullish') return <TrendingUp className={cls} />;
+    if (data.trend === 'bearish') return <TrendingDown className={cls} />;
+    return <Minus className={cls} />;
   };
 
   const getStatusBadge = () => {
@@ -239,6 +247,53 @@ const IndexCard: React.FC<IndexCardProps> = memo(({ symbol, name, data, isConnec
         </div>
         {getStatusBadge()}
       </div>
+
+      {/* Overall Market Outlook - Aggregated Analysis */}
+      {outlookData && (
+        <div className="mb-3 p-2.5 bg-gradient-to-br from-emerald-950/30 to-dark-surface/50 rounded-lg border border-emerald-500/30">
+          <div className="flex items-center justify-between gap-2 mb-1.5">
+            <span className="text-[10px] font-bold text-emerald-400 uppercase tracking-wide">📊 Market Outlook</span>
+            <span className={`px-1.5 py-0.5 text-[9px] font-bold rounded border ${
+              outlookData.riskLevel === 'LOW' 
+                ? 'bg-green-950/30 text-green-400 border-green-500/50'
+                : outlookData.riskLevel === 'HIGH'
+                ? 'bg-red-950/30 text-red-400 border-red-500/50'
+                : 'bg-yellow-950/30 text-yellow-400 border-yellow-500/50'
+            }`}>
+              {outlookData.riskLevel} RISK
+            </span>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className={`flex-1 px-2 py-1 text-[10px] font-bold rounded border text-center ${
+              outlookData.overallSignal === 'STRONG_BUY'
+                ? 'bg-green-950/30 text-green-300 border-green-500/60'
+                : outlookData.overallSignal === 'BUY'
+                ? 'bg-green-900/30 text-green-400 border-green-500/50'
+                : outlookData.overallSignal === 'STRONG_SELL'
+                ? 'bg-red-950/30 text-red-300 border-red-500/60'
+                : outlookData.overallSignal === 'SELL'
+                ? 'bg-red-900/30 text-red-400 border-red-500/50'
+                : 'bg-gray-900/30 text-gray-400 border-gray-500/50'
+            }`}>
+              {outlookData.overallSignal.replace('_', ' ')}
+            </span>
+            <span className="text-sm font-bold text-emerald-300 bg-emerald-950/30 border border-emerald-500/40 rounded px-1.5 py-0.5">
+              {outlookData.overallConfidence}%
+            </span>
+          </div>
+          <p className={`text-[9px] mt-1.5 leading-tight font-bold ${
+            outlookData.tradeRecommendation.includes('WAIT') || outlookData.tradeRecommendation.includes('Mixed')
+              ? 'text-white'
+              : outlookData.tradeRecommendation.includes('BUY')
+              ? 'text-emerald-300'
+              : outlookData.tradeRecommendation.includes('SELL')
+              ? 'text-rose-300'
+              : 'text-dark-tertiary'
+          }`}>
+            {outlookData.tradeRecommendation}
+          </p>
+        </div>
+      )}
 
       {/* Price */}
       <div className="mb-3 sm:mb-4">
@@ -406,8 +461,8 @@ const IndexCard: React.FC<IndexCardProps> = memo(({ symbol, name, data, isConnec
       </div>
     </div>
   );
-});
+};
 
 IndexCard.displayName = 'IndexCard';
 
-export default IndexCard;
+export default memo(IndexCard);

@@ -108,13 +108,6 @@ class VolumePulseEngine:
             # === TREND CLASSIFICATION ===
             trend = self._classify_trend(pulse_score, ratio)
             
-            # DEBUG LOGGING - Show actual values for troubleshooting
-            print(f"[VOLUME-PULSE] {symbol} Analysis:")
-            print(f"   → Green Vol: {green_vol:,} | Red Vol: {red_vol:,}")
-            print(f"   → Green%: {green_pct:.1f}% | Red%: {red_pct:.1f}%")
-            print(f"   → Ratio: {ratio} | Pulse Score: {pulse_score}")
-            print(f"   → Signal: {signal} ({confidence}% conf) | Trend: {trend}")
-            
             # Cache for next iteration (prevent recalculation)
             self._cache[symbol] = (green_vol, red_vol)
             
@@ -131,7 +124,7 @@ class VolumePulseEngine:
             )
             
         except Exception as e:
-            print(f"[VOLUME-PULSE] Error analyzing {symbol}: {e}")
+            # Error in volume pulse analysis
             return self._create_neutral_result(symbol, f"Error: {e}")
     
     def _calculate_pulse_score(

@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useMarketSocket } from '@/hooks/useMarketSocket';
 import { useAIAnalysis } from '@/hooks/useAIAnalysis';
+import { useOverallMarketOutlook } from '@/hooks/useOverallMarketOutlook';
 import { useAuth } from '@/hooks/useAuth';
 import Header from '@/components/Header';
 import IndexCard from '@/components/IndexCard';
@@ -15,6 +16,7 @@ import ZoneControlCard from '@/components/ZoneControlCard';
 export default function Home() {
   const { marketData, isConnected, connectionStatus } = useMarketSocket();
   const { alertData, loading: aiLoading, error: aiError } = useAIAnalysis();
+  const { outlookData, loading: outlookLoading } = useOverallMarketOutlook();
   const { isAuthenticated } = useAuth();
   const [currentTime, setCurrentTime] = useState<string>('');
   const [updateCounter, setUpdateCounter] = useState(0);
@@ -87,6 +89,163 @@ export default function Home() {
       <div className="w-full px-2 sm:px-4 lg:px-6 xl:px-8 py-2">
         <LiveStatus status={connectionStatus} isConnected={isConnected} />
       </div>
+
+      {/* Overall Market Outlook - Comprehensive Aggregated Analysis */}
+      {outlookData && (outlookData.NIFTY || outlookData.BANKNIFTY || outlookData.SENSEX) && (
+        <div className="w-full px-2 sm:px-4 lg:px-6 xl:px-8 py-2">
+          <div className="bg-gradient-to-br from-emerald-950/20 via-dark-card/50 to-dark-elevated/40 backdrop-blur-sm rounded-xl border-2 border-emerald-500/30 p-3 sm:p-4 shadow-xl shadow-emerald-500/10">
+            <h3 className="text-sm sm:text-base font-bold text-dark-text mb-3 flex items-center gap-2">
+              <span className="text-lg">📊</span>
+              Overall Market Outlook
+              <span className="text-[10px] sm:text-xs text-dark-tertiary font-normal ml-2">
+                (Aggregated: Technical 30% • Zone Control 25% • Volume 20% • Trend 15% • Market Indices 10%)
+              </span>
+            </h3>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              {/* NIFTY Outlook */}
+              {outlookData.NIFTY && (
+                <div className="bg-dark-surface/40 rounded-lg p-3 border-2 border-emerald-500/30 shadow-lg shadow-emerald-500/10">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-sm sm:text-base font-bold text-dark-text">NIFTY 50</span>
+                    <span className={`px-2 py-1 text-xs font-bold rounded-md border-2 ${
+                      outlookData.NIFTY.riskLevel === 'LOW' 
+                        ? 'bg-green-950/20 text-green-400 border-green-500/40'
+                        : outlookData.NIFTY.riskLevel === 'HIGH'
+                        ? 'bg-red-950/20 text-red-400 border-red-500/40'
+                        : 'bg-yellow-950/20 text-yellow-400 border-yellow-500/40'
+                    }`}>
+                      {outlookData.NIFTY.riskLevel} RISK
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2 mb-2">
+                    <span className={`flex-1 px-2.5 py-1.5 text-xs font-bold rounded-md border-2 text-center ${
+                      outlookData.NIFTY.overallSignal === 'STRONG_BUY'
+                        ? 'bg-green-950/20 text-green-300 border-green-500/50'
+                        : outlookData.NIFTY.overallSignal === 'BUY'
+                        ? 'bg-green-900/20 text-green-400 border-green-500/40'
+                        : outlookData.NIFTY.overallSignal === 'STRONG_SELL'
+                        ? 'bg-red-950/20 text-red-300 border-red-500/50'
+                        : outlookData.NIFTY.overallSignal === 'SELL'
+                        ? 'bg-red-900/20 text-red-400 border-red-500/40'
+                        : 'bg-gray-900/20 text-gray-400 border-gray-500/40'
+                    }`}>
+                      {outlookData.NIFTY.overallSignal.replace('_', ' ')}
+                    </span>
+                    <span className="text-lg font-bold text-emerald-400 bg-emerald-950/20 border-2 border-emerald-500/30 rounded px-2 py-1">
+                      {outlookData.NIFTY.overallConfidence}%
+                    </span>
+                  </div>
+                  <p className={`text-[10px] leading-tight font-bold ${
+                    outlookData.NIFTY.tradeRecommendation.includes('WAIT') || outlookData.NIFTY.tradeRecommendation.includes('Mixed')
+                      ? 'text-white'
+                      : outlookData.NIFTY.tradeRecommendation.includes('BUY')
+                      ? 'text-emerald-300'
+                      : outlookData.NIFTY.tradeRecommendation.includes('SELL')
+                      ? 'text-rose-300'
+                      : 'text-dark-tertiary'
+                  }`}>
+                    {outlookData.NIFTY.tradeRecommendation}
+                  </p>
+                </div>
+              )}
+
+              {/* BANKNIFTY Outlook */}
+              {outlookData.BANKNIFTY && (
+                <div className="bg-dark-surface/40 rounded-lg p-3 border-2 border-emerald-500/30 shadow-lg shadow-emerald-500/10">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-sm sm:text-base font-bold text-dark-text">BANK NIFTY</span>
+                    <span className={`px-2 py-1 text-xs font-bold rounded-md border-2 ${
+                      outlookData.BANKNIFTY.riskLevel === 'LOW' 
+                        ? 'bg-green-950/20 text-green-400 border-green-500/40'
+                        : outlookData.BANKNIFTY.riskLevel === 'HIGH'
+                        ? 'bg-red-950/20 text-red-400 border-red-500/40'
+                        : 'bg-yellow-950/20 text-yellow-400 border-yellow-500/40'
+                    }`}>
+                      {outlookData.BANKNIFTY.riskLevel} RISK
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2 mb-2">
+                    <span className={`flex-1 px-2.5 py-1.5 text-xs font-bold rounded-md border-2 text-center ${
+                      outlookData.BANKNIFTY.overallSignal === 'STRONG_BUY'
+                        ? 'bg-green-950/20 text-green-300 border-green-500/50'
+                        : outlookData.BANKNIFTY.overallSignal === 'BUY'
+                        ? 'bg-green-900/20 text-green-400 border-green-500/40'
+                        : outlookData.BANKNIFTY.overallSignal === 'STRONG_SELL'
+                        ? 'bg-red-950/20 text-red-300 border-red-500/50'
+                        : outlookData.BANKNIFTY.overallSignal === 'SELL'
+                        ? 'bg-red-900/20 text-red-400 border-red-500/40'
+                        : 'bg-gray-900/20 text-gray-400 border-gray-500/40'
+                    }`}>
+                      {outlookData.BANKNIFTY.overallSignal.replace('_', ' ')}
+                    </span>
+                    <span className="text-lg font-bold text-emerald-400 bg-emerald-950/20 border-2 border-emerald-500/30 rounded px-2 py-1">
+                      {outlookData.BANKNIFTY.overallConfidence}%
+                    </span>
+                  </div>
+                  <p className={`text-[10px] leading-tight font-bold ${
+                    outlookData.BANKNIFTY.tradeRecommendation.includes('WAIT') || outlookData.BANKNIFTY.tradeRecommendation.includes('Mixed')
+                      ? 'text-white'
+                      : outlookData.BANKNIFTY.tradeRecommendation.includes('BUY')
+                      ? 'text-emerald-300'
+                      : outlookData.BANKNIFTY.tradeRecommendation.includes('SELL')
+                      ? 'text-rose-300'
+                      : 'text-dark-tertiary'
+                  }`}>
+                    {outlookData.BANKNIFTY.tradeRecommendation}
+                  </p>
+                </div>
+              )}
+
+              {/* SENSEX Outlook */}
+              {outlookData.SENSEX && (
+                <div className="bg-dark-surface/40 rounded-lg p-3 border-2 border-emerald-500/30 shadow-lg shadow-emerald-500/10">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-sm sm:text-base font-bold text-dark-text">SENSEX</span>
+                    <span className={`px-2 py-1 text-xs font-bold rounded-md border-2 ${
+                      outlookData.SENSEX.riskLevel === 'LOW' 
+                        ? 'bg-green-950/20 text-green-400 border-green-500/40'
+                        : outlookData.SENSEX.riskLevel === 'HIGH'
+                        ? 'bg-red-950/20 text-red-400 border-red-500/40'
+                        : 'bg-yellow-950/20 text-yellow-400 border-yellow-500/40'
+                    }`}>
+                      {outlookData.SENSEX.riskLevel} RISK
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2 mb-2">
+                    <span className={`flex-1 px-2.5 py-1.5 text-xs font-bold rounded-md border-2 text-center ${
+                      outlookData.SENSEX.overallSignal === 'STRONG_BUY'
+                        ? 'bg-green-950/20 text-green-300 border-green-500/50'
+                        : outlookData.SENSEX.overallSignal === 'BUY'
+                        ? 'bg-green-900/20 text-green-400 border-green-500/40'
+                        : outlookData.SENSEX.overallSignal === 'STRONG_SELL'
+                        ? 'bg-red-950/20 text-red-300 border-red-500/50'
+                        : outlookData.SENSEX.overallSignal === 'SELL'
+                        ? 'bg-red-900/20 text-red-400 border-red-500/40'
+                        : 'bg-gray-900/20 text-gray-400 border-gray-500/40'
+                    }`}>
+                      {outlookData.SENSEX.overallSignal.replace('_', ' ')}
+                    </span>
+                    <span className="text-lg font-bold text-emerald-400 bg-emerald-950/20 border-2 border-emerald-500/30 rounded px-2 py-1">
+                      {outlookData.SENSEX.overallConfidence}%
+                    </span>
+                  </div>
+                  <p className={`text-[10px] leading-tight font-bold ${
+                    outlookData.SENSEX.tradeRecommendation.includes('WAIT') || outlookData.SENSEX.tradeRecommendation.includes('Mixed')
+                      ? 'text-white'
+                      : outlookData.SENSEX.tradeRecommendation.includes('BUY')
+                      ? 'text-emerald-300'
+                      : outlookData.SENSEX.tradeRecommendation.includes('SELL')
+                      ? 'text-rose-300'
+                      : 'text-dark-tertiary'
+                  }`}>
+                    {outlookData.SENSEX.tradeRecommendation}
+                  </p>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Main Dashboard - Full Width */}
       <div className="w-full px-2 sm:px-4 lg:px-6 xl:px-8 py-3 sm:py-4">

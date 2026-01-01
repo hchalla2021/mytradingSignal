@@ -165,8 +165,7 @@ export function useMarketSocket() {
         }
       };
 
-      ws.onerror = (error) => {
-        console.error('❌ WebSocket error:', error);
+      ws.onerror = () => {
         setConnectionStatus('error');
       };
 
@@ -205,7 +204,6 @@ export function useMarketSocket() {
     }
     
     // Connect to WebSocket in background (non-blocking)
-    console.log('🔌 Connecting to market feed in background...');
     connect();
 
     return () => {
