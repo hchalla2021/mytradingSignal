@@ -220,7 +220,7 @@ async def get_trend_base(symbol: str) -> Dict[str, Any]:
         
         print(f"[GLOBAL-TOKEN] Status: {'✅ Valid' if token_status['valid'] else '❌ Expired'}")
         
-        # Check cache first
+        # 🔥 FIX: Reduce cache to 3 seconds for near-real-time updates
         cache = get_cache()
         cache_key = f"trend_base:{symbol}"
         cached = await cache.get(cache_key)
@@ -228,16 +228,18 @@ async def get_trend_base(symbol: str) -> Dict[str, Any]:
         if cached:
             # Update cache with current token status
             cached["token_valid"] = token_status["valid"]
-            print(f"[TREND-BASE] ⚡ Cache hit for {symbol}")
+            print(f"[TREND-BASE] ⚡ Cache hit for {symbol} (3s cache)")
             return cached
         
         # 🚀 FETCH LIVE HISTORICAL CANDLES FROM ZERODHA
         print(f"[TREND-BASE] 🚀 Fetching LIVE data from Zerodha...")
         print(f"   → Symbol: {symbol}")
-        print(f"   → Lookback: 100 candles")
-        print(f"   → Time range: Last 15 days")
+        print(f"   → Lookback: 100 candles (5-min)")
+        print(f"   → Time range: Last 3 days (for intraday patterns)")
         
-        df = await _get_historical_data_extended(symbol, lookback=100, days_back=15)
+        # 🔥 FIX: Use 3 days instead of 15 to focus on recent price action
+        # Trend Base needs recent swings, not old historical data
+        df = await _get_historical_data_extended(symbol, lookback=100, days_back=3)
         
         print(f"[TREND-BASE] 📊 Data fetch result:")
         print(f"   → Candles received: {len(df)}")
@@ -338,13 +340,14 @@ async def get_trend_base(symbol: str) -> Dict[str, Any]:
         result["candles_analyzed"] = len(df)
         result["token_valid"] = token_status["valid"]
         
-        # Cache result for 30 seconds (quick refresh)
-        await cache.set(cache_key, result, expire=30)
+        # 🔥 FIX: Cache for only 3 seconds to get near-real-time updates
+        # This allows trend structure to update quickly with new price action
+        await cache.set(cache_key, result, expire=3)
         
         # 🔥 PERMANENT FIX: Save as 24-hour backup for when token expires
         backup_cache_key = f"trend_base_backup:{symbol}"
         await cache.set(backup_cache_key, result, expire=86400)  # 24 hours
-        print(f"[TREND-BASE] 💾 Backup saved (24h) - will show if token expires")
+        print(f"[TREND-BASE] 💾 Cached for 3s (near-real-time) + 24h backup")
         
         print(f"[TREND-BASE] ✅ Analysis complete for {symbol}")
         print(f"   → Status: {result.get('data_status', 'UNKNOWN')}")
@@ -668,12 +671,13 @@ async def _get_historical_data_extended(symbol: str, lookback: int = 100, days_b
         kite.set_access_token(settings.zerodha_access_token)
         
         # Get instrument token for symbol
-        # SENSEX: Use SPOT index (not futures) because SENSEX futures are on BFO with different pricing
-        # NIFTY/BANKNIFTY: Use FUTURES for volume data (spot indices don't have volume)
+        # 🔥 FIXED: Use SPOT indices for Trend Base (Higher-Low structure)
+        # SPOT prices reflect actual index movements accurately
+        # FUTURES have premium/discount which distorts Higher-Low detection
         instrument_tokens = {
-            "NIFTY": settings.nifty_fut_token,      # NFO Futures
-            "BANKNIFTY": settings.banknifty_fut_token,  # NFO Futures  
-            "SENSEX": settings.sensex_token         # BSE SPOT Index (not futures!)
+            "NIFTY": settings.nifty_token,          # NSE SPOT Index
+            "BANKNIFTY": settings.banknifty_token,  # NSE SPOT Index  
+            "SENSEX": settings.sensex_token         # BSE SPOT Index
         }
         
         token = instrument_tokens.get(symbol)
@@ -682,7 +686,7 @@ async def _get_historical_data_extended(symbol: str, lookback: int = 100, days_b
             print(f"   → Supported symbols: {list(instrument_tokens.keys())}")
             return pd.DataFrame()
         
-        token_type = "SPOT" if symbol == "SENSEX" else "FUTURES"
+        token_type = "SPOT INDEX"
         print(f"[DATA-FETCH-EXT] 📌 Using {token_type} instrument token: {token}")
         
         # Fetch 5-minute candles with extended date range
