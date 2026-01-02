@@ -113,18 +113,8 @@ async def zerodha_callback(request_token: str = Query(...), status: str = Query(
         update_env_file(env_path, "ZERODHA_ACCESS_TOKEN", access_token)
         print(f"💾 Access token saved to .env file")
         
-        # Update settings
-        settings.zerodha_access_token = access_token
-        
-        # Trigger market feed reconnection
-        try:
-            from services.market_feed import market_feed_service
-            print("🔄 Triggering market feed reconnection...")
-            await market_feed_service.reconnect_with_new_token(access_token)
-            print("✅ Market feed reconnected successfully")
-        except Exception as e:
-            print(f"⚠️ Auto-reconnect failed: {e}")
-            print("   Backend will use new token on next restart")
+        print(f"\n✅ TOKEN SAVED! File watcher will trigger automatic reconnection...")
+        print(f"   No backend restart needed - connection will resume automatically")
         
         print(f"\n🎉 AUTHENTICATION COMPLETE - Redirecting to dashboard...\n")
         

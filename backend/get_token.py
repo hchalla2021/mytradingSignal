@@ -4,10 +4,25 @@ Run this daily to refresh your token
 """
 from kiteconnect import KiteConnect
 import webbrowser
+import os
+from dotenv import load_dotenv
 
-# Your API credentials
-api_key = "g5tyrnn1mlckrb6f"
-api_secret = "6cusjkixpyv7pii7c2rtei61ewcoxj3l"
+# Load environment variables from .env
+load_dotenv()
+
+# Get API credentials from environment variables
+api_key = os.getenv('ZERODHA_API_KEY')
+api_secret = os.getenv('ZERODHA_API_SECRET')
+
+if not api_key or not api_secret:
+    print("\n" + "="*70)
+    print("❌ ERROR: Zerodha credentials not configured!")
+    print("="*70)
+    print("\nSet these in backend/.env:")
+    print("  ZERODHA_API_KEY=your_api_key")
+    print("  ZERODHA_API_SECRET=your_api_secret")
+    print("\nGet credentials from: https://developers.kite.trade/apps\n")
+    exit(1)
 
 # Initialize Kite
 kite = KiteConnect(api_key=api_key)

@@ -294,6 +294,7 @@ class MarketFeedService:
         """Fetch last traded data from Zerodha and cache it - works even when market is closed."""
         try:
             from kiteconnect import KiteConnect
+            from kiteconnect.exceptions import TokenException
             print("📊 Fetching last traded data from Zerodha...")
             
             kite = KiteConnect(api_key=settings.zerodha_api_key)
@@ -442,8 +443,41 @@ class MarketFeedService:
             print(f"✅ All last traded data cached and ready for display")
             return True
             
+        except TokenException as e:
+            print("\n" + "="*80)
+            print("🔴 ZERODHA TOKEN ERROR - ACCESS TOKEN HAS EXPIRED!")
+            print("="*80)
+            print(f"Error: {e}")
+            print("\n💡 SOLUTION:")
+            print("   1. Zerodha access tokens expire DAILY (every 24 hours)")
+            print("   2. Generate a new token using one of these methods:\n")
+            print("   METHOD A - Quick Token Fix Script:")
+            print("      python quick_token_fix.py")
+            print("\n   METHOD B - Manual Token Generation:")
+            print("      Step 1: Open in browser:")
+            print(f"              https://kite.zerodha.com/connect/login?api_key={settings.zerodha_api_key}")
+            print("      Step 2: Login with your Zerodha credentials")
+            print("      Step 3: Copy request_token from redirect URL")
+            print("      Step 4: Run: python backend/get_token.py")
+            print("      Step 5: Paste request_token and press Enter")
+            print("\n   3. Token will be auto-saved to backend/.env")
+            print("   4. Backend will auto-reconnect when token file changes")
+            print("\n🔄 Waiting for new token... (watching .env file)")
+            print("="*80 + "\n")
+            return False
+            
         except Exception as e:
-            print(f"❌ Failed to fetch last traded data: {e}")
+            error_msg = str(e)
+            print(f"❌ Failed to fetch last traded data: {error_msg}")
+            
+            # Provide context-specific error messages
+            if "403" in error_msg or "Forbidden" in error_msg:
+                print("⚠️  ACCESS DENIED - Likely token expiration issue")
+            elif "connection" in error_msg.lower():
+                print("⚠️  CONNECTION ERROR - Check internet connection")
+            elif "timeout" in error_msg.lower():
+                print("⚠️  TIMEOUT - Zerodha API may be slow or unavailable")
+            
             import traceback
             traceback.print_exc()
             return False
@@ -494,7 +528,21 @@ class MarketFeedService:
     
     def _on_error(self, ws, code, reason):
         """Callback on error."""
-        print(f"❌ Zerodha error: {code} - {reason}")
+        error_msg = f"{code} - {reason}"
+        print(f"❌ Zerodha error: {error_msg}")
+        
+        # Provide helpful error messages
+        if code == 1006 or "403" in str(reason) or "Forbidden" in str(reason):
+            print("\n" + "="*80)
+            print("🔴 ZERODHA ACCESS TOKEN ERROR")
+            print("="*80)
+            print("❌ Token has expired or is invalid (403 Forbidden)")
+            print("\n💡 QUICK FIX:")
+            print("   python quick_token_fix.py")
+            print("\n   OR manually regenerate token at:")
+            print(f"   https://kite.zerodha.com/connect/login?api_key={settings.zerodha_api_key}")
+            print("\n🔄 Backend is watching for token updates and will auto-reconnect")
+            print("="*80 + "\n")
     
     def _on_reconnect(self, ws, attempts_count):
         """Callback on reconnect attempt."""
@@ -521,6 +569,7 @@ class MarketFeedService:
     
     async def start(self):
         """Start the market feed service."""
+        from kiteconnect.exceptions import TokenException
         self.running = True
         self._loop = asyncio.get_event_loop()
         
@@ -577,7 +626,27 @@ class MarketFeedService:
                 
                 await asyncio.sleep(0.1)  # Small sleep to prevent busy loop
                 
+        except TokenException as e:
+            print("\n" + "="*80)
+            print("🔴 ZERODHA TOKEN EXCEPTION")
+            print("="*80)
+            print(f"Error: {e}")
+            print("\n💡 Your Zerodha access token has EXPIRED or is INVALID")
+            print("   Tokens expire daily and must be regenerated.\n")
+            print("🔧 QUICK FIX:")
+            print("   1. Run: python quick_token_fix.py")
+            print("   2. OR open: https://kite.zerodha.com/connect/login?api_key=" + settings.zerodha_api_key)
+            print("   3. Login and copy request_token")
+            print("   4. Run: python backend/get_token.py")
+            print("\n🔄 Backend will automatically reconnect when token is updated")
+            print("="*80 + "\n")
+            
+            # Don't retry immediately for token errors - wait for manual fix
+            await asyncio.sleep(60)  # Wait 1 minute before checking again
+            
         except Exception as e:
+            from kiteconnect.exceptions import TokenException
+            error_msg = str(e)
             error_msg = str(e)
             print(f"❌ Market feed error: {error_msg}")
             
@@ -653,18 +722,43 @@ class MarketFeedService:
     
     async def reconnect_with_new_token(self, new_access_token: str):
         """Reconnect to Zerodha with new access token."""
-        print(f"🔄 Reconnecting with new token: {new_access_token[:20]}...")
+        print("\n" + "="*80)
+        print("🔄 NEW TOKEN DETECTED - AUTO RECONNECTION STARTING")
+        print("="*80)
+        print(f"📝 New Token: {new_access_token[:20]}...")
         
-        # Stop current connection
+        # Stop current connection gracefully
+        print("🛑 Stopping current connection...")
         if self.kws:
-            self.kws.close()
-            self.running = False
-            await asyncio.sleep(2)  # Wait for cleanup
+            try:
+                self.kws.close()
+            except Exception as e:
+                print(f"⚠️ Error closing old connection: {e}")
         
-        # Update settings
-        settings.zerodha_access_token = new_access_token
+        self.running = False
+        await asyncio.sleep(3)  # Wait for cleanup
+        
+        # Reload settings from .env file (clear cache)
+        print("📂 Reloading settings from .env file...")
+        from functools import lru_cache
+        from config import get_settings
+        
+        # Clear the cache to force reload
+        get_settings.cache_clear()
+        
+        # Get fresh settings
+        fresh_settings = get_settings()
+        print(f"✅ Settings reloaded. New token: {fresh_settings.zerodha_access_token[:20]}...")
+        
+        # Update module-level settings
+        global settings
+        settings = fresh_settings
         
         # Start new connection
+        print("🚀 Starting new connection with fresh token...")
         self.running = True
         asyncio.create_task(self.start())
-        print("✅ Reconnection initiated with new token")
+        
+        print("✅ AUTO-RECONNECTION COMPLETE!")
+        print("📡 Live data should start flowing within seconds...")
+        print("="*80 + "\n")

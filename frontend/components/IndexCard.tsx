@@ -251,19 +251,27 @@ const IndexCard = ({ symbol, name, data, isConnected, aiAlertData, outlookData }
       {/* Overall Market Outlook - Aggregated Analysis */}
       {outlookData && (
         <div className="mb-3 p-2.5 bg-gradient-to-br from-emerald-950/30 to-dark-surface/50 rounded-lg border border-emerald-500/30">
+          {/* Header with Risk Badge */}
           <div className="flex items-center justify-between gap-2 mb-1.5">
             <span className="text-[10px] font-bold text-emerald-400 uppercase tracking-wide">📊 Market Outlook</span>
-            <span className={`px-1.5 py-0.5 text-[9px] font-bold rounded border ${
-              outlookData.riskLevel === 'LOW' 
-                ? 'bg-green-950/30 text-green-400 border-green-500/50'
-                : outlookData.riskLevel === 'HIGH'
-                ? 'bg-red-950/30 text-red-400 border-red-500/50'
-                : 'bg-yellow-950/30 text-yellow-400 border-yellow-500/50'
-            }`}>
-              {outlookData.riskLevel} RISK
-            </span>
+            <div className="flex items-center gap-1">
+              <span className={`px-1.5 py-0.5 text-[9px] font-bold rounded border ${
+                outlookData.riskLevel === 'LOW' 
+                  ? 'bg-green-950/30 text-green-400 border-green-500/50'
+                  : outlookData.riskLevel === 'HIGH'
+                  ? 'bg-red-950/30 text-red-400 border-red-500/50'
+                  : 'bg-yellow-950/30 text-yellow-400 border-yellow-500/50'
+              }`}>
+                {outlookData.riskLevel} RISK
+              </span>
+              <span className="text-[8px] text-gray-400">
+                ({outlookData.breakdownRiskPercent}% breakdown)
+              </span>
+            </div>
           </div>
-          <div className="flex items-center gap-2">
+          
+          {/* Signal and Confidence Row */}
+          <div className="flex items-center gap-2 mb-1">
             <span className={`flex-1 px-2 py-1 text-[10px] font-bold rounded border text-center ${
               outlookData.overallSignal === 'STRONG_BUY'
                 ? 'bg-green-950/30 text-green-300 border-green-500/60'
@@ -277,9 +285,12 @@ const IndexCard = ({ symbol, name, data, isConnected, aiAlertData, outlookData }
             }`}>
               {outlookData.overallSignal.replace('_', ' ')}
             </span>
-            <span className="text-sm font-bold text-emerald-300 bg-emerald-950/30 border border-emerald-500/40 rounded px-1.5 py-0.5">
-              {outlookData.overallConfidence}%
-            </span>
+            <div className="flex flex-col items-end">
+              <span className="text-sm font-bold text-emerald-300 bg-emerald-950/30 border border-emerald-500/40 rounded px-1.5 py-0.5">
+                {outlookData.overallConfidence}%
+              </span>
+              <span className="text-[7px] text-emerald-400/60 mt-0.5 whitespace-nowrap">Signal Strength</span>
+            </div>
           </div>
           <p className={`text-[9px] mt-1.5 leading-tight font-bold ${
             outlookData.tradeRecommendation.includes('WAIT') || outlookData.tradeRecommendation.includes('Mixed')

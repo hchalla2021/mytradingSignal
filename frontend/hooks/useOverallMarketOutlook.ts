@@ -36,6 +36,7 @@ interface SymbolOutlook {
     // ai: { signal: string; confidence: number; weight: number }; // COMMENTED OUT
   };
   riskLevel: 'LOW' | 'MEDIUM' | 'HIGH';
+  breakdownRiskPercent: number; // Added: actual breakdown risk percentage
   timestamp: string;
 }
 
@@ -86,6 +87,12 @@ export const useOverallMarketOutlook = () => {
     marketIndicesData: any // Live Market Indices momentum
     // ai: any // COMMENTED OUT - Not required
   ): SymbolOutlook => {
+    // Debug log zone control data
+    // Debug logs removed for production
+    // console.log('[RISK-DEBUG] Zone Control Data:', zoneControl);
+    // console.log('[RISK-DEBUG] Risk Metrics:', zoneControl?.risk_metrics);
+    // console.log('[RISK-DEBUG] Breakdown Risk:', zoneControl?.risk_metrics?.breakdown_risk);
+    
     // Extract signals and confidence
     const techSignal = technical?.signal || 'WAIT';
     const techConfidence = technical?.confidence ? technical.confidence * 100 : 0;
@@ -162,11 +169,19 @@ export const useOverallMarketOutlook = () => {
 
     // Calculate risk level based on zone control breakdown risk
     let riskLevel: 'LOW' | 'MEDIUM' | 'HIGH' = 'MEDIUM';
-    if (zoneControl?.risk_metrics) {
-      const breakdownRisk = zoneControl.risk_metrics.breakdown_risk || 0;
-      if (breakdownRisk >= 70) riskLevel = 'HIGH';
-      else if (breakdownRisk <= 30) riskLevel = 'LOW';
+    const breakdownRisk = zoneControl?.risk_metrics?.breakdown_risk || 50; // Default 50% if no data
+    
+    if (breakdownRisk >= 70) {
+      riskLevel = 'HIGH';
+    } else if (breakdownRisk <= 30) {
+      riskLevel = 'LOW';
+    } else {
+      riskLevel = 'MEDIUM';  // 31-69 range
     }
+    
+    // Debug log to verify calculation
+    // Debug log removed for production
+    // console.log(`[RISK-DEBUG] Breakdown Risk: ${breakdownRisk}% → Risk Level: ${riskLevel}`);
 
     // Generate trade recommendation
     let tradeRecommendation = '';
@@ -225,6 +240,7 @@ export const useOverallMarketOutlook = () => {
         // },
       },
       riskLevel,
+      breakdownRiskPercent: breakdownRisk, // Include the actual percentage
       timestamp: new Date().toISOString(),
     };
   }, []);

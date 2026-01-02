@@ -37,11 +37,14 @@ dist/
 
 # Environment variables
 .env
-.env.*
 .env.local
 .env.development
 .env.production
 *.log
+
+# Keep example files for reference
+!.env.example
+!.env.local.example
 
 # IDE
 .vscode/

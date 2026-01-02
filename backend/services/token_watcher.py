@@ -58,20 +58,36 @@ class TokenWatcher(FileSystemEventHandler):
             # Small delay to ensure file is fully written
             await asyncio.sleep(1)
             
+            print("\n👁️ Token file change detected! Checking for updates...")
+            
+            # Clear settings cache to force reload from .env
+            get_settings.cache_clear()
+            
             # Reload settings
             settings = get_settings()
             new_token = settings.zerodha_access_token
             
+            print(f"📝 Current token in .env: {new_token[:20] if new_token else 'EMPTY'}...")
+            print(f"📝 Last known token: {self.last_token[:20] if self.last_token else 'NONE'}...")
+            
             if new_token and new_token != self.last_token:
+                print("🔔 NEW TOKEN FOUND! Triggering automatic reconnection...")
+                
                 # Update stored token
                 self.last_token = new_token
                 
                 # Trigger reconnection with new token
                 if self.market_feed:
                     await self.market_feed.reconnect_with_new_token(new_token)
+                else:
+                    print("❌ Market feed service not available for reconnection")
+            else:
+                print("ℹ️ Token unchanged - no reconnection needed")
                 
         except Exception as e:
-            print(f"⚠️ Error reloading token: {e}")
+            print(f"❌ Error reloading token: {e}")
+            import traceback
+            traceback.print_exc()
 
 
 def start_token_watcher(market_feed_service):
