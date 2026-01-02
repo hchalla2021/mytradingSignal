@@ -212,15 +212,6 @@ class InstantSignal:
                 'neutral': 'SIDEWAYS'
             }
             
-            # CORRECT VWAP POSITION based on actual price vs VWAP
-            vwap_value = tick_data.get('vwap', price)
-            if price > vwap_value:
-                vwap_pos = 'ABOVE_VWAP'
-            elif price < vwap_value:
-                vwap_pos = 'BELOW_VWAP'
-            else:
-                vwap_pos = 'AT_VWAP'
-            
             # Volume strength classification (different thresholds for indices vs stocks)
             # NSE INDICES (NFO): Daily futures volume typically 500K-2M contracts
             # BSE INDICES (BFO): Daily futures volume typically 10K-100K contracts (lower liquidity)
@@ -312,6 +303,19 @@ class InstantSignal:
                     vwap_value = typical_price  # Simplified for real-time
                 else:
                     vwap_value = price
+            
+            # NOW determine VWAP position using properly calculated VWAP (with ±0.1% threshold)
+            vwap_threshold = 0.001  # 0.1% tolerance for "AT VWAP"
+            price_deviation = abs(price - vwap_value) / vwap_value if vwap_value > 0 else 0
+            
+            if price_deviation <= vwap_threshold:
+                vwap_pos = 'AT_VWAP'  # Within ±0.1% of VWAP
+            elif price > vwap_value:
+                vwap_pos = 'ABOVE_VWAP'
+            else:
+                vwap_pos = 'BELOW_VWAP'
+            
+            print(f"[VWAP-CHECK] {symbol}: Price=₹{price:.2f}, VWAP=₹{vwap_value:.2f}, Deviation={price_deviation*100:.3f}%, Position={vwap_pos}")
             
             # Calculate approximate EMAs (simplified but more realistic)
             # For intraday, use current price with smaller deviations
