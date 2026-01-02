@@ -68,14 +68,15 @@ export const useOverallMarketOutlook = () => {
   const [loading, setLoading] = useState(true);
 
   // Convert signal string to numeric score (-100 to +100)
+  // BUYER-FRIENDLY: NEUTRAL = +25 (slight positive bias since market default is growth-oriented)
   const signalToScore = (signal: string): number => {
     const upperSignal = signal.toUpperCase();
     if (upperSignal.includes('STRONG_BUY') || upperSignal === 'STRONG BUY') return 100;
     if (upperSignal.includes('BUY') || upperSignal === 'BULLISH') return 75;
-    if (upperSignal.includes('NEUTRAL') || upperSignal === 'WAIT' || upperSignal === 'NO_TRADE') return 0;
+    if (upperSignal.includes('NEUTRAL') || upperSignal === 'WAIT' || upperSignal === 'NO_TRADE') return 25; // 🔥 CHANGED: +25 instead of 0
     if (upperSignal.includes('SELL') || upperSignal === 'BEARISH') return -75;
     if (upperSignal.includes('STRONG_SELL') || upperSignal === 'STRONG SELL') return -100;
-    return 0;
+    return 25; // Default to slight positive
   };
 
   // Calculate aggregated confidence score
@@ -107,27 +108,28 @@ export const useOverallMarketOutlook = () => {
     const trendConfidence = trendBase?.confidence || 0;
 
     // Calculate market indices momentum signal from price change
+    // BUYER-FRIENDLY: Lower thresholds for BUY signals, higher thresholds for SELL signals
     const priceChange = marketIndicesData?.change || 0;
     const priceChangePercent = marketIndicesData?.changePercent || 0;
     let marketIndicesSignal = 'NEUTRAL';
     let marketIndicesConfidence = 0;
     
-    if (priceChangePercent >= 2) {
+    if (priceChangePercent >= 1.5) {
       marketIndicesSignal = 'STRONG_BUY';
-      marketIndicesConfidence = 90;
-    } else if (priceChangePercent >= 1) {
+      marketIndicesConfidence = 95;
+    } else if (priceChangePercent >= 0.7) {
       marketIndicesSignal = 'BUY';
-      marketIndicesConfidence = 75;
-    } else if (priceChangePercent >= 0.3) {
+      marketIndicesConfidence = 85;
+    } else if (priceChangePercent >= 0.2) {
       marketIndicesSignal = 'BUY';
-      marketIndicesConfidence = 60;
+      marketIndicesConfidence = 70;
     } else if (priceChangePercent <= -2) {
       marketIndicesSignal = 'STRONG_SELL';
       marketIndicesConfidence = 90;
-    } else if (priceChangePercent <= -1) {
+    } else if (priceChangePercent <= -1.2) {
       marketIndicesSignal = 'SELL';
       marketIndicesConfidence = 75;
-    } else if (priceChangePercent <= -0.3) {
+    } else if (priceChangePercent <= -0.5) {
       marketIndicesSignal = 'SELL';
       marketIndicesConfidence = 60;
     } else {
@@ -156,27 +158,56 @@ export const useOverallMarketOutlook = () => {
       // + (aiScore * aiConfidence * SIGNAL_WEIGHTS.ai / 100) // COMMENTED OUT
     ) / 100;
 
-    // Calculate overall confidence (0-100)
-    const overallConfidence = Math.abs(totalWeightedScore);
+    // Calculate overall confidence (0-100) - SEPARATE from signal score
+    // Confidence = weighted average of individual confidences (not signal scores)
+    const overallConfidence = (
+      (techConfidence * SIGNAL_WEIGHTS.technical) +
+      (zoneConfidence * SIGNAL_WEIGHTS.zoneControl) +
+      (volumeConfidence * SIGNAL_WEIGHTS.volumePulse) +
+      (trendConfidence * SIGNAL_WEIGHTS.trendBase) +
+      (marketIndicesConfidence * SIGNAL_WEIGHTS.marketIndices)
+    ) / 100;
+    
+    // 🔥 BONUS: Add alignment bonus (when signals agree, confidence increases)
+    const bullishCount = [techScore, zoneScore, volumeScore, trendScore, marketIndicesScore].filter(s => s > 0).length;
+    const bearishCount = [techScore, zoneScore, volumeScore, trendScore, marketIndicesScore].filter(s => s < 0).length;
+    const alignmentBonus = Math.abs(bullishCount - bearishCount) * 3; // +3% per aligned signal
+    const finalConfidence = Math.min(100, overallConfidence + alignmentBonus);
 
-    // Determine overall signal
+    // Determine overall signal - BUYER-FRIENDLY THRESHOLDS
     let overallSignal: 'STRONG_BUY' | 'BUY' | 'NEUTRAL' | 'SELL' | 'STRONG_SELL';
-    if (totalWeightedScore >= 70) overallSignal = 'STRONG_BUY';
-    else if (totalWeightedScore >= 40) overallSignal = 'BUY';
+    if (totalWeightedScore >= 60) overallSignal = 'STRONG_BUY';  // 🔥 CHANGED: 60 from 70
+    else if (totalWeightedScore >= 30) overallSignal = 'BUY';     // 🔥 CHANGED: 30 from 40
     else if (totalWeightedScore <= -70) overallSignal = 'STRONG_SELL';
-    else if (totalWeightedScore <= -40) overallSignal = 'SELL';
+    else if (totalWeightedScore <= -45) overallSignal = 'SELL';   // 🔥 CHANGED: -45 from -40
     else overallSignal = 'NEUTRAL';
 
-    // Calculate risk level based on zone control breakdown risk
+    // Calculate risk level with MULTI-FACTOR ANALYSIS (not just zone control)
+    // Factors: Breakdown Risk, Confidence Spread, Signal Alignment
     let riskLevel: 'LOW' | 'MEDIUM' | 'HIGH' = 'MEDIUM';
-    const breakdownRisk = zoneControl?.risk_metrics?.breakdown_risk || 50; // Default 50% if no data
+    const breakdownRisk = zoneControl?.risk_metrics?.breakdown_risk || 50;
     
-    if (breakdownRisk >= 70) {
+    // Factor 1: Zone Control breakdown risk (40% weight)
+    let riskScore = breakdownRisk * 0.4;
+    
+    // Factor 2: Confidence alignment (30% weight)
+    const avgConfidence = (techConfidence + zoneConfidence + volumeConfidence + trendConfidence + marketIndicesConfidence) / 5;
+    const confidenceSpread = Math.max(techConfidence, zoneConfidence, volumeConfidence, trendConfidence, marketIndicesConfidence) - 
+                             Math.min(techConfidence, zoneConfidence, volumeConfidence, trendConfidence, marketIndicesConfidence);
+    // High spread = high risk (conflicting signals)
+    riskScore += (confidenceSpread * 0.3);
+    
+    // Factor 3: Signal alignment (30% weight) - reuse bullishCount/bearishCount from above
+    const alignmentRisk = Math.abs(bullishCount - bearishCount) < 2 ? 70 : 30; // Mixed signals = higher risk
+    riskScore += (alignmentRisk * 0.3);
+    
+    // Final risk level
+    if (riskScore >= 65) {
       riskLevel = 'HIGH';
-    } else if (breakdownRisk <= 30) {
+    } else if (riskScore <= 40) {
       riskLevel = 'LOW';
     } else {
-      riskLevel = 'MEDIUM';  // 31-69 range
+      riskLevel = 'MEDIUM';
     }
     
     // Debug log to verify calculation
@@ -204,7 +235,7 @@ export const useOverallMarketOutlook = () => {
     }
 
     return {
-      overallConfidence: Math.round(overallConfidence),
+      overallConfidence: Math.round(finalConfidence),
       overallSignal,
       tradeRecommendation,
       signalBreakdown: {
