@@ -53,12 +53,12 @@ class TokenWatcher(FileSystemEventHandler):
             print(f"⚠️ Error triggering token check: {e}")
     
     async def _check_and_reload_token(self):
-        """Check if token changed and reload if needed"""
+        """Check if token changed and reload if needed - ULTRA FAST"""
         try:
-            # Small delay to ensure file is fully written
-            await asyncio.sleep(1)
+            # Minimal delay - just enough for file system sync
+            await asyncio.sleep(0.3)
             
-            print("\n👁️ Token file change detected! Checking for updates...")
+            print("\n⚡ Token file change detected! Fast-checking...")
             
             # Clear settings cache to force reload from .env
             get_settings.cache_clear()
@@ -67,22 +67,24 @@ class TokenWatcher(FileSystemEventHandler):
             settings = get_settings()
             new_token = settings.zerodha_access_token
             
-            print(f"📝 Current token in .env: {new_token[:20] if new_token else 'EMPTY'}...")
-            print(f"📝 Last known token: {self.last_token[:20] if self.last_token else 'NONE'}...")
-            
             if new_token and new_token != self.last_token:
-                print("🔔 NEW TOKEN FOUND! Triggering automatic reconnection...")
+                print("🚀 NEW TOKEN DETECTED! Instant reconnection starting...")
                 
                 # Update stored token
                 self.last_token = new_token
                 
+                # Update auth state immediately
+                from services.auth_state_machine import auth_state_manager
+                auth_state_manager.update_token(new_token)
+                
                 # Trigger reconnection with new token
                 if self.market_feed:
                     await self.market_feed.reconnect_with_new_token(new_token)
+                    print("✅ Reconnection complete! Live data flowing...")
                 else:
-                    print("❌ Market feed service not available for reconnection")
+                    print("❌ Market feed service not available")
             else:
-                print("ℹ️ Token unchanged - no reconnection needed")
+                print("ℹ️ No token change detected")
                 
         except Exception as e:
             print(f"❌ Error reloading token: {e}")

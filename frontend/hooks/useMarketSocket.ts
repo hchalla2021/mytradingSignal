@@ -68,7 +68,9 @@ export function useMarketSocket() {
       return;
     }
 
-    setConnectionStatus('connecting');
+    // 🔥 FIX: Don't show "connecting" if we already have cached data
+    // This prevents UI from showing loading spinner when data is already visible
+    setConnectionStatus((prev) => prev === 'connected' ? 'connected' : 'connecting');
     
     try {
       const ws = new WebSocket(WS_URL);
@@ -197,13 +199,18 @@ export function useMarketSocket() {
         const parsed = JSON.parse(saved) as MarketData;
         // Show cached data immediately for instant UI
         setMarketData(parsed);
-
+        
+        // 🔥 ULTRA FAST: Show as "connected" immediately with cached data
+        // This prevents "Connecting..." spinner from blocking UI
+        setIsConnected(true);
+        setConnectionStatus('connected');
       }
     } catch (e) {
       console.error('Failed to load cached market data:', e);
     }
     
     // Connect to WebSocket in background (non-blocking)
+    // Will update connection status when real connection established
     connect();
 
     return () => {

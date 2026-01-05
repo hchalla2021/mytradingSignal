@@ -318,10 +318,11 @@ class InstantSignal:
             print(f"[VWAP-CHECK] {symbol}: Price=₹{price:.2f}, VWAP=₹{vwap_value:.2f}, Deviation={price_deviation*100:.3f}%, Position={vwap_pos}")
             
             # Calculate approximate EMAs (simplified but more realistic)
-            # For intraday, use current price with smaller deviations
-            ema_9 = price * (1 - 0.0005) if change_percent < 0 else price * (1 + 0.0005)
-            ema_21 = price * (1 - 0.001) if change_percent < 0 else price * (1 + 0.001)
-            ema_50 = price * (1 - 0.002) if change_percent < 0 else price * (1 + 0.002)
+            # For intraday, EMAs trail price - below when bullish, above when bearish
+            # FIXED: Reversed logic to match actual EMA behavior
+            ema_9 = price * (1 + 0.0005) if change_percent < 0 else price * (1 - 0.0005)
+            ema_21 = price * (1 + 0.001) if change_percent < 0 else price * (1 - 0.001)
+            ema_50 = price * (1 + 0.002) if change_percent < 0 else price * (1 - 0.002)
             
             # Calculate previous day levels (use close price as prev_day_close)
             # prev_day_close should be from tick data's OHLC
@@ -444,7 +445,11 @@ async def get_instant_analysis(cache_service, symbol: str) -> Dict[str, Any]:
         # Get current tick from cache (will be last traded data if market is closed)
         tick_data = await cache_service.get_market_data(symbol)
         
+        # Check if this is backup/cached data
+        is_cached = tick_data.get('_cached', False) if tick_data else False
+        
         if not tick_data:
+            print(f"[INSTANT-ANALYSIS] ⚠️ No data for {symbol}")
             return {
                 "signal": "WAIT",
                 "confidence": 0.0,
@@ -488,10 +493,21 @@ async def get_instant_analysis(cache_service, symbol: str) -> Dict[str, Any]:
         
         # Add market status info
         market_status = tick_data.get('status', 'UNKNOWN')
-        if market_status == 'OFFLINE':
+        
+        # Add cache status
+        if is_cached:
+            print(f"[INSTANT-ANALYSIS] 📊 Using BACKUP data for {symbol}")
+            result['warnings'] = result.get('warnings', []) + [
+                "📊 Showing last market data (Token may be expired)"
+            ]
+            result['_data_source'] = 'BACKUP_CACHE'
+        elif market_status == 'OFFLINE':
             result['warnings'] = result.get('warnings', []) + [
                 "⏸️ Last traded data"
             ]
+            result['_data_source'] = 'LAST_TRADED'
+        else:
+            result['_data_source'] = 'LIVE'
         
         return result
         

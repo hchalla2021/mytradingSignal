@@ -22,9 +22,11 @@ import asyncio
 
 @dataclass
 class Zone:
-    """Lightweight support/resistance zone container"""
+    """Lightweight support/resistance zone container with PRO trading quality metrics"""
     __slots__ = ('level', 'touches', 'volume_strength', 'zone_type', 
-                 'distance_pct', 'strength_score', 'is_active')
+                 'distance_pct', 'strength_score', 'is_active',
+                 'rejection_speed', 'absorption_strength', 'wick_dominance',
+                 'zone_label', 'liquidity_score')
     
     level: float  # Price level
     touches: int  # Number of times price tested this zone
@@ -33,15 +35,22 @@ class Zone:
     distance_pct: float  # Distance from current price (%)
     strength_score: int  # 0-100 strength rating
     is_active: bool  # Is zone currently valid
+    
+    # 🔥 PRO TRADER METRICS - Quality > Quantity
+    rejection_speed: float  # Fast rejection = Strong opposing force (0-100)
+    absorption_strength: float  # High vol + small candles = Institutional absorption (0-100)
+    wick_dominance: float  # Large wicks = Stop hunting / Liquidity grab (0-100)
+    zone_label: str  # Defensive / Supply Exhaustion / Trap / Liquidity Pool
+    liquidity_score: int  # Combined quality metric (0-100)
 
 
 @dataclass
 class ZoneControlResult:
-    """Result container for zone analysis"""
+    """Result container for zone analysis with PRO trading insights"""
     __slots__ = ('symbol', 'current_price', 'support_zones', 'resistance_zones',
                  'nearest_support', 'nearest_resistance', 'breakdown_risk',
                  'bounce_probability', 'zone_strength', 'signal', 'confidence',
-                 'recommendation', 'timestamp')
+                 'recommendation', 'timestamp', 'risk_metrics')
     
     symbol: str
     current_price: float
@@ -56,6 +65,7 @@ class ZoneControlResult:
     confidence: int  # 0-100
     recommendation: str
     timestamp: str
+    risk_metrics: Dict  # Additional professional trading metrics
 
 
 class ZoneControlEngine:
@@ -137,6 +147,11 @@ class ZoneControlEngine:
                 breakdown_risk, bounce_probability, zone_strength
             )
             
+            # 🔥 NEW: Professional trading risk metrics
+            risk_metrics = self._build_risk_metrics(
+                nearest_support, nearest_resistance, support_zones, resistance_zones
+            )
+            
             return ZoneControlResult(
                 symbol=symbol,
                 current_price=current_price,
@@ -150,7 +165,8 @@ class ZoneControlEngine:
                 signal=signal,
                 confidence=confidence,
                 recommendation=recommendation,
-                timestamp=datetime.now().isoformat()
+                timestamp=datetime.now().isoformat(),
+                risk_metrics=risk_metrics
             )
             
         except Exception as e:
@@ -236,7 +252,7 @@ class ZoneControlEngine:
     def _finalize_zone(self, cluster: List[Tuple[float, float]], 
                        current_price: float, zone_type: str,
                        df: pd.DataFrame) -> Zone:
-        """Convert cluster into Zone object with strength metrics"""
+        """Convert cluster into Zone object with PRO trading quality metrics"""
         prices = [p for p, v in cluster]
         volumes = [v for p, v in cluster]
         
@@ -249,10 +265,29 @@ class ZoneControlEngine:
         volume_strength = total_vol / df['volume'].mean() if len(df) > 0 else 1.0
         distance_pct = (level - current_price) / current_price * 100
         
-        # Strength score (0-100)
+        # Strength score (0-100) - LEGACY metric
         strength_score = self._calculate_zone_strength_score(
             touches, volume_strength, abs(distance_pct)
         )
+        
+        # 🔥 NEW: Professional trading quality metrics
+        # Get candles near this zone for quality analysis
+        candles_near_zone = df[
+            (df['low'] <= level * 1.02) & (df['high'] >= level * 0.98)
+        ].tail(20)  # Last 20 candles near zone
+        
+        # Calculate quality metrics with NaN protection
+        rejection_speed = self._calculate_rejection_speed(candles_near_zone, level)
+        absorption_strength = self._calculate_absorption_strength(candles_near_zone, level)
+        wick_dominance = self._calculate_wick_dominance(candles_near_zone, level, zone_type)
+        
+        # Replace NaN with 0.0 for safety
+        rejection_speed = 0.0 if pd.isna(rejection_speed) or np.isnan(rejection_speed) else rejection_speed
+        absorption_strength = 0.0 if pd.isna(absorption_strength) or np.isnan(absorption_strength) else absorption_strength
+        wick_dominance = 0.0 if pd.isna(wick_dominance) or np.isnan(wick_dominance) else wick_dominance
+        
+        zone_label = self._determine_zone_label(rejection_speed, absorption_strength, wick_dominance, touches, zone_type)
+        liquidity_score = self._calculate_liquidity_score(rejection_speed, absorption_strength, wick_dominance, touches, volume_strength)
         
         # Is zone still active (not too far away)
         is_active = abs(distance_pct) < 10.0  # Within 10% of price
@@ -264,7 +299,13 @@ class ZoneControlEngine:
             zone_type=zone_type,
             distance_pct=round(distance_pct, 2),
             strength_score=strength_score,
-            is_active=is_active
+            is_active=is_active,
+            # 🔥 NEW: Professional quality metrics
+            rejection_speed=round(rejection_speed, 1),
+            absorption_strength=round(absorption_strength, 1),
+            wick_dominance=round(wick_dominance, 1),
+            zone_label=zone_label,
+            liquidity_score=liquidity_score
         )
     
     def _calculate_zone_strength_score(self, touches: int, 
@@ -296,6 +337,183 @@ class ZoneControlEngine:
             score += 15
         
         return min(score, 100)
+    
+    # ═══════════════════════════════════════════════════════════════
+    # 🔥 PROFESSIONAL TRADING QUALITY METRICS
+    # ═══════════════════════════════════════════════════════════════
+    
+    def _calculate_rejection_speed(self, candles_near_zone: pd.DataFrame, zone_level: float) -> float:
+        """
+        Measure how FAST price rejects from zone
+        Fast rejection = Strong opposing force (institutional activity)
+        Slow grind = Weak hands (retail hesitation)
+        
+        Returns: 0-100 (higher = faster rejection = stronger zone)
+        """
+        if len(candles_near_zone) < 2:
+            return 50.0
+        
+        # Calculate average time spent near zone before rejection
+        rejection_speeds = []
+        
+        for idx in range(len(candles_near_zone) - 1):
+            candle = candles_near_zone.iloc[idx]
+            next_candle = candles_near_zone.iloc[idx + 1]
+            
+            # Check if candle touched zone and next candle rejected
+            touched_zone = (candle['low'] <= zone_level <= candle['high'])
+            rejected = abs(next_candle['close'] - zone_level) > abs(candle['close'] - zone_level)
+            
+            if touched_zone and rejected:
+                # Fast rejection = large move away in 1 candle
+                move_size = abs(next_candle['close'] - zone_level) / zone_level * 100
+                rejection_speeds.append(move_size)
+        
+        if rejection_speeds:
+            avg_speed = np.mean(rejection_speeds)
+            # Convert to 0-100 score (faster = higher score)
+            return min(avg_speed * 20, 100.0)  # 5% move = 100 score
+        
+        return 50.0
+    
+    def _calculate_absorption_strength(self, candles_near_zone: pd.DataFrame, zone_level: float) -> float:
+        """
+        Detect institutional ABSORPTION (accumulation/distribution)
+        High volume + small candle bodies = Smart money absorbing supply/demand
+        
+        Returns: 0-100 (higher = more absorption = stronger zone)
+        """
+        if len(candles_near_zone) < 3:
+            return 50.0
+        
+        absorption_scores = []
+        
+        for idx in range(len(candles_near_zone)):
+            candle = candles_near_zone.iloc[idx]
+            
+            # Check if near zone
+            near_zone = abs(candle['close'] - zone_level) / zone_level * 100 < 1.0
+            
+            if near_zone:
+                # Calculate volume vs body size ratio
+                body_size = abs(candle['close'] - candle['open'])
+                candle_range = candle['high'] - candle['low']
+                
+                if candle_range > 0:
+                    body_ratio = body_size / candle_range
+                    volume_ratio = candle['volume'] / candles_near_zone['volume'].mean()
+                    
+                    # High volume + small body = Absorption
+                    if volume_ratio > 1.5 and body_ratio < 0.3:
+                        absorption_scores.append(volume_ratio * 30)
+        
+        if absorption_scores:
+            return min(np.mean(absorption_scores), 100.0)
+        
+        return 50.0
+    
+    def _calculate_wick_dominance(self, candles_near_zone: pd.DataFrame, zone_level: float, zone_type: str) -> float:
+        """
+        Measure WICK DOMINANCE at zone
+        Large wicks = Stop hunting / Liquidity grab (institutional manipulation)
+        
+        For SUPPORT: Large lower wicks = Stop hunt below support (bullish trap)
+        For RESISTANCE: Large upper wicks = Stop hunt above resistance (bearish trap)
+        
+        Returns: 0-100 (higher = more wick dominance = potential trap zone)
+        """
+        if len(candles_near_zone) < 2:
+            return 50.0
+        
+        wick_scores = []
+        
+        for idx in range(len(candles_near_zone)):
+            candle = candles_near_zone.iloc[idx]
+            
+            # Check if near zone
+            near_zone = abs(candle['close'] - zone_level) / zone_level * 100 < 1.5
+            
+            if near_zone:
+                body_size = abs(candle['close'] - candle['open'])
+                candle_range = candle['high'] - candle['low']
+                
+                if zone_type == 'SUPPORT':
+                    # Lower wick size (stop hunt below support)
+                    lower_wick = min(candle['open'], candle['close']) - candle['low']
+                    if candle_range > 0:
+                        wick_ratio = lower_wick / candle_range
+                        if wick_ratio > 0.5:  # Wick > 50% of candle
+                            wick_scores.append(wick_ratio * 100)
+                else:  # RESISTANCE
+                    # Upper wick size (stop hunt above resistance)
+                    upper_wick = candle['high'] - max(candle['open'], candle['close'])
+                    if candle_range > 0:
+                        wick_ratio = upper_wick / candle_range
+                        if wick_ratio > 0.5:
+                            wick_scores.append(wick_ratio * 100)
+        
+        if wick_scores:
+            return min(np.mean(wick_scores), 100.0)
+        
+        return 50.0
+    
+    def _determine_zone_label(self, rejection_speed: float, absorption_strength: float, 
+                             wick_dominance: float, touches: int, zone_type: str) -> str:
+        """
+        Classify zone based on professional trading concepts
+        
+        Returns: 
+        - Defensive Zone: Fast rejection + low absorption (buyers/sellers protecting)
+        - Supply Exhaustion: High absorption + multiple touches (institutional accumulation)
+        - Trap Zone: High wick dominance + fast rejection (stop hunting)
+        - Liquidity Pool: Balanced metrics, multiple touches (fair value zone)
+        """
+        # Trap Zone: High wick dominance indicates stop hunting
+        if wick_dominance > 70:
+            return "Trap Zone"
+        
+        # Defensive Zone: Fast rejection, protecting the level
+        if rejection_speed > 70 and absorption_strength < 60:
+            return "Defensive Zone"
+        
+        # Supply Exhaustion: High absorption (accumulation/distribution)
+        if absorption_strength > 70:
+            return "Supply Exhaustion Zone"
+        
+        # Liquidity Pool: Balanced, multiple touches
+        if touches >= 3 and 40 < rejection_speed < 70:
+            return "Liquidity Pool"
+        
+        return "Standard Zone"
+    
+    def _calculate_liquidity_score(self, rejection_speed: float, absorption_strength: float,
+                                   wick_dominance: float, touches: int, volume_strength: float) -> int:
+        """
+        Combined quality metric (0-100)
+        Higher = Better quality zone for trading
+        
+        Formula: Weighted combination of all quality factors
+        """
+        # Replace NaN/inf values with 0.0 for safety
+        rejection_speed = 0.0 if not np.isfinite(rejection_speed) else rejection_speed
+        absorption_strength = 0.0 if not np.isfinite(absorption_strength) else absorption_strength
+        wick_dominance = 0.0 if not np.isfinite(wick_dominance) else wick_dominance
+        volume_strength = 1.0 if not np.isfinite(volume_strength) else volume_strength
+        
+        # Quality factors (touch count is now SECONDARY)
+        quality_score = (
+            (rejection_speed * 0.30) +      # 30% - Reaction quality
+            (absorption_strength * 0.25) +  # 25% - Institutional activity
+            ((100 - wick_dominance) * 0.20) + # 20% - Less wick = better (inverted)
+            (min(touches * 8, 40) * 0.15) + # 15% - Touch count (capped at 5 touches)
+            (volume_strength * 10 * 0.10)   # 10% - Volume confirmation
+        )
+        
+        # Ensure result is finite and within range
+        quality_score = 0 if not np.isfinite(quality_score) else quality_score
+        return int(min(max(quality_score, 0), 100))
+    
+    # ═══════════════════════════════════════════════════════════════
     
     def _find_nearest_zone(self, zones: List[Zone], current_price: float, 
                            direction: str) -> Optional[Zone]:
@@ -431,31 +649,52 @@ class ZoneControlEngine:
         # === BUY ZONE CONDITIONS ===
         # Price near strong support with high bounce probability
         if nearest_support and abs(nearest_support.distance_pct) < 1.0:
+            # distance_pct is NEGATIVE when support is BELOW current price
+            price_above_support = nearest_support.distance_pct < 0
+            
             if bounce_probability > 70 and breakdown_risk < 30:
                 signal = "BUY_ZONE"
                 confidence = bounce_probability
-                recommendation = f"Strong buy zone at ₹{nearest_support.level:.2f} - High bounce probability"
+                if price_above_support:
+                    recommendation = f"Price above strong support at ₹{nearest_support.level:.2f} - Hold/Buy on dip"
+                else:
+                    recommendation = f"Price testing support at ₹{nearest_support.level:.2f} - Strong buy zone"
             
             elif bounce_probability > 50 and zone_strength == "STRONG":
                 signal = "BUY_ZONE"
                 confidence = bounce_probability - 10
-                recommendation = f"Moderate buy zone at ₹{nearest_support.level:.2f} - Watch for confirmation"
+                if price_above_support:
+                    recommendation = f"Price above support at ₹{nearest_support.level:.2f} - Support holding well"
+                else:
+                    recommendation = f"Price near support at ₹{nearest_support.level:.2f} - Watch for bounce confirmation"
             else:
                 # Still near support but conditions not strong enough
                 confidence = max(30, bounce_probability - 20)
-                recommendation = f"Approaching support at ₹{nearest_support.level:.2f} - Watch closely"
+                if price_above_support:
+                    recommendation = f"Support at ₹{nearest_support.level:.2f} below - Bullish structure intact"
+                else:
+                    recommendation = f"Approaching support at ₹{nearest_support.level:.2f} - Watch for bounce"
         
         # === SELL ZONE CONDITIONS ===
         # Price near resistance or breakdown imminent
         elif nearest_resistance and abs(nearest_resistance.distance_pct) < 1.0:
+            # distance_pct is POSITIVE when resistance is ABOVE current price
+            price_below_resistance = nearest_resistance.distance_pct > 0
+            
             if nearest_resistance.strength_score > 60:
                 signal = "SELL_ZONE"
                 confidence = nearest_resistance.strength_score
-                recommendation = f"Resistance zone at ₹{nearest_resistance.level:.2f} - Consider profit booking"
+                if price_below_resistance:
+                    recommendation = f"Approaching resistance at ₹{nearest_resistance.level:.2f} - Consider profit booking"
+                else:
+                    recommendation = f"Price broke above resistance at ₹{nearest_resistance.level:.2f} - Bullish breakout"
             else:
                 # Near resistance but not strong enough
                 confidence = max(30, nearest_resistance.strength_score - 10)
-                recommendation = f"Approaching resistance at ₹{nearest_resistance.level:.2f} - Watch for rejection"
+                if price_below_resistance:
+                    recommendation = f"Nearing resistance at ₹{nearest_resistance.level:.2f} - Watch for rejection"
+                else:
+                    recommendation = f"Price above resistance at ₹{nearest_resistance.level:.2f} - Breakout in progress"
         
         # High breakdown risk
         elif breakdown_risk > 70:
@@ -482,6 +721,68 @@ class ZoneControlEngine:
                 recommendation = f"Price between zones - Next resistance at ₹{nearest_resistance.level:.2f}"
         return signal, confidence, recommendation
     
+    def _build_risk_metrics(self, nearest_support: Optional[Zone], nearest_resistance: Optional[Zone],
+                           all_supports: List[Zone], all_resistances: List[Zone]) -> Dict:
+        """
+        Build professional trading risk metrics summary
+        """
+        metrics = {
+            "nearest_support_quality": {},
+            "nearest_resistance_quality": {},
+            "overall_zone_health": "UNKNOWN"
+        }
+        
+        if nearest_support:
+            metrics["nearest_support_quality"] = {
+                "level": float(nearest_support.level),
+                "zone_label": nearest_support.zone_label,
+                "liquidity_score": int(nearest_support.liquidity_score),
+                "rejection_speed": float(nearest_support.rejection_speed),
+                "absorption_strength": float(nearest_support.absorption_strength),
+                "wick_dominance": float(nearest_support.wick_dominance),
+                "interpretation": self._interpret_zone_quality(nearest_support)
+            }
+        
+        if nearest_resistance:
+            metrics["nearest_resistance_quality"] = {
+                "level": float(nearest_resistance.level),
+                "zone_label": nearest_resistance.zone_label,
+                "liquidity_score": int(nearest_resistance.liquidity_score),
+                "rejection_speed": float(nearest_resistance.rejection_speed),
+                "absorption_strength": float(nearest_resistance.absorption_strength),
+                "wick_dominance": float(nearest_resistance.wick_dominance),
+                "interpretation": self._interpret_zone_quality(nearest_resistance)
+            }
+        
+        # Overall zone health assessment
+        if nearest_support and nearest_resistance:
+            avg_quality = (nearest_support.liquidity_score + nearest_resistance.liquidity_score) / 2
+            if avg_quality > 70:
+                metrics["overall_zone_health"] = "EXCELLENT"
+            elif avg_quality > 50:
+                metrics["overall_zone_health"] = "GOOD"
+            elif avg_quality > 30:
+                metrics["overall_zone_health"] = "MODERATE"
+            else:
+                metrics["overall_zone_health"] = "WEAK"
+        
+        return metrics
+    
+    def _interpret_zone_quality(self, zone: Zone) -> str:
+        """
+        Human-readable interpretation of zone quality metrics
+        """
+        if zone.zone_label == "Trap Zone":
+            return f"⚠️ Trap Zone - High wick dominance ({zone.wick_dominance:.0f}%). Watch for false breakouts/breakdowns."
+        elif zone.zone_label == "Defensive Zone":
+            return f"🛡️ Defensive Zone - Fast rejection ({zone.rejection_speed:.0f}%). Strong hands protecting this level."
+        elif zone.zone_label == "Supply Exhaustion Zone":
+            return f"📊 Supply Exhaustion - High absorption ({zone.absorption_strength:.0f}%). Institutional accumulation/distribution likely."
+        elif zone.zone_label == "Liquidity Pool":
+            return f"💧 Liquidity Pool - Fair value zone. Price tends to revisit this level."
+        else:
+            return f"📍 Standard Zone - Quality score: {zone.liquidity_score}/100"
+    
     def _create_neutral_result(self, symbol: str, price: float, 
                               reason: str) -> ZoneControlResult:
         """Create neutral result for errors/edge cases"""
@@ -498,7 +799,8 @@ class ZoneControlEngine:
             signal="NEUTRAL",
             confidence=0,
             recommendation=f"Unable to analyze: {reason}",
-            timestamp=datetime.now().isoformat()
+            timestamp=datetime.now().isoformat(),
+            risk_metrics={"overall_zone_health": "UNKNOWN"}
         )
     
     def to_dict(self, result: ZoneControlResult) -> Dict:
@@ -524,7 +826,13 @@ class ZoneControlEngine:
                         "volume_strength": float(z.volume_strength),
                         "distance_pct": float(z.distance_pct),
                         "strength": float(z.strength_score),
-                        "active": bool(z.is_active)
+                        "active": bool(z.is_active),
+                        # 🔥 NEW: Professional quality metrics
+                        "rejection_speed": float(z.rejection_speed),
+                        "absorption_strength": float(z.absorption_strength),
+                        "wick_dominance": float(z.wick_dominance),
+                        "zone_label": str(z.zone_label),
+                        "liquidity_score": int(z.liquidity_score)
                     }
                     for z in result.support_zones
                 ],
@@ -535,7 +843,13 @@ class ZoneControlEngine:
                         "volume_strength": float(z.volume_strength),
                         "distance_pct": float(z.distance_pct),
                         "strength": float(z.strength_score),
-                        "active": bool(z.is_active)
+                        "active": bool(z.is_active),
+                        # 🔥 NEW: Professional quality metrics
+                        "rejection_speed": float(z.rejection_speed),
+                        "absorption_strength": float(z.absorption_strength),
+                        "wick_dominance": float(z.wick_dominance),
+                        "zone_label": str(z.zone_label),
+                        "liquidity_score": int(z.liquidity_score)
                     }
                     for z in result.resistance_zones
                 ]
@@ -545,20 +859,32 @@ class ZoneControlEngine:
                     "level": float(result.nearest_support.level) if result.nearest_support else None,
                     "distance_pct": float(result.nearest_support.distance_pct) if result.nearest_support else None,
                     "strength": float(result.nearest_support.strength_score) if result.nearest_support else 0.0,
-                    "touches": int(result.nearest_support.touches) if result.nearest_support else 0
+                    "touches": int(result.nearest_support.touches) if result.nearest_support else 0,
+                    # 🔥 NEW: Professional quality metrics
+                    "zone_label": str(result.nearest_support.zone_label) if result.nearest_support else "Unknown",
+                    "liquidity_score": int(result.nearest_support.liquidity_score) if result.nearest_support else 0,
+                    "rejection_speed": float(result.nearest_support.rejection_speed) if result.nearest_support else 0.0,
+                    "absorption_strength": float(result.nearest_support.absorption_strength) if result.nearest_support else 0.0,
+                    "wick_dominance": float(result.nearest_support.wick_dominance) if result.nearest_support else 0.0
                 },
                 "resistance": {
                     "level": float(result.nearest_resistance.level) if result.nearest_resistance else None,
                     "distance_pct": float(result.nearest_resistance.distance_pct) if result.nearest_resistance else None,
                     "strength": float(result.nearest_resistance.strength_score) if result.nearest_resistance else 0.0,
-                    "touches": int(result.nearest_resistance.touches) if result.nearest_resistance else 0
+                    "touches": int(result.nearest_resistance.touches) if result.nearest_resistance else 0,
+                    # 🔥 NEW: Professional quality metrics
+                    "zone_label": str(result.nearest_resistance.zone_label) if result.nearest_resistance else "Unknown",
+                    "liquidity_score": int(result.nearest_resistance.liquidity_score) if result.nearest_resistance else 0,
+                    "rejection_speed": float(result.nearest_resistance.rejection_speed) if result.nearest_resistance else 0.0,
+                    "absorption_strength": float(result.nearest_resistance.absorption_strength) if result.nearest_resistance else 0.0,
+                    "wick_dominance": float(result.nearest_resistance.wick_dominance) if result.nearest_resistance else 0.0
                 }
             },
-            "risk_metrics": {
-                "breakdown_risk": int(result.breakdown_risk),
-                "bounce_probability": int(result.bounce_probability),
-                "zone_strength": str(result.zone_strength)
-            },
+            "risk_metrics": result.risk_metrics,  # 🔥 NEW: Professional risk metrics
+            # 🔥 CRITICAL: Top-level risk fields for UI display
+            "breakdown_risk": int(result.breakdown_risk),
+            "bounce_probability": int(result.bounce_probability),
+            "zone_strength": str(result.zone_strength),
             "signal": str(result.signal),
             "confidence": int(result.confidence),
             "recommendation": str(result.recommendation),

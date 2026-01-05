@@ -6,15 +6,26 @@ Real-time trading signals dashboard for **NIFTY**, **BANKNIFTY**, and **SENSEX**
 ![Python](https://img.shields.io/badge/python-3.10+-blue.svg)
 ![Node](https://img.shields.io/badge/node-20+-green.svg)
 ![Docker](https://img.shields.io/badge/docker-ready-blue.svg)
+![Status](https://img.shields.io/badge/status-production%20ready-success.svg)
 
 ## 🚀 Features
 
+### Core Capabilities
 - **Live Market Data** - Real-time price updates via WebSocket
 - **Zerodha Integration** - Direct feed from Kite Ticker
 - **Ultra-Fast Updates** - Sub-second latency with Redis caching
 - **Beautiful Dark UI** - Trader-friendly interface
 - **Responsive Design** - Works on desktop and mobile
-- **Demo Mode** - Works without Zerodha credentials
+
+### 🆕 Production-Grade Features (v2.0)
+- **🔄 Auto-Recovery** - Zero manual restarts required
+- **🔐 Smart Auth** - Explicit token state tracking
+- **📡 Feed Watchdog** - Auto-reconnects dead websockets
+- **🎯 Priority Status** - Always shows what matters most
+- **⏰ Pure Time Logic** - Market status independent of auth/feed
+- **📊 Health Monitoring** - Real-time system status API
+
+**→ See [State Orchestration System](./docs/STATE_ORCHESTRATION_SYSTEM.md) for details**
 
 ## 🏗️ Project Structure
 
@@ -169,6 +180,7 @@ NEXT_PUBLIC_API_URL=http://localhost:8000
 
 ## 📡 API Endpoints
 
+### Core Endpoints
 | Endpoint | Description |
 |----------|-------------|
 | `GET /` | API info |
@@ -177,6 +189,18 @@ NEXT_PUBLIC_API_URL=http://localhost:8000
 | `GET /api/auth/login-url` | Zerodha login URL |
 | `POST /api/auth/callback` | OAuth callback |
 | `POST /api/auth/refresh` | Refresh token |
+
+### 🆕 System Health Endpoints (v2.0)
+| Endpoint | Description |
+|----------|-------------|
+| `GET /api/system/health` | Complete system status (3 state machines) |
+| `GET /api/system/health/market` | Market session status (time-based) |
+| `GET /api/system/health/auth` | Auth state (token validity) |
+| `GET /api/system/health/feed` | Feed health (websocket status) |
+| `GET /api/system/health/summary` | Quick health check |
+| `POST /api/system/health/auth/verify` | Verify token with Zerodha API |
+
+**Full API docs**: `http://localhost:8000/docs` (Swagger UI)
 
 ## 🎨 UI Features
 
@@ -196,8 +220,68 @@ NEXT_PUBLIC_API_URL=http://localhost:8000
 - CORS configured for frontend origin
 - WebSocket authentication support
 
+## 📈 Production Architecture (v2.0)
+
+### 🏗️ State Orchestration System
+
+The app now runs on **3 independent state machines** for 100% uptime:
+
+1. **⏰ Market Session Controller** - Time-based ONLY
+   - PRE_OPEN (9:00-9:07 AM) → AUCTION_FREEZE (9:07-9:15 AM) → LIVE (9:15 AM-3:30 PM) → CLOSED
+   - Never depends on Zerodha or token
+   - Always accurate
+
+2. **🔐 Auth State Machine** - Explicit token tracking
+   - VALID → EXPIRED → REQUIRED
+   - Detects token age (24h expiry)
+   - Auto-triggers login UI
+   - No assumptions
+
+3. **📡 Feed Watchdog** - WebSocket health monitor
+   - CONNECTED → STALE (10s no data) → Auto-reconnect
+   - Detects silent failures
+   - Self-healing
+
+### 🎯 Priority-Based UI
+
+```
+1️⃣ AUTH_REQUIRED     → 🔴 Show Login Button
+2️⃣ FEED_DISCONNECTED → 🟡 Show "Reconnecting..."
+3️⃣ MARKET_SESSION    → 🟢 Show Market Status
+```
+
+### ✅ Zero Manual Restart
+
+**Before**: Restart backend daily when token expires  
+**After**: System self-heals automatically
+
+**Documentation**:
+- [Complete Architecture](./docs/STATE_ORCHESTRATION_SYSTEM.md)
+- [Quick Start](./QUICKSTART_ORCHESTRATION.md)
+- [Visual Diagrams](./docs/VISUAL_ARCHITECTURE.md)
+- [Implementation Summary](./IMPLEMENTATION_SUMMARY.md)
+
+---
+
+## 🧪 Testing
+
+### Test State Orchestration
+```bash
+python test_orchestration.py
+```
+
+### Check System Health
+```bash
+curl http://localhost:8000/api/system/health | jq
+```
+
+---
+
 ## 📈 Future Enhancements
 
+- [x] ~~Auto-recovery from token expiry~~ ✅ v2.0
+- [x] ~~WebSocket watchdog~~ ✅ v2.0
+- [x] ~~Professional state tracking~~ ✅ v2.0
 - [ ] Options chain data
 - [ ] OI & Volume heatmap
 - [ ] AI-based trading signals

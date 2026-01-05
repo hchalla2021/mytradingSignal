@@ -33,10 +33,15 @@ interface ZoneControlData {
       touches: number;
     };
   };
+  // 🔥 Top-level risk fields (NEW API structure)
+  breakdown_risk: number;
+  bounce_probability: number;
+  zone_strength: string;
+  // Professional quality metrics (nested, for future use)
   risk_metrics: {
-    breakdown_risk: number;
-    bounce_probability: number;
-    zone_strength: string;
+    nearest_support_quality?: any;
+    nearest_resistance_quality?: any;
+    overall_zone_health?: string;
   };
   signal: string;
   confidence: number;
@@ -64,8 +69,18 @@ const ZoneControlCard = memo<ZoneControlCardProps>(({ symbol, name }) => {
         const response = await fetch(`${apiUrl}/api/advanced/zone-control/${symbol}`);
         if (!response.ok) throw new Error('Failed to fetch');
         const result = await response.json();
-        setData(result);
-        setError(null);
+        
+        // Check for error statuses
+        if (result.status === 'TOKEN_EXPIRED' || result.status === 'ERROR') {
+          setError(result.message || 'Token expired - Please login');
+          setData(null);
+        } else if (result.status === 'NO_DATA') {
+          setError(result.message || 'Market closed - No data available');
+          setData(null);
+        } else {
+          setData(result);
+          setError(null);
+        }
       } catch (err) {
         setError('Data unavailable');
         console.error(`[ZONE-CONTROL] Error fetching ${symbol}:`, err);
@@ -178,7 +193,7 @@ const ZoneControlCard = memo<ZoneControlCardProps>(({ symbol, name }) => {
     );
   }
 
-  const { current_price, nearest_zones, risk_metrics, signal, confidence, recommendation, status, message, candles_analyzed } = data;
+  const { current_price, nearest_zones, breakdown_risk, bounce_probability, zone_strength, signal, confidence, recommendation, status, message, candles_analyzed } = data;
 
   return (
     <div className="bg-dark-card border-2 border-emerald-500/30 rounded-lg p-3 sm:p-4 hover:border-emerald-400/50 hover:shadow-emerald-500/20 transition-all shadow-lg shadow-emerald-500/10">
@@ -307,28 +322,28 @@ const ZoneControlCard = memo<ZoneControlCardProps>(({ symbol, name }) => {
       <div className="grid grid-cols-3 gap-2 mb-3 p-3 bg-gradient-to-r from-emerald-500/5 via-amber-500/5 to-rose-500/5 rounded-lg border border-emerald-500/20">
         <div className="text-center">
           <div className="flex items-center justify-center gap-1 mb-1">
-            <TrendingDown className={`w-3 h-3 ${getRiskColor(risk_metrics.breakdown_risk)}`} />
+            <TrendingDown className={`w-3 h-3 ${getRiskColor(breakdown_risk)}`} />
             <p className="text-[8px] sm:text-[9px] text-dark-muted font-black">BREAKDOWN</p>
           </div>
-          <p className={`text-sm sm:text-base font-black ${getRiskColor(risk_metrics.breakdown_risk)}`}>
-            {risk_metrics.breakdown_risk}%
+          <p className={`text-sm sm:text-base font-black ${getRiskColor(breakdown_risk)}`}>
+            {breakdown_risk}%
           </p>
         </div>
 
         <div className="text-center border-x border-emerald-500/20">
           <div className="flex items-center justify-center gap-1 mb-1">
-            <TrendingUp className={`w-3 h-3 ${getBounceColor(risk_metrics.bounce_probability)}`} />
+            <TrendingUp className={`w-3 h-3 ${getBounceColor(bounce_probability)}`} />
             <p className="text-[8px] sm:text-[9px] text-dark-muted font-black">BOUNCE</p>
           </div>
-          <p className={`text-sm sm:text-base font-black ${getBounceColor(risk_metrics.bounce_probability)}`}>
-            {risk_metrics.bounce_probability}%
+          <p className={`text-sm sm:text-base font-black ${getBounceColor(bounce_probability)}`}>
+            {bounce_probability}%
           </p>
         </div>
 
         <div className="text-center">
           <p className="text-[8px] sm:text-[9px] text-dark-muted font-black mb-1">ZONE</p>
-          <p className={`text-xs sm:text-sm font-black ${getZoneStrengthColor(risk_metrics.zone_strength)}`}>
-            {risk_metrics.zone_strength}
+          <p className={`text-xs sm:text-sm font-black ${getZoneStrengthColor(zone_strength)}`}>
+            {zone_strength}
           </p>
         </div>
       </div>

@@ -47,12 +47,29 @@ class CacheService:
             return None
     
     async def set_market_data(self, symbol: str, data: Dict[str, Any]):
-        """Set market data for a symbol."""
+        """Set market data for a symbol with 24-hour backup."""
+        # Save to live cache (5 minutes)
         await self.set(f"market:{symbol}", data, expire=300)
+        
+        # 🔥 SAVE 24-HOUR BACKUP - Persists last market data
+        await self.set(f"market_backup:{symbol}", data, expire=86400)
     
     async def get_market_data(self, symbol: str) -> Optional[Dict[str, Any]]:
-        """Get market data for a symbol."""
-        return await self.get(f"market:{symbol}")
+        """Get market data for a symbol with fallback to backup."""
+        # Try live cache first
+        data = await self.get(f"market:{symbol}")
+        if data:
+            return data
+        
+        # 🔥 FALLBACK TO 24-HOUR BACKUP if live data not available
+        backup_data = await self.get(f"market_backup:{symbol}")
+        if backup_data:
+            # Mark as cached data
+            backup_data["_cached"] = True
+            backup_data["_cache_message"] = "📊 Last market data (Token may be expired - Click LOGIN)"
+            return backup_data
+        
+        return None
     
     async def get_all_market_data(self) -> Dict[str, Dict[str, Any]]:
         """Get all market data."""

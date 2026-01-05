@@ -8,10 +8,13 @@ import { useAuth } from '@/hooks/useAuth';
 import Header from '@/components/Header';
 import IndexCard from '@/components/IndexCard';
 import LiveStatus from '@/components/LiveStatus';
+import SystemStatusBanner from '@/components/SystemStatusBanner';
 import { AnalysisCard } from '@/components/AnalysisCard';
 import VolumePulseCard from '@/components/VolumePulseCard';
 import TrendBaseCard from '@/components/TrendBaseCard';
 import ZoneControlCard from '@/components/ZoneControlCard';
+import CandleIntentCard from '@/components/CandleIntentCard';
+import EarlyWarningCard from '@/components/EarlyWarningCard';
 
 export default function Home() {
   const { marketData, isConnected, connectionStatus } = useMarketSocket();
@@ -20,6 +23,27 @@ export default function Home() {
   const { isAuthenticated } = useAuth();
   const [currentTime, setCurrentTime] = useState<string>('');
   const [updateCounter, setUpdateCounter] = useState(0);
+
+  // Check for auth callback success
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const authStatus = params.get('auth');
+    const userName = params.get('user_name');
+    
+    if (authStatus === 'success') {
+      console.log('🎉 Authentication successful! Reloading page...');
+      // Clean URL and reload after 2 seconds
+      window.history.replaceState({}, '', '/');
+      setTimeout(() => {
+        window.location.reload();
+      }, 2000);
+    } else if (authStatus === 'error') {
+      const errorMsg = params.get('message');
+      console.error('❌ Authentication failed:', errorMsg);
+      // Clean URL
+      window.history.replaceState({}, '', '/');
+    }
+  }, []);
 
   // ✅ INSTANT: Extract analysis from marketData (comes via WebSocket)
   const analyses = useMemo(() => {
@@ -60,31 +84,9 @@ export default function Home() {
       {/* Header */}
       <Header isConnected={isConnected} marketStatus={marketStatus} />
       
-      {/* 🔥 GLOBAL TOKEN ALERT - Shows when token expired for ALL sections */}
-      {!isAuthenticated && (
-        <div className="bg-gradient-to-r from-amber-500/20 to-orange-500/20 border-b-2 border-amber-500/50 py-3 px-4 sm:px-6 backdrop-blur-sm sticky top-[72px] z-40">
-          <div className="flex items-center justify-between gap-3 max-w-7xl mx-auto">
-            <div className="flex items-center gap-2">
-              <span className="text-2xl">🔑</span>
-              <div>
-                <p className="text-sm font-bold text-amber-300">Token Expired - All Features Using Cached Data</p>
-                <p className="text-[10px] text-amber-200/80">Click LOGIN to refresh from .env • Takes 10 seconds • No restart needed</p>
-              </div>
-            </div>
-            <button
-              onClick={() => {
-                const loginUrl = `${process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000'}/api/auth/login`;
-                window.open(loginUrl, '_blank', 'width=600,height=700');
-                setTimeout(() => window.location.reload(), 15000);
-              }}
-              className="flex-shrink-0 px-4 py-2 bg-gradient-to-r from-blue-500 to-indigo-500 hover:from-blue-600 hover:to-indigo-600 text-white font-bold rounded-lg transition-all active:scale-95 shadow-lg text-xs whitespace-nowrap"
-            >
-              🔑 LOGIN NOW
-            </button>
-          </div>
-        </div>
-      )}
-
+      {/* 🔥 NEW: Professional System Status Banner */}
+      <SystemStatusBanner />
+      
       {/* Connection Status Bar */}
       <div className="w-full px-2 sm:px-4 lg:px-6 xl:px-8 py-2">
         <LiveStatus status={connectionStatus} isConnected={isConnected} />
@@ -98,7 +100,7 @@ export default function Home() {
               <span className="text-lg">📊</span>
               Overall Market Outlook
               <span className="text-[10px] sm:text-xs text-dark-tertiary font-normal ml-2">
-                (Aggregated: Technical 30% • Zone Control 25% • Volume 20% • Trend 15% • Market Indices 10%)
+                (Aggregated: Technical 20% • Zone 16% • Volume 16% • Trend 12% • Candle 14% • Market 8% • PCR 6% • 🔮 Early Warning 8%)
               </span>
             </h3>
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
@@ -330,6 +332,50 @@ export default function Home() {
             <AnalysisCard analysis={analyses?.NIFTY || null} />
             <AnalysisCard analysis={analyses?.BANKNIFTY || null} />
             <AnalysisCard analysis={analyses?.SENSEX || null} />
+          </div>
+        </div>
+
+        {/* Early Warning Section - PRIORITY (Most Time-Sensitive) */}
+        <div className="mt-6 sm:mt-6 border-2 border-amber-500/30 rounded-2xl p-3 sm:p-4 bg-gradient-to-br from-amber-950/20 via-dark-card/50 to-dark-elevated/40 backdrop-blur-sm shadow-xl shadow-amber-500/10">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-3 sm:mb-4">
+            <div>
+              <h3 className="text-base sm:text-lg lg:text-xl font-bold text-dark-text flex items-center gap-3 tracking-tight">
+                <span className="w-1.5 h-5 sm:h-6 bg-gradient-to-b from-amber-500 to-amber-600 rounded-full shadow-lg shadow-amber-500/30" />
+                🔮 Early Warning (Predictive Signals)
+              </h3>
+              <p className="text-dark-tertiary text-xs sm:text-sm mt-1.5 ml-4 sm:ml-5 font-medium tracking-wide">
+                Get signals 1-3 minutes BEFORE breakout • Fake signal filtering (5-factor validation) • Price targets with 2:1 risk-reward
+              </p>
+            </div>
+          </div>
+
+          {/* Early Warning Cards Grid */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 2xl:grid-cols-3 gap-3 sm:gap-3">
+            <EarlyWarningCard symbol="NIFTY" />
+            <EarlyWarningCard symbol="BANKNIFTY" />
+            <EarlyWarningCard symbol="SENSEX" />
+          </div>
+        </div>
+
+        {/* Candle Intent Section - NEW */}
+        <div className="mt-6 sm:mt-6 border-2 border-emerald-500/30 rounded-2xl p-3 sm:p-4 bg-gradient-to-br from-emerald-950/20 via-dark-card/50 to-dark-elevated/40 backdrop-blur-sm shadow-xl shadow-emerald-500/10">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-3 sm:mb-4">
+            <div>
+              <h3 className="text-base sm:text-lg lg:text-xl font-bold text-dark-text flex items-center gap-3 tracking-tight">
+                <span className="w-1.5 h-5 sm:h-6 bg-gradient-to-b from-emerald-500 to-emerald-600 rounded-full shadow-lg shadow-emerald-500/30" />
+                Candle Intent (Candle Structure)
+              </h3>
+              <p className="text-dark-tertiary text-xs sm:text-sm mt-1.5 ml-4 sm:ml-5 font-medium tracking-wide">
+                Advanced candle pattern analysis • Wick dominance • Volume-price efficiency
+              </p>
+            </div>
+          </div>
+
+          {/* Candle Intent Cards Grid */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 2xl:grid-cols-3 gap-3 sm:gap-3">
+            <CandleIntentCard symbol="NIFTY" name="NIFTY 50" />
+            <CandleIntentCard symbol="BANKNIFTY" name="BANK NIFTY" />
+            <CandleIntentCard symbol="SENSEX" name="SENSEX" />
           </div>
         </div>
 

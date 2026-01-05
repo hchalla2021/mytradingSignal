@@ -53,7 +53,7 @@ AnalysisCardSkeleton.displayName = 'AnalysisCardSkeleton';
 // ✅ SENIOR DEV PATTERN: Memoized sub-components (render once, reuse forever)
 const QuickStat = memo<{ label: string; icon: string; value: string; colorClass: string }>(
   ({ label, icon, value, colorClass }) => (
-    <div className="bg-gradient-to-br from-dark-surface/80 to-dark-card/60 rounded-xl p-3 sm:p-4 border border-dark-border/40 shadow-md backdrop-blur-sm">
+    <div className="bg-gradient-to-br from-dark-surface/80 to-dark-card/60 rounded-xl p-3 sm:p-4 border border-emerald-500/30 shadow-md backdrop-blur-sm">
       <div className="text-[10px] sm:text-xs text-dark-tertiary mb-2 font-semibold tracking-wide uppercase">{label}</div>
       <div className="flex items-center gap-2">
         <span className="text-xl sm:text-2xl">{icon}</span>
@@ -66,7 +66,7 @@ QuickStat.displayName = 'QuickStat';
 
 const IndicatorSection = memo<{ title: string; children: React.ReactNode }>(
   ({ title, children }) => (
-    <div className="border border-accent/20 rounded-xl p-3 bg-dark-surface/40 backdrop-blur-sm shadow-sm">
+    <div className="border border-emerald-500/20 rounded-xl p-3 bg-dark-surface/40 backdrop-blur-sm shadow-sm">
       <h4 className="text-[10px] sm:text-xs font-bold text-dark-secondary mb-2 uppercase tracking-wider">{title}</h4>
       <div className="grid grid-cols-2 gap-2">
         {children}
@@ -115,22 +115,22 @@ const AnalysisCardContent = memo<AnalysisCardProps>(({ analysis }) => {
     }
   }, [displayPrice]);
 
-  // ✅ MEMOIZED: Border and flash classes (ultra-fast)
+  // ✅ MEMOIZED: Border and flash classes (ultra-fast) - Light green borders for all
   const borderClasses = useMemo(() => {
     const base = 'border-2 transition-all duration-200';
     if (signal === SignalType.STRONG_BUY || signal === SignalType.BUY_SIGNAL) {
-      return `${base} border-bullish/40 shadow-lg shadow-bullish/10`;
+      return `${base} border-emerald-500/40 shadow-lg shadow-emerald-500/10`;
     }
     if (signal === SignalType.STRONG_SELL || signal === SignalType.SELL_SIGNAL) {
       return `${base} border-emerald-500/40 shadow-lg shadow-emerald-500/10`;
     }
     if (signal === SignalType.NO_TRADE) {
-      return `${base} border-dark-border/50`;
+      return `${base} border-emerald-500/30`;
     }
-    return `${base} border-neutral/40 shadow-lg shadow-neutral/10`;
+    return `${base} border-emerald-500/40 shadow-lg shadow-emerald-500/10`;
   }, [signal]);
 
-  const flashClasses = flash === 'green' ? 'animate-flash-green border-bullish/80' : flash === 'red' ? 'animate-flash-red border-emerald-500/80' : '';
+  const flashClasses = flash === 'green' ? 'animate-flash-green border-emerald-500/80' : flash === 'red' ? 'animate-flash-red border-emerald-500/80' : '';
   
   const formattedPrice = displayPrice > 0 ? displayPrice.toLocaleString('en-IN', { maximumFractionDigits: 2 }) : '0.00';
 
@@ -227,18 +227,37 @@ const AnalysisCardContent = memo<AnalysisCardProps>(({ analysis }) => {
             <TechnicalIndicator 
               label="EMA 9" 
               value={indicators.ema_9 ? `₹${indicators.ema_9.toFixed(2)}` : 'N/A'} 
-              status="neutral" 
+              status={displayPrice > indicators.ema_9 ? 'positive' : displayPrice < indicators.ema_9 ? 'negative' : 'neutral'}
+              showArrow={true}
             />
             <TechnicalIndicator 
               label="EMA 21" 
               value={indicators.ema_21 ? `₹${indicators.ema_21.toFixed(2)}` : 'N/A'} 
-              status="neutral" 
+              status={displayPrice > indicators.ema_21 ? 'positive' : displayPrice < indicators.ema_21 ? 'negative' : 'neutral'}
+              showArrow={true}
             />
             <TechnicalIndicator 
               label="EMA 50" 
               value={indicators.ema_50 ? `₹${indicators.ema_50.toFixed(2)}` : 'N/A'} 
-              status="neutral" 
+              status={displayPrice > indicators.ema_50 ? 'positive' : displayPrice < indicators.ema_50 ? 'negative' : 'neutral'}
+              showArrow={true}
             />
+            <div className="col-span-1 bg-dark-card/60 rounded-lg p-2 border border-emerald-500/20">
+              <div className="text-[9px] text-dark-tertiary mb-1">TREND</div>
+              <div className={`text-xs font-bold ${
+                displayPrice > indicators.ema_9 && displayPrice > indicators.ema_21 && displayPrice > indicators.ema_50
+                  ? 'text-bullish'
+                  : displayPrice < indicators.ema_9 && displayPrice < indicators.ema_21 && displayPrice < indicators.ema_50
+                  ? 'text-bearish'
+                  : 'text-neutral'
+              }`}>
+                {displayPrice > indicators.ema_9 && displayPrice > indicators.ema_21 && displayPrice > indicators.ema_50
+                  ? '🟢 Above All'
+                  : displayPrice < indicators.ema_9 && displayPrice < indicators.ema_21 && displayPrice < indicators.ema_50
+                  ? '🔴 Below All'
+                  : '🟡 Mixed'}
+              </div>
+            </div>
           </div>
         </div>
 
@@ -267,6 +286,11 @@ const AnalysisCardContent = memo<AnalysisCardProps>(({ analysis }) => {
               label="RSI"
               value={indicators.rsi ? indicators.rsi.toFixed(0) : 'N/A'}
               status={indicators.rsi > 70 ? 'negative' : indicators.rsi < 30 ? 'positive' : 'neutral'}
+              highlight={
+                indicators.rsi >= 75 || indicators.rsi <= 25 ? 'critical' : 
+                indicators.rsi >= 70 || indicators.rsi <= 30 ? 'warning' : 
+                'normal'
+              }
             />
             <TechnicalIndicator
               label="Momentum"
@@ -284,6 +308,13 @@ const AnalysisCardContent = memo<AnalysisCardProps>(({ analysis }) => {
               label="PCR"
               value={indicators.pcr ? indicators.pcr.toFixed(2) : 'N/A'}
               status={indicators.pcr > 1.2 ? 'positive' : indicators.pcr < 0.8 ? 'negative' : 'neutral'}
+              highlight={
+                indicators.pcr >= 1.8 || indicators.pcr <= 0.5 ? 'critical' : 
+                indicators.pcr >= 1.5 || indicators.pcr <= 0.7 ? 'warning' : 
+                'normal'
+              }
+              showArrow={false}
+              isPCR={true}
             />
             <TechnicalIndicator
               label="OI Change"

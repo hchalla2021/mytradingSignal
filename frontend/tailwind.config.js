@@ -52,6 +52,7 @@ module.exports = {
         'flash-green': 'flashGreen 0.4s ease-out',
         'flash-red': 'flashRed 0.4s ease-out',
         'fadeIn': 'fadeIn 0.3s ease-in',
+        'ping-fast': 'ping 1s cubic-bezier(0, 0, 0.2, 1) infinite',
       },
       keyframes: {
         flashGreen: {
@@ -65,6 +66,12 @@ module.exports = {
         fadeIn: {
           '0%': { opacity: '0.8' },
           '100%': { opacity: '1' },
+        },
+        ping: {
+          '75%, 100%': {
+            transform: 'scale(1.05)',
+            opacity: '0',
+          },
         },
       },
       screens: {

@@ -21,9 +21,12 @@ import asyncio
 
 @dataclass
 class VolumePulseResult:
-    """Ultra-lightweight result container"""
+    """Ultra-lightweight result container with PRO volume analysis"""
     __slots__ = ('symbol', 'green_vol', 'red_vol', 'ratio', 'pulse_score', 
-                 'signal', 'confidence', 'trend', 'timestamp')
+                 'signal', 'confidence', 'trend', 'timestamp',
+                 # 🔥 NEW: Professional "Effort vs Result" metrics
+                 'participation', 'aggression', 'exhaustion',
+                 'volume_quality', 'interpretation')
     
     symbol: str
     green_vol: int
@@ -34,6 +37,13 @@ class VolumePulseResult:
     confidence: int  # 0-100
     trend: str  # BULLISH, BEARISH, NEUTRAL
     timestamp: str
+    
+    # 🔥 PRO METRICS - "EFFORT vs RESULT"
+    participation: int  # 0-100: Volume involvement vs average
+    aggression: int  # 0-100: Price movement efficiency (Result/Effort)
+    exhaustion: int  # 0-100: Climax volume detection
+    volume_quality: str  # ABSORPTION, COMPRESSION, FAKE_BREAKOUT, EXHAUSTION, HEALTHY
+    interpretation: str  # Human-readable insight
 
 
 class VolumePulseEngine:
@@ -100,6 +110,14 @@ class VolumePulseEngine:
                 green_vol, red_vol, green_pct, recent
             )
             
+            # 🔥 NEW: PROFESSIONAL "EFFORT vs RESULT" ANALYSIS
+            participation = self._calculate_participation(recent)
+            aggression = self._calculate_aggression(recent)
+            exhaustion = self._calculate_exhaustion(recent)
+            volume_quality, interpretation = self._determine_volume_quality(
+                participation, aggression, exhaustion, recent
+            )
+            
             # === SIGNAL GENERATION ===
             signal, confidence = self._generate_signal(
                 pulse_score, ratio, green_pct, red_pct
@@ -120,7 +138,13 @@ class VolumePulseEngine:
                 signal=signal,
                 confidence=confidence,
                 trend=trend,
-                timestamp=datetime.now().isoformat()
+                timestamp=datetime.now().isoformat(),
+                # 🔥 NEW: Professional metrics
+                participation=participation,
+                aggression=aggression,
+                exhaustion=exhaustion,
+                volume_quality=volume_quality,
+                interpretation=interpretation
             )
             
         except Exception as e:
@@ -177,6 +201,218 @@ class VolumePulseEngine:
         
         # Clamp to 0-100 range
         return min(max(score, 0), 100)
+    
+    # ═══════════════════════════════════════════════════════════════
+    # 🔥 PROFESSIONAL "EFFORT vs RESULT" ANALYSIS
+    # ═══════════════════════════════════════════════════════════════
+    
+    def _calculate_participation(self, recent_df: pd.DataFrame) -> int:
+        """
+        PARTICIPATION: Volume involvement vs average (0-100)
+        High = Heavy trading activity
+        Low = Disinterest
+        """
+        if len(recent_df) < 10:
+            return 50
+        
+        current_vol = recent_df['volume'].iloc[-1]
+        avg_vol = recent_df['volume'].mean()
+        
+        if avg_vol == 0:
+            return 50
+        
+        # Ratio of current to average
+        ratio = current_vol / avg_vol
+        
+        # Scale to 0-100
+        if ratio >= 2.0:
+            return 100  # Extreme participation
+        elif ratio >= 1.5:
+            return 80   # High participation
+        elif ratio >= 1.0:
+            return 60   # Normal participation
+        elif ratio >= 0.7:
+            return 40   # Below average
+        else:
+            return 20   # Very low participation
+    
+    def _calculate_aggression(self, recent_df: pd.DataFrame) -> int:
+        """
+        AGGRESSION: Price movement efficiency (0-100)
+        Formula: (Price Change / Volume) * scaling
+        
+        High aggression = Big price move on small volume (efficient)
+        Low aggression = Small price move on big volume (absorption)
+        """
+        if len(recent_df) < 2:
+            return 50
+        
+        # Get last candle
+        last_candle = recent_df.iloc[-1]
+        open_price = last_candle['open']
+        close_price = last_candle['close']
+        volume = last_candle['volume']
+        
+        if volume == 0 or open_price == 0:
+            return 50
+        
+        # Price change percentage
+        price_change_pct = abs((close_price - open_price) / open_price * 100)
+        
+        # Volume as percentage of average
+        avg_vol = recent_df['volume'].mean()
+        vol_ratio = volume / avg_vol if avg_vol > 0 else 1.0
+        
+        # Aggression = Price efficiency (more price move per unit of volume)
+        # If price moves 2% on 1x volume → aggression = high
+        # If price moves 0.5% on 3x volume → aggression = low (absorption)
+        
+        aggression_ratio = price_change_pct / vol_ratio
+        
+        # Scale to 0-100
+        if aggression_ratio >= 1.5:
+            return 100  # Extreme efficiency (breakout/breakdown)
+        elif aggression_ratio >= 1.0:
+            return 80   # High efficiency
+        elif aggression_ratio >= 0.5:
+            return 60   # Normal
+        elif aggression_ratio >= 0.25:
+            return 40   # Low efficiency (absorption zone)
+        else:
+            return 20   # Very low (heavy absorption)
+    
+    def _calculate_exhaustion(self, recent_df: pd.DataFrame) -> int:
+        """
+        EXHAUSTION: Climax volume detection (0-100)
+        Formula: Volume spike + Diminishing returns
+        
+        High exhaustion = Volume climax with slowing momentum
+        Low exhaustion = Steady participation
+        """
+        if len(recent_df) < 10:
+            return 0
+        
+        # Get recent volume trend
+        vol_arr = recent_df['volume'].values
+        close_arr = recent_df['close'].values
+        
+        current_vol = vol_arr[-1]
+        avg_vol = np.mean(vol_arr[:-1])  # Exclude current
+        
+        # Volume spike detection
+        vol_spike = (current_vol / avg_vol) if avg_vol > 0 else 1.0
+        
+        # Price momentum (last 3 candles)
+        if len(close_arr) >= 4:
+            price_change_recent = abs(close_arr[-1] - close_arr[-4])
+            price_change_before = abs(close_arr[-4] - close_arr[-7]) if len(close_arr) >= 7 else price_change_recent
+            
+            # If volume increasing but price momentum decreasing → exhaustion
+            momentum_ratio = price_change_recent / price_change_before if price_change_before > 0 else 1.0
+        else:
+            momentum_ratio = 1.0
+        
+        # Exhaustion score
+        exhaustion = 0
+        
+        # Massive volume spike (>2x avg)
+        if vol_spike >= 2.5:
+            exhaustion += 40
+        elif vol_spike >= 2.0:
+            exhaustion += 30
+        elif vol_spike >= 1.5:
+            exhaustion += 20
+        
+        # Diminishing momentum
+        if momentum_ratio < 0.7 and vol_spike > 1.5:
+            exhaustion += 40  # High volume but slowing momentum = climax
+        elif momentum_ratio < 0.85:
+            exhaustion += 20
+        
+        # Wide-range candle at extreme volume (blow-off)
+        if len(recent_df) >= 2:
+            last_range = abs(recent_df['high'].iloc[-1] - recent_df['low'].iloc[-1])
+            avg_range = np.mean(np.abs(recent_df['high'].values[:-1] - recent_df['low'].values[:-1]))
+            
+            if last_range > avg_range * 1.5 and vol_spike > 1.8:
+                exhaustion += 20  # Blow-off top/bottom pattern
+        
+        return min(exhaustion, 100)
+    
+    def _determine_volume_quality(
+        self, 
+        participation: int, 
+        aggression: int, 
+        exhaustion: int,
+        recent_df: pd.DataFrame
+    ) -> Tuple[str, str]:
+        """
+        Classify volume quality and provide interpretation
+        
+        Returns: (volume_quality, interpretation)
+        """
+        # Get last candle range
+        last_candle = recent_df.iloc[-1]
+        candle_range_pct = abs((last_candle['high'] - last_candle['low']) / last_candle['open'] * 100)
+        
+        # === ABSORPTION: High volume + flat/small candle ===
+        if participation >= 70 and aggression <= 40 and candle_range_pct < 0.8:
+            return (
+                "ABSORPTION",
+                "🛡️ High volume but small price move - Institutions absorbing supply/demand"
+            )
+        
+        # === COMPRESSION: Rising volume + shrinking range ===
+        if len(recent_df) >= 5:
+            last_3_vol = recent_df['volume'].iloc[-3:].mean()
+            prev_3_vol = recent_df['volume'].iloc[-6:-3].mean() if len(recent_df) >= 6 else last_3_vol
+            last_3_range = np.mean(np.abs(recent_df['high'].iloc[-3:].values - recent_df['low'].iloc[-3:].values))
+            prev_3_range = np.mean(np.abs(recent_df['high'].iloc[-6:-3].values - recent_df['low'].iloc[-6:-3].values)) if len(recent_df) >= 6 else last_3_range
+            
+            if last_3_vol > prev_3_vol * 1.2 and last_3_range < prev_3_range * 0.85:
+                return (
+                    "COMPRESSION",
+                    "⚡ Volume rising while range shrinks - Breakout imminent"
+                )
+        
+        # === FAKE BREAKOUT: Low volume breakout ===
+        if participation <= 40 and aggression >= 70:
+            return (
+                "FAKE_BREAKOUT",
+                "⚠️ Price moving but volume weak - Likely false breakout"
+            )
+        
+        # === EXHAUSTION: Climax volume ===
+        if exhaustion >= 70:
+            return (
+                "EXHAUSTION",
+                "🔥 Volume climax detected - Potential reversal/pause ahead"
+            )
+        
+        # === SELLER EXHAUSTION (at support) ===
+        # Red volume spike with high exhaustion
+        close_arr = recent_df['close'].values
+        open_arr = recent_df['open'].values
+        is_red = close_arr[-1] < open_arr[-1]
+        
+        if is_red and exhaustion >= 60 and participation >= 70:
+            return (
+                "SELLER_EXHAUSTION",
+                "📊 Heavy red volume at support - Sellers may be exhausted"
+            )
+        
+        # === HEALTHY: Balanced volume and price ===
+        if participation >= 50 and aggression >= 50 and exhaustion <= 50:
+            return (
+                "HEALTHY",
+                "✅ Balanced volume and price action - Trend continuation likely"
+            )
+        
+        # === DEFAULT ===
+        return (
+            "NEUTRAL",
+            "➡️ Mixed signals - Wait for clearer volume pattern"
+        )
     
     def _generate_signal(
         self, 
@@ -242,11 +478,17 @@ class VolumePulseEngine:
             signal="NEUTRAL",
             confidence=0,
             trend="NEUTRAL",
-            timestamp=datetime.now().isoformat()
+            timestamp=datetime.now().isoformat(),
+            # 🔥 NEW: Default professional metrics
+            participation=50,
+            aggression=50,
+            exhaustion=0,
+            volume_quality="NEUTRAL",
+            interpretation=f"⚠️ {reason}"
         )
     
     def to_dict(self, result: VolumePulseResult) -> Dict:
-        """Convert result to API-friendly dictionary"""
+        """Convert result to API-friendly dictionary with PRO metrics"""
         return {
             "symbol": result.symbol,
             "volume_data": {
@@ -261,6 +503,14 @@ class VolumePulseEngine:
             "confidence": result.confidence,
             "trend": result.trend,
             "status": "ACTIVE" if result.confidence >= self._signal_threshold else "WATCHING",
+            # 🔥 NEW: Professional "Effort vs Result" metrics
+            "pro_metrics": {
+                "participation": result.participation,
+                "aggression": result.aggression,
+                "exhaustion": result.exhaustion,
+                "volume_quality": result.volume_quality,
+                "interpretation": result.interpretation
+            },
             "timestamp": result.timestamp
         }
 

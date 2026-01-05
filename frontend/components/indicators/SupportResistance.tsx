@@ -26,9 +26,41 @@ export const SupportResistance: React.FC<SupportResistanceProps> = ({
   const range = resistance - support;
   const pricePosition = range > 0 ? ((currentPrice - support) / range) * 100 : 50;
 
+  // Calculate absolute distance to support/resistance
+  const distanceToResistance = Math.abs(currentPrice - resistance);
+  const distanceToSupport = Math.abs(currentPrice - support);
+  
+  // Graduated alert levels
+  const isTouchingResistance = distanceToResistance <= 2; // Within 2 points = TOUCHING
+  const isNearResistance = distanceToResistance <= 5 && distanceToResistance > 2; // 2-5 points = NEAR
+  const isTouchingSupport = distanceToSupport <= 2; // Within 2 points = TOUCHING
+  const isNearSupport = distanceToSupport <= 5 && distanceToSupport > 2; // 2-5 points = NEAR
+
   const formatPrice = (price: number | undefined) => {
     if (price == null || isNaN(price)) return '0.00';
     return price.toLocaleString('en-IN', { maximumFractionDigits: 2 });
+  };
+
+  // Dynamic styling for resistance based on proximity
+  const getResistanceStyle = () => {
+    if (isTouchingResistance) {
+      return 'border-red-500 shadow-red-500/60 animate-ping-fast bg-red-900/50';
+    }
+    if (isNearResistance) {
+      return 'border-red-500/70 shadow-red-500/40 animate-pulse bg-red-950/40';
+    }
+    return 'border-red-500/40 shadow-red-500/20';
+  };
+
+  // Dynamic styling for support based on proximity
+  const getSupportStyle = () => {
+    if (isTouchingSupport) {
+      return 'border-green-500 shadow-green-500/60 animate-ping-fast bg-green-900/50';
+    }
+    if (isNearSupport) {
+      return 'border-green-500/70 shadow-green-500/40 animate-pulse bg-green-950/40';
+    }
+    return 'border-green-500/40 shadow-green-500/20';
   };
 
   return (
@@ -36,8 +68,10 @@ export const SupportResistance: React.FC<SupportResistanceProps> = ({
       {/* Resistance */}
       <div className="flex items-center justify-between text-xs">
         <span className="text-red-500 font-semibold">RESISTANCE</span>
-        <span className="text-red-400 font-bold px-3 py-1.5 rounded-lg bg-red-950/30 border-2 border-red-500/40 shadow-md shadow-red-500/20">
+        <span className={`text-red-400 font-bold px-3 py-1.5 rounded-lg border-2 shadow-md transition-all ${getResistanceStyle()}`}>
           {formatPrice(resistance)}
+          {isTouchingResistance && <span className="ml-1 text-xs">🔥</span>}
+          {isNearResistance && !isTouchingResistance && <span className="ml-1 text-xs">⚠️</span>}
         </span>
       </div>
 
@@ -70,8 +104,10 @@ export const SupportResistance: React.FC<SupportResistanceProps> = ({
       {/* Support */}
       <div className="flex items-center justify-between text-xs">
         <span className="text-green-500 font-semibold">SUPPORT</span>
-        <span className="text-green-400 font-bold px-3 py-1.5 rounded-lg bg-green-950/30 border-2 border-green-500/40 shadow-md shadow-green-500/20">
+        <span className={`text-green-400 font-bold px-3 py-1.5 rounded-lg border-2 shadow-md transition-all ${getSupportStyle()}`}>
           {formatPrice(support)}
+          {isTouchingSupport && <span className="ml-1 text-xs">🔥</span>}
+          {isNearSupport && !isTouchingSupport && <span className="ml-1 text-xs">⚠️</span>}
         </span>
       </div>
 

@@ -19,8 +19,10 @@ interface SignalWeight {
   zoneControl: number;
   volumePulse: number;
   trendBase: number;
+  candleIntent: number; // Candle structure patterns - Professional signals
   marketIndices: number; // Live Market Indices momentum
   pcr: number; // Put-Call Ratio - Market sentiment indicator
+  earlyWarning: number; // Early Warning predictive signals - Pre-move detection
   // ai: number; // COMMENTED OUT - Not required
 }
 
@@ -33,8 +35,10 @@ interface SymbolOutlook {
     zoneControl: { signal: string; confidence: number; weight: number };
     volumePulse: { signal: string; confidence: number; weight: number };
     trendBase: { signal: string; confidence: number; weight: number };
+    candleIntent: { signal: string; confidence: number; weight: number };
     marketIndices: { signal: string; confidence: number; weight: number };
     pcr: { signal: string; confidence: number; weight: number };
+    earlyWarning: { signal: string; confidence: number; weight: number; timeToTrigger?: number; riskLevel?: string };
     // ai: { signal: string; confidence: number; weight: number }; // COMMENTED OUT
   };
   riskLevel: 'LOW' | 'MEDIUM' | 'HIGH';
@@ -51,14 +55,16 @@ interface OverallOutlookData {
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || '';
 const SYMBOLS = (process.env.NEXT_PUBLIC_MARKET_SYMBOLS || '').split(',').filter(Boolean);
 
-// Signal strength weights (total = 100%) - AI REMOVED, Market Indices & PCR ADDED
+// Signal strength weights (total = 100%) - AI REMOVED, Candle Intent, Market Indices, PCR & Early Warning ADDED
 const SIGNAL_WEIGHTS: SignalWeight = {
-  technical: 25,       // 25% weight - Core technical indicators
-  zoneControl: 20,     // 20% weight - Support/Resistance zones
-  volumePulse: 20,     // 20% weight - Volume analysis
-  trendBase: 15,       // 15% weight - Trend structure
-  marketIndices: 10,   // 10% weight - Live price momentum from indices
-  pcr: 10,             // 10% weight - Put-Call Ratio (market sentiment)
+  technical: 20,       // 20% weight - Core technical indicators
+  zoneControl: 16,     // 16% weight - Support/Resistance zones
+  volumePulse: 16,     // 16% weight - Volume analysis
+  trendBase: 12,       // 12% weight - Trend structure
+  candleIntent: 14,    // 14% weight - Candle patterns (rejection, absorption, breakout)
+  marketIndices: 8,    // 8% weight - Live price momentum from indices
+  pcr: 6,              // 6% weight - Put-Call Ratio (market sentiment)
+  earlyWarning: 8,     // 8% weight - Pre-move detection (momentum buildup, volume accumulation)
   // ai: 10,           // COMMENTED OUT - Not required
 };
 
@@ -88,12 +94,18 @@ export const useOverallMarketOutlook = () => {
     zoneControl: any,
     volumePulse: any,
     trendBase: any,
-    marketIndicesData: any // Live Market Indices momentum
+    candleIntent: any,    // Candle structure patterns
+    marketIndicesData: any, // Live Market Indices momentum
+    earlyWarning: any     // Early Warning predictive signals
     // ai: any // COMMENTED OUT - Not required
   ): SymbolOutlook => {
     // 🔥 CRITICAL FIX #1: Market Status Validation
+    // Don't block analysis for CLOSED market if we have cached data with valid signals
     const marketStatus = marketIndicesData?.status || 'CLOSED';
-    if (marketStatus === 'CLOSED' || marketStatus === 'PRE_OPEN') {
+    const hasValidData = technical?.signal || zoneControl?.signal || volumePulse?.signal || trendBase?.signal;
+    
+    // Only return NEUTRAL if market is closed AND we have no cached data
+    if ((marketStatus === 'CLOSED' || marketStatus === 'PRE_OPEN') && !hasValidData) {
       return {
         overallConfidence: 0,
         overallSignal: 'NEUTRAL',
@@ -103,8 +115,10 @@ export const useOverallMarketOutlook = () => {
           zoneControl: { signal: 'NEUTRAL', confidence: 0, weight: SIGNAL_WEIGHTS.zoneControl },
           volumePulse: { signal: 'NEUTRAL', confidence: 0, weight: SIGNAL_WEIGHTS.volumePulse },
           trendBase: { signal: 'NEUTRAL', confidence: 0, weight: SIGNAL_WEIGHTS.trendBase },
+          candleIntent: { signal: 'NEUTRAL', confidence: 0, weight: SIGNAL_WEIGHTS.candleIntent },
           marketIndices: { signal: 'NEUTRAL', confidence: 0, weight: SIGNAL_WEIGHTS.marketIndices },
           pcr: { signal: 'NEUTRAL', confidence: 0, weight: SIGNAL_WEIGHTS.pcr },
+          earlyWarning: { signal: 'WAIT', confidence: 0, weight: SIGNAL_WEIGHTS.earlyWarning },
         },
         riskLevel: 'HIGH',
         breakdownRiskPercent: 100,
@@ -112,28 +126,37 @@ export const useOverallMarketOutlook = () => {
       };
     }
     
-    // 🔥 CRITICAL FIX #2: Signal Availability Check (require at least 4/6 signals)
+    // 🔥 CRITICAL FIX #2: Signal Availability Check
+    // Relax validation when market closed - if we have cached data, allow calculation
     const availableSignals = [
       technical?.signal,
       zoneControl?.signal,
       volumePulse?.signal,
       trendBase?.signal,
+      candleIntent?.professional_signal || candleIntent?.signal,  // Check both fields
       marketIndicesData?.change !== undefined,
-      marketIndicesData?.pcr !== undefined && marketIndicesData?.pcr > 0
+      marketIndicesData?.pcr !== undefined && marketIndicesData?.pcr > 0,
+      earlyWarning?.signal
     ].filter(Boolean).length;
 
-    if (availableSignals < 4) {
+    // When market is CLOSED and we have cached data, require fewer signals (2+)
+    // When market is OPEN, require at least 4/8 signals for quality
+    const minSignalsRequired = (marketStatus === 'CLOSED' || marketStatus === 'PRE_OPEN') ? 2 : 4;
+
+    if (availableSignals < minSignalsRequired) {
       return {
         overallConfidence: 0,
         overallSignal: 'NEUTRAL',
-        tradeRecommendation: `⚠️ INSUFFICIENT DATA - Only ${availableSignals}/6 signals available. Wait for more data.`,
+        tradeRecommendation: `⚠️ INSUFFICIENT DATA - Only ${availableSignals}/8 signals available. Wait for more data.`,
         signalBreakdown: {
           technical: { signal: technical?.signal || 'WAIT', confidence: 0, weight: SIGNAL_WEIGHTS.technical },
           zoneControl: { signal: zoneControl?.signal || 'NEUTRAL', confidence: 0, weight: SIGNAL_WEIGHTS.zoneControl },
           volumePulse: { signal: volumePulse?.signal || 'NEUTRAL', confidence: 0, weight: SIGNAL_WEIGHTS.volumePulse },
           trendBase: { signal: trendBase?.signal || 'NEUTRAL', confidence: 0, weight: SIGNAL_WEIGHTS.trendBase },
+          candleIntent: { signal: candleIntent?.professional_signal || 'NEUTRAL', confidence: 0, weight: SIGNAL_WEIGHTS.candleIntent },
           marketIndices: { signal: 'NEUTRAL', confidence: 0, weight: SIGNAL_WEIGHTS.marketIndices },
           pcr: { signal: 'NEUTRAL', confidence: 0, weight: SIGNAL_WEIGHTS.pcr },
+          earlyWarning: { signal: earlyWarning?.signal || 'WAIT', confidence: 0, weight: SIGNAL_WEIGHTS.earlyWarning },
         },
         riskLevel: 'HIGH',
         breakdownRiskPercent: 100,
@@ -153,6 +176,10 @@ export const useOverallMarketOutlook = () => {
 
     const trendSignal = trendBase?.signal || 'NEUTRAL';
     const trendConfidence = trendBase?.confidence || 0;
+
+    // Extract Candle Intent signal and confidence
+    const candleSignal = candleIntent?.professional_signal || candleIntent?.signal || 'NEUTRAL';
+    const candleConfidence = candleIntent?.pattern?.confidence || candleIntent?.confidence || 0;
 
     // Calculate market indices momentum signal from price change
     // BUYER-FRIENDLY: Lower thresholds for BUY signals, higher thresholds for SELL signals
@@ -186,6 +213,27 @@ export const useOverallMarketOutlook = () => {
 
     // const aiSignal = ai?.signal?.direction || 'NEUTRAL'; // COMMENTED OUT
     // const aiConfidence = ai?.signal?.strength || 0; // COMMENTED OUT
+
+    // Extract Early Warning signal and confidence
+    // Convert EARLY_BUY/EARLY_SELL to standard BUY/SELL signals
+    const earlyWarningSignal = earlyWarning?.signal === 'EARLY_BUY' ? 'BUY' : 
+                               earlyWarning?.signal === 'EARLY_SELL' ? 'SELL' : 'WAIT';
+    const earlyWarningConfidence = earlyWarning?.confidence || 0;
+    const earlyWarningTimeToTrigger = earlyWarning?.time_to_trigger || 0;
+    const earlyWarningRisk = earlyWarning?.fake_signal_risk || 'HIGH';
+    
+    // Adjust confidence based on risk level and time proximity
+    let adjustedEarlyWarningConfidence = earlyWarningConfidence;
+    if (earlyWarningRisk === 'HIGH') {
+      adjustedEarlyWarningConfidence *= 0.7; // Reduce confidence by 30% for high risk
+    } else if (earlyWarningRisk === 'MEDIUM') {
+      adjustedEarlyWarningConfidence *= 0.85; // Reduce confidence by 15% for medium risk
+    }
+    // Boost confidence if trigger is imminent (< 5 minutes)
+    if (earlyWarningTimeToTrigger > 0 && earlyWarningTimeToTrigger < 5) {
+      adjustedEarlyWarningConfidence *= 1.2; // 20% boost for imminent signals
+    }
+    adjustedEarlyWarningConfidence = Math.min(100, adjustedEarlyWarningConfidence); // Cap at 100
 
     // Calculate PCR (Put-Call Ratio) signal
     // PCR > 1.0 = More puts (fear) = Bullish contrarian signal (good for buyers)
@@ -222,18 +270,22 @@ export const useOverallMarketOutlook = () => {
     const zoneScore = signalToScore(zoneSignal);
     const volumeScore = signalToScore(volumeSignal);
     const trendScore = signalToScore(trendSignal);
+    const candleScore = signalToScore(candleSignal);
     const marketIndicesScore = signalToScore(marketIndicesSignal);
     const pcrScore = signalToScore(pcrSignal);
+    const earlyWarningScore = signalToScore(earlyWarningSignal);
     // const aiScore = signalToScore(aiSignal); // COMMENTED OUT
 
-    // Calculate weighted average score (AI REMOVED, Market Indices & PCR ADDED)
+    // Calculate weighted average score (Early Warning ADDED with 8% weight)
     const totalWeightedScore = (
       (techScore * techConfidence * SIGNAL_WEIGHTS.technical / 100) +
       (zoneScore * zoneConfidence * SIGNAL_WEIGHTS.zoneControl / 100) +
       (volumeScore * volumeConfidence * SIGNAL_WEIGHTS.volumePulse / 100) +
       (trendScore * trendConfidence * SIGNAL_WEIGHTS.trendBase / 100) +
+      (candleScore * candleConfidence * SIGNAL_WEIGHTS.candleIntent / 100) +
       (marketIndicesScore * marketIndicesConfidence * SIGNAL_WEIGHTS.marketIndices / 100) +
-      (pcrScore * pcrConfidence * SIGNAL_WEIGHTS.pcr / 100)
+      (pcrScore * pcrConfidence * SIGNAL_WEIGHTS.pcr / 100) +
+      (earlyWarningScore * adjustedEarlyWarningConfidence * SIGNAL_WEIGHTS.earlyWarning / 100)
       // + (aiScore * aiConfidence * SIGNAL_WEIGHTS.ai / 100) // COMMENTED OUT
     ) / 100;
 
@@ -244,13 +296,15 @@ export const useOverallMarketOutlook = () => {
       (zoneConfidence * SIGNAL_WEIGHTS.zoneControl) +
       (volumeConfidence * SIGNAL_WEIGHTS.volumePulse) +
       (trendConfidence * SIGNAL_WEIGHTS.trendBase) +
+      (candleConfidence * SIGNAL_WEIGHTS.candleIntent) +
       (marketIndicesConfidence * SIGNAL_WEIGHTS.marketIndices) +
-      (pcrConfidence * SIGNAL_WEIGHTS.pcr)
+      (pcrConfidence * SIGNAL_WEIGHTS.pcr) +
+      (adjustedEarlyWarningConfidence * SIGNAL_WEIGHTS.earlyWarning)
     ) / 100;
     
     // 🔥 BONUS: Add alignment bonus (when signals agree, confidence increases)
-    const bullishCount = [techScore, zoneScore, volumeScore, trendScore, marketIndicesScore, pcrScore].filter(s => s > 0).length;
-    const bearishCount = [techScore, zoneScore, volumeScore, trendScore, marketIndicesScore, pcrScore].filter(s => s < 0).length;
+    const bullishCount = [techScore, zoneScore, volumeScore, trendScore, candleScore, marketIndicesScore, pcrScore, earlyWarningScore].filter(s => s > 0).length;
+    const bearishCount = [techScore, zoneScore, volumeScore, trendScore, candleScore, marketIndicesScore, pcrScore, earlyWarningScore].filter(s => s < 0).length;
     const alignmentBonus = Math.abs(bullishCount - bearishCount) * 3; // +3% per aligned signal
     const finalConfidence = Math.min(100, overallConfidence + alignmentBonus);
 
@@ -356,6 +410,11 @@ export const useOverallMarketOutlook = () => {
           confidence: Math.round(trendConfidence), 
           weight: SIGNAL_WEIGHTS.trendBase 
         },
+        candleIntent: {
+          signal: candleSignal,
+          confidence: Math.round(candleConfidence),
+          weight: SIGNAL_WEIGHTS.candleIntent
+        },
         marketIndices: {
           signal: marketIndicesSignal,
           confidence: Math.round(marketIndicesConfidence),
@@ -365,6 +424,13 @@ export const useOverallMarketOutlook = () => {
           signal: pcrSignal,
           confidence: Math.round(pcrConfidence),
           weight: SIGNAL_WEIGHTS.pcr
+        },
+        earlyWarning: {
+          signal: earlyWarningSignal,
+          confidence: Math.round(adjustedEarlyWarningConfidence),
+          weight: SIGNAL_WEIGHTS.earlyWarning,
+          timeToTrigger: earlyWarningTimeToTrigger,
+          riskLevel: earlyWarningRisk
         },
         // ai: {  // COMMENTED OUT - Not required
         //   signal: aiSignal, 
@@ -389,13 +455,15 @@ export const useOverallMarketOutlook = () => {
 
       for (const symbol of SYMBOLS) {
         try {
-          // Fetch all analysis types in parallel (AI REMOVED, Market Data ADDED)
-          const [techRes, zoneRes, volumeRes, trendRes, marketRes] = await Promise.all([
+          // Fetch all analysis types in parallel (Candle Intent & Early Warning ADDED)
+          const [techRes, zoneRes, volumeRes, trendRes, candleRes, marketRes, earlyWarningRes] = await Promise.all([
             fetch(`${API_BASE_URL}/api/analysis/analyze/${symbol}`).then(r => r.ok ? r.json() : null).catch(() => null),
             fetch(`${API_BASE_URL}/api/advanced/zone-control/${symbol}`).then(r => r.ok ? r.json() : null).catch(() => null),
             fetch(`${API_BASE_URL}/api/advanced/volume-pulse/${symbol}`).then(r => r.ok ? r.json() : null).catch(() => null),
             fetch(`${API_BASE_URL}/api/advanced/trend-base/${symbol}`).then(r => r.ok ? r.json() : null).catch(() => null),
+            fetch(`${API_BASE_URL}/api/advanced/candle-intent/${symbol}`).then(r => r.ok ? r.json() : null).catch(() => null),
             fetch(`${API_BASE_URL}/ws/cache/${symbol}`).then(r => r.ok ? r.json().then(d => d.data) : null).catch(() => null),
+            fetch(`${API_BASE_URL}/api/advanced/early-warning/${symbol}`).then(r => r.ok ? r.json() : null).catch(() => null),
             // fetch(`${API_BASE_URL}/ai/analysis/${symbol}`).then(r => r.ok ? r.json() : null).catch(() => null), // COMMENTED OUT
           ]);
 
@@ -404,7 +472,9 @@ export const useOverallMarketOutlook = () => {
             zoneRes,
             volumeRes,
             trendRes,
-            marketRes
+            candleRes,
+            marketRes,
+            earlyWarningRes
             // aiRes // COMMENTED OUT
           );
         } catch (error) {

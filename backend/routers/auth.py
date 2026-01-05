@@ -1,6 +1,6 @@
 """Authentication endpoints."""
 from fastapi import APIRouter, HTTPException, Response, Cookie, Query
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, HTMLResponse
 from pydantic import BaseModel
 from typing import Optional
 import os
@@ -111,15 +111,112 @@ async def zerodha_callback(request_token: str = Query(...), status: str = Query(
         # Save access token to .env file for persistence
         env_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env")
         update_env_file(env_path, "ZERODHA_ACCESS_TOKEN", access_token)
+        
+        # Clear settings cache to reload new token immediately
+        from config import get_settings
+        get_settings.cache_clear()
+        
+        # 🔥 CRITICAL: Clear global token manager cache
+        from services.global_token_manager import get_token_manager
+        token_manager = get_token_manager()
+        token_manager.force_recheck()
+        print("🔄 Global token manager cache cleared - will revalidate immediately")
+        
+        # Verify token was saved correctly
+        reloaded_settings = get_settings()
+        saved_token = reloaded_settings.zerodha_access_token
+        
         print(f"💾 Access token saved to .env file")
+        print(f"🔄 Settings cache cleared - all services will use new token")
+        print(f"✅ Verification: Token in memory matches saved token: {saved_token == access_token}")
+        if saved_token != access_token:
+            print(f"   ⚠️ WARNING: Token mismatch!")
+            print(f"   → Original: {access_token[:20]}...")
+            print(f"   → Saved: {saved_token[:20] if saved_token else 'NONE'}...")
         
         print(f"\n✅ TOKEN SAVED! File watcher will trigger automatic reconnection...")
         print(f"   No backend restart needed - connection will resume automatically")
         
         print(f"\n🎉 AUTHENTICATION COMPLETE - Redirecting to dashboard...\n")
         
-        # Redirect to dashboard (home page) with success notification
-        return RedirectResponse(url=f"{settings.frontend_url}/?auth=success&user_id={user_id}&user_name={user_name}")
+        # Redirect to dashboard with auto-close script for popup
+        html_content = f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>Login Successful</title>
+            <meta charset="utf-8">
+            <style>
+                body {{
+                    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    height: 100vh;
+                    margin: 0;
+                    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                    color: white;
+                }}
+                .container {{
+                    text-align: center;
+                    padding: 40px;
+                    background: rgba(255,255,255,0.1);
+                    border-radius: 20px;
+                    backdrop-filter: blur(10px);
+                }}
+                .icon {{
+                    font-size: 64px;
+                    margin-bottom: 20px;
+                    animation: checkmark 0.8s ease;
+                }}
+                @keyframes checkmark {{
+                    0% {{ transform: scale(0); }}
+                    50% {{ transform: scale(1.2); }}
+                    100% {{ transform: scale(1); }}
+                }}
+                .spinner {{
+                    border: 3px solid rgba(255,255,255,0.3);
+                    border-top: 3px solid white;
+                    border-radius: 50%;
+                    width: 40px;
+                    height: 40px;
+                    animation: spin 1s linear infinite;
+                    margin: 20px auto;
+                }}
+                @keyframes spin {{
+                    0% {{ transform: rotate(0deg); }}
+                    100% {{ transform: rotate(360deg); }}
+                }}
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <div class="icon">✅</div>
+                <h1>Login Successful!</h1>
+                <p>Welcome, {user_name}</p>
+                <div class="spinner"></div>
+                <p>Reconnecting to live market data...</p>
+            </div>
+            <script>
+                // Close popup in fraction of a second (0.5s)
+                if (window.opener) {{
+                    console.log('🎉 Auth successful, closing popup...');
+                    setTimeout(() => {{
+                        window.close();
+                    }}, 500);
+                }} else {{
+                    // If not popup, redirect to main app
+                    setTimeout(() => {{
+                        window.location.href = '{settings.frontend_url}';
+                    }}, 2000);
+                }}
+            </script>
+        </body>
+        </html>
+        """
+        
+        from fastapi.responses import HTMLResponse
+        return HTMLResponse(content=html_content)
         
     except Exception as e:
         print(f"\n❌ AUTHENTICATION FAILED")

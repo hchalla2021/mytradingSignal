@@ -3,8 +3,8 @@
 import sys
 import io
 if sys.platform == "win32":
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
-    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
 
 import asyncio
 from contextlib import asynccontextmanager
@@ -17,7 +17,7 @@ from services.market_feed import MarketFeedService
 from services.cache import CacheService
 from services.token_watcher import start_token_watcher
 
-from routers import auth, market, health, analysis, advanced_analysis, token_status
+from routers import auth, market, health, analysis, advanced_analysis, token_status, system_health
 
 
 settings = get_settings()
@@ -83,6 +83,7 @@ app.add_middleware(
 
 # Include routers
 app.include_router(health.router, tags=["Health"])
+app.include_router(system_health.router, prefix="/api/system", tags=["System Health"])
 app.include_router(token_status.router, tags=["Token Status"])
 app.include_router(auth.router, prefix="/api/auth", tags=["Authentication"])
 app.include_router(market.router, prefix="/ws", tags=["Market Data"])

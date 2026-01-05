@@ -41,6 +41,35 @@ const TrendBaseCard = memo<TrendBaseCardProps>(({ symbol, name }) => {
         const response = await fetch(`${apiUrl}/api/advanced/trend-base/${symbol}`);
         if (!response.ok) throw new Error('Failed to fetch');
         const result = await response.json();
+        
+        // 🔥 FIX: Check if backend returned error status (TOKEN_EXPIRED, ERROR, NO_DATA, etc.)
+        if (result.status === 'TOKEN_EXPIRED' || result.status === 'ERROR' || !result.structure) {
+          setError(result.message || 'Token expired - Please login');
+          setData(null);
+          console.warn(`[TREND-BASE] ${symbol} - ${result.status}: ${result.message}`);
+          setLoading(false);
+          return;
+        }
+        
+        // Handle CACHED_DATA status (last session data)
+        if (result.status === 'CACHED_DATA') {
+          // Show cached data with indicator
+          setData({ ...result, _isCached: true });
+          setError(null);
+          console.log(`[TREND-BASE] ${symbol} - Showing last session data (market closed)`);
+          setLoading(false);
+          return;
+        }
+        
+        // Handle NO_DATA status (market closed, no backup cache)
+        if (result.status === 'NO_DATA') {
+          setError(result.message || 'Market closed - No data available');
+          setData(null);
+          console.log(`[TREND-BASE] ${symbol} - Market closed, waiting for market open`);
+          setLoading(false);
+          return;
+        }
+        
         setData(result);
         setError(null);
       } catch (err) {
@@ -156,6 +185,11 @@ const TrendBaseCard = memo<TrendBaseCardProps>(({ symbol, name }) => {
         <div className="flex items-center gap-2">
           <GitBranch className="w-4 h-4 text-accent" />
           <h3 className="text-sm sm:text-base font-bold text-white">{name}</h3>
+          {data._isCached && (
+            <span className="text-[9px] bg-amber-900/30 text-amber-400 px-1.5 py-0.5 rounded border border-amber-500/30">
+              📊 LAST SESSION
+            </span>
+          )}
         </div>
         <div className={`flex items-center gap-1 px-2 py-1 rounded text-xs font-bold ${getSignalBg(signal)} ${getSignalColor(signal)}`}>
           {getSignalIcon(signal)}

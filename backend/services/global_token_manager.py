@@ -21,7 +21,7 @@ class GlobalTokenManager:
         self.settings = get_settings()
         self._last_check: Optional[datetime] = None
         self._is_valid: bool = False
-        self._check_interval = 300  # Check every 5 minutes
+        self._check_interval = 30  # Check every 30 seconds (was 300 = 5 minutes)
         self._user_info: Dict = {}
     
     async def is_token_valid(self) -> bool:
@@ -74,6 +74,9 @@ class GlobalTokenManager:
     def force_recheck(self):
         """Force recheck on next is_token_valid() call"""
         self._last_check = None
+        # Also reload settings to get fresh token from .env
+        from config import get_settings
+        self.settings = get_settings()
 
 
 # Global singleton instance
