@@ -38,6 +38,32 @@ export default function SystemStatusBanner() {
   const [health, setHealth] = useState<SystemHealth | null>(null);
   const [showDetails, setShowDetails] = useState(false);
 
+  // Check if we're returning from Zerodha login on mobile
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const loginPending = sessionStorage.getItem('zerodha_login_pending');
+      const urlParams = new URLSearchParams(window.location.search);
+      const authSuccess = urlParams.get('auth') === 'success';
+      
+      if (loginPending === 'true') {
+        // Clear the flag
+        sessionStorage.removeItem('zerodha_login_pending');
+        
+        if (authSuccess) {
+          // Success! Wait for backend to reconnect
+          console.log('✅ Login successful! Waiting for backend reconnection...');
+          setTimeout(() => {
+            console.log('♻️ Reloading to show live data...');
+            window.location.reload();
+          }, 5000);
+        } else {
+          // Still waiting - show a message
+          console.log('⏳ Waiting for login completion...');
+        }
+      }
+    }
+  }, []);
+
   useEffect(() => {
     const fetchHealth = async () => {
       try {
@@ -66,59 +92,90 @@ export default function SystemStatusBanner() {
     const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000';
     const loginUrl = `${apiUrl}/api/auth/login`;
     
-    // Open popup
-    const popup = window.open(
-      loginUrl, 
-      'ZerodhaLogin',
-      'width=600,height=700,scrollbars=yes,resizable=yes'
-    );
+    // Detect mobile device
+    const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) || window.innerWidth <= 768;
     
-    // Check popup status every 500ms (ultra-fast)
-    const checkPopup = setInterval(() => {
-      if (!popup || popup.closed) {
-        clearInterval(checkPopup);
-        console.log('🔄 Popup closed, waiting for backend reconnection...');
-        console.log('⏳ Backend is reconnecting WebSocket (takes ~3-4 seconds)...');
-        
-        // Wait 5 seconds for backend to:
-        // 1. Save token to .env (0.5s)
-        // 2. Token watcher detect change (0.3s)
-        // 3. WebSocket close old connection (3s)
-        // 4. WebSocket start new connection (1s)
-        // Total: ~5 seconds for complete reconnection
-        setTimeout(() => {
-          console.log('♻️ Reloading page to show live data...');
-          window.location.reload();
-        }, 5000);
-      } else {
-        // Check if popup redirected to success page
-        try {
-          const popupUrl = popup.location.href;
-          if (popupUrl.includes('auth=success')) {
-            console.log('✅ Auth success detected!');
-            popup.close();
-            clearInterval(checkPopup);
-            
-            // Wait 5 seconds for backend reconnection
-            setTimeout(() => {
-              console.log('♻️ Reloading page after successful auth...');
-              window.location.reload();
-            }, 5000);
+    if (isMobile) {
+      // Mobile: Show instructions for Kite app users
+      const hasKiteApp = confirm(
+        '📱 Mobile Login\n\n' +
+        'If you have Kite app installed:\n' +
+        '• Tap OK to continue\n' +
+        '• If Kite app opens, complete login there\n' +
+        '• Then return to this browser tab\n' +
+        '• Refresh the page manually\n\n' +
+        'Tap OK to proceed with login'
+      );
+      
+      if (hasKiteApp) {
+        console.log('📱 Mobile detected - using direct navigation');
+        // Store a flag that we're in login flow
+        sessionStorage.setItem('zerodha_login_pending', 'true');
+        window.location.href = loginUrl;
+      }
+    } else {
+      // Desktop: Use popup
+      console.log('🖥️ Desktop detected - using popup');
+      const popup = window.open(
+        loginUrl, 
+        'ZerodhaLogin',
+        'width=600,height=700,scrollbars=yes,resizable=yes'
+      );
+      
+      if (!popup) {
+        // Popup blocked - fallback to direct navigation
+        console.log('⚠️ Popup blocked - using direct navigation');
+        window.location.href = loginUrl;
+        return;
+      }
+      
+      // Check popup status every 500ms (ultra-fast)
+      const checkPopup = setInterval(() => {
+        if (!popup || popup.closed) {
+          clearInterval(checkPopup);
+          console.log('🔄 Popup closed, waiting for backend reconnection...');
+          console.log('⏳ Backend is reconnecting WebSocket (takes ~3-4 seconds)...');
+          
+          // Wait 5 seconds for backend to:
+          // 1. Save token to .env (0.5s)
+          // 2. Token watcher detect change (0.3s)
+          // 3. WebSocket close old connection (3s)
+          // 4. WebSocket start new connection (1s)
+          // Total: ~5 seconds for complete reconnection
+          setTimeout(() => {
+            console.log('♻️ Reloading page to show live data...');
+            window.location.reload();
+          }, 5000);
+        } else {
+          // Check if popup redirected to success page
+          try {
+            const popupUrl = popup.location.href;
+            if (popupUrl.includes('auth=success')) {
+              console.log('✅ Auth success detected!');
+              popup.close();
+              clearInterval(checkPopup);
+              
+              // Wait 5 seconds for backend reconnection
+              setTimeout(() => {
+                console.log('♻️ Reloading page after successful auth...');
+                window.location.reload();
+              }, 5000);
+            }
+          } catch (e) {
+            // Cross-origin error - popup is still on Zerodha domain
+            // This is expected, keep checking
           }
-        } catch (e) {
-          // Cross-origin error - popup is still on Zerodha domain
-          // This is expected, keep checking
         }
-      }
-    }, 500);
-    
-    // Safety timeout - reload after 30 seconds regardless
-    setTimeout(() => {
-      clearInterval(checkPopup);
-      if (popup && !popup.closed) {
-        popup.close();
-      }
-    }, 30000);
+      }, 500);
+      
+      // Safety timeout - reload after 30 seconds regardless
+      setTimeout(() => {
+        clearInterval(checkPopup);
+        if (popup && !popup.closed) {
+          popup.close();
+        }
+      }, 30000);
+    }
   };
 
   // AUTH_REQUIRED - Critical (Show login)

@@ -138,8 +138,25 @@ export function useAuth() {
   }, [validateToken]);
 
   const login = useCallback(() => {
-    // Redirect to backend which redirects to Zerodha
-    window.location.href = `${API_URL}/api/auth/login`;
+    // Detect mobile device
+    const isMobile = typeof window !== 'undefined' && (/Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) || window.innerWidth <= 768);
+    
+    if (isMobile) {
+      // Mobile: Direct navigation
+      window.location.href = `${API_URL}/api/auth/login`;
+    } else {
+      // Desktop: Try popup first
+      const popup = window.open(
+        `${API_URL}/api/auth/login`,
+        'ZerodhaLogin',
+        'width=600,height=700,scrollbars=yes,resizable=yes'
+      );
+      
+      // If popup blocked or failed, fallback to direct navigation
+      if (!popup) {
+        window.location.href = `${API_URL}/api/auth/login`;
+      }
+    }
   }, []);
 
   const logout = useCallback(() => {
