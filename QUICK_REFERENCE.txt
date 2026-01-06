@@ -1,0 +1,162 @@
+┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃  🔥 DIGITAL OCEAN TOKEN FIX - QUICK REFERENCE CARD           ┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📋 PROBLEM
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Frontend shows:
+  ❌ Feed: disconnected
+  ❌ Auth: error
+  ❌ Market: CLOSED (even when it should be open)
+
+Local works fine ✅, but Digital Ocean breaks daily ❌
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+⚡ INSTANT FIX (5 minutes)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ssh root@your-droplet-ip
+cd /var/www/mytradingSignal
+python manual_token_refresh.py
+docker restart trading-backend  # or: systemctl restart trading-backend
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🔧 PERMANENT FIX (15 minutes)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# 1. Get latest code
+git pull origin main
+
+# 2. Setup automation
+chmod +x setup_token_cron.sh
+./setup_token_cron.sh
+
+# 3. Verify
+crontab -l
+tail -f logs/token_refresh.log
+
+# 4. Done! ✅ Works 24/7 now
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🔍 VERIFICATION
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+# Check cron exists
+crontab -l | grep token
+
+# Test refresh manually
+./refresh_token_cron.sh
+
+# Check logs
+tail -f logs/token_refresh.log
+
+# Verify backend health
+curl localhost:8000/api/system/health | jq
+
+# Expected output:
+{
+  "auth": {
+    "state": "AUTHENTICATED",    # ✅ Good
+    "is_valid": true              # ✅ Good
+  },
+  "feed": {
+    "state": "CONNECTED",         # ✅ Good
+    "is_healthy": true            # ✅ Good
+  }
+}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📖 DOCUMENTATION
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Quick Fix:           QUICKSTART_DO_FIX.md
+Complete Guide:      TOKEN_AUTOMATION_README.md
+Visual Explanation:  docs/TOKEN_REFRESH_EXPLAINED.md
+All Options:         setup_do_token_refresh.md
+Summary:             SETUP_SUMMARY.md
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🐛 TROUBLESHOOTING
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Issue: Cron not running
+Fix:  sudo systemctl status cron
+      grep CRON /var/log/syslog
+
+Issue: Permission denied
+Fix:  chmod +x *.sh *.py
+
+Issue: Token refresh fails
+Fix:  tail -100 logs/token_refresh.log
+      python manual_token_refresh.py  # Emergency
+
+Issue: Backend not detecting token
+Fix:  docker restart trading-backend
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+⏰ HOW IT WORKS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+7:30 AM IST → Token expires (Zerodha automatic)
+7:45 AM IST → Cron runs auto_token_refresh.py
+              ↓
+              New token saved to .env
+              ↓
+              Token Watcher detects change
+              ↓
+              Backend auto-reloads (NO RESTART!)
+              ↓
+9:15 AM IST → Markets open → Live data! ✅
+
+Only 15-min downtime (7:30-7:45 AM) before markets open!
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+📁 NEW FILES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+auto_token_refresh.py       → Main automation script
+setup_token_cron.sh         → Linux cron setup
+setup_token_task.ps1        → Windows Task Scheduler setup
+refresh_token_cron.sh       → Cron job script (created by setup)
+do_setup.sh                 → Complete Digital Ocean setup
+
+TOKEN_AUTOMATION_README.md  → Complete guide
+QUICKSTART_DO_FIX.md        → Quick fix guide
+setup_do_token_refresh.md   → All setup options
+SETUP_SUMMARY.md            → Summary of changes
+docs/TOKEN_REFRESH_EXPLAINED.md → Visual diagrams
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+✅ SUCCESS INDICATORS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+✅ crontab -l shows: 15 2 * * * /path/to/refresh_token_cron.sh
+✅ logs/token_refresh.log exists and updates daily
+✅ curl localhost:8000/api/system/health shows "AUTHENTICATED"
+✅ Frontend shows "Connected" during market hours
+✅ Live data flowing from Zerodha
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+🆘 EMERGENCY COMMANDS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+python manual_token_refresh.py           # Manual refresh
+docker restart trading-backend            # Restart backend
+tail -f logs/token_refresh.log            # View logs
+curl localhost:8000/api/system/health     # Check health
+crontab -l                                # List cron jobs
+./refresh_token_cron.sh                   # Test refresh
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+⚡ QUICK START
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ssh root@your-droplet-ip
+cd /var/www/mytradingSignal
+git pull
+./setup_token_cron.sh
+tail -f logs/token_refresh.log
+
+That's it! Your app now works 24/7! 🚀
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+💡 PRO TIPS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+1. Monitor logs daily for first week
+2. Set up UptimeRobot for health checks
+3. Keep manual_token_refresh.py as backup
+4. Update futures tokens monthly (last Thursday)
+5. Token refresh at 7:45 AM IST is BEFORE markets open (9:15 AM)
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

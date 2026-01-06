@@ -24,8 +24,25 @@ Real-time trading signals dashboard for **NIFTY**, **BANKNIFTY**, and **SENSEX**
 - **🎯 Priority Status** - Always shows what matters most
 - **⏰ Pure Time Logic** - Market status independent of auth/feed
 - **📊 Health Monitoring** - Real-time system status API
+- **🤖 Auto Token Refresh** - Daily token refresh automation (NEW! ⚡)
 
 **→ See [State Orchestration System](./docs/STATE_ORCHESTRATION_SYSTEM.md) for details**
+
+### 🚨 **NEW: Automatic Token Refresh for Production**
+Zerodha tokens expire daily at 7:30 AM IST. We now have **automated refresh**!
+
+**Quick Setup** (15 minutes):
+```bash
+# Linux/Mac/Digital Ocean
+./setup_token_cron.sh
+
+# Windows Server
+.\setup_token_task.ps1
+```
+
+📖 **Complete Guide**: [TOKEN_AUTOMATION_README.md](./TOKEN_AUTOMATION_README.md)  
+⚡ **Quick Fix**: [QUICKSTART_DO_FIX.md](./QUICKSTART_DO_FIX.md)  
+📋 **Quick Reference**: [QUICK_REFERENCE.txt](./QUICK_REFERENCE.txt)
 
 ## 🏗️ Project Structure
 

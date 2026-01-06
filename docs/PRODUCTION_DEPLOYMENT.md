@@ -188,28 +188,69 @@ pm2 start npm --name "mytradingsignal-frontend" -- start
 
 ---
 
-## 🔄 Daily Token Refresh
+## 🔄 Daily Token Refresh (REQUIRED!)
 
-**Zerodha access tokens expire daily.** You MUST regenerate them.
+**Zerodha access tokens expire daily.** You MUST set up automatic refresh.
 
-### Option 1: Manual Refresh (Fastest)
+### ⚠️ CRITICAL: Set Up Automation FIRST!
+
+**After deployment, immediately run ONE of these automation setups:**
+
+### Option 1: Automated Cron (Linux/Mac/Digital Ocean) ✅ RECOMMENDED
+```bash
+# SSH into your server
+ssh root@your-droplet-ip
+cd /path/to/mytradingSignal
+
+# Run automated setup
+chmod +x setup_token_cron.sh
+./setup_token_cron.sh
+
+# Verify
+crontab -l
+tail -f logs/token_refresh.log
+```
+
+### Option 2: Windows Task Scheduler (Windows Servers)
+```powershell
+# Run as Administrator
+cd C:\path\to\mytradingSignal
+.\setup_token_task.ps1
+
+# Verify
+Get-ScheduledTask -TaskName "ZerodhaTokenRefresh"
+Get-Content logs\token_refresh.log -Tail 50
+```
+
+### Option 3: Docker Cron (Docker Deployments)
+Add to your `docker-compose.yml`:
+```yaml
+  token-refresher:
+    image: python:3.11-slim
+    volumes:
+      - ./:/app
+    working_dir: /app
+    environment:
+      - TZ=Asia/Kolkata
+    command: >
+      bash -c "
+      pip install kiteconnect python-dotenv &&
+      echo '15 2 * * * python /app/auto_token_refresh.py >> /app/logs/token_refresh.log 2>&1' | crontab - &&
+      cron -f
+      "
+    restart: unless-stopped
+```
+
+### Option 4: Manual Refresh (Emergency Only)
 ```bash
 python manual_token_refresh.py
+# Then restart backend
 ```
 
-### Option 2: Quick Fix (Browser Auto-Open)
-```bash
-python quick_token_fix.py
-```
-
-### Option 3: Automated with Cron (Linux/Mac)
-```bash
-# Add to crontab
-0 8 * * * cd /path/to/mytradingSignal && python manual_token_refresh.py
-```
-
-### Option 4: Windows Task Scheduler
-Create task to run `manual_token_refresh.py` at 8 AM daily
+### Why Automation is REQUIRED:
+- ❌ Without automation: App breaks every day at 7:30 AM IST
+- ✅ With automation: App runs 24/7 without intervention
+- ⚡ Backend auto-detects new token (no restart needed!)
 
 ---
 
@@ -257,14 +298,23 @@ ws.onmessage = (e) => console.log('📊 Data:', JSON.parse(e.data));
 
 ---
 
-## 🔧 Operational Utilities (Kept for Production)
+## 🔧 Token Refresh Files (Production Ready)
 
 These files are **required** for production operations:
 
-1. **`manual_token_refresh.py`** - Daily token generation
+### Automated Refresh (NEW! ✨)
+1. **`auto_token_refresh.py`** - Automated token refresh (for cron/scheduler)
+2. **`setup_token_cron.sh`** - Linux/Mac cron setup script
+3. **`setup_token_task.ps1`** - Windows Task Scheduler setup
+4. **`refresh_token_cron.sh`** - Cron job script (created by setup)
+
+### Manual Refresh (Backup)
+1. **`manual_token_refresh.py`** - Manual token generation
 2. **`quick_token_fix.py`** - Quick token fix when needed
 3. **`backend/get_token.py`** - Alternative token generation
-4. **`backend/scripts/find_futures_tokens.py`** - Monthly futures token update
+
+### Monthly Maintenance
+1. **`backend/scripts/find_futures_tokens.py`** - Monthly futures token update
 
 ---
 
@@ -351,11 +401,17 @@ Check platform dashboard
 - **Full Docs**: `/docs` folder
 - **API Docs**: `https://api.yourdomain.com/docs` (Swagger UI)
 - **Architecture**: `docs/ARCHITECTURE_DIAGRAM.md`
-- **Environment Setup**: `docs/ENVIRONMENT_SETUP.md`
+- *✅ Deploy to your chosen platform
+2. ✅ Generate first access token: `python manual_token_refresh.py`
+3. ✅ **CRITICAL**: Set up automation IMMEDIATELY:
+   - Linux/Mac: `./setup_token_cron.sh`
+   - Windows: `.\setup_token_task.ps1`
+   - Docker: Add token-refresher service to docker-compose.yml
+4. ✅ Test thoroughly (including overnight test)
+5. ✅ Monitor logs for 2-3 days: `tail -f logs/token_refresh.log`
+6. ✅ Set up health monitoring (UptimeRobot, Cronitor, etc.)
 
----
-
-## 🎉 Deployment Complete!
+**⚠️ WARNING**: Without token automation, your app will stop working within 24 hours!
 
 Your trading signals platform is now production-ready! 🚀
 
