@@ -292,17 +292,36 @@ const IndexCard = ({ symbol, name, data, isConnected, aiAlertData, outlookData }
               <span className="text-[7px] text-emerald-400/60 mt-0.5 whitespace-nowrap">Signal Strength</span>
             </div>
           </div>
-          <p className={`text-[9px] mt-1.5 leading-tight font-bold ${
-            outlookData.tradeRecommendation.includes('WAIT') || outlookData.tradeRecommendation.includes('Mixed')
-              ? 'text-white'
-              : outlookData.tradeRecommendation.includes('BUY')
-              ? 'text-emerald-300'
-              : outlookData.tradeRecommendation.includes('SELL')
-              ? 'text-rose-300'
-              : 'text-dark-tertiary'
-          }`}>
-            {outlookData.tradeRecommendation}
-          </p>
+          
+          {/* Trade Recommendation with Visual Progress Bar */}
+          <div className="mt-1.5">
+            <p className={`text-[9px] leading-relaxed font-bold whitespace-pre-line ${
+              outlookData.tradeRecommendation.includes('WAIT') || outlookData.tradeRecommendation.includes('NEUTRAL')
+                ? 'text-gray-300'
+                : outlookData.tradeRecommendation.includes('BUY') || outlookData.tradeRecommendation.includes('BULLISH')
+                ? 'text-emerald-300'
+                : outlookData.tradeRecommendation.includes('SELL') || outlookData.tradeRecommendation.includes('BEARISH')
+                ? 'text-rose-300'
+                : 'text-white'
+            }`}>
+              {outlookData.tradeRecommendation.split('█')[0]}
+            </p>
+            {/* Visual Confidence Progress Bar */}
+            {outlookData.overallConfidence > 0 && (
+              <div className="mt-1.5 bg-gray-800/50 rounded-full h-1.5 overflow-hidden">
+                <div 
+                  className={`h-full rounded-full transition-all duration-500 ${
+                    outlookData.overallConfidence >= 70 
+                      ? 'bg-gradient-to-r from-green-500 to-emerald-400'
+                      : outlookData.overallConfidence >= 50
+                      ? 'bg-gradient-to-r from-yellow-500 to-amber-400'
+                      : 'bg-gradient-to-r from-orange-500 to-red-400'
+                  }`}
+                  style={{ width: `${outlookData.overallConfidence}%` }}
+                />
+              </div>
+            )}
+          </div>
         </div>
       )}
 

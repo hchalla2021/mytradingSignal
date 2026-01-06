@@ -231,11 +231,43 @@ async def get_volume_pulse(symbol: str) -> Dict[str, Any]:
                 "token_valid": token_status["valid"]
             }
         
+        # �️ SHOW LAST 5 CANDLES WITH VOLUME DETAILS
+        if not df.empty and len(df) >= 5:
+            print(f"\n[VOLUME-PULSE] 🕯️  INSTANT CANDLE VOLUME DETAILS (Last 5 Candles):")
+            print(f"{'='*80}")
+            for i, candle in df.tail(5).iterrows():
+                o, c = candle['open'], candle['close']
+                v = candle.get('volume', 0)
+                candle_type = "🟢 GREEN (Bullish)" if c > o else "🔴 RED (Bearish)" if c < o else "⚪ DOJI"
+                print(f"  Candle #{i} @ {candle.get('date', 'N/A')}")
+                print(f"  {candle_type}")
+                print(f"  📦 Volume: {v:,.0f}")
+                print(f"  📊 Open: {o:.2f} → Close: {c:.2f} (Change: {((c-o)/o*100):.2f}%)")
+                print()
+            print(f"{'='*80}\n")
+        
         # 📊 ANALYZE VOLUME PULSE WITH REAL CANDLE DATA
         result = await analyze_volume_pulse(symbol, df)
         result["message"] = f"✅ Live data from Zerodha ({len(df)} candles)"
         result["candles_analyzed"] = len(df)
         result["token_valid"] = token_status["valid"]
+        result["status"] = "LIVE"
+        
+        # 📊 DETAILED INSTANT ANALYSIS RESULTS
+        print(f"\n[VOLUME-PULSE] 📈 INSTANT ANALYSIS RESULTS for {symbol}")
+        print(f"{'='*80}")
+        print(f"🚦 SIGNAL: {result.get('signal', 'N/A')} (Confidence: {result.get('confidence', 0)}%)")
+        print(f"💯 PULSE SCORE: {result.get('pulse_score', 0)}%")
+        print(f"📊 TREND: {result.get('trend', 'N/A')}")
+        print(f"\n📦 VOLUME ANALYSIS:")
+        vd = result.get('volume_data', {})
+        print(f"   🟢 Green Candle Volume: {vd.get('green_candle_volume', 0):,.0f} ({vd.get('green_percentage', 0):.1f}%)")
+        print(f"   🔴 Red Candle Volume: {vd.get('red_candle_volume', 0):,.0f} ({vd.get('red_percentage', 0):.1f}%)")
+        print(f"   ⚖️  Green/Red Ratio: {vd.get('ratio', 0):.2f}")
+        print(f"\n📊 STATUS: {result.get('status', 'N/A')}")
+        print(f"📦 CANDLES ANALYZED: {result.get('candles_analyzed', 0)}")
+        print(f"💾 CACHED: 5s live + 24h backup")
+        print(f"{'='*80}\n")
         
         # Cache result (5 seconds for real-time updates)
         await cache.set(cache_key, result, expire=5)
@@ -243,7 +275,6 @@ async def get_volume_pulse(symbol: str) -> Dict[str, Any]:
         # 🔥 PERMANENT FIX: Save as 24-hour backup
         backup_cache_key = f"volume_pulse_backup:{symbol}"
         await cache.set(backup_cache_key, result, expire=86400)
-        print(f"[VOLUME-PULSE] 💾 Backup saved (24h)")
         
         return result
         
@@ -422,6 +453,26 @@ async def get_trend_base(symbol: str) -> Dict[str, Any]:
         print(f"   → Low range: ₹{df['low'].min():.2f} - ₹{df['low'].max():.2f}")
         print(f"   → Current close: ₹{df['close'].iloc[-1]:.2f}")
         result = await analyze_trend_base(symbol, df)
+        
+        # 📊 DETAILED INSTANT ANALYSIS RESULTS
+        print(f"\n[TREND-BASE] 🎯 INSTANT ANALYSIS RESULTS for {symbol}")
+        print(f"{'='*80}")
+        print(f"🚦 SIGNAL: {result.get('signal', 'N/A')} (Confidence: {result.get('confidence', 0)}%)")
+        print(f"📊 TREND: {result.get('trend', 'N/A')}")
+        print(f"📋 STATUS: {result.get('status', 'N/A')}")
+        print(f"\n🏗️ STRUCTURE ANALYSIS:")
+        structure = result.get('structure', {})
+        print(f"   Type: {structure.get('type', 'N/A')}")
+        print(f"   Integrity Score: {structure.get('integrity_score', 0)}%")
+        print(f"\n📍 SWING POINTS:")
+        swing = structure.get('swing_points', {})
+        print(f"   Last High: ₹{swing.get('last_high', 0):.2f}")
+        print(f"   Last Low: ₹{swing.get('last_low', 0):.2f}")
+        print(f"   Prev High: ₹{swing.get('prev_high', 0):.2f}")
+        print(f"   Prev Low: ₹{swing.get('prev_low', 0):.2f}")
+        print(f"   High Diff: {swing.get('high_diff', 0):+.2f}")
+        print(f"   Low Diff: {swing.get('low_diff', 0):+.2f}")
+        print(f"{'='*80}\n")
         
         # Determine if data is live or historical
         from services.market_feed import get_market_status
@@ -1089,6 +1140,24 @@ async def get_all_news_detection() -> Dict[str, Dict[str, Any]]:
 # ZONE CONTROL & BREAKDOWN RISK ENDPOINTS
 # ═══════════════════════════════════════════════════════════
 
+def get_risk_emoji(risk: int) -> str:
+    """Get emoji for breakdown risk level"""
+    if risk >= 70:
+        return "🔴 HIGH"
+    elif risk >= 50:
+        return "🟠 MEDIUM"
+    else:
+        return "🟢 LOW"
+
+def get_bounce_emoji(prob: int) -> str:
+    """Get emoji for bounce probability"""
+    if prob >= 70:
+        return "🟢 HIGH"
+    elif prob >= 50:
+        return "🟠 MEDIUM"
+    else:
+        return "🔴 LOW"
+
 @router.get("/zone-control/{symbol}")
 async def get_zone_control(symbol: str) -> Dict[str, Any]:
     """
@@ -1256,16 +1325,38 @@ async def get_zone_control(symbol: str) -> Dict[str, Any]:
         # 🔥 PERMANENT FIX: Save as 24-hour backup for when token expires
         backup_cache_key = f"zone_control_backup:{symbol}"
         await cache.set(backup_cache_key, result, expire=86400)
-        print(f"[ZONE-CONTROL] 💾 Backup saved (24h) + 5s live cache")
-        await cache.set(backup_cache_key, result, expire=86400)  # 24 hours
-        print(f"[ZONE-CONTROL] 💾 Backup saved (24h) - will show if token expires")
         
-        print(f"[ZONE-CONTROL] ✅ Analysis complete for {symbol}")
-        print(f"   → Status: {result['status']}")
-        print(f"   → Signal: {result['signal']}")
-        print(f"   → Confidence: {result['confidence']}%")
-        print(f"   → Cached: 30s live + 24h backup")
-        print(f"{'='*60}\n")
+        # 📊 DETAILED INSTANT ANALYSIS RESULTS
+        print(f"\n[ZONE-CONTROL] 🎯 INSTANT ANALYSIS RESULTS for {symbol}")
+        print(f"{'='*80}")
+        print(f"💰 CURRENT PRICE: ₹{result.get('current_price', 0):.2f}")
+        print(f"🚦 SIGNAL: {result.get('signal', 'N/A')} (Confidence: {result.get('confidence', 0)}%)")
+        print(f"📊 STATUS: {result.get('status', 'N/A')}")
+        print(f"\n🛡️  SUPPORT ZONE:")
+        support = result.get('nearest_zones', {}).get('support', {})
+        if support.get('level'):
+            print(f"   Level: ₹{support['level']:.2f}")
+            print(f"   Distance: {abs(support.get('distance_pct', 0)):.2f}%")
+            print(f"   Strength: {support.get('strength', 0):.0f}")
+            print(f"   Touches: {support.get('touches', 0)}x")
+        else:
+            print(f"   No active support zone")
+        print(f"\n⚠️  RESISTANCE ZONE:")
+        resistance = result.get('nearest_zones', {}).get('resistance', {})
+        if resistance.get('level'):
+            print(f"   Level: ₹{resistance['level']:.2f}")
+            print(f"   Distance: {abs(resistance.get('distance_pct', 0)):.2f}%")
+            print(f"   Strength: {resistance.get('strength', 0):.0f}")
+            print(f"   Touches: {resistance.get('touches', 0)}x")
+        else:
+            print(f"   No active resistance zone")
+        print(f"\n📉 BREAKDOWN RISK: {result.get('breakdown_risk', 50)}% {get_risk_emoji(result.get('breakdown_risk', 50))}")
+        print(f"📈 BOUNCE PROBABILITY: {result.get('bounce_probability', 50)}% {get_bounce_emoji(result.get('bounce_probability', 50))}")
+        print(f"🎯 ZONE STRENGTH: {result.get('zone_strength', 'WEAK')}")
+        print(f"\n💡 RECOMMENDATION: {result.get('recommendation', 'N/A')}")
+        print(f"\n📦 CANDLES ANALYZED: {result.get('candles_analyzed', 0)}")
+        print(f"💾 CACHED: 5s live + 24h backup")
+        print(f"{'='*80}\n")
         
         return result
         
@@ -1573,7 +1664,42 @@ async def get_early_warning(symbol: str) -> Dict[str, Any]:
             print(f"   → Last candle: {last_date}")
             print(f"   → Total candles: {len(df)}")
         
-        # 🔮 ANALYZE EARLY WARNING WITH REAL DATA
+        # �️ SHOW LAST 3 CANDLES WITH INSTANT DETAILS (WICKS, BODY, MOVEMENT)
+        if not df.empty and len(df) >= 3:
+            print(f"\n[EARLY-WARNING] 🕯️  INSTANT CANDLE DETAILS (Last 3 Candles):")
+            print(f"{'='*80}")
+            for i, candle in df.tail(3).iterrows():
+                o, h, l, c = candle['open'], candle['high'], candle['low'], candle['close']
+                v = candle.get('volume', 0)
+                
+                # Calculate candle characteristics
+                body = abs(c - o)
+                total_range = h - l
+                upper_wick = h - max(o, c)
+                lower_wick = min(o, c) - l
+                body_percent = (body / total_range * 100) if total_range > 0 else 0
+                
+                # Candle type
+                candle_type = "🟢 BULLISH" if c > o else "🔴 BEARISH" if c < o else "⚪ DOJI"
+                
+                # Wick analysis
+                wick_info = ""
+                if upper_wick > body * 2:
+                    wick_info = " [LONG UPPER WICK - Rejection]"
+                elif lower_wick > body * 2:
+                    wick_info = " [LONG LOWER WICK - Support]"
+                
+                print(f"\n  Candle #{i} @ {candle.get('date', 'N/A')}")
+                print(f"  {candle_type} {wick_info}")
+                print(f"  📊 OHLC: O={o:.2f} H={h:.2f} L={l:.2f} C={c:.2f}")
+                print(f"  📏 Body: {body:.2f} ({body_percent:.1f}% of range)")
+                print(f"  ⬆️  Upper Wick: {upper_wick:.2f}")
+                print(f"  ⬇️  Lower Wick: {lower_wick:.2f}")
+                print(f"  📈 Total Range: {total_range:.2f}")
+                print(f"  📦 Volume: {v:,.0f}")
+            print(f"{'='*80}\n")
+        
+        # �🔮 ANALYZE EARLY WARNING WITH REAL DATA
         print(f"[EARLY-WARNING] 🔬 Running predictive analysis...")
         result = await analyze_early_warning(symbol, df)
         
@@ -1590,14 +1716,43 @@ async def get_early_warning(symbol: str) -> Dict[str, Any]:
         await cache.set(backup_cache_key, result, expire=86400)
         print(f"[EARLY-WARNING] 💾 Backup saved (24h) + 5s live cache")
         
-        print(f"[EARLY-WARNING] ✅ Analysis complete for {symbol}")
-        print(f"   → Signal: {result['signal']}")
-        print(f"   → Time to trigger: {result['time_to_trigger']} minutes")
-        print(f"   → Confidence: {result['confidence']}%")
-        print(f"   → Fake risk: {result['fake_signal_risk']}")
-        print(f"   → Action: {result['recommended_action']}")
-        print(f"   → Cached: 5s live + 24h backup")
-        print(f"{'='*60}\n")
+        # 📊 DETAILED INSTANT ANALYSIS RESULTS
+        print(f"\n[EARLY-WARNING] 🎯 INSTANT ANALYSIS RESULTS for {symbol}")
+        print(f"{'='*80}")
+        print(f"🚦 SIGNAL: {result['signal']} (Confidence: {result['confidence']}%, Strength: {result['strength']}%)")
+        print(f"⏱️  TIME TO TRIGGER: {result['time_to_trigger']} minutes")
+        print(f"🎲 FAKE SIGNAL RISK: {result['fake_signal_risk']}")
+        print(f"🎬 RECOMMENDED ACTION: {result['recommended_action']}")
+        print(f"\n📈 MOMENTUM ANALYSIS:")
+        print(f"   Direction: {result.get('momentum', {}).get('direction', 'N/A')}")
+        print(f"   Strength: {result.get('momentum', {}).get('strength', 0)}%")
+        print(f"   Acceleration: {result.get('momentum', {}).get('acceleration', 0):.2f}%")
+        print(f"   Consistency: {result.get('momentum', {}).get('consistency', 0)}%")
+        print(f"\n📦 VOLUME BUILDUP:")
+        print(f"   Is Building: {result.get('volume_buildup', {}).get('is_building', False)}")
+        print(f"   Buildup Strength: {result.get('volume_buildup', {}).get('buildup_strength', 0)}%")
+        print(f"   Candles Building: {result.get('volume_buildup', {}).get('candles_building', 0)}")
+        print(f"\n🎯 PRICE COMPRESSION:")
+        print(f"   Is Compressed: {result.get('price_compression', {}).get('is_compressed', False)}")
+        print(f"   Compression Level: {result.get('price_compression', {}).get('compression_level', 0)}%")
+        print(f"   Candles Compressed: {result.get('price_compression', {}).get('candles_compressed', 0)}")
+        print(f"\n✅ SIGNAL VALIDATION (5 Checks):")
+        checks = result.get('fake_signal_checks', {})
+        if checks:
+            for key, value in checks.items():
+                if key != 'pass_rate' and isinstance(value, dict):
+                    status = "✓ PASS" if value.get('pass', False) else "✗ FAIL"
+                    print(f"   {status} - {key.replace('_', ' ').title()}: {value.get('detail', 'N/A')}")
+            print(f"   📊 Overall Pass Rate: {checks.get('pass_rate', 0)}%")
+        print(f"\n💰 PRICE TARGETS:")
+        targets = result.get('price_targets', {})
+        if targets:
+            print(f"   Entry: ₹{targets.get('entry', 0):.2f}")
+            print(f"   Stop Loss: ₹{targets.get('stop_loss', 0):.2f}")
+            print(f"   Target: ₹{targets.get('target', 0):.2f}")
+            print(f"   Risk:Reward = 1:{targets.get('risk_reward_ratio', 2):.1f}")
+        print(f"\n💡 REASONING: {result.get('reasoning', 'N/A')}")
+        print(f"{'='*80}\n")
         
         return result
         

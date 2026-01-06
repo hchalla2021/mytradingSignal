@@ -70,6 +70,28 @@ const ZoneControlCard = memo<ZoneControlCardProps>(({ symbol, name }) => {
         if (!response.ok) throw new Error('Failed to fetch');
         const result = await response.json();
         
+        // 🔍 DETAILED LOGGING for debugging
+        console.log(`[ZONE-CONTROL] ✅ Data received for ${symbol}:`, {
+          status: result.status,
+          signal: result.signal,
+          confidence: result.confidence,
+          current_price: result.current_price,
+          breakdown_risk: result.breakdown_risk,
+          bounce_probability: result.bounce_probability,
+          zone_strength: result.zone_strength,
+          support_level: result.nearest_zones?.support?.level,
+          resistance_level: result.nearest_zones?.resistance?.level,
+          candles_analyzed: result.candles_analyzed
+        });
+        
+        // 🚨 ALERT if values are missing or zero
+        if (result.breakdown_risk === undefined) {
+          console.warn(`[ZONE-CONTROL] ⚠️ ${symbol} missing breakdown_risk!`, result);
+        }
+        if (result.bounce_probability === undefined) {
+          console.warn(`[ZONE-CONTROL] ⚠️ ${symbol} missing bounce_probability!`, result);
+        }
+        
         // Check for error statuses
         if (result.status === 'TOKEN_EXPIRED' || result.status === 'ERROR') {
           setError(result.message || 'Token expired - Please login');
@@ -83,7 +105,7 @@ const ZoneControlCard = memo<ZoneControlCardProps>(({ symbol, name }) => {
         }
       } catch (err) {
         setError('Data unavailable');
-        console.error(`[ZONE-CONTROL] Error fetching ${symbol}:`, err);
+        console.error(`[ZONE-CONTROL] ❌ Error fetching ${symbol}:`, err);
       } finally {
         setLoading(false);
       }

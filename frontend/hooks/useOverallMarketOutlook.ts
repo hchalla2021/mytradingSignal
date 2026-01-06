@@ -77,15 +77,21 @@ export const useOverallMarketOutlook = () => {
   const [loading, setLoading] = useState(true);
 
   // Convert signal string to numeric score (-100 to +100)
-  // BUYER-FRIENDLY: NEUTRAL = +25 (slight positive bias since market default is growth-oriented)
-  const signalToScore = (signal: string): number => {
+  // 🔥 USER-FRIENDLY: Clear scoring with confidence-based amplification
+  const signalToScore = (signal: string, confidence: number): number => {
     const upperSignal = signal.toUpperCase();
-    if (upperSignal.includes('STRONG_BUY') || upperSignal === 'STRONG BUY') return 100;
-    if (upperSignal.includes('BUY') || upperSignal === 'BULLISH') return 75;
-    if (upperSignal.includes('NEUTRAL') || upperSignal === 'WAIT' || upperSignal === 'NO_TRADE') return 25; // 🔥 CHANGED: +25 instead of 0
-    if (upperSignal.includes('SELL') || upperSignal === 'BEARISH') return -75;
-    if (upperSignal.includes('STRONG_SELL') || upperSignal === 'STRONG SELL') return -100;
-    return 25; // Default to slight positive
+    let baseScore = 0;
+    
+    if (upperSignal.includes('STRONG_BUY') || upperSignal === 'STRONG BUY') baseScore = 100;
+    else if (upperSignal.includes('BUY') || upperSignal === 'BULLISH') baseScore = 75;
+    else if (upperSignal.includes('STRONG_SELL') || upperSignal === 'STRONG SELL') baseScore = -100;
+    else if (upperSignal.includes('SELL') || upperSignal === 'BEARISH') baseScore = -75;
+    else if (upperSignal.includes('NEUTRAL') || upperSignal === 'WAIT' || upperSignal === 'NO_TRADE') baseScore = 0;
+    else baseScore = 0; // Default to neutral
+    
+    // 🔥 Amplify score based on confidence: score * (confidence / 100)
+    // This ensures high-confidence signals have more weight
+    return baseScore * (confidence / 100);
   };
 
   // Calculate aggregated confidence score
@@ -265,29 +271,42 @@ export const useOverallMarketOutlook = () => {
       pcrConfidence = 0; // No PCR data available
     }
 
-    // Convert signals to scores
-    const techScore = signalToScore(techSignal);
-    const zoneScore = signalToScore(zoneSignal);
-    const volumeScore = signalToScore(volumeSignal);
-    const trendScore = signalToScore(trendSignal);
-    const candleScore = signalToScore(candleSignal);
-    const marketIndicesScore = signalToScore(marketIndicesSignal);
-    const pcrScore = signalToScore(pcrSignal);
-    const earlyWarningScore = signalToScore(earlyWarningSignal);
-    // const aiScore = signalToScore(aiSignal); // COMMENTED OUT
+    // Convert signals to confidence-weighted scores (-100 to +100)
+    const techScore = signalToScore(techSignal, techConfidence);
+    const zoneScore = signalToScore(zoneSignal, zoneConfidence);
+    const volumeScore = signalToScore(volumeSignal, volumeConfidence);
+    const trendScore = signalToScore(trendSignal, trendConfidence);
+    const candleScore = signalToScore(candleSignal, candleConfidence);
+    const marketIndicesScore = signalToScore(marketIndicesSignal, marketIndicesConfidence);
+    const pcrScore = signalToScore(pcrSignal, pcrConfidence);
+    const earlyWarningScore = signalToScore(earlyWarningSignal, adjustedEarlyWarningConfidence);
+    // const aiScore = signalToScore(aiSignal, aiConfidence); // COMMENTED OUT
+    
+    // 🔍 DEBUG: Log individual scores for transparency
+    console.log(`[OUTLOOK-CALC] Individual Scores:`);
+    console.log(`  Technical: ${techScore.toFixed(1)} (${techSignal}, ${techConfidence}%)`);
+    console.log(`  Zone: ${zoneScore.toFixed(1)} (${zoneSignal}, ${zoneConfidence}%)`);
+    console.log(`  Volume: ${volumeScore.toFixed(1)} (${volumeSignal}, ${volumeConfidence}%)`);
+    console.log(`  Trend: ${trendScore.toFixed(1)} (${trendSignal}, ${trendConfidence}%)`);
+    console.log(`  Candle: ${candleScore.toFixed(1)} (${candleSignal}, ${candleConfidence}%)`);
+    console.log(`  Market: ${marketIndicesScore.toFixed(1)} (${marketIndicesSignal}, ${marketIndicesConfidence}%)`);
+    console.log(`  PCR: ${pcrScore.toFixed(1)} (${pcrSignal}, ${pcrConfidence}%)`);
+    console.log(`  Early Warning: ${earlyWarningScore.toFixed(1)} (${earlyWarningSignal}, ${adjustedEarlyWarningConfidence}%)`)
 
-    // Calculate weighted average score (Early Warning ADDED with 8% weight)
+    // 🔥 SIMPLIFIED: Calculate weighted average score (scores already confidence-adjusted)
     const totalWeightedScore = (
-      (techScore * techConfidence * SIGNAL_WEIGHTS.technical / 100) +
-      (zoneScore * zoneConfidence * SIGNAL_WEIGHTS.zoneControl / 100) +
-      (volumeScore * volumeConfidence * SIGNAL_WEIGHTS.volumePulse / 100) +
-      (trendScore * trendConfidence * SIGNAL_WEIGHTS.trendBase / 100) +
-      (candleScore * candleConfidence * SIGNAL_WEIGHTS.candleIntent / 100) +
-      (marketIndicesScore * marketIndicesConfidence * SIGNAL_WEIGHTS.marketIndices / 100) +
-      (pcrScore * pcrConfidence * SIGNAL_WEIGHTS.pcr / 100) +
-      (earlyWarningScore * adjustedEarlyWarningConfidence * SIGNAL_WEIGHTS.earlyWarning / 100)
-      // + (aiScore * aiConfidence * SIGNAL_WEIGHTS.ai / 100) // COMMENTED OUT
+      (techScore * SIGNAL_WEIGHTS.technical) +
+      (zoneScore * SIGNAL_WEIGHTS.zoneControl) +
+      (volumeScore * SIGNAL_WEIGHTS.volumePulse) +
+      (trendScore * SIGNAL_WEIGHTS.trendBase) +
+      (candleScore * SIGNAL_WEIGHTS.candleIntent) +
+      (marketIndicesScore * SIGNAL_WEIGHTS.marketIndices) +
+      (pcrScore * SIGNAL_WEIGHTS.pcr) +
+      (earlyWarningScore * SIGNAL_WEIGHTS.earlyWarning)
+      // + (aiScore * SIGNAL_WEIGHTS.ai) // COMMENTED OUT
     ) / 100;
+    
+    console.log(`  📊 Total Weighted Score: ${totalWeightedScore.toFixed(2)}/100`);
 
     // Calculate overall confidence (0-100) - SEPARATE from signal score
     // Confidence = weighted average of individual confidences (not signal scores)
@@ -308,16 +327,20 @@ export const useOverallMarketOutlook = () => {
     const alignmentBonus = Math.abs(bullishCount - bearishCount) * 3; // +3% per aligned signal
     const finalConfidence = Math.min(100, overallConfidence + alignmentBonus);
 
-    // Determine overall signal - BUYER-FRIENDLY THRESHOLDS
+    // 🔥 TRADER-FRIENDLY THRESHOLDS: More responsive and granular
     let overallSignal: 'STRONG_BUY' | 'BUY' | 'NEUTRAL' | 'SELL' | 'STRONG_SELL';
-    if (totalWeightedScore >= 60) overallSignal = 'STRONG_BUY';  // 🔥 CHANGED: 60 from 70
-    else if (totalWeightedScore >= 30) overallSignal = 'BUY';     // 🔥 CHANGED: 30 from 40
-    else if (totalWeightedScore <= -70) overallSignal = 'STRONG_SELL';
-    else if (totalWeightedScore <= -45) overallSignal = 'SELL';   // 🔥 CHANGED: -45 from -40
-    else overallSignal = 'NEUTRAL';
+    if (totalWeightedScore >= 40) overallSignal = 'STRONG_BUY';     // Strong bullish: 40+
+    else if (totalWeightedScore >= 12) overallSignal = 'BUY';       // Moderate bullish: 12-39
+    else if (totalWeightedScore <= -40) overallSignal = 'STRONG_SELL'; // Strong bearish: -40 or lower
+    else if (totalWeightedScore <= -12) overallSignal = 'SELL';     // Moderate bearish: -39 to -12
+    else overallSignal = 'NEUTRAL';                                  // Range: -11 to +11
+    
+    console.log(`  🎯 Overall Signal: ${overallSignal} (Score: ${totalWeightedScore.toFixed(1)}, Confidence: ${finalConfidence.toFixed(0)}%)`);
 
     // 🔥 CRITICAL FIX #3: Minimum Confidence Threshold (prevent false signals)
-    if (finalConfidence < 50 && overallSignal !== 'NEUTRAL') {
+    // Only downgrade to NEUTRAL if confidence is VERY low (< 35%)
+    if (finalConfidence < 35 && overallSignal !== 'NEUTRAL') {
+      console.log(`  ⚠️ Downgrading ${overallSignal} to NEUTRAL (confidence ${finalConfidence}% too low)`);
       overallSignal = 'NEUTRAL';
     }
     
@@ -363,26 +386,39 @@ export const useOverallMarketOutlook = () => {
     // Debug log removed for production
     // console.log(`[RISK-DEBUG] Breakdown Risk: ${breakdownRisk}% → Risk Level: ${riskLevel}`);
 
-    // Generate trade recommendation
+    // Generate TRADER-FRIENDLY recommendation with clear action steps
     let tradeRecommendation = '';
+    const scoreDisplay = totalWeightedScore >= 0 ? `+${totalWeightedScore.toFixed(1)}` : totalWeightedScore.toFixed(1);
+    const riskEmoji = riskLevel === 'LOW' ? '🟢' : riskLevel === 'MEDIUM' ? '🟡' : '🔴';
+    
     if (overallSignal === 'STRONG_BUY' && riskLevel === 'LOW') {
-      tradeRecommendation = '🚀 STRONG BUY - All signals aligned, low risk, excellent entry' + dataFreshnessWarning;
-    } else if (overallSignal === 'STRONG_BUY' && riskLevel !== 'LOW') {
-      tradeRecommendation = '⚠️ BUY with caution - Strong signals but elevated risk' + dataFreshnessWarning;
+      tradeRecommendation = `🚀 STRONG BUY ZONE • Perfect Entry!\n${riskEmoji} Risk ${breakdownRisk}% • 💪 Confidence ${Math.round(finalConfidence)}%` + dataFreshnessWarning;
+    } else if (overallSignal === 'STRONG_BUY' && riskLevel === 'MEDIUM') {
+      tradeRecommendation = `🚀 STRONG BUY • Great Setup!\n${riskEmoji} Risk ${breakdownRisk}% • 💪 Confidence ${Math.round(finalConfidence)}%` + dataFreshnessWarning;
+    } else if (overallSignal === 'STRONG_BUY' && riskLevel === 'HIGH') {
+      tradeRecommendation = `⚠️ BUY WITH CAUTION • Strong Signals\n${riskEmoji} HIGH Risk ${breakdownRisk}% • Confidence ${Math.round(finalConfidence)}%` + dataFreshnessWarning;
     } else if (overallSignal === 'BUY' && riskLevel === 'LOW') {
-      tradeRecommendation = '✅ BUY - Favorable conditions, manageable risk' + dataFreshnessWarning;
-    } else if (overallSignal === 'BUY') {
-      tradeRecommendation = '⚡ BUY - Positive signals, monitor risk levels' + dataFreshnessWarning;
+      tradeRecommendation = `✅ BUY OPPORTUNITY • Good Entry!\n${riskEmoji} Safe Zone • 💚 Confidence ${Math.round(finalConfidence)}%` + dataFreshnessWarning;
+    } else if (overallSignal === 'BUY' && riskLevel === 'MEDIUM') {
+      tradeRecommendation = `✅ BUY SIGNAL • Positive Momentum!\n${riskEmoji} Risk ${breakdownRisk}% • Confidence ${Math.round(finalConfidence)}%` + dataFreshnessWarning;
+    } else if (overallSignal === 'BUY' && riskLevel === 'HIGH') {
+      tradeRecommendation = `⚡ BUY (RISKY) • Use Stop-Loss!\n${riskEmoji} Risk ${breakdownRisk}% • Confidence ${Math.round(finalConfidence)}%` + dataFreshnessWarning;
     } else if (overallSignal === 'STRONG_SELL' && riskLevel === 'HIGH') {
-      tradeRecommendation = '🔻 STRONG SELL - All signals bearish, high breakdown risk' + dataFreshnessWarning;
+      tradeRecommendation = `🔻 STRONG SELL • Exit NOW!\n${riskEmoji} Breakdown ${breakdownRisk}% • Confidence ${Math.round(finalConfidence)}%` + dataFreshnessWarning;
     } else if (overallSignal === 'STRONG_SELL') {
-      tradeRecommendation = '❌ STRONG SELL - Bearish alignment across indicators' + dataFreshnessWarning;
+      tradeRecommendation = `🔻 STRONG SELL • Bearish Confirmed!\n${riskEmoji} Risk ${breakdownRisk}% • Confidence ${Math.round(finalConfidence)}%` + dataFreshnessWarning;
+    } else if (overallSignal === 'SELL' && riskLevel === 'HIGH') {
+      tradeRecommendation = `⚠️ SELL SIGNAL • Weakness Detected!\n${riskEmoji} High Risk ${breakdownRisk}% • Exit/Hedge • Confidence ${Math.round(finalConfidence)}%` + dataFreshnessWarning;
     } else if (overallSignal === 'SELL') {
-      tradeRecommendation = '⚠️ SELL - Negative signals, consider exit' + dataFreshnessWarning;
-    } else if (finalConfidence < 50) {
-      tradeRecommendation = '⏸️ WAIT - Confidence too low (' + Math.round(finalConfidence) + '%) for reliable signal' + dataFreshnessWarning;
+      tradeRecommendation = `⚠️ SELL • Bearish Pressure!\n${riskEmoji} Risk ${breakdownRisk}% • Reduce Positions • Confidence ${Math.round(finalConfidence)}%` + dataFreshnessWarning;
+    } else if (finalConfidence < 35) {
+      tradeRecommendation = `⏸️ WAIT • Signals Unclear\nLow Confidence ${Math.round(finalConfidence)}% • Stay Out!` + dataFreshnessWarning;
+    } else if (totalWeightedScore >= 5 && totalWeightedScore < 12) {
+      tradeRecommendation = `🟨 WEAK BULLISH • Wait for Strength\n${riskEmoji} Risk ${breakdownRisk}% • Confidence ${Math.round(finalConfidence)}%` + dataFreshnessWarning;
+    } else if (totalWeightedScore <= -5 && totalWeightedScore > -12) {
+      tradeRecommendation = `🟦 WEAK BEARISH • Stay Cautious\n${riskEmoji} Risk ${breakdownRisk}% • No New Buys • Confidence ${Math.round(finalConfidence)}%` + dataFreshnessWarning;
     } else {
-      tradeRecommendation = '⏸️ WAIT - Mixed signals, avoid trading now' + dataFreshnessWarning;
+      tradeRecommendation = `⏸️ NEUTRAL • Consolidation Phase\n${riskEmoji} Risk ${breakdownRisk}% • Wait for Breakout • Confidence ${Math.round(finalConfidence)}%` + dataFreshnessWarning;
     }
 
     return {

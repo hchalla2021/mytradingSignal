@@ -37,11 +37,35 @@ const VolumePulseCard = memo<VolumePulseCardProps>(({ symbol, name }) => {
         const response = await fetch(`${apiUrl}/api/advanced/volume-pulse/${symbol}`);
         if (!response.ok) throw new Error('Failed to fetch');
         const result = await response.json();
+        
+        // 🔍 DETAILED LOGGING for debugging
+        console.log(`[VOLUME-PULSE] ✅ Data received for ${symbol}:`, {
+          status: result.status,
+          signal: result.signal,
+          confidence: result.confidence,
+          pulse_score: result.pulse_score,
+          trend: result.trend,
+          green_volume: result.volume_data?.green_candle_volume,
+          red_volume: result.volume_data?.red_candle_volume,
+          green_pct: result.volume_data?.green_percentage,
+          red_pct: result.volume_data?.red_percentage,
+          ratio: result.volume_data?.ratio,
+          candles_analyzed: result.candles_analyzed
+        });
+        
+        // 🚨 ALERT if values are zero or missing
+        if (result.volume_data?.green_candle_volume === 0 && result.volume_data?.red_candle_volume === 0) {
+          console.warn(`[VOLUME-PULSE] ⚠️ ${symbol} has ZERO volume data!`, result);
+        }
+        if (result.pulse_score === 50 && result.confidence === 0) {
+          console.warn(`[VOLUME-PULSE] ⚠️ ${symbol} showing neutral/default values - check if live data`, result);
+        }
+        
         setData(result);
         setError(null);
       } catch (err) {
         setError('Data unavailable');
-        console.error(`[VOLUME-PULSE] Error fetching ${symbol}:`, err);
+        console.error(`[VOLUME-PULSE] ❌ Error fetching ${symbol}:`, err);
       } finally {
         setLoading(false);
       }
@@ -144,6 +168,21 @@ const VolumePulseCard = memo<VolumePulseCardProps>(({ symbol, name }) => {
 
   return (
     <div className="bg-dark-card border border-dark-border rounded-lg p-3 sm:p-4 hover:border-dark-muted/50 transition-all">
+      {/* Live Status Indicator */}
+      {data.status === 'LIVE' && (
+        <div className="mb-2 px-2 py-1 rounded-lg bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 text-[9px] font-bold flex items-center gap-1.5">
+          <span className="w-1.5 h-1.5 bg-emerald-400 rounded-full animate-pulse"></span>
+          LIVE DATA
+          {data.candles_analyzed && ` • ${data.candles_analyzed} candles`}
+        </div>
+      )}
+      {data.status === 'CACHED' && (
+        <div className="mb-2 px-2 py-1 rounded-lg bg-amber-500/10 text-amber-400 border border-amber-500/30 text-[9px] font-bold flex items-center gap-1.5">
+          <span className="w-1.5 h-1.5 bg-amber-400 rounded-full animate-pulse"></span>
+          CACHED DATA - {data.message}
+        </div>
+      )}
+      
       {/* Header */}
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-2">
@@ -181,7 +220,12 @@ const VolumePulseCard = memo<VolumePulseCardProps>(({ symbol, name }) => {
       <div className="grid grid-cols-2 gap-2 mb-3">
         {/* Green Candle Volume */}
         <div className="bg-dark-bg rounded-lg p-2 border-2 border-emerald-500/30 shadow-sm shadow-emerald-500/10">
-          <p className="text-[9px] sm:text-[10px] text-dark-muted font-bold mb-1">🟢 GREEN VOL</p>
+          <div className="flex items-center justify-between mb-1">
+            <p className="text-[9px] sm:text-[10px] text-dark-muted font-bold">🟢 GREEN VOL</p>
+            {data.status === 'LIVE' && (
+              <span className="w-1 h-1 bg-emerald-400 rounded-full animate-pulse"></span>
+            )}
+          </div>
           <p className="text-xs sm:text-sm font-bold text-green-400 px-2 py-1 rounded-lg bg-green-950/30 border-2 border-green-500/40 shadow-md shadow-green-500/20 inline-block">
             {formatVolume(volume_data.green_candle_volume)}
           </p>
@@ -190,7 +234,12 @@ const VolumePulseCard = memo<VolumePulseCardProps>(({ symbol, name }) => {
 
         {/* Red Candle Volume */}
         <div className="bg-dark-bg rounded-lg p-2 border-2 border-emerald-500/30 shadow-sm shadow-emerald-500/10">
-          <p className="text-[9px] sm:text-[10px] text-dark-muted font-bold mb-1">🔴 RED VOL</p>
+          <div className="flex items-center justify-between mb-1">
+            <p className="text-[9px] sm:text-[10px] text-dark-muted font-bold">🔴 RED VOL</p>
+            {data.status === 'LIVE' && (
+              <span className="w-1 h-1 bg-rose-400 rounded-full animate-pulse"></span>
+            )}
+          </div>
           <p className="text-xs sm:text-sm font-bold text-red-400 px-2 py-1 rounded-lg bg-red-950/30 border-2 border-red-500/40 shadow-md shadow-red-500/20 inline-block">
             {formatVolume(volume_data.red_candle_volume)}
           </p>

@@ -42,6 +42,30 @@ const TrendBaseCard = memo<TrendBaseCardProps>(({ symbol, name }) => {
         if (!response.ok) throw new Error('Failed to fetch');
         const result = await response.json();
         
+        // 🔍 DETAILED LOGGING for debugging
+        console.log(`[TREND-BASE] ✅ Data received for ${symbol}:`, {
+          status: result.status,
+          data_status: result.data_status,
+          signal: result.signal,
+          confidence: result.confidence,
+          trend: result.trend,
+          structure_type: result.structure?.type,
+          integrity_score: result.structure?.integrity_score,
+          last_high: result.structure?.swing_points?.last_high,
+          last_low: result.structure?.swing_points?.last_low,
+          high_diff: result.structure?.swing_points?.high_diff,
+          low_diff: result.structure?.swing_points?.low_diff,
+          candles_analyzed: result.candles_analyzed
+        });
+        
+        // 🚨 ALERT if values seem wrong
+        if (result.structure?.integrity_score === 50 && result.confidence === 0) {
+          console.warn(`[TREND-BASE] ⚠️ ${symbol} showing neutral/default values - may not have live data`, result);
+        }
+        if (!result.structure || result.structure.swing_points?.last_high === 0) {
+          console.warn(`[TREND-BASE] ⚠️ ${symbol} missing swing point data!`, result);
+        }
+        
         // 🔥 FIX: Check if backend returned error status (TOKEN_EXPIRED, ERROR, NO_DATA, etc.)
         if (result.status === 'TOKEN_EXPIRED' || result.status === 'ERROR' || !result.structure) {
           setError(result.message || 'Token expired - Please login');
@@ -180,6 +204,21 @@ const TrendBaseCard = memo<TrendBaseCardProps>(({ symbol, name }) => {
 
   return (
     <div className="bg-dark-card border border-dark-border rounded-lg p-3 sm:p-4 hover:border-dark-muted/50 transition-all">
+      {/* Live Status Indicator */}
+      {data.data_status === 'LIVE' && (
+        <div className="mb-2 px-2 py-1 rounded-lg bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 text-[9px] font-bold flex items-center gap-1.5">
+          <span className="w-1.5 h-1.5 bg-emerald-400 rounded-full animate-pulse"></span>
+          LIVE DATA
+          {data.candles_analyzed && ` • ${data.candles_analyzed} candles`}
+        </div>
+      )}
+      {data.status === 'CACHED' && (
+        <div className="mb-2 px-2 py-1 rounded-lg bg-amber-500/10 text-amber-400 border border-amber-500/30 text-[9px] font-bold flex items-center gap-1.5">
+          <span className="w-1.5 h-1.5 bg-amber-400 rounded-full animate-pulse"></span>
+          CACHED - {data.message}
+        </div>
+      )}
+      
       {/* Header */}
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-2">
@@ -211,7 +250,12 @@ const TrendBaseCard = memo<TrendBaseCardProps>(({ symbol, name }) => {
       {/* Integrity Score */}
       <div className="mb-3">
         <div className="flex items-center justify-between mb-1">
-          <span className="text-[10px] sm:text-xs text-dark-muted font-bold">INTEGRITY SCORE</span>
+          <div className="flex items-center gap-1.5">
+            <span className="text-[10px] sm:text-xs text-dark-muted font-bold">INTEGRITY SCORE</span>
+            {data.data_status === 'LIVE' && (
+              <span className="w-1 h-1 bg-emerald-400 rounded-full animate-pulse"></span>
+            )}
+          </div>
           <span className="text-base sm:text-lg font-bold text-white px-2 py-1 rounded-lg bg-accent/20 border-2 border-accent/40 shadow-md shadow-accent/20">{structure.integrity_score}%</span>
         </div>
         <div className="w-full bg-dark-border rounded-full h-2 overflow-hidden">
@@ -264,7 +308,12 @@ const TrendBaseCard = memo<TrendBaseCardProps>(({ symbol, name }) => {
       {/* Bottom Stats */}
       <div className="flex items-center justify-between pt-2 border-t border-dark-border">
         <div>
-          <p className="text-[10px] text-dark-muted font-bold">CONFIDENCE</p>
+          <div className="flex items-center gap-1 mb-0.5">
+            <p className="text-[10px] text-dark-muted font-bold">CONFIDENCE</p>
+            {data.data_status === 'LIVE' && (
+              <span className="w-1 h-1 bg-emerald-400 rounded-full animate-pulse"></span>
+            )}
+          </div>
           <p className="text-sm font-bold text-accent">{confidence}%</p>
         </div>
         <div>
