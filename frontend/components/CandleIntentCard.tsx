@@ -196,9 +196,6 @@ const CandleIntentCard = memo<CandleIntentCardProps>(({ symbol, name }) => {
             <Flame className="w-5 h-5 text-orange-400" />
           </div>
           <h3 className="text-lg font-bold text-white">{name}</h3>
-          <span className="px-2 py-0.5 bg-orange-500/20 text-orange-300 text-[10px] font-bold rounded-full border border-orange-500/50">
-            5s Refresh
-          </span>
         </div>
         <div className={`px-3 py-1 rounded-lg text-sm font-bold border-2 shadow-lg ${getSignalColor(data.professional_signal || 'NEUTRAL')}`}>
           {data.professional_signal?.replace('_', ' ') || 'N/A'}

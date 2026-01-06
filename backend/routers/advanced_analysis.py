@@ -194,7 +194,9 @@ async def get_volume_pulse(symbol: str) -> Dict[str, Any]:
         
         # 🚀 FETCH LIVE HISTORICAL CANDLES FROM ZERODHA
         print(f"[VOLUME-PULSE] 🚀 Fetching fresh data from Zerodha...")
-        df = await _get_historical_data(symbol, lookback=50)
+        # 🔥 FIX: Increased lookback from 50 to 200 for better volume aggregation
+        # NIFTY/BANKNIFTY have high volumes - need more candles to show accurate pulse
+        df = await _get_historical_data(symbol, lookback=200)
         print(f"[VOLUME-PULSE] 📊 Received {len(df)} candles")
         
         if df.empty or len(df) < 10:

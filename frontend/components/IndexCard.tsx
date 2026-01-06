@@ -1,6 +1,6 @@
 'use client';
 
-import React, { memo, useEffect, useState, useRef, useMemo } from 'react';
+import React, { useEffect, useState, useRef, useMemo } from 'react';
 import { TrendingUp, TrendingDown, Minus, Activity } from 'lucide-react';
 import { MarketTick } from '@/hooks/useMarketSocket';
 import AIAlertTooltip from './AIAlertTooltip';
@@ -156,6 +156,7 @@ const IndexCard = ({ symbol, name, data, isConnected, aiAlertData, outlookData }
 
   // Flash animation on price change
   useEffect(() => {
+    console.log(`💳 IndexCard[${symbol}] render - price: ${data?.price}, status: ${data?.status}`);
     if (data?.price) {
       // Update timestamp on every data change
       setLastUpdate(new Date().toLocaleTimeString());
@@ -495,4 +496,6 @@ const IndexCard = ({ symbol, name, data, isConnected, aiAlertData, outlookData }
 
 IndexCard.displayName = 'IndexCard';
 
-export default memo(IndexCard);
+// ❌ REMOVED React.memo() - it was preventing updates
+// IndexCard needs to re-render whenever parent data changes
+export default IndexCard;

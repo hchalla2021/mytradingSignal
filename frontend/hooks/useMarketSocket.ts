@@ -98,7 +98,13 @@ export function useMarketSocket() {
               if (message.data && 'symbol' in message.data) {
                 const tick = message.data as MarketTick;
                 setMarketData((prev) => {
-                  const updated = { ...prev, [tick.symbol]: tick };
+                  // Create completely new object to trigger React updates
+                  const updated = {
+                    NIFTY: prev.NIFTY,
+                    BANKNIFTY: prev.BANKNIFTY,
+                    SENSEX: prev.SENSEX,
+                    [tick.symbol]: { ...tick } // New object for changed symbol
+                  };
                   saveMarketData(updated);
                   return updated;
                 });
@@ -108,9 +114,16 @@ export function useMarketSocket() {
             case 'snapshot':
               if (message.data) {
                 const snapshot = message.data as Record<string, MarketTick>;
-                setMarketData((prev) => {
-                  const updated = { ...prev, ...snapshot };
+                console.log('📊 WS Snapshot:', Object.keys(snapshot), 'NIFTY price:', snapshot.NIFTY?.price);
+                setMarketData(() => {
+                  // Create completely new objects to trigger React updates
+                  const updated = {
+                    NIFTY: snapshot.NIFTY ? { ...snapshot.NIFTY } : null,
+                    BANKNIFTY: snapshot.BANKNIFTY ? { ...snapshot.BANKNIFTY } : null,
+                    SENSEX: snapshot.SENSEX ? { ...snapshot.SENSEX } : null,
+                  };
                   saveMarketData(updated);
+                  console.log('✅ State updated - NIFTY:', updated.NIFTY?.price);
                   return updated;
                 });
               }
@@ -192,25 +205,17 @@ export function useMarketSocket() {
 
   useEffect(() => {
     // Load cached data from localStorage on mount (client-side only)
-    // This makes the UI instant - shows last data immediately
     try {
       const saved = localStorage.getItem(STORAGE_KEY);
       if (saved) {
         const parsed = JSON.parse(saved) as MarketData;
-        // Show cached data immediately for instant UI
         setMarketData(parsed);
-        
-        // 🔥 ULTRA FAST: Show as "connected" immediately with cached data
-        // This prevents "Connecting..." spinner from blocking UI
-        setIsConnected(true);
-        setConnectionStatus('connected');
       }
     } catch (e) {
       console.error('Failed to load cached market data:', e);
     }
     
-    // Connect to WebSocket in background (non-blocking)
-    // Will update connection status when real connection established
+    // Connect to WebSocket
     connect();
 
     return () => {

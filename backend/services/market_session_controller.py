@@ -203,31 +203,4 @@ class MarketSessionController:
 market_session = MarketSessionController()
 
 
-if __name__ == "__main__":
-    """Test market session controller"""
-    from datetime import timedelta
-    
-    controller = MarketSessionController()
-    
-    # Test various times
-    test_times = [
-        datetime(2026, 1, 6, 8, 0, tzinfo=IST),   # Before market
-        datetime(2026, 1, 6, 9, 5, tzinfo=IST),   # Pre-open
-        datetime(2026, 1, 6, 9, 10, tzinfo=IST),  # Auction freeze
-        datetime(2026, 1, 6, 9, 20, tzinfo=IST),  # Live
-        datetime(2026, 1, 6, 15, 0, tzinfo=IST),  # Live
-        datetime(2026, 1, 6, 16, 0, tzinfo=IST),  # Closed
-        datetime(2026, 1, 4, 10, 0, tzinfo=IST),  # Saturday
-    ]
-    
-    print("Market Session Controller Test\n")
-    print("="*70)
-    for test_time in test_times:
-        phase = controller.get_current_phase(test_time)
-        desc = controller.get_phase_description(phase)
-        seconds_left = controller.seconds_until_next_phase(test_time)
-        print(f"\n{test_time.strftime('%Y-%m-%d %H:%M:%S %A')}")
-        print(f"  Phase: {desc['icon']} {desc['title']}")
-        print(f"  Status: {desc['description']}")
-        print(f"  Next change in: {seconds_left // 60} minutes")
-    print("\n" + "="*70)
+

@@ -458,10 +458,13 @@ class EarlyWarningEngine:
         
         if pass_rate >= 0.8:  # 4/5 filters passed
             fake_risk = 'LOW'
+            print(f"   ✅ FAKE SIGNAL RISK: LOW (pass rate {pass_rate:.0%} >= 80%)")
         elif pass_rate >= 0.6:  # 3/5 filters passed
             fake_risk = 'MEDIUM'
+            print(f"   ⚠️ FAKE SIGNAL RISK: MEDIUM (pass rate {pass_rate:.0%} >= 60%)")
         else:
             fake_risk = 'HIGH'
+            print(f"   🔴 FAKE SIGNAL RISK: HIGH (pass rate {pass_rate:.0%} < 60%)")
         
         return {
             'checks': checks,
@@ -675,6 +678,15 @@ class EarlyWarningEngine:
             },
             'pass_rate': int(result.fake_signal_checks.get('pass_rate', 0))
         }
+        
+        # 🔍 FINAL SUMMARY LOG
+        print(f"\n{'='*60}")
+        print(f"[EARLY-WARNING-SUMMARY] {result.symbol}")
+        print(f"  Signal: {result.early_warning.signal}")
+        print(f"  Confidence: {result.early_warning.confidence}%")
+        print(f"  Fake Risk: {result.early_warning.fake_signal_risk} (Pass: {result.fake_signal_checks.get('pass_rate', 0)}%)")
+        print(f"  Filters: {result.fake_signal_checks.get('filters_passed', 0)}/{result.fake_signal_checks.get('total_filters', 5)}")
+        print(f"{'='*60}\n")
         
         return {
             'symbol': result.symbol,

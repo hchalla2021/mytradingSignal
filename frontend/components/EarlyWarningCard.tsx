@@ -237,31 +237,6 @@ const EarlyWarningCard: React.FC<EarlyWarningCardProps> = ({ symbol }) => {
   return (
     <div className="bg-gradient-to-br from-gray-900 via-emerald-950/10 to-gray-900 rounded-xl p-6 border-2 border-emerald-500/40 hover:border-emerald-400/60 transition-all shadow-xl shadow-emerald-500/10 hover:shadow-emerald-500/20">
       
-      {/* Data Quality Banner */}
-      {data.status && (
-        <div className={`mb-3 px-3 py-2 rounded-lg border text-xs font-semibold flex items-center gap-2 ${
-          data.status === 'FRESH' ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400' :
-          data.status === 'CACHED' ? 'bg-amber-500/10 border-amber-500/30 text-amber-400' :
-          data.status === 'NO_DATA' ? 'bg-rose-500/10 border-rose-500/30 text-rose-400' :
-          'bg-gray-500/10 border-gray-500/30 text-gray-400'
-        }`}>
-          <span className="w-2 h-2 rounded-full animate-pulse" style={{
-            backgroundColor: data.status === 'FRESH' ? 'rgb(52, 211, 153)' : 
-                          data.status === 'CACHED' ? 'rgb(251, 191, 36)' : 
-                          'rgb(248, 113, 113)'
-          }}></span>
-          <span>
-            {data.status === 'FRESH' && '🟢 LIVE DATA - Analysis from fresh market feed'}
-            {data.status === 'CACHED' && '🟡 CACHED DATA - Using last successful analysis'}
-            {data.status === 'NO_DATA' && '🔴 NO DATA - Market closed or token expired'}
-            {!['FRESH', 'CACHED', 'NO_DATA'].includes(data.status) && `Status: ${data.status}`}
-          </span>
-          {data.token_valid === false && (
-            <span className="ml-auto text-rose-400 font-bold">🔒 TOKEN EXPIRED</span>
-          )}
-        </div>
-      )}
-      
       {/* Header */}
       <div className="flex items-center justify-between mb-4">
         <div className="flex items-center gap-2">
@@ -282,12 +257,6 @@ const EarlyWarningCard: React.FC<EarlyWarningCardProps> = ({ symbol }) => {
               </div>
             )}
           </div>
-          <span className="px-2 py-0.5 bg-emerald-500/20 text-emerald-300 text-[10px] font-bold rounded-full border border-emerald-500/50">
-            5s Analysis
-          </span>
-          <span className="px-2 py-0.5 bg-cyan-500/20 text-cyan-300 text-[10px] font-bold rounded-full border border-cyan-500/50">
-            WS Price
-          </span>
         </div>
         
         {/* Fake Signal Risk Badge */}
@@ -300,17 +269,8 @@ const EarlyWarningCard: React.FC<EarlyWarningCardProps> = ({ symbol }) => {
       <div className={`rounded-xl p-5 mb-4 border-2 backdrop-blur-sm border-emerald-400/25 ${getSignalBg()}`}>
         <div className="flex items-center justify-between">
           <div>
-            <div className="flex items-center gap-2 text-xs text-gray-400 mb-1">
-              <span>PREDICTIVE SIGNAL</span>
-              {data.status && (
-                <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold ${
-                  data.status === 'FRESH' ? 'bg-emerald-500/20 text-emerald-400' :
-                  data.status === 'CACHED' ? 'bg-amber-500/20 text-amber-400' :
-                  'bg-gray-500/20 text-gray-400'
-                }`}>
-                  {data.status}
-                </span>
-              )}
+            <div className="text-xs text-gray-400 mb-1">
+              PREDICTIVE SIGNAL
             </div>
             <div className={`px-3 py-1.5 rounded-lg text-sm font-bold border-2 inline-block ${getSignalBorderStyle()}`}>
               {(data.signal || 'WAIT').replace('_', ' ')}
@@ -609,28 +569,6 @@ const EarlyWarningCard: React.FC<EarlyWarningCardProps> = ({ symbol }) => {
           ANALYSIS
         </div>
         <p className="text-xs text-gray-300 leading-relaxed">{data.reasoning || 'No analysis available'}</p>
-      </div>
-
-      {/* Timestamp */}
-      <div className="mt-3 text-xs text-gray-500 text-center space-y-1">
-        <div className="flex items-center justify-center gap-3">
-          <span>Analysis: {data.timestamp ? new Date(data.timestamp).toLocaleTimeString() : 'N/A'}</span>
-          {livePrice && (
-            <>
-              <span>•</span>
-              <span className="flex items-center gap-1">
-                Price: {lastUpdate.toLocaleTimeString()}
-                <span className="w-1 h-1 bg-emerald-400 rounded-full animate-pulse"></span>
-              </span>
-            </>
-          )}
-        </div>
-        {data.data_source && (
-          <div className="text-[10px] text-cyan-400 flex items-center justify-center gap-1">
-            <span className="w-1 h-1 bg-cyan-400 rounded-full animate-pulse"></span>
-            Data: {data.data_source.replace('_', ' ')}
-          </div>
-        )}
       </div>
     </div>
   );

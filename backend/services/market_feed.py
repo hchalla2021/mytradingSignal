@@ -115,6 +115,7 @@ class MarketFeedService:
         self.running = False
         self.last_prices: Dict[str, float] = {}
         self.last_oi: Dict[str, int] = {}  # Track last OI for change calculation
+        self.last_update_time: Dict[str, float] = {}  # Track last update time per symbol
         self._tick_queue: Queue = Queue()
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._consecutive_403_errors: int = 0  # Track repeated 403 errors
@@ -185,21 +186,31 @@ class MarketFeedService:
                 if symbol not in self.last_prices:
                     print(f"🟢 First tick received for {symbol}: Price={data['price']}, Change={data['changePercent']}%")
                 
-                # 🔥 FIX: Process ticks during PRE_OPEN even if price hasn't changed
-                # During auction period (9:00-9:15), prices may not change often
-                # but we need to keep UI updated with market status
+                # 🔥 CRITICAL FIX: Process ALL ticks during market hours, not just price changes
+                # We need to update:
+                # - PCR data (changes every few seconds)
+                # - OI data (changes frequently)
+                # - Volume data (changes every second)
+                # - Market status (transitions at 9:15 AM, 3:30 PM)
+                # - Timestamp (keeps data fresh)
                 market_status = get_market_status()
-                price_changed = self.last_prices.get(symbol) != data["price"]
-                is_pre_open = market_status == "PRE_OPEN"
+                is_market_open = market_status in ("PRE_OPEN", "LIVE")
                 
-                # Process tick if: price changed OR during PRE_OPEN period
-                if price_changed or is_pre_open:
+                # ⚡ RATE LIMITING: Update each symbol max once per second to prevent spam
+                import time
+                current_time = time.time()
+                last_update = self.last_update_time.get(symbol, 0)
+                time_since_last_update = current_time - last_update
+                
+                # Process tick if market is open AND (price changed OR 1 second elapsed)
+                price_changed = self.last_prices.get(symbol) != data["price"]
+                should_update = is_market_open and (price_changed or time_since_last_update >= 1.0)
+                
+                if should_update:
                     self.last_prices[symbol] = data["price"]
+                    self.last_update_time[symbol] = current_time
                     # Put tick in queue for async processing
                     self._tick_queue.put(data)
-                    
-                    if is_pre_open and not price_changed:
-                        print(f"🔔 PRE_OPEN tick: {symbol} @ ₹{data['price']} (auction period)")
                     
             except Exception as e:
                 print(f"❌ Error processing tick: {e}")

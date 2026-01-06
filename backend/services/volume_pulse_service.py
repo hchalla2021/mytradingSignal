@@ -526,7 +526,8 @@ def get_volume_pulse_engine() -> VolumePulseEngine:
     """Get or create singleton engine instance"""
     global _engine_instance
     if _engine_instance is None:
-        _engine_instance = VolumePulseEngine(lookback_period=20, signal_threshold=63)
+        # 🔥 FIX: Increased lookback from 20 to 100 for better volume aggregation
+        _engine_instance = VolumePulseEngine(lookback_period=100, signal_threshold=63)
     return _engine_instance
 
 
