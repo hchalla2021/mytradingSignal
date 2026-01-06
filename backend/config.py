@@ -38,6 +38,9 @@ class Settings(BaseSettings):
     debug: bool = False  # Production mode
     cors_origins: str = "*"  # Comma-separated: http://localhost:3000,https://example.com
     
+    # ==================== MARKET HOURS SCHEDULER ====================
+    enable_scheduler: bool = True  # Set to False for localhost testing anytime
+    
     # ==================== AI / LLM (DISABLED) ====================
     # AI Engine removed - using InstantSignal analysis only
     # openai_api_key: Optional[str] = None

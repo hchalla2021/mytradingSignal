@@ -48,14 +48,22 @@ async def lifespan(app: FastAPI):
     token_observer = start_token_watcher(market_feed)
     
     # 🕐 PRODUCTION: Automatic Market Hours Scheduler
-    # Starts feed at 8:50 AM, stops at 3:35 PM IST automatically
-    from services.market_hours_scheduler import get_scheduler
-    scheduler = get_scheduler(market_feed)
-    await scheduler.start()
+    # For LOCALHOST: Set ENABLE_SCHEDULER=false in .env to test anytime
+    # For PRODUCTION: Scheduler auto-starts at 8:50 AM, stops at 3:35 PM IST
+    
+    if settings.enable_scheduler:
+        from services.market_hours_scheduler import get_scheduler
+        scheduler = get_scheduler(market_feed)
+        await scheduler.start()
+        print("⏰ Market Hours Scheduler: ACTIVE (Auto-start/stop)")
+    else:
+        # Localhost testing mode - start feed immediately
+        print("🧪 LOCALHOST MODE: Scheduler disabled, starting feed immediately...")
+        feed_task = asyncio.create_task(market_feed.start())
+        scheduler = None
     
     print("🚀 Backend Ready!")
     print(f"📡 WebSocket: ws://{settings.host}:{settings.port}/ws/market")
-    print("⏰ Market Hours Scheduler: ACTIVE (Auto-start/stop)")
     
     yield
     
@@ -64,6 +72,8 @@ async def lifespan(app: FastAPI):
         await scheduler.stop()
     if market_feed:
         await market_feed.stop()
+    if 'feed_task' in locals():
+        feed_task.cancel()
     token_observer.stop()
     token_observer.join()
     await cache.disconnect()
