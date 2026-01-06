@@ -16,7 +16,6 @@ from services.websocket_manager import manager
 from services.market_feed import MarketFeedService
 from services.cache import CacheService
 from services.token_watcher import start_token_watcher
-from services.market_hours_scheduler import start_market_scheduler, stop_market_scheduler
 
 from routers import auth, market, health, analysis, advanced_analysis, token_status, system_health
 
@@ -25,13 +24,12 @@ settings = get_settings()
 
 # Global services
 market_feed: MarketFeedService = None
-market_scheduler = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan manager."""
-    global market_feed, market_scheduler
+    global market_feed
     
     print("⚡ FastAPI: Starting up (optimized for speed)...")
     
@@ -49,26 +47,25 @@ async def lifespan(app: FastAPI):
     # Start token watcher (lightweight file watcher)
     token_observer = start_token_watcher(market_feed)
     
-    # Start services in background (non-blocking)
-    feed_task = asyncio.create_task(market_feed.start())
-    
-    # 🚀 NEW: Start market hours scheduler (auto-reconnect at market open)
-    market_scheduler = await start_market_scheduler(market_feed)
+    # 🕐 PRODUCTION: Automatic Market Hours Scheduler
+    # Starts feed at 8:50 AM, stops at 3:35 PM IST automatically
+    from services.market_hours_scheduler import get_scheduler
+    scheduler = get_scheduler(market_feed)
+    await scheduler.start()
     
     print("🚀 Backend Ready!")
     print(f"📡 WebSocket: ws://{settings.host}:{settings.port}/ws/market")
-    print("📅 Market Hours Scheduler: Active (auto-reconnect at 9:00 AM & 9:15 AM)")
+    print("⏰ Market Hours Scheduler: ACTIVE (Auto-start/stop)")
     
     yield
     
     # Cleanup
-    if market_scheduler:
-        await stop_market_scheduler()
+    if scheduler:
+        await scheduler.stop()
     if market_feed:
         await market_feed.stop()
     token_observer.stop()
     token_observer.join()
-    feed_task.cancel()
     await cache.disconnect()
     print("👋 Backend shutdown complete")
 
