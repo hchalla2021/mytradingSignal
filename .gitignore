@@ -34,7 +34,7 @@ out/
 build/
 dist/
 .cache/
-
+frontend/.env.local
 # Environment variables
 .env
 .env.local

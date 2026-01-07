@@ -68,7 +68,7 @@ async def lifespan(app: FastAPI):
         feed_task = asyncio.create_task(market_feed.start())
 
     # Correct WS protocol display
-    ws_protocol = "wss" if settings.is_production else "ws"
+    ws_protocol = "ws" if settings.is_production else "wss"
     print(f"📡 WebSocket ready at: {ws_protocol}://<domain>/ws/market")
 
     print("🚀 Backend READY")
