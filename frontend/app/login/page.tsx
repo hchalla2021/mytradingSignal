@@ -32,11 +32,60 @@ export default function LoginPage() {
 
   const handleLoginClick = () => {
     setLoading(true);
-    setMessage("Redirecting to Zerodha...");
+    setMessage("Opening Zerodha login...");
     
-    // Redirect to backend which will redirect to Zerodha
     const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
-    window.location.href = `${apiUrl}/api/auth/login`;
+    
+    // Detect mobile device
+    const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) || window.innerWidth <= 768;
+    
+    if (isMobile) {
+      // Mobile: Direct navigation
+      window.location.href = `${apiUrl}/api/auth/login`;
+    } else {
+      // Desktop: Open in popup with larger size for 2FA
+      const popup = window.open(
+        `${apiUrl}/api/auth/login`,
+        'ZerodhaLogin',
+        'width=800,height=800,scrollbars=yes,resizable=yes,top=100,left=200'
+      );
+      
+      if (!popup) {
+        // Popup blocked, fallback to direct navigation
+        setMessage("Popup blocked! Redirecting in same window...");
+        setTimeout(() => {
+          window.location.href = `${apiUrl}/api/auth/login`;
+        }, 1500);
+        return;
+      }
+
+      // Monitor popup for completion
+      const checkPopup = setInterval(() => {
+        try {
+          if (popup.closed) {
+            clearInterval(checkPopup);
+            setLoading(false);
+            setMessage("Login window closed. Checking authentication...");
+            
+            // Revalidate after popup closes
+            setTimeout(() => {
+              router.push('/');
+            }, 2000);
+          }
+        } catch (e) {
+          // Continue monitoring
+        }
+      }, 500);
+
+      // Cleanup after 10 minutes
+      setTimeout(() => {
+        clearInterval(checkPopup);
+        if (!popup.closed) {
+          setLoading(false);
+          setMessage("Please complete login in the popup window");
+        }
+      }, 600000); // 10 minutes
+    }
   };
 
   return (

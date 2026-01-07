@@ -48,6 +48,18 @@ export function useAuth() {
           console.error('Failed to parse cached auth state:', e);
         }
       }
+
+      // Listen for auth success messages from popup
+      const handleMessage = (event: MessageEvent) => {
+        if (event.data?.type === 'zerodha-auth-success') {
+          console.log('✅ Received auth success message from popup');
+          // Revalidate token immediately
+          validateToken();
+        }
+      };
+
+      window.addEventListener('message', handleMessage);
+      return () => window.removeEventListener('message', handleMessage);
     }
   }, []);
 
@@ -145,19 +157,58 @@ export function useAuth() {
       // Mobile: Direct navigation
       window.location.href = `${API_URL}/api/auth/login`;
     } else {
-      // Desktop: Try popup first
+      // Desktop: Open popup with better configuration
       const popup = window.open(
         `${API_URL}/api/auth/login`,
         'ZerodhaLogin',
-        'width=600,height=700,scrollbars=yes,resizable=yes'
+        'width=800,height=800,scrollbars=yes,resizable=yes,top=100,left=200'
       );
       
       // If popup blocked or failed, fallback to direct navigation
       if (!popup) {
+        console.log('Popup blocked, using direct navigation');
         window.location.href = `${API_URL}/api/auth/login`;
+        return;
       }
+
+      // Monitor popup for successful authentication
+      const pollTimer = setInterval(() => {
+        try {
+          // Check if popup is closed
+          if (popup.closed) {
+            clearInterval(pollTimer);
+            console.log('Popup closed, revalidating token...');
+            // Revalidate token after popup closes
+            setTimeout(() => {
+              validateToken();
+            }, 1000);
+            return;
+          }
+
+          // Try to check if popup navigated to success page (same origin)
+          try {
+            if (popup.location.href.includes('/login?status=success') || 
+                popup.location.href.includes('auth=success')) {
+              clearInterval(pollTimer);
+              popup.close();
+              validateToken();
+            }
+          } catch (e) {
+            // Cross-origin error - popup is on Zerodha domain, which is expected
+            // Continue monitoring
+          }
+        } catch (e) {
+          // Error accessing popup, might be closed
+          clearInterval(pollTimer);
+        }
+      }, 500); // Check every 500ms
+
+      // Cleanup after 10 minutes (enough time for 2FA)
+      setTimeout(() => {
+        clearInterval(pollTimer);
+      }, 600000); // 10 minutes timeout
     }
-  }, []);
+  }, [validateToken]);
 
   const logout = useCallback(() => {
     // Clear local state

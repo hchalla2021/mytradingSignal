@@ -163,6 +163,7 @@ async def zerodha_callback(request_token: str = Query(...), status: str = Query(
                     background: rgba(255,255,255,0.1);
                     border-radius: 20px;
                     backdrop-filter: blur(10px);
+                    max-width: 500px;
                 }}
                 .icon {{
                     font-size: 64px;
@@ -187,6 +188,30 @@ async def zerodha_callback(request_token: str = Query(...), status: str = Query(
                     0% {{ transform: rotate(0deg); }}
                     100% {{ transform: rotate(360deg); }}
                 }}
+                .instructions {{
+                    margin-top: 20px;
+                    padding: 15px;
+                    background: rgba(255,255,255,0.1);
+                    border-radius: 10px;
+                    font-size: 14px;
+                    line-height: 1.6;
+                }}
+                .btn {{
+                    display: inline-block;
+                    margin-top: 15px;
+                    padding: 12px 24px;
+                    background: rgba(255,255,255,0.2);
+                    border: 2px solid rgba(255,255,255,0.3);
+                    border-radius: 8px;
+                    color: white;
+                    text-decoration: none;
+                    font-weight: bold;
+                    transition: all 0.3s;
+                }}
+                .btn:hover {{
+                    background: rgba(255,255,255,0.3);
+                    transform: translateY(-2px);
+                }}
             </style>
         </head>
         <body>
@@ -195,21 +220,83 @@ async def zerodha_callback(request_token: str = Query(...), status: str = Query(
                 <h1>Login Successful!</h1>
                 <p>Welcome, {user_name}</p>
                 <div class="spinner"></div>
-                <p>Reconnecting to live market data...</p>
+                <p id="status">Reconnecting to live market data...</p>
+                <div class="instructions" id="instructions" style="display:none;">
+                    <strong>⚠️ Frontend Not Running</strong>
+                    <p>Please start the frontend server:</p>
+                    <code style="display:block; margin:10px 0; padding:10px; background:rgba(0,0,0,0.3); border-radius:5px;">
+                        cd frontend<br/>
+                        npm run dev
+                    </code>
+                    <p>Then refresh this page or close this window.</p>
+                </div>
+                <a href="{settings.frontend_url}" class="btn" id="manualLink" style="display:none;">
+                    Go to Dashboard
+                </a>
             </div>
             <script>
-                // Close popup in fraction of a second (0.5s)
-                if (window.opener) {{
-                    console.log('🎉 Auth successful, closing popup...');
-                    setTimeout(() => {{
-                        window.close();
-                    }}, 500);
-                }} else {{
-                    // If not popup, redirect to main app
-                    setTimeout(() => {{
-                        window.location.href = '{settings.frontend_url}';
-                    }}, 2000);
+                const frontendUrl = '{settings.frontend_url}';
+                
+                // Test if frontend is accessible
+                async function testFrontend() {{
+                    try {{
+                        const response = await fetch(frontendUrl, {{ mode: 'no-cors' }});
+                        return true;
+                    }} catch (error) {{
+                        return false;
+                    }}
                 }}
+                
+                // Main redirect logic
+                async function handleRedirect() {{
+                    const frontendRunning = await testFrontend();
+                    
+                    if (window.opener) {{
+                        // Popup mode - wait longer to show success message
+                        console.log('🎉 Auth successful, closing popup in 2 seconds...');
+                        
+                        // Update message
+                        document.getElementById('status').innerHTML = '✅ Login successful!<br/>Closing window...';
+                        
+                        // Try to notify parent window if on same origin
+                        try {{
+                            if (window.opener && !window.opener.closed) {{
+                                window.opener.postMessage({{ type: 'zerodha-auth-success', userId: '{user_id}' }}, '*');
+                            }}
+                        }} catch (e) {{
+                            console.log('Cannot notify parent:', e);
+                        }}
+                        
+                        // Close after showing success message (2 seconds)
+                        setTimeout(() => {{
+                            window.close();
+                            
+                            // Fallback: if window didn't close, show manual close button
+                            setTimeout(() => {{
+                                if (!window.closed) {{
+                                    document.getElementById('status').innerHTML = 
+                                        '✅ Login successful!<br/><br/>' +
+                                        '<button onclick="window.close()" style="padding:10px 20px;background:#4CAF50;color:white;border:none;border-radius:5px;cursor:pointer;font-size:16px;">' +
+                                        'Close Window' +
+                                        '</button>';
+                                }}
+                            }}, 500);
+                        }}, 2000);
+                    }} else if (frontendRunning) {{
+                        // Frontend is running - redirect
+                        setTimeout(() => {{
+                            window.location.href = frontendUrl;
+                        }}, 2000);
+                    }} else {{
+                        // Frontend not running - show instructions
+                        document.querySelector('.spinner')?.remove();
+                        document.getElementById('status').textContent = 'Authentication complete!';
+                        document.getElementById('instructions').style.display = 'block';
+                        document.getElementById('manualLink').style.display = 'inline-block';
+                    }}
+                }}
+                
+                handleRedirect();
             </script>
         </body>
         </html>
