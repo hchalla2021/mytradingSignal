@@ -35,7 +35,7 @@ const LiveStatus: React.FC<LiveStatusProps> = memo(({ status, isConnected }) => 
         return {
           icon: <AlertCircle className="w-4 h-4 sm:w-5 sm:h-5" />,
           text: 'Connection error - retrying...',
-          shortText: 'Error',
+          shortText: 'Retrying...',
           bgColor: 'bg-gradient-to-r from-rose-500/15 to-red-500/10',
           textColor: 'text-rose-300',
           borderColor: 'border-bullish/40',
