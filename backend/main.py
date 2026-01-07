@@ -1,11 +1,7 @@
-"""Main FastAPI application entry point."""
-# Fix Windows console encoding for emoji characters
+"""Main FastAPI application entry point (production safe)."""
+
 import sys
 import io
-if sys.platform == "win32":
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
-    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
-
 import asyncio
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
@@ -17,77 +13,90 @@ from services.market_feed import MarketFeedService
 from services.cache import CacheService
 from services.token_watcher import start_token_watcher
 
-from routers import auth, market, health, analysis, advanced_analysis, token_status, system_health
+from routers import (
+    auth,
+    market,
+    health,
+    analysis,
+    advanced_analysis,
+    token_status,
+    system_health,
+)
 
+# Windows console fix (safe, ignored on Linux)
+if sys.platform == "win32":
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
 settings = get_settings()
 
-# Global services
-market_feed: MarketFeedService = None
+market_feed: MarketFeedService | None = None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Application lifespan manager."""
+    """Application lifespan manager (production safe)."""
     global market_feed
-    
-    print("⚡ FastAPI: Starting up (optimized for speed)...")
-    
-    # 🔥 AUTO-UPDATE FUTURES TOKENS (if needed)
+
+    print("⚡ FastAPI starting...")
+
+    # Auto update futures on startup
     from services.auto_futures_updater import check_and_update_futures_on_startup
     await check_and_update_futures_on_startup()
-    
-    # Initialize cache (in-memory, instant)
+
+    # Cache
     cache = CacheService()
     await cache.connect()
-    
-    # Initialize market feed
+
+    # Market feed
     market_feed = MarketFeedService(cache, manager)
-    
-    # Start token watcher (lightweight file watcher)
+
+    # Token watcher
     token_observer = start_token_watcher(market_feed)
-    
-    # 🕐 PRODUCTION: Automatic Market Hours Scheduler
-    # For LOCALHOST: Set ENABLE_SCHEDULER=false in .env to test anytime
-    # For PRODUCTION: Scheduler auto-starts at 8:50 AM, stops at 3:35 PM IST
-    
+
+    # Scheduler / Feed startup
+    scheduler = None
+    feed_task = None
+
     if settings.enable_scheduler:
         from services.market_hours_scheduler import get_scheduler
         scheduler = get_scheduler(market_feed)
         await scheduler.start()
-        print("⏰ Market Hours Scheduler: ACTIVE (Auto-start/stop)")
+        print("⏰ Market Scheduler: ACTIVE")
     else:
-        # Localhost testing mode - start feed immediately
-        print("🧪 LOCALHOST MODE: Scheduler disabled, starting feed immediately...")
+        print("🧪 Scheduler disabled → starting feed immediately")
         feed_task = asyncio.create_task(market_feed.start())
-        scheduler = None
-    
-    print("🚀 Backend Ready!")
-    print(f"📡 WebSocket: ws://{settings.host}:{settings.port}/ws/market")
-    
+
+    # Correct WS protocol display
+    ws_protocol = "wss" if settings.is_production else "ws"
+    print(f"📡 WebSocket ready at: {ws_protocol}://<domain>/ws/market")
+
+    print("🚀 Backend READY")
     yield
-    
-    # Cleanup
+
+    # Shutdown
+    print("🛑 Backend shutting down...")
     if scheduler:
         await scheduler.stop()
     if market_feed:
         await market_feed.stop()
-    if 'feed_task' in locals():
+    if feed_task:
         feed_task.cancel()
+
     token_observer.stop()
     token_observer.join()
     await cache.disconnect()
-    print("👋 Backend shutdown complete")
+    print("👋 Shutdown complete")
 
 
 app = FastAPI(
     title="MyDailyTradingSignals API",
-    description="Real-time trading dashboard backend with Zerodha integration",
+    description="Real-time trading dashboard backend",
     version="1.0.0",
-    lifespan=lifespan
+    lifespan=lifespan,
 )
 
-# CORS middleware
+# CORS
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins_list,
@@ -96,24 +105,25 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Include routers
+# Routers
 app.include_router(health.router, tags=["Health"])
 app.include_router(system_health.router, prefix="/api/system", tags=["System Health"])
 app.include_router(token_status.router, tags=["Token Status"])
 app.include_router(auth.router, prefix="/api/auth", tags=["Authentication"])
+
+# ✅ IMPORTANT: keep WS router clean
 app.include_router(market.router, prefix="/ws", tags=["Market Data"])
+
 app.include_router(analysis.router, tags=["Analysis"])
 app.include_router(advanced_analysis.router, tags=["Advanced Technical Analysis"])
 
 
 @app.get("/")
 async def root():
-    """Root endpoint."""
     return {
         "name": "MyDailyTradingSignals API",
         "status": "running",
         "version": "1.0.0",
-        "features": ["InstantSignal", "PCR Analysis", "Volume Pulse", "Trend Base", "Zone Control"]
     }
 
 
@@ -123,5 +133,6 @@ if __name__ == "__main__":
         "main:app",
         host=settings.host,
         port=settings.port,
-        reload=settings.debug
+        reload=settings.debug,
+        proxy_headers=True,   # ✅ IMPORTANT FOR MOBILE
     )
