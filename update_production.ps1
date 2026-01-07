@@ -3,16 +3,13 @@ $SERVER = "root@mydailytradesignals.com"
 
 Write-Host "🚀 Updating Production..." -ForegroundColor Cyan
 
-# Fix backend merge conflict + update env
+# Upload fixed main.py
+Write-Host "📤 Uploading fixed main.py..." -ForegroundColor Cyan
+scp backend/main.py ${SERVER}:/var/www/mytradingSignal/backend/main.py
+
+# Update backend env
 ssh $SERVER @"
 cd /var/www/mytradingSignal/backend
-
-# Fix merge conflict
-if grep -q '<<<<<<< Updated upstream' main.py; then
-    echo '⚠️  Fixing merge conflict...'
-    cp main.py main.py.backup
-    awk '/^<<<<<<< Updated upstream/ { skip=1; next } /^=======/ { skip=0; next } /^>>>>>>> / { next } !skip { print }' main.py > main.py.tmp && mv main.py.tmp main.py
-fi
 
 # Update token in .env
 sed -i 's/ZERODHA_ACCESS_TOKEN=.*/ZERODHA_ACCESS_TOKEN=l39xf8o7D0MfJEBLI8ALD5spJ5CUGd6s/' .env
