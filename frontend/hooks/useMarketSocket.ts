@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { getEnvironmentConfig } from '@/lib/env-detection';
 
 export interface MarketTick {
   symbol: string;
@@ -34,7 +35,13 @@ interface WebSocketMessage {
   timestamp?: string;
 }
 
-const WS_URL = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000/ws/market';
+// Auto-detect WebSocket URL based on environment
+const getWebSocketURL = (): string => {
+  const config = getEnvironmentConfig();
+  console.log(`📡 WebSocket connecting to: ${config.wsUrl} (${config.displayName})`);
+  return config.wsUrl;
+};
+
 const STORAGE_KEY = 'lastMarketData';
 
 // Save market data to localStorage
@@ -73,6 +80,7 @@ export function useMarketSocket() {
     setConnectionStatus((prev) => prev === 'connected' ? 'connected' : 'connecting');
     
     try {
+      const WS_URL = getWebSocketURL(); // Dynamic URL based on environment
       const ws = new WebSocket(WS_URL);
       wsRef.current = ws;
 

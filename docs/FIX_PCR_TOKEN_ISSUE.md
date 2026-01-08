@@ -1,8 +1,26 @@
 # 🔴 PCR NOT SHOWING - TOKEN EXPIRED FIX
 
-**Issue Date:** January 7, 2026  
-**Status:** ❌ Zerodha access token expired  
+**Issue Date:** January 8, 2026  
+**Status:** ❌ Zerodha access token expired or not configured  
 **Impact:** PCR values showing 0.00 or N/A in UI
+
+---
+
+## 🔍 QUICK DIAGNOSIS
+
+Run the validation script to check your setup:
+
+```powershell
+cd backend
+python scripts/validate_pcr_setup.py
+```
+
+This will:
+- ✅ Check if .env file exists
+- ✅ Validate Zerodha credentials
+- ✅ Test API token validity
+- ✅ Verify PCR data fetch
+- ✅ Provide specific fix instructions
 
 ---
 

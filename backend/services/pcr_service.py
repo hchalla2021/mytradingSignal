@@ -29,6 +29,7 @@ class PCRService:
     def __init__(self):
         self.kite: Optional[KiteConnect] = None
         self._initialized = False
+        self._last_token: Optional[str] = None  # Track last used token
     
     def _init_kite(self):
         """Initialize KiteConnect if not already done."""
@@ -36,17 +37,61 @@ class PCRService:
             try:
                 self.kite = KiteConnect(api_key=settings.zerodha_api_key)
                 self.kite.set_access_token(settings.zerodha_access_token)
-                self._initialized = True
+                
+                # 🔥 CRITICAL FIX: Validate token immediately by making a simple API call
+                try:
+                    profile = self.kite.profile()
+                    print(f"✅ PCR Service initialized - User: {profile.get('user_name', 'Unknown')}")
+                    self._initialized = True
+                except Exception as e:
+                    error_msg = str(e).lower()
+                    if "token" in error_msg or "api_key" in error_msg or "403" in error_msg:
+                        print("\n" + "="*80)
+                        print("🔴 PCR SERVICE ERROR: ZERODHA TOKEN EXPIRED OR INVALID")
+                        print("="*80)
+                        print(f"Error: {e}")
+                        print("\n💡 SOLUTION:")
+                        print("   1. Run: python backend/get_token.py")
+                        print("   2. Or run: python quick_token_fix.py")
+                        print("   3. Or click LOGIN in the UI")
+                        print("\n⚠️ PCR will show 0.00 until token is refreshed")
+                        print("="*80 + "\n")
+                    else:
+                        print(f"❌ Failed to validate Zerodha token for PCR: {e}")
+                    self.kite = None
+                    self._initialized = False
+                    
             except Exception as e:
                 print(f"❌ Failed to initialize KiteConnect for PCR: {e}")
+                self.kite = None
+                self._initialized = False
         elif not settings.zerodha_api_key or not settings.zerodha_access_token:
-            print(f"⚠️ PCR Service: Missing API key or access token")
+            print("\n" + "="*80)
+            print("⚠️ PCR SERVICE: ZERODHA CREDENTIALS NOT CONFIGURED")
+            print("="*80)
+            print("Missing: ZERODHA_API_KEY or ZERODHA_ACCESS_TOKEN")
+            print("\nSetup Instructions:")
+            print("   1. Get API credentials from: https://developers.kite.trade")
+            print("   2. Add to backend/.env file:")
+            print("      ZERODHA_API_KEY=your_api_key")
+            print("      ZERODHA_API_SECRET=your_api_secret")
+            print("   3. Generate token: python backend/get_token.py")
+            print("="*80 + "\n")
+            self.kite = None
+            self._initialized = False
     
     async def get_pcr_data(self, symbol: str) -> Dict[str, Any]:
         """
         Get PCR data for an index.
         Returns: {pcr, callOI, putOI, sentiment}
         """
+        # 🔥 CRITICAL FIX: Check if token changed and re-initialize
+        current_token = settings.zerodha_access_token
+        if current_token and current_token != self._last_token:
+            print(f"[TOKEN-REFRESH] New Zerodha token detected! Re-initializing PCR service...")
+            self._initialized = False
+            self._last_token = current_token
+        
         self._init_kite()
         
         # Check cache (update every 10 seconds for real-time PCR)
@@ -66,9 +111,13 @@ class PCRService:
         }
         
         if not self.kite:
-            print(f"[ERROR] CRITICAL: PCR Service not initialized! Kite object is None")
-            print(f"        Check if ZERODHA_API_KEY and ZERODHA_API_SECRET are set in .env")
-            return default_data
+            # Try to re-initialize in case token was updated
+            self._init_kite()
+            
+            if not self.kite:
+                print(f"[ERROR] PCR Service not initialized - Token expired or credentials missing")
+                print(f"        Run: python backend/get_token.py to generate a new token")
+                return default_data
         
         # SMART: Check if we're rate limited
         if symbol in _RATE_LIMITED_UNTIL:
