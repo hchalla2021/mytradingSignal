@@ -165,106 +165,200 @@ const VolumePulseCard = memo<VolumePulseCardProps>(({ symbol, name }) => {
   }
 
   const { volume_data, pulse_score, signal, confidence, trend } = data;
+  
+  // 🚨 Volume Health Check
+  const totalVolume = volume_data.green_candle_volume + volume_data.red_candle_volume;
+  const isLowVolume = totalVolume < 100000; // Less than 1L total
+  const hasData = totalVolume > 0;
 
   return (
-    <div className="bg-dark-card border border-dark-border rounded-lg p-3 sm:p-4 hover:border-dark-muted/50 transition-all">
-      {/* Live Status Indicator */}
-      {data.status === 'LIVE' && (
-        <div className="mb-2 px-2 py-1 rounded-lg bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 text-[9px] font-bold flex items-center gap-1.5">
-          <span className="w-1.5 h-1.5 bg-emerald-400 rounded-full animate-pulse"></span>
-          LIVE DATA
-          {data.candles_analyzed && ` • ${data.candles_analyzed} candles`}
+    <div className="bg-gradient-to-br from-slate-900/60 to-slate-800/60 border border-slate-600/40 rounded-lg p-3 sm:p-4 hover:border-slate-500/50 transition-all shadow-lg">
+      {/* Volume Health Alert */}
+      {!hasData && (
+        <div className="mb-2 px-2 py-1 rounded-lg bg-rose-900/40 text-rose-200 border border-rose-700/50 text-[10px] font-semibold flex items-center gap-1.5">
+          <AlertTriangle className="w-3 h-3" />
+          NO VOLUME DATA - May be outside trading hours or data issue
         </div>
       )}
-      {data.status === 'CACHED' && (
-        <div className="mb-2 px-2 py-1 rounded-lg bg-amber-500/10 text-amber-400 border border-amber-500/30 text-[9px] font-bold flex items-center gap-1.5">
-          <span className="w-1.5 h-1.5 bg-amber-400 rounded-full animate-pulse"></span>
-          CACHED DATA - {data.message}
+      {hasData && isLowVolume && (
+        <div className="mb-2 px-2 py-1 rounded-lg bg-amber-900/40 text-amber-200 border border-amber-700/50 text-[10px] font-semibold flex items-center gap-1.5">
+          <AlertTriangle className="w-3 h-3" />
+          LOW VOLUME ({formatVolume(totalVolume)}) - Wait for higher activity
         </div>
       )}
       
-      {/* Header */}
+      {/* Live Status - Eye Friendly */}
+      {data.status === 'LIVE' && hasData && !isLowVolume && (
+        <div className="mb-2 px-2 py-1 rounded-lg bg-emerald-900/30 text-emerald-200 border border-emerald-700/40 text-[9px] font-semibold flex items-center gap-1.5">
+          <span className="w-1.5 h-1.5 bg-emerald-400 rounded-full animate-pulse"></span>
+          LIVE VOLUME
+          {data.candles_analyzed && ` • ${data.candles_analyzed} Candles`}
+        </div>
+      )}
+      {data.status === 'CACHED' && (
+        <div className="mb-2 px-2 py-1 rounded-lg bg-amber-900/30 text-amber-200 border border-amber-700/40 text-[9px] font-semibold flex items-center gap-1.5">
+          <span className="w-1.5 h-1.5 bg-amber-400 rounded-full animate-pulse"></span>
+          CACHED • {data.message}
+        </div>
+      )}
+      
+      {/* Header - Trader Friendly */}
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-2">
-          <Activity className="w-4 h-4 text-accent" />
-          <h3 className="text-sm sm:text-base font-bold text-white">{name}</h3>
+          <Activity className="w-4 h-4 text-purple-300" />
+          <h3 className="text-sm sm:text-base font-bold text-gray-100">{name}</h3>
         </div>
-        <div className={`flex items-center gap-1 px-2 py-1 rounded text-xs font-bold ${getSignalBg(signal)} ${getSignalColor(signal)}`}>
+        <div className={`flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-bold border shadow-lg ${
+          signal === 'BUY' ? 'bg-emerald-900/40 text-emerald-200 border-emerald-700/50' :
+          signal === 'SELL' ? 'bg-rose-900/40 text-rose-200 border-rose-700/50' :
+          'bg-slate-800/60 text-slate-300 border-slate-600/50'
+        }`}>
           {getSignalIcon(signal)}
           <span>{signal}</span>
         </div>
       </div>
 
-      {/* Pulse Score - Main Metric */}
-      <div className="mb-3">
-        <div className="flex items-center justify-between mb-1">
-          <span className="text-[10px] text-dark-muted font-bold">PULSE SCORE</span>
-          <span className="text-sm font-bold text-white">{pulse_score}%</span>
+      {/* Buying Pressure - FAST Recognition */}
+      <div className="mb-3 bg-slate-800/40 rounded-xl p-3 border border-slate-600/30">
+        <div className="flex items-center justify-between mb-2">
+          <span className="text-xs text-slate-300 font-bold tracking-wide">⚡ BUYING PRESSURE</span>
+          <span className="text-lg font-bold ${
+            pulse_score >= 70 ? 'text-emerald-300' : 
+            pulse_score >= 50 ? 'text-amber-300' : 
+            'text-rose-300'
+          }">{pulse_score}%</span>
         </div>
-        <div className="w-full bg-dark-border rounded-full h-2 overflow-hidden">
+        <div className="w-full bg-gradient-to-r from-rose-900/40 via-slate-700/50 to-emerald-900/40 rounded-full h-2.5 overflow-hidden shadow-inner">
           <div
-            className={`h-full transition-all duration-500 ${
-              pulse_score >= 70 ? 'bg-bullish' : pulse_score >= 50 ? 'bg-accent' : 'bg-bearish'
+            className={`h-full transition-all duration-700 rounded-full ${
+              pulse_score >= 70 ? 'bg-gradient-to-r from-emerald-400 to-emerald-300 shadow-lg shadow-emerald-500/40' : 
+              pulse_score >= 50 ? 'bg-gradient-to-r from-amber-400 to-amber-300 shadow-lg shadow-amber-500/30' : 
+              'bg-gradient-to-r from-rose-400 to-rose-300 shadow-lg shadow-rose-500/40'
             }`}
             style={{ width: `${pulse_score}%` }}
           ></div>
         </div>
-        <div className="flex justify-between text-[10px] text-dark-muted font-semibold mt-1">
-          <span>Bearish</span>
-          <span>Neutral</span>
-          <span>Bullish</span>
+        <div className="flex justify-between text-[10px] text-slate-400 font-semibold mt-1.5">
+          <span className="text-rose-300">🔴 SELLERS</span>
+          <span className="text-slate-400">NEUTRAL</span>
+          <span className="text-emerald-300">🟢 BUYERS</span>
+        </div>
+        
+        {/* Beginner Explanation */}
+        <div className="mt-2 pt-2 border-t border-slate-600/30">
+          <p className="text-[10px] text-slate-400 leading-relaxed">
+            {pulse_score >= 70 ? (
+              <span className="text-emerald-300 font-semibold">✅ Strong Buying: More people buying (green candles have higher volume)</span>
+            ) : pulse_score >= 50 ? (
+              <span className="text-amber-300 font-semibold">⚠️ Balanced: Equal buying & selling pressure</span>
+            ) : (
+              <span className="text-rose-300 font-semibold">⚠️ Strong Selling: More people selling (red candles have higher volume)</span>
+            )}
+          </p>
         </div>
       </div>
 
-      {/* Volume Breakdown */}
-      <div className="grid grid-cols-2 gap-2 mb-3">
-        {/* Green Candle Volume */}
-        <div className="bg-dark-bg rounded-lg p-2 border-2 border-emerald-500/30 shadow-sm shadow-emerald-500/10">
-          <div className="flex items-center justify-between mb-1">
-            <p className="text-[9px] sm:text-[10px] text-dark-muted font-bold">🟢 GREEN VOL</p>
+      {/* REAL CANDLE VOLUME - Eye-Friendly & FAST */}
+      <div className="grid grid-cols-2 gap-3 mb-3">
+        {/* BUY Candles (Green) */}
+        <div className="bg-gradient-to-br from-emerald-900/20 to-emerald-950/10 rounded-xl p-3 border border-emerald-700/30 shadow-lg relative overflow-hidden">
+          <div className="absolute top-0 right-0 w-16 h-16 bg-emerald-400/5 rounded-full -mr-6 -mt-6"></div>
+          <div className="flex items-center justify-between mb-2 relative z-10">
+            <p className="text-[10px] text-emerald-200 font-bold tracking-wider">🟢 BUY CANDLES</p>
             {data.status === 'LIVE' && (
-              <span className="w-1 h-1 bg-emerald-400 rounded-full animate-pulse"></span>
+              <span className="w-1.5 h-1.5 bg-emerald-400 rounded-full animate-pulse shadow-lg shadow-emerald-400/50"></span>
             )}
           </div>
-          <p className="text-xs sm:text-sm font-bold text-green-400 px-2 py-1 rounded-lg bg-green-950/30 border-2 border-green-500/40 shadow-md shadow-green-500/20 inline-block">
+          <p className="text-lg sm:text-xl font-bold text-emerald-300 mb-1 relative z-10">
             {formatVolume(volume_data.green_candle_volume)}
           </p>
-          <p className="text-[9px] text-dark-muted mt-1">{volume_data.green_percentage.toFixed(1)}%</p>
+          <div className="flex items-center gap-2 relative z-10 mb-1">
+            <div className="flex-1 bg-slate-700/40 rounded-full h-1 overflow-hidden">
+              <div className="h-full bg-emerald-400 rounded-full" style={{ width: `${volume_data.green_percentage}%` }}></div>
+            </div>
+            <span className="text-xs text-emerald-300 font-semibold">{volume_data.green_percentage.toFixed(0)}%</span>
+          </div>
+          <p className="text-[9px] text-emerald-200/70 relative z-10">When price went UP</p>
         </div>
 
-        {/* Red Candle Volume */}
-        <div className="bg-dark-bg rounded-lg p-2 border-2 border-emerald-500/30 shadow-sm shadow-emerald-500/10">
-          <div className="flex items-center justify-between mb-1">
-            <p className="text-[9px] sm:text-[10px] text-dark-muted font-bold">🔴 RED VOL</p>
+        {/* SELL Candles (Red) */}
+        <div className="bg-gradient-to-br from-rose-900/20 to-rose-950/10 rounded-xl p-3 border border-rose-700/30 shadow-lg relative overflow-hidden">
+          <div className="absolute top-0 right-0 w-16 h-16 bg-rose-400/5 rounded-full -mr-6 -mt-6"></div>
+          <div className="flex items-center justify-between mb-2 relative z-10">
+            <p className="text-[10px] text-rose-200 font-bold tracking-wider">🔴 SELL CANDLES</p>
             {data.status === 'LIVE' && (
-              <span className="w-1 h-1 bg-rose-400 rounded-full animate-pulse"></span>
+              <span className="w-1.5 h-1.5 bg-rose-400 rounded-full animate-pulse shadow-lg shadow-rose-400/50"></span>
             )}
           </div>
-          <p className="text-xs sm:text-sm font-bold text-red-400 px-2 py-1 rounded-lg bg-red-950/30 border-2 border-red-500/40 shadow-md shadow-red-500/20 inline-block">
+          <p className="text-lg sm:text-xl font-bold text-rose-300 mb-1 relative z-10">
             {formatVolume(volume_data.red_candle_volume)}
           </p>
-          <p className="text-[9px] text-dark-muted mt-1">{volume_data.red_percentage.toFixed(1)}%</p>
+          <div className="flex items-center gap-2 relative z-10 mb-1">
+            <div className="flex-1 bg-slate-700/40 rounded-full h-1 overflow-hidden">
+              <div className="h-full bg-rose-400 rounded-full" style={{ width: `${volume_data.red_percentage}%` }}></div>
+            </div>
+            <span className="text-xs text-rose-300 font-semibold">{volume_data.red_percentage.toFixed(0)}%</span>
+          </div>
+          <p className="text-[9px] text-rose-200/70 relative z-10">When price went DOWN</p>
         </div>
       </div>
 
-      {/* Bottom Stats */}
-      <div className="flex items-center justify-between pt-2 border-t border-dark-border">
-        <div>
-          <p className="text-[9px] text-dark-muted font-bold">RATIO</p>
-          <p className="text-xs font-bold text-white">{volume_data.ratio.toFixed(2)}</p>
+      {/* Trading Metrics - Eye Friendly */}
+      <div className="grid grid-cols-3 gap-2 mb-3 pt-3 border-t border-slate-600/30">
+        <div className="bg-slate-800/30 rounded-lg p-2 border border-slate-600/30">
+          <p className="text-[9px] text-slate-400 font-semibold mb-1">RATIO</p>
+          <p className="text-sm font-bold ${
+            volume_data.ratio > 1.5 ? 'text-emerald-300' :
+            volume_data.ratio < 0.67 ? 'text-rose-300' :
+            'text-slate-300'
+          }">{volume_data.ratio.toFixed(2)}</p>
         </div>
-        <div>
-          <p className="text-[9px] text-dark-muted font-bold">CONFIDENCE</p>
-          <p className="text-xs font-bold text-accent">{confidence}%</p>
+        <div className="bg-slate-800/30 rounded-lg p-2 border border-slate-600/30">
+          <p className="text-[9px] text-slate-400 font-semibold mb-1">CONFIDENCE</p>
+          <p className={`text-sm font-bold ${
+            confidence >= 70 ? 'text-emerald-300' :
+            confidence >= 50 ? 'text-amber-300' :
+            'text-rose-300'
+          }`}>{confidence}%</p>
         </div>
-        <div>
-          <p className="text-[9px] text-dark-muted font-bold">TREND</p>
-          <p className={`text-xs font-bold ${
-            trend === 'BULLISH' ? 'text-bullish' : trend === 'BEARISH' ? 'text-bearish' : 'text-neutral'
+        <div className="bg-slate-800/30 rounded-lg p-2 border border-slate-600/30">
+          <p className="text-[9px] text-slate-400 font-semibold mb-1">TREND</p>
+          <p className={`text-sm font-bold ${
+            trend === 'BULLISH' ? 'text-emerald-300' : 
+            trend === 'BEARISH' ? 'text-rose-300' : 
+            'text-slate-300'
           }`}>
             {trend}
           </p>
         </div>
+      </div>
+      
+      {/* Beginner Trading Advice */}
+      <div className={`rounded-lg p-2.5 border ${
+        signal === 'BUY' ? 'bg-emerald-900/20 border-emerald-700/40' :
+        signal === 'SELL' ? 'bg-rose-900/20 border-rose-700/40' :
+        'bg-slate-800/30 border-slate-600/30'
+      }`}>
+        <div className="flex items-center gap-1.5 mb-1">
+          <span className="text-[9px] text-slate-300 font-bold tracking-wider">💡 WHAT TO DO?</span>
+        </div>
+        <p className="text-[10px] text-slate-200 leading-relaxed">
+          {!hasData ? (
+            <span className="text-amber-300">⚠️ No volume data. Market may be closed or wait for trading hours.</span>
+          ) : isLowVolume ? (
+            <span className="text-amber-300">⚠️ Very low volume ({formatVolume(totalVolume)}). Wait for more activity before trading.</span>
+          ) : signal === 'BUY' && confidence >= 70 ? (
+            <span className="text-emerald-300">Strong buying happening! More green candles with high volume = buyers in control.</span>
+          ) : signal === 'BUY' && confidence >= 50 ? (
+            <span className="text-emerald-300">Moderate buying seen. Green volume higher but not very strong yet.</span>
+          ) : signal === 'SELL' && confidence >= 70 ? (
+            <span className="text-rose-300">Strong selling happening! More red candles with high volume = sellers in control.</span>
+          ) : signal === 'SELL' && confidence >= 50 ? (
+            <span className="text-rose-300">Moderate selling seen. Red volume higher but not very strong yet.</span>
+          ) : (
+            <span className="text-slate-300">Balanced volume. No clear direction yet. Wait for confirmation.</span>
+          )}
+        </p>
       </div>
     </div>
   );

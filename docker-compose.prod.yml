@@ -1,0 +1,102 @@
+version: '3.8'
+
+services:
+  # Redis Cache (Optional but recommended for production)
+  redis:
+    image: redis:7-alpine
+    container_name: trading-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # Backend API Server
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: trading-backend
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      # Zerodha API (REQUIRED - Set these in .env file)
+      - ZERODHA_API_KEY=${ZERODHA_API_KEY}
+      - ZERODHA_API_SECRET=${ZERODHA_API_SECRET}
+      - ZERODHA_REDIRECT_URL=${ZERODHA_REDIRECT_URL:-http://localhost:3000/auth/callback}
+      
+      # Security (REQUIRED - Generate strong random string)
+      - JWT_SECRET=${JWT_SECRET}
+      
+      # Redis Connection
+      - REDIS_URL=${REDIS_URL:-redis://redis:6379}
+      
+      # Market Configuration
+      - MARKET_SYMBOLS=${MARKET_SYMBOLS:-NIFTY 50,NIFTY BANK,SENSEX}
+      
+      # CORS Configuration (Update with your domain)
+      - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:3000,https://your-domain.com}
+      
+      # Environment
+      - ENVIRONMENT=${ENVIRONMENT:-production}
+      - ENABLE_SCHEDULER=${ENABLE_SCHEDULER:-true}
+      - PORT=8000
+    volumes:
+      # Persist access token across restarts
+      - ./backend/access_token.txt:/app/access_token.txt
+      # Mount logs directory (optional)
+      - ./backend/logs:/app/logs
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "2"]
+
+  # Frontend Next.js Server
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: trading-frontend
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      # Backend API URL (Update with your domain)
+      - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+      
+      # WebSocket URL (Update with your domain)
+      - NEXT_PUBLIC_WS_URL=${NEXT_PUBLIC_WS_URL:-ws://localhost:8000/ws/market}
+      
+      # Market Symbols (must match backend)
+      - NEXT_PUBLIC_MARKET_SYMBOLS=${NEXT_PUBLIC_MARKET_SYMBOLS:-NIFTY 50,NIFTY BANK,SENSEX}
+      
+      # Environment
+      - NODE_ENV=production
+    depends_on:
+      - backend
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+# Docker Networks
+networks:
+  default:
+    name: trading-network
+
+# Persistent Volumes
+volumes:
+  redis-data:

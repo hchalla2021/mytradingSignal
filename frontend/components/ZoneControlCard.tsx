@@ -25,12 +25,14 @@ interface ZoneControlData {
       distance_pct: number | null;
       strength: number;
       touches: number;
+      zone_label?: string;
     };
     resistance: {
       level: number | null;
       distance_pct: number | null;
       strength: number;
       touches: number;
+      zone_label?: string;
     };
   };
   // 🔥 Top-level risk fields (NEW API structure)
@@ -70,26 +72,115 @@ const ZoneControlCard = memo<ZoneControlCardProps>(({ symbol, name }) => {
         if (!response.ok) throw new Error('Failed to fetch');
         const result = await response.json();
         
-        // 🔍 DETAILED LOGGING for debugging
-        console.log(`[ZONE-CONTROL] ✅ Data received for ${symbol}:`, {
-          status: result.status,
-          signal: result.signal,
-          confidence: result.confidence,
-          current_price: result.current_price,
-          breakdown_risk: result.breakdown_risk,
-          bounce_probability: result.bounce_probability,
-          zone_strength: result.zone_strength,
-          support_level: result.nearest_zones?.support?.level,
-          resistance_level: result.nearest_zones?.resistance?.level,
-          candles_analyzed: result.candles_analyzed
+        // 🔍 DETAILED LOGGING - ALL SIGNAL LOGIC CHECKS
+        console.log(`[ZONE-CONTROL] 📊 COMPLETE DATA CHECK for ${symbol}:`, {
+          '1_SIGNAL_OUTPUT': {
+            signal: result.signal,
+            confidence: result.confidence,
+            recommendation: result.recommendation,
+            '✅_displaying': result.signal ? 'YES' : '❌ MISSING'
+          },
+          '2_RISK_METRICS': {
+            breakdown_risk: result.breakdown_risk,
+            bounce_probability: result.bounce_probability,
+            zone_strength: result.zone_strength,
+            '✅_values_present': (result.breakdown_risk !== undefined && result.bounce_probability !== undefined) ? 'YES' : '❌ MISSING'
+          },
+          '3_SUPPORT_ZONE': {
+            level: result.nearest_zones?.support?.level,
+            distance_pct: result.nearest_zones?.support?.distance_pct,
+            strength: result.nearest_zones?.support?.strength,
+            touches: result.nearest_zones?.support?.touches,
+            zone_label: result.nearest_zones?.support?.zone_label,
+            '✅_active': result.nearest_zones?.support?.level ? 'YES' : '❌ NO_SUPPORT'
+          },
+          '4_RESISTANCE_ZONE': {
+            level: result.nearest_zones?.resistance?.level,
+            distance_pct: result.nearest_zones?.resistance?.distance_pct,
+            strength: result.nearest_zones?.resistance?.strength,
+            touches: result.nearest_zones?.resistance?.touches,
+            zone_label: result.nearest_zones?.resistance?.zone_label,
+            '✅_active': result.nearest_zones?.resistance?.level ? 'YES' : '❌ NO_RESISTANCE'
+          },
+          '5_PRICE_INFO': {
+            current_price: result.current_price,
+            candles_analyzed: result.candles_analyzed,
+            status: result.status,
+            timestamp: result.timestamp
+          }
         });
         
-        // 🚨 ALERT if values are missing or zero
-        if (result.breakdown_risk === undefined) {
-          console.warn(`[ZONE-CONTROL] ⚠️ ${symbol} missing breakdown_risk!`, result);
+        // 🔥 SIGNAL LOGIC ANALYSIS - Why showing this signal?
+        console.log(`[ZONE-CONTROL] 🔍 SIGNAL DECISION ANALYSIS for ${symbol}:`, {
+          'Current_Signal': result.signal,
+          'Logic_Checks': {
+            '1_HIGH_BREAKDOWN_RISK': {
+              condition: 'breakdown_risk >= 60',
+              breakdown_risk: result.breakdown_risk,
+              passes: result.breakdown_risk >= 60 ? '✅ YES → SELL' : '❌ NO',
+              expected_signal: 'SELL'
+            },
+            '2_MODERATE_BREAKDOWN_RISK': {
+              condition: 'breakdown_risk >= 50 AND bounce_probability < 50',
+              breakdown_risk: result.breakdown_risk,
+              bounce_probability: result.bounce_probability,
+              passes: (result.breakdown_risk >= 50 && result.bounce_probability < 50) ? '✅ YES → SELL' : '❌ NO',
+              expected_signal: 'SELL'
+            },
+            '3_HIGH_BOUNCE_PROBABILITY': {
+              condition: 'bounce_probability >= 60 AND breakdown_risk < 40',
+              bounce_probability: result.bounce_probability,
+              breakdown_risk: result.breakdown_risk,
+              passes: (result.bounce_probability >= 60 && result.breakdown_risk < 40) ? '✅ YES → BUY' : '❌ NO',
+              expected_signal: 'BUY_ZONE'
+            },
+            '4_MODERATE_BOUNCE_PROBABILITY': {
+              condition: 'bounce_probability >= 50 AND breakdown_risk < 50',
+              bounce_probability: result.bounce_probability,
+              breakdown_risk: result.breakdown_risk,
+              passes: (result.bounce_probability >= 50 && result.breakdown_risk < 50) ? '✅ YES → BUY' : '❌ NO',
+              expected_signal: 'BUY_ZONE'
+            },
+            '5_NEAR_SUPPORT': {
+              condition: 'distance_to_support < 1.5% AND strength > 60',
+              distance: result.nearest_zones?.support?.distance_pct !== null ? Math.abs(result.nearest_zones.support.distance_pct) : 'NO_SUPPORT',
+              strength: result.nearest_zones?.support?.strength,
+              passes: (result.nearest_zones?.support?.distance_pct !== null && Math.abs(result.nearest_zones.support.distance_pct) < 1.5 && result.nearest_zones.support.strength > 60) ? '✅ YES → BUY' : '❌ NO',
+              expected_signal: 'BUY_ZONE'
+            },
+            '6_NEAR_RESISTANCE': {
+              condition: 'distance_to_resistance < 1.5% AND strength > 60',
+              distance: result.nearest_zones?.resistance?.distance_pct !== null ? Math.abs(result.nearest_zones.resistance.distance_pct) : 'NO_RESISTANCE',
+              strength: result.nearest_zones?.resistance?.strength,
+              passes: (result.nearest_zones?.resistance?.distance_pct !== null && Math.abs(result.nearest_zones.resistance.distance_pct) < 1.5 && result.nearest_zones.resistance.strength > 60) ? '✅ YES → SELL' : '❌ NO',
+              expected_signal: 'SELL_ZONE'
+            },
+            '7_DEFAULT_NEUTRAL': {
+              condition: 'No other conditions met',
+              passes: '✅ FALLBACK',
+              expected_signal: 'NEUTRAL'
+            }
+          }
+        });
+        
+        // 🚨 ALERT if critical values are missing
+        if (result.breakdown_risk === undefined || result.bounce_probability === undefined) {
+          console.error(`[ZONE-CONTROL] ❌ ${symbol} MISSING CRITICAL RISK METRICS:`, {
+            breakdown_risk: result.breakdown_risk !== undefined ? result.breakdown_risk : '❌ MISSING',
+            bounce_probability: result.bounce_probability !== undefined ? result.bounce_probability : '❌ MISSING',
+            full_response: result
+          });
         }
-        if (result.bounce_probability === undefined) {
-          console.warn(`[ZONE-CONTROL] ⚠️ ${symbol} missing bounce_probability!`, result);
+        
+        if (result.signal === 'NEUTRAL') {
+          console.warn(`[ZONE-CONTROL] ⚠️ ${symbol} showing NEUTRAL signal:`, {
+            reason: 'None of the BUY/SELL conditions were met',
+            breakdown_risk: result.breakdown_risk,
+            bounce_probability: result.bounce_probability,
+            support_distance: result.nearest_zones?.support?.distance_pct,
+            resistance_distance: result.nearest_zones?.resistance?.distance_pct,
+            suggestion: 'Check if risk values are in the middle range (40-60%) causing neutral state'
+          });
         }
         
         // Check for error statuses
@@ -257,139 +348,228 @@ const ZoneControlCard = memo<ZoneControlCardProps>(({ symbol, name }) => {
         </div>
       )}
 
-      {/* Current Price - Bold Display */}
-      <div className="mb-4 p-3 bg-gradient-to-br from-emerald-500/5 to-emerald-500/10 rounded-lg border border-emerald-500/20">
-        <p className="text-[10px] text-emerald-400 font-black mb-1">💰 CURRENT PRICE</p>
-        <p className="text-xl sm:text-2xl font-black text-white tracking-tight">{formatPrice(current_price)}</p>
+      {/* Current Price - Eye-Friendly Display */}
+      <div className="mb-4 p-4 bg-gradient-to-br from-slate-800/60 via-gray-800/50 to-slate-900/60 rounded-xl border border-slate-600/40 shadow-lg">
+        <div className="flex items-center justify-between mb-2">
+          <p className="text-xs text-slate-300 font-bold tracking-wider">CURRENT PRICE</p>
+          <div className="flex items-center gap-1">
+            {nearest_zones.support.distance_pct !== null && nearest_zones.support.distance_pct < 0 ? (
+              <span className="text-[9px] px-2 py-0.5 rounded-full bg-emerald-900/40 text-emerald-300 font-semibold">↑ Above Support</span>
+            ) : (
+              <span className="text-[9px] px-2 py-0.5 rounded-full bg-rose-900/40 text-rose-300 font-semibold">↓ Below Support</span>
+            )}
+          </div>
+        </div>
+        <p className="text-xl sm:text-2xl font-bold text-gray-100 tracking-tight mb-1">{formatPrice(current_price)}</p>
+        <div className="flex items-center gap-2 text-[10px]">
+          {nearest_zones.support.level && (
+            <span className="text-gray-400">Gap to Support: <span className="text-emerald-300 font-semibold">{Math.abs(nearest_zones.support.distance_pct || 0).toFixed(2)}%</span></span>
+          )}
+          {nearest_zones.resistance.level && (
+            <span className="text-gray-400">• Gap to Resistance: <span className="text-rose-300 font-semibold">{Math.abs(nearest_zones.resistance.distance_pct || 0).toFixed(2)}%</span></span>
+          )}
+        </div>
       </div>
 
       {/* Zone Information - Dual Panel */}
       <div className="grid grid-cols-2 gap-3 mb-4">
-        {/* Support Zone */}
-        <div className="bg-dark-bg rounded-lg p-3 border-2 border-emerald-500/30 shadow-sm shadow-emerald-500/10">
-          <div className="flex items-center gap-1.5 mb-2">
-            <Shield className="w-3.5 h-3.5 text-emerald-400" />
-            <p className="text-[9px] sm:text-[10px] text-emerald-400 font-black">SUPPORT</p>
+        {/* Support Zone - BUY SIDE - Eye Friendly */}
+        <div className="bg-gradient-to-br from-emerald-900/30 to-emerald-950/20 rounded-xl p-3 border border-emerald-700/30 shadow-lg">
+          <div className="flex items-center gap-2 mb-2">
+            <Shield className="w-4 h-4 text-emerald-400" />
+            <p className="text-xs text-emerald-200 font-bold tracking-wider">BUY ZONE</p>
+            {nearest_zones.support.zone_label && (
+              <span className="text-[8px] px-1.5 py-0.5 rounded-full bg-emerald-800/40 text-emerald-200 font-semibold ml-auto">
+                {nearest_zones.support.zone_label}
+              </span>
+            )}
           </div>
           {nearest_zones.support.level !== null ? (
             <>
-              <p className="text-base sm:text-lg font-black text-emerald-400 mb-1">
+              <p className="text-lg sm:text-xl font-bold text-emerald-300 mb-3 tracking-tight">
                 {formatPrice(nearest_zones.support.level)}
               </p>
-              <div className="space-y-1">
-                <div className="flex justify-between items-center">
-                  <span className="text-[9px] text-dark-muted font-bold">Distance</span>
-                  <span className="text-xs sm:text-sm font-extrabold text-white">
+              <div className="space-y-2">
+                <div className="flex justify-between items-center bg-black/30 rounded-lg px-2 py-1.5">
+                  <span className="text-xs text-emerald-100 font-semibold">Distance</span>
+                  <span className="text-sm font-semibold text-gray-100">
                     {Math.abs(nearest_zones.support.distance_pct || 0).toFixed(2)}%
                   </span>
                 </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-[9px] text-dark-muted font-bold">Strength</span>
-                  <span className="text-xs sm:text-sm font-extrabold text-emerald-400">
-                    {nearest_zones.support.strength}
-                  </span>
+                <div className="flex justify-between items-center bg-black/30 rounded-lg px-2 py-1.5">
+                  <span className="text-xs text-emerald-100 font-semibold">Reliability</span>
+                  <div className="flex items-center gap-2">
+                    <div className="w-12 bg-gray-700/60 rounded-full h-1.5">
+                      <div className={`h-full rounded-full ${
+                        nearest_zones.support.strength >= 70 ? 'bg-emerald-400' :
+                        nearest_zones.support.strength >= 50 ? 'bg-amber-400' : 'bg-gray-400'
+                      }`} style={{ width: `${nearest_zones.support.strength}%` }}></div>
+                    </div>
+                    <span className="text-sm font-semibold text-gray-100">
+                      {nearest_zones.support.strength}%
+                    </span>
+                  </div>
                 </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-[9px] text-dark-muted font-bold">Touches</span>
-                  <span className="text-xs sm:text-sm font-extrabold text-white">
-                    {nearest_zones.support.touches}x
-                  </span>
+                <div className="text-center text-xs text-emerald-200 font-semibold bg-emerald-900/30 rounded-lg py-1">
+                  Tested {nearest_zones.support.touches}x • {nearest_zones.support.strength >= 70 ? 'Strong' : nearest_zones.support.strength >= 50 ? 'Moderate' : 'Weak'}
                 </div>
               </div>
             </>
           ) : (
-            <p className="text-xs text-dark-muted font-semibold">No active support</p>
+            <p className="text-xs text-gray-400 font-semibold">No support zone</p>
           )}
         </div>
 
-        {/* Resistance Zone */}
-        <div className="bg-dark-bg rounded-lg p-3 border-2 border-emerald-500/30 shadow-sm shadow-emerald-500/10">
-          <div className="flex items-center gap-1.5 mb-2">
-            <AlertOctagon className="w-3.5 h-3.5 text-rose-400" />
-            <p className="text-[9px] sm:text-[10px] text-rose-400 font-black">RESISTANCE</p>
+        {/* Resistance Zone - SELL SIDE - Eye Friendly */}
+        <div className="bg-gradient-to-br from-rose-900/30 to-rose-950/20 rounded-xl p-3 border border-rose-700/30 shadow-lg">
+          <div className="flex items-center gap-2 mb-2">
+            <AlertOctagon className="w-4 h-4 text-rose-400" />
+            <p className="text-xs text-rose-200 font-bold tracking-wider">SELL ZONE</p>
+            {nearest_zones.resistance.zone_label && (
+              <span className="text-[8px] px-1.5 py-0.5 rounded-full bg-rose-800/40 text-rose-200 font-semibold ml-auto">
+                {nearest_zones.resistance.zone_label}
+              </span>
+            )}
           </div>
           {nearest_zones.resistance.level !== null ? (
             <>
-              <p className="text-base sm:text-lg font-black text-rose-400 mb-1">
+              <p className="text-lg sm:text-xl font-bold text-rose-300 mb-3 tracking-tight">
                 {formatPrice(nearest_zones.resistance.level)}
               </p>
-              <div className="space-y-1">
-                <div className="flex justify-between items-center">
-                  <span className="text-[9px] text-dark-muted font-bold">Distance</span>
-                  <span className="text-xs sm:text-sm font-extrabold text-white">
+              <div className="space-y-2">
+                <div className="flex justify-between items-center bg-black/30 rounded-lg px-2 py-1.5">
+                  <span className="text-xs text-rose-100 font-semibold">Distance</span>
+                  <span className="text-sm font-semibold text-gray-100">
                     {Math.abs(nearest_zones.resistance.distance_pct || 0).toFixed(2)}%
                   </span>
                 </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-[9px] text-dark-muted font-bold">Strength</span>
-                  <span className="text-xs sm:text-sm font-extrabold text-rose-400">
-                    {nearest_zones.resistance.strength}
-                  </span>
+                <div className="flex justify-between items-center bg-black/30 rounded-lg px-2 py-1.5">
+                  <span className="text-xs text-rose-100 font-semibold">Reliability</span>
+                  <div className="flex items-center gap-2">
+                    <div className="w-12 bg-gray-700/60 rounded-full h-1.5">
+                      <div className={`h-full rounded-full ${
+                        nearest_zones.resistance.strength >= 70 ? 'bg-rose-400' :
+                        nearest_zones.resistance.strength >= 50 ? 'bg-amber-400' : 'bg-gray-400'
+                      }`} style={{ width: `${nearest_zones.resistance.strength}%` }}></div>
+                    </div>
+                    <span className="text-sm font-semibold text-gray-100">
+                      {nearest_zones.resistance.strength}%
+                    </span>
+                  </div>
                 </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-[9px] text-dark-muted font-bold">Touches</span>
-                  <span className="text-xs sm:text-sm font-extrabold text-white">
-                    {nearest_zones.resistance.touches}x
-                  </span>
+                <div className="text-center text-xs text-rose-200 font-semibold bg-rose-900/30 rounded-lg py-1">
+                  Tested {nearest_zones.resistance.touches}x • {nearest_zones.resistance.strength >= 70 ? 'Strong' : nearest_zones.resistance.strength >= 50 ? 'Moderate' : 'Weak'}
                 </div>
               </div>
             </>
           ) : (
-            <p className="text-xs text-dark-muted font-semibold">No active resistance</p>
+            <p className="text-xs text-gray-400 font-semibold">No resistance zone</p>
           )}
         </div>
       </div>
 
-      {/* Risk Metrics - Triple Display */}
-      <div className="grid grid-cols-3 gap-2 mb-3 p-3 bg-gradient-to-r from-emerald-500/5 via-amber-500/5 to-rose-500/5 rounded-lg border border-emerald-500/20">
-        <div className="text-center">
-          <div className="flex items-center justify-center gap-1 mb-1">
-            <TrendingDown className={`w-3 h-3 ${getRiskColor(breakdown_risk)}`} />
-            <p className="text-[8px] sm:text-[9px] text-dark-muted font-black">BREAKDOWN</p>
-          </div>
-          <p className={`text-sm sm:text-base font-black ${getRiskColor(breakdown_risk)}`}>
-            {breakdown_risk}%
-          </p>
-        </div>
-
-        <div className="text-center border-x border-emerald-500/20">
-          <div className="flex items-center justify-center gap-1 mb-1">
-            <TrendingUp className={`w-3 h-3 ${getBounceColor(bounce_probability)}`} />
-            <p className="text-[8px] sm:text-[9px] text-dark-muted font-black">BOUNCE</p>
-          </div>
-          <p className={`text-sm sm:text-base font-black ${getBounceColor(bounce_probability)}`}>
-            {bounce_probability}%
-          </p>
-        </div>
-
-        <div className="text-center">
-          <p className="text-[8px] sm:text-[9px] text-dark-muted font-black mb-1">ZONE</p>
-          <p className={`text-xs sm:text-sm font-black ${getZoneStrengthColor(zone_strength)}`}>
-            {zone_strength}
-          </p>
-        </div>
-      </div>
-
-      {/* Bottom Stats with Confidence */}
-      <div className="flex items-center justify-between pt-3 border-t border-emerald-500/20">
-        <div>
-          <p className="text-[9px] text-emerald-400 font-black mb-0.5">CONFIDENCE</p>
-          <div className="flex items-center gap-2">
-            <p className="text-base font-black text-white">{confidence}%</p>
-            <div className="w-16 bg-dark-border rounded-full h-1.5 overflow-hidden">
+      {/* Risk Analysis - Eye-Friendly Colors */}
+      <div className="mb-4 p-4 bg-gradient-to-br from-slate-800/40 to-slate-900/40 rounded-xl border border-slate-600/30 shadow-lg">
+        <p className="text-xs text-slate-300 font-bold tracking-wider mb-3 text-center">⚡ RISK CHECK</p>
+        
+        <div className="grid grid-cols-2 gap-4 mb-3">
+          {/* Breakdown Risk */}
+          <div className="bg-gradient-to-br from-rose-900/20 to-rose-950/10 rounded-lg p-3 border border-rose-800/30">
+            <div className="flex items-center justify-between mb-2">
+              <div className="flex items-center gap-1">
+                <TrendingDown className="w-4 h-4 text-rose-300" />
+                <span className="text-[10px] text-rose-200 font-bold">BREAK RISK</span>
+              </div>
+              <span className={`text-[9px] px-2 py-0.5 rounded-full font-semibold ${
+                breakdown_risk >= 70 ? 'bg-rose-900/50 text-rose-200' :
+                breakdown_risk >= 50 ? 'bg-amber-900/50 text-amber-200' :
+                'bg-emerald-900/50 text-emerald-200'
+              }`}>
+                {breakdown_risk >= 70 ? 'HIGH' : breakdown_risk >= 50 ? 'MEDIUM' : 'LOW'}
+              </span>
+            </div>
+            <p className={`text-xl font-bold ${getRiskColor(breakdown_risk)}`}>
+              {breakdown_risk}%
+            </p>
+            <div className="mt-2 w-full bg-gray-700/50 rounded-full h-1.5 overflow-hidden">
               <div
-                className={`h-full ${confidence >= 70 ? 'bg-emerald-500' : confidence >= 50 ? 'bg-amber-500' : 'bg-rose-500'}`}
-                style={{ width: `${confidence}%` }}
+                className={`h-full transition-all ${
+                  breakdown_risk >= 70 ? 'bg-rose-400' :
+                  breakdown_risk >= 50 ? 'bg-amber-400' : 'bg-emerald-400'
+                }`}
+                style={{ width: `${breakdown_risk}%` }}
+              ></div>
+            </div>
+          </div>
+
+          {/* Bounce Probability */}
+          <div className="bg-gradient-to-br from-emerald-900/20 to-emerald-950/10 rounded-lg p-3 border border-emerald-800/30">
+            <div className="flex items-center justify-between mb-2">
+              <div className="flex items-center gap-1">
+                <TrendingUp className="w-4 h-4 text-emerald-300" />
+                <span className="text-[10px] text-emerald-200 font-bold">BOUNCE UP</span>
+              </div>
+              <span className={`text-[9px] px-2 py-0.5 rounded-full font-semibold ${
+                bounce_probability >= 70 ? 'bg-emerald-900/50 text-emerald-200' :
+                bounce_probability >= 50 ? 'bg-amber-900/50 text-amber-200' :
+                'bg-rose-900/50 text-rose-200'
+              }`}>
+                {bounce_probability >= 70 ? 'HIGH' : bounce_probability >= 50 ? 'MEDIUM' : 'LOW'}
+              </span>
+            </div>
+            <p className={`text-xl font-bold ${getBounceColor(bounce_probability)}`}>
+              {bounce_probability}%
+            </p>
+            <div className="mt-2 w-full bg-gray-700/50 rounded-full h-1.5 overflow-hidden">
+              <div
+                className={`h-full transition-all ${
+                  bounce_probability >= 70 ? 'bg-emerald-400' :
+                  bounce_probability >= 50 ? 'bg-amber-400' : 'bg-rose-400'
+                }`}
+                style={{ width: `${bounce_probability}%` }}
               ></div>
             </div>
           </div>
         </div>
-        <div className="text-right max-w-[60%]">
-          <p className="text-[8px] text-dark-muted font-black mb-0.5">RECOMMENDATION</p>
-          <p className="text-[9px] font-bold text-emerald-400 line-clamp-2">
-            {recommendation}
-          </p>
+
+        {/* Zone Health Summary */}
+        <div className={`text-center py-2 rounded-lg font-semibold text-sm ${
+          zone_strength === 'STRONG' ? 'bg-emerald-900/30 text-emerald-200 border border-emerald-800/40' :
+          zone_strength === 'MODERATE' ? 'bg-amber-900/30 text-amber-200 border border-amber-800/40' :
+          'bg-rose-900/30 text-rose-200 border border-rose-800/40'
+        }`}>
+          Zone Quality: {zone_strength === 'STRONG' ? '💪 STRONG' : zone_strength === 'MODERATE' ? '⚠️ MODERATE' : '❌ WEAK'}
         </div>
+      </div>
+
+      {/* Trading Action - Comfortable for Eyes */}
+      <div className="bg-gradient-to-r from-slate-800/40 to-slate-900/40 rounded-lg p-3 border border-slate-600/30">
+        <div className="flex items-center justify-between mb-2">
+          <div className="flex items-center gap-2">
+            <div className="w-2 h-2 rounded-full bg-blue-400 animate-pulse"></div>
+            <p className="text-[10px] text-slate-300 font-bold tracking-wider">TRADING ADVICE</p>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-[9px] text-gray-400 font-semibold">Confidence:</span>
+            <div className="flex items-center gap-1">
+              <div className="w-12 bg-gray-700/50 rounded-full h-1.5">
+                <div
+                  className={`h-full rounded-full ${confidence >= 70 ? 'bg-emerald-400' : confidence >= 50 ? 'bg-amber-400' : 'bg-rose-400'}`}
+                  style={{ width: `${confidence}%` }}
+                ></div>
+              </div>
+              <span className={`text-sm font-semibold ${
+                confidence >= 70 ? 'text-emerald-300' :
+                confidence >= 50 ? 'text-amber-300' : 'text-rose-300'
+              }`}>
+                {confidence}%
+              </span>
+            </div>
+          </div>
+        </div>
+        <p className="text-xs font-semibold text-gray-200 leading-relaxed">
+          {recommendation}
+        </p>
       </div>
     </div>
   );

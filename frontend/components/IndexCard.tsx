@@ -249,79 +249,108 @@ const IndexCard = ({ symbol, name, data, isConnected, aiAlertData, outlookData }
         {getStatusBadge()}
       </div>
 
-      {/* Overall Market Outlook - Aggregated Analysis */}
+      {/* Overall Market Outlook - SUPER SIMPLE FOR TRADERS */}
       {outlookData && (
-        <div className="mb-3 p-2.5 bg-gradient-to-br from-emerald-950/30 to-dark-surface/50 rounded-lg border border-emerald-500/30">
-          {/* Header with Risk Badge */}
-          <div className="flex items-center justify-between gap-2 mb-1.5">
-            <span className="text-[10px] font-bold text-emerald-400 uppercase tracking-wide">📊 Market Outlook</span>
+        <div className="mb-3 p-3 bg-gradient-to-br from-slate-900/60 to-slate-800/40 rounded-xl border-2 border-slate-600/40 shadow-lg">
+          
+          {/* 🎯 BIG DECISION BOX - CAN I TRADE? */}
+          <div className={`mb-3 p-3 rounded-xl border-2 text-center ${
+            (outlookData.overallSignal === 'STRONG_BUY' || outlookData.overallSignal === 'BUY') && outlookData.overallConfidence >= 60 && outlookData.riskLevel !== 'HIGH'
+              ? 'bg-emerald-500/20 border-emerald-400'
+              : outlookData.overallSignal === 'NEUTRAL' || outlookData.overallConfidence < 60 || (outlookData.overallSignal === 'BUY' && outlookData.riskLevel === 'HIGH')
+              ? 'bg-amber-500/20 border-amber-400'
+              : 'bg-rose-500/20 border-rose-400'
+          }`}>
+            <div className="text-2xl mb-1">
+              {(outlookData.overallSignal === 'STRONG_BUY' || outlookData.overallSignal === 'BUY') && outlookData.overallConfidence >= 60 && outlookData.riskLevel !== 'HIGH'
+                ? '✅'
+                : outlookData.overallSignal === 'NEUTRAL' || outlookData.overallConfidence < 60 || (outlookData.overallSignal === 'BUY' && outlookData.riskLevel === 'HIGH')
+                ? '⏸️'
+                : '❌'}
+            </div>
+            <div className={`text-lg font-black tracking-wide ${
+              (outlookData.overallSignal === 'STRONG_BUY' || outlookData.overallSignal === 'BUY') && outlookData.overallConfidence >= 60 && outlookData.riskLevel !== 'HIGH'
+                ? 'text-emerald-200'
+                : outlookData.overallSignal === 'NEUTRAL' || outlookData.overallConfidence < 60 || (outlookData.overallSignal === 'BUY' && outlookData.riskLevel === 'HIGH')
+                ? 'text-amber-200'
+                : 'text-rose-200'
+            }`}>
+              {(outlookData.overallSignal === 'STRONG_BUY' || outlookData.overallSignal === 'BUY') && outlookData.overallConfidence >= 60 && outlookData.riskLevel !== 'HIGH'
+                ? 'YES - TAKE TRADE'
+                : outlookData.overallSignal === 'NEUTRAL' || outlookData.overallConfidence < 60 || (outlookData.overallSignal === 'BUY' && outlookData.riskLevel === 'HIGH')
+                ? 'WAIT - NOT SURE'
+                : 'NO - DON\'T TRADE'}
+            </div>
+            <div className="text-[9px] text-slate-300 mt-1">
+              {(outlookData.overallSignal === 'STRONG_BUY' || outlookData.overallSignal === 'BUY') && outlookData.overallConfidence >= 60 && outlookData.riskLevel !== 'HIGH'
+                ? 'Good opportunity to enter'
+                : outlookData.overallSignal === 'NEUTRAL' || outlookData.overallConfidence < 60
+                ? 'Not enough signals to trade'
+                : (outlookData.overallSignal === 'BUY' && outlookData.riskLevel === 'HIGH')
+                ? 'Too risky to trade now'
+                : 'Market going down - avoid'}
+            </div>
+          </div>
+
+          {/* Signal Strength - Visual bars */}
+          <div className="flex items-center justify-between mb-2 pb-2 border-b border-slate-600/30">
+            <span className="text-[10px] text-slate-400">Signal Strength:</span>
             <div className="flex items-center gap-1">
-              <span className={`px-1.5 py-0.5 text-[9px] font-bold rounded border ${
-                outlookData.riskLevel === 'LOW' 
-                  ? 'bg-green-950/30 text-green-400 border-green-500/50'
-                  : outlookData.riskLevel === 'HIGH'
-                  ? 'bg-red-950/30 text-red-400 border-red-500/50'
-                  : 'bg-yellow-950/30 text-yellow-400 border-yellow-500/50'
-              }`}>
-                {outlookData.riskLevel} RISK
-              </span>
-              <span className="text-[8px] text-gray-400">
-                ({outlookData.breakdownRiskPercent}% breakdown)
-              </span>
-            </div>
-          </div>
-          
-          {/* Signal and Confidence Row */}
-          <div className="flex items-center gap-2 mb-1">
-            <span className={`flex-1 px-2 py-1 text-[10px] font-bold rounded border text-center ${
-              outlookData.overallSignal === 'STRONG_BUY'
-                ? 'bg-green-950/30 text-green-300 border-green-500/60'
-                : outlookData.overallSignal === 'BUY'
-                ? 'bg-green-900/30 text-green-400 border-green-500/50'
-                : outlookData.overallSignal === 'STRONG_SELL'
-                ? 'bg-red-950/30 text-red-300 border-red-500/60'
-                : outlookData.overallSignal === 'SELL'
-                ? 'bg-red-900/30 text-red-400 border-red-500/50'
-                : 'bg-gray-900/30 text-gray-400 border-gray-500/50'
-            }`}>
-              {outlookData.overallSignal.replace('_', ' ')}
-            </span>
-            <div className="flex flex-col items-end">
-              <span className="text-sm font-bold text-emerald-300 bg-emerald-950/30 border border-emerald-500/40 rounded px-1.5 py-0.5">
-                {outlookData.overallConfidence}%
-              </span>
-              <span className="text-[7px] text-emerald-400/60 mt-0.5 whitespace-nowrap">Signal Strength</span>
-            </div>
-          </div>
-          
-          {/* Trade Recommendation with Visual Progress Bar */}
-          <div className="mt-1.5">
-            <p className={`text-[9px] leading-relaxed font-bold whitespace-pre-line ${
-              outlookData.tradeRecommendation.includes('WAIT') || outlookData.tradeRecommendation.includes('NEUTRAL')
-                ? 'text-gray-300'
-                : outlookData.tradeRecommendation.includes('BUY') || outlookData.tradeRecommendation.includes('BULLISH')
-                ? 'text-emerald-300'
-                : outlookData.tradeRecommendation.includes('SELL') || outlookData.tradeRecommendation.includes('BEARISH')
-                ? 'text-rose-300'
-                : 'text-white'
-            }`}>
-              {outlookData.tradeRecommendation.split('█')[0]}
-            </p>
-            {/* Visual Confidence Progress Bar */}
-            {outlookData.overallConfidence > 0 && (
-              <div className="mt-1.5 bg-gray-800/50 rounded-full h-1.5 overflow-hidden">
-                <div 
-                  className={`h-full rounded-full transition-all duration-500 ${
-                    outlookData.overallConfidence >= 70 
-                      ? 'bg-gradient-to-r from-green-500 to-emerald-400'
-                      : outlookData.overallConfidence >= 50
-                      ? 'bg-gradient-to-r from-yellow-500 to-amber-400'
-                      : 'bg-gradient-to-r from-orange-500 to-red-400'
+              {/* Visual strength bars instead of percentage */}
+              {[1, 2, 3, 4, 5].map((bar) => (
+                <div
+                  key={bar}
+                  className={`w-1.5 h-4 rounded-sm ${
+                    bar <= Math.ceil(outlookData.overallConfidence / 20)
+                      ? outlookData.overallConfidence >= 70
+                        ? 'bg-emerald-400'
+                        : outlookData.overallConfidence >= 50
+                        ? 'bg-amber-400'
+                        : 'bg-rose-400'
+                      : 'bg-slate-700'
                   }`}
-                  style={{ width: `${outlookData.overallConfidence}%` }}
                 />
-              </div>
-            )}
+              ))}
+              <span className="text-[10px] text-slate-300 ml-1 font-bold">
+                {outlookData.overallConfidence >= 80 ? 'Very Strong' :
+                 outlookData.overallConfidence >= 60 ? 'Strong' :
+                 outlookData.overallConfidence >= 40 ? 'Weak' :
+                 'Very Weak'}
+              </span>
+            </div>
+          </div>
+
+          {/* Market Direction - Simple icon + text */}
+          <div className="flex items-center justify-between">
+            <span className="text-[10px] text-slate-400">Market Direction:</span>
+            <div className="flex items-center gap-1.5">
+              <span className="text-lg">
+                {outlookData.overallSignal === 'STRONG_BUY' ? '🚀' :
+                 outlookData.overallSignal === 'BUY' ? '📈' :
+                 outlookData.overallSignal === 'STRONG_SELL' ? '🔻' :
+                 outlookData.overallSignal === 'SELL' ? '📉' :
+                 '➡️'}
+              </span>
+              <span className={`text-[11px] font-bold ${
+                outlookData.overallSignal === 'STRONG_BUY' ? 'text-emerald-300' :
+                outlookData.overallSignal === 'BUY' ? 'text-emerald-400' :
+                outlookData.overallSignal === 'STRONG_SELL' ? 'text-rose-300' :
+                outlookData.overallSignal === 'SELL' ? 'text-rose-400' :
+                'text-gray-400'
+              }`}>
+                {outlookData.overallSignal === 'STRONG_BUY' ? 'Going Up Fast' :
+                 outlookData.overallSignal === 'BUY' ? 'Going Up' :
+                 outlookData.overallSignal === 'STRONG_SELL' ? 'Going Down Fast' :
+                 outlookData.overallSignal === 'SELL' ? 'Going Down' :
+                 'Sideways'}
+              </span>
+              {/* Risk emoji only - no confusing text */}
+              <span className="text-base ml-1">
+                {outlookData.riskLevel === 'LOW' ? '🟢' :
+                 outlookData.riskLevel === 'MEDIUM' ? '🟡' :
+                 '🔴'}
+              </span>
+            </div>
           </div>
         </div>
       )}

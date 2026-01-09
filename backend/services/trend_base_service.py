@@ -369,11 +369,17 @@ class TrendBaseEngine:
         last_low: SwingPoint
     ) -> Tuple[str, int]:
         """
-        Generate trading signal based on structure
+        🔥 FIXED: Generate trading signal based on structure + current price action
         Returns: (signal, confidence)
         """
         current_price = float(recent_df.iloc[-1]['close'])
         confidence = 0
+        
+        # 🔥 NEW: Check current momentum (last 5 candles)
+        recent_5 = recent_df.tail(5)
+        price_change_pct = ((recent_5.iloc[-1]['close'] - recent_5.iloc[0]['open']) / recent_5.iloc[0]['open']) * 100
+        is_falling = price_change_pct < -0.3  # Falling more than 0.3% in last 5 candles
+        is_rising = price_change_pct > 0.3    # Rising more than 0.3%
         
         # === STRONG BUY (Higher-Low structure + near support) ===
         if structure == "HIGHER-HIGH-HIGHER-LOW" and integrity_score >= 65:
@@ -392,18 +398,38 @@ class TrendBaseEngine:
         
         # === MODERATE BUY (Lower threshold for better detection) ===
         elif structure == "HIGHER-HIGH-HIGHER-LOW" and integrity_score >= self._signal_threshold:
-            signal = "BUY"
-            confidence = integrity_score
+            # 🔥 NEW: Override to NEUTRAL if market is actively falling
+            if is_falling:
+                signal = "NEUTRAL"
+                confidence = 40
+            else:
+                signal = "BUY"
+                confidence = integrity_score
         
-        # === STRONG SELL (Lower-Low structure breakdown) ===
-        elif structure == "LOWER-HIGH-LOWER-LOW" and integrity_score <= 25:
+        # === 🔥 IMPROVED SELL DETECTION ===
+        # STRONG SELL (Clear downtrend structure)
+        elif structure == "LOWER-HIGH-LOWER-LOW" and integrity_score <= 35:  # Was 25, now 35 for earlier detection
             signal = "SELL"
-            confidence = min(100 - integrity_score, 95)
+            # Boost confidence if price is actively falling
+            base_confidence = 100 - integrity_score
+            if is_falling:
+                confidence = min(base_confidence + 15, 95)
+            else:
+                confidence = min(base_confidence, 90)
         
-        # === MODERATE SELL ===
-        elif structure == "LOWER-HIGH-LOWER-LOW" and integrity_score <= (100 - self._signal_threshold):
+        # MODERATE SELL (Bearish structure forming)
+        elif structure == "LOWER-HIGH-LOWER-LOW" and integrity_score <= 48:  # Was 50, now 48 for sensitivity
             signal = "SELL"
-            confidence = 100 - integrity_score
+            base_confidence = 100 - integrity_score
+            if is_falling:
+                confidence = min(base_confidence + 10, 85)
+            else:
+                confidence = base_confidence
+        
+        # 🔥 NEW: SELL on mixed patterns if market is falling hard
+        elif (structure in ["HIGHER-HIGH-LOWER-LOW", "MIXED"]) and is_falling and integrity_score < 50:
+            signal = "SELL"
+            confidence = 60 if structure == "HIGHER-HIGH-LOWER-LOW" else 45
         
         # === NEUTRAL ===
         else:
@@ -413,13 +439,16 @@ class TrendBaseEngine:
         return signal, confidence
     
     def _classify_trend(self, structure: str, integrity_score: int) -> str:
-        """Classify overall trend - More responsive thresholds for real trading"""
-        # If clear bullish structure detected (even with moderate integrity), it's UPTREND
+        """🔥 FIXED: Classify overall trend - More responsive to actual market movements"""
+        # If clear bullish structure detected
         if "HIGHER-HIGH-HIGHER-LOW" in structure and integrity_score >= 52:
             return "UPTREND"
-        # If clear bearish structure detected
-        elif "LOWER-HIGH-LOWER-LOW" in structure and integrity_score <= 48:
+        # 🔥 IMPROVED: More sensitive to downtrends (was <= 48, now <= 50)
+        elif "LOWER-HIGH-LOWER-LOW" in structure and integrity_score <= 50:
             return "DOWNTREND"
+        # 🔥 NEW: Weakening patterns are also DOWNTREND
+        elif "HIGHER-HIGH-LOWER-LOW" in structure and integrity_score < 48:
+            return "DOWNTREND"  # Topping pattern = start of downtrend
         # Mixed signals or weak structure
         else:
             return "SIDEWAYS"

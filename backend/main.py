@@ -39,6 +39,37 @@ async def lifespan(app: FastAPI):
     global market_feed
 
     print("⚡ FastAPI starting...")
+    
+    # 🔒 PRODUCTION VALIDATION
+    if settings.is_production:
+        print("\n🔍 Running production environment checks...")
+        
+        # Check critical environment variables
+        validation_errors = []
+        
+        if not settings.zerodha_api_key:
+            validation_errors.append("❌ ZERODHA_API_KEY is not set")
+        
+        if not settings.zerodha_api_secret:
+            validation_errors.append("❌ ZERODHA_API_SECRET is not set")
+        
+        if not settings.jwt_secret or settings.jwt_secret == "change-this-in-production":
+            validation_errors.append("❌ JWT_SECRET is not set or using default value")
+        
+        if not settings.redis_url:
+            validation_errors.append("⚠️  REDIS_URL not set - using in-memory cache (not recommended for production)")
+        
+        if validation_errors:
+            print("\n🚨 PRODUCTION CONFIGURATION ERRORS:")
+            for error in validation_errors:
+                print(f"   {error}")
+            print("\n💡 Set required environment variables before deploying to production")
+            print("   See docs/ENVIRONMENT_SETUP.md for details\n")
+            # Don't crash in production - let it start but warn heavily
+        else:
+            print("✅ Production environment configuration valid")
+    
+    print("\n🚀 Starting services...")
 
     # Auto update futures on startup
     from services.auto_futures_updater import check_and_update_futures_on_startup

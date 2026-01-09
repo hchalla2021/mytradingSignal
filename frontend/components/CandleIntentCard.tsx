@@ -88,6 +88,19 @@ const CandleIntentCard = memo<CandleIntentCardProps>(({ symbol, name }) => {
         if (!response.ok) throw new Error('Failed to fetch');
         const result = await response.json();
         
+        console.log(`[CANDLE-INTENT] ${symbol} DATA:`, {
+          signal: result.professional_signal,
+          pattern: result.pattern?.type,
+          intent: result.pattern?.intent,
+          confidence: result.pattern?.confidence,
+          volume: result.volume_analysis?.volume,
+          efficiency: result.volume_analysis?.efficiency,
+          wick_upper: result.wick_analysis?.upper_wick_pct,
+          wick_lower: result.wick_analysis?.lower_wick_pct,
+          body_type: result.body_analysis?.body_type,
+          body_ratio: result.body_analysis?.body_ratio_pct
+        });
+        
         // Check for error statuses
         if (result.status === 'TOKEN_EXPIRED' || result.status === 'ERROR' || result.error) {
           setError(result.message || result.error || 'Token expired - Please login');
@@ -223,8 +236,13 @@ const CandleIntentCard = memo<CandleIntentCardProps>(({ symbol, name }) => {
           </div>
         </div>
         <div className="bg-gray-800/20 rounded-lg p-2 border border-emerald-400/25 hover:border-emerald-400/35 transition-all">
-          <div className="text-gray-400 text-[10px]">Range</div>
-          <div className="text-white font-bold">₹{data.current_candle?.range?.toFixed(2) || '0.00'}</div>
+          <div className="text-gray-400 text-[10px]">Volume</div>
+          <div className={`font-bold ${
+            (data.volume_analysis?.volume_ratio || 0) >= 2 ? 'text-emerald-400' :
+            (data.volume_analysis?.volume_ratio || 0) >= 1 ? 'text-cyan-400' : 'text-gray-400'
+          }`}>
+            {((data.volume_analysis?.volume || 0) / 1000).toFixed(0)}K
+          </div>
         </div>
       </div>
 
@@ -311,6 +329,31 @@ const CandleIntentCard = memo<CandleIntentCardProps>(({ symbol, name }) => {
             {data.volume_analysis?.efficiency?.replace('_', ' ') || 'N/A'}
           </div>
           <div className="text-xs text-gray-300 font-semibold">{data.volume_analysis?.volume_ratio?.toFixed(2) || '0.00'}x avg</div>
+        </div>
+      </div>
+
+      {/* Volume Details */}
+      <div className="bg-gray-800/20 rounded-lg p-3 mb-4 border border-emerald-400/25 hover:border-emerald-400/35 transition-all">
+        <div className="text-xs text-emerald-400 mb-2 font-bold">Volume Analysis</div>
+        <div className="grid grid-cols-3 gap-3 text-xs">
+          <div>
+            <div className="text-gray-400 mb-1">Current</div>
+            <div className="text-white font-bold">{((data.volume_analysis?.volume || 0) / 1000).toFixed(0)}K</div>
+          </div>
+          <div>
+            <div className="text-gray-400 mb-1">Average</div>
+            <div className="text-gray-300 font-bold">{((data.volume_analysis?.avg_volume || 0) / 1000).toFixed(0)}K</div>
+          </div>
+          <div>
+            <div className="text-gray-400 mb-1">Type</div>
+            <div className={`font-bold ${
+              data.volume_analysis?.volume_type === 'VERY_HIGH' ? 'text-emerald-400' :
+              data.volume_analysis?.volume_type === 'HIGH' ? 'text-cyan-400' :
+              data.volume_analysis?.volume_type === 'LOW' ? 'text-amber-400' : 'text-gray-400'
+            }`}>
+              {data.volume_analysis?.volume_type?.replace('_', ' ') || 'N/A'}
+            </div>
+          </div>
         </div>
       </div>
 

@@ -198,7 +198,8 @@ class EarlyWarningEngine:
         # Volume-weighted momentum (stronger if volume increases)
         avg_volume = np.mean(volumes[-10:])
         current_volume = volumes[-1]
-        volume_weight = min(current_volume / avg_volume, 2.0)  # Cap at 2x
+        # 🛡️ SAFE DIVISION: Prevent division by zero
+        volume_weight = min(current_volume / avg_volume, 2.0) if avg_volume > 0 else 1.0  # Cap at 2x
         
         weighted_momentum = abs(recent_momentum) * volume_weight
         
@@ -373,10 +374,10 @@ class EarlyWarningEngine:
         
         checks = {}
         
-        # FILTER 1: Volume Confirmation
+        # FILTER 1: Volume Confirmation (RELAXED THRESHOLD)
         volume_ratio = volume['volume_ratio']
-        print(f"   Filter 1 - Volume: {volume_ratio:.2f}x (need ≥1.2x)")
-        if volume_ratio >= 1.2:  # At least 1.2x volume
+        print(f"   Filter 1 - Volume: {volume_ratio:.2f}x (need ≥1.0x)")
+        if volume_ratio >= 1.0:  # At least normal volume
             checks['volume_confirmed'] = True
             filters_passed += 1
             print(f"      ✅ PASS")
@@ -384,10 +385,10 @@ class EarlyWarningEngine:
             checks['volume_confirmed'] = False
             print(f"      ❌ FAIL")
         
-        # FILTER 2: Momentum Consistency
+        # FILTER 2: Momentum Consistency (RELAXED THRESHOLD)
         consistency = momentum['consistency_strength']
-        print(f"   Filter 2 - Momentum: {consistency:.0f}% (need ≥66%)")
-        if consistency >= 66:  # 2/3 candles aligned
+        print(f"   Filter 2 - Momentum: {consistency:.0f}% (need ≥50%)")
+        if consistency >= 50:  # Half of candles aligned
             checks['momentum_consistent'] = True
             filters_passed += 1
             print(f"      ✅ PASS")
@@ -404,10 +405,10 @@ class EarlyWarningEngine:
         recent_low = np.min(lows[-10:])
         current_price = closes[-1]
         
-        # Near resistance (within 1%)
-        near_resistance = (recent_high - current_price) / recent_high < 0.01
-        # Near support (within 1%)
-        near_support = (current_price - recent_low) / current_price < 0.01
+        # Near resistance (within 2% - RELAXED)
+        near_resistance = (recent_high - current_price) / recent_high < 0.02
+        # Near support (within 2% - RELAXED)
+        near_support = (current_price - recent_low) / current_price < 0.02
         
         print(f"   Filter 3 - Zone: current={current_price:.2f}, high={recent_high:.2f}, low={recent_low:.2f}")
         if near_resistance or near_support:
@@ -451,20 +452,20 @@ class EarlyWarningEngine:
             checks['signals_aligned'] = False
             print(f"      ❌ FAIL")
         
-        # Calculate fake signal risk
+        # Calculate fake signal risk (LESS AGGRESSIVE THRESHOLDS)
         pass_rate = filters_passed / total_filters
         
         print(f"\n   📊 VALIDATION RESULT: {filters_passed}/{total_filters} filters passed ({pass_rate:.0%})")
         
-        if pass_rate >= 0.8:  # 4/5 filters passed
+        if pass_rate >= 0.6:  # 3/5 filters passed
             fake_risk = 'LOW'
-            print(f"   ✅ FAKE SIGNAL RISK: LOW (pass rate {pass_rate:.0%} >= 80%)")
-        elif pass_rate >= 0.6:  # 3/5 filters passed
+            print(f"   ✅ FAKE SIGNAL RISK: LOW (pass rate {pass_rate:.0%} >= 60%)")
+        elif pass_rate >= 0.4:  # 2/5 filters passed
             fake_risk = 'MEDIUM'
-            print(f"   ⚠️ FAKE SIGNAL RISK: MEDIUM (pass rate {pass_rate:.0%} >= 60%)")
+            print(f"   ⚠️ FAKE SIGNAL RISK: MEDIUM (pass rate {pass_rate:.0%} >= 40%)")
         else:
             fake_risk = 'HIGH'
-            print(f"   🔴 FAKE SIGNAL RISK: HIGH (pass rate {pass_rate:.0%} < 60%)")
+            print(f"   🔴 FAKE SIGNAL RISK: HIGH (pass rate {pass_rate:.0%} < 40%)")
         
         return {
             'checks': checks,

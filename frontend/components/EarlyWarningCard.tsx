@@ -266,7 +266,11 @@ const EarlyWarningCard: React.FC<EarlyWarningCardProps> = ({ symbol }) => {
       </div>
 
       {/* Main Signal Card */}
-      <div className={`rounded-xl p-5 mb-4 border-2 backdrop-blur-sm border-emerald-400/25 ${getSignalBg()}`}>
+      <div className={`rounded-xl p-5 mb-4 border-2 backdrop-blur-sm ${
+        data.signal === 'WAIT' 
+          ? 'border-amber-400/30 bg-gradient-to-br from-amber-900/10 to-gray-800/20' 
+          : 'border-emerald-400/25 ' + getSignalBg()
+      }`}>
         <div className="flex items-center justify-between">
           <div>
             <div className="text-xs text-gray-400 mb-1">
@@ -275,14 +279,32 @@ const EarlyWarningCard: React.FC<EarlyWarningCardProps> = ({ symbol }) => {
             <div className={`px-3 py-1.5 rounded-lg text-sm font-bold border-2 inline-block ${getSignalBorderStyle()}`}>
               {(data.signal || 'WAIT').replace('_', ' ')}
             </div>
+            {data.signal === 'WAIT' && (
+              <div className="text-[9px] text-amber-400 mt-1 flex items-center gap-1">
+                <span className="w-1 h-1 bg-amber-400 rounded-full animate-pulse"></span>
+                Monitoring for setup conditions
+              </div>
+            )}
           </div>
           
-          {/* Countdown Timer */}
+          {/* Countdown Timer OR Waiting Status */}
           <div className="text-right">
-            <div className="text-xs text-gray-400 mb-1">TIME TO TRIGGER</div>
-            <div className="text-3xl font-bold text-emerald-400">
-              {data.time_to_trigger ?? 0}m
-            </div>
+            {data.signal !== 'WAIT' ? (
+              <>
+                <div className="text-xs text-gray-400 mb-1">TIME TO TRIGGER</div>
+                <div className="text-3xl font-bold text-emerald-400">
+                  {data.time_to_trigger ?? 0}m
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="text-xs text-amber-400 mb-1">STATUS</div>
+                <div className="text-lg font-bold text-amber-300 flex items-center gap-1">
+                  <Timer className="w-4 h-4" />
+                  Scanning
+                </div>
+              </>
+            )}
           </div>
         </div>
 
@@ -529,44 +551,152 @@ const EarlyWarningCard: React.FC<EarlyWarningCardProps> = ({ symbol }) => {
         </div>
       )}
 
-      {/* Price Targets */}
-      {data.signal !== 'WAIT' && data.price_targets && (
-        <div className="bg-gray-800/20 rounded-lg p-3 mb-4 border border-emerald-400/25 hover:border-emerald-400/35 transition-all">
-          <div className="text-xs font-semibold text-emerald-300 mb-2">PRICE TARGETS</div>
-          <div className="grid grid-cols-4 gap-2 text-xs">
-            <div>
-              <div className="text-gray-500">Entry</div>
-              <div className="text-white font-bold">₹{(data.price_targets.entry ?? 0).toFixed(2)}</div>
+      {/* Price Targets OR Waiting Explanation */}
+      {data.signal !== 'WAIT' ? (
+        /* Show Price Targets when signal is BUY/SELL */
+        data.price_targets && (
+          <div className="bg-gray-800/20 rounded-lg p-3 mb-4 border border-emerald-400/25 hover:border-emerald-400/35 transition-all">
+            <div className="text-xs font-semibold text-emerald-300 mb-2">PRICE TARGETS</div>
+            <div className="grid grid-cols-4 gap-2 text-xs">
+              <div>
+                <div className="text-gray-500">Entry</div>
+                <div className="text-white font-bold">₹{(data.price_targets.entry ?? 0).toFixed(2)}</div>
+              </div>
+              <div>
+                <div className="text-gray-500">Stop Loss</div>
+                <div className="text-rose-400 font-bold">₹{(data.price_targets.stop_loss ?? 0).toFixed(2)}</div>
+              </div>
+              <div>
+                <div className="text-gray-500">Target</div>
+                <div className="text-emerald-400 font-bold">₹{(data.price_targets.target ?? 0).toFixed(2)}</div>
+              </div>
+              <div>
+                <div className="text-gray-500">R:R</div>
+                <div className="text-cyan-400 font-bold">1:{(data.price_targets.risk_reward_ratio ?? 2).toFixed(1)}</div>
+              </div>
             </div>
-            <div>
-              <div className="text-gray-500">Stop Loss</div>
-              <div className="text-rose-400 font-bold">₹{(data.price_targets.stop_loss ?? 0).toFixed(2)}</div>
+          </div>
+        )
+      ) : (
+        /* Show WHAT TO WAIT FOR when signal is WAIT */
+        <div className="bg-gradient-to-br from-amber-900/20 to-gray-800/30 rounded-xl p-4 mb-4 border-2 border-amber-400/40 hover:border-amber-400/60 transition-all shadow-lg">
+          <div className="flex items-center gap-2 mb-3">
+            <div className="p-1.5 bg-amber-500/20 rounded-lg border border-amber-500/40">
+              <Timer className="w-4 h-4 text-amber-400" />
             </div>
-            <div>
-              <div className="text-gray-500">Target</div>
-              <div className="text-emerald-400 font-bold">₹{(data.price_targets.target ?? 0).toFixed(2)}</div>
+            <span className="text-xs font-bold text-amber-300">WAITING FOR CONDITIONS</span>
+          </div>
+          
+          <div className="space-y-2 text-xs">
+            {/* Show what conditions are missing */}
+            <div className="flex items-start gap-2">
+              <div className={`mt-0.5 w-2 h-2 rounded-full ${
+                data.momentum?.direction !== 'NEUTRAL' ? 'bg-emerald-400' : 'bg-gray-600'
+              }`}></div>
+              <div className="flex-1">
+                <div className="text-gray-300 font-semibold">Clear Momentum Direction</div>
+                <div className={`text-[10px] ${
+                  data.momentum?.direction !== 'NEUTRAL' ? 'text-emerald-400' : 'text-gray-500'
+                }`}>
+                  {data.momentum?.direction !== 'NEUTRAL' 
+                    ? `✓ ${data.momentum?.direction} momentum detected` 
+                    : '○ Waiting for bullish/bearish momentum'}
+                </div>
+              </div>
             </div>
-            <div>
-              <div className="text-gray-500">R:R</div>
-              <div className="text-cyan-400 font-bold">1:{(data.price_targets.risk_reward_ratio ?? 2).toFixed(1)}</div>
+            
+            <div className="flex items-start gap-2">
+              <div className={`mt-0.5 w-2 h-2 rounded-full ${
+                data.volume_buildup?.is_building ? 'bg-emerald-400' : 'bg-gray-600'
+              }`}></div>
+              <div className="flex-1">
+                <div className="text-gray-300 font-semibold">Volume Buildup</div>
+                <div className={`text-[10px] ${
+                  data.volume_buildup?.is_building ? 'text-emerald-400' : 'text-gray-500'
+                }`}>
+                  {data.volume_buildup?.is_building 
+                    ? `✓ Volume building (${data.volume_buildup.buildup_strength}% strength)` 
+                    : '○ Waiting for volume accumulation'}
+                </div>
+              </div>
+            </div>
+            
+            <div className="flex items-start gap-2">
+              <div className={`mt-0.5 w-2 h-2 rounded-full ${
+                (data.confidence ?? 0) >= 50 ? 'bg-emerald-400' : 'bg-gray-600'
+              }`}></div>
+              <div className="flex-1">
+                <div className="text-gray-300 font-semibold">Signal Confidence ≥50%</div>
+                <div className={`text-[10px] ${
+                  (data.confidence ?? 0) >= 50 ? 'text-emerald-400' : 'text-gray-500'
+                }`}>
+                  {(data.confidence ?? 0) >= 50 
+                    ? `✓ Confidence at ${data.confidence}%` 
+                    : `○ Current confidence: ${data.confidence}% (need ≥50%)`}
+                </div>
+              </div>
+            </div>
+            
+            <div className="flex items-start gap-2">
+              <div className={`mt-0.5 w-2 h-2 rounded-full ${
+                data.fake_signal_risk === 'LOW' ? 'bg-emerald-400' : 'bg-gray-600'
+              }`}></div>
+              <div className="flex-1">
+                <div className="text-gray-300 font-semibold">Low Fake Signal Risk</div>
+                <div className={`text-[10px] ${
+                  data.fake_signal_risk === 'LOW' ? 'text-emerald-400' : 'text-amber-400'
+                }`}>
+                  {data.fake_signal_risk === 'LOW' 
+                    ? '✓ Risk is LOW' 
+                    : `○ Risk is ${data.fake_signal_risk} (${data.fake_signal_checks?.pass_rate ?? 0}% validation)`}
+                </div>
+              </div>
+            </div>
+          </div>
+          
+          <div className="mt-3 pt-3 border-t border-amber-400/20">
+            <div className="text-[10px] text-amber-300 font-semibold">
+              💡 What This Means:
+            </div>
+            <div className="text-[10px] text-gray-400 mt-1 leading-relaxed">
+              Market is in <span className="text-amber-400 font-semibold">neutral/sideways mode</span>. 
+              Early Warning needs <span className="text-white font-semibold">clear directional momentum + volume buildup</span> to 
+              predict breakouts 1-3 minutes ahead. Keep monitoring - conditions can change quickly!
             </div>
           </div>
         </div>
       )}
 
-      {/* Recommended Action Button */}
-      <button 
-        className={`w-full py-3 px-4 rounded-xl font-bold text-sm flex items-center justify-center gap-2 transition-all transform hover:scale-[1.02] active:scale-[0.98] ${getActionColor()}`}
-      >
-        {getActionIcon()}
-        {data.recommended_action.replace(/_/g, ' ')}
-      </button>
+      {/* Recommended Action Button OR Status Badge */}
+      {data.signal !== 'WAIT' ? (
+        /* Show Action Button when signal is BUY/SELL */
+        <button 
+          className={`w-full py-3 px-4 rounded-xl font-bold text-sm flex items-center justify-center gap-2 transition-all transform hover:scale-[1.02] active:scale-[0.98] ${getActionColor()}`}
+        >
+          {getActionIcon()}
+          {data.recommended_action.replace(/_/g, ' ')}
+        </button>
+      ) : (
+        /* Show Status Badge when signal is WAIT - Not a button! */
+        <div className="w-full py-3 px-4 rounded-xl font-bold text-sm flex items-center justify-center gap-2 bg-gradient-to-r from-gray-700/50 to-gray-600/50 border-2 border-gray-500/40 text-gray-300 shadow-lg">
+          <Timer className="w-5 h-5 text-amber-400 animate-pulse" />
+          <span>MONITORING MARKET CONDITIONS</span>
+        </div>
+      )}
 
       {/* Reasoning */}
-      <div className="mt-3 p-3 bg-emerald-500/5 border border-emerald-400/25 rounded-lg backdrop-blur-sm">
-        <div className="text-xs text-emerald-400 mb-1 font-bold flex items-center gap-1">
-          <span className="w-1.5 h-1.5 bg-emerald-400 rounded-full animate-pulse"></span>
-          ANALYSIS
+      <div className={`mt-3 p-3 rounded-lg backdrop-blur-sm border ${
+        data.signal === 'WAIT' 
+          ? 'bg-amber-500/5 border-amber-400/25' 
+          : 'bg-emerald-500/5 border-emerald-400/25'
+      }`}>
+        <div className={`text-xs mb-1 font-bold flex items-center gap-1 ${
+          data.signal === 'WAIT' ? 'text-amber-400' : 'text-emerald-400'
+        }`}>
+          <span className={`w-1.5 h-1.5 rounded-full animate-pulse ${
+            data.signal === 'WAIT' ? 'bg-amber-400' : 'bg-emerald-400'
+          }`}></span>
+          {data.signal === 'WAIT' ? 'MARKET STATUS' : 'ANALYSIS'}
         </div>
         <p className="text-xs text-gray-300 leading-relaxed">{data.reasoning || 'No analysis available'}</p>
       </div>

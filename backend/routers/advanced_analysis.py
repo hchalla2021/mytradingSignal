@@ -1439,18 +1439,46 @@ async def get_candle_intent(symbol: str) -> Dict[str, Any]:
             print(f"[CANDLE-INTENT] ⚡ Cache hit for {symbol} (3s cache)")
             return cached
         
-        # Fetch fresh historical data
+        # 🔥 FIX: Use FUTURES data (has volume) instead of SPOT INDEX (no volume)
+        # Candle Intent REQUIRES volume for pattern detection
         print(f"[CANDLE-INTENT] 🚀 Fetching LIVE candles from Zerodha...")
         print(f"   → Symbol: {symbol}")
-        print(f"   → Lookback: 50 candles (for volume average)")
-        print(f"   → Time range: Last 3 days (intraday patterns)")
+        print(f"   → Lookback: 100 candles (for volume average and patterns)")
+        print(f"   → Data Source: FUTURES (includes volume)")
         
-        # Use extended data fetch with 3 days lookback
-        df = await _get_historical_data_extended(symbol, lookback=50, days_back=3)
+        # Use same data fetch as Volume Pulse - FUTURES have volume!
+        df = await _get_historical_data(symbol, lookback=100)
         
         print(f"[CANDLE-INTENT] 📊 Data fetch result:")
         print(f"   → Candles received: {len(df)}")
         print(f"   → Data empty: {df.empty}")
+        
+        # 🔥 SHOW LAST 3 CANDLES WITH VOLUME FOR DEBUGGING
+        if not df.empty and len(df) >= 3:
+            print(f"\n[CANDLE-INTENT] 🕯️  INSTANT CANDLE DETAILS (Last 3 Candles):")
+            print(f"{'='*80}")
+            for i, candle in df.tail(3).iterrows():
+                o, h, l, c = candle['open'], candle['high'], candle['low'], candle['close']
+                v = candle.get('volume', 0)
+                
+                # Candle color
+                candle_type = "🟢 GREEN" if c > o else "🔴 RED" if c < o else "⚪ DOJI"
+                
+                # Wicks
+                body = abs(c - o)
+                total_range = h - l if h != l else 0.01
+                upper_wick = h - max(o, c)
+                lower_wick = min(o, c) - l
+                
+                print(f"  Candle #{i} @ {candle.get('date', 'N/A')}")
+                print(f"  {candle_type}")
+                print(f"  📊 OHLC: O={o:.2f} H={h:.2f} L={l:.2f} C={c:.2f}")
+                print(f"  📦 Volume: {v:,.0f}")
+                print(f"  📏 Body: {body:.2f} ({(body/total_range*100):.1f}% of range)")
+                print(f"  ⬆️  Upper Wick: {upper_wick:.2f}")
+                print(f"  ⬇️  Lower Wick: {lower_wick:.2f}")
+                print()
+            print(f"{'='*80}\n")
         
         if df.empty or len(df) < 3:
             print(f"[CANDLE-INTENT] ⚠️  INSUFFICIENT DATA for {symbol}")
@@ -1507,21 +1535,48 @@ async def get_candle_intent(symbol: str) -> Dict[str, Any]:
         # Add metadata
         result["status"] = "FRESH"
         result["token_valid"] = token_status["valid"]
-        result["data_source"] = "ZERODHA_KITECONNECT"
+        result["data_source"] = "ZERODHA_FUTURES"
+        result["candles_analyzed"] = len(df)
         
-        # Cache result (3 seconds for fast refresh)
-        await cache.set(cache_key, result, expire=3)
+        # Cache result (5 seconds for fast refresh - same as other features)
+        await cache.set(cache_key, result, expire=5)
         
         # Save 24-hour backup
         backup_cache_key = f"candle_intent_backup:{symbol}"
         await cache.set(backup_cache_key, result, expire=86400)
+        
+        # 🔥 DETAILED OUTPUT FOR MONITORING
+        print(f"\n[CANDLE-INTENT] 📈 INSTANT ANALYSIS RESULTS for {symbol}")
+        print(f"{'='*80}")
+        print(f"🚦 SIGNAL: {result['professional_signal']} (Confidence: {result['pattern']['confidence']}%)")
+        print(f"💯 PATTERN: {result['pattern']['type']}")
+        print(f"📊 INTENT: {result['pattern']['intent']}")
+        print(f"📋 STATUS: {result['status']}")
+        
+        if result.get('trap_status', {}).get('is_trap'):
+            trap = result['trap_status']
+            print(f"⚠️  TRAP DETECTED: {trap.get('trap_type', 'UNKNOWN')}")
+            print(f"   Severity: {trap.get('severity', 0)}%")
+            print(f"   Action: {trap.get('action_required', 'MONITOR')}")
+        
+        print(f"\n📦 VOLUME ANALYSIS:")
+        vol_analysis = result.get('volume_analysis', {})
+        print(f"   Volume: {vol_analysis.get('volume', 0):,.0f}")
+        print(f"   Avg Volume: {vol_analysis.get('avg_volume', 0):,.0f}")
+        print(f"   Ratio: {vol_analysis.get('volume_ratio', 0):.2f}x")
+        print(f"   Type: {vol_analysis.get('volume_type', 'UNKNOWN')}")
+        print(f"   Efficiency: {vol_analysis.get('efficiency', 'UNKNOWN')}")
+        
+        print(f"\n📦 CANDLES ANALYZED: {len(df)}")
+        print(f"💾 CACHED: 5s live + 24h backup")
+        print(f"{'='*80}\n")
         
         print(f"[CANDLE-INTENT] ✅ Analysis complete for {symbol}")
         print(f"   → Pattern: {result['pattern']['type']}")
         print(f"   → Intent: {result['pattern']['intent']}")
         print(f"   → Signal: {result['professional_signal']}")
         print(f"   → Confidence: {result['pattern']['confidence']}%")
-        print(f"   → Cached: 3s live + 24h backup")
+        print(f"   → Cached: 5s live + 24h backup")
         print(f"{'='*60}\n")
         
         return result

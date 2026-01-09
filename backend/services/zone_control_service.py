@@ -262,7 +262,8 @@ class ZoneControlEngine:
         
         # Calculate metrics
         touches = len(cluster)
-        volume_strength = total_vol / df['volume'].mean() if len(df) > 0 else 1.0
+        avg_volume = df['volume'].mean()
+        volume_strength = (total_vol / avg_volume) if len(df) > 0 and avg_volume > 0 else 1.0
         distance_pct = (level - current_price) / current_price * 100
         
         # Strength score (0-100) - LEGACY metric
@@ -401,7 +402,8 @@ class ZoneControlEngine:
                 
                 if candle_range > 0:
                     body_ratio = body_size / candle_range
-                    volume_ratio = candle['volume'] / candles_near_zone['volume'].mean()
+                    avg_vol_near = candles_near_zone['volume'].mean()
+                    volume_ratio = (candle['volume'] / avg_vol_near) if avg_vol_near > 0 else 1.0
                     
                     # High volume + small body = Absorption
                     if volume_ratio > 1.5 and body_ratio < 0.3:
@@ -639,86 +641,101 @@ class ZoneControlEngine:
                         bounce_probability: int,
                         zone_strength: str) -> Tuple[str, int, str]:
         """
-        Generate trading signal with confidence and recommendation
+        🔥 FIXED: Generate trading signal based on zones + market momentum
         Returns: (signal, confidence, recommendation)
         """
         signal = "NEUTRAL"
         confidence = 0
         recommendation = "Wait for clearer signal"
         
-        # === BUY ZONE CONDITIONS ===
-        # Price near strong support with high bounce probability
-        if nearest_support and abs(nearest_support.distance_pct) < 1.0:
-            # distance_pct is NEGATIVE when support is BELOW current price
+        # 🔥 NEW: Primary signal based on breakdown risk and bounce probability
+        # This makes signal respond to actual market conditions
+        
+        # === HIGH BREAKDOWN RISK = SELL ===
+        if breakdown_risk >= 60:  # Was 70, now 60 for earlier detection
+            signal = "SELL"
+            confidence = min(breakdown_risk, 90)
+            if breakdown_risk >= 75:
+                recommendation = f"HIGH breakdown risk ({breakdown_risk}%) - Exit longs immediately"
+            else:
+                recommendation = f"Elevated breakdown risk ({breakdown_risk}%) - Reduce positions"
+        
+        # === MODERATE BREAKDOWN RISK = CAUTION ===
+        elif breakdown_risk >= 50 and bounce_probability < 50:
+            signal = "SELL"
+            confidence = breakdown_risk
+            recommendation = f"Support weakening ({breakdown_risk}% risk) - Be cautious"
+        
+        # === HIGH BOUNCE PROBABILITY = BUY ===
+        elif bounce_probability >= 60 and breakdown_risk < 40:
+            signal = "BUY"
+            confidence = min(bounce_probability, 85)
+            if nearest_support:
+                recommendation = f"Strong support at ₹{nearest_support.level:.2f} ({bounce_probability}% bounce chance) - Good entry"
+            else:
+                recommendation = f"High bounce probability ({bounce_probability}%) - Bullish setup"
+        
+        # === MODERATE BOUNCE PROBABILITY = HOLD/WATCH ===
+        elif bounce_probability >= 50 and breakdown_risk < 50:
+            signal = "BUY"
+            confidence = bounce_probability - 10
+            if nearest_support:
+                recommendation = f"Support holding at ₹{nearest_support.level:.2f} - Watch for confirmation"
+            else:
+                recommendation = f"Moderate bullish setup - Wait for stronger confirmation"
+        
+        # === PRICE NEAR STRONG SUPPORT (Additional buy signal) ===
+        elif nearest_support and abs(nearest_support.distance_pct) < 1.5:
             price_above_support = nearest_support.distance_pct < 0
             
-            if bounce_probability > 70 and breakdown_risk < 30:
-                signal = "BUY_ZONE"
-                confidence = bounce_probability
+            if nearest_support.strength_score > 60:
+                signal = "BUY"
+                confidence = min(nearest_support.strength_score, 75)
                 if price_above_support:
-                    recommendation = f"Price above strong support at ₹{nearest_support.level:.2f} - Hold/Buy on dip"
+                    recommendation = f"Price holding above support at ₹{nearest_support.level:.2f} - Bullish"
                 else:
-                    recommendation = f"Price testing support at ₹{nearest_support.level:.2f} - Strong buy zone"
-            
-            elif bounce_probability > 50 and zone_strength == "STRONG":
-                signal = "BUY_ZONE"
-                confidence = bounce_probability - 10
-                if price_above_support:
-                    recommendation = f"Price above support at ₹{nearest_support.level:.2f} - Support holding well"
-                else:
-                    recommendation = f"Price near support at ₹{nearest_support.level:.2f} - Watch for bounce confirmation"
+                    recommendation = f"Testing support at ₹{nearest_support.level:.2f} - Buy zone"
             else:
-                # Still near support but conditions not strong enough
                 confidence = max(30, bounce_probability - 20)
                 if price_above_support:
-                    recommendation = f"Support at ₹{nearest_support.level:.2f} below - Bullish structure intact"
+                    recommendation = f"Support at ₹{nearest_support.level:.2f} below - Monitor"
                 else:
-                    recommendation = f"Approaching support at ₹{nearest_support.level:.2f} - Watch for bounce"
+                    recommendation = f"Approaching support at ₹{nearest_support.level:.2f} - Watch"
         
-        # === SELL ZONE CONDITIONS ===
-        # Price near resistance or breakdown imminent
-        elif nearest_resistance and abs(nearest_resistance.distance_pct) < 1.0:
-            # distance_pct is POSITIVE when resistance is ABOVE current price
+        # === PRICE NEAR RESISTANCE (Sell signal) ===
+        elif nearest_resistance and abs(nearest_resistance.distance_pct) < 1.5:
             price_below_resistance = nearest_resistance.distance_pct > 0
             
-            if nearest_resistance.strength_score > 60:
-                signal = "SELL_ZONE"
-                confidence = nearest_resistance.strength_score
-                if price_below_resistance:
-                    recommendation = f"Approaching resistance at ₹{nearest_resistance.level:.2f} - Consider profit booking"
-                else:
-                    recommendation = f"Price broke above resistance at ₹{nearest_resistance.level:.2f} - Bullish breakout"
+            if nearest_resistance.strength_score > 60 and price_below_resistance:
+                signal = "SELL"
+                confidence = min(nearest_resistance.strength_score, 80)
+                recommendation = f"Approaching resistance at ₹{nearest_resistance.level:.2f} - Book profits"
             else:
-                # Near resistance but not strong enough
                 confidence = max(30, nearest_resistance.strength_score - 10)
                 if price_below_resistance:
                     recommendation = f"Nearing resistance at ₹{nearest_resistance.level:.2f} - Watch for rejection"
                 else:
-                    recommendation = f"Price above resistance at ₹{nearest_resistance.level:.2f} - Breakout in progress"
+                    recommendation = f"Price above resistance at ₹{nearest_resistance.level:.2f} - Breakout attempt"
         
-        # High breakdown risk
-        elif breakdown_risk > 70:
-            signal = "SELL_ZONE"
-            confidence = breakdown_risk
-            recommendation = f"High breakdown risk ({breakdown_risk}%) - Exit longs"
-        
-        # === NEUTRAL CONDITIONS ===
+        # === NEUTRAL (Price in middle, no clear zones) ===
         else:
-            # Calculate confidence based on zone positioning
-            # Higher confidence when balanced or good setup forming
+            # Calculate confidence based on zone clarity
             confidence = max(0, 50 - abs(50 - bounce_probability))
             
             # Boost confidence if zones are clearly defined
             if nearest_support and nearest_resistance:
                 if zone_strength == "STRONG":
-                    confidence = min(75, confidence + 25)
+                    confidence = min(70, confidence + 20)
                 elif zone_strength == "MODERATE":
-                    confidence = min(60, confidence + 15)
+                    confidence = min(55, confidence + 10)
             
-            if nearest_support:
-                recommendation = f"Price between zones - Next support at ₹{nearest_support.level:.2f}"
+            if nearest_support and nearest_resistance:
+                recommendation = f"Price between support (₹{nearest_support.level:.2f}) and resistance (₹{nearest_resistance.level:.2f})"
+            elif nearest_support:
+                recommendation = f"Next support at ₹{nearest_support.level:.2f}"
             elif nearest_resistance:
-                recommendation = f"Price between zones - Next resistance at ₹{nearest_resistance.level:.2f}"
+                recommendation = f"Next resistance at ₹{nearest_resistance.level:.2f}"
+        
         return signal, confidence, recommendation
     
     def _build_risk_metrics(self, nearest_support: Optional[Zone], nearest_resistance: Optional[Zone],
