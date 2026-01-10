@@ -24,24 +24,33 @@ def detect_environment() -> str:
     # Auto-detection
     hostname = socket.gethostname().lower()
     
+    # Production indicators (check first for priority)
+    production_indicators = [
+        "mydailytrade" in hostname,  # Digital Ocean droplet
+        "ubuntu" in hostname and os.path.exists("/var/www"),  # Ubuntu server
+        os.path.exists("/var/www/mytradingSignal"),  # Production path exists
+        os.getenv("PM2_HOME"),  # Running under PM2
+    ]
+    
+    if any(production_indicators):
+        return "production"
+    
     # Local indicators
     local_indicators = [
-        "localhost",
-        "127.0.0.1",
+        "localhost" in hostname,
+        "127.0.0.1" in hostname,
         hostname.startswith("desktop-"),
         hostname.startswith("laptop-"),
         hostname.startswith("pc-"),
         "local" in hostname,
+        os.path.exists("/workspaces"),  # GitHub Codespaces
+        os.getenv("CODESPACES"),  # GitHub Codespaces
     ]
     
     if any(local_indicators):
         return "local"
     
-    # Check if running in local development (common dev patterns)
-    if os.path.exists("/workspaces") or os.getenv("CODESPACES"):
-        return "local"
-    
-    # Default to production
+    # Default to production for safety
     return "production"
 
 
