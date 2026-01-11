@@ -88,18 +88,7 @@ const CandleIntentCard = memo<CandleIntentCardProps>(({ symbol, name }) => {
         if (!response.ok) throw new Error('Failed to fetch');
         const result = await response.json();
         
-        console.log(`[CANDLE-INTENT] ${symbol} DATA:`, {
-          signal: result.professional_signal,
-          pattern: result.pattern?.type,
-          intent: result.pattern?.intent,
-          confidence: result.pattern?.confidence,
-          volume: result.volume_analysis?.volume,
-          efficiency: result.volume_analysis?.efficiency,
-          wick_upper: result.wick_analysis?.upper_wick_pct,
-          wick_lower: result.wick_analysis?.lower_wick_pct,
-          body_type: result.body_analysis?.body_type,
-          body_ratio: result.body_analysis?.body_ratio_pct
-        });
+        // Debug removed for production
         
         // Check for error statuses
         if (result.status === 'TOKEN_EXPIRED' || result.status === 'ERROR' || result.error) {

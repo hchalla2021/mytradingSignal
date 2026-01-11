@@ -117,7 +117,6 @@ export default function SystemStatusBanner() {
       
       if (!popup) {
         // Popup blocked - fallback to direct navigation
-        console.log('⚠️ Popup blocked - using direct navigation');
         window.location.href = loginUrl;
         return;
       }
@@ -126,8 +125,6 @@ export default function SystemStatusBanner() {
       const checkPopup = setInterval(() => {
         if (!popup || popup.closed) {
           clearInterval(checkPopup);
-          console.log('🔄 Popup closed, waiting for backend reconnection...');
-          console.log('⏳ Backend is reconnecting WebSocket (takes ~3-4 seconds)...');
           
           // Wait 5 seconds for backend to:
           // 1. Save token to .env (0.5s)
@@ -136,7 +133,6 @@ export default function SystemStatusBanner() {
           // 4. WebSocket start new connection (1s)
           // Total: ~5 seconds for complete reconnection
           setTimeout(() => {
-            console.log('♻️ Reloading page to show live data...');
             window.location.reload();
           }, 5000);
         } else {
@@ -144,13 +140,11 @@ export default function SystemStatusBanner() {
           try {
             const popupUrl = popup.location.href;
             if (popupUrl.includes('auth=success')) {
-              console.log('✅ Auth success detected!');
               popup.close();
               clearInterval(checkPopup);
               
               // Wait 5 seconds for backend reconnection
               setTimeout(() => {
-                console.log('♻️ Reloading page after successful auth...');
                 window.location.reload();
               }, 5000);
             }

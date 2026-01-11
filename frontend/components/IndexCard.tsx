@@ -156,7 +156,7 @@ const IndexCard = ({ symbol, name, data, isConnected, aiAlertData, outlookData }
 
   // Flash animation on price change
   useEffect(() => {
-    console.log(`💳 IndexCard[${symbol}] render - price: ${data?.price}, status: ${data?.status}`);
+    // Debug removed for production
     if (data?.price) {
       // Update timestamp on every data change
       setLastUpdate(new Date().toLocaleTimeString());
