@@ -34,6 +34,11 @@ async def get_system_health():
     market_desc = market_session.get_phase_description(market_phase)
     seconds_to_next = market_session.seconds_until_next_phase(now)
     
+    # 🔥 FIX: If auth_state_manager shows REQUIRED/EXPIRED but token exists, re-verify
+    if auth_state_manager.requires_login:
+        # Try to re-verify token from .env
+        auth_state_manager.force_recheck()
+    
     # 2. Auth State (token validity)
     auth_info = auth_state_manager.get_state_info()
     

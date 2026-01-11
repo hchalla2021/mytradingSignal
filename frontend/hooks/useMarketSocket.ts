@@ -3,6 +3,13 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { getEnvironmentConfig } from '@/lib/env-detection';
 
+// Production-safe logging
+const isDev = process.env.NODE_ENV === 'development';
+const log = {
+  debug: (...args: unknown[]) => isDev && console.log(...args),
+  error: console.error,
+};
+
 export interface MarketTick {
   symbol: string;
   price: number;
@@ -38,7 +45,7 @@ interface WebSocketMessage {
 // Auto-detect WebSocket URL based on environment
 const getWebSocketURL = (): string => {
   const config = getEnvironmentConfig();
-  console.log(`📡 WebSocket connecting to: ${config.wsUrl} (${config.displayName})`);
+  log.debug(`WebSocket connecting to: ${config.wsUrl} (${config.displayName})`);
   return config.wsUrl;
 };
 
@@ -50,7 +57,7 @@ function saveMarketData(data: MarketData): void {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
   } catch (e) {
-    console.error('Failed to save market data:', e);
+    log.error('Failed to save market data:', e);
   }
 }
 
@@ -122,7 +129,7 @@ export function useMarketSocket() {
             case 'snapshot':
               if (message.data) {
                 const snapshot = message.data as Record<string, MarketTick>;
-                console.log('📊 WS Snapshot:', Object.keys(snapshot), 'NIFTY price:', snapshot.NIFTY?.price);
+                log.debug('WS Snapshot received:', Object.keys(snapshot));
                 setMarketData(() => {
                   // Create completely new objects to trigger React updates
                   const updated = {
@@ -131,7 +138,6 @@ export function useMarketSocket() {
                     SENSEX: snapshot.SENSEX ? { ...snapshot.SENSEX } : null,
                   };
                   saveMarketData(updated);
-                  console.log('✅ State updated - NIFTY:', updated.NIFTY?.price);
                   return updated;
                 });
               }

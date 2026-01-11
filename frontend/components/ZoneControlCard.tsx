@@ -3,6 +3,14 @@
 import React, { memo, useEffect, useState } from 'react';
 import { Target, Shield, AlertOctagon, TrendingDown, TrendingUp, CircleDot } from 'lucide-react';
 
+// Production-safe logging
+const isDev = process.env.NODE_ENV === 'development';
+const log = {
+  debug: (...args: unknown[]) => isDev && console.log(...args),
+  warn: (...args: unknown[]) => isDev && console.warn(...args),
+  error: console.error,
+};
+
 interface Zone {
   level: number;
   touches: number;
@@ -72,116 +80,8 @@ const ZoneControlCard = memo<ZoneControlCardProps>(({ symbol, name }) => {
         if (!response.ok) throw new Error('Failed to fetch');
         const result = await response.json();
         
-        // 🔍 DETAILED LOGGING - ALL SIGNAL LOGIC CHECKS
-        console.log(`[ZONE-CONTROL] 📊 COMPLETE DATA CHECK for ${symbol}:`, {
-          '1_SIGNAL_OUTPUT': {
-            signal: result.signal,
-            confidence: result.confidence,
-            recommendation: result.recommendation,
-            '✅_displaying': result.signal ? 'YES' : '❌ MISSING'
-          },
-          '2_RISK_METRICS': {
-            breakdown_risk: result.breakdown_risk,
-            bounce_probability: result.bounce_probability,
-            zone_strength: result.zone_strength,
-            '✅_values_present': (result.breakdown_risk !== undefined && result.bounce_probability !== undefined) ? 'YES' : '❌ MISSING'
-          },
-          '3_SUPPORT_ZONE': {
-            level: result.nearest_zones?.support?.level,
-            distance_pct: result.nearest_zones?.support?.distance_pct,
-            strength: result.nearest_zones?.support?.strength,
-            touches: result.nearest_zones?.support?.touches,
-            zone_label: result.nearest_zones?.support?.zone_label,
-            '✅_active': result.nearest_zones?.support?.level ? 'YES' : '❌ NO_SUPPORT'
-          },
-          '4_RESISTANCE_ZONE': {
-            level: result.nearest_zones?.resistance?.level,
-            distance_pct: result.nearest_zones?.resistance?.distance_pct,
-            strength: result.nearest_zones?.resistance?.strength,
-            touches: result.nearest_zones?.resistance?.touches,
-            zone_label: result.nearest_zones?.resistance?.zone_label,
-            '✅_active': result.nearest_zones?.resistance?.level ? 'YES' : '❌ NO_RESISTANCE'
-          },
-          '5_PRICE_INFO': {
-            current_price: result.current_price,
-            candles_analyzed: result.candles_analyzed,
-            status: result.status,
-            timestamp: result.timestamp
-          }
-        });
-        
-        // 🔥 SIGNAL LOGIC ANALYSIS - Why showing this signal?
-        console.log(`[ZONE-CONTROL] 🔍 SIGNAL DECISION ANALYSIS for ${symbol}:`, {
-          'Current_Signal': result.signal,
-          'Logic_Checks': {
-            '1_HIGH_BREAKDOWN_RISK': {
-              condition: 'breakdown_risk >= 60',
-              breakdown_risk: result.breakdown_risk,
-              passes: result.breakdown_risk >= 60 ? '✅ YES → SELL' : '❌ NO',
-              expected_signal: 'SELL'
-            },
-            '2_MODERATE_BREAKDOWN_RISK': {
-              condition: 'breakdown_risk >= 50 AND bounce_probability < 50',
-              breakdown_risk: result.breakdown_risk,
-              bounce_probability: result.bounce_probability,
-              passes: (result.breakdown_risk >= 50 && result.bounce_probability < 50) ? '✅ YES → SELL' : '❌ NO',
-              expected_signal: 'SELL'
-            },
-            '3_HIGH_BOUNCE_PROBABILITY': {
-              condition: 'bounce_probability >= 60 AND breakdown_risk < 40',
-              bounce_probability: result.bounce_probability,
-              breakdown_risk: result.breakdown_risk,
-              passes: (result.bounce_probability >= 60 && result.breakdown_risk < 40) ? '✅ YES → BUY' : '❌ NO',
-              expected_signal: 'BUY_ZONE'
-            },
-            '4_MODERATE_BOUNCE_PROBABILITY': {
-              condition: 'bounce_probability >= 50 AND breakdown_risk < 50',
-              bounce_probability: result.bounce_probability,
-              breakdown_risk: result.breakdown_risk,
-              passes: (result.bounce_probability >= 50 && result.breakdown_risk < 50) ? '✅ YES → BUY' : '❌ NO',
-              expected_signal: 'BUY_ZONE'
-            },
-            '5_NEAR_SUPPORT': {
-              condition: 'distance_to_support < 1.5% AND strength > 60',
-              distance: result.nearest_zones?.support?.distance_pct !== null ? Math.abs(result.nearest_zones.support.distance_pct) : 'NO_SUPPORT',
-              strength: result.nearest_zones?.support?.strength,
-              passes: (result.nearest_zones?.support?.distance_pct !== null && Math.abs(result.nearest_zones.support.distance_pct) < 1.5 && result.nearest_zones.support.strength > 60) ? '✅ YES → BUY' : '❌ NO',
-              expected_signal: 'BUY_ZONE'
-            },
-            '6_NEAR_RESISTANCE': {
-              condition: 'distance_to_resistance < 1.5% AND strength > 60',
-              distance: result.nearest_zones?.resistance?.distance_pct !== null ? Math.abs(result.nearest_zones.resistance.distance_pct) : 'NO_RESISTANCE',
-              strength: result.nearest_zones?.resistance?.strength,
-              passes: (result.nearest_zones?.resistance?.distance_pct !== null && Math.abs(result.nearest_zones.resistance.distance_pct) < 1.5 && result.nearest_zones.resistance.strength > 60) ? '✅ YES → SELL' : '❌ NO',
-              expected_signal: 'SELL_ZONE'
-            },
-            '7_DEFAULT_NEUTRAL': {
-              condition: 'No other conditions met',
-              passes: '✅ FALLBACK',
-              expected_signal: 'NEUTRAL'
-            }
-          }
-        });
-        
-        // 🚨 ALERT if critical values are missing
-        if (result.breakdown_risk === undefined || result.bounce_probability === undefined) {
-          console.error(`[ZONE-CONTROL] ❌ ${symbol} MISSING CRITICAL RISK METRICS:`, {
-            breakdown_risk: result.breakdown_risk !== undefined ? result.breakdown_risk : '❌ MISSING',
-            bounce_probability: result.bounce_probability !== undefined ? result.bounce_probability : '❌ MISSING',
-            full_response: result
-          });
-        }
-        
-        if (result.signal === 'NEUTRAL') {
-          console.warn(`[ZONE-CONTROL] ⚠️ ${symbol} showing NEUTRAL signal:`, {
-            reason: 'None of the BUY/SELL conditions were met',
-            breakdown_risk: result.breakdown_risk,
-            bounce_probability: result.bounce_probability,
-            support_distance: result.nearest_zones?.support?.distance_pct,
-            resistance_distance: result.nearest_zones?.resistance?.distance_pct,
-            suggestion: 'Check if risk values are in the middle range (40-60%) causing neutral state'
-          });
-        }
+        // Debug logging (development only)
+        log.debug(`[ZONE-CONTROL] Data for ${symbol}:`, result.signal, result.confidence);
         
         // Check for error statuses
         if (result.status === 'TOKEN_EXPIRED' || result.status === 'ERROR') {
@@ -196,7 +96,7 @@ const ZoneControlCard = memo<ZoneControlCardProps>(({ symbol, name }) => {
         }
       } catch (err) {
         setError('Data unavailable');
-        console.error(`[ZONE-CONTROL] ❌ Error fetching ${symbol}:`, err);
+        log.error(`[ZONE-CONTROL] Error fetching ${symbol}:`, err);
       } finally {
         setLoading(false);
       }

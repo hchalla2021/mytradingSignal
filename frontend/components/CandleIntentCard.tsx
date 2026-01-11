@@ -122,7 +122,8 @@ const CandleIntentCard = memo<CandleIntentCardProps>(({ symbol, name }) => {
 
     // Initial fetch + Fast polling (every 5 seconds)
     fetchData();
-    const refreshInterval = parseInt(process.env.NEXT_PUBLIC_REFRESH_INTERVAL || '5000', 10);
+    // Optimized: 12s polling to reduce API load (was 5s)
+    const refreshInterval = parseInt(process.env.NEXT_PUBLIC_REFRESH_INTERVAL || '12000', 10);
     interval = setInterval(fetchData, refreshInterval);
 
     return () => {

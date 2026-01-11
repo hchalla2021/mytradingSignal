@@ -45,14 +45,14 @@ async def redirect_to_zerodha():
 
 @router.get("/validate")
 async def validate_token():
-    """Check if current access token is configured.
+    """Check if current access token is configured and valid.
     
-    Returns INSTANTLY without making external API calls.
-    WebSocket will handle actual Zerodha connection validation.
+    Makes a quick API call to verify token is still valid.
     
     Returns:
-        - valid: True if token exists
+        - valid: True if token exists and works
         - authenticated: True if token is set
+        - user_id, user_name, email: User info from Zerodha
         - message: Status message
     """
     if not settings.zerodha_access_token:
@@ -62,15 +62,43 @@ async def validate_token():
             "message": "No access token configured"
         }
     
-    # Token exists - return immediately without calling Zerodha
-    # Actual validation happens when WebSocket connects
-    return {
-        "valid": True,
-        "authenticated": True,
-        "user_id": "user",  # Placeholder - real validation via WebSocket
-        "user_name": "Authenticated User",
-        "message": "Token configured"
-    }
+    # 🔥 FIX: Actually validate token by making a quick API call
+    try:
+        from kiteconnect import KiteConnect
+        kite = KiteConnect(api_key=settings.zerodha_api_key)
+        kite.set_access_token(settings.zerodha_access_token)
+        
+        # Quick profile check to validate token
+        profile = kite.profile()
+        
+        return {
+            "valid": True,
+            "authenticated": True,
+            "user_id": profile.get("user_id", ""),
+            "user_name": profile.get("user_name", ""),
+            "email": profile.get("email", ""),
+            "message": "Token valid"
+        }
+    except Exception as e:
+        error_msg = str(e)
+        print(f"⚠️ Token validation failed: {error_msg}")
+        
+        # Check if token expired
+        if "TokenException" in str(type(e).__name__) or "expired" in error_msg.lower() or "invalid" in error_msg.lower():
+            return {
+                "valid": False,
+                "authenticated": False,
+                "message": "Token expired - Please login again"
+            }
+        
+        # Other errors - token might still work for WebSocket
+        return {
+            "valid": True,
+            "authenticated": True,
+            "user_id": "user",
+            "user_name": "User",
+            "message": f"Token exists (validation skipped: {error_msg[:50]})"
+        }
 
 
 @router.get("/callback")
@@ -121,6 +149,11 @@ async def zerodha_callback(request_token: str = Query(...), status: str = Query(
         token_manager = get_token_manager()
         token_manager.force_recheck()
         print("🔄 Global token manager cache cleared - will revalidate immediately")
+        
+        # 🔥 CRITICAL: Also update auth state manager
+        from services.auth_state_machine import auth_state_manager
+        auth_state_manager.force_recheck()
+        print("🔄 Auth state manager reset - will show as authenticated")
         
         # Verify token was saved correctly
         reloaded_settings = get_settings()
@@ -253,35 +286,52 @@ async def zerodha_callback(request_token: str = Query(...), status: str = Query(
                     
                     if (window.opener) {{
                         // Popup mode - wait longer to show success message
-                        console.log('🎉 Auth successful, closing popup in 2 seconds...');
+                        console.log('🎉 Auth successful, notifying parent and closing popup...');
                         
                         // Update message
-                        document.getElementById('status').innerHTML = '✅ Login successful!<br/>Closing window...';
+                        document.getElementById('status').innerHTML = '✅ Login successful!<br/>Saving token and reconnecting...';
                         
-                        // Try to notify parent window if on same origin
-                        try {{
-                            if (window.opener && !window.opener.closed) {{
-                                window.opener.postMessage({{ type: 'zerodha-auth-success', userId: '{user_id}' }}, '*');
+                        // 🔥 FIX: Send message multiple times to ensure parent receives it
+                        function notifyParent() {{
+                            try {{
+                                if (window.opener && !window.opener.closed) {{
+                                    window.opener.postMessage({{ type: 'zerodha-auth-success', userId: '{user_id}', userName: '{user_name}' }}, '*');
+                                    console.log('📤 Sent auth-success message to parent');
+                                }}
+                            }} catch (e) {{
+                                console.log('Cannot notify parent:', e);
                             }}
-                        }} catch (e) {{
-                            console.log('Cannot notify parent:', e);
                         }}
                         
-                        // Close after showing success message (2 seconds)
+                        // Send notification immediately
+                        notifyParent();
+                        
+                        // 🔥 FIX: Wait 4 seconds for backend to save token and reconnect WebSocket
+                        // Then close popup - parent will reload
+                        document.getElementById('status').innerHTML = '✅ Login successful!<br/>Waiting for backend to reconnect...';
+                        
                         setTimeout(() => {{
-                            window.close();
+                            // Send message again just before closing
+                            notifyParent();
                             
-                            // Fallback: if window didn't close, show manual close button
+                            document.getElementById('status').innerHTML = '✅ Token saved!<br/>Closing window...';
+                            
                             setTimeout(() => {{
-                                if (!window.closed) {{
-                                    document.getElementById('status').innerHTML = 
-                                        '✅ Login successful!<br/><br/>' +
-                                        '<button onclick="window.close()" style="padding:10px 20px;background:#4CAF50;color:white;border:none;border-radius:5px;cursor:pointer;font-size:16px;">' +
-                                        'Close Window' +
-                                        '</button>';
-                                }}
-                            }}, 500);
-                        }}, 2000);
+                                window.close();
+                                
+                                // Fallback: if window didn't close, show manual close button
+                                setTimeout(() => {{
+                                    if (!window.closed) {{
+                                        document.getElementById('status').innerHTML = 
+                                            '✅ Login successful!<br/><br/>' +
+                                            '<strong>Please close this window manually and refresh the main page.</strong><br/><br/>' +
+                                            '<button onclick="window.close()" style="padding:10px 20px;background:#4CAF50;color:white;border:none;border-radius:5px;cursor:pointer;font-size:16px;">' +
+                                            'Close Window' +
+                                            '</button>';
+                                    }}
+                                }}, 500);
+                            }}, 1000);
+                        }}, 4000); // Wait 4 seconds for backend to process token
                     }} else if (frontendRunning) {{
                         // Frontend is running - redirect
                         setTimeout(() => {{

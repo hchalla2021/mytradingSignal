@@ -91,9 +91,11 @@ export function getEnvironmentConfig() {
 
 /**
  * Log environment detection (useful for debugging)
+ * Only logs in development mode
  */
 export function logEnvironment() {
   if (typeof window === 'undefined') return; // Skip on server
+  if (process.env.NODE_ENV !== 'development') return; // Skip in production
 
   const config = getEnvironmentConfig();
   console.log('🌍 Environment Detection:');

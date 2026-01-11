@@ -157,6 +157,12 @@ class AuthStateManager:
         self._state = AuthState.REQUIRED
         self._token = None
     
+    def force_recheck(self):
+        """Force re-check token from .env file (called after login)"""
+        print("🔄 AUTH STATE: Force re-checking token...")
+        self._consecutive_failures = 0
+        self._check_and_load_token()
+    
     def get_token_age_hours(self) -> Optional[float]:
         """Get token age in hours"""
         if not self._token_created_at:

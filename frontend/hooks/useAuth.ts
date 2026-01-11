@@ -2,6 +2,14 @@
 
 import { useState, useEffect, useCallback } from 'react';
 
+// Production-safe logging
+const isDev = process.env.NODE_ENV === 'development';
+const log = {
+  debug: (...args: unknown[]) => isDev && console.log(...args),
+  warn: (...args: unknown[]) => isDev && console.warn(...args),
+  error: console.error,
+};
+
 interface AuthState {
   isAuthenticated: boolean;
   isValidating: boolean;
@@ -13,7 +21,8 @@ interface AuthState {
   error: string | null;
 }
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+// 🔥 FIX: Use 127.0.0.1 instead of localhost for better compatibility
+const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000';
 const AUTH_STORAGE_KEY = 'zerodha_auth_state';
 const VALIDATION_INTERVAL = 5 * 60 * 1000; // Revalidate every 5 minutes
 
@@ -45,15 +54,14 @@ export function useAuth() {
             });
           }
         } catch (e) {
-          console.error('Failed to parse cached auth state:', e);
+          log.warn('Failed to parse cached auth state');
         }
       }
 
       // Listen for auth success messages from popup
       const handleMessage = (event: MessageEvent) => {
         if (event.data?.type === 'zerodha-auth-success') {
-          console.log('✅ Received auth success message from popup');
-          // Revalidate token immediately
+          log.debug('Received auth success message from popup');
           validateToken();
         }
       };
@@ -124,9 +132,9 @@ export function useAuth() {
     } catch (error) {
       // Silently fail - keep cached state, don't block UI
       if (error.name === 'AbortError') {
-        console.warn('Auth validation timed out - using cached state');
+        log.warn('Auth validation timed out - using cached state');
       } else {
-        console.error('Token validation error:', error);
+        log.error('Token validation error:', error);
       }
       
       // Don't update state on error - keep cached/current state
@@ -166,7 +174,7 @@ export function useAuth() {
       
       // If popup blocked or failed, fallback to direct navigation
       if (!popup) {
-        console.log('Popup blocked, using direct navigation');
+        log.debug('Popup blocked, using direct navigation');
         window.location.href = `${API_URL}/api/auth/login`;
         return;
       }
@@ -177,11 +185,13 @@ export function useAuth() {
           // Check if popup is closed
           if (popup.closed) {
             clearInterval(pollTimer);
-            console.log('Popup closed, revalidating token...');
-            // Revalidate token after popup closes
-            setTimeout(() => {
-              validateToken();
-            }, 1000);
+            log.debug('Popup closed, revalidating token...');
+            // Wait for backend to save token, then revalidate and reload
+            setTimeout(async () => {
+              await validateToken();
+              log.debug('Reloading page to show updated auth state...');
+              window.location.reload();
+            }, 3000);
             return;
           }
 
@@ -227,7 +237,7 @@ export function useAuth() {
     // Optional: Call backend logout endpoint
     fetch(`${API_URL}/api/auth/logout`, {
       method: 'POST',
-    }).catch(console.error);
+    }).catch(log.error);
   }, []);
 
   return {

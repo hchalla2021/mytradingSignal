@@ -51,14 +51,9 @@ export default function SystemStatusBanner() {
         
         if (authSuccess) {
           // Success! Wait for backend to reconnect
-          console.log('✅ Login successful! Waiting for backend reconnection...');
           setTimeout(() => {
-            console.log('♻️ Reloading to show live data...');
             window.location.reload();
           }, 5000);
-        } else {
-          // Still waiting - show a message
-          console.log('⏳ Waiting for login completion...');
         }
       }
     }
@@ -108,14 +103,12 @@ export default function SystemStatusBanner() {
       );
       
       if (hasKiteApp) {
-        console.log('📱 Mobile detected - using direct navigation');
         // Store a flag that we're in login flow
         sessionStorage.setItem('zerodha_login_pending', 'true');
         window.location.href = loginUrl;
       }
     } else {
       // Desktop: Use popup
-      console.log('🖥️ Desktop detected - using popup');
       const popup = window.open(
         loginUrl, 
         'ZerodhaLogin',

@@ -57,67 +57,9 @@ const EarlyWarningCard: React.FC<EarlyWarningCardProps> = ({ symbol }) => {
   const [data, setData] = useState<EarlyWarningData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [livePrice, setLivePrice] = useState<number | null>(null);
-  const [lastUpdate, setLastUpdate] = useState<Date>(new Date());
 
-  // ✅ WEBSOCKET for live price updates
-  useEffect(() => {
-    const WS_URL = process.env.NEXT_PUBLIC_WS_URL || 'ws://127.0.0.1:8000/ws/market';
-    let ws: WebSocket | null = null;
-    let reconnectTimeout: NodeJS.Timeout | null = null;
-
-    const connect = () => {
-      try {
-        ws = new WebSocket(WS_URL);
-
-        ws.onmessage = (event) => {
-          try {
-            const message = JSON.parse(event.data);
-            
-            // Handle tick updates for live price
-            if (message.type === 'tick' && message.data?.symbol === symbol) {
-              setLivePrice(message.data.price);
-              setLastUpdate(new Date());
-              console.log(`[EarlyWarning-WS] 🔴 LIVE price for ${symbol}: ₹${message.data.price}`);
-            }
-            
-            // Handle snapshot data
-            if (message.type === 'snapshot' && message.data?.[symbol]) {
-              setLivePrice(message.data[symbol].price);
-              setLastUpdate(new Date());
-              console.log(`[EarlyWarning-WS] 📸 Snapshot price for ${symbol}: ₹${message.data[symbol].price}`);
-            }
-          } catch (err) {
-            console.error(`[EarlyWarning-WS] Parse error:`, err);
-          }
-        };
-
-        ws.onerror = () => {
-          console.error(`[EarlyWarning-WS] Connection error`);
-        };
-
-        ws.onclose = () => {
-          console.log(`[EarlyWarning-WS] Connection closed, reconnecting...`);
-          reconnectTimeout = setTimeout(connect, 3000);
-        };
-
-      } catch (err) {
-        console.error(`[EarlyWarning-WS] Failed to connect:`, err);
-        reconnectTimeout = setTimeout(connect, 3000);
-      }
-    };
-
-    connect();
-
-    return () => {
-      if (ws) {
-        ws.close();
-      }
-      if (reconnectTimeout) {
-        clearTimeout(reconnectTimeout);
-      }
-    };
-  }, [symbol]);
+  // ✅ REMOVED: Duplicate WebSocket connection - Use central useMarketSocket hook instead
+  // Live price is now handled by the main page's WebSocket connection
 
   // ✅ REST API POLLING for analysis data
   useEffect(() => {
@@ -131,39 +73,21 @@ const EarlyWarningCard: React.FC<EarlyWarningCardProps> = ({ symbol }) => {
         const result = await response.json();
         setData(result);
         setError(null);
-        
-        // 🔍 DETAILED LOGGING for debugging
-        console.log(`[EarlyWarning-API] ✅ Analysis updated for ${symbol}:`, {
-          signal: result.signal,
-          strength: result.strength,
-          confidence: result.confidence,
-          status: result.status,
-          timestamp: result.timestamp,
-          momentum: result.momentum,
-          volume_buildup: result.volume_buildup,
-          price_compression: result.price_compression,
-          fake_signal_checks: result.fake_signal_checks?.pass_rate
-        });
-        
-        // 🚨 ALERT if 0% confidence/strength
-        if (result.confidence === 0 || result.strength === 0) {
-          console.warn(`[EarlyWarning-API] ⚠️ ${symbol} has ZERO confidence/strength:`, {
-            reasoning: result.reasoning,
-            status: result.status,
-            token_valid: result.token_valid
-          });
-        }
+        // Debug logs removed for production performance
       } catch (err) {
-        console.error(`[EarlyWarning-API] Error fetching ${symbol}:`, err);
+        // Only log errors, not every successful fetch
+        if (process.env.NODE_ENV === 'development') {
+          console.error(`[EarlyWarning-API] Error fetching ${symbol}:`, err);
+        }
         setError(err instanceof Error ? err.message : 'Failed to fetch data');
       } finally {
         setLoading(false);
       }
     };
 
-    // Initial fetch + Fast polling (every 5 seconds)
+    // Initial fetch + Optimized polling (every 10 seconds to reduce API load)
     fetchData();
-    const refreshInterval = parseInt(process.env.NEXT_PUBLIC_REFRESH_INTERVAL || '5000', 10);
+    const refreshInterval = parseInt(process.env.NEXT_PUBLIC_REFRESH_INTERVAL || '10000', 10);
     interval = setInterval(fetchData, refreshInterval);
 
     return () => {
@@ -245,17 +169,6 @@ const EarlyWarningCard: React.FC<EarlyWarningCardProps> = ({ symbol }) => {
           </div>
           <div className="flex flex-col">
             <h3 className="text-xl font-bold text-white">{symbol}</h3>
-            {livePrice && (
-              <div className="flex items-center gap-1">
-                <span className="text-xs text-emerald-400 font-semibold">
-                  ₹{livePrice.toFixed(2)}
-                </span>
-                <span className="w-1.5 h-1.5 bg-emerald-400 rounded-full animate-pulse"></span>
-                <span className="text-[9px] text-gray-500">
-                  LIVE
-                </span>
-              </div>
-            )}
           </div>
         </div>
         

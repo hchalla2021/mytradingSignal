@@ -3,6 +3,14 @@
 import React, { memo, useEffect, useState } from 'react';
 import { Activity, TrendingUp, TrendingDown, AlertTriangle } from 'lucide-react';
 
+// Production-safe logging
+const isDev = process.env.NODE_ENV === 'development';
+const log = {
+  debug: (...args: unknown[]) => isDev && console.log(...args),
+  warn: (...args: unknown[]) => isDev && console.warn(...args),
+  error: console.error,
+};
+
 interface VolumePulseData {
   symbol: string;
   volume_data: {
@@ -38,41 +46,22 @@ const VolumePulseCard = memo<VolumePulseCardProps>(({ symbol, name }) => {
         if (!response.ok) throw new Error('Failed to fetch');
         const result = await response.json();
         
-        // 🔍 DETAILED LOGGING for debugging
-        console.log(`[VOLUME-PULSE] ✅ Data received for ${symbol}:`, {
-          status: result.status,
-          signal: result.signal,
-          confidence: result.confidence,
-          pulse_score: result.pulse_score,
-          trend: result.trend,
-          green_volume: result.volume_data?.green_candle_volume,
-          red_volume: result.volume_data?.red_candle_volume,
-          green_pct: result.volume_data?.green_percentage,
-          red_pct: result.volume_data?.red_percentage,
-          ratio: result.volume_data?.ratio,
-          candles_analyzed: result.candles_analyzed
-        });
-        
-        // 🚨 ALERT if values are zero or missing
-        if (result.volume_data?.green_candle_volume === 0 && result.volume_data?.red_candle_volume === 0) {
-          console.warn(`[VOLUME-PULSE] ⚠️ ${symbol} has ZERO volume data!`, result);
-        }
-        if (result.pulse_score === 50 && result.confidence === 0) {
-          console.warn(`[VOLUME-PULSE] ⚠️ ${symbol} showing neutral/default values - check if live data`, result);
-        }
+        // Debug logging (development only)
+        log.debug(`[VOLUME-PULSE] ${symbol}: signal=${result.signal}, pulse=${result.pulse_score}`);
         
         setData(result);
         setError(null);
       } catch (err) {
         setError('Data unavailable');
-        console.error(`[VOLUME-PULSE] ❌ Error fetching ${symbol}:`, err);
+        log.error(`[VOLUME-PULSE] Error fetching ${symbol}:`, err);
       } finally {
         setLoading(false);
       }
     };
 
     fetchData();
-    const refreshInterval = parseInt(process.env.NEXT_PUBLIC_REFRESH_INTERVAL || '5000', 10);
+    // Optimized: 15s polling to reduce API load (was 5s)
+    const refreshInterval = parseInt(process.env.NEXT_PUBLIC_REFRESH_INTERVAL || '15000', 10);
     const interval = setInterval(fetchData, refreshInterval);
 
     return () => clearInterval(interval);

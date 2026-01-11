@@ -3,6 +3,14 @@
 import React, { memo, useEffect, useState } from 'react';
 import { GitBranch, TrendingUp, TrendingDown, AlertTriangle } from 'lucide-react';
 
+// Production-safe logging - only logs in development
+const isDev = process.env.NODE_ENV === 'development';
+const log = {
+  debug: (...args: unknown[]) => isDev && console.log(...args),
+  warn: (...args: unknown[]) => isDev && console.warn(...args),
+  error: console.error, // Always log errors
+};
+
 interface TrendBaseData {
   symbol: string;
   structure: {
@@ -48,99 +56,25 @@ const TrendBaseCard = memo<TrendBaseCardProps>(({ symbol, name }) => {
         const currentRefresh = refreshCount + 1;
         setRefreshCount(currentRefresh);
         
-        // 🔍 DETAILED LOGGING with ALL SECTIONS CHECK
-        console.log(`[TREND-BASE] 🔄 Refresh #${currentRefresh} for ${symbol} at ${new Date().toLocaleTimeString()}`);
-        console.log(`[TREND-BASE] 📊 ALL SECTIONS DATA CHECK:`, {
-          '1_STATUS': {
-            status: result.status,
-            data_status: result.data_status,
-            candles_analyzed: result.candles_analyzed,
-            timestamp: result.timestamp
-          },
-          '2_SIGNAL_SECTION': {
-            signal: result.signal,
-            confidence: result.confidence,
-            trend: result.trend,
-            '✅_displaying': result.signal && result.confidence ? 'YES' : '❌ MISSING'
-          },
-          '3_STRUCTURE_SECTION': {
-            type: result.structure?.type,
-            integrity_score: result.structure?.integrity_score,
-            '✅_displaying': result.structure?.type && result.structure?.integrity_score ? 'YES' : '❌ MISSING'
-          },
-          '4_SWING_HIGHS_SECTION': {
-            last_high: result.structure?.swing_points?.last_high,
-            prev_high: result.structure?.swing_points?.prev_high,
-            high_diff: result.structure?.swing_points?.high_diff,
-            '✅_displaying': result.structure?.swing_points?.last_high ? 'YES' : '❌ MISSING'
-          },
-          '5_SWING_LOWS_SECTION': {
-            last_low: result.structure?.swing_points?.last_low,
-            prev_low: result.structure?.swing_points?.prev_low,
-            low_diff: result.structure?.swing_points?.low_diff,
-            '✅_displaying': result.structure?.swing_points?.last_low ? 'YES' : '❌ MISSING'
-          },
-          '6_STATS_SECTION': {
-            confidence: result.confidence,
-            trend: result.trend,
-            status: result.status,
-            '✅_displaying': result.confidence && result.trend ? 'YES' : '❌ MISSING'
-          }
-        });
+        // Debug logging (development only)
+        log.debug(`[TREND-BASE] Refresh #${currentRefresh} for ${symbol}`);
         
-        // 🚨 ALERT for missing sections
+        // Alert for missing critical data
         if (!result.structure?.swing_points?.last_high || !result.structure?.swing_points?.last_low) {
-          console.error(`[TREND-BASE] ❌ ${symbol} MISSING CRITICAL DATA:`, {
-            last_high: result.structure?.swing_points?.last_high || 'MISSING',
-            last_low: result.structure?.swing_points?.last_low || 'MISSING',
-            full_response: result
-          });
-        }
-        if (!result.signal || result.confidence === undefined) {
-          console.error(`[TREND-BASE] ❌ ${symbol} MISSING SIGNAL DATA:`, {
-            signal: result.signal || 'MISSING',
-            confidence: result.confidence !== undefined ? result.confidence : 'MISSING',
-            full_response: result
-          });
+          log.warn(`[TREND-BASE] ${symbol} missing swing point data`);
         }
         
-        // 📊 COMPARE with previous data to track changes
+        // Track changes from previous data
         if (previousData && previousData.structure && result.structure) {
           const hasChanged = 
             previousData.structure.integrity_score !== result.structure.integrity_score ||
-            previousData.structure.swing_points?.last_high !== result.structure.swing_points?.last_high ||
-            previousData.structure.swing_points?.last_low !== result.structure.swing_points?.last_low ||
-            previousData.signal !== result.signal ||
-            previousData.confidence !== result.confidence;
+            previousData.signal !== result.signal;
           
           if (hasChanged) {
-            console.log(`[TREND-BASE] ✅ ${symbol} VALUES CHANGED:`, {
-              integrity_score: `${previousData.structure.integrity_score}% → ${result.structure.integrity_score}%`,
-              last_high: `${previousData.structure.swing_points?.last_high} → ${result.structure.swing_points?.last_high}`,
-              last_low: `${previousData.structure.swing_points?.last_low} → ${result.structure.swing_points?.last_low}`,
-              signal: `${previousData.signal} → ${result.signal}`,
-              confidence: `${previousData.confidence}% → ${result.confidence}%`
-            });
             setUnchangedCount(0);
           } else {
-            const newUnchangedCount = unchangedCount + 1;
-            setUnchangedCount(newUnchangedCount);
-            console.warn(`[TREND-BASE] ⚠️ ${symbol} NO CHANGE detected (${newUnchangedCount} times in a row)`, {
-              integrity_score: result.structure.integrity_score,
-              last_high: result.structure.swing_points?.last_high,
-              last_low: result.structure.swing_points?.last_low,
-              signal: result.signal,
-              status: result.status
-            });
+            setUnchangedCount(prev => prev + 1);
           }
-        }
-        
-        // 🚨 ALERT if values seem wrong
-        if (result.structure?.integrity_score === 50 && result.confidence === 0) {
-          console.warn(`[TREND-BASE] ⚠️ ${symbol} showing neutral/default values - may not have live data`, result);
-        }
-        if (!result.structure || result.structure.swing_points?.last_high === 0) {
-          console.warn(`[TREND-BASE] ⚠️ ${symbol} missing swing point data!`, result);
         }
         
         // Store previous data for next comparison
@@ -150,17 +84,14 @@ const TrendBaseCard = memo<TrendBaseCardProps>(({ symbol, name }) => {
         if (result.status === 'TOKEN_EXPIRED' || result.status === 'ERROR' || !result.structure) {
           setError(result.message || 'Token expired - Please login');
           setData(null);
-          console.warn(`[TREND-BASE] ${symbol} - ${result.status}: ${result.message}`);
           setLoading(false);
           return;
         }
         
         // Handle CACHED_DATA status (last session data)
         if (result.status === 'CACHED_DATA') {
-          // Show cached data with indicator
           setData({ ...result, _isCached: true });
           setError(null);
-          console.log(`[TREND-BASE] ${symbol} - Showing last session data (market closed)`);
           setLoading(false);
           return;
         }
@@ -169,7 +100,6 @@ const TrendBaseCard = memo<TrendBaseCardProps>(({ symbol, name }) => {
         if (result.status === 'NO_DATA') {
           setError(result.message || 'Market closed - No data available');
           setData(null);
-          console.log(`[TREND-BASE] ${symbol} - Market closed, waiting for market open`);
           setLoading(false);
           return;
         }
@@ -178,14 +108,15 @@ const TrendBaseCard = memo<TrendBaseCardProps>(({ symbol, name }) => {
         setError(null);
       } catch (err) {
         setError('Data unavailable');
-        console.error(`[TREND-BASE] Error fetching ${symbol}:`, err);
+        log.error(`[TREND-BASE] Error fetching ${symbol}:`, err);
       } finally {
         setLoading(false);
       }
     };
 
     fetchData();
-    const refreshInterval = parseInt(process.env.NEXT_PUBLIC_REFRESH_INTERVAL || '5000', 10);
+    // Optimized: 15s polling to reduce API load (was 5s)
+    const refreshInterval = parseInt(process.env.NEXT_PUBLIC_REFRESH_INTERVAL || '15000', 10);
     const interval = setInterval(fetchData, refreshInterval);
 
     return () => clearInterval(interval);
