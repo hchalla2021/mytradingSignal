@@ -12,6 +12,7 @@ from services.websocket_manager import manager
 from services.market_feed import MarketFeedService
 from services.cache import CacheService
 from services.token_watcher import start_token_watcher
+from services.unified_auth_service import unified_auth
 
 from routers import (
     auth,
@@ -71,6 +72,28 @@ async def lifespan(app: FastAPI):
     
     print("\n🚀 Starting services...")
 
+    # 🔐 UNIFIED AUTH SERVICE - Start first (centralized auth management)
+    print("🔐 Initializing Unified Auth Service...")
+    
+    # Register market feed reconnection callback
+    async def on_token_refresh(new_token: str):
+        """Callback when token is refreshed - reconnect market feed"""
+        if market_feed:
+            await market_feed.reconnect_with_new_token(new_token)
+    
+    unified_auth.register_token_refresh_callback(on_token_refresh)
+    
+    # Start auto-refresh monitor (non-blocking background task)
+    asyncio.create_task(unified_auth.start_auto_refresh_monitor())
+    print("✅ Unified Auth Service active (monitoring in background)")
+    
+    # Validate token before starting services
+    token_valid = await unified_auth.validate_token(force=True)
+    if not token_valid:
+        print("⚠️ WARNING: Zerodha token is not valid")
+        print("   Services will start but may not connect to Zerodha")
+        print("   Please login via UI or run: python quick_token_fix.py")
+
     # Auto update futures on startup
     from services.auto_futures_updater import check_and_update_futures_on_startup
     await check_and_update_futures_on_startup()
@@ -82,8 +105,8 @@ async def lifespan(app: FastAPI):
     # Market feed
     market_feed = MarketFeedService(cache, manager)
 
-    # Token watcher
-    token_observer = start_token_watcher(market_feed)
+    # Token watcher (file system monitor for .env changes)
+    token_observer = start_token_watcher(market_feed, unified_auth)
 
     # Scheduler / Feed startup
     scheduler = None

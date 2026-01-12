@@ -128,7 +128,7 @@ export default function Home() {
                   }`}>
                     {outlookData.NIFTY.overallSignal.replace('_', ' ')}
                   </span>
-                  <span className="text-lg font-bold text-emerald-400 bg-emerald-950/20 border-2 border-emerald-500/30 rounded px-2 py-1">
+                  <span className="text-lg font-bold text-emerald-400 bg-emerald-950/20 border-2 border-emerald-500/30 rounded px-2 py-1" suppressHydrationWarning>
                     {outlookData.NIFTY.overallConfidence}%
                   </span>
                 </div>
@@ -152,9 +152,9 @@ export default function Home() {
                 </div>
                 <div className="flex items-center gap-2 mb-2">
                   <span className="flex-1 px-2.5 py-1.5 text-xs font-bold rounded-md border-2 text-center bg-gray-900/20 text-gray-400 border-gray-500/40">NEUTRAL</span>
-                  <span className="text-lg font-bold text-gray-400 bg-gray-950/20 border-2 border-gray-500/30 rounded px-2 py-1">50%</span>
+                  <span className="text-lg font-bold text-gray-400 bg-gray-950/20 border-2 border-gray-500/30 rounded px-2 py-1">0%</span>
                 </div>
-                <p className="text-[10px] leading-tight font-bold text-gray-400">⏸️ NEUTRAL • Wait for Setup</p>
+                <p className="text-[10px] leading-tight font-bold text-gray-400">⏳ Calculating...</p>
               </div>
             )}
 
@@ -187,7 +187,7 @@ export default function Home() {
                     }`}>
                       {outlookData.BANKNIFTY.overallSignal.replace('_', ' ')}
                     </span>
-                    <span className="text-lg font-bold text-emerald-400 bg-emerald-950/20 border-2 border-emerald-500/30 rounded px-2 py-1">
+                    <span className="text-lg font-bold text-emerald-400 bg-emerald-950/20 border-2 border-emerald-500/30 rounded px-2 py-1" suppressHydrationWarning>
                       {outlookData.BANKNIFTY.overallConfidence}%
                     </span>
                   </div>
@@ -211,9 +211,9 @@ export default function Home() {
                 </div>
                 <div className="flex items-center gap-2 mb-2">
                   <span className="flex-1 px-2.5 py-1.5 text-xs font-bold rounded-md border-2 text-center bg-gray-900/20 text-gray-400 border-gray-500/40">NEUTRAL</span>
-                  <span className="text-lg font-bold text-gray-400 bg-gray-950/20 border-2 border-gray-500/30 rounded px-2 py-1">50%</span>
+                  <span className="text-lg font-bold text-gray-400 bg-gray-950/20 border-2 border-gray-500/30 rounded px-2 py-1">0%</span>
                 </div>
-                <p className="text-[10px] leading-tight font-bold text-gray-400">⏸️ NEUTRAL • Wait for Setup</p>
+                <p className="text-[10px] leading-tight font-bold text-gray-400">⏳ Calculating...</p>
               </div>
             )}
 
@@ -246,7 +246,7 @@ export default function Home() {
                   }`}>
                     {outlookData.SENSEX.overallSignal.replace('_', ' ')}
                   </span>
-                  <span className="text-lg font-bold text-emerald-400 bg-emerald-950/20 border-2 border-emerald-500/30 rounded px-2 py-1">
+                  <span className="text-lg font-bold text-emerald-400 bg-emerald-950/20 border-2 border-emerald-500/30 rounded px-2 py-1" suppressHydrationWarning>
                     {outlookData.SENSEX.overallConfidence}%
                   </span>
                 </div>
@@ -270,9 +270,9 @@ export default function Home() {
                 </div>
                 <div className="flex items-center gap-2 mb-2">
                   <span className="flex-1 px-2.5 py-1.5 text-xs font-bold rounded-md border-2 text-center bg-gray-900/20 text-gray-400 border-gray-500/40">NEUTRAL</span>
-                  <span className="text-lg font-bold text-gray-400 bg-gray-950/20 border-2 border-gray-500/30 rounded px-2 py-1">50%</span>
+                  <span className="text-lg font-bold text-gray-400 bg-gray-950/20 border-2 border-gray-500/30 rounded px-2 py-1">0%</span>
                 </div>
-                <p className="text-[10px] leading-tight font-bold text-gray-400">⏸️ NEUTRAL • Wait for Setup</p>
+                <p className="text-[10px] leading-tight font-bold text-gray-400">⏳ Calculating...</p>
               </div>
             )}
           </div>

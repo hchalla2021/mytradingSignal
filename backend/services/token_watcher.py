@@ -20,8 +20,9 @@ IST = pytz.timezone('Asia/Kolkata')
 class TokenWatcher(FileSystemEventHandler):
     """Watches .env file for token changes and triggers reconnection"""
     
-    def __init__(self, market_feed_service):
+    def __init__(self, market_feed_service, unified_auth_service):
         self.market_feed = market_feed_service
+        self.unified_auth = unified_auth_service
         self.last_token = None
         self.env_file = Path(__file__).parent.parent / '.env'
         print(f"👀 Watching for token changes in: {self.env_file}")
@@ -73,16 +74,15 @@ class TokenWatcher(FileSystemEventHandler):
                 # Update stored token
                 self.last_token = new_token
                 
-                # Update auth state immediately
+                # 🔥 UPDATE UNIFIED AUTH SERVICE (centralized)
+                await self.unified_auth.update_token(new_token)
+                
+                # Legacy: Also update auth state manager for backward compatibility
                 from services.auth_state_machine import auth_state_manager
                 auth_state_manager.update_token(new_token)
                 
-                # Trigger reconnection with new token
-                if self.market_feed:
-                    await self.market_feed.reconnect_with_new_token(new_token)
-                    print("✅ Reconnection complete! Live data flowing...")
-                else:
-                    print("❌ Market feed service not available")
+                # Market feed will reconnect via unified_auth callback
+                print("✅ Token update complete! Services reconnecting...")
             else:
                 print("ℹ️ No token change detected")
                 
@@ -92,9 +92,14 @@ class TokenWatcher(FileSystemEventHandler):
             traceback.print_exc()
 
 
-def start_token_watcher(market_feed_service):
-    """Start watching .env file for token changes"""
-    event_handler = TokenWatcher(market_feed_service)
+def start_token_watcher(market_feed_service, unified_auth_service):
+    """Start watching .env file for token changes
+    
+    Args:
+        market_feed_service: Market feed service instance
+        unified_auth_service: Unified auth service instance
+    """
+    event_handler = TokenWatcher(market_feed_service, unified_auth_service)
     observer = Observer()
     
     # Watch the parent directory (where .env is located)

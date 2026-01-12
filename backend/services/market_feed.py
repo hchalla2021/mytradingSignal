@@ -186,25 +186,36 @@ class MarketFeedService:
                 if symbol not in self.last_prices:
                     print(f"🟢 First tick received for {symbol}: Price={data['price']}, Change={data['changePercent']}%")
                 
-                # 🔥 CRITICAL FIX: Process ALL ticks during market hours, not just price changes
+                # 🔥 CRITICAL FIX: Process ALL ticks during market hours
+                # REMOVE rate limiting to ensure smooth 9:15 AM PRE_OPEN → LIVE transition
                 # We need to update:
                 # - PCR data (changes every few seconds)
                 # - OI data (changes frequently)
                 # - Volume data (changes every second)
-                # - Market status (transitions at 9:15 AM, 3:30 PM)
+                # - Market status (transitions at 9:15 AM, 3:30 PM) - CRITICAL!
                 # - Timestamp (keeps data fresh)
                 market_status = get_market_status()
                 is_market_open = market_status in ("PRE_OPEN", "LIVE")
                 
-                # ⚡ RATE LIMITING: Update each symbol max once per second to prevent spam
+                # ⚡ INTELLIGENT RATE LIMITING: Allow bursts during critical transitions
                 import time
                 current_time = time.time()
                 last_update = self.last_update_time.get(symbol, 0)
                 time_since_last_update = current_time - last_update
                 
-                # Process tick if market is open AND (price changed OR 1 second elapsed)
+                # Detect status changes (PRE_OPEN → LIVE transition)
+                last_status = getattr(self, f'_last_status_{symbol}', None)
+                status_changed = last_status != market_status
+                if status_changed:
+                    setattr(self, f'_last_status_{symbol}', market_status)
+                    print(f"🔄 MARKET STATUS CHANGE: {symbol} {last_status} → {market_status}")
+                
+                # Process tick if:
+                # 1. Market is open AND
+                # 2. (Price changed OR 0.5 second elapsed OR status changed)
+                # Using 0.5s instead of 1s for smoother transitions
                 price_changed = self.last_prices.get(symbol) != data["price"]
-                should_update = is_market_open and (price_changed or time_since_last_update >= 1.0)
+                should_update = is_market_open and (price_changed or time_since_last_update >= 0.5 or status_changed)
                 
                 if should_update:
                     self.last_prices[symbol] = data["price"]
@@ -221,9 +232,20 @@ class MarketFeedService:
         """Update cache and broadcast to WebSocket clients."""
         symbol = data["symbol"]
         
-        # 🔥 FIX: Recalculate market status for every broadcast to ensure real-time updates
-        # This prevents stale status from being cached, especially during 9:15 AM transition
-        data["status"] = get_market_status()
+        # 🔥 CRITICAL FIX: ALWAYS recalculate market status for EVERY broadcast
+        # This prevents freezing at 9:15 AM PRE_OPEN → LIVE transition
+        # Status MUST be fresh, never cached
+        current_status = get_market_status()
+        old_status = data.get("status", "UNKNOWN")
+        data["status"] = current_status
+        
+        # 🔔 Alert on status change
+        if old_status != current_status:
+            print(f"\n{'='*80}")
+            print(f"🔔 MARKET STATUS TRANSITION: {symbol}")
+            print(f"   {old_status} → {current_status}")
+            print(f"   Time: {datetime.now(IST).strftime('%H:%M:%S')}")
+            print(f"{'='*80}\n")
         
         # ✅ DEBUG: Log every broadcast with current status
         print(f"[BROADCAST] {symbol}: ₹{data['price']} ({data['changePercent']:+.2f}%) [{data['status']}] → {self.ws_manager.connection_count} clients")

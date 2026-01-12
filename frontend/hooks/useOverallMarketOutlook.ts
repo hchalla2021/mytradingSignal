@@ -100,18 +100,18 @@ const SIGNAL_WEIGHTS: SignalWeight = {
   // ai: 10,           // COMMENTED OUT - Not required
 };
 
-// 🔥🔥🔥 INSTANT DEFAULT VALUES - Show immediately, update in background
+// 🔥🔥🔥 INSTANT DEFAULT VALUES - Start at 0%, load real data immediately
 const createDefaultOutlook = (symbol: string): SymbolOutlook => ({
-  overallConfidence: 50,
+  overallConfidence: 0,
   overallSignal: 'NEUTRAL',
-  tradeRecommendation: '⏸️ NEUTRAL • Wait for Setup',
+  tradeRecommendation: '⏳ Calculating...',
   signalBreakdown: {
-    technical: { signal: 'NEUTRAL', confidence: 50, weight: 20 },
-    zoneControl: { signal: 'NEUTRAL', confidence: 50, weight: 16 },
-    volumePulse: { signal: 'NEUTRAL', confidence: 50, weight: 16 },
-    trendBase: { signal: 'NEUTRAL', confidence: 50, weight: 12 },
-    candleIntent: { signal: 'NEUTRAL', confidence: 50, weight: 14 },
-    marketIndices: { signal: 'NEUTRAL', confidence: 50, weight: 8 },
+    technical: { signal: 'NEUTRAL', confidence: 0, weight: 20 },
+    zoneControl: { signal: 'NEUTRAL', confidence: 0, weight: 16 },
+    volumePulse: { signal: 'NEUTRAL', confidence: 0, weight: 16 },
+    trendBase: { signal: 'NEUTRAL', confidence: 0, weight: 12 },
+    candleIntent: { signal: 'NEUTRAL', confidence: 0, weight: 14 },
+    marketIndices: { signal: 'NEUTRAL', confidence: 0, weight: 8 },
     pcr: { signal: 'NEUTRAL', confidence: 0, weight: 6 },
     earlyWarning: { signal: 'WAIT', confidence: 0, weight: 8 },
   },
@@ -136,7 +136,7 @@ const createDefaultOutlook = (symbol: string): SymbolOutlook => ({
   timestamp: new Date().toISOString(),
 });
 
-// 🔥 GLOBAL CACHE - Pre-populate with defaults for INSTANT display
+// 🔥 GLOBAL CACHE - ALWAYS RESET TO 0% ON IMPORT
 let globalCache: OverallOutlookData = { 
   NIFTY: createDefaultOutlook('NIFTY'), 
   BANKNIFTY: createDefaultOutlook('BANKNIFTY'), 
@@ -145,10 +145,21 @@ let globalCache: OverallOutlookData = {
 let lastFetchTime = 0;
 let isFetching = false;
 
+// 🔥 FORCE RESET: Clear any cached values on module load
+if (typeof window !== 'undefined') {
+  try {
+    localStorage.removeItem('mytradingsignal_last_outlook_data');
+  } catch {}
+}
+
 export const useOverallMarketOutlook = () => {
-  // 🔥 INSTANT: Start with default values - NEVER null, NEVER loading
-  const [outlookData, setOutlookData] = useState<OverallOutlookData>(globalCache);
-  const [loading, setLoading] = useState(false); // 🔥 NEVER loading - always show data
+  // 🔥 FIX HYDRATION: Always start with defaults, load cache in useEffect
+  const [outlookData, setOutlookData] = useState<OverallOutlookData>({
+    NIFTY: createDefaultOutlook('NIFTY'),
+    BANKNIFTY: createDefaultOutlook('BANKNIFTY'),
+    SENSEX: createDefaultOutlook('SENSEX')
+  });
+  const [loading, setLoading] = useState(true);
 
   // Convert signal string to numeric score (-100 to +100)
   // 🔥 USER-FRIENDLY: Clear scoring with confidence-based amplification
@@ -527,9 +538,18 @@ export const useOverallMarketOutlook = () => {
     const earlyWarningScore = signalToScore(earlyWarningSignal, adjustedEarlyWarningConfidence);
     // const aiScore = signalToScore(aiSignal, aiConfidence); // COMMENTED OUT
     
-    // 🔍 DEBUG logs removed for production performance
-    // Enable these for debugging by uncommenting:
-    // console.log(`[OUTLOOK-CALC] Individual Scores:`, { techScore, zoneScore, volumeScore, trendScore, candleScore, marketIndicesScore, pcrScore, earlyWarningScore });
+    // 🔍 DEBUG logs for troubleshooting
+    console.log('[OUTLOOK-CALC] Signal Confidences:', {
+      tech: techConfidence,
+      zone: zoneConfidence,
+      volume: volumeConfidence,
+      trend: trendConfidence,
+      candle: candleConfidence,
+      market: marketIndicesConfidence,
+      pcr: pcrConfidence,
+      warning: adjustedEarlyWarningConfidence
+    });
+    console.log('[OUTLOOK-CALC] Available signals:', availableSignals + '/8');
 
     // 🔥 SIMPLIFIED: Calculate weighted average score (scores already confidence-adjusted)
     // 🔥 DYNAMIC WEIGHT CALCULATION: Adjust for LOW RISK Early Warning boost
@@ -576,7 +596,7 @@ export const useOverallMarketOutlook = () => {
     const bullishCount = [techScore, zoneScore, volumeScore, trendScore, candleScore, marketIndicesScore, pcrScore, earlyWarningScore].filter(s => s > 0).length;
     const bearishCount = [techScore, zoneScore, volumeScore, trendScore, candleScore, marketIndicesScore, pcrScore, earlyWarningScore].filter(s => s < 0).length;
     const alignmentBonus = Math.abs(bullishCount - bearishCount) * 3; // +3% per aligned signal
-    const finalConfidence = Math.min(100, overallConfidence + alignmentBonus);
+    let finalConfidence = Math.min(100, overallConfidence + alignmentBonus);
 
     // 🔥 TRADER-FRIENDLY THRESHOLDS: More responsive and granular
     let overallSignal: 'STRONG_BUY' | 'BUY' | 'NEUTRAL' | 'SELL' | 'STRONG_SELL';
@@ -811,73 +831,176 @@ export const useOverallMarketOutlook = () => {
     return null;
   }, []);
 
-  // 🔥 Full data load (background)
+  // 🔥🔥🔥 ULTRA FAST: Use single aggregated endpoint instead of 7 separate calls!
   const fetchFullSymbolData = useCallback(async (symbol: string) => {
     const quickFetch = (url: string) => 
       Promise.race([
-        fetch(url, { cache: 'no-store' }).then(r => r.ok ? r.json() : null).catch(() => null),
-        new Promise<null>(r => setTimeout(() => r(null), 500))
+        fetch(url, { cache: 'no-store' }).then(r => {
+          if (!r.ok) {
+            console.error(`[OUTLOOK-${symbol}] Fetch failed for ${url}:`, r.status);
+            return null;
+          }
+          return r.json();
+        }).catch(err => {
+          console.error(`[OUTLOOK-${symbol}] Error fetching ${url}:`, err);
+          return null;
+        }),
+        new Promise<null>(r => setTimeout(() => {
+          console.warn(`[OUTLOOK-${symbol}] Timeout for ${url}`);
+          r(null);
+        }, 5000)) // Increased to 5 seconds
       ]);
 
-    const [tech, zone, volume, trend, candle, market, warning] = await Promise.all([
+    console.log(`[OUTLOOK-${symbol}] Starting fetch...`);
+
+    // 🚀 OPTIMIZATION: Fetch ALL advanced analysis in ONE call (5x faster!)
+    const [tech, allAdvanced, market] = await Promise.all([
       quickFetch(`${API_BASE_URL}/api/analysis/analyze/${symbol}`),
-      quickFetch(`${API_BASE_URL}/api/advanced/zone-control/${symbol}`),
-      quickFetch(`${API_BASE_URL}/api/advanced/volume-pulse/${symbol}`),
-      quickFetch(`${API_BASE_URL}/api/advanced/trend-base/${symbol}`),
-      quickFetch(`${API_BASE_URL}/api/advanced/candle-intent/${symbol}`),
+      quickFetch(`${API_BASE_URL}/api/advanced/all-analysis/${symbol}`), // ⚡ ONE CALL for 5 endpoints!
       quickFetch(`${API_BASE_URL}/ws/cache/${symbol}`).then(d => d?.data || null),
-      quickFetch(`${API_BASE_URL}/api/advanced/early-warning/${symbol}`),
     ]);
 
-    return calculateOverallOutlook(tech, zone, volume, trend, candle, market, warning);
+    console.log(`[OUTLOOK-${symbol}] Fetch complete:`, {
+      tech: tech ? '✓' : '✗',
+      allAdvanced: allAdvanced ? '✓' : '✗',
+      market: market ? '✓' : '✗'
+    });
+
+    // Extract individual sections from aggregated response
+    const zone = allAdvanced?.zone_control || null;
+    const volume = allAdvanced?.volume_pulse || null;
+    const trend = allAdvanced?.trend_base || null;
+    const candle = allAdvanced?.candle_intent || null;
+    const warning = allAdvanced?.early_warning || null;
+
+    // 🔍 DEBUG: Log fetched data
+    console.log(`[OUTLOOK-${symbol}] Extracted data:`, {
+      tech: tech ? '✓' : '✗',
+      zone: zone ? '✓' : '✗',
+      volume: volume ? '✓' : '✗',
+      trend: trend ? '✓' : '✗',
+      candle: candle ? '✓' : '✗',
+      market: market ? '✓' : '✗',
+      warning: warning ? '✓' : '✗'
+    });
+
+    const result = calculateOverallOutlook(tech, zone, volume, trend, candle, market, warning);
+    console.log(`[OUTLOOK-${symbol}] Calculated confidence:`, result.overallConfidence + '%', 'Signal:', result.overallSignal);
+    
+    return result;
   }, [calculateOverallOutlook]);
 
-  // 🔥 SILENT UPDATE: Only update state if data actually changed
+  // 🔥 SILENT UPDATE: Always update state immediately (no change detection)
   const silentUpdate = useCallback((symbol: keyof OverallOutlookData, newData: SymbolOutlook | null) => {
     if (!newData) return;
     
-    const current = globalCache[symbol];
-    // Only update if confidence or signal changed (prevents UI flicker)
-    if (!current || 
-        current.overallConfidence !== newData.overallConfidence || 
-        current.overallSignal !== newData.overallSignal ||
-        current.riskLevel !== newData.riskLevel) {
-      globalCache[symbol] = newData;
-      setOutlookData(prev => ({ ...prev, [symbol]: newData }));
-    }
+    // 🔥 ALWAYS UPDATE - Show real data immediately
+    globalCache[symbol] = newData;
+    setOutlookData(prev => ({ ...prev, [symbol]: newData }));
   }, []);
 
-  // 🔥🔥🔥 SIMPLIFIED: SILENT BACKGROUND REFRESH ONLY (defaults shown instantly)
+  // 🔥🔥🔥 PRODUCTION: Fetch ONCE, keep values stable
   const fetchAllAnalysis = useCallback(async () => {
     const now = Date.now();
-    if (isFetching) return;
-    if (now - lastFetchTime < 3000) {
-      return; // Skip - data is fresh enough
+    if (isFetching) {
+      console.log('[OUTLOOK] Already fetching, skipping...');
+      return;
     }
     
     isFetching = true;
     lastFetchTime = now;
     
-    // 🔥 PURE SILENT: Just fetch and update - defaults already showing
+    console.log('[OUTLOOK] ========== STARTING FETCH ==========');
+    
+    // 🔥 FETCH ONCE: Get initial data and keep it stable
     try {
-      // Fetch all 3 symbols in parallel, update silently
-      await Promise.all([
-        fetchFullSymbolData('NIFTY').then(data => silentUpdate('NIFTY', data)),
-        fetchFullSymbolData('BANKNIFTY').then(data => silentUpdate('BANKNIFTY', data)),
-        fetchFullSymbolData('SENSEX').then(data => silentUpdate('SENSEX', data)),
+      // Fetch all 3 symbols in parallel
+      const results = await Promise.all([
+        fetchFullSymbolData('NIFTY').then(data => {
+          if (data) {
+            console.log('[OUTLOOK] ✅ NIFTY data received:', data.overallConfidence + '%');
+            silentUpdate('NIFTY', data);
+          } else {
+            console.error('[OUTLOOK] ❌ NIFTY data is NULL');
+          }
+          return data;
+        }),
+        fetchFullSymbolData('BANKNIFTY').then(data => {
+          if (data) {
+            console.log('[OUTLOOK] ✅ BANKNIFTY data received:', data.overallConfidence + '%');
+            silentUpdate('BANKNIFTY', data);
+          } else {
+            console.error('[OUTLOOK] ❌ BANKNIFTY data is NULL');
+          }
+          return data;
+        }),
+        fetchFullSymbolData('SENSEX').then(data => {
+          if (data) {
+            console.log('[OUTLOOK] ✅ SENSEX data received:', data.overallConfidence + '%');
+            silentUpdate('SENSEX', data);
+          } else {
+            console.error('[OUTLOOK] ❌ SENSEX data is NULL');
+          }
+          return data;
+        }),
       ]);
-    } catch {
-      // Silent fail - keep showing defaults
+      
+      console.log('[OUTLOOK] ========== FETCH COMPLETE ==========');
+      console.log('[OUTLOOK] Results:', {
+        NIFTY: results[0]?.overallConfidence + '%' || 'NULL',
+        BANKNIFTY: results[1]?.overallConfidence + '%' || 'NULL',
+        SENSEX: results[2]?.overallConfidence + '%' || 'NULL'
+      });
+    } catch (error) {
+      console.error('[OUTLOOK] ========== FETCH ERROR ==========', error);
     } finally {
       isFetching = false;
+      setLoading(false); // Data loaded, stop showing loading state
     }
   }, [fetchFullSymbolData, silentUpdate]);
 
   useEffect(() => {
+    // 🔥🔥🔥 FORCE 0% START - Reset everything
+    console.log('[OUTLOOK] FORCE RESET - Starting at 0%');
+    
+    // Clear localStorage
+    try {
+      localStorage.removeItem('mytradingsignal_last_outlook_data');
+    } catch {}
+    
+    // Reset global cache
+    globalCache = {
+      NIFTY: createDefaultOutlook('NIFTY'),
+      BANKNIFTY: createDefaultOutlook('BANKNIFTY'),
+      SENSEX: createDefaultOutlook('SENSEX')
+    };
+    
+    // Reset state to 0%
+    setOutlookData({
+      NIFTY: createDefaultOutlook('NIFTY'),
+      BANKNIFTY: createDefaultOutlook('BANKNIFTY'),
+      SENSEX: createDefaultOutlook('SENSEX')
+    });
+    
+    lastFetchTime = 0;
+    isFetching = false;
+    
+    // 🔥 Fetch fresh live data immediately
+    console.log('[OUTLOOK] Starting fresh data fetch...');
     fetchAllAnalysis();
-    // Silent refresh every 5 seconds
-    const interval = setInterval(fetchAllAnalysis, 5000);
-    return () => clearInterval(interval);
+    
+    // 🔥 VISIBILITY CHANGE: Don't refetch when switching tabs
+    // Only fetch on initial mount - let WebSocket handle live updates
+    const handleVisibilityChange = () => {
+      // Do nothing - prevent unnecessary refetches on tab switch
+      // WebSocket handles all live updates automatically
+    };
+    
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
   }, [fetchAllAnalysis]);
 
   return { outlookData, loading };

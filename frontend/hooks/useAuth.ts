@@ -34,6 +34,9 @@ export function useAuth() {
     user: null,
     error: null,
   });
+  
+  // Track revalidation in progress to prevent duplicate calls
+  const [isRevalidating, setIsRevalidating] = useState(false);
 
   // Load cached state after mount (client-side only)
   useEffect(() => {
@@ -44,24 +47,33 @@ export function useAuth() {
           const parsed = JSON.parse(cached);
           const age = Date.now() - (parsed.timestamp || 0);
           
-          // Use cached data if less than 1 hour old (optimistic auth)
-          if (age < 60 * 60 * 1000) {
+          // Use cached data if less than 5 minutes old (optimistic auth)
+          // Reduced from 1 hour to 5 minutes for faster token expiry detection
+          if (age < 5 * 60 * 1000) {
             setAuthState({
               isAuthenticated: parsed.isAuthenticated || false,
               isValidating: false, // Don't show loading on cached data
               user: parsed.user || null,
               error: parsed.error || null,
             });
+            log.debug('Loaded cached auth state (age: ' + Math.round(age / 1000) + 's)');
+          } else {
+            log.debug('Cached auth state expired, will revalidate');
+            localStorage.removeItem(AUTH_STORAGE_KEY);
           }
         } catch (e) {
           log.warn('Failed to parse cached auth state');
+          localStorage.removeItem(AUTH_STORAGE_KEY);
         }
       }
 
       // Listen for auth success messages from popup
       const handleMessage = (event: MessageEvent) => {
         if (event.data?.type === 'zerodha-auth-success') {
-          log.debug('Received auth success message from popup');
+          log.debug('Received auth success message from popup - forcing revalidation');
+          // Clear cache to force fresh validation
+          localStorage.removeItem(AUTH_STORAGE_KEY);
+          // Revalidate immediately
           validateToken();
         }
       };
@@ -72,11 +84,21 @@ export function useAuth() {
   }, []);
 
   const validateToken = useCallback(async () => {
+    // Prevent duplicate validation calls
+    if (isRevalidating) {
+      log.debug('Validation already in progress, skipping...');
+      return;
+    }
+    
+    setIsRevalidating(true);
+    
     try {
       // Use AbortController for faster cancellation
       const controller = new AbortController();
-      const timeout = parseInt(process.env.NEXT_PUBLIC_API_TIMEOUT || '5000', 10);
+      const timeout = parseInt(process.env.NEXT_PUBLIC_API_TIMEOUT || '8000', 10); // Increased to 8s for Zerodha API
       const timeoutId = setTimeout(() => controller.abort(), timeout);
+      
+      log.debug('Validating token with backend...');
       
       const response = await fetch(`${API_URL}/api/auth/validate`, {
         method: 'GET',
@@ -84,6 +106,7 @@ export function useAuth() {
           'Content-Type': 'application/json',
         },
         signal: controller.signal,
+        cache: 'no-store', // Prevent caching to get fresh token status
       });
       
       clearTimeout(timeoutId);
@@ -93,6 +116,7 @@ export function useAuth() {
       }
 
       const data = await response.json();
+      log.debug('Token validation response:', data);
 
       if (data.valid) {
         // Token is valid
@@ -108,15 +132,19 @@ export function useAuth() {
         };
         setAuthState(newState);
         
-        // Save to localStorage
+        // Save to localStorage with timestamp
         if (typeof window !== 'undefined') {
           localStorage.setItem(AUTH_STORAGE_KEY, JSON.stringify({
             timestamp: Date.now(),
             ...newState,
           }));
         }
+        
+        log.debug('✅ Token valid - User authenticated:', data.user_name);
       } else {
         // Token is invalid or doesn't exist
+        log.warn('❌ Token invalid:', data.message);
+        
         setAuthState({
           isAuthenticated: false,
           isValidating: false,
@@ -129,21 +157,24 @@ export function useAuth() {
           localStorage.removeItem(AUTH_STORAGE_KEY);
         }
       }
-    } catch (error) {
-      // Silently fail - keep cached state, don't block UI
+    } catch (error: any) {
+      // Handle errors gracefully
       if (error.name === 'AbortError') {
-        log.warn('Auth validation timed out - using cached state');
+        log.warn('Auth validation timed out - keeping current state');
       } else {
         log.error('Token validation error:', error);
       }
       
-      // Don't update state on error - keep cached/current state
+      // On error, don't update state - keep cached/current state
+      // But mark as not validating
       setAuthState(prev => ({
         ...prev,
         isValidating: false,
       }));
+    } finally {
+      setIsRevalidating(false);
     }
-  }, []);
+  }, [isRevalidating]);
 
   // Initial validation on mount (background, non-blocking)
   useEffect(() => {
@@ -151,9 +182,9 @@ export function useAuth() {
     validateToken();
   }, [validateToken]);
 
-  // Periodic revalidation
+  // Periodic revalidation - every 2 minutes for faster token expiry detection
   useEffect(() => {
-    const interval = setInterval(validateToken, VALIDATION_INTERVAL);
+    const interval = setInterval(validateToken, 2 * 60 * 1000); // 2 minutes
     return () => clearInterval(interval);
   }, [validateToken]);
 

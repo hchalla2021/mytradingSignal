@@ -93,6 +93,11 @@ const AnalysisCardContent = memo<AnalysisCardProps>(({ analysis }) => {
   const symbol_name = analysis.symbol_name || analysis.symbol || 'UNKNOWN';
   const signal = analysis.signal || SignalType.NO_TRADE;
   const confidence = analysis.confidence || 0;
+  
+  // 🔥 FIX: Show skeleton if confidence is too low (< 5%) indicating no real data yet
+  if (confidence < 0.05 && displayPrice === 0) {
+    return <AnalysisCardSkeleton showMessage={true} />;
+  }
 
   // ✅ OPTIMIZED: Flash effect (simplified)
   React.useEffect(() => {

@@ -106,7 +106,7 @@ export const SignalBadge: React.FC<SignalBadgeProps> = ({
         <span>{config.label}</span>
         {showConfidence && (
           <span className="text-xs opacity-90 border-2 border-green-500/40 rounded px-1.5 py-0.5 bg-green-950/10">
-            {Math.round(confidence * 100)}%
+            {confidence < 0.05 ? 0 : Math.round(confidence * 100)}%
           </span>
         )}
       </div>
