@@ -30,6 +30,9 @@ def detect_environment() -> str:
         "ubuntu" in hostname and os.path.exists("/var/www"),  # Ubuntu server
         os.path.exists("/var/www/mytradingSignal"),  # Production path exists
         os.getenv("PM2_HOME"),  # Running under PM2
+        os.getenv("DIGITAL_OCEAN"),  # Digital Ocean env var
+        os.path.exists("/root"),  # Running as root (typical in production VPS)
+        hostname.startswith("mydaily"),  # Hostname starts with project name
     ]
     
     if any(production_indicators):
