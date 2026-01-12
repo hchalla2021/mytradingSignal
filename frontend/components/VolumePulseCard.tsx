@@ -41,7 +41,7 @@ const VolumePulseCard = memo<VolumePulseCardProps>(({ symbol, name }) => {
   useEffect(() => {
     const fetchData = async () => {
       try {
-        const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000';
+        const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'https://mydailytradesignals.com';
         const response = await fetch(`${apiUrl}/api/advanced/volume-pulse/${symbol}`);
         if (!response.ok) throw new Error('Failed to fetch');
         const result = await response.json();

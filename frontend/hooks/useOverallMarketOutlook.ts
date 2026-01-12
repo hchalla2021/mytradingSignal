@@ -84,7 +84,7 @@ interface OverallOutlookData {
 }
 
 // 🔥 FIX: Use correct API URL with fallback
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000';
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'https://mydailytradesignals.com';
 const SYMBOLS = (process.env.NEXT_PUBLIC_MARKET_SYMBOLS || 'NIFTY,BANKNIFTY,SENSEX').split(',').filter(Boolean);
 
 // Signal strength weights (total = 100%) - AI REMOVED, Candle Intent, Market Indices, PCR & Early Warning ADDED

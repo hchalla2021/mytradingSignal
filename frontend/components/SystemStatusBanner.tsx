@@ -62,7 +62,7 @@ export default function SystemStatusBanner() {
   useEffect(() => {
     const fetchHealth = async () => {
       try {
-        const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000';
+        const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'https://mydailytradesignals.com';
         const response = await fetch(`${apiUrl}/api/system/health`);
         if (response.ok) {
           const data = await response.json();
@@ -84,7 +84,7 @@ export default function SystemStatusBanner() {
   if (!health) return null;
 
   const handleLogin = () => {
-    const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000';
+    const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'https://mydailytradesignals.com';
     const loginUrl = `${apiUrl}/api/auth/login`;
     
     // Detect mobile device

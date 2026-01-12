@@ -7,54 +7,7 @@ import os
 import socket
 
 
-def detect_environment() -> str:
-    """Auto-detect if running locally or in production.
-    
-    Detection logic:
-    1. Check ENVIRONMENT variable (if set explicitly)
-    2. Check hostname (if contains 'localhost', '127.0.0.1', or is local IP)
-    3. Check if running in container (Docker/Kubernetes)
-    4. Default to production for safety
-    """
-    # Check explicit environment setting
-    env = os.getenv("ENVIRONMENT", "auto").lower()
-    if env in ["local", "production"]:
-        return env
-    
-    # Auto-detection
-    hostname = socket.gethostname().lower()
-    
-    # Production indicators (check first for priority)
-    production_indicators = [
-        "mydailytrade" in hostname,  # Digital Ocean droplet
-        "ubuntu" in hostname and os.path.exists("/var/www"),  # Ubuntu server
-        os.path.exists("/var/www/mytradingSignal"),  # Production path exists
-        os.getenv("PM2_HOME"),  # Running under PM2
-        os.getenv("DIGITAL_OCEAN"),  # Digital Ocean env var
-        os.path.exists("/root"),  # Running as root (typical in production VPS)
-        hostname.startswith("mydaily"),  # Hostname starts with project name
-    ]
-    
-    if any(production_indicators):
-        return "production"
-    
-    # Local indicators
-    local_indicators = [
-        "localhost" in hostname,
-        "127.0.0.1" in hostname,
-        hostname.startswith("desktop-"),
-        hostname.startswith("laptop-"),
-        hostname.startswith("pc-"),
-        "local" in hostname,
-        os.path.exists("/workspaces"),  # GitHub Codespaces
-        os.getenv("CODESPACES"),  # GitHub Codespaces
-    ]
-    
-    if any(local_indicators):
-        return "local"
-    
-    # Default to production for safety
-    return "production"
+# Auto-detection removed - using direct .env values
 
 
 class Settings(BaseSettings):
@@ -68,20 +21,9 @@ class Settings(BaseSettings):
     zerodha_developers_url: str = "https://developers.kite.trade/apps"
     
     # ==================== OAUTH & REDIRECT ====================
-    # Environment detection
-    environment: str = Field(default="auto", env="ENVIRONMENT")
-    
-    # Local URLs
-    local_redirect_url: str = Field(default="http://127.0.0.1:8000/api/auth/callback", env="LOCAL_REDIRECT_URL")
-    local_frontend_url: str = Field(default="http://localhost:3000", env="LOCAL_FRONTEND_URL")
-    
-    # Production URLs
-    production_redirect_url: str = Field(default="https://mydailytradesignals.com/api/auth/callback", env="PRODUCTION_REDIRECT_URL")
-    production_frontend_url: str = Field(default="https://mydailytradesignals.com", env="PRODUCTION_FRONTEND_URL")
-    
-    # Legacy support (will be overridden by smart detection)
-    redirect_url: str = ""
-    frontend_url: str = ""
+    # Direct URLs from .env file
+    redirect_url: str = Field(default="https://mydailytradesignals.com/api/auth/callback", env="REDIRECT_URL")
+    frontend_url: str = Field(default="https://mydailytradesignals.com", env="FRONTEND_URL")
     
     # ==================== REDIS ====================
     redis_url: str = "redis://localhost:6379"
@@ -190,34 +132,11 @@ class Settings(BaseSettings):
         extra = "ignore"
     
     def __init__(self, **kwargs):
-        """Initialize settings with environment auto-detection."""
+        """Initialize settings from .env file."""
         super().__init__(**kwargs)
-        
-        # Detect environment
-        detected_env = detect_environment()
-        print(f"🌍 Environment detected: {detected_env.upper()}")
-        
-        # Auto-select URLs based on environment
-        if detected_env == "local":
-            self.redirect_url = self.local_redirect_url
-            self.frontend_url = self.local_frontend_url
-            print(f"   → Redirect URL: {self.redirect_url}")
-            print(f"   → Frontend URL: {self.frontend_url}")
-        else:
-            self.redirect_url = self.production_redirect_url
-            self.frontend_url = self.production_frontend_url
-            print(f"   → Redirect URL: {self.redirect_url}")
-            print(f"   → Frontend URL: {self.frontend_url}")
-    
-    @property
-    def is_production(self) -> bool:
-        """Check if running in production."""
-        return detect_environment() == "production"
-    
-    @property
-    def is_local(self) -> bool:
-        """Check if running locally."""
-        return detect_environment() == "local"
+        print(f"🔧 Configuration loaded from .env")
+        print(f"   → Redirect URL: {self.redirect_url}")
+        print(f"   → Frontend URL: {self.frontend_url}")
     
     @property
     def cors_origins_list(self) -> list:

@@ -21,8 +21,8 @@ interface AuthState {
   error: string | null;
 }
 
-// 🔥 FIX: Use 127.0.0.1 instead of localhost for better compatibility
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://127.0.0.1:8000';
+// Direct URL from .env.local
+const API_URL = process.env.NEXT_PUBLIC_API_URL || 'https://mydailytradesignals.com';
 const AUTH_STORAGE_KEY = 'zerodha_auth_state';
 const VALIDATION_INTERVAL = 5 * 60 * 1000; // Revalidate every 5 minutes
 
