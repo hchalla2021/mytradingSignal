@@ -113,6 +113,7 @@ class MarketFeedService:
         self.ws_manager = ws_manager
         self.kws: Optional[KiteTicker] = None
         self.running = False
+        self._is_connected: bool = False  # Track connection state
         self.last_prices: Dict[str, float] = {}
         self.last_oi: Dict[str, int] = {}  # Track last OI for change calculation
         self.last_update_time: Dict[str, float] = {}  # Track last update time per symbol
@@ -122,6 +123,30 @@ class MarketFeedService:
         self._last_connection_attempt: Optional[datetime] = None  # Track last retry
         self._retry_delay: int = 5  # Start with 5 seconds, exponential backoff
         self._using_rest_fallback: bool = False  # Flag for REST API fallback mode
+    
+    @property
+    def is_connected(self) -> bool:
+        """Check if WebSocket is connected and receiving data.
+        
+        Returns True only if:
+        1. KiteTicker instance exists
+        2. Running flag is True
+        3. Not using REST fallback
+        4. Has received at least one tick in the last 60 seconds
+        """
+        if not self.kws or not self.running or self._using_rest_fallback:
+            return False
+        
+        # Check if we've received recent data
+        if not self.last_update_time:
+            return False
+        
+        import time
+        current_time = time.time()
+        most_recent_update = max(self.last_update_time.values()) if self.last_update_time else 0
+        
+        # Consider connected if we got data in the last 60 seconds
+        return (current_time - most_recent_update) < 60
     
     def _normalize_tick(self, tick: Dict[str, Any]) -> Dict[str, Any]:
         """Normalize Zerodha tick data to our format."""
@@ -540,6 +565,10 @@ class MarketFeedService:
         print("✅ Connected to Zerodha KiteTicker")
         print(f"📊 Connection response: {response}")
         
+        # 🔥 Set connection flag
+        self._is_connected = True
+        self._using_rest_fallback = False
+        
         # 🔥 Notify watchdog of connection
         feed_watchdog.on_connect()
         
@@ -584,6 +613,9 @@ class MarketFeedService:
     def _on_close(self, ws, code, reason):
         """Callback when connection is closed."""
         print(f"🔌 Zerodha connection closed: {code} - {reason}")
+        
+        # 🔥 Clear connection flag
+        self._is_connected = False
         
         # 🔥 Notify watchdog of disconnection
         feed_watchdog.on_disconnect()
@@ -861,12 +893,16 @@ class MarketFeedService:
                 
                 last_auth_state = current_auth_state
                 
-                # �📡 REST API FALLBACK: If WebSocket is down, poll REST API every 5 seconds
+                # 📡 REST API FALLBACK: If WebSocket is down, poll REST API every 2 seconds
+                # This keeps UI updated smoothly during connection issues
                 if self._using_rest_fallback and is_market_open():
-                    if (current_time - last_rest_poll_time).total_seconds() >= 5:
-                        print("📡 REST API fallback: Fetching market data...")
+                    if (current_time - last_rest_poll_time).total_seconds() >= 2:
+                        # Only print every 10th fetch to reduce log spam
+                        should_log = int((current_time - last_rest_poll_time).total_seconds()) % 20 == 0
+                        if should_log:
+                            print("📡 REST API fallback: Fetching market data...")
                         success = await self._fetch_and_cache_last_data()
-                        if success:
+                        if success and should_log:
                             print("✅ REST API data fetched and broadcast")
                         last_rest_poll_time = current_time
                 
