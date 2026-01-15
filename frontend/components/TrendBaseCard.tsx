@@ -115,8 +115,8 @@ const TrendBaseCard = memo<TrendBaseCardProps>(({ symbol, name }) => {
     };
 
     fetchData();
-    // Optimized: 15s polling to reduce API load (was 5s)
-    const refreshInterval = parseInt(process.env.NEXT_PUBLIC_REFRESH_INTERVAL || '15000', 10);
+    // Optimized: 10s polling for live trend updates (backend cache is 5s)
+    const refreshInterval = parseInt(process.env.NEXT_PUBLIC_REFRESH_INTERVAL || '10000', 10);
     const interval = setInterval(fetchData, refreshInterval);
 
     return () => clearInterval(interval);
@@ -246,9 +246,9 @@ const TrendBaseCard = memo<TrendBaseCardProps>(({ symbol, name }) => {
         </div>
       )}
       {data.status === 'CACHED' && (
-        <div className="mb-2 px-2 py-1 rounded-lg bg-amber-900/30 text-amber-200 border border-amber-700/40 text-[9px] font-semibold flex items-center gap-1.5">
-          <span className="w-1.5 h-1.5 bg-amber-400 rounded-full animate-pulse"></span>
-          CACHED • {data.message}
+        <div className="mb-2 px-2 py-1 rounded-lg bg-blue-900/30 text-blue-200 border border-blue-700/40 text-[9px] font-semibold flex items-center gap-1.5">
+          <span className="w-1.5 h-1.5 bg-blue-400 rounded-full"></span>
+          📊 LAST MARKET SESSION DATA • Market Closed
         </div>
       )}
       

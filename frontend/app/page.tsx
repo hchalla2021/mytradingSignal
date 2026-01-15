@@ -284,22 +284,64 @@ export default function Home() {
         {/* Live Market Indices - With Border */}
         <div className="border-2 border-emerald-500/30 rounded-2xl p-3 sm:p-4 bg-gradient-to-br from-emerald-950/20 via-dark-card/50 to-dark-elevated/40 backdrop-blur-sm shadow-xl shadow-emerald-500/10">
           {/* Section Header */}
-          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-3 sm:mb-4">
-            <div>
-              <h2 className="text-lg sm:text-xl lg:text-2xl font-bold text-dark-text flex items-center gap-3 tracking-tight">
-                <span className="w-1.5 h-6 sm:h-7 bg-gradient-to-b from-bullish to-bullish-dark rounded-full shadow-lg shadow-bullish/30" />
+          <div className="flex flex-col gap-3 mb-3 sm:mb-4">
+            {/* Main Header */}
+            <div className="flex items-center gap-2 sm:gap-3">
+              <span className="w-1.5 h-6 sm:h-7 bg-gradient-to-b from-bullish to-bullish-dark rounded-full shadow-lg shadow-bullish/30" />
+              <h2 className="text-base sm:text-xl lg:text-2xl font-bold text-dark-text tracking-tight whitespace-nowrap">
                 Live Market Indices
-                <span className="relative ml-2 px-4 py-1.5 text-xs sm:text-sm font-bold bg-gradient-to-r from-accent via-accent-secondary to-accent rounded-xl shadow-xl animate-pulse-slow border border-accent/30">
-                  <span className="relative z-10 flex items-center gap-2">
-                    <span className="text-base sm:text-lg">🤖</span>
-                    <span className="bg-gradient-to-r from-white via-cyan-100 to-white bg-clip-text text-transparent font-extrabold tracking-wide">AI POWERED</span>
-                    <span className="text-base sm:text-lg">✨</span>
-                  </span>
-                  <span className="absolute inset-0 bg-gradient-to-r from-accent via-accent-secondary to-accent blur-xl opacity-40 rounded-xl"></span>
-                </span>
               </h2>
-              <p className="text-dark-tertiary text-xs sm:text-sm mt-1.5 ml-4 sm:ml-5 font-medium tracking-wide">Real-time NSE & BSE Index Data with GPT-4 Intelligence</p>
+              <span className="relative px-2 sm:px-3 py-1 text-[9px] sm:text-xs font-bold bg-gradient-to-r from-accent via-accent-secondary to-accent rounded-lg shadow-xl animate-pulse-slow border border-accent/30 whitespace-nowrap">
+                <span className="relative z-10 flex items-center gap-1">
+                  <span className="text-xs sm:text-sm">🤖</span>
+                  <span className="bg-gradient-to-r from-white via-cyan-100 to-white bg-clip-text text-transparent font-extrabold">AI POWERED</span>
+                  <span className="text-xs sm:text-sm">✨</span>
+                </span>
+                <span className="absolute inset-0 bg-gradient-to-r from-accent via-accent-secondary to-accent blur-xl opacity-40 rounded-lg"></span>
+              </span>
             </div>
+
+            {/* Trading Parameters - Premium Section */}
+            <div className="p-1.5 sm:p-3 bg-gradient-to-r from-slate-800/40 via-slate-900/40 to-slate-800/40 rounded-lg sm:rounded-xl border border-slate-700/50 shadow-lg">
+              <div className="flex flex-wrap items-center gap-1 sm:gap-2">
+                {/* Trade Time Label */}
+                <span className="text-amber-400 font-bold text-[10px] sm:text-sm whitespace-nowrap flex items-center gap-0.5">
+                  <span>⏰</span>
+                  <span className="hidden sm:inline">Trade Time:</span>
+                </span>
+                
+                {/* Trade Times */}
+                <div className="flex items-center gap-0.5 sm:gap-1.5 px-1.5 sm:px-3 py-0.5 sm:py-1.5 bg-gradient-to-r from-amber-500/20 to-amber-600/20 border border-amber-500/40 rounded-md sm:rounded-lg shadow-md">
+                  <span className="text-amber-300 font-bold text-[10px] sm:text-sm">🥇</span>
+                  <span className="text-amber-100 font-bold text-[10px] sm:text-sm whitespace-nowrap">9:20-10:45</span>
+                </div>
+                <div className="flex items-center gap-0.5 sm:gap-1.5 px-1.5 sm:px-3 py-0.5 sm:py-1.5 bg-gradient-to-r from-emerald-500/20 to-emerald-600/20 border border-emerald-500/40 rounded-md sm:rounded-lg shadow-md">
+                  <span className="text-emerald-300 font-bold text-[10px] sm:text-sm">🥈</span>
+                  <span className="text-emerald-100 font-bold text-[10px] sm:text-sm whitespace-nowrap">10:45-11:30</span>
+                </div>
+                <div className="flex items-center gap-0.5 sm:gap-1.5 px-1.5 sm:px-3 py-0.5 sm:py-1.5 bg-gradient-to-r from-blue-500/20 to-blue-600/20 border border-blue-500/40 rounded-md sm:rounded-lg shadow-md">
+                  <span className="text-blue-300 font-bold text-[10px] sm:text-sm">⚠️</span>
+                  <span className="text-blue-100 font-bold text-[10px] sm:text-sm whitespace-nowrap">1:45-2:45</span>
+                </div>
+
+                {/* Separator - Desktop Only */}
+                <div className="hidden sm:block w-px h-8 bg-gradient-to-b from-transparent via-slate-600 to-transparent mx-1"></div>
+
+                {/* Timeframes - Compact for Mobile */}
+                <div className="flex items-center gap-0.5 sm:gap-2 whitespace-nowrap">
+                  <span className="text-purple-400 font-bold text-[10px] sm:text-sm">📊</span>
+                  <div className="px-1.5 sm:px-3 py-0.5 sm:py-1.5 bg-gradient-to-r from-purple-500/20 to-purple-600/20 border border-purple-500/40 rounded-md sm:rounded-lg shadow-md">
+                    <span className="text-purple-100 font-bold text-[10px] sm:text-sm">15m</span>
+                  </div>
+                  <span className="text-pink-400 font-bold text-[10px] sm:text-sm">🎯</span>
+                  <div className="px-1.5 sm:px-3 py-0.5 sm:py-1.5 bg-gradient-to-r from-pink-500/20 to-pink-600/20 border border-pink-500/40 rounded-md sm:rounded-lg shadow-md">
+                    <span className="text-pink-100 font-bold text-[10px] sm:text-sm">5m</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <p className="text-dark-tertiary text-[10px] sm:text-xs ml-4 sm:ml-5 font-medium tracking-wide">Real-time NSE & BSE Index Data with GPT-4 Intelligence</p>
           </div>
         
           {/* Index Cards Grid - Full Width Responsive */}

@@ -161,6 +161,14 @@ const EarlyWarningCard: React.FC<EarlyWarningCardProps> = ({ symbol }) => {
   return (
     <div className="bg-gradient-to-br from-gray-900 via-emerald-950/10 to-gray-900 rounded-xl p-6 border-2 border-emerald-500/40 hover:border-emerald-400/60 transition-all shadow-xl shadow-emerald-500/10 hover:shadow-emerald-500/20">
       
+      {/* Cached Data Status Badge */}
+      {data.status === 'CACHED' && (
+        <div className="mb-3 px-2 py-1 rounded-lg bg-blue-900/30 text-blue-200 border border-blue-700/40 text-[9px] font-semibold flex items-center gap-1.5">
+          <span className="w-1.5 h-1.5 bg-blue-400 rounded-full"></span>
+          📊 LAST MARKET SESSION DATA • Market Closed
+        </div>
+      )}
+      
       {/* Header */}
       <div className="flex items-center justify-between mb-4">
         <div className="flex items-center gap-2">

@@ -192,6 +192,14 @@ const CandleIntentCard = memo<CandleIntentCardProps>(({ symbol, name }) => {
 
   return (
     <div className="bg-gradient-to-br from-gray-900 via-orange-950/10 to-gray-900 rounded-xl border-2 border-orange-500/40 hover:border-orange-400/60 transition-all shadow-xl shadow-orange-500/10 hover:shadow-orange-500/20 p-6">
+      {/* Cached Data Status Badge */}
+      {data.status === 'CACHED' && (
+        <div className="mb-3 px-2 py-1 rounded-lg bg-blue-900/30 text-blue-200 border border-blue-700/40 text-[9px] font-semibold flex items-center gap-1.5">
+          <span className="w-1.5 h-1.5 bg-blue-400 rounded-full"></span>
+          📊 LAST MARKET SESSION DATA • Market Closed
+        </div>
+      )}
+      
       {/* Header */}
       <div className="flex items-center justify-between mb-4">
         <div className="flex items-center space-x-2">

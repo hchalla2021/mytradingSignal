@@ -104,18 +104,32 @@ async def market_websocket(websocket: WebSocket):
                     
             except asyncio.TimeoutError:
                 # Send keepalive
-                await manager.send_personal(websocket, {
-                    "type": "keepalive",
-                    "timestamp": datetime.now().isoformat()
-                })
+                try:
+                    await manager.send_personal(websocket, {
+                        "type": "keepalive",
+                        "timestamp": datetime.now().isoformat()
+                    })
+                except RuntimeError:
+                    # WebSocket already closed, break the loop
+                    break
+            except (WebSocketDisconnect, RuntimeError):
+                # Client disconnected or WebSocket not connected
+                break
                 
     except WebSocketDisconnect:
         pass
+    except RuntimeError as e:
+        # Handle "WebSocket is not connected" errors silently
+        if "not connected" not in str(e):
+            print(f"❌ WebSocket runtime error: {e}")
     except Exception as e:
         print(f"❌ WebSocket error: {e}")
         import traceback
         traceback.print_exc()
     finally:
-        heartbeat_task.cancel()
+        try:
+            heartbeat_task.cancel()
+        except:
+            pass
         await manager.disconnect(websocket)
         await cache.disconnect()

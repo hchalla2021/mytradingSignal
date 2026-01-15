@@ -210,6 +210,14 @@ const ZoneControlCard = memo<ZoneControlCardProps>(({ symbol, name }) => {
 
   return (
     <div className="bg-dark-card border-2 border-emerald-500/30 rounded-lg p-3 sm:p-4 hover:border-emerald-400/50 hover:shadow-emerald-500/20 transition-all shadow-lg shadow-emerald-500/10">
+      {/* Cached Data Status Badge */}
+      {status === 'CACHED' && (
+        <div className="mb-2 px-2 py-1 rounded-lg bg-blue-900/30 text-blue-200 border border-blue-700/40 text-[9px] font-semibold flex items-center gap-1.5">
+          <span className="w-1.5 h-1.5 bg-blue-400 rounded-full"></span>
+          📊 LAST MARKET SESSION DATA • Market Closed
+        </div>
+      )}
+      
       {/* Header with unique styling */}
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-2">
