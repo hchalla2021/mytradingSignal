@@ -2,6 +2,7 @@
 
 import React, { useEffect, useState } from 'react';
 import { Timer, TrendingUp, TrendingDown, AlertTriangle, Volume2, Activity, Target, XCircle, CheckCircle } from 'lucide-react';
+import { API_CONFIG } from '@/lib/api-config';
 
 interface EarlyWarningData {
   symbol: string;
@@ -63,12 +64,11 @@ const EarlyWarningCard: React.FC<EarlyWarningCardProps> = ({ symbol }) => {
 
   // ✅ REST API POLLING for analysis data
   useEffect(() => {
-    const API_URL = process.env.NEXT_PUBLIC_API_URL || 'https://mydailytradesignals.com';
     let interval: NodeJS.Timeout | null = null;
 
     const fetchData = async () => {
       try {
-        const response = await fetch(`${API_URL}/api/advanced/early-warning/${symbol}`);
+        const response = await fetch(API_CONFIG.endpoint(`/api/advanced/early-warning/${symbol}`));
         if (!response.ok) throw new Error(`HTTP ${response.status}`);
         const result = await response.json();
         setData(result);

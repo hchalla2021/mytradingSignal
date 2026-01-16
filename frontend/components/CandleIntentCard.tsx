@@ -2,6 +2,7 @@
 
 import React, { memo, useEffect, useState } from 'react';
 import { Flame, TrendingUp, TrendingDown, AlertTriangle, Minus, Zap } from 'lucide-react';
+import { API_CONFIG } from '@/lib/api-config';
 
 interface CandlePattern {
   type: string;
@@ -79,12 +80,11 @@ const CandleIntentCard = memo<CandleIntentCardProps>(({ symbol, name }) => {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    const API_URL = process.env.NEXT_PUBLIC_API_URL || 'https://mydailytradesignals.com';
     let interval: NodeJS.Timeout | null = null;
 
     const fetchData = async () => {
       try {
-        const response = await fetch(`${API_URL}/api/advanced/candle-intent/${symbol}`);
+        const response = await fetch(API_CONFIG.endpoint(`/api/advanced/candle-intent/${symbol}`));
         if (!response.ok) throw new Error('Failed to fetch');
         const result = await response.json();
         

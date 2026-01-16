@@ -2,6 +2,7 @@
 
 import React, { memo, useEffect, useState } from 'react';
 import { Target, Shield, AlertOctagon, TrendingDown, TrendingUp, CircleDot } from 'lucide-react';
+import { API_CONFIG } from '@/lib/api-config';
 
 // Production-safe logging
 const isDev = process.env.NODE_ENV === 'development';
@@ -75,8 +76,7 @@ const ZoneControlCard = memo<ZoneControlCardProps>(({ symbol, name }) => {
   useEffect(() => {
     const fetchData = async () => {
       try {
-        const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'https://mydailytradesignals.com';
-        const response = await fetch(`${apiUrl}/api/advanced/zone-control/${symbol}`);
+        const response = await fetch(API_CONFIG.endpoint(`/api/advanced/zone-control/${symbol}`));
         if (!response.ok) throw new Error('Failed to fetch');
         const result = await response.json();
         
