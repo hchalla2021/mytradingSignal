@@ -22,8 +22,9 @@ export const fetchCache = 'force-no-store'
 export const viewport: Viewport = {
   width: 'device-width',
   initialScale: 1,
-  maximumScale: 5,
-  userScalable: true,
+  maximumScale: 1,
+  minimumScale: 1,
+  userScalable: false,
   themeColor: '#0a0e1a',
 }
 
@@ -36,6 +37,8 @@ export default function RootLayout({
     <html lang="en">
       <head>
         <link rel="icon" href="/favicon.ico" />
+        {/* �🖥️ RESPONSIVE VIEWPORT - Works on both mobile and desktop */}
+        <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes" />
         <meta name="mobile-web-app-capable" content="yes" />
         <meta name="apple-mobile-web-app-capable" content="yes" />
         {/* 🔥 AGGRESSIVE CACHE PREVENTION */}
