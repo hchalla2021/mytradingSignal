@@ -292,14 +292,27 @@ class FeedWatchdog:
             return 100.0
         
         # Quality based on:
-        # - Reconnect frequency (fewer is better)
         # - Current state (connected is best)
-        # - Stale events
+        # - Data freshness (stale check)
+        # - Excessive reconnects (only if frequent)
         
-        reconnect_penalty = min(self._health_metrics["total_reconnects"] * 10, 50)
-        state_penalty = 0 if self._state == FeedState.CONNECTED else 30
+        # Base quality on current state
+        if self._state == FeedState.CONNECTED and not self.is_stale:
+            quality = 100.0  # Perfect connection with fresh data
+        elif self._state == FeedState.CONNECTED:
+            quality = 95.0   # Connected but data is stale
+        elif self._state == FeedState.DISCONNECTED:
+            quality = 0.0    # Not connected
+        else:
+            quality = 50.0   # Other states (connecting, error)
         
-        quality = 100.0 - reconnect_penalty - state_penalty
+        # Only penalize if reconnects are EXCESSIVE (more than 5)
+        # Normal operation: 0-2 reconnects = no penalty (startup + 1 recovery is fine)
+        if self._health_metrics["total_reconnects"] > 5:
+            excessive_reconnects = self._health_metrics["total_reconnects"] - 5
+            reconnect_penalty = min(excessive_reconnects * 5, 30)  # Max 30% penalty
+            quality -= reconnect_penalty
+        
         return max(0.0, min(100.0, quality))
 
 
