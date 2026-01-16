@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import type { AIAnalysis, AIAlertTooltipData } from '@/types/ai';
+import { API_CONFIG } from '@/lib/api-config';
 
 interface UseAIAnalysisReturn {
   analyses: Record<string, AIAnalysis>;
@@ -10,8 +11,7 @@ interface UseAIAnalysisReturn {
   error: string | null;
 }
 
-// 🔥 FIX: Use 127.0.0.1 for better compatibility
-const API_URL = process.env.NEXT_PUBLIC_API_URL || 'https://mydailytradesignals.com';
+const API_URL = API_CONFIG.baseUrl;
 
 /**
  * Hook to fetch and manage AI analysis for all indices

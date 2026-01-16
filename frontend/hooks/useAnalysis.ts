@@ -39,7 +39,7 @@ export function useAnalysis(options: UseAnalysisOptions = {}): UseAnalysisReturn
   // Fetch analysis data via REST API
   const fetchAnalysisData = useCallback(async () => {
     try {
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'https://mydailytradesignals.com';
+      const apiUrl = API_CONFIG.baseUrl;
       const url = `${apiUrl}/api/analysis/analyze/all`;
       
       const controller = new AbortController();

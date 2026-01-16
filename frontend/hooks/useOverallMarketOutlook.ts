@@ -13,6 +13,7 @@
 'use client';
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
+import { API_CONFIG } from '@/lib/api-config';
 
 interface SignalWeight {
   technical: number;
@@ -83,8 +84,7 @@ interface OverallOutlookData {
   SENSEX: SymbolOutlook | null;
 }
 
-// 🔥 FIX: Use correct API URL with fallback
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'https://mydailytradesignals.com';
+const API_BASE_URL = API_CONFIG.baseUrl;
 const SYMBOLS = (process.env.NEXT_PUBLIC_MARKET_SYMBOLS || 'NIFTY,BANKNIFTY,SENSEX').split(',').filter(Boolean);
 
 // Signal strength weights (total = 100%) - AI REMOVED, Candle Intent, Market Indices, PCR & Early Warning ADDED
@@ -136,12 +136,9 @@ const createDefaultOutlook = (symbol: string): SymbolOutlook => ({
   timestamp: new Date().toISOString(),
 });
 
-// 🔥 GLOBAL CACHE - ALWAYS RESET TO 0% ON IMPORT
-let globalCache: OverallOutlookData = { 
-  NIFTY: createDefaultOutlook('NIFTY'), 
-  BANKNIFTY: createDefaultOutlook('BANKNIFTY'), 
-  SENSEX: createDefaultOutlook('SENSEX') 
-};
+// 🔥 NO GLOBAL CACHE - Force fresh data every time
+// Desktop browsers cache modules aggressively, causing stale data
+// Mobile browsers reload modules more frequently
 let lastFetchTime = 0;
 let isFetching = false;
 
@@ -149,6 +146,7 @@ let isFetching = false;
 if (typeof window !== 'undefined') {
   try {
     localStorage.removeItem('mytradingsignal_last_outlook_data');
+    sessionStorage.removeItem('mytradingsignal_last_outlook_data');
   } catch {}
 }
 
@@ -848,10 +846,13 @@ export const useOverallMarketOutlook = () => {
         new Promise<null>(r => setTimeout(() => {
           console.warn(`[OUTLOOK-${symbol}] Timeout for ${url}`);
           r(null);
-        }, 5000)) // Increased to 5 seconds
+        }, 15000)) // 🔥 Increased to 15 seconds for slow endpoints
       ]);
 
     console.log(`[OUTLOOK-${symbol}] Starting fetch...`);
+    
+    // 🔥 DEBUG: Log API URL being used
+    console.log(`[OUTLOOK-${symbol}] API Base URL: ${API_BASE_URL}`);
 
     // 🚀 OPTIMIZATION: Fetch ALL advanced analysis in ONE call (5x faster!)
     const [tech, allAdvanced, market] = await Promise.all([
@@ -863,7 +864,9 @@ export const useOverallMarketOutlook = () => {
     console.log(`[OUTLOOK-${symbol}] Fetch complete:`, {
       tech: tech ? '✓' : '✗',
       allAdvanced: allAdvanced ? '✓' : '✗',
-      market: market ? '✓' : '✗'
+      market: market ? '✗' : '✗',
+      apiUrl: API_BASE_URL,
+      timestamp: new Date().toISOString(),
     });
 
     // Extract individual sections from aggregated response
@@ -890,12 +893,11 @@ export const useOverallMarketOutlook = () => {
     return result;
   }, [calculateOverallOutlook]);
 
-  // 🔥 SILENT UPDATE: Always update state immediately (no change detection)
+  // 🔥 ALWAYS UPDATE - No cache, show real data immediately
   const silentUpdate = useCallback((symbol: keyof OverallOutlookData, newData: SymbolOutlook | null) => {
     if (!newData) return;
     
-    // 🔥 ALWAYS UPDATE - Show real data immediately
-    globalCache[symbol] = newData;
+    // Direct state update - no global cache
     setOutlookData(prev => ({ ...prev, [symbol]: newData }));
   }, []);
 
@@ -960,20 +962,14 @@ export const useOverallMarketOutlook = () => {
   }, [fetchFullSymbolData, silentUpdate]);
 
   useEffect(() => {
-    // 🔥🔥🔥 FORCE 0% START - Reset everything
-    console.log('[OUTLOOK] FORCE RESET - Starting at 0%');
+    // 🔥🔥🔥 FORCE FRESH START - Clear all caches
+    console.log('[OUTLOOK] FORCE RESET - Starting fresh, no cache');
     
-    // Clear localStorage
+    // Clear all browser storage
     try {
       localStorage.removeItem('mytradingsignal_last_outlook_data');
+      sessionStorage.removeItem('mytradingsignal_last_outlook_data');
     } catch {}
-    
-    // Reset global cache
-    globalCache = {
-      NIFTY: createDefaultOutlook('NIFTY'),
-      BANKNIFTY: createDefaultOutlook('BANKNIFTY'),
-      SENSEX: createDefaultOutlook('SENSEX')
-    };
     
     // Reset state to 0%
     setOutlookData({

@@ -14,6 +14,11 @@ export const metadata: Metadata = {
   },
 }
 
+// 🔥 DISABLE ALL CACHING
+export const dynamic = 'force-dynamic'
+export const revalidate = 0
+export const fetchCache = 'force-no-store'
+
 export const viewport: Viewport = {
   width: 'device-width',
   initialScale: 1,
@@ -33,9 +38,32 @@ export default function RootLayout({
         <link rel="icon" href="/favicon.ico" />
         <meta name="mobile-web-app-capable" content="yes" />
         <meta name="apple-mobile-web-app-capable" content="yes" />
+        {/* 🔥 AGGRESSIVE CACHE PREVENTION */}
+        <meta httpEquiv="Cache-Control" content="no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0" />
+        <meta httpEquiv="Pragma" content="no-cache" />
+        <meta httpEquiv="Expires" content="0" />
+        <meta name="version" content={Date.now().toString()} />
       </head>
       <body className="min-h-screen bg-gradient-to-br from-dark-bg via-dark-surface to-dark-elevated antialiased">
         {children}
+        {/* Force reload script */}
+        <script dangerouslySetInnerHTML={{
+          __html: `
+            // Clear all caches on load
+            if (typeof window !== 'undefined') {
+              // Clear localStorage and sessionStorage
+              try { localStorage.clear(); } catch(e) {}
+              try { sessionStorage.clear(); } catch(e) {}
+              
+              // Disable back-forward cache
+              window.addEventListener('pageshow', function(event) {
+                if (event.persisted) {
+                  window.location.reload();
+                }
+              });
+            }
+          `
+        }} />
       </body>
     </html>
   )

@@ -17,12 +17,25 @@ import CandleIntentCard from '@/components/CandleIntentCard';
 import EarlyWarningCard from '@/components/EarlyWarningCard';
 
 export default function Home() {
+  // 🔥 Force fresh mount on page load - fixes desktop browser caching
+  const [mountKey, setMountKey] = useState(() => Date.now());
+  
   const { marketData, isConnected, connectionStatus } = useMarketSocket();
   const { alertData, loading: aiLoading, error: aiError } = useAIAnalysis();
   const { outlookData, loading: outlookLoading } = useOverallMarketOutlook();
   const { isAuthenticated } = useAuth();
   const [currentTime, setCurrentTime] = useState<string>('');
   const [updateCounter, setUpdateCounter] = useState(0);
+
+  // 🔥 Clear browser cache on mount (desktop browsers cache aggressively)
+  useEffect(() => {
+    // Force service worker to update
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.getRegistrations().then(registrations => {
+        registrations.forEach(reg => reg.update());
+      });
+    }
+  }, []);
 
   // Check for auth callback success
   useEffect(() => {

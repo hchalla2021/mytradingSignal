@@ -19,7 +19,6 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
-#frontend/.env.local
 # Virtual Environment
 venv/
 env/
@@ -35,6 +34,7 @@ build/
 dist/
 .cache/
 frontend/.env.local
+backend/.env
 # Environment variables
 .env
 .env.local
