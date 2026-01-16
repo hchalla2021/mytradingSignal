@@ -24,28 +24,14 @@ services:
     restart: unless-stopped
     ports:
       - "8000:8000"
+    env_file:
+      - ./backend/.env
     environment:
-      # Zerodha API (REQUIRED - Set these in .env file)
-      - ZERODHA_API_KEY=${ZERODHA_API_KEY}
-      - ZERODHA_API_SECRET=${ZERODHA_API_SECRET}
-      - ZERODHA_REDIRECT_URL=${ZERODHA_REDIRECT_URL:-http://localhost:3000/auth/callback}
-      
-      # Security (REQUIRED - Generate strong random string)
-      - JWT_SECRET=${JWT_SECRET}
-      
-      # Redis Connection
-      - REDIS_URL=${REDIS_URL:-redis://redis:6379}
-      
-      # Market Configuration
-      - MARKET_SYMBOLS=${MARKET_SYMBOLS:-NIFTY 50,NIFTY BANK,SENSEX}
-      
-      # CORS Configuration (Update with your domain)
-      - CORS_ORIGINS=${CORS_ORIGINS:-http://localhost:3000,https://your-domain.com}
-      
-      # Environment
-      - ENVIRONMENT=${ENVIRONMENT:-production}
-      - ENABLE_SCHEDULER=${ENABLE_SCHEDULER:-true}
+      # Override with container-specific settings
       - PORT=8000
+      - HOST=0.0.0.0
+      # Redis connection (using container name)
+      - REDIS_URL=redis://redis:6379
     volumes:
       # Persist access token across restarts
       - ./backend/access_token.txt:/app/access_token.txt
