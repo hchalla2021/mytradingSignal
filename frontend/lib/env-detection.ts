@@ -49,8 +49,9 @@ export function detectEnvironment(): Environment {
     return 'local';
   }
 
-  // Production domain
-  if (hostname === 'mydailytradesignals.com' || hostname.endsWith('.mydailytradesignals.com')) {
+  // Production domain - check if it matches NEXT_PUBLIC_PRODUCTION_DOMAIN from .env
+  const prodDomain = process.env.NEXT_PUBLIC_PRODUCTION_DOMAIN;
+  if (prodDomain && (hostname === prodDomain || hostname.endsWith(`.${prodDomain}`))) {
     return 'production';
   }
 
@@ -69,17 +70,17 @@ export function getEnvironmentConfig() {
     isProduction: env === 'production',
     isLocal: env === 'local',
 
-    // API URLs
+    // API URLs - NO FALLBACKS, must be set in .env.local
     apiUrl:
       env === 'production'
-        ? process.env.NEXT_PUBLIC_PRODUCTION_API_URL || 'https://mydailytradesignals.com'
-        : process.env.NEXT_PUBLIC_LOCAL_API_URL || 'http://127.0.0.1:8000',
+        ? process.env.NEXT_PUBLIC_PRODUCTION_API_URL || process.env.NEXT_PUBLIC_API_URL || ''
+        : process.env.NEXT_PUBLIC_LOCAL_API_URL || process.env.NEXT_PUBLIC_API_URL || '',
 
-    // WebSocket URLs
+    // WebSocket URLs - NO FALLBACKS, must be set in .env.local
     wsUrl:
       env === 'production'
-        ? process.env.NEXT_PUBLIC_PRODUCTION_WS_URL || 'wss://mydailytradesignals.com/ws/market'
-        : process.env.NEXT_PUBLIC_LOCAL_WS_URL || 'ws://127.0.0.1:8000/ws/market',
+        ? process.env.NEXT_PUBLIC_PRODUCTION_WS_URL || process.env.NEXT_PUBLIC_WS_URL || ''
+        : process.env.NEXT_PUBLIC_LOCAL_WS_URL || process.env.NEXT_PUBLIC_WS_URL || '',
 
     // Display info
     displayName: env === 'production' ? 'Production' : 'Local Development',

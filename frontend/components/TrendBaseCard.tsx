@@ -2,6 +2,7 @@
 
 import React, { memo, useEffect, useState } from 'react';
 import { GitBranch, TrendingUp, TrendingDown, AlertTriangle } from 'lucide-react';
+import { API_CONFIG } from '@/lib/api-config';
 
 // Production-safe logging - only logs in development
 const isDev = process.env.NODE_ENV === 'development';

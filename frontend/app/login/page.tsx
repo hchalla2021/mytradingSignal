@@ -34,7 +34,12 @@ export default function LoginPage() {
     setLoading(true);
     setMessage("Opening Zerodha login...");
     
-    const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'https://mydailytradesignals.com';
+    const apiUrl = process.env.NEXT_PUBLIC_API_URL;
+    if (!apiUrl) {
+      setMessage("❌ API URL not configured in .env.local");
+      setLoading(false);
+      return;
+    }
     
     // Detect mobile device
     const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) || window.innerWidth <= 768;
