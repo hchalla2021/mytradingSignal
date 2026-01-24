@@ -31,6 +31,9 @@ interface TrendBaseData {
   trend: string;
   status: string;
   timestamp: string;
+  data_status?: string;
+  candles_analyzed?: number;
+  _isCached?: boolean;
 }
 
 interface TrendBaseCardProps {

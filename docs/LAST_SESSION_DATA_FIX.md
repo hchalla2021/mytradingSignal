@@ -1,7 +1,7 @@
 # 📊 Last Session Data Display Fix
 
 ## Problem
-Advanced analysis sections (Trend Base, Zone Control, Candle Intent, Early Warning, Volume Pulse) were showing "Market closed - No data available" even though the backend had cached OHLC data from the last trading session.
+Advanced analysis sections (Trend Base, Zone Control, Candle Intent, Volume Pulse) were showing "Market closed - No data available" even though the backend had cached OHLC data from the last trading session.
 
 ## Root Cause
 The advanced analysis endpoints required **100 5-minute historical candles** from Zerodha's API to perform calculations. When the market was closed, the API returned empty/insufficient data, causing all analysis to fail - even though single-candle OHLC data (open/high/low/close) WAS cached.
@@ -153,7 +153,6 @@ Analysis functions now handle degraded mode:
   - Trend Base: Shows structure from single candle range
   - Zone Control: Uses high/low as initial support/resistance
   - Candle Intent: Analyzes single candle pattern (doji, hammer, etc.)
-  - Early Warning: Shows previous session signals if applicable
   - Volume Pulse: Compares to average volume if available
 
 ## Testing
@@ -185,7 +184,7 @@ Analysis functions now handle degraded mode:
 - **User Experience**: ⚡ Instant display vs ❌ No data shown
 
 ## Next Steps
-- [ ] Apply same CACHED_DATA handling to other cards (Zone Control, Candle Intent, Early Warning, Volume Pulse)
+- [ ] Apply same CACHED_DATA handling to other cards (Zone Control, Candle Intent, Volume Pulse)
 - [ ] Add timestamp showing when cached data was last updated
 - [ ] Consider storing 5-minute candle history in cache for better analysis
 - [ ] Add "Refresh" button to force cache clear and re-fetch

@@ -519,7 +519,7 @@ SIGNAL:          ⏸️ WAIT
 Confidence:      0%
 
 ════════════════════════════════════════════════════════
-TIME: 10:30:15 AM - EARLY WARNING (15 seconds later)
+TIME: 10:30:15 AM - SIGNAL ALERT (15 seconds later)
 ════════════════════════════════════════════════════════
 Price:           ₹23,420 (+0.09%)
 VWAP:            ₹23,415 (price CROSSES ABOVE!) ← 🚨 FIRST SIGNAL

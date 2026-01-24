@@ -272,8 +272,8 @@ class MarketFeedService:
             print(f"   Time: {datetime.now(IST).strftime('%H:%M:%S')}")
             print(f"{'='*80}\n")
         
-        # ✅ DEBUG: Log every broadcast with current status
-        print(f"[BROADCAST] {symbol}: ₹{data['price']} ({data['changePercent']:+.2f}%) [{data['status']}] → {self.ws_manager.connection_count} clients")
+        # Log broadcasts periodically (not every tick to reduce noise)
+        # print(f"[BROADCAST] {symbol}: ₹{data['price']} ({data['changePercent']:+.2f}%) [{data['status']}]")
         
         # SMART: Fetch PCR with staggered timing to avoid rate limits
         try:
@@ -307,11 +307,9 @@ class MarketFeedService:
             data["oi_change"] = round(oi_change_percent, 2)
             self.last_oi[symbol] = current_oi
             
-            # Debug PCR updates
-            if data["pcr"] > 0:
-                print(f"[PCR UPDATE] {symbol}: PCR={data['pcr']:.2f}, CallOI={data['callOI']:,}, PutOI={data['putOI']:,}, OI Change={data['oi_change']:.2f}%")
-            else:
-                print(f"[WARN] WARNING: PCR is 0 for {symbol} - likely fetch failed or token expired")
+            # Debug PCR updates (reduced logging)
+            # if data["pcr"] > 0:
+            #     print(f"[PCR] {symbol}: PCR={data['pcr']:.2f}")
         except Exception as e:
             print(f"[ERROR] PCR fetch FAILED for {symbol}: {type(e).__name__}: {e}")
             data["pcr"] = 0.0
@@ -338,14 +336,8 @@ class MarketFeedService:
         # Generate instant analysis for this tick
         try:
             from services.instant_analysis import InstantSignal
-            print(f"🔍 Attempting analysis for {data['symbol']} - Price: {data.get('price', 'NO PRICE')}")
             analysis_result = InstantSignal.analyze_tick(data)
-            if analysis_result:
-                data["analysis"] = analysis_result  # Add analysis to tick data
-                print(f"✅ Analysis added for {data['symbol']}: {list(analysis_result.keys())}")
-            else:
-                print(f"⚠️ Analysis returned None for {data['symbol']}")
-                data["analysis"] = None
+            data["analysis"] = analysis_result if analysis_result else None
         except Exception as e:
             print(f"❌ Instant analysis FAILED for {data['symbol']}: {e}")
             import traceback

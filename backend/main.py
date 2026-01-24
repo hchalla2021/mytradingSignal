@@ -12,7 +12,7 @@ from services.websocket_manager import manager
 from services.market_feed import MarketFeedService
 from services.cache import CacheService
 from services.token_watcher import start_token_watcher
-from services.unified_auth_service import unified_auth
+from services.auth_state_machine import auth_state_manager
 
 from routers import (
     auth,
@@ -22,6 +22,7 @@ from routers import (
     advanced_analysis,
     token_status,
     system_health,
+    pivot_indicators,
 )
 
 # Windows console fix (safe, ignored on Linux)
@@ -71,25 +72,16 @@ async def lifespan(app: FastAPI):
     
     print("\n🚀 Starting services...")
 
-    # 🔐 UNIFIED AUTH SERVICE - Start first (centralized auth management)
-    print("🔐 Initializing Unified Auth Service...")
+    # 🔐 AUTH STATE MANAGER - Centralized auth (ONLY ONE AUTH SYSTEM)
+    print("🔐 Initializing Auth State Manager...")
     
-    # Register market feed reconnection callback
-    async def on_token_refresh(new_token: str):
-        """Callback when token is refreshed - reconnect market feed"""
-        if market_feed:
-            await market_feed.reconnect_with_new_token(new_token)
+    # Force recheck of token state
+    auth_state_manager.force_recheck()
+    current_auth_state = auth_state_manager.current_state
+    print(f"   Auth Status: {current_auth_state}")
     
-    unified_auth.register_token_refresh_callback(on_token_refresh)
-    
-    # Start auto-refresh monitor (non-blocking background task)
-    asyncio.create_task(unified_auth.start_auto_refresh_monitor())
-    print("✅ Unified Auth Service active (monitoring in background)")
-    
-    # Validate token before starting services
-    token_valid = await unified_auth.validate_token(force=True)
-    if not token_valid:
-        print("⚠️ WARNING: Zerodha token is not valid")
+    if not auth_state_manager.is_authenticated:
+        print("⚠️  WARNING: Zerodha token not authenticated")
         print("   Services will start but may not connect to Zerodha")
         print("   Please login via UI or run: python quick_token_fix.py")
 
@@ -105,7 +97,7 @@ async def lifespan(app: FastAPI):
     market_feed = MarketFeedService(cache, manager)
 
     # Token watcher (file system monitor for .env changes)
-    token_observer = start_token_watcher(market_feed, unified_auth)
+    token_observer = start_token_watcher(market_feed, auth_state_manager)
 
     # Scheduler / Feed startup
     scheduler = None
@@ -165,6 +157,7 @@ app.include_router(market.router, prefix="/ws", tags=["Market Data"])
 
 app.include_router(analysis.router, tags=["Analysis"])
 app.include_router(advanced_analysis.router, tags=["Advanced Technical Analysis"])
+app.include_router(pivot_indicators.router, tags=["Pivot Indicators"])
 
 
 @app.get("/")

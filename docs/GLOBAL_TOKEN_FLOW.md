@@ -151,14 +151,13 @@ All these services now automatically use the latest token from .env:
 
 ### ✅ Analysis Services
 5. **candle_intent_service.py** - Candle patterns
-6. **early_warning_service.py** - Early warnings
-7. **instant_analysis.py** - Instant signals
-8. **zone_control_service.py** - Zone analysis
+6. **instant_analysis.py** - Instant signals
+7. **zone_control_service.py** - Zone analysis
 
 ### ✅ Utility Services
-9. **auto_futures_updater.py** - Monthly futures update
-10. **zerodha_direct_analysis.py** - Direct API analysis
-11. **global_token_manager.py** - Token validation
+8. **auto_futures_updater.py** - Monthly futures update
+9. **zerodha_direct_analysis.py** - Direct API analysis
+10. **global_token_manager.py** - Token validation
 
 ---
 

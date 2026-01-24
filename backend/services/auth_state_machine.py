@@ -105,6 +105,11 @@ class AuthStateManager:
         return self._state == AuthState.VALID
     
     @property
+    def is_authenticated(self) -> bool:
+        """Check if currently authenticated (alias for is_valid)"""
+        return self._state == AuthState.VALID
+    
+    @property
     def requires_login(self) -> bool:
         """Check if login is required"""
         return self._state in (AuthState.REQUIRED, AuthState.EXPIRED)

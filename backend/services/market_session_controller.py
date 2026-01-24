@@ -115,9 +115,14 @@ class MarketSessionController:
     
     @staticmethod
     def is_data_flow_expected(now: datetime = None) -> bool:
-        """Check if data should be flowing (LIVE only)"""
+        """Check if data should be flowing (PRE_OPEN and LIVE)
+        
+        Note: Data flows during PRE_OPEN too - auction prices update.
+        WebSocket should be connected from 9:00 AM onwards.
+        """
         phase = MarketSessionController.get_current_phase(now)
-        return phase == MarketPhase.LIVE
+        # 🔥 FIX: Data flows during PRE_OPEN too (auction prices)
+        return phase in (MarketPhase.PRE_OPEN, MarketPhase.AUCTION_FREEZE, MarketPhase.LIVE)
     
     @staticmethod
     def seconds_until_next_phase(now: datetime = None) -> int:

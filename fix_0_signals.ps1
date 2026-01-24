@@ -72,9 +72,8 @@ try {
         if ($data.trend_base.signal) { $sections++ }
         if ($data.zone_control.signal) { $sections++ }
         if ($data.candle_intent.signal) { $sections++ }
-        if ($data.early_warning.signal) { $sections++ }
         
-        Write-Host "   → $sections/5 analysis sections available" -ForegroundColor Green
+        Write-Host "   → $sections/4 analysis sections available" -ForegroundColor Green
     }
 } catch {
     Write-Host "   ❌ Failed: $($_.Exception.Message)" -ForegroundColor Red

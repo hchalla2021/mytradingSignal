@@ -95,8 +95,7 @@ Your desktop browser still uses old cached JavaScript. Mobile doesn't have this 
 After deployment + cache clear, you should see:
 
 ### ✅ Working Sections:
-- 🔮 Early Warning - Shows signals for NIFTY/BANKNIFTY/SENSEX
-- 🕯️ Candle Intent - Shows candle analysis
+- ️ Candle Intent - Shows candle analysis
 - 🎯 Zone Control - Shows support/resistance levels
 - 📊 Volume Pulse - Shows volume data
 - 📈 Trend Base - Shows trend structure
@@ -129,7 +128,6 @@ If these return JSON data (not 404), backend is perfect. Problem is 100% fronten
 ## Files Changed (Already Done Locally)
 
 ✅ All these files now use `API_CONFIG`:
-- `frontend/components/EarlyWarningCard.tsx`
 - `frontend/components/CandleIntentCard.tsx`
 - `frontend/components/ZoneControlCard.tsx`
 - `frontend/components/VolumePulseCard.tsx`
@@ -144,7 +142,6 @@ If these return JSON data (not 404), backend is perfect. Problem is 100% fronten
 ## After Fix Checklist
 
 On Desktop Browser:
-- [ ] Early Warning section loads
 - [ ] Candle Intent section loads
 - [ ] Zone Control section loads
 - [ ] Volume Pulse section loads

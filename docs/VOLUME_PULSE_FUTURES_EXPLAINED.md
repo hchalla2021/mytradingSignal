@@ -95,7 +95,7 @@ If Red Volume > Green Volume:
   → SELL signal
 ```
 
-### 3. **Volume Divergence = Early Warning**
+### 3. **Volume Divergence = Price Reversal Warning**
 
 Volume can predict reversals:
 
@@ -365,7 +365,7 @@ Volume Pulse (NIFTY):
 1. ✅ Real market participation data
 2. ✅ Buying vs selling pressure analysis
 3. ✅ Confirmation of price trends
-4. ✅ Early warning of reversals
+4. ✅ Advance notice of reversals
 5. ✅ Actionable BUY/SELL signals
 
 **This is how professional traders analyze the market. Now you can too!** 🚀

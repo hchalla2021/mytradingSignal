@@ -13,10 +13,9 @@ Mobile users were seeing `localhost` URLs when clicking Login because frontend w
 5. ✅ `components/SystemStatusBanner.tsx` - Login button
 6. ✅ `components/ZoneControlCard.tsx` - Zone control data
 7. ✅ `components/TrendBaseCard.tsx` - Trend base data
-8. ✅ `components/EarlyWarningCard.tsx` - Early warning data
-9. ✅ `components/CandleIntentCard.tsx` - Candle intent data
-10. ✅ `components/VolumePulseCard.tsx` - Volume pulse data
-11. ✅ `app/login/page.tsx` - Login page
+8. ✅ `components/CandleIntentCard.tsx` - Candle intent data
+9. ✅ `components/VolumePulseCard.tsx` - Volume pulse data
+10. ✅ `app/login/page.tsx` - Login page
 
 ### Backend Files Updated:
 1. ✅ `backend/config.py` - Better production detection

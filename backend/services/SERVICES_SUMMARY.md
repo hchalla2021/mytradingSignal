@@ -41,7 +41,7 @@ After comprehensive audit of all 23 service files in `backend/services/`, **ever
 | volume_pulse_service.py | ✅ Active | Candle volume analysis |
 | trend_base_service.py | ✅ Active | Higher-low structure |
 | candle_intent_service.py | ✅ Active | Candle pattern detection |
-| early_warning_service.py | ✅ Active | Predictive signals (1-3 min ahead) |
+
 | zone_control_service.py | ✅ Active | Support/resistance zones |
 | news_detection_service.py | ✅ Active | News sentiment analysis |
 | pcr_service.py | ✅ Active | Put-Call Ratio calculation |

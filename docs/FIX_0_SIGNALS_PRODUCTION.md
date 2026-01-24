@@ -20,9 +20,8 @@ The **Overall Market Outlook** section requires **8 data sources**:
 | 5 | Candle Intent | `/api/advanced/candle-intent/{symbol}` | Candle patterns |
 | 6 | Market Indices | `/ws/cache/{symbol}` | Live price + PCR |
 | 7 | PCR (Put-Call Ratio) | `/ws/cache/{symbol}` | Market sentiment |
-| 8 | Early Warning | `/api/advanced/early-warning/{symbol}` | Pre-move detection |
 
-**The frontend aggregates all 8 signals into ONE confidence score.**
+**The frontend aggregates all 7 signals into ONE confidence score.**
 
 ## Why This Happens in Production
 
@@ -124,8 +123,8 @@ curl http://localhost:8000/ws/cache/NIFTY | jq
   "trend_base": { ... },
   "zone_control": { ... },
   "candle_intent": { ... },
-  "early_warning": { ... },
   "timestamp": "2026-01-16T..."
+}
 }
 ```
 

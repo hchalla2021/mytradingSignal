@@ -130,8 +130,7 @@ curl http://localhost:3000
 ### ✅ All Sections Working
 - [ ] 📊 Volume Pulse: Shows green/red candle percentages
 - [ ] 📈 Trend Base: Shows swing structure
-- [ ] 🔮 Early Warning: Shows predictive signals
-- [ ] 🕯️ Candle Intent: Shows candle patterns
+- [ ] ️ Candle Intent: Shows candle patterns
 - [ ] 🎯 Zone Control: Shows support/resistance
 
 ## Troubleshooting

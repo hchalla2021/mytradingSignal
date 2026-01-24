@@ -53,17 +53,12 @@
    - Used by: advanced_analysis.py
    - Status: **WORKING**
 
-10. **early_warning_service.py** ✅ ACTIVE
-    - Predictive signals
-    - Used by: advanced_analysis.py
-    - Status: **WORKING**
-
-11. **zone_control_service.py** ✅ ACTIVE
+10. **zone_control_service.py** ✅ ACTIVE
     - Support/resistance zones
     - Used by: advanced_analysis.py
     - Status: **WORKING**
 
-12. **news_detection_service.py** ✅ ACTIVE
+11. **news_detection_service.py** ✅ ACTIVE
     - News sentiment analysis
     - Used by: advanced_analysis.py
     - Status: **WORKING**
@@ -183,7 +178,6 @@ advanced_analysis.py
 ├── trend_base_service ✅
 ├── news_detection_service ✅
 ├── candle_intent_service ✅
-├── early_warning_service ✅
 ├── zone_control_service ✅
 ├── cache ✅
 └── global_token_manager 🔄 (legacy - still used)

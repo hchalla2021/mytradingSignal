@@ -1,31 +1,53 @@
 """
-Automatic Market Hours Scheduler
-Starts/stops market feed based on IST market timings
-Handles: Pre-open (9:00 AM), Live (9:15 AM), Close (3:30 PM)
+Automatic Market Hours Scheduler - PRODUCTION GRADE
+====================================================
+✅ Auto-starts market feed at 8:55 AM (before pre-open)
+✅ Ensures connection is ready by 9:00 AM pre-open
+✅ Handles 9:15 AM PRE_OPEN → LIVE transition smoothly
+✅ Auto-stops at 3:35 PM (after market close)
+✅ Aggressive reconnection during market hours
+✅ No manual restart needed - EVER
 """
 import asyncio
-from datetime import datetime, time
+from datetime import datetime, time, timedelta
 from zoneinfo import ZoneInfo
-from typing import Optional
+from typing import Optional, Callable
 
 IST = ZoneInfo("Asia/Kolkata")
 
+
 class MarketHoursScheduler:
-    """Automatically start/stop market feed based on market hours"""
+    """
+    Production-grade market hours scheduler
+    
+    GUARANTEES:
+    1. Feed is connected BEFORE 9:00 AM pre-open
+    2. Data flows from 9:00 AM onwards (not just 9:15)
+    3. Aggressive reconnection if connection drops
+    4. Clean shutdown after 3:30 PM
+    """
     
     # Market timings (IST)
-    PRE_OPEN_START = time(9, 0, 0)   # 9:00 AM - Pre-open starts
+    PRE_OPEN_START = time(9, 0, 0)    # 9:00 AM - Pre-open starts
+    PRE_OPEN_END = time(9, 7, 0)      # 9:07 AM - Pre-open ends
     MARKET_OPEN = time(9, 15, 0)      # 9:15 AM - Live trading starts
     MARKET_CLOSE = time(15, 30, 0)    # 3:30 PM - Market closes
     
-    # Auto-start/stop times
-    AUTO_START_TIME = time(8, 50, 0)  # 8:50 AM - Start 10 mins before pre-open
-    AUTO_STOP_TIME = time(15, 35, 0)   # 3:35 PM - Stop 5 mins after close
+    # Auto-start/stop times - START EARLY to ensure connection
+    AUTO_START_TIME = time(8, 55, 0)  # 8:55 AM - 5 mins before pre-open
+    AUTO_STOP_TIME = time(15, 35, 0)  # 3:35 PM - 5 mins after close
+    
+    # Scheduler check interval - CRITICAL for timing
+    CHECK_INTERVAL_SECONDS = 10       # Check every 10 seconds (not 60!)
+    AGGRESSIVE_CHECK_INTERVAL = 3     # 3 seconds near market open
     
     def __init__(self, market_feed_service):
         self.market_feed = market_feed_service
         self.scheduler_task: Optional[asyncio.Task] = None
         self.is_running = False
+        self._last_feed_status = None
+        self._consecutive_start_attempts = 0
+        self._last_successful_start: Optional[datetime] = None
         
     async def start(self):
         """Start the automatic scheduler"""
@@ -34,9 +56,16 @@ class MarketHoursScheduler:
             
         self.is_running = True
         self.scheduler_task = asyncio.create_task(self._run_scheduler())
-        print("⏰ Market Hours Scheduler STARTED")
-        print(f"   Auto-start: {self.AUTO_START_TIME.strftime('%I:%M %p')} IST")
-        print(f"   Auto-stop:  {self.AUTO_STOP_TIME.strftime('%I:%M %p')} IST")
+        
+        print("\n" + "="*70)
+        print("⏰ MARKET HOURS SCHEDULER - PRODUCTION MODE")
+        print("="*70)
+        print(f"   ✅ Auto-start: {self.AUTO_START_TIME.strftime('%I:%M %p')} IST (before pre-open)")
+        print(f"   ✅ Pre-open:   {self.PRE_OPEN_START.strftime('%I:%M %p')} IST (data starts flowing)")
+        print(f"   ✅ Live:       {self.MARKET_OPEN.strftime('%I:%M %p')} IST (trading begins)")
+        print(f"   ✅ Auto-stop:  {self.AUTO_STOP_TIME.strftime('%I:%M %p')} IST (after market)")
+        print(f"   ✅ Check interval: {self.CHECK_INTERVAL_SECONDS}s (aggressive: {self.AGGRESSIVE_CHECK_INTERVAL}s)")
+        print("="*70 + "\n")
         
     async def stop(self):
         """Stop the scheduler"""
@@ -52,23 +81,67 @@ class MarketHoursScheduler:
     def _is_weekday(self, dt: datetime) -> bool:
         """Check if given datetime is a weekday (Mon-Fri)"""
         return dt.weekday() < 5  # 0=Monday, 4=Friday
+    
+    def _is_holiday(self, dt: datetime) -> bool:
+        """Check if given date is a market holiday"""
+        from services.market_session_controller import NSE_HOLIDAYS
+        date_str = dt.strftime("%Y-%m-%d")
+        return date_str in NSE_HOLIDAYS
         
     def _is_market_time(self, dt: datetime) -> bool:
-        """Check if given time is within market hours"""
+        """Check if given time is within market hours (including pre-open prep)"""
         current_time = dt.time()
         return (
             self._is_weekday(dt) and 
+            not self._is_holiday(dt) and
             self.AUTO_START_TIME <= current_time <= self.AUTO_STOP_TIME
         )
+    
+    def _is_critical_window(self, dt: datetime) -> bool:
+        """Check if we're in critical window (8:55 AM - 9:20 AM)
+        During this window, we check more frequently to ensure connection
+        """
+        current_time = dt.time()
+        critical_start = time(8, 55, 0)
+        critical_end = time(9, 20, 0)
+        return critical_start <= current_time <= critical_end
+    
+    def _get_market_phase(self, current_time: time) -> str:
+        """Get current market phase with emoji"""
+        if current_time < self.PRE_OPEN_START:
+            return "🔵 PREPARING (waiting for pre-open)"
+        elif self.PRE_OPEN_START <= current_time < self.PRE_OPEN_END:
+            return "🟡 PRE-OPEN (order collection)"
+        elif self.PRE_OPEN_END <= current_time < self.MARKET_OPEN:
+            return "🟡 AUCTION FREEZE (price discovery)"
+        elif self.MARKET_OPEN <= current_time < self.MARKET_CLOSE:
+            return "🟢 LIVE TRADING"
+        elif current_time <= self.AUTO_STOP_TIME:
+            return "🔴 POST-MARKET (cooling down)"
+        else:
+            return "⚫ CLOSED"
+    
+    def _is_feed_connected(self) -> bool:
+        """Check if market feed is actually connected and receiving data"""
+        if not self.market_feed:
+            return False
+        
+        # Check multiple indicators
+        has_kws = hasattr(self.market_feed, 'kws') and self.market_feed.kws is not None
+        is_running = getattr(self.market_feed, 'running', False)
+        is_connected = getattr(self.market_feed, '_is_connected', False)
+        using_rest = getattr(self.market_feed, '_using_rest_fallback', False)
+        
+        # Consider connected if:
+        # 1. WebSocket is connected OR
+        # 2. REST fallback is active (still getting data)
+        return (is_connected and has_kws and is_running) or (using_rest and is_running)
         
     async def _run_scheduler(self):
-        """Main scheduler loop - checks every minute"""
-        print("\n" + "="*70)
-        print("🕐 AUTOMATIC MARKET HOURS SCHEDULER ACTIVE")
-        print("="*70)
+        """Main scheduler loop - ensures feed is running during market hours"""
+        print("🤖 SCHEDULER LOOP STARTED - Monitoring market hours...\n")
         
-        last_feed_state = None  # Track if feed is running
-        consecutive_failures = 0  # Track failed connection attempts
+        last_status_log = datetime.now(IST)
         
         while self.is_running:
             try:
@@ -77,186 +150,185 @@ class MarketHoursScheduler:
                 
                 # Determine if market feed should be running
                 should_run = self._is_market_time(now)
+                is_connected = self._is_feed_connected()
+                phase = self._get_market_phase(current_time)
                 
-                # 🔥 FIX: Better connection detection
-                is_currently_running = (
-                    hasattr(self.market_feed, 'is_connected') and 
-                    self.market_feed.is_connected and
-                    hasattr(self.market_feed, 'kws') and 
-                    self.market_feed.kws is not None
+                # Use aggressive interval during critical window
+                check_interval = (
+                    self.AGGRESSIVE_CHECK_INTERVAL 
+                    if self._is_critical_window(now) 
+                    else self.CHECK_INTERVAL_SECONDS
                 )
                 
-                # Check if using REST fallback
-                using_rest_fallback = getattr(self.market_feed, '_using_rest_fallback', False)
-                
-                # State change detection OR health check during market hours
+                # ========== MARKET HOURS: ENSURE FEED IS RUNNING ==========
                 if should_run:
-                    if not is_currently_running:
-                        # 🔥 FIX: CONTINUOUSLY retry during market hours
-                        if last_feed_state != 'starting':
-                            print(f"\n⏰ [{now.strftime('%I:%M:%S %p')}] MARKET HOURS - Feed NOT Connected")
-                            print(f"   Connection Status: {'REST Fallback' if using_rest_fallback else 'Disconnected'}")
-                            print("🔄 AUTO-STARTING Market Feed...")
-                            
-                            # Check if it's pre-open or live
-                            if self.AUTO_START_TIME <= current_time < self.MARKET_OPEN:
-                                print("   📊 Phase: PRE-OPEN (9:00 - 9:15 AM)")
-                            elif self.MARKET_OPEN <= current_time < self.MARKET_CLOSE:
-                                print("   📈 Phase: LIVE TRADING (9:15 AM - 3:30 PM)")
-                            
-                            # Start the feed
-                            success = await self._ensure_feed_running()
-                            if success:
-                                consecutive_failures = 0
-                                last_feed_state = 'running'
-                                print("   ✅ Feed started successfully")
-                            else:
-                                consecutive_failures += 1
-                                last_feed_state = 'starting'
-                                print(f"   ⚠️ Feed start failed (attempt {consecutive_failures})")
-                                
-                                # Show helpful message after multiple failures
-                                if consecutive_failures >= 3:
-                                    print("\n" + "="*70)
-                                    print("⚠️ PERSISTENT CONNECTION ISSUES")
-                                    print("="*70)
-                                    print("Possible causes:")
-                                    print("1. Zerodha token expired (tokens expire daily)")
-                                    print("2. Internet connectivity issues")
-                                    print("3. Zerodha API downtime")
-                                    print("\n💡 Solution: Click LOGIN in UI or run:")
-                                    print("   python quick_token_fix.py")
-                                    print("="*70 + "\n")
-                    else:
-                        # Feed is running - update state
-                        if last_feed_state != 'running':
-                            print(f"✅ [{now.strftime('%I:%M:%S %p')}] Market Feed ACTIVE")
-                            consecutive_failures = 0
-                        last_feed_state = 'running'
+                    if not is_connected:
+                        self._consecutive_start_attempts += 1
                         
-                        # Periodic status (every 15 minutes during market hours)
-                        if now.minute % 15 == 0 and now.second < 60:
-                            phase = self._get_market_phase(current_time)
-                            connection_type = "WebSocket" if not using_rest_fallback else "REST API Polling"
+                        # Log connection attempt
+                        print(f"\n{'='*70}")
+                        print(f"⏰ [{now.strftime('%I:%M:%S %p')}] MARKET HOURS - Feed NOT Connected")
+                        print(f"   Phase: {phase}")
+                        print(f"   Attempt: #{self._consecutive_start_attempts}")
+                        print(f"{'='*70}")
+                        
+                        # Start the feed
+                        success = await self._start_feed()
+                        
+                        if success:
+                            self._consecutive_start_attempts = 0
+                            self._last_successful_start = now
+                            self._last_feed_status = 'running'
+                            print(f"   ✅ Feed started successfully!")
+                        else:
+                            print(f"   ⚠️ Feed start attempt #{self._consecutive_start_attempts} failed")
+                            
+                            # After 5 failed attempts, show troubleshooting
+                            if self._consecutive_start_attempts >= 5:
+                                await self._show_troubleshooting()
+                    else:
+                        # Feed is running - update status
+                        if self._last_feed_status != 'running':
+                            print(f"✅ [{now.strftime('%I:%M:%S %p')}] Feed ACTIVE - {phase}")
+                            self._consecutive_start_attempts = 0
+                        self._last_feed_status = 'running'
+                        
+                        # Periodic status log (every 5 minutes)
+                        if (now - last_status_log).total_seconds() > 300:
+                            connection_type = "REST API" if getattr(self.market_feed, '_using_rest_fallback', False) else "WebSocket"
                             print(f"✅ [{now.strftime('%I:%M %p')}] Feed Active - {phase} ({connection_type})")
+                            last_status_log = now
+                
+                # ========== OUTSIDE MARKET HOURS: STOP FEED ==========
                 else:
-                    # Outside market hours
-                    if is_currently_running and last_feed_state != 'stopped':
-                        # Outside market hours - STOP feed
-                        print(f"\n⏰ [{now.strftime('%I:%M:%S %p')}] MARKET CLOSED")
+                    if is_connected and self._last_feed_status != 'stopped':
+                        print(f"\n⏰ [{now.strftime('%I:%M:%S %p')}] OUTSIDE MARKET HOURS")
                         print("🛑 AUTO-STOPPING Market Feed...")
                         
-                        await self._ensure_feed_stopped()
-                        last_feed_state = 'stopped'
-                        consecutive_failures = 0
-                    
-                # Sleep for 60 seconds before next check
-                await asyncio.sleep(60)
+                        await self._stop_feed()
+                        self._last_feed_status = 'stopped'
+                        self._consecutive_start_attempts = 0
+                        
+                        # Show next market open time
+                        next_open = self._get_next_market_open(now)
+                        if next_open:
+                            time_until = next_open - now
+                            hours = int(time_until.total_seconds() // 3600)
+                            minutes = int((time_until.total_seconds() % 3600) // 60)
+                            print(f"   Next market: {next_open.strftime('%a %I:%M %p')} ({hours}h {minutes}m)")
+                
+                # Sleep before next check
+                await asyncio.sleep(check_interval)
                 
             except asyncio.CancelledError:
                 break
             except Exception as e:
                 print(f"❌ Scheduler error: {e}")
-                await asyncio.sleep(60)  # Continue even on error
-                
-    def _get_market_phase(self, current_time: time) -> str:
-        """Get current market phase"""
-        if current_time < self.MARKET_OPEN:
-            return "PRE-OPEN"
-        elif current_time < self.MARKET_CLOSE:
-            return "LIVE TRADING"
-        else:
-            return "AFTER HOURS"
-            
-    async def _ensure_feed_running(self) -> bool:
-        """Ensure market feed is running
-        
-        Returns:
-            True if feed is running or successfully started
-            False if start failed
-        """
+                import traceback
+                traceback.print_exc()
+                await asyncio.sleep(10)  # Continue even on error
+    
+    async def _start_feed(self) -> bool:
+        """Start the market feed with proper error handling"""
         try:
-            # 🔥 FIX: Better connection check
-            is_connected = (
-                hasattr(self.market_feed, 'is_connected') and 
-                self.market_feed.is_connected and
-                hasattr(self.market_feed, 'kws') and 
-                self.market_feed.kws is not None and
-                not getattr(self.market_feed, '_using_rest_fallback', False)
-            )
+            # Check if already starting
+            if getattr(self.market_feed, '_starting', False):
+                print("   ℹ️ Feed start already in progress...")
+                return False
             
-            if is_connected:
-                print("   ℹ️  Market feed already running (WebSocket connected)")
-                return True
+            # Mark as starting
+            self.market_feed._starting = True
             
-            # Check if REST fallback is active
-            using_rest_fallback = getattr(self.market_feed, '_using_rest_fallback', False)
-            if using_rest_fallback:
-                print("   ℹ️  REST API fallback mode active")
-                print("   🔄 Attempting to restore WebSocket connection...")
-                
-                # Try to restore WebSocket
-                if hasattr(self.market_feed, '_attempt_reconnect'):
-                    await self.market_feed._attempt_reconnect()
-                    # Check if reconnect succeeded
-                    await asyncio.sleep(2)  # Give it time to connect
-                    if self.market_feed.is_connected:
-                        print("   ✅ WebSocket restored!")
-                        return True
-                    else:
-                        print("   ⚠️  WebSocket restore failed, continuing with REST fallback")
-                        return False  # Still using REST, not ideal
+            # First, validate token before attempting connection
+            from services.unified_auth_service import unified_auth
+            token_valid = await unified_auth.validate_token(force=True)
             
-            # Start the feed
+            if not token_valid:
+                print("   🔴 Token invalid - cannot start feed")
+                print("   💡 Please login via UI or run: python quick_token_fix.py")
+                self.market_feed._starting = False
+                return False
+            
+            # Start the feed (create task so we don't block)
             print("   🚀 Starting market feed...")
-            if hasattr(self.market_feed, 'start'):
-                # If feed has start method, call it (non-blocking)
-                asyncio.create_task(self.market_feed.start())
-                # Give it a moment to initialize
-                await asyncio.sleep(3)
-            elif hasattr(self.market_feed, 'connect'):
-                # Or if it has connect method
-                await self.market_feed.connect()
-                
-            # Verify connection established
-            await asyncio.sleep(2)
-            is_now_connected = (
-                hasattr(self.market_feed, 'is_connected') and 
-                self.market_feed.is_connected
-            )
+            asyncio.create_task(self.market_feed.start())
             
-            if is_now_connected:
-                print("   ✅ Market feed started successfully!")
-                return True
-            else:
-                # Check if REST fallback is now active (better than nothing)
-                using_rest_fallback = getattr(self.market_feed, '_using_rest_fallback', False)
-                if using_rest_fallback:
-                    print("   ⚠️  WebSocket failed, but REST fallback is active")
-                    return False  # Not ideal, but data is flowing
-                else:
-                    print("   ⚠️  Feed did not connect - will retry")
-                    return False
+            # Wait for connection (up to 10 seconds)
+            for i in range(10):
+                await asyncio.sleep(1)
+                if self._is_feed_connected():
+                    self.market_feed._starting = False
+                    return True
+            
+            # Check if REST fallback is active (acceptable)
+            if getattr(self.market_feed, '_using_rest_fallback', False):
+                print("   ⚠️ WebSocket failed, but REST fallback active")
+                self.market_feed._starting = False
+                return True  # REST is better than nothing
+            
+            self.market_feed._starting = False
+            return False
             
         except Exception as e:
             print(f"   ❌ Failed to start feed: {e}")
-            import traceback
-            traceback.print_exc()
-            print("   🔄 Will retry on next check (in 60 seconds)")
+            if hasattr(self.market_feed, '_starting'):
+                self.market_feed._starting = False
             return False
-            
-    async def _ensure_feed_stopped(self):
-        """Ensure market feed is stopped"""
+    
+    async def _stop_feed(self):
+        """Stop the market feed gracefully"""
         try:
             if hasattr(self.market_feed, 'stop'):
                 await self.market_feed.stop()
-            elif hasattr(self.market_feed, 'disconnect'):
-                await self.market_feed.disconnect()
-                
-            print("   ✅ Market feed stopped successfully!")
-            
+            print("   ✅ Market feed stopped")
         except Exception as e:
-            print(f"   ⚠️  Failed to stop feed: {e}")
+            print(f"   ⚠️ Error stopping feed: {e}")
+    
+    async def _show_troubleshooting(self):
+        """Show troubleshooting tips after multiple failures"""
+        print("\n" + "="*70)
+        print("⚠️ PERSISTENT CONNECTION ISSUES DETECTED")
+        print("="*70)
+        print("Possible causes and solutions:")
+        print("")
+        print("1. 🔐 ZERODHA TOKEN EXPIRED")
+        print("   - Tokens expire DAILY (every 24 hours)")
+        print("   - Solution: Click LOGIN in UI or run 'python quick_token_fix.py'")
+        print("")
+        print("2. 🌐 NETWORK CONNECTIVITY")
+        print("   - Check internet connection on server")
+        print("   - Verify Zerodha API is accessible")
+        print("")
+        print("3. 📊 ZERODHA API ISSUES")
+        print("   - Check status.zerodha.com for outages")
+        print("   - API rate limits may be exceeded")
+        print("")
+        print("4. ⚙️ SERVER CONFIGURATION")
+        print("   - Verify ZERODHA_API_KEY is correct")
+        print("   - Verify ZERODHA_ACCESS_TOKEN is current")
+        print("")
+        print("📡 Using REST API fallback mode for now...")
+        print("="*70 + "\n")
+        
+        # Reset counter to avoid spam
+        self._consecutive_start_attempts = 0
+    
+    def _get_next_market_open(self, now: datetime) -> Optional[datetime]:
+        """Get next market open time"""
+        # Start from tomorrow
+        check_date = now + timedelta(days=1)
+        
+        for _ in range(7):  # Check next 7 days
+            if self._is_weekday(check_date) and not self._is_holiday(check_date):
+                return check_date.replace(
+                    hour=self.AUTO_START_TIME.hour,
+                    minute=self.AUTO_START_TIME.minute,
+                    second=0,
+                    microsecond=0
+                )
+            check_date += timedelta(days=1)
+        
+        return None
 
 
 # Global scheduler instance

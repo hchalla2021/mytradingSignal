@@ -14,7 +14,8 @@ import VolumePulseCard from '@/components/VolumePulseCard';
 import TrendBaseCard from '@/components/TrendBaseCard';
 import ZoneControlCard from '@/components/ZoneControlCard';
 import CandleIntentCard from '@/components/CandleIntentCard';
-import EarlyWarningCard from '@/components/EarlyWarningCard';
+import PivotSectionUnified from '@/components/PivotSectionUnified';
+import PivotDetailedDisplay from '@/components/PivotDetailedDisplay';
 
 export default function Home() {
   // 🔥 Force fresh mount on page load - fixes desktop browser caching
@@ -108,13 +109,19 @@ export default function Home() {
             <span className="text-lg">📊</span>
             Overall Market Outlook
             <span className="text-[10px] sm:text-xs text-dark-tertiary font-normal ml-2">
-              (Aggregated: Technical 20% • Zone 16% • Volume 16% • Trend 12% • Candle 14% • Market 8% • PCR 6% • 🔮 Early Warning 8%)
+              (Aggregated: Technical 20% • Zone 16% • Volume 16% • Trend 12% • Candle 14% • Market 6% • PCR 6% • Pivot 10%)
             </span>
           </h3>
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             {/* NIFTY Outlook */}
             {outlookData?.NIFTY ? (
-              <div className="bg-dark-surface/40 rounded-lg p-3 border-2 border-emerald-500/30 shadow-lg shadow-emerald-500/10">
+              <div className={`bg-dark-surface/40 rounded-lg p-3 border-2 shadow-lg transition-all duration-300 ${
+                outlookData.NIFTY.pivotCriticalAlert?.sharpHighlight
+                  ? outlookData.NIFTY.pivotCriticalAlert?.crossingType === 'BUY_CROSS'
+                    ? 'border-green-400 shadow-green-500/50 ring-2 ring-green-500/60'
+                    : 'border-red-400 shadow-red-500/50 ring-2 ring-red-500/60'
+                  : 'border-emerald-500/30 shadow-emerald-500/10'
+              }`}>
                 <div className="flex items-center justify-between mb-2">
                   <span className="text-sm sm:text-base font-bold text-dark-text">NIFTY 50</span>
                   <span className={`px-2 py-1 text-xs font-bold rounded-md border-2 ${
@@ -156,6 +163,24 @@ export default function Home() {
                 }`}>
                   {outlookData.NIFTY.tradeRecommendation}
                 </p>
+                {/* 🔥 Pivot Critical Alert Indicator */}
+                {outlookData.NIFTY.pivotCriticalAlert?.sharpHighlight && (
+                  <div className={`mt-2 px-2 py-1 rounded text-[9px] font-bold text-center border border-transparent ${
+                    outlookData.NIFTY.pivotCriticalAlert?.crossingType === 'BUY_CROSS'
+                      ? 'bg-green-900/40 text-green-300'
+                      : 'bg-red-900/40 text-red-300'
+                  }`}>
+                    {outlookData.NIFTY.pivotCriticalAlert?.crossingType === 'BUY_CROSS' 
+                      ? `⚡ SUPERTREND BUY CROSS • ${outlookData.NIFTY.pivotCriticalAlert?.nearestLevel || 'PIVOT'}`
+                      : `⚡ SUPERTREND SELL CROSS • ${outlookData.NIFTY.pivotCriticalAlert?.nearestLevel || 'PIVOT'}`
+                    }
+                  </div>
+                )}
+                {outlookData.NIFTY.pivotCriticalAlert?.touchCount >= 2 && !outlookData.NIFTY.pivotCriticalAlert?.isCrossing && (
+                  <div className="mt-2 px-2 py-1 rounded text-[9px] font-bold text-center bg-yellow-900/40 text-yellow-300 border border-transparent">
+                    🎯 {outlookData.NIFTY.pivotCriticalAlert?.touchCount}x TOUCHES • {outlookData.NIFTY.pivotCriticalAlert?.nearestLevel}
+                  </div>
+                )}
               </div>
             ) : (
               <div className="bg-dark-surface/40 rounded-lg p-3 border-2 border-gray-500/30 shadow-lg">
@@ -173,7 +198,13 @@ export default function Home() {
 
             {/* BANKNIFTY Outlook */}
             {outlookData?.BANKNIFTY ? (
-                <div className="bg-dark-surface/40 rounded-lg p-3 border-2 border-emerald-500/30 shadow-lg shadow-emerald-500/10">
+                <div className={`bg-dark-surface/40 rounded-lg p-3 border-2 shadow-lg transition-all duration-300 ${
+                  outlookData.BANKNIFTY.pivotCriticalAlert?.sharpHighlight
+                    ? outlookData.BANKNIFTY.pivotCriticalAlert?.crossingType === 'BUY_CROSS'
+                      ? 'border-green-400 shadow-green-500/50 ring-2 ring-green-500/60'
+                      : 'border-red-400 shadow-red-500/50 ring-2 ring-red-500/60'
+                    : 'border-emerald-500/30 shadow-emerald-500/10'
+                }`}>
                   <div className="flex items-center justify-between mb-2">
                     <span className="text-sm sm:text-base font-bold text-dark-text">BANK NIFTY</span>
                     <span className={`px-2 py-1 text-xs font-bold rounded-md border-2 ${
@@ -215,6 +246,24 @@ export default function Home() {
                   }`}>
                     {outlookData.BANKNIFTY.tradeRecommendation}
                   </p>
+                  {/* 🔥 Pivot Critical Alert Indicator */}
+                  {outlookData.BANKNIFTY.pivotCriticalAlert?.sharpHighlight && (
+                    <div className={`mt-2 px-2 py-1 rounded text-[9px] font-bold text-center border border-transparent ${
+                      outlookData.BANKNIFTY.pivotCriticalAlert?.crossingType === 'BUY_CROSS'
+                        ? 'bg-green-900/40 text-green-300'
+                        : 'bg-red-900/40 text-red-300'
+                    }`}>
+                      {outlookData.BANKNIFTY.pivotCriticalAlert?.crossingType === 'BUY_CROSS' 
+                        ? `⚡ SUPERTREND BUY CROSS • ${outlookData.BANKNIFTY.pivotCriticalAlert?.nearestLevel || 'PIVOT'}`
+                        : `⚡ SUPERTREND SELL CROSS • ${outlookData.BANKNIFTY.pivotCriticalAlert?.nearestLevel || 'PIVOT'}`
+                      }
+                    </div>
+                  )}
+                  {outlookData.BANKNIFTY.pivotCriticalAlert?.touchCount >= 2 && !outlookData.BANKNIFTY.pivotCriticalAlert?.isCrossing && (
+                    <div className="mt-2 px-2 py-1 rounded text-[9px] font-bold text-center bg-yellow-900/40 text-yellow-300 border border-transparent">
+                      🎯 {outlookData.BANKNIFTY.pivotCriticalAlert?.touchCount}x TOUCHES • {outlookData.BANKNIFTY.pivotCriticalAlert?.nearestLevel}
+                    </div>
+                  )}
                 </div>
             ) : (
               <div className="bg-dark-surface/40 rounded-lg p-3 border-2 border-gray-500/30 shadow-lg">
@@ -232,7 +281,13 @@ export default function Home() {
 
             {/* SENSEX Outlook */}
             {outlookData?.SENSEX ? (
-              <div className="bg-dark-surface/40 rounded-lg p-3 border-2 border-emerald-500/30 shadow-lg shadow-emerald-500/10">
+              <div className={`bg-dark-surface/40 rounded-lg p-3 border-2 shadow-lg transition-all duration-300 ${
+                outlookData.SENSEX.pivotCriticalAlert?.sharpHighlight
+                  ? outlookData.SENSEX.pivotCriticalAlert?.crossingType === 'BUY_CROSS'
+                    ? 'border-green-400 shadow-green-500/50 ring-2 ring-green-500/60'
+                    : 'border-red-400 shadow-red-500/50 ring-2 ring-red-500/60'
+                  : 'border-emerald-500/30 shadow-emerald-500/10'
+              }`}>
                 <div className="flex items-center justify-between mb-2">
                   <span className="text-sm sm:text-base font-bold text-dark-text">SENSEX</span>
                   <span className={`px-2 py-1 text-xs font-bold rounded-md border-2 ${
@@ -274,6 +329,24 @@ export default function Home() {
                 }`}>
                   {outlookData.SENSEX.tradeRecommendation}
                 </p>
+                {/* 🔥 Pivot Critical Alert Indicator */}
+                {outlookData.SENSEX.pivotCriticalAlert?.sharpHighlight && (
+                  <div className={`mt-2 px-2 py-1 rounded text-[9px] font-bold text-center border border-transparent ${
+                    outlookData.SENSEX.pivotCriticalAlert?.crossingType === 'BUY_CROSS'
+                      ? 'bg-green-900/40 text-green-300'
+                      : 'bg-red-900/40 text-red-300'
+                  }`}>
+                    {outlookData.SENSEX.pivotCriticalAlert?.crossingType === 'BUY_CROSS' 
+                      ? `⚡ SUPERTREND BUY CROSS • ${outlookData.SENSEX.pivotCriticalAlert?.nearestLevel || 'PIVOT'}`
+                      : `⚡ SUPERTREND SELL CROSS • ${outlookData.SENSEX.pivotCriticalAlert?.nearestLevel || 'PIVOT'}`
+                    }
+                  </div>
+                )}
+                {outlookData.SENSEX.pivotCriticalAlert?.touchCount >= 2 && !outlookData.SENSEX.pivotCriticalAlert?.isCrossing && (
+                  <div className="mt-2 px-2 py-1 rounded text-[9px] font-bold text-center bg-yellow-900/40 text-yellow-300 border border-transparent">
+                    🎯 {outlookData.SENSEX.pivotCriticalAlert?.touchCount}x TOUCHES • {outlookData.SENSEX.pivotCriticalAlert?.nearestLevel}
+                  </div>
+                )}
               </div>
             ) : (
               <div className="bg-dark-surface/40 rounded-lg p-3 border-2 border-gray-500/30 shadow-lg">
@@ -420,26 +493,22 @@ export default function Home() {
           </div>
         </div>
 
-        {/* Early Warning Section - PRIORITY (Most Time-Sensitive) */}
-        <div className="mt-6 sm:mt-6 border-2 border-amber-500/30 rounded-2xl p-3 sm:p-4 bg-gradient-to-br from-amber-950/20 via-dark-card/50 to-dark-elevated/40 backdrop-blur-sm shadow-xl shadow-amber-500/10">
+        {/* Pivot Points & Indicators Section - NEW */}
+        <div className="mt-6 sm:mt-6 border-2 border-cyan-500/30 rounded-2xl p-3 sm:p-4 bg-gradient-to-br from-cyan-950/20 via-dark-card/50 to-dark-elevated/40 backdrop-blur-sm shadow-xl shadow-cyan-500/10">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-3 sm:mb-4">
             <div>
               <h3 className="text-base sm:text-lg lg:text-xl font-bold text-dark-text flex items-center gap-3 tracking-tight">
-                <span className="w-1.5 h-5 sm:h-6 bg-gradient-to-b from-amber-500 to-amber-600 rounded-full shadow-lg shadow-amber-500/30" />
-                🔮 Early Warning (Predictive Signals)
+                <span className="w-1.5 h-5 sm:h-6 bg-gradient-to-b from-cyan-500 to-cyan-600 rounded-full shadow-lg shadow-cyan-500/30" />
+                Pivot Points & Supertrend
               </h3>
               <p className="text-dark-tertiary text-xs sm:text-sm mt-1.5 ml-4 sm:ml-5 font-medium tracking-wide">
-                Get signals 1-3 minutes BEFORE breakout • Fake signal filtering (5-factor validation) • Price targets with 2:1 risk-reward
+                Classic Pivots (R1/R2/S1/S2) • Camarilla Zones • Supertrend Signals
               </p>
             </div>
           </div>
 
-          {/* Early Warning Cards Grid */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 2xl:grid-cols-3 gap-3 sm:gap-3">
-            <EarlyWarningCard symbol="NIFTY" />
-            <EarlyWarningCard symbol="BANKNIFTY" />
-            <EarlyWarningCard symbol="SENSEX" />
-          </div>
+          {/* Unified Pivot Section - All Symbols */}
+          <PivotSectionUnified />
         </div>
 
         {/* Candle Intent Section - NEW */}

@@ -77,16 +77,14 @@ if [ "$HTTP_CODE" == "200" ]; then
     HAS_TREND=$(echo "$RESPONSE" | jq -r '.trend_base.signal' 2>/dev/null)
     HAS_ZONE=$(echo "$RESPONSE" | jq -r '.zone_control.signal' 2>/dev/null)
     HAS_CANDLE=$(echo "$RESPONSE" | jq -r '.candle_intent.signal' 2>/dev/null)
-    HAS_WARNING=$(echo "$RESPONSE" | jq -r '.early_warning.signal' 2>/dev/null)
     
     SECTIONS=0
     [ "$HAS_VOLUME" != "null" ] && ((SECTIONS++))
     [ "$HAS_TREND" != "null" ] && ((SECTIONS++))
     [ "$HAS_ZONE" != "null" ] && ((SECTIONS++))
     [ "$HAS_CANDLE" != "null" ] && ((SECTIONS++))
-    [ "$HAS_WARNING" != "null" ] && ((SECTIONS++))
     
-    echo -e "   ${GREEN}   → $SECTIONS/5 analysis sections available${NC}"
+    echo -e "   ${GREEN}   → $SECTIONS/4 analysis sections available${NC}"
 else
     echo -e "   ${RED}❌ Status: $HTTP_CODE${NC}"
     echo -e "   ${RED}   Response: $(echo "$RESPONSE" | head -c 200)${NC}"

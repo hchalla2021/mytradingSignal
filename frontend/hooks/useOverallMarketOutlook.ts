@@ -23,7 +23,7 @@ interface SignalWeight {
   candleIntent: number; // Candle structure patterns - Professional signals
   marketIndices: number; // Live Market Indices momentum
   pcr: number; // Put-Call Ratio - Market sentiment indicator
-  earlyWarning: number; // Early Warning predictive signals - Pre-move detection
+  pivot: number; // Pivot Points & Supertrend - Independent technical confirmation
   // ai: number; // COMMENTED OUT - Not required
 }
 
@@ -39,24 +39,9 @@ interface SymbolOutlook {
     candleIntent: { signal: string; confidence: number; weight: number };
     marketIndices: { signal: string; confidence: number; weight: number };
     pcr: { signal: string; confidence: number; weight: number };
-    earlyWarning: { 
-      signal: string; 
-      confidence: number; 
-      weight: number; 
-      timeToTrigger?: number; 
-      riskLevel?: string;
-      qualified?: boolean;
-      volumeBuildupActive?: boolean;
-      volumeBuildupStrength?: number;
-      momentumDirection?: string;
-      momentumConsistency?: number;
-      momentumAligned?: boolean;
-      trendStructure?: string;
-      trendIntegrity?: number;
-      trendStructureAligned?: boolean;
-    };
+    pivot: { signal: string; confidence: number; weight: number };
   };
-  // 🔥 MASTER TRADE - 10 Golden Rules Status
+  // 🔥 MASTER TRADE - 9 Golden Rules Status
   masterTradeStatus: {
     qualified: boolean;
     rulesPassed: number;
@@ -68,14 +53,22 @@ interface SymbolOutlook {
       rule5_volumePulse: boolean;
       rule6_nearSupport: boolean;
       rule7_breakdownLow: boolean;
-      rule8_earlyWarning: boolean;
-      rule9_momentum: boolean;
-      rule10_bigThreeAlign: boolean;
+      rule8_momentum: boolean;
+      rule9_bigThreeAlign: boolean;
     };
   };
   riskLevel: 'LOW' | 'MEDIUM' | 'HIGH';
   breakdownRiskPercent: number;
   timestamp: string;
+  // 🔥 PIVOT CRITICAL ALERTS
+  pivotCriticalAlert: {
+    isCrossing: boolean; // Supertrend crossed/broken
+    isTouchingPivot: boolean; // Price touching support/resistance
+    touchCount: number; // How many times touched
+    crossingType: 'BUY_CROSS' | 'SELL_CROSS' | 'NONE';
+    nearestLevel: string;
+    sharpHighlight: boolean; // Should show sharp red/green highlight
+  };
 }
 
 interface OverallOutlookData {
@@ -87,17 +80,16 @@ interface OverallOutlookData {
 const API_BASE_URL = API_CONFIG.baseUrl;
 const SYMBOLS = (process.env.NEXT_PUBLIC_MARKET_SYMBOLS || 'NIFTY,BANKNIFTY,SENSEX').split(',').filter(Boolean);
 
-// Signal strength weights (total = 100%) - AI REMOVED, Candle Intent, Market Indices, PCR & Early Warning ADDED
+// Signal strength weights (total = 100%) - 8 sources
 const SIGNAL_WEIGHTS: SignalWeight = {
   technical: 20,       // 20% weight - Core technical indicators
   zoneControl: 16,     // 16% weight - Support/Resistance zones
   volumePulse: 16,     // 16% weight - Volume analysis
   trendBase: 12,       // 12% weight - Trend structure
   candleIntent: 14,    // 14% weight - Candle patterns (rejection, absorption, breakout)
-  marketIndices: 8,    // 8% weight - Live price momentum from indices
+  marketIndices: 6,    // 6% weight - Live price momentum from indices
   pcr: 6,              // 6% weight - Put-Call Ratio (market sentiment)
-  earlyWarning: 8,     // 8% weight - Pre-move detection (momentum buildup, volume accumulation)
-  // ai: 10,           // COMMENTED OUT - Not required
+  pivot: 10,           // 10% weight - Pivot Points & Supertrend (independent confirmation)
 };
 
 // 🔥🔥🔥 INSTANT DEFAULT VALUES - Start at 0%, load real data immediately
@@ -111,9 +103,9 @@ const createDefaultOutlook = (symbol: string): SymbolOutlook => ({
     volumePulse: { signal: 'NEUTRAL', confidence: 0, weight: 16 },
     trendBase: { signal: 'NEUTRAL', confidence: 0, weight: 12 },
     candleIntent: { signal: 'NEUTRAL', confidence: 0, weight: 14 },
-    marketIndices: { signal: 'NEUTRAL', confidence: 0, weight: 8 },
+    marketIndices: { signal: 'NEUTRAL', confidence: 0, weight: 6 },
     pcr: { signal: 'NEUTRAL', confidence: 0, weight: 6 },
-    earlyWarning: { signal: 'WAIT', confidence: 0, weight: 8 },
+    pivot: { signal: 'NEUTRAL', confidence: 0, weight: 10 },
   },
   masterTradeStatus: {
     qualified: false,
@@ -126,9 +118,8 @@ const createDefaultOutlook = (symbol: string): SymbolOutlook => ({
       rule5_volumePulse: false,
       rule6_nearSupport: false,
       rule7_breakdownLow: false,
-      rule8_earlyWarning: false,
-      rule9_momentum: false,
-      rule10_bigThreeAlign: false,
+      rule8_momentum: false,
+      rule9_bigThreeAlign: false,
     },
   },
   riskLevel: 'MEDIUM',
@@ -187,7 +178,7 @@ export const useOverallMarketOutlook = () => {
     trendBase: any,
     candleIntent: any,    // Candle structure patterns
     marketIndicesData: any, // Live Market Indices momentum
-    earlyWarning: any     // Early Warning predictive signals
+    pivotIndicators: any  // 🎯 Pivot Points & Supertrend data
     // ai: any // COMMENTED OUT - Not required
   ): SymbolOutlook => {
     // 🔥 PERMANENT FIX: ALWAYS calculate and show data
@@ -206,8 +197,7 @@ export const useOverallMarketOutlook = () => {
       trendBase?.signal,
       candleIntent?.professional_signal || candleIntent?.signal,  // Check both fields
       marketIndicesData?.change !== undefined,
-      marketIndicesData?.pcr !== undefined && marketIndicesData?.pcr > 0,
-      earlyWarning?.signal
+      marketIndicesData?.pcr !== undefined && marketIndicesData?.pcr > 0
     ].filter(Boolean).length;
 
     // 🔥🔥🔥 PERMANENT FIX: ALWAYS PROCEED WITH CALCULATION
@@ -231,6 +221,59 @@ export const useOverallMarketOutlook = () => {
     // Extract Candle Intent signal and confidence
     const candleSignal = candleIntent?.professional_signal || candleIntent?.signal || 'NEUTRAL';
     const candleConfidence = candleIntent?.pattern?.confidence || candleIntent?.confidence || 0;
+
+    // 🎯 PIVOT POINTS & SUPERTREND INTEGRATION
+    // Extract key parameters and enhance signals with pivot analysis
+    let pivotEnhancedTechSignal = techSignal;
+    let pivotEnhancedTechConfidence = techConfidence;
+    let pivotEnhancedZoneSignal = zoneSignal;
+    let pivotEnhancedCandleSignal = candleSignal;
+    let pivotEnhancedCandleConfidence = candleConfidence;
+    
+    if (pivotIndicators && pivotIndicators.status !== 'OFFLINE') {
+      const price = pivotIndicators.current_price || 0;
+      const st10 = pivotIndicators.supertrend_10_3 || {};
+      const classic = pivotIndicators.classic_pivots || {};
+      const camarilla = pivotIndicators.camarilla_pivots || {};
+      const bias = pivotIndicators.overall_bias || 'NEUTRAL';
+      
+      // TECHNICAL ANALYSIS ENHANCEMENT (22%): Price action vs key levels
+      // Strong signal if price is above major pivots or EMA trends are aligned
+      if (bias === 'BULLISH' && price > (classic.pivot || 0)) {
+        pivotEnhancedTechSignal = techSignal === 'SELL' || techSignal === 'STRONG_SELL' ? 'NEUTRAL' : techSignal;
+        pivotEnhancedTechConfidence = Math.min(100, techConfidence + 15); // Boost confidence
+      } else if (bias === 'BEARISH' && price < (classic.pivot || 0)) {
+        pivotEnhancedTechSignal = techSignal === 'BUY' || techSignal === 'STRONG_BUY' ? 'NEUTRAL' : techSignal;
+        pivotEnhancedTechConfidence = Math.min(100, techConfidence + 10);
+      }
+      
+      // ZONE CONTROL ENHANCEMENT (18%): Support/Resistance proximity
+      // Alert if price is approaching H3 (resistance) or L3 (support)
+      const nearH3 = camarilla.h3 && price && Math.abs(price - camarilla.h3) / camarilla.h3 < 0.01;
+      const nearL3 = camarilla.l3 && price && Math.abs(price - camarilla.l3) / camarilla.l3 < 0.01;
+      if (nearH3 || nearL3) {
+        pivotEnhancedZoneSignal = nearH3 ? 'SELL' : 'BUY';
+      }
+      
+      // CANDLE INTENT ENHANCEMENT (16%): Supertrend confirmation
+      // If supertrend signals strong momentum, enhance candle analysis
+      if (st10.signal === 'BUY' && st10.trend === 'BULLISH') {
+        pivotEnhancedCandleSignal = candleSignal === 'SELL' ? 'NEUTRAL' : (candleSignal === 'BUY' ? 'STRONG_BUY' : 'BUY');
+        pivotEnhancedCandleConfidence = Math.min(100, candleConfidence + 20);
+      } else if (st10.signal === 'SELL' && st10.trend === 'BEARISH') {
+        pivotEnhancedCandleSignal = candleSignal === 'BUY' ? 'NEUTRAL' : (candleSignal === 'SELL' ? 'STRONG_SELL' : 'SELL');
+        pivotEnhancedCandleConfidence = Math.min(100, candleConfidence + 15);
+      }
+      
+      console.log(`[OUTLOOK-PIVOT] ${pivotIndicators.symbol}: Price=${price}, Bias=${bias}, ST10=${st10.signal}`);
+    }
+    
+    // Use enhanced signals with pivot integration
+    const finalTechSignal = pivotEnhancedTechSignal;
+    const finalTechConfidence = pivotEnhancedTechConfidence;
+    const finalZoneSignal = pivotEnhancedZoneSignal;
+    const finalCandleSignal = pivotEnhancedCandleSignal;
+    const finalCandleConfidence = pivotEnhancedCandleConfidence;
 
     // Calculate market indices momentum signal from price change
     // BUYER-FRIENDLY: Lower thresholds for BUY signals, higher thresholds for SELL signals
@@ -265,24 +308,11 @@ export const useOverallMarketOutlook = () => {
     // const aiSignal = ai?.signal?.direction || 'NEUTRAL'; // COMMENTED OUT
     // const aiConfidence = ai?.signal?.strength || 0; // COMMENTED OUT
 
-    // 🔥🔥🔥 EARLY WARNING - STRICT 7-CONDITION VALIDATION 🔥🔥🔥
+    // ═══════════════════════════════════════════════════════════════════════════════
+    // 🔥🔥🔥 TREND STRUCTURE VALIDATION 🔥🔥🔥
+    // ═══════════════════════════════════════════════════════════════════════════════
     // ALL 7 CONDITIONS MUST BE MET FOR QUALIFIED STATUS:
     // 1. Risk = LOW
-    // 2. Signal = BUY or SELL (not WAIT)
-    // 3. Volume Buildup = ACTIVE (is_building=true AND buildup_strength >= 30%)
-    // 4. Momentum Direction = BULLISH (for BUY) or BEARISH (for SELL)
-    // 5. Momentum Consistency >= 65%
-    // 6. Trend Structure = Higher High + Higher Low (for BUY) or Lower High + Lower Low (for SELL)
-    // 7. Trend Integrity >= 65%
-    
-    // Extract Early Warning data
-    const rawEarlyWarningSignal = earlyWarning?.signal || 'WAIT';
-    const earlyWarningConfidence = earlyWarning?.confidence || 0;
-    const earlyWarningTimeToTrigger = earlyWarning?.time_to_trigger || 0;
-    const earlyWarningRisk = earlyWarning?.fake_signal_risk || 'HIGH';
-    const volumeBuildup = earlyWarning?.volume_buildup || { is_building: false, buildup_strength: 0 };
-    const momentum = earlyWarning?.momentum || { direction: 'NEUTRAL', consistency: 0 };
-    
     // Extract Trend Base data for structure validation
     // 🔥 FIX: structure can be an object with {type, integrity_score} or a string
     const rawStructure = trendBase?.structure;
@@ -297,15 +327,7 @@ export const useOverallMarketOutlook = () => {
     
     const trendIntegrity = trendBase?.structure?.integrity_score || trendBase?.integrity || trendBase?.confidence || 0;
     
-    // Condition checks (1-5)
-    const isVolumeBuildupActive = volumeBuildup.is_building && volumeBuildup.buildup_strength >= 30;
-    const isMomentumBullish = momentum.direction === 'BULLISH';
-    const isMomentumBearish = momentum.direction === 'BEARISH';
-    const isMomentumConsistent = (momentum.consistency || 0) >= 65;
-    
-    // Condition checks (6-7): Trend Structure validation
-    // For BUY: Need Higher High + Higher Low structure (uptrend)
-    // For SELL: Need Lower High + Lower Low structure (downtrend)
+    // Condition checks for Trend Structure validation
     // 🔥 FIX: Safe string check - trendStructure is already uppercase string
     const isUptrendStructure = trendStructure === 'HIGHER_HIGH_HIGHER_LOW' || 
                                trendStructure === 'HH_HL' || 
@@ -318,94 +340,9 @@ export const useOverallMarketOutlook = () => {
                                  trendStructure.includes('DOWNTREND') ||
                                  trendSignal === 'SELL' || trendSignal === 'STRONG_SELL';
     const isTrendIntegrityStrong = trendIntegrity >= 65;
-    
-    // Convert EARLY_BUY/EARLY_SELL to standard BUY/SELL signals
-    const earlyWarningSignal = rawEarlyWarningSignal === 'EARLY_BUY' ? 'BUY' : 
-                               rawEarlyWarningSignal === 'EARLY_SELL' ? 'SELL' : 'WAIT';
-    
-    // 🔥 STRICT VALIDATION: ALL 7 CONDITIONS MUST BE MET
-    let adjustedEarlyWarningConfidence = 0; // Default to 0 (IGNORE)
-    let earlyWarningWeight = 0; // Default to 0 weight
-    let earlyWarningQualified = false;
-    
-    const isLowRisk = earlyWarningRisk === 'LOW';
-    const hasActiveSignal = earlyWarningSignal === 'BUY' || earlyWarningSignal === 'SELL';
-    
-    // For BUY signal: Momentum must be BULLISH
-    // For SELL signal: Momentum must be BEARISH
-    const isMomentumAligned = (earlyWarningSignal === 'BUY' && isMomentumBullish) || 
-                              (earlyWarningSignal === 'SELL' && isMomentumBearish);
-    
-    // For BUY signal: Trend must be Uptrend (HH+HL)
-    // For SELL signal: Trend must be Downtrend (LH+LL)
-    const isTrendStructureAligned = (earlyWarningSignal === 'BUY' && isUptrendStructure) || 
-                                    (earlyWarningSignal === 'SELL' && isDowntrendStructure);
-    
-    // ALL 7 CONDITIONS CHECK
-    const allConditionsMet = isLowRisk && hasActiveSignal && isVolumeBuildupActive && 
-                             isMomentumAligned && isMomentumConsistent && 
-                             isTrendStructureAligned && isTrendIntegrityStrong;
-    
-    if (allConditionsMet) {
-      // ✅✅✅✅✅✅✅ ALL 7 CONDITIONS MET - FULL INTEGRATION
-      earlyWarningQualified = true;
-      adjustedEarlyWarningConfidence = earlyWarningConfidence * 1.5; // +50% boost for fully qualified signal
-      earlyWarningWeight = SIGNAL_WEIGHTS.earlyWarning * 3; // 3x weight for qualified signal
-      
-      // EXTRA BOOST: Imminent trigger (< 3 minutes)
-      if (earlyWarningTimeToTrigger > 0 && earlyWarningTimeToTrigger <= 3) {
-        adjustedEarlyWarningConfidence *= 1.4; // +40% boost for imminent trigger
-        earlyWarningWeight *= 1.3; // +30% more weight
-      }
-      
-      // EXTRA BOOST: Strong volume buildup (>= 60%)
-      if (volumeBuildup.buildup_strength >= 60) {
-        adjustedEarlyWarningConfidence *= 1.2; // +20% boost for strong volume
-      }
-      
-      // EXTRA BOOST: Very high momentum consistency (>= 80%)
-      if ((momentum.consistency || 0) >= 80) {
-        adjustedEarlyWarningConfidence *= 1.15; // +15% boost for strong consistency
-      }
-      
-      // EXTRA BOOST: Very high trend integrity (>= 80%)
-      if (trendIntegrity >= 80) {
-        adjustedEarlyWarningConfidence *= 1.15; // +15% boost for strong trend
-      }
-    } else if (isLowRisk && hasActiveSignal && isVolumeBuildupActive && isMomentumAligned && isMomentumConsistent && !isTrendStructureAligned) {
-      // ⚠️ 5/7 conditions met but trend structure not aligned = Heavily reduced
-      adjustedEarlyWarningConfidence = earlyWarningConfidence * 0.15; // -85% penalty
-      earlyWarningWeight = SIGNAL_WEIGHTS.earlyWarning * 0.15; // 15% weight
-    } else if (isLowRisk && hasActiveSignal && isVolumeBuildupActive && isMomentumAligned && isMomentumConsistent && !isTrendIntegrityStrong) {
-      // ⚠️ 6/7 conditions met but trend integrity too low = Reduced
-      adjustedEarlyWarningConfidence = earlyWarningConfidence * 0.3; // -70% penalty
-      earlyWarningWeight = SIGNAL_WEIGHTS.earlyWarning * 0.3; // 30% weight
-    } else if (isLowRisk && hasActiveSignal && isVolumeBuildupActive && !isMomentumAligned) {
-      // ⚠️ Momentum direction wrong = Heavily reduced
-      adjustedEarlyWarningConfidence = earlyWarningConfidence * 0.1; // -90% penalty
-      earlyWarningWeight = SIGNAL_WEIGHTS.earlyWarning * 0.1; // 10% weight
-    } else if (isLowRisk && hasActiveSignal && isVolumeBuildupActive && !isMomentumConsistent) {
-      // ⚠️ Momentum not consistent enough = Reduced
-      adjustedEarlyWarningConfidence = earlyWarningConfidence * 0.25; // -75% penalty
-      earlyWarningWeight = SIGNAL_WEIGHTS.earlyWarning * 0.25; // 25% weight
-    } else if (isLowRisk && hasActiveSignal && !isVolumeBuildupActive) {
-      // ⚠️ LOW RISK + Signal but NO Volume Buildup = Reduced confidence
-      adjustedEarlyWarningConfidence = earlyWarningConfidence * 0.1; // -90% penalty
-      earlyWarningWeight = SIGNAL_WEIGHTS.earlyWarning * 0.1; // 10% weight
-    } else if (isLowRisk && !hasActiveSignal) {
-      // ⏳ LOW RISK but WAIT signal = Minor inclusion (preparing)
-      adjustedEarlyWarningConfidence = earlyWarningConfidence * 0.02; // -98% (almost ignored)
-      earlyWarningWeight = SIGNAL_WEIGHTS.earlyWarning * 0.02;
-    } else {
-      // 🔴 MEDIUM/HIGH RISK = COMPLETELY IGNORE
-      adjustedEarlyWarningConfidence = 0;
-      earlyWarningWeight = 0;
-    }
-    
-    adjustedEarlyWarningConfidence = Math.min(100, adjustedEarlyWarningConfidence); // Cap at 100
 
     // ═══════════════════════════════════════════════════════════════════════════════
-    // 🔥🔥🔥 MASTER TRADE VALIDATION - 10 GOLDEN RULES 🔥🔥🔥
+    // 🔥🔥🔥 MASTER TRADE VALIDATION - 9 GOLDEN RULES 🔥🔥🔥
     // ALL conditions must align for QUALIFIED TRADE ENTRY
     // ═══════════════════════════════════════════════════════════════════════════════
     
@@ -461,19 +398,20 @@ export const useOverallMarketOutlook = () => {
     const rule7_breakdownLow = breakdownProb < 50;
     
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // RULE 8, 9: EARLY WARNING - Already validated above (7 conditions)
+    // RULE 8: MOMENTUM - Bullish with consistency
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    const rule8_earlyWarningLowRisk = earlyWarningQualified; // Already has all 7 conditions
-    const rule9_momentumBullish = isMomentumBullish && isMomentumConsistent;
+    const isMomentumBullish = trendSignal === 'BUY' || trendSignal === 'STRONG_BUY';
+    const isMomentumConsistent = trendConfidence >= 65;
+    const rule8_momentumBullish = isMomentumBullish && isMomentumConsistent;
     
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // RULE 10: FINAL ALIGNMENT CHECK - The Big 3 Must Agree
+    // RULE 9: FINAL ALIGNMENT CHECK - The Big 3 Must Agree
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     const big3_trendBaseAligned = rule1_trendStructureValid && rule2_trendActive;
     const big3_candleIntentAligned = rule3_candleBuySignal; // Rule 4 is bonus
     const big3_zoneControlAligned = rule7_breakdownLow && bounceProb > breakdownProb;
     
-    const rule10_allThreeAlign = big3_trendBaseAligned && big3_candleIntentAligned && big3_zoneControlAligned;
+    const rule9_allThreeAlign = big3_trendBaseAligned && big3_candleIntentAligned && big3_zoneControlAligned;
     
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     // MASTER TRADE QUALIFICATION - Count passed rules
@@ -486,14 +424,13 @@ export const useOverallMarketOutlook = () => {
       rule5: rule5_volumePulseOk,
       rule6: rule6_nearSupport,
       rule7: rule7_breakdownLow,
-      rule8: rule8_earlyWarningLowRisk,
-      rule9: rule9_momentumBullish,
-      rule10: rule10_allThreeAlign
+      rule8: rule8_momentumBullish,
+      rule9: rule9_allThreeAlign
     };
     
     const rulesPassed = Object.values(rulesStatus).filter(Boolean).length;
-    const isMasterTradeQualified = rulesPassed >= 7 && rule10_allThreeAlign; // Need 7+ rules AND Big 3 aligned
-    const isPartiallyQualified = rulesPassed >= 5 && big3_zoneControlAligned; // 5+ rules with safe zone
+    const isMasterTradeQualified = rulesPassed >= 6 && rule9_allThreeAlign; // Need 6+ rules AND Big 3 aligned
+    const isPartiallyQualified = rulesPassed >= 4 && big3_zoneControlAligned; // 4+ rules with safe zone
 
     // Calculate PCR (Put-Call Ratio) signal
     // PCR > 1.0 = More puts (fear) = Bullish contrarian signal (good for buyers)
@@ -525,32 +462,86 @@ export const useOverallMarketOutlook = () => {
       pcrConfidence = 0; // No PCR data available
     }
 
+    // 🔥 PIVOT POINTS & SUPERTREND - Independent 10% Signal
+    // Isolated extraction from pivot data - doesn't override other signals
+    let pivotSignal = 'NEUTRAL';
+    let pivotConfidence = 0;
+    
+    if (pivotIndicators && pivotIndicators.status !== 'OFFLINE') {
+      const price = pivotIndicators.current_price || 0;
+      const st10 = pivotIndicators.supertrend_10_3 || {};
+      const classic = pivotIndicators.classic_pivots || {};
+      const camarilla = pivotIndicators.camarilla_pivots || {};
+      const bias = pivotIndicators.overall_bias || 'NEUTRAL';
+      
+      // Primary signal: Supertrend 10-3 (60% of pivot confidence)
+      const stSignal = (st10 as any)?.signal || 'NEUTRAL';
+      const stTrend = (st10 as any)?.trend || 'NEUTRAL';
+      
+      // Secondary: Distance to critical levels (40% of pivot confidence)
+      const pivot = (classic as any)?.pivot || 0;
+      const r2 = (classic as any)?.r2 || 0;
+      const s2 = (classic as any)?.s2 || 0;
+      const h3 = (camarilla as any)?.h3 || 0;
+      const l3 = (camarilla as any)?.l3 || 0;
+      
+      // Supertrend signal strength
+      if (stSignal === 'BUY' && stTrend === 'BULLISH') {
+        pivotSignal = 'STRONG_BUY';
+        pivotConfidence = 85; // Strong supertrend buy + bullish trend
+      } else if (stSignal === 'BUY') {
+        pivotSignal = 'BUY';
+        pivotConfidence = 70; // Supertrend buy signal
+      } else if (stSignal === 'SELL' && stTrend === 'BEARISH') {
+        pivotSignal = 'STRONG_SELL';
+        pivotConfidence = 85; // Strong supertrend sell + bearish trend
+      } else if (stSignal === 'SELL') {
+        pivotSignal = 'SELL';
+        pivotConfidence = 70; // Supertrend sell signal
+      }
+      
+      // Adjust confidence based on proximity to critical levels
+      const nearR2 = r2 && Math.abs(price - r2) / r2 < 0.015; // Within 1.5%
+      const nearS2 = s2 && Math.abs(price - s2) / s2 < 0.015;
+      const nearH3 = h3 && Math.abs(price - h3) / h3 < 0.015;
+      const nearL3 = l3 && Math.abs(price - l3) / l3 < 0.015;
+      
+      if ((stSignal === 'BUY' && (nearS2 || nearL3)) || (stSignal === 'SELL' && (nearR2 || nearH3))) {
+        // Supertrend signal aligned with resistance/support = high confidence
+        pivotConfidence = Math.min(95, pivotConfidence + 15);
+      } else if ((stSignal === 'BUY' && (nearR2 || nearH3)) || (stSignal === 'SELL' && (nearS2 || nearL3))) {
+        // Supertrend signal against nearest level = lower confidence
+        pivotConfidence = Math.max(40, pivotConfidence - 20);
+      }
+      
+      console.log(`[OUTLOOK-PIVOT-SIGNAL] ${pivotIndicators.symbol}: ST=${stSignal} Trend=${stTrend} Signal=${pivotSignal} Conf=${pivotConfidence}`);
+    }
+
     // Convert signals to confidence-weighted scores (-100 to +100)
-    const techScore = signalToScore(techSignal, techConfidence);
-    const zoneScore = signalToScore(zoneSignal, zoneConfidence);
+    const techScore = signalToScore(finalTechSignal, finalTechConfidence);
+    const zoneScore = signalToScore(finalZoneSignal, zoneConfidence);
     const volumeScore = signalToScore(volumeSignal, volumeConfidence);
     const trendScore = signalToScore(trendSignal, trendConfidence);
-    const candleScore = signalToScore(candleSignal, candleConfidence);
+    const candleScore = signalToScore(finalCandleSignal, finalCandleConfidence);
     const marketIndicesScore = signalToScore(marketIndicesSignal, marketIndicesConfidence);
     const pcrScore = signalToScore(pcrSignal, pcrConfidence);
-    const earlyWarningScore = signalToScore(earlyWarningSignal, adjustedEarlyWarningConfidence);
+    const pivotScore = signalToScore(pivotSignal, pivotConfidence);
     // const aiScore = signalToScore(aiSignal, aiConfidence); // COMMENTED OUT
     
     // 🔍 DEBUG logs for troubleshooting
-    console.log('[OUTLOOK-CALC] Signal Confidences:', {
-      tech: techConfidence,
+    console.log('[OUTLOOK-CALC] Signal Confidences with Pivot Integration:', {
+      tech: finalTechConfidence,
       zone: zoneConfidence,
       volume: volumeConfidence,
       trend: trendConfidence,
-      candle: candleConfidence,
+      candle: finalCandleConfidence,
       market: marketIndicesConfidence,
       pcr: pcrConfidence,
-      warning: adjustedEarlyWarningConfidence
+      pivot: pivotConfidence
     });
     console.log('[OUTLOOK-CALC] Available signals:', availableSignals + '/8');
 
     // 🔥 SIMPLIFIED: Calculate weighted average score (scores already confidence-adjusted)
-    // 🔥 DYNAMIC WEIGHT CALCULATION: Adjust for LOW RISK Early Warning boost
     const totalWeight = (
       SIGNAL_WEIGHTS.technical +
       SIGNAL_WEIGHTS.zoneControl +
@@ -559,7 +550,7 @@ export const useOverallMarketOutlook = () => {
       SIGNAL_WEIGHTS.candleIntent +
       SIGNAL_WEIGHTS.marketIndices +
       SIGNAL_WEIGHTS.pcr +
-      earlyWarningWeight // Use dynamic weight (boosted for LOW RISK)
+      SIGNAL_WEIGHTS.pivot
     );
     
     const totalWeightedScore = (
@@ -570,29 +561,28 @@ export const useOverallMarketOutlook = () => {
       (candleScore * SIGNAL_WEIGHTS.candleIntent) +
       (marketIndicesScore * SIGNAL_WEIGHTS.marketIndices) +
       (pcrScore * SIGNAL_WEIGHTS.pcr) +
-      (earlyWarningScore * earlyWarningWeight) // Use dynamic weight
+      (pivotScore * SIGNAL_WEIGHTS.pivot)
       // + (aiScore * SIGNAL_WEIGHTS.ai) // COMMENTED OUT
-    ) / totalWeight; // Divide by dynamic total weight
+    ) / totalWeight;
     
     // Debug log removed for production
 
     // Calculate overall confidence (0-100) - SEPARATE from signal score
     // Confidence = weighted average of individual confidences (not signal scores)
-    // 🔥 DYNAMIC WEIGHT: Use earlyWarningWeight for LOW RISK boost
     const overallConfidence = (
-      (techConfidence * SIGNAL_WEIGHTS.technical) +
+      (finalTechConfidence * SIGNAL_WEIGHTS.technical) +
       (zoneConfidence * SIGNAL_WEIGHTS.zoneControl) +
       (volumeConfidence * SIGNAL_WEIGHTS.volumePulse) +
       (trendConfidence * SIGNAL_WEIGHTS.trendBase) +
-      (candleConfidence * SIGNAL_WEIGHTS.candleIntent) +
+      (finalCandleConfidence * SIGNAL_WEIGHTS.candleIntent) +
       (marketIndicesConfidence * SIGNAL_WEIGHTS.marketIndices) +
       (pcrConfidence * SIGNAL_WEIGHTS.pcr) +
-      (adjustedEarlyWarningConfidence * earlyWarningWeight) // Dynamic weight
-    ) / totalWeight; // Use dynamic total weight
+      (pivotConfidence * SIGNAL_WEIGHTS.pivot)
+    ) / totalWeight;
     
     // 🔥 BONUS: Add alignment bonus (when signals agree, confidence increases)
-    const bullishCount = [techScore, zoneScore, volumeScore, trendScore, candleScore, marketIndicesScore, pcrScore, earlyWarningScore].filter(s => s > 0).length;
-    const bearishCount = [techScore, zoneScore, volumeScore, trendScore, candleScore, marketIndicesScore, pcrScore, earlyWarningScore].filter(s => s < 0).length;
+    const bullishCount = [techScore, zoneScore, volumeScore, trendScore, candleScore, marketIndicesScore, pcrScore, pivotScore].filter(s => s > 0).length;
+    const bearishCount = [techScore, zoneScore, volumeScore, trendScore, candleScore, marketIndicesScore, pcrScore, pivotScore].filter(s => s < 0).length;
     const alignmentBonus = Math.abs(bullishCount - bearishCount) * 3; // +3% per aligned signal
     let finalConfidence = Math.min(100, overallConfidence + alignmentBonus);
 
@@ -670,40 +660,25 @@ export const useOverallMarketOutlook = () => {
     // Build Master Trade Status indicator
     let masterTradeIndicator = '';
     if (isMasterTradeQualified) {
-      masterTradeIndicator = `\n🏆 MASTER TRADE QUALIFIED (${rulesPassed}/10 Rules ✅)\n   Big 3: Trend ✅ • Candle ✅ • Zone ✅`;
+      masterTradeIndicator = `\n🏆 MASTER TRADE QUALIFIED (${rulesPassed}/9 Rules ✅)\n   Big 3: Trend ✅ • Candle ✅ • Zone ✅`;
     } else if (isPartiallyQualified) {
       const failedRules: string[] = [];
       if (!rule1_trendStructureValid) failedRules.push('Trend Structure');
       if (!rule2_trendActive) failedRules.push('Trend Active');
       if (!rule3_candleBuySignal) failedRules.push('Candle Signal');
       if (!rule7_breakdownLow) failedRules.push('Breakdown Risk');
-      masterTradeIndicator = `\n⚡ PARTIAL SETUP (${rulesPassed}/10 Rules)\n   Missing: ${failedRules.slice(0, 2).join(', ')}`;
+      masterTradeIndicator = `\n⚡ PARTIAL SETUP (${rulesPassed}/9 Rules)\n   Missing: ${failedRules.slice(0, 2).join(', ')}`;
     } else if (rulesPassed >= 3) {
-      masterTradeIndicator = `\n⏳ BUILDING (${rulesPassed}/10 Rules) - Wait for alignment`;
-    }
-    
-    // Add Early Warning indicator ONLY if QUALIFIED (ALL 7 CONDITIONS)
-    let earlyWarningIndicator = '';
-    if (earlyWarningQualified) {
-      const volumeStr = volumeBuildup.buildup_strength >= 60 ? '🔥' : '✅';
-      const momentumStr = (momentum.consistency || 0) >= 80 ? '💪' : '✓';
-      const trendStr = trendIntegrity >= 80 ? '📈' : '✓';
-      earlyWarningIndicator = `\n🔮 EARLY WARNING: ${earlyWarningSignal} in ${earlyWarningTimeToTrigger}m • Vol: ${volumeBuildup.buildup_strength}% • Mom: ${momentum.consistency}%`;
-    } else if (isLowRisk && hasActiveSignal && !isTrendStructureAligned) {
-      earlyWarningIndicator = `\n⚠️ Early Warning: ${earlyWarningSignal} (Trend not aligned)`;
-    } else if (isLowRisk && hasActiveSignal && !isMomentumAligned) {
-      earlyWarningIndicator = `\n⚠️ Early Warning: ${earlyWarningSignal} (Momentum: ${momentum.direction})`;
-    } else if (isLowRisk && hasActiveSignal && !isVolumeBuildupActive) {
-      earlyWarningIndicator = `\n⏳ Early Warning: Waiting for Volume...`;
+      masterTradeIndicator = `\n⏳ BUILDING (${rulesPassed}/9 Rules) - Wait for alignment`;
     }
     
     // Combine indicators
-    const combinedIndicators = masterTradeIndicator + earlyWarningIndicator;
+    const combinedIndicators = masterTradeIndicator;
     
     if (isMasterTradeQualified && overallSignal === 'STRONG_BUY') {
-      tradeRecommendation = `🏆 MASTER TRADE • PERFECT ENTRY!\n${riskEmoji} Risk ${breakdownRisk}% • 💪 ${Math.round(finalConfidence)}% • ${rulesPassed}/10 Rules${combinedIndicators}` + dataFreshnessWarning;
+      tradeRecommendation = `🏆 MASTER TRADE • PERFECT ENTRY!\n${riskEmoji} Risk ${breakdownRisk}% • 💪 ${Math.round(finalConfidence)}% • ${rulesPassed}/9 Rules${combinedIndicators}` + dataFreshnessWarning;
     } else if (isMasterTradeQualified && (overallSignal === 'BUY' || overallSignal === 'NEUTRAL')) {
-      tradeRecommendation = `🏆 MASTER TRADE READY • Enter Now!\n${riskEmoji} Risk ${breakdownRisk}% • ${Math.round(finalConfidence)}% • ${rulesPassed}/10 Rules${combinedIndicators}` + dataFreshnessWarning;
+      tradeRecommendation = `🏆 MASTER TRADE READY • Enter Now!\n${riskEmoji} Risk ${breakdownRisk}% • ${Math.round(finalConfidence)}% • ${rulesPassed}/9 Rules${combinedIndicators}` + dataFreshnessWarning;
     } else if (overallSignal === 'STRONG_BUY' && riskLevel === 'LOW') {
       tradeRecommendation = `🚀 STRONG BUY • Great Setup!\n${riskEmoji} Risk ${breakdownRisk}% • 💪 ${Math.round(finalConfidence)}%${combinedIndicators}` + dataFreshnessWarning;
     } else if (overallSignal === 'STRONG_BUY' && riskLevel === 'MEDIUM') {
@@ -734,18 +709,86 @@ export const useOverallMarketOutlook = () => {
       tradeRecommendation = `⏸️ NEUTRAL • Wait for Setup\n${riskEmoji} ${breakdownRisk}% Risk • ${Math.round(finalConfidence)}%${combinedIndicators}` + dataFreshnessWarning + signalQualityWarning;
     }
 
+    // 🔥 PIVOT CRITICAL ALERTS - Detect crossing and touching patterns
+    let pivotCriticalAlert = {
+      isCrossing: false,
+      isTouchingPivot: false,
+      touchCount: 0,
+      crossingType: 'NONE' as const,
+      nearestLevel: '',
+      sharpHighlight: false
+    };
+
+    if (pivotIndicators && pivotIndicators.status !== 'OFFLINE') {
+      const price = pivotIndicators.current_price || 0;
+      const st10 = pivotIndicators.supertrend_10_3 || {};
+      const classic = pivotIndicators.classic_pivots || {};
+      const camarilla = pivotIndicators.camarilla_pivots || {};
+      const bias = pivotIndicators.overall_bias || 'NEUTRAL';
+      
+      // Detect Supertrend crossing
+      const isSupertrend10Crossing = st10.signal && (st10.signal === 'BUY' || st10.signal === 'SELL');
+      const superTrendValue = st10.value || 0;
+      const crossingSignal = st10.signal || 'NONE';
+      
+      // Detect price near pivot levels (within 0.5%)
+      const pivot = classic.pivot || 0;
+      const support1 = classic.support1 || 0;
+      const resistance1 = classic.resistance1 || 0;
+      const touchThreshold = price * 0.005; // 0.5% threshold
+      
+      const nearPivot = pivot && Math.abs(price - pivot) <= touchThreshold;
+      const nearS1 = support1 && Math.abs(price - support1) <= touchThreshold;
+      const nearR1 = resistance1 && Math.abs(price - resistance1) <= touchThreshold;
+      const isTouchingPivot = nearPivot || nearS1 || nearR1;
+      
+      // Determine nearest level
+      let nearestLevel = '';
+      if (nearPivot) nearestLevel = 'PIVOT';
+      else if (nearS1) nearestLevel = 'SUPPORT-1';
+      else if (nearR1) nearestLevel = 'RESISTANCE-1';
+      
+      // Detect zone touches (Camarilla H3/L3 multiple touches = strong signals)
+      const h3 = camarilla.h3 || 0;
+      const l3 = camarilla.l3 || 0;
+      const nearH3 = h3 && Math.abs(price - h3) <= touchThreshold;
+      const nearL3 = l3 && Math.abs(price - l3) <= touchThreshold;
+      
+      // Touch count: How many times in critical zones
+      const touchCount = [nearPivot, nearS1, nearR1, nearH3, nearL3].filter(Boolean).length;
+      
+      // Sharp highlight conditions:
+      // 1. Supertrend crosses BUY (green highlight)
+      // 2. Supertrend crosses SELL (red highlight)
+      // 3. Price touches pivot/support/resistance MULTIPLE times (yellow sharp)
+      const stCrossBuy = isSupertrend10Crossing && crossingSignal === 'BUY';
+      const stCrossSell = isSupertrend10Crossing && crossingSignal === 'SELL';
+      const multipleTouches = touchCount >= 2;
+      
+      pivotCriticalAlert = {
+        isCrossing: isSupertrend10Crossing,
+        isTouchingPivot: isTouchingPivot || multipleTouches,
+        touchCount: touchCount,
+        crossingType: stCrossBuy ? 'BUY_CROSS' : stCrossSell ? 'SELL_CROSS' : 'NONE',
+        nearestLevel: nearestLevel,
+        sharpHighlight: stCrossBuy || stCrossSell || multipleTouches
+      };
+      
+      console.log(`[OUTLOOK-PIVOT-ALERT] ${pivotIndicators.symbol}: Cross=${isSupertrend10Crossing} Touch=${isTouchingPivot} Touches=${touchCount} Sharp=${pivotCriticalAlert.sharpHighlight}`);
+    }
+
     return {
       overallConfidence: Math.round(finalConfidence),
       overallSignal,
       tradeRecommendation,
       signalBreakdown: {
         technical: { 
-          signal: techSignal, 
-          confidence: Math.round(techConfidence), 
+          signal: finalTechSignal,
+          confidence: Math.round(finalTechConfidence), 
           weight: SIGNAL_WEIGHTS.technical 
         },
         zoneControl: { 
-          signal: zoneSignal, 
+          signal: finalZoneSignal, 
           confidence: Math.round(zoneConfidence), 
           weight: SIGNAL_WEIGHTS.zoneControl 
         },
@@ -760,8 +803,8 @@ export const useOverallMarketOutlook = () => {
           weight: SIGNAL_WEIGHTS.trendBase 
         },
         candleIntent: {
-          signal: candleSignal,
-          confidence: Math.round(candleConfidence),
+          signal: finalCandleSignal,
+          confidence: Math.round(finalCandleConfidence),
           weight: SIGNAL_WEIGHTS.candleIntent
         },
         marketIndices: {
@@ -774,24 +817,13 @@ export const useOverallMarketOutlook = () => {
           confidence: Math.round(pcrConfidence),
           weight: SIGNAL_WEIGHTS.pcr
         },
-        earlyWarning: {
-          signal: earlyWarningSignal,
-          confidence: Math.round(adjustedEarlyWarningConfidence),
-          weight: Math.round(earlyWarningWeight * 10) / 10, // Show actual dynamic weight
-          timeToTrigger: earlyWarningTimeToTrigger,
-          riskLevel: earlyWarningRisk,
-          qualified: earlyWarningQualified, // 🔥 Shows if ALL 7 conditions met
-          volumeBuildupActive: isVolumeBuildupActive,
-          volumeBuildupStrength: volumeBuildup.buildup_strength,
-          momentumDirection: momentum.direction,
-          momentumConsistency: momentum.consistency || 0,
-          momentumAligned: isMomentumAligned,
-          trendStructure: trendStructure, // 🔥 NEW: Trend structure (HH_HL, LH_LL, etc.)
-          trendIntegrity: trendIntegrity, // 🔥 NEW: Trend integrity %
-          trendStructureAligned: isTrendStructureAligned // 🔥 NEW: Is trend aligned with signal?
+        pivot: {
+          signal: pivotSignal,
+          confidence: Math.round(pivotConfidence),
+          weight: SIGNAL_WEIGHTS.pivot
         },
       },
-      // 🔥 10 GOLDEN RULES - Master Trade Status
+      // 🔥 9 GOLDEN RULES - Master Trade Status
       masterTradeStatus: {
         qualified: isMasterTradeQualified,
         rulesPassed: rulesPassed,
@@ -803,14 +835,15 @@ export const useOverallMarketOutlook = () => {
           rule5_volumePulse: rule5_volumePulseOk,
           rule6_nearSupport: rule6_nearSupport,
           rule7_breakdownLow: rule7_breakdownLow,
-          rule8_earlyWarning: rule8_earlyWarningLowRisk,
-          rule9_momentum: rule9_momentumBullish,
-          rule10_bigThreeAlign: rule10_allThreeAlign
+          rule8_momentum: rule8_momentumBullish,
+          rule9_bigThreeAlign: rule9_allThreeAlign
         }
       },
       riskLevel,
       breakdownRiskPercent: breakdownRisk, // Include the actual percentage
       timestamp: new Date().toISOString(),
+      // 🔥 PIVOT CRITICAL ALERTS
+      pivotCriticalAlert,
     };
   }, []);
 
@@ -855,16 +888,18 @@ export const useOverallMarketOutlook = () => {
     console.log(`[OUTLOOK-${symbol}] API Base URL: ${API_BASE_URL}`);
 
     // 🚀 OPTIMIZATION: Fetch ALL advanced analysis in ONE call (5x faster!)
-    const [tech, allAdvanced, market] = await Promise.all([
+    const [tech, allAdvanced, market, pivotData] = await Promise.all([
       quickFetch(`${API_BASE_URL}/api/analysis/analyze/${symbol}`),
       quickFetch(`${API_BASE_URL}/api/advanced/all-analysis/${symbol}`), // ⚡ ONE CALL for 5 endpoints!
       quickFetch(`${API_BASE_URL}/ws/cache/${symbol}`).then(d => d?.data || null),
+      quickFetch(`${API_BASE_URL}/api/advanced/pivot-indicators`).then(d => d?.[symbol] || null), // 🎯 Pivot Points & Supertrend
     ]);
 
     console.log(`[OUTLOOK-${symbol}] Fetch complete:`, {
       tech: tech ? '✓' : '✗',
       allAdvanced: allAdvanced ? '✓' : '✗',
       market: market ? '✗' : '✗',
+      pivot: pivotData ? '✓' : '✗',
       apiUrl: API_BASE_URL,
       timestamp: new Date().toISOString(),
     });
@@ -874,7 +909,6 @@ export const useOverallMarketOutlook = () => {
     const volume = allAdvanced?.volume_pulse || null;
     const trend = allAdvanced?.trend_base || null;
     const candle = allAdvanced?.candle_intent || null;
-    const warning = allAdvanced?.early_warning || null;
 
     // 🔍 DEBUG: Log fetched data
     console.log(`[OUTLOOK-${symbol}] Extracted data:`, {
@@ -884,10 +918,10 @@ export const useOverallMarketOutlook = () => {
       trend: trend ? '✓' : '✗',
       candle: candle ? '✓' : '✗',
       market: market ? '✓' : '✗',
-      warning: warning ? '✓' : '✗'
+      pivot: pivotData ? '✓' : '✗'
     });
 
-    const result = calculateOverallOutlook(tech, zone, volume, trend, candle, market, warning);
+    const result = calculateOverallOutlook(tech, zone, volume, trend, candle, market, pivotData);
     console.log(`[OUTLOOK-${symbol}] Calculated confidence:`, result.overallConfidence + '%', 'Signal:', result.overallSignal);
     
     return result;

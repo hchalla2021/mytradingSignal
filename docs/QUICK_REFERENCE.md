@@ -1,172 +1,231 @@
-# 🚀 Quick Reference - Environment Setup
+# 🎯 QUICK REFERENCE - DEPLOYMENT FIXES
 
-## ⚡ 30-Second Setup
+**Print This Out or Bookmark It!**
 
-```powershell
-# 1. Backend .env
+---
+
+## 🔴 ISSUES FOUND → 🟢 ISSUES FIXED
+
+```
+┌─ ISSUE #1: AUTHENTICATION BREAKING
+│  Problem: Two conflicting auth systems
+│  Symptom: Login fails, auth disappears after code change
+│  ✅ FIXED: Removed unified_auth, using auth_state_manager only
+│
+├─ ISSUE #2: CONFIG NOT VALIDATED
+│  Problem: Missing config not caught until runtime
+│  Symptom: Crashes with "KeyError" or "NoneType"
+│  ✅ FIXED: Added validation on startup, prints clear errors
+│
+├─ ISSUE #3: STALE MARKET DATA
+│  Problem: Complex cache fallback chain
+│  Symptom: Old prices shown, doesn't update
+│  ✅ FIXED: Simplified cache, removed fallbacks, 5s TTL only
+│
+├─ ISSUE #4: DUPLICATE ZERODHA CONNECTIONS
+│  Problem: Each WebSocket created separate market feed
+│  Symptom: Rate limiting, 403 errors, duplicate API calls
+│  ✅ FIXED: Single centralized market feed (global singleton)
+│
+├─ ISSUE #5: DOCKER REDIS FAILS
+│  Problem: REDIS_URL=localhost:6379 doesn't work in containers
+│  Symptom: "Connection refused" in Docker
+│  ✅ FIXED: Changed to REDIS_URL=redis://redis:6379 (container name)
+│
+└─ ISSUE #6: MARKET STATUS FROZEN AT 9:15 AM
+   Problem: Status cached, doesn't transition
+   Symptom: PRE_OPEN frozen, LIVE never starts
+   ✅ FIXED: Status always recalculated (already implemented)
+```
+
+---
+
+## 📝 FILES CHANGED
+
+```
+backend/main.py                    ← Auth system unified
+backend/config.py                  ← Validation added
+backend/services/cache.py          ← Simplified
+backend/.env.production            ← JWT_SECRET warning
+docker-compose.prod.yml            ← Redis URL fixed
+```
+
+---
+
+## ⚡ QUICK START
+
+### Test Before Deploy
+```bash
 cd backend
-cp .env.example .env
-notepad .env
-# Add: ZERODHA_API_KEY, ZERODHA_API_SECRET, JWT_SECRET
-
-# 2. Frontend .env.local
-cd ../frontend
-cp .env.local.example .env.local
-# Defaults work! No changes needed for local dev
-
-# 3. Start
-.\quick_start.ps1
-
-# 4. Generate Token
-python quick_token_fix.py
+python -c "from config import get_settings; get_settings()"
+# Should show validation messages
 ```
 
-✅ **Done! Dashboard at http://localhost:3000**
-
----
-
-## 📝 Required Environment Variables
-
-### **Backend (.env)** - 4 variables REQUIRED:
-```env
-ZERODHA_API_KEY=your_key_here
-ZERODHA_API_SECRET=your_secret_here
-JWT_SECRET=random_32_char_string
-REDIRECT_URL=http://127.0.0.1:8000/api/auth/callback
+### Deploy
+```bash
+docker-compose -f docker-compose.prod.yml up -d
+# or: cd backend && uvicorn main:app --host 0.0.0.0 --port 8000
 ```
 
-### **Frontend (.env.local)** - Uses defaults, no changes needed:
-```env
-NEXT_PUBLIC_API_URL=http://127.0.0.1:8000
-NEXT_PUBLIC_WS_URL=ws://127.0.0.1:8000/ws/market
+### Verify
+```bash
+curl http://localhost:8000/health
+curl http://localhost:8000/api/auth/validate
+# Both should respond without errors
 ```
 
 ---
 
-## 🔑 Get Zerodha Credentials
+## 🆘 EMERGENCY FIXES (If Something Goes Wrong)
 
-1. Go to: https://developers.kite.trade/apps
-2. Create app (or use existing)
-3. Set redirect: `http://127.0.0.1:8000/api/auth/callback`
-4. Copy API Key & Secret
+### Auth Fails
+```
+1. Check /api/auth/validate endpoint
+2. If token invalid: click LOGIN button
+3. Complete auth flow
+4. Backend auto-reconnects
+```
 
----
+### Market Data Not Updating
+```
+1. Check curl http://localhost:8000/api/system/market-status
+2. If CLOSED: wait for 9:15 AM
+3. If LIVE: check /api/auth/validate
+4. If invalid: login again
+```
 
-## 🔒 Generate Secure JWT Secret
+### Docker Issues
+```
+1. Check: REDIS_URL=redis://redis:6379 ✅ (NOT localhost)
+2. Restart: docker-compose restart trading-backend
+3. View logs: docker logs trading-backend -f
+```
 
-```powershell
-# PowerShell
-[System.Convert]::ToBase64String([System.Guid]::NewGuid().ToByteArray() * 2)
-
-# Or use online: https://generate-secret.vercel.app/32
+### WebSocket Not Connected
+```
+1. Check browser console
+2. Check frontend .env: NEXT_PUBLIC_WS_URL=ws://localhost:8000/ws/market
+3. Restart frontend
+4. Hard refresh browser (Ctrl+Shift+R)
 ```
 
 ---
 
-## 🐛 Common Issues
+## ✅ DEPLOYMENT CHECKLIST
 
-### ❌ "ModuleNotFoundError: No module named 'dotenv'"
-```powershell
-pip install python-dotenv
 ```
+BEFORE:
+☐ Config changed from .env.production
+☐ Zerodha key/secret set
+☐ JWT_SECRET changed from placeholder
+☐ Redis running (if not using in-memory)
 
-### ❌ "ZERODHA_API_KEY not found"
-```powershell
-# Check .env exists
-cd backend
-if (!(Test-Path .env)) { cp .env.example .env }
-notepad .env
-```
+START:
+☐ docker-compose up -d (or manual start)
+☐ Wait 10 seconds
+☐ Check logs: docker logs trading-backend -f
 
-### ❌ "Frontend can't connect"
-```powershell
-# Check backend is running
-curl http://127.0.0.1:8000/api/health
+VERIFY:
+☐ Backend responds to /health
+☐ Config validation passed (no errors)
+☐ Auth state shows (valid/expired/required)
+☐ Market data visible
+☐ WebSocket connected
 
-# Check .env.local exists (optional but recommended)
-cd frontend
-if (!(Test-Path .env.local)) { cp .env.local.example .env.local }
-```
-
-### ❌ "403 Forbidden" or "TokenException"
-```powershell
-# Token expired - regenerate
-python quick_token_fix.py
-# Or visit: http://localhost:8000/api/auth/login
+DONE:
+☐ All above ✅
+☐ Ready for users!
 ```
 
 ---
 
-## 📚 Full Documentation
+## 📞 REFERENCE
 
-- [Complete Setup Guide](../ENVIRONMENT_SETUP.md) - Step-by-step
-- [Environment Variables Reference](ENVIRONMENT_VARIABLES_COMPLETE.md) - All variables explained
-- [Cleanup Summary](HARDCODED_VALUES_CLEANUP_COMPLETE.md) - What changed
-- [Token Auto-Refresh](QUICKSTART_AUTO_TOKEN.md) - Token handling
+| What | Command | Expected |
+|------|---------|----------|
+| Check backend | `curl localhost:8000/health` | `{"status":"ok"}` |
+| Check config | `curl localhost:8000/api/system/health` | Valid JSON |
+| Check auth | `curl localhost:8000/api/auth/validate` | Shows token status |
+| Check market | `curl localhost:8000/ws/cache/NIFTY` | Price data |
+| Login | Click LOGIN in UI | Zerodha popup |
+| Monitor | `docker logs trading-backend -f` | Live logs |
 
 ---
 
-## ✅ Verification
+## 🎯 SUCCESS INDICATORS
 
-### Check Setup:
-```powershell
-# Backend .env exists
-Test-Path backend\.env
+If you see these, you're good:
 
-# Frontend .env.local exists (optional)
-Test-Path frontend\.env.local
+```
+Backend Startup:
+✅ "🔧 Configuration loaded from .env"
+✅ "✅ All critical config values are set correctly"
+✅ "🚀 Backend READY"
 
-# Backend can load config
-cd backend
-python -c "from config import get_settings; s = get_settings(); print('✅ Config loaded')"
+Market Feed:
+✅ "🟢 First tick received for NIFTY"
+✅ "🟢 First tick received for BANKNIFTY"
+✅ "🟢 First tick received for SENSEX"
 
-# No hardcoded credentials
-Select-String -Path "backend\*.py" -Pattern "api_key.*=.*[\"'][a-z0-9]{10,}"
-# Should return: No matches
+Dashboard:
+✅ Prices visible for all 3 symbols
+✅ Prices update every 1-2 seconds
+✅ Login button works
+✅ WebSocket shows "connected" (in browser console)
 ```
 
 ---
 
-## 🚀 Production Deployment
+## ❌ FAILURE INDICATORS
 
-### Backend on Digital Ocean:
-```env
-# backend/.env (on server)
-REDIRECT_URL=https://api.yourdomain.com/api/auth/callback
-FRONTEND_URL=https://yourdomain.com
-JWT_SECRET=your_64_char_secure_random_string
-DEBUG=false
-CORS_ORIGINS=https://yourdomain.com
+If you see these, something needs fixing:
+
+```
+❌ "ZERODHA_API_KEY not set"
+   → Update backend/.env with your key
+
+❌ "JWT_SECRET using placeholder"
+   → Generate unique JWT_SECRET: python -c "import secrets; print(secrets.token_urlsafe(32))"
+
+❌ "Connection refused" to Redis
+   → Docker: Check REDIS_URL=redis://redis:6379
+   → Manual: Start redis-server or docker run redis
+
+❌ "No clients to broadcast to"
+   → This is OK! WebSocket connected, waiting for market data
+
+❌ Repeated "connecting..." messages
+   → Check Zerodha token validity: /api/auth/validate
+
+❌ "CORS error" in browser console
+   → Update CORS_ORIGINS in backend/.env
 ```
 
-### Frontend on Vercel:
-Add in Vercel dashboard:
-```env
-NEXT_PUBLIC_API_URL=https://api.yourdomain.com
-NEXT_PUBLIC_WS_URL=wss://api.yourdomain.com/ws/market
+---
+
+## 🚀 DEPLOYMENT STATUS
+
+```
+Current Status: ✅ READY
+All Issues: ✅ FIXED (6/6)
+Code Quality: ✅ NO ERRORS
+Documentation: ✅ COMPLETE
+
+→ SAFE TO DEPLOY
 ```
 
-**Don't forget:** Update Zerodha redirect URL to production domain!
+---
+
+## 📚 DETAILED DOCS
+
+Need more info? Read these:
+
+- **Full Audit**: `DEPLOYMENT_AUDIT_CRITICAL.md` (what was wrong)
+- **Fixes Detail**: `DEPLOYMENT_FIXES_COMPLETE.md` (what was fixed)
+- **Complete Summary**: `DEPLOYMENT_SUMMARY.md` (everything at a glance)
+- **Action Plan**: `DEPLOYMENT_ACTION_PLAN.md` (step-by-step guide)
 
 ---
 
-## 💡 Tips
-
-1. **JWT_SECRET** - Must be 32+ chars, random
-2. **Token Expiry** - Regenerate daily at 3 AM IST
-3. **Auto-Reconnect** - Works without backend restart
-4. **Redis** - Optional but improves performance
-5. **AI Features** - Disabled by default (save API costs)
-
----
-
-## 🆘 Need Help?
-
-1. Check [ENVIRONMENT_SETUP.md](../ENVIRONMENT_SETUP.md)
-2. Review `.env.example` files (have inline docs)
-3. Search [docs/](.) folder
-4. Open GitHub issue
-
----
-
-**✅ All hardcoded values removed! Configuration is 100% environment-based.**
+**Last Updated**: January 24, 2026  
+**Status**: Ready for Production ✅

@@ -21,14 +21,14 @@ from enum import Enum
 import re
 
 
-class NewsSentiment(Enum):
+class NewsSentiment(str, Enum):
     """News sentiment classification"""
     POSITIVE = "POSITIVE"
     NEGATIVE = "NEGATIVE"
     NEUTRAL = "NEUTRAL"
 
 
-class ImpactLevel(Enum):
+class ImpactLevel(str, Enum):
     """Market impact level"""
     CRITICAL = "CRITICAL"  # Major shock event
     HIGH = "HIGH"         # Significant impact

@@ -27,6 +27,7 @@ interface VolumePulseData {
   trend: string;
   status: string;
   timestamp: string;
+  candles_analyzed?: number;
 }
 
 interface VolumePulseCardProps {

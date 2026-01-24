@@ -15,7 +15,6 @@ from services.volume_pulse_service import analyze_volume_pulse
 from services.trend_base_service import analyze_trend_base
 from services.news_detection_service import analyze_news
 from services.candle_intent_service import analyze_candle_intent
-from services.early_warning_service import analyze_early_warning
 from config import get_settings
 
 settings = get_settings()
@@ -61,7 +60,6 @@ async def get_all_analysis_ultra_fast(symbol: str) -> Dict[str, Any]:
     - Trend Base  
     - Zone Control
     - Candle Intent
-    - Early Warning
     """
     try:
         symbol = symbol.upper()
@@ -95,7 +93,6 @@ async def get_all_analysis_ultra_fast(symbol: str) -> Dict[str, Any]:
                     "trend_base": {"signal": "NEUTRAL", "confidence": 0, "status": "CACHED"},
                     "zone_control": {"signal": "NEUTRAL", "confidence": 0, "status": "CACHED"},
                     "candle_intent": {"signal": "NEUTRAL", "confidence": 0, "status": "CACHED"},
-                    "early_warning": {"signal": "NEUTRAL", "confidence": 0, "status": "CACHED"},
                     "token_valid": token_status["valid"],
                     "last_price": cached_market.get("last_price"),
                     "cached_at": cached_market.get("_cache_message", "")
@@ -109,7 +106,6 @@ async def get_all_analysis_ultra_fast(symbol: str) -> Dict[str, Any]:
                 "trend_base": {"signal": "NEUTRAL", "confidence": 0},
                 "zone_control": {"signal": "NEUTRAL", "confidence": 0},
                 "candle_intent": {"signal": "NEUTRAL", "confidence": 0},
-                "early_warning": {"signal": "NEUTRAL", "confidence": 0},
                 "token_valid": token_status["valid"]
             }
         
@@ -119,12 +115,11 @@ async def get_all_analysis_ultra_fast(symbol: str) -> Dict[str, Any]:
             analyze_trend_base(symbol, df),
             analyze_zone_control(symbol, df),
             analyze_candle_intent(symbol, df),
-            analyze_early_warning(symbol, df),
             return_exceptions=True
         )
         
         # Unpack results
-        volume_pulse, trend_base, zone_control, candle_intent, early_warning = results
+        volume_pulse, trend_base, zone_control, candle_intent = results
         
         # Build response
         response = {
@@ -134,7 +129,6 @@ async def get_all_analysis_ultra_fast(symbol: str) -> Dict[str, Any]:
             "trend_base": trend_base if not isinstance(trend_base, Exception) else {"signal": "ERROR"},
             "zone_control": zone_control if not isinstance(zone_control, Exception) else {"signal": "ERROR"},
             "candle_intent": candle_intent if not isinstance(candle_intent, Exception) else {"signal": "ERROR"},
-            "early_warning": early_warning if not isinstance(early_warning, Exception) else {"signal": "ERROR"},
             "candles_analyzed": len(df),
             "token_valid": token_status["valid"],
             "timestamp": datetime.now().isoformat()
@@ -1639,260 +1633,6 @@ async def get_candle_intent(symbol: str) -> Dict[str, Any]:
             "volume_analysis": {},
             "near_zone": False,
             "professional_signal": "WAIT",
-            "status": "ERROR",
-            "error": str(e),
-            "timestamp": datetime.now().isoformat()
-        }
-
-
-# ═══════════════════════════════════════════════════════════
-# EARLY WARNING ENDPOINT (Predictive Signals 1-3 Minutes Ahead)
-# ═══════════════════════════════════════════════════════════
-
-@router.get("/early-warning/{symbol}")
-async def get_early_warning(symbol: str) -> Dict[str, Any]:
-    """
-    🔮 Early Warning - Predictive Signals 1-3 Minutes Ahead
-    Detects momentum buildup BEFORE breakout with fake signal filtering
-    
-    Purpose:
-    - Get signals 1-3 minutes BEFORE breakout/breakdown
-    - Filter fake signals to prevent money loss (5-factor validation)
-    - Know exact entry/exit prices with 2:1 risk-reward
-    - Actionable recommendations: PREPARE_BUY/PREPARE_SELL/WAIT/CANCEL
-    
-    Fake Signal Filters (5 checks):
-    1. Volume confirmation (≥1.2x) - No volume = fake breakout
-    2. Momentum consistency (≥66% aligned) - No momentum = fake move
-    3. Zone proximity (within 1%) - Far from zone = weak signal
-    4. Consolidation duration (≥2 candles) - Too quick = fake
-    5. Direction alignment (momentum + volume same) - Conflicting = fake
-    
-    Data Source: 100% from Zerodha WebSocket (OHLCV)
-    Performance: <10ms with caching
-    """
-    try:
-        symbol = symbol.upper()
-        print(f"\n{'='*60}")
-        print(f"[EARLY-WARNING-API] 🔮 Request for {symbol}")
-        print(f"{'='*60}")
-        
-        # ✅ GLOBAL TOKEN CHECK
-        from services.global_token_manager import check_global_token_status
-        token_status = await check_global_token_status()
-        print(f"[GLOBAL-TOKEN] Status: {'✅ Valid' if token_status['valid'] else '❌ Expired'}")
-        
-        # Check cache first (5 seconds - faster refresh for predictive signals)
-        cache = get_cache()
-        cache_key = f"early_warning:{symbol}"
-        cached = await cache.get(cache_key)
-        
-        if cached:
-            cached["token_valid"] = token_status["valid"]
-            print(f"[EARLY-WARNING] ⚡ Cache hit for {symbol} (5s cache)")
-            return cached
-        
-        # Fetch fresh historical data (need more candles for momentum analysis)
-        print(f"[EARLY-WARNING] 🚀 Fetching LIVE candles from Zerodha...")
-        print(f"   → Symbol: {symbol}")
-        print(f"   → Lookback: 50 candles (for momentum/volume/compression)")
-        print(f"   → Time range: Last 3 days (momentum patterns)")
-        
-        # Use extended data fetch with 3 days lookback
-        df = await _get_historical_data_extended(symbol, lookback=50, days_back=3)
-        
-        print(f"[EARLY-WARNING] 📊 Data fetch result:")
-        print(f"   → Candles received: {len(df) if not df.empty else 0}")
-        print(f"   → Data source: Zerodha KiteConnect API (100% live)")
-        
-        # Need at least 20 candles for momentum analysis
-        if df.empty or len(df) < 20:
-            print(f"[EARLY-WARNING] ⚠️  Insufficient data for {symbol}")
-            print(f"   → Checking backup cache...")
-            
-            # Try backup cache
-            backup_cache_key = f"early_warning_backup:{symbol}"
-            backup_data = await cache.get(backup_cache_key)
-            
-            if backup_data:
-                print(f"[EARLY-WARNING] ✅ Using CACHED data for {symbol}")
-                print(f"   → Showing last successful analysis")
-                print(f"   → Last updated: {backup_data.get('timestamp', 'Unknown')}")
-                backup_data["status"] = "CACHED"
-                backup_data["message"] = "📊 Last Market Session Data (Market Closed)"
-                backup_data["data_status"] = "CACHED"
-                backup_data["token_valid"] = token_status["valid"]
-                return backup_data
-            
-            print(f"[EARLY-WARNING] ❌ No backup cache available")
-            print(f"   → Returning SAMPLE data to demonstrate UI")
-            is_bullish = symbol != "BANKNIFTY"
-            
-            return {
-                "symbol": symbol,
-                "timestamp": datetime.now().isoformat(),
-                "warnings": [
-                    {
-                        "type": "MOMENTUM_SHIFT" if is_bullish else "MOMENTUM_REVERSAL",
-                        "severity": "MEDIUM",
-                        "message": "Positive momentum building" if is_bullish else "Negative momentum detected"
-                    }
-                ],
-                "signal": "BUY" if is_bullish else "SELL",
-                "strength": 72 if is_bullish else 55,
-                "time_to_trigger": 15 if is_bullish else 25,
-                "confidence": 68 if is_bullish else 55,
-                "fake_signal_risk": "LOW" if is_bullish else "MEDIUM",
-                "momentum": {
-                    "value": 15.5 if is_bullish else -12.3,
-                    "direction": "UP" if is_bullish else "DOWN",
-                    "strength": "STRONG" if is_bullish else "MODERATE"
-                },
-                "volume_buildup": {
-                    "is_building": is_bullish,
-                    "buildup_pct": 35.2 if is_bullish else 12.5
-                },
-                "price_compression": {
-                    "is_compressing": True,
-                    "compression_pct": 65.8 if is_bullish else 45.2,
-                    "signal": "BULLISH" if is_bullish else "BEARISH"
-                },
-                "alert_level": "MEDIUM" if is_bullish else "LOW",
-                "fake_signal_checks": {"passed": is_bullish, "reasons": []},
-                "price_targets": {"short_term": 24700 if symbol == "NIFTY" else 51200},
-                "recommended_action": "PREPARE" if is_bullish else "CAUTION",
-                "reasoning": "Early signs of upward move - Prepare for BUY" if is_bullish else "Weakening momentum - Consider caution",
-                "status": "CACHED",
-                "data_status": "CACHED",
-                "message": "📊 Last Market Session Data (Market Closed)" if token_status["valid"] else "🔑 Sample data - Login to see real market data",
-                "candles_analyzed": 100,
-                "token_valid": token_status["valid"]
-            }
-        
-        # Show data time range
-        if not df.empty and 'date' in df.columns:
-            first_date = df.iloc[0]['date']
-            last_date = df.iloc[-1]['date']
-            print(f"[EARLY-WARNING] 📅 Data time range:")
-            print(f"   → First candle: {first_date}")
-            print(f"   → Last candle: {last_date}")
-            print(f"   → Total candles: {len(df)}")
-        
-        # �️ SHOW LAST 3 CANDLES WITH INSTANT DETAILS (WICKS, BODY, MOVEMENT)
-        if not df.empty and len(df) >= 3:
-            print(f"\n[EARLY-WARNING] 🕯️  INSTANT CANDLE DETAILS (Last 3 Candles):")
-            print(f"{'='*80}")
-            for i, candle in df.tail(3).iterrows():
-                o, h, l, c = candle['open'], candle['high'], candle['low'], candle['close']
-                v = candle.get('volume', 0)
-                
-                # Calculate candle characteristics
-                body = abs(c - o)
-                total_range = h - l
-                upper_wick = h - max(o, c)
-                lower_wick = min(o, c) - l
-                body_percent = (body / total_range * 100) if total_range > 0 else 0
-                
-                # Candle type
-                candle_type = "🟢 BULLISH" if c > o else "🔴 BEARISH" if c < o else "⚪ DOJI"
-                
-                # Wick analysis
-                wick_info = ""
-                if upper_wick > body * 2:
-                    wick_info = " [LONG UPPER WICK - Rejection]"
-                elif lower_wick > body * 2:
-                    wick_info = " [LONG LOWER WICK - Support]"
-                
-                print(f"\n  Candle #{i} @ {candle.get('date', 'N/A')}")
-                print(f"  {candle_type} {wick_info}")
-                print(f"  📊 OHLC: O={o:.2f} H={h:.2f} L={l:.2f} C={c:.2f}")
-                print(f"  📏 Body: {body:.2f} ({body_percent:.1f}% of range)")
-                print(f"  ⬆️  Upper Wick: {upper_wick:.2f}")
-                print(f"  ⬇️  Lower Wick: {lower_wick:.2f}")
-                print(f"  📈 Total Range: {total_range:.2f}")
-                print(f"  📦 Volume: {v:,.0f}")
-            print(f"{'='*80}\n")
-        
-        # �🔮 ANALYZE EARLY WARNING WITH REAL DATA
-        print(f"[EARLY-WARNING] 🔬 Running predictive analysis...")
-        result = await analyze_early_warning(symbol, df)
-        
-        # Add metadata
-        result["status"] = "FRESH"
-        result["token_valid"] = token_status["valid"]
-        result["data_source"] = "ZERODHA_KITECONNECT"
-        
-        # Cache result (5 seconds for predictive signals - faster refresh)
-        await cache.set(cache_key, result, expire=5)
-        
-        # 🔥 SAVE 24-HOUR BACKUP for when token expires
-        backup_cache_key = f"early_warning_backup:{symbol}"
-        await cache.set(backup_cache_key, result, expire=86400)
-        print(f"[EARLY-WARNING] 💾 Backup saved (24h) + 5s live cache")
-        
-        # 📊 DETAILED INSTANT ANALYSIS RESULTS
-        print(f"\n[EARLY-WARNING] 🎯 INSTANT ANALYSIS RESULTS for {symbol}")
-        print(f"{'='*80}")
-        print(f"🚦 SIGNAL: {result['signal']} (Confidence: {result['confidence']}%, Strength: {result['strength']}%)")
-        print(f"⏱️  TIME TO TRIGGER: {result['time_to_trigger']} minutes")
-        print(f"🎲 FAKE SIGNAL RISK: {result['fake_signal_risk']}")
-        print(f"🎬 RECOMMENDED ACTION: {result['recommended_action']}")
-        print(f"\n📈 MOMENTUM ANALYSIS:")
-        print(f"   Direction: {result.get('momentum', {}).get('direction', 'N/A')}")
-        print(f"   Strength: {result.get('momentum', {}).get('strength', 0)}%")
-        print(f"   Acceleration: {result.get('momentum', {}).get('acceleration', 0):.2f}%")
-        print(f"   Consistency: {result.get('momentum', {}).get('consistency', 0)}%")
-        print(f"\n📦 VOLUME BUILDUP:")
-        print(f"   Is Building: {result.get('volume_buildup', {}).get('is_building', False)}")
-        print(f"   Buildup Strength: {result.get('volume_buildup', {}).get('buildup_strength', 0)}%")
-        print(f"   Candles Building: {result.get('volume_buildup', {}).get('candles_building', 0)}")
-        print(f"\n🎯 PRICE COMPRESSION:")
-        print(f"   Is Compressed: {result.get('price_compression', {}).get('is_compressed', False)}")
-        print(f"   Compression Level: {result.get('price_compression', {}).get('compression_level', 0)}%")
-        print(f"   Candles Compressed: {result.get('price_compression', {}).get('candles_compressed', 0)}")
-        print(f"\n✅ SIGNAL VALIDATION (5 Checks):")
-        checks = result.get('fake_signal_checks', {})
-        if checks:
-            for key, value in checks.items():
-                if key != 'pass_rate' and isinstance(value, dict):
-                    status = "✓ PASS" if value.get('pass', False) else "✗ FAIL"
-                    print(f"   {status} - {key.replace('_', ' ').title()}: {value.get('detail', 'N/A')}")
-            print(f"   📊 Overall Pass Rate: {checks.get('pass_rate', 0)}%")
-        print(f"\n💰 PRICE TARGETS:")
-        targets = result.get('price_targets', {})
-        if targets:
-            print(f"   Entry: ₹{targets.get('entry', 0):.2f}")
-            print(f"   Stop Loss: ₹{targets.get('stop_loss', 0):.2f}")
-            print(f"   Target: ₹{targets.get('target', 0):.2f}")
-            print(f"   Risk:Reward = 1:{targets.get('risk_reward_ratio', 2):.1f}")
-        print(f"\n💡 REASONING: {result.get('reasoning', 'N/A')}")
-        print(f"{'='*80}\n")
-        
-        return result
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        print(f"[EARLY-WARNING-API] ❌ CRITICAL ERROR for {symbol}:")
-        print(f"   → Error type: {type(e).__name__}")
-        print(f"   → Error message: {str(e)}")
-        import traceback
-        print(f"   → Traceback:\n{traceback.format_exc()}")
-        return {
-            "symbol": symbol,
-            "timestamp": datetime.now().isoformat(),
-            "signal": "WAIT",
-            "strength": 0,
-            "time_to_trigger": 0,
-            "confidence": 0,
-            "fake_signal_risk": "HIGH",
-            "momentum": {},
-            "volume_buildup": {},
-            "price_compression": {},
-            "fake_signal_checks": {},
-            "price_targets": {},
-            "recommended_action": "WAIT_FOR_CONFIRMATION",
-            "reasoning": f"Error: {str(e)}",
             "status": "ERROR",
             "error": str(e),
             "timestamp": datetime.now().isoformat()

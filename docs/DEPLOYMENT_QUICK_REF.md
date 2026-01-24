@@ -65,10 +65,9 @@ docker-compose -f docker-compose.prod.yml logs -f --tail=50
 ## ✅ Success Check
 
 1. Open https://mydailytradesignals.com
-2. See all 5 sections with live data:
+2. See all 4 sections with live data:
    - 📊 Volume Pulse
    - 📈 Trend Base
-   - 🔮 Early Warning
    - 🕯️ Candle Intent
    - 🎯 Zone Control
 3. Test on mobile and desktop

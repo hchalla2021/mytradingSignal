@@ -6,6 +6,7 @@
 
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { AnalysisSignal, AnalysisResponse } from '@/types/analysis';
+import { API_CONFIG } from '@/lib/api-config';
 
 interface UseAnalysisOptions {
   autoConnect?: boolean;

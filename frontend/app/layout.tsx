@@ -1,4 +1,4 @@
-import type { Metadata, Viewport } from 'next'
+import type { Metadata } from 'next'
 import './globals.css'
 
 export const metadata: Metadata = {
@@ -12,21 +12,13 @@ export const metadata: Metadata = {
     statusBarStyle: 'black-translucent',
     title: 'MyDailyTradingSignals',
   },
+  themeColor: '#0a0e1a',
 }
 
 // 🔥 DISABLE ALL CACHING
 export const dynamic = 'force-dynamic'
 export const revalidate = 0
 export const fetchCache = 'force-no-store'
-
-export const viewport: Viewport = {
-  width: 'device-width',
-  initialScale: 1,
-  maximumScale: 1,
-  minimumScale: 1,
-  userScalable: false,
-  themeColor: '#0a0e1a',
-}
 
 export default function RootLayout({
   children,

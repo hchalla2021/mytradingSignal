@@ -21,7 +21,7 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     container_name: trading-backend
-    restart: unless-stopped
+    restart: always
     ports:
       - "8000:8000"
     env_file:
@@ -30,9 +30,13 @@ services:
       # Override with container-specific settings
       - PORT=8000
       - HOST=0.0.0.0
-      # Redis connection (using container name)
+      # ✅ CRITICAL FIX: Use container name, not localhost
       - REDIS_URL=redis://redis:6379
+      # CRITICAL: Enable scheduler for automatic market hours management
+      - ENABLE_SCHEDULER=true
     volumes:
+      # Mount .env for token hot-reload (token watcher)
+      - ./backend/.env:/app/.env
       # Persist access token across restarts
       - ./backend/access_token.txt:/app/access_token.txt
       # Mount logs directory (optional)
@@ -46,7 +50,7 @@ services:
       timeout: 10s
       retries: 3
       start_period: 40s
-    command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "2"]
+    command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
 
   # Frontend Next.js Server
   frontend:

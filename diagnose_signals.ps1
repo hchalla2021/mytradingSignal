@@ -41,9 +41,8 @@ try {
         if ($response.trend_base) { $sections++; Write-Host "    - Trend Base: OK" -ForegroundColor Green }
         if ($response.zone_control) { $sections++; Write-Host "    - Zone Control: OK" -ForegroundColor Green }
         if ($response.candle_intent) { $sections++; Write-Host "    - Candle Intent: OK" -ForegroundColor Green }
-        if ($response.early_warning) { $sections++; Write-Host "    - Early Warning: OK" -ForegroundColor Green }
         
-        Write-Host "  Total: $sections/5 sections available" -ForegroundColor Green
+        Write-Host "  Total: $sections/4 sections available" -ForegroundColor Green
     } else {
         Write-Host "  Status: $($response.status)" -ForegroundColor Yellow
     }

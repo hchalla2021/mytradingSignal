@@ -78,7 +78,6 @@ Zerodha WebSocket (KiteTicker) → Python Backend → In-Memory Cache → FastAP
 - 📊 **Technical Analysis** - InstantSignal, PCR Analysis, Volume Pulse
 - 📈 **Multiple Indices** - NIFTY, BANKNIFTY, SENSEX
 - 🎯 **Trading Signals** - BUY/SELL signals with confidence levels
-- 🔔 **Early Warning** - Market trend detection
 - 🎨 **Dark Theme** - Trader-friendly UI
 
 ## Environment Setup

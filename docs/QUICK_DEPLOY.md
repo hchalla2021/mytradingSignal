@@ -63,7 +63,6 @@ This will print a login URL. Open it in browser, login to Zerodha, and token wil
 ### ✅ With Valid Token (Market Open):
 - Live Market Indices showing real-time prices
 - Overall Market Outlook with confidence %
-- Early Warning signals
 - Candle Intent analysis
 - Zone Control levels
 - Volume Pulse data

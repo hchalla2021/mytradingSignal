@@ -1,4 +1,12 @@
 """Application configuration settings."""
+import sys
+import io
+
+# 🔧 Windows console fix - must be before any print() statements
+if sys.platform == "win32":
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
+
 from pydantic_settings import BaseSettings
 from pydantic import Field
 from functools import lru_cache
@@ -137,6 +145,41 @@ class Settings(BaseSettings):
         print(f"🔧 Configuration loaded from .env")
         print(f"   → Redirect URL: {self.redirect_url}")
         print(f"   → Frontend URL: {self.frontend_url}")
+        
+        # 🚨 VALIDATION - Check critical config
+        validation_errors = []
+        
+        # Check Zerodha credentials
+        if not self.zerodha_api_key or self.zerodha_api_key == "your_api_key_here":
+            validation_errors.append("❌ ZERODHA_API_KEY not set or using placeholder")
+        
+        if not self.zerodha_api_secret or self.zerodha_api_secret == "your_api_secret_here":
+            validation_errors.append("❌ ZERODHA_API_SECRET not set or using placeholder")
+        
+        # Check JWT Secret
+        if not self.jwt_secret:
+            validation_errors.append("❌ JWT_SECRET not set")
+        elif self.jwt_secret == "change-this-in-production" or self.jwt_secret == "mydailytradingsignals-secret-key-2024":
+            validation_errors.append("⚠️  JWT_SECRET using placeholder/default value (should be unique for production)")
+        
+        # Check Redis connectivity
+        if not self.redis_url:
+            print("⚠️  REDIS_URL not configured - using in-memory cache only")
+        
+        # Check redirect URL
+        if not self.redirect_url or self.redirect_url == "http://localhost:8000/api/auth/callback":
+            if self.redirect_url == "http://localhost:8000/api/auth/callback" and self.debug:
+                print("   ℹ️  REDIRECT_URL: localhost (development mode)")
+            else:
+                validation_errors.append("⚠️  REDIRECT_URL may be incorrect for production")
+        
+        # Print warnings
+        if validation_errors:
+            print("\n🚨 CONFIGURATION WARNINGS:")
+            for error in validation_errors:
+                print(f"   {error}")
+        else:
+            print("\n✅ All critical config values are set correctly")
     
     @property
     def cors_origins_list(self) -> list:

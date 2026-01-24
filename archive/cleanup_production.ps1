@@ -57,7 +57,6 @@ $frontendFiles = @(
     "frontend\components\TrendBaseCard.tsx",
     "frontend\components\SystemStatusBanner.tsx",
     "frontend\components\IndexCard.tsx",
-    "frontend\components\EarlyWarningCard.tsx",
     "frontend\app\page.tsx"
 )
 

@@ -149,9 +149,9 @@ class FeedWatchdog:
             try:
                 now = time.time()
                 
-                # Only check for stale feed during market hours
+                # Check for stale feed during market hours (includes PRE_OPEN)
                 from services.market_session_controller import market_session
-                is_trading_hours = market_session.is_data_flow_expected()
+                is_trading_hours = market_session.is_trading_hours()  # PRE_OPEN + LIVE
                 
                 if is_trading_hours and self._state == FeedState.CONNECTED:
                     # Check if feed has gone stale

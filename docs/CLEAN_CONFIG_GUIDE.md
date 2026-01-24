@@ -271,7 +271,6 @@ When deployment is successful, you should see:
 - ✅ No "Failed to fetch" errors
 - ✅ Volume Pulse shows green/red percentages
 - ✅ Trend Base shows swing structure
-- ✅ Early Warning shows signals
 - ✅ Candle Intent shows patterns
 - ✅ Zone Control shows support/resistance
 - ✅ Works on desktop (all browsers)
