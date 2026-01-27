@@ -14,37 +14,22 @@ from services.pcr_service import get_pcr_service
 from services.feed_watchdog import feed_watchdog
 from services.auth_state_machine import auth_state_manager
 from services.market_session_controller import market_session
+from config.market_session import get_market_session
+from config.nse_holidays import is_holiday, get_holiday_name
 
 settings = get_settings()
 
+# Load market session configuration (from environment, not hardcoded)
+market_config = get_market_session()
+
 # Indian timezone
-IST = pytz.timezone('Asia/Kolkata')
+IST = pytz.timezone(market_config.TIMEZONE)
 
-# Market hours (IST) - Detailed phases
-PRE_OPEN_START = time(9, 0)      # 9:00 AM - Pre-open session starts
-PRE_OPEN_END = time(9, 15)       # 9:15 AM - Pre-open session ends
-MARKET_OPEN = time(9, 15)        # 9:15 AM - Live trading starts
-MARKET_CLOSE = time(15, 30)      # 3:30 PM - Market closes
-
-# NSE Holidays 2025 (add more as needed)
-NSE_HOLIDAYS_2025 = {
-    "2025-01-26",  # Republic Day
-    "2025-02-26",  # Maha Shivaratri
-    "2025-03-14",  # Holi
-    "2025-03-31",  # Id-Ul-Fitr
-    "2025-04-10",  # Shri Mahavir Jayanti
-    "2025-04-14",  # Dr. Ambedkar Jayanti
-    "2025-04-18",  # Good Friday
-    "2025-05-01",  # Maharashtra Day
-    "2025-06-07",  # Bakri Id
-    "2025-08-15",  # Independence Day
-    "2025-08-27",  # Ganesh Chaturthi
-    "2025-10-02",  # Mahatma Gandhi Jayanti
-    "2025-10-21",  # Diwali Laxmi Pujan
-    "2025-10-22",  # Diwali Balipratipada
-    "2025-11-05",  # Gurunanak Jayanti
-    "2025-12-25",  # Christmas
-}
+# Market hours (IST) - Loaded from configuration
+PRE_OPEN_START = market_config.PRE_OPEN_START
+PRE_OPEN_END = market_config.PRE_OPEN_END
+MARKET_OPEN = market_config.MARKET_OPEN
+MARKET_CLOSE = market_config.MARKET_CLOSE
 
 
 def get_market_status() -> str:
@@ -61,12 +46,12 @@ def get_market_status() -> str:
     current_time = now.time()
     
     # Check if weekend (Saturday=5, Sunday=6)
-    if now.weekday() >= 5:
+    if now.weekday() in market_config.WEEKEND_DAYS:
         return "CLOSED"
     
-    # Check if holiday
+    # Check if holiday (using centralized configuration)
     date_str = now.strftime("%Y-%m-%d")
-    if date_str in NSE_HOLIDAYS_2025:
+    if is_holiday(date_str):
         return "CLOSED"
     
     # Check market phases
@@ -337,7 +322,15 @@ class MarketFeedService:
         try:
             from services.instant_analysis import InstantSignal
             analysis_result = InstantSignal.analyze_tick(data)
-            data["analysis"] = analysis_result if analysis_result else None
+            if analysis_result:
+                data["analysis"] = analysis_result
+                # Log only occasionally to reduce spam
+                import time
+                if int(time.time()) % 5 == 0:  # Log every 5 seconds for this symbol
+                    print(f"✅ Analysis generated for {symbol}: signal={analysis_result.get('signal')}, confidence={analysis_result.get('confidence'):.0f}%")
+            else:
+                print(f"⚠️ Analysis returned None for {symbol}")
+                data["analysis"] = None
         except Exception as e:
             print(f"❌ Instant analysis FAILED for {data['symbol']}: {e}")
             import traceback

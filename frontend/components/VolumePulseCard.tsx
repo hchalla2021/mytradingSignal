@@ -135,6 +135,87 @@ const VolumePulseCard = memo<VolumePulseCardProps>(({ symbol, name }) => {
     return vol.toString();
   };
 
+  // Calculate individual volume pulse confidence percentage with market accuracy
+  const calculateVolumePulseConfidence = (): number => {
+    if (!data) return 25;
+    
+    // Calculate hasData locally inside the function
+    const totalVolume = (data.volume_data?.green_candle_volume || 0) + (data.volume_data?.red_candle_volume || 0);
+    const hasDataLocal = totalVolume > 0;
+    const isLowVolumeLocal = totalVolume < 100000;
+    
+    if (!hasDataLocal) return 25;
+    
+    let confidence = 50; // Base confidence
+    
+    // Market Status Impact (15% weight) - NEW
+    if (data.status === 'LIVE') {
+      confidence += 15; // Live data is most accurate
+    } else if (data.status === 'CACHED') {
+      confidence += 5; // Cached data is still useful
+    } else {
+      confidence -= 10; // Offline/Error data is unreliable
+    }
+    
+    // Pulse score strength (25% weight) - Reduced from 30%
+    const pulseScore = data.pulse_score || 50;
+    if (pulseScore >= 80) confidence += 20; // Very strong buying/selling pressure
+    else if (pulseScore >= 70) confidence += 15; // Strong pressure
+    else if (pulseScore >= 60) confidence += 10; // Good pressure
+    else if (pulseScore <= 20) confidence -= 12; // Very weak pressure
+    else if (pulseScore <= 30) confidence -= 6; // Weak pressure
+    
+    // Volume magnitude assessment (20% weight) - Reduced from 25%
+    if (totalVolume >= 10000000) confidence += 15; // Very high volume (10Cr+)
+    else if (totalVolume >= 5000000) confidence += 12; // High volume (5Cr+)
+    else if (totalVolume >= 2000000) confidence += 10; // Good volume (2Cr+)
+    else if (totalVolume >= 1000000) confidence += 8; // Moderate volume (1Cr+)
+    else if (totalVolume >= 500000) confidence += 5; // Fair volume (50L+)
+    else if (totalVolume < 100000) confidence -= 20; // Very low volume
+    else if (totalVolume < 300000) confidence -= 12; // Low volume
+    
+    // Signal clarity (20% weight)
+    const signal = data.signal || 'NEUTRAL';
+    if (signal === 'BUY' || signal === 'SELL') confidence += 12;
+    else confidence -= 8; // NEUTRAL signal
+    
+    // Volume distribution balance (15% weight)
+    const greenPercent = data.volume_data?.green_percentage || 50;
+    const redPercent = data.volume_data?.red_percentage || 50;
+    const imbalance = Math.abs(greenPercent - redPercent);
+    if (imbalance >= 40) confidence += 12; // Clear dominance (60-40 or more)
+    else if (imbalance >= 30) confidence += 10; // Good imbalance
+    else if (imbalance >= 20) confidence += 6; // Moderate imbalance
+    else if (imbalance < 10) confidence -= 5; // Too balanced, no clear direction
+    
+    // API confidence validation (5% weight) - Reduced
+    const apiConfidence = data.confidence || 50;
+    if (apiConfidence >= 80) confidence += 5;
+    else if (apiConfidence >= 70) confidence += 3;
+    else if (apiConfidence < 40) confidence -= 3;
+    
+    // Quality penalties
+    if (isLowVolumeLocal) confidence -= 15; // Penalize low volume scenarios
+    
+    // Candles analyzed bonus (accuracy indicator)
+    if (data.candles_analyzed) {
+      if (data.candles_analyzed >= 50) confidence += 8; // High sample size
+      else if (data.candles_analyzed >= 30) confidence += 5;
+      else if (data.candles_analyzed >= 20) confidence += 3;
+      else if (data.candles_analyzed < 10) confidence -= 5; // Too few samples
+    }
+    
+    // Market timing accuracy (NEW)
+    const currentHour = new Date().getHours();
+    if (data.status === 'LIVE' && currentHour >= 9 && currentHour <= 15) {
+      confidence += 5; // Market hours boost for live data
+    }
+    
+    return Math.min(95, Math.max(25, confidence));
+  };
+
+  const volumePulseConfidence = calculateVolumePulseConfidence();
+
   if (loading) {
     return (
       <div className="bg-dark-card border border-dark-border rounded-lg p-3 sm:p-4 animate-pulse">
@@ -177,26 +258,50 @@ const VolumePulseCard = memo<VolumePulseCardProps>(({ symbol, name }) => {
         </div>
       )}
       
-      {/* Live Status - Eye Friendly */}
-      {data.status === 'LIVE' && hasData && !isLowVolume && (
-        <div className="mb-2 px-2 py-1 rounded-lg bg-emerald-900/30 text-emerald-200 border border-emerald-700/40 text-[9px] font-semibold flex items-center gap-1.5">
-          <span className="w-1.5 h-1.5 bg-emerald-400 rounded-full animate-pulse"></span>
-          LIVE VOLUME
-          {data.candles_analyzed && ` • ${data.candles_analyzed} Candles`}
-        </div>
-      )}
-      {data.status === 'CACHED' && (
-        <div className="mb-2 px-2 py-1 rounded-lg bg-blue-900/30 text-blue-200 border border-blue-700/40 text-[9px] font-semibold flex items-center gap-1.5">
-          <span className="w-1.5 h-1.5 bg-blue-400 rounded-full"></span>
-          📊 LAST MARKET SESSION DATA • Market Closed
-        </div>
-      )}
+      {/* Live Data Status Badge */}
+      <div className="mb-3 px-2 py-1 rounded-lg bg-slate-800/40 border border-emerald-500/40 text-[9px] font-semibold flex items-center gap-1.5">
+        <span className={`w-1.5 h-1.5 rounded-full ${
+          data.status === 'LIVE' ? 'bg-emerald-400' : 
+          data.status === 'CACHED' ? 'bg-yellow-400' : 'bg-slate-400'
+        }`} />
+        <span className="text-slate-300">
+          {data.status === 'LIVE' && '📡 LIVE VOLUME DATA'}
+          {data.status === 'CACHED' && '💾 CACHED VOLUME DATA • Market Closed'}
+          {(!data.status || data.status === 'ERROR') && '⏸️ OFFLINE DATA'}
+        </span>
+        {data.candles_analyzed && data.candles_analyzed > 0 && (
+          <span className="text-slate-500 ml-auto">{data.candles_analyzed} candles</span>
+        )}
+      </div>
       
-      {/* Header - Trader Friendly */}
+      {/* Header - Enhanced with Detailed Confidence */}
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-2">
           <Activity className="w-4 h-4 text-purple-300" />
-          <h3 className="text-sm sm:text-base font-bold text-gray-100">{name}</h3>
+          <div className="flex flex-col">
+            <h3 className="text-sm sm:text-base font-bold text-gray-100">{name}</h3>
+            {/* Enhanced Confidence Display */}
+            <div className="flex flex-col gap-0.5">
+              <span className={`text-xs font-bold ${
+                volumePulseConfidence >= 80 ? 'text-emerald-300' :
+                volumePulseConfidence >= 70 ? 'text-green-300' :
+                volumePulseConfidence >= 60 ? 'text-yellow-300' :
+                volumePulseConfidence >= 50 ? 'text-amber-300' :
+                'text-rose-300'
+              }`}>
+                Confidence: {Math.round(volumePulseConfidence)}%
+              </span>
+              {/* Market Status Accuracy */}
+              <span className={`text-[10px] font-medium ${
+                data.status === 'LIVE' ? 'text-emerald-400' :
+                data.status === 'CACHED' ? 'text-yellow-400' : 'text-slate-500'
+              }`}>
+                {data.status === 'LIVE' && '🎯 Live Accuracy'}
+                {data.status === 'CACHED' && '📊 Cached Data'}
+                {(!data.status || data.status === 'ERROR') && '⚠️ No Data'}
+              </span>
+            </div>
+          </div>
         </div>
         <div className={`flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-bold border shadow-lg ${
           signal === 'BUY' ? 'bg-emerald-900/40 text-emerald-200 border-emerald-700/50' :
@@ -212,11 +317,11 @@ const VolumePulseCard = memo<VolumePulseCardProps>(({ symbol, name }) => {
       <div className="mb-3 bg-slate-800/40 rounded-xl p-3 border border-slate-600/30">
         <div className="flex items-center justify-between mb-2">
           <span className="text-xs text-slate-300 font-bold tracking-wide">⚡ BUYING PRESSURE</span>
-          <span className="text-lg font-bold ${
+          <span className={`text-lg font-bold ${
             pulse_score >= 70 ? 'text-emerald-300' : 
             pulse_score >= 50 ? 'text-amber-300' : 
             'text-rose-300'
-          }">{pulse_score}%</span>
+          }`}>{pulse_score}%</span>
         </div>
         <div className="w-full bg-gradient-to-r from-rose-900/40 via-slate-700/50 to-emerald-900/40 rounded-full h-2.5 overflow-hidden shadow-inner">
           <div

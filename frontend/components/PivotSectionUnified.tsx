@@ -1,7 +1,7 @@
 'use client';
 
 import React, { memo, useEffect, useState, useCallback } from 'react';
-import { Target, TrendingUp, TrendingDown, Activity, Clock, RefreshCw, Zap } from 'lucide-react';
+import { Target, TrendingUp, TrendingDown, Activity, Clock, RefreshCw } from 'lucide-react';
 import { API_CONFIG } from '@/lib/api-config';
 
 // ============================================================================
@@ -13,7 +13,7 @@ interface PivotData {
   current_price: number | null;
   change_percent?: number;
   timestamp: string;
-  ema: { ema9?: number | null; ema21?: number | null; ema50?: number | null; ema20?: number | null; trend: string; price_vs_ema20?: string; price_vs_ema21?: string };
+  ema: { ema_20?: number | null; ema_50?: number | null; ema_100?: number | null; ema_200?: number | null; trend: string; price_vs_ema20?: string };
   classic_pivots: {
     pivot: number | null; r1: number | null; r2: number | null; r3: number | null;
     s1: number | null; s2: number | null; s3: number | null;
@@ -46,48 +46,7 @@ const SYMBOLS: SymbolConfig[] = [
 const CACHE_KEY = 'pivot_unified_data_v2';
 const MARKET_CACHE_KEY = 'lastMarketData';
 
-// Default fallback data for ultra-fast first load and offline mode
-const DEFAULT_FALLBACK_DATA: Record<string, PivotData> = {
-  'NIFTY': {
-    symbol: 'NIFTY',
-    status: 'CACHED',
-    current_price: 24500,
-    change_percent: -0.5,
-    timestamp: new Date().toLocaleTimeString('en-IN'),
-    ema: { ema9: 24450, ema21: 24480, ema50: 24200, ema20: 24470, trend: 'BULLISH', price_vs_ema20: 'ABOVE', price_vs_ema21: 'ABOVE' },
-    classic_pivots: { pivot: 24500, r1: 24600, r2: 24700, r3: 24800, s1: 24400, s2: 24300, s3: 24200, bias: 'BEARISH' },
-    camarilla_pivots: { h4: 24750, h3: 24700, l3: 24300, l4: 24250, zone: 'NEUTRAL' },
-    supertrend_10_3: { value: 24350, trend: 'BEARISH', signal: 'SELL', distance_pct: 0.6 },
-    supertrend_7_3: { value: 24400, trend: 'BEARISH', signal: 'SELL', distance_pct: 0.4 },
-    overall_bias: 'BEARISH',
-  },
-  'BANKNIFTY': {
-    symbol: 'BANKNIFTY',
-    status: 'CACHED',
-    current_price: 58000,
-    change_percent: -1.2,
-    timestamp: new Date().toLocaleTimeString('en-IN'),
-    ema: { ema9: 57900, ema21: 58100, ema50: 57500, ema20: 58050, trend: 'BEARISH', price_vs_ema20: 'BELOW', price_vs_ema21: 'BELOW' },
-    classic_pivots: { pivot: 58000, r1: 58200, r2: 58400, r3: 58600, s1: 57800, s2: 57600, s3: 57400, bias: 'BEARISH' },
-    camarilla_pivots: { h4: 58500, h3: 58400, l3: 57600, l4: 57500, zone: 'BREAKDOWN' },
-    supertrend_10_3: { value: 57700, trend: 'BEARISH', signal: 'SELL', distance_pct: 0.5 },
-    supertrend_7_3: { value: 57800, trend: 'BEARISH', signal: 'SELL', distance_pct: 0.3 },
-    overall_bias: 'BEARISH',
-  },
-  'SENSEX': {
-    symbol: 'SENSEX',
-    status: 'CACHED',
-    current_price: 82000,
-    change_percent: -0.8,
-    timestamp: new Date().toLocaleTimeString('en-IN'),
-    ema: { ema9: 81900, ema21: 82100, ema50: 81500, ema20: 82050, trend: 'NEUTRAL', price_vs_ema20: 'BELOW', price_vs_ema21: 'BELOW' },
-    classic_pivots: { pivot: 82000, r1: 82200, r2: 82400, r3: 82600, s1: 81800, s2: 81600, s3: 81400, bias: 'BEARISH' },
-    camarilla_pivots: { h4: 82500, h3: 82400, l3: 81600, l4: 81500, zone: 'NEUTRAL' },
-    supertrend_10_3: { value: 81700, trend: 'BEARISH', signal: 'SELL', distance_pct: 0.4 },
-    supertrend_7_3: { value: 81800, trend: 'BEARISH', signal: 'SELL', distance_pct: 0.2 },
-    overall_bias: 'BEARISH',
-  },
-};
+// Default fallback data - REMOVED: No more dummy data, only live values
 
 function getCachedData(): Record<string, PivotData> | null {
   if (typeof window === 'undefined') return null;
@@ -101,13 +60,13 @@ function getCachedData(): Record<string, PivotData> | null {
         return parsed;
       }
     }
-    // If no cache, return default fallback (never show blank)
-    console.log('[Pivot] Using default fallback cache');
-    return DEFAULT_FALLBACK_DATA;
+    // No cache, return null - show loading state with REAL data only
+    console.log('[Pivot] No cached data - waiting for live API data');
+    return null;
   } catch {
-    // On any error, still return default fallback
-    console.log('[Pivot] Error reading cache, using default fallback');
-    return DEFAULT_FALLBACK_DATA;
+    // On any error, return null - don't use dummy fallback
+    console.log('[Pivot] Error reading cache, waiting for live API data');
+    return null;
   }
 }
 
@@ -132,10 +91,13 @@ const fmtCompact = (n: number | null | undefined): string => {
 };
 
 // Check if price is near a level (within 0.3%)
-const isNearLevel = (price: number | null, level: number | null): boolean => {
+// Helper to check if price is near a level (dynamic threshold based on symbol)
+const isNearLevel = (price: number | null, level: number | null, symbol?: string): boolean => {
   if (!price || !level) return false;
   const diff = Math.abs(price - level) / level;
-  return diff < 0.003; // 0.3%
+  // Use more lenient thresholds - BANKNIFTY gets higher threshold due to price range
+  const threshold = symbol === 'BANKNIFTY' ? 0.025 : 0.02; // 2.5% for BN, 2% for others
+  return diff < threshold;
 };
 
 // Check if price crossed a level
@@ -151,12 +113,23 @@ const hasCrossed = (price: number | null, level: number | null, direction: 'abov
 
 // Single Symbol Row - Ultra Compact
 const SymbolPivotRow = memo<{ data: PivotData; config: SymbolConfig }>(({ data, config }) => {
+  // Show all data - even if price is null, display the pivot values
+  const hasAnyData = data && (data.current_price || data.classic_pivots?.pivot);
+  
+  if (!hasAnyData) {
+    return (
+      <div className="rounded-xl p-4 bg-slate-800/30 border border-emerald-500/30 text-center">
+        <p className="text-slate-500 text-sm">{config.name}</p>
+        <p className="text-slate-600 text-xs mt-1">No data available</p>
+      </div>
+    );
+  }
+  
   const price = data.current_price || 0;
   const bias = data.overall_bias;
   const pivots = data.classic_pivots;
   const cam = data.camarilla_pivots;
   const st1 = data.supertrend_10_3;
-  const st2 = data.supertrend_7_3;
   const priceChange = data.change_percent || 0;
   
   const isBullish = bias === 'BULLISH';
@@ -177,67 +150,118 @@ const SymbolPivotRow = memo<{ data: PivotData; config: SymbolConfig }>(({ data, 
   const nearestSup = [...levels].reverse().find(l => l.type === 'support' && l.value && price > l.value);
   
   // Critical alerts - detect proximity to key levels
-  const isApproachingSupertrend = st1.distance_pct !== undefined && st1.distance_pct < 1.0;
-  const isCrossingSupertrend = st1.trend === 'BEARISH' && st1.signal === 'SELL';
-  const isNearCamarilla = cam.h3 && price && Math.abs(price - cam.h3) / cam.h3 < 0.01; // Within 1%
-  const isNearPivot = pivots.pivot && price && Math.abs(price - pivots.pivot) / pivots.pivot < 0.015; // Within 1.5%
+  const isNearCamarilla = cam.h4 && price && Math.abs(price - cam.h4) / cam.h4 < 0.01; // Within 1%
+  
+  // Make pivot proximity more lenient - especially for BANKNIFTY which has higher price range
+  const pivotProximityThreshold = config.symbol === 'BANKNIFTY' ? 0.025 : 0.02; // 2.5% for BN, 2% for others
+  const isNearPivot = pivots.pivot && price && Math.abs(price - pivots.pivot) / pivots.pivot < pivotProximityThreshold;
+  
   const isBreakdown = st1.trend === 'BEARISH' && nearestSup && price && price < (nearestSup.value || 0);
+  
+  // Debug logging for pivot proximity
+  console.log(`[${config.symbol}] Pivot Analysis:`, {
+    currentPrice: price,
+    pivotLevel: pivots.pivot,
+    difference: pivots.pivot ? Math.abs(price - pivots.pivot) : 0,
+    diffPercent: pivots.pivot ? (Math.abs(price - pivots.pivot) / pivots.pivot * 100).toFixed(3) : 0,
+    threshold: (pivotProximityThreshold * 100).toFixed(1),
+    isNear: isNearPivot
+  });
   
   // Background color based on market status - Soft & Subtle
   const bgColor = isPriceUp 
     ? 'bg-slate-900/70' 
     : 'bg-slate-900/70';
   
-  const borderColor = isPriceUp ? 'border-teal-700/30' : 'border-amber-700/30';
+  const borderColor = isPriceUp ? 'border-emerald-500/30' : 'border-emerald-500/30';
   
   // Text color for price - Green when UP, RED when DOWN (like live indices)
   const priceColor = isPriceUp ? 'text-teal-300' : 'text-red-400';
   const changeColor = isPriceUp ? 'text-teal-400' : 'text-red-500';
 
+  // Pivot Confidence Calculation
+  const calculatePivotConfidence = (): number => {
+    let confidence = 55; // Base confidence
+    
+    // Price trend adjustment
+    if (isPriceUp && bias === 'BULLISH') confidence += 15; // Aligned trend
+    else if (!isPriceUp && bias === 'BEARISH') confidence += 15; // Aligned trend
+    else if (bias === 'NEUTRAL') confidence += 5; // Neutral market
+    
+    // SuperTrend alignment
+    if (st1.trend === 'BULLISH' && isPriceUp) confidence += 10;
+    else if (st1.trend === 'BEARISH' && !isPriceUp) confidence += 10;
+    
+    // Level proximity (reduces confidence when too close to key levels)
+    if (isNearPivot) confidence -= 5; // Uncertain zone
+    if (isNearCamarilla) confidence -= 10; // Very uncertain
+    
+    // Distance from SuperTrend
+    const stDistance = Math.abs(st1.distance_pct || 0);
+    if (stDistance > 2) confidence += 10; // Clear trend
+    else if (stDistance < 0.5) confidence -= 5; // Too close to flip
+    
+    // Market status
+    if (data.status === 'LIVE') confidence += 5;
+    else if (data.status === 'CACHED') confidence -= 5;
+    
+    return Math.min(90, Math.max(35, confidence));
+  };
+
+  const pivotConfidence = calculatePivotConfidence();
+
   return (
     <div className={`rounded-xl p-4 border shadow-sm transition-all mb-3 ${bgColor} ${borderColor} ${
       isBreakdown ? 'ring-1 ring-red-500/50 shadow-md shadow-red-500/10' : ''
-    } ${isCrossingSupertrend ? 'ring-1 ring-orange-500/40' : ''}`}>
+    }`}>
       {/* Symbol Header - Market Status */}
-      <div className="flex items-center gap-3 mb-3">
-        <div className={`w-10 h-10 rounded-lg flex items-center justify-center font-medium ${
-          isPriceUp ? 'bg-teal-900/30 text-teal-400' : 'bg-amber-900/30 text-amber-400'
-        }`}>
-          {config.shortName === 'NIFTY' && <TrendingUp className="w-5 h-5" />}
-          {config.shortName === 'BNIFTY' && <TrendingDown className="w-5 h-5" />}
-          {config.shortName === 'SENSEX' && <Activity className="w-5 h-5" />}
-        </div>
-        <div className="flex flex-col">
-          <span className={`font-semibold text-base px-2 py-1 rounded-lg border ${
-            isPriceUp 
-              ? 'text-teal-300 border-teal-600/40 bg-teal-900/10'
-              : 'text-slate-200 border-slate-600/40 bg-slate-900/10'
-          }`}>{config.name}</span>
-          <span className={`mt-0.5 text-xs px-2 py-0.5 rounded font-normal w-fit ${
-            isPriceUp 
-              ? 'bg-green-900/20 text-green-300 border border-green-700/30' 
-              : 'bg-red-900/20 text-red-300 border border-red-700/30'
+      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 sm:gap-3 mb-3">
+        <div className="flex items-center gap-3 min-w-0 flex-1">
+          <div className={`w-8 sm:w-10 h-8 sm:h-10 rounded-lg flex items-center justify-center font-medium ${
+            isPriceUp ? 'bg-teal-900/30 text-teal-400' : 'bg-amber-900/30 text-amber-400'
           }`}>
-            {bias}
-          </span>
-        </div>
-        <div className="ml-auto text-right">
-          <span className={`text-xl font-semibold px-3 py-1 rounded-lg ${
-            isPriceUp 
-              ? 'text-teal-300 border border-teal-600/40 bg-teal-900/10'
-              : 'text-red-400 border border-red-600/40 bg-red-900/10'
-          }`}>{fmt(price)}</span>
-          {data.change_percent !== undefined && (
-            <span className={`block text-xs font-normal mt-0.5 ${changeColor}`}>
-              {data.change_percent >= 0 ? '↑' : '↓'} {Math.abs(data.change_percent).toFixed(2)}%
+            {config.shortName === 'NIFTY' && <TrendingUp className="w-4 sm:w-5 h-4 sm:h-5" />}
+            {config.shortName === 'BNIFTY' && <TrendingDown className="w-4 sm:w-5 h-4 sm:h-5" />}
+            {config.shortName === 'SENSEX' && <Activity className="w-4 sm:w-5 h-4 sm:h-5" />}
+          </div>
+          <div className="flex flex-col min-w-0">
+            <span className={`font-semibold text-sm sm:text-base px-2 py-1 rounded-lg border truncate ${
+              isPriceUp 
+                ? 'text-teal-300 border-emerald-500/40 bg-teal-900/10'
+                : 'text-slate-200 border-emerald-500/40 bg-slate-900/10'
+            }`}>{config.name}</span>
+            <span className={`mt-0.5 text-xs px-2 py-0.5 rounded font-normal w-fit ${
+              isPriceUp 
+                ? 'bg-green-900/20 text-green-300 border border-emerald-500/30' 
+                : 'bg-red-900/20 text-red-300 border border-emerald-500/30'
+            }`}>
+              {bias}
             </span>
-          )}
+          </div>
+        </div>
+        <div className="flex flex-col sm:text-right w-full sm:w-auto">
+          <span className={`text-lg sm:text-xl font-semibold px-2 sm:px-3 py-1 rounded-lg ${
+            isPriceUp 
+              ? 'text-teal-300 border border-emerald-500/40 bg-teal-900/10'
+              : 'text-red-400 border border-emerald-500/40 bg-red-900/10'
+          }`}>{fmt(price)}</span>
+          <div className="flex flex-row sm:flex-col gap-2 sm:gap-1 mt-1">
+            {data.change_percent !== undefined && (
+              <span className={`text-xs font-normal ${changeColor}`}>
+                {data.change_percent >= 0 ? '↑' : '↓'} {Math.abs(data.change_percent).toFixed(2)}%
+              </span>
+            )}
+            {/* Confidence Percentage */}
+            <span className="text-xs font-bold text-slate-300">
+              Confidence: {Math.round(pivotConfidence)}%
+            </span>
+          </div>
         </div>
       </div>
 
       {/* Pivot Levels Card - With Critical Alerts */}
       <div className={`mb-3 p-3 rounded-lg border shadow-sm ${
-        isNearPivot ? 'bg-yellow-900/15 border-yellow-600/30 ring-1 ring-yellow-600/30' : 'bg-slate-800/30 border-slate-700/30'
+        isNearPivot ? 'bg-yellow-900/15 border-emerald-500/30 ring-1 ring-emerald-500/30' : 'bg-slate-800/30 border-emerald-500/30'
       }`}>
         <div className="flex items-center gap-2 text-xs font-normal mb-2">
           <Target className="w-3.5 h-3.5 text-slate-500" />
@@ -248,70 +272,39 @@ const SymbolPivotRow = memo<{ data: PivotData; config: SymbolConfig }>(({ data, 
           </span>
         </div>
         <div className="flex items-center gap-1 h-7 bg-slate-700/30 rounded overflow-hidden">
-          {/* S2 */}
+          {/* S3 */}
           <div className={`flex-1 h-full flex items-center justify-center text-[11px] font-normal transition-all ${
-            isNearLevel(price, pivots.s2) ? 'bg-yellow-600/70 text-white' :
-            hasCrossed(price, pivots.s2, 'below') ? 'bg-teal-900/30 text-teal-300' : 'bg-slate-800/20 text-slate-500'
-          }`} title={`S2: ${fmt(pivots.s2)}`}>S2</div>
-          {/* S1 */}
-          <div className={`flex-1 h-full flex items-center justify-center text-[11px] font-normal transition-all ${
-            isNearLevel(price, pivots.s1) ? 'bg-yellow-600/70 text-white' :
-            hasCrossed(price, pivots.s1, 'below') ? 'bg-teal-900/30 text-teal-300' : 'bg-slate-800/20 text-slate-500'
-          }`} title={`S1: ${fmt(pivots.s1)}`}>S1</div>
+            isNearLevel(price, pivots.s3, config.symbol) ? 'bg-yellow-600/70 text-white' :
+            hasCrossed(price, pivots.s3, 'below') ? 'bg-teal-900/30 text-teal-300' : 'bg-slate-800/20 text-slate-500'
+          }`} title={`S3: ${fmt(pivots.s3)}`}>S3</div>
           {/* Pivot */}
-          <div className={`flex-1 h-full flex items-center justify-center text-[11px] font-normal border-x border-slate-600/20 transition-all ${
-            isNearLevel(price, pivots.pivot) ? 'bg-yellow-600/70 text-white' : 'bg-slate-800/40 text-slate-400'
+          <div className={`flex-1 h-full flex items-center justify-center text-[11px] font-normal border-x border-emerald-500/30 transition-all ${
+            isNearLevel(price, pivots.pivot, config.symbol) ? 'bg-yellow-600/70 text-white' : 'bg-slate-800/40 text-slate-400'
           }`} title={`Pivot: ${fmt(pivots.pivot)}`}>P</div>
-          {/* R1 */}
+          {/* R3 */}
           <div className={`flex-1 h-full flex items-center justify-center text-[11px] font-normal transition-all ${
-            isNearLevel(price, pivots.r1) ? 'bg-yellow-600/70 text-white' :
-            hasCrossed(price, pivots.r1, 'above') ? 'bg-amber-900/30 text-amber-300' : 'bg-slate-800/20 text-slate-500'
-          }`} title={`R1: ${fmt(pivots.r1)}`}>R1</div>
-          {/* R2 */}
-          <div className={`flex-1 h-full flex items-center justify-center text-[11px] font-normal transition-all ${
-            isNearLevel(price, pivots.r2) ? 'bg-yellow-600/70 text-white' :
-            hasCrossed(price, pivots.r2, 'above') ? 'bg-amber-900/30 text-amber-300' : 'bg-slate-800/30 text-slate-500'
-          }`} title={`R2: ${fmt(pivots.r2)}`}>R2</div>
+            isNearLevel(price, pivots.r3, config.symbol) ? 'bg-yellow-600/70 text-white' :
+            hasCrossed(price, pivots.r3, 'above') ? 'bg-amber-900/30 text-amber-300' : 'bg-slate-800/30 text-slate-500'
+          }`} title={`R3: ${fmt(pivots.r3)}`}>R3</div>
         </div>
         {/* Level Values Row */}
         <div className="flex justify-between mt-1.5 px-1 text-xs font-normal">
-          <span className={isNearLevel(price, pivots.s2) ? 'text-yellow-300' : 'text-slate-500'}>{fmtCompact(pivots.s2)}</span>
-          <span className={isNearLevel(price, pivots.s1) ? 'text-yellow-300' : 'text-slate-500'}>{fmtCompact(pivots.s1)}</span>
-          <span className={isNearLevel(price, pivots.pivot) ? 'text-yellow-300' : 'text-slate-500'}>{fmtCompact(pivots.pivot)}</span>
-          <span className={isNearLevel(price, pivots.r1) ? 'text-yellow-300' : 'text-slate-500'}>{fmtCompact(pivots.r1)}</span>
-          <span className={isNearLevel(price, pivots.r2) ? 'text-yellow-300' : 'text-slate-500'}>{fmtCompact(pivots.r2)}</span>
+          <span className={isNearLevel(price, pivots.s3, config.symbol) ? 'text-yellow-300' : 'text-slate-500'}>{fmtCompact(pivots.s3)}</span>
+          <span className={isNearLevel(price, pivots.pivot, config.symbol) ? 'text-yellow-300' : 'text-slate-500'}>{fmtCompact(pivots.pivot)}</span>
+          <span className={isNearLevel(price, pivots.r3, config.symbol) ? 'text-yellow-300' : 'text-slate-500'}>{fmtCompact(pivots.r3)}</span>
         </div>
       </div>
 
       {/* Info Cards Row */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
-        {/* Supertrend Card - With Critical Alert */}
-        <div className={`rounded-lg border p-3 flex flex-col items-center shadow-sm transition-all ${
-          isCrossingSupertrend 
-            ? 'bg-red-900/20 border-red-600/40 ring-1 ring-red-500/40 shadow-md shadow-red-500/5' 
-            : isApproachingSupertrend 
-            ? 'bg-orange-900/20 border-orange-600/30 ring-1 ring-orange-500/30'
-            : 'bg-slate-800/30 border-slate-700/30'
-        }`}>
-          <div className="flex items-center gap-1.5 mb-1">
-            <Zap className="w-3.5 h-3.5 text-slate-500" />
-            <span className={`text-xs font-semibold ${isCrossingSupertrend ? 'text-red-300' : isApproachingSupertrend ? 'text-orange-300' : 'text-slate-400'}`}>SUPERTREND</span>
-          </div>
-          <span className={`text-base font-semibold ${st1.trend === 'BULLISH' ? 'text-teal-400' : isCrossingSupertrend ? 'text-red-400' : 'text-amber-400'}`}>
-            {st1.trend === 'BULLISH' ? 'BUY' : 'SELL'}
-          </span>
-          <span className={`text-xs mt-0.5 font-normal ${isApproachingSupertrend ? 'text-orange-400' : 'text-slate-500'}`}>
-            {st1.distance_pct}% {isApproachingSupertrend ? '⚠️ NEAR' : 'away'}
-          </span>
-        </div>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
         {/* Camarilla Card - With Critical Alert */}
-        <div className={`rounded-lg border p-3 flex flex-col items-center shadow-sm transition-all ${
+        <div className={`rounded-lg border p-3 flex flex-col items-center shadow-sm transition-all min-h-[90px] ${
           isNearCamarilla 
-            ? 'bg-yellow-900/15 border-yellow-600/30 ring-1 ring-yellow-600/30'
-            : 'bg-slate-800/30 border-slate-700/30'
+            ? 'bg-yellow-900/15 border-emerald-500/30 ring-1 ring-emerald-500/30'
+            : 'bg-slate-800/30 border-emerald-500/30'
         }`}>
           <span className={`text-xs font-semibold mb-1 ${isNearCamarilla ? 'text-yellow-300' : 'text-slate-400'}`}>CAMARILLA</span>
-          <span className={`text-sm font-normal ${
+          <span className={`text-sm font-normal text-center leading-tight ${
             cam.zone?.includes('BUY') ? 'text-teal-400' :
             cam.zone?.includes('SELL') ? 'text-amber-400' :
             cam.zone?.includes('BREAK') ? 'text-orange-400' :
@@ -319,17 +312,17 @@ const SymbolPivotRow = memo<{ data: PivotData; config: SymbolConfig }>(({ data, 
           }`}>
             {cam.zone?.replace(/_/g, ' ') || 'NEUTRAL'}
           </span>
-          <span className={`text-xs mt-0.5 font-normal ${isNearCamarilla ? 'text-yellow-400' : 'text-slate-500'}`}>
-            H3: {fmtCompact(cam.h3)} {isNearCamarilla ? '⚠️' : ''}
+          <span className={`text-xs mt-0.5 font-normal text-center ${isNearCamarilla ? 'text-yellow-400' : 'text-slate-500'}`}>
+            R3: {fmtCompact(cam.h4)} {isNearCamarilla ? '⚠️' : ''}
           </span>
         </div>
         {/* Nearest Levels Card - With Critical Alert */}
-        <div className={`rounded-lg border p-3 flex flex-col items-center shadow-sm ${
+        <div className={`rounded-lg border p-3 flex flex-col items-center shadow-sm min-h-[90px] ${
           isBreakdown 
-            ? 'bg-red-900/20 border-red-600/40 ring-1 ring-red-500/40 shadow-md shadow-red-500/5'
-            : 'bg-slate-800/30 border-slate-700/30'
+            ? 'bg-red-900/20 border-emerald-500/40 ring-1 ring-red-500/40 shadow-md shadow-red-500/5'
+            : 'bg-slate-800/30 border-emerald-500/30'
         }`}>
-          <span className={`text-xs font-semibold mb-1 ${isBreakdown ? 'text-red-300' : 'text-slate-400'}`}>
+          <span className={`text-xs font-semibold mb-1 text-center ${isBreakdown ? 'text-red-300' : 'text-slate-400'}`}>
             {isBreakdown ? '🚨 BREAKDOWN' : 'NEAREST'}
           </span>
           {nearestRes && (
@@ -339,7 +332,7 @@ const SymbolPivotRow = memo<{ data: PivotData; config: SymbolConfig }>(({ data, 
             </span>
           )}
           {nearestSup && (
-            <span className={`text-xs flex items-center gap-1 ${isBreakdown ? 'text-red-400 font-semibold' : 'text-teal-400'}`}>
+            <span className={`text-xs flex items-center gap-1 mt-0.5 ${isBreakdown ? 'text-red-400 font-semibold' : 'text-teal-400'}`}>
               <span>↓ {nearestSup.label}</span>
               <span className="text-slate-500">{fmtCompact(nearestSup.value)}</span>
             </span>
@@ -355,7 +348,7 @@ SymbolPivotRow.displayName = 'SymbolPivotRow';
 // ============================================================================
 // MAIN COMPONENT
 // ============================================================================
-const PivotSectionUnified = memo(() => {
+const PivotSectionUnified = memo<{ updates?: number }>((props) => {
   const [allData, setAllData] = useState<Record<string, PivotData>>({});
   const [loading, setLoading] = useState(true);
   const [lastUpdate, setLastUpdate] = useState<string>('');
@@ -365,92 +358,73 @@ const PivotSectionUnified = memo(() => {
   const fetchAllData = useCallback(async (isBackground = false) => {
     if (isFetching && isBackground) return;
     setIsFetching(true);
-    if (!isBackground) setError(null);
     
     try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 10000);
+      // Fetch live pivot data (includes current prices + pivot levels + indicators)
+      const liveUrl = API_CONFIG.endpoint('/api/advanced/pivot-indicators');
       
-      const apiUrl = API_CONFIG.endpoint('/api/advanced/pivot-indicators');
-      console.log('[Pivot] Fetching from:', apiUrl);
+      console.log('[Pivot] Fetching live pivot data...');
       
-      const response = await fetch(apiUrl, { 
-        signal: controller.signal,
-        headers: { 'Accept': 'application/json' }
+      const liveResp = await fetch(liveUrl, { 
+        method: 'GET', 
+        headers: { 'Accept': 'application/json' }, 
+        cache: 'no-store' 
       });
-      clearTimeout(timeoutId);
       
-      if (!response.ok) {
-        throw new Error(`API Error: ${response.status}`);
+      if (!liveResp.ok) {
+        throw new Error(`Live API returned ${liveResp.status}`);
       }
       
-      const result = await response.json();
-      console.log('[Pivot] API Response:', Object.keys(result));
+      const liveData = await liveResp.json();
+      console.log('[Pivot] Got live data:', Object.keys(liveData || {}));
       
-      if (result && Object.keys(result).length > 0) {
-        // Check if any symbol has valid data
-        const hasValidData = SYMBOLS.some(s => result[s.symbol]?.current_price);
-        if (hasValidData) {
-          setAllData(result);
-          setCachedData(result);
-          setLastUpdate(new Date().toLocaleTimeString('en-IN'));
-          setError(null);
-          console.log('[Pivot] Data loaded successfully from API');
-        } else {
-          console.log('[Pivot] API returned but no valid prices, keeping cache');
-          // If API has no data but cache exists, keep showing cache
+      // Use live data directly (contains current prices + pivot levels)
+      const validData: Record<string, PivotData> = {};
+      for (const symbol of ['NIFTY', 'BANKNIFTY', 'SENSEX']) {
+        const data = liveData?.[symbol];
+        if (data && (data.current_price || data.classic_pivots?.pivot)) {
+          validData[symbol] = {
+            ...data,
+            timestamp: new Date().toISOString()  // Update timestamp to now
+          };
+          console.log(`[Pivot] ${symbol}: Live data - Price: ${data.current_price}, Status: ${data.status}`);
         }
       }
-    } catch (err) {
-      console.error('[Pivot] Fetch error:', err);
-      if (!isBackground) {
-        setError(err instanceof Error ? err.message : 'Connection failed');
+      
+      if (Object.keys(validData).length >= 2) {
+        setAllData(validData);
+        setCachedData(validData);
+        setLastUpdate(new Date().toLocaleTimeString('en-IN'));
+        setError(null);
+        setLoading(false);
+        console.log('✅ [Pivot] Live data loaded successfully');
+      } else {
+        throw new Error('No valid live pivot data received');
       }
-      // On fetch error, ensure we still have data from cache
-      console.log('[Pivot] Using cache after fetch error');
-    } finally {
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error('[Pivot] ❌ Error:', msg);
+      setError(msg);
       setLoading(false);
+    } finally {
       setIsFetching(false);
     }
   }, [isFetching]);
 
-  // Load cached data immediately on mount
+  // Initial load + periodic refresh
   useEffect(() => {
-    const cached = getCachedData();
-    if (cached && Object.keys(cached).length > 0) {
-      console.log('[Pivot] Initial load from cache');
-      setAllData(cached);
-      // Mark as not loading since we have instant cache
-      setLoading(false);
-      // Still update timestamp to show when cache is from
-      const oldestTimestamp = Object.values(cached)
-        .map(d => new Date(d.timestamp).getTime())
-        .sort((a, b) => a - b)[0];
-      if (oldestTimestamp) {
-        setLastUpdate(new Date(oldestTimestamp).toLocaleTimeString('en-IN'));
-      }
-    }
+    fetchAllData(false);
     
-    // Fetch fresh data in background (even if we have cache)
-    setTimeout(() => {
-      fetchAllData(false);
-    }, 100);
-    
-    // Refresh every 15 seconds
+    // Refresh every 15 seconds when market is open
     const interval = setInterval(() => fetchAllData(true), 15000);
     return () => clearInterval(interval);
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [fetchAllData]);
 
-  // Check if we have data
   const hasData = Object.keys(allData).length > 0;
-  const isMarketClosed = SYMBOLS.every(s => 
-    !allData[s.symbol] || allData[s.symbol]?.status === 'CLOSED' || allData[s.symbol]?.status === 'CACHED' || allData[s.symbol]?.status === 'OFFLINE'
-  );
 
-  // Loading state - only show if we truly have zero data (should never happen with defaults)
   if (loading && !hasData) {
     return (
-      <div className="bg-gradient-to-br from-slate-900/80 to-slate-800/80 border border-cyan-500/30 rounded-xl p-6">
+      <div className="bg-gradient-to-br from-slate-900/80 to-slate-800/80 border border-emerald-500/30 rounded-xl p-6">
         <div className="flex items-center gap-3 mb-4">
           <div className="w-10 h-10 bg-cyan-500/20 rounded-lg animate-pulse" />
           <div className="h-6 w-48 bg-slate-700/50 rounded animate-pulse" />
@@ -464,67 +438,66 @@ const PivotSectionUnified = memo(() => {
     );
   }
 
-  // No data state - now should almost never happen, but fallback to cache if needed
   if (!hasData) {
-    const fallback = getCachedData();
-    if (fallback && Object.keys(fallback).length > 0) {
-      // Render with fallback silently
-      setAllData(fallback);
-      return null; // Let next render with data show
-    }
-    
     return (
-      <div className="bg-gradient-to-br from-slate-900/80 to-slate-800/80 border border-slate-600/50 rounded-xl p-6 text-center">
-        <Clock className="w-12 h-12 mx-auto mb-3 text-slate-500" />
-        <p className="text-slate-400 mb-2">Loading market data...</p>
-        {error && <p className="text-rose-400 text-xs mb-2">{error}</p>}
+      <div className="bg-gradient-to-br from-slate-900/80 to-slate-800/80 border border-emerald-500/50 rounded-xl p-6 text-center">
+        {error ? (
+          <>
+            <div className="text-red-400 text-lg font-bold mb-2">⚠️ Error</div>
+            <p className="text-slate-300 mb-2">{error}</p>
+            <p className="text-slate-600 text-sm">Check API connection</p>
+          </>
+        ) : (
+          <>
+            <Clock className="w-12 h-12 mx-auto mb-3 text-slate-500 animate-spin" />
+            <p className="text-slate-400 mb-2 font-medium">Loading market data...</p>
+            <p className="text-slate-600 text-sm">Connecting to API</p>
+          </>
+        )}
       </div>
     );
   }
 
   return (
     <div className="space-y-3">
-      {/* Status Bar */}
-      {isMarketClosed && (
-        <div className="flex items-center gap-2 px-3 py-1.5 bg-slate-800/40 border border-slate-700/40 rounded">
-          <Clock className="w-3.5 h-3.5 text-slate-500" />
-          <span className="text-xs text-slate-400 font-medium">
-            📊 Cached Data • Last session
-          </span>
-          {lastUpdate && (
-            <span className="text-[10px] text-slate-600 ml-auto">{lastUpdate}</span>
-          )}
-          {isFetching && <RefreshCw className="w-3 h-3 text-slate-500 animate-spin" />}
-        </div>
-      )}
-      
-      {!isMarketClosed && lastUpdate && (
-        <div className="flex items-center gap-2 px-3 py-2 bg-gradient-to-r from-green-900/40 to-green-800/30 border border-green-600/60 rounded-lg shadow-sm shadow-green-500/20">
-          <span className="w-2.5 h-2.5 bg-green-400 rounded-full animate-pulse" />
-          <span className="text-xs text-green-300 font-bold">🔴 LIVE MARKET DATA</span>
-          <span className="text-[10px] text-green-500 ml-auto">{lastUpdate}</span>
-          {isFetching && <RefreshCw className="w-3 h-3 text-green-400 animate-spin" />}
-        </div>
-      )}
+      {/* Live Status Bar - Dynamic Status Based on Data */}
+      <div className="flex items-center gap-2 px-3 py-2 bg-slate-800/40 border border-emerald-500/40 rounded-lg">
+        <span className={`w-2.5 h-2.5 rounded-full ${
+          Object.values(allData).some(d => d?.status === 'LIVE') 
+            ? 'bg-emerald-400' 
+            : Object.values(allData).some(d => d?.status === 'CACHED') 
+            ? 'bg-yellow-400' 
+            : 'bg-slate-400'
+        }`} />
+        <span className="text-xs text-slate-300 font-semibold">
+          {Object.values(allData).some(d => d?.status === 'LIVE') && '📡 LIVE DATA'}
+          {!Object.values(allData).some(d => d?.status === 'LIVE') && 
+           Object.values(allData).some(d => d?.status === 'CACHED') && '💾 CACHED DATA'}
+          {!Object.values(allData).some(d => d?.status === 'LIVE') && 
+           !Object.values(allData).some(d => d?.status === 'CACHED') && '⏸️ OFFLINE DATA'}
+        </span>
+        {lastUpdate && <span className="text-[10px] text-slate-500 ml-auto">{lastUpdate}</span>}
+        {isFetching && <RefreshCw className="w-3 h-3 text-slate-500 animate-spin" />}
+      </div>
 
-      {/* All Symbols Grid */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-3">
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
         {SYMBOLS.map(config => {
           const data = allData[config.symbol];
-          if (!data || !data.current_price) {
+          // Show data if it exists, regardless of current_price
+          if (!data || (!data.current_price && !data.classic_pivots?.pivot)) {
             return (
-              <div key={config.symbol} className="rounded-xl p-4 bg-slate-800/30 border border-slate-600/30 text-center">
+              <div key={config.symbol} className="rounded-xl p-4 bg-slate-800/30 border border-emerald-500/30 text-center">
                 <p className="text-slate-500 text-sm">{config.name}</p>
-                <p className="text-slate-600 text-xs mt-1">No data</p>
+                <p className="text-slate-600 text-xs mt-1">No data loaded</p>
               </div>
             );
           }
+          // Render even if current_price is null - SymbolPivotRow handles it
           return <SymbolPivotRow key={config.symbol} data={data} config={config} />;
         })}
       </div>
 
-      {/* Quick Legend */}
-      <div className="flex flex-wrap items-center justify-center gap-4 pt-1.5 text-[9px] text-slate-600">
+      <div className="flex flex-wrap items-center justify-center gap-2 sm:gap-4 pt-1.5 text-[9px] sm:text-[10px] text-slate-600">
         <span className="flex items-center gap-1">
           <span className="w-2 h-2 bg-teal-700/50 rounded" /> Support
         </span>

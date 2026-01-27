@@ -36,6 +36,12 @@ export default function DebugPage() {
               <p>High: {marketData.NIFTY.high}</p>
               <p>Low: {marketData.NIFTY.low}</p>
               <p className="text-xs text-gray-400">Time: {marketData.NIFTY.timestamp}</p>
+              <p className={marketData.NIFTY.analysis ? 'text-green-400' : 'text-red-400'}>
+                Analysis: {marketData.NIFTY.analysis ? '✅ YES' : '❌ NO'}
+              </p>
+              {marketData.NIFTY.analysis && (
+                <p className="text-blue-400">Signal: {marketData.NIFTY.analysis.signal}</p>
+              )}
             </div>
           ) : (
             <p className="text-red-400">No data</p>
@@ -54,6 +60,12 @@ export default function DebugPage() {
               <p>High: {marketData.BANKNIFTY.high}</p>
               <p>Low: {marketData.BANKNIFTY.low}</p>
               <p className="text-xs text-gray-400">Time: {marketData.BANKNIFTY.timestamp}</p>
+              <p className={marketData.BANKNIFTY.analysis ? 'text-green-400' : 'text-red-400'}>
+                Analysis: {marketData.BANKNIFTY.analysis ? '✅ YES' : '❌ NO'}
+              </p>
+              {marketData.BANKNIFTY.analysis && (
+                <p className="text-blue-400">Signal: {marketData.BANKNIFTY.analysis.signal}</p>
+              )}
             </div>
           ) : (
             <p className="text-red-400">No data</p>
@@ -72,6 +84,12 @@ export default function DebugPage() {
               <p>High: {marketData.SENSEX.high}</p>
               <p>Low: {marketData.SENSEX.low}</p>
               <p className="text-xs text-gray-400">Time: {marketData.SENSEX.timestamp}</p>
+              <p className={marketData.SENSEX.analysis ? 'text-green-400' : 'text-red-400'}>
+                Analysis: {marketData.SENSEX.analysis ? '✅ YES' : '❌ NO'}
+              </p>
+              {marketData.SENSEX.analysis && (
+                <p className="text-blue-400">Signal: {marketData.SENSEX.analysis.signal}</p>
+              )}
             </div>
           ) : (
             <p className="text-red-400">No data</p>

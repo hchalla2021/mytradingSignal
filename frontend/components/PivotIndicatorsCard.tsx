@@ -18,7 +18,7 @@ interface PivotData {
   current_price: number | null;
   prev_day?: { high: number; low: number; close: number; open: number; date: string };
   timestamp: string;
-  ema: { ema20: number | null; ema50: number | null; ema9?: number | null; ema21?: number | null; trend: string; price_vs_ema20: string };
+  ema: { ema_20: number | null; ema_50: number | null; ema_100: number | null; ema_200: number | null; trend: string; price_vs_ema20: string };
   classic_pivots: {
     pivot: number | null; r1: number | null; r2: number | null; r3: number | null;
     s1: number | null; s2: number | null; s3: number | null;
@@ -313,7 +313,7 @@ const PivotIndicatorsCard = memo<Props>(({ symbol, name }) => {
             <div>
               <p className="text-[10px] text-slate-500 mb-0.5">EMA 20</p>
               <p className={`text-sm font-bold ${ema.price_vs_ema20 === 'ABOVE' ? 'text-emerald-400' : 'text-rose-400'}`}>
-                {fmt(ema.ema20)}
+                {fmt(ema.ema_20)}
               </p>
             </div>
             <div>
@@ -380,8 +380,6 @@ const PivotIndicatorsCard = memo<Props>(({ symbol, name }) => {
                   <p className="text-[9px] text-cyan-400 font-extrabold mb-2">RESISTANCE LEVELS</p>
                   {[
                     { label: 'R3', value: classic_pivots.r3, color: 'rose', intensity: 'high' },
-                    { label: 'R2', value: classic_pivots.r2, color: 'rose', intensity: 'medium' },
-                    { label: 'R1', value: classic_pivots.r1, color: 'rose', intensity: 'low' },
                   ].map(level => (
                     <div key={level.label} className="flex items-center gap-2">
                       <span className={`w-8 text-[10px] font-bold text-${level.color}-400`}>{level.label}</span>
@@ -416,8 +414,6 @@ const PivotIndicatorsCard = memo<Props>(({ symbol, name }) => {
                 <div className="space-y-2 mt-4">
                   <p className="text-[9px] text-emerald-400 font-extrabold mb-2">SUPPORT LEVELS</p>
                   {[
-                    { label: 'S1', value: classic_pivots.s1, color: 'emerald', intensity: 'low' },
-                    { label: 'S2', value: classic_pivots.s2, color: 'emerald', intensity: 'medium' },
                     { label: 'S3', value: classic_pivots.s3, color: 'emerald', intensity: 'high' },
                   ].map(level => (
                     <div key={level.label} className="flex items-center gap-2">
@@ -462,21 +458,13 @@ const PivotIndicatorsCard = memo<Props>(({ symbol, name }) => {
                   </span>
                 </div>
                 
-                <div className="grid grid-cols-4 gap-1.5 text-center">
-                  <div className="bg-rose-900/20 rounded p-1.5 border border-rose-500/20">
-                    <p className="text-[9px] text-rose-400 font-bold">H3</p>
-                    <p className="text-[11px] text-white font-semibold">{fmt(camarilla_pivots.h3)}</p>
-                  </div>
+                <div className="grid grid-cols-2 gap-1.5 text-center">
                   <div className="bg-rose-900/30 rounded p-1.5 border border-rose-500/30">
-                    <p className="text-[9px] text-rose-400 font-bold">H4</p>
+                    <p className="text-[9px] text-rose-400 font-bold">R3</p>
                     <p className="text-[11px] text-white font-semibold">{fmt(camarilla_pivots.h4)}</p>
                   </div>
-                  <div className="bg-emerald-900/20 rounded p-1.5 border border-emerald-500/20">
-                    <p className="text-[9px] text-emerald-400 font-bold">L3</p>
-                    <p className="text-[11px] text-white font-semibold">{fmt(camarilla_pivots.l3)}</p>
-                  </div>
                   <div className="bg-emerald-900/30 rounded p-1.5 border border-emerald-500/30">
-                    <p className="text-[9px] text-emerald-400 font-bold">L4</p>
+                    <p className="text-[9px] text-emerald-400 font-bold">S3</p>
                     <p className="text-[11px] text-white font-semibold">{fmt(camarilla_pivots.l4)}</p>
                   </div>
                 </div>
@@ -554,11 +542,11 @@ const PivotIndicatorsCard = memo<Props>(({ symbol, name }) => {
                 <div className="flex items-center gap-3">
                   <div>
                     <p className="text-[9px] text-slate-500">EMA 20</p>
-                    <p className="text-sm font-bold text-white">{fmt(ema.ema20)}</p>
+                    <p className="text-sm font-bold text-white">{fmt(ema.ema_20)}</p>
                   </div>
                   <div>
                     <p className="text-[9px] text-slate-500">EMA 50</p>
-                    <p className="text-sm font-bold text-white">{fmt(ema.ema50)}</p>
+                    <p className="text-sm font-bold text-white">{fmt(ema.ema_50)}</p>
                   </div>
                 </div>
                 <span className={`text-xs font-bold px-2 py-1 rounded ${

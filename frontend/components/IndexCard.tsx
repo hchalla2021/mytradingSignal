@@ -251,12 +251,12 @@ const IndexCard = ({ symbol, name, data, isConnected, aiAlertData, outlookData }
 
       {/* Overall Market Outlook - SUPER SIMPLE FOR TRADERS */}
       {outlookData && (
-        <div className="mb-3 p-3 bg-gradient-to-br from-slate-900/60 to-slate-800/40 rounded-xl border-2 border-slate-600/40 shadow-lg">
+        <div className="mb-3 p-3 bg-dark-surface/60 rounded-xl border-2 shadow-xl hover:shadow-2xl transition-all duration-300 border-green-400/70 ring-2 ring-green-400/30 hover:border-green-300/90 hover:ring-green-300/40">
           
           {/* 🎯 BIG DECISION BOX - CAN I TRADE? */}
           <div className={`mb-3 p-3 rounded-xl border-2 text-center ${
             (outlookData.overallSignal === 'STRONG_BUY' || outlookData.overallSignal === 'BUY') && outlookData.overallConfidence >= 60 && outlookData.riskLevel !== 'HIGH'
-              ? 'bg-emerald-500/20 border-emerald-400'
+              ? 'bg-emerald-500/20 border-emerald-500/25'
               : outlookData.overallSignal === 'NEUTRAL' || outlookData.overallConfidence < 60 || (outlookData.overallSignal === 'BUY' && outlookData.riskLevel === 'HIGH')
               ? 'bg-amber-500/20 border-amber-400'
               : 'bg-rose-500/20 border-rose-400'

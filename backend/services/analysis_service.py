@@ -132,6 +132,9 @@ class AnalysisSignal:
     reasons: List[str] = field(default_factory=list)
     warnings: List[str] = field(default_factory=list)
     
+    # RSI 60/40 Momentum Analysis
+    rsi_60_40_momentum: Optional[Dict[str, Any]] = None
+    
     # Entry/Exit suggestions
     entry_price: Optional[float] = None
     stop_loss: Optional[float] = None
@@ -170,6 +173,7 @@ class AnalysisSignal:
                 "candle_strength": round(self.indicators.candle_strength, 2),
                 "time_quality": self.indicators.time_zone_quality,
             },
+            "rsi_60_40_momentum": self.rsi_60_40_momentum,
             "reasons": self.reasons,
             "warnings": self.warnings,
             "timestamp": self.timestamp.isoformat(),
@@ -300,6 +304,202 @@ class AnalysisEngine:
         
         return round(rsi.iloc[-1], 2)
     
+    def analyze_rsi_60_40_momentum(self, df: pd.DataFrame, rsi: float, trend: TrendDirection, vwap: float, ema_50: float) -> Dict[str, Any]:
+        """RSI 60/40 Dynamic Zone Analysis based on trend context"""
+        if df.empty:
+            return {"signal": "WAIT", "rsi_value": rsi, "zone": "NEUTRAL", "action": "No data", "confidence": 0}
+        
+        current_price = df.iloc[-1]['close']
+        last_3_rsi = self.calculate_last_n_rsi(df, 3)
+        
+        # Get previous candle info for confirmation
+        prev_candle = df.iloc[-2] if len(df) > 1 else df.iloc[-1]
+        prev_close = prev_candle['close']
+        
+        result = {
+            "rsi_value": rsi,
+            "trend": trend.value,
+            "current_price": current_price,
+            "above_vwap": current_price > vwap,
+            "above_ema50": current_price > ema_50,
+        }
+        
+        # UPTREND LOGIC
+        if trend == TrendDirection.UPTREND:
+            # RSI support zone: 40-50
+            if 40 <= rsi <= 50:
+                # Check bounce confirmation
+                if len(last_3_rsi) >= 2 and last_3_rsi[-1] > last_3_rsi[-2]:
+                    if current_price > vwap or current_price > ema_50:
+                        result.update({
+                            "signal": "PULLBACK_BUY",
+                            "zone": "RSI_40_SUPPORT",
+                            "action": "BUY at support - RSI bounce confirmed",
+                            "confidence": 85,
+                            "reason": f"RSI at {rsi} (support zone), bouncing + VWAP/EMA support"
+                        })
+                    else:
+                        result.update({
+                            "signal": "WAIT",
+                            "zone": "RSI_40_SUPPORT",
+                            "action": "Monitor - RSI bouncing but price weak",
+                            "confidence": 60,
+                            "reason": f"RSI at {rsi} (support), bouncing but below VWAP/EMA50"
+                        })
+                else:
+                    result.update({
+                        "signal": "WAIT",
+                        "zone": "RSI_40_SUPPORT",
+                        "action": "Watch for bounce",
+                        "confidence": 50,
+                        "reason": f"RSI at {rsi} (support zone) - waiting for upward confirmation"
+                    })
+            
+            # RSI breakout strength zone: above 60
+            elif rsi >= 60:
+                # Strong bullish confirmation
+                if len(last_3_rsi) >= 3 and all(last_3_rsi[i] >= 60 for i in range(max(0, len(last_3_rsi)-3), len(last_3_rsi))):
+                    if current_price > vwap and current_price > ema_50:
+                        result.update({
+                            "signal": "MOMENTUM_BUY",
+                            "zone": "RSI_60_BREAKOUT",
+                            "action": "BUY - Strong momentum continuation",
+                            "confidence": 90,
+                            "reason": f"RSI sustained above 60 for 3+ candles + VWAP + EMA50 confluence"
+                        })
+                    else:
+                        result.update({
+                            "signal": "BUY",
+                            "zone": "RSI_60_BREAKOUT",
+                            "action": "BUY with caution",
+                            "confidence": 70,
+                            "reason": f"RSI above 60 but price below VWAP/EMA50"
+                        })
+                elif rsi > 70:
+                    result.update({
+                        "signal": "OVERBOUGHT_CAUTION",
+                        "zone": "RSI_OVERBOUGHT",
+                        "action": "Watch for rejection",
+                        "confidence": 55,
+                        "reason": f"RSI {rsi} - extreme overbought, watch for reversal"
+                    })
+                else:
+                    result.update({
+                        "signal": "BUY",
+                        "zone": "RSI_60_BREAKOUT",
+                        "action": "HOLD/BUY",
+                        "confidence": 75,
+                        "reason": f"RSI at {rsi} - above 60, strong momentum"
+                    })
+            else:
+                result.update({
+                    "signal": "WAIT",
+                    "zone": "RSI_NEUTRAL",
+                    "action": "Consolidation",
+                    "confidence": 50,
+                    "reason": f"RSI at {rsi} - neutral zone, waiting for next setup"
+                })
+        
+        # DOWNTREND LOGIC
+        elif trend == TrendDirection.DOWNTREND:
+            # RSI resistance zone: 50-60
+            if 50 <= rsi <= 60:
+                # Check rejection confirmation
+                if len(last_3_rsi) >= 2 and last_3_rsi[-1] < last_3_rsi[-2]:
+                    if current_price < vwap or current_price < ema_50:
+                        result.update({
+                            "signal": "REJECTION_SHORT",
+                            "zone": "RSI_60_RESISTANCE",
+                            "action": "SHORT at resistance - RSI rejection confirmed",
+                            "confidence": 85,
+                            "reason": f"RSI at {rsi} (resistance zone), rejecting + VWAP/EMA resistance"
+                        })
+                    else:
+                        result.update({
+                            "signal": "WAIT",
+                            "zone": "RSI_60_RESISTANCE",
+                            "action": "Monitor - RSI rejecting but price strong",
+                            "confidence": 60,
+                            "reason": f"RSI at {rsi} (resistance), rejecting but above VWAP/EMA50"
+                        })
+                else:
+                    result.update({
+                        "signal": "WAIT",
+                        "zone": "RSI_60_RESISTANCE",
+                        "action": "Watch for rejection",
+                        "confidence": 50,
+                        "reason": f"RSI at {rsi} (resistance zone) - waiting for downward confirmation"
+                    })
+            
+            # RSI weakness zone: below 40
+            elif rsi <= 40:
+                # Strong bearish continuation
+                if len(last_3_rsi) >= 3 and all(last_3_rsi[i] <= 40 for i in range(max(0, len(last_3_rsi)-3), len(last_3_rsi))):
+                    if current_price < vwap and current_price < ema_50:
+                        result.update({
+                            "signal": "MOMENTUM_SHORT",
+                            "zone": "RSI_40_WEAKNESS",
+                            "action": "SHORT - Strong downtrend continuation",
+                            "confidence": 90,
+                            "reason": f"RSI sustained below 40 for 3+ candles + VWAP + EMA50 confluence"
+                        })
+                    else:
+                        result.update({
+                            "signal": "SHORT",
+                            "zone": "RSI_40_WEAKNESS",
+                            "action": "SHORT with caution",
+                            "confidence": 70,
+                            "reason": f"RSI below 40 but price above VWAP/EMA50"
+                        })
+                elif rsi < 30:
+                    result.update({
+                        "signal": "OVERSOLD_CAUTION",
+                        "zone": "RSI_OVERSOLD",
+                        "action": "Watch for bounce",
+                        "confidence": 55,
+                        "reason": f"RSI {rsi} - extreme oversold, watch for reversal"
+                    })
+                else:
+                    result.update({
+                        "signal": "SHORT",
+                        "zone": "RSI_40_WEAKNESS",
+                        "action": "HOLD/SHORT",
+                        "confidence": 75,
+                        "reason": f"RSI at {rsi} - below 40, strong weakness"
+                    })
+            else:
+                result.update({
+                    "signal": "WAIT",
+                    "zone": "RSI_NEUTRAL",
+                    "action": "Consolidation",
+                    "confidence": 50,
+                    "reason": f"RSI at {rsi} - neutral zone, waiting for next setup"
+                })
+        
+        # SIDEWAYS/UNKNOWN TREND
+        else:
+            result.update({
+                "signal": "WAIT",
+                "zone": "RSI_NEUTRAL",
+                "action": "No clear trend",
+                "confidence": 30,
+                "reason": f"Sideways market - RSI {rsi}, insufficient setup clarity"
+            })
+        
+        return result
+    
+    def calculate_last_n_rsi(self, df: pd.DataFrame, n: int = 3) -> List[float]:
+        """Calculate RSI for last N candles"""
+        if len(df) < n + self.config.rsi_period:
+            return []
+        
+        rsi_values = []
+        for i in range(max(0, len(df) - n), len(df)):
+            candle_df = df.iloc[:i+1]
+            rsi = self.calculate_rsi(candle_df)
+            rsi_values.append(rsi)
+        return rsi_values
+    
     def calculate_candle_strength(self, df: pd.DataFrame) -> float:
         """Calculate candle strength (body to range ratio)"""
         if df.empty:
@@ -386,6 +586,9 @@ class AnalysisEngine:
         # Momentum
         rsi = self.calculate_rsi(df)
         candle_strength = self.calculate_candle_strength(df)
+        
+        # RSI 60/40 Momentum Analysis
+        rsi_momentum = self.analyze_rsi_60_40_momentum(df, rsi, trend, vwap, ema_50)
         
         # Time filter
         is_trading_time, time_quality = self.check_trading_time()
@@ -528,6 +731,7 @@ class AnalysisEngine:
         
         return AnalysisSignal(
             symbol="",
+            rsi_60_40_momentum=rsi_momentum,
             signal_type=signal_type,
             confidence_score=confidence,
             indicators=indicators,

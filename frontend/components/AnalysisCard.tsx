@@ -7,7 +7,7 @@
 'use client';
 
 import React, { memo, useMemo, useRef } from 'react';
-import { AnalysisSignal, SignalType, TrendDirection, VolumeStrength, VWAPPosition } from '@/types/analysis';
+import { AnalysisSignal, SignalType, TrendDirection, VolumeStrength } from '@/types/analysis';
 import { SignalBadge } from './indicators/SignalBadge';
 import { TechnicalIndicator } from './indicators/TechnicalIndicator';
 import { SupportResistance } from './indicators/SupportResistance';
@@ -216,29 +216,17 @@ const AnalysisCardContent = memo<AnalysisCardProps>(({ analysis }) => {
               status="neutral"
               showArrow={false}
             />
-            <TechnicalIndicator 
-              label="Position" 
-              value={indicators.vwap_position === VWAPPosition.ABOVE_VWAP ? 'ABOVE VWAP' : indicators.vwap_position === VWAPPosition.BELOW_VWAP ? 'BELOW VWAP' : indicators.vwap_position === VWAPPosition.AT_VWAP ? 'AT VWAP' : 'N/A'} 
-              status={indicators.vwap_position === VWAPPosition.ABOVE_VWAP ? 'positive' : indicators.vwap_position === VWAPPosition.BELOW_VWAP ? 'negative' : 'neutral'} 
-              showArrow={true}
-            />
           </div>
         </div>
 
         {/* EMA Trend Filter */}
         <div className="border-2 border-emerald-500/30 rounded-xl p-3 bg-dark-surface/40 backdrop-blur-sm shadow-sm shadow-emerald-500/10">
-          <h4 className="text-[10px] sm:text-xs font-bold text-dark-secondary mb-2 uppercase tracking-wider">EMA TREND FILTER (9/21/50)</h4>
+          <h4 className="text-[10px] sm:text-xs font-bold text-dark-secondary mb-2 uppercase tracking-wider">EMA TREND FILTER (20/50/100)</h4>
           <div className="grid grid-cols-2 gap-2">
             <TechnicalIndicator 
-              label="EMA 9" 
-              value={indicators.ema_9 ? `₹${indicators.ema_9.toFixed(2)}` : 'N/A'} 
-              status={displayPrice > indicators.ema_9 ? 'positive' : displayPrice < indicators.ema_9 ? 'negative' : 'neutral'}
-              showArrow={true}
-            />
-            <TechnicalIndicator 
-              label="EMA 21" 
-              value={indicators.ema_21 ? `₹${indicators.ema_21.toFixed(2)}` : 'N/A'} 
-              status={displayPrice > indicators.ema_21 ? 'positive' : displayPrice < indicators.ema_21 ? 'negative' : 'neutral'}
+              label="EMA 20" 
+              value={indicators.ema_20 ? `₹${indicators.ema_20.toFixed(2)}` : 'N/A'} 
+              status={displayPrice > indicators.ema_20 ? 'positive' : displayPrice < indicators.ema_20 ? 'negative' : 'neutral'}
               showArrow={true}
             />
             <TechnicalIndicator 
@@ -247,20 +235,26 @@ const AnalysisCardContent = memo<AnalysisCardProps>(({ analysis }) => {
               status={displayPrice > indicators.ema_50 ? 'positive' : displayPrice < indicators.ema_50 ? 'negative' : 'neutral'}
               showArrow={true}
             />
-            <div className="col-span-1 bg-dark-card/60 rounded-lg p-2 border border-emerald-500/20">
-              <div className="text-[9px] text-dark-tertiary mb-1">TREND</div>
+            <TechnicalIndicator 
+              label="EMA 100" 
+              value={indicators.ema_100 ? `₹${indicators.ema_100.toFixed(2)}` : 'N/A'} 
+              status={displayPrice > indicators.ema_100 ? 'positive' : displayPrice < indicators.ema_100 ? 'negative' : 'neutral'}
+              showArrow={true}
+            />
+            <div className="col-span-2 bg-dark-card/60 rounded-lg p-2 border border-emerald-500/20">
+              <div className="text-[9px] text-dark-tertiary mb-1">TREND ALIGNMENT</div>
               <div className={`text-xs font-bold ${
-                displayPrice > indicators.ema_9 && displayPrice > indicators.ema_21 && displayPrice > indicators.ema_50
+                indicators.ema_20 > indicators.ema_50 && indicators.ema_50 > indicators.ema_100
                   ? 'text-bullish'
-                  : displayPrice < indicators.ema_9 && displayPrice < indicators.ema_21 && displayPrice < indicators.ema_50
+                  : indicators.ema_20 < indicators.ema_50 && indicators.ema_50 < indicators.ema_100
                   ? 'text-bearish'
                   : 'text-neutral'
               }`}>
-                {displayPrice > indicators.ema_9 && displayPrice > indicators.ema_21 && displayPrice > indicators.ema_50
-                  ? '🟢 Above All'
-                  : displayPrice < indicators.ema_9 && displayPrice < indicators.ema_21 && displayPrice < indicators.ema_50
-                  ? '🔴 Below All'
-                  : '🟡 Mixed'}
+                {indicators.ema_20 > indicators.ema_50 && indicators.ema_50 > indicators.ema_100
+                  ? '🟢 Perfect Bullish'
+                  : indicators.ema_20 < indicators.ema_50 && indicators.ema_50 < indicators.ema_100
+                  ? '🔴 Perfect Bearish'
+                  : '🟡 Mixed Signal'}
               </div>
             </div>
           </div>

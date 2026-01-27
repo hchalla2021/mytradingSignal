@@ -162,6 +162,65 @@ const CandleIntentCard = memo<CandleIntentCardProps>(({ symbol, name }) => {
     }
   };
 
+  // Calculate individual candle confidence percentage 
+  const calculateCandleConfidence = (): number => {
+    if (!data) return 50;
+    
+    let confidence = 50; // Base confidence
+    
+    // Pattern confidence scaling (30% weight)
+    const patternConf = data.pattern?.confidence || 0;
+    if (patternConf >= 80) confidence += 20; // High pattern confidence
+    else if (patternConf >= 60) confidence += 12; // Medium pattern confidence  
+    else if (patternConf >= 40) confidence += 5;  // Low pattern confidence
+    else confidence -= 10; // Very low pattern confidence
+    
+    // Professional signal strength (25% weight)
+    const signal = data.professional_signal || 'NEUTRAL';
+    if (signal === 'STRONG_BUY' || signal === 'STRONG_SELL') confidence += 15;
+    else if (signal === 'BUY' || signal === 'SELL') confidence += 10;
+    else confidence -= 5; // NEUTRAL signal
+    
+    // Volume analysis efficiency (20% weight) 
+    const volumeEff = data.volume_analysis?.efficiency || '';
+    const volumeRatio = data.volume_analysis?.volume_ratio || 0;
+    if (volumeEff === 'ABSORPTION' && volumeRatio >= 2) confidence += 12; // Strong absorption
+    else if (volumeEff === 'HEALTHY' && volumeRatio >= 1.5) confidence += 8;  // Healthy volume
+    else if (volumeRatio < 0.8) confidence -= 8; // Low volume
+    
+    // Body structure strength (15% weight)
+    const bodyStrength = data.body_analysis?.strength || 0;
+    const bodyRatio = data.body_analysis?.body_ratio_pct || 0;
+    if (bodyStrength >= 80 && bodyRatio >= 60) confidence += 10; // Strong decisive body
+    else if (bodyStrength >= 60) confidence += 5; // Moderate body strength
+    else if (bodyRatio < 30) confidence -= 5; // Weak indecisive body
+    
+    // Wick analysis signals (10% weight)
+    const upperSignal = data.wick_analysis?.upper_signal || '';
+    const lowerSignal = data.wick_analysis?.lower_signal || '';
+    const dominantWick = data.wick_analysis?.dominant_wick || '';
+    
+    // Wick confirmation signals
+    if ((upperSignal === 'BEARISH' && signal.includes('SELL')) ||
+        (lowerSignal === 'BULLISH' && signal.includes('BUY'))) {
+      confidence += 8; // Wick confirms signal
+    }
+    
+    // Market data status adjustment
+    if (data.status === 'LIVE') confidence += 5;
+    else if (data.status === 'CACHED') confidence -= 3;
+    
+    // Near support/resistance zone adjustment
+    if (data.near_zone) {
+      confidence += 5; // Critical level proximity increases significance
+    }
+    
+    // Cap confidence at reasonable ranges
+    return Math.min(95, Math.max(25, confidence));
+  };
+
+  const candleConfidence = calculateCandleConfidence();
+
   const getPatternColor = (pattern: string) => {
     switch (pattern) {
       case 'REJECTION':
@@ -192,13 +251,18 @@ const CandleIntentCard = memo<CandleIntentCardProps>(({ symbol, name }) => {
 
   return (
     <div className="bg-gradient-to-br from-gray-900 via-orange-950/10 to-gray-900 rounded-xl border-2 border-orange-500/40 hover:border-orange-400/60 transition-all shadow-xl shadow-orange-500/10 hover:shadow-orange-500/20 p-6">
-      {/* Cached Data Status Badge */}
-      {data.status === 'CACHED' && (
-        <div className="mb-3 px-2 py-1 rounded-lg bg-blue-900/30 text-blue-200 border border-blue-700/40 text-[9px] font-semibold flex items-center gap-1.5">
-          <span className="w-1.5 h-1.5 bg-blue-400 rounded-full"></span>
-          📊 LAST MARKET SESSION DATA • Market Closed
-        </div>
-      )}
+      {/* Live Data Status Badge */}
+      <div className="mb-3 px-2 py-1 rounded-lg bg-slate-800/40 border border-emerald-500/40 text-[9px] font-semibold flex items-center gap-1.5">
+        <span className={`w-1.5 h-1.5 rounded-full ${
+          data.status === 'LIVE' ? 'bg-emerald-400' : 
+          data.status === 'CACHED' ? 'bg-yellow-400' : 'bg-slate-400'
+        }`} />
+        <span className="text-slate-300">
+          {data.status === 'LIVE' && '📡 LIVE CANDLE DATA'}
+          {data.status === 'CACHED' && '💾 CACHED CANDLE DATA • Market Closed'}
+          {!data.status && '⏸️ OFFLINE DATA'}
+        </span>
+      </div>
       
       {/* Header */}
       <div className="flex items-center justify-between mb-4">
@@ -206,7 +270,13 @@ const CandleIntentCard = memo<CandleIntentCardProps>(({ symbol, name }) => {
           <div className="p-2 bg-orange-500/10 rounded-lg border border-orange-500/30">
             <Flame className="w-5 h-5 text-orange-400" />
           </div>
-          <h3 className="text-lg font-bold text-white">{name}</h3>
+          <div className="flex flex-col">
+            <h3 className="text-lg font-bold text-white">{name}</h3>
+            {/* Individual Confidence Percentage */}
+            <span className="text-xs font-bold text-slate-300">
+              Confidence: {Math.round(candleConfidence)}%
+            </span>
+          </div>
         </div>
         <div className={`px-3 py-1 rounded-lg text-sm font-bold border-2 shadow-lg ${getSignalColor(data.professional_signal || 'NEUTRAL')}`}>
           {data.professional_signal?.replace('_', ' ') || 'N/A'}

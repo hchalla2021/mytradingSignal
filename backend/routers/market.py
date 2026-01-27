@@ -151,19 +151,34 @@ async def market_websocket(websocket: WebSocket):
         print(f"📊 [WS-MARKET] Got data for: {list(initial_data.keys())} ({len(initial_data)} symbols)")
         
         # ✅ INSTANT FIX: Generate analysis for cached data if missing
+        print(f"\n{'='*80}")
+        print(f"🔍 GENERATING ANALYSIS FOR INITIAL SNAPSHOT")
+        print(f"{'='*80}\n")
         try:
             from services.instant_analysis import InstantSignal
             for symbol, data in initial_data.items():
-                if data and not data.get("analysis"):
-                    print(f"🔍 Generating analysis for cached {symbol} data...")
-                    analysis_result = InstantSignal.analyze_tick(data)
-                    if analysis_result:
-                        data["analysis"] = analysis_result
-                        # Update cache with analysis
-                        await cache.set_market_data(symbol, data)
-                        print(f"✅ Analysis generated and cached for {symbol}")
+                if data:
+                    print(f"📊 Processing {symbol}: price={data.get('price')}, has_analysis={bool(data.get('analysis'))}")
+                    if not data.get("analysis"):
+                        print(f"   → Generating analysis for {symbol}...")
+                        analysis_result = InstantSignal.analyze_tick(data)
+                        if analysis_result:
+                            data["analysis"] = analysis_result
+                            # Update cache with analysis
+                            await cache.set_market_data(symbol, data)
+                            print(f"   ✅ Analysis generated for {symbol}: signal={analysis_result.get('signal')}, confidence={analysis_result.get('confidence')}")
+                        else:
+                            print(f"   ❌ Analysis returned None for {symbol}")
+                    else:
+                        print(f"   ✓ Analysis already present for {symbol}")
+                else:
+                    print(f"   ⚠️ No data for {symbol}")
         except Exception as e:
-            print(f"⚠️ Could not generate analysis for cached data: {e}")
+            print(f"❌ Could not generate analysis for cached data: {e}")
+            import traceback
+            traceback.print_exc()
+        
+        print(f"\n{'='*80}\n")
         
         await manager.send_personal(websocket, {
             "type": "snapshot",

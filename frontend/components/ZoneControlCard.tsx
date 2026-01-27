@@ -169,6 +169,59 @@ const ZoneControlCard = memo<ZoneControlCardProps>(({ symbol, name }) => {
     return 'bg-amber-950/30 text-amber-400 border-amber-500/40';
   };
 
+  // Calculate individual zone control confidence percentage
+  const calculateZoneControlConfidence = (): number => {
+    if (!data) return 50;
+    
+    let confidence = 50; // Base confidence
+    
+    // Zone strength assessment (25% weight)
+    if (data.zone_strength === 'STRONG') confidence += 20;
+    else if (data.zone_strength === 'MODERATE') confidence += 10;
+    else confidence -= 10; // WEAK zones
+    
+    // Support zone quality (20% weight)
+    const supportStrength = data.nearest_zones?.support?.strength || 0;
+    const supportTouches = data.nearest_zones?.support?.touches || 0;
+    if (supportStrength >= 80 && supportTouches >= 3) confidence += 15; // Very reliable support
+    else if (supportStrength >= 60 && supportTouches >= 2) confidence += 10; // Good support
+    else if (supportStrength < 40) confidence -= 10; // Weak support
+    
+    // Resistance zone quality (15% weight)
+    const resistanceStrength = data.nearest_zones?.resistance?.strength || 0;
+    const resistanceTouches = data.nearest_zones?.resistance?.touches || 0;
+    if (resistanceStrength >= 80 && resistanceTouches >= 3) confidence += 12; // Strong resistance
+    else if (resistanceStrength >= 60) confidence += 8;
+    else if (resistanceStrength < 40) confidence -= 8;
+    
+    // Risk balance assessment (20% weight)
+    const breakdown = data.breakdown_risk || 50;
+    const bounce = data.bounce_probability || 50;
+    const riskSpread = Math.abs(breakdown - bounce);
+    if (riskSpread >= 30) confidence += 12; // Clear directional bias
+    else if (riskSpread >= 20) confidence += 8; // Moderate bias
+    else confidence -= 5; // Conflicting signals
+    
+    // Distance to zones (10% weight)
+    const supportDist = Math.abs(data.nearest_zones?.support?.distance_pct || 100);
+    const resistanceDist = Math.abs(data.nearest_zones?.resistance?.distance_pct || 100);
+    if (supportDist <= 3 || resistanceDist <= 3) confidence += 8; // Near critical levels
+    else if (supportDist <= 5 || resistanceDist <= 5) confidence += 5; // Close to levels
+    
+    // Signal strength (10% weight)
+    const signal = data.signal || 'NEUTRAL';
+    if (signal === 'BUY_ZONE' || signal === 'SELL_ZONE') confidence += 8;
+    else confidence -= 3; // NEUTRAL signal
+    
+    // Data freshness adjustment
+    if (data.status === 'LIVE') confidence += 5;
+    else if (data.status === 'CACHED') confidence -= 3;
+    
+    return Math.min(95, Math.max(25, confidence));
+  };
+
+  const zoneControlConfidence = calculateZoneControlConfidence();
+
   const getBounceColor = (prob: number) => {
     if (prob >= 70) return 'text-emerald-500';
     if (prob >= 50) return 'text-amber-500';
@@ -210,19 +263,34 @@ const ZoneControlCard = memo<ZoneControlCardProps>(({ symbol, name }) => {
 
   return (
     <div className="bg-dark-card border-2 border-emerald-500/30 rounded-lg p-3 sm:p-4 hover:border-emerald-400/50 hover:shadow-emerald-500/20 transition-all shadow-lg shadow-emerald-500/10">
-      {/* Cached Data Status Badge */}
-      {status === 'CACHED' && (
-        <div className="mb-2 px-2 py-1 rounded-lg bg-blue-900/30 text-blue-200 border border-blue-700/40 text-[9px] font-semibold flex items-center gap-1.5">
-          <span className="w-1.5 h-1.5 bg-blue-400 rounded-full"></span>
-          📊 LAST MARKET SESSION DATA • Market Closed
-        </div>
-      )}
+      {/* Live Data Status Badge */}
+      <div className="mb-3 px-2 py-1 rounded-lg bg-slate-800/40 border border-emerald-500/40 text-[9px] font-semibold flex items-center gap-1.5">
+        <span className={`w-1.5 h-1.5 rounded-full ${
+          status === 'LIVE' ? 'bg-emerald-400' : 
+          status === 'CACHED' ? 'bg-yellow-400' : 'bg-slate-400'
+        }`} />
+        <span className="text-slate-300">
+          {status === 'LIVE' && '📡 LIVE ZONE DATA'}
+          {status === 'CACHED' && '💾 CACHED ZONE DATA • Market Closed'}
+          {status === 'HISTORICAL' && '📊 HISTORICAL ZONE DATA'}
+          {(!status || status === 'ERROR') && '⏸️ OFFLINE DATA'}
+        </span>
+        {candles_analyzed && candles_analyzed > 0 && (
+          <span className="text-slate-500 ml-auto">{candles_analyzed} candles</span>
+        )}
+      </div>
       
       {/* Header with unique styling */}
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-2">
           <Target className="w-4 h-4 text-emerald-400 animate-pulse" />
-          <h3 className="text-sm sm:text-base font-bold text-white tracking-wide">{name}</h3>
+          <div className="flex flex-col">
+            <h3 className="text-sm sm:text-base font-bold text-white tracking-wide">{name}</h3>
+            {/* Individual Confidence Percentage */}
+            <span className="text-xs font-bold text-slate-300">
+              Confidence: {Math.round(zoneControlConfidence)}%
+            </span>
+          </div>
         </div>
         <div className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-black border ${getSignalBg(signal)} ${getSignalColor(signal)}`}>
           {signal === 'BUY_ZONE' && <Shield className="w-3.5 h-3.5" />}
@@ -231,30 +299,6 @@ const ZoneControlCard = memo<ZoneControlCardProps>(({ symbol, name }) => {
           <span>{signal.replace('_', ' ')}</span>
         </div>
       </div>
-
-      {/* Live Status Indicator - Always show when data is live */}
-      {status === 'LIVE' && (
-        <div className="mb-3 p-2 rounded-lg bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 text-[10px] font-bold flex items-center gap-2">
-          <span className="w-2 h-2 bg-emerald-400 rounded-full animate-pulse"></span>
-          LIVE MARKET DATA
-          {candles_analyzed && candles_analyzed > 0 && ` • ${candles_analyzed} candles`}
-        </div>
-      )}
-      
-      {/* Historical Data - Only show if market is closed */}
-      {status && status === 'HISTORICAL' && (
-        <div className="mb-3 p-2 rounded-lg text-[10px] font-bold bg-blue-500/10 text-blue-400 border border-blue-500/30">
-          📊 Last session data - Market closed
-          {candles_analyzed && candles_analyzed > 0 && ` • ${candles_analyzed} candles`}
-        </div>
-      )}
-
-      {/* Token Expired Warning - Only show if token actually expired */}
-      {status && status === 'TOKEN_EXPIRED' && (
-        <div className="mb-3 p-2 rounded-lg bg-rose-500/10 text-rose-400 border border-rose-500/30 text-[10px] font-bold">
-          🔑 Token expired - Click LOGIN in header to refresh
-        </div>
-      )}
 
       {/* Current Price - Eye-Friendly Display */}
       <div className="mb-4 p-4 bg-gradient-to-br from-slate-800/60 via-gray-800/50 to-slate-900/60 rounded-xl border border-slate-600/40 shadow-lg">

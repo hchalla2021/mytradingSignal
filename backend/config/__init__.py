@@ -34,9 +34,9 @@ class Settings(BaseSettings):
     frontend_url: str = Field(default="https://mydailytradesignals.com", env="FRONTEND_URL")
     
     # ==================== REDIS ====================
-    redis_url: str = "redis://localhost:6379"
-    redis_db: int = 0
-    redis_password: Optional[str] = None
+    redis_url: str = Field(default="", env="REDIS_URL")
+    redis_db: int = Field(default=0, env="REDIS_DB")
+    redis_password: Optional[str] = Field(default=None, env="REDIS_PASSWORD")
     
     # ==================== JWT ====================
     jwt_secret: str = Field(default="", env="JWT_SECRET")  # MUST be set in production!
@@ -45,13 +45,13 @@ class Settings(BaseSettings):
     refresh_token_expire_days: int = 7
     
     # ==================== SERVER ====================
-    host: str = "0.0.0.0"
-    port: int = 8000
-    debug: bool = False  # Production mode
-    cors_origins: str = "*"  # Comma-separated: http://localhost:3000,https://example.com
+    host: str = Field(default="0.0.0.0", env="SERVER_HOST")
+    port: int = Field(default=8000, env="SERVER_PORT")
+    debug: bool = Field(default=False, env="DEBUG")
+    cors_origins: str = Field(default="*", env="CORS_ORIGINS")  # Comma-separated
     
     # ==================== MARKET HOURS SCHEDULER ====================
-    enable_scheduler: bool = True  # Set to False for localhost testing anytime
+    enable_scheduler: bool = Field(default=True, env="ENABLE_SCHEDULER")
     
     # ==================== AI / LLM (DISABLED) ====================
     # AI Engine removed - using InstantSignal analysis only
@@ -203,3 +203,5 @@ class Settings(BaseSettings):
 def get_settings() -> Settings:
     """Get cached settings instance."""
     return Settings()
+
+__all__ = ["Settings", "get_settings"]

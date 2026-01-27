@@ -118,11 +118,11 @@ const PivotDetailedDisplay: React.FC<PivotDisplayProps> = ({ symbol }) => {
 
   // Determine Camarilla status
   const getCaramellaStatus = () => {
-    if (!(camarilla as any)?.h3 && !(camarilla as any)?.l3) return 'NEUTRAL';
-    const nearH3 = Math.abs((price - ((camarilla as any)?.h3 || 0)) / ((camarilla as any)?.h3 || 1)) < 0.01;
-    const nearL3 = Math.abs((price - ((camarilla as any)?.l3 || 0)) / ((camarilla as any)?.l3 || 1)) < 0.01;
-    if (nearH3) return 'RESISTANCE ⚠️';
-    if (nearL3) return 'SUPPORT ⚠️';
+    if (!(camarilla as any)?.h4 && !(camarilla as any)?.l4) return 'NEUTRAL';
+    const nearH4 = Math.abs((price - ((camarilla as any)?.h4 || 0)) / ((camarilla as any)?.h4 || 1)) < 0.01;
+    const nearL4 = Math.abs((price - ((camarilla as any)?.l4 || 0)) / ((camarilla as any)?.l4 || 1)) < 0.01;
+    if (nearH4) return 'RESISTANCE ⚠️';
+    if (nearL4) return 'SUPPORT ⚠️';
     return 'NEUTRAL';
   };
 
@@ -168,11 +168,9 @@ const PivotDetailedDisplay: React.FC<PivotDisplayProps> = ({ symbol }) => {
           <div className="font-bold text-yellow-400 mb-2">PIVOT LEVELS</div>
           <div className="text-slate-400 text-[9px] mb-1">| {positionStatus}</div>
           <div className="space-y-0.5 font-mono text-[9px]">
-            <div className="text-red-400/80 font-bold">S2 {(classic as any)?.s2 ? (classic as any).s2.toFixed(0) : '-'}</div>
-            <div className="text-orange-400/70">S1 {(classic as any)?.s1 ? (classic as any).s1.toFixed(0) : '-'}</div>
+            <div className="text-red-400/80 font-bold">S3 {(classic as any)?.s3 ? (classic as any).s3.toFixed(0) : '-'}</div>
             <div className="text-slate-300 font-bold border-y border-slate-700/50 py-0.5">P {(classic as any)?.pivot ? (classic as any).pivot.toFixed(0) : '-'}</div>
-            <div className="text-emerald-400/70">R1 {(classic as any)?.r1 ? (classic as any).r1.toFixed(0) : '-'}</div>
-            <div className="text-green-400/80 font-bold">R2 {(classic as any)?.r2 ? (classic as any).r2.toFixed(0) : '-'}</div>
+            <div className="text-green-400/80 font-bold">R3 {(classic as any)?.r3 ? (classic as any).r3.toFixed(0) : '-'}</div>
           </div>
         </div>
 
@@ -196,8 +194,8 @@ const PivotDetailedDisplay: React.FC<PivotDisplayProps> = ({ symbol }) => {
             {caramellaStatus}
           </div>
           <div className="text-slate-500 text-[9px] mt-2">Zones</div>
-          <div className="text-red-400/80 text-[9px]">H3: {(camarilla as any)?.h3 ? (camarilla as any).h3.toFixed(0) : '-'} ⚠️</div>
-          <div className="text-green-400/80 text-[9px]">L3: {(camarilla as any)?.l3 ? (camarilla as any).l3.toFixed(0) : '-'}</div>
+          <div className="text-red-400/80 text-[9px]">R3: {(camarilla as any)?.h4 ? (camarilla as any).h4.toFixed(0) : '-'} ⚠️</div>
+          <div className="text-green-400/80 text-[9px]">S3: {(camarilla as any)?.l4 ? (camarilla as any).l4.toFixed(0) : '-'}</div>
         </div>
       </div>
 

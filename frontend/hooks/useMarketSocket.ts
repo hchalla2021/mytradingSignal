@@ -121,6 +121,7 @@ export function useMarketSocket() {
                     [tick.symbol]: { ...tick } // New object for changed symbol
                   };
                   saveMarketData(updated);
+                  log.debug(`✅ Tick received for ${tick.symbol}: ₹${tick.price}, Analysis: ${tick.analysis ? 'YES' : 'NO'}`);
                   return updated;
                 });
               }
@@ -129,7 +130,8 @@ export function useMarketSocket() {
             case 'snapshot':
               if (message.data) {
                 const snapshot = message.data as Record<string, MarketTick>;
-                log.debug('WS Snapshot received:', Object.keys(snapshot));
+                log.debug('✅ WS Snapshot received:', Object.keys(snapshot));
+                console.log('📊 [SNAPSHOT] Received data:', snapshot);
                 setMarketData(() => {
                   // Create completely new objects to trigger React updates
                   const updated = {
@@ -138,6 +140,7 @@ export function useMarketSocket() {
                     SENSEX: snapshot.SENSEX ? { ...snapshot.SENSEX } : null,
                   };
                   saveMarketData(updated);
+                  console.log('📊 [STATE] Market data updated:', updated);
                   return updated;
                 });
               }
@@ -223,10 +226,13 @@ export function useMarketSocket() {
       const saved = localStorage.getItem(STORAGE_KEY);
       if (saved) {
         const parsed = JSON.parse(saved) as MarketData;
+        console.log('💾 [CACHE] Loaded from localStorage:', parsed);
         setMarketData(parsed);
+      } else {
+        console.log('⚠️ [CACHE] No cached market data found');
       }
     } catch (e) {
-      console.error('Failed to load cached market data:', e);
+      console.error('❌ Failed to load cached market data:', e);
     }
     
     // Connect to WebSocket

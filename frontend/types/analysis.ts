@@ -38,10 +38,12 @@ export interface TechnicalIndicators {
   low: number;
   open: number;
   vwap: number;
+  vwma_20: number;
   vwap_position: VWAPPosition;
-  ema_9: number;
-  ema_21: number;
+  ema_20: number;
   ema_50: number;
+  ema_100: number;
+  ema_200: number;
   trend: TrendDirection;
 
   // Support & Resistance

@@ -214,12 +214,86 @@ const TrendBaseCard = memo<TrendBaseCardProps>(({ symbol, name }) => {
     );
   }
 
-  const { structure, signal, confidence, trend } = data;
-  
-  // Value validation
-  const hasValidData = structure && structure.swing_points && structure.swing_points.last_high > 0;
-  const isStrongTrend = structure?.integrity_score >= 70;
-  const isModerateTrend = structure?.integrity_score >= 50;
+  // Calculate market status based confidence with enhanced accuracy
+  const calculateTrendConfidence = (data: TrendBaseData): number => {
+    if (!data || !data.structure) return 30;
+    
+    let confidence = 50; // Base confidence
+    const { structure, signal, trend, status } = data;
+    
+    // Market Status Impact (20% weight)
+    if (status === 'LIVE' || status === 'ACTIVE') {
+      confidence += 15; // Live data is most accurate
+    } else if (status === 'CACHED') {
+      confidence += 5; // Cached data is still useful
+    } else {
+      confidence -= 10; // Offline data is less reliable
+    }
+    
+    // Pattern Integrity Score (30% weight)
+    const integrityScore = structure.integrity_score || 50;
+    if (integrityScore >= 80) confidence += 25; // Very strong pattern
+    else if (integrityScore >= 70) confidence += 20; // Strong pattern
+    else if (integrityScore >= 60) confidence += 15; // Good pattern
+    else if (integrityScore >= 50) confidence += 10; // Moderate pattern
+    else if (integrityScore < 30) confidence -= 15; // Very weak pattern
+    
+    // Signal Clarity (20% weight)
+    if (signal === 'BUY' || signal === 'SELL') {
+      confidence += 12; // Clear directional signal
+    } else if (signal === 'NEUTRAL') {
+      confidence -= 8; // No clear direction
+    }
+    
+    // Trend Consistency (15% weight)
+    if (trend === 'UPTREND' || trend === 'DOWNTREND') {
+      confidence += 10; // Clear trend direction
+    } else if (trend === 'SIDEWAYS') {
+      confidence -= 5; // Sideways = less reliable
+    }
+    
+    // Pattern Type Quality (10% weight)
+    if (structure.type) {
+      if (structure.type.includes('HIGHER-HIGH-HIGHER-LOW') || structure.type.includes('LOWER-HIGH-LOWER-LOW')) {
+        confidence += 8; // Classic trend patterns
+      } else if (structure.type.includes('HIGHER-HIGH-LOWER-LOW')) {
+        confidence -= 5; // Mixed pattern = topping/bottoming
+      }
+    }
+    
+    // Swing Points Quality (5% weight)
+    if (structure.swing_points) {
+      const hasValidSwings = structure.swing_points.last_high > 0 && structure.swing_points.last_low > 0;
+      if (hasValidSwings) {
+        confidence += 5; // Valid swing data
+      } else {
+        confidence -= 10; // Invalid/missing swing data
+      }
+    }
+    
+    // Market timing accuracy bonus
+    const currentHour = new Date().getHours();
+    if (status === 'LIVE' && currentHour >= 9 && currentHour <= 15) {
+      confidence += 5; // Market hours boost for live data
+    }
+    
+    return Math.min(95, Math.max(25, Math.round(confidence)));
+  };
+
+  // Check if we have valid swing data
+  const hasValidData = !!(
+    data?.structure?.swing_points?.last_high && 
+    data?.structure?.swing_points?.last_low &&
+    data?.structure?.swing_points?.last_high > 0 &&
+    data?.structure?.swing_points?.last_low > 0
+  );
+
+  // Extract commonly used values from data
+  const signal = data.signal || 'NEUTRAL';
+  const structure = data.structure || { type: 'UNKNOWN', integrity_score: 0, swing_points: {} };
+  const confidence = data.confidence || calculateTrendConfidence(data);
+  const trend = data.trend || 'SIDEWAYS';
+  const isStrongTrend = structure.integrity_score >= 70;
 
   return (
     <div className="bg-gradient-to-br from-slate-900/60 to-slate-800/60 border border-emerald-600/40 rounded-lg p-3 sm:p-4 hover:border-emerald-500/50 transition-all shadow-lg">
