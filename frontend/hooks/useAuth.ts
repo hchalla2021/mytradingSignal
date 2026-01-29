@@ -189,8 +189,12 @@ export function useAuth() {
   }, [validateToken]);
 
   const login = useCallback(() => {
-    // Detect mobile device
-    const isMobile = typeof window !== 'undefined' && (/Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) || window.innerWidth <= 768);
+    // Guard for SSR
+    if (typeof window === 'undefined') return;
+    
+    // Detect mobile device - with safety checks for navigator
+    const isMobile = typeof navigator !== 'undefined' && 
+      (/Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) || window.innerWidth <= 768);
     
     if (isMobile) {
       // Mobile: Direct navigation

@@ -9,6 +9,8 @@ export default function DebugBanner() {
   const [wsStatus, setWsStatus] = useState('checking...');
 
   useEffect(() => {
+    if (typeof window === 'undefined') return;
+    
     const envConfig = getEnvironmentConfig();
     setConfig({
       environment: envConfig.environment,
@@ -18,13 +20,20 @@ export default function DebugBanner() {
       timestamp: new Date().toISOString(),
     });
 
-    // Test websocket connection
-    const ws = new WebSocket(API_CONFIG.wsUrl);
-    ws.onopen = () => setWsStatus('✅ Connected');
-    ws.onerror = () => setWsStatus('❌ Failed');
-    ws.onclose = () => setWsStatus('⚠️ Closed');
-    
-    setTimeout(() => ws.close(), 2000);
+    // Test websocket connection - wrapped in try-catch for mobile Safari
+    try {
+      const ws = new WebSocket(API_CONFIG.wsUrl);
+      ws.onopen = () => setWsStatus('✅ Connected');
+      ws.onerror = () => setWsStatus('❌ Failed');
+      ws.onclose = () => setWsStatus('⚠️ Closed');
+      
+      setTimeout(() => {
+        try { ws.close(); } catch (e) { /* ignore */ }
+      }, 2000);
+    } catch (e) {
+      setWsStatus('❌ WS Init Failed');
+      console.error('WebSocket init error:', e);
+    }
   }, []);
 
   if (!config) return null;

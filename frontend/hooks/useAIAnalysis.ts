@@ -26,7 +26,7 @@ export function useAIAnalysis(): UseAIAnalysisReturn {
   // Fetch AI analysis from backend
   const fetchAnalysis = async () => {
     try {
-      const response = await fetch(`${API_URL}/ai/analysis/all`);
+      const response = await fetch(`${API_URL}/api/analysis/analyze/all`);
       
       if (!response.ok) {
         throw new Error('Failed to fetch AI analysis');

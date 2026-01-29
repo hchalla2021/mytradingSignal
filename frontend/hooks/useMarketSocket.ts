@@ -76,6 +76,9 @@ export function useMarketSocket() {
   const pingIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
   const connect = useCallback(() => {
+    // Guard for SSR - window must exist
+    if (typeof window === 'undefined') return;
+    
     // Prevent multiple connections
     if (wsRef.current?.readyState === WebSocket.OPEN || 
         wsRef.current?.readyState === WebSocket.CONNECTING) {
@@ -88,18 +91,41 @@ export function useMarketSocket() {
     
     try {
       const WS_URL = getWebSocketURL(); // Dynamic URL based on environment
+      if (!WS_URL) {
+        console.error('WebSocket URL not configured');
+        setConnectionStatus('error');
+        return;
+      }
+      
+      log.debug('🔌 Attempting WebSocket connection to:', WS_URL);
       const ws = new WebSocket(WS_URL);
       wsRef.current = ws;
 
+      // Mobile Safari specific timeout - Safari is slower
+      const connectionTimeout = setTimeout(() => {
+        if (ws.readyState === WebSocket.CONNECTING) {
+          log.error('WebSocket connection timeout');
+          ws.close();
+          setConnectionStatus('error');
+        }
+      }, 10000); // 10 second timeout for mobile
+
       ws.onopen = () => {
+        clearTimeout(connectionTimeout);
         setIsConnected(true);
         setConnectionStatus('connected');
+        log.debug('✅ WebSocket connected successfully');
 
         // Start ping interval
         const pingInterval = parseInt(process.env.NEXT_PUBLIC_WS_PING_INTERVAL || '25000', 10);
         pingIntervalRef.current = setInterval(() => {
           if (ws.readyState === WebSocket.OPEN) {
-            ws.send('ping');
+            try {
+              ws.send('ping');
+            } catch (e) {
+              log.error('Failed to send ping:', e);
+              setConnectionStatus('error');
+            }
           }
         }, pingInterval);
       };
@@ -171,11 +197,13 @@ export function useMarketSocket() {
               break;
           }
         } catch (error) {
-          // Silent error handling for production
+          log.error('Failed to parse WebSocket message:', error);
+          // Don't throw - continue processing other messages
         }
       };
 
       ws.onclose = (event) => {
+        clearTimeout(connectionTimeout);
         setIsConnected(false);
         
         // Clear ping interval
@@ -183,10 +211,13 @@ export function useMarketSocket() {
           clearInterval(pingIntervalRef.current);
         }
 
+        log.debug(`WebSocket closed: code=${event.code}, reason=${event.reason}`);
+        
         // Auto-reconnect after delay (unless it's a clean close)
         if (event.code !== 1000) {
           setConnectionStatus('connecting'); // Show "Connecting..." instead of "Disconnected"
           const reconnectDelay = parseInt(process.env.NEXT_PUBLIC_WS_RECONNECT_DELAY || '3000', 10);
+          log.debug(`Reconnecting in ${reconnectDelay}ms...`);
           reconnectTimeoutRef.current = setTimeout(() => {
             if (!wsRef.current || wsRef.current.readyState === WebSocket.CLOSED) {
               connect();
@@ -197,7 +228,9 @@ export function useMarketSocket() {
         }
       };
 
-      ws.onerror = () => {
+      ws.onerror = (error) => {
+        clearTimeout(connectionTimeout);
+        log.error('WebSocket error:', error);
         setConnectionStatus('error');
       };
 
@@ -221,6 +254,9 @@ export function useMarketSocket() {
   }, []);
 
   useEffect(() => {
+    // Guard for SSR
+    if (typeof window === 'undefined') return;
+    
     // Load cached data from localStorage on mount (client-side only)
     try {
       const saved = localStorage.getItem(STORAGE_KEY);

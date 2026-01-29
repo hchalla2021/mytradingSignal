@@ -294,6 +294,7 @@ const TrendBaseCard = memo<TrendBaseCardProps>(({ symbol, name }) => {
   const confidence = data.confidence || calculateTrendConfidence(data);
   const trend = data.trend || 'SIDEWAYS';
   const isStrongTrend = structure.integrity_score >= 70;
+  const isModerateTrend = structure.integrity_score >= 40 && structure.integrity_score < 70;
 
   return (
     <div className="bg-gradient-to-br from-slate-900/60 to-slate-800/60 border border-emerald-600/40 rounded-lg p-3 sm:p-4 hover:border-emerald-500/50 transition-all shadow-lg">

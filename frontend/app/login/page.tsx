@@ -31,6 +31,8 @@ export default function LoginPage() {
   }, [searchParams, router]);
 
   const handleLoginClick = () => {
+    if (typeof window === 'undefined') return;
+    
     setLoading(true);
     setMessage("Opening Zerodha login...");
     
@@ -41,8 +43,9 @@ export default function LoginPage() {
       return;
     }
     
-    // Detect mobile device
-    const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) || window.innerWidth <= 768;
+    // Detect mobile device - guarded for SSR
+    const isMobile = typeof navigator !== 'undefined' && 
+      (/Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) || window.innerWidth <= 768);
     
     if (isMobile) {
       // Mobile: Direct navigation

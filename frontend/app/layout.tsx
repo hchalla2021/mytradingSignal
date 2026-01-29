@@ -1,5 +1,19 @@
 import type { Metadata } from 'next'
 import './globals.css'
+import { GlobalErrorHandler } from '@/components/GlobalErrorHandler'
+
+// Mobile-optimized viewport configuration for ALL browsers
+export const viewport = {
+  width: 'device-width',
+  initialScale: 1,
+  maximumScale: 5,
+  userScalable: true,
+  viewportFit: 'cover', // For iOS notch handling
+  themeColor: [
+    { media: '(prefers-color-scheme: light)', color: '#ffffff' },
+    { media: '(prefers-color-scheme: dark)', color: '#0a0e1a' }
+  ]
+}
 
 export const metadata: Metadata = {
   title: 'MyDailyTradingSignals - Live Market Dashboard',
@@ -29,7 +43,7 @@ export default function RootLayout({
     <html lang="en">
       <head>
         <link rel="icon" href="/favicon.ico" />
-        {/* �🖥️ RESPONSIVE VIEWPORT - Works on both mobile and desktop */}
+        {/* 🖥️ RESPONSIVE VIEWPORT - Works on both mobile and desktop */}
         <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0, user-scalable=yes" />
         <meta name="mobile-web-app-capable" content="yes" />
         <meta name="apple-mobile-web-app-capable" content="yes" />
@@ -37,9 +51,9 @@ export default function RootLayout({
         <meta httpEquiv="Cache-Control" content="no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0" />
         <meta httpEquiv="Pragma" content="no-cache" />
         <meta httpEquiv="Expires" content="0" />
-        <meta name="version" content={Date.now().toString()} />
       </head>
       <body className="min-h-screen bg-gradient-to-br from-dark-bg via-dark-surface to-dark-elevated antialiased">
+        <GlobalErrorHandler />
         {children}
         {/* Force reload script */}
         <script dangerouslySetInnerHTML={{

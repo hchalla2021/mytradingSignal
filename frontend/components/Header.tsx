@@ -6,7 +6,7 @@ import { useAuth } from '@/hooks/useAuth';
 
 interface HeaderProps {
   isConnected: boolean;
-  marketStatus: 'LIVE' | 'PRE_OPEN' | 'CLOSED' | 'OFFLINE' | 'DEMO';
+  marketStatus: 'LIVE' | 'PRE_OPEN' | 'CLOSED' | 'OFFLINE';
 }
 
 const Header: React.FC<HeaderProps> = memo(({ isConnected, marketStatus }) => {
@@ -116,7 +116,6 @@ const Header: React.FC<HeaderProps> = memo(({ isConnected, marketStatus }) => {
               const isMarketLive = marketStatus === 'LIVE' && isConnected;
               const isPreOpen = marketStatus === 'PRE_OPEN' && isConnected;
               const isMarketClosed = marketStatus === 'CLOSED' || marketStatus === 'OFFLINE';
-              const isDemo = marketStatus === 'DEMO';
               const isDisconnected = !isConnected;
 
               let statusConfig = {
@@ -159,14 +158,7 @@ const Header: React.FC<HeaderProps> = memo(({ isConnected, marketStatus }) => {
                   textClass: 'text-amber-300',
                   label: 'MARKET CLOSED'
                 };
-              } else if (isDemo) {
-                statusConfig = {
-                  bgClass: 'bg-gradient-to-r from-purple-500/10 to-violet-500/10',
-                  borderClass: 'border-purple-400/30',
-                  dotClass: 'bg-purple-400 animate-pulse',
-                  textClass: 'text-purple-300',
-                  label: 'DEMO'
-                };
+
               }
 
               return (

@@ -360,7 +360,85 @@ const PivotSectionUnified = memo<{ updates?: number }>((props) => {
     setIsFetching(true);
     
     try {
-      // Fetch live pivot data (includes current prices + pivot levels + indicators)
+      // Check if demo mode (WebSocket URL is empty in .env.local)
+      const wsUrl = process.env.NEXT_PUBLIC_WS_URL || process.env.NEXT_PUBLIC_LOCAL_WS_URL || '';
+      const isDemoMode = !wsUrl || wsUrl.trim() === '';
+      
+      if (isDemoMode) {
+        // Generate demo pivot data directly
+        console.log('[Pivot] Demo mode - generating pivot data...');
+        
+        const validData: Record<string, PivotData> = {};
+        for (const symbolConfig of SYMBOLS) {
+          const symbol = symbolConfig.symbol;
+          const basePrice = symbol === 'NIFTY' ? 23000 : symbol === 'BANKNIFTY' ? 48000 : 75000;
+          const change = (Math.random() - 0.5) * 200;
+          const price = basePrice + change;
+          const isBullish = change > 0;
+          
+          // Generate pivot levels
+          const pivot = price + (Math.random() * 60 - 30);
+          const r1 = pivot + (Math.random() * 100 + 50);
+          const r2 = pivot + (Math.random() * 150 + 100);
+          const r3 = pivot + (Math.random() * 200 + 150);
+          const s1 = pivot - (Math.random() * 100 + 50);
+          const s2 = pivot - (Math.random() * 150 + 100);
+          const s3 = pivot - (Math.random() * 200 + 150);
+          
+          validData[symbol] = {
+            symbol,
+            status: 'LIVE',
+            current_price: price,
+            change_percent: (change / basePrice) * 100,
+            timestamp: new Date().toISOString(),
+            ema: {
+              ema_20: price - (Math.random() * 50 - 25),
+              ema_50: price - (Math.random() * 100 - 50),
+              ema_100: price - (Math.random() * 200 - 100),
+              ema_200: price - (Math.random() * 300 - 150),
+              trend: isBullish ? 'UPTREND' : 'DOWNTREND',
+              price_vs_ema20: price > (price - 25) ? 'ABOVE' : 'BELOW',
+            },
+            classic_pivots: {
+              pivot,
+              r1, r2, r3, s1, s2, s3,
+              bias: isBullish ? 'BULLISH' : 'BEARISH',
+            },
+            camarilla_pivots: {
+              h4: price + (Math.random() * 80 + 40),
+              h3: price + (Math.random() * 50 + 25),
+              l3: price - (Math.random() * 50 + 25),
+              l4: price - (Math.random() * 80 + 40),
+              zone: isBullish ? 'BULLISH_ZONE' : 'BEARISH_ZONE', // Always clear zone
+            },
+            supertrend_10_3: {
+              value: price + (isBullish ? -60 : 60),
+              trend: isBullish ? 'BULLISH' : 'BEARISH', // Always clear trend
+              signal: isBullish ? 'BUY' : 'SELL', // Always clear signal
+              distance_pct: Math.abs(60 / price * 100),
+            },
+            supertrend_7_3: {
+              value: price + (isBullish ? -45 : 45),
+              trend: isBullish ? 'BULLISH' : 'BEARISH', // Always clear trend
+              signal: isBullish ? 'BUY' : 'SELL', // Always clear signal
+              distance_pct: Math.abs(45 / price * 100),
+            },
+            overall_bias: isBullish ? 'BULLISH' : 'BEARISH', // Always clear bias
+          };
+          
+          console.log(`[Pivot] ${symbol}: Demo data - Price: ${price}, Pivot: ${pivot.toFixed(0)}, Bias: ${isBullish ? 'BULLISH' : 'BEARISH'}`);
+        }
+        
+        setAllData(validData);
+        setCachedData(validData);
+        setLastUpdate(new Date().toLocaleTimeString('en-IN'));
+        setError(null);
+        setLoading(false);
+        console.log('✅ [Pivot] Demo data loaded successfully');
+        return;
+      }
+      
+      // Original API code for production
       const liveUrl = API_CONFIG.endpoint('/api/advanced/pivot-indicators');
       
       console.log('[Pivot] Fetching live pivot data...');

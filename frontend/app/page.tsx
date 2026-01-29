@@ -1,31 +1,74 @@
 'use client';
 
-import React, { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo } from 'react';
+import dynamic from 'next/dynamic';
 import { useMarketSocket } from '@/hooks/useMarketSocket';
 import { useAIAnalysis } from '@/hooks/useAIAnalysis';
 import { useOverallMarketOutlook } from '@/hooks/useOverallMarketOutlook';
 import { useAuth } from '@/hooks/useAuth';
 import Header from '@/components/Header';
-import IndexCard from '@/components/IndexCard';
-import LiveStatus from '@/components/LiveStatus';
-import SystemStatusBanner from '@/components/SystemStatusBanner';
-import { AnalysisCard } from '@/components/AnalysisCard';
-import VWMAEMAFilterCard from '@/components/VWMAEMAFilterCard';
-import VolumePulseCard from '@/components/VolumePulseCard';
-import TrendBaseCard from '@/components/TrendBaseCard';
-import ZoneControlCard from '@/components/ZoneControlCard';
-import CandleIntentCard from '@/components/CandleIntentCard';
-import PivotSectionUnified from '@/components/PivotSectionUnified';
-import PivotDetailedDisplay from '@/components/PivotDetailedDisplay';
+
+// Import status component for both mobile and desktop
+const LiveStatus = dynamic(() => import('@/components/LiveStatus'), { 
+  ssr: false,
+  loading: () => (
+    <div className="bg-dark-surface/60 rounded-xl p-4 animate-pulse border border-emerald-500/20">
+      <div className="h-4 bg-gray-700 rounded mb-2"></div>
+      <div className="h-3 bg-gray-700 rounded w-3/4"></div>
+    </div>
+  )
+});
+
+const SystemStatusBanner = dynamic(() => import('@/components/SystemStatusBanner'), { 
+  ssr: false 
+});
+
+// Dynamic imports for components that use live data - prevents SSR issues
+const IndexCard = dynamic(() => import('@/components/IndexCard'), { 
+  ssr: false,
+  loading: () => (
+    <div className="bg-dark-surface/60 rounded-xl p-6 animate-pulse border border-emerald-500/20">
+      <div className="h-6 bg-gray-700 rounded mb-4"></div>
+      <div className="h-4 bg-gray-700 rounded mb-2"></div>
+      <div className="h-4 bg-gray-700 rounded w-3/4"></div>
+    </div>
+  )
+});
+
+const AnalysisCard = dynamic(() => import('@/components/AnalysisCard').then(mod => ({ default: mod.AnalysisCard })), { 
+  ssr: false,
+  loading: () => (
+    <div className="bg-dark-surface/60 rounded-xl p-6 animate-pulse border border-emerald-500/20">
+      <div className="h-4 bg-gray-700 rounded mb-3"></div>
+      <div className="h-3 bg-gray-700 rounded mb-2"></div>
+      <div className="h-3 bg-gray-700 rounded w-2/3"></div>
+    </div>
+  )
+});
+
+const VWMAEMAFilterCard = dynamic(() => import('@/components/VWMAEMAFilterCard'), { ssr: false });
+const VolumePulseCard = dynamic(() => import('@/components/VolumePulseCard'), { ssr: false });
+const TrendBaseCard = dynamic(() => import('@/components/TrendBaseCard'), { ssr: false });
+const ZoneControlCard = dynamic(() => import('@/components/ZoneControlCard'), { ssr: false });
+const CandleIntentCard = dynamic(() => import('@/components/CandleIntentCard'), { ssr: false });
+const PivotSectionUnified = dynamic(() => import('@/components/PivotSectionUnified'), { ssr: false });
+const PivotDetailedDisplay = dynamic(() => import('@/components/PivotDetailedDisplay'), { ssr: false });
 
 export default function Home() {
   // 🔥 Force fresh mount on page load - fixes desktop browser caching
-  const [mountKey, setMountKey] = useState(() => Date.now());
+  const [mountKey, setMountKey] = useState(0);
+  const [currentYear, setCurrentYear] = useState(2026); // Static default for SSR
   const [marketConfidence, setMarketConfidence] = useState(50); // Default value for SSR
   const [bankniftyConfidence, setBankniftyConfidence] = useState(50);
   const [sensexConfidence, setSensexConfidence] = useState(50);
   
-  const { marketData, isConnected, connectionStatus } = useMarketSocket();
+  // Use standard WebSocket hook
+  const {
+    marketData,
+    connectionStatus,
+    isConnected,
+    reconnect
+  } = useMarketSocket();
   const { alertData, loading: aiLoading, error: aiError } = useAIAnalysis();
   const { outlookData, loading: outlookLoading } = useOverallMarketOutlook();
   const { isAuthenticated } = useAuth();
@@ -42,8 +85,14 @@ export default function Home() {
     }
   }, []);
 
-  // Check for auth callback success
+  // Check for auth callback success - guarded for SSR
   useEffect(() => {
+    if (typeof window === 'undefined') return;
+    
+    // Set mount key and current year on client
+    setMountKey(Date.now());
+    setCurrentYear(new Date().getFullYear());
+    
     const params = new URLSearchParams(window.location.search);
     const authStatus = params.get('auth');
     
@@ -289,10 +338,11 @@ export default function Home() {
   }, []);
 
   // Determine market status from actual data (memoized)
-  const marketStatus = useMemo(
-    () => marketData.NIFTY?.status || marketData.BANKNIFTY?.status || marketData.SENSEX?.status || 'OFFLINE',
-    [marketData.NIFTY?.status, marketData.BANKNIFTY?.status, marketData.SENSEX?.status]
-  );
+  const marketStatus = useMemo(() => {
+    const status = marketData.NIFTY?.status || marketData.BANKNIFTY?.status || marketData.SENSEX?.status || 'OFFLINE';
+    // Filter out 'DEMO' status as Header component doesn't expect it
+    return status === 'DEMO' ? 'OFFLINE' : status as 'LIVE' | 'OFFLINE' | 'CLOSED' | 'PRE_OPEN';
+  }, [marketData.NIFTY?.status, marketData.BANKNIFTY?.status, marketData.SENSEX?.status]);
 
   return (
     <main className="min-h-screen">
@@ -304,6 +354,7 @@ export default function Home() {
       
       {/* Connection Status Bar */}
       <div className="w-full px-2 sm:px-4 lg:px-6 xl:px-8 py-2">
+        {/* Use same status component for both mobile and desktop */}
         <LiveStatus status={connectionStatus} isConnected={isConnected} />
       </div>
 
@@ -1162,7 +1213,8 @@ export default function Home() {
                 }`}>
                   {analyses?.NIFTY?.indicators?.ema_alignment === 'ALL_BULLISH' ? '🟢 BULLISH' :
                    analyses?.NIFTY?.indicators?.ema_alignment === 'ALL_BEARISH' ? '🔴 BEARISH' :
-                   ''}
+                   analyses?.NIFTY?.indicators?.ema_alignment === 'COMPRESSION' ? '🟡 COMPRESSION' :
+                   '🟡 NEUTRAL'}
                 </div>
               </div>
             </div>
@@ -1225,23 +1277,31 @@ export default function Home() {
                     <div className="bg-dark-surface/50 border border-emerald-500/30 rounded-lg p-2.5">
                       <div className="text-[10px] font-bold text-dark-secondary uppercase tracking-wider opacity-70 mb-1">Trend Status</div>
                       <div className={`text-sm sm:text-base font-bold ${
-                        item.data.indicators.trend_status === 'STRONG_UPTREND' ? 'text-bullish' :
-                        item.data.indicators.trend_status === 'STRONG_DOWNTREND' ? 'text-bearish' :
+                        item.data.indicators.trend_status === 'STRONG_UPTREND' || item.data.indicators.trend_status === 'WEAK_UPTREND' ? 'text-bullish' :
+                        item.data.indicators.trend_status === 'STRONG_DOWNTREND' || item.data.indicators.trend_status === 'WEAK_DOWNTREND' ? 'text-bearish' :
                         'text-yellow-300'
                       }`}>
                         {item.data.indicators.trend_status === 'STRONG_UPTREND' ? '📈 Strong Uptrend' :
                          item.data.indicators.trend_status === 'STRONG_DOWNTREND' ? '📉 Strong Downtrend' :
-                         item.data.indicators.trend_status === 'WEAK_UPTREND' ? '📊 Weak Uptrend' :
-                         item.data.indicators.trend_status === 'WEAK_DOWNTREND' ? '📊 Weak Downtrend' :
-                         item.data.indicators.trend_status.replace(/_/g, ' ')}
+                         item.data.indicators.trend_status === 'WEAK_UPTREND' ? '� Weak Uptrend' :
+                         item.data.indicators.trend_status === 'WEAK_DOWNTREND' ? '🔴 Weak Downtrend' :
+                         item.data.indicators.trend_status === 'COMPRESSION' ? '🟡 Compression' :
+                         item.data.indicators.trend_status === 'TRANSITION' ? '🟡 Transition' :
+                         '🟡 ' + item.data.indicators.trend_status.replace(/_/g, ' ')}
                       </div>
                     </div>
 
                     {/* Entry Status */}
                     <div className="flex items-center justify-between bg-dark-surface/40 border border-emerald-500/30 rounded-lg px-3 py-2">
                       <span className="text-xs sm:text-sm text-dark-secondary font-medium">Entries:</span>
-                      <span className={`text-xs sm:text-sm font-bold ${item.data.indicators.buy_allowed ? 'text-bullish' : 'text-bearish'}`}>
-                        {item.data.indicators.buy_allowed ? '✅ ALLOWED' : '❌ AVOID'}
+                      <span className={`text-xs sm:text-sm font-bold ${
+                        item.data.indicators.buy_allowed ? 'text-bullish' : 
+                        item.data.indicators.trend_status === 'COMPRESSION' || item.data.indicators.trend_status === 'TRANSITION' ? 'text-yellow-300' :
+                        'text-bearish'
+                      }`}>
+                        {item.data.indicators.buy_allowed ? '✅ ALLOWED' : 
+                         item.data.indicators.trend_status === 'COMPRESSION' || item.data.indicators.trend_status === 'TRANSITION' ? '🟡 WAIT' :
+                         '❌ AVOID'}
                       </span>
                     </div>
 
@@ -1265,7 +1325,11 @@ export default function Home() {
                     {item.data.indicators.pullback_level && item.data.indicators.pullback_level !== 'NONE' && (
                       <div className="flex items-center justify-between bg-dark-surface/40 border border-emerald-500/30 rounded-lg px-3 py-2">
                         <span className="text-xs sm:text-sm text-dark-secondary font-medium">Pullback:</span>
-                        <span className="text-xs sm:text-sm font-bold text-dark-text">{item.data.indicators.pullback_level}</span>
+                        <span className={`text-xs sm:text-sm font-bold ${
+                          item.data.indicators.pullback_level === 'PULLBACK' ? 'text-bullish' :
+                          item.data.indicators.pullback_level === 'EXTENSION' ? 'text-bearish' :
+                          'text-yellow-300'
+                        }`}>{item.data.indicators.pullback_level}</span>
                       </div>
                     )}
 
@@ -1734,14 +1798,14 @@ export default function Home() {
               {/* Market Status Indicator */}
               <div className={`px-3 py-1.5 rounded-lg text-xs font-bold border shadow-sm ${
                 analyses?.NIFTY?.indicators?.supertrend_10_2_signal === 'BUY'
-                  ? 'bg-bullish/20 text-bullish border-bullish/40' :
+                  ? 'bg-green-900/20 text-green-400 border-green-500/40' :
                 analyses?.NIFTY?.indicators?.supertrend_10_2_signal === 'SELL'
-                  ? 'bg-bearish/20 text-bearish border-bearish/40' :
-                  'bg-yellow-500/20 text-yellow-300 border-yellow-500/40'
+                  ? 'bg-red-900/20 text-red-400 border-red-500/40' :
+                  'bg-yellow-900/20 text-yellow-300 border-yellow-500/40'
               }`}>
                 {analyses?.NIFTY?.indicators?.supertrend_10_2_signal === 'BUY' ? '🟢 BUY SIGNAL' :
                  analyses?.NIFTY?.indicators?.supertrend_10_2_signal === 'SELL' ? '🔴 SELL SIGNAL' :
-                 ''}
+                 '🟡 NEUTRAL'}
               </div>
             </div>
           </div>
@@ -1756,10 +1820,10 @@ export default function Home() {
                 !item.data 
                   ? 'bg-dark-card/30'
                   : item.data.indicators?.supertrend_10_2_trend === 'BULLISH'
-                  ? 'bg-bullish/5 shadow-lg shadow-bullish/20'
+                  ? 'bg-green-900/10 shadow-lg shadow-green-500/10'
                   : item.data.indicators?.supertrend_10_2_trend === 'BEARISH'
-                  ? 'bg-bearish/5 shadow-lg shadow-bearish/20'
-                  : 'bg-red-500/5 shadow-lg shadow-red-500/20'
+                  ? 'bg-red-900/10 shadow-lg shadow-red-500/10'
+                  : 'bg-yellow-900/10 shadow-lg shadow-yellow-500/10'
               }`}>
                 {/* Title & Signal - Responsive Layout */}
                 <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-3">
@@ -1774,10 +1838,10 @@ export default function Home() {
                     {/* Signal Badge - Only show when valid signal exists */}
                     {item.data?.indicators?.supertrend_10_2_signal && (item.data.indicators.supertrend_10_2_signal === 'BUY' || item.data.indicators.supertrend_10_2_signal === 'SELL') && (
                       <span className={`text-xs font-bold px-2 py-1 rounded-md whitespace-nowrap flex-shrink-0 ${
-                        item.data.indicators.supertrend_10_2_signal === 'BUY' ? 'bg-bullish/20 text-bullish' :
-                        'bg-bearish/20 text-bearish'
+                        item.data.indicators.supertrend_10_2_signal === 'BUY' ? 'bg-green-900/20 text-green-400' :
+                        'bg-red-900/20 text-red-400'
                       }`}>
-                        {item.data.indicators.supertrend_10_2_signal === 'BUY' ? '✅ BUY' : '❌ SELL'}
+                        {item.data.indicators.supertrend_10_2_signal === 'BUY' ? '🟢 BUY' : '🔴 SELL'}
                       </span>
                     )}
                   </div>
@@ -1788,18 +1852,19 @@ export default function Home() {
                     {/* SuperTrend Status */}
                     <div className={`p-3 rounded-xl border-2 text-center ${
                       item.data.indicators.supertrend_10_2_trend === 'BULLISH' 
-                        ? 'bg-bullish/10 border-emerald-500/30 text-bullish' 
+                        ? 'bg-green-900/20 border-green-500/30 text-green-400' 
                         : item.data.indicators.supertrend_10_2_trend === 'BEARISH'
-                        ? 'bg-bearish/10 border-emerald-500/30 text-bearish'
-                        : 'bg-yellow-500/10 border-emerald-500/30 text-yellow-400'
+                        ? 'bg-red-900/20 border-red-500/30 text-red-400'
+                        : 'bg-yellow-900/20 border-yellow-500/30 text-yellow-300'
                     }`}>
                       <div className="text-lg font-bold">
                         {item.data.indicators.supertrend_10_2_trend === 'BULLISH' ? '📈 BULLISH TREND' :
                          item.data.indicators.supertrend_10_2_trend === 'BEARISH' ? '📉 BEARISH TREND' :
-                         '⚡ TREND CHANGE'}
+                         '🟡 NEUTRAL TREND'}
                       </div>
                       <div className="text-xs mt-1 opacity-80">
-                        SuperTrend is {item.data.indicators.supertrend_10_2_trend?.toLowerCase() || 'changing'}
+                        SuperTrend is {item.data.indicators.supertrend_10_2_trend === 'BULLISH' ? 'bullish' :
+                                      item.data.indicators.supertrend_10_2_trend === 'BEARISH' ? 'bearish' : 'neutral'}
                       </div>
                     </div>
 
@@ -1812,9 +1877,9 @@ export default function Home() {
                       <div className="bg-dark-surface/40 border border-emerald-500/30 rounded-lg p-3 text-center">
                         <div className="text-xs text-dark-secondary mb-1">SuperTrend Level</div>
                         <div className={`font-bold text-sm ${
-                          item.data.indicators.supertrend_10_2_trend === 'BULLISH' ? 'text-bullish' :
-                          item.data.indicators.supertrend_10_2_trend === 'BEARISH' ? 'text-bearish' :
-                          'text-yellow-400'
+                          item.data.indicators.supertrend_10_2_trend === 'BULLISH' ? 'text-green-400' :
+                          item.data.indicators.supertrend_10_2_trend === 'BEARISH' ? 'text-red-400' :
+                          'text-yellow-300'
                         }`}>
                           ₹{item.data.indicators.supertrend_10_2_value}
                         </div>
@@ -1831,16 +1896,16 @@ export default function Home() {
                       </div>
                       <div className={`text-xs p-2 rounded border-l-4 ${
                         Math.abs(item.data.indicators.supertrend_10_2_distance_pct) < 0.5 
-                          ? 'border-yellow-500/50 bg-yellow-500/10 text-yellow-400' 
+                          ? 'border-yellow-500/50 bg-yellow-900/10 text-yellow-300' 
                           : item.data.indicators.supertrend_10_2_trend === 'BULLISH'
-                          ? 'border-emerald-500/50 bg-bullish/10 text-bullish'
-                          : 'border-emerald-500/50 bg-bearish/10 text-bearish'
+                          ? 'border-green-500/50 bg-green-900/10 text-green-400'
+                          : 'border-red-500/50 bg-red-900/10 text-red-400'
                       }`}>
                         {Math.abs(item.data.indicators.supertrend_10_2_distance_pct) < 0.5 
-                          ? '⚠️ Very close to SuperTrend line - Watch for trend change'
+                          ? '🟡 Very close to SuperTrend line - Watch for trend change'
                           : item.data.indicators.supertrend_10_2_trend === 'BULLISH'
-                          ? '✅ Good distance above SuperTrend - Strong uptrend'
-                          : '✅ Good distance below SuperTrend - Strong downtrend'
+                          ? '🟢 Good distance above SuperTrend - Strong uptrend'
+                          : '🔴 Good distance below SuperTrend - Strong downtrend'
                         }
                       </div>
                     </div>
@@ -1848,15 +1913,15 @@ export default function Home() {
                     {/* Simple Entry/Exit Guide */}
                     <div className={`p-3 rounded-lg border-l-4 ${
                       item.data.indicators.supertrend_10_2_signal === 'BUY' 
-                        ? 'border-emerald-500/50 bg-bullish/5 text-bullish'
+                        ? 'border-green-500/50 bg-green-900/10 text-green-400'
                         : item.data.indicators.supertrend_10_2_signal === 'SELL'
-                        ? 'border-emerald-500/50 bg-bearish/5 text-bearish'
-                        : 'border-emerald-500/50 bg-yellow-500/5 text-yellow-400'
+                        ? 'border-red-500/50 bg-red-900/10 text-red-400'
+                        : 'border-yellow-500/50 bg-yellow-900/10 text-yellow-300'
                     }`}>
                       <div className="font-bold text-sm mb-1">
-                        {item.data.indicators.supertrend_10_2_signal === 'BUY' ? 'BUY SIGNAL ACTIVE' :
-                         item.data.indicators.supertrend_10_2_signal === 'SELL' ? 'SELL SIGNAL ACTIVE' :
-                         'HOLD - NO CLEAR SIGNAL'}
+                        {item.data.indicators.supertrend_10_2_signal === 'BUY' ? '🟢 BUY SIGNAL ACTIVE' :
+                         item.data.indicators.supertrend_10_2_signal === 'SELL' ? '🔴 SELL SIGNAL ACTIVE' :
+                         '🟡 HOLD - NO CLEAR SIGNAL'}
                       </div>
                       <div className="text-xs opacity-90">
                         {item.data.indicators.supertrend_10_2_signal === 'BUY' ? 'Price above SuperTrend line - Consider long positions' :
@@ -2242,7 +2307,7 @@ export default function Home() {
       {/* Footer */}
       <footer className="border-t border-dark-border/40 mt-auto py-4 sm:py-5 bg-gradient-to-r from-dark-surface/50 to-dark-card/50 backdrop-blur-sm">
         <div className="w-full px-2 sm:px-4 lg:px-6 xl:px-8 flex items-center justify-between text-dark-muted text-xs sm:text-sm font-medium">
-          <span className="tracking-wide">MyDailyTradingSignals © {new Date().getFullYear()}</span>
+          <span className="tracking-wide">MyDailyTradingSignals © {currentYear}</span>
           <span className="flex items-center gap-2">
             <span className="w-2 h-2 bg-bullish rounded-full animate-pulse shadow-md shadow-bullish" />
             <span className="hidden sm:inline">Built for</span> Harikrishna Challa

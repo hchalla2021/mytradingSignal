@@ -225,19 +225,19 @@ const AnalysisCardContent = memo<AnalysisCardProps>(({ analysis }) => {
           <div className="grid grid-cols-2 gap-2">
             <TechnicalIndicator 
               label="EMA 20" 
-              value={indicators.ema_20 ? `₹${indicators.ema_20.toFixed(2)}` : 'N/A'} 
+              value={indicators.ema_20 && typeof indicators.ema_20 === 'number' ? `₹${indicators.ema_20.toFixed(2)}` : 'N/A'} 
               status={displayPrice > indicators.ema_20 ? 'positive' : displayPrice < indicators.ema_20 ? 'negative' : 'neutral'}
               showArrow={true}
             />
             <TechnicalIndicator 
               label="EMA 50" 
-              value={indicators.ema_50 ? `₹${indicators.ema_50.toFixed(2)}` : 'N/A'} 
+              value={indicators.ema_50 && typeof indicators.ema_50 === 'number' ? `₹${indicators.ema_50.toFixed(2)}` : 'N/A'} 
               status={displayPrice > indicators.ema_50 ? 'positive' : displayPrice < indicators.ema_50 ? 'negative' : 'neutral'}
               showArrow={true}
             />
             <TechnicalIndicator 
               label="EMA 100" 
-              value={indicators.ema_100 ? `₹${indicators.ema_100.toFixed(2)}` : 'N/A'} 
+              value={indicators.ema_100 && typeof indicators.ema_100 === 'number' ? `₹${indicators.ema_100.toFixed(2)}` : 'N/A'} 
               status={displayPrice > indicators.ema_100 ? 'positive' : displayPrice < indicators.ema_100 ? 'negative' : 'neutral'}
               showArrow={true}
             />
@@ -283,7 +283,7 @@ const AnalysisCardContent = memo<AnalysisCardProps>(({ analysis }) => {
           <div className="grid grid-cols-2 gap-2">
             <TechnicalIndicator
               label="RSI"
-              value={indicators.rsi ? indicators.rsi.toFixed(0) : 'N/A'}
+              value={indicators.rsi && typeof indicators.rsi === 'number' ? indicators.rsi.toFixed(0) : 'N/A'}
               status={indicators.rsi > 70 ? 'negative' : indicators.rsi < 30 ? 'positive' : 'neutral'}
               highlight={
                 indicators.rsi >= 75 || indicators.rsi <= 25 ? 'critical' : 
@@ -293,7 +293,7 @@ const AnalysisCardContent = memo<AnalysisCardProps>(({ analysis }) => {
             />
             <TechnicalIndicator
               label="Momentum"
-              value={indicators.momentum ? `${indicators.momentum.toFixed(0)}/100` : indicators.candle_strength ? `${(indicators.candle_strength * 100).toFixed(0)}%` : 'N/A'}
+              value={indicators.momentum && typeof indicators.momentum === 'number' ? `${indicators.momentum.toFixed(0)}/100` : indicators.candle_strength && typeof indicators.candle_strength === 'number' ? `${(indicators.candle_strength * 100).toFixed(0)}%` : 'N/A'}
               status={indicators.momentum > 70 ? 'positive' : indicators.momentum < 30 ? 'negative' : 'neutral'}
             />
           </div>
@@ -305,7 +305,7 @@ const AnalysisCardContent = memo<AnalysisCardProps>(({ analysis }) => {
           <div className="grid grid-cols-2 gap-2">
             <TechnicalIndicator
               label="PCR"
-              value={indicators.pcr ? indicators.pcr.toFixed(2) : 'N/A'}
+              value={indicators.pcr && typeof indicators.pcr === 'number' ? indicators.pcr.toFixed(2) : 'N/A'}
               status={indicators.pcr > 1.2 ? 'positive' : indicators.pcr < 0.8 ? 'negative' : 'neutral'}
               highlight={
                 indicators.pcr >= 1.8 || indicators.pcr <= 0.5 ? 'critical' : 
@@ -317,8 +317,8 @@ const AnalysisCardContent = memo<AnalysisCardProps>(({ analysis }) => {
             />
             <TechnicalIndicator
               label="OI Change"
-              value={indicators.oi_change !== null ? `${indicators.oi_change > 0 ? '+' : ''}${indicators.oi_change.toFixed(2)}%` : 'N/A'}
-              status={indicators.oi_change > 0 ? 'positive' : 'negative'}
+              value={indicators.oi_change && typeof indicators.oi_change === 'number' ? `${indicators.oi_change > 0 ? '+' : ''}${indicators.oi_change.toFixed(2)}%` : 'N/A'}
+              status={indicators.oi_change && indicators.oi_change > 0 ? 'positive' : 'negative'}
             />
           </div>
         </div>

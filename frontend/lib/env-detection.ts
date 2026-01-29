@@ -33,7 +33,8 @@ export function detectEnvironment(): Environment {
     return 'local'; // Default for server
   }
 
-  // Client-side detection based on hostname
+  // Client-side detection based on hostname - with guard
+  if (typeof window === 'undefined') return 'local';
   const hostname = window.location.hostname.toLowerCase();
 
   // Local indicators

@@ -85,9 +85,10 @@ async def lifespan(app: FastAPI):
         print("   Services will start but may not connect to Zerodha")
         print("   Please login via UI or run: python quick_token_fix.py")
 
-    # Auto update futures on startup
-    from services.auto_futures_updater import check_and_update_futures_on_startup
-    await check_and_update_futures_on_startup()
+    # Auto update futures on startup - DISABLED TO PREVENT STARTUP HANG
+    # from services.auto_futures_updater import check_and_update_futures_on_startup
+    # await check_and_update_futures_on_startup()
+    print("⚠️ Futures auto-update disabled to prevent startup hang")
 
     # Cache
     cache = CacheService()

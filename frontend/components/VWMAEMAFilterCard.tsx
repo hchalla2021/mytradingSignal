@@ -75,9 +75,21 @@ export const VWMAEMAFilterCard: React.FC<VWMAEMAFilterCardProps> = ({ analysis, 
     );
   }
 
+  // Safety check - ensure indicators exist
   const { indicators } = analysis;
-  const price = indicators.price;
-  const vwma20 = indicators.vwma_20;
+  if (!indicators) {
+    return (
+      <div className="bg-dark-surface rounded-xl border-2 border-yellow-500/30 p-4">
+        <div className="text-center space-y-2">
+          <div className="text-yellow-400">⚠️ No indicator data available</div>
+          <div className="text-xs text-gray-400">Waiting for market data...</div>
+        </div>
+      </div>
+    );
+  }
+
+  const price = indicators.price || 0;
+  const vwma20 = indicators.vwma_20 || 0;
 
   // Condition checks - VWMA only
   const priceAboveVWMA = price > vwma20;
@@ -101,7 +113,7 @@ export const VWMAEMAFilterCard: React.FC<VWMAEMAFilterCardProps> = ({ analysis, 
   let signalEmoji = '⏳';
   let signalTextColor = 'text-yellow-300';
   let signalTitle = 'WAIT';
-  let signalSubtitle = `Confidence: ${confidence.toFixed(1)}%`;
+  let signalSubtitle = `Confidence: ${(confidence || 0).toFixed(1)}%`;
   let conditionText = 'Analyzing trend alignment for entry opportunity';
   let badgeText = 'WAIT';
   let badgeBg = 'bg-yellow-500/20 text-yellow-300 border border-yellow-500/40';
@@ -110,8 +122,8 @@ export const VWMAEMAFilterCard: React.FC<VWMAEMAFilterCardProps> = ({ analysis, 
     signalEmoji = '🚀';
     signalTextColor = 'text-bullish';
     signalTitle = 'STRONG BUY';
-    signalSubtitle = `Confidence: ${confidence.toFixed(1)}%`;
-    conditionText = `Strong bullish trend confirmed - Price ${vwmaDistance.toFixed(1)}% above key levels`;
+    signalSubtitle = `Confidence: ${(confidence || 0).toFixed(1)}%`;
+    conditionText = `Strong bullish trend confirmed - Price ${(vwmaDistance || 0).toFixed(1)}% above key levels`;
     badgeText = 'STRONG BUY';
     badgeBg = 'bg-bullish/30 text-bullish border border-bullish/60 shadow-lg shadow-bullish/30';
   } else if (isModerateBullish) {
@@ -126,8 +138,8 @@ export const VWMAEMAFilterCard: React.FC<VWMAEMAFilterCardProps> = ({ analysis, 
     signalEmoji = '🔻';
     signalTextColor = 'text-bearish';
     signalTitle = 'STRONG SELL';
-    signalSubtitle = `Confidence: ${confidence.toFixed(1)}%`;
-    conditionText = `Strong bearish trend confirmed - Price ${vwmaDistance.toFixed(1)}% below key levels`;
+    signalSubtitle = `Confidence: ${(confidence || 0).toFixed(1)}%`;
+    conditionText = `Strong bearish trend confirmed - Price ${(vwmaDistance || 0).toFixed(1)}% below key levels`;
     badgeText = 'STRONG SELL';
     badgeBg = 'bg-bearish/30 text-bearish border border-bearish/60 shadow-lg shadow-bearish/30';
   } else if (isModerateBearish) {
@@ -195,17 +207,17 @@ export const VWMAEMAFilterCard: React.FC<VWMAEMAFilterCardProps> = ({ analysis, 
                 <div className="text-dark-secondary mb-1">Current Price</div>
                 <div className={`font-bold text-base ${
                   priceAboveVWMA ? 'text-bullish' : priceBelowVWMA ? 'text-bearish' : 'text-dark-text'
-                }`}>₹{price.toFixed(2)}</div>
+                }`}>₹{(price || 0).toFixed(2)}</div>
               </div>
               <div className="bg-dark-surface/40 border border-dark-border/40 rounded-lg p-2">
                 <div className="text-dark-secondary mb-1">VWMA 20</div>
-                <div className="text-emerald-300 font-bold text-base">₹{vwma20.toFixed(2)}</div>
+                <div className="text-emerald-300 font-bold text-base">₹{(vwma20 || 0).toFixed(2)}</div>
               </div>
             </div>
             <div className="mt-3 text-xs text-dark-tertiary">
               Distance: <span className={`font-bold ${
                 vwmaDistance >= 1.0 ? 'text-yellow-300' : 'text-dark-text'
-              }`}>{vwmaDistance.toFixed(2)}%</span> from VWMA
+              }`}>{(vwmaDistance || 0).toFixed(2)}%</span> from VWMA
             </div>
           </div>
         </div>
