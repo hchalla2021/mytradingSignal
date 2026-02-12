@@ -100,6 +100,47 @@ const isNearLevel = (price: number | null, level: number | null, symbol?: string
   return diff < threshold;
 };
 
+// Determine current price zone relative to pivot levels
+const getPivotZone = (price: number | null, s3: number | null, p: number | null, r3: number | null): 
+  'below_s3' | 'between_s3_p' | 'between_p_r3' | 'above_r3' | 'unknown' => {
+  if (!price || !s3 || !p || !r3) return 'unknown';
+  
+  if (price < s3) return 'below_s3';
+  if (price >= s3 && price < p) return 'between_s3_p';
+  if (price >= p && price < r3) return 'between_p_r3';
+  if (price >= r3) return 'above_r3';
+  
+  return 'unknown';
+};
+
+// Get color for each level based on current price zone
+const getLevelColor = (level: 'S3' | 'P' | 'R3', zone: ReturnType<typeof getPivotZone>, isNear: boolean) => {
+  if (isNear) return 'bg-yellow-600/70 text-white font-semibold'; // Alert: price near this level
+  
+  // Zone-based colors
+  switch (level) {
+    case 'S3': {
+      // S3 is support/bearish level
+      if (zone === 'below_s3') return 'bg-red-700/60 text-white font-semibold'; // 🔴 Price broken below support
+      if (zone === 'between_s3_p') return 'bg-red-900/40 text-red-300'; // Approaching support from above
+      return 'bg-slate-700/30 text-slate-400'; // Above P (not relevant)
+    }
+    case 'P': {
+      // P is pivot/neutral zone
+      if (zone === 'between_s3_p' || zone === 'between_p_r3') return 'bg-slate-600/50 text-slate-200 font-semibold';
+      return 'bg-slate-700/30 text-slate-400';
+    }
+    case 'R3': {
+      // R3 is resistance/bullish level
+      if (zone === 'above_r3') return 'bg-green-700/60 text-white font-semibold'; // 🟢 Price broken above resistance
+      if (zone === 'between_p_r3') return 'bg-green-900/40 text-green-300'; // Approaching resistance
+      return 'bg-slate-700/30 text-slate-400'; // Below P (not relevant)
+    }
+    default:
+      return 'bg-slate-700/30 text-slate-400';
+  }
+};
+
 // Check if price crossed a level
 const hasCrossed = (price: number | null, level: number | null, direction: 'above' | 'below'): boolean => {
   if (!price || !level) return false;
@@ -265,33 +306,57 @@ const SymbolPivotRow = memo<{ data: PivotData; config: SymbolConfig }>(({ data, 
       }`}>
         <div className="flex items-center gap-2 text-xs font-normal mb-2">
           <Target className="w-3.5 h-3.5 text-slate-500" />
-          <span className={isNearPivot ? 'text-yellow-300 font-semibold' : 'text-slate-400'}>PIVOT LEVELS</span>
+          <span className={isNearPivot ? 'text-yellow-300 font-semibold' : 'text-slate-400'}>PIVOT LEVELS (S3/P/R3)</span>
           <span className="text-slate-600">|</span>
-          <span className={pivots.bias === 'BULLISH' ? 'text-teal-400' : 'text-amber-400'}>
-            {pivots.bias === 'BULLISH' ? '📈 Above' : '📉 Below'}
+          <span className="text-slate-500 text-[10px]">Price Position:</span>
+          <span className={`text-xs font-semibold ${
+            getPivotZone(price, pivots.s3, pivots.pivot, pivots.r3) === 'below_s3' ? 'text-red-400' :
+            getPivotZone(price, pivots.s3, pivots.pivot, pivots.r3) === 'between_s3_p' ? 'text-orange-400' :
+            getPivotZone(price, pivots.s3, pivots.pivot, pivots.r3) === 'between_p_r3' ? 'text-blue-400' :
+            getPivotZone(price, pivots.s3, pivots.pivot, pivots.r3) === 'above_r3' ? 'text-green-400' :
+            'text-slate-400'
+          }`}>
+            {getPivotZone(price, pivots.s3, pivots.pivot, pivots.r3) === 'below_s3' ? '↓ BELOW S3 (Bearish)' :
+             getPivotZone(price, pivots.s3, pivots.pivot, pivots.r3) === 'between_s3_p' ? '📉 S3 ← → P (Support Zone)' :
+             getPivotZone(price, pivots.s3, pivots.pivot, pivots.r3) === 'between_p_r3' ? '📈 P ← → R3 (Resistance Zone)' :
+             getPivotZone(price, pivots.s3, pivots.pivot, pivots.r3) === 'above_r3' ? '↑ ABOVE R3 (Bullish)' :
+             'UNKNOWN'}
           </span>
         </div>
-        <div className="flex items-center gap-1 h-7 bg-slate-700/30 rounded overflow-hidden">
-          {/* S3 */}
-          <div className={`flex-1 h-full flex items-center justify-center text-[11px] font-normal transition-all ${
-            isNearLevel(price, pivots.s3, config.symbol) ? 'bg-yellow-600/70 text-white' :
-            hasCrossed(price, pivots.s3, 'below') ? 'bg-teal-900/30 text-teal-300' : 'bg-slate-800/20 text-slate-500'
-          }`} title={`S3: ${fmt(pivots.s3)}`}>S3</div>
-          {/* Pivot */}
-          <div className={`flex-1 h-full flex items-center justify-center text-[11px] font-normal border-x border-emerald-500/30 transition-all ${
-            isNearLevel(price, pivots.pivot, config.symbol) ? 'bg-yellow-600/70 text-white' : 'bg-slate-800/40 text-slate-400'
-          }`} title={`Pivot: ${fmt(pivots.pivot)}`}>P</div>
-          {/* R3 */}
-          <div className={`flex-1 h-full flex items-center justify-center text-[11px] font-normal transition-all ${
-            isNearLevel(price, pivots.r3, config.symbol) ? 'bg-yellow-600/70 text-white' :
-            hasCrossed(price, pivots.r3, 'above') ? 'bg-amber-900/30 text-amber-300' : 'bg-slate-800/30 text-slate-500'
-          }`} title={`R3: ${fmt(pivots.r3)}`}>R3</div>
+        <div className="flex items-center gap-1 h-8 bg-slate-700/30 rounded overflow-hidden">
+          {/* S3 - Support Level */}
+          <div className={`flex-1 h-full flex items-center justify-center text-[11px] font-normal transition-all duration-300 ${
+            getLevelColor('S3', getPivotZone(price, pivots.s3, pivots.pivot, pivots.r3), isNearLevel(price, pivots.s3, config.symbol))
+          }`} title={`S3 (Support): ${fmt(pivots.s3)}`}>
+            <span>S3</span>
+          </div>
+          {/* Pivot - Center Point */}
+          <div className={`flex-1 h-full flex items-center justify-center text-[11px] font-normal border-x border-emerald-500/30 transition-all duration-300 ${
+            getLevelColor('P', getPivotZone(price, pivots.s3, pivots.pivot, pivots.r3), isNearLevel(price, pivots.pivot, config.symbol))
+          }`} title={`Pivot (P): ${fmt(pivots.pivot)}`}>
+            <span>P</span>
+          </div>
+          {/* R3 - Resistance Level */}
+          <div className={`flex-1 h-full flex items-center justify-center text-[11px] font-normal transition-all duration-300 ${
+            getLevelColor('R3', getPivotZone(price, pivots.s3, pivots.pivot, pivots.r3), isNearLevel(price, pivots.r3, config.symbol))
+          }`} title={`R3 (Resistance): ${fmt(pivots.r3)}`}>
+            <span>R3</span>
+          </div>
         </div>
-        {/* Level Values Row */}
-        <div className="flex justify-between mt-1.5 px-1 text-xs font-normal">
-          <span className={isNearLevel(price, pivots.s3, config.symbol) ? 'text-yellow-300' : 'text-slate-500'}>{fmtCompact(pivots.s3)}</span>
-          <span className={isNearLevel(price, pivots.pivot, config.symbol) ? 'text-yellow-300' : 'text-slate-500'}>{fmtCompact(pivots.pivot)}</span>
-          <span className={isNearLevel(price, pivots.r3, config.symbol) ? 'text-yellow-300' : 'text-slate-500'}>{fmtCompact(pivots.r3)}</span>
+        {/* Level Values Row - NOW WITH ZONE INDICATORS */}
+        <div className="flex justify-between mt-2 px-1 text-xs font-normal">
+          <div className="flex flex-col items-start gap-0.5">
+            <span className={`text-xs font-semibold ${getPivotZone(price, pivots.s3, pivots.pivot, pivots.r3) === 'below_s3' ? 'text-red-400' : 'text-slate-500'}`}>S3</span>
+            <span className={getPivotZone(price, pivots.s3, pivots.pivot, pivots.r3) === 'below_s3' ? 'text-red-300 font-semibold' : 'text-slate-400'}>{fmtCompact(pivots.s3)}</span>
+          </div>
+          <div className="flex flex-col items-center gap-0.5">
+            <span className="text-xs font-semibold text-slate-500">P</span>
+            <span className={getPivotZone(price, pivots.s3, pivots.pivot, pivots.r3) === 'between_s3_p' || getPivotZone(price, pivots.s3, pivots.pivot, pivots.r3) === 'between_p_r3' ? 'text-slate-200 font-semibold' : 'text-slate-400'}>{fmtCompact(pivots.pivot)}</span>
+          </div>
+          <div className="flex flex-col items-end gap-0.5">
+            <span className={`text-xs font-semibold ${getPivotZone(price, pivots.s3, pivots.pivot, pivots.r3) === 'above_r3' ? 'text-green-400' : 'text-slate-500'}`}>R3</span>
+            <span className={getPivotZone(price, pivots.s3, pivots.pivot, pivots.r3) === 'above_r3' ? 'text-green-300 font-semibold' : 'text-slate-400'}>{fmtCompact(pivots.r3)}</span>
+          </div>
         </div>
       </div>
 

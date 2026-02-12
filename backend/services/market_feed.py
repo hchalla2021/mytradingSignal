@@ -36,11 +36,12 @@ def get_market_status() -> str:
     """Get current market status with detailed phases.
     
     Returns:
-        - PRE_OPEN: Pre-open session (9:00-9:15 AM) - auction matching
+        - PRE_OPEN: Pre-open session (9:00-9:07 AM) - auction matching
+        - FREEZE: Price discovery freeze (9:07-9:15 AM) - no new ticks
         - LIVE: Live market trading (9:15 AM - 3:30 PM)
         - CLOSED: Market closed (after 3:30 PM, weekends, holidays)
     
-    Note: Data should flow even during PRE_OPEN to show auction prices.
+    Note: During FREEZE period, cached data continues showing but no new updates.
     """
     now = datetime.now(IST)
     current_time = now.time()
@@ -59,6 +60,11 @@ def get_market_status() -> str:
     if PRE_OPEN_START <= current_time < PRE_OPEN_END:
         return "PRE_OPEN"
     
+    # 🔥 NEW: FREEZE phase (9:07-9:15 AM) - order matching in progress
+    # During this time, no new ticks are broadcast, cached data shows
+    if PRE_OPEN_END <= current_time < MARKET_OPEN:
+        return "FREEZE"
+    
     # 🔥 FIX: Market is LIVE from exactly 9:15:00 onwards
     if MARKET_OPEN <= current_time <= MARKET_CLOSE:
         return "LIVE"
@@ -67,13 +73,21 @@ def get_market_status() -> str:
 
 
 def is_market_open() -> bool:
-    """Check if market is open (includes PRE_OPEN and LIVE).
+    """Check if market phase is active (includes PRE_OPEN and FREEZE).
     
-    Returns True during both pre-open (9:00-9:15) and live trading (9:15-15:30).
-    This ensures data continues to flow during auction period.
+    Returns True during:
+    - PRE_OPEN (9:00-9:07 AM) - auction matching phase
+    - FREEZE (9:07-9:15 AM) - price discovery (ticks received but not broadcast)
+    - LIVE (9:15-15:30) - normal trading
+    
+    Returns False during:
+    - CLOSED (after 3:30 PM, weekends, holidays)
+    
+    This ensures we maintain WebSocket connection and receive ticks,
+    but control when they're broadcast to frontend.
     """
     status = get_market_status()
-    return status in ("PRE_OPEN", "LIVE")
+    return status in ("PRE_OPEN", "FREEZE", "LIVE")
 
 
 # Instrument token to symbol mapping
@@ -160,6 +174,19 @@ class MarketFeedService:
             # Use quote volume from cache (set during startup/refresh)
             volume = QUOTE_VOLUMES.get(symbol, 0)
         
+        # 🔥 CRITICAL: Extract previous day OHLC for pivot calculations
+        # Zerodha provides these as separate top-level fields in the quote
+        prev_day_high = tick.get("prev_day_high", None)
+        prev_day_low = tick.get("prev_day_low", None)
+        prev_day_close = tick.get("ohlc", {}).get("close", prev_close)  # Use ohlc close as prev close
+        
+        # Fallback to current day high/low if prev_day values not available
+        # (This happens during market hours as Zerodha updates the fields)
+        if prev_day_high is None:
+            prev_day_high = tick.get("ohlc", {}).get("high", ltp)
+        if prev_day_low is None:
+            prev_day_low = tick.get("ohlc", {}).get("low", ltp)
+        
         return {
             "symbol": symbol,
             "price": round(ltp, 2),
@@ -176,7 +203,11 @@ class MarketFeedService:
             "putOI": 0,      # Will be updated by PCR service
             "trend": trend,
             "timestamp": datetime.now(IST).isoformat(),
-            "status": get_market_status()  # PRE_OPEN, LIVE, or CLOSED
+            "status": get_market_status(),  # PRE_OPEN, LIVE, or CLOSED
+            # 🔥 Previous day data for pivot calculations
+            "prev_day_high": round(prev_day_high, 2) if prev_day_high else None,
+            "prev_day_low": round(prev_day_low, 2) if prev_day_low else None,
+            "prev_day_close": round(prev_day_close, 2) if prev_day_close else None
         }
     
     def _on_ticks(self, ws, ticks):
@@ -205,7 +236,7 @@ class MarketFeedService:
                 # - Market status (transitions at 9:15 AM, 3:30 PM) - CRITICAL!
                 # - Timestamp (keeps data fresh)
                 market_status = get_market_status()
-                is_market_open = market_status in ("PRE_OPEN", "LIVE")
+                is_market_phase = market_status in ("PRE_OPEN", "FREEZE", "LIVE")
                 
                 # ⚡ INTELLIGENT RATE LIMITING: Allow bursts during critical transitions
                 import time
@@ -213,7 +244,7 @@ class MarketFeedService:
                 last_update = self.last_update_time.get(symbol, 0)
                 time_since_last_update = current_time - last_update
                 
-                # Detect status changes (PRE_OPEN → LIVE transition)
+                # Detect status changes (PRE_OPEN → FREEZE → LIVE transition)
                 last_status = getattr(self, f'_last_status_{symbol}', None)
                 status_changed = last_status != market_status
                 if status_changed:
@@ -221,17 +252,25 @@ class MarketFeedService:
                     print(f"🔄 MARKET STATUS CHANGE: {symbol} {last_status} → {market_status}")
                 
                 # Process tick if:
-                # 1. Market is open AND
+                # 1. Market phase is open AND
                 # 2. (Price changed OR 0.5 second elapsed OR status changed)
                 # Using 0.5s instead of 1s for smoother transitions
                 price_changed = self.last_prices.get(symbol) != data["price"]
-                should_update = is_market_open and (price_changed or time_since_last_update >= 0.5 or status_changed)
+                should_update = is_market_phase and (price_changed or time_since_last_update >= 0.5 or status_changed)
                 
                 if should_update:
                     self.last_prices[symbol] = data["price"]
                     self.last_update_time[symbol] = current_time
-                    # Put tick in queue for async processing
-                    self._tick_queue.put(data)
+                    
+                    # 🔥 NEW: Only broadcast if NOT in FREEZE period (9:07-9:15 AM)
+                    # During FREEZE, update cache but don't broadcast to avoid confusing UI
+                    if market_status != "FREEZE":
+                        # Put tick in queue for async processing
+                        self._tick_queue.put(data)
+                    else:
+                        # During FREEZE: Update cache silently, no UI broadcast
+                        # This keeps cache fresh for when LIVE resumes
+                        asyncio.create_task(self.cache.set_market_data(symbol, data))
                     
             except Exception as e:
                 print(f"❌ Error processing tick: {e}")
@@ -320,7 +359,18 @@ class MarketFeedService:
         
         # Generate instant analysis for this tick
         try:
-            from services.instant_analysis import InstantSignal
+            from services.instant_analysis import InstantSignal, calculate_emas_from_cache, calculate_sar_from_cache, calculate_market_structure_from_cache
+            
+            # 🔥 CRITICAL: Calculate EMAs from cached candles before analysis
+            data = await calculate_emas_from_cache(self.cache, data["symbol"], data)
+            
+            # 🔥 CRITICAL: Calculate real Parabolic SAR from cached candles
+            data = await calculate_sar_from_cache(self.cache, data["symbol"], data)
+            
+            # 🔥 CRITICAL: Calculate market structure from cached candles
+            market_structure = await calculate_market_structure_from_cache(self.cache, data["symbol"], data)
+            data.update(market_structure)  # Merge market structure data into tick_data
+            
             analysis_result = InstantSignal.analyze_tick(data)
             if analysis_result:
                 data["analysis"] = analysis_result
@@ -617,11 +667,11 @@ class MarketFeedService:
             
             # Only print detailed error on FIRST occurrence
             if self._consecutive_403_errors == 1:
-                print(f"❌ Zerodha WebSocket error: {error_msg}")
+                print(f"\n❌ Zerodha WebSocket error: {error_msg}")
                 print("\n" + "="*80)
-                print("🔴 ZERODHA ACCESS TOKEN ERROR")
+                print("🔴 ZERODHA ACCESS TOKEN ERROR (403 Forbidden)")
                 print("="*80)
-                print("❌ Token has expired or is invalid (403 Forbidden)")
+                print("❌ Token has expired or is invalid")
                 print("\n💡 QUICK FIX:")
                 print("   1. Click LOGIN button in the UI")
                 print("   2. Or run: python quick_token_fix.py")
@@ -647,7 +697,8 @@ class MarketFeedService:
                         pass
         else:
             # Non-403 errors - log normally
-            print(f"❌ Zerodha error: {error_msg}")
+            print(f"⚠️  Zerodha error (code {code}): {reason}")
+            print("   → Will attempt reconnection...")
             feed_watchdog.on_error(Exception(error_msg))
             
             # Reset 403 counter if we get different error
@@ -827,36 +878,33 @@ class MarketFeedService:
         asyncio.create_task(self._fetch_and_cache_last_data_safe())
         
         try:
-            # 🔍 PRE-FLIGHT: Validate token BEFORE attempting WebSocket
-            token_valid = await self._validate_token_before_connect()
+            # � FIX: Skip expensive REST API validation at startup (causes 9 AM connection delay)
+            # Instead, trust token file age heuristic from auth_state_manager
+            # REST fallback will activate ONLY if actual WebSocket connection fails with 403
+            print("⚡ Skipping pre-flight token validation (trusting auth state manager)")
+            print("   → Will auto-fallback to REST API ONLY if WebSocket fails with 403")
             
-            if not token_valid:
-                print("🔴 Skipping WebSocket connection - token validation failed")
-                print("📡 Using REST API polling mode for market data")
-                self._using_rest_fallback = True
-                auth_state_manager.force_reauth()
-                # Don't return - continue to REST API polling loop below
-            else:
-                # Initialize KiteTicker only if token is valid
-                print("🔧 Initializing KiteTicker...")
-                
-                self.kws = KiteTicker(
-                    settings.zerodha_api_key,
-                    settings.zerodha_access_token
-                )
-                
-                # Assign callbacks
-                self.kws.on_ticks = self._on_ticks
-                self.kws.on_connect = self._on_connect
-                self.kws.on_close = self._on_close
-                self.kws.on_error = self._on_error
-                self.kws.on_reconnect = self._on_reconnect
-                self.kws.on_noreconnect = self._on_noreconnect
-                
-                # Connect (non-blocking in thread)
-                print("🔗 Connecting to Zerodha KiteTicker...")
-                self.kws.connect(threaded=True)
-                print("✅ Connection initiated (running in background)")
+            # Proceed directly to WebSocket connection attempt
+            # Initialize KiteTicker
+            print("🔧 Initializing KiteTicker...")
+            
+            self.kws = KiteTicker(
+                settings.zerodha_api_key,
+                settings.zerodha_access_token
+            )
+            
+            # Assign callbacks
+            self.kws.on_ticks = self._on_ticks
+            self.kws.on_connect = self._on_connect
+            self.kws.on_close = self._on_close
+            self.kws.on_error = self._on_error
+            self.kws.on_reconnect = self._on_reconnect
+            self.kws.on_noreconnect = self._on_noreconnect
+            
+            # Connect (non-blocking in thread)
+            print("🔗 Connecting to Zerodha KiteTicker...")
+            self.kws.connect(threaded=True)
+            print("✅ Connection initiated (running in background)")
             
             # Process tick queue in async loop
             last_refresh_time = datetime.now(IST)
@@ -882,13 +930,22 @@ class MarketFeedService:
                 # This keeps UI updated smoothly during connection issues
                 if self._using_rest_fallback and is_market_open():
                     if (current_time - last_rest_poll_time).total_seconds() >= 2:
-                        # Only print every 10th fetch to reduce log spam
-                        should_log = int((current_time - last_rest_poll_time).total_seconds()) % 20 == 0
-                        if should_log:
-                            print("📡 REST API fallback: Fetching market data...")
+                        # Fetch market data via REST API
                         success = await self._fetch_and_cache_last_data()
-                        if success and should_log:
-                            print("✅ REST API data fetched and broadcast")
+                        
+                        if success:
+                            # 🔥 FIX: Send WebSocket status message to frontend
+                            # This tells frontend we're in REST mode but still getting data
+                            await self.ws_manager.broadcast({
+                                "type": "status",
+                                "status": "LIVE",
+                                "message": "📡 Using REST API (WebSocket temporarily unavailable)"
+                            })
+                            
+                            # Only print every 10th fetch to reduce log spam
+                            if int((current_time - last_rest_poll_time).total_seconds()) % 20 == 0:
+                                print("📡 REST API fallback: Market data fetched and broadcast")
+                        
                         last_rest_poll_time = current_time
                 
                 # Refresh last traded data every 5 minutes (keeps data fresh even after market)

@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from config import get_settings
 from services.websocket_manager import manager
 from services.market_feed import MarketFeedService
+from services.mock_market_feed import MockMarketFeedService
 from services.cache import CacheService
 from services.token_watcher import start_token_watcher
 from services.auth_state_machine import auth_state_manager
@@ -23,6 +24,7 @@ from routers import (
     token_status,
     system_health,
     pivot_indicators,
+    diagnostics,
 )
 
 # Windows console fix (safe, ignored on Linux)
@@ -32,7 +34,7 @@ if sys.platform == "win32":
 
 settings = get_settings()
 
-market_feed: MarketFeedService | None = None
+market_feed: MarketFeedService | MockMarketFeedService | None = None
 
 
 @asynccontextmanager
@@ -94,8 +96,20 @@ async def lifespan(app: FastAPI):
     cache = CacheService()
     await cache.connect()
 
-    # Market feed
-    market_feed = MarketFeedService(cache, manager)
+    # 🔥 Inject cache into diagnostics module
+    from routers import diagnostics as diagnostics_module
+    diagnostics_module.set_cache_instance(cache)
+
+    # 🔥 MARKET FEED DECISION: Check authentication status
+    # If Zerodha is authenticated → Use live feed
+    # If NOT authenticated → Use mock feed for demos/testing
+    if auth_state_manager.is_authenticated:
+        print("\n✅ Using LIVE Zerodha Market Feed")
+        market_feed = MarketFeedService(cache, manager)
+    else:
+        print("\n🎭 Using MOCK Market Feed (no Zerodha authentication)")
+        print("   💡 To use LIVE data: Set up Zerodha authentication")
+        market_feed = MockMarketFeedService(cache, manager)
 
     # Token watcher (file system monitor for .env changes)
     token_observer = start_token_watcher(market_feed, auth_state_manager)
@@ -150,6 +164,7 @@ app.add_middleware(
 # Routers
 app.include_router(health.router, tags=["Health"])
 app.include_router(system_health.router, prefix="/api/system", tags=["System Health"])
+app.include_router(diagnostics.router, tags=["Diagnostics"])
 app.include_router(token_status.router, tags=["Token Status"])
 app.include_router(auth.router, prefix="/api/auth", tags=["Authentication"])
 

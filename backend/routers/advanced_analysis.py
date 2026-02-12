@@ -1503,44 +1503,26 @@ async def get_candle_intent(symbol: str) -> Dict[str, Any]:
                 return backup_data
             
             # Return error response
-            # Return sample data to demonstrate UI
-            print(f"   → Returning SAMPLE data to demonstrate UI")
-            base_price = 24500 if symbol == "NIFTY" else 51000 if symbol == "BANKNIFTY" else 80000
-            is_bullish = symbol != "BANKNIFTY"
+            # Return error instead of sample data
+            from services.market_feed import is_market_open
+            status = "MARKET_CLOSED" if not is_market_open() else "NO_DATA"
+            message = "🔴 Market is currently closed. Data will update when market opens (9:15 AM IST)" if not is_market_open() else "🔴 Waiting for live market data. Please ensure Zerodha connection is active."
             
             return {
                 "symbol": symbol,
                 "timestamp": datetime.now().isoformat(),
-                "current_candle": {
-                    "open": base_price - 30, "high": base_price + 50, "low": base_price - 40, "close": base_price + 20,
-                    "volume": 450000, "range": 90, "body_size": 50,
-                    "upper_wick": 30, "lower_wick": 10
-                },
-                "pattern": {
-                    "type": "BULLISH_HAMMER" if is_bullish else "BEARISH_SHOOTING_STAR",
-                    "strength": 75 if is_bullish else 68,
-                    "intent": "BULLISH" if is_bullish else "BEARISH",
-                    "interpretation": "Strong buying pressure with minimal selling" if is_bullish else "Rejection at highs - bears taking control",
-                    "confidence": 72 if is_bullish else 65
-                },
-                "professional_signal": "BUY" if is_bullish else "SELL",
-                "volume_analysis": {
-                    "volume": 450000,
-                    "avg_volume": 320000,
-                    "volume_ratio": 1.41,
-                    "volume_type": "HIGH",
-                    "efficiency": "STRONG"
-                },
-                "trap_status": {
-                    "is_trap": False,
-                    "trap_type": None,
-                    "severity": 0
-                },
-                "status": "CACHED",
-                "data_status": "CACHED",
-                "message": "📊 Last Market Session Data (Market Closed)" if token_status["valid"] else "🔑 Sample data - Login to see real market data",
-                "candles_analyzed": 100,
-                "token_valid": token_status["valid"]
+                "current_candle": None,
+                "pattern": None,
+                "professional_signal": "NEUTRAL",
+                "volume_analysis": None,
+                "trap_status": None,
+                "status": status,
+                "data_status": status,
+                "message": message,
+                "candles_analyzed": 0,
+                "token_valid": token_status["valid"],
+                "error": "NO_MARKET_DATA",
+                "notes": "Production system: No sample data used. Waiting for live market data."
             }
         
         # Show data time range

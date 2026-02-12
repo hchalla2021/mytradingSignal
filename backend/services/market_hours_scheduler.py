@@ -28,12 +28,17 @@ class MarketHoursScheduler:
     """
     
     # Market timings (IST)
-    PRE_OPEN_START = time(9, 0, 0)    # 9:00 AM - Pre-open starts
-    PRE_OPEN_END = time(9, 7, 0)      # 9:07 AM - Pre-open ends
+    PRE_OPEN_START = time(9, 0, 0)    # 9:00 AM - Pre-open starts (auction matching)
+    PRE_OPEN_END = time(9, 7, 0)      # 9:07 AM - Pre-open ends (price discovery)
     MARKET_OPEN = time(9, 15, 0)      # 9:15 AM - Live trading starts
     MARKET_CLOSE = time(15, 30, 0)    # 3:30 PM - Market closes
     
-    # Auto-start/stop times - START EARLY to ensure connection
+    # ⚡ CRITICAL FIX: Pre-refresh token before 9:00 AM market opens
+    # This prevents token expiration from causing connection failures
+    TOKEN_REFRESH_TIME = time(8, 50, 0)  # 8:50 AM - Refresh token before market
+    
+    # Auto-start/stop times - START EARLY with fresh token
+    # DO NOT change to 9:08 AM - user NEEDS pre-open data from 9:00-9:07 AM
     AUTO_START_TIME = time(8, 55, 0)  # 8:55 AM - 5 mins before pre-open
     AUTO_STOP_TIME = time(15, 35, 0)  # 3:35 PM - 5 mins after close
     
@@ -60,8 +65,8 @@ class MarketHoursScheduler:
         print("\n" + "="*70)
         print("⏰ MARKET HOURS SCHEDULER - PRODUCTION MODE")
         print("="*70)
-        print(f"   ✅ Auto-start: {self.AUTO_START_TIME.strftime('%I:%M %p')} IST (before pre-open)")
-        print(f"   ✅ Pre-open:   {self.PRE_OPEN_START.strftime('%I:%M %p')} IST (data starts flowing)")
+        print(f"   ✅ Pre-open:   {self.PRE_OPEN_START.strftime('%I:%M %p')} IST (auction matching)")
+        print(f"   ✅ Auto-start: {self.AUTO_START_TIME.strftime('%I:%M %p')} IST (after pre-open)")
         print(f"   ✅ Live:       {self.MARKET_OPEN.strftime('%I:%M %p')} IST (trading begins)")
         print(f"   ✅ Auto-stop:  {self.AUTO_STOP_TIME.strftime('%I:%M %p')} IST (after market)")
         print(f"   ✅ Check interval: {self.CHECK_INTERVAL_SECONDS}s (aggressive: {self.AGGRESSIVE_CHECK_INTERVAL}s)")
@@ -111,9 +116,9 @@ class MarketHoursScheduler:
         if current_time < self.PRE_OPEN_START:
             return "🔵 PREPARING (waiting for pre-open)"
         elif self.PRE_OPEN_START <= current_time < self.PRE_OPEN_END:
-            return "🟡 PRE-OPEN (order collection)"
+            return "🟡 PRE-OPEN (auction matching 9:00-9:07)"
         elif self.PRE_OPEN_END <= current_time < self.MARKET_OPEN:
-            return "🟡 AUCTION FREEZE (price discovery)"
+            return "🟡 FREEZE (order matching 9:07-9:15)"
         elif self.MARKET_OPEN <= current_time < self.MARKET_CLOSE:
             return "🟢 LIVE TRADING"
         elif current_time <= self.AUTO_STOP_TIME:
@@ -142,11 +147,24 @@ class MarketHoursScheduler:
         print("🤖 SCHEDULER LOOP STARTED - Monitoring market hours...\n")
         
         last_status_log = datetime.now(IST)
+        last_token_refresh = None
         
         while self.is_running:
             try:
                 now = datetime.now(IST)
                 current_time = now.time()
+                
+                # 🔥 NEW: Token refresh at 8:50 AM (before market opens)
+                # This prevents token expiration from causing connection failures at 9:00 AM
+                token_refresh_time = self.TOKEN_REFRESH_TIME
+                if (current_time >= token_refresh_time and 
+                    (last_token_refresh is None or 
+                     (now - last_token_refresh).total_seconds() > 86400)):  # Once per day
+                    
+                    if self._is_weekday(now) and not self._is_holiday(now):
+                        print(f"\n⏰ [{now.strftime('%I:%M:%S %p')}] PRE-MARKET ACTIONS")
+                        await self._refresh_token_before_market()
+                        last_token_refresh = now
                 
                 # Determine if market feed should be running
                 should_run = self._is_market_time(now)
@@ -329,6 +347,34 @@ class MarketHoursScheduler:
             check_date += timedelta(days=1)
         
         return None
+    
+    async def _refresh_token_before_market(self):
+        """
+        Refresh Zerodha token at 8:50 AM before market opens.
+        This prevents token expiration from causing 9:00 AM connection failures.
+        """
+        try:
+            print("\n" + "="*70)
+            print("🔐 PRE-MARKET TOKEN REFRESH (8:50 AM)")
+            print("="*70)
+            
+            from services.unified_auth_service import unified_auth
+            
+            # Attempt token refresh
+            token_valid = await unified_auth.validate_token(force=True)
+            
+            if token_valid:
+                print("✅ Token VALIDATED and FRESH")
+                print("   Ready for 9:00 AM market open")
+            else:
+                print("⚠️  Token validation failed - will attempt REST fallback at 9:00 AM")
+                print("   If this persists, run: python quick_token_fix.py")
+            
+            print("="*70 + "\n")
+            
+        except Exception as e:
+            print(f"⚠️  Token refresh failed: {e}")
+            print("   Will attempt market connection anyway at 8:55 AM")
 
 
 # Global scheduler instance

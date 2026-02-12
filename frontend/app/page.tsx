@@ -53,6 +53,9 @@ const ZoneControlCard = dynamic(() => import('@/components/ZoneControlCard'), { 
 const CandleIntentCard = dynamic(() => import('@/components/CandleIntentCard'), { ssr: false });
 const PivotSectionUnified = dynamic(() => import('@/components/PivotSectionUnified'), { ssr: false });
 const PivotDetailedDisplay = dynamic(() => import('@/components/PivotDetailedDisplay'), { ssr: false });
+const MarketStructure = dynamic(() => import('@/components/MarketStructure'), { ssr: false });
+const InstitutionalMarketView = dynamic(() => import('@/components/InstitutionalMarketView'), { ssr: false });
+const CandleQualityAnalysis = dynamic(() => import('@/components/CandleQualityAnalysis'), { ssr: false });
 
 export default function Home() {
   // 🔥 Force fresh mount on page load - fixes desktop browser caching
@@ -304,6 +307,149 @@ export default function Home() {
         sellCount++; totalConfidenceSum += 80; 
       } else { neutralCount++; totalConfidenceSum += 50; }
 
+      // Section 14: RANGE STRENGTH - Market Structure (Professional Trader Signal)
+      sectionCount++;
+      const dayHigh14 = tick.high || ind.high || 0;
+      const dayLow14 = tick.low || ind.low || 0;
+      const price14 = price;
+      if (price14 > 0 && dayHigh14 > dayLow14) {
+        const rangeSpan = dayHigh14 - dayLow14;
+        const positionFromLow = rangeSpan > 0 ? (price14 - dayLow14) / rangeSpan : 0.5;
+        
+        // Professional trader logic: 70%+ = Strong bullish, 30%- = Strong bearish
+        if (positionFromLow > 0.7) { 
+          buyCount++; 
+          // Higher confidence for strong range positions
+          const rangeConfidence = Math.min(95, 75 + (positionFromLow - 0.7) * 100);
+          totalConfidenceSum += rangeConfidence;
+        } else if (positionFromLow < 0.3) { 
+          sellCount++; 
+          const rangeConfidence = Math.min(95, 75 + (0.3 - positionFromLow) * 100);
+          totalConfidenceSum += rangeConfidence;
+        } else { 
+          neutralCount++; 
+          totalConfidenceSum += 50; 
+        }
+      } else { 
+        neutralCount++; 
+        totalConfidenceSum += 50; 
+      }
+
+      // Section 15: VWAP REACTION - Professional Trader Master Signal (HIGHEST PRIORITY)
+      sectionCount++;
+      const vwap15 = ind.vwap || 0;
+      const high15 = tick.high || ind.high || 0;
+      const low15 = tick.low || ind.low || 0;
+      const close15 = price;
+      const volume15 = tick.volume || ind.volume || 0;
+      const vwapSignal = String(ind.vwap_signal || '').toUpperCase();
+      const changeP15 = tick.changePercent || 0;
+
+      if (vwap15 > 0 && close15 > 0) {
+        // 🔥 VWAP BREAKOUT: Price cleared VWAP with conviction
+        if (close15 > vwap15 && high15 > vwap15 && changeP15 > 0.2 && (volume15 > 0)) {
+          buyCount++;
+          // BREAKOUT gets 95-98% confidence (strongest institutional signal)
+          const breakoutConfidence = Math.min(98, 95 + (changeP15 * 10));
+          totalConfidenceSum += breakoutConfidence;
+        }
+        // 🔥 VWAP BOUNCE: Strong bounce from VWAP level (price touched VWAP from below and reversed up)
+        else if (low15 <= vwap15 && close15 > vwap15 && changeP15 > 0.1 && vwapSignal.includes('BOUNCE')) {
+          buyCount++;
+          // BOUNCE gets 85-92% confidence
+          const bounceConfidence = Math.min(92, 85 + (Math.abs(changeP15) * 20));
+          totalConfidenceSum += bounceConfidence;
+        }
+        // 🔥 VWAP REJECTED: Price rejected at VWAP (touched VWAP but closed below = reversal signal)
+        else if (high15 >= vwap15 && close15 < vwap15 && changeP15 < -0.2) {
+          sellCount++;
+          // REJECTED gets 90-95% confidence (high probability reversal)
+          const rejectionConfidence = Math.min(95, 90 + (Math.abs(changeP15) * 15));
+          totalConfidenceSum += rejectionConfidence;
+        }
+        // 🔥 VWAP NEUTRAL: Price consolidating at VWAP (no clear reaction yet)
+        else {
+          neutralCount++;
+          // Check if price is creeping above VWAP (bullish lean) or below (bearish lean)
+          if (close15 > vwap15 && close15 <= vwap15 * 1.005) {
+            buyCount++; // Slight bullish lean
+            totalConfidenceSum += 60;
+            neutralCount--;
+          } else if (close15 < vwap15 && close15 >= vwap15 * 0.995) {
+            sellCount++; // Slight bearish lean
+            totalConfidenceSum += 60;
+            neutralCount--;
+          } else {
+            totalConfidenceSum += 50;
+          }
+        }
+      } else {
+        neutralCount++;
+        totalConfidenceSum += 50;
+      }
+
+      // Section 16: VERY GOOD VOLUME - Candle Quality Assessment (Professional Volume Confirmation)
+      sectionCount++;
+      const candleOpen = tick.open || ind.open || price;
+      const candleClose = price;
+      const candleHigh = tick.high || ind.high || 0;
+      const candleLow = tick.low || ind.low || 0;
+      const candleVolume = tick.volume || ind.volume || 0;
+      const last5VolumeAvg = analysisData?.volume?.last_5_avg || (candleVolume * 0.78);
+      
+      if (candleHigh > candleLow && candleLow > 0) {
+        const candleRange = candleHigh - candleLow;
+        const candleBody = Math.abs(candleClose - candleOpen);
+        const bodyPercent = (candleBody / candleRange) * 100;
+        const volumeRatio = last5VolumeAvg > 0 ? candleVolume / last5VolumeAvg : 1;
+        
+        const candleDir = candleClose > candleOpen ? 'BULLISH' : candleClose < candleOpen ? 'BEARISH' : 'DOJI';
+        
+        // 🔥 VERY GOOD VOLUME: All 3 conditions met (professional institutional signal)
+        const meetsMinVolume = candleVolume > 50000;
+        const meetsRatioThreshold = volumeRatio > 1.8;
+        const meetsBodyStrength = bodyPercent > 60;
+        const isVeryGoodVolume = meetsMinVolume && meetsRatioThreshold && meetsBodyStrength;
+        
+        // 🚨 FAKE SPIKE: High volume but weak body (liquidation trap)
+        const isFakeSpike = candleVolume > (last5VolumeAvg * 2.5) && bodyPercent < 40;
+        
+        if (isVeryGoodVolume) {
+          if (candleDir === 'BULLISH') {
+            buyCount++;
+            // VERY GOOD VOLUME on bullish = 95-98% confidence (institutional-grade conviction)
+            const volumeConfidence = Math.min(98, 95 + (Math.min(bodyPercent - 60, 20) * 0.1));
+            totalConfidenceSum += volumeConfidence;
+          } else if (candleDir === 'BEARISH') {
+            sellCount++;
+            // VERY GOOD VOLUME on bearish = 95-98% confidence
+            const volumeConfidence = Math.min(98, 95 + (Math.min(bodyPercent - 60, 20) * 0.1));
+            totalConfidenceSum += volumeConfidence;
+          } else {
+            neutralCount++;
+            totalConfidenceSum += 50;
+          }
+        } else if (isFakeSpike) {
+          // FAKE SPIKE: High volume but weak body = OPPOSITE signal (reversal imminent)
+          if (candleDir === 'BULLISH') {
+            sellCount++; // Fake bull = upcoming correction
+            totalConfidenceSum += 75; // High confidence it's a trap
+          } else if (candleDir === 'BEARISH') {
+            buyCount++; // Fake bear = upcoming bounce
+            totalConfidenceSum += 75;
+          } else {
+            neutralCount++;
+            totalConfidenceSum += 50;
+          }
+        } else {
+          neutralCount++;
+          totalConfidenceSum += 50;
+        }
+      } else {
+        neutralCount++;
+        totalConfidenceSum += 50;
+      }
+
       // Calculate percentages
       const totalSignals = buyCount + sellCount + neutralCount;
       const buyPercent = totalSignals > 0 ? Math.round(((buyCount + neutralCount * 0.5) / totalSignals) * 100) : 50;
@@ -367,7 +513,7 @@ export default function Home() {
               <span className="text-lg">📊</span>
               Overall Market Outlook
               <span className="text-[10px] sm:text-xs text-dark-tertiary font-normal ml-2">
-                (13 Section Signals Aggregated)
+                (16 Signals • VOLUME+VWAP Priority)
               </span>
             </h3>
           </div>
@@ -415,7 +561,7 @@ export default function Home() {
               
               <div className="flex justify-between items-center">
                 <span className="text-[10px] text-slate-400">Avg Confidence: {aggregatedMarketSignal.NIFTY.totalConfidence}%</span>
-                <span className="text-[10px] text-emerald-300 font-bold">{aggregatedMarketSignal.NIFTY.sectionCount}/13 signals</span>
+                <span className="text-[10px] text-emerald-300 font-bold">{aggregatedMarketSignal.NIFTY.sectionCount}/16 signals</span>
               </div>
             </div>
 
@@ -460,7 +606,7 @@ export default function Home() {
               
               <div className="flex justify-between items-center">
                 <span className="text-[10px] text-slate-400">Avg Confidence: {aggregatedMarketSignal.BANKNIFTY.totalConfidence}%</span>
-                <span className="text-[10px] text-emerald-300 font-bold">{aggregatedMarketSignal.BANKNIFTY.sectionCount}/13 signals</span>
+                <span className="text-[10px] text-emerald-300 font-bold">{aggregatedMarketSignal.BANKNIFTY.sectionCount}/16 signals</span>
               </div>
             </div>
 
@@ -505,7 +651,7 @@ export default function Home() {
               
               <div className="flex justify-between items-center">
                 <span className="text-[10px] text-slate-400">Avg Confidence: {aggregatedMarketSignal.SENSEX.totalConfidence}%</span>
-                <span className="text-[10px] text-emerald-300 font-bold">{aggregatedMarketSignal.SENSEX.sectionCount}/13 signals</span>
+                <span className="text-[10px] text-emerald-300 font-bold">{aggregatedMarketSignal.SENSEX.sectionCount}/16 signals</span>
               </div>
             </div>
           </div>
@@ -601,6 +747,72 @@ export default function Home() {
             aiAlertData={alertData.SENSEX}
           />
         </div>
+        </div>
+
+        {/* 🏗️ MARKET STRUCTURE - Trader's Perspective (25% Analysis Component) */}
+        <div className="mt-6 sm:mt-6 border-2 border-emerald-600/40 rounded-2xl p-3 sm:p-4 bg-gradient-to-br from-emerald-950/20 via-dark-card/50 to-dark-elevated/40 backdrop-blur-sm shadow-xl shadow-emerald-600/15">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-3 sm:mb-4">
+            <div>
+              <h2 className="text-lg sm:text-xl lg:text-2xl font-bold text-dark-text flex items-center gap-3 tracking-tight">
+                <span className="w-1.5 h-6 sm:h-7 bg-gradient-to-b from-emerald-400 to-emerald-500 rounded-full shadow-lg shadow-emerald-500/40" />
+                Support/Resistance Zones • Institutional Levels
+              </h2>
+              <p className="text-dark-tertiary text-xs sm:text-sm mt-1.5 ml-4 sm:ml-5 font-medium tracking-wide">
+                Price Structure • Trend • Liquidity Zones • Classical Analysis • Previous Day Levels
+              </p>
+            </div>
+          </div>
+          
+          <div className="grid grid-cols-1 lg:grid-cols-2 2xl:grid-cols-3 gap-3">
+            <MarketStructure symbol="NIFTY" name="NIFTY 50" data={marketData.NIFTY} analysis={analyses?.NIFTY} />
+            <MarketStructure symbol="BANKNIFTY" name="BANK NIFTY" data={marketData.BANKNIFTY} analysis={analyses?.BANKNIFTY} />
+            <MarketStructure symbol="SENSEX" name="SENSEX" data={marketData.SENSEX} analysis={analyses?.SENSEX} />
+          </div>
+        </div>
+
+        {/* Institutional Market View Section - Professional Analysis */}
+        <div className="mt-6 sm:mt-6 border-2 border-purple-600/40 rounded-2xl p-3 sm:p-4 bg-gradient-to-br from-purple-950/20 via-dark-card/50 to-dark-elevated/40 backdrop-blur-sm shadow-xl shadow-purple-600/15">
+          {/* Section Header */}
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-3 sm:mb-4">
+            <div>
+              <h2 className="text-lg sm:text-xl lg:text-2xl font-bold text-dark-text flex items-center gap-3 tracking-tight">
+                <span className="w-1.5 h-6 sm:h-7 bg-gradient-to-b from-purple-400 to-purple-500 rounded-full shadow-lg shadow-purple-500/40" />
+                Smart Money Flow • Order Structure Intelligence
+              </h2>
+              <p className="text-dark-tertiary text-xs sm:text-sm mt-1.5 ml-4 sm:ml-5 font-medium tracking-wide">
+                Order Flow • Institutional Positioning • Fair Value Gaps • Order Blocks • Market Imbalances
+              </p>
+            </div>
+          </div>
+          
+          <div className="grid grid-cols-1 lg:grid-cols-2 2xl:grid-cols-3 gap-3">
+            <InstitutionalMarketView symbol="NIFTY" name="NIFTY 50" analysis={analyses?.NIFTY} marketData={marketData.NIFTY} />
+            <InstitutionalMarketView symbol="BANKNIFTY" name="BANK NIFTY" analysis={analyses?.BANKNIFTY} marketData={marketData.BANKNIFTY} />
+            <InstitutionalMarketView symbol="SENSEX" name="SENSEX" analysis={analyses?.SENSEX} marketData={marketData.SENSEX} />
+          </div>
+        </div>
+
+        
+        {/* Candle Quality & Volume Integrity Section */}
+        <div className="mt-6 sm:mt-6 border-2 border-emerald-600/40 rounded-2xl p-3 sm:p-4 bg-gradient-to-br from-emerald-950/20 via-dark-card/50 to-dark-elevated/40 backdrop-blur-sm shadow-xl shadow-emerald-600/15">
+          {/* Section Header */}
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-3 sm:mb-4">
+            <div>
+              <h2 className="text-lg sm:text-xl lg:text-2xl font-bold text-dark-text flex items-center gap-3 tracking-tight">
+                <span className="w-1.5 h-6 sm:h-7 bg-gradient-to-b from-emerald-400 to-emerald-500 rounded-full shadow-lg shadow-emerald-500/40" />
+                High Volume Candle Scanner
+              </h2>
+              <p className="text-dark-tertiary text-xs sm:text-sm mt-1.5 ml-4 sm:ml-5 font-medium tracking-wide">
+                Fake Spike Detection • Body Strength • Very Good Volume • Conviction Moves • Volume Filter Logic
+              </p>
+            </div>
+          </div>
+          
+          <div className="grid grid-cols-1 lg:grid-cols-2 2xl:grid-cols-3 gap-3">
+            <CandleQualityAnalysis symbol="NIFTY" name="NIFTY 50" data={marketData.NIFTY} analysis={analyses?.NIFTY} />
+            <CandleQualityAnalysis symbol="BANKNIFTY" name="BANK NIFTY" data={marketData.BANKNIFTY} analysis={analyses?.BANKNIFTY} />
+            <CandleQualityAnalysis symbol="SENSEX" name="SENSEX" data={marketData.SENSEX} analysis={analyses?.SENSEX} />
+          </div>
         </div>
 
         {/* Intraday Analysis Section - With Border */}
@@ -822,181 +1034,6 @@ export default function Home() {
             ))}
           </div>
         </div>
-
-          {/* EMA200 Touch Entry Filter Section - Professional Redesign */}
-          <div className="mt-6 sm:mt-6 border-2 border-cyan-500/30 rounded-2xl p-3 sm:p-4 bg-gradient-to-br from-cyan-950/20 via-dark-card/50 to-dark-elevated/40 backdrop-blur-sm shadow-xl shadow-cyan-500/10">
-            {/* Section Header */}
-            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-3 sm:mb-4">
-              <div>
-                <h3 className="text-base sm:text-lg lg:text-xl font-bold text-dark-text flex items-center gap-3 tracking-tight">
-                  <span className="w-1.5 h-5 sm:h-6 bg-gradient-to-b from-cyan-500 to-cyan-600 rounded-full shadow-lg shadow-cyan-500/30" />
-                  EMA200 Touch Entry Filter
-                </h3>
-                <p className="text-dark-tertiary text-xs sm:text-sm mt-1.5 ml-4 sm:ml-5 font-medium tracking-wide">
-                  Entry confirmation at moving average • Touch & bounce detection • Breakout validation
-                </p>
-              </div>
-              
-              {/* Market Status Panel - Without Confidence */}
-              <div className="flex flex-col sm:flex-row gap-2 sm:gap-3 items-center">
-                {/* Market Status Indicator */}
-                <div className={`px-3 py-1.5 rounded-lg text-xs font-bold border shadow-sm ${
-                  analyses?.NIFTY?.indicators?.ema200_touch_signal === 'BULLISH_BOUNCE'
-                    ? 'bg-bullish/20 text-bullish border-bullish/40' :
-                  analyses?.NIFTY?.indicators?.ema200_touch_signal === 'BEARISH_BREAKDOWN'
-                    ? 'bg-bearish/20 text-bearish border-bearish/40' :
-                    'bg-yellow-500/20 text-yellow-300 border-yellow-500/40'
-                }`}>
-                  {analyses?.NIFTY?.indicators?.ema200_touch_signal === 'BULLISH_BOUNCE' ? '🟢 BULLISH' :
-                   analyses?.NIFTY?.indicators?.ema200_touch_signal === 'BEARISH_BREAKDOWN' ? '🔴 BEARISH' :
-                   ''}
-                </div>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 lg:grid-cols-2 2xl:grid-cols-3 gap-3">
-            {[
-              { symbol: 'NIFTY', data: analyses?.NIFTY },
-              { symbol: 'BANKNIFTY', data: analyses?.BANKNIFTY },
-              { symbol: 'SENSEX', data: analyses?.SENSEX }
-            ].map((item) => (
-              <div key={`ema200_${item.symbol}`} className="border-2 border-dark-border/40 rounded-xl bg-dark-surface/30 p-3 sm:p-4 transition-all duration-300 backdrop-blur-sm">
-                {/* Title & Confidence */}
-                <div className="flex items-center justify-between gap-3 mb-3">
-                  <h4 className="font-bold text-dark-text text-sm sm:text-base tracking-tight">
-                    {item.symbol} • EMA200
-                  </h4>
-                  <div className="flex items-center gap-2">
-                    {/* Confidence Percentage */}
-                    <span className="text-xs font-bold text-dark-secondary">
-                      Confidence: {Math.round(
-                        item.data?.indicators?.ema200_touch_confidence || 
-                        (() => {
-                          const ema200Touch = item.data?.indicators?.ema200_touch;
-                          const ema200TouchSignal = item.data?.indicators?.ema200_touch_signal;
-                          const ema200Action = item.data?.indicators?.ema200_action;
-                          let confidence = 45; // Base confidence
-                          
-                          // Touch Status Confidence
-                          if (ema200Touch === 'TOUCHING') confidence += 30; // High probability at touch
-                          else if (ema200Touch === 'ABOVE' || ema200Touch === 'BELOW') confidence += 15;
-                          
-                          // Signal Confidence
-                          if (ema200TouchSignal === 'BULLISH_BOUNCE' || ema200TouchSignal === 'BEARISH_BREAKDOWN') confidence += 25;
-                          else if (ema200TouchSignal === 'FIRST_TOUCH_BOUNCE' || ema200TouchSignal === 'REJECTION') confidence += 20;
-                          
-                          // Action Confirmation
-                          if (ema200Action && ema200Action.includes('CONFIRMED')) confidence += 15;
-                          else if (ema200Action && ema200Action.includes('POTENTIAL')) confidence += 10;
-                          
-                          // Market status adjustment
-                          const marketStatus = item.data?.status;
-                          if (marketStatus === 'LIVE') confidence += 10;
-                          else if (marketStatus === 'CLOSED') confidence -= 5;
-                          
-                          return Math.min(95, Math.max(20, confidence));
-                        })()
-                      )}%
-                    </span>
-                    {/* Status Badge */}
-                    {item.data?.indicators?.ema200_touch && (
-                      <span className={`text-xs sm:text-sm font-bold px-2.5 py-1 rounded-lg whitespace-nowrap ${
-                        item.data.indicators.ema200_touch === 'TOUCHING' ? 'bg-yellow-500/20 text-yellow-300 border border-yellow-500/40' :
-                        item.data.indicators.ema200_touch === 'ABOVE' ? 'bg-bullish/20 text-bullish border border-bullish/40' :
-                        'bg-bearish/20 text-bearish border border-bearish/40'
-                      }`}>
-                        {item.data.indicators.ema200_touch === 'TOUCHING' ? '🎯 TOUCHING' : item.data.indicators.ema200_touch === 'ABOVE' ? '📈 ABOVE' : '📉 BELOW'}
-                      </span>
-                    )}
-                  </div>
-                </div>
-
-                {item.data?.indicators ? (
-                  <div className="space-y-3">
-                    {/* Price Levels Box */}
-                    <div className="bg-dark-surface/50 border border-dark-border/40 rounded-lg p-2.5 space-y-2">
-                      <div className="flex justify-between items-center text-xs sm:text-sm">
-                        <span className="text-dark-secondary font-medium">Price:</span>
-                        <span className={`font-bold ${
-                          item.data.indicators.price > item.data.indicators.ema_200 ? 'text-bullish' :
-                          item.data.indicators.price < item.data.indicators.ema_200 ? 'text-bearish' :
-                          'text-yellow-300'
-                        }`}>
-                          ₹{item.data.indicators.price?.toFixed(2) || 'N/A'}
-                        </span>
-                      </div>
-                      <div className="flex justify-between items-center text-xs sm:text-sm">
-                        <span className="text-dark-secondary font-medium">EMA200:</span>
-                        <span className="font-bold text-dark-text">₹{item.data.indicators.ema_200?.toFixed(2) || 'N/A'}</span>
-                      </div>
-                      <div className="flex justify-between items-center text-xs sm:text-sm pt-1 border-t border-dark-secondary/20">
-                        <span className="text-dark-secondary font-medium">Distance:</span>
-                        <span className={`font-bold ${
-                          Math.abs(item.data.indicators.price - item.data.indicators.ema_200) < 50 ? 'text-yellow-300' :
-                          item.data.indicators.price > item.data.indicators.ema_200 ? 'text-bullish' :
-                          'text-bearish'
-                        }`}>
-                          {((item.data.indicators.price - item.data.indicators.ema_200) / item.data.indicators.ema_200 * 100).toFixed(2)}% {item.data.indicators.price > item.data.indicators.ema_200 ? '▲' : '▼'}
-                        </span>
-                      </div>
-                    </div>
-
-                    {/* Touch Type */}
-                    {item.data.indicators.ema200_touch_type && (
-                      <div className="flex items-center justify-between text-xs">
-                        <span className="text-dark-secondary font-medium">Type:</span>
-                        <span className={`font-bold px-2 py-0.5 rounded ${
-                          item.data.indicators.ema200_touch_type === 'FROM_ABOVE' 
-                            ? 'bg-bullish/10 text-bullish border border-bullish/30' 
-                            : 'bg-bearish/10 text-bearish border border-bearish/30'
-                        }`}>
-                          {item.data.indicators.ema200_touch_type === 'FROM_ABOVE' ? '🔽 Support Test' : '🔼 Resistance Test'}
-                        </span>
-                      </div>
-                    )}
-
-                    {/* Entry Filter Signal Box */}
-                    {item.data.indicators.ema200_entry_filter && (
-                      <div className="rounded-lg bg-dark-surface/50 border border-dark-border/40 p-2.5">
-                        <div className="text-[10px] font-bold text-dark-secondary uppercase tracking-wider opacity-70 mb-1">Entry Filter</div>
-                        <div className={`text-sm sm:text-base font-bold ${
-                          item.data.indicators.ema200_entry_filter === 'FIRST_TOUCH_BOUNCE' ? 'text-bullish' :
-                          item.data.indicators.ema200_entry_filter === 'EMA200_BREAKOUT' ? 'text-bullish' :
-                          item.data.indicators.ema200_entry_filter === 'FIRST_TOUCH_REJECTION' ? 'text-bearish' :
-                          item.data.indicators.ema200_entry_filter === 'SUPPORT_FAIL' ? 'text-bearish' :
-                          item.data.indicators.ema200_entry_filter === 'ABOVE_BOTH' ? 'text-cyan-300' :
-                          item.data.indicators.ema200_entry_filter === 'BELOW_BOTH' ? 'text-cyan-300' :
-                          'text-yellow-300'
-                        }`}>
-                          {item.data.indicators.ema200_entry_filter === 'FIRST_TOUCH_BOUNCE' ? '✅ Touch Bounce' :
-                           item.data.indicators.ema200_entry_filter === 'EMA200_BREAKOUT' ? '📈 Breakout' :
-                           item.data.indicators.ema200_entry_filter === 'FIRST_TOUCH_REJECTION' ? '❌ Touch Rejection' :
-                           item.data.indicators.ema200_entry_filter === 'SUPPORT_FAIL' ? '⚠️ Support Fail' :
-                           item.data.indicators.ema200_entry_filter === 'ABOVE_BOTH' ? '🟢 Above EMA200' :
-                           item.data.indicators.ema200_entry_filter === 'BELOW_BOTH' ? '🔴 Below EMA200' :
-                           item.data.indicators.ema200_entry_filter === 'TOUCH_WATCH' ? '👁️ Watch Touch' :
-                           item.data.indicators.ema200_entry_filter === 'BREAKOUT_WATCH' ? '👁️ Watch Breakout' :
-                           item.data.indicators.ema200_entry_filter.replace(/_/g, ' ')}
-                        </div>
-                      </div>
-                    )}
-
-                    {/* Confirmation Note */}
-                    {item.data.indicators.ema200_confirmation && (
-                      <div className="text-xs text-dark-tertiary leading-relaxed italic bg-dark-surface/40 border-l-2 border-cyan-500/30 pl-2.5 py-2">
-                        {item.data.indicators.ema200_confirmation}
-                      </div>
-                    )}
-                  </div>
-                ) : (
-                  <div className="flex items-center justify-center py-8 text-dark-tertiary text-xs">
-                    ⏳ Loading EMA200 analysis...
-                  </div>
-                )}
-              </div>
-            ))}
-            </div>
-          </div>
 
           {/* VWAP Intraday Filter Section - Professional Redesign */}
           <div className="mt-6 sm:mt-6 border-2 border-emerald-500/30 rounded-2xl p-3 sm:p-4 bg-gradient-to-br from-emerald-950/20 via-dark-card/50 to-dark-elevated/40 backdrop-blur-sm shadow-xl shadow-emerald-500/10">
@@ -1795,17 +1832,45 @@ export default function Home() {
             
             {/* Market Status Panel */}
             <div className="flex flex-col sm:flex-row gap-2 sm:gap-3 items-center">
-              {/* Market Status Indicator */}
+              {/* Market Status Indicator - Based on NIFTY position vs ST */}
               <div className={`px-3 py-1.5 rounded-lg text-xs font-bold border shadow-sm ${
-                analyses?.NIFTY?.indicators?.supertrend_10_2_signal === 'BUY'
-                  ? 'bg-green-900/20 text-green-400 border-green-500/40' :
-                analyses?.NIFTY?.indicators?.supertrend_10_2_signal === 'SELL'
-                  ? 'bg-red-900/20 text-red-400 border-red-500/40' :
-                  'bg-yellow-900/20 text-yellow-300 border-yellow-500/40'
+                (() => {
+                  const niftyData = analyses?.NIFTY?.indicators;
+                  if (!niftyData) return 'bg-gray-900/20 text-gray-300 border-gray-500/40';
+                  
+                  const price = niftyData.price;
+                  const stLevel = niftyData.supertrend_10_2_value;
+                  const distance = Math.abs(price - stLevel);
+                  const isAbove = price > stLevel;
+                  const isVeryClose = distance < (stLevel * 0.0005);
+                  
+                  if (isVeryClose) {
+                    return 'bg-yellow-900/20 text-yellow-300 border-yellow-500/40';
+                  } else if (isAbove) {
+                    return 'bg-green-900/20 text-green-400 border-green-500/40';
+                  } else {
+                    return 'bg-red-900/20 text-red-400 border-red-500/40';
+                  }
+                })()
               }`}>
-                {analyses?.NIFTY?.indicators?.supertrend_10_2_signal === 'BUY' ? '🟢 BUY SIGNAL' :
-                 analyses?.NIFTY?.indicators?.supertrend_10_2_signal === 'SELL' ? '🔴 SELL SIGNAL' :
-                 '🟡 NEUTRAL'}
+                {(() => {
+                  const niftyData = analyses?.NIFTY?.indicators;
+                  if (!niftyData) return '○ LOADING';
+                  
+                  const price = niftyData.price;
+                  const stLevel = niftyData.supertrend_10_2_value;
+                  const distance = Math.abs(price - stLevel);
+                  const isAbove = price > stLevel;
+                  const isVeryClose = distance < (stLevel * 0.0005);
+                  
+                  if (isVeryClose) {
+                    return '🟡 AT SUPERTREND';
+                  } else if (isAbove) {
+                    return '🟢 ABOVE SUPERTREND';
+                  } else {
+                    return '🔴 BELOW SUPERTREND';
+                  }
+                })()}
               </div>
             </div>
           </div>
@@ -1817,13 +1882,25 @@ export default function Home() {
               { symbol: 'SENSEX', data: analyses?.SENSEX }
             ].map((item) => (
               <div key={`st_${item.symbol}`} className={`border-2 border-emerald-500/30 rounded-xl p-3 transition-all duration-300 backdrop-blur-sm ${
-                !item.data 
-                  ? 'bg-dark-card/30'
-                  : item.data.indicators?.supertrend_10_2_trend === 'BULLISH'
-                  ? 'bg-green-900/10 shadow-lg shadow-green-500/10'
-                  : item.data.indicators?.supertrend_10_2_trend === 'BEARISH'
-                  ? 'bg-red-900/10 shadow-lg shadow-red-500/10'
-                  : 'bg-yellow-900/10 shadow-lg shadow-yellow-500/10'
+                (() => {
+                  if (!item.data?.indicators) {
+                    return 'bg-dark-card/30';
+                  }
+                  
+                  const price = item.data.indicators.price;
+                  const stLevel = item.data.indicators.supertrend_10_2_value;
+                  const distance = Math.abs(price - stLevel);
+                  const isAbove = price > stLevel;
+                  const isVeryClose = distance < (stLevel * 0.0005);
+                  
+                  if (isVeryClose) {
+                    return 'bg-yellow-900/10 shadow-lg shadow-yellow-500/10';
+                  } else if (isAbove) {
+                    return 'bg-green-900/10 shadow-lg shadow-green-500/10';
+                  } else {
+                    return 'bg-red-900/10 shadow-lg shadow-red-500/10';
+                  }
+                })()
               }`}>
                 {/* Title & Signal - Responsive Layout */}
                 <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-3">
@@ -1835,13 +1912,40 @@ export default function Home() {
                     <span className="text-xs font-bold text-dark-secondary whitespace-nowrap">
                       Confidence: {Math.round(item.data?.indicators?.supertrend_10_2_confidence || Math.min(Math.abs(item.data?.indicators?.supertrend_10_2_distance_pct || 0) * 15, 95))}%
                     </span>
-                    {/* Signal Badge - Only show when valid signal exists */}
-                    {item.data?.indicators?.supertrend_10_2_signal && (item.data.indicators.supertrend_10_2_signal === 'BUY' || item.data.indicators.supertrend_10_2_signal === 'SELL') && (
+                    {/* Signal Badge - Color based on price vs ST level */}
+                    {item.data?.indicators && (
                       <span className={`text-xs font-bold px-2 py-1 rounded-md whitespace-nowrap flex-shrink-0 ${
-                        item.data.indicators.supertrend_10_2_signal === 'BUY' ? 'bg-green-900/20 text-green-400' :
-                        'bg-red-900/20 text-red-400'
+                        (() => {
+                          const price = item.data.indicators.price;
+                          const stLevel = item.data.indicators.supertrend_10_2_value;
+                          const distance = Math.abs(price - stLevel);
+                          const isAbove = price > stLevel;
+                          const isVeryClose = distance < (stLevel * 0.0005);
+                          
+                          if (isVeryClose) {
+                            return 'bg-yellow-900/20 text-yellow-300';
+                          } else if (isAbove) {
+                            return 'bg-green-900/20 text-green-400';
+                          } else {
+                            return 'bg-red-900/20 text-red-400';
+                          }
+                        })()
                       }`}>
-                        {item.data.indicators.supertrend_10_2_signal === 'BUY' ? '🟢 BUY' : '🔴 SELL'}
+                        {(() => {
+                          const price = item.data.indicators.price;
+                          const stLevel = item.data.indicators.supertrend_10_2_value;
+                          const distance = Math.abs(price - stLevel);
+                          const isAbove = price > stLevel;
+                          const isVeryClose = distance < (stLevel * 0.0005);
+                          
+                          if (isVeryClose) {
+                            return '🟡 AT LEVEL';
+                          } else if (isAbove) {
+                            return '🟢 ABOVE';
+                          } else {
+                            return '🔴 BELOW';
+                          }
+                        })()}
                       </span>
                     )}
                   </div>
@@ -1849,37 +1953,78 @@ export default function Home() {
 
                 {item.data?.indicators ? (
                   <div className="space-y-3">
-                    {/* SuperTrend Status */}
-                    <div className={`p-3 rounded-xl border-2 text-center ${
-                      item.data.indicators.supertrend_10_2_trend === 'BULLISH' 
-                        ? 'bg-green-900/20 border-green-500/30 text-green-400' 
-                        : item.data.indicators.supertrend_10_2_trend === 'BEARISH'
-                        ? 'bg-red-900/20 border-red-500/30 text-red-400'
-                        : 'bg-yellow-900/20 border-yellow-500/30 text-yellow-300'
-                    }`}>
-                      <div className="text-lg font-bold">
-                        {item.data.indicators.supertrend_10_2_trend === 'BULLISH' ? '📈 BULLISH TREND' :
-                         item.data.indicators.supertrend_10_2_trend === 'BEARISH' ? '📉 BEARISH TREND' :
-                         '🟡 NEUTRAL TREND'}
-                      </div>
-                      <div className="text-xs mt-1 opacity-80">
-                        SuperTrend is {item.data.indicators.supertrend_10_2_trend === 'BULLISH' ? 'bullish' :
-                                      item.data.indicators.supertrend_10_2_trend === 'BEARISH' ? 'bearish' : 'neutral'}
-                      </div>
-                    </div>
+                    {/* SuperTrend Status - Based on Price vs ST Level */}
+                    {(() => {
+                      const price = item.data.indicators.price;
+                      const stLevel = item.data.indicators.supertrend_10_2_value;
+                      const distance = Math.abs(price - stLevel);
+                      const isAbove = price > stLevel;
+const isVeryClose = distance < (stLevel * 0.0005); // Less than 0.05% away
+                      
+                      let bgColor, borderColor, textColor, statusText, statusEmoji, glow;
+                      
+                      if (isVeryClose) {
+                        bgColor = 'bg-gradient-to-br from-yellow-900/25 to-yellow-950/25';
+                        borderColor = 'border-yellow-500/40';
+                        textColor = 'text-yellow-300';
+                        statusText = 'AT SUPERTREND LEVEL';
+                        statusEmoji = '🟡';
+                        glow = 'shadow-lg shadow-yellow-500/20';
+                      } else if (isAbove) {
+                        bgColor = 'bg-gradient-to-br from-green-900/25 to-green-950/25';
+                        borderColor = 'border-green-500/40';
+                        textColor = 'text-green-300';
+                        statusText = 'ABOVE SUPERTREND';
+                        statusEmoji = '🟢';
+                        glow = 'shadow-lg shadow-green-500/20';
+                      } else {
+                        bgColor = 'bg-gradient-to-br from-red-900/25 to-red-950/25';
+                        borderColor = 'border-red-500/40';
+                        textColor = 'text-red-300';
+                        statusText = 'BELOW SUPERTREND';
+                        statusEmoji = '🔴';
+                        glow = 'shadow-lg shadow-red-500/20';
+                      }
+                      
+                      return (
+                        <div className={`p-3 rounded-xl border-2 text-center ${bgColor} ${borderColor} ${glow}`}>
+                          <div className={`text-base font-black tracking-wide ${textColor}`}>
+                            {statusEmoji} {statusText}
+                          </div>
+                          <div className={`text-xs mt-1.5 opacity-75 ${textColor} font-medium`}>
+                            Price is {isAbove ? 'above' : isVeryClose ? 'at' : 'below'} SuperTrend level
+                          </div>
+                        </div>
+                      );
+                    })()}
+                
 
                     {/* Current Price vs SuperTrend */}
-                    <div className="grid grid-cols-2 gap-3">
-                      <div className="bg-dark-surface/40 border border-emerald-500/30 rounded-lg p-3 text-center">
-                        <div className="text-xs text-dark-secondary mb-1">Current Price</div>
-                        <div className="font-bold text-sm text-purple-400">₹{item.data.indicators.price}</div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div className="bg-gradient-to-b from-dark-surface/50 to-dark-card/30 border border-emerald-500/25 rounded-lg p-3 text-center backdrop-blur-sm">
+                        <div className="text-[10px] text-dark-secondary mb-1.5 font-semibold tracking-wide uppercase">Current Price</div>
+                        <div className={`font-black text-base ${
+                          (() => {
+                            const price = item.data.indicators.price;
+                            const stLevel = item.data.indicators.supertrend_10_2_value;
+                            const distance = Math.abs(price - stLevel);
+                            const isAbove = price > stLevel;
+                            const isVeryClose = distance < (stLevel * 0.0005);
+                            return isVeryClose ? 'text-yellow-300' : isAbove ? 'text-green-400' : 'text-red-400';
+                          })()
+                        }`}>₹{item.data.indicators.price}</div>
                       </div>
-                      <div className="bg-dark-surface/40 border border-emerald-500/30 rounded-lg p-3 text-center">
-                        <div className="text-xs text-dark-secondary mb-1">SuperTrend Level</div>
-                        <div className={`font-bold text-sm ${
-                          item.data.indicators.supertrend_10_2_trend === 'BULLISH' ? 'text-green-400' :
-                          item.data.indicators.supertrend_10_2_trend === 'BEARISH' ? 'text-red-400' :
-                          'text-yellow-300'
+                      <div className="bg-gradient-to-b from-dark-surface/50 to-dark-card/30 border border-emerald-500/25 rounded-lg p-3 text-center backdrop-blur-sm">
+                        <div className="text-[10px] text-dark-secondary mb-1.5 font-semibold tracking-wide uppercase">SuperTrend Level</div>
+                        <div className={`font-black text-base ${
+                          (() => {
+                            const price = item.data.indicators.price;
+                            const stLevel = item.data.indicators.supertrend_10_2_value;
+                            const distance = Math.abs(price - stLevel);
+                            const isAbove = price > stLevel;
+                            const isVeryClose = distance < (stLevel * 0.0005);
+                            return isVeryClose ? 'text-yellow-300' : isAbove ? 'text-green-400' : 'text-red-400';
+                          })()
                         }`}>
                           ₹{item.data.indicators.supertrend_10_2_value}
                         </div>
@@ -1887,48 +2032,88 @@ export default function Home() {
                     </div>
 
                     {/* Distance Analysis */}
-                    <div className="bg-dark-surface/30 border border-emerald-500/30 rounded-lg p-3">
-                      <div className="flex flex-col sm:flex-row sm:justify-between gap-1 mb-2">
-                        <span className="text-xs text-dark-secondary">Distance from SuperTrend:</span>
-                        <span className="text-xs font-bold text-dark-text break-words">
-                          ₹{item.data.indicators.supertrend_10_2_distance} ({item.data.indicators.supertrend_10_2_distance_pct?.toFixed(2)}%)
-                        </span>
+                    <div className={`rounded-lg p-3 border-l-4 backdrop-blur-sm ${
+                      (() => {
+                        const price = item.data.indicators.price;
+                        const stLevel = item.data.indicators.supertrend_10_2_value;
+                        const distance = Math.abs(price - stLevel);
+                        const isAbove = price > stLevel;
+                        const isVeryClose = distance < (stLevel * 0.0005);
+                        
+                        if (isVeryClose) {
+                          return 'bg-yellow-900/15 border-yellow-500/60 text-yellow-300';
+                        } else if (isAbove) {
+                          return 'bg-green-900/15 border-green-500/60 text-green-300';
+                        } else {
+                          return 'bg-red-900/15 border-red-500/60 text-red-300';
+                        }
+                      })()
+                    }`}>
+                      <div className="flex flex-col gap-1.5 mb-2.5">
+                        <span className="text-[10px] text-dark-secondary font-semibold tracking-wide">DISTANCE FROM SUPERTREND</span>
+                        <div className="flex justify-between items-baseline gap-2">
+                          <span className="text-xl font-black">
+                            ₹{item.data.indicators.supertrend_10_2_distance}
+                          </span>
+                          <span className="text-sm font-bold opacity-80">
+                            {item.data.indicators.supertrend_10_2_distance_pct?.toFixed(2)}%
+                          </span>
+                        </div>
                       </div>
-                      <div className={`text-xs p-2 rounded border-l-4 ${
-                        Math.abs(item.data.indicators.supertrend_10_2_distance_pct) < 0.5 
-                          ? 'border-yellow-500/50 bg-yellow-900/10 text-yellow-300' 
-                          : item.data.indicators.supertrend_10_2_trend === 'BULLISH'
-                          ? 'border-green-500/50 bg-green-900/10 text-green-400'
-                          : 'border-red-500/50 bg-red-900/10 text-red-400'
-                      }`}>
+                      <div className="text-xs font-semibold leading-relaxed">
                         {Math.abs(item.data.indicators.supertrend_10_2_distance_pct) < 0.5 
-                          ? '🟡 Very close to SuperTrend line - Watch for trend change'
-                          : item.data.indicators.supertrend_10_2_trend === 'BULLISH'
-                          ? '🟢 Good distance above SuperTrend - Strong uptrend'
-                          : '🔴 Good distance below SuperTrend - Strong downtrend'
+                          ? '🟡 Very close to SuperTrend line — Watch for trend change'
+                          : item.data.indicators.price > item.data.indicators.supertrend_10_2_value
+                          ? '🟢 Good distance above SuperTrend — Strong uptrend'
+                          : '🔴 Good distance below SuperTrend — Strong downtrend'
                         }
                       </div>
                     </div>
 
-                    {/* Simple Entry/Exit Guide */}
-                    <div className={`p-3 rounded-lg border-l-4 ${
-                      item.data.indicators.supertrend_10_2_signal === 'BUY' 
-                        ? 'border-green-500/50 bg-green-900/10 text-green-400'
-                        : item.data.indicators.supertrend_10_2_signal === 'SELL'
-                        ? 'border-red-500/50 bg-red-900/10 text-red-400'
-                        : 'border-yellow-500/50 bg-yellow-900/10 text-yellow-300'
-                    }`}>
-                      <div className="font-bold text-sm mb-1">
-                        {item.data.indicators.supertrend_10_2_signal === 'BUY' ? '🟢 BUY SIGNAL ACTIVE' :
-                         item.data.indicators.supertrend_10_2_signal === 'SELL' ? '🔴 SELL SIGNAL ACTIVE' :
-                         '🟡 HOLD - NO CLEAR SIGNAL'}
-                      </div>
-                      <div className="text-xs opacity-90">
-                        {item.data.indicators.supertrend_10_2_signal === 'BUY' ? 'Price above SuperTrend line - Consider long positions' :
-                         item.data.indicators.supertrend_10_2_signal === 'SELL' ? 'Price below SuperTrend line - Consider short positions' :
-                         'Wait for clear SuperTrend signal before entering'}
-                      </div>
-                    </div>
+                    {/* Trading Guidance - Based on Price vs ST */}
+                    {(() => {
+                      const price = item.data.indicators.price;
+                      const stLevel = item.data.indicators.supertrend_10_2_value;
+                      const distance = Math.abs(price - stLevel);
+                      const isAbove = price > stLevel;
+                      const isVeryClose = distance < (stLevel * 0.0005);
+                      
+                      let bgColor, borderColor, textColor, title, guidance, glow;
+                      
+                      if (isVeryClose) {
+                        bgColor = 'bg-gradient-to-r from-yellow-900/20 to-yellow-950/20';
+                        borderColor = 'border-yellow-500/50';
+                        textColor = 'text-yellow-300';
+                        title = '🟡 WATCH CLOSELY';
+                        guidance = 'Price is near SuperTrend — Wait for breakout direction';
+                        glow = 'shadow-lg shadow-yellow-500/15';
+                      } else if (isAbove) {
+                        bgColor = 'bg-gradient-to-r from-green-900/20 to-green-950/20';
+                        borderColor = 'border-green-500/50';
+                        textColor = 'text-green-300';
+                        title = '🟢 BUY SETUP ACTIVE';
+                        guidance = 'Price above SuperTrend — Consider long positions with support at ST level';
+                        glow = 'shadow-lg shadow-green-500/15';
+                      } else {
+                        bgColor = 'bg-gradient-to-r from-red-900/20 to-red-950/20';
+                        borderColor = 'border-red-500/50';
+                        textColor = 'text-red-300';
+                        title = '🔴 SELL SETUP ACTIVE';
+                        guidance = 'Price below SuperTrend — Consider short positions with resistance at ST level';
+                        glow = 'shadow-lg shadow-red-500/15';
+                      }
+                      
+                      return (
+                        <div className={`p-3 rounded-lg border-l-4 backdrop-blur-sm ${bgColor} ${borderColor} ${glow}`}>
+                          <div className={`font-black text-base mb-1.5 ${textColor} tracking-wide`}>
+                            {title}
+                          </div>
+                          <div className={`text-xs leading-relaxed ${textColor}`}>
+                            {guidance}
+                          </div>
+                        </div>
+                      );
+                    })()}
                   </div>
                 ) : (
                   <div className="text-center py-8">

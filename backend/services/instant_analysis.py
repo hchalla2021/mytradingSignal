@@ -4,9 +4,340 @@ Uses ONLY current tick data from Zerodha - NO historical data needed
 Blazing fast, always works, production-ready
 """
 
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from datetime import datetime
 import asyncio
+import json
+from .intraday_entry_filter import ParabolicSARFilter
+
+
+def calculate_ema(closes: List[float], period: int) -> float:
+    """
+    Calculate EMA from a list of close prices (oldest first)
+    Returns the current EMA value based on the period
+    """
+    if not closes:
+        return 0
+    
+    if len(closes) < period:
+        # Not enough data, return the current close as fallback
+        return closes[-1]
+    
+    # Smoothing factor
+    multiplier = 2.0 / (period + 1)
+    
+    # Calculate SMA for the first period values
+    sma = sum(closes[:period]) / period
+    
+    # Calculate EMA for remaining values
+    ema = sma
+    for i in range(period, len(closes)):
+        ema = (closes[i] * multiplier) + (ema * (1 - multiplier))
+    
+    return ema
+
+
+def calculate_atr(candles: List[Dict[str, float]], period: int = 10) -> float:
+    """
+    Calculate Average True Range (ATR) from candles
+    Candles should be oldest first for proper ATR calculation
+    Used for SuperTrend (10,2) calculation
+    Returns minimum of 0.1% of price if calculation fails
+    """
+    if not candles or len(candles) < 2:
+        # Not enough data - return 0 and let fallback handle it
+        return 0.0
+    
+    # Calculate True Range for each candle
+    true_ranges = []
+    prev_close = candles[0].get('close', 0)
+    
+    for candle in candles:
+        high = float(candle.get('high', 0))
+        low = float(candle.get('low', 0))
+        close = float(candle.get('close', 0))
+        
+        # True Range = max(high - low, abs(high - prev_close), abs(low - prev_close))
+        tr1 = high - low
+        tr2 = abs(high - prev_close) if prev_close > 0 else 0
+        tr3 = abs(low - prev_close) if prev_close > 0 else 0
+        tr = max(tr1, tr2, tr3)
+        
+        true_ranges.append(tr)
+        prev_close = close
+    
+    # If we have less than period candles, use simple average
+    if len(true_ranges) < period:
+        avg_tr = sum(true_ranges) / len(true_ranges) if true_ranges else 0
+        # Ensure minimum ATR (can't be 0, use average of candle ranges)
+        if avg_tr <= 0 and true_ranges:
+            avg_tr = max(true_ranges)  # Use the largest TR as minimum
+        return max(0.001, avg_tr)  # Return at least 0.001
+    
+    # First ATR is simple average of first 'period' TRs
+    atr = sum(true_ranges[:period]) / period
+    
+    # Then smooth using EMA formula for remaining TRs
+    multiplier = 2.0 / (period + 1)
+    for tr in true_ranges[period:]:
+        atr = (tr * multiplier) + (atr * (1 - multiplier))
+    
+    return max(0.001, atr)  # Ensure ATR is never 0
+
+
+async def calculate_market_structure_from_cache(cache, symbol: str, tick_data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Calculate market structure indicators from cached candles
+    Returns order blocks, swing levels, and institutional activity markers
+    """
+    try:
+        if not cache:
+            return {}
+        
+        candle_key = f"analysis_candles:{symbol}"
+        candles_json = await cache.lrange(candle_key, 0, 199)
+        
+        if not candles_json or len(candles_json) < 5:
+            return {}
+        
+        # Parse candle data (comes in reversed order - newest first)
+        candles = []
+        for candle_json in reversed(candles_json[-20:]):  # Last 20 candles for structure
+            try:
+                candle = json.loads(candle_json)
+                candles.append(candle)
+            except (json.JSONDecodeError, KeyError):
+                continue
+        
+        if len(candles) < 5:
+            return {}
+        
+        current_price = float(tick_data.get('price', 0))
+        closes = [c['close'] for c in candles]
+        highs = [c['high'] for c in candles]
+        lows = [c['low'] for c in candles]
+        
+        # Calculate Swing High/Low (last 5 candles)
+        swing_high = max(highs[-5:]) if len(highs) >= 5 else max(highs)
+        swing_low = min(lows[-5:]) if len(lows) >= 5 else min(lows)
+        
+        # Order Block detection (support level after big move)
+        last_candle = candles[-1]
+        prev_candle = candles[-2] if len(candles) > 1 else last_candle
+        
+        order_block_bullish = None
+        order_block_bearish = None
+        
+        # If price moved down significantly, previous high is resistance order block
+        if prev_candle['close'] > last_candle['close']:
+            order_block_bearish = round(prev_candle['high'], 2)
+        
+        # If price moved up significantly, previous low is support order block
+        if prev_candle['close'] < last_candle['close']:
+            order_block_bullish = round(prev_candle['low'], 2)
+        
+        # Break of Structure (BOS)
+        bos_bullish = current_price > swing_high  # Price breaks above recent high
+        bos_bearish = current_price < swing_low   # Price breaks below recent low
+        
+        # Fair Value Gap (FVG) - gap between candles
+        fvg_bullish = False
+        fvg_bearish = False
+        if len(candles) >= 3:
+            # Bullish FVG: Previous candle low > Current candle high
+            if candles[-2]['low'] > candles[-1]['high']:
+                fvg_bullish = True
+            # Bearish FVG: Previous candle high < Current candle low
+            if candles[-2]['high'] < candles[-1]['low']:
+                fvg_bearish = True
+        
+        # Volume Profile (High volume vs low volume candles in last 10)
+        avg_volume = sum([c.get('volume', 0) for c in candles[-10:]]) / min(10, len(candles))
+        high_volume_levels = []
+        for candle in candles[-10:]:
+            if candle.get('volume', 0) > avg_volume * 1.2:
+                high_volume_levels.append((candle['high'] + candle['low']) / 2)
+        
+        # Institutional activity markers
+        buy_volume_strength = 0
+        sell_volume_strength = 0
+        
+        for candle in candles[-5:]:
+            vol = candle.get('volume', 0)
+            if candle['close'] > candle['open']:
+                buy_volume_strength += vol
+            else:
+                sell_volume_strength += vol
+        
+        buy_volume_ratio = buy_volume_strength / (sell_volume_strength + buy_volume_strength) if (sell_volume_strength + buy_volume_strength) > 0 else 0.5
+        
+        return {
+            "swing_high": swing_high,
+            "swing_low": swing_low,
+            "order_block_bullish": order_block_bullish,
+            "order_block_bearish": order_block_bearish,
+            "bos_bullish": bos_bullish,  # Break of Structure (bullish)
+            "bos_bearish": bos_bearish,  # Break of Structure (bearish)
+            "fvg_bullish": fvg_bullish,  # Fair Value Gap (bullish)
+            "fvg_bearish": fvg_bearish,  # Fair Value Gap (bearish)
+            "high_volume_levels": [round(lvl, 2) for lvl in high_volume_levels[:3]],  # Top 3
+            "buy_volume_ratio": round(buy_volume_ratio * 100, 1),  # Buy vol strength %
+            "sell_volume_ratio": round((1 - buy_volume_ratio) * 100, 1),  # Sell vol strength %
+        }
+        
+    except Exception as e:
+        print(f"⚠️ Error calculating market structure for {symbol}: {e}")
+        return {}
+
+
+async def calculate_emas_from_cache(cache, symbol: str, tick_data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Calculate EMA 20, 50, 100, 200 and ATR 10 from cached candles
+    Updates tick_data with calculated EMA and ATR values
+    """
+    try:
+        candle_key = f"analysis_candles:{symbol}"
+        
+        # Get last 200 candles from cache (need this many for EMA200 + ATR)
+        candles_json = await cache.lrange(candle_key, 0, 199)
+        
+        if not candles_json:
+            # No cached candles yet, return with price as fallback
+            return tick_data
+        
+        # Parse candle data (comes in reversed order - newest first)
+        # Reverse to get oldest first for proper EMA and ATR calculation
+        candles = []
+        closes = []
+        
+        for candle_json in reversed(candles_json):
+            try:
+                candle = json.loads(candle_json)
+                candles.append(candle)  # Keep full candle for ATR
+                closes.append(candle['close'])
+            except (json.JSONDecodeError, KeyError, TypeError):
+                continue
+        
+        if not candles:
+            return tick_data
+        
+        # Calculate EMAs using all available candles
+        ema_20 = calculate_ema(closes, 20)
+        ema_50 = calculate_ema(closes, 50)
+        ema_100 = calculate_ema(closes, 100)
+        ema_200 = calculate_ema(closes, 200)
+        
+        # Calculate ATR 10 from candles (need full OHLC data)
+        atr_10 = calculate_atr(candles, 10)
+        
+        # Update tick_data with calculated values
+        tick_data['ema_20'] = ema_20
+        tick_data['ema_50'] = ema_50
+        tick_data['ema_100'] = ema_100
+        tick_data['ema_200'] = ema_200
+        tick_data['atr_10'] = atr_10  # 🔥 NEW: Real ATR for SuperTrend
+        
+        # Debug logging every 30 seconds
+        import time
+        if int(time.time()) % 30 == 0:
+            print(f"[EMA-ATR-CALC] {symbol}: EMA20={ema_20:.2f}, EMA50={ema_50:.2f}, EMA100={ema_100:.2f}, EMA200={ema_200:.2f}, ATR10={atr_10:.2f}")
+        
+        return tick_data
+        
+    except Exception as e:
+        print(f"⚠️ Error calculating EMAs/ATR from cache for {symbol}: {e}")
+        # Return tick_data unchanged - instant_analysis will use fallback values
+        return tick_data
+
+
+async def calculate_sar_from_cache(cache, symbol: str, tick_data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Calculate real Parabolic SAR from cached candles
+    Returns updated tick_data with sar_value, sar_position, sar_trend, sar_signal fields
+    
+    Uses ParabolicSARFilter.calculate_sar() for accurate SAR calculation
+    """
+    try:
+        if not cache:
+            return tick_data
+        
+        candle_key = f"analysis_candles:{symbol}"
+        candles_json = await cache.lrange(candle_key, 0, 199)
+        
+        if not candles_json or len(candles_json) < 10:
+            # Not enough candles for SAR, use fallback in tick_data
+            return tick_data
+        
+        # Parse candle data (comes in reversed order - newest first)
+        # Reverse to get oldest first for proper SAR calculation
+        highs = []
+        lows = []
+        closes = []
+        
+        for candle_json in reversed(candles_json[-10:]):  # Use last 10 candles for SAR
+            try:
+                candle = json.loads(candle_json)
+                highs.append(candle['high'])
+                lows.append(candle['low'])
+                closes.append(candle['close'])
+            except (json.JSONDecodeError, KeyError, TypeError):
+                continue
+        
+        if len(highs) < 10:
+            return tick_data
+        
+        # Calculate real Parabolic SAR using ParabolicSARFilter
+        sar_data = ParabolicSARFilter.calculate_sar(highs, lows, closes)
+        
+        # Extract values
+        sar_value = sar_data.get('sar', tick_data.get('price', 0))
+        sar_trend = sar_data.get('trend', 'UNKNOWN')
+        
+        # Current tick price and values
+        current_price = float(tick_data.get('price', 0))
+        current_high = float(tick_data.get('high', current_price))
+        current_low = float(tick_data.get('low', current_price))
+        prev_close = float(tick_data.get('prev_close', closes[-1] if closes else current_price))
+        
+        # Determine SAR position and analyze for signal
+        if current_price > sar_value:
+            sar_position = "BELOW"  # SAR below price = bullish
+        elif current_price < sar_value:
+            sar_position = "ABOVE"  # SAR above price = bearish
+        else:
+            sar_position = "NEUTRAL"
+        
+        # Analyze SAR with confidence
+        psar_result = ParabolicSARFilter.analyze_psar(
+            current_high=current_high,
+            current_low=current_low,
+            current_close=current_price,
+            prev_close=prev_close,
+            sar_data=sar_data,
+            volume=int(tick_data.get('volume', 0)),
+            avg_volume=int(tick_data.get('avg_volume', 0)),
+            timeframe="15m"  # Use 15m for analysis
+        )
+        
+        # Update tick_data with SAR values
+        tick_data['sar_value'] = round(sar_value, 2)
+        tick_data['sar_position'] = sar_position
+        tick_data['sar_trend'] = psar_result.get('trend', 'UNKNOWN')
+        tick_data['sar_signal'] = psar_result.get('signal', 'NEUTRAL')
+        tick_data['sar_signal_strength'] = psar_result.get('final_confidence', 0)
+        tick_data['sar_reversal'] = psar_result.get('reversal', False)
+        
+        # Debug logging (every 30 seconds)
+        import time
+        if int(time.time()) % 30 == 0:
+            print(f"[SAR-CALC] {symbol}: SAR={sar_value:.2f}, Trend={psar_result.get('trend')}, Signal={psar_result.get('signal')}")
+        
+        return tick_data
+        
+    except Exception as e:
+        print(f"⚠️ Error calculating SAR from cache for {symbol}: {e}")
+        # Return tick_data unchanged - instant_analysis will use fallback values
+        return tick_data
 
 
 class InstantSignal:
@@ -224,13 +555,25 @@ class InstantSignal:
                 # SENSEX futures (BFO) have lower volume than NSE indices
                 # Strong: >50K, Moderate: >20K, Low: <=20K
                 vol_strength = 'STRONG_VOLUME' if volume > 50000 else 'MODERATE_VOLUME' if volume > 20000 else 'WEAK_VOLUME'
+                volume_threshold = 20000  # Moderate threshold
             elif symbol in ["NIFTY", "BANKNIFTY"]:
                 # NIFTY/BANKNIFTY futures (NFO) have higher volume
                 # Strong: >1M, Moderate: >500K, Low: <=500K
                 vol_strength = 'STRONG_VOLUME' if volume > 1000000 else 'MODERATE_VOLUME' if volume > 500000 else 'WEAK_VOLUME'
+                volume_threshold = 500000  # Moderate threshold
             else:
                 # Stock volume thresholds
                 vol_strength = 'STRONG_VOLUME' if volume > 5000000 else 'MODERATE_VOLUME' if volume > 1000000 else 'WEAK_VOLUME'
+                volume_threshold = 1000000  # Moderate threshold
+            
+            # Calculate volume ratio (for VWMA filter)
+            volume_ratio = volume / volume_threshold if volume_threshold > 0 else 0
+            
+            # Volume-Price Alignment Check (VWMA confirmation)
+            # Volume should support price direction for strong signal
+            volume_above_threshold = volume > volume_threshold
+            price_above_vwma = price > (tick_data.get('vwma_20', price))
+            volume_price_alignment = (volume_above_threshold and price_above_vwma) or (not volume_above_threshold and not price_above_vwma)
             
             # ============================================
             # CALCULATE MOMENTUM INDICATORS - PROFESSIONAL
@@ -556,6 +899,45 @@ class InstantSignal:
                 camarilla_signal = "CPR_CHOP_ZONE"
                 camarilla_signal_desc = "Price in CPR chop zone - avoid entries, await break"
             
+            # 🔥 CAMARILLA CONFIDENCE CALCULATION
+            camarilla_confidence = 50  # Base confidence
+            
+            # Signal type confidence
+            if "CONFIRMED" in camarilla_signal:
+                camarilla_confidence += 30  # Strong signal
+            elif "TOUCH" in camarilla_signal:
+                camarilla_confidence += 15  # Medium signal
+            elif "HOLD" in camarilla_signal:
+                camarilla_confidence += 10  # Moderate signal
+            else:
+                camarilla_confidence += 5   # Weak signal (chop zone)
+            
+            # Zone position confidence
+            if camarilla_zone == "ABOVE_TC" or camarilla_zone == "BELOW_BC":
+                camarilla_confidence += 15  # Clear directional zone
+            elif camarilla_zone == "INSIDE_CPR":
+                camarilla_confidence -= 10  # Unreliable in chop zone
+            
+            # Distance from CPR boundaries
+            dist_to_tc = abs(price - tc)
+            dist_to_bc = abs(price - bc)
+            if dist_to_tc > (cpr_width * 0.5) or dist_to_bc > (cpr_width * 0.5):
+                camarilla_confidence += 10  # Good distance from boundary
+            
+            # EMA alignment bonus
+            if (ema_20 > ema_50 and (camarilla_zone == "ABOVE_TC" or camarilla_zone == "INSIDE_CPR"))  or \
+               (ema_20 < ema_50 and (camarilla_zone == "BELOW_BC" or camarilla_zone == "INSIDE_CPR")):
+                camarilla_confidence += 10  # EMA confirms Camarilla signal
+            
+            # CPR width (narrow = trending, wide = ranging)
+            if cpr_width_pct < 0.5:
+                camarilla_confidence += 10  # Narrow CPR = trending = more reliable
+            elif cpr_width_pct > 1.5:
+                camarilla_confidence -= 5   # Wide CPR = ranging = less reliable
+            
+            # Cap between 30-95 (realistic range)
+            camarilla_confidence = min(95, max(30, camarilla_confidence))
+            
             # COMBINED STRATEGY: CPR + EMA + VWAP
             # Trend Day Signal = CPR break + above/below EMA20 + VWAP alignment
             trend_day_signal = None
@@ -585,34 +967,50 @@ class InstantSignal:
             ema20_vs_ema50 = "ABOVE" if ema_20 > ema_50 else "BELOW" if ema_20 < ema_50 else "EQUAL"
             ema50_vs_ema100 = "ABOVE" if ema_50 > ema_100 else "BELOW" if ema_50 < ema_100 else "EQUAL"
             
-            # Compression check: if all EMAs too close = confusion zone
-            ema_range = abs(ema_200 - ema_20)
-            compression_threshold = ema_200 * 0.01  # 1% compression zone
-            is_compressed = ema_range < compression_threshold
+            # 🔥 FIXED: Compression check - EMAs clustered (not EMA200 vs EMA20 range)
+            # Check if the 3 main EMAs (20, 50, 100) are all within 0.3% of current price
+            ema_values = [ema_20, ema_50, ema_100]
+            ema_max = max(ema_values)
+            ema_min = min(ema_values)
+            ema_spread = ema_max - ema_min
+            compression_threshold = price * 0.003  # 0.3% compression zone (was 1% - too loose)
+            is_compressed = ema_spread < compression_threshold
             
             # Trend Status = Traffic Light
-            if ema_20 > ema_50 > ema_100 and price > ema_20:
-                # Strong Bullish Trend
+            if ema_20 > ema_50 > ema_100 and price > ema_20 and not is_compressed:
+                # Strong Bullish Trend - Perfect alignment + price above all
                 trend_status = "STRONG_UPTREND"
                 trend_label = "✅ Strong Uptrend"
                 trend_color = "BULLISH"
                 buy_allowed = True
-            elif ema_20 < ema_50 < ema_100 and price < ema_20:
-                # Strong Bearish Trend
+            elif ema_20 < ema_50 < ema_100 and price < ema_20 and not is_compressed:
+                # Strong Bearish Trend - Perfect alignment + price below all
                 trend_status = "STRONG_DOWNTREND"
                 trend_label = "🔴 Strong Downtrend"
                 trend_color = "BEARISH"
                 buy_allowed = False
             elif is_compressed:
-                # Compression Zone
+                # 🔥 TRUE Compression Zone - EMAs all clustered together
                 trend_status = "COMPRESSION"
-                trend_label = "⚠️ Compression Zone"
+                trend_label = "🟡 Compression Zone"
                 trend_color = "NEUTRAL"
                 buy_allowed = False
+            elif (ema_20 > ema_50 > ema_100) and (price > ema_50 or price > ema_100):
+                # Weak Bullish - EMAs aligned but price not above all or spread too wide
+                trend_status = "WEAK_UPTREND"
+                trend_label = "🟢 Weak Uptrend"
+                trend_color = "BULLISH"
+                buy_allowed = True
+            elif (ema_20 < ema_50 < ema_100) and (price < ema_50 or price < ema_100):
+                # Weak Bearish - EMAs aligned but price not below all or spread too wide
+                trend_status = "WEAK_DOWNTREND"
+                trend_label = "🔴 Weak Downtrend"
+                trend_color = "BEARISH"
+                buy_allowed = False
             else:
-                # Sideways / Confusion
-                trend_status = "SIDEWAYS"
-                trend_label = "⚠️ Sideways/Confusion"
+                # Sideways / Confusion - EMAs not properly aligned
+                trend_status = "TRANSITION"
+                trend_label = "🟡 Transition/Sideways"
                 trend_color = "NEUTRAL"
                 buy_allowed = False
             
@@ -724,6 +1122,70 @@ class InstantSignal:
                 momentum_shift = "MIXED"
             
             # ============================================
+            # EMA ALIGNMENT STATUS (for frontend EMA Traffic Light)
+            # ============================================
+            # Calculate EMA alignment for the traffic light display
+            if ema_20 > ema_50 > ema_100 and price > ema_20 and not is_compressed:
+                # All three EMAs properly ordered BULLISH + price above all + not compressed
+                ema_alignment = "ALL_BULLISH"
+                ema_alignment_confidence = 95
+            elif ema_20 < ema_50 < ema_100 and price < ema_20 and not is_compressed:
+                # All three EMAs properly ordered BEARISH + price below all + not compressed
+                ema_alignment = "ALL_BEARISH"
+                ema_alignment_confidence = 95
+            elif is_compressed:
+                # 🔥 TRUE compression - EMAs all bunched together = confusion zone
+                ema_alignment = "COMPRESSION"
+                ema_alignment_confidence = 30
+            elif (ema_20 > ema_50 > ema_100) and (price > ema_50 or price > ema_100):
+                # Weak bullish - proper order but price not above all
+                ema_alignment = "PARTIAL_BULLISH"
+                ema_alignment_confidence = 65
+            elif (ema_20 < ema_50 < ema_100) and (price < ema_50 or price < ema_100):
+                # Weak bearish - proper order but price not below all
+                ema_alignment = "PARTIAL_BEARISH"
+                ema_alignment_confidence = 65
+            elif ema_20 > ema_50 or ema_20 > ema_100 or price > ema_50:
+                # Partial bullish alignment (order not perfect)
+                ema_alignment = "PARTIAL_BULLISH"
+                ema_alignment_confidence = 55
+            elif ema_20 < ema_50 or ema_20 < ema_100 or price < ema_50:
+                # Partial bearish alignment (order not perfect)
+                ema_alignment = "PARTIAL_BEARISH"
+                ema_alignment_confidence = 55
+            else:
+                # Mixed/Neutral
+                ema_alignment = "NEUTRAL"
+                ema_alignment_confidence = 50
+            
+            # ============================================
+            # VWMA 20 • ENTRY FILTER SIGNAL (for frontend VWMA filter)
+            # ============================================
+            # Combines VWMA position + EMA alignment + Volume confirmation
+            vwma_20_value = tick_data.get('vwma_20', price)
+            vwma_above_price = vwma_20_value < price  # VWMA below = bullish
+            vwma_below_price = vwma_20_value > price  # VWMA above = bearish
+            
+            # Determine VWMA-EMA signal
+            vwma_ema_signal = None
+            
+            # STRONG BUY: Price > VWMA + Bullish EMA alignment + Volume confirmation
+            if vwma_above_price and (ema_alignment == "ALL_BULLISH" or ema_alignment == "PARTIAL_BULLISH") and volume_ratio >= 1.2:
+                vwma_ema_signal = "STRONG_BUY"
+            # BUY: Price > VWMA + Some bullish conditions
+            elif vwma_above_price and (ema_alignment in ["ALL_BULLISH", "PARTIAL_BULLISH"] or price > ema_20) and volume_price_alignment:
+                vwma_ema_signal = "BUY"
+            # STRONG SELL: Price < VWMA + Bearish EMA alignment + Volume confirmation
+            elif vwma_below_price and (ema_alignment == "ALL_BEARISH" or ema_alignment == "PARTIAL_BEARISH") and volume_ratio >= 1.2:
+                vwma_ema_signal = "STRONG_SELL"
+            # SELL: Price < VWMA + Some bearish conditions
+            elif vwma_below_price and (ema_alignment in ["ALL_BEARISH", "PARTIAL_BEARISH"] or price < ema_20) and volume_price_alignment:
+                vwma_ema_signal = "SELL"
+            # WAIT: No clear signal
+            else:
+                vwma_ema_signal = "WAIT"
+            
+            # ============================================
             # SIDEWAYS MARKET DETECTION (SAR & SuperTrend UNRELIABLE FILTER)
             # ============================================
             # SAR and SuperTrend give FALSE FLIPS in consolidation zones
@@ -737,7 +1199,16 @@ class InstantSignal:
             price_in_cpr = bc <= price <= tc  # Inside CPR = consolidation
             
             # 3. ATR Estimate (Volatility)
-            atr_estimate = high - low  # Today's range
+            # 🔥 FIX: Use real 10-period ATR from cached candles (if available)
+            # Falls back to range-based estimate if cache unavailable
+            atr_estimate = tick_data.get('atr_10', None)
+            
+            if atr_estimate is None or atr_estimate <= 0.001:
+                # Fallback: Use today's range as ATR multiplied by 1.5 (ATR is usually larger than single candle)
+                # This ensures bands are wide enough to show BULLISH/BEARISH instead of always NEUTRAL
+                min_atr = (high - low) * 1.5  # 1.5x multiplier to account for multi-candle ATR
+                atr_estimate = max(min_atr, price * 0.005)  # Minimum 0.5% of price as fallback
+            
             atr_pct = (atr_estimate / price * 100) if price > 0 else 0
             is_atr_low = atr_pct < 0.5  # Low volatility = small candles = chop
             
@@ -752,6 +1223,8 @@ class InstantSignal:
                 sideways_reason.append(f"Low ATR ({atr_pct:.2f}% range)")
             sideway_warning = " + ".join(sideways_reason) if sideways_reason else ""
             
+            # ============================================
+            # SUPERTREND (10,2) - PROFESSIONAL INTRADAY PARAMETERS
             # ============================================
             # SUPERTREND (10,2) - PROFESSIONAL INTRADAY PARAMETERS
             # ============================================
@@ -770,6 +1243,15 @@ class InstantSignal:
             basic_upper_band = hl2 + (st_multiplier * atr_estimate)
             basic_lower_band = hl2 - (st_multiplier * atr_estimate)
             
+            # Safety check: Ensure bands are not too narrow (would cause continuous NEUTRAL)
+            # Minimum band width should be at least 0.3% of price on each side
+            min_band_distance = price * 0.003  # 0.3% minimum
+            if (basic_upper_band - basic_lower_band) < (price * 0.006):
+                # Bands too narrow, widen them
+                band_center = (basic_upper_band + basic_lower_band) / 2
+                basic_upper_band = band_center + min_band_distance
+                basic_lower_band = band_center - min_band_distance
+            
             # SuperTrend determination
             if price > basic_upper_band:
                 st_10_2_value = basic_lower_band
@@ -783,6 +1265,12 @@ class InstantSignal:
                 st_10_2_value = hl2
                 st_10_2_trend = "NEUTRAL"
                 st_10_2_signal = "HOLD"
+            
+            # Debug logging every 30 seconds
+            import time
+            if int(time.time()) % 30 == 0:
+                print(f"[ST-DEBUG] {symbol}: Price={price:.2f}, HL2={hl2:.2f}, ATR={atr_estimate:.2f}")
+                print(f"[ST-DEBUG] Upper={basic_upper_band:.2f}, Lower={basic_lower_band:.2f}, Trend={st_10_2_trend}")
             
             # SuperTrend distance to line
             st_distance = abs(price - st_10_2_value)
@@ -897,44 +1385,30 @@ class InstantSignal:
                     market_status_message = "🔄 NEUTRAL - Waiting for alignment"
             
             # ============================================
-            # PARABOLIC SAR - TREND FOLLOWING (NOT REVERSAL)
+            # PARABOLIC SAR - TREND FOLLOWING (REAL SAR CALCULATION)
             # ============================================
-            # SAR = Stop and Reverse (trailing stop, best for trend riding)
-            # Uses EMA20 as dynamic trailing stop in uptrend/downtrend
+            # SAR = Stop and Reverse (trailing stop, calculated from price history)
+            # Uses real Parabolic SAR from cached candles (calculated in calculate_sar_from_cache)
             
-            # Determine if price is in trending market
-            in_uptrend = price > ema_50 and ema_20 > ema_50 and ema_50 > ema_100
-            in_downtrend = price < ema_50 and ema_20 < ema_50 and ema_50 < ema_100
-            is_ranging = not (in_uptrend or in_downtrend)
+            # Get real SAR values from tick_data (calculated from cache)
+            sar_value = float(tick_data.get('sar_value', (high + low) / 2))
+            sar_position = tick_data.get('sar_position', 'NEUTRAL')
+            sar_trend = tick_data.get('sar_trend', 'UNKNOWN')
+            sar_signal = tick_data.get('sar_signal', None)
+            sar_signal_strength = tick_data.get('sar_signal_strength', 0)
+            sar_reversal = tick_data.get('sar_reversal', False)
             
-            # Calculate SAR value (using EMA20 as dynamic support/resistance)
-            if in_uptrend:
-                # UPTREND: SAR trails below price (support/stop loss)
-                sar_value = ema_20
-                sar_position = "BELOW"  # Below candle = bullish
-                sar_trend = "BULLISH"
-            elif in_downtrend:
-                # DOWNTREND: SAR trails above price (resistance/stop loss)
-                sar_value = ema_20
-                sar_position = "ABOVE"  # Above candle = bearish
-                sar_trend = "BEARISH"
-            else:
-                # RANGING: SAR unreliable, use near-term support/resistance
-                sar_value = (high + low) / 2  # Midpoint as neutral SAR
-                sar_position = "NEUTRAL"
-                sar_trend = "NEUTRAL"
-            
-            # SAR Flip Detection (when SAR crosses price = signal reversal)
-            sar_flip = None
+            # SAR Flip Detection (when SAR crosses price = potential reversal)
+            sar_flip = False
             sar_flip_type = None
             
-            # Check for flip signals (crosses)
-            if in_uptrend and price <= sar_value:
-                # SAR flip: Uptrend breaking down, SAR coming above price
+            # Check for flip signals (crosses) based on SAR position
+            if sar_position == "BELOW" and price <= sar_value:
+                # SAR flip: Bullish trend breaking down, SAR coming to/above price
                 sar_flip = True
                 sar_flip_type = "POTENTIAL_SELL_FLIP"
-            elif in_downtrend and price >= sar_value:
-                # SAR flip: Downtrend breaking up, SAR coming below price
+            elif sar_position == "ABOVE" and price >= sar_value:
+                # SAR flip: Bearish trend breaking up, SAR coming to/below price
                 sar_flip = True
                 sar_flip_type = "POTENTIAL_BUY_FLIP"
             else:
@@ -942,57 +1416,37 @@ class InstantSignal:
                 sar_flip_type = None
             
             # ============================================
-            # SAR SIGNAL VALIDATION (with EMA50 + VWAP filter)
+            # SAR SIGNAL VALIDATION (with EMA50 + VWAP confirmation)
             # ============================================
-            sar_signal = None
-            sar_signal_strength = None
+            # Use SAR signal from ParabolicSARFilter, enhance with EMA50 and VWAP confirmation
+            
             sar_confirmation_status = None
             
-            if in_uptrend and price > sar_value:
-                # SAR BELOW PRICE in uptrend = BUY mode
-                # Validate with EMA50 and VWAP
-                
+            if not sar_signal or sar_signal == "NEUTRAL":
+                # No SAR signal or neutral state
+                sar_confirmation_status = "⚠️ Waiting for SAR signal or trend setup"
+            elif "BUY" in sar_signal:
+                # SAR is giving a BUY signal - validate with filters
                 if price > ema_50 and vwap_pos == "ABOVE_VWAP":
-                    # ALL FILTERS ALIGNED: Price > SAR > EMA50 ✓, Price > VWAP ✓
-                    sar_signal = "SAR_BUY_VALID_STRONG"
-                    sar_signal_strength = 90
-                    sar_confirmation_status = "Trend Long Confirmed (Price + EMA50 + VWAP aligned)"
+                    # STRONG: SAR signal + EMA50 + VWAP all aligned
+                    sar_confirmation_status = "✅ SAR BUY Signal Confirmed (EMA50 + VWAP aligned)"
                 elif price > ema_50:
-                    # PARTIAL: Price > SAR + EMA50 aligned, VWAP not confirmed
-                    sar_signal = "SAR_BUY_VALID"
-                    sar_signal_strength = 75
-                    sar_confirmation_status = "Trend Long (EMA50 confirmed)"
+                    # PARTIAL: SAR signal + EMA50 aligned, VWAP not confirmed
+                    sar_confirmation_status = "✓ SAR BUY Signal (EMA50 confirmed)"
                 else:
-                    # WEAK: SAR below but EMA50 not supporting
-                    sar_signal = "SAR_BUY_WEAK"
-                    sar_signal_strength = 50
-                    sar_confirmation_status = "SAR below price but EMA50 caution"
-            
-            elif in_downtrend and price < sar_value:
-                # SAR ABOVE PRICE in downtrend = SELL mode
-                # Validate with EMA50 and VWAP
-                
+                    # WEAK: SAR signal present but EMA50 not supporting
+                    sar_confirmation_status = "⚠️ SAR BUY caution - EMA50 below price"
+            elif "SELL" in sar_signal:
+                # SAR is giving a SELL signal - validate with filters
                 if price < ema_50 and vwap_pos == "BELOW_VWAP":
-                    # ALL FILTERS ALIGNED: Price < SAR < EMA50 ✓, Price < VWAP ✓
-                    sar_signal = "SAR_SELL_VALID_STRONG"
-                    sar_signal_strength = 90
-                    sar_confirmation_status = "Trend Short Confirmed (Price + EMA50 + VWAP aligned)"
+                    # STRONG: SAR signal + EMA50 + VWAP all aligned
+                    sar_confirmation_status = "✅ SAR SELL Signal Confirmed (EMA50 + VWAP aligned)"
                 elif price < ema_50:
-                    # PARTIAL: Price < SAR + EMA50 aligned, VWAP not confirmed
-                    sar_signal = "SAR_SELL_VALID"
-                    sar_signal_strength = 75
-                    sar_confirmation_status = "Trend Short (EMA50 confirmed)"
+                    # PARTIAL: SAR signal + EMA50 aligned, VWAP not confirmed
+                    sar_confirmation_status = "✓ SAR SELL Signal (EMA50 confirmed)"
                 else:
-                    # WEAK: SAR above but EMA50 not supporting
-                    sar_signal = "SAR_SELL_WEAK"
-                    sar_signal_strength = 50
-                    sar_confirmation_status = "SAR above price but EMA50 caution"
-            
-            elif is_ranging:
-                # NO TREND: SAR unreliable in ranging market
-                sar_signal = "SAR_AVOID_RANGING"
-                sar_signal_strength = 0
-                sar_confirmation_status = "⚠️ Ranging market - SAR false signals likely (use on breakout)"
+                    # WEAK: SAR signal present but EMA50 not supporting
+                    sar_confirmation_status = "⚠️ SAR SELL caution - EMA50 above price"
             
             # Calculate trailing stop loss (current SAR value)
             trailing_sl = sar_value
@@ -1217,6 +1671,8 @@ class InstantSignal:
                     "ema_50": round(ema_50, 2),
                     "ema_100": round(ema_100, 2),
                     "ema_200": round(ema_200, 2),
+                    "ema_alignment": ema_alignment,  # ALL_BULLISH, ALL_BEARISH, PARTIAL_BULLISH, PARTIAL_BEARISH, COMPRESSION, NEUTRAL
+                    "ema_alignment_confidence": ema_alignment_confidence,  # 30-95 confidence score
                     "ema200_touch": ema200_touch,  # TOUCHING, ABOVE, BELOW
                     "ema200_touch_type": ema200_touch_type,  # FROM_ABOVE, FROM_BELOW
                     "ema200_action": ema200_action,  # Description of touch
@@ -1240,6 +1696,7 @@ class InstantSignal:
                     "camarilla_zone_status": camarilla_zone_status,  # Human readable
                     "camarilla_signal": camarilla_signal,  # R3_BREAKOUT_CONFIRMED, S3_BREAKDOWN_CONFIRMED, CPR_CHOP_ZONE, etc.
                     "camarilla_signal_desc": camarilla_signal_desc,  # Full description with emoji
+                    "camarilla_confidence": camarilla_confidence,  # Dynamic confidence score (30-95)
                     
                     # CPR (Central Pivot Range) Analysis
                     "cpr_top_central": round(tc, 2),  # TC = H3
@@ -1320,6 +1777,9 @@ class InstantSignal:
                     # Volume & Momentum
                     "volume": volume if volume > 0 else None,  # None if no volume data
                     "volume_strength": vol_strength,
+                    "volume_ratio": round(volume_ratio, 2),  # Volume ratio to threshold (1.0 = at threshold)
+                    "volume_price_alignment": volume_price_alignment,  # Volume confirms price direction
+                    "vwma_ema_signal": vwma_ema_signal,  # STRONG_BUY, BUY, SELL, STRONG_SELL, WAIT
                     "rsi": round(rsi, 1),  # RSI based on momentum (0-100)
                     "rsi_zone": rsi_zone,  # RSI zone (60_ABOVE, 50_TO_60, 40_TO_50, 40_BELOW)
                     "rsi_signal": rsi_signal,  # RSI 60/40 signal (MOMENTUM_BUY, REJECTION_SHORT, PULLBACK_BUY, etc.)
@@ -1340,6 +1800,19 @@ class InstantSignal:
                     # Options Data
                     "pcr": pcr if pcr > 0 else None,
                     "oi_change": round(oi_change, 2) if oi_change != 0 else 0,
+                    
+                    # Institutional Market Structure (calculated in market_feed.py)
+                    "buy_volume_ratio": tick_data.get('buy_volume_ratio', 50),  # Buy volume %
+                    "sell_volume_ratio": tick_data.get('sell_volume_ratio', 50),  # Sell volume %
+                    "order_block_bullish": tick_data.get('order_block_bullish'),  # Support order block level
+                    "order_block_bearish": tick_data.get('order_block_bearish'),  # Resistance order block level
+                    "bos_bullish": tick_data.get('bos_bullish', False),  # Bullish break of structure
+                    "bos_bearish": tick_data.get('bos_bearish', False),  # Bearish break of structure
+                    "fvg_bullish": tick_data.get('fvg_bullish', False),  # Bullish fair value gap
+                    "fvg_bearish": tick_data.get('fvg_bearish', False),  # Bearish fair value gap
+                    "swing_high": tick_data.get('swing_high'),  # Last 5 candle swing high
+                    "swing_low": tick_data.get('swing_low'),  # Last 5 candle swing low
+                    "high_volume_levels": tick_data.get('high_volume_levels', []),  # Top volume price levels
                     
                     # Time Filter
                     "time_quality": "GOOD",
@@ -1393,6 +1866,8 @@ class InstantSignal:
                         "ema_50": round(safe_price, 2),
                         "ema_100": round(safe_price, 2),
                         "ema_200": round(safe_price, 2),
+                        "ema_alignment": "NEUTRAL",
+                        "ema_alignment_confidence": 20,
                         "trend": "SIDEWAYS",
                         "support": round(safe_low, 2),
                         "resistance": round(safe_high, 2),
@@ -1401,6 +1876,9 @@ class InstantSignal:
                         "prev_day_close": round(safe_close, 2),
                         "volume": tick_data.get('volume', 0),
                         "volume_strength": "MODERATE_VOLUME",
+                        "volume_ratio": 1.0,
+                        "volume_price_alignment": False,
+                        "vwma_ema_signal": "WAIT",
                         "rsi": 50.0,
                         "momentum": 50.0,
                         "candle_strength": 0.5,
@@ -1453,6 +1931,8 @@ async def get_instant_analysis(cache_service, symbol: str) -> Dict[str, Any]:
                     "ema_50": 0,
                     "ema_100": 0,
                     "ema_200": 0,
+                    "ema_alignment": "NEUTRAL",
+                    "ema_alignment_confidence": 20,
                     "trend": "UNKNOWN",
                     "support": 0,
                     "resistance": 0,
@@ -1461,6 +1941,9 @@ async def get_instant_analysis(cache_service, symbol: str) -> Dict[str, Any]:
                     "prev_day_close": 0,
                     "volume": 0,
                     "volume_strength": "WEAK_VOLUME",
+                    "volume_ratio": 0.0,
+                    "volume_price_alignment": False,
+                    "vwma_ema_signal": "WAIT",
                     "rsi": 50,
                     "candle_strength": 0,
                     "pcr": None,
@@ -1471,6 +1954,9 @@ async def get_instant_analysis(cache_service, symbol: str) -> Dict[str, Any]:
                 "symbol": symbol,
                 "symbol_name": symbol,
             }
+        
+        # 🔥 Calculate EMAs from cached candles before analysis
+        tick_data = await calculate_emas_from_cache(cache_service, symbol, tick_data)
         
         # Instant analysis
         result = InstantSignal.analyze_tick(tick_data)
