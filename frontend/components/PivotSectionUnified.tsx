@@ -252,156 +252,224 @@ const SymbolPivotRow = memo<{ data: PivotData; config: SymbolConfig }>(({ data, 
   const pivotConfidence = calculatePivotConfidence();
 
   return (
-    <div className={`rounded-xl p-4 border shadow-sm transition-all mb-3 ${bgColor} ${borderColor} ${
-      isBreakdown ? 'ring-1 ring-red-500/50 shadow-md shadow-red-500/10' : ''
+    <div className={`rounded-xl p-3 border-2 shadow-sm transition-all mb-3 backdrop-blur-sm ${
+      isBreakdown ? 'bg-green-900/15 border-green-500/40 ring-1 ring-green-500/30 shadow-md shadow-green-500/10' :
+      isBullish ? 'bg-green-900/15 border-green-500/40 shadow-lg shadow-green-500/10' :
+      isBearish ? 'bg-green-900/15 border-green-500/40 shadow-lg shadow-green-500/10' :
+      'bg-green-900/15 border-green-500/40'
     }`}>
-      {/* Symbol Header - Market Status */}
-      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 sm:gap-3 mb-3">
-        <div className="flex items-center gap-3 min-w-0 flex-1">
-          <div className={`w-8 sm:w-10 h-8 sm:h-10 rounded-lg flex items-center justify-center font-medium ${
-            isPriceUp ? 'bg-teal-900/30 text-teal-400' : 'bg-amber-900/30 text-amber-400'
+      {/* Title & Status - Responsive Layout */}
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-3">
+        <h4 className="font-bold text-dark-text text-sm tracking-tight flex-shrink-0">
+          {config.name} • Pivot
+        </h4>
+        <div className="flex items-center gap-2 flex-wrap">
+          {/* Confidence Percentage */}
+          <span className="text-xs font-bold text-dark-secondary whitespace-nowrap">
+            Confidence: {Math.round(pivotConfidence)}%
+          </span>
+          {/* Bias Badge */}
+          <span className={`text-xs font-bold px-2 py-1 rounded-md whitespace-nowrap flex-shrink-0 ${
+            isBullish ? 'bg-[#00C087]/20 text-[#00C087]' :
+            isBearish ? 'bg-[#EB5B3C]/20 text-[#EB5B3C]' :
+            'bg-yellow-500/20 text-yellow-300'
           }`}>
-            {config.shortName === 'NIFTY' && <TrendingUp className="w-4 sm:w-5 h-4 sm:h-5" />}
-            {config.shortName === 'BNIFTY' && <TrendingDown className="w-4 sm:w-5 h-4 sm:h-5" />}
-            {config.shortName === 'SENSEX' && <Activity className="w-4 sm:w-5 h-4 sm:h-5" />}
-          </div>
-          <div className="flex flex-col min-w-0">
-            <span className={`font-semibold text-sm sm:text-base px-2 py-1 rounded-lg border truncate ${
-              isPriceUp 
-                ? 'text-teal-300 border-emerald-500/40 bg-teal-900/10'
-                : 'text-slate-200 border-emerald-500/40 bg-slate-900/10'
-            }`}>{config.name}</span>
-            <span className={`mt-0.5 text-xs px-2 py-0.5 rounded font-normal w-fit ${
-              isPriceUp 
-                ? 'bg-green-900/20 text-green-300 border border-emerald-500/30' 
-                : 'bg-red-900/20 text-red-300 border border-emerald-500/30'
+            {isBullish ? '🟢 BULLISH' : isBearish ? '🔴 BEARISH' : '🟡 NEUTRAL'}
+          </span>
+        </div>
+      </div>
+
+      <div className="space-y-3">
+
+        {/* Live Price Display */}
+        <div className="bg-gradient-to-br from-dark-surface/80 to-dark-card/50 border-2 border-emerald-500/40 rounded-xl p-4">
+          <div className="flex items-center justify-between mb-3">
+            <span className="text-xs text-dark-secondary font-bold uppercase tracking-wider">Live Price</span>
+            <span className={`text-xs font-bold px-2 py-1 rounded-md ${
+              isPriceUp ? 'bg-[#00C087]/20 text-[#00C087]' : 'bg-[#EB5B3C]/20 text-[#EB5B3C]'
             }`}>
-              {bias}
+              {isPriceUp ? '▲' : '▼'} {Math.abs(priceChange).toFixed(2)}%
             </span>
           </div>
+          <div className={`text-2xl font-black tracking-tight ${
+            isPriceUp ? 'text-[#00C087]' : 'text-[#EB5B3C]'
+          }`}>
+            ₹{price?.toLocaleString('en-IN', {minimumFractionDigits: 2, maximumFractionDigits: 2})}
+          </div>
         </div>
-        <div className="flex flex-col sm:text-right w-full sm:w-auto">
-          <span className={`text-lg sm:text-xl font-semibold px-2 sm:px-3 py-1 rounded-lg ${
-            isPriceUp 
-              ? 'text-teal-300 border border-emerald-500/40 bg-teal-900/10'
-              : 'text-red-400 border border-emerald-500/40 bg-red-900/10'
-          }`}>{fmt(price)}</span>
-          <div className="flex flex-row sm:flex-col gap-2 sm:gap-1 mt-1">
-            {data.change_percent !== undefined && (
-              <span className={`text-xs font-normal ${changeColor}`}>
-                {data.change_percent >= 0 ? '↑' : '↓'} {Math.abs(data.change_percent).toFixed(2)}%
-              </span>
+
+        {/* Pivot Zone Display - Visual Card */}
+        {(() => {
+          const zone = getPivotZone(price, pivots.s3, pivots.pivot, pivots.r3);
+          
+          if (zone === 'above_r3') {
+            return (
+              <div className="bg-gradient-to-r from-green-900/30 to-green-950/20 border-2 border-[#00C087]/50 rounded-xl p-4 shadow-lg shadow-green-500/20">
+                <div className="flex items-center gap-3 mb-2">
+                  <span className="text-2xl">🚀</span>
+                  <div>
+                    <div className="text-sm font-black text-[#00C087]">STRONG BULLISH ZONE</div>
+                    <div className="text-xs text-[#00C087]/80 font-medium">Price above all resistance</div>
+                  </div>
+                </div>
+                <div className="grid grid-cols-3 gap-2 mb-3">
+                  <div className="bg-green-900/30 rounded-lg p-2 text-center">
+                    <div className="text-xs text-green-300/70 font-semibold">PIVOT</div>
+                    <div className="text-sm font-black text-green-300">₹{pivots.pivot?.toFixed(0)}</div>
+                  </div>
+                  <div className="bg-green-900/30 rounded-lg p-2 text-center">
+                    <div className="text-xs text-green-300/70 font-semibold">R1</div>
+                    <div className="text-sm font-black text-green-300">₹{pivots.r1?.toFixed(0)}</div>
+                  </div>
+                  <div className="bg-green-900/30 rounded-lg p-2 text-center">
+                    <div className="text-xs text-green-300/70 font-semibold">R3</div>
+                    <div className="text-sm font-black text-green-300">₹{pivots.r3?.toFixed(0)}</div>
+                  </div>
+                </div>
+                <div className="text-xs text-green-200 bg-green-900/30 rounded-lg p-2">
+                  ✅ <strong>Action:</strong> Strong uptrend confirmed. Price above R3 resistance. Hold longs or book partial profits. Watch for exhaustion signs.
+                </div>
+              </div>
+            );
+          } else if (zone === 'between_p_r3') {
+            return (
+              <div className="bg-gradient-to-r from-blue-900/30 to-blue-950/20 border-2 border-blue-500/50 rounded-xl p-4 shadow-lg shadow-blue-500/20">
+                <div className="flex items-center gap-3 mb-2">
+                  <span className="text-2xl">📈</span>
+                  <div>
+                    <div className="text-sm font-black text-blue-300">RESISTANCE ZONE</div>
+                    <div className="text-xs text-blue-300/80 font-medium">Between Pivot & R3</div>
+                  </div>
+                </div>
+                <div className="grid grid-cols-3 gap-2 mb-3">
+                  <div className="bg-blue-900/30 rounded-lg p-2 text-center">
+                    <div className="text-xs text-blue-300/70 font-semibold">PIVOT</div>
+                    <div className="text-sm font-black text-blue-300">₹{pivots.pivot?.toFixed(0)}</div>
+                  </div>
+                  <div className="bg-blue-900/30 rounded-lg p-2 text-center">
+                    <div className="text-xs text-blue-300/70 font-semibold">R1</div>
+                    <div className="text-sm font-black text-blue-300">₹{pivots.r1?.toFixed(0)}</div>
+                  </div>
+                  <div className="bg-blue-900/30 rounded-lg p-2 text-center">
+                    <div className="text-xs text-blue-300/70 font-semibold">R3</div>
+                    <div className="text-sm font-black text-blue-300">₹{pivots.r3?.toFixed(0)}</div>
+                  </div>
+                </div>
+                <div className="text-xs text-blue-200 bg-blue-900/30 rounded-lg p-2">
+                  📊 <strong>Strategy:</strong> In resistance zone. Look for longs above Pivot (₹{pivots.pivot?.toFixed(0)}) with target R3 (₹{pivots.r3?.toFixed(0)}). Book profits near resistance.
+                </div>
+              </div>
+            );
+          } else if (zone === 'between_s3_p') {
+            return (
+              <div className="bg-gradient-to-r from-orange-900/30 to-orange-950/20 border-2 border-orange-500/50 rounded-xl p-4 shadow-lg shadow-orange-500/20">
+                <div className="flex items-center gap-3 mb-2">
+                  <span className="text-2xl">📉</span>
+                  <div>
+                    <div className="text-sm font-black text-orange-300">SUPPORT ZONE</div>
+                    <div className="text-xs text-orange-300/80 font-medium">Between S3 & Pivot</div>
+                  </div>
+                </div>
+                <div className="grid grid-cols-3 gap-2 mb-3">
+                  <div className="bg-orange-900/30 rounded-lg p-2 text-center">
+                    <div className="text-xs text-orange-300/70 font-semibold">S3</div>
+                    <div className="text-sm font-black text-orange-300">₹{pivots.s3?.toFixed(0)}</div>
+                  </div>
+                  <div className="bg-orange-900/30 rounded-lg p-2 text-center">
+                    <div className="text-xs text-orange-300/70 font-semibold">S1</div>
+                    <div className="text-sm font-black text-orange-300">₹{pivots.s1?.toFixed(0)}</div>
+                  </div>
+                  <div className="bg-orange-900/30 rounded-lg p-2 text-center">
+                    <div className="text-xs text-orange-300/70 font-semibold">PIVOT</div>
+                    <div className="text-sm font-black text-orange-300">₹{pivots.pivot?.toFixed(0)}</div>
+                  </div>
+                </div>
+                <div className="text-xs text-orange-200 bg-orange-900/30 rounded-lg p-2">
+                  ⚠️ <strong>Strategy:</strong> In support zone. Watch for bounce near S1/S3. Look for longs above Pivot (₹{pivots.pivot?.toFixed(0)}). Use tight stops below S3 (₹{pivots.s3?.toFixed(0)}).
+                </div>
+              </div>
+            );
+          } else {
+            return (
+              <div className="bg-gradient-to-r from-red-900/30 to-red-950/20 border-2 border-[#EB5B3C]/50 rounded-xl p-4 shadow-lg shadow-red-500/20">
+                <div className="flex items-center gap-3 mb-2">
+                  <span className="text-2xl">⚠️</span>
+                  <div>
+                    <div className="text-sm font-black text-[#EB5B3C]">STRONG BEARISH ZONE</div>
+                    <div className="text-xs text-[#EB5B3C]/80 font-medium">Price below all support</div>
+                  </div>
+                </div>
+                <div className="grid grid-cols-3 gap-2 mb-3">
+                  <div className="bg-red-900/30 rounded-lg p-2 text-center">
+                    <div className="text-xs text-red-300/70 font-semibold">S3</div>
+                    <div className="text-sm font-black text-red-300">₹{pivots.s3?.toFixed(0)}</div>
+                  </div>
+                  <div className="bg-red-900/30 rounded-lg p-2 text-center">
+                    <div className="text-xs text-red-300/70 font-semibold">S1</div>
+                    <div className="text-sm font-black text-red-300">₹{pivots.s1?.toFixed(0)}</div>
+                  </div>
+                  <div className="bg-red-900/30 rounded-lg p-2 text-center">
+                    <div className="text-xs text-red-300/70 font-semibold">PIVOT</div>
+                    <div className="text-sm font-black text-red-300">₹{pivots.pivot?.toFixed(0)}</div>
+                  </div>
+                </div>
+                <div className="text-xs text-red-200 bg-red-900/30 rounded-lg p-2">
+                  ⛔ <strong>Action:</strong> Strong downtrend. Price below S3 support. Avoid longs. Look for shorts with stop above S3 (₹{pivots.s3?.toFixed(0)}). Wait for reversal signs.
+                </div>
+              </div>
+            );
+          }
+        })()}
+
+        {/* Camarilla Levels Display */}
+        <div className="bg-gradient-to-br from-slate-800/40 to-slate-900/30 border border-slate-600/30 rounded-lg p-3">
+          <div className="text-xs text-slate-400 font-semibold uppercase tracking-wider mb-2">Camarilla Levels</div>
+          <div className="grid grid-cols-2 gap-2">
+            <div className="bg-green-900/20 rounded-lg p-2 border border-green-500/30">
+              <div className="text-xs text-green-300/70 font-semibold">H4 (Resist)</div>
+              <div className="text-sm font-black text-green-300">₹{cam.h4?.toFixed(0)}</div>
+            </div>
+            <div className="bg-red-900/20 rounded-lg p-2 border border-red-500/30">
+              <div className="text-xs text-red-300/70 font-semibold">L4 (Support)</div>
+              <div className="text-sm font-black text-red-300">₹{cam.l4?.toFixed(0)}</div>
+            </div>
+          </div>
+          <div className={`mt-2 text-xs font-medium text-center px-2 py-1 rounded ${
+            cam.zone?.includes('BUY') ? 'bg-green-900/30 text-green-300' :
+            cam.zone?.includes('SELL') ? 'bg-red-900/30 text-red-300' :
+            'bg-yellow-900/30 text-yellow-300'
+          }`}>
+            {cam.zone?.replace(/_/g, ' ') || 'NEUTRAL ZONE'}
+          </div>
+        </div>
+
+        {/* Quick Summary */}
+        <div className="bg-gradient-to-br from-slate-800/40 to-slate-900/30 border border-slate-600/30 rounded-lg p-3">
+          <div className="text-xs text-slate-400 font-semibold uppercase tracking-wider mb-2">📋 Key Levels</div>
+          <div className="space-y-1 text-xs">
+            {nearestRes && (
+              <div className="flex justify-between items-center">
+                <span className="text-slate-400">Next Resistance:</span>
+                <span className="font-bold text-amber-400">{nearestRes.label} ₹{fmtCompact(nearestRes.value)}</span>
+              </div>
             )}
-            {/* Confidence Percentage */}
-            <span className="text-xs font-bold text-slate-300">
-              Confidence: {Math.round(pivotConfidence)}%
-            </span>
+            {nearestSup && (
+              <div className="flex justify-between items-center">
+                <span className="text-slate-400">Next Support:</span>
+                <span className="font-bold text-teal-400">{nearestSup.label} ₹{fmtCompact(nearestSup.value)}</span>
+              </div>
+            )}
+            <div className="flex justify-between items-center pt-1 border-t border-slate-700">
+              <span className="text-slate-400">Trading Bias:</span>
+              <span className={`font-bold ${
+                isBullish ? 'text-[#00C087]' :
+                isBearish ? 'text-[#EB5B3C]' :
+                'text-yellow-300'
+              }`}>
+                {bias}
+              </span>
+            </div>
           </div>
-        </div>
-      </div>
-
-      {/* Pivot Levels Card - With Critical Alerts */}
-      <div className={`mb-3 p-3 rounded-lg border shadow-sm ${
-        isNearPivot ? 'bg-yellow-900/15 border-emerald-500/30 ring-1 ring-emerald-500/30' : 'bg-slate-800/30 border-emerald-500/30'
-      }`}>
-        <div className="flex items-center gap-2 text-xs font-normal mb-2">
-          <Target className="w-3.5 h-3.5 text-slate-500" />
-          <span className={isNearPivot ? 'text-yellow-300 font-semibold' : 'text-slate-400'}>PIVOT LEVELS (S3/P/R3)</span>
-          <span className="text-slate-600">|</span>
-          <span className="text-slate-500 text-[10px]">Price Position:</span>
-          <span className={`text-xs font-semibold ${
-            getPivotZone(price, pivots.s3, pivots.pivot, pivots.r3) === 'below_s3' ? 'text-red-400' :
-            getPivotZone(price, pivots.s3, pivots.pivot, pivots.r3) === 'between_s3_p' ? 'text-orange-400' :
-            getPivotZone(price, pivots.s3, pivots.pivot, pivots.r3) === 'between_p_r3' ? 'text-blue-400' :
-            getPivotZone(price, pivots.s3, pivots.pivot, pivots.r3) === 'above_r3' ? 'text-green-400' :
-            'text-slate-400'
-          }`}>
-            {getPivotZone(price, pivots.s3, pivots.pivot, pivots.r3) === 'below_s3' ? '↓ BELOW S3 (Bearish)' :
-             getPivotZone(price, pivots.s3, pivots.pivot, pivots.r3) === 'between_s3_p' ? '📉 S3 ← → P (Support Zone)' :
-             getPivotZone(price, pivots.s3, pivots.pivot, pivots.r3) === 'between_p_r3' ? '📈 P ← → R3 (Resistance Zone)' :
-             getPivotZone(price, pivots.s3, pivots.pivot, pivots.r3) === 'above_r3' ? '↑ ABOVE R3 (Bullish)' :
-             'UNKNOWN'}
-          </span>
-        </div>
-        <div className="flex items-center gap-1 h-8 bg-slate-700/30 rounded overflow-hidden">
-          {/* S3 - Support Level */}
-          <div className={`flex-1 h-full flex items-center justify-center text-[11px] font-normal transition-all duration-300 ${
-            getLevelColor('S3', getPivotZone(price, pivots.s3, pivots.pivot, pivots.r3), isNearLevel(price, pivots.s3, config.symbol))
-          }`} title={`S3 (Support): ${fmt(pivots.s3)}`}>
-            <span>S3</span>
-          </div>
-          {/* Pivot - Center Point */}
-          <div className={`flex-1 h-full flex items-center justify-center text-[11px] font-normal border-x border-emerald-500/30 transition-all duration-300 ${
-            getLevelColor('P', getPivotZone(price, pivots.s3, pivots.pivot, pivots.r3), isNearLevel(price, pivots.pivot, config.symbol))
-          }`} title={`Pivot (P): ${fmt(pivots.pivot)}`}>
-            <span>P</span>
-          </div>
-          {/* R3 - Resistance Level */}
-          <div className={`flex-1 h-full flex items-center justify-center text-[11px] font-normal transition-all duration-300 ${
-            getLevelColor('R3', getPivotZone(price, pivots.s3, pivots.pivot, pivots.r3), isNearLevel(price, pivots.r3, config.symbol))
-          }`} title={`R3 (Resistance): ${fmt(pivots.r3)}`}>
-            <span>R3</span>
-          </div>
-        </div>
-        {/* Level Values Row - NOW WITH ZONE INDICATORS */}
-        <div className="flex justify-between mt-2 px-1 text-xs font-normal">
-          <div className="flex flex-col items-start gap-0.5">
-            <span className={`text-xs font-semibold ${getPivotZone(price, pivots.s3, pivots.pivot, pivots.r3) === 'below_s3' ? 'text-red-400' : 'text-slate-500'}`}>S3</span>
-            <span className={getPivotZone(price, pivots.s3, pivots.pivot, pivots.r3) === 'below_s3' ? 'text-red-300 font-semibold' : 'text-slate-400'}>{fmtCompact(pivots.s3)}</span>
-          </div>
-          <div className="flex flex-col items-center gap-0.5">
-            <span className="text-xs font-semibold text-slate-500">P</span>
-            <span className={getPivotZone(price, pivots.s3, pivots.pivot, pivots.r3) === 'between_s3_p' || getPivotZone(price, pivots.s3, pivots.pivot, pivots.r3) === 'between_p_r3' ? 'text-slate-200 font-semibold' : 'text-slate-400'}>{fmtCompact(pivots.pivot)}</span>
-          </div>
-          <div className="flex flex-col items-end gap-0.5">
-            <span className={`text-xs font-semibold ${getPivotZone(price, pivots.s3, pivots.pivot, pivots.r3) === 'above_r3' ? 'text-green-400' : 'text-slate-500'}`}>R3</span>
-            <span className={getPivotZone(price, pivots.s3, pivots.pivot, pivots.r3) === 'above_r3' ? 'text-green-300 font-semibold' : 'text-slate-400'}>{fmtCompact(pivots.r3)}</span>
-          </div>
-        </div>
-      </div>
-
-      {/* Info Cards Row */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-        {/* Camarilla Card - With Critical Alert */}
-        <div className={`rounded-lg border p-3 flex flex-col items-center shadow-sm transition-all min-h-[90px] ${
-          isNearCamarilla 
-            ? 'bg-yellow-900/15 border-emerald-500/30 ring-1 ring-emerald-500/30'
-            : 'bg-slate-800/30 border-emerald-500/30'
-        }`}>
-          <span className={`text-xs font-semibold mb-1 ${isNearCamarilla ? 'text-yellow-300' : 'text-slate-400'}`}>CAMARILLA</span>
-          <span className={`text-sm font-normal text-center leading-tight ${
-            cam.zone?.includes('BUY') ? 'text-teal-400' :
-            cam.zone?.includes('SELL') ? 'text-amber-400' :
-            cam.zone?.includes('BREAK') ? 'text-orange-400' :
-            'text-slate-400'
-          }`}>
-            {cam.zone?.replace(/_/g, ' ') || 'NEUTRAL'}
-          </span>
-          <span className={`text-xs mt-0.5 font-normal text-center ${isNearCamarilla ? 'text-yellow-400' : 'text-slate-500'}`}>
-            R3: {fmtCompact(cam.h4)} {isNearCamarilla ? '⚠️' : ''}
-          </span>
-        </div>
-        {/* Nearest Levels Card - With Critical Alert */}
-        <div className={`rounded-lg border p-3 flex flex-col items-center shadow-sm min-h-[90px] ${
-          isBreakdown 
-            ? 'bg-red-900/20 border-emerald-500/40 ring-1 ring-red-500/40 shadow-md shadow-red-500/5'
-            : 'bg-slate-800/30 border-emerald-500/30'
-        }`}>
-          <span className={`text-xs font-semibold mb-1 text-center ${isBreakdown ? 'text-red-300' : 'text-slate-400'}`}>
-            {isBreakdown ? '🚨 BREAKDOWN' : 'NEAREST'}
-          </span>
-          {nearestRes && (
-            <span className={`text-xs flex items-center gap-1 ${isBreakdown ? 'text-red-400' : 'text-amber-400'}`}>
-              <span className="font-normal">↑ {nearestRes.label}</span>
-              <span className="text-slate-500">{fmtCompact(nearestRes.value)}</span>
-            </span>
-          )}
-          {nearestSup && (
-            <span className={`text-xs flex items-center gap-1 mt-0.5 ${isBreakdown ? 'text-red-400 font-semibold' : 'text-teal-400'}`}>
-              <span>↓ {nearestSup.label}</span>
-              <span className="text-slate-500">{fmtCompact(nearestSup.value)}</span>
-            </span>
-          )}
         </div>
       </div>
     </div>

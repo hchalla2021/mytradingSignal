@@ -127,6 +127,175 @@ async def get_cache_data(symbol: str):
         await cache.disconnect()
 
 
+@router.get("/vwap-live/{symbol}")
+async def get_vwap_live(symbol: str):
+    """
+    Get LIVE intraday VWAP for a futures symbol
+    
+    ✅ Uses ONLY live Zerodha API data - NO hardcoded/dummy data
+    
+    URL: GET /api/market/vwap-live/NIFTY
+    
+    Returns:
+    {
+        "symbol": "NIFTY",
+        "success": true,
+        "vwap": 25599.33,              # Live VWAP from Zerodha candles
+        "current_price": 25605.00,     # Live price from Zerodha
+        "position": {
+            "position": "ABOVE",
+            "distance": 5.67,
+            "distance_pct": 0.0221,
+            "signal": "BULLISH"
+        },
+        "candles_used": 156,           # Fresh candles from today 9:15 AM
+        "last_update": "2025-02-13 14:30:00 IST",
+        "total_volume": 45000000
+    }
+    """
+    try:
+        from kiteconnect import KiteConnect
+        from services.vwap_live_service import VWAPLiveCalculator
+        import asyncio
+        
+        symbol = symbol.upper()
+        
+        # Validate symbol is a futures contract
+        valid_symbols = ["NIFTY", "BANKNIFTY", "SENSEX"]
+        if symbol not in valid_symbols:
+            return {
+                "success": False,
+                "error": f"Invalid symbol: {symbol}. Must be one of {valid_symbols}",
+                "symbol": symbol
+            }
+        
+        # Initialize Zerodha connection with LIVE access token
+        kite = KiteConnect(api_key=settings.zerodha_api_key)
+        if not settings.zerodha_access_token:
+            return {
+                "success": False,
+                "error": "No Zerodha access token configured",
+                "symbol": symbol
+            }
+        kite.set_access_token(settings.zerodha_access_token)
+        
+        # Get current month's futures token using ContractManager (auto-switches monthly!)
+        from services.contract_manager import ContractManager
+        
+        try:
+            manager = ContractManager(kite)
+            instrument_token = manager.get_current_contract_token(symbol, debug=False)
+            
+            if not instrument_token:
+                # Fallback to hardcoded tokens from config
+                token_map = {
+                    "NIFTY": settings.nifty_fut_token,
+                    "BANKNIFTY": settings.banknifty_fut_token,
+                    "SENSEX": settings.sensex_fut_token,
+                }
+                instrument_token = token_map.get(symbol)
+                
+                if not instrument_token:
+                    return {
+                        "success": False,
+                        "error": f"No futures token found for {symbol}. ContractManager failed and no fallback configured.",
+                        "symbol": symbol
+                    }
+                
+                print(f"   ⚠️  Using fallback token from config: {instrument_token}")
+            else:
+                print(f"   ✅ Using ContractManager token: {instrument_token}")
+        except Exception as e:
+            print(f"   ⚠️  ContractManager error: {e}. Falling back to config tokens...")
+            # Fallback to hardcoded tokens
+            token_map = {
+                "NIFTY": settings.nifty_fut_token,
+                "BANKNIFTY": settings.banknifty_fut_token,
+                "SENSEX": settings.sensex_fut_token,
+            }
+            instrument_token = token_map.get(symbol)
+            if not instrument_token:
+                return {
+                    "success": False,
+                    "error": f"Token resolution failed for {symbol}",
+                    "symbol": symbol
+                }
+        
+        # Get current price from LIVE Zerodha API
+        print(f"\n🔄 [VWAP-LIVE] {symbol}: Fetching live data from Zerodha...")
+        try:
+            # Fetch latest 5m candle to get current price
+            from datetime import datetime, timedelta
+            import pytz
+            
+            IST = pytz.timezone('Asia/Kolkata')
+            now = datetime.now(IST)
+            market_open = now.replace(hour=9, minute=15, second=0, microsecond=0)
+            
+            latest_data = kite.historical_data(
+                instrument_token=instrument_token,
+                from_date=market_open,
+                to_date=now,
+                interval="5minute"
+            )
+            
+            if latest_data and len(latest_data) > 0:
+                current_price = latest_data[-1]['close']  # Latest candle close
+            else:
+                return {
+                    "success": False,
+                    "error": f"Zerodha returned no data for token {instrument_token}. Token may have expired.",
+                    "symbol": symbol,
+                    "debug_token": instrument_token
+                }
+            
+            print(f"   💹 Live Price: ₹{current_price:,.2f}")
+        except Exception as e:
+            return {
+                "success": False,
+                "error": f"Failed to fetch current price: {str(e)}",
+                "symbol": symbol
+            }
+        
+        # Calculate VWAP using LIVE 5-minute candles from market open
+        print(f"   📊 Calculating VWAP from live market data...")
+        
+        loop = asyncio.get_event_loop()
+        calculator = VWAPLiveCalculator(kite)
+        
+        # Run in executor to avoid blocking
+        result = await loop.run_in_executor(
+            None,
+            lambda: calculator.get_live_vwap_complete(
+                symbol=symbol,
+                instrument_token=instrument_token,
+                current_price=current_price,
+                interval="5minute",
+                debug=False
+            )
+        )
+        
+        if result['success']:
+            print(f"   ✅ VWAP: ₹{result['vwap']:,.2f}")
+            print(f"   📍 Position: {result['position']['position']} ({result['position']['signal']})")
+            print(f"   📈 Candles used: {result['candles_used']} (from 9:15 AM)")
+        else:
+            print(f"   ❌ VWAP calculation failed: {result.get('error')}")
+        
+        return result
+        
+    except Exception as e:
+        print(f"❌ [VWAP-LIVE] Endpoint error: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        return {
+            "success": False,
+            "error": str(e),
+            "symbol": symbol if 'symbol' in locals() else "UNKNOWN",
+            "error_type": type(e).__name__
+        }
+
+
 @router.websocket("/market")
 async def market_websocket(websocket: WebSocket):
     """

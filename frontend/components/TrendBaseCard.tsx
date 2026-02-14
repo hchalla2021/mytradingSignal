@@ -290,42 +290,53 @@ const TrendBaseCard = memo<TrendBaseCardProps>(({ symbol, name }) => {
 
   // Extract commonly used values from data
   const signal = data.signal || 'NEUTRAL';
-  const structure = data.structure || { type: 'UNKNOWN', integrity_score: 0, swing_points: {} };
+  const structure = data.structure || { 
+    type: 'UNKNOWN', 
+    integrity_score: 0, 
+    swing_points: {
+      last_high: 0,
+      last_low: 0,
+      prev_high: 0,
+      prev_low: 0,
+      high_diff: 0,
+      low_diff: 0
+    }
+  };
   const confidence = data.confidence || calculateTrendConfidence(data);
   const trend = data.trend || 'SIDEWAYS';
   const isStrongTrend = structure.integrity_score >= 70;
   const isModerateTrend = structure.integrity_score >= 40 && structure.integrity_score < 70;
 
   return (
-    <div className="bg-gradient-to-br from-slate-900/60 to-slate-800/60 border border-emerald-600/40 rounded-lg p-3 sm:p-4 hover:border-emerald-500/50 transition-all shadow-lg">
+    <div className="bg-gradient-to-br from-green-900/10 to-green-950/5 border-2 border-green-500/40 rounded-xl p-3 sm:p-4 hover:border-green-500/50 transition-all shadow-lg shadow-green-500/10">
       {/* Data Status Alerts */}
       {!hasValidData && (
-        <div className="mb-2 px-2 py-1 rounded-lg bg-rose-900/40 text-rose-200 border border-rose-700/50 text-[10px] font-semibold flex items-center gap-1.5">
-          <AlertTriangle className="w-3 h-3" />
+        <div className="mb-2 px-2 py-1.5 rounded-lg bg-red-900/30 text-red-300 border border-red-500/40 text-xs font-semibold flex items-center gap-2">
+          <AlertTriangle className="w-4 h-4" />
           NO SWING DATA - Waiting for price swings to form
         </div>
       )}
       
       {/* Stale Data Warning */}
       {unchangedCount >= 3 && hasValidData && (
-        <div className="mb-2 px-2 py-1 rounded-lg bg-amber-900/40 text-amber-200 border border-amber-700/50 text-[10px] font-semibold flex items-center gap-1.5">
-          <AlertTriangle className="w-3 h-3" />
-          VALUES NOT CHANGING ({unchangedCount} refreshes) - Market may be closed or sideways
+        <div className="mb-2 px-2 py-1.5 rounded-lg bg-yellow-900/30 text-yellow-300 border border-yellow-500/40 text-xs font-semibold flex items-center gap-2">
+          <AlertTriangle className="w-4 h-4" />
+          VALUES NOT CHANGING ({unchangedCount} refreshes) - Market may be closed
         </div>
       )}
       
       {/* Live Status */}
       {data.data_status === 'LIVE' && hasValidData && (
-        <div className="mb-2 px-2 py-1 rounded-lg bg-emerald-900/30 text-emerald-200 border border-emerald-700/40 text-[9px] font-semibold flex items-center gap-1.5">
-          <span className="w-1.5 h-1.5 bg-emerald-400 rounded-full animate-pulse"></span>
+        <div className="mb-3 px-3 py-2 rounded-lg bg-green-500/5 text-green-300 border border-green-500/40 text-xs font-semibold flex items-center gap-2">
+          <span className="w-2 h-2 bg-green-400 rounded-full animate-pulse"></span>
           LIVE TREND • Refresh #{refreshCount}
           {data.candles_analyzed && ` • ${data.candles_analyzed} Candles`}
-          {unchangedCount === 0 && refreshCount > 1 && <span className="ml-1 text-emerald-300">✓ UPDATING</span>}
+          {unchangedCount === 0 && refreshCount > 1 && <span className="ml-1 text-green-300">✓ UPDATING</span>}
         </div>
       )}
       {data.status === 'CACHED' && (
-        <div className="mb-2 px-2 py-1 rounded-lg bg-blue-900/30 text-blue-200 border border-blue-700/40 text-[9px] font-semibold flex items-center gap-1.5">
-          <span className="w-1.5 h-1.5 bg-blue-400 rounded-full"></span>
+        <div className="mb-3 px-3 py-2 rounded-lg bg-blue-500/5 text-blue-300 border border-blue-500/40 text-xs font-semibold flex items-center gap-2">
+          <span className="w-2 h-2 bg-blue-400 rounded-full"></span>
           📊 LAST MARKET SESSION DATA • Market Closed
         </div>
       )}
@@ -333,18 +344,18 @@ const TrendBaseCard = memo<TrendBaseCardProps>(({ symbol, name }) => {
       {/* Header - Trader Friendly */}
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-2">
-          <GitBranch className="w-4 h-4 text-blue-300" />
-          <h3 className="text-sm sm:text-base font-bold text-gray-100">{name}</h3>
+          <GitBranch className="w-5 h-5 text-green-400" />
+          <h3 className="text-base sm:text-lg font-bold text-white">{name}</h3>
           {data._isCached && (
-            <span className="text-[9px] bg-amber-900/30 text-amber-200 px-1.5 py-0.5 rounded border border-amber-700/40 font-semibold">
+            <span className="text-xs bg-yellow-900/30 text-yellow-300 px-2 py-1 rounded border border-yellow-500/40 font-semibold">
               📊 LAST SESSION
             </span>
           )}
         </div>
-        <div className={`flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-bold border shadow-lg ${
-          signal === 'BUY' ? 'bg-emerald-900/40 text-emerald-200 border-emerald-700/50' :
-          signal === 'SELL' ? 'bg-rose-900/40 text-rose-200 border-rose-700/50' :
-          'bg-slate-800/60 text-slate-300 border-slate-600/50'
+        <div className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm font-bold border shadow-lg ${
+          signal === 'BUY' ? 'bg-[#00C087]/20 text-[#00C087] border-[#00C087]/40' :
+          signal === 'SELL' ? 'bg-[#EB5B3C]/20 text-[#EB5B3C] border-[#EB5B3C]/40' :
+          'bg-gray-800/60 text-gray-300 border-gray-500/50'
         }`}>
           {getSignalIcon(signal)}
           <span>{signal}</span>
@@ -352,67 +363,67 @@ const TrendBaseCard = memo<TrendBaseCardProps>(({ symbol, name }) => {
       </div>
 
       {/* Trend Structure - Beginner Friendly */}
-      <div className="mb-3 bg-slate-800/40 rounded-xl p-3 border border-emerald-600/30">
+      <div className="mb-3 bg-green-500/5 rounded-xl p-3 border-2 border-green-500/30 shadow-sm">
         <div className="flex items-center justify-between mb-2">
-          <span className="text-xs text-slate-300 font-bold tracking-wide">📈 TREND PATTERN</span>
-          <span className="text-2xl">{getStructureEmoji(structure.type)}</span>
+          <span className="text-xs text-white font-bold tracking-wide">📈 TREND PATTERN</span>
+          <span className="text-3xl">{getStructureEmoji(structure.type)}</span>
         </div>
-        <p className="text-sm font-bold ${
-          structure.type.includes('HIGHER-HIGH-HIGHER-LOW') ? 'text-emerald-300' :
-          structure.type.includes('LOWER-HIGH-LOWER-LOW') ? 'text-rose-300' :
-          'text-slate-300'
-        } leading-tight mb-2">
+        <p className={`text-base font-bold leading-tight mb-2 ${
+          structure.type.includes('HIGHER-HIGH-HIGHER-LOW') ? 'text-[#00C087]' :
+          structure.type.includes('LOWER-HIGH-LOWER-LOW') ? 'text-[#EB5B3C]' :
+          'text-gray-300'
+        }`}>
           {structure.type.replace(/-/g, ' ')}
         </p>
         
         {/* Beginner Explanation */}
-        <div className="pt-2 border-t border-emerald-600/30">
-          <p className="text-[10px] text-slate-400 leading-relaxed">
+        <div className="pt-2 border-t border-green-500/30">
+          <p className="text-xs text-gray-300 leading-relaxed">
             {structure.type.includes('HIGHER-HIGH-HIGHER-LOW') ? (
-              <span className="text-emerald-300 font-semibold">✅ Uptrend: Price making higher peaks & higher valleys (Good for buying)</span>
+              <span className="text-[#00C087] font-semibold">✅ Uptrend: Price making higher peaks & higher valleys (Good for buying)</span>
             ) : structure.type.includes('LOWER-HIGH-LOWER-LOW') ? (
-              <span className="text-rose-300 font-semibold">⚠️ Downtrend: Price making lower peaks & lower valleys (Risky for buying)</span>
+              <span className="text-[#EB5B3C] font-semibold">⚠️ Downtrend: Price making lower peaks & lower valleys (Risky for buying)</span>
             ) : (
-              <span className="text-slate-300 font-semibold">⚠️ Sideways: No clear trend direction (Wait for confirmation)</span>
+              <span className="text-gray-300 font-semibold">⚠️ Sideways: No clear trend direction (Wait for confirmation)</span>
             )}
           </p>
         </div>
       </div>
 
       {/* Trend Strength - Eye Friendly */}
-      <div className="mb-3 bg-slate-800/40 rounded-xl p-3 border border-emerald-600/30">
-        <div className="flex items-center justify-between mb-2">
-          <span className="text-xs text-slate-300 font-bold tracking-wide">⚡ TREND STRENGTH</span>
-          <span className="text-lg font-bold ${
-            structure.integrity_score >= 70 ? 'text-emerald-300' :
-            structure.integrity_score >= 50 ? 'text-amber-300' :
-            'text-rose-300'
-          }">{structure.integrity_score}%</span>
+      <div className="mb-3 bg-green-500/5 rounded-xl p-3 border-2 border-green-500/30 shadow-sm">
+        <div className="flex items-center justify-between mb-3">
+          <span className="text-xs text-white font-bold tracking-wide">⚡ TREND STRENGTH</span>
+          <span className={`text-2xl font-bold ${
+            structure.integrity_score >= 70 ? 'text-[#00C087]' :
+            structure.integrity_score >= 50 ? 'text-yellow-400' :
+            'text-[#EB5B3C]'
+          }`}>{structure.integrity_score}%</span>
         </div>
-        <div className="w-full bg-gradient-to-r from-rose-900/40 via-slate-700/50 to-emerald-900/40 rounded-full h-2.5 overflow-hidden shadow-inner">
+        <div className="w-full bg-gray-800/50 rounded-full h-3 overflow-hidden shadow-inner">
           <div
             className={`h-full transition-all duration-700 rounded-full ${
-              structure.integrity_score >= 70 ? 'bg-gradient-to-r from-emerald-400 to-emerald-300 shadow-lg shadow-emerald-500/40' :
-              structure.integrity_score >= 50 ? 'bg-gradient-to-r from-amber-400 to-amber-300 shadow-lg shadow-amber-500/30' :
-              'bg-gradient-to-r from-rose-400 to-rose-300 shadow-lg shadow-rose-500/40'
+              structure.integrity_score >= 70 ? 'bg-gradient-to-r from-[#00C087] to-green-400 shadow-lg shadow-green-500/40' :
+              structure.integrity_score >= 50 ? 'bg-gradient-to-r from-yellow-500 to-yellow-400 shadow-lg shadow-yellow-500/30' :
+              'bg-gradient-to-r from-[#EB5B3C] to-red-400 shadow-lg shadow-red-500/40'
             }`}
             style={{ width: `${structure.integrity_score}%` }}
           ></div>
         </div>
-        <div className="flex justify-between text-[10px] text-slate-400 font-semibold mt-1.5">
-          <span className="text-rose-300">WEAK</span>
-          <span className="text-slate-400">MODERATE</span>
-          <span className="text-emerald-300">STRONG</span>
+        <div className="flex justify-between text-xs text-gray-400 font-semibold mt-2">
+          <span className="text-[#EB5B3C]">WEAK</span>
+          <span className="text-gray-400">MODERATE</span>
+          <span className="text-[#00C087]">STRONG</span>
         </div>
         
         {/* Strength Explanation */}
-        <p className="text-[10px] text-slate-400 mt-2 leading-relaxed">
+        <p className="text-xs text-gray-300 mt-2 leading-relaxed">
           {structure.integrity_score >= 70 ? (
-            <span className="text-emerald-300 font-semibold">✅ Strong trend - Pattern is intact and reliable</span>
+            <span className="text-[#00C087] font-semibold">✅ Strong trend - Pattern is intact and reliable</span>
           ) : structure.integrity_score >= 50 ? (
-            <span className="text-amber-300 font-semibold">⚠️ Moderate trend - Some consistency but not perfect</span>
+            <span className="text-yellow-400 font-semibold">⚠️ Moderate trend - Some consistency but not perfect</span>
           ) : (
-            <span className="text-rose-300 font-semibold">⚠️ Weak trend - Pattern is breaking or unclear</span>
+            <span className="text-[#EB5B3C] font-semibold">⚠️ Weak trend - Pattern is breaking or unclear</span>
           )}
         </p>
       </div>
@@ -420,15 +431,15 @@ const TrendBaseCard = memo<TrendBaseCardProps>(({ symbol, name }) => {
       {/* Price Swings - Eye Friendly & Clear */}
       <div className="grid grid-cols-2 gap-3 mb-3">
         {/* Last Peak (High) */}
-        <div className="bg-gradient-to-br from-emerald-900/20 to-emerald-950/10 rounded-xl p-3 border border-emerald-700/30 shadow-lg">
-          <p className="text-[10px] text-emerald-200 font-bold tracking-wider mb-2">▲ LAST PEAK</p>
-          <p className="text-base font-bold text-emerald-300 mb-1">
+        <div className="bg-gradient-to-br from-green-500/15 to-green-500/8 rounded-xl p-3 border-2 border-green-500/40 shadow-lg">
+          <p className="text-xs text-green-300 font-bold tracking-wider mb-2">▲ LAST PEAK</p>
+          <p className="text-xl font-bold text-[#00C087] mb-1">
             {formatPrice(structure.swing_points.last_high)}
           </p>
-          <div className="flex items-center justify-between text-[9px] text-emerald-200/70">
-            <span>Previous: {formatPrice(structure.swing_points.prev_high)}</span>
-            <span className={`px-1.5 py-0.5 rounded font-semibold ${
-              structure.swing_points.high_diff >= 0 ? 'bg-emerald-800/40 text-emerald-200' : 'bg-rose-800/40 text-rose-200'
+          <div className="flex flex-col gap-1 text-xs text-green-300/80">
+            <span>Prev: {formatPrice(structure.swing_points.prev_high)}</span>
+            <span className={`px-2 py-1 rounded font-semibold text-center ${
+              structure.swing_points.high_diff >= 0 ? 'bg-green-800/40 text-[#00C087]' : 'bg-red-800/40 text-[#EB5B3C]'
             }`}>
               {structure.swing_points.high_diff >= 0 ? '▲' : '▼'} {Math.abs(structure.swing_points.high_diff).toFixed(0)}
             </span>
@@ -436,15 +447,15 @@ const TrendBaseCard = memo<TrendBaseCardProps>(({ symbol, name }) => {
         </div>
 
         {/* Last Valley (Low) */}
-        <div className="bg-gradient-to-br from-blue-900/20 to-blue-950/10 rounded-xl p-3 border border-blue-700/30 shadow-lg">
-          <p className="text-[10px] text-blue-200 font-bold tracking-wider mb-2">▼ LAST VALLEY</p>
-          <p className="text-base font-bold text-blue-300 mb-1">
+        <div className="bg-gradient-to-br from-blue-500/15 to-blue-500/8 rounded-xl p-3 border-2 border-blue-500/40 shadow-lg">
+          <p className="text-xs text-blue-300 font-bold tracking-wider mb-2">▼ LAST VALLEY</p>
+          <p className="text-xl font-bold text-blue-400 mb-1">
             {formatPrice(structure.swing_points.last_low)}
           </p>
-          <div className="flex items-center justify-between text-[9px] text-blue-200/70">
-            <span>Previous: {formatPrice(structure.swing_points.prev_low)}</span>
-            <span className={`px-1.5 py-0.5 rounded font-semibold ${
-              structure.swing_points.low_diff >= 0 ? 'bg-emerald-800/40 text-emerald-200' : 'bg-rose-800/40 text-rose-200'
+          <div className="flex flex-col gap-1 text-xs text-blue-300/80">
+            <span>Prev: {formatPrice(structure.swing_points.prev_low)}</span>
+            <span className={`px-2 py-1 rounded font-semibold text-center ${
+              structure.swing_points.low_diff >= 0 ? 'bg-green-800/40 text-[#00C087]' : 'bg-red-800/40 text-[#EB5B3C]'
             }`}>
               {structure.swing_points.low_diff >= 0 ? '▲' : '▼'} {Math.abs(structure.swing_points.low_diff).toFixed(0)}
             </span>
@@ -453,53 +464,53 @@ const TrendBaseCard = memo<TrendBaseCardProps>(({ symbol, name }) => {
       </div>
 
       {/* Quick Stats - Eye Friendly */}
-      <div className="grid grid-cols-3 gap-2 mb-3 pt-3 border-t border-emerald-600/30">
-        <div className="bg-slate-800/30 rounded-lg p-2 border border-emerald-600/30">
-          <p className="text-[9px] text-slate-400 font-semibold mb-1">CONFIDENCE</p>
-          <p className={`text-sm font-bold ${
-            confidence >= 70 ? 'text-emerald-300' :
-            confidence >= 50 ? 'text-amber-300' :
-            'text-rose-300'
+      <div className="grid grid-cols-3 gap-2 mb-3 pt-3 border-t border-green-500/30">
+        <div className="bg-green-500/5 rounded-lg p-2 border border-green-500/30">
+          <p className="text-xs text-gray-400 font-semibold mb-1">CONFIDENCE</p>
+          <p className={`text-base font-bold ${
+            confidence >= 70 ? 'text-[#00C087]' :
+            confidence >= 50 ? 'text-yellow-400' :
+            'text-[#EB5B3C]'
           }`}>{confidence}%</p>
         </div>
-        <div className="bg-slate-800/30 rounded-lg p-2 border border-emerald-600/30">
-          <p className="text-[9px] text-slate-400 font-semibold mb-1">TREND</p>
-          <p className={`text-sm font-bold ${
-            trend === 'UPTREND' ? 'text-emerald-300' :
-            trend === 'DOWNTREND' ? 'text-rose-300' :
-            'text-slate-300'
+        <div className="bg-green-500/5 rounded-lg p-2 border border-green-500/30">
+          <p className="text-xs text-gray-400 font-semibold mb-1">TREND</p>
+          <p className={`text-base font-bold ${
+            trend === 'UPTREND' ? 'text-[#00C087]' :
+            trend === 'DOWNTREND' ? 'text-[#EB5B3C]' :
+            'text-gray-300'
           }`}>
             {trend === 'UPTREND' ? '↑ UP' : trend === 'DOWNTREND' ? '↓ DOWN' : 'SIDE'}
           </p>
         </div>
-        <div className="bg-slate-800/30 rounded-lg p-2 border border-emerald-600/30">
-          <p className="text-[9px] text-slate-400 font-semibold mb-1">STATUS</p>
-          <p className="text-sm font-bold text-slate-300">{data.status}</p>
+        <div className="bg-green-500/5 rounded-lg p-2 border border-green-500/30">
+          <p className="text-xs text-gray-400 font-semibold mb-1">STATUS</p>
+          <p className="text-base font-bold text-gray-300">{data.status}</p>
         </div>
       </div>
       
       {/* Beginner Trading Advice */}
-      <div className={`rounded-lg p-2.5 border ${
-        isStrongTrend && structure.type.includes('HIGHER-HIGH-HIGHER-LOW') ? 'bg-emerald-900/20 border-emerald-700/40' :
-        isStrongTrend && structure.type.includes('LOWER-HIGH-LOWER-LOW') ? 'bg-rose-900/20 border-rose-700/40' :
-        'bg-slate-800/30 border-emerald-600/30'
+      <div className={`rounded-xl p-3 border-2 shadow-sm ${
+        isStrongTrend && structure.type.includes('HIGHER-HIGH-HIGHER-LOW') ? 'bg-green-500/10 border-green-500/40' :
+        isStrongTrend && structure.type.includes('LOWER-HIGH-LOWER-LOW') ? 'bg-rose-500/10 border-red-500/40' :
+        'bg-green-500/5 border-green-500/30'
       }`}>
-        <div className="flex items-center gap-1.5 mb-1">
-          <span className="text-[9px] text-slate-300 font-bold tracking-wider">💡 WHAT TO DO?</span>
+        <div className="flex items-center gap-2 mb-2">
+          <span className="text-xs text-white font-bold tracking-wider">💡 WHAT TO DO?</span>
         </div>
-        <p className="text-[10px] text-slate-200 leading-relaxed">
+        <p className="text-xs text-white leading-relaxed">
           {!hasValidData ? (
-            <span className="text-amber-300">⚠️ Waiting for swing points to form. Need more price movement.</span>
+            <span className="text-yellow-400">⚠️ Waiting for swing points to form. Need more price movement.</span>
           ) : isStrongTrend && structure.type.includes('HIGHER-HIGH-HIGHER-LOW') ? (
-            <span className="text-emerald-300">Strong uptrend! Price making higher peaks & valleys = Good time for buying.</span>
+            <span className="text-[#00C087] font-semibold">Strong uptrend! Price making higher peaks & valleys = Good time for buying.</span>
           ) : isModerateTrend && structure.type.includes('HIGHER-HIGH-HIGHER-LOW') ? (
-            <span className="text-emerald-300">Moderate uptrend. Pattern present but not very strong yet.</span>
+            <span className="text-[#00C087]">Moderate uptrend. Pattern present but not very strong yet.</span>
           ) : isStrongTrend && structure.type.includes('LOWER-HIGH-LOWER-LOW') ? (
-            <span className="text-rose-300">Strong downtrend! Price making lower peaks & valleys = Avoid buying, wait.</span>
+            <span className="text-[#EB5B3C] font-semibold">Strong downtrend! Price making lower peaks & valleys = Avoid buying, wait.</span>
           ) : isModerateTrend && structure.type.includes('LOWER-HIGH-LOWER-LOW') ? (
-            <span className="text-rose-300">Moderate downtrend. Be cautious with new positions.</span>
+            <span className="text-[#EB5B3C]">Moderate downtrend. Be cautious with new positions.</span>
           ) : (
-            <span className="text-slate-300">No clear trend. Price moving sideways. Wait for direction.</span>
+            <span className="text-gray-300">No clear trend. Price moving sideways. Wait for direction.</span>
           )}
         </p>
       </div>

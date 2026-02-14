@@ -28,6 +28,7 @@ Production: Use with live 5m + 15m candles only
 from typing import Dict, Any, Optional, Tuple, List
 from datetime import datetime
 import logging
+import warnings
 
 logger = logging.getLogger(__name__)
 
@@ -880,23 +881,77 @@ class VWAPIntradayFilter:
     Volume-Weighted Average Price (VWAP) Intraday Entry Filter
     ===========================================================
     
+    ⚠️ IMPORTANT: VWAP is a LAGGING (Historical) Indicator, NOT a FUTURE indicator
+    • Uses past price × volume data (institutional level)
+    • Best for FUTURES (BANKNIFTY, NIFTY-FUT), NOT indices
+    • Do NOT use on SENSEX or NIFTY (indices) - use only on liquid futures
+    
     BEST TIMEFRAME for VWAP Entry:
-    🔥 Intraday (India)
+    🔥 Intraday 5-MINUTE ONLY
     
-    Purpose              Timeframe    Use
-    ─────────────────    ─────────    ──────────────────
-    Direction / Bias     5m (BEST)    ✅ Clean VWAP
-    Strong Confirmation  15m          High reliability
+    Timeframe    Use                          Status
+    ────────     ──────                       ──────
+    5m           PRIMARY (Entry/Exit)         ✅ BEST - EXECUTE HERE
+    15m          Confirmation ONLY            ⚠️ Optional - For validation only
+    1m/3m        ❌ TOO NOISY - Skip
+    1h+          ❌ TOO SLOW - Use for bias only
     
-    ✅ 5-Minute chart is the BEST timeframe for VWAP intraday entries
+    ✅ 5-Minute execution is MANDATORY - 15m for confirmation ONLY
     
-    Why VWAP works on 5m + 15m:
-    • VWAP represents the institutional price level
-    • 5m offers quick pulse of direction
-    • 15m provides trend confirmation with higher timeframe
-    • Combined: Speed + Reliability
-    • 1:2 to 1:3 RR typical
+    Why VWAP on 5m (FUTURES only):
+    • 5m = Perfect balance of noise reduction + quick signals
+    • Futures = Liquid, tight spreads, high volume
+    • Institutional price level = Clean entries with 2:1 RR typical
     """
+    
+    @staticmethod
+    def is_futures_symbol(symbol: str) -> bool:
+        """Check if symbol is a futures contract.
+        
+        FUTURES (✅ USE VWAP):
+        - BANKNIFTY (Bank Nifty Futures)
+        - NIFTY (Nifty 50 Futures) 
+        - SENSEX (Sensex Futures)
+        - Any symbol ending in -FUT, -FUT50
+        
+        INDICES (❌ SKIP VWAP):
+        - NIFTY (Nifty 50 Index - rare, usually futures)
+        - SENSEX (Sensex Index - rare, usually futures)
+        - Any index symbol
+        
+        Note: When used with get_live_vwap_5m_signal(), NIFTY/BANKNIFTY/SENSEX 
+              are treated as FUTURES since they have futures tokens configured.
+        
+        Returns:
+            bool: True if futures, False otherwise
+        """
+        symbol_upper = symbol.upper() if symbol else ""
+        
+        # Trading symbols that could be futures
+        # When using explicit NIFTY, BANKNIFTY, SENSEX with futures tokens = FUTURES
+        trading_futures = ["NIFTY", "BANKNIFTY", "SENSEX", "NIFTYIT", "FINNIFTY", "MIDCPNIFTY"]
+        
+        # Check if it's a known trading futures symbol
+        if symbol_upper in trading_futures:
+            return True
+        
+        # Check if has explicit futures suffix
+        if "-FUT" in symbol_upper or "-FUTSTK" in symbol_upper or "-FUT50" in symbol_upper:
+            return True
+        
+        return False
+    
+    @staticmethod
+    def validate_for_vwap(symbol: str) -> Tuple[bool, str]:
+        """Validate if symbol should use VWAP filter.
+        
+        Returns:
+            (is_valid, reason_message)
+        """
+        if not VWAPIntradayFilter.is_futures_symbol(symbol):
+            return False, f"❌ {symbol} is INDEX - VWAP only for FUTURES (BANKNIFTY, NIFTY-FUT, etc)"
+        
+        return True, f"✅ {symbol} is FUTURES - VWAP filter ENABLED"
     
     @staticmethod
     def analyze_vwap_direction(
@@ -909,16 +964,66 @@ class VWAPIntradayFilter:
         volume: float,
         avg_volume: float,
         rsi: float = None,
+        symbol: str = None,
+        enforce_futures_only: bool = True,
     ) -> Dict[str, Any]:
         """
         Analyze VWAP direction bias on 5m (BEST) timeframe
         
+        ⚠️ IMPORTANT: This uses 5m ONLY (not 15m)
+        
+        Args:
+            current_price: 5m close price
+            vwap_5m: 5m VWAP value
+            prev_price: Previous 5m close
+            prev_vwap_5m: Previous 5m VWAP
+            ema_20: EMA-20 (5m)
+            ema_50: EMA-50 (5m)
+            volume: Current volume (5m)
+            avg_volume: Average volume (5m)
+            rsi: RSI (optional, 5m)
+            symbol: Symbol (used to validate it's a FUTURES contract, not index)
+            enforce_futures_only: If True, skip INDEX symbols (NIFTY, SENSEX, etc)
+        
         Returns:
-          signal: BUY, SELL, or HOLD
+          signal: BUY, SELL, or HOLD (5m execution only)
           direction: BULLISH, BEARISH, or NEUTRAL
           signal_strength: Confidence 0-95%
-          timeframe_label: 5m (BEST) for direction
+          timeframe_label: 5m (BEST) for PRIMARY execution
         """
+        
+        # ⚠️ VALIDATION: Check if this is a FUTURES symbol (not index)
+        if symbol and enforce_futures_only:
+            is_futures, validation_msg = VWAPIntradayFilter.validate_for_vwap(symbol)
+            if not is_futures:
+                warnings.warn(validation_msg, UserWarning)
+                # Return HOLD for indices - VWAP not recommended here
+                return {
+                    "signal": "HOLD",
+                    "direction": "NEUTRAL",
+                    "signal_type": "VWAP_SKIPPED_INDEX",
+                    "timeframe_label": "❌ INDEX - VWAP not applicable",
+                    "confidence": 0,
+                    "vwap_data": {
+                        "current_price": current_price,
+                        "vwap_5m": vwap_5m,
+                        "distance_pct": 0,
+                        "above_vwap": current_price > vwap_5m,
+                        "volume_ratio": 0,
+                    },
+                    "ema_alignment": {
+                        "bullish_structure": False,
+                        "bearish_structure": False,
+                        "ema_20": ema_20,
+                        "ema_50": ema_50,
+                    },
+                    "reasons": [f"❌ {symbol} is an INDEX - VWAP filter is for FUTURES only", validation_msg],
+                    "multiplier": {
+                        "base_confidence": 0,
+                        "timeframe_multiplier": 1.0,
+                        "adjusted_before_ema": 0,
+                    },
+                }
         
         distance_pct = ((current_price - vwap_5m) / vwap_5m) * 100 if vwap_5m else 0
         was_below = prev_price < prev_vwap_5m if prev_vwap_5m else False
@@ -1031,15 +1136,22 @@ class VWAPIntradayFilter:
         volume_15m: float,
         avg_volume_15m: float,
         rsi_15m: float = None,
+        symbol: str = None,
     ) -> Dict[str, Any]:
         """
-        Confirm VWAP direction on 15m (Strong Confirmation) timeframe
+        Confirm VWAP direction on 15m (CONFIRMATION ONLY - NOT FOR ENTRY/EXIT)
+        
+        ⚠️ IMPORTANT: 15m is for CONFIRMATION/VALIDATION ONLY
+        - DO NOT use 15m for actual trade entry/exit decisions
+        - 5m is the PRIMARY timeframe for execution
+        - 15m is OPTIONAL validation to see if trend is strong
+        - If 5m signal conflicts with 15m, DO NOT force entry
         
         Returns:
           confirmation_signal: CONFIRM, NEUTRAL, or REJECT
           reliability: HIGH, MEDIUM, or LOW
-          signal_strength: Confidence 0-95%
-          timeframe_label: 15m for Confirmation
+          signal_strength: Confidence 0-95% (validation only, not for trading)
+          timeframe_label: 15m (Confirmation only)
         """
         
         distance_pct = ((current_price - vwap_15m) / vwap_15m) * 100 if vwap_15m else 0
@@ -1125,73 +1237,605 @@ class VWAPIntradayFilter:
         }
     
     @staticmethod
+    @staticmethod
+    def get_live_vwap_5m_signal_with_auto_token(
+        symbol: str,
+        kite_client,
+        current_price: float,
+        ema_20: float = None,
+        ema_50: float = None,
+        debug: bool = False,
+    ) -> Dict[str, Any]:
+        """
+        Get LIVE 5-minute VWAP signal with AUTOMATIC contract token lookup
+        
+        ✅ AUTO-SWITCHES to current month contract (never expires!)
+        ✅ No need to pass instrument_token - automatically fetched
+        ✅ RECOMMENDED: Use this instead of get_live_vwap_5m_signal()
+        
+        Args:
+            symbol: Trading symbol (NIFTY, BANKNIFTY, SENSEX)
+            kite_client: Zerodha KiteConnect instance
+            current_price: Current market price
+            ema_20: Optional EMA-20
+            ema_50: Optional EMA-50
+            debug: Print debug info
+        
+        Returns:
+            {
+                "symbol": "NIFTY",
+                "success": True,
+                "signal": "BUY" | "SELL" | "HOLD",
+                "direction": "BULLISH" | "BEARISH" | "NEUTRAL",
+                "confidence": 0-95,
+                "vwap": 25599.33,
+                "current_price": 25605.00,
+                "position": "ABOVE" | "BELOW" | "AT",
+                "distance_pct": 0.0221,
+                "contract_token": 15150594,  # ← Shows which token was used
+                "contract_name": "NIFTY26FEBFUT",  # ← Shows contract name
+                ...
+            }
+        """
+        from services.contract_manager import ContractManager
+        
+        try:
+            # Get current month's contract token automatically
+            manager = ContractManager(kite_client)
+            instrument_token = manager.get_current_contract_token(symbol, debug=debug)
+            
+            # If ContractManager fails (e.g., for SENSEX), fall back to config
+            if not instrument_token:
+                if debug:
+                    logger = logging.getLogger(__name__)
+                    logger.warning(f"⚠️  [AUTO-TOKEN] {symbol}: ContractManager failed, using config fallback")
+                
+                # Fallback to config tokens
+                from config import get_settings
+                settings = get_settings()
+                token_map = {
+                    "NIFTY": settings.nifty_fut_token,
+                    "BANKNIFTY": settings.banknifty_fut_token,
+                    "SENSEX": settings.sensex_fut_token,
+                }
+                instrument_token = token_map.get(symbol)
+                
+                if not instrument_token:
+                    return {
+                        "symbol": symbol,
+                        "success": False,
+                        "error": f"Failed to get contract token for {symbol} (both ContractManager and config)",
+                        "signal": "HOLD",
+                        "direction": "NEUTRAL",
+                        "confidence": 0,
+                        "vwap": None,
+                        "current_price": current_price,
+                    }
+            
+            logger = logging.getLogger(__name__)
+            if debug:
+                logger.info(f"\n✅ [AUTO-TOKEN] {symbol}: Using token {instrument_token} from ContractManager")
+            
+            # Call the regular method with the fetched token
+            result = VWAPIntradayFilter.get_live_vwap_5m_signal(
+                symbol=symbol,
+                kite_client=kite_client,
+                instrument_token=instrument_token,
+                current_price=current_price,
+                ema_20=ema_20,
+                ema_50=ema_50,
+                debug=debug
+            )
+            
+            # Add contract info to result
+            contracts = manager.get_all_contracts(symbol, debug=False)
+            if 'near' in contracts:
+                result['contract_token'] = contracts['near']['token']
+                result['contract_name'] = contracts['near']['name']
+                result['contract_expiry'] = contracts['near']['expiry']
+            
+            return result
+        
+        except Exception as e:
+            import traceback
+            logger = logging.getLogger(__name__)
+            logger.error(f"\n❌ [AUTO-TOKEN] {symbol}: Error: {str(e)}")
+            logger.error(traceback.format_exc())
+            return {
+                "symbol": symbol,
+                "success": False,
+                "error": str(e),
+                "error_type": type(e).__name__,
+                "signal": "HOLD",
+                "direction": "NEUTRAL",
+                "confidence": 0,
+                "vwap": None,
+                "current_price": current_price,
+            }
+    
+    def get_live_vwap_5m_signal(
+        symbol: str,
+        kite_client,
+        instrument_token: int,
+        current_price: float,
+        ema_20: float = None,
+        ema_50: float = None,
+        debug: bool = False,
+    ) -> Dict[str, Any]:
+        """
+        Get LIVE 5-minute VWAP signal for futures (NIFTY, BANKNIFTY, SENSEX futures)
+        
+        ✅ SOLVES: Shows actual LIVE VWAP from Zerodha (not stale/wrong values)
+        
+        Fetches FRESH 5-minute candles from market open and calculates accurate VWAP
+        
+        Args:
+            symbol: Trading symbol (NIFTY, BANKNIFTY, SENSEX) - FUTURES ONLY
+            kite_client: Zerodha KiteConnect instance with access token
+            instrument_token: Futures contract token (expires monthly!)
+            current_price: Current market price (LIVE)
+            ema_20: Optional EMA-20 for confirmation
+            ema_50: Optional EMA-50 for trend
+            debug: Print debug info
+        
+        Returns:
+            {
+                "symbol": "NIFTY",
+                "success": True,
+                "signal": "BUY" | "SELL" | "HOLD",
+                "direction": "BULLISH" | "BEARISH" | "NEUTRAL",
+                "confidence": 0-95,
+                "vwap": 25599.33,                 # LIVE VWAP
+                "current_price": 25605.00,       # LIVE price
+                "position": "ABOVE" | "BELOW" | "AT",
+                "distance_pct": 0.0221,          # Distance from VWAP in %
+                "timeframe_label": "🟢 5m (BEST) ✅",
+                "candles_used": 156,             # Real 5m candles from 9:15 AM
+                "last_update": "2025-02-13 14:30:00 IST",
+                "reasons": [...]
+            }
+        """
+        try:
+            from services.vwap_live_service import VWAPLiveCalculator
+            
+            # Validate it's a futures symbol
+            is_futures, validation_msg = VWAPIntradayFilter.validate_for_vwap(symbol)
+            if not is_futures:
+                return {
+                    "symbol": symbol,
+                    "success": False,
+                    "error": validation_msg,
+                    "signal": "HOLD",
+                    "direction": "NEUTRAL",
+                    "confidence": 0,
+                    "vwap": None,
+                    "current_price": current_price,
+            }
+            
+            # Get LIVE VWAP using the live service
+            if debug:
+                print(f"\n🔄 [VWAP-5M-LIVE] {symbol}: Fetching LIVE 5m VWAP...")
+            
+            calculator = VWAPLiveCalculator(kite_client)
+            vwap_result = calculator.get_live_vwap_complete(
+                symbol=symbol,
+                instrument_token=instrument_token,
+                current_price=current_price,
+                interval="5minute",
+                debug=debug
+            )
+            
+            if not vwap_result['success']:
+                return {
+                    "symbol": symbol,
+                    "success": False,
+                    "error": vwap_result.get('error', 'Failed to calculate VWAP'),
+                    "signal": "HOLD",
+                    "direction": "NEUTRAL",
+                    "confidence": 0,
+                    "vwap": None,
+                    "current_price": current_price,
+                }
+            
+            # Extract VWAP and position data
+            vwap_5m = vwap_result['vwap']
+            position_data = vwap_result['position']
+            distance_pct = position_data['distance_pct']
+            position = position_data['position']
+            live_signal = position_data['signal']
+            
+            # Determine trading signal based on VWAP position
+            signal = "HOLD"
+            direction = "NEUTRAL"
+            base_confidence = 30
+            reasons = []
+            
+            # BULLISH: Price ABOVE VWAP
+            if live_signal == "BULLISH" and distance_pct > 0.05:
+                signal = "BUY"
+                direction = "BULLISH"
+                base_confidence = 80
+                reasons.append(f"🟢 LIVE 5m VWAP Entry Ready!")
+                reasons.append(f"   Price ₹{current_price:,.2f} > VWAP ₹{vwap_5m:,.2f}")
+                reasons.append(f"   Distance: +{distance_pct:.4f}% (institutional level)")
+                if ema_20 and ema_50 and ema_20 > ema_50:
+                    base_confidence += 10
+                    reasons.append(f"   EMA-20 > EMA-50: Uptrend confirmed")
+            
+            # BEARISH: Price BELOW VWAP
+            elif live_signal == "BEARISH" and distance_pct < -0.05:
+                signal = "SELL"
+                direction = "BEARISH"
+                base_confidence = 80
+                reasons.append(f"🔴 LIVE 5m VWAP Exit Ready!")
+                reasons.append(f"   Price ₹{current_price:,.2f} < VWAP ₹{vwap_5m:,.2f}")
+                reasons.append(f"   Distance: {distance_pct:.4f}% (below institutional level)")
+                if ema_20 and ema_50 and ema_20 < ema_50:
+                    base_confidence += 10
+                    reasons.append(f"   EMA-20 < EMA-50: Downtrend confirmed")
+            
+            # NEUTRAL: Price AT VWAP
+            else:
+                signal = "HOLD"
+                direction = "NEUTRAL"
+                base_confidence = 30
+                reasons.append(f"🟡 Price AT VWAP (Equilibrium)")
+                reasons.append(f"   Price ₹{current_price:,.2f} ≈ VWAP ₹{vwap_5m:,.2f}")
+                reasons.append(f"   Distance: {distance_pct:.4f}% (indecision zone)")
+                reasons.append(f"   ➜ Wait for directional break")
+            
+            # Final confidence (max 95%)
+            confidence = min(95, base_confidence)
+            
+            return {
+                "symbol": symbol,
+                "success": True,
+                "signal": signal,
+                "direction": direction,
+                "confidence": confidence,
+                "vwap": vwap_5m,  # LIVE VWAP value
+                "current_price": current_price,
+                "position": position,
+                "distance_pct": distance_pct,
+                "timeframe_label": "🟢 5m (BEST) ✅ for Entry/Exit",
+                "candles_used": vwap_result['candles_used'],
+                "last_update": vwap_result['last_update'],
+                "market_open": vwap_result['market_open'],
+                "total_volume": vwap_result['total_volume'],
+                "reasons": reasons,
+                "vwap_data": vwap_result,
+                "execution_notes": [
+                    f"✅ LIVE data from Zerodha (not stale)",
+                    f"✅ Fresh 5m candles from market open",
+                    f"✅ {vwap_result['candles_used']} candles = accurate VWAP",
+                    f"✅ Volume: {vwap_result['total_volume']:,}",
+                    f"✅ Last candle: {vwap_result['last_update']}",
+                ]
+            }
+        
+        except ImportError:
+            return {
+                "symbol": symbol,
+                "success": False,
+                "error": "VWAPLiveCalculator not available - ensure vwap_live_service.py is installed",
+                "signal": "HOLD",
+                "direction": "NEUTRAL",
+                "confidence": 0,
+                "vwap": None,
+                "current_price": current_price,
+            }
+        except Exception as e:
+            logger.error(f"Error in get_live_vwap_5m_signal: {str(e)}")
+            return {
+                "symbol": symbol,
+                "success": False,
+                "error": str(e),
+                "signal": "HOLD",
+                "direction": "NEUTRAL",
+                "confidence": 0,
+                "vwap": None,
+                "current_price": current_price,
+            }
+
+    @staticmethod
     def combine_vwap_signals(
         direction_5m: Dict[str, Any],
         confirmation_15m: Dict[str, Any],
+        use_5m_only: bool = False,
     ) -> Dict[str, Any]:
         """
-        Combine 5m direction + 15m confirmation
+        Combine 5m (ENTRY) + 15m (TREND) signals
         
-        Weighting:
-          5m direction: 60% (faster, for entry)
-          15m confirmation: 40% (slower, for validation)
+        ⚠️ IMPORTANT: VWAP is LAGGING indicator (NOT FUTURE)
+        • Uses PAST price × volume data
+        • 5m = READY TO BUY signal (actual entry point)
+        • 15m = TREND STRENGTH (is trend strong enough to trust 5m?)
+        
+        Two Execution Modes:
+        
+        MODE 1: 5m ONLY (Aggressive - Fastest entries)
+        ─────────────────
+        • Use 5m signal DIRECTLY for entry/exit
+        • 15m ignored
+        • Fastest trades but more noise
+        • use_5m_only=True
+        
+        MODE 2: 5m + 15m Confirmation (Conservative - Higher accuracy)
+        ──────────────────────────────
+        • 5m signal = "Ready to Buy" timing
+        • 15m signal = Trend confirmation (is it safe to enter?)
+        • Only trade if BOTH aligned
+        • use_5m_only=False (default)
+        
+        Returns:
+            5m_signal: "BUY/SELL/HOLD" - READY TO BUY NOW (timing)
+            15m_signal: "BULLISH/BEARISH/NEUTRAL" - Trend strength
+            final_signal: Combined recommendation
+            trade_timing: When to execute (based on 5m)
+            trend_quality: How strong is the trend (based on 15m)
         """
         
-        signal_5m = direction_5m["signal"]
-        confirmation = confirmation_15m["confirmation_signal"]
+        # Extract 5m and 15m data
+        signal_5m = direction_5m.get("signal", "HOLD")
+        confidence_5m = direction_5m.get("confidence", 0)
+        direction_5m_val = direction_5m.get("direction", "NEUTRAL")
         
-        # Map signals to values for weighting
-        signal_map = {"BUY": 1, "BUY_CONTINUATION": 0.8, "HOLD": 0, "SELL_CONTINUATION": -0.8, "SELL": -1}
-        signal_val = signal_map.get(signal_5m, 0)
+        confirmation_15m_val = confirmation_15m.get("confirmation_signal", "NEUTRAL")
+        confidence_15m = confirmation_15m.get("confidence", 0)
         
-        confirmation_map = {"CONFIRM": 1, "NEUTRAL": 0, "REJECT": -1}
-        confirmation_val = confirmation_map.get(confirmation, 0)
-        
-        # Combine with weights
-        combined_score = (signal_val * 0.60) + (confirmation_val * 0.40)
-        
-        # Determine final signal
-        final_signal = "HOLD"
-        final_direction = "NEUTRAL"
         reasons = []
         
-        if combined_score >= 0.5:
-            final_signal = "BUY"
-            final_direction = "BULLISH"
-            reasons.append("🟢 VWAP Entry: 5m direction + 15m confirmation ALIGNED")
-        elif combined_score <= -0.5:
-            final_signal = "SELL"
-            final_direction = "BEARISH"
-            reasons.append("🔴 VWAP Exit: 5m direction + 15m confirmation ALIGNED")
+        # ═══════════════════════════════════════════
+        # MODE 1: Use 5m ONLY (Aggressive)
+        # ═══════════════════════════════════════════
+        if use_5m_only:
+            final_signal = signal_5m
+            final_direction = direction_5m_val
+            ready_to_trade = signal_5m in ["BUY", "SELL"] and confidence_5m >= 55
+            
+            reasons.append("🔥 5M ONLY MODE (Aggressive)")
+            reasons.append(f"   Entry Signal: {signal_5m} @ {confidence_5m}%")
+            reasons.append(f"   ➜ {signal_5m} NOW - Primary timeframe entry")
+            reasons.append("")
+            reasons.append(f"   15m Trend (Optional): {confirmation_15m_val}")
+            if confirmation_15m_val != "NEUTRAL":
+                reasons.append(f"   ➜ Trend is {confirmation_15m_val} (extra confidence)")
+            
+            return {
+                "execution_mode": "5M_ONLY",
+                "signal": final_signal,
+                "direction": final_direction,
+                "trade_timing": f"✅ READY NOW (5m entry)",
+                "trend_quality": f"Optional: {confirmation_15m_val}",
+                "confidence": confidence_5m,
+                "ready_to_trade": ready_to_trade,
+                "trading_action": f"🎯 {signal_5m} - 5m signal ready" if ready_to_trade else "⏳ WAIT - Confidence too low",
+                "reasons": reasons,
+                "vwap_5m": direction_5m,
+                "vwap_15m": confirmation_15m,
+            }
+        
+        # ═══════════════════════════════════════════
+        # MODE 2: 5m + 15m Confirmation (Conservative)
+        # ═══════════════════════════════════════════
+        
+        # Check alignment between 5m entry signal and 15m trend
+        is_bullish_signal_5m = signal_5m in ["BUY", "BUY_CONTINUATION"]
+        is_bearish_signal_5m = signal_5m in ["SELL", "SELL_CONTINUATION"]
+        
+        is_bullish_trend_15m = confirmation_15m_val == "CONFIRM"
+        is_bearish_trend_15m = confirmation_15m_val == "REJECT"
+        is_neutral_trend_15m = confirmation_15m_val == "NEUTRAL"
+        
+        # Determine alignment
+        bullish_aligned = is_bullish_signal_5m and is_bullish_trend_15m
+        bearish_aligned = is_bearish_signal_5m and is_bearish_trend_15m
+        signals_aligned = bullish_aligned or bearish_aligned
+        
+        # ✅ PRIMARY ENTRY: Both 5m and 15m ALIGNED
+        if signals_aligned and confidence_5m >= 60 and confidence_15m >= 50:
+            if bullish_aligned:
+                final_signal = "BUY"
+                final_direction = "BULLISH"
+                trade_timing = "✅ READY TO BUY NOW"
+                trend_quality = "🟢 STRONG BULLISH TREND (15m confirms)"
+                confidence = min(95, confidence_5m + 10)
+                reasons.append("═══════════════════════════════════")
+                reasons.append("🟢 PREMIUM ENTRY: 5m + 15m ALIGNED")
+                reasons.append("═══════════════════════════════════")
+                reasons.append(f"")
+                reasons.append(f"5-MINUTE (ENTRY TIMING):")
+                reasons.append(f"  Signal: {signal_5m}")
+                reasons.append(f"  Confidence: {confidence_5m}%")
+                reasons.append(f"  Meaning: ✅ Price ready to BUY")
+                reasons.append(f"")
+                reasons.append(f"15-MINUTE (TREND STRENGTH):")
+                reasons.append(f"  Trend: {confirmation_15m_val}")
+                reasons.append(f"  Confidence: {confidence_15m}%")
+                reasons.append(f"  Meaning: 🟢 STRONG uptrend - SAFE to enter")
+                reasons.append(f"")
+                reasons.append(f"🎯 Decision: BUY NOW")
+                reasons.append(f"   • 5m entry signal ready (timing is RIGHT)")
+                reasons.append(f"   • 15m trend is strong (trend is RIGHT)")
+                reasons.append(f"   • Combined confidence: {confidence}%")
+            else:  # bearish_aligned
+                final_signal = "SELL"
+                final_direction = "BEARISH"
+                trade_timing = "✅ READY TO SELL NOW"
+                trend_quality = "🔴 STRONG BEARISH TREND (15m confirms)"
+                confidence = min(95, confidence_5m + 10)
+                reasons.append("═══════════════════════════════════")
+                reasons.append("🔴 PREMIUM EXIT: 5m + 15m ALIGNED")
+                reasons.append("═══════════════════════════════════")
+                reasons.append(f"")
+                reasons.append(f"5-MINUTE (EXIT TIMING):")
+                reasons.append(f"  Signal: {signal_5m}")
+                reasons.append(f"  Confidence: {confidence_5m}%")
+                reasons.append(f"  Meaning: ✅ Price ready to SELL")
+                reasons.append(f"")
+                reasons.append(f"15-MINUTE (TREND STRENGTH):")
+                reasons.append(f"  Trend: {confirmation_15m_val}")
+                reasons.append(f"  Confidence: {confidence_15m}%")
+                reasons.append(f"  Meaning: 🔴 STRONG downtrend - SAFE to exit")
+                reasons.append(f"")
+                reasons.append(f"🎯 Decision: SELL NOW")
+                reasons.append(f"   • 5m exit signal ready (timing is RIGHT)")
+                reasons.append(f"   • 15m trend is strong (trend is RIGHT)")
+                reasons.append(f"   • Combined confidence: {confidence}%")
+            
+            ready_to_trade = True
+        
+        # ⚠️ CONDITIONAL ENTRY: 5m ready but weak 15m trend
+        elif (is_bullish_signal_5m or is_bearish_signal_5m) and is_neutral_trend_15m:
+            if is_bullish_signal_5m:
+                final_signal = "BUY"
+                final_direction = "BULLISH"
+                trade_timing = "⚠️ READY (with caution)"
+                trend_quality = "🟡 NEUTRAL TREND - Watch carefully"
+                confidence = confidence_5m - 15  # Reduce confidence
+                reasons.append("═══════════════════════════════════")
+                reasons.append("🟡 CONDITIONAL: 5m ready, 15m unclear")
+                reasons.append("═══════════════════════════════════")
+                reasons.append(f"")
+                reasons.append(f"5-MINUTE (ENTRY TIMING):")
+                reasons.append(f"  Signal: {signal_5m}")
+                reasons.append(f"  Confidence: {confidence_5m}%")
+                reasons.append(f"  Meaning: ✅ Ready to BUY")
+                reasons.append(f"")
+                reasons.append(f"15-MINUTE (TREND STRENGTH):")
+                reasons.append(f"  Trend: NEUTRAL")
+                reasons.append(f"  Meaning: ⚠️ No clear trend confirmation")
+                reasons.append(f"")
+                reasons.append(f"⚠️ Decision: BUY (with caution)")
+                reasons.append(f"   • 5m timing is ready ✅")
+                reasons.append(f"   • But 15m trend is weak ⚠️")
+                reasons.append(f"   • Use smaller position size")
+                reasons.append(f"   • Adjusted confidence: {confidence}%")
+            else:  # is_bearish_signal_5m
+                final_signal = "SELL"
+                final_direction = "BEARISH"
+                trade_timing = "⚠️ READY (with caution)"
+                trend_quality = "🟡 NEUTRAL TREND - Watch carefully"
+                confidence = confidence_5m - 15
+                reasons.append("═══════════════════════════════════")
+                reasons.append("🟡 CONDITIONAL: 5m ready, 15m unclear")
+                reasons.append("═══════════════════════════════════")
+                reasons.append(f"")
+                reasons.append(f"5-MINUTE (EXIT TIMING):")
+                reasons.append(f"  Signal: {signal_5m}")
+                reasons.append(f"  Confidence: {confidence_5m}%")
+                reasons.append(f"  Meaning: ✅ Ready to SELL")
+                reasons.append(f"")
+                reasons.append(f"15-MINUTE (TREND STRENGTH):")
+                reasons.append(f"  Trend: NEUTRAL")
+                reasons.append(f"  Meaning: ⚠️ No clear trend conviction")
+                reasons.append(f"")
+                reasons.append(f"⚠️ Decision: SELL (with caution)")
+                reasons.append(f"   • 5m timing is ready ✅")
+                reasons.append(f"   • But 15m trend is unclear ⚠️")
+                reasons.append(f"   • Use smaller position size")
+                reasons.append(f"   • Adjusted confidence: {confidence}%")
+            
+            ready_to_trade = confidence >= 55
+        
+        # ❌ CONFLICTING: 5m wants to buy but 15m is bearish
+        elif is_bullish_signal_5m and is_bearish_trend_15m:
+            final_signal = "HOLD"
+            final_direction = "CONFLICTED"
+            trade_timing = "❌ SKIP THIS SIGNAL"
+            trend_quality = "🔴 BEARISH TREND conflicts with 5m"
+            confidence = 0
+            ready_to_trade = False
+            
+            reasons.append("═══════════════════════════════════")
+            reasons.append("❌ CONFLICT: 5m vs 15m OPPOSITE")
+            reasons.append("═══════════════════════════════════")
+            reasons.append(f"")
+            reasons.append(f"5-MINUTE (ENTRY TIMING):")
+            reasons.append(f"  Signal: {signal_5m} @ {confidence_5m}%")
+            reasons.append(f"  Says: ✅ Ready to BUY")
+            reasons.append(f"")
+            reasons.append(f"15-MINUTE (TREND STRENGTH):")
+            reasons.append(f"  Trend: BEARISH (REJECT)")
+            reasons.append(f"  Says: 🔴 Strong downtrend - DON'T buy!")
+            reasons.append(f"")
+            reasons.append(f"❌ Decision: HOLD/SKIP")
+            reasons.append(f"   • Trend is DOWN but signal is UP")
+            reasons.append(f"   • Trust the 15m trend over 5m noise")
+            reasons.append(f"   • WAIT for both to align")
+        
+        # ❌ CONFLICTING: 5m wants to sell but 15m is bullish
+        elif is_bearish_signal_5m and is_bullish_trend_15m:
+            final_signal = "HOLD"
+            final_direction = "CONFLICTED"
+            trade_timing = "❌ SKIP THIS SIGNAL"
+            trend_quality = "🟢 BULLISH TREND conflicts with 5m"
+            confidence = 0
+            ready_to_trade = False
+            
+            reasons.append("═══════════════════════════════════")
+            reasons.append("❌ CONFLICT: 5m vs 15m OPPOSITE")
+            reasons.append("═══════════════════════════════════")
+            reasons.append(f"")
+            reasons.append(f"5-MINUTE (EXIT TIMING):")
+            reasons.append(f"  Signal: {signal_5m} @ {confidence_5m}%")
+            reasons.append(f"  Says: ✅ Ready to SELL")
+            reasons.append(f"")
+            reasons.append(f"15-MINUTE (TREND STRENGTH):")
+            reasons.append(f"  Trend: BULLISH (CONFIRM)")
+            reasons.append(f"  Says: 🟢 Strong uptrend - DON'T sell!")
+            reasons.append(f"")
+            reasons.append(f"❌ Decision: HOLD/SKIP")
+            reasons.append(f"   • Trend is UP but signal is DOWN")
+            reasons.append(f"   • Trust the 15m trend over 5m noise")
+            reasons.append(f"   • WAIT for both to align")
+        
+        # 🟡 NEUTRAL: 5m has no signal yet
         else:
             final_signal = "HOLD"
             final_direction = "NEUTRAL"
-            if confirmation == "NEUTRAL":
-                reasons.append("🟡 WAIT: 15m confirmation too weak")
-            elif signal_5m == "HOLD":
-                reasons.append("🟡 WAIT: 5m price at VWAP level")
-            else:
-                reasons.append("🟡 CAUTION: 5m and 15m not aligned")
-        
-        # Calculate confidence
-        conf_5m = direction_5m["confidence"]
-        conf_15m = confirmation_15m["confidence"]
-        combined_confidence = int((conf_5m * 0.60) + (conf_15m * 0.40))
-        
-        reasons.append(f"\n📊 Confidence Breakdown:")
-        reasons.append(f"   5m (60%): {conf_5m}% × 0.60 = {int(conf_5m * 0.60)}%")
-        reasons.append(f"  15m (40%): {conf_15m}% × 0.40 = {int(conf_15m * 0.40)}%")
-        reasons.append(f"  ➜ COMBINED: {combined_confidence}%")
+            trade_timing = "⏳ WAITING"
+            trend_quality = "🟡 Trend is unclear"
+            confidence = 0
+            ready_to_trade = False
+            
+            reasons.append("═══════════════════════════════════")
+            reasons.append("⏳ WAITING FOR SIGNALS")
+            reasons.append("═══════════════════════════════════")
+            reasons.append(f"")
+            reasons.append(f"5-MINUTE (ENTRY TIMING):")
+            reasons.append(f"  Status: {signal_5m}")
+            reasons.append(f"  Confidence: {confidence_5m}%")
+            reasons.append(f"  Meaning: Price is at VWAP (indecision)")
+            reasons.append(f"")
+            reasons.append(f"15-MINUTE (TREND STRENGTH):")
+            reasons.append(f"  Trend: {confirmation_15m_val}")
+            reasons.append(f"  Confidence: {confidence_15m}%")
+            reasons.append(f"")
+            reasons.append(f"⏳ Decision: HOLD - WAIT FOR BREAKOUT")
+            reasons.append(f"   • 5m: Price too close to VWAP, need clear break")
+            reasons.append(f"   • 15m: No clear trend direction")
+            reasons.append(f"   • WAIT for better setup")
         
         return {
+            "execution_mode": "5M_PRIMARY_15M_CONFIRMATION",
             "signal": final_signal,
             "direction": final_direction,
-            "combined_confidence": combined_confidence,
-            "ready_to_trade": combined_confidence >= 65,
-            "signal_alignment": signal_5m == signal_5m and confirmation != "REJECT",
+            "confidence": round(confidence, 1),
+            "trade_timing": trade_timing,
+            "trend_quality": trend_quality,
+            "ready_to_trade": ready_to_trade,
+            "trading_action": f"{'✅ ' if ready_to_trade else '⏳ '}{final_signal} - {trade_timing}",
+            "reasons": reasons,
             "vwap_5m": direction_5m,
             "vwap_15m": confirmation_15m,
-            "reasons": reasons,
+            "alignment": {
+                "signals_aligned": signals_aligned,
+                "5m_bullish": is_bullish_signal_5m,
+                "15m_bullish": is_bullish_trend_15m,
+                "5m_bearish": is_bearish_signal_5m,
+                "15m_bearish": is_bearish_trend_15m,
+            }
         }
 
 
@@ -1385,25 +2029,37 @@ class IntraDayEntrySystem:
 
 class EMATrafficLightFilter:
     """
-    EMA 20/50/100 Traffic Light System
-    ===================================
+    EMA 20/50/100/200 + Smoothline (EMA-9) Traffic Light System
+    ============================================================
+    
+    ENHANCED with 200 EMA anchor + Smoothline-9 for fast entry confirmation
     
     BEST TIMEFRAME for EMA Traffic Light:
     🔥 Intraday (India)
     
-    Trading Style   Timeframe    Quality
-    ─────────────   ─────────    ──────────────
-    Direction       5m           ⚠️ OK (needs filter)
-    EMA Traffic     15m (BEST)   ✅✅ Very clean
+    Trading Style   Timeframe    Quality        Parameter
+    ─────────────   ─────────    ──────────────  ──────────
+    Fast Entry     5m           ⚠️ Entry timing  Smoothline-9 (EMA-9)
+    Entry Signal   5m           ⚠️ Entry timing  EMA-20
+    EMA Trend      15m (BEST)   ✅✅ Confirm    EMA-20/50/100
+    Anchor Support 15m+ (200)   🔒 Long-term    EMA-200
     
-    ✅ 15-Minute chart is BEST for EMA Traffic Light
+    ✅ Smoothline-9 (EMA-9): Fast entry confirmation (close-based)
+    ✅ 5-Minute: Entry signal (when to BUY/SELL at EMA-20)
+    ✅ 15-Minute: Trend strength (Bullish/Bearish/Neutral)
+    🔒 200 EMA: Market bias anchor (above=bullish, below=bearish)
     
     Why EMA Traffic Light Works:
-    • Green (BUY): EMA-20 > EMA-50 > EMA-100 (Bullish alignment)
-    • Yellow (CAUTION): Ambiguous EMA alignment or flat
-    • Red (SELL): EMA-20 < EMA-50 < EMA-100 (Bearish alignment)
+    • GREEN (BUY): EMA-20 > EMA-50 > EMA-100 with Price > EMA-200 (Perfect bullish)
+                   + Smoothline-9 above EMA-20 (entry confirmation)
+    • YELLOW (CAUTION): Mixed alignment OR conflicting with 200 EMA anchor
+    • RED (SELL): EMA-20 < EMA-50 < EMA-100 with Price < EMA-200 (Perfect bearish)
+                  + Smoothline-9 below EMA-20 (entry confirmation)
     
-    On 15m: Crystal clear trend filtering, institutional-level decision
+    Smoothline Config: Length=9, Source=CLOSE, Type=EMA (smoothed)
+    Entry Signal (5m): Use when price crosses EMA-20 + Smoothline-9 confirmation
+    Trend Filter (15m): Check if aligned with direction
+    Anchor (200): Confirms overall market bias (long-term direction)
     """
     
     @staticmethod
@@ -1411,13 +2067,29 @@ class EMATrafficLightFilter:
         ema_20: float,
         ema_50: float,
         ema_100: float,
+        ema_200: float,
+        smoothline_9: float,              # ✅ NEW: Smoothlined EMA-9 (Close-based)
         current_price: float,
         volume: float = None,
         avg_volume: float = None,
         timeframe: str = "15m",
     ) -> Dict[str, Any]:
         """
-        Analyze EMA alignment as traffic light signal
+        Analyze EMA alignment as traffic light signal with 200 EMA anchor + Smoothline-9
+        
+        Parameters:
+        -----------
+        ema_20, ema_50, ema_100, ema_200: Main trend EMAs
+        smoothline_9: Smoothed EMA-9 (Length=9, Source=CLOSE, Type=EMA)
+        current_price: Current close price
+        volume, avg_volume: For confirmation
+        timeframe: 5m/15m/30m
+        
+        Smoothline Logic:
+        - Fast entry confirmation line (Length=9)
+        - Based on close prices only
+        - Price above Smoothline-9 = Bullish entry zone
+        - Price below Smoothline-9 = Bearish exit zone
         
         Returns:
           signal: GREEN|YELLOW|RED
@@ -1426,7 +2098,7 @@ class EMATrafficLightFilter:
           traffic_light: Visual indicator
         """
         
-        # EMA alignment checks
+        # 1. SHORT-TERM EMA ALIGNMENT (20/50/100 for entry timing)
         bullish_cross_20_50 = ema_20 > ema_50
         bullish_cross_50_100 = ema_50 > ema_100
         bullish_cross_20_100 = ema_20 > ema_100
@@ -1435,11 +2107,37 @@ class EMATrafficLightFilter:
         bearish_cross_50_100 = ema_50 < ema_100
         bearish_cross_20_100 = ema_20 < ema_100
         
-        # Perfect alignment
-        perfect_bullish = bullish_cross_20_50 and bullish_cross_50_100 and bullish_cross_20_100
-        perfect_bearish = bearish_cross_20_50 and bearish_cross_50_100 and bearish_cross_20_100
+        # 1B. SMOOTHLINE-9 CHECKS (fast entry confirmation)
+        price_above_smoothline9 = current_price > smoothline_9
+        ema20_above_smoothline9 = ema_20 > smoothline_9
+        smoothline9_above_ema50 = smoothline_9 > ema_50
         
-        # Partial alignment
+        # Smoothline-9 bullish alignment (fast confirmation)
+        smoothline_bullish = price_above_smoothline9 and ema20_above_smoothline9
+        smoothline_bearish = (current_price < smoothline_9) and (ema_20 < smoothline_9)
+        
+        # 2. 200 EMA ANCHOR CHECK (long-term market bias)
+        bullish_cross_100_200 = ema_100 > ema_200
+        bearish_cross_100_200 = ema_100 < ema_200
+        price_above_200 = current_price > ema_200
+        price_below_200 = current_price < ema_200
+        
+        # 3. PERFECT ALIGNMENT (all 5 conditions aligned)
+        perfect_bullish = (bullish_cross_20_50 and bullish_cross_50_100 and 
+                          bullish_cross_100_200 and price_above_200)
+        perfect_bearish = (bearish_cross_20_50 and bearish_cross_50_100 and 
+                          bearish_cross_100_200 and price_below_200)
+        
+        # 4. STRONG ALIGNMENT (4/5 conditions aligned)
+        strong_bullish = ((bullish_cross_20_50 and bullish_cross_50_100 and bullish_cross_100_200) or
+                         (bullish_cross_20_50 and bullish_cross_50_100 and price_above_200) or
+                         (bullish_cross_50_100 and bullish_cross_100_200 and price_above_200))
+        
+        strong_bearish = ((bearish_cross_20_50 and bearish_cross_50_100 and bearish_cross_100_200) or
+                         (bearish_cross_20_50 and bearish_cross_50_100 and price_below_200) or
+                         (bearish_cross_50_100 and bearish_cross_100_200 and price_below_200))
+        
+        # 5. PARTIAL ALIGNMENT (2/3 of 20/50/100 aligned)
         two_thirds_bullish = (bullish_cross_20_50 and bullish_cross_50_100) or \
                             (bullish_cross_20_50 and bullish_cross_20_100) or \
                             (bullish_cross_50_100 and bullish_cross_20_100)
@@ -1448,7 +2146,7 @@ class EMATrafficLightFilter:
                             (bearish_cross_20_50 and bearish_cross_20_100) or \
                             (bearish_cross_50_100 and bearish_cross_20_100)
         
-        # Determine signal
+        # 6. DETERMINE SIGNAL WITH 200 EMA ANCHOR
         signal = "YELLOW"
         trend = "CAUTION"
         traffic_light = "🟡"
@@ -1456,95 +2154,255 @@ class EMATrafficLightFilter:
         reasons = []
         light_quality = "Ambiguous"
         
-        # ✅ GREEN - Perfect bullish alignment
-        if perfect_bullish:
+        # ✅ GREEN - Perfect bullish alignment (ALL 5: 20>50>100>200 + Price>200) + Smoothline-9 confirmation
+        if perfect_bullish and smoothline_bullish:
             signal = "GREEN"
             trend = "BULLISH"
             traffic_light = "🟢"
             base_confidence = 95
-            light_quality = "PERFECT ALIGN"
-            reasons.append("[GREEN] EMA-20 > EMA-50 > EMA-100 (Perfect bullish)")
-            reasons.append(f"  Distance: 20→50: +{(ema_20-ema_50):.2f} pts | 50→100: +{(ema_50-ema_100):.2f} pts")
-            reasons.append("  Signal: STRONG uptrend, institutional confirmation")
+            light_quality = "PERFECT ALIGN (5/5) + SMOOTHLINE ✅"
+            reasons.append("[GREEN] PERFECT BULLISH: EMA-20 > 50 > 100 > 200 + Price > 200 ✅✅✅")
+            reasons.append(f"  SHORT-TERM (20/50/100): +{(ema_20-ema_50):.2f} pts → {(ema_50-ema_100):.2f} pts")
+            reasons.append(f"  ANCHOR (200 EMA): {(ema_100-ema_200):.2f} pts above 200 (strong uptrend)")
+            reasons.append(f"  FAST ENTRY (Smoothline-9): BULLISH CONFIRMATION - Price > Smoothline + EMA-20 > Smoothline")
+            reasons.append(f"  PRICE: Above all EMAs + Smoothline-9 (highest entry quality)")
+            reasons.append("  ACTION: INSTITUTIONAL BUY SIGNAL - Best entry quality with speed confirmation")
         
-        # 🟢 GREEN - 2/3 bullish alignment  
-        elif two_thirds_bullish and not (bearish_cross_20_50 or bearish_cross_50_100 or bearish_cross_20_100):
+        # ✅ GREEN - Perfect bullish alignment with strong smoothline (slightly lower confidence if smoothline weak)
+        elif perfect_bullish and not smoothline_bearish:
+            signal = "GREEN"
+            trend = "BULLISH"
+            traffic_light = "🟢"
+            base_confidence = 95
+            light_quality = "PERFECT ALIGN (5/5)" 
+            reasons.append("[GREEN] PERFECT BULLISH: EMA-20 > 50 > 100 > 200 + Price > 200 ✅✅✅")
+            reasons.append(f"  SHORT-TERM (20/50/100): +{(ema_20-ema_50):.2f} pts → {(ema_50-ema_100):.2f} pts")
+            reasons.append(f"  ANCHOR (200 EMA): {(ema_100-ema_200):.2f} pts above 200 (strong uptrend)")
+            reasons.append(f"  PRICE: Above all EMAs (bullish bias confirmed)")
+            if not smoothline_bullish:
+                reasons.append(f"  NOTE: Smoothline-9 not yet aligned - monitor for faster entry")
+                base_confidence = 90
+                light_quality = "PERFECT ALIGN (5/5) - Awaiting Smoothline"
+            reasons.append("  ACTION: INSTITUTIONAL BUY SIGNAL - Best entry quality")
+        
+        # 🟢 GREEN - Strong bullish (4/5 conditions aligned) + strong smoothline confirmation
+        elif strong_bullish and not bearish_cross_20_50 and not bearish_cross_50_100 and smoothline_bullish:
+            signal = "GREEN"
+            trend = "BULLISH"
+            traffic_light = "🟢"
+            base_confidence = 88
+            light_quality = "STRONG ALIGN (4/5) + SMOOTHLINE ✅"
+            reasons.append("[GREEN] STRONG BULLISH: 4/5 conditions + Smoothline-9 confirmation")
+            if bullish_cross_20_50 and bullish_cross_50_100 and bullish_cross_100_200:
+                reasons.append("  • EMA-20 > EMA-50 > EMA-100 > EMA-200: Perfect short-term")
+                if price_above_200:
+                    reasons.append(f"  • Price > EMA-200: Confirmed bullish bias")
+                else:
+                    reasons.append(f"  • Price near 200: Watch for pullback")
+            elif bullish_cross_20_50 and bullish_cross_50_100 and price_above_200:
+                reasons.append("  • EMA-20 > EMA-50 > EMA-100: Good short-term alignment")
+                reasons.append(f"  • Price > EMA-200: Bullish bias held")
+            else:
+                reasons.append("  • EMA-100 > EMA-200 with price bullish: Steady uptrend")
+            reasons.append(f"  • Smoothline-9: Fast entry signal confirmed")
+            reasons.append("  ACTION: STRONG ENTRY - Smoothline confirmation ready")
+        
+        # 🟢 GREEN - Strong bullish (4/5 conditions aligned) without smoothline confirmation
+        elif strong_bullish and not bearish_cross_20_50 and not bearish_cross_50_100:
             signal = "GREEN"
             trend = "BULLISH"
             traffic_light = "🟢"
             base_confidence = 85
-            light_quality = "STRONG ALIGN"
-            reasons.append("[GREEN] 2 of 3 EMAs aligned bullish")
-            if bullish_cross_20_50 and bullish_cross_50_100:
-                reasons.append("  EMA-20 > EMA-50 > EMA-100: Good alignment")
-            elif bullish_cross_20_50 and bullish_cross_20_100:
-                reasons.append("  EMA-20 crossing above both EMA-50 and EMA-100: Bullish breakout")
+            light_quality = "STRONG ALIGN (4/5)"
+            reasons.append("[GREEN] STRONG BULLISH: 4/5 conditions aligned")
+            if bullish_cross_20_50 and bullish_cross_50_100 and bullish_cross_100_200:
+                reasons.append("  • EMA-20 > EMA-50 > EMA-100 > EMA-200: Perfect short-term")
+                if price_above_200:
+                    reasons.append(f"  • Price > EMA-200: Confirmed bullish bias")
+                else:
+                    reasons.append(f"  • Price near 200: Watch for pullback")
+            elif bullish_cross_20_50 and bullish_cross_50_100 and price_above_200:
+                reasons.append("  • EMA-20 > EMA-50 > EMA-100: Good short-term alignment")
+                reasons.append(f"  • Price > EMA-200: Bullish bias held")
             else:
-                reasons.append("  EMA-50 > EMA-100 with EMA-20 near EMAs: Steady uptrend")
+                reasons.append("  • EMA-100 > EMA-200 with price bullish: Steady uptrend")
+            if not smoothline_bullish:
+                reasons.append(f"  • Smoothline-9: Not yet aligned - wait for confirmation")
+            reasons.append("  ACTION: GOOD ENTRY - Confirmation signal ready")
         
-        # 🔴 RED - Perfect bearish alignment
-        elif perfect_bearish:
+        # 🔴 RED - Perfect bearish alignment (ALL 5: 20<50<100<200 + Price<200) + Smoothline-9 confirmation
+        elif perfect_bearish and smoothline_bearish:
             signal = "RED"
             trend = "BEARISH"
             traffic_light = "🔴"
             base_confidence = 95
-            light_quality = "PERFECT ALIGN"
-            reasons.append("[RED] EMA-20 < EMA-50 < EMA-100 (Perfect bearish)")
-            reasons.append(f"  Distance: 20→50: {(ema_20-ema_50):.2f} pts | 50→100: {(ema_50-ema_100):.2f} pts")
-            reasons.append("  Signal: STRONG downtrend, institutional confirmation")
+            light_quality = "PERFECT ALIGN (5/5) + SMOOTHLINE ✅"
+            reasons.append("[RED] PERFECT BEARISH: EMA-20 < 50 < 100 < 200 + Price < 200 ✅✅✅")
+            reasons.append(f"  SHORT-TERM (20/50/100): {(ema_20-ema_50):.2f} pts → {(ema_50-ema_100):.2f} pts")
+            reasons.append(f"  ANCHOR (200 EMA): {(ema_100-ema_200):.2f} pts below 200 (strong downtrend)")
+            reasons.append(f"  FAST EXIT (Smoothline-9): BEARISH CONFIRMATION - Price < Smoothline + EMA-20 < Smoothline")
+            reasons.append(f"  PRICE: Below all EMAs + Smoothline-9 (highest exit quality)")
+            reasons.append("  ACTION: INSTITUTIONAL SELL SIGNAL - Best exit quality with speed confirmation")
         
-        # 🔴 RED - 2/3 bearish alignment
-        elif two_thirds_bearish and not (bullish_cross_20_50 or bullish_cross_50_100 or bullish_cross_20_100):
+        # 🔴 RED - Perfect bearish alignment with strong smoothline (slightly lower confidence if smoothline weak)
+        elif perfect_bearish and not smoothline_bullish:
+            signal = "RED"
+            trend = "BEARISH"
+            traffic_light = "🔴"
+            base_confidence = 95
+            light_quality = "PERFECT ALIGN (5/5)"
+            reasons.append("[RED] PERFECT BEARISH: EMA-20 < 50 < 100 < 200 + Price < 200 ✅✅✅")
+            reasons.append(f"  SHORT-TERM (20/50/100): {(ema_20-ema_50):.2f} pts → {(ema_50-ema_100):.2f} pts")
+            reasons.append(f"  ANCHOR (200 EMA): {(ema_100-ema_200):.2f} pts below 200 (strong downtrend)")
+            reasons.append(f"  PRICE: Below all EMAs (bearish bias confirmed)")
+            if not smoothline_bearish:
+                reasons.append(f"  NOTE: Smoothline-9 not yet aligned - monitor for faster exit")
+                base_confidence = 90
+                light_quality = "PERFECT ALIGN (5/5) - Awaiting Smoothline"
+            reasons.append("  ACTION: INSTITUTIONAL SELL SIGNAL - Best exit quality")
+        
+        # 🔴 RED - Strong bearish (4/5 conditions aligned) + strong smoothline confirmation
+        elif strong_bearish and not bullish_cross_20_50 and not bullish_cross_50_100 and smoothline_bearish:
+            signal = "RED"
+            trend = "BEARISH"
+            traffic_light = "🔴"
+            base_confidence = 88
+            light_quality = "STRONG ALIGN (4/5) + SMOOTHLINE ✅"
+            reasons.append("[RED] STRONG BEARISH: 4/5 conditions + Smoothline-9 confirmation")
+            if bearish_cross_20_50 and bearish_cross_50_100 and bearish_cross_100_200:
+                reasons.append("  • EMA-20 < EMA-50 < EMA-100 < EMA-200: Perfect short-term")
+                if price_below_200:
+                    reasons.append(f"  • Price < EMA-200: Confirmed bearish bias")
+                else:
+                    reasons.append(f"  • Price near 200: Watch for bounce")
+            elif bearish_cross_20_50 and bearish_cross_50_100 and price_below_200:
+                reasons.append("  • EMA-20 < EMA-50 < EMA-100: Good short-term alignment")
+                reasons.append(f"  • Price < EMA-200: Bearish bias held")
+            else:
+                reasons.append("  • EMA-100 < EMA-200 with price bearish: Steady downtrend")
+            reasons.append(f"  • Smoothline-9: Fast exit signal confirmed")
+            reasons.append("  ACTION: STRONG EXIT - Smoothline confirmation ready")
+        
+        # 🔴 RED - Strong bearish (4/5 conditions aligned) without smoothline confirmation
+        elif strong_bearish and not bullish_cross_20_50 and not bullish_cross_50_100:
             signal = "RED"
             trend = "BEARISH"
             traffic_light = "🔴"
             base_confidence = 85
-            light_quality = "STRONG ALIGN"
-            reasons.append("[RED] 2 of 3 EMAs aligned bearish")
-            if bearish_cross_20_50 and bearish_cross_50_100:
-                reasons.append("  EMA-20 < EMA-50 < EMA-100: Good alignment")
-            elif bearish_cross_20_50 and bearish_cross_20_100:
-                reasons.append("  EMA-20 crossing below both EMA-50 and EMA-100: Bearish breakdown")
+            light_quality = "STRONG ALIGN (4/5)"
+            reasons.append("[RED] STRONG BEARISH: 4/5 conditions aligned")
+            if bearish_cross_20_50 and bearish_cross_50_100 and bearish_cross_100_200:
+                reasons.append("  • EMA-20 < EMA-50 < EMA-100 < EMA-200: Perfect short-term")
+                if price_below_200:
+                    reasons.append(f"  • Price < EMA-200: Confirmed bearish bias")
+                else:
+                    reasons.append(f"  • Price near 200: Watch for bounce")
+            elif bearish_cross_20_50 and bearish_cross_50_100 and price_below_200:
+                reasons.append("  • EMA-20 < EMA-50 < EMA-100: Good short-term alignment")
+                reasons.append(f"  • Price < EMA-200: Bearish bias held")
             else:
-                reasons.append("  EMA-50 < EMA-100 with EMA-20 near EMAs: Steady downtrend")
+                reasons.append("  • EMA-100 < EMA-200 with price bearish: Steady downtrend")
+            if not smoothline_bearish:
+                reasons.append(f"  • Smoothline-9: Not yet aligned - wait for confirmation")
+            reasons.append("  ACTION: GOOD EXIT - Confirmation signal ready")
         
-        # 🟡 YELLOW - Mixed signals (caution)
+        # 🟡 YELLOW - Partial bullish but unclear with 200 (2/3 short-term, ambiguous long-term)
+        elif two_thirds_bullish and not (bearish_cross_20_50 or bearish_cross_50_100):
+            if bearish_cross_100_200 or price_below_200:
+                signal = "YELLOW"
+                trend = "CAUTION"
+                traffic_light = "🟡"
+                base_confidence = 45
+                light_quality = "WEAKENING UPTREND"
+                reasons.append("[YELLOW] SHORT-TERM BULLISH but LONG-TERM BEARISH (Caution)")
+                reasons.append("  • EMA-20/50/100: Bullish alignment (2/3)")
+                reasons.append(f"  • EMA-200: Below or price below 200 (weakening)")
+                reasons.append("  ACTION: Trade with CAUTION - Trend fade risk")
+            else:
+                signal = "GREEN"
+                trend = "BULLISH"
+                traffic_light = "🟢"
+                base_confidence = 75
+                light_quality = "PARTIAL BULLISH"
+                reasons.append("[GREEN] PARTIAL BULLISH: 2/3 short-term + 200 support")
+                reasons.append("  • EMA-20/50/100: Good bullish alignment")
+                reasons.append(f"  • Price > EMA-200: Bullish bias confirmed")
+                reasons.append("  ACTION: MODERATE ENTRY - Wait for tighter alignment")
+        
+        # 🟡 YELLOW - Partial bearish but unclear with 200 (2/3 short-term, ambiguous long-term)
+        elif two_thirds_bearish and not (bullish_cross_20_50 or bullish_cross_50_100):
+            if bullish_cross_100_200 or price_above_200:
+                signal = "YELLOW"
+                trend = "CAUTION"
+                traffic_light = "🟡"
+                base_confidence = 45
+                light_quality = "WEAKENING DOWNTREND"
+                reasons.append("[YELLOW] SHORT-TERM BEARISH but LONG-TERM BULLISH (Caution)")
+                reasons.append("  • EMA-20/50/100: Bearish alignment (2/3)")
+                reasons.append(f"  • EMA-200: Above or price above 200 (weakening)")
+                reasons.append("  ACTION: Trade with CAUTION - Trend fade risk")
+            else:
+                signal = "RED"
+                trend = "BEARISH"
+                traffic_light = "🔴"
+                base_confidence = 75
+                light_quality = "PARTIAL BEARISH"
+                reasons.append("[RED] PARTIAL BEARISH: 2/3 short-term + 200 resistance")
+                reasons.append("  • EMA-20/50/100: Good bearish alignment")
+                reasons.append(f"  • Price < EMA-200: Bearish bias confirmed")
+                reasons.append("  ACTION: MODERATE EXIT - Wait for tighter alignment")
+        
+        # 🟡 YELLOW - Mixed signals (conflicting EMAs or convergence)
         else:
             signal = "YELLOW"
             trend = "CAUTION"
             traffic_light = "🟡"
             base_confidence = 35
             light_quality = "MIXED/FLAT"
-            reasons.append("[YELLOW] Mixed EMA alignment (Caution)")
+            reasons.append("[YELLOW] MIXED EMA ALIGNMENT (Caution)")
             
             if (bullish_cross_20_50 and bearish_cross_50_100) or (bearish_cross_20_50 and bullish_cross_50_100):
-                reasons.append("  EMAs not aligned - conflicting signals")
+                reasons.append("  • Short-term EMAs conflicting (20 vs 50/100)")
                 light_quality = "CONFLICT"
-            elif ema_20 == ema_50 or ema_50 == ema_100 or ema_20 == ema_100:
-                reasons.append("  EMAs converging - trend change imminent")
+            elif ema_20 == ema_50 or ema_50 == ema_100 or ema_100 == ema_200:
+                reasons.append("  • EMAs converging - trend change imminent")
                 light_quality = "CONVERGENCE"
             else:
-                reasons.append("  Insufficient alignment for clear signal")
+                reasons.append("  • Insufficient alignment for clear signal")
                 light_quality = "UNCLEAR"
+            
+            # Add 200 context even in YELLOW
+            if bullish_cross_100_200:
+                reasons.append("  • EMA-200 anchor: Uptrend (bullish long-term)")
+            elif bearish_cross_100_200:
+                reasons.append("  • EMA-200 anchor: Downtrend (bearish long-term)")
+            else:
+                reasons.append("  • EMA-200 anchor: Flat (no clear direction)")
         
-        # Price position relative to EMAs
+        # 7. PRICE POSITION ANALYSIS (with 200 EMA)
         price_above_20 = current_price > ema_20
         price_above_50 = current_price > ema_50
         price_above_100 = current_price > ema_100
         
         ema_structure = ""
         if price_above_20 and price_above_50 and price_above_100:
-            ema_structure = "Price above all EMAs (bullish)"
+            if price_above_200:
+                ema_structure = "Price above all EMAs (strong bullish)"
+            else:
+                ema_structure = "Price above short-term (20/50/100) but below EMA-200 (weakening)"
         elif price_above_100 and price_above_50 and not price_above_20:
-            ema_structure = "Price below EMA-20 (pullback to support)"
+            ema_structure = "Price below EMA-20 (pullback to major support)"
         elif not price_above_20 and not price_above_50 and not price_above_100:
-            ema_structure = "Price below all EMAs (bearish)"
+            if price_below_200:
+                ema_structure = "Price below all EMAs (strong bearish)"
+            else:
+                ema_structure = "Price below short-term (20/50/100) but above EMA-200 (weakening)"
         elif not price_above_100 and not price_above_50 and price_above_20:
-            ema_structure = "Price above EMA-20 (bounce attempt)"
+            ema_structure = "Price above EMA-20 (bounce attempt from support)"
         else:
-            ema_structure = "Price between EMAs"
+            ema_structure = "Price between EMAs (consolidation zone)"
         
-        reasons.append(f"  Price: {ema_structure}")
+        reasons.append(f"  Price vs EMAs: {ema_structure}")
         
         # Timeframe multiplier
         multiplier = 1.0
@@ -1573,14 +2431,32 @@ class EMATrafficLightFilter:
                 "ema_20": ema_20,
                 "ema_50": ema_50,
                 "ema_100": ema_100,
+                "ema_200": ema_200,
+                "smoothline_9": smoothline_9,
                 "current_price": current_price,
                 "price_position": ema_structure,
             },
             "ema_alignment": {
                 "perfect_bullish": perfect_bullish,
                 "perfect_bearish": perfect_bearish,
+                "strong_bullish": strong_bullish,
+                "strong_bearish": strong_bearish,
                 "two_thirds_bullish": two_thirds_bullish,
                 "two_thirds_bearish": two_thirds_bearish,
+                # Short-term checks (5m entry timing)
+                "ema_20_above_50": bullish_cross_20_50,
+                "ema_50_above_100": bullish_cross_50_100,
+                "ema_20_above_100": bullish_cross_20_100,
+                # Long-term anchor (15m+ trend)
+                "ema_100_above_200": bullish_cross_100_200,
+                # Smoothline-9 fast entry confirmation (EMA-9, Source=CLOSE, Length=9)
+                "smoothline_9": smoothline_9,
+                "price_above_smoothline9": price_above_smoothline9,
+                "ema20_above_smoothline9": ema20_above_smoothline9,
+                "smoothline_bullish": smoothline_bullish,
+                "smoothline_bearish": smoothline_bearish,
+                # Price confirmation
+                "price_above_200": price_above_200,
                 "price_above_all_emas": price_above_20 and price_above_50 and price_above_100,
                 "price_below_all_emas": not price_above_20 and not price_above_50 and not price_above_100,
             },
@@ -1602,10 +2478,17 @@ class EMATrafficLightFilter:
         """
         Combine traffic light + price action for entry signal
         
-        GREEN + price at EMA = Entry
-        GREEN + price above all EMAs = Continuation
-        RED + price at EMA = Exit
-        RED + price below all EMAs = Continuation
+        Entry Logic (5m):
+        - GREEN at EMA-20 = FRESH BUY (with volume)
+        - GREEN above all EMAs = CONTINUATION BUY
+        
+        Exit Logic (5m):
+        - RED at EMA-20 = BREAKDOWN SELL (with volume)
+        - RED below all EMAs = CONTINUATION SELL
+        
+        Trend Filter (15m):
+        - Confirm price respects 200 EMA anchor
+        - Check EMA-20/50/100 alignment strength
         """
         
         signal = "HOLD"
@@ -1618,6 +2501,7 @@ class EMATrafficLightFilter:
         ema_20 = traffic_light["ema_data"]["ema_20"]
         ema_50 = traffic_light["ema_data"]["ema_50"]
         ema_100 = traffic_light["ema_data"]["ema_100"]
+        ema_200 = traffic_light["ema_data"]["ema_200"]
         
         # Volume confirmation
         volume_ratio = 1.0
@@ -1631,66 +2515,84 @@ class EMATrafficLightFilter:
         price_moved_up = current_price > prev_price
         price_moved_down = current_price < prev_price
         
-        # ✅ GREEN LIGHT ENTRIES
+        # ✅ GREEN LIGHT ENTRIES (Bullish Signal)
         if traffic == "GREEN":
-            # At EMA support - Fresh entry
+            # 5M ENTRY: At EMA-20 support - Fresh dip entry point
             if abs(current_price - ema_20) <= (ema_50 * 0.002):  # Within 0.2%
                 if price_moved_up and has_volume:
                     signal = "BUY_FRESH"
                     entry_quality = "EXCELLENT"
                     confidence = min(95, confidence + 10)
-                    reasons.append("  Entry: Price bounced from EMA-20 with volume")
+                    reasons.append("  [5M ENTRY] Price bounced from EMA-20 (support) with volume ✅")
+                    reasons.append(f"     Entry at: ₹{current_price:.2f} (strong reversal setup)")
                 else:
                     signal = "BUY_SETUP"
                     entry_quality = "GOOD"
                     confidence = min(95, confidence + 5)
-                    reasons.append("  Setup: Price at EMA-20 support (wait for breakout)")
+                    reasons.append("  [5M SETUP] Price at EMA-20 support (wait for breakout confirmation)")
+                    reasons.append(f"     Support level: ₹{ema_20:.2f}")
             
-            # Price above all EMAs - Continuation
+            # CONTINUATION: Price above all EMAs (holding uptrend)
             elif traffic_light["ema_alignment"]["price_above_all_emas"]:
                 signal = "BUY_CONTINUATION"
                 entry_quality = "GOOD"
-                reasons.append("  Continuation: Price above all EMAs (uptrend intact)")
+                confidence = min(95, confidence + 5)
+                reasons.append("  [15M TREND] Price above all EMAs (uptrend holding)")
+                reasons.append(f"     Price > EMA-200: {current_price:.2f} > {ema_200:.2f} (bullish anchor)")
+                reasons.append("     ACTION: Hold long positions, add on pullbacks")
             
-            # Green light but price not at EMA
+            # GREEN but price not at support/trend
             else:
                 signal = "BUY"
                 entry_quality = "FAIR"
-                reasons.append("  Entry: Green light confirmed")
+                reasons.append("  [15M TREND] Green light confirmed (trend is bullish)")
+                if traffic_light["ema_alignment"]["price_above_200"]:
+                    reasons.append("  [ANCHOR] Price > EMA-200 (bullish long-term bias)")
+                reasons.append("  [5M WAIT] Wait for price to reach EMA-20 for better entry")
         
-        # 🔴 RED LIGHT EXITS
+        # 🔴 RED LIGHT EXITS (Bearish Signal)
         elif traffic == "RED":
-            # At EMA resistance - Exit signal
+            # 5M EXIT: At EMA-20 resistance - Fresh breakdown exit point
             if abs(current_price - ema_20) <= (ema_50 * 0.002):
                 if price_moved_down and has_volume:
                     signal = "SELL_BREAKDOWN"
                     entry_quality = "EXCELLENT"
                     confidence = min(95, confidence + 10)
-                    reasons.append("  Exit: Price broke below EMA-20 with volume")
+                    reasons.append("  [5M EXIT] Price broke below EMA-20 (resistance) with volume ✅")
+                    reasons.append(f"     Exit at: ₹{current_price:.2f} (strong reversal setup)")
                 else:
                     signal = "SELL_SETUP"
                     entry_quality = "GOOD"
                     confidence = min(95, confidence + 5)
-                    reasons.append("  Setup: Price at EMA-20 resistance (wait for breakdown)")
+                    reasons.append("  [5M SETUP] Price at EMA-20 resistance (wait for breakdown confirmation)")
+                    reasons.append(f"     Resistance level: ₹{ema_20:.2f}")
             
-            # Price below all EMAs - Continuation downtrend
+            # CONTINUATION: Price below all EMAs (holding downtrend)
             elif traffic_light["ema_alignment"]["price_below_all_emas"]:
                 signal = "SELL_CONTINUATION"
                 entry_quality = "GOOD"
-                reasons.append("  Continuation: Price below all EMAs (downtrend intact)")
+                confidence = min(95, confidence + 5)
+                reasons.append("  [15M TREND] Price below all EMAs (downtrend holding)")
+                reasons.append(f"     Price < EMA-200: {current_price:.2f} < {ema_200:.2f} (bearish anchor)")
+                reasons.append("     ACTION: Hold short positions, add on bounces")
             
-            # Red light but price not at EMA
+            # RED but price not at resistance/trend
             else:
                 signal = "SELL"
                 entry_quality = "FAIR"
-                reasons.append("  Exit: Red light confirmed")
+                reasons.append("  [15M TREND] Red light confirmed (trend is bearish)")
+                if not traffic_light["ema_alignment"]["price_above_200"]:
+                    reasons.append("  [ANCHOR] Price < EMA-200 (bearish long-term bias)")
+                reasons.append("  [5M WAIT] Wait for price to reach EMA-20 for better exit")
         
-        # 🟡 YELLOW LIGHT - CAUTION
+        # 🟡 YELLOW LIGHT - CAUTION (ambiguous/mixed signals)
         else:
             signal = "HOLD"
             entry_quality = "SKIP"
             confidence = max(20, confidence - 15)  # Reduce confidence
-            reasons.append("  Action: WAIT - Ambiguous signal, skip entry")
+            reasons.append("  [CAUTION] YELLOW light (ambiguous alignment)")
+            reasons.append("  NO ENTRY - Wait for GREEN or RED confirmation")
+            reasons.append(f"  EMA-200 anchor: {'Bullish' if traffic_light['ema_alignment']['ema_100_above_200'] else 'Bearish'}")
         
         return {
             "signal": signal,
@@ -1702,6 +2604,13 @@ class EMATrafficLightFilter:
                 "moved_up": price_moved_up,
                 "moved_down": price_moved_down,
                 "at_ema_20": abs(current_price - ema_20) <= (ema_50 * 0.002),
+                "at_ema_200": abs(current_price - ema_200) <= (ema_200 * 0.005),
+            },
+            "support_resistance": {
+                "immediate_support": ema_20,
+                "trend_line": ema_50,
+                "major_support": ema_100,
+                "anchor_level": ema_200,
             },
             "reasons": reasons,
         }

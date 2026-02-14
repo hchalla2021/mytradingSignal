@@ -66,6 +66,23 @@ export interface TechnicalIndicators {
 
   // Time Filter
   time_quality: string;
+
+  // EMA Touch Tracking (tracks if price touched EMA from above/below)
+  ema_20_touched_below?: boolean;  // Price crossed above EMA20
+  ema_20_touched_above?: boolean;  // Price crossed below EMA20
+  ema_50_touched_below?: boolean;  // Price crossed above EMA50
+  ema_50_touched_above?: boolean;  // Price crossed below EMA50
+  ema_100_touched_below?: boolean; // Price crossed above EMA100
+  ema_100_touched_above?: boolean; // Price crossed below EMA100
+  ema_200_touched_below?: boolean; // Price crossed above EMA200
+  ema_200_touched_above?: boolean; // Price crossed below EMA200
+
+  // Support & Resistance Touch Tracking
+  resistance_touched?: boolean;    // Price touched resistance level
+  support_touched?: boolean;       // Price touched support level
+
+  // Alignment Confidence
+  ema_alignment_confidence?: number; // 30-95% confidence
 }
 
 export interface AnalysisSignal {

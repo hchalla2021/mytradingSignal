@@ -53,6 +53,8 @@ class MarketHoursScheduler:
         self._last_feed_status = None
         self._consecutive_start_attempts = 0
         self._last_successful_start: Optional[datetime] = None
+        self._token_expired = False  # Flag to prevent connection with expired token
+        self._token_check_done = False  # Flag to track if token check completed
         
     async def start(self):
         """Start the automatic scheduler"""
@@ -148,23 +150,41 @@ class MarketHoursScheduler:
         
         last_status_log = datetime.now(IST)
         last_token_refresh = None
+        last_check_date = None
         
         while self.is_running:
             try:
                 now = datetime.now(IST)
                 current_time = now.time()
+                current_date = now.date()
                 
-                # 🔥 NEW: Token refresh at 8:50 AM (before market opens)
-                # This prevents token expiration from causing connection failures at 9:00 AM
+                # Reset token expired flag on new day (allows retry after user logs in)
+                if last_check_date != current_date:
+                    if self._token_expired:
+                        print(f"\n📅 NEW DAY DETECTED - Resetting token check")
+                        print("   Will validate token when market opens\n")
+                    self._token_expired = False
+                    self._token_check_done = False
+                    last_check_date = current_date
+                
+                # 🔥 NEW: Token check at 8:50 AM (before market opens)
+                # This prevents connection attempts with expired tokens
                 token_refresh_time = self.TOKEN_REFRESH_TIME
                 if (current_time >= token_refresh_time and 
+                    not self._token_check_done and
                     (last_token_refresh is None or 
                      (now - last_token_refresh).total_seconds() > 86400)):  # Once per day
                     
                     if self._is_weekday(now) and not self._is_holiday(now):
-                        print(f"\n⏰ [{now.strftime('%I:%M:%S %p')}] PRE-MARKET ACTIONS")
-                        await self._refresh_token_before_market()
+                        print(f"\n⏰ [{now.strftime('%I:%M:%S %p')}] PRE-MARKET TOKEN CHECK")
+                        token_valid = await self._refresh_token_before_market()
                         last_token_refresh = now
+                        self._token_check_done = True
+                        
+                        if not token_valid:
+                            # Token expired - enter waiting mode
+                            print("⏸️  SCHEDULER PAUSED - Waiting for valid token")
+                            print("   The scheduler will resume once you login.\n")
                 
                 # Determine if market feed should be running
                 should_run = self._is_market_time(now)
@@ -180,6 +200,16 @@ class MarketHoursScheduler:
                 
                 # ========== MARKET HOURS: ENSURE FEED IS RUNNING ==========
                 if should_run:
+                    # 🔥 FIX: Don't attempt connection if token is expired
+                    if self._token_expired:
+                        # Token expired - show message periodically but don't spam
+                        if (datetime.now(IST) - last_status_log).total_seconds() > 300:
+                            print(f"⏸️  [{now.strftime('%I:%M %p')}] Market open but TOKEN EXPIRED")
+                            print("   Please LOGIN via UI to enable live data")
+                            last_status_log = now
+                        await asyncio.sleep(60)  # Check every minute for token refresh
+                        continue
+                    
                     if not is_connected:
                         self._consecutive_start_attempts += 1
                         
@@ -350,31 +380,58 @@ class MarketHoursScheduler:
     
     async def _refresh_token_before_market(self):
         """
-        Refresh Zerodha token at 8:50 AM before market opens.
-        This prevents token expiration from causing 9:00 AM connection failures.
+        Validate Zerodha token at 8:50 AM before market opens.
+        This checks token validity and prevents connection attempts with expired tokens.
+        
+        Note: Zerodha tokens expire every 24 hours and require manual OAuth login.
+        This function cannot auto-generate tokens, but can prevent futile connection attempts.
         """
         try:
             print("\n" + "="*70)
-            print("🔐 PRE-MARKET TOKEN REFRESH (8:50 AM)")
+            print("🔐 PRE-MARKET TOKEN CHECK (8:50 AM)")
             print("="*70)
             
             from services.unified_auth_service import unified_auth
             
-            # Attempt token refresh
+            # Validate token
             token_valid = await unified_auth.validate_token(force=True)
+            token_age = unified_auth.get_token_age_hours()
             
             if token_valid:
-                print("✅ Token VALIDATED and FRESH")
+                print("✅ Token VALID and ACTIVE")
+                if token_age:
+                    print(f"   Token Age: {token_age:.1f} hours")
                 print("   Ready for 9:00 AM market open")
+                print("="*70 + "\n")
+                return True
             else:
-                print("⚠️  Token validation failed - will attempt REST fallback at 9:00 AM")
-                print("   If this persists, run: python quick_token_fix.py")
-            
-            print("="*70 + "\n")
+                # Token expired - stop scheduler from attempting connection
+                print("🔴 TOKEN EXPIRED - CANNOT CONNECT")
+                print("="*70)
+                print("")
+                print("⚠️  Zerodha tokens expire every 24 hours at midnight.")
+                print("   A new token is required for market data.")
+                print("")
+                print("📋 TO FIX THIS ISSUE:")
+                print("   1. Open your trading app UI")
+                print("   2. Click the LOGIN button")
+                print("   3. Complete Zerodha authentication")
+                print("")
+                print("   OR run manually: python quick_token_fix.py")
+                print("")
+                print("🚫 Scheduler will NOT attempt connection with expired token.")
+                print("   This prevents the endless 'reconnecting' loop.")
+                print("="*70 + "\n")
+                
+                # Set flag to prevent connection attempts
+                self._token_expired = True
+                return False
             
         except Exception as e:
-            print(f"⚠️  Token refresh failed: {e}")
-            print("   Will attempt market connection anyway at 8:55 AM")
+            print(f"❌ Token check failed: {e}")
+            print("   Cannot determine token status")
+            print("="*70 + "\n")
+            return False
 
 
 # Global scheduler instance

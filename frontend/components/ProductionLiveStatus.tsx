@@ -1,1 +1,260 @@
-/**\n * 🔥 PRODUCTION LiveStatus Component\n * Shows REAL WebSocket status for traders\n * Handles Zerodha silent connection issues\n */\n\n'use client';\n\nimport React, { useMemo } from 'react';\nimport { WebSocketStatus } from '@/hooks/useProductionMarketSocket';\n\ninterface ProductionLiveStatusProps {\n  status: WebSocketStatus;\n  message: string;\n  isReceivingData: boolean;\n  connectionQuality: 'excellent' | 'good' | 'connecting' | 'poor' | 'offline';\n  lastTickTime: number | null;\n  tickCount: number;\n  onReconnect?: () => void;\n}\n\nexport default function ProductionLiveStatus({\n  status,\n  message,\n  isReceivingData,\n  connectionQuality,\n  lastTickTime,\n  tickCount,\n  onReconnect\n}: ProductionLiveStatusProps) {\n  \n  // Calculate time since last tick\n  const timeSinceLastTick = useMemo(() => {\n    if (!lastTickTime) return null;\n    const diff = Date.now() - lastTickTime;\n    const minutes = Math.floor(diff / 60000);\n    const seconds = Math.floor((diff % 60000) / 1000);\n    \n    if (minutes > 0) {\n      return `${minutes}m ${seconds}s ago`;\n    }\n    return `${seconds}s ago`;\n  }, [lastTickTime]);\n\n  // Status configuration\n  const statusConfig = useMemo(() => {\n    switch (status) {\n      case 'LIVE':\n        return {\n          icon: '🟢',\n          text: 'LIVE DATA',\n          description: 'Receiving real-time market ticks',\n          bgColor: 'bg-green-900/40',\n          borderColor: 'border-green-500/60',\n          textColor: 'text-green-300',\n          pulseColor: 'bg-green-500',\n          showReconnect: false,\n        };\n      \n      case 'CONNECTED':\n      case 'SUBSCRIBED':\n        return {\n          icon: '🔵',\n          text: 'CONNECTED',\n          description: 'Connected, waiting for market data...',\n          bgColor: 'bg-blue-900/40',\n          borderColor: 'border-blue-500/60', \n          textColor: 'text-blue-300',\n          pulseColor: 'bg-blue-500',\n          showReconnect: false,\n        };\n        \n      case 'WAITING':\n        return {\n          icon: '⏰',\n          text: 'WAITING',\n          description: 'Waiting for market start (9:14:50 AM)',\n          bgColor: 'bg-amber-900/40',\n          borderColor: 'border-amber-500/60',\n          textColor: 'text-amber-300',\n          pulseColor: 'bg-amber-500',\n          showReconnect: false,\n        };\n        \n      case 'CONNECTING':\n      case 'RECONNECTING':\n        return {\n          icon: '⚡',\n          text: status === 'CONNECTING' ? 'CONNECTING' : 'RECONNECTING',\n          description: 'Establishing connection to Zerodha...',\n          bgColor: 'bg-yellow-900/40',\n          borderColor: 'border-yellow-500/60',\n          textColor: 'text-yellow-300',\n          pulseColor: 'bg-yellow-500',\n          showReconnect: false,\n        };\n        \n      case 'STALE':\n      case 'NO_TICKS':\n        return {\n          icon: '⚠️',\n          text: 'SILENT CONNECTION',\n          description: 'Connected but no data - Zerodha issue',\n          bgColor: 'bg-orange-900/40',\n          borderColor: 'border-orange-500/60',\n          textColor: 'text-orange-300',\n          pulseColor: 'bg-orange-500',\n          showReconnect: true,\n        };\n        \n      case 'ERROR':\n      case 'FAILED':\n        return {\n          icon: '🔴',\n          text: 'ERROR',\n          description: 'Connection failed - check auth/network',\n          bgColor: 'bg-red-900/40',\n          borderColor: 'border-red-500/60',\n          textColor: 'text-red-300',\n          pulseColor: 'bg-red-500',\n          showReconnect: true,\n        };\n        \n      default: // OFFLINE, DISCONNECTED\n        return {\n          icon: '⚫',\n          text: 'OFFLINE',\n          description: 'Not connected to market feed',\n          bgColor: 'bg-gray-900/40',\n          borderColor: 'border-gray-500/60',\n          textColor: 'text-gray-400',\n          pulseColor: 'bg-gray-500',\n          showReconnect: true,\n        };\n    }\n  }, [status]);\n\n  return (\n    <div className={`\n      relative overflow-hidden rounded-xl border-2 p-4 transition-all duration-300\n      ${statusConfig.bgColor} ${statusConfig.borderColor}\n      hover:shadow-lg hover:scale-[1.02]\n    `}>\n      {/* Background animation for live status */}\n      {isReceivingData && (\n        <div className=\"absolute inset-0 bg-gradient-to-r from-green-500/5 via-green-500/10 to-green-500/5 animate-pulse\" />\n      )}\n      \n      <div className=\"relative flex items-center justify-between\">\n        {/* Left side - Status info */}\n        <div className=\"flex items-center gap-3\">\n          {/* Status indicator with pulse */}\n          <div className=\"relative\">\n            <span className=\"text-2xl\">{statusConfig.icon}</span>\n            <div className={`\n              absolute -top-1 -right-1 w-3 h-3 rounded-full\n              ${statusConfig.pulseColor}\n              ${(status === 'CONNECTING' || status === 'RECONNECTING' || status === 'LIVE') ? 'animate-pulse' : ''}\n            `} />\n          </div>\n          \n          {/* Status text */}\n          <div>\n            <div className={`font-bold text-lg ${statusConfig.textColor}`}>\n              {statusConfig.text}\n            </div>\n            <div className=\"text-sm text-gray-400\">\n              {statusConfig.description}\n            </div>\n            {message && (\n              <div className=\"text-xs text-gray-500 mt-1\">\n                {message}\n              </div>\n            )}\n          </div>\n        </div>\n        \n        {/* Right side - Stats & actions */}\n        <div className=\"flex items-center gap-4\">\n          {/* Tick statistics */}\n          <div className=\"text-right\">\n            {tickCount > 0 && (\n              <div className=\"text-sm font-bold text-gray-300\">\n                {tickCount.toLocaleString()} ticks\n              </div>\n            )}\n            {timeSinceLastTick && (\n              <div className=\"text-xs text-gray-500\">\n                Last: {timeSinceLastTick}\n              </div>\n            )}\n          </div>\n          \n          {/* Reconnect button for problematic states */}\n          {statusConfig.showReconnect && onReconnect && (\n            <button\n              onClick={onReconnect}\n              className=\"\n                px-4 py-2 text-sm font-bold\n                bg-blue-600/80 hover:bg-blue-600 \n                text-white rounded-lg\n                border border-blue-500/50\n                transition-colors duration-200\n                hover:shadow-lg\n              \"\n            >\n              🔄 Reconnect\n            </button>\n          )}\n        </div>\n      </div>\n      \n      {/* Connection quality indicator */}\n      <div className=\"mt-3 flex items-center gap-2\">\n        <span className=\"text-xs text-gray-500\">Quality:</span>\n        <div className=\"flex gap-1\">\n          {[1, 2, 3, 4].map((level) => {\n            const isActive = (() => {\n              switch (connectionQuality) {\n                case 'excellent': return level <= 4;\n                case 'good': return level <= 3;\n                case 'connecting': return level <= 2;\n                case 'poor': return level <= 1;\n                default: return false;\n              }\n            })();\n            \n            return (\n              <div\n                key={level}\n                className={`\n                  w-2 h-4 rounded-sm transition-colors\n                  ${isActive \n                    ? connectionQuality === 'excellent' ? 'bg-green-500'\n                      : connectionQuality === 'good' ? 'bg-blue-500'\n                      : connectionQuality === 'connecting' ? 'bg-yellow-500'\n                      : 'bg-orange-500'\n                    : 'bg-gray-600'\n                  }\n                `}\n              />\n            );\n          })}\n        </div>\n        \n        {/* Quality text */}\n        <span className={`\n          text-xs font-medium\n          ${connectionQuality === 'excellent' ? 'text-green-400'\n            : connectionQuality === 'good' ? 'text-blue-400'\n            : connectionQuality === 'connecting' ? 'text-yellow-400'\n            : connectionQuality === 'poor' ? 'text-orange-400'\n            : 'text-gray-500'\n          }\n        `}>\n          {connectionQuality.charAt(0).toUpperCase() + connectionQuality.slice(1)}\n        </span>\n        \n        {/* Market timing indicator */}\n        <div className=\"ml-auto\">\n          <div className=\"text-xs text-gray-500\">\n            {new Date().toLocaleTimeString('en-IN', {\n              timeZone: 'Asia/Kolkata',\n              hour12: false\n            })} IST\n          </div>\n        </div>\n      </div>\n    </div>\n  );\n}\n\n// Display name for React DevTools\nProductionLiveStatus.displayName = 'ProductionLiveStatus';
+'use client';
+
+import React, { useMemo } from 'react';
+
+export type WebSocketStatus = 
+  | 'OFFLINE' 
+  | 'CONNECTING' 
+  | 'CONNECTED' 
+  | 'SUBSCRIBED'
+  | 'LIVE' 
+  | 'STALE' 
+  | 'NO_TICKS'
+  | 'WAITING'
+  | 'RECONNECTING'
+  | 'ERROR'
+  | 'FAILED';
+
+interface ProductionLiveStatusProps {
+  status: WebSocketStatus;
+  message: string;
+  isReceivingData: boolean;
+  connectionQuality: 'excellent' | 'good' | 'connecting' | 'poor' | 'offline';
+  lastTickTime: number | null;
+  tickCount: number;
+  onReconnect?: () => void;
+}
+
+export default function ProductionLiveStatus({
+  status,
+  message,
+  isReceivingData,
+  connectionQuality,
+  lastTickTime,
+  tickCount,
+  onReconnect
+}: ProductionLiveStatusProps) {
+  
+  const timeSinceLastTick = useMemo(() => {
+    if (!lastTickTime) return null;
+    const diff = Date.now() - lastTickTime;
+    const minutes = Math.floor(diff / 60000);
+    const seconds = Math.floor((diff % 60000) / 1000);
+    
+    if (minutes > 0) {
+      return `${minutes}m ${seconds}s ago`;
+    }
+    return `${seconds}s ago`;
+  }, [lastTickTime]);
+
+  const statusConfig = useMemo(() => {
+    switch (status) {
+      case 'LIVE':
+        return {
+          text: 'LIVE DATA',
+          description: 'Receiving real-time market ticks',
+          bgColor: 'bg-green-900/40',
+          borderColor: 'border-green-500/60',
+          textColor: 'text-green-300',
+          pulseColor: 'bg-green-500',
+          showReconnect: false,
+        };
+      
+      case 'CONNECTED':
+      case 'SUBSCRIBED':
+        return {
+          text: 'CONNECTED',
+          description: 'Connected, waiting for market data...',
+          bgColor: 'bg-blue-900/40',
+          borderColor: 'border-blue-500/60', 
+          textColor: 'text-blue-300',
+          pulseColor: 'bg-blue-500',
+          showReconnect: false,
+        };
+        
+      case 'WAITING':
+        return {
+          text: 'WAITING',
+          description: 'Waiting for market start',
+          bgColor: 'bg-amber-900/40',
+          borderColor: 'border-amber-500/60',
+          textColor: 'text-amber-300',
+          pulseColor: 'bg-amber-500',
+          showReconnect: false,
+        };
+        
+      case 'CONNECTING':
+      case 'RECONNECTING':
+        return {
+          text: status === 'CONNECTING' ? 'CONNECTING' : 'RECONNECTING',
+          description: 'Establishing connection to Zerodha...',
+          bgColor: 'bg-yellow-900/40',
+          borderColor: 'border-yellow-500/60',
+          textColor: 'text-yellow-300',
+          pulseColor: 'bg-yellow-500',
+          showReconnect: false,
+        };
+        
+      case 'STALE':
+      case 'NO_TICKS':
+        return {
+          text: 'SILENT CONNECTION',
+          description: 'Connected but no data',
+          bgColor: 'bg-orange-900/40',
+          borderColor: 'border-orange-500/60',
+          textColor: 'text-orange-300',
+          pulseColor: 'bg-orange-500',
+          showReconnect: true,
+        };
+        
+      case 'ERROR':
+      case 'FAILED':
+        return {
+          text: 'ERROR',
+          description: 'Connection failed',
+          bgColor: 'bg-red-900/40',
+          borderColor: 'border-red-500/60',
+          textColor: 'text-red-300',
+          pulseColor: 'bg-red-500',
+          showReconnect: true,
+        };
+        
+      default:
+        return {
+          text: 'OFFLINE',
+          description: 'Not connected',
+          bgColor: 'bg-gray-900/40',
+          borderColor: 'border-gray-500/60',
+          textColor: 'text-gray-400',
+          pulseColor: 'bg-gray-500',
+          showReconnect: true,
+        };
+    }
+  }, [status]);
+
+  return (
+    <div className={`
+      relative overflow-hidden rounded-xl border-2 p-4 transition-all duration-300
+      ${statusConfig.bgColor} ${statusConfig.borderColor}
+      hover:shadow-lg hover:scale-[1.02]
+    `}>
+      {isReceivingData && (
+        <div className="absolute inset-0 bg-gradient-to-r from-green-500/5 via-green-500/10 to-green-500/5 animate-pulse" />
+      )}
+      
+      <div className="relative flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <div className="relative">
+            <div className="text-2xl font-bold text-white">[{status}]</div>
+            <div className={`
+              absolute -top-1 -right-1 w-3 h-3 rounded-full
+              ${statusConfig.pulseColor}
+              ${(status === 'CONNECTING' || status === 'RECONNECTING' || status === 'LIVE') ? 'animate-pulse' : ''}
+            `} />
+          </div>
+          
+          <div>
+            <div className={`font-bold text-lg ${statusConfig.textColor}`}>
+              {statusConfig.text}
+            </div>
+            <div className="text-sm text-gray-400">
+              {statusConfig.description}
+            </div>
+            {message && (
+              <div className="text-xs text-gray-500 mt-1">
+                {message}
+              </div>
+            )}
+          </div>
+        </div>
+        
+        <div className="flex items-center gap-4">
+          <div className="text-right">
+            {tickCount > 0 && (
+              <div className="text-sm font-bold text-gray-300">
+                {tickCount.toLocaleString()} ticks
+              </div>
+            )}
+            {timeSinceLastTick && (
+              <div className="text-xs text-gray-500">
+                Last: {timeSinceLastTick}
+              </div>
+            )}
+          </div>
+          
+          {statusConfig.showReconnect && onReconnect && (
+            <button
+              onClick={onReconnect}
+              className="
+                px-4 py-2 text-sm font-bold
+                bg-blue-600/80 hover:bg-blue-600 
+                text-white rounded-lg
+                border border-blue-500/50
+                transition-colors duration-200
+                hover:shadow-lg
+              "
+            >
+              Reconnect
+            </button>
+          )}
+        </div>
+      </div>
+      
+      <div className="mt-3 flex items-center gap-2">
+        <span className="text-xs text-gray-500">Quality:</span>
+        <div className="flex gap-1">
+          {[1, 2, 3, 4].map((level) => {
+            const isActive = (() => {
+              switch (connectionQuality) {
+                case 'excellent': return level <= 4;
+                case 'good': return level <= 3;
+                case 'connecting': return level <= 2;
+                case 'poor': return level <= 1;
+                default: return false;
+              }
+            })();
+            
+            return (
+              <div
+                key={level}
+                className={`
+                  w-2 h-4 rounded-sm transition-colors
+                  ${isActive 
+                    ? connectionQuality === 'excellent' ? 'bg-green-500'
+                      : connectionQuality === 'good' ? 'bg-blue-500'
+                      : connectionQuality === 'connecting' ? 'bg-yellow-500'
+                      : 'bg-orange-500'
+                    : 'bg-gray-600'
+                  }
+                `}
+              />
+            );
+          })}
+        </div>
+        
+        <span className={`
+          text-xs font-medium
+          ${connectionQuality === 'excellent' ? 'text-green-400'
+            : connectionQuality === 'good' ? 'text-blue-400'
+            : connectionQuality === 'connecting' ? 'text-yellow-400'
+            : connectionQuality === 'poor' ? 'text-orange-400'
+            : 'text-gray-500'
+          }
+        `}>
+          {connectionQuality.charAt(0).toUpperCase() + connectionQuality.slice(1)}
+        </span>
+        
+        <div className="ml-auto">
+          <div className="text-xs text-gray-500">
+            {new Date().toLocaleTimeString('en-IN', {
+              timeZone: 'Asia/Kolkata',
+              hour12: false
+            })} IST
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+ProductionLiveStatus.displayName = 'ProductionLiveStatus';

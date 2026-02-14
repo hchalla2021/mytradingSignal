@@ -188,41 +188,151 @@ const AnalysisCardContent = memo<AnalysisCardProps>(({ analysis }) => {
 
       {/* Technical Indicators */}
       <div className="space-y-3">
-        {/* Price Action & VWAP */}
-        <div className="border-2 border-emerald-500/30 rounded-xl p-3 bg-dark-surface/40 backdrop-blur-sm shadow-sm shadow-emerald-500/10">
-          <h4 className="text-[10px] sm:text-xs font-bold text-dark-secondary mb-2 uppercase tracking-wider">PRICE ACTION & VWAP</h4>
-          <div className="grid grid-cols-2 gap-2">
-            <TechnicalIndicator 
-              label="Open" 
-              value={`₹${(indicators.open || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })}`} 
-              status="neutral" 
-              showArrow={false}
-            />
-            <TechnicalIndicator 
-              label="High" 
-              value={`₹${(indicators.high || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })}`} 
-              status="neutral" 
-              showArrow={false}
-            />
-            <TechnicalIndicator 
-              label="Low" 
-              value={`₹${(indicators.low || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })}`} 
-              status="neutral" 
-              showArrow={false}
-            />
-            <TechnicalIndicator 
-              label="VWAP" 
-              value={indicators.vwap ? `₹${indicators.vwap.toLocaleString('en-IN', { maximumFractionDigits: 2 })}` : 'N/A'} 
-              status="neutral"
-              showArrow={false}
-            />
+        {/* Price Action & VWAP - Enhanced Production Ready */}
+        <div className="border border-slate-700/50 rounded-lg p-4 bg-[#1F1F1F] backdrop-blur-sm">
+          <h4 className="text-sm font-semibold text-white mb-3 tracking-wide">PRICE ACTION & VWAP</h4>
+          <div className="grid grid-cols-2 gap-3">
+            {/* Open Price */}
+            <div className="bg-[#2A2A2A] rounded-md p-2.5 border border-slate-700/50">
+              <div className="text-[10px] text-slate-400 mb-1 font-medium">Open</div>
+              <div className="text-xs font-bold text-white">
+                ₹{(indicators.open || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })}
+              </div>
+            </div>
+
+            {/* High Price */}
+            <div className="bg-[#2A2A2A] rounded-md p-2.5 border border-slate-700/50">
+              <div className="text-[10px] text-slate-400 mb-1 font-medium">High</div>
+              <div className="text-xs font-bold text-[#00D09C]">
+                ₹{(indicators.high || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })}
+              </div>
+            </div>
+
+            {/* Low Price */}
+            <div className="bg-[#2A2A2A] rounded-md p-2.5 border border-slate-700/50">
+              <div className="text-[10px] text-slate-400 mb-1 font-medium">Low</div>
+              <div className="text-xs font-bold text-[#FF5B5A]">
+                ₹{(indicators.low || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })}
+              </div>
+            </div>
+
+            {/* VWAP with Signal */}
+            <div className={`rounded-md p-2.5 border-2 transition-all ${
+              displayPrice > (indicators.vwap || 0)
+                ? 'bg-[#00C087]/15 border-[#00C087]/50'
+                : 'bg-[#EB5B3C]/15 border-[#EB5B3C]/50'
+            }`}>
+              <div className="text-[10px] text-slate-300 mb-1 font-semibold">VWAP</div>
+              <div className={`text-xs font-bold ${
+                displayPrice > (indicators.vwap || 0) ? 'text-[#00D09C]' : 'text-[#FF5B5A]'
+              }`}>
+                ₹{(indicators.vwap || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })}
+              </div>
+            </div>
+
+            {/* VWAP Signal Analysis */}
+            <div className={`col-span-2 rounded-md p-3 border-2 transition-all ${
+              displayPrice > (indicators.vwap || 0)
+                ? 'bg-[#00C087]/15 border-[#00C087]/50'
+                : displayPrice < (indicators.vwap || 0)
+                ? 'bg-[#EB5B3C]/15 border-[#EB5B3C]/50'
+                : 'bg-[#2A2A2A] border-slate-700/50'
+            }`}>
+              <div className="flex items-center justify-between mb-2">
+                <div className="text-xs text-slate-300 font-semibold">VWAP SIGNAL</div>
+                <div className={`text-xs font-bold px-2.5 py-1 rounded ${
+                  displayPrice > (indicators.vwap || 0)
+                    ? 'bg-[#00C087]/25 text-[#00D09C]'
+                    : displayPrice < (indicators.vwap || 0)
+                    ? 'bg-[#EB5B3C]/25 text-[#FF5B5A]'
+                    : 'bg-slate-700/50 text-slate-400'
+                }`}>
+                  {displayPrice > (indicators.vwap || 0) ? '🟢 ABOVE VWAP' : displayPrice < (indicators.vwap || 0) ? '🔴 BELOW VWAP' : '⚪ AT VWAP'}
+                </div>
+              </div>
+              
+              {/* Distance from VWAP */}
+              <div className="grid grid-cols-2 gap-2 mb-2">
+                <div className="text-center">
+                  <div className="text-[10px] text-slate-400 mb-1">Distance</div>
+                  <div className={`text-xs font-bold ${
+                    Math.abs(displayPrice - (indicators.vwap || 0)) <= 10
+                      ? 'text-amber-400'
+                      : displayPrice > (indicators.vwap || 0)
+                      ? 'text-[#00D09C]'
+                      : 'text-[#FF5B5A]'
+                  }`}>
+                    {displayPrice > (indicators.vwap || 0) ? '+' : ''}
+                    ₹{(displayPrice - (indicators.vwap || 0)).toFixed(2)}
+                  </div>
+                </div>
+                <div className="text-center">
+                  <div className="text-[10px] text-slate-400 mb-1">% Change</div>
+                  <div className={`text-xs font-bold ${
+                    Math.abs(((displayPrice - (indicators.vwap || 0)) / (indicators.vwap || 1)) * 100) <= 0.5
+                      ? 'text-amber-400'
+                      : displayPrice > (indicators.vwap || 0)
+                      ? 'text-[#00D09C]'
+                      : 'text-[#FF5B5A]'
+                  }`}>
+                    {displayPrice > (indicators.vwap || 0) ? '+' : ''}
+                    {(((displayPrice - (indicators.vwap || 0)) / (indicators.vwap || 1)) * 100).toFixed(2)}%
+                  </div>
+                </div>
+              </div>
+
+              {/* Price Action Status */}
+              <div className={`text-[11px] rounded px-2 py-1.5 font-medium ${
+                Math.abs(displayPrice - (indicators.vwap || 0)) <= 10
+                  ? 'bg-amber-500/20 text-amber-300 border border-amber-500/40'
+                  : displayPrice > (indicators.vwap || 0)
+                  ? 'bg-[#00C087]/20 text-[#00D09C] border border-[#00C087]/40'
+                  : 'bg-[#EB5B3C]/20 text-[#FF5B5A] border border-[#EB5B3C]/40'
+              }`}>
+                {Math.abs(displayPrice - (indicators.vwap || 0)) <= 10
+                  ? '⚡ Price near VWAP • Watch for breakout'
+                  : displayPrice > (indicators.vwap || 0)
+                  ? '📈 Bullish momentum • Price trading above institutional level'
+                  : '📉 Bearish pressure • Price trading below institutional level'}
+              </div>
+
+              {/* Day Range Position */}
+              <div className="mt-2 pt-2 border-t border-slate-700/50">
+                <div className="flex justify-between items-center text-[10px] text-slate-400 mb-1">
+                  <span>Day Range Position</span>
+                  <span className="font-bold text-slate-300">
+                    {indicators.high && indicators.low && indicators.high !== indicators.low
+                      ? `${(((displayPrice - indicators.low) / (indicators.high - indicators.low)) * 100).toFixed(0)}%`
+                      : '50%'}
+                  </span>
+                </div>
+                <div className="h-2 bg-slate-800 rounded-full overflow-hidden">
+                  <div 
+                    className={`h-full transition-all duration-500 ${
+                      indicators.high && indicators.low && indicators.high !== indicators.low
+                        ? (((displayPrice - indicators.low) / (indicators.high - indicators.low)) * 100) > 70
+                          ? 'bg-gradient-to-r from-[#00C087] to-[#00D09C]'
+                          : (((displayPrice - indicators.low) / (indicators.high - indicators.low)) * 100) < 30
+                          ? 'bg-gradient-to-r from-[#EB5B3C] to-[#FF5B5A]'
+                          : 'bg-gradient-to-r from-amber-500 to-yellow-400'
+                        : 'bg-slate-600'
+                    }`}
+                    style={{ 
+                      width: indicators.high && indicators.low && indicators.high !== indicators.low
+                        ? `${(((displayPrice - indicators.low) / (indicators.high - indicators.low)) * 100)}%`
+                        : '50%'
+                    }}
+                  />
+                </div>
+              </div>
+            </div>
           </div>
         </div>
 
-        {/* EMA Trend Filter */}
-        <div className="border-2 border-emerald-500/30 rounded-xl p-3 bg-dark-surface/40 backdrop-blur-sm shadow-sm shadow-emerald-500/10">
-          <h4 className="text-[10px] sm:text-xs font-bold text-dark-secondary mb-2 uppercase tracking-wider">EMA TREND FILTER (20/50/100)</h4>
-          <div className="grid grid-cols-2 gap-2">
+        {/* EMA Traffic Light 20/50/100/200 - Zerodha Style */}
+        <div className="border border-slate-700/50 rounded-lg p-4 bg-[#1F1F1F] backdrop-blur-sm">
+          <h4 className="text-sm font-semibold text-white mb-3 tracking-wide">EMA TRAFFIC LIGHT (20/50/100/200)</h4>
+          <div className="grid grid-cols-2 gap-3">
             <TechnicalIndicator 
               label="EMA 20" 
               value={indicators.ema_20 && typeof indicators.ema_20 === 'number' ? `₹${indicators.ema_20.toFixed(2)}` : 'N/A'} 
@@ -241,20 +351,208 @@ const AnalysisCardContent = memo<AnalysisCardProps>(({ analysis }) => {
               status={displayPrice > indicators.ema_100 ? 'positive' : displayPrice < indicators.ema_100 ? 'negative' : 'neutral'}
               showArrow={true}
             />
-            <div className="col-span-2 bg-dark-card/60 rounded-lg p-2 border border-emerald-500/20">
-              <div className="text-[9px] text-dark-tertiary mb-1">TREND ALIGNMENT</div>
-              <div className={`text-xs font-bold ${
-                indicators.ema_20 > indicators.ema_50 && indicators.ema_50 > indicators.ema_100
-                  ? 'text-bullish'
-                  : indicators.ema_20 < indicators.ema_50 && indicators.ema_50 < indicators.ema_100
-                  ? 'text-bearish'
-                  : 'text-neutral'
-              }`}>
-                {indicators.ema_20 > indicators.ema_50 && indicators.ema_50 > indicators.ema_100
-                  ? '🟢 Perfect Bullish'
-                  : indicators.ema_20 < indicators.ema_50 && indicators.ema_50 < indicators.ema_100
-                  ? '🔴 Perfect Bearish'
-                  : '🟡 Mixed Signal'}
+            <TechnicalIndicator 
+              label="EMA 200 🔒" 
+              value={indicators.ema_200 && typeof indicators.ema_200 === 'number' ? `₹${indicators.ema_200.toFixed(2)}` : 'N/A'} 
+              status={displayPrice > indicators.ema_200 ? 'positive' : displayPrice < indicators.ema_200 ? 'negative' : 'neutral'}
+              showArrow={true}
+            />
+
+            {/* EMA Crossover Detection - Zerodha Style */}
+            <div className="col-span-2 bg-[#2A2A2A] rounded-md p-3 border border-slate-700/50">
+              <div className="flex items-center justify-between mb-2">
+                <div className="text-xs text-slate-300 font-semibold">🔄 CROSSOVER SIGNALS</div>
+                <div className={`text-xs font-bold px-2 py-1 rounded ${
+                  (indicators.ema_alignment_confidence || 50) >= 80 ? 'bg-[#00C087]/20 text-[#00D09C]' :
+                  (indicators.ema_alignment_confidence || 50) >= 60 ? 'bg-[#00C087]/15 text-[#00C087]' :
+                  'bg-amber-500/20 text-amber-400'
+                }`}>
+                  {(indicators.ema_alignment_confidence || 50).toFixed(0)}% Confidence
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-2 text-xs">
+                {/* 20/50 Cross */}
+                <div className={`rounded px-2 py-1.5 text-center font-bold transition-all ${
+                  indicators.ema_20 > indicators.ema_50 
+                    ? 'bg-[#00C087]/20 text-[#00D09C] border border-[#00C087]/40' 
+                    : 'bg-[#EB5B3C]/20 text-[#FF5B5A] border border-[#EB5B3C]/40'
+                }`}>
+                  {indicators.ema_20 > indicators.ema_50 ? '✅ 20↑50' : '❌ 20↓50'}
+                </div>
+                {/* 50/100 Cross */}
+                <div className={`rounded px-2 py-1.5 text-center font-bold transition-all ${
+                  indicators.ema_50 > indicators.ema_100 
+                    ? 'bg-[#00C087]/20 text-[#00D09C] border border-[#00C087]/40' 
+                    : 'bg-[#EB5B3C]/20 text-[#FF5B5A] border border-[#EB5B3C]/40'
+                }`}>
+                  {indicators.ema_50 > indicators.ema_100 ? '✅ 50↑100' : '❌ 50↓100'}
+                </div>
+                {/* 100/200 Cross */}
+                <div className={`rounded px-2 py-1.5 text-center font-bold transition-all ${
+                  indicators.ema_100 > indicators.ema_200 
+                    ? 'bg-[#00C087]/20 text-[#00D09C] border border-[#00C087]/40' 
+                    : 'bg-[#EB5B3C]/20 text-[#FF5B5A] border border-[#EB5B3C]/40'
+                }`}>
+                  {indicators.ema_100 > indicators.ema_200 ? '✅ 100↑200' : '❌ 100↓200'}
+                </div>
+                {/* 20/200 Cross */}
+                <div className={`rounded px-2 py-1.5 text-center font-bold transition-all ${
+                  indicators.ema_20 > indicators.ema_200 
+                    ? 'bg-[#00C087]/20 text-[#00D09C] border border-[#00C087]/40' 
+                    : 'bg-[#EB5B3C]/20 text-[#FF5B5A] border border-[#EB5B3C]/40'
+                }`}>
+                  {indicators.ema_20 > indicators.ema_200 ? '✅ 20↑200' : '❌ 20↓200'}
+                </div>
+              </div>
+            </div>
+
+            {/* All EMAs Crossed Status - Zerodha Style */}
+            <div className={`col-span-2 rounded-md p-3 border transition-all ${
+              (indicators.ema_20 > indicators.ema_50 && indicators.ema_50 > indicators.ema_100 && indicators.ema_100 > indicators.ema_200)
+                ? 'bg-[#00C087]/15 border-[#00C087]/50 animate-pulse'
+                : (indicators.ema_20 < indicators.ema_50 && indicators.ema_50 < indicators.ema_100 && indicators.ema_100 < indicators.ema_200)
+                ? 'bg-[#EB5B3C]/15 border-[#EB5B3C]/50 animate-pulse'
+                : 'bg-[#2A2A2A] border-amber-500/40'
+            }`}>
+              <div className="flex items-center justify-between">
+                <div className="text-xs text-slate-300 font-semibold">ALL EMAs CROSSED</div>
+                <div className={`text-xs font-bold px-2.5 py-1 rounded ${
+                  (indicators.ema_20 > indicators.ema_50 && indicators.ema_50 > indicators.ema_100 && indicators.ema_100 > indicators.ema_200)
+                    ? 'bg-[#00C087]/25 text-[#00D09C]'
+                    : (indicators.ema_20 < indicators.ema_50 && indicators.ema_50 < indicators.ema_100 && indicators.ema_100 < indicators.ema_200)
+                    ? 'bg-[#EB5B3C]/25 text-[#FF5B5A]'
+                    : 'bg-amber-500/25 text-amber-400'
+                }`}>
+                  {(indicators.ema_20 > indicators.ema_50 && indicators.ema_50 > indicators.ema_100 && indicators.ema_100 > indicators.ema_200)
+                    ? '🚀 PERFECT BULLISH'
+                    : (indicators.ema_20 < indicators.ema_50 && indicators.ema_50 < indicators.ema_100 && indicators.ema_100 < indicators.ema_200)
+                    ? '📉 PERFECT BEARISH'
+                    : '⚠️ PARTIAL CROSS'}
+                </div>
+              </div>
+              <div className="text-[11px] text-slate-400 mt-2">
+                {(indicators.ema_20 > indicators.ema_50 && indicators.ema_50 > indicators.ema_100 && indicators.ema_100 > indicators.ema_200)
+                  ? '✅ All EMAs: 20>50>100>200 (Strong Uptrend)'
+                  : (indicators.ema_20 < indicators.ema_50 && indicators.ema_50 < indicators.ema_100 && indicators.ema_100 < indicators.ema_200)
+                  ? '❌ All EMAs: 20<50<100<200 (Strong Downtrend)'
+                  : '🟡 Mixed alignment - Wait for clear direction'}
+              </div>
+            </div>
+
+            {/* Moving Average Alignment - Zerodha Style */}
+            <div className="col-span-2 bg-[#2A2A2A] rounded-md p-3 border border-slate-700/50">
+              <div className="text-xs text-slate-300 mb-2 font-semibold">MOVING AVERAGE ALIGNMENT</div>
+              <div className="grid grid-cols-3 gap-2">
+                <div className="text-center">
+                  <div className="text-[10px] text-slate-400 mb-1">Spread</div>
+                  <div className={`text-xs font-bold rounded px-2 py-1 ${
+                    Math.abs(indicators.ema_20 - indicators.ema_200) < 200
+                      ? 'bg-[#00C087]/20 text-[#00D09C]'
+                      : Math.abs(indicators.ema_20 - indicators.ema_200) < 400
+                      ? 'bg-amber-500/20 text-amber-400'
+                      : 'bg-[#EB5B3C]/20 text-[#FF5B5A]'
+                  }`}>
+                    ₹{Math.abs(indicators.ema_20 - indicators.ema_200).toFixed(0)}
+                  </div>
+                </div>
+                <div className="text-center">
+                  <div className="text-[10px] text-slate-400 mb-1">Order</div>
+                  <div className={`text-[10px] font-bold rounded px-2 py-1 ${
+                    (indicators.ema_20 > indicators.ema_50 && indicators.ema_50 > indicators.ema_100 && indicators.ema_100 > indicators.ema_200)
+                      ? 'bg-[#00C087]/20 text-[#00D09C]'
+                      : (indicators.ema_20 < indicators.ema_50 && indicators.ema_50 < indicators.ema_100 && indicators.ema_100 < indicators.ema_200)
+                      ? 'bg-[#EB5B3C]/20 text-[#FF5B5A]'
+                      : 'bg-amber-500/20 text-amber-400'
+                  }`}>
+                    {(indicators.ema_20 > indicators.ema_50 && indicators.ema_50 > indicators.ema_100 && indicators.ema_100 > indicators.ema_200)
+                      ? 'BULLISH'
+                      : (indicators.ema_20 < indicators.ema_50 && indicators.ema_50 < indicators.ema_100 && indicators.ema_100 < indicators.ema_200)
+                      ? 'BEARISH'
+                      : 'MIXED'}
+                  </div>
+                </div>
+                <div className="text-center">
+                  <div className="text-[10px] text-slate-400 mb-1">Quality</div>
+                  <div className={`text-[10px] font-bold rounded px-2 py-1 ${
+                    (indicators.ema_alignment_confidence || 50) >= 80
+                      ? 'bg-[#00C087]/20 text-[#00D09C]'
+                      : (indicators.ema_alignment_confidence || 50) >= 60
+                      ? 'bg-[#00C087]/15 text-[#00C087]'
+                      : 'bg-amber-500/20 text-amber-400'
+                  }`}>
+                    {(indicators.ema_alignment_confidence || 50) >= 80 ? 'STRONG' : (indicators.ema_alignment_confidence || 50) >= 60 ? 'GOOD' : 'WEAK'}
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* Pullback Entry Confirmation - Zerodha Style */}
+            <div className="col-span-2 bg-[#2A2A2A] rounded-md p-3 border border-slate-700/50">
+              <div className="text-xs text-slate-300 mb-2 font-semibold">PULLBACK ENTRY CONFIRMATION</div>
+              <div className="grid grid-cols-2 gap-2">
+                <div className={`rounded px-2 py-2 text-[11px] text-center font-bold transition-all ${
+                  Math.abs(displayPrice - indicators.ema_20) <= 10
+                    ? 'bg-[#00C087]/20 text-[#00D09C] border border-[#00C087]/40'
+                    : Math.abs(displayPrice - indicators.ema_20) <= 30
+                    ? 'bg-amber-500/20 text-amber-400 border border-amber-500/40'
+                    : 'bg-slate-800/50 text-slate-500 border border-slate-700/30'
+                }`}>
+                  {Math.abs(displayPrice - indicators.ema_20) <= 10 
+                    ? '⚡ AT EMA20'
+                    : Math.abs(displayPrice - indicators.ema_20) <= 30
+                    ? '🔸 NEAR EMA20'
+                    : '○ Far from EMA20'}
+                </div>
+                <div className={`rounded px-2 py-2 text-[11px] text-center font-bold transition-all ${
+                  Math.abs(displayPrice - indicators.ema_50) <= 15
+                    ? 'bg-[#00C087]/20 text-[#00D09C] border border-[#00C087]/40'
+                    : Math.abs(displayPrice - indicators.ema_50) <= 50
+                    ? 'bg-amber-500/20 text-amber-400 border border-amber-500/40'
+                    : 'bg-slate-800/50 text-slate-500 border border-slate-700/30'
+                }`}>
+                  {Math.abs(displayPrice - indicators.ema_50) <= 15
+                    ? '⚡ AT EMA50'
+                    : Math.abs(displayPrice - indicators.ema_50) <= 50
+                    ? '🔸 NEAR EMA50'
+                    : '○ Far from EMA50'}
+                </div>
+              </div>
+            </div>
+
+            {/* Trend Status Indicator - Zerodha Style */}
+            <div className="col-span-2 bg-[#2A2A2A] rounded-md p-3 border border-slate-700/50">
+              <div className="flex items-center justify-between mb-2">
+                <div className="text-xs text-slate-300 font-semibold">TREND STATUS INDICATOR</div>
+                <div className={`text-xs font-bold px-2.5 py-1 rounded ${
+                  (indicators.ema_20 > indicators.ema_50 && indicators.ema_50 > indicators.ema_100)
+                    ? 'bg-[#00C087]/20 text-[#00D09C]'
+                    : (indicators.ema_20 < indicators.ema_50 && indicators.ema_50 < indicators.ema_100)
+                    ? 'bg-[#EB5B3C]/20 text-[#FF5B5A]'
+                    : 'bg-amber-500/20 text-amber-400'
+                }`}>
+                  {(indicators.ema_20 > indicators.ema_50 && indicators.ema_50 > indicators.ema_100) ? 'BULLISH ↑' : (indicators.ema_20 < indicators.ema_50 && indicators.ema_50 < indicators.ema_100) ? 'BEARISH ↓' : 'MIXED →'}
+                </div>
+              </div>
+              <div className="flex items-center justify-between text-[11px]">
+                <span className="text-slate-400">Strength:</span>
+                <div className="flex gap-1">
+                  {[1, 2, 3, 4, 5].map((level) => {
+                    const confidence = indicators.ema_alignment_confidence || 50;
+                    const isActive = (level * 20) <= confidence;
+                    return (
+                      <div
+                        key={level}
+                        className={`w-2 h-3 rounded-sm transition-all ${
+                          isActive
+                            ? confidence >= 80 ? 'bg-[#00D09C] shadow-sm shadow-[#00C087]/50'
+                            : confidence >= 60 ? 'bg-[#00C087]'
+                            : 'bg-amber-400'
+                            : 'bg-slate-700'
+                        }`}
+                      />
+                    );
+                  })}
+                </div>
               </div>
             </div>
           </div>

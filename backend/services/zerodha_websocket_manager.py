@@ -131,14 +131,40 @@ class ZerodhaWebSocketManager:
     def _on_error(self, ws, code, reason):
         """Called when WebSocket has an error"""
         logger.error(f"❌ WebSocket error: {code} - {reason}")
-        self._notify_status("ERROR", f"WebSocket error: {reason}")
-        self.failed_attempts += 1
+        
+        # Check for token expiry errors
+        reason_str = str(reason).lower()
+        is_token_error = any(keyword in reason_str for keyword in [
+            'token', 'authentication', 'unauthorized', 'invalid_token', 'session'
+        ])
+        
+        if is_token_error:
+            logger.error("🔴 TOKEN AUTHENTICATION ERROR DETECTED")
+            logger.error("   Zerodha token has expired (24-hour validity)")
+            logger.error("   Please login via UI or run: python quick_token_fix.py")
+            self._notify_status("TOKEN_EXPIRED", "Token expired - Login required")
+            # Stop trying to reconnect with expired token
+            self.failed_attempts = self.max_retries
+        else:
+            self._notify_status("ERROR", f"WebSocket error: {reason}")
+            self.failed_attempts += 1
 
     def _schedule_reconnect(self):
         """Schedule a reconnection attempt"""
         if self.failed_attempts >= self.max_retries:
             logger.error(f"💀 Max retries ({self.max_retries}) exceeded, giving up")
-            self._notify_status("FAILED", "Max reconnection attempts exceeded")
+            logger.error("")
+            logger.error("🔴 POSSIBLE CAUSES:")
+            logger.error("   1. Zerodha token expired (tokens last 24 hours)")
+            logger.error("   2. Network connectivity issues")
+            logger.error("   3. Zerodha API is down")
+            logger.error("")
+            logger.error("📋 TO FIX:")
+            logger.error("   - If token expired: Login via UI")
+            logger.error("   - If network issue: Check internet connection")
+            logger.error("   - If API down: Wait for Zerodha to resolve")
+            logger.error("")
+            self._notify_status("FAILED", "Connection failed - Check token and network")
             return
 
         delay = self.reconnect_delay * (self.failed_attempts + 1)  # Exponential backoff

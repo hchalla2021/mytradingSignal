@@ -66,6 +66,24 @@ class ConnectionManager:
         }
         await self.broadcast(message)
     
+    async def broadcast_auth_status(self, status: str, message: str, requires_action: bool = False):
+        """Broadcast authentication status to all clients.
+        
+        Args:
+            status: Status code (TOKEN_VALID, TOKEN_EXPIRED, TOKEN_WARNING, LOGIN_REQUIRED)
+            message: Human-readable message
+            requires_action: Whether user action is required
+        """
+        notification = {
+            "type": "auth_status",
+            "status": status,
+            "message": message,
+            "requires_action": requires_action,
+            "timestamp": None  # Will be set by frontend
+        }
+        await self.broadcast(notification)
+        print(f"📢 Broadcasted auth status: {status} - {message}")
+    
     @property
     def connection_count(self) -> int:
         """Get the number of active connections."""

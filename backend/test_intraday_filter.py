@@ -657,14 +657,20 @@ def test_vwap_intraday_filter():
     # Combine signals
     combined = VWAPIntradayFilter.combine_vwap_signals(signal_5m, signal_15m)
     
-    print(f"📊 VWAP COMBINED ENTRY")
-    print(f"\n5m Direction: {signal_5m['signal']} @ {signal_5m['confidence']}% (60% weight)")
-    print(f"15m Confirmation: {signal_15m['confirmation_signal']} @ {signal_15m['confidence']}% (40% weight)")
-    print(f"\n🎯 FINAL SIGNAL: {combined['signal']}")
+    print(f"📊 VWAP COMBINED ENTRY (5m Primary + 15m Confirmation)")
+    print(f"\n5m ENTRY SIGNAL:")
+    print(f"  Direction: {signal_5m['signal']} @ {signal_5m['confidence']}% confidence")
+    print(f"  Status: {signal_5m['signal_type']}")
+    print(f"\n15m TREND STRENGTH:")
+    print(f"  Trend: {signal_15m['confirmation_signal']} @ {signal_15m['confidence']}% reliability")
+    print(f"\n🎯 COMBINED RESULT:")
+    print(f"Signal: {combined['signal']}")
     print(f"Direction: {combined['direction']}")
-    print(f"Combined Confidence: {combined['combined_confidence']}%")
+    print(f"Confidence: {combined['confidence']}%")
     print(f"Ready to Trade: {combined['ready_to_trade']}")
-    print(f"\nConfidence Calculation:")
+    print(f"Trade Timing: {combined['trade_timing']}")
+    print(f"Trend Quality: {combined['trend_quality']}")
+    print(f"\nExecution Breakdown:")
     for reason in combined['reasons']:
         print(f"  {reason}")
     
@@ -696,12 +702,17 @@ def test_vwap_intraday_filter():
     
     combined = VWAPIntradayFilter.combine_vwap_signals(signal_5m, signal_15m)
     
-    print(f"📊 VWAP BEARISH EXIT")
-    print(f"\n5m Signal: {signal_5m['signal']} ({signal_5m['signal_type']})")
-    print(f"15m Confirmation: {signal_15m['confirmation_signal']}")
-    print(f"\n🎯 FINAL SIGNAL: {combined['signal']}")
+    print(f"📊 VWAP BEARISH EXIT (5m Primary + 15m Confirmation)")
+    print(f"\n5m EXIT SIGNAL:")
+    print(f"  Direction: {signal_5m['signal']} ({signal_5m['signal_type']})")
+    print(f"  Confidence: {signal_5m['confidence']}%")
+    print(f"\n15m TREND STRENGTH:")
+    print(f"  Trend: {signal_15m['confirmation_signal']}")
+    print(f"  Reliability: {signal_15m['reliability']}")
+    print(f"\n🎯 COMBINED RESULT:")
+    print(f"Signal: {combined['signal']}")
     print(f"Direction: {combined['direction']}")
-    print(f"Combined Confidence: {combined['combined_confidence']}%")
+    print(f"Confidence: {combined['confidence']}%")
     print(f"Ready to Trade: {combined['ready_to_trade']}")
     print(f"\nStructural Breakdown:")
     print(f"  5m: Cross BELOW VWAP-5m + Volume")
@@ -709,17 +720,19 @@ def test_vwap_intraday_filter():
     print(f"  ➜ STRONG ALIGNED BEARISH SIGNAL")
 
 def test_ema_traffic_light_filter():
-    """Test EMA Traffic Light Filter - 15m BEST (Very clean)"""
+    """Test EMA Traffic Light Filter with 200 EMA anchor - 15m BEST (Very clean)"""
     print("\n" + "="*80)
     print("TEST 23: EMA TRAFFIC LIGHT - GREEN (PERFECT BULLISH ALIGNMENT)")
     print("="*80 + "\n")
     
-    # Scenario: Perfect bullish EMA alignment (Green light)
+    # Scenario: Perfect bullish EMA alignment (Green light) with 200 EMA anchor
     result = EMATrafficLightFilter.analyze_ema_traffic(
-        ema_20=23155.00,  # Highest
-        ema_50=23140.00,  # Middle
-        ema_100=23120.00, # Lowest
-        current_price=23160.00,  # Above all EMAs
+        ema_20=23155.00,  # Highest (entry timing)
+        ema_50=23140.00,  # Middle (trend line)
+        ema_100=23120.00, # Major support
+        ema_200=23100.00, # Anchor (long-term)
+        smoothline_9=23158.00,  # EMA-9: Fast entry confirmation (above EMA-20)
+        current_price=23160.00,  # Above all EMAs (bullish)
         volume=45000000,
         avg_volume=40000000,
         timeframe="15m",  # BEST
@@ -733,7 +746,9 @@ def test_ema_traffic_light_filter():
     print(f"  EMA-20: Rs.{result['ema_data']['ema_20']}")
     print(f"  EMA-50: Rs.{result['ema_data']['ema_50']}")
     print(f"  EMA-100: Rs.{result['ema_data']['ema_100']}")
-    print(f"  => EMA-20 > EMA-50 > EMA-100 (Perfect bullish)")
+    print(f"  EMA-200: Rs.{result['ema_data']['ema_200']} (Anchor)")
+    print(f"  => EMA-20 > EMA-50 > EMA-100 > EMA-200 (Perfect bullish)")
+    print(f"  => Price above all EMAs (strong bullish bias)")
     print(f"\nPrice Position: {result['ema_data']['price_position']}")
     print(f"Reasons:")
     for reason in result['reasons']:
@@ -755,10 +770,12 @@ def test_ema_traffic_light_filter():
     print("="*80 + "\n")
     
     result = EMATrafficLightFilter.analyze_ema_traffic(
-        ema_20=23100.00,  # Lowest
-        ema_50=23120.00,  # Middle
-        ema_100=23140.00, # Highest
-        current_price=23090.00,  # Below all EMAs
+        ema_20=23100.00,  # Lowest (entry timing)
+        ema_50=23120.00,  # Middle (trend line)
+        ema_100=23140.00, # Major resistance
+        ema_200=23160.00, # Anchor (long-term)
+        smoothline_9=23092.00,  # EMA-9: Fast exit confirmation (below EMA-20)
+        current_price=23090.00,  # Below all EMAs (bearish)
         timeframe="15m",
     )
     
@@ -769,7 +786,9 @@ def test_ema_traffic_light_filter():
     print(f"  EMA-20: Rs.{result['ema_data']['ema_20']}")
     print(f"  EMA-50: Rs.{result['ema_data']['ema_50']}")
     print(f"  EMA-100: Rs.{result['ema_data']['ema_100']}")
-    print(f"  => EMA-20 < EMA-50 < EMA-100 (Perfect bearish)")
+    print(f"  EMA-200: Rs.{result['ema_data']['ema_200']} (Anchor)")
+    print(f"  => EMA-20 < EMA-50 < EMA-100 < EMA-200 (Perfect bearish)")
+    print(f"  => Price below all EMAs (strong bearish bias)")
     print(f"\nPrice Position: {result['ema_data']['price_position']}")
     
     # ==========================================
@@ -779,8 +798,10 @@ def test_ema_traffic_light_filter():
     
     result = EMATrafficLightFilter.analyze_ema_traffic(
         ema_20=23130.00,  # Above 100 but below 50
-        ema_50=23140.00,  # Highest
+        ema_50=23140.00,  # Highest (mixed)
         ema_100=23120.00, # Lowest
+        ema_200=23110.00, # Anchor
+        smoothline_9=23133.00,  # EMA-9: Mixed signal (between EMAs)
         current_price=23135.00,
         timeframe="15m",
     )
@@ -805,6 +826,8 @@ def test_ema_traffic_light_filter():
         ema_20=23155.00,
         ema_50=23140.00,
         ema_100=23120.00,
+        ema_200=23100.00,
+        smoothline_9=23153.50,  # EMA-9: Fast confirmation on 5m
         current_price=23155.00,  # At EMA-20
         timeframe="5m",  # Note: 5m gets penalty
     )
@@ -828,6 +851,8 @@ def test_ema_traffic_light_filter():
         ema_20=23155.00,
         ema_50=23140.00,
         ema_100=23120.00,
+        ema_200=23100.00,
+        smoothline_9=23153.00,  # EMA-9: Fast entry signal
         current_price=23154.80,  # Very close to EMA-20
         volume=48000000,
         avg_volume=40000000,
@@ -854,6 +879,70 @@ def test_ema_traffic_light_filter():
     print(f"  Entry: After price bounces from EMA-20 with volume")
     print(f"  SL: Below EMA-50 (Rs.23140)")
     print(f"  Target: Above EMA-100 (Rs.23120+)")
+    
+    # ==========================================
+    print("\n" + "="*80)
+    print("TEST 27.5: EMA 200 ANCHOR - BULLISH VS BEARISH CONFIRMATION")
+    print("="*80 + "\n")
+    
+    # Scenario 1: Price above 200 EMA (bullish bias)
+    print("🟢 SCENARIO A: Price above EMA-200 (Bullish Anchor)")
+    result_a = EMATrafficLightFilter.analyze_ema_traffic(
+        ema_20=23155.00,
+        ema_50=23140.00,
+        ema_100=23125.00,
+        ema_200=23100.00,  # Anchor below price
+        smoothline_9=23158.00,  # EMA-9: Fast bullish confirmation
+        current_price=23160.00,  # Above 200 = Bullish
+        volume=50000000,
+        avg_volume=40000000,
+        timeframe="15m",
+    )
+    print(f"  Signal: {result_a['signal']} {result_a['traffic_light']}")
+    print(f"  Alignment: {result_a['ema_alignment']['ema_100_above_200']} (100 > 200)")
+    print(f"  Price > 200: {result_a['ema_alignment']['price_above_200']}")
+    print(f"  Confidence: {result_a['confidence']}%")
+    print(f"  Quality: {result_a['light_quality']}")
+    
+    # Scenario 2: Price below 200 EMA (bearish bias)
+    print(f"\n🔴 SCENARIO B: Price below EMA-200 (Bearish Anchor)")
+    result_b = EMATrafficLightFilter.analyze_ema_traffic(
+        ema_20=23095.00,
+        ema_50=23110.00,
+        ema_100=23125.00,
+        ema_200=23150.00,  # Anchor above price
+        smoothline_9=23092.00,  # EMA-9: Fast bearish confirmation
+        current_price=23090.00,  # Below 200 = Bearish
+        volume=48000000,
+        avg_volume=40000000,
+        timeframe="15m",
+    )
+    print(f"  Signal: {result_b['signal']} {result_b['traffic_light']}")
+    print(f"  Alignment: {result_b['ema_alignment']['ema_100_above_200']} (100 < 200)")
+    print(f"  Price < 200: {not result_b['ema_alignment']['price_above_200']}")
+    print(f"  Confidence: {result_b['confidence']}%")
+    print(f"  Quality: {result_b['light_quality']}")
+    
+    # Scenario 3: Weakening trend (bullish signal but price below 200)
+    print(f"\n🟡 SCENARIO C: Bullish Signal BUT Price Below EMA-200 (Weakening)")
+    result_c = EMATrafficLightFilter.analyze_ema_traffic(
+        ema_20=23155.00,
+        ema_50=23140.00,
+        ema_100=23120.00,  # Short-term bullish
+        ema_200=23165.00,  # Long-term bearish
+        smoothline_9=23108.00,  # EMA-9: Aligned with price (weakening signal)
+        current_price=23110.00,  # Below both 100 and 200
+        volume=40000000,
+        avg_volume=40000000,
+        timeframe="15m",
+    )
+    print(f"  Signal: {result_c['signal']} {result_c['traffic_light']}")
+    print(f"  Short-term: 20 > 50 > 100? {result_c['ema_alignment']['ema_20_above_50'] and result_c['ema_alignment']['ema_50_above_100']}")
+    print(f"  Long-term: 100 > 200? {result_c['ema_alignment']['ema_100_above_200']}")
+    print(f"  Price Position: {result_c['ema_data']['price_position']}")
+    print(f"  Confidence: {result_c['confidence']}%")
+    print(f"  Quality: {result_c['light_quality']}")
+    print(f"\n  PURPOSE: Detect when uptrend is FADING (shorts emerging)")
 
 def test_camarilla_pivot_filter():
     """Test Camarilla Pivot Points with CPR zones (15m analysis + 5m execution)"""
@@ -1859,7 +1948,7 @@ def main():
     print("  - RSI 60/40 Timeframe-Specific Momentum")
     print("  - EMA-200 Touch Entry Filter (15m BEST)")
     print("  - VWAP Intraday Filter (5m BEST + 15m Confirmation)")
-    print("  - EMA 20/50/100 Traffic Light (15m BEST) [LATEST]")
+    print("  - EMA 20/50/100/200 Traffic Light (15m BEST + 5m ENTRY) [REFACTORED]")
     print("="*80 + "\n")
     # Run tests
     test_vwma_entry_scenarios()
@@ -1883,7 +1972,7 @@ def main():
     print("  [OK] Tests 8-12: RSI 60/40 Momentum Filter (Timeframe-Specific)")
     print("  [OK] Tests 13-17: EMA-200 Touch Entry Filter (15m BEST)")
     print("  [OK] Tests 18-22: VWAP Intraday Filter (5m BEST + 15m Confirmation)")
-    print("  [OK] Tests 23-27: EMA Traffic Light (15m BEST)")
+    print("  [OK] Tests 23-27.5: EMA Traffic Light with 200 EMA Anchor (15m BEST + 5m ENTRY)")
     print("  [OK] Tests 28-33: Camarilla Pivot Points (15m Analysis + 5m Execution)")
     print("  [OK] Tests 34-39: SuperTrend (10,2) Trend Following (15m Analysis + 5m Execution)")
     print("  [OK] Tests 40-45: Parabolic SAR Trend Following (15m Analysis + 5m Execution)")
@@ -1906,13 +1995,20 @@ def main():
     print("  - Fresh VWAP crosses with volume confirmation")
     print("  - 15m VWAP strong confirmation (High Reliability)")
     print("  - 5m/15m weighting: 60%/40% for combined signals")
-    print("  - EMA 20/50/100 Traffic Light (15m BEST - very clean)")
+    print("  - EMA 20/50/100/200 Traffic Light (15m BEST with 200 anchor, 5m entry timing)")
     print("  - Perfect bullish alignment (Green - GO)")
     print("  - Perfect bearish alignment (Red - STOP)")
     print("  - Mixed signals (Yellow - CAUTION)")
     print("  - Price action integration with traffic light")
     print("  - Support/Resistance at EMA levels identified")
     print("  - EMA-20 as primary support, EMA-50 as trend line, EMA-100 as anchor")
+    print("  - EMA-200 as long-term market bias (bullish above, bearish below) [NEW]")
+    print("  - 5m: Entry timing signal (when price crosses EMA-20)")
+    print("  - 15m: Trend confirmation (check 20/50/100 alignment) [BEST]")
+    print("  - 15m: Anchor validation (confirm price respects 200 EMA)")
+    print("  - Perfect alignment (all 5: 20>50>100>200 + Price > 200) = 95% confidence")
+    print("  - Strong alignment (4/5 conditions met) = 85% confidence")
+    print("  - Weakening trend detection (bullish short-term but bearish long-term)")
     print("  - Camarilla Pivot Points (15m Analysis + 5m Execution)")
     print("  - L3/H3 as strong support/resistance (CPR Range - BEST entries)")
     print("  - L4/H4 as extreme support/resistance (panic selling/buying)")

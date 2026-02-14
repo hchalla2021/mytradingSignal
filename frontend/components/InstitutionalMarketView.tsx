@@ -42,12 +42,30 @@ const InstitutionalMarketView = ({
     const smart_money_bearish = bos_bearish || (order_block_bearish && price < order_block_bearish);
     const high_volume_levels = indicators.high_volume_levels || [];
 
+    // Advanced calculations
+    const range = swing_high - swing_low;
+    const priceInRange = range > 0 ? ((price - swing_low) / range) * 100 : 50;
+    const inPremiumZone = priceInRange > 60; // Top 40% of range
+    const inDiscountZone = priceInRange < 40; // Bottom 40% of range
+    const inEquilibrium = !inPremiumZone && !inDiscountZone;
+    
+    // Smart money strength
+    const smartMoneyStrength = Math.abs(ordinal_imbalance) + (bos_bullish || bos_bearish ? 20 : 0) + 
+      ((order_block_bullish || order_block_bearish) ? 15 : 0);
+
+    // Liquidity analysis
+    const nearSwingHigh = Math.abs(price - swing_high) / price * 100 < 2;
+    const nearSwingLow = Math.abs(price - swing_low) / price * 100 < 2;
+    const liquiditySweepRisk = nearSwingHigh || nearSwingLow;
+
     return {
       price, volume, volume_ratio, buy_volume_ratio, sell_volume_ratio,
       ordinal_imbalance, order_block_bullish, order_block_bearish,
       bos_bullish, bos_bearish, fvg_bullish, fvg_bearish,
       swing_high, swing_low, volatility_trend, atr_pct, high_volume_levels,
-      smart_money_bullish, smart_money_bearish,
+      smart_money_bullish, smart_money_bearish, smartMoneyStrength,
+      inPremiumZone, inDiscountZone, inEquilibrium, priceInRange,
+      nearSwingHigh, nearSwingLow, liquiditySweepRisk,
     };
   }, [analysis]);
 
@@ -61,27 +79,97 @@ const InstitutionalMarketView = ({
 
   return (
     <div className="space-y-3">
-      <div className="border-2 border-purple-500/40 rounded-xl p-3 bg-purple-900/20 backdrop-blur-sm">
+      {/* Header Card */}
+      <div className="border-2 border-purple-500/40 rounded-xl p-3 bg-gradient-to-br from-purple-900/20 to-indigo-900/10 backdrop-blur-sm shadow-xl">
         <div className="flex items-center justify-between mb-2">
           <h3 className="flex items-center gap-2 text-base font-bold text-purple-300">
-            <span className="text-xl">🏛️</span>
+            <span className="text-xl drop-shadow-[0_0_8px_rgba(168,85,247,0.6)]">🏛️</span>
             {name}
           </h3>
-          <div className="text-[10px] px-2 py-1 rounded-full bg-green-500/20 text-green-300 border border-green-500/30">
-            🔴 LIVE
+          <div className="flex items-center gap-2">
+            <div className="text-[10px] px-2 py-1 rounded-full bg-green-500/20 text-green-300 border border-green-500/30 flex items-center gap-1">
+              <div className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse"></div>
+              <span>🔴 LIVE</span>
+            </div>
           </div>
         </div>
-        <div className="text-[10px] text-purple-300/70">Institutional view • Market structure</div>
+        <div className="flex items-center justify-between">
+          <div className="text-[10px] text-purple-300/70">Institutional view • Market structure</div>
+          <div className="text-[10px] px-2 py-0.5 rounded-full bg-purple-500/20 text-purple-300 border border-purple-500/30">
+            Smart Money: {Math.round(metrics.smartMoneyStrength)}%
+          </div>
+        </div>
       </div>
 
-      <div className="border-2 border-blue-500/40 rounded-xl p-3 bg-blue-900/20 backdrop-blur-sm">
+      {/* Premium/Discount Zone Indicator */}
+      <div className="border-2 border-cyan-500/40 rounded-xl p-3 bg-gradient-to-br from-cyan-900/20 to-blue-900/10 backdrop-blur-sm">
+        <h4 className="text-sm font-bold text-cyan-300 mb-2 flex items-center justify-between">
+          <span className="flex items-center gap-2">
+            <span>📊</span>
+            <span>Price Position</span>
+          </span>
+          <span className={`text-[10px] px-2 py-1 rounded-full font-semibold ${
+            metrics.inPremiumZone ? 'bg-rose-500/20 text-rose-300 border border-rose-500/40' :
+            metrics.inDiscountZone ? 'bg-green-500/20 text-green-300 border border-green-500/40' :
+            'bg-amber-500/20 text-amber-300 border border-amber-500/40'
+          }`}>
+            {metrics.inPremiumZone ? '📈 PREMIUM' : metrics.inDiscountZone ? '📉 DISCOUNT' : '⚖️ EQUILIBRIUM'}
+          </span>
+        </h4>
+        <div className="relative h-8 bg-gradient-to-r from-green-500/20 via-amber-500/20 to-rose-500/20 rounded-lg overflow-hidden border border-cyan-500/30">
+          <div className="absolute inset-0 flex">
+            <div className="w-[40%] border-r border-cyan-500/40"></div>
+            <div className="w-[20%] border-r border-cyan-500/40"></div>
+            <div className="w-[40%]"></div>
+          </div>
+          <div 
+            className="absolute top-0 bottom-0 w-1 bg-white shadow-lg shadow-white/50"
+            style={{ left: `${metrics.priceInRange}%` }}
+          >
+            <div className="absolute -top-6 left-1/2 -translate-x-1/2 text-[10px] text-white bg-cyan-600 px-2 py-0.5 rounded whitespace-nowrap">
+              {metrics.priceInRange.toFixed(0)}%
+            </div>
+          </div>
+        </div>
+        <div className="flex justify-between text-[9px] text-cyan-300/70 mt-1">
+          <span>🟢 BUY ZONE</span>
+          <span>⚖️ FAIR VALUE</span>
+          <span>🔴 SELL ZONE</span>
+        </div>
+        {metrics.inDiscountZone && (
+          <div className="mt-2 text-[10px] text-green-300 bg-green-500/10 rounded px-2 py-1 border border-green-500/30">
+            💡 Trading below fair value - Institutional buying opportunity
+          </div>
+        )}
+        {metrics.inPremiumZone && (
+          <div className="mt-2 text-[10px] text-rose-300 bg-rose-500/10 rounded px-2 py-1 border border-rose-500/30">
+            ⚠️ Trading above fair value - Potential distribution zone
+          </div>
+        )}
+      </div>
+
+      {/* Liquidity Sweep Risk */}
+      {metrics.liquiditySweepRisk && (
+        <div className="border-2 border-amber-500/50 rounded-xl p-3 bg-gradient-to-br from-amber-900/30 to-orange-900/10 backdrop-blur-sm animate-pulse">
+          <h4 className="text-sm font-bold text-amber-300 mb-1 flex items-center gap-2">
+            <span>💧</span>
+            <span>Liquidity Sweep Risk</span>
+          </h4>
+          <p className="text-[10px] text-amber-200/90">
+            {metrics.nearSwingHigh && 'Price near swing high - Watch for stop hunt above before reversal'}
+            {metrics.nearSwingLow && 'Price near swing low - Watch for stop hunt below before reversal'}
+          </p>
+        </div>
+      )}
+
+      <div className="border-2 border-blue-500/40 rounded-xl p-3 bg-gradient-to-br from-blue-900/20 to-cyan-900/10 backdrop-blur-sm">
         <h4 className="text-sm font-bold text-blue-300 mb-2 flex items-center justify-between">
           <span className="flex items-center gap-2">
             <span>📊</span>
-            Order Flow
+            <span>Order Flow Analysis</span>
           </span>
-          <span className="text-[10px] text-blue-300/70 font-normal">
-            Confidence: {Math.round(Math.abs(metrics.ordinal_imbalance))}%
+          <span className="text-[10px] text-blue-300/70 font-normal px-2 py-1 bg-blue-500/10 rounded-full border border-blue-500/30">
+            Confidence: {Math.round(Math.min(95, 50 + Math.abs(metrics.ordinal_imbalance) / 2))}%
           </span>
         </h4>
         <div className="space-y-2">
@@ -209,28 +297,38 @@ const InstitutionalMarketView = ({
         </div>
       )}
 
-      <div className="border-2 border-indigo-500/40 rounded-xl p-3 bg-indigo-900/20 backdrop-blur-sm">
+      <div className="border-2 border-indigo-500/40 rounded-xl p-3 bg-gradient-to-br from-indigo-900/20 to-purple-900/10 backdrop-blur-sm shadow-lg">
         <h4 className="text-sm font-bold text-indigo-300 mb-2 flex items-center justify-between">
           <span className="flex items-center gap-2">
             <span>💡</span>
-            Smart Money
+            <span>Smart Money Positioning</span>
           </span>
-          <span className="text-[10px] text-indigo-300/70 font-normal">
-            Confidence: {(metrics.smart_money_bullish || metrics.smart_money_bearish) ? 82 : 55}%
+          <span className={`text-[10px] font-normal px-2 py-1 rounded-full border ${
+            metrics.smartMoneyStrength >= 60 ? 'bg-green-500/20 text-green-300 border-green-500/40' :
+            metrics.smartMoneyStrength >= 40 ? 'bg-amber-500/20 text-amber-300 border-amber-500/40' :
+            'bg-gray-500/20 text-gray-300 border-gray-500/40'
+          }`}>
+            Strength: {Math.round(metrics.smartMoneyStrength)}%
           </span>
         </h4>
-        <div className="grid grid-cols-2 gap-2 text-[10px]">
+        <div className="grid grid-cols-2 gap-2 text-[10px] mb-3">
           <div className={metrics.smart_money_bullish 
-            ? 'bg-green-900/20 border border-green-500/40 rounded p-2 font-bold text-green-400 text-center' 
-            : 'bg-dark-surface/40 border border-dark-border/40 rounded p-2 font-bold text-dark-tertiary text-center'}>
-            {metrics.smart_money_bullish ? '🟢 Accum' : '○ Neutral'}
+            ? 'bg-gradient-to-br from-green-500/30 to-emerald-500/10 border-2 border-green-500/50 rounded-lg p-2.5 font-bold text-green-300 text-center shadow-lg shadow-green-500/20' 
+            : 'bg-dark-surface/40 border border-dark-border/40 rounded-lg p-2.5 font-bold text-dark-tertiary text-center'}>
+            {metrics.smart_money_bullish ? '🟢 ACCUMULATION' : '○ No Accumulation'}
           </div>
           <div className={metrics.smart_money_bearish 
-            ? 'bg-red-900/20 border border-red-500/40 rounded p-2 font-bold text-red-400 text-center' 
-            : 'bg-dark-surface/40 border border-dark-border/40 rounded p-2 font-bold text-dark-tertiary text-center'}>
-            {metrics.smart_money_bearish ? '🔴 Dist' : '○ Neutral'}
+            ? 'bg-gradient-to-br from-red-500/30 to-rose-500/10 border-2 border-red-500/50 rounded-lg p-2.5 font-bold text-red-300 text-center shadow-lg shadow-red-500/20' 
+            : 'bg-dark-surface/40 border border-dark-border/40 rounded-lg p-2.5 font-bold text-dark-tertiary text-center'}>
+            {metrics.smart_money_bearish ? '🔴 DISTRIBUTION' : '○ No Distribution'}
           </div>
         </div>
+        {(metrics.smart_money_bullish || metrics.smart_money_bearish) && (
+          <div className="text-[10px] text-indigo-200/90 bg-indigo-500/10 rounded px-2 py-2 border border-indigo-500/30">
+            {metrics.smart_money_bullish && '📈 Institutional buyers active - Look for long setups near support zones'}
+            {metrics.smart_money_bearish && '📉 Institutional sellers active - Look for short setups near resistance zones'}
+          </div>
+        )}
       </div>
 
       <div className="border-2 border-teal-500/40 rounded-xl p-3 bg-teal-900/20 backdrop-blur-sm">

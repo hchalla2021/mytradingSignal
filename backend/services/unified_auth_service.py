@@ -247,28 +247,70 @@ class UnifiedAuthService:
         print("   - Validates token every 30 seconds")
         print("   - Alerts when token expires")
         print("   - Monitors for token refresh")
+        print("   - Notifies frontend clients")
         print("="*80 + "\n")
+        
+        alert_shown = False
+        warning_threshold_hours = 18  # Warn when token is >18 hours old
+        warning_sent = False
         
         while True:
             try:
                 now = datetime.now(IST)
+                current_time = now.time()
+                
+                # Reset alert flag on new day
+                if current_time.hour == 0 and current_time.minute < 1:
+                    alert_shown = False
+                    warning_sent = False
                 
                 # Validate token periodically
                 is_valid = await self.validate_token()
                 
-                if not is_valid:
-                    # Token expired - alert
+                if not is_valid and not alert_shown:
+                    # Token expired - alert ONCE per day
                     print("\n" + "="*80)
                     print("🔴 UNIFIED AUTH: TOKEN EXPIRED")
-                    print("   Please login to refresh token:")
-                    print("   1. Click LOGIN button in UI")
-                    print("   2. Or run: python quick_token_fix.py")
+                    print("   Zerodha tokens expire after 24 hours")
+                    print("")
+                    print("   📋 TO FIX:")
+                    print("   1. Click LOGIN button in your trading app UI")
+                    print("   2. Complete Zerodha authentication")
+                    print("   3. Or run manually: python quick_token_fix.py")
+                    print("")
+                    print("   ⚠️  Live market data will NOT work without valid token")
                     print("="*80 + "\n")
+                    alert_shown = True
+                    
+                    # Notify frontend clients
+                    try:
+                        from services.websocket_manager import manager
+                        await manager.broadcast_auth_status(
+                            status="TOKEN_EXPIRED",
+                            message="Your Zerodha token has expired. Please login to continue.",
+                            requires_action=True
+                        )
+                    except Exception as e:
+                        print(f"⚠️  Could not notify frontend: {e}")
                 
-                # Check if token is getting old (>18 hours)
+                # Check if token is getting old (>18 hours) - warn before 9 AM
                 token_age = self.get_token_age_hours()
-                if token_age and token_age > 18:
-                    print(f"⚠️ UNIFIED AUTH: Token is {token_age:.1f}h old - consider refreshing before expiry")
+                if (token_age and token_age > warning_threshold_hours and 
+                    time(8, 0) <= current_time < time(9, 0) and not warning_sent):
+                    print(f"\n⚠️  UNIFIED AUTH: Token is {token_age:.1f}h old")
+                    print(f"   Token will expire soon - please login before market opens at 9:00 AM\n")
+                    warning_sent = True
+                    
+                    # Notify frontend clients
+                    try:
+                        from services.websocket_manager import manager
+                        await manager.broadcast_auth_status(
+                            status="TOKEN_WARNING",
+                            message=f"Your token is {token_age:.1f}h old and will expire soon. Please login before market opens.",
+                            requires_action=True
+                        )
+                    except Exception as e:
+                        print(f"⚠️  Could not notify frontend: {e}")
                 
                 # Sleep for validation interval
                 await asyncio.sleep(self._validation_interval)

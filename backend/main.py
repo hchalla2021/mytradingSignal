@@ -86,6 +86,11 @@ async def lifespan(app: FastAPI):
         print("⚠️  WARNING: Zerodha token not authenticated")
         print("   Services will start but may not connect to Zerodha")
         print("   Please login via UI or run: python quick_token_fix.py")
+    
+    # Start unified auth auto-refresh monitor
+    from services.unified_auth_service import unified_auth
+    await unified_auth.start_auto_refresh_monitor()
+    print("✅ Token expiry monitor started")
 
     # Auto update futures on startup - DISABLED TO PREVENT STARTUP HANG
     # from services.auto_futures_updater import check_and_update_futures_on_startup
@@ -132,6 +137,11 @@ async def lifespan(app: FastAPI):
 
     # Shutdown
     print("🛑 Backend shutting down...")
+    
+    # Stop unified auth monitor
+    from services.unified_auth_service import unified_auth
+    await unified_auth.stop_auto_refresh_monitor()
+    
     if scheduler:
         await scheduler.stop()
     if market_feed:

@@ -53,7 +53,7 @@ export interface MarketStructureAnalysis {
 }
 
 export function analyzeMarketStructureImproved(
-  data: MarketTick | null,
+  data: { price: number; high: number; low: number; close: number } | null,
   analysis: any
 ): MarketStructureAnalysis {
   if (!data) {
