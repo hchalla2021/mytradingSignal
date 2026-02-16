@@ -717,6 +717,162 @@ class InstantSignal:
             candle_strength = (candle_body / price_range * 100) if price_range > 0 else 0
             candle_strength = min(candle_strength, 100)  # Cap at 100%
             
+            # ============================================
+            # CANDLE QUALITY SIGNAL - HIGH VOLUME SCANNER
+            # ============================================
+            # Determine candle direction
+            candle_direction = None
+            if abs(price - open_price) < (price_range * 0.05):  # Doji if body < 5% of range
+                candle_direction = 'DOJI'
+            elif price > open_price:
+                candle_direction = 'BULLISH'
+            elif price < open_price:
+                candle_direction = 'BEARISH'
+            else:
+                candle_direction = 'DOJI'
+            
+            # Calculate candle quality signal based on multiple factors
+            candle_quality_signal = 'NEUTRAL'
+            candle_quality_confidence = 0.3  # Default low confidence
+            
+            # Strong candle quality criteria:
+            # 1. High volume (above threshold for the symbol)
+            # 2. Strong candle body (>30% of range)
+            # 3. Direction aligned with momentum
+            
+            has_high_volume = volume_above_threshold
+            has_strong_body = candle_strength > 0.30  # >30% of range is strong
+            
+            if candle_direction == 'BULLISH':
+                if has_high_volume and has_strong_body and momentum_score > 60:
+                    candle_quality_signal = 'STRONG_BUY'
+                    candle_quality_confidence = min(0.95, 0.60 + (momentum_score - 60) / 100)
+                elif has_high_volume and has_strong_body and momentum_score > 50:
+                    candle_quality_signal = 'BUY'
+                    candle_quality_confidence = min(0.85, 0.50 + (momentum_score - 50) / 100)
+                elif momentum_score > 55:
+                    candle_quality_signal = 'BUY'
+                    candle_quality_confidence = min(0.70, 0.40 + (momentum_score - 55) / 100)
+                else:
+                    candle_quality_signal = 'NEUTRAL'
+                    candle_quality_confidence = 0.40
+            
+            elif candle_direction == 'BEARISH':
+                if has_high_volume and has_strong_body and momentum_score < 40:
+                    candle_quality_signal = 'STRONG_SELL'
+                    candle_quality_confidence = min(0.95, 0.60 + (40 - momentum_score) / 100)
+                elif has_high_volume and has_strong_body and momentum_score < 50:
+                    candle_quality_signal = 'SELL'
+                    candle_quality_confidence = min(0.85, 0.50 + (50 - momentum_score) / 100)
+                elif momentum_score < 45:
+                    candle_quality_signal = 'SELL'
+                    candle_quality_confidence = min(0.70, 0.40 + (45 - momentum_score) / 100)
+                else:
+                    candle_quality_signal = 'NEUTRAL'
+                    candle_quality_confidence = 0.40
+            
+            else:  # DOJI
+                # Doji in bullish momentum => potential bounce
+                if momentum_score > 60 and price < high * 0.99:
+                    candle_quality_signal = 'BUY'
+                    candle_quality_confidence = min(0.65, 0.45 + (momentum_score - 60) / 100)
+                # Doji in bearish momentum => potential reversal down
+                elif momentum_score < 40 and price > low * 1.01:
+                    candle_quality_signal = 'SELL'
+                    candle_quality_confidence = min(0.65, 0.45 + (40 - momentum_score) / 100)
+                else:
+                    candle_quality_signal = 'NEUTRAL'
+                    candle_quality_confidence = 0.35
+            
+            # ============================================
+            # SMART MONEY FLOW - ORDER STRUCTURE SIGNAL
+            # ============================================
+            # Smart money signal based on order flow, volume imbalance, and institutional positioning
+            smart_money_signal = 'NEUTRAL'
+            smart_money_confidence = 0.3
+            
+            # Calculate buy/sell volume ratio from available data
+            # First try to get from market structure analysis
+            buy_volume_ratio = tick_data.get('buy_volume_ratio', None)
+            
+            if buy_volume_ratio is None:
+                # Calculate from candle data if not available
+                try:
+                    # Get volume data for analysis
+                    curr_volume = tick_data.get('volume', 0)
+                    curr_price = price
+                    curr_close = tick_data.get('close', curr_price)
+                    curr_open = tick_data.get('open', curr_price)
+                    
+                    # Simple heuristic: if close > open, it's a buy candle, else sell
+                    if curr_close > curr_open and curr_volume > 0:
+                        # Bullish candle = more buying
+                        buy_volume_ratio = min(75, 50 + (curr_volume / max(curr_volume, 10000) * 25))
+                    elif curr_close < curr_open and curr_volume > 0:
+                        # Bearish candle = more selling
+                        buy_volume_ratio = max(25, 50 - (curr_volume / max(curr_volume, 10000) * 25))
+                    else:
+                        # Neutral/no volume
+                        buy_volume_ratio = 50
+                except:
+                    buy_volume_ratio = 50
+            
+            sell_volume_ratio = 100 - buy_volume_ratio
+            
+            order_flow_imbalance = abs(buy_volume_ratio - 50)  # How imbalanced (0-50)
+            has_strong_buy_flow = buy_volume_ratio > 60
+            has_strong_sell_flow = sell_volume_ratio > 60
+            has_moderate_buy_flow = buy_volume_ratio > 55
+            has_moderate_sell_flow = sell_volume_ratio > 55
+            
+            # Smart money positioning based on institutional markers:
+            # 1. High volume imbalance (>60% buy or >60% sell)
+            # 2. Price at key institutional levels
+            # 3. Momentum alignment
+            
+            price_above_vwap = price > vwap_value
+            price_below_vwap = price < vwap_value
+            price_above_vwma = price > tick_data.get('vwma_20', price)
+            
+            # Tier 1: Strong signals (volume + position + momentum)
+            if has_strong_buy_flow and price_above_vwap and volume_above_threshold:
+                smart_money_signal = 'STRONG_BUY'
+                smart_money_confidence = min(0.95, 0.70 + (buy_volume_ratio - 60) / 100)
+            elif has_strong_sell_flow and price_below_vwap and volume_above_threshold:
+                smart_money_signal = 'STRONG_SELL'
+                smart_money_confidence = min(0.95, 0.70 + (sell_volume_ratio - 60) / 100)
+            # Tier 2: Moderate signals (good flow + direction)
+            elif has_strong_buy_flow and price_above_vwma:
+                smart_money_signal = 'BUY'
+                smart_money_confidence = min(0.85, 0.60 + (buy_volume_ratio - 60) / 100)
+            elif has_strong_sell_flow and not price_above_vwma:
+                smart_money_signal = 'SELL'
+                smart_money_confidence = min(0.85, 0.60 + (sell_volume_ratio - 60) / 100)
+            elif has_moderate_buy_flow and price_above_vwma:
+                smart_money_signal = 'BUY'
+                smart_money_confidence = min(0.75, 0.55 + (buy_volume_ratio - 55) / 100)
+            elif has_moderate_sell_flow and price_below_vwap:
+                smart_money_signal = 'SELL'
+                smart_money_confidence = min(0.75, 0.55 + (sell_volume_ratio - 55) / 100)
+            # Tier 3: Fallback to just price position (even with weak volume)
+            elif buy_volume_ratio > 55 and price_above_vwma:
+                smart_money_signal = 'BUY'
+                smart_money_confidence = min(0.65, 0.45 + (buy_volume_ratio - 55) / 100)
+            elif sell_volume_ratio > 55 and price_below_vwap:
+                smart_money_signal = 'SELL'
+                smart_money_confidence = min(0.65, 0.45 + (sell_volume_ratio - 55) / 100)
+            # Tier 4: Very basic - just market sentiment
+            elif buy_volume_ratio > 52:
+                smart_money_signal = 'BUY'
+                smart_money_confidence = max(0.4, 0.3 + (buy_volume_ratio - 50) / 100)
+            elif sell_volume_ratio > 52:
+                smart_money_signal = 'SELL'
+                smart_money_confidence = max(0.4, 0.3 + (sell_volume_ratio - 50) / 100)
+            else:
+                # NEUTRAL - Balanced market
+                smart_money_signal = 'NEUTRAL'
+                smart_money_confidence = max(0.3, 0.4 + order_flow_imbalance / 200)
+            
             # Calculate VWAP properly using OHLC and volume
             # VWAP = (Typical Price × Volume) / Total Volume
             # Typical Price = (High + Low + Close) / 3
@@ -1766,6 +1922,7 @@ class InstantSignal:
                     "orb_reward_risk_ratio": orb_reward_risk_ratio,  # Risk/Reward (typically 2:1 for ORB)
                     
                     "trend": trend_map.get(trend, 'SIDEWAYS'),
+                    "changePercent": round(change_percent, 2),  # Price change percentage
                     
                     # Support & Resistance
                     "support": round(low, 2),
@@ -1786,6 +1943,15 @@ class InstantSignal:
                     "rsi_action": rsi_action,  # Human-readable RSI action description
                     "momentum": round(momentum_score, 1),  # Momentum score (0-100)
                     "candle_strength": round(candle_strength / 100, 3),  # As decimal 0-1
+                    "candle_direction": candle_direction,  # BULLISH, BEARISH, DOJI
+                    "candle_quality_signal": candle_quality_signal,  # STRONG_BUY, BUY, SELL, STRONG_SELL, NEUTRAL
+                    "candle_quality_confidence": round(candle_quality_confidence, 2),  # Confidence 0-1 (or 0-100%)
+                    
+                    # Smart Money Flow - Order Structure Intelligence
+                    "smart_money_signal": smart_money_signal,  # STRONG_BUY, BUY, SELL, STRONG_SELL, NEUTRAL
+                    "smart_money_confidence": round(smart_money_confidence, 2),  # Confidence 0-1
+                    "order_flow_strength": round(buy_volume_ratio if smart_money_signal in ['STRONG_BUY', 'BUY', 'NEUTRAL'] else sell_volume_ratio, 1),  # Buy or sell %
+                    "volume_imbalance": round(buy_volume_ratio - 50, 1),  # Positive = more buy, Negative = more sell
                     
                     # VWMA EMA Filter Confidence (for Entry Filter component)
                     "vwma_above_ema200": price > vwma_20 and vwma_20 > ema_200,  # VWMA above EMA200
@@ -1882,6 +2048,13 @@ class InstantSignal:
                         "rsi": 50.0,
                         "momentum": 50.0,
                         "candle_strength": 0.5,
+                        "candle_direction": "DOJI",
+                        "candle_quality_signal": "NEUTRAL",
+                        "candle_quality_confidence": 0.3,
+                        "smart_money_signal": "NEUTRAL",
+                        "smart_money_confidence": 0.3,
+                        "order_flow_strength": 50.0,
+                        "volume_imbalance": 0,
                         "pcr": tick_data.get('pcr', 0) or None,
                         "oi_change": float(tick_data.get('oi_change', 0)),
                         "time_quality": "POOR",
@@ -1964,6 +2137,7 @@ async def get_instant_analysis(cache_service, symbol: str) -> Dict[str, Any]:
         
         # Add market status info
         market_status = tick_data.get('status', 'UNKNOWN')
+        result['status'] = 'LIVE' if market_status == 'LIVE' else 'CLOSED' if market_status == 'CLOSED' else 'OFFLINE'
         
         # Add cache status
         if is_cached:

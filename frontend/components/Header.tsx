@@ -162,9 +162,9 @@ const Header: React.FC<HeaderProps> = memo(({ isConnected, marketStatus }) => {
               }
 
               return (
-                <div className={`flex items-center gap-1 sm:gap-1.5 px-2 sm:px-2.5 py-1.5 rounded-lg border-2 ${statusConfig.bgClass} ${statusConfig.borderClass}`}>
+                <div suppressHydrationWarning className={`flex items-center gap-1 sm:gap-1.5 px-2 sm:px-2.5 py-1.5 rounded-lg border-2 ${statusConfig.bgClass} ${statusConfig.borderClass}`}>
                   <div className={`w-2 h-2 sm:w-2.5 sm:h-2.5 rounded-full ${statusConfig.dotClass}`} />
-                  <span className={`text-[9px] sm:text-xs font-bold tracking-wider ${statusConfig.textClass}`}>
+                  <span suppressHydrationWarning className={`text-[9px] sm:text-xs font-bold tracking-wider ${statusConfig.textClass}`}>
                     {statusConfig.label}
                   </span>
                 </div>
@@ -174,16 +174,16 @@ const Header: React.FC<HeaderProps> = memo(({ isConnected, marketStatus }) => {
 
           {/* Time & Date - Hidden on very small screens */}
           <div className="hidden xs:block text-right flex-shrink-0 bg-gradient-to-br from-dark-surface/90 to-dark-bg/70 px-2 sm:px-3 py-1.5 sm:py-2 rounded-xl border-2 border-sky-500/20 shadow-lg">
-            <div className="text-sm sm:text-lg font-mono font-black tracking-wide">
-              <span className="text-sky-300">{currentTime.split(':')[0]}</span>
-              <span className="text-white/40">:</span>
-              <span className="text-teal-300">{currentTime.split(':')[1]}</span>
-              <span className="text-white/40">:</span>
-              <span className="text-indigo-300">{currentTime.split(':')[2]}</span>
+            <div suppressHydrationWarning className="text-sm sm:text-lg font-mono font-black tracking-wide">
+              <span suppressHydrationWarning className="text-sky-300">{currentTime.split(':')[0]}</span>
+              <span suppressHydrationWarning className="text-white/40">:</span>
+              <span suppressHydrationWarning className="text-teal-300">{currentTime.split(':')[1]}</span>
+              <span suppressHydrationWarning className="text-white/40">:</span>
+              <span suppressHydrationWarning className="text-indigo-300">{currentTime.split(':')[2]}</span>
             </div>
-            <div className="text-[8px] sm:text-[10px] font-semibold tracking-wide flex items-center justify-end gap-1">
+            <div suppressHydrationWarning className="text-[8px] sm:text-[10px] font-semibold tracking-wide flex items-center justify-end gap-1">
               <span className="text-amber-400/80">📅</span>
-              <span className="text-slate-300">{currentDate}</span>
+              <span suppressHydrationWarning className="text-slate-300">{currentDate}</span>
             </div>
           </div>
         </div>

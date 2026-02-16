@@ -103,6 +103,9 @@ export interface AnalysisSignal {
   stop_loss: number | null;
   target: number | null;
 
+  // Market Status
+  status?: 'LIVE' | 'CLOSED' | 'OFFLINE';
+
   // Metadata
   timestamp: string;
 }

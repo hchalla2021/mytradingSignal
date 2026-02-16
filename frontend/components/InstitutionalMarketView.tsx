@@ -1,380 +1,226 @@
 'use client';
 
-import React, { useMemo } from 'react';
+import React, { memo, useMemo } from 'react';
 
-interface InstitutionalMarketViewProps {
+interface InstagramData {
   symbol: string;
-  name: string;
-  analysis?: any;
-  marketData?: any;
+  symbol_name?: string;
+  smart_money_signal: string;
+  smart_money_confidence: number;
+  status: string;
+  indicators?: {
+    price?: number;
+    order_flow_strength?: number;
+    volume_imbalance?: number;
+  };
 }
 
-const InstitutionalMarketView = ({ 
-  symbol = 'NIFTY', 
-  name = 'NIFTY 50',
-  analysis = null,
-  marketData = null
-}: InstitutionalMarketViewProps) => {
-  
-  const metrics = useMemo(() => {
-    if (!analysis) return null;
+interface InstitutionalMarketViewProps {
+  analysis: InstagramData | null;
+  marketStatus?: 'LIVE' | 'OFFLINE' | 'CLOSED';
+}
+
+/**
+ * Smart Money Flow • Order Structure Intelligence - Professional Simplified
+ * Layman-friendly signal with 100% accuracy focus
+ * Shows only: Symbol, Signal, Confidence, Market Status
+ * Order flow and institutional positioning based on smart money moves
+ */
+const InstitutionalMarketView = memo<InstitutionalMarketViewProps>(({ analysis, marketStatus = 'OFFLINE' }) => {
+
+  const signalAnalysis = useMemo(() => {
+    if (!analysis) {
+      return {
+        signal: 'NEUTRAL',
+        badgeEmoji: '⚪',
+        signalColor: 'bg-amber-500/20 border-amber-500/40 text-amber-300',
+        textColor: 'text-amber-300',
+        confidence: 30,
+        status: 'OFFLINE',
+        symbol: 'INDEX'
+      };
+    }
+
+    const { smart_money_signal, smart_money_confidence } = analysis;
+    const status = analysis.status || marketStatus || 'OFFLINE';
+    const symbol = analysis.symbol_name || analysis.symbol || 'INDEX';
     
-    const indicators = analysis.indicators || analysis;
-
-    const price = indicators.price || 0;
-    const volume = indicators.volume || 0;
-    const volume_ratio = indicators.volume_ratio || 1.0;
-    const buy_volume_ratio = indicators.buy_volume_ratio || 50;
-    const sell_volume_ratio = indicators.sell_volume_ratio || 50;
-
-    const order_block_bullish = indicators.order_block_bullish;
-    const order_block_bearish = indicators.order_block_bearish;
-    const bos_bullish = indicators.bos_bullish === true;
-    const bos_bearish = indicators.bos_bearish === true;
-    const fvg_bullish = indicators.fvg_bullish === true;
-    const fvg_bearish = indicators.fvg_bearish === true;
-    const swing_high = indicators.swing_high || price;
-    const swing_low = indicators.swing_low || price;
-    const ordinal_imbalance = buy_volume_ratio - sell_volume_ratio;
-    const atr_pct = indicators.atr_estimated_pct || 0.5;
-    const volatility_trend = atr_pct > 1.0 ? 'EXPANDING' : atr_pct < 0.3 ? 'CONTRACTING' : 'STABLE';
-    const smart_money_bullish = bos_bullish || (order_block_bullish && price > order_block_bullish);
-    const smart_money_bearish = bos_bearish || (order_block_bearish && price < order_block_bearish);
-    const high_volume_levels = indicators.high_volume_levels || [];
-
-    // Advanced calculations
-    const range = swing_high - swing_low;
-    const priceInRange = range > 0 ? ((price - swing_low) / range) * 100 : 50;
-    const inPremiumZone = priceInRange > 60; // Top 40% of range
-    const inDiscountZone = priceInRange < 40; // Bottom 40% of range
-    const inEquilibrium = !inPremiumZone && !inDiscountZone;
+    // Extract indicators for fallback logic
+    const orderFlowStrength = analysis.indicators?.order_flow_strength || 50;
+    const volumeImbalance = analysis.indicators?.volume_imbalance || 0;
     
-    // Smart money strength
-    const smartMoneyStrength = Math.abs(ordinal_imbalance) + (bos_bullish || bos_bearish ? 20 : 0) + 
-      ((order_block_bullish || order_block_bearish) ? 15 : 0);
+    let signal = smart_money_signal || 'NEUTRAL';
+    let confidence = Math.round((smart_money_confidence || 0.3) * 100);
+    let badgeEmoji = '⚪';
+    let signalColor = 'bg-amber-500/20 border-amber-500/40 text-amber-300';
+    let textColor = 'text-amber-300';
 
-    // Liquidity analysis
-    const nearSwingHigh = Math.abs(price - swing_high) / price * 100 < 2;
-    const nearSwingLow = Math.abs(price - swing_low) / price * 100 < 2;
-    const liquiditySweepRisk = nearSwingHigh || nearSwingLow;
+    // Tier 1: Use backend smart money signal if strong
+    if (signal === 'STRONG_BUY' || signal === 'STRONG BUY') {
+      badgeEmoji = '🚀';
+      signalColor = 'bg-green-500/20 border-green-500/50 text-green-300';
+      textColor = 'text-green-300';
+      confidence = Math.min(95, Math.max(confidence, 70));
+    } else if (signal === 'BUY') {
+      badgeEmoji = '📈';
+      signalColor = 'bg-emerald-500/20 border-emerald-500/40 text-emerald-300';
+      textColor = 'text-emerald-300';
+      confidence = Math.min(85, Math.max(confidence, 60));
+    } else if (signal === 'STRONG_SELL' || signal === 'STRONG SELL') {
+      badgeEmoji = '📉';
+      signalColor = 'bg-red-500/20 border-red-500/50 text-red-300';
+      textColor = 'text-red-300';
+      confidence = Math.min(95, Math.max(confidence, 70));
+    } else if (signal === 'SELL') {
+      badgeEmoji = '📊';
+      signalColor = 'bg-rose-500/20 border-rose-500/40 text-rose-300';
+      textColor = 'text-rose-300';
+      confidence = Math.min(85, Math.max(confidence, 60));
+    }
+    // Tier 2: Fallback to order flow imbalance if smart money is neutral
+    else if (signal === 'NEUTRAL') {
+      if (orderFlowStrength > 60) {
+        signal = 'BUY';
+        badgeEmoji = '📈';
+        signalColor = 'bg-emerald-500/20 border-emerald-500/40 text-emerald-300';
+        textColor = 'text-emerald-300';
+        confidence = Math.min(75, 50 + (orderFlowStrength - 60));
+      } else if (orderFlowStrength < 40) {
+        signal = 'SELL';
+        badgeEmoji = '📊';
+        signalColor = 'bg-rose-500/20 border-rose-500/40 text-rose-300';
+        textColor = 'text-rose-300';
+        confidence = Math.min(75, 50 + (40 - orderFlowStrength));
+      }
+    }
+    // Tier 3: If still neutral, show volume imbalance direction (even when market CLOSED)
+    if (signal === 'NEUTRAL' && Math.abs(volumeImbalance) > 5) {
+      if (volumeImbalance > 5) {
+        signal = 'BUY';
+        badgeEmoji = '📈';
+        signalColor = 'bg-emerald-500/20 border-emerald-500/40 text-emerald-300';
+        textColor = 'text-emerald-300';
+        confidence = Math.min(65, 45 + Math.abs(volumeImbalance) / 2);
+      } else if (volumeImbalance < -5) {
+        signal = 'SELL';
+        badgeEmoji = '📊';
+        signalColor = 'bg-rose-500/20 border-rose-500/40 text-rose-300';
+        textColor = 'text-rose-300';
+        confidence = Math.min(65, 45 + Math.abs(volumeImbalance) / 2);
+      }
+    }
 
-    return {
-      price, volume, volume_ratio, buy_volume_ratio, sell_volume_ratio,
-      ordinal_imbalance, order_block_bullish, order_block_bearish,
-      bos_bullish, bos_bearish, fvg_bullish, fvg_bearish,
-      swing_high, swing_low, volatility_trend, atr_pct, high_volume_levels,
-      smart_money_bullish, smart_money_bearish, smartMoneyStrength,
-      inPremiumZone, inDiscountZone, inEquilibrium, priceInRange,
-      nearSwingHigh, nearSwingLow, liquiditySweepRisk,
-    };
-  }, [analysis]);
+    return { signal, badgeEmoji, signalColor, textColor, confidence, status, symbol };
+  }, [analysis, marketStatus]);
 
-  if (!metrics || !analysis) {
+  if (!analysis) {
     return (
-      <div className="border-2 border-purple-500/40 rounded-xl p-3 bg-purple-900/20 backdrop-blur-sm">
-        <div className="text-center text-dark-tertiary text-xs py-3">Loading...</div>
+      <div className="border-2 border-purple-500/30 rounded-xl p-3 sm:p-4 transition-all duration-300 backdrop-blur-sm bg-gradient-to-br from-purple-900/10 via-purple-950/5 to-purple-900/5">
+        <div className="flex items-center justify-between gap-2 mb-2">
+          <h4 className="font-bold text-white text-base">INDEX</h4>
+          <div className="text-[10px] font-semibold text-white/60 animate-pulse">Loading...</div>
+        </div>
       </div>
     );
   }
 
+  const { signal, badgeEmoji, signalColor, textColor, confidence, status, symbol } = signalAnalysis;
+
   return (
-    <div className="space-y-3">
-      {/* Header Card */}
-      <div className="border-2 border-purple-500/40 rounded-xl p-3 bg-gradient-to-br from-purple-900/20 to-indigo-900/10 backdrop-blur-sm shadow-xl">
-        <div className="flex items-center justify-between mb-2">
-          <h3 className="flex items-center gap-2 text-base font-bold text-purple-300">
-            <span className="text-xl drop-shadow-[0_0_8px_rgba(168,85,247,0.6)]">🏛️</span>
-            {name}
-          </h3>
-          <div className="flex items-center gap-2">
-            <div className="text-[10px] px-2 py-1 rounded-full bg-green-500/20 text-green-300 border border-green-500/30 flex items-center gap-1">
-              <div className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse"></div>
-              <span>🔴 LIVE</span>
-            </div>
-          </div>
-        </div>
-        <div className="flex items-center justify-between">
-          <div className="text-[10px] text-purple-300/70">Institutional view • Market structure</div>
-          <div className="text-[10px] px-2 py-0.5 rounded-full bg-purple-500/20 text-purple-300 border border-purple-500/30">
-            Smart Money: {Math.round(metrics.smartMoneyStrength)}%
-          </div>
-        </div>
-      </div>
-
-      {/* Premium/Discount Zone Indicator */}
-      <div className="border-2 border-cyan-500/40 rounded-xl p-3 bg-gradient-to-br from-cyan-900/20 to-blue-900/10 backdrop-blur-sm">
-        <h4 className="text-sm font-bold text-cyan-300 mb-2 flex items-center justify-between">
-          <span className="flex items-center gap-2">
-            <span>📊</span>
-            <span>Price Position</span>
-          </span>
-          <span className={`text-[10px] px-2 py-1 rounded-full font-semibold ${
-            metrics.inPremiumZone ? 'bg-rose-500/20 text-rose-300 border border-rose-500/40' :
-            metrics.inDiscountZone ? 'bg-green-500/20 text-green-300 border border-green-500/40' :
-            'bg-amber-500/20 text-amber-300 border border-amber-500/40'
-          }`}>
-            {metrics.inPremiumZone ? '📈 PREMIUM' : metrics.inDiscountZone ? '📉 DISCOUNT' : '⚖️ EQUILIBRIUM'}
-          </span>
-        </h4>
-        <div className="relative h-8 bg-gradient-to-r from-green-500/20 via-amber-500/20 to-rose-500/20 rounded-lg overflow-hidden border border-cyan-500/30">
-          <div className="absolute inset-0 flex">
-            <div className="w-[40%] border-r border-cyan-500/40"></div>
-            <div className="w-[20%] border-r border-cyan-500/40"></div>
-            <div className="w-[40%]"></div>
-          </div>
-          <div 
-            className="absolute top-0 bottom-0 w-1 bg-white shadow-lg shadow-white/50"
-            style={{ left: `${metrics.priceInRange}%` }}
-          >
-            <div className="absolute -top-6 left-1/2 -translate-x-1/2 text-[10px] text-white bg-cyan-600 px-2 py-0.5 rounded whitespace-nowrap">
-              {metrics.priceInRange.toFixed(0)}%
-            </div>
-          </div>
-        </div>
-        <div className="flex justify-between text-[9px] text-cyan-300/70 mt-1">
-          <span>🟢 BUY ZONE</span>
-          <span>⚖️ FAIR VALUE</span>
-          <span>🔴 SELL ZONE</span>
-        </div>
-        {metrics.inDiscountZone && (
-          <div className="mt-2 text-[10px] text-green-300 bg-green-500/10 rounded px-2 py-1 border border-green-500/30">
-            💡 Trading below fair value - Institutional buying opportunity
-          </div>
-        )}
-        {metrics.inPremiumZone && (
-          <div className="mt-2 text-[10px] text-rose-300 bg-rose-500/10 rounded px-2 py-1 border border-rose-500/30">
-            ⚠️ Trading above fair value - Potential distribution zone
-          </div>
-        )}
-      </div>
-
-      {/* Liquidity Sweep Risk */}
-      {metrics.liquiditySweepRisk && (
-        <div className="border-2 border-amber-500/50 rounded-xl p-3 bg-gradient-to-br from-amber-900/30 to-orange-900/10 backdrop-blur-sm animate-pulse">
-          <h4 className="text-sm font-bold text-amber-300 mb-1 flex items-center gap-2">
-            <span>💧</span>
-            <span>Liquidity Sweep Risk</span>
+    <div suppressHydrationWarning className="border-2 border-purple-500/30 rounded-xl p-3 sm:p-4 transition-all duration-300 backdrop-blur-sm bg-gradient-to-br from-purple-900/10 via-purple-950/5 to-purple-900/5 hover:border-purple-500/50 hover:shadow-purple-500/30 shadow-xl shadow-purple-500/15">
+      
+      {/* Symbol & Confidence Header */}
+      <div className="flex items-center justify-between gap-2 mb-2">
+        <div className="flex items-center gap-2">
+          <h4 className="font-bold text-white text-base sm:text-lg tracking-tight">
+            {symbol}
           </h4>
-          <p className="text-[10px] text-amber-200/90">
-            {metrics.nearSwingHigh && 'Price near swing high - Watch for stop hunt above before reversal'}
-            {metrics.nearSwingLow && 'Price near swing low - Watch for stop hunt below before reversal'}
-          </p>
+          <span className="text-lg sm:text-xl">{badgeEmoji}</span>
         </div>
-      )}
+        <div suppressHydrationWarning className={`text-center px-2.5 py-1 rounded-lg border-2 bg-black/30 ${signalColor}`}>
+          <div className="text-[10px] font-semibold text-white/60">Confidence</div>
+          <div suppressHydrationWarning className="text-base font-bold text-white">{confidence}%</div>
+        </div>
+      </div>
 
-      <div className="border-2 border-blue-500/40 rounded-xl p-3 bg-gradient-to-br from-blue-900/20 to-cyan-900/10 backdrop-blur-sm">
-        <h4 className="text-sm font-bold text-blue-300 mb-2 flex items-center justify-between">
-          <span className="flex items-center gap-2">
-            <span>📊</span>
-            <span>Order Flow Analysis</span>
-          </span>
-          <span className="text-[10px] text-blue-300/70 font-normal px-2 py-1 bg-blue-500/10 rounded-full border border-blue-500/30">
-            Confidence: {Math.round(Math.min(95, 50 + Math.abs(metrics.ordinal_imbalance) / 2))}%
-          </span>
-        </h4>
+      {/* PROMINENT STATUS BADGE */}
+      <div suppressHydrationWarning className={`mb-3 p-3 rounded-lg border-2 ${signalColor}`}>
+        <div suppressHydrationWarning className="text-lg sm:text-xl font-bold tracking-tight text-white drop-shadow-lg">
+          {signal === 'STRONG_BUY' || signal === 'STRONG BUY' ? '🚀 STRONG BUY' :
+           signal === 'BUY' ? '📈 BUY' :
+           signal === 'STRONG_SELL' || signal === 'STRONG SELL' ? '📉 STRONG SELL' :
+           signal === 'SELL' ? '📊 SELL' :
+           '⚪ NEUTRAL'}
+        </div>
+        <p className="text-xs text-white/60 mt-0.5 font-medium">
+          Smart Money Flow Signal
+        </p>
+      </div>
+
+      {/* Key Info Summary */}
+      {analysis && (
         <div className="space-y-2">
-          <div>
-            <div className="flex justify-between text-[10px] mb-1">
-              <span className="text-blue-300">Buy</span>
-              <span className="text-green-400">{metrics.buy_volume_ratio.toFixed(1)}%</span>
+          {/* Order Flow Status */}
+          {analysis.indicators?.order_flow_strength !== undefined && (
+            <div className="flex flex-col sm:flex-row sm:justify-between gap-2 p-2 rounded-lg border border-purple-500/30 bg-purple-500/5">
+              <span className="text-white font-semibold text-xs">Order Flow:</span>
+              <span suppressHydrationWarning className={`font-bold text-sm ${
+                (analysis.indicators.order_flow_strength || 0) > 60 ? 'text-green-300' : 
+                (analysis.indicators.order_flow_strength || 0) < 40 ? 'text-red-300' : 
+                'text-yellow-300'
+              }`}>
+                {(analysis.indicators.order_flow_strength || 0) > 60 ? '📈 Strong Buy' : 
+                 (analysis.indicators.order_flow_strength || 0) < 40 ? '📉 Strong Sell' : 
+                 '⚪ Neutral'}
+              </span>
             </div>
-            <div className="h-1.5 bg-dark-secondary/30 rounded-full overflow-hidden">
-              <div className="h-full bg-green-500 transition-all" style={{width: `${metrics.buy_volume_ratio}%`}} />
-            </div>
-          </div>
-          <div>
-            <div className="flex justify-between text-[10px] mb-1">
-              <span className="text-blue-300">Sell</span>
-              <span className="text-red-400">{metrics.sell_volume_ratio.toFixed(1)}%</span>
-            </div>
-            <div className="h-1.5 bg-dark-secondary/30 rounded-full overflow-hidden">
-              <div className="h-full bg-red-500 transition-all" style={{width: `${metrics.sell_volume_ratio}%`}} />
-            </div>
-          </div>
-        </div>
-      </div>
+          )}
 
-      <div className="border-2 border-cyan-500/40 rounded-xl p-3 bg-cyan-900/20 backdrop-blur-sm">
-        <h4 className="text-sm font-bold text-cyan-300 mb-2 flex items-center justify-between">
-          <span className="flex items-center gap-2">
-            <span>🎯</span>
-            Market Structure
-          </span>
-          <span className="text-[10px] text-cyan-300/70 font-normal">
-            Confidence: {((metrics.bos_bullish || metrics.bos_bearish) ? 85 : 65)}%
-          </span>
-        </h4>
-        <div className="grid grid-cols-2 gap-2 text-[10px]">
-          <div className="bg-dark-surface/40 rounded p-2 border border-cyan-500/30">
-            <div className="text-cyan-300 mb-1">Swing High</div>
-            <div className="font-bold text-cyan-400">₹{metrics.swing_high?.toFixed(2)}</div>
-          </div>
-          <div className="bg-dark-surface/40 rounded p-2 border border-cyan-500/30">
-            <div className="text-cyan-300 mb-1">Swing Low</div>
-            <div className="font-bold text-cyan-400">₹{metrics.swing_low?.toFixed(2)}</div>
-          </div>
-        </div>
-        <div className="grid grid-cols-2 gap-2 mt-2">
-          {metrics.bos_bullish && (
-            <div className="bg-green-900/20 border border-green-500/40 rounded p-2 text-[10px] font-bold text-green-400">
-              ✓ BOS Bull
+          {/* Volume Imbalance */}
+          {analysis.indicators?.volume_imbalance !== undefined && (
+            <div className="flex flex-col sm:flex-row sm:justify-between gap-2 p-2 rounded-lg border border-purple-500/30 bg-purple-500/5">
+              <span className="text-white font-semibold text-xs">Volume:</span>
+              <span suppressHydrationWarning className={`font-bold text-sm ${
+                (analysis.indicators.volume_imbalance || 0) > 0 ? 'text-green-300' : 'text-red-300'
+              }`}>
+                {(analysis.indicators.volume_imbalance || 0) > 0 ? '🟢 Buying' : '🔴 Selling'}
+              </span>
             </div>
           )}
-          {metrics.bos_bearish && (
-            <div className="bg-red-900/20 border border-red-500/40 rounded p-2 text-[10px] font-bold text-red-400">
-              ✓ BOS Bear
-            </div>
-          )}
-        </div>
-      </div>
 
-      {(metrics.order_block_bullish || metrics.order_block_bearish) && (
-        <div className="border-2 border-amber-500/40 rounded-xl p-3 bg-amber-900/20 backdrop-blur-sm">
-          <h4 className="text-sm font-bold text-amber-300 mb-2 flex items-center justify-between">
-            <span className="flex items-center gap-2">
-              <span>🔒</span>
-              Order Blocks
-            </span>
-            <span className="text-[10px] text-amber-300/70 font-normal">
-              Confidence: {(metrics.order_block_bullish && metrics.order_block_bearish) ? 90 : 78}%
-            </span>
-          </h4>
-          {metrics.order_block_bullish && (
-            <div className="flex justify-between bg-green-900/20 border border-green-500/30 rounded p-2 text-[10px]">
-              <span className="text-green-300">Support OB</span>
-              <span className="font-bold text-green-400">₹{metrics.order_block_bullish?.toFixed(2)}</span>
+          {/* Current Price */}
+          {analysis.indicators?.price && (
+            <div className="flex flex-col sm:flex-row sm:justify-between gap-2 p-2 rounded-lg border border-purple-500/30 bg-purple-500/5">
+              <span className="text-white font-semibold text-xs">Price:</span>
+              <span className="font-bold text-sm text-white">
+                ₹{analysis.indicators.price.toLocaleString('en-IN', { maximumFractionDigits: 2 })}
+              </span>
             </div>
           )}
-          {metrics.order_block_bearish && (
-            <div className="flex justify-between bg-red-900/20 border border-red-500/30 rounded p-2 text-[10px] mt-1">
-              <span className="text-red-300">Resist OB</span>
-              <span className="font-bold text-red-400">₹{metrics.order_block_bearish?.toFixed(2)}</span>
-            </div>
-          )}
-        </div>
-      )}
 
-      {(metrics.fvg_bullish || metrics.fvg_bearish) && (
-        <div className="border-2 border-pink-500/40 rounded-xl p-3 bg-pink-900/20 backdrop-blur-sm">
-          <h4 className="text-sm font-bold text-pink-300 mb-2 flex items-center justify-between">
-            <span className="flex items-center gap-2">
-              <span>📈</span>
-              Fair Value Gaps
-            </span>
-            <span className="text-[10px] text-pink-300/70 font-normal">
-              Confidence: {(metrics.fvg_bullish && metrics.fvg_bearish) ? 72 : 88}%
-            </span>
-          </h4>
-          {metrics.fvg_bullish && (
-            <div className="bg-green-900/20 border border-green-500/30 rounded p-2 text-[10px] font-bold text-green-400">
-              ✓ Bullish FVG
-            </div>
-          )}
-          {metrics.fvg_bearish && (
-            <div className="bg-red-900/20 border border-red-500/30 rounded p-2 text-[10px] font-bold text-red-400 mt-1">
-              ✓ Bearish FVG
-            </div>
-          )}
-        </div>
-      )}
-
-      {metrics.high_volume_levels.length > 0 && (
-        <div className="border-2 border-orange-500/40 rounded-xl p-3 bg-orange-900/20 backdrop-blur-sm">
-          <h4 className="text-sm font-bold text-orange-300 mb-2 flex items-center justify-between">
-            <span className="flex items-center gap-2">
-              <span>📊</span>
-              High Volume
-            </span>
-            <span className="text-[10px] text-orange-300/70 font-normal">
-              Confidence: {Math.min(95, 70 + (metrics.high_volume_levels.length * 8))}%
-            </span>
-          </h4>
-          {metrics.high_volume_levels.map((level: number, idx: number) => (
-            <div key={idx} className="text-[10px] text-orange-400 py-1">
-              Level {idx + 1}: ₹{level?.toFixed(2)}
-            </div>
-          ))}
-        </div>
-      )}
-
-      <div className="border-2 border-indigo-500/40 rounded-xl p-3 bg-gradient-to-br from-indigo-900/20 to-purple-900/10 backdrop-blur-sm shadow-lg">
-        <h4 className="text-sm font-bold text-indigo-300 mb-2 flex items-center justify-between">
-          <span className="flex items-center gap-2">
-            <span>💡</span>
-            <span>Smart Money Positioning</span>
-          </span>
-          <span className={`text-[10px] font-normal px-2 py-1 rounded-full border ${
-            metrics.smartMoneyStrength >= 60 ? 'bg-green-500/20 text-green-300 border-green-500/40' :
-            metrics.smartMoneyStrength >= 40 ? 'bg-amber-500/20 text-amber-300 border-amber-500/40' :
-            'bg-gray-500/20 text-gray-300 border-gray-500/40'
+          {/* Market Status */}
+          <div suppressHydrationWarning className={`flex flex-col sm:flex-row sm:justify-between gap-2 p-2 rounded-lg border border-purple-500/30 ${
+            status === 'LIVE' ? 'bg-green-500/5' : status === 'CLOSED' ? 'bg-amber-500/5' : 'bg-red-500/5'
           }`}>
-            Strength: {Math.round(metrics.smartMoneyStrength)}%
-          </span>
-        </h4>
-        <div className="grid grid-cols-2 gap-2 text-[10px] mb-3">
-          <div className={metrics.smart_money_bullish 
-            ? 'bg-gradient-to-br from-green-500/30 to-emerald-500/10 border-2 border-green-500/50 rounded-lg p-2.5 font-bold text-green-300 text-center shadow-lg shadow-green-500/20' 
-            : 'bg-dark-surface/40 border border-dark-border/40 rounded-lg p-2.5 font-bold text-dark-tertiary text-center'}>
-            {metrics.smart_money_bullish ? '🟢 ACCUMULATION' : '○ No Accumulation'}
-          </div>
-          <div className={metrics.smart_money_bearish 
-            ? 'bg-gradient-to-br from-red-500/30 to-rose-500/10 border-2 border-red-500/50 rounded-lg p-2.5 font-bold text-red-300 text-center shadow-lg shadow-red-500/20' 
-            : 'bg-dark-surface/40 border border-dark-border/40 rounded-lg p-2.5 font-bold text-dark-tertiary text-center'}>
-            {metrics.smart_money_bearish ? '🔴 DISTRIBUTION' : '○ No Distribution'}
+            <span className="text-white font-semibold text-xs">Market:</span>
+            <span className={`font-bold text-sm ${
+              status === 'LIVE' ? 'text-green-300' : 
+              status === 'CLOSED' ? 'text-amber-300' : 
+              'text-red-300'
+            }`}>
+              {status === 'LIVE' ? '🟢 LIVE' : 
+               status === 'CLOSED' ? '🟡 CLOSED' : 
+               '🔴 OFFLINE'}
+            </span>
           </div>
         </div>
-        {(metrics.smart_money_bullish || metrics.smart_money_bearish) && (
-          <div className="text-[10px] text-indigo-200/90 bg-indigo-500/10 rounded px-2 py-2 border border-indigo-500/30">
-            {metrics.smart_money_bullish && '📈 Institutional buyers active - Look for long setups near support zones'}
-            {metrics.smart_money_bearish && '📉 Institutional sellers active - Look for short setups near resistance zones'}
-          </div>
-        )}
-      </div>
-
-      <div className="border-2 border-teal-500/40 rounded-xl p-3 bg-teal-900/20 backdrop-blur-sm">
-        <h4 className="text-sm font-bold text-teal-300 mb-2 flex items-center justify-between">
-          <span className="flex items-center gap-2">
-            <span>⚡</span>
-            Volatility
-          </span>
-          <span className="text-[10px] text-teal-300/70 font-normal">
-            Confidence: {Math.round(75 + (metrics.atr_pct * 10))}%
-          </span>
-        </h4>
-        <div className="flex justify-between text-[10px] bg-dark-surface/40 rounded p-2">
-          <span className="text-teal-300">ATR: {metrics.atr_pct?.toFixed(2)}%</span>
-          <span className={
-            metrics.volatility_trend === 'EXPANDING' ? 'text-red-400' : 
-            metrics.volatility_trend === 'CONTRACTING' ? 'text-green-400' : 
-            'text-amber-400'
-          }>
-            {metrics.volatility_trend}
-          </span>
-        </div>
-      </div>
-
-      <div className="border-2 border-sky-500/40 rounded-xl p-3 bg-sky-900/20 backdrop-blur-sm">
-        <h4 className="text-sm font-bold text-sky-300 mb-2 flex items-center justify-between">
-          <span className="flex items-center gap-2">
-            <span>💪</span>
-            Volume
-          </span>
-          <span className="text-[10px] text-sky-300/70 font-normal">
-            Confidence: {Math.min(95, Math.round(60 + (metrics.volume_ratio * 20)))}%
-          </span>
-        </h4>
-        <div className="text-center py-2">
-          <div className="text-xl font-bold text-sky-400">
-            {metrics.volume_ratio?.toFixed(2)}x
-          </div>
-          <div className="text-[10px] text-sky-300/70 mt-1">
-            {metrics.volume_ratio > 1.3 ? '🟢 High' : 
-             metrics.volume_ratio < 0.7 ? '🔴 Low' : '🟡 Normal'}
-          </div>
-        </div>
-      </div>
+      )}
     </div>
   );
-};
+});
 
+InstitutionalMarketView.displayName = 'InstitutionalMarketView';
+
+export { InstitutionalMarketView };
 export default InstitutionalMarketView;
+

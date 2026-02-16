@@ -278,22 +278,22 @@ export const SupportResistance: React.FC<SupportResistanceProps> = ({
         )}
       </div>
 
-      {/* Key Levels Grid - Enhanced */}
+      {/* Key Levels Grid - Enhanced for Mobile */}
       <div className="grid grid-cols-3 gap-2 pt-3 border-t border-gray-700/50">
         <div className="text-center bg-gradient-to-b from-red-500/10 to-transparent rounded-lg p-2 border border-red-500/20">
-          <div className="text-[10px] text-red-400/80 font-semibold mb-1">PDH</div>
-          <div className="text-xs text-red-300 font-bold">{formatPrice(prevDayHigh)}</div>
-          <div className="text-[8px] text-red-400/60 mt-0.5">Prev Day High</div>
+          <div className="text-[9px] sm:text-[10px] text-red-400/80 font-semibold mb-1">PDH</div>
+          <div className="text-xs sm:text-sm text-red-300 font-bold break-words">{formatPrice(prevDayHigh)}</div>
+          <div className="text-[7px] sm:text-[8px] text-red-400/60 mt-0.5">Prev Day High</div>
         </div>
         <div className="text-center bg-gradient-to-b from-yellow-500/10 to-transparent rounded-lg p-2 border border-yellow-500/30">
-          <div className="text-[10px] text-yellow-400/80 font-semibold mb-1">PDC</div>
-          <div className="text-xs text-yellow-300 font-bold">{formatPrice(prevDayClose)}</div>
-          <div className="text-[8px] text-yellow-400/60 mt-0.5">Prev Day Close</div>
+          <div className="text-[9px] sm:text-[10px] text-yellow-400/80 font-semibold mb-1">PDC</div>
+          <div className="text-xs sm:text-sm text-yellow-300 font-bold break-words">{formatPrice(prevDayClose)}</div>
+          <div className="text-[7px] sm:text-[8px] text-yellow-400/60 mt-0.5 whitespace-nowrap overflow-hidden text-ellipsis">Prev Day Close</div>
         </div>
         <div className="text-center bg-gradient-to-b from-green-500/10 to-transparent rounded-lg p-2 border border-green-500/20">
-          <div className="text-[10px] text-green-400/80 font-semibold mb-1">PDL</div>
-          <div className="text-xs text-green-300 font-bold">{formatPrice(prevDayLow)}</div>
-          <div className="text-[8px] text-green-400/60 mt-0.5">Prev Day Low</div>
+          <div className="text-[9px] sm:text-[10px] text-green-400/80 font-semibold mb-1">PDL</div>
+          <div className="text-xs sm:text-sm text-green-300 font-bold break-words">{formatPrice(prevDayLow)}</div>
+          <div className="text-[7px] sm:text-[8px] text-green-400/60 mt-0.5">Prev Day Low</div>
         </div>
       </div>
 
