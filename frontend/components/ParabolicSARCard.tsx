@@ -6,7 +6,7 @@ import { TrendingUp, TrendingDown, Minus, Circle, Activity } from 'lucide-react'
 // Simplified interface for Parabolic SAR data (layman perspective)
 interface ParabolicSARData {
   symbol: string;
-  status: 'LIVE' | 'CACHED' | 'OFFLINE';
+  status: 'LIVE' | 'CACHED' | 'OFFLINE' | 'CLOSED' | 'PRE_OPEN' | 'FREEZE';
   current_price: number;
   sar_value: number;
   sar_position: 'BELOW' | 'ABOVE' | 'NEUTRAL';
@@ -178,7 +178,7 @@ const ParabolicSARCard: React.FC<ParabolicSARCardProps> = ({
 
       const sarData: ParabolicSARData = {
         symbol: symbol,
-        status: result.status || 'OFFLINE',
+        status: result.status || 'CLOSED',
         current_price: currentPrice,
         sar_value: parseFloat(indicators.sar_value || 0),
         sar_position: indicators.sar_position || 'NEUTRAL',

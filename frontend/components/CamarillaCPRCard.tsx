@@ -6,7 +6,7 @@ import { TrendingUp, TrendingDown, Minus, Target, Layers } from 'lucide-react';
 // Simplified interface for Camarilla R3/S3 + CPR data (layman perspective)
 interface CamarillaCPRData {
   symbol: string;
-  status: 'LIVE' | 'CACHED' | 'OFFLINE';
+  status: 'LIVE' | 'CACHED' | 'OFFLINE' | 'CLOSED' | 'PRE_OPEN' | 'FREEZE';
   current_price: number;
   camarilla_h3: number; // R3 - Strong resistance (top gate)
   camarilla_l3: number; // S3 - Strong support (bottom gate)
@@ -193,7 +193,7 @@ const CamarillaCPRCard: React.FC<CamarillaCPRCardProps> = ({
 
       const camarillaData: CamarillaCPRData = {
         symbol: symbol,
-        status: result.status || 'OFFLINE',
+        status: result.status || 'CLOSED',
         current_price: currentPrice,
         camarilla_h3: parseFloat(indicators.camarilla_h3 || 0),
         camarilla_l3: parseFloat(indicators.camarilla_l3 || 0),

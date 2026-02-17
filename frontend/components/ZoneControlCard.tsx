@@ -152,8 +152,10 @@ const ZoneControlCard = memo<ZoneControlCardProps>(({ analysis }) => {
               'text-red-300'
             }`}>
               {analysis.status === 'LIVE' ? '🟢 LIVE' : 
-               analysis.status === 'CLOSED' ? '🟡 CLOSED' : 
-               '🔴 OFFLINE'}
+               analysis.status === 'CLOSED' ? '🟡 Market Closed' : 
+               analysis.status === 'PRE_OPEN' ? '🟠 Pre-Open' :
+               analysis.status === 'FREEZE' ? '⏸️ Freeze' :
+               '🔴 Market Closed'}
             </span>
           </div>
         </div>

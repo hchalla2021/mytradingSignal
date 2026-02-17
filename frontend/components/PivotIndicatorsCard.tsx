@@ -6,7 +6,7 @@ import { API_CONFIG } from '@/lib/api-config';
 
 interface PivotData {
   symbol: string;
-  status: 'LIVE' | 'CACHED' | 'OFFLINE' | 'CLOSED';
+  status: 'LIVE' | 'CACHED' | 'OFFLINE' | 'CLOSED' | 'PRE_OPEN' | 'FREEZE';
   current_price: number | null;
   timestamp: string;
   classic_pivots: {
@@ -240,7 +240,7 @@ const PivotIndicatorsCard = memo<Props>(({ symbol, name }) => {
             data.status === 'CACHED' ? 'bg-yellow-400' : 'bg-gray-500'
           }`} />
           <span className="text-[10px] text-gray-400 font-medium">
-            {data.status === 'LIVE' ? 'LIVE' : data.status === 'CACHED' ? 'CACHED' : 'OFFLINE'}
+            {data.status === 'LIVE' ? 'LIVE' : data.status === 'CACHED' ? 'CACHED' : data.status === 'PRE_OPEN' ? 'Pre-Open' : data.status === 'FREEZE' ? 'Freeze' : 'Market Closed'}
           </span>
         </div>
       </div>
@@ -404,7 +404,7 @@ PivotIndicatorsCard.displayName = 'PivotIndicatorsCard';
 
 export default PivotIndicatorsCard;
   // ============================================================================
-  if (!data || (data.status === 'OFFLINE' && !data.current_price) || error) {
+  if (!data || ((data.status === 'OFFLINE' || data.status === 'CLOSED') && !data.current_price) || error) {
     return (
       <div className="bg-gradient-to-br from-slate-900/80 to-slate-800/80 border border-slate-600/50 rounded-xl p-4 shadow-xl">
         <div className="flex items-center justify-between mb-4">
@@ -415,7 +415,7 @@ export default PivotIndicatorsCard;
             <h3 className="font-bold text-slate-200">{name}</h3>
           </div>
           <span className="px-2 py-1 text-[10px] font-bold rounded bg-amber-900/40 text-amber-300 border border-amber-600/40">
-            OFFLINE
+            Market Closed
           </span>
         </div>
         

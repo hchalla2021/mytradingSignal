@@ -6,7 +6,7 @@ import { useAuth } from '@/hooks/useAuth';
 
 interface HeaderProps {
   isConnected: boolean;
-  marketStatus: 'LIVE' | 'PRE_OPEN' | 'CLOSED' | 'OFFLINE';
+  marketStatus: 'LIVE' | 'PRE_OPEN' | 'FREEZE' | 'CLOSED' | 'OFFLINE';
 }
 
 const Header: React.FC<HeaderProps> = memo(({ isConnected, marketStatus }) => {
@@ -115,16 +115,11 @@ const Header: React.FC<HeaderProps> = memo(({ isConnected, marketStatus }) => {
             {(() => {
               const isMarketLive = marketStatus === 'LIVE' && isConnected;
               const isPreOpen = marketStatus === 'PRE_OPEN' && isConnected;
-              const isMarketClosed = marketStatus === 'CLOSED' || marketStatus === 'OFFLINE';
+              const isFreeze = marketStatus === 'FREEZE' && isConnected;
+              const isMarketClosed = marketStatus === 'CLOSED';
               const isDisconnected = !isConnected;
 
-              let statusConfig = {
-                bgClass: '',
-                borderClass: '',
-                dotClass: '',
-                textClass: '',
-                label: ''
-              };
+              let statusConfig;
 
               if (isDisconnected) {
                 statusConfig = {
@@ -132,7 +127,7 @@ const Header: React.FC<HeaderProps> = memo(({ isConnected, marketStatus }) => {
                   borderClass: 'border-rose-400/30',
                   dotClass: 'bg-rose-500',
                   textClass: 'text-rose-400',
-                  label: 'OFFLINE'
+                  label: 'CONNECTION LOST'
                 };
               } else if (isMarketLive) {
                 statusConfig = {
@@ -150,6 +145,14 @@ const Header: React.FC<HeaderProps> = memo(({ isConnected, marketStatus }) => {
                   textClass: 'text-yellow-300',
                   label: 'PRE-OPEN'
                 };
+              } else if (isFreeze) {
+                statusConfig = {
+                  bgClass: 'bg-gradient-to-r from-orange-500/10 to-yellow-500/10',
+                  borderClass: 'border-orange-400/30 shadow-lg shadow-orange-500/10',
+                  dotClass: 'bg-orange-400 animate-pulse shadow-lg shadow-orange-400/50',
+                  textClass: 'text-orange-300',
+                  label: 'FREEZE'
+                };
               } else if (isMarketClosed) {
                 statusConfig = {
                   bgClass: 'bg-gradient-to-r from-amber-500/10 to-orange-500/10',
@@ -158,7 +161,15 @@ const Header: React.FC<HeaderProps> = memo(({ isConnected, marketStatus }) => {
                   textClass: 'text-amber-300',
                   label: 'MARKET CLOSED'
                 };
-
+              } else {
+                // Default fallback - should never happen but ensures label is never blank
+                statusConfig = {
+                  bgClass: 'bg-gradient-to-r from-amber-500/10 to-orange-500/10',
+                  borderClass: 'border-amber-400/30',
+                  dotClass: 'bg-amber-400',
+                  textClass: 'text-amber-300',
+                  label: 'MARKET CLOSED'
+                };
               }
 
               return (

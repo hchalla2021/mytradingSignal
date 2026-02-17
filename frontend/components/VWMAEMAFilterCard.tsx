@@ -5,7 +5,7 @@ import { AnalysisSignal } from '@/types/analysis';
 
 interface VWMAEMAFilterCardProps {
   analysis: AnalysisSignal | null;
-  marketStatus?: 'LIVE' | 'OFFLINE' | 'CLOSED';
+  marketStatus?: 'LIVE' | 'OFFLINE' | 'CLOSED' | 'PRE_OPEN' | 'FREEZE';
   symbol?: string;
 }
 
@@ -15,7 +15,7 @@ interface VWMAEMAFilterCardProps {
  * Shows only essential information: Symbol, Status, Confidence, Signal
  * Dual timeframe: 5-min entry + 15-min trend confirmation
  */
-export const VWMAEMAFilterCard: React.FC<VWMAEMAFilterCardProps> = ({ analysis, marketStatus = 'OFFLINE', symbol = 'INDEX' }) => {
+export const VWMAEMAFilterCard: React.FC<VWMAEMAFilterCardProps> = ({ analysis, marketStatus = 'CLOSED', symbol = 'INDEX' }) => {
 
   // Calculate confidence based on live market data
   const signalAnalysis = useMemo(() => {
@@ -26,13 +26,13 @@ export const VWMAEMAFilterCard: React.FC<VWMAEMAFilterCardProps> = ({ analysis, 
         signalColor: 'bg-amber-500/20 border-amber-500/40 text-amber-300',
         textColor: 'text-amber-300',
         confidence: 30,
-        status: marketStatus || 'OFFLINE'
+        status: marketStatus || 'CLOSED'
       };
     }
 
     const { price, vwma_20, vwap, volume_strength } = analysis.indicators;
     // Use analysis.status if available, otherwise fall back to marketStatus prop
-    const status = analysis.status || marketStatus || 'OFFLINE';
+    const status = analysis.status || marketStatus || 'CLOSED';
     
     if (!price || !vwma_20) {
       return {
@@ -200,7 +200,7 @@ export const VWMAEMAFilterCard: React.FC<VWMAEMAFilterCardProps> = ({ analysis, 
             <span className={`font-bold text-sm ${
               status === 'LIVE' ? 'text-green-300' : status === 'CLOSED' ? 'text-amber-300' : 'text-red-300'
             }`}>
-              {status === 'LIVE' ? '🟢 LIVE' : status === 'CLOSED' ? '🟡 CLOSED' : '🔴 OFFLINE'}
+              {status === 'LIVE' ? '🟢 LIVE' : status === 'CLOSED' ? '🟡 Market Closed' : status === 'PRE_OPEN' ? '🟠 Pre-Open' : status === 'FREEZE' ? '⏸️ Freeze' : '🔴 Market Closed'}
             </span>
           </div>
         </div>

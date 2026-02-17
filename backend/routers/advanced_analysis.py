@@ -194,8 +194,22 @@ async def get_volume_pulse(symbol: str) -> Dict[str, Any]:
         df = await _get_historical_data(symbol, lookback=100)
         print(f"[VOLUME-PULSE] 📊 Received {len(df)} candles")
         
-        if df.empty or len(df) < 10:
-            print(f"[VOLUME-PULSE] ⚠️ INSUFFICIENT DATA - Checking backup cache...")
+        # 🔥 CHECK IF MARKET IS ACTUALLY OPEN for better threshold decision
+        from services.market_feed import is_market_open
+        market_is_open = is_market_open()
+        
+        # 🔥 DYNAMIC THRESHOLD: Lower requirement during live market (early hours may have limited data)
+        min_candles = 5 if market_is_open else 10
+        
+        if df.empty or len(df) < min_candles:
+            print(f"[VOLUME-PULSE] ⚠️ INSUFFICIENT DATA - Need {min_candles}+, got {len(df)}")
+            print(f"[VOLUME-PULSE] ⚠️ {'Market is LIVE' if market_is_open else 'Market is CLOSED'}")
+            print(f"[VOLUME-PULSE] ⚠️ Checking backup cache...")
+            
+            if market_is_open:
+                print(f"[VOLUME-PULSE] ⚠️ MARKET IS LIVE but data fetch failed!")
+                print(f"   → Possible reasons: Zerodha API timeout, rate limit, or early market hours")
+                print(f"   → Using backup cache with LIVE status...")
             
             # 🔥 PERMANENT FIX: Try to get last cached data
             backup_cache_key = f"volume_pulse_backup:{symbol}"
@@ -205,32 +219,35 @@ async def get_volume_pulse(symbol: str) -> Dict[str, Any]:
                 print(f"[VOLUME-PULSE] ✅ Using CACHED data for {symbol}")
                 print(f"   → Showing last successful analysis")
                 print(f"   → Last updated: {backup_data.get('timestamp', 'Unknown')}")
-                backup_data["status"] = "CACHED"
-                backup_data["message"] = "📊 Last Market Session Data (Market Closed)"
-                backup_data["data_status"] = "CACHED"
+                # 🔥 FIX: Set status to LIVE if market is open, even with cached data
+                backup_data["status"] = "LIVE" if market_is_open else "CACHED"
+                backup_data["message"] = f"{'⚡ Live market - Last data' if market_is_open else '📊 Last Market Session Data (Market Closed)'}"
+                backup_data["data_status"] = "PARTIAL" if market_is_open else "CACHED"
                 backup_data["token_valid"] = token_status["valid"]
                 return backup_data
             
-            # No cached data - return sample data to show UI
-            print(f"[VOLUME-PULSE] 🎭 Using SAMPLE data (no backup available)")
+            # No cached data - return neutral data
+            print(f"[VOLUME-PULSE] 🎭 Using NEUTRAL data (no backup available)")
+            from services.market_feed import get_market_status
+            current_market_status = get_market_status()
             return {
                 "symbol": symbol,
                 "volume_data": {
-                    "green_candle_volume": 450000 if symbol == "NIFTY" else 380000,
-                    "red_candle_volume": 320000 if symbol == "NIFTY" else 410000,
-                    "green_percentage": 58.4 if symbol == "NIFTY" else 48.1,
-                    "red_percentage": 41.6 if symbol == "NIFTY" else 51.9,
-                    "ratio": 1.41 if symbol == "NIFTY" else 0.93
+                    "green_candle_volume": 0,
+                    "red_candle_volume": 0,
+                    "green_percentage": 50.0,
+                    "red_percentage": 50.0,
+                    "ratio": 1.0
                 },
-                "pulse_score": 65 if symbol == "NIFTY" else 45,
-                "signal": "BUY" if symbol == "NIFTY" else "SELL",
-                "confidence": 58 if symbol == "NIFTY" else 52,
-                "trend": "BULLISH" if symbol == "NIFTY" else "BEARISH",
-                "status": "CACHED",
-                "data_status": "CACHED",
+                "pulse_score": 50,
+                "signal": "NEUTRAL",
+                "confidence": 0,
+                "trend": "SIDEWAYS",
+                "status": current_market_status,  # Use actual market status (LIVE, PRE_OPEN, FREEZE, or CLOSED)
+                "data_status": "WAITING" if current_market_status in ['LIVE', 'PRE_OPEN', 'FREEZE'] else "NO_DATA",
                 "timestamp": datetime.now().isoformat(),
-                "message": "📊 Last Market Session Data (Market Closed)",
-                "candles_analyzed": 100,
+                "message": "⏳ Waiting for market data..." if current_market_status in ['LIVE', 'PRE_OPEN', 'FREEZE'] else "📊 Market Closed",
+                "candles_analyzed": 0,
                 "token_valid": token_status["valid"]
             }
         
@@ -254,7 +271,9 @@ async def get_volume_pulse(symbol: str) -> Dict[str, Any]:
         result["message"] = f"✅ Live data from Zerodha ({len(df)} candles)"
         result["candles_analyzed"] = len(df)
         result["token_valid"] = token_status["valid"]
-        result["status"] = "LIVE"
+        # 🔥 Use actual market status (PRE_OPEN, FREEZE, LIVE, or CLOSED)
+        from services.market_feed import get_market_status
+        result["status"] = get_market_status()
         
         # 📊 DETAILED INSTANT ANALYSIS RESULTS
         print(f"\n[VOLUME-PULSE] 📈 INSTANT ANALYSIS RESULTS for {symbol}")
@@ -393,10 +412,26 @@ async def get_trend_base(symbol: str) -> Dict[str, Any]:
         print(f"   → Candles received: {len(df)}")
         print(f"   → Data empty: {df.empty}")
         
-        if df.empty or len(df) < 20:
+        # 🔥 CHECK IF MARKET IS ACTUALLY OPEN for better threshold decision
+        from services.market_feed import is_market_open
+        market_is_open = is_market_open()
+        
+        # 🔥 DYNAMIC THRESHOLD: Lower requirement during live market (early hours may have limited data)
+        min_candles = 10 if market_is_open else 20
+        
+        if df.empty or len(df) < min_candles:
             print(f"[TREND-BASE] ⚠️ INSUFFICIENT FRESH DATA for {symbol}")
             print(f"   → Got: {len(df)} candles from Zerodha")
             print(f"   → Checking for cached historical data...")
+            
+            # 🔥 CHECK IF MARKET IS ACTUALLY OPEN
+            from services.market_feed import is_market_open
+            market_is_open = is_market_open()
+            
+            if market_is_open:
+                print(f"[TREND-BASE] ⚠️ MARKET IS LIVE but data fetch failed!")
+                print(f"   → Possible reasons: Zerodha API timeout, rate limit, or early market hours")
+                print(f"   → Using backup cache with LIVE status...")
             
             # 🔥 PERMANENT FIX: Try to get last cached data instead of failing
             backup_cache_key = f"trend_base_backup:{symbol}"
@@ -406,42 +441,42 @@ async def get_trend_base(symbol: str) -> Dict[str, Any]:
                 print(f"[TREND-BASE] ✅ Using CACHED data for {symbol}")
                 print(f"   → Showing last successful analysis")
                 print(f"   → Last updated: {backup_data.get('timestamp', 'Unknown')}")
-                backup_data["status"] = "CACHED"
-                backup_data["message"] = "📊 Last Market Session Data (Market Closed)"
-                backup_data["data_status"] = "CACHED"
+                # 🔥 FIX: Set status to LIVE if market is open, even with cached data
+                backup_data["status"] = "LIVE" if market_is_open else "CACHED"
+                backup_data["message"] = f"{'⚡ Live market - Last data' if market_is_open else '📊 Last Market Session Data (Market Closed)'}"
+                backup_data["data_status"] = "PARTIAL" if market_is_open else "CACHED"
                 return backup_data
             
-            # No cached data - check if token is valid or expired
+            # No cached data - return neutral structure
             print(f"[TREND-BASE] ❌ NO DATA AVAILABLE (fresh or cached)")
             print(f"   → Token Status: {'VALID' if token_status['valid'] else 'EXPIRED'}")
+            print(f"   → Returning NEUTRAL data")
             
-            # Return sample data to show UI working with cached/demo data
-            print(f"   → Returning SAMPLE data to demonstrate UI")
-            base_price = 24500 if symbol == "NIFTY" else 51000 if symbol == "BANKNIFTY" else 80000
-            is_bullish = symbol != "BANKNIFTY"
+            from services.market_feed import get_market_status
+            current_market_status = get_market_status()
             
             return {
                 "symbol": symbol,
                 "structure": {
-                    "type": "HIGHER_HIGH_HIGHER_LOW" if is_bullish else "LOWER_HIGH_LOWER_LOW",
-                    "integrity_score": 75 if is_bullish else 68,
+                    "type": "SIDEWAYS",
+                    "integrity_score": 0,
                     "swing_points": {
-                        "last_high": base_price + 120,
-                        "last_low": base_price - 80,
-                        "prev_high": base_price + 50,
-                        "prev_low": base_price - 100,
-                        "high_diff": 70 if is_bullish else -70,
-                        "low_diff": 20 if is_bullish else -20
+                        "last_high": 0,
+                        "last_low": 0,
+                        "prev_high": 0,
+                        "prev_low": 0,
+                        "high_diff": 0,
+                        "low_diff": 0
                     }
                 },
-                "signal": "BUY" if is_bullish else "SELL",
-                "confidence": 72 if is_bullish else 65,
-                "trend": "STRONG_UPTREND" if is_bullish else "DOWNTREND",
-                "status": "CACHED",
-                "data_status": "CACHED",
+                "signal": "NEUTRAL",
+                "confidence": 0,
+                "trend": "SIDEWAYS",
+                "status": current_market_status,  # Use actual market status (LIVE, PRE_OPEN, FREEZE, or CLOSED)
+                "data_status": "WAITING" if current_market_status in ['LIVE', 'PRE_OPEN', 'FREEZE'] else "NO_DATA",
                 "timestamp": datetime.now().isoformat(),
-                "message": "📊 Last Market Session Data (Market Closed)" if token_status["valid"] else "🔑 Sample data - Login to see real market data",
-                "candles_analyzed": 100,
+                "message": "⏳ Waiting for market data..." if current_market_status in ['LIVE', 'PRE_OPEN', 'FREEZE'] else "📊 Market Closed",
+                "candles_analyzed": 0,
                 "token_valid": token_status["valid"]
             }
         
@@ -504,17 +539,20 @@ async def get_trend_base(symbol: str) -> Dict[str, Any]:
             print(f"   → Is recent (< 1 hour): {is_recent}")
         
         # If market is LIVE or PRE_OPEN and data is recent, mark as LIVE
-        if market_status in ['LIVE', 'PRE_OPEN'] and (is_recent or len(df) > 0):
+        if market_status in ['LIVE', 'PRE_OPEN', 'FREEZE'] and (is_recent or len(df) > 0):
             result["message"] = f"✅ LIVE market analysis ({len(df)} candles)"
             result["data_status"] = "LIVE"
+            result["status"] = market_status  # Return actual market status (LIVE, PRE_OPEN, or FREEZE)
             print(f"[TREND-BASE] ✅ Status: LIVE DATA (market {market_status})")
         elif is_recent:
             result["message"] = f"✅ Recent data from Zerodha ({len(df)} candles)"
             result["data_status"] = "LIVE"
+            result["status"] = market_status
             print(f"[TREND-BASE] ✅ Status: LIVE DATA (recent candles)")
         else:
             result["message"] = f"📊 Historical data ({len(df)} candles) - Market closed"
             result["data_status"] = "HISTORICAL"
+            result["status"] = "CLOSED"
             print(f"[TREND-BASE] 📊 Status: HISTORICAL DATA (market closed)")
         
         result["candles_analyzed"] = len(df)
@@ -927,7 +965,7 @@ async def _get_historical_data_extended(symbol: str, lookback: int = 100, days_b
         print(f"   → Interval: 5minute (OPTIMIZED for speed)")
         print(f"   → Target candles: {lookback}")
         
-        # 🚀 OPTIMIZED: 5-min candles (faster than 3-min) + 6s timeout
+        # 🚀 OPTIMIZED: 5-min candles (faster than 3-min) + 15s timeout (increased for reliability)
         try:
             data = await asyncio.wait_for(
                 asyncio.to_thread(
@@ -937,58 +975,21 @@ async def _get_historical_data_extended(symbol: str, lookback: int = 100, days_b
                     to_date=to_date,
                     interval="5minute"  # ⚡ Changed from 3-min to 5-min for faster API response
                 ),
-                timeout=6.0  # ⚡ Reduced from 10s to 6s for faster timeout
+                timeout=15.0  # ⚡ Increased from 6s to 15s - Zerodha API can be slow during market hours
             )
         except asyncio.TimeoutError:
-            print(f"[DATA-FETCH-EXT] ⏱️ TIMEOUT: Zerodha API took >6s for {symbol}")
+            print(f"[DATA-FETCH-EXT] ⏱️ TIMEOUT: Zerodha API took >15s for {symbol}")
+            print(f"[DATA-FETCH-EXT] ⚠️ This usually happens during high market activity or network issues")
             data = None
         except Exception as api_error:
             print(f"[DATA-FETCH-EXT] ❌ Zerodha API error: {api_error}")
+            print(f"[DATA-FETCH-EXT] ⚠️ Possible reasons: Token expired, Rate limit, Network issue")
             data = None
         
         if not data:
-            print(f"[DATA-FETCH-EXT] ⚠️ No data received from Zerodha for {symbol}")
-            print(f"   → Market likely closed - Attempting fallback to cached OHLC...")
-            
-            # 🔥 FALLBACK: Use last cached OHLC data
-            try:
-                cache = get_cache()
-                cached_market_data = await cache.get_market_data(symbol)
-                
-                if cached_market_data:
-                    # Check if we have price data (can be 'price' or 'last_price')
-                    price = cached_market_data.get('price') or cached_market_data.get('last_price')
-                    if price:
-                        print(f"[DATA-FETCH-FALLBACK] ✅ Found cached data for {symbol}")
-                        print(f"   → Price: ₹{price:.2f}")
-                        
-                        # Extract OHLC - handle both nested and flat structures
-                        ohlc_nested = cached_market_data.get('ohlc', {})
-                        open_price = cached_market_data.get('open') or ohlc_nested.get('open') or price
-                        high_price = cached_market_data.get('high') or ohlc_nested.get('high') or price
-                        low_price = cached_market_data.get('low') or ohlc_nested.get('low') or price
-                        close_price = cached_market_data.get('close') or ohlc_nested.get('close') or price
-                        
-                        # Create single-row DataFrame from cached OHLC
-                        df = pd.DataFrame([{
-                            'date': datetime.now(timezone.utc),
-                            'open': open_price,
-                            'high': high_price,
-                            'low': low_price,
-                            'close': close_price,
-                            'volume': cached_market_data.get('volume', 0)
-                        }])
-                        
-                        print(f"[DATA-FETCH-FALLBACK] ✅ Created synthetic candle from cached data")
-                        print(f"   → OHLC: {df['open'].iloc[0]:.2f} / {df['high'].iloc[0]:.2f} / {df['low'].iloc[0]:.2f} / {df['close'].iloc[0]:.2f}")
-                        return df
-            except Exception as fallback_error:
-                print(f"[DATA-FETCH-FALLBACK] ❌ Could not use cached data: {fallback_error}")
-                import traceback
-                traceback.print_exc()
-            
-            # No data available at all
-            print(f"   → No cached fallback data available")
+            print(f"[DATA-FETCH-EXT] ❌ NO LIVE DATA from Zerodha for {symbol}")
+            print(f"   → Market likely CLOSED (no fallback to dummy/cached data)")
+            print(f"   → Analysis requires LIVE market data only")
             return pd.DataFrame()
         
         print(f"[DATA-FETCH-EXT] ✅ Received {len(data)} candles from Zerodha")
@@ -1029,45 +1030,7 @@ async def _get_historical_data_extended(symbol: str, lookback: int = 100, days_b
         print(f"[DATA-FETCH-EXT] ❌ Error fetching historical data:")
         print(f"   → Error Type: {type(e).__name__}")
         print(f"   → Error Message: {error_msg}")
-        
-        # 🔥 FALLBACK: Use last cached OHLC data if Zerodha API fails
-        print(f"[DATA-FETCH-FALLBACK] Attempting to use last cached market data...")
-        try:
-            cache = get_cache()
-            cached_market_data = await cache.get_market_data(symbol)
-            
-            if cached_market_data:
-                # Check if we have price data (can be 'price' or 'last_price')
-                price = cached_market_data.get('price') or cached_market_data.get('last_price')
-                if price:
-                    print(f"[DATA-FETCH-FALLBACK] ✅ Found cached data for {symbol}")
-                    print(f"   → Price: ₹{price:.2f}")
-                    
-                    # Extract OHLC - handle both nested and flat structures
-                    ohlc_nested = cached_market_data.get('ohlc', {})
-                    open_price = cached_market_data.get('open') or ohlc_nested.get('open') or price
-                    high_price = cached_market_data.get('high') or ohlc_nested.get('high') or price
-                    low_price = cached_market_data.get('low') or ohlc_nested.get('low') or price
-                    close_price = cached_market_data.get('close') or ohlc_nested.get('close') or price
-                    
-                    # Create a single-row DataFrame from cached OHLC
-                    # This allows analysis to run with at least today's data
-                    df = pd.DataFrame([{
-                        'date': datetime.now(timezone.utc),
-                        'open': open_price,
-                        'high': high_price,
-                        'low': low_price,
-                        'close': close_price,
-                        'volume': cached_market_data.get('volume', 0)
-                    }])
-                    
-                    print(f"[DATA-FETCH-FALLBACK] ✅ Created synthetic candle from cached data")
-                    print(f"   → OHLC: {df['open'].iloc[0]:.2f} / {df['high'].iloc[0]:.2f} / {df['low'].iloc[0]:.2f} / {df['close'].iloc[0]:.2f}")
-                    return df
-        except Exception as fallback_error:
-            print(f"[DATA-FETCH-FALLBACK] ❌ Could not use cached data: {fallback_error}")
-            import traceback
-            traceback.print_exc()
+        print(f"   → NO FALLBACK TO DUMMY DATA - LIVE DATA ONLY REQUIRED")
         
         # Specific error handling
         if "api_key" in error_msg.lower() or "access_token" in error_msg.lower():
@@ -1268,49 +1231,41 @@ async def get_zone_control(symbol: str) -> Dict[str, Any]:
             
             # No cached data - provide helpful error with clear fix
             print(f"[ZONE-CONTROL] ❌ NO DATA AVAILABLE (fresh or cached)")
-            print(f"   → Token Status: Likely EXPIRED")
+            print(f"   → Token Status: {'VALID' if token_status['valid'] else 'EXPIRED'}")
             print(f"   → Solution: Click 🔑 LOGIN button in app")
             
-            # Get current market price from live tick cache
-            from services.cache import CacheService
-            cache_svc = CacheService()
-            await cache_svc.connect()
-            tick_data = await cache_svc.get_market_data(symbol)
-            await cache_svc.disconnect()
-            current_price = tick_data.get('price', 0.0) if tick_data else 0.0
-            
-            # Return sample data to demonstrate UI
-            print(f"   → Returning SAMPLE data to demonstrate UI")
-            base_price = current_price if current_price > 0 else (24500 if symbol == "NIFTY" else 51000 if symbol == "BANKNIFTY" else 80000)
-            is_bullish = symbol != "BANKNIFTY"
+            # 🚀 PRODUCTION: Return error instead of sample data
+            # Force user to authenticate - no dummy data in production
+            from services.market_feed import get_market_status
+            current_market_status = get_market_status()
             
             return {
                 "symbol": symbol,
-                "current_price": base_price,
+                "current_price": 0,
                 "zones": {
-                    "support": [{"level": base_price - 150, "strength": 85, "touches": 4}],
-                    "resistance": [{"level": base_price + 200, "strength": 78, "touches": 3}]
+                    "support": [],
+                    "resistance": []
                 },
                 "nearest_zones": {
-                    "support": {"level": base_price - 150, "distance_pct": -0.61, "strength": 85, "touches": 4},
-                    "resistance": {"level": base_price + 200, "distance_pct": 0.82, "strength": 78, "touches": 3}
+                    "support": None,
+                    "resistance": None
                 },
                 "risk_metrics": {
-                    "breakdown_risk": 25 if is_bullish else 65,
-                    "bounce_probability": 75 if is_bullish else 35,
-                    "zone_strength": "STRONG" if is_bullish else "MODERATE"
+                    "breakdown_risk": 0,
+                    "bounce_probability": 0,
+                    "zone_strength": "UNKNOWN"
                 },
-                "breakdown_risk": 25 if is_bullish else 65,
-                "bounce_probability": 75 if is_bullish else 35,
-                "zone_strength": "STRONG" if is_bullish else "MODERATE",
-                "signal": "BUY" if is_bullish else "SELL",
-                "confidence": 68 if is_bullish else 62,
-                "recommendation": "Strong support nearby - Look for BUY" if is_bullish else "Resistance overhead - Consider SELL",
-                "status": "CACHED",
-                "data_status": "CACHED",
+                "breakdown_risk": 0,
+                "bounce_probability": 0,
+                "zone_strength": "UNKNOWN",
+                "signal": "NEUTRAL",
+                "confidence": 0,
+                "recommendation": "🔑 Login to Zerodha to see live analysis" if not token_status["valid"] else "⏳ Waiting for market data",
+                "status": current_market_status,
+                "data_status": "NO_DATA",
                 "timestamp": datetime.now().isoformat(),
-                "message": "📊 Last Market Session Data (Market Closed)" if token_status["valid"] else "🔑 Sample data - Login to see real market data",
-                "candles_analyzed": 100,
+                "message": "🔑 Login to Zerodha to see live analysis" if not token_status["valid"] else "⏳ Waiting for live market data",
+                "candles_analyzed": 0,
                 "token_valid": token_status["valid"]
             }
         
@@ -1348,17 +1303,17 @@ async def get_zone_control(symbol: str) -> Dict[str, Any]:
             print(f"   → Is recent (< 1 hour): {is_recent}")
         
         # If market is LIVE or PRE_OPEN and data is recent, mark as LIVE
-        if market_status in ['LIVE', 'PRE_OPEN'] and (is_recent or len(df) > 0):
+        if market_status in ['LIVE', 'PRE_OPEN', 'FREEZE'] and (is_recent or len(df) > 0):
             result["message"] = f"✅ LIVE market analysis ({len(df)} candles)"
-            result["status"] = "LIVE"
+            result["status"] = market_status  # Return actual market status (LIVE, PRE_OPEN, or FREEZE)
             print(f"[ZONE-CONTROL] ✅ Status: LIVE DATA (market {market_status})")
         elif is_recent:
             result["message"] = f"✅ Recent data from Zerodha ({len(df)} candles)"
-            result["status"] = "LIVE"
+            result["status"] = market_status
             print(f"[ZONE-CONTROL] ✅ Status: LIVE DATA (recent candles)")
         else:
             result["message"] = f"📊 Historical data ({len(df)} candles) - Market closed"
-            result["status"] = "HISTORICAL"
+            result["status"] = "CLOSED"
             print(f"[ZONE-CONTROL] 📊 Status: HISTORICAL DATA (market closed)")
         
         result["candles_analyzed"] = len(df)

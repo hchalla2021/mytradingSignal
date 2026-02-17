@@ -10,7 +10,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from config import get_settings
 from services.websocket_manager import manager
 from services.market_feed import MarketFeedService
-from services.mock_market_feed import MockMarketFeedService
 from services.cache import CacheService
 from services.token_watcher import start_token_watcher
 from services.auth_state_machine import auth_state_manager
@@ -34,7 +33,7 @@ if sys.platform == "win32":
 
 settings = get_settings()
 
-market_feed: MarketFeedService | MockMarketFeedService | None = None
+market_feed: MarketFeedService | None = None
 
 
 @asynccontextmanager
@@ -105,16 +104,14 @@ async def lifespan(app: FastAPI):
     from routers import diagnostics as diagnostics_module
     diagnostics_module.set_cache_instance(cache)
 
-    # 🔥 MARKET FEED DECISION: Check authentication status
-    # If Zerodha is authenticated → Use live feed
-    # If NOT authenticated → Use mock feed for demos/testing
-    if auth_state_manager.is_authenticated:
-        print("\n✅ Using LIVE Zerodha Market Feed")
-        market_feed = MarketFeedService(cache, manager)
-    else:
-        print("\n🎭 Using MOCK Market Feed (no Zerodha authentication)")
-        print("   💡 To use LIVE data: Set up Zerodha authentication")
-        market_feed = MockMarketFeedService(cache, manager)
+    # 🔥 PRODUCTION MARKET FEED: Always use LIVE Zerodha feed
+    # If not authenticated, feed won't start but API will serve cached/error data
+    # This prevents any mock/test data in production
+    print("\n✅ Using LIVE Zerodha Market Feed (Production Mode)")
+    if not auth_state_manager.is_authenticated:
+        print("   ⚠️  Not authenticated - Feed will not start until you login")
+        print("   💡 Click 🔑 LOGIN in the app to authenticate with Zerodha")
+    market_feed = MarketFeedService(cache, manager)
 
     # Token watcher (file system monitor for .env changes)
     token_observer = start_token_watcher(market_feed, auth_state_manager)

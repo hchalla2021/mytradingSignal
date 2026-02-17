@@ -121,7 +121,7 @@ export default function ProductionLiveStatus({
         
       default:
         return {
-          text: 'OFFLINE',
+          text: 'Connection Lost',
           description: 'Not connected',
           bgColor: 'bg-gray-900/40',
           borderColor: 'border-gray-500/60',

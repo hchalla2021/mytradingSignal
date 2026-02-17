@@ -371,7 +371,7 @@ class MarketFeedService:
             market_structure = await calculate_market_structure_from_cache(self.cache, data["symbol"], data)
             data.update(market_structure)  # Merge market structure data into tick_data
             
-            analysis_result = InstantSignal.analyze_tick(data)
+            analysis_result = await InstantSignal.analyze_tick(data)
             if analysis_result:
                 data["analysis"] = analysis_result
                 # Log only occasionally to reduce spam

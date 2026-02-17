@@ -5,10 +5,13 @@ Blazing fast, always works, production-ready
 """
 
 from typing import Dict, Any, Optional, List
-from datetime import datetime
+from datetime import datetime, timedelta
 import asyncio
 import json
+import pandas as pd
+from kiteconnect import KiteConnect
 from .intraday_entry_filter import ParabolicSARFilter
+from config import get_settings
 
 
 def calculate_ema(closes: List[float], period: int) -> float:
@@ -35,6 +38,195 @@ def calculate_ema(closes: List[float], period: int) -> float:
         ema = (closes[i] * multiplier) + (ema * (1 - multiplier))
     
     return ema
+
+
+def calculate_rsi_from_df(df: pd.DataFrame, period: int = 14) -> float:
+    """
+    Calculate RSI from DataFrame with 'close' column
+    Returns RSI value (0-100) or 50 if insufficient data
+    """
+    try:
+        if df.empty or len(df) < period + 1:
+            return 50.0
+        
+        # Calculate price changes
+        delta = df['close'].diff()
+        
+        # Separate gains and losses
+        gain = delta.where(delta > 0, 0)
+        loss = -delta.where(delta < 0, 0)
+        
+        # Calculate average gain and loss
+        avg_gain = gain.rolling(window=period, min_periods=period).mean()
+        avg_loss = loss.rolling(window=period, min_periods=period).mean()
+        
+        # Calculate RS and RSI
+        rs = avg_gain / avg_loss
+        rsi = 100 - (100 / (1 + rs))
+        
+        # Return latest RSI value
+        latest_rsi = rsi.iloc[-1]
+        return latest_rsi if not pd.isna(latest_rsi) else 50.0
+        
+    except Exception as e:
+        print(f"⚠️ RSI calculation error: {e}")
+        return 50.0
+
+
+def get_rsi_signal_label(rsi: float) -> str:
+    """Map RSI value to signal label"""
+    if rsi < 30:
+        return 'OVERSOLD'
+    elif rsi < 40:
+        return 'WEAK'
+    elif rsi < 60:
+        return 'NEUTRAL'
+    elif rsi < 70:
+        return 'STRONG'
+    else:
+        return 'OVERBOUGHT'
+
+
+# Cache for RSI calculations (symbol -> {data, timestamp})
+_rsi_cache: Dict[str, Dict] = {}
+_RSI_CACHE_TTL = 60  # 1 minute cache (refresh every minute during market hours)
+
+async def fetch_dual_rsi_from_cache(symbol: str, cache) -> Dict[str, Any]:
+    """
+    Calculate 5-min and 15-min RSI from CACHED candles (from WebSocket feed)
+    NO API CALLS - Uses existing live market data already in cache
+    Returns dict with rsi_5m, rsi_15m, and signal labels
+    """
+    global _rsi_cache
+    
+    # Check cache first
+    now = datetime.now()
+    if symbol in _rsi_cache:
+        cached_data = _rsi_cache[symbol]
+        cache_age = (now - cached_data['timestamp']).total_seconds()
+        if cache_age < _RSI_CACHE_TTL:
+            return cached_data['data']
+    
+    try:
+        # Get cached candles from WebSocket feed (already stored by websocket_integration)
+        candle_key = f"analysis_candles:{symbol}"
+        candles_json = await cache.lrange(candle_key, 0, 199)  # Get last 200 candles
+        
+        if not candles_json or len(candles_json) < 30:
+            # Not enough data - return neutral
+            print(f"⚠️ [{symbol}] RSI: Insufficient cached candles ({len(candles_json) if candles_json else 0})")
+            return {
+                'rsi_5m': 50.0,
+                'rsi_15m': 50.0,
+                'rsi_5m_signal': 'NEUTRAL',
+                'rsi_15m_signal': 'NEUTRAL',
+                'rsi_momentum_status': 'NEUTRAL',
+                'rsi_momentum_confidence': 50.0
+            }
+        
+        # Parse candles (newest first from cache)
+        candles = []
+        for candle_json in reversed(candles_json):  # Reverse to get oldest first
+            try:
+                candles.append(json.loads(candle_json))
+            except:
+                continue
+        
+        if len(candles) < 30:
+            return {
+                'rsi_5m': 50.0,
+                'rsi_15m': 50.0,
+                'rsi_5m_signal': 'NEUTRAL',
+                'rsi_15m_signal': 'NEUTRAL',
+                'rsi_momentum_status': 'NEUTRAL',
+                'rsi_momentum_confidence': 50.0
+            }
+        
+        # Build DataFrames from cached candles (these are already 5-minute candles)
+        df_5m = pd.DataFrame(candles)
+        
+        # Build 15-minute candles by aggregating 3x 5-minute candles
+        df_15m_data = []
+        for i in range(0, len(candles) - 2, 3):  # Every 3 candles = 15 minutes
+            chunk = candles[i:i+3]
+            if len(chunk) == 3:
+                df_15m_data.append({
+                    'open': chunk[0]['open'],
+                    'high': max(c['high'] for c in chunk),
+                    'low': min(c['low'] for c in chunk),
+                    'close': chunk[-1]['close'],
+                    'volume': sum(c.get('volume', 0) for c in chunk)
+                })
+        df_15m = pd.DataFrame(df_15m_data)
+        
+        # Calculate RSI
+        rsi_5m = calculate_rsi_from_df(df_5m, period=14)
+        rsi_15m = calculate_rsi_from_df(df_15m, period=14)
+        
+        # Get signal labels
+        rsi_5m_signal = get_rsi_signal_label(rsi_5m)
+        rsi_15m_signal = get_rsi_signal_label(rsi_15m)
+        
+        # Calculate combined confidence
+        confidence = 50
+        status = 'NEUTRAL'
+        
+        # Timeframe alignment bonus
+        if rsi_5m_signal == rsi_15m_signal:
+            confidence += 25
+        
+        # RSI level strength
+        avg_rsi = (rsi_5m + rsi_15m) / 2
+        if avg_rsi < 25 or avg_rsi > 75:
+            confidence += 20
+        elif avg_rsi < 35 or avg_rsi > 65:
+            confidence += 10
+        
+        # Determine status
+        if rsi_5m < 30 and rsi_15m < 40:
+            status = 'STRONG_BUY'
+            confidence = min(95, confidence + 10)
+        elif (rsi_5m < 40 and rsi_15m < 50) or rsi_5m < 35:
+            status = 'BUY'
+        elif rsi_5m > 70 and rsi_15m > 60:
+            status = 'STRONG_SELL'
+            confidence = min(95, confidence + 10)
+        elif (rsi_5m > 60 and rsi_15m > 50) or rsi_5m > 65:
+            status = 'SELL'
+        
+        confidence = max(30, min(100, confidence))
+        
+        print(f"📊 [{symbol}] RSI (CACHED): 5m={rsi_5m:.1f}({rsi_5m_signal}), 15m={rsi_15m:.1f}({rsi_15m_signal}) → {status} ({confidence}%)")
+        
+        result = {
+            'rsi_5m': round(rsi_5m, 1),
+            'rsi_15m': round(rsi_15m, 1),
+            'rsi_5m_signal': rsi_5m_signal,
+            'rsi_15m_signal': rsi_15m_signal,
+            'rsi_momentum_status': status,
+            'rsi_momentum_confidence': round(confidence, 0)
+        }
+        
+        # Cache the result
+        _rsi_cache[symbol] = {
+            'data': result,
+            'timestamp': datetime.now()
+        }
+        
+        return result
+        
+    except Exception as e:
+        print(f"❌ RSI calculation error for {symbol}: {e}")
+        import traceback
+        traceback.print_exc()
+        return {
+            'rsi_5m': 50.0,
+            'rsi_15m': 50.0,
+            'rsi_5m_signal': 'NEUTRAL',
+            'rsi_15m_signal': 'NEUTRAL',
+            'rsi_momentum_status': 'NEUTRAL',
+            'rsi_momentum_confidence': 50.0
+        }
 
 
 def calculate_atr(candles: List[Dict[str, float]], period: int = 10) -> float:
@@ -344,7 +536,7 @@ class InstantSignal:
     """Lightning-fast signal generator using only current tick"""
     
     @staticmethod
-    def analyze_tick(tick_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    async def analyze_tick(tick_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """
         INSTANT analysis from single tick - ULTRA FAST
         Returns signal in milliseconds
@@ -370,6 +562,18 @@ class InstantSignal:
             oi = int(tick_data.get('oi', 0))
             oi_change = float(tick_data.get('oi_change', 0))
             trend = tick_data.get('trend', 'neutral')
+            instrument_token = tick_data.get('instrument_token', 0)
+            
+            # Fetch dual-timeframe RSI from CACHE (uses WebSocket candles - NO API calls!)
+            try:
+                dual_rsi = await fetch_dual_rsi_from_cache(symbol, cache)
+            except Exception as e:
+                print(f"⚠️ RSI calculation skipped for {symbol}: {e}")
+                dual_rsi = {
+                    'rsi_5m': 50.0, 'rsi_15m': 50.0, 'rsi_5m_signal': 'NEUTRAL',
+                   'rsi_15m_signal': 'NEUTRAL', 'rsi_momentum_status': 'NEUTRAL',
+                    'rsi_momentum_confidence': 50.0
+                }
             
             # Debug logging for OHLC values
             print(f"\n[INSTANT-ANALYSIS] {symbol} OHLC DATA:")
@@ -742,47 +946,82 @@ class InstantSignal:
             
             has_high_volume = volume_above_threshold
             has_strong_body = candle_strength > 0.30  # >30% of range is strong
+            has_moderate_body = candle_strength > 0.15  # >15% of range is moderate
+            
+            # Debug logging for candle quality
+            print(f"🕯️ [{symbol}] Candle Quality: Direction={candle_direction} | Body={candle_strength:.1%} | Volume={'HIGH' if has_high_volume else 'LOW'} | Momentum={momentum_score:.0f}")
             
             if candle_direction == 'BULLISH':
+                # Tier 1: Strong conviction moves (high volume + strong body + momentum)
                 if has_high_volume and has_strong_body and momentum_score > 60:
                     candle_quality_signal = 'STRONG_BUY'
-                    candle_quality_confidence = min(0.95, 0.60 + (momentum_score - 60) / 100)
-                elif has_high_volume and has_strong_body and momentum_score > 50:
+                    candle_quality_confidence = min(0.95, 0.70 + (momentum_score - 60) / 100)
+                    print(f"✅ [{symbol}] STRONG_BUY candle (conviction move)")
+                # Tier 2: Good quality bullish (high volume + body OR strong body + momentum)
+                elif (has_high_volume and has_strong_body) or (has_strong_body and momentum_score > 55):
                     candle_quality_signal = 'BUY'
-                    candle_quality_confidence = min(0.85, 0.50 + (momentum_score - 50) / 100)
+                    candle_quality_confidence = min(0.85, 0.55 + (momentum_score - 50) / 100)
+                    print(f"💡 [{symbol}] BUY candle (good quality)")
+                # Tier 3: Moderate quality (moderate body + bullish direction)
+                elif has_moderate_body and momentum_score > 50:
+                    candle_quality_signal = 'BUY'
+                    candle_quality_confidence = min(0.70, 0.45 + (momentum_score - 50) / 100)
+                # Tier 4: Weak bullish (direction same as momentum, but weak body)
                 elif momentum_score > 55:
                     candle_quality_signal = 'BUY'
-                    candle_quality_confidence = min(0.70, 0.40 + (momentum_score - 55) / 100)
+                    candle_quality_confidence = min(0.60, 0.35 + (momentum_score - 55) / 100)
                 else:
                     candle_quality_signal = 'NEUTRAL'
                     candle_quality_confidence = 0.40
             
             elif candle_direction == 'BEARISH':
+                # Tier 1: Strong conviction sell (high volume + strong body + bearish momentum)
                 if has_high_volume and has_strong_body and momentum_score < 40:
                     candle_quality_signal = 'STRONG_SELL'
-                    candle_quality_confidence = min(0.95, 0.60 + (40 - momentum_score) / 100)
-                elif has_high_volume and has_strong_body and momentum_score < 50:
+                    candle_quality_confidence = min(0.95, 0.70 + (40 - momentum_score) / 100)
+                    print(f"✅ [{symbol}] STRONG_SELL candle (conviction move)")
+                # Tier 2: Good quality bearish (high volume + body OR strong body + bearish momentum)
+                elif (has_high_volume and has_strong_body) or (has_strong_body and momentum_score < 45):
                     candle_quality_signal = 'SELL'
-                    candle_quality_confidence = min(0.85, 0.50 + (50 - momentum_score) / 100)
+                    candle_quality_confidence = min(0.85, 0.55 + (50 - momentum_score) / 100)
+                    print(f"💡 [{symbol}] SELL candle (good quality)")
+                # Tier 3: Moderate quality (moderate body + bearish direction)
+                elif has_moderate_body and momentum_score < 50:
+                    candle_quality_signal = 'SELL'
+                    candle_quality_confidence = min(0.70, 0.45 + (50 - momentum_score) / 100)
+                # Tier 4: Weak bearish (direction same as momentum, but weak body)
                 elif momentum_score < 45:
                     candle_quality_signal = 'SELL'
-                    candle_quality_confidence = min(0.70, 0.40 + (45 - momentum_score) / 100)
+                    candle_quality_confidence = min(0.60, 0.35 + (45 - momentum_score) / 100)
                 else:
                     candle_quality_signal = 'NEUTRAL'
                     candle_quality_confidence = 0.40
             
             else:  # DOJI
-                # Doji in bullish momentum => potential bounce
-                if momentum_score > 60 and price < high * 0.99:
+                # Doji candles often signal indecision or reversal
+                # In trending markets, they can be continuation signals
+                # Doji in bullish momentum with high volume => potential continuation buy
+                if has_high_volume and momentum_score > 60:
                     candle_quality_signal = 'BUY'
-                    candle_quality_confidence = min(0.65, 0.45 + (momentum_score - 60) / 100)
-                # Doji in bearish momentum => potential reversal down
-                elif momentum_score < 40 and price > low * 1.01:
+                    candle_quality_confidence = min(0.70, 0.50 + (momentum_score - 60) / 100)
+                # Doji in bearish momentum with high volume => potential continuation sell
+                elif has_high_volume and momentum_score < 40:
                     candle_quality_signal = 'SELL'
-                    candle_quality_confidence = min(0.65, 0.45 + (40 - momentum_score) / 100)
+                    candle_quality_confidence = min(0.70, 0.50 + (40 - momentum_score) / 100)
+                # Doji in bullish trend (no high volume) => moderate buy
+                elif momentum_score > 55 and price < high * 0.99:
+                    candle_quality_signal = 'BUY'
+                    candle_quality_confidence = min(0.60, 0.40 + (momentum_score - 55) / 100)
+                # Doji in bearish trend (no high volume) => moderate sell
+                elif momentum_score < 45 and price > low * 1.01:
+                    candle_quality_signal = 'SELL'
+                    candle_quality_confidence = min(0.60, 0.40 + (45 - momentum_score) / 100)
                 else:
                     candle_quality_signal = 'NEUTRAL'
                     candle_quality_confidence = 0.35
+            
+            # Final logging
+            print(f"📊 [{symbol}] Candle Signal: {candle_quality_signal} ({candle_quality_confidence:.0%} confidence)")
             
             # ============================================
             # SMART MONEY FLOW - ORDER STRUCTURE SIGNAL
@@ -803,18 +1042,48 @@ class InstantSignal:
                     curr_price = price
                     curr_close = tick_data.get('close', curr_price)
                     curr_open = tick_data.get('open', curr_price)
+                    curr_high = high
+                    curr_low = low
                     
-                    # Simple heuristic: if close > open, it's a buy candle, else sell
-                    if curr_close > curr_open and curr_volume > 0:
-                        # Bullish candle = more buying
-                        buy_volume_ratio = min(75, 50 + (curr_volume / max(curr_volume, 10000) * 25))
-                    elif curr_close < curr_open and curr_volume > 0:
-                        # Bearish candle = more selling
-                        buy_volume_ratio = max(25, 50 - (curr_volume / max(curr_volume, 10000) * 25))
+                    # Enhanced heuristic based on candle pattern + range
+                    candle_body = abs(curr_close - curr_open)
+                    candle_range = curr_high - curr_low
+                    upper_wick = curr_high - max(curr_open, curr_close)
+                    lower_wick = min(curr_open, curr_close) - curr_low
+                    
+                    # Calculate buy pressure based on candle anatomy
+                    if candle_range > 0:
+                        # Strong bullish candle (close >> open, small upper wick)
+                        if curr_close > curr_open:
+                            body_strength = (candle_body / candle_range) * 100
+                            wick_penalty = (upper_wick / candle_range) * 20  # Upper wick reduces buy power
+                            buy_volume_ratio = min(85, 50 + body_strength / 2 - wick_penalty)
+                        # Strong bearish candle (open >> close, small lower wick)
+                        elif curr_close < curr_open:
+                            body_strength = (candle_body / candle_range) * 100
+                            wick_penalty = (lower_wick / candle_range) * 20  # Lower wick reduces sell power
+                            buy_volume_ratio = max(15, 50 - body_strength / 2 + wick_penalty)
+                        else:
+                            # Doji - check wicks for direction
+                            if upper_wick > lower_wick * 1.5:
+                                buy_volume_ratio = 40  # Rejection from high = bearish
+                            elif lower_wick > upper_wick * 1.5:
+                                buy_volume_ratio = 60  # Rejection from low = bullish
+                            else:
+                                buy_volume_ratio = 50  # Neutral
                     else:
-                        # Neutral/no volume
                         buy_volume_ratio = 50
-                except:
+                        
+                    # Volume boost - higher volume increases signal strength
+                    if curr_volume > 0:
+                        volume_boost = min(10, (curr_volume / max(10000, curr_volume)) * 5)
+                        if buy_volume_ratio > 50:
+                            buy_volume_ratio = min(90, buy_volume_ratio + volume_boost)
+                        elif buy_volume_ratio < 50:
+                            buy_volume_ratio = max(10, buy_volume_ratio - volume_boost)
+                            
+                except Exception as vol_calc_err:
+                    print(f"⚠️ Volume ratio calculation error: {vol_calc_err}")
                     buy_volume_ratio = 50
             
             sell_volume_ratio = 100 - buy_volume_ratio
@@ -830,17 +1099,22 @@ class InstantSignal:
             # 2. Price at key institutional levels
             # 3. Momentum alignment
             
-            price_above_vwap = price > vwap_value
-            price_below_vwap = price < vwap_value
+            price_above_vwap = price > vwap_value if vwap_value > 0 else False
+            price_below_vwap = price < vwap_value if vwap_value > 0 else False
             price_above_vwma = price > tick_data.get('vwma_20', price)
+            
+            # Debug logging for smart money calculation
+            print(f"🔍 [{symbol}] Smart Money Flow: Buy={buy_volume_ratio:.1f}% Sell={sell_volume_ratio:.1f}% | Price vs VWAP: {'ABOVE' if price_above_vwap else 'BELOW' if price_below_vwap else 'N/A'} | Vol Threshold: {volume_above_threshold}")
             
             # Tier 1: Strong signals (volume + position + momentum)
             if has_strong_buy_flow and price_above_vwap and volume_above_threshold:
                 smart_money_signal = 'STRONG_BUY'
                 smart_money_confidence = min(0.95, 0.70 + (buy_volume_ratio - 60) / 100)
+                print(f"✅ [{symbol}] STRONG_BUY signal generated (confidence: {smart_money_confidence:.0%})")
             elif has_strong_sell_flow and price_below_vwap and volume_above_threshold:
                 smart_money_signal = 'STRONG_SELL'
                 smart_money_confidence = min(0.95, 0.70 + (sell_volume_ratio - 60) / 100)
+                print(f"✅ [{symbol}] STRONG_SELL signal generated (confidence: {smart_money_confidence:.0%})")
             # Tier 2: Moderate signals (good flow + direction)
             elif has_strong_buy_flow and price_above_vwma:
                 smart_money_signal = 'BUY'
@@ -872,6 +1146,10 @@ class InstantSignal:
                 # NEUTRAL - Balanced market
                 smart_money_signal = 'NEUTRAL'
                 smart_money_confidence = max(0.3, 0.4 + order_flow_imbalance / 200)
+            
+            # Final logging
+            if smart_money_signal not in ['STRONG_BUY', 'STRONG_SELL']:  # Already logged above
+                print(f"💡 [{symbol}] Smart Money: {smart_money_signal} ({smart_money_confidence:.0%} confidence) | Buy:{buy_volume_ratio:.0f}% Sell:{sell_volume_ratio:.0f}%")
             
             # Calculate VWAP properly using OHLC and volume
             # VWAP = (Typical Price × Volume) / Total Volume
@@ -1941,6 +2219,15 @@ class InstantSignal:
                     "rsi_zone": rsi_zone,  # RSI zone (60_ABOVE, 50_TO_60, 40_TO_50, 40_BELOW)
                     "rsi_signal": rsi_signal,  # RSI 60/40 signal (MOMENTUM_BUY, REJECTION_SHORT, PULLBACK_BUY, etc.)
                     "rsi_action": rsi_action,  # Human-readable RSI action description
+                    
+                    # Dual-Timeframe RSI (5-min and 15-min for RSI 60/40 Momentum section)
+                    "rsi_5m": dual_rsi.get('rsi_5m', 50.0),  # Real 5-minute RSI
+                    "rsi_15m": dual_rsi.get('rsi_15m', 50.0),  # Real 15-minute RSI
+                    "rsi_5m_signal": dual_rsi.get('rsi_5m_signal', 'NEUTRAL'),  # 5m signal (OVERSOLD/WEAK/NEUTRAL/STRONG/OVERBOUGHT)
+                    "rsi_15m_signal": dual_rsi.get('rsi_15m_signal', 'NEUTRAL'),  # 15m signal
+                    "rsi_momentum_status": dual_rsi.get('rsi_momentum_status', 'NEUTRAL'),  # Combined signal (STRONG_BUY/BUY/NEUTRAL/SELL/STRONG_SELL)
+                    "rsi_momentum_confidence": dual_rsi.get('rsi_momentum_confidence', 50.0),  # Confidence percentage
+                    
                     "momentum": round(momentum_score, 1),  # Momentum score (0-100)
                     "candle_strength": round(candle_strength / 100, 3),  # As decimal 0-1
                     "candle_direction": candle_direction,  # BULLISH, BEARISH, DOJI
@@ -2132,12 +2419,16 @@ async def get_instant_analysis(cache_service, symbol: str) -> Dict[str, Any]:
         tick_data = await calculate_emas_from_cache(cache_service, symbol, tick_data)
         
         # Instant analysis
-        result = InstantSignal.analyze_tick(tick_data)
+        result = await InstantSignal.analyze_tick(tick_data)
         result['symbol'] = symbol
         
         # Add market status info
         market_status = tick_data.get('status', 'UNKNOWN')
-        result['status'] = 'LIVE' if market_status == 'LIVE' else 'CLOSED' if market_status == 'CLOSED' else 'OFFLINE'
+        # Support PRE_OPEN (9:00-9:07 AM) and FREEZE (9:07-9:15 AM) statuses
+        if market_status in ('PRE_OPEN', 'FREEZE'):
+            result['status'] = market_status
+        else:
+            result['status'] = 'LIVE' if market_status == 'LIVE' else 'CLOSED' if market_status == 'CLOSED' else 'CLOSED'
         
         # Add cache status
         if is_cached:
@@ -2146,10 +2437,19 @@ async def get_instant_analysis(cache_service, symbol: str) -> Dict[str, Any]:
                 "📊 Showing last market data (Token may be expired)"
             ]
             result['_data_source'] = 'BACKUP_CACHE'
-        elif market_status == 'OFFLINE':
-            result['warnings'] = result.get('warnings', []) + [
-                "⏸️ Last traded data"
-            ]
+        elif market_status in ('CLOSED', 'PRE_OPEN', 'FREEZE'):
+            if market_status == 'PRE_OPEN':
+                result['warnings'] = result.get('warnings', []) + [
+                    "🟠 Pre-Open Session (9:00-9:07 AM)"
+                ]
+            elif market_status == 'FREEZE':
+                result['warnings'] = result.get('warnings', []) + [
+                    "⏸️ Price Discovery Phase (9:07-9:15 AM)"
+                ]
+            else:
+                result['warnings'] = result.get('warnings', []) + [
+                    "🔴 Market Closed"
+                ]
             result['_data_source'] = 'LAST_TRADED'
         else:
             result['_data_source'] = 'LIVE'

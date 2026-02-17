@@ -49,6 +49,16 @@ const AnalysisCard = dynamic(() => import('@/components/AnalysisCard').then(mod 
 });
 
 const VWMAEMAFilterCard = dynamic(() => import('@/components/VWMAEMAFilterCard'), { ssr: false });
+const OIMomentumCard = dynamic(() => import('@/components/OIMomentumCard'), { 
+  ssr: false,
+  loading: () => (
+    <div className="bg-dark-surface/60 rounded-xl p-6 animate-pulse border border-emerald-500/20">
+      <div className="h-6 bg-gray-700 rounded mb-4"></div>
+      <div className="h-4 bg-gray-700 rounded mb-2"></div>
+      <div className="h-4 bg-gray-700 rounded w-3/4"></div>
+    </div>
+  )
+});
 const VolumePulseCard = dynamic(() => import('@/components/VolumePulseCard'), { ssr: false });
 const TrendBaseCard = dynamic(() => import('@/components/TrendBaseCard'), { ssr: false });
 const CandleIntentCard = dynamic(() => import('@/components/CandleIntentCard'), { ssr: false });
@@ -824,7 +834,44 @@ export default function Home() {
         </div>
         </div>
 
-        {/* 🏗️ MARKET STRUCTURE - Trader's Perspective (25% Analysis Component) */}
+        {/* � OI MOMENTUM - Pure Data Buy/Sell Signals */}
+        <div className="mt-4 sm:mt-6 border-2 border-purple-500/30 rounded-2xl p-3 sm:p-4 bg-gradient-to-br from-purple-950/20 via-dark-card/50 to-dark-elevated/40 backdrop-blur-sm shadow-xl shadow-purple-500/10">
+          {/* Section Header */}
+          <div className="flex flex-col gap-2 mb-3 sm:mb-4">
+            <div className="flex items-center gap-2 sm:gap-3">
+              <span className="w-1.5 h-6 sm:h-7 bg-gradient-to-b from-purple-400 to-purple-500 rounded-full shadow-lg shadow-purple-500/30" />
+              <h2 className="text-base sm:text-xl lg:text-2xl font-bold text-dark-text tracking-tight whitespace-nowrap">
+                OI Momentum Signals
+              </h2>
+            </div>
+            
+            {/* Strategy Info - Compact */}
+            <div className="ml-4 sm:ml-5 p-2 sm:p-3 bg-slate-900/40 rounded-lg border border-slate-700/30">
+              <div className="flex flex-wrap items-center gap-1 sm:gap-2 text-[9px] sm:text-xs">
+                <span className="px-2 py-1 bg-purple-500/20 border border-purple-500/30 rounded-md text-purple-200 font-bold">
+                  5m Entry Timing
+                </span>
+                <span className="text-slate-600">+</span>
+                <span className="px-2 py-1 bg-indigo-500/20 border border-indigo-500/30 rounded-md text-indigo-200 font-bold">
+                  15m Trend Direction
+                </span>
+                <span className="text-slate-600">=</span>
+                <span className="px-2 py-1 bg-emerald-500/20 border border-emerald-500/30 rounded-md text-emerald-200 font-bold">
+                  Final Signal
+                </span>
+              </div>
+            </div>
+          </div>
+          
+          {/* OI Momentum Cards Grid */}
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 sm:gap-3">
+            <OIMomentumCard symbol="NIFTY" name="NIFTY 50" />
+            <OIMomentumCard symbol="BANKNIFTY" name="BANK NIFTY" />
+            <OIMomentumCard symbol="SENSEX" name="SENSEX" />
+          </div>
+        </div>
+
+        {/* �🏗️ MARKET STRUCTURE - Trader's Perspective (25% Analysis Component) */}
         <div className="mt-6 sm:mt-6 border-2 border-emerald-600/40 rounded-2xl p-3 sm:p-4 bg-gradient-to-br from-emerald-950/20 via-dark-card/50 to-dark-elevated/40 backdrop-blur-sm shadow-xl shadow-emerald-600/15">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-3 sm:mb-4">
             <div>
@@ -884,25 +931,25 @@ export default function Home() {
               symbol_name: 'NIFTY 50',
               smart_money_signal: analyses?.NIFTY?.indicators?.smart_money_signal || 'NEUTRAL',
               smart_money_confidence: analyses?.NIFTY?.indicators?.smart_money_confidence || 0.3,
-              status: analyses?.NIFTY?.status || 'OFFLINE',
+              status: analyses?.NIFTY?.status || marketStatus,
               indicators: analyses?.NIFTY?.indicators
-            }} />
+            }} marketStatus={marketStatus} />
             <InstitutionalMarketView analysis={{
               symbol: 'BANKNIFTY',
               symbol_name: 'BANK NIFTY',
               smart_money_signal: analyses?.BANKNIFTY?.indicators?.smart_money_signal || 'NEUTRAL',
               smart_money_confidence: analyses?.BANKNIFTY?.indicators?.smart_money_confidence || 0.3,
-              status: analyses?.BANKNIFTY?.status || 'OFFLINE',
+              status: analyses?.BANKNIFTY?.status || marketStatus,
               indicators: analyses?.BANKNIFTY?.indicators
-            }} />
+            }} marketStatus={marketStatus} />
             <InstitutionalMarketView analysis={{
               symbol: 'SENSEX',
               symbol_name: 'SENSEX',
               smart_money_signal: analyses?.SENSEX?.indicators?.smart_money_signal || 'NEUTRAL',
               smart_money_confidence: analyses?.SENSEX?.indicators?.smart_money_confidence || 0.3,
-              status: analyses?.SENSEX?.status || 'OFFLINE',
+              status: analyses?.SENSEX?.status || marketStatus,
               indicators: analyses?.SENSEX?.indicators
-            }} />
+            }} marketStatus={marketStatus} />
           </div>
         </div>
 
@@ -928,7 +975,7 @@ export default function Home() {
               symbol_name: 'NIFTY 50',
               candle_quality_signal: analyses?.NIFTY?.indicators?.candle_quality_signal || 'NEUTRAL',
               candle_quality_confidence: analyses?.NIFTY?.indicators?.candle_quality_confidence || 0.3,
-              status: analyses?.NIFTY?.status || 'OFFLINE',
+              status: analyses?.NIFTY?.status || marketStatus,
               indicators: analyses?.NIFTY?.indicators
             }} />
             <CandleQualityAnalysis analysis={{
@@ -936,7 +983,7 @@ export default function Home() {
               symbol_name: 'BANK NIFTY',
               candle_quality_signal: analyses?.BANKNIFTY?.indicators?.candle_quality_signal || 'NEUTRAL',
               candle_quality_confidence: analyses?.BANKNIFTY?.indicators?.candle_quality_confidence || 0.3,
-              status: analyses?.BANKNIFTY?.status || 'OFFLINE',
+              status: analyses?.BANKNIFTY?.status || marketStatus,
               indicators: analyses?.BANKNIFTY?.indicators
             }} />
             <CandleQualityAnalysis analysis={{
@@ -944,7 +991,7 @@ export default function Home() {
               symbol_name: 'SENSEX',
               candle_quality_signal: analyses?.SENSEX?.indicators?.candle_quality_signal || 'NEUTRAL',
               candle_quality_confidence: analyses?.SENSEX?.indicators?.candle_quality_confidence || 0.3,
-              status: analyses?.SENSEX?.status || 'OFFLINE',
+              status: analyses?.SENSEX?.status || marketStatus,
               indicators: analyses?.SENSEX?.indicators
             }} />
           </div>
@@ -1179,6 +1226,22 @@ export default function Home() {
                     }`}>
                       Price: ₹{item.data.indicators.price}
                     </div>
+
+                    {/* Market Status */}
+                    <div className={`flex justify-center p-2 rounded-lg border ${
+                      (item.data?.status || marketStatus) === 'LIVE' ? 'bg-green-500/5 border-green-500/30 text-green-300' :
+                      (item.data?.status || marketStatus) === 'CLOSED' ? 'bg-amber-500/5 border-amber-500/30 text-amber-300' :
+                      (item.data?.status || marketStatus) === 'PRE_OPEN' ? 'bg-orange-500/5 border-orange-500/30 text-orange-300' :
+                      'bg-red-500/5 border-red-500/30 text-red-300'
+                    }`}>
+                      <span className="text-xs font-bold">
+                        {(item.data?.status || marketStatus) === 'LIVE' ? '🟢 LIVE' :
+                         (item.data?.status || marketStatus) === 'CLOSED' ? '🟡 Market Closed' :
+                         (item.data?.status || marketStatus) === 'PRE_OPEN' ? '🟠 Pre-Open' :
+                         (item.data?.status || marketStatus) === 'FREEZE' ? '⏸️ Freeze' :
+                         '🔴 Market Closed'}
+                      </span>
+                    </div>
                   </div>
                 ) : (
                   <div className="flex items-center justify-center py-6 text-white text-sm font-semibold">
@@ -1315,14 +1378,17 @@ export default function Home() {
 
                     {/* Status Badge */}
                     <div className={`flex justify-center p-2 rounded-lg border ${
-                      item.data?.status === 'LIVE' ? 'bg-green-500/5 border-green-500/30 text-green-300' :
-                      item.data?.status === 'CLOSED' ? 'bg-amber-500/5 border-amber-500/30 text-amber-300' :
+                      (item.data?.status || marketStatus) === 'LIVE' ? 'bg-green-500/5 border-green-500/30 text-green-300' :
+                      (item.data?.status || marketStatus) === 'CLOSED' ? 'bg-amber-500/5 border-amber-500/30 text-amber-300' :
+                      (item.data?.status || marketStatus) === 'PRE_OPEN' ? 'bg-orange-500/5 border-orange-500/30 text-orange-300' :
                       'bg-red-500/5 border-red-500/30 text-red-300'
                     }`}>
                       <span className="text-xs font-bold">
-                        {item.data?.status === 'LIVE' ? '🟢 LIVE' :
-                         item.data?.status === 'CLOSED' ? '🟡 CLOSED' :
-                         '🔴 OFFLINE'} {new Date().toLocaleTimeString().split(' ')[0]}
+                        {(item.data?.status || marketStatus) === 'LIVE' ? '🟢 LIVE' :
+                         (item.data?.status || marketStatus) === 'CLOSED' ? '🟡 Market Closed' :
+                         (item.data?.status || marketStatus) === 'PRE_OPEN' ? '🟠 Pre-Open' :
+                         (item.data?.status || marketStatus) === 'FREEZE' ? '⏸️ Freeze' :
+                         '🔴 Market Closed'}
                       </span>
                     </div>
                   </div>
@@ -2388,7 +2454,7 @@ export default function Home() {
                     ? 'bg-cyan-900/60 text-cyan-300 border-2 border-cyan-500/60 shadow-cyan-500/40 animate-pulse' 
                     : 'bg-red-900/60 text-red-300 border-2 border-red-500/60 shadow-red-500/40'
                 }`}>
-                  {marketStatus === 'LIVE' ? '● LIVE' : '● OFFLINE'}
+                  {marketStatus === 'LIVE' ? '● LIVE' : marketStatus === 'PRE_OPEN' ? '● Pre-Open' : marketStatus === 'FREEZE' ? '● Freeze' : '● Market Closed'}
                 </span>
               </h3>
               <p className="text-xs text-gray-300 leading-relaxed mb-2.5">

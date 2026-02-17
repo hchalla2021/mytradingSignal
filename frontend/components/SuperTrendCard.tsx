@@ -224,7 +224,7 @@ const SuperTrendCard = memo(({ symbol, timeframe = '5m' }: SuperTrendCardProps) 
 
   const signal = getSuperTrendSignal(data);
   const confidence = calculateSuperTrendConfidence(data);
-  const marketStatus = data.status || 'OFFLINE';
+  const marketStatus = data.status || 'CLOSED';
 
   const getSignalColor = (sig: string) => {
     if (sig === 'STRONG BUY') return 'text-emerald-400';

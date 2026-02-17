@@ -17,7 +17,7 @@ interface InstagramData {
 
 interface InstitutionalMarketViewProps {
   analysis: InstagramData | null;
-  marketStatus?: 'LIVE' | 'OFFLINE' | 'CLOSED';
+  marketStatus?: 'LIVE' | 'OFFLINE' | 'CLOSED' | 'PRE_OPEN' | 'FREEZE';
 }
 
 /**
@@ -26,7 +26,7 @@ interface InstitutionalMarketViewProps {
  * Shows only: Symbol, Signal, Confidence, Market Status
  * Order flow and institutional positioning based on smart money moves
  */
-const InstitutionalMarketView = memo<InstitutionalMarketViewProps>(({ analysis, marketStatus = 'OFFLINE' }) => {
+const InstitutionalMarketView = memo<InstitutionalMarketViewProps>(({ analysis, marketStatus = 'CLOSED' }) => {
 
   const signalAnalysis = useMemo(() => {
     if (!analysis) {
@@ -36,13 +36,13 @@ const InstitutionalMarketView = memo<InstitutionalMarketViewProps>(({ analysis, 
         signalColor: 'bg-amber-500/20 border-amber-500/40 text-amber-300',
         textColor: 'text-amber-300',
         confidence: 30,
-        status: 'OFFLINE',
+        status: marketStatus || 'CLOSED',
         symbol: 'INDEX'
       };
     }
 
     const { smart_money_signal, smart_money_confidence } = analysis;
-    const status = analysis.status || marketStatus || 'OFFLINE';
+    const status = analysis.status || marketStatus || 'CLOSED';
     const symbol = analysis.symbol_name || analysis.symbol || 'INDEX';
     
     // Extract indicators for fallback logic
@@ -210,7 +210,7 @@ const InstitutionalMarketView = memo<InstitutionalMarketViewProps>(({ analysis, 
             }`}>
               {status === 'LIVE' ? '🟢 LIVE' : 
                status === 'CLOSED' ? '🟡 CLOSED' : 
-               '🔴 OFFLINE'}
+               '🔴 Market Closed'}
             </span>
           </div>
         </div>

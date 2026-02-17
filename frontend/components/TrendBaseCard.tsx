@@ -204,15 +204,26 @@ const TrendBaseCard = memo<TrendBaseCardProps>(({ symbol, name }) => {
       'border-amber-500/30 shadow-amber-500/10'
     }`}>
       
-      {/* Index Name & Live Status */}
+      {/* Index Name & Confidence Badge */}
       <div className="flex items-center justify-between mb-3">
-        <h3 className="text-base sm:text-lg font-bold text-white/90">{name}</h3>
-        {isLive && (
-          <div className="flex items-center gap-1.5 px-2 py-1 bg-emerald-500/15 rounded-full border border-emerald-500/30">
-            <span className="w-2 h-2 bg-emerald-400 rounded-full animate-pulse shadow-lg shadow-emerald-400/50"></span>
-            <span className="text-[10px] font-bold text-emerald-300">LIVE</span>
-          </div>
-        )}
+        <div className="flex items-center gap-2">
+          <h3 className="text-base sm:text-lg font-bold text-white/90">{name}</h3>
+          {isLive && (
+            <div className="flex items-center gap-1.5 px-2 py-1 bg-emerald-500/15 rounded-full border border-emerald-500/30">
+              <span className="w-2 h-2 bg-emerald-400 rounded-full animate-pulse shadow-lg shadow-emerald-400/50"></span>
+              <span className="text-[10px] font-bold text-emerald-300">LIVE</span>
+            </div>
+          )}
+        </div>
+        <div className={`text-center px-2.5 py-1 rounded-lg border-2 bg-black/30 ${
+          liveConfidence >= 75 ? 'border-emerald-500/40' :
+          liveConfidence >= 60 ? 'border-green-500/40' :
+          liveConfidence >= 45 ? 'border-amber-500/40' :
+          'border-rose-500/40'
+        }`}>
+          <div className="text-[10px] font-semibold text-white/60">Confidence</div>
+          <div className="text-base font-bold text-white">{liveConfidence}%</div>
+        </div>
       </div>
 
       {/* Main Trading Signal - Clear & Readable */}

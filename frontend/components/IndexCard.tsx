@@ -187,7 +187,7 @@ const IndexCard = ({ symbol, name, data, isConnected, aiAlertData, outlookData }
     if (!isConnected) {
       return <span className="px-2 py-0.5 text-xs font-medium bg-bearish/20 text-bearish rounded-full">OFFLINE</span>;
     }
-    if (data?.status === 'CLOSED' || data?.status === 'OFFLINE') {
+    if (data?.status === 'CLOSED' || data?.status === 'PRE_OPEN' || data?.status === 'FREEZE') {
       return <span className="px-2 py-0.5 text-xs font-medium bg-neutral/20 text-neutral rounded-full">CLOSED</span>;
     }
     if (data?.status === 'PRE_OPEN') {

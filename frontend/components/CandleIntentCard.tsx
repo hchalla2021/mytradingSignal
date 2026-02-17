@@ -234,17 +234,23 @@ const CandleIntentCard = memo<CandleIntentCardProps>(({ symbol, name }) => {
         <div className="flex items-center gap-2">
           <Flame className="w-5 h-5 text-orange-400" />
           <h3 className="text-base font-semibold text-white">{name}</h3>
+          {/* Live Status Badge */}
+          {data.status === 'LIVE' && (
+            <div className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-emerald-500/15 border border-emerald-500/30">
+              <span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />
+              <span className="text-[10px] text-emerald-300 font-bold">LIVE</span>
+            </div>
+          )}
         </div>
         
-        {/* Live Status Badge */}
-        <div className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-gray-800/50 border border-gray-700/40">
-          <span className={`w-1.5 h-1.5 rounded-full ${
-            data.status === 'LIVE' ? 'bg-green-400 animate-pulse' : 
-            data.status === 'CACHED' ? 'bg-yellow-400' : 'bg-gray-500'
-          }`} />
-          <span className="text-[10px] text-gray-400 font-medium">
-            {data.status === 'LIVE' ? 'LIVE' : data.status === 'CACHED' ? 'CACHED' : 'OFFLINE'}
-          </span>
+        {/* Confidence Badge */}
+        <div className={`text-center px-2.5 py-1 rounded-lg border-2 bg-black/30 ${
+          confidence >= 70 ? 'border-emerald-500/40' :
+          confidence >= 55 ? 'border-amber-500/40' :
+          'border-rose-500/40'
+        }`}>
+          <div className="text-[10px] font-semibold text-white/60">Confidence</div>
+          <div className="text-base font-bold text-white">{confidence}%</div>
         </div>
       </div>
 

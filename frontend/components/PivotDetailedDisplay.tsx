@@ -61,7 +61,7 @@ const PivotDetailedDisplay: React.FC<PivotDisplayProps> = ({ symbol }) => {
         if (response.ok) {
           const data = await response.json();
           const symbolData = data[symbol];
-          if (symbolData && symbolData.status !== 'OFFLINE') {
+          if (symbolData && symbolData.status !== 'CLOSED') {
             setPivotData(symbolData);
             // Cache it
             try {
@@ -85,7 +85,7 @@ const PivotDetailedDisplay: React.FC<PivotDisplayProps> = ({ symbol }) => {
   }, [symbol]);
 
   // Don't render if no data available
-  if (!pivotData || pivotData.status === 'OFFLINE' || !pivotData.current_price) {
+  if (!pivotData || pivotData.status === 'CLOSED' || !pivotData.current_price) {
     return null;
   }
 

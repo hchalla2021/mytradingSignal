@@ -104,7 +104,7 @@ export interface AnalysisSignal {
   target: number | null;
 
   // Market Status
-  status?: 'LIVE' | 'CLOSED' | 'OFFLINE';
+  status?: 'LIVE' | 'CLOSED' | 'OFFLINE' | 'PRE_OPEN' | 'FREEZE';
 
   // Metadata
   timestamp: string;

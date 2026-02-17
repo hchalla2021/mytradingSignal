@@ -20,7 +20,7 @@ interface TradeSupportResistanceProps {
   symbolName: string;
   data: any; // Live WebSocket data
   analysis: any; // Backend analysis with 5min + 15min data
-  marketStatus?: 'LIVE' | 'CLOSED' | 'OFFLINE' | 'PRE_OPEN';
+  marketStatus?: 'LIVE' | 'CLOSED' | 'OFFLINE' | 'PRE_OPEN' | 'FREEZE';
 }
 
 export const TradeSupportResistance: React.FC<TradeSupportResistanceProps> = ({
@@ -28,7 +28,7 @@ export const TradeSupportResistance: React.FC<TradeSupportResistanceProps> = ({
   symbolName,
   data,
   analysis,
-  marketStatus = 'OFFLINE'
+  marketStatus = 'CLOSED'
 }) => {
   
   // ✅ CORE SIGNAL CALCULATION - 5min + 15min Combined
@@ -50,14 +50,19 @@ export const TradeSupportResistance: React.FC<TradeSupportResistanceProps> = ({
     const resistance = analysis?.indicators?.resistance || data.high || 0;
     const vwap = analysis?.indicators?.vwap || 0;
     const ema200 = analysis?.indicators?.ema_200 || 0;
+    const ema50 = analysis?.indicators?.ema_50 || 0;
+    const ema20 = analysis?.indicators?.ema_20 || 0;
     
-    // 5min data (quick trades)
-    const trend5min = analysis?.indicators?.trend_5min || analysis?.indicators?.trend || '';
-    const rsi5min = analysis?.indicators?.rsi_5min || analysis?.indicators?.rsi || 50;
+    // Use available trend and RSI data (from instant_analysis)
+    const trend = analysis?.indicators?.trend || '';
+    const rsi = analysis?.indicators?.rsi || 50;
+    const emaAlignment = analysis?.indicators?.ema_alignment || 'NEUTRAL';
     
-    // 15min data (trend confirmation)
-    const trend15min = analysis?.indicators?.trend_15min || '';
-    const rsi15min = analysis?.indicators?.rsi_15min || 50;
+    // Use trend for both timeframes since backend doesn't separate them yet
+    const trend5min = trend;
+    const trend15min = emaAlignment; // Use EMA alignment as trend confirmation
+    const rsi5min = rsi;
+    const rsi15min = rsi; // Same RSI for now
     
     // Volume confirmation
     const volumeStrength = analysis?.indicators?.volume_strength || '';
@@ -79,9 +84,9 @@ export const TradeSupportResistance: React.FC<TradeSupportResistanceProps> = ({
     // 🔥 STRONG BUY - ALL CONDITIONS MUST BE TRUE (No False Positives)
     // ═══════════════════════════════════════════════════════════════
     if (
-      // 1. Both timeframes bullish
-      trend5min.toUpperCase().includes('UP') &&
-      trend15min.toUpperCase().includes('UP') &&
+      // 1. Both trend and EMA alignment bullish
+      (trend5min.toUpperCase().includes('UP') || trend5min.toUpperCase().includes('BULLISH')) &&
+      (trend15min.toUpperCase().includes('BULLISH') || trend15min.toUpperCase().includes('UP')) &&
       
       // 2. Price above VWAP AND EMA200
       (vwap === 0 || price > vwap) &&
@@ -90,9 +95,8 @@ export const TradeSupportResistance: React.FC<TradeSupportResistanceProps> = ({
       // 3. Near support (within 1.5% above)
       distanceToSupport <= 1.5 &&
       
-      // 4. RSI not overbought on both timeframes
-      rsi5min < 70 &&
-      rsi15min < 70 &&
+      // 4. RSI not overbought
+      rsi < 70 &&
       
       // 5. Strong volume confirmation
       isHighVolume &&
@@ -112,8 +116,9 @@ export const TradeSupportResistance: React.FC<TradeSupportResistanceProps> = ({
     // 🟢 NORMAL BUY - Good conditions but not perfect
     // ═══════════════════════════════════════════════════════════════
     else if (
-      // 1. 5min bullish + 15min not bearish
-      trend5min.toUpperCase().includes('UP') &&
+      // 1. Trend bullish + EMA not bearish
+      (trend5min.toUpperCase().includes('UP') || trend5min.toUpperCase().includes('BULLISH')) &&
+      !trend15min.toUpperCase().includes('BEARISH') &&
       !trend15min.toUpperCase().includes('DOWN') &&
       
       // 2. Price above VWAP or EMA200 (at least one)
@@ -122,8 +127,8 @@ export const TradeSupportResistance: React.FC<TradeSupportResistanceProps> = ({
       // 3. Near support (within 2.5%)
       distanceToSupport <= 2.5 &&
       
-      // 4. RSI not overbought on 5min
-      rsi5min < 70 &&
+      // 4. RSI not overbought
+      rsi < 70 &&
       
       // 5. Not too close to resistance
       distanceToResistance >= 2
@@ -137,9 +142,9 @@ export const TradeSupportResistance: React.FC<TradeSupportResistanceProps> = ({
     // 🔴 STRONG SELL - ALL CONDITIONS MUST BE TRUE (No False Positives)
     // ═══════════════════════════════════════════════════════════════
     else if (
-      // 1. Both timeframes bearish
-      trend5min.toUpperCase().includes('DOWN') &&
-      trend15min.toUpperCase().includes('DOWN') &&
+      // 1. Both trend and EMA alignment bearish
+      (trend5min.toUpperCase().includes('DOWN') || trend5min.toUpperCase().includes('BEARISH')) &&
+      (trend15min.toUpperCase().includes('BEARISH') || trend15min.toUpperCase().includes('DOWN')) &&
       
       // 2. Price below VWAP AND EMA200
       (vwap === 0 || price < vwap) &&
@@ -148,9 +153,8 @@ export const TradeSupportResistance: React.FC<TradeSupportResistanceProps> = ({
       // 3. Near resistance (within 1.5% below)
       distanceToResistance <= 1.5 &&
       
-      // 4. RSI not oversold on both timeframes
-      rsi5min > 30 &&
-      rsi15min > 30 &&
+      // 4. RSI not oversold
+      rsi > 30 &&
       
       // 5. Strong volume confirmation
       isHighVolume &&
@@ -180,8 +184,8 @@ export const TradeSupportResistance: React.FC<TradeSupportResistanceProps> = ({
       // 3. Near resistance (within 2.5%)
       distanceToResistance <= 2.5 &&
       
-      // 4. RSI not oversold on 5min
-      rsi5min > 30 &&
+      // 4. RSI not oversold
+      rsi > 30 &&
       
       // 5. Not too close to support
       distanceToSupport >= 2

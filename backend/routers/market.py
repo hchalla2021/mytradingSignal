@@ -330,7 +330,7 @@ async def market_websocket(websocket: WebSocket):
                     print(f"📊 Processing {symbol}: price={data.get('price')}, has_analysis={bool(data.get('analysis'))}")
                     if not data.get("analysis"):
                         print(f"   → Generating analysis for {symbol}...")
-                        analysis_result = InstantSignal.analyze_tick(data)
+                        analysis_result = await InstantSignal.analyze_tick(data)
                         if analysis_result:
                             data["analysis"] = analysis_result
                             # Update cache with analysis

@@ -220,7 +220,7 @@ const ORBCard = memo(({ symbol, timeframe = '5m' }: ORBCardProps) => {
 
   const signal = getORBSignal(data);
   const confidence = calculateORBConfidence(data);
-  const marketStatus = data.status || 'OFFLINE';
+  const marketStatus = data.status || 'CLOSED';
 
   const getSignalColor = (sig: string) => {
     if (sig === 'STRONG BUY') return 'text-emerald-400';
