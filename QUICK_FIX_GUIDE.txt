@@ -1,0 +1,190 @@
+╔═══════════════════════════════════════════════════════════════════════════╗
+║            OI MOMENTUM: ₹0.00 / NO SIGNAL - QUICK FIX GUIDE              ║
+╚═══════════════════════════════════════════════════════════════════════════╝
+
+YOUR ISSUE: All symbols showing ₹0.00 and NO_SIGNAL
+
+═══════════════════════════════════════════════════════════════════════════════
+
+🎯 STEP 1: What time is it? (Most important!)
+───────────────────────────────────────────
+
+   Your screenshot shows: 5:10 PM (timestamp on dashboard)
+   
+   Is current time between 9:15 AM - 3:30 PM IST, weekdays?
+   
+   ❌ NO (It's 5:10 PM = after market close)
+      → This is NORMAL behavior! Market is closed!
+      → Prices show ₹0.00 after hours = EXPECTED ✓
+      → Solution: Wait for tomorrow at 9:15 AM
+      → Then check this guide again during market hours
+   
+   ✅ YES (Time is 9:15 AM - 3:30 PM, Mon-Fri)
+      → GO TO STEP 2 (Market should be getting live data)
+
+═══════════════════════════════════════════════════════════════════════════════
+
+🎯 STEP 2: Is backend running?
+──────────────────────────────
+
+   Terminal command:
+   $ curl http://localhost:8000/health
+   
+   ✅ Returns: {"status":"ok"}
+      → GO TO STEP 3
+   
+   ❌ Connection error / No response
+      → Start backend:
+         cd backend
+         python -m uvicorn main:app --reload --host 0.0.0.0 --port 8000
+      → Wait 5 seconds
+      → Go back to STEP 1 (check time again)
+
+═══════════════════════════════════════════════════════════════════════════════
+
+🎯 STEP 3: Refresh Zerodha token
+─────────────────────────────────
+
+   Tokens expire every 24 hours. This is most common cause of ₹0.00.
+   
+   Terminal command:
+   $ cd backend
+   $ python quick_token_fix.py
+   
+   Output should show:
+   ✅ Token refreshed successfully
+   
+   Then wait 30 seconds and check dashboard.
+   
+   Still ₹0.00? → GO TO STEP 4
+
+═══════════════════════════════════════════════════════════════════════════════
+
+🎯 STEP 4: Check system diagnostics
+────────────────────────────────────
+
+   Terminal command:
+   $ cd backend
+   $ python diagnose_system.py
+   
+   Look for this line:
+   "7️⃣ DIAGNOSIS & RECOMMENDATIONS"
+   
+   ✅ Shows: "ALL SYSTEMS OPERATIONAL"
+      → Problem solved! Data should flow now
+   
+   ❌ Shows error section
+      → Read the recommendations and follow them
+      → Usually one of:
+         • Redis connection failed → Start Redis
+         • WebSocket disconnected → Restart backend
+         • Market data: NO DATA → Check Zerodha API status
+
+═══════════════════════════════════════════════════════════════════════════════
+
+🎯 STEP 5: Monitor data flow
+─────────────────────────────
+
+   Terminal command:
+   $ cd backend
+   $ python watch_oi_momentum.py
+   
+   Watch this screen for 30 seconds:
+   • NIFTY candles should increase (5 → 6 → 7...)
+   • BUY/SELL signals may appear
+   • Prices should show (not ₹0.00)
+   
+   ✅ Numbers increasing
+      → All good! Data is flowing. Wait 10 min for signals.
+   
+   ❌ Numbers stuck at 0
+      → Something broken. Go back to STEP 4 output
+
+═══════════════════════════════════════════════════════════════════════════════
+
+⚡ QUICK COMMAND REFERENCE (copy-paste ready)
+──────────────────────────────────────────────
+
+# Check what's wrong:
+cd backend && python diagnose_system.py
+
+# Refresh token:
+cd backend && python quick_token_fix.py
+
+# Watch live data:
+cd backend && python watch_oi_momentum.py
+
+# Check status:
+cd backend && python check_oi_momentum_status.py
+
+# Test API:
+cd backend && python test_api_responses.py
+
+═══════════════════════════════════════════════════════════════════════════════
+
+📊 WHAT SHOULD HAPPEN DURING MARKET HOURS
+────────────────────────────────────────────
+
+   9:15 AM Market opens
+   ↓
+   9:15:00 - Prices update in cache
+   ↓
+   9:15:05 - First candles created
+   ↓
+   9:15:15 - More candles accumulate (20+ needed for signal)
+   ↓
+   9:25 AM+ - OI Momentum signals START appearing
+   ↓
+   9:30+ AM - Dashboard shows live BUY/SELL signals
+
+   Your case at 5:10 PM: Market closed 1.5+ hours ago = ₹0.00 NORMAL ✓
+
+═══════════════════════════════════════════════════════════════════════════════
+
+🔍 IF STILL BROKEN AFTER ALL STEPS
+───────────────────────────────────
+
+   Check these manually:
+   
+   1. Is Redis running?
+      $ redis-cli ping
+      Should return: PONG
+      
+   2. Can you see backend logs?
+      Look for errors like:
+      ❌ "Zerodha connection failed"
+      ❌ "Token invalid"
+      ❌ "WebSocket disconnected"
+      
+   3. During market hours (9:15 AM - 3:30 PM)?
+      Check your system clock
+      
+   4. Is Zerodha API up?
+      Try logging into Zerodha console directly
+      
+   5. Need more help?
+      Read: docs/FIX_ZERO_PRICE_NO_SIGNAL.md (detailed guide)
+      Read: docs/OI_MOMENTUM_DEBUGGING_GUIDE.md (technical steps)
+
+═══════════════════════════════════════════════════════════════════════════════
+
+⏰ YOUR EXACT SITUATION
+──────────────────────
+
+   Screenshot timestamp: 5:10:55 PM
+   Market closes at: 3:30 PM
+   Time since close: 1 hour 40 minutes
+   
+   Status: ✅ COMPLETELY NORMAL BEHAVIOR
+   
+   Action: WAIT FOR TOMORROW AT 9:15 AM
+           Data will flow automatically when market opens
+
+═══════════════════════════════════════════════════════════════════════════════
+
+Questions?
+→ Check docs/FIX_ZERO_PRICE_NO_SIGNAL.md for detailed explanations
+→ Check docs/OI_MOMENTUM_DEBUGGING_GUIDE.md for technical reference
+→ Run: python backend/diagnose_system.py (shows exact issue)
+
+Good luck! 🚀

@@ -330,7 +330,7 @@ export default function SystemStatusBanner() {
               <div>
                 <p className="font-semibold text-white/90 mb-1">Market</p>
                 <p className="truncate">{health.market.phase}</p>
-                <p className="truncate">{health.market.is_trading_hours ? '🟢 Open' : '🔴 Closed'}</p>
+                {health.market.is_trading_hours && <p className="truncate">🟢 Open</p>}
               </div>
               <div>
                 <p className="font-semibold text-white/90 mb-1">Feed</p>

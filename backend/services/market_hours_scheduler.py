@@ -7,6 +7,8 @@ Automatic Market Hours Scheduler - PRODUCTION GRADE
 ✅ Auto-stops at 3:35 PM (after market close)
 ✅ Aggressive reconnection during market hours
 ✅ No manual restart needed - EVER
+✅ Restores historical candles at market open
+✅ Backs up candles at market close
 """
 import asyncio
 from datetime import datetime, time, timedelta
@@ -14,6 +16,9 @@ from zoneinfo import ZoneInfo
 from typing import Optional, Callable
 
 IST = ZoneInfo("Asia/Kolkata")
+
+# Import candle backup service
+from services.candle_backup_service import CandleBackupService
 
 
 class MarketHoursScheduler:
@@ -306,6 +311,24 @@ class MarketHoursScheduler:
                 await asyncio.sleep(1)
                 if self._is_feed_connected():
                     self.market_feed._starting = False
+                    
+                    # 🔥 NEW: RESTORE HISTORICAL CANDLES FOR OI MOMENTUM SIGNALS
+                    # Load last session's candles so OI Momentum works immediately
+                    print("\n   📥 Restoring historical candles for signal analysis...")
+                    try:
+                        symbols = ["NIFTY", "BANKNIFTY", "SENSEX"]
+                        results = await CandleBackupService.restore_all_symbols(
+                            self.market_feed.cache, 
+                            symbols
+                        )
+                        restored_count = sum(1 for v in results.values() if v)
+                        if restored_count > 0:
+                            print(f"   ✅ Restored candles for {restored_count}/{len(symbols)} symbols")
+                        else:
+                            print(f"   ℹ️  No backup candles found - will use live feed")
+                    except Exception as e:
+                        print(f"   ⚠️  Could not restore candles: {e}")
+                    
                     return True
             
             # Check if REST fallback is active (acceptable)
@@ -324,8 +347,26 @@ class MarketHoursScheduler:
             return False
     
     async def _stop_feed(self):
-        """Stop the market feed gracefully"""
+        """Stop the market feed gracefully and backup candles"""
         try:
+            # 🔥 NEW: BACKUP HISTORICAL CANDLES BEFORE STOPPING
+            # Save candles for restoration at next market open
+            print("\n   📤 Backing up candles for next market session...")
+            try:
+                symbols = ["NIFTY", "BANKNIFTY", "SENSEX"]
+                results = await CandleBackupService.backup_all_symbols(
+                    self.market_feed.cache,
+                    symbols
+                )
+                backed_up_count = sum(1 for v in results.values() if v)
+                if backed_up_count > 0:
+                    print(f"   ✅ Backed up candles for {backed_up_count}/{len(symbols)} symbols")
+                else:
+                    print(f"   ℹ️  No candles to backup")
+            except Exception as e:
+                print(f"   ⚠️  Could not backup candles: {e}")
+            
+            # Stop the feed
             if hasattr(self.market_feed, 'stop'):
                 await self.market_feed.stop()
             print("   ✅ Market feed stopped")

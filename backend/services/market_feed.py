@@ -357,30 +357,71 @@ class MarketFeedService:
         await self.cache.lpush(candle_key, json.dumps(candle_data))
         await self.cache.ltrim(candle_key, 0, 99)  # Keep 100 candles
         
-        # Generate instant analysis for this tick
+        # Generate instant analysis for this tick (with smart caching to avoid recalculation lag)
         try:
             from services.instant_analysis import InstantSignal, calculate_emas_from_cache, calculate_sar_from_cache, calculate_market_structure_from_cache
+            from datetime import datetime
+            import pytz
             
-            # 🔥 CRITICAL: Calculate EMAs from cached candles before analysis
-            data = await calculate_emas_from_cache(self.cache, data["symbol"], data)
+            # 🔥 SMART CACHING: Reduced to 1 second during trading for real-time trading signals
+            # This prevents analysis calculation delays while keeping signals responsive
+            market_status = get_market_status()
+            is_trading = market_status == "LIVE"
             
-            # 🔥 CRITICAL: Calculate real Parabolic SAR from cached candles
-            data = await calculate_sar_from_cache(self.cache, data["symbol"], data)
+            # Determine cache expiry - SHORTER for trading signals to appear live
+            cache_ttl = 1 if is_trading else 60  # 1s during market hours (fast updates), 60s outside
+            cache_key = f"ws_analysis:{symbol}"
             
-            # 🔥 CRITICAL: Calculate market structure from cached candles
-            market_structure = await calculate_market_structure_from_cache(self.cache, data["symbol"], data)
-            data.update(market_structure)  # Merge market structure data into tick_data
+            # Try to get cached analysis first
+            cached_analysis = None
+            if is_trading:  # Only use cache during trading hours
+                try:
+                    cached_json = await self.cache.get(cache_key)
+                    if cached_json:
+                        import json
+                        cached_analysis = json.loads(cached_json)
+                        # Use cached analysis - skip recalculation
+                        data["analysis"] = cached_analysis
+                except Exception as cache_err:
+                    pass  # Fall through to recalculation if cache read fails
             
-            analysis_result = await InstantSignal.analyze_tick(data)
-            if analysis_result:
-                data["analysis"] = analysis_result
-                # Log only occasionally to reduce spam
-                import time
-                if int(time.time()) % 5 == 0:  # Log every 5 seconds for this symbol
-                    print(f"✅ Analysis generated for {symbol}: signal={analysis_result.get('signal')}, confidence={analysis_result.get('confidence'):.0f}%")
+            # If no cached analysis, calculate fresh
+            if not cached_analysis:
+                # 🔥 CRITICAL: Calculate EMAs from cached candles before analysis
+                data = await calculate_emas_from_cache(self.cache, data["symbol"], data)
+                
+                # 🔥 CRITICAL: Calculate real Parabolic SAR from cached candles
+                data = await calculate_sar_from_cache(self.cache, data["symbol"], data)
+                
+                # 🔥 CRITICAL: Calculate market structure from cached candles
+                market_structure = await calculate_market_structure_from_cache(self.cache, data["symbol"], data)
+                data.update(market_structure)  # Merge market structure data into tick_data
+                
+                analysis_result = await InstantSignal.analyze_tick(data)
+                if analysis_result:
+                    data["analysis"] = analysis_result
+                    
+                    # Cache the fresh analysis for next ticks
+                    if is_trading:
+                        try:
+                            import json
+                            await self.cache.set(cache_key, json.dumps(analysis_result), expire=cache_ttl)
+                        except Exception as cache_write_err:
+                            pass  # Non-critical: if cache write fails, just continue
+                    
+                    # Log only occasionally to reduce spam
+                    import time
+                    if int(time.time()) % 5 == 0:  # Log every 5 seconds for this symbol
+                        print(f"✅ Analysis generated for {symbol}: signal={analysis_result.get('signal')}, confidence={analysis_result.get('confidence'):.0f}%")
+                else:
+                    print(f"⚠️ Analysis returned None for {symbol}")
+                    data["analysis"] = None
             else:
-                print(f"⚠️ Analysis returned None for {symbol}")
-                data["analysis"] = None
+                # Using cached analysis - log sparingly
+                import time
+                if int(time.time()) % 10 == 0:  # Log every 10 seconds
+                    print(f"♻️ Using cached analysis for {symbol} (TTL: {cache_ttl}s)")
+                    
         except Exception as e:
             print(f"❌ Instant analysis FAILED for {data['symbol']}: {e}")
             import traceback

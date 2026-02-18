@@ -35,7 +35,7 @@ const VolumePulseCard = memo<VolumePulseCardProps>(({ symbol, name }) => {
   useEffect(() => {
     const fetchData = async () => {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 15000);
+      const timeoutId = setTimeout(() => controller.abort(), 10000);
 
       try {
         const response = await fetch(
@@ -71,7 +71,8 @@ const VolumePulseCard = memo<VolumePulseCardProps>(({ symbol, name }) => {
     };
 
     fetchData();
-    const interval = setInterval(fetchData, 15000);
+    // 🔥 IMPROVED: Fetch every 5 seconds (was 15s) for responsive volume updates
+    const interval = setInterval(fetchData, 5000);
     return () => clearInterval(interval);
   }, [symbol]);
 

@@ -208,7 +208,7 @@ const ParabolicSARCard: React.FC<ParabolicSARCardProps> = ({
 
   useEffect(() => {
     fetchSARData();
-    const interval = setInterval(fetchSARData, 10000); // Refresh every 10s
+    const interval = setInterval(fetchSARData, 5000); // Refresh every 5s (live updates during market hours)
     return () => clearInterval(interval);
   }, [fetchSARData]);
 

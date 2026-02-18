@@ -192,17 +192,7 @@ export const VWMAEMAFilterCard: React.FC<VWMAEMAFilterCardProps> = ({ analysis, 
             </div>
           )}
 
-          {/* Market Status */}
-          <div suppressHydrationWarning className={`flex flex-col sm:flex-row sm:justify-between gap-2 p-2 rounded-lg border border-purple-500/30 ${
-            status === 'LIVE' ? 'bg-green-500/5' : status === 'CLOSED' ? 'bg-amber-500/5' : 'bg-red-500/5'
-          }`}>
-            <span className="text-white font-semibold text-xs">Market:</span>
-            <span className={`font-bold text-sm ${
-              status === 'LIVE' ? 'text-green-300' : status === 'CLOSED' ? 'text-amber-300' : 'text-red-300'
-            }`}>
-              {status === 'LIVE' ? '🟢 LIVE' : status === 'CLOSED' ? '🟡 Market Closed' : status === 'PRE_OPEN' ? '🟠 Pre-Open' : status === 'FREEZE' ? '⏸️ Freeze' : '🔴 Market Closed'}
-            </span>
-          </div>
+
         </div>
       )}
     </div>

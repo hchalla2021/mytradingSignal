@@ -83,8 +83,8 @@ export default function OIMomentumCard({ symbol, name }: OIMomentumCardProps) {
 
     fetchData();
     
-    // Refresh every 30 seconds
-    const interval = setInterval(fetchData, 30000);
+    // Refresh every 5 seconds (was 30 seconds)
+    const interval = setInterval(fetchData, 5000);
     
     return () => clearInterval(interval);
   }, [symbol, name]);
@@ -177,9 +177,21 @@ export default function OIMomentumCard({ symbol, name }: OIMomentumCardProps) {
   if (!data) return null;
 
   const style = getSignalStyle(data.final_signal);
+  
+  // Check if data is stale (market closed, showing cached analysis)
+  const dataTimestamp = new Date(data.timestamp);
+  const isStaleData = data.current_price === 0 || dataTimestamp.getTime() < (Date.now() - 60000);
+  const isMarketClosed = data.final_signal === "NO_SIGNAL" && data.confidence === 0;
 
   return (
-    <div className={`${style.bg} rounded-xl border-2 ${style.border} p-4 transition-all duration-300 hover:shadow-lg`}>
+    <div className={`${style.bg} rounded-xl border-2 ${style.border} p-4 transition-all duration-300 hover:shadow-lg relative`}>
+      {/* Stale Data Indicator Badge */}
+      {isStaleData && !isMarketClosed && (
+        <div className="absolute top-2 right-2 bg-amber-500/20 border border-amber-500/50 rounded-full px-2 py-1 text-[8px] text-amber-300 font-bold uppercase tracking-wider">
+          Last Session
+        </div>
+      )}
+      
       {/* Header */}
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-2">
@@ -224,20 +236,35 @@ export default function OIMomentumCard({ symbol, name }: OIMomentumCardProps) {
         </div>
       </div>
 
-      {/* Timeframe Signals */}
-      <div className="grid grid-cols-2 gap-2 mb-3">
+      {/* Timeframe Signals - Entry + Trend = Final Signal */}
+      <div className="grid grid-cols-3 gap-1.5 mb-3 text-[10px]">
+        {/* 5M Entry Timing */}
         <div className="bg-slate-900/40 rounded-lg p-2 border border-slate-700/30">
-          <div className="text-xs text-slate-400 mb-1">5m • Entry</div>
-          <div className={`text-sm font-bold ${getSignalStyle(data.signal_5m).text}`}>
+          <div className="text-[9px] text-slate-500 mb-1 font-bold uppercase">⏱️ 5m Entry</div>
+          <div className={`text-xs font-bold ${getSignalStyle(data.signal_5m).text}`}>
             {getSignalStyle(data.signal_5m).label}
           </div>
+          <div className="text-[8px] text-slate-600 mt-0.5">Short-term timing</div>
         </div>
+
+        {/* + Symbol */}
+        <div className="flex items-center justify-center text-slate-500 font-bold text-lg">
+          +
+        </div>
+
+        {/* 15M Trend Direction */}
         <div className="bg-slate-900/40 rounded-lg p-2 border border-slate-700/30">
-          <div className="text-xs text-slate-400 mb-1">15m • Trend</div>
-          <div className={`text-sm font-bold ${getSignalStyle(data.signal_15m).text}`}>
+          <div className="text-[9px] text-slate-500 mb-1 font-bold uppercase">📈 15m Trend</div>
+          <div className={`text-xs font-bold ${getSignalStyle(data.signal_15m).text}`}>
             {getSignalStyle(data.signal_15m).label}
           </div>
+          <div className="text-[8px] text-slate-600 mt-0.5">Direction confirm</div>
         </div>
+      </div>
+      
+      {/* Signal Equation: Only take 5m signals aligned with 15m trend */}
+      <div className="mb-3 p-2 bg-slate-900/80 rounded-lg border-l-2 border-slate-600 text-[9px] text-slate-400">
+        <span className="text-slate-300 font-semibold">Logic:</span> Take 5m entry only if aligned with 15m trend direction
       </div>
 
       {/* Reasons */}
@@ -271,7 +298,33 @@ export default function OIMomentumCard({ symbol, name }: OIMomentumCardProps) {
       {/* Metrics Summary - Enhanced with Tooltips */}
       <div className="mt-3 pt-3 border-t border-slate-700/30">
         <div className="text-[9px] text-slate-400 mb-2 text-center uppercase tracking-wider font-bold">
-          Data Confirmation
+          ✅ Alignment Check
+        </div>
+        <div className="grid grid-cols-2 gap-2 mb-2">
+          <div className={`text-center p-2 rounded-lg transition-all text-[9px] ${
+            (data.signal_5m === 'BUY' || data.signal_5m === 'STRONG_BUY') && (data.signal_15m === 'BUY' || data.signal_15m === 'STRONG_BUY')
+              ? 'bg-green-500/20 border border-green-500/40 text-green-300 font-bold'
+              : (data.signal_5m === 'SELL' || data.signal_5m === 'STRONG_SELL') && (data.signal_15m === 'SELL' || data.signal_15m === 'STRONG_SELL')
+              ? 'bg-red-500/20 border border-red-500/40 text-red-300 font-bold'
+              : 'bg-slate-800/30 border border-slate-700/20 text-slate-400'
+          }`}>
+            <div className="font-bold mb-0.5">5m ↔ 15m</div>
+            <div>
+              {((data.signal_5m === 'BUY' || data.signal_5m === 'STRONG_BUY') && (data.signal_15m === 'BUY' || data.signal_15m === 'STRONG_BUY')) ||
+               ((data.signal_5m === 'SELL' || data.signal_5m === 'STRONG_SELL') && (data.signal_15m === 'SELL' || data.signal_15m === 'STRONG_SELL'))
+                ? '✅ Aligned'
+                : '⚠️ Mixed'}
+            </div>
+          </div>
+          <div className="text-center p-2 rounded-lg bg-slate-800/30 border border-slate-700/20 text-slate-400 text-[9px]">
+            <div className="font-bold mb-0.5">Current Price</div>
+            <div className="text-green-400 font-bold">₹{data.current_price?.toFixed(2)}</div>
+          </div>
+        </div>
+        
+        {/* Live Data Confirmation */}
+        <div className="text-[9px] text-slate-400 mb-2 text-center uppercase tracking-wider font-bold">
+          Market Metrics
         </div>
         <div className="grid grid-cols-4 gap-2">
           <div className={`text-center p-2 rounded-lg transition-all ${

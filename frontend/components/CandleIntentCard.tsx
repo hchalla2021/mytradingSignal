@@ -170,7 +170,7 @@ const CandleIntentCard = memo<CandleIntentCardProps>(({ symbol, name }) => {
     };
 
     fetchData();
-    const interval = setInterval(fetchData, 15000);
+    const interval = setInterval(fetchData, 5000);
     return () => clearInterval(interval);
   }, [symbol]);
 

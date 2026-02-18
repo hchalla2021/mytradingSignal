@@ -1,37 +1,93 @@
 'use client';
 
-import React, { useMemo } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
+
+interface RSIMomentumData {
+  symbol: string;
+  rsi_5m: number;
+  rsi_15m: number;
+  rsi_5m_signal: string;
+  rsi_15m_signal: string;
+  rsi_momentum_status: string;
+  rsi_momentum_confidence: number;
+  volume_ma_ratio: number;
+  price_momentum: string;
+  last_update: string;
+}
 
 interface RSIMomentumProps {
   symbol: string;
-  rsi_5m?: number;
-  rsi_15m?: number;
-  rsi_5m_signal?: string;
-  rsi_15m_signal?: string;
-  rsi_momentum_status?: string;
-  rsi_momentum_confidence?: number;
-  volume_ma_ratio?: number;
-  price_momentum?: string;
-  last_update?: string;
 }
 
-const RSI60_40MomentumCard: React.FC<RSIMomentumProps> = ({
-  symbol = 'NIFTY',
-  rsi_5m = 50,
-  rsi_15m = 50,
-  rsi_5m_signal = 'NEUTRAL',
-  rsi_15m_signal = 'NEUTRAL',
-  rsi_momentum_status = 'NEUTRAL',
-  rsi_momentum_confidence = 50,
-  volume_ma_ratio = 1.0,
-  price_momentum = 'FLAT',
-  last_update = new Date().toLocaleTimeString()
-}) => {
+const RSI60_40MomentumCard: React.FC<RSIMomentumProps> = ({ symbol }) => {
+  const [data, setData] = useState<RSIMomentumData | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  // Fetch live RSI data from backend
+  useEffect(() => {
+    const fetchData = async () => {
+      try {
+        setLoading(true);
+        const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+        const response = await fetch(`${apiUrl}/api/analysis/rsi-momentum/${symbol}`);
+        
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+        
+        const result = await response.json();
+        if (result && result.rsi_5m !== undefined) {
+          setData({
+            symbol,
+            rsi_5m: Number(result.rsi_5m || 50),
+            rsi_15m: Number(result.rsi_15m || 50),
+            rsi_5m_signal: result.rsi_5m_signal || 'NEUTRAL',
+            rsi_15m_signal: result.rsi_15m_signal || 'NEUTRAL',
+            rsi_momentum_status: result.rsi_momentum_status || 'NEUTRAL',
+            rsi_momentum_confidence: Number(result.rsi_momentum_confidence || 50),
+            volume_ma_ratio: Number(result.volume_ma_ratio || 1.0),
+            price_momentum: result.price_momentum || 'FLAT',
+            last_update: result.last_update || new Date().toLocaleTimeString()
+          });
+          setError(null);
+        }
+      } catch (err) {
+        console.error(`Error fetching RSI data for ${symbol}:`, err);
+        setError('Unable to fetch RSI data');
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchData();
+    const interval = setInterval(fetchData, 5000); // Refresh every 5 seconds (live updates)
+    
+    return () => clearInterval(interval);
+  }, [symbol]);
+
   // Calculate signal strength based on RSI levels and timeframe alignment
   const signalAnalysis = useMemo(() => {
-    const confidence = Math.min(100, Math.max(25, rsi_momentum_confidence || 50));
+    if (!data) {
+      return {
+        primarySignal: 'LOADING',
+        signalLabel: '⏳ Loading...',
+        signalColor: 'bg-slate-500/20 border-slate-500/40 text-slate-300',
+        badgeEmoji: '⏳',
+        textColor: 'text-slate-300',
+        bgGradient: 'from-slate-600/20 via-slate-500/10 to-slate-600/20',
+        confidence: 0,
+        rsi5m: 0,
+        rsi15m: 0
+      };
+    }
+
+    const rsi_5m = data.rsi_5m || 50;
+    const rsi_15m = data.rsi_15m || 50;
+    const rsi_5m_signal = data.rsi_5m_signal || 'NEUTRAL';
+    const rsi_15m_signal = data.rsi_15m_signal || 'NEUTRAL';
+    const confidence = Math.min(100, Math.max(25, data.rsi_momentum_confidence || 50));
     
-    // Determine the primary signal
     let primarySignal = 'NEUTRAL';
     let signalColor = 'bg-amber-500/20 border-amber-500/40 text-amber-300';
     let badgeEmoji = '⚪';
@@ -98,7 +154,31 @@ const RSI60_40MomentumCard: React.FC<RSIMomentumProps> = ({
       rsi5m: Math.round(rsi_5m),
       rsi15m: Math.round(rsi_15m)
     };
-  }, [rsi_5m, rsi_15m, rsi_5m_signal, rsi_15m_signal, rsi_momentum_confidence]);
+  }, [data]);
+
+  if (loading && !data) {
+    return (
+      <div className="border-2 border-slate-500/30 rounded-2xl p-4 bg-slate-900/20 backdrop-blur-sm animate-pulse">
+        <div className="h-8 bg-slate-700 rounded w-24 mb-3"></div>
+        <div className="h-12 bg-slate-700 rounded w-full mb-3"></div>
+        <div className="grid grid-cols-2 gap-2">
+          <div className="h-6 bg-slate-700 rounded"></div>
+          <div className="h-6 bg-slate-700 rounded"></div>
+        </div>
+      </div>
+    );
+  }
+
+  if (error && !data) {
+    return (
+      <div className="border-2 border-red-500/30 rounded-2xl p-4 bg-red-900/10">
+        <div className="text-red-300 text-sm font-semibold">{symbol}</div>
+        <div className="text-red-400 text-xs mt-2">{error}</div>
+      </div>
+    );
+  }
+
+  if (!data) return null;
 
   return (
     <div className={`relative border-2 rounded-2xl transition-all duration-300 backdrop-blur-sm shadow-xl
@@ -111,7 +191,7 @@ const RSI60_40MomentumCard: React.FC<RSIMomentumProps> = ({
         <div className="flex items-center justify-between gap-3 mb-3">
           <div className="flex items-center gap-2">
             <h3 className="font-bold text-white text-base sm:text-lg tracking-tight">
-              {symbol}
+              {data.symbol}
             </h3>
             <span className="text-lg sm:text-xl">{signalAnalysis.badgeEmoji}</span>
           </div>
@@ -162,7 +242,7 @@ const RSI60_40MomentumCard: React.FC<RSIMomentumProps> = ({
               </span>
             </div>
             <div className="text-[9px] text-white/40 mt-0.5 font-bold">
-              {rsi_5m_signal || 'NEUTRAL'}
+              {data.rsi_5m_signal || 'NEUTRAL'}
             </div>
           </div>
 
@@ -195,20 +275,20 @@ const RSI60_40MomentumCard: React.FC<RSIMomentumProps> = ({
               </span>
             </div>
             <div className="text-[9px] text-white/40 mt-0.5 font-bold">
-              {rsi_15m_signal || 'NEUTRAL'}
+              {data.rsi_15m_signal || 'NEUTRAL'}
             </div>
           </div>
         </div>
 
         {/* Status Info Row */}
         <div className="flex items-center justify-between gap-2 pt-2 border-t border-white/10 text-[10px] text-white/50 font-medium">
-          <span>Vol: {(volume_ma_ratio || 1.0).toFixed(2)}x</span>
-          <span>{price_momentum || 'FLAT'}</span>
-          <span className="text-[9px]">{last_update}</span>
+          <span>Vol: {(data.volume_ma_ratio || 1.0).toFixed(2)}x</span>
+          <span>{data.price_momentum || 'FLAT'}</span>
+          <span className="text-[9px]">{data.last_update}</span>
         </div>
       </div>
 
-      {/* No Connection Error Indicator */}
+      {/* Live Indicator */}
       <div className="absolute top-2 right-2">
         <span className="inline-block w-2 h-2 rounded-full bg-green-500 animate-pulse shadow-lg shadow-green-500/50" />
       </div>

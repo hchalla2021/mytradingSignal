@@ -141,23 +141,7 @@ const ZoneControlCard = memo<ZoneControlCardProps>(({ analysis }) => {
             </div>
           )}
 
-          {/* Market Status */}
-          <div className={`flex flex-col sm:flex-row sm:justify-between gap-2 p-2 rounded-lg border border-purple-500/30 ${
-            analysis.status === 'LIVE' ? 'bg-green-500/5' : analysis.status === 'CLOSED' ? 'bg-amber-500/5' : 'bg-red-500/5'
-          }`}>
-            <span className="text-white font-semibold text-xs">Market:</span>
-            <span className={`font-bold text-sm ${
-              analysis.status === 'LIVE' ? 'text-green-300' : 
-              analysis.status === 'CLOSED' ? 'text-amber-300' : 
-              'text-red-300'
-            }`}>
-              {analysis.status === 'LIVE' ? '🟢 LIVE' : 
-               analysis.status === 'CLOSED' ? '🟡 Market Closed' : 
-               analysis.status === 'PRE_OPEN' ? '🟠 Pre-Open' :
-               analysis.status === 'FREEZE' ? '⏸️ Freeze' :
-               '🔴 Market Closed'}
-            </span>
-          </div>
+
         </div>
       )}
     </div>

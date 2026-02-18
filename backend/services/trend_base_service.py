@@ -508,11 +508,38 @@ def get_trend_base_engine() -> TrendBaseEngine:
     return _engine_instance
 
 
-async def analyze_trend_base(symbol: str, df: pd.DataFrame) -> Dict:
+async def analyze_trend_base(symbol: str, df: pd.DataFrame, inject_live_tick: bool = True) -> Dict:
     """
     Main entry point for API
-    Ultra-fast async wrapper
+    Ultra-fast async wrapper with optional live tick injection
+    
+    🔥 IMPROVEMENT: Injects latest market tick into analysis
+    This ensures swing point detection uses current price, not stale candle close
     """
+    # 🔥 LIVE TICK INJECTION: Get current market price and inject into DataFrame
+    if inject_live_tick and not df.empty and len(df) > 0:
+        from services.cache import get_redis
+        try:
+            cache = await get_redis()
+            market_data = await cache.get_market_data(symbol)
+            
+            if market_data and market_data.get('price', 0) > 0:
+                current_price = float(market_data.get('price', 0))
+                current_oi = market_data.get('oi', None)
+                
+                # Update the last candle with live price
+                df = df.copy()
+                last_idx = len(df) - 1
+                df.loc[last_idx, 'close'] = current_price
+                df.loc[last_idx, 'high'] = max(df.loc[last_idx, 'high'], current_price)
+                df.loc[last_idx, 'low'] = min(df.loc[last_idx, 'low'], current_price)
+                if current_oi:
+                    df.loc[last_idx, 'oi'] = current_oi
+                
+                print(f"[TREND-BASE-INJECT] 🔥 Injected live tick for {symbol}: ₹{current_price}")
+        except Exception as e:
+            print(f"[TREND-BASE-INJECT] ⚠️ Failed to inject live tick: {e}")
+    
     engine = get_trend_base_engine()
     result = await asyncio.to_thread(engine.analyze, symbol, df)
     return engine.to_dict(result)

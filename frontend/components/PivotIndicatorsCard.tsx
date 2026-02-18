@@ -239,9 +239,9 @@ const PivotIndicatorsCard = memo<Props>(({ symbol, name }) => {
             data.status === 'LIVE' ? 'bg-green-400 animate-pulse' : 
             data.status === 'CACHED' ? 'bg-yellow-400' : 'bg-gray-500'
           }`} />
-          <span className="text-[10px] text-gray-400 font-medium">
-            {data.status === 'LIVE' ? 'LIVE' : data.status === 'CACHED' ? 'CACHED' : data.status === 'PRE_OPEN' ? 'Pre-Open' : data.status === 'FREEZE' ? 'Freeze' : 'Market Closed'}
-          </span>
+          {data.status === 'LIVE' && (
+            <span className="text-[10px] text-gray-400 font-medium">LIVE</span>
+          )}
         </div>
       </div>
 
@@ -414,9 +414,6 @@ export default PivotIndicatorsCard;
             </div>
             <h3 className="font-bold text-slate-200">{name}</h3>
           </div>
-          <span className="px-2 py-1 text-[10px] font-bold rounded bg-amber-900/40 text-amber-300 border border-amber-600/40">
-            Market Closed
-          </span>
         </div>
         
         <div className="text-center py-8">
@@ -466,9 +463,6 @@ export default PivotIndicatorsCard;
                   data.status === 'LIVE' ? 'bg-emerald-400 animate-pulse' : 
                   isClosed ? 'bg-amber-400' : 'bg-blue-400'
                 }`} />
-                <span className="text-[10px] text-slate-400 font-medium">
-                  {data.status === 'LIVE' ? 'Live Data' : isClosed ? 'Last Session' : 'Cached'}
-                </span>
                 {(lastUpdate || data._lastUpdate) && (
                   <span className="text-[9px] text-slate-500">
                     • {lastUpdate || data._lastUpdate}

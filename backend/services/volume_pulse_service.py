@@ -531,11 +531,38 @@ def get_volume_pulse_engine() -> VolumePulseEngine:
     return _engine_instance
 
 
-async def analyze_volume_pulse(symbol: str, df: pd.DataFrame) -> Dict:
+async def analyze_volume_pulse(symbol: str, df: pd.DataFrame, inject_live_tick: bool = True) -> Dict:
     """
     Main entry point for API
-    Ultra-fast async wrapper
+    Ultra-fast async wrapper with optional live tick injection
+    
+    🔥 IMPROVEMENT: Injects latest market tick into analysis
+    This ensures volume analysis uses current price, not stale candle close
     """
+    # 🔥 LIVE TICK INJECTION: Get current market price and inject into DataFrame
+    if inject_live_tick and not df.empty and len(df) > 0:
+        from services.cache import get_redis
+        try:
+            cache = await get_redis()
+            market_data = await cache.get_market_data(symbol)
+            
+            if market_data and market_data.get('price', 0) > 0:
+                current_price = float(market_data.get('price', 0))
+                current_volume = market_data.get('volume', None)
+                
+                # Update the last candle with live price
+                df = df.copy()
+                last_idx = len(df) - 1
+                df.loc[last_idx, 'close'] = current_price
+                df.loc[last_idx, 'high'] = max(df.loc[last_idx, 'high'], current_price)
+                df.loc[last_idx, 'low'] = min(df.loc[last_idx, 'low'], current_price)
+                if current_volume:
+                    df.loc[last_idx, 'volume'] = current_volume
+                
+                print(f"[VOLUME-PULSE-INJECT] 🔥 Injected live tick for {symbol}: ₹{current_price}")
+        except Exception as e:
+            print(f"[VOLUME-PULSE-INJECT] ⚠️ Failed to inject live tick: {e}")
+    
     engine = get_volume_pulse_engine()
     result = await asyncio.to_thread(engine.analyze, symbol, df)
     return engine.to_dict(result)

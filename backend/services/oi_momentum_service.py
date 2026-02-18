@@ -28,9 +28,9 @@ class OIMomentumService:
     """
 
     def __init__(self):
-        self.min_candles_required = 30  # Need at least 30 candles for rolling calculations
-        self.volume_avg_period = 20
-        self.lookback_period = 5
+        self.min_candles_required = 20  # Reduced from 30 - allows signals with fresh data
+        self.volume_avg_period = 20     # 20-candle volume average for baseline
+        self.lookback_period = 5        # 5-candle lookback for liquidity grab
 
     def analyze_signal(
         self,

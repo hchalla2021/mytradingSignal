@@ -214,9 +214,7 @@ export const TradeSupportResistance: React.FC<TradeSupportResistanceProps> = ({
     // Reduce confidence if market is not LIVE
     if (marketStatus !== 'LIVE') {
       confidence = Math.max(30, confidence - 20);
-      if (marketStatus === 'CLOSED') {
-        reason += ' (Market Closed)';
-      }
+
     }
     
     // Style mapping
@@ -312,19 +310,14 @@ export const TradeSupportResistance: React.FC<TradeSupportResistanceProps> = ({
         </div>
       </div>
       
-      {/* Market Status Indicator */}
-      <div className="mt-3 text-center">
-        <div suppressHydrationWarning className={`inline-flex items-center gap-2 text-sm font-medium px-3 py-1.5 rounded-full ${
-          marketStatus === 'LIVE' ? 'bg-green-500/20 text-green-300 border border-green-500/40' :
-          marketStatus === 'CLOSED' ? 'bg-red-500/20 text-red-300 border border-red-500/40' :
-          'bg-gray-500/20 text-gray-400 border border-gray-500/40'
-        }`}>
-          <span className={`w-2 h-2 rounded-full ${
-            marketStatus === 'LIVE' ? 'bg-green-400 animate-pulse' : 'bg-red-400'
-          }`} />
-          <span suppressHydrationWarning>{marketStatus}</span>
+      {marketStatus === 'LIVE' && (
+        <div className="mt-3 text-center">
+          <div suppressHydrationWarning className="inline-flex items-center gap-2 text-sm font-medium px-3 py-1.5 rounded-full bg-green-500/20 text-green-300 border border-green-500/40">
+            <span className="w-2 h-2 rounded-full bg-green-400 animate-pulse" />
+            <span suppressHydrationWarning>LIVE</span>
+          </div>
         </div>
-      </div>
+      )}
     </div>
   );
 };

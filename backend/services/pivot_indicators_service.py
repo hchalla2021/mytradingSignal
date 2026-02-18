@@ -129,7 +129,10 @@ class PivotIndicatorsService:
 
     async def get_indicators(self, symbol: str) -> Dict:
         """Get pivot indicators from instant analysis data - INSTANT!
-        Never throws - always returns fallback if service unavailable."""
+        Never throws - always returns fallback if service unavailable.
+        
+        🔥 IMPROVEMENT: Injects latest market tick for live analysis
+        This ensures pivot points use current price, not stale data"""
         try:
             # Use instant_analysis which has fallback to Zerodha API
             cache = await get_redis()
@@ -146,6 +149,18 @@ class PivotIndicatorsService:
             high = float(indicators.get('high', current_price))
             low = float(indicators.get('low', current_price))
             open_price = float(indicators.get('open', current_price))
+            
+            # 🔥 LIVE TICK INJECTION: Get current market tick for absolutely fresh analysis
+            try:
+                market_data = await cache.get_market_data(symbol)
+                if market_data and market_data.get('price', 0) > 0:
+                    live_price = float(market_data.get('price', 0))
+                    current_price = live_price
+                    high = max(high, live_price)
+                    low = min(low, live_price)
+                    print(f"[PIVOT-INJECT] 🔥 Injected live tick for {symbol}: ₹{live_price}")
+            except Exception as e:
+                print(f"[PIVOT-INJECT] ⚠️ Failed to inject live tick: {e}")
             
             # Get previous day data from indicators
             prev_high = float(indicators.get('prev_day_high', high))

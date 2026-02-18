@@ -291,10 +291,23 @@ async def get_volume_pulse(symbol: str) -> Dict[str, Any]:
         print(f"💾 CACHED: 10s live + 24h backup")
         print(f"{'='*80}\n")
         
-        # ⚡ PERFORMANCE: Cache for 10s (frontend polls every 15s)
-        # This ensures most requests get instant cached response
+        # 🔥 IMPROVED CACHE STRATEGY: 
+        # During live market (9:15-3:30): Skip cache for fresh data every 5 seconds
+        # Outside market hours: Cache for 60s to reduce API calls
+        from datetime import time as time_class
+        now = datetime.now().time()
+        is_trading = time_class(9, 15) <= now <= time_class(15, 30)  # 9:15 AM to 3:30 PM
+        
         result["cache_hit"] = False  # Fresh data
-        await cache.set(cache_key, result, expire=10)
+        
+        if is_trading:
+            # 🔥 NO CACHE during live trading - get fresh data immediately
+            print(f"[VOLUME-PULSE] 🚀 LIVE TRADING (9:15-3:30): Fresh data every request")
+            # Don't cache during live trading to ensure responsive updates
+        else:
+            # Cache for 60 seconds outside trading hours
+            await cache.set(cache_key, result, expire=60)
+            print(f"[VOLUME-PULSE] 💾 Outside trading hours: Cached for 60s")
         
         # 🔥 PERMANENT FIX: Save as 24-hour backup
         backup_cache_key = f"volume_pulse_backup:{symbol}"
@@ -559,14 +572,26 @@ async def get_trend_base(symbol: str) -> Dict[str, Any]:
         result["token_valid"] = token_status["valid"]
         result["cache_hit"] = False  # Fresh data
         
-        # ⚡ PERFORMANCE: Cache for 10s (frontend polls every 15s)
-        # This ensures most requests get instant cached response
-        await cache.set(cache_key, result, expire=10)
+        # 🔥 IMPROVED CACHE STRATEGY: 
+        # During live market (9:15-3:30): Skip cache for fresh data every 5 seconds
+        # Outside market hours: Cache for 60s to reduce API calls
+        from datetime import time as time_class
+        now = datetime.now().time()
+        is_trading = time_class(9, 15) <= now <= time_class(15, 30)  # 9:15 AM to 3:30 PM
+        
+        if is_trading:
+            # 🔥 NO CACHE during live trading - get fresh data immediately
+            print(f"[TREND-BASE] 🚀 LIVE TRADING (9:15-3:30): Fresh data every request")
+            # Don't cache during live trading to ensure responsive updates
+        else:
+            # Cache for 60 seconds outside trading hours
+            await cache.set(cache_key, result, expire=60)
+            print(f"[TREND-BASE] 💾 Outside trading hours: Cached for 60s")
         
         # 🔥 FIX: Also save 24-hour backup for market closed periods
         backup_cache_key = f"trend_base_backup:{symbol}"
         await cache.set(backup_cache_key, result, expire=86400)
-        print(f"[TREND-BASE] 💾 Cached: 10s fast + 24h backup")
+        print(f"[TREND-BASE] 💾 Backup cache: 24h for after-hours display")
         
         print(f"[TREND-BASE] ✅ Analysis complete for {symbol}")
         print(f"   → Status: {result.get('data_status', 'UNKNOWN')}")
@@ -1426,15 +1451,27 @@ async def get_candle_intent(symbol: str) -> Dict[str, Any]:
         token_status = await check_global_token_status()
         print(f"[GLOBAL-TOKEN] Status: {'✅ Valid' if token_status['valid'] else '❌ Expired'}")
         
-        # Check cache first (3 seconds - very fast refresh for candle patterns)
+        # Check cache with smart timing (no cache during live trading hours)
+        from datetime import datetime
+        from pytz import timezone
         cache = get_cache()
         cache_key = f"candle_intent:{symbol}"
-        cached = await cache.get(cache_key)
         
-        if cached:
-            cached["token_valid"] = token_status["valid"]
-            print(f"[CANDLE-INTENT] ⚡ Cache hit for {symbol} (3s cache)")
-            return cached
+        # Trading hours detection (9:15 AM - 3:30 PM IST)
+        ist = timezone('Asia/Kolkata')
+        current_time = datetime.now(ist).time()
+        is_trading = datetime.now(ist).weekday() < 5 and (datetime.strptime("09:15", "%H:%M").time() <= current_time <= datetime.strptime("15:30", "%H:%M").time())
+        
+        # During trading hours: no cache for live analysis
+        # Outside trading hours: 60s cache for efficiency
+        if is_trading:
+            print(f"[CANDLE-INTENT] 🔥 Trading hours (9:15-3:30) - NO CACHE for live updates")
+        else:
+            cached = await cache.get(cache_key)
+            if cached:
+                cached["token_valid"] = token_status["valid"]
+                print(f"[CANDLE-INTENT] ⚡ Cache hit for {symbol} (60s cache outside trading hours)")
+                return cached
         
         # 🔥 FIX: Use FUTURES data (has volume) instead of SPOT INDEX (no volume)
         # Candle Intent REQUIRES volume for pattern detection
@@ -1526,9 +1563,9 @@ async def get_candle_intent(symbol: str) -> Dict[str, Any]:
             print(f"   → Last candle: {last_date}")
             print(f"   → Total candles: {len(df)}")
         
-        # 📊 ANALYZE CANDLE INTENT WITH REAL DATA
+        # 📊 ANALYZE CANDLE INTENT WITH REAL DATA (with live tick injection)
         print(f"[CANDLE-INTENT] 🔬 Running candle structure analysis...")
-        result = await analyze_candle_intent(symbol, df)
+        result = await analyze_candle_intent(symbol, df, inject_live_tick=True)
         
         # Add metadata
         result["status"] = "FRESH"
@@ -1536,8 +1573,14 @@ async def get_candle_intent(symbol: str) -> Dict[str, Any]:
         result["data_source"] = "ZERODHA_FUTURES"
         result["candles_analyzed"] = len(df)
         
-        # Cache result (5 seconds for fast refresh - same as other features)
-        await cache.set(cache_key, result, expire=5)
+        # Smart cache strategy (same as other live components)
+        if is_trading:
+            # During trading: NO cache for real-time pattern changes
+            print(f"[CANDLE-INTENT] 🚀 Trading hours - Fresh analysis, no cache")
+        else:
+            # Outside trading: 60s cache for efficiency
+            await cache.set(cache_key, result, expire=60)
+            print(f"[CANDLE-INTENT] 💾 Non-trading hours - Cached for 60s")
         
         # Save 24-hour backup
         backup_cache_key = f"candle_intent_backup:{symbol}"

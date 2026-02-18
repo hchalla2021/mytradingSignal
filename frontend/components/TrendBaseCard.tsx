@@ -42,7 +42,7 @@ const TrendBaseCard = memo<TrendBaseCardProps>(({ symbol, name }) => {
     const fetchData = async () => {
       try {
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 15000);
+        const timeoutId = setTimeout(() => controller.abort(), 10000);
         
         const response = await fetch(
           API_CONFIG.endpoint(`/api/advanced/trend-base/${symbol}`),
@@ -78,7 +78,9 @@ const TrendBaseCard = memo<TrendBaseCardProps>(({ symbol, name }) => {
     };
 
     fetchData();
-    const interval = setInterval(fetchData, 15000);
+    // 🔥 IMPROVED: Fetch every 5 seconds (was 15s) for responsive trend updates
+    // Pre-open: 5s | Live trading: 5s | Post-market: 5s
+    const interval = setInterval(fetchData, 5000);
     return () => clearInterval(interval);
   }, [symbol]);
 

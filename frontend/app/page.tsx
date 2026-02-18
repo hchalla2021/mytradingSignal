@@ -926,30 +926,9 @@ export default function Home() {
           </div>
           
           <div className="grid grid-cols-1 lg:grid-cols-2 2xl:grid-cols-3 gap-3">
-            <InstitutionalMarketView analysis={{
-              symbol: 'NIFTY',
-              symbol_name: 'NIFTY 50',
-              smart_money_signal: analyses?.NIFTY?.indicators?.smart_money_signal || 'NEUTRAL',
-              smart_money_confidence: analyses?.NIFTY?.indicators?.smart_money_confidence || 0.3,
-              status: analyses?.NIFTY?.status || marketStatus,
-              indicators: analyses?.NIFTY?.indicators
-            }} marketStatus={marketStatus} />
-            <InstitutionalMarketView analysis={{
-              symbol: 'BANKNIFTY',
-              symbol_name: 'BANK NIFTY',
-              smart_money_signal: analyses?.BANKNIFTY?.indicators?.smart_money_signal || 'NEUTRAL',
-              smart_money_confidence: analyses?.BANKNIFTY?.indicators?.smart_money_confidence || 0.3,
-              status: analyses?.BANKNIFTY?.status || marketStatus,
-              indicators: analyses?.BANKNIFTY?.indicators
-            }} marketStatus={marketStatus} />
-            <InstitutionalMarketView analysis={{
-              symbol: 'SENSEX',
-              symbol_name: 'SENSEX',
-              smart_money_signal: analyses?.SENSEX?.indicators?.smart_money_signal || 'NEUTRAL',
-              smart_money_confidence: analyses?.SENSEX?.indicators?.smart_money_confidence || 0.3,
-              status: analyses?.SENSEX?.status || marketStatus,
-              indicators: analyses?.SENSEX?.indicators
-            }} marketStatus={marketStatus} />
+            <InstitutionalMarketView symbol="NIFTY" marketStatus={marketStatus} />
+            <InstitutionalMarketView symbol="BANKNIFTY" marketStatus={marketStatus} />
+            <InstitutionalMarketView symbol="SENSEX" marketStatus={marketStatus} />
           </div>
         </div>
 
@@ -970,30 +949,9 @@ export default function Home() {
           </div>
           
           <div className="grid grid-cols-1 lg:grid-cols-2 2xl:grid-cols-3 gap-3">
-            <CandleQualityAnalysis analysis={{
-              symbol: 'NIFTY',
-              symbol_name: 'NIFTY 50',
-              candle_quality_signal: analyses?.NIFTY?.indicators?.candle_quality_signal || 'NEUTRAL',
-              candle_quality_confidence: analyses?.NIFTY?.indicators?.candle_quality_confidence || 0.3,
-              status: analyses?.NIFTY?.status || marketStatus,
-              indicators: analyses?.NIFTY?.indicators
-            }} />
-            <CandleQualityAnalysis analysis={{
-              symbol: 'BANKNIFTY',
-              symbol_name: 'BANK NIFTY',
-              candle_quality_signal: analyses?.BANKNIFTY?.indicators?.candle_quality_signal || 'NEUTRAL',
-              candle_quality_confidence: analyses?.BANKNIFTY?.indicators?.candle_quality_confidence || 0.3,
-              status: analyses?.BANKNIFTY?.status || marketStatus,
-              indicators: analyses?.BANKNIFTY?.indicators
-            }} />
-            <CandleQualityAnalysis analysis={{
-              symbol: 'SENSEX',
-              symbol_name: 'SENSEX',
-              candle_quality_signal: analyses?.SENSEX?.indicators?.candle_quality_signal || 'NEUTRAL',
-              candle_quality_confidence: analyses?.SENSEX?.indicators?.candle_quality_confidence || 0.3,
-              status: analyses?.SENSEX?.status || marketStatus,
-              indicators: analyses?.SENSEX?.indicators
-            }} />
+            <CandleQualityAnalysis symbol="NIFTY" />
+            <CandleQualityAnalysis symbol="BANKNIFTY" />
+            <CandleQualityAnalysis symbol="SENSEX" />
           </div>
         </div>
 
@@ -1227,21 +1185,12 @@ export default function Home() {
                       Price: ₹{item.data.indicators.price}
                     </div>
 
-                    {/* Market Status */}
-                    <div className={`flex justify-center p-2 rounded-lg border ${
-                      (item.data?.status || marketStatus) === 'LIVE' ? 'bg-green-500/5 border-green-500/30 text-green-300' :
-                      (item.data?.status || marketStatus) === 'CLOSED' ? 'bg-amber-500/5 border-amber-500/30 text-amber-300' :
-                      (item.data?.status || marketStatus) === 'PRE_OPEN' ? 'bg-orange-500/5 border-orange-500/30 text-orange-300' :
-                      'bg-red-500/5 border-red-500/30 text-red-300'
-                    }`}>
-                      <span className="text-xs font-bold">
-                        {(item.data?.status || marketStatus) === 'LIVE' ? '🟢 LIVE' :
-                         (item.data?.status || marketStatus) === 'CLOSED' ? '🟡 Market Closed' :
-                         (item.data?.status || marketStatus) === 'PRE_OPEN' ? '🟠 Pre-Open' :
-                         (item.data?.status || marketStatus) === 'FREEZE' ? '⏸️ Freeze' :
-                         '🔴 Market Closed'}
-                      </span>
-                    </div>
+                    {/* Market Status - Only show when LIVE */}
+                    {(item.data?.status || marketStatus) === 'LIVE' && (
+                      <div className="flex justify-center p-2 rounded-lg border bg-green-500/5 border-green-500/30 text-green-300">
+                        <span className="text-xs font-bold">🟢 LIVE</span>
+                      </div>
+                    )}
                   </div>
                 ) : (
                   <div className="flex items-center justify-center py-6 text-white text-sm font-semibold">
@@ -1376,21 +1325,12 @@ export default function Home() {
                       </div>
                     )}
 
-                    {/* Status Badge */}
-                    <div className={`flex justify-center p-2 rounded-lg border ${
-                      (item.data?.status || marketStatus) === 'LIVE' ? 'bg-green-500/5 border-green-500/30 text-green-300' :
-                      (item.data?.status || marketStatus) === 'CLOSED' ? 'bg-amber-500/5 border-amber-500/30 text-amber-300' :
-                      (item.data?.status || marketStatus) === 'PRE_OPEN' ? 'bg-orange-500/5 border-orange-500/30 text-orange-300' :
-                      'bg-red-500/5 border-red-500/30 text-red-300'
-                    }`}>
-                      <span className="text-xs font-bold">
-                        {(item.data?.status || marketStatus) === 'LIVE' ? '🟢 LIVE' :
-                         (item.data?.status || marketStatus) === 'CLOSED' ? '🟡 Market Closed' :
-                         (item.data?.status || marketStatus) === 'PRE_OPEN' ? '🟠 Pre-Open' :
-                         (item.data?.status || marketStatus) === 'FREEZE' ? '⏸️ Freeze' :
-                         '🔴 Market Closed'}
-                      </span>
-                    </div>
+                    {/* Status Badge - Only show when LIVE */}
+                    {(item.data?.status || marketStatus) === 'LIVE' && (
+                      <div className="flex justify-center p-2 rounded-lg border bg-green-500/5 border-green-500/30 text-green-300">
+                        <span className="text-xs font-bold">🟢 LIVE</span>
+                      </div>
+                    )}
                   </div>
                 </div>
               );

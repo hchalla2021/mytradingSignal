@@ -626,8 +626,8 @@ const PivotSectionUnified = memo<{ updates?: number }>((props) => {
   useEffect(() => {
     fetchAllData(false);
     
-    // Refresh every 15 seconds when market is open
-    const interval = setInterval(() => fetchAllData(true), 15000);
+    // Refresh every 5 seconds when market is open (was 15 seconds)
+    const interval = setInterval(() => fetchAllData(true), 5000);
     return () => clearInterval(interval);
   }, [fetchAllData]);
 

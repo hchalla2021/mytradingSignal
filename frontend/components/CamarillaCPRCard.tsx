@@ -225,7 +225,7 @@ const CamarillaCPRCard: React.FC<CamarillaCPRCardProps> = ({
 
   useEffect(() => {
     fetchCamarillaCPRData();
-    const interval = setInterval(fetchCamarillaCPRData, 10000); // Refresh every 10s
+    const interval = setInterval(fetchCamarillaCPRData, 5000); // Refresh every 5s (live updates)
     return () => clearInterval(interval);
   }, [fetchCamarillaCPRData]);
 

@@ -23,11 +23,19 @@ interface SignalWeight {
   zoneControl: number;
   volumePulse: number;
   trendBase: number;
-  marketStructure: number; // 🏗️ Order Flow, FVG, Order Blocks, Smart Money positioning
-  candleIntent: number; // Candle structure patterns - Professional signals
+  marketStructure: number; // 🏗️ Order Flow, FVG, Order Blocks positioning
+  candleIntent: number; // Candle structure patterns
   marketIndices: number; // Live Market Indices momentum
   pcr: number; // Put-Call Ratio - Market sentiment indicator
-  pivot: number; // Pivot Points & Supertrend - Independent technical confirmation
+  pivot: number; // Pivot Points & Supertrend
+  // 🔥 NEW: 5 Additional Components
+  orb: number; // Opening Range Breakout
+  supertrend: number; // SuperTrend Indicator
+  sar: number; // Parabolic SAR - Trailing Stops
+  camarilla: number; // Camarilla CPR - Zone Breaks
+  rsi60_40: number; // RSI 60/40 Momentum
+  smartMoney: number; // Smart Money Flow
+  oiMomentum: number; // OI Momentum
 }
 
 interface SymbolOutlook {
@@ -44,6 +52,14 @@ interface SymbolOutlook {
     marketIndices: { signal: string; confidence: number; weight: number };
     pcr: { signal: string; confidence: number; weight: number };
     pivot: { signal: string; confidence: number; weight: number };
+    // 🔥 NEW: 5 Additional Components for Complete Integration
+    orb: { signal: string; confidence: number; weight: number };
+    supertrend: { signal: string; confidence: number; weight: number };
+    sar: { signal: string; confidence: number; weight: number };
+    camarilla: { signal: string; confidence: number; weight: number };
+    rsi60_40: { signal: string; confidence: number; weight: number };
+    smartMoney: { signal: string; confidence: number; weight: number };
+    oiMomentum: { signal: string; confidence: number; weight: number };
   };
   // 🔥 MASTER TRADE - 9 Golden Rules Status
   masterTradeStatus: {
@@ -84,17 +100,25 @@ interface OverallOutlookData {
 const API_BASE_URL = API_CONFIG.baseUrl;
 const SYMBOLS = (process.env.NEXT_PUBLIC_MARKET_SYMBOLS || 'NIFTY,BANKNIFTY,SENSEX').split(',').filter(Boolean);
 
-// Signal strength weights (total = 100%) - 9 sources
+// Signal strength weights (total = 100%) - 14 component sources integrated
 const SIGNAL_WEIGHTS: SignalWeight = {
-  technical: 18,           // 18% weight - Core technical indicators
-  zoneControl: 14,         // 14% weight - Support/Resistance zones
-  volumePulse: 14,         // 14% weight - Volume analysis
-  trendBase: 11,           // 11% weight - Trend structure
-  marketStructure: 10,     // 10% weight - Order Flow, FVG, Order Blocks, Smart Money
-  candleIntent: 12,        // 12% weight - Candle patterns (rejection, absorption, breakout)
-  marketIndices: 6,        // 6% weight - Live price momentum from indices
-  pcr: 5,                  // 5% weight - Put-Call Ratio (market sentiment)
-  pivot: 10,               // 10% weight - Pivot Points & Supertrend (independent confirmation)
+  technical: 12,           // 12% weight - Technical Analysis (VWAP, EMA, Support/Resistance)
+  zoneControl: 10,         // 10% weight - Zone Control (Breakdown Risk, Bounce Probability)
+  volumePulse: 9,          // 9% weight - Volume Pulse (Green/Red Candle Volume Ratio)
+  trendBase: 8,            // 8% weight - Trend Base (Higher-Low Structure)
+  marketStructure: 8,      // 8% weight - Market Structure (Order Flow, FVG, Order Blocks)
+  candleIntent: 8,         // 8% weight - Candle Intent (Candle Pattern Analysis)
+  marketIndices: 5,        // 5% weight - Market Indices (PCR, Sentiment)
+  pcr: 4,                  // 4% weight - Put-Call Ratio (market sentiment)
+  pivot: 7,                // 7% weight - Pivot Points (Supertrend, Support/Resistance)
+  // 🔥 NEW: 5 Additional Components (totaling 21% for operational signals)
+  orb: 5,                  // 5% weight - ORB (Opening Range Breakout)
+  supertrend: 5,           // 5% weight - SuperTrend (Trend Following)
+  sar: 4,                  // 4% weight - SAR (Parabolic SAR - Trailing Stops)
+  camarilla: 4,            // 4% weight - Camarilla CPR (Zone Breaks)
+  rsi60_40: 5,             // 5% weight - RSI 60/40 Momentum (Entry Signal)
+  smartMoney: 5,           // 5% weight - Smart Money Flow (Institutional Positioning)
+  oiMomentum: 5,           // 5% weight - OI Momentum (5m/15m Signal Alignment)
 }
 
 // 🔥🔥🔥 INSTANT DEFAULT VALUES - Start at 0%, load real data immediately
@@ -103,15 +127,23 @@ const createDefaultOutlook = (symbol: string): SymbolOutlook => ({
   overallSignal: 'NEUTRAL',
   tradeRecommendation: '⏳ Calculating...',
   signalBreakdown: {
-    technical: { signal: 'NEUTRAL', confidence: 0, weight: 18 },
-    zoneControl: { signal: 'NEUTRAL', confidence: 0, weight: 14 },
-    volumePulse: { signal: 'NEUTRAL', confidence: 0, weight: 14 },
-    trendBase: { signal: 'NEUTRAL', confidence: 0, weight: 11 },
-    marketStructure: { signal: 'NEUTRAL', confidence: 0, weight: 10 },
-    candleIntent: { signal: 'NEUTRAL', confidence: 0, weight: 12 },
-    marketIndices: { signal: 'NEUTRAL', confidence: 0, weight: 6 },
-    pcr: { signal: 'NEUTRAL', confidence: 0, weight: 5 },
-    pivot: { signal: 'NEUTRAL', confidence: 0, weight: 10 },
+    technical: { signal: 'NEUTRAL', confidence: 0, weight: 12 },
+    zoneControl: { signal: 'NEUTRAL', confidence: 0, weight: 10 },
+    volumePulse: { signal: 'NEUTRAL', confidence: 0, weight: 9 },
+    trendBase: { signal: 'NEUTRAL', confidence: 0, weight: 8 },
+    marketStructure: { signal: 'NEUTRAL', confidence: 0, weight: 8 },
+    candleIntent: { signal: 'NEUTRAL', confidence: 0, weight: 8 },
+    marketIndices: { signal: 'NEUTRAL', confidence: 0, weight: 5 },
+    pcr: { signal: 'NEUTRAL', confidence: 0, weight: 4 },
+    pivot: { signal: 'NEUTRAL', confidence: 0, weight: 7 },
+    // 🔥 NEW: 5 Additional Components
+    orb: { signal: 'NEUTRAL', confidence: 0, weight: 5 },
+    supertrend: { signal: 'NEUTRAL', confidence: 0, weight: 5 },
+    sar: { signal: 'NEUTRAL', confidence: 0, weight: 4 },
+    camarilla: { signal: 'NEUTRAL', confidence: 0, weight: 4 },
+    rsi60_40: { signal: 'NEUTRAL', confidence: 0, weight: 5 },
+    smartMoney: { signal: 'NEUTRAL', confidence: 0, weight: 5 },
+    oiMomentum: { signal: 'NEUTRAL', confidence: 0, weight: 5 },
   },
   masterTradeStatus: {
     qualified: false,
@@ -176,16 +208,23 @@ export const useOverallMarketOutlook = () => {
     return baseScore * (confidence / 100);
   };
 
-  // Calculate aggregated confidence score
+  // Calculate aggregated confidence score with ALL 14 COMPONENTS
   const calculateOverallOutlook = useCallback((
     technical: any,
     zoneControl: any,
     volumePulse: any,
     trendBase: any,
-    candleIntent: any,    // Candle structure patterns
-    marketIndicesData: any, // Live Market Indices momentum
-    pivotIndicators: any  // 🎯 Pivot Points & Supertrend data
-    // ai: any // COMMENTED OUT - Not required
+    candleIntent: any,
+    marketIndicesData: any,
+    pivotIndicators: any,
+    // 🔥 NEW: 5 Additional Components
+    orb: any,
+    supertrend: any,
+    sar: any,
+    camarilla: any,
+    rsi60_40: any,
+    smartMoney: any,
+    oiMomentum: any
   ): SymbolOutlook => {
     // 🔥 PERMANENT FIX: ALWAYS calculate and show data
     // Market status is informational only, never block display
@@ -599,6 +638,76 @@ export const useOverallMarketOutlook = () => {
       }
     }
 
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    // 🔥 NEW: Extract 5 Additional Component Signals
+    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+    
+    // ORB (Opening Range Breakout)
+    let orbSignal = 'NEUTRAL';
+    let orbConfidence = 0;
+    if (orb) {
+      orbSignal = orb.signal || orb.orb_signal || 'NEUTRAL';
+      orbConfidence = (orb.confidence || orb.orb_confidence || 0) * 100;
+    }
+    
+    // SuperTrend
+    let supertrendSignal = 'NEUTRAL';
+    let supertrendConfidence = 0;
+    if (supertrend) {
+      supertrendSignal = supertrend.signal || supertrend.supertrend_signal || 'NEUTRAL';
+      supertrendConfidence = (supertrend.confidence || supertrend.st_confidence || 0) * 100;
+    }
+    
+    // Parabolic SAR
+    let sarSignal = 'NEUTRAL';
+    let sarConfidence = 0;
+    if (sar) {
+      sarSignal = sar.signal || sar.sar_signal || 'NEUTRAL';
+      sarConfidence = (sar.confidence || sar.sar_confidence || 0) * 100;
+    }
+    
+    // Camarilla CPR
+    let camarillaSignal = 'NEUTRAL';
+    let camarillaConfidence = 0;
+    if (camarilla) {
+      camarillaSignal = camarilla.signal || camarilla.camarilla_signal || 'NEUTRAL';
+      camarillaConfidence = (camarilla.confidence || camarilla.camarilla_confidence || 0) * 100;
+    }
+    
+    // RSI 60/40 Momentum
+    let rsi60_40Signal = 'NEUTRAL';
+    let rsi60_40Confidence = 0;
+    if (rsi60_40) {
+      rsi60_40Signal = rsi60_40.rsi_momentum_status || rsi60_40.signal || 'NEUTRAL';
+      rsi60_40Confidence = (rsi60_40.rsi_momentum_confidence || rsi60_40.confidence || 0);
+    }
+    
+    // Smart Money Flow (Institutional)
+    let smartMoneySignal = 'NEUTRAL';
+    let smartMoneyConfidence = 0;
+    if (smartMoney) {
+      smartMoneySignal = smartMoney.signal || smartMoney.bos_signal || 'NEUTRAL';
+      smartMoneyConfidence = (smartMoney.confidence || smartMoney.fvg_confidence || 0) * 100;
+    }
+    
+    // OI Momentum (5m/15m Alignment)
+    let oiMomentumSignal = 'NEUTRAL';
+    let oiMomentumConfidence = 0;
+    if (oiMomentum) {
+      oiMomentumSignal = oiMomentum.final_signal || oiMomentum.signal || 'NEUTRAL';
+      oiMomentumConfidence = oiMomentum.confidence || 0;
+    }
+
+    console.log('[OUTLOOK-CALC] NEW Component Signals:', {
+      orb: orbSignal + ' (' + orbConfidence + '%)',
+      supertrend: supertrendSignal + ' (' + supertrendConfidence + '%)',
+      sar: sarSignal + ' (' + sarConfidence + '%)',
+      camarilla: camarillaSignal + ' (' + camarillaConfidence + '%)',
+      rsi60_40: rsi60_40Signal + ' (' + rsi60_40Confidence + '%)',
+      smartMoney: smartMoneySignal + ' (' + smartMoneyConfidence + '%)',
+      oiMomentum: oiMomentumSignal + ' (' + oiMomentumConfidence + '%)',
+    });
+
     // Convert signals to confidence-weighted scores (-100 to +100)
     const techScore = signalToScore(finalTechSignal, finalTechConfidence);
     const zoneScore = signalToScore(finalZoneSignal, zoneConfidence);
@@ -609,7 +718,14 @@ export const useOverallMarketOutlook = () => {
     const marketIndicesScore = signalToScore(marketIndicesSignal, marketIndicesConfidence);
     const pcrScore = signalToScore(pcrSignal, pcrConfidence);
     const pivotScore = signalToScore(pivotSignal, pivotConfidence);
-    // const aiScore = signalToScore(aiSignal, aiConfidence); // COMMENTED OUT
+    // 🔥 NEW: Convert new component signals to scores
+    const orbScore = signalToScore(orbSignal, orbConfidence);
+    const supertrendScore = signalToScore(supertrendSignal, supertrendConfidence);
+    const sarScore = signalToScore(sarSignal, sarConfidence);
+    const camarillaScore = signalToScore(camarillaSignal, camarillaConfidence);
+    const rsi60_40Score = signalToScore(rsi60_40Signal, rsi60_40Confidence);
+    const smartMoneyScore = signalToScore(smartMoneySignal, smartMoneyConfidence);
+    const oiMomentumScore = signalToScore(oiMomentumSignal, oiMomentumConfidence);
     
     // 🔍 DEBUG logs for troubleshooting
     console.log('[OUTLOOK-CALC] Signal Confidences with Pivot Integration:', {
@@ -625,7 +741,7 @@ export const useOverallMarketOutlook = () => {
     });
     console.log('[OUTLOOK-CALC] Available signals:', availableSignals + '/9');
 
-    // 🔥 SIMPLIFIED: Calculate weighted average score (scores already confidence-adjusted)
+    // 🔥 SIMPLIFIED: Calculate weighted average score - NOW WITH 14 COMPONENTS
     const totalWeight = (
       SIGNAL_WEIGHTS.technical +
       SIGNAL_WEIGHTS.zoneControl +
@@ -635,7 +751,15 @@ export const useOverallMarketOutlook = () => {
       SIGNAL_WEIGHTS.candleIntent +
       SIGNAL_WEIGHTS.marketIndices +
       SIGNAL_WEIGHTS.pcr +
-      SIGNAL_WEIGHTS.pivot
+      SIGNAL_WEIGHTS.pivot +
+      // 🔥 NEW: 5 Additional Components
+      SIGNAL_WEIGHTS.orb +
+      SIGNAL_WEIGHTS.supertrend +
+      SIGNAL_WEIGHTS.sar +
+      SIGNAL_WEIGHTS.camarilla +
+      SIGNAL_WEIGHTS.rsi60_40 +
+      SIGNAL_WEIGHTS.smartMoney +
+      SIGNAL_WEIGHTS.oiMomentum
     );
     
     const totalWeightedScore = (
@@ -647,13 +771,20 @@ export const useOverallMarketOutlook = () => {
       (candleScore * SIGNAL_WEIGHTS.candleIntent) +
       (marketIndicesScore * SIGNAL_WEIGHTS.marketIndices) +
       (pcrScore * SIGNAL_WEIGHTS.pcr) +
-      (pivotScore * SIGNAL_WEIGHTS.pivot)
-      // + (aiScore * SIGNAL_WEIGHTS.ai) // COMMENTED OUT
+      (pivotScore * SIGNAL_WEIGHTS.pivot) +
+      // 🔥 NEW: 5 Additional Component Scores
+      (orbScore * SIGNAL_WEIGHTS.orb) +
+      (supertrendScore * SIGNAL_WEIGHTS.supertrend) +
+      (sarScore * SIGNAL_WEIGHTS.sar) +
+      (camarillaScore * SIGNAL_WEIGHTS.camarilla) +
+      (rsi60_40Score * SIGNAL_WEIGHTS.rsi60_40) +
+      (smartMoneyScore * SIGNAL_WEIGHTS.smartMoney) +
+      (oiMomentumScore * SIGNAL_WEIGHTS.oiMomentum)
     ) / totalWeight;
     
     // Debug log removed for production
 
-    // Calculate overall confidence (0-100) - SEPARATE from signal score
+    // Calculate overall confidence (0-100) - SEPARATE from signal score - WITH 14 COMPONENTS
     // Confidence = weighted average of individual confidences (not signal scores)
     const overallConfidence = (
       (finalTechConfidence * SIGNAL_WEIGHTS.technical) +
@@ -664,13 +795,22 @@ export const useOverallMarketOutlook = () => {
       (finalCandleConfidence * SIGNAL_WEIGHTS.candleIntent) +
       (marketIndicesConfidence * SIGNAL_WEIGHTS.marketIndices) +
       (pcrConfidence * SIGNAL_WEIGHTS.pcr) +
-      (pivotConfidence * SIGNAL_WEIGHTS.pivot)
+      (pivotConfidence * SIGNAL_WEIGHTS.pivot) +
+      // 🔥 NEW: 5 Additional Component Confidences
+      (orbConfidence * SIGNAL_WEIGHTS.orb) +
+      (supertrendConfidence * SIGNAL_WEIGHTS.supertrend) +
+      (sarConfidence * SIGNAL_WEIGHTS.sar) +
+      (camarillaConfidence * SIGNAL_WEIGHTS.camarilla) +
+      (rsi60_40Confidence * SIGNAL_WEIGHTS.rsi60_40) +
+      (smartMoneyConfidence * SIGNAL_WEIGHTS.smartMoney) +
+      (oiMomentumConfidence * SIGNAL_WEIGHTS.oiMomentum)
     ) / totalWeight;
     
-    // 🔥 BONUS: Add alignment bonus (when signals agree, confidence increases)
-    const bullishCount = [techScore, zoneScore, volumeScore, trendScore, marketStructureScore, candleScore, marketIndicesScore, pcrScore, pivotScore].filter(s => s > 0).length;
-    const bearishCount = [techScore, zoneScore, volumeScore, trendScore, marketStructureScore, candleScore, marketIndicesScore, pcrScore, pivotScore].filter(s => s < 0).length;
-    const alignmentBonus = Math.abs(bullishCount - bearishCount) * 3; // +3% per aligned signal
+    // 🔥 BONUS: Add alignment bonus (when signals agree, confidence increases) - NOW 14 SIGNALS
+    const allScores = [techScore, zoneScore, volumeScore, trendScore, marketStructureScore, candleScore, marketIndicesScore, pcrScore, pivotScore, orbScore, supertrendScore, sarScore, camarillaScore, rsi60_40Score, smartMoneyScore, oiMomentumScore];
+    const bullishCount = allScores.filter(s => s > 0).length;
+    const bearishCount = allScores.filter(s => s < 0).length;
+    const alignmentBonus = Math.abs(bullishCount - bearishCount) * 2; // +2% per aligned signal (reduced for 14 signals)
     let finalConfidence = Math.min(100, overallConfidence + alignmentBonus);
 
     // 🔥 TRADER-FRIENDLY THRESHOLDS: More responsive and granular
@@ -914,6 +1054,42 @@ export const useOverallMarketOutlook = () => {
           confidence: Math.round(pivotConfidence),
           weight: SIGNAL_WEIGHTS.pivot
         },
+        // 🔥 NEW: 5 Additional Components for 14-Signal Integration
+        orb: {
+          signal: orbSignal,
+          confidence: Math.round(orbConfidence),
+          weight: SIGNAL_WEIGHTS.orb
+        },
+        supertrend: {
+          signal: supertrendSignal,
+          confidence: Math.round(supertrendConfidence),
+          weight: SIGNAL_WEIGHTS.supertrend
+        },
+        sar: {
+          signal: sarSignal,
+          confidence: Math.round(sarConfidence),
+          weight: SIGNAL_WEIGHTS.sar
+        },
+        camarilla: {
+          signal: camarillaSignal,
+          confidence: Math.round(camarillaConfidence),
+          weight: SIGNAL_WEIGHTS.camarilla
+        },
+        rsi60_40: {
+          signal: rsi60_40Signal,
+          confidence: Math.round(rsi60_40Confidence),
+          weight: SIGNAL_WEIGHTS.rsi60_40
+        },
+        smartMoney: {
+          signal: smartMoneySignal,
+          confidence: Math.round(smartMoneyConfidence),
+          weight: SIGNAL_WEIGHTS.smartMoney
+        },
+        oiMomentum: {
+          signal: oiMomentumSignal,
+          confidence: Math.round(oiMomentumConfidence),
+          weight: SIGNAL_WEIGHTS.oiMomentum
+        },
       },
       // 🔥 9 GOLDEN RULES - Master Trade Status
       masterTradeStatus: {
@@ -979,19 +1155,33 @@ export const useOverallMarketOutlook = () => {
     // 🔥 DEBUG: Log API URL being used
     console.log(`[OUTLOOK-${symbol}] API Base URL: ${API_BASE_URL}`);
 
-    // 🚀 OPTIMIZATION: Fetch ALL advanced analysis in ONE call (5x faster!)
-    const [tech, allAdvanced, market, pivotData] = await Promise.all([
+    // 🚀 OPTIMIZATION: Fetch ALL analysis endpoints in parallel (14 signals!)
+    const [tech, allAdvanced, market, pivotData, orb, supertrend, sar, camarilla, rsi60_40, smartMoney, oiMomentum] = await Promise.all([
       quickFetch(`${API_BASE_URL}/api/analysis/analyze/${symbol}`),
-      quickFetch(`${API_BASE_URL}/api/advanced/all-analysis/${symbol}`), // ⚡ ONE CALL for 5 endpoints!
+      quickFetch(`${API_BASE_URL}/api/advanced/all-analysis/${symbol}`), // ⚡ Zone, Volume, Trend, Candle
       quickFetch(`${API_BASE_URL}/ws/cache/${symbol}`).then(d => d?.data || null),
-      quickFetch(`${API_BASE_URL}/api/advanced/pivot-indicators`).then(d => d?.[symbol] || null), // 🎯 Pivot Points & Supertrend
+      quickFetch(`${API_BASE_URL}/api/advanced/pivot-indicators`).then(d => d?.[symbol] || null), // Pivot + Supertrend
+      quickFetch(`${API_BASE_URL}/api/analysis/analyze/${symbol}`).then(d => d?.orb || null), // ORB from analyze
+      quickFetch(`${API_BASE_URL}/api/analysis/analyze/${symbol}`).then(d => d?.supertrend || null), // SuperTrend from analyze
+      quickFetch(`${API_BASE_URL}/api/analysis/analyze/${symbol}`).then(d => d?.sar || null), // SAR from analyze
+      quickFetch(`${API_BASE_URL}/api/analysis/analyze/${symbol}`).then(d => d?.camarilla || null), // Camarilla from analyze
+      quickFetch(`${API_BASE_URL}/api/analysis/rsi-momentum/${symbol}`), // RSI 60/40 dedicated endpoint
+      quickFetch(`${API_BASE_URL}/api/analysis/smart-money/${symbol}`), // Smart Money dedicated endpoint
+      quickFetch(`${API_BASE_URL}/api/analysis/oi-momentum/${symbol}`), // OI Momentum dedicated endpoint
     ]);
 
     console.log(`[OUTLOOK-${symbol}] Fetch complete:`, {
       tech: tech ? '✓' : '✗',
       allAdvanced: allAdvanced ? '✓' : '✗',
-      market: market ? '✗' : '✗',
+      market: market ? '✓' : '✗',
       pivot: pivotData ? '✓' : '✗',
+      orb: orb ? '✓' : '✗',
+      supertrend: supertrend ? '✓' : '✗',
+      sar: sar ? '✓' : '✗',
+      camarilla: camarilla ? '✓' : '✗',
+      rsi60_40: rsi60_40 ? '✓' : '✗',
+      smartMoney: smartMoney ? '✓' : '✗',
+      oiMomentum: oiMomentum ? '✓' : '✗',
       apiUrl: API_BASE_URL,
       timestamp: new Date().toISOString(),
     });
@@ -1010,10 +1200,17 @@ export const useOverallMarketOutlook = () => {
       trend: trend ? '✓' : '✗',
       candle: candle ? '✓' : '✗',
       market: market ? '✓' : '✗',
-      pivot: pivotData ? '✓' : '✗'
+      pivot: pivotData ? '✓' : '✗',
+      orb: orb ? '✓' : '✗',
+      supertrend: supertrend ? '✓' : '✗',
+      sar: sar ? '✓' : '✗',
+      camarilla: camarilla ? '✓' : '✗',
+      rsi60_40: rsi60_40 ? '✓' : '✗',
+      smartMoney: smartMoney ? '✓' : '✗',
+      oiMomentum: oiMomentum ? '✓' : '✗',
     });
 
-    const result = calculateOverallOutlook(tech, zone, volume, trend, candle, market, pivotData);
+    const result = calculateOverallOutlook(tech, zone, volume, trend, candle, market, pivotData, orb, supertrend, sar, camarilla, rsi60_40, smartMoney, oiMomentum);
     console.log(`[OUTLOOK-${symbol}] Calculated confidence:`, result.overallConfidence + '%', 'Signal:', result.overallSignal);
     
     return result;

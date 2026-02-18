@@ -3,11 +3,15 @@ Pivot Points & Technical Indicators Router
 ==========================================
 API endpoints for EMA 20/50, Classic Pivots, Camarilla Pivots, and Supertrend.
 Always returns data - never fails.
+❤️ IMPROVED: Smart caching (no cache during 9:15-3:30 IST trading hours)
 """
 
 from fastapi import APIRouter
 from typing import Optional, Dict
+from datetime import datetime
+from pytz import timezone
 from services.pivot_indicators_service import get_pivot_service
+from services.cache import get_cache
 
 router = APIRouter(prefix="/api/advanced", tags=["Pivot Indicators"])
 
@@ -50,6 +54,10 @@ async def get_pivot_indicators(symbol: str) -> Dict:
     Get technical indicators for a symbol.
     Always returns data (LIVE, CACHED, or OFFLINE fallback).
     Never throws errors - graceful degradation.
+    
+    🔥 IMPROVEMENT: Smart caching during trading hours
+    - 9:15-3:30 IST (Mon-Fri): NO CACHE - fresh analysis every request
+    - Outside hours: 60s cache for efficiency
     """
     symbol = symbol.upper()
     
@@ -62,15 +70,45 @@ async def get_pivot_indicators(symbol: str) -> Dict:
         }
     
     try:
+        # Trading hours detection (9:15 AM - 3:30 PM IST, Mon-Fri)
+        ist = timezone('Asia/Kolkata')
+        current_time = datetime.now(ist)
+        is_weekday = current_time.weekday() < 5  # Mon=0, Fri=4
+        current_hm = current_time.time()
+        trading_start = datetime.strptime("09:15", "%H:%M").time()
+        trading_end = datetime.strptime("15:30", "%H:%M").time()
+        is_trading = is_weekday and (trading_start <= current_hm <= trading_end)
+        
+        # Smart caching strategy
+        cache = get_cache()
+        cache_key = f"pivot_indicators:{symbol}"
+        
+        # During trading hours: NO CACHE for live analysis
+        # Outside trading hours: 60s cache for efficiency
+        if is_trading:
+            print(f"[PIVOT-INDICATORS] 🔥 Trading hours (9:15-3:30) - NO CACHE for live updates")
+        else:
+            cached = await cache.get(cache_key)
+            if cached:
+                print(f"[PIVOT-INDICATORS] ⚡ Cache hit for {symbol} (60s cache outside trading hours)")
+                return cached
+        
         service = get_pivot_service()
         result = await service.get_indicators(symbol)
         
         # Always return something (fallback is built into service)
-        return result if result else {
-            "symbol": symbol,
-            "status": "OFFLINE",
-            "reason": "SERVICE_ERROR"
-        }
+        if result:
+            # Cache strategy: no cache during trading, 60s outside
+            if not is_trading:
+                await cache.set(cache_key, result, expire=60)
+                print(f"[PIVOT-INDICATORS] 💾 Non-trading hours - Cached for 60s")
+            return result
+        else:
+            return {
+                "symbol": symbol,
+                "status": "OFFLINE",
+                "reason": "SERVICE_ERROR"
+            }
     except Exception as e:
         # Log error but don't crash - return offline response
         print(f"❌ [PIVOT-INDICATORS] Error for {symbol}: {str(e)}")
