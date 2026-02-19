@@ -304,7 +304,12 @@ async def market_websocket(websocket: WebSocket):
     Sends:
     - Initial snapshot of all market data
     - Live tick updates as they arrive
-    - Heartbeat every 30 seconds
+    - Heartbeat every 30 seconds with connection status
+    
+    🔥 Enhanced Status Messages:
+    - Tells client if using WebSocket or REST fallback
+    - Shows connection quality
+    - Warns about token expiration
     """
     print("🔌 [WS-MARKET] New WebSocket connection request...")
     await manager.connect(websocket)
@@ -314,6 +319,53 @@ async def market_websocket(websocket: WebSocket):
     await cache.connect()
     
     try:
+        # 🔥 NEW: Send connection status info to client
+        from services.market_feed import market_feed, get_market_status
+        from services.auth_state_machine import auth_state_manager
+        from services.feed_watchdog import feed_watchdog
+        
+        market_status = get_market_status()
+        auth_state = auth_state_manager.current_state
+        feed_state = feed_watchdog.get_health_metrics()
+        
+        # Determine connection mode and quality message
+        connection_mode = "WebSocket"
+        connection_quality = "UNKNOWN"
+        status_message = "Initializing..."
+        
+        if market_feed and hasattr(market_feed, '_using_rest_fallback'):
+            if market_feed._using_rest_fallback:
+                connection_mode = "REST API Polling"
+                status_message = "⚠️ Using REST API (WebSocket temporarily unavailable)"
+            else:
+                connection_mode = "WebSocket"
+        
+        # Assess connection quality
+        if feed_state.get('is_healthy'):
+            connection_quality = "EXCELLENT"
+            status_message = "✓ Connected and receiving live data"
+        elif feed_state.get('is_stale'):
+            connection_quality = "DEGRADED"
+            status_message = "⚠️ Connected but low tick frequency"
+        elif feed_state.get('requires_reconnect') and market_status in ("PRE_OPEN", "LIVE"):
+            connection_quality = "POOR"
+            status_message = "⚠️ Reconnecting to market feed..."
+        
+        # Check auth status
+        if auth_state_manager.requires_login:
+            status_message = "🔐 Please login to enable live data"
+        
+        # Send connection status to client
+        await manager.send_personal(websocket, {
+            "type": "connection_status",
+            "mode": connection_mode,
+            "quality": connection_quality,
+            "message": status_message,
+            "market_status": market_status,
+            "auth_required": auth_state_manager.requires_login,
+            "timestamp": datetime.now().isoformat()
+        })
+        
         # Send initial market data snapshot (with REST API fallback)
         print("📊 [WS-MARKET] Fetching initial market data...")
         initial_data = await _get_market_data_with_fallback(cache)
@@ -357,17 +409,37 @@ async def market_websocket(websocket: WebSocket):
         
         # Start heartbeat task with market status refresh
         async def heartbeat():
-            from services.market_feed import get_market_status
+            from services.market_feed import get_market_status, market_feed
+            from services.feed_watchdog import feed_watchdog
+            from services.auth_state_machine import auth_state_manager
+            
             while True:
                 await asyncio.sleep(settings.ws_ping_interval)
                 try:
                     # 🔥 FIX: Include market status in heartbeat to ensure UI always has current status
                     current_status = get_market_status()
+                    
+                    # 🔥 NEW: Add connection health info to heartbeat
+                    feed_metrics = feed_watchdog.get_health_metrics()
+                    
+                    # Determine if using REST fallback
+                    using_rest = (market_feed and 
+                                hasattr(market_feed, '_using_rest_fallback') and 
+                                market_feed._using_rest_fallback)
+                    
                     await manager.send_personal(websocket, {
                         "type": "heartbeat",
                         "timestamp": datetime.now().isoformat(),
                         "connections": manager.connection_count,
-                        "marketStatus": current_status  # Add current market status
+                        "marketStatus": current_status,
+                        "connectionHealth": {
+                            "state": feed_metrics["state"],
+                            "is_healthy": feed_metrics["is_healthy"],
+                            "is_stale": feed_metrics["is_stale"],
+                            "connection_quality": round(feed_metrics.get("connection_quality", 0), 1),
+                            "using_rest_fallback": using_rest,
+                            "last_tick_seconds_ago": feed_metrics.get("last_tick_seconds_ago"),
+                        }
                     })
                 except Exception:
                     break

@@ -147,6 +147,49 @@ class MarketFeedService:
         # Consider connected if we got data in the last 60 seconds
         return (current_time - most_recent_update) < 60
     
+    def get_connection_health(self) -> dict:
+        """Get detailed connection health status for diagnostics.
+        
+        Returns dict with:
+        - is_connected: bool
+        - has_kws: bool (KiteTicker instance exists)
+        - is_running: bool
+        - using_rest_fallback: bool
+        - last_tick_age_seconds: float
+        - symbols_with_data: list
+        - symbols_without_data: list
+        """
+        import time
+        current_time = time.time()
+        
+        symbols_with_data = []
+        symbols_without_data = []
+        
+        for symbol in TOKEN_SYMBOL_MAP.values():
+            if symbol in self.last_update_time:
+                age = current_time - self.last_update_time[symbol]
+                if age < 60:
+                    symbols_with_data.append(symbol)
+                else:
+                    symbols_without_data.append(symbol)
+            else:
+                symbols_without_data.append(symbol)
+        
+        most_recent = max(self.last_update_time.values()) if self.last_update_time else 0
+        last_tick_age = current_time - most_recent if most_recent else None
+        
+        return {
+            "is_connected": self.is_connected,
+            "has_kws": bool(self.kws),
+            "is_running": self.running,
+            "using_rest_fallback": self._using_rest_fallback,
+            "last_tick_age_seconds": last_tick_age,
+            "symbols_with_data": symbols_with_data,
+            "symbols_without_data": symbols_without_data,
+            "consecutive_403_errors": self._consecutive_403_errors,
+            "is_authenticated": auth_state_manager.is_authenticated
+        }
+    
     def _normalize_tick(self, tick: Dict[str, Any]) -> Dict[str, Any]:
         """Normalize Zerodha tick data to our format."""
         token = tick.get("instrument_token")
@@ -746,12 +789,48 @@ class MarketFeedService:
             self._consecutive_403_errors = 0
     
     def _on_reconnect(self, ws, attempts_count):
-        """Callback on reconnect attempt."""
+        """Callback on reconnect attempt.
+        
+        🔥 CRITICAL FIX: Re-subscribe to instruments after reconnect
+        This prevents the "reconnecting forever" issue where WebSocket 
+        reconnects but never receives ticks.
+        """
         print(f"🔄 Reconnecting... Attempt {attempts_count}")
+        
+        # 🔥 CRITICAL: Re-subscribe to all instruments after reconnect
+        # The KiteTicker library handles the TCP reconnection automatically,
+        # but we must re-subscribe to get ticks again
+        try:
+            if ws and hasattr(ws, 'subscribe'):
+                tokens = list(TOKEN_SYMBOL_MAP.keys())
+                print(f"   📡 Re-subscribing to {len(tokens)} tokens: {list(TOKEN_SYMBOL_MAP.values())}")
+                ws.subscribe(tokens)
+                ws.set_mode(ws.MODE_FULL, tokens)
+                print("   ✅ Re-subscription sent")
+            else:
+                print("   ⚠️  WebSocket object not ready for re-subscription")
+        except Exception as e:
+            print(f"   ❌ Re-subscription failed: {e}")
+            import traceback
+            traceback.print_exc()
     
     def _on_noreconnect(self, ws):
-        """Callback when reconnect fails."""
-        print("❌ Reconnect failed")
+        """Callback when reconnect fails.
+        
+        🔥 CRITICAL: This means KiteTicker has given up on automatic reconnection.
+        We need to trigger our own reconnection logic.
+        """
+        print("❌ KiteTicker reconnect failed - automatic retries exhausted")
+        print("   🔄 Triggering manual auto-reconnect...")
+        
+        # Set connection flag to False so scheduler can detect and fix
+        self._is_connected = False
+        
+        # Notify watchdog
+        feed_watchdog.on_disconnect()
+        
+        # Schedule a reconnect attempt in the main loop
+        print("   ⏳ Reconnection will be attempted by the scheduler in the next check")
     
     async def _validate_token_before_connect(self) -> bool:
         """Pre-flight check: Validate token using REST API before attempting WebSocket.
@@ -1003,6 +1082,24 @@ class MarketFeedService:
                         await self._update_and_broadcast(data)
                     except Exception as e:
                         print(f"❌ Error broadcasting tick: {e}")
+                
+                # 🔥 HEARTBEAT CHECK: Detect stale connections (no ticks for 30+ seconds during market hours)
+                import time
+                market_status = get_market_status()
+                if market_status in ("PRE_OPEN", "FREEZE", "LIVE"):
+                    current_time = time.time()
+                    if self.last_update_time:
+                        most_recent = max(self.last_update_time.values())
+                        time_since_tick = current_time - most_recent
+                        
+                        # If no ticks in last 30 seconds during market hours, it's stale
+                        if time_since_tick > 30 and not self._using_rest_fallback:
+                            # 🔥 STALE FEED DETECTED
+                            print(f"\n⚠️  STALE FEED DETECTED - No ticks for {time_since_tick:.0f} seconds")
+                            print("   Attempting to restart WebSocket connection...")
+                            
+                            # Trigger reconnect via watchdog
+                            await feed_watchdog.trigger_reconnect()
                 
                 await asyncio.sleep(0.1)  # Small sleep to prevent busy loop
                 

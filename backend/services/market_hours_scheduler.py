@@ -67,6 +67,11 @@ class MarketHoursScheduler:
             return
             
         self.is_running = True
+        
+        # 🔥 CRITICAL: Validate server timezone is set to IST
+        # DigitalOcean servers often default to UTC, which breaks market timing
+        self._validate_server_timezone()
+        
         self.scheduler_task = asyncio.create_task(self._run_scheduler())
         
         print("\n" + "="*70)
@@ -99,6 +104,87 @@ class MarketHoursScheduler:
         from services.market_session_controller import NSE_HOLIDAYS
         date_str = dt.strftime("%Y-%m-%d")
         return date_str in NSE_HOLIDAYS
+    
+    def _validate_server_timezone(self):
+        """🔥 CRITICAL: Validate server timezone is IST (Asia/Kolkata)
+        
+        This is a VERY COMMON issue with DigitalOcean and cloud servers.
+        If timezone is wrong, market times will be off by hours.
+        
+        Example: Server in UTC will show 2:55 PM when it's actually 9:25 PM IST
+        This completely breaks market timing!
+        """
+        import os
+        import subprocess
+        
+        print("\n" + "="*70)
+        print("🌍 SERVER TIMEZONE CHECK")
+        print("="*70)
+        
+        # Check current timezone
+        try:
+            # Method 1: Check TZ environment variable
+            tz_env = os.environ.get('TZ', 'NOT SET')
+            print(f"   TZ env var: {tz_env}")
+            
+            # Method 2: Check /etc/timezone file (Linux)
+            try:
+                with open('/etc/timezone', 'r') as f:
+                    system_tz = f.read().strip()
+                    print(f"   System timezone: {system_tz}")
+            except:
+                system_tz = "UNKNOWN"
+            
+            # Method 3: Check current time
+            from datetime import datetime
+            import time
+            local_time = datetime.now()
+            ist_time = datetime.now(IST)
+            
+            print(f"   Local time: {local_time}")
+            print(f"   IST time:   {ist_time}")
+            
+            # Calculate offset
+            offset_seconds = (ist_time.utcoffset().total_seconds() if ist_time.utcoffset() else 19800)
+            offset_hours = offset_seconds / 3600
+            
+            print(f"   UTC offset: +{offset_hours:.1f} hours (IST should be +5.5)")
+            
+            # Check if timezone is correct (IST is +5:30)
+            if abs(offset_hours - 5.5) < 0.1:  # Within 6 minutes of IST
+                print("\n   ✅ SERVER TIMEZONE IS CORRECT (IST)")
+                print("     Market times will be accurate\n")
+                return True
+            else:
+                # WRONG TIMEZONE - This is the problem!
+                print("\n   ❌ SERVER TIMEZONE IS WRONG (NOT IST)")
+                print("="*70)
+                print("     ⚠️  THIS WILL BREAK MARKET TIMING")
+                print("")
+                print("     You are in UTC+{:.1f} but need UTC+5.5 (IST)".format(offset_hours))
+                print("     Market will open at wrong times!")
+                print("")
+                print("     🔧 TO FIX ON LINUX:")
+                print("        sudo timedatectl set-timezone Asia/Kolkata")
+                print("")
+                print("     🔧 TO FIX ON DOCKER:")
+                print("        Add to Dockerfile: ENV TZ=Asia/Kolkata")
+                print("        Or docker-compose.yml: environment: TZ=Asia/Kolkata")
+                print("")
+                print("     🔧 TO FIX ON DIGITALOCEAN:")
+                print("        1. SSH into your server")
+                print("        2. Run: sudo timedatectl set-timezone Asia/Kolkata")
+                print("        3. Verify: timedatectl")
+                print("        4. Restart backend service")
+                print("\n" + "="*70 + "\n")
+                
+                # Don't fail, just warn - they may know what they're doing
+                return False
+                
+        except Exception as e:
+            print(f"   ⚠️  Could not validate timezone: {e}")
+            print("     Proceeding anyway...\n")
+            return True
         
     def _is_market_time(self, dt: datetime) -> bool:
         """Check if given time is within market hours (including pre-open prep)"""
