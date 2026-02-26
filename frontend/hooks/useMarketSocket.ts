@@ -26,7 +26,7 @@ export interface MarketTick {
   putOI: number;        // Put Open Interest
   trend: 'bullish' | 'bearish' | 'neutral';
   timestamp: string;
-  status: 'LIVE' | 'OFFLINE' | 'DEMO' | 'CLOSED' | 'PRE_OPEN';
+  status: 'LIVE' | 'OFFLINE' | 'DEMO' | 'CLOSED' | 'PRE_OPEN' | 'FREEZE';
   analysis?: any;       // ✅ Technical analysis data from backend
 }
 
@@ -138,6 +138,21 @@ export function useMarketSocket() {
             case 'tick':
               if (message.data && 'symbol' in message.data) {
                 const tick = message.data as MarketTick;
+                
+                // 🔥 DEBUG: Check if analysis is in the tick
+                if (tick.symbol === 'NIFTY') {
+                  if (tick.analysis) {
+                    console.log(`📊 [TICK-${tick.symbol}] Analysis received:`, {
+                      hasSignal: !!tick.analysis.signal,
+                      hasIndicators: !!tick.analysis.indicators,
+                      signal: tick.analysis.signal,
+                      confidence: tick.analysis.confidence
+                    });
+                  } else {
+                    console.log(`⚠️ [TICK-${tick.symbol}] NO analysis data in tick!`);
+                  }
+                }
+                
                 setMarketData((prev) => {
                   // Create completely new object to trigger React updates
                   const updated = {

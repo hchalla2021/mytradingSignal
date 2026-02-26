@@ -43,6 +43,8 @@ def get_market_status() -> str:
     
     Note: During FREEZE period, cached data continues showing but no new updates.
     """
+    # 🔥 CRITICAL: Always use IST timezone, never system timezone!
+    # If system is in UTC, this will give wrong results
     now = datetime.now(IST)
     current_time = now.time()
     
@@ -475,6 +477,18 @@ class MarketFeedService:
         await self.cache.set_market_data(data["symbol"], data)
         
         # Broadcast to WebSocket with analysis included
+        # 🔥 DEBUG: Log analysis structure before broadcast
+        import time as time_module
+        if int(time_module.time()) % 10 == 0 and symbol == 'NIFTY':  # Log every 10 seconds
+            if data.get("analysis"):
+                analysis = data["analysis"]
+                print(f"🔥 [BROADCAST] {symbol} - Analysis present: signal={analysis.get('signal')}, has_indicators={bool(analysis.get('indicators'))}")
+                if analysis.get("indicators"):
+                    ind_keys = list(analysis["indicators"].keys())[:5]
+                    print(f"   Indicators (first 5): {ind_keys}")
+            else:
+                print(f"⚠️ [BROADCAST] {symbol} - NO analysis data!")
+        
         await self.ws_manager.broadcast({
             "type": "tick",
             "data": data

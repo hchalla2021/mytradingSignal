@@ -1,0 +1,302 @@
+{
+  "timestamp": "2026-02-20T17:42:34.717957",
+  "results": {
+    "NIFTY": {
+      "success": true,
+      "data": {
+        "timestamp": "2026-02-20T17:42:25.590987",
+        "symbol": "NIFTY",
+        "overall_signal": "NEUTRAL",
+        "overall_confidence": 50,
+        "bullish_signals": 0,
+        "bearish_signals": 0,
+        "neutral_signals": 14,
+        "trend_percentage": 0.0,
+        "signals": {
+          "trend_base": {
+            "name": "Trend Base (Structure)",
+            "confidence": 50,
+            "signal": "NEUTRAL",
+            "status": "Trend Strength: 50%"
+          },
+          "volume_pulse": {
+            "name": "Volume Pulse",
+            "confidence": 50,
+            "signal": "NEUTRAL",
+            "status": "Vol Strength: 50%"
+          },
+          "candle_intent": {
+            "name": "Candle Intent",
+            "confidence": 50,
+            "signal": "NEUTRAL",
+            "status": "Intent Score: 50%"
+          },
+          "pivot_points": {
+            "name": "Pivot Points",
+            "confidence": 50,
+            "signal": "NEUTRAL",
+            "status": "Price vs Pivots: R3=0.00, S3=0.00"
+          },
+          "orb": {
+            "name": "ORB",
+            "confidence": 50,
+            "signal": "NEUTRAL",
+            "status": "Breakout: False"
+          },
+          "supertrend": {
+            "name": "SuperTrend (10,2)",
+            "confidence": 50,
+            "signal": "NEUTRAL",
+            "status": "Trend: neutral"
+          },
+          "parabolic_sar": {
+            "name": "Parabolic SAR",
+            "confidence": 50,
+            "signal": "NEUTRAL",
+            "status": "SAR Signal: neutral"
+          },
+          "rsi_60_40": {
+            "name": "RSI 60/40",
+            "confidence": 50,
+            "signal": "NEUTRAL",
+            "status": "RSI 5m: 50%, 15m: 50%"
+          },
+          "camarilla": {
+            "name": "Camarilla (R3/S3)",
+            "confidence": 50,
+            "signal": "NEUTRAL",
+            "status": "CPR Zone: R3=0.00, S3=0.00"
+          },
+          "vwma_20": {
+            "name": "VWMA 20",
+            "confidence": 50,
+            "signal": "NEUTRAL",
+            "status": "VWMA Entry Filter Active"
+          },
+          "high_volume_scanner": {
+            "name": "High Volume Scanner",
+            "confidence": 50,
+            "signal": "NEUTRAL",
+            "status": "Volume Anomaly: 50%"
+          },
+          "smart_money_flow": {
+            "name": "Smart Money Flow",
+            "confidence": 50,
+            "signal": "NEUTRAL",
+            "status": "Order Structure: NEUTRAL"
+          },
+          "trade_zones": {
+            "name": "Trade Zones",
+            "confidence": 50,
+            "signal": "NEUTRAL",
+            "status": "Zone Status: NEUTRAL"
+          },
+          "oi_momentum": {
+            "name": "OI Momentum",
+            "confidence": 50,
+            "signal": "NEUTRAL",
+            "status": "Momentum: NEUTRAL"
+          }
+        }
+      }
+    },
+    "BANKNIFTY": {
+      "success": true,
+      "data": {
+        "timestamp": "2026-02-20T17:42:28.699398",
+        "symbol": "BANKNIFTY",
+        "overall_signal": "NEUTRAL",
+        "overall_confidence": 50,
+        "bullish_signals": 0,
+        "bearish_signals": 0,
+        "neutral_signals": 14,
+        "trend_percentage": 0.0,
+        "signals": {
+          "trend_base": {
+            "name": "Trend Base (Structure)",
+            "confidence": 50,
+            "signal": "NEUTRAL",
+            "status": "Trend Strength: 50%"
+          },
+          "volume_pulse": {
+            "name": "Volume Pulse",
+            "confidence": 50,
+            "signal": "NEUTRAL",
+            "status": "Vol Strength: 50%"
+          },
+          "candle_intent": {
+            "name": "Candle Intent",
+            "confidence": 50,
+            "signal": "NEUTRAL",
+            "status": "Intent Score: 50%"
+          },
+          "pivot_points": {
+            "name": "Pivot Points",
+            "confidence": 50,
+            "signal": "NEUTRAL",
+            "status": "Price vs Pivots: R3=0.00, S3=0.00"
+          },
+          "orb": {
+            "name": "ORB",
+            "confidence": 50,
+            "signal": "NEUTRAL",
+            "status": "Breakout: False"
+          },
+          "supertrend": {
+            "name": "SuperTrend (10,2)",
+            "confidence": 50,
+            "signal": "NEUTRAL",
+            "status": "Trend: neutral"
+          },
+          "parabolic_sar": {
+            "name": "Parabolic SAR",
+            "confidence": 50,
+            "signal": "NEUTRAL",
+            "status": "SAR Signal: neutral"
+          },
+          "rsi_60_40": {
+            "name": "RSI 60/40",
+            "confidence": 50,
+            "signal": "NEUTRAL",
+            "status": "RSI 5m: 50%, 15m: 50%"
+          },
+          "camarilla": {
+            "name": "Camarilla (R3/S3)",
+            "confidence": 50,
+            "signal": "NEUTRAL",
+            "status": "CPR Zone: R3=0.00, S3=0.00"
+          },
+          "vwma_20": {
+            "name": "VWMA 20",
+            "confidence": 50,
+            "signal": "NEUTRAL",
+            "status": "VWMA Entry Filter Active"
+          },
+          "high_volume_scanner": {
+            "name": "High Volume Scanner",
+            "confidence": 50,
+            "signal": "NEUTRAL",
+            "status": "Volume Anomaly: 50%"
+          },
+          "smart_money_flow": {
+            "name": "Smart Money Flow",
+            "confidence": 50,
+            "signal": "NEUTRAL",
+            "status": "Order Structure: NEUTRAL"
+          },
+          "trade_zones": {
+            "name": "Trade Zones",
+            "confidence": 50,
+            "signal": "NEUTRAL",
+            "status": "Zone Status: NEUTRAL"
+          },
+          "oi_momentum": {
+            "name": "OI Momentum",
+            "confidence": 50,
+            "signal": "NEUTRAL",
+            "status": "Momentum: NEUTRAL"
+          }
+        }
+      }
+    },
+    "SENSEX": {
+      "success": true,
+      "data": {
+        "timestamp": "2026-02-20T17:42:33.700679",
+        "symbol": "SENSEX",
+        "overall_signal": "NEUTRAL",
+        "overall_confidence": 50,
+        "bullish_signals": 0,
+        "bearish_signals": 0,
+        "neutral_signals": 14,
+        "trend_percentage": 0.0,
+        "signals": {
+          "trend_base": {
+            "name": "Trend Base (Structure)",
+            "confidence": 50,
+            "signal": "NEUTRAL",
+            "status": "Trend Strength: 50%"
+          },
+          "volume_pulse": {
+            "name": "Volume Pulse",
+            "confidence": 50,
+            "signal": "NEUTRAL",
+            "status": "Vol Strength: 50%"
+          },
+          "candle_intent": {
+            "name": "Candle Intent",
+            "confidence": 50,
+            "signal": "NEUTRAL",
+            "status": "Intent Score: 50%"
+          },
+          "pivot_points": {
+            "name": "Pivot Points",
+            "confidence": 50,
+            "signal": "NEUTRAL",
+            "status": "Price vs Pivots: R3=0.00, S3=0.00"
+          },
+          "orb": {
+            "name": "ORB",
+            "confidence": 50,
+            "signal": "NEUTRAL",
+            "status": "Breakout: False"
+          },
+          "supertrend": {
+            "name": "SuperTrend (10,2)",
+            "confidence": 50,
+            "signal": "NEUTRAL",
+            "status": "Trend: neutral"
+          },
+          "parabolic_sar": {
+            "name": "Parabolic SAR",
+            "confidence": 50,
+            "signal": "NEUTRAL",
+            "status": "SAR Signal: neutral"
+          },
+          "rsi_60_40": {
+            "name": "RSI 60/40",
+            "confidence": 50,
+            "signal": "NEUTRAL",
+            "status": "RSI 5m: 50%, 15m: 50%"
+          },
+          "camarilla": {
+            "name": "Camarilla (R3/S3)",
+            "confidence": 50,
+            "signal": "NEUTRAL",
+            "status": "CPR Zone: R3=0.00, S3=0.00"
+          },
+          "vwma_20": {
+            "name": "VWMA 20",
+            "confidence": 50,
+            "signal": "NEUTRAL",
+            "status": "VWMA Entry Filter Active"
+          },
+          "high_volume_scanner": {
+            "name": "High Volume Scanner",
+            "confidence": 50,
+            "signal": "NEUTRAL",
+            "status": "Volume Anomaly: 50%"
+          },
+          "smart_money_flow": {
+            "name": "Smart Money Flow",
+            "confidence": 50,
+            "signal": "NEUTRAL",
+            "status": "Order Structure: NEUTRAL"
+          },
+          "trade_zones": {
+            "name": "Trade Zones",
+            "confidence": 50,
+            "signal": "NEUTRAL",
+            "status": "Zone Status: NEUTRAL"
+          },
+          "oi_momentum": {
+            "name": "OI Momentum",
+            "confidence": 50,
+            "signal": "NEUTRAL",
+            "status": "Momentum: NEUTRAL"
+          }
+        }
+      }
+    }
+  }
+}

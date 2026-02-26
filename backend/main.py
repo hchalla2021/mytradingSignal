@@ -24,6 +24,7 @@ from routers import (
     system_health,
     pivot_indicators,
     diagnostics,
+    market_outlook,
 )
 
 # Windows console fix (safe, ignored on Linux)
@@ -112,6 +113,9 @@ async def lifespan(app: FastAPI):
         print("   ⚠️  Not authenticated - Feed will not start until you login")
         print("   💡 Click 🔑 LOGIN in the app to authenticate with Zerodha")
     market_feed = MarketFeedService(cache, manager)
+    
+    # 🔥 Inject market_feed into diagnostics module for force-reconnect endpoint
+    diagnostics_module.set_market_feed_instance(market_feed)
 
     # Token watcher (file system monitor for .env changes)
     token_observer = start_token_watcher(market_feed, auth_state_manager)
@@ -129,11 +133,26 @@ async def lifespan(app: FastAPI):
         print("🧪 Scheduler disabled → starting feed immediately")
         feed_task = asyncio.create_task(market_feed.start())
 
+    # 🚀 Start OI Momentum Live Broadcaster
+    try:
+        from services.oi_momentum_broadcaster import start_oi_momentum_broadcaster
+        await start_oi_momentum_broadcaster()
+        print("🚀 OI Momentum Broadcaster: ACTIVE (live mode)")
+    except Exception as e:
+        print(f"⚠️  OI Momentum Broadcaster init error: {e}")
+
     print("🚀 Backend READY")
     yield
 
     # Shutdown
     print("🛑 Backend shutting down...")
+    
+    # Stop OI Momentum Broadcaster
+    try:
+        from services.oi_momentum_broadcaster import stop_oi_momentum_broadcaster
+        await stop_oi_momentum_broadcaster()
+    except:
+        pass
     
     # Stop unified auth monitor
     from services.unified_auth_service import unified_auth
@@ -181,6 +200,7 @@ app.include_router(market.router, prefix="/ws", tags=["Market Data"])
 app.include_router(analysis.router, tags=["Analysis"])
 app.include_router(advanced_analysis.router, tags=["Advanced Technical Analysis"])
 app.include_router(pivot_indicators.router, tags=["Pivot Indicators"])
+app.include_router(market_outlook.router, tags=["Market Outlook"])
 
 
 @app.get("/")

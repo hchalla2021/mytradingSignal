@@ -91,10 +91,12 @@ def get_rsi_signal_label(rsi: float) -> str:
 _rsi_cache: Dict[str, Dict] = {}
 _RSI_CACHE_TTL = 60  # 1 minute cache (refresh every minute during market hours)
 
-async def fetch_dual_rsi_from_cache(symbol: str, cache) -> Dict[str, Any]:
+async def fetch_dual_rsi_from_cache(symbol: str, cache, tick_data: Dict[str, Any] = None) -> Dict[str, Any]:
     """
-    Calculate 5-min and 15-min RSI from CACHED candles (from WebSocket feed)
-    NO API CALLS - Uses existing live market data already in cache
+    Calculate 5-min and 15-min RSI - HYBRID approach
+    1. TRY: Use cached candles from WebSocket feed
+    2. FALLBACK: Use momentum-based RSI if candles unavailable
+    
     Returns dict with rsi_5m, rsi_15m, and signal labels
     """
     global _rsi_cache
@@ -112,19 +114,81 @@ async def fetch_dual_rsi_from_cache(symbol: str, cache) -> Dict[str, Any]:
         candle_key = f"analysis_candles:{symbol}"
         candles_json = await cache.lrange(candle_key, 0, 199)  # Get last 200 candles
         
+        # Fallback if insufficient cached candles - use momentum-based RSI
         if not candles_json or len(candles_json) < 30:
-            # Not enough data - return neutral
-            print(f"⚠️ [{symbol}] RSI: Insufficient cached candles ({len(candles_json) if candles_json else 0})")
-            return {
-                'rsi_5m': 50.0,
-                'rsi_15m': 50.0,
-                'rsi_5m_signal': 'NEUTRAL',
-                'rsi_15m_signal': 'NEUTRAL',
-                'rsi_momentum_status': 'NEUTRAL',
-                'rsi_momentum_confidence': 50.0
+            print(f"⚠️ [{symbol}] RSI: Only {len(candles_json) if candles_json else 0} candles, using HYBRID RSI")
+            
+            # HYBRID FALLBACK: Calculate RSI based on momentum  + volatility
+            if tick_data:
+                change_pct = float(tick_data.get('changePercent', 0))
+                open_price = float(tick_data.get('open', 0))
+                close_price = float(tick_data.get('price', 0))
+                high = float(tick_data.get('high', 0))
+                low = float(tick_data.get('low', 0))
+                
+                # Momentum-based RSI: Center at 50, adjust up/down by change  + range strength
+                base_rsi = 50.0
+                
+                # Momentum component (0-20 points) - 1% change = ~10 points
+                momentum_rsi = change_pct * 10  # ±10 points for ±1% change
+                
+                # Strength component (0-20 points) - based on candle body vs range
+                if high > low > 0:
+                    body = abs(close_price - open_price)
+                    range_val = high - low
+                    strength_ratio = (body / range_val) if range_val > 0 else 0
+                    strength_rsi = strength_ratio * 20  # Max 20 points for strong body
+                else:
+                    strength_rsi = 0
+                
+                # Volatility component (0-10 points) - higher volatility = more extreme RSI
+                if open_price > 0:
+                    volatility_range = (high - low) / open_price * 100
+                    # Normalize 0-5% range to 0-10 points
+                    volatility_rsi = min(10, volatility_range * 2) if volatility_range > 0 else 0
+                else:
+                    volatility_rsi = 0
+                
+                # Combine components
+                rsi_5m = base_rsi + momentum_rsi
+                rsi_15m = base_rsi + momentum_rsi * 0.7  # 15m less responsive
+                
+                # Clamp to 0-100
+                rsi_5m = max(0, min(100, rsi_5m))
+                rsi_15m = max(0, min(100, rsi_15m))
+                
+                print(f"   Momentum-based: 5m={rsi_5m:.1f}, 15m={rsi_15m:.1f} (change={change_pct:.2f}%)")
+            else:
+                # No tick data available either
+                rsi_5m = 50.0
+                rsi_15m = 50.0
+            
+            # Get signal labels
+            rsi_5m_signal = get_rsi_signal_label(rsi_5m)
+            rsi_15m_signal = get_rsi_signal_label(rsi_15m)
+            
+            # Calculate confidence based on rsi alignment
+            confidence = 40 if (not candles_json or len(candles_json) == 0) else 60
+            status = rsi_5m_signal if rsi_5m_signal == rsi_15m_signal else 'DIVERGENCE'
+            
+            result = {
+                'rsi_5m': round(rsi_5m, 1),
+                'rsi_15m': round(rsi_15m, 1),
+                'rsi_5m_signal': rsi_5m_signal,
+                'rsi_15m_signal': rsi_15m_signal,
+                'rsi_momentum_status': status,
+                'rsi_momentum_confidence': round(confidence, 0)
             }
+            
+            # Cache the result
+            _rsi_cache[symbol] = {
+                'data': result,
+                'timestamp': datetime.now()
+            }
+            
+            return result
         
-        # Parse candles (newest first from cache)
+        # Parse candles (newest first from cache) for traditional RSI
         candles = []
         for candle_json in reversed(candles_json):  # Reverse to get oldest first
             try:
@@ -133,12 +197,27 @@ async def fetch_dual_rsi_from_cache(symbol: str, cache) -> Dict[str, Any]:
                 continue
         
         if len(candles) < 30:
+            # Still not enough after parsing - fallback again
+            print(f"⚠️ [{symbol}] RSI: Parsing reduced to {len(candles)} candles, using hybrid")
+            
+            if tick_data:
+                change_pct = float(tick_data.get('changePercent', 0))
+                rsi_5m = 50.0 + (change_pct * 10)
+                rsi_15m = 50.0 + (change_pct * 7)
+                rsi_5m = max(0, min(100, rsi_5m))
+                rsi_15m = max(0, min(100, rsi_15m))
+            else:
+                rsi_5m = rsi_15m = 50.0
+            
+            rsi_5m_signal = get_rsi_signal_label(rsi_5m)
+            rsi_15m_signal = get_rsi_signal_label(rsi_15m)
+            
             return {
-                'rsi_5m': 50.0,
-                'rsi_15m': 50.0,
-                'rsi_5m_signal': 'NEUTRAL',
-                'rsi_15m_signal': 'NEUTRAL',
-                'rsi_momentum_status': 'NEUTRAL',
+                'rsi_5m': round(rsi_5m, 1),
+                'rsi_15m': round(rsi_15m, 1),
+                'rsi_5m_signal': rsi_5m_signal,
+                'rsi_15m_signal': rsi_15m_signal,
+                'rsi_momentum_status': 'DIVERGENCE' if rsi_5m_signal != rsi_15m_signal else rsi_5m_signal,
                 'rsi_momentum_confidence': 50.0
             }
         
@@ -422,12 +501,118 @@ async def calculate_emas_from_cache(cache, symbol: str, tick_data: Dict[str, Any
         # Calculate ATR 10 from candles (need full OHLC data)
         atr_10 = calculate_atr(candles, 10)
         
+        # Calculate trend_structure from swing points (higher highs/lows = UPTREND, lower = DOWNTREND)
+        trend_structure = "SIDEWAYS"  # Default
+        
+        if len(candles) >= 20:
+            # SIMPLIFIED APPROACH: Look at recent trend momentum
+            # Split last 20 candles into 3 segments
+            recent_candles = candles[-20:]
+            
+            segment_size = 7
+            seg1 = recent_candles[:segment_size]      # Oldest 7
+            seg2 = recent_candles[segment_size:segment_size*2]  # Middle 7
+            seg3 = recent_candles[segment_size*2:]    # Recent 6
+            
+            # Get high/low for each segment
+            seg1_high = max([c['high'] for c in seg1])
+            seg2_high = max([c['high'] for c in seg2])
+            seg3_high = max([c['high'] for c in seg3])
+            
+            seg1_low = min([c['low'] for c in seg1])
+            seg2_low = min([c['low'] for c in seg2])
+            seg3_low = min([c['low'] for c in seg3])
+            
+            seg1_close = seg1[-1]['close']
+            seg2_close = seg2[-1]['close']
+            seg3_close = seg3[-1]['close']
+            
+            # UPTREND: Each segment's high is higher + closes are higher
+            # OR: Recent high > first half high AND close above midpoint
+            if seg3_high > seg2_high > seg1_high:
+                # Clear progression of higher highs
+                if seg3_close > seg2_close and seg2_close > seg1_close:
+                    trend_structure = "HIGHER_HIGHS_LOWS"
+                elif seg3_close > seg1_close:  # Just need recent close > old close
+                    trend_structure = "HIGHER_HIGHS_LOWS"
+            
+            # DOWNTREND: Each segment's high is lower + closes are lower
+            elif seg3_high < seg2_high < seg1_high:
+                if seg3_close < seg2_close and seg2_close < seg1_close:
+                    trend_structure = "LOWER_HIGHS_LOWS"
+                elif seg3_close < seg1_close:
+                    trend_structure = "LOWER_HIGHS_LOWS"
+            
+            # Alternative: Use overall high/low comparison with price momentum
+            elif trend_structure == "SIDEWAYS":
+                overall_high = max([c['high'] for c in recent_candles])
+                overall_low = min([c['low'] for c in recent_candles])
+                overall_close_now = recent_candles[-1]['close']
+                overall_close_then = recent_candles[0]['close']
+                
+                # If price moved significantly up and is above midpoint
+                if overall_close_now > overall_close_then:
+                    # Check recent momentum
+                    recent_high = max([c['high'] for c in seg3])
+                    old_high = max([c['high'] for c in seg1])
+                    if recent_high > old_high:
+                        trend_structure = "HIGHER_HIGHS_LOWS"
+                
+                # If price moved significantly down and is below midpoint
+                elif overall_close_now < overall_close_then:
+                    # Check recent momentum
+                    recent_low = min([c['low'] for c in seg3])
+                    old_low = min([c['low'] for c in seg1])
+                    if recent_low < old_low:
+                        trend_structure = "LOWER_HIGHS_LOWS"
+        
+        elif len(candles) >= 10:
+            # Fallback for fewer candles: simple comparison
+            highs = [c['high'] for c in candles[-10:]]
+            lows = [c['low'] for c in candles[-10:]]
+            closes = [c['close'] for c in candles[-10:]]
+            
+            mid = 5
+            if max(highs[mid:]) > max(highs[:mid]) and closes[-1] > closes[0]:
+                trend_structure = "HIGHER_HIGHS_LOWS"
+            elif max(highs[mid:]) < max(highs[:mid]) and closes[-1] < closes[0]:
+                trend_structure = "LOWER_HIGHS_LOWS"
+        
         # Update tick_data with calculated values
         tick_data['ema_20'] = ema_20
         tick_data['ema_50'] = ema_50
         tick_data['ema_100'] = ema_100
         tick_data['ema_200'] = ema_200
         tick_data['atr_10'] = atr_10  # 🔥 NEW: Real ATR for SuperTrend
+        tick_data['trend_structure'] = trend_structure  # 🔥 NEW: Higher/Lower highs-lows structure
+        
+        # Debug logging for trend structure (every 5 seconds)
+        import time
+        current_time = int(time.time())
+        if current_time % 5 == 0:
+            if len(candles) >= 15:
+                recent = candles[-15:]
+                highs = [c['high'] for c in recent]
+                lows = [c['low'] for c in recent]
+                closes = [c['close'] for c in recent]
+                
+                print(f"\n[TREND-STRUCTURE-CALC] {symbol}:")
+                print(f"  Candles count: {len(candles)}")
+                print(f"  Last 15 Highs: {[round(h, 2) for h in highs]}")
+                print(f"  Last 15 Lows: {[round(l, 2) for l in lows]}")
+                print(f"  Last 15 Closes: {[round(c, 2) for c in closes]}")
+                
+                mid = len(recent) // 2
+                first_half_high = max(highs[:mid])
+                second_half_high = max(highs[mid:])
+                first_half_low = min(lows[:mid])
+                second_half_low = min(lows[mid:])
+                first_half_close = closes[mid // 2] if mid > 0 else closes[0]
+                second_half_close = closes[-1]
+                
+                print(f"  First half  → H:{first_half_high:.2f} L:{first_half_low:.2f} C:{first_half_close:.2f}")
+                print(f"  Second half → H:{second_half_high:.2f} L:{second_half_low:.2f} C:{second_half_close:.2f}")
+                print(f"  ✓ Final trend_structure: {trend_structure}")
         
         # Debug logging every 30 seconds
         import time
@@ -543,13 +728,19 @@ class InstantSignal:
         Returns None only if price is 0 (invalid data)
         """
         try:
+            print(f"\n[ANALYZE_TICK] Starting analysis for {tick_data.get('symbol', 'UNKNOWN')}")
+            print(f"[ANALYZE_TICK] Price={tick_data.get('price', 0)}, Change={tick_data.get('changePercent', 0)}")
+            # Get cache instance
+            from services.cache import get_cache
+            cache = get_cache()
+            
             # Extract data from tick - with fallbacks
             price = float(tick_data.get('price', 0))
             symbol = tick_data.get('symbol', 'UNKNOWN')
             
             # 🔥 FIX: Return None only if price is 0 (completely invalid data)
             if price == 0:
-                print(f"⚠️ WARNING: Price is 0 in tick_data for {symbol} - cannot analyze")
+                print(f"⚠️ WARNING: Price is 0 in tick_data for {symbol} - returning None")
                 return None
             
             change_percent = float(tick_data.get('changePercent', 0))
@@ -566,7 +757,7 @@ class InstantSignal:
             
             # Fetch dual-timeframe RSI from CACHE (uses WebSocket candles - NO API calls!)
             try:
-                dual_rsi = await fetch_dual_rsi_from_cache(symbol, cache)
+                dual_rsi = await fetch_dual_rsi_from_cache(symbol, cache, tick_data)
             except Exception as e:
                 print(f"⚠️ RSI calculation skipped for {symbol}: {e}")
                 dual_rsi = {
@@ -2267,6 +2458,12 @@ class InstantSignal:
                     "swing_low": tick_data.get('swing_low'),  # Last 5 candle swing low
                     "high_volume_levels": tick_data.get('high_volume_levels', []),  # Top volume price levels
                     
+                    # Trend Structure (Higher Highs/Lows, Lower Highs/Lows, or Sideways)
+                    "trend_structure": tick_data.get('trend_structure', 'SIDEWAYS'),  # HIGHER_HIGHS_LOWS, LOWER_HIGHS_LOWS, or SIDEWAYS
+                    "market_structure": "UPTREND" if tick_data.get('trend_structure') == 'HIGHER_HIGHS_LOWS' else "DOWNTREND" if tick_data.get('trend_structure') == 'LOWER_HIGHS_LOWS' else "SIDEWAYS",
+                    "swing_pattern": "HIGHER_HIGH_HIGHER_LOW" if tick_data.get('trend_structure') == 'HIGHER_HIGHS_LOWS' else "LOWER_HIGH_LOWER_LOW" if tick_data.get('trend_structure') == 'LOWER_HIGHS_LOWS' else None,
+                    "structure_confidence": 75 if tick_data.get('trend_structure') in ['HIGHER_HIGHS_LOWS', 'LOWER_HIGHS_LOWS'] else 50,
+                    
                     # Time Filter
                     "time_quality": "GOOD",
                 },
@@ -2418,8 +2615,65 @@ async def get_instant_analysis(cache_service, symbol: str) -> Dict[str, Any]:
         # 🔥 Calculate EMAs from cached candles before analysis
         tick_data = await calculate_emas_from_cache(cache_service, symbol, tick_data)
         
-        # Instant analysis
-        result = await InstantSignal.analyze_tick(tick_data)
+        # Instant analysis - with explicit error logging
+        try:
+            result = await InstantSignal.analyze_tick(tick_data)
+            if result is None:
+                print(f"❌ [{symbol}] analyze_tick returned None! Using fallback...")
+                raise ValueError("analyze_tick returned None")
+        except Exception as e:
+            print(f"❌ [{symbol}] analyze_tick failed: {e}")
+            import traceback
+            traceback.print_exc()
+            result = None
+        
+        if result is None:
+            # Use minimal fallback
+            print(f"⚠️ [{symbol}] Using minimal fallback response")
+            return {
+                "signal": "WAIT",
+                "confidence": 0.0,
+                "reasons": ["Analysis failed"],
+                "warnings": ["Could not generate full analysis"],
+                "entry_price": None,
+                "stop_loss": None,
+                "target": None,
+                "indicators": {
+                    "price": tick_data.get('price', 0),
+                    "high": tick_data.get('high', 0),
+                    "low": tick_data.get('low', 0),
+                    "open": tick_data.get('open', 0),
+                    "vwap": tick_data.get('vwap', 0),
+                    "vwma_20": tick_data.get('vwma_20', 0),
+                    "vwap_position": "AT_VWAP",
+                    "ema_20": tick_data.get('ema_20', 0),
+                    "ema_50": tick_data.get('ema_50', 0),
+                    "ema_100": tick_data.get('ema_100', 0),
+                    "ema_200": tick_data.get('ema_200', 0),
+                    "ema_alignment": "NEUTRAL",
+                    "ema_alignment_confidence": 20,
+                    "trend": "UNKNOWN",
+                    "support": 0,
+                    "resistance": 0,
+                    "prev_day_high": 0,
+                    "prev_day_low": 0,
+                    "prev_day_close": 0,
+                    "volume": tick_data.get('volume', 0),
+                    "volume_strength": "WEAK_VOLUME",
+                    "volume_ratio": 0.0,
+                    "volume_price_alignment": False,
+                    "vwma_ema_signal": "WAIT",
+                    "rsi": 50,
+                    "candle_strength": 0,
+                    "pcr": None,
+                    "oi_change": None,
+                    "time_quality": "POOR",
+                },
+                "timestamp": datetime.now().isoformat(),
+                "symbol": symbol,
+                "symbol_name": symbol,
+            }
+        
         result['symbol'] = symbol
         
         # Add market status info

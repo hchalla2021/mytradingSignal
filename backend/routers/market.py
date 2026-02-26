@@ -1,6 +1,5 @@
 """Market data WebSocket endpoint."""
 import asyncio
-from concurrent.futures import ThreadPoolExecutor
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, HTTPException
 from datetime import datetime
 from typing import Dict, Any, Optional
@@ -12,100 +11,24 @@ from services.cache import CacheService
 router = APIRouter()
 settings = get_settings()
 
-# Thread pool for blocking Zerodha calls
-_executor = ThreadPoolExecutor(max_workers=2)
 
-
-def _fetch_zerodha_quotes() -> Dict[str, Any]:
-    """Fetch live quotes from Zerodha REST API (blocking call)"""
-    try:
-        from kiteconnect import KiteConnect
-        
-        kite = KiteConnect(api_key=settings.zerodha_api_key)
-        if settings.zerodha_access_token:
-            kite.set_access_token(settings.zerodha_access_token)
-        else:
-            print("⚠️ No access token for quote fetch")
-            return {}
-        
-        # Fetch all indices
-        instruments = ["NSE:NIFTY 50", "NSE:NIFTY BANK", "BSE:SENSEX"]
-        quotes = kite.quote(instruments)
-        
-        results = {}
-        symbol_map = {
-            "NSE:NIFTY 50": "NIFTY",
-            "NSE:NIFTY BANK": "BANKNIFTY", 
-            "BSE:SENSEX": "SENSEX"
-        }
-        
-        for inst, symbol in symbol_map.items():
-            if inst in quotes:
-                q = quotes[inst]
-                ohlc = q.get('ohlc', {})
-                last_price = q.get('last_price', 0)
-                close_price = ohlc.get('close', last_price)
-                change = last_price - close_price if close_price else 0
-                change_pct = (change / close_price * 100) if close_price else 0
-                
-                results[symbol] = {
-                    "symbol": symbol,
-                    "price": last_price,
-                    "high": ohlc.get('high', last_price),
-                    "low": ohlc.get('low', last_price),
-                    "open": ohlc.get('open', last_price),
-                    "close": close_price,
-                    "volume": q.get('volume', 0),
-                    "oi": q.get('oi', 0),
-                    "change": change,
-                    "changePercent": round(change_pct, 2),
-                    "timestamp": datetime.now().isoformat(),
-                    "status": "CLOSED",
-                    "trend": "bullish" if change > 0 else "bearish" if change < 0 else "neutral",
-                }
-                print(f"📊 Fetched {symbol}: ₹{last_price:,.2f} ({change_pct:+.2f}%)")
-        
-        return results
-    except Exception as e:
-        print(f"❌ Zerodha quote fetch error: {e}")
-        return {}
 
 
 async def _get_market_data_with_fallback(cache: CacheService) -> Dict[str, Any]:
-    """Get market data from cache, fallback to Zerodha REST API if empty"""
-    # Try cache first
+    """Get market data from cache (fast, non-blocking!)"""
+    # 🔥 CRITICAL: Only return what's in cache immediately - NO blocking REST calls!
+    # The WebSocket needs to respond quickly to new client connections
+    # Market data will flow in via ticks once market_feed populates the cache
+    
     cached_data = await cache.get_all_market_data()
     
-    # Check if we have valid data for all symbols
     symbols = ["NIFTY", "BANKNIFTY", "SENSEX"]
-    missing = [s for s in symbols if s not in cached_data or not cached_data.get(s) or not cached_data.get(s, {}).get('price')]
+    present = len([s for s in symbols if s in cached_data and cached_data.get(s, {}).get('price')])
     
-    if not missing:
-        print(f"✅ All market data in cache: {list(cached_data.keys())}")
-        return cached_data
-    
-    # Fetch from Zerodha REST API
-    print(f"📡 Cache empty/incomplete for {missing}, fetching from Zerodha REST API...")
-    
-    loop = asyncio.get_event_loop()
-    try:
-        zerodha_data = await loop.run_in_executor(_executor, _fetch_zerodha_quotes)
-        
-        if zerodha_data:
-            # Cache the fetched data
-            for symbol, data in zerodha_data.items():
-                await cache.set_market_data(symbol, data)
-                print(f"💾 Cached {symbol}: ₹{data.get('price', 0):,.2f}")
-            
-            # Merge with any existing cached data
-            cached_data.update(zerodha_data)
-            print(f"✅ Cached {len(zerodha_data)} symbols from Zerodha REST API")
-        else:
-            print("⚠️ No data returned from Zerodha REST API")
-    except Exception as e:
-        print(f"❌ REST API fallback failed: {e}")
-        import traceback
-        traceback.print_exc()
+    if present > 0:
+        print(f"✅ Market data in cache: {present}/{len(symbols)} symbols")
+    else:
+        print(f"⏳ Cache empty - waiting for market_feed to populate via ticks")
     
     return cached_data
 
@@ -316,15 +239,25 @@ async def market_websocket(websocket: WebSocket):
     print(f"✅ [WS-MARKET] Client connected. Total clients: {manager.connection_count}")
     
     cache = CacheService()
-    await cache.connect()
+    print("🔌 [WS-MARKET] Connecting to cache...")
+    try:
+        await cache.connect()
+        print("✅ [WS-MARKET] Cache connected")
+    except Exception as e:
+        print(f"❌ [WS-MARKET] Cache connection failed: {e}")
+        await manager.disconnect(websocket)
+        return
     
     try:
         # 🔥 NEW: Send connection status info to client
-        from services.market_feed import market_feed, get_market_status
+        from services.market_feed import get_market_status
         from services.auth_state_machine import auth_state_manager
         from services.feed_watchdog import feed_watchdog
         
+        print("🔌 [WS-MARKET] Getting market status...")
         market_status = get_market_status()
+        print(f"   Market status: {market_status}")
+        
         auth_state = auth_state_manager.current_state
         feed_state = feed_watchdog.get_health_metrics()
         
@@ -333,12 +266,12 @@ async def market_websocket(websocket: WebSocket):
         connection_quality = "UNKNOWN"
         status_message = "Initializing..."
         
-        if market_feed and hasattr(market_feed, '_using_rest_fallback'):
-            if market_feed._using_rest_fallback:
-                connection_mode = "REST API Polling"
-                status_message = "⚠️ Using REST API (WebSocket temporarily unavailable)"
-            else:
-                connection_mode = "WebSocket"
+        # Check if using REST fallback (from feed_watchdog metrics)
+        if feed_state.get('using_rest_fallback'):
+            connection_mode = "REST API Polling"
+            status_message = "⚠️ Using REST API (WebSocket temporarily unavailable)"
+        else:
+            connection_mode = "WebSocket"
         
         # Assess connection quality
         if feed_state.get('is_healthy'):
@@ -356,6 +289,7 @@ async def market_websocket(websocket: WebSocket):
             status_message = "🔐 Please login to enable live data"
         
         # Send connection status to client
+        print("🔌 [WS-MARKET] Sending connection status...")
         await manager.send_personal(websocket, {
             "type": "connection_status",
             "mode": connection_mode,
@@ -365,51 +299,71 @@ async def market_websocket(websocket: WebSocket):
             "auth_required": auth_state_manager.requires_login,
             "timestamp": datetime.now().isoformat()
         })
+        print("✅ [WS-MARKET] Connection status sent")
         
         # Send initial market data snapshot (with REST API fallback)
-        print("📊 [WS-MARKET] Fetching initial market data...")
+        print("📊 [WS-MARKET] Fetching initial market data from cache...")
         initial_data = await _get_market_data_with_fallback(cache)
         print(f"📊 [WS-MARKET] Got data for: {list(initial_data.keys())} ({len(initial_data)} symbols)")
         
-        # ✅ INSTANT FIX: Generate analysis for cached data if missing
-        print(f"\n{'='*80}")
-        print(f"🔍 GENERATING ANALYSIS FOR INITIAL SNAPSHOT")
-        print(f"{'='*80}\n")
-        try:
-            from services.instant_analysis import InstantSignal
-            for symbol, data in initial_data.items():
-                if data:
-                    print(f"📊 Processing {symbol}: price={data.get('price')}, has_analysis={bool(data.get('analysis'))}")
-                    if not data.get("analysis"):
-                        print(f"   → Generating analysis for {symbol}...")
-                        analysis_result = await InstantSignal.analyze_tick(data)
-                        if analysis_result:
-                            data["analysis"] = analysis_result
-                            # Update cache with analysis
-                            await cache.set_market_data(symbol, data)
-                            print(f"   ✅ Analysis generated for {symbol}: signal={analysis_result.get('signal')}, confidence={analysis_result.get('confidence')}")
-                        else:
-                            print(f"   ❌ Analysis returned None for {symbol}")
-                    else:
-                        print(f"   ✓ Analysis already present for {symbol}")
-                else:
-                    print(f"   ⚠️ No data for {symbol}")
-        except Exception as e:
-            print(f"❌ Could not generate analysis for cached data: {e}")
-            import traceback
-            traceback.print_exc()
+        # 🔥 CRITICAL FIX: Ensure all snapshot data has FRESH market status
+        # Not cached/stale status from when data was last received
+        from services.market_feed import get_market_status
+        current_market_status = get_market_status()
         
-        print(f"\n{'='*80}\n")
+        for symbol, data in initial_data.items():
+            if data:
+                data["status"] = current_market_status  # Always use current status, not cached
         
+        # 🔥 SEND SNAPSHOT IMMEDIATELY - Don't block on analysis generation!
+        print("📊 [WS-MARKET] Sending snapshot to client...")
         await manager.send_personal(websocket, {
             "type": "snapshot",
             "data": initial_data,
-            "timestamp": datetime.now().isoformat()
+            "timestamp": datetime.now().isoformat(),
+            "marketStatus": current_market_status  # Also include at message level
         })
+        print("✅ [WS-MARKET] Snapshot sent to client")
+        
+        # 🔥 GENERATE ANALYSIS ASYNC - Don't block UI from getting data
+        async def generate_analysis_async():
+            """Generate analysis in background without blocking snapshot"""
+            try:
+                from services.instant_analysis import InstantSignal
+                print(f"\n{'='*80}")
+                print(f"🔍 GENERATING ANALYSIS FOR INITIAL SNAPSHOT (Background Task)")
+                print(f"{'='*80}\n")
+                
+                for symbol, data in initial_data.items():
+                    if data:
+                        print(f"📊 Processing {symbol}: price={data.get('price')}, has_analysis={bool(data.get('analysis'))}")
+                        if not data.get("analysis"):
+                            print(f"   → Generating analysis for {symbol}...")
+                            analysis_result = await InstantSignal.analyze_tick(data)
+                            if analysis_result:
+                                data["analysis"] = analysis_result
+                                # Update cache with analysis
+                                await cache.set_market_data(symbol, data)
+                                print(f"   ✅ Analysis generated for {symbol}: signal={analysis_result.get('signal')}, confidence={analysis_result.get('confidence')}")
+                            else:
+                                print(f"   ❌ Analysis returned None for {symbol}")
+                        else:
+                            print(f"   ✓ Analysis already present for {symbol}")
+                    else:
+                        print(f"   ⚠️ No data for {symbol}")
+                
+                print(f"\n{'='*80}\n")
+            except Exception as e:
+                print(f"❌ Background analysis error: {e}")
+                import traceback
+                traceback.print_exc()
+        
+        # Start analysis in background task
+        asyncio.create_task(generate_analysis_async())
         
         # Start heartbeat task with market status refresh
         async def heartbeat():
-            from services.market_feed import get_market_status, market_feed
+            from services.market_feed import get_market_status
             from services.feed_watchdog import feed_watchdog
             from services.auth_state_machine import auth_state_manager
             
@@ -422,11 +376,6 @@ async def market_websocket(websocket: WebSocket):
                     # 🔥 NEW: Add connection health info to heartbeat
                     feed_metrics = feed_watchdog.get_health_metrics()
                     
-                    # Determine if using REST fallback
-                    using_rest = (market_feed and 
-                                hasattr(market_feed, '_using_rest_fallback') and 
-                                market_feed._using_rest_fallback)
-                    
                     await manager.send_personal(websocket, {
                         "type": "heartbeat",
                         "timestamp": datetime.now().isoformat(),
@@ -437,7 +386,7 @@ async def market_websocket(websocket: WebSocket):
                             "is_healthy": feed_metrics["is_healthy"],
                             "is_stale": feed_metrics["is_stale"],
                             "connection_quality": round(feed_metrics.get("connection_quality", 0), 1),
-                            "using_rest_fallback": using_rest,
+                            "using_rest_fallback": feed_metrics.get("using_rest_fallback", False),
                             "last_tick_seconds_ago": feed_metrics.get("last_tick_seconds_ago"),
                         }
                     })

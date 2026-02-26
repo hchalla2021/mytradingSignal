@@ -47,19 +47,41 @@ const CandleQualityAnalysis = memo<CandleQualityAnalysisProps>(({ symbol }) => {
       try {
         setLoading(true);
         const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
-        const response = await fetch(`${apiUrl}/api/analysis/candle-quality/${symbol}`);
+        const response = await fetch(`${apiUrl}/api/analysis/candle-quality/${symbol}`, {
+          cache: 'no-store',
+          headers: {
+            'Cache-Control': 'no-cache'
+          }
+        });
         
         if (!response.ok) {
           throw new Error(`HTTP ${response.status}`);
         }
         
         const result = await response.json();
+        
+        console.log(`[${symbol}] Candle Quality Data:`, {
+          signal: result.candle_quality_signal,
+          confidence: result.candle_quality_confidence,
+          direction: result.candle_direction,
+          body_percent: result.body_percent,
+          candle_strength: result.candle_strength,
+          volume_above_threshold: result.volume_above_threshold,
+          fake_spike_detected: result.fake_spike_detected,
+          conviction_move: result.conviction_move,
+          current_volume: result.current_volume,
+          price: result.current_price,
+          open: result.open_price,
+          high: result.high_price,
+          low: result.low_price
+        });
+        
         if (result && result.candle_quality_signal !== undefined) {
           setData(result);
           setError(null);
         }
       } catch (err) {
-        console.error(`Error fetching candle quality data for ${symbol}:`, err);
+        console.error(`[${symbol}] Error fetching candle quality data:`, err);
         setError('Unable to fetch candle data');
       } finally {
         setLoading(false);
@@ -67,7 +89,7 @@ const CandleQualityAnalysis = memo<CandleQualityAnalysisProps>(({ symbol }) => {
     };
 
     fetchData();
-    const interval = setInterval(fetchData, 5000); // 🔥 FIX: Reduced from 15s to 5s for live updates
+    const interval = setInterval(fetchData, 3000); // 🔥 FIX: Reduced to 3s for live updates during market hours
     
     return () => clearInterval(interval);
   }, [symbol]);
@@ -86,29 +108,41 @@ const CandleQualityAnalysis = memo<CandleQualityAnalysisProps>(({ symbol }) => {
 
     const { candle_quality_signal, candle_quality_confidence } = data;
     const signal = candle_quality_signal || 'NEUTRAL';
-    const confidence = Math.round(candle_quality_confidence) || Math.round(candle_quality_confidence * 100) || 30;
+    // 🔥 FIX: Confidence comes from backend as 0-100 already
+    const confidence = Math.round(
+      typeof candle_quality_confidence === 'number' && candle_quality_confidence > 1 
+        ? candle_quality_confidence 
+        : (candle_quality_confidence * 100) || 30
+    );
     const symbolName = data.symbol_name || data.symbol || symbol;
 
     let badgeEmoji = '⚪';
     let signalColor = 'bg-amber-500/20 border-amber-500/40 text-amber-300';
     let textColor = 'text-amber-300';
 
-    if (signal === 'STRONG_BUY' || signal === 'STRONG BUY') {
+    // 🔥 Enhanced signal matching with all variants
+    const normalizedSignal = String(signal || '').toUpperCase();
+    
+    if (normalizedSignal.includes('STRONG_BUY') || normalizedSignal === 'STRONG BUY') {
       badgeEmoji = '🚀';
       signalColor = 'bg-green-500/20 border-green-500/50 text-green-300';
       textColor = 'text-green-300';
-    } else if (signal === 'BUY') {
+    } else if (normalizedSignal === 'BUY' || normalizedSignal === 'BULLISH') {
       badgeEmoji = '📈';
       signalColor = 'bg-emerald-500/20 border-emerald-500/40 text-emerald-300';
       textColor = 'text-emerald-300';
-    } else if (signal === 'STRONG_SELL' || signal === 'STRONG SELL') {
+    } else if (normalizedSignal.includes('STRONG_SELL') || normalizedSignal === 'STRONG SELL') {
       badgeEmoji = '📉';
       signalColor = 'bg-red-500/20 border-red-500/50 text-red-300';
       textColor = 'text-red-300';
-    } else if (signal === 'SELL') {
+    } else if (normalizedSignal === 'SELL' || normalizedSignal === 'BEARISH') {
       badgeEmoji = '📊';
       signalColor = 'bg-rose-500/20 border-rose-500/40 text-rose-300';
       textColor = 'text-rose-300';
+    } else if (normalizedSignal === 'WAIT') {
+      badgeEmoji = '⏸️';
+      signalColor = 'bg-orange-500/20 border-orange-500/40 text-orange-300';
+      textColor = 'text-orange-300';
     }
 
     return { signal, badgeEmoji, signalColor, textColor, confidence, symbol: symbolName };
@@ -160,10 +194,11 @@ const CandleQualityAnalysis = memo<CandleQualityAnalysisProps>(({ symbol }) => {
       {/* PROMINENT SIGNAL */}
       <div suppressHydrationWarning className={`mb-3 p-3 rounded-lg border-2 ${signalColor}`}>
         <div suppressHydrationWarning className="text-base sm:text-lg font-bold tracking-tight text-white drop-shadow-lg">
-          {signal === 'STRONG_BUY' || signal === 'STRONG BUY' ? '🚀 STRONG BUY' :
-           signal === 'BUY' ? '📈 BUY' :
-           signal === 'STRONG_SELL' || signal === 'STRONG SELL' ? '📉 STRONG SELL' :
-           signal === 'SELL' ? '📊 SELL' :
+          {signal.toUpperCase().includes('STRONG_BUY') || signal.toUpperCase() === 'STRONG BUY' ? '🚀 STRONG BUY' :
+           signal.toUpperCase() === 'BUY' ? '📈 BUY' :
+           signal.toUpperCase().includes('STRONG_SELL') || signal.toUpperCase() === 'STRONG SELL' ? '📉 STRONG SELL' :
+           signal.toUpperCase() === 'SELL' ? '📊 SELL' :
+           signal.toUpperCase() === 'WAIT' ? '⏸️ WAIT - Fake Spike!' :
            '⚪ NEUTRAL'}
         </div>
         <p className="text-xs text-white/60 mt-0.5 font-medium">
@@ -179,12 +214,12 @@ const CandleQualityAnalysis = memo<CandleQualityAnalysisProps>(({ symbol }) => {
           <div className="flex justify-between items-center p-2 rounded-lg border border-emerald-500/30 bg-emerald-500/5">
             <span className="text-white font-semibold">📊 Direction</span>
             <span suppressHydrationWarning className={`font-bold ${
-              data.candle_direction === 'BULLISH' ? 'text-green-300' :
-              data.candle_direction === 'BEARISH' ? 'text-red-300' :
+              data.candle_direction === 'UP' ? 'text-green-300' :
+              data.candle_direction === 'DOWN' ? 'text-red-300' :
               'text-yellow-300'
             }`}>
-              {data.candle_direction === 'BULLISH' ? '📈 Bullish' :
-               data.candle_direction === 'BEARISH' ? '📉 Bearish' :
+              {data.candle_direction === 'UP' ? '📈 Up' :
+               data.candle_direction === 'DOWN' ? '📉 Down' :
                '⚖️ Doji'}
             </span>
           </div>
@@ -197,7 +232,7 @@ const CandleQualityAnalysis = memo<CandleQualityAnalysisProps>(({ symbol }) => {
               data.body_percent > 30 ? 'text-yellow-300' :
               'text-red-300'
             }`}>
-              {data.body_percent.toFixed(1)}%
+              {data.body_percent?.toFixed(1) || '0'}%
             </span>
           </div>
 
@@ -207,7 +242,7 @@ const CandleQualityAnalysis = memo<CandleQualityAnalysisProps>(({ symbol }) => {
             <span suppressHydrationWarning className={`font-bold ${
               data.volume_above_threshold ? 'text-green-300' : 'text-gray-400'
             }`}>
-              {data.volume_above_threshold ? `🟢 Very Good (${data.current_volume})` : `⚪ Normal (${data.current_volume})`}
+              {data.volume_above_threshold ? `🟢 Very Good` : `⚪ Normal`}
             </span>
           </div>
 

@@ -166,14 +166,15 @@ class CacheService:
     async def lpush(self, key: str, value: str):
         """Push to list (Redis-compatible API)."""
         cached = _SHARED_CACHE.get(key)
-        expire_at = time.time() + 3600  # Default 1 hour for lists
+        expire_at = time.time() + 3600  # Default 1 hour for lists - REFRESH on each push
         if cached:
             try:
                 existing_value, existing_expire = cached
                 items = json.loads(existing_value)
                 if isinstance(items, list):
                     items.insert(0, value)
-                    _SHARED_CACHE[key] = (json.dumps(items), existing_expire)
+                    # CRITICAL FIX: Refresh TTL when new data is pushed (was using existing_expire)
+                    _SHARED_CACHE[key] = (json.dumps(items), expire_at)  # Refresh TTL
                     return
             except:
                 pass

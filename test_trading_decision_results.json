@@ -1,0 +1,203 @@
+{
+  "timestamp": "2026-02-20T17:48:22.510625",
+  "results": {
+    "NIFTY": {
+      "success": true,
+      "data": {
+        "timestamp": "2026-02-20T17:48:14.910028",
+        "market_status": "AFTER_HOURS",
+        "14_signal_analysis": {
+          "overall_signal": "NEUTRAL",
+          "overall_confidence": 50,
+          "bullish_signals": 0,
+          "bearish_signals": 0,
+          "signal_agreement_percent": 0
+        },
+        "market_indices": {
+          "pcr": {
+            "pcr_value": 1.0,
+            "sentiment": "NEUTRAL",
+            "strength": 50,
+            "interpretation": "PCR 1.00 indicates NEUTRAL market sentiment",
+            "action": "NEUTRAL"
+          },
+          "oi_momentum": "OI Change: 0, Impact: Bearish",
+          "market_breadth": {
+            "advance_count": 10,
+            "decline_count": 10,
+            "unchanged_count": 0,
+            "advance_percent": 50.0,
+            "decline_percent": 50.0,
+            "unchanged_percent": 0.0,
+            "ad_ratio": 1.0,
+            "breadth_signal": "NEUTRAL",
+            "strength": 50,
+            "interpretation": "A/D Ratio 1.00 indicates NEUTRAL market participation"
+          },
+          "volatility": "NORMAL volatility"
+        },
+        "score_components": {
+          "base_score": 50,
+          "pcr_adjustment": 0,
+          "oi_adjustment": 0,
+          "volatility_adjustment": 0,
+          "breadth_adjustment": 0,
+          "final_score": 50.0
+        },
+        "trading_decision": {
+          "action": "WAIT",
+          "confidence": 50,
+          "description": "MARKET CLOSED - Wait for market open",
+          "risk_level": "MEDIUM"
+        },
+        "trader_actions": {
+          "entry_setup": "HOLD - Wait for clearer signal or market setup",
+          "position_management": "Reduce position size - mixed signals",
+          "risk_management": "\u2705 Normal risk management - Standard position sizing acceptable",
+          "time_frame_preference": "SWING (4h+) - Lower confidence = longer holding period needed"
+        },
+        "monitor": {
+          "key_levels_to_watch": "Support/Resistance based on PCR 1.00",
+          "confirmation_signals": [
+            "Price consolidates in range",
+            "Volume decreases"
+          ],
+          "exit_trigger": "When clear signal emerges",
+          "next_check_minutes": 30
+        }
+      }
+    },
+    "BANKNIFTY": {
+      "success": true,
+      "data": {
+        "timestamp": "2026-02-20T17:48:18.291921",
+        "market_status": "AFTER_HOURS",
+        "14_signal_analysis": {
+          "overall_signal": "NEUTRAL",
+          "overall_confidence": 50,
+          "bullish_signals": 0,
+          "bearish_signals": 0,
+          "signal_agreement_percent": 0
+        },
+        "market_indices": {
+          "pcr": {
+            "pcr_value": 1.0,
+            "sentiment": "NEUTRAL",
+            "strength": 50,
+            "interpretation": "PCR 1.00 indicates NEUTRAL market sentiment",
+            "action": "NEUTRAL"
+          },
+          "oi_momentum": "OI Change: 0, Impact: Bearish",
+          "market_breadth": {
+            "advance_count": 10,
+            "decline_count": 10,
+            "unchanged_count": 0,
+            "advance_percent": 50.0,
+            "decline_percent": 50.0,
+            "unchanged_percent": 0.0,
+            "ad_ratio": 1.0,
+            "breadth_signal": "NEUTRAL",
+            "strength": 50,
+            "interpretation": "A/D Ratio 1.00 indicates NEUTRAL market participation"
+          },
+          "volatility": "NORMAL volatility"
+        },
+        "score_components": {
+          "base_score": 50,
+          "pcr_adjustment": 0,
+          "oi_adjustment": 0,
+          "volatility_adjustment": 0,
+          "breadth_adjustment": 0,
+          "final_score": 50.0
+        },
+        "trading_decision": {
+          "action": "WAIT",
+          "confidence": 50,
+          "description": "MARKET CLOSED - Wait for market open",
+          "risk_level": "MEDIUM"
+        },
+        "trader_actions": {
+          "entry_setup": "HOLD - Wait for clearer signal or market setup",
+          "position_management": "Reduce position size - mixed signals",
+          "risk_management": "\u2705 Normal risk management - Standard position sizing acceptable",
+          "time_frame_preference": "SWING (4h+) - Lower confidence = longer holding period needed"
+        },
+        "monitor": {
+          "key_levels_to_watch": "Support/Resistance based on PCR 1.00",
+          "confirmation_signals": [
+            "Price consolidates in range",
+            "Volume decreases"
+          ],
+          "exit_trigger": "When clear signal emerges",
+          "next_check_minutes": 30
+        }
+      }
+    },
+    "SENSEX": {
+      "success": true,
+      "data": {
+        "timestamp": "2026-02-20T17:48:21.501196",
+        "market_status": "AFTER_HOURS",
+        "14_signal_analysis": {
+          "overall_signal": "NEUTRAL",
+          "overall_confidence": 50,
+          "bullish_signals": 0,
+          "bearish_signals": 0,
+          "signal_agreement_percent": 0
+        },
+        "market_indices": {
+          "pcr": {
+            "pcr_value": 1.0,
+            "sentiment": "NEUTRAL",
+            "strength": 50,
+            "interpretation": "PCR 1.00 indicates NEUTRAL market sentiment",
+            "action": "NEUTRAL"
+          },
+          "oi_momentum": "OI Change: 0, Impact: Bearish",
+          "market_breadth": {
+            "advance_count": 10,
+            "decline_count": 10,
+            "unchanged_count": 0,
+            "advance_percent": 50.0,
+            "decline_percent": 50.0,
+            "unchanged_percent": 0.0,
+            "ad_ratio": 1.0,
+            "breadth_signal": "NEUTRAL",
+            "strength": 50,
+            "interpretation": "A/D Ratio 1.00 indicates NEUTRAL market participation"
+          },
+          "volatility": "NORMAL volatility"
+        },
+        "score_components": {
+          "base_score": 50,
+          "pcr_adjustment": 0,
+          "oi_adjustment": 0,
+          "volatility_adjustment": 0,
+          "breadth_adjustment": 0,
+          "final_score": 50.0
+        },
+        "trading_decision": {
+          "action": "WAIT",
+          "confidence": 50,
+          "description": "MARKET CLOSED - Wait for market open",
+          "risk_level": "MEDIUM"
+        },
+        "trader_actions": {
+          "entry_setup": "HOLD - Wait for clearer signal or market setup",
+          "position_management": "Reduce position size - mixed signals",
+          "risk_management": "\u2705 Normal risk management - Standard position sizing acceptable",
+          "time_frame_preference": "SWING (4h+) - Lower confidence = longer holding period needed"
+        },
+        "monitor": {
+          "key_levels_to_watch": "Support/Resistance based on PCR 1.00",
+          "confirmation_signals": [
+            "Price consolidates in range",
+            "Volume decreases"
+          ],
+          "exit_trigger": "When clear signal emerges",
+          "next_check_minutes": 30
+        }
+      }
+    }
+  }
+}

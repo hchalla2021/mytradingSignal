@@ -31,6 +31,18 @@ export const TradeSupportResistance: React.FC<TradeSupportResistanceProps> = ({
   marketStatus = 'CLOSED'
 }) => {
   
+  // 🔥 DEBUG: Log component props
+  React.useEffect(() => {
+    console.log(`[TradeSupportResistance-${symbol}]`, {
+      hasData: !!data,
+      hasAnalysis: !!analysis,
+      hasIndicators: !!analysis?.indicators,
+      dataPrice: data?.price,
+      analysisSignal: analysis?.signal,
+      marketStatus: marketStatus
+    });
+  }, [data, analysis, symbol, marketStatus]);
+  
   // ✅ CORE SIGNAL CALCULATION - 5min + 15min Combined
   const tradeSignal = useMemo(() => {
     if (!data || !analysis) {

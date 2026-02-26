@@ -16,10 +16,18 @@ router = APIRouter(prefix="/api/diagnostics", tags=["Diagnostics"])
 # Global cache instance (will be injected by main.py)
 _cache: CacheService | None = None
 
+# Global market feed instance (will be injected by main.py)
+_market_feed = None
+
 def set_cache_instance(cache: CacheService):
     """Inject cache instance for diagnostics"""
     global _cache
     _cache = cache
+
+def set_market_feed_instance(market_feed):
+    """Inject market feed instance for diagnostics"""
+    global _market_feed
+    _market_feed = market_feed
 
 @router.get("/market-data-status")
 async def market_data_status():
@@ -59,6 +67,28 @@ async def market_data_status():
             "status": "error",
             "message": str(e),
             "timestamp": None
+        }
+
+@router.get("/market-status")
+async def market_status_endpoint():
+    """Get current market status (LIVE, CLOSED, PRE_OPEN, etc)"""
+    try:
+        from services.market_feed import get_market_status
+        
+        status = get_market_status()
+        
+        return {
+            "status": "ok",
+            "market_status": status,
+            "timestamp": datetime.now().isoformat()
+        }
+    except Exception as e:
+        import traceback
+        return {
+            "status": "error",
+            "message": str(e),
+            "traceback": traceback.format_exc(),
+            "timestamp": datetime.now().isoformat()
         }
 
 @router.get("/zerodha-connection")
@@ -291,4 +321,210 @@ async def oi_momentum_debug():
             "status": "error",
             "message": str(e),
             "traceback": traceback.format_exc()
+        }
+
+@router.get("/connection-health")
+async def connection_health():
+    """
+    Quick health check for market feed connection.
+    Returns detailed status of WebSocket and data flow.
+    """
+    if not _market_feed:
+        return {
+            "status": "error",
+            "message": "Market feed not initialized"
+        }
+    
+    try:
+        from services.feed_watchdog import feed_watchdog
+        from services.market_feed import get_market_status
+        
+        health = _market_feed.get_connection_health()
+        watchdog_metrics = feed_watchdog.get_health_metrics()
+        market_status = get_market_status()
+        
+        return {
+            "status": "ok",
+            "timestamp": datetime.now().isoformat(),
+            "websocket": {
+                "is_connected": health["is_connected"],
+                "has_kws": health["has_kws"],
+                "is_running": health["is_running"],
+                "using_rest_fallback": health["using_rest_fallback"],
+                "last_tick_age_seconds": health["last_tick_age_seconds"],
+                "symbols_with_data": health["symbols_with_data"],
+                "symbols_without_data": health["symbols_without_data"],
+            },
+            "watchdog": {
+                "state": watchdog_metrics["state"],
+                "is_healthy": watchdog_metrics["is_healthy"],
+                "is_stale": watchdog_metrics["is_stale"],
+                "requires_reconnect": watchdog_metrics["requires_reconnect"],
+                "last_tick_seconds_ago": watchdog_metrics["last_tick_seconds_ago"],
+                "total_ticks": watchdog_metrics["total_ticks"],
+                "total_reconnects": watchdog_metrics["total_reconnects"],
+                "connection_quality": watchdog_metrics["connection_quality"],
+            },
+            "market": {
+                "status": market_status,
+                "is_open": market_status in ("PRE_OPEN", "FREEZE", "LIVE"),
+            },
+            "auth": {
+                "authenticated": auth_state_manager.is_authenticated,
+                "state": str(auth_state_manager.current_state),
+            },
+            "recommendation": _get_health_recommendation(health, watchdog_metrics, market_status)
+        }
+    
+    except Exception as e:
+        import traceback
+        return {
+            "status": "error",
+            "message": str(e),
+            "error_type": type(e).__name__,
+            "timestamp": datetime.now().isoformat()
+        }
+
+
+def _get_health_recommendation(health, watchdog_metrics, market_status):
+    """Recommend action based on health status"""
+    
+    # Check for issues
+    issues = []
+    
+    if not health["is_connected"] and market_status in ("PRE_OPEN", "FREEZE", "LIVE"):
+        issues.append("WebSocket not connected during market hours")
+    
+    if watchdog_metrics["is_stale"]:
+        issues.append(f"Feed is stale - no ticks for {watchdog_metrics.get('last_tick_seconds_ago', 0)}s")
+    
+    if health["using_rest_fallback"]:
+        issues.append("Using REST API fallback (WebSocket not available)")
+    
+    if watchdog_metrics["requires_reconnect"] and market_status in ("PRE_OPEN", "FREEZE", "LIVE"):
+        issues.append("Feed requires reconnection")
+    
+    if not issues:
+        return "✅ All systems healthy - Market feed is working properly"
+    
+    if len(issues) == 1 and "REST API fallback" in issues[0]:
+        return f"⚠️ {issues[0]}. This is OK outside market hours. If this persists during market hours, try: POST /api/diagnostics/force-reconnect"
+    
+    # Multiple issues or critical issue during market hours
+    if len(issues) > 0 and market_status in ("PRE_OPEN", "FREEZE", "LIVE"):
+        return "🔥 CRITICAL: " + " | ".join(issues) + ". RUN: POST /api/diagnostics/force-reconnect"
+    
+    return "⚠️ " + " | ".join(issues)
+
+
+@router.post("/force-reconnect")
+async def force_reconnect():
+    """
+    🔥 EMERGENCY FIX: Force reconnection to Zerodha market feed
+    
+    This endpoint:
+    1. Closes the current WebSocket connection
+    2. Clears all stale market data from cache
+    3. Triggers immediate reconnection
+    4. Re-fetches initial market data
+    5. Resets the market status
+    
+    Use this if the feed gets stuck showing old data or stuck on PRE_OPEN.
+    """
+    if not _market_feed:
+        return {
+            "status": "error",
+            "message": "Market feed not initialized",
+            "timestamp": datetime.now().isoformat()
+        }
+    
+    try:
+        import asyncio
+        
+        print("\n" + "="*80)
+        print("🔥 FORCE RECONNECT TRIGGERED")
+        print("="*80)
+        
+        # 1. Close existing connection
+        print("🛑 Closing existing WebSocket connection...")
+        if _market_feed.kws:
+            try:
+                _market_feed.kws.close()
+                await asyncio.sleep(1)
+            except Exception as e:
+                print(f"⚠️ Error closing WebSocket: {e}")
+        
+        # Reset the connection flags
+        _market_feed._is_connected = False
+        _market_feed._using_rest_fallback = False
+        _market_feed._consecutive_403_errors = 0
+        _market_feed._retry_delay = 5
+        _market_feed.last_prices.clear()
+        _market_feed.last_update_time.clear()
+        
+        print("✅ Connection closed and state reset")
+        
+        # 2. Clear stale market data from cache to force fresh fetch
+        print("🧹 Clearing stale market data from cache...")
+        if _cache:
+            symbols = ["NIFTY", "BANKNIFTY", "SENSEX"]
+            for symbol in symbols:
+                try:
+                    await _cache.delete(f"market:{symbol}")
+                    print(f"   ✅ Cleared {symbol}")
+                except:
+                    pass
+        
+        # 3. Reset watchdog state
+        print("🐕 Resetting watchdog...")
+        from services.feed_watchdog import feed_watchdog
+        feed_watchdog._state = feed_watchdog.FeedState.DISCONNECTED
+        feed_watchdog._last_tick_time = None
+        feed_watchdog._consecutive_403_errors = 0
+        feed_watchdog._reconnect_count = 0
+        
+        # 4. Trigger reconnection
+        print("🔄 Triggering reconnection...")
+        await _market_feed._attempt_reconnect()
+        
+        # 5. Wait a bit for connection to establish
+        await asyncio.sleep(2)
+        
+        # 6. Fetch initial data
+        print("📊 Fetching initial market data...")
+        await _market_feed._fetch_and_cache_last_data()
+        
+        print("✅ FORCE RECONNECT COMPLETE")
+        print("="*80 + "\n")
+        
+        return {
+            "status": "success",
+            "message": "Market feed reconnected successfully",
+            "actions": [
+                "❌ Closed old WebSocket connection",
+                "🧹 Cleared stale market data",
+                "🐕 Reset watchdog state",
+                "🔄 Triggered reconnection",
+                "📊 Fetched fresh market data"
+            ],
+            "next_step": "Market data should now be live. Check /ws/market WebSocket for updates.",
+            "timestamp": datetime.now().isoformat(),
+            "market_status": {
+                "is_connected": _market_feed.is_connected,
+                "using_rest_fallback": _market_feed._using_rest_fallback,
+                "has_kws": bool(_market_feed.kws),
+                "running": _market_feed.running
+            }
+        }
+    
+    except Exception as e:
+        print(f"❌ Force reconnect failed: {e}")
+        import traceback
+        traceback.print_exc()
+        
+        return {
+            "status": "error",
+            "message": f"Force reconnect failed: {str(e)}",
+            "error_type": type(e).__name__,
+            "timestamp": datetime.now().isoformat()
         }
