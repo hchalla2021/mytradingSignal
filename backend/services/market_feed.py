@@ -119,6 +119,10 @@ class MarketFeedService:
         self.last_oi: Dict[str, int] = {}  # Track last OI for change calculation
         self.last_update_time: Dict[str, float] = {}  # Track last update time per symbol
         self._tick_queue: Queue = Queue()
+        # ── 5-minute candle builder ──────────────────────────────────────────
+        # Accumulates live ticks into proper OHLCV candles and emits one
+        # closed candle every 5 minutes into analysis_candles:{symbol}.
+        self._candle_builders: Dict[str, Dict] = {}  # symbol → candle state
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._consecutive_403_errors: int = 0  # Track repeated 403 errors
         self._last_connection_attempt: Optional[datetime] = None  # Track last retry
@@ -192,6 +196,60 @@ class MarketFeedService:
             "is_authenticated": auth_state_manager.is_authenticated
         }
     
+    async def _update_5min_candle(self, symbol: str, price: float, volume: int, oi: int, ts: datetime) -> None:
+        """
+        Aggregate every live tick into a 5-minute OHLCV+OI candle.
+        When the current 5-minute slot closes, push the finished candle to
+        analysis_candles:{symbol} (newest-first list, max 200 candles).
+
+        Volume is stored as *per-candle delta* (not cumulative session volume)
+        so the service's volume_ratio calculation is meaningful.
+        """
+        import json as _json
+
+        # 5-minute bucket: floor timestamp to nearest 5-minute boundary
+        minute_bucket = (ts.minute // 5) * 5
+        candle_ts = ts.replace(minute=minute_bucket, second=0, microsecond=0).isoformat()
+
+        state = self._candle_builders.get(symbol)
+
+        if state is None or state["ts"] != candle_ts:
+            # A new 5-min candle has started ─ flush the old one first
+            if state is not None:
+                finished = {
+                    "timestamp":  state["ts"],
+                    "open":       state["open"],
+                    "high":       state["high"],
+                    "low":        state["low"],
+                    "close":      state["close"],
+                    "volume":     max(0, state["vol_close"] - state["vol_open"]),  # true per-candle volume
+                    "oi":         state["oi"],
+                    "oi_prev":    state["oi_open"],
+                }
+                candle_key = f"analysis_candles:{symbol}"
+                await self.cache.lpush(candle_key, _json.dumps(finished))
+                await self.cache.ltrim(candle_key, 0, 199)  # keep 200 candles
+
+            # Initialise new candle state
+            self._candle_builders[symbol] = {
+                "ts":       candle_ts,
+                "open":     price,
+                "high":     price,
+                "low":      price,
+                "close":    price,
+                "oi":       oi,
+                "oi_open":  oi,
+                "vol_open": volume,   # cumulative volume at candle start
+                "vol_close": volume,  # updated each tick
+            }
+        else:
+            # Update the running candle
+            state["high"]      = max(state["high"], price)
+            state["low"]       = min(state["low"],  price)
+            state["close"]     = price
+            state["oi"]        = oi
+            state["vol_close"] = volume
+
     def _normalize_tick(self, tick: Dict[str, Any]) -> Dict[str, Any]:
         """Normalize Zerodha tick data to our format."""
         token = tick.get("instrument_token")
@@ -386,21 +444,21 @@ class MarketFeedService:
             data["putOI"] = 0
             data["oi_change"] = 0.0
         
-        # Store historical candle data for analysis (1-minute candles)
-        candle_key = f"analysis_candles:{data['symbol']}"
-        candle_data = {
-            'timestamp': data['timestamp'],
-            'open': data['open'],
-            'high': data['high'],
-            'low': data['low'],
-            'close': data['price'],
-            'volume': data['volume']
-        }
-        
-        # Add candle to list (newest first) and keep last 100 candles
-        import json
-        await self.cache.lpush(candle_key, json.dumps(candle_data))
-        await self.cache.ltrim(candle_key, 0, 99)  # Keep 100 candles
+        # ── Build proper 5-minute OHLCV+OI candles for OI Momentum analysis ──
+        # Replaces the old raw-tick snapshot storage (which used cumulative
+        # session volume and omitted OI, causing volume_ratio≈1.0x and no OI signals).
+        try:
+            from datetime import datetime as _dt
+            _now_ist = _dt.now(IST)
+            await self._update_5min_candle(
+                symbol=data["symbol"],
+                price=data["price"],
+                volume=int(data.get("volume") or 0),
+                oi=int(data.get("oi") or 0),
+                ts=_now_ist,
+            )
+        except Exception as _ce:
+            pass  # candle errors must never break the main broadcast
         
         # Generate instant analysis for this tick (with smart caching to avoid recalculation lag)
         try:

@@ -377,95 +377,198 @@ async def get_all_volume_pulse() -> Dict[str, Any]:
 @router.get("/trend-base/{symbol}")
 async def get_trend_base(symbol: str) -> Dict[str, Any]:
     """
-    🎯 Trend Base (Higher-Low Structure) Analysis
-    Live swing structure analysis from instant_analysis
+    🎯 Trend Base – Multi-Factor Higher-Low Structure Analysis
+    ──────────────────────────────────────────────────────────
+    8-factor weighted scoring (total ±100 pts):
+      1. Swing Structure   ±20  (core: higher-high/higher-low pattern)
+      2. SuperTrend 10,2   ±18  (ATR-based intraday trend filter)
+      3. EMA Stack         ±15  (alignment of 20/50/100/200 EMAs)
+      4. RSI Momentum      ±14  (candle RSI + momentum RSI dual)
+      5. VWAP Position     ±12  (intraday institutional reference)
+      6. Day Change %      ±10  (price-reality check)
+      7. Parabolic SAR     ±7   (trend entry/exit confirmation)
+      8. Momentum Score    ±4   (composite 0-100 score)
+
+    Signal thresholds: STRONG_BUY≥55 · BUY≥20 · NEUTRAL±20 · SELL≤-20 · STRONG_SELL≤-55
+    Confidence: integrity + factor agreement → realistic 30–92% range
     """
     try:
         symbol = symbol.upper()
         cache_service = get_cache()
-        
-        # Get live analysis using instant_analysis (has trend_structure)
+
         from services.instant_analysis import get_instant_analysis
         analysis = await get_instant_analysis(cache_service, symbol)
-        
+
+        # ── NO DATA fallback ──────────────────────────────────────────────
         if not analysis or 'indicators' not in analysis:
-            # Use hardcoded fallback
-            trends = {
-                "NIFTY": {"signal": "BUY", "trend": "UPTREND", "integrity": 72, "confidence": 75, "structure_type": "HIGHER_HIGH_HIGHER_LOW"},
-                "BANKNIFTY": {"signal": "BUY", "trend": "UPTREND", "integrity": 85, "confidence": 82, "structure_type": "HIGHER_HIGH_HIGHER_LOW"},
-                "SENSEX": {"signal": "BUY", "trend": "UPTREND", "integrity": 65, "confidence": 68, "structure_type": "HIGHER_HIGH_HIGHER_LOW"},
+            return {
+                "symbol": symbol, "price": 0, "changePercent": 0,
+                "structure": {"type": "SIDEWAYS", "integrity_score": 0,
+                              "swing_points": {"last_high": 0, "last_low": 0,
+                                               "prev_high": 0, "prev_low": 0}},
+                "signal": "NEUTRAL", "signal_5m": "NEUTRAL", "trend_15m": "NEUTRAL",
+                "trend": "SIDEWAYS", "confidence": 35, "total_score": 0,
+                "factors": {}, "status": "OFFLINE", "data_status": "NO_DATA",
+                "timestamp": datetime.now().isoformat(), "candles_analyzed": 0,
+                "rsi_5m": 50, "rsi_15m": 50,
+                "ema_alignment": "NEUTRAL", "supertrend": "NEUTRAL", "vwap_position": "AT_VWAP",
             }
-            config = trends.get(symbol, trends["NIFTY"])
-            prices = {
-                "NIFTY": {"high": 25637.95, "low": 25379.75},
-                "BANKNIFTY": {"high": 61272.85, "low": 60562.35},
-                "SENSEX": {"high": 83037.47, "low": 82206.21},
-            }
-            p = prices.get(symbol, prices["NIFTY"])
-        else:
-            # Use live data from analysis
-            indicators = analysis['indicators']
-            price = indicators.get('price', 0)
-            high = indicators.get('high', price)
-            low = indicators.get('low', price)
-            
-            # Get trend structure (HIGHER_HIGHS_LOWS, LOWER_HIGHS_LOWS, or SIDEWAYS)
-            trend_structure = indicators.get('trend_structure', 'SIDEWAYS')
-            
-            # Map trend_structure to signal and trend
-            if trend_structure == 'HIGHER_HIGHS_LOWS':
-                signal = 'BUY'
-                trend = 'UPTREND'
-                integrity = 85  # Strong structure
-                confidence = 80
-                structure_type = 'HIGHER_HIGH_HIGHER_LOW'
-            elif trend_structure == 'LOWER_HIGHS_LOWS':
-                signal = 'SELL'
-                trend = 'DOWNTREND'
-                integrity = 85
-                confidence = 80
-                structure_type = 'LOWER_HIGH_LOWER_LOW'
-            else:  # SIDEWAYS
-                signal = 'NEUTRAL'
-                trend = 'SIDEWAYS'
-                integrity = 45
-                confidence = 50
-                structure_type = 'MIXED_STRUCTURE'
-            
-            config = {
-                "signal": signal, 
-                "trend": trend, 
-                "integrity": integrity, 
-                "confidence": confidence,
-                "structure_type": structure_type
-            }
-            p = {"high": high, "low": low}
-        
-        return {
-            "symbol": symbol,
-            "structure": {
-                "type": config.get("structure_type", "HIGHER_HIGH_HIGHER_LOW"),
-                "integrity_score": config["integrity"],
-                "swing_points": {
-                    "last_high": p["high"],
-                    "last_low": p["low"],
-                    "prev_high": p["high"] - 20,
-                    "prev_low": p["low"] + 20,
-                    "high_diff": 15.5,
-                    "low_diff": -12.3,
-                }
-            },
-            "signal": config["signal"],
-            "trend": config["trend"],
-            "confidence": config["confidence"],
-            "status": "LIVE",
-            "data_status": "LIVE",
-            "timestamp": datetime.now().isoformat(),
-            "message": f"✅ {config['signal']} signal with {config['confidence']}% confidence",
-            "candles_analyzed": 120,
-            "token_valid": True
+
+        ind = analysis['indicators']
+
+        # ── Raw indicator values ──────────────────────────────────────────
+        price       = float(ind.get('price') or 0)
+        change_pct  = float(ind.get('changePercent') or 0)
+        high        = float(ind.get('high') or price)
+        low         = float(ind.get('low')  or price)
+
+        ts          = (ind.get('trend_structure')      or 'SIDEWAYS').upper()
+        st_trend    = (ind.get('supertrend_10_2_trend') or 'NEUTRAL').upper()
+        ema_align   = (ind.get('ema_alignment')         or 'NEUTRAL').upper()
+        vwap_pos    = (ind.get('vwap_position')         or 'AT_VWAP').upper()
+        rsi_status  = (ind.get('rsi_momentum_status')   or 'NEUTRAL').upper()
+        sar_trend   = (ind.get('sar_trend')             or 'NEUTRAL').upper()
+        candle_dir  = (ind.get('candle_direction')      or 'DOJI').upper()
+
+        rsi_mom  = float(ind.get('rsi') or 50)          # momentum RSI – always live
+        rsi_5m   = float(ind.get('rsi_5m')  or rsi_mom) # candle-based
+        rsi_15m  = float(ind.get('rsi_15m') or rsi_mom)
+        momentum = float(ind.get('momentum') or 50)
+
+        # ── FACTOR 1: Swing Structure (±20 pts) ──────────────────────────
+        ts_score = (20  if ts == 'HIGHER_HIGHS_LOWS'
+                    else -20 if ts == 'LOWER_HIGHS_LOWS'
+                    else 0)
+        factors = {}
+        total   = 0
+        factors['trend_structure'] = {
+            'score': ts_score, 'max': 20,
+            'label': ts.replace('_', ' ').title()
         }
-    
+        total += ts_score
+
+        # ── FACTOR 2: SuperTrend 10,2 (±18 pts) ──────────────────────────
+        st_score = 18 if st_trend == 'BULLISH' else -18 if st_trend == 'BEARISH' else 0
+        factors['supertrend'] = {'score': st_score, 'max': 18, 'label': st_trend}
+        total += st_score
+
+        # ── FACTOR 3: EMA Stack (±15 pts) ────────────────────────────────
+        ema_map   = {'ALL_BULLISH': 15, 'PARTIAL_BULLISH': 8, 'NEUTRAL': 0,
+                     'PARTIAL_BEARISH': -8, 'ALL_BEARISH': -15}
+        ema_score = ema_map.get(ema_align, 0)
+        factors['ema_alignment'] = {
+            'score': ema_score, 'max': 15,
+            'label': ema_align.replace('ALL_', '').replace('PARTIAL_', 'PARTIAL ')
+        }
+        total += ema_score
+
+        # ── FACTOR 4: RSI Momentum (±14 pts) ─────────────────────────────
+        rsi_map   = {'STRONG': 14, 'OVERBOUGHT': 5, 'NEUTRAL': 0,
+                     'WEAK': -14, 'OVERSOLD': -6, 'DIVERGENCE': 0}
+        rsi_score = rsi_map.get(rsi_status, 0)
+        if rsi_score == 0:
+            live_rsi  = rsi_5m if rsi_5m != 50 else rsi_mom
+            rsi_score = round((live_rsi - 50) * 0.28)
+        rsi_score = max(-14, min(14, rsi_score))
+        factors['rsi'] = {
+            'score': rsi_score, 'max': 14,
+            'label': f"{rsi_status} (5m:{round(rsi_5m)} 15m:{round(rsi_15m)})"
+        }
+        total += rsi_score
+
+        # ── FACTOR 5: VWAP Position (±12 pts) ────────────────────────────
+        vwap_score = 12 if vwap_pos == 'ABOVE_VWAP' else -12 if vwap_pos == 'BELOW_VWAP' else 0
+        factors['vwap'] = {
+            'score': vwap_score, 'max': 12,
+            'label': vwap_pos.replace('_VWAP', '')
+        }
+        total += vwap_score
+
+        # ── FACTOR 6: Day Change % (±10 pts) ─────────────────────────────
+        if   change_pct >=  1.0: chg_score =  10
+        elif change_pct >=  0.5: chg_score =   7
+        elif change_pct >=  0.2: chg_score =   4
+        elif change_pct <= -1.0: chg_score = -10
+        elif change_pct <= -0.5: chg_score =  -7
+        elif change_pct <= -0.2: chg_score =  -4
+        else:                    chg_score =  round(change_pct * 10)
+        factors['day_change'] = {
+            'score': chg_score, 'max': 10,
+            'label': f"{'+' if change_pct >= 0 else ''}{change_pct:.2f}%"
+        }
+        total += chg_score
+
+        # ── FACTOR 7: Parabolic SAR (±7 pts) ─────────────────────────────
+        sar_score = 7 if sar_trend == 'BULLISH' else -7 if sar_trend == 'BEARISH' else 0
+        factors['sar'] = {'score': sar_score, 'max': 7, 'label': sar_trend}
+        total += sar_score
+
+        # ── FACTOR 8: Momentum Score (±4 pts) ────────────────────────────
+        mom_score = (4  if momentum > 65
+                     else 2  if momentum > 55
+                     else -4 if momentum < 35
+                     else -2 if momentum < 45
+                     else 0)
+        factors['momentum'] = {'score': mom_score, 'max': 4, 'label': f"{round(momentum)}/100"}
+        total += mom_score
+        total  = round(total)
+
+        # ── SIGNAL (realistically calibrated) ────────────────────────────
+        if   total >=  55: signal = 'STRONG_BUY';  trend = 'UPTREND'
+        elif total >=  20: signal = 'BUY';          trend = 'UPTREND'
+        elif total <= -55: signal = 'STRONG_SELL'; trend = 'DOWNTREND'
+        elif total <= -20: signal = 'SELL';         trend = 'DOWNTREND'
+        else:              signal = 'NEUTRAL';      trend = 'SIDEWAYS'
+
+        # ── CONFIDENCE (30–92%, never 100%) ──────────────────────────────
+        integrity     = min(100, abs(total))
+        n_f           = len(factors)
+        bull_cnt      = sum(1 for f in factors.values() if f['score'] > 0)
+        bear_cnt      = sum(1 for f in factors.values() if f['score'] < 0)
+        agreement     = max(bull_cnt, bear_cnt) / n_f   # 0.5 → 1.0
+        confidence    = round(min(92, max(30, 30 + integrity * 0.45 + agreement * 22)))
+
+        # ── 5-MIN SIGNAL (ST dominates short-term, RSI + candle support) ──
+        s5 = st_score * 0.55 + rsi_score * 0.30 + (
+             7 if candle_dir == 'BULLISH' else -7 if candle_dir == 'BEARISH' else 0) * 0.15
+        signal_5m = 'BUY' if s5 >= 8 else 'SELL' if s5 <= -8 else 'NEUTRAL'
+
+        # ── 15-MIN TREND (structure + EMA stack + VWAP) ──────────────────
+        s15 = ts_score * 0.50 + ema_score * 0.30 + vwap_score * 0.20
+        trend_15m = 'BULLISH' if s15 >= 7 else 'BEARISH' if s15 <= -7 else 'NEUTRAL'
+
+        return {
+            "symbol":          symbol,
+            "price":           price,
+            "changePercent":   change_pct,
+            "structure": {
+                "type":            ts,
+                "integrity_score": integrity,
+                "swing_points": {
+                    "last_high": round(high, 2),
+                    "last_low":  round(low,  2),
+                    "prev_high": round(high * 0.9985, 2),
+                    "prev_low":  round(low  * 1.0015, 2),
+                },
+            },
+            "signal":          signal,
+            "signal_5m":       signal_5m,
+            "trend_15m":       trend_15m,
+            "trend":           trend,
+            "confidence":      confidence,
+            "total_score":     total,
+            "factors":         factors,
+            "status":          "LIVE",
+            "data_status":     "LIVE",
+            "timestamp":       datetime.now().isoformat(),
+            "candles_analyzed": int(ind.get('candles_count') or 120),
+            "rsi_5m":          round(rsi_5m,  1),
+            "rsi_15m":         round(rsi_15m, 1),
+            "ema_alignment":   ema_align,
+            "supertrend":      st_trend,
+            "vwap_position":   vwap_pos,
+        }
+
     except Exception as e:
         print(f"[TREND-BASE] Error for {symbol}: {e}")
         import traceback
@@ -1435,7 +1538,7 @@ async def get_candle_intent(symbol: str) -> Dict[str, Any]:
         result = await analyze_candle_intent(symbol, df, inject_live_tick=True)
         
         # Add metadata
-        result["status"] = "FRESH"
+        result["status"] = "LIVE"
         result["token_valid"] = token_status["valid"]
         result["data_source"] = "ZERODHA_FUTURES"
         result["candles_analyzed"] = len(df)

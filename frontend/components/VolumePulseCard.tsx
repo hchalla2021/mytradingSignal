@@ -1,358 +1,493 @@
+/**
+ * VolumePulseCard – Green vs Red Candle Volume Analysis
+ * ─────────────────────────────────────────────────────────────────────────────
+ * Architecture: Self-contained REST polling → /api/advanced/volume-pulse/{symbol}
+ * Refresh:      Every 5 s via AbortController-guarded fetch
+ * Signal:       Uses backend signal + confidence directly (no frontend re-derivation)
+ * Metrics:      pulse_score (buying pressure), confidence (signal strength),
+ *               pro_metrics.interpretation (institutional analysis text)
+ */
 'use client';
 
-import React, { memo, useEffect, useState } from 'react';
-import { TrendingUp, TrendingDown, Minus } from 'lucide-react';
+import React, { memo, useEffect, useState, useCallback, useRef } from 'react';
 import { API_CONFIG } from '@/lib/api-config';
 
 interface VolumePulseData {
-  symbol: string;
+  symbol:        string;
   volume_data: {
     green_candle_volume: number;
-    red_candle_volume: number;
-    green_percentage: number;
-    red_percentage: number;
-    ratio: number;
+    red_candle_volume:   number;
+    green_percentage:    number;
+    red_percentage:      number;
+    ratio:               number;
   };
-  pulse_score: number;
-  signal: string;
-  confidence: number;
-  trend: string;
-  status: string;
-  timestamp: string;
+  pulse_score:       number;  // 0-100: buying pressure score
+  signal:            string;  // BUY | SELL | NEUTRAL
+  confidence:        number;  // 0-95: actual signal confidence from backend
+  trend:             string;  // BULLISH | BEARISH | NEUTRAL
+  status:            string;
+  timestamp:         string;
   candles_analyzed?: number;
+  pro_metrics?: {
+    participation:    number;
+    aggression:       number;
+    exhaustion:       number;
+    volume_quality:   string;
+    interpretation:   string;
+  };
 }
 
 interface VolumePulseCardProps {
   symbol: string;
-  name: string;
+  name:   string;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Static config — module-level, never recreated per render
+// ─────────────────────────────────────────────────────────────────────────────
+const SIG_CFG: Record<string, {
+  label: string; color: string; bg: string; border: string; bar: string; icon: string; subtext: string;
+}> = {
+  STRONG_BUY:  { label: 'STRONG BUY',  color: 'text-emerald-300', bg: 'bg-emerald-500/10', border: 'border-emerald-500',  bar: 'from-emerald-500 to-green-400',  icon: '▲▲', subtext: 'Strong buying volume dominant — buyers in full control.' },
+  BUY:         { label: 'BUY',         color: 'text-green-300',   bg: 'bg-green-500/10',   border: 'border-green-500',    bar: 'from-green-500 to-emerald-400',  icon: '▲',  subtext: 'More volume on green candles — buyers active.' },
+  NEUTRAL:     { label: 'NEUTRAL',     color: 'text-amber-300',   bg: 'bg-amber-500/8',    border: 'border-amber-500/60', bar: 'from-amber-500 to-yellow-400',   icon: '▬',  subtext: 'Balanced buy/sell volume — no clear direction.' },
+  SELL:        { label: 'SELL',        color: 'text-red-300',     bg: 'bg-red-500/10',     border: 'border-red-500',      bar: 'from-red-500 to-rose-400',       icon: '▼',  subtext: 'More volume on red candles — sellers active.' },
+  STRONG_SELL: { label: 'STRONG SELL', color: 'text-rose-300',    bg: 'bg-rose-500/10',    border: 'border-rose-500',     bar: 'from-rose-500 to-red-400',       icon: '▼▼', subtext: 'Strong selling volume dominant — sellers in full control.' },
+};
+
+function getSig(backendSignal: string, confidence: number) {
+  const s = (backendSignal ?? 'NEUTRAL').toUpperCase();
+  if (s === 'BUY'  && confidence >= 75) return SIG_CFG.STRONG_BUY;
+  if (s === 'BUY')                       return SIG_CFG.BUY;
+  if (s === 'SELL' && confidence >= 75) return SIG_CFG.STRONG_SELL;
+  if (s === 'SELL')                      return SIG_CFG.SELL;
+  return SIG_CFG.NEUTRAL;
+}
+
+function fmtVol(v: number): string {
+  if (v >= 10_000_000) return `${(v / 10_000_000).toFixed(1)}Cr`;
+  if (v >= 100_000)    return `${(v / 100_000).toFixed(1)}L`;
+  if (v >= 1_000)      return `${(v / 1_000).toFixed(0)}K`;
+  return String(v);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 5-Min Prediction Engine
+// Pure volume intelligence — no extra API call, derived from fetched data
+// Factors (max ±11 pts total):
+//   1. Volume Momentum (pulse_score)  ±3
+//   2. Buy/Sell Ratio                 ±2
+//   3. Volume Quality (institutional) ±3
+//   4. Participation level            ±1
+//   5. Aggression vs Exhaustion       ±2
+// ─────────────────────────────────────────────────────────────────────────────
+interface PredFactor { label: string; pts: number; note: string }
+interface Prediction {
+  score: number; label: string; color: string; border: string;
+  bg: string; icon: string; upProb: number; downProb: number;
+  factors: PredFactor[];
+}
+
+function computePrediction(d: VolumePulseData): Prediction {
+  const pulse    = d.pulse_score ?? 50;
+  const ratio    = d.volume_data?.ratio ?? 1;
+  const pm       = d.pro_metrics;
+  const quality  = pm?.volume_quality ?? 'NEUTRAL';
+  const partic   = pm?.participation  ?? 50;
+  const aggr     = pm?.aggression     ?? 50;
+  const exhaust  = pm?.exhaustion     ?? 0;
+  const backConf = d.confidence ?? 0;
+
+  let score = 0;
+  const factors: PredFactor[] = [];
+
+  // ── Factor 1: Volume Momentum (±3) ──
+  if (pulse > 65)      { score += 3; factors.push({ label: 'Vol Momentum', pts:  3, note: `${pulse}% — strong buying` }); }
+  else if (pulse > 55) { score += 2; factors.push({ label: 'Vol Momentum', pts:  2, note: `${pulse}% — moderate buying` }); }
+  else if (pulse < 35) { score -= 3; factors.push({ label: 'Vol Momentum', pts: -3, note: `${pulse}% — heavy selling` }); }
+  else if (pulse < 45) { score -= 2; factors.push({ label: 'Vol Momentum', pts: -2, note: `${pulse}% — selling bias` }); }
+  else                 {             factors.push({ label: 'Vol Momentum', pts:  0, note: `${pulse}% — balanced` }); }
+
+  // ── Factor 2: Buy/Sell Ratio (±2) ──
+  const r = ratio === 999 ? 5 : ratio;
+  if (r > 1.5)       { score += 2; factors.push({ label: 'B/S Ratio', pts:  2, note: `${r.toFixed(2)} — buyers dominant` }); }
+  else if (r > 1.2)  { score += 1; factors.push({ label: 'B/S Ratio', pts:  1, note: `${r.toFixed(2)} — buyers ahead` }); }
+  else if (r < 0.67) { score -= 2; factors.push({ label: 'B/S Ratio', pts: -2, note: `${r.toFixed(2)} — sellers dominant` }); }
+  else if (r < 0.85) { score -= 1; factors.push({ label: 'B/S Ratio', pts: -1, note: `${r.toFixed(2)} — sellers ahead` }); }
+  else               {             factors.push({ label: 'B/S Ratio', pts:  0, note: `${r.toFixed(2)} — balanced` }); }
+
+  // ── Factor 3: Volume Quality (±3) ──
+  const qMap: Record<string, { pts: number; note: string }> = {
+    HEALTHY:           { pts:  2, note: 'Healthy — continuation likely' },
+    COMPRESSION:       { pts:  2, note: 'Compression — breakout imminent' },
+    ABSORPTION:        { pts:  0, note: 'Absorption — direction unclear' },
+    EXHAUSTION:        { pts: -3, note: 'Exhaustion — reversal warning' },
+    SELLER_EXHAUSTION: { pts:  2, note: 'Seller exhaustion — bounce likely' },
+    FAKE_BREAKOUT:     { pts: -1, note: 'Fake breakout — avoid chase' },
+    NEUTRAL:           { pts:  0, note: 'Neutral — mixed signals' },
+  };
+  const qm = qMap[quality] ?? { pts: 0, note: 'Mixed signals' };
+  score += qm.pts;
+  factors.push({ label: 'Vol Quality', pts: qm.pts, note: qm.note });
+
+  // ── Factor 4: Participation (±1) ──
+  if (partic > 70)      { score += 1; factors.push({ label: 'Participation', pts:  1, note: `${partic}% — high activity` }); }
+  else if (partic < 30) { score -= 1; factors.push({ label: 'Participation', pts: -1, note: `${partic}% — low activity` }); }
+  else                  {             factors.push({ label: 'Participation', pts:  0, note: `${partic}% — normal` }); }
+
+  // ── Factor 5: Aggression vs Exhaustion (±2) ──
+  if (exhaust > 70) {
+    score -= 2;
+    factors.push({ label: 'Exhaustion', pts: -2, note: `${exhaust}% — move may stall` });
+  } else if (aggr > 70 && exhaust < 40) {
+    const pts = score >= 0 ? 2 : -2; // follows current bias direction
+    score += pts;
+    factors.push({ label: 'Aggression', pts, note: `${aggr}% aggression — trend accelerating` });
+  } else {
+    factors.push({ label: 'Momentum', pts: 0, note: `Aggr ${aggr} / Exhaust ${exhaust}` });
+  }
+
+  // ── Derive label + probability ──
+  let label: string, color: string, border: string, bg: string, icon: string, upProb: number;
+  if      (score >= 6)  { label = 'STRONG UP';   color = 'text-emerald-300'; border = 'border-emerald-500';  bg = 'bg-emerald-500/10'; icon = '▲▲'; upProb = 86; }
+  else if (score >= 3)  { label = 'LIKELY UP';   color = 'text-green-300';   border = 'border-green-500';    bg = 'bg-green-500/10';   icon = '▲';  upProb = 68; }
+  else if (score <= -6) { label = 'STRONG DOWN'; color = 'text-rose-300';    border = 'border-rose-500';     bg = 'bg-rose-500/10';    icon = '▼▼'; upProb = 14; }
+  else if (score <= -3) { label = 'LIKELY DOWN'; color = 'text-red-300';     border = 'border-red-500';      bg = 'bg-red-500/10';     icon = '▼';  upProb = 32; }
+  else                  { label = 'CHOPPY';      color = 'text-amber-300';   border = 'border-amber-500/60'; bg = 'bg-amber-500/8';    icon = '▬';  upProb = 50; }
+
+  // Nudge probability using backend signal confidence
+  const boost = Math.round(backConf * 0.08); // max ~7
+  if (upProb > 50) upProb = Math.min(93, upProb + boost);
+  else if (upProb < 50) upProb = Math.max(7, upProb - boost);
+
+  return { score, label, color, border, bg, icon, upProb, downProb: 100 - upProb, factors };
 }
 
 const VolumePulseCard = memo<VolumePulseCardProps>(({ symbol, name }) => {
-  const [data, setData] = useState<VolumePulseData | null>(null);
+  const [data,    setData]    = useState<VolumePulseData | null>(null);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [error,   setError]   = useState<string | null>(null);
+  const [flash,   setFlash]   = useState(false);
+  const prevSigRef = useRef<string>('');
+  const abortRef   = useRef<AbortController | null>(null);
 
-  useEffect(() => {
-    const fetchData = async () => {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 10000);
-
-      try {
-        const response = await fetch(
-          API_CONFIG.endpoint(`/api/advanced/volume-pulse/${symbol}`),
-          { 
-            signal: controller.signal,
-            headers: { 'Content-Type': 'application/json' }
-          }
-        );
-
-        clearTimeout(timeoutId);
-
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        
-        const result = await response.json();
-        
-        if (result.status === 'ERROR' || !result.volume_data) {
-          setError(result.message || 'No volume data');
-          setData(null);
-        } else {
-          setData(result);
-          setError(null);
-        }
-      } catch (err: unknown) {
-        if ((err as Error).name === 'AbortError') {
-          setError('Request timeout');
-        } else {
-          setError('Data unavailable');
-        }
-      } finally {
-        setLoading(false);
+  // ── Fetch ────────────────────────────────────────────────────────────────
+  const fetchData = useCallback(async () => {
+    abortRef.current?.abort();
+    const ctrl = new AbortController();
+    abortRef.current = ctrl;
+    try {
+      const res = await fetch(
+        API_CONFIG.endpoint(`/api/advanced/volume-pulse/${symbol}`),
+        { signal: ctrl.signal, cache: 'no-store' },
+      );
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const result: VolumePulseData = await res.json();
+      if (!result.volume_data) { setError('No volume data'); setLoading(false); return; }
+      if (prevSigRef.current && prevSigRef.current !== result.signal) {
+        setFlash(true);
+        setTimeout(() => setFlash(false), 700);
       }
-    };
-
-    fetchData();
-    // 🔥 IMPROVED: Fetch every 5 seconds (was 15s) for responsive volume updates
-    const interval = setInterval(fetchData, 5000);
-    return () => clearInterval(interval);
+      prevSigRef.current = result.signal;
+      setData(result);
+      setError(null);
+      setLoading(false);
+    } catch (e: any) {
+      if (e?.name === 'AbortError') return;
+      setError('Connection error');
+      setLoading(false);
+    }
   }, [symbol]);
 
-  // Determine trading signal based on volume analysis
-  const getVolumeSignal = (): { signal: string; color: string; bgColor: string; icon: JSX.Element } => {
-    if (!data || !data.volume_data) {
-      return { signal: 'NO DATA', color: 'text-gray-400', bgColor: 'bg-gray-900/20', icon: <Minus className="w-8 h-8" /> };
-    }
+  useEffect(() => {
+    fetchData();
+    const id = setInterval(fetchData, 5000);
+    return () => { clearInterval(id); abortRef.current?.abort(); };
+  }, [symbol]); // eslint-disable-line react-hooks/exhaustive-deps
 
-    const pulseScore = data.pulse_score || 50;
-    const volumeStrength = calculateVolumeStrength();
-    const baseSignal = data.signal || 'NEUTRAL';
-    
-    // STRONG BUY: High pulse + high volume strength
-    if (pulseScore >= 70 && volumeStrength >= 75 && baseSignal === 'BUY') {
-      return {
-        signal: 'STRONG BUY',
-        color: 'text-emerald-300',
-        bgColor: 'from-emerald-500/20 to-green-500/10',
-        icon: <TrendingUp className="w-8 h-8" />
-      };
-    }
-    
-    // BUY: Moderate pulse + good volume
-    if (pulseScore >= 55 && volumeStrength >= 50) {
-      return {
-        signal: 'BUY',
-        color: 'text-green-300',
-        bgColor: 'from-green-500/15 to-green-600/8',
-        icon: <TrendingUp className="w-8 h-8" />
-      };
-    }
-    
-    // STRONG SELL: Low pulse + high volume strength
-    if (pulseScore <= 30 && volumeStrength >= 75 && baseSignal === 'SELL') {
-      return {
-        signal: 'STRONG SELL',
-        color: 'text-rose-300',
-        bgColor: 'from-rose-500/20 to-red-500/10',
-        icon: <TrendingDown className="w-8 h-8" />
-      };
-    }
-    
-    // SELL: Low-moderate pulse + selling pressure
-    if (pulseScore <= 45 && volumeStrength >= 50) {
-      return {
-        signal: 'SELL',
-        color: 'text-red-300',
-        bgColor: 'from-red-500/15 to-red-600/8',
-        icon: <TrendingDown className="w-8 h-8" />
-      };
-    }
-    
-    // SIDEWAYS/NO TRADE - Low confidence or unclear
-    return {
-      signal: 'SIDEWAYS',
-      color: 'text-amber-300',
-      bgColor: 'from-amber-500/15 to-yellow-500/8',
-      icon: <Minus className="w-8 h-8" />
-    };
-  };
-
-  // Calculate volume strength (realistic 40-85% range)
-  const calculateVolumeStrength = (): number => {
-    if (!data || !data.volume_data) return 40;
-    
-    const totalVolume = data.volume_data.green_candle_volume + data.volume_data.red_candle_volume;
-    if (totalVolume === 0) return 40;
-    
-    let strength = 50;
-    
-    // Volume magnitude (most important)
-    if (totalVolume >= 10000000) strength += 18;
-    else if (totalVolume >= 5000000) strength += 14;
-    else if (totalVolume >= 2000000) strength += 10;
-    else if (totalVolume >= 1000000) strength += 6;
-    else if (totalVolume < 100000) strength -= 20;
-    
-    // Pulse score strength
-    const pulse = data.pulse_score || 50;
-    const pulseDeviation = Math.abs(pulse - 50);
-    if (pulseDeviation >= 30) strength += 12;
-    else if (pulseDeviation >= 20) strength += 8;
-    else if (pulseDeviation < 5) strength -= 10;
-    
-    // Market status
-    if (data.status === 'LIVE') strength += 8;
-    else if (data.status === 'CACHED') strength += 3;
-    
-    return Math.min(85, Math.max(40, Math.round(strength)));
-  };
-
-  // Format volume for display
-  const formatVolume = (vol: number): string => {
-    if (vol >= 10000000) return `${(vol / 10000000).toFixed(1)}Cr`;
-    if (vol >= 100000) return `${(vol / 100000).toFixed(1)}L`;
-    if (vol >= 1000) return `${(vol / 1000).toFixed(0)}K`;
-    return vol.toString();
-  };
-
-  if (loading) {
-    return (
-      <div className="bg-gradient-to-br from-slate-900/40 to-slate-950/20 border-2 border-slate-700/30 rounded-xl p-4 animate-pulse">
-        <div className="h-28 bg-slate-800/30 rounded-lg"></div>
+  // ── Loading skeleton ──────────────────────────────────────────────────────
+  if (loading) return (
+    <div className="bg-slate-900/40 border-2 border-slate-700/40 rounded-2xl p-4 animate-pulse min-h-[300px]">
+      <div className="flex justify-between mb-3">
+        <div className="h-5 bg-slate-800/70 rounded w-24" />
+        <div className="h-5 bg-slate-800/70 rounded w-16" />
       </div>
-    );
-  }
-
-  if (error || !data) {
-    return (
-      <div className="bg-gradient-to-br from-slate-900/40 to-slate-950/20 border-2 border-rose-500/30 rounded-xl p-4">
-        <div className="text-center">
-          <Minus className="w-10 h-10 mx-auto mb-2 text-rose-400/60" />
-          <p className="text-base font-bold text-rose-300 mb-1">{name}</p>
-          <p className="text-xs text-rose-400/80">{error || 'Data unavailable'}</p>
-        </div>
+      <div className="h-14 bg-slate-800/50 rounded-xl mb-3" />
+      <div className="h-2 bg-slate-800/50 rounded-full mb-3" />
+      <div className="h-2 bg-slate-800/50 rounded-full mb-3" />
+      <div className="grid grid-cols-2 gap-2 mb-3">
+        <div className="h-12 bg-slate-800/40 rounded-xl" />
+        <div className="h-12 bg-slate-800/40 rounded-xl" />
       </div>
-    );
-  }
+      <div className="h-10 bg-slate-800/30 rounded-xl" />
+    </div>
+  );
 
-  const volumeSignal = getVolumeSignal();
-  const volumeStrength = calculateVolumeStrength();
-  const isLive = data.status === 'LIVE' || data.status === 'ACTIVE';
-  const totalVolume = data.volume_data.green_candle_volume + data.volume_data.red_candle_volume;
-  const isLowVolume = totalVolume < 100000;
+  // ── Error state ───────────────────────────────────────────────────────────
+  if (error || !data) return (
+    <div className="bg-slate-900/40 border-2 border-rose-500/30 rounded-2xl p-5 min-h-[160px] flex flex-col items-center justify-center gap-2">
+      <span className="text-2xl">⚠</span>
+      <p className="text-sm font-bold text-rose-300">{name}</p>
+      <p className="text-xs text-rose-400/80">{error ?? 'No data available'}</p>
+      <button onClick={fetchData} className="mt-2 text-[10px] px-3 py-1 rounded-full bg-rose-500/20 text-rose-300 border border-rose-500/40 hover:bg-rose-500/30 transition-colors">
+        Retry
+      </button>
+    </div>
+  );
+
+  // ── Derived values ────────────────────────────────────────────────────────
+  const sig     = getSig(data.signal, data.confidence);
+  const isLive  = data.status === 'LIVE' || data.status === 'ACTIVE';
+  const vd      = data.volume_data;
+  const total   = vd.green_candle_volume + vd.red_candle_volume;
+  const isLowVol = total > 0 && total < 100_000;
+  const pulse   = data.pulse_score ?? 50;         // 0-100 buying pressure
+  const conf    = data.confidence  ?? 0;           // 0-95 signal confidence
+  const trend   = (data.trend ?? 'NEUTRAL').toUpperCase();
+  const interpretation = data.pro_metrics?.interpretation ?? sig.subtext;
+  const quality = data.pro_metrics?.volume_quality ?? '';
+  const pred    = computePrediction(data);
 
   return (
-    <div className={`bg-gradient-to-br ${volumeSignal.bgColor} border-2 rounded-xl p-3 sm:p-4 transition-all duration-300 hover:scale-[1.01] shadow-xl ${
-      volumeSignal.signal.includes('BUY') ? 'border-emerald-500/40 shadow-emerald-500/10' :
-      volumeSignal.signal.includes('SELL') ? 'border-rose-500/40 shadow-rose-500/10' :
-      'border-amber-500/30 shadow-amber-500/10'
-    }`}>
-      
-      {/* Index Name & Confidence Badge */}
-      <div className="flex items-center justify-between mb-3">
+    <div
+      suppressHydrationWarning
+      className={`
+        rounded-2xl border-2 ${sig.border} ${sig.bg} overflow-hidden
+        shadow-lg transition-all duration-300
+        ${flash ? 'ring-2 ring-white/25 scale-[1.004]' : ''}
+      `}
+    >
+      {/* ─── HEADER ──────────────────────────────────────────────────────── */}
+      <div className="flex items-center justify-between px-4 py-2.5 border-b border-white/5">
         <div className="flex items-center gap-2">
-          <h3 className="text-base sm:text-lg font-bold text-white/90">{name}</h3>
+          <span className="text-sm font-black text-white">{name}</span>
           {isLive && (
-            <div className="flex items-center gap-1.5 px-2 py-1 bg-emerald-500/15 rounded-full border border-emerald-500/30">
-              <span className="w-2 h-2 bg-emerald-400 rounded-full animate-pulse shadow-lg shadow-emerald-400/50"></span>
-              <span className="text-[10px] font-bold text-emerald-300">LIVE</span>
-            </div>
+            <span className="flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-emerald-500/15 border border-emerald-500/30">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+              <span className="text-[9px] font-bold text-emerald-400">LIVE</span>
+            </span>
           )}
         </div>
-        <div className={`text-center px-2.5 py-1 rounded-lg border-2 bg-black/30 ${
-          volumeStrength >= 75 ? 'border-emerald-500/40' :
-          volumeStrength >= 60 ? 'border-green-500/40' :
-          volumeStrength >= 50 ? 'border-amber-500/40' :
-          'border-rose-500/40'
-        }`}>
-          <div className="text-[10px] font-semibold text-white/60">Confidence</div>
-          <div className="text-base font-bold text-white">{volumeStrength}%</div>
-        </div>
+        {/* Trend badge */}
+        <span suppressHydrationWarning className={`text-[10px] font-bold px-2 py-0.5 rounded-md border ${
+          trend === 'BULLISH' ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-400' :
+          trend === 'BEARISH' ? 'border-red-500/40 bg-red-500/10 text-red-400' :
+          'border-slate-600/40 bg-slate-800/40 text-slate-400'
+        }`}>{trend}</span>
       </div>
 
-      {/* Low Volume Warning */}
-      {totalVolume > 0 && isLowVolume && (
-        <div className="mb-2 px-2 py-1 rounded-lg bg-amber-900/30 text-amber-200 border border-amber-500/40 text-[10px] font-semibold flex items-center gap-1.5">
-          ⚠️ Low Volume ({formatVolume(totalVolume)}) - Wait for higher activity
-        </div>
-      )}
+      <div className="p-3 space-y-2.5">
 
-      {/* Main Volume Signal - Clear & Readable */}
-      <div className="mb-3 text-center py-3 px-3 bg-black/20 rounded-xl border border-white/10">
-        <div className="flex items-center justify-center mb-2">
-          <div className={`${volumeSignal.color} drop-shadow-[0_0_10px_currentColor]`}>
-            {volumeSignal.icon}
+        {/* ─── LOW VOLUME WARNING ──────────────────────────────────────── */}
+        {isLowVol && (
+          <div className="px-2.5 py-1.5 rounded-lg bg-amber-900/25 border border-amber-500/35 text-[10px] font-semibold text-amber-300 flex items-center gap-1.5">
+            ⚠ Low Volume ({fmtVol(total)}) — wait for higher activity
+          </div>
+        )}
+
+        {/* ─── MAIN SIGNAL ─────────────────────────────────────────────── */}
+        <div className={`rounded-xl border ${sig.border} ${sig.bg} px-3 py-2.5 text-center`}>
+          <div suppressHydrationWarning className={`text-xl font-black tracking-wide ${sig.color}`}>
+            {sig.icon}&nbsp;{sig.label}
+          </div>
+          <p className="text-[10px] text-gray-400 mt-0.5 leading-tight">{sig.subtext}</p>
+        </div>
+
+        {/* ─── SIGNAL CONFIDENCE ───────────────────────────────────────── */}
+        <div>
+          <div className="flex justify-between items-center mb-1">
+            <span className="text-[10px] text-gray-500 font-semibold uppercase tracking-widest">Signal Confidence</span>
+            <span suppressHydrationWarning className={`text-sm font-black ${sig.color}`}>{conf}%</span>
+          </div>
+          <div className="h-2 bg-gray-900 rounded-full overflow-hidden border border-white/5">
+            <div
+              suppressHydrationWarning
+              className={`h-full rounded-full bg-gradient-to-r ${sig.bar} transition-all duration-700`}
+              style={{ width: `${conf}%` }}
+            />
+          </div>
+          <div className="flex justify-between text-[9px] text-gray-700 mt-0.5">
+            <span>0</span><span>25</span><span>50</span><span>75</span><span>95</span>
           </div>
         </div>
-        <h2 className={`text-xl sm:text-2xl font-bold ${volumeSignal.color} mb-1 tracking-tight`}>
-          {volumeSignal.signal}
-        </h2>
-        <p className="text-[10px] sm:text-xs text-white/60 font-medium">
-          {volumeSignal.signal.includes('BUY') && '📈 Strong buying volume detected'}
-          {volumeSignal.signal.includes('SELL') && '📉 Strong selling volume detected'}
-          {volumeSignal.signal === 'SIDEWAYS' && '⚠️ Balanced volume - No clear direction'}
-        </p>
+
+        {/* ─── BUYING PRESSURE ─────────────────────────────────────────── */}
+        <div>
+          <div className="flex justify-between items-center mb-1">
+            <span className="text-[10px] text-gray-500 font-semibold uppercase tracking-widest">Buying Pressure</span>
+            <span suppressHydrationWarning className={`text-sm font-black ${
+              pulse >= 65 ? 'text-emerald-300' : pulse >= 50 ? 'text-green-300' :
+              pulse >= 35 ? 'text-amber-300' : 'text-red-300'
+            }`}>{pulse}%</span>
+          </div>
+          <div className="relative h-2 bg-gradient-to-r from-rose-900/50 via-gray-800 to-emerald-900/50 rounded-full overflow-hidden border border-white/5">
+            {/* Needle at pulse position */}
+            <div
+              suppressHydrationWarning
+              className={`absolute top-0 h-full w-0.5 bg-white/80 transition-all duration-700`}
+              style={{ left: `${pulse}%` }}
+            />
+            {/* Fill from center */}
+            {pulse >= 50 ? (
+              <div
+                suppressHydrationWarning
+                className="absolute top-0 h-full bg-emerald-500/60 transition-all duration-700"
+                style={{ left: '50%', width: `${(pulse - 50) * 2}%` }}
+              />
+            ) : (
+              <div
+                suppressHydrationWarning
+                className="absolute top-0 h-full bg-red-500/60 transition-all duration-700"
+                style={{ right: '50%', width: `${(50 - pulse) * 2}%` }}
+              />
+            )}
+          </div>
+          <div className="flex justify-between text-[9px] text-gray-600 mt-0.5">
+            <span>Selling</span><span>Neutral</span><span>Buying</span>
+          </div>
+        </div>
+
+        {/* ─── VOLUME BREAKDOWN ────────────────────────────────────────── */}
+        <div className="grid grid-cols-2 gap-2">
+          <div className="bg-emerald-500/8 rounded-xl p-2.5 border border-emerald-500/25">
+            <p className="text-[8px] text-emerald-400/70 font-bold uppercase mb-0.5">BUY VOLUME</p>
+            <p suppressHydrationWarning className="text-sm font-black text-emerald-300">{fmtVol(vd.green_candle_volume)}</p>
+            <p suppressHydrationWarning className="text-[9px] text-emerald-400/60">{vd.green_percentage.toFixed(0)}% of total</p>
+            <div className="mt-1 h-1 bg-gray-900/50 rounded-full overflow-hidden">
+              <div suppressHydrationWarning className="h-full bg-emerald-500 rounded-full" style={{ width: `${vd.green_percentage}%` }} />
+            </div>
+          </div>
+          <div className="bg-rose-500/8 rounded-xl p-2.5 border border-rose-500/25">
+            <p className="text-[8px] text-rose-400/70 font-bold uppercase mb-0.5">SELL VOLUME</p>
+            <p suppressHydrationWarning className="text-sm font-black text-rose-300">{fmtVol(vd.red_candle_volume)}</p>
+            <p suppressHydrationWarning className="text-[9px] text-rose-400/60">{vd.red_percentage.toFixed(0)}% of total</p>
+            <div className="mt-1 h-1 bg-gray-900/50 rounded-full overflow-hidden">
+              <div suppressHydrationWarning className="h-full bg-rose-500 rounded-full" style={{ width: `${vd.red_percentage}%` }} />
+            </div>
+          </div>
+        </div>
+
+        {/* ─── RATIO ───────────────────────────────────────────────────── */}
+        <div className="flex items-center justify-between px-2.5 py-1.5 rounded-lg bg-slate-900/50 border border-slate-700/30">
+          <span className="text-[9px] text-gray-500 font-semibold uppercase tracking-wider">Buy/Sell Ratio</span>
+          <span suppressHydrationWarning className={`text-[10px] font-bold ${
+            vd.ratio > 1.2 ? 'text-emerald-400' : vd.ratio < 0.85 ? 'text-red-400' : 'text-amber-400'
+          }`}>{vd.ratio === 999 ? '∞' : vd.ratio.toFixed(2)}</span>
+        </div>
+
+        {/* ─── INSTITUTIONAL INTERPRETATION ────────────────────────────── */}
+        {quality && quality !== 'NEUTRAL' && (
+          <div className={`px-2.5 py-1.5 rounded-lg border text-[10px] font-medium ${
+            quality === 'ABSORPTION'       ? 'bg-blue-500/8 border-blue-500/30 text-blue-300' :
+            quality === 'COMPRESSION'      ? 'bg-purple-500/8 border-purple-500/30 text-purple-300' :
+            quality === 'EXHAUSTION'       ? 'bg-orange-500/8 border-orange-500/30 text-orange-300' :
+            quality === 'SELLER_EXHAUSTION'? 'bg-emerald-500/8 border-emerald-500/30 text-emerald-300' :
+            quality === 'FAKE_BREAKOUT'    ? 'bg-rose-500/8 border-rose-500/30 text-rose-300' :
+            quality === 'HEALTHY'          ? 'bg-emerald-500/8 border-emerald-500/30 text-emerald-300' :
+            'bg-slate-800/40 border-slate-700/30 text-slate-400'
+          }`}>
+            {interpretation}
+          </div>
+        )}
+
+        {/* ─── PRO METRICS ─────────────────────────────────────────────── */}
+        {data.pro_metrics && (
+          <div className="border border-slate-700/40 rounded-xl bg-slate-900/40 px-3 py-2">
+            <div className="text-[8px] font-bold text-gray-500 uppercase tracking-widest mb-1.5">Volume Quality</div>
+            <div className="space-y-1">
+              {[
+                { label: 'Participation', val: data.pro_metrics.participation },
+                { label: 'Aggression',    val: data.pro_metrics.aggression    },
+                { label: 'Exhaustion',    val: data.pro_metrics.exhaustion     },
+              ].map(({ label, val }) => (
+                <div key={label} className="flex items-center gap-2">
+                  <span className="text-[9px] text-gray-500 w-[72px] flex-shrink-0">{label}</span>
+                  <div className="flex-1 h-1.5 bg-gray-800 rounded-full overflow-hidden">
+                    <div
+                      suppressHydrationWarning
+                      className={`h-full rounded-full transition-all duration-500 ${
+                        label === 'Exhaustion'
+                          ? val >= 70 ? 'bg-orange-500' : val >= 40 ? 'bg-amber-500' : 'bg-gray-600'
+                          : val >= 70 ? 'bg-emerald-500' : val >= 40 ? 'bg-amber-500' : 'bg-red-500'
+                      }`}
+                      style={{ width: `${val}%` }}
+                    />
+                  </div>
+                  <span suppressHydrationWarning className="text-[9px] text-gray-500 w-7 text-right flex-shrink-0">{val}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* ════════════════════════════════════════════════════════════════
+            5-MIN PREDICTION
+            Pure volume intelligence — 5 weighted factors, no extra fetch
+        ════════════════════════════════════════════════════════════════ */}
+        <div className="border border-slate-700/50 rounded-xl bg-slate-900/50 px-3 py-2.5">
+
+          {/* Panel header */}
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-[9px] font-bold text-gray-400 uppercase tracking-widest">5-Min Prediction</span>
+            <span suppressHydrationWarning className={`text-[9px] font-bold px-1.5 py-0.5 rounded border ${pred.border} ${pred.bg} ${pred.color}`}>
+              Score&nbsp;{pred.score > 0 ? '+' : ''}{pred.score}
+            </span>
+          </div>
+
+          {/* Prediction signal */}
+          <div className={`rounded-lg border ${pred.border} ${pred.bg} px-2.5 py-2 text-center mb-2`}>
+            <span suppressHydrationWarning className={`text-base font-black tracking-wide ${pred.color}`}>
+              {pred.icon}&nbsp;{pred.label}
+            </span>
+          </div>
+
+          {/* Up/Down probability bar */}
+          <div className="mb-2">
+            <div className="flex justify-between text-[9px] mb-0.5">
+              <span suppressHydrationWarning className="text-emerald-400 font-bold">▲ UP&nbsp;{pred.upProb}%</span>
+              <span suppressHydrationWarning className="text-red-400 font-bold">▼ DOWN&nbsp;{pred.downProb}%</span>
+            </div>
+            <div className="h-2 rounded-full overflow-hidden flex bg-gray-900 border border-white/5">
+              <div
+                suppressHydrationWarning
+                className="h-full bg-gradient-to-r from-emerald-600 to-emerald-400 transition-all duration-700 rounded-l-full"
+                style={{ width: `${pred.upProb}%` }}
+              />
+              <div className="h-full bg-gradient-to-r from-rose-400 to-rose-600 flex-1 rounded-r-full" />
+            </div>
+          </div>
+
+          {/* Factor rows */}
+          <div className="space-y-0.5">
+            {pred.factors.map(f => (
+              <div key={f.label} className="flex items-center gap-1.5">
+                <span className={`text-[9px] font-bold w-3 text-center flex-shrink-0 ${f.pts > 0 ? 'text-emerald-400' : f.pts < 0 ? 'text-red-400' : 'text-gray-600'}`}>
+                  {f.pts > 0 ? '▲' : f.pts < 0 ? '▼' : '─'}
+                </span>
+                <span className="text-[9px] text-gray-500 w-[76px] flex-shrink-0 truncate">{f.label}</span>
+                <span suppressHydrationWarning className={`text-[9px] flex-1 truncate ${f.pts > 0 ? 'text-emerald-400/80' : f.pts < 0 ? 'text-red-400/80' : 'text-gray-600'}`}>{f.note}</span>
+              </div>
+            ))}
+          </div>
+
+          {/* Summary */}
+          <div suppressHydrationWarning className={`mt-2 text-center text-[10px] font-bold rounded-lg py-1 border ${pred.border} ${pred.bg} ${pred.color}`}>
+            {pred.label}&nbsp;·&nbsp;{pred.upProb > 50 ? pred.upProb : pred.downProb}% probability
+          </div>
+        </div>
+
       </div>
 
-      {/* Volume Strength Meter */}
-      <div className="mb-3">
-        <div className="flex items-center justify-between mb-1.5">
-          <span className="text-xs font-bold text-white/80">Volume Strength</span>
-          <span className={`text-lg font-bold ${
-            volumeStrength >= 75 ? 'text-emerald-300' :
-            volumeStrength >= 60 ? 'text-green-300' :
-            volumeStrength >= 50 ? 'text-amber-300' :
-            'text-rose-300'
-          }`}>{volumeStrength}%</span>
-        </div>
-        <div className="relative w-full h-3 bg-black/30 rounded-full overflow-hidden border border-white/10">
-          <div
-            className={`absolute inset-y-0 left-0 transition-all duration-700 rounded-full ${
-              volumeStrength >= 75 ? 'bg-gradient-to-r from-emerald-500 to-green-400 shadow-lg shadow-emerald-500/50' :
-              volumeStrength >= 60 ? 'bg-gradient-to-r from-green-500 to-green-400 shadow-lg shadow-green-500/40' :
-              volumeStrength >= 50 ? 'bg-gradient-to-r from-amber-500 to-yellow-400 shadow-lg shadow-amber-500/40' :
-              'bg-gradient-to-r from-rose-500 to-red-400 shadow-lg shadow-rose-500/40'
-            }`}
-            style={{ width: `${volumeStrength}%` }}
-          ></div>
-        </div>
-        <div className="flex justify-between mt-1 text-[9px] font-semibold text-white/40">
-          <span>Weak</span>
-          <span>Moderate</span>
-          <span>Strong</span>
-        </div>
-      </div>
-
-      {/* Buying vs Selling Pressure */}
-      <div className="mb-3">
-        <div className="flex items-center justify-between mb-1.5">
-          <span className="text-xs font-bold text-white/80">Buying Pressure</span>
-          <span className={`text-lg font-bold ${
-            data.pulse_score >= 65 ? 'text-emerald-300' :
-            data.pulse_score >= 50 ? 'text-green-300' :
-            data.pulse_score >= 35 ? 'text-amber-300' :
-            'text-rose-300'
-          }`}>{data.pulse_score}%</span>
-        </div>
-        <div className="relative w-full h-3 bg-gradient-to-r from-rose-900/40 via-gray-700/50 to-emerald-900/40 rounded-full overflow-hidden border border-white/10">
-          <div
-            className="absolute inset-y-0 left-0 h-full bg-gradient-to-r from-emerald-500 to-green-400 shadow-lg shadow-emerald-500/50 transition-all duration-700"
-            style={{ width: `${data.pulse_score}%` }}
-          ></div>
-        </div>
-        <div className="flex justify-between mt-1 text-[9px] font-semibold text-white/40">
-          <span>🔴 Selling</span>
-          <span>Neutral</span>
-          <span>🟢 Buying</span>
-        </div>
-      </div>
-
-      {/* Volume Breakdown - Compact */}
-      <div className="grid grid-cols-2 gap-2 mb-3">
-        <div className="bg-emerald-500/10 rounded-lg p-2 border border-emerald-500/30">
-          <p className="text-[9px] text-emerald-200 font-bold mb-0.5">BUY VOLUME</p>
-          <p className="text-sm font-bold text-emerald-300">{formatVolume(data.volume_data.green_candle_volume)}</p>
-          <p className="text-[9px] text-emerald-300/70">{data.volume_data.green_percentage.toFixed(0)}%</p>
-        </div>
-        <div className="bg-rose-500/10 rounded-lg p-2 border border-rose-500/30">
-          <p className="text-[9px] text-rose-200 font-bold mb-0.5">SELL VOLUME</p>
-          <p className="text-sm font-bold text-rose-300">{formatVolume(data.volume_data.red_candle_volume)}</p>
-          <p className="text-[9px] text-rose-300/70">{data.volume_data.red_percentage.toFixed(0)}%</p>
-        </div>
-      </div>
-
-      {/* Quick Explanation */}
-      <div className={`p-2.5 rounded-lg border ${
-        volumeSignal.signal.includes('STRONG BUY') ? 'bg-emerald-500/10 border-emerald-500/30' :
-        volumeSignal.signal === 'BUY' ? 'bg-green-500/10 border-green-500/30' :
-        volumeSignal.signal.includes('STRONG SELL') ? 'bg-rose-500/10 border-rose-500/30' :
-        volumeSignal.signal === 'SELL' ? 'bg-red-500/10 border-red-500/30' :
-        'bg-amber-500/10 border-amber-500/30'
-      }`}>
-        <p className="text-xs leading-relaxed text-white/90 font-medium">
-          {volumeSignal.signal === 'STRONG BUY' && (
-            <span>✅ <strong className="text-emerald-300">Very strong buying</strong> - Green candles have much higher volume. Buyers dominating.</span>
-          )}
-          {volumeSignal.signal === 'BUY' && (
-            <span>✅ <strong className="text-green-300">Good buying activity</strong> - More volume on green candles. Buyers active.</span>
-          )}
-          {volumeSignal.signal === 'STRONG SELL' && (
-            <span>⚠️ <strong className="text-rose-300">Very strong selling</strong> - Red candles have much higher volume. Sellers dominating.</span>
-          )}
-          {volumeSignal.signal === 'SELL' && (
-            <span>⚠️ <strong className="text-red-300">Selling pressure</strong> - More volume on red candles. Be cautious.</span>
-          )}
-          {volumeSignal.signal === 'SIDEWAYS' && (
-            <span>⏸️ <strong className="text-amber-300">Balanced volume</strong> - No clear winner. Wait for trend confirmation.</span>
-          )}
-        </p>
-      </div>
-
-      {/* Footer Info */}
-      <div className="mt-3 pt-2 border-t border-white/10 flex items-center justify-between text-[10px]">
-        <span className="text-white/50 font-medium">
-          {isLive ? '📡 Live' : '📊 Cached'}
+      {/* ─── FOOTER ──────────────────────────────────────────────────────── */}
+      <div className="px-4 py-1.5 border-t border-white/5 flex justify-between items-center">
+        <span suppressHydrationWarning className="text-[9px] text-gray-600">
+          {data.timestamp
+            ? new Date(data.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+            : '—'}
         </span>
-        <span className="text-white/50 font-medium">
-          {data.candles_analyzed && `${data.candles_analyzed} candles`}
+        <span className="text-[9px] text-gray-600">
+          {(data.candles_analyzed ?? 0) > 0 ? `${data.candles_analyzed} candles` : ''}
+          {isLive ? <span className="ml-1.5 font-bold text-emerald-500">● Live</span> : <span className="ml-1.5 text-gray-600">○ Cached</span>}
         </span>
       </div>
     </div>
@@ -360,6 +495,4 @@ const VolumePulseCard = memo<VolumePulseCardProps>(({ symbol, name }) => {
 });
 
 VolumePulseCard.displayName = 'VolumePulseCard';
-
-
 export default VolumePulseCard;

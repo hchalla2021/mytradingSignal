@@ -32,6 +32,13 @@ export interface OIMomentumLiveData {
     oi_change_pct_15m: number;
     volume_ratio_5m: number;
     volume_ratio_15m: number;
+    // Sell-side factors (required for SELL signal drivers)
+    price_breakdown_5m: boolean;
+    price_breakdown_15m: boolean;
+    oi_reduction_5m: boolean;
+    oi_reduction_15m: boolean;
+    liquidity_grab_sell_5m: boolean;
+    liquidity_grab_sell_15m: boolean;
   };
   symbol_name: string;
   current_price: number;

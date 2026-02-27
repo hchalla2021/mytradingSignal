@@ -1,6 +1,6 @@
 'use client';
 
-import React, { memo, useEffect, useState } from 'react';
+import React, { memo, useEffect, useState, useCallback, useRef } from 'react';
 import { TrendingUp, TrendingDown, Minus, Flame } from 'lucide-react';
 import { API_CONFIG } from '@/lib/api-config';
 
@@ -8,32 +8,76 @@ interface CandleIntentData {
   symbol: string;
   timestamp: string;
   current_candle: {
+    open?: number;
+    high?: number;
+    low?: number;
     close: number;
     volume: number;
+    range?: number;
+    body_size?: number;
+    upper_wick?: number;
+    lower_wick?: number;
   };
   pattern: {
     type: string;
     intent: string;
     confidence: number;
+    strength?: number;
+    interpretation?: string;
   };
   wick_analysis: {
     upper_signal: string;
     lower_signal: string;
-    dominant_wick: string;
+    dominant_wick: string;           // 'UPPER' | 'LOWER' | 'NEITHER'
+    dominant_wick_note?: string;     // "Sellers in control" etc
+    upper_wick_pct?: number;
+    lower_wick_pct?: number;
+    upper_strength?: number;
+    lower_strength?: number;
+    upper_interpretation?: string;
+    lower_interpretation?: string;
   };
   body_analysis: {
     body_ratio_pct: number;
     is_bullish: boolean;
     strength: number;
+    body_type?: string;
+    color?: string;
+    conviction?: string;
+    interpretation?: string;
   };
   volume_analysis: {
     volume_ratio: number;
     efficiency: string;
+    efficiency_interpretation?: string;
+    volume_type?: string;
+    volume_interpretation?: string;
+    trap_detected?: boolean;
+    trap_type?: string | null;
+    trap_severity?: number;
+    alert_level?: string;   // 'NORMAL'|'CAUTION'|'WARNING'|'DANGER'|'OPPORTUNITY'|'HIGHLIGHT'|'CRITICAL'
+    volume?: number;
+    avg_volume?: number;
   };
   near_zone: boolean;
   professional_signal: string;
+  trap_status?: {
+    is_trap: boolean;
+    trap_type: string | null;
+    severity: number;
+    action_required: string;
+  };
+  visual_alert?: {
+    icon: string;
+    color: string;
+    animation: string;
+    priority: number;
+    message: string;
+  };
   status?: string;
   error?: string;
+  data_status?: string;
+  candles_analyzed?: number;
 }
 
 interface CandleIntentCardProps {
@@ -118,7 +162,7 @@ const calculateCandleConfidence = (data: CandleIntentData): number => {
   if (data.near_zone) confidence += 5;
   
   // Market status (5% weight)
-  if (data.status === 'LIVE') confidence += 5;
+  if (data.status === 'LIVE' || data.status === 'FRESH') confidence += 5;
   else if (data.status === 'CACHED') confidence -= 3;
   
   // Clamp to realistic range 35-85%
@@ -129,50 +173,48 @@ const CandleIntentCard = memo<CandleIntentCardProps>(({ symbol, name }) => {
   const [data, setData] = useState<CandleIntentData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
+
+  const fetchData = useCallback(async () => {
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+    const timeoutId = setTimeout(() => controller.abort(), 15000);
+    try {
+      const response = await fetch(
+        API_CONFIG.endpoint(`/api/advanced/candle-intent/${symbol}`),
+        { signal: controller.signal }
+      );
+      clearTimeout(timeoutId);
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const result = await response.json();
+      if (result.status === 'ERROR' || result.status === 'TOKEN_EXPIRED' || result.error) {
+        setError(result.message || result.error || 'Authentication error');
+        setData(null);
+      } else if (!result.pattern || !result.current_candle) {
+        setError('Incomplete data');
+        setData(null);
+      } else {
+        setData(result);
+        setError(null);
+      }
+    } catch (err) {
+      clearTimeout(timeoutId);
+      if (err instanceof Error && err.name === 'AbortError') return;
+      setError('Connection error');
+    } finally {
+      setLoading(false);
+    }
+  }, [symbol]);
 
   useEffect(() => {
-    const fetchData = async () => {
-      try {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 15000);
-        
-        const response = await fetch(
-          API_CONFIG.endpoint(`/api/advanced/candle-intent/${symbol}`),
-          { signal: controller.signal }
-        );
-        clearTimeout(timeoutId);
-        
-        if (!response.ok) {
-          throw new Error(`HTTP ${response.status}`);
-        }
-        
-        const result = await response.json();
-        
-        if (result.status === 'ERROR' || result.status === 'TOKEN_EXPIRED' || result.error) {
-          setError(result.message || result.error || 'Authentication error');
-          setData(null);
-        } else if (!result.pattern || !result.current_candle) {
-          setError('Incomplete data');
-          setData(null);
-        } else {
-          setData(result);
-          setError(null);
-        }
-      } catch (err) {
-        if (err instanceof Error && err.name === 'AbortError') {
-          setError('Timeout - Server slow');
-        } else {
-          setError('Connection error');
-        }
-      } finally {
-        setLoading(false);
-      }
-    };
-
     fetchData();
     const interval = setInterval(fetchData, 5000);
-    return () => clearInterval(interval);
-  }, [symbol]);
+    return () => {
+      clearInterval(interval);
+      abortRef.current?.abort();
+    };
+  }, [fetchData]);
 
   const formatVolume = (vol: number): string => {
     if (vol >= 1000000) return `${(vol / 1000000).toFixed(2)}M`;
@@ -202,8 +244,10 @@ const CandleIntentCard = memo<CandleIntentCardProps>(({ symbol, name }) => {
 
   const signal = getCandleSignal(data);
   const confidence = calculateCandleConfidence(data);
-  
-  // Signal colors
+  const isLive = data.status === 'LIVE' || data.status === 'FRESH';
+  const isTrap = data.trap_status?.is_trap ?? false;
+  const alertLevel = data.volume_analysis.alert_level ?? 'NORMAL';
+  const efficiencyText = data.volume_analysis.efficiency_interpretation ?? '';
   const getSignalColor = () => {
     if (signal === 'STRONG BUY') return 'text-emerald-300';
     if (signal === 'BUY') return 'text-green-400';
@@ -235,7 +279,7 @@ const CandleIntentCard = memo<CandleIntentCardProps>(({ symbol, name }) => {
           <Flame className="w-5 h-5 text-orange-400" />
           <h3 className="text-base font-semibold text-white">{name}</h3>
           {/* Live Status Badge */}
-          {data.status === 'LIVE' && (
+          {isLive && (
             <div className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-emerald-500/15 border border-emerald-500/30">
               <span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />
               <span className="text-[10px] text-emerald-300 font-bold">LIVE</span>
@@ -386,6 +430,63 @@ const CandleIntentCard = memo<CandleIntentCardProps>(({ symbol, name }) => {
           </div>
         </div>
       </div>
+
+      {/* Volume Efficiency Interpretation */}
+      {efficiencyText && alertLevel !== 'NORMAL' && (
+        <div className={`p-2.5 rounded-lg border text-[10px] font-medium leading-relaxed ${
+          alertLevel === 'DANGER' || alertLevel === 'CRITICAL'
+            ? 'bg-rose-900/20 border-rose-500/40 text-rose-300'
+            : alertLevel === 'HIGHLIGHT'
+            ? 'bg-amber-900/20 border-amber-500/40 text-amber-300'
+            : alertLevel === 'OPPORTUNITY'
+            ? 'bg-cyan-900/20 border-cyan-500/40 text-cyan-200'
+            : alertLevel === 'WARNING'
+            ? 'bg-orange-900/20 border-orange-500/40 text-orange-300'
+            : 'bg-gray-800/30 border-gray-700/40 text-gray-300'
+        }`}>
+          {efficiencyText}
+        </div>
+      )}
+
+      {/* Trap Detection Panel */}
+      {isTrap && data.trap_status && (
+        <div className={`p-3 rounded-lg border-2 ${
+          data.trap_status.severity >= 75
+            ? 'bg-rose-950/40 border-rose-500/80'
+            : 'bg-orange-950/30 border-orange-500/60'
+        }`}>
+          <div className="flex items-center justify-between mb-1.5">
+            <span className={`text-xs font-bold ${
+              data.trap_status.severity >= 75 ? 'text-rose-300' : 'text-orange-300'
+            }`}>
+              🚨 TRAP: {(data.trap_status.trap_type ?? '').replace(/_/g, ' ')}
+            </span>
+            <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded border ${
+              data.trap_status.action_required === 'AVOID'
+                ? 'bg-rose-500/20 text-rose-300 border-rose-500/50'
+                : 'bg-orange-500/15 text-orange-300 border-orange-500/40'
+            }`}>
+              {data.trap_status.action_required}
+            </span>
+          </div>
+          <div className="h-1.5 bg-gray-800 rounded-full overflow-hidden">
+            <div
+              className={`h-full rounded-full transition-all duration-500 ${
+                data.trap_status.severity >= 75 ? 'bg-rose-500' : 'bg-orange-500'
+              }`}
+              style={{ width: `${data.trap_status.severity}%` }}
+            />
+          </div>
+          <div className="flex justify-between mt-1">
+            <span className="text-[9px] text-gray-500">Trap Severity</span>
+            <span suppressHydrationWarning className={`text-[9px] font-bold ${
+              data.trap_status.severity >= 75 ? 'text-rose-400' : 'text-orange-400'
+            }`}>
+              {data.trap_status.severity}%
+            </span>
+          </div>
+        </div>
+      )}
 
       {/* Near Zone Alert */}
       {data.near_zone && (

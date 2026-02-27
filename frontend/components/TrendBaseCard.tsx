@@ -1,313 +1,394 @@
+/**
+ * TrendBaseCard – Higher-Low Swing Structure Analysis
+ * ─────────────────────────────────────────────────────────────────────────────
+ * Architecture: Self-contained REST polling → /api/advanced/trend-base/{symbol}
+ * Independent:  No external hooks, no shared state — pure props (symbol + name)
+ * Refresh:      Every 5 s via AbortController-guarded fetch
+ *
+ * Signal engine (8 factors, ±100 pts total):
+ *   STRONG_BUY ≥+55  ·  BUY ≥+20  ·  NEUTRAL ±20
+ *   SELL ≤−20  ·  STRONG_SELL ≤−55
+ *
+ * Confidence: 30–92 % (integrity × factor-agreement — never 100 %)
+ * 5-Min Production: all 8 factor bars + live RSI/VWAP values inline
+ */
 'use client';
 
-import React, { memo, useEffect, useState } from 'react';
-import { TrendingUp, TrendingDown, Minus } from 'lucide-react';
+import React, { memo, useEffect, useState, useCallback, useRef } from 'react';
 import { API_CONFIG } from '@/lib/api-config';
 
-interface TrendBaseData {
-  symbol: string;
+// ─────────────────────────────────────────────────────────────────────────────
+// Types
+// ─────────────────────────────────────────────────────────────────────────────
+interface Factor { score: number; max: number; label: string }
+
+interface TrendBaseResponse {
+  symbol:           string;
+  price:            number;
+  changePercent:    number;
   structure: {
-    type: string;
+    type:            string;   // HIGHER_HIGHS_LOWS | LOWER_HIGHS_LOWS | SIDEWAYS
     integrity_score: number;
-    swing_points: {
-      last_high: number;
-      last_low: number;
-      prev_high: number;
-      prev_low: number;
-      high_diff: number;
-      low_diff: number;
-    };
+    swing_points: { last_high: number; last_low: number; prev_high: number; prev_low: number };
   };
-  signal: string;
-  confidence: number;
-  trend: string;
-  status: string;
-  timestamp: string;
-  data_status?: string;
-  candles_analyzed?: number;
-  _isCached?: boolean;
+  signal:           string;   // STRONG_BUY | BUY | NEUTRAL | SELL | STRONG_SELL
+  signal_5m:        string;   // BUY | NEUTRAL | SELL
+  trend_15m:        string;   // BULLISH | NEUTRAL | BEARISH
+  trend:            string;
+  confidence:       number;
+  total_score:      number;
+  factors:          Record<string, Factor>;
+  status:           string;
+  timestamp:        string;
+  candles_analyzed: number;
+  rsi_5m:           number;
+  rsi_15m:          number;
+  ema_alignment:    string;
+  supertrend:       string;
+  vwap_position:    string;
 }
 
-interface TrendBaseCardProps {
-  symbol: string;
-  name: string;
-}
+// ─────────────────────────────────────────────────────────────────────────────
+// Static signal config — module-level, never recreated per render tick
+// ─────────────────────────────────────────────────────────────────────────────
+const SIG_CFG: Record<string, {
+  label: string; color: string; bg: string; border: string; bar: string; icon: string;
+}> = {
+  STRONG_BUY:  { label: 'STRONG BUY',  color: 'text-emerald-300', bg: 'bg-emerald-500/10', border: 'border-emerald-500',  bar: 'from-emerald-500 to-green-400',  icon: '▲▲' },
+  BUY:         { label: 'BUY',         color: 'text-green-300',   bg: 'bg-green-500/10',   border: 'border-green-500',    bar: 'from-green-500 to-emerald-400',  icon: '▲'  },
+  NEUTRAL:     { label: 'NEUTRAL',     color: 'text-amber-300',   bg: 'bg-amber-500/8',    border: 'border-amber-500/60', bar: 'from-amber-500 to-yellow-400',   icon: '▬'  },
+  SELL:        { label: 'SELL',        color: 'text-red-300',     bg: 'bg-red-500/10',     border: 'border-red-500',      bar: 'from-red-500 to-rose-400',       icon: '▼'  },
+  STRONG_SELL: { label: 'STRONG SELL', color: 'text-rose-300',    bg: 'bg-rose-500/10',    border: 'border-rose-500',     bar: 'from-rose-500 to-red-400',       icon: '▼▼' },
+};
+
+const S5_CFG: Record<string, { label: string; color: string; border: string }> = {
+  BUY:     { label: 'BUY',     color: 'text-emerald-400', border: 'border-emerald-500/70' },
+  SELL:    { label: 'SELL',    color: 'text-red-400',     border: 'border-red-500/70'     },
+  NEUTRAL: { label: 'NEUTRAL', color: 'text-amber-400',   border: 'border-amber-500/50'   },
+};
+
+const T15_CFG: Record<string, { label: string; color: string; border: string }> = {
+  BULLISH: { label: 'BULLISH', color: 'text-emerald-400', border: 'border-emerald-500/70' },
+  BEARISH: { label: 'BEARISH', color: 'text-red-400',     border: 'border-red-500/70'     },
+  NEUTRAL: { label: 'NEUTRAL', color: 'text-amber-400',   border: 'border-amber-500/50'   },
+};
+
+const FACTOR_LABELS: Record<string, string> = {
+  trend_structure: 'Swing Structure',
+  supertrend:      'SuperTrend 10,2',
+  ema_alignment:   'EMA Stack',
+  rsi:             'RSI Momentum',
+  vwap:            'VWAP Position',
+  day_change:      'Day Change %',
+  sar:             'Parabolic SAR',
+  momentum:        'Momentum',
+};
+
+function getSig(k?: string) { return SIG_CFG[(k ?? 'NEUTRAL').toUpperCase()] ?? SIG_CFG.NEUTRAL; }
+function getS5(k?: string)  { return S5_CFG[(k  ?? 'NEUTRAL').toUpperCase()] ?? S5_CFG.NEUTRAL;  }
+function getT15(k?: string) { return T15_CFG[(k ?? 'NEUTRAL').toUpperCase()] ?? T15_CFG.NEUTRAL; }
+function fmt(n: number)     { return n.toLocaleString('en-IN', { maximumFractionDigits: 0 }); }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Component
+// ─────────────────────────────────────────────────────────────────────────────
+interface TrendBaseCardProps { symbol: string; name: string }
 
 const TrendBaseCard = memo<TrendBaseCardProps>(({ symbol, name }) => {
-  const [data, setData] = useState<TrendBaseData | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [data,     setData]    = useState<TrendBaseResponse | null>(null);
+  const [loading,  setLoading] = useState(true);
+  const [error,    setError]   = useState<string | null>(null);
+  const [flash,    setFlash]   = useState(false);
+  const prevSigRef = useRef<string>('');
+  const abortRef   = useRef<AbortController | null>(null);
 
-  useEffect(() => {
-    const fetchData = async () => {
-      try {
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 10000);
-        
-        const response = await fetch(
-          API_CONFIG.endpoint(`/api/advanced/trend-base/${symbol}`),
-          { signal: controller.signal }
-        );
-        clearTimeout(timeoutId);
-        
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        const result = await response.json();
-        
-        if (!result || typeof result !== 'object') {
-          setError('Invalid data');
-          setData(null);
-        } else if (result.status === 'TOKEN_EXPIRED' || result.status === 'ERROR') {
-          setError(result.message || 'Login required');
-          setData(null);
-        } else if (result.status === 'NO_DATA') {
-          setError('Market closed');
-          setData(null);
-        } else {
-          setData(result);
-          setError(null);
-        }
-      } catch (err) {
-        if (err instanceof Error && err.name === 'AbortError') {
-          setError('Timeout');
-        } else {
-          setError('Connection error');
-        }
-      } finally {
-        setLoading(false);
+  // ── Fetch — AbortController prevents stale updates ───────────────────────
+  const fetchData = useCallback(async () => {
+    abortRef.current?.abort();
+    const ctrl = new AbortController();
+    abortRef.current = ctrl;
+    try {
+      const res = await fetch(
+        API_CONFIG.endpoint(`/api/advanced/trend-base/${symbol}`),
+        { signal: ctrl.signal, cache: 'no-store' },
+      );
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const result: TrendBaseResponse = await res.json();
+      if (result?.status === 'TOKEN_EXPIRED') { setError('Auth required'); setLoading(false); return; }
+      if (result?.status === 'ERROR')          { setError('Feed error');    setLoading(false); return; }
+      // Flash on signal change
+      if (prevSigRef.current && prevSigRef.current !== result.signal) {
+        setFlash(true);
+        setTimeout(() => setFlash(false), 700);
       }
-    };
-
-    fetchData();
-    // 🔥 IMPROVED: Fetch every 5 seconds (was 15s) for responsive trend updates
-    // Pre-open: 5s | Live trading: 5s | Post-market: 5s
-    const interval = setInterval(fetchData, 5000);
-    return () => clearInterval(interval);
+      prevSigRef.current = result.signal;
+      setData(result);
+      setError(null);
+      setLoading(false);
+    } catch (e: any) {
+      if (e?.name === 'AbortError') return;
+      setError('Connection error');
+      setLoading(false);
+    }
   }, [symbol]);
 
-  // Determine trading signal based on data
-  const getTradingSignal = (): { signal: string; color: string; bgColor: string; icon: JSX.Element } => {
-    if (!data || !data.structure) {
-      return { signal: 'NO DATA', color: 'text-gray-400', bgColor: 'bg-gray-900/20', icon: <Minus className="w-8 h-8" /> };
-    }
+  useEffect(() => {
+    fetchData();
+    const id = setInterval(fetchData, 5000);
+    return () => { clearInterval(id); abortRef.current?.abort(); };
+  }, [symbol]); // eslint-disable-line react-hooks/exhaustive-deps
 
-    const integrity = data.structure.integrity_score || 0;
-    const trend = data.trend || 'SIDEWAYS';
-    const baseSignal = data.signal || 'NEUTRAL';
-    
-    // STRONG BUY: High integrity + clear uptrend
-    if (integrity >= 75 && trend === 'UPTREND' && baseSignal === 'BUY') {
-      return { 
-        signal: 'STRONG BUY', 
-        color: 'text-emerald-300', 
-        bgColor: 'from-emerald-500/20 to-green-500/10', 
-        icon: <TrendingUp className="w-8 h-8" /> 
-      };
-    }
-    
-    // BUY: Moderate integrity + uptrend
-    if (integrity >= 50 && (trend === 'UPTREND' || baseSignal === 'BUY')) {
-      return { 
-        signal: 'BUY', 
-        color: 'text-green-300', 
-        bgColor: 'from-green-500/15 to-green-600/8', 
-        icon: <TrendingUp className="w-8 h-8" /> 
-      };
-    }
-    
-    // STRONG SELL: High integrity + clear downtrend
-    if (integrity >= 75 && trend === 'DOWNTREND' && baseSignal === 'SELL') {
-      return { 
-        signal: 'STRONG SELL', 
-        color: 'text-rose-300', 
-        bgColor: 'from-rose-500/20 to-red-500/10', 
-        icon: <TrendingDown className="w-8 h-8" /> 
-      };
-    }
-    
-    // SELL: Moderate integrity + downtrend
-    if (integrity >= 50 && (trend === 'DOWNTREND' || baseSignal === 'SELL')) {
-      return { 
-        signal: 'SELL', 
-        color: 'text-red-300', 
-        bgColor: 'from-red-500/15 to-red-600/8', 
-        icon: <TrendingDown className="w-8 h-8" /> 
-      };
-    }
-    
-    // SIDEWAYS/NO TRADE - Low confidence or unclear trend
-    return { 
-      signal: 'SIDEWAYS', 
-      color: 'text-amber-300', 
-      bgColor: 'from-amber-500/15 to-yellow-500/8', 
-      icon: <Minus className="w-8 h-8" /> 
-    };
-  };
-
-  // Calculate live market confidence (realistic 35-85% range)
-  const getLiveConfidence = (): number => {
-    if (!data) return 35;
-    
-    let confidence = 45; // Lower base
-    const integrity = data.structure?.integrity_score || 0;
-    const isLive = data.status === 'LIVE' || data.status === 'ACTIVE';
-    
-    // Market status impact (reduced)
-    if (isLive) confidence += 12;
-    else if (data.status === 'CACHED') confidence += 6;
-    else confidence -= 10;
-    
-    // Pattern strength (reduced to prevent 100%)
-    if (integrity >= 80) confidence += 18;
-    else if (integrity >= 70) confidence += 14;
-    else if (integrity >= 60) confidence += 10;
-    else if (integrity >= 50) confidence += 6;
-    else if (integrity < 30) confidence -= 15;
-    
-    // Signal clarity (reduced)
-    if (data.signal === 'BUY' || data.signal === 'SELL') confidence += 8;
-    else confidence -= 8;
-    
-    // Market hours bonus (reduced)
-    const hour = new Date().getHours();
-    if (isLive && hour >= 9 && hour <= 15) confidence += 5;
-    
-    // Cap at 85% - never show 100% (unrealistic)
-    return Math.min(85, Math.max(35, Math.round(confidence)));
-  };
-
-  if (loading) {
-    return (
-      <div className="bg-gradient-to-br from-slate-900/40 to-slate-950/20 border-2 border-slate-700/30 rounded-2xl p-6 animate-pulse">
-        <div className="h-32 bg-slate-800/30 rounded-xl"></div>
+  // ── Loading skeleton ──────────────────────────────────────────────────────
+  if (loading) return (
+    <div className="bg-slate-900/40 border-2 border-slate-700/40 rounded-2xl p-4 animate-pulse min-h-[360px]">
+      <div className="flex justify-between mb-3">
+        <div className="h-5 bg-slate-800/70 rounded w-24" />
+        <div className="h-5 bg-slate-800/70 rounded w-16" />
       </div>
-    );
-  }
-
-  if (error || !data) {
-    return (
-      <div className="bg-gradient-to-br from-slate-900/40 to-slate-950/20 border-2 border-rose-500/30 rounded-2xl p-6">
-        <div className="text-center">
-          <Minus className="w-12 h-12 mx-auto mb-3 text-rose-400/60" />
-          <p className="text-lg font-bold text-rose-300 mb-1">{name}</p>
-          <p className="text-sm text-rose-400/80">{error || 'Data unavailable'}</p>
-        </div>
+      <div className="h-14 bg-slate-800/50 rounded-xl mb-3" />
+      <div className="h-2 bg-slate-800/50 rounded-full mb-3" />
+      <div className="grid grid-cols-2 gap-2 mb-3">
+        <div className="h-14 bg-slate-800/40 rounded-xl" />
+        <div className="h-14 bg-slate-800/40 rounded-xl" />
       </div>
-    );
-  }
+      <div className="h-44 bg-slate-800/30 rounded-xl" />
+    </div>
+  );
 
-  const tradingSignal = getTradingSignal();
-  const liveConfidence = getLiveConfidence();
+  // ── Error state ──────────────────────────────────────────────────────────
+  if (error || !data) return (
+    <div className="bg-slate-900/40 border-2 border-rose-500/30 rounded-2xl p-5 min-h-[200px] flex flex-col items-center justify-center gap-2">
+      <span className="text-2xl">⚠</span>
+      <p className="text-sm font-bold text-rose-300">{name}</p>
+      <p className="text-xs text-rose-400/80">{error ?? 'No data available'}</p>
+      <button
+        onClick={fetchData}
+        className="mt-2 text-[10px] px-3 py-1 rounded-full bg-rose-500/20 text-rose-300 border border-rose-500/40 hover:bg-rose-500/30 transition-colors"
+      >Retry</button>
+    </div>
+  );
+
+  // ── Derived values ────────────────────────────────────────────────────────
+  const sig    = getSig(data.signal);
+  const s5     = getS5(data.signal_5m);
+  const t15    = getT15(data.trend_15m);
   const isLive = data.status === 'LIVE' || data.status === 'ACTIVE';
+  const chgPos = (data.changePercent ?? 0) >= 0;
+  const factors    = data.factors ?? {};
+  const integrity  = data.structure?.integrity_score ?? 0;
+  const totalScore = data.total_score ?? 0;
+  const sp         = data.structure?.swing_points;
+
+  const structureLabel =
+    data.structure?.type === 'HIGHER_HIGHS_LOWS' ? 'Higher Highs + Higher Lows' :
+    data.structure?.type === 'LOWER_HIGHS_LOWS'  ? 'Lower Highs + Lower Lows'  :
+    'Mixed / Sideways';
+
+  const ctx =
+    data.signal === 'STRONG_BUY'  ? 'All 8 indicators confirm uptrend — high conviction long.' :
+    data.signal === 'BUY'         ? 'Majority bullish. Good long entry on dips to support.' :
+    data.signal === 'STRONG_SELL' ? 'All 8 indicators confirm downtrend — high conviction short.' :
+    data.signal === 'SELL'        ? 'Majority bearish. Avoid longs; trail shorts on bounces.' :
+                                    'Mixed signals. Wait for structure break before trading.';
+
+  const vwapLabel = (data.vwap_position ?? 'AT_VWAP').replace('_VWAP', '');
+  const emaLabel  = (data.ema_alignment ?? 'NEUTRAL')
+                      .replace('ALL_', '').replace('PARTIAL_', 'P ');
 
   return (
-    <div className={`bg-gradient-to-br ${tradingSignal.bgColor} border-2 rounded-xl p-3 sm:p-4 transition-all duration-300 hover:scale-[1.01] shadow-xl ${
-      tradingSignal.signal.includes('BUY') ? 'border-emerald-500/40 shadow-emerald-500/10' :
-      tradingSignal.signal.includes('SELL') ? 'border-rose-500/40 shadow-rose-500/10' :
-      'border-amber-500/30 shadow-amber-500/10'
-    }`}>
-      
-      {/* Index Name & Confidence Badge */}
-      <div className="flex items-center justify-between mb-3">
+    <div
+      suppressHydrationWarning
+      className={`
+        rounded-2xl border-2 ${sig.border} ${sig.bg} overflow-hidden
+        shadow-lg transition-all duration-300
+        ${flash ? 'ring-2 ring-white/25 scale-[1.004]' : ''}
+      `}
+    >
+      {/* ─── HEADER ──────────────────────────────────────────────────────── */}
+      <div className="flex items-center justify-between px-4 py-2.5 border-b border-white/5">
         <div className="flex items-center gap-2">
-          <h3 className="text-base sm:text-lg font-bold text-white/90">{name}</h3>
+          <span className="text-sm font-black text-white">{name}</span>
           {isLive && (
-            <div className="flex items-center gap-1.5 px-2 py-1 bg-emerald-500/15 rounded-full border border-emerald-500/30">
-              <span className="w-2 h-2 bg-emerald-400 rounded-full animate-pulse shadow-lg shadow-emerald-400/50"></span>
-              <span className="text-[10px] font-bold text-emerald-300">LIVE</span>
-            </div>
+            <span className="flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-emerald-500/15 border border-emerald-500/30">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+              <span className="text-[9px] font-bold text-emerald-400">LIVE</span>
+            </span>
           )}
         </div>
-        <div className={`text-center px-2.5 py-1 rounded-lg border-2 bg-black/30 ${
-          liveConfidence >= 75 ? 'border-emerald-500/40' :
-          liveConfidence >= 60 ? 'border-green-500/40' :
-          liveConfidence >= 45 ? 'border-amber-500/40' :
-          'border-rose-500/40'
-        }`}>
-          <div className="text-[10px] font-semibold text-white/60">Confidence</div>
-          <div className="text-base font-bold text-white">{liveConfidence}%</div>
+        <div className="flex items-center gap-2">
+          <span suppressHydrationWarning className={`text-[11px] font-bold ${chgPos ? 'text-emerald-400' : 'text-red-400'}`}>
+            {chgPos ? '▲' : '▼'}&nbsp;{Math.abs(data.changePercent ?? 0).toFixed(2)}%
+          </span>
+          <span suppressHydrationWarning className="text-xs font-black text-white">
+            {(data.price ?? 0) > 0 ? `₹${fmt(data.price)}` : '—'}
+          </span>
         </div>
       </div>
 
-      {/* Main Trading Signal - Clear & Readable */}
-      <div className="mb-4 text-center py-3 px-3 bg-black/20 rounded-xl border border-white/10">
-        <div className="flex items-center justify-center mb-2">
-          <div className={`${tradingSignal.color} drop-shadow-[0_0_10px_currentColor]`}>
-            {tradingSignal.icon}
+      <div className="p-3 space-y-2.5">
+
+        {/* ─── MAIN SIGNAL ─────────────────────────────────────────────── */}
+        <div className={`rounded-xl border ${sig.border} ${sig.bg} px-3 py-2.5 text-center`}>
+          <div suppressHydrationWarning className={`text-xl font-black tracking-wide ${sig.color}`}>
+            {sig.icon}&nbsp;{sig.label}
+          </div>
+          <p className="text-[10px] text-gray-400 mt-0.5 leading-tight">{ctx}</p>
+        </div>
+
+        {/* ─── CONFIDENCE BAR ──────────────────────────────────────────── */}
+        <div>
+          <div className="flex justify-between items-center mb-1">
+            <span className="text-[10px] text-gray-500 font-semibold uppercase tracking-widest">Confidence</span>
+            <span suppressHydrationWarning className={`text-sm font-black ${sig.color}`}>{data.confidence}%</span>
+          </div>
+          <div className="h-2 bg-gray-900 rounded-full overflow-hidden border border-white/5">
+            <div
+              suppressHydrationWarning
+              className={`h-full rounded-full bg-gradient-to-r ${sig.bar} transition-all duration-700`}
+              style={{ width: `${data.confidence}%` }}
+            />
+          </div>
+          <div className="flex justify-between text-[9px] text-gray-700 mt-0.5">
+            <span>30</span><span>50</span><span>70</span><span>92</span>
           </div>
         </div>
-        <h2 className={`text-xl sm:text-2xl font-bold ${tradingSignal.color} mb-1 tracking-tight`}>
-          {tradingSignal.signal}
-        </h2>
-        <p className="text-[10px] sm:text-xs text-white/60 font-medium">
-          {tradingSignal.signal.includes('BUY') && '📈 Good time to consider buying'}
-          {tradingSignal.signal.includes('SELL') && '📉 Consider selling or avoiding'}
-          {tradingSignal.signal === 'SIDEWAYS' && '⚠️ Wait for clear trend'}
-        </p>
+
+        {/* ─── DUAL TIMEFRAME ──────────────────────────────────────────── */}
+        <div className="grid grid-cols-2 gap-2">
+          {/* 5m */}
+          <div className={`bg-slate-900/60 border ${s5.border} rounded-xl p-2.5`}>
+            <div className="text-[8px] font-bold text-gray-500 uppercase tracking-widest mb-1">5m Entry</div>
+            <div suppressHydrationWarning className={`text-sm font-black ${s5.color}`}>{s5.label}</div>
+            <div className="text-[9px] text-gray-600 mt-0.5">
+              ST:&nbsp;
+              <span suppressHydrationWarning className={
+                data.supertrend === 'BULLISH' ? 'text-emerald-400 font-bold' :
+                data.supertrend === 'BEARISH' ? 'text-red-400 font-bold' : 'text-gray-500'
+              }>{data.supertrend ?? '—'}</span>
+            </div>
+          </div>
+          {/* 15m */}
+          <div className={`bg-slate-900/60 border ${t15.border} rounded-xl p-2.5`}>
+            <div className="text-[8px] font-bold text-gray-500 uppercase tracking-widest mb-1">15m Trend</div>
+            <div suppressHydrationWarning className={`text-sm font-black ${t15.color}`}>{t15.label}</div>
+            <div className="text-[9px] text-gray-600 mt-0.5">
+              EMA:&nbsp;
+              <span suppressHydrationWarning className={
+                (data.ema_alignment ?? '').includes('BULLISH') ? 'text-emerald-400 font-bold' :
+                (data.ema_alignment ?? '').includes('BEARISH') ? 'text-red-400 font-bold' : 'text-gray-500'
+              }>{emaLabel}</span>
+            </div>
+          </div>
+        </div>
+
+        {/* ─── KEY PRICE LEVELS ────────────────────────────────────────── */}
+        <div className="grid grid-cols-2 gap-2">
+          <div className="bg-slate-900/40 border border-slate-700/30 rounded-lg px-2.5 py-1.5">
+            <div className="text-[8px] text-gray-500 font-semibold uppercase">Day High</div>
+            <div suppressHydrationWarning className="text-[11px] font-bold text-emerald-400">
+              {(sp?.last_high ?? 0) > 0 ? `₹${fmt(sp!.last_high)}` : '—'}
+            </div>
+          </div>
+          <div className="bg-slate-900/40 border border-slate-700/30 rounded-lg px-2.5 py-1.5">
+            <div className="text-[8px] text-gray-500 font-semibold uppercase">Day Low</div>
+            <div suppressHydrationWarning className="text-[11px] font-bold text-red-400">
+              {(sp?.last_low ?? 0) > 0 ? `₹${fmt(sp!.last_low)}` : '—'}
+            </div>
+          </div>
+        </div>
+
+        {/* ─── STRUCTURE TAG ───────────────────────────────────────────── */}
+        <div className={`flex items-center justify-between px-2.5 py-1.5 rounded-lg border ${
+          data.structure?.type === 'HIGHER_HIGHS_LOWS' ? 'bg-emerald-500/8 border-emerald-500/35' :
+          data.structure?.type === 'LOWER_HIGHS_LOWS'  ? 'bg-red-500/8 border-red-500/35'         :
+          'bg-amber-500/8 border-amber-500/35'
+        }`}>
+          <span className="text-[9px] font-bold text-gray-500 uppercase tracking-wider">Structure</span>
+          <span suppressHydrationWarning className={`text-[10px] font-bold ${
+            data.structure?.type === 'HIGHER_HIGHS_LOWS' ? 'text-emerald-400' :
+            data.structure?.type === 'LOWER_HIGHS_LOWS'  ? 'text-red-400' : 'text-amber-400'
+          }`}>{structureLabel}</span>
+        </div>
+
+        {/* ══════════════════════════════════════════════════════════════════
+            5-MIN PREDICTION
+            Shows every factor, live RSI/VWAP values, integrity score
+        ══════════════════════════════════════════════════════════════════ */}
+        <div className="border border-slate-700/50 rounded-xl bg-slate-900/50 px-3 py-2.5">
+
+          {/* Panel header */}
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-[9px] font-bold text-gray-400 uppercase tracking-widest">
+              5-Min Prediction
+            </span>
+            <span suppressHydrationWarning className={`text-[9px] font-bold px-1.5 py-0.5 rounded border ${sig.border} ${sig.bg} ${sig.color}`}>
+              Score&nbsp;{totalScore > 0 ? '+' : ''}{totalScore}/100
+            </span>
+          </div>
+
+          {/* Live indicator snapshot */}
+          <div className="flex flex-wrap gap-x-3 gap-y-0.5 mb-2 pb-1.5 border-b border-white/5">
+            {[
+              { label: 'RSI 5m',   val: (data.rsi_5m  ?? 50).toFixed(0), bull: (data.rsi_5m  ?? 50) >= 56, bear: (data.rsi_5m  ?? 50) <= 44 },
+              { label: 'RSI 15m',  val: (data.rsi_15m ?? 50).toFixed(0), bull: (data.rsi_15m ?? 50) >= 56, bear: (data.rsi_15m ?? 50) <= 44 },
+              { label: 'VWAP',     val: vwapLabel, bull: vwapLabel === 'ABOVE', bear: vwapLabel === 'BELOW', neutral: vwapLabel === 'AT' },
+              { label: 'Integrity',val: `${integrity}%`, bull: integrity >= 55, bear: false, neutral: integrity < 30 },
+            ].map(({ label, val, bull, bear }) => (
+              <span key={label} className="text-[9px] text-gray-500">
+                {label}:&nbsp;
+                <span suppressHydrationWarning className={bull ? 'text-emerald-400 font-bold' : bear ? 'text-red-400 font-bold' : 'text-gray-400'}>
+                  {val}
+                </span>
+              </span>
+            ))}
+          </div>
+
+          {/* 8 factor bars */}
+          <div className="space-y-1">
+            {Object.entries(factors).map(([key, f]) => {
+              const pct    = f.max > 0 ? Math.abs(f.score) / f.max * 100 : 0;
+              const isBull = f.score > 0;
+              const isBear = f.score < 0;
+              return (
+                <div key={key} className="flex items-center gap-1.5">
+                  <span className={`text-[9px] font-bold w-3 text-center flex-shrink-0 ${isBull ? 'text-emerald-400' : isBear ? 'text-red-400' : 'text-gray-600'}`}>
+                    {isBull ? '▲' : isBear ? '▼' : '─'}
+                  </span>
+                  <span className="text-[9px] text-gray-500 w-[88px] truncate flex-shrink-0">
+                    {FACTOR_LABELS[key] ?? key}
+                  </span>
+                  <div className="flex-1 h-1.5 bg-gray-800 rounded-full overflow-hidden min-w-0">
+                    <div
+                      suppressHydrationWarning
+                      className={`h-full rounded-full transition-all duration-500 ${isBull ? 'bg-emerald-500' : isBear ? 'bg-red-500' : 'bg-gray-700'}`}
+                      style={{ width: `${pct}%` }}
+                    />
+                  </div>
+                  <span suppressHydrationWarning className={`text-[9px] font-semibold w-[72px] text-right truncate flex-shrink-0 ${isBull ? 'text-emerald-400' : isBear ? 'text-red-400' : 'text-gray-600'}`}>
+                    {f.label}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+
+          {/* Summary line */}
+          <div suppressHydrationWarning className={`mt-2 text-center text-[10px] font-bold rounded-lg py-1 border ${sig.border} ${sig.bg} ${sig.color}`}>
+            {sig.label}&nbsp;·&nbsp;{data.confidence}% confidence&nbsp;·&nbsp;{data.candles_analyzed ?? 120} candles
+          </div>
+        </div>
+
       </div>
 
-      {/* Live Confidence Meter */}
-      <div className="mb-3">
-        <div className="flex items-center justify-between mb-1.5">
-          <span className="text-xs font-bold text-white/80">Signal Confidence</span>
-          <span className={`text-lg font-bold ${
-            liveConfidence >= 75 ? 'text-emerald-300' :
-            liveConfidence >= 60 ? 'text-green-300' :
-            liveConfidence >= 45 ? 'text-amber-300' :
-            'text-rose-300'
-          }`}>{liveConfidence}%</span>
-        </div>
-        <div className="relative w-full h-3 bg-black/30 rounded-full overflow-hidden border border-white/10">
-          <div
-            className={`absolute inset-y-0 left-0 transition-all duration-700 rounded-full ${
-              liveConfidence >= 75 ? 'bg-gradient-to-r from-emerald-500 to-green-400 shadow-lg shadow-emerald-500/50' :
-              liveConfidence >= 60 ? 'bg-gradient-to-r from-green-500 to-green-400 shadow-lg shadow-green-500/40' :
-              liveConfidence >= 45 ? 'bg-gradient-to-r from-amber-500 to-yellow-400 shadow-lg shadow-amber-500/40' :
-              'bg-gradient-to-r from-rose-500 to-red-400 shadow-lg shadow-rose-500/40'
-            }`}
-            style={{  width: `${liveConfidence}%` }}
-          ></div>
-        </div>
-        <div className="flex justify-between mt-1 text-[9px] font-semibold text-white/40">
-          <span>Low</span>
-          <span>Medium</span>
-          <span>High</span>
-        </div>
-      </div>
-
-      {/* Quick Insight - What it means */}
-      <div className={`p-3 rounded-lg border ${
-        tradingSignal.signal.includes('STRONG BUY') ? 'bg-emerald-500/10 border-emerald-500/30' :
-        tradingSignal.signal === 'BUY' ? 'bg-green-500/10 border-green-500/30' :
-        tradingSignal.signal.includes('STRONG SELL') ? 'bg-rose-500/10 border-rose-500/30' :
-        tradingSignal.signal === 'SELL' ? 'bg-red-500/10 border-red-500/30' :
-        'bg-amber-500/10 border-amber-500/30'
-      }`}>
-        <p className="text-xs leading-relaxed text-white/90 font-medium">
-          {tradingSignal.signal === 'STRONG BUY' && (
-            <span>✅ <strong className="text-emerald-300">Very strong uptrend</strong> - Price making higher highs & higher lows consistently. Best time to buy.</span>
-          )}
-          {tradingSignal.signal === 'BUY' && (
-            <span>✅ <strong className="text-green-300">Uptrend detected</strong> - Price moving up. Good opportunity to consider buying.</span>
-          )}
-          {tradingSignal.signal === 'STRONG SELL' && (
-            <span>⚠️ <strong className="text-rose-300">Very strong downtrend</strong> - Price making lower lows consistently. Avoid buying, consider selling.</span>
-          )}
-          {tradingSignal.signal === 'SELL' && (
-            <span>⚠️ <strong className="text-red-300">Downtrend detected</strong> - Price moving down. Be cautious with new positions.</span>
-          )}
-          {tradingSignal.signal === 'SIDEWAYS' && (
-            <span>⏸️ <strong className="text-amber-300">No clear trend</strong> - Market is sideways. Wait for a clear direction before trading.</span>
-          )}
-        </p>
-      </div>
-
-      {/* Market Data Status Footer */}
-      <div className="mt-3 pt-2 border-t border-white/10 flex items-center justify-between text-[10px]">
-        <span className="text-white/50 font-medium">
-          {isLive ? '📡 Live' : '📊 Cached'}
+      {/* ─── FOOTER ──────────────────────────────────────────────────────── */}
+      <div className="px-4 py-1.5 border-t border-white/5 flex justify-between items-center">
+        <span suppressHydrationWarning className="text-[9px] text-gray-600">
+          {data.timestamp
+            ? new Date(data.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+            : '—'}
         </span>
-        <span className="text-white/50 font-medium">
-          {data.candles_analyzed && `${data.candles_analyzed} candles`}
+        <span className={`text-[9px] font-bold ${isLive ? 'text-emerald-500' : 'text-gray-600'}`}>
+          {isLive ? '● Live' : '○ Cached'}
         </span>
       </div>
     </div>
@@ -315,5 +396,5 @@ const TrendBaseCard = memo<TrendBaseCardProps>(({ symbol, name }) => {
 });
 
 TrendBaseCard.displayName = 'TrendBaseCard';
-
 export default TrendBaseCard;
+

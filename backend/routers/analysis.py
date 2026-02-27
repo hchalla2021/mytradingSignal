@@ -224,171 +224,155 @@ async def analysis_health():
 
 
 # Cache for OI Momentum (avoid excessive API calls)
-_oi_momentum_cache = {}
+_oi_momentum_cache: dict = {}
+_oi_momentum_symbol_cache: dict = {}   # per-symbol cache for individual endpoint
 _OI_CACHE_TTL = 60  # 1 minute cache
+
+
+async def _calc_oi_momentum(symbol: str) -> dict:
+    """
+    Shared real calculation for both /oi-momentum/all and /oi-momentum/{symbol}.
+    Reads cached candles, builds 5m + 15m DataFrames, runs the full service.
+    Returns the complete signal dict with real metrics (never hardcoded).
+    """
+    import pandas as pd
+    import json as _json
+
+    cache = await get_redis()
+    candle_key = f"analysis_candles:{symbol}"
+    candles_json = await cache.lrange(candle_key, 0, 199)
+
+    if not candles_json or len(candles_json) < 5:
+        return {
+            "signal_5m": "NO_SIGNAL",
+            "signal_15m": "NO_SIGNAL",
+            "final_signal": "NO_SIGNAL",
+            "confidence": 0,
+            "reasons": ["Waiting for live market data — accumulating candles"],
+            "metrics": oi_momentum_service._empty_metrics(),
+            "symbol_name": SYMBOL_MAPPING.get(symbol, {}).get("name", symbol),
+            "current_price": 0,
+            "timestamp": datetime.now().isoformat(),
+        }
+
+    # Parse candles (list stored newest-first → reverse for chronological order)
+    candles = []
+    for c in reversed(candles_json):
+        try:
+            candles.append(_json.loads(c))
+        except Exception:
+            continue
+
+    # 5-minute DataFrame
+    df_5m = pd.DataFrame(candles)
+
+    # 15-minute DataFrame (aggregate every 3 × 5m candles)
+    df_15m_rows = []
+    for i in range(0, len(candles) - 2, 3):
+        chunk = candles[i:i + 3]
+        if len(chunk) == 3:
+            df_15m_rows.append({
+                "open":   chunk[0]["open"],
+                "high":   max(c["high"] for c in chunk),
+                "low":    min(c["low"]  for c in chunk),
+                "close":  chunk[-1]["close"],
+                "volume": sum(c.get("volume", 0) for c in chunk),
+                "oi":     chunk[-1].get("oi", 0),
+            })
+    df_15m = pd.DataFrame(df_15m_rows)
+
+    current_price  = float(df_5m.iloc[-1]["close"])  if len(df_5m) > 0 else 0.0
+    current_oi     = df_5m.iloc[-1].get("oi")        if len(df_5m) > 0 else None
+    current_volume = df_5m.iloc[-1].get("volume")    if len(df_5m) > 0 else None
+
+    signal_data = oi_momentum_service.analyze_signal(
+        symbol=symbol,
+        df_5min=df_5m,
+        df_15min=df_15m,
+        current_price=current_price,
+        current_oi=current_oi,
+        current_volume=current_volume,
+    )
+
+    return {
+        **signal_data,
+        "symbol_name":   SYMBOL_MAPPING.get(symbol, {}).get("name", symbol),
+        "current_price": current_price,
+    }
 
 @router.get("/oi-momentum/all")
 async def get_oi_momentum_all():
     """
-    Get OI Momentum signals for all symbols (NIFTY, BANKNIFTY, SENSEX)
-    Uses CACHED CANDLES from WebSocket feed - NO API CALLS!
-    Pure data-driven buy/sell signals based on Liquidity Grab, Volume, OI, Price Structure
+    Get OI Momentum signals for all symbols (NIFTY, BANKNIFTY, SENSEX).
+    Uses cached candles from the WebSocket feed — no Zerodha API calls.
     """
     global _oi_momentum_cache
-    
-    # Check cache
+
     now = datetime.now()
-    if 'data' in _oi_momentum_cache:
-        cache_age = (now - _oi_momentum_cache['timestamp']).total_seconds()
-        if cache_age < _OI_CACHE_TTL:
-            return _oi_momentum_cache['data']
-    
+    if "data" in _oi_momentum_cache:
+        if (now - _oi_momentum_cache["timestamp"]).total_seconds() < _OI_CACHE_TTL:
+            return _oi_momentum_cache["data"]
+
     try:
-        cache = await get_redis()
         results = {}
-        
-        import pandas as pd
-        import json
-        
         for symbol in ["NIFTY", "BANKNIFTY", "SENSEX"]:
             try:
-                # Get cached candles from WebSocket feed (NO API calls!)
-                candle_key = f"analysis_candles:{symbol}"
-                candles_json = await cache.lrange(candle_key, 0, 199)
-                
-                if not candles_json or len(candles_json) < 20:
-                    results[symbol] = {
-                        "signal_5m": "NO_SIGNAL",
-                        "signal_15m": "NO_SIGNAL",
-                        "final_signal": "NO_SIGNAL",
-                        "confidence": 0,
-                        "reasons": ["Waiting for live market data - accumulating candles for analysis"],
-                        "metrics": {},
-                        "symbol_name": SYMBOL_MAPPING[symbol]["name"]
-                    }
-                    continue
-                
-                # Parse cached candles (newest first)
-                candles = []
-                for candle_json in reversed(candles_json):
-                    try:
-                        candles.append(json.loads(candle_json))
-                    except:
-                        continue
-                
-                # Build 5-minute DataFrame
-                df_5m = pd.DataFrame(candles)
-                
-                # Build 15-minute DataFrame (aggregate every 3 candles)
-                df_15m_data = []
-                for i in range(0, len(candles) - 2, 3):
-                    chunk = candles[i:i+3]
-                    if len(chunk) == 3:
-                        df_15m_data.append({
-                            'open': chunk[0]['open'],
-                            'high': max(c['high'] for c in chunk),
-                            'low': min(c['low'] for c in chunk),
-                            'close': chunk[-1]['close'],
-                            'volume': sum(c.get('volume', 0) for c in chunk),
-                            'oi': chunk[-1].get('oi', 0)
-                        })
-                df_15m = pd.DataFrame(df_15m_data)
-                
-                # Get current values from latest candle
-                current_price = df_5m.iloc[-1]['close'] if len(df_5m) > 0 else 0
-                current_oi = df_5m.iloc[-1].get('oi') if len(df_5m) > 0 else None
-                current_volume = df_5m.iloc[-1]['volume'] if len(df_5m) > 0 else None
-                
-                # Analyze OI Momentum
-                signal_data = oi_momentum_service.analyze_signal(
-                    symbol=symbol,
-                    df_5min=df_5m,
-                    df_15min=df_15m,
-                    current_price=current_price,
-                    current_oi=current_oi,
-                    current_volume=current_volume
-                )
-                
-                results[symbol] = {
-                    **signal_data,
-                    "symbol_name": SYMBOL_MAPPING[symbol]["name"],
-                    "current_price": current_price
-                }
-                
-                print(f"✅ OI Momentum [{symbol}]: {signal_data['final_signal']} ({signal_data['confidence']}%) - FROM CACHE")
-                
+                results[symbol] = await _calc_oi_momentum(symbol)
+                sig = results[symbol]
+                print(f"✅ OI Momentum [{symbol}]: {sig['final_signal']} ({sig['confidence']}%)")
             except Exception as e:
-                print(f"❌ OI Momentum error for {symbol}: {e}")
-                import traceback
-                traceback.print_exc()
+                import traceback; traceback.print_exc()
                 results[symbol] = {
-                    "signal_5m": "ERROR",
-                    "signal_15m": "ERROR",
-                    "final_signal": "ERROR",
+                    "signal_5m": "ERROR", "signal_15m": "ERROR", "final_signal": "ERROR",
                     "confidence": 0,
                     "reasons": [f"Calculation error: {str(e)[:100]}"],
-                    "metrics": {},
-                    "symbol_name": SYMBOL_MAPPING.get(symbol, {}).get("name", symbol)
+                    "metrics": oi_momentum_service._empty_metrics(),
+                    "symbol_name": SYMBOL_MAPPING.get(symbol, {}).get("name", symbol),
+                    "current_price": 0,
+                    "timestamp": datetime.now().isoformat(),
                 }
-        
-        # Cache the results
-        _oi_momentum_cache['data'] = results
-        _oi_momentum_cache['timestamp'] = datetime.now()
-        
+
+        _oi_momentum_cache["data"]      = results
+        _oi_momentum_cache["timestamp"] = now
         return results
-        
+
     except Exception as e:
-        print(f"❌ OI Momentum service error: {e}")
-        import traceback
-        traceback.print_exc()
+        import traceback; traceback.print_exc()
         return {"error": str(e)}
 
 
 @router.get("/oi-momentum/{symbol}")
 async def get_oi_momentum_symbol(symbol: str):
     """
-    Get OI Momentum signal for a specific symbol
+    Get OI Momentum signal for a specific symbol — real calculation, never hardcoded.
+    Uses the same candle-based engine as /oi-momentum/all with a per-symbol cache.
     """
     symbol = symbol.upper()
-    
     if symbol not in SYMBOL_MAPPING:
         return {"error": f"Unknown symbol: {symbol}"}
-    
-    # Get actual market data for this symbol
-    cache = await get_redis()
-    market_data = await cache.get_market_data(symbol)
-    current_price = float(market_data.get('price', 0)) if market_data else 0
-    
-    # Symbol-specific response (temporary hardcoded, but with real prices)
-    symbol_config = {
-        "NIFTY": {"price": current_price or 25595.0, "confidence": 75, "signal_5m": "BUY", "buildup": 3.2, "volume": 2.1},
-        "BANKNIFTY": {"price": current_price or 61250.0, "confidence": 82, "signal_5m": "STRONG_BUY", "buildup": 4.5, "volume": 2.8},
-        "SENSEX": {"price": current_price or 83000.0, "confidence": 68, "signal_5m": "BUY", "buildup": 2.0, "volume": 1.5},
-    }
-    
-    config = symbol_config.get(symbol, symbol_config["NIFTY"])
-    
-    return {
-        "signal_5m": config["signal_5m"],
-        "signal_15m": "BULLISH",
-        "final_signal": config["signal_5m"],
-        "confidence": config["confidence"],
-        "reasons": [
-            f"OI buildup detected: {config['buildup']:.1f}% increase",
-            f"Volume ratio: {config['volume']:.1f}x average",
-            "Price above VWAP",
-            "Smart money buying confirmed"
-        ],
-        "metrics": {
-            "liquidity": True,
-            "oi_buildup": config["buildup"],
-            "volume_ratio": config["volume"],
-            "breakout": True
-        },
-        "symbol_name": SYMBOL_MAPPING[symbol]["name"],
-        "current_price": config["price"],
-        "timestamp": datetime.now().isoformat()
-    }
+
+    global _oi_momentum_symbol_cache
+    now = datetime.now()
+    cached = _oi_momentum_symbol_cache.get(symbol)
+    if cached and (now - cached["timestamp"]).total_seconds() < _OI_CACHE_TTL:
+        return cached["data"]
+
+    try:
+        result = await _calc_oi_momentum(symbol)
+        _oi_momentum_symbol_cache[symbol] = {"data": result, "timestamp": now}
+        print(f"✅ OI Momentum [{symbol}]: {result['final_signal']} ({result['confidence']}%)")
+        return result
+    except Exception as e:
+        import traceback; traceback.print_exc()
+        return {
+            "signal_5m": "NO_SIGNAL", "signal_15m": "NO_SIGNAL", "final_signal": "NO_SIGNAL",
+            "confidence": 0,
+            "reasons": [f"Error: {str(e)[:100]}"],
+            "metrics": oi_momentum_service._empty_metrics(),
+            "symbol_name": SYMBOL_MAPPING.get(symbol, {}).get("name", symbol),
+            "current_price": 0,
+            "timestamp": now.isoformat(),
+        }
 
 
 @router.get("/rsi-momentum/{symbol}")

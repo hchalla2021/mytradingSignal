@@ -276,11 +276,19 @@ async def market_websocket(websocket: WebSocket):
         # Assess connection quality
         if feed_state.get('is_healthy'):
             connection_quality = "EXCELLENT"
-            status_message = "✓ Connected and receiving live data"
+            if market_status == "PRE_OPEN":
+                status_message = "✓ Connected – Pre-Open Session (9:00–9:15 AM)"
+            else:
+                status_message = "✓ Connected and receiving live data"
+        elif market_status == "PRE_OPEN":
+            # During PRE_OPEN the feed is connecting and no ticks are expected yet –
+            # this is normal first-connection-of-the-day behaviour, not an error.
+            connection_quality = "GOOD"
+            status_message = "✓ Connected – Pre-Open Session (9:00–9:15 AM)"
         elif feed_state.get('is_stale'):
             connection_quality = "DEGRADED"
             status_message = "⚠️ Connected but low tick frequency"
-        elif feed_state.get('requires_reconnect') and market_status in ("PRE_OPEN", "LIVE"):
+        elif feed_state.get('requires_reconnect') and market_status == "LIVE":
             connection_quality = "POOR"
             status_message = "⚠️ Reconnecting to market feed..."
         

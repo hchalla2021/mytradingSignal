@@ -50,6 +50,7 @@ const AnalysisCard = dynamic(() => import('@/components/AnalysisCard').then(mod 
 });
 
 const VWMAEMAFilterCard = dynamic(() => import('@/components/VWMAEMAFilterCard'), { ssr: false });
+const MarketPositioningCard = dynamic(() => import('@/components/MarketPositioningCard'), { ssr: false });
 const OIMomentumCard = dynamic(() => import('@/components/OIMomentumCard'), { 
   ssr: false,
   loading: () => (
@@ -276,16 +277,22 @@ export default function Home() {
       // SECTION 2: Smart Money Flow • Order Structure Intelligence
       // ═══════════════════════════════════════════════════════════════
       sectionCount++;
-      const orderFlow = String(ind.order_flow || '').toUpperCase();
-      const institutionalFlow = String(ind.institutional_flow || '').toUpperCase();
-      const fairValueGap = ind.fair_value_gap || 0;
-      
-      if (orderFlow.includes('BUY') || institutionalFlow.includes('ACCUMULATION')) {
+      const bosBullish = ind.bos_bullish === true;
+      const bosBearish = ind.bos_bearish === true;
+      const fvgBullish = ind.fvg_bullish === true;
+      const fvgBearish = ind.fvg_bearish === true;
+      const orderBlockBull = Number(ind.order_block_bullish || 0);
+      const orderBlockBear = Number(ind.order_block_bearish || 0);
+      const smFlowStrength = Number(ind.order_flow_strength || 50);
+
+      const smBullish = bosBullish || fvgBullish || (orderBlockBull > 0 && price > orderBlockBull);
+      const smBearish = bosBearish || fvgBearish || (orderBlockBear > 0 && price < orderBlockBear);
+      if (smBullish && !smBearish) {
         buyCount++;
-        totalConfidenceSum += 85;
-      } else if (orderFlow.includes('SELL') || institutionalFlow.includes('DISTRIBUTION')) {
+        totalConfidenceSum += Math.min(90, 50 + smFlowStrength * 0.4);
+      } else if (smBearish && !smBullish) {
         sellCount++;
-        totalConfidenceSum += 85;
+        totalConfidenceSum += Math.min(90, 50 + (100 - smFlowStrength) * 0.4);
       } else {
         neutralCount++;
         totalConfidenceSum += 50;
@@ -392,24 +399,24 @@ export default function Home() {
       }
 
       // ═══════════════════════════════════════════════════════════════
-      // SECTION 7: RSI 60/40 Momentum (5-Min + 15-Min Trend)
+      // SECTION 7: RSI 60/40 Momentum
+      // Backend provides single 'rsi' field derived from momentum
       // ═══════════════════════════════════════════════════════════════
       sectionCount++;
-      const rsi5min = Number(ind.rsi_5min || ind.rsi || 50);
-      const rsi15min = Number(ind.rsi_15min || 50);
-      
-      if (rsi5min < 40 && rsi15min < 40) {
-        buyCount++; // Oversold on both timeframes
-        totalConfidenceSum += 90;
-      } else if (rsi5min > 60 && rsi15min > 60) {
-        sellCount++; // Overbought on both timeframes
-        totalConfidenceSum += 90;
-      } else if (rsi5min < 40) {
-        buyCount++; // Oversold on 5min
-        totalConfidenceSum += 70;
-      } else if (rsi5min > 60) {
-        sellCount++; // Overbought on 5min
-        totalConfidenceSum += 70;
+      const rsiValue = Number(ind.rsi || 50);
+
+      if (rsiValue < 35) {
+        buyCount++; // Oversold — potential bounce
+        totalConfidenceSum += 88;
+      } else if (rsiValue < 40) {
+        buyCount++; // Approaching oversold
+        totalConfidenceSum += 72;
+      } else if (rsiValue > 65) {
+        sellCount++; // Overbought — potential reversal
+        totalConfidenceSum += 88;
+      } else if (rsiValue > 60) {
+        sellCount++; // Approaching overbought
+        totalConfidenceSum += 72;
       } else {
         neutralCount++;
         totalConfidenceSum += 50;
@@ -437,19 +444,21 @@ export default function Home() {
 
       // ═══════════════════════════════════════════════════════════════
       // SECTION 9: SuperTrend (10,2) • Trend Following
+      // Backend field: supertrend_10_2_value (not supertrend_10_2)
       // ═══════════════════════════════════════════════════════════════
       sectionCount++;
-      const supertrend = ind.supertrend_10_2 || 0;
+      const supertrendValue = Number(ind.supertrend_10_2_value || 0);
       const supertrendSignal = String(ind.supertrend_10_2_signal || '').toUpperCase();
-      const supertrendDistance = Math.abs(ind.supertrend_10_2_distance_pct || 0);
-      const supertrendConfidence = ind.supertrend_10_2_confidence || Math.min(95, supertrendDistance * 15);
-      
-      if (supertrendSignal === 'BUY' || (supertrend > 0 && price > supertrend)) {
+      const supertrendTrend  = String(ind.supertrend_10_2_trend  || '').toUpperCase();
+      const supertrendDistPct = Math.abs(Number(ind.supertrend_10_2_distance_pct || 0));
+      const supertrendConf = Math.min(93, 50 + supertrendDistPct * 15);
+
+      if (supertrendSignal === 'BUY' || supertrendTrend === 'BULLISH' || (supertrendValue > 0 && price > supertrendValue)) {
         buyCount++;
-        totalConfidenceSum += supertrendConfidence;
-      } else if (supertrendSignal === 'SELL' || (supertrend > 0 && price < supertrend)) {
+        totalConfidenceSum += supertrendConf;
+      } else if (supertrendSignal === 'SELL' || supertrendTrend === 'BEARISH' || (supertrendValue > 0 && price < supertrendValue)) {
         sellCount++;
-        totalConfidenceSum += supertrendConfidence;
+        totalConfidenceSum += supertrendConf;
       } else {
         neutralCount++;
         totalConfidenceSum += 50;
@@ -503,18 +512,32 @@ export default function Home() {
 
       // ═══════════════════════════════════════════════════════════════
       // SECTION 12: Candle Intent (Candle Structure Analysis)
+      // Derived from tick + OHLC — candle_intent separate endpoint;
+      // infer from body position vs range using available tick fields
       // ═══════════════════════════════════════════════════════════════
       sectionCount++;
-      const wickDominance = String(ind.wick_dominance || '').toUpperCase();
-      const candleIntent = String(ind.candle_intent || '').toUpperCase();
-      const candleEfficiency = Number(ind.candle_efficiency || 50);
-      
-      if (wickDominance.includes('LOWER') || candleIntent.includes('BULL')) {
-        buyCount++; // Lower wick rejection = bullish
-        totalConfidenceSum += Math.max(65, candleEfficiency);
-      } else if (wickDominance.includes('UPPER') ||candleIntent.includes('BEAR')) {
-        sellCount++; // Upper wick rejection = bearish
-        totalConfidenceSum += Math.max(65, candleEfficiency);
+      const ciHigh   = Number(tick.high  || ind.high  || price);
+      const ciLow    = Number(tick.low   || ind.low   || price);
+      const ciOpen   = Number(tick.open  || ind.open  || price);
+      const ciRange  = ciHigh - ciLow;
+      const ciBody   = Math.abs(price - ciOpen);
+      const ciBodyPct = ciRange > 0 ? (ciBody / ciRange) * 100 : 0;
+      const ciUpperWick = ciHigh - Math.max(price, ciOpen);
+      const ciLowerWick = Math.min(price, ciOpen) - ciLow;
+      const ciBodyConf = Math.min(85, 50 + ciBodyPct * 0.35);
+
+      if (price > ciOpen && ciLowerWick > ciUpperWick * 1.5 && ciBodyPct > 40) {
+        buyCount++; // Bullish: lower wick rejection + green body
+        totalConfidenceSum += ciBodyConf;
+      } else if (price > ciOpen && ciBodyPct > 55) {
+        buyCount++; // Strong green candle
+        totalConfidenceSum += Math.min(80, 55 + ciBodyPct * 0.25);
+      } else if (price < ciOpen && ciUpperWick > ciLowerWick * 1.5 && ciBodyPct > 40) {
+        sellCount++; // Bearish: upper wick rejection + red body
+        totalConfidenceSum += ciBodyConf;
+      } else if (price < ciOpen && ciBodyPct > 55) {
+        sellCount++; // Strong red candle
+        totalConfidenceSum += Math.min(80, 55 + ciBodyPct * 0.25);
       } else {
         neutralCount++;
         totalConfidenceSum += 50;
@@ -522,19 +545,24 @@ export default function Home() {
 
       // ═══════════════════════════════════════════════════════════════
       // SECTION 13: Volume Pulse (Candle Volume Analysis)
+      // Backend field: buy_volume_ratio (0-100 %) — not buy_volume
       // ═══════════════════════════════════════════════════════════════
       sectionCount++;
-      const buyVolume = ind.buy_volume || 0;
-      const sellVolume = ind.sell_volume || 0;
-      const totalVolume = buyVolume + sellVolume;
-      const buyPressure = totalVolume > 0 ? (buyVolume / totalVolume) * 100 : 50;
-      
-      if (buyPressure > 60) {
+      // buy_volume_ratio is already a percentage (0-100) from instant_analysis
+      const buyVolumeRatio = Number(ind.buy_volume_ratio ?? 50);
+
+      if (buyVolumeRatio > 65) {
         buyCount++; // Strong buying pressure
-        totalConfidenceSum += Math.min(95, 50 + buyPressure);
-      } else if (buyPressure < 40) {
+        totalConfidenceSum += Math.min(95, 50 + (buyVolumeRatio - 50) * 0.9);
+      } else if (buyVolumeRatio > 55) {
+        buyCount++; // Moderate buying pressure
+        totalConfidenceSum += 68;
+      } else if (buyVolumeRatio < 35) {
         sellCount++; // Strong selling pressure
-        totalConfidenceSum += Math.min(95, 50 + (100 - buyPressure));
+        totalConfidenceSum += Math.min(95, 50 + (50 - buyVolumeRatio) * 0.9);
+      } else if (buyVolumeRatio < 45) {
+        sellCount++; // Moderate selling pressure
+        totalConfidenceSum += 68;
       } else {
         neutralCount++;
         totalConfidenceSum += 50;
@@ -877,7 +905,10 @@ export default function Home() {
         </div>
         </div>
 
-        {/* � OI MOMENTUM - Pure Data Buy/Sell Signals */}
+        {/* 🥇 MARKET POSITIONING INTELLIGENCE */}
+        <MarketPositioningCard liveData={marketData} />
+
+        {/* 🔮 OI MOMENTUM - Pure Data Buy/Sell Signals */}
         <div className="mt-4 sm:mt-6 border-2 border-purple-500/30 rounded-2xl p-3 sm:p-4 bg-gradient-to-br from-purple-950/20 via-dark-card/50 to-dark-elevated/40 backdrop-blur-sm shadow-xl shadow-purple-500/10">
           {/* Section Header */}
           <div className="flex flex-col gap-2 mb-3 sm:mb-4">
@@ -912,24 +943,27 @@ export default function Home() {
               symbol="NIFTY" 
               name="NIFTY 50" 
               livePrice={marketData.NIFTY?.price}
+              liveChangePct={marketData.NIFTY?.changePercent}
               marketStatus={marketStatus}
             />
             <OIMomentumCard 
               symbol="BANKNIFTY" 
               name="BANK NIFTY"
               livePrice={marketData.BANKNIFTY?.price}
+              liveChangePct={marketData.BANKNIFTY?.changePercent}
               marketStatus={marketStatus}
             />
             <OIMomentumCard 
               symbol="SENSEX" 
               name="SENSEX"
               livePrice={marketData.SENSEX?.price}
+              liveChangePct={marketData.SENSEX?.changePercent}
               marketStatus={marketStatus}
             />
           </div>
         </div>
 
-        {/* �🏗️ MARKET STRUCTURE - Trader's Perspective (25% Analysis Component) */}
+        {/* 🎯 TRADE ZONES – Buy/Sell Signals (Multi-factor, dual timeframe) */}
         <div className="mt-6 sm:mt-6 border-2 border-emerald-600/40 rounded-2xl p-3 sm:p-4 bg-gradient-to-br from-emerald-950/20 via-dark-card/50 to-dark-elevated/40 backdrop-blur-sm shadow-xl shadow-emerald-600/15">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-3 sm:mb-4">
             <div>
@@ -938,7 +972,7 @@ export default function Home() {
                 Trade Zones • Buy/Sell Signals
               </h2>
               <p className="text-dark-tertiary text-xs sm:text-sm mt-1.5 ml-4 sm:ml-5 font-medium tracking-wide">
-                5min Entry + 15min Trend • Simple Clear Signals • Live Confidence • Professional Accuracy
+                5min Entry + 15min Trend • 8-Factor Scoring • Live Confidence • 5 Min Production Status
               </p>
             </div>
           </div>
@@ -1996,15 +2030,15 @@ export default function Home() {
             <div className="flex flex-col sm:flex-row gap-2 sm:gap-3 items-center">
               {/* Market Status Indicator */}
               <div className={`px-3 py-1.5 rounded-lg text-xs font-bold border shadow-sm ${
-                analyses?.NIFTY?.indicators?.orb_status === 'BREAKOUT_UP'
+                analyses?.NIFTY?.indicators?.orb_position === 'ABOVE_HIGH'
                   ? 'bg-bullish/20 text-bullish border-bullish/40' :
-                analyses?.NIFTY?.indicators?.orb_status === 'BREAKOUT_DOWN'
+                analyses?.NIFTY?.indicators?.orb_position === 'BELOW_LOW'
                   ? 'bg-bearish/20 text-bearish border-bearish/40' :
                   'bg-yellow-500/20 text-yellow-300 border-yellow-500/40'
               }`}>
-                {analyses?.NIFTY?.indicators?.orb_status === 'BREAKOUT_UP' ? '🟢 BULLISH' :
-                 analyses?.NIFTY?.indicators?.orb_status === 'BREAKOUT_DOWN' ? '🔴 BEARISH' :
-                 ''}
+                {analyses?.NIFTY?.indicators?.orb_position === 'ABOVE_HIGH' ? '🟢 BULLISH' :
+                 analyses?.NIFTY?.indicators?.orb_position === 'BELOW_LOW' ? '🔴 BEARISH' :
+                 '⏳ WATCHING'}
               </div>
             </div>
           </div>
@@ -2400,32 +2434,14 @@ export default function Home() {
 
         {/* Trend Base Section - ENHANCED */}
         <div className="mt-6 sm:mt-6 border-2 border-green-500/40 rounded-2xl p-3 sm:p-4 bg-gradient-to-br from-green-900/15 via-green-950/10 to-green-900/5 backdrop-blur-sm shadow-xl shadow-green-500/10">
-          <div className="flex flex-col gap-3 mb-3 sm:mb-4">
-            <div className="flex items-center gap-3">
-              <h3 className="text-base sm:text-lg lg:text-xl font-bold text-dark-text flex items-center gap-3 tracking-tight">
-                <span className="w-1.5 h-5 sm:h-6 bg-gradient-to-b from-green-500 to-green-600 rounded-full shadow-lg shadow-green-500/30" />
-                Trend Base (Higher-Low Structure)
-              </h3>
-            </div>
+          <div className="flex flex-col gap-1.5 mb-3 sm:mb-4">
+            <h3 className="text-base sm:text-lg lg:text-xl font-bold text-dark-text flex items-center gap-3 tracking-tight">
+              <span className="w-1.5 h-5 sm:h-6 bg-gradient-to-b from-green-500 to-green-600 rounded-full shadow-lg shadow-green-500/30" />
+              Trend Base (Higher-Low Structure)
+            </h3>
             <p className="text-dark-tertiary text-xs sm:text-sm ml-4 sm:ml-5 font-medium tracking-wide">
               Live swing structure analysis • Higher-high/higher-low detection • Clear trend signals
             </p>
-            
-            {/* Market Status Indicator */}
-            <div className="flex items-center gap-2">
-              <div className={`px-3 py-1.5 rounded-lg text-xs font-bold border shadow-sm ${
-                analyses?.NIFTY?.indicators?.trend_structure === 'HIGHER_HIGHS_LOWS' 
-                  ? 'bg-green-500/20 text-green-300 border-green-500/40' :
-                analyses?.NIFTY?.indicators?.trend_structure === 'LOWER_HIGHS_LOWS'
-                  ? 'bg-[#EB5B3C]/20 text-[#EB5B3C] border-[#EB5B3C]/40' :
-                  'bg-yellow-500/20 text-yellow-300 border-yellow-500/40'
-              }`}>
-                {analyses?.NIFTY?.indicators?.trend_structure === 'HIGHER_HIGHS_LOWS' ? '🟢 UPTREND' :
-                 analyses?.NIFTY?.indicators?.trend_structure === 'LOWER_HIGHS_LOWS' ? '🔴 DOWNTREND' :
-                 analyses?.NIFTY?.indicators?.trend_structure === 'SIDEWAYS' ? '🟡 SIDEWAYS' :
-                 '⚪ ANALYZING'}
-              </div>
-            </div>
           </div>
 
           {/* Trend Base Cards Grid */}

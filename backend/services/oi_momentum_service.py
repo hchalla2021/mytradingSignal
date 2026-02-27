@@ -28,9 +28,9 @@ class OIMomentumService:
     """
 
     def __init__(self):
-        self.min_candles_required = 20  # Reduced from 30 - allows signals with fresh data
-        self.volume_avg_period = 20     # 20-candle volume average for baseline
-        self.lookback_period = 5        # 5-candle lookback for liquidity grab
+        self.min_candles_required = 5   # Need ≥5 closed 5-min candles (25 min of data)
+        self.volume_avg_period = 5      # 5-candle rolling average — works with minimal history
+        self.lookback_period = 3        # 3-candle lookback for liquidity grab (less data needed)
 
     def analyze_signal(
         self,
@@ -73,9 +73,40 @@ class OIMomentumService:
             # Validate data
             if df_5min is None or len(df_5min) < self.min_candles_required:
                 return self._no_signal_response("Insufficient 5m data")
-            
-            if df_15min is None or len(df_15min) < 10:
-                return self._no_signal_response("Insufficient 15m data")
+
+            # 15m candles are aggregated 3×5m — need at least 1 completed 15m candle
+            if df_15min is None or len(df_15min) < 1:
+                # Fall back to using 5m signal for both timeframes when 15m isn't ready
+                signal_5m = self._analyze_timeframe(df_5min, "5m", current_price, current_oi, current_volume)
+                final_signal, confidence, reasons = self._combine_signals(signal_5m, signal_5m)
+                return {
+                    "signal_5m": signal_5m["signal"],
+                    "signal_15m": signal_5m["signal"],
+                    "final_signal": final_signal,
+                    "confidence": max(0, confidence - 15),  # -15 for missing 15m confirmation
+                    "reasons": reasons + ["15m trend not yet available — using 5m only"],
+                    "metrics": {
+                        "liquidity_grab_5m":     signal_5m["metrics"]["liquidity_grab"],
+                        "liquidity_grab_15m":    signal_5m["metrics"]["liquidity_grab"],
+                        "oi_buildup_5m":         signal_5m["metrics"]["oi_buildup"],
+                        "oi_buildup_15m":        signal_5m["metrics"]["oi_buildup"],
+                        "volume_spike_5m":       signal_5m["metrics"]["volume_spike"],
+                        "volume_spike_15m":      signal_5m["metrics"]["volume_spike"],
+                        "price_breakout_5m":     signal_5m["metrics"]["price_breakout"],
+                        "price_breakout_15m":    signal_5m["metrics"]["price_breakout"],
+                        "oi_change_pct_5m":      signal_5m["metrics"]["oi_change_pct"],
+                        "oi_change_pct_15m":     signal_5m["metrics"]["oi_change_pct"],
+                        "volume_ratio_5m":       signal_5m["metrics"]["volume_ratio"],
+                        "volume_ratio_15m":      signal_5m["metrics"]["volume_ratio"],
+                        "price_breakdown_5m":    signal_5m["metrics"]["price_breakdown"],
+                        "price_breakdown_15m":   signal_5m["metrics"]["price_breakdown"],
+                        "oi_reduction_5m":       signal_5m["metrics"]["oi_reduction"],
+                        "oi_reduction_15m":      signal_5m["metrics"]["oi_reduction"],
+                        "liquidity_grab_sell_5m":  signal_5m["metrics"]["liquidity_grab_sell"],
+                        "liquidity_grab_sell_15m": signal_5m["metrics"]["liquidity_grab_sell"],
+                    },
+                    "timestamp": datetime.now().isoformat(),
+                }
 
             # Analyze 5-minute timeframe (EXECUTION)
             signal_5m = self._analyze_timeframe(df_5min, "5m", current_price, current_oi, current_volume)
@@ -105,6 +136,13 @@ class OIMomentumService:
                     "oi_change_pct_15m": signal_15m["metrics"]["oi_change_pct"],
                     "volume_ratio_5m": signal_5m["metrics"]["volume_ratio"],
                     "volume_ratio_15m": signal_15m["metrics"]["volume_ratio"],
+                    # Sell-side metrics — needed so SELL signals show correct drivers
+                    "price_breakdown_5m":      signal_5m["metrics"]["price_breakdown"],
+                    "price_breakdown_15m":     signal_15m["metrics"]["price_breakdown"],
+                    "oi_reduction_5m":         signal_5m["metrics"]["oi_reduction"],
+                    "oi_reduction_15m":        signal_15m["metrics"]["oi_reduction"],
+                    "liquidity_grab_sell_5m":  signal_5m["metrics"]["liquidity_grab_sell"],
+                    "liquidity_grab_sell_15m": signal_15m["metrics"]["liquidity_grab_sell"],
                 },
                 "timestamp": datetime.now().isoformat()
             }
@@ -146,8 +184,10 @@ class OIMomentumService:
         oi_buildup = bool(latest.get('oi_buildup', False))
         volume_spike = bool(latest.get('volume_spike', False))
         price_breakout = bool(latest.get('price_breakout', False))
-        oi_change_pct = float(latest.get('oi_change_pct', 0))
-        volume_ratio = float(latest.get('volume_ratio', 0))
+        _raw_oicp = latest.get('oi_change_pct', 0)
+        oi_change_pct = 0.0 if pd.isna(_raw_oicp) else float(_raw_oicp)
+        _raw_vrat = latest.get('volume_ratio', 0)
+        volume_ratio = 0.0 if pd.isna(_raw_vrat) else float(_raw_vrat)
         
         # Reverse logic for SELL
         liquidity_grab_sell = bool(latest.get('liquidity_grab_sell', False))
@@ -190,6 +230,17 @@ class OIMomentumService:
         else:
             signal = "NEUTRAL"
 
+        # Directional score: only credit factors that support the actual signal direction.
+        # Using max(buy, sell) previously inflated the "Data Strength" factor in confidence
+        # when signals were NEUTRAL or conflicting.
+        if signal in ("STRONG_BUY", "BUY"):
+            directional_score = buy_score
+        elif signal in ("STRONG_SELL", "SELL"):
+            directional_score = sell_score
+        else:
+            # NEUTRAL: partial credit so confidence isn't artificially 0
+            directional_score = max(buy_score, sell_score) // 2
+
         return {
             "signal": signal,
             "metrics": {
@@ -203,7 +254,7 @@ class OIMomentumService:
                 "oi_reduction": oi_reduction,
                 "price_breakdown": price_breakdown
             },
-            "score": max(buy_score, sell_score)
+            "score": directional_score
         }
 
     def _calculate_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
@@ -211,22 +262,22 @@ class OIMomentumService:
         
         # 🧠 PART 1: LIQUIDITY GRAB (Buy-side)
         # Smart money pushes price below previous low to trigger stop-losses
-        df['avg_volume'] = df['volume'].rolling(self.volume_avg_period).mean()
-        df['lowest_low_5'] = df['low'].rolling(self.lookback_period).min().shift(1)
+        df['avg_volume'] = df['volume'].rolling(self.volume_avg_period, min_periods=1).mean()
+        df['lowest_low_5'] = df['low'].rolling(self.lookback_period, min_periods=1).min().shift(1)
         
         df['liquidity_grab'] = (
-            (df['low'] < df['lowest_low_5']) &  # Low breaks previous 5-candle low
-            (df['volume'] > 1.8 * df['avg_volume']) &  # Volume spike >1.8x
+            (df['low'] < df['lowest_low_5']) &  # Low breaks previous N-candle low
+            (df['volume'] > 1.5 * df['avg_volume']) &  # Volume spike >1.5x
             (df['close'] > df['low'].shift(1))  # Strong rejection close
         )
         
         # 🧠 SELL-SIDE LIQUIDITY GRAB
         # Smart money pushes price above previous high to trigger buy stop-losses
-        df['highest_high_5'] = df['high'].rolling(self.lookback_period).max().shift(1)
+        df['highest_high_5'] = df['high'].rolling(self.lookback_period, min_periods=1).max().shift(1)
         
         df['liquidity_grab_sell'] = (
-            (df['high'] > df['highest_high_5']) &  # High breaks previous 5-candle high
-            (df['volume'] > 1.8 * df['avg_volume']) &  # Volume spike
+            (df['high'] > df['highest_high_5']) &  # High breaks previous N-candle high
+            (df['volume'] > 1.5 * df['avg_volume']) &  # Volume spike
             (df['close'] < df['high'].shift(1))  # Rejection (close below high)
         )
 
@@ -256,7 +307,7 @@ class OIMomentumService:
             df['oi_reduction'] = False
 
         # 🧠 PART 3: VOLUME CONFIRMATION
-        df['volume_ratio'] = df['volume'] / df['avg_volume']
+        df['volume_ratio'] = (df['volume'] / df['avg_volume']).fillna(1.0)
         df['volume_spike'] = df['volume'] > 1.5 * df['avg_volume']
 
         # 🧠 PART 4: PRICE STRUCTURE
@@ -393,11 +444,22 @@ class OIMomentumService:
         confidence_factors.append(("Price Structure", price_score, 5))
         
         # CALCULATE FINAL CONFIDENCE
-        total_score = sum(score for _, score, _ in confidence_factors)
-        total_possible = sum(max_val for _, _, max_val in confidence_factors)
-        
+        # OI data is always 0 for NSE spot indices (Zerodha). When unavailable,
+        # exclude the OI factor from the denominator — otherwise its 15 pts are
+        # permanently unreachable, deflating every confidence reading unfairly.
+        oi_data_present = (
+            oi_5m or oi_15m or oi_change_5m > 0.0 or oi_change_15m > 0.0
+        )
+        if not oi_data_present:
+            active_factors = [(n, s, mx) for n, s, mx in confidence_factors if n != "OI Activity"]
+        else:
+            active_factors = confidence_factors
+
+        total_score    = sum(s  for _, s,  _ in active_factors)
+        total_possible = sum(mx for _, _, mx in active_factors)
+
         # Confidence as percentage (0-100)
-        confidence = int((total_score / total_possible) * 100)
+        confidence = int((total_score / total_possible) * 100) if total_possible > 0 else 0
         
         # PENALTY for conflicting signals between timeframes
         if (strength_5m > 0 and strength_15m < 0) or (strength_5m < 0 and strength_15m > 0):
@@ -479,7 +541,7 @@ class OIMomentumService:
         }
 
     def _empty_metrics(self) -> Dict:
-        """Return empty metrics"""
+        """Return empty metrics (all fields including sell-side)"""
         return {
             "liquidity_grab_5m": False,
             "liquidity_grab_15m": False,
@@ -493,6 +555,13 @@ class OIMomentumService:
             "oi_change_pct_15m": 0,
             "volume_ratio_5m": 0,
             "volume_ratio_15m": 0,
+            # Sell-side
+            "price_breakdown_5m": False,
+            "price_breakdown_15m": False,
+            "oi_reduction_5m": False,
+            "oi_reduction_15m": False,
+            "liquidity_grab_sell_5m": False,
+            "liquidity_grab_sell_15m": False,
         }
 
 

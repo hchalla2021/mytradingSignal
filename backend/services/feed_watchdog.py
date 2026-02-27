@@ -149,11 +149,23 @@ class FeedWatchdog:
             try:
                 now = time.time()
                 
-                # Check for stale feed during market hours (includes PRE_OPEN)
-                from services.market_session_controller import market_session
-                is_trading_hours = market_session.is_trading_hours()  # PRE_OPEN + LIVE
-                
-                if is_trading_hours and self._state == FeedState.CONNECTED:
+                # Only check for stale feed during LIVE trading – PRE_OPEN sends
+                # very few/no ticks so stale detection must NOT fire then.
+                from services.market_session_controller import MarketSessionController, MarketPhase
+                current_phase = MarketSessionController.get_current_phase()
+                is_live_trading = current_phase == MarketPhase.LIVE
+                is_pre_open = current_phase in (MarketPhase.PRE_OPEN, MarketPhase.AUCTION_FREEZE)
+
+                # During PRE_OPEN / AUCTION_FREEZE the first connection of the day
+                # receives no or very sparse ticks.  Auto-promote CONNECTING → CONNECTED
+                # after 5 s so the UI shows a clean "connected" state immediately.
+                if is_pre_open and self._state == FeedState.CONNECTING and self._last_connect_time:
+                    seconds_since_connect = now - self._last_connect_time
+                    if seconds_since_connect >= 5:
+                        print("🟢 PRE-OPEN: WebSocket connected (no ticks expected yet) – marking CONNECTED")
+                        self._change_state(FeedState.CONNECTED)
+
+                if is_live_trading and self._state == FeedState.CONNECTED:
                     # Check if feed has gone stale
                     if self._last_tick_time:
                         seconds_since_last_tick = now - self._last_tick_time

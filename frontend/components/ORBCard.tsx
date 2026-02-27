@@ -1,6 +1,7 @@
 'use client';
-import { memo, useEffect, useState } from 'react';
+import { memo, useEffect, useState, useRef } from 'react';
 import { TrendingUp, TrendingDown, Minus, Clock } from 'lucide-react';
+import { API_CONFIG } from '@/lib/api-config';
 
 // Simplified ORB data interface - only essential fields for trader decision
 interface ORBData {
@@ -28,6 +29,7 @@ interface ORBCardProps {
 const ORBCard = memo(({ symbol, timeframe = '5m' }: ORBCardProps) => {
   const [data, setData] = useState<ORBData | null>(null);
   const [loading, setLoading] = useState(true);
+  const isFirstFetch = useRef(true);
   const [error, setError] = useState<string | null>(null);
 
   // Get ORB signal - STRONG BUY/BUY/WAIT/SELL/STRONG SELL
@@ -138,14 +140,14 @@ const ORBCard = memo(({ symbol, timeframe = '5m' }: ORBCardProps) => {
 
     const fetchData = async () => {
       try {
-        setLoading(true);
+        if (isFirstFetch.current) setLoading(true);
         setError(null);
         
         controller = new AbortController();
         const timeoutId = setTimeout(() => controller?.abort(), 15000);
 
         const response = await fetch(
-          `http://localhost:8000/api/analysis/analyze/${symbol}`,
+          API_CONFIG.endpoint(`/api/analysis/analyze/${symbol}`),
           { signal: controller.signal }
         );
 
@@ -184,7 +186,10 @@ const ORBCard = memo(({ symbol, timeframe = '5m' }: ORBCardProps) => {
           setError('Failed to load');
         }
       } finally {
-        setLoading(false);
+        if (isFirstFetch.current) {
+          setLoading(false);
+          isFirstFetch.current = false;
+        }
       }
     };
 

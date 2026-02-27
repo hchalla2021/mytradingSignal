@@ -25,6 +25,7 @@ from routers import (
     pivot_indicators,
     diagnostics,
     market_outlook,
+    market_positioning,
 )
 
 # Windows console fix (safe, ignored on Linux)
@@ -201,6 +202,7 @@ app.include_router(analysis.router, tags=["Analysis"])
 app.include_router(advanced_analysis.router, tags=["Advanced Technical Analysis"])
 app.include_router(pivot_indicators.router, tags=["Pivot Indicators"])
 app.include_router(market_outlook.router, tags=["Market Outlook"])
+app.include_router(market_positioning.router, tags=["Market Positioning"])
 
 
 @app.get("/")

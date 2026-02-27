@@ -251,13 +251,16 @@ class CandleIntentEngine:
             lower_strength = int(lower_ratio * 100)
             lower_signal = "NEUTRAL"
         
-        # Dominant wick (key insight)
+        # Dominant wick (key insight) — clean enum so frontend === comparisons work
         if upper_ratio > lower_ratio and upper_ratio >= self._min_wick_ratio:
-            dominant = "UPPER - Sellers in control"
+            dominant_wick = "UPPER"
+            dominant_wick_note = "Sellers in control"
         elif lower_ratio > upper_ratio and lower_ratio >= self._min_wick_ratio:
-            dominant = "LOWER - Buyers in control"
+            dominant_wick = "LOWER"
+            dominant_wick_note = "Buyers in control"
         else:
-            dominant = "BALANCED - No clear dominance"
+            dominant_wick = "NEITHER"
+            dominant_wick_note = "No clear dominance"
         
         return {
             "upper_wick_pct": round(upper_ratio * 100, 1),
@@ -268,7 +271,8 @@ class CandleIntentEngine:
             "lower_signal": lower_signal,
             "upper_interpretation": upper_interpretation,
             "lower_interpretation": lower_interpretation,
-            "dominant_wick": dominant
+            "dominant_wick": dominant_wick,
+            "dominant_wick_note": dominant_wick_note,
         }
     
     def _analyze_body(
@@ -631,7 +635,7 @@ class CandleIntentEngine:
                 "upper_strength": 0, "lower_strength": 0,
                 "upper_signal": "NEUTRAL", "lower_signal": "NEUTRAL",
                 "upper_interpretation": "N/A", "lower_interpretation": "N/A",
-                "dominant_wick": "NEUTRAL"
+                "dominant_wick": "NEITHER", "dominant_wick_note": "No data",
             },
             body_analysis={
                 "body_ratio_pct": 0, "body_type": "NEUTRAL",

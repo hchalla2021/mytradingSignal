@@ -2085,28 +2085,21 @@ class InstantSignal:
             # ============================================
             # ORB = Opening Range captured in first 5/10/15 minutes
             # Classic breakout strategy: Buy on ORB High break, Sell on ORB Low break
-            # 
-            # ORB High = Highest point in opening period
-            # ORB Low = Lowest point in opening period
-            # Current ORB: Use day's open as reference
-            
-            # Simple ORB calculation: Use open price + day's range
-            # ORB High = Open + (50% of ATR estimate) as 5-min range projection
-            # ORB Low = Open - (50% of ATR estimate)
-            orb_estimated_high = open_price + (atr_estimate * 0.4)  # Conservative 5-min high
-            orb_estimated_low = open_price - (atr_estimate * 0.4)   # Conservative 5-min low
-            
-            # More accurate: Use today's high/low as ORB reference (if available in tick)
-            # Check tick_data for time-based ORB data
-            orb_high = tick_data.get('orb_high', orb_estimated_high)
-            orb_low = tick_data.get('orb_low', orb_estimated_low)
-            
-            # If not available in tick, fallback to calculated estimates
-            if not tick_data.get('orb_high'):
-                orb_high = orb_estimated_high
-            if not tick_data.get('orb_low'):
-                orb_low = orb_estimated_low
-            
+            #
+            # Priority 1: Use day's actual high/low from Zerodha tick data (real data)
+            # Priority 2: fall back to ATR-based estimate around day's open
+            day_high = float(tick_data.get('high', 0) or 0)
+            day_low  = float(tick_data.get('low',  0) or 0)
+
+            # Valid if Zerodha gave us real day range and both sides bracket the open
+            if day_high > open_price and day_low < open_price and day_low > 0:
+                orb_high = day_high
+                orb_low  = day_low
+            else:
+                # Fallback: ATR-based projection from day's open (± 40% of ATR)
+                orb_high = open_price + (atr_estimate * 0.4)
+                orb_low  = open_price - (atr_estimate * 0.4)
+
             # ORB BREAKOUT DETECTION 🔥
             # Close above ORB High = BUY Signal
             price_above_orb_high = price > orb_high
@@ -2391,7 +2384,23 @@ class InstantSignal:
                     "orb_reward_risk_ratio": orb_reward_risk_ratio,  # Risk/Reward (typically 2:1 for ORB)
                     
                     "trend": trend_map.get(trend, 'SIDEWAYS'),
+
+                    # ── DUAL TIMEFRAME TREND (direct keys for Trade Zones UI) ──────────
+                    # 5-min trend: driven by short-term RSI + price momentum
+                    "trend_5min": (
+                        "UP" if (dual_rsi.get('rsi_5m', 50) >= 55 or (change_percent > 0.3 and trend == "bullish") or st_10_2_trend == "BULLISH")
+                        else "DOWN" if (dual_rsi.get('rsi_5m', 50) <= 45 or (change_percent < -0.3 and trend == "bearish") or st_10_2_trend == "BEARISH")
+                        else "NEUTRAL"
+                    ),
+                    # 15-min trend: driven by EMA alignment + market structure
+                    "trend_15min": (
+                        "UP" if (ema_alignment in ["ALL_BULLISH", "PARTIAL_BULLISH"] or tick_data.get('trend_structure') == "HIGHER_HIGHS_LOWS")
+                        else "DOWN" if (ema_alignment in ["ALL_BEARISH", "PARTIAL_BEARISH"] or tick_data.get('trend_structure') == "LOWER_HIGHS_LOWS")
+                        else "NEUTRAL"
+                    ),
+
                     "changePercent": round(change_percent, 2),  # Price change percentage
+                    "change": round(price - open_price, 2),      # Absolute ₹ change from day open
                     
                     # Support & Resistance
                     "support": round(low, 2),
