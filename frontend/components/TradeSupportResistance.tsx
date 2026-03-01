@@ -509,15 +509,64 @@ export const TradeSupportResistance: React.FC<TradeSupportResistanceProps> = ({
       </div>
 
       {/* ══════════════════════════════════════════════════════════
-          5 MIN PRODUCTION STATUS — all calculations shown
+          5 MIN PREDICTION
       ══════════════════════════════════════════════════════════ */}
       <div className="border-t border-dark-border/40 bg-dark-bg/30 px-3 py-2.5">
+
+        {/* Header: label + confidence pill */}
         <div className="flex items-center justify-between mb-2">
-          <span className="text-[9px] font-bold text-gray-400 uppercase tracking-widest">5 Min Production Status</span>
+          <span className="text-[9px] font-bold text-gray-400 uppercase tracking-widest">5 Min Prediction</span>
           <span suppressHydrationWarning className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${style.badge}`}>
-            Score {totalScore > 0 ? '+' : ''}{totalScore}/100
+            {confidence}% Confidence
           </span>
         </div>
+
+        {/* Direction pill + confidence bar: combined 5m + 15m → signal */}
+        {(() => {
+          // Combined direction: both agree → use that; else 5m leads (faster), else 15m
+          const predDir =
+            (trend5min === trend15min && trend5min !== 'NEUTRAL') ? trend5min
+            : trend5min !== 'NEUTRAL' ? trend5min
+            : trend15min;
+          const same5m15m = trend5min !== 'NEUTRAL' && trend5min === trend15min;
+          const conflict  = trend5min !== 'NEUTRAL' && trend15min !== 'NEUTRAL' && trend5min !== trend15min;
+          const dirColor  = predDir === 'UP'   ? 'text-emerald-400'
+                          : predDir === 'DOWN' ? 'text-red-400'
+                          : 'text-amber-400';
+          const dirBorder = predDir === 'UP'   ? 'border-emerald-500/50'
+                          : predDir === 'DOWN' ? 'border-red-500/50'
+                          : 'border-amber-500/40';
+          const dirBg     = predDir === 'UP'   ? 'bg-emerald-500/10'
+                          : predDir === 'DOWN' ? 'bg-red-500/10'
+                          : 'bg-amber-500/[0.08]';
+          const dirIcon   = predDir === 'UP'   ? '▲' : predDir === 'DOWN' ? '▼' : '▬';
+          // Confidence modifier: full confidence when aligned, reduced when 5m only, penalised when conflicting
+          const dispConf = same5m15m ? confidence
+                         : conflict   ? Math.max(30, confidence - 12)
+                         : Math.max(30, confidence - 6);
+          const ctxNote = same5m15m ? '5m + 15m aligned'
+                        : conflict   ? '⚠ 5m vs 15m conflict'
+                        : trend5min !== 'NEUTRAL' ? '5m signal · 15m neutral'
+                        : '15m trend · 5m forming';
+          return (
+            <div className={`rounded-xl border ${dirBorder} ${dirBg} px-2.5 py-2 mb-2`}>
+              <div className="flex items-center justify-between gap-2 mb-1.5">
+                <span className={`text-xs font-black ${dirColor}`}>
+                  {dirIcon} {predDir === 'NEUTRAL' ? 'FLAT' : predDir}
+                </span>
+                <span className="text-[9px] text-gray-500">{ctxNote}</span>
+                <span suppressHydrationWarning className={`text-xs font-black ${dirColor}`}>{dispConf}%</span>
+              </div>
+              <div className="h-1.5 bg-gray-800 rounded-full overflow-hidden border border-white/5">
+                <div
+                  suppressHydrationWarning
+                  className={`h-full rounded-full bg-gradient-to-r ${style.bar} transition-all duration-700`}
+                  style={{ width: `${dispConf}%` }}
+                />
+              </div>
+            </div>
+          );
+        })()}
 
         {/* Factor rows */}
         <div className="space-y-1">
@@ -543,9 +592,9 @@ export const TradeSupportResistance: React.FC<TradeSupportResistanceProps> = ({
           })}
         </div>
 
-        {/* Final recommendation line */}
+        {/* Summary line */}
         <div suppressHydrationWarning className={`mt-2 text-center text-[10px] font-bold rounded-lg py-1 ${style.badge}`}>
-          Calculation: {totalScore}/{factors.reduce((s,f)=>s+f.max,0)} → {action} at {confidence}%
+          {action} · {confidence}% Confidence · Score {totalScore > 0 ? '+' : ''}{totalScore}
         </div>
 
         {/* Support / Resistance distance */}

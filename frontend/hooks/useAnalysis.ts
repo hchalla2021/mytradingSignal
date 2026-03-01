@@ -8,6 +8,45 @@ import { useEffect, useState, useCallback, useRef } from 'react';
 import { AnalysisSignal, AnalysisResponse } from '@/types/analysis';
 import { API_CONFIG } from '@/lib/api-config';
 
+// ─── Separate cache for last-known analysis data ──────────────────────────────
+// Persists across market-closed sessions. Never cleared — only overwritten with
+// fresher data. Completely independent of the live polling logic.
+const ANALYSIS_CACHE_KEY = 'lastKnownAnalysisData';
+
+function saveAnalysisCache(data: AnalysisResponse): void {
+  if (typeof window === 'undefined') return;
+  try {
+    // Strip the synthetic _fetchTime before persisting so we don't restore
+    // a stale timestamp as if it were fresh.
+    const { _fetchTime, ...rest } = data as any;
+    localStorage.setItem(ANALYSIS_CACHE_KEY, JSON.stringify(rest));
+  } catch (e) {
+    // localStorage may be full or blocked — silently ignore
+  }
+}
+
+function loadAnalysisCache(): AnalysisResponse | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = localStorage.getItem(ANALYSIS_CACHE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as AnalysisResponse;
+    console.log('[useAnalysis] 💾 Loaded last-known analysis from cache');
+    return parsed;
+  } catch (e) {
+    return null;
+  }
+}
+
+/** Returns true when the API response contains at least one symbol with real data */
+function isValidAnalysisData(data: any): boolean {
+  const symbols = ['NIFTY', 'BANKNIFTY', 'SENSEX'];
+  return symbols.some(sym => {
+    const d = data?.[sym];
+    return d && (d.confidence > 0 || Object.keys(d.indicators || {}).length > 0);
+  });
+}
+
 interface UseAnalysisOptions {
   autoConnect?: boolean;
   pollingInterval?: number;
@@ -29,7 +68,9 @@ export function useAnalysis(options: UseAnalysisOptions = {}): UseAnalysisReturn
     onError,
   } = options;
 
-  const [analyses, setAnalyses] = useState<AnalysisResponse | null>(null);
+  // Initialise with cached data immediately so market-closed screens show
+  // the last known values instead of zeros.
+  const [analyses, setAnalyses] = useState<AnalysisResponse | null>(() => loadAnalysisCache());
   const [isConnected, setIsConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [refreshCount, setRefreshCount] = useState(0);
@@ -100,6 +141,11 @@ export function useAnalysis(options: UseAnalysisOptions = {}): UseAnalysisReturn
         setRefreshCount(prev => prev + 1);
         setIsConnected(true);
         setError(null);
+
+        // ── Persist to last-known cache (only when data is genuinely valid) ──
+        if (isValidAnalysisData(data)) {
+          saveAnalysisCache(data);
+        }
       } else {
         const errorText = await response.text();
         console.error('[useAnalysis] ❌ API error response:', response.status, errorText.substring(0, 200));
@@ -111,6 +157,19 @@ export function useAnalysis(options: UseAnalysisOptions = {}): UseAnalysisReturn
         console.error('[useAnalysis] ❌ Fetch error:', err);
       }
       setIsConnected(false);
+
+      // ── Fall back to last-known cache on API failure ──────────────────────
+      // Keep showing real values instead of zeros when market is closed or
+      // the backend is temporarily unreachable.
+      setAnalyses(prev => {
+        if (prev !== null) return prev; // already have (cached) data — keep it
+        const cached = loadAnalysisCache();
+        if (cached) {
+          console.log('[useAnalysis] ⚠️ API failed — restored last-known analysis from cache');
+          return cached;
+        }
+        return null;
+      });
       
       if (err instanceof Error && err.name === 'AbortError') {
         setError('Timeout - retrying...');

@@ -312,70 +312,74 @@ const TrendBaseCard = memo<TrendBaseCardProps>(({ symbol, name }) => {
 
         {/* ══════════════════════════════════════════════════════════════════
             5-MIN PREDICTION
-            Shows every factor, live RSI/VWAP values, integrity score
+            8-factor backend confidence • swing structure • live RSI/VWAP
         ══════════════════════════════════════════════════════════════════ */}
-        <div className="border border-slate-700/50 rounded-xl bg-slate-900/50 px-3 py-2.5">
-
-          {/* Panel header */}
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-[9px] font-bold text-gray-400 uppercase tracking-widest">
-              5-Min Prediction
-            </span>
-            <span suppressHydrationWarning className={`text-[9px] font-bold px-1.5 py-0.5 rounded border ${sig.border} ${sig.bg} ${sig.color}`}>
-              Score&nbsp;{totalScore > 0 ? '+' : ''}{totalScore}/100
-            </span>
-          </div>
-
-          {/* Live indicator snapshot */}
-          <div className="flex flex-wrap gap-x-3 gap-y-0.5 mb-2 pb-1.5 border-b border-white/5">
-            {[
-              { label: 'RSI 5m',   val: (data.rsi_5m  ?? 50).toFixed(0), bull: (data.rsi_5m  ?? 50) >= 56, bear: (data.rsi_5m  ?? 50) <= 44 },
-              { label: 'RSI 15m',  val: (data.rsi_15m ?? 50).toFixed(0), bull: (data.rsi_15m ?? 50) >= 56, bear: (data.rsi_15m ?? 50) <= 44 },
-              { label: 'VWAP',     val: vwapLabel, bull: vwapLabel === 'ABOVE', bear: vwapLabel === 'BELOW', neutral: vwapLabel === 'AT' },
-              { label: 'Integrity',val: `${integrity}%`, bull: integrity >= 55, bear: false, neutral: integrity < 30 },
-            ].map(({ label, val, bull, bear }) => (
-              <span key={label} className="text-[9px] text-gray-500">
-                {label}:&nbsp;
-                <span suppressHydrationWarning className={bull ? 'text-emerald-400 font-bold' : bear ? 'text-red-400 font-bold' : 'text-gray-400'}>
-                  {val}
-                </span>
-              </span>
-            ))}
-          </div>
-
-          {/* 8 factor bars */}
-          <div className="space-y-1">
-            {Object.entries(factors).map(([key, f]) => {
-              const pct    = f.max > 0 ? Math.abs(f.score) / f.max * 100 : 0;
-              const isBull = f.score > 0;
-              const isBear = f.score < 0;
-              return (
-                <div key={key} className="flex items-center gap-1.5">
-                  <span className={`text-[9px] font-bold w-3 text-center flex-shrink-0 ${isBull ? 'text-emerald-400' : isBear ? 'text-red-400' : 'text-gray-600'}`}>
-                    {isBull ? '▲' : isBear ? '▼' : '─'}
-                  </span>
-                  <span className="text-[9px] text-gray-500 w-[88px] truncate flex-shrink-0">
-                    {FACTOR_LABELS[key] ?? key}
-                  </span>
-                  <div className="flex-1 h-1.5 bg-gray-800 rounded-full overflow-hidden min-w-0">
-                    <div
-                      suppressHydrationWarning
-                      className={`h-full rounded-full transition-all duration-500 ${isBull ? 'bg-emerald-500' : isBear ? 'bg-red-500' : 'bg-gray-700'}`}
-                      style={{ width: `${pct}%` }}
-                    />
-                  </div>
-                  <span suppressHydrationWarning className={`text-[9px] font-semibold w-[72px] text-right truncate flex-shrink-0 ${isBull ? 'text-emerald-400' : isBear ? 'text-red-400' : 'text-gray-600'}`}>
-                    {f.label}
-                  </span>
+        <div className="rounded-xl border border-white/[0.06] bg-[#0d1117] overflow-hidden">
+          <div className="h-px bg-gradient-to-r from-transparent via-white/10 to-transparent" />
+          {(() => {
+            const sig5m     = (data.signal_5m ?? 'NEUTRAL').toUpperCase();
+            const isBuy5m   = sig5m === 'BUY';
+            const isSell5m  = sig5m === 'SELL';
+            const adjConf   = data.confidence; // 30–92%, 8-factor backend (structure, ST, EMA, RSI, VWAP, day%, SAR, momentum)
+            const predDir   = isBuy5m ? 'LONG' : isSell5m ? 'SHORT' : 'FLAT';
+            const dirIcon   = isBuy5m ? '▲' : isSell5m ? '▼' : '─';
+            const dirColor  = isBuy5m ? 'text-teal-300'       : isSell5m ? 'text-rose-300'       : 'text-amber-300';
+            const dirBorder = isBuy5m ? 'border-teal-500/40'  : isSell5m ? 'border-rose-500/35'  : 'border-amber-500/30';
+            const dirBg     = isBuy5m ? 'bg-teal-500/[0.07]'  : isSell5m ? 'bg-rose-500/[0.07]'  : 'bg-amber-500/[0.05]';
+            const barColor  = isBuy5m ? 'bg-teal-500'         : isSell5m ? 'bg-rose-500'         : 'bg-amber-500';
+            const structType = data.structure?.type ?? 'SIDEWAYS';
+            const ctxNote =
+              structType === 'HIGHER_HIGHS_LOWS' && isBuy5m  ? 'HH+HL structure — long confirmed'
+              : structType === 'LOWER_HIGHS_LOWS'  && isSell5m ? 'LH+LL structure — short confirmed'
+              : integrity >= 70  ? 'High integrity swing structure'
+              : structType === 'SIDEWAYS' ? 'Sideways — wait for break'
+              : isBuy5m  ? 'Bullish swing structure forming'
+              : isSell5m ? 'Bearish swing structure forming'
+              : 'Monitoring swing structure…';
+            const rsi5 = data.rsi_5m ?? 50;
+            return (
+              <div className="px-3 pt-2.5 pb-3">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-[9px] text-white/40 font-bold uppercase tracking-widest">5-Min Prediction</span>
+                  <span className={`text-[9px] font-black ${dirColor}`}>{adjConf}% Confidence</span>
                 </div>
-              );
-            })}
-          </div>
-
-          {/* Summary line */}
-          <div suppressHydrationWarning className={`mt-2 text-center text-[10px] font-bold rounded-lg py-1 border ${sig.border} ${sig.bg} ${sig.color}`}>
-            {sig.label}&nbsp;·&nbsp;{data.confidence}% confidence&nbsp;·&nbsp;{data.candles_analyzed ?? 120} candles
-          </div>
+                <div className={`rounded-lg border ${dirBorder} ${dirBg} px-2.5 py-2 mb-2`}>
+                  <div className="flex items-center justify-between gap-2 mb-1.5">
+                    <span className={`text-sm font-black ${dirColor}`}>{dirIcon} {predDir}</span>
+                    <span className="text-[9px] text-white/30 truncate">{ctxNote}</span>
+                    <span className={`text-sm font-black ${dirColor} shrink-0`}>{adjConf}%</span>
+                  </div>
+                  <div className="h-[2px] bg-white/[0.06] rounded-full overflow-hidden">
+                    <div suppressHydrationWarning className={`h-full rounded-full transition-all duration-700 ${barColor}`} style={{ width: `${adjConf}%` }} />
+                  </div>
+                </div>
+                <div className="grid grid-cols-3 gap-1.5">
+                  <div className="text-center bg-black/30 border border-white/[0.05] rounded-lg p-2">
+                    <div className="text-[8px] text-white/30 mb-0.5">Structure</div>
+                    <div className={`text-[10px] font-bold ${
+                      structType === 'HIGHER_HIGHS_LOWS' ? 'text-teal-300'
+                      : structType === 'LOWER_HIGHS_LOWS' ? 'text-rose-300'
+                      : 'text-amber-300'
+                    }`}>
+                      {structType === 'HIGHER_HIGHS_LOWS' ? 'HH+HL' : structType === 'LOWER_HIGHS_LOWS' ? 'LH+LL' : 'Sideways'}
+                    </div>
+                  </div>
+                  <div className="text-center bg-black/30 border border-white/[0.05] rounded-lg p-2">
+                    <div className="text-[8px] text-white/30 mb-0.5">RSI 5m</div>
+                    <div suppressHydrationWarning className={`text-[10px] font-bold ${
+                      rsi5 >= 60 ? 'text-teal-300' : rsi5 <= 40 ? 'text-rose-300' : 'text-amber-300'
+                    }`}>{rsi5.toFixed(0)}</div>
+                  </div>
+                  <div className="text-center bg-black/30 border border-white/[0.05] rounded-lg p-2">
+                    <div className="text-[8px] text-white/30 mb-0.5">VWAP</div>
+                    <div suppressHydrationWarning className={`text-[10px] font-bold ${
+                      vwapLabel === 'ABOVE' ? 'text-teal-300' : vwapLabel === 'BELOW' ? 'text-rose-300' : 'text-amber-300'
+                    }`}>{vwapLabel}</div>
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
         </div>
 
       </div>

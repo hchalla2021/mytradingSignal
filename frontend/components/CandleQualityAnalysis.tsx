@@ -151,10 +151,21 @@ const CandleQualityAnalysis = memo<CandleQualityAnalysisProps>(({ symbol }) => {
   // Loading state
   if (loading && !data) {
     return (
-      <div className="border-2 border-emerald-500/30 rounded-xl p-3 sm:p-4 transition-all duration-300 backdrop-blur-sm bg-gradient-to-br from-emerald-900/10 via-emerald-950/5 to-emerald-900/5 animate-pulse">
-        <div className="flex items-center justify-between gap-2 mb-2">
-          <h4 className="font-bold text-white text-base">Candle Scanner</h4>
-          <div className="text-[10px] font-semibold text-white/60">Loading...</div>
+      <div className="relative rounded-2xl overflow-hidden border border-white/[0.07] bg-[#0b0f1a] backdrop-blur-xl p-4 animate-pulse">
+        <div className="absolute top-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-white/15 to-transparent" />
+        <div className="flex items-center justify-between mb-3">
+          <div className="space-y-1.5">
+            <div className="h-2 w-28 bg-white/[0.06] rounded" />
+            <div className="h-3 w-40 bg-white/[0.06] rounded" />
+          </div>
+          <div className="h-8 w-8 bg-white/[0.06] rounded-full" />
+        </div>
+        <div className="h-14 bg-white/[0.04] rounded-xl mb-2" />
+        <div className="grid grid-cols-2 gap-1.5">
+          <div className="h-10 bg-white/[0.03] rounded-lg" />
+          <div className="h-10 bg-white/[0.03] rounded-lg" />
+          <div className="h-10 bg-white/[0.03] rounded-lg" />
+          <div className="h-10 bg-white/[0.03] rounded-lg" />
         </div>
       </div>
     );
@@ -163,141 +174,266 @@ const CandleQualityAnalysis = memo<CandleQualityAnalysisProps>(({ symbol }) => {
   // Error state
   if (error && !data) {
     return (
-      <div className="border-2 border-red-500/30 rounded-xl p-3 sm:p-4 transition-all duration-300 backdrop-blur-sm bg-red-900/10">
-        <div className="text-red-300 text-sm font-semibold">{symbol}</div>
-        <div className="text-red-400 text-xs mt-2">{error}</div>
+      <div className="relative rounded-2xl overflow-hidden border border-red-500/20 bg-[#0b0f1a] backdrop-blur-xl p-4">
+        <div className="absolute top-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-red-500/25 to-transparent" />
+        <p className="text-[9px] text-slate-500 uppercase tracking-[0.15em] font-medium mb-1">High Volume Candle Scanner</p>
+        <p className="text-red-400 text-sm font-semibold">{symbol} — Connection Error</p>
+        <p className="text-red-500/50 text-xs mt-1">{error}</p>
       </div>
     );
   }
 
   if (!data) return null;
 
-  const { signal, badgeEmoji, signalColor, textColor, confidence, symbol: symbolName } = signalAnalysis;
+  const { signal, confidence, symbol: symbolName } = signalAnalysis;
+
+  // ── Accent palette (signal-reactive, eye-friendly muted tones) ──
+  const isBuy  = signal.includes('BUY')  || signal === 'BULLISH';
+  const isSell = signal.includes('SELL') || signal === 'BEARISH';
+  const isWait = signal === 'WAIT';
+
+  const accentBorder  = isBuy ? 'border-teal-500/30'   : isSell ? 'border-rose-500/25'  : isWait ? 'border-orange-500/25' : 'border-slate-600/30';
+  const accentText    = isBuy ? 'text-teal-300'         : isSell ? 'text-rose-300'        : isWait ? 'text-orange-300'      : 'text-slate-400';
+  const accentBarBg   = isBuy ? 'from-teal-500 to-teal-300' : isSell ? 'from-rose-600 to-rose-400' : isWait ? 'from-orange-500 to-orange-300' : 'from-slate-500 to-slate-400';
+  const accentCorner  = isBuy ? 'bg-teal-500'           : isSell ? 'bg-rose-500'          : 'bg-slate-500';
+  const panelBorder   = isBuy ? 'border-teal-500/25'    : isSell ? 'border-rose-500/20'   : 'border-slate-600/25';
+
+  const signalLabel =
+    signal === 'STRONG_BUY'  || signal === 'STRONG BUY'  ? '▲▲ STRONG BUY'  :
+    signal === 'BUY'         || signal === 'BULLISH'      ? '▲ BUY'           :
+    signal === 'STRONG_SELL' || signal === 'STRONG SELL' ? '▼▼ STRONG SELL' :
+    signal === 'SELL'        || signal === 'BEARISH'      ? '▼ SELL'          :
+    signal === 'WAIT'                                     ? '⏸ WAIT'          :
+    '◆ NEUTRAL';
+
+  // ── Derived pre-production intelligence ──
+  const bodyRating   = data.body_percent > 60 ? 'STRONG' : data.body_percent > 35 ? 'MODERATE' : 'WEAK';
+  const volStatus    = data.volume_above_threshold ? 'HIGH' : 'NORMAL';
+  const convictionLv = data.conviction_move ? 'CONFIRMED' : data.momentum_score > 60 ? 'BUILDING' : 'LOW';
+
+  // ── Derived 5-min prediction ──
+  const predictedDir   = isBuy ? 'UPSIDE' : isSell ? 'DOWNSIDE' : 'SIDEWAYS';
+  const bodyExpect     = data.conviction_move ? 'EXPANDING' : data.fake_spike_detected ? 'SHRINKING' : 'STABLE';
+  const volumeExpect   = data.volume_above_threshold && data.conviction_move ? 'SURGING' : data.fake_spike_detected ? 'FADING' : 'STEADY';
+
+  // ── 5-factor Confidence calculation ──
+  const volConfidence = (() => {
+    let score = 38;
+    // Factor 1: body strength (+18 STRONG, +8 MODERATE, -5 WEAK)
+    if (bodyRating === 'STRONG')        score += 18;
+    else if (bodyRating === 'MODERATE') score += 8;
+    else                                score -= 5;
+    // Factor 2: volume quality (+14 if above threshold)
+    if (data.volume_above_threshold)    score += 14;
+    // Factor 3: conviction move (+12)
+    if (data.conviction_move)           score += 12;
+    // Factor 4: fake spike penalty (-18)
+    if (data.fake_spike_detected)       score -= 18;
+    // Factor 5: momentum blend (normalized 0-100 → ±10)
+    score += Math.round(((data.momentum_score || 50) - 50) * 0.20);
+    return Math.min(90, Math.max(35, Math.round(score)));
+  })();
 
   return (
-    <div className="border-2 border-emerald-500/30 rounded-xl p-3 sm:p-4 transition-all duration-300 backdrop-blur-sm bg-gradient-to-br from-emerald-900/10 via-emerald-950/5 to-emerald-900/5 hover:border-emerald-500/50 hover:shadow-emerald-500/30 shadow-xl shadow-emerald-500/15">
-      
-      {/* Symbol & Confidence Header */}
-      <div className="flex items-center justify-between gap-2 mb-2">
-        <div className="flex items-center gap-2">
-          <h4 className="font-bold text-white text-base sm:text-lg tracking-tight">
-            {symbolName}
-          </h4>
-          <span className="text-lg sm:text-xl">{badgeEmoji}</span>
+    <div suppressHydrationWarning className={`relative rounded-2xl overflow-hidden border ${accentBorder} shadow-lg bg-[#0b0f1a] backdrop-blur-xl`}>
+
+      {/* Top reflector shimmer */}
+      <div className="absolute top-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-white/20 to-transparent pointer-events-none" />
+      {/* Corner accent glow */}
+      <div className={`absolute top-0 right-0 w-14 h-14 rounded-bl-full opacity-[8%] ${accentCorner} pointer-events-none`} />
+
+      {/* ── HEADER ── */}
+      <div className="relative px-4 py-3 flex items-center justify-between border-b border-white/[0.05]">
+        <div>
+          <p className="text-[9px] text-slate-500 uppercase tracking-[0.18em] font-medium">High Volume Candle Scanner</p>
+          <p className="text-[10px] font-semibold text-slate-400 mt-0.5 tracking-wide">Fake Spike · Body Strength · Conviction</p>
         </div>
-        <div suppressHydrationWarning className={`text-center px-2.5 py-1 rounded-lg border-2 bg-black/30 ${signalColor}`}>
-          <div className="text-[10px] font-semibold text-white/60">Confidence</div>
-          <div suppressHydrationWarning className="text-base font-bold text-white">{confidence}%</div>
+        <div className="flex flex-col items-end gap-0.5">
+          <div className="flex items-center gap-1.5">
+            <div className="w-1.5 h-1.5 rounded-full bg-teal-400 animate-pulse" />
+            <span className="text-[9px] text-slate-500 font-medium">LIVE</span>
+          </div>
+          <span className="text-[9px] text-slate-600 font-medium">{symbolName}</span>
         </div>
       </div>
 
-      {/* PROMINENT SIGNAL */}
-      <div suppressHydrationWarning className={`mb-3 p-3 rounded-lg border-2 ${signalColor}`}>
-        <div suppressHydrationWarning className="text-base sm:text-lg font-bold tracking-tight text-white drop-shadow-lg">
-          {signal.toUpperCase().includes('STRONG_BUY') || signal.toUpperCase() === 'STRONG BUY' ? '🚀 STRONG BUY' :
-           signal.toUpperCase() === 'BUY' ? '📈 BUY' :
-           signal.toUpperCase().includes('STRONG_SELL') || signal.toUpperCase() === 'STRONG SELL' ? '📉 STRONG SELL' :
-           signal.toUpperCase() === 'SELL' ? '📊 SELL' :
-           signal.toUpperCase() === 'WAIT' ? '⏸️ WAIT - Fake Spike!' :
-           '⚪ NEUTRAL'}
+      {/* ── REFLECTOR: Main Signal Panel ── */}
+      <div className="relative mx-3 mt-3 rounded-xl overflow-hidden">
+        <div className={`absolute inset-0 opacity-[5%] ${
+          isBuy ? 'bg-gradient-to-b from-teal-400 to-transparent'
+          : isSell ? 'bg-gradient-to-b from-rose-400 to-transparent'
+          : 'bg-gradient-to-b from-slate-400 to-transparent'
+        } pointer-events-none`} />
+        <div className="absolute inset-0 bg-gradient-to-b from-white/[0.03] via-transparent to-black/25 pointer-events-none" />
+
+        <div className={`relative border rounded-xl p-3.5 bg-[#0d1117]/80 ${panelBorder}`}>
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <div suppressHydrationWarning className={`text-xl font-black tracking-tight ${accentText}`}>
+                {signalLabel}
+              </div>
+              <p className="text-[9px] text-white/30 mt-0.5 uppercase tracking-wider font-medium">
+                Volume · Candle Quality
+              </p>
+            </div>
+            <div className="text-right shrink-0">
+              <div suppressHydrationWarning className="text-2xl font-black text-white tabular-nums leading-none">{confidence}%</div>
+              <p className="text-[9px] text-white/30 font-medium mt-0.5">Confidence</p>
+            </div>
+          </div>
+          <div className="mt-2.5 h-[3px] bg-black/40 rounded-full overflow-hidden">
+            <div
+              suppressHydrationWarning
+              className={`h-full rounded-full bg-gradient-to-r ${accentBarBg} transition-all duration-1000 ease-out`}
+              style={{ width: `${confidence}%` }}
+            />
+          </div>
+          {/* Alert badges inline */}
+          {(data.fake_spike_detected || data.conviction_move) && (
+            <div className="flex gap-2 mt-2.5">
+              {data.conviction_move && (
+                <span className="text-[9px] font-semibold px-2 py-0.5 rounded-md bg-teal-500/10 border border-teal-500/20 text-teal-300 tracking-wide">
+                  CONVICTION MOVE
+                </span>
+              )}
+              {data.fake_spike_detected && (
+                <span className="text-[9px] font-semibold px-2 py-0.5 rounded-md bg-rose-500/10 border border-rose-500/20 text-rose-300 tracking-wide">
+                  FAKE SPIKE
+                </span>
+              )}
+            </div>
+          )}
         </div>
-        <p className="text-xs text-white/60 mt-0.5 font-medium">
-          Candle Quality • Volume & Body Analysis
-        </p>
       </div>
 
-      {/* High Volume Scanner Details */}
-      {data && (
-        <div className="space-y-2 text-[11px]">
-          
-          {/* Candle Direction */}
-          <div className="flex justify-between items-center p-2 rounded-lg border border-emerald-500/30 bg-emerald-500/5">
-            <span className="text-white font-semibold">📊 Direction</span>
-            <span suppressHydrationWarning className={`font-bold ${
-              data.candle_direction === 'UP' ? 'text-green-300' :
-              data.candle_direction === 'DOWN' ? 'text-red-300' :
-              'text-yellow-300'
+      {/* ── CONFERENCE PANEL: Market Intelligence Grid 2×2 ── */}
+      <div className="px-3 pt-3">
+        <div className="flex items-center gap-2 mb-2">
+          <div className="h-px flex-1 bg-white/[0.05]" />
+          <p className="text-[8px] text-slate-600 uppercase tracking-[0.18em] font-semibold">Candle Intelligence</p>
+          <div className="h-px flex-1 bg-white/[0.05]" />
+        </div>
+        <div className="grid grid-cols-2 gap-1.5">
+
+          {/* Direction */}
+          <div className="p-2.5 rounded-lg bg-[#0d1117] border border-white/[0.06]">
+            <p className="text-[8px] text-slate-600 uppercase tracking-wide mb-1">Direction</p>
+            <p suppressHydrationWarning className={`text-[13px] font-bold ${
+              data.candle_direction === 'UP' ? 'text-teal-300' :
+              data.candle_direction === 'DOWN' ? 'text-rose-300' : 'text-slate-400'
             }`}>
-              {data.candle_direction === 'UP' ? '📈 Up' :
-               data.candle_direction === 'DOWN' ? '📉 Down' :
-               '⚖️ Doji'}
-            </span>
+              {data.candle_direction === 'UP' ? '▲ UP' : data.candle_direction === 'DOWN' ? '▼ DOWN' : '◆ DOJI'}
+            </p>
           </div>
 
           {/* Body Strength */}
-          <div className="flex justify-between items-center p-2 rounded-lg border border-emerald-500/30 bg-emerald-500/5">
-            <span className="text-white font-semibold">💪 Body Strength</span>
-            <span suppressHydrationWarning className={`font-bold ${
-              data.body_percent > 60 ? 'text-green-300' :
-              data.body_percent > 30 ? 'text-yellow-300' :
-              'text-red-300'
+          <div className="p-2.5 rounded-lg bg-[#0d1117] border border-white/[0.06]">
+            <p className="text-[8px] text-slate-600 uppercase tracking-wide mb-1">Body Strength</p>
+            <p suppressHydrationWarning className={`text-[13px] font-bold ${
+              data.body_percent > 60 ? 'text-teal-300' :
+              data.body_percent > 30 ? 'text-amber-300' : 'text-rose-300'
             }`}>
               {data.body_percent?.toFixed(1) || '0'}%
-            </span>
+            </p>
+            <p className="text-[8px] text-slate-600 mt-0.5">{bodyRating}</p>
           </div>
 
-          {/* Volume Status - Very Good Volume Indicator */}
-          <div className="flex justify-between items-center p-2 rounded-lg border border-emerald-500/30 bg-emerald-500/5">
-            <span className="text-white font-semibold">📈 Volume</span>
-            <span suppressHydrationWarning className={`font-bold ${
-              data.volume_above_threshold ? 'text-green-300' : 'text-gray-400'
+          {/* Volume */}
+          <div className="p-2.5 rounded-lg bg-[#0d1117] border border-white/[0.06]">
+            <p className="text-[8px] text-slate-600 uppercase tracking-wide mb-1">Volume</p>
+            <p suppressHydrationWarning className={`text-[13px] font-bold ${
+              data.volume_above_threshold ? 'text-teal-300' : 'text-slate-400'
             }`}>
-              {data.volume_above_threshold ? `🟢 Very Good` : `⚪ Normal`}
-            </span>
+              {data.volume_above_threshold ? 'VERY GOOD' : 'NORMAL'}
+            </p>
           </div>
 
-          {/* Conviction Move Detection */}
-          {data.conviction_move && (
-            <div className="flex justify-between items-center p-2 rounded-lg border border-green-500/40 bg-green-500/10">
-              <span className="text-white font-semibold flex items-center gap-1">
-                ⚡ Conviction Move
-              </span>
-              <span className="font-bold text-green-300 text-[10px]">✅ Detected</span>
-            </div>
-          )}
-
-          {/* Fake Spike Detection */}
-          {data.fake_spike_detected && (
-            <div className="flex justify-between items-center p-2 rounded-lg border border-red-500/40 bg-red-500/10">
-              <span className="text-white font-semibold flex items-center gap-1">
-                ⚠️ Fake Spike
-              </span>
-              <span className="font-bold text-red-300 text-[10px]">🔴 Alert</span>
-            </div>
-          )}
-
-          {/* Momentum Score */}
-          <div className="flex justify-between items-center p-2 rounded-lg border border-emerald-500/30 bg-emerald-500/5">
-            <span className="text-white font-semibold">🎯 Momentum</span>
-            <span suppressHydrationWarning className={`font-bold ${
-              data.momentum_score > 60 ? 'text-green-300' :
-              data.momentum_score > 40 ? 'text-yellow-300' :
-              'text-red-300'
+          {/* Momentum */}
+          <div className="p-2.5 rounded-lg bg-[#0d1117] border border-white/[0.06]">
+            <p className="text-[8px] text-slate-600 uppercase tracking-wide mb-1">Momentum</p>
+            <p suppressHydrationWarning className={`text-[13px] font-bold ${
+              data.momentum_score > 60 ? 'text-teal-300' :
+              data.momentum_score > 40 ? 'text-amber-300' : 'text-slate-400'
             }`}>
-              {data.momentum_score}/100
-            </span>
-          </div>
-
-          {/* Price Details */}
-          <div className="grid grid-cols-2 gap-2 pt-1">
-            <div className="flex flex-col p-1.5 rounded-lg border border-emerald-500/30 bg-emerald-500/5">
-              <span className="text-[9px] text-white/60 font-semibold">Current</span>
-              <span className="font-bold text-white text-xs">₹{(data.current_price ?? 0).toFixed(2)}</span>
-            </div>
-            <div className="flex flex-col p-1.5 rounded-lg border border-emerald-500/30 bg-emerald-500/5">
-              <span className="text-[9px] text-white/60 font-semibold">Range</span>
-              <span className="font-bold text-white text-xs">H: ₹{(data.high_price ?? data.current_price ?? 0).toFixed(2)}</span>
-              <span className="font-bold text-white text-xs">L: ₹{(data.low_price ?? data.current_price ?? 0).toFixed(2)}</span>
-            </div>
-          </div>
-
-          {/* Live Indicator */}
-          <div className="text-[9px] text-slate-400 text-center pt-1 flex items-center justify-center gap-1">
-            <span className="inline-block w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse" />
-            Live • {new Date(data.timestamp || '').toLocaleTimeString()}
+              {data.momentum_score}<span className="text-[10px] text-slate-600">/100</span>
+            </p>
           </div>
         </div>
-      )}
+      </div>
+
+      {/* ── 5-MIN CONFIDENCE SECTION ── */}
+      <div className="mx-3 mt-2 mb-3 rounded-xl overflow-hidden border border-white/[0.06] bg-[#0d1117]">
+        <div className="h-px bg-gradient-to-r from-transparent via-white/10 to-transparent" />
+        <div className="px-3 pt-2.5 pb-1 flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <span suppressHydrationWarning className={`w-1 h-1 rounded-full animate-pulse ${
+              isBuy ? 'bg-teal-400' : isSell ? 'bg-rose-400' : 'bg-amber-400'
+            }`} />
+            <span className="text-[9px] text-white/40 font-bold uppercase tracking-widest">5-Min Confidence</span>
+          </div>
+          <div className="flex items-center gap-1.5">
+            <span className="text-[10px] text-white/30">Confidence</span>
+            <span suppressHydrationWarning className={`text-[11px] font-black ${
+              isBuy ? 'text-teal-300' : isSell ? 'text-rose-300' : 'text-amber-300'
+            }`}>{volConfidence}%</span>
+          </div>
+        </div>
+        {/* Confidence bar */}
+        <div className="mx-3 mb-2.5 h-0.5 rounded-full bg-white/[0.05] overflow-hidden">
+          <div suppressHydrationWarning
+            className={`h-full rounded-full transition-all duration-700 ${
+              isBuy ? 'bg-teal-500' : isSell ? 'bg-rose-500' : 'bg-amber-500'
+            }`}
+            style={{ width: `${volConfidence}%` }}
+          />
+        </div>
+        <div className="grid grid-cols-3 px-3 pb-3 gap-0">
+          {/* Body */}
+          <div className="text-center">
+            <p className="text-[8px] text-white/25 uppercase tracking-wider mb-1">Body</p>
+            <p suppressHydrationWarning className={`text-[11px] font-black ${
+              bodyRating === 'STRONG' ? 'text-teal-300' :
+              bodyRating === 'MODERATE' ? 'text-amber-300' : 'text-rose-300'
+            }`}>
+              {bodyRating === 'STRONG' ? '▲ STRONG' : bodyRating === 'MODERATE' ? '◆ MED' : '▼ WEAK'}
+            </p>
+          </div>
+          {/* Spike */}
+          <div className="text-center">
+            <p className="text-[8px] text-white/25 uppercase tracking-wider mb-1">Spike</p>
+            <p suppressHydrationWarning className={`text-[11px] font-black ${
+              data.fake_spike_detected ? 'text-rose-300' : 'text-teal-300'
+            }`}>
+              {data.fake_spike_detected ? '⚠ FAKE' : '✓ CLEAN'}
+            </p>
+          </div>
+          {/* Conviction */}
+          <div className="text-center">
+            <p className="text-[8px] text-white/25 uppercase tracking-wider mb-1">Conviction</p>
+            <p suppressHydrationWarning className={`text-[11px] font-black ${
+              convictionLv === 'CONFIRMED' ? 'text-teal-300' :
+              convictionLv === 'BUILDING'  ? 'text-amber-300' : 'text-white/30'
+            }`}>
+              {convictionLv === 'CONFIRMED' ? 'CONF' : convictionLv === 'BUILDING' ? 'BUILD' : 'LOW'}
+            </p>
+          </div>
+        </div>
+        <div className="h-px bg-gradient-to-r from-transparent via-white/[0.06] to-transparent" />
+      </div>
+
+      {/* ── FOOTER ── */}
+      <div className="px-3 pb-3 flex items-center justify-between -mt-0.5">
+        <div className="flex items-center gap-1">
+          <div className="w-1 h-1 rounded-full bg-teal-500 animate-pulse" />
+          <span className="text-[9px] text-slate-600">Live · 3s refresh</span>
+        </div>
+        <span suppressHydrationWarning className="text-[9px] text-slate-600 tabular-nums">
+          {new Date(data.timestamp || '').toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+        </span>
+      </div>
+
+      {/* Bottom reflector shimmer */}
+      <div className="absolute bottom-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-white/8 to-transparent pointer-events-none" />
     </div>
   );
 });

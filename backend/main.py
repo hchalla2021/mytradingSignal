@@ -27,6 +27,8 @@ from routers import (
     market_outlook,
     market_positioning,
 )
+from routers.compass import http_router as compass_http, ws_router as compass_ws
+from routers.liquidity import http_router as liq_http, ws_router as liq_ws
 
 # Windows console fix (safe, ignored on Linux)
 if sys.platform == "win32":
@@ -142,6 +144,24 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         print(f"⚠️  OI Momentum Broadcaster init error: {e}")
 
+    # 🧭 Start Institutional Market Compass Service
+    try:
+        from services.compass_service import get_compass_service
+        compass_svc = get_compass_service()
+        await compass_svc.start()
+        print("🧭 Institutional Market Compass: ACTIVE")
+    except Exception as e:
+        print(f"⚠️  Compass Service init error: {e}")
+
+    # ⚡ Start Pure Liquidity Intelligence Service
+    try:
+        from services.liquidity_service import get_liquidity_service
+        liq_svc = get_liquidity_service()
+        await liq_svc.start()
+        print("⚡ Pure Liquidity Intelligence: ACTIVE")
+    except Exception as e:
+        print(f"⚠️  Liquidity Service init error: {e}")
+
     print("🚀 Backend READY")
     yield
 
@@ -152,6 +172,20 @@ async def lifespan(app: FastAPI):
     try:
         from services.oi_momentum_broadcaster import stop_oi_momentum_broadcaster
         await stop_oi_momentum_broadcaster()
+    except:
+        pass
+
+    # Stop Compass Service
+    try:
+        from services.compass_service import get_compass_service
+        await get_compass_service().stop()
+    except:
+        pass
+
+    # Stop Liquidity Service
+    try:
+        from services.liquidity_service import get_liquidity_service
+        await get_liquidity_service().stop()
     except:
         pass
     
@@ -203,6 +237,14 @@ app.include_router(advanced_analysis.router, tags=["Advanced Technical Analysis"
 app.include_router(pivot_indicators.router, tags=["Pivot Indicators"])
 app.include_router(market_outlook.router, tags=["Market Outlook"])
 app.include_router(market_positioning.router, tags=["Market Positioning"])
+
+# 🧭 Institutional Market Compass
+app.include_router(compass_ws,   prefix="/ws",  tags=["Compass"])
+app.include_router(compass_http, prefix="/api", tags=["Compass"])
+
+# ⚡ Pure Liquidity Intelligence
+app.include_router(liq_ws,   prefix="/ws",  tags=["Liquidity"])
+app.include_router(liq_http, prefix="/api", tags=["Liquidity"])
 
 
 @app.get("/")

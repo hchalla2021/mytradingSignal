@@ -85,6 +85,7 @@ interface PredFactor { label: string; pts: number; note: string }
 interface Prediction {
   score: number; label: string; color: string; border: string;
   bg: string; icon: string; upProb: number; downProb: number;
+  confidence: number;   // 0-90: certainty of the predicted direction
   factors: PredFactor[];
 }
 
@@ -160,7 +161,23 @@ function computePrediction(d: VolumePulseData): Prediction {
   if (upProb > 50) upProb = Math.min(93, upProb + boost);
   else if (upProb < 50) upProb = Math.max(7, upProb - boost);
 
-  return { score, label, color, border, bg, icon, upProb, downProb: 100 - upProb, factors };
+  // ── Confidence: HOW CERTAIN we are about the direction ──
+  // Separate from probability — measures signal quality, not direction bias.
+  // Max raw score = 11 pts → maps base 0-35 additional pts
+  let conf = 38;                                          // base (low info state)
+  conf += (Math.abs(score) / 11) * 37;                   // conviction from score magnitude (+0…+37)
+  if (quality === 'HEALTHY' || quality === 'COMPRESSION') conf += 9;   // strong institutional pattern
+  if (quality === 'SELLER_EXHAUSTION')                    conf += 6;   // clear reversal signal
+  if (quality === 'EXHAUSTION')                           conf -= 12;  // trend ending — very uncertain
+  if (quality === 'FAKE_BREAKOUT')                        conf -= 7;   // deceptive move
+  if (quality === 'ABSORPTION')                           conf -= 3;   // direction unclear
+  if (partic > 70) conf += 5;   // high participation → reliable signal
+  if (partic < 30) conf -= 6;   // low participation → noise
+  if (exhaust > 70) conf -= 8;  // exhaustion kills confidence
+  conf += backConf * 0.10;      // blend backend signal strength (max +9.5)
+  const confidence = Math.round(Math.min(90, Math.max(35, conf)));
+
+  return { score, label, color, border, bg, icon, upProb, downProb: 100 - upProb, confidence, factors };
 }
 
 const VolumePulseCard = memo<VolumePulseCardProps>(({ symbol, name }) => {
@@ -424,71 +441,95 @@ const VolumePulseCard = memo<VolumePulseCardProps>(({ symbol, name }) => {
             5-MIN PREDICTION
             Pure volume intelligence — 5 weighted factors, no extra fetch
         ════════════════════════════════════════════════════════════════ */}
-        <div className="border border-slate-700/50 rounded-xl bg-slate-900/50 px-3 py-2.5">
-
-          {/* Panel header */}
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-[9px] font-bold text-gray-400 uppercase tracking-widest">5-Min Prediction</span>
-            <span suppressHydrationWarning className={`text-[9px] font-bold px-1.5 py-0.5 rounded border ${pred.border} ${pred.bg} ${pred.color}`}>
-              Score&nbsp;{pred.score > 0 ? '+' : ''}{pred.score}
-            </span>
-          </div>
-
-          {/* Prediction signal */}
-          <div className={`rounded-lg border ${pred.border} ${pred.bg} px-2.5 py-2 text-center mb-2`}>
-            <span suppressHydrationWarning className={`text-base font-black tracking-wide ${pred.color}`}>
-              {pred.icon}&nbsp;{pred.label}
-            </span>
-          </div>
-
-          {/* Up/Down probability bar */}
-          <div className="mb-2">
-            <div className="flex justify-between text-[9px] mb-0.5">
-              <span suppressHydrationWarning className="text-emerald-400 font-bold">▲ UP&nbsp;{pred.upProb}%</span>
-              <span suppressHydrationWarning className="text-red-400 font-bold">▼ DOWN&nbsp;{pred.downProb}%</span>
-            </div>
-            <div className="h-2 rounded-full overflow-hidden flex bg-gray-900 border border-white/5">
-              <div
-                suppressHydrationWarning
-                className="h-full bg-gradient-to-r from-emerald-600 to-emerald-400 transition-all duration-700 rounded-l-full"
-                style={{ width: `${pred.upProb}%` }}
-              />
-              <div className="h-full bg-gradient-to-r from-rose-400 to-rose-600 flex-1 rounded-r-full" />
-            </div>
-          </div>
-
-          {/* Factor rows */}
-          <div className="space-y-0.5">
-            {pred.factors.map(f => (
-              <div key={f.label} className="flex items-center gap-1.5">
-                <span className={`text-[9px] font-bold w-3 text-center flex-shrink-0 ${f.pts > 0 ? 'text-emerald-400' : f.pts < 0 ? 'text-red-400' : 'text-gray-600'}`}>
-                  {f.pts > 0 ? '▲' : f.pts < 0 ? '▼' : '─'}
-                </span>
-                <span className="text-[9px] text-gray-500 w-[76px] flex-shrink-0 truncate">{f.label}</span>
-                <span suppressHydrationWarning className={`text-[9px] flex-1 truncate ${f.pts > 0 ? 'text-emerald-400/80' : f.pts < 0 ? 'text-red-400/80' : 'text-gray-600'}`}>{f.note}</span>
+        <div className="rounded-xl border border-white/[0.06] bg-[#0d1117] overflow-hidden">
+          <div className="h-px bg-gradient-to-r from-transparent via-white/10 to-transparent" />
+          {(() => {
+            const isBuyVol  = pred.label === 'STRONG UP'   || pred.label === 'LIKELY UP';
+            const isSellVol = pred.label === 'STRONG DOWN' || pred.label === 'LIKELY DOWN';
+            const adjConf   = pred.confidence; // 35–90%, 5-factor weighted (momentum, ratio, quality, participation, aggression)
+            const predDir   = isBuyVol ? 'LONG' : isSellVol ? 'SHORT' : 'FLAT';
+            const dirIcon   = isBuyVol ? '▲' : isSellVol ? '▼' : '─';
+            const dirColor  = isBuyVol ? 'text-teal-300'       : isSellVol ? 'text-rose-300'       : 'text-amber-300';
+            const dirBorder = isBuyVol ? 'border-teal-500/40'  : isSellVol ? 'border-rose-500/35'  : 'border-amber-500/30';
+            const dirBg     = isBuyVol ? 'bg-teal-500/[0.07]'  : isSellVol ? 'bg-rose-500/[0.07]'  : 'bg-amber-500/[0.05]';
+            const barColor  = isBuyVol ? 'bg-teal-500'         : isSellVol ? 'bg-rose-500'         : 'bg-amber-500';
+            const q = data.pro_metrics?.volume_quality ?? 'NEUTRAL';
+            const ctxNote =
+              q === 'EXHAUSTION'          ? '⚠ Volume exhaustion — reversal risk'
+              : q === 'FAKE_BREAKOUT'     ? '⚠ Fake breakout — avoid chase'
+              : q === 'COMPRESSION'       ? 'Compression — breakout imminent'
+              : q === 'SELLER_EXHAUSTION' ? 'Seller exhaustion — bounce likely'
+              : q === 'ABSORPTION'        ? 'Absorption — direction unclear'
+              : (pred.label === 'STRONG UP' || pred.label === 'STRONG DOWN') ? 'Strong vol dominance confirmed'
+              : isBuyVol  ? 'Buying pressure active'
+              : isSellVol ? 'Selling pressure active'
+              : 'Balanced — await breakout';
+            return (
+              <div className="px-3 pt-2.5 pb-3">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-[9px] text-white/40 font-bold uppercase tracking-widest">5-Min Prediction</span>
+                  <span className={`text-[9px] font-black ${dirColor}`}>{adjConf}% Confidence</span>
+                </div>
+                <div className={`rounded-lg border ${dirBorder} ${dirBg} px-2.5 py-2 mb-2`}>
+                  <div className="flex items-center justify-between gap-2 mb-1.5">
+                    <span className={`text-sm font-black ${dirColor}`}>{dirIcon} {predDir}</span>
+                    <span className="text-[9px] text-white/30 truncate">{ctxNote}</span>
+                    <span className={`text-sm font-black ${dirColor} shrink-0`}>{adjConf}%</span>
+                  </div>
+                  <div className="h-[2px] bg-white/[0.06] rounded-full overflow-hidden">
+                    <div suppressHydrationWarning className={`h-full rounded-full transition-all duration-700 ${barColor}`} style={{ width: `${adjConf}%` }} />
+                  </div>
+                </div>
+                <div className="grid grid-cols-3 gap-1.5">
+                  <div className="text-center bg-black/30 border border-white/[0.05] rounded-lg p-2">
+                    <div className="text-[8px] text-white/30 mb-0.5">Buy Vol</div>
+                    <div className={`text-[10px] font-bold ${vd.green_percentage >= 55 ? 'text-teal-300' : 'text-amber-300'}`}>
+                      {vd.green_percentage.toFixed(0)}%
+                    </div>
+                  </div>
+                  <div className="text-center bg-black/30 border border-white/[0.05] rounded-lg p-2">
+                    <div className="text-[8px] text-white/30 mb-0.5">Sell Vol</div>
+                    <div className={`text-[10px] font-bold ${vd.red_percentage >= 55 ? 'text-rose-300' : 'text-amber-300'}`}>
+                      {vd.red_percentage.toFixed(0)}%
+                    </div>
+                  </div>
+                  <div className="text-center bg-black/30 border border-white/[0.05] rounded-lg p-2">
+                    <div className="text-[8px] text-white/30 mb-0.5">Quality</div>
+                    <div className={`text-[10px] font-bold ${
+                      q === 'HEALTHY' || q === 'COMPRESSION' || q === 'SELLER_EXHAUSTION' ? 'text-teal-300'
+                      : q === 'EXHAUSTION' || q === 'FAKE_BREAKOUT' ? 'text-rose-300'
+                      : 'text-amber-300'
+                    }`}>{q === 'NEUTRAL' ? '—' : q.replace('_', ' ')}</div>
+                  </div>
+                </div>
               </div>
-            ))}
-          </div>
-
-          {/* Summary */}
-          <div suppressHydrationWarning className={`mt-2 text-center text-[10px] font-bold rounded-lg py-1 border ${pred.border} ${pred.bg} ${pred.color}`}>
-            {pred.label}&nbsp;·&nbsp;{pred.upProb > 50 ? pred.upProb : pred.downProb}% probability
-          </div>
+            );
+          })()}
         </div>
 
       </div>
 
       {/* ─── FOOTER ──────────────────────────────────────────────────────── */}
-      <div className="px-4 py-1.5 border-t border-white/5 flex justify-between items-center">
-        <span suppressHydrationWarning className="text-[9px] text-gray-600">
-          {data.timestamp
-            ? new Date(data.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
-            : '—'}
-        </span>
-        <span className="text-[9px] text-gray-600">
-          {(data.candles_analyzed ?? 0) > 0 ? `${data.candles_analyzed} candles` : ''}
-          {isLive ? <span className="ml-1.5 font-bold text-emerald-500">● Live</span> : <span className="ml-1.5 text-gray-600">○ Cached</span>}
-        </span>
+      <div className="px-4 py-3 border-t border-white/5 flex justify-between items-center bg-white/[0.015]">
+        <div className="flex items-center gap-2">
+          <span suppressHydrationWarning className={`w-2 h-2 rounded-full flex-shrink-0 ${isLive ? 'bg-emerald-400 animate-pulse' : 'bg-gray-600'}`} />
+          <div className="flex flex-col">
+            <span className={`text-[10px] font-bold ${isLive ? 'text-emerald-400' : 'text-gray-500'}`}>
+              {isLive ? 'Live Feed' : 'Cached'}
+            </span>
+            <span suppressHydrationWarning className="text-[9px] text-gray-600">
+              {data.timestamp
+                ? new Date(data.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+                : '—'}
+            </span>
+          </div>
+        </div>
+        {(data.candles_analyzed ?? 0) > 0 && (
+          <div className="flex flex-col items-end">
+            <span className="text-[10px] font-bold text-white/50">{data.candles_analyzed}</span>
+            <span className="text-[9px] text-gray-600">candles</span>
+          </div>
+        )}
       </div>
     </div>
   );

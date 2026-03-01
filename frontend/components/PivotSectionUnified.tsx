@@ -34,6 +34,8 @@ interface SymbolConfig {
   shortName: string;
 }
 
+type MarketStatus = 'LIVE' | 'PRE_OPEN' | 'FREEZE' | 'CLOSED' | string;
+
 const SYMBOLS: SymbolConfig[] = [
   { symbol: 'NIFTY', name: 'NIFTY 50', shortName: 'NIFTY' },
   { symbol: 'BANKNIFTY', name: 'BANK NIFTY', shortName: 'BNIFTY' },
@@ -153,7 +155,7 @@ const hasCrossed = (price: number | null, level: number | null, direction: 'abov
 // ============================================================================
 
 // Single Symbol Row - Ultra Compact
-const SymbolPivotRow = memo<{ data: PivotData; config: SymbolConfig }>(({ data, config }) => {
+const SymbolPivotRow = memo<{ data: PivotData; config: SymbolConfig; marketStatus?: MarketStatus }>(({ data, config, marketStatus = 'LIVE' }) => {
   // Show all data - even if price is null, display the pivot values
   const hasAnyData = data && (data.current_price || data.classic_pivots?.pivot);
   
@@ -326,9 +328,6 @@ const SymbolPivotRow = memo<{ data: PivotData; config: SymbolConfig }>(({ data, 
                     <div className="text-sm font-black text-green-300">₹{pivots.r3?.toFixed(0)}</div>
                   </div>
                 </div>
-                <div className="text-xs text-green-200 bg-green-900/30 rounded-lg p-2">
-                  ✅ <strong>Action:</strong> Strong uptrend confirmed. Price above R3 resistance. Hold longs or book partial profits. Watch for exhaustion signs.
-                </div>
               </div>
             );
           } else if (zone === 'between_p_r3') {
@@ -354,9 +353,6 @@ const SymbolPivotRow = memo<{ data: PivotData; config: SymbolConfig }>(({ data, 
                     <div className="text-xs text-blue-300/70 font-semibold">R3</div>
                     <div className="text-sm font-black text-blue-300">₹{pivots.r3?.toFixed(0)}</div>
                   </div>
-                </div>
-                <div className="text-xs text-blue-200 bg-blue-900/30 rounded-lg p-2">
-                  📊 <strong>Strategy:</strong> In resistance zone. Look for longs above Pivot (₹{pivots.pivot?.toFixed(0)}) with target R3 (₹{pivots.r3?.toFixed(0)}). Book profits near resistance.
                 </div>
               </div>
             );
@@ -384,9 +380,6 @@ const SymbolPivotRow = memo<{ data: PivotData; config: SymbolConfig }>(({ data, 
                     <div className="text-sm font-black text-orange-300">₹{pivots.pivot?.toFixed(0)}</div>
                   </div>
                 </div>
-                <div className="text-xs text-orange-200 bg-orange-900/30 rounded-lg p-2">
-                  ⚠️ <strong>Strategy:</strong> In support zone. Watch for bounce near S1/S3. Look for longs above Pivot (₹{pivots.pivot?.toFixed(0)}). Use tight stops below S3 (₹{pivots.s3?.toFixed(0)}).
-                </div>
               </div>
             );
           } else {
@@ -412,9 +405,6 @@ const SymbolPivotRow = memo<{ data: PivotData; config: SymbolConfig }>(({ data, 
                     <div className="text-xs text-red-300/70 font-semibold">PIVOT</div>
                     <div className="text-sm font-black text-red-300">₹{pivots.pivot?.toFixed(0)}</div>
                   </div>
-                </div>
-                <div className="text-xs text-red-200 bg-red-900/30 rounded-lg p-2">
-                  ⛔ <strong>Action:</strong> Strong downtrend. Price below S3 support. Avoid longs. Look for shorts with stop above S3 (₹{pivots.s3?.toFixed(0)}). Wait for reversal signs.
                 </div>
               </div>
             );
@@ -471,6 +461,103 @@ const SymbolPivotRow = memo<{ data: PivotData; config: SymbolConfig }>(({ data, 
             </div>
           </div>
         </div>
+
+        {/* ── 5-Min Prediction ── */}
+        <div className="rounded-xl border border-white/[0.06] bg-[#0d1117] overflow-hidden">
+          <div className="h-px bg-gradient-to-r from-transparent via-white/10 to-transparent" />
+          {(() => {
+            // ── Multi-factor Pivot 5-min confidence engine ──────────
+            // Base: pivotConfidence (already computed with 6 factors)
+            const stDistPct  = Math.abs(st1.distance_pct || 0);
+            const stAligns   = (isBullish && st1.trend === 'BULLISH') || (isBearish && st1.trend === 'BEARISH');
+            const stOpposes  = (isBullish && st1.trend === 'BEARISH') || (isBearish && st1.trend === 'BULLISH');
+            const stStrong   = stDistPct > 1.0;
+            const aboveR2    = isBullish && nearestRes?.label === 'R2' && price > (pivots.r1 || 0);
+            const belowS2    = isBearish && nearestSup?.label === 'S2' && price < (pivots.s1 || 0);
+            const goodZone   = aboveR2 || belowS2;
+            const isLiveData = data.status === 'LIVE';
+
+            let adjConf = pivotConfidence;
+            if (stAligns && stStrong) adjConf += 5;  // ST confirms direction + strong gap
+            else if (stAligns)       adjConf += 3;   // ST confirms direction
+            if (goodZone)            adjConf += 4;   // price well into R2/S2 zone
+            if (isLiveData)          adjConf += 2;   // live data bonus
+            if (stOpposes)           adjConf -= 7;   // ST contradicts bias
+            if (isNearPivot)         adjConf -= 4;   // already at pivot — uncertainty
+            if (marketStatus !== 'LIVE') adjConf = Math.max(30, adjConf - 10);
+            adjConf = Math.round(Math.min(95, Math.max(30, adjConf)));
+
+            // Direction
+            const predDir   = isBullish ? 'LONG' : isBearish ? 'SHORT' : 'FLAT';
+            const dirIcon   = isBullish ? '▲' : isBearish ? '▼' : '─';
+            const dirColor  = isBullish ? 'text-teal-300'  : isBearish ? 'text-rose-300'  : 'text-amber-300';
+            const dirBorder = isBullish ? 'border-teal-500/40' : isBearish ? 'border-rose-500/35' : 'border-amber-500/30';
+            const dirBg     = isBullish ? 'bg-teal-500/[0.07]' : isBearish ? 'bg-rose-500/[0.07]' : 'bg-amber-500/[0.05]';
+            const barColor  = isBullish ? 'bg-teal-500' : isBearish ? 'bg-rose-500' : 'bg-amber-500';
+
+            // Context
+            const ctxNote = stOpposes     ? '⚠ ST diverges from pivot bias'
+              : isNearPivot              ? '⚠ At pivot — wait for break'
+              : goodZone && stAligns     ? `${nearestRes?.label || nearestSup?.label} zone + ST confirm`
+              : stAligns                 ? 'ST + Pivot aligned'
+              : nearestRes              ? `Target ${nearestRes.label} ₹${fmtCompact(nearestRes.value)}`
+              : nearestSup              ? `Support ${nearestSup.label} ₹${fmtCompact(nearestSup.value)}`
+              : 'Watching pivot levels…';
+
+            return (
+              <div className="px-3 pt-2.5 pb-3">
+                {/* Header */}
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-[9px] text-white/40 font-bold uppercase tracking-widest">5-Min Prediction</span>
+                  <span className={`text-[9px] font-black ${dirColor}`}>{adjConf}% Confidence</span>
+                </div>
+
+                {/* Direction pill + bar */}
+                <div className={`rounded-lg border ${dirBorder} ${dirBg} px-2.5 py-2 mb-2`}>
+                  <div className="flex items-center justify-between gap-2 mb-1.5">
+                    <span className={`text-sm font-black ${dirColor}`}>{dirIcon} {predDir}</span>
+                    <span className="text-[9px] text-white/30 truncate">{ctxNote}</span>
+                    <span className={`text-sm font-black ${dirColor} shrink-0`}>{adjConf}%</span>
+                  </div>
+                  <div className="h-[2px] bg-white/[0.06] rounded-full overflow-hidden">
+                    <div
+                      suppressHydrationWarning
+                      className={`h-full rounded-full transition-all duration-700 ${barColor}`}
+                      style={{ width: `${adjConf}%` }}
+                    />
+                  </div>
+                </div>
+
+                {/* 3-cell grid */}
+                <div className="grid grid-cols-3 gap-1.5">
+                  <div className="text-center bg-black/30 border border-white/[0.05] rounded-lg p-2">
+                    <div className="text-[8px] text-white/30 mb-0.5">Pivot Zone</div>
+                    <div className={`text-[10px] font-bold ${dirColor}`}>
+                      {price > (pivots.pivot || 0) ? 'Above P' : 'Below P'}
+                    </div>
+                  </div>
+                  <div className="text-center bg-black/30 border border-white/[0.05] rounded-lg p-2">
+                    <div className="text-[8px] text-white/30 mb-0.5">Key Level</div>
+                    <div className={`text-[10px] font-bold ${dirColor}`}>
+                      {isBullish
+                        ? (nearestRes ? `${nearestRes.label}` : '—')
+                        : isBearish
+                        ? (nearestSup ? `${nearestSup.label}` : '—')
+                        : `P`}
+                    </div>
+                  </div>
+                  <div className="text-center bg-black/30 border border-white/[0.05] rounded-lg p-2">
+                    <div className="text-[8px] text-white/30 mb-0.5">ST Align</div>
+                    <div className={`text-[10px] font-bold ${stAligns ? dirColor : stOpposes ? 'text-rose-300' : 'text-amber-300'}`}>
+                      {stAligns ? 'Confirm' : stOpposes ? 'Diverge' : 'Neutral'}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            );
+          })()}
+        </div>
+
       </div>
     </div>
   );
@@ -481,8 +568,9 @@ SymbolPivotRow.displayName = 'SymbolPivotRow';
 // ============================================================================
 // MAIN COMPONENT
 // ============================================================================
-const PivotSectionUnified = memo<{ updates?: number }>((props) => {
-  const [allData, setAllData] = useState<Record<string, PivotData>>({});
+const PivotSectionUnified = memo<{ updates?: number; analyses?: Record<string, any> | null; marketStatus?: MarketStatus }>((props) => {
+  const { analyses, marketStatus = 'LIVE' } = props;
+  const [allData, setAllData] = useState<Record<string, PivotData>>(() => getCachedData() || {});
   const [loading, setLoading] = useState(true);
   const [lastUpdate, setLastUpdate] = useState<string>('');
   const [isFetching, setIsFetching] = useState(false);
@@ -622,6 +710,71 @@ const PivotSectionUnified = memo<{ updates?: number }>((props) => {
     }
   }, [isFetching]);
 
+  // Immediately seed from parent analyses data (fast path — no API call needed)
+  useEffect(() => {
+    if (!analyses) return;
+    const built: Record<string, PivotData> = {};
+    for (const sym of ['NIFTY', 'BANKNIFTY', 'SENSEX']) {
+      const symData = analyses[sym];
+      if (!symData) continue;
+      const ind = symData.indicators || {};
+      const price = ind.price || 0;
+      const isBull = (symData.signal || '').includes('BUY');
+      const isBear = (symData.signal || '').includes('SELL');
+      // Pivot levels may be nested under pivot_points or flat
+      const pp = ind.pivot_points || {};
+      built[sym] = {
+        symbol: sym,
+        status: symData.status || 'LIVE',
+        current_price: price,
+        change_percent: ind.change_percent || 0,
+        timestamp: new Date().toISOString(),
+        ema: {
+          ema_20: ind.ema_20 || null,
+          ema_50: ind.ema_50 || null,
+          ema_100: ind.ema_100 || null,
+          ema_200: ind.ema_200 || null,
+          trend: ind.trend || 'NEUTRAL',
+          price_vs_ema20: price > (ind.ema_20 || 0) ? 'ABOVE' : 'BELOW',
+        },
+        classic_pivots: {
+          pivot: pp.pivot || ind.cpr_pivot || 0,
+          r1: pp.r1 || ind.pivot_r1 || 0,
+          r2: pp.r2 || ind.pivot_r2 || 0,
+          r3: pp.r3 || ind.pivot_r3 || 0,
+          s1: pp.s1 || ind.pivot_s1 || 0,
+          s2: pp.s2 || ind.pivot_s2 || 0,
+          s3: pp.s3 || ind.pivot_s3 || 0,
+          bias: isBull ? 'BULLISH' : isBear ? 'BEARISH' : 'NEUTRAL',
+        },
+        camarilla_pivots: {
+          h4: ind.camarilla_h4 || 0,
+          h3: ind.camarilla_h3 || 0,
+          l3: ind.camarilla_l3 || 0,
+          l4: ind.camarilla_l4 || 0,
+          zone: ind.camarilla_zone || (isBull ? 'BULLISH_ZONE' : isBear ? 'BEARISH_ZONE' : 'NEUTRAL'),
+        },
+        supertrend_10_3: {
+          value: ind.supertrend_10_2_value || null,
+          trend: ind.supertrend_10_2_trend || (isBull ? 'BULLISH' : isBear ? 'BEARISH' : 'NEUTRAL'),
+          signal: isBull ? 'BUY' : isBear ? 'SELL' : 'NEUTRAL',
+          distance_pct: ind.supertrend_10_2_distance_pct || 0,
+        },
+        supertrend_7_3: {
+          value: ind.supertrend_10_2_value || null,
+          trend: ind.supertrend_10_2_trend || (isBull ? 'BULLISH' : isBear ? 'BEARISH' : 'NEUTRAL'),
+          signal: isBull ? 'BUY' : isBear ? 'SELL' : 'NEUTRAL',
+          distance_pct: 0,
+        },
+        overall_bias: isBull ? 'BULLISH' : isBear ? 'BEARISH' : 'NEUTRAL',
+      };
+    }
+    if (Object.keys(built).length > 0) {
+      setAllData(prev => ({ ...prev, ...built }));
+      setLoading(false);
+    }
+  }, [analyses]);
+
   // Initial load + periodic refresh
   useEffect(() => {
     fetchAllData(false);
@@ -704,7 +857,7 @@ const PivotSectionUnified = memo<{ updates?: number }>((props) => {
             );
           }
           // Render even if current_price is null - SymbolPivotRow handles it
-          return <SymbolPivotRow key={config.symbol} data={data} config={config} />;
+          return <SymbolPivotRow key={config.symbol} data={data} config={config} marketStatus={marketStatus} />;
         })}
       </div>
 

@@ -87,9 +87,10 @@ class ContractManager:
             
             logger.info("📥 Fetching instruments from Zerodha (NFO + BSE)...")
             
-            # Fetch both NFO (for NIFTY/BANKNIFTY) and BSE (for SENSEX)
+            # Fetch both NFO (for NIFTY/BANKNIFTY) and BFO (for SENSEX futures)
+            # SENSEX futures trade on BFO (BSE Futures & Options), NOT BSE spot exchange
             nfo_instruments = self.kite.instruments("NFO")
-            bse_instruments = self.kite.instruments("BSE")
+            bse_instruments = self.kite.instruments("BFO")
             
             if not nfo_instruments:
                 logger.error("❌ No NFO instruments received from Zerodha")

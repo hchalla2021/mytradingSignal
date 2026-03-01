@@ -178,6 +178,8 @@ export default function OIMomentumCard({
   const s15     = getSig(data.signal_15m);
   const m       = data.metrics ?? {};
   const outlook = fiveMinOutlook(data);
+  // Adjust outlook probability for market status (same logic as signal confidence)
+  const outlookConf = adjustConf(outlook.prob, marketStatus);
 
   // ── Signal drivers: buy-side AND sell-side ────────────────────────────────
   const isBearish = s5.strength < 0 || s15.strength < 0;
@@ -399,10 +401,10 @@ export default function OIMomentumCard({
           </div>
         </div>
 
-        {/* ─── 5-MIN OUTLOOK ───────────────────────────────────────────────── */}
+        {/* ─── 5-MIN PREDICTION ─────────────────────────────────────────────── */}
         <div className={`rounded-lg border px-2.5 py-2 ${outlookBgOnly} ${outlookBorder}`}>
           <p className="text-[8px] font-bold text-slate-500 uppercase tracking-widest mb-1.5">
-            5-Min Outlook
+            5-Min Prediction
           </p>
           <div className="flex items-center justify-between gap-2">
             <div className="min-w-0">
@@ -415,8 +417,8 @@ export default function OIMomentumCard({
               <p className="text-[9px] text-slate-500 mt-0.5 leading-tight">{outlook.context}</p>
             </div>
             <div className="flex-shrink-0 text-right">
-              <p className={`text-2xl font-black leading-none ${outlookColor}`}>{outlook.prob}%</p>
-              <p className="text-[9px] text-slate-500 font-bold uppercase tracking-wide">probability</p>
+              <p className={`text-2xl font-black leading-none ${outlookColor}`}>{outlookConf}%</p>
+              <p className="text-[9px] text-slate-500 font-bold uppercase tracking-wide">Confidence</p>
             </div>
           </div>
         </div>

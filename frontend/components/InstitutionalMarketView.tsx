@@ -384,12 +384,21 @@ const InstitutionalMarketView = memo<InstitutionalMarketViewProps>(({ symbol, ma
 
   if (loading) {
     return (
-      <div className="border-2 border-purple-500/30 rounded-xl p-3 sm:p-4 transition-all duration-300 backdrop-blur-sm bg-gradient-to-br from-purple-900/10 via-purple-950/5 to-purple-900/5 animate-pulse">
-        <div className="flex items-center justify-between gap-2 mb-2">
-          <h4 className="font-bold text-white text-base">Smart Money</h4>
-          <div className="text-[10px] font-semibold text-white/60">
-            {isConnected ? 'Fetching data...' : 'Connecting...'}
+      <div className="relative rounded-2xl overflow-hidden border border-white/8 bg-gradient-to-br from-[#0d1117]/98 via-[#161b22]/90 to-[#0d1117]/98 backdrop-blur-xl p-4 animate-pulse">
+        <div className="absolute top-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-white/20 to-transparent" />
+        <div className="flex items-center justify-between mb-3">
+          <div className="space-y-1.5">
+            <div className="h-2 w-24 bg-white/8 rounded" />
+            <div className="h-3 w-36 bg-white/8 rounded" />
           </div>
+          <div className="h-8 w-8 bg-white/8 rounded-full" />
+        </div>
+        <div className="h-16 bg-white/5 rounded-xl mb-2" />
+        <div className="grid grid-cols-2 gap-1.5">
+          <div className="h-10 bg-white/4 rounded-lg" />
+          <div className="h-10 bg-white/4 rounded-lg" />
+          <div className="h-10 bg-white/4 rounded-lg" />
+          <div className="h-10 bg-white/4 rounded-lg" />
         </div>
       </div>
     );
@@ -398,142 +407,276 @@ const InstitutionalMarketView = memo<InstitutionalMarketViewProps>(({ symbol, ma
   // Error state
   if (hasError) {
     return (
-      <div className="border-2 border-red-500/30 rounded-xl p-3 sm:p-4 transition-all duration-300 backdrop-blur-sm bg-red-900/10">
-        <div className="text-red-300 text-sm font-semibold">{symbol}</div>
-        <div className="text-red-400 text-xs mt-2">{error}</div>
+      <div className="relative rounded-2xl overflow-hidden border border-red-500/20 bg-gradient-to-br from-red-950/30 via-[#0d1117]/90 to-[#0d1117]/98 backdrop-blur-xl p-4">
+        <div className="absolute top-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-red-500/30 to-transparent" />
+        <p className="text-[9px] text-slate-500 uppercase tracking-[0.15em] font-medium mb-1">Smart Money Flow</p>
+        <p className="text-red-400 text-sm font-semibold">{symbol} — Connection Error</p>
+        <p className="text-red-500/60 text-xs mt-1">{error}</p>
       </div>
     );
   }
 
   if (!data) return null;
 
-  const { signal, badgeEmoji, signalColor, textColor, confidence, symbol: symbolName } = signalAnalysis;
+  const { signal, signalColor, confidence, symbol: symbolName } = signalAnalysis;
+
+  // Derived display values
+  const buyRatio = Math.round(data.order_flow_strength || 50);
+  const sellRatio = 100 - buyRatio;
+  const imbalanceType = data.market_imbalance || 'NEUTRAL';
+  const orderBlockLevel = data.order_block_bullish || data.order_block_bearish || null;
+
+  // 5-min pre-production intelligence
+  const volBuild = buyRatio > 55 ? 'BULLISH' : buyRatio < 45 ? 'BEARISH' : 'NEUTRAL';
+  const signalForming = imbalanceType.includes('BUY') ? 'BUY' : imbalanceType.includes('SELL') ? 'SELL' : 'WAIT';
+  const convictionLevel = confidence >= 75 ? 'HIGH' : confidence >= 55 ? 'MODERATE' : 'LOW';
+
+  // Signal accent colors (border + glow)
+  const accentBorder = signal.includes('BUY') ? 'border-emerald-500/35' : signal.includes('SELL') ? 'border-red-500/35' : 'border-amber-500/30';
+  const accentGlow = signal.includes('BUY') ? 'shadow-emerald-500/10' : signal.includes('SELL') ? 'shadow-red-500/10' : 'shadow-amber-500/8';
+  const accentCorner = signal.includes('BUY') ? 'bg-emerald-500' : signal.includes('SELL') ? 'bg-red-500' : 'bg-amber-500';
+  const accentText = signal.includes('BUY') ? 'text-emerald-300' : signal.includes('SELL') ? 'text-red-300' : 'text-amber-300';
+  const accentBarBg = signal.includes('BUY') ? 'from-emerald-500 to-emerald-300' : signal.includes('SELL') ? 'from-red-600 to-red-400' : 'from-amber-500 to-amber-300';
+  const signalLabel = signal === 'STRONG_BUY' || signal === 'STRONG BUY' ? '▲▲ STRONG BUY'
+    : signal === 'BUY' || signal === 'BULLISH' ? '▲ BUY'
+    : signal === 'STRONG_SELL' || signal === 'STRONG SELL' ? '▼▼ STRONG SELL'
+    : signal === 'SELL' || signal === 'BEARISH' ? '▼ SELL'
+    : '◆ NEUTRAL';
 
   return (
-    <div suppressHydrationWarning className="border-2 border-purple-500/30 rounded-xl p-3 sm:p-4 transition-all duration-300 backdrop-blur-sm bg-gradient-to-br from-purple-900/10 via-purple-950/5 to-purple-900/5 hover:border-purple-500/50 hover:shadow-purple-500/30 shadow-xl shadow-purple-500/15">
-      
-      {/* Symbol & Confidence Header */}
-      <div className="flex items-center justify-between gap-2 mb-2">
-        <div className="flex items-center gap-2">
-          <h4 className="font-bold text-white text-base sm:text-lg tracking-tight">
-            {symbolName}
-          </h4>
+    <div suppressHydrationWarning className={`relative rounded-2xl overflow-hidden border ${accentBorder} shadow-lg ${accentGlow} backdrop-blur-xl bg-[#0b0f1a]`}>
+
+      {/* Top reflector shimmer */}
+      <div className="absolute top-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-white/25 to-transparent pointer-events-none" />
+      {/* Corner accent glow */}
+      <div className={`absolute top-0 right-0 w-16 h-16 rounded-bl-full opacity-10 ${accentCorner} pointer-events-none`} />
+
+      {/* ── HEADER BAR ── */}
+      <div className="relative px-4 py-3 flex items-center justify-between border-b border-white/[0.05]">
+        <div>
+          <p className="text-[9px] text-slate-500 uppercase tracking-[0.18em] font-medium">Smart Money Flow</p>
+          <p className="text-[11px] font-semibold text-slate-300 mt-0.5 tracking-wide">Order Structure Intelligence</p>
         </div>
-        <div suppressHydrationWarning className={`text-center px-2.5 py-1 rounded-lg border-2 bg-black/30 ${signalColor}`}>
-          <div className="text-[10px] font-semibold text-white/60">Confidence</div>
-          <div suppressHydrationWarning className="text-base font-bold text-white">{confidence}%</div>
+        <div className="flex flex-col items-end gap-0.5">
+          <div className="flex items-center gap-1.5">
+            <div className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />
+            <span className="text-[9px] text-slate-400 font-medium">{marketStatus}</span>
+          </div>
+          <span className="text-[9px] text-slate-600 font-medium">{symbolName}</span>
         </div>
       </div>
 
-      {/* PROMINENT SIGNAL */}
-      <div suppressHydrationWarning className={`mb-3 p-3 rounded-lg border-2 ${signalColor}`}>
-        <div suppressHydrationWarning className="text-lg sm:text-xl font-bold tracking-tight text-white drop-shadow-lg">
-          {signal === 'STRONG_BUY' || signal === 'STRONG BUY' ? '🚀 STRONG BUY' :
-           signal === 'BUY' ? '📈 BUY' :
-           signal === 'STRONG_SELL' || signal === 'STRONG SELL' ? '📉 STRONG SELL' :
-           signal === 'SELL' ? '📊 SELL' :
-           '⚪ NEUTRAL'}
-        </div>
-        <p className="text-xs text-white/60 mt-0.5 font-medium">
-          Smart Money • Order Structure Intelligence
-        </p>
-      </div>
+      {/* ── REFLECTOR: Main Signal Panel ── */}
+      <div className="relative mx-3 mt-3 rounded-xl overflow-hidden">
+        {/* Reflective tinted background — very subtle, dark */}
+        <div className={`absolute inset-0 opacity-[6%] ${
+          signal.includes('BUY') ? 'bg-gradient-to-b from-emerald-400 to-transparent'
+          : signal.includes('SELL') ? 'bg-gradient-to-b from-red-400 to-transparent'
+          : 'bg-gradient-to-b from-slate-400 to-transparent'
+        } pointer-events-none`} />
+        {/* Reflection overlay — top micro-shine + bottom depth */}
+        <div className="absolute inset-0 bg-gradient-to-b from-white/[0.03] via-transparent to-black/30 pointer-events-none" />
 
-      {/* Order Flow + Fair Value Gaps + Order Blocks + Market Imbalance Summary */}
-      {data && (
-        <div className="space-y-2 text-[11px]">
-          
-          {/* Order Flow (Buy/Sell Ratio) */}
-          <div className="flex justify-between items-center p-2 rounded-lg border border-purple-500/30 bg-purple-500/5">
-            <span className="text-white font-semibold flex items-center gap-1">
-              📊 Order Flow
-            </span>
-            <span suppressHydrationWarning className={`font-bold ${
-              (data.order_flow_strength || 50) > 60 ? 'text-green-300' : 
-              (data.order_flow_strength || 50) < 40 ? 'text-red-300' : 
-              'text-yellow-300'
-            }`}>
-              {data.order_flow_strength ? `${Math.round(data.order_flow_strength)}% Buy` : '50% Neutral'}
-            </span>
+        <div className={`relative border rounded-xl p-3.5 bg-[#0d1117]/80 ${accentBorder}`}>
+          {/* Signal label + confidence value */}
+          <div className="flex items-center justify-between gap-3">
+            <div>
+              <div suppressHydrationWarning className={`text-xl font-black tracking-tight ${accentText}`}>
+                {signalLabel}
+              </div>
+              <p className="text-[9px] text-white/35 mt-0.5 uppercase tracking-wider font-medium">
+                Institutional · Order Flow
+              </p>
+            </div>
+            <div className="text-right shrink-0">
+              <div suppressHydrationWarning className="text-2xl font-black text-white tabular-nums leading-none">{confidence}%</div>
+              <p className="text-[9px] text-white/35 font-medium mt-0.5">Confidence</p>
+            </div>
           </div>
 
-          {/* Fair Value Gaps (FVG) */}
-          {(data.fair_value_gap_bullish || data.fair_value_gap_bearish) && (
-            <div className="flex justify-between items-center p-2 rounded-lg border border-purple-500/30 bg-purple-500/5">
-              <span className="text-white font-semibold flex items-center gap-1">
-                💎 Fair Value Gap
-              </span>
-              <span suppressHydrationWarning className={`font-bold ${
-                data.fair_value_gap_bullish ? 'text-green-300' : 'text-red-300'
-              }`}>
-                {data.fair_value_gap_bullish ? '🟢 Bullish' : '🔴 Bearish'}
-              </span>
-            </div>
-          )}
+          {/* Confidence progress bar */}
+          <div className="mt-2.5 h-[3px] bg-black/40 rounded-full overflow-hidden">
+            <div
+              suppressHydrationWarning
+              className={`h-full rounded-full bg-gradient-to-r ${accentBarBg} transition-all duration-1000 ease-out`}
+              style={{ width: `${confidence}%` }}
+            />
+          </div>
+        </div>
+      </div>
 
-          {/* Order Blocks */}
-          {(data.order_block_bullish !== null || data.order_block_bearish !== null) && (
-            <div className="flex justify-between items-center p-2 rounded-lg border border-purple-500/30 bg-purple-500/5">
-              <span className="text-white font-semibold flex items-center gap-1">
-                🧱 Order Block
-              </span>
-              <span suppressHydrationWarning className={`font-bold ${
-                data.order_block_bullish !== null ? 'text-green-300' : 'text-red-300'
-              }`}>
-                {data.order_block_bullish ? `₹${data.order_block_bullish.toFixed(2)}` : 
-                 data.order_block_bearish ? `₹${data.order_block_bearish.toFixed(2)}` : 
-                 'N/A'}
-              </span>
-            </div>
-          )}
+      {/* ── CONFERENCE PANEL: Market Intelligence Grid (2×2) ── */}
+      <div className="px-3 pt-3">
+        <div className="flex items-center gap-2 mb-2">
+          <div className="h-px flex-1 bg-white/[0.05]" />
+          <p className="text-[8px] text-slate-600 uppercase tracking-[0.18em] font-semibold">Market Intelligence</p>
+          <div className="h-px flex-1 bg-white/[0.05]" />
+        </div>
+
+        <div className="grid grid-cols-2 gap-1.5">
+          {/* Order Flow */}
+          <div className="p-2.5 rounded-lg bg-[#0d1117] border border-white/[0.06]">
+            <p className="text-[8px] text-slate-600 uppercase tracking-wide mb-1">Order Flow</p>
+            <p suppressHydrationWarning className={`text-[13px] font-bold ${
+              buyRatio > 60 ? 'text-emerald-400' : buyRatio < 40 ? 'text-red-400' : 'text-amber-400'
+            }`}>
+              {buyRatio}% Buy
+            </p>
+            <p className="text-[8px] text-slate-600 mt-0.5">{sellRatio}% Sell</p>
+          </div>
 
           {/* Market Imbalance */}
-          <div className="flex justify-between items-center p-2 rounded-lg border border-purple-500/30 bg-purple-500/5">
-            <span className="text-white font-semibold flex items-center gap-1">
-              ⚖️ Imbalance
-            </span>
-            <span suppressHydrationWarning className={`font-bold ${
-              (data.market_imbalance || 'NEUTRAL').includes('BUY') ? 'text-green-300' : 
-              (data.market_imbalance || 'NEUTRAL').includes('SELL') ? 'text-red-300' : 
-              'text-yellow-300'
+          <div className="p-2.5 rounded-lg bg-[#0d1117] border border-white/[0.06]">
+            <p className="text-[8px] text-slate-600 uppercase tracking-wide mb-1">Imbalance</p>
+            <p suppressHydrationWarning className={`text-[13px] font-bold ${
+              imbalanceType.includes('BUY') ? 'text-emerald-400'
+              : imbalanceType.includes('SELL') ? 'text-red-400'
+              : 'text-amber-400'
             }`}>
-              {(data.market_imbalance || 'NEUTRAL').includes('BUY') ? '🟢 BUY' :
-               (data.market_imbalance || 'NEUTRAL').includes('SELL') ? '🔴 SELL' :
-               '⚪ NEUTRAL'} • {data.market_imbalance || 'NEUTRAL'}
-            </span>
+              {imbalanceType.includes('BUY') ? 'BUY ZONE'
+               : imbalanceType.includes('SELL') ? 'SELL ZONE'
+               : 'NEUTRAL'}
+            </p>
           </div>
 
-          {/* Volume Imbalance Indicator */}
-          {data.volume_imbalance !== undefined && (
-            <div className="flex justify-between items-center p-2 rounded-lg border border-purple-500/30 bg-purple-500/5">
-              <span className="text-white font-semibold flex items-center gap-1">
-                📈 Vol Imbalance
-              </span>
-              <span suppressHydrationWarning className={`font-bold ${
-                (data.volume_imbalance || 0) > 0 ? 'text-green-300' : 'text-red-300'
-              }`}>
-                {(data.volume_imbalance || 0) > 0 ? '🟢 Buy' : '🔴 Sell'} ({Math.abs(data.volume_imbalance || 0).toFixed(1)})
-              </span>
-            </div>
-          )}
+          {/* Fair Value Gap */}
+          <div className="p-2.5 rounded-lg bg-[#0d1117] border border-white/[0.06]">
+            <p className="text-[8px] text-slate-600 uppercase tracking-wide mb-1">Fair Value Gap</p>
+            <p suppressHydrationWarning className={`text-[13px] font-bold ${
+              data.fair_value_gap_bullish ? 'text-emerald-400'
+              : data.fair_value_gap_bearish ? 'text-red-400'
+              : 'text-slate-500'
+            }`}>
+              {data.fair_value_gap_bullish ? 'BULLISH' : data.fair_value_gap_bearish ? 'BEARISH' : 'CLOSED'}
+            </p>
+          </div>
 
-          {/* Current Price & Volume */}
-          {data.current_price && (
-            <div className="flex justify-between items-center p-2 rounded-lg border border-purple-500/30 bg-purple-500/5">
-              <span className="text-white font-semibold">₹ Price</span>
-              <span className="font-bold text-white">
-                ₹{(data.current_price ?? 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })}
-              </span>
-            </div>
-          )}
-
-          {/* Live Indicator */}
-          <div className="text-[9px] text-slate-400 text-center pt-1 flex items-center justify-center gap-1">
-            <span className="inline-block w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse" />
-            Live • {new Date(data.timestamp || '').toLocaleTimeString()}
+          {/* Order Block */}
+          <div className="p-2.5 rounded-lg bg-[#0d1117] border border-white/[0.06]">
+            <p className="text-[8px] text-slate-600 uppercase tracking-wide mb-1">Order Block</p>
+            <p suppressHydrationWarning className={`text-[13px] font-bold ${
+              data.order_block_bullish ? 'text-emerald-400'
+              : data.order_block_bearish ? 'text-red-400'
+              : 'text-slate-500'
+            }`}>
+              {orderBlockLevel ? `₹${orderBlockLevel.toFixed(0)}` : 'N/A'}
+            </p>
           </div>
         </div>
-      )}
+      </div>
+
+      {/* ── 5-MIN PREDICTION SECTION ── */}
+      <div className="mx-3 mt-2.5 mb-3 rounded-xl overflow-hidden border border-white/[0.06] bg-[#0d1117]">
+        <div className="h-px bg-gradient-to-r from-transparent via-white/10 to-transparent" />
+
+        <div className="p-3">
+          {(() => {
+            // Direction from signal
+            const isBull = signal.includes('BUY') || signal === 'BULLISH';
+            const isBear = signal.includes('SELL') || signal === 'BEARISH';
+            const predDir = isBull ? 'LONG' : isBear ? 'SHORT' : 'FLAT';
+            const dirIcon = isBull ? '▲' : isBear ? '▼' : '─';
+            const dirColor  = isBull ? 'text-emerald-400' : isBear ? 'text-red-400' : 'text-amber-400';
+            const dirBorder = isBull ? 'border-emerald-500/40' : isBear ? 'border-red-500/40' : 'border-amber-500/30';
+            const dirBg     = isBull ? 'bg-emerald-500/[0.08]' : isBear ? 'bg-red-500/[0.08]' : 'bg-amber-500/[0.05]';
+
+            // Confidence adjustment: OI flow, imbalance, FVG, order-block confirmation
+            const flowAligns  = (isBull && volBuild === 'BULLISH') || (isBear && volBuild === 'BEARISH');
+            const flowOpp     = (isBull && volBuild === 'BEARISH') || (isBear && volBuild === 'BULLISH');
+            const fvgConfirms = (isBull && !!data.fair_value_gap_bullish) || (isBear && !!data.fair_value_gap_bearish);
+            const obConfirms  = (isBull && !!data.order_block_bullish)    || (isBear && !!data.order_block_bearish);
+            const imbAligns   = (isBull && signalForming === 'BUY') || (isBear && signalForming === 'SELL');
+
+            let adjConf = confidence;
+            if (flowAligns)  adjConf += 5;
+            if (imbAligns)   adjConf += 4;
+            if (fvgConfirms) adjConf += 4;
+            if (obConfirms)  adjConf += 3;
+            if (flowOpp)     adjConf -= 10;
+            adjConf = Math.round(Math.min(95, Math.max(30, adjConf)));
+
+            // Context note
+            const confirms = [
+              flowAligns  && 'Order Flow',
+              imbAligns   && 'Imbalance',
+              fvgConfirms && 'FVG',
+              obConfirms  && 'Order Block',
+            ].filter(Boolean) as string[];
+            const ctxNote = flowOpp
+              ? '⚠ Flow vs Signal conflict'
+              : confirms.length >= 2 ? `${confirms.slice(0,2).join(' + ')} confirm`
+              : confirms.length === 1 ? `${confirms[0]} confirms`
+              : 'Monitoring structure…';
+
+            return (
+              <>
+                {/* Header */}
+                <div className="flex items-center justify-between mb-2.5">
+                  <div className="flex items-center gap-1.5">
+                    <div className={`w-[3px] h-3.5 rounded-full ${isBull ? 'bg-emerald-400' : isBear ? 'bg-red-400' : 'bg-amber-400'} animate-pulse`} />
+                    <p className="text-[9px] text-slate-400 font-semibold uppercase tracking-wider">5-Min Prediction</p>
+                  </div>
+                  <span suppressHydrationWarning className={`text-[9px] font-black ${dirColor}`}>{adjConf}% Confidence</span>
+                </div>
+
+                {/* Direction pill + confidence bar */}
+                <div className={`rounded-lg border ${dirBorder} ${dirBg} px-2.5 py-2 mb-2.5`}>
+                  <div className="flex items-center justify-between gap-2 mb-1.5">
+                    <span suppressHydrationWarning className={`text-sm font-black ${dirColor}`}>{dirIcon} {predDir}</span>
+                    <span className="text-[9px] text-slate-500 truncate">{ctxNote}</span>
+                    <span suppressHydrationWarning className={`text-sm font-black ${dirColor} shrink-0`}>{adjConf}%</span>
+                  </div>
+                  <div className="h-[2px] bg-black/40 rounded-full overflow-hidden">
+                    <div
+                      suppressHydrationWarning
+                      className={`h-full rounded-full bg-gradient-to-r ${accentBarBg} transition-all duration-1000 ease-out`}
+                      style={{ width: `${adjConf}%` }}
+                    />
+                  </div>
+                </div>
+
+                {/* 3-column intelligence cells */}
+                <div className="grid grid-cols-3 gap-1.5">
+                  <div className="text-center p-2 rounded-lg bg-black/30 border border-white/[0.05]">
+                    <p className="text-[8px] text-slate-600 uppercase tracking-wide mb-1">Order Flow</p>
+                    <p suppressHydrationWarning className={`text-[11px] font-bold ${buyRatio > 55 ? 'text-emerald-400' : buyRatio < 45 ? 'text-red-400' : 'text-amber-400'}`}>
+                      {buyRatio}% Buy
+                    </p>
+                  </div>
+                  <div className="text-center p-2 rounded-lg bg-black/30 border border-white/[0.05]">
+                    <p className="text-[8px] text-slate-600 uppercase tracking-wide mb-1">FVG</p>
+                    <p suppressHydrationWarning className={`text-[11px] font-bold ${data.fair_value_gap_bullish ? 'text-emerald-400' : data.fair_value_gap_bearish ? 'text-red-400' : 'text-slate-500'}`}>
+                      {data.fair_value_gap_bullish ? '▲ BULL' : data.fair_value_gap_bearish ? '▼ BEAR' : 'CLOSED'}
+                    </p>
+                  </div>
+                  <div className="text-center p-2 rounded-lg bg-black/30 border border-white/[0.05]">
+                    <p className="text-[8px] text-slate-600 uppercase tracking-wide mb-1">Conviction</p>
+                    <p suppressHydrationWarning className={`text-[11px] font-bold ${convictionLevel === 'HIGH' ? 'text-emerald-400' : convictionLevel === 'MODERATE' ? 'text-amber-400' : 'text-slate-500'}`}>
+                      {convictionLevel}
+                    </p>
+                  </div>
+                </div>
+              </>
+            );
+          })()}
+        </div>
+
+        <div className="h-px bg-gradient-to-r from-transparent via-white/[0.06] to-transparent" />
+      </div>
+
+      {/* ── FOOTER ── */}
+      <div className="px-3 pb-3 flex items-center justify-between -mt-0.5">
+        <div className="flex items-center gap-1">
+          <div className="w-1 h-1 rounded-full bg-green-500 animate-pulse" />
+          <span className="text-[9px] text-slate-600">Live</span>
+        </div>
+        <span suppressHydrationWarning className="text-[9px] text-slate-600 tabular-nums">
+          {new Date(data.timestamp || '').toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+        </span>
+      </div>
+
+      {/* Bottom reflector shimmer */}
+      <div className="absolute bottom-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-white/10 to-transparent pointer-events-none" />
     </div>
   );
 });

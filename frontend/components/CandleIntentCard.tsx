@@ -169,6 +169,112 @@ const calculateCandleConfidence = (data: CandleIntentData): number => {
   return Math.min(85, Math.max(35, Math.round(confidence)));
 };
 
+// ─────────────────────────────────────────────────────────────────────────────
+// 5-Min Prediction Engine
+// Multi-factor weighted model — 7 inputs, single confidence output
+// Max raw score = ±16 pts across all factors
+// Confidence = how CERTAIN we are about direction (independent of direction itself)
+// ─────────────────────────────────────────────────────────────────────────────
+interface CandlePrediction {
+  score: number;        // −16…+16
+  label: string;        // STRONG UP | LIKELY UP | CHOPPY | LIKELY DOWN | STRONG DOWN
+  color: string;
+  confidence: number;   // 35–90%  — certainty of prediction
+  upConf: number;       // directional % for bullish scenario
+  downConf: number;     // directional % for bearish scenario
+}
+
+function computeCandlePrediction(data: CandleIntentData, overallConf: number): CandlePrediction {
+  const body   = data.body_analysis;
+  const wick   = data.wick_analysis;
+  const vol    = data.volume_analysis;
+  const pat    = data.pattern;
+  const prof   = (data.professional_signal ?? 'NEUTRAL').toUpperCase();
+  const isTrap = data.trap_status?.is_trap ?? false;
+
+  let score = 0;
+
+  // Factor 1: Body direction + strength  (max ±4)
+  if (body.is_bullish) {
+    score += body.strength >= 75 ? 4 : body.strength >= 55 ? 3 : body.body_ratio_pct >= 40 ? 2 : 1;
+  } else {
+    score -= body.strength >= 75 ? 4 : body.strength >= 55 ? 3 : body.body_ratio_pct >= 40 ? 2 : 1;
+  }
+
+  // Factor 2: Volume confirmation  (max ±3)
+  const vr = vol.volume_ratio;
+  if (body.is_bullish)  score += vr >= 2.0 ? 3 : vr >= 1.5 ? 2 : vr >= 1.2 ? 1 : vr < 0.8 ? -1 : 0;
+  else                  score -= vr >= 2.0 ? 3 : vr >= 1.5 ? 2 : vr >= 1.2 ? 1 : vr < 0.8 ? -1 : 0;
+
+  // Factor 3: Wick rejection alignment  (max ±3)
+  if (score > 0 && wick.lower_signal === 'BULLISH') score += wick.lower_strength && wick.lower_strength >= 70 ? 3 : 2;
+  else if (score < 0 && wick.upper_signal === 'BEARISH') score -= wick.upper_strength && wick.upper_strength >= 70 ? 3 : 2;
+  else if (wick.dominant_wick === 'NEITHER') score += 0; // no wick info
+
+  // Factor 4: Pattern confidence  (max ±3)
+  if (pat.confidence >= 80)       score += pat.intent === 'BULLISH' ? 3 : pat.intent === 'BEARISH' ? -3 : 0;
+  else if (pat.confidence >= 65)  score += pat.intent === 'BULLISH' ? 2 : pat.intent === 'BEARISH' ? -2 : 0;
+  else if (pat.confidence >= 50)  score += pat.intent === 'BULLISH' ? 1 : pat.intent === 'BEARISH' ? -1 : 0;
+
+  // Factor 5: Professional signal alignment  (max ±2)
+  if (prof === 'STRONG_BUY' || prof === 'BUY')   score += 2;
+  else if (prof === 'STRONG_SELL' || prof === 'SELL') score -= 2;
+
+  // Factor 6: Trap penalty  (−5 — kills signal reliability)
+  if (isTrap) score = Math.sign(score) * Math.max(0, Math.abs(score) - 5);
+
+  // Factor 7: Near key zone bonus  (+1 certainty of reaction)
+  if (data.near_zone) score += score >= 0 ? 1 : -1;
+
+  // ── Direction label (score ±16) ──
+  let label: string, color: string;
+  if      (score >= 8)  { label = 'STRONG UP';   color = 'text-teal-300'; }
+  else if (score >= 4)  { label = 'LIKELY UP';   color = 'text-teal-400'; }
+  else if (score <= -8) { label = 'STRONG DOWN'; color = 'text-rose-300'; }
+  else if (score <= -4) { label = 'LIKELY DOWN'; color = 'text-rose-400'; }
+  else                  { label = 'CHOPPY';       color = 'text-amber-300'; }
+
+  // ── Confidence calculation ──
+  // Measures HOW CERTAIN we are — separate from direction
+  let conf = 38; // Base: no info = 38%
+
+  // Score magnitude (+0…+34): higher divergence = more certainty
+  conf += (Math.abs(score) / 16) * 34;
+
+  // Body conviction
+  if (body.body_ratio_pct >= 60 && body.strength >= 70) conf += 9;  // decisive candle
+  else if (body.body_ratio_pct < 25) conf -= 10;                     // doji / spinning top
+
+  // Volume quality
+  if (vr >= 2.0) conf += 9;        // spike — institutional move
+  else if (vr >= 1.5) conf += 6;
+  else if (vr >= 1.2) conf += 3;
+  else if (vr < 0.8)  conf -= 8;   // below-average vol = unreliable
+
+  // Pattern quality
+  if (pat.confidence >= 80) conf += 6;
+  else if (pat.confidence < 50) conf -= 5;
+
+  // Wick confirms direction
+  if (body.is_bullish  && wick.lower_signal === 'BULLISH') conf += 5;
+  if (!body.is_bullish && wick.upper_signal === 'BEARISH') conf += 5;
+
+  // Trap kills confidence
+  if (isTrap) conf -= 14;
+
+  // Live data
+  if (data.status === 'LIVE' || data.status === 'FRESH') conf += 5;
+  else if (data.status === 'CACHED') conf -= 4;
+
+  const confidence = Math.round(Math.min(90, Math.max(35, conf)));
+
+  // ── Directional confidence split ──
+  const upConf   = score >= 0 ? confidence : Math.round(confidence * 0.35);
+  const downConf = score <  0 ? confidence : Math.round(confidence * 0.35);
+
+  return { score, label, color, confidence, upConf, downConf };
+}
+
 const CandleIntentCard = memo<CandleIntentCardProps>(({ symbol, name }) => {
   const [data, setData] = useState<CandleIntentData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -222,283 +328,210 @@ const CandleIntentCard = memo<CandleIntentCardProps>(({ symbol, name }) => {
     return vol.toFixed(0);
   };
 
+  const signal = data ? getCandleSignal(data) : 'SIDEWAYS';
+  const confidence = data ? calculateCandleConfidence(data) : 50;
+  const isLive = data?.status === 'LIVE' || data?.status === 'FRESH';
+  const isBuy = signal === 'STRONG BUY' || signal === 'BUY';
+  const isSell = signal === 'STRONG SELL' || signal === 'SELL';
+  const accentBorder = isBuy ? 'border-teal-500/30' : isSell ? 'border-rose-500/25' : 'border-amber-500/25';
+  const accentCorner = isBuy ? 'bg-teal-500' : isSell ? 'bg-rose-500' : 'bg-amber-500';
+  const accentText = isBuy ? 'text-teal-300' : isSell ? 'text-rose-300' : 'text-amber-300';
+  const accentBarBg = isBuy ? 'bg-teal-500' : isSell ? 'bg-rose-500' : 'bg-amber-500';
+  const signalLabel = isBuy ? (signal === 'STRONG BUY' ? '▲ STRONG BUY' : '▲ BUY') : isSell ? (signal === 'STRONG SELL' ? '▼ STRONG SELL' : '▼ SELL') : '◆ SIDEWAYS';
+
   if (loading) {
     return (
-      <div className="bg-gradient-to-br from-gray-900/50 to-gray-950/30 border border-gray-700/40 rounded-xl p-4 animate-pulse">
-        <div className="h-32 bg-gray-800/30 rounded"></div>
+      <div className={`relative rounded-2xl overflow-hidden border ${accentBorder} bg-[#0b0f1a] animate-pulse`}>
+        <div className="p-4 h-40" />
       </div>
     );
   }
 
   if (error || !data) {
     return (
-      <div className="bg-gradient-to-br from-gray-900/50 to-gray-950/30 border border-rose-500/40 rounded-xl p-4">
-        <div className="flex items-center gap-2 text-rose-400 font-semibold">
-          <Flame className="w-5 h-5" />
+      <div className={`relative rounded-2xl overflow-hidden border border-rose-500/25 bg-[#0b0f1a] p-4`}>
+        <div className="flex items-center gap-2 text-rose-300 font-semibold text-sm">
+          <Flame className="w-4 h-4" />
           <span>{name}</span>
         </div>
-        <p className="text-xs text-gray-400 mt-2">{error || 'No data'}</p>
+        <p className="text-xs text-white/40 mt-2">{error || 'No data'}</p>
       </div>
     );
   }
 
-  const signal = getCandleSignal(data);
-  const confidence = calculateCandleConfidence(data);
-  const isLive = data.status === 'LIVE' || data.status === 'FRESH';
   const isTrap = data.trap_status?.is_trap ?? false;
-  const alertLevel = data.volume_analysis.alert_level ?? 'NORMAL';
-  const efficiencyText = data.volume_analysis.efficiency_interpretation ?? '';
-  const getSignalColor = () => {
-    if (signal === 'STRONG BUY') return 'text-emerald-300';
-    if (signal === 'BUY') return 'text-green-400';
-    if (signal === 'SELL') return 'text-rose-400';
-    if (signal === 'STRONG SELL') return 'text-red-400';
-    return 'text-amber-400';
-  };
-  
-  const getSignalBg = () => {
-    if (signal === 'STRONG BUY') return 'bg-emerald-500/20 border-emerald-400/40';
-    if (signal === 'BUY') return 'bg-green-500/15 border-green-400/30';
-    if (signal === 'SELL') return 'bg-rose-500/15 border-rose-400/30';
-    if (signal === 'STRONG SELL') return 'bg-red-500/20 border-red-400/40';
-    return 'bg-amber-500/15 border-amber-400/30';
-  };
-  
-  // Confidence level text
-  const getConfidenceLabel = () => {
-    if (confidence >= 70) return 'High';
-    if (confidence >= 55) return 'Medium';
-    return 'Low';
-  };
+  const pred   = computeCandlePrediction(data, confidence);
 
   return (
-    <div className="bg-gradient-to-br from-gray-900/50 to-gray-950/30 border border-gray-700/40 rounded-xl p-4 hover:border-gray-600/50 transition-all">
-      {/* Header */}
-      <div className="flex items-center justify-between mb-4">
+    <div className={`relative rounded-2xl overflow-hidden border ${accentBorder} shadow-lg bg-[#0b0f1a] backdrop-blur-xl`}>
+      {/* Top shimmer */}
+      <div className="absolute top-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-white/20 to-transparent pointer-events-none" />
+      {/* Corner glow */}
+      <div className={`absolute top-0 right-0 w-14 h-14 rounded-bl-full opacity-[7%] ${accentCorner} pointer-events-none`} />
+
+      {/* HEADER */}
+      <div className="flex items-center justify-between px-4 pt-4 pb-2">
         <div className="flex items-center gap-2">
-          <Flame className="w-5 h-5 text-orange-400" />
-          <h3 className="text-base font-semibold text-white">{name}</h3>
-          {/* Live Status Badge */}
+          <Flame className="w-4 h-4 text-white/40" />
+          <span className="text-sm font-bold text-white/80 tracking-wide">{name}</span>
           {isLive && (
-            <div className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-emerald-500/15 border border-emerald-500/30">
-              <span className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />
-              <span className="text-[10px] text-emerald-300 font-bold">LIVE</span>
-            </div>
+            <span className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-teal-500/10 border border-teal-500/25">
+              <span className="w-1 h-1 rounded-full bg-teal-400 animate-pulse" />
+              <span className="text-[9px] text-teal-300 font-bold">LIVE</span>
+            </span>
           )}
         </div>
-        
-        {/* Confidence Badge */}
-        <div className={`text-center px-2.5 py-1 rounded-lg border-2 bg-black/30 ${
-          confidence >= 70 ? 'border-emerald-500/40' :
-          confidence >= 55 ? 'border-amber-500/40' :
-          'border-rose-500/40'
-        }`}>
-          <div className="text-[10px] font-semibold text-white/60">Confidence</div>
-          <div className="text-base font-bold text-white">{confidence}%</div>
-        </div>
+        <span className="text-[10px] text-white/30 font-medium">CANDLE STRUCTURE</span>
       </div>
 
-      {/* Large Signal Display */}
-      <div className={`mb-4 p-4 rounded-xl border-2 ${getSignalBg()}`}>
-        <div className="flex items-center justify-center gap-2 mb-2">
-          {signal === 'STRONG BUY' && <TrendingUp className="w-6 h-6 text-emerald-300" />}
-          {signal === 'BUY' && <TrendingUp className="w-6 h-6 text-green-400" />}
-          {signal === 'SELL' && <TrendingDown className="w-6 h-6 text-rose-400" />}
-          {signal === 'STRONG SELL' && <TrendingDown className="w-6 h-6 text-red-400" />}
-          {signal === 'SIDEWAYS' && <Minus className="w-6 h-6 text-amber-400" />}
-          <span className={`text-2xl font-bold ${getSignalColor()}`}>
-            {signal}
-          </span>
-        </div>
-        
-        {/* Quick Explanation */}
-        <p className="text-xs text-center text-gray-300">
-          {signal === 'STRONG BUY' && 'Strong bullish candle with high volume confirmation'}
-          {signal === 'BUY' && 'Bullish candle pattern - Consider entry'}
-          {signal === 'SELL' && 'Bearish candle pattern - Consider exit'}
-          {signal === 'STRONG SELL' && 'Strong bearish candle with high volume confirmation'}
-          {signal === 'SIDEWAYS' && 'Indecisive candle - Wait for confirmation'}
-        </p>
-      </div>
-
-      {/* Confidence Meter */}
-      <div className="mb-4 p-3 bg-gray-800/30 rounded-lg border border-gray-700/40">
-        <div className="flex items-center justify-between mb-2">
-          <span className="text-xs text-gray-400 font-medium">Signal Confidence</span>
-          <span className={`text-lg font-bold ${
-            confidence >= 70 ? 'text-green-400' :
-            confidence >= 55 ? 'text-amber-400' : 'text-rose-400'
-          }`}>
-            {confidence}%
-          </span>
-        </div>
-        
-        {/* Progress Bar */}
-        <div className="relative w-full h-2 bg-gray-700/50 rounded-full overflow-hidden">
-          <div
-            className={`h-full transition-all duration-500 ${
-              confidence >= 70 ? 'bg-gradient-to-r from-green-500 to-green-400' :
-              confidence >= 55 ? 'bg-gradient-to-r from-amber-500 to-amber-400' :
-              'bg-gradient-to-r from-rose-500 to-rose-400'
-            }`}
-            style={{ width: `${confidence}%` }}
-          />
-        </div>
-        
-        {/* Labels */}
-        <div className="flex justify-between mt-1.5">
-          <span className="text-[9px] text-gray-500">Low</span>
-          <span className="text-[9px] text-gray-400 font-medium">{getConfidenceLabel()}</span>
-          <span className="text-[9px] text-gray-500">High</span>
-        </div>
-      </div>
-
-      {/* Candle Analysis - Simplified */}
-      <div className="grid grid-cols-2 gap-3 mb-3">
-        {/* Pattern Recognition */}
-        <div className={`p-2.5 rounded-lg border ${
-          data.pattern.intent === 'BULLISH' ? 'bg-green-500/10 border-green-500/30' :
-          data.pattern.intent === 'BEARISH' ? 'bg-rose-500/10 border-rose-500/30' :
-          'bg-amber-500/10 border-amber-500/30'
-        }`}>
-          <span className="text-[10px] text-gray-400 font-medium block mb-1">Pattern</span>
-          <span className={`text-sm font-bold ${
-            data.pattern.intent === 'BULLISH' ? 'text-green-400' :
-            data.pattern.intent === 'BEARISH' ? 'text-rose-400' : 'text-amber-400'
-          }`}>
-            {data.pattern.type}
-          </span>
-          <div className="text-[9px] text-gray-400 mt-1">
-            {data.pattern.confidence}% confidence
+      {/* REFLECTOR SIGNAL PANEL */}
+      <div className="mx-3 mb-3 rounded-xl bg-[#0d1117]/80 border border-white/[0.05] overflow-hidden">
+        <div className={`h-px opacity-[5%] ${accentBarBg}`} />
+        <div className="absolute top-[3.5rem] left-0 right-0 h-16 opacity-[5%] pointer-events-none"
+          style={{ background: `linear-gradient(to bottom, var(--tw-gradient-from), transparent)` }} />
+        <div className="px-4 py-3 flex items-center justify-between">
+          <div>
+            <div className={`text-xl font-black tracking-tight ${accentText}`}>{signalLabel}</div>
+            <div className="text-[10px] text-white/40 mt-0.5">
+              {isBuy ? 'Bullish candle structure' : isSell ? 'Bearish candle structure' : 'Indecisive — wait for confirm'}
+            </div>
+          </div>
+          <div className="text-right">
+            <div className="text-[10px] text-white/40 mb-0.5">CONFIDENCE</div>
+            <div className={`text-2xl font-black ${accentText}`}>{confidence}%</div>
           </div>
         </div>
-        
-        {/* Body Strength */}
-        <div className={`p-2.5 rounded-lg border ${
-          data.body_analysis.is_bullish ? 'bg-green-500/10 border-green-500/30' :
-          'bg-rose-500/10 border-rose-500/30'
-        }`}>
-          <span className="text-[10px] text-gray-400 font-medium block mb-1">Body</span>
-          <span className={`text-sm font-bold ${
-            data.body_analysis.is_bullish ? 'text-green-400' : 'text-rose-400'
-          }`}>
+        {/* Confidence bar */}
+        <div className="mx-4 mb-3 h-1 rounded-full bg-white/[0.05] overflow-hidden">
+          <div className={`h-full rounded-full transition-all duration-700 ${accentBarBg}`} style={{ width: `${confidence}%` }} />
+        </div>
+        {/* Trap badge */}
+        {isTrap && data.trap_status && (
+          <div className="mx-4 mb-3 px-3 py-1.5 rounded-lg bg-rose-500/10 border border-rose-500/25 flex items-center justify-between">
+            <span className="text-[10px] text-rose-300 font-bold">⚠ TRAP: {(data.trap_status.trap_type ?? '').replace(/_/g, ' ')}</span>
+            <span className="text-[10px] text-rose-300 font-bold">{data.trap_status.severity}%</span>
+          </div>
+        )}
+      </div>
+
+      {/* CONFERENCE GRID — 2×2 */}
+      <div className="mx-3 mb-3 grid grid-cols-2 gap-2">
+        {/* Pattern */}
+        <div className="bg-[#0d1117] border border-white/[0.06] p-2.5 rounded-lg">
+          <div className="text-[9px] text-white/35 uppercase tracking-widest mb-1">Pattern</div>
+          <div className={`text-sm font-bold truncate ${
+            data.pattern.intent === 'BULLISH' ? 'text-teal-300' :
+            data.pattern.intent === 'BEARISH' ? 'text-rose-300' : 'text-amber-300'
+          }`}>{data.pattern.type}</div>
+          <div className="text-[9px] text-white/35 mt-0.5">{data.pattern.confidence}% conf</div>
+        </div>
+        {/* Body */}
+        <div className="bg-[#0d1117] border border-white/[0.06] p-2.5 rounded-lg">
+          <div className="text-[9px] text-white/35 uppercase tracking-widest mb-1">Body</div>
+          <div className={`text-sm font-bold ${data.body_analysis.is_bullish ? 'text-teal-300' : 'text-rose-300'}`}>
             {data.body_analysis.is_bullish ? 'Bullish' : 'Bearish'}
-          </span>
-          <div className="text-[9px] text-gray-400 mt-1">
-            {data.body_analysis.body_ratio_pct.toFixed(0)}% body ratio
           </div>
+          <div className="text-[9px] text-white/35 mt-0.5">{data.body_analysis.body_ratio_pct.toFixed(0)}% ratio</div>
         </div>
-      </div>
-
-      {/* Volume & Wicks */}
-      <div className="grid grid-cols-2 gap-3">
-        {/* Volume Analysis */}
-        <div className={`p-2.5 rounded-lg border ${
-          data.volume_analysis.volume_ratio >= 1.5 ? 'bg-green-500/10 border-green-500/30' :
-          data.volume_analysis.volume_ratio >= 1.0 ? 'bg-amber-500/10 border-amber-500/30' :
-          'bg-rose-500/10 border-rose-500/30'
-        }`}>
-          <span className="text-[10px] text-gray-400 font-medium block mb-1">Volume</span>
-          <span className={`text-sm font-bold ${
-            data.volume_analysis.volume_ratio >= 1.5 ? 'text-green-400' :
-            data.volume_analysis.volume_ratio >= 1.0 ? 'text-amber-400' : 'text-rose-400'
-          }`}>
-            {data.volume_analysis.volume_ratio.toFixed(2)}x
-          </span>
-          <div className="text-[9px] text-gray-400 mt-1">
-            {formatVolume(data.current_candle.volume)}
-          </div>
+        {/* Volume */}
+        <div className="bg-[#0d1117] border border-white/[0.06] p-2.5 rounded-lg">
+          <div className="text-[9px] text-white/35 uppercase tracking-widest mb-1">Volume</div>
+          <div className={`text-sm font-bold ${
+            data.volume_analysis.volume_ratio >= 1.5 ? 'text-teal-300' :
+            data.volume_analysis.volume_ratio >= 1.0 ? 'text-amber-300' : 'text-rose-300'
+          }`}>{data.volume_analysis.volume_ratio.toFixed(2)}x</div>
+          <div className="text-[9px] text-white/35 mt-0.5">{formatVolume(data.current_candle.volume)}</div>
         </div>
-        
-        {/* Wick Dominance */}
-        <div className={`p-2.5 rounded-lg border ${
-          data.wick_analysis.dominant_wick === 'LOWER' ? 'bg-green-500/10 border-green-500/30' :
-          data.wick_analysis.dominant_wick === 'UPPER' ? 'bg-rose-500/10 border-rose-500/30' :
-          'bg-gray-700/30 border-gray-600/30'
-        }`}>
-          <span className="text-[10px] text-gray-400 font-medium block mb-1">Wick</span>
-          <span className={`text-sm font-bold ${
-            data.wick_analysis.dominant_wick === 'LOWER' ? 'text-green-400' :
-            data.wick_analysis.dominant_wick === 'UPPER' ? 'text-rose-400' : 'text-gray-400'
+        {/* Wick */}
+        <div className="bg-[#0d1117] border border-white/[0.06] p-2.5 rounded-lg">
+          <div className="text-[9px] text-white/35 uppercase tracking-widest mb-1">Wick</div>
+          <div className={`text-sm font-bold ${
+            data.wick_analysis.dominant_wick === 'LOWER' ? 'text-teal-300' :
+            data.wick_analysis.dominant_wick === 'UPPER' ? 'text-rose-300' : 'text-white/50'
           }`}>
             {data.wick_analysis.dominant_wick === 'LOWER' ? 'Lower' :
              data.wick_analysis.dominant_wick === 'UPPER' ? 'Upper' : 'Balanced'}
-          </span>
-          <div className="text-[9px] text-gray-400 mt-1">
-            {data.wick_analysis.dominant_wick === 'LOWER' ? 'Bullish rejection' :
-             data.wick_analysis.dominant_wick === 'UPPER' ? 'Bearish rejection' : 'No rejection'}
+          </div>
+          <div className="text-[9px] text-white/35 mt-0.5">
+            {data.wick_analysis.dominant_wick === 'LOWER' ? 'Bulls rejecting' :
+             data.wick_analysis.dominant_wick === 'UPPER' ? 'Bears rejecting' : 'No rejection'}
           </div>
         </div>
       </div>
 
-      {/* Volume Efficiency Interpretation */}
-      {efficiencyText && alertLevel !== 'NORMAL' && (
-        <div className={`p-2.5 rounded-lg border text-[10px] font-medium leading-relaxed ${
-          alertLevel === 'DANGER' || alertLevel === 'CRITICAL'
-            ? 'bg-rose-900/20 border-rose-500/40 text-rose-300'
-            : alertLevel === 'HIGHLIGHT'
-            ? 'bg-amber-900/20 border-amber-500/40 text-amber-300'
-            : alertLevel === 'OPPORTUNITY'
-            ? 'bg-cyan-900/20 border-cyan-500/40 text-cyan-200'
-            : alertLevel === 'WARNING'
-            ? 'bg-orange-900/20 border-orange-500/40 text-orange-300'
-            : 'bg-gray-800/30 border-gray-700/40 text-gray-300'
-        }`}>
-          {efficiencyText}
-        </div>
-      )}
+      {/* 5-MIN PREDICTION */}
+      <div className="mx-3 mb-3 rounded-xl border border-white/[0.06] bg-[#0d1117] overflow-hidden">
+        <div className="h-px bg-gradient-to-r from-transparent via-white/10 to-transparent" />
+        {(() => {
+          const isBuyCandle  = pred.label === 'STRONG UP'   || pred.label === 'LIKELY UP';
+          const isSellCandle = pred.label === 'STRONG DOWN' || pred.label === 'LIKELY DOWN';
+          const adjConf  = pred.confidence; // 35–90%, 7-factor weighted (body, vol, wick, pattern, signal, trap, zone)
+          const predDir  = isBuyCandle ? 'LONG' : isSellCandle ? 'SHORT' : 'FLAT';
+          const dirIcon  = isBuyCandle ? '▲' : isSellCandle ? '▼' : '─';
+          const dirColor  = isBuyCandle ? 'text-teal-300'  : isSellCandle ? 'text-rose-300'  : 'text-amber-300';
+          const dirBorder = isBuyCandle ? 'border-teal-500/40' : isSellCandle ? 'border-rose-500/35' : 'border-amber-500/30';
+          const dirBg     = isBuyCandle ? 'bg-teal-500/[0.07]' : isSellCandle ? 'bg-rose-500/[0.07]' : 'bg-amber-500/[0.05]';
+          const barColor  = isBuyCandle ? 'bg-teal-500'    : isSellCandle ? 'bg-rose-500'    : 'bg-amber-500';
 
-      {/* Trap Detection Panel */}
-      {isTrap && data.trap_status && (
-        <div className={`p-3 rounded-lg border-2 ${
-          data.trap_status.severity >= 75
-            ? 'bg-rose-950/40 border-rose-500/80'
-            : 'bg-orange-950/30 border-orange-500/60'
-        }`}>
-          <div className="flex items-center justify-between mb-1.5">
-            <span className={`text-xs font-bold ${
-              data.trap_status.severity >= 75 ? 'text-rose-300' : 'text-orange-300'
-            }`}>
-              🚨 TRAP: {(data.trap_status.trap_type ?? '').replace(/_/g, ' ')}
-            </span>
-            <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded border ${
-              data.trap_status.action_required === 'AVOID'
-                ? 'bg-rose-500/20 text-rose-300 border-rose-500/50'
-                : 'bg-orange-500/15 text-orange-300 border-orange-500/40'
-            }`}>
-              {data.trap_status.action_required}
-            </span>
-          </div>
-          <div className="h-1.5 bg-gray-800 rounded-full overflow-hidden">
-            <div
-              className={`h-full rounded-full transition-all duration-500 ${
-                data.trap_status.severity >= 75 ? 'bg-rose-500' : 'bg-orange-500'
-              }`}
-              style={{ width: `${data.trap_status.severity}%` }}
-            />
-          </div>
-          <div className="flex justify-between mt-1">
-            <span className="text-[9px] text-gray-500">Trap Severity</span>
-            <span suppressHydrationWarning className={`text-[9px] font-bold ${
-              data.trap_status.severity >= 75 ? 'text-rose-400' : 'text-orange-400'
-            }`}>
-              {data.trap_status.severity}%
-            </span>
-          </div>
-        </div>
-      )}
+          const isTrap = data.trap_status?.is_trap ?? false;
+          const vr = data.volume_analysis.volume_ratio;
+          const ctxNote = isTrap
+            ? '⚠ Trap detected — avoid'
+            : (pred.label === 'STRONG UP' || pred.label === 'STRONG DOWN')
+            ? 'Strong body + volume confirm'
+            : data.near_zone ? 'Near key zone — sharp move'
+            : (isBuyCandle && data.wick_analysis.lower_signal === 'BULLISH') ? 'Body + lower wick confirm'
+            : (isSellCandle && data.wick_analysis.upper_signal === 'BEARISH') ? 'Body + upper wick confirm'
+            : 'Watching candle structure…';
+
+          return (
+            <div className="px-3 pt-2.5 pb-3">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-[9px] text-white/40 font-bold uppercase tracking-widest">5-Min Prediction</span>
+                <span className={`text-[9px] font-black ${dirColor}`}>{adjConf}% Confidence</span>
+              </div>
+              <div className={`rounded-lg border ${dirBorder} ${dirBg} px-2.5 py-2 mb-2`}>
+                <div className="flex items-center justify-between gap-2 mb-1.5">
+                  <span className={`text-sm font-black ${dirColor}`}>{dirIcon} {predDir}</span>
+                  <span className="text-[9px] text-white/30 truncate">{ctxNote}</span>
+                  <span className={`text-sm font-black ${dirColor} shrink-0`}>{adjConf}%</span>
+                </div>
+                <div className="h-[2px] bg-white/[0.06] rounded-full overflow-hidden">
+                  <div suppressHydrationWarning className={`h-full rounded-full transition-all duration-700 ${barColor}`} style={{ width: `${adjConf}%` }} />
+                </div>
+              </div>
+              <div className="grid grid-cols-3 gap-1.5">
+                <div className="text-center bg-black/30 border border-white/[0.05] rounded-lg p-2">
+                  <div className="text-[8px] text-white/30 mb-0.5">Pattern</div>
+                  <div className={`text-[10px] font-bold ${dirColor}`}>{data.pattern.type || '—'}</div>
+                </div>
+                <div className="text-center bg-black/30 border border-white/[0.05] rounded-lg p-2">
+                  <div className="text-[8px] text-white/30 mb-0.5">Body</div>
+                  <div className={`text-[10px] font-bold ${data.body_analysis.body_ratio_pct >= 60 ? dirColor : 'text-amber-300'}`}>
+                    {Math.round(data.body_analysis.body_ratio_pct)}%
+                  </div>
+                </div>
+                <div className="text-center bg-black/30 border border-white/[0.05] rounded-lg p-2">
+                  <div className="text-[8px] text-white/30 mb-0.5">Volume</div>
+                  <div className={`text-[10px] font-bold ${vr >= 1.5 ? 'text-teal-300' : vr < 0.8 ? 'text-rose-300' : 'text-amber-300'}`}>
+                    {vr.toFixed(1)}x
+                  </div>
+                </div>
+              </div>
+            </div>
+          );
+        })()}
+      </div>
 
       {/* Near Zone Alert */}
       {data.near_zone && (
-        <div className="mt-3 p-2 bg-blue-500/10 border border-blue-500/30 rounded-lg">
-          <div className="flex items-center gap-1.5">
-            <span className="text-blue-400 text-xs">⚡</span>
-            <span className="text-[10px] text-blue-300 font-medium">
-              Near key support/resistance zone
-            </span>
-          </div>
+        <div className="mx-3 mb-3 px-3 py-1.5 rounded-lg bg-sky-500/10 border border-sky-500/20">
+          <span className="text-[10px] text-sky-300 font-medium">⚡ Near key support/resistance zone</span>
         </div>
       )}
+
+      {/* Bottom shimmer */}
+      <div className="absolute bottom-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-white/8 to-transparent pointer-events-none" />
     </div>
   );
 });

@@ -373,10 +373,29 @@ const SymbolCard = memo(function SymbolCard({ data, name, liveTick }: SymbolCard
           </span>
         </div>
 
-        {data.prediction?.confidence > 0 ? (
+        {(() => {
+          // Fallback: derive prediction from available signals when backend data is absent
+          const hasBackendPred = (data.prediction?.confidence ?? 0) > 0;
+          const fallbackSignal = data.signal ?? 'NEUTRAL';
+          const fallbackConf   = Math.min(90, Math.max(35, data.confidence ?? 40));
+          const fallbackReason =
+            data.positioning?.description
+              ? `${data.positioning.label}: ${data.positioning.description}`
+              : fallbackSignal !== 'NEUTRAL'
+                ? `Signal ${fallbackSignal.replace('_', ' ')} — based on OI positioning`
+                : 'Market neutral — no strong directional OI signal';
+          const pred = hasBackendPred ? data.prediction : {
+            signal:         fallbackSignal,
+            confidence:     fallbackConf,
+            reason:         fallbackReason,
+            price_velocity: 0,
+            vol_velocity:   0,
+            tick_flow_pct:  0,
+          };
+          return pred.confidence > 0 ? (
           <>
             <p className="text-[10px] text-slate-300 leading-snug mb-1.5">
-              {data.prediction.reason}
+              {pred.reason}
             </p>
 
             {/* ─ Velocity pills — 3 distinct types, each with correct format ─ */}
@@ -384,7 +403,7 @@ const SymbolCard = memo(function SymbolCard({ data, name, liveTick }: SymbolCard
 
               {/* P: ₹ pts velocity across the tick window (e.g. +8.5 pts) */}
               {(() => {
-                const pts = data.prediction.price_velocity ?? 0;
+                const pts = pred.price_velocity ?? 0;
                 const up  = pts > 0;
                 if (Math.abs(pts) < 0.01) return (
                   <span key="P" className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-slate-700/50 text-slate-400">
@@ -402,7 +421,7 @@ const SymbolCard = memo(function SymbolCard({ data, name, liveTick }: SymbolCard
 
               {/* V: % vs session EMA — use live client-side value, fall back to API */}
               {(() => {
-                const v   = Math.abs(volDevPct) >= 0.05 ? volDevPct : (data.prediction.vol_velocity ?? 0);
+                const v   = Math.abs(volDevPct) >= 0.05 ? volDevPct : (pred.vol_velocity ?? 0);
                 const up  = v > 0;
                 if (Math.abs(v) < 0.05) return (
                   <span key="V" className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-slate-700/50 text-slate-400">
@@ -420,7 +439,7 @@ const SymbolCard = memo(function SymbolCard({ data, name, liveTick }: SymbolCard
 
               {/* Flow: signed tick-directional flow −0 to +100% */}
               {(() => {
-                const f  = data.prediction.tick_flow_pct ?? 0;
+                const f  = pred.tick_flow_pct ?? 0;
                 const up = f > 0;
                 if (Math.abs(f) < 1) return (
                   <span key="F" className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-slate-700/50 text-slate-400">
@@ -440,15 +459,14 @@ const SymbolCard = memo(function SymbolCard({ data, name, liveTick }: SymbolCard
               })()}
 
               <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded ml-auto ${predSig.text} bg-slate-800/50`}>
-                {data.prediction.confidence}% conf
+                {pred.confidence}% Confidence
               </span>
             </div>
           </>
-        ) : (
-          <p className="text-[10px] text-slate-500">
-            {data.prediction?.label ?? "Collecting market data…"}
-          </p>
-        )}
+          ) : (
+          <p className="text-[10px] text-slate-500">Collecting market data…</p>
+          );
+        })()}
       </div>
 
       {/* Live indicator dot */}
