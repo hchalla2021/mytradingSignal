@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, memo } from 'react';
-import { Activity, TrendingUp, Loader2 } from 'lucide-react';
+import { Activity, TrendingUp, Loader2, RotateCcw } from 'lucide-react';
 import { useAuth } from '@/hooks/useAuth';
 
 interface HeaderProps {
@@ -12,6 +12,8 @@ interface HeaderProps {
 const Header: React.FC<HeaderProps> = memo(({ isConnected, marketStatus }) => {
   const [currentTime, setCurrentTime] = useState<string>('');
   const [currentDate, setCurrentDate] = useState<string>('');
+  const [isRestarting, setIsRestarting] = useState(false);
+  const [restartMessage, setRestartMessage] = useState<string>('');
   const { isAuthenticated, isValidating, user, login } = useAuth();
   
   // Expose login function globally for token refresh banner
@@ -46,6 +48,46 @@ const Header: React.FC<HeaderProps> = memo(({ isConnected, marketStatus }) => {
 
     return () => clearInterval(interval);
   }, []);
+
+  // 🔄 Admin Restart Handler
+  const handleRestart = async () => {
+    const adminKey = process.env.NEXT_PUBLIC_ADMIN_KEY;
+    
+    if (!adminKey) {
+      setRestartMessage('❌ Admin key not configured');
+      setTimeout(() => setRestartMessage(''), 3000);
+      return;
+    }
+
+    setIsRestarting(true);
+    setRestartMessage('🔄 Restarting server...');
+
+    try {
+      const response = await fetch('/api/admin/restart', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-admin-key': adminKey,
+        },
+      });
+
+      if (response.ok) {
+        setRestartMessage('✅ Restart initiated successfully!');
+        setTimeout(() => {
+          setRestartMessage('');
+          setIsRestarting(false);
+        }, 3000);
+      } else {
+        setRestartMessage('❌ Unauthorized - Restart failed');
+        setIsRestarting(false);
+        setTimeout(() => setRestartMessage(''), 3000);
+      }
+    } catch (error) {
+      setRestartMessage('❌ Error: Could not reach server');
+      setIsRestarting(false);
+      setTimeout(() => setRestartMessage(''), 3000);
+    }
+  };
 
   return (
     <header className="bg-gradient-to-r from-dark-card via-dark-card to-dark-surface border-b-2 border-sky-500/20 sticky top-0 z-50 shadow-xl shadow-black/40">
@@ -109,6 +151,32 @@ const Header: React.FC<HeaderProps> = memo(({ isConnected, marketStatus }) => {
                 <span className="text-[10px] font-semibold text-green-300 truncate max-w-[100px]">
                   {user.userName || user.userId}
                 </span>
+              </div>
+            )}
+
+            {/* 🔴 Admin Restart Button - Only on DigitalOcean (Production) */}
+            {isAuthenticated && user && process.env.NEXT_PUBLIC_ENVIRONMENT === 'production' && (
+              <button
+                onClick={handleRestart}
+                disabled={isRestarting}
+                title="Admin: Restart Server (Frontend + Backend)"
+                className="flex items-center gap-1.5 px-2.5 py-1.5 sm:px-3 sm:py-2 rounded-lg border-2 bg-gradient-to-r from-red-500/15 to-rose-500/15 border-red-400/40 hover:border-red-400/60 hover:bg-red-500/25 disabled:opacity-50 disabled:cursor-not-allowed transition-all active:scale-95 shadow-lg shadow-red-500/5"
+              >
+                {isRestarting ? (
+                  <Loader2 className="w-3 h-3 sm:w-4 sm:h-4 animate-spin text-red-400" />
+                ) : (
+                  <RotateCcw className="w-3 h-3 sm:w-4 sm:h-4 text-red-400" />
+                )}
+                <span className="text-[9px] sm:text-xs font-bold tracking-wider text-red-300 hidden sm:inline">
+                  {isRestarting ? 'RESTARTING...' : 'RESTART'}
+                </span>
+              </button>
+            )}
+
+            {/* Restart Status Message */}
+            {restartMessage && (
+              <div className="fixed top-20 right-4 px-4 py-2 rounded-lg bg-dark-surface border-2 border-white/10 shadow-xl">
+                <span className="text-xs font-semibold text-white whitespace-nowrap">{restartMessage}</span>
               </div>
             )}
             
