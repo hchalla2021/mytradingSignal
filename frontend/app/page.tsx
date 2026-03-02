@@ -162,59 +162,22 @@ export default function Home() {
     pollingInterval: 2000 // Poll every 2 seconds for fresh data
   });
 
-  // ✅ INSTANT: Combine API analysis with test data fallback (comes via REST API + WebSocket)
+  // ✅ INSTANT: Combine API analysis with WebSocket data (live data only — no fabricated fallbacks)
   const analyses = useMemo(() => {
-    // Use API data if available, otherwise use test data
-    if (apiAnalyses) {
-      console.log('✅ [PAGE] Using API analysis data');
-      return apiAnalyses;
-    }
-    
-    // Fallback to test data if API hasn't loaded yet
-    const niftyAnalysis = marketData.NIFTY?.analysis;
-    const bankniftyAnalysis = marketData.BANKNIFTY?.analysis;
-    const sensexAnalysis = marketData.SENSEX?.analysis;
-    
-    // Create test/fallback analysis data
-    const createTestAnalysis = (symbol: string, price: number) => ({
-      signal: "BUY_SIGNAL",
-      confidence: 70,
-      indicators: {
-        support: price * 0.94,
-        resistance: price * 1.12,
-        vwap: price * 0.987,
-        ema_20: price,
-        ema_50: price * 0.96,
-        ema_200: price * 0.94,
-        trend: "UPTREND",
-        rsi: 62,
-        ema_alignment: "BULLISH",
-        volume_strength: "STRONG_VOLUME",
-        volume_ratio: 1.2,
-        // 🔥 TREND BASE: Higher-Low Structure Analysis
-        trend_structure: "HIGHER_HIGHS_LOWS",  // Shows uptrend structure
-        market_structure: "UPTREND",
-        swing_pattern: "HIGHER_HIGH_HIGHER_LOW",
-        structure_confidence: 75
-      }
-    });
-    
-    // Provide test data if WebSocket analysis is missing
-    const finalNifty = niftyAnalysis || createTestAnalysis('NIFTY', marketData.NIFTY?.price || 25550);
-    const finalBanknifty = bankniftyAnalysis || createTestAnalysis('BANKNIFTY', marketData.BANKNIFTY?.price || 61200);
-    const finalSensex = sensexAnalysis || createTestAnalysis('SENSEX', marketData.SENSEX?.price || 82900);
-    
-    // Only return if at least one analysis exists
-    if (!finalNifty && !finalBanknifty && !finalSensex) {
-      return null;
-    }
-    
+    if (apiAnalyses) return apiAnalyses;
+
+    const niftyAnalysis = marketData.NIFTY?.analysis ?? null;
+    const bankniftyAnalysis = marketData.BANKNIFTY?.analysis ?? null;
+    const sensexAnalysis = marketData.SENSEX?.analysis ?? null;
+
+    if (!niftyAnalysis && !bankniftyAnalysis && !sensexAnalysis) return null;
+
     return {
-      NIFTY: finalNifty,
-      BANKNIFTY: finalBanknifty, 
-      SENSEX: finalSensex,
+      NIFTY: niftyAnalysis,
+      BANKNIFTY: bankniftyAnalysis,
+      SENSEX: sensexAnalysis,
     };
-  }, [apiAnalyses, marketData.NIFTY?.analysis, marketData.BANKNIFTY?.analysis, marketData.SENSEX?.analysis, marketData.NIFTY?.price, marketData.BANKNIFTY?.price, marketData.SENSEX?.price]);
+  }, [apiAnalyses, marketData.NIFTY?.analysis, marketData.BANKNIFTY?.analysis, marketData.SENSEX?.analysis]);
 
   // Calculate market confidence on client-side to prevent hydration errors
   useEffect(() => {
@@ -987,15 +950,11 @@ export default function Home() {
 
                   {/* ── 17 Signals Confidence ── */}
                   <div className="rounded-xl border border-white/[0.06] bg-white/[0.025] px-3 py-2.5">
-                    <div className="flex items-center justify-between mb-1.5">
-                      <span className="text-[8px] text-white/20 font-bold uppercase tracking-widest sm:hidden">17 Signals</span>
-                      <span suppressHydrationWarning className={`text-[9px] font-black ml-auto ${confTxt}`}>{s.totalConfidence}% Confidence</span>
-                    </div>
                     <div className="h-[7px] rounded-full overflow-hidden flex bg-white/[0.06] mb-1.5">
                       <div suppressHydrationWarning className="bg-gradient-to-r from-teal-700 to-teal-400 transition-all duration-700 ease-out" style={{ width: `${s.buyPercent}%` }} />
                       <div suppressHydrationWarning className="bg-gradient-to-r from-rose-400 to-rose-700 flex-1" />
                     </div>
-                    <div className="flex justify-between text-[8px] font-bold">
+                    <div className="flex justify-between text-[11px] font-bold">
                       <span suppressHydrationWarning className="text-teal-400">▲ {s.buyPercent}% BUY</span>
                       <span suppressHydrationWarning className="text-rose-400">SELL {s.sellPercent}% ▼</span>
                     </div>
@@ -1004,11 +963,10 @@ export default function Home() {
                   {/* ── 5-Min Prediction ── */}
                   <div className={`rounded-xl border px-3 py-2.5 ${p5Border}`}>
                     <div className="flex items-center justify-between mb-1.5">
-                      <span className="text-[8px] text-white/20 font-bold uppercase tracking-widest sm:hidden">5-Min Pred</span>
+                      <span className="text-[9px] text-white/30 font-bold uppercase tracking-widest sm:hidden">5-Min Pred</span>
                       <div suppressHydrationWarning className={`flex items-center gap-1 ml-auto ${p5Txt}`}>
-                        <span className="text-[10px] font-black leading-none">{p5Icon}</span>
-                        <span className={`font-black tracking-wide ${s.pred5mConf >= 70 ? 'text-[9px]' : 'text-[8px]'}`}>{p5Strength}</span>
-                        <span className="text-[8px] opacity-50">• {s.pred5mConf}% Confidence</span>
+                        <span className="text-[11px] font-black leading-none">{p5Icon}</span>
+                        <span className="text-[10px] font-black tracking-wide">{p5Strength}</span>
                       </div>
                     </div>
                     <div className="h-[7px] rounded-full overflow-hidden flex bg-white/[0.06] mb-1.5">
@@ -1017,7 +975,7 @@ export default function Home() {
                         style={{ width: `${p5BuyBar}%` }} />
                       <div suppressHydrationWarning className={`flex-1 ${p5Bull ? 'bg-rose-900/40' : p5Bear ? 'bg-teal-900/40' : 'bg-white/[0.03]'}`} />
                     </div>
-                    <div className="flex justify-between text-[8px] font-bold">
+                    <div className="flex justify-between text-[11px] font-bold">
                       <span suppressHydrationWarning className="text-teal-400">▲ {p5BuyBar}% UP</span>
                       <span suppressHydrationWarning className="text-rose-400">SELL {p5SellBar}% ▼</span>
                     </div>
@@ -1026,6 +984,8 @@ export default function Home() {
                 </div>
               );
             })}
+
+
           </div>
         </div>
       </div>
@@ -1450,16 +1410,20 @@ export default function Home() {
                       const cprNarrow      = cprClass === 'NARROW';
                       const cprWide        = cprClass === 'WIDE';
 
+                      // Proportional multiplier chain — no flat ±cliffs
                       let adjConf = camarillaConfidence;
-                      if (zoneConfirms)   adjConf += 6;
-                      if (gateBreak)      adjConf += 5;
-                      if (trendDayAligns) adjConf += 4;
-                      if (cprNarrow)      adjConf += 3;  // tight CPR → cleaner breakout
-                      if (zoneConflicts)  adjConf -= 10;
-                      if (trendDayOpp)    adjConf -= 6;
-                      if (cprWide)        adjConf -= 4;  // wide CPR → choppy, less reliable
-                      // Market-status penalty
-                      if (marketStatus !== 'LIVE') adjConf = Math.max(30, adjConf - 10);
+                      if (zoneConflicts) {
+                        adjConf = Math.round(adjConf * 0.82); // zone vs signal mismatch — strongest penalty
+                      } else {
+                        const cnt = [zoneConfirms, gateBreak, trendDayAligns, cprNarrow].filter(Boolean).length;
+                        if (cnt >= 3)      adjConf = Math.round(adjConf * 1.10);
+                        else if (cnt === 2) adjConf = Math.round(adjConf * 1.06);
+                        else if (cnt === 1) adjConf = Math.round(adjConf * 1.03);
+                      }
+                      if (trendDayOpp) adjConf = Math.round(adjConf * 0.90); // opposing trend day
+                      if (cprWide)     adjConf = Math.round(adjConf * 0.94); // wide CPR = choppy
+                      // Market-status: proportional (non-LIVE dampens the forecast)
+                      if (marketStatus !== 'LIVE') adjConf = Math.round(Math.max(30, adjConf * 0.88));
                       adjConf = Math.round(Math.min(95, Math.max(30, adjConf)));
 
                       // Direction
@@ -1600,8 +1564,33 @@ export default function Home() {
                 confidence = 50;
               }
               
-              const isBuyRsi = uiSignal === 'BUY' || uiSignal === 'STRONG BUY';
+              const isBuyRsi  = uiSignal === 'BUY' || uiSignal === 'STRONG BUY';
               const isSellRsi = uiSignal === 'SELL' || uiSignal === 'STRONG SELL';
+
+              // ── Continuous confidence: RSI deviation from threshold ──────────────
+              // Replaces the hard-coded 50/75/85 tiers.
+              // BUY zone: deviation = RSI − 60 (0 at boundary → +to-right grows)
+              // SELL zone: deviation = 40 − RSI (0 at boundary → grows deeper)
+              // dev=0 (RSI=60/40)  → 52%  |  dev=5 (65/35) → 62%
+              // dev=10 (70/30)     → 71%  |  dev=15 (75/25) → 81%
+              // dev=20 (80/20)     → 90%  (cap)
+              {
+                const _rsiDev = isBuyRsi
+                  ? Math.max(0, rsi - 60)
+                  : isSellRsi ? Math.max(0, 40 - rsi) : 0;
+                confidence = (isBuyRsi || isSellRsi)
+                  ? Math.min(90, Math.round(52 + _rsiDev * 1.9))
+                  : 33;  // NEUTRAL: low base
+
+                // Momentum multiplier — direction-aware, proportional
+                const _momOpp  = (isBuyRsi && momentum < 40) || (isSellRsi && momentum > 60);
+                const _momConf = (isBuyRsi && momentum > 60) || (isSellRsi && momentum < 40);
+                confidence = Math.round(confidence * (_momOpp ? 0.91 : _momConf ? 1.07 : 1.0));
+
+                // Volume multiplier — proportional, no flat cliffs
+                confidence = Math.round(confidence * (volumeRatio >= 1.3 ? 1.05 : volumeRatio < 0.85 ? 0.94 : 1.0));
+                confidence = Math.min(95, Math.max(30, confidence));
+              }
               const rsiAccentBorder = isBuyRsi ? 'border-teal-500/30' : isSellRsi ? 'border-rose-500/25' : 'border-amber-500/25';
               const rsiAccentText = isBuyRsi ? 'text-teal-300' : isSellRsi ? 'text-rose-300' : 'text-amber-300';
               const rsiAccentBar = isBuyRsi ? 'bg-teal-500' : isSellRsi ? 'bg-rose-500' : 'bg-amber-500';
@@ -1689,16 +1678,27 @@ export default function Home() {
                       const volWeak    = volumeRatio < 0.85;
                       const nearBoundary = (isBuyRsi && rsi < 55) || (isSellRsi && rsi > 45);
 
+                      // Proportional multiplier chain — no flat ± cliffs
                       let adjConf = confidence;
-                      if (rsiSigUp || rsiSigDown)  adjConf += 5;   // strongest signal category
-                      if (rsiExtreme)              adjConf += 5;   // RSI firmly in zone
-                      if (rsiVeryExt)              adjConf += 3;   // extreme zone bonus
-                      if (momConfirms)             adjConf += 4;   // momentum aligns
-                      if (volStrong)               adjConf += 4;   // volume confirms move
-                      if (nearBoundary)            adjConf -= 8;   // weak: RSI barely in zone
-                      if (momOpposes)              adjConf -= 7;   // momentum contradicts
-                      if (volWeak)                 adjConf -= 5;   // volume doesn't support
-                      if (marketStatus !== 'LIVE') adjConf  = Math.max(30, adjConf - 10);
+                      if (momOpposes) {
+                        // Momentum divergence: highest risk signal — evaluated first
+                        adjConf = Math.round(adjConf * 0.88);
+                      } else {
+                        const cnt = [
+                          rsiExtreme || rsiVeryExt,  // RSI firmly in zone
+                          momConfirms,               // momentum confirms
+                          volStrong,                 // volume expanding
+                        ].filter(Boolean).length;
+                        if (cnt >= 3)      adjConf = Math.round(adjConf * 1.08);
+                        else if (cnt === 2) adjConf = Math.round(adjConf * 1.05);
+                        else if (cnt === 1) adjConf = Math.round(adjConf * 1.03);
+                      }
+                      // Near-boundary risk: RSI barely crossed 60/40 — mean-reversion likely
+                      if (nearBoundary) adjConf = Math.round(adjConf * 0.92);
+                      // Volume weakness: independent of direction
+                      if (volWeak)      adjConf = Math.round(adjConf * 0.94);
+                      // Non-LIVE market: proportional dampening
+                      if (marketStatus !== 'LIVE') adjConf = Math.round(Math.max(30, adjConf * 0.88));
                       adjConf = Math.round(Math.min(95, Math.max(30, adjConf)));
 
                       // Direction
@@ -1889,18 +1889,22 @@ export default function Home() {
                       const distStrong  = distPct > 0.5;   // well clear of SAR
                       const distClose   = distPct < 0.2 && sarHasPosition; // near SAR = fragile
 
-                      // Signal-strength tier from backend
+                      // Signal-strength tier from backend (kept for context note only)
                       const sigStrong   = sarConfidence >= 75;
-                      const sigWeak     = sarConfidence < 45;
 
                       let adjConf = sarConfidence;
-                      if (sarHasPosition)  adjConf += 3;   // confirmed position
-                      if (distStrong)      adjConf += 6;   // price well away from SAR
-                      if (sigStrong)       adjConf += 4;   // high-confidence signal tier
-                      if (distClose)       adjConf -= 8;   // SAR about to flip
-                      if (sarFlip)         adjConf -= 7;   // recent flip = unsettled trend
-                      if (sigWeak)         adjConf -= 5;   // weak signal
-                      if (marketStatus !== 'LIVE') adjConf = Math.max(30, adjConf - 10);
+                      // Highest-risk conditions evaluated first (mutually exclusive)
+                      if (sarFlip) {
+                        adjConf = Math.round(adjConf * 0.85); // just reversed — trend not yet confirmed
+                      } else if (distClose) {
+                        adjConf = Math.round(adjConf * 0.89); // near SAR — reversal risk
+                      } else {
+                        // Count independent confirmations: distance clear + has established position
+                        const confCnt = [distStrong, sarHasPosition].filter(Boolean).length;
+                        if (confCnt >= 2)       adjConf = Math.round(adjConf * 1.08);
+                        else if (confCnt === 1) adjConf = Math.round(adjConf * 1.04);
+                      }
+                      if (marketStatus !== 'LIVE') adjConf = Math.round(Math.max(30, adjConf * 0.88));
                       adjConf = Math.round(Math.min(95, Math.max(30, adjConf)));
 
                       // Direction
@@ -2080,17 +2084,20 @@ export default function Home() {
                         const distStrong    = stDistancePct > 0.5;
                         const distVStrong   = stDistancePct > 1.0;
                         const distWeak      = stDistancePct < 0.2 && stHasData;
-                        const sigStrong     = stConfidence >= 75;
-                        const sigWeak       = stConfidence < 45;
+                        const sigStrong     = stConfidence >= 75; // used for context note only
 
                         let adjConf = stHasData ? stConfidence : 30;
-                        if (distStrong)   adjConf += 6;   // well clear of ST
-                        if (distVStrong)  adjConf += 3;   // bonus for very strong gap
-                        if (sigStrong)    adjConf += 4;   // high confidence tier
-                        if (stIsVeryClose) adjConf -= 10; // at ST level — flip risk
-                        if (distWeak)    adjConf -= 6;    // near ST line
-                        if (sigWeak)     adjConf -= 4;    // weak signal
-                        if (marketStatus !== 'LIVE') adjConf = Math.max(30, adjConf - 10);
+                        // Highest-risk condition evaluated first (mutually exclusive chain)
+                        if (stIsVeryClose) {
+                          adjConf = Math.round(adjConf * 0.83); // at ST level — flip imminent
+                        } else if (distWeak) {
+                          adjConf = Math.round(adjConf * 0.90); // near ST line — reversal risk
+                        } else if (distVStrong) {
+                          adjConf = Math.round(adjConf * 1.08); // very wide gap — strong trend
+                        } else if (distStrong) {
+                          adjConf = Math.round(adjConf * 1.05); // well clear of ST line
+                        }
+                        if (marketStatus !== 'LIVE') adjConf = Math.round(Math.max(30, adjConf * 0.88));
                         adjConf = Math.round(Math.min(95, Math.max(30, adjConf)));
 
                         // Direction
@@ -2308,11 +2315,20 @@ export default function Home() {
                       const poorRR      = orbRRR > 0 && orbRRR < 1;
 
                       let adjConf = orbConfidence;
-                      if (tightRange) adjConf += 4;  // tight ORB confirms the level
-                      if (goodRR)     adjConf += 3;  // good R/R supports holding
-                      if (wideRange)  adjConf -= 5;  // wide range = noise
-                      if (poorRR)     adjConf -= 5;  // poor R/R = don't chase
-                      if (marketStatus !== 'LIVE') adjConf = Math.max(30, adjConf - 10);
+                      // Highest-risk conditions evaluated first (mutually exclusive chain)
+                      if (poorRR && wideRange) {
+                        adjConf = Math.round(adjConf * 0.80); // both bad — avoid
+                      } else if (wideRange) {
+                        adjConf = Math.round(adjConf * 0.87); // messy breakout level
+                      } else if (poorRR) {
+                        adjConf = Math.round(adjConf * 0.88); // poor R/R — don't chase
+                      } else {
+                        // Count independent confirmations
+                        const confCnt = [tightRange, goodRR].filter(Boolean).length;
+                        if (confCnt >= 2)       adjConf = Math.round(adjConf * 1.08);
+                        else if (confCnt === 1) adjConf = Math.round(adjConf * 1.04);
+                      }
+                      if (marketStatus !== 'LIVE') adjConf = Math.round(Math.max(30, adjConf * 0.88));
                       adjConf = Math.round(Math.min(95, Math.max(30, adjConf)));
 
                       // Direction

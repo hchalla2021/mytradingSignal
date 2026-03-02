@@ -65,7 +65,7 @@ function getOIMomentumWebSocket(): WebSocket {
     return global_ws;
   }
 
-  const wsUrl = `${process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000/ws'}/market`;
+  const wsUrl = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000/ws/market';
   global_ws = new WebSocket(wsUrl);
 
   global_ws.onmessage = (event) => {
@@ -153,6 +153,7 @@ export function useOIMomentumLive(symbol: string) {
         
         if (result && result.final_signal) {
           setData(result);
+          setIsLive(true);
           setError(null);
           
           // Update cache
@@ -235,7 +236,7 @@ export function useOIMomentumLive(symbol: string) {
               return prevData;
             });
             
-            setIsLive(false); // Polling, not live
+            setIsLive(true); // Polling is live — data is fresh from backend
             setError(null);
             
             // Update cache
@@ -251,8 +252,8 @@ export function useOIMomentumLive(symbol: string) {
       }
     };
 
-    // Poll every 5 seconds for fresh data
-    const interval = setInterval(poll, 5000);
+    // Poll every 3 seconds for fresh data
+    const interval = setInterval(poll, 3000);
 
     return () => {
       if (interval) {

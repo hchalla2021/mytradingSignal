@@ -36,9 +36,9 @@ class FeedWatchdog:
     
     def __init__(
         self,
-        stale_threshold_seconds: int = 10,
+        stale_threshold_seconds: int = 30,
         reconnect_delay_seconds: int = 5,
-        max_reconnect_attempts: int = 5,
+        max_reconnect_attempts: int = 50,
     ):
         self._state: FeedState = FeedState.DISCONNECTED
         self._last_tick_time: Optional[float] = None
@@ -330,9 +330,9 @@ class FeedWatchdog:
 
 # Singleton instance
 feed_watchdog = FeedWatchdog(
-    stale_threshold_seconds=10,
+    stale_threshold_seconds=30,
     reconnect_delay_seconds=5,
-    max_reconnect_attempts=10,
+    max_reconnect_attempts=50,
 )
 
 

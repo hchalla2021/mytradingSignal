@@ -99,7 +99,7 @@ const Pred5mBadge = memo(({ pred, conf }: { pred: Prediction5m; conf?: number })
         <span>{s.label.toUpperCase()}</span>
       </span>
       {conf !== undefined && (
-        <span className={`text-[8px] font-bold tabular-nums ${s.dirColor}`}>{conf}% conf</span>
+        <span className={`text-[8px] font-bold tabular-nums ${s.dirColor}`}>{conf}% Confidence</span>
       )}
     </div>
   );
@@ -436,7 +436,7 @@ const IndexCompassCard = memo(({ data }: IndexCardProps) => {
       <div className="flex items-center justify-between px-3 py-2
                       rounded-xl bg-slate-900/50 border border-slate-700/40">
         <div>
-          <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest">5-Min Forecast</p>
+          <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest">5-Min Prediction</p>
           <p className="text-[8px] text-slate-700 mt-0.5">EMA · RSI · VWAP · Prem</p>
         </div>
         <div className="flex items-center gap-3">

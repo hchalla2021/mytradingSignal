@@ -699,6 +699,21 @@ class MarketFeedService:
                     
                     # Cache the data
                     await self.cache.set_market_data(symbol_name, data)
+
+                    # 🕯️ Build 5-minute OHLCV candles even in REST fallback mode
+                    # Without this, analysis_candles:{symbol} stays empty and OI Momentum
+                    # always returns NO_SIGNAL while the WebSocket is down.
+                    try:
+                        from datetime import datetime as _dt_rest
+                        await self._update_5min_candle(
+                            symbol=symbol_name,
+                            price=data["price"],
+                            volume=int(data.get("volume") or 0),
+                            oi=int(data.get("oi") or 0),
+                            ts=_dt_rest.now(IST),
+                        )
+                    except Exception:
+                        pass  # candle errors must never interrupt the REST polling loop
                     
                     # 📡 BROADCAST when in REST fallback mode
                     if self._using_rest_fallback:
@@ -1126,7 +1141,11 @@ class MarketFeedService:
                         success = await self._fetch_and_cache_last_data()
                         
                         if success:
-                            # 🔥 FIX: Send WebSocket status message to frontend
+                            # 🔥 FIX: Notify watchdog that data is flowing via REST
+                            # This prevents a false "FEED_DISCONNECTED" banner in the UI
+                            feed_watchdog.on_tick()
+                            
+                            # Send WebSocket status message to frontend
                             # This tells frontend we're in REST mode but still getting data
                             await self.ws_manager.broadcast({
                                 "type": "status",

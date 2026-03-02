@@ -136,8 +136,10 @@ class CandleBackupService:
             candle_key = f"analysis_candles:{symbol}"
             await cache.delete(candle_key)
             
-            # Restore candles to Redis (in reverse order - newest first)
-            for candle in reversed(candles):
+            # Restore candles to Redis (oldest-first iteration → newest ends at head after all lpushes)
+            # Backup stores candles oldest-first. By pushing oldest first with lpush, each newer push
+            # goes to the head, so the final list has newest at index 0 (lpush convention).
+            for candle in candles:
                 candle_json = json.dumps(candle)
                 await cache.lpush(candle_key, candle_json)
             
@@ -145,7 +147,8 @@ class CandleBackupService:
             await cache.ltrim(candle_key, 0, 99)
             
             # Verify restoration
-            restored = await cache.llen(candle_key)
+            restored_candles = await cache.lrange(candle_key, 0, 199)
+            restored = len(restored_candles)
             
             print(f"   ✅ Restored {restored} candles from backup")
             print(f"      Backup date: {backup_data.get('backup_date', 'N/A')}")

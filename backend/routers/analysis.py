@@ -226,7 +226,16 @@ async def analysis_health():
 # Cache for OI Momentum (avoid excessive API calls)
 _oi_momentum_cache: dict = {}
 _oi_momentum_symbol_cache: dict = {}   # per-symbol cache for individual endpoint
-_OI_CACHE_TTL = 60  # 1 minute cache
+_OI_CACHE_TTL_LIVE = 5   # 5 seconds during live market hours
+_OI_CACHE_TTL = 60        # 1 minute outside market hours
+
+def _oi_cache_ttl() -> int:
+    """Return 5s during LIVE trading hours, 60s otherwise."""
+    try:
+        from services.market_feed import get_market_status
+        return _OI_CACHE_TTL_LIVE if get_market_status() == "LIVE" else _OI_CACHE_TTL
+    except Exception:
+        return _OI_CACHE_TTL
 
 
 async def _calc_oi_momentum(symbol: str) -> dict:
@@ -242,7 +251,7 @@ async def _calc_oi_momentum(symbol: str) -> dict:
     candle_key = f"analysis_candles:{symbol}"
     candles_json = await cache.lrange(candle_key, 0, 199)
 
-    if not candles_json or len(candles_json) < 5:
+    if not candles_json or len(candles_json) < oi_momentum_service.min_candles_required:
         return {
             "signal_5m": "NO_SIGNAL",
             "signal_15m": "NO_SIGNAL",
@@ -310,7 +319,7 @@ async def get_oi_momentum_all():
 
     now = datetime.now()
     if "data" in _oi_momentum_cache:
-        if (now - _oi_momentum_cache["timestamp"]).total_seconds() < _OI_CACHE_TTL:
+        if (now - _oi_momentum_cache["timestamp"]).total_seconds() < _oi_cache_ttl():
             return _oi_momentum_cache["data"]
 
     try:
@@ -354,7 +363,7 @@ async def get_oi_momentum_symbol(symbol: str):
     global _oi_momentum_symbol_cache
     now = datetime.now()
     cached = _oi_momentum_symbol_cache.get(symbol)
-    if cached and (now - cached["timestamp"]).total_seconds() < _OI_CACHE_TTL:
+    if cached and (now - cached["timestamp"]).total_seconds() < _oi_cache_ttl():
         return cached["data"]
 
     try:
@@ -782,8 +791,16 @@ async def get_candle_quality(symbol: str):
         low_price = float(market_data.get('low', current_price))
         
         # Get analysis data for momentum and volume baseline
-        analysis_key = f"analysis:{symbol}"
+        # ws_analysis:{symbol} is written by the live WebSocket feed on every tick
+        analysis_key = f"ws_analysis:{symbol}"
         cached_analysis = await cache.get(analysis_key)
+        # Handle both JSON-string and dict return types from cache
+        if cached_analysis and isinstance(cached_analysis, str):
+            try:
+                import json as _json
+                cached_analysis = _json.loads(cached_analysis)
+            except Exception:
+                cached_analysis = None
         
         # Default values
         candle_quality_signal = "NEUTRAL"
@@ -835,33 +852,65 @@ async def get_candle_quality(symbol: str):
         # 🔥 CONVICTION MOVE: Strong body (>50%) + volume above threshold
         conviction_move = body_percent > 50 and volume_above_threshold
         
-        # 🔥 SIGNAL LOGIC - Based on real candle anatomy
+        # 🔥 SIGNAL LOGIC - Based on real candle anatomy (unified direction-aware confidence)
+        # ─────────────────────────────────────────────────────────────────────────
+        # Unified continuous confidence formula — no tier jumps.
+        # Two independent axes:
+        #   1. body_percent (structural quality): piecewise linear 35→88%
+        #   2. direction-aware momentum deviation: ±10pp continuous
+        # Boolean confirmations applied as proportional multipliers (never flat adds).
+        # ─────────────────────────────────────────────────────────────────────────
+
+        # Direction-aware momentum deviation (-1.0 to +1.0)
+        if candle_direction == "UP":
+            mom_dev = (momentum_score - 50) / 50.0    # +1 when momentum fully bullish
+        elif candle_direction == "DOWN":
+            mom_dev = (50 - momentum_score) / 50.0    # +1 when momentum fully bearish
+        else:
+            mom_dev = abs(momentum_score - 50) / 50.0  # decisive extremes for DOJI
+
+        # Base confidence from body_percent (0–100):
+        #   bp  0–30  →  35–52%  (weak candle, high wick content)
+        #   bp 30–55  →  52–65%  (moderate body, mixed structure)
+        #   bp 55–100 →  65–88%  (strong body, clear directional impulse)
+        bp = body_percent
+        if bp >= 55:
+            base_conf = 65.0 + (bp - 55.0) * (23.0 / 45.0)
+        elif bp >= 30:
+            base_conf = 52.0 + (bp - 30.0) * (13.0 / 25.0)
+        else:
+            base_conf = max(35.0, 35.0 + bp * (17.0 / 30.0))
+
+        # Momentum adjustment: ±10pp (direction-aware, continuous)
+        base_conf += mom_dev * 10.0
+
+        # Volume confirmation: proportional +8%
+        if volume_above_threshold:
+            base_conf *= 1.08
+
+        # Conviction bonus applied proportionally on top of volume
         if conviction_move:
-            if candle_direction == "UP":
-                candle_quality_signal = "STRONG_BUY"
-                candle_quality_confidence = min(0.95, 0.70 + (body_percent / 100) * 0.25)  # Max 95%
-            else:
-                candle_quality_signal = "STRONG_SELL"
-                candle_quality_confidence = min(0.95, 0.70 + (body_percent / 100) * 0.25)
+            base_conf *= 1.05
+
+        # Fake spike penalty: proportional -20%
+        if fake_spike_detected:
+            base_conf *= 0.80
+
+        candle_quality_confidence = min(0.95, max(0.30, round(base_conf) / 100.0))
+
+        # Signal classification (unchanged tier conditions — only confidence formula changed)
+        if conviction_move:
+            candle_quality_signal = "STRONG_BUY" if candle_direction == "UP" else "STRONG_SELL"
         elif fake_spike_detected:
-            candle_quality_signal = "WAIT"  # Don't trade fake spikes
-            candle_quality_confidence = 0.4
+            candle_quality_signal = "WAIT"
         elif body_percent > 50 and candle_direction == "UP":
             candle_quality_signal = "BUY"
-            candle_quality_confidence = 0.60 + (body_percent - 50) / 100 * 0.25
         elif body_percent > 50 and candle_direction == "DOWN":
             candle_quality_signal = "SELL"
-            candle_quality_confidence = 0.60 + (body_percent - 50) / 100 * 0.25
         elif volume_above_threshold:
-            if candle_direction == "UP":
-                candle_quality_signal = "BUY"
-                candle_quality_confidence = 0.50
-            else:
-                candle_quality_signal = "SELL"
-                candle_quality_confidence = 0.50
+            candle_quality_signal = "BUY" if candle_direction == "UP" else "SELL"
         else:
             candle_quality_signal = "NEUTRAL"
-            candle_quality_confidence = 0.30
         
         print(f"🕯️ Candle Quality [{symbol}]:")
         print(f"   Price: {current_price} | Open: {open_price} | High: {high_price} | Low: {low_price}")

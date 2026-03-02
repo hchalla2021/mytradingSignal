@@ -11,7 +11,7 @@ export default function GlobalError({
 }) {
   // Auto-reset on error without showing error UI
   useEffect(() => {
-    console.log('Error caught:', error.message);
+    console.error('Global error caught:', error.message);
     // Attempt to recover automatically
     const timer = setTimeout(() => {
       reset();

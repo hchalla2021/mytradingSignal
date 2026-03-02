@@ -162,6 +162,14 @@ const createDefaultOutlook = (symbol: string): SymbolOutlook => ({
   },
   riskLevel: 'MEDIUM',
   breakdownRiskPercent: 50,
+  pivotCriticalAlert: {
+    isCrossing: false,
+    isTouchingPivot: false,
+    touchCount: 0,
+    crossingType: 'NONE' as const,
+    nearestLevel: '',
+    sharpHighlight: false,
+  },
   timestamp: new Date().toISOString(),
 });
 
@@ -313,7 +321,6 @@ export const useOverallMarketOutlook = () => {
         pivotEnhancedCandleConfidence = Math.min(100, candleConfidence + 15);
       }
       
-      console.log(`[OUTLOOK-PIVOT] ${pivotIndicators.symbol}: Price=${price}, Bias=${bias}, ST10=${st10.signal}`);
     }
     
     // Use enhanced signals with pivot integration
@@ -565,7 +572,6 @@ export const useOverallMarketOutlook = () => {
         pivotConfidence = Math.max(40, pivotConfidence - 20);
       }
       
-      console.log(`[OUTLOOK-PIVOT-SIGNAL] ${pivotIndicators.symbol}: ST=${stSignal} Trend=${stTrend} Signal=${pivotSignal} Conf=${pivotConfidence}`);
     }
 
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -698,16 +704,6 @@ export const useOverallMarketOutlook = () => {
       oiMomentumConfidence = oiMomentum.confidence || 0;
     }
 
-    console.log('[OUTLOOK-CALC] NEW Component Signals:', {
-      orb: orbSignal + ' (' + orbConfidence + '%)',
-      supertrend: supertrendSignal + ' (' + supertrendConfidence + '%)',
-      sar: sarSignal + ' (' + sarConfidence + '%)',
-      camarilla: camarillaSignal + ' (' + camarillaConfidence + '%)',
-      rsi60_40: rsi60_40Signal + ' (' + rsi60_40Confidence + '%)',
-      smartMoney: smartMoneySignal + ' (' + smartMoneyConfidence + '%)',
-      oiMomentum: oiMomentumSignal + ' (' + oiMomentumConfidence + '%)',
-    });
-
     // Convert signals to confidence-weighted scores (-100 to +100)
     const techScore = signalToScore(finalTechSignal, finalTechConfidence);
     const zoneScore = signalToScore(finalZoneSignal, zoneConfidence);
@@ -727,21 +723,7 @@ export const useOverallMarketOutlook = () => {
     const smartMoneyScore = signalToScore(smartMoneySignal, smartMoneyConfidence);
     const oiMomentumScore = signalToScore(oiMomentumSignal, oiMomentumConfidence);
     
-    // 🔍 DEBUG logs for troubleshooting
-    console.log('[OUTLOOK-CALC] Signal Confidences with Pivot Integration:', {
-      tech: finalTechConfidence,
-      zone: zoneConfidence,
-      volume: volumeConfidence,
-      trend: trendConfidence,
-      marketStructure: marketStructureConfidence,
-      candle: finalCandleConfidence,
-      market: marketIndicesConfidence,
-      pcr: pcrConfidence,
-      pivot: pivotConfidence
-    });
-    console.log('[OUTLOOK-CALC] Available signals:', availableSignals + '/9');
-
-    // 🔥 SIMPLIFIED: Calculate weighted average score - NOW WITH 14 COMPONENTS
+    //  SIMPLIFIED: Calculate weighted average score - NOW WITH 14 COMPONENTS
     const totalWeight = (
       SIGNAL_WEIGHTS.technical +
       SIGNAL_WEIGHTS.zoneControl +
@@ -941,7 +923,7 @@ export const useOverallMarketOutlook = () => {
       isCrossing: false,
       isTouchingPivot: false,
       touchCount: 0,
-      crossingType: 'NONE' as const,
+      crossingType: 'NONE' as 'BUY_CROSS' | 'SELL_CROSS' | 'NONE',
       nearestLevel: '',
       sharpHighlight: false
     };
@@ -996,12 +978,11 @@ export const useOverallMarketOutlook = () => {
         isCrossing: isSupertrend10Crossing,
         isTouchingPivot: isTouchingPivot || multipleTouches,
         touchCount: touchCount,
-        crossingType: stCrossBuy ? 'BUY_CROSS' : stCrossSell ? 'SELL_CROSS' : 'NONE',
+        crossingType: (stCrossBuy ? 'BUY_CROSS' : stCrossSell ? 'SELL_CROSS' : 'NONE') as 'BUY_CROSS' | 'SELL_CROSS' | 'NONE',
         nearestLevel: nearestLevel,
         sharpHighlight: stCrossBuy || stCrossSell || multipleTouches
       };
       
-      console.log(`[OUTLOOK-PIVOT-ALERT] ${pivotIndicators.symbol}: Cross=${isSupertrend10Crossing} Touch=${isTouchingPivot} Touches=${touchCount} Sharp=${pivotCriticalAlert.sharpHighlight}`);
     }
 
     return {
@@ -1150,11 +1131,6 @@ export const useOverallMarketOutlook = () => {
         }, 15000)) // 🔥 Increased to 15 seconds for slow endpoints
       ]);
 
-    console.log(`[OUTLOOK-${symbol}] Starting fetch...`);
-    
-    // 🔥 DEBUG: Log API URL being used
-    console.log(`[OUTLOOK-${symbol}] API Base URL: ${API_BASE_URL}`);
-
     // 🚀 OPTIMIZATION: Fetch ALL analysis endpoints in parallel (14 signals!)
     const [tech, allAdvanced, market, pivotData, orb, supertrend, sar, camarilla, rsi60_40, smartMoney, oiMomentum] = await Promise.all([
       quickFetch(`${API_BASE_URL}/api/analysis/analyze/${symbol}`),
@@ -1170,49 +1146,13 @@ export const useOverallMarketOutlook = () => {
       quickFetch(`${API_BASE_URL}/api/analysis/oi-momentum/${symbol}`), // OI Momentum dedicated endpoint
     ]);
 
-    console.log(`[OUTLOOK-${symbol}] Fetch complete:`, {
-      tech: tech ? '✓' : '✗',
-      allAdvanced: allAdvanced ? '✓' : '✗',
-      market: market ? '✓' : '✗',
-      pivot: pivotData ? '✓' : '✗',
-      orb: orb ? '✓' : '✗',
-      supertrend: supertrend ? '✓' : '✗',
-      sar: sar ? '✓' : '✗',
-      camarilla: camarilla ? '✓' : '✗',
-      rsi60_40: rsi60_40 ? '✓' : '✗',
-      smartMoney: smartMoney ? '✓' : '✗',
-      oiMomentum: oiMomentum ? '✓' : '✗',
-      apiUrl: API_BASE_URL,
-      timestamp: new Date().toISOString(),
-    });
-
     // Extract individual sections from aggregated response
     const zone = allAdvanced?.zone_control || null;
     const volume = allAdvanced?.volume_pulse || null;
     const trend = allAdvanced?.trend_base || null;
     const candle = allAdvanced?.candle_intent || null;
 
-    // 🔍 DEBUG: Log fetched data
-    console.log(`[OUTLOOK-${symbol}] Extracted data:`, {
-      tech: tech ? '✓' : '✗',
-      zone: zone ? '✓' : '✗',
-      volume: volume ? '✓' : '✗',
-      trend: trend ? '✓' : '✗',
-      candle: candle ? '✓' : '✗',
-      market: market ? '✓' : '✗',
-      pivot: pivotData ? '✓' : '✗',
-      orb: orb ? '✓' : '✗',
-      supertrend: supertrend ? '✓' : '✗',
-      sar: sar ? '✓' : '✗',
-      camarilla: camarilla ? '✓' : '✗',
-      rsi60_40: rsi60_40 ? '✓' : '✗',
-      smartMoney: smartMoney ? '✓' : '✗',
-      oiMomentum: oiMomentum ? '✓' : '✗',
-    });
-
     const result = calculateOverallOutlook(tech, zone, volume, trend, candle, market, pivotData, orb, supertrend, sar, camarilla, rsi60_40, smartMoney, oiMomentum);
-    console.log(`[OUTLOOK-${symbol}] Calculated confidence:`, result.overallConfidence + '%', 'Signal:', result.overallSignal);
-    
     return result;
   }, [calculateOverallOutlook]);
 
@@ -1227,57 +1167,31 @@ export const useOverallMarketOutlook = () => {
   // 🔥🔥🔥 PRODUCTION: Fetch ONCE, keep values stable
   const fetchAllAnalysis = useCallback(async () => {
     const now = Date.now();
-    if (isFetching) {
-      console.log('[OUTLOOK] Already fetching, skipping...');
-      return;
-    }
+    if (isFetching) return;
     
     isFetching = true;
     lastFetchTime = now;
-    
-    console.log('[OUTLOOK] ========== STARTING FETCH ==========');
-    
+
     // 🔥 FETCH ONCE: Get initial data and keep it stable
     try {
       // Fetch all 3 symbols in parallel
       const results = await Promise.all([
         fetchFullSymbolData('NIFTY').then(data => {
-          if (data) {
-            console.log('[OUTLOOK] ✅ NIFTY data received:', data.overallConfidence + '%');
-            silentUpdate('NIFTY', data);
-          } else {
-            console.error('[OUTLOOK] ❌ NIFTY data is NULL');
-          }
+          if (data) silentUpdate('NIFTY', data);
           return data;
         }),
         fetchFullSymbolData('BANKNIFTY').then(data => {
-          if (data) {
-            console.log('[OUTLOOK] ✅ BANKNIFTY data received:', data.overallConfidence + '%');
-            silentUpdate('BANKNIFTY', data);
-          } else {
-            console.error('[OUTLOOK] ❌ BANKNIFTY data is NULL');
-          }
+          if (data) silentUpdate('BANKNIFTY', data);
           return data;
         }),
         fetchFullSymbolData('SENSEX').then(data => {
-          if (data) {
-            console.log('[OUTLOOK] ✅ SENSEX data received:', data.overallConfidence + '%');
-            silentUpdate('SENSEX', data);
-          } else {
-            console.error('[OUTLOOK] ❌ SENSEX data is NULL');
-          }
+          if (data) silentUpdate('SENSEX', data);
           return data;
         }),
       ]);
       
-      console.log('[OUTLOOK] ========== FETCH COMPLETE ==========');
-      console.log('[OUTLOOK] Results:', {
-        NIFTY: results[0]?.overallConfidence + '%' || 'NULL',
-        BANKNIFTY: results[1]?.overallConfidence + '%' || 'NULL',
-        SENSEX: results[2]?.overallConfidence + '%' || 'NULL'
-      });
     } catch (error) {
-      console.error('[OUTLOOK] ========== FETCH ERROR ==========', error);
+      console.error('[OUTLOOK] Fetch error:', error);
     } finally {
       isFetching = false;
       setLoading(false); // Data loaded, stop showing loading state
@@ -1285,9 +1199,6 @@ export const useOverallMarketOutlook = () => {
   }, [fetchFullSymbolData, silentUpdate]);
 
   useEffect(() => {
-    // 🔥🔥🔥 FORCE FRESH START - Clear all caches
-    console.log('[OUTLOOK] FORCE RESET - Starting fresh, no cache');
-    
     // Clear all browser storage
     try {
       localStorage.removeItem('mytradingsignal_last_outlook_data');
@@ -1304,8 +1215,6 @@ export const useOverallMarketOutlook = () => {
     lastFetchTime = 0;
     isFetching = false;
     
-    // 🔥 Fetch fresh live data immediately
-    console.log('[OUTLOOK] Starting fresh data fetch...');
     fetchAllAnalysis();
     
     // 🔥 VISIBILITY CHANGE: Don't refetch when switching tabs

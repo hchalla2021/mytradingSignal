@@ -411,16 +411,24 @@ async def calculate_market_structure_from_cache(cache, symbol: str, tick_data: D
         bos_bullish = current_price > swing_high  # Price breaks above recent high
         bos_bearish = current_price < swing_low   # Price breaks below recent low
         
-        # Fair Value Gap (FVG) - gap between candles
+        # Fair Value Gap (FVG) - SMC 3-candle structure: scan last 15 candles
+        # Bullish FVG: C[i].high < C[i+2].low  (price gapped up, support gap below)
+        # Bearish FVG: C[i].low  > C[i+2].high (price gapped down, resistance gap above)
         fvg_bullish = False
         fvg_bearish = False
         if len(candles) >= 3:
-            # Bullish FVG: Previous candle low > Current candle high
-            if candles[-2]['low'] > candles[-1]['high']:
-                fvg_bullish = True
-            # Bearish FVG: Previous candle high < Current candle low
-            if candles[-2]['high'] < candles[-1]['low']:
-                fvg_bearish = True
+            scan = candles[-15:] if len(candles) >= 15 else candles
+            for i in range(len(scan) - 2):
+                c1_high = float(scan[i].get('high', 0))
+                c1_low  = float(scan[i].get('low',  0))
+                c3_high = float(scan[i + 2].get('high', 0))
+                c3_low  = float(scan[i + 2].get('low',  0))
+                if c1_high > 0 and c3_low > 0 and c1_high < c3_low:
+                    fvg_bullish = True
+                if c1_low > 0 and c3_high > 0 and c1_low > c3_high:
+                    fvg_bearish = True
+                if fvg_bullish and fvg_bearish:
+                    break
         
         # Volume Profile (High volume vs low volume candles in last 10)
         avg_volume = sum([c.get('volume', 0) for c in candles[-10:]]) / min(10, len(candles))
@@ -1451,11 +1459,16 @@ class InstantSignal:
             l3 = prev_close_px - (range_hl * 1.1 / 4)
             l4 = prev_close_px - (range_hl * 1.1 / 2)
             
-            # CPR (Central Pivot Range) = most important for day trading
-            # TC = Top Central Pivot (R3), P = Pivot, BC = Bottom Central (S3)
-            tc = h3  # Top Central Pivot = R3
-            pivot_point = prev_close_px
-            bc = l3  # Bottom Central Pivot = S3
+            # CPR (Central Pivot Range) — standard formula, matches classic pivot chart
+            # P  = (H + L + C) / 3  (classic pivot — same as PivotSectionUnified chart)
+            # TC = (H + L) / 2      (CPR top central boundary)
+            # BC = 2P - TC          (CPR bottom central boundary)
+            # R3/S3 (Camarilla gate levels) are h3/l3 — kept separate from CPR TC/BC
+            pivot_point = (prev_high_px + prev_low_px + prev_close_px) / 3
+            tc = (prev_high_px + prev_low_px) / 2     # CPR Top Central
+            bc = (2 * pivot_point) - tc                # CPR Bottom Central
+            r3 = h3   # Camarilla R3 gate level (above TC, stronger breakout signal)
+            s3 = l3   # Camarilla S3 gate level (below BC, stronger breakdown signal)
             
             # CPR width analysis
             cpr_width = tc - bc
@@ -1471,97 +1484,106 @@ class InstantSignal:
                 cpr_description = "Wide CPR (range day) - consolidation pattern"
             
             # R3/S3 Gate Level Status
+            # 5 distinct zones (R3 and S3 are Camarilla gates, TC/BC are CPR boundaries):
+            #   price > R3           → ABOVE_TC  + R3 breakout (strongest bull)
+            #   TC  < price ≤ R3     → ABOVE_TC  + hold above CPR top (moderate bull)
+            #   BC  ≤ price ≤ TC     → INSIDE_CPR + chop zone (neutral)
+            #   S3  ≤ price < BC     → BELOW_BC  + hold below CPR bottom (moderate bear)
+            #   price < S3           → BELOW_BC  + S3 breakdown (strongest bear)
             camarilla_zone_status = None
             camarilla_zone = None
             camarilla_signal = None
-            
-            if price > tc:
-                # ABOVE TC = BULLISH SCENARIO
+
+            if price > r3:
+                # ABOVE R3 GATE = Camarilla R3 breakout (bullish)
                 camarilla_zone = "ABOVE_TC"
-                camarilla_zone_status = "Price above top CPR - bullish territory"
-                
-                # Check for R3 breakout (most important gate)
-                if price > h3:
-                    # Check for close above R3 (more significant than just touch)
-                    if close_price > h3:
-                        camarilla_signal = "R3_BREAKOUT_CONFIRMED"
-                        camarilla_signal_desc = "🔥 R3 breakout confirmed by close - trend day bullish"
-                    else:
-                        camarilla_signal = "R3_BREAKOUT_TOUCH"
-                        camarilla_signal_desc = "Price touching R3 (test) - awaiting close confirmation"
+                camarilla_zone_status = "Price above Camarilla R3 gate - strongest bullish breakout"
+                if close_price > r3:
+                    camarilla_signal = "R3_BREAKOUT_CONFIRMED"
+                    camarilla_signal_desc = "🔥 R3 breakout confirmed by close - trend day bullish"
                 else:
-                    camarilla_signal = "ABOVE_CPR_HOLD"
-                    camarilla_signal_desc = "Above CPR but below R3 - hold bullish position"
-            
-            elif price < bc:
-                # BELOW BC = BEARISH SCENARIO
+                    camarilla_signal = "R3_BREAKOUT_TOUCH"
+                    camarilla_signal_desc = "Price touching R3 gate (test) - awaiting close confirmation"
+
+            elif price > tc:
+                # ABOVE CPR TOP, BELOW R3 = bullish hold zone
+                camarilla_zone = "ABOVE_TC"
+                camarilla_zone_status = "Price above CPR top but below R3 gate - hold bullish position"
+                camarilla_signal = "ABOVE_CPR_HOLD"
+                camarilla_signal_desc = "Above CPR top - hold bullish position, await R3 breakout"
+
+            elif price < s3:
+                # BELOW S3 GATE = Camarilla S3 breakdown (bearish)
                 camarilla_zone = "BELOW_BC"
-                camarilla_zone_status = "Price below bottom CPR - bearish territory"
-                
-                # Check for S3 breakdown (most important gate)
-                if price < l3:
-                    # Check for close below S3 (more significant)
-                    if close_price < l3:
-                        camarilla_signal = "S3_BREAKDOWN_CONFIRMED"
-                        camarilla_signal_desc = "🔥 S3 breakdown confirmed by close - trend day bearish"
-                    else:
-                        camarilla_signal = "S3_BREAKDOWN_TOUCH"
-                        camarilla_signal_desc = "Price touching S3 (test) - awaiting close confirmation"
+                camarilla_zone_status = "Price below Camarilla S3 gate - strongest bearish breakdown"
+                if close_price < s3:
+                    camarilla_signal = "S3_BREAKDOWN_CONFIRMED"
+                    camarilla_signal_desc = "🔥 S3 breakdown confirmed by close - trend day bearish"
                 else:
-                    camarilla_signal = "BELOW_CPR_HOLD"
-                    camarilla_signal_desc = "Below CPR but above S3 - hold bearish position"
-            
+                    camarilla_signal = "S3_BREAKDOWN_TOUCH"
+                    camarilla_signal_desc = "Price touching S3 gate (test) - awaiting close confirmation"
+
+            elif price < bc:
+                # BELOW CPR BOTTOM, ABOVE S3 = bearish hold zone
+                camarilla_zone = "BELOW_BC"
+                camarilla_zone_status = "Price below CPR bottom but above S3 gate - hold bearish position"
+                camarilla_signal = "BELOW_CPR_HOLD"
+                camarilla_signal_desc = "Below CPR bottom - hold bearish position, await S3 breakdown"
+
             else:
-                # INSIDE CPR = CHOP ZONE
+                # INSIDE CPR (between BC and TC) = chop zone
                 camarilla_zone = "INSIDE_CPR"
-                
-                # Determine position within CPR
                 if price > pivot_point:
                     camarilla_zone_status = "Price inside upper CPR - low risk long if breaks above TC"
                 else:
                     camarilla_zone_status = "Price inside lower CPR - low risk short if breaks below BC"
-                
                 camarilla_signal = "CPR_CHOP_ZONE"
                 camarilla_signal_desc = "Price in CPR chop zone - avoid entries, await break"
             
-            # 🔥 CAMARILLA CONFIDENCE CALCULATION
-            camarilla_confidence = 50  # Base confidence
-            
-            # Signal type confidence
+            # 🔥 CAMARILLA CONFIDENCE CALCULATION (unified proportional-multiplier chain)
+            # ─────────────────────────────────────────────────────────────────────────
+            # Signal-type base — meaningful range so all subsequent multipliers are
+            # distinguishable (the old flat-addition approach reached the 95%-cap
+            # before EMA / distance / CPR bonuses could contribute).
+            # CONFIRMED: close sealed the breakout (highest reliability)
+            # TOUCH:     price tested the level but no close confirmation yet
+            # HOLD:      price holding above/below CPR — directional but not a new entry
+            # CHOP:      inside CPR — indeterminate, wait for break
+            # ─────────────────────────────────────────────────────────────────────────
             if "CONFIRMED" in camarilla_signal:
-                camarilla_confidence += 30  # Strong signal
+                camarilla_confidence = 70.0
             elif "TOUCH" in camarilla_signal:
-                camarilla_confidence += 15  # Medium signal
+                camarilla_confidence = 55.0
             elif "HOLD" in camarilla_signal:
-                camarilla_confidence += 10  # Moderate signal
+                camarilla_confidence = 47.0
             else:
-                camarilla_confidence += 5   # Weak signal (chop zone)
-            
-            # Zone position confidence
-            if camarilla_zone == "ABOVE_TC" or camarilla_zone == "BELOW_BC":
-                camarilla_confidence += 15  # Clear directional zone
+                camarilla_confidence = 38.0   # chop zone default
+
+            # Zone position — proportional multiplier
+            if camarilla_zone in ("ABOVE_TC", "BELOW_BC"):
+                camarilla_confidence *= 1.10  # clear directional zone
             elif camarilla_zone == "INSIDE_CPR":
-                camarilla_confidence -= 10  # Unreliable in chop zone
-            
-            # Distance from CPR boundaries
+                camarilla_confidence *= 0.88  # unreliable in chop zone
+
+            # Distance from CPR boundaries — proportional bonus
             dist_to_tc = abs(price - tc)
             dist_to_bc = abs(price - bc)
             if dist_to_tc > (cpr_width * 0.5) or dist_to_bc > (cpr_width * 0.5):
-                camarilla_confidence += 10  # Good distance from boundary
-            
-            # EMA alignment bonus
-            if (ema_20 > ema_50 and (camarilla_zone == "ABOVE_TC" or camarilla_zone == "INSIDE_CPR"))  or \
+                camarilla_confidence *= 1.06  # good distance from boundary
+
+            # EMA alignment — direction-confirmed proportional bonus
+            if (ema_20 > ema_50 and (camarilla_zone == "ABOVE_TC" or camarilla_zone == "INSIDE_CPR")) or \
                (ema_20 < ema_50 and (camarilla_zone == "BELOW_BC" or camarilla_zone == "INSIDE_CPR")):
-                camarilla_confidence += 10  # EMA confirms Camarilla signal
-            
-            # CPR width (narrow = trending, wide = ranging)
+                camarilla_confidence *= 1.07  # EMA confirms Camarilla signal
+
+            # CPR width (narrow = trending = more reliable, wide = ranging = less reliable)
             if cpr_width_pct < 0.5:
-                camarilla_confidence += 10  # Narrow CPR = trending = more reliable
+                camarilla_confidence *= 1.07
             elif cpr_width_pct > 1.5:
-                camarilla_confidence -= 5   # Wide CPR = ranging = less reliable
-            
+                camarilla_confidence *= 0.93
+
             # Cap between 30-95 (realistic range)
-            camarilla_confidence = min(95, max(30, camarilla_confidence))
+            camarilla_confidence = min(95, max(30, round(camarilla_confidence)))
             
             # COMBINED STRATEGY: CPR + EMA + VWAP
             # Trend Day Signal = CPR break + above/below EMA20 + VWAP alignment
@@ -1904,37 +1926,35 @@ class InstantSignal:
             # ⚠️ SuperTrend Warning (unreliable in sideways)
             st_warning = "⚠️ WARNING: Inside CPR zone" if is_sideways_market else None
             
-            # SuperTrend Confidence Calculation (Improved)
-            st_10_2_confidence = 60  # Higher base confidence
-            
-            # Distance-based confidence (farther from line = more confident)
+            # SuperTrend Confidence Calculation (proportional multipliers)
+            st_10_2_confidence = 60  # Base for a valid SuperTrend read
+
+            # Distance-based confidence: farther from ST line = stronger trend
             if st_distance_pct > 3.0:
-                st_10_2_confidence += 25  # Very strong distance
+                st_10_2_confidence = round(st_10_2_confidence * 1.20)  # very strong distance
             elif st_distance_pct > 2.0:
-                st_10_2_confidence += 20  # Strong distance  
+                st_10_2_confidence = round(st_10_2_confidence * 1.15)  # strong distance
             elif st_distance_pct > 1.0:
-                st_10_2_confidence += 15  # Good distance
+                st_10_2_confidence = round(st_10_2_confidence * 1.10)  # good distance
             elif st_distance_pct > 0.5:
-                st_10_2_confidence += 10  # Moderate distance
-            else:
-                st_10_2_confidence += 5   # Close but still valid
-            
-            # Signal strength confidence
+                st_10_2_confidence = round(st_10_2_confidence * 1.05)  # moderate distance
+            # else: close to line — base confidence, no distance bonus
+
+            # Signal direction confirmation
             if st_10_2_signal in ["BUY", "SELL"]:
-                st_10_2_confidence += 10  # Clear directional signal
                 if not is_sideways_market:
-                    st_10_2_confidence += 15  # Boost for trending market
+                    st_10_2_confidence = round(st_10_2_confidence * 1.12)  # trending = reliable
                 else:
-                    st_10_2_confidence -= 10  # Slight reduction for sideways
-            
-            # Market volatility adjustment (higher ATR = lower confidence)
+                    st_10_2_confidence = round(st_10_2_confidence * 0.88)  # sideways = unreliable
+
+            # Volatility reliability adjustment
             if atr_pct < 1.0:
-                st_10_2_confidence += 5   # Low volatility = more reliable
+                st_10_2_confidence = round(st_10_2_confidence * 1.04)  # low vol = more reliable
             elif atr_pct > 2.5:
-                st_10_2_confidence -= 5   # High volatility = less reliable
-                
-            # Cap confidence between 45-95 (more realistic range)
-            st_10_2_confidence = min(95, max(45, st_10_2_confidence))
+                st_10_2_confidence = round(st_10_2_confidence * 0.94)  # high vol = less reliable
+
+            # Cap: 40 floor (weak/neutral states); 95 ceiling
+            st_10_2_confidence = min(95, max(40, st_10_2_confidence))
             
             # ============================================
             # COMBINED CONFIRMATION SETUP (BEST APP LOGIC)
@@ -2308,6 +2328,8 @@ class InstantSignal:
                     # Camarilla R3/S3 Gate Levels
                     "camarilla_h3": round(h3, 2),  # R3 (top gate)
                     "camarilla_l3": round(l3, 2),  # S3 (bottom gate)
+                    "camarilla_r3": round(r3, 2),  # Alias: R3 gate = h3
+                    "camarilla_s3": round(s3, 2),  # Alias: S3 gate = l3
                     "camarilla_h4": round(h4, 2),  # H4 (upper extreme)
                     "camarilla_l4": round(l4, 2),  # L4 (lower extreme)
                     "camarilla_zone": camarilla_zone,  # ABOVE_TC, BELOW_BC, INSIDE_CPR
@@ -2317,9 +2339,11 @@ class InstantSignal:
                     "camarilla_confidence": camarilla_confidence,  # Dynamic confidence score (30-95)
                     
                     # CPR (Central Pivot Range) Analysis
-                    "cpr_top_central": round(tc, 2),  # TC = H3
-                    "cpr_bottom_central": round(bc, 2),  # BC = L3
-                    "cpr_pivot": round(pivot_point, 2),  # P = Pivot
+                    "cpr_top_central": round(tc, 2),  # TC = (H+L)/2
+                    "cpr_bottom_central": round(bc, 2),  # BC = 2P - TC
+                    "cpr_pivot": round(pivot_point, 2),  # P = (H+L+C)/3 (classic formula)
+                    "cpr_tc": round(tc, 2),  # Alias: CPR Top Central
+                    "cpr_bc": round(bc, 2),  # Alias: CPR Bottom Central
                     "cpr_width": round(cpr_width, 2),  # TC - BC distance
                     "cpr_width_pct": round(cpr_width_pct, 3),  # As % of price
                     "cpr_classification": cpr_classification,  # NARROW (trending) or WIDE (range)

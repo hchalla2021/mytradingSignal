@@ -193,6 +193,21 @@ class CacheService:
             except:
                 pass
     
+    async def llen(self, key: str) -> int:
+        """Get length of list (Redis-compatible API)."""
+        cached = _SHARED_CACHE.get(key)
+        if cached:
+            try:
+                value, expire_at = cached
+                if time.time() >= expire_at:
+                    del _SHARED_CACHE[key]
+                    return 0
+                items = json.loads(value)
+                return len(items) if isinstance(items, list) else 0
+            except:
+                pass
+        return 0
+    
     async def expire(self, key: str, seconds: int):
         """Set expiration on existing key (Redis-compatible API)."""
         cached = _SHARED_CACHE.get(key)

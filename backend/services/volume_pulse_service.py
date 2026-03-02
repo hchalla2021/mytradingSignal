@@ -93,9 +93,14 @@ class VolumePulseEngine:
             green_vol = int(np.sum(volume_arr[is_green]))
             red_vol = int(np.sum(volume_arr[is_red]))
             
-            # Avoid division by zero
+            # Zero-volume fallback: spot indices (NIFTY/BANKNIFTY/SENSEX) have
+            # volume_traded = 0 from the WebSocket feed.  Use candle COUNT as a
+            # proxy so buy/sell percentages still reflect actual price direction.
             if green_vol == 0 and red_vol == 0:
-                return self._create_neutral_result(symbol, "No volume data")
+                green_vol = int(np.sum(is_green))   # number of up-candles
+                red_vol   = int(np.sum(is_red))     # number of down-candles
+                if green_vol == 0 and red_vol == 0:
+                    return self._create_neutral_result(symbol, "No volume data")
             
             # Calculate metrics
             total_vol = green_vol + red_vol
@@ -209,77 +214,70 @@ class VolumePulseEngine:
     def _calculate_participation(self, recent_df: pd.DataFrame) -> int:
         """
         PARTICIPATION: Volume involvement vs average (0-100)
-        High = Heavy trading activity
-        Low = Disinterest
+        Uses last-3-candles rolling average vs historical mean for stability.
+        Continuous scoring avoids discrete bucket lock-in.
         """
         if len(recent_df) < 10:
             return 50
-        
-        current_vol = recent_df['volume'].iloc[-1]
-        avg_vol = recent_df['volume'].mean()
-        
-        if avg_vol == 0:
+
+        vol_arr = recent_df['volume'].values.astype(float)
+
+        # Exclude zero-volume candles from average (common for index tick gaps)
+        nonzero = vol_arr[vol_arr > 0]
+        if len(nonzero) < 5:
             return 50
-        
-        # Ratio of current to average
-        ratio = current_vol / avg_vol
-        
-        # Scale to 0-100
-        if ratio >= 2.0:
-            return 100  # Extreme participation
-        elif ratio >= 1.5:
-            return 80   # High participation
-        elif ratio >= 1.0:
-            return 60   # Normal participation
-        elif ratio >= 0.7:
-            return 40   # Below average
-        else:
-            return 20   # Very low participation
+
+        avg_vol = float(np.mean(nonzero))
+
+        # Rolling 3-candle window to smooth out single-candle spikes / dips
+        last_3 = vol_arr[-3:]
+        active_3 = last_3[last_3 > 0]
+        recent_avg = float(np.mean(active_3)) if len(active_3) > 0 else 0.0
+
+        if avg_vol == 0 or recent_avg == 0:
+            return 50
+
+        ratio = recent_avg / avg_vol  # 1.0 = at historical average
+        # Continuous linear: ratio 0.3→2.5 maps to 5→100; clamped at extremes
+        score = round((ratio - 0.3) / (2.5 - 0.3) * 95 + 5)
+        return int(min(100, max(5, score)))
     
     def _calculate_aggression(self, recent_df: pd.DataFrame) -> int:
         """
         AGGRESSION: Price movement efficiency (0-100)
-        Formula: (Price Change / Volume) * scaling
-        
-        High aggression = Big price move on small volume (efficient)
-        Low aggression = Small price move on big volume (absorption)
+        Rolling 3-candle window; continuous scoring instead of fixed buckets.
+        High = Big price move per unit of volume (breakout energy)
+        Low  = Small move on heavy volume (institutional absorption)
         """
-        if len(recent_df) < 2:
+        if len(recent_df) < 5:
             return 50
-        
-        # Get last candle
-        last_candle = recent_df.iloc[-1]
-        open_price = last_candle['open']
-        close_price = last_candle['close']
-        volume = last_candle['volume']
-        
-        if volume == 0 or open_price == 0:
-            return 50
-        
-        # Price change percentage
-        price_change_pct = abs((close_price - open_price) / open_price * 100)
-        
-        # Volume as percentage of average
+
         avg_vol = recent_df['volume'].mean()
-        vol_ratio = volume / avg_vol if avg_vol > 0 else 1.0
-        
-        # Aggression = Price efficiency (more price move per unit of volume)
-        # If price moves 2% on 1x volume → aggression = high
-        # If price moves 0.5% on 3x volume → aggression = low (absorption)
-        
-        aggression_ratio = price_change_pct / vol_ratio
-        
-        # Scale to 0-100
-        if aggression_ratio >= 1.5:
-            return 100  # Extreme efficiency (breakout/breakdown)
-        elif aggression_ratio >= 1.0:
-            return 80   # High efficiency
-        elif aggression_ratio >= 0.5:
-            return 60   # Normal
-        elif aggression_ratio >= 0.25:
-            return 40   # Low efficiency (absorption zone)
-        else:
-            return 20   # Very low (heavy absorption)
+        if avg_vol == 0:
+            return 50
+
+        # Use last 3 candles for a stable rolling measurement
+        last_3 = recent_df.tail(3)
+        total_aggr = 0.0
+        count = 0
+        for _, row in last_3.iterrows():
+            vol = float(row.get('volume', 0))
+            op  = float(row.get('open',  0))
+            cl  = float(row.get('close', 0))
+            if vol <= 0 or op <= 0:
+                continue
+            price_chg_pct = abs((cl - op) / op * 100)
+            vol_ratio     = vol / avg_vol
+            total_aggr   += price_chg_pct / vol_ratio
+            count        += 1
+
+        if count == 0:
+            return 50
+
+        avg_aggr = total_aggr / count  # 0–∞; 1.0 = "normal" efficiency
+        # Continuous linear mapping: 0→2.0 maps to 0→100; clamped
+        score = round(avg_aggr / 2.0 * 100)
+        return int(min(100, max(0, score)))
     
     def _calculate_exhaustion(self, recent_df: pd.DataFrame) -> int:
         """
@@ -312,32 +310,25 @@ class VolumePulseEngine:
         else:
             momentum_ratio = 1.0
         
-        # Exhaustion score
-        exhaustion = 0
-        
-        # Massive volume spike (>2x avg)
-        if vol_spike >= 2.5:
-            exhaustion += 40
-        elif vol_spike >= 2.0:
-            exhaustion += 30
-        elif vol_spike >= 1.5:
-            exhaustion += 20
-        
-        # Diminishing momentum
-        if momentum_ratio < 0.7 and vol_spike > 1.5:
-            exhaustion += 40  # High volume but slowing momentum = climax
-        elif momentum_ratio < 0.85:
-            exhaustion += 20
-        
-        # Wide-range candle at extreme volume (blow-off)
+        # ── Continuous volume-spike component (0-50) ──────────────────────
+        # Smooth curve: spike=1.0 → 0 pts, spike=3.0 → 50 pts
+        vol_spike_score = round(min(50, max(0, (vol_spike - 1.0) / 2.0 * 50)))
+
+        # ── Momentum deterioration component (0-35) ──────────────────────
+        # momentum_ratio 1.0 = steady; 0.0 = full stall
+        deterior = max(0.0, 1.0 - momentum_ratio)  # 0-1 (0=healthy, 1=stalled)
+        momentum_score = round(deterior * 35) if vol_spike > 1.2 else 0
+
+        # ── Wide-range blow-off candle bonus (0-15) ───────────────────────
+        blowoff_score = 0
         if len(recent_df) >= 2:
             last_range = abs(recent_df['high'].iloc[-1] - recent_df['low'].iloc[-1])
-            avg_range = np.mean(np.abs(recent_df['high'].values[:-1] - recent_df['low'].values[:-1]))
-            
-            if last_range > avg_range * 1.5 and vol_spike > 1.8:
-                exhaustion += 20  # Blow-off top/bottom pattern
-        
-        return min(exhaustion, 100)
+            avg_range  = np.mean(np.abs(recent_df['high'].values[:-1] - recent_df['low'].values[:-1]))
+            if avg_range > 0 and last_range > avg_range * 1.5 and vol_spike > 1.8:
+                blowoff_score = round(min(15, (last_range / avg_range - 1.5) / 1.0 * 15))
+
+        exhaustion = vol_spike_score + momentum_score + blowoff_score
+        return int(min(100, max(0, exhaustion)))
     
     def _determine_volume_quality(
         self, 

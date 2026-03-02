@@ -263,7 +263,7 @@ class ZerodhaDirectAnalysis:
                 "time_quality": "POOR",
             },
             "timestamp": datetime.now().isoformat(),
-            "source": "fallback_demo_data",
+            "source": "fallback_unavailable",
         }
 
 

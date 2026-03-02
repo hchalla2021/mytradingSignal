@@ -30,10 +30,11 @@ export const VWMAEMAFilterCard: React.FC<VWMAEMAFilterCardProps> = ({ analysis, 
       };
     }
 
-    const { price, vwma_20, vwap, volume_strength } = analysis.indicators;
+    const ind = analysis.indicators as any;
+    const { price, vwma_20, vwap, volume_strength } = ind;
     // Use analysis.status if available, otherwise fall back to marketStatus prop
     const status = analysis.status || marketStatus || 'CLOSED';
-    
+
     if (!price || !vwma_20) {
       return {
         signal: 'NEUTRAL',
@@ -45,73 +46,67 @@ export const VWMAEMAFilterCard: React.FC<VWMAEMAFilterCardProps> = ({ analysis, 
       };
     }
 
-    const priceAboveVWMA = price > vwma_20;
-    const priceAboveVWAP = price > (vwap || 0);
-    const hasStrongVolume = volume_strength === 'STRONG_VOLUME';
+    const priceAboveVWMA   = price > vwma_20;
+    const priceAboveVWAP   = price > (vwap || 0);
+    const hasStrongVolume   = volume_strength === 'STRONG_VOLUME';
     const hasModerateVolume = volume_strength === 'MODERATE_VOLUME';
-    
+
+    // ── Signal direction: driven by VWMA + VWAP position ──
     let signal = 'NEUTRAL';
     let badgeEmoji = '⚪';
     let signalColor = 'bg-amber-500/20 border-amber-500/40 text-amber-300';
     let textColor = 'text-amber-300';
-    let confidence = 50;
 
-    // STRONG BUY: Price above both VWAP & VWMA + Strong Volume + Market Live
-    if (priceAboveVWMA && priceAboveVWAP && hasStrongVolume && status === 'LIVE') {
-      signal = 'STRONG_BUY';
-      badgeEmoji = '🚀';
-      signalColor = 'bg-green-500/20 border-green-500/50 text-green-300';
-      textColor = 'text-green-300';
-      confidence = Math.min(95, 80 + (hasStrongVolume ? 15 : 0));
+    if (priceAboveVWMA && priceAboveVWAP && hasStrongVolume) {
+      signal = 'STRONG_BUY'; badgeEmoji = '🚀';
+      signalColor = 'bg-green-500/20 border-green-500/50 text-green-300'; textColor = 'text-green-300';
+    } else if (priceAboveVWMA && priceAboveVWAP) {
+      signal = 'BUY'; badgeEmoji = '📈';
+      signalColor = 'bg-emerald-500/20 border-emerald-500/40 text-emerald-300'; textColor = 'text-emerald-300';
+    } else if (priceAboveVWMA) {
+      signal = 'BUY'; badgeEmoji = '📈';
+      signalColor = 'bg-emerald-500/20 border-emerald-500/40 text-emerald-300'; textColor = 'text-emerald-300';
+    } else if (!priceAboveVWMA && !priceAboveVWAP && hasStrongVolume) {
+      signal = 'STRONG_SELL'; badgeEmoji = '📉';
+      signalColor = 'bg-red-500/20 border-red-500/50 text-red-300'; textColor = 'text-red-300';
+    } else if (!priceAboveVWMA && !priceAboveVWAP) {
+      signal = 'SELL'; badgeEmoji = '📊';
+      signalColor = 'bg-rose-500/20 border-rose-500/40 text-rose-300'; textColor = 'text-rose-300';
+    } else {
+      // price below VWMA but above VWAP — VWMA is the primary filter
+      signal = 'SELL'; badgeEmoji = '📊';
+      signalColor = 'bg-rose-500/20 border-rose-500/40 text-rose-300'; textColor = 'text-rose-300';
     }
-    // BUY: Price above VWMA + Volume confirmation
-    else if (priceAboveVWMA && hasModerateVolume && status === 'LIVE') {
-      signal = 'BUY';
-      badgeEmoji = '📈';
-      signalColor = 'bg-emerald-500/20 border-emerald-500/40 text-emerald-300';
-      textColor = 'text-emerald-300';
-      confidence = Math.min(90, 65 + (hasStrongVolume ? 15 : 5));
-    }
-    // BUY (Fallback): Price above VWMA even if volume weak or market status uncertain
-    else if (priceAboveVWMA) {
-      signal = 'BUY';
-      badgeEmoji = '📈';
-      signalColor = 'bg-emerald-500/20 border-emerald-500/40 text-emerald-300';
-      textColor = 'text-emerald-300';
-      confidence = Math.min(75, 50 + (hasModerateVolume ? 15 : 5));
-    }
-    // STRONG SELL: Price below both VWAP & VWMA + Strong Volume + Market Live
-    else if (!priceAboveVWMA && !priceAboveVWAP && hasStrongVolume && status === 'LIVE') {
-      signal = 'STRONG_SELL';
-      badgeEmoji = '📉';
-      signalColor = 'bg-red-500/20 border-red-500/50 text-red-300';
-      textColor = 'text-red-300';
-      confidence = Math.min(95, 80 + (hasStrongVolume ? 15 : 0));
-    }
-    // SELL: Price below VWMA + Volume confirmation
-    else if (!priceAboveVWMA && hasModerateVolume && status === 'LIVE') {
-      signal = 'SELL';
-      badgeEmoji = '📊';
-      signalColor = 'bg-rose-500/20 border-rose-500/40 text-rose-300';
-      textColor = 'text-rose-300';
-      confidence = Math.min(90, 65 + (hasStrongVolume ? 15 : 5));
-    }
-    // SELL (Fallback): Price below VWMA even if volume weak or market status uncertain
-    else if (!priceAboveVWMA) {
-      signal = 'SELL';
-      badgeEmoji = '📊';
-      signalColor = 'bg-rose-500/20 border-rose-500/40 text-rose-300';
-      textColor = 'text-rose-300';
-      confidence = Math.min(75, 50 + (hasModerateVolume ? 15 : 5));
-    }
-    // NEUTRAL: Choppy or unclear signal
-    else {
-      signal = 'NEUTRAL';
-      badgeEmoji = '⚪';
-      signalColor = 'bg-amber-500/20 border-amber-500/40 text-amber-300';
-      textColor = 'text-amber-300';
-      confidence = 40 + (hasModerateVolume ? 10 : 0);
-    }
+
+    // ── Confidence: anchored to backend ema_alignment_confidence (live-changing) ──
+    // NSE indices (NIFTY/BANKNIFTY/SENSEX) are spot indices with no tradeable volume,
+    // so volume_strength is always WEAK_VOLUME for them. Never gate confidence on it.
+    // Use ema_alignment_confidence as the live-reactive base, then layer bonuses on top.
+    const emaAlignConf = Math.max(35, Math.min(95, Number(ind.ema_alignment_confidence || 55)));
+    const emaAlign     = String(ind.ema_alignment || '');
+    const isBuy        = signal.includes('BUY');
+    const isSell       = signal.includes('SELL');
+
+    let confidence = emaAlignConf;   // starts at real backend value, changes every tick
+
+    // VWAP directional agreement: proportional multipliers — no flat cliffs
+    const vwapAgrees = (isBuy && priceAboveVWAP) || (isSell && !priceAboveVWAP);
+    confidence *= vwapAgrees ? 1.06 : 0.92;
+
+    // EMA structure quality: proportional
+    if (emaAlign.includes('ALL_'))  confidence *= 1.05;  // perfectly stacked EMAs
+    if (emaAlign === 'COMPRESSION') confidence *= 0.90;  // choppy / low directional bias
+
+    // Volume confirmation: proportional — no penalty for indices without volume
+    if (hasStrongVolume)        confidence *= 1.08;
+    else if (hasModerateVolume) confidence *= 1.04;
+
+    // Market-hours: proportional (non-LIVE applies floor of 30)
+    confidence = status === 'LIVE'
+      ? confidence * 1.03
+      : Math.max(30, confidence * 0.94);
+
+    confidence = Math.min(95, Math.max(30, Math.round(confidence)));
 
     return { signal, badgeEmoji, signalColor, textColor, confidence, status };
   }, [analysis, marketStatus]);
@@ -329,13 +324,21 @@ export const VWMAEMAFilterCard: React.FC<VWMAEMAFilterCardProps> = ({ analysis, 
             const volStrong  = volLabel === 'STRONG';
             const volWeak    = volLabel === 'WEAK';
 
+            // Proportional scaling — no flat ± cliffs
             let adjConf = confidence;
-            if (vwmaAligns)  adjConf += 5;   // price-VWMA position confirms signal direction
-            if (vwapAligns)  adjConf += 4;   // VWAP also agrees → dual institutional reference
-            if (bothAlign)   adjConf += 3;   // both levels agree → extra conviction bonus
-            if (volStrong && (isBuy || isSell)) adjConf += 5;  // volume confirms directional move
-            if (volWeak)     adjConf -= 6;   // weak volume → signal less reliable
-            if (!vwmaAligns && (isBuy || isSell)) adjConf -= 8; // price vs VWMA conflict
+            if (!vwmaAligns && (isBuy || isSell)) {
+              adjConf = Math.round(confidence * 0.82); // VWMA conflicts with signal → penalty
+            } else {
+              const confirmCount = [
+                vwmaAligns,
+                vwapAligns,
+                volStrong && (isBuy || isSell),
+              ].filter(Boolean).length;
+              if (confirmCount >= 3)       adjConf = Math.round(confidence * 1.10);
+              else if (confirmCount === 2)  adjConf = Math.round(confidence * 1.06);
+              else if (confirmCount === 1)  adjConf = Math.round(confidence * 1.03);
+            }
+            if (volWeak) adjConf = Math.round(adjConf * 0.94); // volume weakness always applies
             adjConf = Math.round(Math.min(95, Math.max(30, adjConf)));
 
             // ── Direction ──

@@ -31,7 +31,6 @@ function loadAnalysisCache(): AnalysisResponse | null {
     const raw = localStorage.getItem(ANALYSIS_CACHE_KEY);
     if (!raw) return null;
     const parsed = JSON.parse(raw) as AnalysisResponse;
-    console.log('[useAnalysis] 💾 Loaded last-known analysis from cache');
     return parsed;
   } catch (e) {
     return null;
@@ -94,10 +93,6 @@ export function useAnalysis(options: UseAnalysisOptions = {}): UseAnalysisReturn
       const url = `${apiUrl}/api/analysis/analyze/all`;
       
       attemptCountRef.current += 1;
-      const attemptNum = attemptCountRef.current;
-      if (attemptNum <= 3) {
-        console.log(`[useAnalysis] 🔄 Attempt ${attemptNum}: Fetching from ${url}`);
-      }
       
       const controller = new AbortController();
       const timeout = parseInt(process.env.NEXT_PUBLIC_API_TIMEOUT || '5000', 10);
@@ -117,20 +112,6 @@ export function useAnalysis(options: UseAnalysisOptions = {}): UseAnalysisReturn
       
       if (response.ok) {
         const data = await response.json();
-        
-        if (attemptNum <= 3 || attemptNum % 10 === 0) {
-          console.log('[useAnalysis] ✅ Data received:', {
-            symbols: Object.keys(data),
-            sampleData: Object.entries(data).slice(0, 1).reduce((acc, [k, v]: any) => {
-              acc[k] = {
-                signal: v.signal,
-                confidence: v.confidence,
-                indicators: Object.keys(v.indicators || {})
-              };
-              return acc;
-            }, {})
-          });
-        }
         
         // Force new object reference to ensure React detects change
         const dataWithTimestamp = { 
@@ -152,23 +133,14 @@ export function useAnalysis(options: UseAnalysisOptions = {}): UseAnalysisReturn
         throw new Error(`HTTP ${response.status}: ${response.statusText}`);
       }
     } catch (err) {
-      const attemptNum = attemptCountRef.current;
-      if (attemptNum <= 3 || attemptNum % 10 === 0) {
-        console.error('[useAnalysis] ❌ Fetch error:', err);
-      }
       setIsConnected(false);
 
       // ── Fall back to last-known cache on API failure ──────────────────────
       // Keep showing real values instead of zeros when market is closed or
       // the backend is temporarily unreachable.
       setAnalyses(prev => {
-        if (prev !== null) return prev; // already have (cached) data — keep it
-        const cached = loadAnalysisCache();
-        if (cached) {
-          console.log('[useAnalysis] ⚠️ API failed — restored last-known analysis from cache');
-          return cached;
-        }
-        return null;
+        if (prev !== null) return prev;
+        return loadAnalysisCache();
       });
       
       if (err instanceof Error && err.name === 'AbortError') {

@@ -137,13 +137,20 @@ const calculateCandleConfidence = (data: CandleIntentData): number => {
   else if (bodyStrength >= 60) confidence += 8;
   else if (bodyRatio < 30) confidence -= 8; // Indecisive
   
-  // Volume confirmation (20% weight)
+  // Volume confirmation (20% weight) — skip penalty for spot indices (no traded volume)
   const volumeRatio = data.volume_analysis.volume_ratio;
   const volumeEff = data.volume_analysis.efficiency;
-  if (volumeRatio >= 2.0 && volumeEff === 'ABSORPTION') confidence += 15; // Strong volume
-  else if (volumeRatio >= 1.5) confidence += 10;
-  else if (volumeRatio >= 1.2) confidence += 5;
-  else if (volumeRatio < 0.8) confidence -= 10; // Weak volume
+  const isSpotIndex = data.volume_analysis.volume_type === 'SPOT_INDEX';
+  if (!isSpotIndex) {
+    if (volumeRatio >= 2.0 && volumeEff === 'ABSORPTION') confidence += 15;
+    else if (volumeRatio >= 1.5) confidence += 10;
+    else if (volumeRatio >= 1.2) confidence += 5;
+    else if (volumeRatio < 0.8) confidence -= 10;
+  } else {
+    // Spot index: use efficiency-based bonus/penalty only
+    if (volumeEff === 'HEALTHY') confidence += 8;
+    else if (volumeEff === 'NEUTRAL') confidence += 0;
+  }
   
   // Wick analysis (15% weight)
   const signal = getCandleSignal(data);
@@ -201,10 +208,13 @@ function computeCandlePrediction(data: CandleIntentData, overallConf: number): C
     score -= body.strength >= 75 ? 4 : body.strength >= 55 ? 3 : body.body_ratio_pct >= 40 ? 2 : 1;
   }
 
-  // Factor 2: Volume confirmation  (max ±3)
+  // Factor 2: Volume confirmation  (max ±3) — neutral for spot indices
   const vr = vol.volume_ratio;
-  if (body.is_bullish)  score += vr >= 2.0 ? 3 : vr >= 1.5 ? 2 : vr >= 1.2 ? 1 : vr < 0.8 ? -1 : 0;
-  else                  score -= vr >= 2.0 ? 3 : vr >= 1.5 ? 2 : vr >= 1.2 ? 1 : vr < 0.8 ? -1 : 0;
+  const isSpot = vol.volume_type === 'SPOT_INDEX';
+  if (!isSpot) {
+    if (body.is_bullish)  score += vr >= 2.0 ? 3 : vr >= 1.5 ? 2 : vr >= 1.2 ? 1 : vr < 0.8 ? -1 : 0;
+    else                  score -= vr >= 2.0 ? 3 : vr >= 1.5 ? 2 : vr >= 1.2 ? 1 : vr < 0.8 ? -1 : 0;
+  }
 
   // Factor 3: Wick rejection alignment  (max ±3)
   if (score > 0 && wick.lower_signal === 'BULLISH') score += wick.lower_strength && wick.lower_strength >= 70 ? 3 : 2;
@@ -245,11 +255,15 @@ function computeCandlePrediction(data: CandleIntentData, overallConf: number): C
   if (body.body_ratio_pct >= 60 && body.strength >= 70) conf += 9;  // decisive candle
   else if (body.body_ratio_pct < 25) conf -= 10;                     // doji / spinning top
 
-  // Volume quality
-  if (vr >= 2.0) conf += 9;        // spike — institutional move
-  else if (vr >= 1.5) conf += 6;
-  else if (vr >= 1.2) conf += 3;
-  else if (vr < 0.8)  conf -= 8;   // below-average vol = unreliable
+  // Volume quality — neutral for spot indices
+  if (!isSpot) {
+    if (vr >= 2.0) conf += 9;
+    else if (vr >= 1.5) conf += 6;
+    else if (vr >= 1.2) conf += 3;
+    else if (vr < 0.8) conf -= 8;
+  } else if (vol.efficiency === 'HEALTHY') {
+    conf += 5; // structure-based healthy move bonus
+  }
 
   // Pattern quality
   if (pat.confidence >= 80) conf += 6;

@@ -60,22 +60,6 @@ const CandleQualityAnalysis = memo<CandleQualityAnalysisProps>(({ symbol }) => {
         
         const result = await response.json();
         
-        console.log(`[${symbol}] Candle Quality Data:`, {
-          signal: result.candle_quality_signal,
-          confidence: result.candle_quality_confidence,
-          direction: result.candle_direction,
-          body_percent: result.body_percent,
-          candle_strength: result.candle_strength,
-          volume_above_threshold: result.volume_above_threshold,
-          fake_spike_detected: result.fake_spike_detected,
-          conviction_move: result.conviction_move,
-          current_volume: result.current_volume,
-          price: result.current_price,
-          open: result.open_price,
-          high: result.high_price,
-          low: result.low_price
-        });
-        
         if (result && result.candle_quality_signal !== undefined) {
           setData(result);
           setError(null);
@@ -207,7 +191,8 @@ const CandleQualityAnalysis = memo<CandleQualityAnalysisProps>(({ symbol }) => {
     '◆ NEUTRAL';
 
   // ── Derived pre-production intelligence ──
-  const bodyRating   = data.body_percent > 60 ? 'STRONG' : data.body_percent > 35 ? 'MODERATE' : 'WEAK';
+  // Body ≥55% = STRONG (clear momentum), 30-55% = MODERATE, <30% = WEAK (mostly wicks)
+  const bodyRating   = data.body_percent > 55 ? 'STRONG' : data.body_percent > 30 ? 'MODERATE' : 'WEAK';
   const volStatus    = data.volume_above_threshold ? 'HIGH' : 'NORMAL';
   const convictionLv = data.conviction_move ? 'CONFIRMED' : data.momentum_score > 60 ? 'BUILDING' : 'LOW';
 
@@ -216,22 +201,31 @@ const CandleQualityAnalysis = memo<CandleQualityAnalysisProps>(({ symbol }) => {
   const bodyExpect     = data.conviction_move ? 'EXPANDING' : data.fake_spike_detected ? 'SHRINKING' : 'STABLE';
   const volumeExpect   = data.volume_above_threshold && data.conviction_move ? 'SURGING' : data.fake_spike_detected ? 'FADING' : 'STEADY';
 
-  // ── 5-factor Confidence calculation ──
+  // ── 5-Min Conviction confidence (direction-aware, continuous) ──
+  // Mirrors the backend unified formula:  body_percent → piecewise 35–88%,
+  // direction-aware momentum ±8pp, Boolean factors as proportional multipliers.
   const volConfidence = (() => {
-    let score = 38;
-    // Factor 1: body strength (+18 STRONG, +8 MODERATE, -5 WEAK)
-    if (bodyRating === 'STRONG')        score += 18;
-    else if (bodyRating === 'MODERATE') score += 8;
-    else                                score -= 5;
-    // Factor 2: volume quality (+14 if above threshold)
-    if (data.volume_above_threshold)    score += 14;
-    // Factor 3: conviction move (+12)
-    if (data.conviction_move)           score += 12;
-    // Factor 4: fake spike penalty (-18)
-    if (data.fake_spike_detected)       score -= 18;
-    // Factor 5: momentum blend (normalized 0-100 → ±10)
-    score += Math.round(((data.momentum_score || 50) - 50) * 0.20);
-    return Math.min(90, Math.max(35, Math.round(score)));
+    const bp  = data.body_percent    || 0;
+    const mom = data.momentum_score  || 50;
+
+    // Piecewise base from body_percent (0–100)
+    let base: number;
+    if (bp >= 55)      base = 65 + (bp - 55) * (20 / 45);        // 65→74 as bp 55→100
+    else if (bp >= 30) base = 52 + (bp - 30) * (13 / 25);        // 52→65 as bp 30→55
+    else               base = Math.max(35, 35 + bp * (17 / 30)); // 35→52 as bp  0→30
+
+    // Direction-aware momentum adjustment: ±8pp continuous
+    const momAdj = isBuy  ? ((mom - 50) / 50) * 8
+                 : isSell ? ((50 - mom) / 50) * 8
+                 : (Math.abs(mom - 50) / 50) * 8;  // neutral/wait: any extreme adds
+    base += momAdj;
+
+    // Boolean factor multipliers — proportional, no flat cliffs
+    if (data.volume_above_threshold) base *= 1.08;  // +8% volume confirmation
+    if (data.conviction_move)        base *= 1.05;  // +5% conviction (on top of volume)
+    if (data.fake_spike_detected)    base *= 0.82;  // -18% fake-spike penalty
+
+    return Math.min(90, Math.max(35, Math.round(base)));
   })();
 
   return (
@@ -330,7 +324,7 @@ const CandleQualityAnalysis = memo<CandleQualityAnalysisProps>(({ symbol }) => {
           <div className="p-2.5 rounded-lg bg-[#0d1117] border border-white/[0.06]">
             <p className="text-[8px] text-slate-600 uppercase tracking-wide mb-1">Body Strength</p>
             <p suppressHydrationWarning className={`text-[13px] font-bold ${
-              data.body_percent > 60 ? 'text-teal-300' :
+              data.body_percent > 55 ? 'text-teal-300' :
               data.body_percent > 30 ? 'text-amber-300' : 'text-rose-300'
             }`}>
               {data.body_percent?.toFixed(1) || '0'}%
@@ -361,7 +355,7 @@ const CandleQualityAnalysis = memo<CandleQualityAnalysisProps>(({ symbol }) => {
         </div>
       </div>
 
-      {/* ── 5-MIN CONFIDENCE SECTION ── */}
+      {/* ── 5-MIN CONVICTION SECTION ── */}
       <div className="mx-3 mt-2 mb-3 rounded-xl overflow-hidden border border-white/[0.06] bg-[#0d1117]">
         <div className="h-px bg-gradient-to-r from-transparent via-white/10 to-transparent" />
         <div className="px-3 pt-2.5 pb-1 flex items-center justify-between">
@@ -369,10 +363,10 @@ const CandleQualityAnalysis = memo<CandleQualityAnalysisProps>(({ symbol }) => {
             <span suppressHydrationWarning className={`w-1 h-1 rounded-full animate-pulse ${
               isBuy ? 'bg-teal-400' : isSell ? 'bg-rose-400' : 'bg-amber-400'
             }`} />
-            <span className="text-[9px] text-white/40 font-bold uppercase tracking-widest">5-Min Confidence</span>
+            <span className="text-[9px] text-white/40 font-bold uppercase tracking-widest">5-Min Conviction</span>
           </div>
           <div className="flex items-center gap-1.5">
-            <span className="text-[10px] text-white/30">Confidence</span>
+            <span className="text-[10px] text-white/30">Strength</span>
             <span suppressHydrationWarning className={`text-[11px] font-black ${
               isBuy ? 'text-teal-300' : isSell ? 'text-rose-300' : 'text-amber-300'
             }`}>{volConfidence}%</span>
@@ -414,7 +408,7 @@ const CandleQualityAnalysis = memo<CandleQualityAnalysisProps>(({ symbol }) => {
               convictionLv === 'CONFIRMED' ? 'text-teal-300' :
               convictionLv === 'BUILDING'  ? 'text-amber-300' : 'text-white/30'
             }`}>
-              {convictionLv === 'CONFIRMED' ? 'CONF' : convictionLv === 'BUILDING' ? 'BUILD' : 'LOW'}
+              {convictionLv === 'CONFIRMED' ? '✓ HIGH' : convictionLv === 'BUILDING' ? '▲ MED' : '▼ LOW'}
             </p>
           </div>
         </div>

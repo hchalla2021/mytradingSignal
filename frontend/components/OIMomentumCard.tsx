@@ -30,12 +30,13 @@ const SIGS: Record<string, {
 const getSig = (s?: string | null) => SIGS[(s ?? "").toUpperCase()] ?? SIGS.NO_SIGNAL;
 
 // ── Confidence: adjust raw API value for current market state ────────────────
+// Smooth linear boost during LIVE hours: +0 at 50%, +2 at 60%, +4 at 70%,
+// +6 at 80%, +8 at 90%+.  No quantization cliffs — a 1-pt backend change
+// causes at most a 1.2-pt display change (continuous, never jumpy).
 function adjustConf(base: number, status: string): number {
   if (status === "LIVE") {
-    if (base >= 80) return Math.min(98, base + 8);
-    if (base >= 70) return Math.min(95, base + 5);
-    if (base >= 60) return Math.min(90, base + 3);
-    return base;
+    const boost = Math.min(8, Math.max(0, (base - 50) / 5));
+    return Math.min(98, Math.round(base + boost));
   }
   if (status === "PRE_OPEN" || status === "FREEZE") return Math.max(30, base - 15);
   return Math.max(20, base - 25); // CLOSED / OFFLINE

@@ -187,12 +187,38 @@ async def get_volume_pulse(symbol: str) -> Dict[str, Any]:
             print(f"[VOLUME-PULSE] ⚡⚡⚡ INSTANT CACHE HIT for {symbol} - <1ms response")
             return cached
         
-        # 🚀 FETCH LIVE DATA - OPTIMIZED FOR SPEED
-        print(f"[VOLUME-PULSE] 🚀 Fetching fresh data from Zerodha...")
-        # ⚡ OPTIMIZED: Reduced from 200 to 100 candles for 2x faster response
-        # 100 candles (3-min) = 5 hours of data - sufficient for volume analysis
-        df = await _get_historical_data(symbol, lookback=100)
-        print(f"[VOLUME-PULSE] 📊 Received {len(df)} candles")
+        # ── Priority 1: live WebSocket candle cache (always fresh, no Zerodha token needed) ──
+        df = pd.DataFrame()
+        try:
+            import json as _json
+            _cc = get_cache()
+            _candle_key = f"analysis_candles:{symbol}"
+            _candles_raw = await _cc.lrange(_candle_key, 0, 99)  # newest-first list
+            if _candles_raw and len(_candles_raw) >= 20:
+                _rows = []
+                for _c in reversed(_candles_raw):   # reverse → chronological order
+                    try:
+                        _rows.append(_json.loads(_c))
+                    except Exception:
+                        continue
+                if len(_rows) >= 20:
+                    df = pd.DataFrame(_rows)
+                    for _col in ('open', 'high', 'low', 'close'):
+                        if _col not in df.columns:
+                            df[_col] = 0.0
+                        df[_col] = pd.to_numeric(df[_col], errors='coerce').fillna(0.0)
+                    if 'volume' not in df.columns:
+                        df['volume'] = 0
+                    df['volume'] = pd.to_numeric(df['volume'], errors='coerce').fillna(0).astype(int)
+                    print(f"[VOLUME-PULSE] ✅ Using live candle cache: {len(df)} candles")
+        except Exception as _ce:
+            print(f"[VOLUME-PULSE] ⚠️ Candle cache read failed: {_ce}")
+
+        # ── Priority 2: Zerodha REST API (fallback when candle cache insufficient) ──
+        if df.empty:
+            print(f"[VOLUME-PULSE] 🚀 Fetching fresh data from Zerodha...")
+            df = await _get_historical_data(symbol, lookback=100)
+            print(f"[VOLUME-PULSE] 📊 Received {len(df)} candles")
         
         # 🔥 CHECK IF MARKET IS ACTUALLY OPEN for better threshold decision
         from services.market_feed import is_market_open
@@ -520,18 +546,42 @@ async def get_trend_base(symbol: str) -> Dict[str, Any]:
         elif total <= -20: signal = 'SELL';         trend = 'DOWNTREND'
         else:              signal = 'NEUTRAL';      trend = 'SIDEWAYS'
 
-        # ── CONFIDENCE (30–92%, never 100%) ──────────────────────────────
+        # ── MARKET STATUS (from instant analysis, not hardcoded) ────────
+        market_status = analysis.get('status', 'CLOSED')  # LIVE / CLOSED / PRE_OPEN / FREEZE
+
+        # ── CONFIDENCE (25–92%, market-status aware) ─────────────────────
+        # LIVE: fresh ticks → full confidence range
+        # CLOSED/stale: last-known data may not reflect current reality → penalise
         integrity     = min(100, abs(total))
         n_f           = len(factors)
         bull_cnt      = sum(1 for f in factors.values() if f['score'] > 0)
         bear_cnt      = sum(1 for f in factors.values() if f['score'] < 0)
         agreement     = max(bull_cnt, bear_cnt) / n_f   # 0.5 → 1.0
-        confidence    = round(min(92, max(30, 30 + integrity * 0.45 + agreement * 22)))
+        live_bonus    = 6 if market_status == 'LIVE' else -8
+        confidence    = round(min(92, max(25, 30 + integrity * 0.45 + agreement * 22 + live_bonus)))
 
         # ── 5-MIN SIGNAL (ST dominates short-term, RSI + candle support) ──
         s5 = st_score * 0.55 + rsi_score * 0.30 + (
              7 if candle_dir == 'BULLISH' else -7 if candle_dir == 'BEARISH' else 0) * 0.15
         signal_5m = 'BUY' if s5 >= 8 else 'SELL' if s5 <= -8 else 'NEUTRAL'
+
+        # ── 5-MIN CONFIDENCE (independent of main; uses short-term factors) ─
+        # Anchored to raw 8-factor score but weighted toward ST + RSI (intraday)
+        rsi_5m_adj   = round((rsi_5m - 50) * 0.24) if signal_5m == 'BUY' else round((50 - rsi_5m) * 0.24)
+        st_5m_adj    = ( 7 if (signal_5m == 'BUY'  and st_trend == 'BULLISH')
+                        else 7 if (signal_5m == 'SELL' and st_trend == 'BEARISH')
+                        else -6 if (signal_5m == 'BUY'  and st_trend == 'BEARISH')
+                        else -6 if (signal_5m == 'SELL' and st_trend == 'BULLISH')
+                        else 0)
+        sig_align_adj = ( 4 if (signal_5m == 'BUY'  and signal in ('BUY', 'STRONG_BUY'))
+                         else 4 if (signal_5m == 'SELL' and signal in ('SELL', 'STRONG_SELL'))
+                         else -5 if (signal_5m != 'NEUTRAL' and signal not in ('NEUTRAL',) and
+                                     not ((signal_5m == 'BUY' and 'BUY' in signal) or
+                                          (signal_5m == 'SELL' and 'SELL' in signal)))
+                         else 0)
+        confidence_5m = round(min(92, max(25,
+            30 + integrity * 0.38 + agreement * 18 + live_bonus + rsi_5m_adj + st_5m_adj + sig_align_adj
+        )))
 
         # ── 15-MIN TREND (structure + EMA stack + VWAP) ──────────────────
         s15 = ts_score * 0.50 + ema_score * 0.30 + vwap_score * 0.20
@@ -556,10 +606,11 @@ async def get_trend_base(symbol: str) -> Dict[str, Any]:
             "trend_15m":       trend_15m,
             "trend":           trend,
             "confidence":      confidence,
+            "confidence_5m":   confidence_5m,
             "total_score":     total,
             "factors":         factors,
-            "status":          "LIVE",
-            "data_status":     "LIVE",
+            "status":          market_status,
+            "data_status":     market_status,
             "timestamp":       datetime.now().isoformat(),
             "candles_analyzed": int(ind.get('candles_count') or 120),
             "rsi_5m":          round(rsi_5m,  1),
@@ -1443,15 +1494,37 @@ async def get_candle_intent(symbol: str) -> Dict[str, Any]:
                 print(f"[CANDLE-INTENT] ⚡ Cache hit for {symbol} (60s cache outside trading hours)")
                 return cached
         
-        # 🔥 FIX: Use FUTURES data (has volume) instead of SPOT INDEX (no volume)
-        # Candle Intent REQUIRES volume for pattern detection
-        print(f"[CANDLE-INTENT] 🚀 Fetching LIVE candles from Zerodha...")
-        print(f"   → Symbol: {symbol}")
-        print(f"   → Lookback: 100 candles (for volume average and patterns)")
-        print(f"   → Data Source: FUTURES (includes volume)")
-        
-        # Use same data fetch as Volume Pulse - FUTURES have volume!
-        df = await _get_historical_data(symbol, lookback=100)
+        # ── Priority 1: live WebSocket candle cache (always fresh, no Zerodha token needed) ──
+        df = pd.DataFrame()
+        try:
+            import json as _json
+            _cc = get_cache()
+            _candle_key = f"analysis_candles:{symbol}"
+            _candles_raw = await _cc.lrange(_candle_key, 0, 99)  # newest-first list
+            if _candles_raw and len(_candles_raw) >= 3:
+                _rows = []
+                for _c in reversed(_candles_raw):   # reverse → chronological order
+                    try:
+                        _rows.append(_json.loads(_c))
+                    except Exception:
+                        continue
+                if len(_rows) >= 3:
+                    df = pd.DataFrame(_rows)
+                    for _col in ('open', 'high', 'low', 'close'):
+                        if _col not in df.columns:
+                            df[_col] = 0.0
+                        df[_col] = pd.to_numeric(df[_col], errors='coerce').fillna(0.0)
+                    if 'volume' not in df.columns:
+                        df['volume'] = 0
+                    df['volume'] = pd.to_numeric(df['volume'], errors='coerce').fillna(0).astype(int)
+                    print(f"[CANDLE-INTENT] ✅ Using live candle cache: {len(df)} candles")
+        except Exception as _ce:
+            print(f"[CANDLE-INTENT] ⚠️ Candle cache read failed: {_ce}")
+
+        # ── Priority 2: Zerodha REST API (fallback when candle cache insufficient) ──
+        if df.empty:
+            print(f"[CANDLE-INTENT] 🚀 Fetching LIVE candles from Zerodha...")
+            df = await _get_historical_data(symbol, lookback=100)
         
         print(f"[CANDLE-INTENT] 📊 Data fetch result:")
         print(f"   → Candles received: {len(df)}")
@@ -1537,10 +1610,11 @@ async def get_candle_intent(symbol: str) -> Dict[str, Any]:
         print(f"[CANDLE-INTENT] 🔬 Running candle structure analysis...")
         result = await analyze_candle_intent(symbol, df, inject_live_tick=True)
         
-        # Add metadata
-        result["status"] = "LIVE"
+        # Add metadata — use real market status so frontend status badge is accurate
+        from services.market_feed import get_market_status
+        result["status"] = get_market_status()
         result["token_valid"] = token_status["valid"]
-        result["data_source"] = "ZERODHA_FUTURES"
+        result["data_source"] = "LIVE_CANDLE_CACHE"
         result["candles_analyzed"] = len(df)
         
         # Smart cache strategy (same as other live components)

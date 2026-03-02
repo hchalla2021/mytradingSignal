@@ -149,12 +149,23 @@ def _parse_candle(item) -> Optional[Dict]:
 
 
 def _ema(series: List[float], period: int) -> Optional[float]:
-    if len(series) < period:
+    """EMA with graceful degradation: seeds from first value when fewer candles than period.
+    Requires at least 3 data points; returns None only when data is truly insufficient.
+    """
+    if len(series) < 3:
         return None
     k = 2.0 / (period + 1)
-    val = sum(series[:period]) / period
-    for price in series[period:]:
-        val = price * k + val * (1.0 - k)
+    if len(series) >= period:
+        # Standard SMA seed over first `period` bars
+        val = sum(series[:period]) / period
+        for price in series[period:]:
+            val = price * k + val * (1.0 - k)
+    else:
+        # Fewer bars than period — seed from first close, apply multiplier over all
+        # Result is an approximation that converges as more bars arrive
+        val = series[0]
+        for price in series[1:]:
+            val = price * k + val * (1.0 - k)
     return val
 
 
@@ -396,11 +407,11 @@ def _price_momentum_signal(candles: List[Dict], spot_price: float) -> Dict:
         "extra": {"ema9": None, "ema20": None, "vwap": None, "vwapDev": None},
     }
 
-    if len(candles) < 10 or spot_price <= 0:
+    if len(candles) < 3 or spot_price <= 0:
         return neutral
 
     closes = [float(c.get("close") or 0) for c in candles if c.get("close")]
-    if len(closes) < 10:
+    if len(closes) < 3:
         return neutral
 
     ema9  = _ema(closes, 9)
@@ -552,13 +563,27 @@ def _finalize_liquidity(signals: Dict) -> Tuple[str, int, float]:
     else:
         direction = "NEUTRAL"
 
-    sig_type = "BULL" if direction == "BULLISH" else ("BEAR" if direction == "BEARISH" else None)
-    if sig_type:
-        agreement = sum(s["weight"] for s in signals.values() if s["signal"] == sig_type)
-        confidence = int(35 + agreement * 65)
+    # ── Confidence: strength × consensus (mirrors compass_service pattern) ──────────
+    # NEUTRAL  (30–52 %): peaks at raw=0, falls toward band edges.
+    # Directional (35–99 %): normalised strength + contradiction penalty.
+    if direction == "NEUTRAL":
+        band_centre = 1.0 - (abs(raw) / BULL_T)
+        confidence  = int(30 + band_centre * 22)          # 30–52 %
     else:
-        neutrality = 1.0 - (abs(raw) / max(abs(BULL_T), 0.01))
-        confidence = int(40 + neutrality * 20)
+        sign = 1.0 if direction == "BULLISH" else -1.0
+        # pos_contrib / neg_contrib: track both WITH and AGAINST contributions
+        pos_contrib = sum(
+            max(0.0, s["score"] * sign) * s["weight"] for s in signals.values()
+        )
+        neg_contrib = sum(
+            max(0.0, -s["score"] * sign) * s["weight"] for s in signals.values()
+        )
+        net      = pos_contrib - neg_contrib
+        # strength: 0 at threshold, 1 when all factors max-agree
+        strength = (net - BULL_T) / (1.0 - BULL_T)
+        # penalty: each opposing weighted unit costs 25 pts
+        penalty    = neg_contrib * 25
+        confidence = int(round(35 + strength * 64 - penalty))
 
     return direction, max(1, min(99, confidence)), round(raw, 4)
 
@@ -571,14 +596,26 @@ def _predict_5m_liquidity(signals: Dict) -> Tuple[str, int]:
     score = sum(signals[k]["score"] * W5M.get(k, 0) for k in signals)
     score = _clamp(score, -1.0, 1.0)
 
-    if score >=  0.55: pred, base = "STRONG_BUY",  82
-    elif score >=  0.25: pred, base = "BUY",         62
-    elif score <= -0.55: pred, base = "STRONG_SELL", 82
-    elif score <= -0.25: pred, base = "SELL",         62
-    else:                pred, base = "NEUTRAL",      48
+    # Piecewise confidence: continuous across ALL tier boundaries — no cliffs.
+    #   NEUTRAL  (|score| < 0.25):            40–48 %  — await clearer signal
+    #   BUY/SELL (0.25 ≤ |score| < 0.55):    50–65 %  — directional momentum
+    #   STRONG   (|score| ≥ 0.55):            65–92 %  — multi-factor alignment
+    abs_s = abs(score)
+    if abs_s < 0.25:
+        conf = int(40 + (abs_s / 0.25) * 8)                    # 40–48 %
+    elif abs_s < 0.55:
+        conf = int(50 + ((abs_s - 0.25) / 0.30) * 15)          # 50–65 %
+    else:
+        conf = int(65 + ((abs_s - 0.55) / 0.45) * 27)          # 65–92 %
+    conf = max(40, min(92, conf))
 
-    conf = int(base + abs(score) * 14)
-    return pred, max(1, min(99, conf))
+    if score >=  0.55: pred = "STRONG_BUY"
+    elif score >=  0.25: pred = "BUY"
+    elif score <= -0.55: pred = "STRONG_SELL"
+    elif score <= -0.25: pred = "SELL"
+    else:                pred = "NEUTRAL"
+
+    return pred, conf
 
 
 # ── Main Service ──────────────────────────────────────────────────────────────

@@ -35,11 +35,15 @@ dist/
 .cache/
 frontend/.env.local
 backend/.env
-# Environment variables
+# Environment variables (any file containing secrets)
 .env
 .env.local
 .env.development
 .env.production
+.env.digitalocean
+backend/.env.digitalocean
+frontend/.env.digitalocean
+archive/env_backups/
 *.log
 
 # Keep example files for reference

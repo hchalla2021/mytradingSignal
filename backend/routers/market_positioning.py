@@ -189,10 +189,15 @@ def _calc_confidence(
         # Fading: small penalty proportional to how far below avg (max -8)
         vol_bonus = max(-8, -(vol_dev_abs * 0.5))
 
-    # ── Factor 4: Tick consistency ────────────────────────────────────────────
-    # 100% consistent ticks = institutions pushing price directionally → +10
-    # 50% random ticks = choppy → +0
-    tick_bonus = min(10, tick_consistency * 12)
+    # ── Factor 4: Tick consistency (direction-aware, −1 to +1) ──────────────────
+    # Positive = ticks ALIGN with signal direction → +0 to +10 confidence boost
+    # Negative = ticks OPPOSE signal direction     →   0 to −15 confidence penalty
+    # (Opposition penalty is asymmetrically larger: an opposing tick flow is a
+    #  stronger warning than an aligned one is confirmation.)
+    if tick_consistency >= 0:
+        tick_bonus = min(10, tick_consistency * 12)
+    else:
+        tick_bonus = max(-15, tick_consistency * 15)
 
     raw = clarity_base + type_adj + price_bonus + vol_bonus + tick_bonus
     return max(20, min(92, int(raw)))
@@ -308,19 +313,22 @@ def _build_prediction(history: list[dict], current: dict) -> dict:
 
     pos = _classify_positioning(price_acc, vol_building, oi_acc)
 
-    # ── Confidence: weighted by signal strengths ──────────────────────────────
+    # ── Confidence: tiered base + earned bonuses ──────────────────────────────
+    # Base reflects signal type; bonuses must be EARNED by actual market data.
+    # Old floors (72/55/50/35) caused unearned confidence on minimal moves.
+    # New floors are starting points; max achievable: 50 + 25 + 22 + 8 = 105 → 95.
     base_conf = {
-        "LONG_BUILDUP":   72,
-        "SHORT_BUILDUP":  72,
-        "SHORT_COVERING": 55,
-        "LONG_UNWINDING": 55,
-        "MIXED_BULLISH":  50,
-        "MIXED_BEARISH":  50,
-        "NEUTRAL":        35,
-    }.get(pos["type"], 35)
+        "LONG_BUILDUP":   50,   # fresh institutional longs — earned by momentum
+        "SHORT_BUILDUP":  50,   # fresh institutional shorts — earned by momentum
+        "SHORT_COVERING": 38,   # shorts exiting — moderate base
+        "LONG_UNWINDING": 38,   # longs exiting  — moderate base
+        "MIXED_BULLISH":  28,   # conflicting participant flows — low base
+        "MIXED_BEARISH":  28,   # conflicting participant flows — low base
+        "NEUTRAL":        22,   # no directional signal — near-floor
+    }.get(pos["type"], 22)
 
-    chg_bonus         = min(25, abs(latest_chg) * 10)     # bigger daily move  → more confident
-    consistency_bonus = min(20, abs(tick_bias)  * 20)      # tighter tick flow  → more confident
+    chg_bonus         = min(25, abs(latest_chg) * 12)   # 0.5%→6, 1%→12, 2%→24, cap 25
+    consistency_bonus = min(22, abs(tick_bias)  * 22)   # 0→0, 0.5→11, 1.0→22
     vol_bonus         = 8  if vol_building else 0
 
     conf = min(95, int(base_conf + chg_bonus + consistency_bonus + vol_bonus))
@@ -440,16 +448,26 @@ def _analyse_symbol(symbol: str, data: dict) -> dict:
         else:
             oi_up = False
 
-    # ── Tick consistency (0.0–1.0) ──────────────────────────────────────────
-    # Fraction of recent ticks moving monotonically in the signal direction.
-    # Used by confidence model — high consistency = institutions driving the move.
+    # ── Tick flow ─────────────────────────────────────────────────────────────────────
+    # Compute signed tick_net first; direction-aware tick_consistency is derived
+    # AFTER positioning so we can align the sign with the actual signal.
     _win = hist[-min(len(hist), 6):]
     _up  = sum(1 for i in range(1, len(_win)) if _win[i]["price"] > _win[i - 1]["price"])
     _dn  = sum(1 for i in range(1, len(_win)) if _win[i]["price"] < _win[i - 1]["price"])
     _tot = max(len(_win) - 1, 1)
-    tick_consistency = abs(_up - _dn) / _tot   # 0.0 = perfectly choppy, 1.0 = perfectly monotone
+    _tick_net = (_up - _dn) / _tot             # −1 fully bearish … +1 fully bullish
 
     positioning = _classify_positioning(price_up, vol_up, oi_up)
+
+    # Direction-aware: +1 = all ticks ALIGN with signal, −1 = all ticks OPPOSE
+    # Aligned ticks boost confidence; opposing ticks trigger a penalty in _calc_confidence.
+    _pos_sig = positioning["signal"]
+    if _pos_sig in ("STRONG_BUY", "BUY"):
+        tick_consistency = _tick_net           # positive when bull ticks = aligned
+    elif _pos_sig in ("STRONG_SELL", "SELL"):
+        tick_consistency = -_tick_net          # positive when bear ticks = aligned
+    else:
+        tick_consistency = abs(_tick_net)      # NEUTRAL: magnitude only, no directional penalty
 
     # ── Dynamic description with live metric values ──────────────────────────
     # Overwrite the generic template with actual numbers so the trader sees real data.
@@ -457,7 +475,7 @@ def _analyse_symbol(symbol: str, data: dict) -> dict:
         positioning = dict(positioning)   # shallow copy — never mutate the template
         direction_arrow = "↑" if pr_chg  > 0 else "↓"
         vol_arrow       = "↑" if vol_chg > 0 else "↓"
-        tick_pct        = int(tick_consistency * 100)
+        tick_pct        = int(abs(_tick_net) * 100)   # display: unsigned magnitude %
         positioning["description"] = (
             f"{positioning['description']} — "
             f"Price {direction_arrow}{abs(pr_chg):.2f}% | "
@@ -474,7 +492,7 @@ def _analyse_symbol(symbol: str, data: dict) -> dict:
     price_tick = round(price - prev["price"], 2)   # e.g. +3.50 or -2.80 pts
 
     # ── Tick flow % (directional ticks as OI proxy when oi=0) ────────────────
-    tick_flow = round(tick_consistency * 100, 1)   # 0–100 %, 100 = all ticks same dir
+    tick_flow = round(abs(_tick_net) * 100, 1)     # 0–100 %, 100 = all ticks same direction (unsigned magnitude)
 
     return {
         "symbol":      symbol,

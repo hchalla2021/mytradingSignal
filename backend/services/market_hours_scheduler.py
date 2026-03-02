@@ -421,6 +421,23 @@ class MarketHoursScheduler:
             if getattr(self.market_feed, '_using_rest_fallback', False):
                 print("   ⚠️ WebSocket failed, but REST fallback active")
                 self.market_feed._starting = False
+
+                # Still restore backup candles so OI Momentum works immediately
+                print("\n   📥 Restoring historical candles (REST fallback mode)...")
+                try:
+                    symbols = ["NIFTY", "BANKNIFTY", "SENSEX"]
+                    results = await CandleBackupService.restore_all_symbols(
+                        self.market_feed.cache,
+                        symbols
+                    )
+                    restored_count = sum(1 for v in results.values() if v)
+                    if restored_count > 0:
+                        print(f"   ✅ Restored candles for {restored_count}/{len(symbols)} symbols")
+                    else:
+                        print(f"   ℹ️  No backup candles found - will build from REST feed")
+                except Exception as e:
+                    print(f"   ⚠️  Could not restore candles: {e}")
+
                 return True  # REST is better than nothing
             
             self.market_feed._starting = False

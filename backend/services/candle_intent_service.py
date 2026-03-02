@@ -120,9 +120,12 @@ class CandleIntentEngine:
             
             # Calculate average volume (last 20 candles)
             recent_df = df.tail(20)
-            avg_volume = float(recent_df['volume'].mean()) if 'volume' in recent_df.columns else 1
-            if avg_volume == 0:
-                avg_volume = 1
+            avg_volume_raw = float(recent_df['volume'].mean()) if 'volume' in recent_df.columns else 0.0
+            avg_volume = avg_volume_raw if avg_volume_raw > 0 else 1
+
+            # Detect spot indices (NIFTY/BANKNIFTY/SENSEX) — volume_traded is always 0
+            # When ALL 20 recent candles have zero volume, analysis must rely on OHLC structure only
+            is_spot_index = (float(recent_df['volume'].sum()) == 0)
             
             # === CORE CALCULATIONS (Vectorized for speed) ===
             candle_range = high_price - low_price
@@ -140,8 +143,8 @@ class CandleIntentEngine:
             upper_wick_ratio = upper_wick / candle_range
             lower_wick_ratio = lower_wick / candle_range
             
-            # Volume efficiency
-            volume_ratio = volume / avg_volume if avg_volume > 0 else 1.0
+            # Volume efficiency — neutral (1.0) for spot indices so no false LOW-VOLUME penalties
+            volume_ratio = 1.0 if is_spot_index else (volume / avg_volume if avg_volume > 0 else 1.0)
             
             # Price movement percentage
             price_change_pct = ((close_price - prev_close) / prev_close) * 100 if prev_close > 0 else 0
@@ -159,7 +162,7 @@ class CandleIntentEngine:
             
             # === VOLUME ANALYSIS ===
             volume_analysis = self._analyze_volume(
-                volume_ratio, body_ratio, price_change_pct, volume, avg_volume
+                volume_ratio, body_ratio, price_change_pct, volume, avg_volume, is_spot_index
             )
             
             # === ZONE PROXIMITY CHECK ===
@@ -168,7 +171,7 @@ class CandleIntentEngine:
             # === PATTERN DETECTION (Professional Logic) ===
             pattern = self._detect_pattern(
                 wick_analysis, body_analysis, volume_analysis, near_zone,
-                upper_wick_ratio, lower_wick_ratio, body_ratio, volume_ratio
+                upper_wick_ratio, lower_wick_ratio, body_ratio, volume_ratio, is_spot_index
             )
             
             # === PROFESSIONAL SIGNAL GENERATION ===
@@ -332,7 +335,8 @@ class CandleIntentEngine:
         body_ratio: float,
         price_change_pct: float,
         volume: float,
-        avg_volume: float
+        avg_volume: float,
+        is_spot_index: bool = False
     ) -> Dict:
         """
         🔥 PROFESSIONAL: Analyze volume-price efficiency
@@ -345,6 +349,29 @@ class CandleIntentEngine:
         - Bear Trap: Big red candle + Low volume = Fake breakdown
         - Sharp moves without volume = Suspicious
         """
+        # ── Spot index: no traded volume — derive efficiency from OHLC structure ──
+        if is_spot_index:
+            vol_type = "SPOT_INDEX"
+            vol_interpretation = "Spot index — price-structure analysis only"
+            alert_level = "NORMAL"
+            if body_ratio >= 0.6 and abs(price_change_pct) >= 0.5:
+                efficiency = "HEALTHY"
+                efficiency_interpretation = "✅ HEALTHY MOVE — strong directional body"
+            elif body_ratio < 0.3:
+                efficiency = "NEUTRAL"
+                efficiency_interpretation = "Indecisive candle — wait for direction"
+            else:
+                efficiency = "NEUTRAL"
+                efficiency_interpretation = "Normal price-structure relationship"
+            return {
+                "volume": 0, "avg_volume": 0, "volume_ratio": 1.0,
+                "volume_type": vol_type, "volume_interpretation": vol_interpretation,
+                "efficiency": efficiency, "efficiency_interpretation": efficiency_interpretation,
+                "signal": "NEUTRAL",
+                "trap_detected": False, "trap_type": None,
+                "trap_severity": 0, "alert_level": alert_level,
+            }
+
         # Volume classification
         if volume_ratio >= 2.0:
             vol_type = "VERY_HIGH"
@@ -490,7 +517,8 @@ class CandleIntentEngine:
         upper_wick_ratio: float,
         lower_wick_ratio: float,
         body_ratio: float,
-        volume_ratio: float
+        volume_ratio: float,
+        is_spot_index: bool = False
     ) -> CandlePattern:
         """
         🔥 PROFESSIONAL: Detect primary candle pattern
@@ -552,15 +580,17 @@ class CandleIntentEngine:
                 confidence=70
             )
         
-        # Pattern 6: HEALTHY MOVE (Big body + High volume)
-        if body_ratio >= 0.6 and volume_ratio >= 1.5:
+        # Pattern 6: HEALTHY MOVE (Big body + High volume, or big body on spot index with OHLC-only analysis)
+        if body_ratio >= 0.6 and (volume_ratio >= 1.5 or is_spot_index):
             intent = "BULLISH" if body_analysis['is_bullish'] else "BEARISH"
+            vol_note = "volume confirmation" if not is_spot_index else "price-structure confirmation"
+            conf = 85 if not is_spot_index else 75  # slightly lower confidence without volume
             return CandlePattern(
                 pattern_type="HEALTHY_MOVE",
-                strength=int((body_ratio + volume_ratio/3) * 100),
+                strength=int(body_ratio * 100),
                 intent=intent,
-                interpretation=f"Strong {intent.lower()} move with volume confirmation - Follow the trend",
-                confidence=85
+                interpretation=f"Strong {intent.lower()} move with {vol_note} — follow the trend",
+                confidence=conf
             )
         
         # Default: NEUTRAL

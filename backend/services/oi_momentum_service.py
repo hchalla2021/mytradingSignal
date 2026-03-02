@@ -28,9 +28,9 @@ class OIMomentumService:
     """
 
     def __init__(self):
-        self.min_candles_required = 5   # Need ≥5 closed 5-min candles (25 min of data)
-        self.volume_avg_period = 5      # 5-candle rolling average — works with minimal history
-        self.lookback_period = 3        # 3-candle lookback for liquidity grab (less data needed)
+        self.min_candles_required = 3   # Need ≥3 closed 5-min candles (15 min of data — signals from 9:30 AM)
+        self.volume_avg_period = 3      # 3-candle rolling average — works with minimal history
+        self.lookback_period = 2        # 2-candle lookback for liquidity grab
 
     def analyze_signal(
         self,
@@ -264,41 +264,53 @@ class OIMomentumService:
         # Smart money pushes price below previous low to trigger stop-losses
         df['avg_volume'] = df['volume'].rolling(self.volume_avg_period, min_periods=1).mean()
         df['lowest_low_5'] = df['low'].rolling(self.lookback_period, min_periods=1).min().shift(1)
-        
-        df['liquidity_grab'] = (
-            (df['low'] < df['lowest_low_5']) &  # Low breaks previous N-candle low
-            (df['volume'] > 1.5 * df['avg_volume']) &  # Volume spike >1.5x
-            (df['close'] > df['low'].shift(1))  # Strong rejection close
-        )
-        
-        # 🧠 SELL-SIDE LIQUIDITY GRAB
-        # Smart money pushes price above previous high to trigger buy stop-losses
         df['highest_high_5'] = df['high'].rolling(self.lookback_period, min_periods=1).max().shift(1)
-        
-        df['liquidity_grab_sell'] = (
-            (df['high'] > df['highest_high_5']) &  # High breaks previous N-candle high
-            (df['volume'] > 1.5 * df['avg_volume']) &  # Volume spike
-            (df['close'] < df['high'].shift(1))  # Rejection (close below high)
-        )
+
+        # NSE spot indices have volume_traded = 0 from Zerodha WebSocket ticks.
+        # Detect this and fall back to price-structure-only liquidity grab.
+        has_volume_data = bool(df['volume'].sum() > 0)
+
+        if has_volume_data:
+            df['liquidity_grab'] = (
+                (df['low'] < df['lowest_low_5']) &       # Low breaks previous N-candle low
+                (df['volume'] > 1.5 * df['avg_volume']) & # Volume spike >1.5x
+                (df['close'] > df['low'].shift(1))         # Strong rejection close
+            )
+            # 🧠 SELL-SIDE LIQUIDITY GRAB
+            df['liquidity_grab_sell'] = (
+                (df['high'] > df['highest_high_5']) &     # High breaks previous N-candle high
+                (df['volume'] > 1.5 * df['avg_volume']) & # Volume spike
+                (df['close'] < df['high'].shift(1))        # Rejection (close below high)
+            )
+        else:
+            # Price-structure-only liquidity grab (no volume data for indices)
+            df['liquidity_grab'] = (
+                (df['low'] < df['lowest_low_5']) &
+                (df['close'] > df['low'].shift(1))
+            )
+            df['liquidity_grab_sell'] = (
+                (df['high'] > df['highest_high_5']) &
+                (df['close'] < df['high'].shift(1))
+            )
 
         # 🧠 PART 2: OI CHANGE CONFIRMATION
         if 'oi' in df.columns:
             df['oi_change'] = df['oi'].diff()
             df['oi_change_pct'] = (df['oi_change'] / df['oi'].shift(1)) * 100
             
-            # BUY: Price up + OI up + OI change > 3%
+            # BUY: Price up + OI up + OI change > 1% (lowered from 3% — options OI moves slower)
             df['oi_buildup'] = (
                 (df['close'] > df['close'].shift(1)) &
                 (df['oi'] > df['oi'].shift(1)) &
-                (df['oi_change_pct'] > 3)
+                (df['oi_change_pct'] > 1)
             )
-            
-            # SELL: Price down + OI down OR Price down + OI up massively (short buildup)
+
+            # SELL: Price down + OI down OR Price down + OI up (short buildup)
             df['oi_reduction'] = (
                 (df['close'] < df['close'].shift(1)) &
                 (
                     (df['oi'] < df['oi'].shift(1)) |  # OI reducing (positions closing)
-                    (df['oi_change_pct'] > 5)  # Massive OI increase with price down = short buildup
+                    (df['oi_change_pct'] > 3)          # OI building while price falls = short buildup
                 )
             )
         else:
@@ -308,7 +320,11 @@ class OIMomentumService:
 
         # 🧠 PART 3: VOLUME CONFIRMATION
         df['volume_ratio'] = (df['volume'] / df['avg_volume']).fillna(1.0)
-        df['volume_spike'] = df['volume'] > 1.5 * df['avg_volume']
+        # Only flag a spike when actual volume data exists; avoid false signals from 0-volume indices
+        if has_volume_data:
+            df['volume_spike'] = df['volume'] > 1.5 * df['avg_volume']
+        else:
+            df['volume_spike'] = False
 
         # 🧠 PART 4: PRICE STRUCTURE
         # BUY: Higher high formed
@@ -390,46 +406,70 @@ class OIMomentumService:
         confidence_factors.append(("Data Strength", strength_score, 25))
         
         # FACTOR 3: Volume Confirmation (15 points max)
-        volume_5m = signal_5m["metrics"]["volume_spike"]
+        # Continuous intensity bonus replaces the old discrete ›2.0× cliff:
+        # every additional unit of volume above the 1.5× spike threshold
+        # contributes proportionally (0 at 1.5×, +1 at 2.0×, +2 at 2.5×, +3 at 3.0×).
+        volume_5m  = signal_5m["metrics"]["volume_spike"]
         volume_15m = signal_15m["metrics"]["volume_spike"]
-        volume_ratio_5m = signal_5m["metrics"]["volume_ratio"]
+        volume_ratio_5m  = signal_5m["metrics"]["volume_ratio"]
         volume_ratio_15m = signal_15m["metrics"]["volume_ratio"]
-        
+
         volume_score = 0
-        if volume_5m and volume_15m:  # Both timeframes show volume spike
-            volume_score = 15
-        elif volume_5m or volume_15m:  # One timeframe shows volume spike
-            volume_score = 10
-        # Bonus for very high volume
-        if volume_ratio_5m > 2.0 or volume_ratio_15m > 2.0:
-            volume_score = min(15, volume_score + 3)
+        if volume_5m and volume_15m:   volume_score = 15
+        elif volume_5m or volume_15m:  volume_score = 10
+        if volume_score > 0:
+            best_ratio  = max(volume_ratio_5m, volume_ratio_15m)
+            ratio_bonus = min(3.0, max(0.0, (best_ratio - 1.5) * 2.0))  # 0→0, 2×→1, 2.5×→2, 3×→3
+            volume_score = min(15, int(volume_score + ratio_bonus))
         confidence_factors.append(("Volume", volume_score, 15))
         
-        # FACTOR 4: OI Buildup Confirmation (15 points max)
-        oi_5m = signal_5m["metrics"]["oi_buildup"] or signal_5m["metrics"]["oi_reduction"]
-        oi_15m = signal_15m["metrics"]["oi_buildup"] or signal_15m["metrics"]["oi_reduction"]
-        oi_change_5m = abs(signal_5m["metrics"]["oi_change_pct"])
+        # FACTOR 4: OI Confirmation (15 points max)
+        # Direction-aware: only credit OI activity that SUPPORTS the final signal.
+        # Crediting contradicting OI (e.g. oi_reduction on a BUY) inflates confidence
+        # precisely when the setup is least reliable — the opposite of what we want.
+        oi_raw_5m  = bool(signal_5m["metrics"]["oi_buildup"])  or bool(signal_5m["metrics"]["oi_reduction"])
+        oi_raw_15m = bool(signal_15m["metrics"]["oi_buildup"]) or bool(signal_15m["metrics"]["oi_reduction"])
+        oi_change_5m  = abs(signal_5m["metrics"]["oi_change_pct"])
         oi_change_15m = abs(signal_15m["metrics"]["oi_change_pct"])
-        
+
+        _is_buy_sig  = final_signal in ("STRONG_BUY",  "BUY")
+        _is_sell_sig = final_signal in ("STRONG_SELL", "SELL")
+
+        if _is_buy_sig:
+            oi_5m  = bool(signal_5m["metrics"]["oi_buildup"])
+            oi_15m = bool(signal_15m["metrics"]["oi_buildup"])
+        elif _is_sell_sig:
+            oi_5m  = bool(signal_5m["metrics"]["oi_reduction"])
+            oi_15m = bool(signal_15m["metrics"]["oi_reduction"])
+        else:  # NEUTRAL: any OI activity counts
+            oi_5m  = oi_raw_5m
+            oi_15m = oi_raw_15m
+
         oi_score = 0
-        if oi_5m and oi_15m:  # Both timeframes show OI activity
-            oi_score = 15
-        elif oi_5m or oi_15m:  # One timeframe shows OI activity
-            oi_score = 10
-        # Bonus for significant OI change
-        if oi_change_5m > 5.0 or oi_change_15m > 5.0:
-            oi_score = min(15, oi_score + 3)
+        if oi_5m and oi_15m:    oi_score = 15
+        elif oi_5m or oi_15m:   oi_score = 10
+        # Continuous bonus: 0 at 1% OI change, +1.5 at 3%, +3 at 5% (no cliff)
+        best_oi_chg  = max(oi_change_5m, oi_change_15m)
+        oi_chg_bonus = min(3.0, max(0.0, (best_oi_chg - 1.0) * 0.75))
+        oi_score     = min(15, int(oi_score + oi_chg_bonus))
         confidence_factors.append(("OI Activity", oi_score, 15))
-        
+
         # FACTOR 5: Liquidity Grab (10 points max)
-        liq_grab_5m = signal_5m["metrics"]["liquidity_grab"] or signal_5m["metrics"]["liquidity_grab_sell"]
-        liq_grab_15m = signal_15m["metrics"]["liquidity_grab"] or signal_15m["metrics"]["liquidity_grab_sell"]
-        
+        # Direction-aware: buy-side grab confirms BUY; sell-side grab confirms SELL.
+        # A buy-side liquidity sweep on a SELL signal is a warning flag — not confirmation.
+        if _is_buy_sig:
+            liq_grab_5m  = bool(signal_5m["metrics"]["liquidity_grab"])
+            liq_grab_15m = bool(signal_15m["metrics"]["liquidity_grab"])
+        elif _is_sell_sig:
+            liq_grab_5m  = bool(signal_5m["metrics"]["liquidity_grab_sell"])
+            liq_grab_15m = bool(signal_15m["metrics"]["liquidity_grab_sell"])
+        else:  # NEUTRAL: either side counts
+            liq_grab_5m  = bool(signal_5m["metrics"]["liquidity_grab"])  or bool(signal_5m["metrics"]["liquidity_grab_sell"])
+            liq_grab_15m = bool(signal_15m["metrics"]["liquidity_grab"]) or bool(signal_15m["metrics"]["liquidity_grab_sell"])
+
         liq_score = 0
-        if liq_grab_5m and liq_grab_15m:  # Both timeframes show liquidity grab
-            liq_score = 10
-        elif liq_grab_5m or liq_grab_15m:  # One timeframe shows liquidity grab
-            liq_score = 6
+        if liq_grab_5m and liq_grab_15m:  liq_score = 10
+        elif liq_grab_5m or liq_grab_15m: liq_score = 6
         confidence_factors.append(("Liquidity Grab", liq_score, 10))
         
         # FACTOR 6: Price Structure (5 points max)
@@ -447,8 +487,10 @@ class OIMomentumService:
         # OI data is always 0 for NSE spot indices (Zerodha). When unavailable,
         # exclude the OI factor from the denominator — otherwise its 15 pts are
         # permanently unreachable, deflating every confidence reading unfairly.
+        # Use the RAW (direction-agnostic) booleans here — we want to know if OI
+        # data EXISTS at all, not whether it supports the current signal direction.
         oi_data_present = (
-            oi_5m or oi_15m or oi_change_5m > 0.0 or oi_change_15m > 0.0
+            oi_raw_5m or oi_raw_15m or oi_change_5m > 0.0 or oi_change_15m > 0.0
         )
         if not oi_data_present:
             active_factors = [(n, s, mx) for n, s, mx in confidence_factors if n != "OI Activity"]

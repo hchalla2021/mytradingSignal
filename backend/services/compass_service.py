@@ -122,30 +122,49 @@ def _clamp(v: float, lo: float, hi: float) -> float:
 
 
 def _ema(series: List[float], period: int) -> Optional[float]:
-    """Exponential Moving Average — returns the last computed value."""
-    if len(series) < period:
+    """
+    Exponential Moving Average — returns the last computed value.
+    Graceful degradation: if fewer than `period` candles are available but at
+    least 3 exist, seeds from the first value and applies the EMA multiplier
+    over all available data.  The result is less precise but directionally
+    correct and far better than returning None mid-session.
+    """
+    if len(series) < 3:
         return None
     k = 2.0 / (period + 1)
-    val = sum(series[:period]) / period          # SMA seed
-    for price in series[period:]:
-        val = price * k + val * (1.0 - k)
+    if len(series) >= period:
+        val = sum(series[:period]) / period      # proper SMA seed
+        for price in series[period:]:
+            val = price * k + val * (1.0 - k)
+    else:
+        # Fewer candles than period — seed with first close, run EMA over rest
+        val = series[0]
+        for price in series[1:]:
+            val = price * k + val * (1.0 - k)
     return val
 
 
 def _rsi(closes: List[float], period: int = 14) -> Optional[float]:
-    """RSI using Wilder's smoothing.  Needs at least period+1 closes."""
-    if len(closes) < period + 1:
+    """
+    RSI using Wilder's smoothing.
+    Graceful degradation: computes with as few as 5 closes (4 changes) using
+    whatever data is available instead of returning None mid-session.
+    """
+    min_needed = min(period + 1, 5)
+    if len(closes) < min_needed:
         return None
+    # Use available data — Wilder's method still gives directionally correct RSI
+    effective_period = min(period, len(closes) - 1)
     gains, losses = [], []
     for i in range(1, len(closes)):
         d = closes[i] - closes[i - 1]
         gains.append(max(d, 0.0))
         losses.append(max(-d, 0.0))
-    avg_g = sum(gains[:period]) / period
-    avg_l = sum(losses[:period]) / period
-    for i in range(period, len(gains)):
-        avg_g = (avg_g * (period - 1) + gains[i]) / period
-        avg_l = (avg_l * (period - 1) + losses[i]) / period
+    avg_g = sum(gains[:effective_period]) / effective_period
+    avg_l = sum(losses[:effective_period]) / effective_period
+    for i in range(effective_period, len(gains)):
+        avg_g = (avg_g * (effective_period - 1) + gains[i]) / effective_period
+        avg_l = (avg_l * (effective_period - 1) + losses[i]) / effective_period
     if avg_l == 0:
         return 100.0
     rs = avg_g / avg_l
@@ -498,20 +517,45 @@ def _finalize_direction(signals: Dict[str, Dict]) -> Tuple[str, int, float, str]
     else:
         direction = "NEUTRAL"
 
-    # Confidence: how MANY factors agree with the final direction
+    # ── Confidence: strength × consensus ────────────────────────────────────
+    # Reflects BOTH how strong the overall bias is AND whether high-weight
+    # factors are aligned.  Also penalises when key factors actively oppose.
+    #
+    # NEUTRAL band (30–52 %):
+    #   Peaks at raw ≈ 0 (true equilibrium) and falls toward band edges.
+    #   Always capped below directional so a direction flip never lowers conf.
+    #
+    # Directional (35–99 %):
+    #   strength  = normalised raw magnitude above the direction threshold.
+    #   penalty   = deduction when high-weight factors oppose the bias;
+    #               prevents false-high confidence on split markets.
+    # ─────────────────────────────────────────────────────────────────────────
     if direction == "NEUTRAL":
-        # Neutral confidence = how strongly neutral (centre of band = highest)
-        neutrality = 1.0 - (abs(raw) / abs(BULL_THRESHOLD))
-        confidence = int(40 + neutrality * 20)
+        # band_centre: 1.0 at raw=0 (perfectly balanced), 0.0 at band edge
+        band_centre = 1.0 - (abs(raw) / BULL_THRESHOLD)
+        confidence  = int(30 + band_centre * 22)          # 30–52 %
     else:
-        signal_type = "BULL" if direction == "BULLISH" else "BEAR"
-        agreement = sum(
-            sig["weight"]
+        sign = 1.0 if direction == "BULLISH" else -1.0
+
+        # pos_contrib: weighted sum of scores pointing WITH the direction (0–1.0)
+        pos_contrib = sum(
+            max(0.0, sig["score"] * sign) * sig["weight"]
             for sig in signals.values()
-            if sig["signal"] == signal_type
         )
-        # agreement in [0..1.0] (weight sums) → confidence [35..97]
-        confidence = int(35 + agreement * 62)
+        # neg_contrib: weighted sum of scores pointing AGAINST direction (0–1.0)
+        neg_contrib = sum(
+            max(0.0, -sig["score"] * sign) * sig["weight"]
+            for sig in signals.values()
+        )
+        # net = raw * sign (positive, in [BULL_THRESHOLD … 1.0])
+        # strength ∈ [0..1]: 0 at threshold, 1 when all factors max-agree
+        net      = pos_contrib - neg_contrib
+        strength = (net - BULL_THRESHOLD) / (1.0 - BULL_THRESHOLD)
+
+        # Contradiction penalty: each opposing unit of weighted score costs 25 pts
+        # (e.g. futures premium fully opposing → neg_contrib ≈ 0.20 → −5 pts)
+        penalty    = neg_contrib * 25
+        confidence = int(round(35 + strength * 64 - penalty))
 
     confidence = max(1, min(99, confidence))
 
@@ -585,8 +629,19 @@ def _predict_5m(
             -1.0, 1.0,
         )
 
-    # Confidence: 40% at score=0, scales to 92% at score=±1.0
-    conf = max(40, min(92, int(40 + abs(score) * 52)))
+    # Confidence: piecewise — guarantees clear separation between signal tiers.
+    #   NEUTRAL  (|score| < 0.20):            40–48 %  — uncertain, await break
+    #   BUY/SELL (0.20 ≤ |score| < 0.45):    50–65 %  — directional momentum
+    #   STRONG   (|score| ≥ 0.45):            65–92 %  — multi-factor alignment
+    abs_s = abs(score)
+    if abs_s < 0.20:
+        conf = int(40 + (abs_s / 0.20) * 8)                    # 40–48 %
+    elif abs_s < 0.45:
+        conf = int(50 + ((abs_s - 0.20) / 0.25) * 15)          # 50–65 %
+    else:
+        conf = int(65 + ((abs_s - 0.45) / 0.55) * 27)          # 65–92 %
+    conf = max(40, min(92, conf))
+
     if score >=  0.45: return "STRONG_BUY",  conf
     if score >=  0.20: return "BUY",          conf
     if score <= -0.45: return "STRONG_SELL",  conf
@@ -863,6 +918,82 @@ class CompassService:
         except Exception as e:
             logger.debug(f"🧭 Futures quote fetch error: {e}")
 
+    # ── Startup: populate analysis_candles with today's Zerodha spot history ──
+
+    async def _seed_spot_candles_from_history(self):
+        """
+        On startup, fetch today's 5-min spot candles from Zerodha historical API
+        and write them to analysis_candles:{symbol} so EMA50 and RSI-14 work
+        immediately instead of waiting 4+ hours for live ticks to accumulate.
+
+        Only writes candles that aren't already in the cache (avoids duplicating
+        live-feed data).  Runs once at CompassService start.
+        """
+        kite = self._get_kite()
+        if not kite:
+            return
+
+        # Spot index tokens → symbol
+        SPOT_TOKENS: Dict[int, str] = {
+            settings.nifty_token:     "NIFTY",
+            settings.banknifty_token: "BANKNIFTY",
+            settings.sensex_token:    "SENSEX",
+        }
+
+        today   = datetime.now(IST).date()
+        from_dt = datetime.combine(today, dtime(9, 15)).astimezone(IST)
+        to_dt   = datetime.now(IST)
+        loop    = asyncio.get_event_loop()
+        import json as _json
+
+        for token, symbol in SPOT_TOKENS.items():
+            if not token:
+                continue
+            try:
+                raw_candles = await loop.run_in_executor(
+                    None,
+                    lambda t=token: kite.historical_data(
+                        t, from_dt, to_dt, interval="5minute", continuous=False
+                    ),
+                )
+                if not raw_candles:
+                    continue
+
+                # Only seed when cache is empty — avoids ordering conflicts with live candles.
+                # Adding to a non-empty list (backup/live) would require rpush which isn't
+                # available; skip to let the existing candles + live feed accumulate.
+                existing = await self._cache.lrange(f"analysis_candles:{symbol}", 0, 0)
+                if existing:
+                    # Cache already has candles (backup restored or live already running)
+                    continue
+
+                # Cache is empty → seed full today's history.
+                # Push oldest-first: each newer lpush goes to head, so the final list
+                # has newest at index 0 — matching the lpush convention used by the live feed.
+                for c in raw_candles:  # oldest-first from Zerodha historical API
+                    candle_dict = {
+                        "timestamp": str(c.get("date", "")),
+                        "open":      float(c.get("open",   0)),
+                        "high":      float(c.get("high",   0)),
+                        "low":       float(c.get("low",    0)),
+                        "close":     float(c.get("close",  0)),
+                        "volume":    int(c.get("volume",   0)),
+                        "oi":        0,
+                        "oi_prev":   0,
+                    }
+                    await self._cache.lpush(
+                        f"analysis_candles:{symbol}", _json.dumps(candle_dict)
+                    )
+
+                await self._cache.ltrim(f"analysis_candles:{symbol}", 0, 199)
+                logger.info(
+                    f"🧭 Seeded {len(raw_candles)} spot candles for {symbol} "
+                    f"(today's history from 09:15)"
+                )
+
+            except Exception as e:
+                logger.debug(f"🧭 Spot candle seed [{symbol}]: {e}")
+
     # ── Read spot candles from cache ──────────────────────────────────────────
 
     async def _read_spot_candles(self, symbol: str) -> List[Dict]:
@@ -1095,6 +1226,9 @@ class CompassService:
         loop.run_in_executor(None, self._refresh_contracts_sync)
         # Pre-populate last-spot fallback from Zerodha quote API (works when market is closed)
         loop.run_in_executor(None, self._fetch_initial_spot_sync)
+        # Seed analysis_candles with today's historical spot data so EMA50/RSI
+        # work immediately without waiting for 50 live 5-min candles to accumulate.
+        asyncio.create_task(self._seed_spot_candles_from_history())
         # Main broadcast task
         self._task = asyncio.create_task(self._broadcast_loop())
         # Futures candle refresh task (separate, every 5 min)

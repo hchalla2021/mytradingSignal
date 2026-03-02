@@ -58,16 +58,11 @@ function getCachedData(): Record<string, PivotData> | null {
     if (cached) {
       const parsed = JSON.parse(cached);
       if (parsed && Object.keys(parsed).length > 0) {
-        console.log('[Pivot] Loaded from pivot cache');
         return parsed;
       }
     }
-    // No cache, return null - show loading state with REAL data only
-    console.log('[Pivot] No cached data - waiting for live API data');
     return null;
   } catch {
-    // On any error, return null - don't use dummy fallback
-    console.log('[Pivot] Error reading cache, waiting for live API data');
     return null;
   }
 }
@@ -201,16 +196,6 @@ const SymbolPivotRow = memo<{ data: PivotData; config: SymbolConfig; marketStatu
   
   const isBreakdown = st1.trend === 'BEARISH' && nearestSup && price && price < (nearestSup.value || 0);
   
-  // Debug logging for pivot proximity
-  console.log(`[${config.symbol}] Pivot Analysis:`, {
-    currentPrice: price,
-    pivotLevel: pivots.pivot,
-    difference: pivots.pivot ? Math.abs(price - pivots.pivot) : 0,
-    diffPercent: pivots.pivot ? (Math.abs(price - pivots.pivot) / pivots.pivot * 100).toFixed(3) : 0,
-    threshold: (pivotProximityThreshold * 100).toFixed(1),
-    isNear: isNearPivot
-  });
-  
   // Background color based on market status - Soft & Subtle
   const bgColor = isPriceUp 
     ? 'bg-slate-900/70' 
@@ -222,32 +207,41 @@ const SymbolPivotRow = memo<{ data: PivotData; config: SymbolConfig; marketStatu
   const priceColor = isPriceUp ? 'text-teal-300' : 'text-red-400';
   const changeColor = isPriceUp ? 'text-teal-400' : 'text-red-500';
 
-  // Pivot Confidence Calculation
+  // Pivot Confidence Calculation (proportional multipliers)
   const calculatePivotConfidence = (): number => {
-    let confidence = 55; // Base confidence
-    
-    // Price trend adjustment
-    if (isPriceUp && bias === 'BULLISH') confidence += 15; // Aligned trend
-    else if (!isPriceUp && bias === 'BEARISH') confidence += 15; // Aligned trend
-    else if (bias === 'NEUTRAL') confidence += 5; // Neutral market
-    
+    let confidence = 55; // Base
+
+    // Price-bias alignment (strongest factor)
+    if ((isPriceUp && bias === 'BULLISH') || (!isPriceUp && bias === 'BEARISH')) {
+      confidence = Math.round(confidence * 1.14); // price moving in bias direction
+    } else if (bias === 'NEUTRAL') {
+      confidence = Math.round(confidence * 1.05); // neutral — mild positive
+    }
+
     // SuperTrend alignment
-    if (st1.trend === 'BULLISH' && isPriceUp) confidence += 10;
-    else if (st1.trend === 'BEARISH' && !isPriceUp) confidence += 10;
-    
-    // Level proximity (reduces confidence when too close to key levels)
-    if (isNearPivot) confidence -= 5; // Uncertain zone
-    if (isNearCamarilla) confidence -= 10; // Very uncertain
-    
-    // Distance from SuperTrend
+    if ((st1.trend === 'BULLISH' && isPriceUp) || (st1.trend === 'BEARISH' && !isPriceUp)) {
+      confidence = Math.round(confidence * 1.10);
+    }
+
+    // Distance from SuperTrend line
     const stDistance = Math.abs(st1.distance_pct || 0);
-    if (stDistance > 2) confidence += 10; // Clear trend
-    else if (stDistance < 0.5) confidence -= 5; // Too close to flip
-    
+    if (stDistance > 2) {
+      confidence = Math.round(confidence * 1.10); // well-separated — clear trend
+    } else if (stDistance < 0.5) {
+      confidence = Math.round(confidence * 0.93); // near ST — flip risk
+    }
+
+    // Level proximity — risk factors (Camarilla is tighter, evaluated first)
+    if (isNearCamarilla) {
+      confidence = Math.round(confidence * 0.87);
+    } else if (isNearPivot) {
+      confidence = Math.round(confidence * 0.94);
+    }
+
     // Market status
-    if (data.status === 'LIVE') confidence += 5;
-    else if (data.status === 'CACHED') confidence -= 5;
-    
+    if (data.status === 'LIVE')   confidence = Math.round(confidence * 1.05);
+    else if (data.status === 'CACHED') confidence = Math.round(confidence * 0.94);
+
     return Math.min(90, Math.max(35, confidence));
   };
 
@@ -436,22 +430,23 @@ const SymbolPivotRow = memo<{ data: PivotData; config: SymbolConfig; marketStatu
         {/* Quick Summary */}
         <div className="bg-gradient-to-br from-slate-800/40 to-slate-900/30 border border-slate-600/30 rounded-lg p-3">
           <div className="text-xs text-slate-400 font-semibold uppercase tracking-wider mb-2">📋 Key Levels</div>
-          <div className="space-y-1 text-xs">
-            {nearestRes && (
-              <div className="flex justify-between items-center">
-                <span className="text-slate-400">Next Resistance:</span>
-                <span className="font-bold text-amber-400">{nearestRes.label} ₹{fmtCompact(nearestRes.value)}</span>
-              </div>
-            )}
-            {nearestSup && (
-              <div className="flex justify-between items-center">
-                <span className="text-slate-400">Next Support:</span>
-                <span className="font-bold text-teal-400">{nearestSup.label} ₹{fmtCompact(nearestSup.value)}</span>
-              </div>
-            )}
+          {/* Fixed-height rows — always rendered to prevent layout shift / page flicker */}
+          <div className="text-xs">
+            <div className="flex justify-between items-center py-[3px]">
+              <span className="text-slate-400">Next Resistance:</span>
+              <span suppressHydrationWarning className="font-bold text-amber-400">
+                {nearestRes ? `${nearestRes.label} ₹${fmtCompact(nearestRes.value)}` : '—'}
+              </span>
+            </div>
+            <div className="flex justify-between items-center py-[3px]">
+              <span className="text-slate-400">Next Support:</span>
+              <span suppressHydrationWarning className="font-bold text-teal-400">
+                {nearestSup ? `${nearestSup.label} ₹${fmtCompact(nearestSup.value)}` : '—'}
+              </span>
+            </div>
             <div className="flex justify-between items-center pt-1 border-t border-slate-700">
               <span className="text-slate-400">Trading Bias:</span>
-              <span className={`font-bold ${
+              <span suppressHydrationWarning className={`font-bold ${
                 isBullish ? 'text-[#00C087]' :
                 isBearish ? 'text-[#EB5B3C]' :
                 'text-yellow-300'
@@ -478,13 +473,19 @@ const SymbolPivotRow = memo<{ data: PivotData; config: SymbolConfig; marketStatu
             const isLiveData = data.status === 'LIVE';
 
             let adjConf = pivotConfidence;
-            if (stAligns && stStrong) adjConf += 5;  // ST confirms direction + strong gap
-            else if (stAligns)       adjConf += 3;   // ST confirms direction
-            if (goodZone)            adjConf += 4;   // price well into R2/S2 zone
-            if (isLiveData)          adjConf += 2;   // live data bonus
-            if (stOpposes)           adjConf -= 7;   // ST contradicts bias
-            if (isNearPivot)         adjConf -= 4;   // already at pivot — uncertainty
-            if (marketStatus !== 'LIVE') adjConf = Math.max(30, adjConf - 10);
+            // Conflict evaluated first (strongest penalty)
+            if (stOpposes) {
+              adjConf = Math.round(adjConf * 0.85); // ST contradicts pivot bias
+            } else {
+              // Tiered ST confirmation
+              if (stAligns && stStrong) adjConf = Math.round(adjConf * 1.08);
+              else if (stAligns)        adjConf = Math.round(adjConf * 1.05);
+              // Independent zone bonus
+              if (goodZone) adjConf = Math.round(adjConf * 1.04);
+            }
+            // Uncertainty penalty
+            if (isNearPivot) adjConf = Math.round(adjConf * 0.93);
+            if (marketStatus !== 'LIVE') adjConf = Math.round(Math.max(30, adjConf * 0.88));
             adjConf = Math.round(Math.min(95, Math.max(30, adjConf)));
 
             // Direction
@@ -581,88 +582,8 @@ const PivotSectionUnified = memo<{ updates?: number; analyses?: Record<string, a
     setIsFetching(true);
     
     try {
-      // Check if demo mode (WebSocket URL is empty in .env.local)
-      const wsUrl = process.env.NEXT_PUBLIC_WS_URL || process.env.NEXT_PUBLIC_LOCAL_WS_URL || '';
-      const isDemoMode = !wsUrl || wsUrl.trim() === '';
-      
-      if (isDemoMode) {
-        // Generate demo pivot data directly
-        console.log('[Pivot] Demo mode - generating pivot data...');
-        
-        const validData: Record<string, PivotData> = {};
-        for (const symbolConfig of SYMBOLS) {
-          const symbol = symbolConfig.symbol;
-          const basePrice = symbol === 'NIFTY' ? 23000 : symbol === 'BANKNIFTY' ? 48000 : 75000;
-          const change = (Math.random() - 0.5) * 200;
-          const price = basePrice + change;
-          const isBullish = change > 0;
-          
-          // Generate pivot levels
-          const pivot = price + (Math.random() * 60 - 30);
-          const r1 = pivot + (Math.random() * 100 + 50);
-          const r2 = pivot + (Math.random() * 150 + 100);
-          const r3 = pivot + (Math.random() * 200 + 150);
-          const s1 = pivot - (Math.random() * 100 + 50);
-          const s2 = pivot - (Math.random() * 150 + 100);
-          const s3 = pivot - (Math.random() * 200 + 150);
-          
-          validData[symbol] = {
-            symbol,
-            status: 'LIVE',
-            current_price: price,
-            change_percent: (change / basePrice) * 100,
-            timestamp: new Date().toISOString(),
-            ema: {
-              ema_20: price - (Math.random() * 50 - 25),
-              ema_50: price - (Math.random() * 100 - 50),
-              ema_100: price - (Math.random() * 200 - 100),
-              ema_200: price - (Math.random() * 300 - 150),
-              trend: isBullish ? 'UPTREND' : 'DOWNTREND',
-              price_vs_ema20: price > (price - 25) ? 'ABOVE' : 'BELOW',
-            },
-            classic_pivots: {
-              pivot,
-              r1, r2, r3, s1, s2, s3,
-              bias: isBullish ? 'BULLISH' : 'BEARISH',
-            },
-            camarilla_pivots: {
-              h4: price + (Math.random() * 80 + 40),
-              h3: price + (Math.random() * 50 + 25),
-              l3: price - (Math.random() * 50 + 25),
-              l4: price - (Math.random() * 80 + 40),
-              zone: isBullish ? 'BULLISH_ZONE' : 'BEARISH_ZONE', // Always clear zone
-            },
-            supertrend_10_3: {
-              value: price + (isBullish ? -60 : 60),
-              trend: isBullish ? 'BULLISH' : 'BEARISH', // Always clear trend
-              signal: isBullish ? 'BUY' : 'SELL', // Always clear signal
-              distance_pct: Math.abs(60 / price * 100),
-            },
-            supertrend_7_3: {
-              value: price + (isBullish ? -45 : 45),
-              trend: isBullish ? 'BULLISH' : 'BEARISH', // Always clear trend
-              signal: isBullish ? 'BUY' : 'SELL', // Always clear signal
-              distance_pct: Math.abs(45 / price * 100),
-            },
-            overall_bias: isBullish ? 'BULLISH' : 'BEARISH', // Always clear bias
-          };
-          
-          console.log(`[Pivot] ${symbol}: Demo data - Price: ${price}, Pivot: ${pivot.toFixed(0)}, Bias: ${isBullish ? 'BULLISH' : 'BEARISH'}`);
-        }
-        
-        setAllData(validData);
-        setCachedData(validData);
-        setLastUpdate(new Date().toLocaleTimeString('en-IN'));
-        setError(null);
-        setLoading(false);
-        console.log('✅ [Pivot] Demo data loaded successfully');
-        return;
-      }
-      
-      // Original API code for production
+      // Fetch live pivot data
       const liveUrl = API_CONFIG.endpoint('/api/advanced/pivot-indicators');
-      
-      console.log('[Pivot] Fetching live pivot data...');
       
       const liveResp = await fetch(liveUrl, { 
         method: 'GET', 
@@ -675,7 +596,6 @@ const PivotSectionUnified = memo<{ updates?: number; analyses?: Record<string, a
       }
       
       const liveData = await liveResp.json();
-      console.log('[Pivot] Got live data:', Object.keys(liveData || {}));
       
       // Use live data directly (contains current prices + pivot levels)
       const validData: Record<string, PivotData> = {};
@@ -684,9 +604,8 @@ const PivotSectionUnified = memo<{ updates?: number; analyses?: Record<string, a
         if (data && (data.current_price || data.classic_pivots?.pivot)) {
           validData[symbol] = {
             ...data,
-            timestamp: new Date().toISOString()  // Update timestamp to now
+            timestamp: new Date().toISOString()
           };
-          console.log(`[Pivot] ${symbol}: Live data - Price: ${data.current_price}, Status: ${data.status}`);
         }
       }
       
@@ -696,7 +615,7 @@ const PivotSectionUnified = memo<{ updates?: number; analyses?: Record<string, a
         setLastUpdate(new Date().toLocaleTimeString('en-IN'));
         setError(null);
         setLoading(false);
-        console.log('✅ [Pivot] Live data loaded successfully');
+
       } else {
         throw new Error('No valid live pivot data received');
       }

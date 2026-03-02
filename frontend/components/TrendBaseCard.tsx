@@ -36,6 +36,7 @@ interface TrendBaseResponse {
   trend_15m:        string;   // BULLISH | NEUTRAL | BEARISH
   trend:            string;
   confidence:       number;
+  confidence_5m?:   number;  // short-term 5m-specific confidence from backend
   total_score:      number;
   factors:          Record<string, Factor>;
   status:           string;
@@ -320,7 +321,24 @@ const TrendBaseCard = memo<TrendBaseCardProps>(({ symbol, name }) => {
             const sig5m     = (data.signal_5m ?? 'NEUTRAL').toUpperCase();
             const isBuy5m   = sig5m === 'BUY';
             const isSell5m  = sig5m === 'SELL';
-            const adjConf   = data.confidence; // 30–92%, 8-factor backend (structure, ST, EMA, RSI, VWAP, day%, SAR, momentum)
+            const isLiveNow = data.status === 'LIVE' || data.status === 'ACTIVE';
+            // Use backend confidence_5m when available (independent short-term calc);
+            // fallback: derive from main confidence with proportional multipliers
+            const rsi5Raw  = data.rsi_5m ?? 50;
+            // RSI deviation as a proportional multiplier (continuous, no cliffs)
+            const rsiDev   = isBuy5m  ? Math.max(0, rsi5Raw - 50)
+                           : isSell5m ? Math.max(0, 50 - rsi5Raw) : 0;
+            const rsiMult  = 1 + rsiDev * 0.004;  // RSI=70 → ×1.08; RSI=80 → ×1.12
+            // SuperTrend alignment multiplier
+            const stMult   = (isBuy5m  && data.supertrend === 'BULLISH') ? 1.06
+                           : (isSell5m && data.supertrend === 'BEARISH') ? 1.06
+                           : (isBuy5m  && data.supertrend === 'BEARISH') ? 0.90
+                           : (isSell5m && data.supertrend === 'BULLISH') ? 0.90 : 1.0;
+            // Live data reliability multiplier
+            const liveMult = isLiveNow ? 1.04 : 0.91;
+            const adjConf  = data.confidence_5m != null
+              ? data.confidence_5m  // backend computed directly
+              : Math.round(Math.min(92, Math.max(25, data.confidence * rsiMult * stMult * liveMult)));
             const predDir   = isBuy5m ? 'LONG' : isSell5m ? 'SHORT' : 'FLAT';
             const dirIcon   = isBuy5m ? '▲' : isSell5m ? '▼' : '─';
             const dirColor  = isBuy5m ? 'text-teal-300'       : isSell5m ? 'text-rose-300'       : 'text-amber-300';

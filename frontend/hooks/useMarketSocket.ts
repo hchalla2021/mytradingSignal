@@ -69,11 +69,13 @@ export function useMarketSocket() {
     SENSEX: null,
   });
   const [isConnected, setIsConnected] = useState(false);
-  const [connectionStatus, setConnectionStatus] = useState<'connecting' | 'connected' | 'disconnected' | 'error'>('disconnected');
+  const [connectionStatus, setConnectionStatus] = useState<'connecting' | 'connected' | 'disconnected' | 'error' | 'RECONNECTING'>('disconnected');
   
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const pingIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const hasEverConnectedRef = useRef(false);   // track if we've ever had a successful connection
+  const reconnectAttemptsRef = useRef(0);       // for exponential backoff
 
   const connect = useCallback(() => {
     // Guard for SSR - window must exist
@@ -85,9 +87,13 @@ export function useMarketSocket() {
       return;
     }
 
-    // 🔥 FIX: Don't show "connecting" if we already have cached data
-    // This prevents UI from showing loading spinner when data is already visible
-    setConnectionStatus((prev) => prev === 'connected' ? 'connected' : 'connecting');
+    // Show RECONNECTING (not "connecting") if we've ever been connected before
+    // This correctly labels subsequent connection attempts as re-connections
+    if (hasEverConnectedRef.current) {
+      setConnectionStatus('RECONNECTING');
+    } else {
+      setConnectionStatus('connecting');
+    }
     
     try {
       const WS_URL = getWebSocketURL(); // Dynamic URL based on environment
@@ -114,6 +120,8 @@ export function useMarketSocket() {
         clearTimeout(connectionTimeout);
         setIsConnected(true);
         setConnectionStatus('connected');
+        hasEverConnectedRef.current = true;
+        reconnectAttemptsRef.current = 0;  // reset backoff on successful connect
         log.debug('✅ WebSocket connected successfully');
 
         // Start ping interval
@@ -139,19 +147,6 @@ export function useMarketSocket() {
               if (message.data && 'symbol' in message.data) {
                 const tick = message.data as MarketTick;
                 
-                // 🔥 DEBUG: Check if analysis is in the tick
-                if (tick.symbol === 'NIFTY') {
-                  if (tick.analysis) {
-                    console.log(`📊 [TICK-${tick.symbol}] Analysis received:`, {
-                      hasSignal: !!tick.analysis.signal,
-                      hasIndicators: !!tick.analysis.indicators,
-                      signal: tick.analysis.signal,
-                      confidence: tick.analysis.confidence
-                    });
-                  } else {
-                    console.log(`⚠️ [TICK-${tick.symbol}] NO analysis data in tick!`);
-                  }
-                }
                 
                 setMarketData((prev) => {
                   // Create completely new object to trigger React updates
@@ -172,7 +167,6 @@ export function useMarketSocket() {
               if (message.data) {
                 const snapshot = message.data as Record<string, MarketTick>;
                 log.debug('✅ WS Snapshot received:', Object.keys(snapshot));
-                console.log('📊 [SNAPSHOT] Received data:', snapshot);
                 setMarketData(() => {
                   // Create completely new objects to trigger React updates
                   const updated = {
@@ -181,7 +175,6 @@ export function useMarketSocket() {
                     SENSEX: snapshot.SENSEX ? { ...snapshot.SENSEX } : null,
                   };
                   saveMarketData(updated);
-                  console.log('📊 [STATE] Market data updated:', updated);
                   return updated;
                 });
               }
@@ -230,15 +223,21 @@ export function useMarketSocket() {
         
         // Auto-reconnect after delay (unless it's a clean close)
         if (event.code !== 1000) {
-          setConnectionStatus('connecting'); // Show "Connecting..." instead of "Disconnected"
-          const reconnectDelay = parseInt(process.env.NEXT_PUBLIC_WS_RECONNECT_DELAY || '3000', 10);
-          log.debug(`Reconnecting in ${reconnectDelay}ms...`);
+          // Show RECONNECTING if we've connected before, else show connecting
+          setConnectionStatus(hasEverConnectedRef.current ? 'RECONNECTING' : 'connecting');
+
+          // Exponential backoff: 3s, 5s, 10s, 20s, 30s (max)
+          reconnectAttemptsRef.current += 1;
+          const baseDelay = parseInt(process.env.NEXT_PUBLIC_WS_RECONNECT_DELAY || '3000', 10);
+          const backoffDelay = Math.min(baseDelay * Math.pow(1.5, reconnectAttemptsRef.current - 1), 30000);
+          log.debug(`Reconnecting in ${Math.round(backoffDelay)}ms (attempt ${reconnectAttemptsRef.current})...`);
           reconnectTimeoutRef.current = setTimeout(() => {
             if (!wsRef.current || wsRef.current.readyState === WebSocket.CLOSED) {
               connect();
             }
-          }, reconnectDelay);
+          }, backoffDelay);
         } else {
+          reconnectAttemptsRef.current = 0;
           setConnectionStatus('disconnected');
         }
       };
@@ -277,10 +276,7 @@ export function useMarketSocket() {
       const saved = localStorage.getItem(STORAGE_KEY);
       if (saved) {
         const parsed = JSON.parse(saved) as MarketData;
-        console.log('💾 [CACHE] Loaded from localStorage:', parsed);
         setMarketData(parsed);
-      } else {
-        console.log('⚠️ [CACHE] No cached market data found');
       }
     } catch (e) {
       console.error('❌ Failed to load cached market data:', e);
@@ -289,7 +285,22 @@ export function useMarketSocket() {
     // Connect to WebSocket
     connect();
 
+    // Page Visibility API: reconnect immediately when tab comes back into focus
+    // Browsers throttle timers in background tabs, which can make our ping interval
+    // miss the 60-second server timeout. On visibility change we reconnect proactively.
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        const ws = wsRef.current;
+        if (!ws || ws.readyState === WebSocket.CLOSED || ws.readyState === WebSocket.CLOSING) {
+          reconnectAttemptsRef.current = 0; // reset backoff - user is back
+          connect();
+        }
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
     return () => {
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
       disconnect();
     };
   }, [connect, disconnect]);

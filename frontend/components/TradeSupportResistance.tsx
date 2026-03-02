@@ -288,38 +288,54 @@ export const TradeSupportResistance: React.FC<TradeSupportResistanceProps> = ({
     const totalScore = Math.round(factors.reduce((s, f) => s + f.value, 0)); // range ~−116 to +116
 
     // ── SIGNAL DETERMINATION ─────────────────────────────────────
-    // Thresholds calibrated so a moderate bearish day (-0.5%) scores ~ -35 → SELL
+    // Signal tier thresholds are unchanged.
+    // CONFIDENCE: replaced per-tier formulas with a single unified function.
+    //
+    // OLD formula had a critical cliff: at score 47→48 (BUY→STRONG BUY),
+    // confidence DROPPED from 83% to 68% — exactly backwards.
+    // Root cause: each tier's formula re-started from its own base, so the
+    // STRONG tier always opened lower than the top of the weaker tier.
+    //
+    // NEW formula: continuous, monotonically increasing at every boundary.
+    //   abs=0  → 40%   (neutral, zero lean)
+    //   abs=8  → 50%   (NO TRADE top — continuity with SIDEWAYS)
+    //   abs=18 → 52%   (BUY / SELL entry — clean start)
+    //   abs=48 → 72%   (STRONG entry — picks up exactly where BUY left off)
+    //   abs≥95 → 95%   (asymptotic maximum)
+    // Verified: each piece-value matches the adjacent piece at every boundary.
+    const absScore = Math.abs(totalScore);
+    const unifiedConf = (a: number): number => {
+      if (a <= 8)  return Math.round(40 + a * 1.25);                        // 40 → 50  NO TRADE
+      if (a < 18)  return Math.round(50 + (a - 8)  * 0.2);                 // 50 → 52  SIDEWAYS
+      if (a < 48)  return Math.round(52 + (a - 18) * (20 / 30));           // 52 → 72  BUY / SELL
+      return Math.min(95, Math.round(72 + (a - 48) * (23 / 48)));          // 72 → 95  STRONG
+    };
+
     let action: string;
-    let confidence: number;
     let signalReason: string;
 
     if (totalScore >= 48) {
       action = 'STRONG BUY';
-      confidence = Math.min(95, 68 + (totalScore - 48) * 0.54);
       signalReason = 'All major indicators aligned bullish';
     } else if (totalScore >= 18) {
       action = 'BUY';
-      confidence = Math.min(84, 52 + (totalScore - 18) * 1.07);
       signalReason = 'Majority of signals confirm upside';
     } else if (totalScore <= -48) {
       action = 'STRONG SELL';
-      confidence = Math.min(95, 68 + (-totalScore - 48) * 0.54);
       signalReason = 'All major indicators aligned bearish';
     } else if (totalScore <= -18) {
       action = 'SELL';
-      confidence = Math.min(84, 52 + (-totalScore - 18) * 1.07);
       signalReason = 'Majority of signals confirm downside';
     } else if (Math.abs(totalScore) <= 8) {
       action = 'NO TRADE';
-      confidence = 50;
       signalReason = 'Balanced signals – wait for a clear break';
     } else {
       action = 'SIDEWAYS';
-      confidence = 42 + Math.abs(totalScore) * 0.5;
       signalReason = 'Mixed signals – no clean directional setup';
     }
 
-    // Market-closed penalty
+    // Market-closed penalty: flat deduction preserves the same numeric feel.
+    let confidence = unifiedConf(absScore);
     if (marketStatus !== 'LIVE') confidence = Math.max(30, confidence - 15);
     confidence = Math.round(confidence);
 
@@ -540,10 +556,16 @@ export const TradeSupportResistance: React.FC<TradeSupportResistanceProps> = ({
                           : predDir === 'DOWN' ? 'bg-red-500/10'
                           : 'bg-amber-500/[0.08]';
           const dirIcon   = predDir === 'UP'   ? '▲' : predDir === 'DOWN' ? '▼' : '▬';
-          // Confidence modifier: full confidence when aligned, reduced when 5m only, penalised when conflicting
-          const dispConf = same5m15m ? confidence
-                         : conflict   ? Math.max(30, confidence - 12)
-                         : Math.max(30, confidence - 6);
+          // Confidence modifier: proportional scaling so a weak BUY with conflict and
+          // a strong STRONG_BUY with conflict scale consistently rather than hit the same floor.
+          // same dir → 100 % of signal confidence (no penalty)
+          // one neutral → 90 % (slight skepticism: only half the picture is confirmed)
+          // conflict  → 75 % (meaningful discount: 5m and 15m disagree on direction)
+          const dispConf = Math.max(30, Math.min(90, Math.round(
+            same5m15m ? confidence
+            : conflict ? confidence * 0.75
+            : confidence * 0.90
+          )));
           const ctxNote = same5m15m ? '5m + 15m aligned'
                         : conflict   ? '⚠ 5m vs 15m conflict'
                         : trend5min !== 'NEUTRAL' ? '5m signal · 15m neutral'

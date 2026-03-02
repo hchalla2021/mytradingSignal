@@ -50,7 +50,6 @@ const InstitutionalMarketView = memo<InstitutionalMarketViewProps>(({ symbol, ma
       }
       
       const url = `${apiUrl}/api/analysis/analyze/${symbol}`;
-      console.log(`[${symbol}] Fetching from: ${url}`);
       
       const response = await fetch(url, {
         cache: 'no-store',
@@ -65,7 +64,6 @@ const InstitutionalMarketView = memo<InstitutionalMarketViewProps>(({ symbol, ma
       }
       
       const analysisData = await response.json();
-      console.log(`[${symbol}] Got data:`, analysisData);
       
       setIsConnected(true);
       setError(null);
@@ -80,12 +78,6 @@ const InstitutionalMarketView = memo<InstitutionalMarketViewProps>(({ symbol, ma
         const buyVolumeRatio = volumeRatio > 1 ? 
           Math.round(volumeRatio) :  // Already percentage (0-100)
           Math.round(volumeRatio * 100);  // Need to convert from 0-1
-        
-        console.log(`[${symbol}] Volume Ratio Check:`, {
-          raw_volume_ratio: volumeRatio,
-          is_percentage: volumeRatio > 1,
-          buyVolumeRatio
-        });
         
         // 🔥 DERIVE MARKET IMBALANCE from multiple sources
         // Priority: EMA alignment → Volume ratio → Candle strength → Trend
@@ -114,55 +106,18 @@ const InstitutionalMarketView = memo<InstitutionalMarketViewProps>(({ symbol, ma
           }
         }
         
-        console.log(`[${symbol}] Market Imbalance Data:`, {
-          emasAlignment,
-          buyVolumeRatio,
-          marketImbalance,
-          volumePrice: indicators.volume_price_alignment,
-          candleStrength: indicators.candle_strength,
-          trend: indicators.trend
-        });
-        
         // Calculate volume imbalance
         const volumeImbalance = indicators.volume_price_alignment ? 
           (indicators.candle_strength || 0) / 10 : 0;
         
-        // 🔥 DERIVE FAIR VALUE GAPS from VWAP and price position
-        const vwapPos = String(indicators.vwap_position || '').toUpperCase();
-        // FVG Bullish: Price above VWAP AND bullish EMA OR high buy volume
-        const fvgBullish = (vwapPos.includes('ABOVE') && emasAlignment.includes('BULL')) || 
-                          (buyVolumeRatio > 65 && emasAlignment.includes('BULL'));
-        // FVG Bearish: Price below VWAP AND bearish EMA OR low buy volume
-        const fvgBearish = (vwapPos.includes('BELOW') && emasAlignment.includes('BEAR')) || 
-                          (buyVolumeRatio < 35 && emasAlignment.includes('BEAR'));
-        
-        console.log(`[${symbol}] FVG Data:`, {
-          vwapPosition: indicators.vwap_position,
-          derived_fvg_bullish: fvgBullish,
-          derived_fvg_bearish: fvgBearish,
-          price: indicators.price,
-          vwap: indicators.vwap
-        });
-        
-        console.log(`[${symbol}] Order Blocks:`, {
-          support: indicators.support,
-          resistance: indicators.resistance,
-          prev_day_high: indicators.prev_day_high,
-          prev_day_low: indicators.prev_day_low
-        });
+        // Use backend FVG directly — computed from actual 3-candle price structure gaps
+        const fvgBullish = Boolean(indicators.fvg_bullish);
+        const fvgBearish = Boolean(indicators.fvg_bearish);
         
         // 🔥 EXPERT-GRADE SIGNAL DERIVATION - Based on Market Imbalance + Order Flow Conviction
         // Priority: Market Structure >> Order Flow >> Technical Indicators
         let finalSignal = analysisData.signal || "NEUTRAL";
         let finalConfidence = (analysisData.confidence || 0) * 100;
-        
-        console.log(`[${symbol}] 🎯 SIGNAL ANALYSIS START`, {
-          backend_signal: finalSignal,
-          backend_confidence: finalConfidence,
-          market_imbalance: marketImbalance,
-          buy_volume_ratio: buyVolumeRatio + '%',
-          order_flow_strength: buyVolumeRatio
-        });
         
         // Normalize signal to uppercase for comparison
         const normalizedSignal = String(finalSignal || '').toUpperCase();
@@ -176,11 +131,10 @@ const InstitutionalMarketView = memo<InstitutionalMarketViewProps>(({ symbol, ma
           finalSignal = "SELL";
           // If extreme imbalance (< 40% buy), very high confidence
           if (buyVolumeRatio < 40) {
-            finalConfidence = Math.min(99, 100 - buyVolumeRatio); // 1% buy = 99% confidence
-            console.log(`[${symbol}] 🔴 TIER 1: EXTREME SELL_IMBALANCE - Very low buy ratio (${buyVolumeRatio}%)`);
+            // Monotonic continuation from moderate boundary: ratio=40→80%, ratio=1→95%
+            finalConfidence = Math.round(Math.min(95, 80 + (40 - buyVolumeRatio) * 0.385));
           } else {
             finalConfidence = Math.min(85, 70 + (50 - buyVolumeRatio)); // Scale from 70-85%
-            console.log(`[${symbol}] 🔴 TIER 1: SELL_IMBALANCE at ${buyVolumeRatio}% buy`);
           }
         } 
         else if (marketImbalance === 'BUY_IMBALANCE') {
@@ -189,46 +143,38 @@ const InstitutionalMarketView = memo<InstitutionalMarketViewProps>(({ symbol, ma
           finalSignal = "BUY";
           // If extreme imbalance (> 60% buy), very high confidence
           if (buyVolumeRatio > 60) {
-            finalConfidence = Math.min(99, buyVolumeRatio); // 99% buy = 99% confidence
-            console.log(`[${symbol}] 🟢 TIER 1: EXTREME BUY_IMBALANCE - Very high buy ratio (${buyVolumeRatio}%)`);
+            // Monotonic continuation from moderate boundary: ratio=60→80%, ratio=99→95%
+            finalConfidence = Math.round(Math.min(95, 80 + (buyVolumeRatio - 60) * 0.385));
           } else {
             finalConfidence = Math.min(85, 70 + (buyVolumeRatio - 50)); // Scale from 70-85%
-            console.log(`[${symbol}] 🟢 TIER 1: BUY_IMBALANCE at ${buyVolumeRatio}% buy`);
           }
         }
         // 🟡 TIER 2: EXTREME ORDER FLOW (If imbalance is NEUTRAL but order flow is extreme)
         else if (normalizedSignal === 'NEUTRAL' || normalizedSignal === 'WAIT' || finalConfidence < 50) {
-          console.log(`[${symbol}] 📊 TIER 2: Checking order flow (imbalance is ${marketImbalance})...`);
           
           // If order flow is extreme (< 35% or > 65%), use it as primary signal
           if (buyVolumeRatio < 35) {
             finalSignal = "SELL";
             finalConfidence = Math.min(90, 100 - buyVolumeRatio); // 20% buy = 80% confidence
-            console.log(`[${symbol}] 🔴 TIER 2: EXTREME SELL from order flow (${buyVolumeRatio}% buy)`);
           } else if (buyVolumeRatio > 65) {
             finalSignal = "BUY";
             finalConfidence = Math.min(90, buyVolumeRatio); // 80% buy = 80% confidence
-            console.log(`[${symbol}] 🟢 TIER 2: EXTREME BUY from order flow (${buyVolumeRatio}% buy)`);
           }
           // 🟠 TIER 3: EMA Alignment + Candle Strength
           else if (normalizedEMA.includes('BULL') && (indicators.ema_alignment_confidence || 0) > 30) {
             finalSignal = "BUY";
             finalConfidence = Math.max(finalConfidence, (indicators.ema_alignment_confidence || 0) * 100);
-            console.log(`[${symbol}] 🟢 TIER 3: BUY from EMA alignment (${(indicators.ema_alignment_confidence || 0) * 100}%)`);
           } else if (normalizedEMA.includes('BEAR') && (indicators.ema_alignment_confidence || 0) > 30) {
             finalSignal = "SELL";
             finalConfidence = Math.max(finalConfidence, (indicators.ema_alignment_confidence || 0) * 100);
-            console.log(`[${symbol}] 🔴 TIER 3: SELL from EMA alignment (${(indicators.ema_alignment_confidence || 0) * 100}%)`);
           }
           // 🟠 TIER 4: Moderate order flow ratios (45-55% = undecided)
           else if (buyVolumeRatio > 55) {
             finalSignal = "BUY";
             finalConfidence = Math.max(finalConfidence, buyVolumeRatio - 10);
-            console.log(`[${symbol}] 🟢 TIER 4: MODERATE BUY from order flow (${buyVolumeRatio}%)`);
           } else if (buyVolumeRatio < 45) {
             finalSignal = "SELL";
             finalConfidence = Math.max(finalConfidence, 100 - buyVolumeRatio - 10);
-            console.log(`[${symbol}] 🔴 TIER 4: MODERATE SELL from order flow (${buyVolumeRatio}%)`);
           }
         }
         
@@ -237,56 +183,12 @@ const InstitutionalMarketView = memo<InstitutionalMarketViewProps>(({ symbol, ma
         // During CLOSED/PRE_OPEN: reduce confidence
         if (marketStatus === 'LIVE') {
           finalConfidence = Math.min(99, finalConfidence + 5); // +5% boost during live
-          console.log(`[${symbol}] 📈 Market LIVE: +5% to confidence → ${Math.round(finalConfidence)}%`);
         } else if (marketStatus === 'CLOSED' || marketStatus === 'OFFLINE') {
           finalConfidence = Math.max(30, finalConfidence - 15); // -15% penalty when closed
-          console.log(`[${symbol}] 📊 Market CLOSED: -15% penalty → ${Math.round(finalConfidence)}%`);
         }
         
         // Ensure confidence is in valid range (0-100)
         finalConfidence = Math.max(0, Math.min(100, finalConfidence));
-        
-        console.log(`[${symbol}] Final Signal After Derivation:`, {
-          finalSignal,
-          finalConfidence: Math.round(finalConfidence),
-          buyVolumeRatio,
-          marketImbalance,
-          emasAlignment: normalizedEMA,
-          marketStatus
-        });
-        
-        // 🔥 COMPREHENSIVE DEBUG: Show all sources together
-        console.group(`[${symbol}] 🎯 EXPERT SIGNAL ANALYSIS COMPLETE`);
-        console.log('🚨 FINAL SIGNAL:', {
-          signal: finalSignal,
-          confidence: Math.round(finalConfidence) + '%',
-          market_status: marketStatus
-        });
-        console.log('💼 MARKET STRUCTURE:', {
-          market_imbalance: marketImbalance,
-          buy_volume_percentage: buyVolumeRatio + '%',
-          sell_volume_percentage: (100 - buyVolumeRatio) + '%',
-          order_flow_conviction: buyVolumeRatio < 35 ? 'EXTREME SELL' : 
-                                 buyVolumeRatio > 65 ? 'EXTREME BUY' : 
-                                 'MODERATE'
-        });
-        console.log('📈 TECHNICAL INDICATORS:', {
-          ema_alignment: indicators.ema_alignment,
-          ema_alignment_confidence: (indicators.ema_alignment_confidence || 0) * 100 + '%',
-          candle_strength: (indicators.candle_strength || 0).toFixed(2),
-          volume_price_alignment: indicators.volume_price_alignment,
-          trend: indicators.trend
-        });
-        console.log('📊 PRICE & SUPPORT:', {
-          current_price: indicators.price,
-          support: indicators.support,
-          resistance: indicators.resistance,
-          vwap: indicators.vwap,
-          vwap_position: indicators.vwap_position
-        });
-        console.log('⏱️ TIMESTAMP:', new Date().toLocaleTimeString('en-IN'));
-        console.groupEnd();
-        
         
         const smartMoneyData: SmartMoneyData = {
           symbol: symbol,
@@ -587,12 +489,17 @@ const InstitutionalMarketView = memo<InstitutionalMarketViewProps>(({ symbol, ma
             const obConfirms  = (isBull && !!data.order_block_bullish)    || (isBear && !!data.order_block_bearish);
             const imbAligns   = (isBull && signalForming === 'BUY') || (isBear && signalForming === 'SELL');
 
+            const confirmCount = [flowAligns, imbAligns, fvgConfirms, obConfirms].filter(Boolean).length;
             let adjConf = confidence;
-            if (flowAligns)  adjConf += 5;
-            if (imbAligns)   adjConf += 4;
-            if (fvgConfirms) adjConf += 4;
-            if (obConfirms)  adjConf += 3;
-            if (flowOpp)     adjConf -= 10;
+            if (flowOpp) {
+              adjConf = Math.round(confidence * 0.82); // Flow conflicts — proportional penalty
+            } else if (confirmCount >= 3) {
+              adjConf = Math.round(confidence * 1.08);
+            } else if (confirmCount === 2) {
+              adjConf = Math.round(confidence * 1.04);
+            } else if (confirmCount === 1) {
+              adjConf = Math.round(confidence * 1.02);
+            }
             adjConf = Math.round(Math.min(95, Math.max(30, adjConf)));
 
             // Context note
