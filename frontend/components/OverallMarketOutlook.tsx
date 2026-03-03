@@ -1,6 +1,8 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
+import { useIndiaVIX } from '@/hooks/useIndiaVIX';
+import IndiaVIXBadge from '@/components/IndiaVIXBadge';
 
 interface SignalData {
   name: string;
@@ -39,6 +41,9 @@ const OverallMarketOutlook: React.FC<{ symbol: string }> = ({ symbol }) => {
   const [data, setData] = useState<MarketOutlookData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  
+  // Fetch India VIX data with memoization
+  const { vixData, loading: vixLoading } = useIndiaVIX();
 
   useEffect(() => {
     const fetchMarketOutlook = async () => {
@@ -102,7 +107,19 @@ const OverallMarketOutlook: React.FC<{ symbol: string }> = ({ symbol }) => {
 
   if (loading) {
     return (
-      <div className="bg-gradient-to-br from-slate-900 to-slate-800 rounded-lg p-6 border border-slate-700">
+      <div className="bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 rounded-lg p-8 border border-slate-700 shadow-2xl">
+        {/* Title Row with India VIX Badge */}
+        <div className="flex flex-wrap items-center justify-between gap-3 mb-6 pb-6 border-b border-slate-700/50">
+          <h2 className="text-base sm:text-xl font-bold text-gray-300">OVERALL MARKET OUTLOOK</h2>
+          <IndiaVIXBadge
+            value={vixData.value}
+            changePercent={vixData.changePercent}
+            volatilityLevel={vixData.volatilityLevel}
+            marketFearScore={vixData.marketFearScore}
+            loading={vixLoading}
+          />
+        </div>
+        {/* Loading Skeleton */}
         <div className="animate-pulse">
           <div className="h-8 bg-slate-700 rounded w-1/3 mb-4"></div>
           <div className="grid grid-cols-3 gap-4">
@@ -117,7 +134,18 @@ const OverallMarketOutlook: React.FC<{ symbol: string }> = ({ symbol }) => {
 
   if (error || !data) {
     return (
-      <div className="bg-gradient-to-br from-slate-900 to-slate-800 rounded-lg p-6 border border-red-500/50">
+      <div className="bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 rounded-lg p-8 border border-red-500/50">
+        {/* Title Row with India VIX Badge */}
+        <div className="flex flex-wrap items-center justify-between gap-3 mb-6 pb-6 border-b border-slate-700/50">
+          <h2 className="text-base sm:text-xl font-bold text-gray-300">OVERALL MARKET OUTLOOK</h2>
+          <IndiaVIXBadge
+            value={vixData.value}
+            changePercent={vixData.changePercent}
+            volatilityLevel={vixData.volatilityLevel}
+            marketFearScore={vixData.marketFearScore}
+            loading={vixLoading}
+          />
+        </div>
         <p className="text-red-400">Failed to load market outlook: {error}</p>
       </div>
     );
@@ -144,10 +172,24 @@ const OverallMarketOutlook: React.FC<{ symbol: string }> = ({ symbol }) => {
     <div className="space-y-6">
       {/* Main Overview Card */}
       <div className="bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 rounded-lg p-8 border border-slate-700 shadow-2xl">
+        
+        {/* Title Row with India VIX Badge */}
+        <div className="flex flex-wrap items-center justify-between gap-3 mb-6 pb-6 border-b border-slate-700/50">
+          <h2 className="text-base sm:text-xl font-bold text-gray-300">OVERALL MARKET OUTLOOK</h2>
+          <IndiaVIXBadge
+            value={vixData.value}
+            changePercent={vixData.changePercent}
+            volatilityLevel={vixData.volatilityLevel}
+            marketFearScore={vixData.marketFearScore}
+            loading={vixLoading}
+          />
+        </div>
+
+        {/* Main Grid */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
           {/* Overall Signal */}
           <div className="flex flex-col items-center justify-center">
-            <div className="text-sm text-gray-400 mb-2">OVERALL MARKET OUTLOOK</div>
+            <div className="text-sm text-gray-400 mb-2">SIGNAL</div>
             <div
               className={`text-4xl font-bold ${
                 data.overall_signal === 'STRONG_BUY'

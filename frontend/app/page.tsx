@@ -10,9 +10,11 @@ import { useAuth } from '@/hooks/useAuth';
 import { useLiquiditySocket, type LiquidityIndex } from '@/hooks/useLiquiditySocket';
 import { useCompassSocket, type CompassIndex } from '@/hooks/useCompassSocket';
 import { useOIMomentumLive, type OIMomentumLiveData } from '@/hooks/useOIMomentumLive';
+import { useIndiaVIX } from '@/hooks/useIndiaVIX';
 
 // Dynamic import for Header to prevent SSR hydration errors with time/date
 const Header = dynamic(() => import('@/components/Header'), { ssr: false });
+const IndiaVIXBadge = dynamic(() => import('@/components/IndiaVIXBadge'), { ssr: false });
 
 // Import status component for both mobile and desktop
 const LiveStatus = dynamic(() => import('@/components/LiveStatus'), { 
@@ -113,6 +115,7 @@ export default function Home() {
   } = useMarketSocket();
   const { alertData, loading: aiLoading, error: aiError } = useAIAnalysis();
   const { outlookData, loading: outlookLoading } = useOverallMarketOutlook();
+  const { vixData, loading: vixLoading } = useIndiaVIX();
   const { isAuthenticated } = useAuth();
   const { liquidityData } = useLiquiditySocket();
   const { compassData } = useCompassSocket();
@@ -867,13 +870,23 @@ export default function Home() {
         <div className="rounded-2xl border border-white/[0.09] bg-[#06090e] overflow-hidden shadow-2xl shadow-black/60">
 
           {/* Header */}
-          <div className="px-4 sm:px-5 py-3 flex items-center justify-between bg-white/[0.015] border-b border-white/[0.06]">
+          <div className="px-4 sm:px-5 py-2.5 flex flex-wrap items-center gap-2 sm:gap-3 bg-white/[0.015] border-b border-white/[0.06]">
+            {/* Left: Title */}
             <div className="flex items-center gap-2.5">
               <span className="w-[3px] h-5 rounded-full bg-gradient-to-b from-teal-300 to-teal-600 shadow-[0_0_8px_2px] shadow-teal-500/40" />
               <span className="text-xs sm:text-sm font-black text-white tracking-tight">Overall Market Outlook</span>
             </div>
-            <div className="flex items-center gap-2">
-              <span className="hidden sm:inline text-[9px] text-white font-bold">17 Signals • Real-time</span>
+            {/* VIX Badge */}
+            <IndiaVIXBadge
+              value={vixData.value}
+              changePercent={vixData.changePercent}
+              volatilityLevel={vixData.volatilityLevel}
+              marketFearScore={vixData.marketFearScore}
+              loading={vixLoading}
+            />
+            {/* Right: meta */}
+            <div className="flex items-center gap-2 ml-auto">
+              <span className="hidden sm:inline text-[9px] text-white/60 font-bold">17 Signals</span>
               <span className="w-1.5 h-1.5 rounded-full bg-teal-400 animate-pulse" />
               <span className="text-[9px] text-teal-400/50 font-bold">LIVE</span>
             </div>

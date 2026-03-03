@@ -26,6 +26,7 @@ from routers import (
     diagnostics,
     market_outlook,
     market_positioning,
+    vix,
 )
 from routers.compass import http_router as compass_http, ws_router as compass_ws
 from routers.liquidity import http_router as liq_http, ws_router as liq_ws
@@ -237,6 +238,7 @@ app.include_router(advanced_analysis.router, tags=["Advanced Technical Analysis"
 app.include_router(pivot_indicators.router, tags=["Pivot Indicators"])
 app.include_router(market_outlook.router, tags=["Market Outlook"])
 app.include_router(market_positioning.router, tags=["Market Positioning"])
+app.include_router(vix.router, tags=["India VIX"])
 
 # 🧭 Institutional Market Compass
 app.include_router(compass_ws,   prefix="/ws",  tags=["Compass"])

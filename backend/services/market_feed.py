@@ -96,7 +96,8 @@ def is_market_open() -> bool:
 TOKEN_SYMBOL_MAP = {
     settings.nifty_token: "NIFTY",
     settings.banknifty_token: "BANKNIFTY", 
-    settings.sensex_token: "SENSEX"
+    settings.sensex_token: "SENSEX",
+    256170: "INDIAVIX"  # India VIX (IVIX) - NSE ticker
 }
 
 # Previous close prices - ONLY from live Zerodha tick data
@@ -566,7 +567,8 @@ class MarketFeedService:
             index_symbols = {
                 settings.nifty_token: "NSE:NIFTY 50",
                 settings.banknifty_token: "NSE:NIFTY BANK",
-                settings.sensex_token: "BSE:SENSEX"
+                settings.sensex_token: "BSE:SENSEX",
+                256170: "NSE:INDIA VIX",
             }
             
             # Futures instrument tokens for volume data (indices don't have volume, but futures do!)
