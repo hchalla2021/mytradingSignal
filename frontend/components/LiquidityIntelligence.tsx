@@ -234,7 +234,7 @@ const IndexCard = memo(({ data, index }: { data: LiquidityIndex | null; index: s
 
       {/* ── OI Profile banner ──────────────────────────────────────────────── */}
       <div className={`px-3 py-2 border-b flex items-center justify-between ${oiStyle.bg}`}>
-        <div className="flex items-center gap-1.5">
+        <div className="flex items-center gap-1.5 rounded-md border border-green-500/60 bg-green-950/30 px-2 py-1">
           <span className="text-sm">{oiStyle.icon}</span>
           <span className={`text-[11px] font-black tracking-wider uppercase ${oiStyle.text}`}>
             {oiStyle.label}
@@ -251,7 +251,7 @@ const IndexCard = memo(({ data, index }: { data: LiquidityIndex | null; index: s
 
         {/* ── Header: symbol + price ──────────────────────────────────────── */}
         <div className="flex items-start justify-between">
-          <div>
+          <div className="rounded-lg border border-green-500/60 bg-green-950/30 px-2.5 py-1.5">
             <span className="text-sm font-black text-white tracking-wide">{data.symbol}</span>
             <div className="flex items-center gap-1.5 mt-0.5">
               <span className="text-[11px] font-mono text-slate-300">

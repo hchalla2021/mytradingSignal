@@ -242,12 +242,12 @@ const CandleQualityAnalysis = memo<CandleQualityAnalysisProps>(({ symbol }) => {
           <p className="text-[9px] text-slate-500 uppercase tracking-[0.18em] font-medium">High Volume Candle Scanner</p>
           <p className="text-[10px] font-semibold text-slate-400 mt-0.5 tracking-wide">Fake Spike · Body Strength · Conviction</p>
         </div>
-        <div className="flex flex-col items-end gap-0.5">
+        <div className="flex items-center gap-2">
+          <span className="rounded-lg border border-green-500/60 bg-green-950/30 px-2.5 py-1.5 text-sm font-bold text-white">{symbolName}</span>
           <div className="flex items-center gap-1.5">
             <div className="w-1.5 h-1.5 rounded-full bg-teal-400 animate-pulse" />
-            <span className="text-[9px] text-slate-500 font-medium">LIVE</span>
+            <span className="text-[10px] text-slate-400 font-medium">LIVE</span>
           </div>
-          <span className="text-[9px] text-slate-600 font-medium">{symbolName}</span>
         </div>
       </div>
 

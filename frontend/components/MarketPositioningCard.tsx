@@ -273,7 +273,7 @@ const SymbolCard = memo(function SymbolCard({ data, name, liveTick }: SymbolCard
 
       {/* ─ Header ─ */}
       <div className="flex items-center justify-between">
-        <div>
+        <div className="rounded-lg border border-green-500/60 bg-green-950/30 px-2.5 py-1.5">
           <span className="text-base font-extrabold text-white tracking-wide">{name}</span>
           <div className="flex items-center gap-1.5 mt-0.5 flex-wrap">
             {/* Live price — updates every WebSocket tick */}

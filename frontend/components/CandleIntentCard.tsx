@@ -387,7 +387,7 @@ const CandleIntentCard = memo<CandleIntentCardProps>(({ symbol, name }) => {
       <div className="flex items-center justify-between px-4 pt-4 pb-2">
         <div className="flex items-center gap-2">
           <Flame className="w-4 h-4 text-white/40" />
-          <span className="text-sm font-bold text-white/80 tracking-wide">{name}</span>
+          <span className="rounded-lg border border-green-500/60 bg-green-950/30 px-2.5 py-1.5 text-sm font-bold text-white">{name}</span>
           {isLive && (
             <span className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-teal-500/10 border border-teal-500/25">
               <span className="w-1 h-1 rounded-full bg-teal-400 animate-pulse" />

@@ -250,7 +250,7 @@ export default function OIMomentumCard({
 
       {/* ─── HEADER: name · price · live status ─────────────────────────── */}
       <div className="flex items-center justify-between px-3 py-2 border-b border-white/5">
-        <div>
+        <div className="rounded-lg border border-green-500/60 bg-green-950/30 px-2.5 py-1.5">
           <p className="text-[11px] font-black text-white leading-tight">{name}</p>
           <p className="text-[9px] text-slate-500 font-mono">{symbol}</p>
         </div>

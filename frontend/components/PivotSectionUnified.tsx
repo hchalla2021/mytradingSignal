@@ -256,8 +256,9 @@ const SymbolPivotRow = memo<{ data: PivotData; config: SymbolConfig; marketStatu
     }`}>
       {/* Title & Status - Responsive Layout */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-3">
-        <h4 className="font-bold text-dark-text text-sm tracking-tight flex-shrink-0">
-          {config.name} • Pivot
+        <h4 className="font-bold text-dark-text text-sm tracking-tight flex-shrink-0 flex items-center gap-2">
+          <span className="rounded-lg border border-green-500/60 bg-green-950/30 px-2.5 py-1.5 text-sm font-bold text-white">{config.name}</span>
+          <span>• Pivot</span>
         </h4>
         <div className="flex items-center gap-2 flex-wrap">
           {/* Confidence Percentage */}

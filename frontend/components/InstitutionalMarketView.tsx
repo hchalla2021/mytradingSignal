@@ -359,12 +359,12 @@ const InstitutionalMarketView = memo<InstitutionalMarketViewProps>(({ symbol, ma
           <p className="text-[9px] text-slate-500 uppercase tracking-[0.18em] font-medium">Smart Money Flow</p>
           <p className="text-[11px] font-semibold text-slate-300 mt-0.5 tracking-wide">Order Structure Intelligence</p>
         </div>
-        <div className="flex flex-col items-end gap-0.5">
+        <div className="flex items-center gap-2">
+          <span className="rounded-lg border border-green-500/60 bg-green-950/30 px-2.5 py-1.5 text-sm font-bold text-white">{symbolName}</span>
           <div className="flex items-center gap-1.5">
             <div className="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse" />
-            <span className="text-[9px] text-slate-400 font-medium">{marketStatus}</span>
+            <span className="text-[10px] text-slate-400 font-medium">{marketStatus}</span>
           </div>
-          <span className="text-[9px] text-slate-600 font-medium">{symbolName}</span>
         </div>
       </div>
 

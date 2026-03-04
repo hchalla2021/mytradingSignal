@@ -277,7 +277,7 @@ const VolumePulseCard = memo<VolumePulseCardProps>(({ symbol, name }) => {
       {/* ─── HEADER ──────────────────────────────────────────────────────── */}
       <div className="flex items-center justify-between px-4 py-2.5 border-b border-white/5">
         <div className="flex items-center gap-2">
-          <span className="text-sm font-black text-white">{name}</span>
+          <span className="rounded-lg border border-green-500/60 bg-green-950/30 px-2.5 py-1.5 text-sm font-bold text-white">{name}</span>
           {isLive && (
             <span className="flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-emerald-500/15 border border-emerald-500/30">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
@@ -293,7 +293,7 @@ const VolumePulseCard = memo<VolumePulseCardProps>(({ symbol, name }) => {
         }`}>{trend}</span>
       </div>
 
-      <div className="p-3 space-y-2.5">
+      <div className="px-3 py-1.5 space-y-2">
 
         {/* ─── LOW VOLUME WARNING ──────────────────────────────────────── */}
         {isLowVol && (
@@ -510,10 +510,10 @@ const VolumePulseCard = memo<VolumePulseCardProps>(({ symbol, name }) => {
       </div>
 
       {/* ─── FOOTER ──────────────────────────────────────────────────────── */}
-      <div className="px-4 py-3 border-t border-white/5 flex justify-between items-center bg-white/[0.015]">
+      <div className="px-4 py-1 border-t border-white/5 flex justify-between items-center bg-white/[0.015]">
         <div className="flex items-center gap-2">
           <span suppressHydrationWarning className={`w-2 h-2 rounded-full flex-shrink-0 ${isLive ? 'bg-emerald-400 animate-pulse' : 'bg-gray-600'}`} />
-          <div className="flex flex-col">
+          <div className="flex items-center gap-2">
             <span className={`text-[10px] font-bold ${isLive ? 'text-emerald-400' : 'text-gray-500'}`}>
               {isLive ? 'Live Feed' : 'Cached'}
             </span>
@@ -525,7 +525,7 @@ const VolumePulseCard = memo<VolumePulseCardProps>(({ symbol, name }) => {
           </div>
         </div>
         {(data.candles_analyzed ?? 0) > 0 && (
-          <div className="flex flex-col items-end">
+          <div className="flex items-center gap-1">
             <span className="text-[10px] font-bold text-white/50">{data.candles_analyzed}</span>
             <span className="text-[9px] text-gray-600">candles</span>
           </div>

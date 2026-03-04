@@ -370,7 +370,7 @@ const IndexCompassCard = memo(({ data }: IndexCardProps) => {
       <div className="flex items-start justify-between gap-2">
         <div>
           <div className="flex items-center gap-2 flex-wrap">
-            <span className="text-lg font-bold text-white tracking-wide">{data.symbol}</span>
+            <span className="rounded-lg border border-green-500/60 bg-green-950/30 px-2.5 py-1.5 text-lg font-bold text-white tracking-wide">{data.symbol}</span>
             {data.dataSource === 'LIVE' ? (
               <span className="flex items-center gap-1 text-[10px] font-bold uppercase text-emerald-400">
                 <span className="relative flex h-1.5 w-1.5">

@@ -1094,11 +1094,11 @@ export default function Home() {
         </div>
         </div>
 
-        {/* � INSTITUTIONAL MARKET COMPASS */}
-        <InstitutionalCompass />
-
         {/* ⚡ PURE LIQUIDITY INTELLIGENCE */}
         <LiquidityIntelligence />
+
+        {/* � INSTITUTIONAL MARKET COMPASS */}
+        <InstitutionalCompass />
 
         {/* �🥇 MARKET POSITIONING INTELLIGENCE */}
         <MarketPositioningCard liveData={marketData} />
@@ -1333,7 +1333,7 @@ export default function Home() {
                   {/* HEADER */}
                   <div className="flex items-center justify-between px-4 pt-4 pb-2">
                     <div className="flex items-center gap-2">
-                      <span className="text-base font-black text-white tracking-wide">{item.symbol}</span>
+                      <span className="rounded-lg border border-green-500/60 bg-green-950/30 px-2.5 py-1.5 text-sm font-bold text-white">{item.symbol}</span>
                       {(item.data?.status || marketStatus) === 'LIVE' && (
                         <span className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-teal-500/10 border border-teal-500/25">
                           <span className="w-1 h-1 rounded-full bg-teal-400 animate-pulse" />
@@ -1619,7 +1619,7 @@ export default function Home() {
                   {/* HEADER */}
                   <div className="flex items-center justify-between px-4 pt-4 pb-2">
                     <div className="flex items-center gap-2">
-                      <span className="text-base font-black text-white tracking-wide">{item.symbol}</span>
+                      <span className="rounded-lg border border-green-500/60 bg-green-950/30 px-2.5 py-1.5 text-sm font-bold text-white">{item.symbol}</span>
                       {(item.data?.status || marketStatus) === 'LIVE' && (
                         <span className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-teal-500/10 border border-teal-500/25">
                           <span className="w-1 h-1 rounded-full bg-teal-400 animate-pulse" />
@@ -1829,7 +1829,7 @@ export default function Home() {
                   {/* HEADER */}
                   <div className="flex items-center justify-between px-4 pt-4 pb-2">
                     <div className="flex items-center gap-2">
-                      <span className="text-base font-black text-white tracking-wide">{item.symbol}</span>
+                      <span className="rounded-lg border border-green-500/60 bg-green-950/30 px-2.5 py-1.5 text-sm font-bold text-white">{item.symbol}</span>
                       {(item.data?.status || marketStatus) === 'LIVE' && (
                         <span className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-teal-500/10 border border-teal-500/25">
                           <span className="w-1 h-1 rounded-full bg-teal-400 animate-pulse" />
@@ -2035,7 +2035,7 @@ export default function Home() {
                     {/* HEADER */}
                     <div className="flex items-center justify-between px-4 pt-4 pb-2">
                       <div className="flex items-center gap-2">
-                        <span className="text-base font-black text-white tracking-wide">{item.symbol}</span>
+                        <span className="rounded-lg border border-green-500/60 bg-green-950/30 px-2.5 py-1.5 text-sm font-bold text-white">{item.symbol}</span>
                         {(item.data?.status || marketStatus) === 'LIVE' && (
                           <span className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-teal-500/10 border border-teal-500/25">
                             <span className="w-1 h-1 rounded-full bg-teal-400 animate-pulse" />
@@ -2258,7 +2258,7 @@ export default function Home() {
                   {/* HEADER */}
                   <div className="flex items-center justify-between px-4 pt-4 pb-2">
                     <div className="flex items-center gap-2">
-                      <span className="text-base font-black text-white tracking-wide">{item.symbol}</span>
+                      <span className="rounded-lg border border-green-500/60 bg-green-950/30 px-2.5 py-1.5 text-sm font-bold text-white">{item.symbol}</span>
                       {(item.data?.status || marketStatus) === 'LIVE' && (
                         <span className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-teal-500/10 border border-teal-500/25">
                           <span className="w-1 h-1 rounded-full bg-teal-400 animate-pulse" />
