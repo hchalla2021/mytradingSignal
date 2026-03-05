@@ -295,19 +295,19 @@ const IndexCard = memo(({ data, index }: { data: LiquidityIndex | null; index: s
               </span>
             </div>
           </div>
-          <div className="mt-1 flex items-center gap-2 text-[9px] text-slate-500">
-            <span className="text-cyan-600">PUT {fmtOI(data.metrics.putOI)}</span>
-            <span className="text-slate-600">/</span>
-            <span className="text-orange-600">CALL {fmtOI(data.metrics.callOI)}</span>
-            {data.metrics.vwapDev != null && (
-              <>
-                <span className="text-slate-600 ml-1">·</span>
-                <span className={data.metrics.vwapDev >= 0 ? 'text-cyan-600' : 'text-orange-600'}>
-                  VWAP {data.metrics.vwapDev >= 0 ? '+' : ''}{data.metrics.vwapDev.toFixed(2)}%
-                </span>
-              </>
-            )}
+          <div className="mt-1.5 inline-flex items-center gap-2 text-[10px] font-bold bg-emerald-950/40 border-2 border-emerald-400/50 rounded-md px-2.5 py-1 shadow-sm shadow-emerald-500/10">
+            <span className="text-cyan-400">PUT {fmtOI(data.metrics.putOI)}</span>
+            <span className="text-emerald-400/70 font-black">/</span>
+            <span className="text-orange-400">CALL {fmtOI(data.metrics.callOI)}</span>
           </div>
+          {data.metrics.vwapDev != null && (
+            <div className="mt-1 flex items-center gap-2 text-[9px] text-slate-500">
+              <span className="text-slate-600">·</span>
+              <span className={data.metrics.vwapDev >= 0 ? 'text-cyan-600' : 'text-orange-600'}>
+                VWAP {data.metrics.vwapDev >= 0 ? '+' : ''}{data.metrics.vwapDev.toFixed(2)}%
+              </span>
+            </div>
+          )}
         </div>
 
         {/* ── 5-Min prediction (very prominent) ───────────────────────────── */}

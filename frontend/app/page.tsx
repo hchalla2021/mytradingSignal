@@ -1097,11 +1097,33 @@ export default function Home() {
         {/* ⚡ PURE LIQUIDITY INTELLIGENCE */}
         <LiquidityIntelligence />
 
-        {/* � INSTITUTIONAL MARKET COMPASS */}
-        <InstitutionalCompass />
-
-        {/* �🥇 MARKET POSITIONING INTELLIGENCE */}
+        {/* 🥇 MARKET POSITIONING INTELLIGENCE */}
         <MarketPositioningCard liveData={marketData} />
+
+        {/* Volume Pulse Section */}
+        <div className="mt-6 sm:mt-6 border-2 border-emerald-500/30 rounded-2xl p-3 sm:p-4 bg-gradient-to-br from-emerald-950/20 via-dark-card/50 to-dark-elevated/40 backdrop-blur-sm shadow-xl shadow-emerald-500/10">
+          <div className="flex flex-col gap-3 mb-3 sm:mb-4">
+            <div className="flex items-center gap-3">
+              <h3 className="text-base sm:text-lg lg:text-xl font-bold text-dark-text flex items-center gap-3 tracking-tight">
+                <span className="w-1.5 h-5 sm:h-6 bg-gradient-to-b from-emerald-500 to-emerald-600 rounded-full shadow-lg shadow-emerald-500/30" />
+                Volume Pulse (Candle Volume)
+              </h3>
+            </div>
+            <p className="text-dark-tertiary text-xs sm:text-sm ml-4 sm:ml-5 font-medium tracking-wide">
+              Real-time buying/selling pressure • Green vs Red candle volume tracking
+            </p>
+          </div>
+
+          {/* Volume Pulse Cards Grid */}
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 sm:gap-4">
+            <VolumePulseCard symbol="NIFTY" name="NIFTY 50" />
+            <VolumePulseCard symbol="BANKNIFTY" name="BANK NIFTY" />
+            <VolumePulseCard symbol="SENSEX" name="SENSEX" />
+          </div>
+        </div>
+
+        {/* 🧭 INSTITUTIONAL MARKET COMPASS */}
+        <InstitutionalCompass />
 
         {/* 🔮 OI MOMENTUM - Pure Data Buy/Sell Signals */}
         <div className="mt-4 sm:mt-6 border-2 border-purple-500/30 rounded-2xl p-3 sm:p-4 bg-gradient-to-br from-purple-950/20 via-dark-card/50 to-dark-elevated/40 backdrop-blur-sm shadow-xl shadow-purple-500/10">
@@ -2446,28 +2468,6 @@ export default function Home() {
             <CandleIntentCard symbol="NIFTY" name="NIFTY 50" />
             <CandleIntentCard symbol="BANKNIFTY" name="BANK NIFTY" />
             <CandleIntentCard symbol="SENSEX" name="SENSEX" />
-          </div>
-        </div>
-
-        {/* Volume Pulse Section - NEW */}
-        <div className="mt-6 sm:mt-6 border-2 border-emerald-500/30 rounded-2xl p-3 sm:p-4 bg-gradient-to-br from-emerald-950/20 via-dark-card/50 to-dark-elevated/40 backdrop-blur-sm shadow-xl shadow-emerald-500/10">
-          <div className="flex flex-col gap-3 mb-3 sm:mb-4">
-            <div className="flex items-center gap-3">
-              <h3 className="text-base sm:text-lg lg:text-xl font-bold text-dark-text flex items-center gap-3 tracking-tight">
-                <span className="w-1.5 h-5 sm:h-6 bg-gradient-to-b from-emerald-500 to-emerald-600 rounded-full shadow-lg shadow-emerald-500/30" />
-                Volume Pulse (Candle Volume)
-              </h3>
-            </div>
-            <p className="text-dark-tertiary text-xs sm:text-sm ml-4 sm:ml-5 font-medium tracking-wide">
-              Real-time buying/selling pressure • Green vs Red candle volume tracking
-            </p>
-          </div>
-
-          {/* Volume Pulse Cards Grid */}
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 sm:gap-4">
-            <VolumePulseCard symbol="NIFTY" name="NIFTY 50" />
-            <VolumePulseCard symbol="BANKNIFTY" name="BANK NIFTY" />
-            <VolumePulseCard symbol="SENSEX" name="SENSEX" />
           </div>
         </div>
 
