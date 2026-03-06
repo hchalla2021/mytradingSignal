@@ -5,6 +5,7 @@ Isolated, self-contained endpoint delivering:
   - Confidence score (0-100)
   - Direction signal (STRONG_BUY / BUY / SELL / STRONG_SELL / NEUTRAL)
   - 5-minute predictive alert based on recent trend trajectories
+  - Advanced 5m prediction: intelligent micro-change detection + confidence erosion tracking
 
 All config from environment. Zero impact on other routers.
 """
@@ -13,6 +14,10 @@ from fastapi import APIRouter
 from datetime import datetime
 from services.cache import get_cache, _SHARED_CACHE
 from services.market_feed import get_market_status
+from services.market_positioning_5m_predictor import (
+    PositioningBuffer,
+    calculate_market_positioning_5m_prediction,
+)
 import json
 import time
 import os
@@ -25,11 +30,17 @@ _HISTORY: dict[str, list[dict]] = {"NIFTY": [], "BANKNIFTY": [], "SENSEX": []}
 _MAX_HISTORY = int(os.getenv("POSITIONING_HISTORY_POINTS", "30"))  # ~5 mins @ 10s intervals
 _SYMBOLS = ["NIFTY", "BANKNIFTY", "SENSEX"]
 
+# Advanced 5m predictor buffers (one per symbol)
+_POSITIONING_BUFFERS: dict[str, PositioningBuffer] = {
+    sym: PositioningBuffer(sym, maxlen=20) for sym in _SYMBOLS
+}
+
 # ─── Signal thresholds (configurable via env) ────────────────────────────────
 _STRONG_THRESHOLD  = float(os.getenv("POSITIONING_STRONG_THRESHOLD",  "70"))  # confidence >= this → STRONG
 _BUY_THRESHOLD     = float(os.getenv("POSITIONING_BUY_THRESHOLD",     "55"))  # confidence >= this → BUY/SELL
 _OI_CHANGE_MIN_PCT = float(os.getenv("POSITIONING_OI_CHANGE_MIN_PCT", "0.05")) # OI change threshold %
 _VOL_CHANGE_MIN_PCT= float(os.getenv("POSITIONING_VOL_CHANGE_MIN_PCT","0.03")) # Vol change threshold %
+
 
 
 def _classify_positioning(price_up: bool | None, vol_up: bool | None, oi_up: bool | None) -> dict:
@@ -494,6 +505,34 @@ def _analyse_symbol(symbol: str, data: dict) -> dict:
     # ── Tick flow % (directional ticks as OI proxy when oi=0) ────────────────
     tick_flow = round(abs(_tick_net) * 100, 1)     # 0–100 %, 100 = all ticks same direction (unsigned magnitude)
 
+    # ── Advanced 5m prediction: intelligent micro-change detection ──────────────
+    # Track this symbol's positioning snapshots for trend analysis
+    buf = _POSITIONING_BUFFERS[symbol]
+    buf.push(
+        confidence=confidence,
+        signal=positioning["signal"],
+        positioning_type=positioning["type"],
+        price=price,
+        oi=oi,
+        volume=volume,
+        tick_flow_pct=tick_flow,
+    )
+    
+    # Advanced prediction available once buffer has enough history (~25 seconds)
+    advanced_5m = None
+    if buf.is_full():
+        try:
+            advanced_5m = calculate_market_positioning_5m_prediction(
+                current_confidence=confidence,
+                current_signal=positioning["signal"],
+                current_positioning=positioning["type"],
+                current_price=price,
+                recent_snapshots=buf.get_recent(min(10, len(buf._buf))),
+            )
+        except Exception as e:
+            logger.warning(f"Advanced 5m prediction failed for {symbol}: {e}")
+            advanced_5m = None
+
     return {
         "symbol":      symbol,
         "price":       price,
@@ -511,6 +550,7 @@ def _analyse_symbol(symbol: str, data: dict) -> dict:
             "tick_flow":  tick_flow,            # % of recent ticks in signal direction
         },
         "prediction":  prediction,
+        "advanced_5m_prediction": advanced_5m,  # NEW: Intelligent 5m micro-trend prediction
         "timestamp":   datetime.now().isoformat(),
         "market_status": get_market_status(),
     }

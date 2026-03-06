@@ -462,12 +462,12 @@ const SymbolPivotRow = memo<{ data: PivotData; config: SymbolConfig; marketStatu
         <div className="rounded-xl border border-white/[0.06] bg-[#0d1117] overflow-hidden">
           <div className="h-px bg-gradient-to-r from-transparent via-white/10 to-transparent" />
           {(() => {
-            // ── Multi-factor Pivot 5-min confidence engine ──────────
-            // Base: pivotConfidence (already computed with 6 factors)
+            // ── ENHANCED Multi-factor Pivot 5-min confidence engine ──────────
             const stDistPct  = Math.abs(st1.distance_pct || 0);
             const stAligns   = (isBullish && st1.trend === 'BULLISH') || (isBearish && st1.trend === 'BEARISH');
             const stOpposes  = (isBullish && st1.trend === 'BEARISH') || (isBearish && st1.trend === 'BULLISH');
             const stStrong   = stDistPct > 1.0;
+            const stModerate = stDistPct > 0.5;
             const aboveR2    = isBullish && nearestRes?.label === 'R2' && price > (pivots.r1 || 0);
             const belowS2    = isBearish && nearestSup?.label === 'S2' && price < (pivots.s1 || 0);
             const goodZone   = aboveR2 || belowS2;
@@ -480,14 +480,26 @@ const SymbolPivotRow = memo<{ data: PivotData; config: SymbolConfig; marketStatu
             } else {
               // Tiered ST confirmation
               if (stAligns && stStrong) adjConf = Math.round(adjConf * 1.08);
-              else if (stAligns)        adjConf = Math.round(adjConf * 1.05);
+              else if (stAligns && stModerate) adjConf = Math.round(adjConf * 1.06);
+              else if (stAligns) adjConf = Math.round(adjConf * 1.04);
               // Independent zone bonus
-              if (goodZone) adjConf = Math.round(adjConf * 1.04);
+              if (goodZone) adjConf = Math.round(adjConf * 1.05);
             }
             // Uncertainty penalty
             if (isNearPivot) adjConf = Math.round(adjConf * 0.93);
             if (marketStatus !== 'LIVE') adjConf = Math.round(Math.max(30, adjConf * 0.88));
             adjConf = Math.round(Math.min(95, Math.max(30, adjConf)));
+
+            // ── ACTUAL MARKET CONFIDENCE (independent calculation) ──
+            // Base from pivot alignment + ST confirmation + zone quality
+            let actualMarketConf = 50;
+            if (isBullish) {
+              actualMarketConf = Math.min(95, Math.max(30, (stStrong ? 35 : stModerate ? 25 : 15) + (stAligns ? 25 : 10) + (goodZone ? 15 : 5)));
+            } else if (isBearish) {
+              actualMarketConf = Math.min(95, Math.max(30, (stStrong ? 35 : stModerate ? 25 : 15) + (stAligns ? 25 : 10) + (goodZone ? 15 : 5)));
+            } else {
+              actualMarketConf = 33;
+            }
 
             // Direction
             const predDir   = isBullish ? 'LONG' : isBearish ? 'SHORT' : 'FLAT';
@@ -497,63 +509,146 @@ const SymbolPivotRow = memo<{ data: PivotData; config: SymbolConfig; marketStatu
             const dirBg     = isBullish ? 'bg-teal-500/[0.07]' : isBearish ? 'bg-rose-500/[0.07]' : 'bg-amber-500/[0.05]';
             const barColor  = isBullish ? 'bg-teal-500' : isBearish ? 'bg-rose-500' : 'bg-amber-500';
 
-            // Context
-            const ctxNote = stOpposes     ? '⚠ ST diverges from pivot bias'
-              : isNearPivot              ? '⚠ At pivot — wait for break'
-              : goodZone && stAligns     ? `${nearestRes?.label || nearestSup?.label} zone + ST confirm`
-              : stAligns                 ? 'ST + Pivot aligned'
-              : nearestRes              ? `Target ${nearestRes.label} ₹${fmtCompact(nearestRes.value)}`
-              : nearestSup              ? `Support ${nearestSup.label} ₹${fmtCompact(nearestSup.value)}`
-              : 'Watching pivot levels…';
+            // Movement probability distribution
+            const bullishProb = isBullish ? Math.max(5, Math.min(95, adjConf)) : Math.max(5, Math.min(95, 50 - Math.abs(adjConf - 50)));
+            const bearishProb = 100 - bullishProb;
+
+            // Confirmations list
+            const confirms = [
+              stStrong && 'ST > 1.0%',
+              stAligns && 'ST aligned',
+              goodZone && (nearestRes ? `${nearestRes.label} zone` : nearestSup ? `${nearestSup.label} zone` : 'Zone confirmed'),
+              !isNearPivot && 'Clear break',
+            ].filter(Boolean) as string[];
+
+            // Early signal detection
+            const multiFactorAlign = [stAligns, stStrong || stModerate, goodZone].filter(Boolean).length >= 2;
+            const showEarlySignal = adjConf >= 75 || (multiFactorAlign && !stOpposes && !isNearPivot);
+            const earlySignalText = adjConf >= 85 ? `⚡ STRONG Pivot ${predDir} Signal Ready` : `⚡ CONFIRMED Pivot ${predDir} Signal Ready`;
 
             return (
-              <div className="px-3 pt-2.5 pb-3">
-                {/* Header */}
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-[9px] text-white/40 font-bold uppercase tracking-widest">5-Min Prediction</span>
-                  <span className={`text-[9px] font-black ${dirColor}`}>{adjConf}% Confidence</span>
+              <div className="px-4 py-3 space-y-3">
+                {/* 1. HEADER */}
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-bold text-gray-400 uppercase">5 Min Prediction</span>
+                  <span className={`text-[10px] font-bold px-2 py-1 rounded ${isBullish ? 'bg-teal-500/25 text-teal-300' : isBearish ? 'bg-rose-500/25 text-rose-300' : 'bg-amber-500/25 text-amber-300'}`}>
+                    {adjConf}% CONFIDENCE
+                  </span>
                 </div>
 
-                {/* Direction pill + bar */}
-                <div className={`rounded-lg border ${dirBorder} ${dirBg} px-2.5 py-2 mb-2`}>
-                  <div className="flex items-center justify-between gap-2 mb-1.5">
-                    <span className={`text-sm font-black ${dirColor}`}>{dirIcon} {predDir}</span>
-                    <span className="text-[9px] text-white/30 truncate">{ctxNote}</span>
-                    <span className={`text-sm font-black ${dirColor} shrink-0`}>{adjConf}%</span>
-                  </div>
-                  <div className="h-[2px] bg-white/[0.06] rounded-full overflow-hidden">
-                    <div
-                      suppressHydrationWarning
-                      className={`h-full rounded-full transition-all duration-700 ${barColor}`}
-                      style={{ width: `${adjConf}%` }}
-                    />
-                  </div>
-                </div>
-
-                {/* 3-cell grid */}
-                <div className="grid grid-cols-3 gap-1.5">
-                  <div className="text-center bg-black/30 border border-white/[0.05] rounded-lg p-2">
-                    <div className="text-[8px] text-white/30 mb-0.5">Pivot Zone</div>
-                    <div className={`text-[10px] font-bold ${dirColor}`}>
-                      {price > (pivots.pivot || 0) ? 'Above P' : 'Below P'}
+                {/* 2. DUAL CONFIDENCE DISPLAY */}
+                <div className="grid grid-cols-2 gap-2">
+                  {/* Predicted confidence */}
+                  <div className="flex flex-col bg-gray-900/50 rounded-lg px-2.5 py-2 border border-gray-700/30">
+                    <span className="text-[9px] text-gray-500 font-bold uppercase">CONFIDENCE</span>
+                    <span className={`text-[13px] font-black ${dirColor}`}>{adjConf}%</span>
+                    <div className="h-2 bg-gray-800 rounded-full overflow-hidden mt-1.5">
+                      <div className={`h-full rounded-full transition-all duration-500 ${barColor}`} style={{ width: `${adjConf}%` }} />
                     </div>
                   </div>
-                  <div className="text-center bg-black/30 border border-white/[0.05] rounded-lg p-2">
-                    <div className="text-[8px] text-white/30 mb-0.5">Key Level</div>
-                    <div className={`text-[10px] font-bold ${dirColor}`}>
+
+                  {/* Actual Market confidence */}
+                  <div className="flex flex-col bg-gray-900/50 rounded-lg px-2.5 py-2 border border-gray-700/30">
+                    <span className="text-[9px] text-gray-500 font-bold uppercase">Actual Market</span>
+                    <span className={`text-[13px] font-black ${isBullish ? 'text-teal-400' : isBearish ? 'text-rose-400' : 'text-amber-400'}`}>{actualMarketConf}%</span>
+                    <div className="h-2 bg-gray-800 rounded-full overflow-hidden mt-1.5">
+                      <div className={`h-full rounded-full transition-all duration-500 ${isBullish ? 'bg-teal-500' : isBearish ? 'bg-rose-500' : 'bg-amber-500'}`} style={{ width: `${actualMarketConf}%` }} />
+                    </div>
+                  </div>
+                </div>
+
+                {/* 3. DIRECTION + STATUS */}
+                <div className={`rounded-lg border ${dirBorder} ${dirBg} px-3 py-2.5`}>
+                  <div className="flex items-center justify-between">
+                    <span className={`text-sm font-black ${dirColor}`}>{dirIcon} {predDir}</span>
+                    <span className="text-[9px] text-gray-400">{stOpposes ? '⚠ ST diverges' : isNearPivot ? '⚠ At pivot' : 'Aligned'}</span>
+                    <span className={`text-sm font-black ${dirColor}`}>{adjConf}%</span>
+                  </div>
+                  <div className="h-2 bg-gray-800 rounded-full overflow-hidden border border-white/5 mt-2">
+                    <div className={`h-full rounded-full transition-all duration-500 bg-gradient-to-r ${isBullish ? 'from-teal-500 to-teal-400' : isBearish ? 'from-rose-500 to-rose-400' : 'from-amber-500 to-amber-400'}`} style={{ width: `${adjConf}%` }} />
+                  </div>
+                </div>
+
+                {/* 4. PIVOT MOMENTUM INDICATORS (4-row grid) */}
+                <div className="space-y-1.5 bg-gray-900/30 rounded-lg p-3 border border-gray-700/20">
+                  {/* Pivot Position */}
+                  <div className="flex items-center justify-between">
+                    <span className="text-[9px] text-gray-500 font-bold uppercase">Pivot Position</span>
+                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${isBullish ? 'bg-teal-500/25 text-teal-300' : isBearish ? 'bg-rose-500/25 text-rose-300' : 'bg-gray-700/30 text-gray-300'}`}>
+                      {price > (pivots.pivot || 0) ? 'Above Pivot' : 'Below Pivot'}
+                    </span>
+                  </div>
+
+                  {/* SuperTrend Alignment */}
+                  <div className="flex items-center justify-between">
+                    <span className="text-[9px] text-gray-500 font-bold uppercase">ST Alignment</span>
+                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${stAligns ? (isBullish ? 'bg-teal-500/25 text-teal-300' : 'bg-rose-500/25 text-rose-300') : stOpposes ? 'bg-red-500/25 text-red-300' : 'bg-amber-500/25 text-amber-300'}`}>
+                      {stAligns ? 'Confirms' : stOpposes ? 'Diverges' : 'Neutral'} ({stDistPct?.toFixed(2)}%)
+                    </span>
+                  </div>
+
+                  {/* ST Distance Quality */}
+                  <div className="flex items-center justify-between">
+                    <span className="text-[9px] text-gray-500 font-bold uppercase">ST Strength</span>
+                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${stStrong ? (isBullish ? 'bg-teal-500/25 text-teal-300' : 'bg-rose-500/25 text-rose-300') : stModerate ? 'bg-amber-500/25 text-amber-300' : 'bg-gray-700/30 text-gray-300'}`}>
+                      {stStrong ? 'Very Strong' : stModerate ? 'Moderate' : 'Weak'} ({stDistPct?.toFixed(2)}%)
+                    </span>
+                  </div>
+
+                  {/* Target Level */}
+                  <div className="flex items-center justify-between">
+                    <span className="text-[9px] text-gray-500 font-bold uppercase">Key Level</span>
+                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${dirColor}`}>
                       {isBullish
                         ? (nearestRes ? `${nearestRes.label}` : '—')
                         : isBearish
                         ? (nearestSup ? `${nearestSup.label}` : '—')
-                        : `P`}
+                        : `Pivot`}
+                    </span>
+                  </div>
+                </div>
+
+                {/* 5. MOVEMENT PROBABILITY DISTRIBUTION */}
+                <div className="space-y-1.5">
+                  <p className="text-[9px] font-bold text-gray-500 uppercase">Movement Probability</p>
+                  <div className="flex items-center gap-0.5 h-6 rounded-md overflow-hidden bg-gray-950/50 border border-gray-700/30">
+                    {/* Bullish probability */}
+                    <div className="h-full bg-gradient-to-r from-teal-600 to-teal-500 flex items-center justify-center transition-all duration-500" style={{ width: `${bullishProb}%` }}>
+                      {bullishProb >= 15 && <span className="text-[8px] font-bold text-white">{bullishProb}%↑</span>}
+                    </div>
+                    {/* Bearish probability */}
+                    <div className="h-full bg-gradient-to-l from-rose-600 to-rose-500 flex items-center justify-center transition-all duration-500 ml-auto" style={{ width: `${bearishProb}%` }}>
+                      {bearishProb >= 15 && <span className="text-[8px] font-bold text-white">{bearishProb}%↓</span>}
                     </div>
                   </div>
-                  <div className="text-center bg-black/30 border border-white/[0.05] rounded-lg p-2">
-                    <div className="text-[8px] text-white/30 mb-0.5">ST Align</div>
-                    <div className={`text-[10px] font-bold ${stAligns ? dirColor : stOpposes ? 'text-rose-300' : 'text-amber-300'}`}>
-                      {stAligns ? 'Confirm' : stOpposes ? 'Diverge' : 'Neutral'}
+                </div>
+
+                {/* 6. EARLY SIGNAL DETECTION */}
+                {showEarlySignal && (
+                  <div className="pt-2 border-t border-gray-700/30">
+                    <span className="text-[9px] font-bold text-amber-400 uppercase inline-block">
+                      {earlySignalText}
+                    </span>
+                  </div>
+                )}
+
+                {/* 7. CONFIRMATION SUMMARY */}
+                {confirms.length > 0 && (
+                  <div className="rounded-lg bg-gray-900/20 px-3 py-2 border border-gray-700/20">
+                    <p className="text-[9px] text-gray-500 font-bold uppercase mb-1.5">Confirmations</p>
+                    <div className="flex flex-wrap gap-1">
+                      {confirms.map((c, idx) => (
+                        <span key={idx} className="text-[8px] bg-teal-500/20 text-teal-300 px-2 py-0.5 rounded">
+                          ✓ {c}
+                        </span>
+                      ))}
                     </div>
                   </div>
+                )}
+
+                {/* 8. SUMMARY LINE */}
+                <div className={`text-center text-[10px] font-bold rounded-lg py-2 border ${dirBorder} ${dirBg}`}>
+                  {predDir} · {adjConf}% Pred · {actualMarketConf}% Market · {confirms.length} Confirms
                 </div>
               </div>
             );

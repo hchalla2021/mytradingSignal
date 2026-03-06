@@ -446,7 +446,7 @@ const VolumePulseCard = memo<VolumePulseCardProps>(({ symbol, name }) => {
           {(() => {
             const isBuyVol  = pred.label === 'STRONG UP'   || pred.label === 'LIKELY UP';
             const isSellVol = pred.label === 'STRONG DOWN' || pred.label === 'LIKELY DOWN';
-            const adjConf   = pred.confidence; // 35–90%, 5-factor weighted (momentum, ratio, quality, participation, aggression)
+            const adjConf   = pred.confidence; // Predicted confidence
             const predDir   = isBuyVol ? 'LONG' : isSellVol ? 'SHORT' : 'FLAT';
             const dirIcon   = isBuyVol ? '▲' : isSellVol ? '▼' : '─';
             const dirColor  = isBuyVol ? 'text-teal-300'       : isSellVol ? 'text-rose-300'       : 'text-amber-300';
@@ -454,6 +454,15 @@ const VolumePulseCard = memo<VolumePulseCardProps>(({ symbol, name }) => {
             const dirBg     = isBuyVol ? 'bg-teal-500/[0.07]'  : isSellVol ? 'bg-rose-500/[0.07]'  : 'bg-amber-500/[0.05]';
             const barColor  = isBuyVol ? 'bg-teal-500'         : isSellVol ? 'bg-rose-500'         : 'bg-amber-500';
             const q = data.pro_metrics?.volume_quality ?? 'NEUTRAL';
+            
+            // Calculate Actual Market Confidence from volume data
+            const pm = data.pro_metrics ?? {};
+            const actualMarketConf = Math.round(
+              Math.abs(vd.green_percentage - vd.red_percentage) * 0.4 +
+              Math.abs(pm.participation ?? 50 - 50) * 0.3 +
+              Math.abs(pm.aggression ?? 50 - 50) * 0.3
+            );
+
             const ctxNote =
               q === 'EXHAUSTION'          ? '⚠ Volume exhaustion — reversal risk'
               : q === 'FAKE_BREAKOUT'     ? '⚠ Fake breakout — avoid chase'
@@ -464,42 +473,126 @@ const VolumePulseCard = memo<VolumePulseCardProps>(({ symbol, name }) => {
               : isBuyVol  ? 'Buying pressure active'
               : isSellVol ? 'Selling pressure active'
               : 'Balanced — await breakout';
+            
             return (
-              <div className="px-3 pt-2.5 pb-3">
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-[9px] text-white/40 font-bold uppercase tracking-widest">5-Min Prediction</span>
-                  <span className={`text-[9px] font-black ${dirColor}`}>{adjConf}% Confidence</span>
+              <div className="px-4 pt-3 pb-3 space-y-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] text-white/50 font-bold uppercase tracking-widest">5-Min Prediction</span>
+                  <span className={`text-sm font-bold ${dirColor}`}>{dirIcon} {predDir}</span>
                 </div>
-                <div className={`rounded-lg border ${dirBorder} ${dirBg} px-2.5 py-2 mb-2`}>
+
+                {/* Dual Confidence Display */}
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="flex flex-col bg-black/30 border border-teal-500/30 rounded-lg px-2 py-1.5">
+                    <span className="text-[10px] text-white/40 font-bold uppercase tracking-wide">CONFIDENCE</span>
+                    <span className="text-[13px] font-black text-teal-300 mt-0.5">{adjConf}%</span>
+                    <div className="w-full h-2 rounded-full bg-white/10 overflow-hidden mt-1">
+                      <div
+                        className="h-full bg-gradient-to-r from-teal-500 to-teal-400 transition-all duration-300 rounded-full"
+                        style={{ width: `${Math.min(100, adjConf)}%` }}
+                      />
+                    </div>
+                  </div>
+                  <div className="flex flex-col bg-black/30 border border-emerald-500/30 rounded-lg px-2 py-1.5">
+                    <span className="text-[10px] text-white/40 font-bold uppercase tracking-wide">Actual Market</span>
+                    <span className="text-[13px] font-black text-emerald-300 mt-0.5">{Math.min(100, actualMarketConf)}%</span>
+                    <div className="w-full h-2 rounded-full bg-white/10 overflow-hidden mt-1">
+                      <div
+                        className="h-full bg-gradient-to-r from-emerald-500 to-emerald-400 transition-all duration-300 rounded-full"
+                        style={{ width: `${Math.min(100, actualMarketConf)}%` }}
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* Volume Momentum Indicators */}
+                <div className="space-y-2 bg-black/20 rounded-lg p-2.5 border border-white/[0.05]">
+                  {/* Buy vs Sell Volume */}
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px] text-white/40 font-bold uppercase tracking-wide">Volume Momentum</span>
+                    <span className={`font-bold px-2 py-1 rounded text-[10px] ${
+                      data.pulse_score > 65   ? 'bg-teal-500/30 text-teal-200' :
+                      data.pulse_score > 55   ? 'bg-teal-500/20 text-teal-300' :
+                      data.pulse_score < 35   ? 'bg-rose-500/30 text-rose-200' :
+                      data.pulse_score < 45   ? 'bg-rose-500/20 text-rose-300' :
+                                                'bg-amber-500/20 text-amber-300'
+                    }`}>
+                      {data.pulse_score > 50 ? '▲' : data.pulse_score < 50 ? '▼' : '→'} {data.pulse_score.toFixed(0)}%
+                    </span>
+                  </div>
+
+                  {/* Participation Level */}
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px] text-white/40 font-bold uppercase tracking-wide">Participation</span>
+                    <span className={`font-bold px-2 py-1 rounded text-[10px] ${
+                      pm.participation > 70  ? 'bg-teal-500/30 text-teal-200' :
+                      pm.participation > 50  ? 'bg-teal-500/20 text-teal-300' :
+                      pm.participation < 30  ? 'bg-rose-500/30 text-rose-200' :
+                                               'bg-amber-500/20 text-amber-300'
+                    }`}>
+                      {(pm.participation ?? 50).toFixed(0)}% Activity
+                    </span>
+                  </div>
+
+                  {/* Volume Quality */}
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px] text-white/40 font-bold uppercase tracking-wide">Quality</span>
+                    <span className={`font-bold px-2 py-1 rounded text-[10px] max-w-[140px] truncate ${
+                      q === 'HEALTHY' || q === 'COMPRESSION' || q === 'SELLER_EXHAUSTION' ? 'bg-teal-500/30 text-teal-200' :
+                      q === 'EXHAUSTION' || q === 'FAKE_BREAKOUT' ? 'bg-rose-500/30 text-rose-200' :
+                      'bg-amber-500/20 text-amber-300'
+                    }`}>
+                      {q === 'NEUTRAL' ? '—' : q.replace('_', ' ')}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Probability Distribution */}
+                <div className="space-y-2">
+                  <div className="text-[10px] text-white/40 font-bold uppercase tracking-wide">Movement Probability</div>
+                  <div className="flex items-center gap-1 h-7 rounded-md overflow-hidden bg-black/50 border border-white/[0.1]">
+                    {/* Buy probability */}
+                    <div
+                      className="h-full bg-gradient-to-r from-teal-600 to-teal-500 transition-all duration-300 flex items-center justify-center min-w-[2px]"
+                      style={{
+                        width: `${Math.max(5, Math.min(95, vd.green_percentage))}%`,
+                      }}
+                    >
+                      <span className="text-[9px] font-bold text-white px-1 truncate whitespace-nowrap">
+                        {vd.green_percentage.toFixed(0)}%↑
+                      </span>
+                    </div>
+                    {/* Sell probability */}
+                    <div
+                      className="h-full bg-gradient-to-l from-rose-600 to-rose-500 transition-all duration-300 flex items-center justify-center ml-auto min-w-[2px]"
+                      style={{
+                        width: `${Math.max(5, Math.min(95, vd.red_percentage))}%`,
+                      }}
+                    >
+                      <span className="text-[9px] font-bold text-white px-1 truncate whitespace-nowrap">
+                        {vd.red_percentage.toFixed(0)}%↓
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Early Signal Detection */}
+                {(data.pulse_score > 75 || data.pulse_score < 25 || (pm.exhaustion ?? 0) > 70) && (
+                  <div className="pt-2 border-t border-white/10">
+                    <span className="text-[10px] font-bold text-amber-400 uppercase tracking-wide">
+                      ⚡ {data.pulse_score > 75 ? 'Strong Bullish' : data.pulse_score < 25 ? 'Strong Bearish' : 'Exhaustion'} Signal
+                    </span>
+                  </div>
+                )}
+
+                {/* Context & Direction Confidence Bar */}
+                <div className={`rounded-lg border ${dirBorder} ${dirBg} px-2.5 py-2`}>
                   <div className="flex items-center justify-between gap-2 mb-1.5">
-                    <span className={`text-sm font-black ${dirColor}`}>{dirIcon} {predDir}</span>
-                    <span className="text-[9px] text-white/30 truncate">{ctxNote}</span>
-                    <span className={`text-sm font-black ${dirColor} shrink-0`}>{adjConf}%</span>
+                    <span className="text-[10px] text-white/40">{ctxNote}</span>
+                    <span className={`text-[11px] font-black ${dirColor} shrink-0`}>{adjConf}%</span>
                   </div>
                   <div className="h-[2px] bg-white/[0.06] rounded-full overflow-hidden">
                     <div suppressHydrationWarning className={`h-full rounded-full transition-all duration-700 ${barColor}`} style={{ width: `${adjConf}%` }} />
-                  </div>
-                </div>
-                <div className="grid grid-cols-3 gap-1.5">
-                  <div className="text-center bg-black/30 border border-white/[0.05] rounded-lg p-2">
-                    <div className="text-[8px] text-white/30 mb-0.5">Buy Vol</div>
-                    <div className={`text-[10px] font-bold ${vd.green_percentage >= 55 ? 'text-teal-300' : 'text-amber-300'}`}>
-                      {vd.green_percentage.toFixed(0)}%
-                    </div>
-                  </div>
-                  <div className="text-center bg-black/30 border border-white/[0.05] rounded-lg p-2">
-                    <div className="text-[8px] text-white/30 mb-0.5">Sell Vol</div>
-                    <div className={`text-[10px] font-bold ${vd.red_percentage >= 55 ? 'text-rose-300' : 'text-amber-300'}`}>
-                      {vd.red_percentage.toFixed(0)}%
-                    </div>
-                  </div>
-                  <div className="text-center bg-black/30 border border-white/[0.05] rounded-lg p-2">
-                    <div className="text-[8px] text-white/30 mb-0.5">Quality</div>
-                    <div className={`text-[10px] font-bold ${
-                      q === 'HEALTHY' || q === 'COMPRESSION' || q === 'SELLER_EXHAUSTION' ? 'text-teal-300'
-                      : q === 'EXHAUSTION' || q === 'FAKE_BREAKOUT' ? 'text-rose-300'
-                      : 'text-amber-300'
-                    }`}>{q === 'NEUTRAL' ? '—' : q.replace('_', ' ')}</div>
                   </div>
                 </div>
               </div>

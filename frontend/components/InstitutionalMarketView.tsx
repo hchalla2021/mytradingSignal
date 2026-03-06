@@ -467,11 +467,13 @@ const InstitutionalMarketView = memo<InstitutionalMarketViewProps>(({ symbol, ma
         </div>
       </div>
 
-      {/* ── 5-MIN PREDICTION SECTION ── */}
+      {/* ══════════════════════════════════════════════════════════
+          5 MIN PREDICTION
+      ══════════════════════════════════════════════════════════ */}
       <div className="mx-3 mt-2.5 mb-3 rounded-xl overflow-hidden border border-white/[0.06] bg-[#0d1117]">
         <div className="h-px bg-gradient-to-r from-transparent via-white/10 to-transparent" />
 
-        <div className="p-3">
+        <div className="p-4 space-y-3">
           {(() => {
             // Direction from signal
             const isBull = signal.includes('BUY') || signal === 'BULLISH';
@@ -492,7 +494,7 @@ const InstitutionalMarketView = memo<InstitutionalMarketViewProps>(({ symbol, ma
             const confirmCount = [flowAligns, imbAligns, fvgConfirms, obConfirms].filter(Boolean).length;
             let adjConf = confidence;
             if (flowOpp) {
-              adjConf = Math.round(confidence * 0.82); // Flow conflicts — proportional penalty
+              adjConf = Math.round(confidence * 0.82);
             } else if (confirmCount >= 3) {
               adjConf = Math.round(confidence * 1.08);
             } else if (confirmCount === 2) {
@@ -501,6 +503,13 @@ const InstitutionalMarketView = memo<InstitutionalMarketViewProps>(({ symbol, ma
               adjConf = Math.round(confidence * 1.02);
             }
             adjConf = Math.round(Math.min(95, Math.max(30, adjConf)));
+
+            // Actual market confidence calculated from structure alignment
+            const actualMarketConf = Math.round(
+              Math.min(95, Math.max(30, 
+                (confirmCount * 15) + (flowAligns ? 20 : 10) + (adjConf * 0.4)
+              ))
+            );
 
             // Context note
             const confirms = [
@@ -518,50 +527,155 @@ const InstitutionalMarketView = memo<InstitutionalMarketViewProps>(({ symbol, ma
             return (
               <>
                 {/* Header */}
-                <div className="flex items-center justify-between mb-2.5">
-                  <div className="flex items-center gap-1.5">
-                    <div className={`w-[3px] h-3.5 rounded-full ${isBull ? 'bg-emerald-400' : isBear ? 'bg-red-400' : 'bg-amber-400'} animate-pulse`} />
-                    <p className="text-[9px] text-slate-400 font-semibold uppercase tracking-wider">5-Min Prediction</p>
-                  </div>
-                  <span suppressHydrationWarning className={`text-[9px] font-black ${dirColor}`}>{adjConf}% Confidence</span>
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-bold text-gray-400 uppercase tracking-widest">5 Min Prediction</span>
+                  <span suppressHydrationWarning className={`text-[10px] font-bold px-2 py-1 rounded ${isBull ? 'bg-emerald-500/25 text-emerald-300' : isBear ? 'bg-red-500/25 text-red-300' : 'bg-amber-500/15 text-amber-300'}`}>
+                    {adjConf}% CONFIDENCE
+                  </span>
                 </div>
 
-                {/* Direction pill + confidence bar */}
-                <div className={`rounded-lg border ${dirBorder} ${dirBg} px-2.5 py-2 mb-2.5`}>
-                  <div className="flex items-center justify-between gap-2 mb-1.5">
-                    <span suppressHydrationWarning className={`text-sm font-black ${dirColor}`}>{dirIcon} {predDir}</span>
-                    <span className="text-[9px] text-slate-500 truncate">{ctxNote}</span>
-                    <span suppressHydrationWarning className={`text-sm font-black ${dirColor} shrink-0`}>{adjConf}%</span>
+                {/* Dual Confidence Display */}
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="flex flex-col bg-gray-900/50 rounded-lg px-2 py-1.5 border border-gray-700/30">
+                    <span className="text-[9px] text-gray-500 font-bold uppercase tracking-wide">CONFIDENCE</span>
+                    <span suppressHydrationWarning className="text-[13px] font-black text-emerald-300 mt-0.5">{adjConf}%</span>
+                    <div className="w-full h-2 rounded-full bg-gray-800 overflow-hidden mt-1">
+                      <div
+                        suppressHydrationWarning
+                        className="h-full bg-gradient-to-r from-emerald-500 to-emerald-400 transition-all duration-300 rounded-full"
+                        style={{ width: `${Math.min(100, adjConf)}%` }}
+                      />
+                    </div>
                   </div>
-                  <div className="h-[2px] bg-black/40 rounded-full overflow-hidden">
+
+                  <div className="flex flex-col bg-gray-900/50 rounded-lg px-2 py-1.5 border border-gray-700/30">
+                    <span className="text-[9px] text-gray-500 font-bold uppercase tracking-wide">Actual Market</span>
+                    <span suppressHydrationWarning className="text-[13px] font-black text-teal-300 mt-0.5">{actualMarketConf}%</span>
+                    <div className="w-full h-2 rounded-full bg-gray-800 overflow-hidden mt-1">
+                      <div
+                        suppressHydrationWarning
+                        className="h-full bg-gradient-to-r from-teal-500 to-teal-400 transition-all duration-300 rounded-full"
+                        style={{ width: `${Math.min(100, actualMarketConf)}%` }}
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* Direction + Market Structure Assessment */}
+                <div className={`rounded-lg border ${dirBorder} ${dirBg} px-3 py-2.5`}>
+                  <div className="flex items-center justify-between gap-2 mb-1.5">
+                    <span suppressHydrationWarning className={`text-sm font-black ${dirColor}`}>
+                      {dirIcon} {predDir}
+                    </span>
+                    <span className="text-[9px] text-gray-400 flex-1">{ctxNote}</span>
+                    <span suppressHydrationWarning className={`text-sm font-black ${dirColor}`}>{adjConf}%</span>
+                  </div>
+                  <div className="h-2 bg-gray-800 rounded-full overflow-hidden border border-white/5">
                     <div
                       suppressHydrationWarning
-                      className={`h-full rounded-full bg-gradient-to-r ${accentBarBg} transition-all duration-1000 ease-out`}
+                      className={`h-full rounded-full bg-gradient-to-r ${accentBarBg} transition-all duration-700`}
                       style={{ width: `${adjConf}%` }}
                     />
                   </div>
                 </div>
 
-                {/* 3-column intelligence cells */}
-                <div className="grid grid-cols-3 gap-1.5">
-                  <div className="text-center p-2 rounded-lg bg-black/30 border border-white/[0.05]">
-                    <p className="text-[8px] text-slate-600 uppercase tracking-wide mb-1">Order Flow</p>
-                    <p suppressHydrationWarning className={`text-[11px] font-bold ${buyRatio > 55 ? 'text-emerald-400' : buyRatio < 45 ? 'text-red-400' : 'text-amber-400'}`}>
-                      {buyRatio}% Buy
-                    </p>
+                {/* Order Structure Momentum Indicators */}
+                <div className="space-y-1.5 bg-gray-900/30 rounded-lg p-2.5 border border-gray-700/20">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[9px] text-gray-500 font-bold uppercase tracking-wide">Buy Volume</span>
+                    <span suppressHydrationWarning className={`text-[10px] font-bold px-2 py-0.5 rounded ${
+                      buyRatio > 60 ? 'bg-emerald-500/25 text-emerald-300' :
+                      buyRatio < 40 ? 'bg-red-500/25 text-red-300' :
+                      'bg-amber-500/15 text-amber-300'
+                    }`}>
+                      {buyRatio}%
+                    </span>
                   </div>
-                  <div className="text-center p-2 rounded-lg bg-black/30 border border-white/[0.05]">
-                    <p className="text-[8px] text-slate-600 uppercase tracking-wide mb-1">FVG</p>
-                    <p suppressHydrationWarning className={`text-[11px] font-bold ${data.fair_value_gap_bullish ? 'text-emerald-400' : data.fair_value_gap_bearish ? 'text-red-400' : 'text-slate-500'}`}>
+                  <div className="flex items-center justify-between">
+                    <span className="text-[9px] text-gray-500 font-bold uppercase tracking-wide">Fair Value Gap</span>
+                    <span suppressHydrationWarning className={`text-[10px] font-bold px-2 py-0.5 rounded ${
+                      data.fair_value_gap_bullish ? 'bg-emerald-500/25 text-emerald-300' :
+                      data.fair_value_gap_bearish ? 'bg-red-500/25 text-red-300' :
+                      'bg-gray-700/40 text-gray-400'
+                    }`}>
                       {data.fair_value_gap_bullish ? '▲ BULL' : data.fair_value_gap_bearish ? '▼ BEAR' : 'CLOSED'}
-                    </p>
+                    </span>
                   </div>
-                  <div className="text-center p-2 rounded-lg bg-black/30 border border-white/[0.05]">
-                    <p className="text-[8px] text-slate-600 uppercase tracking-wide mb-1">Conviction</p>
-                    <p suppressHydrationWarning className={`text-[11px] font-bold ${convictionLevel === 'HIGH' ? 'text-emerald-400' : convictionLevel === 'MODERATE' ? 'text-amber-400' : 'text-slate-500'}`}>
-                      {convictionLevel}
-                    </p>
+                  <div className="flex items-center justify-between">
+                    <span className="text-[9px] text-gray-500 font-bold uppercase tracking-wide">Order Block Status</span>
+                    <span suppressHydrationWarning className={`text-[10px] font-bold px-2 py-0.5 rounded ${
+                      isBull && data.order_block_bullish ? 'bg-emerald-500/25 text-emerald-300' :
+                      isBear && data.order_block_bearish ? 'bg-red-500/25 text-red-300' :
+                      'bg-gray-700/40 text-gray-400'
+                    }`}>
+                      {isBull && data.order_block_bullish ? '📍 Active' : isBear && data.order_block_bearish ? '📍 Active' : 'Inactive'}
+                    </span>
                   </div>
+                </div>
+
+                {/* Movement Probability Distribution */}
+                <div className="space-y-2">
+                  <p className="text-[9px] font-bold text-gray-500 uppercase tracking-wide">Movement Probability</p>
+                  <div className="flex items-center gap-0.5 h-6 rounded-md overflow-hidden bg-gray-950/50 border border-gray-700/30">
+                    {/* Bullish probability */}
+                    <div
+                      suppressHydrationWarning
+                      className="h-full bg-gradient-to-r from-emerald-600 to-emerald-500 transition-all duration-300 flex items-center justify-center min-w-[2px]"
+                      style={{
+                        width: `${Math.max(5, Math.min(95, isBull ? adjConf : Math.max(0, 50 - adjConf / 2)))}%`,
+                      }}
+                    >
+                      <span className="text-[8px] font-bold text-white px-1 truncate whitespace-nowrap">
+                        {Math.round(isBull ? adjConf : Math.max(0, 50 - adjConf / 2))}%↑
+                      </span>
+                    </div>
+                    {/* Bearish probability */}
+                    <div
+                      suppressHydrationWarning
+                      className="h-full bg-gradient-to-l from-red-600 to-red-500 transition-all duration-300 flex items-center justify-center ml-auto min-w-[2px]"
+                      style={{
+                        width: `${Math.max(5, Math.min(95, isBear ? adjConf : Math.max(0, 50 - adjConf / 2)))}%`,
+                      }}
+                    >
+                      <span className="text-[8px] font-bold text-white px-1 truncate whitespace-nowrap">
+                        {Math.round(isBear ? adjConf : Math.max(0, 50 - adjConf / 2))}%↓
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Early Signal Detection */}
+                {(adjConf >= 75 || (confirmCount >= 3)) && (
+                  <div className="pt-2 border-t border-gray-700/20">
+                    <span suppressHydrationWarning className="text-[9px] font-bold text-amber-400 uppercase tracking-wide">
+                      ⚡ {adjConf >= 85 ? 'STRONG' : 'CONFIRMED'} {predDir} Signal Detected
+                    </span>
+                  </div>
+                )}
+
+                {/* Structure Confirmation Summary */}
+                <div className="rounded-lg bg-gray-900/20 px-2.5 py-2 border border-gray-700/20">
+                  <p className="text-[9px] text-gray-500 font-bold uppercase tracking-wide mb-1">Confirmations</p>
+                  <div className="flex flex-wrap gap-1">
+                    {confirms.length > 0 ? (
+                      confirms.map((confirm) => (
+                        <span key={confirm} className="text-[8px] bg-emerald-500/20 text-emerald-300 px-2 py-0.5 rounded">
+                          ✓ {confirm}
+                        </span>
+                      ))
+                    ) : (
+                      <span className="text-[8px] text-gray-500">Awaiting structure formation…</span>
+                    )}
+                  </div>
+                </div>
+
+                {/* Summary line */}
+                <div suppressHydrationWarning className={`text-center text-[10px] font-bold rounded-lg py-1.5 border ${
+                  isBull ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300' :
+                  isBear ? 'bg-red-500/10 border-red-500/30 text-red-300' :
+                  'bg-amber-500/10 border-amber-500/20 text-amber-300'
+                }`}>
+                  {predDir} · {adjConf}% Pred · {actualMarketConf}% Actual · {confirmCount} Confirms
                 </div>
               </>
             );

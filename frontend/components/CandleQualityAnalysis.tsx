@@ -201,7 +201,7 @@ const CandleQualityAnalysis = memo<CandleQualityAnalysisProps>(({ symbol }) => {
   const bodyExpect     = data.conviction_move ? 'EXPANDING' : data.fake_spike_detected ? 'SHRINKING' : 'STABLE';
   const volumeExpect   = data.volume_above_threshold && data.conviction_move ? 'SURGING' : data.fake_spike_detected ? 'FADING' : 'STEADY';
 
-  // ── 5-Min Conviction confidence (direction-aware, continuous) ──
+  // ── 5-Min Prediction confidence (direction-aware, continuous) ──
   // Mirrors the backend unified formula:  body_percent → piecewise 35–88%,
   // direction-aware momentum ±8pp, Boolean factors as proportional multipliers.
   const volConfidence = (() => {
@@ -355,63 +355,183 @@ const CandleQualityAnalysis = memo<CandleQualityAnalysisProps>(({ symbol }) => {
         </div>
       </div>
 
-      {/* ── 5-MIN CONVICTION SECTION ── */}
+      {/* ══════════════════════════════════════════════════════════
+          5 MIN PREDICTION
+      ══════════════════════════════════════════════════════════ */}
       <div className="mx-3 mt-2 mb-3 rounded-xl overflow-hidden border border-white/[0.06] bg-[#0d1117]">
         <div className="h-px bg-gradient-to-r from-transparent via-white/10 to-transparent" />
-        <div className="px-3 pt-2.5 pb-1 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <span suppressHydrationWarning className={`w-1 h-1 rounded-full animate-pulse ${
-              isBuy ? 'bg-teal-400' : isSell ? 'bg-rose-400' : 'bg-amber-400'
-            }`} />
-            <span className="text-[9px] text-white/40 font-bold uppercase tracking-widest">5-Min Conviction</span>
+
+        <div className="p-4 space-y-3">
+          {/* Header */}
+          <div className="flex items-center justify-between">
+            <span className="text-[11px] font-bold text-gray-400 uppercase tracking-widest">5 Min Prediction</span>
+            <span suppressHydrationWarning className={`text-[10px] font-bold px-2 py-1 rounded ${
+              isBuy ? 'bg-teal-500/25 text-teal-300' :
+              isSell ? 'bg-rose-500/25 text-rose-300' :
+              'bg-amber-500/15 text-amber-300'
+            }`}>
+              {volConfidence}% CONFIDENCE
+            </span>
           </div>
-          <div className="flex items-center gap-1.5">
-            <span className="text-[10px] text-white/30">Strength</span>
-            <span suppressHydrationWarning className={`text-[11px] font-black ${
-              isBuy ? 'text-teal-300' : isSell ? 'text-rose-300' : 'text-amber-300'
-            }`}>{volConfidence}%</span>
+
+          {/* Dual Confidence Display */}
+          <div className="grid grid-cols-2 gap-2">
+            <div className="flex flex-col bg-gray-900/50 rounded-lg px-2 py-1.5 border border-gray-700/30">
+              <span className="text-[9px] text-gray-500 font-bold uppercase tracking-wide">CONFIDENCE</span>
+              <span suppressHydrationWarning className="text-[13px] font-black text-emerald-300 mt-0.5">{volConfidence}%</span>
+              <div className="w-full h-2 rounded-full bg-gray-800 overflow-hidden mt-1">
+                <div
+                  suppressHydrationWarning
+                  className="h-full bg-gradient-to-r from-emerald-500 to-emerald-400 transition-all duration-300 rounded-full"
+                  style={{ width: `${Math.min(100, volConfidence)}%` }}
+                />
+              </div>
+            </div>
+
+            <div className="flex flex-col bg-gray-900/50 rounded-lg px-2 py-1.5 border border-gray-700/30">
+              <span className="text-[9px] text-gray-500 font-bold uppercase tracking-wide">Actual Market</span>
+              <span suppressHydrationWarning className="text-[13px] font-black text-teal-300 mt-0.5">
+                {Math.round(volConfidence * (data.conviction_move ? 1.05 : data.fake_spike_detected ? 0.85 : 1.0))}%
+              </span>
+              <div className="w-full h-2 rounded-full bg-gray-800 overflow-hidden mt-1">
+                <div
+                  suppressHydrationWarning
+                  className="h-full bg-gradient-to-r from-teal-500 to-teal-400 transition-all duration-300 rounded-full"
+                  style={{ width: `${Math.min(100, Math.round(volConfidence * (data.conviction_move ? 1.05 : data.fake_spike_detected ? 0.85 : 1.0)))}%` }}
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* Direction + Candle Quality Assessment */}
+          <div className={`rounded-lg border ${
+            isBuy ? 'border-teal-500/40 bg-teal-500/[0.08]' :
+            isSell ? 'border-rose-500/40 bg-rose-500/[0.08]' :
+            'border-amber-500/30 bg-amber-500/[0.05]'
+          } px-3 py-2.5`}>
+            <div className="flex items-center justify-between gap-2 mb-1.5">
+              <span suppressHydrationWarning className={`text-sm font-black ${
+                isBuy ? 'text-teal-400' : isSell ? 'text-rose-400' : 'text-amber-400'
+              }`}>
+                {isBuy ? '▲' : isSell ? '▼' : '─'} {predictedDir}
+              </span>
+              <span className="text-[9px] text-gray-400 flex-1">
+                {bodyRating === 'STRONG' ? 'Strong body momentum' :
+                 bodyRating === 'MODERATE' ? 'Moderate conviction' :
+                 'Weak signal'}
+                {data.fake_spike_detected ? ' ⚠ Spike detected' : ''}
+              </span>
+              <span suppressHydrationWarning className={`text-sm font-black ${
+                isBuy ? 'text-teal-400' : isSell ? 'text-rose-400' : 'text-amber-400'
+              }`}>
+                {volConfidence}%
+              </span>
+            </div>
+            <div className="h-2 bg-gray-800 rounded-full overflow-hidden border border-white/5">
+              <div
+                suppressHydrationWarning
+                className={`h-full rounded-full bg-gradient-to-r ${accentBarBg} transition-all duration-700`}
+                style={{ width: `${volConfidence}%` }}
+              />
+            </div>
+          </div>
+
+          {/* Candle Structure Momentum Indicators */}
+          <div className="space-y-1.5 bg-gray-900/30 rounded-lg p-2.5 border border-gray-700/20">
+            <div className="flex items-center justify-between">
+              <span className="text-[9px] text-gray-500 font-bold uppercase tracking-wide">Body Strength</span>
+              <span suppressHydrationWarning className={`text-[10px] font-bold px-2 py-0.5 rounded ${
+                bodyRating === 'STRONG' ? 'bg-teal-500/25 text-teal-300' :
+                bodyRating === 'MODERATE' ? 'bg-amber-500/25 text-amber-300' :
+                'bg-rose-500/25 text-rose-300'
+              }`}>
+                {bodyRating === 'STRONG' ? '▲ STRONG' :
+                 bodyRating === 'MODERATE' ? '◆ MODERATE' :
+                 '▼ WEAK'}
+              </span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-[9px] text-gray-500 font-bold uppercase tracking-wide">Volume Status</span>
+              <span suppressHydrationWarning className={`text-[10px] font-bold px-2 py-0.5 rounded ${
+                data.volume_above_threshold ? 'bg-teal-500/25 text-teal-300' :
+                'bg-gray-700/40 text-gray-400'
+              }`}>
+                {data.volume_above_threshold ? '📊 HIGH' : 'Normal'}
+              </span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-[9px] text-gray-500 font-bold uppercase tracking-wide">Spike Detection</span>
+              <span suppressHydrationWarning className={`text-[10px] font-bold px-2 py-0.5 rounded ${
+                data.fake_spike_detected ? 'bg-rose-500/25 text-rose-300' :
+                'bg-teal-500/25 text-teal-300'
+              }`}>
+                {data.fake_spike_detected ? '⚠️ FAKE' : '✓ CLEAN'}
+              </span>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-[9px] text-gray-500 font-bold uppercase tracking-wide">Conviction Level</span>
+              <span suppressHydrationWarning className={`text-[10px] font-bold px-2 py-0.5 rounded ${
+                convictionLv === 'CONFIRMED' ? 'bg-teal-500/25 text-teal-300' :
+                convictionLv === 'BUILDING' ? 'bg-amber-500/25 text-amber-300' :
+                'bg-gray-700/40 text-gray-400'
+              }`}>
+                {convictionLv === 'CONFIRMED' ? '✓ CONFIRMED' :
+                 convictionLv === 'BUILDING' ? '▲ BUILDING' :
+                 '▼ WEAK'}
+              </span>
+            </div>
+          </div>
+
+          {/* Movement Probability Distribution */}
+          <div className="space-y-2">
+            <p className="text-[9px] font-bold text-gray-500 uppercase tracking-wide">Movement Probability</p>
+            <div className="flex items-center gap-0.5 h-6 rounded-md overflow-hidden bg-gray-950/50 border border-gray-700/30">
+              {/* Bullish probability */}
+              <div
+                suppressHydrationWarning
+                className="h-full bg-gradient-to-r from-teal-600 to-teal-500 transition-all duration-300 flex items-center justify-center min-w-[2px]"
+                style={{
+                  width: `${Math.max(5, Math.min(95, isBuy ? volConfidence : Math.max(0, 50 - Math.abs(data.momentum_score - 50))))}%`,
+                }}
+              >
+                <span className="text-[8px] font-bold text-white px-1 truncate whitespace-nowrap">
+                  {Math.round(isBuy ? volConfidence : Math.max(0, 50 - Math.abs(data.momentum_score - 50)))}%↑
+                </span>
+              </div>
+              {/* Bearish probability */}
+              <div
+                suppressHydrationWarning
+                className="h-full bg-gradient-to-l from-rose-600 to-rose-500 transition-all duration-300 flex items-center justify-center ml-auto min-w-[2px]"
+                style={{
+                  width: `${Math.max(5, Math.min(95, isSell ? volConfidence : Math.max(0, 50 - Math.abs(data.momentum_score - 50))))}%`,
+                }}
+              >
+                <span className="text-[8px] font-bold text-white px-1 truncate whitespace-nowrap">
+                  {Math.round(isSell ? volConfidence : Math.max(0, 50 - Math.abs(data.momentum_score - 50)))}%↓
+                </span>
+              </div>
+            </div>
+          </div>
+
+          {/* Early Signal Detection */}
+          {(volConfidence >= 75 || (bodyRating === 'STRONG' && data.volume_above_threshold && !data.fake_spike_detected)) && (
+            <div className="pt-2 border-t border-gray-700/20">
+              <span suppressHydrationWarning className="text-[9px] font-bold text-amber-400 uppercase tracking-wide">
+                ⚡ {volConfidence >= 85 ? 'STRONG' : 'CONFIRMED'} {predictedDir} Signal Formed
+              </span>
+            </div>
+          )}
+
+          {/* Summary line */}
+          <div suppressHydrationWarning className={`text-center text-[10px] font-bold rounded-lg py-1.5 border ${
+            isBuy ? 'bg-teal-500/10 border-teal-500/30 text-teal-300' :
+            isSell ? 'bg-rose-500/10 border-rose-500/30 text-rose-300' :
+            'bg-amber-500/10 border-amber-500/20 text-amber-300'
+          }`}>
+            {predictedDir} · {volConfidence}% Predicted · {data.body_percent.toFixed(0)}% Body
           </div>
         </div>
-        {/* Confidence bar */}
-        <div className="mx-3 mb-2.5 h-0.5 rounded-full bg-white/[0.05] overflow-hidden">
-          <div suppressHydrationWarning
-            className={`h-full rounded-full transition-all duration-700 ${
-              isBuy ? 'bg-teal-500' : isSell ? 'bg-rose-500' : 'bg-amber-500'
-            }`}
-            style={{ width: `${volConfidence}%` }}
-          />
-        </div>
-        <div className="grid grid-cols-3 px-3 pb-3 gap-0">
-          {/* Body */}
-          <div className="text-center">
-            <p className="text-[8px] text-white/25 uppercase tracking-wider mb-1">Body</p>
-            <p suppressHydrationWarning className={`text-[11px] font-black ${
-              bodyRating === 'STRONG' ? 'text-teal-300' :
-              bodyRating === 'MODERATE' ? 'text-amber-300' : 'text-rose-300'
-            }`}>
-              {bodyRating === 'STRONG' ? '▲ STRONG' : bodyRating === 'MODERATE' ? '◆ MED' : '▼ WEAK'}
-            </p>
-          </div>
-          {/* Spike */}
-          <div className="text-center">
-            <p className="text-[8px] text-white/25 uppercase tracking-wider mb-1">Spike</p>
-            <p suppressHydrationWarning className={`text-[11px] font-black ${
-              data.fake_spike_detected ? 'text-rose-300' : 'text-teal-300'
-            }`}>
-              {data.fake_spike_detected ? '⚠ FAKE' : '✓ CLEAN'}
-            </p>
-          </div>
-          {/* Conviction */}
-          <div className="text-center">
-            <p className="text-[8px] text-white/25 uppercase tracking-wider mb-1">Conviction</p>
-            <p suppressHydrationWarning className={`text-[11px] font-black ${
-              convictionLv === 'CONFIRMED' ? 'text-teal-300' :
-              convictionLv === 'BUILDING'  ? 'text-amber-300' : 'text-white/30'
-            }`}>
-              {convictionLv === 'CONFIRMED' ? '✓ HIGH' : convictionLv === 'BUILDING' ? '▲ MED' : '▼ LOW'}
-            </p>
-          </div>
-        </div>
+
         <div className="h-px bg-gradient-to-r from-transparent via-white/[0.06] to-transparent" />
       </div>
 

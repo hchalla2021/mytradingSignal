@@ -310,24 +310,23 @@ export const VWMAEMAFilterCard: React.FC<VWMAEMAFilterCardProps> = ({ analysis, 
         </div>
       </div>
 
-      {/* ── 5-MIN PREDICTION SECTION ── */}
+      {/* ══════════════════════════════════════════════════════════
+          5 MIN PREDICTION
+      ══════════════════════════════════════════════════════════ */}
       <div className="mx-3 mt-2 mb-3 rounded-xl overflow-hidden border border-white/[0.06] bg-[#0d1117]">
         <div className="h-px bg-gradient-to-r from-transparent via-white/10 to-transparent" />
-        <div className="p-3">
+        <div className="p-4 space-y-3">
           {(() => {
             // ── Adjusted confidence: multi-factor VWMA-specific scoring ──
-            // Base = signalAnalysis.confidence (already market-status adjusted 30–95%)
-            // Layer on VWMA-specific confirmations:
             const vwmaAligns = (isBuy && priceVsVwma === 'ABOVE') || (isSell && priceVsVwma === 'BELOW');
             const vwapAligns = (isBuy && priceVsVwap === 'ABOVE') || (isSell && priceVsVwap === 'BELOW');
             const bothAlign  = vwmaAligns && vwapAligns;
             const volStrong  = volLabel === 'STRONG';
             const volWeak    = volLabel === 'WEAK';
 
-            // Proportional scaling — no flat ± cliffs
             let adjConf = confidence;
             if (!vwmaAligns && (isBuy || isSell)) {
-              adjConf = Math.round(confidence * 0.82); // VWMA conflicts with signal → penalty
+              adjConf = Math.round(confidence * 0.82);
             } else {
               const confirmCount = [
                 vwmaAligns,
@@ -338,8 +337,18 @@ export const VWMAEMAFilterCard: React.FC<VWMAEMAFilterCardProps> = ({ analysis, 
               else if (confirmCount === 2)  adjConf = Math.round(confidence * 1.06);
               else if (confirmCount === 1)  adjConf = Math.round(confidence * 1.03);
             }
-            if (volWeak) adjConf = Math.round(adjConf * 0.94); // volume weakness always applies
+            if (volWeak) adjConf = Math.round(adjConf * 0.94);
             adjConf = Math.round(Math.min(95, Math.max(30, adjConf)));
+
+            // Actual market confidence from entry filter alignment
+            const actualMarketConf = Math.round(
+              Math.min(95, Math.max(30,
+                (bothAlign ? 35 : 20) + 
+                (vwmaAligns ? 25 : 15) + 
+                (vwapAligns ? 20 : 5) + 
+                (volStrong ? 15 : volWeak ? -10 : 5)
+              ))
+            );
 
             // ── Direction ──
             const predDir   = isBuy ? 'LONG' : isSell ? 'SHORT' : 'FLAT';
@@ -364,61 +373,169 @@ export const VWMAEMAFilterCard: React.FC<VWMAEMAFilterCardProps> = ({ analysis, 
             return (
               <>
                 {/* Header */}
-                <div className="flex items-center justify-between mb-2.5">
-                  <div className="flex items-center gap-1.5">
-                    <div className={`w-[3px] h-3.5 rounded-full animate-pulse ${
-                      isBuy ? 'bg-sky-400' : isSell ? 'bg-rose-400' : 'bg-slate-500'
-                    }`} />
-                    <p className="text-[9px] text-slate-400 font-semibold uppercase tracking-wider">5-Min Prediction</p>
-                  </div>
-                  <span suppressHydrationWarning className={`text-[9px] font-black ${dirColor}`}>
-                    {adjConf}% Confidence
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-bold text-gray-400 uppercase tracking-widest">5 Min Prediction</span>
+                  <span suppressHydrationWarning className={`text-[10px] font-bold px-2 py-1 rounded ${
+                    isBuy ? 'bg-sky-500/25 text-sky-300' :
+                    isSell ? 'bg-rose-500/25 text-rose-300' :
+                    'bg-amber-500/15 text-amber-300'
+                  }`}>
+                    {adjConf}% CONFIDENCE
                   </span>
                 </div>
 
-                {/* Direction pill + confidence bar */}
-                <div className={`rounded-lg border ${dirBorder} ${dirBg} px-2.5 py-2 mb-2.5`}>
-                  <div className="flex items-center justify-between gap-2 mb-1.5">
-                    <span suppressHydrationWarning className={`text-sm font-black ${dirColor}`}>{dirIcon} {predDir}</span>
-                    <span className="text-[9px] text-slate-500 truncate">{ctxNote}</span>
-                    <span suppressHydrationWarning className={`text-sm font-black ${dirColor} shrink-0`}>{adjConf}%</span>
+                {/* Dual Confidence Display */}
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="flex flex-col bg-gray-900/50 rounded-lg px-2 py-1.5 border border-gray-700/30">
+                    <span className="text-[9px] text-gray-500 font-bold uppercase tracking-wide">CONFIDENCE</span>
+                    <span suppressHydrationWarning className="text-[13px] font-black text-emerald-300 mt-0.5">{adjConf}%</span>
+                    <div className="w-full h-2 rounded-full bg-gray-800 overflow-hidden mt-1">
+                      <div
+                        suppressHydrationWarning
+                        className="h-full bg-gradient-to-r from-emerald-500 to-emerald-400 transition-all duration-300 rounded-full"
+                        style={{ width: `${Math.min(100, adjConf)}%` }}
+                      />
+                    </div>
                   </div>
-                  <div className="h-[2px] bg-black/40 rounded-full overflow-hidden">
+
+                  <div className="flex flex-col bg-gray-900/50 rounded-lg px-2 py-1.5 border border-gray-700/30">
+                    <span className="text-[9px] text-gray-500 font-bold uppercase tracking-wide">Actual Market</span>
+                    <span suppressHydrationWarning className="text-[13px] font-black text-sky-300 mt-0.5">{actualMarketConf}%</span>
+                    <div className="w-full h-2 rounded-full bg-gray-800 overflow-hidden mt-1">
+                      <div
+                        suppressHydrationWarning
+                        className="h-full bg-gradient-to-r from-sky-500 to-sky-400 transition-all duration-300 rounded-full"
+                        style={{ width: `${Math.min(100, actualMarketConf)}%` }}
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* Direction + Entry Filter Status */}
+                <div className={`rounded-lg border ${dirBorder} ${dirBg} px-3 py-2.5`}>
+                  <div className="flex items-center justify-between gap-2 mb-1.5">
+                    <span suppressHydrationWarning className={`text-sm font-black ${dirColor}`}>
+                      {dirIcon} {predDir}
+                    </span>
+                    <span className="text-[9px] text-gray-400 flex-1">{ctxNote}</span>
+                    <span suppressHydrationWarning className={`text-sm font-black ${dirColor}`}>{adjConf}%</span>
+                  </div>
+                  <div className="h-2 bg-gray-800 rounded-full overflow-hidden border border-white/5">
                     <div
                       suppressHydrationWarning
-                      className={`h-full rounded-full bg-gradient-to-r ${accentBarBg} transition-all duration-1000 ease-out`}
+                      className={`h-full rounded-full bg-gradient-to-r ${accentBarBg} transition-all duration-700`}
                       style={{ width: `${adjConf}%` }}
                     />
                   </div>
                 </div>
 
-                {/* 3-cell intelligence grid */}
-                <div className="grid grid-cols-3 gap-1.5">
-                  <div className="text-center p-2 rounded-lg bg-black/30 border border-white/[0.05]">
-                    <p className="text-[8px] text-slate-600 uppercase tracking-wide mb-1">VWMA</p>
-                    <p suppressHydrationWarning className={`text-[10px] font-bold leading-tight ${
-                      priceVsVwma === 'ABOVE' ? 'text-sky-300' : priceVsVwma === 'BELOW' ? 'text-rose-300' : 'text-slate-400'
+                {/* Entry Filter Momentum Indicators */}
+                <div className="space-y-1.5 bg-gray-900/30 rounded-lg p-2.5 border border-gray-700/20">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[9px] text-gray-500 font-bold uppercase tracking-wide">VWMA 20 Status</span>
+                    <span suppressHydrationWarning className={`text-[10px] font-bold px-2 py-0.5 rounded ${
+                      priceVsVwma === 'ABOVE' ? 'bg-sky-500/25 text-sky-300' :
+                      priceVsVwma === 'BELOW' ? 'bg-rose-500/25 text-rose-300' :
+                      'bg-gray-700/40 text-gray-400'
                     }`}>
                       {priceVsVwma === 'ABOVE' ? '▲ ABOVE' : priceVsVwma === 'BELOW' ? '▼ BELOW' : '─ N/A'}
-                    </p>
+                    </span>
                   </div>
-                  <div className="text-center p-2 rounded-lg bg-black/30 border border-white/[0.05]">
-                    <p className="text-[8px] text-slate-600 uppercase tracking-wide mb-1">Volume</p>
-                    <p suppressHydrationWarning className={`text-[10px] font-bold leading-tight ${
-                      volLabel === 'STRONG' ? 'text-sky-300' : volLabel === 'MODERATE' ? 'text-amber-300' : 'text-slate-500'
+                  <div className="flex items-center justify-between">
+                    <span className="text-[9px] text-gray-500 font-bold uppercase tracking-wide">VWAP Alignment</span>
+                    <span suppressHydrationWarning className={`text-[10px] font-bold px-2 py-0.5 rounded ${
+                      priceVsVwap === 'ABOVE' ? 'bg-sky-500/25 text-sky-300' :
+                      priceVsVwap === 'BELOW' ? 'bg-rose-500/25 text-rose-300' :
+                      'bg-gray-700/40 text-gray-400'
                     }`}>
-                      {volLabel}
-                    </p>
+                      {priceVsVwap === 'ABOVE' ? '▲ ABOVE' : priceVsVwap === 'BELOW' ? '▼ BELOW' : '─ N/A'}
+                    </span>
                   </div>
-                  <div className="text-center p-2 rounded-lg bg-black/30 border border-white/[0.05]">
-                    <p className="text-[8px] text-slate-600 uppercase tracking-wide mb-1">Entry</p>
-                    <p suppressHydrationWarning className={`text-[10px] font-bold leading-tight ${
-                      entryWindow === 'OPEN NOW' ? 'text-sky-300' :
-                      entryWindow === 'OPENING'  ? 'text-amber-300' : 'text-slate-500'
+                  <div className="flex items-center justify-between">
+                    <span className="text-[9px] text-gray-500 font-bold uppercase tracking-wide">Volume Status</span>
+                    <span suppressHydrationWarning className={`text-[10px] font-bold px-2 py-0.5 rounded ${
+                      volLabel === 'STRONG' ? 'bg-sky-500/25 text-sky-300' :
+                      volLabel === 'MODERATE' ? 'bg-amber-500/25 text-amber-300' :
+                      'bg-gray-700/40 text-gray-400'
                     }`}>
-                      {entryWindow === 'OPEN NOW' ? 'OPEN' : entryWindow === 'OPENING' ? 'SOON' : 'CLOSED'}
-                    </p>
+                      {volLabel === 'STRONG' ? '📊 HIGH' : volLabel === 'MODERATE' ? 'Normal' : 'Weak'}
+                    </span>
                   </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-[9px] text-gray-500 font-bold uppercase tracking-wide">Entry Window</span>
+                    <span suppressHydrationWarning className={`text-[10px] font-bold px-2 py-0.5 rounded ${
+                      entryWindow === 'OPEN NOW' ? 'bg-sky-500/25 text-sky-300' :
+                      entryWindow === 'OPENING' ? 'bg-amber-500/25 text-amber-300' :
+                      'bg-gray-700/40 text-gray-400'
+                    }`}>
+                      {entryWindow === 'OPEN NOW' ? '🔓 OPEN' : entryWindow === 'OPENING' ? 'Soon' : 'Closed'}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Movement Probability Distribution */}
+                <div className="space-y-2">
+                  <p className="text-[9px] font-bold text-gray-500 uppercase tracking-wide">Movement Probability</p>
+                  <div className="flex items-center gap-0.5 h-6 rounded-md overflow-hidden bg-gray-950/50 border border-gray-700/30">
+                    {/* Bullish probability */}
+                    <div
+                      suppressHydrationWarning
+                      className="h-full bg-gradient-to-r from-sky-600 to-sky-500 transition-all duration-300 flex items-center justify-center min-w-[2px]"
+                      style={{
+                        width: `${Math.max(5, Math.min(95, isBuy ? adjConf : Math.max(0, 50 - Math.abs(adjConf - 50))))}%`,
+                      }}
+                    >
+                      <span className="text-[8px] font-bold text-white px-1 truncate whitespace-nowrap">
+                        {Math.round(isBuy ? adjConf : Math.max(0, 50 - Math.abs(adjConf - 50)))}%↑
+                      </span>
+                    </div>
+                    {/* Bearish probability */}
+                    <div
+                      suppressHydrationWarning
+                      className="h-full bg-gradient-to-l from-rose-600 to-rose-500 transition-all duration-300 flex items-center justify-center ml-auto min-w-[2px]"
+                      style={{
+                        width: `${Math.max(5, Math.min(95, isSell ? adjConf : Math.max(0, 50 - Math.abs(adjConf - 50))))}%`,
+                      }}
+                    >
+                      <span className="text-[8px] font-bold text-white px-1 truncate whitespace-nowrap">
+                        {Math.round(isSell ? adjConf : Math.max(0, 50 - Math.abs(adjConf - 50)))}%↓
+                      </span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Early Signal Detection */}
+                {(adjConf >= 75 || (bothAlign && volStrong)) && (
+                  <div className="pt-2 border-t border-gray-700/20">
+                    <span suppressHydrationWarning className="text-[9px] font-bold text-amber-400 uppercase tracking-wide">
+                      ⚡ {adjConf >= 85 ? 'STRONG' : 'CONFIRMED'} Entry Signal Ready
+                    </span>
+                  </div>
+                )}
+
+                {/* Entry Filter Confirmation Summary */}
+                <div className="rounded-lg bg-gray-900/20 px-2.5 py-2 border border-gray-700/20">
+                  <p className="text-[9px] text-gray-500 font-bold uppercase tracking-wide mb-1">Filter Status</p>
+                  <div className="flex flex-wrap gap-1">
+                    {confirms.length > 0 ? (
+                      confirms.map((confirm) => (
+                        <span key={confirm} className="text-[8px] bg-sky-500/20 text-sky-300 px-2 py-0.5 rounded">
+                          ✓ {confirm}
+                        </span>
+                      ))
+                    ) : (
+                      <span className="text-[8px] text-gray-500">Awaiting entry filters…</span>
+                    )}
+                  </div>
+                </div>
+
+                {/* Summary line */}
+                <div suppressHydrationWarning className={`text-center text-[10px] font-bold rounded-lg py-1.5 border ${
+                  isBuy ? 'bg-sky-500/10 border-sky-500/30 text-sky-300' :
+                  isSell ? 'bg-rose-500/10 border-rose-500/30 text-rose-300' :
+                  'bg-amber-500/10 border-amber-500/20 text-amber-300'
+                }`}>
+                  {predDir} · {adjConf}% Pred · {actualMarketConf}% Market · {confirms.length} Confirms
                 </div>
               </>
             );

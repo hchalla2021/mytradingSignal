@@ -433,23 +433,195 @@ const IndexCompassCard = memo(({ data }: IndexCardProps) => {
       </div>
 
       {/* ── 5-min Forecast ───────────────────────────────────────────────── */}
-      <div className="flex items-center justify-between px-3 py-2
-                      rounded-xl bg-slate-900/50 border border-slate-700/40">
+      <div className="rounded-xl bg-slate-900/50 border border-slate-700/40 px-4 py-3 space-y-3">
         <div>
-          <p className="text-[9px] font-bold text-slate-500 uppercase tracking-widest">5-Min Prediction</p>
-          <p className="text-[8px] text-slate-700 mt-0.5">EMA · RSI · VWAP · Prem</p>
+          <p className="text-[11px] font-bold text-slate-400 uppercase tracking-widest mb-2">5-Min Prediction</p>
+          <p className="text-[9px] text-slate-600">EMA · RSI · VWAP · Premium</p>
         </div>
-        <div className="flex items-center gap-3">
-          <div className="text-center">
-            <p className="text-[8px] text-slate-600 uppercase mb-0.5">Index</p>
-            <Pred5mBadge pred={data.spot.prediction5m} conf={data.spot.prediction5mConf} />
+
+        {/* Dual Confidence Comparison */}
+        <div className="grid grid-cols-2 gap-2">
+          {/* Index (Spot) Section */}
+          <div className="space-y-2">
+            <div className="text-center">
+              <p className="text-[9px] font-bold text-slate-500 uppercase tracking-wide mb-1">Index</p>
+              <Pred5mBadge pred={data.spot.prediction5m} conf={data.spot.prediction5mConf} />
+            </div>
+            
+            {/* Predicted vs Actual for Index */}
+            <div className="space-y-1.5">
+              <div className="flex flex-col bg-slate-800/40 rounded px-2 py-1">
+                <span className="text-[8px] text-slate-500 font-bold">CONFIDENCE</span>
+                <span className="text-[11px] font-black text-emerald-300">{data.spot.prediction5mConf}%</span>
+                <div className="w-full h-1.5 rounded-full bg-slate-700/50 overflow-hidden mt-0.5">
+                  <div
+                    className="h-full bg-gradient-to-r from-emerald-500 to-emerald-400 transition-all duration-300 rounded-full"
+                    style={{ width: `${Math.min(100, data.spot.prediction5mConf)}%` }}
+                  />
+                </div>
+              </div>
+
+              <div className="flex flex-col bg-slate-800/40 rounded px-2 py-1">
+                <span className="text-[8px] text-slate-500 font-bold">Actual</span>
+                <span className="text-[11px] font-black text-teal-300">
+                  {Math.round(
+                    Math.abs(data.spot.rsi ?? 50 - 50) * 0.4 +
+                    Math.max(0, Math.abs(data.spot.ema9 ?? 0 - data.spot.ema20 ?? 0)) * 1.2 +
+                    Math.abs(data.spot.changePct ?? 0) * 10
+                  )}%
+                </span>
+                <div className="w-full h-1.5 rounded-full bg-slate-700/50 overflow-hidden mt-0.5">
+                  <div
+                    className="h-full bg-gradient-to-r from-teal-500 to-teal-400 transition-all duration-300 rounded-full"
+                    style={{
+                      width: `${Math.min(100, Math.round(
+                        Math.abs(data.spot.rsi ?? 50 - 50) * 0.4 +
+                        Math.max(0, Math.abs(data.spot.ema9 ?? 0 - data.spot.ema20 ?? 0)) * 1.2 +
+                        Math.abs(data.spot.changePct ?? 0) * 10
+                      ))}%`,
+                    }}
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* Index Momentum Indicators */}
+            <div className="space-y-1">
+              <div className="flex justify-between items-center text-[8px] bg-slate-800/30 rounded px-1.5 py-1">
+                <span className="text-slate-500 font-bold">EMA Momentum</span>
+                <span className={`font-bold ${
+                  (data.spot.ema9 ?? 0) > (data.spot.ema20 ?? 0) ? 'text-emerald-400' :
+                  (data.spot.ema9 ?? 0) < (data.spot.ema20 ?? 0) ? 'text-red-400' :
+                  'text-amber-400'
+                }`}>
+                  {(data.spot.ema9 ?? 0) > (data.spot.ema20 ?? 0) ? '▲' : (data.spot.ema9 ?? 0) < (data.spot.ema20 ?? 0) ? '▼' : '→'}
+                </span>
+              </div>
+              <div className="flex justify-between items-center text-[8px] bg-slate-800/30 rounded px-1.5 py-1">
+                <span className="text-slate-500 font-bold">RSI Signal</span>
+                <span className={`font-bold ${
+                  (data.spot.rsi ?? 50) > 65 ? 'text-emerald-400' :
+                  (data.spot.rsi ?? 50) < 35 ? 'text-red-400' :
+                  'text-amber-400'
+                }`}>
+                  {(data.spot.rsi ?? 50).toFixed(0)}
+                </span>
+              </div>
+            </div>
           </div>
-          <div className="w-px h-10 bg-slate-700/60" />
-          <div className="text-center">
-            <p className="text-[8px] text-slate-600 uppercase mb-0.5">Futures</p>
-            <Pred5mBadge pred={data.futures.prediction5mFut} />
+
+          {/* Futures Section */}
+          <div className="space-y-2">
+            <div className="text-center">
+              <p className="text-[9px] font-bold text-slate-500 uppercase tracking-wide mb-1">Futures</p>
+              <Pred5mBadge pred={data.futures.prediction5mFut} />
+            </div>
+
+            {/* Premium Trend Indicator */}
+            <div className="space-y-1.5">
+              <div className="flex flex-col bg-slate-800/40 rounded px-2 py-1">
+                <span className="text-[8px] text-slate-500 font-bold">Premium Trend</span>
+                <span className={`text-[10px] font-bold ${
+                  data.futures.premiumTrend === 'EXPANDING' ? 'text-emerald-400' :
+                  data.futures.premiumTrend === 'CONTRACTING' ? 'text-red-400' :
+                  'text-amber-400'
+                }`}>
+                  {data.futures.premiumTrend === 'EXPANDING' ? '📈' : 
+                   data.futures.premiumTrend === 'CONTRACTING' ? '📉' : '⚖️'} {data.futures.premiumTrend}
+                </span>
+              </div>
+
+              <div className="flex flex-col bg-slate-800/40 rounded px-2 py-1">
+                <span className="text-[8px] text-slate-500 font-bold">Current Premium</span>
+                <span className={`text-[11px] font-black ${
+                  (data.futures.current?.premium ?? 0) > 0 ? 'text-emerald-400' :
+                  (data.futures.current?.premium ?? 0) < 0 ? 'text-red-400' :
+                  'text-amber-400'
+                }`}>
+                  {(data.futures.current?.premium ?? 0).toFixed(2)} ({(data.futures.current?.premiumPct ?? 0).toFixed(3)}%)
+                </span>
+              </div>
+            </div>
+
+            {/* Futures Momentum Indicators */}
+            <div className="space-y-1">
+              <div className="flex justify-between items-center text-[8px] bg-slate-800/30 rounded px-1.5 py-1">
+                <span className="text-slate-500 font-bold">CUR Change</span>
+                <span className={`font-bold ${
+                  (data.futures.current?.changePct ?? 0) > 0 ? 'text-emerald-400' :
+                  (data.futures.current?.changePct ?? 0) < 0 ? 'text-red-400' :
+                  'text-amber-400'
+                }`}>
+                  {(data.futures.current?.changePct ?? 0) > 0 ? '▲' : (data.futures.current?.changePct ?? 0) < 0 ? '▼' : '→'} {Math.abs(data.futures.current?.changePct ?? 0).toFixed(2)}%
+                </span>
+              </div>
+              <div className="flex justify-between items-center text-[8px] bg-slate-800/30 rounded px-1.5 py-1">
+                <span className="text-slate-500 font-bold">Spot-Fut Gap</span>
+                <span className={`font-bold ${
+                  (data.spot.changePct ?? 0) > (data.futures.current?.changePct ?? 0) ? 'text-emerald-400' :
+                  (data.spot.changePct ?? 0) < (data.futures.current?.changePct ?? 0) ? 'text-red-400' :
+                  'text-amber-400'
+                }`}>
+                  {((data.spot.changePct ?? 0) - (data.futures.current?.changePct ?? 0)).toFixed(2)}%
+                </span>
+              </div>
+            </div>
           </div>
         </div>
+
+        {/* Movement Probability Bar */}
+        <div className="space-y-2 border-t border-slate-700/30 pt-2">
+          <p className="text-[9px] font-bold text-slate-500 uppercase tracking-wide">Movement Probability</p>
+          <div className="flex items-center gap-0.5 h-6 rounded-md overflow-hidden bg-slate-950/50 border border-slate-700/30">
+            {/* Bullish */}
+            <div
+              className="h-full bg-gradient-to-r from-emerald-600 to-emerald-500 transition-all duration-300 flex items-center justify-center min-w-[2px]"
+              style={{
+                width: `${Math.max(5, Math.min(95, Math.round(
+                  Math.max(0, data.spot.ema9 ?? 0 - data.spot.ema20 ?? 0) * 2 +
+                  Math.max(0, (data.spot.rsi ?? 50) - 50) * 0.5 +
+                  Math.max(0, data.spot.changePct ?? 0) * 10
+                )))}%`,
+              }}
+            >
+              <span className="text-[8px] font-bold text-white px-1 truncate whitespace-nowrap">
+                {Math.round(
+                  Math.max(0, data.spot.ema9 ?? 0 - data.spot.ema20 ?? 0) * 2 +
+                  Math.max(0, (data.spot.rsi ?? 50) - 50) * 0.5 +
+                  Math.max(0, data.spot.changePct ?? 0) * 10
+                )}%↑
+              </span>
+            </div>
+            {/* Bearish */}
+            <div
+              className="h-full bg-gradient-to-l from-red-600 to-red-500 transition-all duration-300 flex items-center justify-center ml-auto min-w-[2px]"
+              style={{
+                width: `${Math.max(5, Math.min(95, Math.round(
+                  Math.max(0, (data.spot.ema20 ?? 0) - (data.spot.ema9 ?? 0)) * 2 +
+                  Math.max(0, 50 - (data.spot.rsi ?? 50)) * 0.5 +
+                  Math.max(0, -(data.spot.changePct ?? 0)) * 10
+                )))}%`,
+              }}
+            >
+              <span className="text-[8px] font-bold text-white px-1 truncate whitespace-nowrap">
+                {Math.round(
+                  Math.max(0, (data.spot.ema20 ?? 0) - (data.spot.ema9 ?? 0)) * 2 +
+                  Math.max(0, 50 - (data.spot.rsi ?? 50)) * 0.5 +
+                  Math.max(0, -(data.spot.changePct ?? 0)) * 10
+                )}%↓
+              </span>
+            </div>
+          </div>
+        </div>
+
+        {/* Early Signal Detection */}
+        {(Math.abs(data.spot.changePct ?? 0) > 0.3 || Math.abs(data.spot.rsi ?? 50 - 50) > 20) && (
+          <div className="pt-2 border-t border-slate-700/30">
+            <span className="text-[9px] font-bold text-amber-400 uppercase tracking-wide">
+              ⚡ {Math.abs(data.spot.rsi ?? 50 - 50) > 20 ? 'Momentum Shift' : 'Price Acceleration'} Detected
+            </span>
+          </div>
+        )}
       </div>
 
       {/* ── Key Indicators ───────────────────────────────────────────────── */}

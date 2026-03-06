@@ -1,21 +1,25 @@
 /**
  * TrendBaseCard – Higher-Low Swing Structure Analysis
+ * ═════════════════════════════════════════════════════════════════════════════
+ * 🔥 ULTRA-FAST REAL-TIME EDITION
  * ─────────────────────────────────────────────────────────────────────────────
- * Architecture: Self-contained REST polling → /api/advanced/trend-base/{symbol}
- * Independent:  No external hooks, no shared state — pure props (symbol + name)
- * Refresh:      Every 5 s via AbortController-guarded fetch
- *
+ * Architecture: WebSocket live ticks + API analysis refresh (3s not 5s)
+ * Live ticks:  Real-time price/change updates (200ms batched)
+ * API refresh: Every 3 seconds for signals, confidence, factors
+ * 
+ * Performance Target: <50ms total latency from tick → UI update
+ * 
  * Signal engine (8 factors, ±100 pts total):
  *   STRONG_BUY ≥+55  ·  BUY ≥+20  ·  NEUTRAL ±20
  *   SELL ≤−20  ·  STRONG_SELL ≤−55
  *
  * Confidence: 30–92 % (integrity × factor-agreement — never 100 %)
- * 5-Min Production: all 8 factor bars + live RSI/VWAP values inline
+ * 5-Min Production: all 8 factor bars + live 5m RSI/VWAP values inline
  */
 'use client';
 
-import React, { memo, useEffect, useState, useCallback, useRef } from 'react';
-import { API_CONFIG } from '@/lib/api-config';
+import React, { memo } from 'react';
+import { useTrendBaseRealtime } from '@/hooks/useTrendBaseRealtime';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Types
@@ -96,48 +100,8 @@ function fmt(n: number)     { return n.toLocaleString('en-IN', { maximumFraction
 interface TrendBaseCardProps { symbol: string; name: string }
 
 const TrendBaseCard = memo<TrendBaseCardProps>(({ symbol, name }) => {
-  const [data,     setData]    = useState<TrendBaseResponse | null>(null);
-  const [loading,  setLoading] = useState(true);
-  const [error,    setError]   = useState<string | null>(null);
-  const [flash,    setFlash]   = useState(false);
-  const prevSigRef = useRef<string>('');
-  const abortRef   = useRef<AbortController | null>(null);
-
-  // ── Fetch — AbortController prevents stale updates ───────────────────────
-  const fetchData = useCallback(async () => {
-    abortRef.current?.abort();
-    const ctrl = new AbortController();
-    abortRef.current = ctrl;
-    try {
-      const res = await fetch(
-        API_CONFIG.endpoint(`/api/advanced/trend-base/${symbol}`),
-        { signal: ctrl.signal, cache: 'no-store' },
-      );
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const result: TrendBaseResponse = await res.json();
-      if (result?.status === 'TOKEN_EXPIRED') { setError('Auth required'); setLoading(false); return; }
-      if (result?.status === 'ERROR')          { setError('Feed error');    setLoading(false); return; }
-      // Flash on signal change
-      if (prevSigRef.current && prevSigRef.current !== result.signal) {
-        setFlash(true);
-        setTimeout(() => setFlash(false), 700);
-      }
-      prevSigRef.current = result.signal;
-      setData(result);
-      setError(null);
-      setLoading(false);
-    } catch (e: any) {
-      if (e?.name === 'AbortError') return;
-      setError('Connection error');
-      setLoading(false);
-    }
-  }, [symbol]);
-
-  useEffect(() => {
-    fetchData();
-    const id = setInterval(fetchData, 5000);
-    return () => { clearInterval(id); abortRef.current?.abort(); };
-  }, [symbol]); // eslint-disable-line react-hooks/exhaustive-deps
+  // 🔥 Use real-time hook for ultra-fast live updates
+  const { data, loading, error, flash, refetch } = useTrendBaseRealtime(symbol);
 
   // ── Loading skeleton ──────────────────────────────────────────────────────
   if (loading) return (
@@ -163,7 +127,7 @@ const TrendBaseCard = memo<TrendBaseCardProps>(({ symbol, name }) => {
       <p className="text-sm font-bold text-rose-300">{name}</p>
       <p className="text-xs text-rose-400/80">{error ?? 'No data available'}</p>
       <button
-        onClick={fetchData}
+        onClick={refetch}
         className="mt-2 text-[10px] px-3 py-1 rounded-full bg-rose-500/20 text-rose-300 border border-rose-500/40 hover:bg-rose-500/30 transition-colors"
       >Retry</button>
     </div>
@@ -355,45 +319,153 @@ const TrendBaseCard = memo<TrendBaseCardProps>(({ symbol, name }) => {
               : isSell5m ? 'Bearish swing structure forming'
               : 'Monitoring swing structure…';
             const rsi5 = data.rsi_5m ?? 50;
+            
+            // Trend-specific momentum indicators
+            const structQuality = integrity >= 80 ? 'Very High' : integrity >= 65 ? 'High' : integrity >= 50 ? 'Moderate' : 'Low';
+            const structQualityColor = integrity >= 80 ? 'text-teal-300' : integrity >= 65 ? 'text-teal-400' : 'text-amber-300';
+            
+            const rsiStatus = rsi5 >= 70 ? 'Overbought' : rsi5 >= 60 ? 'Strong' : rsi5 > 40 && rsi5 < 60 ? 'Neutral' : rsi5 <= 30 ? 'Oversold' : 'Weak';
+            const rsiStatusColor = rsi5 >= 70 ? 'text-rose-300' : rsi5 >= 60 ? 'text-teal-300' : rsi5 > 40 && rsi5 < 60 ? 'text-amber-300' : rsi5 <= 30 ? 'text-teal-400' : 'text-rose-300';
+            
+            const vwapStatus = vwapLabel === 'ABOVE' ? 'Above VWAP' : vwapLabel === 'BELOW' ? 'Below VWAP' : 'At VWAP';
+            const vwapStatusColor = vwapLabel === 'ABOVE' ? 'text-teal-300' : vwapLabel === 'BELOW' ? 'text-rose-300' : 'text-amber-300';
+            
+            const stAlign = (data.supertrend === 'BULLISH' && isBuy5m) || (data.supertrend === 'BEARISH' && isSell5m) ? 'Aligned' : (data.supertrend === 'BULLISH' && isSell5m) || (data.supertrend === 'BEARISH' && isBuy5m) ? 'Diverging' : 'Neutral';
+            const stAlignColor = stAlign === 'Aligned' ? 'text-teal-300' : stAlign === 'Diverging' ? 'text-rose-300' : 'text-amber-300';
+            
+            // Actual Market Confidence (independent from predicted)
+            let actualMarketConf = 50;
+            if (isBuy5m) {
+              actualMarketConf = Math.min(92, Math.max(25,
+                (integrity >= 75 ? 35 : integrity >= 60 ? 25 : 15) +
+                (rsi5 >= 60 && rsi5 < 70 ? 25 : rsi5 <= 40 ? 20 : 10) +
+                (vwapLabel === 'ABOVE' ? 20 : 10) +
+                (data.supertrend === 'BULLISH' ? 15 : 0)
+              ));
+            } else if (isSell5m) {
+              actualMarketConf = Math.min(92, Math.max(25,
+                (integrity >= 75 ? 35 : integrity >= 60 ? 25 : 15) +
+                (rsi5 <= 40 && rsi5 > 30 ? 25 : rsi5 >= 60 ? 20 : 10) +
+                (vwapLabel === 'BELOW' ? 20 : 10) +
+                (data.supertrend === 'BEARISH' ? 15 : 0)
+              ));
+            } else {
+              actualMarketConf = 33;
+            }
+            
+            // Build confirmation list
+            const confirms = [];
+            if (structType === 'HIGHER_HIGHS_LOWS' && isBuy5m) confirms.push('✓ HH+HL formed');
+            if (structType === 'LOWER_HIGHS_LOWS' && isSell5m) confirms.push('✓ LH+LL formed');
+            if (integrity >= 75) confirms.push('✓ High integrity');
+            if ((rsi5 >= 60 && rsi5 < 70 && isBuy5m) || (rsi5 <= 40 && rsi5 > 30 && isSell5m)) confirms.push('✓ RSI aligned');
+            if ((vwapLabel === 'ABOVE' && isBuy5m) || (vwapLabel === 'BELOW' && isSell5m)) confirms.push('✓ VWAP confirms');
+            if ((data.supertrend === 'BULLISH' && isBuy5m) || (data.supertrend === 'BEARISH' && isSell5m)) confirms.push('✓ ST aligned');
+            
+            // Early signal detection
+            const showEarlySignal = (adjConf >= 75) || (confirms.length >= 2);
+            
             return (
-              <div className="px-3 pt-2.5 pb-3">
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-[9px] text-white/40 font-bold uppercase tracking-widest">5-Min Prediction</span>
-                  <span className={`text-[9px] font-black ${dirColor}`}>{adjConf}% Confidence</span>
+              <div className="px-4 py-3 space-y-3">
+                {/* Header */}
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-bold text-gray-400 uppercase">5 Min Prediction</span>
+                  <span className={`text-[10px] font-bold px-2 py-1 rounded ${dirColor} bg-black/40 border border-white/[0.05]`}>{adjConf}% CONFIDENCE</span>
                 </div>
-                <div className={`rounded-lg border ${dirBorder} ${dirBg} px-2.5 py-2 mb-2`}>
+                
+                {/* Dual Confidence Display */}
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="bg-black/40 border border-white/[0.05] rounded-lg p-2.5">
+                    <div className="text-[9px] text-white/40 mb-1">CONFIDENCE</div>
+                    <div className={`text-[13px] font-bold ${dirColor} mb-1.5`}>{adjConf}%</div>
+                    <div className="h-1.5 bg-white/[0.05] rounded-full overflow-hidden">
+                      <div suppressHydrationWarning className={`h-full rounded-full transition-all duration-700 ${barColor}`} style={{ width: `${adjConf}%` }} />
+                    </div>
+                  </div>
+                  <div className="bg-black/40 border border-white/[0.05] rounded-lg p-2.5">
+                    <div className="text-[9px] text-white/40 mb-1">Market</div>
+                    <div className={`text-[13px] font-bold ${dirColor} mb-1.5`}>{actualMarketConf}%</div>
+                    <div className="h-1.5 bg-white/[0.05] rounded-full overflow-hidden">
+                      <div suppressHydrationWarning className={`h-full rounded-full transition-all duration-700 ${barColor}`} style={{ width: `${actualMarketConf}%` }} />
+                    </div>
+                  </div>
+                </div>
+                
+                {/* Direction + Status */}
+                <div className={`rounded-lg border ${dirBorder} ${dirBg} px-3 py-2.5`}>
                   <div className="flex items-center justify-between gap-2 mb-1.5">
                     <span className={`text-sm font-black ${dirColor}`}>{dirIcon} {predDir}</span>
-                    <span className="text-[9px] text-white/30 truncate">{ctxNote}</span>
-                    <span className={`text-sm font-black ${dirColor} shrink-0`}>{adjConf}%</span>
+                    <span className="text-[9px] text-white/30 truncate flex-1">{ctxNote}</span>
                   </div>
                   <div className="h-[2px] bg-white/[0.06] rounded-full overflow-hidden">
                     <div suppressHydrationWarning className={`h-full rounded-full transition-all duration-700 ${barColor}`} style={{ width: `${adjConf}%` }} />
                   </div>
                 </div>
-                <div className="grid grid-cols-3 gap-1.5">
-                  <div className="text-center bg-black/30 border border-white/[0.05] rounded-lg p-2">
-                    <div className="text-[8px] text-white/30 mb-0.5">Structure</div>
-                    <div className={`text-[10px] font-bold ${
-                      structType === 'HIGHER_HIGHS_LOWS' ? 'text-teal-300'
-                      : structType === 'LOWER_HIGHS_LOWS' ? 'text-rose-300'
-                      : 'text-amber-300'
-                    }`}>
-                      {structType === 'HIGHER_HIGHS_LOWS' ? 'HH+HL' : structType === 'LOWER_HIGHS_LOWS' ? 'LH+LL' : 'Sideways'}
+                
+                {/* Trend-Base Momentum Indicators (4-row grid) */}
+                <div className="space-y-1.5 bg-gray-900/30 rounded-lg p-2.5">
+                  <div className="flex items-center justify-between text-[9px]">
+                    <span className="text-white/40">Structure Quality</span>
+                    <span className={`font-bold ${structQualityColor}`}>{structQuality} ({integrity}%)</span>
+                  </div>
+                  <div className="flex items-center justify-between text-[9px]">
+                    <span className="text-white/40">RSI 5m Status</span>
+                    <span className={`font-bold ${rsiStatusColor}`}>{rsiStatus} ({rsi5.toFixed(0)})</span>
+                  </div>
+                  <div className="flex items-center justify-between text-[9px]">
+                    <span className="text-white/40">VWAP Position</span>
+                    <span className={`font-bold ${vwapStatusColor}`}>{vwapStatus}</span>
+                  </div>
+                  <div className="flex items-center justify-between text-[9px]">
+                    <span className="text-white/40">ST Alignment</span>
+                    <span className={`font-bold ${stAlignColor}`}>{stAlign} ({data.supertrend})</span>
+                  </div>
+                </div>
+                
+                {/* Movement Probability Distribution */}
+                <div className="flex items-center gap-0.5 h-6 bg-black/30 rounded-lg p-1">
+                  <div className="flex-1 h-full rounded" style={{
+                    background: isBuy5m ? 'linear-gradient(to right, #0d9488, #14b8a6)' : 'transparent',
+                    opacity: isBuy5m ? 0.8 : 0.2,
+                  }} />
+                  <div className="flex-1 h-full rounded" style={{
+                    background: isSell5m ? 'linear-gradient(to right, #be123c, #e11d48)' : 'transparent',
+                    opacity: isSell5m ? 0.8 : 0.2,
+                  }} />
+                </div>
+                {isBuy5m && (
+                  <div className="text-[8px] text-center text-teal-300 font-bold">Bullish {Math.round((adjConf / 92) * 100)}% | Bearish {Math.round((100 - (adjConf / 92) * 100))}%</div>
+                )}
+                {isSell5m && (
+                  <div className="text-[8px] text-center text-rose-300 font-bold">Bullish {Math.round((100 - (adjConf / 92) * 100))}% | Bearish {Math.round((adjConf / 92) * 100)}%</div>
+                )}
+                {!isBuy5m && !isSell5m && (
+                  <div className="text-[8px] text-center text-amber-300 font-bold">Uncertain — Structure watches</div>
+                )}
+                
+                {/* Early Signal Detection */}
+                {showEarlySignal && (
+                  <div className={`rounded-lg px-3 py-2 border-t-2 ${dirBorder}`}>
+                    <div className={`text-[11px] font-bold ${dirColor} text-center`}>
+                      ⚡ {adjConf >= 85 ? 'STRONG' : 'CONFIRMED'} {predDir} Signal Ready
                     </div>
                   </div>
-                  <div className="text-center bg-black/30 border border-white/[0.05] rounded-lg p-2">
-                    <div className="text-[8px] text-white/30 mb-0.5">RSI 5m</div>
-                    <div suppressHydrationWarning className={`text-[10px] font-bold ${
-                      rsi5 >= 60 ? 'text-teal-300' : rsi5 <= 40 ? 'text-rose-300' : 'text-amber-300'
-                    }`}>{rsi5.toFixed(0)}</div>
+                )}
+                
+                {/* Confirmation Summary */}
+                {confirms.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5">
+                    {confirms.map((conf, idx) => (
+                      <span key={idx} className="text-[9px] font-bold px-2 py-1 rounded bg-teal-500/30 text-teal-300 border border-teal-500/40">
+                        {conf}
+                      </span>
+                    ))}
                   </div>
-                  <div className="text-center bg-black/30 border border-white/[0.05] rounded-lg p-2">
-                    <div className="text-[8px] text-white/30 mb-0.5">VWAP</div>
-                    <div suppressHydrationWarning className={`text-[10px] font-bold ${
-                      vwapLabel === 'ABOVE' ? 'text-teal-300' : vwapLabel === 'BELOW' ? 'text-rose-300' : 'text-amber-300'
-                    }`}>{vwapLabel}</div>
-                  </div>
+                )}
+                
+                {/* Summary Line */}
+                <div className={`text-center text-[10px] font-bold px-3 py-1.5 rounded-lg border ${dirBorder} ${dirBg} ${dirColor}`}>
+                  {predDir} · {adjConf}% Pred · {actualMarketConf}% Market · {confirms.length} Confirms
                 </div>
               </div>
             );

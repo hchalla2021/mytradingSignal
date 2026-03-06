@@ -527,19 +527,47 @@ export const TradeSupportResistance: React.FC<TradeSupportResistanceProps> = ({
       {/* ══════════════════════════════════════════════════════════
           5 MIN PREDICTION
       ══════════════════════════════════════════════════════════ */}
-      <div className="border-t border-dark-border/40 bg-dark-bg/30 px-3 py-2.5">
+      <div className="border-t border-dark-border/40 bg-dark-bg/30 px-4 py-3 space-y-3">
 
-        {/* Header: label + confidence pill */}
-        <div className="flex items-center justify-between mb-2">
-          <span className="text-[9px] font-bold text-gray-400 uppercase tracking-widest">5 Min Prediction</span>
-          <span suppressHydrationWarning className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${style.badge}`}>
-            {confidence}% Confidence
+        {/* Header */}
+        <div className="flex items-center justify-between">
+          <span className="text-[11px] font-bold text-gray-400 uppercase tracking-widest">5 Min Prediction</span>
+          <span suppressHydrationWarning className={`text-[10px] font-bold px-2 py-1 rounded ${style.badge}`}>
+            {confidence}% CONFIDENCE
           </span>
         </div>
 
-        {/* Direction pill + confidence bar: combined 5m + 15m → signal */}
+        {/* Dual Confidence Display */}
+        <div className="grid grid-cols-2 gap-2">
+          <div className="flex flex-col bg-gray-900/50 rounded-lg px-2 py-1.5 border border-gray-700/30">
+            <span className="text-[9px] text-gray-500 font-bold uppercase tracking-wide">CONFIDENCE</span>
+            <span suppressHydrationWarning className="text-[13px] font-black text-emerald-300 mt-0.5">{confidence}%</span>
+            <div className="w-full h-2 rounded-full bg-gray-800 overflow-hidden mt-1">
+              <div
+                suppressHydrationWarning
+                className="h-full bg-gradient-to-r from-emerald-500 to-emerald-400 transition-all duration-300 rounded-full"
+                style={{ width: `${Math.min(100, confidence)}%` }}
+              />
+            </div>
+          </div>
+
+          <div className="flex flex-col bg-gray-900/50 rounded-lg px-2 py-1.5 border border-gray-700/30">
+            <span className="text-[9px] text-gray-500 font-bold uppercase tracking-wide">Actual Market</span>
+            <span suppressHydrationWarning className="text-[13px] font-black text-teal-300 mt-0.5">
+              {Math.round(Math.abs(totalScore) * 2 + (confidence * 0.3))}%
+            </span>
+            <div className="w-full h-2 rounded-full bg-gray-800 overflow-hidden mt-1">
+              <div
+                suppressHydrationWarning
+                className="h-full bg-gradient-to-r from-teal-500 to-teal-400 transition-all duration-300 rounded-full"
+                style={{ width: `${Math.min(100, Math.round(Math.abs(totalScore) * 2 + (confidence * 0.3)))}%` }}
+              />
+            </div>
+          </div>
+        </div>
+
+        {/* Direction + Conflict Assessment */}
         {(() => {
-          // Combined direction: both agree → use that; else 5m leads (faster), else 15m
           const predDir =
             (trend5min === trend15min && trend5min !== 'NEUTRAL') ? trend5min
             : trend5min !== 'NEUTRAL' ? trend5min
@@ -556,42 +584,121 @@ export const TradeSupportResistance: React.FC<TradeSupportResistanceProps> = ({
                           : predDir === 'DOWN' ? 'bg-red-500/10'
                           : 'bg-amber-500/[0.08]';
           const dirIcon   = predDir === 'UP'   ? '▲' : predDir === 'DOWN' ? '▼' : '▬';
-          // Confidence modifier: proportional scaling so a weak BUY with conflict and
-          // a strong STRONG_BUY with conflict scale consistently rather than hit the same floor.
-          // same dir → 100 % of signal confidence (no penalty)
-          // one neutral → 90 % (slight skepticism: only half the picture is confirmed)
-          // conflict  → 75 % (meaningful discount: 5m and 15m disagree on direction)
+          
           const dispConf = Math.max(30, Math.min(90, Math.round(
             same5m15m ? confidence
             : conflict ? confidence * 0.75
             : confidence * 0.90
           )));
-          const ctxNote = same5m15m ? '5m + 15m aligned'
-                        : conflict   ? '⚠ 5m vs 15m conflict'
+          
+          const ctxNote = same5m15m ? '5m + 15m aligned — strong conviction'
+                        : conflict   ? '⚠ 5m vs 15m conflict — use caution'
                         : trend5min !== 'NEUTRAL' ? '5m signal · 15m neutral'
                         : '15m trend · 5m forming';
+
           return (
-            <div className={`rounded-xl border ${dirBorder} ${dirBg} px-2.5 py-2 mb-2`}>
-              <div className="flex items-center justify-between gap-2 mb-1.5">
-                <span className={`text-xs font-black ${dirColor}`}>
-                  {dirIcon} {predDir === 'NEUTRAL' ? 'FLAT' : predDir}
-                </span>
-                <span className="text-[9px] text-gray-500">{ctxNote}</span>
-                <span suppressHydrationWarning className={`text-xs font-black ${dirColor}`}>{dispConf}%</span>
+            <>
+              <div className={`rounded-lg border ${dirBorder} ${dirBg} px-3 py-2.5`}>
+                <div className="flex items-center justify-between gap-2 mb-1.5">
+                  <span suppressHydrationWarning className={`text-sm font-black ${dirColor}`}>
+                    {dirIcon} {predDir === 'NEUTRAL' ? 'FLAT' : predDir}
+                  </span>
+                  <span className="text-[9px] text-gray-400 flex-1">{ctxNote}</span>
+                  <span suppressHydrationWarning className={`text-sm font-black ${dirColor}`}>{dispConf}%</span>
+                </div>
+                <div className="h-2 bg-gray-800 rounded-full overflow-hidden border border-white/5">
+                  <div
+                    suppressHydrationWarning
+                    className={`h-full rounded-full bg-gradient-to-r ${style.bar} transition-all duration-700`}
+                    style={{ width: `${dispConf}%` }}
+                  />
+                </div>
               </div>
-              <div className="h-1.5 bg-gray-800 rounded-full overflow-hidden border border-white/5">
-                <div
-                  suppressHydrationWarning
-                  className={`h-full rounded-full bg-gradient-to-r ${style.bar} transition-all duration-700`}
-                  style={{ width: `${dispConf}%` }}
-                />
+
+              {/* Timeframe Momentum Indicators */}
+              <div className="space-y-1.5 bg-gray-900/30 rounded-lg p-2.5 border border-gray-700/20">
+                <div className="flex items-center justify-between">
+                  <span className="text-[9px] text-gray-500 font-bold uppercase tracking-wide">5-Min Momentum</span>
+                  <span suppressHydrationWarning className={`text-[10px] font-bold px-2 py-0.5 rounded ${
+                    trend5min === 'UP' ? 'bg-emerald-500/25 text-emerald-300' :
+                    trend5min === 'DOWN' ? 'bg-red-500/25 text-red-300' :
+                    'bg-amber-500/15 text-amber-300'
+                  }`}>
+                    {trend5min === 'UP' ? '▲' : trend5min === 'DOWN' ? '▼' : '→'} {trend5min}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-[9px] text-gray-500 font-bold uppercase tracking-wide">15-Min Trend</span>
+                  <span suppressHydrationWarning className={`text-[10px] font-bold px-2 py-0.5 rounded ${
+                    trend15min === 'UP' ? 'bg-emerald-500/25 text-emerald-300' :
+                    trend15min === 'DOWN' ? 'bg-red-500/25 text-red-300' :
+                    'bg-amber-500/15 text-amber-300'
+                  }`}>
+                    {trend15min === 'UP' ? '▲' : trend15min === 'DOWN' ? '▼' : '→'} {trend15min}
+                  </span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-[9px] text-gray-500 font-bold uppercase tracking-wide">Alignment</span>
+                  <span suppressHydrationWarning className={`text-[10px] font-bold px-2 py-0.5 rounded ${
+                    same5m15m ? 'bg-emerald-500/25 text-emerald-300' :
+                    conflict ? 'bg-red-500/25 text-red-300' :
+                    'bg-amber-500/15 text-amber-300'
+                  }`}>
+                    {same5m15m ? '🔗 Aligned' : conflict ? '⚠️ Conflict' : '⏳ Forming'}
+                  </span>
+                </div>
               </div>
-            </div>
+
+              {/* Movement Probability */}
+              <div className="space-y-2">
+                <p className="text-[9px] font-bold text-gray-500 uppercase tracking-wide">Movement Probability</p>
+                <div className="flex items-center gap-0.5 h-6 rounded-md overflow-hidden bg-gray-950/50 border border-gray-700/30">
+                  {/* Bullish */}
+                  <div
+                    suppressHydrationWarning
+                    className="h-full bg-gradient-to-r from-emerald-600 to-emerald-500 transition-all duration-300 flex items-center justify-center min-w-[2px]"
+                    style={{
+                      width: `${Math.max(5, Math.min(95, Math.round(
+                        Math.max(0, totalScore + confidence / 10) * 0.8
+                      )))}%`,
+                    }}
+                  >
+                    <span className="text-[8px] font-bold text-white px-1 truncate whitespace-nowrap">
+                      {Math.round(Math.max(0, totalScore + confidence / 10) * 0.8)}%↑
+                    </span>
+                  </div>
+                  {/* Bearish */}
+                  <div
+                    suppressHydrationWarning
+                    className="h-full bg-gradient-to-l from-red-600 to-red-500 transition-all duration-300 flex items-center justify-center ml-auto min-w-[2px]"
+                    style={{
+                      width: `${Math.max(5, Math.min(95, Math.round(
+                        Math.max(0, -totalScore + confidence / 10) * 0.8
+                      )))}%`,
+                    }}
+                  >
+                    <span className="text-[8px] font-bold text-white px-1 truncate whitespace-nowrap">
+                      {Math.round(Math.max(0, -totalScore + confidence / 10) * 0.8)}%↓
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Early Signal Detection */}
+              {(confidence >= 75 || same5m15m) && (
+                <div className="pt-2 border-t border-gray-700/20">
+                  <span suppressHydrationWarning className="text-[9px] font-bold text-amber-400 uppercase tracking-wide">
+                    ⚡ {confidence >= 80 ? 'Strong' : 'Moderate'} {predDir === 'NEUTRAL' ? 'Neutral' : predDir} Signal Detected
+                  </span>
+                </div>
+              )}
+            </>
           );
         })()}
 
         {/* Factor rows */}
-        <div className="space-y-1">
+        <div className="space-y-1 border-t border-gray-700/20 pt-2">
+          <p className="text-[9px] font-bold text-gray-600 uppercase tracking-wide">Factor Breakdown</p>
           {factors.map(f => {
             const pct = Math.abs(f.value) / f.max * 100;
             const isBull = f.value > 0;
@@ -599,8 +706,7 @@ export const TradeSupportResistance: React.FC<TradeSupportResistanceProps> = ({
             return (
               <div key={f.name} className="flex items-center gap-1.5">
                 <span className={`text-[9px] font-bold w-3 text-center ${factorColor(f.value)}`}>{f.icon}</span>
-                <span className="text-[9px] text-gray-500 w-24 truncate">{f.name}</span>
-                {/* Mini bar */}
+                <span className="text-[9px] text-gray-500 w-20 truncate">{f.name}</span>
                 <div className="flex-1 h-1.5 bg-gray-800 rounded-full overflow-hidden">
                   <div
                     suppressHydrationWarning
@@ -615,8 +721,8 @@ export const TradeSupportResistance: React.FC<TradeSupportResistanceProps> = ({
         </div>
 
         {/* Summary line */}
-        <div suppressHydrationWarning className={`mt-2 text-center text-[10px] font-bold rounded-lg py-1 ${style.badge}`}>
-          {action} · {confidence}% Confidence · Score {totalScore > 0 ? '+' : ''}{totalScore}
+        <div suppressHydrationWarning className={`text-center text-[10px] font-bold rounded-lg py-1.5 border ${style.badge}`}>
+          {action} · {confidence}% Conf · Score {totalScore > 0 ? '+' : ''}{totalScore}
         </div>
 
         {/* Support / Resistance distance */}

@@ -97,7 +97,12 @@ function getSignalStyle(signal: string): SignalStyle {
 
 // ─── Positioning type style map ───────────────────────────────────────────────
 
-function getPositioningStyle(type: string) {
+function getPositioningStyle(type: string, label?: string) {
+  // Special case: Weak Short Buildup with light green border
+  if (label === "Weak Short Buildup") {
+    return { color: "text-red-400", bg: "bg-red-500/15", border: "border-lime-400/50", badge: "bg-red-500/20 text-red-300" };
+  }
+
   switch (type) {
     case "LONG_BUILDUP":
       return { color: "text-emerald-400", bg: "bg-emerald-500/15", border: "border-emerald-500/40", badge: "bg-emerald-500/20 text-emerald-300" };
@@ -185,24 +190,53 @@ function FlowBadge({ value, sub }: { value: number; sub?: string }) {
 // Keep as alias for any remaining usages
 const DeltaBadge = ({ value }: { value: number }) => <PctBadge value={value} />;
 
-function ConfidenceGauge({ value }: { value: number }) {
+/**
+ * ConfidenceGauge — Signal-aware confidence visualization
+ * Bar color matches signal direction (not just confidence level)
+ * - BUY signals → green/emerald gradient
+ * - SELL signals → red/rose gradient
+ * - NEUTRAL → amber/slate neutral
+ * Opacity/saturation increases with confidence ≥55%
+ */
+function ConfidenceGauge({ value, signal }: { value: number; signal?: string }) {
   const capped  = Math.min(100, Math.max(0, value));
-  const color   =
-    capped >= 75 ? "from-yellow-400 via-amber-400 to-yellow-300" :
-    capped >= 55 ? "from-emerald-400 to-green-400" :
-    capped >= 40 ? "from-slate-400 to-slate-300" :
-                   "from-red-400 to-rose-400";
+  
+  // Signal color determines base gradient direction — confidence controls saturation
+  let bgColor = "from-slate-500 to-slate-400";      // neutral default
+  let textColor = "text-slate-400";
+  
+  const signalType = signal?.toUpperCase();
+  if (signalType?.includes("BUY")) {
+    // BUY signal → green/emerald (bullish)
+    bgColor = capped >= 70 
+      ? "from-emerald-400 via-green-300 to-emerald-300"   // high confidence → bright
+      : "from-green-500 to-emerald-400";                   // moderate confidence → muted
+    textColor = capped >= 70 ? "text-emerald-300" : "text-green-400";
+  } else if (signalType?.includes("SELL")) {
+    // SELL signal → red/rose (bearish)
+    bgColor = capped >= 70
+      ? "from-red-400 via-rose-300 to-red-300"             // high confidence → bright
+      : "from-rose-500 to-red-400";                        // moderate confidence → muted
+    textColor = capped >= 70 ? "text-red-300" : "text-rose-400";
+  } else {
+    // NEUTRAL signal → amber (cautious)
+    bgColor = capped >= 55
+      ? "from-amber-400 to-yellow-400"
+      : "from-slate-500 to-slate-400";
+    textColor = capped >= 55 ? "text-amber-300" : "text-slate-400";
+  }
+
   return (
     <div className="w-full">
       <div className="flex justify-between items-center mb-1">
         <span className="text-[10px] text-slate-400 font-medium">Confidence</span>
-        <span className={`text-sm font-extrabold ${capped >= 70 ? "text-yellow-300" : capped >= 55 ? "text-emerald-300" : "text-slate-400"}`}>
+        <span className={`text-sm font-extrabold ${textColor}`}>
           {capped}%
         </span>
       </div>
       <div className="h-2 bg-slate-800 rounded-full overflow-hidden">
         <div
-          className={`h-full bg-gradient-to-r ${color} rounded-full transition-all duration-700`}
+          className={`h-full bg-gradient-to-r ${bgColor} rounded-full transition-all duration-700`}
           style={{ width: `${capped}%` }}
         />
       </div>
@@ -221,7 +255,7 @@ interface SymbolCardProps {
 
 const SymbolCard = memo(function SymbolCard({ data, name, liveTick }: SymbolCardProps) {
   const sig      = getSignalStyle(data.signal);
-  const posStyle = getPositioningStyle(data.positioning?.type ?? "NEUTRAL");
+  const posStyle = getPositioningStyle(data.positioning?.type ?? "NEUTRAL", data.positioning?.label);
   const predSig  = getSignalStyle(data.prediction?.signal ?? "NEUTRAL");
 
   // Prefer live WebSocket price/change — falls back to polling API value
@@ -258,12 +292,22 @@ const SymbolCard = memo(function SymbolCard({ data, name, liveTick }: SymbolCard
   const tickFlow    = data.changes?.tick_flow ?? 0;
   const hasRealOI   = Math.abs(oiPct) >= 0.01;  // non-trivial OI change from PCR
 
+  // Determine outer card border: special case for "Weak Short Buildup"
+  const outerBorder = data.positioning?.label === "Weak Short Buildup" 
+    ? posStyle.border 
+    : sig.border;
+
+  // For "Weak Short Buildup", use subtle background so lime border shows prominently
+  const innerPosBackground = data.positioning?.label === "Weak Short Buildup"
+    ? "bg-slate-800/20"
+    : posStyle.bg;
+
   return (
     <div
       className={`
         relative flex flex-col gap-3 rounded-2xl p-4
         bg-gradient-to-br from-slate-900/90 via-slate-950/80 to-black/60
-        border-2 ${sig.border} shadow-xl ${sig.glow}
+        border-2 ${outerBorder} shadow-xl ${sig.glow}
         hover:shadow-2xl hover:scale-[1.01] transition-all duration-300
         backdrop-blur-sm overflow-hidden
       `}
@@ -297,10 +341,11 @@ const SymbolCard = memo(function SymbolCard({ data, name, liveTick }: SymbolCard
       </div>
 
       {/* ─ Confidence gauge ─ */}
-      <ConfidenceGauge value={data.confidence} />
+      {/* Signal-aware: bar color matches direction (BUY=green, SELL=red) */}
+      <ConfidenceGauge value={data.confidence} signal={data.signal} />
 
       {/* ─ Positioning type ─ */}
-      <div className={`flex items-center justify-between rounded-xl px-3 py-2 border ${posStyle.bg} ${posStyle.border}`}>
+      <div className={`flex items-center justify-between rounded-xl px-3 py-2 border ${innerPosBackground} ${posStyle.border}`}>
         <div>
           <span className={`text-xs font-extrabold ${posStyle.color}`}>
             {data.positioning?.label ?? "—"}
@@ -357,18 +402,18 @@ const SymbolCard = memo(function SymbolCard({ data, name, liveTick }: SymbolCard
 
       {/* ─ 5-Minute Predictive Alert ─ */}
       <div className={`
-        rounded-xl px-3 py-2.5 border
+        rounded-xl px-4 py-3 border space-y-3
         ${data.prediction?.confidence >= 60
           ? "bg-amber-950/30 border-amber-500/30"
           : "bg-slate-800/40 border-slate-700/30"
         }
       `}>
-        <div className="flex items-center gap-1.5 mb-1">
-          <Clock className="w-3.5 h-3.5 text-amber-400" />
-          <span className="text-[10px] font-extrabold text-amber-400 uppercase tracking-widest">
+        <div className="flex items-center gap-1.5">
+          <Clock className="w-4 h-4 text-amber-400" />
+          <span className="text-[11px] font-bold text-amber-400 uppercase tracking-widest">
             5-Min Prediction
           </span>
-          <span className={`ml-auto text-[9px] font-bold px-1.5 py-0.5 rounded ${predSig.text} ${predSig.bg}`}>
+          <span className={`ml-auto text-[10px] font-bold px-2 py-1 rounded ${predSig.text} ${predSig.bg}`}>
             {predSig.label}
           </span>
         </div>
@@ -392,26 +437,146 @@ const SymbolCard = memo(function SymbolCard({ data, name, liveTick }: SymbolCard
             vol_velocity:   0,
             tick_flow_pct:  0,
           };
+
+          // Calculate actual market confidence from signals
+          const actualMarketConf = Math.round(
+            Math.abs(data.changes.price_tick * 2) * 20 +
+            Math.abs(data.changes.oi) * 30 +
+            Math.abs(data.changes.tick_flow) * 40 +
+            Math.abs(data.changes.volume) * 10
+          ) / 100;
+
           return pred.confidence > 0 ? (
           <>
-            <p className="text-[10px] text-slate-300 leading-snug mb-1.5">
+            <p className="text-[10px] text-slate-300 leading-snug">
               {pred.reason}
             </p>
 
-            {/* ─ Velocity pills — 3 distinct types, each with correct format ─ */}
-            <div className="flex flex-wrap gap-1 items-center">
+            {/* Micro-Movement Detection Subsection */}
+            <div className="bg-slate-900/50 rounded-lg p-3 border border-slate-700/20 space-y-2">
+              {/* Predicted vs Actual Confidence */}
+              <div className="grid grid-cols-2 gap-2">
+                <div className="flex flex-col bg-slate-900/30 rounded px-2 py-1.5">
+                  <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wide">CONFIDENCE</span>
+                  <span className="text-[12px] font-black text-yellow-300 mt-0.5">{pred.confidence}%</span>
+                  <div className="w-full h-2 rounded-full bg-slate-700/50 overflow-hidden mt-1">
+                    <div
+                      className="h-full bg-gradient-to-r from-amber-500 to-amber-400 transition-all duration-300 rounded-full"
+                      style={{ width: `${Math.min(100, pred.confidence)}%` }}
+                    />
+                  </div>
+                </div>
+                <div className="flex flex-col bg-slate-900/30 rounded px-2 py-1.5">
+                  <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wide">Actual Market</span>
+                  <span className="text-[12px] font-black text-emerald-300 mt-0.5">{Math.min(100, actualMarketConf)}%</span>
+                  <div className="w-full h-2 rounded-full bg-slate-700/50 overflow-hidden mt-1">
+                    <div
+                      className="h-full bg-gradient-to-r from-emerald-500 to-emerald-400 transition-all duration-300 rounded-full"
+                      style={{ width: `${Math.min(100, actualMarketConf)}%` }}
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Price Momentum Indicator */}
+              <div className="flex items-center justify-between bg-slate-900/30 rounded px-2 py-1.5">
+                <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wide">Price Momentum</span>
+                <span className={`font-bold px-2 py-1 rounded text-[10px] ${
+                  data.changes.price_tick > 0.5   ? 'bg-emerald-500/40 text-emerald-200' :
+                  data.changes.price_tick > 0     ? 'bg-emerald-500/25 text-emerald-300' :
+                  data.changes.price_tick < -0.5  ? 'bg-red-500/40 text-red-200' :
+                  data.changes.price_tick < 0     ? 'bg-red-500/25 text-red-300' :
+                                                    'bg-slate-600/25 text-slate-300'
+                }`}>
+                  {data.changes.price_tick > 0 ? '▲' : data.changes.price_tick < 0 ? '▼' : '→'} {Math.abs(data.changes.price_tick).toFixed(2)} pts
+                </span>
+              </div>
+
+              {/* OI Momentum Indicator */}
+              <div className="flex items-center justify-between bg-slate-900/30 rounded px-2 py-1.5">
+                <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wide">OI Momentum</span>
+                <span className={`font-bold px-2 py-1 rounded text-[10px] ${
+                  data.changes.oi > 0.3  ? 'bg-emerald-500/40 text-emerald-200' :
+                  data.changes.oi > 0    ? 'bg-emerald-500/25 text-emerald-300' :
+                  data.changes.oi < -0.3 ? 'bg-red-500/40 text-red-200' :
+                  data.changes.oi < 0    ? 'bg-red-500/25 text-red-300' :
+                                           'bg-slate-600/25 text-slate-300'
+                }`}>
+                  {data.changes.oi > 0 ? '📈' : data.changes.oi < 0 ? '📉' : '⚖️'} {Math.abs(data.changes.oi).toFixed(2)}%
+                </span>
+              </div>
+
+              {/* Probability Distribution */}
+              <div className="pt-2 border-t border-slate-700/20">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wide">Movement Probability</span>
+                </div>
+                <div className="flex items-center gap-0.5 h-7 rounded-md overflow-hidden bg-slate-950/50 border border-slate-700/30">
+                  {/* Bullish prob */}
+                  <div
+                    className="h-full bg-gradient-to-r from-emerald-600 to-emerald-500 transition-all duration-300 flex items-center justify-center min-w-[2px]"
+                    style={{
+                      width: `${Math.max(5, Math.min(95, Math.round(
+                        Math.max(0, data.changes.price_tick) * 20 +
+                        Math.max(0, data.changes.oi) * 30 +
+                        Math.max(0, data.changes.tick_flow) * 40
+                      ) / 90 * 100))}%`,
+                    }}
+                  >
+                    <span className="text-[9px] font-bold text-white px-2 truncate whitespace-nowrap">
+                      {Math.round(
+                        Math.max(0, data.changes.price_tick) * 20 +
+                        Math.max(0, data.changes.oi) * 30 +
+                        Math.max(0, data.changes.tick_flow) * 40
+                      ) / 90 * 100}%↑
+                    </span>
+                  </div>
+                  {/* Bearish prob */}
+                  <div
+                    className="h-full bg-gradient-to-l from-red-600 to-red-500 transition-all duration-300 flex items-center justify-center ml-auto min-w-[2px]"
+                    style={{
+                      width: `${Math.max(5, Math.min(95, Math.round(
+                        Math.max(0, -data.changes.price_tick) * 20 +
+                        Math.max(0, -data.changes.oi) * 30 +
+                        Math.max(0, -data.changes.tick_flow) * 40
+                      ) / 90 * 100))}%`,
+                    }}
+                  >
+                    <span className="text-[9px] font-bold text-white px-2 truncate whitespace-nowrap">
+                      {Math.round(
+                        Math.max(0, -data.changes.price_tick) * 20 +
+                        Math.max(0, -data.changes.oi) * 30 +
+                        Math.max(0, -data.changes.tick_flow) * 40
+                      ) / 90 * 100}%↓
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Early Signal Detection */}
+              {(Math.abs(data.changes.price_tick) > 0.25 || Math.abs(data.changes.tick_flow) > 40) && (
+                <div className="pt-2 border-t border-slate-700/20">
+                  <span className="text-[10px] font-bold text-amber-400 uppercase tracking-wide">
+                    ⚡ Early Signal Detected
+                  </span>
+                </div>
+              )}
+            </div>
+
+            {/* ─ Legacy Velocity Pills (kept for reference, now secondary) ─ */}
+            <div className="flex flex-wrap gap-1 items-center text-[9px]">
 
               {/* P: ₹ pts velocity across the tick window (e.g. +8.5 pts) */}
               {(() => {
                 const pts = pred.price_velocity ?? 0;
                 const up  = pts > 0;
                 if (Math.abs(pts) < 0.01) return (
-                  <span key="P" className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-slate-700/50 text-slate-400">
+                  <span key="P" className="font-bold px-1.5 py-0.5 rounded bg-slate-700/50 text-slate-400">
                     P —
                   </span>
                 );
                 return (
-                  <span key="P" className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${
+                  <span key="P" className={`font-bold px-1.5 py-0.5 rounded ${
                     up ? "bg-emerald-500/15 text-emerald-400" : "bg-red-500/15 text-red-400"
                   }`}>
                     P {up ? "+" : ""}{pts.toFixed(1)} pts
@@ -424,12 +589,12 @@ const SymbolCard = memo(function SymbolCard({ data, name, liveTick }: SymbolCard
                 const v   = Math.abs(volDevPct) >= 0.05 ? volDevPct : (pred.vol_velocity ?? 0);
                 const up  = v > 0;
                 if (Math.abs(v) < 0.05) return (
-                  <span key="V" className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-slate-700/50 text-slate-400">
+                  <span key="V" className="font-bold px-1.5 py-0.5 rounded bg-slate-700/50 text-slate-400">
                     Vol —
                   </span>
                 );
                 return (
-                  <span key="V" className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${
+                  <span key="V" className={`font-bold px-1.5 py-0.5 rounded ${
                     up ? "bg-emerald-500/15 text-emerald-400" : "bg-red-500/15 text-red-400"
                   }`}>
                     Vol {up ? "+" : ""}{v.toFixed(1)}% vs avg
@@ -442,13 +607,13 @@ const SymbolCard = memo(function SymbolCard({ data, name, liveTick }: SymbolCard
                 const f  = pred.tick_flow_pct ?? 0;
                 const up = f > 0;
                 if (Math.abs(f) < 1) return (
-                  <span key="F" className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-slate-700/50 text-slate-400">
+                  <span key="F" className="font-bold px-1.5 py-0.5 rounded bg-slate-700/50 text-slate-400">
                     Flow —
                   </span>
                 );
                 const strong = Math.abs(f) >= 66;
                 return (
-                  <span key="F" className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${
+                  <span key="F" className={`font-bold px-1.5 py-0.5 rounded ${
                     strong
                       ? up ? "bg-emerald-500/20 text-emerald-300" : "bg-red-500/20 text-red-300"
                       : up ? "bg-emerald-500/10 text-emerald-400" : "bg-red-500/10 text-red-400"
@@ -457,10 +622,6 @@ const SymbolCard = memo(function SymbolCard({ data, name, liveTick }: SymbolCard
                   </span>
                 );
               })()}
-
-              <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded ml-auto ${predSig.text} bg-slate-800/50`}>
-                {pred.confidence}% Confidence
-              </span>
             </div>
           </>
           ) : (
@@ -468,6 +629,8 @@ const SymbolCard = memo(function SymbolCard({ data, name, liveTick }: SymbolCard
           );
         })()}
       </div>
+
+      {/* Advanced 5m Prediction Analysis - DISABLED */}
 
       {/* Live indicator dot */}
       {data.is_live && (

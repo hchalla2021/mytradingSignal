@@ -24,6 +24,7 @@ import {
   LiquidityPrediction,
   OIProfile,
 } from '@/hooks/useLiquiditySocket';
+import { Advanced5mPredictionView } from './Advanced5mPredictionView';
 
 // ── Colour system ─────────────────────────────────────────────────────────────
 
@@ -311,20 +312,22 @@ const IndexCard = memo(({ data, index }: { data: LiquidityIndex | null; index: s
         </div>
 
         {/* ── 5-Min prediction (very prominent) ───────────────────────────── */}
-        <div className="rounded-lg bg-slate-800/60 border border-slate-700/30 px-3 py-2.5">
-          <div className="text-[9px] text-slate-500 uppercase tracking-widest font-semibold mb-1.5">
-            ⚡ 5-Min Liquidity Prediction
-          </div>
+        <div className="rounded-lg bg-slate-800/60 border border-slate-700/30 px-4 py-3 space-y-3">
           <div className="flex items-center justify-between">
-            <Pred5mBadge pred={data.prediction5m} />
-            <div className="flex flex-col items-end gap-0.5">
-              <span className="text-[11px] font-black text-white">
+            <div>
+              <div className="text-[11px] text-slate-400 uppercase tracking-widest font-bold mb-2">
+                ⚡5-Min Prediction
+              </div>
+              <Pred5mBadge pred={data.prediction5m} />
+            </div>
+            <div className="flex flex-col items-end gap-1">
+              <span className="text-[14px] font-black text-white">
                 {data.pred5mConf}%
-                <span className="text-[9px] font-normal text-slate-500 ml-0.5">Confidence</span>
+                <span className="text-[10px] font-semibold text-slate-400 ml-1">CONFIDENCE</span>
               </span>
-              <div className="w-16 h-1 rounded-full bg-slate-700/50 overflow-hidden">
+              <div className="w-20 h-2 rounded-full bg-slate-700/50 overflow-hidden">
                 <div
-                  className={`h-full rounded-full transition-all duration-500 ${
+                  className={`h-full rounded-full transition-all duration-300 ${
                     data.prediction5m === 'STRONG_BUY'  ? 'bg-emerald-400' :
                     data.prediction5m === 'BUY'         ? 'bg-cyan-400' :
                     data.prediction5m === 'STRONG_SELL' ? 'bg-red-400' :
@@ -336,7 +339,133 @@ const IndexCard = memo(({ data, index }: { data: LiquidityIndex | null; index: s
               </div>
             </div>
           </div>
+
+          {/* Micro-Movement Detection Subsection */}
+          <div className="bg-slate-900/50 rounded-lg p-3 border border-slate-700/20 space-y-2">
+            {/* Actual Market Confidence (derived from signals) */}
+            <div className="flex items-center justify-between bg-slate-900/30 rounded px-2 py-1.5">
+              <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wide">Market Actual</span>
+              <div className="flex items-center gap-2">
+                <span className="text-[12px] font-black text-emerald-300">
+                  {Math.round(
+                    Math.abs(data.signals.oi_buildup.score * 50) +
+                    Math.abs(data.signals.price_momentum.score * 30) +
+                    Math.abs(data.signals.candle_conviction.score * 20)
+                  )}%
+                </span>
+                <div className="w-14 h-2 rounded-full bg-slate-700/50 overflow-hidden">
+                  <div
+                    className="h-full bg-gradient-to-r from-emerald-500 to-emerald-400 transition-all duration-300 rounded-full"
+                    style={{
+                      width: `${Math.round(
+                        Math.abs(data.signals.oi_buildup.score * 50) +
+                        Math.abs(data.signals.price_momentum.score * 30) +
+                        Math.abs(data.signals.candle_conviction.score * 20)
+                      )}%`,
+                    }}
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* Price Momentum Indicator */}
+            <div className="flex items-center justify-between bg-slate-900/30 rounded px-2 py-1.5">
+              <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wide">Price Momentum</span>
+              <div className="flex items-center gap-2">
+                <span className={`font-bold px-2 py-1 rounded text-[10px] ${
+                  data.metrics.changePct > 0.5   ? 'bg-emerald-500/40 text-emerald-200' :
+                  data.metrics.changePct > 0     ? 'bg-emerald-500/25 text-emerald-300' :
+                  data.metrics.changePct < -0.5  ? 'bg-red-500/40 text-red-200' :
+                  data.metrics.changePct < 0     ? 'bg-red-500/25 text-red-300' :
+                                                   'bg-slate-600/25 text-slate-300'
+                }`}>
+                  {data.metrics.changePct > 0 ? '▲' : data.metrics.changePct < 0 ? '▼' : '→'} {Math.abs(data.metrics.changePct).toFixed(2)}%
+                </span>
+              </div>
+            </div>
+
+            {/* OI Momentum Indicator */}
+            <div className="flex items-center justify-between bg-slate-900/30 rounded px-2 py-1.5">
+              <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wide">OI Momentum</span>
+              <div className="flex items-center gap-2">
+                <span className={`font-bold px-2 py-1 rounded text-[10px] max-w-[140px] ${
+                  data.signals.oi_buildup.score > 0.3  ? 'bg-emerald-500/40 text-emerald-200' :
+                  data.signals.oi_buildup.score > 0    ? 'bg-emerald-500/25 text-emerald-300' :
+                  data.signals.oi_buildup.score < -0.3 ? 'bg-red-500/40 text-red-200' :
+                  data.signals.oi_buildup.score < 0    ? 'bg-red-500/25 text-red-300' :
+                                                         'bg-slate-600/25 text-slate-300'
+                }`}>
+                  {data.signals.oi_buildup.signal === 'BULL' ? '📈' : data.signals.oi_buildup.signal === 'BEAR' ? '📉' : '⚖️'} 
+                  <span className="ml-1">{data.signals.oi_buildup.label}</span>
+                </span>
+              </div>
+            </div>
+
+            {/* Probability Distribution */}
+            <div className="pt-2 border-t border-slate-700/20">
+              <div className="flex items-center justify-between mb-2">
+                <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wide">Movement Probability</span>
+              </div>
+              <div className="flex items-center gap-0.5 h-7 rounded-md overflow-hidden bg-slate-950/50 border border-slate-700/30">
+                {/* Bullish prob */}
+                <div
+                  className="h-full bg-gradient-to-r from-cyan-600 to-cyan-500 transition-all duration-300 flex items-center justify-center min-w-[2px]"
+                  style={{
+                    width: `${Math.max(5, Math.min(95, Math.round(
+                      Math.max(0, data.signals.price_momentum.score) * 100 +
+                      Math.max(0, data.signals.oi_buildup.score) * 80 +
+                      Math.max(0, data.signals.candle_conviction.score) * 60
+                    ) / 240 * 100))}%`,
+                  }}
+                >
+                  <span className="text-[9px] font-bold text-white px-2 truncate whitespace-nowrap">
+                    {Math.round(
+                      Math.max(0, data.signals.price_momentum.score) * 100 +
+                      Math.max(0, data.signals.oi_buildup.score) * 80 +
+                      Math.max(0, data.signals.candle_conviction.score) * 60
+                    ) / 240 * 100}%↑
+                  </span>
+                </div>
+                {/* Bearish prob */}
+                <div
+                  className="h-full bg-gradient-to-l from-orange-600 to-orange-500 transition-all duration-300 flex items-center justify-center ml-auto min-w-[2px]"
+                  style={{
+                    width: `${Math.max(5, Math.min(95, Math.round(
+                      Math.max(0, -data.signals.price_momentum.score) * 100 +
+                      Math.max(0, -data.signals.oi_buildup.score) * 80 +
+                      Math.max(0, -data.signals.candle_conviction.score) * 60
+                    ) / 240 * 100))}%`,
+                  }}
+                >
+                  <span className="text-[9px] font-bold text-white px-2 truncate whitespace-nowrap">
+                    {Math.round(
+                      Math.max(0, -data.signals.price_momentum.score) * 100 +
+                      Math.max(0, -data.signals.oi_buildup.score) * 80 +
+                      Math.max(0, -data.signals.candle_conviction.score) * 60
+                    ) / 240 * 100}%↓
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            {/* Early Signal Detection */}
+            {(Math.abs(data.metrics.changePct) > 0.15 || Math.abs(data.signals.oi_buildup.score) > 0.4) && (
+              <div className="pt-2 border-t border-slate-700/20">
+                <span className="text-[10px] font-bold text-amber-400 uppercase tracking-wide">
+                  ⚡ Early Signal Detected
+                </span>
+              </div>
+            )}
+          </div>
         </div>
+
+        {/* ── Advanced 5-Min Micro-Trend Prediction (DISABLED) ─────────── */}
+        {false && data.advanced5mPrediction && (
+          <Advanced5mPredictionView 
+            data={data.advanced5mPrediction as any} 
+            symbol={data.symbol} 
+          />
+        )}
 
         {/* ── 4-Signal breakdown ──────────────────────────────────────────── */}
         <div className="rounded-lg bg-slate-800/40 border border-slate-700/25 px-3 py-2">

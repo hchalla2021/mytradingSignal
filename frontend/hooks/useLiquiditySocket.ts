@@ -74,6 +74,7 @@ export interface LiquidityIndex {
   };
   dataSource: LiquidityDataSource;
   timestamp: string;
+  advanced5mPrediction?: Record<string, unknown>;  // Advanced micro-trend prediction
 }
 
 export interface LiquidityData {

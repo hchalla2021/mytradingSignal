@@ -44,6 +44,10 @@ from fastapi import WebSocket
 import pytz
 
 from services.cache import CacheService, _SHARED_CACHE
+from services.advanced_5m_predictor import (
+    MicroTrendBuffer,
+    calculate_advanced_5m_prediction,
+)
 
 logger = logging.getLogger(__name__)
 IST = pytz.timezone("Asia/Kolkata")
@@ -637,6 +641,14 @@ class LiquidityService:
         self._pcr_buffers: Dict[str, PCRHistory] = {
             sym: PCRHistory() for sym in self.INDICES
         }
+        # Micro-trend buffers for advanced 5-min prediction
+        self._micro_trends: Dict[str, MicroTrendBuffer] = {
+            sym: MicroTrendBuffer(sym, maxlen=20) for sym in self.INDICES
+        }
+        # Track last known values for delta calculation
+        self._last_values: Dict[str, Dict[str, float]] = {
+            sym: {"oi": 0.0, "price": 0.0, "volume": 0.0} for sym in self.INDICES
+        }
         self._last_spot_data: Dict[str, Dict] = {}   # no-TTL fallback
         self._latest: Dict[str, Any] = {}
         self._task: Optional[asyncio.Task] = None
@@ -790,7 +802,80 @@ class LiquidityService:
         oi_profile = sig_oi["extra"].get("profile", "NEUTRAL")
         data_source = "LIVE" if is_live else "MARKET_CLOSED"
 
-        return {
+        # ── Calculate micro-trends for advanced 5-min prediction ──────────────
+        # Track OI, volume, and price changes for micro-trend detection
+        last_vals = self._last_values[symbol]
+        
+        # OI change percentage
+        oi_change_pct = 0.0
+        if last_vals["oi"] > 0 and oi_raw > 0:
+            oi_change_pct = ((oi_raw - last_vals["oi"]) / last_vals["oi"]) * 100.0
+        
+        # Price change percentage (from last candle close, not change_pct which is from prev close)
+        price_change_pct = 0.0
+        if len(candles) >= 2:
+            prev_close = float(candles[-2].get("close") or 0)
+            if prev_close > 0:
+                price_change_pct = ((price - prev_close) / prev_close) * 100.0
+        
+        # Volume from latest candle
+        current_volume = float(candles[-1].get("volume") or 0) if candles else 0.0
+        prev_volume = float(candles[-2].get("volume") or 0) if len(candles) >= 2 else current_volume
+        
+        # Volume ratio (current vs average)
+        volume_ratio = 0.0
+        if candles and len(candles) >= 5:
+            recent_volumes = [float(c.get("volume") or 0) for c in candles[-5:]]
+            avg_volume = sum(recent_volumes) / len(recent_volumes) if recent_volumes else 1
+            if avg_volume > 0:
+                volume_ratio = current_volume / avg_volume
+        
+        # EMA slope (from price momentum signal)
+        ema_slope = sig_mom["extra"].get("emaSlope", 0.0)
+        
+        # Push to micro-trend buffer
+        micro_buffer = self._micro_trends[symbol]
+        micro_buffer.push(
+            pcr=pcr_val,
+            oi_change_pct=oi_change_pct,
+            volume_ratio=volume_ratio,
+            price_change_pct=price_change_pct,
+            ema_slope=ema_slope
+        )
+        
+        # Update last known values for next iteration
+        self._last_values[symbol] = {
+            "oi": oi_raw,
+            "price": price,
+            "volume": current_volume
+        }
+        
+        # ── Advanced 5-min prediction (if we have enough micro-trend data) ────
+        advanced_5m = None
+        if micro_buffer.is_full():
+            try:
+                recent_oi_changes = [
+                    (d['oi_change'] * last_vals["oi"] / 100.0) if last_vals["oi"] > 0 else 0.0
+                    for d in micro_buffer.get_recent(n=10)
+                ]
+                recent_volumes_list = [
+                    current_volume * d['volume_ratio'] if d['volume_ratio'] > 0 else current_volume
+                    for d in micro_buffer.get_recent(n=10)
+                ]
+                recent_prices_list = [price * (1 + d['price_change'] / 100.0) for d in micro_buffer.get_recent(n=10)]
+                
+                advanced_5m = calculate_advanced_5m_prediction(
+                    signals=signals,
+                    recent_oi_changes=recent_oi_changes,
+                    recent_volumes=recent_volumes_list,
+                    recent_prices=recent_prices_list,
+                    current_pcr=pcr_val,
+                    current_direction=direction
+                )
+            except Exception as e:
+                logger.warning(f"Advanced 5m prediction error for {symbol}: {e}")
+
+        response = {
             "symbol":       symbol,
             "direction":    direction,
             "confidence":   confidence,
@@ -814,6 +899,12 @@ class LiquidityService:
             "dataSource": data_source,
             "timestamp":  datetime.now(IST).isoformat(),
         }
+        
+        # Add advanced 5-min prediction if available
+        if advanced_5m:
+            response["advanced5mPrediction"] = advanced_5m
+
+        return response
 
     # ── Background broadcast loop ─────────────────────────────────────────────
 

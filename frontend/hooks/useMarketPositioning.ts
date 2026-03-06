@@ -50,6 +50,7 @@ export interface SymbolPositioning {
     tick_flow: number;        // 0-100 — % of recent ticks in signal direction
   };
   prediction: PositioningPrediction;   // 5-min ahead prediction
+  advanced_5m_prediction?: Record<string, unknown>;  // NEW: Intelligent 5m micro-trend analysis
   timestamp: string;
   market_status: string;
   is_live?: boolean;

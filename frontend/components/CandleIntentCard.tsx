@@ -1,8 +1,8 @@
 'use client';
 
-import React, { memo, useEffect, useState, useCallback, useRef } from 'react';
+import React, { memo } from 'react';
 import { TrendingUp, TrendingDown, Minus, Flame } from 'lucide-react';
-import { API_CONFIG } from '@/lib/api-config';
+import { useCandleIntentRealtime } from '@/hooks/useCandleIntentRealtime';
 
 interface CandleIntentData {
   symbol: string;
@@ -290,51 +290,8 @@ function computeCandlePrediction(data: CandleIntentData, overallConf: number): C
 }
 
 const CandleIntentCard = memo<CandleIntentCardProps>(({ symbol, name }) => {
-  const [data, setData] = useState<CandleIntentData | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const abortRef = useRef<AbortController | null>(null);
-
-  const fetchData = useCallback(async () => {
-    abortRef.current?.abort();
-    const controller = new AbortController();
-    abortRef.current = controller;
-    const timeoutId = setTimeout(() => controller.abort(), 15000);
-    try {
-      const response = await fetch(
-        API_CONFIG.endpoint(`/api/advanced/candle-intent/${symbol}`),
-        { signal: controller.signal }
-      );
-      clearTimeout(timeoutId);
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const result = await response.json();
-      if (result.status === 'ERROR' || result.status === 'TOKEN_EXPIRED' || result.error) {
-        setError(result.message || result.error || 'Authentication error');
-        setData(null);
-      } else if (!result.pattern || !result.current_candle) {
-        setError('Incomplete data');
-        setData(null);
-      } else {
-        setData(result);
-        setError(null);
-      }
-    } catch (err) {
-      clearTimeout(timeoutId);
-      if (err instanceof Error && err.name === 'AbortError') return;
-      setError('Connection error');
-    } finally {
-      setLoading(false);
-    }
-  }, [symbol]);
-
-  useEffect(() => {
-    fetchData();
-    const interval = setInterval(fetchData, 5000);
-    return () => {
-      clearInterval(interval);
-      abortRef.current?.abort();
-    };
-  }, [fetchData]);
+  // 🔥 Use real-time hook for ultra-fast live updates
+  const { data, loading, error, refetch } = useCandleIntentRealtime(symbol);
 
   const formatVolume = (vol: number): string => {
     if (vol >= 1000000) return `${(vol / 1000000).toFixed(2)}M`;
@@ -369,6 +326,10 @@ const CandleIntentCard = memo<CandleIntentCardProps>(({ symbol, name }) => {
           <span>{name}</span>
         </div>
         <p className="text-xs text-white/40 mt-2">{error || 'No data'}</p>
+        <button
+          onClick={refetch}
+          className="mt-2 text-[10px] px-3 py-1 rounded-full bg-rose-500/20 text-rose-300 border border-rose-500/40 hover:bg-rose-500/30 transition-colors"
+        >Retry</button>
       </div>
     );
   }
@@ -489,6 +450,56 @@ const CandleIntentCard = memo<CandleIntentCardProps>(({ symbol, name }) => {
 
           const isTrap = data.trap_status?.is_trap ?? false;
           const vr = data.volume_analysis.volume_ratio;
+          const bodyRatio = data.body_analysis.body_ratio_pct;
+          const bodyStrength = data.body_analysis.strength;
+          const patConf = data.pattern.confidence;
+          const volEff = data.volume_analysis.efficiency;
+          
+          // Candle-specific momentum indicators (4-row grid)
+          const patternQuality = patConf >= 80 ? 'Very High' : patConf >= 65 ? 'High' : patConf >= 50 ? 'Moderate' : 'Low';
+          const patternQualityColor = patConf >= 80 ? 'text-teal-300' : patConf >= 65 ? 'text-teal-400' : 'text-amber-300';
+          
+          const bodyType = bodyRatio >= 70 ? 'Very Decisive' : bodyRatio >= 50 ? 'Decisive' : bodyRatio >= 30 ? 'Moderate' : 'Indecisive';
+          const bodyTypeColor = bodyRatio >= 70 ? 'text-teal-300' : bodyRatio >= 50 ? 'text-teal-400' : bodyRatio >= 30 ? 'text-amber-300' : 'text-rose-300';
+          
+          const volumeQuality = vr >= 2.0 ? 'Strong' : vr >= 1.5 ? 'Good' : vr >= 1.0 ? 'Fair' : 'Weak';
+          const volumeQualityColor = vr >= 2.0 ? 'text-teal-300' : vr >= 1.5 ? 'text-teal-400' : vr >= 1.0 ? 'text-amber-300' : 'text-rose-300';
+          
+          const wickType = data.wick_analysis.dominant_wick === 'LOWER' ? 'Lower Wick' : data.wick_analysis.dominant_wick === 'UPPER' ? 'Upper Wick' : 'Balanced';
+          const wickTypeColor = data.wick_analysis.dominant_wick === 'LOWER' ? 'text-teal-300' : data.wick_analysis.dominant_wick === 'UPPER' ? 'text-rose-300' : 'text-white/50';
+          
+          // Actual Market Confidence (independent from predicted)
+          let actualMarketConf = 50;
+          if (isBuyCandle) {
+            actualMarketConf = Math.min(95, Math.max(30, 
+              (bodyRatio >= 60 && bodyStrength >= 70 ? 35 : bodyRatio >= 45 ? 25 : 15) +
+              (vr >= 1.8 ? 25 : vr >= 1.2 ? 15 : 5) +
+              (data.wick_analysis.lower_signal === 'BULLISH' ? 20 : 10) +
+              (patConf >= 75 ? 15 : 0)
+            ));
+          } else if (isSellCandle) {
+            actualMarketConf = Math.min(95, Math.max(30, 
+              (bodyRatio >= 60 && bodyStrength >= 70 ? 35 : bodyRatio >= 45 ? 25 : 15) +
+              (vr >= 1.8 ? 25 : vr >= 1.2 ? 15 : 5) +
+              (data.wick_analysis.upper_signal === 'BEARISH' ? 20 : 10) +
+              (patConf >= 75 ? 15 : 0)
+            ));
+          } else {
+            actualMarketConf = 33;
+          }
+          
+          // Building confirmation list (for 5m prediction context)
+          const confirms = [];
+          if (bodyRatio >= 60) confirms.push('✓ Decisive body');
+          if (vr >= 1.5) confirms.push('✓ Volume confirms');
+          if (data.wick_analysis.lower_signal === 'BULLISH' && isBuyCandle) confirms.push('✓ Lower wick bulls');
+          if (data.wick_analysis.upper_signal === 'BEARISH' && isSellCandle) confirms.push('✓ Upper wick bears');
+          if (!isTrap && patConf >= 70) confirms.push('✓ Pattern clear');
+          if (data.near_zone) confirms.push('✓ Near key zone');
+          
+          // Early signal detection
+          const showEarlySignal = (adjConf >= 75) || (confirms.length >= 2);
+          
           const ctxNote = isTrap
             ? '⚠ Trap detected — avoid'
             : (pred.label === 'STRONG UP' || pred.label === 'STRONG DOWN')
@@ -499,38 +510,106 @@ const CandleIntentCard = memo<CandleIntentCardProps>(({ symbol, name }) => {
             : 'Watching candle structure…';
 
           return (
-            <div className="px-3 pt-2.5 pb-3">
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-[9px] text-white/40 font-bold uppercase tracking-widest">5-Min Prediction</span>
-                <span className={`text-[9px] font-black ${dirColor}`}>{adjConf}% Confidence</span>
+            <div className="px-4 py-3 space-y-3">
+              {/* Header */}
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-bold text-gray-400 uppercase">5 Min Prediction</span>
+                <span className={`text-[10px] font-bold px-2 py-1 rounded ${dirColor} bg-black/40 border border-white/[0.05]`}>{adjConf}% CONFIDENCE</span>
               </div>
-              <div className={`rounded-lg border ${dirBorder} ${dirBg} px-2.5 py-2 mb-2`}>
+              
+              {/* Dual Confidence Display */}
+              <div className="grid grid-cols-2 gap-2">
+                <div className="bg-black/40 border border-white/[0.05] rounded-lg p-2.5">
+                  <div className="text-[9px] text-white/40 mb-1">CONFIDENCE</div>
+                  <div className={`text-[13px] font-bold ${dirColor} mb-1.5`}>{adjConf}%</div>
+                  <div className="h-1.5 bg-white/[0.05] rounded-full overflow-hidden">
+                    <div suppressHydrationWarning className={`h-full rounded-full transition-all duration-700 ${barColor}`} style={{ width: `${adjConf}%` }} />
+                  </div>
+                </div>
+                <div className="bg-black/40 border border-white/[0.05] rounded-lg p-2.5">
+                  <div className="text-[9px] text-white/40 mb-1">Market</div>
+                  <div className={`text-[13px] font-bold ${dirColor} mb-1.5`}>{actualMarketConf}%</div>
+                  <div className="h-1.5 bg-white/[0.05] rounded-full overflow-hidden">
+                    <div suppressHydrationWarning className={`h-full rounded-full transition-all duration-700 ${barColor}`} style={{ width: `${actualMarketConf}%` }} />
+                  </div>
+                </div>
+              </div>
+              
+              {/* Direction + Status */}
+              <div className={`rounded-lg border ${dirBorder} ${dirBg} px-3 py-2.5`}>
                 <div className="flex items-center justify-between gap-2 mb-1.5">
                   <span className={`text-sm font-black ${dirColor}`}>{dirIcon} {predDir}</span>
-                  <span className="text-[9px] text-white/30 truncate">{ctxNote}</span>
-                  <span className={`text-sm font-black ${dirColor} shrink-0`}>{adjConf}%</span>
+                  <span className="text-[9px] text-white/30 truncate flex-1">{ctxNote}</span>
                 </div>
                 <div className="h-[2px] bg-white/[0.06] rounded-full overflow-hidden">
                   <div suppressHydrationWarning className={`h-full rounded-full transition-all duration-700 ${barColor}`} style={{ width: `${adjConf}%` }} />
                 </div>
               </div>
-              <div className="grid grid-cols-3 gap-1.5">
-                <div className="text-center bg-black/30 border border-white/[0.05] rounded-lg p-2">
-                  <div className="text-[8px] text-white/30 mb-0.5">Pattern</div>
-                  <div className={`text-[10px] font-bold ${dirColor}`}>{data.pattern.type || '—'}</div>
+              
+              {/* Candle Momentum Indicators (4-row grid) */}
+              <div className="space-y-1.5 bg-gray-900/30 rounded-lg p-2.5">
+                <div className="flex items-center justify-between text-[9px]">
+                  <span className="text-white/40">Pattern Quality</span>
+                  <span className={`font-bold ${patternQualityColor}`}>{patternQuality} ({patConf}%)</span>
                 </div>
-                <div className="text-center bg-black/30 border border-white/[0.05] rounded-lg p-2">
-                  <div className="text-[8px] text-white/30 mb-0.5">Body</div>
-                  <div className={`text-[10px] font-bold ${data.body_analysis.body_ratio_pct >= 60 ? dirColor : 'text-amber-300'}`}>
-                    {Math.round(data.body_analysis.body_ratio_pct)}%
+                <div className="flex items-center justify-between text-[9px]">
+                  <span className="text-white/40">Body Conviction</span>
+                  <span className={`font-bold ${bodyTypeColor}`}>{bodyType} ({bodyRatio.toFixed(0)}%)</span>
+                </div>
+                <div className="flex items-center justify-between text-[9px]">
+                  <span className="text-white/40">Volume Quality</span>
+                  <span className={`font-bold ${volumeQualityColor}`}>{volumeQuality} ({vr.toFixed(1)}x)</span>
+                </div>
+                <div className="flex items-center justify-between text-[9px]">
+                  <span className="text-white/40">Wick Analysis</span>
+                  <span className={`font-bold ${wickTypeColor}`}>{wickType}</span>
+                </div>
+              </div>
+              
+              {/* Movement Probability Distribution */}
+              <div className="flex items-center gap-0.5 h-6 bg-black/30 rounded-lg p-1">
+                <div className="flex-1 h-full rounded" style={{
+                  background: isBuyCandle ? 'linear-gradient(to right, #0d9488, #14b8a6)' : 'transparent',
+                  opacity: isBuyCandle ? 0.8 : 0.2,
+                }} />
+                <div className="flex-1 h-full rounded" style={{
+                  background: isSellCandle ? 'linear-gradient(to right, #be123c, #e11d48)' : 'transparent',
+                  opacity: isSellCandle ? 0.8 : 0.2,
+                }} />
+              </div>
+              {isBuyCandle && (
+                <div className="text-[8px] text-center text-teal-300 font-bold">Bullish {Math.round((adjConf / 95) * 100)}% | Bearish {Math.round((100 - (adjConf / 95) * 100))}%</div>
+              )}
+              {isSellCandle && (
+                <div className="text-[8px] text-center text-rose-300 font-bold">Bullish {Math.round((100 - (adjConf / 95) * 100))}% | Bearish {Math.round((adjConf / 95) * 100)}%</div>
+              )}
+              {!isBuyCandle && !isSellCandle && (
+                <div className="text-[8px] text-center text-amber-300 font-bold">Uncertain — Balanced</div>
+              )}
+              
+              {/* Early Signal Detection */}
+              {showEarlySignal && (
+                <div className={`rounded-lg px-3 py-2 border-t-2 ${dirBorder}`}>
+                  <div className={`text-[11px] font-bold ${dirColor} text-center`}>
+                    ⚡ {adjConf >= 85 ? 'STRONG' : 'CONFIRMED'} {predDir} Signal Ready
                   </div>
                 </div>
-                <div className="text-center bg-black/30 border border-white/[0.05] rounded-lg p-2">
-                  <div className="text-[8px] text-white/30 mb-0.5">Volume</div>
-                  <div className={`text-[10px] font-bold ${vr >= 1.5 ? 'text-teal-300' : vr < 0.8 ? 'text-rose-300' : 'text-amber-300'}`}>
-                    {vr.toFixed(1)}x
-                  </div>
+              )}
+              
+              {/* Confirmation Summary */}
+              {confirms.length > 0 && (
+                <div className="flex flex-wrap gap-1.5">
+                  {confirms.map((conf, idx) => (
+                    <span key={idx} className="text-[9px] font-bold px-2 py-1 rounded bg-teal-500/30 text-teal-300 border border-teal-500/40">
+                      {conf}
+                    </span>
+                  ))}
                 </div>
+              )}
+              
+              {/* Summary Line */}
+              <div className={`text-center text-[10px] font-bold px-3 py-1.5 rounded-lg border ${dirBorder} ${dirBg} ${dirColor}`}>
+                {predDir} · {adjConf}% Pred · {actualMarketConf}% Market · {confirms.length} Confirms
               </div>
             </div>
           );
