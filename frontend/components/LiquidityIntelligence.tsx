@@ -374,9 +374,11 @@ MetricPill.displayName = 'MetricPill';
 // ── Header bar ────────────────────────────────────────────────────────────────
 
 const HeaderBar = memo(({ isConnected, lastUpdate }: { isConnected: boolean; lastUpdate: string | null }) => {
-  const statusDot = isConnected ? 'bg-cyan-400 shadow-cyan-400/70 shadow-sm animate-pulse' : 'bg-slate-600';
-  const statusLabel = isConnected ? 'LIVE' : 'OFFLINE';
-  const statusColor = isConnected ? 'text-cyan-400' : 'text-slate-500';
+  // Show as active if WebSocket is connected OR if we got a REST update in last 10 seconds
+  const hasRecentData = lastUpdate ? (Date.now() - new Date(lastUpdate).getTime()) < 10000 : false;
+  const isActive = isConnected || hasRecentData;
+  const statusDot = isActive ? 'bg-cyan-400 shadow-cyan-400/70 shadow-sm animate-pulse' : 'bg-slate-600';
+  const statusLabel = isActive ? 'LIVE' : 'OFFLINE';
 
   return (
     <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
@@ -387,7 +389,7 @@ const HeaderBar = memo(({ isConnected, lastUpdate }: { isConnected: boolean; las
           </span>
           <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5
                             text-[9px] font-bold tracking-widest border ${
-                            isConnected
+                            isActive
                               ? 'bg-cyan-500/15 text-cyan-300 border-cyan-500/40'
                               : 'bg-slate-700/40 text-slate-500 border-slate-700/40'
                           }`}>

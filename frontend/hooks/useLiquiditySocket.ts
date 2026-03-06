@@ -125,14 +125,22 @@ export function useLiquiditySocket() {
   const wsRef      = useRef<WebSocket | null>(null);
   const retryRef   = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pingRef    = useRef<ReturnType<typeof setInterval> | null>(null);
+  const pollRef    = useRef<ReturnType<typeof setInterval> | null>(null);
   const retryDelay = useRef(3000);
 
   const mergeData = useCallback((raw: Record<string, LiquidityIndex>) => {
     setLiquidityData(prev => {
       const next: LiquidityData = { ...prev };
+      let changed = false;
       for (const sym of ['NIFTY', 'BANKNIFTY', 'SENSEX'] as const) {
-        if (raw[sym]) next[sym] = raw[sym];
+        if (raw[sym]) {
+          // Create new object reference to ensure memo re-renders
+          // JSON.stringify+parse creates a deep clone with new refs
+          next[sym] = JSON.parse(JSON.stringify(raw[sym]));
+          changed = true;
+        }
       }
+      if (!changed) return prev; // No changes, don't trigger re-render
       saveToStorage(next);
       return next;
     });
@@ -152,6 +160,8 @@ export function useLiquiditySocket() {
     ws.onopen = () => {
       setIsConnected(true);
       retryDelay.current = 3000;
+      // Stop REST polling — WebSocket is live
+      if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
       pingRef.current = setInterval(() => {
         if (ws.readyState === WebSocket.OPEN)
           ws.send(JSON.stringify({ type: 'ping' }));
@@ -175,6 +185,17 @@ export function useLiquiditySocket() {
       if (pingRef.current) clearInterval(pingRef.current);
       retryDelay.current = Math.min(retryDelay.current * 1.5, 30000);
       retryRef.current = setTimeout(connect, retryDelay.current);
+      // Start REST polling fallback while WebSocket is down
+      if (!pollRef.current) {
+        pollRef.current = setInterval(() => {
+          fetch(getLiquidityApiUrl())
+            .then(r => r.json())
+            .then((json: { success?: boolean; data?: Record<string, LiquidityIndex> }) => {
+              if (json?.success && json.data) mergeData(json.data);
+            })
+            .catch(() => {});
+        }, 3000);
+      }
     };
 
     ws.onerror = () => ws.close();
@@ -196,6 +217,7 @@ export function useLiquiditySocket() {
     return () => {
       if (retryRef.current) clearTimeout(retryRef.current);
       if (pingRef.current)  clearInterval(pingRef.current);
+      if (pollRef.current)  clearInterval(pollRef.current);
       wsRef.current?.close();
     };
   }, [connect, mergeData]);

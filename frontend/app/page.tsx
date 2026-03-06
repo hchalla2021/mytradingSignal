@@ -826,11 +826,33 @@ export default function Home() {
     return () => clearInterval(interval);
   }, []);
 
-  // Determine market status from actual data (memoized)
+  // Determine market status from actual data, with client-side IST fallback
+  // so the UI never shows "MARKET CLOSED" when the Indian market is actually open
   const marketStatus = useMemo(() => {
-    const status = marketData.NIFTY?.status || marketData.BANKNIFTY?.status || marketData.SENSEX?.status || 'OFFLINE';
-    // Filter out 'DEMO' status as Header component doesn't expect it
-    return status === 'DEMO' ? 'OFFLINE' : status as 'LIVE' | 'OFFLINE' | 'CLOSED' | 'PRE_OPEN' | 'FREEZE';
+    const dataStatus = marketData.NIFTY?.status || marketData.BANKNIFTY?.status || marketData.SENSEX?.status;
+
+    // If we have a status from backend tick data, trust it (it uses server IST clock)
+    if (dataStatus && dataStatus !== 'DEMO') {
+      return dataStatus as 'LIVE' | 'OFFLINE' | 'CLOSED' | 'PRE_OPEN' | 'FREEZE';
+    }
+
+    // Fallback: compute market phase client-side using IST
+    // This prevents showing "MARKET CLOSED" when backend ticks haven't arrived yet
+    try {
+      const nowIST = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+      const day = nowIST.getDay(); // 0=Sun, 6=Sat
+      const h = nowIST.getHours();
+      const m = nowIST.getMinutes();
+      const mins = h * 60 + m; // minutes since midnight IST
+
+      if (day === 0 || day === 6) return 'CLOSED';       // weekends
+      if (mins >= 540 && mins < 555) return 'PRE_OPEN';  // 9:00-9:15
+      if (mins >= 555 && mins <= 930) return 'LIVE';      // 9:15-15:30
+    } catch {
+      // toLocaleString may fail in exotic envs; ignore
+    }
+
+    return 'OFFLINE';
   }, [marketData.NIFTY?.status, marketData.BANKNIFTY?.status, marketData.SENSEX?.status]);
 
   // Show loading until client is mounted to prevent hydration errors

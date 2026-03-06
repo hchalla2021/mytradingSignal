@@ -4,8 +4,10 @@ import time
 import os
 from typing import Optional, Dict, Any, List, Tuple
 from pathlib import Path
+from datetime import datetime
 
 from config import get_settings
+from services.persistent_market_state import PersistentMarketState
 
 settings = get_settings()
 
@@ -117,30 +119,84 @@ class CacheService:
         return len(keys_to_delete)
     
     async def set_market_data(self, symbol: str, data: Dict[str, Any]):
-        """Set market data for a symbol with proper TTL."""
-        # ✅ SIMPLE: Store market data with 5-second TTL
-        # NO complex fallback chains or file backups
-        # Market data should come from live sources only
-        await self.set(f"market:{symbol}", data, expire=5)
+        """
+        Set market data for a symbol with proper TTL.
+        Also saves to persistent storage for cross-closure availability.
+        """
+        # ✅ FIX: 30-second TTL prevents data disappearing during slow tick periods
+        # Old 5s TTL caused cache expiry between ticks → frontend showed OFFLINE/CLOSED
+        # 30s is safe: data is overwritten on every tick anyway (~every 0.5-2s)
+        await self.set(f"market:{symbol}", data, expire=30)
+        
+        # 🔥 SILENT PERSISTENCE: Save to persistent state WITHOUT disrupting live flow
+        # This runs in background - doesn't block market feed
+        try:
+            PersistentMarketState.save_market_state(symbol, data)
+        except Exception as e:
+            # Silently catch - don't disrupt market feed on persistence error
+            pass
     
     async def get_market_data(self, symbol: str) -> Optional[Dict[str, Any]]:
-        """Get market data for a symbol - simple, no fallbacks."""
-        # ✅ SIMPLE: Only return live cache data
-        # If cache is expired, return None (forces fresh fetch from Zerodha)
+        """
+        Get market data for a symbol with intelligent fallback.
+        
+        Priority:
+        1. Return live real-time data from in-memory cache (if available & fresh)
+        2. Return persistent last-known state if live data expired/unavailable
+        3. Return None only as last resort
+        
+        This ensures Live Market Indices always shows last known data 
+        across market closures, weekends, holidays.
+        """
+        # Try to get live data first
         data = await self.get(f"market:{symbol}")
         if data:
             return data
+        
+        # 🔥 INTELLIGENT FALLBACK: No live data? Use persistent cache
+        # This happens when:
+        # - Market is closed (no ticks coming in)
+        # - Zerodha token expired (WebSocket reconnecting)
+        # - First load (data not in memory yet)
+        persistent_data = PersistentMarketState.get_last_known_state(symbol)
+        if persistent_data:
+            return persistent_data
+        
+        # Last resort: no data available at all
         return None
     
     async def get_all_market_data(self) -> Dict[str, Dict[str, Any]]:
-        """Get all market data."""
+        """
+        Get all market data for all symbols with intelligent fallback.
+        Uses live data when available, falls back to persistent cache otherwise.
+        """
         symbols = ["NIFTY", "BANKNIFTY", "SENSEX"]
         result = {}
         for symbol in symbols:
+            # This now uses the intelligent fallback logic in get_market_data
             data = await self.get_market_data(symbol)
             if data:
                 result[symbol] = data
         return result
+    
+    def get_persistent_cache_info(self, symbol: str) -> Optional[Dict[str, Any]]:
+        """
+        Get metadata about the persistent cache for a symbol.
+        Useful for debugging / understanding data freshness.
+        """
+        last_update = PersistentMarketState.get_last_update_time(symbol)
+        time_since_update = PersistentMarketState.get_time_since_last_update(symbol)
+        
+        if last_update is None:
+            return None
+        
+        return {
+            'last_update_unix_time': last_update,
+            'last_update_datetime': datetime.fromtimestamp(last_update).isoformat(),
+            'seconds_since_update': round(time_since_update, 1) if time_since_update else None,
+            'minutes_since_update': round((time_since_update or 0) / 60, 1) if time_since_update else None,
+            'is_from_persistent_cache': True,
+        }
     
     async def setex(self, key: str, expire: int, value: str):
         """Set a value with expiration (Redis-compatible API)."""

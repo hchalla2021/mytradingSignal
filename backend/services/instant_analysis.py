@@ -2741,6 +2741,17 @@ async def get_instant_analysis(cache_service, symbol: str) -> Dict[str, Any]:
         else:
             result['_data_source'] = 'LIVE'
         
+        # 🔥 SILENT PERSISTENCE: Add cache metadata to response
+        # Helps frontend understand if data is from persistent cache (across closures)
+        try:
+            from services.cache import get_cache
+            cache = get_cache()
+            cache_info = cache.get_persistent_cache_info(symbol)
+            if cache_info:
+                result['_cache_info'] = cache_info
+        except Exception:
+            pass  # Silently skip cache info if error - don't disrupt response
+        
         return result
         
     except Exception as e:

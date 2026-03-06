@@ -185,6 +185,7 @@ const Header: React.FC<HeaderProps> = memo(({ isConnected, marketStatus }) => {
               const isPreOpen = marketStatus === 'PRE_OPEN' && isConnected;
               const isFreeze = marketStatus === 'FREEZE' && isConnected;
               const isMarketClosed = marketStatus === 'CLOSED';
+              const isOffline = marketStatus === 'OFFLINE';
               const isDisconnected = !isConnected;
 
               let statusConfig;
@@ -229,14 +230,24 @@ const Header: React.FC<HeaderProps> = memo(({ isConnected, marketStatus }) => {
                   textClass: 'text-amber-300',
                   label: 'MARKET CLOSED'
                 };
+              } else if (isOffline) {
+                // OFFLINE = connected to backend but no tick data yet
+                // Show "CONNECTING..." instead of misleading "MARKET CLOSED"
+                statusConfig = {
+                  bgClass: 'bg-gradient-to-r from-blue-500/10 to-cyan-500/10',
+                  borderClass: 'border-blue-400/30',
+                  dotClass: 'bg-blue-400 animate-pulse',
+                  textClass: 'text-blue-300',
+                  label: 'WAITING FOR DATA'
+                };
               } else {
                 // Default fallback - should never happen but ensures label is never blank
                 statusConfig = {
-                  bgClass: 'bg-gradient-to-r from-amber-500/10 to-orange-500/10',
-                  borderClass: 'border-amber-400/30',
-                  dotClass: 'bg-amber-400',
-                  textClass: 'text-amber-300',
-                  label: 'MARKET CLOSED'
+                  bgClass: 'bg-gradient-to-r from-blue-500/10 to-cyan-500/10',
+                  borderClass: 'border-blue-400/30',
+                  dotClass: 'bg-blue-400 animate-pulse',
+                  textClass: 'text-blue-300',
+                  label: 'WAITING FOR DATA'
                 };
               }
 

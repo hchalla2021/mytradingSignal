@@ -1,6 +1,7 @@
 """Zerodha KiteTicker market feed service."""
 import asyncio
 import threading
+import time as time_module
 from datetime import datetime, time
 from typing import Dict, Any, Optional
 from queue import Queue
@@ -32,6 +33,14 @@ MARKET_OPEN = market_config.MARKET_OPEN
 MARKET_CLOSE = market_config.MARKET_CLOSE
 
 
+# Track whether Zerodha is actively sending tick data.
+# When True, get_market_status() will override "CLOSED" → "LIVE"
+# during normal market hours (8:55-15:35 IST) so a wrong holiday entry
+# or timezone glitch can never block live data from reaching the UI.
+_zerodha_ticks_active: bool = False
+_zerodha_last_tick_time: float = 0.0
+
+
 def get_market_status() -> str:
     """Get current market status with detailed phases.
     
@@ -41,35 +50,43 @@ def get_market_status() -> str:
         - LIVE: Live market trading (9:15 AM - 3:30 PM)
         - CLOSED: Market closed (after 3:30 PM, weekends, holidays)
     
-    Note: During FREEZE period, cached data continues showing but no new updates.
+    If Zerodha is actively sending ticks during market hours,
+    this function trusts the exchange over local holiday/weekend config.
     """
-    # 🔥 CRITICAL: Always use IST timezone, never system timezone!
-    # If system is in UTC, this will give wrong results
+    global _zerodha_ticks_active, _zerodha_last_tick_time
+    
     now = datetime.now(IST)
     current_time = now.time()
     
     # Check if weekend (Saturday=5, Sunday=6)
-    if now.weekday() in market_config.WEEKEND_DAYS:
-        return "CLOSED"
+    is_weekend = now.weekday() in market_config.WEEKEND_DAYS
     
     # Check if holiday (using centralized configuration)
     date_str = now.strftime("%Y-%m-%d")
-    if is_holiday(date_str):
+    is_hol = is_holiday(date_str)
+    
+    # Normal market phase logic (when not weekend/holiday)
+    if not is_weekend and not is_hol:
+        if PRE_OPEN_START <= current_time < PRE_OPEN_END:
+            return "PRE_OPEN"
+        if PRE_OPEN_END <= current_time < MARKET_OPEN:
+            return "FREEZE"
+        if MARKET_OPEN <= current_time <= MARKET_CLOSE:
+            return "LIVE"
         return "CLOSED"
     
-    # Check market phases
-    # 🔥 FIX: Use <= for PRE_OPEN_END to handle exactly 9:15:00
-    if PRE_OPEN_START <= current_time < PRE_OPEN_END:
-        return "PRE_OPEN"
+    # It's marked as weekend or holiday — but check if Zerodha disagrees.
+    # If we received a tick in the last 120 seconds during plausible market hours,
+    # the exchange IS open despite our holiday list. Trust the exchange.
+    in_market_window = time(8, 55) <= current_time <= time(15, 35)
+    ticks_recent = (time_module.time() - _zerodha_last_tick_time) < 120
     
-    # 🔥 NEW: FREEZE phase (9:07-9:15 AM) - order matching in progress
-    # During this time, no new ticks are broadcast, cached data shows
-    if PRE_OPEN_END <= current_time < MARKET_OPEN:
-        return "FREEZE"
-    
-    # 🔥 FIX: Market is LIVE from exactly 9:15:00 onwards
-    if MARKET_OPEN <= current_time <= MARKET_CLOSE:
-        return "LIVE"
+    if in_market_window and _zerodha_ticks_active and ticks_recent:
+        # Zerodha is sending data — market IS open
+        if MARKET_OPEN <= current_time <= MARKET_CLOSE:
+            return "LIVE"
+        if PRE_OPEN_START <= current_time < MARKET_OPEN:
+            return "PRE_OPEN"
     
     return "CLOSED"
 
@@ -147,8 +164,7 @@ class MarketFeedService:
         if not self.last_update_time:
             return False
         
-        import time
-        current_time = time.time()
+        current_time = time_module.time()
         most_recent_update = max(self.last_update_time.values()) if self.last_update_time else 0
         
         # Consider connected if we got data in the last 60 seconds
@@ -166,8 +182,7 @@ class MarketFeedService:
         - symbols_with_data: list
         - symbols_without_data: list
         """
-        import time
-        current_time = time.time()
+        current_time = time_module.time()
         
         symbols_with_data = []
         symbols_without_data = []
@@ -316,6 +331,11 @@ class MarketFeedService:
     
     def _on_ticks(self, ws, ticks):
         """Callback when ticks are received (runs in KiteTicker thread)."""
+        global _zerodha_ticks_active, _zerodha_last_tick_time
+        # Mark that Zerodha is actively sending data
+        _zerodha_ticks_active = True
+        _zerodha_last_tick_time = time_module.time()
+        
         for tick in ticks:
             try:
                 data = self._normalize_tick(tick)
@@ -340,11 +360,12 @@ class MarketFeedService:
                 # - Market status (transitions at 9:15 AM, 3:30 PM) - CRITICAL!
                 # - Timestamp (keeps data fresh)
                 market_status = get_market_status()
+                data["status"] = market_status  # Ensure tick carries correct status
+                
                 is_market_phase = market_status in ("PRE_OPEN", "FREEZE", "LIVE")
                 
                 # ⚡ INTELLIGENT RATE LIMITING: Allow bursts during critical transitions
-                import time
-                current_time = time.time()
+                current_time = time_module.time()
                 last_update = self.last_update_time.get(symbol, 0)
                 time_since_last_update = current_time - last_update
                 
@@ -366,15 +387,11 @@ class MarketFeedService:
                     self.last_prices[symbol] = data["price"]
                     self.last_update_time[symbol] = current_time
                     
-                    # 🔥 NEW: Only broadcast if NOT in FREEZE period (9:07-9:15 AM)
-                    # During FREEZE, update cache but don't broadcast to avoid confusing UI
-                    if market_status != "FREEZE":
-                        # Put tick in queue for async processing
-                        self._tick_queue.put(data)
-                    else:
-                        # During FREEZE: Update cache silently, no UI broadcast
-                        # This keeps cache fresh for when LIVE resumes
-                        asyncio.create_task(self.cache.set_market_data(symbol, data))
+                    # 🔥 CRITICAL FIX: ALWAYS broadcast ticks during ALL market phases
+                    # Previously FREEZE was blocked, causing "Market Closed" on frontend
+                    # because no data reached clients → status fell back to OFFLINE.
+                    # Traders need to see pre-open prices during FREEZE too.
+                    self._tick_queue.put(data)
                     
             except Exception as e:
                 print(f"❌ Error processing tick: {e}")
@@ -385,9 +402,8 @@ class MarketFeedService:
         """Update cache and broadcast to WebSocket clients."""
         symbol = data["symbol"]
         
-        # 🔥 CRITICAL FIX: ALWAYS recalculate market status for EVERY broadcast
-        # This prevents freezing at 9:15 AM PRE_OPEN → LIVE transition
-        # Status MUST be fresh, never cached
+        # Recalculate market status fresh for every broadcast
+        # get_market_status() already handles Zerodha override via _zerodha_ticks_active
         current_status = get_market_status()
         old_status = data.get("status", "UNKNOWN")
         data["status"] = current_status
@@ -408,8 +424,7 @@ class MarketFeedService:
             pcr_service = get_pcr_service()
             
             # Add small delay based on symbol to stagger requests
-            import time
-            current_second = int(time.time()) % 30
+            current_second = int(time_module.time()) % 30
             stagger_map = {"NIFTY": 0, "BANKNIFTY": 10, "SENSEX": 20}
             expected_second = stagger_map.get(symbol, 0)
             
@@ -468,9 +483,8 @@ class MarketFeedService:
             import pytz
             
             # 🔥 SMART CACHING: Reduced to 1 second during trading for real-time trading signals
-            # This prevents analysis calculation delays while keeping signals responsive
-            market_status = get_market_status()
-            is_trading = market_status == "LIVE"
+            # Use data["status"] which already has the Zerodha override applied
+            is_trading = data.get("status") == "LIVE"
             
             # Determine cache expiry - SHORTER for trading signals to appear live
             cache_ttl = 1 if is_trading else 60  # 1s during market hours (fast updates), 60s outside
@@ -514,16 +528,14 @@ class MarketFeedService:
                             pass  # Non-critical: if cache write fails, just continue
                     
                     # Log only occasionally to reduce spam
-                    import time
-                    if int(time.time()) % 5 == 0:  # Log every 5 seconds for this symbol
+                    if int(time_module.time()) % 5 == 0:  # Log every 5 seconds for this symbol
                         print(f"✅ Analysis generated for {symbol}: signal={analysis_result.get('signal')}, confidence={analysis_result.get('confidence'):.0f}%")
                 else:
                     print(f"⚠️ Analysis returned None for {symbol}")
                     data["analysis"] = None
             else:
                 # Using cached analysis - log sparingly
-                import time
-                if int(time.time()) % 10 == 0:  # Log every 10 seconds
+                if int(time_module.time()) % 10 == 0:  # Log every 10 seconds
                     print(f"♻️ Using cached analysis for {symbol} (TTL: {cache_ttl}s)")
                     
         except Exception as e:
@@ -537,7 +549,6 @@ class MarketFeedService:
         
         # Broadcast to WebSocket with analysis included
         # 🔥 DEBUG: Log analysis structure before broadcast
-        import time as time_module
         if int(time_module.time()) % 10 == 0 and symbol == 'NIFTY':  # Log every 10 seconds
             if data.get("analysis"):
                 analysis = data["analysis"]
@@ -1177,10 +1188,9 @@ class MarketFeedService:
                         print(f"❌ Error broadcasting tick: {e}")
                 
                 # 🔥 HEARTBEAT CHECK: Detect stale connections (no ticks for 30+ seconds during market hours)
-                import time
                 market_status = get_market_status()
                 if market_status in ("PRE_OPEN", "FREEZE", "LIVE"):
-                    current_time = time.time()
+                    current_time = time_module.time()
                     if self.last_update_time:
                         most_recent = max(self.last_update_time.values())
                         time_since_tick = current_time - most_recent

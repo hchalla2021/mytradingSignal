@@ -253,6 +253,7 @@ async def _calc_oi_momentum(symbol: str) -> dict:
 
     if not candles_json or len(candles_json) < oi_momentum_service.min_candles_required:
         return {
+            "symbol": symbol,
             "signal_5m": "NO_SIGNAL",
             "signal_15m": "NO_SIGNAL",
             "final_signal": "NO_SIGNAL",
@@ -305,6 +306,7 @@ async def _calc_oi_momentum(symbol: str) -> dict:
 
     return {
         **signal_data,
+        "symbol": symbol,
         "symbol_name":   SYMBOL_MAPPING.get(symbol, {}).get("name", symbol),
         "current_price": current_price,
     }
@@ -374,6 +376,7 @@ async def get_oi_momentum_symbol(symbol: str):
     except Exception as e:
         import traceback; traceback.print_exc()
         return {
+            "symbol": symbol,
             "signal_5m": "NO_SIGNAL", "signal_15m": "NO_SIGNAL", "final_signal": "NO_SIGNAL",
             "confidence": 0,
             "reasons": [f"Error: {str(e)[:100]}"],
@@ -969,6 +972,83 @@ async def get_candle_quality(symbol: str):
             "current_volume": 0,
             "timestamp": datetime.now().isoformat(),
             "error": str(e)
+        }
+
+
+@router.get("/cache-status/all")
+async def get_cache_status_all():
+    """
+    Get persistent cache status for all symbols.
+    Shows last update time and data freshness.
+    Useful for understanding data source across market closures.
+    
+    Response includes:
+    - last_update_unix_time: When the data was last updated
+    - last_update_datetime: Human-readable timestamp
+    - seconds_since_update: How fresh the data is
+    - is_from_persistent_cache: Whether backend is using cached data
+    """
+    try:
+        from services.persistent_market_state import PersistentMarketState
+        
+        cache = get_cache()
+        symbols = ["NIFTY", "BANKNIFTY", "SENSEX"]
+        
+        result = {}
+        for symbol in symbols:
+            cache_info = cache.get_persistent_cache_info(symbol)
+            if cache_info:
+                result[symbol] = cache_info
+            else:
+                result[symbol] = {
+                    "status": "no_persistent_cache",
+                    "message": "No cached data available yet"
+                }
+        
+        return {
+            "symbols": result,
+            "timestamp": datetime.now().isoformat(),
+            "note": "Shows when last market data was cached. Helps understand data freshness across market closures."
+        }
+        
+    except Exception as e:
+        print(f"❌ Error getting cache status: {e}")
+        return {
+            "error": str(e),
+            "timestamp": datetime.now().isoformat()
+        }
+
+
+@router.get("/cache-status/{symbol}")
+async def get_cache_status_symbol(symbol: str):
+    """Get persistent cache status for a specific symbol."""
+    try:
+        if symbol not in SYMBOL_MAPPING:
+            return {"error": f"Unknown symbol: {symbol}"}
+        
+        cache = get_cache()
+        cache_info = cache.get_persistent_cache_info(symbol)
+        
+        if cache_info:
+            return {
+                "symbol": symbol,
+                **cache_info,
+                "timestamp": datetime.now().isoformat()
+            }
+        else:
+            return {
+                "symbol": symbol,
+                "status": "no_persistent_cache",
+                "message": "No cached data available yet",
+                "timestamp": datetime.now().isoformat()
+            }
+        
+    except Exception as e:
+        print(f"❌ Error getting cache status for {symbol}: {e}")
+        return {
+            "symbol": symbol,
+            "error": str(e),
+            "timestamp": datetime.now().isoformat()
         }
 
 
