@@ -92,6 +92,12 @@ const getCandleSignal = (data: CandleIntentData): string => {
   // Use professional signal as base, but validate with pattern
   const profSignal = professional_signal || 'NEUTRAL';
   
+  // Defensive checks for undefined data
+  if (!body_analysis || !wick_analysis || !volume_analysis) {
+    return profSignal === 'STRONG_BUY' ? 'STRONG BUY' : profSignal === 'STRONG_SELL' ? 'STRONG SELL' : 
+           profSignal === 'BUY' ? 'BUY' : profSignal === 'SELL' ? 'SELL' : 'SIDEWAYS';
+  }
+  
   // Strong signals when all factors align
   if (profSignal === 'STRONG_BUY' && pattern.confidence >= 70 && body_analysis.is_bullish) {
     return 'STRONG BUY';
@@ -122,6 +128,11 @@ const getCandleSignal = (data: CandleIntentData): string => {
 // Helper: Calculate realistic confidence (35-85%)
 const calculateCandleConfidence = (data: CandleIntentData): number => {
   let confidence = 50; // Base
+  
+  // Defensive check: if critical data is missing, return base confidence
+  if (!data.body_analysis || !data.wick_analysis || !data.volume_analysis || !data.pattern) {
+    return confidence;
+  }
   
   // Pattern confidence (25% weight)
   const patternConf = data.pattern.confidence;
@@ -198,6 +209,18 @@ function computeCandlePrediction(data: CandleIntentData, overallConf: number): C
   const pat    = data.pattern;
   const prof   = (data.professional_signal ?? 'NEUTRAL').toUpperCase();
   const isTrap = data.trap_status?.is_trap ?? false;
+
+  // Defensive: if critical data is missing, return neutral prediction
+  if (!body || !wick || !vol || !pat) {
+    return {
+      score: 0,
+      label: 'INSUFFICIENT DATA',
+      color: 'text-white/50',
+      confidence: 35,
+      upConf: 35,
+      downConf: 35,
+    };
+  }
 
   let score = 0;
 
@@ -395,41 +418,41 @@ const CandleIntentCard = memo<CandleIntentCardProps>(({ symbol, name }) => {
         <div className="bg-[#0d1117] border border-white/[0.06] p-2.5 rounded-lg">
           <div className="text-[9px] text-white/35 uppercase tracking-widest mb-1">Pattern</div>
           <div className={`text-sm font-bold truncate ${
-            data.pattern.intent === 'BULLISH' ? 'text-teal-300' :
-            data.pattern.intent === 'BEARISH' ? 'text-rose-300' : 'text-amber-300'
-          }`}>{data.pattern.type}</div>
-          <div className="text-[9px] text-white/35 mt-0.5">{data.pattern.confidence}% conf</div>
+            data.pattern?.intent === 'BULLISH' ? 'text-teal-300' :
+            data.pattern?.intent === 'BEARISH' ? 'text-rose-300' : 'text-amber-300'
+          }`}>{data.pattern?.type || 'UNKNOWN'}</div>
+          <div className="text-[9px] text-white/35 mt-0.5">{data.pattern?.confidence || 0}% conf</div>
         </div>
         {/* Body */}
         <div className="bg-[#0d1117] border border-white/[0.06] p-2.5 rounded-lg">
           <div className="text-[9px] text-white/35 uppercase tracking-widest mb-1">Body</div>
-          <div className={`text-sm font-bold ${data.body_analysis.is_bullish ? 'text-teal-300' : 'text-rose-300'}`}>
-            {data.body_analysis.is_bullish ? 'Bullish' : 'Bearish'}
+          <div className={`text-sm font-bold ${data.body_analysis?.is_bullish ? 'text-teal-300' : 'text-rose-300'}`}>
+            {data.body_analysis?.is_bullish ? 'Bullish' : 'Bearish'}
           </div>
-          <div className="text-[9px] text-white/35 mt-0.5">{data.body_analysis.body_ratio_pct.toFixed(0)}% ratio</div>
+          <div className="text-[9px] text-white/35 mt-0.5">{(data.body_analysis?.body_ratio_pct ?? 0).toFixed(0)}% ratio</div>
         </div>
         {/* Volume */}
         <div className="bg-[#0d1117] border border-white/[0.06] p-2.5 rounded-lg">
           <div className="text-[9px] text-white/35 uppercase tracking-widest mb-1">Volume</div>
           <div className={`text-sm font-bold ${
-            data.volume_analysis.volume_ratio >= 1.5 ? 'text-teal-300' :
-            data.volume_analysis.volume_ratio >= 1.0 ? 'text-amber-300' : 'text-rose-300'
-          }`}>{data.volume_analysis.volume_ratio.toFixed(2)}x</div>
-          <div className="text-[9px] text-white/35 mt-0.5">{formatVolume(data.current_candle.volume)}</div>
+            (data.volume_analysis?.volume_ratio ?? 0) >= 1.5 ? 'text-teal-300' :
+            (data.volume_analysis?.volume_ratio ?? 0) >= 1.0 ? 'text-amber-300' : 'text-rose-300'
+          }`}>{(data.volume_analysis?.volume_ratio ?? 0).toFixed(2)}x</div>
+          <div className="text-[9px] text-white/35 mt-0.5">{formatVolume(data.current_candle?.volume || 0)}</div>
         </div>
         {/* Wick */}
         <div className="bg-[#0d1117] border border-white/[0.06] p-2.5 rounded-lg">
           <div className="text-[9px] text-white/35 uppercase tracking-widest mb-1">Wick</div>
           <div className={`text-sm font-bold ${
-            data.wick_analysis.dominant_wick === 'LOWER' ? 'text-teal-300' :
-            data.wick_analysis.dominant_wick === 'UPPER' ? 'text-rose-300' : 'text-white/50'
+            data.wick_analysis?.dominant_wick === 'LOWER' ? 'text-teal-300' :
+            data.wick_analysis?.dominant_wick === 'UPPER' ? 'text-rose-300' : 'text-white/50'
           }`}>
-            {data.wick_analysis.dominant_wick === 'LOWER' ? 'Lower' :
-             data.wick_analysis.dominant_wick === 'UPPER' ? 'Upper' : 'Balanced'}
+            {data.wick_analysis?.dominant_wick === 'LOWER' ? 'Lower' :
+             data.wick_analysis?.dominant_wick === 'UPPER' ? 'Upper' : 'Balanced'}
           </div>
           <div className="text-[9px] text-white/35 mt-0.5">
-            {data.wick_analysis.dominant_wick === 'LOWER' ? 'Bulls rejecting' :
-             data.wick_analysis.dominant_wick === 'UPPER' ? 'Bears rejecting' : 'No rejection'}
+            {data.wick_analysis?.dominant_wick === 'LOWER' ? 'Bulls rejecting' :
+             data.wick_analysis?.dominant_wick === 'UPPER' ? 'Bears rejecting' : 'No rejection'}
           </div>
         </div>
       </div>

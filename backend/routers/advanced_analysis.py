@@ -5,7 +5,7 @@ Ultra-fast endpoints for Volume Pulse and Trend Base analysis
 Performance: <10ms response time with caching
 """
 
-from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect, Header
 from typing import Dict, Any
 import asyncio
 from datetime import datetime, timezone
