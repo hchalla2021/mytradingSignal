@@ -894,12 +894,10 @@ export default function Home() {
 
           {/* Header */}
           <div className="px-4 sm:px-5 py-2.5 flex flex-wrap items-center gap-2 sm:gap-3 bg-white/[0.015] border-b border-white/[0.06]">
-            {/* Left: Title */}
             <div className="flex items-center gap-2.5">
               <span className="w-[3px] h-5 rounded-full bg-gradient-to-b from-teal-300 to-teal-600 shadow-[0_0_8px_2px] shadow-teal-500/40" />
               <span className="text-xs sm:text-sm font-black text-white tracking-tight">Overall Market Outlook</span>
             </div>
-            {/* VIX Badge */}
             <IndiaVIXBadge
               value={vixData.value}
               changePercent={vixData.changePercent}
@@ -907,7 +905,6 @@ export default function Home() {
               marketFearScore={vixData.marketFearScore}
               loading={vixLoading}
             />
-            {/* Right: meta */}
             <div className="flex items-center gap-2 ml-auto">
               <span className="hidden sm:inline text-[9px] text-white/60 font-bold">17 Signals</span>
               <span className="w-1.5 h-1.5 rounded-full bg-teal-400 animate-pulse" />
@@ -915,112 +912,98 @@ export default function Home() {
             </div>
           </div>
 
-          {/* Desktop column labels */}
-          <div className="hidden sm:grid grid-cols-[130px_1fr] gap-3 px-5 py-1.5 border-b border-white/[0.04] bg-black/20">
-            <span />
-            <div className="flex items-center justify-center gap-3">
-              <div className="flex items-center gap-1.5">
-                <span className="w-[5px] h-[5px] rounded-full bg-white/15" />
-                <span className="text-[10px] text-white font-bold uppercase tracking-[0.14em]">17 Signals Confidence</span>
-              </div>
-              <span className="text-white/10">|</span>
-              <div className="flex items-center gap-1.5">
-                <span className="w-[5px] h-[5px] rounded-full bg-cyan-400/30" />
-                <span className="text-[10px] text-cyan-300/60 font-bold uppercase tracking-[0.14em]">5-Min Prediction</span>
-              </div>
-            </div>
-          </div>
-
-          {/* Index rows */}
-          <div suppressHydrationWarning className="flex flex-col gap-2 p-2">
+          {/* Index Cards */}
+          <div suppressHydrationWarning className="grid grid-cols-1 lg:grid-cols-3 gap-2.5 p-3">
             {(['NIFTY','BANKNIFTY','SENSEX'] as const).map((sym) => {
               const s = aggregatedMarketSignal[sym];
               const isBull = s.buyPercent >= 55, isBear = s.sellPercent >= 55;
 
-              // 14-Signals derived
               const accentDot = isBull ? 'bg-teal-400 shadow-teal-400/60' : isBear ? 'bg-rose-400 shadow-rose-400/60' : 'bg-amber-400 shadow-amber-400/60';
-              const sigPill   = isBull ? 'text-teal-300 border-teal-400/25 bg-teal-500/[0.07]' : isBear ? 'text-rose-300 border-rose-400/25 bg-rose-500/[0.07]' : 'text-amber-300 border-amber-400/25 bg-amber-500/[0.07]';
+              const sigPill   = isBull ? 'text-teal-300 border-teal-400/30 bg-teal-500/15' : isBear ? 'text-rose-300 border-rose-400/30 bg-rose-500/15' : 'text-amber-300 border-amber-400/30 bg-amber-500/15';
               const name      = sym === 'NIFTY' ? 'NIFTY 50' : sym === 'BANKNIFTY' ? 'BANK NIFTY' : 'SENSEX';
 
-              // 5-Min prediction derived
               const p5 = { conf: s.pred5mConf, buyPct: s.pred5mBuyPct, dir: s.pred5mDir };
               const p5SellPct = 100 - p5.buyPct;
               const p5Bull = p5.dir === 'UP', p5Bear = p5.dir === 'DOWN';
               const p5DirIcon = p5Bull ? '▲' : p5Bear ? '▼' : '◆';
               const p5DirColor = p5Bull ? 'text-teal-400' : p5Bear ? 'text-rose-400' : 'text-amber-400';
-              const p5DirBg = p5Bull ? 'bg-teal-500/10 border-teal-500/25' : p5Bear ? 'bg-rose-500/10 border-rose-500/25' : 'bg-amber-500/10 border-amber-500/25';
-              const p5ConfColor = p5Bull ? (p5.conf >= 70 ? 'text-teal-300' : p5.conf >= 55 ? 'text-teal-400' : 'text-amber-400')
-                : p5Bear ? (p5.conf >= 70 ? 'text-rose-300' : p5.conf >= 55 ? 'text-rose-400' : 'text-amber-400')
-                : 'text-amber-400';
+              const p5ConfColor = p5Bull ? 'text-teal-300' : p5Bear ? 'text-rose-300' : 'text-amber-300';
               const p5Signal = p5Bull ? (p5.buyPct >= 65 ? 'STRONG BUY' : 'BUY') : p5Bear ? (p5SellPct >= 65 ? 'STRONG SELL' : 'SELL') : 'NEUTRAL';
               const p5SigColor = p5Bull ? 'text-teal-300 border-teal-400/20 bg-teal-500/[0.06]' : p5Bear ? 'text-rose-300 border-rose-400/20 bg-rose-500/[0.06]' : 'text-amber-300 border-amber-400/20 bg-amber-500/[0.06]';
 
+              const cardBorder = isBull ? 'border-teal-500/20 hover:border-teal-500/35' : isBear ? 'border-rose-500/20 hover:border-rose-500/35' : 'border-white/[0.08] hover:border-white/[0.14]';
+              const cardBg = isBull ? 'bg-teal-500/[0.03]' : isBear ? 'bg-rose-500/[0.03]' : 'bg-white/[0.015]';
+
               return (
                 <div key={sym} suppressHydrationWarning
-                  className={`grid grid-cols-1 sm:grid-cols-[130px_1fr] gap-2 sm:gap-3 px-4 sm:px-5 py-3 sm:py-3.5 rounded-xl border transition-colors duration-150
-                    ${ isBull ? 'border-teal-500/30 bg-teal-500/[0.04] hover:bg-teal-500/[0.07] shadow-[0_0_12px_0px_rgba(20,184,166,0.06)]'
-                      : isBear ? 'border-rose-500/30 bg-rose-500/[0.04] hover:bg-rose-500/[0.07] shadow-[0_0_12px_0px_rgba(244,63,94,0.06)]'
-                      : 'border-amber-500/20 bg-amber-500/[0.025] hover:bg-amber-500/[0.05] shadow-[0_0_12px_0px_rgba(245,158,11,0.04)]' }`}>
+                  className={`rounded-xl border overflow-hidden transition-all duration-200 flex flex-col ${cardBorder} ${cardBg}`}>
 
-                  {/* Index name + signal */}
-                  <div className="flex sm:flex-col items-center sm:items-start justify-between sm:justify-center gap-2 sm:gap-2">
-                    <div className="flex items-center gap-2">
-                      <span className={`w-2 h-2 rounded-full shrink-0 shadow-[0_0_6px_2px] ${accentDot}`} />
-                      <span className="text-[12px] font-black text-white tracking-tight">{name}</span>
+                  {/* Card Header — index name + signal pill */}
+                  <div className="flex items-center justify-between px-4 py-3 border-b border-white/[0.05]">
+                    <div className="flex items-center gap-2.5">
+                      <span className={`w-2.5 h-2.5 rounded-full shrink-0 shadow-[0_0_6px_2px] ${accentDot}`} />
+                      <span className="text-sm font-black text-white tracking-tight px-3 py-1.5 rounded-md border border-emerald-400/30 bg-emerald-500/[0.08]">{name}</span>
                     </div>
-                    <span suppressHydrationWarning className={`text-[8px] font-black px-2 py-0.5 rounded-full border tracking-wide ${sigPill}`}>
+                    <span suppressHydrationWarning className={`text-[11px] font-black px-3 py-1.5 rounded-md border tracking-wider min-w-[58px] text-center ${sigPill}`}>
                       {s.signal.replace('_', ' ')}
                     </span>
                   </div>
 
-                  {/* Right column — stacked bars */}
-                  <div className="flex flex-col gap-2">
-                    {/* ── 17 Signals Confidence ── */}
-                    <div className="rounded-xl border border-white/[0.06] bg-white/[0.025] px-3 py-2.5">
-                      <div className="h-[7px] rounded-full overflow-hidden flex bg-white/[0.06] mb-1.5">
-                        <div suppressHydrationWarning className="bg-gradient-to-r from-teal-700 to-teal-400 transition-all duration-700 ease-out" style={{ width: `${s.buyPercent}%` }} />
-                        <div suppressHydrationWarning className="bg-gradient-to-r from-rose-400 to-rose-700 flex-1" />
-                      </div>
-                      <div className="flex justify-between text-[11px] font-bold">
-                        <span suppressHydrationWarning className="text-teal-400">▲ {s.buyPercent}% BUY</span>
-                        <span suppressHydrationWarning className="text-rose-400">SELL {s.sellPercent}% ▼</span>
-                      </div>
+                  {/* 17 Signals Confidence */}
+                  <div className="px-4 pt-3.5 pb-3 flex-1">
+                    <div className="mb-2.5">
+                      <span className="text-[10px] font-bold text-white/40 uppercase tracking-[0.15em]">17 Signals</span>
                     </div>
+                    <div suppressHydrationWarning className="h-2.5 rounded-full overflow-hidden flex bg-white/[0.06] mb-3">
+                      <div className="bg-gradient-to-r from-teal-700 to-teal-400 transition-all duration-700 ease-out" style={{ width: `${s.buyPercent}%` }} />
+                      <div className="bg-gradient-to-r from-rose-400 to-rose-700 flex-1" />
+                    </div>
+                    <div className="flex items-center justify-between text-[12px] font-bold">
+                      <span suppressHydrationWarning className="text-teal-400 tabular-nums">
+                        <span className="text-white/30 mr-1.5">BUY</span>
+                        <span className="inline-block min-w-[32px] text-left">{s.buyPercent}%</span>
+                        <span className="ml-1">▲</span>
+                      </span>
+                      <span suppressHydrationWarning className="text-rose-400 tabular-nums">
+                        <span className="mr-1">▼</span>
+                        <span className="inline-block min-w-[32px] text-right">{s.sellPercent}%</span>
+                        <span className="text-white/30 ml-1.5">SELL</span>
+                      </span>
+                    </div>
+                  </div>
 
-                    {/* ── 5-Min Prediction ── */}
-                    <div className={`rounded-xl border px-3 py-2.5 ${p5DirBg}`}>
-                      {/* Header row: label + direction + signal + confidence */}
-                      <div className="flex items-center justify-between mb-1.5">
-                        <div className="flex items-center gap-1.5">
-                          <span className="text-[9px] font-black text-white/50 uppercase tracking-widest">5-Min Prediction</span>
-                          <span className={`text-[10px] font-black ${p5DirColor}`}>{p5DirIcon} {p5.dir}</span>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <span suppressHydrationWarning className={`text-[8px] font-black px-1.5 py-0.5 rounded-full border ${p5SigColor}`}>
-                            {p5Signal}
-                          </span>
-                          <span suppressHydrationWarning className={`text-[11px] font-black tabular-nums ${p5ConfColor}`}>
-                            {p5.conf}%
-                          </span>
-                        </div>
+                  {/* 5-Min Forecast */}
+                  <div className="mx-3 mb-3 rounded-lg border border-dashed border-white/[0.08] bg-black/25 px-3.5 py-3">
+                    <div className="flex items-center justify-between mb-2.5">
+                      <div className="flex items-center gap-2">
+                        <span className="text-[10px] font-bold text-cyan-300/50 uppercase tracking-[0.12em]">5-Min</span>
+                        <span suppressHydrationWarning className={`text-[12px] font-black min-w-[50px] ${p5DirColor}`}>{p5DirIcon} {p5.dir}</span>
                       </div>
-                      {/* Buy/Sell bar */}
-                      <div className="h-[5px] rounded-full overflow-hidden flex bg-white/[0.06] mb-1">
-                        <div suppressHydrationWarning className="bg-gradient-to-r from-teal-600 to-teal-400 transition-all duration-700 ease-out" style={{ width: `${p5.buyPct}%` }} />
-                        <div suppressHydrationWarning className="bg-gradient-to-r from-rose-400 to-rose-600 flex-1" />
-                      </div>
-                      <div className="flex justify-between text-[10px] font-bold">
-                        <span suppressHydrationWarning className="text-teal-400/80">▲ {p5.buyPct}% BUY</span>
-                        <span suppressHydrationWarning className="text-rose-400/80">SELL {p5SellPct}% ▼</span>
-                      </div>
+                      <span suppressHydrationWarning className={`text-[10px] font-black px-2 py-1 rounded border min-w-[72px] text-center ${p5SigColor}`}>
+                        {p5Signal}
+                      </span>
+                    </div>
+                    <div suppressHydrationWarning className="h-[6px] rounded-full overflow-hidden flex bg-white/[0.06] mb-2.5">
+                      <div className="bg-gradient-to-r from-teal-600 to-teal-400 transition-all duration-700 ease-out" style={{ width: `${p5.buyPct}%` }} />
+                      <div className="bg-gradient-to-r from-rose-400 to-rose-600 flex-1" />
+                    </div>
+                    <div className="flex items-center justify-between text-[11px] font-bold">
+                      <span suppressHydrationWarning className="text-teal-400/80 tabular-nums">
+                        <span className="text-white/25 mr-1.5">BUY</span>
+                        <span className="inline-block min-w-[32px] text-left">{p5.buyPct}%</span>
+                        <span className="ml-1">▲</span>
+                      </span>
+                      <span suppressHydrationWarning className="text-rose-400/80 tabular-nums">
+                        <span className="mr-1">▼</span>
+                        <span className="inline-block min-w-[32px] text-right">{p5SellPct}%</span>
+                        <span className="text-white/25 ml-1.5">SELL</span>
+                      </span>
                     </div>
                   </div>
 
                 </div>
               );
             })}
-
-
           </div>
         </div>
       </div>
