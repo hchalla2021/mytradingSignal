@@ -53,8 +53,7 @@ class AuthStateManager:
     def _check_and_load_token(self):
         """Check for existing token and determine initial state"""
         try:
-            # Always reload settings to get latest token from .env
-            get_settings.cache_clear()
+            # Reload settings to get latest token from .env
             self._settings = get_settings()
             
             token = self._settings.zerodha_access_token
@@ -166,6 +165,7 @@ class AuthStateManager:
         """Force re-check token from .env file (called after login)"""
         print("🔄 AUTH STATE: Force re-checking token...")
         self._consecutive_failures = 0
+        get_settings.cache_clear()
         self._check_and_load_token()
     
     def get_token_age_hours(self) -> Optional[float]:

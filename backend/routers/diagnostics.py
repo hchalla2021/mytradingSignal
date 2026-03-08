@@ -9,7 +9,6 @@ from services.auth_state_machine import auth_state_manager
 from config import get_settings
 import json
 from datetime import datetime
-import pandas as pd
 
 router = APIRouter(prefix="/api/diagnostics", tags=["Diagnostics"])
 
@@ -247,6 +246,7 @@ async def oi_momentum_debug():
                         continue
                     
                     # Build dataframes
+                    import pandas as pd
                     df_5m = pd.DataFrame(candles)
                     
                     # Build 15-minute DataFrame

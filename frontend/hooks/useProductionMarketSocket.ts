@@ -80,8 +80,12 @@ export function useProductionMarketSocket(): UseProductionMarketSocket {
       if (parsedData && typeof parsedData === 'object') {
         setLastTickTime(Date.now());
         setTickCount(prev => prev + 1);
-        setStatus('LIVE');
-        setMessage('');
+        
+        // Transition from SUBSCRIBED to LIVE on first tick
+        if (status !== 'LIVE') {
+          setStatus('LIVE');
+          setMessage('');
+        }
         
         setData(prev => ({
           ...prev,
@@ -89,68 +93,132 @@ export function useProductionMarketSocket(): UseProductionMarketSocket {
         }));
       }
     } catch (err) {
-      // Ignore parse errors
+      // Ignore parse errors for non-JSON messages
+      console.debug('WebSocket message parse error');
     }
-  }, []);
+  }, [status]);
 
   const reconnect = useCallback(() => {
     if (reconnectAttempts.current > 5) {
       setStatus('FAILED');
-      setMessage('Max reconnection attempts reached');
+      setMessage('Max reconnection attempts reached - please refresh');
       return;
     }
 
     reconnectAttempts.current++;
     setStatus('RECONNECTING');
+    setMessage(`Reconnecting (attempt ${reconnectAttempts.current}/5)...`);
 
     if (reconnectTimeout.current) {
       clearTimeout(reconnectTimeout.current);
     }
 
     reconnectTimeout.current = setTimeout(() => {
-      // connect called below
-    }, 2000 * reconnectAttempts.current);
-  }, []);
+      // Attempt to reconnect by calling connect logic
+      if (checkMarketTiming()) {
+        // Market is open, try to connect
+        try {
+          const wsUrl = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000/ws/market';
+          if (ws.current?.readyState === WebSocket.OPEN) {
+            ws.current.close();
+          }
+          
+          setStatus('CONNECTING');
+          setMessage('Connecting to market feed...');
+          
+          ws.current = new WebSocket(wsUrl);
+
+          const connectionTimeout = setTimeout(() => {
+            if (ws.current?.readyState !== WebSocket.OPEN) {
+              ws.current?.close();
+              setStatus('ERROR');
+              setMessage('Connection timeout - retrying...');
+              reconnect();
+            }
+          }, 10000);
+
+          ws.current.onopen = () => {
+            clearTimeout(connectionTimeout);
+            setStatus('SUBSCRIBED');
+            setMessage('Connected, waiting for data...');
+            reconnectAttempts.current = 0;
+          };
+
+          ws.current.onmessage = handleWebSocketMessage;
+
+          ws.current.onerror = () => {
+            clearTimeout(connectionTimeout);
+            setStatus('ERROR');
+            setMessage('Connection error, retrying...');
+          };
+
+          ws.current.onclose = () => {
+            clearTimeout(connectionTimeout);
+            // Don't auto-reconnect from onclose during reconnect sequence
+          };
+        } catch (err) {
+          console.error('Reconnect attempt failed:', err);
+          setStatus('ERROR');
+          setMessage('Reconnection failed, retrying...');
+        }
+      }
+    }, Math.min(1000 * Math.pow(2, reconnectAttempts.current - 1), 10000));
+  }, [checkMarketTiming, handleWebSocketMessage]);
 
   const connect = useCallback(() => {
     if (!checkMarketTiming()) {
       setStatus('WAITING');
-      setMessage('Waiting for market to open');
+      const now = new Date();
+      const hours = now.getHours();
+      const minutes = now.getMinutes();
+      setMessage(`Market opens at 9:15 AM (IST). Current: ${hours}:${minutes.toString().padStart(2, '0')}`);
       return;
     }
 
     if (ws.current?.readyState === WebSocket.OPEN) return;
+    if (status === 'CONNECTING' || status === 'RECONNECTING') return; // Don't try to connect twice
     
     setStatus('CONNECTING');
-    setMessage('Connecting...');
+    setMessage('Connecting to market feed...');
 
     try {
       const wsUrl = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000/ws/market';
       ws.current = new WebSocket(wsUrl);
 
+      // WebSocket connection timeout (10 seconds)
+      const connectionTimeout = setTimeout(() => {
+        if (ws.current?.readyState !== WebSocket.OPEN) {
+          ws.current?.close();
+          setStatus('ERROR');
+          setMessage('Connection timeout - retrying...');
+        }
+      }, 10000);
+
       ws.current.onopen = () => {
+        clearTimeout(connectionTimeout);
         setStatus('SUBSCRIBED');
-        setMessage('Connected');
+        setMessage('Connected, waiting for data...');
         reconnectAttempts.current = 0;
       };
 
       ws.current.onmessage = handleWebSocketMessage;
 
-      ws.current.onerror = () => {
+      ws.current.onerror = (event) => {
+        clearTimeout(connectionTimeout);
+        console.error('WebSocket error:', event);
         setStatus('ERROR');
-        setMessage('WebSocket error');
+        setMessage('Connection error, retrying...');
       };
 
       ws.current.onclose = () => {
-        setStatus('OFFLINE');
-        setMessage('Disconnected');
-        reconnect();
+        clearTimeout(connectionTimeout);
       };
     } catch (err) {
+      console.error('WebSocket creation error:', err);
       setStatus('ERROR');
-      setMessage('Failed to create WebSocket');
+      setMessage('Failed to connect, retrying...');
     }
-  }, [checkMarketTiming, handleWebSocketMessage, reconnect]);
+  }, [checkMarketTiming, handleWebSocketMessage, status]);
 
   const calculateConnectionQuality = useCallback((): 'excellent' | 'good' | 'connecting' | 'poor' | 'offline' => {
     const isReceiving = status === 'LIVE' && tickCount > 0;
@@ -175,17 +243,38 @@ export function useProductionMarketSocket(): UseProductionMarketSocket {
 
     connect();
 
+    // Check market timing every minute (in case it transitions from closed to open)
+    const marketCheckInterval = setInterval(() => {
+      if (checkMarketTiming() && status === 'WAITING') {
+        connect();
+      }
+    }, 60000);
+
+    // Check tick timeout every 5 seconds
     const tickCheckInterval = setInterval(() => {
       checkTickTimeout();
     }, 5000);
 
+    // Try to reconnect if we're supposed to be connected but aren't
+    const autoReconnectInterval = setInterval(() => {
+      if (checkMarketTiming()) {
+        if (status === 'ERROR' || status === 'FAILED') {
+          reconnect();
+        } else if (status !== 'LIVE' && status !== 'SUBSCRIBED' && status !== 'CONNECTING' && status !== 'RECONNECTING') {
+          connect();
+        }
+      }
+    }, 15000);
+
     return () => {
+      clearInterval(marketCheckInterval);
       clearInterval(tickCheckInterval);
+      clearInterval(autoReconnectInterval);
       if (reconnectTimeout.current) clearTimeout(reconnectTimeout.current);
       if (tickTimeout.current) clearTimeout(tickTimeout.current);
       if (ws.current) ws.current.close();
     };
-  }, [connect, checkTickTimeout]);
+  }, [connect, checkTickTimeout, checkMarketTiming, reconnect, status]);
 
   return {
     status,

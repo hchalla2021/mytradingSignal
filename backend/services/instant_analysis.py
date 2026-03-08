@@ -8,10 +8,25 @@ from typing import Dict, Any, Optional, List
 from datetime import datetime, timedelta
 import asyncio
 import json
-import pandas as pd
-from kiteconnect import KiteConnect
-from .intraday_entry_filter import ParabolicSARFilter
 from config import get_settings
+
+# Lazy imports for fast startup (pandas ~1.7s, kiteconnect ~2s at import)
+_pd = None
+_ParabolicSARFilter = None
+
+def _get_pd():
+    global _pd
+    if _pd is None:
+        import pandas
+        _pd = pandas
+    return _pd
+
+def _get_parabolic_sar_filter():
+    global _ParabolicSARFilter
+    if _ParabolicSARFilter is None:
+        from .intraday_entry_filter import ParabolicSARFilter
+        _ParabolicSARFilter = ParabolicSARFilter
+    return _ParabolicSARFilter
 
 
 def calculate_ema(closes: List[float], period: int) -> float:
@@ -40,11 +55,12 @@ def calculate_ema(closes: List[float], period: int) -> float:
     return ema
 
 
-def calculate_rsi_from_df(df: pd.DataFrame, period: int = 14) -> float:
+def calculate_rsi_from_df(df, period: int = 14) -> float:
     """
     Calculate RSI from DataFrame with 'close' column
     Returns RSI value (0-100) or 50 if insufficient data
     """
+    pd = _get_pd()
     try:
         if df.empty or len(df) < period + 1:
             return 50.0
@@ -222,6 +238,7 @@ async def fetch_dual_rsi_from_cache(symbol: str, cache, tick_data: Dict[str, Any
             }
         
         # Build DataFrames from cached candles (these are already 5-minute candles)
+        pd = _get_pd()
         df_5m = pd.DataFrame(candles)
         
         # Build 15-minute candles by aggregating 3x 5-minute candles
@@ -637,91 +654,149 @@ async def calculate_emas_from_cache(cache, symbol: str, tick_data: Dict[str, Any
 
 async def calculate_sar_from_cache(cache, symbol: str, tick_data: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Calculate real Parabolic SAR from cached candles
-    Returns updated tick_data with sar_value, sar_position, sar_trend, sar_signal fields
-    
-    Uses ParabolicSARFilter.calculate_sar() for accurate SAR calculation
+    Calculate real Parabolic SAR from cached candles.
+    Returns updated tick_data with sar_value, sar_position, sar_trend,
+    sar_signal (STRONG_BUY / BUY / HOLD / SELL / STRONG_SELL) and helpers.
     """
     try:
         if not cache:
             return tick_data
-        
+
         candle_key = f"analysis_candles:{symbol}"
         candles_json = await cache.lrange(candle_key, 0, 199)
-        
-        if not candles_json or len(candles_json) < 10:
-            # Not enough candles for SAR, use fallback in tick_data
+
+        if not candles_json or len(candles_json) < 5:
             return tick_data
-        
-        # Parse candle data (comes in reversed order - newest first)
-        # Reverse to get oldest first for proper SAR calculation
+
+        # Parse candle data — use ALL available candles for proper AF development
+        # List is newest-first in Redis; reverse to oldest-first for SAR math
         highs = []
         lows = []
         closes = []
-        
-        for candle_json in reversed(candles_json[-10:]):  # Use last 10 candles for SAR
+
+        for candle_json in reversed(candles_json):
             try:
                 candle = json.loads(candle_json)
-                highs.append(candle['high'])
-                lows.append(candle['low'])
-                closes.append(candle['close'])
-            except (json.JSONDecodeError, KeyError, TypeError):
+                highs.append(float(candle['high']))
+                lows.append(float(candle['low']))
+                closes.append(float(candle['close']))
+            except (json.JSONDecodeError, KeyError, TypeError, ValueError):
                 continue
-        
-        if len(highs) < 10:
+
+        if len(highs) < 5:
             return tick_data
-        
-        # Calculate real Parabolic SAR using ParabolicSARFilter
-        sar_data = ParabolicSARFilter.calculate_sar(highs, lows, closes)
-        
-        # Extract values
-        sar_value = sar_data.get('sar', tick_data.get('price', 0))
-        sar_trend = sar_data.get('trend', 'UNKNOWN')
-        
-        # Current tick price and values
+
+        # ── Calculate Parabolic SAR ──────────────────────────────────────
+        sar_data = _get_parabolic_sar_filter().calculate_sar(highs, lows, closes)
+
+        sar_value = float(sar_data.get('sar', 0))
+        sar_trend_raw = sar_data.get('trend', 'UNKNOWN')
+        reversal = sar_data.get('reversal', False)
+
         current_price = float(tick_data.get('price', 0))
-        current_high = float(tick_data.get('high', current_price))
-        current_low = float(tick_data.get('low', current_price))
-        prev_close = float(tick_data.get('prev_close', closes[-1] if closes else current_price))
-        
-        # Determine SAR position and analyze for signal
+        if current_price <= 0:
+            current_price = closes[-1] if closes else 0
+        if sar_value <= 0 or current_price <= 0:
+            return tick_data
+
+        # ── SAR Position ─────────────────────────────────────────────────
         if current_price > sar_value:
-            sar_position = "BELOW"  # SAR below price = bullish
+            sar_position = "BELOW"   # SAR below price → uptrend
         elif current_price < sar_value:
-            sar_position = "ABOVE"  # SAR above price = bearish
+            sar_position = "ABOVE"   # SAR above price → downtrend
         else:
             sar_position = "NEUTRAL"
-        
-        # Analyze SAR with confidence
-        psar_result = ParabolicSARFilter.analyze_psar(
-            current_high=current_high,
-            current_low=current_low,
-            current_close=current_price,
-            prev_close=prev_close,
-            sar_data=sar_data,
-            volume=int(tick_data.get('volume', 0)),
-            avg_volume=int(tick_data.get('avg_volume', 0)),
-            timeframe="15m"  # Use 15m for analysis
-        )
-        
-        # Update tick_data with SAR values
+
+        # ── Distance metrics ─────────────────────────────────────────────
+        distance = abs(current_price - sar_value)
+        distance_pct = (distance / current_price) * 100
+
+        # ── Trend strength from distance ─────────────────────────────────
+        if distance_pct > 0.8:
+            trend_strength = "STRONG"
+        elif distance_pct > 0.3:
+            trend_strength = "MODERATE"
+        elif distance_pct > 0.1:
+            trend_strength = "WEAK"
+        else:
+            trend_strength = "NEUTRAL"
+
+        # ── Normalize signal to 5 clean levels ───────────────────────────
+        # STRONG_BUY : reversal to uptrend OR strong uptrend (far above SAR)
+        # BUY        : uptrend continuation
+        # HOLD       : near SAR / unclear
+        # SELL       : downtrend continuation
+        # STRONG_SELL: reversal to downtrend OR strong downtrend (far below SAR)
+        if sar_position == "BELOW":
+            if reversal and sar_trend_raw == "UPTREND":
+                sar_signal = "STRONG_BUY"
+            elif trend_strength == "STRONG":
+                sar_signal = "STRONG_BUY"
+            elif trend_strength in ("MODERATE", "WEAK"):
+                sar_signal = "BUY"
+            else:
+                sar_signal = "HOLD"
+        elif sar_position == "ABOVE":
+            if reversal and sar_trend_raw == "DOWNTREND":
+                sar_signal = "STRONG_SELL"
+            elif trend_strength == "STRONG":
+                sar_signal = "STRONG_SELL"
+            elif trend_strength in ("MODERATE", "WEAK"):
+                sar_signal = "SELL"
+            else:
+                sar_signal = "HOLD"
+        else:
+            sar_signal = "HOLD"
+
+        # ── Confidence (40-95) ───────────────────────────────────────────
+        base_conf = 55
+        if trend_strength == "STRONG":
+            base_conf = 82
+        elif trend_strength == "MODERATE":
+            base_conf = 68
+        elif trend_strength == "WEAK":
+            base_conf = 52
+        if reversal:
+            base_conf = max(base_conf, 78)
+        sar_confidence = min(95, max(40, base_conf))
+
+        # ── Friendly trend label ─────────────────────────────────────────
+        if sar_position == "BELOW":
+            sar_trend = "BULLISH"
+        elif sar_position == "ABOVE":
+            sar_trend = "BEARISH"
+        else:
+            sar_trend = "NEUTRAL"
+
+        # ── Action guidance for traders ──────────────────────────────────
+        if sar_signal in ("STRONG_BUY", "BUY"):
+            sar_action = "BUY CE (Call)"
+        elif sar_signal in ("STRONG_SELL", "SELL"):
+            sar_action = "BUY PE (Put)"
+        else:
+            sar_action = "WAIT"
+
+        # ── Write to tick_data ───────────────────────────────────────────
         tick_data['sar_value'] = round(sar_value, 2)
         tick_data['sar_position'] = sar_position
-        tick_data['sar_trend'] = psar_result.get('trend', 'UNKNOWN')
-        tick_data['sar_signal'] = psar_result.get('signal', 'NEUTRAL')
-        tick_data['sar_signal_strength'] = psar_result.get('final_confidence', 0)
-        tick_data['sar_reversal'] = psar_result.get('reversal', False)
-        
+        tick_data['sar_trend'] = sar_trend
+        tick_data['sar_signal'] = sar_signal
+        tick_data['sar_signal_strength'] = sar_confidence
+        tick_data['sar_reversal'] = reversal
+        tick_data['sar_trend_strength'] = trend_strength
+        tick_data['sar_action'] = sar_action
+        tick_data['sar_distance'] = round(distance, 2)
+        tick_data['sar_distance_pct'] = round(distance_pct, 3)
+
         # Debug logging (every 30 seconds)
         import time
         if int(time.time()) % 30 == 0:
-            print(f"[SAR-CALC] {symbol}: SAR={sar_value:.2f}, Trend={psar_result.get('trend')}, Signal={psar_result.get('signal')}")
-        
+            print(f"[SAR-CALC] {symbol}: SAR={sar_value:.2f} Pos={sar_position} Sig={sar_signal} Str={trend_strength} Conf={sar_confidence}%")
+
         return tick_data
-        
+
     except Exception as e:
         print(f"⚠️ Error calculating SAR from cache for {symbol}: {e}")
-        # Return tick_data unchanged - instant_analysis will use fallback values
         return tick_data
 
 
@@ -2357,10 +2432,12 @@ class InstantSignal:
                     "sar_value": round(sar_value, 2),  # Current SAR level (trailing stop)
                     "sar_position": sar_position,  # BELOW (bullish), ABOVE (bearish), NEUTRAL
                     "sar_trend": sar_trend,  # BULLISH, BEARISH, NEUTRAL
-                    "sar_signal": sar_signal,  # SAR_BUY_VALID_STRONG, SAR_SELL_VALID_STRONG, SAR_AVOID_RANGING, etc.
-                    "sar_signal_strength": sar_signal_strength,  # 0-90 strength score
+                    "sar_signal": sar_signal,  # STRONG_BUY, BUY, HOLD, SELL, STRONG_SELL
+                    "sar_signal_strength": sar_signal_strength,  # 40-95 confidence score
                     "sar_flip": sar_flip,  # Boolean: SAR flip occurring?
                     "sar_flip_type": sar_flip_type,  # POTENTIAL_BUY_FLIP, POTENTIAL_SELL_FLIP, None
+                    "sar_trend_strength": tick_data.get('sar_trend_strength', 'NEUTRAL'),  # STRONG/MODERATE/WEAK/NEUTRAL
+                    "sar_action": tick_data.get('sar_action', 'WAIT'),  # BUY CE (Call) / BUY PE (Put) / WAIT
                     "sar_confirmation_status": sar_confirmation_status,  # Full confirmation message
                     "trailing_sl": round(trailing_sl, 2),  # Stop loss value
                     "distance_to_sar": round(distance_to_sar, 2),  # Price distance from SAR

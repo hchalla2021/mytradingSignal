@@ -76,6 +76,7 @@ class PersistentMarketState:
         Called every time fresh market data is received.
         """
         try:
+            _ensure_initialized()
             global _PERSISTENT_STATE
             
             # Add metadata for persistence
@@ -101,6 +102,7 @@ class PersistentMarketState:
         Returns None if no state has been saved yet.
         """
         try:
+            _ensure_initialized()
             global _PERSISTENT_STATE
             
             if symbol in _PERSISTENT_STATE:
@@ -122,6 +124,7 @@ class PersistentMarketState:
     def get_last_update_time(symbol: str) -> Optional[float]:
         """Get Unix timestamp of last update for a symbol."""
         try:
+            _ensure_initialized()
             global _PERSISTENT_STATE
             
             if symbol in _PERSISTENT_STATE:
@@ -146,6 +149,7 @@ class PersistentMarketState:
     def get_all_last_known_states() -> Dict[str, Dict[str, Any]]:
         """Get all last-known states for all symbols."""
         try:
+            _ensure_initialized()
             global _PERSISTENT_STATE
             
             return {
@@ -167,5 +171,11 @@ class PersistentMarketState:
             print(f"[WARN] Error clearing persistent states: {e}")
 
 
-# Initialize on module load
-PersistentMarketState.initialize()
+# Lazy initialization - called on first access, not on import
+_INITIALIZED = False
+
+def _ensure_initialized():
+    global _INITIALIZED
+    if not _INITIALIZED:
+        PersistentMarketState.initialize()
+        _INITIALIZED = True

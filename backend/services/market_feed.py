@@ -5,7 +5,6 @@ import time as time_module
 from datetime import datetime, time
 from typing import Dict, Any, Optional
 from queue import Queue
-from kiteconnect import KiteTicker
 import pytz
 
 from config import get_settings
@@ -1029,6 +1028,7 @@ class MarketFeedService:
             
             # Re-initialize KiteTicker with validated token
             print("🔧 Re-initializing KiteTicker with fresh token...")
+            from kiteconnect import KiteTicker
             self.kws = KiteTicker(
                 fresh_settings.zerodha_api_key,
                 fresh_settings.zerodha_access_token
@@ -1108,6 +1108,7 @@ class MarketFeedService:
             # Initialize KiteTicker
             print("🔧 Initializing KiteTicker...")
             
+            from kiteconnect import KiteTicker
             self.kws = KiteTicker(
                 settings.zerodha_api_key,
                 settings.zerodha_access_token
@@ -1261,6 +1262,7 @@ class MarketFeedService:
                     await asyncio.sleep(2)
                 
                 # Re-initialize connection
+                from kiteconnect import KiteTicker
                 self.kws = KiteTicker(
                     settings.zerodha_api_key,
                     settings.zerodha_access_token

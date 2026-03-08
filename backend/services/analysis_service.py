@@ -3,13 +3,13 @@ Intraday Analysis Service - World-Class Technical Analysis Engine
 Implements: Price Action, S&R, Volume, Momentum, EMA, VWAP, OI, PCR, Time Filter
 Architecture: Highly configurable, performance-optimized, AI-ready
 """
+from __future__ import annotations
 
 from typing import Dict, List, Optional, Tuple, Any
 from dataclasses import dataclass, field
 from enum import Enum
 from datetime import datetime, time
 import numpy as np
-import pandas as pd
 from functools import lru_cache
 import asyncio
 
@@ -224,6 +224,7 @@ class AnalysisEngine:
         if df.empty or len(df) < period:
             return df.iloc[-1]['close'] if not df.empty else 0.0
         
+        import pandas as pd
         prices = df['close'].values
         ema = pd.Series(prices).ewm(span=period, adjust=False).mean()
         return round(ema.iloc[-1], 2)
@@ -296,6 +297,7 @@ class AnalysisEngine:
         gains = np.where(deltas > 0, deltas, 0)
         losses = np.where(deltas < 0, -deltas, 0)
         
+        import pandas as pd
         avg_gain = pd.Series(gains).rolling(window=self.config.rsi_period).mean()
         avg_loss = pd.Series(losses).rolling(window=self.config.rsi_period).mean()
         

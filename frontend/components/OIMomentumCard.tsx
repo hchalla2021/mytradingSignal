@@ -126,7 +126,7 @@ export default function OIMomentumCard({
   liveChangePct,
   marketStatus = "OFFLINE",
 }: OIMomentumCardProps) {
-  const { data, isLive } = useOIMomentumLive(symbol);
+  const { data, loading, error, isLive, refetch } = useOIMomentumLive(symbol);
   const [prevPrice, setPrevPrice] = useState(0);
   const [flash, setFlash] = useState<"up" | "down" | null>(null);
 
@@ -168,9 +168,58 @@ export default function OIMomentumCard({
     return () => clearTimeout(t);
   }, [displayPrice, prevPrice]);
 
+  // ── LOADING STATE ─────────────────────────────────────────────────────────
+  if (loading && !data) {
+    return (
+      <div className="bg-slate-900/40 border-2 border-purple-500/20 rounded-2xl p-4 animate-pulse min-h-[300px]">
+        <div className="flex justify-between mb-3">
+          <div className="h-5 bg-slate-800/70 rounded w-24" />
+          <div className="h-5 bg-slate-800/70 rounded w-16" />
+        </div>
+        <div className="h-14 bg-slate-800/50 rounded-xl mb-3" />
+        <div className="h-1.5 bg-slate-800/50 rounded-full mb-3" />
+        <div className="grid grid-cols-2 gap-2 mb-3">
+          <div className="h-16 bg-slate-800/40 rounded-xl" />
+          <div className="h-16 bg-slate-800/40 rounded-xl" />
+        </div>
+        <div className="h-12 bg-slate-800/30 rounded-xl mb-2" />
+        <div className="h-14 bg-slate-800/30 rounded-xl" />
+        <p className="text-[10px] text-slate-600 mt-2 text-center">Loading OI Momentum for {name}...</p>
+      </div>
+    );
+  }
+
+  // ── ERROR STATE ───────────────────────────────────────────────────────────
+  if (error && !data) {
+    return (
+      <div className="bg-slate-900/40 border-2 border-rose-500/30 rounded-2xl p-5 min-h-[200px] flex flex-col items-center justify-center gap-2">
+        <span className="text-2xl">⚠</span>
+        <p className="text-sm font-bold text-rose-300">{name}</p>
+        <p className="text-xs text-rose-400/80">{error}</p>
+        <button
+          onClick={refetch}
+          className="mt-2 text-[10px] px-3 py-1 rounded-full bg-rose-500/20 text-rose-300 border border-rose-500/40 hover:bg-rose-500/30 transition-colors"
+        >
+          Retry
+        </button>
+      </div>
+    );
+  }
+
+  // ── NO DATA STATE ─────────────────────────────────────────────────────────
   if (!data) {
     return (
-      <div className="bg-slate-800/40 border border-slate-700 rounded-xl p-4 animate-pulse min-h-[220px]" />
+      <div className="bg-slate-900/40 border-2 border-slate-700/40 rounded-2xl p-5 min-h-[200px] flex flex-col items-center justify-center gap-2">
+        <span className="text-2xl">📊</span>
+        <p className="text-sm font-bold text-slate-400">{name}</p>
+        <p className="text-xs text-slate-500">No OI momentum data available</p>
+        <button
+          onClick={refetch}
+          className="mt-2 text-[10px] px-3 py-1 rounded-full bg-slate-700/40 text-slate-400 border border-slate-600/40 hover:bg-slate-700/60 transition-colors"
+        >
+          Retry
+        </button>
+      </div>
     );
   }
 
@@ -179,14 +228,12 @@ export default function OIMomentumCard({
   const s15     = getSig(data.signal_15m);
   const m       = data.metrics ?? {};
   const outlook = fiveMinOutlook(data);
-  // Adjust outlook probability for market status (same logic as signal confidence)
   const outlookConf = adjustConf(outlook.prob, marketStatus);
 
   // ── Signal drivers: buy-side AND sell-side ────────────────────────────────
   const isBearish = s5.strength < 0 || s15.strength < 0;
   const drivers: Array<{ label: string; value: string; active: boolean }> = [];
 
-  // Liquidity grab (buy-side or sell-side)
   const liqBuy  = !!(m.liquidity_grab_5m  || m.liquidity_grab_15m);
   const liqSell = !!(m.liquidity_grab_sell_5m || m.liquidity_grab_sell_15m);
   if (liqBuy || liqSell) {
@@ -195,7 +242,6 @@ export default function OIMomentumCard({
     drivers.push({ label: isBearish ? "Dist. Zone Grab" : "Liquidity Grab", value: tf, active: true });
   }
 
-  // OI activity (buildup for BUY, reduction for SELL)
   const oiBuy  = !!(m.oi_buildup_5m  || m.oi_buildup_15m);
   const oiSell = !!(m.oi_reduction_5m || m.oi_reduction_15m);
   if (oiBuy || oiSell) {
@@ -210,7 +256,6 @@ export default function OIMomentumCard({
     });
   }
 
-  // Volume spike
   if (m.volume_spike_5m || m.volume_spike_15m) {
     const r = Math.max(
       (m.volume_ratio_5m  as number | undefined) ?? 0,
@@ -219,7 +264,6 @@ export default function OIMomentumCard({
     drivers.push({ label: "Volume Spike", value: `${r.toFixed(1)}x avg`, active: true });
   }
 
-  // Price structure (breakout for BUY, breakdown for SELL)
   if (drivers.length < 3) {
     const pb5  = !!(m.price_breakout_5m  || m.price_breakdown_5m);
     const pb15 = !!(m.price_breakout_15m || m.price_breakdown_15m);
@@ -233,11 +277,9 @@ export default function OIMomentumCard({
     drivers.push({ label: "No factor active", value: "—", active: false });
   }
 
-  // Outlook color / bg helpers
   const outlookColor =
     outlook.dir === "UP"   ? "text-emerald-400" :
     outlook.dir === "DOWN" ? "text-red-400"      : "text-slate-400";
-  // Split bg and border so sub-section border colors are independently vivid
   const outlookBgOnly =
     outlook.dir === "UP"   ? "bg-emerald-900/15" :
     outlook.dir === "DOWN" ? "bg-red-900/15"      : "bg-slate-800/20";
@@ -246,14 +288,21 @@ export default function OIMomentumCard({
     outlook.dir === "DOWN" ? "border-red-500"      : "border-slate-600";
 
   return (
-    <div className={`rounded-xl border-2 ${final.border} ${final.bg} overflow-hidden`}>
+    <div className={`rounded-2xl border-2 ${final.border} ${final.bg} overflow-hidden transition-all duration-300`}>
 
-      {/* ─── HEADER: name · price · live status ─────────────────────────── */}
-      <div className="flex items-center justify-between px-3 py-2 border-b border-white/5">
-        <div className="rounded-lg border border-green-500/60 bg-green-950/30 px-2.5 py-1.5">
-          <p className="text-[11px] font-black text-white leading-tight">{name}</p>
-          <p className="text-[9px] text-slate-500 font-mono">{symbol}</p>
+      {/* ─── HEADER ─────────────────────────────────────────────────────── */}
+      <div className="flex items-center justify-between px-3 py-2.5 border-b border-white/5">
+        <div className="flex items-center gap-2">
+          <div className="rounded-lg border border-purple-500/50 bg-purple-950/30 px-2.5 py-1.5">
+            <p className="text-[11px] font-black text-white leading-tight">{name}</p>
+            <p className="text-[9px] text-slate-500 font-mono">{symbol}</p>
+          </div>
+          {/* Final signal badge */}
+          <span className={`text-[10px] font-black px-2 py-1 rounded-md border ${final.border} ${final.bg} ${final.color}`}>
+            {final.label}
+          </span>
         </div>
+
         <div className="flex items-center gap-2 flex-shrink-0">
           {isLive && marketStatus === "LIVE" && (
             <span className="flex items-center gap-1">
@@ -265,6 +314,9 @@ export default function OIMomentumCard({
             <span className="text-[9px] font-bold text-amber-400">
               {marketStatus === "FREEZE" ? "FREEZE" : "PRE-OPEN"}
             </span>
+          )}
+          {marketStatus === "CLOSED" && (
+            <span className="text-[9px] font-bold text-slate-500">CLOSED</span>
           )}
           <span
             className={`
@@ -304,12 +356,10 @@ export default function OIMomentumCard({
 
       <div className="p-3 space-y-2.5">
 
-        {/* ─── FINAL SIGNAL + CONFIDENCE BAR ──────────────────────────────── */}
+        {/* ─── CONFIDENCE BAR ─────────────────────────────────────────────── */}
         <div className="flex items-center gap-3">
-          {/* Left: label + bar */}
           <div className="flex-1 min-w-0">
-            <p className={`text-sm font-black tracking-wide ${final.color}`}>{final.label}</p>
-            <div className="mt-1.5 h-1.5 bg-slate-900/60 rounded-full overflow-hidden border border-white/5">
+            <div className="mt-1 h-1.5 bg-slate-900/60 rounded-full overflow-hidden border border-white/5">
               <div
                 className={`h-full rounded-full bg-gradient-to-r ${final.bar} transition-all duration-700`}
                 style={{ width: `${confidence}%` }}
@@ -317,17 +367,14 @@ export default function OIMomentumCard({
             </div>
             <p className="text-[9px] text-slate-500 mt-0.5">{confSubtitle}</p>
           </div>
-          {/* Right: % number */}
           <div className="flex-shrink-0 text-right">
             <p className={`text-2xl font-black leading-none ${final.color}`}>{confidence}%</p>
             <p className="text-[9px] text-slate-500 font-bold uppercase tracking-wide">Confidence</p>
           </div>
         </div>
 
-        {/* ─── 5m ENTRY TIMING  /  15m TREND DIRECTION ────────────────────── */}
+        {/* ─── 5m ENTRY / 15m TREND ───────────────────────────────────────── */}
         <div className="grid grid-cols-2 gap-2">
-
-          {/* 5m */}
           <div className={`bg-slate-900/50 border rounded-lg p-2.5 ${s5.border}`}>
             <p className="text-[8px] font-bold text-slate-500 uppercase tracking-widest mb-1">
               5m Entry Timing
@@ -351,7 +398,6 @@ export default function OIMomentumCard({
             </div>
           </div>
 
-          {/* 15m */}
           <div className={`bg-slate-900/50 border rounded-lg p-2.5 ${s15.border}`}>
             <p className="text-[8px] font-bold text-slate-500 uppercase tracking-widest mb-1">
               15m Trend Direction
@@ -426,7 +472,7 @@ export default function OIMomentumCard({
 
       </div>
 
-      {/* ─── FOOTER: timestamp + live/cached ────────────────────────────── */}
+      {/* ─── FOOTER ─────────────────────────────────────────────────────── */}
       <div className="px-3 py-1.5 border-t border-white/5 flex justify-between items-center">
         <span className="text-[9px] text-slate-600">
           {new Date(data.timestamp).toLocaleTimeString([], {

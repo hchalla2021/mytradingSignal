@@ -3833,32 +3833,33 @@ class ParabolicSARFilter:
                 "reversal": False,
             }
         
-        # Initialize SAR calculation
+        n = len(closes)
         sar_list = []
         af_list = []
         ep_list = []
         trend_list = []
         reversal_detected = False
         
-        # Determine initial trend from first two candles
-        if closes[-2] <= closes[-1]:
+        # Initialize from FIRST two candles (not last two)
+        if closes[0] <= closes[1]:
             trend = "UPTREND"
-            sar = min(lows[-2], lows[-1])
-            ep = max(highs[-2], highs[-1])
+            sar = min(lows[0], lows[1])
+            ep = max(highs[0], highs[1])
         else:
             trend = "DOWNTREND"
-            sar = max(highs[-2], highs[-1])
-            ep = min(lows[-2], lows[-1])
+            sar = max(highs[0], highs[1])
+            ep = min(lows[0], lows[1])
         
         af = af_start
         
-        # Calculate SAR for each candle (simplified - using last 5 for quick calc)
-        lookback = min(5, len(closes))
-        
-        for i in range(max(0, len(closes) - lookback), len(closes)):
+        # Process ALL candles from index 2 onward for proper AF development
+        for i in range(2, n):
             high = highs[i]
             low = lows[i]
             close = closes[i]
+            
+            # Track reversal only on the LATEST candle (not historical)
+            is_last = (i == n - 1)
             
             # Update SAR
             sar = sar + af * (ep - sar)
@@ -3868,7 +3869,8 @@ class ParabolicSARFilter:
                 # SAR should be below price in uptrend
                 if close < sar:
                     trend = "DOWNTREND"
-                    reversal_detected = True
+                    if is_last:
+                        reversal_detected = True
                     sar = ep
                     ep = low
                     af = af_start
@@ -3887,7 +3889,8 @@ class ParabolicSARFilter:
                 # SAR should be above price in downtrend
                 if close > sar:
                     trend = "UPTREND"
-                    reversal_detected = True
+                    if is_last:
+                        reversal_detected = True
                     sar = ep
                     ep = high
                     af = af_start

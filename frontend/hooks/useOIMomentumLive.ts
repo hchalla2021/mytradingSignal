@@ -57,6 +57,7 @@ export function useOIMomentumLive(symbol: string) {
   const [isLive, setIsLive] = useState(false);
 
   const mountedRef = useRef(true);
+  const fetchRef = useRef<(() => void) | null>(null);
 
   // Cleanup mounted flag
   useEffect(() => {
@@ -87,7 +88,7 @@ export function useOIMomentumLive(symbol: string) {
     const fetchData = async () => {
       try {
         const response = await fetch(
-          `${apiBaseUrl}/analysis/oi-momentum/${symbol}`,
+          `${apiBaseUrl}/api/analysis/oi-momentum/${symbol}`,
           { signal: AbortSignal.timeout(5000) }
         );
 
@@ -138,6 +139,7 @@ export function useOIMomentumLive(symbol: string) {
     };
 
     // Initial fetch
+    fetchRef.current = fetchData;
     fetchData();
 
     // Poll every 3 seconds
@@ -149,6 +151,10 @@ export function useOIMomentumLive(symbol: string) {
     };
   }, [symbol]);
 
+  const refetch = useRef(() => {
+    if (fetchRef.current) fetchRef.current();
+  }).current;
+
   return useMemo(
     () => ({
       data,
@@ -156,8 +162,9 @@ export function useOIMomentumLive(symbol: string) {
       error,
       isLive,
       isReady: !loading && data !== null,
+      refetch,
     }),
-    [data, loading, error, isLive]
+    [data, loading, error, isLive, refetch]
   );
 }
 
@@ -166,7 +173,8 @@ export function useOIMomentumLive(symbol: string) {
  * Call this on app init for instant data when navigating to OI section
  */
 export async function preloadOIMomentumData(symbols: string[]) {
-  const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+  const config = getEnvironmentConfig();
+  const apiUrl = config.apiUrl.replace(/\/$/, '');
 
   try {
     const promises = symbols.map((symbol) =>

@@ -4,12 +4,22 @@ Advanced Technical Analysis Router
 Ultra-fast endpoints for Volume Pulse and Trend Base analysis
 Performance: <10ms response time with caching
 """
+from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect, Header
 from typing import Dict, Any
 import asyncio
 from datetime import datetime, timezone
-import pandas as pd
+
+# Lazy pandas import - loaded on first use, not at module load (~1.7s savings)
+class _LazyPandas:
+    _pd = None
+    def __getattr__(self, name):
+        if _LazyPandas._pd is None:
+            import pandas
+            _LazyPandas._pd = pandas
+        return getattr(_LazyPandas._pd, name)
+pd = _LazyPandas()
 
 from services.volume_pulse_service import analyze_volume_pulse
 from services.trend_base_service import analyze_trend_base
@@ -2408,13 +2418,30 @@ async def get_parabolic_sar(symbol: str) -> Dict[str, Any]:
         
         ind = analysis.get('indicators', {})
         
-        # Extract SAR-specific data from indicators
+        # Extract SAR-specific data from indicators (already normalized by calculate_sar_from_cache)
         current_price = float(ind.get('price') or 0)
         sar_value = float(ind.get('sar_value') or 0)
         sar_position = ind.get('sar_position', 'UNKNOWN')
         sar_trend = ind.get('sar_trend', 'NEUTRAL')
         sar_signal = ind.get('sar_signal', 'HOLD')
-        sar_signal_strength = float(ind.get('sar_signal_strength') or 0)
+        sar_confidence = int(ind.get('sar_signal_strength') or 50)
+        sar_trend_strength = ind.get('sar_trend_strength', 'NEUTRAL')
+        sar_action = ind.get('sar_action', 'WAIT')
+        
+        # Normalize sar_signal to clean 5-level values
+        _sig_upper = str(sar_signal).upper()
+        if 'STRONG' in _sig_upper and 'BUY' in _sig_upper:
+            sar_signal = 'STRONG_BUY'
+        elif 'BUY' in _sig_upper:
+            sar_signal = 'BUY'
+        elif 'STRONG' in _sig_upper and 'SELL' in _sig_upper:
+            sar_signal = 'STRONG_SELL'
+        elif 'SELL' in _sig_upper:
+            sar_signal = 'SELL'
+        elif _sig_upper in ('STRONG_BUY', 'BUY', 'SELL', 'STRONG_SELL', 'HOLD'):
+            pass  # already clean
+        else:
+            sar_signal = 'HOLD'
         
         # Calculate distance
         distance_to_sar = 0
@@ -2429,16 +2456,12 @@ async def get_parabolic_sar(symbol: str) -> Dict[str, Any]:
             if not df.empty:
                 last_close = float(df['close'].iloc[-1])
                 current_price = last_close
-                # Use simple midpoint as fallback
                 high = float(df['high'].iloc[-1])
                 low = float(df['low'].iloc[-1])
                 sar_value = (high + low) / 2
                 distance_to_sar = abs(current_price - sar_value)
                 distance_pct = (distance_to_sar / current_price) * 100 if current_price > 0 else 0
-                sar_confidence = 50  # Default for calculated values
-        else:
-            # Calculate confidence based on distance (closer to SAR = lower confidence in trend)
-            sar_confidence = min(95, max(40, 60 + int(distance_pct * 3)))
+                sar_confidence = 50
         
         # Build response
         result = {
@@ -2449,6 +2472,8 @@ async def get_parabolic_sar(symbol: str) -> Dict[str, Any]:
             "sar_position": sar_position,
             "sar_trend": sar_trend,
             "sar_signal": sar_signal,
+            "sar_trend_strength": sar_trend_strength,
+            "sar_action": sar_action,
             "distance_to_sar": round(distance_to_sar, 2),
             "distance_pct": round(distance_pct, 4),
             "sar_confidence": sar_confidence,

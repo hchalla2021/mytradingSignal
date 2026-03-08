@@ -15,10 +15,10 @@ VWAP Formula:
 vwap = Sum(Typical Price × Volume) / Sum(Volume)
 where Typical Price = (High + Low + Close) / 3
 """
+from __future__ import annotations
 
 from datetime import datetime, timedelta
 import pytz
-import pandas as pd
 from typing import Tuple, Optional, Dict, Any
 import logging
 
@@ -103,6 +103,7 @@ class VWAPLiveCalculator:
                 return None
             
             # Create DataFrame from list of dicts
+            import pandas as pd
             df = pd.DataFrame(data)
             
             # Ensure required columns exist with proper names
@@ -189,6 +190,7 @@ class VWAPLiveCalculator:
                 return None
             
             # Ensure numeric data types
+            import pandas as pd
             df_copy['high'] = pd.to_numeric(df_copy['high'], errors='coerce')
             df_copy['low'] = pd.to_numeric(df_copy['low'], errors='coerce')
             df_copy['close'] = pd.to_numeric(df_copy['close'], errors='coerce')

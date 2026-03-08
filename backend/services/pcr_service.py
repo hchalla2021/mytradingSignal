@@ -2,7 +2,6 @@
 import asyncio
 from datetime import datetime, timedelta, date
 from typing import Dict, Any, Optional, List
-from kiteconnect import KiteConnect
 import pytz
 
 from config import get_settings
@@ -27,7 +26,7 @@ class PCRService:
     """Service to calculate PCR ratio from Zerodha options data."""
     
     def __init__(self):
-        self.kite: Optional[KiteConnect] = None
+        self.kite: Optional['KiteConnect'] = None
         self._initialized = False
         self._last_token: Optional[str] = None  # Track last used token
     
@@ -35,6 +34,7 @@ class PCRService:
         """Initialize KiteConnect if not already done."""
         if not self._initialized and settings.zerodha_api_key and settings.zerodha_access_token:
             try:
+                from kiteconnect import KiteConnect
                 self.kite = KiteConnect(api_key=settings.zerodha_api_key)
                 self.kite.set_access_token(settings.zerodha_access_token)
                 

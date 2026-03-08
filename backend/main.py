@@ -1,7 +1,5 @@
 """Main FastAPI application entry point (production safe)."""
 
-import sys
-import io
 import asyncio
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
@@ -31,10 +29,7 @@ from routers import (
 from routers.compass import http_router as compass_http, ws_router as compass_ws
 from routers.liquidity import http_router as liq_http, ws_router as liq_ws
 
-# Windows console fix (safe, ignored on Linux)
-if sys.platform == "win32":
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
-    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
+# Windows console fix already applied in config/__init__.py
 
 settings = get_settings()
 
@@ -105,6 +100,14 @@ async def lifespan(app: FastAPI):
     cache = CacheService()
     await cache.connect()
 
+    # 🔄 Restore last market candles from disk (instant OI Momentum on startup)
+    try:
+        from services.candle_backup_service import CandleBackupService
+        await CandleBackupService.restore_all_symbols(cache)
+        print("✅ Candle data restored from backup")
+    except Exception as e:
+        print(f"⚠️  Candle restore skipped: {e}")
+
     # 🔥 Inject cache into diagnostics module
     from routers import diagnostics as diagnostics_module
     diagnostics_module.set_cache_instance(cache)
@@ -168,6 +171,14 @@ async def lifespan(app: FastAPI):
 
     # Shutdown
     print("🛑 Backend shutting down...")
+
+    # 📦 Backup candle data to disk before shutdown
+    try:
+        from services.candle_backup_service import CandleBackupService
+        await CandleBackupService.backup_all_symbols(cache)
+        print("✅ Candle data backed up to disk")
+    except Exception as e:
+        print(f"⚠️  Candle backup on shutdown failed: {e}")
     
     # Stop OI Momentum Broadcaster
     try:

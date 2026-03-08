@@ -72,15 +72,23 @@ export function ParabolicSarCard({ symbol }: ParabolicSarCardProps) {
 
   if (!data) return null;
 
-  // ── Signal Colors ────────────────────────────────────────────────────────
-  const signalConfig = {
-    BUY: { color: 'from-emerald-600 to-emerald-700', bg: 'bg-emerald-900/20', badge: 'bg-emerald-500/20 text-emerald-400' },
-    SELL: { color: 'from-rose-600 to-rose-700', bg: 'bg-rose-900/20', badge: 'bg-rose-500/20 text-rose-400' },
-    HOLD: { color: 'from-amber-600 to-amber-700', bg: 'bg-amber-900/20', badge: 'bg-amber-500/20 text-amber-400' },
-  };
+  // ── Signal Colors (5-level: STRONG_BUY, BUY, HOLD, SELL, STRONG_SELL) ──
+  const sig = String(data.sar_signal || 'HOLD').toUpperCase();
+  const isBullish = sig === 'STRONG_BUY' || sig === 'BUY' || data.sar_position === 'BELOW' || data.sar_trend === 'BULLISH';
+  const isBearish = sig === 'STRONG_SELL' || sig === 'SELL' || data.sar_position === 'ABOVE' || data.sar_trend === 'BEARISH';
 
-  const signal = data.sar_signal || 'HOLD';
-  const config = signalConfig[signal as keyof typeof signalConfig] || signalConfig.HOLD;
+  const signalConfig = {
+    green: { bg: 'bg-emerald-900/20', badge: 'bg-emerald-500/20 text-emerald-400', text: 'text-emerald-400', bar: 'bg-emerald-500' },
+    red:   { bg: 'bg-rose-900/20',    badge: 'bg-rose-500/20 text-rose-400',       text: 'text-rose-400',    bar: 'bg-rose-500' },
+    amber: { bg: 'bg-amber-900/20',   badge: 'bg-amber-500/20 text-amber-400',     text: 'text-amber-400',   bar: 'bg-amber-500' },
+  };
+  const config = isBullish ? signalConfig.green : isBearish ? signalConfig.red : signalConfig.amber;
+
+  const signalLabel = sig === 'STRONG_BUY' ? 'STRONG BUY' : sig === 'BUY' ? 'BUY'
+    : sig === 'STRONG_SELL' ? 'STRONG SELL' : sig === 'SELL' ? 'SELL' : 'HOLD';
+
+  const trendStrength = (data as any).sar_trend_strength || '';
+  const sarAction = (data as any).sar_action || 'WAIT';
 
   // ── Risk Level Colors ────────────────────────────────────────────────────
   const riskColors = {
@@ -101,7 +109,7 @@ export function ParabolicSarCard({ symbol }: ParabolicSarCardProps) {
 
   return (
     <div
-      className={`bg-gradient-to-b ${config.color} from-opacity-5 to-opacity-5 rounded-lg border border-slate-700/50 overflow-hidden transition-all ${
+      className={`rounded-lg border border-slate-700/50 overflow-hidden transition-all ${
         flash ? 'ring-2 ring-offset-2 ring-offset-slate-950 ring-amber-500' : ''
       }`}
     >
@@ -112,7 +120,7 @@ export function ParabolicSarCard({ symbol }: ParabolicSarCardProps) {
       >
         <div className="flex items-center gap-3 flex-1">
           <div className={`${config.badge} px-2 py-1 rounded text-xs font-semibold`}>
-            {signal}
+            {signalLabel}
           </div>
           <span className="text-sm font-semibold text-slate-200">Parabolic SAR</span>
           <span className="text-xs text-slate-400">Trend Following</span>
@@ -126,7 +134,7 @@ export function ParabolicSarCard({ symbol }: ParabolicSarCardProps) {
       {expanded && (
         <div className={`${config.bg} border-t border-slate-700/30 p-3 space-y-3`}>
           
-          {/* 🔥 SAR Price & Position ──────────────────────────────────────*/}
+          {/* SAR Price & Position ─────────────────────────────────────────*/}
           <div className="grid grid-cols-2 gap-2">
             <div className="bg-slate-800/40 p-2 rounded border border-slate-700/30">
               <p className="text-xs text-slate-500 mb-1">Current Price</p>
@@ -137,30 +145,31 @@ export function ParabolicSarCard({ symbol }: ParabolicSarCardProps) {
 
             <div className="bg-slate-800/40 p-2 rounded border border-slate-700/30">
               <p className="text-xs text-slate-500 mb-1">SAR Level</p>
-              <p className={`text-lg font-bold ${analysis.isBelowSar ? 'text-emerald-400' : 'text-rose-400'}`}>
+              <p className={`text-lg font-bold ${config.text}`}>
                 ₹{data.sar_value?.toFixed(2) || '0.00'}
               </p>
             </div>
           </div>
 
-          {/* Position & Trend Status ─────────────────────────────────────*/}
+          {/* Position & Action ────────────────────────────────────────────*/}
           <div className="grid grid-cols-2 gap-2">
             <div className="flex items-center gap-2 bg-slate-800/40 p-2 rounded border border-slate-700/30">
-              {positionIcon}
+              {isBullish ? <TrendingUp className="w-4 h-4 text-emerald-400" /> : isBearish ? <TrendingDown className="w-4 h-4 text-rose-400" /> : positionIcon}
               <div>
-                <p className="text-xs text-slate-500">Position</p>
-                <p className={`text-sm font-semibold ${analysis.isBelowSar ? 'text-emerald-400' : 'text-rose-400'}`}>
-                  {data.sar_position === 'BELOW' ? 'ABOVE SAR' : 'BELOW SAR'}
+                <p className="text-xs text-slate-500">Trend</p>
+                <p className={`text-sm font-semibold ${config.text}`}>
+                  {data.sar_trend || 'NEUTRAL'}
+                  {trendStrength && trendStrength !== 'NEUTRAL' ? ` (${trendStrength})` : ''}
                 </p>
               </div>
             </div>
 
             <div className="flex items-center gap-2 bg-slate-800/40 p-2 rounded border border-slate-700/30">
-              <div className={`w-2 h-2 rounded-full ${riskConfig.dot}`} />
+              <div className={`w-2 h-2 rounded-full ${config.bar}`} />
               <div>
-                <p className="text-xs text-slate-500">Risk Level</p>
-                <p className={`text-sm font-semibold ${riskConfig.text}`}>
-                  {analysis.riskLevel}
+                <p className="text-xs text-slate-500">Action</p>
+                <p className={`text-sm font-semibold ${config.text}`}>
+                  {sarAction}
                 </p>
               </div>
             </div>
@@ -199,26 +208,23 @@ export function ParabolicSarCard({ symbol }: ParabolicSarCardProps) {
           {/* Confidence Score ──────────────────────────────────────────────*/}
           <div className="bg-slate-800/40 p-2 rounded border border-slate-700/30">
             <div className="flex items-center justify-between mb-2">
-              <p className="text-xs text-slate-500">SAR Confidence</p>
-              <p className="text-sm font-bold text-slate-100">{data.sar_confidence || 0}%</p>
+              <p className="text-xs text-slate-500">Confidence</p>
+              <p className={`text-sm font-bold ${config.text}`}>{data.sar_confidence || 0}%</p>
             </div>
             <div className="w-full h-1.5 bg-slate-700/40 rounded-full overflow-hidden">
               <div
-                className="h-full bg-gradient-to-r from-blue-500 to-cyan-400 transition-all duration-300"
+                className={`h-full ${config.bar} transition-all duration-300`}
                 style={{ width: `${data.sar_confidence || 0}%` }}
               />
             </div>
           </div>
 
-          {/* Trend Strength & Configuration ─────────────────────────────*/}
+          {/* Trend & Candles ─────────────────────────────────────────────*/}
           <div className="grid grid-cols-2 gap-2 text-xs">
             <div className="bg-slate-800/40 p-2 rounded border border-slate-700/30">
-              <p className="text-slate-500 mb-1">Trend</p>
-              <p className={`font-semibold ${
-                data.sar_trend === 'BULLISH' ? 'text-emerald-400' :
-                data.sar_trend === 'BEARISH' ? 'text-rose-400' : 'text-slate-400'
-              }`}>
-                {data.sar_trend || 'NEUTRAL'}
+              <p className="text-slate-500 mb-1">Signal</p>
+              <p className={`font-semibold ${config.text}`}>
+                {signalLabel}
               </p>
             </div>
 

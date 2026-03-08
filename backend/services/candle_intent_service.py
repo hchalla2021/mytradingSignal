@@ -13,8 +13,8 @@ Professional Patterns:
 
 Data Source: 100% from Zerodha WebSocket (df['open','high','low','close','volume'])
 """
+from __future__ import annotations
 
-import pandas as pd
 import numpy as np
 from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass

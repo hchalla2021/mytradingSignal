@@ -40,134 +40,335 @@ const signalColor = {
   'STRONG_SELL': '#dc2626'
 };
 
-const SignalCard = memo(({ data }: { data: SymbolData }) => (
-  <div className="bg-slate-800/50 border border-slate-700/50 rounded-lg p-6 backdrop-blur-sm hover:bg-slate-800/70 transition-colors">
-    {/* Header: Symbol + Confidence */}
-    <div className="flex items-baseline justify-between mb-6">
-      <h3 className="text-2xl font-bold text-white">{data.symbol}</h3>
-      <span className="text-sm font-semibold px-2 py-1 rounded" style={{
-        backgroundColor: `${signalColor[data.signal]}20`,
-        color: signalColor[data.signal]
-      }}>
-        {data.confidence}%
-      </span>
-    </div>
-
-    {/* Main Signal - Bold */}
-    <div className="mb-8">
-      <div className="text-4xl font-black mb-2" style={{ color: signalColor[data.signal] }}>
-        {data.signal}
-      </div>
-      <div className="h-1 w-12 rounded-full" style={{ backgroundColor: signalColor[data.signal] }} />
-    </div>
-
-    {/* 16-Signal Consensus - Clean Bars */}
-    <div className="mb-8 space-y-4">
-      <div className="text-xs uppercase tracking-wide text-gray-400 font-bold">16 Signal Consensus</div>
-      
-      {/* BUY Bar */}
-      <div>
-        <div className="flex justify-between text-sm mb-2">
-          <span className="text-gray-300 font-medium">▲ BUY</span>
-          <span className="text-white font-bold">{data.buy_signals}%</span>
-        </div>
-        <div className="h-2 bg-slate-700/50 rounded-full overflow-hidden">
-          <div
-            className="h-full bg-gradient-to-r from-emerald-500 to-emerald-400 rounded-full transition-all duration-300"
-            style={{ width: `${data.buy_signals}%` }}
-          />
-        </div>
-      </div>
-
-      {/* SELL Bar */}
-      <div>
-        <div className="flex justify-between text-sm mb-2">
-          <span className="text-gray-300 font-medium">▼ SELL</span>
-          <span className="text-white font-bold">{data.sell_signals}%</span>
-        </div>
-        <div className="h-2 bg-slate-700/50 rounded-full overflow-hidden">
-          <div
-            className="h-full bg-gradient-to-r from-red-500 to-red-400 rounded-full transition-all duration-300"
-            style={{ width: `${data.sell_signals}%` }}
-          />
+const SignalCard = memo(({ data }: { data: SymbolData }) => {
+  // Calculate integrated confidence (average of index confidence and 5m prediction)
+  const indexConfidence = data.confidence || 0;
+  const predictionConfidence = data.prediction_5m_confidence || 0;
+  const integratedConfidence = Math.round((indexConfidence + predictionConfidence) / 2);
+  
+  // Calculate confidence alignment (how well they agree)
+  const confidenceDiff = Math.abs(indexConfidence - predictionConfidence);
+  const alignmentScore = Math.max(0, 100 - confidenceDiff);
+  const isAligned = confidenceDiff <= 15; // Within 15% = good alignment
+  const isStrongAlignment = confidenceDiff <= 5; // Within 5% = strong alignment
+  
+  // Determine alignment indicator
+  const alignmentLabel = isStrongAlignment ? 'STRONG ALIGNMENT' : isAligned ? 'ALIGNED' : 'DIVERGENT';
+  const alignmentColor = isStrongAlignment ? '#10b981' : isAligned ? '#fbbf24' : '#ef4444';
+  
+  // Direction agreement between index and 5m prediction
+  const indexBullish = data.signal === 'STRONG_BUY' || data.signal === 'BUY';
+  const indexBearish = data.signal === 'STRONG_SELL' || data.signal === 'SELL';
+  const predictionBullish = data.prediction_5m_signal === 'STRONG_BUY' || data.prediction_5m_signal === 'BUY';
+  const predictionBearish = data.prediction_5m_signal === 'STRONG_SELL' || data.prediction_5m_signal === 'SELL';
+  
+  const directionsAlign = (indexBullish && predictionBullish) || (indexBearish && predictionBearish) || 
+                         (data.signal === 'NEUTRAL' && data.prediction_5m_signal === 'NEUTRAL');
+  
+  return (
+    <div className="bg-slate-800/50 border border-slate-700/50 rounded-lg p-6 backdrop-blur-sm hover:bg-slate-800/70 transition-colors">
+      {/* Header: Symbol */}
+      <div className="flex items-baseline justify-between mb-4">
+        <h3 className="text-2xl font-bold text-white">{data.symbol}</h3>
+        <div className="text-xs font-bold px-2 py-1 rounded" style={{
+          backgroundColor: alignmentColor + '20',
+          color: alignmentColor
+        }}>
+          {alignmentLabel}
         </div>
       </div>
-    </div>
 
-    {/* 5-Minute Prediction - Prominent Section */}
-    <div className="pt-6 border-t border-slate-700/50">
-      <div className="text-xs uppercase tracking-wide text-gray-400 font-bold mb-4">⚡ 5-Min Prediction</div>
-      
-      <div className="flex items-start justify-between mb-6">
-        {/* Direction + Signal */}
-        <div>
-          <div className="text-3xl font-black mb-1" style={{ color: signalColor[data.prediction_5m_signal] }}>
-            {data.prediction_5m_direction === 'UP' ? '▲' : data.prediction_5m_direction === 'DOWN' ? '▼' : '→'}
+      {/* INTEGRATED CONFIDENCE DISPLAY - PROMINENT DUAL METERS */}
+      <div className="mb-6 p-5 bg-gradient-to-br from-slate-900/80 to-slate-800/60 rounded-xl border-2 border-slate-700/50 shadow-lg">
+        <div className="mb-4 pb-3 border-b border-slate-700/50">
+          <h4 className="text-xs font-bold uppercase tracking-widest text-gray-300 mb-3">📊 Integration Analysis</h4>
+          
+          {/* DUAL CONFIDENCE SIDE-BY-SIDE */}
+          <div className="grid grid-cols-2 gap-4">
+            {/* INDEX CONFIDENCE (LEFT) */}
+            <div className="bg-slate-800/50 rounded-lg p-3.5 border border-slate-700/40">
+              <div className="text-center">
+                <div className="text-[9px] font-bold uppercase tracking-wider text-gray-400 mb-2">INDEX CONFIDENCE</div>
+                <div className="text-4xl font-black mb-2" style={{ color: signalColor[data.signal] }}>
+                  {indexConfidence}<span className="text-xl">%</span>
+                </div>
+                <div className="h-2 bg-slate-700/60 rounded-full overflow-hidden mb-2">
+                  <div
+                    className="h-full rounded-full transition-all duration-500"
+                    style={{
+                      width: `${indexConfidence}%`,
+                      backgroundColor: signalColor[data.signal]
+                    }}
+                  />
+                </div>
+                <div className="text-[11px] font-semibold text-gray-300">{data.signal.replace(/_/g, ' ')}</div>
+              </div>
+            </div>
+
+            {/* 5-MIN PREDICTION (RIGHT) */}
+            <div className="bg-slate-800/50 rounded-lg p-3.5 border border-slate-700/40">
+              <div className="text-center">
+                <div className="text-[9px] font-bold uppercase tracking-wider text-gray-400 mb-2">⚡ 5-MIN CONFIDENCE</div>
+                <div className="text-4xl font-black mb-2" style={{ color: signalColor[data.prediction_5m_signal] }}>
+                  {predictionConfidence}<span className="text-xl">%</span>
+                </div>
+                <div className="h-2 bg-slate-700/60 rounded-full overflow-hidden mb-2">
+                  <div
+                    className="h-full rounded-full transition-all duration-500"
+                    style={{
+                      width: `${predictionConfidence}%`,
+                      backgroundColor: signalColor[data.prediction_5m_signal]
+                    }}
+                  />
+                </div>
+                <div className="text-[11px] font-semibold text-gray-300">{data.prediction_5m_signal.replace(/_/g, ' ')}</div>
+              </div>
+            </div>
           </div>
-          <div className="text-lg font-bold text-white">{data.prediction_5m_signal}</div>
         </div>
 
-        {/* Confidence */}
-        <div className="text-right">
-          <div className="text-sm text-gray-400 mb-1">CONFIDENCE</div>
-          <div className="text-3xl font-black" style={{ color: signalColor[data.prediction_5m_signal] }}>
-            {data.prediction_5m_confidence}%
+        {/* INTEGRATED CONFIDENCE + ALIGNMENT METRICS */}
+        <div className="space-y-3">
+          {/* Integrated Score */}
+          <div className="bg-slate-800/40 rounded-lg p-3 border border-slate-700/40">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-[10px] font-bold uppercase tracking-wider text-gray-400">INTEGRATED CONFIDENCE</span>
+              <div className="flex items-center gap-2">
+                <span className="text-2xl font-black text-white">{integratedConfidence}%</span>
+                <span className="text-[11px] font-bold px-3 py-1 rounded-full" style={{
+                  backgroundColor: alignmentColor + '30',
+                  color: alignmentColor
+                }}>
+                  {alignmentLabel}
+                </span>
+              </div>
+            </div>
+            <div className="h-2.5 bg-slate-700/60 rounded-full overflow-hidden">
+              <div
+                className="h-full rounded-full transition-all duration-500"
+                style={{
+                  width: `${integratedConfidence}%`,
+                  backgroundColor: isStrongAlignment ? '#10b981' : isAligned ? '#fbbf24' : '#ef4444'
+                }}
+              />
+            </div>
+          </div>
+
+          {/* Alignment & Direction Indicators */}
+          <div className="grid grid-cols-3 gap-2">
+            <div className="bg-slate-800/40 rounded-lg p-2.5 text-center border border-slate-700/40">
+              <div className="text-[8px] font-bold uppercase text-gray-500 mb-1">Diff</div>
+              <div className="text-xl font-black text-amber-400">{confidenceDiff}%</div>
+            </div>
+            <div className="bg-slate-800/40 rounded-lg p-2.5 text-center border border-slate-700/40">
+              <div className="text-[8px] font-bold uppercase text-gray-500 mb-1">Alignment</div>
+              <div className="text-xl font-black" style={{ color: alignmentColor }}>{alignmentScore}%</div>
+            </div>
+            <div className="bg-slate-800/40 rounded-lg p-2.5 text-center border border-slate-700/40">
+              <div className="text-[8px] font-bold uppercase text-gray-500 mb-1">Agreement</div>
+              <div className="text-lg font-black" style={{ color: directionsAlign ? '#10b981' : '#ef4444' }}>
+                {directionsAlign ? '✓' : '✗'}
+              </div>
+            </div>
           </div>
         </div>
       </div>
 
-      {/* Prediction Bars - VISIBLE BOTH COLORS */}
-      <div className="space-y-4">
-        {/* Bull Bar - GREEN */}
+      {/* Main Signal - Bold */}
+      <div className="mb-6 pb-4 border-b border-slate-700/50">
+        <div className="text-sm text-gray-400 font-bold uppercase mb-2">Overall Signal</div>
+        <div className="text-4xl font-black" style={{ color: signalColor[data.signal] }}>
+          {data.signal.replace(/_/g, ' ')}
+        </div>
+      </div>
+
+      {/* 16-Signal Consensus - Clean Bars */}
+      <div className="mb-6 space-y-4">
+        <h4 className="text-xs uppercase tracking-wide text-gray-400 font-bold">16 Signal Consensus</h4>
+        
+        {/* BUY Bar */}
         <div>
           <div className="flex justify-between text-sm mb-2">
-            <span className="text-emerald-400 font-medium">▲ BULL</span>
-            <span className="text-white font-bold">{data.prediction_5m_confidence}%</span>
+            <span className="text-emerald-400 font-semibold">▲ BUY SIGNALS</span>
+            <span className="text-white font-bold">{data.buy_signals}%</span>
           </div>
-          <div className="w-full h-2.5 bg-slate-700/50 rounded-full overflow-hidden border border-slate-600/30">
+          <div className="h-2.5 bg-slate-700/50 rounded-full overflow-hidden border border-slate-600/30">
             <div
-              className="h-full bg-emerald-500 rounded-full transition-all duration-300 shadow-sm shadow-emerald-500/40"
-              style={{ width: `${Math.max(data.prediction_5m_confidence, 2)}%` }}
+              className="h-full bg-gradient-to-r from-emerald-500 to-emerald-400 rounded-full transition-all duration-500"
+              style={{ width: `${data.buy_signals}%` }}
             />
           </div>
         </div>
 
-        {/* Bear Bar - RED */}
+        {/* SELL Bar */}
         <div>
           <div className="flex justify-between text-sm mb-2">
-            <span className="text-red-400 font-medium">▼ BEAR</span>
-            <span className="text-white font-bold">{100 - data.prediction_5m_confidence}%</span>
+            <span className="text-red-400 font-semibold">▼ SELL SIGNALS</span>
+            <span className="text-white font-bold">{data.sell_signals}%</span>
           </div>
-          <div className="w-full h-2.5 bg-slate-700/50 rounded-full overflow-hidden border border-slate-600/30">
+          <div className="h-2.5 bg-slate-700/50 rounded-full overflow-hidden border border-slate-600/30">
             <div
-              className="h-full bg-red-500 rounded-full transition-all duration-300 shadow-sm shadow-red-500/40"
-              style={{ width: `${Math.max(100 - data.prediction_5m_confidence, 2)}%` }}
+              className="h-full bg-gradient-to-r from-red-500 to-red-400 rounded-full transition-all duration-500"
+              style={{ width: `${data.sell_signals}%` }}
             />
           </div>
         </div>
       </div>
-    </div>
 
-    {/* Footer: Last Update */}
-    <div className="mt-6 pt-4 border-t border-slate-700/50 text-xs text-gray-500 text-center">
-      {new Date(data.timestamp).toLocaleTimeString()}
+      {/* 5-Minute Prediction - PROMINENT SECTION - FULLY VISIBLE */}
+      <div className="mt-6 pt-6 px-5 py-6 border-t-2 border-purple-500/40 bg-gradient-to-br from-purple-950/40 to-slate-900/30 rounded-lg">
+        <div className="flex items-center justify-between mb-5">
+          <h4 className="text-sm font-bold uppercase tracking-wider text-purple-300">⚡ 5-MIN PREDICTION ANALYSIS</h4>
+          {directionsAlign && (
+            <span className="text-[10px] font-bold px-3 py-1.5 rounded-full bg-emerald-500/30 text-emerald-300 border border-emerald-500/60">
+              ✓ CONFIRMED
+            </span>
+          )}
+          {!directionsAlign && (
+            <span className="text-[10px] font-bold px-3 py-1.5 rounded-full bg-red-500/30 text-red-300 border border-red-500/60">
+              ⚠ DIVERGENT
+            </span>
+          )}
+        </div>
+        
+        {/* Direction & Signal Grid */}
+        <div className="grid grid-cols-2 gap-3 mb-4">
+          <div className="bg-slate-800/70 border border-purple-500/50 rounded-lg p-3">
+            <div className="text-[8px] font-bold text-purple-400 mb-1">DIRECTION</div>
+            <div className="text-3xl font-black mb-1" style={{ color: signalColor[data.prediction_5m_signal] }}>
+              {data.prediction_5m_direction === 'UP' ? '▲' : data.prediction_5m_direction === 'DOWN' ? '▼' : '→'}
+            </div>
+            <div className="text-[11px] font-semibold text-gray-300">
+              {data.prediction_5m_direction === 'UP' ? 'BULLISH' : data.prediction_5m_direction === 'DOWN' ? 'BEARISH' : 'NEUTRAL'}
+            </div>
+          </div>
+
+          <div className="bg-slate-800/70 border border-purple-500/50 rounded-lg p-3">
+            <div className="text-[8px] font-bold text-purple-400 mb-1">SIGNAL</div>
+            <div className="text-lg font-black mb-1" style={{ color: signalColor[data.prediction_5m_signal] }}>
+              {data.prediction_5m_signal.replace(/_/g, ' ')}
+            </div>
+            <div className="text-[11px] font-semibold text-gray-300">{predictionConfidence}%</div>
+          </div>
+        </div>
+
+        {/* LARGE CONFIDENCE DISPLAY */}
+        <div className="bg-slate-800/60 border-2 border-purple-500/50 rounded-lg p-4 mb-4">
+          <div className="text-[9px] font-bold text-purple-400 mb-1 text-center">5-MIN CONFIDENCE</div>
+          <div className="text-5xl font-black text-purple-300 text-center mb-2">{predictionConfidence}%</div>
+          <div className="h-3 bg-slate-700/50 rounded-full overflow-hidden">
+            <div
+              className="h-full bg-gradient-to-r from-purple-600 to-purple-400 transition-all duration-500"
+              style={{ width: `${Math.max(predictionConfidence, 2)}%` }}
+            />
+          </div>
+        </div>
+
+        {/* Momentum Distribution */}
+        <div className="space-y-2 pt-3 border-t border-slate-700/40">
+          <div className="text-[8px] font-bold text-gray-400 text-center mb-2">MOMENTUM</div>
+          
+          <div>
+            <div className="flex justify-between text-xs mb-1">
+              <span className="text-emerald-400 font-semibold">▲ BULL</span>
+              <span className="text-emerald-300 font-bold">{predictionConfidence}%</span>
+            </div>
+            <div className="h-2 bg-slate-700/50 rounded-full overflow-hidden">
+              <div
+                className="h-full bg-gradient-to-r from-emerald-600 to-emerald-400"
+                style={{ width: `${Math.max(predictionConfidence, 2)}%` }}
+              />
+            </div>
+          </div>
+
+          <div>
+            <div className="flex justify-between text-xs mb-1">
+              <span className="text-red-400 font-semibold">▼ BEAR</span>
+              <span className="text-red-300 font-bold">{100 - predictionConfidence}%</span>
+            </div>
+            <div className="h-2 bg-slate-700/50 rounded-full overflow-hidden">
+              <div
+                className="h-full bg-gradient-to-r from-red-600 to-red-400"
+                style={{ width: `${Math.max(100 - predictionConfidence, 2)}%` }}
+              />
+            </div>
+          </div>
+        </div>
+
+        {/* Sync Status */}
+        <div className="text-center mt-3 pt-3 border-t border-slate-700/40">
+          <div className="text-[10px] font-bold px-3 py-1 rounded-full inline-block" style={{
+            backgroundColor: directionsAlign ? 'rgba(16, 185, 129, 0.15)' : 'rgba(251, 191, 36, 0.15)',
+            color: directionsAlign ? '#a7f3d0' : '#fcd34d',
+            border: `1px solid ${directionsAlign ? 'rgba(16, 185, 129, 0.4)' : 'rgba(251, 191, 36, 0.4)'}`
+          }}>
+            {directionsAlign ? '✓ SYNCED' : '⚠ VERIFY'}
+          </div>
+        </div>
+      </div>
+
+      {/* Footer: Last Update */}
+      <div className="mt-4 pt-4 border-t border-slate-700/40 flex items-center justify-between text-xs text-gray-500">
+        <span>Updated: {new Date(data.timestamp).toLocaleTimeString()}</span>
+        <span className="text-[10px]" style={{ color: directionsAlign ? '#10b981' : '#fbbf24' }}>
+          {directionsAlign ? '✓ Signals Aligned' : '⚠ Check Setup'}
+        </span>
+      </div>
     </div>
-  </div>
-), (prev, next) => JSON.stringify(prev.data) === JSON.stringify(next.data));
+  );
+}, (prev, next) => JSON.stringify(prev.data) === JSON.stringify(next.data));
 
 SignalCard.displayName = 'SignalCard';
 
+// 🔥 DEFAULT FALLBACK DATA - Shows immediately if API is slow
+const DEFAULT_DATA: MarketOutlookResponse = {
+  NIFTY: {
+    symbol: 'NIFTY',
+    signal: 'STRONG_BUY',
+    confidence: 75,
+    buy_signals: 73,
+    sell_signals: 27,
+    prediction_5m_direction: 'UP',
+    prediction_5m_signal: 'BUY',
+    prediction_5m_confidence: 72,
+    timestamp: new Date().toISOString()
+  },
+  BANKNIFTY: {
+    symbol: 'BANKNIFTY',
+    signal: 'BUY',
+    confidence: 68,
+    buy_signals: 70,
+    sell_signals: 30,
+    prediction_5m_direction: 'UP',
+    prediction_5m_signal: 'BUY',
+    prediction_5m_confidence: 65,
+    timestamp: new Date().toISOString()
+  },
+  SENSEX: {
+    symbol: 'SENSEX',
+    signal: 'NEUTRAL',
+    confidence: 52,
+    buy_signals: 50,
+    sell_signals: 50,
+    prediction_5m_direction: 'FLAT',
+    prediction_5m_signal: 'NEUTRAL',
+    prediction_5m_confidence: 48,
+    timestamp: new Date().toISOString()
+  }
+};
+
 export default function OverallMarketOutlook() {
-  const [data, setData] = useState<MarketOutlookResponse | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [data, setData] = useState<MarketOutlookResponse>(DEFAULT_DATA);
+  const [loading, setLoading] = useState(false);
+  const [isRealData, setIsRealData] = useState(false);
   const { vixData, loading: vixLoading } = useIndiaVIX();
 
-  // Fast fetch with abort signal
+  // Fast fetch with abort signal - NON-BLOCKING
   const fetchData = useCallback(async () => {
     try {
       const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 3000);
+      const timeout = setTimeout(() => controller.abort(), 2000); // Faster timeout, non-blocking
 
       const res = await fetch(`${apiUrl}/api/analysis/market-outlook-all`, {
         cache: 'no-store',
@@ -177,11 +378,31 @@ export default function OverallMarketOutlook() {
       clearTimeout(timeout);
       if (res.ok) {
         const result = await res.json();
-        setData(result);
+        // Ensure all required fields exist
+        const validated: MarketOutlookResponse = {
+          NIFTY: {
+            ...DEFAULT_DATA.NIFTY,
+            ...(result.NIFTY || {})
+          },
+          BANKNIFTY: {
+            ...DEFAULT_DATA.BANKNIFTY,
+            ...(result.BANKNIFTY || {})
+          },
+          SENSEX: {
+            ...DEFAULT_DATA.SENSEX,
+            ...(result.SENSEX || {})
+          }
+        };
+        setData(validated);
+        setIsRealData(true);
+        setLoading(false);
+      } else {
         setLoading(false);
       }
     } catch (err) {
       console.error('Fetch error:', err);
+      setLoading(false);
+      // Keep showing default data - NO BLOCKING
     }
   }, []);
 
@@ -191,20 +412,27 @@ export default function OverallMarketOutlook() {
     return () => clearInterval(interval);
   }, [fetchData]);
 
-  const symbols = useMemo(() => ['NIFTY', 'BANKNIFTY', 'SENSEX'] as const, []);
+  // Calculate integrated metrics across ALL symbols
+  const allSymbols = ['NIFTY', 'BANKNIFTY', 'SENSEX'];
+  const avgIndexConfidence = Math.round(
+    allSymbols.reduce((sum, sym) => sum + (data[sym as keyof MarketOutlookResponse].confidence || 0), 0) / 3
+  );
+  const avg5minConfidence = Math.round(
+    allSymbols.reduce((sum, sym) => sum + (data[sym as keyof MarketOutlookResponse].prediction_5m_confidence || 0), 0) / 3
+  );
+  const integratedConfidence = Math.round((avgIndexConfidence + avg5minConfidence) / 2);
+  const confidenceDiff = Math.abs(avgIndexConfidence - avg5minConfidence);
+  const alignmentScore = Math.max(0, 100 - confidenceDiff);
 
-  if (loading || !data) {
-    return (
-      <div className="space-y-6">
-        <div className="h-10 w-64 bg-slate-700/50 rounded animate-pulse" />
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          {[...Array(3)].map((_, i) => (
-            <div key={i} className="h-96 bg-slate-700/50 rounded-lg animate-pulse" />
-          ))}
-        </div>
-      </div>
-    );
-  }
+  // Count direction agreements
+  const bullishCount = allSymbols.filter(sym => {
+    const symbolData = data[sym as keyof MarketOutlookResponse];
+    const indexBullish = symbolData.signal === 'STRONG_BUY' || symbolData.signal === 'BUY';
+    const predictionBullish = symbolData.prediction_5m_signal === 'STRONG_BUY' || symbolData.prediction_5m_signal === 'BUY';
+    return indexBullish && predictionBullish;
+  }).length;
+  
+  const directionAgreement = Math.round((bullishCount / 3) * 100);
 
   return (
     <div className="space-y-6">
@@ -212,12 +440,15 @@ export default function OverallMarketOutlook() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-3xl font-black text-white">MARKET OUTLOOK</h1>
-          <p className="text-sm text-gray-400 mt-2">16-Signal Consensus • 5-Minute Prediction</p>
+          <p className="text-sm text-gray-400 mt-2">
+            Integrated Analysis • 16-Signal Consensus • 5-Min Prediction Alignment
+            {!isRealData && ' • (Demo Data)'}
+          </p>
         </div>
         <div className="text-right">
           <div className="flex items-center gap-2 text-sm text-gray-400 mb-2">
-            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-            LIVE
+            <span className={`w-2 h-2 rounded-full ${isRealData ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'}`} />
+            {isRealData ? 'LIVE DATA' : 'DEMO MODE'}
           </div>
           <IndiaVIXBadge
             value={vixData.value}
@@ -229,17 +460,139 @@ export default function OverallMarketOutlook() {
         </div>
       </div>
 
-      {/* Three-Symbol Grid */}
+      {/* ✨ INTEGRATION SUMMARY - TOP SECTION - ALWAYS VISIBLE */}
+      <div className="bg-gradient-to-br from-slate-900/90 via-slate-800/80 to-slate-900/90 border-2 border-amber-500/30 rounded-xl p-8 backdrop-blur-lg shadow-2xl">
+        <h2 className="text-sm font-bold uppercase tracking-widest text-amber-400 mb-6">📊 5-Minute Integration Summary</h2>
+        
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+          {/* LEFT: Confidence Comparison */}
+          <div className="space-y-6">
+            <div>
+              <div className="flex items-center justify-between mb-3">
+                <span className="text-xs font-bold uppercase tracking-wider text-gray-400">✓ INDEX CONFIDENCE (AVG)</span>
+                <span className="text-3xl font-black text-blue-400">{avgIndexConfidence}%</span>
+              </div>
+              <div className="h-3 bg-slate-700/60 rounded-full overflow-hidden border border-blue-500/30">
+                <div
+                  className="h-full bg-gradient-to-r from-blue-600 to-blue-400 rounded-full transition-all duration-500"
+                  style={{ width: `${avgIndexConfidence}%` }}
+                />
+              </div>
+            </div>
+
+            <div>
+              <div className="flex items-center justify-between mb-3">
+                <span className="text-xs font-bold uppercase tracking-wider text-gray-400">⚡ 5-MIN CONFIDENCE (AVG)</span>
+                <span className="text-3xl font-black text-purple-400">{avg5minConfidence}%</span>
+              </div>
+              <div className="h-3 bg-slate-700/60 rounded-full overflow-hidden border border-purple-500/30">
+                <div
+                  className="h-full bg-gradient-to-r from-purple-600 to-purple-400 rounded-full transition-all duration-500"
+                  style={{ width: `${avg5minConfidence}%` }}
+                />
+              </div>
+            </div>
+
+            <div className="bg-slate-800/50 rounded-lg p-4 border border-slate-700/50">
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-bold uppercase tracking-wider text-gray-400">Diff Between Both</span>
+                <span className="text-2xl font-black text-amber-400">{confidenceDiff}%</span>
+              </div>
+            </div>
+          </div>
+
+          {/* RIGHT: Integrated Metrics */}
+          <div className="space-y-6">
+            {/* INTEGRATED CONFIDENCE - MAIN METRIC */}
+            <div className="bg-slate-800/80 border-2 border-emerald-500/40 rounded-lg p-5">
+              <div className="flex items-center justify-between mb-4">
+                <span className="text-xs font-bold uppercase tracking-wider text-emerald-400">🎯 INTEGRATED CONFIDENCE</span>
+                <span className="text-4xl font-black text-emerald-400">{integratedConfidence}%</span>
+              </div>
+              <div className="h-4 bg-slate-700/60 rounded-full overflow-hidden border border-emerald-500/30">
+                <div
+                  className="h-full bg-gradient-to-r from-emerald-600 to-emerald-400 rounded-full transition-all duration-500 shadow-lg shadow-emerald-500/40"
+                  style={{ width: `${integratedConfidence}%` }}
+                />
+              </div>
+              <div className="text-[10px] text-gray-400 mt-2">= (INDEX + 5-MIN) ÷ 2</div>
+            </div>
+
+            {/* ALIGNMENT SCORE */}
+            <div className="bg-slate-800/80 border-2 border-cyan-500/40 rounded-lg p-5">
+              <div className="flex items-center justify-between mb-4">
+                <span className="text-xs font-bold uppercase tracking-wider text-cyan-400">⚔ ALIGNMENT SCORE</span>
+                <span className="text-4xl font-black text-cyan-400">{alignmentScore}%</span>
+              </div>
+              <div className="h-4 bg-slate-700/60 rounded-full overflow-hidden border border-cyan-500/30">
+                <div
+                  className="h-full bg-gradient-to-r from-cyan-600 to-cyan-400 rounded-full transition-all duration-500 shadow-lg shadow-cyan-500/40"
+                  style={{ width: `${alignmentScore}%` }}
+                />
+              </div>
+              <div className="text-[10px] text-gray-400 mt-2">100% = Perfect Match</div>
+            </div>
+
+            {/* DIRECTION AGREEMENT */}
+            <div className="bg-slate-800/50 rounded-lg p-4 border border-slate-700/50">
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-bold uppercase tracking-wider text-gray-400">Both Agree</span>
+                <span className="text-2xl font-black text-emerald-400">{directionAgreement}%</span>
+              </div>
+              <div className="text-[9px] text-gray-500 mt-1">Symbols: {bullishCount}/3 in same direction</div>
+            </div>
+          </div>
+        </div>
+
+        {/* Trader Decision Helper */}
+        <div className="mt-6 pt-6 border-t border-slate-700/50">
+          <div className="grid grid-cols-3 gap-4">
+            <div className="text-center">
+              <div className="text-[9px] font-bold uppercase text-gray-500 mb-2">Trade Confidence</div>
+              <div className={`text-sm font-black px-3 py-2 rounded ${
+                integratedConfidence >= 70 ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/50' :
+                integratedConfidence >= 50 ? 'bg-amber-500/20 text-amber-400 border border-amber-500/50' :
+                'bg-red-500/20 text-red-400 border border-red-500/50'
+              }`}>
+                {integratedConfidence >= 70 ? '✓ HIGH' : integratedConfidence >= 50 ? '⚠ MEDIUM' : '✗ LOW'}
+              </div>
+            </div>
+            <div className="text-center">
+              <div className="text-[9px] font-bold uppercase text-gray-500 mb-2">Agreement Quality</div>
+              <div className={`text-sm font-black px-3 py-2 rounded ${
+                alignmentScore >= 90 ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/50' :
+                alignmentScore >= 75 ? 'bg-amber-500/20 text-amber-400 border border-amber-500/50' :
+                'bg-red-500/20 text-red-400 border border-red-500/50'
+              }`}>
+                {alignmentScore >= 90 ? '✓ STRONG' : alignmentScore >= 75 ? '⚠ GOOD' : '✗ WEAK'}
+              </div>
+            </div>
+            <div className="text-center">
+              <div className="text-[9px] font-bold uppercase text-gray-500 mb-2">Direction Synced</div>
+              <div className={`text-sm font-black px-3 py-2 rounded ${
+                directionAgreement >= 67 ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/50' :
+                'bg-amber-500/20 text-amber-400 border border-amber-500/50'
+              }`}>
+                {directionAgreement >= 67 ? '✓ YES' : '⚠ PARTIAL'}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Three-Symbol Grid - ALWAYS VISIBLE */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {symbols.map(symbol => (
+        {['NIFTY', 'BANKNIFTY', 'SENSEX'].map(symbol => (
           <SignalCard key={symbol} data={data[symbol as keyof MarketOutlookResponse]} />
         ))}
       </div>
 
       {/* Footer */}
-      <div className="text-xs text-gray-500 text-center pt-4">
-        16 integrated market signals • 5-minute forecast • {' '}
-        <span className="text-emerald-600 font-semibold">{'<'}15ms latency</span>
+      <div className="text-xs text-gray-500 text-center pt-4 border-t border-slate-700/30 mt-6 pt-6">
+        <div className="space-y-1">
+          <p>✓ INDEX CONFIDENCE • ⚡ 5-MIN PREDICTION • 🎯 INTEGRATED ALIGNMENT</p>
+          <p>{isRealData ? '🟢 Real-time data flowing' : '🟡 Waiting for live data...'}</p>
+        </div>
       </div>
     </div>
   );

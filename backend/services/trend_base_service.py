@@ -10,14 +10,13 @@ Key Metrics:
 - Trend structure integrity (0-100%)
 - Real-time BUY/SELL signals based on structure breaks
 """
+from __future__ import annotations
 
-import pandas as pd
 import numpy as np
 from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass
 from datetime import datetime
 import asyncio
-from scipy.signal import argrelextrema
 
 
 @dataclass
@@ -152,10 +151,12 @@ class TrendBaseEngine:
             for order in [2, 3, 4]:  # Multi-scale swing detection
                 try:
                     # Find local maxima (swing highs)
+                    from scipy.signal import argrelextrema
                     high_idx = argrelextrema(high_arr, np.greater, order=order)[0]
                     all_high_indices.update(high_idx)
                     
                     # Find local minima (swing lows)
+                    from scipy.signal import argrelextrema
                     low_idx = argrelextrema(low_arr, np.less, order=order)[0]
                     all_low_indices.update(low_idx)
                 except:

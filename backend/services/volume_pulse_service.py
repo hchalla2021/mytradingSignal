@@ -10,8 +10,8 @@ Key Metrics:
 - Buying pressure score (0-100%)
 - Real-time pulse detection for BUY/SELL signals
 """
+from __future__ import annotations
 
-import pandas as pd
 import numpy as np
 from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass

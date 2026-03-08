@@ -235,8 +235,15 @@ async def market_websocket(websocket: WebSocket):
     - Warns about token expiration
     """
     print("🔌 [WS-MARKET] New WebSocket connection request...")
-    await manager.connect(websocket)
-    print(f"✅ [WS-MARKET] Client connected. Total clients: {manager.connection_count}")
+    
+    try:
+        await manager.connect(websocket)
+        print(f"✅ [WS-MARKET] Client connected. Total clients: {manager.connection_count}")
+    except Exception as e:
+        print(f"❌ [WS-MARKET] Failed to connect: {e}")
+        import traceback
+        traceback.print_exc()
+        return
     
     cache = CacheService()
     print("🔌 [WS-MARKET] Connecting to cache...")
@@ -245,21 +252,50 @@ async def market_websocket(websocket: WebSocket):
         print("✅ [WS-MARKET] Cache connected")
     except Exception as e:
         print(f"❌ [WS-MARKET] Cache connection failed: {e}")
-        await manager.disconnect(websocket)
+        import traceback
+        traceback.print_exc()
+        try:
+            await manager.disconnect(websocket)
+        except:
+            pass
         return
     
     try:
         # 🔥 NEW: Send connection status info to client
-        from services.market_feed import get_market_status
-        from services.auth_state_machine import auth_state_manager
-        from services.feed_watchdog import feed_watchdog
+        try:
+            from services.market_feed import get_market_status
+            from services.auth_state_machine import auth_state_manager
+            from services.feed_watchdog import feed_watchdog
+        except ImportError as e:
+            print(f"❌ [WS-MARKET] Import error: {e}")
+            await manager.send_personal(websocket, {
+                "type": "error",
+                "error": f"Service initialization error: {str(e)}",
+                "timestamp": datetime.now().isoformat()
+            })
+            await asyncio.sleep(1)
+            try:
+                await manager.disconnect(websocket)
+            except:
+                pass
+            return
         
         print("🔌 [WS-MARKET] Getting market status...")
-        market_status = get_market_status()
+        try:
+            market_status = get_market_status()
+        except Exception as e:
+            print(f"❌ [WS-MARKET] get_market_status error: {e}")
+            market_status = "UNKNOWN"
+        
         print(f"   Market status: {market_status}")
         
-        auth_state = auth_state_manager.current_state
-        feed_state = feed_watchdog.get_health_metrics()
+        try:
+            auth_state = auth_state_manager.current_state
+            feed_state = feed_watchdog.get_health_metrics()
+        except Exception as e:
+            print(f"❌ [WS-MARKET] Auth/Feed state error: {e}")
+            auth_state = "ERROR"
+            feed_state = {}
         
         # Determine connection mode and quality message
         connection_mode = "WebSocket"
@@ -293,31 +329,45 @@ async def market_websocket(websocket: WebSocket):
             status_message = "⚠️ Reconnecting to market feed..."
         
         # Check auth status
-        if auth_state_manager.requires_login:
-            status_message = "🔐 Please login to enable live data"
+        try:
+            if auth_state_manager.requires_login:
+                status_message = "🔐 Please login to enable live data"
+        except:
+            pass
         
         # Send connection status to client
         print("🔌 [WS-MARKET] Sending connection status...")
-        await manager.send_personal(websocket, {
-            "type": "connection_status",
-            "mode": connection_mode,
-            "quality": connection_quality,
-            "message": status_message,
-            "market_status": market_status,
-            "auth_required": auth_state_manager.requires_login,
-            "timestamp": datetime.now().isoformat()
-        })
-        print("✅ [WS-MARKET] Connection status sent")
+        try:
+            await manager.send_personal(websocket, {
+                "type": "connection_status",
+                "mode": connection_mode,
+                "quality": connection_quality,
+                "message": status_message,
+                "market_status": market_status,
+                "auth_required": auth_state_manager.requires_login,
+                "timestamp": datetime.now().isoformat()
+            })
+            print("✅ [WS-MARKET] Connection status sent")
+        except Exception as e:
+            print(f"❌ [WS-MARKET] Failed to send connection status: {e}")
         
         # Send initial market data snapshot (with REST API fallback)
         print("📊 [WS-MARKET] Fetching initial market data from cache...")
-        initial_data = await _get_market_data_with_fallback(cache)
-        print(f"📊 [WS-MARKET] Got data for: {list(initial_data.keys())} ({len(initial_data)} symbols)")
+        try:
+            initial_data = await _get_market_data_with_fallback(cache)
+            print(f"📊 [WS-MARKET] Got data for: {list(initial_data.keys())} ({len(initial_data)} symbols)")
+        except Exception as e:
+            print(f"❌ [WS-MARKET] Failed to fetch market data: {e}")
+            initial_data = {}
         
         # 🔥 CRITICAL FIX: Ensure all snapshot data has FRESH market status
         # Not cached/stale status from when data was last received
-        from services.market_feed import get_market_status
-        current_market_status = get_market_status()
+        try:
+            from services.market_feed import get_market_status
+            current_market_status = get_market_status()
+        except Exception as e:
+            print(f"❌ [WS-MARKET] Failed to get current market status: {e}")
+            current_market_status = "UNKNOWN"
         
         for symbol, data in initial_data.items():
             if data:
@@ -325,13 +375,16 @@ async def market_websocket(websocket: WebSocket):
         
         # 🔥 SEND SNAPSHOT IMMEDIATELY - Don't block on analysis generation!
         print("📊 [WS-MARKET] Sending snapshot to client...")
-        await manager.send_personal(websocket, {
-            "type": "snapshot",
-            "data": initial_data,
-            "timestamp": datetime.now().isoformat(),
-            "marketStatus": current_market_status  # Also include at message level
-        })
-        print("✅ [WS-MARKET] Snapshot sent to client")
+        try:
+            await manager.send_personal(websocket, {
+                "type": "snapshot",
+                "data": initial_data,
+                "timestamp": datetime.now().isoformat(),
+                "marketStatus": current_market_status  # Also include at message level
+            })
+            print("✅ [WS-MARKET] Snapshot sent to client")
+        except Exception as e:
+            print(f"❌ [WS-MARKET] Failed to send snapshot: {e}")
         
         # 🔥 GENERATE ANALYSIS ASYNC - Don't block UI from getting data
         async def generate_analysis_async():

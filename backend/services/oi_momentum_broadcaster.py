@@ -84,8 +84,8 @@ class OIMomentumBroadcaster:
             candle_key = f"analysis_candles:{symbol}"
             candles_json = await self.cache.lrange(candle_key, 0, 199)
             
-            if not candles_json or len(candles_json) < 20:
-                return  # Need minimum candles
+            if not candles_json or len(candles_json) < 3:
+                return  # Need minimum candles (matches service min_candles_required)
             
             # Parse candles
             candles = []
@@ -112,7 +112,7 @@ class OIMomentumBroadcaster:
                     })
             df_15m = pd.DataFrame(df_15m_data)
             
-            if len(df_5m) < 20 or len(df_15m) < 5:
+            if len(df_5m) < 3 or len(df_15m) < 1:
                 return
             
             # Analyze OI momentum

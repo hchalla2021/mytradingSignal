@@ -135,23 +135,23 @@ const calculateCandleConfidence = (data: CandleIntentData): number => {
   }
   
   // Pattern confidence (25% weight)
-  const patternConf = data.pattern.confidence;
+  const patternConf = data.pattern?.confidence ?? 0;
   if (patternConf >= 80) confidence += 18;
   else if (patternConf >= 65) confidence += 12;
   else if (patternConf >= 50) confidence += 6;
   else confidence -= 8;
   
   // Body strength (20% weight)
-  const bodyStrength = data.body_analysis.strength;
-  const bodyRatio = data.body_analysis.body_ratio_pct;
+  const bodyStrength = data.body_analysis?.strength ?? 0;
+  const bodyRatio = data.body_analysis?.body_ratio_pct ?? 0;
   if (bodyStrength >= 75 && bodyRatio >= 60) confidence += 15; // Decisive candle
   else if (bodyStrength >= 60) confidence += 8;
   else if (bodyRatio < 30) confidence -= 8; // Indecisive
   
   // Volume confirmation (20% weight) — skip penalty for spot indices (no traded volume)
-  const volumeRatio = data.volume_analysis.volume_ratio;
-  const volumeEff = data.volume_analysis.efficiency;
-  const isSpotIndex = data.volume_analysis.volume_type === 'SPOT_INDEX';
+  const volumeRatio = data.volume_analysis?.volume_ratio ?? 0;
+  const volumeEff = data.volume_analysis?.efficiency ?? 0;
+  const isSpotIndex = data.volume_analysis?.volume_type === 'SPOT_INDEX';
   if (!isSpotIndex) {
     if (volumeRatio >= 2.0 && volumeEff === 'ABSORPTION') confidence += 15;
     else if (volumeRatio >= 1.5) confidence += 10;
@@ -166,10 +166,10 @@ const calculateCandleConfidence = (data: CandleIntentData): number => {
   // Wick analysis (15% weight)
   const signal = getCandleSignal(data);
   const wickConfirms = 
-    (signal === 'BUY' && data.wick_analysis.lower_signal === 'BULLISH') ||
-    (signal === 'SELL' && data.wick_analysis.upper_signal === 'BEARISH');
+    (signal === 'BUY' && data.wick_analysis?.lower_signal === 'BULLISH') ||
+    (signal === 'SELL' && data.wick_analysis?.upper_signal === 'BEARISH');
   if (wickConfirms) confidence += 12;
-  else if (data.wick_analysis.dominant_wick === 'NEITHER') confidence -= 5;
+  else if (data.wick_analysis?.dominant_wick === 'NEITHER') confidence -= 5;
   
   // Signal strength (10% weight)
   if (signal.includes('STRONG')) confidence += 8;
@@ -406,8 +406,8 @@ const CandleIntentCard = memo<CandleIntentCardProps>(({ symbol, name }) => {
         {/* Trap badge */}
         {isTrap && data.trap_status && (
           <div className="mx-4 mb-3 px-3 py-1.5 rounded-lg bg-rose-500/10 border border-rose-500/25 flex items-center justify-between">
-            <span className="text-[10px] text-rose-300 font-bold">⚠ TRAP: {(data.trap_status.trap_type ?? '').replace(/_/g, ' ')}</span>
-            <span className="text-[10px] text-rose-300 font-bold">{data.trap_status.severity}%</span>
+            <span className="text-[10px] text-rose-300 font-bold">⚠ TRAP: {(data.trap_status?.trap_type ?? '').replace(/_/g, ' ')}</span>
+            <span className="text-[10px] text-rose-300 font-bold">{data.trap_status?.severity ?? 0}%</span>
           </div>
         )}
       </div>
@@ -472,11 +472,11 @@ const CandleIntentCard = memo<CandleIntentCardProps>(({ symbol, name }) => {
           const barColor  = isBuyCandle ? 'bg-teal-500'    : isSellCandle ? 'bg-rose-500'    : 'bg-amber-500';
 
           const isTrap = data.trap_status?.is_trap ?? false;
-          const vr = data.volume_analysis.volume_ratio;
-          const bodyRatio = data.body_analysis.body_ratio_pct;
-          const bodyStrength = data.body_analysis.strength;
-          const patConf = data.pattern.confidence;
-          const volEff = data.volume_analysis.efficiency;
+          const vr = data.volume_analysis?.volume_ratio ?? 0;
+          const bodyRatio = data.body_analysis?.body_ratio_pct ?? 0;
+          const bodyStrength = data.body_analysis?.strength ?? 0;
+          const patConf = data.pattern?.confidence ?? 0;
+          const volEff = data.volume_analysis?.efficiency ?? 0;
           
           // Candle-specific momentum indicators (4-row grid)
           const patternQuality = patConf >= 80 ? 'Very High' : patConf >= 65 ? 'High' : patConf >= 50 ? 'Moderate' : 'Low';
@@ -488,8 +488,8 @@ const CandleIntentCard = memo<CandleIntentCardProps>(({ symbol, name }) => {
           const volumeQuality = vr >= 2.0 ? 'Strong' : vr >= 1.5 ? 'Good' : vr >= 1.0 ? 'Fair' : 'Weak';
           const volumeQualityColor = vr >= 2.0 ? 'text-teal-300' : vr >= 1.5 ? 'text-teal-400' : vr >= 1.0 ? 'text-amber-300' : 'text-rose-300';
           
-          const wickType = data.wick_analysis.dominant_wick === 'LOWER' ? 'Lower Wick' : data.wick_analysis.dominant_wick === 'UPPER' ? 'Upper Wick' : 'Balanced';
-          const wickTypeColor = data.wick_analysis.dominant_wick === 'LOWER' ? 'text-teal-300' : data.wick_analysis.dominant_wick === 'UPPER' ? 'text-rose-300' : 'text-white/50';
+          const wickType = data.wick_analysis?.dominant_wick === 'LOWER' ? 'Lower Wick' : data.wick_analysis?.dominant_wick === 'UPPER' ? 'Upper Wick' : 'Balanced';
+          const wickTypeColor = data.wick_analysis?.dominant_wick === 'LOWER' ? 'text-teal-300' : data.wick_analysis?.dominant_wick === 'UPPER' ? 'text-rose-300' : 'text-white/50';
           
           // Actual Market Confidence (independent from predicted)
           let actualMarketConf = 50;
@@ -497,14 +497,14 @@ const CandleIntentCard = memo<CandleIntentCardProps>(({ symbol, name }) => {
             actualMarketConf = Math.min(95, Math.max(30, 
               (bodyRatio >= 60 && bodyStrength >= 70 ? 35 : bodyRatio >= 45 ? 25 : 15) +
               (vr >= 1.8 ? 25 : vr >= 1.2 ? 15 : 5) +
-              (data.wick_analysis.lower_signal === 'BULLISH' ? 20 : 10) +
+              (data.wick_analysis?.lower_signal === 'BULLISH' ? 20 : 10) +
               (patConf >= 75 ? 15 : 0)
             ));
           } else if (isSellCandle) {
             actualMarketConf = Math.min(95, Math.max(30, 
               (bodyRatio >= 60 && bodyStrength >= 70 ? 35 : bodyRatio >= 45 ? 25 : 15) +
               (vr >= 1.8 ? 25 : vr >= 1.2 ? 15 : 5) +
-              (data.wick_analysis.upper_signal === 'BEARISH' ? 20 : 10) +
+              (data.wick_analysis?.upper_signal === 'BEARISH' ? 20 : 10) +
               (patConf >= 75 ? 15 : 0)
             ));
           } else {
@@ -515,8 +515,8 @@ const CandleIntentCard = memo<CandleIntentCardProps>(({ symbol, name }) => {
           const confirms = [];
           if (bodyRatio >= 60) confirms.push('✓ Decisive body');
           if (vr >= 1.5) confirms.push('✓ Volume confirms');
-          if (data.wick_analysis.lower_signal === 'BULLISH' && isBuyCandle) confirms.push('✓ Lower wick bulls');
-          if (data.wick_analysis.upper_signal === 'BEARISH' && isSellCandle) confirms.push('✓ Upper wick bears');
+          if (data.wick_analysis?.lower_signal === 'BULLISH' && isBuyCandle) confirms.push('✓ Lower wick bulls');
+          if (data.wick_analysis?.upper_signal === 'BEARISH' && isSellCandle) confirms.push('✓ Upper wick bears');
           if (!isTrap && patConf >= 70) confirms.push('✓ Pattern clear');
           if (data.near_zone) confirms.push('✓ Near key zone');
           
@@ -528,8 +528,8 @@ const CandleIntentCard = memo<CandleIntentCardProps>(({ symbol, name }) => {
             : (pred.label === 'STRONG UP' || pred.label === 'STRONG DOWN')
             ? 'Strong body + volume confirm'
             : data.near_zone ? 'Near key zone — sharp move'
-            : (isBuyCandle && data.wick_analysis.lower_signal === 'BULLISH') ? 'Body + lower wick confirm'
-            : (isSellCandle && data.wick_analysis.upper_signal === 'BEARISH') ? 'Body + upper wick confirm'
+            : (isBuyCandle && data.wick_analysis?.lower_signal === 'BULLISH') ? 'Body + lower wick confirm'
+            : (isSellCandle && data.wick_analysis?.upper_signal === 'BEARISH') ? 'Body + upper wick confirm'
             : 'Watching candle structure…';
 
           return (

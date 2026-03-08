@@ -40,7 +40,6 @@ from typing import Dict, Any, Optional, List, Tuple, Deque, Set
 from fastapi import WebSocket
 
 import pytz
-from kiteconnect import KiteConnect
 
 from config import get_settings
 from services.cache import CacheService
@@ -755,12 +754,13 @@ class CompassService:
 
     # ── Kite client ──────────────────────────────────────────────────────────
 
-    def _get_kite(self) -> Optional[KiteConnect]:
+    def _get_kite(self):
         if not auth_state_manager.is_authenticated:
             return None
         s = get_settings()
         if not s.zerodha_api_key or not s.zerodha_access_token:
             return None
+        from kiteconnect import KiteConnect
         kite = KiteConnect(api_key=s.zerodha_api_key)
         kite.set_access_token(s.zerodha_access_token)
         return kite

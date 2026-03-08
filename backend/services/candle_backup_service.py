@@ -116,12 +116,19 @@ class CandleBackupService:
         try:
             print(f"\n🔄 RESTORING CANDLES FOR {symbol}...")
             
-            # Try to find the most recent backup file for this symbol
+            # Try today's backup first, then fall back to most recent
             backup_file = CandleBackupService.get_backup_file_path(symbol)
             
             if not backup_file.exists():
-                print(f"   ⚠️  No backup file found: {backup_file.name}")
-                return False
+                # Find the most recent backup for this symbol
+                pattern = f"{symbol}_candles_*.json"
+                candidates = sorted(BACKUP_DIR.glob(pattern), reverse=True)
+                if candidates:
+                    backup_file = candidates[0]
+                    print(f"   ℹ️  Using most recent backup: {backup_file.name}")
+                else:
+                    print(f"   ⚠️  No backup file found for {symbol}")
+                    return False
             
             # Load backup data
             with open(backup_file, 'r') as f:

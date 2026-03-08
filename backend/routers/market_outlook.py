@@ -382,6 +382,10 @@ class MarketOutlookCalculator:
             'bearish_signals': bearish_count,
             'neutral_signals': neutral_count,
             'trend_percentage': round(trend_percentage, 1),
+            # 🔥 5-MINUTE PREDICTION INTEGRATION
+            'prediction_5m_direction': 'UP' if bullish_count > bearish_count else 'DOWN' if bearish_count > bullish_count else 'FLAT',
+            'prediction_5m_signal': candle_intent_signal if candle_intent_conf > 50 else overall_signal,
+            'prediction_5m_confidence': int(candle_intent_conf) if candle_intent_conf > 50 else int(overall_confidence * 0.8),
             'signals': {
                 'trend_base': signals['trend_base'],
                 'volume_pulse': signals['volume_pulse'],
@@ -454,6 +458,66 @@ async def get_all_symbols_market_outlook():
             results[symbol] = await get_market_outlook(symbol)
         except Exception as e:
             results[symbol] = {'error': str(e)}
+    
+    return results
+
+
+@router.get("/market-outlook-all")
+async def get_market_outlook_all_formatted():
+    """
+    Get market outlook for NIFTY, BANKNIFTY, SENSEX with properly formatted response
+    for Overall Market Outlook UI component with integrated 5-minute predictions.
+    
+    Returns data structured as:
+    {
+      "NIFTY": {
+        "symbol": "NIFTY",
+        "signal": "STRONG_BUY",
+        "confidence": 75,
+        "buy_signals": 11,
+        "sell_signals": 3,
+        "prediction_5m_direction": "UP",
+        "prediction_5m_signal": "BUY",
+        "prediction_5m_confidence": 72,
+        "timestamp": "2025-03-08T10:30:45"
+      }
+    }
+    """
+    symbols = ['NIFTY', 'BANKNIFTY', 'SENSEX']
+    results = {}
+    
+    for symbol in symbols:
+        try:
+            outlook = await get_market_outlook(symbol)
+            
+            # Format for frontend UI with all required fields
+            formatted = {
+                'symbol': symbol,
+                'signal': outlook.get('overall_signal', 'NEUTRAL'),
+                'confidence': outlook.get('overall_confidence', 50),
+                # Map signal counts (normalize to percentages)
+                'buy_signals': int((outlook.get('bullish_signals', 0) / max(outlook.get('bullish_signals', 0) + outlook.get('bearish_signals', 0) + outlook.get('neutral_signals', 0), 1)) * 100),
+                'sell_signals': int((outlook.get('bearish_signals', 0) / max(outlook.get('bullish_signals', 0) + outlook.get('bearish_signals', 0) + outlook.get('neutral_signals', 0), 1)) * 100),
+                # 5-minute prediction integration (from candle intent signal)
+                'prediction_5m_direction': outlook.get('prediction_5m_direction', 'FLAT'),
+                'prediction_5m_signal': outlook.get('prediction_5m_signal', 'NEUTRAL'),
+                'prediction_5m_confidence': outlook.get('prediction_5m_confidence', 50),
+                'timestamp': outlook.get('timestamp', datetime.now().isoformat())
+            }
+            results[symbol] = formatted
+        except Exception as e:
+            results[symbol] = {
+                'symbol': symbol,
+                'signal': 'NEUTRAL',
+                'confidence': 50,
+                'buy_signals': 0,
+                'sell_signals': 0,
+                'prediction_5m_direction': 'FLAT',
+                'prediction_5m_signal': 'NEUTRAL',
+                'prediction_5m_confidence': 50,
+                'timestamp': datetime.now().isoformat(),
+                'error': str(e)
+            }
     
     return results
 

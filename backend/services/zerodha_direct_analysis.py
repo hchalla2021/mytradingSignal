@@ -4,7 +4,6 @@ Independent analysis using direct Zerodha REST API
 Works WITHOUT WebSocket dependency - PERMANENT SOLUTION
 """
 
-from kiteconnect import KiteConnect
 from typing import Dict, Any, Optional
 from datetime import datetime
 import os
@@ -21,6 +20,7 @@ class ZerodhaDirectAnalysis:
         self.access_token = settings.zerodha_access_token
         
         # Initialize KiteConnect
+        from kiteconnect import KiteConnect
         self.kite = KiteConnect(api_key=self.api_key)
         
         if self.access_token:

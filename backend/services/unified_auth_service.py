@@ -30,9 +30,6 @@ from pathlib import Path
 from typing import Optional, Callable, Dict
 from enum import Enum
 import pytz
-from kiteconnect import KiteConnect
-from kiteconnect.exceptions import TokenException
-
 from config import get_settings
 
 IST = pytz.timezone('Asia/Kolkata')
@@ -70,7 +67,6 @@ class UnifiedAuthService:
     def _load_token(self):
         """Load token from settings and determine initial state"""
         try:
-            get_settings.cache_clear()
             self.settings = get_settings()
             
             token = self.settings.zerodha_access_token
@@ -155,6 +151,8 @@ class UnifiedAuthService:
         try:
             print(f"🔍 UNIFIED AUTH: Validating token...")
             
+            from kiteconnect import KiteConnect
+            from kiteconnect.exceptions import TokenException
             kite = KiteConnect(api_key=self.settings.zerodha_api_key)
             kite.set_access_token(self._token)
             

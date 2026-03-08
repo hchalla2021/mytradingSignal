@@ -4,8 +4,8 @@ No indicators. No emotions. Only: Liquidity Grab, Volume Spike, OI Change, Price
 
 Designed by: 25-year veteran trader + Python developer
 """
+from __future__ import annotations
 
-import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Literal
@@ -185,61 +185,75 @@ class OIMomentumService:
         volume_spike = bool(latest.get('volume_spike', False))
         price_breakout = bool(latest.get('price_breakout', False))
         _raw_oicp = latest.get('oi_change_pct', 0)
-        oi_change_pct = 0.0 if pd.isna(_raw_oicp) else float(_raw_oicp)
+        try:
+            oi_change_pct = 0.0 if (_raw_oicp is None or _raw_oicp != _raw_oicp) else float(_raw_oicp)
+        except (TypeError, ValueError):
+            oi_change_pct = 0.0
         _raw_vrat = latest.get('volume_ratio', 0)
-        volume_ratio = 0.0 if pd.isna(_raw_vrat) else float(_raw_vrat)
+        try:
+            volume_ratio = 0.0 if (_raw_vrat is None or _raw_vrat != _raw_vrat) else float(_raw_vrat)
+        except (TypeError, ValueError):
+            volume_ratio = 0.0
         
         # Reverse logic for SELL
         liquidity_grab_sell = bool(latest.get('liquidity_grab_sell', False))
         oi_reduction = bool(latest.get('oi_reduction', False))
         price_breakdown = bool(latest.get('price_breakdown', False))
 
-        # Calculate signal score (0-100)
+        # Calculate signal score — proportional, not binary
         buy_score = 0
         sell_score = 0
-        
-        # BUY SCORING
+
+        # BUY-SIDE EVIDENCE
         if liquidity_grab:
             buy_score += 25
         if oi_buildup:
             buy_score += 25
-        if volume_spike:
-            buy_score += 25
+            # Proportional OI bonus: large OI buildup = stronger conviction
+            buy_score += min(15, abs(oi_change_pct) * 1.5)
         if price_breakout:
-            buy_score += 25
-            
-        # SELL SCORING  
+            buy_score += 20
+
+        # SELL-SIDE EVIDENCE
         if liquidity_grab_sell:
             sell_score += 25
         if oi_reduction:
             sell_score += 25
-        if volume_spike:  # High volume on sell is also important
-            sell_score += 25
+            sell_score += min(15, abs(oi_change_pct) * 1.5)
         if price_breakdown:
-            sell_score += 25
+            sell_score += 20
 
-        # Determine signal
-        if buy_score >= 75:
+        # Volume confirms whichever direction has more evidence
+        if volume_spike:
+            if buy_score > sell_score:
+                buy_score += 20
+            elif sell_score > buy_score:
+                sell_score += 20
+            else:
+                buy_score += 10
+                sell_score += 10
+
+        # Net score determines signal direction
+        net_score = buy_score - sell_score
+
+        if net_score >= 50:
             signal = "STRONG_BUY"
-        elif buy_score >= 50:
+        elif net_score >= 20:
             signal = "BUY"
-        elif sell_score >= 75:
+        elif net_score <= -50:
             signal = "STRONG_SELL"
-        elif sell_score >= 50:
+        elif net_score <= -20:
             signal = "SELL"
         else:
             signal = "NEUTRAL"
 
-        # Directional score: only credit factors that support the actual signal direction.
-        # Using max(buy, sell) previously inflated the "Data Strength" factor in confidence
-        # when signals were NEUTRAL or conflicting.
+        # Directional score for confidence calculation
         if signal in ("STRONG_BUY", "BUY"):
-            directional_score = buy_score
+            directional_score = int(buy_score)
         elif signal in ("STRONG_SELL", "SELL"):
-            directional_score = sell_score
+            directional_score = int(sell_score)
         else:
-            # NEUTRAL: partial credit so confidence isn't artificially 0
-            directional_score = max(buy_score, sell_score) // 2
+            directional_score = int(max(buy_score, sell_score)) // 2
 
         return {
             "signal": signal,
@@ -322,16 +336,24 @@ class OIMomentumService:
         df['volume_ratio'] = (df['volume'] / df['avg_volume']).fillna(1.0)
         # Only flag a spike when actual volume data exists; avoid false signals from 0-volume indices
         if has_volume_data:
-            df['volume_spike'] = df['volume'] > 1.5 * df['avg_volume']
+            df['volume_spike'] = df['volume'] > 1.2 * df['avg_volume']
         else:
             df['volume_spike'] = False
 
         # 🧠 PART 4: PRICE STRUCTURE
-        # BUY: Higher high formed
-        df['price_breakout'] = df['high'] > df['high'].shift(1)
-        
-        # SELL: Lower low formed
-        df['price_breakdown'] = df['low'] < df['low'].shift(1)
+        # BUY: Close confirms upward + high exceeds rolling 3-candle high
+        # (prevents false breakouts from single-candle noise)
+        rolling_high = df['high'].rolling(3, min_periods=1).max().shift(1)
+        rolling_low = df['low'].rolling(3, min_periods=1).min().shift(1)
+        df['price_breakout'] = (
+            (df['close'] > df['close'].shift(1)) &
+            (df['high'] > rolling_high)
+        )
+        # SELL: Close confirms downward + low breaks rolling 3-candle low
+        df['price_breakdown'] = (
+            (df['close'] < df['close'].shift(1)) &
+            (df['low'] < rolling_low)
+        )
 
         return df
 
@@ -368,14 +390,15 @@ class OIMomentumService:
         # Combined strength (weighted)
         combined_strength = (strength_15m * 0.6) + (strength_5m * 0.4)  # 15m has more weight
         
-        # Determine final signal
+        # Determine final signal — threshold 0.4 so a clear 5m signal
+        # isn't diluted to NEUTRAL by a borderline 15m
         if combined_strength >= 1.5:
             final_signal = "STRONG_BUY"
-        elif combined_strength >= 0.5:
+        elif combined_strength >= 0.4:
             final_signal = "BUY"
         elif combined_strength <= -1.5:
             final_signal = "STRONG_SELL"
-        elif combined_strength <= -0.5:
+        elif combined_strength <= -0.4:
             final_signal = "SELL"
         else:
             final_signal = "NEUTRAL"

@@ -11,8 +11,8 @@ Key Features:
 - Price distance to critical zones
 - Real-time bounce/break prediction
 """
+from __future__ import annotations
 
-import pandas as pd
 import numpy as np
 from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass
@@ -283,9 +283,9 @@ class ZoneControlEngine:
         wick_dominance = self._calculate_wick_dominance(candles_near_zone, level, zone_type)
         
         # Replace NaN with 0.0 for safety
-        rejection_speed = 0.0 if pd.isna(rejection_speed) or np.isnan(rejection_speed) else rejection_speed
-        absorption_strength = 0.0 if pd.isna(absorption_strength) or np.isnan(absorption_strength) else absorption_strength
-        wick_dominance = 0.0 if pd.isna(wick_dominance) or np.isnan(wick_dominance) else wick_dominance
+        rejection_speed = 0.0 if (rejection_speed is None or rejection_speed != rejection_speed) else rejection_speed
+        absorption_strength = 0.0 if (absorption_strength is None or absorption_strength != absorption_strength) else absorption_strength
+        wick_dominance = 0.0 if (wick_dominance is None or wick_dominance != wick_dominance) else wick_dominance
         
         zone_label = self._determine_zone_label(rejection_speed, absorption_strength, wick_dominance, touches, zone_type)
         liquidity_score = self._calculate_liquidity_score(rejection_speed, absorption_strength, wick_dominance, touches, volume_strength)

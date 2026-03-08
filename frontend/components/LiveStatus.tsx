@@ -81,6 +81,16 @@ const LiveStatus: React.FC<LiveStatusProps> = memo(({ status, isConnected }) => 
           borderColor: 'border-rose-500/40',
           glowClass: 'shadow-md shadow-rose-500/20',
         };
+      case 'WAITING':
+        return {
+          icon: <AlertCircle className="w-4 h-4 sm:w-5 sm:h-5" />,
+          text: 'Waiting for market to open (9:15 AM IST)',
+          shortText: 'Market Closed',
+          bgColor: 'bg-gradient-to-r from-slate-500/15 to-gray-500/10',
+          textColor: 'text-slate-300',
+          borderColor: 'border-slate-500/40',
+          glowClass: 'shadow-md shadow-slate-500/20',
+        };
       case 'DISCONNECTED':
       case 'disconnected':
       default:
