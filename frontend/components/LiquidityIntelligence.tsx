@@ -62,16 +62,16 @@ function getDirPalette(dir: LiquidityDirection): DirPalette {
 
 // ── OI Profile banner ─────────────────────────────────────────────────────────
 
-type ProfileStyle = { bg: string; text: string; label: string; icon: string };
+type ProfileStyle = { bg: string; text: string; label: string; icon: string; ring: string; glow: string };
 
 const OI_PROFILE: Record<OIProfile, ProfileStyle> = {
-  LONG_BUILDUP:     { bg: 'bg-emerald-500/20 border-emerald-500/40', text: 'text-emerald-200', label: 'Long Buildup',      icon: '📈' },
-  SHORT_COVERING:   { bg: 'bg-lime-500/15    border-lime-500/30',    text: 'text-lime-300',    label: 'Short Covering',    icon: '🔄' },
-  SHORT_BUILDUP:    { bg: 'bg-red-500/20     border-red-500/40',     text: 'text-red-200',     label: 'Short Buildup',     icon: '📉' },
-  LONG_UNWINDING:   { bg: 'bg-orange-500/15  border-orange-500/30',  text: 'text-orange-300',  label: 'Long Unwinding',    icon: '⚠️' },
-  NEUTRAL:          { bg: 'bg-slate-700/30   border-slate-600/30',   text: 'text-slate-400',   label: 'No Clear Pattern',  icon: '⚖️' },
-  PCR_EXTREME_BULL: { bg: 'bg-cyan-500/20    border-cyan-400/50',    text: 'text-cyan-200',    label: 'Extreme Put Wall',  icon: '🛡️' },
-  PCR_EXTREME_BEAR: { bg: 'bg-amber-500/20   border-amber-400/40',   text: 'text-amber-200',   label: 'Extreme Call Wall', icon: '🧱' },
+  LONG_BUILDUP:     { bg: 'bg-emerald-500/20 border-emerald-500/40', text: 'text-emerald-200', label: 'Long Buildup',      icon: '📈', ring: 'ring-2 ring-emerald-400/70 border-emerald-400/60', glow: 'shadow-[0_0_18px_rgba(52,211,153,0.35)]' },
+  SHORT_COVERING:   { bg: 'bg-lime-500/15    border-lime-500/30',    text: 'text-lime-300',    label: 'Short Covering',    icon: '🔄', ring: '', glow: '' },
+  SHORT_BUILDUP:    { bg: 'bg-red-500/20     border-red-500/40',     text: 'text-red-200',     label: 'Short Buildup',     icon: '📉', ring: 'ring-2 ring-red-500/70 border-red-500/60',         glow: 'shadow-[0_0_18px_rgba(239,68,68,0.35)]' },
+  LONG_UNWINDING:   { bg: 'bg-orange-500/15  border-orange-500/30',  text: 'text-orange-300',  label: 'Long Unwinding',    icon: '⚠️', ring: '', glow: '' },
+  NEUTRAL:          { bg: 'bg-slate-700/30   border-slate-600/30',   text: 'text-slate-400',   label: 'No Clear Pattern',  icon: '⚖️', ring: '', glow: '' },
+  PCR_EXTREME_BULL: { bg: 'bg-cyan-500/20    border-cyan-400/50',    text: 'text-cyan-200',    label: 'Extreme Put Wall',  icon: '🛡️', ring: '', glow: '' },
+  PCR_EXTREME_BEAR: { bg: 'bg-amber-500/20   border-amber-400/40',   text: 'text-amber-200',   label: 'Extreme Call Wall', icon: '🧱', ring: '', glow: '' },
 };
 
 // ── 5-min prediction badge ─────────────────────────────────────────────────────
@@ -229,9 +229,10 @@ const IndexCard = memo(({ data, index }: { data: LiquidityIndex | null; index: s
     ['pcr_sentiment', 'oi_buildup', 'price_momentum', 'candle_conviction'];
 
   return (
-    <div className={`flex-1 min-w-[260px] rounded-xl bg-[#1a2332] border border-slate-700/40
-                     ring-1 ${pal.ring} shadow-lg ${pal.glow} overflow-hidden
-                     transition-all duration-300`}>
+    <div className={`flex-1 min-w-[260px] rounded-xl bg-[#1a2332] border overflow-hidden
+                     transition-all duration-300
+                     ${oiStyle.ring || `ring-1 ${pal.ring} border-slate-700/40`}
+                     ${oiStyle.glow || `shadow-lg ${pal.glow}`}`}>
 
       {/* ── OI Profile banner ──────────────────────────────────────────────── */}
       <div className={`px-3 py-2 border-b flex items-center justify-between ${oiStyle.bg}`}>

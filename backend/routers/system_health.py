@@ -47,15 +47,26 @@ async def get_system_health():
     
     # Overall system status priority:
     # 1. AUTH_REQUIRED → Show login
-    # 2. FEED_DISCONNECTED → Show "Reconnecting..."
+    # 2. FEED_DISCONNECTED → Show "Reconnecting..." (ONLY during LIVE hours)
     # 3. MARKET_SESSION → Show actual status
     
     if auth_state_manager.requires_login:
         priority_status = "AUTH_REQUIRED"
         priority_message = "Login required to view live data"
     elif feed_watchdog.requires_reconnect and market_session.is_data_flow_expected(now):
-        priority_status = "FEED_DISCONNECTED"
-        priority_message = "Reconnecting to market feed..."
+        # During PRE_OPEN / AUCTION_FREEZE the feed may not have received
+        # ticks yet — this is normal startup behaviour, not a failure.
+        # Only show the alarming FEED_DISCONNECTED during LIVE hours AND
+        # only if the feed previously received ticks (genuine disconnect).
+        # If total_ticks == 0 the feed has never connected — this is startup, not a failure.
+        phase = market_session.get_current_phase(now)
+        has_ever_received_ticks = feed_metrics.get("total_ticks", 0) > 0
+        if phase == MarketPhase.LIVE and has_ever_received_ticks:
+            priority_status = "FEED_DISCONNECTED"
+            priority_message = "Reconnecting to market feed..."
+        else:
+            priority_status = "MARKET_SESSION"
+            priority_message = market_desc["description"]
     else:
         priority_status = "MARKET_SESSION"
         priority_message = market_desc["description"]

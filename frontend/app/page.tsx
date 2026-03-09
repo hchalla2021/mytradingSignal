@@ -58,6 +58,7 @@ const OIMomentumCard = dynamic(() => import('@/components/OIMomentumCard'), {
 const VolumePulseCard = dynamic(() => import('@/components/VolumePulseCard'), { ssr: false });
 const TrendBaseCard = dynamic(() => import('@/components/TrendBaseCard'), { ssr: false });
 const CandleIntentCard = dynamic(() => import('@/components/CandleIntentCard'), { ssr: false });
+const ORBCard = dynamic(() => import('@/components/ORBCard'), { ssr: false });
 const PivotSectionUnified = dynamic(() => import('@/components/PivotSectionUnified'), { ssr: false });
 const TradeSupportResistance = dynamic(() => import('@/components/TradeSupportResistance'), { ssr: false });
 const InstitutionalMarketView = dynamic(() => import('@/components/InstitutionalMarketView'), { ssr: false });
@@ -856,6 +857,43 @@ export default function Home() {
     return 'OFFLINE';
   }, [marketData.NIFTY?.status, marketData.BANKNIFTY?.status, marketData.SENSEX?.status]);
 
+  // Derive a display-ready connection status.
+  // Upgrades to LIVE when WS is connected AND live tick data is flowing.
+  // Downgrades alarming RECONNECTING to calmer messages outside trading hours.
+  const hasLiveData = !!(marketData.NIFTY?.price || marketData.BANKNIFTY?.price || marketData.SENSEX?.price);
+
+  const displayStatus = useMemo(() => {
+    // WS connected + live tick data + market LIVE → show "Live market data ⚡"
+    if (connectionStatus === 'connected' && hasLiveData && marketStatus === 'LIVE') {
+      return 'LIVE' as const;
+    }
+
+    // WS connected but no live data yet, or market not LIVE → CONNECTED (teal)
+    if (connectionStatus === 'connected') return 'CONNECTED' as const;
+
+    // Market closed / offline → calm "Waiting for market to open"
+    if (marketStatus === 'CLOSED' || marketStatus === 'OFFLINE') {
+      if (connectionStatus === 'RECONNECTING' || connectionStatus === 'connecting' || connectionStatus === 'disconnected') {
+        return 'WAITING' as const;
+      }
+    }
+
+    // Pre-market or freeze → gentle "Connecting…" instead of alarming RECONNECTING
+    if (marketStatus === 'PRE_OPEN' || marketStatus === 'FREEZE') {
+      if (connectionStatus === 'RECONNECTING') {
+        return 'CONNECTING' as const;
+      }
+    }
+
+    // During LIVE with no data yet, convert RECONNECTING → CONNECTING (less alarming)
+    if (marketStatus === 'LIVE' && !hasLiveData && connectionStatus === 'RECONNECTING') {
+      return 'CONNECTING' as const;
+    }
+
+    // Pass through actual status
+    return connectionStatus;
+  }, [connectionStatus, marketStatus, hasLiveData]);
+
   // Show loading until client is mounted to prevent hydration errors
   if (!isClient) {
     return (
@@ -885,7 +923,7 @@ export default function Home() {
       {/* Connection Status Bar */}
       <div className="w-full px-2 sm:px-4 lg:px-6 xl:px-8 py-2">
         {/* Use same status component for both mobile and desktop */}
-        <LiveStatus status={connectionStatus} isConnected={isConnected} />
+        <LiveStatus status={displayStatus} isConnected={isConnected} />
       </div>
 
       {/* Overall Market Outlook */}
@@ -1503,7 +1541,7 @@ export default function Home() {
                             {/* Header */}
                             <div className="flex items-center justify-between">
                               <span className="text-[11px] font-bold text-gray-400 uppercase tracking-widest">5 Min Prediction</span>
-                              <span suppressHydrationWarning className={`text-[10px] font-bold px-2 py-1 rounded ${
+                              <span className={`text-[10px] font-bold tabular-nums px-2 py-1 rounded ${
                                 isBuyCam ? 'bg-teal-500/25 text-teal-300' :
                                 isSellCam ? 'bg-rose-500/25 text-rose-300' :
                                 'bg-amber-500/15 text-amber-300'
@@ -1516,11 +1554,10 @@ export default function Home() {
                             <div className="grid grid-cols-2 gap-2">
                               <div className="flex flex-col bg-gray-900/50 rounded-lg px-2 py-1.5 border border-gray-700/30">
                                 <span className="text-[9px] text-gray-500 font-bold uppercase tracking-wide">CONFIDENCE</span>
-                                <span suppressHydrationWarning className="text-[13px] font-black text-emerald-300 mt-0.5">{adjConf}%</span>
+                                <span className="text-[13px] font-black text-emerald-300 tabular-nums mt-0.5">{adjConf}%</span>
                                 <div className="w-full h-2 rounded-full bg-gray-800 overflow-hidden mt-1">
                                   <div
-                                    suppressHydrationWarning
-                                    className="h-full bg-gradient-to-r from-emerald-500 to-emerald-400 transition-all duration-300 rounded-full"
+                                    className="h-full bg-gradient-to-r from-emerald-500 to-emerald-400 transition-all duration-700 rounded-full"
                                     style={{ width: `${Math.min(100, adjConf)}%` }}
                                   />
                                 </div>
@@ -1528,11 +1565,10 @@ export default function Home() {
 
                               <div className="flex flex-col bg-gray-900/50 rounded-lg px-2 py-1.5 border border-gray-700/30">
                                 <span className="text-[9px] text-gray-500 font-bold uppercase tracking-wide">Actual Market</span>
-                                <span suppressHydrationWarning className="text-[13px] font-black text-teal-300 mt-0.5">{actualMarketConf}%</span>
+                                <span className="text-[13px] font-black text-teal-300 tabular-nums mt-0.5">{actualMarketConf}%</span>
                                 <div className="w-full h-2 rounded-full bg-gray-800 overflow-hidden mt-1">
                                   <div
-                                    suppressHydrationWarning
-                                    className="h-full bg-gradient-to-r from-teal-500 to-teal-400 transition-all duration-300 rounded-full"
+                                    className="h-full bg-gradient-to-r from-teal-500 to-teal-400 transition-all duration-700 rounded-full"
                                     style={{ width: `${Math.min(100, actualMarketConf)}%` }}
                                   />
                                 </div>
@@ -1542,15 +1578,14 @@ export default function Home() {
                             {/* Direction + CPR Status */}
                             <div className={`rounded-lg border ${dirBorder} ${dirBg} px-3 py-2.5`}>
                               <div className="flex items-center justify-between gap-2 mb-1.5">
-                                <span suppressHydrationWarning className={`text-sm font-black ${dirColor}`}>
+                                <span className={`text-sm font-black ${dirColor}`}>
                                   {dirIcon} {predDir}
                                 </span>
                                 <span className="text-[9px] text-gray-400 flex-1">{ctxNote}</span>
-                                <span suppressHydrationWarning className={`text-sm font-black ${dirColor}`}>{adjConf}%</span>
+                                <span className={`text-sm font-black tabular-nums ${dirColor}`}>{adjConf}%</span>
                               </div>
                               <div className="h-2 bg-gray-800 rounded-full overflow-hidden border border-white/5">
                                 <div
-                                  suppressHydrationWarning
                                   className={`h-full rounded-full transition-all duration-700 ${barColor}`}
                                   style={{ width: `${adjConf}%` }}
                                 />
@@ -1561,7 +1596,7 @@ export default function Home() {
                             <div className="space-y-1.5 bg-gray-900/30 rounded-lg p-2.5 border border-gray-700/20">
                               <div className="flex items-center justify-between">
                                 <span className="text-[9px] text-gray-500 font-bold uppercase tracking-wide">Camarilla Gate</span>
-                                <span suppressHydrationWarning className={`text-[10px] font-bold px-2 py-0.5 rounded ${
+                                <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${
                                   isBuyCam ? 'bg-teal-500/25 text-teal-300' :
                                   isSellCam ? 'bg-rose-500/25 text-rose-300' :
                                   'bg-gray-700/40 text-gray-400'
@@ -1571,7 +1606,7 @@ export default function Home() {
                               </div>
                               <div className="flex items-center justify-between">
                                 <span className="text-[9px] text-gray-500 font-bold uppercase tracking-wide">CPR Classification</span>
-                                <span suppressHydrationWarning className={`text-[10px] font-bold px-2 py-0.5 rounded ${
+                                <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${
                                   cprNarrow ? 'bg-teal-500/25 text-teal-300' :
                                   cprWide ? 'bg-rose-500/25 text-rose-300' :
                                   'bg-amber-500/15 text-amber-300'
@@ -1581,7 +1616,7 @@ export default function Home() {
                               </div>
                               <div className="flex items-center justify-between">
                                 <span className="text-[9px] text-gray-500 font-bold uppercase tracking-wide">Zone Status</span>
-                                <span suppressHydrationWarning className={`text-[10px] font-bold px-2 py-0.5 rounded ${
+                                <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${
                                   zoneConfirms ? 'bg-teal-500/25 text-teal-300' :
                                   zoneConflicts ? 'bg-rose-500/25 text-rose-300' :
                                   'bg-amber-500/15 text-amber-300'
@@ -1591,7 +1626,7 @@ export default function Home() {
                               </div>
                               <div className="flex items-center justify-between">
                                 <span className="text-[9px] text-gray-500 font-bold uppercase tracking-wide">Trend Day Alignment</span>
-                                <span suppressHydrationWarning className={`text-[10px] font-bold px-2 py-0.5 rounded ${
+                                <span className={`text-[10px] font-bold tabular-nums px-2 py-0.5 rounded ${
                                   trendDayAligns ? 'bg-teal-500/25 text-teal-300' :
                                   trendDayOpp ? 'bg-rose-500/25 text-rose-300' :
                                   'bg-gray-700/40 text-gray-400'
@@ -1602,44 +1637,40 @@ export default function Home() {
                             </div>
 
                             {/* Movement Probability Distribution */}
-                            <div className="space-y-2">
-                              <p className="text-[9px] font-bold text-gray-500 uppercase tracking-wide">Movement Probability</p>
-                              <div className="flex items-center gap-0.5 h-6 rounded-md overflow-hidden bg-gray-950/50 border border-gray-700/30">
-                                {/* Bullish probability */}
-                                <div
-                                  suppressHydrationWarning
-                                  className="h-full bg-gradient-to-r from-teal-600 to-teal-500 transition-all duration-300 flex items-center justify-center min-w-[2px]"
-                                  style={{
-                                    width: `${Math.max(5, Math.min(95, isBuyCam ? adjConf : Math.max(0, 50 - Math.abs(adjConf - 50))))}%`,
-                                  }}
-                                >
-                                  <span className="text-[8px] font-bold text-white px-1 truncate whitespace-nowrap">
-                                    {Math.round(isBuyCam ? adjConf : Math.max(0, 50 - Math.abs(adjConf - 50)))}%↑
-                                  </span>
+                            {(() => {
+                              const camBull = isBuyCam ? Math.max(5, Math.min(95, adjConf)) : isSellCam ? Math.max(5, 100 - adjConf) : 50;
+                              const camBear = 100 - camBull;
+                              return (
+                                <div className="space-y-2">
+                                  <p className="text-[9px] font-bold text-gray-500 uppercase tracking-wide">Movement Probability</p>
+                                  <div className="flex items-center h-6 rounded-md overflow-hidden bg-gray-950/50 border border-gray-700/30">
+                                    <div
+                                      className="h-full bg-gradient-to-r from-teal-600 to-teal-500 transition-all duration-700 flex items-center justify-center"
+                                      style={{ width: `${camBull}%` }}
+                                    >
+                                      <span className="text-[8px] font-bold text-white tabular-nums px-1 truncate whitespace-nowrap">
+                                        {camBull}%↑
+                                      </span>
+                                    </div>
+                                    <div
+                                      className="h-full bg-gradient-to-l from-rose-600 to-rose-500 transition-all duration-700 flex items-center justify-center"
+                                      style={{ width: `${camBear}%` }}
+                                    >
+                                      <span className="text-[8px] font-bold text-white tabular-nums px-1 truncate whitespace-nowrap">
+                                        {camBear}%↓
+                                      </span>
+                                    </div>
+                                  </div>
                                 </div>
-                                {/* Bearish probability */}
-                                <div
-                                  suppressHydrationWarning
-                                  className="h-full bg-gradient-to-l from-rose-600 to-rose-500 transition-all duration-300 flex items-center justify-center ml-auto min-w-[2px]"
-                                  style={{
-                                    width: `${Math.max(5, Math.min(95, isSellCam ? adjConf : Math.max(0, 50 - Math.abs(adjConf - 50))))}%`,
-                                  }}
-                                >
-                                  <span className="text-[8px] font-bold text-white px-1 truncate whitespace-nowrap">
-                                    {Math.round(isSellCam ? adjConf : Math.max(0, 50 - Math.abs(adjConf - 50)))}%↓
-                                  </span>
-                                </div>
-                              </div>
-                            </div>
+                              );
+                            })()}
 
                             {/* Early Signal Detection */}
-                            {(adjConf >= 75 || ([zoneConfirms, gateBreak, trendDayAligns, cprNarrow].filter(Boolean).length >= 3)) && (
-                              <div className="pt-2 border-t border-gray-700/20">
-                                <span suppressHydrationWarning className="text-[9px] font-bold text-amber-400 uppercase tracking-wide">
-                                  ⚡ {adjConf >= 85 ? 'STRONG' : 'CONFIRMED'} CPR Zone Signal Ready
-                                </span>
-                              </div>
-                            )}
+                            <div className={`min-h-[24px] pt-2 border-t border-gray-700/20 ${(adjConf >= 75 || ([zoneConfirms, gateBreak, trendDayAligns, cprNarrow].filter(Boolean).length >= 3)) ? '' : 'invisible'}`}>
+                              <span className="text-[9px] font-bold text-amber-400 uppercase tracking-wide">
+                                ⚡ {adjConf >= 85 ? 'STRONG' : 'CONFIRMED'} CPR Zone Signal Ready
+                              </span>
+                            </div>
 
                             {/* CPR Confirmation Summary */}
                             <div className="rounded-lg bg-gray-900/20 px-2.5 py-2 border border-gray-700/20">
@@ -1658,7 +1689,7 @@ export default function Home() {
                             </div>
 
                             {/* Summary line */}
-                            <div suppressHydrationWarning className={`text-center text-[10px] font-bold rounded-lg py-1.5 border ${
+                            <div className={`text-center text-[10px] font-bold tabular-nums rounded-lg py-1.5 border ${
                               isBuyCam ? 'bg-teal-500/10 border-teal-500/30 text-teal-300' :
                               isSellCam ? 'bg-rose-500/10 border-rose-500/30 text-rose-300' :
                               'bg-amber-500/10 border-amber-500/20 text-amber-300'
@@ -2069,7 +2100,7 @@ export default function Home() {
               const sarAction = String(ind.sar_action || 'WAIT');
               const distancePct = ind.distance_to_sar_pct || ind.sar_distance_pct || 0;
               const distanceAbs = ind.distance_to_sar || ind.sar_distance || 0;
-              const sarFlip = !!ind.sar_flip;
+              const sarFlip = !!ind.sar_reversal;
 
               // ── Signal classification (5-level) ──
               const isBullish = sarSignal === 'STRONG_BUY' || sarSignal === 'BUY' || sarPosition === 'BELOW' || sarTrend === 'BULLISH';
@@ -2164,8 +2195,7 @@ export default function Home() {
                   </div>
 
                   {/* ── SAR STATUS ROW ── */}
-                  <div className="mx-3 mt-2 mb-3 flex items-center gap-2">
-                    {/* Trend Flip Warning */}
+                  <div className="mx-3 mt-2 mb-2 flex items-center gap-2">
                     {sarFlip && (
                       <span className="flex-1 text-center text-[10px] font-bold px-2 py-1.5 rounded-lg bg-amber-500/10 border border-amber-500/25 text-amber-300">
                         ⟳ TREND REVERSAL DETECTED
@@ -2177,6 +2207,130 @@ export default function Home() {
                       </span>
                     )}
                   </div>
+
+                  {/* ── 5 MIN PREDICTION ── */}
+                  {(() => {
+                    // All derived from existing live SAR data — zero backend cost
+                    const distFar    = distancePct > 0.8;
+                    const distMod    = distancePct > 0.3 && distancePct <= 0.8;
+                    const distNear   = distancePct > 0.1 && distancePct <= 0.3;
+                    const distFlip   = distancePct <= 0.1 && (sarValue > 0);
+
+                    // Confidence: start from SAR confidence, adjust by distance & reversal
+                    let predConf = sarConfidence;
+                    if (distFlip)       predConf = Math.round(predConf * 0.78);
+                    else if (distNear)  predConf = Math.round(predConf * 0.90);
+                    else if (distFar)   predConf = Math.round(predConf * 1.08);
+                    else if (distMod)   predConf = Math.round(predConf * 1.03);
+                    if (sarFlip)        predConf = Math.round(Math.max(predConf, 75));
+                    if (marketStatus !== 'LIVE') predConf = Math.round(Math.max(30, predConf * 0.88));
+                    predConf = Math.min(95, Math.max(25, predConf));
+
+                    const predDir   = isBullish ? 'LONG' : isBearish ? 'SHORT' : 'FLAT';
+                    const dirIcon   = isBullish ? '▲' : isBearish ? '▼' : '─';
+                    const dirColor  = isBullish ? 'text-emerald-300' : isBearish ? 'text-rose-300' : 'text-amber-300';
+                    const dirBg     = isBullish ? 'bg-emerald-500/[0.07]' : isBearish ? 'bg-rose-500/[0.07]' : 'bg-amber-500/[0.05]';
+                    const dirBorder = isBullish ? 'border-emerald-500/30' : isBearish ? 'border-rose-500/30' : 'border-amber-500/25';
+                    const gradBar   = isBullish ? 'from-emerald-500 to-emerald-400' : isBearish ? 'from-rose-500 to-rose-400' : 'from-amber-500 to-amber-400';
+
+                    const bullProb  = isBullish ? Math.max(5, Math.min(95, predConf)) : isBearish ? Math.max(5, 100 - predConf) : 50;
+                    const bearProb  = 100 - bullProb;
+
+                    // Confirmations from live SAR data
+                    const confirms = [
+                      distFar && 'Wide SAR gap',
+                      isStrong && 'Strong trend',
+                      sarFlip && 'Reversal',
+                      trendStrength === 'MODERATE' && 'Moderate trend',
+                    ].filter(Boolean) as string[];
+
+                    const showSignal = predConf >= 70 && predDir !== 'FLAT';
+
+                    return (
+                      <div className="mx-3 mb-2 rounded-xl border border-white/[0.06] bg-[#0d1117] overflow-hidden">
+                        <div className="h-px bg-gradient-to-r from-transparent via-white/10 to-transparent" />
+                        <div className="px-4 py-3 space-y-2.5">
+                          {/* Header */}
+                          <div className="flex items-center justify-between">
+                            <span className="text-[11px] font-bold text-gray-400 uppercase">5 Min Prediction</span>
+                            <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${signalBg} ${signalText}`}>
+                              {predConf}% CONFIDENCE
+                            </span>
+                          </div>
+
+                          {/* Direction + confidence bar */}
+                          <div className={`rounded-lg border ${dirBorder} ${dirBg} px-3 py-2`}>
+                            <div className="flex items-center justify-between">
+                              <span className={`text-sm font-black ${dirColor}`}>{dirIcon} {predDir}</span>
+                              <span className="text-[9px] text-gray-400">
+                                {distFlip ? '⚠ Flip risk' : distNear ? '⚠ Near SAR' : 'Trend clear'}
+                              </span>
+                              <span className={`text-sm font-black ${dirColor}`}>{predConf}%</span>
+                            </div>
+                            <div className="h-1.5 bg-gray-800 rounded-full overflow-hidden border border-white/5 mt-1.5">
+                              <div className={`h-full rounded-full transition-all duration-500 bg-gradient-to-r ${gradBar}`} style={{ width: `${predConf}%` }} />
+                            </div>
+                          </div>
+
+                          {/* SAR factors (compact 2×2) */}
+                          <div className="grid grid-cols-2 gap-1.5">
+                            <div className="flex items-center justify-between bg-gray-900/40 rounded px-2 py-1 border border-gray-700/20">
+                              <span className="text-[8px] text-gray-500 font-bold">POSITION</span>
+                              <span className={`text-[9px] font-bold ${signalText}`}>
+                                {sarPosition === 'BELOW' ? 'Below ↑' : sarPosition === 'ABOVE' ? 'Above ↓' : 'Neutral'}
+                              </span>
+                            </div>
+                            <div className="flex items-center justify-between bg-gray-900/40 rounded px-2 py-1 border border-gray-700/20">
+                              <span className="text-[8px] text-gray-500 font-bold">DISTANCE</span>
+                              <span className={`text-[9px] font-bold ${distFlip ? 'text-red-400' : distNear ? 'text-amber-400' : signalText}`}>
+                                {distFar ? 'Far' : distMod ? 'Moderate' : distNear ? 'Close' : distFlip ? 'Flip Risk' : '—'} ({distancePct.toFixed(2)}%)
+                              </span>
+                            </div>
+                            <div className="flex items-center justify-between bg-gray-900/40 rounded px-2 py-1 border border-gray-700/20">
+                              <span className="text-[8px] text-gray-500 font-bold">STRENGTH</span>
+                              <span className={`text-[9px] font-bold ${signalText}`}>{trendStrength}</span>
+                            </div>
+                            <div className="flex items-center justify-between bg-gray-900/40 rounded px-2 py-1 border border-gray-700/20">
+                              <span className="text-[8px] text-gray-500 font-bold">REVERSAL</span>
+                              <span className={`text-[9px] font-bold ${sarFlip ? 'text-amber-400' : 'text-gray-500'}`}>{sarFlip ? 'Yes ⟳' : 'No'}</span>
+                            </div>
+                          </div>
+
+                          {/* Movement probability bar */}
+                          <div>
+                            <p className="text-[8px] font-bold text-gray-500 uppercase mb-1">Movement Probability</p>
+                            <div className="flex items-center h-5 rounded-md overflow-hidden bg-gray-950/50 border border-gray-700/30">
+                              <div className="h-full bg-gradient-to-r from-emerald-600 to-emerald-500 flex items-center justify-center transition-all duration-700" style={{ width: `${bullProb}%` }}>
+                                {bullProb >= 15 && <span className="text-[7px] font-bold text-white tabular-nums">{bullProb}%↑</span>}
+                              </div>
+                              <div className="h-full bg-gradient-to-l from-rose-600 to-rose-500 flex items-center justify-center transition-all duration-700" style={{ width: `${bearProb}%` }}>
+                                {bearProb >= 15 && <span className="text-[7px] font-bold text-white tabular-nums">{bearProb}%↓</span>}
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Signal + confirmations */}
+                          <div className={`min-h-[20px] pt-1.5 border-t border-gray-700/20 ${showSignal ? '' : 'invisible'}`}>
+                            <span className="text-[9px] font-bold text-amber-400 uppercase">
+                              {predConf >= 80 ? `⚡ STRONG SAR ${predDir} Signal` : `⚡ SAR ${predDir} Signal Active`}
+                            </span>
+                          </div>
+                          <div className={`flex flex-wrap gap-1 min-h-[18px] ${confirms.length > 0 ? '' : 'invisible'}`}>
+                            {confirms.length > 0 ? confirms.map((c, i) => (
+                              <span key={i} className={`text-[7px] px-1.5 py-0.5 rounded ${isBullish ? 'bg-emerald-500/15 text-emerald-300' : isBearish ? 'bg-rose-500/15 text-rose-300' : 'bg-amber-500/15 text-amber-300'}`}>
+                                ✓ {c}
+                              </span>
+                            )) : <span className="text-[7px] invisible">placeholder</span>}
+                          </div>
+
+                          {/* Summary */}
+                          <div className={`text-center text-[9px] font-bold rounded-lg py-1.5 border ${dirBorder} ${dirBg}`}>
+                            {predDir} · {predConf}% Confidence · {confirms.length} Confirms
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })()}
 
                   {/* ── TIMESTAMP ── */}
                   <div className="px-4 pb-2.5 flex items-center justify-between text-[9px] text-white/20 border-t border-white/[0.04] pt-2">
@@ -2352,7 +2506,7 @@ export default function Home() {
                             {/* 1. HEADER */}
                             <div className="flex items-center justify-between">
                               <span className="text-[11px] font-bold text-gray-400 uppercase">5 Min Prediction</span>
-                              <span className={`text-[10px] font-bold px-2 py-1 rounded ${stIsBuy ? 'bg-teal-500/25 text-teal-300' : stIsSell ? 'bg-rose-500/25 text-rose-300' : 'bg-amber-500/25 text-amber-300'}`}>
+                              <span className={`text-[10px] font-bold tabular-nums px-2 py-1 rounded ${stIsBuy ? 'bg-teal-500/25 text-teal-300' : stIsSell ? 'bg-rose-500/25 text-rose-300' : 'bg-amber-500/25 text-amber-300'}`}>
                                 {adjConf}% CONFIDENCE
                               </span>
                             </div>
@@ -2362,18 +2516,18 @@ export default function Home() {
                               {/* Predicted confidence */}
                               <div className="flex flex-col bg-gray-900/50 rounded-lg px-2.5 py-2 border border-gray-700/30">
                                 <span className="text-[9px] text-gray-500 font-bold uppercase">CONFIDENCE</span>
-                                <span className={`text-[13px] font-black ${dirColor}`}>{adjConf}%</span>
+                                <span className={`text-[13px] font-black tabular-nums ${dirColor}`}>{adjConf}%</span>
                                 <div className="h-2 bg-gray-800 rounded-full overflow-hidden mt-1.5">
-                                  <div className={`h-full rounded-full transition-all duration-500 ${stAccentBar}`} style={{ width: `${adjConf}%` }} />
+                                  <div className={`h-full rounded-full transition-all duration-700 ${stAccentBar}`} style={{ width: `${adjConf}%` }} />
                                 </div>
                               </div>
 
                               {/* Actual Market confidence */}
                               <div className="flex flex-col bg-gray-900/50 rounded-lg px-2.5 py-2 border border-gray-700/30">
                                 <span className="text-[9px] text-gray-500 font-bold uppercase">Actual Market</span>
-                                <span className={`text-[13px] font-black ${stIsBuy ? 'text-teal-400' : stIsSell ? 'text-rose-400' : 'text-amber-400'}`}>{actualMarketConf}%</span>
+                                <span className={`text-[13px] font-black tabular-nums ${stIsBuy ? 'text-teal-400' : stIsSell ? 'text-rose-400' : 'text-amber-400'}`}>{actualMarketConf}%</span>
                                 <div className="h-2 bg-gray-800 rounded-full overflow-hidden mt-1.5">
-                                  <div className={`h-full rounded-full transition-all duration-500 ${stIsBuy ? 'bg-teal-500' : stIsSell ? 'bg-rose-500' : 'bg-amber-500'}`} style={{ width: `${actualMarketConf}%` }} />
+                                  <div className={`h-full rounded-full transition-all duration-700 ${stIsBuy ? 'bg-teal-500' : stIsSell ? 'bg-rose-500' : 'bg-amber-500'}`} style={{ width: `${actualMarketConf}%` }} />
                                 </div>
                               </div>
                             </div>
@@ -2383,10 +2537,10 @@ export default function Home() {
                               <div className="flex items-center justify-between">
                                 <span className={`text-sm font-black ${dirColor}`}>{dirIcon} {predDir}</span>
                                 <span className="text-[9px] text-gray-400">{stIsVeryClose ? '⚠ At ST level' : distWeak ? '⚠ Near ST' : 'Trend clear'}</span>
-                                <span className={`text-sm font-black ${dirColor}`}>{adjConf}%</span>
+                                <span className={`text-sm font-black tabular-nums ${dirColor}`}>{adjConf}%</span>
                               </div>
                               <div className="h-2 bg-gray-800 rounded-full overflow-hidden border border-white/5 mt-2">
-                                <div className={`h-full rounded-full transition-all duration-500 bg-gradient-to-r ${stIsBuy ? 'from-teal-500 to-teal-400' : stIsSell ? 'from-rose-500 to-rose-400' : 'from-amber-500 to-amber-400'}`} style={{ width: `${adjConf}%` }} />
+                                <div className={`h-full rounded-full transition-all duration-700 bg-gradient-to-r ${stIsBuy ? 'from-teal-500 to-teal-400' : stIsSell ? 'from-rose-500 to-rose-400' : 'from-amber-500 to-amber-400'}`} style={{ width: `${adjConf}%` }} />
                               </div>
                             </div>
 
@@ -2428,26 +2582,24 @@ export default function Home() {
                             {/* 5. MOVEMENT PROBABILITY DISTRIBUTION */}
                             <div className="space-y-1.5">
                               <p className="text-[9px] font-bold text-gray-500 uppercase">Movement Probability</p>
-                              <div className="flex items-center gap-0.5 h-6 rounded-md overflow-hidden bg-gray-950/50 border border-gray-700/30">
+                              <div className="flex items-center h-6 rounded-md overflow-hidden bg-gray-950/50 border border-gray-700/30">
                                 {/* Bullish probability */}
-                                <div className="h-full bg-gradient-to-r from-teal-600 to-teal-500 flex items-center justify-center transition-all duration-500" style={{ width: `${bullishProb}%` }}>
-                                  {bullishProb >= 15 && <span className="text-[8px] font-bold text-white">{bullishProb}%↑</span>}
+                                <div className="h-full bg-gradient-to-r from-teal-600 to-teal-500 flex items-center justify-center transition-all duration-700" style={{ width: `${bullishProb}%` }}>
+                                  {bullishProb >= 15 && <span className="text-[8px] font-bold text-white tabular-nums">{bullishProb}%↑</span>}
                                 </div>
                                 {/* Bearish probability */}
-                                <div className="h-full bg-gradient-to-l from-rose-600 to-rose-500 flex items-center justify-center transition-all duration-500 ml-auto" style={{ width: `${bearishProb}%` }}>
-                                  {bearishProb >= 15 && <span className="text-[8px] font-bold text-white">{bearishProb}%↓</span>}
+                                <div className="h-full bg-gradient-to-l from-rose-600 to-rose-500 flex items-center justify-center transition-all duration-700" style={{ width: `${bearishProb}%` }}>
+                                  {bearishProb >= 15 && <span className="text-[8px] font-bold text-white tabular-nums">{bearishProb}%↓</span>}
                                 </div>
                               </div>
                             </div>
 
                             {/* 6. EARLY SIGNAL DETECTION */}
-                            {showEarlySignal && (
-                              <div className="pt-2 border-t border-gray-700/30">
-                                <span className="text-[9px] font-bold text-amber-400 uppercase inline-block">
-                                  {earlySignalText}
-                                </span>
-                              </div>
-                            )}
+                            <div className={`min-h-[24px] pt-2 border-t border-gray-700/30 ${showEarlySignal ? '' : 'invisible'}`}>
+                              <span className="text-[9px] font-bold text-amber-400 uppercase inline-block">
+                                {earlySignalText}
+                              </span>
+                            </div>
 
                             {/* 7. CONFIRMATION SUMMARY */}
                             {confirms.length > 0 && (
@@ -2480,329 +2632,21 @@ export default function Home() {
           </div>
         </div>
 
-        {/* Opening Range Breakout (ORB) - Intraday Breakout System */}
+        {/* Opening Range Breakout (ORB) */}
         <div className="mt-6 sm:mt-6">
-          <div className="flex flex-col gap-2 mb-4 px-2 sm:px-0">
+          <div className="flex flex-col gap-1 mb-3 sm:mb-4">
             <h3 className="text-base sm:text-lg lg:text-xl font-bold text-dark-text flex items-center gap-3 tracking-tight">
-              <span className="w-1.5 h-5 sm:h-6 bg-gradient-to-b from-teal-500 to-teal-600 rounded-full shadow-lg shadow-teal-500/30" />
+              <span className="w-1.5 h-5 sm:h-6 bg-gradient-to-b from-teal-500 to-teal-600 rounded-full" />
               Opening Range Breakout (ORB)
             </h3>
-            <p className="text-dark-tertiary text-xs sm:text-sm ml-4 sm:ml-5 font-medium tracking-wide">
-              Live first 5-min range tracking • Clear breakout signals • Simple entry guidance
+            <p className="text-dark-tertiary text-[11px] sm:text-xs ml-4 sm:ml-5">
+              Live range tracking · Breakout signals · Entry guidance
             </p>
           </div>
-
-          <div className="mt-4 grid grid-cols-1 lg:grid-cols-2 2xl:grid-cols-3 gap-3">
-            {[
-              { symbol: 'NIFTY', data: analyses?.NIFTY },
-              { symbol: 'BANKNIFTY', data: analyses?.BANKNIFTY },
-              { symbol: 'SENSEX', data: analyses?.SENSEX }
-            ].map((item) => {
-              const orbPosition = item.data?.indicators?.orb_position;
-              const orbIsBuy = orbPosition === 'ABOVE_HIGH';
-              const orbIsSell = orbPosition === 'BELOW_LOW';
-              const orbAccentBorder = orbIsBuy ? 'border-teal-500/30' : orbIsSell ? 'border-rose-500/25' : 'border-amber-500/25';
-              const orbAccentText = orbIsBuy ? 'text-teal-300' : orbIsSell ? 'text-rose-300' : 'text-amber-300';
-              const orbAccentBar = orbIsBuy ? 'bg-teal-500' : orbIsSell ? 'bg-rose-500' : 'bg-amber-500';
-              const orbSignalLabel = orbIsBuy ? '▲ BREAKOUT ABOVE' : orbIsSell ? '▼ BREAKDOWN BELOW' : '◆ INSIDE RANGE';
-              const orbRange    = item.data?.indicators?.orb_range    || 0;
-              const orbHigh     = item.data?.indicators?.orb_high     || 0;
-              const orbLow      = item.data?.indicators?.orb_low      || 0;
-              const orbStrength = item.data?.indicators?.orb_strength  || 0;
-              const orbRRR      = item.data?.indicators?.orb_reward_risk_ratio || 0;
-              const isLive      = item.data?.status === 'LIVE';
-
-              // ── ORB Confidence: multi-factor, 35-90% ──
-              // Factor 1: Breakout clarity  (+0…+35)
-              // Factor 2: Range width (narrower = cleaner breakout)  (±8)
-              // Factor 3: Backend strength signal  (+0…+20)
-              // Factor 4: R/R ratio quality  (±8)
-              // Factor 5: Live data bonus  (+5)
-              const orbConfidence = (() => {
-                let c = 38; // base
-                // F1: position clarity
-                if (orbIsBuy || orbIsSell) c += 30;
-                else c -= 5; // inside range = low certainty
-                // F2: range width (relative to index price level)
-                if (orbRange > 0 && orbHigh > 0) {
-                  const rangePct = (orbRange / orbHigh) * 100;
-                  if (rangePct < 0.3)       c += 8;  // tight range = clean level
-                  else if (rangePct < 0.6)  c += 4;
-                  else if (rangePct > 1.2)  c -= 8;  // wide range = messy
-                }
-                // F3: backend orb_strength (0-100)
-                c += Math.round(orbStrength * 0.20); // max +20
-                // F4: R/R ratio
-                if (orbRRR >= 3)       c += 8;
-                else if (orbRRR >= 2)  c += 5;
-                else if (orbRRR >= 1)  c += 2;
-                else if (orbRRR > 0)   c -= 5; // poor R/R = skip
-                // F5: live data
-                if (isLive) c += 5;
-                return Math.round(Math.min(90, Math.max(35, c)));
-              })();
-
-              return (
-                <div key={`orb_${item.symbol}`} className={`relative rounded-2xl overflow-hidden border ${orbAccentBorder} shadow-lg bg-[#0b0f1a] backdrop-blur-xl`}>
-                  {/* Top shimmer */}
-                  <div className="absolute top-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-white/20 to-transparent pointer-events-none" />
-                  {/* Corner glow */}
-                  <div className={`absolute top-0 right-0 w-14 h-14 rounded-bl-full opacity-[7%] ${orbAccentBar} pointer-events-none`} />
-
-                  {/* HEADER */}
-                  <div className="flex items-center justify-between px-4 pt-4 pb-2">
-                    <div className="flex items-center gap-2">
-                      <span className="rounded-lg border border-green-500/60 bg-green-950/30 px-2.5 py-1.5 text-sm font-bold text-white">{item.symbol}</span>
-                      {(item.data?.status || marketStatus) === 'LIVE' && (
-                        <span className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-teal-500/10 border border-teal-500/25">
-                          <span className="w-1 h-1 rounded-full bg-teal-400 animate-pulse" />
-                          <span className="text-[9px] text-teal-300 font-bold">LIVE</span>
-                        </span>
-                      )}
-                    </div>
-                    <span className="text-[10px] text-white/30 font-medium">ORB</span>
-                  </div>
-
-                  {/* REFLECTOR SIGNAL PANEL */}
-                  <div className="mx-3 mb-3 rounded-xl bg-[#0d1117]/80 border border-white/[0.05] overflow-hidden">
-                    <div className="px-4 py-3 flex items-center justify-between">
-                      <div>
-                        <div className={`text-xl font-black tracking-tight ${orbAccentText}`}>{orbSignalLabel}</div>
-                        <div className="text-[10px] text-white/40 mt-0.5">
-                          Range: ₹{orbLow.toFixed(0)} – ₹{orbHigh.toFixed(0)}
-                        </div>
-                      </div>
-                      <div className="text-right">
-                        <div className="text-[10px] text-white/40 mb-0.5">CONFIDENCE</div>
-                        <div className={`text-2xl font-black ${orbAccentText}`}>{orbConfidence}%</div>
-                      </div>
-                    </div>
-                    <div className="mx-4 mb-3 h-1 rounded-full bg-white/[0.05] overflow-hidden">
-                      <div className={`h-full rounded-full transition-all duration-700 ${orbAccentBar}`} style={{ width: `${orbConfidence}%` }} />
-                    </div>
-                  </div>
-
-                  {/* CONFERENCE GRID — 2×2 */}
-                  <div className="mx-3 mb-3 grid grid-cols-2 gap-2">
-                    <div className="bg-[#0d1117] border border-white/[0.06] p-2.5 rounded-lg">
-                      <div className="text-[9px] text-white/35 uppercase tracking-widest mb-1">Position</div>
-                      <div className={`text-sm font-bold ${orbAccentText}`}>{orbIsBuy ? 'Above High' : orbIsSell ? 'Below Low' : 'Inside'}</div>
-                      <div className="text-[9px] text-white/30 mt-0.5">{orbIsBuy ? 'Bullish break' : orbIsSell ? 'Bearish break' : 'Watching'}</div>
-                    </div>
-                    <div className="bg-[#0d1117] border border-white/[0.06] p-2.5 rounded-lg">
-                      <div className="text-[9px] text-white/35 uppercase tracking-widest mb-1">ORB Range</div>
-                      <div className={`text-sm font-bold ${orbAccentText}`}>₹{item.data?.indicators?.orb_range?.toFixed(0) || '—'}</div>
-                      <div className="text-[9px] text-white/30 mt-0.5">Range width</div>
-                    </div>
-                    <div className="bg-[#0d1117] border border-white/[0.06] p-2.5 rounded-lg">
-                      <div className="text-[9px] text-white/35 uppercase tracking-widest mb-1">High / Low</div>
-                      <div className="text-sm font-bold text-teal-300">₹{orbHigh.toFixed(0)}</div>
-                      <div className="text-[9px] text-rose-300 mt-0.5">₹{orbLow.toFixed(0)}</div>
-                    </div>
-                    <div className="bg-[#0d1117] border border-white/[0.06] p-2.5 rounded-lg">
-                      <div className="text-[9px] text-white/35 uppercase tracking-widest mb-1">R/R Ratio</div>
-                      <div className={`text-sm font-bold ${(item.data?.indicators?.orb_reward_risk_ratio || 0) >= 2 ? 'text-teal-300' : 'text-amber-300'}`}>
-                        {item.data?.indicators?.orb_reward_risk_ratio ? `1:${item.data.indicators.orb_reward_risk_ratio}` : '—'}
-                      </div>
-                      <div className="text-[9px] text-white/30 mt-0.5">Risk reward</div>
-                    </div>
-                  </div>
-
-                  {/* 5-MIN PREDICTION */}
-                  <div className="mx-3 mb-3 rounded-xl border border-white/[0.06] bg-[#0d1117] overflow-hidden">
-                    <div className="h-px bg-gradient-to-r from-transparent via-white/10 to-transparent" />
-                    {(() => {
-                      // ── ENHANCED Multi-factor ORB 5-min confidence engine ────────────
-                      const rangePct = orbHigh > 0 ? (orbRange / orbHigh) * 100 : 0;
-                      const tightRange  = rangePct > 0 && rangePct < 0.3;  // tight ORB = cleaner break
-                      const mediumRange  = rangePct >= 0.3 && rangePct <= 1.2;
-                      const wideRange   = rangePct > 1.2;                  // wide = messy
-                      const goodRR      = orbRRR >= 2;
-                      const mediumRR     = orbRRR >= 1 && orbRRR < 2;
-                      const poorRR      = orbRRR > 0 && orbRRR < 1;
-                      const breakoutActive = orbIsBuy || orbIsSell;
-
-                      let adjConf = orbConfidence;
-                      // Highest-risk conditions evaluated first
-                      if (poorRR && wideRange) {
-                        adjConf = Math.round(adjConf * 0.80); // both bad — avoid
-                      } else if (wideRange) {
-                        adjConf = Math.round(adjConf * 0.87); // messy breakout level
-                      } else if (poorRR) {
-                        adjConf = Math.round(adjConf * 0.88); // poor R/R — don't chase
-                      } else {
-                        // Count independent confirmations
-                        const confCnt = [tightRange || mediumRange, goodRR || mediumRR, breakoutActive].filter(Boolean).length;
-                        if (confCnt >= 3)       adjConf = Math.round(adjConf * 1.08);
-                        else if (confCnt === 2) adjConf = Math.round(adjConf * 1.05);
-                        else if (confCnt === 1) adjConf = Math.round(adjConf * 1.03);
-                      }
-                      if (marketStatus !== 'LIVE') adjConf = Math.round(Math.max(30, adjConf * 0.88));
-                      adjConf = Math.round(Math.min(95, Math.max(30, adjConf)));
-
-                      // ── ACTUAL MARKET CONFIDENCE (independent calculation) ──
-                      // Base from breakout status + range quality + R/R
-                      let actualMarketConf = 50;
-                      if (breakoutActive) {
-                        actualMarketConf = Math.min(95, Math.max(30, (tightRange ? 35 : mediumRange ? 25 : 15) + (goodRR ? 25 : mediumRR ? 15 : 5) + (orbHigh > 0 ? 15 : 0)));
-                      } else {
-                        actualMarketConf = 33;
-                      }
-
-                      // Direction
-                      const predDir   = orbIsBuy ? 'LONG' : orbIsSell ? 'SHORT' : 'FLAT';
-                      const dirIcon   = orbIsBuy ? '▲' : orbIsSell ? '▼' : '─';
-                      const dirColor  = orbIsBuy ? 'text-teal-300'  : orbIsSell ? 'text-rose-300'  : 'text-amber-300';
-                      const dirBorder = orbIsBuy ? 'border-teal-500/40' : orbIsSell ? 'border-rose-500/35' : 'border-amber-500/30';
-                      const dirBg     = orbIsBuy ? 'bg-teal-500/[0.07]' : orbIsSell ? 'bg-rose-500/[0.07]' : 'bg-amber-500/[0.05]';
-
-                      // Movement probability distribution
-                      const bullishProb = orbIsBuy ? Math.max(5, Math.min(95, adjConf)) : Math.max(5, Math.min(95, 50 - Math.abs(adjConf - 50)));
-                      const bearishProb = 100 - bullishProb;
-
-                      // Confirmations list
-                      const confirms = [
-                        tightRange && 'Tight ORB',
-                        breakoutActive && (orbIsBuy ? 'Above High' : 'Below Low'),
-                        goodRR && 'Good R/R',
-                        mediumRR && 'Fair R/R',
-                      ].filter(Boolean) as string[];
-
-                      // Early signal detection
-                      const multiFactorAlign = [breakoutActive, goodRR || mediumRR, tightRange || mediumRange].filter(Boolean).length >= 2;
-                      const showEarlySignal = adjConf >= 75 || (multiFactorAlign && !wideRange && !poorRR);
-                      const earlySignalText = adjConf >= 85 ? `⚡ STRONG ORB ${predDir} Signal Ready` : `⚡ CONFIRMED ORB ${predDir} Signal Ready`;
-
-                      return (
-                        <div className="px-4 py-3 space-y-3">
-                          {/* 1. HEADER */}
-                          <div className="flex items-center justify-between">
-                            <span className="text-[11px] font-bold text-gray-400 uppercase">5 Min Prediction</span>
-                            <span className={`text-[10px] font-bold px-2 py-1 rounded ${orbIsBuy ? 'bg-teal-500/25 text-teal-300' : orbIsSell ? 'bg-rose-500/25 text-rose-300' : 'bg-amber-500/25 text-amber-300'}`}>
-                              {adjConf}% CONFIDENCE
-                            </span>
-                          </div>
-
-                          {/* 2. DUAL CONFIDENCE DISPLAY */}
-                          <div className="grid grid-cols-2 gap-2">
-                            {/* Predicted confidence */}
-                            <div className="flex flex-col bg-gray-900/50 rounded-lg px-2.5 py-2 border border-gray-700/30">
-                              <span className="text-[9px] text-gray-500 font-bold uppercase">CONFIDENCE</span>
-                              <span className={`text-[13px] font-black ${dirColor}`}>{adjConf}%</span>
-                              <div className="h-2 bg-gray-800 rounded-full overflow-hidden mt-1.5">
-                                <div className={`h-full rounded-full transition-all duration-500 ${orbAccentBar}`} style={{ width: `${adjConf}%` }} />
-                              </div>
-                            </div>
-
-                            {/* Actual Market confidence */}
-                            <div className="flex flex-col bg-gray-900/50 rounded-lg px-2.5 py-2 border border-gray-700/30">
-                              <span className="text-[9px] text-gray-500 font-bold uppercase">Actual Market</span>
-                              <span className={`text-[13px] font-black ${orbIsBuy ? 'text-teal-400' : orbIsSell ? 'text-rose-400' : 'text-amber-400'}`}>{actualMarketConf}%</span>
-                              <div className="h-2 bg-gray-800 rounded-full overflow-hidden mt-1.5">
-                                <div className={`h-full rounded-full transition-all duration-500 ${orbIsBuy ? 'bg-teal-500' : orbIsSell ? 'bg-rose-500' : 'bg-amber-500'}`} style={{ width: `${actualMarketConf}%` }} />
-                              </div>
-                            </div>
-                          </div>
-
-                          {/* 3. DIRECTION + STATUS */}
-                          <div className={`rounded-lg border ${dirBorder} ${dirBg} px-3 py-2.5`}>
-                            <div className="flex items-center justify-between">
-                              <span className={`text-sm font-black ${dirColor}`}>{dirIcon} {predDir}</span>
-                              <span className="text-[9px] text-gray-400">{wideRange ? '⚠ Wide ORB' : poorRR ? '⚠ Poor R/R' : 'Quality clear'}</span>
-                              <span className={`text-sm font-black ${dirColor}`}>{adjConf}%</span>
-                            </div>
-                            <div className="h-2 bg-gray-800 rounded-full overflow-hidden border border-white/5 mt-2">
-                              <div className={`h-full rounded-full transition-all duration-500 bg-gradient-to-r ${orbIsBuy ? 'from-teal-500 to-teal-400' : orbIsSell ? 'from-rose-500 to-rose-400' : 'from-amber-500 to-amber-400'}`} style={{ width: `${adjConf}%` }} />
-                            </div>
-                          </div>
-
-                          {/* 4. ORB MOMENTUM INDICATORS (4-row grid) */}
-                          <div className="space-y-1.5 bg-gray-900/30 rounded-lg p-3 border border-gray-700/20">
-                            {/* Breakout Position */}
-                            <div className="flex items-center justify-between">
-                              <span className="text-[9px] text-gray-500 font-bold uppercase">Position</span>
-                              <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${orbIsBuy ? 'bg-teal-500/25 text-teal-300' : orbIsSell ? 'bg-rose-500/25 text-rose-300' : 'bg-gray-700/30 text-gray-300'}`}>
-                                {orbIsBuy ? 'Above High' : orbIsSell ? 'Below Low' : 'Inside Range'}
-                              </span>
-                            </div>
-
-                            {/* Range Quality */}
-                            <div className="flex items-center justify-between">
-                              <span className="text-[9px] text-gray-500 font-bold uppercase">Range Width</span>
-                              <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${tightRange ? 'bg-teal-500/25 text-teal-300' : wideRange ? 'bg-red-500/25 text-red-300' : 'bg-amber-500/25 text-amber-300'}`}>
-                                {tightRange ? 'Tight' : wideRange ? 'Wide' : 'Moderate'} ({rangePct?.toFixed(2)}%)
-                              </span>
-                            </div>
-
-                            {/* R/R Ratio Quality */}
-                            <div className="flex items-center justify-between">
-                              <span className="text-[9px] text-gray-500 font-bold uppercase">Reward/Risk</span>
-                              <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${goodRR ? 'bg-teal-500/25 text-teal-300' : poorRR ? 'bg-red-500/25 text-red-300' : 'bg-amber-500/25 text-amber-300'}`}>
-                                {goodRR ? 'Good' : mediumRR ? 'Fair' : poorRR ? 'Poor' : 'Neutral'} {orbRRR > 0 ? `(1:${orbRRR.toFixed(1)})` : ''}
-                              </span>
-                            </div>
-
-                            {/* ORB Status */}
-                            <div className="flex items-center justify-between">
-                              <span className="text-[9px] text-gray-500 font-bold uppercase">Status</span>
-                              <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${breakoutActive ? (orbIsBuy ? 'bg-teal-500/25 text-teal-300' : 'bg-rose-500/25 text-rose-300') : 'bg-amber-500/25 text-amber-300'}`}>
-                                {breakoutActive ? 'Breakout' : 'Consolidating'} (₹{orbRange?.toFixed(0)})
-                              </span>
-                            </div>
-                          </div>
-
-                          {/* 5. MOVEMENT PROBABILITY DISTRIBUTION */}
-                          <div className="space-y-1.5">
-                            <p className="text-[9px] font-bold text-gray-500 uppercase">Movement Probability</p>
-                            <div className="flex items-center gap-0.5 h-6 rounded-md overflow-hidden bg-gray-950/50 border border-gray-700/30">
-                              {/* Bullish probability */}
-                              <div className="h-full bg-gradient-to-r from-teal-600 to-teal-500 flex items-center justify-center transition-all duration-500" style={{ width: `${bullishProb}%` }}>
-                                {bullishProb >= 15 && <span className="text-[8px] font-bold text-white">{bullishProb}%↑</span>}
-                              </div>
-                              {/* Bearish probability */}
-                              <div className="h-full bg-gradient-to-l from-rose-600 to-rose-500 flex items-center justify-center transition-all duration-500 ml-auto" style={{ width: `${bearishProb}%` }}>
-                                {bearishProb >= 15 && <span className="text-[8px] font-bold text-white">{bearishProb}%↓</span>}
-                              </div>
-                            </div>
-                          </div>
-
-                          {/* 6. EARLY SIGNAL DETECTION */}
-                          {showEarlySignal && (
-                            <div className="pt-2 border-t border-gray-700/30">
-                              <span className="text-[9px] font-bold text-amber-400 uppercase inline-block">
-                                {earlySignalText}
-                              </span>
-                            </div>
-                          )}
-
-                          {/* 7. CONFIRMATION SUMMARY */}
-                          {confirms.length > 0 && (
-                            <div className="rounded-lg bg-gray-900/20 px-3 py-2 border border-gray-700/20">
-                              <p className="text-[9px] text-gray-500 font-bold uppercase mb-1.5">Confirmations</p>
-                              <div className="flex flex-wrap gap-1">
-                                {confirms.map((c, idx) => (
-                                  <span key={idx} className="text-[8px] bg-teal-500/20 text-teal-300 px-2 py-0.5 rounded">
-                                    ✓ {c}
-                                  </span>
-                                ))}
-                              </div>
-                            </div>
-                          )}
-
-                          {/* 8. SUMMARY LINE */}
-                          <div className={`text-center text-[10px] font-bold rounded-lg py-2 border ${dirBorder} ${dirBg}`}>
-                            {predDir} · {adjConf}% Pred · {actualMarketConf}% Market · {confirms.length} Confirms
-                          </div>
-                        </div>
-                      );
-                    })()}
-                  </div>
-
-                  {/* Bottom shimmer */}
-                  <div className="absolute bottom-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-white/8 to-transparent pointer-events-none" />
-                </div>
-              );
-            })}
+          <div className="grid grid-cols-1 lg:grid-cols-2 2xl:grid-cols-3 gap-3">
+            <ORBCard symbol="NIFTY" name="NIFTY 50" />
+            <ORBCard symbol="BANKNIFTY" name="BANK NIFTY" />
+            <ORBCard symbol="SENSEX" name="SENSEX" />
           </div>
         </div>
 
@@ -2837,20 +2681,18 @@ export default function Home() {
           </div>
         </div>
 
-        {/* Trend Base Section - ENHANCED */}
-        <div className="mt-6 sm:mt-6 border-2 border-green-500/40 rounded-2xl p-3 sm:p-4 bg-gradient-to-br from-green-900/15 via-green-950/10 to-green-900/5 backdrop-blur-sm shadow-xl shadow-green-500/10">
-          <div className="flex flex-col gap-1.5 mb-3 sm:mb-4">
+        {/* Trend Base Section */}
+        <div className="mt-6 sm:mt-6">
+          <div className="flex flex-col gap-1 mb-3 sm:mb-4">
             <h3 className="text-base sm:text-lg lg:text-xl font-bold text-dark-text flex items-center gap-3 tracking-tight">
-              <span className="w-1.5 h-5 sm:h-6 bg-gradient-to-b from-green-500 to-green-600 rounded-full shadow-lg shadow-green-500/30" />
+              <span className="w-1.5 h-5 sm:h-6 bg-gradient-to-b from-green-500 to-green-600 rounded-full" />
               Trend Base (Higher-Low Structure)
             </h3>
-            <p className="text-dark-tertiary text-xs sm:text-sm ml-4 sm:ml-5 font-medium tracking-wide">
-              Live swing structure analysis • Higher-high/higher-low detection • Clear trend signals
+            <p className="text-dark-tertiary text-[11px] sm:text-xs ml-4 sm:ml-5">
+              Live swing structure · 8-factor analysis · 5-min prediction
             </p>
           </div>
-
-          {/* Trend Base Cards Grid */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 2xl:grid-cols-3 gap-3 sm:gap-3">
+          <div className="grid grid-cols-1 lg:grid-cols-2 2xl:grid-cols-3 gap-3">
             <TrendBaseCard symbol="NIFTY" name="NIFTY 50" />
             <TrendBaseCard symbol="BANKNIFTY" name="BANK NIFTY" />
             <TrendBaseCard symbol="SENSEX" name="SENSEX" />

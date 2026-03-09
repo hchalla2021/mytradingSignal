@@ -292,10 +292,30 @@ const SymbolCard = memo(function SymbolCard({ data, name, liveTick }: SymbolCard
   const tickFlow    = data.changes?.tick_flow ?? 0;
   const hasRealOI   = Math.abs(oiPct) >= 0.01;  // non-trivial OI change from PCR
 
-  // Determine outer card border: special case for "Weak Short Buildup"
-  const outerBorder = data.positioning?.label === "Weak Short Buildup" 
-    ? posStyle.border 
+  // Determine outer card border: highlight Long Buildup (green) and Short Buildup (red)
+  const posType = data.positioning?.type ?? '';
+  const isLongBuildup  = posType === 'LONG_BUILDUP';
+  const isShortBuildup = posType === 'SHORT_BUILDUP';
+
+  const outerBorder = isLongBuildup
+    ? 'border-emerald-400/70'
+    : isShortBuildup
+    ? 'border-red-500/70'
+    : data.positioning?.label === "Weak Short Buildup"
+    ? posStyle.border
     : sig.border;
+
+  const outerRing = isLongBuildup
+    ? 'ring-2 ring-emerald-400/60'
+    : isShortBuildup
+    ? 'ring-2 ring-red-500/60'
+    : '';
+
+  const outerGlow = isLongBuildup
+    ? 'shadow-[0_0_18px_rgba(52,211,153,0.35)]'
+    : isShortBuildup
+    ? 'shadow-[0_0_18px_rgba(239,68,68,0.35)]'
+    : `shadow-xl ${sig.glow}`;
 
   // For "Weak Short Buildup", use subtle background so lime border shows prominently
   const innerPosBackground = data.positioning?.label === "Weak Short Buildup"
@@ -307,7 +327,7 @@ const SymbolCard = memo(function SymbolCard({ data, name, liveTick }: SymbolCard
       className={`
         relative flex flex-col gap-3 rounded-2xl p-4
         bg-gradient-to-br from-slate-900/90 via-slate-950/80 to-black/60
-        border-2 ${outerBorder} shadow-xl ${sig.glow}
+        border-2 ${outerBorder} ${outerRing} ${outerGlow}
         hover:shadow-2xl hover:scale-[1.01] transition-all duration-300
         backdrop-blur-sm overflow-hidden
       `}

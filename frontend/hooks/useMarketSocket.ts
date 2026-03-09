@@ -37,7 +37,7 @@ export interface MarketData {
 }
 
 interface WebSocketMessage {
-  type: 'tick' | 'snapshot' | 'heartbeat' | 'pong' | 'keepalive';
+  type: 'tick' | 'snapshot' | 'heartbeat' | 'pong' | 'keepalive' | 'connection_status';
   data?: MarketTick | Record<string, MarketTick>;
   timestamp?: string;
 }
@@ -183,6 +183,7 @@ export function useMarketSocket() {
             case 'heartbeat':
             case 'pong':
             case 'keepalive':
+            case 'connection_status':
               // 🔥 FIX: Update market status from heartbeat if provided
               // This ensures status updates even when no ticks are coming
               if (message.type === 'heartbeat' && (message as any).marketStatus) {

@@ -1860,6 +1860,7 @@ async def get_opening_range_breakout(symbol: str) -> Dict[str, Any]:
         # Get current instant analysis (which includes ORB data)
         print(f"[ORB] 🔬 Getting ORB analysis from instant_analysis...")
         instant_cache = get_cache()
+        from services.instant_analysis import get_instant_analysis
         analysis = await get_instant_analysis(instant_cache, symbol)
         
         if not analysis or 'indicators' not in analysis:
@@ -2138,6 +2139,7 @@ async def get_supertrend(symbol: str) -> Dict[str, Any]:
         # Get current instant analysis (which includes SuperTrend data)
         print(f"[SUPERTREND] 🔬 Getting SuperTrend analysis from instant_analysis...")
         instant_cache = get_cache()
+        from services.instant_analysis import get_instant_analysis
         analysis = await get_instant_analysis(instant_cache, symbol)
         
         if not analysis or 'indicators' not in analysis:
@@ -2410,6 +2412,7 @@ async def get_parabolic_sar(symbol: str) -> Dict[str, Any]:
         # Get current instant analysis (which includes SAR data)
         print(f"[PARABOLIC-SAR] 🔬 Getting SAR analysis from instant_analysis...")
         instant_cache = get_cache()
+        from services.instant_analysis import get_instant_analysis
         analysis = await get_instant_analysis(instant_cache, symbol)
         
         if not analysis or 'indicators' not in analysis:

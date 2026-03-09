@@ -132,6 +132,47 @@ const CandleQualityAnalysis = memo<CandleQualityAnalysisProps>(({ symbol }) => {
     return { signal, badgeEmoji, signalColor, textColor, confidence, symbol: symbolName };
   }, [data, symbol]);
 
+  // ── Derive direction flags from signalAnalysis (must be before early returns) ──
+  const isBuy  = signalAnalysis.signal.includes('BUY')  || signalAnalysis.signal === 'BULLISH';
+  const isSell = signalAnalysis.signal.includes('SELL') || signalAnalysis.signal === 'BEARISH';
+
+  // ── 5-Min Prediction confidence (direction-aware, continuous) ──
+  const volConfidence = useMemo(() => {
+    if (!data) return 50;
+    const bp  = data.body_percent    || 0;
+    const mom = data.momentum_score  || 50;
+
+    let base: number;
+    if (bp >= 55)      base = 65 + (bp - 55) * (20 / 45);
+    else if (bp >= 30) base = 52 + (bp - 30) * (13 / 25);
+    else               base = Math.max(35, 35 + bp * (17 / 30));
+
+    const momAdj = isBuy  ? ((mom - 50) / 50) * 8
+                 : isSell ? ((50 - mom) / 50) * 8
+                 : (Math.abs(mom - 50) / 50) * 8;
+    base += momAdj;
+
+    if (data.volume_above_threshold) base *= 1.08;
+    if (data.conviction_move)        base *= 1.05;
+    if (data.fake_spike_detected)    base *= 0.82;
+
+    return Math.min(90, Math.max(35, Math.round(base)));
+  }, [data, isBuy, isSell]);
+
+  // ── Stable derived values (memoized to prevent flickering) ──
+  const actualMarketConf = useMemo(() => {
+    if (!data) return 50;
+    const mult = data.conviction_move ? 1.05 : data.fake_spike_detected ? 0.85 : 1.0;
+    return Math.min(95, Math.max(30, Math.round(volConfidence * mult)));
+  }, [volConfidence, data]);
+
+  const bullProb = useMemo(() => {
+    if (isBuy)  return Math.max(5, Math.min(95, volConfidence));
+    if (isSell) return Math.max(5, Math.min(95, 100 - volConfidence));
+    return 50;
+  }, [isBuy, isSell, volConfidence]);
+  const bearProb = 100 - bullProb;
+
   // Loading state
   if (loading && !data) {
     return (
@@ -172,8 +213,6 @@ const CandleQualityAnalysis = memo<CandleQualityAnalysisProps>(({ symbol }) => {
   const { signal, confidence, symbol: symbolName } = signalAnalysis;
 
   // ── Accent palette (signal-reactive, eye-friendly muted tones) ──
-  const isBuy  = signal.includes('BUY')  || signal === 'BULLISH';
-  const isSell = signal.includes('SELL') || signal === 'BEARISH';
   const isWait = signal === 'WAIT';
 
   const accentBorder  = isBuy ? 'border-teal-500/30'   : isSell ? 'border-rose-500/25'  : isWait ? 'border-orange-500/25' : 'border-slate-600/30';
@@ -191,42 +230,12 @@ const CandleQualityAnalysis = memo<CandleQualityAnalysisProps>(({ symbol }) => {
     '◆ NEUTRAL';
 
   // ── Derived pre-production intelligence ──
-  // Body ≥55% = STRONG (clear momentum), 30-55% = MODERATE, <30% = WEAK (mostly wicks)
   const bodyRating   = data.body_percent > 55 ? 'STRONG' : data.body_percent > 30 ? 'MODERATE' : 'WEAK';
   const volStatus    = data.volume_above_threshold ? 'HIGH' : 'NORMAL';
   const convictionLv = data.conviction_move ? 'CONFIRMED' : data.momentum_score > 60 ? 'BUILDING' : 'LOW';
 
   // ── Derived 5-min prediction ──
   const predictedDir   = isBuy ? 'UPSIDE' : isSell ? 'DOWNSIDE' : 'SIDEWAYS';
-  const bodyExpect     = data.conviction_move ? 'EXPANDING' : data.fake_spike_detected ? 'SHRINKING' : 'STABLE';
-  const volumeExpect   = data.volume_above_threshold && data.conviction_move ? 'SURGING' : data.fake_spike_detected ? 'FADING' : 'STEADY';
-
-  // ── 5-Min Prediction confidence (direction-aware, continuous) ──
-  // Mirrors the backend unified formula:  body_percent → piecewise 35–88%,
-  // direction-aware momentum ±8pp, Boolean factors as proportional multipliers.
-  const volConfidence = (() => {
-    const bp  = data.body_percent    || 0;
-    const mom = data.momentum_score  || 50;
-
-    // Piecewise base from body_percent (0–100)
-    let base: number;
-    if (bp >= 55)      base = 65 + (bp - 55) * (20 / 45);        // 65→74 as bp 55→100
-    else if (bp >= 30) base = 52 + (bp - 30) * (13 / 25);        // 52→65 as bp 30→55
-    else               base = Math.max(35, 35 + bp * (17 / 30)); // 35→52 as bp  0→30
-
-    // Direction-aware momentum adjustment: ±8pp continuous
-    const momAdj = isBuy  ? ((mom - 50) / 50) * 8
-                 : isSell ? ((50 - mom) / 50) * 8
-                 : (Math.abs(mom - 50) / 50) * 8;  // neutral/wait: any extreme adds
-    base += momAdj;
-
-    // Boolean factor multipliers — proportional, no flat cliffs
-    if (data.volume_above_threshold) base *= 1.08;  // +8% volume confirmation
-    if (data.conviction_move)        base *= 1.05;  // +5% conviction (on top of volume)
-    if (data.fake_spike_detected)    base *= 0.82;  // -18% fake-spike penalty
-
-    return Math.min(90, Math.max(35, Math.round(base)));
-  })();
 
   return (
     <div suppressHydrationWarning className={`relative rounded-2xl overflow-hidden border ${accentBorder} shadow-lg bg-[#0b0f1a] backdrop-blur-xl`}>
@@ -271,7 +280,7 @@ const CandleQualityAnalysis = memo<CandleQualityAnalysisProps>(({ symbol }) => {
               </p>
             </div>
             <div className="text-right shrink-0">
-              <div suppressHydrationWarning className="text-2xl font-black text-white tabular-nums leading-none">{confidence}%</div>
+              <div className="text-2xl font-black text-white tabular-nums leading-none">{confidence}%</div>
               <p className="text-[9px] text-white/30 font-medium mt-0.5">Confidence</p>
             </div>
           </div>
@@ -282,21 +291,15 @@ const CandleQualityAnalysis = memo<CandleQualityAnalysisProps>(({ symbol }) => {
               style={{ width: `${confidence}%` }}
             />
           </div>
-          {/* Alert badges inline */}
-          {(data.fake_spike_detected || data.conviction_move) && (
-            <div className="flex gap-2 mt-2.5">
-              {data.conviction_move && (
-                <span className="text-[9px] font-semibold px-2 py-0.5 rounded-md bg-teal-500/10 border border-teal-500/20 text-teal-300 tracking-wide">
-                  CONVICTION MOVE
-                </span>
-              )}
-              {data.fake_spike_detected && (
-                <span className="text-[9px] font-semibold px-2 py-0.5 rounded-md bg-rose-500/10 border border-rose-500/20 text-rose-300 tracking-wide">
-                  FAKE SPIKE
-                </span>
-              )}
-            </div>
-          )}
+          {/* Alert badges inline (always rendered with fixed height to prevent layout shift) */}
+          <div className="flex gap-2 mt-2.5 min-h-[22px]">
+            <span className={`text-[9px] font-semibold px-2 py-0.5 rounded-md tracking-wide transition-opacity duration-500 ${data.conviction_move ? 'bg-teal-500/10 border border-teal-500/20 text-teal-300 opacity-100' : 'opacity-0'}`}>
+              CONVICTION MOVE
+            </span>
+            <span className={`text-[9px] font-semibold px-2 py-0.5 rounded-md tracking-wide transition-opacity duration-500 ${data.fake_spike_detected ? 'bg-rose-500/10 border border-rose-500/20 text-rose-300 opacity-100' : 'opacity-0'}`}>
+              FAKE SPIKE
+            </span>
+          </div>
         </div>
       </div>
 
@@ -378,11 +381,10 @@ const CandleQualityAnalysis = memo<CandleQualityAnalysisProps>(({ symbol }) => {
           <div className="grid grid-cols-2 gap-2">
             <div className="flex flex-col bg-gray-900/50 rounded-lg px-2 py-1.5 border border-gray-700/30">
               <span className="text-[9px] text-gray-500 font-bold uppercase tracking-wide">CONFIDENCE</span>
-              <span suppressHydrationWarning className="text-[13px] font-black text-emerald-300 mt-0.5">{volConfidence}%</span>
+              <span className="text-[13px] font-black text-emerald-300 mt-0.5 tabular-nums">{volConfidence}%</span>
               <div className="w-full h-2 rounded-full bg-gray-800 overflow-hidden mt-1">
                 <div
-                  suppressHydrationWarning
-                  className="h-full bg-gradient-to-r from-emerald-500 to-emerald-400 transition-all duration-300 rounded-full"
+                  className="h-full bg-gradient-to-r from-emerald-500 to-emerald-400 transition-all duration-700 rounded-full"
                   style={{ width: `${Math.min(100, volConfidence)}%` }}
                 />
               </div>
@@ -390,14 +392,11 @@ const CandleQualityAnalysis = memo<CandleQualityAnalysisProps>(({ symbol }) => {
 
             <div className="flex flex-col bg-gray-900/50 rounded-lg px-2 py-1.5 border border-gray-700/30">
               <span className="text-[9px] text-gray-500 font-bold uppercase tracking-wide">Actual Market</span>
-              <span suppressHydrationWarning className="text-[13px] font-black text-teal-300 mt-0.5">
-                {Math.round(volConfidence * (data.conviction_move ? 1.05 : data.fake_spike_detected ? 0.85 : 1.0))}%
-              </span>
+              <span className="text-[13px] font-black text-teal-300 mt-0.5 tabular-nums">{actualMarketConf}%</span>
               <div className="w-full h-2 rounded-full bg-gray-800 overflow-hidden mt-1">
                 <div
-                  suppressHydrationWarning
-                  className="h-full bg-gradient-to-r from-teal-500 to-teal-400 transition-all duration-300 rounded-full"
-                  style={{ width: `${Math.min(100, Math.round(volConfidence * (data.conviction_move ? 1.05 : data.fake_spike_detected ? 0.85 : 1.0)))}%` }}
+                  className="h-full bg-gradient-to-r from-teal-500 to-teal-400 transition-all duration-700 rounded-full"
+                  style={{ width: `${Math.min(100, actualMarketConf)}%` }}
                 />
               </div>
             </div>
@@ -410,7 +409,7 @@ const CandleQualityAnalysis = memo<CandleQualityAnalysisProps>(({ symbol }) => {
             'border-amber-500/30 bg-amber-500/[0.05]'
           } px-3 py-2.5`}>
             <div className="flex items-center justify-between gap-2 mb-1.5">
-              <span suppressHydrationWarning className={`text-sm font-black ${
+              <span className={`text-sm font-black ${
                 isBuy ? 'text-teal-400' : isSell ? 'text-rose-400' : 'text-amber-400'
               }`}>
                 {isBuy ? '▲' : isSell ? '▼' : '─'} {predictedDir}
@@ -421,7 +420,7 @@ const CandleQualityAnalysis = memo<CandleQualityAnalysisProps>(({ symbol }) => {
                  'Weak signal'}
                 {data.fake_spike_detected ? ' ⚠ Spike detected' : ''}
               </span>
-              <span suppressHydrationWarning className={`text-sm font-black ${
+              <span className={`text-sm font-black tabular-nums ${
                 isBuy ? 'text-teal-400' : isSell ? 'text-rose-400' : 'text-amber-400'
               }`}>
                 {volConfidence}%
@@ -485,45 +484,31 @@ const CandleQualityAnalysis = memo<CandleQualityAnalysisProps>(({ symbol }) => {
           {/* Movement Probability Distribution */}
           <div className="space-y-2">
             <p className="text-[9px] font-bold text-gray-500 uppercase tracking-wide">Movement Probability</p>
-            <div className="flex items-center gap-0.5 h-6 rounded-md overflow-hidden bg-gray-950/50 border border-gray-700/30">
-              {/* Bullish probability */}
+            <div className="flex items-center h-6 rounded-md overflow-hidden bg-gray-950/50 border border-gray-700/30">
               <div
-                suppressHydrationWarning
-                className="h-full bg-gradient-to-r from-teal-600 to-teal-500 transition-all duration-300 flex items-center justify-center min-w-[2px]"
-                style={{
-                  width: `${Math.max(5, Math.min(95, isBuy ? volConfidence : Math.max(0, 50 - Math.abs(data.momentum_score - 50))))}%`,
-                }}
+                className="h-full bg-gradient-to-r from-teal-600 to-teal-500 transition-all duration-700 flex items-center justify-center"
+                style={{ width: `${bullProb}%` }}
               >
-                <span className="text-[8px] font-bold text-white px-1 truncate whitespace-nowrap">
-                  {Math.round(isBuy ? volConfidence : Math.max(0, 50 - Math.abs(data.momentum_score - 50)))}%↑
-                </span>
+                {bullProb >= 15 && <span className="text-[8px] font-bold text-white tabular-nums">{bullProb}%↑</span>}
               </div>
-              {/* Bearish probability */}
               <div
-                suppressHydrationWarning
-                className="h-full bg-gradient-to-l from-rose-600 to-rose-500 transition-all duration-300 flex items-center justify-center ml-auto min-w-[2px]"
-                style={{
-                  width: `${Math.max(5, Math.min(95, isSell ? volConfidence : Math.max(0, 50 - Math.abs(data.momentum_score - 50))))}%`,
-                }}
+                className="h-full bg-gradient-to-l from-rose-600 to-rose-500 transition-all duration-700 flex items-center justify-center"
+                style={{ width: `${bearProb}%` }}
               >
-                <span className="text-[8px] font-bold text-white px-1 truncate whitespace-nowrap">
-                  {Math.round(isSell ? volConfidence : Math.max(0, 50 - Math.abs(data.momentum_score - 50)))}%↓
-                </span>
+                {bearProb >= 15 && <span className="text-[8px] font-bold text-white tabular-nums">{bearProb}%↓</span>}
               </div>
             </div>
           </div>
 
-          {/* Early Signal Detection */}
-          {(volConfidence >= 75 || (bodyRating === 'STRONG' && data.volume_above_threshold && !data.fake_spike_detected)) && (
-            <div className="pt-2 border-t border-gray-700/20">
-              <span suppressHydrationWarning className="text-[9px] font-bold text-amber-400 uppercase tracking-wide">
-                ⚡ {volConfidence >= 85 ? 'STRONG' : 'CONFIRMED'} {predictedDir} Signal Formed
-              </span>
-            </div>
-          )}
+          {/* Early Signal Detection (always rendered, visibility toggled to prevent layout shift) */}
+          <div className={`pt-2 border-t border-gray-700/20 min-h-[24px] ${(volConfidence >= 75 || (bodyRating === 'STRONG' && data.volume_above_threshold && !data.fake_spike_detected)) ? '' : 'invisible'}`}>
+            <span className="text-[9px] font-bold text-amber-400 uppercase tracking-wide">
+              ⚡ {volConfidence >= 85 ? 'STRONG' : 'CONFIRMED'} {predictedDir} Signal Formed
+            </span>
+          </div>
 
           {/* Summary line */}
-          <div suppressHydrationWarning className={`text-center text-[10px] font-bold rounded-lg py-1.5 border ${
+          <div className={`text-center text-[10px] font-bold rounded-lg py-1.5 border tabular-nums ${
             isBuy ? 'bg-teal-500/10 border-teal-500/30 text-teal-300' :
             isSell ? 'bg-rose-500/10 border-rose-500/30 text-rose-300' :
             'bg-amber-500/10 border-amber-500/20 text-amber-300'
