@@ -438,6 +438,9 @@ const PivotSectionUnified = memo<{ updates?: number; analyses?: Record<string, a
   const isFetchingRef = useRef(false);
   const intervalRef = useRef<NodeJS.Timeout | null>(null);
   const hasFetchedRef = useRef(false);
+  // Locked pivot levels — once valid R3-S3 arrive they never get overwritten with zeros
+  const lockedPivotsRef = useRef<Record<string, PivotData['classic_pivots']>>({});
+  const lockedCamRef = useRef<Record<string, PivotData['camarilla_pivots']>>({});
 
   const isLiveMarket = useMemo(() => {
     if (marketStatus === 'LIVE') return true;
@@ -465,7 +468,26 @@ const PivotSectionUnified = memo<{ updates?: number; analyses?: Record<string, a
       for (const symbol of ['NIFTY', 'BANKNIFTY', 'SENSEX']) {
         const d = liveData?.[symbol];
         if (d && (d.current_price || d.classic_pivots?.pivot)) {
-          validData[symbol] = { ...d, timestamp: new Date().toISOString() };
+          const entry: PivotData = { ...d, timestamp: new Date().toISOString() };
+
+          // Lock pivot levels: once valid, never replace with zeros
+          const cp = entry.classic_pivots;
+          const hasPivots = cp && cp.pivot > 0 && cp.r1 > 0 && cp.s1 > 0;
+          if (hasPivots) {
+            lockedPivotsRef.current[symbol] = { ...cp };
+          } else if (lockedPivotsRef.current[symbol]) {
+            entry.classic_pivots = { ...lockedPivotsRef.current[symbol], bias: cp?.bias || 'NEUTRAL' };
+          }
+
+          const cam = entry.camarilla_pivots;
+          const hasCam = cam && cam.h4 > 0 && cam.l4 > 0;
+          if (hasCam) {
+            lockedCamRef.current[symbol] = { ...cam };
+          } else if (lockedCamRef.current[symbol]) {
+            entry.camarilla_pivots = { ...lockedCamRef.current[symbol], zone: cam?.zone || '' };
+          }
+
+          validData[symbol] = entry;
         }
       }
 
@@ -489,9 +511,11 @@ const PivotSectionUnified = memo<{ updates?: number; analyses?: Record<string, a
     }
   }, []);
 
-  // Seed from parent analyses (fast path)
+  // Seed from parent analyses (fast path) — only used BEFORE the dedicated API responds.
+  // Once hasFetchedRef is true, the dedicated pivot API is the sole data source
+  // to prevent two competing sources from causing flicker.
   useEffect(() => {
-    if (!analyses) return;
+    if (!analyses || hasFetchedRef.current) return;
     const built: Record<string, PivotData> = {};
     for (const sym of ['NIFTY', 'BANKNIFTY', 'SENSEX']) {
       const symData = analyses[sym];
@@ -501,6 +525,12 @@ const PivotSectionUnified = memo<{ updates?: number; analyses?: Record<string, a
       const isBull = (symData.signal || '').includes('BUY');
       const isBear = (symData.signal || '').includes('SELL');
       const pp = ind.pivot_points || {};
+
+      const cpivot = pp.pivot || ind.cpr_pivot || 0;
+      const cr1 = pp.r1 || ind.pivot_r1 || 0;
+      // Skip this symbol if pivot data is empty — don't overwrite with zeros
+      if (cpivot <= 0 && cr1 <= 0) continue;
+
       built[sym] = {
         symbol: sym,
         status: symData.status || 'LIVE',
@@ -516,8 +546,8 @@ const PivotSectionUnified = memo<{ updates?: number; analyses?: Record<string, a
           price_vs_ema20: price > (ind.ema_20 || 0) ? 'ABOVE' : 'BELOW',
         },
         classic_pivots: {
-          pivot: pp.pivot || ind.cpr_pivot || 0,
-          r1: pp.r1 || ind.pivot_r1 || 0,
+          pivot: cpivot,
+          r1: cr1,
           r2: pp.r2 || ind.pivot_r2 || 0,
           r3: pp.r3 || ind.pivot_r3 || 0,
           s1: pp.s1 || ind.pivot_s1 || 0,

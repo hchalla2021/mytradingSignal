@@ -65,8 +65,10 @@ function getDirPalette(dir: LiquidityDirection): DirPalette {
 type ProfileStyle = { bg: string; text: string; label: string; icon: string; ring: string; glow: string };
 
 const OI_PROFILE: Record<OIProfile, ProfileStyle> = {
+  STRONG_LONG_BUILDUP: { bg: 'bg-green-500/30  border-green-400/60',   text: 'text-green-100',   label: '🚀 Rally — Strong Long Buildup', icon: '🚀', ring: 'ring-2 ring-green-400/80 border-green-400/70',   glow: 'shadow-[0_0_24px_rgba(34,197,94,0.50)]' },
   LONG_BUILDUP:     { bg: 'bg-emerald-500/20 border-emerald-500/40', text: 'text-emerald-200', label: 'Long Buildup',      icon: '📈', ring: 'ring-2 ring-emerald-400/70 border-emerald-400/60', glow: 'shadow-[0_0_18px_rgba(52,211,153,0.35)]' },
   SHORT_COVERING:   { bg: 'bg-lime-500/15    border-lime-500/30',    text: 'text-lime-300',    label: 'Short Covering',    icon: '🔄', ring: '', glow: '' },
+  STRONG_SHORT_BUILDUP: { bg: 'bg-rose-600/30   border-rose-500/60',    text: 'text-rose-100',    label: '💥 Crash — Strong Short Buildup', icon: '💥', ring: 'ring-2 ring-rose-500/80 border-rose-500/70',     glow: 'shadow-[0_0_24px_rgba(225,29,72,0.50)]' },
   SHORT_BUILDUP:    { bg: 'bg-red-500/20     border-red-500/40',     text: 'text-red-200',     label: 'Short Buildup',     icon: '📉', ring: 'ring-2 ring-red-500/70 border-red-500/60',         glow: 'shadow-[0_0_18px_rgba(239,68,68,0.35)]' },
   LONG_UNWINDING:   { bg: 'bg-orange-500/15  border-orange-500/30',  text: 'text-orange-300',  label: 'Long Unwinding',    icon: '⚠️', ring: '', glow: '' },
   NEUTRAL:          { bg: 'bg-slate-700/30   border-slate-600/30',   text: 'text-slate-400',   label: 'No Clear Pattern',  icon: '⚖️', ring: '', glow: '' },

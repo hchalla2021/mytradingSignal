@@ -104,10 +104,14 @@ function getPositioningStyle(type: string, label?: string) {
   }
 
   switch (type) {
+    case "STRONG_LONG_BUILDUP":
+      return { color: "text-green-300",   bg: "bg-green-500/25",   border: "border-green-400/60",   badge: "bg-green-500/30 text-green-200" };
     case "LONG_BUILDUP":
       return { color: "text-emerald-400", bg: "bg-emerald-500/15", border: "border-emerald-500/40", badge: "bg-emerald-500/20 text-emerald-300" };
     case "SHORT_COVERING":
       return { color: "text-green-400",   bg: "bg-green-500/10",   border: "border-green-500/30",   badge: "bg-green-500/20 text-green-300" };
+    case "STRONG_SHORT_BUILDUP":
+      return { color: "text-rose-300",    bg: "bg-rose-600/25",    border: "border-rose-500/60",    badge: "bg-rose-500/30 text-rose-200" };
     case "SHORT_BUILDUP":
       return { color: "text-red-400",     bg: "bg-red-500/15",     border: "border-red-500/40",     badge: "bg-red-500/20 text-red-300" };
     case "LONG_UNWINDING":
@@ -294,10 +298,16 @@ const SymbolCard = memo(function SymbolCard({ data, name, liveTick }: SymbolCard
 
   // Determine outer card border: highlight Long Buildup (green) and Short Buildup (red)
   const posType = data.positioning?.type ?? '';
-  const isLongBuildup  = posType === 'LONG_BUILDUP';
-  const isShortBuildup = posType === 'SHORT_BUILDUP';
+  const isStrongLong   = posType === 'STRONG_LONG_BUILDUP';
+  const isStrongShort  = posType === 'STRONG_SHORT_BUILDUP';
+  const isLongBuildup  = posType === 'LONG_BUILDUP' || isStrongLong;
+  const isShortBuildup = posType === 'SHORT_BUILDUP' || isStrongShort;
 
-  const outerBorder = isLongBuildup
+  const outerBorder = isStrongLong
+    ? 'border-green-400/80'
+    : isStrongShort
+    ? 'border-rose-500/80'
+    : isLongBuildup
     ? 'border-emerald-400/70'
     : isShortBuildup
     ? 'border-red-500/70'
@@ -305,13 +315,21 @@ const SymbolCard = memo(function SymbolCard({ data, name, liveTick }: SymbolCard
     ? posStyle.border
     : sig.border;
 
-  const outerRing = isLongBuildup
+  const outerRing = isStrongLong
+    ? 'ring-2 ring-green-400/70'
+    : isStrongShort
+    ? 'ring-2 ring-rose-500/70'
+    : isLongBuildup
     ? 'ring-2 ring-emerald-400/60'
     : isShortBuildup
     ? 'ring-2 ring-red-500/60'
     : '';
 
-  const outerGlow = isLongBuildup
+  const outerGlow = isStrongLong
+    ? 'shadow-[0_0_24px_rgba(34,197,94,0.50)]'
+    : isStrongShort
+    ? 'shadow-[0_0_24px_rgba(225,29,72,0.50)]'
+    : isLongBuildup
     ? 'shadow-[0_0_18px_rgba(52,211,153,0.35)]'
     : isShortBuildup
     ? 'shadow-[0_0_18px_rgba(239,68,68,0.35)]'

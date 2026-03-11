@@ -58,7 +58,6 @@ const OIMomentumCard = dynamic(() => import('@/components/OIMomentumCard'), {
 const VolumePulseCard = dynamic(() => import('@/components/VolumePulseCard'), { ssr: false });
 const TrendBaseCard = dynamic(() => import('@/components/TrendBaseCard'), { ssr: false });
 const CandleIntentCard = dynamic(() => import('@/components/CandleIntentCard'), { ssr: false });
-const ORBCard = dynamic(() => import('@/components/ORBCard'), { ssr: false });
 const PivotSectionUnified = dynamic(() => import('@/components/PivotSectionUnified'), { ssr: false });
 const TradeSupportResistance = dynamic(() => import('@/components/TradeSupportResistance'), { ssr: false });
 const InstitutionalMarketView = dynamic(() => import('@/components/InstitutionalMarketView'), { ssr: false });
@@ -198,8 +197,6 @@ export default function Home() {
         indexData.indicators?.ema_alignment_confidence || (indexData.indicators?.ema_alignment ? 75 : 28),
         indexData.indicators?.camarilla_confidence || (indexData.indicators?.camarilla_signal ? 72 : 24),
         indexData.indicators?.supertrend_confidence || (indexData.indicators?.supertrend ? 80 : 15),
-        indexData.indicators?.sar_confidence || (indexData.indicators?.sar_signal ? 77 : 21),
-        indexData.indicators?.orb_confidence || (indexData.indicators?.orb_signal ? 83 : 19),
         indexData.indicators?.pivot_confidence || (indexData.indicators?.pivot_signal ? 76 : 23),
         indexData.indicators?.zone_confidence || (indexData.analysis?.zoneControl ? 74 : 26),
         indexData.volume?.volume_confidence || (indexData.volume?.buying_pressure || indexData.volume?.selling_pressure ? 72 : 20),
@@ -420,27 +417,6 @@ export default function Home() {
       }
 
       // ═══════════════════════════════════════════════════════════════
-      // SECTION 8: Parabolic SAR • Trend Following
-      // ═══════════════════════════════════════════════════════════════
-      sectionCount++;
-      const sarValue = ind.sar_value || 0;
-      const sarPosition = String(ind.sar_position || '').toUpperCase();
-      const sarTrend = String(ind.sar_trend || '').toUpperCase();
-      const sarSignalRaw = String(ind.sar_signal || '').toUpperCase();
-      const sarConfidence = ind.sar_signal_strength || (sarPosition ? 65 : 30);
-      
-      if (sarSignalRaw.includes('BUY') || sarPosition === 'BELOW' || sarTrend.includes('BULL')) {
-        buyCount++;
-        totalConfidenceSum += sarConfidence;
-      } else if (sarSignalRaw.includes('SELL') || sarPosition === 'ABOVE' || sarTrend.includes('BEAR')) {
-        sellCount++;
-        totalConfidenceSum += sarConfidence;
-      } else {
-        neutralCount++;
-        totalConfidenceSum += 50;
-      }
-
-      // ═══════════════════════════════════════════════════════════════
       // SECTION 9: SuperTrend (10,2) • Trend Following
       // Backend field: supertrend_10_2_value (not supertrend_10_2)
       // ═══════════════════════════════════════════════════════════════
@@ -463,27 +439,7 @@ export default function Home() {
       }
 
       // ═══════════════════════════════════════════════════════════════
-      // SECTION 10: Opening Range Breakout (ORB)
-      // ═══════════════════════════════════════════════════════════════
-      sectionCount++;
-      const orbHigh = ind.orb_high || 0;
-      const orbLow = ind.orb_low || 0;
-      const orbSignal = String(ind.orb_signal || '').toUpperCase();
-      const orbConfidence = ind.orb_confidence || 50;
-      
-      if (orbSignal.includes('BUY') || (orbHigh > 0 && price > orbHigh)) {
-        buyCount++;
-        totalConfidenceSum += orbConfidence;
-      } else if (orbSignal.includes('SELL') || (orbLow > 0 && price < orbLow)) {
-        sellCount++;
-        totalConfidenceSum += orbConfidence;
-      } else {
-        neutralCount++;
-        totalConfidenceSum += 50;
-      }
-
-      // ═══════════════════════════════════════════════════════════════
-      // SECTION 11: Pivot Points (Support/Resistance Levels)
+      // SECTION 10: Pivot Points (Support/Resistance Levels)
       // ═══════════════════════════════════════════════════════════════
       sectionCount++;
       const pivotR1 = ind.pivot_r1 || 0;
@@ -657,9 +613,9 @@ export default function Home() {
 
       // ═══════════════════════════════════════════════════════════════
       // 5-MIN PREDICTION ENGINE
-      // Every one of the 17 sections contributes a factor here.
+      // Every one of the 15 sections contributes a factor here.
       // ZERO extra API calls — all values already computed above.
-      //   totalConfidence = average certainty of all 17 static signals
+      //   totalConfidence = average certainty of all 15 static signals
       //   pred5mConf      = certainty of the SHORT-TERM directional move
       // ═══════════════════════════════════════════════════════════════
       let p5Buy = 0, p5Sell = 0, p5ConfSum = 0, p5N = 0;
@@ -683,25 +639,13 @@ export default function Home() {
       if (f3 > 0) p5Buy += f3; else if (f3 < 0) p5Sell += Math.abs(f3);
       p5ConfSum += rsiValue > 65 || rsiValue < 35 ? 82 : rsiValue > 60 || rsiValue < 40 ? 68 : 50; p5N++;
 
-      // F4 (S8): Parabolic SAR trailing stop direction
-      const f4 = (sarSignalRaw.includes('BUY') || sarPosition === 'BELOW' || sarTrend.includes('BULL')) ? 1
-               : (sarSignalRaw.includes('SELL') || sarPosition === 'ABOVE' || sarTrend.includes('BEAR')) ? -1 : 0;
-      if (f4 > 0) p5Buy += f4; else if (f4 < 0) p5Sell += Math.abs(f4);
-      p5ConfSum += sarConfidence || 50; p5N++;
-
       // F5 (S9): SuperTrend (10,2) short-term trend
       const f5 = supertrendSignal === 'BUY' || supertrendTrend === 'BULLISH' ? 1
                : supertrendSignal === 'SELL' || supertrendTrend === 'BEARISH' ? -1 : 0;
       if (f5 > 0) p5Buy += f5; else if (f5 < 0) p5Sell += Math.abs(f5);
       p5ConfSum += supertrendConf || 50; p5N++;
 
-      // F6 (S10): ORB breakout momentum
-      const f6 = orbSignal.includes('BUY') || (orbHigh > 0 && price > orbHigh) ? 1
-               : orbSignal.includes('SELL') || (orbLow > 0 && price < orbLow) ? -1 : 0;
-      if (f6 > 0) p5Buy += f6; else if (f6 < 0) p5Sell += Math.abs(f6);
-      p5ConfSum += orbConfidence || 50; p5N++;
-
-      // F7 (S15): Pure Liquidity 5-min prediction (OI velocity + PCR momentum)
+      // F6 (S15): Pure Liquidity 5-min prediction (OI velocity + PCR momentum)
       if (liquidityIndex) {
         const lq5m = liquidityIndex.prediction5m;
         const lq5mConf = liquidityIndex.pred5mConf; // 1–99
@@ -944,7 +888,7 @@ export default function Home() {
               loading={vixLoading}
             />
             <div className="flex items-center gap-2 ml-auto">
-              <span className="hidden sm:inline text-[9px] text-white/60 font-bold">17 Signals</span>
+              <span className="hidden sm:inline text-[9px] text-white/60 font-bold">15 Signals</span>
               <span className="w-1.5 h-1.5 rounded-full bg-teal-400 animate-pulse" />
               <span className="text-[9px] text-teal-400/50 font-bold">LIVE</span>
             </div>
@@ -987,10 +931,10 @@ export default function Home() {
                     </span>
                   </div>
 
-                  {/* 17 Signals Confidence */}
+                  {/* 15 Signals Confidence */}
                   <div className="px-4 pt-3.5 pb-3 flex-1">
                     <div className="mb-2.5">
-                      <span className="text-[10px] font-bold text-white/40 uppercase tracking-[0.15em]">17 Signals</span>
+                      <span className="text-[10px] font-bold text-white/40 uppercase tracking-[0.15em]">15 Signals</span>
                     </div>
                     <div suppressHydrationWarning className="h-2.5 rounded-full overflow-hidden flex bg-white/[0.06] mb-3">
                       <div className="bg-gradient-to-r from-teal-700 to-teal-400 transition-all duration-700 ease-out" style={{ width: `${s.buyPercent}%` }} />
@@ -2070,280 +2014,6 @@ export default function Home() {
             })}
           </div>
         </div>
-
-        {/* Parabolic SAR - Trend Following Section */}
-        <div className="mt-6 sm:mt-6">
-          <div className="flex flex-col gap-2 mb-4 px-2 sm:px-0">
-            <h3 className="text-base sm:text-lg lg:text-xl font-bold text-dark-text flex items-center gap-3 tracking-tight">
-              <span className="w-1.5 h-5 sm:h-6 bg-gradient-to-b from-teal-500 to-teal-600 rounded-full shadow-lg shadow-teal-500/30" />
-              Parabolic SAR • Trend Following
-            </h3>
-            <p className="text-dark-tertiary text-xs sm:text-sm ml-4 sm:ml-5 font-medium tracking-wide">
-              Dynamic stop-loss levels • Trend reversal detection • Clear entry/exit signals
-            </p>
-          </div>
-
-          <div className="mt-4 grid grid-cols-1 lg:grid-cols-2 2xl:grid-cols-3 gap-3">
-            {[
-              { symbol: 'NIFTY', data: analyses?.NIFTY },
-              { symbol: 'BANKNIFTY', data: analyses?.BANKNIFTY },
-              { symbol: 'SENSEX', data: analyses?.SENSEX }
-            ].map((item) => {
-              const ind = item.data?.indicators || {};
-              const sarPosition = String(ind.sar_position || '').toUpperCase();
-              const sarSignal = String(ind.sar_signal || 'HOLD').toUpperCase();
-              const sarTrend = String(ind.sar_trend || '').toUpperCase();
-              const sarValue = ind.sar_value || 0;
-              const curPrice = ind.price || 0;
-              const sarConfidence = Math.round(ind.sar_signal_strength || 50);
-              const trendStrength = String(ind.sar_trend_strength || 'NEUTRAL').toUpperCase();
-              const sarAction = String(ind.sar_action || 'WAIT');
-              const distancePct = ind.distance_to_sar_pct || ind.sar_distance_pct || 0;
-              const distanceAbs = ind.distance_to_sar || ind.sar_distance || 0;
-              const sarFlip = !!ind.sar_reversal;
-
-              // ── Signal classification (5-level) ──
-              const isBullish = sarSignal === 'STRONG_BUY' || sarSignal === 'BUY' || sarPosition === 'BELOW' || sarTrend === 'BULLISH';
-              const isBearish = sarSignal === 'STRONG_SELL' || sarSignal === 'SELL' || sarPosition === 'ABOVE' || sarTrend === 'BEARISH';
-              const isStrong = sarSignal === 'STRONG_BUY' || sarSignal === 'STRONG_SELL' || trendStrength === 'STRONG';
-
-              // ── Colors: green=bullish, red=bearish, yellow=neutral ──
-              const accentColor = isBullish ? 'emerald' : isBearish ? 'rose' : 'amber';
-              const borderClass = isBullish ? 'border-emerald-500/40' : isBearish ? 'border-rose-500/40' : 'border-amber-500/30';
-              const signalBg = isBullish ? 'bg-emerald-500/15' : isBearish ? 'bg-rose-500/15' : 'bg-amber-500/10';
-              const signalText = isBullish ? 'text-emerald-400' : isBearish ? 'text-rose-400' : 'text-amber-400';
-              const barBg = isBullish ? 'bg-emerald-500' : isBearish ? 'bg-rose-500' : 'bg-amber-500';
-
-              // ── Signal label ──
-              const signalLabel = sarSignal === 'STRONG_BUY' ? 'STRONG BUY ▲▲'
-                : sarSignal === 'BUY' ? 'BUY ▲'
-                : sarSignal === 'STRONG_SELL' ? 'STRONG SELL ▼▼'
-                : sarSignal === 'SELL' ? 'SELL ▼'
-                : 'HOLD ◆';
-
-              // ── Trend label ──
-              const trendLabel = isBullish
-                ? (isStrong ? 'Strong Uptrend' : 'Uptrend')
-                : isBearish
-                ? (isStrong ? 'Strong Downtrend' : 'Downtrend')
-                : 'Sideways / No Trend';
-
-              return (
-                <div key={`sar_${item.symbol}`} className={`relative rounded-2xl overflow-hidden border ${borderClass} shadow-lg bg-[#0b0f1a]`}>
-                  {/* Top accent line */}
-                  <div className={`h-[2px] ${barBg}`} />
-
-                  {/* ── HEADER ── */}
-                  <div className="flex items-center justify-between px-4 pt-3 pb-2">
-                    <div className="flex items-center gap-2">
-                      <span className={`rounded-md border ${borderClass} bg-slate-900 px-2.5 py-1 text-sm font-bold text-white`}>{item.symbol}</span>
-                      {(item.data?.status || marketStatus) === 'LIVE' && (
-                        <span className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-emerald-500/10 border border-emerald-500/25">
-                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-                          <span className="text-[9px] text-emerald-300 font-bold">LIVE</span>
-                        </span>
-                      )}
-                    </div>
-                    <span className="text-[10px] text-white/25 font-medium tracking-wider">PARABOLIC SAR</span>
-                  </div>
-
-                  {/* ── SIGNAL BANNER ── */}
-                  <div className={`mx-3 rounded-xl ${signalBg} border ${borderClass} px-4 py-3`}>
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <div className={`text-xl font-black tracking-tight ${signalText}`}>{signalLabel}</div>
-                        <div className="text-[10px] text-white/40 mt-0.5">{trendLabel}</div>
-                      </div>
-                      <div className="text-right">
-                        <div className={`text-2xl font-black ${signalText}`}>{sarConfidence}%</div>
-                        <div className="text-[9px] text-white/35">Confidence</div>
-                      </div>
-                    </div>
-                    {/* Confidence bar */}
-                    <div className="mt-2.5 h-1.5 rounded-full bg-white/[0.06] overflow-hidden">
-                      <div className={`h-full rounded-full transition-all duration-700 ${barBg}`} style={{ width: `${sarConfidence}%` }} />
-                    </div>
-                  </div>
-
-                  {/* ── PRICE + SAR LEVEL ── */}
-                  <div className="mx-3 mt-2 grid grid-cols-2 gap-2">
-                    <div className="bg-[#0d1117] border border-white/[0.06] p-2.5 rounded-lg">
-                      <div className="text-[9px] text-white/35 uppercase tracking-widest mb-1">Current Price</div>
-                      <div className="text-base font-bold text-white">₹{curPrice ? curPrice.toLocaleString('en-IN', { maximumFractionDigits: 0 }) : '—'}</div>
-                    </div>
-                    <div className="bg-[#0d1117] border border-white/[0.06] p-2.5 rounded-lg">
-                      <div className="text-[9px] text-white/35 uppercase tracking-widest mb-1">SAR Stop-Loss</div>
-                      <div className={`text-base font-bold ${signalText}`}>₹{sarValue ? sarValue.toLocaleString('en-IN', { maximumFractionDigits: 0 }) : '—'}</div>
-                    </div>
-                  </div>
-
-                  {/* ── KEY METRICS (3 cols) ── */}
-                  <div className="mx-3 mt-2 grid grid-cols-3 gap-2">
-                    <div className="bg-[#0d1117] border border-white/[0.06] p-2 rounded-lg text-center">
-                      <div className="text-[8px] text-white/30 uppercase tracking-widest mb-1">Distance</div>
-                      <div className={`text-sm font-bold ${signalText}`}>{distancePct ? distancePct.toFixed(2) : '0.00'}%</div>
-                      <div className="text-[8px] text-white/25 mt-0.5">₹{distanceAbs ? distanceAbs.toFixed(0) : '0'}</div>
-                    </div>
-                    <div className="bg-[#0d1117] border border-white/[0.06] p-2 rounded-lg text-center">
-                      <div className="text-[8px] text-white/30 uppercase tracking-widest mb-1">Strength</div>
-                      <div className={`text-sm font-bold ${signalText}`}>{trendStrength}</div>
-                    </div>
-                    <div className="bg-[#0d1117] border border-white/[0.06] p-2 rounded-lg text-center">
-                      <div className="text-[8px] text-white/30 uppercase tracking-widest mb-1">Action</div>
-                      <div className={`text-sm font-bold ${signalText}`}>{sarAction}</div>
-                    </div>
-                  </div>
-
-                  {/* ── SAR STATUS ROW ── */}
-                  <div className="mx-3 mt-2 mb-2 flex items-center gap-2">
-                    {sarFlip && (
-                      <span className="flex-1 text-center text-[10px] font-bold px-2 py-1.5 rounded-lg bg-amber-500/10 border border-amber-500/25 text-amber-300">
-                        ⟳ TREND REVERSAL DETECTED
-                      </span>
-                    )}
-                    {!sarFlip && (
-                      <span className={`flex-1 text-center text-[10px] font-bold px-2 py-1.5 rounded-lg ${signalBg} border ${borderClass} ${signalText}`}>
-                        {isBullish ? '▲ Price ABOVE SAR — Uptrend Active' : isBearish ? '▼ Price BELOW SAR — Downtrend Active' : '◆ SAR Neutral — Wait for Direction'}
-                      </span>
-                    )}
-                  </div>
-
-                  {/* ── 5 MIN PREDICTION ── */}
-                  {(() => {
-                    // All derived from existing live SAR data — zero backend cost
-                    const distFar    = distancePct > 0.8;
-                    const distMod    = distancePct > 0.3 && distancePct <= 0.8;
-                    const distNear   = distancePct > 0.1 && distancePct <= 0.3;
-                    const distFlip   = distancePct <= 0.1 && (sarValue > 0);
-
-                    // Confidence: start from SAR confidence, adjust by distance & reversal
-                    let predConf = sarConfidence;
-                    if (distFlip)       predConf = Math.round(predConf * 0.78);
-                    else if (distNear)  predConf = Math.round(predConf * 0.90);
-                    else if (distFar)   predConf = Math.round(predConf * 1.08);
-                    else if (distMod)   predConf = Math.round(predConf * 1.03);
-                    if (sarFlip)        predConf = Math.round(Math.max(predConf, 75));
-                    if (marketStatus !== 'LIVE') predConf = Math.round(Math.max(30, predConf * 0.88));
-                    predConf = Math.min(95, Math.max(25, predConf));
-
-                    const predDir   = isBullish ? 'LONG' : isBearish ? 'SHORT' : 'FLAT';
-                    const dirIcon   = isBullish ? '▲' : isBearish ? '▼' : '─';
-                    const dirColor  = isBullish ? 'text-emerald-300' : isBearish ? 'text-rose-300' : 'text-amber-300';
-                    const dirBg     = isBullish ? 'bg-emerald-500/[0.07]' : isBearish ? 'bg-rose-500/[0.07]' : 'bg-amber-500/[0.05]';
-                    const dirBorder = isBullish ? 'border-emerald-500/30' : isBearish ? 'border-rose-500/30' : 'border-amber-500/25';
-                    const gradBar   = isBullish ? 'from-emerald-500 to-emerald-400' : isBearish ? 'from-rose-500 to-rose-400' : 'from-amber-500 to-amber-400';
-
-                    const bullProb  = isBullish ? Math.max(5, Math.min(95, predConf)) : isBearish ? Math.max(5, 100 - predConf) : 50;
-                    const bearProb  = 100 - bullProb;
-
-                    // Confirmations from live SAR data
-                    const confirms = [
-                      distFar && 'Wide SAR gap',
-                      isStrong && 'Strong trend',
-                      sarFlip && 'Reversal',
-                      trendStrength === 'MODERATE' && 'Moderate trend',
-                    ].filter(Boolean) as string[];
-
-                    const showSignal = predConf >= 70 && predDir !== 'FLAT';
-
-                    return (
-                      <div className="mx-3 mb-2 rounded-xl border border-white/[0.06] bg-[#0d1117] overflow-hidden">
-                        <div className="h-px bg-gradient-to-r from-transparent via-white/10 to-transparent" />
-                        <div className="px-4 py-3 space-y-2.5">
-                          {/* Header */}
-                          <div className="flex items-center justify-between">
-                            <span className="text-[11px] font-bold text-gray-400 uppercase">5 Min Prediction</span>
-                            <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${signalBg} ${signalText}`}>
-                              {predConf}% CONFIDENCE
-                            </span>
-                          </div>
-
-                          {/* Direction + confidence bar */}
-                          <div className={`rounded-lg border ${dirBorder} ${dirBg} px-3 py-2`}>
-                            <div className="flex items-center justify-between">
-                              <span className={`text-sm font-black ${dirColor}`}>{dirIcon} {predDir}</span>
-                              <span className="text-[9px] text-gray-400">
-                                {distFlip ? '⚠ Flip risk' : distNear ? '⚠ Near SAR' : 'Trend clear'}
-                              </span>
-                              <span className={`text-sm font-black ${dirColor}`}>{predConf}%</span>
-                            </div>
-                            <div className="h-1.5 bg-gray-800 rounded-full overflow-hidden border border-white/5 mt-1.5">
-                              <div className={`h-full rounded-full transition-all duration-500 bg-gradient-to-r ${gradBar}`} style={{ width: `${predConf}%` }} />
-                            </div>
-                          </div>
-
-                          {/* SAR factors (compact 2×2) */}
-                          <div className="grid grid-cols-2 gap-1.5">
-                            <div className="flex items-center justify-between bg-gray-900/40 rounded px-2 py-1 border border-gray-700/20">
-                              <span className="text-[8px] text-gray-500 font-bold">POSITION</span>
-                              <span className={`text-[9px] font-bold ${signalText}`}>
-                                {sarPosition === 'BELOW' ? 'Below ↑' : sarPosition === 'ABOVE' ? 'Above ↓' : 'Neutral'}
-                              </span>
-                            </div>
-                            <div className="flex items-center justify-between bg-gray-900/40 rounded px-2 py-1 border border-gray-700/20">
-                              <span className="text-[8px] text-gray-500 font-bold">DISTANCE</span>
-                              <span className={`text-[9px] font-bold ${distFlip ? 'text-red-400' : distNear ? 'text-amber-400' : signalText}`}>
-                                {distFar ? 'Far' : distMod ? 'Moderate' : distNear ? 'Close' : distFlip ? 'Flip Risk' : '—'} ({distancePct.toFixed(2)}%)
-                              </span>
-                            </div>
-                            <div className="flex items-center justify-between bg-gray-900/40 rounded px-2 py-1 border border-gray-700/20">
-                              <span className="text-[8px] text-gray-500 font-bold">STRENGTH</span>
-                              <span className={`text-[9px] font-bold ${signalText}`}>{trendStrength}</span>
-                            </div>
-                            <div className="flex items-center justify-between bg-gray-900/40 rounded px-2 py-1 border border-gray-700/20">
-                              <span className="text-[8px] text-gray-500 font-bold">REVERSAL</span>
-                              <span className={`text-[9px] font-bold ${sarFlip ? 'text-amber-400' : 'text-gray-500'}`}>{sarFlip ? 'Yes ⟳' : 'No'}</span>
-                            </div>
-                          </div>
-
-                          {/* Movement probability bar */}
-                          <div>
-                            <p className="text-[8px] font-bold text-gray-500 uppercase mb-1">Movement Probability</p>
-                            <div className="flex items-center h-5 rounded-md overflow-hidden bg-gray-950/50 border border-gray-700/30">
-                              <div className="h-full bg-gradient-to-r from-emerald-600 to-emerald-500 flex items-center justify-center transition-all duration-700" style={{ width: `${bullProb}%` }}>
-                                {bullProb >= 15 && <span className="text-[7px] font-bold text-white tabular-nums">{bullProb}%↑</span>}
-                              </div>
-                              <div className="h-full bg-gradient-to-l from-rose-600 to-rose-500 flex items-center justify-center transition-all duration-700" style={{ width: `${bearProb}%` }}>
-                                {bearProb >= 15 && <span className="text-[7px] font-bold text-white tabular-nums">{bearProb}%↓</span>}
-                              </div>
-                            </div>
-                          </div>
-
-                          {/* Signal + confirmations */}
-                          <div className={`min-h-[20px] pt-1.5 border-t border-gray-700/20 ${showSignal ? '' : 'invisible'}`}>
-                            <span className="text-[9px] font-bold text-amber-400 uppercase">
-                              {predConf >= 80 ? `⚡ STRONG SAR ${predDir} Signal` : `⚡ SAR ${predDir} Signal Active`}
-                            </span>
-                          </div>
-                          <div className={`flex flex-wrap gap-1 min-h-[18px] ${confirms.length > 0 ? '' : 'invisible'}`}>
-                            {confirms.length > 0 ? confirms.map((c, i) => (
-                              <span key={i} className={`text-[7px] px-1.5 py-0.5 rounded ${isBullish ? 'bg-emerald-500/15 text-emerald-300' : isBearish ? 'bg-rose-500/15 text-rose-300' : 'bg-amber-500/15 text-amber-300'}`}>
-                                ✓ {c}
-                              </span>
-                            )) : <span className="text-[7px] invisible">placeholder</span>}
-                          </div>
-
-                          {/* Summary */}
-                          <div className={`text-center text-[9px] font-bold rounded-lg py-1.5 border ${dirBorder} ${dirBg}`}>
-                            {predDir} · {predConf}% Confidence · {confirms.length} Confirms
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })()}
-
-                  {/* ── TIMESTAMP ── */}
-                  <div className="px-4 pb-2.5 flex items-center justify-between text-[9px] text-white/20 border-t border-white/[0.04] pt-2">
-                    <span>{item.data?.timestamp ? new Date(item.data.timestamp).toLocaleString('en-IN', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }) : 'Last session'}</span>
-                    <span>{sarPosition === 'BELOW' ? 'SAR Below' : sarPosition === 'ABOVE' ? 'SAR Above' : 'N/A'}</span>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-
-        {/* SuperTrend (10,2) - Professional Intraday + Combined Confirmation Section */}
         <div className="mt-6 sm:mt-6">
           <div className="flex flex-col gap-2 mb-4 px-2 sm:px-0">
             <h3 className="text-base sm:text-lg lg:text-xl font-bold text-dark-text flex items-center gap-3 tracking-tight">
@@ -2629,24 +2299,6 @@ export default function Home() {
                   </div>
                 );
               })}
-          </div>
-        </div>
-
-        {/* Opening Range Breakout (ORB) */}
-        <div className="mt-6 sm:mt-6">
-          <div className="flex flex-col gap-1 mb-3 sm:mb-4">
-            <h3 className="text-base sm:text-lg lg:text-xl font-bold text-dark-text flex items-center gap-3 tracking-tight">
-              <span className="w-1.5 h-5 sm:h-6 bg-gradient-to-b from-teal-500 to-teal-600 rounded-full" />
-              Opening Range Breakout (ORB)
-            </h3>
-            <p className="text-dark-tertiary text-[11px] sm:text-xs ml-4 sm:ml-5">
-              Live range tracking · Breakout signals · Entry guidance
-            </p>
-          </div>
-          <div className="grid grid-cols-1 lg:grid-cols-2 2xl:grid-cols-3 gap-3">
-            <ORBCard symbol="NIFTY" name="NIFTY 50" />
-            <ORBCard symbol="BANKNIFTY" name="BANK NIFTY" />
-            <ORBCard symbol="SENSEX" name="SENSEX" />
           </div>
         </div>
 

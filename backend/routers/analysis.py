@@ -113,16 +113,16 @@ async def analyze_symbol(symbol: str):
         # Smart caching strategy
         cache = await get_redis()
         cache_svc = get_cache()
-        cache_key = f"analysis:orb:{symbol}"
+        cache_key = f"analysis:main:{symbol}"
         
         # During trading hours: NO CACHE for live analysis
         # Outside trading hours: 60s cache for efficiency
         if is_trading:
-            print(f"[ANALYSIS-ORB] 🔥 Trading hours (9:15-3:30) - NO CACHE for live updates")
+            print(f"[ANALYSIS] 🔥 Trading hours (9:15-3:30) - NO CACHE for live updates")
         else:
             cached_result = await cache_svc.get(cache_key)
             if cached_result:
-                print(f"[ANALYSIS-ORB] ⚡ Cache hit for {symbol} (60s cache outside trading hours)")
+                print(f"[ANALYSIS] ⚡ Cache hit for {symbol} (60s cache outside trading hours)")
                 if symbol in SYMBOL_MAPPING:
                     cached_result['symbol_name'] = SYMBOL_MAPPING[symbol]['name']
                 return cached_result
@@ -168,7 +168,7 @@ async def analyze_symbol(symbol: str):
             # Smart cache strategy
             if not is_trading:
                 await cache_svc.set(cache_key, result, expire=60)
-                print(f"[ANALYSIS-ORB] 💾 Non-trading hours - Cached for 60s")
+                print(f"[ANALYSIS] 💾 Non-trading hours - Cached for 60s")
             
             return result
         

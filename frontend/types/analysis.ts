@@ -107,19 +107,6 @@ export interface TechnicalIndicators {
   trend_day_signal?: string;
   trend_day_confidence?: number;
 
-  // Parabolic SAR
-  sar_value?: number;
-  sar_position?: string;  // BELOW, ABOVE, NEUTRAL
-  sar_trend?: string;  // BULLISH, BEARISH, NEUTRAL
-  sar_signal?: string;
-  sar_signal_strength?: number;
-  sar_flip?: boolean;
-  sar_flip_type?: string;
-  sar_confirmation_status?: string;
-  trailing_sl?: number;
-  distance_to_sar?: number;
-  distance_to_sar_pct?: number;
-
   // SuperTrend (10,2)
   supertrend_10_2_value?: number;
   supertrend_10_2_trend?: string;  // BULLISH, BEARISH, NEUTRAL
@@ -146,21 +133,6 @@ export interface TechnicalIndicators {
   sell_setup_confidence?: number;
   sell_setup_desc?: string;
   market_status_message?: string;
-
-  // Opening Range Breakout (ORB)
-  orb_high?: number;
-  orb_low?: number;
-  orb_range?: number;
-  orb_position?: string;
-  orb_status?: string;
-  orb_signal?: string;
-  orb_strength?: number;
-  orb_confidence?: number;
-  orb_confirmation?: string;
-  distance_to_orb_high?: number;
-  distance_to_orb_low?: number;
-  orb_risk?: number;
-  orb_reward_risk_ratio?: number;
 
   // Volume & Momentum
   volume: number;

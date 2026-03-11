@@ -3,7 +3,7 @@
 /**
  * Overall Market Outlook – PROFESSIONAL MINIMAL DASHBOARD
  * Clean, fast, professional trading interface
- * - Real-time 16-signal aggregation
+ * - Real-time 14-signal aggregation
  * - Multi-symbol sentiment dashboard
  * - 5-minute prediction alerts
  * - Zero clutter, maximum clarity
@@ -182,9 +182,9 @@ const SignalCard = memo(({ data }: { data: SymbolData }) => {
         </div>
       </div>
 
-      {/* 16-Signal Consensus - Clean Bars */}
+      {/* 14-Signal Consensus - Clean Bars */}
       <div className="mb-6 space-y-4">
-        <h4 className="text-xs uppercase tracking-wide text-gray-400 font-bold">16 Signal Consensus</h4>
+        <h4 className="text-xs uppercase tracking-wide text-gray-400 font-bold">14 Signal Consensus</h4>
         
         {/* BUY Bar */}
         <div>
@@ -441,7 +441,7 @@ export default function OverallMarketOutlook() {
         <div>
           <h1 className="text-3xl font-black text-white">MARKET OUTLOOK</h1>
           <p className="text-sm text-gray-400 mt-2">
-            Integrated Analysis • 16-Signal Consensus • 5-Min Prediction Alignment
+            Integrated Analysis • 14-Signal Consensus • 5-Min Prediction Alignment
             {!isRealData && ' • (Demo Data)'}
           </p>
         </div>

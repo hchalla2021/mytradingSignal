@@ -19,6 +19,7 @@ IST = ZoneInfo("Asia/Kolkata")
 
 # Import candle backup service
 from services.candle_backup_service import CandleBackupService
+from services.auth_state_machine import auth_state_manager
 
 
 class MarketHoursScheduler:
@@ -277,6 +278,17 @@ class MarketHoursScheduler:
                             print("⏸️  SCHEDULER PAUSED - Waiting for valid token")
                             print("   The scheduler will resume once you login.\n")
                 
+                # 🔥 CRITICAL FIX: Reset _token_expired when user logs in mid-day
+                # Without this, if token was expired at 8:50 AM pre-market check
+                # but user logs in later (e.g. 10:00 AM), the scheduler stays paused
+                # for the entire day because _token_expired only reset on NEW DAY.
+                if self._token_expired and not auth_state_manager.requires_login:
+                    print(f"\n{'='*70}")
+                    print(f"🔓 [{now.strftime('%I:%M:%S %p')}] TOKEN REFRESHED - Resuming scheduler")
+                    print(f"   Auth state is now VALID — clearing expired flag")
+                    print(f"{'='*70}\n")
+                    self._token_expired = False
+                
                 # Determine if market feed should be running
                 should_run = self._is_market_time(now)
                 is_connected = self._is_feed_connected()
@@ -298,7 +310,7 @@ class MarketHoursScheduler:
                             print(f"⏸️  [{now.strftime('%I:%M %p')}] Market open but TOKEN EXPIRED")
                             print("   Please LOGIN via UI to enable live data")
                             last_status_log = now
-                        await asyncio.sleep(60)  # Check every minute for token refresh
+                        await asyncio.sleep(check_interval)  # Use normal interval so mid-day auth fix reacts fast
                         continue
                     
                     if not is_connected:
@@ -573,9 +585,11 @@ class MarketHoursScheduler:
             
         except Exception as e:
             print(f"❌ Token check failed: {e}")
-            print("   Cannot determine token status")
+            print("   Cannot determine token status — will attempt connection anyway")
             print("="*70 + "\n")
-            return False
+            # Don't set _token_expired on network/unknown errors
+            # Only TokenException (handled inside validate_token) means truly expired
+            return True  # Optimistic: allow connection attempt
 
 
 # Global scheduler instance

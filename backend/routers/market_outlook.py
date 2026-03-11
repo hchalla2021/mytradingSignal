@@ -4,7 +4,7 @@ import asyncio
 from datetime import datetime
 from services.instant_analysis import get_instant_analysis
 from services.cache import get_cache, get_redis
-from services.signal_indicators_calculator import enhance_analysis_with_14_signals
+from services.signal_indicators_calculator import enhance_analysis_with_12_signals
 from services.live_market_indices_integration import (
     LiveMarketIndicesAnalyzer,
     MarketStatus
@@ -13,11 +13,11 @@ from services.live_market_indices_integration import (
 router = APIRouter(prefix="/api/analysis", tags=["market-outlook"])
 
 class MarketOutlookCalculator:
-    """Calculate unified market outlook from 14 integrated signals"""
+    """Calculate unified market outlook from 12 integrated signals"""
 
     @staticmethod
     async def calculate_outlet(symbol: str, indicators: Dict[str, Any]) -> Dict[str, Any]:
-        """Calculate comprehensive market outlook with all 14 signals"""
+        """Calculate comprehensive market outlook with all 12 signals"""
 
         signals = {}
         bullish_count = 0
@@ -120,29 +120,7 @@ class MarketOutlookCalculator:
         }
         total_confidence += pivot_conf
 
-        # 5. OPENING RANGE BREAKOUT (ORB)
-        orb_signal = 'NEUTRAL'
-        orb_conf = 50
-        orb_data = indicators.get('orb', {})
-        if orb_data.get('breakout_detected', False):
-            orb_signal = 'BUY' if orb_data.get('breakout_direction', 'up') == 'up' else 'SELL'
-            orb_conf = 85
-            if orb_signal == 'BUY':
-                bullish_count += 1
-            else:
-                bearish_count += 1
-        else:
-            neutral_count += 1
-
-        signals['opening_range_breakout'] = {
-            'name': 'ORB',
-            'confidence': orb_conf,
-            'signal': orb_signal,
-            'status': f"Breakout: {orb_data.get('breakout_detected', False)}"
-        }
-        total_confidence += orb_conf
-
-        # 6. SUPERTREND (10,2)
+        # 5. SUPERTREND (10,2)
         supertrend_signal = 'NEUTRAL'
         supertrend_conf = 50
         supertrend_data = indicators.get('supertrend', {})
@@ -164,29 +142,6 @@ class MarketOutlookCalculator:
             'status': f"Trend: {supertrend_data.get('trend', 'NEUTRAL')}"
         }
         total_confidence += supertrend_conf
-
-        # 7. PARABOLIC SAR
-        sar_signal = 'NEUTRAL'
-        sar_conf = 50
-        sar_data = indicators.get('parabolic_sar', {})
-        if sar_data.get('signal', 'neutral') == 'buy':
-            sar_signal = 'BUY'
-            sar_conf = 70
-            bullish_count += 1
-        elif sar_data.get('signal', 'neutral') == 'sell':
-            sar_signal = 'SELL'
-            sar_conf = 70
-            bearish_count += 1
-        else:
-            neutral_count += 1
-
-        signals['parabolic_sar'] = {
-            'name': 'Parabolic SAR',
-            'confidence': sar_conf,
-            'signal': sar_signal,
-            'status': f"SAR Signal: {sar_data.get('signal', 'NEUTRAL')}"
-        }
-        total_confidence += sar_conf
 
         # 8. RSI 60/40 MOMENTUM
         rsi_signal = 'NEUTRAL'
@@ -364,7 +319,7 @@ class MarketOutlookCalculator:
             trend_percentage = 0
 
         # Calculate overall signal
-        overall_confidence = int(total_confidence / 14)
+        overall_confidence = int(total_confidence / 12)
         
         if bullish_count > bearish_count + 3:
             overall_signal = 'STRONG_BUY' if overall_confidence > 70 else 'BUY'
@@ -391,9 +346,7 @@ class MarketOutlookCalculator:
                 'volume_pulse': signals['volume_pulse'],
                 'candle_intent': signals['candle_intent'],
                 'pivot_points': signals['pivot_points'],
-                'orb': signals['opening_range_breakout'],
                 'supertrend': signals['supertrend'],
-                'parabolic_sar': signals['parabolic_sar'],
                 'rsi_60_40': signals['rsi_60_40'],
                 'camarilla': signals['camarilla'],
                 'vwma_20': signals['vwma_20'],
@@ -408,12 +361,12 @@ class MarketOutlookCalculator:
 @router.get("/market-outlook/{symbol}")
 async def get_market_outlook(symbol: str):
     """
-    Get comprehensive market outlook with all 14 integrated signals
+    Get comprehensive market outlook with all 12 integrated signals
     
     Returns:
     - Overall signal (STRONG_BUY, BUY, NEUTRAL, SELL, STRONG_SELL)
     - Overall confidence percentage
-    - Individual signal confidence and status for all 14 signals
+    - Individual signal confidence and status for all 12 signals
     - Signal distribution (bullish, bearish, neutral count)
     - Trend percentage
     """
@@ -427,8 +380,8 @@ async def get_market_outlook(symbol: str):
         if not analysis or 'indicators' not in analysis:
             raise HTTPException(status_code=404, detail=f"No analysis data for {symbol}")
 
-        # 🔥 ENHANCE indicators with 14-signal calculations
-        indicators = enhance_analysis_with_14_signals(analysis)
+        # 🔥 ENHANCE indicators with 12-signal calculations
+        indicators = enhance_analysis_with_12_signals(analysis)
 
         # Calculate market outlook
         outlook = await MarketOutlookCalculator.calculate_outlet(symbol, indicators)

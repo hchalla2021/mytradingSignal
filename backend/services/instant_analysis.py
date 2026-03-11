@@ -12,7 +12,6 @@ from config import get_settings
 
 # Lazy imports for fast startup (pandas ~1.7s, kiteconnect ~2s at import)
 _pd = None
-_ParabolicSARFilter = None
 
 def _get_pd():
     global _pd
@@ -20,13 +19,6 @@ def _get_pd():
         import pandas
         _pd = pandas
     return _pd
-
-def _get_parabolic_sar_filter():
-    global _ParabolicSARFilter
-    if _ParabolicSARFilter is None:
-        from .intraday_entry_filter import ParabolicSARFilter
-        _ParabolicSARFilter = ParabolicSARFilter
-    return _ParabolicSARFilter
 
 
 def calculate_ema(closes: List[float], period: int) -> float:
@@ -650,156 +642,6 @@ async def calculate_emas_from_cache(cache, symbol: str, tick_data: Dict[str, Any
         print(f"⚠️ Error calculating EMAs/ATR from cache for {symbol}: {e}")
         # Return tick_data unchanged - instant_analysis will use fallback values
         return tick_data
-
-
-async def calculate_sar_from_cache(cache, symbol: str, tick_data: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Calculate real Parabolic SAR from cached candles.
-    Returns updated tick_data with sar_value, sar_position, sar_trend,
-    sar_signal (STRONG_BUY / BUY / HOLD / SELL / STRONG_SELL) and helpers.
-    """
-    try:
-        if not cache:
-            return tick_data
-
-        candle_key = f"analysis_candles:{symbol}"
-        candles_json = await cache.lrange(candle_key, 0, 199)
-
-        if not candles_json or len(candles_json) < 5:
-            return tick_data
-
-        # Parse candle data — use ALL available candles for proper AF development
-        # List is newest-first in Redis; reverse to oldest-first for SAR math
-        highs = []
-        lows = []
-        closes = []
-
-        for candle_json in reversed(candles_json):
-            try:
-                candle = json.loads(candle_json)
-                highs.append(float(candle['high']))
-                lows.append(float(candle['low']))
-                closes.append(float(candle['close']))
-            except (json.JSONDecodeError, KeyError, TypeError, ValueError):
-                continue
-
-        if len(highs) < 5:
-            return tick_data
-
-        # ── Calculate Parabolic SAR ──────────────────────────────────────
-        sar_data = _get_parabolic_sar_filter().calculate_sar(highs, lows, closes)
-
-        sar_value = float(sar_data.get('sar', 0))
-        sar_trend_raw = sar_data.get('trend', 'UNKNOWN')
-        reversal = sar_data.get('reversal', False)
-
-        current_price = float(tick_data.get('price', 0))
-        if current_price <= 0:
-            current_price = closes[-1] if closes else 0
-        if sar_value <= 0 or current_price <= 0:
-            return tick_data
-
-        # ── SAR Position ─────────────────────────────────────────────────
-        if current_price > sar_value:
-            sar_position = "BELOW"   # SAR below price → uptrend
-        elif current_price < sar_value:
-            sar_position = "ABOVE"   # SAR above price → downtrend
-        else:
-            sar_position = "NEUTRAL"
-
-        # ── Distance metrics ─────────────────────────────────────────────
-        distance = abs(current_price - sar_value)
-        distance_pct = (distance / current_price) * 100
-
-        # ── Trend strength from distance ─────────────────────────────────
-        if distance_pct > 0.8:
-            trend_strength = "STRONG"
-        elif distance_pct > 0.3:
-            trend_strength = "MODERATE"
-        elif distance_pct > 0.1:
-            trend_strength = "WEAK"
-        else:
-            trend_strength = "NEUTRAL"
-
-        # ── Normalize signal to 5 clean levels ───────────────────────────
-        # STRONG_BUY : reversal to uptrend OR strong uptrend (far above SAR)
-        # BUY        : uptrend continuation
-        # HOLD       : near SAR / unclear
-        # SELL       : downtrend continuation
-        # STRONG_SELL: reversal to downtrend OR strong downtrend (far below SAR)
-        if sar_position == "BELOW":
-            if reversal and sar_trend_raw == "UPTREND":
-                sar_signal = "STRONG_BUY"
-            elif trend_strength == "STRONG":
-                sar_signal = "STRONG_BUY"
-            elif trend_strength in ("MODERATE", "WEAK"):
-                sar_signal = "BUY"
-            else:
-                sar_signal = "HOLD"
-        elif sar_position == "ABOVE":
-            if reversal and sar_trend_raw == "DOWNTREND":
-                sar_signal = "STRONG_SELL"
-            elif trend_strength == "STRONG":
-                sar_signal = "STRONG_SELL"
-            elif trend_strength in ("MODERATE", "WEAK"):
-                sar_signal = "SELL"
-            else:
-                sar_signal = "HOLD"
-        else:
-            sar_signal = "HOLD"
-
-        # ── Confidence (40-95) ───────────────────────────────────────────
-        base_conf = 55
-        if trend_strength == "STRONG":
-            base_conf = 82
-        elif trend_strength == "MODERATE":
-            base_conf = 68
-        elif trend_strength == "WEAK":
-            base_conf = 52
-        if reversal:
-            base_conf = max(base_conf, 78)
-        sar_confidence = min(95, max(40, base_conf))
-
-        # ── Friendly trend label ─────────────────────────────────────────
-        if sar_position == "BELOW":
-            sar_trend = "BULLISH"
-        elif sar_position == "ABOVE":
-            sar_trend = "BEARISH"
-        else:
-            sar_trend = "NEUTRAL"
-
-        # ── Action guidance for traders ──────────────────────────────────
-        if sar_signal in ("STRONG_BUY", "BUY"):
-            sar_action = "BUY CE (Call)"
-        elif sar_signal in ("STRONG_SELL", "SELL"):
-            sar_action = "BUY PE (Put)"
-        else:
-            sar_action = "WAIT"
-
-        # ── Write to tick_data ───────────────────────────────────────────
-        tick_data['sar_value'] = round(sar_value, 2)
-        tick_data['sar_position'] = sar_position
-        tick_data['sar_trend'] = sar_trend
-        tick_data['sar_signal'] = sar_signal
-        tick_data['sar_signal_strength'] = sar_confidence
-        tick_data['sar_reversal'] = reversal
-        tick_data['sar_trend_strength'] = trend_strength
-        tick_data['sar_action'] = sar_action
-        tick_data['sar_distance'] = round(distance, 2)
-        tick_data['sar_distance_pct'] = round(distance_pct, 3)
-
-        # Debug logging (every 30 seconds)
-        import time
-        if int(time.time()) % 30 == 0:
-            print(f"[SAR-CALC] {symbol}: SAR={sar_value:.2f} Pos={sar_position} Sig={sar_signal} Str={trend_strength} Conf={sar_confidence}%")
-
-        return tick_data
-
-    except Exception as e:
-        print(f"⚠️ Error calculating SAR from cache for {symbol}: {e}")
-        return tick_data
-
-
 class InstantSignal:
     """Lightning-fast signal generator using only current tick"""
     
@@ -2105,77 +1947,6 @@ class InstantSignal:
                     market_status_message = "🔄 NEUTRAL - Waiting for alignment"
             
             # ============================================
-            # PARABOLIC SAR - TREND FOLLOWING (REAL SAR CALCULATION)
-            # ============================================
-            # SAR = Stop and Reverse (trailing stop, calculated from price history)
-            # Uses real Parabolic SAR from cached candles (calculated in calculate_sar_from_cache)
-            
-            # Get real SAR values from tick_data (calculated from cache)
-            sar_value = float(tick_data.get('sar_value', (high + low) / 2))
-            sar_position = tick_data.get('sar_position', 'NEUTRAL')
-            sar_trend = tick_data.get('sar_trend', 'UNKNOWN')
-            sar_signal = tick_data.get('sar_signal', None)
-            sar_signal_strength = tick_data.get('sar_signal_strength', 0)
-            sar_reversal = tick_data.get('sar_reversal', False)
-            
-            # SAR Flip Detection (when SAR crosses price = potential reversal)
-            sar_flip = False
-            sar_flip_type = None
-            
-            # Check for flip signals (crosses) based on SAR position
-            if sar_position == "BELOW" and price <= sar_value:
-                # SAR flip: Bullish trend breaking down, SAR coming to/above price
-                sar_flip = True
-                sar_flip_type = "POTENTIAL_SELL_FLIP"
-            elif sar_position == "ABOVE" and price >= sar_value:
-                # SAR flip: Bearish trend breaking up, SAR coming to/below price
-                sar_flip = True
-                sar_flip_type = "POTENTIAL_BUY_FLIP"
-            else:
-                sar_flip = False
-                sar_flip_type = None
-            
-            # ============================================
-            # SAR SIGNAL VALIDATION (with EMA50 + VWAP confirmation)
-            # ============================================
-            # Use SAR signal from ParabolicSARFilter, enhance with EMA50 and VWAP confirmation
-            
-            sar_confirmation_status = None
-            
-            if not sar_signal or sar_signal == "NEUTRAL":
-                # No SAR signal or neutral state
-                sar_confirmation_status = "⚠️ Waiting for SAR signal or trend setup"
-            elif "BUY" in sar_signal:
-                # SAR is giving a BUY signal - validate with filters
-                if price > ema_50 and vwap_pos == "ABOVE_VWAP":
-                    # STRONG: SAR signal + EMA50 + VWAP all aligned
-                    sar_confirmation_status = "✅ SAR BUY Signal Confirmed (EMA50 + VWAP aligned)"
-                elif price > ema_50:
-                    # PARTIAL: SAR signal + EMA50 aligned, VWAP not confirmed
-                    sar_confirmation_status = "✓ SAR BUY Signal (EMA50 confirmed)"
-                else:
-                    # WEAK: SAR signal present but EMA50 not supporting
-                    sar_confirmation_status = "⚠️ SAR BUY caution - EMA50 below price"
-            elif "SELL" in sar_signal:
-                # SAR is giving a SELL signal - validate with filters
-                if price < ema_50 and vwap_pos == "BELOW_VWAP":
-                    # STRONG: SAR signal + EMA50 + VWAP all aligned
-                    sar_confirmation_status = "✅ SAR SELL Signal Confirmed (EMA50 + VWAP aligned)"
-                elif price < ema_50:
-                    # PARTIAL: SAR signal + EMA50 aligned, VWAP not confirmed
-                    sar_confirmation_status = "✓ SAR SELL Signal (EMA50 confirmed)"
-                else:
-                    # WEAK: SAR signal present but EMA50 not supporting
-                    sar_confirmation_status = "⚠️ SAR SELL caution - EMA50 above price"
-            
-            # Calculate trailing stop loss (current SAR value)
-            trailing_sl = sar_value
-            
-            # Calculate distance to SAR
-            distance_to_sar = abs(price - sar_value)
-            distance_to_sar_pct = (distance_to_sar / price * 100) if price > 0 else 0
-            
-            # ============================================
             # OPENING RANGE BREAKOUT (ORB) - Fast Intraday System
             # ============================================
             # ORB = Opening Range captured in first 5/10/15 minutes
@@ -2427,21 +2198,6 @@ class InstantSignal:
                     # Trend Day Signal (CPR + EMA + VWAP alignment)
                     "trend_day_signal": trend_day_signal,  # TREND_DAY_BULLISH_HIGH_PROB, CHOPPY_CONSOLIDATION, etc.
                     "trend_day_confidence": trend_day_confidence,  # 30-90 confidence score
-                    
-                    # Parabolic SAR - Trend Following Indicator
-                    "sar_value": round(sar_value, 2),  # Current SAR level (trailing stop)
-                    "sar_position": sar_position,  # BELOW (bullish), ABOVE (bearish), NEUTRAL
-                    "sar_trend": sar_trend,  # BULLISH, BEARISH, NEUTRAL
-                    "sar_signal": sar_signal,  # STRONG_BUY, BUY, HOLD, SELL, STRONG_SELL
-                    "sar_signal_strength": sar_signal_strength,  # 40-95 confidence score
-                    "sar_flip": sar_flip,  # Boolean: SAR flip occurring?
-                    "sar_flip_type": sar_flip_type,  # POTENTIAL_BUY_FLIP, POTENTIAL_SELL_FLIP, None
-                    "sar_trend_strength": tick_data.get('sar_trend_strength', 'NEUTRAL'),  # STRONG/MODERATE/WEAK/NEUTRAL
-                    "sar_action": tick_data.get('sar_action', 'WAIT'),  # BUY CE (Call) / BUY PE (Put) / WAIT
-                    "sar_confirmation_status": sar_confirmation_status,  # Full confirmation message
-                    "trailing_sl": round(trailing_sl, 2),  # Stop loss value
-                    "distance_to_sar": round(distance_to_sar, 2),  # Price distance from SAR
-                    "distance_to_sar_pct": round(distance_to_sar_pct, 3),  # Distance as percentage
                     
                     # SuperTrend (10,2) - Professional Intraday
                     "supertrend_10_2_value": round(st_10_2_value, 2),  # Current line

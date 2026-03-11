@@ -29,8 +29,10 @@ export type LiquidityPrediction = 'STRONG_BUY' | 'BUY' | 'NEUTRAL' | 'SELL' | 'S
  */
 export type OIProfile =
   | 'LONG_BUILDUP'
+  | 'STRONG_LONG_BUILDUP'
   | 'SHORT_COVERING'
   | 'SHORT_BUILDUP'
+  | 'STRONG_SHORT_BUILDUP'
   | 'LONG_UNWINDING'
   | 'NEUTRAL'
   | 'PCR_EXTREME_BULL'

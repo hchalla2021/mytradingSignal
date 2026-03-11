@@ -503,11 +503,73 @@ def _sig(score: float, bull_t: float = 0.15, bear_t: float = -0.15) -> str:
     return "NEUTRAL"
 
 
-def _finalize_direction(signals: Dict[str, Dict]) -> Tuple[str, int, float, str]:
+def _recent_candle_momentum(candles: List[Dict], n: int = 5) -> float:
+    """
+    Short-term candle momentum from the last *n* 5-min candles.
+
+    Returns a score in [-1.0 … +1.0]:
+      +1 = all candles closing higher, strong price gain
+      -1 = all candles closing lower, strong price drop
+       0 = mixed / flat
+
+    Uses two equally-weighted components:
+      1. Direction consensus: fraction of close-to-close up vs down moves
+      2. Price change: % change across the window, normalised to ±0.30%
+    """
+    if len(candles) < 3:
+        return 0.0
+    recent = candles[-n:]
+    steps = len(recent) - 1
+    if steps == 0:
+        return 0.0
+
+    up_moves = sum(
+        1 for i in range(1, len(recent))
+        if float(recent[i].get("close", 0)) > float(recent[i - 1].get("close", 0))
+    )
+    dn_moves = sum(
+        1 for i in range(1, len(recent))
+        if float(recent[i].get("close", 0)) < float(recent[i - 1].get("close", 0))
+    )
+
+    first_close = float(recent[0].get("close", 0))
+    last_close  = float(recent[-1].get("close", 0))
+    window_chg_pct = ((last_close - first_close) / first_close * 100) if first_close > 0 else 0.0
+
+    dir_score   = (up_moves - dn_moves) / steps                  # -1 … +1
+    price_score = _clamp(window_chg_pct / 0.30, -1.0, 1.0)       # ±0.30% → ±1.0
+
+    return _clamp(dir_score * 0.5 + price_score * 0.5, -1.0, 1.0)
+
+
+def _finalize_direction(
+    signals: Dict[str, Dict],
+    recent_momentum: float = 0.0,
+) -> Tuple[str, int, float, str]:
     """
     Weighted sum of factor scores → direction, confidence, raw_score, bias_text.
+
+    recent_momentum (−1 … +1): short-term candle momentum from the last 5
+    candles.  When it *contradicts* the 6-factor consensus it pulls the raw
+    score toward NEUTRAL so intraday bounces / reversals are detected faster
+    than lagging indicators alone.  25 % blend strength, 0.30 activation gate.
     """
     raw = sum(sig["score"] * sig["weight"] for sig in signals.values())
+
+    # ── Recent-momentum override (anti-lag) ────────────────────────────────
+    # Technical factors (VWAP, EMA, RSI) inherently lag because they average
+    # over many candles.  On a down day even a strong bounce keeps the raw
+    # score deeply negative.  When the LAST 5 candles clearly move in the
+    # opposite direction, blend up to 25 % momentum into the raw score so
+    # the compass can flip to NEUTRAL and eventually BULLISH during recoveries.
+    _MOM_GATE    = 0.30   # momentum must exceed this to activate
+    _MOM_BLEND   = 0.25   # max pull toward momentum direction
+    if abs(recent_momentum) >= _MOM_GATE:
+        # Only adjust when momentum CONTRADICTS the score
+        if raw < 0 and recent_momentum > _MOM_GATE:
+            raw += recent_momentum * _MOM_BLEND
+        elif raw > 0 and recent_momentum < -_MOM_GATE:
+            raw += recent_momentum * _MOM_BLEND
 
     if raw >= BULL_THRESHOLD:
         direction = "BULLISH"
@@ -1095,7 +1157,12 @@ class CompassService:
             fair_value_pct  = fv_pct,
         )
 
-        direction, confidence, raw_score, bias = _finalize_direction(signals)
+        # ── Recent candle momentum (anti-lag for bounces / reversals) ────
+        candle_momentum = _recent_candle_momentum(spot_candles, n=5)
+
+        direction, confidence, raw_score, bias = _finalize_direction(
+            signals, recent_momentum=candle_momentum,
+        )
 
         # ── Near-futures candle indicators (extra intelligence) ───────────────
         near_fut_candles = self._futures_candles.get(symbol, [])

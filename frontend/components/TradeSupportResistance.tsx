@@ -82,7 +82,6 @@ export const TradeSupportResistance: React.FC<TradeSupportResistanceProps> = ({
     const emaAlignment: string  = (ind.ema_alignment ?? 'NEUTRAL').toUpperCase();
     const vwapPos:      string  = (ind.vwap_position ?? 'AT_VWAP').toUpperCase();
     const stTrend:      string  = (ind.supertrend_10_2_trend ?? 'NEUTRAL').toUpperCase();
-    const sarTrend:     string  = (ind.sar_trend  ?? 'NEUTRAL').toUpperCase();
     const trendStruct:  string  = (ind.trend_structure ?? 'SIDEWAYS').toUpperCase();
     const candleQ:      string  = (ind.candle_quality_signal ?? 'NEUTRAL').toUpperCase();
     const smartMoney:   string  = (ind.smart_money_signal    ?? 'NEUTRAL').toUpperCase();
@@ -146,8 +145,6 @@ export const TradeSupportResistance: React.FC<TradeSupportResistanceProps> = ({
       if (trendMapped === 'UPTREND')   return 'UP';
       if (trendMapped === 'DOWNTREND') return 'DOWN';
       // SAR + change combo
-      if (sarTrend === 'BEARISH' && changePercent < -0.3) return 'DOWN';
-      if (sarTrend === 'BULLISH' && changePercent > 0.3)  return 'UP';
       return 'NEUTRAL';
     };
 
@@ -237,13 +234,6 @@ export const TradeSupportResistance: React.FC<TradeSupportResistanceProps> = ({
       'EMA 200', ema200Vote, 8,
       ema200 > 0 ? (price > ema200 ? `ABOVE (${((price/ema200-1)*100).toFixed(1)}%)` : 'BELOW') : 'N/A',
       ema200Vote > 0 ? '▲' : ema200Vote < 0 ? '▼' : '─',
-    ));
-
-    // 7 · Parabolic SAR (10 pts)
-    const sarVote = sarTrend === 'BULLISH' ? 10 : sarTrend === 'BEARISH' ? -10 : 0;
-    factors.push(scoreFactor(
-      'Parabolic SAR', sarVote, 10, sarTrend || 'NEUTRAL',
-      sarVote > 0 ? '▲' : sarVote < 0 ? '▼' : '─',
     ));
 
     // 8 · Smart Money Flow (8 pts)
@@ -351,7 +341,7 @@ export const TradeSupportResistance: React.FC<TradeSupportResistanceProps> = ({
       style, totalScore, factors,
       trend5min, trend15min,
       rsi5m, rsi15m, rsiMomStatus, rsi5mRaw, rsiMomentum,
-      emaAlignment, vwapPos, stTrend, sarTrend, trendColor,
+      emaAlignment, vwapPos, stTrend, trendColor,
       price, changePercent, momentum,
       support, resistance, distToSupport, distToResistance,
       vwap, vwapDist, ema200, volumeStrength,

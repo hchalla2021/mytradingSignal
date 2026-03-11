@@ -485,7 +485,16 @@ async def force_reconnect():
         
         # 4. Trigger reconnection
         print("🔄 Triggering reconnection...")
-        await _market_feed._attempt_reconnect()
+        
+        # If feed was never started (running=False), do a full start
+        # _attempt_reconnect only works when start() loop is already running
+        if not _market_feed.running:
+            print("   Feed was never started — performing full start...")
+            _market_feed.running = True
+            import asyncio
+            asyncio.create_task(_market_feed.start())
+        else:
+            await _market_feed._attempt_reconnect()
         
         # 5. Wait a bit for connection to establish
         await asyncio.sleep(2)

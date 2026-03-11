@@ -129,31 +129,6 @@ def calculate_pivot_points(analysis_data: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def calculate_orb_indicator(analysis_data: Dict[str, Any]) -> Dict[str, Any]:
-    """Calculate Opening Range Breakout: detection and direction"""
-    open_price = analysis_data.get('open', 0)
-    close_price = analysis_data.get('price', 0)
-    high_price = analysis_data.get('high', 0)
-    low_price = analysis_data.get('low', 0)
-    
-    if open_price == 0:
-        return {'breakout_detected': False, 'breakout_direction': 'neutral'}
-    
-    # Opening range = open ± 1% buffer
-    orb_high = open_price * 1.01
-    orb_low = open_price * 0.99
-    
-    breakout_detected = close_price > orb_high or close_price < orb_low
-    breakout_direction = 'up' if close_price > orb_high else 'down' if close_price < orb_low else 'neutral'
-    
-    return {
-        'breakout_detected': breakout_detected,
-        'breakout_direction': breakout_direction,
-        'range_high': round(orb_high, 2),
-        'range_low': round(orb_low, 2)
-    }
-
-
 def calculate_supertrend(analysis_data: Dict[str, Any]) -> Dict[str, Any]:
     """Calculate SuperTrend (10,2): trend direction and strength"""
     trend_label = analysis_data.get('trend', 'UNKNOWN').upper()
@@ -177,28 +152,6 @@ def calculate_supertrend(analysis_data: Dict[str, Any]) -> Dict[str, Any]:
         'trend_strength': trend_strength,
         'label': trend_label
     }
-
-
-def calculate_parabolic_sar(analysis_data: Dict[str, Any]) -> Dict[str, Any]:
-    """Calculate Parabolic SAR: signal direction"""
-    trend = (analysis_data.get('trend') or 'NEUTRAL').upper()
-    ema_20 = analysis_data.get('ema_20', 0)
-    ema_50 = analysis_data.get('ema_50', 0)
-    
-    # SAR signal follows EMA alignment
-    if ema_20 > ema_50:
-        signal = 'buy'
-    elif ema_20 < ema_50:
-        signal = 'sell'
-    else:
-        signal = 'neutral'
-    
-    return {
-        'signal': signal,
-        'sar_value': 0  # Would need more data for actual SAR value
-    }
-
-
 def calculate_rsi_dual(analysis_data: Dict[str, Any]) -> Dict[str, Any]:
     """Calculate RSI 5m/15m: use momentum to create dual RSI"""
     rsi = analysis_data.get('rsi', 50)
@@ -367,9 +320,9 @@ def calculate_oi_momentum(analysis_data: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def enhance_analysis_with_14_signals(analysis_data: Dict[str, Any]) -> Dict[str, Any]:
+def enhance_analysis_with_12_signals(analysis_data: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Enhance analysis data with all 14-signal required indicators
+    Enhance analysis data with all 12-signal required indicators
     Takes output from instant_analysis and adds missing indicators
     """
     
@@ -396,14 +349,8 @@ def enhance_analysis_with_14_signals(analysis_data: Dict[str, Any]) -> Dict[str,
         # 4. Pivot Points
         enhanced['pivot_points'] = calculate_pivot_points(enhanced)
         
-        # 5. ORB
-        enhanced['orb'] = calculate_orb_indicator(enhanced)
-        
-        # 6. SuperTrend
+        # 5. SuperTrend
         enhanced['supertrend'] = calculate_supertrend(enhanced)
-        
-        # 7. Parabolic SAR
-        enhanced['parabolic_sar'] = calculate_parabolic_sar(enhanced)
         
         # 8. RSI 60/40 (dual RSI)
         rsi_data = calculate_rsi_dual(enhanced)

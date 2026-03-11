@@ -477,7 +477,7 @@ class MarketFeedService:
         
         # Generate instant analysis for this tick (with smart caching to avoid recalculation lag)
         try:
-            from services.instant_analysis import InstantSignal, calculate_emas_from_cache, calculate_sar_from_cache, calculate_market_structure_from_cache
+            from services.instant_analysis import InstantSignal, calculate_emas_from_cache, calculate_market_structure_from_cache
             from datetime import datetime
             import pytz
             
@@ -507,8 +507,6 @@ class MarketFeedService:
                 # 🔥 CRITICAL: Calculate EMAs from cached candles before analysis
                 data = await calculate_emas_from_cache(self.cache, data["symbol"], data)
                 
-                # 🔥 CRITICAL: Calculate real Parabolic SAR from cached candles
-                data = await calculate_sar_from_cache(self.cache, data["symbol"], data)
                 
                 # 🔥 CRITICAL: Calculate market structure from cached candles
                 market_structure = await calculate_market_structure_from_cache(self.cache, data["symbol"], data)

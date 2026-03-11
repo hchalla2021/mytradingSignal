@@ -359,18 +359,32 @@ def _oi_buildup_signal(candles: List[Dict], spot_change_pct: float) -> Dict:
     # Magnitude: cap at 0.5% OI change = full signal
     magnitude = _clamp(abs(oi_pct) / 0.5, 0.25, 1.0)
 
+    # Strong thresholds: heavy OI buildup + decisive price move = RALLY / CRASH
+    _STRONG_OI_PCT   = 0.30   # OI must change ≥0.30% for strong classification
+    _STRONG_PRICE_PCT = 0.50  # price must move ≥0.50% for strong classification
+
     if price_up and oi_up:
-        profile = "LONG_BUILDUP"
-        score   = magnitude * 0.90
-        label   = f"Long Buildup — OI ↑{abs(oi_pct):.3f}% + price rising"
+        if abs(oi_pct) >= _STRONG_OI_PCT and abs(spot_change_pct) >= _STRONG_PRICE_PCT:
+            profile = "STRONG_LONG_BUILDUP"
+            score   = magnitude * 1.0
+            label   = f"🚀 Strong Long Buildup (Rally) — OI ↑{abs(oi_pct):.3f}% + price surging {spot_change_pct:+.2f}%"
+        else:
+            profile = "LONG_BUILDUP"
+            score   = magnitude * 0.90
+            label   = f"Long Buildup — OI ↑{abs(oi_pct):.3f}% + price rising"
     elif price_up and oi_dn:
         profile = "SHORT_COVERING"
         score   = magnitude * 0.40
         label   = f"Short Covering — OI ↓{abs(oi_pct):.3f}%, shorts exiting"
     elif price_dn and oi_up:
-        profile = "SHORT_BUILDUP"
-        score   = -magnitude * 0.90
-        label   = f"Short Buildup — OI ↑{abs(oi_pct):.3f}% + price falling"
+        if abs(oi_pct) >= _STRONG_OI_PCT and abs(spot_change_pct) >= _STRONG_PRICE_PCT:
+            profile = "STRONG_SHORT_BUILDUP"
+            score   = -magnitude * 1.0
+            label   = f"💥 Strong Short Buildup (Crash) — OI ↑{abs(oi_pct):.3f}% + price plunging {spot_change_pct:+.2f}%"
+        else:
+            profile = "SHORT_BUILDUP"
+            score   = -magnitude * 0.90
+            label   = f"Short Buildup — OI ↑{abs(oi_pct):.3f}% + price falling"
     elif price_dn and oi_dn:
         profile = "LONG_UNWINDING"
         score   = -magnitude * 0.40

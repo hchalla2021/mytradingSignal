@@ -94,9 +94,7 @@ export default function DashboardPage(): JSX.Element {
                   <li>✓ <strong>Volume Pulse:</strong> Candle volume strength</li>
                   <li>✓ <strong>Candle Intent:</strong> Bullish/bearish candle structure</li>
                   <li>✓ <strong>Pivot Points:</strong> Support/Resistance levels</li>
-                  <li>✓ <strong>ORB:</strong> Opening Range Breakout detection</li>
                   <li>✓ <strong>SuperTrend:</strong> (10,2) trend following indicator</li>
-                  <li>✓ <strong>Parabolic SAR:</strong> Trend reversal detector</li>
                 </ul>
               </div>
               <div>

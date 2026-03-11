@@ -19,8 +19,11 @@ from services.market_positioning_5m_predictor import (
     calculate_market_positioning_5m_prediction,
 )
 import json
+import logging
 import time
 import os
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/market-positioning", tags=["market-positioning"])
 
@@ -177,6 +180,8 @@ def _calc_confidence(
 
     # Type premium: strong conviction types get a small premium over moderate types
     type_adj = {
+        "STRONG_LONG_BUILDUP":  +12,  # rally — maximum premium
+        "STRONG_SHORT_BUILDUP": +12,  # crash — maximum premium
         "LONG_BUILDUP":   +7,   # fresh longs = premium signal
         "SHORT_BUILDUP":  +7,   # fresh shorts = premium signal
         "SHORT_COVERING":  0,   # moderate — shorts just exiting
@@ -329,6 +334,8 @@ def _build_prediction(history: list[dict], current: dict) -> dict:
     # Old floors (72/55/50/35) caused unearned confidence on minimal moves.
     # New floors are starting points; max achievable: 50 + 25 + 22 + 8 = 105 → 95.
     base_conf = {
+        "STRONG_LONG_BUILDUP":  60,   # rally — highest earned base
+        "STRONG_SHORT_BUILDUP": 60,   # crash — highest earned base
         "LONG_BUILDUP":   50,   # fresh institutional longs — earned by momentum
         "SHORT_BUILDUP":  50,   # fresh institutional shorts — earned by momentum
         "SHORT_COVERING": 38,   # shorts exiting — moderate base
@@ -381,7 +388,58 @@ def _pct_change(current: float, previous: float) -> float:
     return ((current - previous) / abs(previous)) * 100
 
 
-def _analyse_symbol(symbol: str, data: dict) -> dict:
+async def _get_oi_from_candles(symbol: str) -> tuple:
+    """
+    Read OI direction from 5-min analysis candles — same data source
+    as Pure Liquidity Intelligence for consistent positioning signals.
+
+    Uses per-candle OI delta (oi - oi_prev) weighted over the last 3 candles
+    (55% latest / 30% / 15% earliest) — identical to Liquidity's approach.
+
+    Returns (oi_up: bool | None, oi_change_pct: float).
+    Returns (None, 0.0) when no real OI data is available in candles.
+    """
+    cache = get_cache()
+    raw = await cache.lrange(f"analysis_candles:{symbol}", 0, 4)
+
+    candles = []
+    for item in reversed(raw):  # newest first → chronological order
+        try:
+            c = json.loads(item) if isinstance(item, str) else item
+            if isinstance(c, dict):
+                candles.append(c)
+        except Exception:
+            continue
+
+    if not candles:
+        return None, 0.0
+
+    # Use last 3 candles, weighted: 55% latest, 30% prev, 15% earliest
+    recent = candles[-3:] if len(candles) >= 3 else candles
+    weights = [0.15, 0.30, 0.55][-len(recent):]
+
+    oi_deltas = []
+    last_oi = 0.0
+
+    for c in recent:
+        oi_end = float(c.get("oi") or 0)
+        oi_start = float(c.get("oi_prev") or oi_end)
+        if oi_end > 0:
+            oi_deltas.append(oi_end - oi_start)
+            last_oi = oi_end
+
+    if not oi_deltas or last_oi <= 0:
+        return None, 0.0
+
+    weights_used = weights[-len(oi_deltas):]
+    tw = sum(weights_used)
+    wt_oi = sum(d * w for d, w in zip(oi_deltas, weights_used)) / tw
+    oi_pct = (wt_oi / last_oi) * 100
+
+    return wt_oi > 0, round(oi_pct, 4)
+
+
+async def _analyse_symbol(symbol: str, data: dict) -> dict:
     """Core analysis for one symbol given live cache data."""
     now_ts = time.time()
     hist   = _HISTORY.setdefault(symbol, [])
@@ -414,16 +472,53 @@ def _analyse_symbol(symbol: str, data: dict) -> dict:
 
     prev = hist[-2]
 
-    # ── Price direction: use daily changePercent (robust for index instruments) ──
-    # Tick-to-tick delta between 5s polls is micro-noise (<0.005%) and always kills
-    # the threshold check. Daily changePercent is always a meaningful, non-zero signal.
+    # ── Price direction: BLEND daily bias + intraday tick flow ────────────────
+    # Bug fix: using only daily changePercent meant signal was locked to
+    # one direction for the entire day (e.g. always SELL on a down day even
+    # during strong intraday bounces). Now we blend:
+    #   - Daily bias:  changePercent from prev close (long-term anchor)
+    #   - Tick flow:   recent 6 price ticks (intraday momentum, detects reversals)
+    # If they agree → strong signal. If they contradict → tick flow wins
+    # (because the CURRENT direction is what the trader needs to act on).
     PRICE_DIR_THRESHOLD = 0.10  # indices must be ≥0.10% from prev close to show direction
-    if change_pct > PRICE_DIR_THRESHOLD:
-        price_up = True
-    elif change_pct < -PRICE_DIR_THRESHOLD:
-        price_up = False
+
+    # Compute tick flow early (we need it for price_up and later for tick_consistency)
+    _tick_win = hist[-min(len(hist), 6):]
+    _tick_up  = sum(1 for i in range(1, len(_tick_win)) if _tick_win[i]["price"] > _tick_win[i - 1]["price"])
+    _tick_dn  = sum(1 for i in range(1, len(_tick_win)) if _tick_win[i]["price"] < _tick_win[i - 1]["price"])
+    _tick_tot = max(len(_tick_win) - 1, 1)
+    _tick_net = (_tick_up - _tick_dn) / _tick_tot  # −1 fully bearish … +1 fully bullish
+
+    # Also compute actual ₹ price movement in the window
+    _window_price_pts = _tick_win[-1]["price"] - _tick_win[0]["price"] if len(_tick_win) >= 2 else 0
+
+    # Daily bias
+    daily_up = True if change_pct > PRICE_DIR_THRESHOLD else (False if change_pct < -PRICE_DIR_THRESHOLD else None)
+
+    # Intraday tick consensus — strong tick flow (≥30%) overrides daily
+    TICK_OVERRIDE_THRESHOLD = 0.30  # 30% of ticks going same direction to override
+
+    if daily_up is None:
+        # Flat day: use tick flow if strong, else None
+        if _tick_net > TICK_OVERRIDE_THRESHOLD and _window_price_pts > 0:
+            price_up = True
+        elif _tick_net < -TICK_OVERRIDE_THRESHOLD and _window_price_pts < 0:
+            price_up = False
+        else:
+            price_up = None
+    elif daily_up is True:
+        # Up day: accept unless ticks are strongly opposing (reversal)
+        if _tick_net < -TICK_OVERRIDE_THRESHOLD and _window_price_pts < 0:
+            price_up = False  # Ticks AND price moving down → reversal
+        else:
+            price_up = True
     else:
-        price_up = None  # Genuinely flat for the day (rare, near open price)
+        # Down day: accept unless ticks are strongly opposing (bounce)
+        if _tick_net > TICK_OVERRIDE_THRESHOLD and _window_price_pts > 0:
+            price_up = True  # Ticks AND price moving up → bounce
+        else:
+            price_up = False
+
     pr_chg = change_pct  # Use daily % for confidence magnitude calc
 
     # ── Volume direction: compare current vs rolling average ──
@@ -433,42 +528,47 @@ def _analyse_symbol(symbol: str, data: dict) -> dict:
     vol_up  = volume > vol_avg * 1.005  # 0.5% above rolling average → volume building
     vol_chg = _pct_change(volume, vol_avg)
 
-    # ── OI direction ──
-    # NSE spot indices (NIFTY/BANKNIFTY/SENSEX): Zerodha sends oi=0 always.
-    # For futures tokens: real OI is available → use tick-to-tick change.
-    # For indices: synthesise from price-tick consistency (monotone movement
-    # across the last 3 samples = fresh positions being built).
-    oi_chg = _pct_change(oi, prev["oi"])
-    if oi > 0:
-        # Real OI data (futures subscription)
+    # ── OI direction: use 5-min candle OI (same source as Liquidity Intelligence) ──
+    # Reads real per-candle OI deltas from analysis_candles:{symbol}, weighted
+    # over the last 3 candles (55%/30%/15%) — matches Liquidity's _oi_buildup_signal.
+    # This replaces the old synthetic monotone-price proxy which was unreliable.
+    candle_oi_up, candle_oi_pct = await _get_oi_from_candles(symbol)
+    if candle_oi_up is not None:
+        oi_up = candle_oi_up
+        oi_chg = candle_oi_pct
+    elif oi > 0 and prev["oi"] > 0:
+        # Fallback: tick-to-tick OI from PCR service (before first candle is ready)
+        oi_chg = _pct_change(oi, prev["oi"])
         oi_up = oi_chg >= _OI_CHANGE_MIN_PCT
     else:
-        # Synthetic OI proxy for index spot instruments
-        recent_prices = [p["price"] for p in hist[-3:]]
-        if len(recent_prices) >= 3:
-            # Monotone rise with bullish bias OR monotone fall with bearish bias
-            # = new positions being directionally built
-            monotone_up   = all(a <= b for a, b in zip(recent_prices, recent_prices[1:]))
-            monotone_down = all(a >= b for a, b in zip(recent_prices, recent_prices[1:]))
-            if price_up is True and monotone_up:
-                oi_up = True
-            elif price_up is False and monotone_down:
-                oi_up = True
-            else:
-                oi_up = False  # Choppy / reversing
-        else:
-            oi_up = False
+        # No OI data available yet — use price direction as weak proxy
+        # (same fallback strategy as Liquidity Intelligence)
+        oi_up = price_up if price_up is not None else False
+        oi_chg = 0.0
 
-    # ── Tick flow ─────────────────────────────────────────────────────────────────────
-    # Compute signed tick_net first; direction-aware tick_consistency is derived
-    # AFTER positioning so we can align the sign with the actual signal.
-    _win = hist[-min(len(hist), 6):]
-    _up  = sum(1 for i in range(1, len(_win)) if _win[i]["price"] > _win[i - 1]["price"])
-    _dn  = sum(1 for i in range(1, len(_win)) if _win[i]["price"] < _win[i - 1]["price"])
-    _tot = max(len(_win) - 1, 1)
-    _tick_net = (_up - _dn) / _tot             # −1 fully bearish … +1 fully bullish
+    # ── Tick flow already computed above (blended price_up block) ─────────────
+    # _tick_net is available from the early tick-flow calculation.
 
     positioning = _classify_positioning(price_up, vol_up, oi_up)
+
+    # ── Strong upgrade: heavy OI + decisive price = Rally / Crash ────────────
+    # Same thresholds as Liquidity Intelligence for consistent signals.
+    _STRONG_OI_PCT   = 0.30   # OI must change ≥0.30% for strong classification
+    _STRONG_PRICE_PCT = 0.50  # price must move ≥0.50% for strong classification
+    if positioning["type"] == "LONG_BUILDUP" and abs(oi_chg) >= _STRONG_OI_PCT and abs(pr_chg) >= _STRONG_PRICE_PCT:
+        positioning = dict(positioning)
+        positioning["type"]  = "STRONG_LONG_BUILDUP"
+        positioning["label"] = "🚀 Rally — Strong Long Buildup"
+        positioning["trend"] = "Rally"
+        positioning["signal"] = "STRONG_BUY"
+        positioning["description"] = f"Heavy institutional longs + price surging — rally mode"
+    elif positioning["type"] == "SHORT_BUILDUP" and abs(oi_chg) >= _STRONG_OI_PCT and abs(pr_chg) >= _STRONG_PRICE_PCT:
+        positioning = dict(positioning)
+        positioning["type"]  = "STRONG_SHORT_BUILDUP"
+        positioning["label"] = "💥 Crash — Strong Short Buildup"
+        positioning["trend"] = "Crash"
+        positioning["signal"] = "STRONG_SELL"
+        positioning["description"] = f"Heavy institutional shorts + price plunging — crash risk"
 
     # Direction-aware: +1 = all ticks ALIGN with signal, −1 = all ticks OPPOSE
     # Aligned ticks boost confidence; opposing ticks trigger a penalty in _calc_confidence.
@@ -600,7 +700,7 @@ async def get_market_positioning():
     for symbol in _SYMBOLS:
         data = await _get_symbol_data(symbol)
         if data:
-            result[symbol] = _analyse_symbol(symbol, data)
+            result[symbol] = await _analyse_symbol(symbol, data)
         else:
             result[symbol] = {
                 "symbol": symbol, "price": 0, "volume": 0, "oi": 0,
@@ -622,7 +722,7 @@ async def get_symbol_positioning(symbol: str):
         return {"error": f"Symbol {symbol} not supported"}
     data = await _get_symbol_data(symbol)
     if data:
-        return _analyse_symbol(symbol, data)
+        return await _analyse_symbol(symbol, data)
     return {
         "symbol": symbol, "price": 0, "volume": 0, "oi": 0,
         "positioning": _classify_positioning(None, None, None),
