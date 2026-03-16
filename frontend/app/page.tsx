@@ -714,7 +714,7 @@ export default function Home() {
               loading={vixLoading}
             />
             <div className="flex items-center gap-2 ml-auto">
-              <span className="hidden sm:inline text-[9px] text-white/60 font-bold">15 Signals</span>
+              <span className="hidden sm:inline text-[9px] text-white/60 font-bold">{aggregatedMarketSignal.NIFTY.sectionCount} Signals</span>
               <span className="w-1.5 h-1.5 rounded-full bg-teal-400 animate-pulse" />
               <span className="text-[9px] text-teal-400/50 font-bold">LIVE</span>
             </div>
@@ -757,10 +757,10 @@ export default function Home() {
                     </span>
                   </div>
 
-                  {/* 15 Signals Confidence */}
+                  {/* Confidence Signals */}
                   <div className="px-4 pt-3.5 pb-3 flex-1">
                     <div className="mb-2.5">
-                      <span className="text-[10px] font-bold text-white/40 uppercase tracking-[0.15em]">15 Signals</span>
+                      <span className="text-[10px] font-bold text-white/40 uppercase tracking-[0.15em]">{s.sectionCount} Signals</span>
                     </div>
                     <div suppressHydrationWarning className="h-2.5 rounded-full overflow-hidden flex bg-white/[0.06] mb-3">
                       <div className="bg-gradient-to-r from-teal-700 to-teal-400 transition-all duration-700 ease-out" style={{ width: `${s.buyPercent}%` }} />
