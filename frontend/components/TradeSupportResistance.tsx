@@ -85,7 +85,6 @@ export const TradeSupportResistance: React.FC<TradeSupportResistanceProps> = ({
     const trendStruct:  string  = (ind.trend_structure ?? 'SIDEWAYS').toUpperCase();
     const candleQ:      string  = (ind.candle_quality_signal ?? 'NEUTRAL').toUpperCase();
     const smartMoney:   string  = (ind.smart_money_signal    ?? 'NEUTRAL').toUpperCase();
-    const vwmaEma:      string  = (ind.vwma_ema_signal ?? 'WAIT').toUpperCase();
     const buySteup:     string  = (ind.buy_setup_status  ?? '').toUpperCase();
     const sellSetup:    string  = (ind.sell_setup_status ?? '').toUpperCase();
     const volumeStrength: string = (ind.volume_strength ?? '').toUpperCase();

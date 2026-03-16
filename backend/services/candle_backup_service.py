@@ -244,7 +244,7 @@ class CandleBackupService:
                     "backup_date": data.get("backup_date", "UNKNOWN"),
                     "candle_count": data.get("candle_count", 0)
                 })
-            except:
+            except Exception:
                 pass
         return backups
 
@@ -261,5 +261,5 @@ class CandleBackupService:
                 if file_time < cutoff_time:
                     backup_file.unlink()
                     print(f"🗑️  Deleted old backup: {backup_file.name}")
-            except:
+            except Exception:
                 pass

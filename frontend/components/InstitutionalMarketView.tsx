@@ -468,7 +468,7 @@ const InstitutionalMarketView = memo<InstitutionalMarketViewProps>(({ symbol, ma
       </div>
 
       {/* ══════════════════════════════════════════════════════════
-          5 MIN PREDICTION
+          5-MIN PREDICTION
       ══════════════════════════════════════════════════════════ */}
       <div className="mx-3 mt-2.5 mb-3 rounded-xl overflow-hidden border border-white/[0.06] bg-[#0d1117]">
         <div className="h-px bg-gradient-to-r from-transparent via-white/10 to-transparent" />
@@ -528,7 +528,7 @@ const InstitutionalMarketView = memo<InstitutionalMarketViewProps>(({ symbol, ma
               <>
                 {/* Header */}
                 <div className="flex items-center justify-between">
-                  <span className="text-[11px] font-bold text-gray-400 uppercase tracking-widest">5 Min Prediction</span>
+                  <span className="text-[11px] font-bold text-gray-400 uppercase tracking-widest">5-Min Prediction</span>
                   <span suppressHydrationWarning className={`text-[10px] font-bold px-2 py-1 rounded ${isBull ? 'bg-emerald-500/25 text-emerald-300' : isBear ? 'bg-red-500/25 text-red-300' : 'bg-amber-500/15 text-amber-300'}`}>
                     {adjConf}% CONFIDENCE
                   </span>

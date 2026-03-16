@@ -590,7 +590,7 @@ async def get_smart_money_flow(symbol: str):
                 if cached_result:
                     import json
                     return json.loads(cached_result)
-            except:
+            except Exception:
                 pass  # Fall through to fresh calculation
         
         # 🔥 Get LATEST market data (live tick)
@@ -672,7 +672,7 @@ async def get_smart_money_flow(symbol: str):
                         market_imbalance = "NEUTRAL"
                     
                     print(f"✅ Smart Money [{symbol}]: {smart_money_signal} ({smart_money_confidence}%) from WebSocket cache")
-        except:
+        except Exception:
             pass  # Fall through to defaults if cache read fails
         
         result = {
@@ -700,7 +700,7 @@ async def get_smart_money_flow(symbol: str):
             try:
                 import json
                 await cache.set(cache_key, json.dumps(result), expire=cache_ttl)
-            except:
+            except Exception:
                 pass  # Non-critical: if cache write fails, just continue
         
         return result
@@ -763,7 +763,7 @@ async def get_candle_quality(symbol: str):
                 if cached_result:
                     import json
                     return json.loads(cached_result)
-            except:
+            except Exception:
                 pass  # Fall through to fresh calculation
         
         # 🔥 Get LATEST market data (live tick)
@@ -948,7 +948,7 @@ async def get_candle_quality(symbol: str):
             try:
                 import json
                 await cache.set(cache_key, json.dumps(result), expire=cache_ttl)
-            except:
+            except Exception:
                 pass  # Non-critical: if cache write fails, just continue
         
         return result

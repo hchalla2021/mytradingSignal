@@ -505,7 +505,7 @@ class CandleIntentEngine:
             dist_to_low = abs(current_price - recent_low) / recent_low
             
             return dist_to_high <= self._zone_proximity or dist_to_low <= self._zone_proximity
-        except:
+        except Exception:
             return False
     
     def _detect_pattern(

@@ -424,8 +424,7 @@ async def get_trend_base(symbol: str) -> Dict[str, Any]:
       6. Day Change %      ±10  (price-reality check)
       7. Momentum Score    ±4   (composite 0-100 score)
 
-    Signal thresholds: STRONG_BUY≥55 · BUY≥20 · NEUTRAL±20 · SELL≤-20 · STRONG_SELL≤-55
-    Confidence: integrity + factor agreement → realistic 30–92% range
+    Signal thresholds: STRONG_BUY≥40 · BUY≥15 · NEUTRAL±15 · SELL≤-15 · STRONG_SELL≤-40
     """
     try:
         symbol = symbol.upper()
@@ -533,7 +532,7 @@ async def get_trend_base(symbol: str) -> Dict[str, Any]:
         total += chg_score
 
 
-        # ── FACTOR 8: Momentum Score (±4 pts) ────────────────────────────
+        # ── FACTOR 7: Momentum Score (±4 pts) ────────────────────────────
         mom_score = (4  if momentum > 65
                      else 2  if momentum > 55
                      else -4 if momentum < 35
@@ -543,11 +542,11 @@ async def get_trend_base(symbol: str) -> Dict[str, Any]:
         total += mom_score
         total  = round(total)
 
-        # ── SIGNAL (realistically calibrated) ────────────────────────────
-        if   total >=  55: signal = 'STRONG_BUY';  trend = 'UPTREND'
-        elif total >=  20: signal = 'BUY';          trend = 'UPTREND'
-        elif total <= -55: signal = 'STRONG_SELL'; trend = 'DOWNTREND'
-        elif total <= -20: signal = 'SELL';         trend = 'DOWNTREND'
+        # ── SIGNAL (calibrated: max ±93, STRONG at ~43% alignment) ────
+        if   total >=  40: signal = 'STRONG_BUY';  trend = 'UPTREND'
+        elif total >=  15: signal = 'BUY';          trend = 'UPTREND'
+        elif total <= -40: signal = 'STRONG_SELL'; trend = 'DOWNTREND'
+        elif total <= -15: signal = 'SELL';         trend = 'DOWNTREND'
         else:              signal = 'NEUTRAL';      trend = 'SIDEWAYS'
 
         # ── MARKET STATUS (from instant analysis, not hardcoded) ────────
@@ -567,7 +566,9 @@ async def get_trend_base(symbol: str) -> Dict[str, Any]:
         # ── 5-MIN SIGNAL (ST dominates short-term, RSI + candle support) ──
         s5 = st_score * 0.55 + rsi_score * 0.30 + (
              7 if candle_dir == 'BULLISH' else -7 if candle_dir == 'BEARISH' else 0) * 0.15
-        signal_5m = 'BUY' if s5 >= 8 else 'SELL' if s5 <= -8 else 'NEUTRAL'
+        signal_5m = ('STRONG_BUY' if s5 >= 14 else 'BUY' if s5 >= 6
+                     else 'STRONG_SELL' if s5 <= -14 else 'SELL' if s5 <= -6
+                     else 'NEUTRAL')
 
         # ── 5-MIN CONFIDENCE (independent of main; uses short-term factors) ─
         # Anchored to raw 8-factor score but weighted toward ST + RSI (intraday)
@@ -629,37 +630,6 @@ async def get_trend_base(symbol: str) -> Dict[str, Any]:
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Trend base analysis error: {str(e)}")
-
-
-@router.get("/trend-base/all")
-async def get_all_trend_base() -> Dict[str, Any]:
-    """
-    Get Trend Base for all major indices
-    Ultra-fast parallel execution
-    """
-    try:
-        symbols = ["NIFTY", "BANKNIFTY", "SENSEX"]
-        
-        # Parallel execution for speed
-        tasks = [get_trend_base(symbol) for symbol in symbols]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-        
-        response = {}
-        for symbol, result in zip(symbols, results):
-            if isinstance(result, Exception):
-                print(f"[TREND-BASE-ALL] Error for {symbol}: {result}")
-                response[symbol] = {"error": str(result)}
-            else:
-                response[symbol] = result
-        
-        return {
-            "data": response,
-            "timestamp": datetime.now().isoformat()
-        }
-        
-    except Exception as e:
-        print(f"[TREND-BASE-ALL] Error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get("/trend-base/all")

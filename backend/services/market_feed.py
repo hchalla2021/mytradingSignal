@@ -874,7 +874,7 @@ class MarketFeedService:
                 if self.kws:
                     try:
                         self.kws.close()
-                    except:
+                    except Exception:
                         pass
         else:
             # Non-403 errors - log normally

@@ -93,17 +93,11 @@ export default function DashboardPage(): JSX.Element {
                   <li>✓ <strong>Trend Base:</strong> Higher-Low structure analysis</li>
                   <li>✓ <strong>Volume Pulse:</strong> Candle volume strength</li>
                   <li>✓ <strong>Candle Intent:</strong> Bullish/bearish candle structure</li>
-                  <li>✓ <strong>Pivot Points:</strong> Support/Resistance levels</li>
-                  <li>✓ <strong>SuperTrend:</strong> (10,2) trend following indicator</li>
                 </ul>
               </div>
               <div>
                 <p className="font-semibold text-white mb-2">Advanced Signals:</p>
                 <ul className="space-y-1 text-xs">
-                  <li>✓ <strong>RSI 60/40:</strong> Momentum overbought/oversold zones</li>
-                  <li>✓ <strong>Camarilla:</strong> CPR (Central Pivot Range) zones</li>
-                  <li>✓ <strong>VWMA 20:</strong> Volume-weighted entry filter</li>
-                  <li>✓ <strong>High Volume:</strong> Anomaly scanner for volume spikes</li>
                   <li>✓ <strong>Smart Money:</strong> Order structure intelligence</li>
                   <li>✓ <strong>Trade Zones:</strong> Buy/Sell signal zones</li>
                   <li>✓ <strong>OI Momentum:</strong> Open Interest based momentum</li>

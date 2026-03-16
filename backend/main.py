@@ -23,11 +23,11 @@ from routers import (
     pivot_indicators,
     diagnostics,
     market_outlook,
-    market_positioning,
     vix,
 )
 from routers.compass import http_router as compass_http, ws_router as compass_ws
 from routers.liquidity import http_router as liq_http, ws_router as liq_ws
+from routers.ict import http_router as ict_http, ws_router as ict_ws
 
 # Windows console fix already applied in config/__init__.py
 
@@ -166,6 +166,15 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         print(f"⚠️  Liquidity Service init error: {e}")
 
+    # 🏦 Start ICT Smart Money Intelligence Service
+    try:
+        from services.ict_engine import get_ict_service
+        ict_svc = get_ict_service()
+        await ict_svc.start()
+        print("🏦 ICT Smart Money Intelligence: ACTIVE")
+    except Exception as e:
+        print(f"⚠️  ICT Service init error: {e}")
+
     print("🚀 Backend READY")
     yield
 
@@ -184,21 +193,28 @@ async def lifespan(app: FastAPI):
     try:
         from services.oi_momentum_broadcaster import stop_oi_momentum_broadcaster
         await stop_oi_momentum_broadcaster()
-    except:
+    except Exception:
         pass
 
     # Stop Compass Service
     try:
         from services.compass_service import get_compass_service
         await get_compass_service().stop()
-    except:
+    except Exception:
         pass
 
     # Stop Liquidity Service
     try:
         from services.liquidity_service import get_liquidity_service
         await get_liquidity_service().stop()
-    except:
+    except Exception:
+        pass
+
+    # Stop ICT Service
+    try:
+        from services.ict_engine import get_ict_service
+        await get_ict_service().stop()
+    except Exception:
         pass
     
     # Stop unified auth monitor
@@ -248,7 +264,6 @@ app.include_router(analysis.router, tags=["Analysis"])
 app.include_router(advanced_analysis.router, tags=["Advanced Technical Analysis"])
 app.include_router(pivot_indicators.router, tags=["Pivot Indicators"])
 app.include_router(market_outlook.router, tags=["Market Outlook"])
-app.include_router(market_positioning.router, tags=["Market Positioning"])
 app.include_router(vix.router, tags=["India VIX"])
 
 # 🧭 Institutional Market Compass
@@ -258,6 +273,10 @@ app.include_router(compass_http, prefix="/api", tags=["Compass"])
 # ⚡ Pure Liquidity Intelligence
 app.include_router(liq_ws,   prefix="/ws",  tags=["Liquidity"])
 app.include_router(liq_http, prefix="/api", tags=["Liquidity"])
+
+# 🏦 ICT Smart Money Intelligence
+app.include_router(ict_ws,   prefix="/ws",  tags=["ICT"])
+app.include_router(ict_http, prefix="/api", tags=["ICT"])
 
 
 @app.get("/")

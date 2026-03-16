@@ -12,11 +12,16 @@ Key Metrics:
 """
 from __future__ import annotations
 
+import logging
 import numpy as np
+import pandas as pd
 from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass
 from datetime import datetime
 import asyncio
+from scipy.signal import argrelextrema
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -126,7 +131,7 @@ class TrendBaseEngine:
             )
             
         except Exception as e:
-            print(f"[TREND-BASE] Error analyzing {symbol}: {e}")
+            logger.error(f"[TREND-BASE] Error analyzing {symbol}: {e}")
             return self._create_neutral_result(symbol, f"Error: {e}")
     
     def _detect_swing_points(self, df: pd.DataFrame) -> Tuple[List[SwingPoint], List[SwingPoint]]:
@@ -151,15 +156,13 @@ class TrendBaseEngine:
             for order in [2, 3, 4]:  # Multi-scale swing detection
                 try:
                     # Find local maxima (swing highs)
-                    from scipy.signal import argrelextrema
                     high_idx = argrelextrema(high_arr, np.greater, order=order)[0]
                     all_high_indices.update(high_idx)
                     
                     # Find local minima (swing lows)
-                    from scipy.signal import argrelextrema
                     low_idx = argrelextrema(low_arr, np.less, order=order)[0]
                     all_low_indices.update(low_idx)
-                except:
+                except Exception:
                     continue
             
             # 🔥 FIX 2: Sort and filter swing points by significance
@@ -243,9 +246,7 @@ class TrendBaseEngine:
             lows_list.sort(key=lambda x: x.index)
             
         except Exception as e:
-            print(f"[SWING-DETECTION] Error: {e}")
-            import traceback
-            traceback.print_exc()
+            logger.error(f"[SWING-DETECTION] Error: {e}", exc_info=True)
         
         return highs_list, lows_list
     
@@ -537,9 +538,9 @@ async def analyze_trend_base(symbol: str, df: pd.DataFrame, inject_live_tick: bo
                 if current_oi:
                     df.loc[last_idx, 'oi'] = current_oi
                 
-                print(f"[TREND-BASE-INJECT] 🔥 Injected live tick for {symbol}: ₹{current_price}")
+                logger.debug(f"[TREND-BASE-INJECT] Injected live tick for {symbol}: {current_price}")
         except Exception as e:
-            print(f"[TREND-BASE-INJECT] ⚠️ Failed to inject live tick: {e}")
+            logger.warning(f"[TREND-BASE-INJECT] Failed to inject live tick: {e}")
     
     engine = get_trend_base_engine()
     result = await asyncio.to_thread(engine.analyze, symbol, df)

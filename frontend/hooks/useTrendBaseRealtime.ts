@@ -144,7 +144,7 @@ export function useTrendBaseRealtime(symbol: string) {
 
   // ── 🔥 Process batched live tick updates (200ms window) ───────────────────
   const processBatchedUpdate = useCallback(() => {
-    if (!liveTickRef.current || !data) return;
+    if (!liveTickRef.current) return;
 
     const tick = liveTickRef.current;
     const now = Date.now();
@@ -158,7 +158,7 @@ export function useTrendBaseRealtime(symbol: string) {
     lastUpdateTimeRef.current = now;
     pendingUpdateRef.current = false;
 
-    // Update data with live tick (instant price update)
+    // Update data with live tick (instant price update) — uses functional setState to avoid stale closure
     setData((prev) => {
       if (!prev) return prev;
       return {
@@ -170,13 +170,14 @@ export function useTrendBaseRealtime(symbol: string) {
       };
     });
 
-    // Schedule next batch window
+    // Clear previous batch timer before scheduling new one
+    if (batchTimerRef.current) clearTimeout(batchTimerRef.current);
     batchTimerRef.current = setTimeout(() => {
       if (pendingUpdateRef.current) {
         processBatchedUpdate();
       }
     }, 200);
-  }, [data]);
+  }, []);
 
   // ── 🔥 WebSocket listener (ultra-fast, no debouncing) ──────────────────────
   const handleWebSocketTick = useCallback(
@@ -204,18 +205,17 @@ export function useTrendBaseRealtime(symbol: string) {
 
   // ── Listen for WebSocket events (subscribe/unsubscribe) ───────────────────
   useEffect(() => {
-    // Try to find existing WebSocket listener or create new one
     const eventName = `market-tick-${symbol}`;
 
-    // Subscribe to custom event (emitted by WebSocket manager)
-    window.addEventListener(eventName, (e: any) => {
-      handleWebSocketTick(e.detail);
-    });
+    // Store handler reference so removeEventListener can match it
+    const handler = (e: Event) => {
+      handleWebSocketTick((e as CustomEvent).detail);
+    };
+
+    window.addEventListener(eventName, handler);
 
     return () => {
-      window.removeEventListener(eventName, (e: any) => {
-        handleWebSocketTick(e.detail);
-      });
+      window.removeEventListener(eventName, handler);
     };
   }, [symbol, handleWebSocketTick]);
 

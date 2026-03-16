@@ -389,7 +389,7 @@ export default function OIMomentumCard({
               </div>
               <div className="flex justify-between text-[9px]">
                 <span className="text-slate-600">OI Δ</span>
-                <span className={(m.oi_buildup_5m as boolean) ? "text-emerald-400 font-bold" : "text-slate-600"}>
+                <span className={(m.oi_buildup_5m as boolean) ? "text-emerald-400 font-bold" : (m.oi_reduction_5m as boolean) ? "text-red-400 font-bold" : "text-slate-600"}>
                   {((m.oi_change_pct_5m as number) ?? 0) !== 0
                     ? `${((m.oi_change_pct_5m as number) ?? 0) > 0 ? "+" : ""}${((m.oi_change_pct_5m as number) ?? 0).toFixed(1)}%`
                     : "—"}
@@ -412,7 +412,7 @@ export default function OIMomentumCard({
               </div>
               <div className="flex justify-between text-[9px]">
                 <span className="text-slate-600">OI Δ</span>
-                <span className={(m.oi_buildup_15m as boolean) ? "text-emerald-400 font-bold" : "text-slate-600"}>
+                <span className={(m.oi_buildup_15m as boolean) ? "text-emerald-400 font-bold" : (m.oi_reduction_15m as boolean) ? "text-red-400 font-bold" : "text-slate-600"}>
                   {((m.oi_change_pct_15m as number) ?? 0) !== 0
                     ? `${((m.oi_change_pct_15m as number) ?? 0) > 0 ? "+" : ""}${((m.oi_change_pct_15m as number) ?? 0).toFixed(1)}%`
                     : "—"}

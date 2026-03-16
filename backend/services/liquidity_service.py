@@ -300,38 +300,43 @@ def _pcr_sentiment_signal(
     }
 
 
-def _oi_buildup_signal(candles: List[Dict], spot_change_pct: float) -> Dict:
+def _oi_buildup_signal(candles: List[Dict], spot_change_pct: float, live_oi: float = 0.0) -> Dict:
     """
-    OI × Price direction matrix — detects WHERE institutions are positioning.
+    OI × Price × Volume direction matrix — detects WHERE institutions are positioning.
 
-    Uses per-candle OI delta (oi - oi_prev) to classify:
-      Long Buildup / Short Covering / Short Buildup / Long Unwinding
+    3-factor classification (Price × Volume × OI) with 8 cases:
+      STRONG: Long Buildup, Short Covering, Short Buildup, Long Unwinding
+      MIXED:  Unconfirmed Rally, Bear Exhaustion
+      WEAK:   Quiet Accumulation, Weak Short Buildup
     """
     neutral = {
         "score": 0.0, "signal": "NEUTRAL",
         "label": "OI change unavailable — price proxy only",
         "weight": WEIGHTS["oi_buildup"], "value": None,
-        "extra": {"profile": "NEUTRAL", "oiDeltaPct": 0.0, "lastOI": 0},
+        "extra": {"profile": "NEUTRAL", "oiDeltaPct": 0.0, "lastOI": 0,
+                  "clarity": "NONE", "volConfirmed": False},
     }
 
     if not candles:
         return neutral
 
-    # Recent 3 candles, weighted: last = 55%, prev = 30%, before = 15%
+    # Recent 3 candles, weighted: last = 70%, prev = 20%, before = 10%
     recent   = candles[-3:] if len(candles) >= 3 else candles
-    w_map    = [0.15, 0.30, 0.55][-len(recent):]
-    total_w  = sum(w_map)
+    w_map    = [0.10, 0.20, 0.70][-len(recent):]
 
     oi_deltas   : List[float] = []
     price_moves : List[float] = []
+    volumes     : List[float] = []
     last_oi     = 0.0
 
     for c in recent:
         oi_end   = float(c.get("oi") or 0)
         oi_start = float(c.get("oi_prev") or oi_end)
+        vol      = float(c.get("volume") or 0)
         if oi_end > 0:
             oi_deltas.append(oi_end - oi_start)
             price_moves.append(float(c.get("close") or 0) - float(c.get("open") or 0))
+            volumes.append(vol)
             last_oi = oi_end
 
     if not oi_deltas or last_oi <= 0:
@@ -341,7 +346,8 @@ def _oi_buildup_signal(candles: List[Dict], spot_change_pct: float) -> Dict:
             "score": round(score, 4), "signal": _sig(score),
             "label": "No OI in candles — price-direction proxy",
             "weight": WEIGHTS["oi_buildup"], "value": None,
-            "extra": {"profile": "NEUTRAL", "oiDeltaPct": 0.0, "lastOI": 0},
+            "extra": {"profile": "NEUTRAL", "oiDeltaPct": 0.0, "lastOI": 0,
+                      "clarity": "NONE", "volConfirmed": False},
         }
 
     weights_used = w_map[-len(oi_deltas):]
@@ -349,12 +355,30 @@ def _oi_buildup_signal(candles: List[Dict], spot_change_pct: float) -> Dict:
     wt_oi    = sum(d * w for d, w in zip(oi_deltas, weights_used)) / tw
     wt_price = sum(p * w for p, w in zip(price_moves, weights_used)) / tw
 
-    oi_pct = (wt_oi / last_oi) * 100  # weighted OI change as % of current OI
+    # Leading-edge: blend live OI delta for faster detection (40% live, 60% candle)
+    if live_oi > 0 and last_oi > 0:
+        live_delta = live_oi - last_oi
+        wt_oi = wt_oi * 0.60 + live_delta * 0.40
 
-    price_up = wt_price > 0 or spot_change_pct > 0.10
-    price_dn = wt_price < 0 or spot_change_pct < -0.10
+    oi_base = live_oi if live_oi > 0 else last_oi
+    oi_pct = (wt_oi / oi_base) * 100  # OI change as % of current OI
+
+    price_up = wt_price > 0 or spot_change_pct > 0.05
+    price_dn = wt_price < 0 or spot_change_pct < -0.05
     oi_up    = wt_oi > 0
     oi_dn    = wt_oi < 0
+
+    # Volume direction: current candle vs rolling average (3rd axis from Market Positioning)
+    vol_up = False
+    if len(volumes) >= 2:
+        vol_avg = sum(volumes[:-1]) / len(volumes[:-1])
+        vol_up = vol_avg > 0 and volumes[-1] > vol_avg * 1.005
+    elif candles and len(candles) >= 5:
+        all_vols = [float(c.get("volume") or 0) for c in candles[-5:-1]]
+        valid = [v for v in all_vols if v > 0]
+        if valid:
+            vol_avg = sum(valid) / len(valid)
+            vol_up = float(candles[-1].get("volume") or 0) > vol_avg * 1.005
 
     # Magnitude: cap at 0.5% OI change = full signal
     magnitude = _clamp(abs(oi_pct) / 0.5, 0.25, 1.0)
@@ -363,33 +387,71 @@ def _oi_buildup_signal(candles: List[Dict], spot_change_pct: float) -> Dict:
     _STRONG_OI_PCT   = 0.30   # OI must change ≥0.30% for strong classification
     _STRONG_PRICE_PCT = 0.50  # price must move ≥0.50% for strong classification
 
+    # 3-factor P × V × OI classification (8 cases)
     if price_up and oi_up:
-        if abs(oi_pct) >= _STRONG_OI_PCT and abs(spot_change_pct) >= _STRONG_PRICE_PCT:
-            profile = "STRONG_LONG_BUILDUP"
-            score   = magnitude * 1.0
-            label   = f"🚀 Strong Long Buildup (Rally) — OI ↑{abs(oi_pct):.3f}% + price surging {spot_change_pct:+.2f}%"
+        if vol_up:
+            # P↑ V↑ OI↑ — volume-confirmed Long Buildup
+            clarity = "STRONG"
+            if abs(oi_pct) >= _STRONG_OI_PCT and abs(spot_change_pct) >= _STRONG_PRICE_PCT:
+                profile = "STRONG_LONG_BUILDUP"
+                score   = magnitude * 1.0
+                label   = f"🚀 Strong Long Buildup (Rally) — OI ↑{abs(oi_pct):.3f}% + price surging {spot_change_pct:+.2f}%"
+            else:
+                profile = "LONG_BUILDUP"
+                score   = magnitude * 0.90
+                label   = f"Long Buildup — OI ↑{abs(oi_pct):.3f}% + price rising, volume confirming"
         else:
-            profile = "LONG_BUILDUP"
-            score   = magnitude * 0.90
-            label   = f"Long Buildup — OI ↑{abs(oi_pct):.3f}% + price rising"
+            # P↑ V↓ OI↑ — OI building but low volume: stealthy accumulation
+            clarity = "WEAK"
+            profile = "QUIET_ACCUMULATION"
+            score   = magnitude * 0.55
+            label   = f"Quiet Accumulation — OI ↑{abs(oi_pct):.3f}% + price rising, low volume"
     elif price_up and oi_dn:
-        profile = "SHORT_COVERING"
-        score   = magnitude * 0.40
-        label   = f"Short Covering — OI ↓{abs(oi_pct):.3f}%, shorts exiting"
-    elif price_dn and oi_up:
-        if abs(oi_pct) >= _STRONG_OI_PCT and abs(spot_change_pct) >= _STRONG_PRICE_PCT:
-            profile = "STRONG_SHORT_BUILDUP"
-            score   = -magnitude * 1.0
-            label   = f"💥 Strong Short Buildup (Crash) — OI ↑{abs(oi_pct):.3f}% + price plunging {spot_change_pct:+.2f}%"
+        if not vol_up:
+            # P↑ V↓ OI↓ — classic Short Covering
+            clarity = "STRONG"
+            profile = "SHORT_COVERING"
+            score   = magnitude * 0.40
+            label   = f"Short Covering — OI ↓{abs(oi_pct):.3f}%, shorts exiting"
         else:
-            profile = "SHORT_BUILDUP"
-            score   = -magnitude * 0.90
-            label   = f"Short Buildup — OI ↑{abs(oi_pct):.3f}% + price falling"
+            # P↑ V↑ OI↓ — volume rising into OI drop: unconfirmed rally
+            clarity = "MIXED"
+            profile = "UNCONFIRMED_RALLY"
+            score   = magnitude * 0.25
+            label   = f"Unconfirmed Rally — price ↑ + volume ↑ but OI ↓{abs(oi_pct):.3f}%, caution"
+    elif price_dn and oi_up:
+        if vol_up:
+            # P↓ V↑ OI↑ — volume-confirmed Short Buildup
+            clarity = "STRONG"
+            if abs(oi_pct) >= _STRONG_OI_PCT and abs(spot_change_pct) >= _STRONG_PRICE_PCT:
+                profile = "STRONG_SHORT_BUILDUP"
+                score   = -magnitude * 1.0
+                label   = f"💥 Strong Short Buildup (Crash) — OI ↑{abs(oi_pct):.3f}% + price plunging {spot_change_pct:+.2f}%"
+            else:
+                profile = "SHORT_BUILDUP"
+                score   = -magnitude * 0.90
+                label   = f"Short Buildup — OI ↑{abs(oi_pct):.3f}% + price falling, volume confirming"
+        else:
+            # P↓ V↓ OI↑ — OI building but no volume: unconvincing
+            clarity = "WEAK"
+            profile = "WEAK_SHORT_BUILDUP"
+            score   = -magnitude * 0.55
+            label   = f"Weak Short Buildup — OI ↑{abs(oi_pct):.3f}% + price falling, low volume"
     elif price_dn and oi_dn:
-        profile = "LONG_UNWINDING"
-        score   = -magnitude * 0.40
-        label   = f"Long Unwinding — OI ↓{abs(oi_pct):.3f}%, longs exiting"
+        if not vol_up:
+            # P↓ V↓ OI↓ — classic Long Unwinding
+            clarity = "STRONG"
+            profile = "LONG_UNWINDING"
+            score   = -magnitude * 0.40
+            label   = f"Long Unwinding — OI ↓{abs(oi_pct):.3f}%, longs exiting"
+        else:
+            # P↓ V↑ OI↓ — heavy selling into OI drop: exhaustion
+            clarity = "MIXED"
+            profile = "BEAR_EXHAUSTION"
+            score   = -magnitude * 0.25
+            label   = f"Bear Exhaustion — price ↓ + volume ↑ but OI ↓{abs(oi_pct):.3f}%, sellers tiring"
     else:
+        clarity = "NONE"
         profile = "NEUTRAL"
         score   = _clamp(oi_pct / 0.2, -0.15, 0.15)
         label   = f"OI neutral — {oi_pct:+.3f}% change, no clear direction"
@@ -402,10 +464,12 @@ def _oi_buildup_signal(candles: List[Dict], spot_change_pct: float) -> Dict:
         "weight": WEIGHTS["oi_buildup"],
         "value": round(oi_pct, 4),
         "extra": {
-            "profile":     profile,
-            "oiDeltaPct":  round(oi_pct, 4),
-            "lastOI":      round(last_oi, 0),
-            "magnitude":   round(magnitude, 3),
+            "profile":      profile,
+            "oiDeltaPct":   round(oi_pct, 4),
+            "lastOI":       round(last_oi, 0),
+            "magnitude":    round(magnitude, 3),
+            "clarity":      clarity,
+            "volConfirmed": vol_up,
         },
     }
 
@@ -476,6 +540,13 @@ def _price_momentum_signal(candles: List[Dict], spot_price: float) -> Dict:
     if vwap_dev is not None:
         label += f" · VWAP{vwap_dev:+.2f}%"
 
+    # EMA slope: rate of change between current and one-candle-ago EMA9
+    ema_slope_val = 0.0
+    if ema9 is not None and len(closes) >= 5:
+        prev_ema9 = _ema(closes[:-1], 9)
+        if prev_ema9 is not None and prev_ema9 > 0:
+            ema_slope_val = (ema9 - prev_ema9) / prev_ema9 * 100
+
     return {
         "score": round(score, 4),
         "signal": _sig(score),
@@ -483,10 +554,11 @@ def _price_momentum_signal(candles: List[Dict], spot_price: float) -> Dict:
         "weight": WEIGHTS["price_momentum"],
         "value": round(spot_price - (ema9 or spot_price), 2),
         "extra": {
-            "ema9":    round(ema9, 2)  if ema9  else None,
-            "ema20":   round(ema20, 2) if ema20 else None,
-            "vwap":    round(vwap, 2)  if vwap  else None,
-            "vwapDev": round(vwap_dev, 4) if vwap_dev is not None else None,
+            "ema9":     round(ema9, 2)  if ema9  else None,
+            "ema20":    round(ema20, 2) if ema20 else None,
+            "emaSlope": round(ema_slope_val, 6),
+            "vwap":     round(vwap, 2)  if vwap  else None,
+            "vwapDev":  round(vwap_dev, 4) if vwap_dev is not None else None,
         },
     }
 
@@ -799,7 +871,7 @@ class LiquidityService:
 
         # ── Run 4 signals ──────────────────────────────────────────────────
         sig_pcr  = _pcr_sentiment_signal(pcr_val, call_oi, put_oi, self._pcr_buffers[symbol])
-        sig_oi   = _oi_buildup_signal(candles, change_pct)
+        sig_oi   = _oi_buildup_signal(candles, change_pct, live_oi=oi_raw)
         sig_mom  = _price_momentum_signal(candles, price)
         sig_conv = _candle_conviction_signal(candles)
 

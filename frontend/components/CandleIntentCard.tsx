@@ -536,7 +536,7 @@ const CandleIntentCard = memo<CandleIntentCardProps>(({ symbol, name }) => {
             <div className="px-4 py-3 space-y-3">
               {/* Header */}
               <div className="flex items-center justify-between">
-                <span className="text-[11px] font-bold text-gray-400 uppercase">5 Min Prediction</span>
+                <span className="text-[11px] font-bold text-gray-400 uppercase">5-Min Prediction</span>
                 <span className={`text-[10px] font-bold px-2 py-1 rounded ${dirColor} bg-black/40 border border-white/[0.05]`}>{adjConf}% CONFIDENCE</span>
               </div>
               

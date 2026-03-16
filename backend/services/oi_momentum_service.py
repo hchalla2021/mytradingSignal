@@ -7,6 +7,7 @@ Designed by: 25-year veteran trader + Python developer
 from __future__ import annotations
 
 import numpy as np
+import pandas as pd
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Literal
 import logging

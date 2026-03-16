@@ -92,7 +92,7 @@ class OIMomentumBroadcaster:
             for candle_json in reversed(candles_json):
                 try:
                     candles.append(json.loads(candle_json))
-                except:
+                except Exception:
                     continue
             
             # Build 5m and 15m DataFrames

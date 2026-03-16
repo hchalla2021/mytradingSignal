@@ -193,9 +193,11 @@ export async function preloadOIMomentumData(symbols: string[]) {
 
     await Promise.race([
       Promise.all(promises),
-      new Promise((_, reject) =>
-        setTimeout(() => reject(new Error("Preload timeout")), 5000)
-      ),
+      new Promise((_, reject) => {
+        const t = setTimeout(() => reject(new Error("Preload timeout")), 5000);
+        // Ensure timer is cleaned up if Promise.all wins the race
+        Promise.all(promises).then(() => clearTimeout(t), () => clearTimeout(t));
+      }),
     ]);
   } catch (err) {
     console.debug("OI preload error:", err instanceof Error ? err.message : "");

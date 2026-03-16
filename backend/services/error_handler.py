@@ -26,7 +26,7 @@ def handle_zerodha_error(error: Exception, context: str = "") -> Dict[str, Any]:
     # Get current market phase
     try:
         market_phase = get_market_phase()
-    except:
+    except Exception:
         market_phase = MarketPhase.CLOSED
     
     # Build response
@@ -98,7 +98,7 @@ def should_skip_api_call(market_phase: Optional[MarketPhase] = None) -> Dict[str
     if market_phase is None:
         try:
             market_phase = get_market_phase()
-        except:
+        except Exception:
             market_phase = MarketPhase.CLOSED
     
     if market_phase == MarketPhase.CLOSED:

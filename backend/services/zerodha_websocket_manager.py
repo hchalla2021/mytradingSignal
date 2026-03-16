@@ -275,7 +275,7 @@ class ZerodhaWebSocketManager:
         if self.kws:
             try:
                 self.kws.close()
-            except:
+            except Exception:
                 pass
             self.kws = None
             

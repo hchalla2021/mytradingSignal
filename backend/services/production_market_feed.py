@@ -136,7 +136,7 @@ class ProductionMarketFeedService:
                 if not self.tick_queue.empty():
                     tick = self.tick_queue.get(timeout=1)
                     self._transform_and_broadcast_tick(tick)
-            except:
+            except Exception:
                 continue  # Keep processing
 
     def _transform_and_broadcast_tick(self, tick):

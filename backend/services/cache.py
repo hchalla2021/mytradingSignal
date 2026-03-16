@@ -215,7 +215,7 @@ class CacheService:
                 items = json.loads(value)
                 if isinstance(items, list):
                     return items[start:end+1] if end >= 0 else items[start:]
-            except:
+            except Exception:
                 pass
         return []
     
@@ -232,7 +232,7 @@ class CacheService:
                     # CRITICAL FIX: Refresh TTL when new data is pushed (was using existing_expire)
                     _SHARED_CACHE[key] = (json.dumps(items), expire_at)  # Refresh TTL
                     return
-            except:
+            except Exception:
                 pass
         _SHARED_CACHE[key] = (json.dumps([value]), expire_at)
     
@@ -246,7 +246,7 @@ class CacheService:
                 if isinstance(items, list):
                     trimmed = items[start:end+1] if end >= 0 else items[start:]
                     _SHARED_CACHE[key] = (json.dumps(trimmed), expire_at)
-            except:
+            except Exception:
                 pass
     
     async def llen(self, key: str) -> int:
@@ -260,7 +260,7 @@ class CacheService:
                     return 0
                 items = json.loads(value)
                 return len(items) if isinstance(items, list) else 0
-            except:
+            except Exception:
                 pass
         return 0
     

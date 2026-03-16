@@ -70,8 +70,12 @@ const OI_PROFILE: Record<OIProfile, ProfileStyle> = {
   SHORT_COVERING:   { bg: 'bg-lime-500/15    border-lime-500/30',    text: 'text-lime-300',    label: 'Short Covering',    icon: '🔄', ring: '', glow: '' },
   STRONG_SHORT_BUILDUP: { bg: 'bg-rose-600/30   border-rose-500/60',    text: 'text-rose-100',    label: '💥 Crash — Strong Short Buildup', icon: '💥', ring: 'ring-2 ring-rose-500/80 border-rose-500/70',     glow: 'shadow-[0_0_24px_rgba(225,29,72,0.50)]' },
   SHORT_BUILDUP:    { bg: 'bg-red-500/20     border-red-500/40',     text: 'text-red-200',     label: 'Short Buildup',     icon: '📉', ring: 'ring-2 ring-red-500/70 border-red-500/60',         glow: 'shadow-[0_0_18px_rgba(239,68,68,0.35)]' },
-  LONG_UNWINDING:   { bg: 'bg-orange-500/15  border-orange-500/30',  text: 'text-orange-300',  label: 'Long Unwinding',    icon: '⚠️', ring: '', glow: '' },
-  NEUTRAL:          { bg: 'bg-slate-700/30   border-slate-600/30',   text: 'text-slate-400',   label: 'No Clear Pattern',  icon: '⚖️', ring: '', glow: '' },
+  LONG_UNWINDING:      { bg: 'bg-orange-500/15  border-orange-500/30',  text: 'text-orange-300',  label: 'Long Unwinding',       icon: '⚠️', ring: '', glow: '' },
+  QUIET_ACCUMULATION:  { bg: 'bg-teal-500/15    border-teal-500/30',    text: 'text-teal-300',    label: 'Quiet Accumulation',   icon: '🤫', ring: '', glow: '' },
+  UNCONFIRMED_RALLY:   { bg: 'bg-yellow-500/15  border-yellow-500/30',  text: 'text-yellow-300',  label: 'Unconfirmed Rally',    icon: '⚡', ring: '', glow: '' },
+  WEAK_SHORT_BUILDUP:  { bg: 'bg-pink-500/15    border-pink-500/30',    text: 'text-pink-300',    label: 'Weak Short Buildup',   icon: '🔻', ring: '', glow: '' },
+  BEAR_EXHAUSTION:     { bg: 'bg-amber-600/15   border-amber-500/30',   text: 'text-amber-300',   label: 'Bear Exhaustion',      icon: '😮‍💨', ring: '', glow: '' },
+  NEUTRAL:             { bg: 'bg-slate-700/30   border-slate-600/30',   text: 'text-slate-400',   label: 'No Clear Pattern',     icon: '⚖️', ring: '', glow: '' },
   PCR_EXTREME_BULL: { bg: 'bg-cyan-500/20    border-cyan-400/50',    text: 'text-cyan-200',    label: 'Extreme Put Wall',  icon: '🛡️', ring: '', glow: '' },
   PCR_EXTREME_BEAR: { bg: 'bg-amber-500/20   border-amber-400/40',   text: 'text-amber-200',   label: 'Extreme Call Wall', icon: '🧱', ring: '', glow: '' },
 };
@@ -345,27 +349,25 @@ const IndexCard = memo(({ data, index }: { data: LiquidityIndex | null; index: s
 
           {/* Micro-Movement Detection Subsection */}
           <div className="bg-slate-900/50 rounded-lg p-3 border border-slate-700/20 space-y-2">
-            {/* Actual Market Confidence (derived from signals) */}
+            {/* Signal Strength (derived from all 4 weighted signals) */}
             <div className="flex items-center justify-between bg-slate-900/30 rounded px-2 py-1.5">
-              <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wide">Market Actual</span>
+              <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wide">Signal Strength</span>
               <div className="flex items-center gap-2">
-                <span className="text-[12px] font-black text-emerald-300">
-                  {Math.round(
-                    Math.abs(data.signals.oi_buildup.score * 50) +
-                    Math.abs(data.signals.price_momentum.score * 30) +
-                    Math.abs(data.signals.candle_conviction.score * 20)
-                  )}%
+                <span className={`text-[12px] font-black ${
+                  data.confidence >= 70 ? 'text-emerald-300' :
+                  data.confidence >= 50 ? 'text-cyan-300' :
+                  'text-slate-300'
+                }`}>
+                  {data.confidence}%
                 </span>
                 <div className="w-14 h-2 rounded-full bg-slate-700/50 overflow-hidden">
                   <div
-                    className="h-full bg-gradient-to-r from-emerald-500 to-emerald-400 transition-all duration-300 rounded-full"
-                    style={{
-                      width: `${Math.round(
-                        Math.abs(data.signals.oi_buildup.score * 50) +
-                        Math.abs(data.signals.price_momentum.score * 30) +
-                        Math.abs(data.signals.candle_conviction.score * 20)
-                      )}%`,
-                    }}
+                    className={`h-full transition-all duration-300 rounded-full ${
+                      data.direction === 'BULLISH' ? 'bg-gradient-to-r from-cyan-500 to-cyan-400' :
+                      data.direction === 'BEARISH' ? 'bg-gradient-to-r from-orange-500 to-orange-400' :
+                      'bg-gradient-to-r from-slate-500 to-slate-400'
+                    }`}
+                    style={{ width: `${data.confidence}%` }}
                   />
                 </div>
               </div>
@@ -404,51 +406,36 @@ const IndexCard = memo(({ data, index }: { data: LiquidityIndex | null; index: s
               </div>
             </div>
 
-            {/* Probability Distribution */}
+            {/* Probability Distribution — uses all 4 signals via rawScore */}
             <div className="pt-2 border-t border-slate-700/20">
               <div className="flex items-center justify-between mb-2">
                 <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wide">Movement Probability</span>
               </div>
-              <div className="flex items-center gap-0.5 h-7 rounded-md overflow-hidden bg-slate-950/50 border border-slate-700/30">
-                {/* Bullish prob */}
-                <div
-                  className="h-full bg-gradient-to-r from-cyan-600 to-cyan-500 transition-all duration-300 flex items-center justify-center min-w-[2px]"
-                  style={{
-                    width: `${Math.max(5, Math.min(95, Math.round(
-                      Math.max(0, data.signals.price_momentum.score) * 100 +
-                      Math.max(0, data.signals.oi_buildup.score) * 80 +
-                      Math.max(0, data.signals.candle_conviction.score) * 60
-                    ) / 240 * 100))}%`,
-                  }}
-                >
-                  <span className="text-[9px] font-bold text-white px-2 truncate whitespace-nowrap">
-                    {Math.round(
-                      Math.max(0, data.signals.price_momentum.score) * 100 +
-                      Math.max(0, data.signals.oi_buildup.score) * 80 +
-                      Math.max(0, data.signals.candle_conviction.score) * 60
-                    ) / 240 * 100}%↑
-                  </span>
-                </div>
-                {/* Bearish prob */}
-                <div
-                  className="h-full bg-gradient-to-l from-orange-600 to-orange-500 transition-all duration-300 flex items-center justify-center ml-auto min-w-[2px]"
-                  style={{
-                    width: `${Math.max(5, Math.min(95, Math.round(
-                      Math.max(0, -data.signals.price_momentum.score) * 100 +
-                      Math.max(0, -data.signals.oi_buildup.score) * 80 +
-                      Math.max(0, -data.signals.candle_conviction.score) * 60
-                    ) / 240 * 100))}%`,
-                  }}
-                >
-                  <span className="text-[9px] font-bold text-white px-2 truncate whitespace-nowrap">
-                    {Math.round(
-                      Math.max(0, -data.signals.price_momentum.score) * 100 +
-                      Math.max(0, -data.signals.oi_buildup.score) * 80 +
-                      Math.max(0, -data.signals.candle_conviction.score) * 60
-                    ) / 240 * 100}%↓
-                  </span>
-                </div>
-              </div>
+              {(() => {
+                const rs = data.rawScore || 0;
+                const bullPct = Math.max(5, Math.min(95, Math.round(((rs + 1) / 2) * 100)));
+                const bearPct = 100 - bullPct;
+                return (
+                  <div className="flex h-7 rounded-md overflow-hidden bg-slate-950/50 border border-slate-700/30">
+                    <div
+                      className="h-full bg-gradient-to-r from-cyan-600 to-cyan-500 transition-all duration-300 flex items-center justify-center"
+                      style={{ width: `${bullPct}%` }}
+                    >
+                      <span className="text-[9px] font-bold text-white px-1 truncate whitespace-nowrap">
+                        {bullPct}%↑
+                      </span>
+                    </div>
+                    <div
+                      className="h-full bg-gradient-to-l from-orange-600 to-orange-500 transition-all duration-300 flex items-center justify-center"
+                      style={{ width: `${bearPct}%` }}
+                    >
+                      <span className="text-[9px] font-bold text-white px-1 truncate whitespace-nowrap">
+                        {bearPct}%↓
+                      </span>
+                    </div>
+                  </div>
+                );
+              })()}
             </div>
 
             {/* Early Signal Detection */}

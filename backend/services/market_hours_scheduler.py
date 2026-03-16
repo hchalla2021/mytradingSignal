@@ -133,7 +133,7 @@ class MarketHoursScheduler:
                 with open('/etc/timezone', 'r') as f:
                     system_tz = f.read().strip()
                     print(f"   System timezone: {system_tz}")
-            except:
+            except Exception:
                 system_tz = "UNKNOWN"
             
             # Method 3: Check current time

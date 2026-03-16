@@ -256,7 +256,7 @@ async def market_websocket(websocket: WebSocket):
         traceback.print_exc()
         try:
             await manager.disconnect(websocket)
-        except:
+        except Exception:
             pass
         return
     
@@ -276,7 +276,7 @@ async def market_websocket(websocket: WebSocket):
             await asyncio.sleep(1)
             try:
                 await manager.disconnect(websocket)
-            except:
+            except Exception:
                 pass
             return
         
@@ -332,7 +332,7 @@ async def market_websocket(websocket: WebSocket):
         try:
             if auth_state_manager.requires_login:
                 status_message = "🔐 Please login to enable live data"
-        except:
+        except Exception:
             pass
         
         # Send connection status to client
@@ -498,7 +498,7 @@ async def market_websocket(websocket: WebSocket):
     finally:
         try:
             heartbeat_task.cancel()
-        except:
+        except Exception:
             pass
         await manager.disconnect(websocket)
         await cache.disconnect()

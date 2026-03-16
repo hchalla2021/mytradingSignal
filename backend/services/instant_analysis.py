@@ -201,7 +201,7 @@ async def fetch_dual_rsi_from_cache(symbol: str, cache, tick_data: Dict[str, Any
         for candle_json in reversed(candles_json):  # Reverse to get oldest first
             try:
                 candles.append(json.loads(candle_json))
-            except:
+            except Exception:
                 continue
         
         if len(candles) < 30:

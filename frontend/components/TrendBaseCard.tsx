@@ -19,11 +19,10 @@ const FACTOR_LABELS: Record<string, string> = {
   rsi:             'RSI',
   vwap:            'VWAP',
   day_change:      'Day Chg',
-  sar:             'SAR',
   momentum:        'Momentum',
 };
 
-const FACTOR_ORDER = ['trend_structure', 'supertrend', 'ema_alignment', 'rsi', 'vwap', 'day_change', 'sar', 'momentum'];
+const FACTOR_ORDER = ['trend_structure', 'supertrend', 'ema_alignment', 'rsi', 'vwap', 'day_change', 'momentum'];
 
 function sig(k?: string)  { return SIG[(k ?? 'NEUTRAL').toUpperCase()] ?? SIG.NEUTRAL; }
 function fmt(n: number)   { return n.toLocaleString('en-IN', { maximumFractionDigits: 0 }); }
@@ -74,8 +73,8 @@ const TrendBaseCard = memo<{ symbol: string; name: string }>(({ symbol, name }) 
 
   // 5m prediction
   const sig5m   = (data.signal_5m ?? 'NEUTRAL').toUpperCase();
-  const isBuy5  = sig5m === 'BUY';
-  const isSell5 = sig5m === 'SELL';
+  const isBuy5  = sig5m === 'BUY' || sig5m === 'STRONG_BUY';
+  const isSell5 = sig5m === 'SELL' || sig5m === 'STRONG_SELL';
   const conf5   = data.confidence_5m ?? data.confidence;
   const dir5    = isBuy5 ? 'LONG' : isSell5 ? 'SHORT' : 'FLAT';
   const dir5Icon  = isBuy5 ? '▲' : isSell5 ? '▼' : '─';
@@ -100,7 +99,7 @@ const TrendBaseCard = memo<{ symbol: string; name: string }>(({ symbol, name }) 
             </span>
           )}
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 px-2 py-1 rounded-md border border-emerald-500/30">
           <span className={`text-[11px] font-bold ${chgPos ? 'text-emerald-400' : 'text-red-400'}`}>
             {chgPos ? '▲' : '▼'} {Math.abs(data.changePercent ?? 0).toFixed(2)}%
           </span>
@@ -165,7 +164,7 @@ const TrendBaseCard = memo<{ symbol: string; name: string }>(({ symbol, name }) 
         {/* ── 8-FACTOR BREAKDOWN (clean horizontal bars) ──────────────── */}
         <div className="bg-slate-800/20 border border-slate-700/30 rounded-lg p-2.5">
           <div className="flex items-center justify-between mb-2">
-            <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">8-Factor Analysis</span>
+            <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">7-Factor Analysis</span>
             <span className={`text-[11px] px-2 py-0.5 rounded-md font-extrabold transition-all duration-500 ${
               (bullCount - bearCount) >= 2
                 ? 'ring-2 ring-emerald-400/70 bg-emerald-500/15 shadow-[0_0_12px_rgba(52,211,153,0.35)]'
