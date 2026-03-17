@@ -744,10 +744,13 @@ export const InstitutionalCompass = memo(() => {
       {/* ── Section header ─────────────────────────────────────────────── */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-5">
         <div>
-          <div className="flex items-center gap-2.5 flex-wrap">
-            <span className="text-base sm:text-lg font-bold text-white tracking-tight">
-              🧭 Institutional Market Compass
-            </span>
+          <div className="relative rounded-xl bg-blue-500/[0.06] border border-emerald-400/25 px-3 sm:px-4 py-2.5 sm:py-3 shadow-sm shadow-blue-500/20">
+            <div className="absolute top-0 left-4 right-4 h-[1px] bg-gradient-to-r from-transparent via-blue-500/30 to-transparent" />
+            <div className="flex items-center gap-2 sm:gap-3 flex-wrap">
+              <span className="w-[3px] h-7 sm:h-9 rounded-full bg-gradient-to-b from-blue-400 to-blue-600 shrink-0 shadow-sm shadow-blue-500/20" />
+              <h2 className="text-[14px] sm:text-[18px] lg:text-[22px] font-extrabold text-white tracking-tight leading-snug">
+                🧭 Institutional Market Compass
+              </h2>
             <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5
                               text-[10px] font-bold uppercase tracking-wider border
                               ${headerBadge.cls}`}>
@@ -762,15 +765,16 @@ export const InstitutionalCompass = memo(() => {
               {headerBadge.label}
             </span>
           </div>
-          <p className="mt-0.5 text-xs text-slate-400">
+          <p className="text-[11px] sm:text-xs text-blue-300 opacity-80 mt-1.5 ml-[15px] sm:ml-[17px] font-semibold tracking-wide leading-relaxed">
             AI-Powered Index &amp; Futures Direction Engine
-            <span className="ml-2 text-[10px] text-slate-600">
+            <span className="ml-1.5 sm:ml-2 text-[10px] sm:text-[11px] text-blue-400/70 font-medium">
               VWAP · EMA · Swing · Futures Premium · RSI · Volume
             </span>
           </p>
+          </div>
         </div>
         <div className="flex flex-col items-end gap-1.5 shrink-0">
-          {ts && <span className="text-[10px] text-slate-600 tabular-nums">Updated {ts}</span>}
+          {ts && <span className="hidden">Updated {ts}</span>}
           {loaded.length > 0 && <SummaryStrip items={loaded} />}
         </div>
       </div>

@@ -603,7 +603,7 @@ const VolumePulseCard = memo<VolumePulseCardProps>(({ symbol, name }) => {
       </div>
 
       {/* ─── FOOTER ──────────────────────────────────────────────────────── */}
-      <div className="px-4 py-1 border-t border-white/5 flex justify-between items-center bg-white/[0.015]">
+      <div className="hidden px-4 py-1 border-t border-white/5 flex justify-between items-center bg-white/[0.015]">
         <div className="flex items-center gap-2">
           <span suppressHydrationWarning className={`w-2 h-2 rounded-full flex-shrink-0 ${isLive ? 'bg-emerald-400 animate-pulse' : 'bg-gray-600'}`} />
           <div className="flex items-center gap-2">

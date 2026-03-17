@@ -500,14 +500,17 @@ const HeaderBar = memo(({ isConnected, lastUpdate }: { isConnected: boolean; las
   const statusLabel = isActive ? 'LIVE' : 'OFFLINE';
 
   return (
-    <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
-      <div>
-        <div className="flex items-center gap-2.5">
-          <span className="text-lg font-black text-white tracking-tight">
-            ⚡ Pure Liquidity Intelligence
-          </span>
-          <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5
-                            text-[9px] font-bold tracking-widest border ${
+    <div className="mb-4 sm:mb-5">
+      <div className="relative rounded-xl bg-cyan-500/[0.06] border border-emerald-400/25 px-3 sm:px-4 py-2.5 sm:py-3 shadow-sm shadow-cyan-500/20">
+        <div className="absolute top-0 left-4 right-4 h-[1px] bg-gradient-to-r from-transparent via-cyan-500/30 to-transparent" />
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-2 sm:gap-3 min-w-0 overflow-hidden">
+            <span className="w-[3px] h-7 sm:h-9 rounded-full bg-gradient-to-b from-cyan-400 to-cyan-600 shrink-0 shadow-sm shadow-cyan-500/20" />
+            <h2 className="text-[14px] sm:text-[18px] lg:text-[22px] font-extrabold text-white tracking-tight leading-snug truncate">
+              ⚡ Market Liquidity
+            </h2>
+            <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5
+                              text-[9px] font-bold tracking-widest border shrink-0 ${
                             isActive
                               ? 'bg-cyan-500/15 text-cyan-300 border-cyan-500/40'
                               : 'bg-slate-700/40 text-slate-500 border-slate-700/40'
@@ -515,16 +518,12 @@ const HeaderBar = memo(({ isConnected, lastUpdate }: { isConnected: boolean; las
             <span className={`w-1.5 h-1.5 rounded-full ${statusDot}`} />
             {statusLabel}
           </span>
+          </div>
+          <p className="text-[11px] sm:text-xs text-cyan-400 opacity-60 mt-1.5 ml-[15px] sm:ml-[17px] font-medium tracking-wide">
+            Options Flow · PCR Sentiment · OI Analysis · Smart Money Positioning
+          </p>
         </div>
-        <p className="mt-0.5 text-[11px] text-slate-500 tracking-wide">
-          Options Flow · PCR Sentiment · OI Analysis · Smart Money Positioning
-        </p>
       </div>
-      {lastUpdate && (
-        <span className="text-[9px] text-slate-600 font-mono">
-          {new Date(lastUpdate).toLocaleTimeString('en-IN', { hour12: false })}
-        </span>
-      )}
     </div>
   );
 });
@@ -550,34 +549,34 @@ const SummaryStrip = memo(({ data }: { data: { NIFTY: LiquidityIndex | null; BAN
   const pcrDisplay = avgPCR.length ? (avgPCR.reduce((a, b) => a + b, 0) / avgPCR.length).toFixed(2) : '—';
 
   return (
-    <div className="mb-4 rounded-xl bg-slate-800/50 border border-slate-700/30 px-4 py-2.5
-                    flex flex-wrap items-center gap-4">
+    <div className="mb-4 rounded-xl bg-emerald-950/40 border border-emerald-500/20 px-4 py-3
+                    flex flex-wrap items-center gap-4 shadow-sm shadow-emerald-500/5">
       <div className="flex items-center gap-2">
-        <span className="text-[9px] text-slate-500 uppercase tracking-wider">Market Liquidity</span>
-        <span className={`text-xs font-black ${biasColor}`}>{marketBias}</span>
+        <span className="text-[10px] text-emerald-400/70 uppercase tracking-wider font-semibold">Market Liquidity</span>
+        <span className={`text-sm font-black ${biasColor}`}>{marketBias}</span>
       </div>
-      <div className="w-px h-4 bg-slate-700/50" />
+      <div className="w-px h-4 bg-emerald-500/20" />
       <div className="flex items-center gap-2">
-        <span className="text-[9px] text-slate-500 uppercase tracking-wider">Avg Confidence</span>
-        <span className="text-xs font-bold text-white">{avgConf}%</span>
+        <span className="text-[10px] text-emerald-400/70 uppercase tracking-wider font-semibold">Avg Confidence</span>
+        <span className="text-sm font-bold text-emerald-100">{avgConf}%</span>
       </div>
-      <div className="w-px h-4 bg-slate-700/50" />
+      <div className="w-px h-4 bg-emerald-500/20" />
       <div className="flex items-center gap-2">
-        <span className="text-[9px] text-slate-500 uppercase tracking-wider">Avg PCR</span>
-        <span className={`text-xs font-bold ${pcrColor(avgPCR.length ? parseFloat(pcrDisplay) : null)}`}>
+        <span className="text-[10px] text-emerald-400/70 uppercase tracking-wider font-semibold">Avg PCR</span>
+        <span className={`text-sm font-bold ${pcrColor(avgPCR.length ? parseFloat(pcrDisplay) : null)}`}>
           {pcrDisplay}
         </span>
       </div>
-      <div className="w-px h-4 bg-slate-700/50" />
+      <div className="w-px h-4 bg-emerald-500/20" />
       <div className="flex items-center gap-4 ml-auto">
         {(['NIFTY', 'BANKNIFTY', 'SENSEX'] as const).map(sym => {
           const d = data[sym];
           if (!d) return null;
-          const dot = d.direction === 'BULLISH' ? '🔵' : d.direction === 'BEARISH' ? '🔴' : '⚫';
+          const dot = d.direction === 'BULLISH' ? '🟢' : d.direction === 'BEARISH' ? '🔴' : '⚪';
           return (
-            <span key={sym} className="text-[10px] text-slate-400">
-              {dot} <span className="font-semibold">{sym.replace('BANKNIFTY','BNF')}</span>
-              <span className="ml-1 text-[9px] text-slate-600">{d.confidence}%</span>
+            <span key={sym} className="text-[11px] text-emerald-200/80">
+              {dot} <span className="font-bold">{sym.replace('BANKNIFTY','BNF')}</span>
+              <span className="ml-1 text-[10px] text-emerald-300/60 font-semibold">{d.confidence}%</span>
             </span>
           );
         })}

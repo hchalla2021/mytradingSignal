@@ -57,6 +57,7 @@ const OIMomentumCard = dynamic(() => import('@/components/OIMomentumCard'), {
 const VolumePulseCard = dynamic(() => import('@/components/VolumePulseCard'), { ssr: false });
 const TrendBaseCard = dynamic(() => import('@/components/TrendBaseCard'), { ssr: false });
 const CandleIntentCard = dynamic(() => import('@/components/CandleIntentCard'), { ssr: false });
+const SectionTitle = dynamic(() => import('@/components/SectionTitle'), { ssr: false });
 const TradeSupportResistance = dynamic(() => import('@/components/TradeSupportResistance'), { ssr: false });
 const InstitutionalMarketView = dynamic(() => import('@/components/InstitutionalMarketView'), { ssr: false });
 const InstitutionalCompass = dynamic(() => import('@/components/InstitutionalCompass'), {
@@ -276,7 +277,7 @@ export default function Home() {
       }
 
       // ═══════════════════════════════════════════════════════════════
-      // SECTION 2: Smart Money Flow • Order Structure Intelligence
+      // SECTION 2: Smart Money • Order Logic
       // ═══════════════════════════════════════════════════════════════
       sectionCount++;
       const bosBullish = ind.bos_bullish === true;
@@ -701,10 +702,10 @@ export default function Home() {
         <div className="rounded-2xl border border-white/[0.09] bg-[#06090e] overflow-hidden shadow-2xl shadow-black/60">
 
           {/* Header */}
-          <div className="px-4 sm:px-5 py-2.5 flex flex-wrap items-center gap-2 sm:gap-3 bg-white/[0.015] border-b border-white/[0.06]">
-            <div className="flex items-center gap-2.5">
-              <span className="w-[3px] h-5 rounded-full bg-gradient-to-b from-teal-300 to-teal-600 shadow-[0_0_8px_2px] shadow-teal-500/40" />
-              <span className="text-xs sm:text-sm font-black text-white tracking-tight">Overall Market Outlook</span>
+          <div className="px-3 sm:px-5 py-3 flex items-center gap-1.5 sm:gap-3 bg-teal-500/[0.04] rounded-xl border border-emerald-400/25">
+            <div className="flex items-center gap-1.5 sm:gap-2 min-w-0">
+              <span className="w-[3px] h-7 sm:h-9 rounded-full bg-gradient-to-b from-teal-300 to-teal-600 shrink-0 shadow-sm shadow-teal-500/20" />
+              <h2 className="text-[12px] sm:text-[18px] lg:text-[22px] font-extrabold text-white tracking-tight leading-snug whitespace-nowrap">Overall Market Outlook</h2>
             </div>
             <IndiaVIXBadge
               value={vixData.value}
@@ -822,21 +823,20 @@ export default function Home() {
         <div className="border-2 border-emerald-500/30 rounded-2xl p-3 sm:p-4 bg-gradient-to-br from-emerald-950/20 via-dark-card/50 to-dark-elevated/40 backdrop-blur-sm shadow-xl shadow-emerald-500/10">
           {/* Section Header */}
           <div className="flex flex-col gap-3 mb-3 sm:mb-4">
-            {/* Main Header */}
-            <div className="flex items-center gap-2 sm:gap-3">
-              <span className="w-1.5 h-6 sm:h-7 bg-gradient-to-b from-bullish to-bullish-dark rounded-full shadow-lg shadow-bullish/30" />
-              <h2 className="text-base sm:text-xl lg:text-2xl font-bold text-dark-text tracking-tight whitespace-nowrap">
-                Live Market Indices
-              </h2>
-              <span className="relative px-2 sm:px-3 py-1 text-[9px] sm:text-xs font-bold bg-gradient-to-r from-accent via-accent-secondary to-accent rounded-lg shadow-xl animate-pulse-slow border border-accent/30 whitespace-nowrap">
-                <span className="relative z-10 flex items-center gap-1">
-                  <span className="text-xs sm:text-sm">🤖</span>
-                  <span className="bg-gradient-to-r from-white via-cyan-100 to-white bg-clip-text text-transparent font-extrabold">AI POWERED</span>
-                  <span className="text-xs sm:text-sm">✨</span>
+            <SectionTitle
+              title="Live Market Indices"
+              accentColor="emerald"
+              badge={
+                <span className="relative inline-flex items-center px-2 sm:px-2.5 py-0.5 sm:py-1 text-[9px] sm:text-[10px] font-bold bg-gradient-to-r from-accent via-accent-secondary to-accent rounded-md shadow-lg animate-pulse-slow border border-accent/30 whitespace-nowrap leading-none align-middle">
+                  <span className="relative z-10 inline-flex items-center gap-0.5">
+                    <span>🤖</span>
+                    <span className="bg-gradient-to-r from-white via-cyan-100 to-white bg-clip-text text-transparent font-extrabold">AI POWERED</span>
+                    <span>✨</span>
+                  </span>
+                  <span className="absolute inset-0 bg-gradient-to-r from-accent via-accent-secondary to-accent blur-xl opacity-40 rounded-md"></span>
                 </span>
-                <span className="absolute inset-0 bg-gradient-to-r from-accent via-accent-secondary to-accent blur-xl opacity-40 rounded-lg"></span>
-              </span>
-            </div>
+              }
+            />
 
             {/* Trading Parameters - Premium Section */}
             <div className="p-1.5 sm:p-3 bg-gradient-to-r from-slate-800/40 via-slate-900/40 to-slate-800/40 rounded-lg sm:rounded-xl border border-slate-700/50 shadow-lg">
@@ -917,12 +917,10 @@ export default function Home() {
         <div className="mt-4 sm:mt-6 border-2 border-purple-500/30 rounded-2xl p-3 sm:p-4 bg-gradient-to-br from-purple-950/20 via-dark-card/50 to-dark-elevated/40 backdrop-blur-sm shadow-xl shadow-purple-500/10">
           {/* Section Header */}
           <div className="flex flex-col gap-2 mb-3 sm:mb-4">
-            <div className="flex items-center gap-2 sm:gap-3">
-              <span className="w-1.5 h-6 sm:h-7 bg-gradient-to-b from-purple-400 to-purple-500 rounded-full shadow-lg shadow-purple-500/30" />
-              <h2 className="text-base sm:text-xl lg:text-2xl font-bold text-dark-text tracking-tight whitespace-nowrap">
-                OI Momentum Signals
-              </h2>
-            </div>
+            <SectionTitle
+              title="OI Momentum Signals"
+              accentColor="purple"
+            />
             
             {/* Strategy Info - Compact */}
             <div className="ml-4 sm:ml-5 p-2 sm:p-3 bg-slate-900/40 rounded-lg border border-slate-700/30">
@@ -968,19 +966,15 @@ export default function Home() {
           </div>
         </div>
 
-        {/* P4: Smart Money Flow • Order Structure Intelligence */}
+        {/* P4: Smart Money • Order Logic */}
         <div className="mt-6 sm:mt-6 border-2 border-purple-600/40 rounded-2xl p-3 sm:p-4 bg-gradient-to-br from-purple-950/20 via-dark-card/50 to-dark-elevated/40 backdrop-blur-sm shadow-xl shadow-purple-600/15">
           {/* Section Header */}
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-3 sm:mb-4">
-            <div>
-              <h2 className="text-lg sm:text-xl lg:text-2xl font-bold text-dark-text flex items-center gap-3 tracking-tight">
-                <span className="w-1.5 h-6 sm:h-7 bg-gradient-to-b from-purple-400 to-purple-500 rounded-full shadow-lg shadow-purple-500/40" />
-                Smart Money Flow • Order Structure Intelligence
-              </h2>
-              <p className="text-dark-tertiary text-xs sm:text-sm mt-1.5 ml-4 sm:ml-5 font-medium tracking-wide">
-                Order Flow • Institutional Positioning • Fair Value Gaps • Order Blocks • Market Imbalances
-              </p>
-            </div>
+            <SectionTitle
+              title="Smart Money • Order Logic"
+              subtitle="Order Flow • Institutional Positioning • Fair Value Gaps • Order Blocks • Market Imbalances"
+              accentColor="purple"
+            />
           </div>
           
           <div className="grid grid-cols-1 lg:grid-cols-2 2xl:grid-cols-3 gap-3">
@@ -996,13 +990,11 @@ export default function Home() {
         {/* P6: Trend Base Section */}
         <div className="mt-6 sm:mt-6">
           <div className="flex flex-col gap-1 mb-3 sm:mb-4">
-            <h3 className="text-base sm:text-lg lg:text-xl font-bold text-dark-text flex items-center gap-3 tracking-tight">
-              <span className="w-1.5 h-5 sm:h-6 bg-gradient-to-b from-green-500 to-green-600 rounded-full" />
-              Trend Base (Higher-Low Structure)
-            </h3>
-            <p className="text-dark-tertiary text-[11px] sm:text-xs ml-4 sm:ml-5">
-              Live swing structure · 8-factor analysis · 5-min prediction
-            </p>
+            <SectionTitle
+              title="Trend Base (Higher-Low Structure)"
+              subtitle="Live swing structure · 8-factor analysis · 5-min prediction"
+              accentColor="green"
+            />
           </div>
           <div className="grid grid-cols-1 lg:grid-cols-2 2xl:grid-cols-3 gap-3">
             <TrendBaseCard symbol="NIFTY" name="NIFTY 50" />
@@ -1014,15 +1006,11 @@ export default function Home() {
         {/* P7: 🎯 TRADE ZONES – Buy/Sell Signals (Multi-factor, dual timeframe) */}
         <div className="mt-6 sm:mt-6 border-2 border-emerald-600/40 rounded-2xl p-3 sm:p-4 bg-gradient-to-br from-emerald-950/20 via-dark-card/50 to-dark-elevated/40 backdrop-blur-sm shadow-xl shadow-emerald-600/15">
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-3 sm:mb-4">
-            <div>
-              <h2 className="text-lg sm:text-xl lg:text-2xl font-bold text-dark-text flex items-center gap-3 tracking-tight">
-                <span className="w-1.5 h-6 sm:h-7 bg-gradient-to-b from-emerald-400 to-emerald-500 rounded-full shadow-lg shadow-emerald-500/40" />
-                Trade Zones • Buy/Sell Signals
-              </h2>
-              <p className="text-dark-tertiary text-xs sm:text-sm mt-1.5 ml-4 sm:ml-5 font-medium tracking-wide">
-                5min Entry + 15min Trend • 8-Factor Scoring • Live Confidence • 5-Min Prediction
-              </p>
-            </div>
+            <SectionTitle
+              title="Trade Zones • Buy/Sell Signals"
+              subtitle="5min Entry + 15min Trend • 8-Factor Scoring • Live Confidence • 5-Min Prediction"
+              accentColor="emerald"
+            />
           </div>
           
           <div className="grid grid-cols-1 lg:grid-cols-2 2xl:grid-cols-3 gap-3">
@@ -1053,15 +1041,11 @@ export default function Home() {
         {/* P8: Volume Pulse Section */}
         <div className="mt-6 sm:mt-6 border-2 border-emerald-500/30 rounded-2xl p-3 sm:p-4 bg-gradient-to-br from-emerald-950/20 via-dark-card/50 to-dark-elevated/40 backdrop-blur-sm shadow-xl shadow-emerald-500/10">
           <div className="flex flex-col gap-3 mb-3 sm:mb-4">
-            <div className="flex items-center gap-3">
-              <h3 className="text-base sm:text-lg lg:text-xl font-bold text-dark-text flex items-center gap-3 tracking-tight">
-                <span className="w-1.5 h-5 sm:h-6 bg-gradient-to-b from-emerald-500 to-emerald-600 rounded-full shadow-lg shadow-emerald-500/30" />
-                Volume Pulse (Candle Volume)
-              </h3>
-            </div>
-            <p className="text-dark-tertiary text-xs sm:text-sm ml-4 sm:ml-5 font-medium tracking-wide">
-              Real-time buying/selling pressure • Green vs Red candle volume tracking
-            </p>
+            <SectionTitle
+              title="Volume Pulse (Candle Volume)"
+              subtitle="Real-time buying/selling pressure • Green vs Red candle volume tracking"
+              accentColor="emerald"
+            />
           </div>
 
           {/* Volume Pulse Cards Grid */}
@@ -1075,13 +1059,11 @@ export default function Home() {
         {/* P9: Candle Intent Section */}
         <div className="mt-6 sm:mt-6">
           <div className="flex flex-col gap-2 mb-4 px-2 sm:px-0">
-            <h3 className="text-base sm:text-lg lg:text-xl font-bold text-dark-text flex items-center gap-3 tracking-tight">
-              <span className="w-1.5 h-5 sm:h-6 bg-gradient-to-b from-teal-500 to-teal-600 rounded-full shadow-lg shadow-teal-500/30" />
-              Candle Intent (Candle Structure)
-            </h3>
-            <p className="text-dark-tertiary text-xs sm:text-sm ml-4 sm:ml-5 font-medium tracking-wide">
-              Live candle pattern analysis • Wick dominance signals • Volume-price efficiency
-            </p>
+            <SectionTitle
+              title="Candle Intent (Candle Structure)"
+              subtitle="Live candle pattern analysis • Wick dominance signals • Volume-price efficiency"
+              accentColor="teal"
+            />
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 sm:gap-4">
             <CandleIntentCard symbol="NIFTY" name="NIFTY 50" />
@@ -1098,7 +1080,7 @@ export default function Home() {
           <div className="flex items-start gap-4">
             <div className="text-3xl flex-shrink-0">📊</div>
             <div className="flex-1">
-              <h3 className="text-base font-bold text-white mb-2 flex items-center gap-2.5">
+              <h3 className="text-[17px] sm:text-[19px] lg:text-[22px] font-bold text-slate-50 tracking-[-0.01em] mb-2 flex items-center gap-2.5">
                 LIVE Market Data Analysis
                 <span className={`text-xs px-2.5 py-1 rounded-full font-extrabold shadow-md ${
                   marketStatus === 'LIVE' 

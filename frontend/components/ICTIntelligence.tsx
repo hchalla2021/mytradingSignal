@@ -437,14 +437,17 @@ const HeaderBar = memo(({ isConnected, lastUpdate }: { isConnected: boolean; las
   const statusLabel = isActive ? 'LIVE' : 'OFFLINE';
 
   return (
-    <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
-      <div>
-        <div className="flex items-center gap-2.5">
-          <span className="text-lg font-black text-white tracking-tight">
-            🏦 ICT Smart Money Intelligence
-          </span>
-          <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5
-                            text-[9px] font-bold tracking-widest border ${
+    <div className="mb-4 sm:mb-5">
+      <div className="relative rounded-xl bg-amber-500/[0.06] border border-emerald-400/25 px-3 sm:px-4 py-2.5 sm:py-3 shadow-sm shadow-amber-500/20">
+        <div className="absolute top-0 left-4 right-4 h-[1px] bg-gradient-to-r from-transparent via-amber-500/30 to-transparent" />
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2 sm:gap-3 min-w-0 overflow-hidden">
+            <span className="w-[3px] h-7 sm:h-9 rounded-full bg-gradient-to-b from-amber-400 to-amber-600 shrink-0 shadow-sm shadow-amber-500/20" />
+            <h2 className="text-[14px] sm:text-[18px] lg:text-[22px] font-extrabold text-white tracking-tight leading-snug truncate">
+              🏦 ICT Bias
+            </h2>
+            <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5
+                              text-[9px] font-bold tracking-widest border shrink-0 ${
                             isActive
                               ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/40'
                               : 'bg-slate-700/40 text-slate-500 border-slate-700/40'
@@ -452,16 +455,12 @@ const HeaderBar = memo(({ isConnected, lastUpdate }: { isConnected: boolean; las
             <span className={`w-1.5 h-1.5 rounded-full ${statusDot}`} />
             {statusLabel}
           </span>
+          </div>
         </div>
-        <p className="mt-0.5 text-[11px] text-slate-500 tracking-wide">
+        <p className="text-[10px] sm:text-xs text-amber-400 opacity-60 mt-1.5 ml-[15px] sm:ml-[17px] font-medium tracking-wide leading-relaxed">
           Order Blocks · Fair Value Gaps · Market Structure · Liquidity Sweeps · Displacement · Smart Money
         </p>
       </div>
-      {lastUpdate && (
-        <span className="text-[9px] text-slate-600 font-mono">
-          {new Date(lastUpdate).toLocaleTimeString('en-IN', { hour12: false })}
-        </span>
-      )}
     </div>
   );
 });
@@ -486,34 +485,34 @@ const SummaryStrip = memo(({ data }: { data: { NIFTY: ICTIndex | null; BANKNIFTY
   const avgGrade = indices.map(x => x.ictSetup.grade).join(' / ');
 
   return (
-    <div className="mb-3 rounded-xl bg-slate-800/50 border border-slate-700/30 px-4 py-2
-                    flex flex-wrap items-center gap-4">
+    <div className="mb-3 rounded-xl bg-emerald-950/40 border border-emerald-500/20 px-4 py-3
+                    flex flex-wrap items-center gap-4 shadow-sm shadow-emerald-500/5">
       <div className="flex items-center gap-2">
-        <span className="text-[9px] text-slate-500 uppercase tracking-wider">ICT Bias</span>
-        <span className={`text-xs font-black ${biasColor}`}>{marketBias}</span>
+        <span className="text-[10px] text-emerald-400/70 uppercase tracking-wider font-semibold">ICT Bias</span>
+        <span className={`text-sm font-black ${biasColor}`}>{marketBias}</span>
       </div>
-      <div className="w-px h-4 bg-slate-700/50" />
+      <div className="w-px h-4 bg-emerald-500/20" />
       <div className="flex items-center gap-2">
-        <span className="text-[9px] text-slate-500 uppercase tracking-wider">Confidence</span>
-        <span className="text-xs font-bold text-white">{avgConf}%</span>
+        <span className="text-[10px] text-emerald-400/70 uppercase tracking-wider font-semibold">Confidence</span>
+        <span className="text-sm font-bold text-emerald-100">{avgConf}%</span>
       </div>
-      <div className="w-px h-4 bg-slate-700/50" />
+      <div className="w-px h-4 bg-emerald-500/20" />
       <div className="flex items-center gap-2">
-        <span className="text-[9px] text-slate-500 uppercase tracking-wider">Grades</span>
-        <span className="text-xs font-bold text-amber-400">{avgGrade}</span>
+        <span className="text-[10px] text-emerald-400/70 uppercase tracking-wider font-semibold">Grades</span>
+        <span className="text-sm font-bold text-amber-400">{avgGrade}</span>
       </div>
-      <div className="w-px h-4 bg-slate-700/50" />
+      <div className="w-px h-4 bg-emerald-500/20" />
       <div className="flex items-center gap-4 ml-auto">
         {(['NIFTY', 'BANKNIFTY', 'SENSEX'] as const).map(sym => {
           const d = data[sym];
           if (!d) return null;
-          const icon = d.direction === 'BULLISH' ? '🟢' : d.direction === 'BEARISH' ? '🔴' : '⚫';
+          const icon = d.direction === 'BULLISH' ? '🟢' : d.direction === 'BEARISH' ? '🔴' : '⚪';
           const signal = d.direction === 'BULLISH' ? 'BUY' : d.direction === 'BEARISH' ? 'SELL' : 'WAIT';
           return (
-            <span key={sym} className="text-[10px] text-slate-400">
-              {icon} <span className="font-semibold">{sym.replace('BANKNIFTY', 'BNF')}</span>
-              <span className={`ml-1 text-[9px] font-bold ${
-                signal === 'BUY' ? 'text-emerald-400' : signal === 'SELL' ? 'text-red-400' : 'text-slate-500'
+            <span key={sym} className="text-[11px] text-emerald-200/80">
+              {icon} <span className="font-bold">{sym.replace('BANKNIFTY', 'BNF')}</span>
+              <span className={`ml-1 text-[10px] font-bold ${
+                signal === 'BUY' ? 'text-emerald-400' : signal === 'SELL' ? 'text-red-400' : 'text-emerald-300/50'
               }`}>{signal}</span>
             </span>
           );

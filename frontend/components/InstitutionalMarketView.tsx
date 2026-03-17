@@ -30,7 +30,7 @@ interface InstitutionalMarketViewProps {
 }
 
 /**
- * Smart Money Flow • Order Structure Intelligence
+ * Smart Money • Order Logic
  * LIVE Data version - Fetches real-time order flow, fair value gaps, order blocks, market imbalances
  * 
  * Shows: Order Flow + Institutional Positioning + FVG + Order Blocks + Market Imbalances
@@ -318,7 +318,33 @@ const InstitutionalMarketView = memo<InstitutionalMarketViewProps>(({ symbol, ma
     );
   }
 
-  if (!data) return null;
+  if (!data) {
+    return (
+      <div className="relative rounded-2xl overflow-hidden border border-slate-700/30 shadow-lg backdrop-blur-xl bg-[#0b0f1a] min-h-[420px]">
+        <div className="absolute top-0 left-0 right-0 h-px bg-gradient-to-r from-transparent via-white/25 to-transparent pointer-events-none" />
+        <div className="relative px-4 py-3 flex items-center justify-between border-b border-white/[0.05]">
+          <div>
+            <p className="text-[9px] text-slate-500 uppercase tracking-[0.18em] font-medium">Smart Money Flow</p>
+            <p className="text-[11px] font-semibold text-slate-300 mt-0.5 tracking-wide">Order Structure Intelligence</p>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="rounded-lg border border-slate-600/60 bg-slate-950/30 px-2.5 py-1.5 text-sm font-bold text-white">{symbol}</span>
+          </div>
+        </div>
+        <div className="px-4 py-8 space-y-3">
+          <div className="h-8 bg-white/4 rounded-lg animate-pulse" />
+          <div className="h-6 bg-white/4 rounded-lg animate-pulse w-3/4" />
+          <div className="grid grid-cols-2 gap-1.5">
+            <div className="h-16 bg-white/4 rounded-lg animate-pulse" />
+            <div className="h-16 bg-white/4 rounded-lg animate-pulse" />
+            <div className="h-16 bg-white/4 rounded-lg animate-pulse" />
+            <div className="h-16 bg-white/4 rounded-lg animate-pulse" />
+          </div>
+          <div className="h-24 bg-white/4 rounded-lg animate-pulse" />
+        </div>
+      </div>
+    );
+  }
 
   const { signal, signalColor, confidence, symbol: symbolName } = signalAnalysis;
 
@@ -644,17 +670,15 @@ const InstitutionalMarketView = memo<InstitutionalMarketViewProps>(({ symbol, ma
                   </div>
                 </div>
 
-                {/* Early Signal Detection */}
-                {(adjConf >= 75 || (confirmCount >= 3)) && (
-                  <div className="pt-2 border-t border-gray-700/20">
-                    <span suppressHydrationWarning className="text-[9px] font-bold text-amber-400 uppercase tracking-wide">
-                      ⚡ {adjConf >= 85 ? 'STRONG' : 'CONFIRMED'} {predDir} Signal Detected
-                    </span>
-                  </div>
-                )}
+                {/* Early Signal Detection - always rendered to prevent layout shift */}
+                <div className={`pt-2 border-t border-gray-700/20 transition-opacity duration-300 ${(adjConf >= 75 || (confirmCount >= 3)) ? 'opacity-100' : 'opacity-0 h-0 overflow-hidden pt-0 border-t-0'}`}>
+                  <span suppressHydrationWarning className="text-[9px] font-bold text-amber-400 uppercase tracking-wide">
+                    ⚡ {adjConf >= 85 ? 'STRONG' : 'CONFIRMED'} {predDir} Signal Detected
+                  </span>
+                </div>
 
-                {/* Structure Confirmation Summary */}
-                <div className="rounded-lg bg-gray-900/20 px-2.5 py-2 border border-gray-700/20">
+                {/* Structure Confirmation Summary - fixed min-height to prevent layout shift */}
+                <div className="rounded-lg bg-gray-900/20 px-2.5 py-2 border border-gray-700/20 min-h-[52px]">
                   <p className="text-[9px] text-gray-500 font-bold uppercase tracking-wide mb-1">Confirmations</p>
                   <div className="flex flex-wrap gap-1">
                     {confirms.length > 0 ? (
