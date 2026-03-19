@@ -9,7 +9,7 @@ import { useOverallMarketOutlook } from '@/hooks/useOverallMarketOutlook';
 import { useAuth } from '@/hooks/useAuth';
 import { useLiquiditySocket, type LiquidityIndex } from '@/hooks/useLiquiditySocket';
 import { useCompassSocket, type CompassIndex } from '@/hooks/useCompassSocket';
-import { useOIMomentumLive, type OIMomentumLiveData } from '@/hooks/useOIMomentumLive';
+import { useOIAnalysis, type OIAnalysisData } from '@/hooks/useOIAnalysis';
 import { useICTSocket, type ICTIndex } from '@/hooks/useICTSocket';
 import { useIndiaVIX } from '@/hooks/useIndiaVIX';
 
@@ -44,10 +44,10 @@ const IndexCard = dynamic(() => import('@/components/IndexCard'), {
   )
 });
 
-const OIMomentumCard = dynamic(() => import('@/components/OIMomentumCard'), { 
+const OIAnalysisCard = dynamic(() => import('@/components/OIAnalysisCard'), { 
   ssr: false,
   loading: () => (
-    <div className="bg-dark-surface/60 rounded-xl p-6 animate-pulse border border-emerald-500/20">
+    <div className="bg-dark-surface/60 rounded-xl p-6 animate-pulse border border-cyan-500/20">
       <div className="h-6 bg-gray-700 rounded mb-4"></div>
       <div className="h-4 bg-gray-700 rounded mb-2"></div>
       <div className="h-4 bg-gray-700 rounded w-3/4"></div>
@@ -132,10 +132,10 @@ export default function Home() {
   const { liquidityData } = useLiquiditySocket();
   const { compassData } = useCompassSocket();
   const { ictData } = useICTSocket();
-  // OI Momentum — one hook per symbol, shares global WS + in-memory cache
-  const { data: oiNifty }     = useOIMomentumLive('NIFTY');
-  const { data: oiBankNifty } = useOIMomentumLive('BANKNIFTY');
-  const { data: oiSensex }    = useOIMomentumLive('SENSEX');
+  // Advanced OI Analysis — one hook per symbol, REST polling + in-memory cache
+  const { data: oiNifty }     = useOIAnalysis('NIFTY');
+  const { data: oiBankNifty } = useOIAnalysis('BANKNIFTY');
+  const { data: oiSensex }    = useOIAnalysis('SENSEX');
   const [currentTime, setCurrentTime] = useState<string>('');
   const [updateCounter, setUpdateCounter] = useState(0);
 
@@ -231,7 +231,7 @@ export default function Home() {
       symbol: string,
       liquidityIndex: LiquidityIndex | null,
       compassIndex: CompassIndex | null,
-      oiData: OIMomentumLiveData | null,
+      oiData: OIAnalysisData | null,
       ictIndex: ICTIndex | null,
     ) => {
       const ind = analysisData?.indicators || {};
@@ -451,18 +451,18 @@ export default function Home() {
       }
 
       // ═══════════════════════════════════════════════════════════════
-      // SECTION 9: OI Momentum Signals
+      // SECTION 9: Advanced OI Analysis
       // STRONG_BUY / BUY / NEUTRAL / SELL / STRONG_SELL / NO_SIGNAL
-      // Sourced from the dedicated OI momentum engine (separate API).
+      // Sourced from the multi-factor OI analysis engine (separate API).
       // ═══════════════════════════════════════════════════════════════
       sectionCount++;
       if (oiData) {
         const oiConf = Math.max(1, Math.min(99, oiData.confidence));
-        const oiSig  = (oiData.final_signal ?? '').toUpperCase();
-        if (oiSig === 'STRONG_BUY' || oiSig === 'BUY' || oiSig === 'BULLISH') {
+        const oiSig  = (oiData.signal ?? '').toUpperCase();
+        if (oiSig === 'STRONG_BUY' || oiSig === 'BUY') {
           buyCount++;
           totalConfidenceSum += oiConf;
-        } else if (oiSig === 'STRONG_SELL' || oiSig === 'SELL' || oiSig === 'BEARISH') {
+        } else if (oiSig === 'STRONG_SELL' || oiSig === 'SELL') {
           sellCount++;
           totalConfidenceSum += oiConf;
         } else {
@@ -517,14 +517,12 @@ export default function Home() {
         p5ConfSum += cp5mConf; p5N++;
       }
 
-      // F5 (S9): OI Momentum 5-min signal (STRONG_BUY / BUY / SELL / STRONG_SELL)
-      if (oiData) {
-        const oi5mSig = (oiData.signal_5m ?? '').toUpperCase();
-        const oiConf5 = Math.max(20, Math.min(95, oiData.confidence));
-        const oiF = oi5mSig === 'STRONG_BUY'  ?  2
-                  : (oi5mSig === 'BUY' || oi5mSig === 'BULLISH')  ?  1
-                  : oi5mSig === 'STRONG_SELL'  ? -2
-                  : (oi5mSig === 'SELL' || oi5mSig === 'BEARISH') ? -1 : 0;
+      // F5 (S9): Advanced OI Analysis 5-min prediction
+      if (oiData && oiData.prediction_5m) {
+        const oi5mDir = (oiData.prediction_5m.direction ?? '').toUpperCase();
+        const oiConf5 = Math.max(20, Math.min(95, oiData.prediction_5m.probability ?? 50));
+        const oiF = oi5mDir === 'UP' ? (oiConf5 >= 70 ? 2 : 1)
+                  : oi5mDir === 'DOWN' ? (oiConf5 >= 70 ? -2 : -1) : 0;
         if (oiF > 0) p5Buy += oiF; else if (oiF < 0) p5Sell += Math.abs(oiF);
         p5ConfSum += oiConf5; p5N++;
       }
@@ -910,53 +908,54 @@ export default function Home() {
         {/* P1: ⚡ PURE LIQUIDITY INTELLIGENCE */}
         <LiquidityIntelligence />
 
-        {/* P2: 🏦 ICT SMART MONEY INTELLIGENCE */}
+        {/* P2: Trend Base Section */}
+        <div className="mt-6 sm:mt-6">
+          <div className="flex flex-col gap-1 mb-3 sm:mb-4">
+            <SectionTitle
+              title="Trend Base (Higher-Low Structure)"
+              subtitle="Live swing structure · 8-factor analysis · 5-min prediction"
+              accentColor="green"
+            />
+          </div>
+          <div className="grid grid-cols-1 lg:grid-cols-2 2xl:grid-cols-3 gap-3">
+            <TrendBaseCard symbol="NIFTY" name="NIFTY 50" />
+            <TrendBaseCard symbol="BANKNIFTY" name="BANK NIFTY" />
+            <TrendBaseCard symbol="SENSEX" name="SENSEX" />
+          </div>
+        </div>
+
+        {/* P3: 🏦 ICT SMART MONEY INTELLIGENCE */}
         <ICTIntelligence />
 
-        {/* P3: 🔮 OI MOMENTUM - Pure Data Buy/Sell Signals */}
-        <div className="mt-4 sm:mt-6 border-2 border-purple-500/30 rounded-2xl p-3 sm:p-4 bg-gradient-to-br from-purple-950/20 via-dark-card/50 to-dark-elevated/40 backdrop-blur-sm shadow-xl shadow-purple-500/10">
-          {/* Section Header */}
-          <div className="flex flex-col gap-2 mb-3 sm:mb-4">
+        {/* P3: � ADVANCED OI ANALYSIS - 8-Factor Institutional Flow Intelligence */}
+        <div className="mt-4 sm:mt-6 border border-cyan-500/25 rounded-2xl p-3 sm:p-4 bg-gradient-to-br from-cyan-950/15 via-dark-card/40 to-dark-elevated/30 backdrop-blur-sm shadow-lg shadow-cyan-500/5">
+          <div className="flex items-center justify-between mb-3">
             <SectionTitle
-              title="OI Momentum Signals"
-              accentColor="purple"
+              title="Advanced OI Analysis"
+              accentColor="cyan"
             />
-            
-            {/* Strategy Info - Compact */}
-            <div className="ml-4 sm:ml-5 p-2 sm:p-3 bg-slate-900/40 rounded-lg border border-slate-700/30">
-              <div className="flex flex-wrap items-center gap-1 sm:gap-2 text-[9px] sm:text-xs">
-                <span className="px-2 py-1 bg-purple-500/20 border border-purple-500/30 rounded-md text-purple-200 font-bold">
-                  5m Entry Timing
-                </span>
-                <span className="text-slate-600">+</span>
-                <span className="px-2 py-1 bg-indigo-500/20 border border-indigo-500/30 rounded-md text-indigo-200 font-bold">
-                  15m Trend Direction
-                </span>
-                <span className="text-slate-600">=</span>
-                <span className="px-2 py-1 bg-emerald-500/20 border border-emerald-500/30 rounded-md text-emerald-200 font-bold">
-                  Final Signal
-                </span>
-              </div>
-            </div>
+            <span className="text-[9px] px-2 py-0.5 rounded-full bg-cyan-500/10 border border-cyan-500/25 text-cyan-300/80 font-bold">
+              8-Factor Engine
+            </span>
           </div>
           
-          {/* OI Momentum Cards Grid */}
+          {/* OI Analysis Cards Grid */}
           <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 sm:gap-3">
-            <OIMomentumCard 
+            <OIAnalysisCard 
               symbol="NIFTY" 
               name="NIFTY 50" 
               livePrice={marketData.NIFTY?.price}
               liveChangePct={marketData.NIFTY?.changePercent}
               marketStatus={marketStatus}
             />
-            <OIMomentumCard 
+            <OIAnalysisCard 
               symbol="BANKNIFTY" 
               name="BANK NIFTY"
               livePrice={marketData.BANKNIFTY?.price}
               liveChangePct={marketData.BANKNIFTY?.changePercent}
               marketStatus={marketStatus}
             />
-            <OIMomentumCard 
+            <OIAnalysisCard 
               symbol="SENSEX" 
               name="SENSEX"
               livePrice={marketData.SENSEX?.price}
@@ -986,22 +985,6 @@ export default function Home() {
 
         {/* P5: 🧭 INSTITUTIONAL MARKET COMPASS */}
         <InstitutionalCompass />
-
-        {/* P6: Trend Base Section */}
-        <div className="mt-6 sm:mt-6">
-          <div className="flex flex-col gap-1 mb-3 sm:mb-4">
-            <SectionTitle
-              title="Trend Base (Higher-Low Structure)"
-              subtitle="Live swing structure · 8-factor analysis · 5-min prediction"
-              accentColor="green"
-            />
-          </div>
-          <div className="grid grid-cols-1 lg:grid-cols-2 2xl:grid-cols-3 gap-3">
-            <TrendBaseCard symbol="NIFTY" name="NIFTY 50" />
-            <TrendBaseCard symbol="BANKNIFTY" name="BANK NIFTY" />
-            <TrendBaseCard symbol="SENSEX" name="SENSEX" />
-          </div>
-        </div>
 
         {/* P7: 🎯 TRADE ZONES – Buy/Sell Signals (Multi-factor, dual timeframe) */}
         <div className="mt-6 sm:mt-6 border-2 border-emerald-600/40 rounded-2xl p-3 sm:p-4 bg-gradient-to-br from-emerald-950/20 via-dark-card/50 to-dark-elevated/40 backdrop-blur-sm shadow-xl shadow-emerald-600/15">

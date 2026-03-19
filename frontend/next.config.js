@@ -11,9 +11,9 @@ const nextConfig = {
   generateBuildId: async () => {
     return `build-${Date.now()}`
   },
-  // Disable static optimization
   experimental: {
-    isrMemoryCacheSize: 0,
+    // Use a small ISR cache (0 causes ReadableStream abort crashes in Next 13.5.x)
+    isrMemoryCacheSize: 16,
   },
   // Add cache-busting headers
   async headers() {

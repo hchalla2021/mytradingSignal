@@ -670,11 +670,13 @@ const InstitutionalMarketView = memo<InstitutionalMarketViewProps>(({ symbol, ma
                   </div>
                 </div>
 
-                {/* Early Signal Detection - always rendered to prevent layout shift */}
-                <div className={`pt-2 border-t border-gray-700/20 transition-opacity duration-300 ${(adjConf >= 75 || (confirmCount >= 3)) ? 'opacity-100' : 'opacity-0 h-0 overflow-hidden pt-0 border-t-0'}`}>
-                  <span suppressHydrationWarning className="text-[9px] font-bold text-amber-400 uppercase tracking-wide">
-                    ⚡ {adjConf >= 85 ? 'STRONG' : 'CONFIRMED'} {predDir} Signal Detected
-                  </span>
+                {/* Early Signal Detection - always rendered with fixed height to prevent layout shift */}
+                <div className="pt-2 border-t border-gray-700/20 min-h-[28px]">
+                  {(adjConf >= 75 || confirmCount >= 3) && (
+                    <span suppressHydrationWarning className="text-[9px] font-bold text-amber-400 uppercase tracking-wide">
+                      ⚡ {adjConf >= 85 ? 'STRONG' : 'CONFIRMED'} {predDir} Signal Detected
+                    </span>
+                  )}
                 </div>
 
                 {/* Structure Confirmation Summary - fixed min-height to prevent layout shift */}

@@ -410,7 +410,7 @@ def _compute_all_signals(
         score = _clamp(dev_from_fv / max(fair_value_pct * 0.6, 0.05), -1.0, 1.0)
 
         # Add premium trend momentum (expanding = extra bullish signal)
-        trend_bonus = _clamp(premium_slope / 0.003, -0.30, 0.30)
+        trend_bonus = _clamp(premium_slope / 0.001, -0.30, 0.30)
         score = _clamp(score + trend_bonus, -1.0, 1.0)
 
         if dev_from_fv > fair_value_pct * 0.3:
@@ -424,7 +424,7 @@ def _compute_all_signals(
         else:
             prem_label = f"Premium {premium_pct:.3f}% below FV {fair_value_pct:.3f}%"
 
-        prem_trend_str = "EXPANDING" if premium_slope > 0.001 else ("CONTRACTING" if premium_slope < -0.001 else "STABLE")
+        prem_trend_str = "EXPANDING" if premium_slope > 0.0003 else ("CONTRACTING" if premium_slope < -0.0003 else "STABLE")
     elif premium_pct == 0:
         score, prem_label = 0.10 if spot_change_pct > 0 else (-0.10 if spot_change_pct < 0 else 0.0), "Futures data loading…"
         prem_trend_str, dev_from_fv = "STABLE", 0.0
@@ -681,7 +681,7 @@ def _predict_5m(
     score = sum(signals[k]["score"] * w for k, w in W5.items() if k in signals)
 
     # Premium slope momentum nudge (±8 %)
-    score = _clamp(score + _clamp(premium_slope / 0.005, -0.08, 0.08), -1.0, 1.0)
+    score = _clamp(score + _clamp(premium_slope / 0.0015, -0.08, 0.08), -1.0, 1.0)
 
     # Near-futures RSI cross-confirmation (±10 % nudge)
     if near_fut_rsi is not None:
@@ -745,7 +745,7 @@ def _predict_5m_futures(
         parts.append((_clamp((near_fut_rsi - 50.0) / 22.0, -1.0, 1.0), 0.35))
 
     # Premium slope — always available, even during closed market
-    slope_score = _clamp(premium_slope / 0.003, -1.0, 1.0)
+    slope_score = _clamp(premium_slope / 0.001, -1.0, 1.0)
     parts.append((slope_score, 0.25))
 
     if not parts:
@@ -776,9 +776,9 @@ class PremiumHistory:
     def push(self, prem_pct: float):
         self._buf.append(prem_pct)
 
-    def slope(self, n: int = 30) -> float:
+    def slope(self, n: int = 60) -> float:
         """Linear regression slope of the last n values."""
-        if len(self._buf) < 5:
+        if len(self._buf) < 3:
             return 0.0
         vals = list(self._buf)[-n:]
         return _linear_slope(vals)
@@ -1143,6 +1143,8 @@ class CompassService:
         if futures_info["near"]:
             ph.push(near_premium_pct)
         prem_slope = ph.slope()
+        prem_trend = "EXPANDING" if prem_slope > 0.0003 else ("CONTRACTING" if prem_slope < -0.0003 else "STABLE")
+        logger.debug(f"🧭 [{symbol}] Premium: {near_premium_pct:.4f}% | Slope: {prem_slope:.6f} | Buf: {len(ph._buf)} | Trend: {prem_trend}")
 
         # ── Fair value premium ────────────────────────────────────────────────
         fv_pct = _fair_value_prem_pct(days_to_expiry)

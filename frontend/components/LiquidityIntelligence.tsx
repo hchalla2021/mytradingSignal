@@ -438,14 +438,14 @@ const IndexCard = memo(({ data, index }: { data: LiquidityIndex | null; index: s
               })()}
             </div>
 
-            {/* Early Signal Detection */}
-            {(Math.abs(data.metrics.changePct) > 0.15 || Math.abs(data.signals.oi_buildup.score) > 0.4) && (
-              <div className="pt-2 border-t border-slate-700/20">
+            {/* Early Signal Detection - fixed height to prevent layout shift on mobile */}
+            <div className="pt-2 border-t border-slate-700/20 min-h-[28px]">
+              {(Math.abs(data.metrics.changePct) > 0.15 || Math.abs(data.signals.oi_buildup.score) > 0.4) && (
                 <span className="text-[10px] font-bold text-amber-400 uppercase tracking-wide">
                   ⚡ Early Signal Detected
                 </span>
-              </div>
-            )}
+              )}
+            </div>
           </div>
         </div>
 

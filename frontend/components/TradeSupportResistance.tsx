@@ -673,14 +673,14 @@ export const TradeSupportResistance: React.FC<TradeSupportResistanceProps> = ({
                 </div>
               </div>
 
-              {/* Early Signal Detection */}
-              {(confidence >= 75 || same5m15m) && (
-                <div className="pt-2 border-t border-gray-700/20">
+              {/* Early Signal Detection - fixed height to prevent layout shift on mobile */}
+              <div className="pt-2 border-t border-gray-700/20 min-h-[28px]">
+                {(confidence >= 75 || same5m15m) && (
                   <span suppressHydrationWarning className="text-[9px] font-bold text-amber-400 uppercase tracking-wide">
                     ⚡ {confidence >= 80 ? 'Strong' : 'Moderate'} {predDir === 'NEUTRAL' ? 'Neutral' : predDir} Signal Detected
                   </span>
-                </div>
-              )}
+                )}
+              </div>
             </>
           );
         })()}

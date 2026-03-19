@@ -534,11 +534,11 @@ const IndexCompassCard = memo(({ data }: IndexCardProps) => {
               <div className="flex flex-col bg-slate-800/40 rounded px-2 py-1">
                 <span className="text-[8px] text-slate-500 font-bold">Current Premium</span>
                 <span className={`text-[11px] font-black ${
-                  (data.futures.current?.premium ?? 0) > 0 ? 'text-emerald-400' :
-                  (data.futures.current?.premium ?? 0) < 0 ? 'text-red-400' :
+                  (data.futures.near?.premium ?? 0) > 0 ? 'text-emerald-400' :
+                  (data.futures.near?.premium ?? 0) < 0 ? 'text-red-400' :
                   'text-amber-400'
                 }`}>
-                  {(data.futures.current?.premium ?? 0).toFixed(2)} ({(data.futures.current?.premiumPct ?? 0).toFixed(3)}%)
+                  {(data.futures.near?.premium ?? 0).toFixed(2)} ({(data.futures.near?.premiumPct ?? 0).toFixed(3)}%)
                 </span>
               </div>
             </div>
@@ -548,21 +548,21 @@ const IndexCompassCard = memo(({ data }: IndexCardProps) => {
               <div className="flex justify-between items-center text-[8px] bg-slate-800/30 rounded px-1.5 py-1">
                 <span className="text-slate-500 font-bold">CUR Change</span>
                 <span className={`font-bold ${
-                  (data.futures.current?.changePct ?? 0) > 0 ? 'text-emerald-400' :
-                  (data.futures.current?.changePct ?? 0) < 0 ? 'text-red-400' :
+                  (data.futures.near?.changePct ?? 0) > 0 ? 'text-emerald-400' :
+                  (data.futures.near?.changePct ?? 0) < 0 ? 'text-red-400' :
                   'text-amber-400'
                 }`}>
-                  {(data.futures.current?.changePct ?? 0) > 0 ? '▲' : (data.futures.current?.changePct ?? 0) < 0 ? '▼' : '→'} {Math.abs(data.futures.current?.changePct ?? 0).toFixed(2)}%
+                  {(data.futures.near?.changePct ?? 0) > 0 ? '▲' : (data.futures.near?.changePct ?? 0) < 0 ? '▼' : '→'} {Math.abs(data.futures.near?.changePct ?? 0).toFixed(2)}%
                 </span>
               </div>
               <div className="flex justify-between items-center text-[8px] bg-slate-800/30 rounded px-1.5 py-1">
                 <span className="text-slate-500 font-bold">Spot-Fut Gap</span>
                 <span className={`font-bold ${
-                  (data.spot.changePct ?? 0) > (data.futures.current?.changePct ?? 0) ? 'text-emerald-400' :
-                  (data.spot.changePct ?? 0) < (data.futures.current?.changePct ?? 0) ? 'text-red-400' :
+                  (data.spot.changePct ?? 0) > (data.futures.near?.changePct ?? 0) ? 'text-emerald-400' :
+                  (data.spot.changePct ?? 0) < (data.futures.near?.changePct ?? 0) ? 'text-red-400' :
                   'text-amber-400'
                 }`}>
-                  {((data.spot.changePct ?? 0) - (data.futures.current?.changePct ?? 0)).toFixed(2)}%
+                  {((data.spot.changePct ?? 0) - (data.futures.near?.changePct ?? 0)).toFixed(2)}%
                 </span>
               </div>
             </div>

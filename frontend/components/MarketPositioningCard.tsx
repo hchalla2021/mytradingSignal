@@ -591,14 +591,14 @@ const SymbolCard = memo(function SymbolCard({ data, name, liveTick }: SymbolCard
                 </div>
               </div>
 
-              {/* Early Signal Detection */}
-              {(Math.abs(data.changes.price_tick) > 0.25 || Math.abs(data.changes.tick_flow) > 40) && (
-                <div className="pt-2 border-t border-slate-700/20">
+              {/* Early Signal Detection - fixed height to prevent layout shift on mobile */}
+              <div className="pt-2 border-t border-slate-700/20 min-h-[28px]">
+                {(Math.abs(data.changes.price_tick) > 0.25 || Math.abs(data.changes.tick_flow) > 40) && (
                   <span className="text-[10px] font-bold text-amber-400 uppercase tracking-wide">
                     ⚡ Early Signal Detected
                   </span>
-                </div>
-              )}
+                )}
+              </div>
             </div>
 
             {/* ─ Legacy Velocity Pills (kept for reference, now secondary) ─ */}
