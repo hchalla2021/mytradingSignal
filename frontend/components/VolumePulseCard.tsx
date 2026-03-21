@@ -365,24 +365,48 @@ const VolumePulseCard = memo<VolumePulseCardProps>(({ symbol, name }) => {
         </div>
 
         {/* ─── VOLUME BREAKDOWN ────────────────────────────────────────── */}
-        <div className="grid grid-cols-2 gap-2">
-          <div className="bg-emerald-500/8 rounded-xl p-2.5 border border-emerald-500/25">
-            <p className="text-[8px] text-emerald-400/70 font-bold uppercase mb-0.5">BUY VOLUME</p>
-            <p suppressHydrationWarning className="text-sm font-black text-emerald-300">{fmtVol(vd.green_candle_volume)}</p>
-            <p suppressHydrationWarning className="text-[9px] text-emerald-400/60">{vd.green_percentage.toFixed(0)}% of total</p>
-            <div className="mt-1 h-1 bg-gray-900/50 rounded-full overflow-hidden">
-              <div suppressHydrationWarning className="h-full bg-emerald-500 rounded-full" style={{ width: `${vd.green_percentage}%` }} />
+        {(() => {
+          const buyWins  = vd.green_candle_volume > vd.red_candle_volume;
+          const sellWins = vd.red_candle_volume > vd.green_candle_volume;
+          return (
+            <div className="grid grid-cols-2 gap-2">
+              <div
+                className={`bg-emerald-500/8 rounded-xl p-2.5 border transition-all duration-500 ${
+                  buyWins
+                    ? 'border-emerald-400 ring-2 ring-emerald-400/50'
+                    : 'border-emerald-500/25'
+                }`}
+                style={buyWins ? {
+                  boxShadow: '0 0 14px rgba(52,211,153,0.45), 0 0 30px rgba(52,211,153,0.18)',
+                } : undefined}
+              >
+                <p className="text-[8px] text-emerald-400/70 font-bold uppercase mb-0.5">BUY VOLUME</p>
+                <p suppressHydrationWarning className="text-sm font-black text-emerald-300">{fmtVol(vd.green_candle_volume)}</p>
+                <p suppressHydrationWarning className="text-[9px] text-emerald-400/60">{vd.green_percentage.toFixed(0)}% of total</p>
+                <div className="mt-1 h-1 bg-gray-900/50 rounded-full overflow-hidden">
+                  <div suppressHydrationWarning className="h-full bg-emerald-500 rounded-full" style={{ width: `${vd.green_percentage}%` }} />
+                </div>
+              </div>
+              <div
+                className={`bg-rose-500/8 rounded-xl p-2.5 border transition-all duration-500 ${
+                  sellWins
+                    ? 'border-rose-400 ring-2 ring-rose-400/50'
+                    : 'border-rose-500/25'
+                }`}
+                style={sellWins ? {
+                  boxShadow: '0 0 14px rgba(251,113,133,0.45), 0 0 30px rgba(251,113,133,0.18)',
+                } : undefined}
+              >
+                <p className="text-[8px] text-rose-400/70 font-bold uppercase mb-0.5">SELL VOLUME</p>
+                <p suppressHydrationWarning className="text-sm font-black text-rose-300">{fmtVol(vd.red_candle_volume)}</p>
+                <p suppressHydrationWarning className="text-[9px] text-rose-400/60">{vd.red_percentage.toFixed(0)}% of total</p>
+                <div className="mt-1 h-1 bg-gray-900/50 rounded-full overflow-hidden">
+                  <div suppressHydrationWarning className="h-full bg-rose-500 rounded-full" style={{ width: `${vd.red_percentage}%` }} />
+                </div>
+              </div>
             </div>
-          </div>
-          <div className="bg-rose-500/8 rounded-xl p-2.5 border border-rose-500/25">
-            <p className="text-[8px] text-rose-400/70 font-bold uppercase mb-0.5">SELL VOLUME</p>
-            <p suppressHydrationWarning className="text-sm font-black text-rose-300">{fmtVol(vd.red_candle_volume)}</p>
-            <p suppressHydrationWarning className="text-[9px] text-rose-400/60">{vd.red_percentage.toFixed(0)}% of total</p>
-            <div className="mt-1 h-1 bg-gray-900/50 rounded-full overflow-hidden">
-              <div suppressHydrationWarning className="h-full bg-rose-500 rounded-full" style={{ width: `${vd.red_percentage}%` }} />
-            </div>
-          </div>
-        </div>
+          );
+        })()}
 
         {/* ─── RATIO ───────────────────────────────────────────────────── */}
         <div className="flex items-center justify-between px-2.5 py-1.5 rounded-lg bg-slate-900/50 border border-slate-700/30">

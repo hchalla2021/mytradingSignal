@@ -223,10 +223,6 @@ class ZerodhaDirectAnalysis:
     def _fallback_analysis(self, symbol: str, error: str = None) -> Dict[str, Any]:
         """Fallback when API unavailable - provides valid structure"""
         
-        # Use last known price from settings or reasonable defaults
-        # In production, these should be populated from last successful API call
-        base_price = 20000  # Generic fallback
-        
         return {
             "symbol": symbol,
             "symbol_name": self.symbols.get(symbol, {}).get("name", symbol),
@@ -238,29 +234,30 @@ class ZerodhaDirectAnalysis:
             "stop_loss": None,
             "target": None,
             "indicators": {
-                "price": base_price,
-                "high": base_price * 1.005,
-                "low": base_price * 0.995,
-                "open": base_price * 0.998,
-                "vwap": base_price,
-                "vwap_position": "AT_VWAP",
-                "ema_20": base_price * 0.999,
-                "ema_50": base_price * 0.998,
-                "ema_100": base_price * 0.997,
-                "ema_200": base_price * 0.996,
-                "trend": "UNKNOWN",
-                "support": base_price * 0.995,
-                "resistance": base_price * 1.005,
-                "prev_day_high": base_price * 1.008,
-                "prev_day_low": base_price * 0.992,
-                "prev_day_close": base_price,
-                "volume": 1000000,
-                "volume_strength": "WEAK_VOLUME",
-                "rsi": 50,
+                "price": 0,
+                "high": 0,
+                "low": 0,
+                "open": 0,
+                "vwap": 0,
+                "vwap_position": "UNAVAILABLE",
+                "ema_20": 0,
+                "ema_50": 0,
+                "ema_100": 0,
+                "ema_200": 0,
+                "trend": "UNAVAILABLE",
+                "support": 0,
+                "resistance": 0,
+                "prev_day_high": 0,
+                "prev_day_low": 0,
+                "prev_day_close": 0,
+                "volume": 0,
+                "volume_strength": "UNAVAILABLE",
+                "rsi": 0,
                 "candle_strength": 0,
                 "pcr": None,
                 "oi_change": None,
-                "time_quality": "POOR",
+                "time_quality": "UNAVAILABLE",
+                "data_source": "FALLBACK_NO_DATA"
             },
             "timestamp": datetime.now().isoformat(),
             "source": "fallback_unavailable",

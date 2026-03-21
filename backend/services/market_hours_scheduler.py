@@ -102,9 +102,9 @@ class MarketHoursScheduler:
     
     def _is_holiday(self, dt: datetime) -> bool:
         """Check if given date is a market holiday"""
-        from services.market_session_controller import NSE_HOLIDAYS
+        from config.nse_holidays import is_holiday
         date_str = dt.strftime("%Y-%m-%d")
-        return date_str in NSE_HOLIDAYS
+        return is_holiday(date_str)
     
     def _validate_server_timezone(self):
         """🔥 CRITICAL: Validate server timezone is IST (Asia/Kolkata)

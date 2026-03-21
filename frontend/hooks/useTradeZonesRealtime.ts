@@ -1,8 +1,5 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// 💰 TRADE ZONES – BUY/SELL SIGNALS WITH SUPPORT/RESISTANCE LEVELS
-// ═══════════════════════════════════════════════════════════════════════════════
+import { API_CONFIG } from '@/lib/api-config';
 // Real-time zone detection with entry/exit signals based on EMA levels
 //
 // Architecture:
@@ -151,11 +148,7 @@ export function useTradeZonesRealtime(symbol: string): UseTradeZonesRealtimeRetu
       // Create abort controller for cleanup
       abortControllerRef.current = new AbortController();
 
-      const wsUrl = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000';
-      const apiUrl = wsUrl
-        .replace('ws://', 'http://')
-        .replace('wss://', 'https://')
-        .replace('/ws/market', '');
+      const apiUrl = API_CONFIG.baseUrl;
 
       const response = await fetch(`${apiUrl}/api/advanced/trade-zones/${symbol}`, {
         signal: abortControllerRef.current.signal,
@@ -200,7 +193,7 @@ export function useTradeZonesRealtime(symbol: string): UseTradeZonesRealtimeRetu
     const apiTimer = setInterval(fetchTradeZoneData, 3000);
 
     // WebSocket for live updates
-    const wsUrl = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000';
+    const wsUrl = API_CONFIG.wsUrl;
     let ws: WebSocket | null = null;
     let wsReconnectTimer: NodeJS.Timeout | null = null;
 

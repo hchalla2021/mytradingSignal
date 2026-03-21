@@ -2613,3 +2613,225 @@ async def get_all_instant_analysis(cache_service) -> Dict[str, Dict[str, Any]]:
     results = await asyncio.gather(*tasks)
     
     return {symbol: result for symbol, result in zip(symbols, results)}
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# DataFrame-based Smart Money Analysis
+# Used by advanced_analysis.py smart-money-flow endpoint
+# ═══════════════════════════════════════════════════════════════════════════════
+
+async def get_instant_analysis_data(df, symbol: str, current_price: float) -> Dict[str, Any]:
+    """
+    Compute smart money metrics from a OHLCV DataFrame.
+    
+    Returns dict with:
+      buy_volume_ratio, vwap, avg_volume, volume_above_threshold,
+      volume_strength, smart_money_signal, smart_money_confidence,
+      zone_control, fvg_bullish, fvg_bearish,
+      order_block_bullish, order_block_bearish
+    """
+    pd = _get_pd()
+    try:
+        if df is None or df.empty or len(df) < 3:
+            return _empty_analysis_data(current_price)
+
+        # Ensure numeric columns
+        for col in ['open', 'high', 'low', 'close', 'volume']:
+            if col in df.columns:
+                df[col] = pd.to_numeric(df[col], errors='coerce')
+
+        # ── VWAP ────────────────────────────────────────────────────────
+        typical = (df['high'] + df['low'] + df['close']) / 3
+        cum_tp_vol = (typical * df['volume']).cumsum()
+        cum_vol = df['volume'].cumsum()
+        vwap = float(cum_tp_vol.iloc[-1] / cum_vol.iloc[-1]) if cum_vol.iloc[-1] > 0 else current_price
+
+        # ── Buy / Sell volume ───────────────────────────────────────────
+        green_mask = df['close'] >= df['open']
+        green_vol = float(df.loc[green_mask, 'volume'].sum())
+        red_vol = float(df.loc[~green_mask, 'volume'].sum())
+        total_vol = green_vol + red_vol
+        buy_volume_ratio = round(green_vol / total_vol * 100, 1) if total_vol > 0 else 50.0
+
+        # ── Volume metrics ──────────────────────────────────────────────
+        avg_volume = int(df['volume'].mean()) if len(df) > 0 else 0
+        current_vol = int(df.iloc[-1].get('volume', 0))
+        vol_ratio = current_vol / avg_volume if avg_volume > 0 else 1.0
+        volume_above_threshold = vol_ratio > 1.3
+
+        if vol_ratio > 2.0:
+            volume_strength = 'VERY_STRONG'
+        elif vol_ratio > 1.3:
+            volume_strength = 'STRONG'
+        elif vol_ratio > 0.7:
+            volume_strength = 'NORMAL'
+        else:
+            volume_strength = 'WEAK'
+
+        # ── Absorption strength (high vol + small body) ─────────────────
+        recent = df.tail(10)
+        bodies = (recent['close'] - recent['open']).abs()
+        ranges_ = recent['high'] - recent['low']
+        body_pct = (bodies / ranges_.replace(0, float('nan'))).dropna()
+        avg_body_pct = float(body_pct.mean()) if len(body_pct) > 0 else 0.5
+        recent_vol_ratio = float(recent['volume'].mean() / avg_volume) if avg_volume > 0 else 1.0
+        # High volume + small bodies => strong absorption
+        absorption_strength = min(100, max(0, round(
+            (1 - avg_body_pct) * 60 + min(recent_vol_ratio, 2) * 20
+        )))
+
+        # ── Wick dominance (stop-hunting) ──────────────────────────────
+        upper_wicks = recent['high'] - recent[['open', 'close']].max(axis=1)
+        lower_wicks = recent[['open', 'close']].min(axis=1) - recent['low']
+        total_wick = (upper_wicks + lower_wicks).sum()
+        total_range = ranges_.sum()
+        wick_dominance = min(100, max(0, round(
+            float(total_wick / total_range * 100) if total_range > 0 else 50
+        )))
+
+        # ── Fair Value Gap detection (3-candle gap) ────────────────────
+        fvg_bullish = False
+        fvg_bearish = False
+        if len(df) >= 3:
+            for i in range(len(df) - 3, max(len(df) - 8, 0), -1):
+                c1 = df.iloc[i]
+                c3 = df.iloc[i + 2]
+                # Bullish FVG: candle-3 low > candle-1 high (gap up)
+                if c3['low'] > c1['high']:
+                    fvg_bullish = True
+                # Bearish FVG: candle-1 low > candle-3 high (gap down)
+                if c1['low'] > c3['high']:
+                    fvg_bearish = True
+                if fvg_bullish or fvg_bearish:
+                    break
+
+        # ── Order Block detection ──────────────────────────────────────
+        order_block_bullish = None
+        order_block_bearish = None
+        if len(df) >= 5:
+            # Bullish OB: last bearish candle before a strong bullish move
+            for i in range(len(df) - 2, max(len(df) - 15, 0), -1):
+                c = df.iloc[i]
+                nxt = df.iloc[i + 1] if i + 1 < len(df) else None
+                if nxt is None:
+                    continue
+                # Bearish candle followed by a bullish expansion
+                if c['close'] < c['open'] and nxt['close'] > nxt['open']:
+                    move_pct = (nxt['close'] - nxt['open']) / nxt['open'] * 100 if nxt['open'] > 0 else 0
+                    if move_pct > 0.05:
+                        order_block_bullish = float(c['low'])
+                        break
+            # Bearish OB: last bullish candle before a strong bearish move
+            for i in range(len(df) - 2, max(len(df) - 15, 0), -1):
+                c = df.iloc[i]
+                nxt = df.iloc[i + 1] if i + 1 < len(df) else None
+                if nxt is None:
+                    continue
+                if c['close'] > c['open'] and nxt['close'] < nxt['open']:
+                    move_pct = (nxt['open'] - nxt['close']) / nxt['open'] * 100 if nxt['open'] > 0 else 0
+                    if move_pct > 0.05:
+                        order_block_bearish = float(c['high'])
+                        break
+
+        # ── Smart Money Signal derivation ──────────────────────────────
+        score = 0  # -10 .. +10
+
+        # Factor 1: Buy/Sell volume ratio (±3)
+        if buy_volume_ratio > 60:
+            score += 3
+        elif buy_volume_ratio > 55:
+            score += 1
+        elif buy_volume_ratio < 40:
+            score -= 3
+        elif buy_volume_ratio < 45:
+            score -= 1
+
+        # Factor 2: VWAP position (±2)
+        if current_price > vwap * 1.002:
+            score += 2
+        elif current_price < vwap * 0.998:
+            score -= 2
+
+        # Factor 3: Volume confirmation (±2)
+        if volume_above_threshold:
+            score += 2 if score > 0 else -2 if score < 0 else 0
+
+        # Factor 4: Absorption (±1)
+        if absorption_strength > 70:
+            score += 1 if current_price > vwap else -1
+
+        # Factor 5: FVG confirmation (±1)
+        if fvg_bullish and not fvg_bearish:
+            score += 1
+        elif fvg_bearish and not fvg_bullish:
+            score -= 1
+
+        # Factor 6: Recent candle momentum (±1)
+        last3 = df.tail(3)
+        bullish_count = int((last3['close'] > last3['open']).sum())
+        if bullish_count >= 3:
+            score += 1
+        elif bullish_count == 0:
+            score -= 1
+
+        # Map score to signal
+        if score >= 5:
+            signal = 'STRONG_BUY'
+        elif score >= 2:
+            signal = 'BUY'
+        elif score <= -5:
+            signal = 'STRONG_SELL'
+        elif score <= -2:
+            signal = 'SELL'
+        else:
+            signal = 'NEUTRAL'
+
+        # Confidence 0-1
+        raw_conf = min(0.95, 0.35 + abs(score) / 10 * 0.6)
+        if volume_above_threshold:
+            raw_conf = min(0.95, raw_conf + 0.05)
+        if (fvg_bullish and score > 0) or (fvg_bearish and score < 0):
+            raw_conf = min(0.95, raw_conf + 0.04)
+
+        return {
+            'buy_volume_ratio': buy_volume_ratio,
+            'vwap': vwap,
+            'avg_volume': avg_volume,
+            'volume_above_threshold': volume_above_threshold,
+            'volume_strength': volume_strength,
+            'smart_money_signal': signal,
+            'smart_money_confidence': round(raw_conf, 3),
+            'zone_control': {
+                'absorption_strength': absorption_strength,
+                'wick_dominance': wick_dominance,
+            },
+            'fvg_bullish': fvg_bullish,
+            'fvg_bearish': fvg_bearish,
+            'order_block_bullish': order_block_bullish,
+            'order_block_bearish': order_block_bearish,
+        }
+
+    except Exception as e:
+        print(f"[get_instant_analysis_data] Error for {symbol}: {e}")
+        import traceback
+        traceback.print_exc()
+        return _empty_analysis_data(current_price)
+
+
+def _empty_analysis_data(current_price: float) -> Dict[str, Any]:
+    """Fallback when no data is available — all zeros, no fake signals."""
+    return {
+        'buy_volume_ratio': 0.0,
+        'vwap': current_price,
+        'avg_volume': 0,
+        'volume_above_threshold': False,
+        'volume_strength': 'UNAVAILABLE',
+        'smart_money_signal': 'NEUTRAL',
+        'smart_money_confidence': 0,
+        'zone_control': {'absorption_strength': 0, 'wick_dominance': 0},
+        'fvg_bullish': False,
+        'fvg_bearish': False,
+        'order_block_bullish': None,
+        'order_block_bearish': None,
+        'data_source': 'NO_DATA',
+    }

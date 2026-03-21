@@ -2840,8 +2840,36 @@ async def get_smart_money_flow(symbol: str) -> Dict[str, Any]:
                 "message": "Authentication expired"
             }
         
-        # 🔥 Fetch extended historical data (ONCE)
-        df = await _get_historical_data_extended(symbol, lookback=100, days_back=3)
+        # ── Priority 1: Live WebSocket candle cache (has REAL volume) ──
+        df = pd.DataFrame()
+        try:
+            import json as _json
+            _cc = get_cache()
+            _candle_key = f"analysis_candles:{symbol}"
+            _candles_raw = await _cc.lrange(_candle_key, 0, 99)
+            if _candles_raw and len(_candles_raw) >= 5:
+                _rows = []
+                for _c in reversed(_candles_raw):
+                    try:
+                        _rows.append(_json.loads(_c))
+                    except Exception:
+                        continue
+                if len(_rows) >= 5:
+                    df = pd.DataFrame(_rows)
+                    for _col in ('open', 'high', 'low', 'close'):
+                        if _col not in df.columns:
+                            df[_col] = 0.0
+                        df[_col] = pd.to_numeric(df[_col], errors='coerce').fillna(0.0)
+                    if 'volume' not in df.columns:
+                        df['volume'] = 0
+                    df['volume'] = pd.to_numeric(df['volume'], errors='coerce').fillna(0).astype(int)
+                    print(f"[SMART-MONEY] Using live candle cache: {len(df)} candles with volume")
+        except Exception as _ce:
+            print(f"[SMART-MONEY] Candle cache read failed: {_ce}")
+
+        # ── Priority 2: Zerodha REST historical data (fallback) ──
+        if df.empty:
+            df = await _get_historical_data_extended(symbol, lookback=100, days_back=3)
         
         if df.empty:
             return {
@@ -3011,6 +3039,14 @@ async def get_smart_money_flow(symbol: str) -> Dict[str, Any]:
             "order_structure": order_structure,
             "structure_description": structure_description,
             
+            # Fair Value Gaps
+            "fvg_bullish": bool(analysis.get('fvg_bullish', False)),
+            "fvg_bearish": bool(analysis.get('fvg_bearish', False)),
+            
+            # Order Blocks
+            "order_block_bullish": analysis.get('order_block_bullish'),
+            "order_block_bearish": analysis.get('order_block_bearish'),
+            
             # Status
             "status": "LIVE",
             "data_status": "REAL_TIME",
@@ -3087,6 +3123,10 @@ async def get_smart_money_flow(symbol: str) -> Dict[str, Any]:
             "liquidity_description": "Error",
             "order_structure": "UNKNOWN",
             "structure_description": "Error analyzing order structure",
+            "fvg_bullish": False,
+            "fvg_bearish": False,
+            "order_block_bullish": None,
+            "order_block_bearish": None,
             "status": "ERROR",
             "error": str(e)
         }

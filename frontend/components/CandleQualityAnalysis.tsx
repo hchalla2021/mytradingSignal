@@ -1,6 +1,7 @@
 'use client';
 
 import React, { memo, useMemo, useEffect, useState } from 'react';
+import { API_CONFIG } from '@/lib/api-config';
 
 interface CandleQualityData {
   symbol: string;
@@ -46,8 +47,7 @@ const CandleQualityAnalysis = memo<CandleQualityAnalysisProps>(({ symbol }) => {
     const fetchData = async () => {
       try {
         setLoading(true);
-        const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
-        const response = await fetch(`${apiUrl}/api/analysis/candle-quality/${symbol}`, {
+        const response = await fetch(API_CONFIG.endpoint(`/api/analysis/candle-quality/${symbol}`), {
           cache: 'no-store',
           headers: {
             'Cache-Control': 'no-cache'

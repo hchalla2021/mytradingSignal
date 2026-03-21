@@ -924,6 +924,24 @@ export default function Home() {
           </div>
         </div>
 
+        {/* P2b: Volume Pulse Section */}
+        <div className="mt-6 sm:mt-6 border-2 border-emerald-500/30 rounded-2xl p-3 sm:p-4 bg-gradient-to-br from-emerald-950/20 via-dark-card/50 to-dark-elevated/40 backdrop-blur-sm shadow-xl shadow-emerald-500/10">
+          <div className="flex flex-col gap-3 mb-3 sm:mb-4">
+            <SectionTitle
+              title="Volume Pulse (Candle Volume)"
+              subtitle="Real-time buying/selling pressure • Green vs Red candle volume tracking"
+              accentColor="emerald"
+            />
+          </div>
+
+          {/* Volume Pulse Cards Grid */}
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 sm:gap-4">
+            <VolumePulseCard symbol="NIFTY" name="NIFTY 50" />
+            <VolumePulseCard symbol="BANKNIFTY" name="BANK NIFTY" />
+            <VolumePulseCard symbol="SENSEX" name="SENSEX" />
+          </div>
+        </div>
+
         {/* P3: 🏦 ICT SMART MONEY INTELLIGENCE */}
         <ICTIntelligence />
 
@@ -932,6 +950,7 @@ export default function Home() {
           <div className="flex items-center justify-between mb-3">
             <SectionTitle
               title="Advanced OI Analysis"
+              subtitle="8-Factor OI engine: OI flow, velocity, institutional accumulation, liquidity sweeps, trap detection"
               accentColor="cyan"
             />
             <span className="text-[9px] px-2 py-0.5 rounded-full bg-cyan-500/10 border border-cyan-500/25 text-cyan-300/80 font-bold">
@@ -977,9 +996,9 @@ export default function Home() {
           </div>
           
           <div className="grid grid-cols-1 lg:grid-cols-2 2xl:grid-cols-3 gap-3">
-            <InstitutionalMarketView symbol="NIFTY" marketStatus={marketStatus} livePrice={marketData.NIFTY?.price} />
-            <InstitutionalMarketView symbol="BANKNIFTY" marketStatus={marketStatus} livePrice={marketData.BANKNIFTY?.price} />
-            <InstitutionalMarketView symbol="SENSEX" marketStatus={marketStatus} livePrice={marketData.SENSEX?.price} />
+            <InstitutionalMarketView symbol="NIFTY" />
+            <InstitutionalMarketView symbol="BANKNIFTY" />
+            <InstitutionalMarketView symbol="SENSEX" />
           </div>
         </div>
 
@@ -1018,24 +1037,6 @@ export default function Home() {
               analysis={analyses?.SENSEX}
               marketStatus={marketStatus}
             />
-          </div>
-        </div>
-
-        {/* P8: Volume Pulse Section */}
-        <div className="mt-6 sm:mt-6 border-2 border-emerald-500/30 rounded-2xl p-3 sm:p-4 bg-gradient-to-br from-emerald-950/20 via-dark-card/50 to-dark-elevated/40 backdrop-blur-sm shadow-xl shadow-emerald-500/10">
-          <div className="flex flex-col gap-3 mb-3 sm:mb-4">
-            <SectionTitle
-              title="Volume Pulse (Candle Volume)"
-              subtitle="Real-time buying/selling pressure • Green vs Red candle volume tracking"
-              accentColor="emerald"
-            />
-          </div>
-
-          {/* Volume Pulse Cards Grid */}
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 sm:gap-4">
-            <VolumePulseCard symbol="NIFTY" name="NIFTY 50" />
-            <VolumePulseCard symbol="BANKNIFTY" name="BANK NIFTY" />
-            <VolumePulseCard symbol="SENSEX" name="SENSEX" />
           </div>
         </div>
 

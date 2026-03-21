@@ -85,6 +85,22 @@ class AdvancedOIAnalysisService:
             # ── Factors (flat for frontend) ──────────────────────────
             factors = self._build_factors(f5, f15)
 
+            # ── Timeframe alignment status ────────────────────────
+            s5_str = self._signal_strength(f5["signal"])
+            s15_str = self._signal_strength(f15["signal"]) if f15 else s5_str
+            is_conflicting = (s5_str > 0 and s15_str < 0) or (s5_str < 0 and s15_str > 0)
+            if f15 and f5["signal"] == f15["signal"]:
+                alignment = "ALIGNED"
+            elif not f15:
+                alignment = "ALIGNED"
+            elif is_conflicting:
+                alignment = "CONFLICTING"
+            else:
+                alignment = "PARTIAL"
+
+            # ── Trader summary ────────────────────────────────────────
+            summary = self._build_trader_summary(signal, confidence, f5, f15, alignment)
+
             return {
                 "signal": signal,
                 "confidence": confidence,
@@ -93,6 +109,9 @@ class AdvancedOIAnalysisService:
                 "reasons": reasons,
                 "signal_5m": f5["signal"],
                 "signal_15m": f15["signal"] if f15 else f5["signal"],
+                "is_conflicting": is_conflicting,
+                "alignment": alignment,
+                "trader_summary": summary,
                 "timestamp": datetime.now().isoformat(),
             }
 
@@ -410,13 +429,19 @@ class AdvancedOIAnalysisService:
 
         conf = int((pts / max_pts) * 100) if max_pts > 0 else 50
 
-        # Conflict penalty
-        if (s5 > 0 and s15 < 0) or (s5 < 0 and s15 > 0):
-            conf = int(conf * 0.6)
+        # Conflict penalty — softer: traders still need actionable confidence
+        is_conflicting = (s5 > 0 and s15 < 0) or (s5 < 0 and s15 > 0)
+        if is_conflicting:
+            conf = max(30, int(conf * 0.75))
 
         # Strong alignment boost
         if s5 == s15 and abs(s5) == 2:
             conf = min(98, conf + 10)
+
+        # Ensure minimum meaningful confidence when data exists
+        has_data = abs(f5["buy_score"]) + abs(f5["sell_score"]) > 5
+        if has_data:
+            conf = max(25, conf)
 
         return max(5, min(98, conf))
 
@@ -461,9 +486,9 @@ class AdvancedOIAnalysisService:
         prob = max(25, min(95, 42 + int(pts * 0.6)))
 
         context_map = {
-            "UP": "Bullish momentum building" if aligned else "Upward bias · mixed signals",
-            "DOWN": "Bearish pressure increasing" if aligned else "Downward bias · conflicting",
-            "FLAT": "Range-bound · wait for breakout",
+            "UP": "Bullish momentum building" if aligned else "Upward bias, mixed signals",
+            "DOWN": "Bearish pressure increasing" if aligned else "Downward bias, conflicting",
+            "FLAT": "Range-bound, wait for breakout",
         }
 
         return {
@@ -471,6 +496,43 @@ class AdvancedOIAnalysisService:
             "probability": prob,
             "context": context_map[direction],
         }
+
+    # ─── TRADER SUMMARY ──────────────────────────────────────────────
+
+    def _build_trader_summary(self, signal: str, confidence: int, f5: Dict, f15: Optional[Dict], alignment: str) -> str:
+        d5 = f5["detail"]
+        d15 = f15["detail"] if f15 else {}
+        oi_t5 = d5.get("oi_trend", "NO_DATA")
+        oi_t15 = d15.get("oi_trend", oi_t5)
+
+        trend_map = {
+            "LONG_BUILDUP": "fresh longs building",
+            "SHORT_BUILDUP": "sellers adding positions",
+            "SHORT_COVERING": "shorts exiting (bullish)",
+            "LONG_UNWINDING": "longs exiting (bearish)",
+        }
+
+        if alignment == "CONFLICTING":
+            t5_desc = trend_map.get(oi_t5, "mixed")
+            t15_desc = trend_map.get(oi_t15, "mixed")
+            return f"Timeframe conflict: 5m {t5_desc}, 15m {t15_desc}. Wait for alignment or trade the 15m bias."
+        elif signal in ("STRONG_BUY", "BUY"):
+            if oi_t15 == "LONG_BUILDUP":
+                return f"Bullish: Fresh long positions building on both timeframes. Confidence {confidence}%."
+            elif oi_t15 == "SHORT_COVERING":
+                return f"Mildly bullish: Shorts covering. Momentum may fade - trail stops tight."
+            return f"Bullish bias with {confidence}% conviction. Monitor OI buildup for confirmation."
+        elif signal in ("STRONG_SELL", "SELL"):
+            if oi_t15 == "SHORT_BUILDUP":
+                return f"Bearish: Fresh short positions building. Sellers in control. Conf {confidence}%."
+            elif oi_t15 == "LONG_UNWINDING":
+                return f"Bearish: Longs unwinding - expect continued downside pressure."
+            return f"Bearish bias with {confidence}% conviction. Watch for short covering bounce."
+        else:
+            vel = d5.get("oi_velocity", 0)
+            if abs(vel) > 1:
+                return f"Neutral but OI velocity is {vel:+.1f}% - direction may emerge soon."
+            return "No clear institutional bias. Choppy conditions - wait for OI trend to develop."
 
     # ─── REASONS ─────────────────────────────────────────────────────
 
@@ -482,10 +544,10 @@ class AdvancedOIAnalysisService:
         oi_t5 = d5.get("oi_trend", "")
         oi_t15 = d15.get("oi_trend", "")
         oi_labels = {
-            "LONG_BUILDUP": "Long Buildup (Price↑ OI↑)",
-            "SHORT_BUILDUP": "Short Buildup (Price↓ OI↑)",
-            "SHORT_COVERING": "Short Covering (Price↑ OI↓)",
-            "LONG_UNWINDING": "Long Unwinding (Price↓ OI↓)",
+            "LONG_BUILDUP": "Long Buildup (Price Up + OI Up)",
+            "SHORT_BUILDUP": "Short Buildup (Price Down + OI Up)",
+            "SHORT_COVERING": "Short Covering (Price Up + OI Down)",
+            "LONG_UNWINDING": "Long Unwinding (Price Down + OI Down)",
         }
         if oi_t5 in oi_labels:
             reasons.append(f"5m {oi_labels[oi_t5]}")
@@ -576,6 +638,9 @@ class AdvancedOIAnalysisService:
             "reasons": [reason],
             "signal_5m": "NO_SIGNAL",
             "signal_15m": "NO_SIGNAL",
+            "is_conflicting": False,
+            "alignment": "NONE",
+            "trader_summary": reason,
             "timestamp": datetime.now().isoformat(),
         }
 

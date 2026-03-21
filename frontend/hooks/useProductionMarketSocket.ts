@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { API_CONFIG } from '@/lib/api-config';
 
 export type WebSocketStatus = 
   | 'OFFLINE' 
@@ -118,7 +119,7 @@ export function useProductionMarketSocket(): UseProductionMarketSocket {
       if (checkMarketTiming()) {
         // Market is open, try to connect
         try {
-          const wsUrl = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000/ws/market';
+          const wsUrl = API_CONFIG.wsUrl;
           if (ws.current?.readyState === WebSocket.OPEN) {
             ws.current.close();
           }
@@ -182,7 +183,7 @@ export function useProductionMarketSocket(): UseProductionMarketSocket {
     setMessage('Connecting to market feed...');
 
     try {
-      const wsUrl = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000/ws/market';
+      const wsUrl = API_CONFIG.wsUrl;
       ws.current = new WebSocket(wsUrl);
 
       // WebSocket connection timeout (10 seconds)

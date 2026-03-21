@@ -12,6 +12,7 @@
 import React, { useState, useEffect, memo, useMemo, useCallback } from 'react';
 import { useIndiaVIX } from '@/hooks/useIndiaVIX';
 import IndiaVIXBadge from '@/components/IndiaVIXBadge';
+import { API_CONFIG } from '@/lib/api-config';
 
 interface SymbolData {
   symbol: string;
@@ -320,97 +321,70 @@ const SignalCard = memo(({ data }: { data: SymbolData }) => {
 
 SignalCard.displayName = 'SignalCard';
 
-// 🔥 DEFAULT FALLBACK DATA - Shows immediately if API is slow
-const DEFAULT_DATA: MarketOutlookResponse = {
-  NIFTY: {
-    symbol: 'NIFTY',
-    signal: 'STRONG_BUY',
-    confidence: 75,
-    buy_signals: 73,
-    sell_signals: 27,
-    prediction_5m_direction: 'UP',
-    prediction_5m_signal: 'BUY',
-    prediction_5m_confidence: 72,
-    timestamp: new Date().toISOString()
-  },
-  BANKNIFTY: {
-    symbol: 'BANKNIFTY',
-    signal: 'BUY',
-    confidence: 68,
-    buy_signals: 70,
-    sell_signals: 30,
-    prediction_5m_direction: 'UP',
-    prediction_5m_signal: 'BUY',
-    prediction_5m_confidence: 65,
-    timestamp: new Date().toISOString()
-  },
-  SENSEX: {
-    symbol: 'SENSEX',
-    signal: 'NEUTRAL',
-    confidence: 52,
-    buy_signals: 50,
-    sell_signals: 50,
-    prediction_5m_direction: 'FLAT',
-    prediction_5m_signal: 'NEUTRAL',
-    prediction_5m_confidence: 48,
-    timestamp: new Date().toISOString()
-  }
-};
-
 export default function OverallMarketOutlook() {
-  const [data, setData] = useState<MarketOutlookResponse>(DEFAULT_DATA);
-  const [loading, setLoading] = useState(false);
-  const [isRealData, setIsRealData] = useState(false);
+  const [data, setData] = useState<MarketOutlookResponse | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const { vixData, loading: vixLoading } = useIndiaVIX();
 
-  // Fast fetch with abort signal - NON-BLOCKING
   const fetchData = useCallback(async () => {
     try {
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
       const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), 2000); // Faster timeout, non-blocking
+      const timeout = setTimeout(() => controller.abort(), 8000);
 
-      const res = await fetch(`${apiUrl}/api/analysis/market-outlook-all`, {
-        cache: 'no-store',
-        signal: controller.signal
-      });
+      const res = await fetch(
+        API_CONFIG.endpoint('/api/analysis/market-outlook-all'),
+        { cache: 'no-store', signal: controller.signal }
+      );
 
       clearTimeout(timeout);
-      if (res.ok) {
-        const result = await res.json();
-        // Ensure all required fields exist
-        const validated: MarketOutlookResponse = {
-          NIFTY: {
-            ...DEFAULT_DATA.NIFTY,
-            ...(result.NIFTY || {})
-          },
-          BANKNIFTY: {
-            ...DEFAULT_DATA.BANKNIFTY,
-            ...(result.BANKNIFTY || {})
-          },
-          SENSEX: {
-            ...DEFAULT_DATA.SENSEX,
-            ...(result.SENSEX || {})
-          }
-        };
-        setData(validated);
-        setIsRealData(true);
-        setLoading(false);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const result = await res.json();
+      if (result.NIFTY && result.BANKNIFTY && result.SENSEX) {
+        setData(result as MarketOutlookResponse);
+        setError(null);
       } else {
-        setLoading(false);
+        setError('Incomplete data from server');
       }
-    } catch (err) {
-      console.error('Fetch error:', err);
       setLoading(false);
-      // Keep showing default data - NO BLOCKING
+    } catch (err: any) {
+      if (err?.name === 'AbortError') return;
+      setError('Connection error');
+      setLoading(false);
     }
   }, []);
 
   useEffect(() => {
     fetchData();
-    const interval = setInterval(fetchData, 500); // Fast updates
+    const interval = setInterval(fetchData, 5000);
     return () => clearInterval(interval);
   }, [fetchData]);
+
+  // Loading state
+  if (loading) return (
+    <div className="space-y-6">
+      <h1 className="text-3xl font-black text-white">MARKET OUTLOOK</h1>
+      <div className="bg-slate-900/60 border border-slate-700/40 rounded-xl p-12 animate-pulse flex flex-col items-center gap-3">
+        <div className="h-6 bg-slate-800/70 rounded w-48" />
+        <div className="h-4 bg-slate-800/50 rounded w-64" />
+        <p className="text-sm text-gray-500 mt-2">Loading live market data...</p>
+      </div>
+    </div>
+  );
+
+  // Error state
+  if (error || !data) return (
+    <div className="space-y-6">
+      <h1 className="text-3xl font-black text-white">MARKET OUTLOOK</h1>
+      <div className="bg-slate-900/60 border-2 border-rose-500/30 rounded-xl p-12 flex flex-col items-center gap-3">
+        <span className="text-3xl">⚠</span>
+        <p className="text-sm font-bold text-rose-300">{error || 'No data available'}</p>
+        <button onClick={fetchData} className="mt-2 text-xs px-4 py-1.5 rounded-full bg-rose-500/20 text-rose-300 border border-rose-500/40 hover:bg-rose-500/30 transition-colors">
+          Retry
+        </button>
+      </div>
+    </div>
+  );
 
   // Calculate integrated metrics across ALL symbols
   const allSymbols = ['NIFTY', 'BANKNIFTY', 'SENSEX'];
@@ -442,13 +416,12 @@ export default function OverallMarketOutlook() {
           <h1 className="text-3xl font-black text-white">MARKET OUTLOOK</h1>
           <p className="text-sm text-gray-400 mt-2">
             Integrated Analysis • 14-Signal Consensus • 5-Min Prediction Alignment
-            {!isRealData && ' • (Demo Data)'}
           </p>
         </div>
         <div className="text-right">
           <div className="flex items-center gap-2 text-sm text-gray-400 mb-2">
-            <span className={`w-2 h-2 rounded-full ${isRealData ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'}`} />
-            {isRealData ? 'LIVE DATA' : 'DEMO MODE'}
+            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+            LIVE DATA
           </div>
           <IndiaVIXBadge
             value={vixData.value}
@@ -591,7 +564,7 @@ export default function OverallMarketOutlook() {
       <div className="text-xs text-gray-500 text-center pt-4 border-t border-slate-700/30 mt-6 pt-6">
         <div className="space-y-1">
           <p>✓ INDEX CONFIDENCE • ⚡ 5-MIN PREDICTION • 🎯 INTEGRATED ALIGNMENT</p>
-          <p>{isRealData ? '🟢 Real-time data flowing' : '🟡 Waiting for live data...'}</p>
+          <p>🟢 Real-time data flowing</p>
         </div>
       </div>
     </div>

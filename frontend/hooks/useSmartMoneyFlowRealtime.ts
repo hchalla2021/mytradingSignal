@@ -1,8 +1,5 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// 🧠 SMART MONEY FLOW – INSTITUTIONAL ORDER STRUCTURE INTELLIGENCE
-// ═══════════════════════════════════════════════════════════════════════════════
+import { API_CONFIG } from '@/lib/api-config';
 // Real-time order flow imbalance detection with institutional positioning analysis
 //
 // Architecture:
@@ -149,11 +146,7 @@ export function useSmartMoneyFlowRealtime(symbol: string): UseSmartMoneyFlowReal
       // Create abort controller for cleanup
       abortControllerRef.current = new AbortController();
 
-      const wsUrl = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000';
-      const apiUrl = wsUrl
-        .replace('ws://', 'http://')
-        .replace('wss://', 'https://')
-        .replace('/ws/market', '');
+      const apiUrl = API_CONFIG.baseUrl;
 
       const response = await fetch(`${apiUrl}/api/advanced/smart-money-flow/${symbol}`, {
         signal: abortControllerRef.current.signal,
@@ -198,7 +191,7 @@ export function useSmartMoneyFlowRealtime(symbol: string): UseSmartMoneyFlowReal
     const apiTimer = setInterval(fetchOrderFlowData, 3000);
 
     // WebSocket for live updates
-    const wsUrl = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000';
+    const wsUrl = API_CONFIG.wsUrl;
     let ws: WebSocket | null = null;
     let wsReconnectTimer: NodeJS.Timeout | null = null;
 

@@ -46,6 +46,9 @@ export interface OIAnalysisData {
   reasons: string[];
   signal_5m: string;
   signal_15m: string;
+  is_conflicting: boolean;
+  alignment: string;
+  trader_summary: string;
   symbol_name: string;
   current_price: number;
   timestamp: string;
@@ -108,6 +111,9 @@ export function useOIAnalysis(symbol: string) {
           reasons: json.reasons ?? [],
           signal_5m: json.signal_5m ?? "NO_SIGNAL",
           signal_15m: json.signal_15m ?? "NO_SIGNAL",
+          is_conflicting: json.is_conflicting ?? false,
+          alignment: json.alignment ?? "NONE",
+          trader_summary: json.trader_summary ?? "",
           symbol_name: json.symbol_name ?? symbol,
           current_price: json.current_price ?? 0,
           timestamp: json.timestamp ?? new Date().toISOString(),

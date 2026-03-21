@@ -131,31 +131,11 @@ async def analyze_symbol(symbol: str):
         # PRIORITY: Use cache-based instant analysis
         result = await get_instant_analysis(cache, symbol)
         
-        # ENSURE RSI fields are present (fallback hybrid calculation if missing)
+        # Mark RSI data source if missing (let instant_analysis handle calculation)
         if 'indicators' in result:
             indicators = result['indicators']
-            
-            # If RSI 5m/15m missing, calculate from momentum as fallback
             if 'rsi_5m' not in indicators or 'rsi_15m' not in indicators:
-                change_pct = indicators.get('changePercent', 0)
-                open_price = indicators.get('open', 0)
-                close_price = indicators.get('price', 0)
-                high = indicators.get('high', 0)
-                low = indicators.get('low', 0)
-                
-                # Simple hybrid RSI
-                base_rsi = 50.0
-                momentum_rsi = change_pct * 10
-                rsi_5m = max(0, min(100, base_rsi + momentum_rsi))
-                rsi_15m = max(0, min(100, base_rsi + momentum_rsi * 0.7))
-                
-                # Add to indicators
-                indicators['rsi_5m'] = round(rsi_5m, 1)
-                indicators['rsi_15m'] = round(rsi_15m, 1)
-                indicators['rsi_5m_signal'] = 'OVERSOLD' if rsi_5m < 30 else 'WEAK' if rsi_5m < 40 else 'NEUTRAL' if rsi_5m < 60 else 'STRONG' if rsi_5m < 70 else 'OVERBOUGHT'
-                indicators['rsi_15m_signal'] = 'OVERSOLD' if rsi_15m < 30 else 'WEAK' if rsi_15m < 40 else 'NEUTRAL' if rsi_15m < 60 else 'STRONG' if rsi_15m < 70 else 'OVERBOUGHT'
-                indicators['rsi_momentum_status'] = 'NEUTRAL'
-                indicators['rsi_momentum_confidence'] = 50
+                indicators['rsi_data_source'] = 'UNAVAILABLE'
         
         if symbol in SYMBOL_MAPPING:
             result['symbol_name'] = SYMBOL_MAPPING[symbol]['name']
@@ -492,6 +472,9 @@ async def get_oi_analysis(symbol: str):
             "reasons": [f"Error: {str(e)[:100]}"],
             "signal_5m": "NO_SIGNAL",
             "signal_15m": "NO_SIGNAL",
+            "is_conflicting": False,
+            "alignment": "NONE",
+            "trader_summary": f"Service error - retrying",
             "symbol_name": SYMBOL_MAPPING.get(symbol, {}).get("name", symbol),
             "current_price": 0,
             "timestamp": now.isoformat(),

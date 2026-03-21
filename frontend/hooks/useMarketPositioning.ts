@@ -8,6 +8,7 @@
  */
 
 import { useEffect, useRef, useState, useCallback } from "react";
+import { API_CONFIG } from '@/lib/api-config';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -64,7 +65,7 @@ export interface MarketPositioningData {
 
 // ─── Config from env ─────────────────────────────────────────────────────────
 
-const API_BASE    = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+const API_BASE    = API_CONFIG.baseUrl;
 const ENDPOINT    = `${API_BASE}/api/market-positioning`;
 const INTERVAL_MS = parseInt(process.env.NEXT_PUBLIC_POSITIONING_INTERVAL || "5000", 10);
 

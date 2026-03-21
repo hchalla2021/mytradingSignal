@@ -375,12 +375,14 @@ class MarketFeedService:
                     setattr(self, f'_last_status_{symbol}', market_status)
                     print(f"🔄 MARKET STATUS CHANGE: {symbol} {last_status} → {market_status}")
                 
-                # Process tick if:
-                # 1. Market phase is open AND
-                # 2. (Price changed OR 0.5 second elapsed OR status changed)
-                # Using 0.5s instead of 1s for smoother transitions
+                # 🔥 CRITICAL FIX: Trust the exchange over local clock/holiday checks.
+                # If Zerodha IS sending ticks (this callback is proof), ALWAYS process them.
+                # Previously ticks were silently dropped when get_market_status() returned
+                # "CLOSED" due to timezone issues, wrong holiday list, or clock drift,
+                # causing "no live feed / no movement" even when the market was open.
+                # Rate limit: price changed OR 0.5 second elapsed OR status changed
                 price_changed = self.last_prices.get(symbol) != data["price"]
-                should_update = is_market_phase and (price_changed or time_since_last_update >= 0.5 or status_changed)
+                should_update = price_changed or time_since_last_update >= 0.5 or status_changed
                 
                 if should_update:
                     self.last_prices[symbol] = data["price"]
@@ -918,10 +920,16 @@ class MarketFeedService:
         We need to trigger our own reconnection logic.
         """
         print("❌ KiteTicker reconnect failed - automatic retries exhausted")
-        print("   🔄 Triggering manual auto-reconnect...")
         
         # Set connection flag to False so scheduler can detect and fix
         self._is_connected = False
+        
+        # 🔥 FIX: Activate REST API fallback when WebSocket reconnection fails,
+        # not just on 403 errors. This ensures data keeps flowing to the UI
+        # while the scheduler attempts to re-establish the WebSocket.
+        if not self._using_rest_fallback:
+            print("📡 Activating REST API fallback mode (WebSocket reconnect exhausted)")
+            self._using_rest_fallback = True
         
         # Notify watchdog
         feed_watchdog.on_disconnect()

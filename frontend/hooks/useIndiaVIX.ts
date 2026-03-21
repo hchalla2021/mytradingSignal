@@ -11,6 +11,7 @@
 'use client';
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import { API_CONFIG } from '@/lib/api-config';
 
 export interface VIXData {
   value: number | null;
@@ -58,8 +59,7 @@ export function useIndiaVIX(options: UseVIXOptions = {}) {
   const fetchVIX = useCallback(async () => {
     if (!enabled) return;
     try {
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
-      const res = await fetch(`${apiUrl}/api/vix`, {
+      const res = await fetch(API_CONFIG.endpoint('/api/vix'), {
         cache: 'no-store',
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);

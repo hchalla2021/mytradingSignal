@@ -1,8 +1,5 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// 🚀 HIGH VOLUME CANDLE SCANNER – REAL-TIME VOLUME SPIKE DETECTION
-// ═══════════════════════════════════════════════════════════════════════════════
+import { API_CONFIG } from '@/lib/api-config';
 // Ultra-fast volume pattern detection with WebSocket + batching + 3s API polling
 //
 // Architecture:
@@ -138,11 +135,7 @@ export function useHighVolumeCandleRealtime(symbol: string): UseHighVolumeCandle
       // Create abort controller for cleanup
       abortControllerRef.current = new AbortController();
 
-      const wsUrl = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000';
-      const apiUrl = wsUrl
-        .replace('ws://', 'http://')
-        .replace('wss://', 'https://')
-        .replace('/ws/market', '');
+      const apiUrl = API_CONFIG.baseUrl;
 
       const response = await fetch(`${apiUrl}/api/advanced/high-volume-candle/${symbol}`, {
         signal: abortControllerRef.current.signal,
@@ -187,7 +180,7 @@ export function useHighVolumeCandleRealtime(symbol: string): UseHighVolumeCandle
     const apiTimer = setInterval(fetchVolumeData, 3000);
 
     // WebSocket for live updates
-    const wsUrl = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:8000';
+    const wsUrl = API_CONFIG.wsUrl;
     let ws: WebSocket | null = null;
     let wsReconnectTimer: NodeJS.Timeout | null = null;
 
