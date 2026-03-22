@@ -3,6 +3,8 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { API_CONFIG } from '@/lib/api-config';
 
+const isDev = process.env.NODE_ENV === 'development';
+
 export interface VolumePulseData {
   symbol: string;
   timestamp: string;
@@ -146,7 +148,7 @@ export function useVolumePulseRealtime(symbol: string | null) {
       }));
 
       // 🔥 Log volume pulse update
-      if (data.status === 'LIVE') {
+      if (isDev && data.status === 'LIVE') {
         console.log(
           `[VOLUME-PULSE] 📊 ${symbol}: ${data.volume_strength} | Signal: ${data.volume_pulse_signal} | Confidence: ${data.signal_confidence}%`
         );
@@ -178,7 +180,7 @@ export function useVolumePulseRealtime(symbol: string | null) {
       batchTimerRef.current = setTimeout(() => {
         if (pendingUpdateRef.current) {
           // ✨ Trigger analysis update
-          console.log(`[VOLUME-PULSE] 🔄 Batch update triggered for ${symbol}`);
+          if (isDev) console.log(`[VOLUME-PULSE] 🔄 Batch update triggered for ${symbol}`);
           fetchVolumePulseData();
           pendingUpdateRef.current = false;
         }
@@ -193,7 +195,7 @@ export function useVolumePulseRealtime(symbol: string | null) {
   useEffect(() => {
     if (!symbol) return;
 
-    console.log(`[VOLUME-PULSE] 🚀 Initializing real-time monitor for ${symbol}`);
+    if (isDev) console.log(`[VOLUME-PULSE] 🚀 Initializing real-time monitor for ${symbol}`);
 
     // Initial fetch
     fetchVolumePulseData();
@@ -207,12 +209,12 @@ export function useVolumePulseRealtime(symbol: string | null) {
 
     // API polling (3-second background sync)
     apiTimerRef.current = setInterval(() => {
-      console.log(`[VOLUME-PULSE] ⏱️  API poll for ${symbol}`);
+      if (isDev) console.log(`[VOLUME-PULSE] ⏱️  API poll for ${symbol}`);
       fetchVolumePulseData();
     }, API_POLL_INTERVAL);
 
     return () => {
-      console.log(`[VOLUME-PULSE] 🛑 Cleaning up for ${symbol}`);
+      if (isDev) console.log(`[VOLUME-PULSE] 🛑 Cleaning up for ${symbol}`);
       window.removeEventListener(`market-tick-${symbol}`, handleTick as EventListener);
       clearTimeout(batchTimerRef.current);
       clearInterval(apiTimerRef.current);

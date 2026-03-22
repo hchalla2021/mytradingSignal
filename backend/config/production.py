@@ -17,10 +17,10 @@ class ProductionConfig:
     ZERODHA_API_KEY: str = os.getenv("ZERODHA_API_KEY", "")
     ZERODHA_API_SECRET: str = os.getenv("ZERODHA_API_SECRET", "")
     ZERODHA_ACCESS_TOKEN: str = os.getenv("ZERODHA_ACCESS_TOKEN", "")
-    REDIRECT_URL: str = os.getenv("REDIRECT_URL", "http://localhost:8000/api/auth/callback")
+    REDIRECT_URL: str = os.getenv("REDIRECT_URL", "")
     
     # Security
-    JWT_SECRET: str = os.getenv("JWT_SECRET", "change-this-in-production")
+    JWT_SECRET: str = os.getenv("JWT_SECRET", "")
     JWT_ALGORITHM: str = os.getenv("JWT_ALGORITHM", "HS256")
     ACCESS_TOKEN_EXPIRE_MINUTES: int = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "30"))
     

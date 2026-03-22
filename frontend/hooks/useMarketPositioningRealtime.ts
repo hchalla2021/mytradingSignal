@@ -3,6 +3,8 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { API_CONFIG } from '@/lib/api-config';
 
+const isDev = process.env.NODE_ENV === 'development';
+
 export interface MarketPositioningData {
   symbol: string;
   timestamp: string;
@@ -170,7 +172,7 @@ export function useMarketPositioningRealtime(symbol: string | null) {
       }));
 
       // 🔥 Log market positioning update
-      if (data.status === 'LIVE') {
+      if (isDev && data.status === 'LIVE') {
         console.log(
           `[MARKET-POSITIONING] 🎯 ${symbol}: ${data.setup_quality} setup | ${data.entry_opportunity_rating}% opportunity | Confidence: ${data.positioning_confidence}%`
         );
@@ -202,7 +204,7 @@ export function useMarketPositioningRealtime(symbol: string | null) {
       batchTimerRef.current = setTimeout(() => {
         if (pendingUpdateRef.current) {
           // ✨ Trigger analysis update
-          console.log(`[MARKET-POSITIONING] 🔄 Batch update triggered for ${symbol}`);
+          if (isDev) console.log(`[MARKET-POSITIONING] 🔄 Batch update triggered for ${symbol}`);
           fetchMarketPositioningData();
           pendingUpdateRef.current = false;
         }
@@ -217,7 +219,7 @@ export function useMarketPositioningRealtime(symbol: string | null) {
   useEffect(() => {
     if (!symbol) return;
 
-    console.log(`[MARKET-POSITIONING] 🚀 Initializing market positioning monitor for ${symbol}`);
+    if (isDev) console.log(`[MARKET-POSITIONING] 🚀 Initializing market positioning monitor for ${symbol}`);
 
     // Initial fetch
     fetchMarketPositioningData();
@@ -231,12 +233,12 @@ export function useMarketPositioningRealtime(symbol: string | null) {
 
     // API polling (3-second background sync)
     apiTimerRef.current = setInterval(() => {
-      console.log(`[MARKET-POSITIONING] ⏱️  API poll for ${symbol}`);
+      if (isDev) console.log(`[MARKET-POSITIONING] ⏱️  API poll for ${symbol}`);
       fetchMarketPositioningData();
     }, API_POLL_INTERVAL);
 
     return () => {
-      console.log(`[MARKET-POSITIONING] 🛑 Cleaning up for ${symbol}`);
+      if (isDev) console.log(`[MARKET-POSITIONING] 🛑 Cleaning up for ${symbol}`);
       window.removeEventListener(`market-tick-${symbol}`, handleTick as EventListener);
       clearTimeout(batchTimerRef.current);
       clearInterval(apiTimerRef.current);

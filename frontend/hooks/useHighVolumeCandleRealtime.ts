@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { API_CONFIG } from '@/lib/api-config';
+
+const isDev = process.env.NODE_ENV === 'development';
 // Ultra-fast volume pattern detection with WebSocket + batching + 3s API polling
 //
 // Architecture:
@@ -189,7 +191,7 @@ export function useHighVolumeCandleRealtime(symbol: string): UseHighVolumeCandle
         ws = new WebSocket(wsUrl);
 
         ws.onopen = () => {
-          console.log(`[HIGH-VOLUME] 🟢 WebSocket connected for ${symbol}`);
+          if (isDev) console.log(`[HIGH-VOLUME] 🟢 WebSocket connected for ${symbol}`);
           // Subscribe to market ticks
           ws?.send(
             JSON.stringify({
@@ -227,7 +229,7 @@ export function useHighVolumeCandleRealtime(symbol: string): UseHighVolumeCandle
         };
 
         ws.onclose = () => {
-          console.log(`[HIGH-VOLUME] 🟠 WebSocket disconnected for ${symbol}`);
+          if (isDev) console.log(`[HIGH-VOLUME] 🟠 WebSocket disconnected for ${symbol}`);
 
           // Attempt reconnection after 5 seconds
           wsReconnectTimer = setTimeout(connectWebSocket, 5000);

@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { API_CONFIG } from '@/lib/api-config';
+
+const isDev = process.env.NODE_ENV === 'development';
 // Real-time order flow imbalance detection with institutional positioning analysis
 //
 // Architecture:
@@ -200,7 +202,7 @@ export function useSmartMoneyFlowRealtime(symbol: string): UseSmartMoneyFlowReal
         ws = new WebSocket(wsUrl);
 
         ws.onopen = () => {
-          console.log(`[SMART-MONEY] 🟢 WebSocket connected for ${symbol}`);
+          if (isDev) console.log(`[SMART-MONEY] 🟢 WebSocket connected for ${symbol}`);
           // Subscribe to market ticks
           ws?.send(
             JSON.stringify({
@@ -238,7 +240,7 @@ export function useSmartMoneyFlowRealtime(symbol: string): UseSmartMoneyFlowReal
         };
 
         ws.onclose = () => {
-          console.log(`[SMART-MONEY] 🟠 WebSocket disconnected for ${symbol}`);
+          if (isDev) console.log(`[SMART-MONEY] 🟠 WebSocket disconnected for ${symbol}`);
 
           // Attempt reconnection after 5 seconds
           wsReconnectTimer = setTimeout(connectWebSocket, 5000);

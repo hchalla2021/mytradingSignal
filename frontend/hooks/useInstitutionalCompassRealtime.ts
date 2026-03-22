@@ -3,6 +3,8 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { API_CONFIG } from '@/lib/api-config';
 
+const isDev = process.env.NODE_ENV === 'development';
+
 export interface FactorScore {
   value: number;
   factor: string;
@@ -148,7 +150,7 @@ export function useInstitutionalCompassRealtime(symbol: string | null) {
       }));
 
       // 🔥 Log compass update
-      if (data.status === 'LIVE') {
+      if (isDev && data.status === 'LIVE') {
         console.log(
           `[INSTITUTIONAL-COMPASS] 🧭 ${symbol}: ${data.compass_signal} (${data.institutional_conviction}% conviction)`
         );
@@ -180,7 +182,7 @@ export function useInstitutionalCompassRealtime(symbol: string | null) {
       batchTimerRef.current = setTimeout(() => {
         if (pendingUpdateRef.current) {
           // ✨ Trigger compass update
-          console.log(`[INSTITUTIONAL-COMPASS] 🔄 Batch update triggered for ${symbol}`);
+          if (isDev) console.log(`[INSTITUTIONAL-COMPASS] 🔄 Batch update triggered for ${symbol}`);
           fetchInstitutionalCompassData();
           pendingUpdateRef.current = false;
         }
@@ -195,7 +197,7 @@ export function useInstitutionalCompassRealtime(symbol: string | null) {
   useEffect(() => {
     if (!symbol) return;
 
-    console.log(`[INSTITUTIONAL-COMPASS] 🚀 Initializing institutional positioning monitor for ${symbol}`);
+    if (isDev) console.log(`[INSTITUTIONAL-COMPASS] 🚀 Initializing institutional positioning monitor for ${symbol}`);
 
     // Initial fetch
     fetchInstitutionalCompassData();
@@ -209,12 +211,12 @@ export function useInstitutionalCompassRealtime(symbol: string | null) {
 
     // API polling (3-second background sync)
     apiTimerRef.current = setInterval(() => {
-      console.log(`[INSTITUTIONAL-COMPASS] ⏱️  API poll for ${symbol}`);
+      if (isDev) console.log(`[INSTITUTIONAL-COMPASS] ⏱️  API poll for ${symbol}`);
       fetchInstitutionalCompassData();
     }, API_POLL_INTERVAL);
 
     return () => {
-      console.log(`[INSTITUTIONAL-COMPASS] 🛑 Cleaning up for ${symbol}`);
+      if (isDev) console.log(`[INSTITUTIONAL-COMPASS] 🛑 Cleaning up for ${symbol}`);
       window.removeEventListener(`market-tick-${symbol}`, handleTick as EventListener);
       clearTimeout(batchTimerRef.current);
       clearInterval(apiTimerRef.current);

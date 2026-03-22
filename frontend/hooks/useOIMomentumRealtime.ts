@@ -3,6 +3,8 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { API_CONFIG } from '@/lib/api-config';
 
+const isDev = process.env.NODE_ENV === 'development';
+
 export interface OIMomentumData {
   symbol: string;
   timestamp: string;
@@ -142,7 +144,7 @@ export function useOIMomentumRealtime(symbol: string | null) {
       }));
 
       // 🔥 Log OI momentum update
-      if (data.status === 'LIVE') {
+      if (isDev && data.status === 'LIVE') {
         console.log(
           `[OI-MOMENTUM] 📊 ${symbol}: ${data.oi_pattern} | PCR: ${data.pcr_value.toFixed(2)} | Confidence: ${data.overall_confidence}%`
         );
@@ -174,7 +176,7 @@ export function useOIMomentumRealtime(symbol: string | null) {
       batchTimerRef.current = setTimeout(() => {
         if (pendingUpdateRef.current) {
           // ✨ Trigger analysis update
-          console.log(`[OI-MOMENTUM] 🔄 Batch update triggered for ${symbol}`);
+          if (isDev) console.log(`[OI-MOMENTUM] 🔄 Batch update triggered for ${symbol}`);
           fetchOIMomentumData();
           pendingUpdateRef.current = false;
         }
@@ -189,7 +191,7 @@ export function useOIMomentumRealtime(symbol: string | null) {
   useEffect(() => {
     if (!symbol) return;
 
-    console.log(`[OI-MOMENTUM] 🚀 Initializing real-time monitor for ${symbol}`);
+    if (isDev) console.log(`[OI-MOMENTUM] 🚀 Initializing real-time monitor for ${symbol}`);
 
     // Initial fetch
     fetchOIMomentumData();
@@ -203,12 +205,12 @@ export function useOIMomentumRealtime(symbol: string | null) {
 
     // API polling (3-second background sync)
     apiTimerRef.current = setInterval(() => {
-      console.log(`[OI-MOMENTUM] ⏱️  API poll for ${symbol}`);
+      if (isDev) console.log(`[OI-MOMENTUM] ⏱️  API poll for ${symbol}`);
       fetchOIMomentumData();
     }, API_POLL_INTERVAL);
 
     return () => {
-      console.log(`[OI-MOMENTUM] 🛑 Cleaning up for ${symbol}`);
+      if (isDev) console.log(`[OI-MOMENTUM] 🛑 Cleaning up for ${symbol}`);
       window.removeEventListener(`market-tick-${symbol}`, handleTick as EventListener);
       clearTimeout(batchTimerRef.current);
       clearInterval(apiTimerRef.current);

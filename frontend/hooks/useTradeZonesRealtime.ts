@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { API_CONFIG } from '@/lib/api-config';
+
+const isDev = process.env.NODE_ENV === 'development';
 // Real-time zone detection with entry/exit signals based on EMA levels
 //
 // Architecture:
@@ -202,7 +204,7 @@ export function useTradeZonesRealtime(symbol: string): UseTradeZonesRealtimeRetu
         ws = new WebSocket(wsUrl);
 
         ws.onopen = () => {
-          console.log(`[TRADE-ZONES] 🟢 WebSocket connected for ${symbol}`);
+          if (isDev) console.log(`[TRADE-ZONES] 🟢 WebSocket connected for ${symbol}`);
           // Subscribe to market ticks
           ws?.send(
             JSON.stringify({
@@ -240,7 +242,7 @@ export function useTradeZonesRealtime(symbol: string): UseTradeZonesRealtimeRetu
         };
 
         ws.onclose = () => {
-          console.log(`[TRADE-ZONES] 🟠 WebSocket disconnected for ${symbol}`);
+          if (isDev) console.log(`[TRADE-ZONES] 🟠 WebSocket disconnected for ${symbol}`);
 
           // Attempt reconnection after 5 seconds
           wsReconnectTimer = setTimeout(connectWebSocket, 5000);
