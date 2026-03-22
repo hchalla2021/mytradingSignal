@@ -908,6 +908,24 @@ export default function Home() {
         {/* P1: ⚡ PURE LIQUIDITY INTELLIGENCE */}
         <LiquidityIntelligence />
 
+        {/* P4: Smart Money • Order Logic */}
+        <div className="mt-6 sm:mt-6 border-2 border-purple-600/40 rounded-2xl p-3 sm:p-4 bg-gradient-to-br from-purple-950/20 via-dark-card/50 to-dark-elevated/40 backdrop-blur-sm shadow-xl shadow-purple-600/15">
+          {/* Section Header */}
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-3 sm:mb-4">
+            <SectionTitle
+              title="Smart Money • Order Logic"
+              subtitle="Order Flow • Institutional Positioning • Fair Value Gaps • Order Blocks • Market Imbalances"
+              accentColor="purple"
+            />
+          </div>
+          
+          <div className="grid grid-cols-1 lg:grid-cols-2 2xl:grid-cols-3 gap-3">
+            <InstitutionalMarketView symbol="NIFTY" />
+            <InstitutionalMarketView symbol="BANKNIFTY" />
+            <InstitutionalMarketView symbol="SENSEX" />
+          </div>
+        </div>
+
         {/* P2: Trend Base Section */}
         <div className="mt-6 sm:mt-6">
           <div className="flex flex-col gap-1 mb-3 sm:mb-4">
@@ -981,24 +999,6 @@ export default function Home() {
               liveChangePct={marketData.SENSEX?.changePercent}
               marketStatus={marketStatus}
             />
-          </div>
-        </div>
-
-        {/* P4: Smart Money • Order Logic */}
-        <div className="mt-6 sm:mt-6 border-2 border-purple-600/40 rounded-2xl p-3 sm:p-4 bg-gradient-to-br from-purple-950/20 via-dark-card/50 to-dark-elevated/40 backdrop-blur-sm shadow-xl shadow-purple-600/15">
-          {/* Section Header */}
-          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-3 sm:mb-4">
-            <SectionTitle
-              title="Smart Money • Order Logic"
-              subtitle="Order Flow • Institutional Positioning • Fair Value Gaps • Order Blocks • Market Imbalances"
-              accentColor="purple"
-            />
-          </div>
-          
-          <div className="grid grid-cols-1 lg:grid-cols-2 2xl:grid-cols-3 gap-3">
-            <InstitutionalMarketView symbol="NIFTY" />
-            <InstitutionalMarketView symbol="BANKNIFTY" />
-            <InstitutionalMarketView symbol="SENSEX" />
           </div>
         </div>
 
