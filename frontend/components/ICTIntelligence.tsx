@@ -474,6 +474,11 @@ const SummaryStrip = memo(({ data }: { data: { NIFTY: ICTIndex | null; BANKNIFTY
 
   const bulls = indices.filter(x => x.direction === 'BULLISH').length;
   const bears = indices.filter(x => x.direction === 'BEARISH').length;
+  const total = bulls + bears;
+  
+  // Calculate buyer/seller percentages
+  const buyerPct = total > 0 ? Math.round((bulls / total) * 100) : 50;
+  const sellerPct = 100 - buyerPct;
 
   let marketBias: string;
   let biasColor: string;
@@ -487,9 +492,13 @@ const SummaryStrip = memo(({ data }: { data: { NIFTY: ICTIndex | null; BANKNIFTY
   return (
     <div className="mb-3 rounded-xl bg-emerald-950/40 border border-emerald-500/20 px-4 py-3
                     flex flex-wrap items-center gap-4 shadow-sm shadow-emerald-500/5">
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-3">
         <span className="text-[10px] text-emerald-400/70 uppercase tracking-wider font-semibold">ICT Bias</span>
-        <span className={`text-sm font-black ${biasColor}`}>{marketBias}</span>
+        <div className="flex items-center gap-2">
+          <span className="text-sm font-black text-emerald-400">{buyerPct}% BUY</span>
+          <span className="text-slate-400">/</span>
+          <span className="text-sm font-black text-red-400">{sellerPct}% SELL</span>
+        </div>
       </div>
       <div className="w-px h-4 bg-emerald-500/20" />
       <div className="flex items-center gap-2">

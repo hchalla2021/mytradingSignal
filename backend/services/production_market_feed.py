@@ -1,6 +1,7 @@
 """
 🔥 PRODUCTION MARKET FEED SERVICE
 Integrates with ZerodhaWebSocketManager for bulletproof trading
+Now with advanced order flow analysis
 """
 
 import asyncio
@@ -15,6 +16,7 @@ from services.cache import CacheService
 from services.websocket_manager import ConnectionManager
 from services.zerodha_websocket_manager import ZerodhaWebSocketManager
 from services.auth_state_machine import auth_state_manager
+from services.order_flow_analyzer import order_flow_analyzer
 from config.market_session import get_market_session
 
 settings = get_settings()
@@ -140,15 +142,28 @@ class ProductionMarketFeedService:
                 continue  # Keep processing
 
     def _transform_and_broadcast_tick(self, tick):
-        """Transform Zerodha tick and broadcast to clients"""
+        """Transform Zerodha tick and broadcast to clients with order flow analysis"""
         try:
             token = tick.get('instrument_token', 0)
             symbol = TOKEN_SYMBOL_MAP.get(token)
             
             if not symbol:
                 return
-                
-            # Transform tick to our format
+            
+            # Process order flow analysis
+            asyncio.create_task(self._process_and_broadcast_with_order_flow(tick, symbol))
+            
+        except Exception as e:
+            print(f"❌ Error processing tick: {e}")
+
+    async def _process_and_broadcast_with_order_flow(self, tick: Dict, symbol: str):
+        """Process tick through order flow analyzer and broadcast enhanced data"""
+        try:
+            # Get order flow metrics
+            order_flow_metrics = await order_flow_analyzer.process_zerodha_tick(tick, symbol)
+            order_flow_data = order_flow_analyzer.get_current_metrics(symbol)
+            
+            # Transform basic tick to our format
             transformed_tick = {
                 "symbol": symbol,
                 "price": tick.get('last_price', 0),
@@ -162,6 +177,9 @@ class ProductionMarketFeedService:
                 "oi": tick.get('oi', 0),
                 "timestamp": datetime.now(IST).isoformat(),
                 "status": self._get_market_status(),
+                
+                # 🔥 NEW: Order flow data
+                "orderFlow": order_flow_data
             }
             
             # Calculate change percentage
@@ -178,13 +196,13 @@ class ProductionMarketFeedService:
                 "type": "tick",
                 "data": transformed_tick
             }
-            asyncio.create_task(self.ws_manager.broadcast(message))
+            await self.ws_manager.broadcast(message)
             
             # Cache the data
-            asyncio.create_task(self._cache_tick(symbol, transformed_tick))
+            await self._cache_tick(symbol, transformed_tick)
             
         except Exception as e:
-            print(f"❌ Error processing tick: {e}")
+            print(f"❌ Error in order flow processing: {e}")
 
     async def _cache_tick(self, symbol: str, tick_data: Dict):
         """Cache tick data for quick access"""
