@@ -184,7 +184,7 @@ export function useAuth() {
 
   // Periodic revalidation - every 2 minutes for faster token expiry detection
   useEffect(() => {
-    const interval = setInterval(validateToken, 2 * 60 * 1000); // 2 minutes
+    const interval = setInterval(validateToken, VALIDATION_INTERVAL); // 5 minutes
     return () => clearInterval(interval);
   }, [validateToken]);
 
@@ -246,7 +246,7 @@ export function useAuth() {
           // Error accessing popup, might be closed
           clearInterval(pollTimer);
         }
-      }, 500); // Check every 500ms
+      }, 2000); // Check every 2 seconds
 
       // Cleanup after 10 minutes (enough time for 2FA)
       setTimeout(() => {

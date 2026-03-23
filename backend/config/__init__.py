@@ -186,8 +186,10 @@ class Settings(BaseSettings):
         """Parse CORS origins from comma-separated string.
         
         Starlette 0.50+ no longer treats ["*"] as wildcard for preflight.
-        Always includes localhost dev origins so local development works
-        regardless of which environment block is active in .env.
+        Explicit origins required. Dev origins added when DEBUG=true or
+        CORS_ORIGINS=*.
+        In production, set CORS_ORIGINS to exact production domain(s).
+        For local dev, set DEBUG=true in .env.
         """
         dev_origins = [
             "http://localhost:3000",
@@ -200,11 +202,12 @@ class Settings(BaseSettings):
             origins = list(dev_origins)
         else:
             origins = [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
-            # Always include dev origins for local development
+        # Add dev origins when DEBUG is on
+        if self.debug:
             for dev in dev_origins:
                 if dev not in origins:
                     origins.append(dev)
-        # Include production frontend URL if set
+        # Always include configured frontend URL
         if self.frontend_url and self.frontend_url not in origins:
             origins.append(self.frontend_url)
         return origins

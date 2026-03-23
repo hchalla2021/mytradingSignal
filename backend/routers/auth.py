@@ -30,7 +30,6 @@ async def get_login_url():
     login_url = f"{settings.zerodha_api_base_url}/connect/login?v=3&api_key={settings.zerodha_api_key}"
     return {
         "login_url": login_url,
-        "api_key": settings.zerodha_api_key,
         "redirect_url": settings.redirect_url,
         "instructions": f"Set this redirect_url in your Zerodha app settings at {settings.zerodha_developers_url}"
     }
@@ -109,7 +108,7 @@ async def zerodha_callback(request_token: str = Query(...), status: str = Query(
     """
     print(f"\n{'='*60}")
     print(f"🔐 ZERODHA CALLBACK RECEIVED")
-    print(f"   Request Token: {request_token[:20]}...")
+    print(f"   Request Token: ***REDACTED***")
     print(f"   Status: {status}")
     print(f"   Action: {action}")
     print(f"{'='*60}\n")
@@ -134,7 +133,6 @@ async def zerodha_callback(request_token: str = Query(...), status: str = Query(
         print(f"\n✅ SESSION GENERATED SUCCESSFULLY")
         print(f"   User ID: {user_id}")
         print(f"   User Name: {user_name}")
-        print(f"   Access Token: {access_token[:20]}...")
         
         # Save access token to .env file for persistence
         env_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env")
@@ -163,9 +161,7 @@ async def zerodha_callback(request_token: str = Query(...), status: str = Query(
         print(f"🔄 Settings cache cleared - all services will use new token")
         print(f"✅ Verification: Token in memory matches saved token: {saved_token == access_token}")
         if saved_token != access_token:
-            print(f"   ⚠️ WARNING: Token mismatch!")
-            print(f"   → Original: {access_token[:20]}...")
-            print(f"   → Saved: {saved_token[:20] if saved_token else 'NONE'}...")
+            print(f"   ⚠️ WARNING: Token mismatch! Saved token does not match.")
         
         print(f"\n✅ TOKEN SAVED! File watcher will trigger automatic reconnection...")
         print(f"   No backend restart needed - connection will resume automatically")

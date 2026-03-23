@@ -11,6 +11,7 @@ interface CacheData {
 export default function CacheDebugBanner() {
   const [cacheData, setCacheData] = useState<CacheData | null>(null);
   const [showDetails, setShowDetails] = useState(false);
+  const isDev = process.env.NODE_ENV === 'development';
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -20,9 +21,9 @@ export default function CacheDebugBanner() {
       if (saved) {
         const parsed = JSON.parse(saved);
         setCacheData(parsed);
-        console.log('✅ Cache found:', parsed);
+        if (isDev) console.log('✅ Cache found:', parsed);
       } else {
-        console.log('⚠️ No cache in localStorage');
+        if (isDev) console.log('⚠️ No cache in localStorage');
       }
     } catch (e) {
       console.error('Cache read error:', e);
