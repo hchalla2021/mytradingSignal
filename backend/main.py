@@ -242,7 +242,7 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-# CORS
+# CORS — Starlette 0.50+ requires explicit origins (not ["*"]) for preflight to work
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins_list,

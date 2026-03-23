@@ -183,10 +183,31 @@ class Settings(BaseSettings):
     
     @property
     def cors_origins_list(self) -> list:
-        """Parse CORS origins from comma-separated string."""
+        """Parse CORS origins from comma-separated string.
+        
+        Starlette 0.50+ no longer treats ["*"] as wildcard for preflight.
+        Always includes localhost dev origins so local development works
+        regardless of which environment block is active in .env.
+        """
+        dev_origins = [
+            "http://localhost:3000",
+            "http://127.0.0.1:3000",
+            "http://localhost:3001",
+            "http://localhost:8000",
+            "http://127.0.0.1:8000",
+        ]
         if self.cors_origins == "*":
-            return ["*"]
-        return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
+            origins = list(dev_origins)
+        else:
+            origins = [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
+            # Always include dev origins for local development
+            for dev in dev_origins:
+                if dev not in origins:
+                    origins.append(dev)
+        # Include production frontend URL if set
+        if self.frontend_url and self.frontend_url not in origins:
+            origins.append(self.frontend_url)
+        return origins
     
     @property
     def alert_phones_list(self) -> list:
