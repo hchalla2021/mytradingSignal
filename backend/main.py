@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from config import get_settings
 from services.websocket_manager import manager
-from services.production_market_feed import ProductionMarketFeedService
+from services.market_feed import MarketFeedService
 from services.cache import CacheService
 from services.token_watcher import start_token_watcher
 from services.auth_state_machine import auth_state_manager
@@ -33,7 +33,7 @@ from routers.ict import http_router as ict_http, ws_router as ict_ws
 
 settings = get_settings()
 
-market_feed: ProductionMarketFeedService | None = None
+market_feed: MarketFeedService | None = None
 
 
 @asynccontextmanager
@@ -112,15 +112,13 @@ async def lifespan(app: FastAPI):
     from routers import diagnostics as diagnostics_module
     diagnostics_module.set_cache_instance(cache)
 
-    # 🔥 PRODUCTION MARKET FEED: Use ProductionMarketFeedService with Order Flow
-    # If not authenticated, feed won't start but API will serve cached/error data
-    # This prevents any mock/test data in production
-    # NEW: Includes real-time order flow analysis for Smart Money section
-    print("\n✅ Using PRODUCTION Market Feed with Order Flow Analysis")
+    # 🔥 PRODUCTION MARKET FEED: Use MarketFeedService (battle-tested)
+    # Order flow analysis is injected into its _update_and_broadcast pipeline
+    print("\n✅ Using MarketFeedService with Order Flow Analysis")
     if not auth_state_manager.is_authenticated:
         print("   ⚠️  Not authenticated - Feed will not start until you login")
         print("   💡 Click 🔑 LOGIN in the app to authenticate with Zerodha")
-    market_feed = ProductionMarketFeedService(cache, manager)
+    market_feed = MarketFeedService(cache, manager)
     
     # 🔥 Inject market_feed into diagnostics module for force-reconnect endpoint
     diagnostics_module.set_market_feed_instance(market_feed)

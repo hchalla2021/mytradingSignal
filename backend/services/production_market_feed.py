@@ -48,6 +48,9 @@ class ProductionMarketFeedService:
         self.tick_queue = Queue()
         self.processor_thread: Optional[threading.Thread] = None
         
+        # 🔥 FIX: Store event loop reference for cross-thread async calls
+        self._loop: Optional[asyncio.AbstractEventLoop] = None
+        
         print("🚀 ProductionMarketFeedService initialized")
 
     async def start(self):
@@ -57,6 +60,9 @@ class ProductionMarketFeedService:
             return
             
         print("🔥 Starting Production Market Feed Service...")
+        
+        # 🔥 FIX: Capture event loop for cross-thread async dispatch
+        self._loop = asyncio.get_running_loop()
         
         # Check authentication
         if not auth_state_manager.is_authenticated:
@@ -118,8 +124,9 @@ class ProductionMarketFeedService:
         self.current_status = status
         self.current_message = message
         
-        # Create status message for frontend
-        asyncio.create_task(self._notify_status(status, message))
+        # 🔥 FIX: Use run_coroutine_threadsafe — this callback runs in KiteTicker thread
+        if self._loop and self._loop.is_running():
+            asyncio.run_coroutine_threadsafe(self._notify_status(status, message), self._loop)
 
     async def _notify_status(self, status: str, message: str):
         """Notify connected clients about status changes"""
@@ -150,8 +157,12 @@ class ProductionMarketFeedService:
             if not symbol:
                 return
             
-            # Process order flow analysis
-            asyncio.create_task(self._process_and_broadcast_with_order_flow(tick, symbol))
+            # 🔥 FIX: Use run_coroutine_threadsafe — this runs in _process_ticks thread
+            if self._loop and self._loop.is_running():
+                asyncio.run_coroutine_threadsafe(
+                    self._process_and_broadcast_with_order_flow(tick, symbol),
+                    self._loop
+                )
             
         except Exception as e:
             print(f"❌ Error processing tick: {e}")
@@ -207,7 +218,9 @@ class ProductionMarketFeedService:
     async def _cache_tick(self, symbol: str, tick_data: Dict):
         """Cache tick data for quick access"""
         try:
-            await self.cache.set(f"tick:{symbol}", tick_data, expiry=300)  # 5 min expiry
+            # 🔥 FIX: Use set_market_data (writes to "market:{symbol}" key)
+            # so the WebSocket snapshot endpoint can find the data
+            await self.cache.set_market_data(symbol, tick_data)
         except Exception as e:
             print(f"⚠️ Cache error: {e}")
 
@@ -217,7 +230,8 @@ class ProductionMarketFeedService:
             # Get cached data or send empty snapshot
             snapshot = {}
             for symbol in ["NIFTY", "BANKNIFTY", "SENSEX"]:
-                cached_data = await self.cache.get(f"tick:{symbol}")
+                # 🔥 FIX: Use get_market_data (reads "market:{symbol}" key with fallback)
+                cached_data = await self.cache.get_market_data(symbol)
                 if cached_data:
                     snapshot[symbol] = cached_data
                     

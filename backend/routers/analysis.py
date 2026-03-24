@@ -769,11 +769,51 @@ async def get_smart_money_flow(symbol: str):
         except Exception:
             pass  # Fall through to defaults if cache read fails
         
+        # 🔥 OVERRIDE with LIVE order flow data (real-time from tick stream)
+        try:
+            from services.order_flow_analyzer import order_flow_analyzer
+            of_metrics = order_flow_analyzer.get_current_metrics(symbol)
+            if of_metrics and of_metrics.get('totalBidQty', 0) > 0:
+                of_pred = of_metrics.get('fiveMinPrediction', {})
+                of_signal = of_metrics.get('signal', 'HOLD')
+                of_conf = of_metrics.get('signalConfidence', 0.5)
+                buyer_agg = of_metrics.get('buyerAggressionRatio', 0.5)
+                
+                # Map order flow signal to smart money signal
+                if of_signal in ('STRONG_BUY', 'BUY'):
+                    smart_money_signal = of_signal
+                    smart_money_confidence = max(smart_money_confidence, int(of_conf * 100))
+                elif of_signal in ('STRONG_SELL', 'SELL'):
+                    smart_money_signal = of_signal
+                    smart_money_confidence = max(smart_money_confidence, int(of_conf * 100))
+                
+                order_flow_strength = int(buyer_agg * 100)
+                
+                # Use order flow 5-min prediction for imbalance
+                buy_pct = of_pred.get('buyDominancePct', 50)
+                sell_pct = of_pred.get('sellDominancePct', 50)
+                volume_imbalance = int(buy_pct - sell_pct)
+                
+                if volume_imbalance > 10:
+                    market_imbalance = "STRONG_BUY"
+                elif volume_imbalance > 5:
+                    market_imbalance = "ACCUMULATION"
+                elif volume_imbalance < -10:
+                    market_imbalance = "STRONG_SELL"
+                elif volume_imbalance < -5:
+                    market_imbalance = "DISTRIBUTION"
+                else:
+                    market_imbalance = "NEUTRAL"
+        except Exception as e:
+            pass  # Non-critical: fall back to cached values
+        
         result = {
             "symbol": symbol,
             "symbol_name": SYMBOL_MAPPING[symbol]["name"],
             "smart_money_signal": smart_money_signal,
             "smart_money_confidence": smart_money_confidence,
+            "signal": smart_money_signal,
+            "confidence": smart_money_confidence / 100 if smart_money_confidence > 1 else smart_money_confidence,
             "order_flow_strength": order_flow_strength,
             "buy_volume_ratio": order_flow_strength,
             "sell_volume_ratio": 100 - order_flow_strength,

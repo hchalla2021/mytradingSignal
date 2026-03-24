@@ -13,6 +13,7 @@ import React, { useState, useEffect, memo, useMemo, useCallback } from 'react';
 import { useIndiaVIX } from '@/hooks/useIndiaVIX';
 import IndiaVIXBadge from '@/components/IndiaVIXBadge';
 import { API_CONFIG } from '@/lib/api-config';
+import useOrderFlowRealtime from '@/hooks/useOrderFlowRealtime';
 
 interface SymbolData {
   symbol: string;
@@ -23,6 +24,8 @@ interface SymbolData {
   prediction_5m_direction: 'UP' | 'DOWN' | 'FLAT';
   prediction_5m_signal: 'STRONG_BUY' | 'BUY' | 'NEUTRAL' | 'SELL' | 'STRONG_SELL';
   prediction_5m_confidence: number;
+  order_flow_buy_pct?: number;
+  order_flow_sell_pct?: number;
   timestamp: string;
 }
 
@@ -327,6 +330,11 @@ export default function OverallMarketOutlook() {
   const [error, setError] = useState<string | null>(null);
   const { vixData, loading: vixLoading } = useIndiaVIX();
 
+  // 🔥 LIVE ORDER FLOW: Subscribe to WebSocket for real-time 5-min prediction updates
+  const niftyOF = useOrderFlowRealtime('NIFTY');
+  const bankniftyOF = useOrderFlowRealtime('BANKNIFTY');
+  const sensexOF = useOrderFlowRealtime('SENSEX');
+
   const fetchData = useCallback(async () => {
     try {
       const controller = new AbortController();
@@ -386,13 +394,79 @@ export default function OverallMarketOutlook() {
     </div>
   );
 
-  // Calculate integrated metrics across ALL symbols
-  const allSymbols = ['NIFTY', 'BANKNIFTY', 'SENSEX'];
+  // 🔥 MERGE live WebSocket order flow data into REST data for real-time updates
+  // When order flow prediction changes, overall values update INSTANTLY
+  const mergeOrderFlow = (
+    restData: SymbolData,
+    ofData: ReturnType<typeof useOrderFlowRealtime>
+  ): SymbolData => {
+    if (!ofData?.data?.fiveMinPrediction) return restData;
+    const pred = ofData.data.fiveMinPrediction;
+    const buyPct = pred.buyDominancePct ?? 50;
+    const sellPct = pred.sellDominancePct ?? 50;
+    const ofConf = Math.round((pred.confidence ?? 0) * 100);
+    const ofDir = pred.direction || 'NEUTRAL';
+
+    // Map order flow direction to 5m signal
+    let pred5mSignal: SymbolData['prediction_5m_signal'] = restData.prediction_5m_signal;
+    if (ofDir === 'STRONG_BUY' || ofDir === 'BUY' || ofDir === 'STRONG_SELL' || ofDir === 'SELL') {
+      pred5mSignal = ofDir as SymbolData['prediction_5m_signal'];
+    }
+
+    // Direction from buy/sell dominance
+    let pred5mDir: SymbolData['prediction_5m_direction'] = 'FLAT';
+    if (buyPct > 55) pred5mDir = 'UP';
+    else if (sellPct > 55) pred5mDir = 'DOWN';
+
+    // Confidence: blend order flow (60%) with index confidence (40%)
+    const blendedConf = Math.round(0.6 * ofConf + 0.4 * restData.confidence);
+
+    // Recalculate overall signal based on order flow agreement
+    const ofBullish = ofDir === 'STRONG_BUY' || ofDir === 'BUY';
+    const ofBearish = ofDir === 'STRONG_SELL' || ofDir === 'SELL';
+    const restBullish = restData.signal === 'STRONG_BUY' || restData.signal === 'BUY';
+    const restBearish = restData.signal === 'STRONG_SELL' || restData.signal === 'SELL';
+
+    let mergedSignal = restData.signal;
+    // Strengthen signal when both agree
+    if (ofBullish && restBullish && ofConf > 55) {
+      mergedSignal = 'STRONG_BUY';
+    } else if (ofBearish && restBearish && ofConf > 55) {
+      mergedSignal = 'STRONG_SELL';
+    }
+    // Weaken signal when they disagree
+    else if (ofBearish && restBullish) {
+      mergedSignal = 'NEUTRAL';
+    } else if (ofBullish && restBearish) {
+      mergedSignal = 'NEUTRAL';
+    }
+
+    return {
+      ...restData,
+      signal: mergedSignal,
+      confidence: blendedConf,
+      prediction_5m_direction: pred5mDir,
+      prediction_5m_signal: pred5mSignal,
+      prediction_5m_confidence: ofConf,
+      order_flow_buy_pct: buyPct,
+      order_flow_sell_pct: sellPct,
+      timestamp: new Date().toISOString(),
+    };
+  };
+
+  const liveData: MarketOutlookResponse = {
+    NIFTY: mergeOrderFlow(data.NIFTY, niftyOF),
+    BANKNIFTY: mergeOrderFlow(data.BANKNIFTY, bankniftyOF),
+    SENSEX: mergeOrderFlow(data.SENSEX, sensexOF),
+  };
+
+  // Calculate integrated metrics across ALL symbols (using LIVE merged data)
+  const allSymbols = ['NIFTY', 'BANKNIFTY', 'SENSEX'] as const;
   const avgIndexConfidence = Math.round(
-    allSymbols.reduce((sum, sym) => sum + (data[sym as keyof MarketOutlookResponse].confidence || 0), 0) / 3
+    allSymbols.reduce((sum, sym) => sum + (liveData[sym].confidence || 0), 0) / 3
   );
   const avg5minConfidence = Math.round(
-    allSymbols.reduce((sum, sym) => sum + (data[sym as keyof MarketOutlookResponse].prediction_5m_confidence || 0), 0) / 3
+    allSymbols.reduce((sum, sym) => sum + (liveData[sym].prediction_5m_confidence || 0), 0) / 3
   );
   const integratedConfidence = Math.round((avgIndexConfidence + avg5minConfidence) / 2);
   const confidenceDiff = Math.abs(avgIndexConfidence - avg5minConfidence);
@@ -400,7 +474,7 @@ export default function OverallMarketOutlook() {
 
   // Count direction agreements
   const bullishCount = allSymbols.filter(sym => {
-    const symbolData = data[sym as keyof MarketOutlookResponse];
+    const symbolData = liveData[sym];
     const indexBullish = symbolData.signal === 'STRONG_BUY' || symbolData.signal === 'BUY';
     const predictionBullish = symbolData.prediction_5m_signal === 'STRONG_BUY' || symbolData.prediction_5m_signal === 'BUY';
     return indexBullish && predictionBullish;
@@ -555,8 +629,8 @@ export default function OverallMarketOutlook() {
 
       {/* Three-Symbol Grid - ALWAYS VISIBLE */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {['NIFTY', 'BANKNIFTY', 'SENSEX'].map(symbol => (
-          <SignalCard key={symbol} data={data[symbol as keyof MarketOutlookResponse]} />
+        {(['NIFTY', 'BANKNIFTY', 'SENSEX'] as const).map(symbol => (
+          <SignalCard key={symbol} data={liveData[symbol]} />
         ))}
       </div>
 

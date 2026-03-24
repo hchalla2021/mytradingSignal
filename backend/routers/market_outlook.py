@@ -9,6 +9,7 @@ from services.live_market_indices_integration import (
     LiveMarketIndicesAnalyzer,
     MarketStatus
 )
+from services.order_flow_analyzer import order_flow_analyzer
 
 router = APIRouter(prefix="/api/analysis", tags=["market-outlook"])
 
@@ -311,15 +312,49 @@ class MarketOutlookCalculator:
         }
         total_confidence += oi_conf
 
-        # Calculate trend percentage
+        # 15. 🔥 LIVE ORDER FLOW 5-MIN PREDICTION (from WebSocket tick data)
+        of_data = indicators.get('order_flow_live', {})
+        of_pred = of_data.get('fiveMinPrediction', {})
+        of_signal_raw = of_data.get('signal', 'HOLD')
+        of_pred_dir = of_pred.get('direction', 'NEUTRAL')
+        of_pred_conf = of_pred.get('confidence', 0)  # 0-1 scale
+        of_pred_buy_pct = of_pred.get('buyDominancePct', 50.0)
+        of_pred_sell_pct = of_pred.get('sellDominancePct', 50.0)
+
+        # Map order flow signal to standard signal
+        of_signal = 'NEUTRAL'
+        of_conf = 50
+        if of_pred_dir in ('STRONG_BUY', 'BUY'):
+            of_signal = of_pred_dir
+            of_conf = max(int(of_pred_conf * 100), 55)
+            bullish_count += 1
+        elif of_pred_dir in ('STRONG_SELL', 'SELL'):
+            of_signal = of_pred_dir
+            of_conf = max(int(of_pred_conf * 100), 55)
+            bearish_count += 1
+        else:
+            of_conf = max(int(of_pred_conf * 100), 30)
+            neutral_count += 1
+
+        signals['order_flow_5m'] = {
+            'name': 'Order Flow 5-Min',
+            'confidence': of_conf,
+            'signal': of_signal,
+            'status': f"Buy {of_pred_buy_pct:.1f}% / Sell {of_pred_sell_pct:.1f}%",
+            'buyDominancePct': of_pred_buy_pct,
+            'sellDominancePct': of_pred_sell_pct,
+        }
+        total_confidence += of_conf
+
+        # Calculate trend percentage (now 13 signals)
         total_signals = bullish_count + bearish_count + neutral_count
         if total_signals > 0:
             trend_percentage = ((bullish_count - bearish_count) / total_signals) * 100
         else:
             trend_percentage = 0
 
-        # Calculate overall signal
-        overall_confidence = int(total_confidence / 12)
+        # Calculate overall signal (now dividing by 13)
+        overall_confidence = int(total_confidence / max(total_signals, 1))
         
         if bullish_count > bearish_count + 3:
             overall_signal = 'STRONG_BUY' if overall_confidence > 70 else 'BUY'
@@ -327,6 +362,26 @@ class MarketOutlookCalculator:
             overall_signal = 'STRONG_SELL' if overall_confidence > 70 else 'SELL'
         else:
             overall_signal = 'NEUTRAL'
+
+        # 🔥 5-MIN PREDICTION: Use REAL order flow prediction (not candle intent)
+        # Direction from order flow buy/sell dominance
+        if of_pred_buy_pct > 55:
+            pred_5m_direction = 'UP'
+        elif of_pred_sell_pct > 55:
+            pred_5m_direction = 'DOWN'
+        else:
+            pred_5m_direction = 'FLAT'
+        
+        # Signal: blend order flow with overall signal for accuracy
+        if of_pred_dir in ('STRONG_BUY', 'BUY', 'STRONG_SELL', 'SELL'):
+            pred_5m_signal = of_pred_dir
+        elif candle_intent_conf > 60:
+            pred_5m_signal = candle_intent_signal
+        else:
+            pred_5m_signal = overall_signal
+        
+        # Confidence: weighted blend (60% order flow, 40% overall)
+        pred_5m_confidence = int(0.6 * of_conf + 0.4 * overall_confidence)
 
         return {
             'timestamp': datetime.now().isoformat(),
@@ -337,10 +392,12 @@ class MarketOutlookCalculator:
             'bearish_signals': bearish_count,
             'neutral_signals': neutral_count,
             'trend_percentage': round(trend_percentage, 1),
-            # 🔥 5-MINUTE PREDICTION INTEGRATION
-            'prediction_5m_direction': 'UP' if bullish_count > bearish_count else 'DOWN' if bearish_count > bullish_count else 'FLAT',
-            'prediction_5m_signal': candle_intent_signal if candle_intent_conf > 50 else overall_signal,
-            'prediction_5m_confidence': int(candle_intent_conf) if candle_intent_conf > 50 else int(overall_confidence * 0.8),
+            # 🔥 5-MINUTE PREDICTION from LIVE ORDER FLOW
+            'prediction_5m_direction': pred_5m_direction,
+            'prediction_5m_signal': pred_5m_signal,
+            'prediction_5m_confidence': pred_5m_confidence,
+            'order_flow_buy_pct': round(of_pred_buy_pct, 1),
+            'order_flow_sell_pct': round(of_pred_sell_pct, 1),
             'signals': {
                 'trend_base': signals['trend_base'],
                 'volume_pulse': signals['volume_pulse'],
@@ -354,6 +411,7 @@ class MarketOutlookCalculator:
                 'smart_money_flow': signals['smart_money_flow'],
                 'trade_zones': signals['trade_zones'],
                 'oi_momentum': signals['oi_momentum'],
+                'order_flow_5m': signals['order_flow_5m'],
             }
         }
 
@@ -382,6 +440,14 @@ async def get_market_outlook(symbol: str):
 
         # 🔥 ENHANCE indicators with 12-signal calculations
         indicators = enhance_analysis_with_12_signals(analysis)
+
+        # 🔥 Inject LIVE order flow data from WebSocket tick stream
+        try:
+            of_metrics = order_flow_analyzer.get_current_metrics(symbol)
+            if of_metrics and of_metrics.get('totalBidQty', 0) > 0:
+                indicators['order_flow_live'] = of_metrics
+        except Exception as e:
+            print(f"⚠️ Order flow injection for {symbol}: {e}")
 
         # Calculate market outlook
         outlook = await MarketOutlookCalculator.calculate_outlet(symbol, indicators)
@@ -451,10 +517,13 @@ async def get_market_outlook_all_formatted():
                 # Map signal counts (normalize to percentages)
                 'buy_signals': int((outlook.get('bullish_signals', 0) / max(outlook.get('bullish_signals', 0) + outlook.get('bearish_signals', 0) + outlook.get('neutral_signals', 0), 1)) * 100),
                 'sell_signals': int((outlook.get('bearish_signals', 0) / max(outlook.get('bullish_signals', 0) + outlook.get('bearish_signals', 0) + outlook.get('neutral_signals', 0), 1)) * 100),
-                # 5-minute prediction integration (from candle intent signal)
+                # 5-minute prediction from LIVE order flow data
                 'prediction_5m_direction': outlook.get('prediction_5m_direction', 'FLAT'),
                 'prediction_5m_signal': outlook.get('prediction_5m_signal', 'NEUTRAL'),
                 'prediction_5m_confidence': outlook.get('prediction_5m_confidence', 50),
+                # Order flow buy/sell breakdown
+                'order_flow_buy_pct': outlook.get('order_flow_buy_pct', 50.0),
+                'order_flow_sell_pct': outlook.get('order_flow_sell_pct', 50.0),
                 'timestamp': outlook.get('timestamp', datetime.now().isoformat())
             }
             results[symbol] = formatted

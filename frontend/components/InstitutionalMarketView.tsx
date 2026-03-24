@@ -25,95 +25,86 @@ interface OrderFlowCardProps {
   isLoading: boolean;
 }
 
-// 📊 IMPROVED MARKET DEPTH COMPONENT - LIVE DATA WITH DOMINANCE HIGHLIGHTING
+// 📊 IMPROVED MARKET DEPTH COMPONENT - FIXED LAYOUT, NO FLICKER
 const MarketDepthDisplay = memo(({ data }: { data: OrderFlowData }) => {
   const maxQty = Math.max(...data.askLevels.map(l => l.quantity), ...data.bidLevels.map(l => l.quantity), 10000);
   
-  // Ask side (Sellers) - Red
-  const askLevels = data.askLevels.slice().reverse(); // Reverse to show best ask at bottom
-  // Bid side (Buyers) - Green
+  const askLevels = data.askLevels.slice().reverse();
   const bidLevels = data.bidLevels;
   
-  // Calculate dominance ratio and highlight intensity
   const buyQty = data.totalBidQty || 1;
   const sellQty = data.totalAskQty || 1;
   const buyerDominance = buyQty / (sellQty || 1);
   const sellerDominance = sellQty / (buyQty || 1);
   
-  // Determine which side is dominant and intensity
-  const isDominantBuyers = buyerDominance > 1.2; // More than 20% difference
+  const isDominantBuyers = buyerDominance > 1.2;
   const isDominantSellers = sellerDominance > 1.2;
-  const dominanceRatio = Math.max(buyerDominance, sellerDominance);
   
-  // Highlight intensity (0-100%)
-  const highlightIntensity = Math.min((dominanceRatio - 1) * 100, 100);
-  
-  // Glow colors based on dominance
-  const buyerGlow = isDominantBuyers ? `0 0 ${Math.min(highlightIntensity / 2, 20)}px rgba(74, 222, 128, ${highlightIntensity / 100})` : 'none';
-  const sellerGlow = isDominantSellers ? `0 0 ${Math.min(highlightIntensity / 2, 20)}px rgba(248, 113, 113, ${highlightIntensity / 100})` : 'none';
+  // Always-present dominance label (text changes, element stays)
+  const dominanceLabel = isDominantBuyers
+    ? `🟢 BUYERS ${buyerDominance.toFixed(1)}x`
+    : isDominantSellers
+    ? `🔴 SELLERS ${sellerDominance.toFixed(1)}x`
+    : '';
   
   return (
     <div className="space-y-2">
-      {/* Title with dominance indicator */}
-      <div className="text-xs font-semibold text-gray-300 flex justify-between items-center">
+      {/* Title — fixed height, always present */}
+      <div className="text-xs font-semibold text-gray-300 flex justify-between items-center h-5">
         <span>Market Depth (5 Levels) - LIVE</span>
         <div className="flex items-center gap-2">
-          {isDominantBuyers && (
-            <span className="text-xs text-green-400 font-bold animate-pulse">
-              🟢 BUYERS {buyerDominance.toFixed(1)}x
-            </span>
-          )}
-          {isDominantSellers && (
-            <span className="text-xs text-red-400 font-bold animate-pulse">
-              🔴 SELLERS {sellerDominance.toFixed(1)}x
-            </span>
-          )}
+          <span
+            className="text-xs font-bold min-w-[100px] text-right"
+            style={{
+              color: isDominantBuyers ? '#4ade80' : isDominantSellers ? '#f87171' : 'transparent',
+            }}
+          >
+            {dominanceLabel || '\u00A0'}
+          </span>
           <span className="text-gray-500">Qty × Orders</span>
         </div>
       </div>
       
-      {/* Desktop View */}
+      {/* Desktop View — fixed structure */}
       <div className="hidden md:block space-y-2">
-        {/* SELLERS (ASK) - Top Section */}
+        {/* SELLERS (ASK) */}
         <div 
-          className={`relative bg-red-900/20 border-2 rounded p-2 space-y-1 transition-all duration-300 ${
-            isDominantSellers 
-              ? `border-red-500 bg-red-900/40` 
-              : 'border-red-700/30 bg-red-900/20'
-          }`}
+          className="relative bg-red-900/20 border-2 rounded p-2 space-y-1"
           style={{ 
-            boxShadow: sellerGlow,
-            opacity: isDominantSellers ? 1 : 0.8
+            borderColor: isDominantSellers ? 'rgb(239 68 68)' : 'rgba(127, 29, 29, 0.3)',
+            backgroundColor: isDominantSellers ? 'rgba(127, 29, 29, 0.4)' : 'rgba(127, 29, 29, 0.2)',
           }}
         >
-          {isDominantSellers && (
-            <div className="absolute -top-2 right-2 bg-red-500 text-white px-2 py-0.5 rounded text-xs font-bold">
-              ⚠️ HEAVY SELLING
-            </div>
-          )}
+          {/* Fixed-height badge slot — always occupies space */}
+          <div className="h-5 flex items-center justify-end">
+            <span
+              className="text-xs font-bold px-2 py-0.5 rounded"
+              style={{
+                backgroundColor: isDominantSellers ? 'rgb(239 68 68)' : 'transparent',
+                color: isDominantSellers ? 'white' : 'transparent',
+              }}
+            >
+              {isDominantSellers ? '⚠️ HEAVY SELLING' : '\u00A0'}
+            </span>
+          </div>
           <div className="text-xs font-semibold text-red-400 mb-1">🔴 SELLERS (ASK)</div>
           {askLevels.map((level, idx) => {
             const barWidth = (level.quantity / maxQty) * 100;
             return (
-              <div key={`ask-${idx}`} className="flex items-center gap-2 text-xs group">
-                <div className="w-14 text-right font-mono text-red-400 group-hover:text-red-300">
+              <div key={`ask-${idx}`} className="flex items-center gap-2 text-xs h-5">
+                <div className="w-14 text-right font-mono text-red-400">
                   ₹{level.price.toFixed(2)}
                 </div>
                 <div className="flex-1 flex items-center gap-1">
                   <div 
-                    className={`h-4 bg-gradient-to-r from-red-500 to-red-600 rounded transition-all ${
-                      isDominantSellers ? 'shadow-lg' : ''
-                    }`}
-                    style={{ 
-                      width: `${Math.min(barWidth, 100)}%`,
-                      opacity: isDominantSellers ? 1 : 0.7
-                    }}
+                    className="h-4 bg-gradient-to-r from-red-500 to-red-600 rounded"
+                    style={{ width: `${Math.min(barWidth, 100)}%` }}
                   />
                 </div>
-                <div className="w-20 text-right text-red-300 font-mono text-xs group-hover:text-red-200">
+                <div className="w-20 text-right text-red-300 font-mono text-xs">
                   {(level.quantity/1000).toFixed(1)}K
                 </div>
-                <div className="w-8 text-right text-red-500 font-semibold group-hover:text-red-400">
+                <div className="w-8 text-right text-red-500 font-semibold">
                   {Math.round(level.orders)}
                 </div>
               </div>
@@ -122,52 +113,50 @@ const MarketDepthDisplay = memo(({ data }: { data: OrderFlowData }) => {
         </div>
         
         {/* MID POINT */}
-        <div className="flex items-center justify-center py-1 text-xs text-gray-500 font-semibold">
+        <div className="flex items-center justify-center py-1 text-xs text-gray-500 font-semibold h-6">
           <div className="flex-1 border-t border-gray-600" />
           <span className="px-3 bg-gray-800 rounded">MID</span>
           <div className="flex-1 border-t border-gray-600" />
         </div>
         
-        {/* BUYERS (BID) - Bottom Section */}
+        {/* BUYERS (BID) */}
         <div 
-          className={`relative bg-green-900/20 border-2 rounded p-2 space-y-1 transition-all duration-300 ${
-            isDominantBuyers 
-              ? `border-green-500 bg-green-900/40` 
-              : 'border-green-700/30 bg-green-900/20'
-          }`}
+          className="relative bg-green-900/20 border-2 rounded p-2 space-y-1"
           style={{ 
-            boxShadow: buyerGlow,
-            opacity: isDominantBuyers ? 1 : 0.8
+            borderColor: isDominantBuyers ? 'rgb(34 197 94)' : 'rgba(20, 83, 45, 0.3)',
+            backgroundColor: isDominantBuyers ? 'rgba(20, 83, 45, 0.4)' : 'rgba(20, 83, 45, 0.2)',
           }}
         >
-          {isDominantBuyers && (
-            <div className="absolute -top-2 right-2 bg-green-500 text-white px-2 py-0.5 rounded text-xs font-bold">
-              ⚡ HEAVY BUYING
-            </div>
-          )}
+          {/* Fixed-height badge slot */}
+          <div className="h-5 flex items-center justify-end">
+            <span
+              className="text-xs font-bold px-2 py-0.5 rounded"
+              style={{
+                backgroundColor: isDominantBuyers ? 'rgb(34 197 94)' : 'transparent',
+                color: isDominantBuyers ? 'white' : 'transparent',
+              }}
+            >
+              {isDominantBuyers ? '⚡ HEAVY BUYING' : '\u00A0'}
+            </span>
+          </div>
           <div className="text-xs font-semibold text-green-400 mb-1">🟢 BUYERS (BID)</div>
           {bidLevels.map((level, idx) => {
             const barWidth = (level.quantity / maxQty) * 100;
             return (
-              <div key={`bid-${idx}`} className="flex items-center gap-2 text-xs group">
-                <div className="w-14 text-right font-mono text-green-400 group-hover:text-green-300">
+              <div key={`bid-${idx}`} className="flex items-center gap-2 text-xs h-5">
+                <div className="w-14 text-right font-mono text-green-400">
                   ₹{level.price.toFixed(2)}
                 </div>
                 <div className="flex-1 flex items-center justify-end gap-1">
                   <div 
-                    className={`h-4 bg-gradient-to-r from-green-600 to-green-500 rounded transition-all ${
-                      isDominantBuyers ? 'shadow-lg' : ''
-                    }`}
-                    style={{ 
-                      width: `${Math.min(barWidth, 100)}%`,
-                      opacity: isDominantBuyers ? 1 : 0.7
-                    }}
+                    className="h-4 bg-gradient-to-r from-green-600 to-green-500 rounded"
+                    style={{ width: `${Math.min(barWidth, 100)}%` }}
                   />
                 </div>
-                <div className="w-20 text-right text-green-300 font-mono text-xs group-hover:text-green-200">
+                <div className="w-20 text-right text-green-300 font-mono text-xs">
                   {(level.quantity/1000).toFixed(1)}K
                 </div>
-                <div className="w-8 text-right text-green-500 font-semibold group-hover:text-green-400">
+                <div className="w-8 text-right text-green-500 font-semibold">
                   {Math.round(level.orders)}
                 </div>
               </div>
@@ -176,39 +165,29 @@ const MarketDepthDisplay = memo(({ data }: { data: OrderFlowData }) => {
         </div>
       </div>
       
-      {/* Mobile View - Compact Side-by-Side with Dominance */}
+      {/* Mobile View — fixed grid layout */}
       <div className="md:hidden">
         <div className="grid grid-cols-2 gap-2">
           {/* SELLERS (Left) */}
           <div 
-            className={`relative bg-red-900/20 border-2 rounded p-1.5 space-y-0.5 transition-all ${
-              isDominantSellers 
-                ? `border-red-500 bg-red-900/40` 
-                : 'border-red-700/30 bg-red-900/20'
-            }`}
-            style={{ boxShadow: sellerGlow }}
+            className="bg-red-900/20 border-2 rounded p-1.5"
+            style={{
+              borderColor: isDominantSellers ? 'rgb(239 68 68)' : 'rgba(127, 29, 29, 0.3)',
+            }}
           >
-            {isDominantSellers && (
-              <div className="absolute -top-1.5 left-1 bg-red-500 text-white px-1.5 py-0.5 rounded text-xs font-bold">
-                SELLERS
-              </div>
-            )}
-            <div className="text-xs font-semibold text-red-400 text-center">SELLERS</div>
+            <div className="text-xs font-semibold text-red-400 text-center h-4">SELLERS</div>
             {askLevels.map((level, idx) => {
               const barWidth = (level.quantity / maxQty) * 100;
               return (
-                <div key={`ask-m-${idx}`} className="text-xs space-y-0.5">
-                  <div className="flex justify-between">
+                <div key={`ask-m-${idx}`} className="text-xs mb-0.5">
+                  <div className="flex justify-between h-4">
                     <span className="text-red-400 font-mono text-xs">₹{level.price.toFixed(2)}</span>
                     <span className="text-red-500 font-semibold">{Math.round(level.orders)}</span>
                   </div>
                   <div className="w-full h-2 bg-red-900/50 rounded overflow-hidden">
-                    <div 
-                      className={`h-full bg-red-500 rounded transition-all ${isDominantSellers ? 'shadow-sm' : ''}`}
-                      style={{ width: `${Math.min(barWidth, 100)}%` }}
-                    />
+                    <div className="h-full bg-red-500 rounded" style={{ width: `${Math.min(barWidth, 100)}%` }} />
                   </div>
-                  <div className="text-red-300 text-xs">{(level.quantity/1000).toFixed(1)}K</div>
+                  <div className="text-red-300 text-xs h-4">{(level.quantity/1000).toFixed(1)}K</div>
                 </div>
               );
             })}
@@ -216,34 +195,24 @@ const MarketDepthDisplay = memo(({ data }: { data: OrderFlowData }) => {
           
           {/* BUYERS (Right) */}
           <div 
-            className={`relative bg-green-900/20 border-2 rounded p-1.5 space-y-0.5 transition-all ${
-              isDominantBuyers 
-                ? `border-green-500 bg-green-900/40` 
-                : 'border-green-700/30 bg-green-900/20'
-            }`}
-            style={{ boxShadow: buyerGlow }}
+            className="bg-green-900/20 border-2 rounded p-1.5"
+            style={{
+              borderColor: isDominantBuyers ? 'rgb(34 197 94)' : 'rgba(20, 83, 45, 0.3)',
+            }}
           >
-            {isDominantBuyers && (
-              <div className="absolute -top-1.5 left-1 bg-green-500 text-white px-1.5 py-0.5 rounded text-xs font-bold">
-                BUYERS
-              </div>
-            )}
-            <div className="text-xs font-semibold text-green-400 text-center">BUYERS</div>
+            <div className="text-xs font-semibold text-green-400 text-center h-4">BUYERS</div>
             {bidLevels.map((level, idx) => {
               const barWidth = (level.quantity / maxQty) * 100;
               return (
-                <div key={`bid-m-${idx}`} className="text-xs space-y-0.5">
-                  <div className="flex justify-between">
+                <div key={`bid-m-${idx}`} className="text-xs mb-0.5">
+                  <div className="flex justify-between h-4">
                     <span className="text-green-400 font-mono text-xs">₹{level.price.toFixed(2)}</span>
                     <span className="text-green-500 font-semibold">{Math.round(level.orders)}</span>
                   </div>
                   <div className="w-full h-2 bg-green-900/50 rounded overflow-hidden">
-                    <div 
-                      className={`h-full bg-green-500 rounded transition-all ${isDominantBuyers ? 'shadow-sm' : ''}`}
-                      style={{ width: `${Math.min(barWidth, 100)}%` }}
-                    />
+                    <div className="h-full bg-green-500 rounded" style={{ width: `${Math.min(barWidth, 100)}%` }} />
                   </div>
-                  <div className="text-green-300 text-xs">{(level.quantity/1000).toFixed(1)}K</div>
+                  <div className="text-green-300 text-xs h-4">{(level.quantity/1000).toFixed(1)}K</div>
                 </div>
               );
             })}
@@ -251,21 +220,21 @@ const MarketDepthDisplay = memo(({ data }: { data: OrderFlowData }) => {
         </div>
       </div>
       
-      {/* Summary Stats with Dominance Highlight */}
+      {/* Summary Stats — fixed layout, no conditional sizing */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs p-2 bg-gray-800/30 rounded text-center border border-gray-700/50">
-        <div className={`${isDominantBuyers ? 'bg-green-900/30 border border-green-500/50 rounded p-1' : ''}`}>
+        <div className="p-1 rounded" style={{ backgroundColor: isDominantBuyers ? 'rgba(20, 83, 45, 0.3)' : 'transparent' }}>
           <div className="text-green-400 font-semibold">{data.totalBidQty.toLocaleString()}</div>
           <div className="text-green-600 text-xs">Buy Qty</div>
         </div>
-        <div className={`${isDominantBuyers ? 'bg-green-900/30 border border-green-500/50 rounded p-1' : ''}`}>
+        <div className="p-1 rounded" style={{ backgroundColor: isDominantBuyers ? 'rgba(20, 83, 45, 0.3)' : 'transparent' }}>
           <div className="text-green-500 font-semibold">{data.totalBidOrders}</div>
           <div className="text-green-600 text-xs">Buy Orders</div>
         </div>
-        <div className={`${isDominantSellers ? 'bg-red-900/30 border border-red-500/50 rounded p-1' : ''}`}>
+        <div className="p-1 rounded" style={{ backgroundColor: isDominantSellers ? 'rgba(127, 29, 29, 0.3)' : 'transparent' }}>
           <div className="text-red-400 font-semibold">{data.totalAskQty.toLocaleString()}</div>
           <div className="text-red-600 text-xs">Sell Qty</div>
         </div>
-        <div className={`${isDominantSellers ? 'bg-red-900/30 border border-red-500/50 rounded p-1' : ''}`}>
+        <div className="p-1 rounded" style={{ backgroundColor: isDominantSellers ? 'rgba(127, 29, 29, 0.3)' : 'transparent' }}>
           <div className="text-red-500 font-semibold">{data.totalAskOrders}</div>
           <div className="text-red-600 text-xs">Sell Orders</div>
         </div>
@@ -276,44 +245,30 @@ const MarketDepthDisplay = memo(({ data }: { data: OrderFlowData }) => {
 
 MarketDepthDisplay.displayName = 'MarketDepthDisplay';
 
-// 🎯 DELTA VISUALIZATION BAR
+// 🎯 DELTA VISUALIZATION BAR — fixed height, no conditional DOM
 const DeltaBar = memo(({ data }: { data: OrderFlowData }) => {
-  const maxDelta = Math.max(Math.abs(data.delta), 10000);
-  const buyPercent = data.delta > 0 ? (data.delta / maxDelta) * 100 : 0;
-  const sellPercent = data.delta < 0 ? (Math.abs(data.delta) / maxDelta) * 100 : 0;
+  const totalQty = data.totalBidQty + data.totalAskQty || 1;
+  const buyPercent = (data.totalBidQty / totalQty) * 100;
+  const sellPercent = (data.totalAskQty / totalQty) * 100;
   
   return (
     <div className="space-y-2">
-      <div className="flex items-center justify-between gap-2">
+      <div className="flex items-center justify-between gap-2 h-5">
         <span className="text-xs text-gray-400">Delta</span>
-        <span className={`font-bold text-sm ${data.delta > 0 ? 'text-green-400' : 'text-red-400'}`}>
+        <span className={`font-bold text-sm ${data.delta > 0 ? 'text-green-400' : data.delta < 0 ? 'text-red-400' : 'text-gray-400'}`}>
           {data.delta > 0 ? '+' : ''}{data.delta.toFixed(0)}
         </span>
       </div>
       
       <div className="flex h-6 rounded-full overflow-hidden bg-gray-800 border border-gray-700">
-        {/* Buy side (green) */}
-        {buyPercent > 0 && (
-          <div 
-            className="bg-gradient-to-r from-green-600 to-green-500 transition-all"
-            style={{ width: `${buyPercent}%` }}
-          />
-        )}
-        
-        {/* Sell side (red) */}
-        {sellPercent > 0 && (
-          <div 
-            className="bg-gradient-to-r from-red-600 to-red-500 transition-all ml-auto"
-            style={{ width: `${sellPercent}%` }}
-          />
-        )}
-        
-        {/* Neutral zone */}
-        {buyPercent === 0 && sellPercent === 0 && (
-          <div className="w-full flex items-center justify-center text-gray-500 text-xs">
-            ≈ NEUTRAL
-          </div>
-        )}
+        <div 
+          className="bg-gradient-to-r from-green-600 to-green-500 h-full"
+          style={{ width: `${buyPercent}%` }}
+        />
+        <div 
+          className="bg-gradient-to-r from-red-600 to-red-500 h-full"
+          style={{ width: `${sellPercent}%` }}
+        />
       </div>
     </div>
   );
@@ -321,40 +276,37 @@ const DeltaBar = memo(({ data }: { data: OrderFlowData }) => {
 
 DeltaBar.displayName = 'DeltaBar';
 
-// ⚔️ BUYER VS SELLER BATTLE
+// ⚔️ BUYER VS SELLER BATTLE — fixed layout
 const BattleIndicator = memo(({ data }: { data: OrderFlowData }) => {
   const buyPercentOfTotal = data.buyerAggressionRatio * 100;
   const sellPercentOfTotal = data.sellerAggressionRatio * 100;
   
-  let battleStatus = 'NEUTRAL';
-  if (buyPercentOfTotal > 55) battleStatus = 'BUY_DOMINATING';
-  else if (sellPercentOfTotal > 55) battleStatus = 'SELL_DOMINATING';
-  
-  const battleMessages = {
-    'BUY_DOMINATING': '🔥 Buyers Attacking',
-    'SELL_DOMINATING': '🔥 Sellers Attacking',
-    'NEUTRAL': '⚖️ Balanced Battle'
-  };
+  const battleLabel = buyPercentOfTotal > 55
+    ? '🔥 Buyers Attacking'
+    : sellPercentOfTotal > 55
+    ? '🔥 Sellers Attacking'
+    : '⚖️ Balanced Battle';
   
   return (
-    <div className="space-y-2">
-      <div className="text-xs font-semibold text-gray-300 text-center">
-        {battleMessages[battleStatus as keyof typeof battleMessages]}
+    <div>
+      {/* Fixed-height title */}
+      <div className="text-xs font-semibold text-gray-300 text-center h-5 leading-5">
+        {battleLabel}
       </div>
       
-      {/* Buyer vs Seller ratio */}
-      <div className="flex items-center justify-center gap-4 text-xs">
-        <div className="text-center">
-          <div className="text-green-400 font-bold text-sm">
+      {/* Fixed-width columns */}
+      <div className="flex items-center justify-center gap-4 text-xs mt-1">
+        <div className="text-center w-20">
+          <div className="text-green-400 font-bold text-sm h-5 leading-5">
             {buyPercentOfTotal.toFixed(1)}%
           </div>
-          <div className="text-green-600 text-xs">Buyers</div>
-          <div className="text-green-600 text-xs">
+          <div className="text-green-600 text-xs h-4">Buyers</div>
+          <div className="text-green-600 text-xs h-4">
             {data.totalBidOrders} orders
           </div>
         </div>
         
-        <div className="flex-1 flex items-center justify-center">
+        <div className="w-8 text-center">
           <div className={`text-lg font-bold ${
             buyPercentOfTotal > 50 ? 'text-green-400' : 'text-red-400'
           }`}>
@@ -362,12 +314,12 @@ const BattleIndicator = memo(({ data }: { data: OrderFlowData }) => {
           </div>
         </div>
         
-        <div className="text-center">
-          <div className="text-red-400 font-bold text-sm">
+        <div className="text-center w-20">
+          <div className="text-red-400 font-bold text-sm h-5 leading-5">
             {sellPercentOfTotal.toFixed(1)}%
           </div>
-          <div className="text-red-600 text-xs">Sellers</div>
-          <div className="text-red-600 text-xs">
+          <div className="text-red-600 text-xs h-4">Sellers</div>
+          <div className="text-red-600 text-xs h-4">
             {data.totalAskOrders} orders
           </div>
         </div>
@@ -378,249 +330,157 @@ const BattleIndicator = memo(({ data }: { data: OrderFlowData }) => {
 
 BattleIndicator.displayName = 'BattleIndicator';
 
-// � MARKET LIQUIDITY - DYNAMIC PERCENTAGE HIGHLIGHTING
+// 💧 MARKET LIQUIDITY — SINGLE FIXED DOM STRUCTURE (no conditional tree swap)
 const MarketLiquidity = memo(({ data }: { data: OrderFlowData }) => {
-  const buyPercentOfTotal = data.buyerAggressionRatio * 100;
-  const sellPercentOfTotal = data.sellerAggressionRatio * 100;
+  const buyPct = data.buyerAggressionRatio * 100;
+  const sellPct = data.sellerAggressionRatio * 100;
+  const isBuyDom = buyPct > sellPct;
+  const pctDiff = Math.abs(buyPct - sellPct);
+  const intensity = Math.min(pctDiff, 50) / 50;
   
-  // Determine dominance
-  const buyDominance = buyPercentOfTotal > sellPercentOfTotal;
-  const percentDiff = Math.abs(buyPercentOfTotal - sellPercentOfTotal);
+  // Colors: highlighted side uses vivid, muted side uses gray
+  const buyBg = isBuyDom ? `rgba(52, 211, 153, ${0.3 + intensity * 0.5})` : 'rgba(107, 114, 128, 0.2)';
+  const buyBorder = isBuyDom ? `rgba(52, 211, 153, ${0.5 + intensity * 0.5})` : 'rgba(107, 114, 128, 0.3)';
+  const buyColor = isBuyDom ? 'rgb(52, 211, 153)' : 'rgba(107, 114, 128, 0.6)';
+  const buyLabel = isBuyDom ? '↑ Strong Buying' : '↑ Weak Buying';
   
-  // Calculate highlight intensity (0-100%)
-  // Scale: 0% diff = 0% intensity, 50% diff = 100% intensity
-  const highlightIntensity = Math.min(percentDiff, 50) / 50;
+  const sellBg = !isBuyDom ? `rgba(239, 68, 68, ${0.3 + intensity * 0.5})` : 'rgba(107, 114, 128, 0.2)';
+  const sellBorder = !isBuyDom ? `rgba(239, 68, 68, ${0.5 + intensity * 0.5})` : 'rgba(107, 114, 128, 0.3)';
+  const sellColor = !isBuyDom ? 'rgb(239, 68, 68)' : 'rgba(107, 114, 128, 0.6)';
+  const sellLabel = !isBuyDom ? '↓ Heavy Selling' : '↓ Passive Selling';
   
-  // If buy is dominant
-  if (buyDominance) {
-    const buyGlowOpacity = highlightIntensity;
-    const buyGlow = `0 0 ${Math.min(highlightIntensity * 25, 25)}px rgba(52, 211, 153, ${buyGlowOpacity * 0.8})`;
-    
-    return (
-      <div className="space-y-2">
-        <div className="text-xs font-semibold text-gray-300">Market Liquidity</div>
+  const barBuyBg = isBuyDom
+    ? 'linear-gradient(to right, rgb(16 185 129), rgb(52 211 153))'
+    : 'linear-gradient(to right, rgb(75 85 99), rgb(107 114 128))';
+  const barSellBg = !isBuyDom
+    ? 'linear-gradient(to right, rgb(220 38 38), rgb(239 68 68))'
+    : 'linear-gradient(to right, rgb(75 85 99), rgb(107 114 128))';
+  
+  const domLabel = isBuyDom
+    ? `🟢 BUYER DOMINANCE: ${pctDiff.toFixed(1)}% stronger`
+    : `🔴 SELLER DOMINANCE: ${pctDiff.toFixed(1)}% stronger`;
+  const domColor = isBuyDom ? 'rgb(52 211 153)' : 'rgb(248 113 113)';
+  const domBg = isBuyDom ? 'rgba(6, 78, 59, 0.2)' : 'rgba(127, 29, 29, 0.2)';
+  const domBorderColor = isBuyDom ? 'rgba(6, 95, 70, 0.5)' : 'rgba(153, 27, 27, 0.5)';
+  
+  return (
+    <div>
+      <div className="text-xs font-semibold text-gray-300 h-5 leading-5">Market Liquidity</div>
+      
+      {/* Buyer / Seller boxes — always both present, same height */}
+      <div className="flex justify-between items-stretch gap-2 mt-1">
+        <div 
+          className="flex-1 rounded-lg p-3"
+          style={{ backgroundColor: buyBg, border: `2px solid ${buyBorder}` }}
+        >
+          <div className="text-xs font-semibold" style={{ color: isBuyDom ? 'rgb(156 163 175)' : 'rgb(107 114 128)' }}>BUYERS</div>
+          <div className="text-2xl font-bold mt-1 h-8 leading-8" style={{ color: buyColor }}>
+            {buyPct.toFixed(1)}%
+          </div>
+          <div className="text-xs mt-1 h-4" style={{ color: isBuyDom ? 'rgb(6 95 70)' : 'rgb(75 85 99)' }}>
+            {buyLabel}
+          </div>
+        </div>
         
-        {/* Buyer Dominant Bar */}
-        <div className="space-y-1">
-          <div className="flex justify-between items-end gap-2">
-            {/* Buyer Side - Highlighted */}
-            <div 
-              className="flex-1 rounded-lg p-3 transition-all duration-300"
-              style={{
-                backgroundColor: `rgba(52, 211, 153, ${0.3 + highlightIntensity * 0.5})`,
-                border: `2px solid rgba(52, 211, 153, ${0.5 + highlightIntensity * 0.5})`,
-                boxShadow: buyGlow
-              }}
-            >
-              <div className="text-xs text-gray-400 font-semibold">BUYERS</div>
-              <div 
-                className="text-2xl font-bold mt-1"
-                style={{ color: `rgba(52, 211, 153, ${1})` }}
-              >
-                {buyPercentOfTotal.toFixed(1)}%
-              </div>
-              <div className="text-xs text-emerald-700 mt-1">
-                ↑ Strong Buying
-              </div>
-            </div>
-            
-            {/* Seller Side - Muted */}
-            <div 
-              className="flex-1 rounded-lg p-3 transition-all duration-300"
-              style={{
-                backgroundColor: 'rgba(107, 114, 128, 0.2)',
-                border: '2px solid rgba(107, 114, 128, 0.3)',
-              }}
-            >
-              <div className="text-xs text-gray-500 font-semibold">SELLERS</div>
-              <div 
-                className="text-2xl font-bold mt-1"
-                style={{ color: 'rgba(107, 114, 128, 0.6)' }}
-              >
-                {sellPercentOfTotal.toFixed(1)}%
-              </div>
-              <div className="text-xs text-gray-600 mt-1">
-                ↓ Passive Selling
-              </div>
-            </div>
+        <div 
+          className="flex-1 rounded-lg p-3"
+          style={{ backgroundColor: sellBg, border: `2px solid ${sellBorder}` }}
+        >
+          <div className="text-xs font-semibold" style={{ color: !isBuyDom ? 'rgb(156 163 175)' : 'rgb(107 114 128)' }}>SELLERS</div>
+          <div className="text-2xl font-bold mt-1 h-8 leading-8" style={{ color: sellColor }}>
+            {sellPct.toFixed(1)}%
           </div>
-          
-          {/* Visual Indicator Bar */}
-          <div 
-            className="h-8 rounded-lg overflow-hidden flex bg-gray-800/50 border border-gray-700/50"
-            style={{
-              boxShadow: 'inset 0 1px 3px rgba(0,0,0,0.5)'
-            }}
-          >
-            {/* Buy side bar */}
-            <div 
-              className="bg-gradient-to-r from-emerald-500 to-emerald-400 transition-all duration-300 flex items-center justify-center"
-              style={{ 
-                width: `${buyPercentOfTotal}%`,
-                boxShadow: `inset 0 0 ${highlightIntensity * 12}px rgba(255, 255, 255, ${highlightIntensity * 0.3})`
-              }}
-            >
-              {buyPercentOfTotal > 30 && (
-                <span className="text-white font-bold text-xs drop-shadow">BUY</span>
-              )}
-            </div>
-            
-            {/* Sell side bar */}
-            <div 
-              className="bg-gradient-to-r from-gray-600 to-gray-500 transition-all duration-300 flex items-center justify-center"
-              style={{ 
-                width: `${sellPercentOfTotal}%`,
-                opacity: 0.6
-              }}
-            >
-              {sellPercentOfTotal > 30 && (
-                <span className="text-white font-bold text-xs drop-shadow">SELL</span>
-              )}
-            </div>
-          </div>
-          
-          {/* Dominance Indicator */}
-          <div className="text-center text-xs p-2 rounded bg-emerald-900/20 border border-emerald-700/50">
-            <span className="text-emerald-400 font-bold">
-              🟢 BUYER DOMINANCE: {percentDiff.toFixed(1)}% stronger
-            </span>
+          <div className="text-xs mt-1 h-4" style={{ color: !isBuyDom ? 'rgb(153 27 27)' : 'rgb(75 85 99)' }}>
+            {sellLabel}
           </div>
         </div>
       </div>
-    );
-  } else {
-    // Seller dominant
-    const sellGlowOpacity = highlightIntensity;
-    const sellGlow = `0 0 ${Math.min(highlightIntensity * 25, 25)}px rgba(239, 68, 68, ${sellGlowOpacity * 0.8})`;
-    
-    return (
-      <div className="space-y-2">
-        <div className="text-xs font-semibold text-gray-300">Market Liquidity</div>
-        
-        {/* Seller Dominant Bar */}
-        <div className="space-y-1">
-          <div className="flex justify-between items-end gap-2">
-            {/* Buyer Side - Muted */}
-            <div 
-              className="flex-1 rounded-lg p-3 transition-all duration-300"
-              style={{
-                backgroundColor: 'rgba(107, 114, 128, 0.2)',
-                border: '2px solid rgba(107, 114, 128, 0.3)',
-              }}
-            >
-              <div className="text-xs text-gray-500 font-semibold">BUYERS</div>
-              <div 
-                className="text-2xl font-bold mt-1"
-                style={{ color: 'rgba(107, 114, 128, 0.6)' }}
-              >
-                {buyPercentOfTotal.toFixed(1)}%
-              </div>
-              <div className="text-xs text-gray-600 mt-1">
-                ↑ Weak Buying
-              </div>
-            </div>
-            
-            {/* Seller Side - Highlighted */}
-            <div 
-              className="flex-1 rounded-lg p-3 transition-all duration-300"
-              style={{
-                backgroundColor: `rgba(239, 68, 68, ${0.3 + highlightIntensity * 0.5})`,
-                border: `2px solid rgba(239, 68, 68, ${0.5 + highlightIntensity * 0.5})`,
-                boxShadow: sellGlow
-              }}
-            >
-              <div className="text-xs text-gray-400 font-semibold">SELLERS</div>
-              <div 
-                className="text-2xl font-bold mt-1"
-                style={{ color: `rgba(239, 68, 68, ${1})` }}
-              >
-                {sellPercentOfTotal.toFixed(1)}%
-              </div>
-              <div className="text-xs text-red-700 mt-1">
-                ↓ Heavy Selling
-              </div>
-            </div>
-          </div>
-          
-          {/* Visual Indicator Bar */}
-          <div 
-            className="h-8 rounded-lg overflow-hidden flex bg-gray-800/50 border border-gray-700/50"
-            style={{
-              boxShadow: 'inset 0 1px 3px rgba(0,0,0,0.5)'
-            }}
-          >
-            {/* Buy side bar */}
-            <div 
-              className="bg-gradient-to-r from-gray-600 to-gray-500 transition-all duration-300 flex items-center justify-center"
-              style={{ 
-                width: `${buyPercentOfTotal}%`,
-                opacity: 0.6
-              }}
-            >
-              {buyPercentOfTotal > 30 && (
-                <span className="text-white font-bold text-xs drop-shadow">BUY</span>
-              )}
-            </div>
-            
-            {/* Sell side bar */}
-            <div 
-              className="bg-gradient-to-r from-red-600 to-red-500 transition-all duration-300 flex items-center justify-center"
-              style={{ 
-                width: `${sellPercentOfTotal}%`,
-                boxShadow: `inset 0 0 ${highlightIntensity * 12}px rgba(255, 255, 255, ${highlightIntensity * 0.3})`
-              }}
-            >
-              {sellPercentOfTotal > 30 && (
-                <span className="text-white font-bold text-xs drop-shadow">SELL</span>
-              )}
-            </div>
-          </div>
-          
-          {/* Dominance Indicator */}
-          <div className="text-center text-xs p-2 rounded bg-red-900/20 border border-red-700/50">
-            <span className="text-red-400 font-bold">
-              🔴 SELLER DOMINANCE: {percentDiff.toFixed(1)}% stronger
-            </span>
-          </div>
+      
+      {/* Visual Indicator Bar — always present */}
+      <div 
+        className="h-8 rounded-lg overflow-hidden flex bg-gray-800/50 border border-gray-700/50 mt-1"
+        style={{ boxShadow: 'inset 0 1px 3px rgba(0,0,0,0.5)' }}
+      >
+        <div 
+          className="h-full flex items-center justify-center"
+          style={{ width: `${buyPct}%`, background: barBuyBg }}
+        >
+          {buyPct > 30 && <span className="text-white font-bold text-xs drop-shadow">BUY</span>}
+        </div>
+        <div 
+          className="h-full flex items-center justify-center"
+          style={{ width: `${sellPct}%`, background: barSellBg }}
+        >
+          {sellPct > 30 && <span className="text-white font-bold text-xs drop-shadow">SELL</span>}
         </div>
       </div>
-    );
-  }
+      
+      {/* Dominance Indicator — always present, fixed height */}
+      <div 
+        className="text-center text-xs p-2 rounded mt-1 h-8 leading-4"
+        style={{ backgroundColor: domBg, border: `1px solid ${domBorderColor}` }}
+      >
+        <span className="font-bold" style={{ color: domColor }}>
+          {domLabel}
+        </span>
+      </div>
+    </div>
+  );
 });
 
 MarketLiquidity.displayName = 'MarketLiquidity';
-// �📈 5-MINUTE PREDICTION
+// 📈 5-MINUTE PREDICTION — fixed layout, never hides
 const FiveMinPrediction = memo(({ data }: { data: OrderFlowData }) => {
   const pred = data.fiveMinPrediction;
-  const predColor = SIGNAL_COLORS[pred.direction as keyof typeof SIGNAL_COLORS] || '#888888';
+  const predColor = pred ? (SIGNAL_COLORS[pred.direction as keyof typeof SIGNAL_COLORS] || '#888888') : '#888888';
+  const confidencePct = ((pred?.confidence ?? 0) * 100);
+  const buyDomPct = pred?.buyDominancePct ?? 50;
+  const sellDomPct = pred?.sellDominancePct ?? 50;
+  const isBullish = buyDomPct > sellDomPct;
   
   return (
-    <div className="space-y-2">
-      <div className="text-xs font-semibold text-gray-300">5-Min Prediction</div>
+    <div>
+      <div className="text-xs font-semibold text-gray-300 h-5 leading-5">5-Min Prediction</div>
       
-      <div className="p-2 bg-gray-800/50 rounded border border-gray-700">
-        <div className="flex items-center justify-between gap-2 mb-2">
-          <span 
-            className="font-bold text-sm"
-            style={{ color: predColor }}
-          >
-            {pred.direction}
+      <div className="p-2 bg-gray-800/50 rounded border border-gray-700 mt-1">
+        {/* Direction + Confidence — fixed heights */}
+        <div className="flex items-center justify-between gap-2 h-8">
+          <span className="font-bold text-sm" style={{ color: predColor }}>
+            {pred?.direction ?? 'NEUTRAL'}
           </span>
-          <div className="flex flex-col items-end gap-1">
+          <div className="flex items-center gap-2">
             <span className="text-xs text-gray-400">CONFIDENCE</span>
             <span className="text-sm font-bold text-yellow-400">
-              {(pred.confidence * 100).toFixed(0)}%
+              {confidencePct.toFixed(0)}%
             </span>
           </div>
         </div>
         
-        <div className="text-xs text-gray-400 leading-tight">
-          {pred.reasoning}
+        {/* Reasoning — fixed min-height */}
+        <div className="text-xs text-gray-400 leading-tight min-h-[2rem]">
+          {pred?.reasoning ?? 'Waiting for data...'}
         </div>
         
-        <div className="flex gap-2 mt-2 text-xs text-gray-500">
-          <span>🔍 {pred.tickCount} ticks</span>
-          <span>Δ {pred.avgDelta.toFixed(0)}</span>
+        {/* Buyer vs Seller Dominance Bar — always rendered */}
+        <div className="mt-2">
+          <div className="flex justify-between text-xs h-4">
+            <span className={`font-semibold ${isBullish ? 'text-green-400' : 'text-gray-500'}`}>
+              Buy {buyDomPct.toFixed(1)}%
+            </span>
+            <span className={`font-semibold ${!isBullish ? 'text-red-400' : 'text-gray-500'}`}>
+              Sell {sellDomPct.toFixed(1)}%
+            </span>
+          </div>
+          <div className="flex h-2 rounded-full overflow-hidden bg-gray-700 mt-0.5">
+            <div className="bg-green-500" style={{ width: `${buyDomPct}%` }} />
+            <div className="bg-red-500" style={{ width: `${sellDomPct}%` }} />
+          </div>
+        </div>
+        
+        {/* Stats — fixed height */}
+        <div className="flex gap-2 mt-2 text-xs text-gray-500 h-4">
+          <span>🔍 {pred?.tickCount ?? 0} ticks</span>
+          <span>Δ {(pred?.avgDelta ?? 0).toFixed(0)}</span>
         </div>
       </div>
     </div>
@@ -660,34 +520,34 @@ const SignalMeter = memo(({ data }: { data: OrderFlowData }) => {
 
 SignalMeter.displayName = 'SignalMeter';
 
-// 🎯 MAIN SIGNAL BADGE
+// 🎯 MAIN SIGNAL BADGE — fixed size
 const SignalBadge = memo(({ data }: { data: OrderFlowData }) => {
   const color = SIGNAL_COLORS[data.signal as keyof typeof SIGNAL_COLORS] || '#888888';
   const deltaColor = DELTA_TREND_COLORS[data.deltaTrend as keyof typeof DELTA_TREND_COLORS];
   
+  const strengthLabel = data.signalConfidence > 0.75 ? '🔥 STRONG' : 
+    data.signalConfidence > 0.55 ? '📈 MODERATE' : '⚖️ WEAK';
+  
   return (
     <div className="flex flex-col gap-2">
-      {/* Main signal */}
+      {/* Main signal — fixed height */}
       <div 
-        className="p-3 rounded-lg border-2 text-center"
+        className="p-3 rounded-lg border-2 text-center h-[76px] flex flex-col items-center justify-center"
         style={{ 
           borderColor: color,
           backgroundColor: `${color}15`,
-          boxShadow: `0 0 12px ${color}40`
         }}
       >
-        <div className="font-bold text-lg" style={{ color }}>
+        <div className="font-bold text-lg leading-tight" style={{ color }}>
           {data.signal.replace(/_/g, ' ')}
         </div>
-        <div className="text-xs text-gray-400 mt-1">
-          {data.signalConfidence > 0.75 ? '🔥 STRONG' : 
-           data.signalConfidence > 0.55 ? '📈 MODERATE' : 
-           '⚖️ WEAK'}
+        <div className="text-xs text-gray-400 mt-1 h-4">
+          {strengthLabel}
         </div>
       </div>
       
-      {/* Delta trend */}
-      <div className="text-center text-xs p-2 bg-gray-800/50 rounded">
+      {/* Delta trend — fixed height */}
+      <div className="text-center text-xs p-2 bg-gray-800/50 rounded h-[52px] flex flex-col items-center justify-center">
         <div style={{ color: deltaColor }} className="font-semibold">
           {data.deltaTrend}
         </div>
@@ -701,11 +561,11 @@ const SignalBadge = memo(({ data }: { data: OrderFlowData }) => {
 
 SignalBadge.displayName = 'SignalBadge';
 
-// INDIVIDUAL ORDER FLOW CARD
+// INDIVIDUAL ORDER FLOW CARD — STABLE LAYOUT
 const OrderFlowCard = memo(({ symbol, data, isLoading }: OrderFlowCardProps) => {
   if (isLoading || !data) {
     return (
-      <div className="bg-gray-900/60 border border-gray-700/50 rounded-lg p-4 backdrop-blur-sm">
+      <div className="bg-gray-900/60 border border-gray-700/50 rounded-lg p-4 backdrop-blur-sm min-h-[600px]">
         <div className="text-center text-gray-500">
           <div className="text-sm font-semibold text-gray-300 mb-2 border border-green-400/60 rounded px-2 py-1 inline-block">{symbol}</div>
           <div className="animate-pulse">Loading order flow...</div>
@@ -715,11 +575,11 @@ const OrderFlowCard = memo(({ symbol, data, isLoading }: OrderFlowCardProps) => 
   }
   
   return (
-    <div className="bg-gray-900/60 border border-gray-700/50 rounded-lg p-4 backdrop-blur-sm space-y-4">
-      {/* Header */}
-      <div className="border-b border-gray-700/50 pb-3 space-y-2">
-        <div className="flex items-center justify-between">
-          <div className="text-sm font-semibold text-gray-300 border border-green-400/60 rounded px-2 py-1 inline-block">{symbol}</div>
+    <div className="bg-gray-900/60 border border-gray-700/50 rounded-lg p-4 backdrop-blur-sm overflow-hidden">
+      {/* Header — fixed height */}
+      <div className="border-b border-gray-700/50 pb-3 mb-4">
+        <div className="flex items-center justify-between h-7">
+          <div className="text-sm font-semibold text-gray-300 border border-green-400/60 rounded px-2 py-1">{symbol}</div>
           <div className="text-xs text-gray-500 flex items-center gap-2">
             <span>CONFIDENCE</span>
             <div className="text-sm font-bold" style={{ color: data.signalConfidence > 0.7 ? '#4ade80' : data.signalConfidence > 0.5 ? '#facc15' : '#ef4444' }}>
@@ -727,73 +587,75 @@ const OrderFlowCard = memo(({ symbol, data, isLoading }: OrderFlowCardProps) => 
             </div>
           </div>
         </div>
-        <div className="text-xs text-gray-500">
+        <div className="text-xs text-gray-500 mt-1 h-4">
           {new Date(data.timestamp).toLocaleTimeString()}
         </div>
       </div>
       
       {/* Signal + Bid/Ask Info */}
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-2 gap-3 mb-4">
         <SignalBadge data={data} />
         
-        <div className="space-y-2">
-          <div className="text-center">
-            <div className="text-xs text-gray-400">Bid/Ask</div>
-            <div className="text-sm font-semibold text-blue-400">
+        <div>
+          <div className="text-center mb-2">
+            <div className="text-xs text-gray-400 h-4">Bid/Ask</div>
+            <div className="text-sm font-semibold text-blue-400 h-5">
               ₹{data.bid.toFixed(2)} / ₹{data.ask.toFixed(2)}
             </div>
-            <div className="text-xs text-gray-500 mt-1">
+            <div className="text-xs text-gray-500 mt-1 h-4">
               Spread: ₹{data.spread.toFixed(3)}
             </div>
           </div>
           
           <div className="flex gap-2 text-xs">
             <div className="flex-1 bg-green-900/30 p-2 rounded text-center">
-              <div className="text-green-400 font-semibold">
+              <div className="text-green-400 font-semibold h-5 leading-5">
                 {data.totalBidQty.toLocaleString()}
               </div>
-              <div className="text-green-700 text-xs">Bid Qty</div>
+              <div className="text-green-700 text-xs h-4">Bid Qty</div>
             </div>
             <div className="flex-1 bg-red-900/30 p-2 rounded text-center">
-              <div className="text-red-400 font-semibold">
+              <div className="text-red-400 font-semibold h-5 leading-5">
                 {data.totalAskQty.toLocaleString()}
               </div>
-              <div className="text-red-700 text-xs">Ask Qty</div>
+              <div className="text-red-700 text-xs h-4">Ask Qty</div>
             </div>
           </div>
         </div>
       </div>
       
       {/* Delta Analysis */}
-      <div className="space-y-2 p-2 bg-gray-800/30 rounded">
+      <div className="p-2 bg-gray-800/30 rounded mb-4">
         <DeltaBar data={data} />
       </div>
       
-      {/* Improved Market Depth Display */}
-      <MarketDepthDisplay data={data} />
+      {/* Market Depth Display */}
+      <div className="mb-4">
+        <MarketDepthDisplay data={data} />
+      </div>
       
       {/* Battle Indicator */}
-      <div className="space-y-2 p-3 bg-gray-800/50 rounded border border-gray-700/30">
+      <div className="p-3 bg-gray-800/50 rounded border border-gray-700/30 mb-4">
         <BattleIndicator data={data} />
       </div>
       
-      {/* Market Liquidity - Dynamic Percentage Highlighting */}
-      <div className="space-y-2 p-3 bg-gray-800/50 rounded border border-gray-700/30">
+      {/* Market Liquidity */}
+      <div className="p-3 bg-gray-800/50 rounded border border-gray-700/30 mb-4">
         <MarketLiquidity data={data} />
       </div>
       
       {/* Signal Confidence */}
-      <div className="space-y-2 p-2 bg-gray-800/30 rounded">
+      <div className="p-2 bg-gray-800/30 rounded mb-4">
         <SignalMeter data={data} />
       </div>
       
       {/* 5-Minute Prediction */}
-      <div className="space-y-2 p-2 bg-gray-800/30 rounded">
+      <div className="p-2 bg-gray-800/30 rounded mb-4">
         <FiveMinPrediction data={data} />
       </div>
       
-      {/* Stats Footer */}
-      <div className="text-xs text-gray-500 grid grid-cols-2 gap-2 pt-2 border-t border-gray-700/50">
+      {/* Stats Footer — fixed height */}
+      <div className="text-xs text-gray-500 grid grid-cols-2 gap-2 pt-2 border-t border-gray-700/50 h-6">
         <div>Imbalance: {(data.liquidityImbalance * 100).toFixed(2)}%</div>
         <div>Spread %: {data.spreadPct.toFixed(4)}%</div>
       </div>
@@ -837,46 +699,56 @@ export default function InstitutionalMarketView({
         const apiData = await response.json();
         
         // Transform REST API response to OrderFlowData format
+        const currentPrice = apiData.current_price || 0;
+        const halfSpread = currentPrice * 0.00025; // ~0.5pt spread for indices
+        const bidPrice = currentPrice - halfSpread;
+        const askPrice = currentPrice + halfSpread;
+        const buyPct = apiData.buy_volume_pct || 50;
+        const sellPct = apiData.sell_volume_pct || 50;
+        const baseQty = 5000;
+        const buyPressure = buyPct / 50;   // >1 when buyers dominate
+        const sellPressure = sellPct / 50;
+        
         const transformed: OrderFlowData = {
-          timestamp: new Date().toISOString(),
-          bid: apiData.bid_price || 0,
-          ask: apiData.ask_price || 0,
-          spread: (apiData.ask_price || 0) - (apiData.bid_price || 0),
-          spreadPct: ((apiData.ask_price || 0) - (apiData.bid_price || 0)) / (apiData.bid_price || 1) * 100,
+          timestamp: apiData.timestamp || new Date().toISOString(),
+          bid: +bidPrice.toFixed(2),
+          ask: +askPrice.toFixed(2),
+          spread: +(askPrice - bidPrice).toFixed(2),
+          spreadPct: currentPrice > 0 ? +((askPrice - bidPrice) / currentPrice * 100).toFixed(4) : 0,
           bidLevels: Array(5).fill(null).map((_, i) => ({
-            price: (apiData.bid_price || 0) - (i * 0.5),
-            quantity: Math.random() * 5000 + 5000,
-            orders: Math.random() * 50 + 20,
+            price: +(bidPrice - i * halfSpread * 2).toFixed(2),
+            quantity: Math.round(baseQty * buyPressure * (1 - i * 0.12)),
+            orders: Math.round(baseQty * buyPressure * (1 - i * 0.12) / 150) + 5,
           })),
           askLevels: Array(5).fill(null).map((_, i) => ({
-            price: (apiData.ask_price || 0) + (i * 0.5),
-            quantity: Math.random() * 5000 + 5000,
-            orders: Math.random() * 50 + 20,
+            price: +(askPrice + i * halfSpread * 2).toFixed(2),
+            quantity: Math.round(baseQty * sellPressure * (1 - i * 0.12)),
+            orders: Math.round(baseQty * sellPressure * (1 - i * 0.12) / 150) + 5,
           })),
-          totalBidQty: apiData.buy_volume || 0,
-          totalAskQty: apiData.sell_volume || 0,
-          totalBidOrders: Math.round((apiData.total_orders || 1000) * (apiData.buy_volume_pct || 50) / 100),
-          totalAskOrders: Math.round((apiData.total_orders || 1000) * (apiData.sell_volume_pct || 50) / 100),
-          delta: (apiData.buy_volume || 0) - (apiData.sell_volume || 0),
-          deltaPercentage: ((apiData.buy_volume || 0) - (apiData.sell_volume || 0)) / (apiData.buy_volume + apiData.sell_volume || 1),
+          totalBidQty: apiData.buy_volume || Math.round(baseQty * 5 * buyPressure),
+          totalAskQty: apiData.sell_volume || Math.round(baseQty * 5 * sellPressure),
+          totalBidOrders: Math.round((apiData.total_orders || 300) * buyPct / 100),
+          totalAskOrders: Math.round((apiData.total_orders || 300) * sellPct / 100),
+          delta: (apiData.buy_volume || Math.round(baseQty * 5 * buyPressure)) - (apiData.sell_volume || Math.round(baseQty * 5 * sellPressure)),
+          deltaPercentage: (buyPct - sellPct) / 100,
           deltaTrend: apiData.smart_money_signal?.includes('BUY') ? 'BULLISH' : apiData.smart_money_signal?.includes('SELL') ? 'BEARISH' : 'NEUTRAL',
-          buyerAggressionRatio: (apiData.buy_volume_pct || 50) / 100,
-          sellerAggressionRatio: (apiData.sell_volume_pct || 50) / 100,
+          buyerAggressionRatio: buyPct / 100,
+          sellerAggressionRatio: sellPct / 100,
           liquidityImbalance: (apiData.order_flow_imbalance || 0) / 50,
-          bidDepth: apiData.buy_volume || 0,
-          askDepth: apiData.sell_volume || 0,
-          buyDomination: (apiData.buy_volume_pct || 50) > 65,
-          sellDomination: (apiData.sell_volume_pct || 50) > 65,
+          bidDepth: apiData.buy_volume || Math.round(baseQty * 5 * buyPressure),
+          askDepth: apiData.sell_volume || Math.round(baseQty * 5 * sellPressure),
+          buyDomination: buyPct > 60,
+          sellDomination: sellPct > 60,
           signal: (apiData.smart_money_signal || 'HOLD') as any,
           signalConfidence: ((apiData.smart_money_confidence || 50) / 100),
           fiveMinPrediction: {
             direction: apiData.smart_money_signal || 'NEUTRAL',
             confidence: ((apiData.smart_money_confidence || 50) / 100),
             reasoning: apiData.flow_description || 'Market analysis from institutional positioning',
-            tickCount: Math.round(Math.random() * 100 + 50),
+            tickCount: apiData.candles_analyzed || 50,
             avgDelta: (apiData.buy_volume || 0) - (apiData.sell_volume || 0),
-            buyDominancePct: apiData.buy_volume_pct || 50,
-            sellDominancePct: apiData.sell_volume_pct || 50,
+            buyDominancePct: buyPct,
+            sellDominancePct: sellPct,
           },
         };
         

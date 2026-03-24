@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback, useRef } from 'react';
+import { useState, useEffect } from 'react';
 import { getEnvironmentConfig } from '@/lib/env-detection';
 
 interface BidAskLevel {
@@ -56,129 +56,147 @@ const log = {
   error: console.error,
 };
 
-export function useOrderFlowRealtime() {
-  const [orderFlow, setOrderFlow] = useState<OrderFlowSnapshot>({});
-  const [isConnected, setIsConnected] = useState(false);
-  const [connectionStatus, setConnectionStatus] = useState<'connecting' | 'connected' | 'disconnected' | 'error' | 'RECONNECTING'>('disconnected');
-  
-  const wsRef = useRef<WebSocket | null>(null);
-  const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const hasEverConnectedRef = useRef(false);
-  const reconnectAttemptsRef = useRef(0);
+// ── Shared singleton WebSocket (ONE connection for all component instances) ──
+let sharedWs: WebSocket | null = null;
+let sharedOrderFlow: OrderFlowSnapshot = {};
+let subscriberCount = 0;
+let listeners = new Set<(snapshot: OrderFlowSnapshot) => void>();
+let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+let reconnectAttempts = 0;
+let hasEverConnected = false;
 
-  const connect = useCallback(() => {
-    if (typeof window === 'undefined') return;
-    
-    if (wsRef.current?.readyState === WebSocket.OPEN || 
-        wsRef.current?.readyState === WebSocket.CONNECTING) {
-      return;
-    }
+function isValidDepth(of: Record<string, unknown>): boolean {
+  return ((of.bid as number) > 0 || (of.totalBidQty as number) > 0 || (of.totalAskQty as number) > 0);
+}
 
-    if (hasEverConnectedRef.current) {
-      setConnectionStatus('RECONNECTING');
-    } else {
-      setConnectionStatus('connecting');
-    }
-    
-    try {
-      const config = getEnvironmentConfig();
-      const WS_URL = config.wsUrl;
-      
-      if (!WS_URL) {
-        console.error('WebSocket URL not configured');
-        setConnectionStatus('error');
-        return;
-      }
-      
-      log.debug('🔌 Connecting to order flow WebSocket:', WS_URL);
-      const ws = new WebSocket(WS_URL);
-      wsRef.current = ws;
+function notifyListeners() {
+  const snapshot = { ...sharedOrderFlow };
+  listeners.forEach(fn => fn(snapshot));
+}
 
-      const connectionTimeout = setTimeout(() => {
-        if (ws.readyState === WebSocket.CONNECTING) {
-          log.error('Order flow WebSocket connection timeout');
-          ws.close();
-          setConnectionStatus('error');
-        }
-      }, 10000);
+function connectSharedWs() {
+  if (typeof window === 'undefined') return;
+  if (sharedWs?.readyState === WebSocket.OPEN || sharedWs?.readyState === WebSocket.CONNECTING) return;
 
-      ws.onopen = () => {
-        clearTimeout(connectionTimeout);
-        setIsConnected(true);
-        setConnectionStatus('connected');
-        hasEverConnectedRef.current = true;
-        reconnectAttemptsRef.current = 0;
-        log.debug('✅ Order flow WebSocket connected');
-      };
+  try {
+    const config = getEnvironmentConfig();
+    const WS_URL = config.wsUrl;
+    if (!WS_URL) return;
 
-      ws.onmessage = (event) => {
-        try {
-          const message = JSON.parse(event.data);
+    log.debug('🔌 [OrderFlow] Connecting shared WebSocket:', WS_URL);
+    const ws = new WebSocket(WS_URL);
+    sharedWs = ws;
 
-          // Only process tick messages with order flow data
-          if (message.type === 'tick' && message.data?.orderFlow) {
-            const tick = message.data;
-            const symbol = tick.symbol;
-            
-            setOrderFlow((prev) => ({
-              ...prev,
-              [symbol]: tick.orderFlow
-            }));
-            
-            log.debug(`📊 Order flow received for ${symbol}:`, tick.orderFlow.signal);
+    const timeout = setTimeout(() => {
+      if (ws.readyState === WebSocket.CONNECTING) ws.close();
+    }, 10000);
+
+    ws.onopen = () => {
+      clearTimeout(timeout);
+      hasEverConnected = true;
+      reconnectAttempts = 0;
+      log.debug('✅ [OrderFlow] Shared WebSocket connected');
+      notifyListeners(); // notify connection status change
+    };
+
+    ws.onmessage = (event) => {
+      try {
+        const message = JSON.parse(event.data);
+
+        if (message.type === 'tick' && message.data?.orderFlow) {
+          const { symbol } = message.data;
+          const of = message.data.orderFlow;
+          if (isValidDepth(of)) {
+            sharedOrderFlow = { ...sharedOrderFlow, [symbol]: of };
+            notifyListeners();
           }
-        } catch (err) {
-          log.error('Message parse error:', err);
+        } else if (message.type === 'snapshot' && message.data) {
+          // Process snapshot — each symbol may have orderFlow
+          let updated = false;
+          for (const [sym, tickData] of Object.entries(message.data)) {
+            const td = tickData as Record<string, unknown>;
+            if (td?.orderFlow && isValidDepth(td.orderFlow as Record<string, unknown>)) {
+              sharedOrderFlow = { ...sharedOrderFlow, [sym]: td.orderFlow as OrderFlowData };
+              updated = true;
+            }
+          }
+          if (updated) notifyListeners();
         }
-      };
+      } catch {
+        // ignore parse errors
+      }
+    };
 
-      ws.onerror = (event) => {
-        log.error('Order flow WebSocket error:', event);
-        setConnectionStatus('error');
-      };
+    ws.onerror = () => {};
 
-      ws.onclose = () => {
-        setIsConnected(false);
-        setConnectionStatus('disconnected');
-        log.debug('🔌 Order flow WebSocket disconnected');
-        
-        // Auto-reconnect with exponential backoff
-        if (hasEverConnectedRef.current) {
-          const delay = Math.min(1000 * Math.pow(2, reconnectAttemptsRef.current), 30000);
-          reconnectAttemptsRef.current += 1;
-          reconnectTimeoutRef.current = setTimeout(connect, delay);
-        }
-      };
-      
-    } catch (err) {
-      log.error('Failed to connect to order flow WebSocket:', err);
-      setConnectionStatus('error');
-    }
-  }, []);
+    ws.onclose = () => {
+      sharedWs = null;
+      log.debug('🔌 [OrderFlow] Shared WebSocket disconnected');
+      notifyListeners(); // notify connection status change
+      if (subscriberCount > 0 && hasEverConnected) {
+        const delay = Math.min(1000 * 2 ** reconnectAttempts, 30000);
+        reconnectAttempts++;
+        reconnectTimer = setTimeout(connectSharedWs, delay);
+      }
+    };
+  } catch {
+    // ignore connection errors
+  }
+}
 
-  const disconnect = useCallback(() => {
-    if (reconnectTimeoutRef.current) {
-      clearTimeout(reconnectTimeoutRef.current);
-    }
-    if (wsRef.current) {
-      wsRef.current.close();
-      wsRef.current = null;
-    }
-    setIsConnected(false);
-    setConnectionStatus('disconnected');
-  }, []);
+function disconnectSharedWs() {
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
+  if (sharedWs) {
+    sharedWs.close();
+    sharedWs = null;
+  }
+}
+
+// ── Hook (multiple instances share ONE WebSocket) ─────────────────────
+export function useOrderFlowRealtime() {
+  const [orderFlow, setOrderFlow] = useState<OrderFlowSnapshot>(sharedOrderFlow);
+  const [isConnected, setIsConnected] = useState(false);
+  const [connectionStatus, setConnectionStatus] = useState<
+    'connecting' | 'connected' | 'disconnected' | 'error' | 'RECONNECTING'
+  >('disconnected');
 
   useEffect(() => {
-    connect();
-    return () => disconnect();
-  }, [connect, disconnect]);
+    subscriberCount++;
+    connectSharedWs();
+
+    // Subscribe to data updates
+    const listener = (snapshot: OrderFlowSnapshot) => {
+      setOrderFlow(snapshot);
+      const connected = sharedWs?.readyState === WebSocket.OPEN;
+      setIsConnected(!!connected);
+      setConnectionStatus(connected ? 'connected' : hasEverConnected ? 'RECONNECTING' : 'connecting');
+    };
+    listeners.add(listener);
+
+    // Sync initial status
+    const connected = sharedWs?.readyState === WebSocket.OPEN;
+    setIsConnected(!!connected);
+    setConnectionStatus(connected ? 'connected' : hasEverConnected ? 'RECONNECTING' : 'connecting');
+
+    return () => {
+      listeners.delete(listener);
+      subscriberCount--;
+      if (subscriberCount <= 0) {
+        subscriberCount = 0;
+        disconnectSharedWs();
+      }
+    };
+  }, []);
 
   return {
     orderFlow,
     isConnected,
     connectionStatus,
-    connect,
-    disconnect
+    connect: connectSharedWs,
+    disconnect: disconnectSharedWs,
   };
 }
 

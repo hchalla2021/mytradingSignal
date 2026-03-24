@@ -143,6 +143,7 @@ class MarketFeedService:
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._consecutive_403_errors: int = 0  # Track repeated 403 errors
         self._last_connection_attempt: Optional[datetime] = None  # Track last retry
+        self._analysis_semaphore: asyncio.Semaphore = asyncio.Semaphore(1)  # Limit concurrent analysis
         self._retry_delay: int = 5  # Start with 5 seconds, exponential backoff
         self._using_rest_fallback: bool = False  # Flag for REST API fallback mode
     
@@ -325,7 +326,10 @@ class MarketFeedService:
             # 🔥 Previous day data for pivot calculations
             "prev_day_high": round(prev_day_high, 2) if prev_day_high else None,
             "prev_day_low": round(prev_day_low, 2) if prev_day_low else None,
-            "prev_day_close": round(prev_day_close, 2) if prev_day_close else None
+            "prev_day_close": round(prev_day_close, 2) if prev_day_close else None,
+            # 🔥 Preserve raw depth for order flow analysis (stripped before broadcast)
+            "_raw_depth": tick.get("depth", {}),
+            "_raw_bid": tick.get("last_price", 0) - (tick.get("depth", {}).get("buy", [{}])[0].get("price", 0) if tick.get("depth", {}).get("buy") else 0),
         }
     
     def _on_ticks(self, ws, ticks):
@@ -400,11 +404,14 @@ class MarketFeedService:
                 traceback.print_exc()
     
     async def _update_and_broadcast(self, data: Dict[str, Any]):
-        """Update cache and broadcast to WebSocket clients."""
+        """Update cache and broadcast to WebSocket clients.
+        
+        Split into fast path (broadcast immediately) and slow path (analysis in background)
+        to prevent event loop starvation.
+        """
         symbol = data["symbol"]
         
         # Recalculate market status fresh for every broadcast
-        # get_market_status() already handles Zerodha override via _zerodha_ticks_active
         current_status = get_market_status()
         old_status = data.get("status", "UNKNOWN")
         data["status"] = current_status
@@ -417,27 +424,12 @@ class MarketFeedService:
             print(f"   Time: {datetime.now(IST).strftime('%H:%M:%S')}")
             print(f"{'='*80}\n")
         
-        # Log broadcasts periodically (not every tick to reduce noise)
-        # print(f"[BROADCAST] {symbol}: ₹{data['price']} ({data['changePercent']:+.2f}%) [{data['status']}]")
+        # ── FAST PATH: Use cached PCR and analysis, broadcast immediately ──
         
-        # SMART: Fetch PCR with staggered timing to avoid rate limits
+        # PCR: Use cached data only (no HTTP calls in fast path)
         try:
-            pcr_service = get_pcr_service()
-            
-            # Add small delay based on symbol to stagger requests
-            current_second = int(time_module.time()) % 30
-            stagger_map = {"NIFTY": 0, "BANKNIFTY": 10, "SENSEX": 20}
-            expected_second = stagger_map.get(symbol, 0)
-            
-            # Only fetch if it's this symbol's turn (within 5 second window)
-            if abs(current_second - expected_second) <= 5 or current_second < 5:
-                pcr_data = await pcr_service.get_pcr_data(symbol)
-            else:
-                # Use cached data if not this symbol's turn
-                from services.pcr_service import _PCR_CACHE
-                pcr_data = _PCR_CACHE.get(symbol, {})
-                if not pcr_data:
-                    pcr_data = await pcr_service.get_pcr_data(symbol)
+            from services.pcr_service import _PCR_CACHE
+            pcr_data = _PCR_CACHE.get(symbol, {})
             data["pcr"] = pcr_data.get("pcr", 0.0)
             data["callOI"] = pcr_data.get("callOI", 0)
             data["putOI"] = pcr_data.get("putOI", 0)
@@ -450,20 +442,13 @@ class MarketFeedService:
             oi_change_percent = (oi_change / prev_oi * 100) if prev_oi > 0 else 0
             data["oi_change"] = round(oi_change_percent, 2)
             self.last_oi[symbol] = current_oi
-            
-            # Debug PCR updates (reduced logging)
-            # if data["pcr"] > 0:
-            #     print(f"[PCR] {symbol}: PCR={data['pcr']:.2f}")
-        except Exception as e:
-            print(f"[ERROR] PCR fetch FAILED for {symbol}: {type(e).__name__}: {e}")
+        except Exception:
             data["pcr"] = 0.0
             data["callOI"] = 0
             data["putOI"] = 0
             data["oi_change"] = 0.0
         
-        # ── Build proper 5-minute OHLCV+OI candles for OI Momentum analysis ──
-        # Replaces the old raw-tick snapshot storage (which used cumulative
-        # session volume and omitted OI, causing volume_ratio≈1.0x and no OI signals).
+        # 5-minute candle building (lightweight)
         try:
             from datetime import datetime as _dt
             _now_ist = _dt.now(IST)
@@ -474,94 +459,126 @@ class MarketFeedService:
                 oi=int(data.get("oi") or 0),
                 ts=_now_ist,
             )
-        except Exception as _ce:
-            pass  # candle errors must never break the main broadcast
+        except Exception:
+            pass
         
-        # Generate instant analysis for this tick (with smart caching to avoid recalculation lag)
+        # Analysis: Use cached analysis (fast, no computation)
         try:
-            from services.instant_analysis import InstantSignal, calculate_emas_from_cache, calculate_market_structure_from_cache
-            from datetime import datetime
-            import pytz
-            
-            # 🔥 SMART CACHING: Reduced to 1 second during trading for real-time trading signals
-            # Use data["status"] which already has the Zerodha override applied
-            is_trading = data.get("status") == "LIVE"
-            
-            # Determine cache expiry - SHORTER for trading signals to appear live
-            cache_ttl = 1 if is_trading else 60  # 1s during market hours (fast updates), 60s outside
             cache_key = f"ws_analysis:{symbol}"
-            
-            # Try to get cached analysis first
-            cached_analysis = None
-            if is_trading:  # Only use cache during trading hours
-                try:
-                    cached_json = await self.cache.get(cache_key)
-                    if cached_json:
-                        import json
-                        cached_analysis = json.loads(cached_json)
-                        # Use cached analysis - skip recalculation
-                        data["analysis"] = cached_analysis
-                except Exception as cache_err:
-                    pass  # Fall through to recalculation if cache read fails
-            
-            # If no cached analysis, calculate fresh
-            if not cached_analysis:
-                # 🔥 CRITICAL: Calculate EMAs from cached candles before analysis
-                data = await calculate_emas_from_cache(self.cache, data["symbol"], data)
-                
-                
-                # 🔥 CRITICAL: Calculate market structure from cached candles
-                market_structure = await calculate_market_structure_from_cache(self.cache, data["symbol"], data)
-                data.update(market_structure)  # Merge market structure data into tick_data
-                
-                analysis_result = await InstantSignal.analyze_tick(data)
-                if analysis_result:
-                    data["analysis"] = analysis_result
-                    
-                    # Cache the fresh analysis for next ticks
-                    if is_trading:
-                        try:
-                            import json
-                            await self.cache.set(cache_key, json.dumps(analysis_result), expire=cache_ttl)
-                        except Exception as cache_write_err:
-                            pass  # Non-critical: if cache write fails, just continue
-                    
-                    # Log only occasionally to reduce spam
-                    if int(time_module.time()) % 5 == 0:  # Log every 5 seconds for this symbol
-                        print(f"✅ Analysis generated for {symbol}: signal={analysis_result.get('signal')}, confidence={analysis_result.get('confidence'):.0f}%")
-                else:
-                    print(f"⚠️ Analysis returned None for {symbol}")
-                    data["analysis"] = None
+            cached_json = await self.cache.get(cache_key)
+            if cached_json:
+                import json
+                data["analysis"] = json.loads(cached_json)
             else:
-                # Using cached analysis - log sparingly
-                if int(time_module.time()) % 10 == 0:  # Log every 10 seconds
-                    print(f"♻️ Using cached analysis for {symbol} (TTL: {cache_ttl}s)")
-                    
-        except Exception as e:
-            print(f"❌ Instant analysis FAILED for {data['symbol']}: {e}")
-            import traceback
-            traceback.print_exc()
+                data["analysis"] = None
+        except Exception:
             data["analysis"] = None
         
-        # ✅ CRITICAL FIX: Store data WITH analysis to cache (after analysis is added)
+        # Order flow: strip raw depth before broadcast
+        raw_depth = data.pop("_raw_depth", {})
+        data.pop("_raw_bid", None)
+        
+        # Order flow: process on EVERY tick (lightweight, no HTTP)
+        try:
+            from services.order_flow_analyzer import order_flow_analyzer
+            buy_levels = raw_depth.get("buy", [])
+            sell_levels = raw_depth.get("sell", [])
+            synthetic_tick = {
+                "instrument_token": 0,
+                "last_price": data.get("price", 0),
+                "volume_traded": data.get("volume", 0),
+                "oi": data.get("oi", 0),
+                "ohlc": {"open": data.get("open", 0), "high": data.get("high", 0),
+                          "low": data.get("low", 0), "close": data.get("close", 0)},
+                "depth": raw_depth,
+                "bid": buy_levels[0].get("price", 0) if buy_levels else 0,
+                "ask": sell_levels[0].get("price", 0) if sell_levels else 0,
+            }
+            await order_flow_analyzer.process_zerodha_tick(synthetic_tick, symbol)
+            of_metrics = order_flow_analyzer.get_current_metrics(symbol)
+            if of_metrics:
+                data["orderFlow"] = of_metrics
+        except Exception as e:
+            import traceback
+            print(f"⚠️ OrderFlow fast-path error for {symbol}: {e}")
+            traceback.print_exc()
+
+        # ── BROADCAST IMMEDIATELY (non-blocking) ──
         await self.cache.set_market_data(data["symbol"], data)
-        
-        # Broadcast to WebSocket with analysis included
-        # 🔥 DEBUG: Log analysis structure before broadcast
-        if int(time_module.time()) % 10 == 0 and symbol == 'NIFTY':  # Log every 10 seconds
-            if data.get("analysis"):
-                analysis = data["analysis"]
-                print(f"🔥 [BROADCAST] {symbol} - Analysis present: signal={analysis.get('signal')}, has_indicators={bool(analysis.get('indicators'))}")
-                if analysis.get("indicators"):
-                    ind_keys = list(analysis["indicators"].keys())[:5]
-                    print(f"   Indicators (first 5): {ind_keys}")
-            else:
-                print(f"⚠️ [BROADCAST] {symbol} - NO analysis data!")
-        
         await self.ws_manager.broadcast({
             "type": "tick",
             "data": data
         })
+        
+        # ── SLOW PATH: Run heavy analysis in background task ──
+        asyncio.create_task(self._run_background_analysis(symbol, dict(data), raw_depth))
+    
+    async def _run_background_analysis(self, symbol: str, data: Dict[str, Any], raw_depth: Dict):
+        """Run heavy analysis in background without blocking tick broadcasts."""
+        # Use semaphore to prevent multiple heavy analyses competing for CPU
+        if self._analysis_semaphore.locked():
+            return  # Skip if another analysis is already running
+        
+        async with self._analysis_semaphore:
+            try:
+                await asyncio.sleep(0)
+                
+                is_trading = data.get("status") == "LIVE"
+                cache_ttl = 10 if is_trading else 60
+                cache_key = f"ws_analysis:{symbol}"
+                
+                # Check if analysis cache is still valid
+                if is_trading:
+                    cached_json = await self.cache.get(cache_key)
+                    if cached_json:
+                        return
+                
+                # PCR fetch (HTTP)
+                try:
+                    pcr_service = get_pcr_service()
+                    current_second = int(time_module.time()) % 30
+                    stagger_map = {"NIFTY": 0, "BANKNIFTY": 10, "SENSEX": 20}
+                    expected_second = stagger_map.get(symbol, 0)
+                    if abs(current_second - expected_second) <= 5 or current_second < 5:
+                        await pcr_service.get_pcr_data(symbol)
+                except Exception:
+                    pass
+                
+                await asyncio.sleep(0)
+                
+                # Heavy analysis — run CPU-bound parts with yields
+                try:
+                    from services.instant_analysis import InstantSignal, calculate_emas_from_cache, calculate_market_structure_from_cache
+                    
+                    data = await calculate_emas_from_cache(self.cache, data["symbol"], data)
+                    await asyncio.sleep(0)
+                    
+                    market_structure = await calculate_market_structure_from_cache(self.cache, data["symbol"], data)
+                    data.update(market_structure)
+                    await asyncio.sleep(0)
+                    
+                    analysis_result = await InstantSignal.analyze_tick(data)
+                    await asyncio.sleep(0)
+                    
+                    if analysis_result:
+                        try:
+                            import json
+                            await self.cache.set(cache_key, json.dumps(analysis_result), expire=cache_ttl)
+                        except Exception:
+                            pass
+                        
+                        if int(time_module.time()) % 10 == 0:
+                            print(f"✅ Analysis: {symbol} signal={analysis_result.get('signal')}")
+                except Exception as e:
+                    if int(time_module.time()) % 30 == 0:
+                        print(f"❌ Analysis failed for {symbol}: {e}")
+                
+                await asyncio.sleep(0)
+                
+                # Order flow: now processed in fast path (every tick), removed from here
+                    
+            except Exception as e:
+                print(f"❌ Background task error for {symbol}: {e}")
     
     async def _fetch_and_cache_last_data(self):
         """Fetch last traded data from Zerodha and cache it - works even when market is closed."""
@@ -1187,10 +1204,14 @@ class MarketFeedService:
                     last_refresh_time = current_time
                 
                 # Process any pending ticks from the queue (only when WebSocket is active)
-                while not self._tick_queue.empty():
+                # 🔥 FIX: Limit ticks per cycle to prevent event loop starvation
+                ticks_processed = 0
+                while not self._tick_queue.empty() and ticks_processed < 3:
                     try:
                         data = self._tick_queue.get_nowait()
                         await self._update_and_broadcast(data)
+                        ticks_processed += 1
+                        await asyncio.sleep(0)  # Yield to event loop between ticks
                     except Exception as e:
                         print(f"❌ Error broadcasting tick: {e}")
                 
@@ -1288,10 +1309,13 @@ class MarketFeedService:
                 
                 # Process tick queue
                 while self.running:
-                    while not self._tick_queue.empty():
+                    ticks_processed = 0
+                    while not self._tick_queue.empty() and ticks_processed < 3:
                         try:
                             data = self._tick_queue.get_nowait()
                             await self._update_and_broadcast(data)
+                            ticks_processed += 1
+                            await asyncio.sleep(0)  # Yield to event loop
                         except Exception as e:
                             print(f"❌ Error broadcasting tick: {e}")
                     await asyncio.sleep(0.1)
