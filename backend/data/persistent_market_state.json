@@ -1,20 +1,20 @@
 {
   "NIFTY": {
     "symbol": "NIFTY",
-    "price": 22924.35,
-    "change": 411.7,
+    "price": 22923.85,
+    "change": 411.2,
     "changePercent": 1.83,
     "high": 23057.3,
     "low": 22624.2,
     "open": 22878.45,
     "close": 22512.65,
     "volume": 10136880,
-    "oi": 164023145,
-    "pcr": 9.36,
-    "callOI": 15836340,
-    "putOI": 148186805,
+    "oi": 161968560,
+    "pcr": 9.25,
+    "callOI": 15798705,
+    "putOI": 146169855,
     "trend": "bullish",
-    "timestamp": "2026-03-24T15:07:57.461004+05:30",
+    "timestamp": "2026-03-24T15:08:00.460966+05:30",
     "status": "LIVE",
     "prev_day_high": 23057.3,
     "prev_day_low": 22624.2,
@@ -31,25 +31,25 @@
         "\u2197\ufe0f Price in upper zone (69%)"
       ],
       "warnings": [],
-      "entry_price": 22924.05,
-      "stop_loss": 22809.42975,
-      "target": 23153.2905,
+      "entry_price": 22923.75,
+      "stop_loss": 22809.13125,
+      "target": 23152.9875,
       "indicators": {
-        "price": 22924.05,
+        "price": 22923.75,
         "high": 23057.3,
         "low": 22624.2,
         "open": 22878.45,
-        "vwap": 22868.52,
-        "vwma_20": 22908.0,
+        "vwap": 22868.42,
+        "vwma_20": 22907.7,
         "vwap_position": "ABOVE_VWAP",
         "vwap_bias": "LONG_ONLY",
         "vwap_role": "SUPPORT",
         "vwap_signal": "DIP_TO_VWAP_BUY",
         "vwap_r3_s3_combo": "Price dipping to VWAP support - buy zone activated",
-        "ema_20": 22912.59,
-        "ema_50": 22901.13,
-        "ema_100": 22878.2,
-        "ema_200": 22855.28,
+        "ema_20": 22912.29,
+        "ema_50": 22900.83,
+        "ema_100": 22877.9,
+        "ema_200": 22854.98,
         "ema_alignment": "ALL_BEARISH",
         "ema_alignment_confidence": 95,
         "ema200_touch": "TOUCHING",
@@ -90,8 +90,8 @@
         "supertrend_10_2_value": 22840.75,
         "supertrend_10_2_trend": "NEUTRAL",
         "supertrend_10_2_signal": "HOLD",
-        "supertrend_10_2_distance": 83.3,
-        "supertrend_10_2_distance_pct": 0.363,
+        "supertrend_10_2_distance": 83.0,
+        "supertrend_10_2_distance_pct": 0.362,
         "supertrend_10_2_confidence": 62,
         "supertrend_10_2_warning": "\u26a0\ufe0f WARNING: Inside CPR zone",
         "is_sideways_market": true,
@@ -116,15 +116,15 @@
         "orb_strength": 0,
         "orb_confidence": 45,
         "orb_confirmation": "Waiting for ORB breakout or breakdown",
-        "distance_to_orb_high": 133.25,
-        "distance_to_orb_low": 299.85,
-        "orb_risk": 299.85,
+        "distance_to_orb_high": 133.55,
+        "distance_to_orb_low": 299.55,
+        "orb_risk": 299.55,
         "orb_reward_risk_ratio": 2.89,
         "trend": "UPTREND",
         "trend_5min": "UP",
         "trend_15min": "DOWN",
         "changePercent": 1.83,
-        "change": 45.6,
+        "change": 45.3,
         "support": 22624.2,
         "resistance": 23057.3,
         "prev_day_high": 23057.3,
@@ -179,104 +179,104 @@
         "structure_confidence": 75,
         "time_quality": "GOOD"
       },
-      "timestamp": "2026-03-24T15:13:17.996171",
+      "timestamp": "2026-03-24T15:13:31.430140",
       "symbol": "NIFTY",
       "symbol_name": "NIFTY"
     },
     "orderFlow": {
-      "timestamp": "2026-03-24T15:13:20.982050+05:30",
-      "bid": 22918.62,
-      "ask": 22930.08,
+      "timestamp": "2026-03-24T15:13:32.359805+05:30",
+      "bid": 22918.12,
+      "ask": 22929.58,
       "spread": 11.46,
       "spreadPct": 0.05,
       "bidLevels": [
         {
-          "price": 22918.62,
-          "quantity": 4495,
-          "orders": 37
+          "price": 22918.12,
+          "quantity": 3113,
+          "orders": 25
         },
         {
-          "price": 22907.16,
-          "quantity": 3821,
-          "orders": 31
+          "price": 22906.66,
+          "quantity": 2646,
+          "orders": 22
         },
         {
-          "price": 22895.7,
-          "quantity": 3146,
-          "orders": 26
+          "price": 22895.2,
+          "quantity": 2179,
+          "orders": 18
         },
         {
-          "price": 22884.23,
-          "quantity": 2472,
-          "orders": 20
-        },
-        {
-          "price": 22872.77,
-          "quantity": 1798,
+          "price": 22883.73,
+          "quantity": 1712,
           "orders": 14
+        },
+        {
+          "price": 22872.27,
+          "quantity": 1245,
+          "orders": 10
         }
       ],
       "askLevels": [
         {
-          "price": 22930.08,
-          "quantity": 2436,
+          "price": 22929.58,
+          "quantity": 2923,
+          "orders": 24
+        },
+        {
+          "price": 22941.04,
+          "quantity": 2484,
           "orders": 20
         },
         {
-          "price": 22941.54,
-          "quantity": 2070,
+          "price": 22952.5,
+          "quantity": 2046,
           "orders": 17
         },
         {
-          "price": 22953.0,
-          "quantity": 1705,
-          "orders": 14
+          "price": 22963.97,
+          "quantity": 1607,
+          "orders": 13
         },
         {
-          "price": 22964.47,
-          "quantity": 1339,
-          "orders": 11
-        },
-        {
-          "price": 22975.93,
-          "quantity": 974,
-          "orders": 8
+          "price": 22975.43,
+          "quantity": 1169,
+          "orders": 9
         }
       ],
-      "totalBidQty": 15732,
-      "totalAskQty": 8524,
-      "totalBidOrders": 128,
-      "totalAskOrders": 70,
-      "delta": 7208,
-      "deltaPercentage": 64.9,
-      "deltaTrend": "BULLISH",
-      "buyerAggressionRatio": 0.649,
-      "sellerAggressionRatio": 0.351,
-      "liquidityImbalance": 0.297,
-      "bidDepth": 15732,
-      "askDepth": 8524,
-      "buyDomination": true,
+      "totalBidQty": 10895,
+      "totalAskQty": 10229,
+      "totalBidOrders": 89,
+      "totalAskOrders": 83,
+      "delta": 666,
+      "deltaPercentage": 51.6,
+      "deltaTrend": "NEUTRAL",
+      "buyerAggressionRatio": 0.516,
+      "sellerAggressionRatio": 0.484,
+      "liquidityImbalance": 0.032,
+      "bidDepth": 10895,
+      "askDepth": 10229,
+      "buyDomination": false,
       "sellDomination": false,
-      "signal": "BUY",
-      "signalConfidence": 0.55,
+      "signal": "HOLD",
+      "signalConfidence": 0.5,
       "fiveMinPrediction": {
         "direction": "BUY",
-        "confidence": 0.55,
-        "reasoning": "Buy bias: 55% buyers, \u0394 +2633",
+        "confidence": 0.57,
+        "reasoning": "Buy bias: 55% buyers, \u0394 +2946",
         "tickCount": 192,
-        "avgDelta": 2633.13,
-        "buyDominancePct": 55.1,
-        "sellDominancePct": 44.9
+        "avgDelta": 2945.83,
+        "buyDominancePct": 55.7,
+        "sellDominancePct": 44.3
       }
     },
-    "_persist_timestamp": "2026-03-24T15:13:21.011684",
-    "_persist_unix_time": 1774345401.011704,
+    "_persist_timestamp": "2026-03-24T15:13:32.361081",
+    "_persist_unix_time": 1774345412.3610911,
     "_symbol": "NIFTY"
   },
   "BANKNIFTY": {
     "symbol": "BANKNIFTY",
-    "price": 52665.1,
-    "change": 1227.35,
+    "price": 52666.95,
+    "change": 1229.2,
     "changePercent": 2.39,
     "high": 52949.15,
     "low": 51827.5,
@@ -288,7 +288,7 @@
     "callOI": 9692880,
     "putOI": 5908980,
     "trend": "bullish",
-    "timestamp": "2026-03-24T15:07:57.460717+05:30",
+    "timestamp": "2026-03-24T15:08:00.710747+05:30",
     "status": "LIVE",
     "prev_day_high": 52949.15,
     "prev_day_low": 51827.5,
@@ -298,32 +298,32 @@
       "signal": "BUY_SIGNAL",
       "confidence": 0.55,
       "reasons": [
-        "\ud83d\udd25 Strong bullish momentum: +2.38%",
+        "\ud83d\udd25 Strong bullish momentum: +2.39%",
         "\u26a0\ufe0f Strong PCR bearish: 0.61",
         "\ud83d\udcca Bullish trend confirmed",
         "\u2713 Moderate volume",
-        "\u2197\ufe0f Price in upper zone (74%)"
+        "\u2197\ufe0f Price in upper zone (75%)"
       ],
       "warnings": [],
-      "entry_price": 52662.8,
-      "stop_loss": 52399.486000000004,
-      "target": 53189.428,
+      "entry_price": 52666.75,
+      "stop_loss": 52403.41625,
+      "target": 53193.4175,
       "indicators": {
-        "price": 52662.8,
+        "price": 52666.75,
         "high": 52949.15,
         "low": 51827.5,
         "open": 52384.8,
-        "vwap": 52479.82,
-        "vwma_20": 52625.94,
+        "vwap": 52481.13,
+        "vwma_20": 52629.88,
         "vwap_position": "ABOVE_VWAP",
         "vwap_bias": "LONG_ONLY",
         "vwap_role": "SUPPORT",
         "vwap_signal": "DIP_TO_VWAP_BUY",
         "vwap_r3_s3_combo": "Price dipping to VWAP support - buy zone activated",
-        "ema_20": 52636.47,
-        "ema_50": 52610.14,
-        "ema_100": 52557.47,
-        "ema_200": 52504.81,
+        "ema_20": 52640.42,
+        "ema_50": 52614.08,
+        "ema_100": 52561.42,
+        "ema_200": 52508.75,
         "ema_alignment": "ALL_BEARISH",
         "ema_alignment_confidence": 95,
         "ema200_touch": "TOUCHING",
@@ -364,8 +364,8 @@
         "supertrend_10_2_value": 52388.32,
         "supertrend_10_2_trend": "NEUTRAL",
         "supertrend_10_2_signal": "HOLD",
-        "supertrend_10_2_distance": 274.48,
-        "supertrend_10_2_distance_pct": 0.521,
+        "supertrend_10_2_distance": 278.43,
+        "supertrend_10_2_distance_pct": 0.529,
         "supertrend_10_2_confidence": 66,
         "supertrend_10_2_warning": "\u26a0\ufe0f WARNING: Inside CPR zone",
         "is_sideways_market": true,
@@ -390,15 +390,15 @@
         "orb_strength": 0,
         "orb_confidence": 45,
         "orb_confirmation": "Waiting for ORB breakout or breakdown",
-        "distance_to_orb_high": 286.35,
-        "distance_to_orb_low": 835.3,
-        "orb_risk": 835.3,
-        "orb_reward_risk_ratio": 2.69,
+        "distance_to_orb_high": 282.4,
+        "distance_to_orb_low": 839.25,
+        "orb_risk": 839.25,
+        "orb_reward_risk_ratio": 2.67,
         "trend": "UPTREND",
         "trend_5min": "UP",
         "trend_15min": "DOWN",
-        "changePercent": 2.38,
-        "change": 278.0,
+        "changePercent": 2.39,
+        "change": 281.95,
         "support": 51827.5,
         "resistance": 52949.15,
         "prev_day_high": 52949.15,
@@ -419,8 +419,8 @@
         "rsi_15m_signal": "WEAK",
         "rsi_momentum_status": "BUY",
         "rsi_momentum_confidence": 75,
-        "momentum": 94.9,
-        "candle_strength": 0.248,
+        "momentum": 95.0,
+        "candle_strength": 0.251,
         "candle_direction": "BULLISH",
         "candle_quality_signal": "STRONG_BUY",
         "candle_quality_confidence": 0.95,
@@ -453,104 +453,104 @@
         "structure_confidence": 75,
         "time_quality": "GOOD"
       },
-      "timestamp": "2026-03-24T15:13:16.922048",
+      "timestamp": "2026-03-24T15:13:30.524919",
       "symbol": "BANKNIFTY",
       "symbol_name": "BANKNIFTY"
     },
     "orderFlow": {
-      "timestamp": "2026-03-24T15:13:20.690051+05:30",
-      "bid": 52651.93,
-      "ask": 52678.27,
+      "timestamp": "2026-03-24T15:13:32.374829+05:30",
+      "bid": 52653.78,
+      "ask": 52680.12,
       "spread": 26.34,
       "spreadPct": 0.05,
       "bidLevels": [
         {
-          "price": 52651.93,
-          "quantity": 4957,
-          "orders": 41
+          "price": 52653.78,
+          "quantity": 5193,
+          "orders": 43
         },
         {
-          "price": 52625.6,
-          "quantity": 4213,
-          "orders": 35
+          "price": 52627.45,
+          "quantity": 4414,
+          "orders": 36
         },
         {
-          "price": 52599.26,
-          "quantity": 3470,
-          "orders": 28
+          "price": 52601.11,
+          "quantity": 3635,
+          "orders": 30
         },
         {
-          "price": 52572.93,
-          "quantity": 2726,
-          "orders": 22
+          "price": 52574.78,
+          "quantity": 2856,
+          "orders": 23
         },
         {
-          "price": 52546.6,
-          "quantity": 1983,
-          "orders": 16
+          "price": 52548.45,
+          "quantity": 2077,
+          "orders": 17
         }
       ],
       "askLevels": [
         {
-          "price": 52678.27,
-          "quantity": 7955,
-          "orders": 66
+          "price": 52680.12,
+          "quantity": 8817,
+          "orders": 73
         },
         {
-          "price": 52704.6,
-          "quantity": 6761,
-          "orders": 56
+          "price": 52706.45,
+          "quantity": 7495,
+          "orders": 62
         },
         {
-          "price": 52730.94,
-          "quantity": 5568,
-          "orders": 46
+          "price": 52732.79,
+          "quantity": 6172,
+          "orders": 51
         },
         {
-          "price": 52757.27,
-          "quantity": 4375,
-          "orders": 36
+          "price": 52759.12,
+          "quantity": 4849,
+          "orders": 40
         },
         {
-          "price": 52783.6,
-          "quantity": 3182,
-          "orders": 26
+          "price": 52785.45,
+          "quantity": 3527,
+          "orders": 29
         }
       ],
-      "totalBidQty": 17349,
-      "totalAskQty": 27841,
-      "totalBidOrders": 142,
-      "totalAskOrders": 230,
-      "delta": -10492,
-      "deltaPercentage": 38.4,
-      "deltaTrend": "BEARISH",
-      "buyerAggressionRatio": 0.384,
-      "sellerAggressionRatio": 0.616,
-      "liquidityImbalance": -0.232,
-      "bidDepth": 17349,
-      "askDepth": 27841,
+      "totalBidQty": 18175,
+      "totalAskQty": 30860,
+      "totalBidOrders": 149,
+      "totalAskOrders": 255,
+      "delta": -12685,
+      "deltaPercentage": 37.1,
+      "deltaTrend": "NEUTRAL",
+      "buyerAggressionRatio": 0.371,
+      "sellerAggressionRatio": 0.629,
+      "liquidityImbalance": -0.259,
+      "bidDepth": 18175,
+      "askDepth": 30860,
       "buyDomination": false,
-      "sellDomination": true,
+      "sellDomination": false,
       "signal": "SELL",
-      "signalConfidence": 0.52,
+      "signalConfidence": 0.53,
       "fiveMinPrediction": {
         "direction": "BUY",
-        "confidence": 0.57,
-        "reasoning": "Buy bias: 55% buyers, \u0394 +6405",
-        "tickCount": 208,
-        "avgDelta": 6405.33,
-        "buyDominancePct": 55.7,
-        "sellDominancePct": 44.3
+        "confidence": 0.58,
+        "reasoning": "Buy bias: 55% buyers, \u0394 +6878",
+        "tickCount": 209,
+        "avgDelta": 6877.55,
+        "buyDominancePct": 56.0,
+        "sellDominancePct": 44.0
       }
     },
-    "_persist_timestamp": "2026-03-24T15:13:20.692687",
-    "_persist_unix_time": 1774345400.6927328,
+    "_persist_timestamp": "2026-03-24T15:13:32.376186",
+    "_persist_unix_time": 1774345412.3761966,
     "_symbol": "BANKNIFTY"
   },
   "SENSEX": {
     "symbol": "SENSEX",
-    "price": 74085.41,
-    "change": 1389.02,
+    "price": 74088.26,
+    "change": 1391.87,
     "changePercent": 1.91,
     "high": 74489.39,
     "low": 73084.46,
@@ -562,7 +562,7 @@
     "callOI": 1115340,
     "putOI": 5113640,
     "trend": "bullish",
-    "timestamp": "2026-03-24T15:07:56.711168+05:30",
+    "timestamp": "2026-03-24T15:08:00.710986+05:30",
     "status": "LIVE",
     "prev_day_high": 74489.39,
     "prev_day_low": 73084.46,
@@ -572,31 +572,31 @@
       "signal": "STRONG_BUY",
       "confidence": 0.75,
       "reasons": [
-        "\ud83d\udd25 Strong bullish momentum: +1.91%",
+        "\ud83d\udd25 Strong bullish momentum: +1.92%",
         "\ud83c\udfaf Extreme PCR bullish: 4.58 (heavy put writing)",
         "\ud83d\udcca Bullish trend confirmed",
         "\u2197\ufe0f Price in upper zone (71%)"
       ],
       "warnings": [],
-      "entry_price": 74085.06,
-      "stop_loss": 73714.6347,
-      "target": 74825.9106,
+      "entry_price": 74088.82,
+      "stop_loss": 73718.37590000001,
+      "target": 74829.70820000001,
       "indicators": {
-        "price": 74085.06,
+        "price": 74088.82,
         "high": 74489.39,
         "low": 73084.46,
         "open": 74212.47,
-        "vwap": 73886.3,
-        "vwma_20": 74033.2,
+        "vwap": 73887.56,
+        "vwma_20": 74036.96,
         "vwap_position": "ABOVE_VWAP",
         "vwap_bias": "LONG_ONLY",
         "vwap_role": "SUPPORT",
         "vwap_signal": "DIP_TO_VWAP_BUY",
         "vwap_r3_s3_combo": "Price dipping to VWAP support - buy zone activated",
-        "ema_20": 74048.02,
-        "ema_50": 74010.97,
-        "ema_100": 73936.89,
-        "ema_200": 73862.8,
+        "ema_20": 74051.78,
+        "ema_50": 74014.73,
+        "ema_100": 73940.64,
+        "ema_200": 73866.55,
         "ema_alignment": "ALL_BEARISH",
         "ema_alignment_confidence": 95,
         "ema200_touch": "TOUCHING",
@@ -637,8 +637,8 @@
         "supertrend_10_2_value": 73786.93,
         "supertrend_10_2_trend": "NEUTRAL",
         "supertrend_10_2_signal": "HOLD",
-        "supertrend_10_2_distance": 298.13,
-        "supertrend_10_2_distance_pct": 0.402,
+        "supertrend_10_2_distance": 301.9,
+        "supertrend_10_2_distance_pct": 0.407,
         "supertrend_10_2_confidence": 62,
         "supertrend_10_2_warning": "\u26a0\ufe0f WARNING: Inside CPR zone",
         "is_sideways_market": true,
@@ -663,15 +663,15 @@
         "orb_strength": 0,
         "orb_confidence": 45,
         "orb_confirmation": "Waiting for ORB breakout or breakdown",
-        "distance_to_orb_high": 404.33,
-        "distance_to_orb_low": 1000.6,
-        "orb_risk": 1000.6,
-        "orb_reward_risk_ratio": 2.81,
+        "distance_to_orb_high": 400.57,
+        "distance_to_orb_low": 1004.36,
+        "orb_risk": 1004.36,
+        "orb_reward_risk_ratio": 2.8,
         "trend": "UPTREND",
         "trend_5min": "UP",
         "trend_15min": "DOWN",
-        "changePercent": 1.91,
-        "change": -127.41,
+        "changePercent": 1.92,
+        "change": -123.65,
         "support": 73084.46,
         "resistance": 74489.39,
         "prev_day_high": 74489.39,
@@ -692,8 +692,8 @@
         "rsi_15m_signal": "NEUTRAL",
         "rsi_momentum_status": "NEUTRAL",
         "rsi_momentum_confidence": 75,
-        "momentum": 92.9,
-        "candle_strength": 0.091,
+        "momentum": 93.1,
+        "candle_strength": 0.088,
         "candle_direction": "BEARISH",
         "candle_quality_signal": "SELL",
         "candle_quality_confidence": 0.12,
@@ -726,98 +726,98 @@
         "structure_confidence": 75,
         "time_quality": "GOOD"
       },
-      "timestamp": "2026-03-24T15:13:17.901955",
+      "timestamp": "2026-03-24T15:13:31.892159",
       "symbol": "SENSEX",
       "symbol_name": "SENSEX"
     },
     "orderFlow": {
-      "timestamp": "2026-03-24T15:13:19.206737+05:30",
-      "bid": 74066.89,
-      "ask": 74103.93,
+      "timestamp": "2026-03-24T15:13:34.973053+05:30",
+      "bid": 74069.74,
+      "ask": 74106.78,
       "spread": 37.04,
       "spreadPct": 0.05,
       "bidLevels": [
         {
-          "price": 74066.89,
-          "quantity": 6507,
-          "orders": 54
+          "price": 74069.74,
+          "quantity": 13866,
+          "orders": 115
         },
         {
-          "price": 74029.85,
-          "quantity": 5531,
+          "price": 74032.7,
+          "quantity": 11786,
+          "orders": 98
+        },
+        {
+          "price": 73995.65,
+          "quantity": 9706,
+          "orders": 80
+        },
+        {
+          "price": 73958.61,
+          "quantity": 7626,
+          "orders": 63
+        },
+        {
+          "price": 73921.56,
+          "quantity": 5546,
           "orders": 46
-        },
-        {
-          "price": 73992.8,
-          "quantity": 4555,
-          "orders": 37
-        },
-        {
-          "price": 73955.76,
-          "quantity": 3579,
-          "orders": 29
-        },
-        {
-          "price": 73918.72,
-          "quantity": 2603,
-          "orders": 21
         }
       ],
       "askLevels": [
         {
-          "price": 74103.93,
-          "quantity": 15924,
-          "orders": 132
+          "price": 74106.78,
+          "quantity": 10402,
+          "orders": 86
         },
         {
-          "price": 74140.97,
-          "quantity": 13535,
-          "orders": 112
+          "price": 74143.82,
+          "quantity": 8842,
+          "orders": 73
         },
         {
-          "price": 74178.02,
-          "quantity": 11146,
-          "orders": 92
+          "price": 74180.87,
+          "quantity": 7281,
+          "orders": 60
         },
         {
-          "price": 74215.06,
-          "quantity": 8758,
-          "orders": 72
+          "price": 74217.91,
+          "quantity": 5721,
+          "orders": 47
         },
         {
-          "price": 74252.1,
-          "quantity": 6369,
-          "orders": 53
+          "price": 74254.96,
+          "quantity": 4161,
+          "orders": 34
         }
       ],
-      "totalBidQty": 22775,
-      "totalAskQty": 55732,
-      "totalBidOrders": 187,
-      "totalAskOrders": 461,
-      "delta": -32957,
-      "deltaPercentage": 29.0,
-      "deltaTrend": "BEARISH",
-      "buyerAggressionRatio": 0.29,
-      "sellerAggressionRatio": 0.71,
-      "liquidityImbalance": -0.42,
-      "bidDepth": 22775,
-      "askDepth": 55732,
-      "buyDomination": false,
-      "sellDomination": true,
-      "signal": "SELL",
-      "signalConfidence": 0.6,
+      "totalBidQty": 48530,
+      "totalAskQty": 36407,
+      "totalBidOrders": 402,
+      "totalAskOrders": 300,
+      "delta": 12123,
+      "deltaPercentage": 57.1,
+      "deltaTrend": "BULLISH",
+      "buyerAggressionRatio": 0.571,
+      "sellerAggressionRatio": 0.429,
+      "liquidityImbalance": 0.143,
+      "bidDepth": 48530,
+      "askDepth": 36407,
+      "buyDomination": true,
+      "sellDomination": false,
+      "signal": "HOLD",
+      "signalConfidence": 0.5,
       "fiveMinPrediction": {
         "direction": "BUY",
-        "confidence": 0.56,
-        "reasoning": "Buy bias: 55% buyers, \u0394 +8532",
-        "tickCount": 96,
-        "avgDelta": 8532.42,
-        "buyDominancePct": 55.3,
-        "sellDominancePct": 44.7
+        "confidence": 0.58,
+        "reasoning": "Buy bias: 56% buyers, \u0394 +9919",
+        "tickCount": 95,
+        "avgDelta": 9919.27,
+        "buyDominancePct": 56.1,
+        "sellDominancePct": 43.9
       }
     },
-    "_persist_timestamp": "2026-03-24T15:13:19.210200",
-    "_persist_unix_time": 1774345399.2102373,
+    "_persist_timestamp": "2026-03-24T15:13:34.974457",
+    "_persist_unix_time": 1774345414.974467,
     "_symbol": "SENSEX"
   },
   "INDIAVIX": {
