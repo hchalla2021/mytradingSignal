@@ -266,6 +266,23 @@ class MarketFeedService:
             state["oi"]        = oi
             state["vol_close"] = volume
 
+        # ── Push live (in-progress) candle to cache every tick ────────────
+        # This allows OI Analysis to see the latest price/OI instead of
+        # waiting up to 5 minutes for the candle to close.
+        state = self._candle_builders[symbol]
+        live_candle = {
+            "timestamp":  state["ts"],
+            "open":       state["open"],
+            "high":       state["high"],
+            "low":        state["low"],
+            "close":      state["close"],
+            "volume":     max(0, state["vol_close"] - state["vol_open"]),
+            "oi":         state["oi"],
+            "oi_prev":    state["oi_open"],
+            "_live":      True,
+        }
+        await self.cache.set(f"analysis_candle_live:{symbol}", live_candle, expire=30)
+
     def _normalize_tick(self, tick: Dict[str, Any]) -> Dict[str, Any]:
         """Normalize Zerodha tick data to our format."""
         token = tick.get("instrument_token")

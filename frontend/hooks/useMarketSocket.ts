@@ -202,7 +202,9 @@ export function useMarketSocket() {
                   return updated;
                 });
               }
-              // Connection is alive
+              break;
+
+            default:
               break;
           }
         } catch (error) {

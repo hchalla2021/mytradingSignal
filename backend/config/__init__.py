@@ -159,8 +159,8 @@ class Settings(BaseSettings):
         # Check JWT Secret
         if not self.jwt_secret:
             validation_errors.append("❌ JWT_SECRET not set")
-        elif self.jwt_secret == "change-this-in-production" or self.jwt_secret == "mydailytradingsignals-secret-key-2024":
-            validation_errors.append("⚠️  JWT_SECRET using placeholder/default value (should be unique for production)")
+        elif self.jwt_secret in ("change-this-in-production", "mydailytradingsignals-secret-key-2024", "CHANGE_ME_USE_STRONG_RANDOM_SECRET_32CHARS"):
+            validation_errors.append("❌ JWT_SECRET using placeholder value — generate a strong random secret before production!")
         
         # Check Redis connectivity
         if not self.redis_url:

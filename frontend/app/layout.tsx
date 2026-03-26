@@ -55,16 +55,10 @@ export default function RootLayout({
       <body className="min-h-screen bg-gradient-to-br from-dark-bg via-dark-surface to-dark-elevated antialiased">
         <GlobalErrorHandler />
         {children}
-        {/* Force reload script */}
+        {/* Disable back-forward cache */}
         <script dangerouslySetInnerHTML={{
           __html: `
-            // Clear all caches on load
             if (typeof window !== 'undefined') {
-              // Clear localStorage and sessionStorage
-              try { localStorage.clear(); } catch(e) {}
-              try { sessionStorage.clear(); } catch(e) {}
-              
-              // Disable back-forward cache
               window.addEventListener('pageshow', function(event) {
                 if (event.persisted) {
                   window.location.reload();

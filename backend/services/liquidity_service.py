@@ -1017,7 +1017,13 @@ class LiquidityService:
             except Exception as e:
                 logger.error(f"⚡ Liquidity loop error: {e}")
 
-            await asyncio.sleep(self.TICK_INTERVAL)
+            # Throttle during closed market to free event loop for HTTP requests
+            try:
+                from services.market_feed import get_market_status
+                _status = get_market_status()
+            except Exception:
+                _status = "CLOSED"
+            await asyncio.sleep(self.TICK_INTERVAL if _status == "LIVE" else 30)
 
         logger.info("⚡ LiquidityService stopped")
 

@@ -850,7 +850,13 @@ class ICTService:
             except Exception as e:
                 logger.error(f"🏦 ICT loop error: {e}", exc_info=True)
 
-            await asyncio.sleep(self.CADENCE)
+            # Throttle during closed market to free event loop for HTTP requests
+            try:
+                from services.market_feed import get_market_status
+                _status = get_market_status()
+            except Exception:
+                _status = "CLOSED"
+            await asyncio.sleep(self.CADENCE if _status == "LIVE" else 30)
 
     # ── Snapshot (REST) ───────────────────────────────────────────────────
 

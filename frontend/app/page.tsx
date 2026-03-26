@@ -9,7 +9,6 @@ import { useOverallMarketOutlook } from '@/hooks/useOverallMarketOutlook';
 import { useAuth } from '@/hooks/useAuth';
 import { useLiquiditySocket, type LiquidityIndex } from '@/hooks/useLiquiditySocket';
 import { useCompassSocket, type CompassIndex } from '@/hooks/useCompassSocket';
-import { useOIAnalysis, type OIAnalysisData } from '@/hooks/useOIAnalysis';
 import { useICTSocket, type ICTIndex } from '@/hooks/useICTSocket';
 import { useIndiaVIX } from '@/hooks/useIndiaVIX';
 
@@ -44,19 +43,8 @@ const IndexCard = dynamic(() => import('@/components/IndexCard'), {
   )
 });
 
-const OIAnalysisCard = dynamic(() => import('@/components/OIAnalysisCard'), { 
-  ssr: false,
-  loading: () => (
-    <div className="bg-dark-surface/60 rounded-xl p-6 animate-pulse border border-cyan-500/20">
-      <div className="h-6 bg-gray-700 rounded mb-4"></div>
-      <div className="h-4 bg-gray-700 rounded mb-2"></div>
-      <div className="h-4 bg-gray-700 rounded w-3/4"></div>
-    </div>
-  )
-});
 const VolumePulseCard = dynamic(() => import('@/components/VolumePulseCard'), { ssr: false });
 const TrendBaseCard = dynamic(() => import('@/components/TrendBaseCard'), { ssr: false });
-const CandleIntentCard = dynamic(() => import('@/components/CandleIntentCard'), { ssr: false });
 const SectionTitle = dynamic(() => import('@/components/SectionTitle'), { ssr: false });
 const TradeSupportResistance = dynamic(() => import('@/components/TradeSupportResistance'), { ssr: false });
 const InstitutionalMarketView = dynamic(() => import('@/components/InstitutionalMarketView'), { ssr: false });
@@ -82,6 +70,21 @@ const LiquidityIntelligence = dynamic(() => import('@/components/LiquidityIntell
       <div className="flex flex-col lg:flex-row gap-4">
         {[0, 1, 2].map(i => (
           <div key={i} className="flex-1 rounded-xl bg-slate-700/25 h-80" />
+        ))}
+      </div>
+    </div>
+  )
+});
+
+const CRTBTSTCard = dynamic(() => import('@/components/CRTBTSTCard'), {
+  ssr: false,
+  loading: () => (
+    <div className="rounded-2xl border border-orange-500/30 bg-slate-800/40 p-4 animate-pulse">
+      <div className="h-5 w-32 bg-slate-700 rounded mb-3" />
+      <div className="h-20 bg-slate-700/30 rounded-xl mb-2" />
+      <div className="grid grid-cols-2 gap-1.5">
+        {[0, 1, 2, 3].map(i => (
+          <div key={i} className="h-14 bg-slate-700/25 rounded-lg" />
         ))}
       </div>
     </div>
@@ -132,10 +135,6 @@ export default function Home() {
   const { liquidityData } = useLiquiditySocket();
   const { compassData } = useCompassSocket();
   const { ictData } = useICTSocket();
-  // Advanced OI Analysis — one hook per symbol, REST polling + in-memory cache
-  const { data: oiNifty }     = useOIAnalysis('NIFTY');
-  const { data: oiBankNifty } = useOIAnalysis('BANKNIFTY');
-  const { data: oiSensex }    = useOIAnalysis('SENSEX');
   const [currentTime, setCurrentTime] = useState<string>('');
   const [updateCounter, setUpdateCounter] = useState(0);
 
@@ -231,7 +230,6 @@ export default function Home() {
       symbol: string,
       liquidityIndex: LiquidityIndex | null,
       compassIndex: CompassIndex | null,
-      oiData: OIAnalysisData | null,
       ictIndex: ICTIndex | null,
     ) => {
       const ind = analysisData?.indicators || {};
@@ -329,39 +327,6 @@ export default function Home() {
       }
 
       // ═══════════════════════════════════════════════════════════════
-      // SECTION 4: Candle Intent (Candle Structure Analysis)
-      // Derived from tick + OHLC — candle_intent separate endpoint;
-      // infer from body position vs range using available tick fields
-      // ═══════════════════════════════════════════════════════════════
-      sectionCount++;
-      const ciHigh   = Number(tick.high  || ind.high  || price);
-      const ciLow    = Number(tick.low   || ind.low   || price);
-      const ciOpen   = Number(tick.open  || ind.open  || price);
-      const ciRange  = ciHigh - ciLow;
-      const ciBody   = Math.abs(price - ciOpen);
-      const ciBodyPct = ciRange > 0 ? (ciBody / ciRange) * 100 : 0;
-      const ciUpperWick = ciHigh - Math.max(price, ciOpen);
-      const ciLowerWick = Math.min(price, ciOpen) - ciLow;
-      const ciBodyConf = Math.min(85, 50 + ciBodyPct * 0.35);
-
-      if (price > ciOpen && ciLowerWick > ciUpperWick * 1.5 && ciBodyPct > 40) {
-        buyCount++; // Bullish: lower wick rejection + green body
-        totalConfidenceSum += ciBodyConf;
-      } else if (price > ciOpen && ciBodyPct > 55) {
-        buyCount++; // Strong green candle
-        totalConfidenceSum += Math.min(80, 55 + ciBodyPct * 0.25);
-      } else if (price < ciOpen && ciUpperWick > ciLowerWick * 1.5 && ciBodyPct > 40) {
-        sellCount++; // Bearish: upper wick rejection + red body
-        totalConfidenceSum += ciBodyConf;
-      } else if (price < ciOpen && ciBodyPct > 55) {
-        sellCount++; // Strong red candle
-        totalConfidenceSum += Math.min(80, 55 + ciBodyPct * 0.25);
-      } else {
-        neutralCount++;
-        totalConfidenceSum += 50;
-      }
-
-      // ═══════════════════════════════════════════════════════════════
       // SECTION 5: Volume Pulse (Candle Volume Analysis)
       // Backend field: buy_volume_ratio (0-100 %) — not buy_volume
       // ═══════════════════════════════════════════════════════════════
@@ -451,30 +416,6 @@ export default function Home() {
       }
 
       // ═══════════════════════════════════════════════════════════════
-      // SECTION 9: Advanced OI Analysis
-      // STRONG_BUY / BUY / NEUTRAL / SELL / STRONG_SELL / NO_SIGNAL
-      // Sourced from the multi-factor OI analysis engine (separate API).
-      // ═══════════════════════════════════════════════════════════════
-      sectionCount++;
-      if (oiData) {
-        const oiConf = Math.max(1, Math.min(99, oiData.confidence));
-        const oiSig  = (oiData.signal ?? '').toUpperCase();
-        if (oiSig === 'STRONG_BUY' || oiSig === 'BUY') {
-          buyCount++;
-          totalConfidenceSum += oiConf;
-        } else if (oiSig === 'STRONG_SELL' || oiSig === 'SELL') {
-          sellCount++;
-          totalConfidenceSum += oiConf;
-        } else {
-          neutralCount++;
-          totalConfidenceSum += oiConf;
-        }
-      } else {
-        neutralCount++;
-        totalConfidenceSum += 50;
-      }
-
-      // ═══════════════════════════════════════════════════════════════
       // 5-MIN PREDICTION ENGINE
       // All 9 UI sections contribute a factor (F1–F9).
       // ZERO extra API calls — all values already computed above.
@@ -484,12 +425,6 @@ export default function Home() {
       let p5Buy = 0, p5Sell = 0, p5ConfSum = 0, p5N = 0;
 
       // ── TIER 1: Fastest-moving real-time signals (weight ×2 / ×1) ──
-
-      // F1 (S4): Candle Intent — most immediate price-action signal
-      const f1 = price > ciOpen && ciBodyPct > 40 ? 2 : price > ciOpen ? 1
-               : price < ciOpen && ciBodyPct > 40 ? -2 : price < ciOpen ? -1 : 0;
-      if (f1 > 0) p5Buy += f1; else if (f1 < 0) p5Sell += Math.abs(f1);
-      p5ConfSum += Math.min(88, 50 + ciBodyPct * 0.4); p5N++;
 
       // F2 (S5): Volume Pulse — buying/selling pressure right now
       const f2 = buyVolumeRatio > 60 ? 2 : buyVolumeRatio > 52 ? 1
@@ -517,17 +452,7 @@ export default function Home() {
         p5ConfSum += cp5mConf; p5N++;
       }
 
-      // F5 (S9): Advanced OI Analysis 5-min prediction
-      if (oiData && oiData.prediction_5m) {
-        const oi5mDir = (oiData.prediction_5m.direction ?? '').toUpperCase();
-        const oiConf5 = Math.max(20, Math.min(95, oiData.prediction_5m.probability ?? 50));
-        const oiF = oi5mDir === 'UP' ? (oiConf5 >= 70 ? 2 : 1)
-                  : oi5mDir === 'DOWN' ? (oiConf5 >= 70 ? -2 : -1) : 0;
-        if (oiF > 0) p5Buy += oiF; else if (oiF < 0) p5Sell += Math.abs(oiF);
-        p5ConfSum += oiConf5; p5N++;
-      }
-
-      // F6 (S3): ICT Smart Money 5-min prediction (Order Blocks · FVG · Structure)
+      // F5 (S3): ICT Smart Money 5-min prediction (Order Blocks · FVG · Structure)
       if (ictIndex) {
         const ict5m = ictIndex.prediction5m;
         const ict5mConf = Math.max(20, Math.min(95, ictIndex.pred5mConf));
@@ -581,11 +506,11 @@ export default function Home() {
     };
 
     return {
-      NIFTY:     calculateAggregatedSignal(analyses?.NIFTY,     marketData.NIFTY,     'NIFTY',     liquidityData.NIFTY     ?? null, compassData.NIFTY     ?? null, oiNifty     ?? null, ictData.NIFTY     ?? null),
-      BANKNIFTY: calculateAggregatedSignal(analyses?.BANKNIFTY, marketData.BANKNIFTY, 'BANKNIFTY', liquidityData.BANKNIFTY ?? null, compassData.BANKNIFTY ?? null, oiBankNifty ?? null, ictData.BANKNIFTY ?? null),
-      SENSEX:    calculateAggregatedSignal(analyses?.SENSEX,    marketData.SENSEX,    'SENSEX',    liquidityData.SENSEX    ?? null, compassData.SENSEX    ?? null, oiSensex    ?? null, ictData.SENSEX    ?? null),
+      NIFTY:     calculateAggregatedSignal(analyses?.NIFTY,     marketData.NIFTY,     'NIFTY',     liquidityData.NIFTY     ?? null, compassData.NIFTY     ?? null, ictData.NIFTY     ?? null),
+      BANKNIFTY: calculateAggregatedSignal(analyses?.BANKNIFTY, marketData.BANKNIFTY, 'BANKNIFTY', liquidityData.BANKNIFTY ?? null, compassData.BANKNIFTY ?? null, ictData.BANKNIFTY ?? null),
+      SENSEX:    calculateAggregatedSignal(analyses?.SENSEX,    marketData.SENSEX,    'SENSEX',    liquidityData.SENSEX    ?? null, compassData.SENSEX    ?? null, ictData.SENSEX    ?? null),
     };
-  }, [analyses, marketData, liquidityData, compassData, oiNifty, oiBankNifty, oiSensex, ictData]);
+  }, [analyses, marketData, liquidityData, compassData, ictData]);
 
   // Update current time
   useEffect(() => {
@@ -963,45 +888,6 @@ export default function Home() {
         {/* P3: 🏦 ICT SMART MONEY INTELLIGENCE */}
         <ICTIntelligence />
 
-        {/* P3: � ADVANCED OI ANALYSIS - 8-Factor Institutional Flow Intelligence */}
-        <div className="mt-4 sm:mt-6 border border-cyan-500/25 rounded-2xl p-3 sm:p-4 bg-gradient-to-br from-cyan-950/15 via-dark-card/40 to-dark-elevated/30 backdrop-blur-sm shadow-lg shadow-cyan-500/5">
-          <div className="flex items-center justify-between mb-3">
-            <SectionTitle
-              title="Advanced OI Analysis"
-              subtitle="8-Factor OI engine: OI flow, velocity, institutional accumulation, liquidity sweeps, trap detection"
-              accentColor="cyan"
-            />
-            <span className="text-[9px] px-2 py-0.5 rounded-full bg-cyan-500/10 border border-cyan-500/25 text-cyan-300/80 font-bold">
-              8-Factor Engine
-            </span>
-          </div>
-          
-          {/* OI Analysis Cards Grid */}
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 sm:gap-3">
-            <OIAnalysisCard 
-              symbol="NIFTY" 
-              name="NIFTY 50" 
-              livePrice={marketData.NIFTY?.price}
-              liveChangePct={marketData.NIFTY?.changePercent}
-              marketStatus={marketStatus}
-            />
-            <OIAnalysisCard 
-              symbol="BANKNIFTY" 
-              name="BANK NIFTY"
-              livePrice={marketData.BANKNIFTY?.price}
-              liveChangePct={marketData.BANKNIFTY?.changePercent}
-              marketStatus={marketStatus}
-            />
-            <OIAnalysisCard 
-              symbol="SENSEX" 
-              name="SENSEX"
-              livePrice={marketData.SENSEX?.price}
-              liveChangePct={marketData.SENSEX?.changePercent}
-              marketStatus={marketStatus}
-            />
-          </div>
-        </div>
-
         {/* P5: 🧭 INSTITUTIONAL MARKET COMPASS */}
         <InstitutionalCompass />
 
@@ -1040,19 +926,28 @@ export default function Home() {
           </div>
         </div>
 
-        {/* P9: Candle Intent Section */}
-        <div className="mt-6 sm:mt-6">
-          <div className="flex flex-col gap-2 mb-4 px-2 sm:px-0">
+        {/* P10: 🕯️ CRT-BASED BTST STRATEGIES */}
+        <div className="mt-6 sm:mt-6 border-2 border-orange-500/35 rounded-2xl p-3 sm:p-4 bg-gradient-to-br from-orange-950/20 via-dark-card/50 to-dark-elevated/40 backdrop-blur-sm shadow-xl shadow-orange-500/10">
+          <div className="flex flex-col gap-1 mb-3 sm:mb-4">
             <SectionTitle
-              title="Candle Intent (Candle Structure)"
-              subtitle="Live candle pattern analysis • Wick dominance signals • Volume-price efficiency"
-              accentColor="teal"
+              title="CRT-Based BTST Strategies"
+              subtitle="Candle Range Theory • 8-Factor Scoring • PDH/PDL Sweep Detection • AMD Pattern • Evening BTST Signals"
+              accentColor="amber"
+              badge={
+                <span className="relative inline-flex items-center px-2 py-0.5 text-[9px] font-bold bg-gradient-to-r from-orange-600/80 to-amber-600/80 rounded-md shadow-lg border border-orange-400/30 whitespace-nowrap leading-none">
+                  <span className="relative z-10 inline-flex items-center gap-0.5">
+                    <span>🕯️</span>
+                    <span className="bg-gradient-to-r from-white via-amber-100 to-white bg-clip-text text-transparent font-extrabold">BTST ENGINE</span>
+                  </span>
+                </span>
+              }
             />
           </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 sm:gap-4">
-            <CandleIntentCard symbol="NIFTY" name="NIFTY 50" />
-            <CandleIntentCard symbol="BANKNIFTY" name="BANK NIFTY" />
-            <CandleIntentCard symbol="SENSEX" name="SENSEX" />
+
+          <div className="grid grid-cols-1 lg:grid-cols-2 2xl:grid-cols-3 gap-3">
+            <CRTBTSTCard symbol="NIFTY" name="NIFTY 50" data={marketData.NIFTY} />
+            <CRTBTSTCard symbol="BANKNIFTY" name="BANK NIFTY" data={marketData.BANKNIFTY} />
+            <CRTBTSTCard symbol="SENSEX" name="SENSEX" data={marketData.SENSEX} />
           </div>
         </div>
 

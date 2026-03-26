@@ -12,12 +12,12 @@ import asyncio
 from datetime import datetime
 from pytz import timezone
 
-from services.zerodha_direct_analysis import get_zerodha_analysis
+# Heavy services lazy-imported inside endpoint functions:
+# - get_zerodha_analysis (from services.zerodha_direct_analysis)
+# - oi_momentum_service (from services.oi_momentum_service) — pandas+numpy
 from services.instant_analysis import get_instant_analysis, get_all_instant_analysis
 from services.cache import get_redis, get_cache
 from services.websocket_manager import manager
-from services.oi_momentum_service import oi_momentum_service
-from services.oi_analysis_service import oi_analysis_service
 from config import get_settings
 
 settings = get_settings()
@@ -70,6 +70,7 @@ async def analyze_all_symbols():
         
         # If cache has no data, try Direct API
         print(f"⚠️ Cache has no data, trying Direct Zerodha API...")
+        from services.zerodha_direct_analysis import get_zerodha_analysis
         zerodha = get_zerodha_analysis()
         results = zerodha.analyze_all()
         
@@ -155,6 +156,7 @@ async def analyze_symbol(symbol: str):
         
         # If cache has no data, try Direct API
         print(f"⚠️ No cache data for {symbol}, trying Direct API...")
+        from services.zerodha_direct_analysis import get_zerodha_analysis
         zerodha = get_zerodha_analysis()
         result = zerodha.analyze_symbol(symbol)
         
@@ -174,6 +176,7 @@ async def analyze_symbol(symbol: str):
 async def analysis_health():
     """Check analysis service health and Zerodha API connection"""
     try:
+        from services.zerodha_direct_analysis import get_zerodha_analysis
         zerodha = get_zerodha_analysis()
         
         # Test connection with NIFTY quote
@@ -227,6 +230,7 @@ async def _calc_oi_momentum(symbol: str) -> dict:
     """
     import pandas as pd
     import json as _json
+    from services.oi_momentum_service import oi_momentum_service
 
     cache = await get_redis()
     candle_key = f"analysis_candles:{symbol}"
@@ -314,11 +318,12 @@ async def get_oi_momentum_all():
                 print(f"✅ OI Momentum [{symbol}]: {sig['final_signal']} ({sig['confidence']}%)")
             except Exception as e:
                 import traceback; traceback.print_exc()
+                from services.oi_momentum_service import oi_momentum_service as _oi_svc
                 results[symbol] = {
                     "signal_5m": "ERROR", "signal_15m": "ERROR", "final_signal": "ERROR",
                     "confidence": 0,
                     "reasons": [f"Calculation error: {str(e)[:100]}"],
-                    "metrics": oi_momentum_service._empty_metrics(),
+                    "metrics": _oi_svc._empty_metrics(),
                     "symbol_name": SYMBOL_MAPPING.get(symbol, {}).get("name", symbol),
                     "current_price": 0,
                     "timestamp": datetime.now().isoformat(),
@@ -356,125 +361,13 @@ async def get_oi_momentum_symbol(symbol: str):
         return result
     except Exception as e:
         import traceback; traceback.print_exc()
+        from services.oi_momentum_service import oi_momentum_service as _oi_svc
         return {
             "symbol": symbol,
             "signal_5m": "NO_SIGNAL", "signal_15m": "NO_SIGNAL", "final_signal": "NO_SIGNAL",
             "confidence": 0,
             "reasons": [f"Error: {str(e)[:100]}"],
-            "metrics": oi_momentum_service._empty_metrics(),
-            "symbol_name": SYMBOL_MAPPING.get(symbol, {}).get("name", symbol),
-            "current_price": 0,
-            "timestamp": now.isoformat(),
-        }
-
-
-# ═══════════════════════════════════════════════════════════════════
-# ADVANCED OI ANALYSIS — 8-factor institutional flow intelligence
-# ═══════════════════════════════════════════════════════════════════
-
-_oi_analysis_cache: dict = {}
-_OI_ANALYSIS_TTL_LIVE = 5
-_OI_ANALYSIS_TTL = 60
-
-
-def _oi_analysis_ttl() -> int:
-    try:
-        from services.market_feed import get_market_status
-        return _OI_ANALYSIS_TTL_LIVE if get_market_status() == "LIVE" else _OI_ANALYSIS_TTL
-    except Exception:
-        return _OI_ANALYSIS_TTL
-
-
-async def _calc_oi_analysis(symbol: str) -> dict:
-    import pandas as pd
-    import json as _json
-
-    cache = await get_redis()
-    candle_key = f"analysis_candles:{symbol}"
-    candles_json = await cache.lrange(candle_key, 0, 199)
-
-    if not candles_json or len(candles_json) < oi_analysis_service.min_candles:
-        result = oi_analysis_service._no_signal("Waiting for live market data")
-        result["symbol"] = symbol
-        result["symbol_name"] = SYMBOL_MAPPING.get(symbol, {}).get("name", symbol)
-        result["current_price"] = 0
-        return result
-
-    candles = []
-    for c in reversed(candles_json):
-        try:
-            candles.append(_json.loads(c))
-        except Exception:
-            continue
-
-    df_5m = pd.DataFrame(candles)
-
-    df_15m_rows = []
-    for i in range(0, len(candles) - 2, 3):
-        chunk = candles[i:i + 3]
-        if len(chunk) == 3:
-            df_15m_rows.append({
-                "open": chunk[0]["open"],
-                "high": max(c["high"] for c in chunk),
-                "low": min(c["low"] for c in chunk),
-                "close": chunk[-1]["close"],
-                "volume": sum(c.get("volume", 0) for c in chunk),
-                "oi": chunk[-1].get("oi", 0),
-            })
-    df_15m = pd.DataFrame(df_15m_rows)
-
-    current_price = float(df_5m.iloc[-1]["close"]) if len(df_5m) > 0 else 0.0
-    current_oi = df_5m.iloc[-1].get("oi") if len(df_5m) > 0 else None
-    current_volume = df_5m.iloc[-1].get("volume") if len(df_5m) > 0 else None
-
-    signal_data = oi_analysis_service.analyze(
-        symbol=symbol,
-        df_5m=df_5m,
-        df_15m=df_15m,
-        current_price=current_price,
-        current_oi=current_oi,
-        current_volume=current_volume,
-    )
-
-    return {
-        **signal_data,
-        "symbol": symbol,
-        "symbol_name": SYMBOL_MAPPING.get(symbol, {}).get("name", symbol),
-        "current_price": current_price,
-    }
-
-
-@router.get("/oi-analysis/{symbol}")
-async def get_oi_analysis(symbol: str):
-    """Advanced OI Analysis for a single symbol."""
-    symbol = symbol.upper()
-    if symbol not in SYMBOL_MAPPING:
-        return {"error": f"Unknown symbol: {symbol}"}
-
-    global _oi_analysis_cache
-    now = datetime.now()
-    cached = _oi_analysis_cache.get(symbol)
-    if cached and (now - cached["timestamp"]).total_seconds() < _oi_analysis_ttl():
-        return cached["data"]
-
-    try:
-        result = await _calc_oi_analysis(symbol)
-        _oi_analysis_cache[symbol] = {"data": result, "timestamp": now}
-        return result
-    except Exception as e:
-        import traceback; traceback.print_exc()
-        return {
-            "symbol": symbol,
-            "signal": "NO_SIGNAL",
-            "confidence": 0,
-            "prediction_5m": {"direction": "FLAT", "probability": 50, "context": "Error"},
-            "factors": oi_analysis_service.empty_factors(),
-            "reasons": [f"Error: {str(e)[:100]}"],
-            "signal_5m": "NO_SIGNAL",
-            "signal_15m": "NO_SIGNAL",
-            "is_conflicting": False,
-            "alignment": "NONE",
-            "trader_summary": f"Service error - retrying",
+            "metrics": _oi_svc._empty_metrics(),
             "symbol_name": SYMBOL_MAPPING.get(symbol, {}).get("name", symbol),
             "current_price": 0,
             "timestamp": now.isoformat(),

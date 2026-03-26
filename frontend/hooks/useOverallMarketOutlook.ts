@@ -8,9 +8,8 @@
  * 3. Volume Pulse (Green/Red Candle Volume Ratio)
  * 4. Trend Base (Higher-Low Structure)
  * 5. Market Structure (Order Flow, FVG, Order Blocks, Smart Money)
- * 6. Candle Intent (Candle Pattern Analysis)
- * 7. Market Indices (PCR, Sentiment)
- * 8. Pivot Points (Supertrend, Support/Resistance)
+ * 6. Market Indices (PCR, Sentiment)
+ * 7. Pivot Points (Supertrend, Support/Resistance)
  */
 
 'use client';
@@ -24,7 +23,6 @@ interface SignalWeight {
   volumePulse: number;
   trendBase: number;
   marketStructure: number; // 🏗️ Order Flow, FVG, Order Blocks positioning
-  candleIntent: number; // Candle structure patterns
   marketIndices: number; // Live Market Indices momentum
   pcr: number; // Put-Call Ratio - Market sentiment indicator
   pivot: number; // Pivot Points & Supertrend
@@ -46,7 +44,6 @@ interface SymbolOutlook {
     volumePulse: { signal: string; confidence: number; weight: number };
     trendBase: { signal: string; confidence: number; weight: number };
     marketStructure: { signal: string; confidence: number; weight: number };
-    candleIntent: { signal: string; confidence: number; weight: number };
     marketIndices: { signal: string; confidence: number; weight: number };
     pcr: { signal: string; confidence: number; weight: number };
     pivot: { signal: string; confidence: number; weight: number };
@@ -64,8 +61,6 @@ interface SymbolOutlook {
     rules: {
       rule1_trendStructure: boolean;
       rule2_trendActive: boolean;
-      rule3_candleBuy: boolean;
-      rule4_volumeEfficiency: boolean;
       rule5_volumePulse: boolean;
       rule6_nearSupport: boolean;
       rule7_breakdownLow: boolean;
@@ -103,7 +98,6 @@ const SIGNAL_WEIGHTS: SignalWeight = {
   volumePulse: 9,          // 9% weight - Volume Pulse (Green/Red Candle Volume Ratio)
   trendBase: 8,            // 8% weight - Trend Base (Higher-Low Structure)
   marketStructure: 8,      // 8% weight - Market Structure (Order Flow, FVG, Order Blocks)
-  candleIntent: 8,         // 8% weight - Candle Intent (Candle Pattern Analysis)
   marketIndices: 5,        // 5% weight - Market Indices (PCR, Sentiment)
   pcr: 4,                  // 4% weight - Put-Call Ratio (market sentiment)
   pivot: 7,                // 7% weight - Pivot Points (Supertrend, Support/Resistance)
@@ -126,7 +120,6 @@ const createDefaultOutlook = (symbol: string): SymbolOutlook => ({
     volumePulse: { signal: 'NEUTRAL', confidence: 0, weight: 9 },
     trendBase: { signal: 'NEUTRAL', confidence: 0, weight: 8 },
     marketStructure: { signal: 'NEUTRAL', confidence: 0, weight: 8 },
-    candleIntent: { signal: 'NEUTRAL', confidence: 0, weight: 8 },
     marketIndices: { signal: 'NEUTRAL', confidence: 0, weight: 5 },
     pcr: { signal: 'NEUTRAL', confidence: 0, weight: 4 },
     pivot: { signal: 'NEUTRAL', confidence: 0, weight: 7 },
@@ -143,8 +136,6 @@ const createDefaultOutlook = (symbol: string): SymbolOutlook => ({
     rules: {
       rule1_trendStructure: false,
       rule2_trendActive: false,
-      rule3_candleBuy: false,
-      rule4_volumeEfficiency: false,
       rule5_volumePulse: false,
       rule6_nearSupport: false,
       rule7_breakdownLow: false,
@@ -214,7 +205,6 @@ export const useOverallMarketOutlook = () => {
     zoneControl: any,
     volumePulse: any,
     trendBase: any,
-    candleIntent: any,
     marketIndicesData: any,
     pivotIndicators: any,
     // 🔥 NEW: 5 Additional Components
@@ -241,7 +231,6 @@ export const useOverallMarketOutlook = () => {
       // 🏗️ Market Structure signals from technical.indicators
       technical?.indicators?.fvg_bullish || technical?.indicators?.fvg_bearish || 
       technical?.indicators?.bos_bullish || technical?.indicators?.bos_bearish ? 'MARKET_STRUCTURE' : null,
-      candleIntent?.professional_signal || candleIntent?.signal,  // Check both fields
       marketIndicesData?.change !== undefined,
       marketIndicesData?.pcr !== undefined && marketIndicesData?.pcr > 0
     ].filter(Boolean).length;
@@ -264,17 +253,11 @@ export const useOverallMarketOutlook = () => {
     const trendSignal = trendBase?.signal || 'NEUTRAL';
     const trendConfidence = trendBase?.confidence || 0;
 
-    // Extract Candle Intent signal and confidence
-    const candleSignal = candleIntent?.professional_signal || candleIntent?.signal || 'NEUTRAL';
-    const candleConfidence = candleIntent?.pattern?.confidence || candleIntent?.confidence || 0;
-
     // 🎯 PIVOT POINTS & SUPERTREND INTEGRATION
     // Extract key parameters and enhance signals with pivot analysis
     let pivotEnhancedTechSignal = techSignal;
     let pivotEnhancedTechConfidence = techConfidence;
     let pivotEnhancedZoneSignal = zoneSignal;
-    let pivotEnhancedCandleSignal = candleSignal;
-    let pivotEnhancedCandleConfidence = candleConfidence;
     
     if (pivotIndicators && pivotIndicators.status !== 'OFFLINE') {
       const price = pivotIndicators.current_price || 0;
@@ -301,24 +284,12 @@ export const useOverallMarketOutlook = () => {
         pivotEnhancedZoneSignal = nearH3 ? 'SELL' : 'BUY';
       }
       
-      // CANDLE INTENT ENHANCEMENT (16%): Supertrend confirmation
-      // If supertrend signals strong momentum, enhance candle analysis
-      if (st10.signal === 'BUY' && st10.trend === 'BULLISH') {
-        pivotEnhancedCandleSignal = candleSignal === 'SELL' ? 'NEUTRAL' : (candleSignal === 'BUY' ? 'STRONG_BUY' : 'BUY');
-        pivotEnhancedCandleConfidence = Math.min(100, candleConfidence + 20);
-      } else if (st10.signal === 'SELL' && st10.trend === 'BEARISH') {
-        pivotEnhancedCandleSignal = candleSignal === 'BUY' ? 'NEUTRAL' : (candleSignal === 'SELL' ? 'STRONG_SELL' : 'SELL');
-        pivotEnhancedCandleConfidence = Math.min(100, candleConfidence + 15);
-      }
-      
     }
     
     // Use enhanced signals with pivot integration
     const finalTechSignal = pivotEnhancedTechSignal;
     const finalTechConfidence = pivotEnhancedTechConfidence;
     const finalZoneSignal = pivotEnhancedZoneSignal;
-    const finalCandleSignal = pivotEnhancedCandleSignal;
-    const finalCandleConfidence = pivotEnhancedCandleConfidence;
 
     // Calculate market indices momentum signal from price change
     // BUYER-FRIENDLY: Lower thresholds for BUY signals, higher thresholds for SELL signals
@@ -404,24 +375,7 @@ export const useOverallMarketOutlook = () => {
                               (trendDirection === 'UPTREND' || trendDirection === 'BULLISH' || trendSignal === 'BUY' || trendSignal === 'STRONG_BUY');
     
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // RULE 3 & 4: CANDLE INTENT - Signal + Volume Efficiency
-    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    const rawCandleBodyStructure = candleIntent?.body_structure || candleIntent?.pattern?.body_type || 'UNKNOWN';
-    const candleBodyStructure = typeof rawCandleBodyStructure === 'string' ? rawCandleBodyStructure.toUpperCase() : 'UNKNOWN';
-    
-    // 🔥 FIX: Extract volume metrics from volume_analysis (backend returns efficiency there, not top-level volume_efficiency)
-    const candleVolumeRatio = candleIntent?.volume_analysis?.volume_ratio || 0;
-    const candleEfficiency = candleIntent?.volume_analysis?.efficiency || '';
-    
-    // Rule 3: Signal = BUY/STRONG_BUY, Body = STRONG, Confidence ≥ 80%
-    const rule3_candleBuySignal = (candleSignal === 'BUY' || candleSignal === 'STRONG_BUY' || candleSignal === 'BULLISH') && 
-                                   candleConfidence >= 80 &&
-                                   (candleBodyStructure === 'STRONG' || candleBodyStructure === 'STRONG_BODY' || candleBodyStructure.includes('STRONG'));
-    // Rule 4: High volume with strong conviction - check volume_ratio >= 1.5x OR ABSORPTION pattern
-    const rule4_volumeEfficiency = candleVolumeRatio >= 1.5 || candleEfficiency === 'ABSORPTION';
-    
-    // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-    // RULE 5: VOLUME PULSE - Not Bearish
+    // RULE 3: VOLUME PULSE - Not Bearish
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     const volumePulseScore = volumePulse?.pulse_score || volumePulse?.score || 50;
     const volumePulseTrend = volumePulse?.trend || volumePulse?.bias || 'NEUTRAL';
@@ -456,10 +410,9 @@ export const useOverallMarketOutlook = () => {
     // RULE 9: FINAL ALIGNMENT CHECK - The Big 3 Must Agree
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     const big3_trendBaseAligned = rule1_trendStructureValid && rule2_trendActive;
-    const big3_candleIntentAligned = rule3_candleBuySignal; // Rule 4 is bonus
     const big3_zoneControlAligned = rule7_breakdownLow && bounceProb > breakdownProb;
     
-    const rule9_allThreeAlign = big3_trendBaseAligned && big3_candleIntentAligned && big3_zoneControlAligned;
+    const rule9_allThreeAlign = big3_trendBaseAligned && big3_zoneControlAligned;
     
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     // MASTER TRADE QUALIFICATION - Count passed rules
@@ -467,8 +420,6 @@ export const useOverallMarketOutlook = () => {
     const rulesStatus = {
       rule1: rule1_trendStructureValid,
       rule2: rule2_trendActive,
-      rule3: rule3_candleBuySignal,
-      rule4: rule4_volumeEfficiency,
       rule5: rule5_volumePulseOk,
       rule6: rule6_nearSupport,
       rule7: rule7_breakdownLow,
@@ -477,8 +428,8 @@ export const useOverallMarketOutlook = () => {
     };
     
     const rulesPassed = Object.values(rulesStatus).filter(Boolean).length;
-    const isMasterTradeQualified = rulesPassed >= 6 && rule9_allThreeAlign; // Need 6+ rules AND Big 3 aligned
-    const isPartiallyQualified = rulesPassed >= 4 && big3_zoneControlAligned; // 4+ rules with safe zone
+    const isMasterTradeQualified = rulesPassed >= 5 && rule9_allThreeAlign; // Need 5+ rules AND Big 2 aligned
+    const isPartiallyQualified = rulesPassed >= 3 && big3_zoneControlAligned; // 3+ rules with safe zone
 
     // Calculate PCR (Put-Call Ratio) signal
     // PCR > 1.0 = More puts (fear) = Bullish contrarian signal (good for buyers)
@@ -685,7 +636,6 @@ export const useOverallMarketOutlook = () => {
     const volumeScore = signalToScore(volumeSignal, volumeConfidence);
     const trendScore = signalToScore(trendSignal, trendConfidence);
     const marketStructureScore = signalToScore(marketStructureSignal, marketStructureConfidence);
-    const candleScore = signalToScore(finalCandleSignal, finalCandleConfidence);
     const marketIndicesScore = signalToScore(marketIndicesSignal, marketIndicesConfidence);
     const pcrScore = signalToScore(pcrSignal, pcrConfidence);
     const pivotScore = signalToScore(pivotSignal, pivotConfidence);
@@ -703,7 +653,6 @@ export const useOverallMarketOutlook = () => {
       SIGNAL_WEIGHTS.volumePulse +
       SIGNAL_WEIGHTS.trendBase +
       SIGNAL_WEIGHTS.marketStructure +
-      SIGNAL_WEIGHTS.candleIntent +
       SIGNAL_WEIGHTS.marketIndices +
       SIGNAL_WEIGHTS.pcr +
       SIGNAL_WEIGHTS.pivot +
@@ -721,7 +670,6 @@ export const useOverallMarketOutlook = () => {
       (volumeScore * SIGNAL_WEIGHTS.volumePulse) +
       (trendScore * SIGNAL_WEIGHTS.trendBase) +
       (marketStructureScore * SIGNAL_WEIGHTS.marketStructure) +
-      (candleScore * SIGNAL_WEIGHTS.candleIntent) +
       (marketIndicesScore * SIGNAL_WEIGHTS.marketIndices) +
       (pcrScore * SIGNAL_WEIGHTS.pcr) +
       (pivotScore * SIGNAL_WEIGHTS.pivot) +
@@ -743,7 +691,6 @@ export const useOverallMarketOutlook = () => {
       (volumeConfidence * SIGNAL_WEIGHTS.volumePulse) +
       (trendConfidence * SIGNAL_WEIGHTS.trendBase) +
       (marketStructureConfidence * SIGNAL_WEIGHTS.marketStructure) +
-      (finalCandleConfidence * SIGNAL_WEIGHTS.candleIntent) +
       (marketIndicesConfidence * SIGNAL_WEIGHTS.marketIndices) +
       (pcrConfidence * SIGNAL_WEIGHTS.pcr) +
       (pivotConfidence * SIGNAL_WEIGHTS.pivot) +
@@ -756,7 +703,7 @@ export const useOverallMarketOutlook = () => {
     ) / totalWeight;
     
     // 🔥 BONUS: Add alignment bonus (when signals agree, confidence increases) - NOW 14 SIGNALS
-    const allScores = [techScore, zoneScore, volumeScore, trendScore, marketStructureScore, candleScore, marketIndicesScore, pcrScore, pivotScore, supertrendScore, camarillaScore, rsi60_40Score, smartMoneyScore, oiMomentumScore];
+    const allScores = [techScore, zoneScore, volumeScore, trendScore, marketStructureScore, marketIndicesScore, pcrScore, pivotScore, supertrendScore, camarillaScore, rsi60_40Score, smartMoneyScore, oiMomentumScore];
     const bullishCount = allScores.filter(s => s > 0).length;
     const bearishCount = allScores.filter(s => s < 0).length;
     const alignmentBonus = Math.abs(bullishCount - bearishCount) * 2; // +2% per aligned signal (reduced for 14 signals)
@@ -836,16 +783,15 @@ export const useOverallMarketOutlook = () => {
     // Build Master Trade Status indicator
     let masterTradeIndicator = '';
     if (isMasterTradeQualified) {
-      masterTradeIndicator = `\n🏆 MASTER TRADE QUALIFIED (${rulesPassed}/9 Rules ✅)\n   Big 3: Trend ✅ • Candle ✅ • Zone ✅`;
+      masterTradeIndicator = `\n🏆 MASTER TRADE QUALIFIED (${rulesPassed}/7 Rules ✅)\n   Big 2: Trend ✅ • Zone ✅`;
     } else if (isPartiallyQualified) {
       const failedRules: string[] = [];
       if (!rule1_trendStructureValid) failedRules.push('Trend Structure');
       if (!rule2_trendActive) failedRules.push('Trend Active');
-      if (!rule3_candleBuySignal) failedRules.push('Candle Signal');
       if (!rule7_breakdownLow) failedRules.push('Breakdown Risk');
-      masterTradeIndicator = `\n⚡ PARTIAL SETUP (${rulesPassed}/9 Rules)\n   Missing: ${failedRules.slice(0, 2).join(', ')}`;
+      masterTradeIndicator = `\n⚡ PARTIAL SETUP (${rulesPassed}/7 Rules)\n   Missing: ${failedRules.slice(0, 2).join(', ')}`;
     } else if (rulesPassed >= 3) {
-      masterTradeIndicator = `\n⏳ BUILDING (${rulesPassed}/9 Rules) - Wait for alignment`;
+      masterTradeIndicator = `\n⏳ BUILDING (${rulesPassed}/7 Rules) - Wait for alignment`;
     }
     
     // Combine indicators
@@ -982,11 +928,6 @@ export const useOverallMarketOutlook = () => {
           confidence: Math.round(marketStructureConfidence),
           weight: SIGNAL_WEIGHTS.marketStructure
         },
-        candleIntent: {
-          signal: finalCandleSignal,
-          confidence: Math.round(finalCandleConfidence),
-          weight: SIGNAL_WEIGHTS.candleIntent
-        },
         marketIndices: {
           signal: marketIndicesSignal,
           confidence: Math.round(marketIndicesConfidence),
@@ -1036,8 +977,6 @@ export const useOverallMarketOutlook = () => {
         rules: {
           rule1_trendStructure: rule1_trendStructureValid,
           rule2_trendActive: rule2_trendActive,
-          rule3_candleBuy: rule3_candleBuySignal,
-          rule4_volumeEfficiency: rule4_volumeEfficiency,
           rule5_volumePulse: rule5_volumePulseOk,
           rule6_nearSupport: rule6_nearSupport,
           rule7_breakdownLow: rule7_breakdownLow,
@@ -1091,7 +1030,7 @@ export const useOverallMarketOutlook = () => {
     // 🚀 OPTIMIZATION: Fetch ALL analysis endpoints in parallel (14 signals!)
     const [tech, allAdvanced, market, pivotData, supertrend, camarilla, rsi60_40, smartMoney, oiMomentum] = await Promise.all([
       quickFetch(`${API_BASE_URL}/api/analysis/analyze/${symbol}`),
-      quickFetch(`${API_BASE_URL}/api/advanced/all-analysis/${symbol}`), // ⚡ Zone, Volume, Trend, Candle
+      quickFetch(`${API_BASE_URL}/api/advanced/all-analysis/${symbol}`), // ⚡ Zone, Volume, Trend
       quickFetch(`${API_BASE_URL}/ws/cache/${symbol}`).then(d => d?.data || null),
       quickFetch(`${API_BASE_URL}/api/advanced/pivot-indicators`).then(d => d?.[symbol] || null), // Pivot + Supertrend
       quickFetch(`${API_BASE_URL}/api/analysis/analyze/${symbol}`).then(d => d?.supertrend || null), // SuperTrend from analyze
@@ -1105,9 +1044,8 @@ export const useOverallMarketOutlook = () => {
     const zone = allAdvanced?.zone_control || null;
     const volume = allAdvanced?.volume_pulse || null;
     const trend = allAdvanced?.trend_base || null;
-    const candle = allAdvanced?.candle_intent || null;
 
-    const result = calculateOverallOutlook(tech, zone, volume, trend, candle, market, pivotData, supertrend, camarilla, rsi60_40, smartMoney, oiMomentum);
+    const result = calculateOverallOutlook(tech, zone, volume, trend, market, pivotData, supertrend, camarilla, rsi60_40, smartMoney, oiMomentum);
     return result;
   }, [calculateOverallOutlook]);
 

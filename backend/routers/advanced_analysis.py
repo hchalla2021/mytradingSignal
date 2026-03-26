@@ -21,17 +21,15 @@ class _LazyPandas:
         return getattr(_LazyPandas._pd, name)
 pd = _LazyPandas()
 
-from services.volume_pulse_service import analyze_volume_pulse
-from services.trend_base_service import analyze_trend_base
-from services.news_detection_service import analyze_news
-from services.candle_intent_service import analyze_candle_intent
-from config import get_settings
+# Heavy services lazy-imported inside endpoint functions to avoid ~2s startup delay:
+# - analyze_volume_pulse (from services.volume_pulse_service)
+# - analyze_trend_base (from services.trend_base_service) — pandas+numpy+scipy
+# - analyze_news (from services.news_detection_service)
+# - analyze_zone_control (from services.zone_control_service)
 
-settings = get_settings()
-from services.zone_control_service import analyze_zone_control
+from config import get_settings
 from services.cache import CacheService
 import os
-from config import get_settings
 
 router = APIRouter(prefix="/api/advanced", tags=["Advanced Technical Analysis"])
 
@@ -69,7 +67,6 @@ async def get_all_analysis_ultra_fast(symbol: str) -> Dict[str, Any]:
     - Volume Pulse
     - Trend Base  
     - Zone Control
-    - Candle Intent
     """
     try:
         symbol = symbol.upper()
@@ -102,7 +99,6 @@ async def get_all_analysis_ultra_fast(symbol: str) -> Dict[str, Any]:
                     "volume_pulse": {"signal": "NEUTRAL", "confidence": 0, "status": "CACHED"},
                     "trend_base": {"signal": "NEUTRAL", "confidence": 0, "status": "CACHED"},
                     "zone_control": {"signal": "NEUTRAL", "confidence": 0, "status": "CACHED"},
-                    "candle_intent": {"signal": "NEUTRAL", "confidence": 0, "status": "CACHED"},
                     "token_valid": token_status["valid"],
                     "last_price": cached_market.get("last_price"),
                     "cached_at": cached_market.get("_cache_message", "")
@@ -115,21 +111,22 @@ async def get_all_analysis_ultra_fast(symbol: str) -> Dict[str, Any]:
                 "volume_pulse": {"signal": "NEUTRAL", "confidence": 0},
                 "trend_base": {"signal": "NEUTRAL", "confidence": 0},
                 "zone_control": {"signal": "NEUTRAL", "confidence": 0},
-                "candle_intent": {"signal": "NEUTRAL", "confidence": 0},
                 "token_valid": token_status["valid"]
             }
         
         # 🔥 OPTIMIZATION 2: Run all analysis in PARALLEL (asyncio.gather)
+        from services.volume_pulse_service import analyze_volume_pulse
+        from services.trend_base_service import analyze_trend_base
+        from services.zone_control_service import analyze_zone_control
         results = await asyncio.gather(
             analyze_volume_pulse(symbol, df),
             analyze_trend_base(symbol, df),
             analyze_zone_control(symbol, df),
-            analyze_candle_intent(symbol, df),
             return_exceptions=True
         )
         
         # Unpack results
-        volume_pulse, trend_base, zone_control, candle_intent = results
+        volume_pulse, trend_base, zone_control = results
         
         # Build response
         response = {
@@ -138,7 +135,6 @@ async def get_all_analysis_ultra_fast(symbol: str) -> Dict[str, Any]:
             "volume_pulse": volume_pulse if not isinstance(volume_pulse, Exception) else {"signal": "ERROR"},
             "trend_base": trend_base if not isinstance(trend_base, Exception) else {"signal": "ERROR"},
             "zone_control": zone_control if not isinstance(zone_control, Exception) else {"signal": "ERROR"},
-            "candle_intent": candle_intent if not isinstance(candle_intent, Exception) else {"signal": "ERROR"},
             "candles_analyzed": len(df),
             "token_valid": token_status["valid"],
             "timestamp": datetime.now().isoformat()
@@ -303,6 +299,7 @@ async def get_volume_pulse(symbol: str) -> Dict[str, Any]:
             print(f"{'='*80}\n")
         
         # 📊 ANALYZE VOLUME PULSE WITH REAL CANDLE DATA
+        from services.volume_pulse_service import analyze_volume_pulse
         result = await analyze_volume_pulse(symbol, df)
         result["message"] = f"✅ Live data from Zerodha ({len(df)} candles)"
         result["candles_analyzed"] = len(df)
@@ -1101,6 +1098,7 @@ async def get_news_detection(symbol: str) -> Dict[str, Any]:
             }
         
         # Analyze news
+        from services.news_detection_service import analyze_news
         result = await analyze_news(symbol, api_key, base_url, page_size,
                                    lookback_hours, rate_limit_cooldown, http_timeout)
         
@@ -1138,6 +1136,7 @@ async def get_all_news_detection() -> Dict[str, Dict[str, Any]]:
             }
         
         # Execute in parallel for ultra-fast response
+        from services.news_detection_service import analyze_news
         tasks = [
             analyze_news("NIFTY", api_key, base_url, page_size, lookback_hours, rate_limit_cooldown, http_timeout),
             analyze_news("BANKNIFTY", api_key, base_url, page_size, lookback_hours, rate_limit_cooldown, http_timeout),
@@ -1298,6 +1297,7 @@ async def get_zone_control(symbol: str) -> Dict[str, Any]:
         
         # Analyze zone control with available data
         print(f"[ZONE-CONTROL] 🔬 Running zone analysis...")
+        from services.zone_control_service import analyze_zone_control
         result = await analyze_zone_control(symbol, df)
         
         # Determine if data is live or historical based on last candle time
@@ -1412,265 +1412,6 @@ async def get_zone_control(symbol: str) -> Dict[str, Any]:
             "status": "ERROR",
             "message": f"⚠️ Error: {str(e)}. Will retry when data is available.",
             "candles_analyzed": 0
-        }
-
-
-# ═══════════════════════════════════════════════════════════
-# CANDLE INTENT ENDPOINT (Professional Candle Structure)
-# ═══════════════════════════════════════════════════════════
-
-@router.get("/candle-intent/{symbol}")
-async def get_candle_intent(symbol: str) -> Dict[str, Any]:
-    """
-    🔥 Candle Intent - Professional Candle Structure Analysis
-    WHERE PROS MAKE MONEY - Candle is the final judge, not indicators
-    
-    Patterns Detected:
-    - Long upper wick at resistance → SUPPLY ACTIVE (rejection)
-    - Long lower wick at support → DEMAND DEFENDING (absorption)
-    - Small body + high volume → ABSORPTION (institutional positioning)
-    - Big body + low volume → EMOTIONAL MOVE (trap/false breakout)
-    - Inside candle near zone → BREAKOUT SETUP (consolidation)
-    
-    Data Source: 100% from Zerodha WebSocket (OHLCV)
-    Performance: <10ms with caching
-    """
-    try:
-        symbol = symbol.upper()
-        print(f"\n{'='*60}")
-        print(f"[CANDLE-INTENT-API] 🕯️  Request for {symbol}")
-        print(f"{'='*60}")
-        
-        # ✅ GLOBAL TOKEN CHECK
-        from services.global_token_manager import check_global_token_status
-        token_status = await check_global_token_status()
-        print(f"[GLOBAL-TOKEN] Status: {'✅ Valid' if token_status['valid'] else '❌ Expired'}")
-        
-        # Check cache with smart timing (no cache during live trading hours)
-        from datetime import datetime
-        from pytz import timezone
-        cache = get_cache()
-        cache_key = f"candle_intent:{symbol}"
-        
-        # Trading hours detection (9:15 AM - 3:30 PM IST)
-        ist = timezone('Asia/Kolkata')
-        current_time = datetime.now(ist).time()
-        is_trading = datetime.now(ist).weekday() < 5 and (datetime.strptime("09:15", "%H:%M").time() <= current_time <= datetime.strptime("15:30", "%H:%M").time())
-        
-        # During trading hours: no cache for live analysis
-        # Outside trading hours: 60s cache for efficiency
-        if is_trading:
-            print(f"[CANDLE-INTENT] 🔥 Trading hours (9:15-3:30) - NO CACHE for live updates")
-        else:
-            cached = await cache.get(cache_key)
-            if cached:
-                cached["token_valid"] = token_status["valid"]
-                print(f"[CANDLE-INTENT] ⚡ Cache hit for {symbol} (60s cache outside trading hours)")
-                return cached
-        
-        # ── Priority 1: live WebSocket candle cache (always fresh, no Zerodha token needed) ──
-        df = pd.DataFrame()
-        try:
-            import json as _json
-            _cc = get_cache()
-            _candle_key = f"analysis_candles:{symbol}"
-            _candles_raw = await _cc.lrange(_candle_key, 0, 99)  # newest-first list
-            if _candles_raw and len(_candles_raw) >= 3:
-                _rows = []
-                for _c in reversed(_candles_raw):   # reverse → chronological order
-                    try:
-                        _rows.append(_json.loads(_c))
-                    except Exception:
-                        continue
-                if len(_rows) >= 3:
-                    df = pd.DataFrame(_rows)
-                    for _col in ('open', 'high', 'low', 'close'):
-                        if _col not in df.columns:
-                            df[_col] = 0.0
-                        df[_col] = pd.to_numeric(df[_col], errors='coerce').fillna(0.0)
-                    if 'volume' not in df.columns:
-                        df['volume'] = 0
-                    df['volume'] = pd.to_numeric(df['volume'], errors='coerce').fillna(0).astype(int)
-                    print(f"[CANDLE-INTENT] ✅ Using live candle cache: {len(df)} candles")
-        except Exception as _ce:
-            print(f"[CANDLE-INTENT] ⚠️ Candle cache read failed: {_ce}")
-
-        # ── Priority 2: Zerodha REST API (fallback when candle cache insufficient) ──
-        if df.empty:
-            print(f"[CANDLE-INTENT] 🚀 Fetching LIVE candles from Zerodha...")
-            df = await _get_historical_data(symbol, lookback=100)
-        
-        print(f"[CANDLE-INTENT] 📊 Data fetch result:")
-        print(f"   → Candles received: {len(df)}")
-        print(f"   → Data empty: {df.empty}")
-        
-        # 🔥 SHOW LAST 3 CANDLES WITH VOLUME FOR DEBUGGING
-        if not df.empty and len(df) >= 3:
-            print(f"\n[CANDLE-INTENT] 🕯️  INSTANT CANDLE DETAILS (Last 3 Candles):")
-            print(f"{'='*80}")
-            for i, candle in df.tail(3).iterrows():
-                o, h, l, c = candle['open'], candle['high'], candle['low'], candle['close']
-                v = candle.get('volume', 0)
-                
-                # Candle color
-                candle_type = "🟢 GREEN" if c > o else "🔴 RED" if c < o else "⚪ DOJI"
-                
-                # Wicks
-                body = abs(c - o)
-                total_range = h - l if h != l else 0.01
-                upper_wick = h - max(o, c)
-                lower_wick = min(o, c) - l
-                
-                print(f"  Candle #{i} @ {candle.get('date', 'N/A')}")
-                print(f"  {candle_type}")
-                print(f"  📊 OHLC: O={o:.2f} H={h:.2f} L={l:.2f} C={c:.2f}")
-                print(f"  📦 Volume: {v:,.0f}")
-                print(f"  📏 Body: {body:.2f} ({(body/total_range*100):.1f}% of range)")
-                print(f"  ⬆️  Upper Wick: {upper_wick:.2f}")
-                print(f"  ⬇️  Lower Wick: {lower_wick:.2f}")
-                print()
-            print(f"{'='*80}\n")
-        
-        if df.empty or len(df) < 3:
-            print(f"[CANDLE-INTENT] ⚠️  INSUFFICIENT DATA for {symbol}")
-            
-            # Try backup cache
-            backup_cache_key = f"candle_intent_backup:{symbol}"
-            backup_data = await cache.get(backup_cache_key)
-            
-            if backup_data:
-                print(f"[CANDLE-INTENT] ✅ Using CACHED data for {symbol}")
-                print(f"   → Showing last successful analysis")
-                print(f"   → Last updated: {backup_data.get('timestamp', 'Unknown')}")
-                backup_data["status"] = "CACHED"
-                backup_data["message"] = "📊 Last Market Session Data (Market Closed)"
-                backup_data["data_status"] = "CACHED"
-                backup_data["token_valid"] = token_status["valid"]
-                return backup_data
-            
-            # Return error response
-            # Return error instead of sample data
-            from services.market_feed import is_market_open
-            status = "MARKET_CLOSED" if not is_market_open() else "NO_DATA"
-            message = "🔴 Market is currently closed. Data will update when market opens (9:15 AM IST)" if not is_market_open() else "🔴 Waiting for live market data. Please ensure Zerodha connection is active."
-            
-            return {
-                "symbol": symbol,
-                "timestamp": datetime.now().isoformat(),
-                "current_candle": None,
-                "pattern": None,
-                "professional_signal": "NEUTRAL",
-                "volume_analysis": None,
-                "trap_status": None,
-                "status": status,
-                "data_status": status,
-                "message": message,
-                "candles_analyzed": 0,
-                "token_valid": token_status["valid"],
-                "error": "NO_MARKET_DATA",
-                "notes": "Production system: No sample data used. Waiting for live market data."
-            }
-        
-        # Show data time range
-        if not df.empty and 'date' in df.columns:
-            first_date = df.iloc[0]['date']
-            last_date = df.iloc[-1]['date']
-            print(f"[CANDLE-INTENT] 📅 Data time range:")
-            print(f"   → First candle: {first_date}")
-            print(f"   → Last candle: {last_date}")
-            print(f"   → Total candles: {len(df)}")
-        
-        # 📊 ANALYZE CANDLE INTENT WITH REAL DATA (with live tick injection)
-        print(f"[CANDLE-INTENT] 🔬 Running candle structure analysis...")
-        result = await analyze_candle_intent(symbol, df, inject_live_tick=True)
-        
-        # Add metadata — use real market status so frontend status badge is accurate
-        from services.market_feed import get_market_status
-        result["status"] = get_market_status()
-        result["token_valid"] = token_status["valid"]
-        result["data_source"] = "LIVE_CANDLE_CACHE"
-        result["candles_analyzed"] = len(df)
-        
-        # Smart cache strategy (same as other live components)
-        if is_trading:
-            # During trading: NO cache for real-time pattern changes
-            print(f"[CANDLE-INTENT] 🚀 Trading hours - Fresh analysis, no cache")
-        else:
-            # Outside trading: 60s cache for efficiency
-            await cache.set(cache_key, result, expire=60)
-            print(f"[CANDLE-INTENT] 💾 Non-trading hours - Cached for 60s")
-        
-        # Save 24-hour backup
-        backup_cache_key = f"candle_intent_backup:{symbol}"
-        await cache.set(backup_cache_key, result, expire=86400)
-        
-        # 🔥 DETAILED OUTPUT FOR MONITORING
-        print(f"\n[CANDLE-INTENT] 📈 INSTANT ANALYSIS RESULTS for {symbol}")
-        print(f"{'='*80}")
-        print(f"🚦 SIGNAL: {result['professional_signal']} (Confidence: {result['pattern']['confidence']}%)")
-        print(f"💯 PATTERN: {result['pattern']['type']}")
-        print(f"📊 INTENT: {result['pattern']['intent']}")
-        print(f"📋 STATUS: {result['status']}")
-        
-        if result.get('trap_status', {}).get('is_trap'):
-            trap = result['trap_status']
-            print(f"⚠️  TRAP DETECTED: {trap.get('trap_type', 'UNKNOWN')}")
-            print(f"   Severity: {trap.get('severity', 0)}%")
-            print(f"   Action: {trap.get('action_required', 'MONITOR')}")
-        
-        print(f"\n📦 VOLUME ANALYSIS:")
-        vol_analysis = result.get('volume_analysis', {})
-        print(f"   Volume: {vol_analysis.get('volume', 0):,.0f}")
-        print(f"   Avg Volume: {vol_analysis.get('avg_volume', 0):,.0f}")
-        print(f"   Ratio: {vol_analysis.get('volume_ratio', 0):.2f}x")
-        print(f"   Type: {vol_analysis.get('volume_type', 'UNKNOWN')}")
-        print(f"   Efficiency: {vol_analysis.get('efficiency', 'UNKNOWN')}")
-        
-        print(f"\n📦 CANDLES ANALYZED: {len(df)}")
-        print(f"💾 CACHED: 5s live + 24h backup")
-        print(f"{'='*80}\n")
-        
-        print(f"[CANDLE-INTENT] ✅ Analysis complete for {symbol}")
-        print(f"   → Pattern: {result['pattern']['type']}")
-        print(f"   → Intent: {result['pattern']['intent']}")
-        print(f"   → Signal: {result['professional_signal']}")
-        print(f"   → Confidence: {result['pattern']['confidence']}%")
-        print(f"   → Cached: 5s live + 24h backup")
-        print(f"{'='*60}\n")
-        
-        return result
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        print(f"[CANDLE-INTENT-API] ❌ CRITICAL ERROR for {symbol}:")
-        print(f"   → Error type: {type(e).__name__}")
-        print(f"   → Error message: {str(e)}")
-        import traceback
-        print(f"   → Traceback:\n{traceback.format_exc()}")
-        return {
-            "symbol": symbol,
-            "timestamp": datetime.now().isoformat(),
-            "current_candle": {
-                "open": 0, "high": 0, "low": 0, "close": 0,
-                "volume": 0, "range": 0, "body_size": 0,
-                "upper_wick": 0, "lower_wick": 0
-            },
-            "pattern": {
-                "type": "NEUTRAL",
-                "strength": 0,
-                "intent": "NEUTRAL",
-                "interpretation": f"Error: {str(e)}",
-                "confidence": 0
-            },
-            "wick_analysis": {},
-            "body_analysis": {},
-            "volume_analysis": {},
-            "near_zone": False,
-            "professional_signal": "WAIT",
-            "status": "ERROR",
-            "error": str(e),
-            "timestamp": datetime.now().isoformat()
         }
 
 

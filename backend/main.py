@@ -38,141 +38,114 @@ market_feed: MarketFeedService | None = None
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Application lifespan manager (production safe)."""
+    """Application lifespan manager — fast parallel startup."""
     global market_feed
 
     print("⚡ FastAPI starting...")
-    
-    # 🔒 PRODUCTION VALIDATION (always check)
-    print("\n🔍 Running environment checks...")
-    
-    # Check critical environment variables
+
+    # ── Quick env validation (sync, instant) ──────────────────────────
     validation_errors = []
-    
     if not settings.zerodha_api_key:
         validation_errors.append("❌ ZERODHA_API_KEY is not set")
-    
     if not settings.zerodha_api_secret:
         validation_errors.append("❌ ZERODHA_API_SECRET is not set")
-    
     if not settings.jwt_secret or settings.jwt_secret == "change-this-in-production":
         validation_errors.append("❌ JWT_SECRET is not set or using default value")
-    
     if not settings.redis_url:
-        validation_errors.append("⚠️  REDIS_URL not set - using in-memory cache (not recommended for production)")
-    
+        validation_errors.append("⚠️  REDIS_URL not set — in-memory cache active")
     if validation_errors:
-        print("\n🚨 CONFIGURATION WARNINGS:")
         for error in validation_errors:
-            print(f"   {error}")
-        print("\n💡 Set required environment variables before deploying to production")
-        print("   See docs/ENVIRONMENT_SETUP.md for details\n")
-        # Don't crash - let it start but warn heavily
+            print(f"  {error}")
     else:
-        print("✅ Environment configuration valid")
-    
-    print("\n🚀 Starting services...")
+        print("✅ Config OK")
 
-    # 🔐 AUTH STATE MANAGER - Centralized auth (ONLY ONE AUTH SYSTEM)
-    print("🔐 Initializing Auth State Manager...")
-    
-    # Force recheck of token state
+    # ── Auth check (sync, instant) ────────────────────────────────────
     auth_state_manager.force_recheck()
-    current_auth_state = auth_state_manager.current_state
-    print(f"   Auth Status: {current_auth_state}")
-    
-    if not auth_state_manager.is_authenticated:
-        print("⚠️  WARNING: Zerodha token not authenticated")
-        print("   Services will start but may not connect to Zerodha")
-        print("   Please login via UI or run: python quick_token_fix.py")
-    
-    # Start unified auth auto-refresh monitor
+    is_auth = auth_state_manager.is_authenticated
+    print(f"🔐 Auth: {'✅ Authenticated' if is_auth else '⚠️ Not authenticated — login via UI'}")
+
+    # ── Phase 1: Cache + Auth monitor (must complete before services) ─
     from services.unified_auth_service import unified_auth
-    await unified_auth.start_auto_refresh_monitor()
-    print("✅ Token expiry monitor started")
 
-    # Auto update futures on startup - DISABLED TO PREVENT STARTUP HANG
-    # from services.auto_futures_updater import check_and_update_futures_on_startup
-    # await check_and_update_futures_on_startup()
-    print("⚠️ Futures auto-update disabled to prevent startup hang")
-
-    # Cache
     cache = CacheService()
-    await cache.connect()
+    await asyncio.gather(
+        cache.connect(),
+        unified_auth.start_auto_refresh_monitor(),
+    )
+    print("✅ Cache + Auth monitor ready")
 
-    # 🔄 Restore last market candles from disk (instant OI Momentum on startup)
+    # ── Restore candle backup (fast disk read) ────────────────────────
     try:
         from services.candle_backup_service import CandleBackupService
         await CandleBackupService.restore_all_symbols(cache)
-        print("✅ Candle data restored from backup")
-    except Exception as e:
-        print(f"⚠️  Candle restore skipped: {e}")
+    except Exception:
+        pass  # Non-critical
 
-    # 🔥 Inject cache into diagnostics module
+    # ── Phase 2: Market feed + inject dependencies ────────────────────
     from routers import diagnostics as diagnostics_module
     diagnostics_module.set_cache_instance(cache)
 
-    # 🔥 PRODUCTION MARKET FEED: Use MarketFeedService (battle-tested)
-    # Order flow analysis is injected into its _update_and_broadcast pipeline
-    print("\n✅ Using MarketFeedService with Order Flow Analysis")
-    if not auth_state_manager.is_authenticated:
-        print("   ⚠️  Not authenticated - Feed will not start until you login")
-        print("   💡 Click 🔑 LOGIN in the app to authenticate with Zerodha")
     market_feed = MarketFeedService(cache, manager)
-    
-    # 🔥 Inject market_feed into diagnostics module for force-reconnect endpoint
     diagnostics_module.set_market_feed_instance(market_feed)
 
-    # Token watcher (file system monitor for .env changes)
+    # Token watcher (file system monitor)
     token_observer = start_token_watcher(market_feed, auth_state_manager)
 
-    # Scheduler / Feed startup
+    # ── Phase 3: Start ALL services in parallel ───────────────────────
     scheduler = None
     feed_task = None
 
-    if settings.enable_scheduler:
-        from services.market_hours_scheduler import get_scheduler
-        scheduler = get_scheduler(market_feed)
-        await scheduler.start()
-        print("⏰ Market Scheduler: ACTIVE")
-    else:
-        print("🧪 Scheduler disabled → starting feed immediately")
-        feed_task = asyncio.create_task(market_feed.start())
+    async def start_scheduler():
+        nonlocal scheduler, feed_task
+        if settings.enable_scheduler:
+            from services.market_hours_scheduler import get_scheduler
+            scheduler = get_scheduler(market_feed)
+            await scheduler.start()
+            print("⏰ Scheduler: ON")
+        else:
+            feed_task = asyncio.create_task(market_feed.start())
+            print("🧪 Feed: immediate start")
 
-    # 🚀 Start OI Momentum Live Broadcaster
-    try:
-        from services.oi_momentum_broadcaster import start_oi_momentum_broadcaster
-        await start_oi_momentum_broadcaster()
-        print("🚀 OI Momentum Broadcaster: ACTIVE (live mode)")
-    except Exception as e:
-        print(f"⚠️  OI Momentum Broadcaster init error: {e}")
+    async def start_oi_broadcaster():
+        try:
+            from services.oi_momentum_broadcaster import start_oi_momentum_broadcaster
+            await start_oi_momentum_broadcaster()
+            print("📊 OI Momentum: ON")
+        except Exception:
+            pass
 
-    # 🧭 Start Institutional Market Compass Service
-    try:
-        from services.compass_service import get_compass_service
-        compass_svc = get_compass_service()
-        await compass_svc.start()
-        print("🧭 Institutional Market Compass: ACTIVE")
-    except Exception as e:
-        print(f"⚠️  Compass Service init error: {e}")
+    async def start_compass():
+        try:
+            from services.compass_service import get_compass_service
+            await get_compass_service().start()
+            print("🧭 Compass: ON")
+        except Exception:
+            pass
 
-    # ⚡ Start Pure Liquidity Intelligence Service
-    try:
-        from services.liquidity_service import get_liquidity_service
-        liq_svc = get_liquidity_service()
-        await liq_svc.start()
-        print("⚡ Pure Liquidity Intelligence: ACTIVE")
-    except Exception as e:
-        print(f"⚠️  Liquidity Service init error: {e}")
+    async def start_liquidity():
+        try:
+            from services.liquidity_service import get_liquidity_service
+            await get_liquidity_service().start()
+            print("⚡ Liquidity: ON")
+        except Exception:
+            pass
 
-    # 🏦 Start ICT Smart Money Intelligence Service
-    try:
-        from services.ict_engine import get_ict_service
-        ict_svc = get_ict_service()
-        await ict_svc.start()
-        print("🏦 ICT Smart Money Intelligence: ACTIVE")
-    except Exception as e:
-        print(f"⚠️  ICT Service init error: {e}")
+    async def start_ict():
+        try:
+            from services.ict_engine import get_ict_service
+            await get_ict_service().start()
+            print("🏦 ICT: ON")
+        except Exception:
+            pass
+
+    # 🔥 All services start simultaneously
+    await asyncio.gather(
+        start_scheduler(),
+        start_oi_broadcaster(),
+        start_compass(),
+        start_liquidity(),
+        start_ict(),
+    )
 
     print("🚀 Backend READY")
     yield

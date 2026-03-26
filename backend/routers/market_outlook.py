@@ -70,31 +70,7 @@ class MarketOutlookCalculator:
         }
         total_confidence += volume_pulse_conf
 
-        # 3. CANDLE INTENT (Candle Structure)
-        candle_intent_signal = 'NEUTRAL'
-        candle_intent_conf = 50
-        candle_structure = indicators.get('candle_structure', {})
-        intent_strength = candle_structure.get('bullish_strength', 50)
-        if intent_strength > 65:
-            candle_intent_signal = 'BUY'
-            candle_intent_conf = min(intent_strength, 90)
-            bullish_count += 1
-        elif intent_strength < 35:
-            candle_intent_signal = 'SELL'
-            candle_intent_conf = min(abs(35 - intent_strength) + 50, 90)
-            bearish_count += 1
-        else:
-            neutral_count += 1
-
-        signals['candle_intent'] = {
-            'name': 'Candle Intent',
-            'confidence': candle_intent_conf,
-            'signal': candle_intent_signal,
-            'status': f"Intent Score: {intent_strength}%"
-        }
-        total_confidence += candle_intent_conf
-
-        # 4. PIVOT POINTS
+        # 3. PIVOT POINTS
         pivot_signal = 'NEUTRAL'
         pivot_conf = 50
         pivot_data = indicators.get('pivot_points', {})
@@ -363,7 +339,7 @@ class MarketOutlookCalculator:
         else:
             overall_signal = 'NEUTRAL'
 
-        # 🔥 5-MIN PREDICTION: Use REAL order flow prediction (not candle intent)
+        # 🔥 5-MIN PREDICTION: Use REAL order flow prediction
         # Direction from order flow buy/sell dominance
         if of_pred_buy_pct > 55:
             pred_5m_direction = 'UP'
@@ -375,8 +351,6 @@ class MarketOutlookCalculator:
         # Signal: blend order flow with overall signal for accuracy
         if of_pred_dir in ('STRONG_BUY', 'BUY', 'STRONG_SELL', 'SELL'):
             pred_5m_signal = of_pred_dir
-        elif candle_intent_conf > 60:
-            pred_5m_signal = candle_intent_signal
         else:
             pred_5m_signal = overall_signal
         
@@ -401,7 +375,6 @@ class MarketOutlookCalculator:
             'signals': {
                 'trend_base': signals['trend_base'],
                 'volume_pulse': signals['volume_pulse'],
-                'candle_intent': signals['candle_intent'],
                 'pivot_points': signals['pivot_points'],
                 'supertrend': signals['supertrend'],
                 'rsi_60_40': signals['rsi_60_40'],
