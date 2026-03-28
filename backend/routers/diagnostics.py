@@ -477,10 +477,9 @@ async def force_reconnect():
         
         # 3. Reset watchdog state
         print("🐕 Resetting watchdog...")
-        from services.feed_watchdog import feed_watchdog
-        feed_watchdog._state = feed_watchdog.FeedState.DISCONNECTED
+        from services.feed_watchdog import feed_watchdog, FeedState
+        feed_watchdog._state = FeedState.DISCONNECTED
         feed_watchdog._last_tick_time = None
-        feed_watchdog._consecutive_403_errors = 0
         feed_watchdog._reconnect_count = 0
         
         # 4. Trigger reconnection

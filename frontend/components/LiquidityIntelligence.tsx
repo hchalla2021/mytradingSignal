@@ -213,7 +213,7 @@ const IndexCard = memo(({ data, index }: { data: LiquidityIndex | null; index: s
   // ── Skeleton ──────────────────────────────────────────────────────────────
   if (!data) {
     return (
-      <div className="flex-1 min-w-[260px] rounded-xl bg-[#1a2332] border border-slate-700/40 overflow-hidden">
+      <div className="w-full rounded-xl bg-[#1a2332] border border-slate-700/40 overflow-hidden">
         <div className="h-8 bg-slate-700/40 animate-pulse" />
         <div className="p-4 space-y-3">
           {[...Array(5)].map((_, i) => (
@@ -235,8 +235,8 @@ const IndexCard = memo(({ data, index }: { data: LiquidityIndex | null; index: s
     ['pcr_sentiment', 'oi_buildup', 'price_momentum', 'candle_conviction'];
 
   return (
-    <div className={`flex-1 min-w-[260px] rounded-xl bg-[#1a2332] border overflow-hidden
-                     transition-all duration-300
+    <div className={`w-full rounded-xl bg-[#1a2332] border overflow-hidden
+                     transition-all duration-150
                      ${oiStyle.ring || `ring-1 ${pal.ring} border-slate-700/40`}
                      ${oiStyle.glow || `shadow-lg ${pal.glow}`}`}>
 
@@ -270,17 +270,40 @@ const IndexCard = memo(({ data, index }: { data: LiquidityIndex | null; index: s
               </span>
             </div>
           </div>
-          {/* Main direction badge */}
-          <div className={`rounded-lg border px-2 py-1 text-center ${pal.badge}`}>
-            <div className="text-[10px] font-black tracking-widest leading-none">
-              {data.direction === 'BULLISH' ? '▲' : data.direction === 'BEARISH' ? '▼' : '●'}
-              &nbsp;{data.direction}
+          <div className="flex items-center gap-2">
+            {/* Individual Liquidity Bias label */}
+            <div className={`rounded-lg border px-2 py-1.5 text-center transition-all duration-150 ${
+              data.direction === 'BULLISH' ? 'bg-cyan-500/10 border-cyan-500/40' :
+              data.direction === 'BEARISH' ? 'bg-orange-500/10 border-orange-500/40' :
+              'bg-slate-700/20 border-slate-600/30'
+            }`}>
+              <div className={`text-[9px] font-bold uppercase tracking-wider leading-none ${
+                data.direction === 'BULLISH' ? 'text-cyan-400' :
+                data.direction === 'BEARISH' ? 'text-orange-400' :
+                'text-slate-400'
+              }`}>
+                Liquidity
+              </div>
+              <div className={`text-[11px] font-black leading-none mt-1 ${
+                data.direction === 'BULLISH' ? 'text-cyan-300' :
+                data.direction === 'BEARISH' ? 'text-orange-300' :
+                'text-slate-300'
+              }`}>
+                {data.direction === 'BULLISH' ? '▲ Bullish' : data.direction === 'BEARISH' ? '▼ Bearish' : '● Neutral'}
+              </div>
             </div>
-            <div className={`text-[13px] font-black leading-none mt-0.5 ${pal.text}`}>
-              {data.confidence}%
-            </div>
-            <div className="text-[8px] font-normal text-slate-500 leading-none mt-0.5 tracking-wide">
-              Confidence
+            {/* Main direction badge */}
+            <div className={`rounded-lg border px-2 py-1 text-center ${pal.badge}`}>
+              <div className="text-[10px] font-black tracking-widest leading-none">
+                {data.direction === 'BULLISH' ? '▲' : data.direction === 'BEARISH' ? '▼' : '●'}
+                &nbsp;{data.direction}
+              </div>
+              <div className={`text-[13px] font-black leading-none mt-0.5 ${pal.text}`}>
+                {data.confidence}%
+              </div>
+              <div className="text-[8px] font-normal text-slate-500 leading-none mt-0.5 tracking-wide">
+                Confidence
+              </div>
             </div>
           </div>
         </div>
@@ -529,62 +552,7 @@ const HeaderBar = memo(({ isConnected, lastUpdate }: { isConnected: boolean; las
 });
 HeaderBar.displayName = 'HeaderBar';
 
-// ── Summary strip ─────────────────────────────────────────────────────────────
 
-const SummaryStrip = memo(({ data }: { data: { NIFTY: LiquidityIndex | null; BANKNIFTY: LiquidityIndex | null; SENSEX: LiquidityIndex | null } }) => {
-  const indices = (['NIFTY', 'BANKNIFTY', 'SENSEX'] as const).map(k => data[k]).filter(Boolean) as LiquidityIndex[];
-  if (indices.length === 0) return null;
-
-  const bulls = indices.filter(x => x.direction === 'BULLISH').length;
-  const bears = indices.filter(x => x.direction === 'BEARISH').length;
-
-  let marketBias: string;
-  let biasColor: string;
-  if (bulls > bears)      { marketBias = 'Liquidity Bullish';  biasColor = 'text-cyan-400'; }
-  else if (bears > bulls) { marketBias = 'Liquidity Bearish';  biasColor = 'text-orange-400'; }
-  else                    { marketBias = 'Neutral / Mixed';    biasColor = 'text-slate-400'; }
-
-  const avgConf = Math.round(indices.reduce((a, b) => a + b.confidence, 0) / indices.length);
-  const avgPCR  = indices.filter(x => x.metrics.pcr).map(x => x.metrics.pcr!);
-  const pcrDisplay = avgPCR.length ? (avgPCR.reduce((a, b) => a + b, 0) / avgPCR.length).toFixed(2) : '—';
-
-  return (
-    <div className="mb-4 rounded-xl bg-emerald-950/40 border border-emerald-500/20 px-4 py-3
-                    flex flex-wrap items-center gap-4 shadow-sm shadow-emerald-500/5">
-      <div className="flex items-center gap-2">
-        <span className="text-[10px] text-emerald-400/70 uppercase tracking-wider font-semibold">Market Liquidity</span>
-        <span className={`text-sm font-black ${biasColor}`}>{marketBias}</span>
-      </div>
-      <div className="w-px h-4 bg-emerald-500/20" />
-      <div className="flex items-center gap-2">
-        <span className="text-[10px] text-emerald-400/70 uppercase tracking-wider font-semibold">Avg Confidence</span>
-        <span className="text-sm font-bold text-emerald-100">{avgConf}%</span>
-      </div>
-      <div className="w-px h-4 bg-emerald-500/20" />
-      <div className="flex items-center gap-2">
-        <span className="text-[10px] text-emerald-400/70 uppercase tracking-wider font-semibold">Avg PCR</span>
-        <span className={`text-sm font-bold ${pcrColor(avgPCR.length ? parseFloat(pcrDisplay) : null)}`}>
-          {pcrDisplay}
-        </span>
-      </div>
-      <div className="w-px h-4 bg-emerald-500/20" />
-      <div className="flex items-center gap-4 ml-auto">
-        {(['NIFTY', 'BANKNIFTY', 'SENSEX'] as const).map(sym => {
-          const d = data[sym];
-          if (!d) return null;
-          const dot = d.direction === 'BULLISH' ? '🟢' : d.direction === 'BEARISH' ? '🔴' : '⚪';
-          return (
-            <span key={sym} className="text-[11px] text-emerald-200/80">
-              {dot} <span className="font-bold">{sym.replace('BANKNIFTY','BNF')}</span>
-              <span className="ml-1 text-[10px] text-emerald-300/60 font-semibold">{d.confidence}%</span>
-            </span>
-          );
-        })}
-      </div>
-    </div>
-  );
-});
-SummaryStrip.displayName = 'SummaryStrip';
 
 // ── Root component ────────────────────────────────────────────────────────────
 
@@ -597,12 +565,11 @@ function LiquidityIntelligence() {
       {/* Section background gradient stripe */}
       <div className="px-4 pt-5 pb-1">
         <HeaderBar isConnected={isConnected} lastUpdate={lastUpdate} />
-        <SummaryStrip data={liquidityData} />
       </div>
 
       {/* 3-column index cards */}
       <div className="px-4 pb-5">
-        <div className="flex flex-col lg:flex-row gap-4">
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
           <IndexCard data={liquidityData.NIFTY}     index="NIFTY"     />
           <IndexCard data={liquidityData.BANKNIFTY}  index="BANKNIFTY" />
           <IndexCard data={liquidityData.SENSEX}     index="SENSEX"    />

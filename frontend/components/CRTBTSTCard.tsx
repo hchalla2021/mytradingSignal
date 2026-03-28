@@ -15,63 +15,14 @@
 
 'use client';
 
-import React, { memo, useMemo } from 'react';
+import React, { memo } from 'react';
 import { useCRTBTSTRealtime } from '@/hooks/useCRTBTSTRealtime';
-import type { CRTAnalysis, BTSTSignal, CRTFactors } from '@/lib/crt-engine';
+import type { CRTAnalysis, BTSTSignal } from '@/lib/crt-engine';
 
 interface CRTBTSTCardProps {
   symbol: string;
   name: string;
   data?: any;
-}
-
-// ── BTST percentage calc from 8-factor scores ─────────────────────────
-
-function computeBTSTPct(factors: CRTFactors, totalScore: number, maxScore: number) {
-  const scores = [
-    factors.rangeExpansion.score,
-    factors.sweepDetection.score,
-    factors.closePosition.score,
-    factors.displacement.score,
-    factors.bodyWickRatio.score,
-    factors.amdPattern.score,
-    factors.rangeReclaim.score,
-    factors.trendAlignment.score,
-  ];
-  const maxScores = [10, 10, 10, 8, 6, 6, 8, 8]; // per factor max
-
-  // Bullish strength = sum of positive scores / sum of their max
-  let bullishRaw = 0, bullishMax = 0, bearishRaw = 0, bearishMax = 0;
-  scores.forEach((s, i) => {
-    if (s > 0) { bullishRaw += s; bullishMax += maxScores[i]; }
-    else if (s < 0) { bearishRaw += Math.abs(s); bearishMax += maxScores[i]; }
-  });
-
-  const bullishPct = bullishMax > 0 ? (bullishRaw / maxScore) * 100 : 0;
-  const bearishPct = bearishMax > 0 ? (bearishRaw / maxScore) * 100 : 0;
-  const neutralPct = Math.max(0, 100 - bullishPct - bearishPct);
-
-  // Split BUY into Strong BUY + BUY based on score magnitude
-  let strongBuyPct = 0, buyPct = 0, sellPct = 0, strongSellPct = 0;
-
-  if (bullishPct > 0) {
-    if (totalScore >= 35) { strongBuyPct = bullishPct; }
-    else if (totalScore >= 18) { strongBuyPct = bullishPct * 0.3; buyPct = bullishPct * 0.7; }
-    else { buyPct = bullishPct; }
-  }
-  if (bearishPct > 0) {
-    if (totalScore <= -35) { strongSellPct = bearishPct; }
-    else if (totalScore <= -18) { strongSellPct = bearishPct * 0.3; sellPct = bearishPct * 0.7; }
-    else { sellPct = bearishPct; }
-  }
-
-  return {
-    strongBuy: Math.round(strongBuyPct),
-    buy: Math.round(buyPct),
-    neutral: Math.round(neutralPct),
-    sell: Math.round(sellPct),
-    strongSell: Math.round(strongSellPct),
-  };
 }
 
 // ── Signal Colors ──────────────────────────────────────────────────────
@@ -249,12 +200,6 @@ LevelRow.displayName = 'LevelRow';
 const CRTBTSTCard = memo<CRTBTSTCardProps>(({ symbol, name, data }) => {
   const { analysis, isLive, fromCache, loading, flash, factorSummary } = useCRTBTSTRealtime(symbol, data);
 
-  // Hook must be called unconditionally (before any early returns)
-  const btstPct = useMemo(() => {
-    if (!analysis) return { strongBuy: 0, buy: 0, neutral: 100, sell: 0, strongSell: 0 };
-    return computeBTSTPct(analysis.factors, analysis.btst.totalScore, analysis.btst.maxScore);
-  }, [analysis]);
-
   // ── Loading State ─────────────────────────────────────────────────
   if (loading && !analysis) {
     return (
@@ -310,61 +255,40 @@ const CRTBTSTCard = memo<CRTBTSTCardProps>(({ symbol, name, data }) => {
         </div>
       </div>
 
-      {/* ── BTST Signal % Strip ───────────────────────────────────────── */}
+      {/* ── BTST Dynamic Signal ──────────────────────────────────────── */}
       <div className="px-3 sm:px-4 pt-2.5 pb-1">
-        <div className="flex items-center justify-between mb-1.5">
-          <span className="text-[9px] text-slate-500 font-semibold tracking-widest uppercase">Buy Today Sell Tomorrow</span>
-          <span className="text-[9px] text-slate-600 font-mono">8-Factor Score</span>
+        <div className="flex items-center gap-2">
+          {/* Single dynamic BTST signal box */}
+          <div className={`flex-1 rounded-lg border ${sc.border} bg-gradient-to-r ${sc.bg} px-3 py-2 flex items-center justify-between transition-all duration-500`}>
+            <div className="flex items-center gap-2">
+              <span className="text-xl">{sc.icon}</span>
+              <div>
+                <p className={`text-xs font-black ${sc.text} uppercase tracking-wide leading-none`}>
+                  {btst.signal === 'STRONG_BUY' ? 'STRONG BUY-BTST' :
+                   btst.signal === 'BUY' ? 'BUY-BTST' :
+                   btst.signal === 'SELL' ? 'SELL-BTST' :
+                   btst.signal === 'STRONG_SELL' ? 'STRONG SELL-BTST' : 'NEUTRAL-BTST'}
+                </p>
+                <p className="text-[9px] text-slate-400 mt-0.5 leading-none">CRT 8-Factor • Buy Today Sell Tomorrow</p>
+              </div>
+            </div>
+            <div className="text-right">
+              <p className={`text-lg font-black ${sc.text}`}>{btst.confidence}%</p>
+              <p className="text-[8px] text-slate-500 font-mono leading-none">confidence</p>
+            </div>
+          </div>
         </div>
-        <div className="flex items-center gap-1">
-          {btstPct.strongBuy > 0 && (
-            <div className="flex-1 min-w-0">
-              <div className={`rounded-md border border-emerald-400/50 bg-emerald-900/40 px-1.5 py-1 text-center ${btstPct.strongBuy >= 70 ? 'btst-highlight-strong-buy' : btstPct.strongBuy >= 50 ? 'btst-highlight-buy' : ''}`}>
-                <p className="text-[8px] text-emerald-400/80 font-bold uppercase leading-none mb-0.5">Strong BUY</p>
-                <p className="text-sm font-black text-emerald-300">{btstPct.strongBuy}%</p>
-              </div>
-            </div>
-          )}
-          {btstPct.buy > 0 && (
-            <div className="flex-1 min-w-0">
-              <div className={`rounded-md border border-green-400/40 bg-green-900/30 px-1.5 py-1 text-center ${btstPct.buy >= 70 ? 'btst-highlight-strong-buy' : btstPct.buy >= 50 ? 'btst-highlight-buy' : ''}`}>
-                <p className="text-[8px] text-green-400/80 font-bold uppercase leading-none mb-0.5">BUY-BTST</p>
-                <p className="text-sm font-black text-green-300">{btstPct.buy}%</p>
-              </div>
-            </div>
-          )}
-          {btstPct.neutral > 0 && (
-            <div className="flex-1 min-w-0">
-              <div className="rounded-md border border-amber-500/30 bg-amber-900/20 px-1.5 py-1 text-center">
-                <p className="text-[8px] text-amber-400/70 font-bold uppercase leading-none mb-0.5">NEUTRAL</p>
-                <p className="text-sm font-black text-amber-300">{btstPct.neutral}%</p>
-              </div>
-            </div>
-          )}
-          {btstPct.sell > 0 && (
-            <div className="flex-1 min-w-0">
-              <div className={`rounded-md border border-red-400/40 bg-red-900/30 px-1.5 py-1 text-center ${btstPct.sell >= 70 ? 'btst-highlight-strong-sell' : btstPct.sell >= 50 ? 'btst-highlight-sell' : ''}`}>
-                <p className="text-[8px] text-red-400/80 font-bold uppercase leading-none mb-0.5">SELL-BTST</p>
-                <p className="text-sm font-black text-red-300">{btstPct.sell}%</p>
-              </div>
-            </div>
-          )}
-          {btstPct.strongSell > 0 && (
-            <div className="flex-1 min-w-0">
-              <div className={`rounded-md border border-red-400/50 bg-red-900/40 px-1.5 py-1 text-center ${btstPct.strongSell >= 70 ? 'btst-highlight-strong-sell' : btstPct.strongSell >= 50 ? 'btst-highlight-sell' : ''}`}>
-                <p className="text-[8px] text-red-400/80 font-bold uppercase leading-none mb-0.5">Strong SELL</p>
-                <p className="text-sm font-black text-red-300">{btstPct.strongSell}%</p>
-              </div>
-            </div>
-          )}
-        </div>
-        {/* Combined bar */}
-        <div className="flex h-1.5 rounded-full overflow-hidden mt-1.5 bg-slate-700/40">
-          {btstPct.strongBuy > 0 && <div className="bg-emerald-400 transition-all duration-700" style={{ width: `${btstPct.strongBuy}%` }} />}
-          {btstPct.buy > 0 && <div className="bg-green-400 transition-all duration-700" style={{ width: `${btstPct.buy}%` }} />}
-          {btstPct.neutral > 0 && <div className="bg-amber-400/60 transition-all duration-700" style={{ width: `${btstPct.neutral}%` }} />}
-          {btstPct.sell > 0 && <div className="bg-red-400 transition-all duration-700" style={{ width: `${btstPct.sell}%` }} />}
-          {btstPct.strongSell > 0 && <div className="bg-red-500 transition-all duration-700" style={{ width: `${btstPct.strongSell}%` }} />}
+        {/* Score bar */}
+        <div className="relative h-1.5 rounded-full overflow-hidden mt-1.5 bg-slate-700/40">
+          <div
+            className={`h-full rounded-full transition-all duration-700 ${
+              btst.signal === 'STRONG_BUY' ? 'bg-emerald-400' :
+              btst.signal === 'BUY' ? 'bg-green-400' :
+              btst.signal === 'SELL' ? 'bg-red-400' :
+              btst.signal === 'STRONG_SELL' ? 'bg-red-500' : 'bg-amber-400/60'
+            }`}
+            style={{ width: `${btst.confidence}%` }}
+          />
         </div>
       </div>
 

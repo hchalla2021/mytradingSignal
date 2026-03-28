@@ -119,6 +119,9 @@ TOKEN_SYMBOL_MAP = {
 # Previous close prices - ONLY from live Zerodha tick data
 PREV_CLOSE = {}
 
+# Previous day OHLC - fetched via historical_data API for CRT calculations
+PREV_DAY_OHLC: Dict[str, Dict[str, float]] = {}  # {"NIFTY": {"high": ..., "low": ..., "close": ..., "open": ...}}
+
 # Quote volumes - Preserved for indices (since tick volume_traded is 0 for indices)
 QUOTE_VOLUMES = {}
 
@@ -310,18 +313,13 @@ class MarketFeedService:
             # Use quote volume from cache (set during startup/refresh)
             volume = QUOTE_VOLUMES.get(symbol, 0)
         
-        # 🔥 CRITICAL: Extract previous day OHLC for pivot calculations
-        # Zerodha provides these as separate top-level fields in the quote
-        prev_day_high = tick.get("prev_day_high", None)
-        prev_day_low = tick.get("prev_day_low", None)
-        prev_day_close = tick.get("ohlc", {}).get("close", prev_close)  # Use ohlc close as prev close
-        
-        # Fallback to current day high/low if prev_day values not available
-        # (This happens during market hours as Zerodha updates the fields)
-        if prev_day_high is None:
-            prev_day_high = tick.get("ohlc", {}).get("high", ltp)
-        if prev_day_low is None:
-            prev_day_low = tick.get("ohlc", {}).get("low", ltp)
+        # 🔥 CRITICAL: Extract previous day OHLC for CRT/pivot calculations
+        # KiteTicker does NOT send prev_day_high/low — must use PREV_DAY_OHLC
+        # fetched via historical_data API on connect
+        prev_day_ohlc = PREV_DAY_OHLC.get(symbol, {})
+        prev_day_high = prev_day_ohlc.get("high")
+        prev_day_low = prev_day_ohlc.get("low")
+        prev_day_close = prev_day_ohlc.get("close") or tick.get("ohlc", {}).get("close", prev_close)
         
         return {
             "symbol": symbol,
@@ -607,6 +605,10 @@ class MarketFeedService:
             kite = KiteConnect(api_key=settings.zerodha_api_key)
             kite.set_access_token(settings.zerodha_access_token)
             
+            # 🔥 Fetch prev day OHLC if not already loaded (needed for CRT)
+            if not PREV_DAY_OHLC:
+                self._fetch_prev_day_ohlc(kite)
+            
             # Index symbols for quote API (for price)
             index_symbols = {
                 settings.nifty_token: "NSE:NIFTY 50",
@@ -720,6 +722,9 @@ class MarketFeedService:
                     QUOTE_VOLUMES[symbol_name] = volume
                     print(f"💾 Stored futures volume for {symbol_name}: {volume:,}")
                     
+                    # Get previous day OHLC for CRT analysis
+                    pd_ohlc = PREV_DAY_OHLC.get(symbol_name, {})
+                    
                     # Create normalized data
                     data = {
                         "symbol": symbol_name,
@@ -737,7 +742,11 @@ class MarketFeedService:
                         "putOI": 0,
                         "trend": trend,
                         "timestamp": datetime.now(IST).isoformat(),
-                        "status": get_market_status()
+                        "status": get_market_status(),
+                        # 🔥 Previous day data for CRT/pivot calculations
+                        "prev_day_high": round(pd_ohlc["high"], 2) if pd_ohlc.get("high") else None,
+                        "prev_day_low": round(pd_ohlc["low"], 2) if pd_ohlc.get("low") else None,
+                        "prev_day_close": round(prev_close, 2),
                     }
                     
                     # Update PREV_CLOSE
@@ -828,6 +837,7 @@ class MarketFeedService:
         auth_state_manager.mark_api_success()
         
         # Fetch real previous close prices using KiteConnect
+        kite = None
         try:
             from kiteconnect import KiteConnect
             kite = KiteConnect(api_key=settings.zerodha_api_key)
@@ -853,7 +863,13 @@ class MarketFeedService:
             print(f"🔄 Updated PREV_CLOSE: {PREV_CLOSE}")
         except Exception as e:
             print(f"⚠️ Failed to fetch real previous close: {e}")
-            
+        
+        # 🔥 Fetch previous day OHLC for CRT (Candle Range Theory) analysis
+        try:
+            self._fetch_prev_day_ohlc(kite)
+        except Exception as e:
+            print(f"⚠️ Failed to fetch prev day OHLC: {e}")
+
         # Subscribe to instrument tokens
         tokens = list(TOKEN_SYMBOL_MAP.keys())
         print(f"📊 Subscribing to tokens: {tokens}")
@@ -862,6 +878,57 @@ class MarketFeedService:
         print(f"📊 Subscribed to: {list(TOKEN_SYMBOL_MAP.values())}")
         print("✅ Market feed is now LIVE - Waiting for ticks...")
     
+    def _fetch_prev_day_ohlc(self, kite=None):
+        """Fetch previous trading day OHLC via historical_data API for CRT analysis."""
+        global PREV_DAY_OHLC
+        try:
+            if not kite:
+                from kiteconnect import KiteConnect
+                kite = KiteConnect(api_key=settings.zerodha_api_key)
+                kite.set_access_token(settings.zerodha_access_token)
+
+            from datetime import timedelta
+            today = datetime.now(IST).date()
+            # Go back up to 7 days to find previous trading day (skip weekends/holidays)
+            from_date = today - timedelta(days=7)
+            to_date = today - timedelta(days=1)
+
+            index_tokens = {
+                settings.nifty_token: "NIFTY",
+                settings.banknifty_token: "BANKNIFTY",
+                settings.sensex_token: "SENSEX",
+            }
+
+            print(f"📅 Fetching previous day OHLC (from {from_date} to {to_date})...")
+            for token, symbol in index_tokens.items():
+                try:
+                    data = kite.historical_data(
+                        instrument_token=token,
+                        from_date=from_date,
+                        to_date=to_date,
+                        interval="day",
+                    )
+                    if data and len(data) > 0:
+                        # Last entry is the most recent previous trading day
+                        prev = data[-1]
+                        PREV_DAY_OHLC[symbol] = {
+                            "open": prev["open"],
+                            "high": prev["high"],
+                            "low": prev["low"],
+                            "close": prev["close"],
+                        }
+                        print(f"  📊 {symbol} prev day: H={prev['high']}, L={prev['low']}, C={prev['close']}")
+                    else:
+                        print(f"  ⚠️ {symbol}: No historical data found")
+                except Exception as e:
+                    print(f"  ❌ {symbol} historical fetch failed: {e}")
+
+            print(f"✅ PREV_DAY_OHLC loaded for {list(PREV_DAY_OHLC.keys())}")
+        except Exception as e:
+            print(f"❌ Failed to fetch prev day OHLC: {e}")
+            import traceback
+            traceback.print_exc()
+
     def _on_close(self, ws, code, reason):
         """Callback when connection is closed."""
         print(f"🔌 Zerodha connection closed: {code} - {reason}")
