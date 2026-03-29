@@ -38,7 +38,11 @@ market_feed: MarketFeedService | None = None
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Application lifespan manager — fast parallel startup."""
+    """Application lifespan manager — ultra-fast startup.
+
+    Strategy: yield ASAP so HTTP requests are accepted immediately.
+    Heavy services boot in a background task after yield.
+    """
     global market_feed
 
     print("⚡ FastAPI starting...")
@@ -64,94 +68,109 @@ async def lifespan(app: FastAPI):
     is_auth = auth_state_manager.is_authenticated
     print(f"🔐 Auth: {'✅ Authenticated' if is_auth else '⚠️ Not authenticated — login via UI'}")
 
-    # ── Phase 1: Cache + Auth monitor (must complete before services) ─
+    # ── Minimum init: cache + market feed (instant — in-memory cache) ─
     from services.unified_auth_service import unified_auth
 
     cache = CacheService()
-    await asyncio.gather(
-        cache.connect(),
-        unified_auth.start_auto_refresh_monitor(),
-    )
-    print("✅ Cache + Auth monitor ready")
+    await cache.connect()
+    print("✅ Cache ready")
 
-    # ── Restore candle backup (fast disk read) ────────────────────────
-    try:
-        from services.candle_backup_service import CandleBackupService
-        await CandleBackupService.restore_all_symbols(cache)
-    except Exception:
-        pass  # Non-critical
-
-    # ── Phase 2: Market feed + inject dependencies ────────────────────
     from routers import diagnostics as diagnostics_module
     diagnostics_module.set_cache_instance(cache)
 
     market_feed = MarketFeedService(cache, manager)
     diagnostics_module.set_market_feed_instance(market_feed)
 
-    # Token watcher (file system monitor)
+    # Token watcher (file system monitor — instant)
     token_observer = start_token_watcher(market_feed, auth_state_manager)
 
-    # ── Phase 3: Start ALL services in parallel ───────────────────────
+    # ── Variables shared with shutdown ────────────────────────────────
     scheduler = None
     feed_task = None
+    _bg_boot: asyncio.Task | None = None
 
-    async def start_scheduler():
+    async def _boot_services():
+        """Boot all heavy services in background AFTER server is accepting requests."""
         nonlocal scheduler, feed_task
-        if settings.enable_scheduler:
-            from services.market_hours_scheduler import get_scheduler
-            scheduler = get_scheduler(market_feed)
-            await scheduler.start()
-            print("⏰ Scheduler: ON")
-        else:
-            feed_task = asyncio.create_task(market_feed.start())
-            print("🧪 Feed: immediate start")
 
-    async def start_oi_broadcaster():
+        # Auth monitor
+        await unified_auth.start_auto_refresh_monitor()
+
+        # Candle backup restoration (non-critical disk I/O)
         try:
-            from services.oi_momentum_broadcaster import start_oi_momentum_broadcaster
-            await start_oi_momentum_broadcaster()
-            print("📊 OI Momentum: ON")
+            from services.candle_backup_service import CandleBackupService
+            await CandleBackupService.restore_all_symbols(cache)
         except Exception:
             pass
 
-    async def start_compass():
-        try:
-            from services.compass_service import get_compass_service
-            await get_compass_service().start()
-            print("🧭 Compass: ON")
-        except Exception:
-            pass
+        # All services in parallel
+        async def start_scheduler():
+            nonlocal scheduler, feed_task
+            if settings.enable_scheduler:
+                from services.market_hours_scheduler import get_scheduler
+                scheduler = get_scheduler(market_feed)
+                await scheduler.start()
+                print("⏰ Scheduler: ON")
+            else:
+                feed_task = asyncio.create_task(market_feed.start())
+                print("🧪 Feed: immediate start")
 
-    async def start_liquidity():
-        try:
-            from services.liquidity_service import get_liquidity_service
-            await get_liquidity_service().start()
-            print("⚡ Liquidity: ON")
-        except Exception:
-            pass
+        async def start_oi_broadcaster():
+            try:
+                from services.oi_momentum_broadcaster import start_oi_momentum_broadcaster
+                await start_oi_momentum_broadcaster()
+                print("📊 OI Momentum: ON")
+            except Exception:
+                pass
 
-    async def start_ict():
-        try:
-            from services.ict_engine import get_ict_service
-            await get_ict_service().start()
-            print("🏦 ICT: ON")
-        except Exception:
-            pass
+        async def start_compass():
+            try:
+                from services.compass_service import get_compass_service
+                await get_compass_service().start()
+                print("🧭 Compass: ON")
+            except Exception:
+                pass
 
-    # 🔥 All services start simultaneously
-    await asyncio.gather(
-        start_scheduler(),
-        start_oi_broadcaster(),
-        start_compass(),
-        start_liquidity(),
-        start_ict(),
-    )
+        async def start_liquidity():
+            try:
+                from services.liquidity_service import get_liquidity_service
+                await get_liquidity_service().start()
+                print("⚡ Liquidity: ON")
+            except Exception:
+                pass
 
-    print("🚀 Backend READY")
+        async def start_ict():
+            try:
+                from services.ict_engine import get_ict_service
+                await get_ict_service().start()
+                print("🏦 ICT: ON")
+            except Exception:
+                pass
+
+        await asyncio.gather(
+            start_scheduler(),
+            start_oi_broadcaster(),
+            start_compass(),
+            start_liquidity(),
+            start_ict(),
+        )
+        print("🚀 All services READY")
+
+    # 🔥 Fire background boot — server starts accepting HTTP immediately
+    _bg_boot = asyncio.create_task(_boot_services())
+
+    print("🚀 Backend accepting requests (services booting in background...)")
     yield
 
     # Shutdown
     print("🛑 Backend shutting down...")
+
+    # Wait for background boot to finish (if still running) before cleanup
+    if _bg_boot and not _bg_boot.done():
+        try:
+            await asyncio.wait_for(_bg_boot, timeout=5)
+        except (asyncio.TimeoutError, Exception):
+            _bg_boot.cancel()
 
     # 📦 Backup candle data to disk before shutdown
     try:

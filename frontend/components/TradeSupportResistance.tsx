@@ -41,10 +41,10 @@ function scoreFactor(
 // Extended with glowClass for ultra-fast highlighting
 // ─────────────────────────────────────────────────────────────────
 const SIGNAL_STYLES: Record<string, { bg: string; border: string; text: string; badge: string; bar: string; glowClass: string; badgePulse: string }> = {
-  'STRONG BUY':  { bg: 'bg-emerald-500/20', border: 'border-emerald-400/80', text: 'text-emerald-300', badge: 'bg-emerald-500/30 text-emerald-100 border border-emerald-400/60', bar: 'from-emerald-500 to-green-400', glowClass: 'tz-strong-buy', badgePulse: 'tz-badge-strong-buy' },
-  'BUY':         { bg: 'bg-green-500/12',   border: 'border-green-400/60',   text: 'text-green-300',   badge: 'bg-green-500/25 text-green-200 border border-green-400/40',    bar: 'from-green-600 to-green-400',  glowClass: 'tz-buy', badgePulse: '' },
-  'STRONG SELL': { bg: 'bg-rose-500/20',    border: 'border-rose-400/80',    text: 'text-rose-300',    badge: 'bg-rose-500/30 text-rose-100 border border-rose-400/60',       bar: 'from-rose-500 to-red-400',     glowClass: 'tz-strong-sell', badgePulse: 'tz-badge-strong-sell' },
-  'SELL':        { bg: 'bg-red-500/12',     border: 'border-red-400/60',     text: 'text-red-300',     badge: 'bg-red-500/25 text-red-200 border border-red-400/40',           bar: 'from-red-600 to-red-400',      glowClass: 'tz-sell', badgePulse: '' },
+  'STRONG BUY':  { bg: 'bg-emerald-500/20', border: 'border-emerald-400/50', text: 'text-emerald-300', badge: 'bg-emerald-500/30 text-emerald-100 border border-emerald-400/40', bar: 'from-emerald-500 to-green-400', glowClass: 'tz-strong-buy', badgePulse: 'tz-badge-strong-buy' },
+  'BUY':         { bg: 'bg-green-500/12',   border: 'border-green-400/40',   text: 'text-green-300',   badge: 'bg-green-500/25 text-green-200 border border-green-400/30',    bar: 'from-green-600 to-green-400',  glowClass: 'tz-buy', badgePulse: '' },
+  'STRONG SELL': { bg: 'bg-rose-500/20',    border: 'border-rose-400/50',    text: 'text-rose-300',    badge: 'bg-rose-500/30 text-rose-100 border border-rose-400/40',       bar: 'from-rose-500 to-red-400',     glowClass: 'tz-strong-sell', badgePulse: 'tz-badge-strong-sell' },
+  'SELL':        { bg: 'bg-red-500/12',     border: 'border-red-400/40',     text: 'text-red-300',     badge: 'bg-red-500/25 text-red-200 border border-red-400/30',           bar: 'from-red-600 to-red-400',      glowClass: 'tz-sell', badgePulse: '' },
   'NO TRADE':    { bg: 'bg-amber-500/10',   border: 'border-amber-400/40',   text: 'text-amber-300',   badge: 'bg-amber-500/20 text-amber-200',    bar: 'from-amber-500 to-yellow-400', glowClass: '', badgePulse: '' },
   'SIDEWAYS':    { bg: 'bg-gray-500/10',    border: 'border-gray-500/30',    text: 'text-gray-300',    badge: 'bg-gray-500/20 text-gray-300',      bar: 'from-gray-500 to-gray-400',    glowClass: '', badgePulse: '' },
 };
@@ -352,7 +352,7 @@ export const TradeSupportResistance: React.FC<TradeSupportResistanceProps> = ({
   // ── Loading skeleton ──────────────────────────────────────────────
   if (!sig) {
     return (
-      <div className="bg-dark-surface/60 rounded-2xl p-4 border-2 border-gray-700/40 animate-pulse">
+      <div className="bg-dark-surface/60 rounded-2xl p-4 border border-gray-700/30 animate-pulse">
         <div className="flex items-center justify-between mb-3">
           <div className="h-4 bg-gray-700/50 rounded w-24" />
           <div className="h-4 bg-gray-700/50 rounded w-12" />
@@ -436,7 +436,7 @@ export const TradeSupportResistance: React.FC<TradeSupportResistanceProps> = ({
   const nearResistance = distToResistance < 0.5 && distToResistance >= 0;
 
   return (
-    <div ref={cardRef} suppressHydrationWarning className={`${style.bg} rounded-2xl border-2 ${style.border} shadow-xl overflow-hidden ${style.glowClass} transition-[box-shadow,border-color] duration-150`}>
+    <div ref={cardRef} suppressHydrationWarning className={`${style.bg} rounded-2xl border ${style.border} shadow-md overflow-hidden ${style.glowClass} transition-[box-shadow,border-color] duration-150`}>
 
       {/* ── HEADER BAR ─────────────────────────────────────────── */}
       <div className="flex items-center justify-between px-4 pt-3 pb-2">
@@ -507,8 +507,8 @@ export const TradeSupportResistance: React.FC<TradeSupportResistanceProps> = ({
         {/* Alignment badge — shown when both timeframes match */}
         {bothAligned && (
           <div className={`col-span-2 text-center py-1 rounded-lg text-[10px] font-black uppercase tracking-widest ${
-            alignedBullish ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-400/50' :
-            'bg-red-500/20 text-red-300 border border-red-400/50'
+            alignedBullish ? 'bg-emerald-500/20 text-emerald-300' :
+            'bg-red-500/20 text-red-300'
           }`}>
             ⚡ BOTH TIMEFRAMES {alignedBullish ? 'BULLISH' : 'BEARISH'} — HIGH CONVICTION
           </div>
@@ -517,7 +517,7 @@ export const TradeSupportResistance: React.FC<TradeSupportResistanceProps> = ({
 
       {/* ── BIG SIGNAL BADGE — Ultra-highlighted for STRONG signals ── */}
       <div className="px-3 pb-2">
-        <div ref={badgeRef} suppressHydrationWarning className={`text-center rounded-xl py-3 ${style.bg} border-2 ${style.border} ${style.badgePulse} ${
+        <div ref={badgeRef} suppressHydrationWarning className={`text-center rounded-xl py-3 ${style.bg} border ${style.border} ${style.badgePulse} ${
           action === 'STRONG BUY' || action === 'STRONG SELL' ? 'shadow-lg' : ''
         }`}>
           <div suppressHydrationWarning className={`font-black tracking-wider tz-instant ${
@@ -801,7 +801,7 @@ export const TradeSupportResistance: React.FC<TradeSupportResistanceProps> = ({
         </div>
 
         {/* Summary line */}
-        <div suppressHydrationWarning className={`text-center text-[11px] font-black rounded-lg py-2 border-2 tz-instant ${
+        <div suppressHydrationWarning className={`text-center text-[11px] font-black rounded-lg py-2 border tz-instant ${
           action === 'STRONG BUY' ? 'bg-emerald-500/25 text-emerald-200 border-emerald-400/60 shadow-lg shadow-emerald-500/20' :
           action === 'STRONG SELL' ? 'bg-red-500/25 text-red-200 border-red-400/60 shadow-lg shadow-red-500/20' :
           style.badge

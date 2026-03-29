@@ -919,7 +919,7 @@ export default function Home() {
             tzSignal === 'STRONG_SELL' || tzSignal === 'SELL' ? 'from-red-950/30 via-dark-card/50 to-dark-elevated/40' :
             'from-emerald-950/20 via-dark-card/50 to-dark-elevated/40';
           return (
-        <div className={`mt-6 sm:mt-6 border-2 ${tzBorderColor} rounded-2xl p-3 sm:p-4 bg-gradient-to-br ${tzBg} backdrop-blur-sm shadow-xl ${tzSectionGlow}`}>
+        <div className={`mt-6 sm:mt-6 border ${tzBorderColor} rounded-2xl p-3 sm:p-4 bg-gradient-to-br ${tzBg} backdrop-blur-sm shadow-md ${tzSectionGlow}`}>
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-3 sm:mb-4">
             <SectionTitle
               title="Trade Zones • Buy/Sell Signals"

@@ -118,7 +118,18 @@ export function useICTSocket() {
       let changed = false;
       for (const sym of ['NIFTY', 'BANKNIFTY', 'SENSEX'] as const) {
         if (raw[sym]) {
-          next[sym] = JSON.parse(JSON.stringify(raw[sym]));
+          // Don't overwrite good cached data with fallback zeros
+          const incoming = raw[sym];
+          const existing = prev[sym];
+          if (
+            existing &&
+            existing.confidence > 0 &&
+            incoming.confidence === 0 &&
+            incoming.metrics?.price === 0
+          ) {
+            continue; // keep existing good data
+          }
+          next[sym] = JSON.parse(JSON.stringify(incoming));
           changed = true;
         }
       }

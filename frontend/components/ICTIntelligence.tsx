@@ -596,7 +596,6 @@ function ICTIntelligence() {
                     bg-gradient-to-br from-amber-950/10 via-dark-card/50 to-dark-elevated/40
                     backdrop-blur-sm shadow-xl shadow-amber-500/10 ${sectionGlow}`}>
       <HeaderBar isConnected={isConnected} lastUpdate={lastUpdate} />
-      <SummaryStrip data={ictData} />
       <div className="flex flex-col lg:flex-row gap-3">
         <IndexCard index="NIFTY"     data={ictData.NIFTY} />
         <IndexCard index="BANKNIFTY" data={ictData.BANKNIFTY} />

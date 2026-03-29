@@ -213,33 +213,33 @@ h1, h2, h3, h4, h5, h6 {
 
 /* ── STRONG BUY — steady glow, no blink ─────────────────────────── */
 .tz-strong-buy {
-  box-shadow: 0 0 14px rgba(16, 185, 129, 0.5), 0 0 30px rgba(16, 185, 129, 0.18);
-  border-color: rgba(16, 185, 129, 0.85) !important;
-  border-width: 3px !important;
+  box-shadow: 0 0 10px rgba(16, 185, 129, 0.3), 0 0 20px rgba(16, 185, 129, 0.1);
+  border-color: rgba(16, 185, 129, 0.6) !important;
+  border-width: 1px !important;
   transform: translateZ(0);
 }
 
 /* ── BUY — steady glow, no blink ────────────────────────────────── */
 .tz-buy {
-  box-shadow: 0 0 8px rgba(34, 197, 94, 0.35), 0 0 18px rgba(34, 197, 94, 0.12);
-  border-color: rgba(34, 197, 94, 0.7) !important;
-  border-width: 2px !important;
+  box-shadow: 0 0 6px rgba(34, 197, 94, 0.2), 0 0 12px rgba(34, 197, 94, 0.08);
+  border-color: rgba(34, 197, 94, 0.5) !important;
+  border-width: 1px !important;
   transform: translateZ(0);
 }
 
 /* ── STRONG SELL — steady glow, no blink ────────────────────────── */
 .tz-strong-sell {
-  box-shadow: 0 0 14px rgba(239, 68, 68, 0.5), 0 0 30px rgba(239, 68, 68, 0.18);
-  border-color: rgba(239, 68, 68, 0.85) !important;
-  border-width: 3px !important;
+  box-shadow: 0 0 10px rgba(239, 68, 68, 0.3), 0 0 20px rgba(239, 68, 68, 0.1);
+  border-color: rgba(239, 68, 68, 0.6) !important;
+  border-width: 1px !important;
   transform: translateZ(0);
 }
 
 /* ── SELL — steady glow, no blink ───────────────────────────────── */
 .tz-sell {
-  box-shadow: 0 0 8px rgba(239, 68, 68, 0.35), 0 0 18px rgba(239, 68, 68, 0.12);
-  border-color: rgba(239, 68, 68, 0.7) !important;
-  border-width: 2px !important;
+  box-shadow: 0 0 6px rgba(239, 68, 68, 0.2), 0 0 12px rgba(239, 68, 68, 0.08);
+  border-color: rgba(239, 68, 68, 0.5) !important;
+  border-width: 1px !important;
   transform: translateZ(0);
 }
 
@@ -302,18 +302,18 @@ h1, h2, h3, h4, h5, h6 {
 
 /* Section wrapper — steady glow based on signal, no blink */
 .tz-section-strong-buy {
-  border-color: rgba(16, 185, 129, 0.6);
-  box-shadow: 0 0 20px rgba(16, 185, 129, 0.12);
-  border-width: 3px !important;
+  border-color: rgba(16, 185, 129, 0.4);
+  box-shadow: 0 0 12px rgba(16, 185, 129, 0.08);
+  border-width: 1px !important;
 }
 .tz-section-buy {
   border-color: rgba(16, 185, 129, 0.45);
   box-shadow: 0 0 12px rgba(16, 185, 129, 0.08);
 }
 .tz-section-strong-sell {
-  border-color: rgba(239, 68, 68, 0.6);
-  box-shadow: 0 0 20px rgba(239, 68, 68, 0.12);
-  border-width: 3px !important;
+  border-color: rgba(239, 68, 68, 0.4);
+  box-shadow: 0 0 12px rgba(239, 68, 68, 0.08);
+  border-width: 1px !important;
 }
 .tz-section-sell {
   border-color: rgba(239, 68, 68, 0.45);
@@ -322,7 +322,7 @@ h1, h2, h3, h4, h5, h6 {
 
 /* Aligned trends highlight box */
 .tz-aligned-box {
-  border-width: 2px !important;
+  border: none !important;
   position: relative;
 }
 .tz-aligned-box::after {

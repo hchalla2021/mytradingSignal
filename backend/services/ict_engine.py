@@ -30,9 +30,11 @@ import asyncio
 import collections
 import json
 import math
+import os
 import time
 import logging
 from datetime import datetime
+from pathlib import Path
 from typing import Dict, Any, Optional, List, Tuple, Deque, Set
 
 from fastapi import WebSocket
@@ -42,6 +44,9 @@ from services.cache import CacheService, _SHARED_CACHE
 
 logger = logging.getLogger(__name__)
 IST = pytz.timezone("Asia/Kolkata")
+
+# Disk persistence for last market data (survives server restart)
+_ICT_PERSIST_FILE = Path(__file__).resolve().parent.parent / "data" / "ict_last_snapshot.json"
 
 # ── Factor weights (sum = 1.0) ────────────────────────────────────────────────
 
@@ -805,6 +810,7 @@ class ICTService:
         self._task: Optional[asyncio.Task] = None
         self._running = False
         self._last_snapshot: Dict[str, Any] = {}
+        self._last_good: Dict[str, Dict[str, Any]] = {}  # per-symbol last real data
 
         # Per-symbol state
         self._swing_trackers: Dict[str, SwingTracker] = {
@@ -812,6 +818,9 @@ class ICTService:
             "BANKNIFTY": SwingTracker(),
             "SENSEX": SwingTracker(),
         }
+
+        # Load persisted data from disk (survives server restart)
+        self._load_from_disk()
 
     # ── Lifecycle ─────────────────────────────────────────────────────────
 
@@ -832,6 +841,35 @@ class ICTService:
                 pass
         logger.info("🏦 ICT Smart Money Intelligence: STOPPED")
 
+    # ── Disk persistence ──────────────────────────────────────────────────
+
+    def _load_from_disk(self):
+        """Load last good snapshot from disk on startup."""
+        try:
+            if _ICT_PERSIST_FILE.exists():
+                data = json.loads(_ICT_PERSIST_FILE.read_text(encoding="utf-8"))
+                if isinstance(data, dict):
+                    for sym in ["NIFTY", "BANKNIFTY", "SENSEX"]:
+                        if sym in data and isinstance(data[sym], dict):
+                            data[sym]["dataSource"] = "MARKET_CLOSED"
+                            self._last_good[sym] = data[sym]
+                    if self._last_good:
+                        self._last_snapshot = {**self._last_good}
+                        logger.info(f"🏦 ICT: Loaded last market data from disk ({list(self._last_good.keys())})")
+        except Exception as e:
+            logger.warning(f"🏦 ICT: Could not load persisted data: {e}")
+
+    def _save_to_disk(self, snapshot: Dict[str, Any]):
+        """Persist snapshot to disk (non-blocking, best-effort)."""
+        try:
+            _ICT_PERSIST_FILE.parent.mkdir(parents=True, exist_ok=True)
+            _ICT_PERSIST_FILE.write_text(
+                json.dumps(snapshot, default=str, indent=2),
+                encoding="utf-8",
+            )
+        except Exception as e:
+            logger.debug(f"🏦 ICT: Could not persist to disk: {e}")
+
     # ── Main loop ─────────────────────────────────────────────────────────
 
     async def _loop(self):
@@ -839,6 +877,15 @@ class ICTService:
             try:
                 snapshot = await self._compute_all()
                 self._last_snapshot = snapshot
+
+                # Persist per-symbol last good data (only save symbols with real data)
+                has_real = False
+                for sym in ["NIFTY", "BANKNIFTY", "SENSEX"]:
+                    if sym in snapshot and snapshot[sym].get("confidence", 0) > 0:
+                        self._last_good[sym] = snapshot[sym]
+                        has_real = True
+                if has_real:
+                    self._save_to_disk(self._last_good)
 
                 if ict_manager.client_count > 0:
                     await ict_manager.broadcast({
@@ -863,6 +910,9 @@ class ICTService:
     async def get_snapshot(self) -> Dict[str, Any]:
         if self._last_snapshot:
             return self._last_snapshot
+        # Try last good per-symbol data (from disk)
+        if self._last_good:
+            return {**self._last_good}
         return await self._compute_all()
 
     # ── Core computation ──────────────────────────────────────────────────
@@ -874,7 +924,7 @@ class ICTService:
                 result[symbol] = await self._compute_symbol(symbol)
             except Exception as e:
                 logger.debug(f"🏦 ICT {symbol} error: {e}")
-                result[symbol] = self._fallback(symbol)
+                result[symbol] = self._last_good.get(symbol) or self._fallback(symbol)
         return result
 
     async def _compute_symbol(self, symbol: str) -> Dict[str, Any]:
@@ -882,13 +932,13 @@ class ICTService:
         # _SHARED_CACHE stores (json_string, expire_at) tuples
         raw = _SHARED_CACHE.get(f"market:{symbol}")
         if not raw:
-            return self._fallback(symbol)
+            return self._last_good.get(symbol) or self._fallback(symbol)
 
         try:
             if isinstance(raw, tuple):
                 json_str, expire_at = raw
                 if time.time() >= expire_at:
-                    return self._fallback(symbol)
+                    return self._last_good.get(symbol) or self._fallback(symbol)
                 data = json.loads(json_str) if isinstance(json_str, str) else {}
             elif isinstance(raw, dict):
                 data = raw
@@ -900,11 +950,11 @@ class ICTService:
             data = {}
 
         if not data:
-            return self._fallback(symbol)
+            return self._last_good.get(symbol) or self._fallback(symbol)
 
         price = float(data.get("price") or data.get("last_price") or 0)
         if price <= 0:
-            return self._fallback(symbol)
+            return self._last_good.get(symbol) or self._fallback(symbol)
 
         change_pct = float(data.get("changePercent") or data.get("change_percent") or 0)
         oi = int(data.get("oi") or data.get("open_interest") or 0)

@@ -811,7 +811,6 @@ export const InstitutionalCompass = memo(() => {
         </div>
         <div className="flex flex-col items-end gap-1.5 shrink-0">
           {ts && <span className="hidden">Updated {ts}</span>}
-          {loaded.length > 0 && <SummaryStrip items={loaded} />}
         </div>
       </div>
 
