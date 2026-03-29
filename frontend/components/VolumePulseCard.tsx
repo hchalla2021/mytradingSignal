@@ -1,11 +1,12 @@
 /**
  * VolumePulseCard – Green vs Red Candle Volume Analysis
  * ─────────────────────────────────────────────────────────────────────────────
- * Architecture: Self-contained REST polling → /api/advanced/volume-pulse/{symbol}
- * Refresh:      Every 5 s via AbortController-guarded fetch
+ * Architecture: WebSocket tick listener + 3s REST poll → /api/advanced/volume-pulse/{symbol}
+ * Latency:      <200ms via market-tick events, 150ms batch window, GPU-accelerated CSS
  * Signal:       Uses backend signal + confidence directly (no frontend re-derivation)
  * Metrics:      pulse_score (buying pressure), confidence (signal strength),
  *               pro_metrics.interpretation (institutional analysis text)
+ * Performance:  contain: layout style on values, 80-150ms transitions, requestAnimationFrame flash
  */
 'use client';
 
@@ -46,13 +47,13 @@ interface VolumePulseCardProps {
 // Static config — module-level, never recreated per render
 // ─────────────────────────────────────────────────────────────────────────────
 const SIG_CFG: Record<string, {
-  label: string; color: string; bg: string; border: string; bar: string; icon: string; subtext: string;
+  label: string; color: string; bg: string; border: string; bar: string; icon: string; subtext: string; glowClass: string; badgeClass: string;
 }> = {
-  STRONG_BUY:  { label: 'STRONG BUY',  color: 'text-emerald-300', bg: 'bg-emerald-500/10', border: 'border-emerald-500',  bar: 'from-emerald-500 to-green-400',  icon: '▲▲', subtext: 'Strong buying volume dominant — buyers in full control.' },
-  BUY:         { label: 'BUY',         color: 'text-green-300',   bg: 'bg-green-500/10',   border: 'border-green-500',    bar: 'from-green-500 to-emerald-400',  icon: '▲',  subtext: 'More volume on green candles — buyers active.' },
-  NEUTRAL:     { label: 'NEUTRAL',     color: 'text-amber-300',   bg: 'bg-amber-500/8',    border: 'border-amber-500/60', bar: 'from-amber-500 to-yellow-400',   icon: '▬',  subtext: 'Balanced buy/sell volume — no clear direction.' },
-  SELL:        { label: 'SELL',        color: 'text-red-300',     bg: 'bg-red-500/10',     border: 'border-red-500',      bar: 'from-red-500 to-rose-400',       icon: '▼',  subtext: 'More volume on red candles — sellers active.' },
-  STRONG_SELL: { label: 'STRONG SELL', color: 'text-rose-300',    bg: 'bg-rose-500/10',    border: 'border-rose-500',     bar: 'from-rose-500 to-red-400',       icon: '▼▼', subtext: 'Strong selling volume dominant — sellers in full control.' },
+  STRONG_BUY:  { label: 'STRONG BUY',  color: 'text-emerald-300', bg: 'bg-emerald-500/10', border: 'border-emerald-500',  bar: 'from-emerald-500 to-green-400',  icon: '▲▲', subtext: 'Strong buying volume dominant — buyers in full control.', glowClass: 'vp-strong-buy', badgeClass: 'vp-badge-strong' },
+  BUY:         { label: 'BUY',         color: 'text-green-300',   bg: 'bg-green-500/10',   border: 'border-green-500',    bar: 'from-green-500 to-emerald-400',  icon: '▲',  subtext: 'More volume on green candles — buyers active.', glowClass: 'vp-buy', badgeClass: '' },
+  NEUTRAL:     { label: 'NEUTRAL',     color: 'text-amber-300',   bg: 'bg-amber-500/8',    border: 'border-amber-500/60', bar: 'from-amber-500 to-yellow-400',   icon: '▬',  subtext: 'Balanced buy/sell volume — no clear direction.', glowClass: '', badgeClass: '' },
+  SELL:        { label: 'SELL',        color: 'text-red-300',     bg: 'bg-red-500/10',     border: 'border-red-500',      bar: 'from-red-500 to-rose-400',       icon: '▼',  subtext: 'More volume on red candles — sellers active.', glowClass: 'vp-sell', badgeClass: '' },
+  STRONG_SELL: { label: 'STRONG SELL', color: 'text-rose-300',    bg: 'bg-rose-500/10',    border: 'border-rose-500',     bar: 'from-rose-500 to-red-400',       icon: '▼▼', subtext: 'Strong selling volume dominant — sellers in full control.', glowClass: 'vp-strong-sell', badgeClass: 'vp-badge-strong' },
 };
 
 function getSig(backendSignal: string, confidence: number) {
@@ -184,9 +185,20 @@ const VolumePulseCard = memo<VolumePulseCardProps>(({ symbol, name }) => {
   const [data,    setData]    = useState<VolumePulseData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error,   setError]   = useState<string | null>(null);
-  const [flash,   setFlash]   = useState(false);
   const prevSigRef = useRef<string>('');
   const abortRef   = useRef<AbortController | null>(null);
+  const cardRef    = useRef<HTMLDivElement>(null);
+  const batchRef   = useRef<NodeJS.Timeout>();
+
+  // ── GPU-accelerated flash on every data update ───────────────────────────
+  const triggerFlash = useCallback(() => {
+    const el = cardRef.current;
+    if (!el) return;
+    el.classList.remove('vp-tick');
+    // Force reflow then add — triggers CSS animation restart
+    void el.offsetWidth;
+    el.classList.add('vp-tick');
+  }, []);
 
   // ── Fetch ────────────────────────────────────────────────────────────────
   const fetchData = useCallback(async () => {
@@ -201,26 +213,39 @@ const VolumePulseCard = memo<VolumePulseCardProps>(({ symbol, name }) => {
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const result: VolumePulseData = await res.json();
       if (!result.volume_data) { setError('No volume data'); setLoading(false); return; }
-      if (prevSigRef.current && prevSigRef.current !== result.signal) {
-        setFlash(true);
-        setTimeout(() => setFlash(false), 700);
-      }
       prevSigRef.current = result.signal;
       setData(result);
       setError(null);
       setLoading(false);
+      // Flash on every successful update
+      requestAnimationFrame(triggerFlash);
     } catch (e: any) {
       if (e?.name === 'AbortError') return;
       setError('Connection error');
       setLoading(false);
     }
-  }, [symbol]);
+  }, [symbol, triggerFlash]);
 
+  // ── WebSocket tick listener + batched re-fetch (150ms window) ────────────
   useEffect(() => {
     fetchData();
-    const id = setInterval(fetchData, 5000);
-    return () => { clearInterval(id); abortRef.current?.abort(); };
-  }, [symbol]); // eslint-disable-line react-hooks/exhaustive-deps
+    // 3s background poll (was 5s)
+    const pollId = setInterval(fetchData, 3000);
+
+    // Listen for WebSocket market ticks — triggers re-fetch within 150ms
+    const handleTick = () => {
+      clearTimeout(batchRef.current);
+      batchRef.current = setTimeout(fetchData, 150);
+    };
+    window.addEventListener(`market-tick-${symbol}`, handleTick);
+
+    return () => {
+      clearInterval(pollId);
+      clearTimeout(batchRef.current);
+      abortRef.current?.abort();
+      window.removeEventListener(`market-tick-${symbol}`, handleTick);
+    };
+  }, [symbol, fetchData]);
 
   // ── Loading skeleton ──────────────────────────────────────────────────────
   if (loading) return (
@@ -264,14 +289,15 @@ const VolumePulseCard = memo<VolumePulseCardProps>(({ symbol, name }) => {
   const interpretation = data.pro_metrics?.interpretation ?? sig.subtext;
   const quality = data.pro_metrics?.volume_quality ?? '';
   const pred    = computePrediction(data);
+  const isStrong = sig.label === 'STRONG BUY' || sig.label === 'STRONG SELL';
 
   return (
     <div
+      ref={cardRef}
       suppressHydrationWarning
       className={`
         rounded-2xl border-2 ${sig.border} ${sig.bg} overflow-hidden
-        shadow-lg transition-all duration-300
-        ${flash ? 'ring-2 ring-white/25 scale-[1.004]' : ''}
+        shadow-lg ${sig.glowClass}
       `}
     >
       {/* ─── HEADER ──────────────────────────────────────────────────────── */}
@@ -285,10 +311,10 @@ const VolumePulseCard = memo<VolumePulseCardProps>(({ symbol, name }) => {
             </span>
           )}
         </div>
-        {/* Trend badge */}
-        <span suppressHydrationWarning className={`text-[10px] font-bold px-2 py-0.5 rounded-md border ${
-          trend === 'BULLISH' ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-400' :
-          trend === 'BEARISH' ? 'border-red-500/40 bg-red-500/10 text-red-400' :
+        {/* Trend badge — glows on active direction */}
+        <span suppressHydrationWarning className={`text-[10px] font-bold px-2 py-0.5 rounded-md border vp-val ${
+          trend === 'BULLISH' ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-400 vp-trend-up' :
+          trend === 'BEARISH' ? 'border-red-500/40 bg-red-500/10 text-red-400 vp-trend-down' :
           'border-slate-600/40 bg-slate-800/40 text-slate-400'
         }`}>{trend}</span>
       </div>
@@ -303,8 +329,8 @@ const VolumePulseCard = memo<VolumePulseCardProps>(({ symbol, name }) => {
         )}
 
         {/* ─── MAIN SIGNAL ─────────────────────────────────────────────── */}
-        <div className={`rounded-xl border ${sig.border} ${sig.bg} px-3 py-2.5 text-center`}>
-          <div suppressHydrationWarning className={`text-xl font-black tracking-wide ${sig.color}`}>
+        <div className={`rounded-xl border ${sig.border} ${sig.bg} px-3 py-2.5 text-center ${sig.badgeClass}`}>
+          <div suppressHydrationWarning className={`${isStrong ? 'text-2xl' : 'text-xl'} font-black tracking-wide ${sig.color} vp-val`}>
             {sig.icon}&nbsp;{sig.label}
           </div>
           <p className="text-[10px] text-gray-400 mt-0.5 leading-tight">{sig.subtext}</p>
@@ -314,12 +340,12 @@ const VolumePulseCard = memo<VolumePulseCardProps>(({ symbol, name }) => {
         <div>
           <div className="flex justify-between items-center mb-1">
             <span className="text-[10px] text-gray-500 font-semibold uppercase tracking-widest">Signal Confidence</span>
-            <span suppressHydrationWarning className={`text-sm font-black ${sig.color}`}>{conf}%</span>
+            <span suppressHydrationWarning className={`text-sm font-black ${sig.color} vp-val ${conf >= 75 ? 'ring-1 ring-current rounded-md px-1' : ''}`}>{conf}%</span>
           </div>
           <div className="h-2 bg-gray-900 rounded-full overflow-hidden border border-white/5">
             <div
               suppressHydrationWarning
-              className={`h-full rounded-full bg-gradient-to-r ${sig.bar} transition-all duration-700`}
+              className={`h-full rounded-full bg-gradient-to-r ${sig.bar} vp-bar`}
               style={{ width: `${conf}%` }}
             />
           </div>
@@ -332,29 +358,29 @@ const VolumePulseCard = memo<VolumePulseCardProps>(({ symbol, name }) => {
         <div>
           <div className="flex justify-between items-center mb-1">
             <span className="text-[10px] text-gray-500 font-semibold uppercase tracking-widest">Buying Pressure</span>
-            <span suppressHydrationWarning className={`text-sm font-black ${
+            <span suppressHydrationWarning className={`text-sm font-black vp-val ${
               pulse >= 65 ? 'text-emerald-300' : pulse >= 50 ? 'text-green-300' :
               pulse >= 35 ? 'text-amber-300' : 'text-red-300'
-            }`}>{pulse}%</span>
+            } ${pulse >= 65 || pulse <= 35 ? 'ring-1 ring-current rounded-md px-1' : ''}`}>{pulse}%</span>
           </div>
           <div className="relative h-2 bg-gradient-to-r from-rose-900/50 via-gray-800 to-emerald-900/50 rounded-full overflow-hidden border border-white/5">
             {/* Needle at pulse position */}
             <div
               suppressHydrationWarning
-              className={`absolute top-0 h-full w-0.5 bg-white/80 transition-all duration-700`}
+              className="absolute top-0 h-full w-0.5 bg-white/80 vp-bar"
               style={{ left: `${pulse}%` }}
             />
             {/* Fill from center */}
             {pulse >= 50 ? (
               <div
                 suppressHydrationWarning
-                className="absolute top-0 h-full bg-emerald-500/60 transition-all duration-700"
+                className="absolute top-0 h-full bg-emerald-500/60 vp-bar"
                 style={{ left: '50%', width: `${(pulse - 50) * 2}%` }}
               />
             ) : (
               <div
                 suppressHydrationWarning
-                className="absolute top-0 h-full bg-red-500/60 transition-all duration-700"
+                className="absolute top-0 h-full bg-red-500/60 vp-bar"
                 style={{ right: '50%', width: `${(50 - pulse) * 2}%` }}
               />
             )}
@@ -371,9 +397,9 @@ const VolumePulseCard = memo<VolumePulseCardProps>(({ symbol, name }) => {
           return (
             <div className="grid grid-cols-2 gap-2">
               <div
-                className={`bg-emerald-500/8 rounded-xl p-2.5 border transition-all duration-500 ${
+                className={`bg-emerald-500/8 rounded-xl p-2.5 border ${
                   buyWins
-                    ? 'border-emerald-400 ring-2 ring-emerald-400/50'
+                    ? 'border-emerald-400 ring-2 ring-emerald-400/50 vp-vol-winner'
                     : 'border-emerald-500/25'
                 }`}
                 style={buyWins ? {
@@ -381,16 +407,16 @@ const VolumePulseCard = memo<VolumePulseCardProps>(({ symbol, name }) => {
                 } : undefined}
               >
                 <p className="text-[8px] text-emerald-400/70 font-bold uppercase mb-0.5">BUY VOLUME</p>
-                <p suppressHydrationWarning className="text-sm font-black text-emerald-300">{fmtVol(vd.green_candle_volume)}</p>
-                <p suppressHydrationWarning className="text-[9px] text-emerald-400/60">{vd.green_percentage.toFixed(0)}% of total</p>
+                <p suppressHydrationWarning className="text-sm font-black text-emerald-300 vp-val">{fmtVol(vd.green_candle_volume)}</p>
+                <p suppressHydrationWarning className="text-[9px] text-emerald-400/60 vp-val">{vd.green_percentage.toFixed(0)}% of total</p>
                 <div className="mt-1 h-1 bg-gray-900/50 rounded-full overflow-hidden">
-                  <div suppressHydrationWarning className="h-full bg-emerald-500 rounded-full" style={{ width: `${vd.green_percentage}%` }} />
+                  <div suppressHydrationWarning className="h-full bg-emerald-500 rounded-full vp-bar" style={{ width: `${vd.green_percentage}%` }} />
                 </div>
               </div>
               <div
-                className={`bg-rose-500/8 rounded-xl p-2.5 border transition-all duration-500 ${
+                className={`bg-rose-500/8 rounded-xl p-2.5 border ${
                   sellWins
-                    ? 'border-rose-400 ring-2 ring-rose-400/50'
+                    ? 'border-rose-400 ring-2 ring-rose-400/50 vp-vol-winner'
                     : 'border-rose-500/25'
                 }`}
                 style={sellWins ? {
@@ -398,10 +424,10 @@ const VolumePulseCard = memo<VolumePulseCardProps>(({ symbol, name }) => {
                 } : undefined}
               >
                 <p className="text-[8px] text-rose-400/70 font-bold uppercase mb-0.5">SELL VOLUME</p>
-                <p suppressHydrationWarning className="text-sm font-black text-rose-300">{fmtVol(vd.red_candle_volume)}</p>
-                <p suppressHydrationWarning className="text-[9px] text-rose-400/60">{vd.red_percentage.toFixed(0)}% of total</p>
+                <p suppressHydrationWarning className="text-sm font-black text-rose-300 vp-val">{fmtVol(vd.red_candle_volume)}</p>
+                <p suppressHydrationWarning className="text-[9px] text-rose-400/60 vp-val">{vd.red_percentage.toFixed(0)}% of total</p>
                 <div className="mt-1 h-1 bg-gray-900/50 rounded-full overflow-hidden">
-                  <div suppressHydrationWarning className="h-full bg-rose-500 rounded-full" style={{ width: `${vd.red_percentage}%` }} />
+                  <div suppressHydrationWarning className="h-full bg-rose-500 rounded-full vp-bar" style={{ width: `${vd.red_percentage}%` }} />
                 </div>
               </div>
             </div>
@@ -411,9 +437,9 @@ const VolumePulseCard = memo<VolumePulseCardProps>(({ symbol, name }) => {
         {/* ─── RATIO ───────────────────────────────────────────────────── */}
         <div className="flex items-center justify-between px-2.5 py-1.5 rounded-lg bg-slate-900/50 border border-slate-700/30">
           <span className="text-[9px] text-gray-500 font-semibold uppercase tracking-wider">Buy/Sell Ratio</span>
-          <span suppressHydrationWarning className={`text-[10px] font-bold ${
+          <span suppressHydrationWarning className={`text-[10px] font-bold vp-val ${
             vd.ratio > 1.2 ? 'text-emerald-400' : vd.ratio < 0.85 ? 'text-red-400' : 'text-amber-400'
-          }`}>{vd.ratio === 999 ? '∞' : vd.ratio.toFixed(2)}</span>
+          } ${vd.ratio > 1.5 || vd.ratio < 0.67 ? 'ring-1 ring-current rounded px-1' : ''}`}>{vd.ratio === 999 ? '∞' : vd.ratio.toFixed(2)}</span>
         </div>
 
         {/* ─── INSTITUTIONAL INTERPRETATION ────────────────────────────── */}
@@ -442,11 +468,15 @@ const VolumePulseCard = memo<VolumePulseCardProps>(({ symbol, name }) => {
                 { label: 'Exhaustion',    val: data.pro_metrics.exhaustion     },
               ].map(({ label, val }) => (
                 <div key={label} className="flex items-center gap-2">
-                  <span className="text-[9px] text-gray-500 w-[72px] flex-shrink-0">{label}</span>
+                  <span className={`text-[9px] w-[72px] flex-shrink-0 ${
+                    (label === 'Exhaustion' && val >= 70) ? 'text-orange-400 font-bold' :
+                    (label !== 'Exhaustion' && val >= 70) ? 'text-emerald-400 font-bold' :
+                    'text-gray-500'
+                  }`}>{label}</span>
                   <div className="flex-1 h-1.5 bg-gray-800 rounded-full overflow-hidden">
                     <div
                       suppressHydrationWarning
-                      className={`h-full rounded-full transition-all duration-500 ${
+                      className={`h-full rounded-full vp-bar ${
                         label === 'Exhaustion'
                           ? val >= 70 ? 'bg-orange-500' : val >= 40 ? 'bg-amber-500' : 'bg-gray-600'
                           : val >= 70 ? 'bg-emerald-500' : val >= 40 ? 'bg-amber-500' : 'bg-red-500'
@@ -454,7 +484,7 @@ const VolumePulseCard = memo<VolumePulseCardProps>(({ symbol, name }) => {
                       style={{ width: `${val}%` }}
                     />
                   </div>
-                  <span suppressHydrationWarning className="text-[9px] text-gray-500 w-7 text-right flex-shrink-0">{val}</span>
+                  <span suppressHydrationWarning className="text-[9px] text-gray-500 w-7 text-right flex-shrink-0 vp-val">{val}</span>
                 </div>
               ))}
             </div>
@@ -497,32 +527,33 @@ const VolumePulseCard = memo<VolumePulseCardProps>(({ symbol, name }) => {
               : isBuyVol  ? 'Buying pressure active'
               : isSellVol ? 'Selling pressure active'
               : 'Balanced — await breakout';
+            const predGlowClass = isBuyVol ? 'vp-pred-up' : isSellVol ? 'vp-pred-down' : '';
             
             return (
               <div className="px-4 pt-3 pb-3 space-y-3">
                 <div className="flex items-center justify-between">
                   <span className="text-[11px] text-white/50 font-bold uppercase tracking-widest">5-Min Prediction</span>
-                  <span className={`text-sm font-bold ${dirColor}`}>{dirIcon} {predDir}</span>
+                  <span className={`text-sm font-bold ${dirColor} vp-val ${(isBuyVol || isSellVol) ? 'ring-1 ring-current rounded-md px-1.5 py-0.5' : ''}`}>{dirIcon} {predDir}</span>
                 </div>
 
                 {/* Dual Confidence Display */}
                 <div className="grid grid-cols-2 gap-2">
                   <div className="flex flex-col bg-black/30 border border-teal-500/30 rounded-lg px-2 py-1.5">
                     <span className="text-[10px] text-white/40 font-bold uppercase tracking-wide">CONFIDENCE</span>
-                    <span className="text-[13px] font-black text-teal-300 mt-0.5">{adjConf}%</span>
+                    <span className="text-[13px] font-black text-teal-300 mt-0.5 vp-val">{adjConf}%</span>
                     <div className="w-full h-2 rounded-full bg-white/10 overflow-hidden mt-1">
                       <div
-                        className="h-full bg-gradient-to-r from-teal-500 to-teal-400 transition-all duration-300 rounded-full"
+                        className="h-full bg-gradient-to-r from-teal-500 to-teal-400 vp-bar rounded-full"
                         style={{ width: `${Math.min(100, adjConf)}%` }}
                       />
                     </div>
                   </div>
                   <div className="flex flex-col bg-black/30 border border-emerald-500/30 rounded-lg px-2 py-1.5">
                     <span className="text-[10px] text-white/40 font-bold uppercase tracking-wide">Actual Market</span>
-                    <span className="text-[13px] font-black text-emerald-300 mt-0.5">{Math.min(100, actualMarketConf)}%</span>
+                    <span className="text-[13px] font-black text-emerald-300 mt-0.5 vp-val">{Math.min(100, actualMarketConf)}%</span>
                     <div className="w-full h-2 rounded-full bg-white/10 overflow-hidden mt-1">
                       <div
-                        className="h-full bg-gradient-to-r from-emerald-500 to-emerald-400 transition-all duration-300 rounded-full"
+                        className="h-full bg-gradient-to-r from-emerald-500 to-emerald-400 vp-bar rounded-full"
                         style={{ width: `${Math.min(100, actualMarketConf)}%` }}
                       />
                     </div>
@@ -534,10 +565,10 @@ const VolumePulseCard = memo<VolumePulseCardProps>(({ symbol, name }) => {
                   {/* Buy vs Sell Volume */}
                   <div className="flex items-center justify-between">
                     <span className="text-[10px] text-white/40 font-bold uppercase tracking-wide">Volume Momentum</span>
-                    <span className={`font-bold px-2 py-1 rounded text-[10px] ${
-                      data.pulse_score > 65   ? 'bg-teal-500/30 text-teal-200' :
+                    <span className={`font-bold px-2 py-1 rounded text-[10px] vp-val ${
+                      data.pulse_score > 65   ? 'bg-teal-500/30 text-teal-200 ring-1 ring-teal-400/50' :
                       data.pulse_score > 55   ? 'bg-teal-500/20 text-teal-300' :
-                      data.pulse_score < 35   ? 'bg-rose-500/30 text-rose-200' :
+                      data.pulse_score < 35   ? 'bg-rose-500/30 text-rose-200 ring-1 ring-rose-400/50' :
                       data.pulse_score < 45   ? 'bg-rose-500/20 text-rose-300' :
                                                 'bg-amber-500/20 text-amber-300'
                     }`}>
@@ -548,10 +579,10 @@ const VolumePulseCard = memo<VolumePulseCardProps>(({ symbol, name }) => {
                   {/* Participation Level */}
                   <div className="flex items-center justify-between">
                     <span className="text-[10px] text-white/40 font-bold uppercase tracking-wide">Participation</span>
-                    <span className={`font-bold px-2 py-1 rounded text-[10px] ${
-                      pm.participation > 70  ? 'bg-teal-500/30 text-teal-200' :
+                    <span className={`font-bold px-2 py-1 rounded text-[10px] vp-val ${
+                      pm.participation > 70  ? 'bg-teal-500/30 text-teal-200 ring-1 ring-teal-400/50' :
                       pm.participation > 50  ? 'bg-teal-500/20 text-teal-300' :
-                      pm.participation < 30  ? 'bg-rose-500/30 text-rose-200' :
+                      pm.participation < 30  ? 'bg-rose-500/30 text-rose-200 ring-1 ring-rose-400/50' :
                                                'bg-amber-500/20 text-amber-300'
                     }`}>
                       {(pm.participation ?? 50).toFixed(0)}% Activity
@@ -561,9 +592,9 @@ const VolumePulseCard = memo<VolumePulseCardProps>(({ symbol, name }) => {
                   {/* Volume Quality */}
                   <div className="flex items-center justify-between">
                     <span className="text-[10px] text-white/40 font-bold uppercase tracking-wide">Quality</span>
-                    <span className={`font-bold px-2 py-1 rounded text-[10px] max-w-[140px] truncate ${
-                      q === 'HEALTHY' || q === 'COMPRESSION' || q === 'SELLER_EXHAUSTION' ? 'bg-teal-500/30 text-teal-200' :
-                      q === 'EXHAUSTION' || q === 'FAKE_BREAKOUT' ? 'bg-rose-500/30 text-rose-200' :
+                    <span className={`font-bold px-2 py-1 rounded text-[10px] max-w-[140px] truncate vp-val ${
+                      q === 'HEALTHY' || q === 'COMPRESSION' || q === 'SELLER_EXHAUSTION' ? 'bg-teal-500/30 text-teal-200 ring-1 ring-teal-400/50' :
+                      q === 'EXHAUSTION' || q === 'FAKE_BREAKOUT' ? 'bg-rose-500/30 text-rose-200 ring-1 ring-rose-400/50' :
                       'bg-amber-500/20 text-amber-300'
                     }`}>
                       {q === 'NEUTRAL' ? '—' : q.replace('_', ' ')}
@@ -577,23 +608,23 @@ const VolumePulseCard = memo<VolumePulseCardProps>(({ symbol, name }) => {
                   <div className="flex items-center gap-1 h-7 rounded-md overflow-hidden bg-black/50 border border-white/[0.1]">
                     {/* Buy probability */}
                     <div
-                      className="h-full bg-gradient-to-r from-teal-600 to-teal-500 transition-all duration-300 flex items-center justify-center min-w-[2px]"
+                      className="h-full bg-gradient-to-r from-teal-600 to-teal-500 vp-bar flex items-center justify-center min-w-[2px]"
                       style={{
                         width: `${Math.max(5, Math.min(95, vd.green_percentage))}%`,
                       }}
                     >
-                      <span className="text-[9px] font-bold text-white px-1 truncate whitespace-nowrap">
+                      <span className="text-[9px] font-bold text-white px-1 truncate whitespace-nowrap vp-val">
                         {vd.green_percentage.toFixed(0)}%↑
                       </span>
                     </div>
                     {/* Sell probability */}
                     <div
-                      className="h-full bg-gradient-to-l from-rose-600 to-rose-500 transition-all duration-300 flex items-center justify-center ml-auto min-w-[2px]"
+                      className="h-full bg-gradient-to-l from-rose-600 to-rose-500 vp-bar flex items-center justify-center ml-auto min-w-[2px]"
                       style={{
                         width: `${Math.max(5, Math.min(95, vd.red_percentage))}%`,
                       }}
                     >
-                      <span className="text-[9px] font-bold text-white px-1 truncate whitespace-nowrap">
+                      <span className="text-[9px] font-bold text-white px-1 truncate whitespace-nowrap vp-val">
                         {vd.red_percentage.toFixed(0)}%↓
                       </span>
                     </div>
@@ -603,20 +634,20 @@ const VolumePulseCard = memo<VolumePulseCardProps>(({ symbol, name }) => {
                 {/* Early Signal Detection */}
                 {(data.pulse_score > 75 || data.pulse_score < 25 || (pm.exhaustion ?? 0) > 70) && (
                   <div className="pt-2 border-t border-white/10">
-                    <span className="text-[10px] font-bold text-amber-400 uppercase tracking-wide">
+                    <span className="text-[10px] font-bold text-amber-400 uppercase tracking-wide vp-early-signal">
                       ⚡ {data.pulse_score > 75 ? 'Strong Bullish' : data.pulse_score < 25 ? 'Strong Bearish' : 'Exhaustion'} Signal
                     </span>
                   </div>
                 )}
 
                 {/* Context & Direction Confidence Bar */}
-                <div className={`rounded-lg border ${dirBorder} ${dirBg} px-2.5 py-2`}>
+                <div className={`rounded-lg border ${dirBorder} ${dirBg} px-2.5 py-2 ${predGlowClass}`}>
                   <div className="flex items-center justify-between gap-2 mb-1.5">
                     <span className="text-[10px] text-white/40">{ctxNote}</span>
-                    <span className={`text-[11px] font-black ${dirColor} shrink-0`}>{adjConf}%</span>
+                    <span className={`text-[11px] font-black ${dirColor} shrink-0 vp-val`}>{adjConf}%</span>
                   </div>
                   <div className="h-[2px] bg-white/[0.06] rounded-full overflow-hidden">
-                    <div suppressHydrationWarning className={`h-full rounded-full transition-all duration-700 ${barColor}`} style={{ width: `${adjConf}%` }} />
+                    <div suppressHydrationWarning className={`h-full rounded-full vp-bar ${barColor}`} style={{ width: `${adjConf}%` }} />
                   </div>
                 </div>
               </div>

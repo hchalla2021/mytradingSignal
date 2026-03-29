@@ -133,7 +133,7 @@ export function useCompassSocket() {
   const retryRef   = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pingRef    = useRef<ReturnType<typeof setInterval> | null>(null);
   const pollRef    = useRef<ReturnType<typeof setInterval> | null>(null);
-  const retryDelay = useRef(3000);
+  const retryDelay = useRef(2000);
 
   const mergeData = useCallback((raw: Record<string, CompassIndex>) => {
     setCompassData(prev => {
@@ -159,7 +159,7 @@ export function useCompassSocket() {
 
     ws.onopen = () => {
       setIsConnected(true);
-      retryDelay.current = 3000;
+      retryDelay.current = 2000;
       // Stop REST polling — WebSocket is live
       if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
       pingRef.current = setInterval(() => {
@@ -188,7 +188,7 @@ export function useCompassSocket() {
             .then(r => r.json())
             .then(json => { if (json?.success && json.data) mergeData(json.data); })
             .catch(() => {});
-        }, 3000);
+        }, 2500);
       }
     };
 

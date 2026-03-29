@@ -867,23 +867,33 @@ export default function Home() {
           </div>
         </div>
 
-        {/* P2b: Volume Pulse Section */}
-        <div className="mt-6 sm:mt-6 border-2 border-emerald-500/30 rounded-2xl p-3 sm:p-4 bg-gradient-to-br from-emerald-950/20 via-dark-card/50 to-dark-elevated/40 backdrop-blur-sm shadow-xl shadow-emerald-500/10">
-          <div className="flex flex-col gap-3 mb-3 sm:mb-4">
-            <SectionTitle
-              title="Volume Pulse (Candle Volume)"
-              subtitle="Real-time buying/selling pressure • Green vs Red candle volume tracking"
-              accentColor="emerald"
-            />
-          </div>
+        {/* P2b: Volume Pulse Section — dynamic glow based on NIFTY volume signal */}
+        {(() => {
+          const niftySig = aggregatedMarketSignal.NIFTY.signal;
+          const vpSectionClass =
+            niftySig === 'STRONG_BUY'  ? 'vp-section-strong-buy' :
+            niftySig === 'BUY'         ? 'vp-section-buy' :
+            niftySig === 'STRONG_SELL' ? 'vp-section-strong-sell' :
+            niftySig === 'SELL'        ? 'vp-section-sell' : '';
+          return (
+            <div className={`mt-6 sm:mt-6 border-2 border-emerald-500/30 rounded-2xl p-3 sm:p-4 bg-gradient-to-br from-emerald-950/20 via-dark-card/50 to-dark-elevated/40 backdrop-blur-sm shadow-xl shadow-emerald-500/10 ${vpSectionClass}`}>
+              <div className="flex flex-col gap-3 mb-3 sm:mb-4">
+                <SectionTitle
+                  title="Volume Pulse (Candle Volume)"
+                  subtitle="Ultra-fast buying/selling pressure • Green vs Red candle volume tracking"
+                  accentColor="emerald"
+                />
+              </div>
 
-          {/* Volume Pulse Cards Grid */}
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 sm:gap-4">
-            <VolumePulseCard symbol="NIFTY" name="NIFTY 50" />
-            <VolumePulseCard symbol="BANKNIFTY" name="BANK NIFTY" />
-            <VolumePulseCard symbol="SENSEX" name="SENSEX" />
-          </div>
-        </div>
+              {/* Volume Pulse Cards Grid */}
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 sm:gap-4">
+                <VolumePulseCard symbol="NIFTY" name="NIFTY 50" />
+                <VolumePulseCard symbol="BANKNIFTY" name="BANK NIFTY" />
+                <VolumePulseCard symbol="SENSEX" name="SENSEX" />
+              </div>
+            </div>
+          );
+        })()}
 
         {/* P3: 🏦 ICT SMART MONEY INTELLIGENCE */}
         <ICTIntelligence />
@@ -892,7 +902,24 @@ export default function Home() {
         <InstitutionalCompass />
 
         {/* P7: 🎯 TRADE ZONES – Buy/Sell Signals (Multi-factor, dual timeframe) */}
-        <div className="mt-6 sm:mt-6 border-2 border-emerald-600/40 rounded-2xl p-3 sm:p-4 bg-gradient-to-br from-emerald-950/20 via-dark-card/50 to-dark-elevated/40 backdrop-blur-sm shadow-xl shadow-emerald-600/15">
+        {(() => {
+          // Dynamic section highlighting based on dominant signal
+          const tzSignal = aggregatedMarketSignal.NIFTY.signal;
+          const tzSectionGlow = 
+            tzSignal === 'STRONG_BUY' ? 'tz-section-strong-buy' :
+            tzSignal === 'BUY' ? 'tz-section-buy' :
+            tzSignal === 'STRONG_SELL' ? 'tz-section-strong-sell' :
+            tzSignal === 'SELL' ? 'tz-section-sell' : '';
+          const tzBorderColor = 
+            tzSignal === 'STRONG_BUY' || tzSignal === 'BUY' ? 'border-emerald-500/60' :
+            tzSignal === 'STRONG_SELL' || tzSignal === 'SELL' ? 'border-red-500/60' :
+            'border-emerald-600/40';
+          const tzBg = 
+            tzSignal === 'STRONG_BUY' || tzSignal === 'BUY' ? 'from-emerald-950/30 via-dark-card/50 to-dark-elevated/40' :
+            tzSignal === 'STRONG_SELL' || tzSignal === 'SELL' ? 'from-red-950/30 via-dark-card/50 to-dark-elevated/40' :
+            'from-emerald-950/20 via-dark-card/50 to-dark-elevated/40';
+          return (
+        <div className={`mt-6 sm:mt-6 border-2 ${tzBorderColor} rounded-2xl p-3 sm:p-4 bg-gradient-to-br ${tzBg} backdrop-blur-sm shadow-xl ${tzSectionGlow}`}>
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-3 sm:mb-4">
             <SectionTitle
               title="Trade Zones • Buy/Sell Signals"
@@ -925,6 +952,8 @@ export default function Home() {
             />
           </div>
         </div>
+          );
+        })()}
 
         {/* P10: 🕯️ CRT-BASED BTST STRATEGIES */}
         <div className="mt-6 sm:mt-6 border-2 border-orange-500/35 rounded-2xl p-3 sm:p-4 bg-gradient-to-br from-orange-950/20 via-dark-card/50 to-dark-elevated/40 backdrop-blur-sm shadow-xl shadow-orange-500/10">

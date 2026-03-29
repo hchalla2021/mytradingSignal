@@ -11,7 +11,7 @@
 
 'use client';
 
-import React, { useMemo } from 'react';
+import React, { useMemo, useRef, useEffect } from 'react';
 
 interface TradeSupportResistanceProps {
   symbol: string;
@@ -38,14 +38,15 @@ function scoreFactor(
 
 // ─────────────────────────────────────────────────────────────────
 // Static signal styles — module-level to avoid object recreation on every tick
+// Extended with glowClass for ultra-fast highlighting
 // ─────────────────────────────────────────────────────────────────
-const SIGNAL_STYLES: Record<string, { bg: string; border: string; text: string; badge: string; bar: string }> = {
-  'STRONG BUY':  { bg: 'bg-emerald-500/15', border: 'border-emerald-400/70', text: 'text-emerald-300', badge: 'bg-emerald-500/25 text-emerald-200', bar: 'from-emerald-500 to-green-400' },
-  'BUY':         { bg: 'bg-green-500/10',   border: 'border-green-400/50',   text: 'text-green-300',   badge: 'bg-green-500/20 text-green-200',    bar: 'from-green-600 to-green-400'   },
-  'STRONG SELL': { bg: 'bg-rose-500/15',    border: 'border-rose-400/70',    text: 'text-rose-300',    badge: 'bg-rose-500/25 text-rose-200',      bar: 'from-rose-500 to-red-400'      },
-  'SELL':        { bg: 'bg-red-500/10',     border: 'border-red-400/50',     text: 'text-red-300',     badge: 'bg-red-500/20 text-red-200',        bar: 'from-red-600 to-red-400'       },
-  'NO TRADE':    { bg: 'bg-amber-500/10',   border: 'border-amber-400/40',   text: 'text-amber-300',   badge: 'bg-amber-500/20 text-amber-200',    bar: 'from-amber-500 to-yellow-400'  },
-  'SIDEWAYS':    { bg: 'bg-gray-500/10',    border: 'border-gray-500/30',    text: 'text-gray-300',    badge: 'bg-gray-500/20 text-gray-300',      bar: 'from-gray-500 to-gray-400'     },
+const SIGNAL_STYLES: Record<string, { bg: string; border: string; text: string; badge: string; bar: string; glowClass: string; badgePulse: string }> = {
+  'STRONG BUY':  { bg: 'bg-emerald-500/20', border: 'border-emerald-400/80', text: 'text-emerald-300', badge: 'bg-emerald-500/30 text-emerald-100 border border-emerald-400/60', bar: 'from-emerald-500 to-green-400', glowClass: 'tz-strong-buy', badgePulse: 'tz-badge-strong-buy' },
+  'BUY':         { bg: 'bg-green-500/12',   border: 'border-green-400/60',   text: 'text-green-300',   badge: 'bg-green-500/25 text-green-200 border border-green-400/40',    bar: 'from-green-600 to-green-400',  glowClass: 'tz-buy', badgePulse: '' },
+  'STRONG SELL': { bg: 'bg-rose-500/20',    border: 'border-rose-400/80',    text: 'text-rose-300',    badge: 'bg-rose-500/30 text-rose-100 border border-rose-400/60',       bar: 'from-rose-500 to-red-400',     glowClass: 'tz-strong-sell', badgePulse: 'tz-badge-strong-sell' },
+  'SELL':        { bg: 'bg-red-500/12',     border: 'border-red-400/60',     text: 'text-red-300',     badge: 'bg-red-500/25 text-red-200 border border-red-400/40',           bar: 'from-red-600 to-red-400',      glowClass: 'tz-sell', badgePulse: '' },
+  'NO TRADE':    { bg: 'bg-amber-500/10',   border: 'border-amber-400/40',   text: 'text-amber-300',   badge: 'bg-amber-500/20 text-amber-200',    bar: 'from-amber-500 to-yellow-400', glowClass: '', badgePulse: '' },
+  'SIDEWAYS':    { bg: 'bg-gray-500/10',    border: 'border-gray-500/30',    text: 'text-gray-300',    badge: 'bg-gray-500/20 text-gray-300',      bar: 'from-gray-500 to-gray-400',    glowClass: '', badgePulse: '' },
 };
 
 // ─────────────────────────────────────────────────────────────────
@@ -373,6 +374,45 @@ export const TradeSupportResistance: React.FC<TradeSupportResistanceProps> = ({
     distToSupport, distToResistance, vwap, vwapDist, volumeStrength,
   } = sig;
 
+  // ── Flash ONLY when signal status actually changes ──────────────
+  const cardRef = useRef<HTMLDivElement>(null);
+  const badgeRef = useRef<HTMLDivElement>(null);
+  const trend5Ref = useRef<HTMLDivElement>(null);
+  const trend15Ref = useRef<HTMLDivElement>(null);
+  const prevAction = useRef(action);
+  const prevTrend5 = useRef(trend5min);
+  const prevTrend15 = useRef(trend15min);
+
+  useEffect(() => {
+    // Card flash — only when the BUY/SELL/STRONG action changes
+    if (prevAction.current !== action && cardRef.current) {
+      cardRef.current.classList.remove('tz-status-changed');
+      void cardRef.current.offsetWidth;
+      cardRef.current.classList.add('tz-status-changed');
+    }
+    // Badge flash — only when action changes
+    if (prevAction.current !== action && badgeRef.current) {
+      badgeRef.current.classList.remove('tz-badge-changed');
+      void badgeRef.current.offsetWidth;
+      badgeRef.current.classList.add('tz-badge-changed');
+    }
+    // 5min trend flash — only when trend direction changes
+    if (prevTrend5.current !== trend5min && trend5Ref.current) {
+      trend5Ref.current.classList.remove('tz-trend-changed');
+      void trend5Ref.current.offsetWidth;
+      trend5Ref.current.classList.add('tz-trend-changed');
+    }
+    // 15min trend flash — only when trend direction changes
+    if (prevTrend15.current !== trend15min && trend15Ref.current) {
+      trend15Ref.current.classList.remove('tz-trend-changed');
+      void trend15Ref.current.offsetWidth;
+      trend15Ref.current.classList.add('tz-trend-changed');
+    }
+    prevAction.current = action;
+    prevTrend5.current = trend5min;
+    prevTrend15.current = trend15min;
+  }, [action, trend5min, trend15min]);
+
   const trendIcon  = (t: string) => t === 'UP' ? '▲' : t === 'DOWN' ? '▼' : '─';
   const trendClass = (t: string) =>
     t === 'UP'   ? 'text-emerald-400' :
@@ -386,8 +426,17 @@ export const TradeSupportResistance: React.FC<TradeSupportResistanceProps> = ({
   const factorColor = (v: number) =>
     v > 0 ? 'text-emerald-400' : v < 0 ? 'text-red-400' : 'text-gray-500';
 
+  // ── Trend alignment check for highlighting ─────────────────────
+  const bothAligned = trend5min !== 'NEUTRAL' && trend5min === trend15min;
+  const alignedBullish = bothAligned && trend5min === 'UP';
+  const alignedBearish = bothAligned && trend5min === 'DOWN';
+
+  // ── Proximity alert for support/resistance ─────────────────────
+  const nearSupport = distToSupport < 0.5 && distToSupport >= 0;
+  const nearResistance = distToResistance < 0.5 && distToResistance >= 0;
+
   return (
-    <div suppressHydrationWarning className={`${style.bg} rounded-2xl border-2 ${style.border} shadow-xl transition-all duration-300 overflow-hidden`}>
+    <div ref={cardRef} suppressHydrationWarning className={`${style.bg} rounded-2xl border-2 ${style.border} shadow-xl overflow-hidden ${style.glowClass} transition-[box-shadow,border-color] duration-150`}>
 
       {/* ── HEADER BAR ─────────────────────────────────────────── */}
       <div className="flex items-center justify-between px-4 pt-3 pb-2">
@@ -408,18 +457,24 @@ export const TradeSupportResistance: React.FC<TradeSupportResistanceProps> = ({
         </div>
       </div>
 
-      {/* ── DUAL TIMEFRAME ROW ──────────────────────────────────── */}
-      <div className="grid grid-cols-2 gap-2 px-3 pb-2">
+      {/* ── DUAL TIMEFRAME ROW — Sharp highlighted when aligned ─── */}
+      <div className={`grid grid-cols-2 gap-2 px-3 pb-2 ${bothAligned ? 'tz-aligned-box' : ''} ${alignedBullish ? 'tz-aligned-bullish' : ''} ${alignedBearish ? 'tz-aligned-bearish' : ''}`}>
         {/* 5 MIN */}
-        <div className="bg-dark-bg/50 rounded-xl p-2.5 border border-dark-border/40">
+        <div className={`rounded-xl p-2.5 border transition-all duration-100 ${
+          trend5min === 'UP' ? 'bg-emerald-950/40 border-emerald-500/60' :
+          trend5min === 'DOWN' ? 'bg-red-950/40 border-red-500/60' :
+          'bg-dark-bg/50 border-dark-border/40'
+        }`}>
           <div className="text-[9px] text-gray-500 font-semibold uppercase tracking-widest mb-1">5 MIN ENTRY</div>
-          <div className={`text-base font-bold ${trendClass(trend5min)} flex items-center gap-1`}>
-            <span suppressHydrationWarning>{trendIcon(trend5min)}</span>
+          <div className={`text-lg font-black ${trendClass(trend5min)} flex items-center gap-1.5 tz-instant ${
+            trend5min === 'UP' ? 'tz-trend-up-active' : trend5min === 'DOWN' ? 'tz-trend-down-active' : ''
+          }`} ref={trend5Ref}>
+            <span suppressHydrationWarning className="text-xl">{trendIcon(trend5min)}</span>
             <span suppressHydrationWarning>{trend5min}</span>
           </div>
-          <div className="text-[10px] text-gray-500 mt-0.5">
+          <div className="text-[10px] text-gray-500 mt-0.5 tz-instant">
             RSI{' '}
-            <span suppressHydrationWarning className={rsi5m >= 56 ? 'text-emerald-400' : rsi5m <= 44 ? 'text-red-400' : 'text-gray-400'}>
+            <span suppressHydrationWarning className={`font-bold ${rsi5m >= 56 ? 'text-emerald-400' : rsi5m <= 44 ? 'text-red-400' : 'text-gray-400'}`}>
               {rsi5m.toFixed(0)}
             </span>
             {rsi5mRaw === 50 && rsiMomentum !== 50 && (
@@ -428,46 +483,73 @@ export const TradeSupportResistance: React.FC<TradeSupportResistanceProps> = ({
           </div>
         </div>
         {/* 15 MIN */}
-        <div className="bg-dark-bg/50 rounded-xl p-2.5 border border-dark-border/40">
+        <div className={`rounded-xl p-2.5 border transition-all duration-100 ${
+          trend15min === 'UP' ? 'bg-emerald-950/40 border-emerald-500/60' :
+          trend15min === 'DOWN' ? 'bg-red-950/40 border-red-500/60' :
+          'bg-dark-bg/50 border-dark-border/40'
+        }`}>
           <div className="text-[9px] text-gray-500 font-semibold uppercase tracking-widest mb-1">15 MIN TREND</div>
-          <div className={`text-base font-bold ${trendClass(trend15min)} flex items-center gap-1`}>
-            <span suppressHydrationWarning>{trendIcon(trend15min)}</span>
+          <div className={`text-lg font-black ${trendClass(trend15min)} flex items-center gap-1.5 tz-instant ${
+            trend15min === 'UP' ? 'tz-trend-up-active' : trend15min === 'DOWN' ? 'tz-trend-down-active' : ''
+          }`} ref={trend15Ref}>
+            <span suppressHydrationWarning className="text-xl">{trendIcon(trend15min)}</span>
             <span suppressHydrationWarning>{trend15min}</span>
           </div>
-          <div className="text-[10px] text-gray-500 mt-0.5">
+          <div className="text-[10px] text-gray-500 mt-0.5 tz-instant">
             EMA{' '}
-            <span suppressHydrationWarning className={emaAlignment.includes('BULLISH') ? 'text-emerald-400' : emaAlignment.includes('BEARISH') ? 'text-red-400' : trendColor === 'BULLISH' ? 'text-emerald-400' : trendColor === 'BEARISH' ? 'text-red-400' : 'text-gray-400'}>
+            <span suppressHydrationWarning className={`font-bold ${emaAlignment.includes('BULLISH') ? 'text-emerald-400' : emaAlignment.includes('BEARISH') ? 'text-red-400' : trendColor === 'BULLISH' ? 'text-emerald-400' : trendColor === 'BEARISH' ? 'text-red-400' : 'text-gray-400'}`}>
               {emaAlignment === 'NEUTRAL' && trendColor !== 'NEUTRAL'
                 ? trendColor
                 : emaAlignment.replace('ALL_', '').replace('PARTIAL_', 'PARTIAL ')}
             </span>
           </div>
         </div>
+        {/* Alignment badge — shown when both timeframes match */}
+        {bothAligned && (
+          <div className={`col-span-2 text-center py-1 rounded-lg text-[10px] font-black uppercase tracking-widest ${
+            alignedBullish ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-400/50' :
+            'bg-red-500/20 text-red-300 border border-red-400/50'
+          }`}>
+            ⚡ BOTH TIMEFRAMES {alignedBullish ? 'BULLISH' : 'BEARISH'} — HIGH CONVICTION
+          </div>
+        )}
       </div>
 
-      {/* ── BIG SIGNAL BADGE ────────────────────────────────────── */}
+      {/* ── BIG SIGNAL BADGE — Ultra-highlighted for STRONG signals ── */}
       <div className="px-3 pb-2">
-        <div suppressHydrationWarning className={`text-center rounded-xl py-2 ${style.bg} border ${style.border}`}>
-          <div suppressHydrationWarning className={`text-xl font-black tracking-wider ${style.text}`}>{action}</div>
-          <div className="text-[10px] text-gray-500 mt-0.5">{signalReason}</div>
+        <div ref={badgeRef} suppressHydrationWarning className={`text-center rounded-xl py-3 ${style.bg} border-2 ${style.border} ${style.badgePulse} ${
+          action === 'STRONG BUY' || action === 'STRONG SELL' ? 'shadow-lg' : ''
+        }`}>
+          <div suppressHydrationWarning className={`font-black tracking-wider tz-instant ${
+            action === 'STRONG BUY' || action === 'STRONG SELL' ? 'text-2xl' : 'text-xl'
+          } ${style.text}`}>
+            {action === 'STRONG BUY' ? '🟢 ' : action === 'STRONG SELL' ? '🔴 ' : action === 'BUY' ? '▲ ' : action === 'SELL' ? '▼ ' : ''}
+            {action}
+            {action === 'STRONG BUY' ? ' 🟢' : action === 'STRONG SELL' ? ' 🔴' : ''}
+          </div>
+          <div className={`text-[10px] mt-1 font-semibold ${
+            action.includes('STRONG') ? style.text : 'text-gray-500'
+          }`}>{signalReason}</div>
         </div>
       </div>
 
-      {/* ── CONFIDENCE BAR ──────────────────────────────────────── */}
+      {/* ── CONFIDENCE BAR — Instant update ──────────────────────── */}
       <div className="px-3 pb-3">
         <div className="flex justify-between text-[10px] font-semibold mb-1">
           <span className="text-gray-500">Confidence</span>
-          <span suppressHydrationWarning className={style.text}>{confidence}%</span>
+          <span suppressHydrationWarning className={`tz-instant font-black ${style.text} ${confidence >= 80 ? 'text-sm' : ''}`}>{confidence}%</span>
         </div>
-        <div className="h-2 bg-gray-800/80 rounded-full overflow-hidden">
+        <div className={`h-2.5 bg-gray-800/80 rounded-full overflow-hidden ${confidence >= 75 ? 'ring-1 ring-offset-1 ring-offset-transparent' : ''} ${
+          confidence >= 75 && action.includes('BUY') ? 'ring-emerald-400/40' : confidence >= 75 && action.includes('SELL') ? 'ring-red-400/40' : ''
+        }`}>
           <div
             suppressHydrationWarning
-            className={`h-full bg-gradient-to-r ${style.bar} rounded-full transition-all duration-700`}
+            className={`h-full bg-gradient-to-r ${style.bar} rounded-full tz-conf-bar`}
             style={{ width: `${confidence}%` }}
           />
         </div>
         <div className="flex justify-between text-[9px] text-gray-600 mt-0.5">
-          <span>30</span><span>50</span><span>70</span><span>95</span>
+          <span>30</span><span>50</span><span className={confidence >= 70 ? 'text-amber-400 font-bold' : ''}>70</span><span className={confidence >= 90 ? 'text-emerald-400 font-bold' : ''}>95</span>
         </div>
       </div>
 
@@ -487,16 +569,16 @@ export const TradeSupportResistance: React.FC<TradeSupportResistanceProps> = ({
           {
             label: 'Support',
             value: support > 0 ? `₹${fmt(support)}  -${distToSupport.toFixed(1)}%` : '—',
-            // Green = safe buffer (far from support), Red = danger (price near support, could break)
             bull: distToSupport > 1.5,
             bear: distToSupport < 0.4,
+            highlight: nearSupport,
           },
           {
             label: 'Resist',
             value: resistance > 0 ? `₹${fmt(resistance)}  +${distToResistance.toFixed(1)}%` : '—',
-            // Green = room to rally (far from resistance), Red = capped (near resistance)
             bull: distToResistance > 1.5,
             bear: distToResistance < 0.4,
+            highlight: nearResistance,
           },
           {
             label: 'Volume',
@@ -505,10 +587,12 @@ export const TradeSupportResistance: React.FC<TradeSupportResistanceProps> = ({
             bear: volumeStrength.includes('WEAK') || volumeStrength.includes('LOW'),
           },
           { label: 'Momentum', value: `${momentum.toFixed(0)}/100`, bull: momentum > 60, bear: momentum < 40 },
-        ].map(({ label, value, bull, bear }) => (
-          <div key={label} className="bg-dark-bg/40 rounded-lg px-2.5 py-1.5 border border-dark-border/30 flex items-center justify-between gap-1">
+        ].map(({ label, value, bull, bear, highlight }: any) => (
+          <div key={label} className={`bg-dark-bg/40 rounded-lg px-2.5 py-1.5 border flex items-center justify-between gap-1 transition-all duration-100 ${
+            highlight ? 'tz-near-zone border-amber-400/60' : 'border-dark-border/30'
+          }`}>
             <span className="text-[9px] text-gray-500 font-semibold truncate">{label}</span>
-            <span suppressHydrationWarning className={`text-[10px] font-bold truncate ${bull ? 'text-emerald-400' : bear ? 'text-red-400' : 'text-gray-300'}`}>{value}</span>
+            <span suppressHydrationWarning className={`text-[10px] font-bold truncate tz-instant ${bull ? 'text-emerald-400' : bear ? 'text-red-400' : 'text-gray-300'}`}>{value}</span>
           </div>
         ))}
       </div>
@@ -534,7 +618,7 @@ export const TradeSupportResistance: React.FC<TradeSupportResistanceProps> = ({
             <div className="w-full h-2 rounded-full bg-gray-800 overflow-hidden mt-1">
               <div
                 suppressHydrationWarning
-                className="h-full bg-gradient-to-r from-emerald-500 to-emerald-400 transition-all duration-300 rounded-full"
+                className="h-full bg-gradient-to-r from-emerald-500 to-emerald-400 tz-conf-bar rounded-full"
                 style={{ width: `${Math.min(100, confidence)}%` }}
               />
             </div>
@@ -548,7 +632,7 @@ export const TradeSupportResistance: React.FC<TradeSupportResistanceProps> = ({
             <div className="w-full h-2 rounded-full bg-gray-800 overflow-hidden mt-1">
               <div
                 suppressHydrationWarning
-                className="h-full bg-gradient-to-r from-teal-500 to-teal-400 transition-all duration-300 rounded-full"
+                className="h-full bg-gradient-to-r from-teal-500 to-teal-400 tz-conf-bar rounded-full"
                 style={{ width: `${Math.min(100, Math.round(Math.abs(totalScore) * 2 + (confidence * 0.3)))}%` }}
               />
             </div>
@@ -598,7 +682,7 @@ export const TradeSupportResistance: React.FC<TradeSupportResistanceProps> = ({
                 <div className="h-2 bg-gray-800 rounded-full overflow-hidden border border-white/5">
                   <div
                     suppressHydrationWarning
-                    className={`h-full rounded-full bg-gradient-to-r ${style.bar} transition-all duration-700`}
+                    className={`h-full rounded-full bg-gradient-to-r ${style.bar} tz-conf-bar`}
                     style={{ width: `${dispConf}%` }}
                   />
                 </div>
@@ -641,32 +725,32 @@ export const TradeSupportResistance: React.FC<TradeSupportResistanceProps> = ({
               {/* Movement Probability */}
               <div className="space-y-2">
                 <p className="text-[9px] font-bold text-gray-500 uppercase tracking-wide">Movement Probability</p>
-                <div className="flex items-center gap-0.5 h-6 rounded-md overflow-hidden bg-gray-950/50 border border-gray-700/30">
+                <div className="flex items-center gap-0.5 h-7 rounded-md overflow-hidden bg-gray-950/50 border border-gray-700/30">
                   {/* Bullish */}
                   <div
                     suppressHydrationWarning
-                    className="h-full bg-gradient-to-r from-emerald-600 to-emerald-500 transition-all duration-300 flex items-center justify-center min-w-[2px]"
+                    className="h-full bg-gradient-to-r from-emerald-600 to-emerald-500 flex items-center justify-center min-w-[2px] tz-conf-bar"
                     style={{
                       width: `${Math.max(5, Math.min(95, Math.round(
                         Math.max(0, totalScore + confidence / 10) * 0.8
                       )))}%`,
                     }}
                   >
-                    <span className="text-[8px] font-bold text-white px-1 truncate whitespace-nowrap">
+                    <span className="text-[9px] font-black text-white px-1 truncate whitespace-nowrap tz-instant">
                       {Math.round(Math.max(0, totalScore + confidence / 10) * 0.8)}%↑
                     </span>
                   </div>
                   {/* Bearish */}
                   <div
                     suppressHydrationWarning
-                    className="h-full bg-gradient-to-l from-red-600 to-red-500 transition-all duration-300 flex items-center justify-center ml-auto min-w-[2px]"
+                    className="h-full bg-gradient-to-l from-red-600 to-red-500 flex items-center justify-center ml-auto min-w-[2px] tz-conf-bar"
                     style={{
                       width: `${Math.max(5, Math.min(95, Math.round(
                         Math.max(0, -totalScore + confidence / 10) * 0.8
                       )))}%`,
                     }}
                   >
-                    <span className="text-[8px] font-bold text-white px-1 truncate whitespace-nowrap">
+                    <span className="text-[9px] font-black text-white px-1 truncate whitespace-nowrap tz-instant">
                       {Math.round(Math.max(0, -totalScore + confidence / 10) * 0.8)}%↓
                     </span>
                   </div>
@@ -674,10 +758,16 @@ export const TradeSupportResistance: React.FC<TradeSupportResistanceProps> = ({
               </div>
 
               {/* Early Signal Detection - fixed height to prevent layout shift on mobile */}
-              <div className="pt-2 border-t border-gray-700/20 min-h-[28px]">
+              <div className={`pt-2 border-t min-h-[28px] ${
+                (confidence >= 75 || same5m15m) 
+                  ? (predDir === 'UP' ? 'border-emerald-500/30' : predDir === 'DOWN' ? 'border-red-500/30' : 'border-gray-700/20')
+                  : 'border-gray-700/20'
+              }`}>
                 {(confidence >= 75 || same5m15m) && (
-                  <span suppressHydrationWarning className="text-[9px] font-bold text-amber-400 uppercase tracking-wide">
-                    ⚡ {confidence >= 80 ? 'Strong' : 'Moderate'} {predDir === 'NEUTRAL' ? 'Neutral' : predDir} Signal Detected
+                  <span suppressHydrationWarning className={`text-[10px] font-black uppercase tracking-wide ${
+                    predDir === 'UP' ? 'text-emerald-400' : predDir === 'DOWN' ? 'text-red-400' : 'text-amber-400'
+                  }`}>
+                    ⚡ {confidence >= 80 ? 'STRONG' : 'MODERATE'} {predDir === 'NEUTRAL' ? 'NEUTRAL' : predDir} SIGNAL DETECTED
                   </span>
                 )}
               </div>
@@ -692,36 +782,45 @@ export const TradeSupportResistance: React.FC<TradeSupportResistanceProps> = ({
             const pct = Math.abs(f.value) / f.max * 100;
             const isBull = f.value > 0;
             const isBear = f.value < 0;
+            const isMaxed = pct >= 90;
             return (
-              <div key={f.name} className="flex items-center gap-1.5">
-                <span className={`text-[9px] font-bold w-3 text-center ${factorColor(f.value)}`}>{f.icon}</span>
-                <span className="text-[9px] text-gray-500 w-20 truncate">{f.name}</span>
+              <div key={f.name} className={`flex items-center gap-1.5 ${isMaxed ? 'py-0.5' : ''}`}>
+                <span className={`text-[9px] font-black w-3 text-center ${factorColor(f.value)} ${isMaxed ? 'text-[10px]' : ''}`}>{f.icon}</span>
+                <span className={`text-[9px] w-20 truncate ${isMaxed ? 'font-bold text-gray-300' : 'text-gray-500'}`}>{f.name}</span>
                 <div className="flex-1 h-1.5 bg-gray-800 rounded-full overflow-hidden">
                   <div
                     suppressHydrationWarning
-                    className={`h-full rounded-full transition-all duration-500 ${isBull ? 'bg-emerald-500' : isBear ? 'bg-red-500' : 'bg-gray-600'}`}
+                    className={`h-full rounded-full tz-conf-bar ${isBull ? 'bg-emerald-500' : isBear ? 'bg-red-500' : 'bg-gray-600'} ${isMaxed ? 'shadow-[0_0_6px] shadow-current' : ''}`}
                     style={{ width: `${pct}%` }}
                   />
                 </div>
-                <span suppressHydrationWarning className={`text-[9px] font-semibold w-16 text-right truncate ${factorColor(f.value)}`}>{f.label}</span>
+                <span suppressHydrationWarning className={`text-[9px] font-semibold w-16 text-right truncate tz-instant ${factorColor(f.value)}`}>{f.label}</span>
               </div>
             );
           })}
         </div>
 
         {/* Summary line */}
-        <div suppressHydrationWarning className={`text-center text-[10px] font-bold rounded-lg py-1.5 border ${style.badge}`}>
+        <div suppressHydrationWarning className={`text-center text-[11px] font-black rounded-lg py-2 border-2 tz-instant ${
+          action === 'STRONG BUY' ? 'bg-emerald-500/25 text-emerald-200 border-emerald-400/60 shadow-lg shadow-emerald-500/20' :
+          action === 'STRONG SELL' ? 'bg-red-500/25 text-red-200 border-red-400/60 shadow-lg shadow-red-500/20' :
+          style.badge
+        }`}>
           {action} · {confidence}% Conf · Score {totalScore > 0 ? '+' : ''}{totalScore}
         </div>
 
         {/* Support / Resistance distance */}
         {(support > 0 || resistance > 0) && (
-          <div className="flex justify-between mt-1.5">
-            <span className="text-[9px] text-emerald-400/70">
-              Support {distToSupport.toFixed(2)}% below
+          <div className="flex justify-between mt-2 px-1">
+            <span className={`text-[10px] font-bold ${
+              nearSupport ? 'text-amber-400 tz-instant' : 'text-emerald-400/70'
+            }`}>
+              {nearSupport ? '⚠️ ' : ''}Support {distToSupport.toFixed(2)}% below
             </span>
-            <span className="text-[9px] text-red-400/70">
-              Resistance {distToResistance.toFixed(2)}% above
+            <span className={`text-[10px] font-bold ${
+              nearResistance ? 'text-amber-400 tz-instant' : 'text-red-400/70'
+            }`}>
+              Resistance {distToResistance.toFixed(2)}% above{nearResistance ? ' ⚠️' : ''}
             </span>
           </div>
         )}

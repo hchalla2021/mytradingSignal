@@ -136,39 +136,22 @@ h1, h2, h3, h4, h5, h6 {
   box-shadow: 0 0 20px rgba(239, 68, 68, 0.15), 0 0 40px rgba(239, 68, 68, 0.08);
 }
 
-/* ── BTST Signal Highlight Glow (>=50%) ─────────────────────────── */
-@keyframes btst-spark-buy {
-  0%, 100% { box-shadow: 0 0 6px rgba(16, 185, 129, 0.3), 0 0 12px rgba(16, 185, 129, 0.15); }
-  50% { box-shadow: 0 0 14px rgba(16, 185, 129, 0.55), 0 0 28px rgba(16, 185, 129, 0.25); }
-}
-@keyframes btst-spark-sell {
-  0%, 100% { box-shadow: 0 0 6px rgba(239, 68, 68, 0.3), 0 0 12px rgba(239, 68, 68, 0.15); }
-  50% { box-shadow: 0 0 14px rgba(239, 68, 68, 0.55), 0 0 28px rgba(239, 68, 68, 0.25); }
-}
-@keyframes btst-spark-strong-buy {
-  0%, 100% { box-shadow: 0 0 10px rgba(16, 185, 129, 0.5), 0 0 24px rgba(16, 185, 129, 0.25), 0 0 48px rgba(16, 185, 129, 0.1); }
-  50% { box-shadow: 0 0 20px rgba(16, 185, 129, 0.7), 0 0 40px rgba(16, 185, 129, 0.35), 0 0 60px rgba(16, 185, 129, 0.15); }
-}
-@keyframes btst-spark-strong-sell {
-  0%, 100% { box-shadow: 0 0 10px rgba(239, 68, 68, 0.5), 0 0 24px rgba(239, 68, 68, 0.25), 0 0 48px rgba(239, 68, 68, 0.1); }
-  50% { box-shadow: 0 0 20px rgba(239, 68, 68, 0.7), 0 0 40px rgba(239, 68, 68, 0.35), 0 0 60px rgba(239, 68, 68, 0.15); }
-}
-
+/* ── BTST Signal Highlight Glow (>=50%) — STEADY, no infinite loops ──── */
 .btst-highlight-buy {
-  animation: btst-spark-buy 2s ease-in-out infinite;
+  box-shadow: 0 0 10px rgba(16, 185, 129, 0.4), 0 0 20px rgba(16, 185, 129, 0.15);
   border-color: rgba(16, 185, 129, 0.7) !important;
 }
 .btst-highlight-sell {
-  animation: btst-spark-sell 2s ease-in-out infinite;
+  box-shadow: 0 0 10px rgba(239, 68, 68, 0.4), 0 0 20px rgba(239, 68, 68, 0.15);
   border-color: rgba(239, 68, 68, 0.7) !important;
 }
 .btst-highlight-strong-buy {
-  animation: btst-spark-strong-buy 1.5s ease-in-out infinite;
+  box-shadow: 0 0 14px rgba(16, 185, 129, 0.55), 0 0 30px rgba(16, 185, 129, 0.2);
   border-color: rgba(16, 185, 129, 0.9) !important;
   border-width: 2px !important;
 }
 .btst-highlight-strong-sell {
-  animation: btst-spark-strong-sell 1.5s ease-in-out infinite;
+  box-shadow: 0 0 14px rgba(239, 68, 68, 0.55), 0 0 30px rgba(239, 68, 68, 0.2);
   border-color: rgba(239, 68, 68, 0.9) !important;
   border-width: 2px !important;
 }
@@ -211,6 +194,450 @@ h1, h2, h3, h4, h5, h6 {
 ::-moz-selection {
   background: var(--accent-primary);
   color: white;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   TRADE ZONES — Ultra-Fast Signal Highlights
+   GPU-accelerated · <16ms paint · zero layout-shift
+   ═══════════════════════════════════════════════════════════════ */
+
+/* ── Trade Zone flash — fires ONLY when signal status changes ─────── */
+@keyframes tz-status-flash {
+  0%   { filter: brightness(1.6); }
+  100% { filter: brightness(1); }
+}
+.tz-status-changed {
+  animation: tz-status-flash 0.5s ease-out;
+  will-change: filter;
+}
+
+/* ── STRONG BUY — steady glow, no blink ─────────────────────────── */
+.tz-strong-buy {
+  box-shadow: 0 0 14px rgba(16, 185, 129, 0.5), 0 0 30px rgba(16, 185, 129, 0.18);
+  border-color: rgba(16, 185, 129, 0.85) !important;
+  border-width: 3px !important;
+  transform: translateZ(0);
+}
+
+/* ── BUY — steady glow, no blink ────────────────────────────────── */
+.tz-buy {
+  box-shadow: 0 0 8px rgba(34, 197, 94, 0.35), 0 0 18px rgba(34, 197, 94, 0.12);
+  border-color: rgba(34, 197, 94, 0.7) !important;
+  border-width: 2px !important;
+  transform: translateZ(0);
+}
+
+/* ── STRONG SELL — steady glow, no blink ────────────────────────── */
+.tz-strong-sell {
+  box-shadow: 0 0 14px rgba(239, 68, 68, 0.5), 0 0 30px rgba(239, 68, 68, 0.18);
+  border-color: rgba(239, 68, 68, 0.85) !important;
+  border-width: 3px !important;
+  transform: translateZ(0);
+}
+
+/* ── SELL — steady glow, no blink ───────────────────────────────── */
+.tz-sell {
+  box-shadow: 0 0 8px rgba(239, 68, 68, 0.35), 0 0 18px rgba(239, 68, 68, 0.12);
+  border-color: rgba(239, 68, 68, 0.7) !important;
+  border-width: 2px !important;
+  transform: translateZ(0);
+}
+
+/* Trend UP — steady text glow, no blink */
+.tz-trend-up-active {
+  text-shadow: 0 0 8px rgba(16, 185, 129, 0.7);
+  font-weight: 900 !important;
+}
+
+/* Trend DOWN — steady text glow, no blink */
+.tz-trend-down-active {
+  text-shadow: 0 0 8px rgba(239, 68, 68, 0.7);
+  font-weight: 900 !important;
+}
+
+/* One-shot trend flash — plays ONCE when trend direction changes */
+@keyframes tz-trend-changed {
+  0%   { text-shadow: 0 0 20px currentColor; transform: scale(1.08); }
+  100% { text-shadow: 0 0 8px currentColor; transform: scale(1); }
+}
+.tz-trend-changed {
+  animation: tz-trend-changed 0.5s ease-out;
+}
+
+/* Signal badge — steady styling, no blink */
+.tz-badge-strong-buy {
+  transform: translateZ(0);
+}
+.tz-badge-strong-sell {
+  transform: translateZ(0);
+}
+
+/* One-shot badge flash — plays ONCE when action signal changes */
+@keyframes tz-badge-changed {
+  0%   { transform: scale(1.06); filter: brightness(1.4); }
+  100% { transform: scale(1); filter: brightness(1); }
+}
+.tz-badge-changed {
+  animation: tz-badge-changed 0.6s ease-out;
+}
+
+/* Support/Resistance proximity — steady amber highlight, no blink */
+.tz-near-zone {
+  background-color: rgba(251, 191, 36, 0.12);
+  border-color: rgba(251, 191, 36, 0.6) !important;
+}
+
+/* Confidence bar instant transition */
+.tz-conf-bar {
+  transition: width 0.15s cubic-bezier(0.25, 0.46, 0.45, 0.94) !important;
+  will-change: width;
+}
+
+/* All trade-zone numeric values — zero-delay render */
+.tz-instant {
+  transition: color 0.1s ease-out, background-color 0.1s ease-out;
+  will-change: contents;
+  contain: layout style;
+}
+
+/* Section wrapper — steady glow based on signal, no blink */
+.tz-section-strong-buy {
+  border-color: rgba(16, 185, 129, 0.6);
+  box-shadow: 0 0 20px rgba(16, 185, 129, 0.12);
+  border-width: 3px !important;
+}
+.tz-section-buy {
+  border-color: rgba(16, 185, 129, 0.45);
+  box-shadow: 0 0 12px rgba(16, 185, 129, 0.08);
+}
+.tz-section-strong-sell {
+  border-color: rgba(239, 68, 68, 0.6);
+  box-shadow: 0 0 20px rgba(239, 68, 68, 0.12);
+  border-width: 3px !important;
+}
+.tz-section-sell {
+  border-color: rgba(239, 68, 68, 0.45);
+  box-shadow: 0 0 12px rgba(239, 68, 68, 0.08);
+}
+
+/* Aligned trends highlight box */
+.tz-aligned-box {
+  border-width: 2px !important;
+  position: relative;
+}
+.tz-aligned-box::after {
+  content: '';
+  position: absolute;
+  inset: -1px;
+  border-radius: inherit;
+  pointer-events: none;
+  opacity: 0.4;
+}
+.tz-aligned-bullish::after {
+  box-shadow: inset 0 0 12px rgba(16, 185, 129, 0.3);
+}
+.tz-aligned-bearish::after {
+  box-shadow: inset 0 0 12px rgba(239, 68, 68, 0.3);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   VOLUME PULSE — Ultra-fast GPU-accelerated animations
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* Card-level brightness flash on every data tick */
+@keyframes vp-tick-flash {
+  0%   { filter: brightness(1.35); }
+  100% { filter: brightness(1); }
+}
+.vp-tick {
+  animation: vp-tick-flash 0.15s ease-out;
+  will-change: filter;
+}
+
+/* All VP numeric values — zero-layout-shift, instant paint */
+.vp-val {
+  transition: color 0.08s ease-out, background-color 0.08s ease-out;
+  will-change: contents;
+  contain: layout style;
+}
+
+/* VP confidence/pressure bars — instant width transition */
+.vp-bar {
+  transition: width 0.12s cubic-bezier(0.25, 0.46, 0.45, 0.94) !important;
+  will-change: width;
+}
+
+/* STRONG BUY card glow — STEADY, no infinite loop */
+.vp-strong-buy {
+  box-shadow: 0 0 14px rgba(16, 185, 129, 0.55), 0 0 35px rgba(16, 185, 129, 0.2);
+  border-color: rgba(16, 185, 129, 0.9) !important;
+  border-width: 3px !important;
+  transform: translateZ(0);
+}
+
+/* BUY card glow — STEADY */
+.vp-buy {
+  box-shadow: 0 0 10px rgba(34, 197, 94, 0.4), 0 0 22px rgba(34, 197, 94, 0.15);
+  border-color: rgba(34, 197, 94, 0.75) !important;
+  border-width: 2px !important;
+  transform: translateZ(0);
+}
+
+/* STRONG SELL card glow — STEADY */
+.vp-strong-sell {
+  box-shadow: 0 0 14px rgba(239, 68, 68, 0.55), 0 0 35px rgba(239, 68, 68, 0.2);
+  border-color: rgba(239, 68, 68, 0.9) !important;
+  border-width: 3px !important;
+  transform: translateZ(0);
+}
+
+/* SELL card glow — STEADY */
+.vp-sell {
+  box-shadow: 0 0 10px rgba(239, 68, 68, 0.4), 0 0 22px rgba(239, 68, 68, 0.15);
+  border-color: rgba(239, 68, 68, 0.75) !important;
+  border-width: 2px !important;
+  transform: translateZ(0);
+}
+
+/* Signal badge — STEADY styling for STRONG signals */
+.vp-badge-strong {
+  transform: translateZ(0);
+}
+
+/* Volume bar dominance — STEADY brightness for winning side */
+.vp-vol-winner {
+  filter: brightness(1.15);
+  transform: translateZ(0);
+}
+
+/* Trend badge — STEADY text-shadow, no blink */
+.vp-trend-up {
+  text-shadow: 0 0 8px rgba(16, 185, 129, 0.7);
+  font-weight: 900 !important;
+}
+.vp-trend-down {
+  text-shadow: 0 0 8px rgba(239, 68, 68, 0.7);
+  font-weight: 900 !important;
+}
+
+/* Prediction direction — STEADY glow, no infinite loop */
+.vp-pred-up {
+  box-shadow: inset 0 0 10px rgba(20, 184, 166, 0.25), 0 0 8px rgba(20, 184, 166, 0.15);
+  border-width: 2px !important;
+}
+.vp-pred-down {
+  box-shadow: inset 0 0 10px rgba(239, 68, 68, 0.25), 0 0 8px rgba(239, 68, 68, 0.15);
+  border-width: 2px !important;
+}
+
+/* Early signal — STEADY bold, no blink */
+.vp-early-signal {
+  font-weight: 900 !important;
+  text-shadow: 0 0 6px currentColor;
+}
+
+/* Section wrapper glow — STEADY, no infinite loop */
+.vp-section-strong-buy {
+  border-color: rgba(16, 185, 129, 0.6) !important;
+  box-shadow: 0 0 20px rgba(16, 185, 129, 0.12);
+  border-width: 3px !important;
+}
+.vp-section-buy {
+  border-color: rgba(16, 185, 129, 0.45) !important;
+  box-shadow: 0 0 12px rgba(16, 185, 129, 0.08);
+}
+.vp-section-strong-sell {
+  border-color: rgba(239, 68, 68, 0.6) !important;
+  box-shadow: 0 0 20px rgba(239, 68, 68, 0.12);
+  border-width: 3px !important;
+}
+.vp-section-sell {
+  border-color: rgba(239, 68, 68, 0.45) !important;
+  box-shadow: 0 0 12px rgba(239, 68, 68, 0.08);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   ICT BIAS — ULTRA-FAST RENDERING CLASSES (ict-*)
+   GPU-accelerated, status-change-only highlights, zero layout shift
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* Instant value updates — zero layout shift */
+.ict-val {
+  contain: layout style;
+  transition: color 80ms linear;
+  will-change: color;
+  transform: translateZ(0);
+}
+
+/* Ultra-fast bar transitions — 100ms instead of 500-700ms */
+.ict-bar {
+  transition: width 100ms cubic-bezier(0.22, 1, 0.36, 1);
+  will-change: width;
+  transform: translateZ(0);
+}
+
+/* One-shot status changed flash — plays once (0.5s) then stops */
+@keyframes ict-status-flash {
+  0%   { filter: brightness(1.6); }
+  100% { filter: brightness(1); }
+}
+.ict-status-changed {
+  animation: ict-status-flash 0.5s ease-out 1;
+  transform: translateZ(0);
+}
+
+/* One-shot direction changed flash — plays once (0.5s) */
+@keyframes ict-dir-flash {
+  0%   { filter: brightness(1.5); text-shadow: 0 0 12px currentColor; }
+  100% { filter: brightness(1); text-shadow: none; }
+}
+.ict-dir-changed {
+  animation: ict-dir-flash 0.5s ease-out 1;
+  transform: translateZ(0);
+}
+
+/* One-shot prediction changed flash — plays once (0.5s) */
+@keyframes ict-pred-flash {
+  0%   { transform: scale(1.06); filter: brightness(1.4); }
+  100% { transform: scale(1); filter: brightness(1); }
+}
+.ict-pred-changed {
+  animation: ict-pred-flash 0.5s ease-out 1;
+  transform: translateZ(0);
+}
+
+/* Static glow for BULLISH card — steady, no animation loop */
+.ict-bullish {
+  box-shadow: 0 0 12px rgba(16, 185, 129, 0.25), 0 0 24px rgba(16, 185, 129, 0.1);
+  border-color: rgba(16, 185, 129, 0.6) !important;
+  border-width: 2px !important;
+}
+
+/* Static glow for BEARISH card — steady, no animation loop */
+.ict-bearish {
+  box-shadow: 0 0 12px rgba(239, 68, 68, 0.25), 0 0 24px rgba(239, 68, 68, 0.1);
+  border-color: rgba(239, 68, 68, 0.6) !important;
+  border-width: 2px !important;
+}
+
+/* High confidence ring highlight (>=75%) */
+.ict-high-conf {
+  ring-width: 1px;
+  --tw-ring-color: currentColor;
+  box-shadow: 0 0 8px currentColor;
+}
+
+/* Grade A+ / A highlight — steady amber border */
+.ict-grade-top {
+  border-color: rgba(245, 158, 11, 0.6) !important;
+  box-shadow: 0 0 6px rgba(245, 158, 11, 0.2);
+}
+
+/* Strong signal factor bar highlight */
+.ict-factor-strong {
+  font-weight: 800 !important;
+  text-shadow: 0 0 4px currentColor;
+}
+
+/* Static section wrapper glow based on bias */
+.ict-section-bullish {
+  border-color: rgba(16, 185, 129, 0.5) !important;
+  box-shadow: 0 0 20px rgba(16, 185, 129, 0.1);
+}
+.ict-section-bearish {
+  border-color: rgba(239, 68, 68, 0.5) !important;
+  box-shadow: 0 0 20px rgba(239, 68, 68, 0.1);
+}
+
+/* ── Institutional Market Compass  — ultra-fast rendering ─────────────── */
+
+/* Instant value updates — zero layout shift, 80ms color transition */
+.imc-val {
+  contain: layout style;
+  will-change: color;
+  transition: color 80ms ease-out;
+}
+
+/* Fast bar width — 100ms cubic-bezier for all progress bars */
+.imc-bar {
+  transition: width 100ms cubic-bezier(0.22, 1, 0.36, 1);
+  will-change: width;
+}
+
+/* One-shot card flash when direction changes (BULLISH↔BEARISH) — plays once */
+@keyframes imc-direction-flash {
+  0%   { filter: brightness(1.4); }
+  100% { filter: brightness(1); }
+}
+.imc-direction-changed {
+  animation: imc-direction-flash 0.5s ease-out 1 forwards;
+}
+
+/* One-shot direction badge flash */
+@keyframes imc-badge-flash {
+  0%   { transform: scale(1.15); filter: brightness(1.3); }
+  100% { transform: scale(1); filter: brightness(1); }
+}
+.imc-badge-changed {
+  animation: imc-badge-flash 0.5s ease-out 1 forwards;
+}
+
+/* One-shot prediction badge pop */
+@keyframes imc-pred-flash {
+  0%   { transform: scale(1.12); filter: brightness(1.25); }
+  100% { transform: scale(1); filter: brightness(1); }
+}
+.imc-pred-changed {
+  animation: imc-pred-flash 0.45s ease-out 1 forwards;
+}
+
+/* Steady glow for BULLISH card — NO infinite loop */
+.imc-bullish {
+  border-color: rgba(16, 185, 129, 0.5);
+  box-shadow: 0 0 12px rgba(16, 185, 129, 0.12);
+}
+
+/* Steady glow for BEARISH card — NO infinite loop */
+.imc-bearish {
+  border-color: rgba(239, 68, 68, 0.5);
+  box-shadow: 0 0 12px rgba(239, 68, 68, 0.12);
+}
+
+/* High confidence ring (>=75%) */
+.imc-high-conf {
+  box-shadow: 0 0 8px rgba(16, 185, 129, 0.2);
+}
+
+/* Score bar fast transitions */
+.imc-score-bar {
+  transition: width 100ms cubic-bezier(0.22, 1, 0.36, 1);
+  will-change: width;
+}
+
+/* Factor row with strong signal (score > 0.5) */
+.imc-factor-strong {
+  font-weight: 700;
+  text-shadow: 0 0 6px currentColor;
+}
+
+/* Futures leading badge steady glow */
+.imc-fut-leading {
+  box-shadow: 0 0 8px rgba(6, 182, 212, 0.2);
+}
+
+/* Premium near zone highlight */
+.imc-prem-extreme {
+  box-shadow: inset 0 0 6px rgba(245, 158, 11, 0.15);
+}
+
+/* Section-level steady glow based on dominant signal */
+.imc-section-bullish {
+  border-color: rgba(16, 185, 129, 0.5) !important;
+  box-shadow: 0 0 20px rgba(16, 185, 129, 0.1);
+}
+.imc-section-bearish {
+  border-color: rgba(239, 68, 68, 0.5) !important;
+  box-shadow: 0 0 20px rgba(239, 68, 68, 0.1);
 }
 
 /* Mobile touch optimization */

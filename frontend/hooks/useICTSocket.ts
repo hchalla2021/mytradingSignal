@@ -174,7 +174,7 @@ export function useICTSocket() {
               if (json?.success && json.data) mergeData(json.data);
             })
             .catch(() => {});
-        }, 4000);
+        }, 2500);
       }
     };
 

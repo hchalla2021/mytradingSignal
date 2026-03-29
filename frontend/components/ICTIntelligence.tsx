@@ -16,7 +16,7 @@
  * Fully isolated — own WebSocket, own hook, zero overlap with Liquidity section.
  */
 
-import React, { memo } from 'react';
+import React, { memo, useRef, useEffect } from 'react';
 import {
   useICTSocket,
   type ICTIndex,
@@ -123,9 +123,9 @@ const ScoreBar = memo(({ score, positiveColor = 'bg-emerald-500', negativeColor 
     <div className="relative flex-1 flex items-center h-1.5 rounded-full bg-slate-700/60 overflow-visible mx-1">
       <div className="absolute left-1/2 top-0 w-px h-full bg-slate-500/60 z-10" />
       {isPos ? (
-        <div className={`absolute left-1/2 h-full rounded-r-full ${color} transition-all duration-500`} style={{ width }} />
+        <div className={`absolute left-1/2 h-full rounded-r-full ${color} ict-bar`} style={{ width }} />
       ) : (
-        <div className={`absolute right-1/2 h-full rounded-l-full ${color} transition-all duration-500`} style={{ width }} />
+        <div className={`absolute right-1/2 h-full rounded-l-full ${color} ict-bar`} style={{ width }} />
       )}
     </div>
   );
@@ -159,7 +159,7 @@ const SignalRow = memo(({ factorKey, factor }: { factorKey: string; factor: ICTS
         <span className="ml-1 text-slate-600">{pct}%</span>
       </span>
       <ScoreBar score={factor.score} />
-      <span className={`w-12 text-right text-[10px] font-semibold leading-none ${arrowColor}`}>
+      <span className={`w-12 text-right text-[10px] font-semibold leading-none ict-val ${arrowColor} ${Math.abs(factor.score) >= 0.7 ? 'ict-factor-strong' : ''}`}>
         {factor.score >= 0 ? '+' : ''}{(factor.score * 100).toFixed(0)}
         <span className="text-slate-600 font-normal">/100</span>
       </span>
@@ -173,7 +173,7 @@ SignalRow.displayName = 'SignalRow';
 const ConfidenceBar = memo(({ confidence, barColor }: { confidence: number; barColor: string }) => (
   <div className="w-full h-1.5 rounded-full bg-slate-700/50 overflow-hidden mt-1">
     <div
-      className={`h-full rounded-full ${barColor} transition-all duration-700`}
+      className={`h-full rounded-full ${barColor} ict-bar`}
       style={{ width: `${confidence}%` }}
     />
   </div>
@@ -189,6 +189,44 @@ function fmtPrice(n: number): string {
 // ── Index card ────────────────────────────────────────────────────────────────
 
 const IndexCard = memo(({ data, index }: { data: ICTIndex | null; index: string }) => {
+  const cardRef = useRef<HTMLDivElement>(null);
+  const prevDirection = useRef<ICTDirection | null>(null);
+  const prevPrediction = useRef<ICTPrediction | null>(null);
+  const dirBadgeRef = useRef<HTMLDivElement>(null);
+  const predBadgeRef = useRef<HTMLDivElement>(null);
+
+  // Flash only when status actually changes — no lamp blinking
+  useEffect(() => {
+    if (!data) return;
+    // Card-level flash only when direction changes
+    if (prevDirection.current !== null && prevDirection.current !== data.direction) {
+      const card = cardRef.current;
+      if (card) {
+        card.classList.remove('ict-status-changed');
+        void card.offsetWidth;
+        card.classList.add('ict-status-changed');
+      }
+      const badge = dirBadgeRef.current;
+      if (badge) {
+        badge.classList.remove('ict-dir-changed');
+        void badge.offsetWidth;
+        badge.classList.add('ict-dir-changed');
+      }
+    }
+    prevDirection.current = data.direction;
+
+    // Prediction flash only when prediction changes
+    if (prevPrediction.current !== null && prevPrediction.current !== data.prediction5m) {
+      const pred = predBadgeRef.current;
+      if (pred) {
+        pred.classList.remove('ict-pred-changed');
+        void pred.offsetWidth;
+        pred.classList.add('ict-pred-changed');
+      }
+    }
+    prevPrediction.current = data.prediction5m;
+  }, [data?.direction, data?.prediction5m, data]);
+
   if (!data) {
     return (
       <div className="flex-1 min-w-[280px] rounded-xl bg-[#1a2332] border border-slate-700/40 overflow-hidden">
@@ -211,13 +249,16 @@ const IndexCard = memo(({ data, index }: { data: ICTIndex | null; index: string 
     'liquidity_sweeps', 'displacement', 'smart_money_div',
   ];
 
+  const dirGlowClass = data.direction === 'BULLISH' ? 'ict-bullish' :
+                       data.direction === 'BEARISH' ? 'ict-bearish' : '';
+
   return (
-    <div className={`flex-1 min-w-[280px] rounded-xl bg-[#1a2332] border overflow-hidden
-                     transition-all duration-300 ring-1 ${pal.ring} border-slate-700/40
-                     shadow-lg ${pal.glow}`}>
+    <div ref={cardRef} className={`flex-1 min-w-[280px] rounded-xl bg-[#1a2332] border overflow-hidden
+                     ring-1 ${pal.ring} border-slate-700/40
+                     shadow-lg ${pal.glow} ${dirGlowClass}`}>
 
       {/* ── ICT Setup banner ──────────────────────────────────────────── */}
-      <div className="px-3 py-2 border-b border-slate-700/30 bg-gradient-to-r from-slate-800/60 to-slate-900/40">
+      <div className={`px-3 py-2 border-b border-slate-700/30 bg-gradient-to-r from-slate-800/60 to-slate-900/40 ${data.ictSetup.grade === 'A+' || data.ictSetup.grade === 'A' ? 'ict-grade-top' : ''}`}>
         <SetupBadge setup={data.ictSetup} />
       </div>
 
@@ -232,20 +273,20 @@ const IndexCard = memo(({ data, index }: { data: ICTIndex | null; index: string 
           }`}>
             <span className="text-sm font-black text-white tracking-wide">{data.symbol}</span>
             <div className="flex items-center gap-1.5 mt-0.5">
-              <span className="text-[11px] font-mono text-slate-300">
+              <span className="text-[11px] font-mono text-slate-300 ict-val">
                 {fmtPrice(data.metrics.price)}
               </span>
-              <span className={`text-[10px] font-semibold ${changePctColor}`}>
+              <span className={`text-[10px] font-semibold ict-val ${changePctColor}`}>
                 {data.metrics.changePct >= 0 ? '+' : ''}{data.metrics.changePct.toFixed(2)}%
               </span>
             </div>
           </div>
           {/* Direction + confidence */}
-          <div className={`rounded-lg border px-2.5 py-1.5 text-center ${pal.badge}`}>
-            <div className="text-[10px] font-black tracking-widest leading-none">
+          <div ref={dirBadgeRef} className={`rounded-lg border px-2.5 py-1.5 text-center ${pal.badge} ${data.confidence >= 75 ? 'ring-1 ring-current' : ''}`}>
+            <div className={`text-[10px] font-black tracking-widest leading-none ${data.direction !== 'NEUTRAL' ? 'text-base' : ''}`}>
               {data.direction === 'BULLISH' ? '▲ BUY' : data.direction === 'BEARISH' ? '▼ SELL' : '● WAIT'}
             </div>
-            <div className={`text-[14px] font-black leading-none mt-0.5 ${pal.text}`}>
+            <div className={`text-[14px] font-black leading-none mt-0.5 ict-val ${pal.text}`}>
               {data.confidence}%
             </div>
             <div className="text-[8px] font-normal text-slate-500 leading-none mt-0.5 tracking-wide">
@@ -287,7 +328,9 @@ const IndexCard = memo(({ data, index }: { data: ICTIndex | null; index: string 
         </div>
 
         {/* ── 5-Min ICT Prediction ─────────────────────────────────── */}
-        <div className="rounded-lg bg-slate-800/60 border border-slate-700/30 px-3 py-2">
+        <div ref={predBadgeRef} className={`rounded-lg bg-slate-800/60 border border-slate-700/30 px-3 py-2 ${
+          data.prediction5m === 'STRONG_BUY' || data.prediction5m === 'STRONG_SELL' ? 'ring-1 ring-current' : ''
+        }`}>
           <div className="flex items-center justify-between">
             <div>
               <div className="text-[11px] text-slate-400 uppercase tracking-widest font-bold mb-2">
@@ -296,13 +339,13 @@ const IndexCard = memo(({ data, index }: { data: ICTIndex | null; index: string 
               <Pred5mBadge pred={data.prediction5m} />
             </div>
             <div className="flex flex-col items-end gap-1">
-              <span className="text-[14px] font-black text-white">
+              <span className="text-[14px] font-black text-white ict-val">
                 {data.pred5mConf}%
                 <span className="text-[10px] font-semibold text-slate-400 ml-1">CONF</span>
               </span>
               <div className="w-20 h-2 rounded-full bg-slate-700/50 overflow-hidden">
                 <div
-                  className={`h-full rounded-full transition-all duration-300 ${
+                  className={`h-full rounded-full ict-bar ${
                     data.prediction5m === 'STRONG_BUY'  ? 'bg-emerald-400' :
                     data.prediction5m === 'BUY'         ? 'bg-green-400' :
                     data.prediction5m === 'STRONG_SELL' ? 'bg-red-400' :
@@ -357,19 +400,19 @@ const IndexCard = memo(({ data, index }: { data: ICTIndex | null; index: string 
                   <div className="flex items-center h-7 rounded-md overflow-hidden bg-slate-950/50 border border-slate-700/30">
                     {/* Buy probability */}
                     <div
-                      className="h-full bg-gradient-to-r from-emerald-600 to-emerald-500 transition-all duration-300 flex items-center justify-center"
+                      className="h-full bg-gradient-to-r from-emerald-600 to-emerald-500 ict-bar flex items-center justify-center"
                       style={{ width: `${buyPct}%` }}
                     >
-                      <span className="text-[9px] font-bold text-white px-2 truncate whitespace-nowrap">
+                      <span className="text-[9px] font-bold text-white px-2 truncate whitespace-nowrap ict-val">
                         {buyPct}% BUY
                       </span>
                     </div>
                     {/* Sell probability */}
                     <div
-                      className="h-full bg-gradient-to-l from-red-600 to-red-500 transition-all duration-300 flex items-center justify-center"
+                      className="h-full bg-gradient-to-l from-red-600 to-red-500 ict-bar flex items-center justify-center"
                       style={{ width: `${sellPct}%` }}
                     >
-                      <span className="text-[9px] font-bold text-white px-2 truncate whitespace-nowrap">
+                      <span className="text-[9px] font-bold text-white px-2 truncate whitespace-nowrap ict-val">
                         {sellPct}% SELL
                       </span>
                     </div>
@@ -423,7 +466,7 @@ IndexCard.displayName = 'ICTIndexCard';
 const MetricPill = memo(({ label, value }: { label: string; value: string }) => (
   <div className="rounded-md bg-slate-800/50 border border-slate-700/30 px-2 py-1 text-center">
     <div className="text-[8px] text-slate-600 uppercase tracking-wider">{label}</div>
-    <div className="text-[10px] text-slate-300 font-mono font-semibold">{value}</div>
+    <div className="text-[10px] text-slate-300 font-mono font-semibold ict-val">{value}</div>
   </div>
 ));
 MetricPill.displayName = 'ICTMetricPill';
@@ -489,26 +532,30 @@ const SummaryStrip = memo(({ data }: { data: { NIFTY: ICTIndex | null; BANKNIFTY
   const avgConf = Math.round(indices.reduce((a, b) => a + b.confidence, 0) / indices.length);
   const avgGrade = indices.map(x => x.ictSetup.grade).join(' / ');
 
+  const summaryGlow = bulls > bears ? 'border-emerald-500/30 bg-emerald-950/40' :
+                      bears > bulls ? 'border-red-500/30 bg-red-950/40' :
+                      'border-emerald-500/20 bg-emerald-950/40';
+
   return (
-    <div className="mb-3 rounded-xl bg-emerald-950/40 border border-emerald-500/20 px-4 py-3
-                    flex flex-wrap items-center gap-4 shadow-sm shadow-emerald-500/5">
+    <div className={`mb-3 rounded-xl ${summaryGlow} px-4 py-3
+                    flex flex-wrap items-center gap-4 shadow-sm shadow-emerald-500/5`}>
       <div className="flex items-center gap-3">
         <span className="text-[10px] text-emerald-400/70 uppercase tracking-wider font-semibold">ICT Bias</span>
         <div className="flex items-center gap-2">
-          <span className="text-sm font-black text-emerald-400">{buyerPct}% BUY</span>
+          <span className="text-sm font-black text-emerald-400 ict-val">{buyerPct}% BUY</span>
           <span className="text-slate-400">/</span>
-          <span className="text-sm font-black text-red-400">{sellerPct}% SELL</span>
+          <span className="text-sm font-black text-red-400 ict-val">{sellerPct}% SELL</span>
         </div>
       </div>
       <div className="w-px h-4 bg-emerald-500/20" />
       <div className="flex items-center gap-2">
         <span className="text-[10px] text-emerald-400/70 uppercase tracking-wider font-semibold">Confidence</span>
-        <span className="text-sm font-bold text-emerald-100">{avgConf}%</span>
+        <span className="text-sm font-bold text-emerald-100 ict-val">{avgConf}%</span>
       </div>
       <div className="w-px h-4 bg-emerald-500/20" />
       <div className="flex items-center gap-2">
         <span className="text-[10px] text-emerald-400/70 uppercase tracking-wider font-semibold">Grades</span>
-        <span className="text-sm font-bold text-amber-400">{avgGrade}</span>
+        <span className="text-sm font-bold text-amber-400 ict-val">{avgGrade}</span>
       </div>
       <div className="w-px h-4 bg-emerald-500/20" />
       <div className="flex items-center gap-4 ml-auto">
@@ -537,10 +584,17 @@ SummaryStrip.displayName = 'ICTSummaryStrip';
 function ICTIntelligence() {
   const { ictData, isConnected, lastUpdate } = useICTSocket();
 
+  // Determine dominant ICT bias for section-level glow
+  const indices = (['NIFTY', 'BANKNIFTY', 'SENSEX'] as const).map(k => ictData[k]).filter(Boolean) as ICTIndex[];
+  const bulls = indices.filter(x => x.direction === 'BULLISH').length;
+  const bears = indices.filter(x => x.direction === 'BEARISH').length;
+  const sectionGlow = bulls > bears ? 'ict-section-bullish' :
+                      bears > bulls ? 'ict-section-bearish' : '';
+
   return (
-    <div className="mt-6 rounded-2xl border-2 border-amber-500/30 p-2 sm:p-3
+    <div className={`mt-6 rounded-2xl border-2 border-amber-500/30 p-2 sm:p-3
                     bg-gradient-to-br from-amber-950/10 via-dark-card/50 to-dark-elevated/40
-                    backdrop-blur-sm shadow-xl shadow-amber-500/10">
+                    backdrop-blur-sm shadow-xl shadow-amber-500/10 ${sectionGlow}`}>
       <HeaderBar isConnected={isConnected} lastUpdate={lastUpdate} />
       <SummaryStrip data={ictData} />
       <div className="flex flex-col lg:flex-row gap-3">

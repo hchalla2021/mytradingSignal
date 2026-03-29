@@ -15,7 +15,7 @@
  *   • Futures Leading badge when smart-money leads spot
  */
 
-import React, { memo, useState } from 'react';
+import React, { memo, useState, useRef, useEffect } from 'react';
 import {
   useCompassSocket,
   CompassIndex,
@@ -127,12 +127,12 @@ const ScoreBar = memo(({ score }: { score: number }) => {
       <div className="absolute left-1/2 top-0 w-px h-full bg-slate-500/60 z-10" />
       {isPos ? (
         <div
-          className={`absolute left-1/2 h-full rounded-r-full ${barCls} transition-all duration-500`}
+          className={`absolute left-1/2 h-full rounded-r-full ${barCls} imc-score-bar`}
           style={{ width }}
         />
       ) : (
         <div
-          className={`absolute right-1/2 h-full rounded-l-full ${barCls} transition-all duration-500`}
+          className={`absolute right-1/2 h-full rounded-l-full ${barCls} imc-score-bar`}
           style={{ width }}
         />
       )}
@@ -160,6 +160,7 @@ interface SignalRowProps {
 const SignalRow = memo(({ factorKey, factor }: SignalRowProps) => {
   const sp = signalPalette(factor.signal);
   const pct = Math.round(factor.weight * 100);
+  const isStrong = Math.abs(factor.score) > 0.5;
 
   return (
     <div className="flex items-center gap-2 py-1.5 border-t border-slate-700/30 first:border-0">
@@ -169,7 +170,7 @@ const SignalRow = memo(({ factorKey, factor }: SignalRowProps) => {
       </span>
       {/* Name + weight */}
       <div className="w-28 shrink-0">
-        <span className="text-[11px] font-semibold text-slate-300">
+        <span className={`text-[11px] font-semibold text-slate-300 ${isStrong ? 'imc-factor-strong' : ''}`}>
           {FACTOR_NAMES[factorKey] ?? factorKey}
         </span>
         <span className="ml-1 text-[9px] text-slate-600">{pct}%</span>
@@ -177,7 +178,7 @@ const SignalRow = memo(({ factorKey, factor }: SignalRowProps) => {
       {/* Score bar (centred, -1 left ← 0 → right +1) */}
       <ScoreBar score={factor.score} />
       {/* Score value */}
-      <span className={`w-10 text-right text-[10px] tabular-nums font-mono shrink-0 ${sp.color}`}>
+      <span className={`w-10 text-right text-[10px] tabular-nums font-mono shrink-0 imc-val ${sp.color}`}>
         {factor.score >= 0 ? '+' : ''}{factor.score.toFixed(2)}
       </span>
       {/* Label */}
@@ -220,11 +221,11 @@ const IndicatorsStrip = memo(({ data }: IndicatorsStripProps) => {
       {/* VWAP */}
       <div>
         <p className="text-[9px] uppercase tracking-wider text-slate-500 font-semibold">VWAP</p>
-        <p className="text-xs font-bold text-slate-200 tabular-nums">
+        <p className="text-xs font-bold text-slate-200 tabular-nums imc-val">
           {spot.vwap ? fmt(spot.vwap) : '—'}
         </p>
         {vwapDev !== null && (
-          <p className={`text-[10px] tabular-nums font-semibold ${pctColor(vwapDev)}`}>
+          <p className={`text-[10px] tabular-nums font-semibold imc-val ${pctColor(vwapDev)}`}>
             {fmtPct(vwapDev)}
           </p>
         )}
@@ -232,7 +233,7 @@ const IndicatorsStrip = memo(({ data }: IndicatorsStripProps) => {
       {/* RSI */}
       <div>
         <p className="text-[9px] uppercase tracking-wider text-slate-500 font-semibold">RSI 14</p>
-        <p className={`text-xs font-bold tabular-nums ${
+        <p className={`text-xs font-bold tabular-nums imc-val ${
           spot.rsi == null ? 'text-slate-600'
           : spot.rsi >= 60 ? 'text-emerald-400'
           : spot.rsi <= 40 ? 'text-red-400'
@@ -286,9 +287,9 @@ const FuturesTable = memo(({ data }: FuturesTableProps) => {
           {/* Spot row */}
           <tr className="bg-slate-900/30">
             <td className="py-1.5 px-2 font-semibold text-slate-400">Spot</td>
-            <td className="py-1.5 px-2 text-right tabular-nums text-slate-200">{fmt(spot.price)}</td>
+            <td className="py-1.5 px-2 text-right tabular-nums text-slate-200 imc-val">{fmt(spot.price)}</td>
             <td className="py-1.5 px-2 text-right text-slate-600">—</td>
-            <td className={`py-1.5 px-2 text-right tabular-nums ${pctColor(spot.changePct)}`}>
+            <td className={`py-1.5 px-2 text-right tabular-nums imc-val ${pctColor(spot.changePct)}`}>
               {fmtPct(spot.changePct)}
             </td>
           </tr>
@@ -301,11 +302,11 @@ const FuturesTable = memo(({ data }: FuturesTableProps) => {
                     {slot.name.replace(/^(BANKNIFTY|NIFTY|SENSEX)/, '').replace('FUT', '')}
                   </span>
                 </td>
-                <td className="py-1.5 px-2 text-right tabular-nums text-slate-200">{fmt(slot.price)}</td>
-                <td className={`py-1.5 px-2 text-right tabular-nums font-semibold ${pctColor(slot.premiumPct)}`}>
+                <td className="py-1.5 px-2 text-right tabular-nums text-slate-200 imc-val">{fmt(slot.price)}</td>
+                <td className={`py-1.5 px-2 text-right tabular-nums font-semibold imc-val ${pctColor(slot.premiumPct)}`}>
                   {slot.premiumPct >= 0 ? '+' : ''}{slot.premiumPct.toFixed(3)}%
                 </td>
-                <td className={`py-1.5 px-2 text-right tabular-nums ${pctColor(slot.changePct)}`}>
+                <td className={`py-1.5 px-2 text-right tabular-nums imc-val ${pctColor(slot.changePct)}`}>
                   {fmtPct(slot.changePct)}
                 </td>
               </tr>
@@ -324,7 +325,7 @@ const FuturesTable = memo(({ data }: FuturesTableProps) => {
                       bg-slate-900/50 border-t border-slate-700/40 gap-2">
         <div className="flex items-center gap-1.5">
           <span className="text-[9px] text-slate-600 uppercase tracking-wider">Fair Value</span>
-          <span className="text-[10px] font-semibold text-slate-400">
+          <span className="text-[10px] font-semibold text-slate-400 imc-val">
             +{data.futures.fairValuePct.toFixed(3)}%
           </span>
           <span className="text-[9px] text-slate-700">({data.futures.daysToExpiry}d to exp)</span>
@@ -332,7 +333,7 @@ const FuturesTable = memo(({ data }: FuturesTableProps) => {
         {data.futures.futuresLeading && (
           <span className="flex items-center gap-1 px-1.5 py-0.5 rounded-md
                            bg-cyan-500/15 border border-cyan-500/30 text-[9px]
-                           font-bold text-cyan-400 uppercase tracking-wide">
+                           font-bold text-cyan-400 uppercase tracking-wide imc-fut-leading">
             ⚡ FUT Leading
           </span>
         )}
@@ -357,13 +358,43 @@ const IndexCompassCard = memo(({ data }: IndexCardProps) => {
   const [showBreakdown, setShowBreakdown] = useState(true);
   const pal = getPalette(data.direction);
 
+  // ── Change-detection refs ──────────────────────────────────────────
+  const cardRef = useRef<HTMLDivElement>(null);
+  const dirBadgeRef = useRef<HTMLSpanElement>(null);
+  const predBadgeRef = useRef<HTMLDivElement>(null);
+  const prevDirection = useRef<CompassDirection>(data.direction);
+  const prevPrediction = useRef<Prediction5m>(data.spot.prediction5m);
+
+  useEffect(() => {
+    // Flash card + badge ONLY when direction actually changes
+    if (data.direction !== prevDirection.current) {
+      cardRef.current?.classList.remove('imc-direction-changed');
+      dirBadgeRef.current?.classList.remove('imc-badge-changed');
+      void cardRef.current?.offsetWidth; // force reflow
+      cardRef.current?.classList.add('imc-direction-changed');
+      dirBadgeRef.current?.classList.add('imc-badge-changed');
+      prevDirection.current = data.direction;
+    }
+    // Flash prediction badge ONLY when prediction changes
+    if (data.spot.prediction5m !== prevPrediction.current) {
+      predBadgeRef.current?.classList.remove('imc-pred-changed');
+      void predBadgeRef.current?.offsetWidth;
+      predBadgeRef.current?.classList.add('imc-pred-changed');
+      prevPrediction.current = data.spot.prediction5m;
+    }
+  }, [data.direction, data.spot.prediction5m]);
+
+  // Steady glow class based on current direction (no blinking)
+  const glowCls = data.direction === 'BULLISH' ? 'imc-bullish'
+    : data.direction === 'BEARISH' ? 'imc-bearish' : '';
+
   return (
-    <div className={`
+    <div ref={cardRef} className={`
       relative rounded-2xl border border-slate-700/60
       bg-gradient-to-b ${pal.bg} to-slate-800/80
       ring-1 ${pal.ring} shadow-lg ${pal.glow}
       backdrop-blur-sm flex flex-col gap-3 p-4
-      transition-all duration-300
+      ${glowCls}
     `}>
 
       {/* ── Header ─────────────────────────────────────────────────────── */}
@@ -398,8 +429,8 @@ const IndexCompassCard = memo(({ data }: IndexCardProps) => {
             )}
           </div>
           <div className="mt-0.5 flex items-baseline gap-2">
-            <span className="text-2xl font-bold tabular-nums text-white">{fmt(data.spot.price)}</span>
-            <span className={`text-sm font-semibold tabular-nums ${pctColor(data.spot.changePct)}`}>
+            <span className="text-2xl font-bold tabular-nums text-white imc-val">{fmt(data.spot.price)}</span>
+            <span className={`text-sm font-semibold tabular-nums imc-val ${pctColor(data.spot.changePct)}`}>
               {fmtPct(data.spot.changePct)}
             </span>
           </div>
@@ -410,14 +441,14 @@ const IndexCompassCard = memo(({ data }: IndexCardProps) => {
 
         {/* Direction badge */}
         <div className="flex flex-col items-end gap-1.5 shrink-0">
-          <span className={`inline-flex items-center gap-1.5 rounded-xl border px-3 py-1.5
+          <span ref={dirBadgeRef} className={`inline-flex items-center gap-1.5 rounded-xl border px-3 py-1.5
                             text-sm font-bold tracking-wide ${pal.badge}`}>
             <span className="text-base leading-none">{dirArrow(data.direction)}</span>
             {data.direction}
           </span>
           <div className="text-right">
             <span className="text-[10px] text-slate-400">Confidence</span>
-            <span className={`ml-1.5 text-sm font-bold tabular-nums ${pal.text}`}>
+            <span className={`ml-1.5 text-sm font-bold tabular-nums imc-val ${pal.text}`}>
               {data.confidence}%
             </span>
           </div>
@@ -425,15 +456,15 @@ const IndexCompassCard = memo(({ data }: IndexCardProps) => {
       </div>
 
       {/* ── Confidence bar ───────────────────────────────────────────────── */}
-      <div className="h-1.5 rounded-full bg-slate-700/60 overflow-hidden">
+      <div className={`h-1.5 rounded-full bg-slate-700/60 overflow-hidden ${data.confidence >= 75 ? 'imc-high-conf' : ''}`}>
         <div
-          className={`h-full rounded-full transition-all duration-700 ${pal.bar}`}
+          className={`h-full rounded-full imc-bar ${pal.bar}`}
           style={{ width: `${data.confidence}%` }}
         />
       </div>
 
       {/* ── 5-min Forecast ───────────────────────────────────────────────── */}
-      <div className="rounded-xl bg-slate-900/50 border border-slate-700/40 px-4 py-3 space-y-3">
+      <div ref={predBadgeRef} className="rounded-xl bg-slate-900/50 border border-slate-700/40 px-4 py-3 space-y-3">
         <div>
           <p className="text-[11px] font-bold text-slate-400 uppercase tracking-widest mb-2">5-Min Prediction</p>
           <p className="text-[9px] text-slate-600">EMA · RSI · VWAP · Premium</p>
@@ -452,10 +483,10 @@ const IndexCompassCard = memo(({ data }: IndexCardProps) => {
             <div className="space-y-1.5">
               <div className="flex flex-col bg-slate-800/40 rounded px-2 py-1">
                 <span className="text-[8px] text-slate-500 font-bold">CONFIDENCE</span>
-                <span className="text-[11px] font-black text-emerald-300">{data.spot.prediction5mConf}%</span>
+                <span className="text-[11px] font-black text-emerald-300 imc-val">{data.spot.prediction5mConf}%</span>
                 <div className="w-full h-1.5 rounded-full bg-slate-700/50 overflow-hidden mt-0.5">
                   <div
-                    className="h-full bg-gradient-to-r from-emerald-500 to-emerald-400 transition-all duration-300 rounded-full"
+                    className="h-full bg-gradient-to-r from-emerald-500 to-emerald-400 imc-bar rounded-full"
                     style={{ width: `${Math.min(100, data.spot.prediction5mConf)}%` }}
                   />
                 </div>
@@ -472,7 +503,7 @@ const IndexCompassCard = memo(({ data }: IndexCardProps) => {
                 </span>
                 <div className="w-full h-1.5 rounded-full bg-slate-700/50 overflow-hidden mt-0.5">
                   <div
-                    className="h-full bg-gradient-to-r from-teal-500 to-teal-400 transition-all duration-300 rounded-full"
+                    className="h-full bg-gradient-to-r from-teal-500 to-teal-400 imc-bar rounded-full"
                     style={{
                       width: `${Math.min(100, Math.round(
                         Math.abs(data.spot.rsi ?? 50 - 50) * 0.4 +
@@ -489,7 +520,7 @@ const IndexCompassCard = memo(({ data }: IndexCardProps) => {
             <div className="space-y-1">
               <div className="flex justify-between items-center text-[8px] bg-slate-800/30 rounded px-1.5 py-1">
                 <span className="text-slate-500 font-bold">EMA Momentum</span>
-                <span className={`font-bold ${
+                <span className={`font-bold imc-val ${
                   (data.spot.ema9 ?? 0) > (data.spot.ema20 ?? 0) ? 'text-emerald-400' :
                   (data.spot.ema9 ?? 0) < (data.spot.ema20 ?? 0) ? 'text-red-400' :
                   'text-amber-400'
@@ -499,7 +530,7 @@ const IndexCompassCard = memo(({ data }: IndexCardProps) => {
               </div>
               <div className="flex justify-between items-center text-[8px] bg-slate-800/30 rounded px-1.5 py-1">
                 <span className="text-slate-500 font-bold">RSI Signal</span>
-                <span className={`font-bold ${
+                <span className={`font-bold imc-val ${
                   (data.spot.rsi ?? 50) > 65 ? 'text-emerald-400' :
                   (data.spot.rsi ?? 50) < 35 ? 'text-red-400' :
                   'text-amber-400'
@@ -521,7 +552,7 @@ const IndexCompassCard = memo(({ data }: IndexCardProps) => {
             <div className="space-y-1.5">
               <div className="flex flex-col bg-slate-800/40 rounded px-2 py-1">
                 <span className="text-[8px] text-slate-500 font-bold">Premium Trend</span>
-                <span className={`text-[10px] font-bold ${
+                <span className={`text-[10px] font-bold imc-val ${
                   data.futures.premiumTrend === 'EXPANDING' ? 'text-emerald-400' :
                   data.futures.premiumTrend === 'CONTRACTING' ? 'text-red-400' :
                   'text-amber-400'
@@ -533,7 +564,7 @@ const IndexCompassCard = memo(({ data }: IndexCardProps) => {
 
               <div className="flex flex-col bg-slate-800/40 rounded px-2 py-1">
                 <span className="text-[8px] text-slate-500 font-bold">Current Premium</span>
-                <span className={`text-[11px] font-black ${
+                <span className={`text-[11px] font-black imc-val ${
                   (data.futures.near?.premium ?? 0) > 0 ? 'text-emerald-400' :
                   (data.futures.near?.premium ?? 0) < 0 ? 'text-red-400' :
                   'text-amber-400'
@@ -547,7 +578,7 @@ const IndexCompassCard = memo(({ data }: IndexCardProps) => {
             <div className="space-y-1">
               <div className="flex justify-between items-center text-[8px] bg-slate-800/30 rounded px-1.5 py-1">
                 <span className="text-slate-500 font-bold">CUR Change</span>
-                <span className={`font-bold ${
+                <span className={`font-bold imc-val ${
                   (data.futures.near?.changePct ?? 0) > 0 ? 'text-emerald-400' :
                   (data.futures.near?.changePct ?? 0) < 0 ? 'text-red-400' :
                   'text-amber-400'
@@ -557,7 +588,7 @@ const IndexCompassCard = memo(({ data }: IndexCardProps) => {
               </div>
               <div className="flex justify-between items-center text-[8px] bg-slate-800/30 rounded px-1.5 py-1">
                 <span className="text-slate-500 font-bold">Spot-Fut Gap</span>
-                <span className={`font-bold ${
+                <span className={`font-bold imc-val ${
                   (data.spot.changePct ?? 0) > (data.futures.near?.changePct ?? 0) ? 'text-emerald-400' :
                   (data.spot.changePct ?? 0) < (data.futures.near?.changePct ?? 0) ? 'text-red-400' :
                   'text-amber-400'
@@ -575,7 +606,7 @@ const IndexCompassCard = memo(({ data }: IndexCardProps) => {
           <div className="flex items-center gap-0.5 h-6 rounded-md overflow-hidden bg-slate-950/50 border border-slate-700/30">
             {/* Bullish */}
             <div
-              className="h-full bg-gradient-to-r from-emerald-600 to-emerald-500 transition-all duration-300 flex items-center justify-center min-w-[2px]"
+              className="h-full bg-gradient-to-r from-emerald-600 to-emerald-500 imc-bar flex items-center justify-center min-w-[2px]"
               style={{
                 width: `${Math.max(5, Math.min(95, Math.round(
                   Math.max(0, data.spot.ema9 ?? 0 - data.spot.ema20 ?? 0) * 2 +
@@ -594,7 +625,7 @@ const IndexCompassCard = memo(({ data }: IndexCardProps) => {
             </div>
             {/* Bearish */}
             <div
-              className="h-full bg-gradient-to-l from-red-600 to-red-500 transition-all duration-300 flex items-center justify-center ml-auto min-w-[2px]"
+              className="h-full bg-gradient-to-l from-red-600 to-red-500 imc-bar flex items-center justify-center ml-auto min-w-[2px]"
               style={{
                 width: `${Math.max(5, Math.min(95, Math.round(
                   Math.max(0, (data.spot.ema20 ?? 0) - (data.spot.ema9 ?? 0)) * 2 +
@@ -652,7 +683,7 @@ const IndexCompassCard = memo(({ data }: IndexCardProps) => {
               <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
                 Weighted Score
               </span>
-              <span className={`text-xs font-bold tabular-nums ${pal.text}`}>
+              <span className={`text-xs font-bold tabular-nums imc-val ${pal.text}`}>
                 {data.rawScore >= 0 ? '+' : ''}{data.rawScore.toFixed(4)}
               </span>
             </div>
@@ -704,7 +735,7 @@ const SummaryStrip = memo(({ items }: { items: CompassIndex[] }) => (
           <span>{dirArrow(d.direction)}</span>
           <span>{d.direction}</span>
           <span className="opacity-50">·</span>
-          <span>{d.confidence}%</span>
+          <span className="imc-val">{d.confidence}%</span>
         </span>
       );
     })}
@@ -736,10 +767,15 @@ export const InstitutionalCompass = memo(() => {
       })
     : null;
 
+  // Determine dominant section glow based on NIFTY direction (no blinking)
+  const niftyDir = compassData.NIFTY?.direction;
+  const sectionGlow = niftyDir === 'BULLISH' ? 'imc-section-bullish'
+    : niftyDir === 'BEARISH' ? 'imc-section-bearish' : '';
+
   return (
-    <section className="rounded-3xl border border-slate-700/50
+    <section className={`rounded-3xl border border-slate-700/50
                         bg-gradient-to-br from-slate-800/80 to-slate-900/90
-                        p-5 shadow-2xl backdrop-blur-sm">
+                        p-5 shadow-2xl backdrop-blur-sm ${sectionGlow}`}>
 
       {/* ── Section header ─────────────────────────────────────────────── */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-5">
