@@ -1,0 +1,307 @@
+{
+  "NIFTY": {
+    "symbol": "NIFTY",
+    "direction": "NEUTRAL",
+    "confidence": 20,
+    "rawScore": -0.154,
+    "ictSetup": {
+      "name": "\u2696\ufe0f NO TRADE ZONE",
+      "description": "ICT signals mixed \u2014 Wait for alignment",
+      "grade": "\u2014",
+      "confluences": 0
+    },
+    "prediction5m": "SELL",
+    "pred5mConf": 64,
+    "pred5mScore": -0.3045,
+    "signals": {
+      "order_blocks": {
+        "score": 0.0,
+        "signal": "NEUTRAL",
+        "label": "No active Order Block near price",
+        "weight": 0.25,
+        "value": 0.0,
+        "extra": {
+          "bullish_obs": 0,
+          "bearish_obs": 2,
+          "nearest_ob": null
+        }
+      },
+      "fair_value_gaps": {
+        "score": 0.0,
+        "signal": "NEUTRAL",
+        "label": "9 unfilled FVGs detected",
+        "weight": 0.2,
+        "value": 0.0,
+        "extra": {
+          "bullish_fvgs": 7,
+          "bearish_fvgs": 9,
+          "nearest_fvg": null
+        }
+      },
+      "market_structure": {
+        "score": -0.45,
+        "signal": "BEAR",
+        "label": "Bearish structure \u2014 Lower Highs + Lower Lows",
+        "weight": 0.2,
+        "value": -0.45,
+        "extra": {
+          "structure": "BEARISH_TREND",
+          "swing_highs": 9,
+          "swing_lows": 8,
+          "last_swing_high": 22839.5,
+          "last_swing_low": 22806.9
+        }
+      },
+      "liquidity_sweeps": {
+        "score": 0.0,
+        "signal": "NEUTRAL",
+        "label": "No liquidity sweep detected",
+        "weight": 0.15,
+        "value": 0.0,
+        "extra": {
+          "sweeps_detected": 0,
+          "last_sweep": null
+        }
+      },
+      "displacement": {
+        "score": -0.64,
+        "signal": "BEAR",
+        "label": "Bearish displacement \u00d7 1 \u2014 Institutional selling",
+        "weight": 0.1,
+        "value": 0.865,
+        "extra": {
+          "displacement_count": 2,
+          "avg_body_ratio": 0.865,
+          "bull_count": 1,
+          "bear_count": 1
+        }
+      },
+      "smart_money_div": {
+        "score": 0.0,
+        "signal": "NEUTRAL",
+        "label": "Waiting for OI data for divergence analysis",
+        "weight": 0.1,
+        "value": null,
+        "extra": {
+          "divergence": "NO_DATA"
+        }
+      }
+    },
+    "metrics": {
+      "price": 22228.35,
+      "changePct": -1.99,
+      "oi": 0,
+      "candleCount": 31,
+      "swingHighs": 9,
+      "swingLows": 8,
+      "lastSwingHigh": 22839.5,
+      "lastSwingLow": 22806.9
+    },
+    "dataSource": "LIVE",
+    "timestamp": "2026-04-02T11:36:55.329044+05:30"
+  },
+  "BANKNIFTY": {
+    "symbol": "BANKNIFTY",
+    "direction": "NEUTRAL",
+    "confidence": 15,
+    "rawScore": -0.184,
+    "ictSetup": {
+      "name": "\u2696\ufe0f NO TRADE ZONE",
+      "description": "ICT signals mixed \u2014 Wait for alignment",
+      "grade": "\u2014",
+      "confluences": 0
+    },
+    "prediction5m": "SELL",
+    "pred5mConf": 65,
+    "pred5mScore": -0.3195,
+    "signals": {
+      "order_blocks": {
+        "score": 0.0,
+        "signal": "NEUTRAL",
+        "label": "No active Order Block near price",
+        "weight": 0.25,
+        "value": 0.0,
+        "extra": {
+          "bullish_obs": 1,
+          "bearish_obs": 0,
+          "nearest_ob": null
+        }
+      },
+      "fair_value_gaps": {
+        "score": 0.0,
+        "signal": "NEUTRAL",
+        "label": "9 unfilled FVGs detected",
+        "weight": 0.2,
+        "value": 0.0,
+        "extra": {
+          "bullish_fvgs": 7,
+          "bearish_fvgs": 9,
+          "nearest_fvg": null
+        }
+      },
+      "market_structure": {
+        "score": -0.45,
+        "signal": "BEAR",
+        "label": "Bearish structure \u2014 Lower Highs + Lower Lows",
+        "weight": 0.2,
+        "value": -0.45,
+        "extra": {
+          "structure": "BEARISH_TREND",
+          "swing_highs": 7,
+          "swing_lows": 6,
+          "last_swing_high": 52364.35,
+          "last_swing_low": 52220.85
+        }
+      },
+      "liquidity_sweeps": {
+        "score": 0.0,
+        "signal": "NEUTRAL",
+        "label": "No liquidity sweep detected",
+        "weight": 0.15,
+        "value": 0.0,
+        "extra": {
+          "sweeps_detected": 0,
+          "last_sweep": null
+        }
+      },
+      "displacement": {
+        "score": -0.64,
+        "signal": "BEAR",
+        "label": "Bearish displacement \u00d7 1 \u2014 Institutional selling",
+        "weight": 0.1,
+        "value": 0.932,
+        "extra": {
+          "displacement_count": 2,
+          "avg_body_ratio": 0.932,
+          "bull_count": 1,
+          "bear_count": 1
+        }
+      },
+      "smart_money_div": {
+        "score": -0.3,
+        "signal": "BEAR",
+        "label": "Price \u21930.7% + OI dropping \u2014 Confirmed bearish",
+        "weight": 0.1,
+        "value": -0.3,
+        "extra": {
+          "divergence": "CONFIRMED_BEAR",
+          "price_change": -0.72,
+          "oi_slope": -96562.697
+        }
+      }
+    },
+    "metrics": {
+      "price": 50120.35,
+      "changePct": -2.58,
+      "oi": 7953420,
+      "candleCount": 31,
+      "swingHighs": 7,
+      "swingLows": 6,
+      "lastSwingHigh": 52364.35,
+      "lastSwingLow": 52220.85
+    },
+    "dataSource": "LIVE",
+    "timestamp": "2026-04-02T11:36:55.329897+05:30"
+  },
+  "SENSEX": {
+    "symbol": "SENSEX",
+    "direction": "NEUTRAL",
+    "confidence": 20,
+    "rawScore": -0.154,
+    "ictSetup": {
+      "name": "\u2696\ufe0f NO TRADE ZONE",
+      "description": "ICT signals mixed \u2014 Wait for alignment",
+      "grade": "\u2014",
+      "confluences": 0
+    },
+    "prediction5m": "SELL",
+    "pred5mConf": 64,
+    "pred5mScore": -0.3045,
+    "signals": {
+      "order_blocks": {
+        "score": 0.0,
+        "signal": "NEUTRAL",
+        "label": "No active Order Block near price",
+        "weight": 0.25,
+        "value": 0.0,
+        "extra": {
+          "bullish_obs": 0,
+          "bearish_obs": 2,
+          "nearest_ob": null
+        }
+      },
+      "fair_value_gaps": {
+        "score": 0.0,
+        "signal": "NEUTRAL",
+        "label": "11 unfilled FVGs detected",
+        "weight": 0.2,
+        "value": 0.0,
+        "extra": {
+          "bullish_fvgs": 7,
+          "bearish_fvgs": 11,
+          "nearest_fvg": null
+        }
+      },
+      "market_structure": {
+        "score": -0.45,
+        "signal": "BEAR",
+        "label": "Bearish structure \u2014 Lower Highs + Lower Lows",
+        "weight": 0.2,
+        "value": -0.45,
+        "extra": {
+          "structure": "BEARISH_TREND",
+          "swing_highs": 7,
+          "swing_lows": 8,
+          "last_swing_high": 73676.74,
+          "last_swing_low": 73539.01
+        }
+      },
+      "liquidity_sweeps": {
+        "score": 0.0,
+        "signal": "NEUTRAL",
+        "label": "No liquidity sweep detected",
+        "weight": 0.15,
+        "value": 0.0,
+        "extra": {
+          "sweeps_detected": 0,
+          "last_sweep": null
+        }
+      },
+      "displacement": {
+        "score": -0.64,
+        "signal": "BEAR",
+        "label": "Bearish displacement \u00d7 1 \u2014 Institutional selling",
+        "weight": 0.1,
+        "value": 0.871,
+        "extra": {
+          "displacement_count": 2,
+          "avg_body_ratio": 0.871,
+          "bull_count": 1,
+          "bear_count": 1
+        }
+      },
+      "smart_money_div": {
+        "score": 0.0,
+        "signal": "NEUTRAL",
+        "label": "Waiting for OI data for divergence analysis",
+        "weight": 0.1,
+        "value": null,
+        "extra": {
+          "divergence": "NO_DATA"
+        }
+      }
+    },
+    "metrics": {
+      "price": 71670.89,
+      "changePct": -2.0,
+      "oi": 0,
+      "candleCount": 31,
+      "swingHighs": 7,
+      "swingLows": 8,
+      "lastSwingHigh": 73676.74,
+      "lastSwingLow": 73539.01
+    },
+    "dataSource": "LIVE",
+    "timestamp": "2026-04-02T11:36:55.330693+05:30"
+  }
+}
