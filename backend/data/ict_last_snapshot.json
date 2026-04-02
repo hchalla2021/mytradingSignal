@@ -88,8 +88,8 @@
       }
     },
     "metrics": {
-      "price": 22228.35,
-      "changePct": -1.99,
+      "price": 22229.45,
+      "changePct": -1.98,
       "oi": 0,
       "candleCount": 31,
       "swingHighs": 9,
@@ -98,7 +98,7 @@
       "lastSwingLow": 22806.9
     },
     "dataSource": "LIVE",
-    "timestamp": "2026-04-02T11:36:55.329044+05:30"
+    "timestamp": "2026-04-02T11:37:35.169977+05:30"
   },
   "BANKNIFTY": {
     "symbol": "BANKNIFTY",
@@ -191,9 +191,9 @@
       }
     },
     "metrics": {
-      "price": 50120.35,
+      "price": 50123.4,
       "changePct": -2.58,
-      "oi": 7953420,
+      "oi": 7953510,
       "candleCount": 31,
       "swingHighs": 7,
       "swingLows": 6,
@@ -201,13 +201,13 @@
       "lastSwingLow": 52220.85
     },
     "dataSource": "LIVE",
-    "timestamp": "2026-04-02T11:36:55.329897+05:30"
+    "timestamp": "2026-04-02T11:37:35.170733+05:30"
   },
   "SENSEX": {
     "symbol": "SENSEX",
     "direction": "NEUTRAL",
-    "confidence": 20,
-    "rawScore": -0.154,
+    "confidence": 15,
+    "rawScore": -0.184,
     "ictSetup": {
       "name": "\u2696\ufe0f NO TRADE ZONE",
       "description": "ICT signals mixed \u2014 Wait for alignment",
@@ -215,8 +215,8 @@
       "confluences": 0
     },
     "prediction5m": "SELL",
-    "pred5mConf": 64,
-    "pred5mScore": -0.3045,
+    "pred5mConf": 65,
+    "pred5mScore": -0.3195,
     "signals": {
       "order_blocks": {
         "score": 0.0,
@@ -281,20 +281,22 @@
         }
       },
       "smart_money_div": {
-        "score": 0.0,
-        "signal": "NEUTRAL",
-        "label": "Waiting for OI data for divergence analysis",
+        "score": -0.3,
+        "signal": "BEAR",
+        "label": "Price \u21930.7% + OI dropping \u2014 Confirmed bearish",
         "weight": 0.1,
-        "value": null,
+        "value": -0.3,
         "extra": {
-          "divergence": "NO_DATA"
+          "divergence": "CONFIRMED_BEAR",
+          "price_change": -0.67,
+          "oi_slope": -373909.6667
         }
       }
     },
     "metrics": {
-      "price": 71670.89,
+      "price": 71671.99,
       "changePct": -2.0,
-      "oi": 0,
+      "oi": 30839740,
       "candleCount": 31,
       "swingHighs": 7,
       "swingLows": 8,
@@ -302,6 +304,6 @@
       "lastSwingLow": 73539.01
     },
     "dataSource": "LIVE",
-    "timestamp": "2026-04-02T11:36:55.330693+05:30"
+    "timestamp": "2026-04-02T11:37:35.171253+05:30"
   }
 }
