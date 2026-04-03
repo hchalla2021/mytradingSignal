@@ -24,7 +24,7 @@ export function isValidMarketData(data: any): data is MarketTick {
     isValidNumber(data.price) &&
     isValidNumber(data.change) &&
     isValidNumber(data.changePercent) &&
-    ['LIVE', 'OFFLINE'].includes(data.status)
+    ['LIVE', 'OFFLINE', 'CLOSED', 'PRE_OPEN', 'FREEZE'].includes(data.status)
   );
 }
 
@@ -94,9 +94,11 @@ export function isValidWSMessage(message: any): boolean {
  * Check if market is open (IST timezone)
  */
 export function isMarketOpen(date: Date = new Date()): boolean {
-  const istHours = date.getHours();
-  const istMinutes = date.getMinutes();
-  const dayOfWeek = date.getDay();
+  // Convert to IST (UTC+5:30) regardless of user's local timezone
+  const istDate = new Date(date.toLocaleString('en-US', { timeZone: 'Asia/Kolkata' }));
+  const istHours = istDate.getHours();
+  const istMinutes = istDate.getMinutes();
+  const dayOfWeek = istDate.getDay();
   
   // Weekend check
   if (dayOfWeek === 0 || dayOfWeek === 6) return false;

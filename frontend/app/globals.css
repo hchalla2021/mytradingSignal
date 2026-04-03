@@ -325,6 +325,49 @@ h1, h2, h3, h4, h5, h6 {
   border: none !important;
   position: relative;
 }
+
+/* ── HIGH-CONVICTION SHARP BORDER HIGHLIGHTS ────────────────────
+   Only applied when criteria are met (7+ factors or score≥48+conf≥72).
+   NOT always visible — conditional class toggled by React.
+   ─────────────────────────────────────────────────────────────── */
+
+/* ULTRA bullish: score ≥ 48 + confidence ≥ 72% — sharpest green border */
+.tz-conviction-ultra-bull {
+  border-width: 2px !important;
+  border-color: rgb(16, 185, 129) !important;
+  box-shadow:
+    0 0 16px rgba(16, 185, 129, 0.45),
+    0 0 32px rgba(16, 185, 129, 0.2),
+    inset 0 0 12px rgba(16, 185, 129, 0.08) !important;
+}
+
+/* STRONG bullish: 7+ green factors — sharp green border */
+.tz-conviction-strong-bull {
+  border-width: 2px !important;
+  border-color: rgba(16, 185, 129, 0.85) !important;
+  box-shadow:
+    0 0 12px rgba(16, 185, 129, 0.35),
+    0 0 24px rgba(16, 185, 129, 0.12) !important;
+}
+
+/* ULTRA bearish: score ≤ -48 + confidence ≥ 72% — sharpest red border */
+.tz-conviction-ultra-bear {
+  border-width: 2px !important;
+  border-color: rgb(239, 68, 68) !important;
+  box-shadow:
+    0 0 16px rgba(239, 68, 68, 0.45),
+    0 0 32px rgba(239, 68, 68, 0.2),
+    inset 0 0 12px rgba(239, 68, 68, 0.08) !important;
+}
+
+/* STRONG bearish: 7+ red factors — sharp red border */
+.tz-conviction-strong-bear {
+  border-width: 2px !important;
+  border-color: rgba(239, 68, 68, 0.85) !important;
+  box-shadow:
+    0 0 12px rgba(239, 68, 68, 0.35),
+    0 0 24px rgba(239, 68, 68, 0.12) !important;
+}
 .tz-aligned-box::after {
   content: '';
   position: absolute;
@@ -638,6 +681,116 @@ h1, h2, h3, h4, h5, h6 {
 .imc-section-bearish {
   border-color: rgba(239, 68, 68, 0.5) !important;
   box-shadow: 0 0 20px rgba(239, 68, 68, 0.1);
+}
+
+/* ── COMPASS: Per-section sharp conditional highlights ──────────
+   Applied ONLY when specific criteria are met, NOT always.
+   Green sharp border = bullish criteria met.
+   Red sharp border = bearish criteria met.
+   ─────────────────────────────────────────────────────────────── */
+.imc-section-hl-bull {
+  border-width: 2px !important;
+  border-style: solid !important;
+  border-color: rgb(16, 185, 129) !important;
+  box-shadow:
+    0 0 10px rgba(16, 185, 129, 0.35),
+    0 0 20px rgba(16, 185, 129, 0.12) !important;
+}
+.imc-section-hl-bear {
+  border-width: 2px !important;
+  border-style: solid !important;
+  border-color: rgb(239, 68, 68) !important;
+  box-shadow:
+    0 0 10px rgba(239, 68, 68, 0.35),
+    0 0 20px rgba(239, 68, 68, 0.12) !important;
+}
+
+/* ───────────────────────────────────────────────────────────────
+   ICT Smart Money – Per-section conviction highlights
+   Green sharp border = bullish criteria met.
+   Red sharp border = bearish criteria met.
+   ─────────────────────────────────────────────────────────────── */
+.ict-section-hl-bull {
+  border-width: 2px !important;
+  border-style: solid !important;
+  border-color: rgb(16, 185, 129) !important;
+  box-shadow:
+    0 0 10px rgba(16, 185, 129, 0.35),
+    0 0 20px rgba(16, 185, 129, 0.12) !important;
+}
+.ict-section-hl-bear {
+  border-width: 2px !important;
+  border-style: solid !important;
+  border-color: rgb(239, 68, 68) !important;
+  box-shadow:
+    0 0 10px rgba(239, 68, 68, 0.35),
+    0 0 20px rgba(239, 68, 68, 0.12) !important;
+}
+
+/* ───────────────────────────────────────────────────────────────
+   Volume Pulse – Per-section conviction highlights
+   Green sharp border = bullish criteria met (market up).
+   Red sharp border = bearish criteria met (market down).
+   ─────────────────────────────────────────────────────────────── */
+.vp-section-hl-bull {
+  border-width: 2px !important;
+  border-style: solid !important;
+  border-color: rgb(16, 185, 129) !important;
+  box-shadow:
+    0 0 10px rgba(16, 185, 129, 0.35),
+    0 0 20px rgba(16, 185, 129, 0.12) !important;
+}
+.vp-section-hl-bear {
+  border-width: 2px !important;
+  border-style: solid !important;
+  border-color: rgb(239, 68, 68) !important;
+  box-shadow:
+    0 0 10px rgba(239, 68, 68, 0.35),
+    0 0 20px rgba(239, 68, 68, 0.12) !important;
+}
+
+/* ───────────────────────────────────────────────────────────────
+   Trend Base – Per-section conviction highlights
+   Green sharp border = bullish criteria met (market up).
+   Red sharp border = bearish criteria met (market down).
+   ─────────────────────────────────────────────────────────────── */
+.tb-section-hl-bull {
+  border-width: 2px !important;
+  border-style: solid !important;
+  border-color: rgb(16, 185, 129) !important;
+  box-shadow:
+    0 0 10px rgba(16, 185, 129, 0.35),
+    0 0 20px rgba(16, 185, 129, 0.12) !important;
+}
+.tb-section-hl-bear {
+  border-width: 2px !important;
+  border-style: solid !important;
+  border-color: rgb(239, 68, 68) !important;
+  box-shadow:
+    0 0 10px rgba(239, 68, 68, 0.35),
+    0 0 20px rgba(239, 68, 68, 0.12) !important;
+}
+
+/* ───────────────────────────────────────────────────────────────
+   Smart Money • Order Logic — per-section highlights
+   Green sharp border = bullish criteria met (market up).
+   Red sharp border = bearish criteria met (market down).
+   ─────────────────────────────────────────────────────────────── */
+.sm-section-hl-bull {
+  border-width: 2px !important;
+  border-style: solid !important;
+  border-color: rgb(16, 185, 129) !important;
+  box-shadow:
+    0 0 10px rgba(16, 185, 129, 0.35),
+    0 0 20px rgba(16, 185, 129, 0.12) !important;
+}
+.sm-section-hl-bear {
+  border-width: 2px !important;
+  border-style: solid !important;
+  border-color: rgb(239, 68, 68) !important;
+  box-shadow:
+    0 0 10px rgba(239, 68, 68, 0.35),
+    0 0 20px rgba(239, 68, 68, 0.12) !important;
 }
 
 /* Mobile touch optimization */

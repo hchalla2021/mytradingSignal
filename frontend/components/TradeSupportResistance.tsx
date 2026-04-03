@@ -277,6 +277,10 @@ export const TradeSupportResistance: React.FC<TradeSupportResistanceProps> = ({
 
     const totalScore = Math.round(factors.reduce((s, f) => s + f.value, 0)); // range ~−116 to +116
 
+    // ── FACTOR COUNTS (for conviction highlighting) ──────────────
+    const greenFactors = factors.filter(f => f.value > 0).length;
+    const redFactors   = factors.filter(f => f.value < 0).length;
+
     // ── SIGNAL DETERMINATION ─────────────────────────────────────
     // Signal tier thresholds are unchanged.
     // CONFIDENCE: replaced per-tier formulas with a single unified function.
@@ -339,6 +343,7 @@ export const TradeSupportResistance: React.FC<TradeSupportResistanceProps> = ({
     return {
       action, confidence, signalReason,
       style, totalScore, factors,
+      greenFactors, redFactors,
       trend5min, trend15min,
       rsi5m, rsi15m, rsiMomStatus, rsi5mRaw, rsiMomentum,
       emaAlignment, vwapPos, stTrend, trendColor,
@@ -368,6 +373,7 @@ export const TradeSupportResistance: React.FC<TradeSupportResistanceProps> = ({
 
   const {
     action, confidence, signalReason, style, totalScore, factors,
+    greenFactors, redFactors,
     trend5min, trend15min, rsi5m, rsiMomStatus, rsi5mRaw, rsiMomentum,
     emaAlignment, vwapPos, stTrend, trendColor,
     changePercent, momentum, support, resistance,
@@ -435,8 +441,24 @@ export const TradeSupportResistance: React.FC<TradeSupportResistanceProps> = ({
   const nearSupport = distToSupport < 0.5 && distToSupport >= 0;
   const nearResistance = distToResistance < 0.5 && distToResistance >= 0;
 
+  // ── HIGH-CONVICTION HIGHLIGHTING ──────────────────────────────
+  // Highest: score ≥ 48 + confidence ≥ 72% → ultra-sharp border
+  // Strong:  7+ factors green/red → sharp border
+  // Only when criteria are met — not always
+  const isBullHighConviction = totalScore >= 48 && confidence >= 72;
+  const isBearHighConviction = totalScore <= -48 && confidence >= 72;
+  const isBullStrong = greenFactors >= 7 && !isBullHighConviction;
+  const isBearStrong = redFactors >= 7 && !isBearHighConviction;
+
+  const convictionClass =
+    isBullHighConviction ? 'tz-conviction-ultra-bull' :
+    isBearHighConviction ? 'tz-conviction-ultra-bear' :
+    isBullStrong         ? 'tz-conviction-strong-bull' :
+    isBearStrong         ? 'tz-conviction-strong-bear' :
+    '';
+
   return (
-    <div ref={cardRef} suppressHydrationWarning className={`${style.bg} rounded-2xl border ${style.border} shadow-md overflow-hidden ${style.glowClass} transition-[box-shadow,border-color] duration-150`}>
+    <div ref={cardRef} suppressHydrationWarning className={`${style.bg} rounded-2xl border ${style.border} shadow-md overflow-hidden ${style.glowClass} ${convictionClass} transition-[box-shadow,border-color] duration-150`}>
 
       {/* ── HEADER BAR ─────────────────────────────────────────── */}
       <div className="flex items-center justify-between px-4 pt-3 pb-2">
@@ -625,15 +647,15 @@ export const TradeSupportResistance: React.FC<TradeSupportResistanceProps> = ({
           </div>
 
           <div className="flex flex-col bg-gray-900/50 rounded-lg px-2 py-1.5 border border-gray-700/30">
-            <span className="text-[9px] text-gray-500 font-bold uppercase tracking-wide">Actual Market</span>
+            <span className="text-[9px] text-gray-500 font-bold uppercase tracking-wide">Score Strength</span>
             <span suppressHydrationWarning className="text-[13px] font-black text-teal-300 mt-0.5">
-              {Math.round(Math.abs(totalScore) * 2 + (confidence * 0.3))}%
+              {Math.min(100, Math.round(Math.abs(totalScore) / 1.16))}%
             </span>
             <div className="w-full h-2 rounded-full bg-gray-800 overflow-hidden mt-1">
               <div
                 suppressHydrationWarning
                 className="h-full bg-gradient-to-r from-teal-500 to-teal-400 tz-conf-bar rounded-full"
-                style={{ width: `${Math.min(100, Math.round(Math.abs(totalScore) * 2 + (confidence * 0.3)))}%` }}
+                style={{ width: `${Math.min(100, Math.round(Math.abs(totalScore) / 1.16))}%` }}
               />
             </div>
           </div>
@@ -725,36 +747,36 @@ export const TradeSupportResistance: React.FC<TradeSupportResistanceProps> = ({
               {/* Movement Probability */}
               <div className="space-y-2">
                 <p className="text-[9px] font-bold text-gray-500 uppercase tracking-wide">Movement Probability</p>
-                <div className="flex items-center gap-0.5 h-7 rounded-md overflow-hidden bg-gray-950/50 border border-gray-700/30">
-                  {/* Bullish */}
-                  <div
-                    suppressHydrationWarning
-                    className="h-full bg-gradient-to-r from-emerald-600 to-emerald-500 flex items-center justify-center min-w-[2px] tz-conf-bar"
-                    style={{
-                      width: `${Math.max(5, Math.min(95, Math.round(
-                        Math.max(0, totalScore + confidence / 10) * 0.8
-                      )))}%`,
-                    }}
-                  >
-                    <span className="text-[9px] font-black text-white px-1 truncate whitespace-nowrap tz-instant">
-                      {Math.round(Math.max(0, totalScore + confidence / 10) * 0.8)}%↑
-                    </span>
-                  </div>
-                  {/* Bearish */}
-                  <div
-                    suppressHydrationWarning
-                    className="h-full bg-gradient-to-l from-red-600 to-red-500 flex items-center justify-center ml-auto min-w-[2px] tz-conf-bar"
-                    style={{
-                      width: `${Math.max(5, Math.min(95, Math.round(
-                        Math.max(0, -totalScore + confidence / 10) * 0.8
-                      )))}%`,
-                    }}
-                  >
-                    <span className="text-[9px] font-black text-white px-1 truncate whitespace-nowrap tz-instant">
-                      {Math.round(Math.max(0, -totalScore + confidence / 10) * 0.8)}%↓
-                    </span>
-                  </div>
-                </div>
+                {(() => {
+                  // Normalize to 0-100 range where 50 = neutral (totalScore range ~-116 to +116)
+                  const norm = Math.max(5, Math.min(95, Math.round(50 + totalScore * 0.39)));
+                  const bullPct = norm;
+                  const bearPct = 100 - norm;
+                  return (
+                    <div className="flex items-center gap-0.5 h-7 rounded-md overflow-hidden bg-gray-950/50 border border-gray-700/30">
+                      {/* Bullish */}
+                      <div
+                        suppressHydrationWarning
+                        className="h-full bg-gradient-to-r from-emerald-600 to-emerald-500 flex items-center justify-center min-w-[2px] tz-conf-bar"
+                        style={{ width: `${bullPct}%` }}
+                      >
+                        <span className="text-[9px] font-black text-white px-1 truncate whitespace-nowrap tz-instant">
+                          {bullPct}%↑
+                        </span>
+                      </div>
+                      {/* Bearish */}
+                      <div
+                        suppressHydrationWarning
+                        className="h-full bg-gradient-to-l from-red-600 to-red-500 flex items-center justify-center ml-auto min-w-[2px] tz-conf-bar"
+                        style={{ width: `${bearPct}%` }}
+                      >
+                        <span className="text-[9px] font-black text-white px-1 truncate whitespace-nowrap tz-instant">
+                          {bearPct}%↓
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })()}
               </div>
 
               {/* Early Signal Detection - fixed height to prevent layout shift on mobile */}

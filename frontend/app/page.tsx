@@ -812,6 +812,7 @@ export default function Home() {
             data={marketData.NIFTY}
             isConnected={isConnected}
             aiAlertData={alertData.NIFTY}
+            outlookData={outlookData.NIFTY}
           />
           <IndexCard
             symbol="BANKNIFTY"
@@ -819,6 +820,7 @@ export default function Home() {
             data={marketData.BANKNIFTY}
             isConnected={isConnected}
             aiAlertData={alertData.BANKNIFTY}
+            outlookData={outlookData.BANKNIFTY}
           />
           <IndexCard
             symbol="SENSEX"
@@ -826,6 +828,7 @@ export default function Home() {
             data={marketData.SENSEX}
             isConnected={isConnected}
             aiAlertData={alertData.SENSEX}
+            outlookData={outlookData.SENSEX}
           />
         </div>
         </div>

@@ -1,9 +1,14 @@
 """Main FastAPI application entry point (production safe)."""
 
 import asyncio
+import logging
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 
 from config import get_settings
 from services.websocket_manager import manager
@@ -34,6 +39,9 @@ from routers.ict import http_router as ict_http, ws_router as ict_ws
 settings = get_settings()
 
 market_feed: MarketFeedService | None = None
+
+# Rate limiter — applied globally, individual routes can override
+limiter = Limiter(key_func=get_remote_address, default_limits=["60/minute"])
 
 
 @asynccontextmanager
@@ -232,6 +240,10 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Rate limiting
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
 # CORS — Starlette 0.50+ requires explicit origins (not ["*"]) for preflight to work
 app.add_middleware(
     CORSMiddleware,
@@ -240,6 +252,19 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+logger = logging.getLogger("mytradingsignal")
+
+
+# ── Global exception handler — prevents stack trace leaks ────────────
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    """Catch unhandled exceptions and return safe JSON response."""
+    logger.error("Unhandled error on %s %s: %s", request.method, request.url.path, exc, exc_info=True)
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Internal server error"},
+    )
 
 # Routers
 app.include_router(health.router, tags=["Health"])

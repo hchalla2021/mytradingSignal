@@ -190,15 +190,8 @@ const VolumePulseCard = memo<VolumePulseCardProps>(({ symbol, name }) => {
   const cardRef    = useRef<HTMLDivElement>(null);
   const batchRef   = useRef<NodeJS.Timeout>();
 
-  // ── GPU-accelerated flash on every data update ───────────────────────────
-  const triggerFlash = useCallback(() => {
-    const el = cardRef.current;
-    if (!el) return;
-    el.classList.remove('vp-tick');
-    // Force reflow then add — triggers CSS animation restart
-    void el.offsetWidth;
-    el.classList.add('vp-tick');
-  }, []);
+  // ── GPU-accelerated flash — DISABLED to avoid thunderstorm flicker ───
+  // const triggerFlash = useCallback(() => { ... }, [symbol]);
 
   // ── Fetch ────────────────────────────────────────────────────────────────
   const fetchData = useCallback(async () => {
@@ -217,14 +210,12 @@ const VolumePulseCard = memo<VolumePulseCardProps>(({ symbol, name }) => {
       setData(result);
       setError(null);
       setLoading(false);
-      // Flash on every successful update
-      requestAnimationFrame(triggerFlash);
     } catch (e: any) {
       if (e?.name === 'AbortError') return;
       setError('Connection error');
       setLoading(false);
     }
-  }, [symbol, triggerFlash]);
+  }, [symbol]);
 
   // ── WebSocket tick listener + batched re-fetch (150ms window) ────────────
   useEffect(() => {
@@ -290,14 +281,45 @@ const VolumePulseCard = memo<VolumePulseCardProps>(({ symbol, name }) => {
   const quality = data.pro_metrics?.volume_quality ?? '';
   const pred    = computePrediction(data);
   const isStrong = sig.label === 'STRONG BUY' || sig.label === 'STRONG SELL';
+  const pm      = data.pro_metrics;
+
+  // ── Per-section conviction highlights ─────────────────────────────────
+  // Signal: BUY conf≥63 or SELL conf≥63
+  const sigBull = data.signal === 'BUY'  && conf >= 63;
+  const sigBear = data.signal === 'SELL' && conf >= 63;
+
+  // Buying Pressure: pulse ≥55 buy zone, ≤45 sell zone
+  const pulseBull = pulse >= 55;
+  const pulseBear = pulse <= 45;
+
+  // Buy/Sell Ratio: >1.2 buyers ahead, <0.85 sellers ahead
+  const ratioBull = vd.ratio > 1.2;
+  const ratioBear = vd.ratio < 0.85;
+
+  // Volume Quality: HEALTHY/COMPRESSION/SELLER_EXHAUSTION = bull-ok
+  //                 EXHAUSTION/FAKE_BREAKOUT = bear-warning
+  const qualBull = ['HEALTHY', 'COMPRESSION', 'SELLER_EXHAUSTION'].includes(quality);
+  const qualBear = ['EXHAUSTION', 'FAKE_BREAKOUT'].includes(quality);
+
+  // PRO Metrics: Participation>50 & Exhaustion<40 = healthy, Participation<30 | Exhaustion≥70 = warning
+  const proOk     = (pm?.participation ?? 50) > 50 && (pm?.exhaustion ?? 0) < 40;
+  const proWarn   = (pm?.participation ?? 50) < 30 || (pm?.exhaustion ?? 0) >= 70;
+
+  // 5-Min Prediction: STRONG UP / LIKELY UP = bull, STRONG DOWN / LIKELY DOWN = bear
+  const pred5Bull = pred.label === 'STRONG UP'   || pred.label === 'LIKELY UP';
+  const pred5Bear = pred.label === 'STRONG DOWN' || pred.label === 'LIKELY DOWN';
+
+  // Helper: returns CSS class for section highlight
+  const vpHl = (bull: boolean, bear: boolean) =>
+    bull ? 'vp-section-hl-bull' : bear ? 'vp-section-hl-bear' : '';
 
   return (
     <div
       ref={cardRef}
       suppressHydrationWarning
       className={`
-        rounded-2xl border-2 ${sig.border} ${sig.bg} overflow-hidden
-        shadow-lg ${sig.glowClass}
+        rounded-2xl border-2 border-slate-700/40 ${sig.bg} overflow-hidden
+        shadow-lg
       `}
     >
       {/* ─── HEADER ──────────────────────────────────────────────────────── */}
@@ -328,16 +350,16 @@ const VolumePulseCard = memo<VolumePulseCardProps>(({ symbol, name }) => {
           </div>
         )}
 
-        {/* ─── MAIN SIGNAL ─────────────────────────────────────────────── */}
-        <div className={`rounded-xl border ${sig.border} ${sig.bg} px-3 py-2.5 text-center ${sig.badgeClass}`}>
+        {/* ─── MAIN SIGNAL — highlight when BUY conf≥63 or SELL conf≥63 ── */}
+        <div className={`rounded-xl border ${sig.border} ${sig.bg} px-3 py-2.5 text-center ${sig.badgeClass} ${vpHl(sigBull, sigBear)}`}>
           <div suppressHydrationWarning className={`${isStrong ? 'text-2xl' : 'text-xl'} font-black tracking-wide ${sig.color} vp-val`}>
             {sig.icon}&nbsp;{sig.label}
           </div>
           <p className="text-[10px] text-gray-400 mt-0.5 leading-tight">{sig.subtext}</p>
         </div>
 
-        {/* ─── SIGNAL CONFIDENCE ───────────────────────────────────────── */}
-        <div>
+        {/* ─── SIGNAL CONFIDENCE — highlight when conf≥63 ──────────────── */}
+        <div className={`rounded-lg ${vpHl(sigBull, sigBear)}`}>
           <div className="flex justify-between items-center mb-1">
             <span className="text-[10px] text-gray-500 font-semibold uppercase tracking-widest">Signal Confidence</span>
             <span suppressHydrationWarning className={`text-sm font-black ${sig.color} vp-val ${conf >= 75 ? 'ring-1 ring-current rounded-md px-1' : ''}`}>{conf}%</span>
@@ -354,8 +376,8 @@ const VolumePulseCard = memo<VolumePulseCardProps>(({ symbol, name }) => {
           </div>
         </div>
 
-        {/* ─── BUYING PRESSURE ─────────────────────────────────────────── */}
-        <div>
+        {/* ─── BUYING PRESSURE — highlight when pulse≥55 or ≤45 ────────── */}
+        <div className={`rounded-lg ${vpHl(pulseBull, pulseBear)}`}>
           <div className="flex justify-between items-center mb-1">
             <span className="text-[10px] text-gray-500 font-semibold uppercase tracking-widest">Buying Pressure</span>
             <span suppressHydrationWarning className={`text-sm font-black vp-val ${
@@ -434,17 +456,17 @@ const VolumePulseCard = memo<VolumePulseCardProps>(({ symbol, name }) => {
           );
         })()}
 
-        {/* ─── RATIO ───────────────────────────────────────────────────── */}
-        <div className="flex items-center justify-between px-2.5 py-1.5 rounded-lg bg-slate-900/50 border border-slate-700/30">
+        {/* ─── RATIO — highlight when ratio>1.2 or <0.85 ─────────────── */}
+        <div className={`flex items-center justify-between px-2.5 py-1.5 rounded-lg bg-slate-900/50 border ${ratioBull || ratioBear ? '' : 'border-slate-700/30'} ${vpHl(ratioBull, ratioBear)}`}>
           <span className="text-[9px] text-gray-500 font-semibold uppercase tracking-wider">Buy/Sell Ratio</span>
           <span suppressHydrationWarning className={`text-[10px] font-bold vp-val ${
             vd.ratio > 1.2 ? 'text-emerald-400' : vd.ratio < 0.85 ? 'text-red-400' : 'text-amber-400'
           } ${vd.ratio > 1.5 || vd.ratio < 0.67 ? 'ring-1 ring-current rounded px-1' : ''}`}>{vd.ratio === 999 ? '∞' : vd.ratio.toFixed(2)}</span>
         </div>
 
-        {/* ─── INSTITUTIONAL INTERPRETATION ────────────────────────────── */}
+        {/* ─── INSTITUTIONAL INTERPRETATION — highlight HEALTHY/COMPRESSION or EXHAUSTION/FAKE ── */}
         {quality && quality !== 'NEUTRAL' && (
-          <div className={`px-2.5 py-1.5 rounded-lg border text-[10px] font-medium ${
+          <div className={`px-2.5 py-1.5 rounded-lg border text-[10px] font-medium ${vpHl(qualBull, qualBear)} ${
             quality === 'ABSORPTION'       ? 'bg-blue-500/8 border-blue-500/30 text-blue-300' :
             quality === 'COMPRESSION'      ? 'bg-purple-500/8 border-purple-500/30 text-purple-300' :
             quality === 'EXHAUSTION'       ? 'bg-orange-500/8 border-orange-500/30 text-orange-300' :
@@ -457,9 +479,9 @@ const VolumePulseCard = memo<VolumePulseCardProps>(({ symbol, name }) => {
           </div>
         )}
 
-        {/* ─── PRO METRICS ─────────────────────────────────────────────── */}
+        {/* ─── PRO METRICS — highlight when participation>50 & exhaust<40 ─ */}
         {data.pro_metrics && (
-          <div className="border border-slate-700/40 rounded-xl bg-slate-900/40 px-3 py-2">
+          <div className={`border rounded-xl bg-slate-900/40 px-3 py-2 ${proOk || proWarn ? '' : 'border-slate-700/40'} ${vpHl(proOk, proWarn)}`}>
             <div className="text-[8px] font-bold text-gray-500 uppercase tracking-widest mb-1.5">Volume Quality</div>
             <div className="space-y-1">
               {[
@@ -495,7 +517,7 @@ const VolumePulseCard = memo<VolumePulseCardProps>(({ symbol, name }) => {
             5-MIN PREDICTION
             Pure volume intelligence — 5 weighted factors, no extra fetch
         ════════════════════════════════════════════════════════════════ */}
-        <div className="rounded-xl border border-white/[0.06] bg-[#0d1117] overflow-hidden">
+        <div className={`rounded-xl border bg-[#0d1117] overflow-hidden ${pred5Bull || pred5Bear ? '' : 'border-white/[0.06]'} ${vpHl(pred5Bull, pred5Bear)}`}>
           <div className="h-px bg-gradient-to-r from-transparent via-white/10 to-transparent" />
           {(() => {
             const isBuyVol  = pred.label === 'STRONG UP'   || pred.label === 'LIKELY UP';
@@ -513,8 +535,8 @@ const VolumePulseCard = memo<VolumePulseCardProps>(({ symbol, name }) => {
             const pm = data.pro_metrics ?? {};
             const actualMarketConf = Math.round(
               Math.abs(vd.green_percentage - vd.red_percentage) * 0.4 +
-              Math.abs(pm.participation ?? 50 - 50) * 0.3 +
-              Math.abs(pm.aggression ?? 50 - 50) * 0.3
+              Math.abs((pm.participation ?? 50) - 50) * 0.3 +
+              Math.abs((pm.aggression ?? 50) - 50) * 0.3
             );
 
             const ctxNote =
@@ -549,7 +571,7 @@ const VolumePulseCard = memo<VolumePulseCardProps>(({ symbol, name }) => {
                     </div>
                   </div>
                   <div className="flex flex-col bg-black/30 border border-emerald-500/30 rounded-lg px-2 py-1.5">
-                    <span className="text-[10px] text-white/40 font-bold uppercase tracking-wide">Actual Market</span>
+                    <span className="text-[10px] text-white/40 font-bold uppercase tracking-wide">Volume Divergence</span>
                     <span className="text-[13px] font-black text-emerald-300 mt-0.5 vp-val">{Math.min(100, actualMarketConf)}%</span>
                     <div className="w-full h-2 rounded-full bg-white/10 overflow-hidden mt-1">
                       <div

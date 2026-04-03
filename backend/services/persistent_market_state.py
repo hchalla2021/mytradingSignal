@@ -7,12 +7,14 @@ Key Features:
 - Persistent storage of last market state per symbol
 - Automatic failover to cached data when market is closed
 - Timestamps track when data was last updated
+- Debounced disk writes (10s) to avoid I/O bottleneck on every tick
 - Works silently without disrupting other functionality
 - Professional error handling and logging
 """
 
 import json
 import time
+import threading
 from typing import Optional, Dict, Any
 from pathlib import Path
 from datetime import datetime, timedelta
@@ -20,6 +22,12 @@ import asyncio
 
 # Persistent storage file location
 PERSISTENT_STATE_FILE = Path(__file__).parent.parent / "data" / "persistent_market_state.json"
+
+# Debounce interval for disk writes (seconds)
+_SAVE_DEBOUNCE_SECONDS = 10.0
+_last_save_time: float = 0.0
+_save_timer: threading.Timer | None = None
+_save_lock = threading.Lock()
 
 
 def _ensure_persistent_dir():
@@ -41,13 +49,39 @@ def _load_persistent_state() -> Dict[str, Any]:
 
 
 def _save_persistent_state(state: Dict[str, Any]):
-    """Save persistent market state to file."""
+    """Save persistent market state to file (synchronous, called from debounce timer)."""
     try:
         _ensure_persistent_dir()
         with open(PERSISTENT_STATE_FILE, 'w') as f:
             json.dump(state, f, indent=2)
     except Exception as e:
         print(f"[WARN] Could not save persistent state file: {e}")
+
+
+def _debounced_save():
+    """Schedule a disk write, debounced to avoid writing on every tick.
+    
+    Writes at most once every _SAVE_DEBOUNCE_SECONDS.
+    If a write is already scheduled, it reuses the existing timer.
+    """
+    global _last_save_time, _save_timer
+    with _save_lock:
+        now = time.time()
+        if now - _last_save_time >= _SAVE_DEBOUNCE_SECONDS:
+            # Enough time has passed — write immediately
+            _last_save_time = now
+            _save_persistent_state(_PERSISTENT_STATE)
+        elif _save_timer is None or not _save_timer.is_alive():
+            # Schedule a delayed write
+            delay = _SAVE_DEBOUNCE_SECONDS - (now - _last_save_time)
+            def _do_save():
+                global _last_save_time
+                with _save_lock:
+                    _last_save_time = time.time()
+                    _save_persistent_state(_PERSISTENT_STATE)
+            _save_timer = threading.Timer(delay, _do_save)
+            _save_timer.daemon = True
+            _save_timer.start()
 
 
 # In-memory persistent state (loaded on startup, updated on market data)
@@ -89,8 +123,8 @@ class PersistentMarketState:
             
             _PERSISTENT_STATE[symbol] = persistent_data
             
-            # Save to file asynchronously (doesn't block market feed)
-            _save_persistent_state(_PERSISTENT_STATE)
+            # Debounced save — writes to disk at most once every 10 seconds
+            _debounced_save()
             
         except Exception as e:
             print(f"[WARN] Error saving persistent state for {symbol}: {e}")

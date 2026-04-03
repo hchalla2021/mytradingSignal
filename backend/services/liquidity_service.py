@@ -300,7 +300,7 @@ def _pcr_sentiment_signal(
     }
 
 
-def _oi_buildup_signal(candles: List[Dict], spot_change_pct: float, live_oi: float = 0.0) -> Dict:
+def _oi_buildup_signal(candles: List[Dict], spot_change_pct: float, live_oi: float = 0.0, spot_price: float = 0.0, prev_oi: float = 0.0, vol_up_override: Optional[bool] = None) -> Dict:
     """
     OI × Price × Volume direction matrix — detects WHERE institutions are positioning.
 
@@ -331,7 +331,13 @@ def _oi_buildup_signal(candles: List[Dict], spot_change_pct: float, live_oi: flo
 
     for c in recent:
         oi_end   = float(c.get("oi") or 0)
-        oi_start = float(c.get("oi_prev") or oi_end)
+        oi_start_raw = c.get("oi_prev")
+        # Fix: oi_prev=0 means "not captured" (spot indices before PCR loads).
+        # Use None sentinel to distinguish "no data" from "genuinely zero".
+        if oi_start_raw is not None and float(oi_start_raw) > 0:
+            oi_start = float(oi_start_raw)
+        else:
+            oi_start = oi_end  # no valid prev → assume no change for this candle
         vol      = float(c.get("volume") or 0)
         if oi_end > 0:
             oi_deltas.append(oi_end - oi_start)
@@ -340,7 +346,49 @@ def _oi_buildup_signal(candles: List[Dict], spot_change_pct: float, live_oi: flo
             last_oi = oi_end
 
     if not oi_deltas or last_oi <= 0:
-        # Fallback: derive weak signal from price momentum alone
+        # Fallback: use live OI vs previous tracked OI (from PCR service)
+        # This fires when candle OI is 0 (spot indices) or before first candle closes
+        if live_oi > 0 and prev_oi > 0:
+            oi_delta_live = live_oi - prev_oi
+            oi_pct_live = (oi_delta_live / prev_oi) * 100
+            magnitude_live = _clamp(abs(oi_pct_live) / 0.5, 0.25, 1.0)
+
+            price_up_fb = spot_change_pct > 0.02
+            price_dn_fb = spot_change_pct < -0.02
+            oi_up_fb = oi_delta_live > 0
+
+            if price_up_fb and oi_up_fb:
+                profile = "LONG_BUILDUP"
+                score = magnitude_live * 0.70
+                label = f"Long Buildup — OI ↑{abs(oi_pct_live):.3f}% + price rising (live OI)"
+            elif price_up_fb and not oi_up_fb:
+                profile = "SHORT_COVERING"
+                score = magnitude_live * 0.35
+                label = f"Short Covering — OI ↓{abs(oi_pct_live):.3f}%, shorts exiting (live OI)"
+            elif price_dn_fb and oi_up_fb:
+                profile = "SHORT_BUILDUP"
+                score = -magnitude_live * 0.70
+                label = f"Short Buildup — OI ↑{abs(oi_pct_live):.3f}% + price falling (live OI)"
+            elif price_dn_fb and not oi_up_fb:
+                profile = "LONG_UNWINDING"
+                score = -magnitude_live * 0.35
+                label = f"Long Unwinding — OI ↓{abs(oi_pct_live):.3f}%, longs exiting (live OI)"
+            else:
+                profile = "NEUTRAL"
+                score = _clamp(oi_pct_live / 0.2, -0.15, 0.15)
+                label = f"OI neutral — {oi_pct_live:+.3f}% change (live OI)"
+
+            score = _clamp(score, -1.0, 1.0)
+            return {
+                "score": round(score, 4), "signal": _sig(score),
+                "label": label,
+                "weight": WEIGHTS["oi_buildup"], "value": round(oi_pct_live, 4),
+                "extra": {"profile": profile, "oiDeltaPct": round(oi_pct_live, 4),
+                          "lastOI": round(live_oi, 0), "magnitude": round(magnitude_live, 3),
+                          "clarity": "LIVE", "volConfirmed": False},
+            }
+
+        # Last resort: derive weak signal from price momentum alone
         score = _clamp(spot_change_pct / 3.0, -0.20, 0.20)
         return {
             "score": round(score, 4), "signal": _sig(score),
@@ -355,30 +403,53 @@ def _oi_buildup_signal(candles: List[Dict], spot_change_pct: float, live_oi: flo
     wt_oi    = sum(d * w for d, w in zip(oi_deltas, weights_used)) / tw
     wt_price = sum(p * w for p, w in zip(price_moves, weights_used)) / tw
 
-    # Leading-edge: blend live OI delta for faster detection (40% live, 60% candle)
+    # Leading-edge: blend live OI delta for faster detection (55% live, 45% candle)
     if live_oi > 0 and last_oi > 0:
         live_delta = live_oi - last_oi
-        wt_oi = wt_oi * 0.60 + live_delta * 0.40
+        wt_oi = wt_oi * 0.45 + live_delta * 0.55
 
     oi_base = live_oi if live_oi > 0 else last_oi
     oi_pct = (wt_oi / oi_base) * 100  # OI change as % of current OI
 
-    price_up = wt_price > 0 or spot_change_pct > 0.05
-    price_dn = wt_price < 0 or spot_change_pct < -0.05
+    # ── Intraday-responsive price direction ────────────────────────────────
+    # Blend live spot price action (vs last candle close) with candle momentum
+    # so the signal transitions immediately when price reverses intraday,
+    # instead of staying stuck on the day-level spot_change_pct.
+    live_price_move = 0.0
+    if spot_price > 0 and candles:
+        last_candle_close = float(candles[-1].get("close") or 0)
+        if last_candle_close > 0:
+            live_price_move = spot_price - last_candle_close
+
+    # 55% live spot action + 45% candle momentum — faster reaction to reversals
+    blended_price = wt_price * 0.45 + live_price_move * 0.55
+
+    price_up = blended_price > 0
+    price_dn = blended_price < 0
+    # Fallback: day-level change only when blended signal is exactly flat
+    if not price_up and not price_dn:
+        price_up = spot_change_pct > 0.03
+        price_dn = spot_change_pct < -0.03
+
     oi_up    = wt_oi > 0
     oi_dn    = wt_oi < 0
 
-    # Volume direction: current candle vs rolling average (3rd axis from Market Positioning)
-    vol_up = False
-    if len(volumes) >= 2:
-        vol_avg = sum(volumes[:-1]) / len(volumes[:-1])
-        vol_up = vol_avg > 0 and volumes[-1] > vol_avg * 1.005
-    elif candles and len(candles) >= 5:
-        all_vols = [float(c.get("volume") or 0) for c in candles[-5:-1]]
-        valid = [v for v in all_vols if v > 0]
-        if valid:
-            vol_avg = sum(valid) / len(valid)
-            vol_up = float(candles[-1].get("volume") or 0) > vol_avg * 1.005
+    # Volume direction: use caller-supplied vol_up (from tick-level rolling history)
+    # which is accurate for index instruments. Only fall back to candle-based
+    # comparison when the caller doesn't provide it.
+    if vol_up_override is not None:
+        vol_up = vol_up_override
+    else:
+        vol_up = False
+        if len(volumes) >= 2:
+            vol_avg = sum(volumes[:-1]) / len(volumes[:-1])
+            vol_up = vol_avg > 0 and volumes[-1] > vol_avg * 1.005
+        elif candles and len(candles) >= 5:
+            all_vols = [float(c.get("volume") or 0) for c in candles[-5:-1]]
+            valid = [v for v in all_vols if v > 0]
+            if valid:
+                vol_avg = sum(valid) / len(valid)
+                vol_up = float(candles[-1].get("volume") or 0) > vol_avg * 1.005
 
     # Magnitude: cap at 0.5% OI change = full signal
     magnitude = _clamp(abs(oi_pct) / 0.5, 0.25, 1.0)
@@ -735,6 +806,10 @@ class LiquidityService:
         self._last_values: Dict[str, Dict[str, float]] = {
             sym: {"oi": 0.0, "price": 0.0, "volume": 0.0} for sym in self.INDICES
         }
+        # Rolling volume history for accurate vol_up detection (tick-level, not candle)
+        self._vol_history: Dict[str, Deque[float]] = {
+            sym: collections.deque(maxlen=20) for sym in self.INDICES
+        }
         self._last_spot_data: Dict[str, Dict] = {}   # no-TTL fallback
         self._latest: Dict[str, Any] = {}
         self._task: Optional[asyncio.Task] = None
@@ -844,6 +919,16 @@ class LiquidityService:
             c = _parse_candle(item)
             if c:
                 result.append(c)
+
+        # Append the live in-progress candle (updated every tick by market_feed)
+        # so that OI buildup detection reacts within seconds instead of waiting
+        # up to 5 minutes for each candle to close.
+        live = await self._cache.get(f"analysis_candle_live:{symbol}")
+        if live and isinstance(live, dict) and float(live.get("oi") or 0) > 0:
+            # Avoid duplicate: skip if timestamp matches the last closed candle
+            if not result or result[-1].get("timestamp") != live.get("timestamp"):
+                result.append(live)
+
         return result
 
     # ── Per-symbol computation ────────────────────────────────────────────────
@@ -869,9 +954,29 @@ class LiquidityService:
 
         candles = await self._read_candles(symbol)
 
+        # ── Tick-level volume direction (fixes index instruments where candle volume is 0) ──
+        spot_volume = float(spot_data.get("volume") or 0)
+        vol_hist = self._vol_history[symbol]
+        if spot_volume > 0:
+            vol_hist.append(spot_volume)
+        # vol_up: current volume > rolling average (need at least 5 readings)
+        vol_up_live: Optional[bool] = None
+        if len(vol_hist) >= 5:
+            recent = list(vol_hist)
+            avg_vol = sum(recent[:-1]) / len(recent[:-1])
+            vol_up_live = avg_vol > 0 and recent[-1] > avg_vol * 1.005
+
+        # Previous OI for live-OI fallback (when candle OI is absent)
+        tracked_prev_oi = self._last_values[symbol]["oi"]
+        # Bootstrap: if prev OI is still 0 (first iteration), seed it from current
+        # so that the next iteration gets a valid delta baseline
+        if tracked_prev_oi == 0 and oi_raw > 0:
+            tracked_prev_oi = oi_raw
+
         # ── Run 4 signals ──────────────────────────────────────────────────
         sig_pcr  = _pcr_sentiment_signal(pcr_val, call_oi, put_oi, self._pcr_buffers[symbol])
-        sig_oi   = _oi_buildup_signal(candles, change_pct, live_oi=oi_raw)
+        sig_oi   = _oi_buildup_signal(candles, change_pct, live_oi=oi_raw, spot_price=price,
+                                       prev_oi=tracked_prev_oi, vol_up_override=vol_up_live)
         sig_mom  = _price_momentum_signal(candles, price)
         sig_conv = _candle_conviction_signal(candles)
 

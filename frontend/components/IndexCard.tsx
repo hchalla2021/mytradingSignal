@@ -187,8 +187,11 @@ const IndexCard = ({ symbol, name, data, isConnected, aiAlertData, outlookData }
     if (!isConnected) {
       return <span className="px-2 py-0.5 text-xs font-medium bg-bearish/20 text-bearish rounded-full">OFFLINE</span>;
     }
-    if (data?.status === 'CLOSED' || data?.status === 'PRE_OPEN' || data?.status === 'FREEZE') {
-      return null;
+    if (data?.status === 'CLOSED') {
+      return <span className="px-2 py-0.5 text-xs font-medium bg-gray-500/20 text-gray-400 rounded-full">CLOSED</span>;
+    }
+    if (data?.status === 'FREEZE') {
+      return <span className="px-2 py-0.5 text-xs font-medium bg-yellow-500/20 text-yellow-400 rounded-full">FREEZE</span>;
     }
     if (data?.status === 'PRE_OPEN') {
       return (
@@ -214,17 +217,22 @@ const IndexCard = ({ symbol, name, data, isConnected, aiAlertData, outlookData }
     );
   };
 
+  // Dynamic border color based on market direction
+  const borderColor = analysis.direction === 'bullish'
+    ? 'border-bullish/30 hover:border-bullish/50 shadow-bullish/10 hover:shadow-bullish/20'
+    : analysis.direction === 'bearish'
+    ? 'border-bearish/30 hover:border-bearish/50 shadow-bearish/10 hover:shadow-bearish/20'
+    : 'border-slate-500/30 hover:border-slate-500/50 shadow-slate-500/10 hover:shadow-slate-500/20';
+
   return (
     <div className={`
       relative overflow-hidden
       bg-dark-card
       rounded-lg sm:rounded-xl
-      border-2 border-emerald-500/30
+      border-2 ${borderColor}
       p-3 sm:p-4 lg:p-5
       transition-all duration-200
-      hover:border-emerald-500/50
-      hover:shadow-lg hover:shadow-emerald-500/20
-      shadow-md shadow-emerald-500/10
+      shadow-md
       ${flash === 'green' ? 'animate-flash-green' : ''}
       ${flash === 'red' ? 'animate-flash-red' : ''}
     `}>
@@ -238,7 +246,7 @@ const IndexCard = ({ symbol, name, data, isConnected, aiAlertData, outlookData }
       {/* Header */}
       <div className="flex items-center justify-between mb-3 sm:mb-4">
         <div className="flex items-center gap-2.5">
-          <div className={`p-2 sm:p-2.5 rounded-lg ${analysis.color} border-2 border-green-500/40 bg-green-950/10 shadow-sm shadow-green-500/10`}>
+          <div className={`p-2 sm:p-2.5 rounded-lg ${analysis.color} border-2 ${analysis.direction === 'bearish' ? 'border-bearish/40 bg-red-950/10 shadow-sm shadow-bearish/10' : 'border-bullish/40 bg-green-950/10 shadow-sm shadow-bullish/10'}`}>
             <Activity className={`w-4 h-4 sm:w-5 sm:h-5 ${analysis.color}`} />
           </div>
           <div>
@@ -251,8 +259,13 @@ const IndexCard = ({ symbol, name, data, isConnected, aiAlertData, outlookData }
 
       {/* Overall Market Outlook - SUPER SIMPLE FOR TRADERS */}
       {outlookData && (
-        <div className="mb-3 p-3 bg-dark-surface/60 rounded-xl border-2 shadow-xl hover:shadow-2xl transition-all duration-300 border-green-400/70 ring-2 ring-green-400/30 hover:border-green-300/90 hover:ring-green-300/40">
-          
+        <div className={`mb-3 p-3 bg-dark-surface/60 rounded-xl border-2 shadow-xl hover:shadow-2xl transition-all duration-300 ${
+          (outlookData.overallSignal === 'STRONG_BUY' || outlookData.overallSignal === 'BUY')
+            ? 'border-emerald-400/70 ring-2 ring-emerald-400/30 hover:border-emerald-300/90 hover:ring-emerald-300/40'
+            : (outlookData.overallSignal === 'STRONG_SELL' || outlookData.overallSignal === 'SELL')
+            ? 'border-rose-400/70 ring-2 ring-rose-400/30 hover:border-rose-300/90 hover:ring-rose-300/40'
+            : 'border-amber-400/50 ring-2 ring-amber-400/20 hover:border-amber-300/70 hover:ring-amber-300/30'
+        }`}>          
           {/* 🎯 BIG DECISION BOX - CAN I TRADE? */}
           <div className={`mb-3 p-3 rounded-xl border-2 text-center ${
             (outlookData.overallSignal === 'STRONG_BUY' || outlookData.overallSignal === 'BUY') && outlookData.overallConfidence >= 60 && outlookData.riskLevel !== 'HIGH'
@@ -358,10 +371,10 @@ const IndexCard = ({ symbol, name, data, isConnected, aiAlertData, outlookData }
       {/* Price */}
       <div className="mb-3 sm:mb-4">
         <div className={`text-2xl sm:text-3xl font-mono font-bold border-2 rounded-xl px-4 py-2.5 shadow-lg inline-block transition-all duration-200 ${analysis.color} ${
-          analysis.color === 'text-bullish' 
+          analysis.direction === 'bullish' 
             ? 'border-bullish/60 bg-bullish/10 shadow-bullish/20' 
-            : analysis.color === 'text-bearish'
-            ? 'border-emerald-500/60 bg-emerald-500/10 shadow-emerald-500/20'
+            : analysis.direction === 'bearish'
+            ? 'border-bearish/60 bg-bearish/10 shadow-bearish/20'
             : 'border-accent/30 bg-accent/5'
         }`}>
           ₹{data ? MarketUtils.formatPrice(data.price) : '—'}
@@ -370,17 +383,17 @@ const IndexCard = ({ symbol, name, data, isConnected, aiAlertData, outlookData }
 
       {/* Change */}
       <div className="flex flex-wrap items-center gap-2 sm:gap-2.5 mb-3 sm:mb-4">
-        <div className={`flex items-center gap-1.5 ${analysis.color} border-2 border-green-500/40 rounded-lg px-2.5 py-1 bg-green-950/10 shadow-sm shadow-green-500/10`}>
+        <div className={`flex items-center gap-1.5 ${analysis.color} border-2 ${analysis.direction === 'bearish' ? 'border-bearish/40 bg-red-950/10 shadow-sm shadow-bearish/10' : 'border-bullish/40 bg-green-950/10 shadow-sm shadow-bullish/10'} rounded-lg px-2.5 py-1`}>
           {getTrendIcon()}
           <span className="font-bold text-xs sm:text-sm">{data ? MarketUtils.formatChange(data.change) : '—'}</span>
         </div>
-        <div className={`px-2.5 py-1 rounded-lg text-[10px] sm:text-xs font-bold ${analysis.color} border-2 border-green-500/40 bg-green-950/10 shadow-sm shadow-green-500/10`}>
+        <div className={`px-2.5 py-1 rounded-lg text-[10px] sm:text-xs font-bold ${analysis.color} border-2 ${analysis.direction === 'bearish' ? 'border-bearish/40 bg-red-950/10 shadow-sm shadow-bearish/10' : 'border-bullish/40 bg-green-950/10 shadow-sm shadow-bullish/10'}`}>
           {data ? MarketUtils.formatPercent(data.changePercent) : '—'}
         </div>
       </div>
 
       {/* OHLC Grid */}
-      <div className="grid grid-cols-2 gap-1.5 text-[10px] sm:text-xs bg-dark-surface/60 rounded-lg p-2 sm:p-2.5 border-2 border-emerald-500/20">
+      <div className="grid grid-cols-2 gap-1.5 text-[10px] sm:text-xs bg-dark-surface/60 rounded-lg p-2 sm:p-2.5 border border-slate-600/30">
         <div className="flex justify-between items-center py-1 px-1.5 bg-dark-bg/30 rounded">
           <span className="text-dark-muted font-medium">Open</span>
           <span className="text-white font-semibold">{data ? MarketUtils.formatPrice(data.open) : '—'}</span>
@@ -400,14 +413,14 @@ const IndexCard = ({ symbol, name, data, isConnected, aiAlertData, outlookData }
       </div>
 
       {/* Trend Section */}
-      <div className="mt-3 sm:mt-4 pt-3 sm:pt-4 border-t-2 border-emerald-500/25 space-y-2 sm:space-y-2.5">
+      <div className="mt-3 sm:mt-4 pt-3 sm:pt-4 border-t border-slate-600/30 space-y-2 sm:space-y-2.5">
         {/* Trend Label */}
         <div className="flex items-center justify-between">
           <span className="text-[10px] sm:text-xs text-dark-muted font-medium">Trend</span>
           <div className={`flex items-center gap-1.5 sm:gap-2 ${analysis.color}`}>
             <span className="text-sm sm:text-base">{analysis.emoji}</span>
             <span className="font-bold text-xs sm:text-sm">{analysis.label}</span>
-            <span className={`text-[9px] sm:text-[10px] px-1.5 py-0.5 rounded-lg font-semibold ${analysis.color} border-2 border-green-500/40 bg-green-950/10 shadow-sm shadow-green-500/10`}>
+            <span className={`text-[9px] sm:text-[10px] px-1.5 py-0.5 rounded-lg font-semibold ${analysis.color} border-2 ${analysis.direction === 'bearish' ? 'border-bearish/40 bg-red-950/10' : 'border-bullish/40 bg-green-950/10'}`}>
               {analysis.strength}%
             </span>
           </div>
@@ -446,9 +459,9 @@ const IndexCard = ({ symbol, name, data, isConnected, aiAlertData, outlookData }
       </div>
 
       {/* Volume & OI */}
-      <div className="mt-2 sm:mt-3 pt-2 sm:pt-3 border-t-2 border-emerald-500/25">
+      <div className="mt-2 sm:mt-3 pt-2 sm:pt-3 border-t border-slate-600/30">
         <div className="grid grid-cols-2 gap-2">
-          <div className="bg-dark-surface/60 rounded-lg p-2 text-center border-2 border-emerald-500/20">
+          <div className="bg-dark-surface/60 rounded-lg p-2 text-center border border-slate-600/30">
             <p className="text-[9px] sm:text-[10px] text-dark-muted font-medium">Volume</p>
             <p className="text-xs sm:text-sm text-white font-bold">
               {data?.volume && data.volume > 0 
@@ -457,7 +470,7 @@ const IndexCard = ({ symbol, name, data, isConnected, aiAlertData, outlookData }
               }
             </p>
           </div>
-          <div className="bg-dark-surface/60 rounded-lg p-2 text-center border-2 border-emerald-500/20">
+          <div className="bg-dark-surface/60 rounded-lg p-2 text-center border border-slate-600/30">
             <p className="text-[9px] sm:text-[10px] text-dark-muted font-medium">Total OI</p>
             <p className="text-xs sm:text-sm text-white font-bold">{data?.oi ? MarketUtils.formatOI(data.oi) : '—'}</p>
           </div>
@@ -465,7 +478,7 @@ const IndexCard = ({ symbol, name, data, isConnected, aiAlertData, outlookData }
       </div>
 
       {/* PCR Section */}
-      <div className="mt-2 sm:mt-3 pt-2 sm:pt-3 border-t-2 border-emerald-500/25 space-y-2">
+      <div className="mt-2 sm:mt-3 pt-2 sm:pt-3 border-t border-slate-600/30 space-y-2">
         <div className="flex items-center justify-between">
           <span className="text-[10px] sm:text-xs text-dark-muted font-medium">PCR {data?.pcr ? <span className="text-bullish text-[8px]">●</span> : ''}</span>
           <div className={`flex items-center gap-1.5 ${pcrAnalysis.color}`}>
@@ -509,11 +522,11 @@ const IndexCard = ({ symbol, name, data, isConnected, aiAlertData, outlookData }
 
         {/* Call vs Put OI */}
         <div className="grid grid-cols-2 gap-2">
-          <div className="bg-dark-surface/60 rounded-lg p-1.5 text-center border-2 border-emerald-500/20">
+          <div className="bg-dark-surface/60 rounded-lg p-1.5 text-center border border-slate-600/30">
             <p className="text-[9px] sm:text-[10px] text-dark-muted font-medium">Call OI</p>
             <p className="text-[10px] sm:text-xs text-bearish font-bold">{data?.callOI ? MarketUtils.formatOI(data.callOI) : '—'}</p>
           </div>
-          <div className="bg-dark-surface/60 rounded-lg p-1.5 text-center border-2 border-emerald-500/20">
+          <div className="bg-dark-surface/60 rounded-lg p-1.5 text-center border border-slate-600/30">
             <p className="text-[9px] sm:text-[10px] text-dark-muted font-medium">Put OI</p>
             <p className="text-[10px] sm:text-xs text-bullish font-bold">{data?.putOI ? MarketUtils.formatOI(data.putOI) : '—'}</p>
           </div>
@@ -525,6 +538,4 @@ const IndexCard = ({ symbol, name, data, isConnected, aiAlertData, outlookData }
 
 IndexCard.displayName = 'IndexCard';
 
-// ❌ REMOVED React.memo() - it was preventing updates
-// IndexCard needs to re-render whenever parent data changes
-export default IndexCard;
+export default React.memo(IndexCard);

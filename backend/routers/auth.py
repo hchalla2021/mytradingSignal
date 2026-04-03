@@ -4,12 +4,18 @@ from fastapi.responses import RedirectResponse, HTMLResponse
 from pydantic import BaseModel
 from typing import Optional
 import os
+import secrets
+import hashlib
 
 from services.auth import auth_service
 from config import get_settings
 
 settings = get_settings()
 router = APIRouter()
+
+# CSRF state store — maps state token → True (short-lived, in-memory)
+_csrf_states: dict[str, float] = {}
+_CSRF_EXPIRY_SECONDS = 300  # 5 minutes
 
 
 class LoginRequest(BaseModel):
@@ -37,8 +43,16 @@ async def get_login_url():
 
 @router.get("/login")
 async def redirect_to_zerodha():
-    """Redirect to Zerodha login page instantly."""
-    login_url = f"{settings.zerodha_api_base_url}/connect/login?v=3&api_key={settings.zerodha_api_key}"
+    """Redirect to Zerodha login page with CSRF state parameter."""
+    import time
+    state = secrets.token_urlsafe(32)
+    _csrf_states[state] = time.time()
+    # Clean up expired states
+    now = time.time()
+    expired = [k for k, v in _csrf_states.items() if now - v > _CSRF_EXPIRY_SECONDS]
+    for k in expired:
+        _csrf_states.pop(k, None)
+    login_url = f"{settings.zerodha_api_base_url}/connect/login?v=3&api_key={settings.zerodha_api_key}&state={state}"
     return RedirectResponse(url=login_url)
 
 
@@ -101,11 +115,24 @@ async def validate_token():
 
 
 @router.get("/callback")
-async def zerodha_callback(request_token: str = Query(...), status: str = Query(None), action: str = Query(None)):
+async def zerodha_callback(request_token: str = Query(...), status: str = Query(None), action: str = Query(None), state: str = Query(None)):
     """
     Handle Zerodha OAuth callback (GET request from redirect).
     Exchange request_token for access_token and redirect back to frontend.
+    Validates CSRF state parameter to prevent cross-site request forgery.
     """
+    import time as _time
+
+    # CSRF state validation
+    if state:
+        created_at = _csrf_states.pop(state, None)
+        if created_at is None:
+            print("❌ CSRF state validation failed — unknown state token")
+            return RedirectResponse(url=f"{settings.frontend_url}/?auth=error&message=Invalid+state+parameter")
+        if _time.time() - created_at > _CSRF_EXPIRY_SECONDS:
+            print("❌ CSRF state validation failed — state expired")
+            return RedirectResponse(url=f"{settings.frontend_url}/?auth=error&message=Login+session+expired")
+
     print(f"\n{'='*60}")
     print(f"🔐 ZERODHA CALLBACK RECEIVED")
     print(f"   Request Token: ***REDACTED***")

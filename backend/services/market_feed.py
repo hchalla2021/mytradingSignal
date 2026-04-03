@@ -138,6 +138,7 @@ class MarketFeedService:
         self.last_prices: Dict[str, float] = {}
         self.last_oi: Dict[str, int] = {}  # Track last OI for change calculation
         self.last_update_time: Dict[str, float] = {}  # Track last update time per symbol
+        self._tick_lock = threading.Lock()  # Protects last_prices/last_update_time across threads
         self._tick_queue: Queue = Queue()
         # ── 5-minute candle builder ──────────────────────────────────────────
         # Accumulates live ticks into proper OHLCV candles and emits one
@@ -268,6 +269,10 @@ class MarketFeedService:
             state["close"]     = price
             state["oi"]        = oi
             state["vol_close"] = volume
+            # Retroactively fix oi_open if it was 0 at candle start
+            # (happens when PCR data wasn't available for the first tick)
+            if state["oi_open"] == 0 and oi > 0:
+                state["oi_open"] = oi
 
         # ── Push live (in-progress) candle to cache every tick ────────────
         # This allows OI Analysis to see the latest price/OI instead of
@@ -366,17 +371,12 @@ class MarketFeedService:
                 auth_state_manager.mark_api_success()
                 
                 # Log first tick received for each symbol
-                if symbol not in self.last_prices:
+                with self._tick_lock:
+                    first_tick = symbol not in self.last_prices
+                if first_tick:
                     print(f"🟢 First tick received for {symbol}: Price={data['price']}, Change={data['changePercent']}%")
                 
                 # 🔥 CRITICAL FIX: Process ALL ticks during market hours
-                # REMOVE rate limiting to ensure smooth 9:15 AM PRE_OPEN → LIVE transition
-                # We need to update:
-                # - PCR data (changes every few seconds)
-                # - OI data (changes frequently)
-                # - Volume data (changes every second)
-                # - Market status (transitions at 9:15 AM, 3:30 PM) - CRITICAL!
-                # - Timestamp (keeps data fresh)
                 market_status = get_market_status()
                 data["status"] = market_status  # Ensure tick carries correct status
                 
@@ -384,7 +384,8 @@ class MarketFeedService:
                 
                 # ⚡ INTELLIGENT RATE LIMITING: Allow bursts during critical transitions
                 current_time = time_module.time()
-                last_update = self.last_update_time.get(symbol, 0)
+                with self._tick_lock:
+                    last_update = self.last_update_time.get(symbol, 0)
                 time_since_last_update = current_time - last_update
                 
                 # Detect status changes (PRE_OPEN → FREEZE → LIVE transition)
@@ -394,23 +395,16 @@ class MarketFeedService:
                     setattr(self, f'_last_status_{symbol}', market_status)
                     print(f"🔄 MARKET STATUS CHANGE: {symbol} {last_status} → {market_status}")
                 
-                # 🔥 CRITICAL FIX: Trust the exchange over local clock/holiday checks.
-                # If Zerodha IS sending ticks (this callback is proof), ALWAYS process them.
-                # Previously ticks were silently dropped when get_market_status() returned
-                # "CLOSED" due to timezone issues, wrong holiday list, or clock drift,
-                # causing "no live feed / no movement" even when the market was open.
                 # Rate limit: price changed OR 0.5 second elapsed OR status changed
-                price_changed = self.last_prices.get(symbol) != data["price"]
+                with self._tick_lock:
+                    price_changed = self.last_prices.get(symbol) != data["price"]
                 should_update = price_changed or time_since_last_update >= 0.5 or status_changed
                 
                 if should_update:
-                    self.last_prices[symbol] = data["price"]
-                    self.last_update_time[symbol] = current_time
+                    with self._tick_lock:
+                        self.last_prices[symbol] = data["price"]
+                        self.last_update_time[symbol] = current_time
                     
-                    # 🔥 CRITICAL FIX: ALWAYS broadcast ticks during ALL market phases
-                    # Previously FREEZE was blocked, causing "Market Closed" on frontend
-                    # because no data reached clients → status fell back to OFFLINE.
-                    # Traders need to see pre-open prices during FREEZE too.
                     self._tick_queue.put(data)
                     
             except Exception as e:
@@ -548,13 +542,13 @@ class MarketFeedService:
                     if cached_json:
                         return
                 
-                # PCR fetch (HTTP)
+                # PCR fetch (HTTP) — stagger across symbols within a 15s window
                 try:
                     pcr_service = get_pcr_service()
-                    current_second = int(time_module.time()) % 30
-                    stagger_map = {"NIFTY": 0, "BANKNIFTY": 10, "SENSEX": 20}
+                    current_second = int(time_module.time()) % 15
+                    stagger_map = {"NIFTY": 0, "BANKNIFTY": 5, "SENSEX": 10}
                     expected_second = stagger_map.get(symbol, 0)
-                    if abs(current_second - expected_second) <= 5 or current_second < 5:
+                    if abs(current_second - expected_second) <= 3 or current_second < 3:
                         await pcr_service.get_pcr_data(symbol)
                 except Exception:
                     pass

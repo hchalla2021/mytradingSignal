@@ -28,6 +28,15 @@ check_*.py
 quick_*.py
 verify_*.py
 monitor_*.py
+full_response_*.py
+market_auto_start.py
+
+# Documentation
+*.md
+*.txt
+
+# Persistent data (rebuilt at runtime)
+data/
 
 # IDE
 .vscode/

@@ -98,7 +98,7 @@ class PCRService:
         now = datetime.now(IST)
         if symbol in _PCR_CACHE and symbol in _LAST_UPDATE:
             elapsed = (now - _LAST_UPDATE[symbol]).total_seconds()
-            if elapsed < 30:  # Increased to 30 seconds to avoid rate limits
+            if elapsed < 10:  # 10 seconds — fast enough for intraday OI shifts
                 return _PCR_CACHE[symbol]
         
         # Default values

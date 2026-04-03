@@ -337,6 +337,12 @@ const MarketLiquidity = memo(({ data }: { data: OrderFlowData }) => {
   const isBuyDom = buyPct > sellPct;
   const pctDiff = Math.abs(buyPct - sellPct);
   const intensity = Math.min(pctDiff, 50) / 50;
+
+  // ── Inner-element highlight: criteria = gap≥10% AND dominant side >60% ──
+  const liqCriteriaMet = pctDiff >= 10 && (isBuyDom ? buyPct > 60 : sellPct > 60);
+  const liqHlClass = liqCriteriaMet
+    ? (isBuyDom ? 'sm-section-hl-bull' : 'sm-section-hl-bear')
+    : '';
   
   // Colors: highlighted side uses vivid, muted side uses gray
   const buyBg = isBuyDom ? `rgba(52, 211, 153, ${0.3 + intensity * 0.5})` : 'rgba(107, 114, 128, 0.2)';
@@ -374,10 +380,10 @@ const MarketLiquidity = memo(({ data }: { data: OrderFlowData }) => {
           style={{ backgroundColor: buyBg, border: `2px solid ${buyBorder}` }}
         >
           <div className="text-xs font-semibold" style={{ color: isBuyDom ? 'rgb(156 163 175)' : 'rgb(107 114 128)' }}>BUYERS</div>
-          <div className="text-2xl font-bold mt-1 h-8 leading-8" style={{ color: buyColor }}>
+          <div className={`text-2xl font-bold mt-1 h-8 leading-8 ${isBuyDom && liqHlClass ? `inline-block rounded px-1 ${liqHlClass}` : ''}`} style={{ color: buyColor }}>
             {buyPct.toFixed(1)}%
           </div>
-          <div className="text-xs mt-1 h-4" style={{ color: isBuyDom ? 'rgb(6 95 70)' : 'rgb(75 85 99)' }}>
+          <div className={`text-xs mt-1 h-4 ${isBuyDom && liqHlClass ? `inline-block rounded px-1 ${liqHlClass}` : ''}`} style={{ color: isBuyDom ? 'rgb(6 95 70)' : 'rgb(75 85 99)' }}>
             {buyLabel}
           </div>
         </div>
@@ -387,10 +393,10 @@ const MarketLiquidity = memo(({ data }: { data: OrderFlowData }) => {
           style={{ backgroundColor: sellBg, border: `2px solid ${sellBorder}` }}
         >
           <div className="text-xs font-semibold" style={{ color: !isBuyDom ? 'rgb(156 163 175)' : 'rgb(107 114 128)' }}>SELLERS</div>
-          <div className="text-2xl font-bold mt-1 h-8 leading-8" style={{ color: sellColor }}>
+          <div className={`text-2xl font-bold mt-1 h-8 leading-8 ${!isBuyDom && liqHlClass ? `inline-block rounded px-1 ${liqHlClass}` : ''}`} style={{ color: sellColor }}>
             {sellPct.toFixed(1)}%
           </div>
-          <div className="text-xs mt-1 h-4" style={{ color: !isBuyDom ? 'rgb(153 27 27)' : 'rgb(75 85 99)' }}>
+          <div className={`text-xs mt-1 h-4 ${!isBuyDom && liqHlClass ? `inline-block rounded px-1 ${liqHlClass}` : ''}`} style={{ color: !isBuyDom ? 'rgb(153 27 27)' : 'rgb(75 85 99)' }}>
             {sellLabel}
           </div>
         </div>
@@ -417,8 +423,8 @@ const MarketLiquidity = memo(({ data }: { data: OrderFlowData }) => {
       
       {/* Dominance Indicator — always present, fixed height */}
       <div 
-        className="text-center text-xs p-2 rounded mt-1 h-8 leading-4"
-        style={{ backgroundColor: domBg, border: `1px solid ${domBorderColor}` }}
+        className={`text-center text-xs p-2 rounded mt-1 h-8 leading-4 ${liqHlClass}`}
+        style={{ backgroundColor: domBg, border: liqHlClass ? undefined : `1px solid ${domBorderColor}` }}
       >
         <span className="font-bold" style={{ color: domColor }}>
           {domLabel}
@@ -573,7 +579,32 @@ const OrderFlowCard = memo(({ symbol, data, isLoading }: OrderFlowCardProps) => 
       </div>
     );
   }
-  
+
+  // ── Smart Money Section Highlights ──
+  const isBull = data.signal === 'STRONG_BUY' || data.signal === 'BUY';
+  const isBear = data.signal === 'STRONG_SELL' || data.signal === 'SELL';
+  const smBuyPct = data.buyerAggressionRatio * 100;
+  const smSellPct = data.sellerAggressionRatio * 100;
+  const smLiqDiff = Math.abs(smBuyPct - smSellPct);
+  const smPred = data.fiveMinPrediction;
+
+  // 1. Signal Badge: signal direction + confidence > 55%
+  const signalHl = (isBull && data.signalConfidence > 0.55) ? 'sm-section-hl-bull'
+    : (isBear && data.signalConfidence > 0.55) ? 'sm-section-hl-bear' : '';
+  // 2. Market Liquidity: dominant side with 10%+ gap
+  const liqHl = (smBuyPct > smSellPct && smLiqDiff > 10) ? 'sm-section-hl-bull'
+    : (smSellPct > smBuyPct && smLiqDiff > 10) ? 'sm-section-hl-bear' : '';
+  // 3. 5-Min Prediction: direction + dominance > 55%
+  const predBull = smPred && smPred.direction?.includes('BUY') && smPred.buyDominancePct > 55;
+  const predBear = smPred && smPred.direction?.includes('SELL') && smPred.sellDominancePct > 55;
+  const predHl = predBull ? 'sm-section-hl-bull' : predBear ? 'sm-section-hl-bear' : '';
+  // 4. Battle Indicator: aggression > 60%
+  const battleHl = (data.buyerAggressionRatio > 0.60) ? 'sm-section-hl-bull'
+    : (data.sellerAggressionRatio > 0.60) ? 'sm-section-hl-bear' : '';
+  // 5. Signal Confidence: > 75% with directional signal
+  const confHl = (data.signalConfidence > 0.75 && isBull) ? 'sm-section-hl-bull'
+    : (data.signalConfidence > 0.75 && isBear) ? 'sm-section-hl-bear' : '';
+
   return (
     <div className="bg-gray-900/60 border border-gray-700/50 rounded-lg p-4 backdrop-blur-sm overflow-hidden">
       {/* Header — fixed height */}
@@ -594,7 +625,9 @@ const OrderFlowCard = memo(({ symbol, data, isLoading }: OrderFlowCardProps) => 
       
       {/* Signal + Bid/Ask Info */}
       <div className="grid grid-cols-2 gap-3 mb-4">
-        <SignalBadge data={data} />
+        <div className={`rounded-lg ${signalHl}`}>
+          <SignalBadge data={data} />
+        </div>
         
         <div>
           <div className="text-center mb-2">
@@ -635,7 +668,7 @@ const OrderFlowCard = memo(({ symbol, data, isLoading }: OrderFlowCardProps) => 
       </div>
       
       {/* Battle Indicator */}
-      <div className="p-3 bg-gray-800/50 rounded border border-gray-700/30 mb-4">
+      <div className={`p-3 bg-gray-800/50 rounded border border-gray-700/30 mb-4 ${battleHl}`}>
         <BattleIndicator data={data} />
       </div>
       
@@ -645,12 +678,12 @@ const OrderFlowCard = memo(({ symbol, data, isLoading }: OrderFlowCardProps) => 
       </div>
       
       {/* Signal Confidence */}
-      <div className="p-2 bg-gray-800/30 rounded mb-4">
+      <div className={`p-2 bg-gray-800/30 rounded mb-4 ${confHl}`}>
         <SignalMeter data={data} />
       </div>
       
       {/* 5-Minute Prediction */}
-      <div className="p-2 bg-gray-800/30 rounded mb-4">
+      <div className={`p-2 bg-gray-800/30 rounded mb-4 ${predHl}`}>
         <FiveMinPrediction data={data} />
       </div>
       

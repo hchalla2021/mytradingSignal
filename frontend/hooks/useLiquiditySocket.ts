@@ -141,9 +141,12 @@ export function useLiquiditySocket() {
       let changed = false;
       for (const sym of ['NIFTY', 'BANKNIFTY', 'SENSEX'] as const) {
         if (raw[sym]) {
-          // Create new object reference to ensure memo re-renders
-          // JSON.stringify+parse creates a deep clone with new refs
-          next[sym] = JSON.parse(JSON.stringify(raw[sym]));
+          // Skip update if data hasn't actually changed (same timestamp)
+          if (prev[sym]?.timestamp === raw[sym].timestamp) continue;
+          // structuredClone is faster than JSON round-trip and handles types properly
+          next[sym] = typeof structuredClone === 'function'
+            ? structuredClone(raw[sym])
+            : { ...raw[sym], signals: { ...raw[sym].signals }, metrics: { ...raw[sym].metrics } };
           changed = true;
         }
       }

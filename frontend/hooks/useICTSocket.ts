@@ -129,7 +129,7 @@ export function useICTSocket() {
           ) {
             continue; // keep existing good data
           }
-          next[sym] = JSON.parse(JSON.stringify(incoming));
+          next[sym] = incoming;
           changed = true;
         }
       }

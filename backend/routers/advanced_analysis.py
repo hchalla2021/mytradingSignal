@@ -173,13 +173,10 @@ async def get_volume_pulse(symbol: str) -> Dict[str, Any]:
     """
     try:
         symbol = symbol.upper()
-        print(f"[VOLUME-PULSE-API] 🔥 Request for {symbol}")
         
-        # ✅ GLOBAL TOKEN CHECK - One source of truth
+        # ✅ GLOBAL TOKEN CHECK
         from services.global_token_manager import check_global_token_status
         token_status = await check_global_token_status()
-        
-        print(f"[GLOBAL-TOKEN] Status: {'✅ Valid' if token_status['valid'] else '❌ Expired'}")
         
         # 🚀 AGGRESSIVE CACHE - Return immediately if available (10s TTL)
         cache = get_cache()
@@ -190,7 +187,6 @@ async def get_volume_pulse(symbol: str) -> Dict[str, Any]:
             # Update cache with current token status
             cached["token_valid"] = token_status["valid"]
             cached["cache_hit"] = True
-            print(f"[VOLUME-PULSE] ⚡⚡⚡ INSTANT CACHE HIT for {symbol} - <1ms response")
             return cached
         
         # ── Priority 1: live WebSocket candle cache (always fresh, no Zerodha token needed) ──
@@ -216,15 +212,12 @@ async def get_volume_pulse(symbol: str) -> Dict[str, Any]:
                     if 'volume' not in df.columns:
                         df['volume'] = 0
                     df['volume'] = pd.to_numeric(df['volume'], errors='coerce').fillna(0).astype(int)
-                    print(f"[VOLUME-PULSE] ✅ Using live candle cache: {len(df)} candles")
-        except Exception as _ce:
-            print(f"[VOLUME-PULSE] ⚠️ Candle cache read failed: {_ce}")
+        except Exception:
+            pass
 
         # ── Priority 2: Zerodha REST API (fallback when candle cache insufficient) ──
         if df.empty:
-            print(f"[VOLUME-PULSE] 🚀 Fetching fresh data from Zerodha...")
             df = await _get_historical_data(symbol, lookback=100)
-            print(f"[VOLUME-PULSE] 📊 Received {len(df)} candles")
         
         # 🔥 CHECK IF MARKET IS ACTUALLY OPEN for better threshold decision
         from services.market_feed import is_market_open
@@ -234,24 +227,12 @@ async def get_volume_pulse(symbol: str) -> Dict[str, Any]:
         min_candles = 5 if market_is_open else 10
         
         if df.empty or len(df) < min_candles:
-            print(f"[VOLUME-PULSE] ⚠️ INSUFFICIENT DATA - Need {min_candles}+, got {len(df)}")
-            print(f"[VOLUME-PULSE] ⚠️ {'Market is LIVE' if market_is_open else 'Market is CLOSED'}")
-            print(f"[VOLUME-PULSE] ⚠️ Checking backup cache...")
-            
-            if market_is_open:
-                print(f"[VOLUME-PULSE] ⚠️ MARKET IS LIVE but data fetch failed!")
-                print(f"   → Possible reasons: Zerodha API timeout, rate limit, or early market hours")
-                print(f"   → Using backup cache with LIVE status...")
-            
-            # 🔥 PERMANENT FIX: Try to get last cached data
+            # Try to get last cached data
             backup_cache_key = f"volume_pulse_backup:{symbol}"
             backup_data = await cache.get(backup_cache_key)
             
             if backup_data:
-                print(f"[VOLUME-PULSE] ✅ Using CACHED data for {symbol}")
-                print(f"   → Showing last successful analysis")
-                print(f"   → Last updated: {backup_data.get('timestamp', 'Unknown')}")
-                # 🔥 FIX: Set status to LIVE if market is open, even with cached data
+                # Set status to LIVE if market is open, even with cached data
                 backup_data["status"] = "LIVE" if market_is_open else "CACHED"
                 backup_data["message"] = f"{'⚡ Live market - Last data' if market_is_open else '📊 Last Market Session Data (Market Closed)'}"
                 backup_data["data_status"] = "PARTIAL" if market_is_open else "CACHED"
@@ -259,7 +240,6 @@ async def get_volume_pulse(symbol: str) -> Dict[str, Any]:
                 return backup_data
             
             # No cached data - return neutral data
-            print(f"[VOLUME-PULSE] 🎭 Using NEUTRAL data (no backup available)")
             from services.market_feed import get_market_status
             current_market_status = get_market_status()
             return {
@@ -283,21 +263,6 @@ async def get_volume_pulse(symbol: str) -> Dict[str, Any]:
                 "token_valid": token_status["valid"]
             }
         
-        # �️ SHOW LAST 5 CANDLES WITH VOLUME DETAILS
-        if not df.empty and len(df) >= 5:
-            print(f"\n[VOLUME-PULSE] 🕯️  INSTANT CANDLE VOLUME DETAILS (Last 5 Candles):")
-            print(f"{'='*80}")
-            for i, candle in df.tail(5).iterrows():
-                o, c = candle['open'], candle['close']
-                v = candle.get('volume', 0)
-                candle_type = "🟢 GREEN (Bullish)" if c > o else "🔴 RED (Bearish)" if c < o else "⚪ DOJI"
-                print(f"  Candle #{i} @ {candle.get('date', 'N/A')}")
-                print(f"  {candle_type}")
-                print(f"  📦 Volume: {v:,.0f}")
-                print(f"  📊 Open: {o:.2f} → Close: {c:.2f} (Change: {((c-o)/o*100):.2f}%)")
-                print()
-            print(f"{'='*80}\n")
-        
         # 📊 ANALYZE VOLUME PULSE WITH REAL CANDLE DATA
         from services.volume_pulse_service import analyze_volume_pulse
         result = await analyze_volume_pulse(symbol, df)
@@ -308,41 +273,21 @@ async def get_volume_pulse(symbol: str) -> Dict[str, Any]:
         from services.market_feed import get_market_status
         result["status"] = get_market_status()
         
-        # 📊 DETAILED INSTANT ANALYSIS RESULTS
-        print(f"\n[VOLUME-PULSE] 📈 INSTANT ANALYSIS RESULTS for {symbol}")
-        print(f"{'='*80}")
-        print(f"🚦 SIGNAL: {result.get('signal', 'N/A')} (Confidence: {result.get('confidence', 0)}%)")
-        print(f"💯 PULSE SCORE: {result.get('pulse_score', 0)}%")
-        print(f"📊 TREND: {result.get('trend', 'N/A')}")
-        print(f"\n📦 VOLUME ANALYSIS:")
-        vd = result.get('volume_data', {})
-        print(f"   🟢 Green Candle Volume: {vd.get('green_candle_volume', 0):,.0f} ({vd.get('green_percentage', 0):.1f}%)")
-        print(f"   🔴 Red Candle Volume: {vd.get('red_candle_volume', 0):,.0f} ({vd.get('red_percentage', 0):.1f}%)")
-        print(f"   ⚖️  Green/Red Ratio: {vd.get('ratio', 0):.2f}")
-        print(f"\n📊 STATUS: {result.get('status', 'N/A')}")
-        print(f"📦 CANDLES ANALYZED: {result.get('candles_analyzed', 0)}")
-        print(f"💾 CACHED: 10s live + 24h backup")
-        print(f"{'='*80}\n")
-        
-        # 🔥 IMPROVED CACHE STRATEGY: 
-        # During live market (9:15-3:30): Skip cache for fresh data every 5 seconds
-        # Outside market hours: Cache for 60s to reduce API calls
+        # Cache: 10s live, 60s outside + 24h backup
         from datetime import time as time_class
-        now = datetime.now().time()
-        is_trading = time_class(9, 15) <= now <= time_class(15, 30)  # 9:15 AM to 3:30 PM
+        import pytz
+        _ist_tz = pytz.timezone('Asia/Kolkata')
+        ist = datetime.now(_ist_tz)
+        is_trading = time_class(9, 15) <= ist.time() <= time_class(15, 30) and ist.weekday() < 5
         
-        result["cache_hit"] = False  # Fresh data
+        result["cache_hit"] = False
         
         if is_trading:
-            # 🔥 NO CACHE during live trading - get fresh data immediately
-            print(f"[VOLUME-PULSE] 🚀 LIVE TRADING (9:15-3:30): Fresh data every request")
-            # Don't cache during live trading to ensure responsive updates
+            await cache.set(cache_key, result, expire=10)
         else:
-            # Cache for 60 seconds outside trading hours
             await cache.set(cache_key, result, expire=60)
-            print(f"[VOLUME-PULSE] 💾 Outside trading hours: Cached for 60s")
         
-        # 🔥 PERMANENT FIX: Save as 24-hour backup
+        # 24-hour backup
         backup_cache_key = f"volume_pulse_backup:{symbol}"
         await cache.set(backup_cache_key, result, expire=86400)
         
@@ -351,7 +296,8 @@ async def get_volume_pulse(symbol: str) -> Dict[str, Any]:
     except HTTPException:
         raise
     except Exception as e:
-        print(f"[VOLUME-PULSE-API] Error for {symbol}: {e}")
+        import logging
+        logging.getLogger(__name__).warning(f"[VOLUME-PULSE-API] Error for {symbol}: {e}")
         # Return neutral state instead of 500 error
         return {
             "symbol": symbol,
@@ -3064,8 +3010,10 @@ async def get_trade_zones(symbol: str) -> Dict[str, Any]:
         atr_10 = float(analysis.get('atr_10', current_price * 0.01)) if 'atr_10' in analysis else current_price * 0.01
         
         stop_loss = current_price - atr_10
-        target_upside = ema_100 if current_price < ema_100 else ema_100 + atr_10 * 2
-        target_downside = ema_50 if current_price > ema_50 else ema_50 - atr_10 * 2
+        # Upside target: next resistance level above current price
+        target_upside = current_price + atr_10 * 2
+        # Downside target: next support level below current price
+        target_downside = current_price - atr_10 * 2
         
         risk = abs(current_price - stop_loss)
         reward_bullish = target_upside - current_price
@@ -3138,26 +3086,13 @@ async def get_trade_zones(symbol: str) -> Dict[str, Any]:
         
         # Smart cache strategy
         if is_trading:
-            print(f"[TRADE-ZONES] 🚀 Trading hours - Fresh analysis, no cache")
+            await cache.set(cache_key, result, expire=5)
         else:
             await cache.set(cache_key, result, expire=60)
-            print(f"[TRADE-ZONES] 💾 Non-trading hours - Cached for 60s")
         
         # Save 24-hour backup
         backup_cache_key = f"trade_zones_backup:{symbol}"
         await cache.set(backup_cache_key, result, expire=86400)
-        
-        # 🔥 DETAILED OUTPUT
-        print(f"\n[TRADE-ZONES] 💰 ZONE ANALYSIS for {symbol}")
-        print(f"{'='*80}")
-        print(f"💰 CURRENT PRICE: ₹{result['current_price']:.2f}")
-        print(f"📍 ZONE: {result['zone_classification']} | {result['zone_description']}")
-        print(f"📊 EMAs: 20={result['ema_20']:.2f}, 50={result['ema_50']:.2f}, 100={result['ema_100']:.2f}, 200={result['ema_200']:.2f}")
-        print(f"📈 BUY: {result['buy_signal']} ({result['buy_confidence']}%) | SELL: {result['sell_signal']} ({result['sell_confidence']}%)")
-        print(f"🎯 OVERALL: {result['overall_signal']} ({result['signal_confidence']}%)")
-        print(f"🏆 ENTRY QUALITY: {result['entry_quality']}")
-        print(f"💎 R:R Ratio: {result['risk_reward_ratio']}")
-        print(f"{'='*80}\n")
         
         return result
         
@@ -3745,46 +3680,28 @@ async def get_institutional_compass(symbol: str) -> Dict[str, Any]:
             "candles_analyzed": len(df),
         }
         
-        # Determine if trading hours
-        from datetime import datetime as dt
-        now = dt.now()
-        is_trading = 9 <= now.hour <= 15 and now.weekday() < 5
+        # Determine if trading hours (IST)
+        import pytz as _pytz
+        _ist = _pytz.timezone("Asia/Kolkata")
+        _now_ist = datetime.now(_ist)
+        is_trading = 9 <= _now_ist.hour <= 15 and _now_ist.weekday() < 5
         
-        # Smart cache strategy
+        # Smart cache strategy — always cache to avoid API spam
         if is_trading:
-            print(f"[INSTITUTIONAL-COMPASS] 🚀 Trading hours - Fresh analysis, no cache")
+            await cache.set(cache_key, result, expire=5)
         else:
             await cache.set(cache_key, result, expire=60)
-            print(f"[INSTITUTIONAL-COMPASS] 💾 Non-trading hours - Cached for 60s")
         
         # Save 24-hour backup
         backup_cache_key = f"institutional_compass_backup:{symbol}"
         await cache.set(backup_cache_key, result, expire=86400)
-        
-        # 🔥 DETAILED OUTPUT
-        print(f"\n[INSTITUTIONAL-COMPASS] 🧭 INSTITUTIONAL POSITIONING for {symbol}")
-        print(f"{'='*80}")
-        print(f"💰 CURRENT PRICE: ₹{result['current_price']:.2f}")
-        print(f"\n📊 FACTOR BREAKDOWN:")
-        print(f"   Price Momentum   : {result['price_score']:.1f}/100 ({price_factor})")
-        print(f"   PCR Analysis     : {result['pcr_score']:.1f}/100 ({pcr_factor})")
-        print(f"   VWAP Position    : {result['vwap_score']:.1f}/100 ({vwap_factor})")
-        print(f"   Trend Alignment  : {result['trend_score']:.1f}/100 ({trend_factor})")
-        print(f"   Volume Strength  : {result['volume_score']:.1f}/100 ({volume_factor})")
-        print(f"\n🧭 COMPASS: {compass_signal}")
-        print(f"📈 CONVICTION: {int(institutional_conviction)}%")
-        print(f"{'='*80}\n")
         
         return result
         
     except HTTPException:
         raise
     except Exception as e:
-        print(f"[INSTITUTIONAL-COMPASS-API] ❌ CRITICAL ERROR for {symbol}:")
-        print(f"   → Error type: {type(e).__name__}")
-        print(f"   → Error message: {str(e)}")
-        import traceback
-        print(f"   → Traceback:\n{traceback.format_exc()}")
+        logger.error(f"[INSTITUTIONAL-COMPASS] Error for {symbol}: {e}")
         
         return {
             "symbol": symbol,

@@ -549,10 +549,8 @@ async def analyze_volume_pulse(symbol: str, df: pd.DataFrame, inject_live_tick: 
                 df.loc[last_idx, 'low'] = min(df.loc[last_idx, 'low'], current_price)
                 if current_volume:
                     df.loc[last_idx, 'volume'] = current_volume
-                
-                print(f"[VOLUME-PULSE-INJECT] 🔥 Injected live tick for {symbol}: ₹{current_price}")
-        except Exception as e:
-            print(f"[VOLUME-PULSE-INJECT] ⚠️ Failed to inject live tick: {e}")
+        except Exception:
+            pass
     
     engine = get_volume_pulse_engine()
     result = await asyncio.to_thread(engine.analyze, symbol, df)

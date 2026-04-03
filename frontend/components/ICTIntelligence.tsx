@@ -252,13 +252,42 @@ const IndexCard = memo(({ data, index }: { data: ICTIndex | null; index: string 
   const dirGlowClass = data.direction === 'BULLISH' ? 'ict-bullish' :
                        data.direction === 'BEARISH' ? 'ict-bearish' : '';
 
+  // ── Per-section conviction highlights (only when criteria met) ──────
+  const isBull = data.direction === 'BULLISH';
+  const isBear = data.direction === 'BEARISH';
+
+  // Setup Grade: A- or higher = tradeable
+  const gradeOk = ['A+', 'A', 'A-'].includes(data.ictSetup.grade);
+
+  // Core 3 factors (OB + Structure + FVG = 65% weight) all agree?
+  const obSig  = data.signals.order_blocks.signal;
+  const stSig  = data.signals.market_structure.signal;
+  const fvgSig = data.signals.fair_value_gaps.signal;
+  const core3Bull = obSig === 'BULL' && stSig === 'BULL' && fvgSig === 'BULL';
+  const core3Bear = obSig === 'BEAR' && stSig === 'BEAR' && fvgSig === 'BEAR';
+
+  // Liquidity Sweep active in direction?
+  const sweepBull = data.signals.liquidity_sweeps.signal === 'BULL';
+  const sweepBear = data.signals.liquidity_sweeps.signal === 'BEAR';
+
+  // Confidence meets threshold?
+  const confMet = data.confidence >= 55;
+
+  // 5-min prediction directional?
+  const pred5mBull = data.prediction5m === 'STRONG_BUY' || data.prediction5m === 'BUY';
+  const pred5mBear = data.prediction5m === 'STRONG_SELL' || data.prediction5m === 'SELL';
+
+  // Helper for section highlight class
+  const hlClass = (bullCond: boolean, bearCond: boolean) =>
+    bullCond ? 'ict-section-hl-bull' : bearCond ? 'ict-section-hl-bear' : '';
+
   return (
     <div ref={cardRef} className={`flex-1 min-w-[280px] rounded-xl bg-[#1a2332] border overflow-hidden
                      ring-1 ${pal.ring} border-slate-700/40
                      shadow-lg ${pal.glow} ${dirGlowClass}`}>
 
-      {/* ── ICT Setup banner ──────────────────────────────────────────── */}
-      <div className={`px-3 py-2 border-b border-slate-700/30 bg-gradient-to-r from-slate-800/60 to-slate-900/40 ${data.ictSetup.grade === 'A+' || data.ictSetup.grade === 'A' ? 'ict-grade-top' : ''}`}>
+      {/* ── ICT Setup banner — sharp highlight when grade A- or higher ── */}
+      <div className={`px-3 py-2 border-b border-slate-700/30 bg-gradient-to-r from-slate-800/60 to-slate-900/40 ${data.ictSetup.grade === 'A+' || data.ictSetup.grade === 'A' ? 'ict-grade-top' : ''} ${gradeOk ? hlClass(isBull, isBear) : ''}`}>
         <SetupBadge setup={data.ictSetup} />
       </div>
 
@@ -281,8 +310,8 @@ const IndexCard = memo(({ data, index }: { data: ICTIndex | null; index: string 
               </span>
             </div>
           </div>
-          {/* Direction + confidence */}
-          <div ref={dirBadgeRef} className={`rounded-lg border px-2.5 py-1.5 text-center ${pal.badge} ${data.confidence >= 75 ? 'ring-1 ring-current' : ''}`}>
+          {/* Direction + confidence — sharp highlight when BULLISH/BEARISH */}
+          <div ref={dirBadgeRef} className={`rounded-lg border px-2.5 py-1.5 text-center ${pal.badge} ${data.confidence >= 75 ? 'ring-1 ring-current' : ''} ${hlClass(isBull, isBear)}`}>
             <div className={`text-[10px] font-black tracking-widest leading-none ${data.direction !== 'NEUTRAL' ? 'text-base' : ''}`}>
               {data.direction === 'BULLISH' ? '▲ BUY' : data.direction === 'BEARISH' ? '▼ SELL' : '● WAIT'}
             </div>
@@ -295,8 +324,10 @@ const IndexCard = memo(({ data, index }: { data: ICTIndex | null; index: string 
           </div>
         </div>
 
-        {/* Confidence bar */}
-        <ConfidenceBar confidence={data.confidence} barColor={pal.bar} />
+        {/* Confidence bar — sharp highlight when ≥ 55% */}
+        <div className={`rounded-full ${confMet ? hlClass(isBull, isBear) : ''}`}>
+          <ConfidenceBar confidence={data.confidence} barColor={pal.bar} />
+        </div>
 
         {/* ── Market Structure Info ──────────────────────────────────── */}
         <div className="rounded-lg bg-slate-800/50 border border-slate-700/30 px-3 py-2">
@@ -328,9 +359,9 @@ const IndexCard = memo(({ data, index }: { data: ICTIndex | null; index: string 
         </div>
 
         {/* ── 5-Min ICT Prediction ─────────────────────────────────── */}
-        <div ref={predBadgeRef} className={`rounded-lg bg-slate-800/60 border border-slate-700/30 px-3 py-2 ${
+        <div ref={predBadgeRef} className={`rounded-lg bg-slate-800/60 border px-3 py-2 ${
           data.prediction5m === 'STRONG_BUY' || data.prediction5m === 'STRONG_SELL' ? 'ring-1 ring-current' : ''
-        }`}>
+        } ${pred5mBull ? 'ict-section-hl-bull' : pred5mBear ? 'ict-section-hl-bear' : 'border-slate-700/30'}`}>
           <div className="flex items-center justify-between">
             <div>
               <div className="text-[11px] text-slate-400 uppercase tracking-widest font-bold mb-2">
@@ -432,8 +463,8 @@ const IndexCard = memo(({ data, index }: { data: ICTIndex | null; index: string 
           </div>
         </div>
 
-        {/* ── 6-Signal breakdown ──────────────────────────────────────── */}
-        <div className="rounded-lg bg-slate-800/40 border border-slate-700/25 px-3 py-2">
+        {/* ── 6-Signal breakdown — sharp highlight when core 3 agree ──── */}
+        <div className={`rounded-lg bg-slate-800/40 border px-3 py-2 ${core3Bull ? 'ict-section-hl-bull' : core3Bear ? 'ict-section-hl-bear' : 'border-slate-700/25'}`}>
           <div className="text-[9px] text-slate-600 uppercase tracking-widest font-semibold mb-1">
             ICT Signal Matrix
           </div>
@@ -517,10 +548,12 @@ const SummaryStrip = memo(({ data }: { data: { NIFTY: ICTIndex | null; BANKNIFTY
 
   const bulls = indices.filter(x => x.direction === 'BULLISH').length;
   const bears = indices.filter(x => x.direction === 'BEARISH').length;
-  const total = bulls + bears;
   
-  // Calculate buyer/seller percentages
-  const buyerPct = total > 0 ? Math.round((bulls / total) * 100) : 50;
+  // Calculate buyer/seller percentages from rawScore (continuous, not just counting)
+  const avgRawScore = indices.length > 0
+    ? indices.reduce((a, b) => a + b.rawScore, 0) / indices.length
+    : 0;
+  const buyerPct = Math.max(5, Math.min(95, Math.round(50 + avgRawScore * 62)));
   const sellerPct = 100 - buyerPct;
 
   let marketBias: string;
@@ -534,7 +567,7 @@ const SummaryStrip = memo(({ data }: { data: { NIFTY: ICTIndex | null; BANKNIFTY
 
   const summaryGlow = bulls > bears ? 'border-emerald-500/30 bg-emerald-950/40' :
                       bears > bulls ? 'border-red-500/30 bg-red-950/40' :
-                      'border-emerald-500/20 bg-emerald-950/40';
+                      'border-slate-500/20 bg-slate-950/40';
 
   return (
     <div className={`mb-3 rounded-xl ${summaryGlow} px-4 py-3

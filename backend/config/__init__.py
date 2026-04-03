@@ -44,6 +44,9 @@ class Settings(BaseSettings):
     access_token_expire_minutes: int = 30
     refresh_token_expire_days: int = 7
     
+    # ==================== ADMIN ====================
+    admin_restart_key: str = Field(default="", env="ADMIN_RESTART_KEY")
+    
     # ==================== SERVER ====================
     host: str = Field(default="0.0.0.0", env="SERVER_HOST")
     port: int = Field(default=8000, env="SERVER_PORT")
@@ -186,10 +189,8 @@ class Settings(BaseSettings):
         """Parse CORS origins from comma-separated string.
         
         Starlette 0.50+ no longer treats ["*"] as wildcard for preflight.
-        Explicit origins required. Dev origins added when DEBUG=true or
-        CORS_ORIGINS=*.
+        Explicit origins required. Dev origins added only when DEBUG=true.
         In production, set CORS_ORIGINS to exact production domain(s).
-        For local dev, set DEBUG=true in .env.
         """
         dev_origins = [
             "http://localhost:3000",
@@ -199,14 +200,21 @@ class Settings(BaseSettings):
             "http://127.0.0.1:8000",
         ]
         if self.cors_origins == "*":
-            origins = list(dev_origins)
+            # Wildcard only applies in debug mode
+            if self.debug:
+                origins = list(dev_origins)
+            else:
+                origins = []
         else:
             origins = [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
-        # Add dev origins when DEBUG is on
+        # Add dev origins only when DEBUG is on
         if self.debug:
             for dev in dev_origins:
                 if dev not in origins:
                     origins.append(dev)
+        else:
+            # Production: strip localhost origins
+            origins = [o for o in origins if 'localhost' not in o and '127.0.0.1' not in o]
         # Always include configured frontend URL
         if self.frontend_url and self.frontend_url not in origins:
             origins.append(self.frontend_url)

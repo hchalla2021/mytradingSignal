@@ -85,6 +85,33 @@ const TrendBaseCard = memo<{ symbol: string; name: string }>(({ symbol, name }) 
   const bullCount = sortedFactors.filter(f => f.score > 0).length;
   const bearCount = sortedFactors.filter(f => f.score < 0).length;
 
+  // ── Per-section conviction highlights ─────────────────────────────────
+  const totalScore = data.total_score ?? 0;
+
+  // Signal: BUY/STRONG_BUY with conf≥55 or SELL/STRONG_SELL with conf≥55
+  const sigBull = (data.signal === 'BUY' || data.signal === 'STRONG_BUY') && data.confidence >= 55;
+  const sigBear = (data.signal === 'SELL' || data.signal === 'STRONG_SELL') && data.confidence >= 55;
+
+  // Structure: HH+HL = bull, LH+LL = bear
+  const structBull = data.structure?.type === 'HIGHER_HIGHS_LOWS';
+  const structBear = data.structure?.type === 'LOWER_HIGHS_LOWS';
+
+  // 5m Signal: BUY/STRONG_BUY = bull, SELL/STRONG_SELL = bear
+  const tf5mBull = isBuy5;
+  const tf5mBear = isSell5;
+
+  // 7-Factor: 5+ bull factors or totalScore≥15 = bull; 5+ bear or ≤-15 = bear
+  const factorBull = bullCount >= 5 || totalScore >= 15;
+  const factorBear = bearCount >= 5 || totalScore <= -15;
+
+  // 5-Min Prediction: LONG conf≥55% = bull, SHORT conf≥55% = bear
+  const pred5Bull = isBuy5 && conf5 >= 55;
+  const pred5Bear = isSell5 && conf5 >= 55;
+
+  // Helper: returns CSS class for section highlight
+  const tbHl = (bull: boolean, bear: boolean) =>
+    bull ? 'tb-section-hl-bull' : bear ? 'tb-section-hl-bear' : '';
+
   return (
     <div className={`rounded-xl border ${s.border} bg-[#0b1120]/80 overflow-hidden ${flash ? 'ring-1 ring-white/20' : ''}`}>
 
@@ -111,9 +138,9 @@ const TrendBaseCard = memo<{ symbol: string; name: string }>(({ symbol, name }) 
 
       <div className="p-3 space-y-3">
 
-        {/* ── SIGNAL + CONFIDENCE (single row) ─────────────────────────── */}
+        {/* ── SIGNAL + CONFIDENCE ────────────────────────────────────── */}
         <div className="flex items-center gap-3">
-          <div className={`flex-shrink-0 rounded-lg border ${s.border} ${s.bg} px-3 py-2 text-center min-w-[110px]`}>
+          <div className={`flex-shrink-0 rounded-lg border ${s.border} ${s.bg} px-3 py-2 text-center min-w-[110px] ${tbHl(sigBull, sigBear)}`}>
             <div className={`text-base font-black ${s.color}`}>{s.icon} {s.label}</div>
           </div>
           <div className="flex-1 min-w-0">
@@ -127,21 +154,21 @@ const TrendBaseCard = memo<{ symbol: string; name: string }>(({ symbol, name }) 
           </div>
         </div>
 
-        {/* ── STRUCTURE + TIMEFRAMES (compact row) ─────────────────────── */}
+        {/* ── STRUCTURE + TIMEFRAMES ─────────────────────────────────── */}
         <div className="grid grid-cols-3 gap-2">
           <div className="bg-slate-800/30 border border-slate-700/30 rounded-lg px-2.5 py-2">
             <div className="text-[8px] text-slate-500 font-bold uppercase tracking-wider mb-0.5">Structure</div>
-            <div className={`text-[11px] font-bold ${structColor}`}>{structLabel}</div>
+            <div className={`text-[11px] font-bold ${structColor} inline-block rounded px-1 ${tbHl(structBull, structBear)}`}>{structLabel}</div>
             <div className="text-[9px] text-slate-600">{integ}% integrity</div>
           </div>
           <div className="bg-slate-800/30 border border-slate-700/30 rounded-lg px-2.5 py-2">
             <div className="text-[8px] text-slate-500 font-bold uppercase tracking-wider mb-0.5">5m Signal</div>
-            <div className={`text-[11px] font-bold ${dir5Color}`}>{dir5Icon} {sig5m}</div>
+            <div className={`text-[11px] font-bold ${dir5Color} inline-block rounded px-1 ${tbHl(tf5mBull, tf5mBear)}`}>{dir5Icon} {sig5m}</div>
             <div className="text-[9px] text-slate-600">RSI {(data.rsi_5m ?? 50).toFixed(0)}</div>
           </div>
           <div className="bg-slate-800/30 border border-slate-700/30 rounded-lg px-2.5 py-2">
             <div className="text-[8px] text-slate-500 font-bold uppercase tracking-wider mb-0.5">15m Trend</div>
-            <div className={`text-[11px] font-bold ${
+            <div className={`text-[11px] font-bold inline-block rounded px-1 ${tbHl(data.trend_15m === 'BULLISH', data.trend_15m === 'BEARISH')} ${
               (data.trend_15m ?? 'NEUTRAL') === 'BULLISH' ? 'text-emerald-400' :
               data.trend_15m === 'BEARISH' ? 'text-red-400' : 'text-amber-400'
             }`}>{data.trend_15m ?? 'NEUTRAL'}</div>
@@ -161,7 +188,7 @@ const TrendBaseCard = memo<{ symbol: string; name: string }>(({ symbol, name }) 
           </div>
         </div>
 
-        {/* ── 8-FACTOR BREAKDOWN (clean horizontal bars) ──────────────── */}
+        {/* ── 7-FACTOR BREAKDOWN ─────────────────────────────────────── */}
         <div className="bg-slate-800/20 border border-slate-700/30 rounded-lg p-2.5">
           <div className="flex items-center justify-between mb-2">
             <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">7-Factor Analysis</span>
@@ -203,17 +230,17 @@ const TrendBaseCard = memo<{ symbol: string; name: string }>(({ symbol, name }) 
           </div>
           <div className="flex items-center justify-between mt-2 pt-1.5 border-t border-slate-700/30">
             <span className="text-[9px] text-slate-500 font-bold">Total Score</span>
-            <span className={`text-xs font-black tabular-nums ${(data.total_score ?? 0) > 0 ? 'text-emerald-400' : (data.total_score ?? 0) < 0 ? 'text-red-400' : 'text-amber-400'}`}>
+            <span className={`text-xs font-black tabular-nums rounded px-1.5 py-0.5 ${tbHl(factorBull, factorBear)} ${(data.total_score ?? 0) > 0 ? 'text-emerald-400' : (data.total_score ?? 0) < 0 ? 'text-red-400' : 'text-amber-400'}`}>
               {(data.total_score ?? 0) > 0 ? '+' : ''}{data.total_score ?? 0} / 100
             </span>
           </div>
         </div>
 
-        {/* ── 5-MIN PREDICTION (clean, no duplicate confidence) ────────── */}
+        {/* ── 5-MIN PREDICTION ──────────────────────────────────────── */}
         <div className="bg-slate-800/20 border border-slate-700/30 rounded-lg p-2.5">
           <div className="flex items-center justify-between mb-2">
             <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">5-Min Prediction</span>
-            <span className={`text-xs font-black ${dir5Color}`}>{dir5Icon} {dir5}</span>
+            <span className={`text-xs font-black rounded px-1.5 py-0.5 ${dir5Color} ${tbHl(pred5Bull, pred5Bear)}`}>{dir5Icon} {dir5}</span>
           </div>
           <div className="flex items-center justify-between mb-1.5">
             <span className="text-[9px] text-slate-500">Confidence</span>
@@ -226,11 +253,11 @@ const TrendBaseCard = memo<{ symbol: string; name: string }>(({ symbol, name }) 
           <div className="grid grid-cols-2 gap-x-3 gap-y-1">
             <div className="flex items-center justify-between text-[9px]">
               <span className="text-slate-500">SuperTrend</span>
-              <span className={`font-bold ${data.supertrend === 'BULLISH' ? 'text-emerald-400' : data.supertrend === 'BEARISH' ? 'text-red-400' : 'text-amber-400'}`}>{data.supertrend ?? '—'}</span>
+              <span className={`font-bold rounded px-1 ${tbHl(data.supertrend === 'BULLISH', data.supertrend === 'BEARISH')} ${data.supertrend === 'BULLISH' ? 'text-emerald-400' : data.supertrend === 'BEARISH' ? 'text-red-400' : 'text-amber-400'}`}>{data.supertrend ?? '—'}</span>
             </div>
             <div className="flex items-center justify-between text-[9px]">
               <span className="text-slate-500">VWAP</span>
-              <span className={`font-bold ${(data.vwap_position ?? '').includes('ABOVE') ? 'text-emerald-400' : (data.vwap_position ?? '').includes('BELOW') ? 'text-red-400' : 'text-amber-400'}`}>
+              <span className={`font-bold rounded px-1 ${tbHl((data.vwap_position ?? '').includes('ABOVE'), (data.vwap_position ?? '').includes('BELOW'))} ${(data.vwap_position ?? '').includes('ABOVE') ? 'text-emerald-400' : (data.vwap_position ?? '').includes('BELOW') ? 'text-red-400' : 'text-amber-400'}`}>
                 {(data.vwap_position ?? 'AT_VWAP').replace('_VWAP', '')}
               </span>
             </div>

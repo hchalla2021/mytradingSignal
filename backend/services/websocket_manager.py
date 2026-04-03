@@ -26,28 +26,36 @@ class ConnectionManager:
         print(f"📴 Client disconnected. Total: {len(self.active_connections)}")
     
     async def broadcast(self, data: Dict[str, Any]):
-        """Broadcast data to all connected clients."""
+        """Broadcast data to all connected clients.
+        
+        Snapshots the connection set under the lock, then sends
+        outside the lock so one slow client cannot block others.
+        """
         if not self.active_connections:
-            # ✅ DEBUG: Warn if no clients connected
-            if data.get('type') == 'tick':
-                tick_data = data.get('data', {})
-                symbol = tick_data.get('symbol', 'UNKNOWN')
-                print(f"⚠️ No clients to broadcast {symbol} tick to")
             return
         
         message = json.dumps(data)
-        disconnected = set()
         
+        # Snapshot connections under lock (fast)
         async with self._lock:
-            for connection in self.active_connections:
-                try:
-                    await connection.send_text(message)
-                except Exception as e:
-                    print(f"❌ Failed to send to client: {e}")
-                    disconnected.add(connection)
-            
-            # Remove disconnected clients
-            self.active_connections -= disconnected
+            connections = list(self.active_connections)
+        
+        # Send to all clients concurrently (outside lock)
+        async def _send(conn: WebSocket):
+            try:
+                await asyncio.wait_for(conn.send_text(message), timeout=5.0)
+                return None
+            except Exception:
+                return conn
+        
+        results = await asyncio.gather(*[_send(c) for c in connections], return_exceptions=True)
+        
+        # Collect disconnected clients
+        disconnected = {r for r in results if isinstance(r, WebSocket)}
+        
+        if disconnected:
+            async with self._lock:
+                self.active_connections -= disconnected
     
     async def send_personal(self, websocket: WebSocket, data: Dict[str, Any]):
         """Send data to a specific client."""

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { API_CONFIG } from '@/lib/api-config';
 
 // Production-safe logging
@@ -36,7 +36,7 @@ export function useAuth() {
   });
   
   // Track revalidation in progress to prevent duplicate calls
-  const [isRevalidating, setIsRevalidating] = useState(false);
+  const isRevalidatingRef = useRef(false);
 
   // Load cached state after mount (client-side only)
   useEffect(() => {
@@ -85,12 +85,12 @@ export function useAuth() {
 
   const validateToken = useCallback(async () => {
     // Prevent duplicate validation calls
-    if (isRevalidating) {
+    if (isRevalidatingRef.current) {
       log.debug('Validation already in progress, skipping...');
       return;
     }
     
-    setIsRevalidating(true);
+    isRevalidatingRef.current = true;
     
     try {
       // Use AbortController for faster cancellation
@@ -172,9 +172,9 @@ export function useAuth() {
         isValidating: false,
       }));
     } finally {
-      setIsRevalidating(false);
+      isRevalidatingRef.current = false;
     }
-  }, [isRevalidating]);
+  }, []);
 
   // Initial validation on mount (background, non-blocking)
   useEffect(() => {

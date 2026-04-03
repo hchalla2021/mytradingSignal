@@ -416,6 +416,10 @@ const IndexCard = memo(({ data, index }: { data: LiquidityIndex | null; index: s
             <div className="flex items-center justify-between bg-slate-900/30 rounded px-2 py-1.5">
               <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wide">OI Momentum</span>
               <div className="flex items-center gap-2">
+                {/* Warn if price is moving but OI signal is still neutral */}
+                {data.signals.oi_buildup.signal === 'NEUTRAL' && Math.abs(data.metrics.changePct) > 0.3 && (
+                  <span className="text-[8px] text-amber-500 font-bold">⏳ syncing</span>
+                )}
                 <span className={`font-bold px-2 py-1 rounded text-[10px] max-w-[140px] ${
                   data.signals.oi_buildup.score > 0.3  ? 'bg-emerald-500/40 text-emerald-200' :
                   data.signals.oi_buildup.score > 0    ? 'bg-emerald-500/25 text-emerald-300' :

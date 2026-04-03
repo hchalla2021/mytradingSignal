@@ -194,9 +194,10 @@ SignalRow.displayName = 'SignalRow';
 
 interface IndicatorsStripProps {
   data: CompassIndex;
+  premHighlight?: 'bull' | 'bear' | null;
 }
 
-const IndicatorsStrip = memo(({ data }: IndicatorsStripProps) => {
+const IndicatorsStrip = memo(({ data, premHighlight }: IndicatorsStripProps) => {
   const { spot, futures } = data;
   const vwapDev = spot.vwap && spot.price > 0
     ? ((spot.price - spot.vwap) / spot.vwap * 100)
@@ -245,8 +246,11 @@ const IndicatorsStrip = memo(({ data }: IndicatorsStripProps) => {
           {spot.rsi == null ? '' : spot.rsi >= 70 ? 'Overbought' : spot.rsi <= 30 ? 'Oversold' : spot.rsi >= 55 ? 'Bullish zone' : spot.rsi <= 45 ? 'Bearish zone' : 'Neutral'}
         </p>
       </div>
-      {/* Premium trend */}
-      <div>
+      {/* Premium trend — sharp highlight when EXPANDING/CONTRACTING */}
+      <div className={`rounded-lg px-1 py-0.5 ${
+        premHighlight === 'bull' ? 'imc-section-hl-bull' :
+        premHighlight === 'bear' ? 'imc-section-hl-bear' : ''
+      }`}>
         <p className="text-[9px] uppercase tracking-wider text-slate-500 font-semibold">Prem Trend</p>
         <p className={`text-xs font-bold ${premColor}`}>{premTrend}</p>
         <p className="text-[10px] text-slate-500">
@@ -388,6 +392,29 @@ const IndexCompassCard = memo(({ data }: IndexCardProps) => {
   const glowCls = data.direction === 'BULLISH' ? 'imc-bullish'
     : data.direction === 'BEARISH' ? 'imc-bearish' : '';
 
+  // ── Per-section conviction highlights (only when criteria met) ──────
+  const isBullDir = data.direction === 'BULLISH';
+  const isBearDir = data.direction === 'BEARISH';
+
+  // Core 3 factors (VWAP + EMA + Swing = 65% weight) all agree?
+  const vwapSig = (data.signals as any)?.vwap?.signal;
+  const emaSig  = (data.signals as any)?.ema_alignment?.signal;
+  const swingSig = (data.signals as any)?.trend_structure?.signal;
+  const core3Bull = vwapSig === 'BULL' && emaSig === 'BULL' && swingSig === 'BULL';
+  const core3Bear = vwapSig === 'BEAR' && emaSig === 'BEAR' && swingSig === 'BEAR';
+
+  // Premium trend matches direction?
+  const premExpanding = data.futures.premiumTrend === 'EXPANDING';
+  const premContracting = data.futures.premiumTrend === 'CONTRACTING';
+
+  // Confidence meets threshold?
+  const confMet = data.confidence >= 55;
+
+  // 5-min prediction directional?
+  const pred5m = data.spot.prediction5m;
+  const pred5mBull = pred5m === 'STRONG_BUY' || pred5m === 'BUY';
+  const pred5mBear = pred5m === 'STRONG_SELL' || pred5m === 'SELL';
+
   return (
     <div ref={cardRef} className={`
       relative rounded-2xl border border-slate-700/60
@@ -439,8 +466,10 @@ const IndexCompassCard = memo(({ data }: IndexCardProps) => {
           </p>
         </div>
 
-        {/* Direction badge */}
-        <div className="flex flex-col items-end gap-1.5 shrink-0">
+        {/* Direction badge — sharp highlight when BULLISH/BEARISH */}
+        <div className={`flex flex-col items-end gap-1.5 shrink-0 rounded-xl px-1 py-1 ${
+          isBullDir ? 'imc-section-hl-bull' : isBearDir ? 'imc-section-hl-bear' : ''
+        }`}>
           <span ref={dirBadgeRef} className={`inline-flex items-center gap-1.5 rounded-xl border px-3 py-1.5
                             text-sm font-bold tracking-wide ${pal.badge}`}>
             <span className="text-base leading-none">{dirArrow(data.direction)}</span>
@@ -455,16 +484,20 @@ const IndexCompassCard = memo(({ data }: IndexCardProps) => {
         </div>
       </div>
 
-      {/* ── Confidence bar ───────────────────────────────────────────────── */}
-      <div className={`h-1.5 rounded-full bg-slate-700/60 overflow-hidden ${data.confidence >= 75 ? 'imc-high-conf' : ''}`}>
+      {/* ── Confidence bar — sharp highlight when ≥ 55% ─────────────────── */}
+      <div className={`h-1.5 rounded-full bg-slate-700/60 overflow-hidden ${data.confidence >= 75 ? 'imc-high-conf' : ''} ${
+        confMet ? (isBullDir ? 'imc-section-hl-bull' : isBearDir ? 'imc-section-hl-bear' : '') : ''
+      }`}>
         <div
           className={`h-full rounded-full imc-bar ${pal.bar}`}
           style={{ width: `${data.confidence}%` }}
         />
       </div>
 
-      {/* ── 5-min Forecast ───────────────────────────────────────────────── */}
-      <div ref={predBadgeRef} className="rounded-xl bg-slate-900/50 border border-slate-700/40 px-4 py-3 space-y-3">
+      {/* ── 5-min Forecast — sharp highlight when BUY+/SELL+ ────────────── */}
+      <div ref={predBadgeRef} className={`rounded-xl bg-slate-900/50 border px-4 py-3 space-y-3 ${
+        pred5mBull ? 'imc-section-hl-bull' : pred5mBear ? 'imc-section-hl-bear' : 'border-slate-700/40'
+      }`}>
         <div>
           <p className="text-[11px] font-bold text-slate-400 uppercase tracking-widest mb-2">5-Min Prediction</p>
           <p className="text-[9px] text-slate-600">EMA · RSI · VWAP · Premium</p>
@@ -493,23 +526,15 @@ const IndexCompassCard = memo(({ data }: IndexCardProps) => {
               </div>
 
               <div className="flex flex-col bg-slate-800/40 rounded px-2 py-1">
-                <span className="text-[8px] text-slate-500 font-bold">Actual</span>
+                <span className="text-[8px] text-slate-500 font-bold">Score Strength</span>
                 <span className="text-[11px] font-black text-teal-300">
-                  {Math.round(
-                    Math.abs(data.spot.rsi ?? 50 - 50) * 0.4 +
-                    Math.max(0, Math.abs(data.spot.ema9 ?? 0 - data.spot.ema20 ?? 0)) * 1.2 +
-                    Math.abs(data.spot.changePct ?? 0) * 10
-                  )}%
+                  {Math.min(100, Math.round(Math.abs(data.rawScore) / 0.65 * 100))}%
                 </span>
                 <div className="w-full h-1.5 rounded-full bg-slate-700/50 overflow-hidden mt-0.5">
                   <div
                     className="h-full bg-gradient-to-r from-teal-500 to-teal-400 imc-bar rounded-full"
                     style={{
-                      width: `${Math.min(100, Math.round(
-                        Math.abs(data.spot.rsi ?? 50 - 50) * 0.4 +
-                        Math.max(0, Math.abs(data.spot.ema9 ?? 0 - data.spot.ema20 ?? 0)) * 1.2 +
-                        Math.abs(data.spot.changePct ?? 0) * 10
-                      ))}%`,
+                      width: `${Math.min(100, Math.round(Math.abs(data.rawScore) / 0.65 * 100))}%`,
                     }}
                   />
                 </div>
@@ -603,63 +628,53 @@ const IndexCompassCard = memo(({ data }: IndexCardProps) => {
         {/* Movement Probability Bar */}
         <div className="space-y-2 border-t border-slate-700/30 pt-2">
           <p className="text-[9px] font-bold text-slate-500 uppercase tracking-wide">Movement Probability</p>
-          <div className="flex items-center gap-0.5 h-6 rounded-md overflow-hidden bg-slate-950/50 border border-slate-700/30">
-            {/* Bullish */}
-            <div
-              className="h-full bg-gradient-to-r from-emerald-600 to-emerald-500 imc-bar flex items-center justify-center min-w-[2px]"
-              style={{
-                width: `${Math.max(5, Math.min(95, Math.round(
-                  Math.max(0, data.spot.ema9 ?? 0 - data.spot.ema20 ?? 0) * 2 +
-                  Math.max(0, (data.spot.rsi ?? 50) - 50) * 0.5 +
-                  Math.max(0, data.spot.changePct ?? 0) * 10
-                )))}%`,
-              }}
-            >
-              <span className="text-[8px] font-bold text-white px-1 truncate whitespace-nowrap">
-                {Math.round(
-                  Math.max(0, data.spot.ema9 ?? 0 - data.spot.ema20 ?? 0) * 2 +
-                  Math.max(0, (data.spot.rsi ?? 50) - 50) * 0.5 +
-                  Math.max(0, data.spot.changePct ?? 0) * 10
-                )}%↑
-              </span>
-            </div>
-            {/* Bearish */}
-            <div
-              className="h-full bg-gradient-to-l from-red-600 to-red-500 imc-bar flex items-center justify-center ml-auto min-w-[2px]"
-              style={{
-                width: `${Math.max(5, Math.min(95, Math.round(
-                  Math.max(0, (data.spot.ema20 ?? 0) - (data.spot.ema9 ?? 0)) * 2 +
-                  Math.max(0, 50 - (data.spot.rsi ?? 50)) * 0.5 +
-                  Math.max(0, -(data.spot.changePct ?? 0)) * 10
-                )))}%`,
-              }}
-            >
-              <span className="text-[8px] font-bold text-white px-1 truncate whitespace-nowrap">
-                {Math.round(
-                  Math.max(0, (data.spot.ema20 ?? 0) - (data.spot.ema9 ?? 0)) * 2 +
-                  Math.max(0, 50 - (data.spot.rsi ?? 50)) * 0.5 +
-                  Math.max(0, -(data.spot.changePct ?? 0)) * 10
-                )}%↓
-              </span>
-            </div>
-          </div>
+          {(() => {
+            const bullPct = Math.max(5, Math.min(95, Math.round(50 + data.rawScore * 62)));
+            const bearPct = 100 - bullPct;
+            return (
+              <div className="flex items-center gap-0.5 h-6 rounded-md overflow-hidden bg-slate-950/50 border border-slate-700/30">
+                {/* Bullish */}
+                <div
+                  className="h-full bg-gradient-to-r from-emerald-600 to-emerald-500 imc-bar flex items-center justify-center min-w-[2px]"
+                  style={{ width: `${bullPct}%` }}
+                >
+                  <span className="text-[8px] font-bold text-white px-1 truncate whitespace-nowrap">
+                    {bullPct}%↑
+                  </span>
+                </div>
+                {/* Bearish */}
+                <div
+                  className="h-full bg-gradient-to-l from-red-600 to-red-500 imc-bar flex items-center justify-center ml-auto min-w-[2px]"
+                  style={{ width: `${bearPct}%` }}
+                >
+                  <span className="text-[8px] font-bold text-white px-1 truncate whitespace-nowrap">
+                    {bearPct}%↓
+                  </span>
+                </div>
+              </div>
+            );
+          })()}
         </div>
 
         {/* Early Signal Detection */}
-        {(Math.abs(data.spot.changePct ?? 0) > 0.3 || Math.abs(data.spot.rsi ?? 50 - 50) > 20) && (
+        {(Math.abs(data.spot.changePct ?? 0) > 0.3 || Math.abs((data.spot.rsi ?? 50) - 50) > 20) && (
           <div className="pt-2 border-t border-slate-700/30">
             <span className="text-[9px] font-bold text-amber-400 uppercase tracking-wide">
-              ⚡ {Math.abs(data.spot.rsi ?? 50 - 50) > 20 ? 'Momentum Shift' : 'Price Acceleration'} Detected
+              ⚡ {Math.abs((data.spot.rsi ?? 50) - 50) > 20 ? 'Momentum Shift' : 'Price Acceleration'} Detected
             </span>
           </div>
         )}
       </div>
 
-      {/* ── Key Indicators ───────────────────────────────────────────────── */}
-      <IndicatorsStrip data={data} />
+      {/* ── Key Indicators — Premium sharp highlight ─────────────────── */}
+      <IndicatorsStrip data={data} premHighlight={
+        premExpanding && isBullDir ? 'bull' : premContracting && isBearDir ? 'bear' : null
+      } />
 
-      {/* ── Signal Breakdown ─────────────────────────────────────────────── */}
-      <div className="rounded-xl bg-slate-900/40 border border-slate-700/40 overflow-hidden">
+      {/* ── Signal Breakdown — sharp highlight when core 3 agree ──────────── */}
+      <div className={`rounded-xl bg-slate-900/40 border overflow-hidden ${
+        core3Bull ? 'imc-section-hl-bull' : core3Bear ? 'imc-section-hl-bear' : 'border-slate-700/40'
+      }`}>
         <button
           onClick={() => setShowBreakdown(v => !v)}
           className="w-full flex items-center justify-between px-3 py-1.5

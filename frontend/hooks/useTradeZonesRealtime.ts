@@ -187,6 +187,10 @@ export function useTradeZonesRealtime(symbol: string): UseTradeZonesRealtimeRetu
    * 🌐 WebSocket Connection Management
    * Real-time price/volume tick updates
    */
+  // Use ref to access latest data in WS handler without adding to deps
+  const dataRef = useRef<TradeZonesData | null>(null);
+  useEffect(() => { dataRef.current = data; }, [data]);
+
   useEffect(() => {
     // Initial fetch
     fetchTradeZoneData();
@@ -222,11 +226,12 @@ export function useTradeZonesRealtime(symbol: string): UseTradeZonesRealtimeRetu
             if (message.type === `market-tick-${symbol}`) {
               const { price, volume } = message.data || {};
 
-              // Update data with new price/zone calculation (will batch)
-              if (data) {
+              // Use ref to avoid stale closure and prevent infinite re-render loop
+              const current = dataRef.current;
+              if (current) {
                 queueZoneUpdate({
-                  ...data,
-                  current_price: price || data.current_price,
+                  ...current,
+                  current_price: price || current.current_price,
                   timestamp: new Date().toISOString(),
                 });
               }
@@ -274,7 +279,7 @@ export function useTradeZonesRealtime(symbol: string): UseTradeZonesRealtimeRetu
         abortControllerRef.current.abort();
       }
     };
-  }, [symbol, fetchTradeZoneData, queueZoneUpdate, data]);
+  }, [symbol, fetchTradeZoneData, queueZoneUpdate]);
 
   return {
     data,
@@ -343,38 +348,5 @@ export function useMemoizedTradeZoneAnalysis(data: TradeZonesData | null) {
   }, [data]);
 }
 
-/**
- * 🎯 Multi-Symbol Hook – Trade Zone Portfolio
- * Fetches zone data for multiple symbols in parallel
- */
-export function useTradeZonesMultiRealtime(symbols: string[]) {
-  const hooks = symbols.map((symbol) => useTradeZonesRealtime(symbol));
-
-  const allData = useMemo(() => {
-    return hooks.reduce(
-      (acc, hook) => {
-        if (hook.data) {
-          acc[hook.data.symbol] = hook.data;
-        }
-        return acc;
-      },
-      {} as Record<string, TradeZonesData>
-    );
-  }, [hooks]);
-
-  const anyLoading = hooks.some((hook) => hook.loading);
-  const anyError = hooks.find((hook) => hook.error);
-  const anyFlash = hooks.some((hook) => hook.flash);
-
-  const refetchAll = useCallback(async () => {
-    await Promise.all(hooks.map((hook) => hook.refetch()));
-  }, [hooks]);
-
-  return {
-    data: allData,
-    loading: anyLoading,
-    error: anyError?.error || null,
-    flash: anyFlash,
-    refetch: refetchAll,
-  };
-}
+// useTradeZonesMultiRealtime removed — it called hooks inside .map() 
+// violating React Rules of Hooks. Use individual useTradeZonesRealtime() calls instead.

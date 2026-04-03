@@ -3,7 +3,7 @@ Diagnostic endpoint for troubleshooting market data flow
 Helps identify if Zerodha connection is working and data is flowing
 """
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Header, HTTPException, Depends
 from services.cache import CacheService
 from services.auth_state_machine import auth_state_manager
 from config import get_settings
@@ -11,6 +11,20 @@ import json
 from datetime import datetime
 
 router = APIRouter(prefix="/api/diagnostics", tags=["Diagnostics"])
+
+
+def _verify_admin_key(x_admin_key: str = Header(None, alias="X-Admin-Key")):
+    """Verify admin API key from request header."""
+    settings = get_settings()
+    expected_key = getattr(settings, 'admin_restart_key', None) or settings.__dict__.get('admin_restart_key', '')
+    if not expected_key or expected_key in ('', 'CHANGE_ME_USE_STRONG_RANDOM_KEY'):
+        raise HTTPException(
+            status_code=503,
+            detail="Admin key not configured. Set ADMIN_RESTART_KEY in .env"
+        )
+    if not x_admin_key or x_admin_key != expected_key:
+        raise HTTPException(status_code=403, detail="Invalid admin key")
+    return True
 
 # Global cache instance (will be injected by main.py)
 _cache: CacheService | None = None
@@ -29,7 +43,7 @@ def set_market_feed_instance(market_feed):
     _market_feed = market_feed
 
 @router.get("/market-data-status")
-async def market_data_status():
+async def market_data_status(_admin=Depends(_verify_admin_key)):
     """Check if market data is flowing and what the current values are"""
     if not _cache:
         return {
@@ -91,7 +105,7 @@ async def market_status_endpoint():
         }
 
 @router.get("/zerodha-connection")
-async def zerodha_connection_status():
+async def zerodha_connection_status(_admin=Depends(_verify_admin_key)):
     """Check Zerodha connection status"""
     settings = get_settings()
     
@@ -109,7 +123,7 @@ async def zerodha_connection_status():
     }
 
 @router.get("/oi-momentum-debug")
-async def oi_momentum_debug():
+async def oi_momentum_debug(_admin=Depends(_verify_admin_key)):
     """
     Comprehensive OI Momentum diagnostic - Shows:
     1. Last market values for all symbols
@@ -324,7 +338,7 @@ async def oi_momentum_debug():
         }
 
 @router.get("/connection-health")
-async def connection_health():
+async def connection_health(_admin=Depends(_verify_admin_key)):
     """
     Quick health check for market feed connection.
     Returns detailed status of WebSocket and data flow.
@@ -418,7 +432,7 @@ def _get_health_recommendation(health, watchdog_metrics, market_status):
 
 
 @router.post("/force-reconnect")
-async def force_reconnect():
+async def force_reconnect(_admin=Depends(_verify_admin_key)):
     """
     🔥 EMERGENCY FIX: Force reconnection to Zerodha market feed
     

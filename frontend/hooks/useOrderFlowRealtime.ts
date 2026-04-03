@@ -130,7 +130,10 @@ function connectSharedWs() {
     ws.onerror = () => {};
 
     ws.onclose = () => {
-      sharedWs = null;
+      // Only process if this is still the active WebSocket
+      if (sharedWs === ws) {
+        sharedWs = null;
+      }
       log.debug('🔌 [OrderFlow] Shared WebSocket disconnected');
       notifyListeners(); // notify connection status change
       if (subscriberCount > 0 && hasEverConnected) {
@@ -149,7 +152,9 @@ function disconnectSharedWs() {
     clearTimeout(reconnectTimer);
     reconnectTimer = null;
   }
+  reconnectAttempts = 0;
   if (sharedWs) {
+    sharedWs.onclose = null; // Prevent reconnect on intentional close
     sharedWs.close();
     sharedWs = null;
   }

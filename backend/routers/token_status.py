@@ -2,7 +2,7 @@
 Token Status & Health Check Endpoint
 Shows if token is valid, when it expires, and connection status
 """
-from fastapi import APIRouter
+from fastapi import APIRouter, Header, HTTPException, Depends
 from datetime import datetime, time
 import pytz
 from typing import Dict, Any
@@ -14,8 +14,23 @@ router = APIRouter()
 
 IST = pytz.timezone('Asia/Kolkata')
 
+
+def _verify_admin_key(x_admin_key: str = Header(None, alias="X-Admin-Key")):
+    """Verify admin API key from request header."""
+    settings = get_settings()
+    expected_key = getattr(settings, 'admin_restart_key', '')
+    if not expected_key or expected_key in ('', 'CHANGE_ME_USE_STRONG_RANDOM_KEY'):
+        raise HTTPException(
+            status_code=503,
+            detail="Admin key not configured. Set ADMIN_RESTART_KEY in .env"
+        )
+    if not x_admin_key or x_admin_key != expected_key:
+        raise HTTPException(status_code=403, detail="Invalid admin key")
+    return True
+
+
 @router.get("/api/token-status")
-async def get_token_status() -> Dict[str, Any]:
+async def get_token_status(_admin=Depends(_verify_admin_key)) -> Dict[str, Any]:
     """
     Get current token and market status
     Useful for monitoring and debugging
