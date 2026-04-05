@@ -532,7 +532,7 @@ const VolumePulseCard = memo<VolumePulseCardProps>(({ symbol, name }) => {
             const q = data.pro_metrics?.volume_quality ?? 'NEUTRAL';
             
             // Calculate Actual Market Confidence from volume data
-            const pm = data.pro_metrics ?? {};
+            const pm = (data.pro_metrics ?? {}) as NonNullable<typeof data.pro_metrics>;
             const actualMarketConf = Math.round(
               Math.abs(vd.green_percentage - vd.red_percentage) * 0.4 +
               Math.abs((pm.participation ?? 50) - 50) * 0.3 +

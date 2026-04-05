@@ -331,9 +331,7 @@ export default function OverallMarketOutlook() {
   const { vixData, loading: vixLoading } = useIndiaVIX();
 
   // 🔥 LIVE ORDER FLOW: Subscribe to WebSocket for real-time 5-min prediction updates
-  const niftyOF = useOrderFlowRealtime('NIFTY');
-  const bankniftyOF = useOrderFlowRealtime('BANKNIFTY');
-  const sensexOF = useOrderFlowRealtime('SENSEX');
+  const { orderFlow } = useOrderFlowRealtime();
 
   const fetchData = useCallback(async () => {
     try {
@@ -398,10 +396,10 @@ export default function OverallMarketOutlook() {
   // When order flow prediction changes, overall values update INSTANTLY
   const mergeOrderFlow = (
     restData: SymbolData,
-    ofData: ReturnType<typeof useOrderFlowRealtime>
+    ofData: import('@/hooks/useOrderFlowRealtime').OrderFlowData | undefined
   ): SymbolData => {
-    if (!ofData?.data?.fiveMinPrediction) return restData;
-    const pred = ofData.data.fiveMinPrediction;
+    if (!ofData?.fiveMinPrediction) return restData;
+    const pred = ofData.fiveMinPrediction;
     const buyPct = pred.buyDominancePct ?? 50;
     const sellPct = pred.sellDominancePct ?? 50;
     const ofConf = Math.round((pred.confidence ?? 0) * 100);
@@ -455,9 +453,9 @@ export default function OverallMarketOutlook() {
   };
 
   const liveData: MarketOutlookResponse = {
-    NIFTY: mergeOrderFlow(data.NIFTY, niftyOF),
-    BANKNIFTY: mergeOrderFlow(data.BANKNIFTY, bankniftyOF),
-    SENSEX: mergeOrderFlow(data.SENSEX, sensexOF),
+    NIFTY: mergeOrderFlow(data.NIFTY, orderFlow.NIFTY),
+    BANKNIFTY: mergeOrderFlow(data.BANKNIFTY, orderFlow.BANKNIFTY),
+    SENSEX: mergeOrderFlow(data.SENSEX, orderFlow.SENSEX),
   };
 
   // Calculate integrated metrics across ALL symbols (using LIVE merged data)

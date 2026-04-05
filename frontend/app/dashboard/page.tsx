@@ -58,7 +58,7 @@ export default function DashboardPage(): JSX.Element {
         <div className="grid grid-cols-1 gap-8">
           {/* Overall Market Outlook - 14 Signals */}
           <div>
-            <OverallMarketOutlook symbol={selectedSymbol} />
+            <OverallMarketOutlook />
           </div>
 
           {/* Index Card for Quick Reference */}

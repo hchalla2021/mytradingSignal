@@ -226,7 +226,7 @@ export default function OIMomentumCard({
   const final   = getSig(data.final_signal);
   const s5      = getSig(data.signal_5m);
   const s15     = getSig(data.signal_15m);
-  const m       = data.metrics ?? {};
+  const m       = (data.metrics ?? {}) as Record<string, number | boolean>;
   const outlook = fiveMinOutlook(data);
   const outlookConf = adjustConf(outlook.prob, marketStatus);
 

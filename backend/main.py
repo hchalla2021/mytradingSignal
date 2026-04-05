@@ -33,6 +33,8 @@ from routers import (
 from routers.compass import http_router as compass_http, ws_router as compass_ws
 from routers.liquidity import http_router as liq_http, ws_router as liq_ws
 from routers.ict import http_router as ict_http, ws_router as ict_ws
+from routers.expiry_explosion import http_router as expiry_http, ws_router as expiry_ws
+from routers.market_edge import http_router as edge_http, ws_router as edge_ws
 
 # Windows console fix already applied in config/__init__.py
 
@@ -155,12 +157,30 @@ async def lifespan(app: FastAPI):
             except Exception:
                 pass
 
+        async def start_expiry_explosion():
+            try:
+                from services.expiry_explosion_service import get_expiry_explosion_service
+                await get_expiry_explosion_service().start()
+                print("💥 Expiry Explosion: ON")
+            except Exception:
+                pass
+
+        async def start_market_edge():
+            try:
+                from services.market_edge_service import get_market_edge_service
+                await get_market_edge_service().start()
+                print("📈 MarketEdge: ON")
+            except Exception:
+                pass
+
         await asyncio.gather(
             start_scheduler(),
             start_oi_broadcaster(),
             start_compass(),
             start_liquidity(),
             start_ict(),
+            start_expiry_explosion(),
+            start_market_edge(),
         )
         print("🚀 All services READY")
 
@@ -213,6 +233,20 @@ async def lifespan(app: FastAPI):
     try:
         from services.ict_engine import get_ict_service
         await get_ict_service().stop()
+    except Exception:
+        pass
+
+    # Stop Expiry Explosion Service
+    try:
+        from services.expiry_explosion_service import get_expiry_explosion_service
+        await get_expiry_explosion_service().stop()
+    except Exception:
+        pass
+
+    # Stop MarketEdge Intelligence Service
+    try:
+        from services.market_edge_service import get_market_edge_service
+        await get_market_edge_service().stop()
     except Exception:
         pass
     
@@ -293,6 +327,14 @@ app.include_router(liq_http, prefix="/api", tags=["Liquidity"])
 # 🏦 ICT Smart Money Intelligence
 app.include_router(ict_ws,   prefix="/ws",  tags=["ICT"])
 app.include_router(ict_http, prefix="/api", tags=["ICT"])
+
+# 💥 Expiry Explosion Zone
+app.include_router(expiry_ws,   prefix="/ws",  tags=["Expiry Explosion"])
+app.include_router(expiry_http, prefix="/api", tags=["Expiry Explosion"])
+
+# 📈 MarketEdge Intelligence
+app.include_router(edge_ws,   prefix="/ws",  tags=["MarketEdge"])
+app.include_router(edge_http, prefix="/api", tags=["MarketEdge"])
 
 
 @app.get("/")
