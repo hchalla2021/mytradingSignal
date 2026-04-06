@@ -28,7 +28,6 @@ NSE_HOLIDAYS = {
     "2026-03-03": "Maha Shivaratri",
     "2026-03-04": "Holi",
     "2026-03-21": "Id-Ul-Fitr (Ramadan)",
-    "2026-04-06": "Shri Mahavir Jayanti",
     "2026-04-10": "Good Friday",
     "2026-04-14": "Dr. Ambedkar Jayanti",
     "2026-05-01": "Maharashtra Day",
