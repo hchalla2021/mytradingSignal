@@ -2894,23 +2894,43 @@ async def get_trade_zones(symbol: str) -> Dict[str, Any]:
         current_price = float(df.iloc[-1].get('close', 0))
         current_volume = int(df.iloc[-1].get('volume', 0))
         
-        # Extract analysis data
+        # Extract analysis data (volume, vwap, smart money)
         from services.instant_analysis import get_instant_analysis_data
         analysis = await get_instant_analysis_data(df, symbol, current_price)
         
-        # Extract EMA levels (support/resistance zones)
-        ema_20 = float(analysis.get('ema_20', current_price))
-        ema_50 = float(analysis.get('ema_50', current_price))
-        ema_100 = float(analysis.get('ema_100', current_price))
-        ema_200 = float(analysis.get('ema_200', current_price))
+        # ── Compute EMA levels directly from DataFrame (not in get_instant_analysis_data) ──
+        close_series = pd.to_numeric(df['close'], errors='coerce')
+        ema_20 = float(close_series.ewm(span=20, adjust=False).mean().iloc[-1]) if len(df) >= 20 else current_price
+        ema_50 = float(close_series.ewm(span=50, adjust=False).mean().iloc[-1]) if len(df) >= 50 else current_price
+        ema_100 = float(close_series.ewm(span=min(100, len(df)), adjust=False).mean().iloc[-1]) if len(df) >= 20 else current_price
+        ema_200 = float(close_series.ewm(span=min(200, len(df)), adjust=False).mean().iloc[-1]) if len(df) >= 20 else current_price
+        
+        # ── Compute trend structure from swing highs/lows ──
+        highs = pd.to_numeric(df['high'], errors='coerce').values
+        lows = pd.to_numeric(df['low'], errors='coerce').values
+        n = len(highs)
+        trend_structure = 'SIDEWAYS'
+        if n >= 10:
+            mid = n // 2
+            first_high, second_high = float(max(highs[:mid])), float(max(highs[mid:]))
+            first_low, second_low = float(min(lows[:mid])), float(min(lows[mid:]))
+            if second_high > first_high and second_low > first_low:
+                trend_structure = 'HIGHER_HIGHS_LOWS'
+            elif second_high < first_high and second_low < first_low:
+                trend_structure = 'LOWER_HIGHS_LOWS'
+        
+        # ── Compute ATR from DataFrame ──
+        if len(df) >= 10:
+            high_s = pd.to_numeric(df['high'], errors='coerce')
+            low_s = pd.to_numeric(df['low'], errors='coerce')
+            atr_10 = float((high_s - low_s).tail(10).mean())
+        else:
+            atr_10 = current_price * 0.01
         
         # Extract volume and strength data
         buy_volume_ratio = float(analysis.get('buy_volume_ratio', 50.0))
         volume_strength = analysis.get('volume_strength', 'WEAK_VOLUME')
         vwap_value = float(analysis.get('vwap', current_price))
-        
-        # Get trend info
-        trend_structure = analysis.get('trend_structure', 'SIDEWAYS')
         
         # Calculate distances to key levels
         distance_to_ema20 = ((current_price - ema_20) / ema_20 * 100) if ema_20 > 0 else 0
@@ -3007,8 +3027,6 @@ async def get_trade_zones(symbol: str) -> Dict[str, Any]:
         
         # Calculate risk/reward ratio
         # Risk = distance to stop loss (ATR), Reward = distance to target
-        atr_10 = float(analysis.get('atr_10', current_price * 0.01)) if 'atr_10' in analysis else current_price * 0.01
-        
         stop_loss = current_price - atr_10
         # Upside target: next resistance level above current price
         target_upside = current_price + atr_10 * 2

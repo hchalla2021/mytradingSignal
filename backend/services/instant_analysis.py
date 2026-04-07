@@ -270,17 +270,18 @@ async def fetch_dual_rsi_from_cache(symbol: str, cache, tick_data: Dict[str, Any
         elif avg_rsi < 35 or avg_rsi > 65:
             confidence += 10
         
-        # Determine status
-        if rsi_5m < 30 and rsi_15m < 40:
-            status = 'STRONG_BUY'
-            confidence = min(95, confidence + 10)
-        elif (rsi_5m < 40 and rsi_15m < 50) or rsi_5m < 35:
-            status = 'BUY'
-        elif rsi_5m > 70 and rsi_15m > 60:
-            status = 'STRONG_SELL'
+        # Determine momentum status (trend-following labels)
+        # HIGH RSI = STRONG bullish momentum, LOW RSI = WEAK/bearish momentum
+        if rsi_5m > 70 and rsi_15m > 60:
+            status = 'STRONG'
             confidence = min(95, confidence + 10)
         elif (rsi_5m > 60 and rsi_15m > 50) or rsi_5m > 65:
-            status = 'SELL'
+            status = 'OVERBOUGHT'
+        elif rsi_5m < 30 and rsi_15m < 40:
+            status = 'OVERSOLD'
+            confidence = min(95, confidence + 10)
+        elif (rsi_5m < 40 and rsi_15m < 50) or rsi_5m < 35:
+            status = 'WEAK'
         
         confidence = max(30, min(100, confidence))
         
@@ -1541,20 +1542,21 @@ class InstantSignal:
             is_compressed = ema_spread < compression_threshold
             
             # Trend Status = Traffic Light
-            if ema_20 > ema_50 > ema_100 and price > ema_20 and not is_compressed:
+            if ema_20 > ema_50 > ema_100 and price > ema_20:
                 # Strong Bullish Trend - Perfect alignment + price above all
+                # Even if compressed — the direction is clear
                 trend_status = "STRONG_UPTREND"
-                trend_label = "✅ Strong Uptrend"
+                trend_label = "✅ Strong Uptrend" if not is_compressed else "✅ Bullish (Tight EMAs)"
                 trend_color = "BULLISH"
                 buy_allowed = True
-            elif ema_20 < ema_50 < ema_100 and price < ema_20 and not is_compressed:
+            elif ema_20 < ema_50 < ema_100 and price < ema_20:
                 # Strong Bearish Trend - Perfect alignment + price below all
                 trend_status = "STRONG_DOWNTREND"
-                trend_label = "🔴 Strong Downtrend"
+                trend_label = "🔴 Strong Downtrend" if not is_compressed else "🔴 Bearish (Tight EMAs)"
                 trend_color = "BEARISH"
                 buy_allowed = False
-            elif is_compressed:
-                # 🔥 TRUE Compression Zone - EMAs all clustered together
+            elif is_compressed and not (ema_20 > ema_50 > ema_100) and not (ema_20 < ema_50 < ema_100):
+                # TRUE Compression Zone — EMAs clustered AND not ordered
                 trend_status = "COMPRESSION"
                 trend_label = "🟡 Compression Zone"
                 trend_color = "NEUTRAL"
@@ -1689,16 +1691,17 @@ class InstantSignal:
             # EMA ALIGNMENT STATUS (for frontend EMA Traffic Light)
             # ============================================
             # Calculate EMA alignment for the traffic light display
-            if ema_20 > ema_50 > ema_100 and price > ema_20 and not is_compressed:
-                # All three EMAs properly ordered BULLISH + price above all + not compressed
+            if ema_20 > ema_50 > ema_100 and price > ema_20:
+                # All three EMAs properly ordered BULLISH + price above all
+                # Even if compressed — the ORDER matters more than the spread
                 ema_alignment = "ALL_BULLISH"
-                ema_alignment_confidence = 95
-            elif ema_20 < ema_50 < ema_100 and price < ema_20 and not is_compressed:
-                # All three EMAs properly ordered BEARISH + price below all + not compressed
+                ema_alignment_confidence = 80 if is_compressed else 95
+            elif ema_20 < ema_50 < ema_100 and price < ema_20:
+                # All three EMAs properly ordered BEARISH + price below all
                 ema_alignment = "ALL_BEARISH"
-                ema_alignment_confidence = 95
-            elif is_compressed:
-                # 🔥 TRUE compression - EMAs all bunched together = confusion zone
+                ema_alignment_confidence = 80 if is_compressed else 95
+            elif is_compressed and not (ema_20 > ema_50 > ema_100) and not (ema_20 < ema_50 < ema_100):
+                # TRUE compression — EMAs bunched AND not properly ordered = confusion
                 ema_alignment = "COMPRESSION"
                 ema_alignment_confidence = 30
             elif (ema_20 > ema_50 > ema_100) and (price > ema_50 or price > ema_100):
@@ -2243,16 +2246,16 @@ class InstantSignal:
                     "trend": trend_map.get(trend, 'SIDEWAYS'),
 
                     # ── DUAL TIMEFRAME TREND (direct keys for Trade Zones UI) ──────────
-                    # 5-min trend: driven by short-term RSI + price momentum
+                    # 5-min trend: SuperTrend primary → RSI → price change (widened dead zone)
                     "trend_5min": (
-                        "UP" if (dual_rsi.get('rsi_5m', 50) >= 55 or (change_percent > 0.3 and trend == "bullish") or st_10_2_trend == "BULLISH")
-                        else "DOWN" if (dual_rsi.get('rsi_5m', 50) <= 45 or (change_percent < -0.3 and trend == "bearish") or st_10_2_trend == "BEARISH")
+                        "UP" if (st_10_2_trend == "BULLISH" or dual_rsi.get('rsi_5m', 50) >= 53 or (change_percent > 0.2 and trend == "bullish"))
+                        else "DOWN" if (st_10_2_trend == "BEARISH" or dual_rsi.get('rsi_5m', 50) <= 47 or (change_percent < -0.2 and trend == "bearish"))
                         else "NEUTRAL"
                     ),
-                    # 15-min trend: driven by EMA alignment + market structure
+                    # 15-min trend: EMA alignment + market structure + trend_color fallback
                     "trend_15min": (
-                        "UP" if (ema_alignment in ["ALL_BULLISH", "PARTIAL_BULLISH"] or tick_data.get('trend_structure') == "HIGHER_HIGHS_LOWS")
-                        else "DOWN" if (ema_alignment in ["ALL_BEARISH", "PARTIAL_BEARISH"] or tick_data.get('trend_structure') == "LOWER_HIGHS_LOWS")
+                        "UP" if (ema_alignment in ["ALL_BULLISH", "PARTIAL_BULLISH"] or tick_data.get('trend_structure') == "HIGHER_HIGHS_LOWS" or trend_color == "BULLISH")
+                        else "DOWN" if (ema_alignment in ["ALL_BEARISH", "PARTIAL_BEARISH"] or tick_data.get('trend_structure') == "LOWER_HIGHS_LOWS" or trend_color == "BEARISH")
                         else "NEUTRAL"
                     ),
 

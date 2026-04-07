@@ -268,36 +268,36 @@ const IndexCard = ({ symbol, name, data, isConnected, aiAlertData, outlookData }
         }`}>          
           {/* 🎯 BIG DECISION BOX - CAN I TRADE? */}
           <div className={`mb-3 p-3 rounded-xl border-2 text-center ${
-            (outlookData.overallSignal === 'STRONG_BUY' || outlookData.overallSignal === 'BUY') && outlookData.overallConfidence >= 60 && outlookData.riskLevel !== 'HIGH'
+            (outlookData.overallSignal === 'STRONG_BUY' || outlookData.overallSignal === 'BUY') && outlookData.overallConfidence >= 45 && outlookData.riskLevel !== 'HIGH'
               ? 'bg-emerald-500/20 border-emerald-500/25'
-              : outlookData.overallSignal === 'NEUTRAL' || outlookData.overallConfidence < 60 || (outlookData.overallSignal === 'BUY' && outlookData.riskLevel === 'HIGH')
+              : outlookData.overallSignal === 'NEUTRAL' || outlookData.overallConfidence < 45 || (outlookData.overallSignal === 'BUY' && outlookData.riskLevel === 'HIGH')
               ? 'bg-amber-500/20 border-amber-400'
               : 'bg-rose-500/20 border-rose-400'
           }`}>
             <div className="text-2xl mb-1">
-              {(outlookData.overallSignal === 'STRONG_BUY' || outlookData.overallSignal === 'BUY') && outlookData.overallConfidence >= 60 && outlookData.riskLevel !== 'HIGH'
+              {(outlookData.overallSignal === 'STRONG_BUY' || outlookData.overallSignal === 'BUY') && outlookData.overallConfidence >= 45 && outlookData.riskLevel !== 'HIGH'
                 ? '✅'
-                : outlookData.overallSignal === 'NEUTRAL' || outlookData.overallConfidence < 60 || (outlookData.overallSignal === 'BUY' && outlookData.riskLevel === 'HIGH')
+                : outlookData.overallSignal === 'NEUTRAL' || outlookData.overallConfidence < 45 || (outlookData.overallSignal === 'BUY' && outlookData.riskLevel === 'HIGH')
                 ? '⏸️'
                 : '❌'}
             </div>
             <div className={`text-lg font-black tracking-wide ${
-              (outlookData.overallSignal === 'STRONG_BUY' || outlookData.overallSignal === 'BUY') && outlookData.overallConfidence >= 60 && outlookData.riskLevel !== 'HIGH'
+              (outlookData.overallSignal === 'STRONG_BUY' || outlookData.overallSignal === 'BUY') && outlookData.overallConfidence >= 45 && outlookData.riskLevel !== 'HIGH'
                 ? 'text-emerald-200'
-                : outlookData.overallSignal === 'NEUTRAL' || outlookData.overallConfidence < 60 || (outlookData.overallSignal === 'BUY' && outlookData.riskLevel === 'HIGH')
+                : outlookData.overallSignal === 'NEUTRAL' || outlookData.overallConfidence < 45 || (outlookData.overallSignal === 'BUY' && outlookData.riskLevel === 'HIGH')
                 ? 'text-amber-200'
                 : 'text-rose-200'
             }`}>
-              {(outlookData.overallSignal === 'STRONG_BUY' || outlookData.overallSignal === 'BUY') && outlookData.overallConfidence >= 60 && outlookData.riskLevel !== 'HIGH'
+              {(outlookData.overallSignal === 'STRONG_BUY' || outlookData.overallSignal === 'BUY') && outlookData.overallConfidence >= 45 && outlookData.riskLevel !== 'HIGH'
                 ? 'YES - TAKE TRADE'
-                : outlookData.overallSignal === 'NEUTRAL' || outlookData.overallConfidence < 60 || (outlookData.overallSignal === 'BUY' && outlookData.riskLevel === 'HIGH')
+                : outlookData.overallSignal === 'NEUTRAL' || outlookData.overallConfidence < 45 || (outlookData.overallSignal === 'BUY' && outlookData.riskLevel === 'HIGH')
                 ? 'WAIT - NOT SURE'
                 : 'NO - DON\'T TRADE'}
             </div>
             <div className="text-[9px] text-slate-300 mt-1">
-              {(outlookData.overallSignal === 'STRONG_BUY' || outlookData.overallSignal === 'BUY') && outlookData.overallConfidence >= 60 && outlookData.riskLevel !== 'HIGH'
+              {(outlookData.overallSignal === 'STRONG_BUY' || outlookData.overallSignal === 'BUY') && outlookData.overallConfidence >= 45 && outlookData.riskLevel !== 'HIGH'
                 ? 'Good opportunity to enter'
-                : outlookData.overallSignal === 'NEUTRAL' || outlookData.overallConfidence < 60
+                : outlookData.overallSignal === 'NEUTRAL' || outlookData.overallConfidence < 45
                 ? 'Not enough signals to trade'
                 : (outlookData.overallSignal === 'BUY' && outlookData.riskLevel === 'HIGH')
                 ? 'Too risky to trade now'

@@ -1,6 +1,6 @@
 'use client';
 
-import React, { memo, useMemo } from 'react';
+import React, { memo } from 'react';
 import { useMarketEdge, type EdgeIndex, type EdgeAction, type OIProfile } from '@/hooks/useMarketEdge';
 import SectionTitle from '@/components/SectionTitle';
 
@@ -70,7 +70,7 @@ const SignalBar = memo<{ name: string; score: number; signal: string; label: str
         </div>
         <div className="relative h-1.5 bg-slate-700/50 rounded-full overflow-hidden">
           <div
-            className={`absolute top-0 ${isBull ? 'left-1/2' : 'right-1/2'} h-full ${barColor} rounded-full transition-all duration-500`}
+            className={`absolute top-0 ${isBull ? 'left-1/2' : 'right-1/2'} h-full ${barColor} rounded-full`}
             style={{ width: `${pct / 2}%` }}
           />
           <div className="absolute top-0 left-1/2 w-px h-full bg-slate-500/60" />
@@ -119,7 +119,7 @@ const IVGauge = memo<{ ivRank: number; ivPercentile: number; ivEst: number; vix:
           </div>
           <div className="h-2 bg-slate-700/50 rounded-full overflow-hidden">
             <div
-              className={`h-full bg-gradient-to-r ${rankBg} to-transparent rounded-full transition-all duration-700`}
+              className={`h-full bg-gradient-to-r ${rankBg} to-transparent rounded-full`}
               style={{ width: `${ivRank}%` }}
             />
           </div>
@@ -147,9 +147,9 @@ IVGauge.displayName = 'IVGauge';
 const EdgeCard = memo<{ data: EdgeIndex | null; name: string }>(({ data, name }) => {
   if (!data) {
     return (
-      <div className="rounded-2xl border border-slate-700/50 bg-gradient-to-br from-slate-800/60 to-slate-900/60 p-4 animate-pulse">
-        <div className="h-5 w-32 bg-slate-700 rounded mb-3" />
-        <div className="h-12 w-full bg-slate-700/50 rounded-xl mb-3" />
+      <div className="rounded-2xl border border-slate-700/50 bg-gradient-to-br from-slate-800/60 to-slate-900/60 p-4">
+        <div className="h-5 w-32 bg-slate-700/60 rounded mb-3" />
+        <div className="h-12 w-full bg-slate-700/40 rounded-xl mb-3" />
         <div className="space-y-2">
           {[...Array(5)].map((_, i) => <div key={i} className="h-3 bg-slate-700/30 rounded" />)}
         </div>
@@ -178,7 +178,7 @@ const EdgeCard = memo<{ data: EdgeIndex | null; name: string }>(({ data, name })
   const confColor = data.confidence >= 70 ? 'from-emerald-500 to-emerald-400' : data.confidence >= 40 ? 'from-amber-500 to-amber-400' : 'from-red-500 to-red-400';
 
   return (
-    <div className={`rounded-2xl border ${cardBorder} bg-gradient-to-br from-slate-800/70 via-slate-900/70 to-slate-800/50 backdrop-blur-sm p-3 sm:p-4 transition-all duration-300`}>
+    <div className={`rounded-2xl border ${cardBorder} bg-gradient-to-br from-slate-800/70 via-slate-900/70 to-slate-800/50 backdrop-blur-sm p-3 sm:p-4`}>
       {/* Header */}
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-2">
@@ -187,7 +187,7 @@ const EdgeCard = memo<{ data: EdgeIndex | null; name: string }>(({ data, name })
             {isLive ? '● LIVE' : '○ CLOSED'}
           </span>
         </div>
-        <span className={`inline-flex items-center px-2.5 py-1 rounded-lg border ${m.changePct >= 0 ? 'border-emerald-400/60 bg-emerald-500/10 shadow-sm shadow-emerald-500/20' : 'border-red-400/60 bg-red-500/10 shadow-sm shadow-red-500/20'} transition-all duration-500`}>
+        <span className={`inline-flex items-center px-2.5 py-1 rounded-lg border ${m.changePct >= 0 ? 'border-emerald-400/60 bg-emerald-500/10 shadow-sm shadow-emerald-500/20' : 'border-red-400/60 bg-red-500/10 shadow-sm shadow-red-500/20'}`}>
           <span className={`text-lg font-mono font-bold ${m.changePct >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
             ₹{formatPrice(m.price)}
           </span>
@@ -208,7 +208,7 @@ const EdgeCard = memo<{ data: EdgeIndex | null; name: string }>(({ data, name })
           </span>
         </div>
         <div className="h-1.5 bg-slate-700/50 rounded-full overflow-hidden">
-          <div className={`h-full bg-gradient-to-r ${confColor} rounded-full transition-all duration-700`} style={{ width: `${data.confidence}%` }} />
+          <div className={`h-full bg-gradient-to-r ${confColor} rounded-full`} style={{ width: `${data.confidence}%` }} />
         </div>
       </div>
 
@@ -227,7 +227,7 @@ const EdgeCard = memo<{ data: EdgeIndex | null; name: string }>(({ data, name })
 
       {/* OI Spurts Alert */}
       {data.signals.oi_spurts.extra && (data.signals.oi_spurts.extra as Record<string, number>).peakSpurt >= 1.5 && (
-        <div className={`rounded-lg border p-2 mb-3 animate-pulse ${data.signals.oi_spurts.score > 0 ? 'bg-emerald-500/10 border-emerald-400/40' : data.signals.oi_spurts.score < 0 ? 'bg-red-500/10 border-red-400/40' : 'bg-amber-500/10 border-amber-400/40'}`}>
+        <div className={`rounded-lg border p-2 mb-3 ${data.signals.oi_spurts.score > 0 ? 'bg-emerald-500/10 border-emerald-400/40' : data.signals.oi_spurts.score < 0 ? 'bg-red-500/10 border-red-400/40' : 'bg-amber-500/10 border-amber-400/40'}`}>
           <div className="flex items-center gap-1.5">
             <span className="text-sm">🔥</span>
             <span className={`text-[10px] sm:text-xs font-bold ${data.signals.oi_spurts.score > 0 ? 'text-emerald-300' : data.signals.oi_spurts.score < 0 ? 'text-red-300' : 'text-amber-300'}`}>
@@ -320,36 +320,10 @@ EdgeCard.displayName = 'EdgeCard';
 const MarketEdgeIntelligence = memo(() => {
   const { edgeData, isConnected } = useMarketEdge();
 
-  const dominantAction = useMemo(() => {
-    const actions: EdgeAction[] = [];
-    for (const sym of ['NIFTY', 'BANKNIFTY', 'SENSEX'] as const) {
-      if (edgeData[sym]?.action) actions.push(edgeData[sym]!.action);
-    }
-    if (actions.includes('STRONG_BUY')) return 'STRONG_BUY';
-    if (actions.includes('STRONG_SELL')) return 'STRONG_SELL';
-    if (actions.includes('BUY')) return 'BUY';
-    if (actions.includes('SELL')) return 'SELL';
-    return 'NEUTRAL';
-  }, [edgeData]);
-
-  const sectionBorder =
-    dominantAction === 'STRONG_BUY' ? 'border-emerald-400/50' :
-    dominantAction === 'BUY' ? 'border-emerald-500/30' :
-    dominantAction === 'STRONG_SELL' ? 'border-red-400/50' :
-    dominantAction === 'SELL' ? 'border-red-500/30' :
-    'border-teal-500/30';
-
-  const sectionBg =
-    dominantAction === 'STRONG_BUY' || dominantAction === 'BUY'
-      ? 'from-emerald-950/25 via-dark-card/50 to-dark-elevated/40'
-      : dominantAction === 'STRONG_SELL' || dominantAction === 'SELL'
-      ? 'from-red-950/25 via-dark-card/50 to-dark-elevated/40'
-      : 'from-teal-950/20 via-dark-card/50 to-dark-elevated/40';
-
-  const sectionGlow =
-    dominantAction === 'STRONG_BUY' ? 'shadow-xl shadow-emerald-500/15' :
-    dominantAction === 'STRONG_SELL' ? 'shadow-xl shadow-red-500/15' :
-    'shadow-md';
+  // Fixed section styling — no dynamic color swaps that cause flashing
+  const sectionBorder = 'border-teal-500/30';
+  const sectionBg = 'from-teal-950/20 via-dark-card/50 to-dark-elevated/40';
+  const sectionGlow = 'shadow-md';
 
   return (
     <div className={`mt-6 sm:mt-6 border-2 ${sectionBorder} rounded-2xl p-3 sm:p-4 bg-gradient-to-br ${sectionBg} backdrop-blur-sm ${sectionGlow}`}>

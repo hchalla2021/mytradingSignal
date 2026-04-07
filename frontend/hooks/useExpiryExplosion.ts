@@ -61,8 +61,11 @@ export interface ExpiryIndex {
   confidence: number;
   rawScore: number;
   isExpiryDay: boolean;
+  isMonthlyExpiry?: boolean;
   hoursToExpiry: number;
   expiryPhase: ExpiryPhase;
+  expiryLabel?: string;
+  expiryDate?: string;
   signals: {
     gamma_exposure: ExpirySignalFactor;
     oi_concentration: ExpirySignalFactor;

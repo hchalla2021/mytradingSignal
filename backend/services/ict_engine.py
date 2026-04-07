@@ -69,8 +69,8 @@ W5M: Dict[str, float] = {
     "smart_money_div":    0.05,
 }
 
-BULL_T = 0.20
-BEAR_T = -0.20
+BULL_T = 0.12
+BEAR_T = -0.12
 
 
 # ── Isolated WebSocket manager ────────────────────────────────────────────────
@@ -97,16 +97,19 @@ class ICTConnectionManager:
         msg = json.dumps(data, default=str)
         dead: Set[WebSocket] = set()
         async with self._lock:
-            for ws in self._connections:
-                try:
-                    await ws.send_text(msg)
-                except Exception:
-                    dead.add(ws)
-            self._connections -= dead
+            clients = list(self._connections)
+        for ws in clients:
+            try:
+                await asyncio.wait_for(ws.send_text(msg), timeout=3.0)
+            except Exception:
+                dead.add(ws)
+        if dead:
+            async with self._lock:
+                self._connections -= dead
 
     async def send_personal(self, ws: WebSocket, data: Dict[str, Any]):
         try:
-            await ws.send_text(json.dumps(data, default=str))
+            await asyncio.wait_for(ws.send_text(json.dumps(data, default=str)), timeout=3.0)
         except Exception:
             await self.disconnect(ws)
 
@@ -259,40 +262,52 @@ def _order_block_signal(candles: List[Dict], price: float) -> Dict:
                 "ts": c0.get("timestamp", ""),
             })
 
-    # Score: price proximity to OBs
-    score = 0.0
+    # Score: price proximity to OBs (with diminishing returns)
+    bull_score = 0.0
+    bear_score = 0.0
     nearest_ob = None
     nearest_dist = float("inf")
+    _DR = [1.0, 0.55, 0.30]  # Diminishing returns: 1st OB full, 2nd 55%, 3rd 30%
 
     # Check bullish OBs (support zones — price above = bullish)
+    bull_hit = 0
     for ob in bullish_obs[-5:]:  # Last 5
         dist_pct = (price - ob["low"]) / (price + 0.001) * 100
         if 0 < dist_pct < 1.5:  # Price within 1.5% of bullish OB
-            score += 0.35 * ob["strength"]
+            dr = _DR[min(bull_hit, len(_DR) - 1)]
+            bull_score += 0.35 * ob["strength"] * dr
+            bull_hit += 1
             if abs(dist_pct) < nearest_dist:
                 nearest_dist = abs(dist_pct)
                 nearest_ob = {"type": "BULLISH", "zone": f"{ob['low']:.0f}-{ob['high']:.0f}", "dist": round(dist_pct, 2)}
         elif -0.5 < dist_pct <= 0:  # Price inside bullish OB
-            score += 0.65 * ob["strength"]
+            dr = _DR[min(bull_hit, len(_DR) - 1)]
+            bull_score += 0.55 * ob["strength"] * dr
+            bull_hit += 1
             if abs(dist_pct) < nearest_dist:
                 nearest_dist = abs(dist_pct)
                 nearest_ob = {"type": "BULLISH_RETEST", "zone": f"{ob['low']:.0f}-{ob['high']:.0f}", "dist": 0}
 
     # Check bearish OBs (resistance zones — price below = bearish)
+    bear_hit = 0
     for ob in bearish_obs[-5:]:
         dist_pct = (ob["high"] - price) / (price + 0.001) * 100
         if 0 < dist_pct < 1.5:
-            score -= 0.35 * ob["strength"]
+            dr = _DR[min(bear_hit, len(_DR) - 1)]
+            bear_score += 0.35 * ob["strength"] * dr
+            bear_hit += 1
             if abs(dist_pct) < nearest_dist:
                 nearest_dist = abs(dist_pct)
                 nearest_ob = {"type": "BEARISH", "zone": f"{ob['low']:.0f}-{ob['high']:.0f}", "dist": round(dist_pct, 2)}
         elif -0.5 < dist_pct <= 0:
-            score -= 0.65 * ob["strength"]
+            dr = _DR[min(bear_hit, len(_DR) - 1)]
+            bear_score += 0.55 * ob["strength"] * dr
+            bear_hit += 1
             if abs(dist_pct) < nearest_dist:
                 nearest_dist = abs(dist_pct)
                 nearest_ob = {"type": "BEARISH_RETEST", "zone": f"{ob['low']:.0f}-{ob['high']:.0f}", "dist": 0}
 
-    score = _clamp(score, -1.0, 1.0)
+    score = _clamp(bull_score - bear_score, -0.70, 0.70)
 
     if nearest_ob:
         ob_type = nearest_ob["type"]
@@ -478,6 +493,22 @@ def _market_structure_signal(candles: List[Dict], swing_tracker: SwingTracker) -
             structure = "BEARISH_BOS"
             score = -0.75
             label = f"🔥 Bearish BOS — Price broke below {last_sl:.0f}"
+
+    else:
+        # RANGING fallback — use recent price action for mild directional lean
+        recent = candles[-5:] if len(candles) >= 5 else candles
+        first_c = float(recent[0].get("close", 0))
+        last_c = float(recent[-1].get("close", 0))
+        if first_c > 0 and last_c > 0:
+            trend_pct = (last_c - first_c) / first_c * 100
+            if trend_pct > 0.05:
+                score = min(0.20, trend_pct * 0.8)
+                structure = "RANGING_BULL_LEAN"
+                label = f"Ranging with bullish lean (+{trend_pct:.2f}%)"
+            elif trend_pct < -0.05:
+                score = max(-0.20, trend_pct * 0.8)
+                structure = "RANGING_BEAR_LEAN"
+                label = f"Ranging with bearish lean ({trend_pct:.2f}%)"
 
     # CHoCH detection: bullish structure but price breaks below last swing low
     if last_sh > prev_sh and current_low < last_sl:
@@ -1013,24 +1044,35 @@ class ICTService:
         magnitude = abs(composite)
 
         if direction == "NEUTRAL":
-            # For NEUTRAL: confidence = how balanced/conflicting signals are
-            # High confidence NEUTRAL = signals truly cancel out (strong opposing forces)
-            # Low confidence NEUTRAL = all signals near zero (no data / no conviction)
+            # NEUTRAL = conflicting or weak signals → should show LOW confidence
+            # Conflicting strong signals = low confidence (market is confused)
+            # All-zero signals = very low confidence (no data)
             if active_signals:
-                avg_magnitude = sum(abs(s) for s in active_signals) / len(active_signals)
+                # Count how many signals DISAGREE (some bull, some bear)
                 bull_count = sum(1 for s in active_signals if s > 0)
                 bear_count = sum(1 for s in active_signals if s < 0)
-                balance = 1.0 - abs(bull_count - bear_count) / max(len(active_signals), 1)
-                confidence = int(_clamp(balance * 35 + avg_magnitude * 30 + (1.0 - magnitude / 0.20) * 20, 5, 85))
+                disagreement = min(bull_count, bear_count) / max(len(active_signals), 1)
+                # More disagreement = LESS confident in any direction
+                # magnitude near 0 when NEUTRAL = signals cancel = low confidence
+                confidence = int(_clamp(
+                    15 + magnitude * 80 - disagreement * 20,
+                    5, 45
+                ))
             else:
                 confidence = 5
         else:
-            # For BULLISH/BEARISH: confidence = signal agreement with direction
+            # For BULLISH/BEARISH: confidence = signal agreement + magnitude + breadth
             if active_signals and magnitude > 0.03:
-                agreement = sum(1 for s in active_signals if (s > 0) == (composite > 0)) / len(active_signals)
+                same_dir = sum(1 for s in active_signals if (s > 0) == (composite > 0))
+                agreement = same_dir / len(active_signals)
+                breadth = min(len(active_signals), 5) / 5.0
             else:
                 agreement = 0.0
-            confidence = int(_clamp(agreement * 55 + magnitude * 44, 5, 99))
+                breadth = 0.0
+            confidence = int(_clamp(
+                agreement * 45 + magnitude * 35 + breadth * 15 + 5,
+                15, 99
+            ))
 
         # ── ICT Setup type ───────────────────────────────────────────────
         ict_setup = self._classify_setup(signals, composite)

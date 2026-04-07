@@ -590,21 +590,32 @@ export const useOverallMarketOutlook = () => {
     // 🔥 NEW: Extract 5 Additional Component Signals
     // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     
-    // SuperTrend
+    // SuperTrend — check top-level object first, then fallback to tech.indicators flat fields
     let supertrendSignal = 'NEUTRAL';
     let supertrendConfidence = 0;
-    if (supertrend) {
+    if (supertrend && (supertrend.signal || supertrend.supertrend_signal)) {
       supertrendSignal = supertrend.signal || supertrend.supertrend_signal || 'NEUTRAL';
       supertrendConfidence = (supertrend.confidence || supertrend.st_confidence || 0) * 100;
+    } else if (technical?.indicators) {
+      // Fallback: extract from flat indicator fields in /analyze response
+      const ind = technical.indicators;
+      supertrendSignal = ind.supertrend_10_2_signal || 'NEUTRAL';
+      const rawStConf = ind.supertrend_10_2_confidence || 0;
+      supertrendConfidence = rawStConf > 1 ? rawStConf : rawStConf * 100;
     }
     
     
-    // Camarilla CPR
+    // Camarilla CPR — check top-level object first, then fallback to tech.indicators flat fields
     let camarillaSignal = 'NEUTRAL';
     let camarillaConfidence = 0;
-    if (camarilla) {
+    if (camarilla && (camarilla.signal || camarilla.camarilla_signal)) {
       camarillaSignal = camarilla.signal || camarilla.camarilla_signal || 'NEUTRAL';
       camarillaConfidence = (camarilla.confidence || camarilla.camarilla_confidence || 0) * 100;
+    } else if (technical?.indicators) {
+      const ind = technical.indicators;
+      camarillaSignal = ind.camarilla_signal || 'NEUTRAL';
+      const rawCamConf = ind.camarilla_confidence || 0;
+      camarillaConfidence = rawCamConf > 1 ? rawCamConf : rawCamConf * 100;
     }
     
     // RSI 60/40 Momentum
@@ -619,8 +630,10 @@ export const useOverallMarketOutlook = () => {
     let smartMoneySignal = 'NEUTRAL';
     let smartMoneyConfidence = 0;
     if (smartMoney) {
-      smartMoneySignal = smartMoney.signal || smartMoney.bos_signal || 'NEUTRAL';
-      smartMoneyConfidence = (smartMoney.confidence || smartMoney.fvg_confidence || 0) * 100;
+      smartMoneySignal = smartMoney.smart_money_signal || smartMoney.signal || smartMoney.bos_signal || 'NEUTRAL';
+      const rawSmConf = smartMoney.smart_money_confidence || smartMoney.confidence || smartMoney.fvg_confidence || 0;
+      // API returns confidence as 0-1 decimal OR 0-100 int — normalize to 0-100
+      smartMoneyConfidence = rawSmConf > 1 ? rawSmConf : rawSmConf * 100;
     }
     
     // OI Momentum (5m/15m Alignment)
@@ -647,67 +660,47 @@ export const useOverallMarketOutlook = () => {
     const smartMoneyScore = signalToScore(smartMoneySignal, smartMoneyConfidence);
     const oiMomentumScore = signalToScore(oiMomentumSignal, oiMomentumConfidence);
     
-    //  SIMPLIFIED: Calculate weighted average score - NOW WITH 14 COMPONENTS
-    const totalWeight = (
-      SIGNAL_WEIGHTS.technical +
-      SIGNAL_WEIGHTS.zoneControl +
-      SIGNAL_WEIGHTS.volumePulse +
-      SIGNAL_WEIGHTS.trendBase +
-      SIGNAL_WEIGHTS.marketStructure +
-      SIGNAL_WEIGHTS.marketIndices +
-      SIGNAL_WEIGHTS.pcr +
-      SIGNAL_WEIGHTS.pivot +
-      // 🔥 NEW: 5 Additional Components
-      SIGNAL_WEIGHTS.supertrend +
-      SIGNAL_WEIGHTS.camarilla +
-      SIGNAL_WEIGHTS.rsi60_40 +
-      SIGNAL_WEIGHTS.smartMoney +
-      SIGNAL_WEIGHTS.oiMomentum
-    );
-    
-    const totalWeightedScore = (
-      (techScore * SIGNAL_WEIGHTS.technical) +
-      (zoneScore * SIGNAL_WEIGHTS.zoneControl) +
-      (volumeScore * SIGNAL_WEIGHTS.volumePulse) +
-      (trendScore * SIGNAL_WEIGHTS.trendBase) +
-      (marketStructureScore * SIGNAL_WEIGHTS.marketStructure) +
-      (marketIndicesScore * SIGNAL_WEIGHTS.marketIndices) +
-      (pcrScore * SIGNAL_WEIGHTS.pcr) +
-      (pivotScore * SIGNAL_WEIGHTS.pivot) +
-      // 🔥 NEW: 5 Additional Component Scores
-      (supertrendScore * SIGNAL_WEIGHTS.supertrend) +
-      (camarillaScore * SIGNAL_WEIGHTS.camarilla) +
-      (rsi60_40Score * SIGNAL_WEIGHTS.rsi60_40) +
-      (smartMoneyScore * SIGNAL_WEIGHTS.smartMoney) +
-      (oiMomentumScore * SIGNAL_WEIGHTS.oiMomentum)
-    ) / totalWeight;
-    
-    // Debug log removed for production
+    //  SIMPLIFIED: Calculate weighted average score - NOW WITH 13 COMPONENTS
+    // 🔥 FIX: Only include signals that have actual data (confidence > 0)
+    // Signals with 0 confidence = no data available → exclude from averaging
+    // This prevents unavailable signals from diluting the weighted average
+    const signalEntries: Array<{ score: number; confidence: number; weight: number }> = [
+      { score: techScore, confidence: finalTechConfidence, weight: SIGNAL_WEIGHTS.technical },
+      { score: zoneScore, confidence: zoneConfidence, weight: SIGNAL_WEIGHTS.zoneControl },
+      { score: volumeScore, confidence: volumeConfidence, weight: SIGNAL_WEIGHTS.volumePulse },
+      { score: trendScore, confidence: trendConfidence, weight: SIGNAL_WEIGHTS.trendBase },
+      { score: marketStructureScore, confidence: marketStructureConfidence, weight: SIGNAL_WEIGHTS.marketStructure },
+      { score: marketIndicesScore, confidence: marketIndicesConfidence, weight: SIGNAL_WEIGHTS.marketIndices },
+      { score: pcrScore, confidence: pcrConfidence, weight: SIGNAL_WEIGHTS.pcr },
+      { score: pivotScore, confidence: pivotConfidence, weight: SIGNAL_WEIGHTS.pivot },
+      { score: supertrendScore, confidence: supertrendConfidence, weight: SIGNAL_WEIGHTS.supertrend },
+      { score: camarillaScore, confidence: camarillaConfidence, weight: SIGNAL_WEIGHTS.camarilla },
+      { score: rsi60_40Score, confidence: rsi60_40Confidence, weight: SIGNAL_WEIGHTS.rsi60_40 },
+      { score: smartMoneyScore, confidence: smartMoneyConfidence, weight: SIGNAL_WEIGHTS.smartMoney },
+      { score: oiMomentumScore, confidence: oiMomentumConfidence, weight: SIGNAL_WEIGHTS.oiMomentum },
+    ];
 
-    // Calculate overall confidence (0-100) - SEPARATE from signal score - WITH 14 COMPONENTS
-    // Confidence = weighted average of individual confidences (not signal scores)
-    const overallConfidence = (
-      (finalTechConfidence * SIGNAL_WEIGHTS.technical) +
-      (zoneConfidence * SIGNAL_WEIGHTS.zoneControl) +
-      (volumeConfidence * SIGNAL_WEIGHTS.volumePulse) +
-      (trendConfidence * SIGNAL_WEIGHTS.trendBase) +
-      (marketStructureConfidence * SIGNAL_WEIGHTS.marketStructure) +
-      (marketIndicesConfidence * SIGNAL_WEIGHTS.marketIndices) +
-      (pcrConfidence * SIGNAL_WEIGHTS.pcr) +
-      (pivotConfidence * SIGNAL_WEIGHTS.pivot) +
-      // 🔥 NEW: 5 Additional Component Confidences
-      (supertrendConfidence * SIGNAL_WEIGHTS.supertrend) +
-      (camarillaConfidence * SIGNAL_WEIGHTS.camarilla) +
-      (rsi60_40Confidence * SIGNAL_WEIGHTS.rsi60_40) +
-      (smartMoneyConfidence * SIGNAL_WEIGHTS.smartMoney) +
-      (oiMomentumConfidence * SIGNAL_WEIGHTS.oiMomentum)
-    ) / totalWeight;
+    // Active signals = those with confidence > 0 (have actual data)
+    const activeSignals = signalEntries.filter(e => e.confidence > 0);
+    const activeWeight = activeSignals.reduce((sum, e) => sum + e.weight, 0) || 1;
+    // Use full weight for score denominator (keeps thresholds stable), but
+    // use active weight for confidence (so missing signals don't drag it down)
+    const totalWeight = activeWeight;
     
-    // 🔥 BONUS: Add alignment bonus (when signals agree, confidence increases) - NOW 14 SIGNALS
-    const allScores = [techScore, zoneScore, volumeScore, trendScore, marketStructureScore, marketIndicesScore, pcrScore, pivotScore, supertrendScore, camarillaScore, rsi60_40Score, smartMoneyScore, oiMomentumScore];
-    const bullishCount = allScores.filter(s => s > 0).length;
-    const bearishCount = allScores.filter(s => s < 0).length;
-    const alignmentBonus = Math.abs(bullishCount - bearishCount) * 2; // +2% per aligned signal (reduced for 14 signals)
+    const totalWeightedScore = activeSignals.reduce(
+      (sum, e) => sum + e.score * e.weight, 0
+    ) / totalWeight;
+
+    // Calculate overall confidence (0-100) - only from active signals
+    const overallConfidence = activeSignals.reduce(
+      (sum, e) => sum + e.confidence * e.weight, 0
+    ) / activeWeight;
+    
+    // 🔥 BONUS: Add alignment bonus (when active signals agree, confidence increases)
+    const activeScores = activeSignals.map(e => e.score);
+    const bullishCount = activeScores.filter(s => s > 0).length;
+    const bearishCount = activeScores.filter(s => s < 0).length;
+    const alignmentBonus = Math.abs(bullishCount - bearishCount) * 2;
     let finalConfidence = Math.min(100, overallConfidence + alignmentBonus);
 
     // 🔥 TRADER-FRIENDLY THRESHOLDS: More responsive and granular

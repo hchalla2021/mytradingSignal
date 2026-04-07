@@ -93,16 +93,19 @@ class CompassConnectionManager:
         msg = json.dumps(data, default=str)
         dead: Set[WebSocket] = set()
         async with self._lock:
-            for ws in self._connections:
-                try:
-                    await ws.send_text(msg)
-                except Exception:
-                    dead.add(ws)
-            self._connections -= dead
+            clients = list(self._connections)
+        for ws in clients:
+            try:
+                await asyncio.wait_for(ws.send_text(msg), timeout=3.0)
+            except Exception:
+                dead.add(ws)
+        if dead:
+            async with self._lock:
+                self._connections -= dead
 
     async def send_personal(self, ws: WebSocket, data: Dict[str, Any]):
         try:
-            await ws.send_text(json.dumps(data, default=str))
+            await asyncio.wait_for(ws.send_text(json.dumps(data, default=str)), timeout=3.0)
         except Exception:
             await self.disconnect(ws)
 
@@ -753,6 +756,11 @@ def _predict_5m_futures(
 
     total_w = sum(w for _, w in parts)
     score   = _clamp(sum(s * w for s, w in parts) / total_w, -1.0, 1.0)
+
+    # If only premium_slope contributed (no candles, no RSI), dampen the signal
+    # A single factor shouldn't produce extreme predictions
+    if total_w <= 0.26:
+        score *= 0.4   # dampen when only premium slope is available
 
     if score >=  0.45: return "STRONG_BUY"
     if score >=  0.20: return "BUY"

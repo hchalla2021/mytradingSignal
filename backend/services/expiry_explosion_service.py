@@ -36,18 +36,20 @@ Isolation: Own ConnectionManager, own asyncio task, own CacheService instance.
 """
 
 import asyncio
+import calendar
 import collections
 import json
 import math
 import time
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, date, timedelta
 from typing import Dict, Any, Optional, List, Tuple, Deque, Set
 
 from fastapi import WebSocket
 import pytz
 
 from services.cache import CacheService, _SHARED_CACHE
+from config.nse_holidays import is_trading_day, shift_to_prev_trading_day
 
 logger = logging.getLogger(__name__)
 IST = pytz.timezone("Asia/Kolkata")
@@ -70,10 +72,15 @@ BEAR_T = -0.15
 STRONG_BEAR_T = -0.35
 
 # ── Expiry calendar ──────────────────────────────────────────────────────────
+# NSE weekly expiry days (0=Monday ... 6=Sunday)
+# NIFTY weekly F&O: Tuesday (1)
+# BANKNIFTY weekly F&O: Wednesday (2)
+# SENSEX weekly F&O: Thursday (3)
+# Monthly expiry: last Tuesday of the month for all
 
-NIFTY_EXPIRY_DAY = 3       # Thursday (0=Mon)
+NIFTY_EXPIRY_DAY = 1       # Tuesday (0=Mon)
 BANKNIFTY_EXPIRY_DAY = 2   # Wednesday
-SENSEX_EXPIRY_DAY = 4      # Friday
+SENSEX_EXPIRY_DAY = 3      # Thursday
 
 EXPIRY_WEEKDAY_MAP = {
     "NIFTY": NIFTY_EXPIRY_DAY,
@@ -106,16 +113,20 @@ class ExpiryConnectionManager:
         msg = json.dumps(data, default=str)
         dead: Set[WebSocket] = set()
         async with self._lock:
-            for ws in self._connections:
-                try:
-                    await ws.send_text(msg)
-                except Exception:
-                    dead.add(ws)
-            self._connections -= dead
+            clients = list(self._connections)
+        # Send OUTSIDE lock — per-client 3s timeout to prevent blocking
+        for ws in clients:
+            try:
+                await asyncio.wait_for(ws.send_text(msg), timeout=3.0)
+            except Exception:
+                dead.add(ws)
+        if dead:
+            async with self._lock:
+                self._connections -= dead
 
     async def send_personal(self, ws: WebSocket, data: Dict[str, Any]):
         try:
-            await ws.send_text(json.dumps(data, default=str))
+            await asyncio.wait_for(ws.send_text(json.dumps(data, default=str)), timeout=3.0)
         except Exception:
             await self.disconnect(ws)
 
@@ -163,38 +174,107 @@ def _sig(score: float) -> str:
     return "NEUTRAL"
 
 
-# ── Expiry date computation ──────────────────────────────────────────────────
+# ── Expiry date computation (holiday-aware) ──────────────────────────────────
+
+def _effective_expiry_date(symbol: str, candidate: date) -> date:
+    """Shift a candidate expiry date backward if it falls on a holiday/weekend."""
+    return shift_to_prev_trading_day(candidate)
+
+
+def _get_monthly_expiry(now_date: date) -> date:
+    """Get the last Tuesday of the current month (monthly F&O expiry)."""
+    year, month = now_date.year, now_date.month
+    last_day = calendar.monthrange(year, month)[1]
+    d = date(year, month, last_day)
+    # Walk backward to find last Tuesday (weekday=1)
+    while d.weekday() != 1:  # 1 = Tuesday
+        d -= timedelta(days=1)
+    return _effective_expiry_date("NIFTY", d)
+
 
 def _is_expiry_day(symbol: str, now: Optional[datetime] = None) -> bool:
-    """Check if today is the weekly expiry day for the given symbol."""
+    """Check if today is the weekly expiry day for the given symbol (holiday-aware)."""
     now = now or datetime.now(IST)
-    target_day = EXPIRY_WEEKDAY_MAP.get(symbol, 3)
-    return now.weekday() == target_day
+    today = now.date() if isinstance(now, datetime) else now
+    # Check weekly expiry
+    nxt = _get_next_expiry(symbol, now)
+    nxt_date = nxt.date() if isinstance(nxt, datetime) else nxt
+    return today == nxt_date
 
 
 def _get_next_expiry(symbol: str, now: Optional[datetime] = None) -> datetime:
-    """Get the next expiry datetime for the symbol."""
+    """Get the next expiry datetime for the symbol (holiday-aware).
+
+    Logic:
+    1. Find the next occurrence of the symbol's weekly expiry weekday.
+    2. Shift backward if that day is a holiday/weekend → previous trading day.
+    3. If that effective expiry is already past (market closed), look at next week.
+    4. Also check monthly expiry (last Tuesday) — return whichever is sooner.
+    """
     now = now or datetime.now(IST)
-    target_day = EXPIRY_WEEKDAY_MAP.get(symbol, 3)
-    days_ahead = target_day - now.weekday()
-    if days_ahead < 0:
-        days_ahead += 7
-    if days_ahead == 0:
-        # If today is expiry day, check if market is still open
-        market_close = now.replace(hour=15, minute=30, second=0, microsecond=0)
-        if now < market_close:
-            return now  # Today is expiry, market still open
-        days_ahead = 7  # Next week's expiry
-    next_exp = now + timedelta(days=days_ahead)
-    return next_exp.replace(hour=15, minute=30, second=0, microsecond=0)
+    today = now.date() if isinstance(now, datetime) else now
+    target_day = EXPIRY_WEEKDAY_MAP.get(symbol, 1)  # default Tuesday
+    market_close_today = now.replace(hour=15, minute=30, second=0, microsecond=0)
+
+    # --- Weekly expiry ---
+    # Find next occurrence of target_day from today
+    days_ahead = (target_day - today.weekday()) % 7
+    candidate = today + timedelta(days=days_ahead)
+    effective = _effective_expiry_date(symbol, candidate)
+
+    # If effective expiry is today but market is closed, move to next week
+    if isinstance(now, datetime) and effective == today and now >= market_close_today:
+        candidate = today + timedelta(days=7)
+        # Re-find next target_day (candidate is already +7, but recalc for safety)
+        days_ahead2 = (target_day - candidate.weekday()) % 7
+        candidate = candidate + timedelta(days=days_ahead2)
+        effective = _effective_expiry_date(symbol, candidate)
+
+    # If effective shifted to before today (rare edge: holiday shifted back past today),
+    # move forward a week
+    if effective < today:
+        candidate = candidate + timedelta(days=7)
+        effective = _effective_expiry_date(symbol, candidate)
+
+    weekly_expiry = effective
+
+    # --- Monthly expiry (last Tuesday of month, holiday-shifted) ---
+    monthly = _get_monthly_expiry(today)
+    if monthly < today or (monthly == today and isinstance(now, datetime) and now >= market_close_today):
+        # This month's monthly expiry passed, look at next month
+        next_month = (today.replace(day=1) + timedelta(days=32)).replace(day=1)
+        monthly = _get_monthly_expiry(next_month)
+
+    # Return whichever is sooner (weekly or monthly — monthly IS a weekly for NIFTY)
+    chosen = min(weekly_expiry, monthly)
+
+    return datetime(chosen.year, chosen.month, chosen.day, 15, 30, 0, tzinfo=IST)
 
 
 def _hours_to_expiry(symbol: str, now: Optional[datetime] = None) -> float:
-    """Hours remaining until expiry close (15:30 IST)."""
+    """Hours remaining until expiry close (15:30 IST), counting only market hours."""
     now = now or datetime.now(IST)
     expiry = _get_next_expiry(symbol, now)
     diff = (expiry - now).total_seconds() / 3600.0
     return max(0.0, diff)
+
+
+def _get_expiry_label(symbol: str, now: Optional[datetime] = None) -> str:
+    """Human-readable expiry label like 'Weekly Tue' or 'Monthly (Last Tue)'."""
+    now = now or datetime.now(IST)
+    today = now.date() if isinstance(now, datetime) else now
+    expiry_dt = _get_next_expiry(symbol, now)
+    exp_date = expiry_dt.date()
+
+    monthly = _get_monthly_expiry(today)
+    if monthly < today:
+        next_month = (today.replace(day=1) + timedelta(days=32)).replace(day=1)
+        monthly = _get_monthly_expiry(next_month)
+
+    day_name = exp_date.strftime("%A")
+    if exp_date == monthly:
+        return f"Monthly Expiry ({day_name})"
+    return f"Weekly Expiry ({day_name})"
 
 
 def _expiry_phase(hours_left: float) -> str:
@@ -1111,7 +1191,11 @@ class ExpiryExplosionService:
             "BSE:SENSEX": "SENSEX",
         }
         try:
-            quotes = kite.quote(list(QUOTE_MAP.keys()))
+            # Timeout: if Kite API is slow/unreachable, don't block other services
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                future = pool.submit(kite.quote, list(QUOTE_MAP.keys()))
+                quotes = future.result(timeout=5)  # 5s max
             for q_key, sym in QUOTE_MAP.items():
                 q = quotes.get(q_key, {})
                 if not q:
@@ -1212,6 +1296,17 @@ class ExpiryExplosionService:
         is_expiry = _is_expiry_day(symbol, now)
         hours_left = _hours_to_expiry(symbol, now)
         phase = _expiry_phase(hours_left)
+        expiry_label = _get_expiry_label(symbol, now)
+        expiry_dt = _get_next_expiry(symbol, now)
+        expiry_date_str = expiry_dt.strftime("%Y-%m-%d")
+
+        # Monthly expiry detection
+        today = now.date()
+        monthly = _get_monthly_expiry(today)
+        if monthly < today:
+            next_m = (today.replace(day=1) + timedelta(days=32)).replace(day=1)
+            monthly = _get_monthly_expiry(next_m)
+        is_monthly = (expiry_dt.date() == monthly)
 
         # ── Compute all 7 signals ──────────────────────────────────────
         sig_gamma = _gamma_exposure_signal(oi_raw, call_oi, put_oi, price, history, hours_left, candles)
@@ -1248,8 +1343,11 @@ class ExpiryExplosionService:
             "confidence": confidence,
             "rawScore": raw_score,
             "isExpiryDay": is_expiry,
+            "isMonthlyExpiry": is_monthly,
             "hoursToExpiry": round(hours_left, 2),
             "expiryPhase": phase,
+            "expiryLabel": expiry_label,
+            "expiryDate": expiry_date_str,
             "signals": signals,
             "strikeRecommendation": strike_rec,
             "breakoutLevels": breakout,

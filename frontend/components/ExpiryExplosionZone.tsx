@@ -74,7 +74,7 @@ const SignalBar = memo<{ name: string; score: number; signal: string; label: str
         </div>
         <div className="relative h-1.5 bg-slate-700/50 rounded-full overflow-hidden">
           <div
-            className={`absolute top-0 ${isBull ? 'left-1/2' : 'right-1/2'} h-full ${barColor} rounded-full transition-all duration-500`}
+            className={`absolute top-0 ${isBull ? 'left-1/2' : 'right-1/2'} h-full ${barColor} rounded-full`}
             style={{ width: `${pct / 2}%` }}
           />
           <div className="absolute top-0 left-1/2 w-px h-full bg-slate-500/60" />
@@ -91,9 +91,9 @@ SignalBar.displayName = 'SignalBar';
 const ExpiryCard = memo<{ data: ExpiryIndex | null; name: string }>(({ data, name }) => {
   if (!data) {
     return (
-      <div className="rounded-2xl border border-slate-700/50 bg-gradient-to-br from-slate-800/60 to-slate-900/60 p-4 animate-pulse">
-        <div className="h-5 w-32 bg-slate-700 rounded mb-3" />
-        <div className="h-12 w-full bg-slate-700/50 rounded-xl mb-3" />
+      <div className="rounded-2xl border border-slate-700/50 bg-gradient-to-br from-slate-800/60 to-slate-900/60 p-4">
+        <div className="h-5 w-32 bg-slate-700/60 rounded mb-3" />
+        <div className="h-12 w-full bg-slate-700/40 rounded-xl mb-3" />
         <div className="space-y-2">
           {[...Array(4)].map((_, i) => <div key={i} className="h-3 bg-slate-700/30 rounded" />)}
         </div>
@@ -126,7 +126,7 @@ const ExpiryCard = memo<{ data: ExpiryIndex | null; name: string }>(({ data, nam
   const confColor = data.confidence >= 70 ? 'from-emerald-500 to-emerald-400' : data.confidence >= 40 ? 'from-amber-500 to-amber-400' : 'from-red-500 to-red-400';
 
   return (
-    <div className={`rounded-2xl border ${cardBorder} bg-gradient-to-br from-slate-800/70 via-slate-900/70 to-slate-800/50 backdrop-blur-sm p-3 sm:p-4 transition-all duration-300`}>
+    <div className={`rounded-2xl border ${cardBorder} bg-gradient-to-br from-slate-800/70 via-slate-900/70 to-slate-800/50 backdrop-blur-sm p-3 sm:p-4`}>
       {/* Header */}
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-2">
@@ -156,34 +156,47 @@ const ExpiryCard = memo<{ data: ExpiryIndex | null; name: string }>(({ data, nam
         {/* Confidence bar */}
         <div className="h-1.5 bg-slate-700/50 rounded-full overflow-hidden">
           <div
-            className={`h-full bg-gradient-to-r ${confColor} rounded-full transition-all duration-700`}
+            className={`h-full bg-gradient-to-r ${confColor} rounded-full`}
             style={{ width: `${data.confidence}%` }}
           />
         </div>
       </div>
 
-      {/* Expiry Phase */}
-      <div className={`flex items-center justify-between rounded-lg ${phaseCfg.bg} border border-slate-700/30 px-2.5 py-1.5 mb-3`}>
-        <div className="flex items-center gap-2">
-          <span className="text-xs">⏰</span>
-          <span className={`text-[10px] sm:text-xs font-bold ${phaseCfg.color} ${isActivePhase ? dirHl : ''}`}>
-            {phaseCfg.label}
+      {/* Expiry Phase + Dynamic Label */}
+      <div className={`flex flex-col rounded-lg ${phaseCfg.bg} border border-slate-700/30 px-2.5 py-1.5 mb-3 gap-1`}>
+        {/* Expiry Label: Weekly/Monthly + day */}
+        <div className="flex items-center justify-between">
+          <span className={`text-[9px] font-semibold tracking-wide ${data.isExpiryDay ? 'text-orange-300' : 'text-slate-400'}`}>
+            {data.expiryLabel || (data.isExpiryDay ? '⚡ Expiry Today' : 'Weekly Expiry')}
+            {data.isMonthlyExpiry && <span className="ml-1 text-[8px] px-1 py-0.5 bg-purple-500/20 text-purple-300 rounded border border-purple-400/30">MONTHLY</span>}
           </span>
-          {phaseCfg.intensity === 'EXTREME' || phaseCfg.intensity === 'MAX' ? (
-            <span className="text-[9px] px-1.5 py-0.5 bg-red-500/20 text-red-300 rounded-full font-bold animate-pulse border border-red-400/30">
-              {phaseCfg.intensity}
-            </span>
-          ) : phaseCfg.intensity === 'HIGH' ? (
-            <span className="text-[9px] px-1.5 py-0.5 bg-amber-500/20 text-amber-300 rounded-full font-bold border border-amber-400/30">
-              {phaseCfg.intensity}
-            </span>
-          ) : null}
+          {data.expiryDate && (
+            <span className="text-[9px] font-mono text-slate-500">{data.expiryDate}</span>
+          )}
         </div>
-        <div className="flex items-center gap-1">
-          <span className="text-[10px] text-slate-400">Expiry in</span>
-          <span className={`text-xs font-mono font-bold ${data.hoursToExpiry <= 4 ? 'text-red-400' : 'text-cyan-400'}`}>
-            {data.hoursToExpiry <= 1 ? `${Math.round(data.hoursToExpiry * 60)}m` : `${data.hoursToExpiry.toFixed(1)}h`}
-          </span>
+        {/* Phase + Countdown */}
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <span className="text-xs">⏰</span>
+            <span className={`text-[10px] sm:text-xs font-bold ${phaseCfg.color} ${isActivePhase ? dirHl : ''}`}>
+              {phaseCfg.label}
+            </span>
+            {phaseCfg.intensity === 'EXTREME' || phaseCfg.intensity === 'MAX' ? (
+              <span className="text-[9px] px-1.5 py-0.5 bg-red-500/20 text-red-300 rounded-full font-bold border border-red-400/30">
+                {phaseCfg.intensity}
+              </span>
+            ) : phaseCfg.intensity === 'HIGH' ? (
+              <span className="text-[9px] px-1.5 py-0.5 bg-amber-500/20 text-amber-300 rounded-full font-bold border border-amber-400/30">
+                {phaseCfg.intensity}
+              </span>
+            ) : null}
+          </div>
+          <div className="flex items-center gap-1">
+            <span className="text-[10px] text-slate-400">Expiry in</span>
+            <span className={`text-xs font-mono font-bold ${data.hoursToExpiry <= 4 ? 'text-red-400' : 'text-cyan-400'}`}>
+              {data.hoursToExpiry <= 1 ? `${Math.round(data.hoursToExpiry * 60)}m` : `${data.hoursToExpiry.toFixed(1)}h`}
+            </span>
+          </div>
         </div>
       </div>
 
@@ -332,7 +345,7 @@ const ExpiryCard = memo<{ data: ExpiryIndex | null; name: string }>(({ data, nam
       {/* Expiry Day Badge */}
       {data.isExpiryDay && (
         <div className="mt-2 text-center">
-          <span className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-gradient-to-r from-orange-600/20 to-red-600/20 border border-orange-400/30 rounded-full animate-pulse">
+          <span className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-gradient-to-r from-orange-600/20 to-red-600/20 border border-orange-400/30 rounded-full">
             <span className="text-xs">💥</span>
             <span className="text-[10px] font-extrabold text-orange-300 tracking-wider">EXPIRY DAY ACTIVE</span>
             <span className="text-xs">💥</span>
@@ -349,19 +362,6 @@ ExpiryCard.displayName = 'ExpiryCard';
 const ExpiryExplosionZone = memo(() => {
   const { expiryData, isConnected } = useExpiryExplosion();
 
-  // Find strongest action across all indices
-  const dominantAction = useMemo(() => {
-    const actions: ExpiryAction[] = [];
-    for (const sym of ['NIFTY', 'BANKNIFTY', 'SENSEX'] as const) {
-      if (expiryData[sym]?.action) actions.push(expiryData[sym]!.action);
-    }
-    if (actions.includes('STRONG_BUY')) return 'STRONG_BUY';
-    if (actions.includes('STRONG_SELL')) return 'STRONG_SELL';
-    if (actions.includes('BUY')) return 'BUY';
-    if (actions.includes('SELL')) return 'SELL';
-    return 'NEUTRAL';
-  }, [expiryData]);
-
   // Any index on expiry day?
   const anyExpiry = useMemo(() => {
     for (const sym of ['NIFTY', 'BANKNIFTY', 'SENSEX'] as const) {
@@ -370,33 +370,17 @@ const ExpiryExplosionZone = memo(() => {
     return false;
   }, [expiryData]);
 
-  // Section border/glow based on dominant action
-  const sectionBorder =
-    dominantAction === 'STRONG_BUY' ? 'border-emerald-400/50' :
-    dominantAction === 'BUY' ? 'border-emerald-500/30' :
-    dominantAction === 'STRONG_SELL' ? 'border-red-400/50' :
-    dominantAction === 'SELL' ? 'border-red-500/30' :
-    'border-purple-500/30';
-
-  const sectionBg =
-    dominantAction === 'STRONG_BUY' || dominantAction === 'BUY'
-      ? 'from-emerald-950/25 via-dark-card/50 to-dark-elevated/40'
-      : dominantAction === 'STRONG_SELL' || dominantAction === 'SELL'
-      ? 'from-red-950/25 via-dark-card/50 to-dark-elevated/40'
-      : 'from-purple-950/20 via-dark-card/50 to-dark-elevated/40';
-
-  const sectionGlow =
-    dominantAction === 'STRONG_BUY' ? 'shadow-xl shadow-emerald-500/15' :
-    dominantAction === 'STRONG_SELL' ? 'shadow-xl shadow-red-500/15' :
-    anyExpiry ? 'shadow-lg shadow-purple-500/10' :
-    'shadow-md';
+  // Fixed section styling — no dynamic color swaps that cause flashing
+  const sectionBorder = 'border-purple-500/30';
+  const sectionBg = 'from-purple-950/20 via-dark-card/50 to-dark-elevated/40';
+  const sectionGlow = 'shadow-md';
 
   return (
     <div className={`mt-6 sm:mt-6 border-2 ${sectionBorder} rounded-2xl p-3 sm:p-4 bg-gradient-to-br ${sectionBg} backdrop-blur-sm ${sectionGlow}`}>
       <div className="flex flex-col gap-1 mb-3 sm:mb-4">
         <SectionTitle
           title="Expiry Explosion Zone"
-          subtitle="Gamma × Delta × OI × Volume × PCR × IV × Theta • 7-Factor Expiry Engine • ATM Strike Intelligence"
+          subtitle="Weekly: NIFTY(Tue) • BANKNIFTY(Wed) • SENSEX(Thu) | Monthly: Last Tue | Holiday-Aware"
           accentColor="purple"
           badge={
             <span className="relative inline-flex items-center px-2 py-0.5 text-[9px] font-bold bg-gradient-to-r from-purple-600/80 to-pink-600/80 rounded-md shadow-lg border border-purple-400/30 whitespace-nowrap leading-none">
@@ -409,7 +393,7 @@ const ExpiryExplosionZone = memo(() => {
           rightContent={
             <div className="flex items-center gap-2">
               {anyExpiry && (
-                <span className="text-[9px] px-2 py-0.5 bg-gradient-to-r from-orange-500/20 to-red-500/20 text-orange-300 rounded-full font-bold border border-orange-400/30 animate-pulse">
+                <span className="text-[9px] px-2 py-0.5 bg-gradient-to-r from-orange-500/20 to-red-500/20 text-orange-300 rounded-full font-bold border border-orange-400/30">
                   ⚡ EXPIRY DAY
                 </span>
               )}

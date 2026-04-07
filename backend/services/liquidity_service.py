@@ -97,16 +97,19 @@ class LiquidityConnectionManager:
         msg = json.dumps(data, default=str)
         dead: Set[WebSocket] = set()
         async with self._lock:
-            for ws in self._connections:
-                try:
-                    await ws.send_text(msg)
-                except Exception:
-                    dead.add(ws)
-            self._connections -= dead
+            clients = list(self._connections)
+        for ws in clients:
+            try:
+                await asyncio.wait_for(ws.send_text(msg), timeout=3.0)
+            except Exception:
+                dead.add(ws)
+        if dead:
+            async with self._lock:
+                self._connections -= dead
 
     async def send_personal(self, ws: WebSocket, data: Dict[str, Any]):
         try:
-            await ws.send_text(json.dumps(data, default=str))
+            await asyncio.wait_for(ws.send_text(json.dumps(data, default=str)), timeout=3.0)
         except Exception:
             await self.disconnect(ws)
 
@@ -470,19 +473,21 @@ def _oi_buildup_signal(candles: List[Dict], spot_change_pct: float, live_oi: flo
     # Volume direction: use caller-supplied vol_up (from tick-level rolling history)
     # which is accurate for index instruments. Only fall back to candle-based
     # comparison when the caller doesn't provide it.
+    # vol_up = None means "unknown" — classification uses 2-factor P×OI fallback.
     if vol_up_override is not None:
         vol_up = vol_up_override
     else:
-        vol_up = False
+        vol_up = None  # unknown — don't assume False
         if len(volumes) >= 2:
             vol_avg = sum(volumes[:-1]) / len(volumes[:-1])
-            vol_up = vol_avg > 0 and volumes[-1] > vol_avg * 1.005
-        elif candles and len(candles) >= 5:
-            all_vols = [float(c.get("volume") or 0) for c in candles[-5:-1]]
+            if vol_avg > 0:
+                vol_up = volumes[-1] > vol_avg
+        elif candles and len(candles) >= 3:
+            all_vols = [float(c.get("volume") or 0) for c in candles[-4:-1]]
             valid = [v for v in all_vols if v > 0]
             if valid:
                 vol_avg = sum(valid) / len(valid)
-                vol_up = float(candles[-1].get("volume") or 0) > vol_avg * 1.005
+                vol_up = float(candles[-1].get("volume") or 0) > vol_avg
 
     # Magnitude: cap at 0.5% OI change = full signal
     magnitude = _clamp(abs(oi_pct) / 0.5, 0.25, 1.0)
@@ -502,9 +507,14 @@ def _oi_buildup_signal(candles: List[Dict], spot_change_pct: float, live_oi: flo
     # Use whichever shows larger move — day-level or intraday
     effective_price_pct = max(abs(spot_change_pct), abs(intraday_pct))
 
-    # 3-factor P × V × OI classification (8 cases)
+    # Volume is unknown (None) when not enough tick history yet — use 2-factor
+    # P × OI classification (industry standard) instead of forcing "WEAK" profiles.
+    vol_known = vol_up is not None
+
+    # 3-factor P × V × OI classification (8 cases when volume known)
+    # 2-factor P × OI fallback when volume not yet available
     if price_up and oi_up:
-        if vol_up:
+        if vol_known and vol_up:
             # P↑ V↑ OI↑ — volume-confirmed Long Buildup
             clarity = "STRONG"
             if abs(oi_pct) >= _STRONG_OI_PCT and effective_price_pct >= _STRONG_PRICE_PCT:
@@ -515,27 +525,39 @@ def _oi_buildup_signal(candles: List[Dict], spot_change_pct: float, live_oi: flo
                 profile = "LONG_BUILDUP"
                 score   = magnitude * 0.90
                 label   = f"Long Buildup — OI ↑{abs(oi_pct):.3f}% + price rising, volume confirming"
-        else:
+        elif vol_known and not vol_up:
             # P↑ V↓ OI↑ — OI building but low volume: stealthy accumulation
             clarity = "WEAK"
             profile = "QUIET_ACCUMULATION"
             score   = magnitude * 0.55
             label   = f"Quiet Accumulation — OI ↑{abs(oi_pct):.3f}% + price rising, low volume"
+        else:
+            # Volume unknown — use 2-factor P×OI: Long Buildup (standard)
+            clarity = "MODERATE"
+            profile = "LONG_BUILDUP"
+            score   = magnitude * 0.75
+            label   = f"Long Buildup — OI ↑{abs(oi_pct):.3f}% + price rising"
     elif price_up and oi_dn:
-        if not vol_up:
+        if vol_known and not vol_up:
             # P↑ V↓ OI↓ — classic Short Covering
             clarity = "STRONG"
             profile = "SHORT_COVERING"
             score   = magnitude * 0.40
             label   = f"Short Covering — OI ↓{abs(oi_pct):.3f}%, shorts exiting"
-        else:
+        elif vol_known and vol_up:
             # P↑ V↑ OI↓ — volume rising into OI drop: unconfirmed rally
             clarity = "MIXED"
             profile = "UNCONFIRMED_RALLY"
             score   = magnitude * 0.25
             label   = f"Unconfirmed Rally — price ↑ + volume ↑ but OI ↓{abs(oi_pct):.3f}%, caution"
+        else:
+            # Volume unknown — 2-factor: Short Covering (P↑ OI↓)
+            clarity = "MODERATE"
+            profile = "SHORT_COVERING"
+            score   = magnitude * 0.35
+            label   = f"Short Covering — OI ↓{abs(oi_pct):.3f}%, shorts exiting"
     elif price_dn and oi_up:
-        if vol_up:
+        if vol_known and vol_up:
             # P↓ V↑ OI↑ — volume-confirmed Short Buildup
             clarity = "STRONG"
             if abs(oi_pct) >= _STRONG_OI_PCT and effective_price_pct >= _STRONG_PRICE_PCT:
@@ -546,25 +568,37 @@ def _oi_buildup_signal(candles: List[Dict], spot_change_pct: float, live_oi: flo
                 profile = "SHORT_BUILDUP"
                 score   = -magnitude * 0.90
                 label   = f"Short Buildup — OI ↑{abs(oi_pct):.3f}% + price falling, volume confirming"
-        else:
+        elif vol_known and not vol_up:
             # P↓ V↓ OI↑ — OI building but no volume: unconvincing
             clarity = "WEAK"
             profile = "WEAK_SHORT_BUILDUP"
             score   = -magnitude * 0.55
             label   = f"Weak Short Buildup — OI ↑{abs(oi_pct):.3f}% + price falling, low volume"
+        else:
+            # Volume unknown — 2-factor: Short Buildup (P↓ OI↑)
+            clarity = "MODERATE"
+            profile = "SHORT_BUILDUP"
+            score   = -magnitude * 0.75
+            label   = f"Short Buildup — OI ↑{abs(oi_pct):.3f}% + price falling"
     elif price_dn and oi_dn:
-        if not vol_up:
+        if vol_known and not vol_up:
             # P↓ V↓ OI↓ — classic Long Unwinding
             clarity = "STRONG"
             profile = "LONG_UNWINDING"
             score   = -magnitude * 0.40
             label   = f"Long Unwinding — OI ↓{abs(oi_pct):.3f}%, longs exiting"
-        else:
+        elif vol_known and vol_up:
             # P↓ V↑ OI↓ — heavy selling into OI drop: exhaustion
             clarity = "MIXED"
             profile = "BEAR_EXHAUSTION"
             score   = -magnitude * 0.25
             label   = f"Bear Exhaustion — price ↓ + volume ↑ but OI ↓{abs(oi_pct):.3f}%, sellers tiring"
+        else:
+            # Volume unknown — 2-factor: Long Unwinding (P↓ OI↓)
+            clarity = "MODERATE"
+            profile = "LONG_UNWINDING"
+            score   = -magnitude * 0.35
+            label   = f"Long Unwinding — OI ↓{abs(oi_pct):.3f}%, longs exiting"
     else:
         clarity = "NONE"
         profile = "NEUTRAL"
@@ -1007,12 +1041,15 @@ class LiquidityService:
         vol_delta = max(0, spot_volume - prev_cum_vol) if prev_cum_vol > 0 else 0
         if vol_delta > 0:
             vol_hist.append(vol_delta)
-        # vol_up: current volume rate > rolling average (need at least 5 readings)
+        # vol_up: current volume rate > median of recent history
+        # Use median (not mean) to avoid spikes skewing the baseline.
+        # Need only 3 readings (not 5) to start producing a signal faster.
         vol_up_live: Optional[bool] = None
-        if len(vol_hist) >= 5:
+        if len(vol_hist) >= 3:
             recent = list(vol_hist)
-            avg_vol = sum(recent[:-1]) / len(recent[:-1])
-            vol_up_live = avg_vol > 0 and recent[-1] > avg_vol * 1.005
+            baseline = sorted(recent[:-1])
+            median_vol = baseline[len(baseline) // 2]
+            vol_up_live = median_vol > 0 and recent[-1] > median_vol
 
         # Previous OI for live-OI fallback (when candle OI is absent)
         tracked_prev_oi = self._last_values[symbol]["oi"]

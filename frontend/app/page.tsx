@@ -864,7 +864,10 @@ export default function Home() {
         {/* P1: ⚡ PURE LIQUIDITY INTELLIGENCE */}
         <LiquidityIntelligence />
 
-        {/* P4: Smart Money • Order Logic */}
+        {/* P12: 📈 MARKETEDGE INTELLIGENCE */}
+        <MarketEdgeIntelligence />
+
+        {/* P4: Smart Money • Order Logic */
         <div className="mt-6 sm:mt-6 border-2 border-purple-600/40 rounded-2xl p-3 sm:p-4 bg-gradient-to-br from-purple-950/20 via-dark-card/50 to-dark-elevated/40 backdrop-blur-sm shadow-xl shadow-purple-600/15">
           {/* Section Header */}
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-3 sm:mb-4">
@@ -1013,9 +1016,6 @@ export default function Home() {
 
         {/* P11: 💥 EXPIRY EXPLOSION ZONE */}
         <ExpiryExplosionZone />
-
-        {/* P12: 📈 MARKETEDGE INTELLIGENCE */}
-        <MarketEdgeIntelligence />
 
       </div>
 

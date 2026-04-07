@@ -270,8 +270,8 @@ const IndexCard = memo(({ data, index }: { data: ICTIndex | null; index: string 
   const sweepBull = data.signals.liquidity_sweeps.signal === 'BULL';
   const sweepBear = data.signals.liquidity_sweeps.signal === 'BEAR';
 
-  // Confidence meets threshold?
-  const confMet = data.confidence >= 55;
+  // Confidence meets threshold for highlight?
+  const confMet = data.confidence >= 40;
 
   // 5-min prediction directional?
   const pred5mBull = data.prediction5m === 'STRONG_BUY' || data.prediction5m === 'BUY';

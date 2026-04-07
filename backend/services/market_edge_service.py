@@ -85,16 +85,19 @@ class MarketEdgeConnectionManager:
         msg = json.dumps(data, default=str)
         dead: Set[WebSocket] = set()
         async with self._lock:
-            for ws in self._connections:
-                try:
-                    await ws.send_text(msg)
-                except Exception:
-                    dead.add(ws)
-            self._connections -= dead
+            clients = list(self._connections)
+        for ws in clients:
+            try:
+                await asyncio.wait_for(ws.send_text(msg), timeout=3.0)
+            except Exception:
+                dead.add(ws)
+        if dead:
+            async with self._lock:
+                self._connections -= dead
 
     async def send_personal(self, ws: WebSocket, data: Dict[str, Any]):
         try:
-            await ws.send_text(json.dumps(data, default=str))
+            await asyncio.wait_for(ws.send_text(json.dumps(data, default=str)), timeout=3.0)
         except Exception:
             await self.disconnect(ws)
 
@@ -321,9 +324,15 @@ def _oi_spurts_signal(
         if len(oi_vals) >= 2:
             oi_change_pct = _pct_change(oi_vals[0], oi_vals[-1])
             extras["candleOIChangePct"] = round(oi_change_pct, 2)
-            if abs(oi_change_pct) > 2.0:
-                max_spurt = 1.5 + min(abs(oi_change_pct) / 10.0, 1.5)
+            if abs(oi_change_pct) > 1.0:
+                max_spurt = 1.3 + min(abs(oi_change_pct) / 8.0, 1.7)
                 extras["peakSpurt"] = round(max_spurt, 2)
+            elif total_oi > 0:
+                # Even mild OI changes matter — compute ratio-based spurt
+                avg_oi = sum(oi_vals) / len(oi_vals)
+                if avg_oi > 0:
+                    max_spurt = oi_vals[-1] / avg_oi
+                    extras["peakSpurt"] = round(max_spurt, 2)
         # Also use PCR for direction when spot_slope is flat
         if call_oi > 0 and put_oi > 0:
             pcr = put_oi / call_oi
@@ -431,8 +440,9 @@ def _iv_estimation_signal(
                 return {"score": 0.0, "signal": "NEUTRAL", "label": "IV data unavailable",
                         "weight": EDGE_WEIGHTS["iv_estimation"], "extra": extras}
 
-    # Use VIX as primary IV proxy when available
-    effective_iv = iv_est if iv_est > 0 else vix
+    # Use VIX as primary IV proxy — it IS implied vol.
+    # Candle-derived IV is just realized vol, often far too low.
+    effective_iv = vix if vix > 0 else iv_est
 
     if effective_iv >= 25:
         # Very high IV — options expensive, potential mean-reversion
@@ -494,35 +504,42 @@ def _iv_rank_signal(history: EdgeHistory) -> Dict[str, Any]:
     extras["ivRank"] = round(rank, 1)
     extras["ivPercentile"] = round(percentile, 1)
 
-    # When IV history is too short for reliable rank, use IV direction as proxy
+    # When IV history is too short for reliable rank, use current IV level as proxy
     iv_history_cold = len(history._iv_history) < 10
     if iv_history_cold:
         iv_slope = history.iv_slope
         extras["ivSlope"] = round(iv_slope, 4)
         extras["historyWarmup"] = len(history._iv_history)
-        if iv_slope > 0.01:
+
+        # Use current IV value (preferring VIX) for basic classification
+        iv_vals = list(history._iv_buf)
+        current_iv = iv_vals[-1] if iv_vals and iv_vals[-1] > 0 else 0
+
+        if current_iv > 0:
+            if current_iv >= 25:
+                score = -0.35
+                label = f"High IV {current_iv:.1f} — Options expensive (rank building)"
+            elif current_iv >= 18:
+                score = -0.15
+                label = f"Elevated IV {current_iv:.1f} — Moderately expensive (rank building)"
+            elif current_iv <= 12:
+                score = 0.3
+                label = f"Low IV {current_iv:.1f} — Options cheap (rank building)"
+            elif current_iv <= 15:
+                score = 0.1
+                label = f"Fair-low IV {current_iv:.1f} — Normal (rank building)"
+            else:
+                score = 0.0
+                label = f"IV Rank warming up — IV {current_iv:.1f} (normal range)"
+        elif iv_slope > 0.01:
             score = -0.15
             label = "IV rising — getting expensive (limited history)"
         elif iv_slope < -0.01:
             score = 0.15
             label = "IV falling — getting cheaper (limited history)"
         else:
-            # Use current IV value if available for basic classification
-            iv_vals = list(history._iv_buf)
-            if iv_vals and iv_vals[-1] > 0:
-                current_iv = iv_vals[-1]
-                if current_iv >= 22:
-                    score = -0.25
-                    label = f"High IV {current_iv:.1f} — Options expensive (limited history)"
-                elif current_iv <= 13:
-                    score = 0.25
-                    label = f"Low IV {current_iv:.1f} — Options cheap (limited history)"
-                else:
-                    score = 0.0
-                    label = f"IV Rank warming up — IV {current_iv:.1f} (normal range)"
-            else:
-                score = 0.0
-                label = "IV Rank warming up — collecting data"
+            score = 0.0
+            label = "IV Rank warming up — collecting data"
         return {"score": round(score, 4), "signal": _sig(score), "label": label,
                 "weight": EDGE_WEIGHTS["iv_rank"], "extra": extras}
 
@@ -1000,8 +1017,8 @@ class MarketEdgeService:
             hist.push_futures(fut_price, fut_oi)
         if iv_est > 0:
             hist.push_iv(iv_est)
-        elif vix > 0:
-            hist.push_iv(vix)
+        if vix > 0:
+            hist.push_iv(vix)  # Always push VIX too — builds IV history faster
 
         # ── Compute all 5 signals ─────────────────────────────────────
         sig_oi_spurts = _oi_spurts_signal(call_oi, put_oi, total_oi, fut_oi, hist, candles)
@@ -1064,8 +1081,20 @@ class MarketEdgeService:
     async def _loop(self):
         """Main background loop — compute and broadcast."""
         heartbeat_counter = 0
+        contract_retry = 0
         while self._running:
             try:
+                # Retry contract loading if still empty (kite may not be ready at startup)
+                if not self._contracts:
+                    contract_retry += 1
+                    if contract_retry <= 20 or contract_retry % 60 == 0:
+                        try:
+                            await asyncio.to_thread(self._refresh_contracts_sync)
+                            if self._contracts:
+                                logger.info(f"📈 Futures contracts loaded: {list(self._contracts.keys())}")
+                        except Exception:
+                            pass
+
                 # Fetch futures data (rate-limited internally)
                 await self._fetch_futures_data()
 

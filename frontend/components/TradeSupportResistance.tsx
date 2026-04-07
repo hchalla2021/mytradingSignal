@@ -115,18 +115,21 @@ export const TradeSupportResistance: React.FC<TradeSupportResistanceProps> = ({
       // SuperTrend is the most reliable 5-min signal
       if (stTrend === 'BULLISH') return 'UP';
       if (stTrend === 'BEARISH') return 'DOWN';
+      // Price change is a strong arbiter — market actually moving
+      if (changePercent > 0.2) return 'UP';
+      if (changePercent < -0.2) return 'DOWN';
       // Live RSI (substituted with momentum RSI when candle cache missing)
-      if (rsi5m >= 54) return 'UP';
-      if (rsi5m <= 46) return 'DOWN';
+      if (rsi5m >= 53) return 'UP';
+      if (rsi5m <= 47) return 'DOWN';
       // Direct momentum-based RSI (always computed)
-      if (rsiMomentum >= 58) return 'UP';
-      if (rsiMomentum <= 42) return 'DOWN';
+      if (rsiMomentum >= 56) return 'UP';
+      if (rsiMomentum <= 44) return 'DOWN';
       // Momentum score (0-100 scale, 50=neutral)
-      if (momentum >= 58) return 'UP';
-      if (momentum <= 42) return 'DOWN';
-      // Price change is the final arbiter
-      if (changePercent > 0.15) return 'UP';
-      if (changePercent < -0.15) return 'DOWN';
+      if (momentum >= 56) return 'UP';
+      if (momentum <= 44) return 'DOWN';
+      // Price change is the final arbiter for small moves
+      if (changePercent > 0.08) return 'UP';
+      if (changePercent < -0.08) return 'DOWN';
       return 'NEUTRAL';
     };
 
@@ -144,7 +147,11 @@ export const TradeSupportResistance: React.FC<TradeSupportResistanceProps> = ({
       // Mapped trend (from raw tick trend field, always live)
       if (trendMapped === 'UPTREND')   return 'UP';
       if (trendMapped === 'DOWNTREND') return 'DOWN';
-      // SAR + change combo
+      // COMPRESSION with directional price action — lean into the direction
+      if (emaAlignment === 'COMPRESSION') {
+        if (changePercent > 0.2) return 'UP';
+        if (changePercent < -0.2) return 'DOWN';
+      }
       return 'NEUTRAL';
     };
 
