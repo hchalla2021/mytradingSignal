@@ -1,18 +1,18 @@
 {
   "NIFTY": {
     "symbol": "NIFTY",
-    "direction": "BULLISH",
-    "confidence": 44,
-    "rawScore": 0.1513,
+    "direction": "NEUTRAL",
+    "confidence": 16,
+    "rawScore": 0.1183,
     "ictSetup": {
-      "name": "\ud83d\udc8e BOS + OB LONG",
-      "description": "Bullish BOS with order block support",
-      "grade": "A-",
-      "confluences": 2
+      "name": "\u2696\ufe0f NO TRADE ZONE",
+      "description": "ICT signals mixed \u2014 Wait for alignment",
+      "grade": "\u2014",
+      "confluences": 0
     },
     "prediction5m": "NEUTRAL",
-    "pred5mConf": 55,
-    "pred5mScore": 0.1232,
+    "pred5mConf": 28,
+    "pred5mScore": 0.0793,
     "signals": {
       "order_blocks": {
         "score": -0.595,
@@ -37,12 +37,12 @@
         "weight": 0.2,
         "value": 1.0,
         "extra": {
-          "bullish_fvgs": 9,
+          "bullish_fvgs": 8,
           "bearish_fvgs": 1,
           "nearest_fvg": {
             "type": "BULLISH",
             "zone": "23101-23106",
-            "dist": 0.16
+            "dist": 0.12
           }
         }
       },
@@ -55,9 +55,123 @@
         "extra": {
           "structure": "BULLISH_BOS",
           "swing_highs": 8,
-          "swing_lows": 8,
+          "swing_lows": 7,
           "last_swing_high": 23133.25,
           "last_swing_low": 23099.35
+        }
+      },
+      "liquidity_sweeps": {
+        "score": -0.22,
+        "signal": "BEAR",
+        "label": "Bearish sweep @ 23133 \u2014 Stops hunted",
+        "weight": 0.15,
+        "value": -0.22,
+        "extra": {
+          "sweeps_detected": 1,
+          "last_sweep": {
+            "type": "BEARISH_SWEEP",
+            "level": 23133.25,
+            "depth_pct": 0.08,
+            "ts": "2026-04-07T15:25:00+05:30"
+          }
+        }
+      },
+      "displacement": {
+        "score": 0.0,
+        "signal": "NEUTRAL",
+        "label": "No displacement \u2014 market chopping",
+        "weight": 0.1,
+        "value": 0.0,
+        "extra": {
+          "displacement_count": 0,
+          "avg_body_ratio": 0
+        }
+      },
+      "smart_money_div": {
+        "score": -0.5,
+        "signal": "BEAR",
+        "label": "\u26a0\ufe0f Bearish divergence \u2014 Price \u21910.6% but OI dropping",
+        "weight": 0.1,
+        "value": -0.5,
+        "extra": {
+          "divergence": "BEARISH_DIVERGENCE",
+          "price_change": 0.56,
+          "oi_slope": -14750844.3333
+        }
+      }
+    },
+    "metrics": {
+      "price": 23132.3,
+      "changePct": 0.71,
+      "oi": 349830390,
+      "candleCount": 31,
+      "swingHighs": 8,
+      "swingLows": 7,
+      "lastSwingHigh": 23133.25,
+      "lastSwingLow": 23099.35
+    },
+    "dataSource": "MARKET_CLOSED",
+    "timestamp": "2026-04-07T15:31:01.482917+05:30"
+  },
+  "BANKNIFTY": {
+    "symbol": "BANKNIFTY",
+    "direction": "NEUTRAL",
+    "confidence": 17,
+    "rawScore": -0.0966,
+    "ictSetup": {
+      "name": "\u2696\ufe0f NO TRADE ZONE",
+      "description": "ICT signals mixed \u2014 Wait for alignment",
+      "grade": "\u2014",
+      "confluences": 0
+    },
+    "prediction5m": "SELL",
+    "pred5mConf": 59,
+    "pred5mScore": -0.201,
+    "signals": {
+      "order_blocks": {
+        "score": -0.5065,
+        "signal": "BEAR",
+        "label": "Bearish OB @ 52683-52776 (0.12% away)",
+        "weight": 0.25,
+        "value": -0.506,
+        "extra": {
+          "bullish_obs": 5,
+          "bearish_obs": 5,
+          "nearest_ob": {
+            "type": "BEARISH",
+            "zone": "52683-52776",
+            "dist": 0.12
+          }
+        }
+      },
+      "fair_value_gaps": {
+        "score": 1.0,
+        "signal": "BULL",
+        "label": "Bullish FVG @ 52570-52680",
+        "weight": 0.2,
+        "value": 1.0,
+        "extra": {
+          "bullish_fvgs": 9,
+          "bearish_fvgs": 1,
+          "nearest_fvg": {
+            "type": "BULLISH",
+            "zone": "52570-52680",
+            "dist": 0.16
+          }
+        }
+      },
+      "market_structure": {
+        "score": -0.6,
+        "signal": "BEAR",
+        "label": "\u26a0\ufe0f CHoCH \u2014 Bearish reversal below 52668",
+        "weight": 0.2,
+        "value": -0.6,
+        "extra": {
+          "structure": "BEARISH_CHOCH",
+          "swing_highs": 7,
+          "swing_lows": 7,
+          "last_swing_high": 52776.25,
+          "last_swing_low": 52667.85
         }
       },
       "liquidity_sweeps": {
@@ -85,148 +199,34 @@
       "smart_money_div": {
         "score": -0.5,
         "signal": "BEAR",
-        "label": "\u26a0\ufe0f Bearish divergence \u2014 Price \u21910.4% but OI dropping",
+        "label": "\u26a0\ufe0f Bearish divergence \u2014 Price \u21910.6% but OI dropping",
         "weight": 0.1,
         "value": -0.5,
         "extra": {
           "divergence": "BEARISH_DIVERGENCE",
-          "price_change": 0.44,
-          "oi_slope": -8859327.0606
+          "price_change": 0.61,
+          "oi_slope": -7231.4545
         }
       }
     },
     "metrics": {
-      "price": 23141.35,
-      "changePct": 0.75,
-      "oi": 365581970,
-      "candleCount": 31,
-      "swingHighs": 8,
-      "swingLows": 8,
-      "lastSwingHigh": 23133.25,
-      "lastSwingLow": 23099.35
-    },
-    "dataSource": "LIVE",
-    "timestamp": "2026-04-07T15:28:59.044703+05:30"
-  },
-  "BANKNIFTY": {
-    "symbol": "BANKNIFTY",
-    "direction": "BULLISH",
-    "confidence": 51,
-    "rawScore": 0.1286,
-    "ictSetup": {
-      "name": "\u25b2 ICT LEAN LONG",
-      "description": "Mild bullish bias from ICT framework",
-      "grade": "C",
-      "confluences": 1
-    },
-    "prediction5m": "NEUTRAL",
-    "pred5mConf": 53,
-    "pred5mScore": 0.0819,
-    "signals": {
-      "order_blocks": {
-        "score": -0.5065,
-        "signal": "BEAR",
-        "label": "Bearish OB @ 52683-52776 (0.1% away)",
-        "weight": 0.25,
-        "value": -0.506,
-        "extra": {
-          "bullish_obs": 5,
-          "bearish_obs": 5,
-          "nearest_ob": {
-            "type": "BEARISH",
-            "zone": "52683-52776",
-            "dist": 0.1
-          }
-        }
-      },
-      "fair_value_gaps": {
-        "score": 1.0,
-        "signal": "BULL",
-        "label": "Bullish FVG @ 52570-52680",
-        "weight": 0.2,
-        "value": 1.0,
-        "extra": {
-          "bullish_fvgs": 10,
-          "bearish_fvgs": 1,
-          "nearest_fvg": {
-            "type": "BULLISH",
-            "zone": "52570-52680",
-            "dist": 0.19
-          }
-        }
-      },
-      "market_structure": {
-        "score": 0.45,
-        "signal": "BULL",
-        "label": "Bullish structure \u2014 Higher Highs + Higher Lows",
-        "weight": 0.2,
-        "value": 0.45,
-        "extra": {
-          "structure": "BULLISH_TREND",
-          "swing_highs": 7,
-          "swing_lows": 8,
-          "last_swing_high": 52776.25,
-          "last_swing_low": 52667.85
-        }
-      },
-      "liquidity_sweeps": {
-        "score": 0.1017,
-        "signal": "NEUTRAL",
-        "label": "Bullish sweep @ 52668 \u2014 Stops hunted",
-        "weight": 0.15,
-        "value": 0.102,
-        "extra": {
-          "sweeps_detected": 1,
-          "last_sweep": {
-            "type": "BULLISH_SWEEP",
-            "level": 52667.85,
-            "depth_pct": 0.037,
-            "ts": "2026-04-07T14:55:00+05:30"
-          }
-        }
-      },
-      "displacement": {
-        "score": 0.0,
-        "signal": "NEUTRAL",
-        "label": "No displacement \u2014 market chopping",
-        "weight": 0.1,
-        "value": 0.0,
-        "extra": {
-          "displacement_count": 0,
-          "avg_body_ratio": 0
-        }
-      },
-      "smart_money_div": {
-        "score": -0.5,
-        "signal": "BEAR",
-        "label": "\u26a0\ufe0f Bearish divergence \u2014 Price \u21910.5% but OI dropping",
-        "weight": 0.1,
-        "value": -0.5,
-        "extra": {
-          "divergence": "BEARISH_DIVERGENCE",
-          "price_change": 0.48,
-          "oi_slope": -7719.4545
-        }
-      }
-    },
-    "metrics": {
-      "price": 52726.0,
-      "changePct": 0.22,
-      "oi": 8787510,
+      "price": 52711.1,
+      "changePct": 0.19,
+      "oi": 8787570,
       "candleCount": 31,
       "swingHighs": 7,
-      "swingLows": 8,
+      "swingLows": 7,
       "lastSwingHigh": 52776.25,
       "lastSwingLow": 52667.85
     },
-    "dataSource": "LIVE",
-    "timestamp": "2026-04-07T15:28:59.046400+05:30"
+    "dataSource": "MARKET_CLOSED",
+    "timestamp": "2026-04-07T15:31:01.485112+05:30"
   },
   "SENSEX": {
     "symbol": "SENSEX",
     "direction": "BULLISH",
-    "confidence": 55,
-    "rawScore": 0.2342,
+    "confidence": 49,
+    "rawScore": 0.2026,
     "ictSetup": {
       "name": "\ud83d\udc8e BOS + OB LONG",
       "description": "Bullish BOS with order block support",
@@ -234,22 +234,22 @@
       "confluences": 3
     },
     "prediction5m": "BUY",
-    "pred5mConf": 67,
-    "pred5mScore": 0.365,
+    "pred5mConf": 49,
+    "pred5mScore": 0.3294,
     "signals": {
       "order_blocks": {
-        "score": -0.5834,
+        "score": -0.619,
         "signal": "BEAR",
-        "label": "Bearish OB @ 74533-74644 (0% away)",
+        "label": "Bearish OB @ 74533-74644 (0.04% away)",
         "weight": 0.25,
-        "value": -0.583,
+        "value": -0.619,
         "extra": {
           "bullish_obs": 5,
           "bearish_obs": 5,
           "nearest_ob": {
-            "type": "BEARISH_RETEST",
+            "type": "BEARISH",
             "zone": "74533-74644",
-            "dist": 0
+            "dist": 0.04
           }
         }
       },
@@ -260,12 +260,12 @@
         "weight": 0.2,
         "value": 1.0,
         "extra": {
-          "bullish_fvgs": 9,
+          "bullish_fvgs": 8,
           "bearish_fvgs": 1,
           "nearest_fvg": {
             "type": "BULLISH",
             "zone": "74417-74560",
-            "dist": 0.23
+            "dist": 0.17
           }
         }
       },
@@ -278,20 +278,25 @@
         "extra": {
           "structure": "BULLISH_BOS",
           "swing_highs": 8,
-          "swing_lows": 8,
+          "swing_lows": 7,
           "last_swing_high": 74643.95,
           "last_swing_low": 74532.66
         }
       },
       "liquidity_sweeps": {
-        "score": 0.0,
-        "signal": "NEUTRAL",
-        "label": "No liquidity sweep detected",
+        "score": -0.1512,
+        "signal": "BEAR",
+        "label": "Bearish sweep @ 74644 \u2014 Stops hunted",
         "weight": 0.15,
-        "value": 0.0,
+        "value": -0.151,
         "extra": {
-          "sweeps_detected": 0,
-          "last_sweep": null
+          "sweeps_detected": 1,
+          "last_sweep": {
+            "type": "BEARISH_SWEEP",
+            "level": 74643.95,
+            "depth_pct": 0.055,
+            "ts": "2026-04-07T15:25:00+05:30"
+          }
         }
       },
       "displacement": {
@@ -310,27 +315,27 @@
       "smart_money_div": {
         "score": -0.5,
         "signal": "BEAR",
-        "label": "\u26a0\ufe0f Bearish divergence \u2014 Price \u21910.4% but OI dropping",
+        "label": "\u26a0\ufe0f Bearish divergence \u2014 Price \u21910.5% but OI dropping",
         "weight": 0.1,
         "value": -0.5,
         "extra": {
           "divergence": "BEARISH_DIVERGENCE",
-          "price_change": 0.45,
-          "oi_slope": -70068.6667
+          "price_change": 0.54,
+          "oi_slope": -93391.0909
         }
       }
     },
     "metrics": {
-      "price": 74658.26,
-      "changePct": 0.74,
+      "price": 74616.58,
+      "changePct": 0.69,
       "oi": 5256640,
       "candleCount": 31,
       "swingHighs": 8,
-      "swingLows": 8,
+      "swingLows": 7,
       "lastSwingHigh": 74643.95,
       "lastSwingLow": 74532.66
     },
-    "dataSource": "LIVE",
-    "timestamp": "2026-04-07T15:28:59.048098+05:30"
+    "dataSource": "MARKET_CLOSED",
+    "timestamp": "2026-04-07T15:31:01.487323+05:30"
   }
 }
