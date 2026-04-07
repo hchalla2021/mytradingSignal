@@ -42,7 +42,7 @@
           "nearest_fvg": {
             "type": "BULLISH",
             "zone": "23101-23106",
-            "dist": 0.17
+            "dist": 0.15
           }
         }
       },
@@ -96,8 +96,8 @@
       }
     },
     "metrics": {
-      "price": 23142.5,
-      "changePct": 0.76,
+      "price": 23139.1,
+      "changePct": 0.74,
       "oi": 365567410,
       "candleCount": 31,
       "swingHighs": 8,
@@ -106,7 +106,7 @@
       "lastSwingLow": 23099.35
     },
     "dataSource": "LIVE",
-    "timestamp": "2026-04-07T15:28:23.694136+05:30"
+    "timestamp": "2026-04-07T15:28:25.710559+05:30"
   },
   "BANKNIFTY": {
     "symbol": "BANKNIFTY",
@@ -126,7 +126,7 @@
       "order_blocks": {
         "score": -0.5065,
         "signal": "BEAR",
-        "label": "Bearish OB @ 52683-52776 (0.09% away)",
+        "label": "Bearish OB @ 52683-52776 (0.1% away)",
         "weight": 0.25,
         "value": -0.506,
         "extra": {
@@ -135,7 +135,7 @@
           "nearest_ob": {
             "type": "BEARISH",
             "zone": "52683-52776",
-            "dist": 0.09
+            "dist": 0.1
           }
         }
       },
@@ -151,7 +151,7 @@
           "nearest_fvg": {
             "type": "BULLISH",
             "zone": "52570-52680",
-            "dist": 0.19
+            "dist": 0.18
           }
         }
       },
@@ -210,8 +210,8 @@
       }
     },
     "metrics": {
-      "price": 52726.6,
-      "changePct": 0.22,
+      "price": 52722.2,
+      "changePct": 0.21,
       "oi": 8786070,
       "candleCount": 31,
       "swingHighs": 7,
@@ -220,7 +220,7 @@
       "lastSwingLow": 52667.85
     },
     "dataSource": "LIVE",
-    "timestamp": "2026-04-07T15:28:23.696709+05:30"
+    "timestamp": "2026-04-07T15:28:25.712799+05:30"
   },
   "SENSEX": {
     "symbol": "SENSEX",
@@ -321,7 +321,7 @@
       }
     },
     "metrics": {
-      "price": 74650.74,
+      "price": 74651.39,
       "changePct": 0.73,
       "oi": 5242060,
       "candleCount": 31,
@@ -331,6 +331,6 @@
       "lastSwingLow": 74532.66
     },
     "dataSource": "LIVE",
-    "timestamp": "2026-04-07T15:28:23.698878+05:30"
+    "timestamp": "2026-04-07T15:28:25.715659+05:30"
   }
 }
