@@ -305,7 +305,8 @@ class OIHistory:
 
     @property
     def data_ready(self) -> bool:
-        return len(self._oi_buf) >= 3 and len(self._price_buf) >= 3
+        # OI may be 0 for spot indices — only require price data
+        return len(self._price_buf) >= 3
 
 
 # ── Signal computation functions ─────────────────────────────────────────────
@@ -432,6 +433,19 @@ def _oi_concentration_signal(
     profile = "NEUTRAL"
 
     if not history.data_ready:
+        # Even without price history, use PCR if available for basic positioning
+        if call_oi > 0 and put_oi > 0:
+            pcr = put_oi / call_oi
+            if pcr >= 1.3:
+                return {"score": 0.3, "signal": "BULL",
+                        "label": f"Heavy put writing (PCR={pcr:.2f}) — building support floor",
+                        "weight": EXPIRY_WEIGHTS["oi_concentration"],
+                        "extra": {"profile": "LONG_BUILDUP", "pcr": round(pcr, 3)}}
+            elif pcr <= 0.7:
+                return {"score": -0.3, "signal": "BEAR",
+                        "label": f"Heavy call writing (PCR={pcr:.2f}) — building resistance ceiling",
+                        "weight": EXPIRY_WEIGHTS["oi_concentration"],
+                        "extra": {"profile": "SHORT_BUILDUP", "pcr": round(pcr, 3)}}
         return {"score": 0.0, "signal": "NEUTRAL", "label": "Collecting OI data...",
                 "weight": EXPIRY_WEIGHTS["oi_concentration"], "extra": {"profile": profile}}
 
@@ -440,23 +454,40 @@ def _oi_concentration_signal(
     extras["oiSlope"] = round(oi_slope, 4)
     extras["priceSlope"] = round(price_slope, 4)
 
-    # OI × Price direction matrix
-    if price_slope > 0 and oi_slope > 0:
-        profile = "LONG_BUILDUP"
-        score = _clamp(0.3 + oi_slope * 100, 0.2, 0.8)
-        label = "LONG BUILDUP — Institutions adding longs"
-    elif price_slope > 0 and oi_slope <= 0:
-        profile = "SHORT_COVERING"
-        score = _clamp(0.15 + price_slope * 50, 0.1, 0.5)
-        label = "SHORT COVERING — Weak bullish (shorts exiting)"
-    elif price_slope < 0 and oi_slope > 0:
-        profile = "SHORT_BUILDUP"
-        score = _clamp(-0.3 - oi_slope * 100, -0.8, -0.2)
-        label = "SHORT BUILDUP — Institutions adding shorts"
-    elif price_slope < 0 and oi_slope <= 0:
-        profile = "LONG_UNWINDING"
-        score = _clamp(-0.15 + price_slope * 50, -0.5, -0.1)
-        label = "LONG UNWINDING — Weak bearish (longs exiting)"
+    # When OI buffer is empty (spot indices), derive signal from price + PCR
+    has_oi_data = len(history._oi_buf) >= 3
+
+    if has_oi_data:
+        # OI × Price direction matrix
+        if price_slope > 0 and oi_slope > 0:
+            profile = "LONG_BUILDUP"
+            score = _clamp(0.3 + oi_slope * 100, 0.2, 0.8)
+            label = "LONG BUILDUP — Institutions adding longs"
+        elif price_slope > 0 and oi_slope <= 0:
+            profile = "SHORT_COVERING"
+            score = _clamp(0.15 + price_slope * 50, 0.1, 0.5)
+            label = "SHORT COVERING — Weak bullish (shorts exiting)"
+        elif price_slope < 0 and oi_slope > 0:
+            profile = "SHORT_BUILDUP"
+            score = _clamp(-0.3 - oi_slope * 100, -0.8, -0.2)
+            label = "SHORT BUILDUP — Institutions adding shorts"
+        elif price_slope < 0 and oi_slope <= 0:
+            profile = "LONG_UNWINDING"
+            score = _clamp(-0.15 + price_slope * 50, -0.5, -0.1)
+            label = "LONG UNWINDING — Weak bearish (longs exiting)"
+    else:
+        # No OI history (spot index) — use price slope + PCR as proxy
+        pcr = put_oi / call_oi if call_oi > 0 else 1.0
+        if price_slope > 0:
+            profile = "LONG_BUILDUP" if pcr >= 1.0 else "SHORT_COVERING"
+            score = _clamp(0.2 + price_slope * 30, 0.1, 0.6)
+            label = f"{profile} — price rising (PCR={pcr:.2f})"
+        elif price_slope < 0:
+            profile = "SHORT_BUILDUP" if pcr <= 1.0 else "LONG_UNWINDING"
+            score = _clamp(-0.2 + price_slope * 30, -0.6, -0.1)
+            label = f"{profile} — price falling (PCR={pcr:.2f})"
+        else:
+            label = f"Flat price action (PCR={pcr:.2f})"
 
     # Call vs Put OI trend
     call_trend = history.call_oi_trend
@@ -854,12 +885,28 @@ def _theta_decay_signal(hours_left: float, candles: List[Dict]) -> Dict[str, Any
 def _finalize_explosion(
     signals: Dict[str, Dict]
 ) -> Tuple[str, int, float, str]:
-    """Weighted aggregation of all 7 signals → direction, confidence, raw_score, action."""
+    """Weighted aggregation of all 7 signals → direction, confidence, raw_score, action.
+
+    Confidence approach: count signal AGREEMENT, not just raw score magnitude.
+    This avoids the near-zero-average problem when signals partially cancel.
+    """
     total_score = 0.0
+    total_weight = 0.0
+    bull_weight = 0.0
+    bear_weight = 0.0
+    contributing_count = 0
+
     for key, sig in signals.items():
         w = sig.get("weight", 0.0)
         s = sig.get("score", 0.0)
         total_score += w * s
+        total_weight += w
+        if abs(s) > 0.05:
+            contributing_count += 1
+            if s > 0:
+                bull_weight += w * abs(s)
+            else:
+                bear_weight += w * abs(s)
 
     total_score = _clamp(total_score, -1.0, 1.0)
 
@@ -879,7 +926,26 @@ def _finalize_explosion(
         direction = "NEUTRAL"
         action = "NEUTRAL"
 
-    confidence = int(min(99, max(1, abs(total_score) * 100)))
+    # Confidence: based on signal agreement + magnitude, not raw average
+    dominant_weight = max(bull_weight, bear_weight)
+    opposing_weight = min(bull_weight, bear_weight)
+    agreement_ratio = (dominant_weight - opposing_weight) / max(0.01, dominant_weight + opposing_weight)
+
+    if direction == "NEUTRAL":
+        # NEUTRAL confidence: 25-48%, based on how close to a directional call
+        edge = abs(total_score) / max(BULL_T, 0.01)
+        confidence = int(25 + edge * 23)  # 25% at center, 48% at boundary
+    else:
+        # Directional confidence: 35-95%
+        # Component 1: raw magnitude (how far past threshold)
+        raw_contrib = min(1.0, abs(total_score) / 0.60) * 30   # 0-30 pts
+        # Component 2: signal agreement (how many agree)
+        agree_contrib = agreement_ratio * 25                     # 0-25 pts
+        # Component 3: number of contributing signals
+        breadth_contrib = min(7, contributing_count) / 7.0 * 15  # 0-15 pts
+        confidence = int(35 + raw_contrib + agree_contrib + breadth_contrib)
+
+    confidence = max(1, min(99, confidence))
 
     return direction, confidence, round(total_score, 4), action
 
@@ -1096,7 +1162,7 @@ class ExpiryExplosionService:
             if c:
                 result.append(c)
         live = await self._cache.get(f"analysis_candle_live:{symbol}")
-        if live and isinstance(live, dict) and float(live.get("oi") or 0) > 0:
+        if live and isinstance(live, dict) and float(live.get("close") or 0) > 0:
             if not result or result[-1].get("timestamp") != live.get("timestamp"):
                 result.append(live)
         return result
@@ -1116,6 +1182,21 @@ class ExpiryExplosionService:
         call_oi = int(spot_data.get("callOI") or 0)
         put_oi = int(spot_data.get("putOI") or 0)
         volume = float(spot_data.get("volume") or 0)
+
+        # Fallback: read PCR directly from PCR service cache if spot data lacks it
+        if pcr_val == 0 or (call_oi == 0 and put_oi == 0):
+            try:
+                from services.pcr_service import _PCR_CACHE
+                pcr_data = _PCR_CACHE.get(symbol, {})
+                if pcr_data:
+                    if pcr_val == 0:
+                        pcr_val = float(pcr_data.get("pcr") or 0)
+                    if call_oi == 0:
+                        call_oi = int(pcr_data.get("callOI") or 0)
+                    if put_oi == 0:
+                        put_oi = int(pcr_data.get("putOI") or 0)
+            except Exception:
+                pass
 
         if pcr_val == 0 and call_oi > 0 and put_oi > 0:
             pcr_val = put_oi / call_oi

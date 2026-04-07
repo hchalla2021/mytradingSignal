@@ -270,38 +270,38 @@ const IndexCard = memo(({ data, index }: { data: LiquidityIndex | null; index: s
               </span>
             </div>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex items-stretch gap-2">
             {/* Individual Liquidity Bias label */}
-            <div className={`rounded-lg border px-2 py-1.5 text-center transition-all duration-150 ${
-              data.direction === 'BULLISH' ? 'bg-cyan-500/10 border-cyan-500/40' :
-              data.direction === 'BEARISH' ? 'bg-orange-500/10 border-orange-500/40' :
-              'bg-slate-700/20 border-slate-600/30'
+            <div className={`rounded-lg border-2 px-2.5 py-2 text-center transition-all duration-700 w-[80px] sm:w-[90px] flex flex-col items-center justify-center ${
+              data.direction === 'BULLISH' ? 'bg-cyan-500/15 border-cyan-500/50' :
+              data.direction === 'BEARISH' ? 'bg-orange-500/15 border-orange-500/50' :
+              'bg-slate-700/25 border-slate-500/40'
             }`}>
-              <div className={`text-[9px] font-bold uppercase tracking-wider leading-none ${
+              <div className={`text-[9px] sm:text-[10px] font-bold uppercase tracking-wider leading-none ${
                 data.direction === 'BULLISH' ? 'text-cyan-400' :
                 data.direction === 'BEARISH' ? 'text-orange-400' :
-                'text-slate-400'
+                'text-slate-300'
               }`}>
                 Liquidity
               </div>
-              <div className={`text-[11px] font-black leading-none mt-1 ${
-                data.direction === 'BULLISH' ? 'text-cyan-300' :
-                data.direction === 'BEARISH' ? 'text-orange-300' :
-                'text-slate-300'
+              <div className={`text-[12px] sm:text-[13px] font-black leading-none mt-1.5 ${
+                data.direction === 'BULLISH' ? 'text-cyan-200' :
+                data.direction === 'BEARISH' ? 'text-orange-200' :
+                'text-slate-200'
               }`}>
                 {data.direction === 'BULLISH' ? '▲ Bullish' : data.direction === 'BEARISH' ? '▼ Bearish' : '● Neutral'}
               </div>
             </div>
             {/* Main direction badge */}
-            <div className={`rounded-lg border px-2 py-1 text-center ${pal.badge}`}>
-              <div className="text-[10px] font-black tracking-widest leading-none">
+            <div className={`rounded-lg border-2 px-2.5 py-2 text-center transition-all duration-700 w-[80px] sm:w-[90px] flex flex-col items-center justify-center ${pal.badge}`}>
+              <div className="text-[9px] sm:text-[10px] font-black tracking-widest leading-none">
                 {data.direction === 'BULLISH' ? '▲' : data.direction === 'BEARISH' ? '▼' : '●'}
                 &nbsp;{data.direction}
               </div>
-              <div className={`text-[13px] font-black leading-none mt-0.5 ${pal.text}`}>
+              <div className={`text-[15px] sm:text-[17px] font-black leading-none mt-1 tabular-nums ${pal.text}`}>
                 {data.confidence}%
               </div>
-              <div className="text-[8px] font-normal text-slate-500 leading-none mt-0.5 tracking-wide">
+              <div className="text-[8px] sm:text-[9px] font-semibold text-slate-400 leading-none mt-1 tracking-wide">
                 Confidence
               </div>
             </div>
@@ -440,7 +440,11 @@ const IndexCard = memo(({ data, index }: { data: LiquidityIndex | null; index: s
               </div>
               {(() => {
                 const rs = data.rawScore || 0;
-                const bullPct = Math.max(5, Math.min(95, Math.round(((rs + 1) / 2) * 100)));
+                // Sigmoid mapping: rawScore is a weighted signal score, not a probability.
+                // Sigmoid compresses extreme values and spreads the neutral zone,
+                // giving traders a more honest probability reading.
+                const sigmoid = 1 / (1 + Math.exp(-rs * 4));
+                const bullPct = Math.max(5, Math.min(95, Math.round(sigmoid * 100)));
                 const bearPct = 100 - bullPct;
                 return (
                   <div className="flex h-7 rounded-md overflow-hidden bg-slate-950/50 border border-slate-700/30">

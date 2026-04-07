@@ -69,8 +69,8 @@ W5M: Dict[str, float] = {
     "candle_conviction": 0.05,
 }
 
-BULL_T =  0.20
-BEAR_T = -0.20
+BULL_T =  0.12
+BEAR_T = -0.12
 
 
 # ── Isolated WebSocket manager ────────────────────────────────────────────────
@@ -182,7 +182,25 @@ def _vwap(candles: List[Dict]) -> Optional[float]:
         tp = (float(c.get("high") or 0) + float(c.get("low") or 0) + float(c.get("close") or 0)) / 3.0
         total_pv += tp * vol
         total_vol += vol
-    return round(total_pv / total_vol, 2) if total_vol > 0 else None
+    if total_vol > 0:
+        return round(total_pv / total_vol, 2)
+
+    # Fallback for index instruments with zero volume:
+    # use equal-weighted typical price across candles
+    if len(candles) >= 3:
+        tp_sum = 0.0
+        count = 0
+        for c in candles:
+            h = float(c.get("high") or 0)
+            lo = float(c.get("low") or 0)
+            cl = float(c.get("close") or 0)
+            if cl > 0:
+                tp_sum += (h + lo + cl) / 3.0
+                count += 1
+        if count > 0:
+            return round(tp_sum / count, 2)
+
+    return None
 
 
 # ── PCR ring buffer ───────────────────────────────────────────────────────────
@@ -320,9 +338,9 @@ def _oi_buildup_signal(candles: List[Dict], spot_change_pct: float, live_oi: flo
     if not candles:
         return neutral
 
-    # Recent 3 candles, weighted: last = 70%, prev = 20%, before = 10%
+    # Recent 3 candles, weighted: last = 85%, prev = 10%, before = 5%
     recent   = candles[-3:] if len(candles) >= 3 else candles
-    w_map    = [0.10, 0.20, 0.70][-len(recent):]
+    w_map    = [0.05, 0.10, 0.85][-len(recent):]
 
     oi_deltas   : List[float] = []
     price_moves : List[float] = []
@@ -356,19 +374,34 @@ def _oi_buildup_signal(candles: List[Dict], spot_change_pct: float, live_oi: flo
             price_up_fb = spot_change_pct > 0.02
             price_dn_fb = spot_change_pct < -0.02
             oi_up_fb = oi_delta_live > 0
+            vol_up_fb = vol_up_override is True
+
+            _STRONG_OI_FB   = 0.30
+            _STRONG_PRICE_FB = 0.50
+            is_strong = abs(oi_pct_live) >= _STRONG_OI_FB and abs(spot_change_pct) >= _STRONG_PRICE_FB
 
             if price_up_fb and oi_up_fb:
-                profile = "LONG_BUILDUP"
-                score = magnitude_live * 0.70
-                label = f"Long Buildup — OI ↑{abs(oi_pct_live):.3f}% + price rising (live OI)"
+                if is_strong and vol_up_fb:
+                    profile = "STRONG_LONG_BUILDUP"
+                    score = magnitude_live * 1.0
+                    label = f"🚀 Strong Long Buildup — OI ↑{abs(oi_pct_live):.3f}% + price surging {spot_change_pct:+.2f}% (live OI)"
+                else:
+                    profile = "LONG_BUILDUP"
+                    score = magnitude_live * 0.70
+                    label = f"Long Buildup — OI ↑{abs(oi_pct_live):.3f}% + price rising (live OI)"
             elif price_up_fb and not oi_up_fb:
                 profile = "SHORT_COVERING"
                 score = magnitude_live * 0.35
                 label = f"Short Covering — OI ↓{abs(oi_pct_live):.3f}%, shorts exiting (live OI)"
             elif price_dn_fb and oi_up_fb:
-                profile = "SHORT_BUILDUP"
-                score = -magnitude_live * 0.70
-                label = f"Short Buildup — OI ↑{abs(oi_pct_live):.3f}% + price falling (live OI)"
+                if is_strong and vol_up_fb:
+                    profile = "STRONG_SHORT_BUILDUP"
+                    score = -magnitude_live * 1.0
+                    label = f"💥 Strong Short Buildup — OI ↑{abs(oi_pct_live):.3f}% + price plunging {spot_change_pct:+.2f}% (live OI)"
+                else:
+                    profile = "SHORT_BUILDUP"
+                    score = -magnitude_live * 0.70
+                    label = f"Short Buildup — OI ↑{abs(oi_pct_live):.3f}% + price falling (live OI)"
             elif price_dn_fb and not oi_up_fb:
                 profile = "LONG_UNWINDING"
                 score = -magnitude_live * 0.35
@@ -403,10 +436,10 @@ def _oi_buildup_signal(candles: List[Dict], spot_change_pct: float, live_oi: flo
     wt_oi    = sum(d * w for d, w in zip(oi_deltas, weights_used)) / tw
     wt_price = sum(p * w for p, w in zip(price_moves, weights_used)) / tw
 
-    # Leading-edge: blend live OI delta for faster detection (55% live, 45% candle)
+    # Leading-edge: blend live OI delta for faster detection (70% live, 30% candle)
     if live_oi > 0 and last_oi > 0:
         live_delta = live_oi - last_oi
-        wt_oi = wt_oi * 0.45 + live_delta * 0.55
+        wt_oi = wt_oi * 0.30 + live_delta * 0.70
 
     oi_base = live_oi if live_oi > 0 else last_oi
     oi_pct = (wt_oi / oi_base) * 100  # OI change as % of current OI
@@ -421,8 +454,8 @@ def _oi_buildup_signal(candles: List[Dict], spot_change_pct: float, live_oi: flo
         if last_candle_close > 0:
             live_price_move = spot_price - last_candle_close
 
-    # 55% live spot action + 45% candle momentum — faster reaction to reversals
-    blended_price = wt_price * 0.45 + live_price_move * 0.55
+    # 70% live spot action + 30% candle momentum — faster reaction to reversals
+    blended_price = wt_price * 0.30 + live_price_move * 0.70
 
     price_up = blended_price > 0
     price_dn = blended_price < 0
@@ -458,12 +491,23 @@ def _oi_buildup_signal(candles: List[Dict], spot_change_pct: float, live_oi: flo
     _STRONG_OI_PCT   = 0.30   # OI must change ≥0.30% for strong classification
     _STRONG_PRICE_PCT = 0.50  # price must move ≥0.50% for strong classification
 
+    # Use intraday price change (blended) for Strong classification instead of
+    # day-level spot_change_pct. This allows Strong detection during a big intraday
+    # rally even if the day started flat (small gap-up/down from yesterday's close).
+    intraday_pct = 0.0
+    if spot_price > 0 and candles:
+        first_open = float(candles[0].get("open") or 0)
+        if first_open > 0:
+            intraday_pct = ((spot_price - first_open) / first_open) * 100.0
+    # Use whichever shows larger move — day-level or intraday
+    effective_price_pct = max(abs(spot_change_pct), abs(intraday_pct))
+
     # 3-factor P × V × OI classification (8 cases)
     if price_up and oi_up:
         if vol_up:
             # P↑ V↑ OI↑ — volume-confirmed Long Buildup
             clarity = "STRONG"
-            if abs(oi_pct) >= _STRONG_OI_PCT and abs(spot_change_pct) >= _STRONG_PRICE_PCT:
+            if abs(oi_pct) >= _STRONG_OI_PCT and effective_price_pct >= _STRONG_PRICE_PCT:
                 profile = "STRONG_LONG_BUILDUP"
                 score   = magnitude * 1.0
                 label   = f"🚀 Strong Long Buildup (Rally) — OI ↑{abs(oi_pct):.3f}% + price surging {spot_change_pct:+.2f}%"
@@ -494,7 +538,7 @@ def _oi_buildup_signal(candles: List[Dict], spot_change_pct: float, live_oi: flo
         if vol_up:
             # P↓ V↑ OI↑ — volume-confirmed Short Buildup
             clarity = "STRONG"
-            if abs(oi_pct) >= _STRONG_OI_PCT and abs(spot_change_pct) >= _STRONG_PRICE_PCT:
+            if abs(oi_pct) >= _STRONG_OI_PCT and effective_price_pct >= _STRONG_PRICE_PCT:
                 profile = "STRONG_SHORT_BUILDUP"
                 score   = -magnitude * 1.0
                 label   = f"💥 Strong Short Buildup (Crash) — OI ↑{abs(oi_pct):.3f}% + price plunging {spot_change_pct:+.2f}%"
@@ -725,11 +769,11 @@ def _finalize_liquidity(signals: Dict) -> Tuple[str, int, float]:
         direction = "NEUTRAL"
 
     # ── Confidence: strength × consensus (mirrors compass_service pattern) ──────────
-    # NEUTRAL  (30–52 %): peaks at raw=0, falls toward band edges.
+    # NEUTRAL  (25–48 %): peaks at raw=0, falls toward band edges.
     # Directional (35–99 %): normalised strength + contradiction penalty.
     if direction == "NEUTRAL":
         band_centre = 1.0 - (abs(raw) / BULL_T)
-        confidence  = int(30 + band_centre * 22)          # 30–52 %
+        confidence  = int(25 + band_centre * 23)          # 25–48 %
     else:
         sign = 1.0 if direction == "BULLISH" else -1.0
         # pos_contrib / neg_contrib: track both WITH and AGAINST contributions
@@ -742,8 +786,8 @@ def _finalize_liquidity(signals: Dict) -> Tuple[str, int, float]:
         net      = pos_contrib - neg_contrib
         # strength: 0 at threshold, 1 when all factors max-agree
         strength = (net - BULL_T) / (1.0 - BULL_T)
-        # penalty: each opposing weighted unit costs 25 pts
-        penalty    = neg_contrib * 25
+        # penalty: each opposing weighted unit costs 20 pts
+        penalty    = neg_contrib * 20
         confidence = int(round(35 + strength * 64 - penalty))
 
     return direction, max(1, min(99, confidence)), round(raw, 4)
@@ -804,7 +848,7 @@ class LiquidityService:
         }
         # Track last known values for delta calculation
         self._last_values: Dict[str, Dict[str, float]] = {
-            sym: {"oi": 0.0, "price": 0.0, "volume": 0.0} for sym in self.INDICES
+            sym: {"oi": 0.0, "price": 0.0, "volume": 0.0, "cum_volume": 0.0} for sym in self.INDICES
         }
         # Rolling volume history for accurate vol_up detection (tick-level, not candle)
         self._vol_history: Dict[str, Deque[float]] = {
@@ -921,10 +965,10 @@ class LiquidityService:
                 result.append(c)
 
         # Append the live in-progress candle (updated every tick by market_feed)
-        # so that OI buildup detection reacts within seconds instead of waiting
-        # up to 5 minutes for each candle to close.
+        # so that price momentum and OI buildup react within seconds instead of
+        # waiting up to 5 minutes for each candle to close.
         live = await self._cache.get(f"analysis_candle_live:{symbol}")
-        if live and isinstance(live, dict) and float(live.get("oi") or 0) > 0:
+        if live and isinstance(live, dict) and float(live.get("close") or 0) > 0:
             # Avoid duplicate: skip if timestamp matches the last closed candle
             if not result or result[-1].get("timestamp") != live.get("timestamp"):
                 result.append(live)
@@ -955,11 +999,15 @@ class LiquidityService:
         candles = await self._read_candles(symbol)
 
         # ── Tick-level volume direction (fixes index instruments where candle volume is 0) ──
+        # Index volume from Zerodha is CUMULATIVE session volume, so we track
+        # per-tick deltas to get meaningful volume acceleration readings.
         spot_volume = float(spot_data.get("volume") or 0)
         vol_hist = self._vol_history[symbol]
-        if spot_volume > 0:
-            vol_hist.append(spot_volume)
-        # vol_up: current volume > rolling average (need at least 5 readings)
+        prev_cum_vol = self._last_values[symbol].get("cum_volume", 0.0)
+        vol_delta = max(0, spot_volume - prev_cum_vol) if prev_cum_vol > 0 else 0
+        if vol_delta > 0:
+            vol_hist.append(vol_delta)
+        # vol_up: current volume rate > rolling average (need at least 5 readings)
         vol_up_live: Optional[bool] = None
         if len(vol_hist) >= 5:
             recent = list(vol_hist)
@@ -990,7 +1038,33 @@ class LiquidityService:
         direction, confidence, raw_score = _finalize_liquidity(signals)
         prediction_5m, pred_conf         = _predict_5m_liquidity(signals)
 
+        # ── OI Profile: use OI signal first, then enhance with PCR + direction ──
         oi_profile = sig_oi["extra"].get("profile", "NEUTRAL")
+
+        # When OI signal alone is NEUTRAL (no OI data or no delta),
+        # use PCR + price momentum to provide a meaningful profile
+        if oi_profile == "NEUTRAL":
+            pcr_interp = sig_pcr["extra"].get("interpretation", "")
+            pcr_score = sig_pcr["score"]
+            mom_score = sig_mom["score"]
+
+            # PCR extreme overrides
+            if pcr_interp == "EXTREME_PUT_WALL":
+                oi_profile = "PCR_EXTREME_BULL"
+            elif pcr_interp == "EXTREME_CALL_WALL":
+                oi_profile = "PCR_EXTREME_BEAR"
+            # Strong directional signal from PCR + momentum combined
+            elif direction == "BULLISH" and confidence >= 55:
+                if pcr_score >= 0.30 and mom_score >= 0.20:
+                    oi_profile = "LONG_BUILDUP"
+                elif pcr_score >= 0.15 or mom_score >= 0.30:
+                    oi_profile = "SHORT_COVERING"
+            elif direction == "BEARISH" and confidence >= 55:
+                if pcr_score <= -0.30 and mom_score <= -0.20:
+                    oi_profile = "SHORT_BUILDUP"
+                elif pcr_score <= -0.15 or mom_score <= -0.30:
+                    oi_profile = "LONG_UNWINDING"
+
         data_source = "LIVE" if is_live else "MARKET_CLOSED"
 
         # ── Calculate micro-trends for advanced 5-min prediction ──────────────
@@ -1038,7 +1112,8 @@ class LiquidityService:
         self._last_values[symbol] = {
             "oi": oi_raw,
             "price": price,
-            "volume": current_volume
+            "volume": current_volume,
+            "cum_volume": spot_volume,
         }
         
         # ── Advanced 5-min prediction (if we have enough micro-trend data) ────

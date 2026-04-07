@@ -161,6 +161,7 @@ const createDefaultOutlook = (symbol: string): SymbolOutlook => ({
 // Mobile browsers reload modules more frequently
 let lastFetchTime = 0;
 let isFetching = false;
+let fetchStartTime = 0; // Track when fetch started to prevent permanent lock
 
 // 🔥 FORCE RESET: Clear any cached values on module load
 if (typeof window !== 'undefined') {
@@ -1024,21 +1025,24 @@ export const useOverallMarketOutlook = () => {
         new Promise<null>(r => setTimeout(() => {
           console.warn(`[OUTLOOK-${symbol}] Timeout for ${url}`);
           r(null);
-        }, 15000)) // 🔥 Increased to 15 seconds for slow endpoints
+        }, 10000)) // 10 second timeout per request
       ]);
 
-    // 🚀 OPTIMIZATION: Fetch ALL analysis endpoints in parallel (14 signals!)
-    const [tech, allAdvanced, market, pivotData, supertrend, camarilla, rsi60_40, smartMoney, oiMomentum] = await Promise.all([
+    // 🚀 OPTIMIZATION: Fetch analysis endpoints in parallel
+    // Reuse /analyze/{symbol} response for supertrend & camarilla (was called 3x before!)
+    const [tech, allAdvanced, market, pivotData, rsi60_40, smartMoney, oiMomentum] = await Promise.all([
       quickFetch(`${API_BASE_URL}/api/analysis/analyze/${symbol}`),
       quickFetch(`${API_BASE_URL}/api/advanced/all-analysis/${symbol}`), // ⚡ Zone, Volume, Trend
       quickFetch(`${API_BASE_URL}/ws/cache/${symbol}`).then(d => d?.data || null),
-      quickFetch(`${API_BASE_URL}/api/advanced/pivot-indicators`).then(d => d?.[symbol] || null), // Pivot + Supertrend
-      quickFetch(`${API_BASE_URL}/api/analysis/analyze/${symbol}`).then(d => d?.supertrend || null), // SuperTrend from analyze
-      quickFetch(`${API_BASE_URL}/api/analysis/analyze/${symbol}`).then(d => d?.camarilla || null), // Camarilla from analyze
-      quickFetch(`${API_BASE_URL}/api/analysis/rsi-momentum/${symbol}`), // RSI 60/40 dedicated endpoint
-      quickFetch(`${API_BASE_URL}/api/analysis/smart-money/${symbol}`), // Smart Money dedicated endpoint
-      quickFetch(`${API_BASE_URL}/api/analysis/oi-momentum/${symbol}`), // OI Momentum dedicated endpoint
+      quickFetch(`${API_BASE_URL}/api/advanced/pivot-indicators`).then(d => d?.[symbol] || null),
+      quickFetch(`${API_BASE_URL}/api/analysis/rsi-momentum/${symbol}`),
+      quickFetch(`${API_BASE_URL}/api/analysis/smart-money/${symbol}`),
+      quickFetch(`${API_BASE_URL}/api/analysis/oi-momentum/${symbol}`),
     ]);
+
+    // Extract supertrend & camarilla from the same analyze response (no duplicate calls)
+    const supertrend = tech?.supertrend || null;
+    const camarilla = tech?.camarilla || null;
 
     // Extract individual sections from aggregated response
     const zone = allAdvanced?.zone_control || null;
@@ -1057,12 +1061,18 @@ export const useOverallMarketOutlook = () => {
     setOutlookData(prev => ({ ...prev, [symbol]: newData }));
   }, []);
 
-  // 🔥🔥🔥 PRODUCTION: Fetch ONCE, keep values stable
+  // 🔥🔥🔥 PRODUCTION: Fetch and refresh periodically during market hours
   const fetchAllAnalysis = useCallback(async () => {
     const now = Date.now();
-    if (isFetching) return;
+    
+    // Prevent concurrent fetches, but auto-unlock if stuck for >30 seconds
+    if (isFetching) {
+      if (now - fetchStartTime < 30000) return; // Still within timeout
+      console.warn('[OUTLOOK] Force-unlocking stuck fetch after 30s');
+    }
     
     isFetching = true;
+    fetchStartTime = now;
     lastFetchTime = now;
 
     // 🔥 FETCH ONCE: Get initial data and keep it stable
@@ -1110,16 +1120,37 @@ export const useOverallMarketOutlook = () => {
     
     fetchAllAnalysis();
     
-    // 🔥 VISIBILITY CHANGE: Don't refetch when switching tabs
-    // Only fetch on initial mount - let WebSocket handle live updates
+    // 🔥 PERIODIC REFRESH: Re-fetch every 30 seconds during market hours
+    // The outlook must update as market data changes - REST APIs provide fresh analysis
+    const refreshInterval = setInterval(() => {
+      const now = new Date();
+      const istOffset = 5.5 * 60 * 60 * 1000; // IST = UTC + 5:30
+      const istTime = new Date(now.getTime() + istOffset + now.getTimezoneOffset() * 60 * 1000);
+      const hours = istTime.getHours();
+      const minutes = istTime.getMinutes();
+      const totalMinutes = hours * 60 + minutes;
+      const day = istTime.getDay();
+      
+      // Only refresh during market hours: Mon-Fri 9:00 - 15:35 IST
+      const isMarketDay = day >= 1 && day <= 5;
+      const isMarketTime = totalMinutes >= 540 && totalMinutes <= 935; // 9:00 to 15:35
+      
+      if (isMarketDay && isMarketTime) {
+        fetchAllAnalysis();
+      }
+    }, 30000); // Every 30 seconds
+    
+    // 🔥 VISIBILITY CHANGE: Refetch when user returns to tab
     const handleVisibilityChange = () => {
-      // Do nothing - prevent unnecessary refetches on tab switch
-      // WebSocket handles all live updates automatically
+      if (document.visibilityState === 'visible') {
+        fetchAllAnalysis();
+      }
     };
     
     document.addEventListener('visibilitychange', handleVisibilityChange);
     
     return () => {
+      clearInterval(refreshInterval);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
   }, [fetchAllAnalysis]);

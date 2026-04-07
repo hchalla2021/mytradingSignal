@@ -311,6 +311,30 @@ def _oi_spurts_signal(
     max_spurt = max(opt_spurt, fut_spurt)
     extras["peakSpurt"] = round(max_spurt, 2)
 
+    # When history buffers are cold (spurt = 1.0 default),
+    # derive signal from candle OI changes + PCR
+    buffers_cold = len(history._options_oi_buf) < 5 and len(history._fut_oi_buf) < 5
+
+    if buffers_cold and candles and len(candles) >= 2:
+        # Use candle OI delta as OI spurt proxy
+        oi_vals = [float(c.get("oi") or 0) for c in candles[-5:] if float(c.get("oi") or 0) > 0]
+        if len(oi_vals) >= 2:
+            oi_change_pct = _pct_change(oi_vals[0], oi_vals[-1])
+            extras["candleOIChangePct"] = round(oi_change_pct, 2)
+            if abs(oi_change_pct) > 2.0:
+                max_spurt = 1.5 + min(abs(oi_change_pct) / 10.0, 1.5)
+                extras["peakSpurt"] = round(max_spurt, 2)
+        # Also use PCR for direction when spot_slope is flat
+        if call_oi > 0 and put_oi > 0:
+            pcr = put_oi / call_oi
+            extras["pcr"] = round(pcr, 3)
+            if spot_slope == 0:
+                # Infer direction from PCR
+                if pcr >= 1.2:
+                    spot_slope = 0.001  # Treat as mild bullish
+                elif pcr <= 0.8:
+                    spot_slope = -0.001  # Treat as mild bearish
+
     if max_spurt >= 2.0:
         # Massive OI spurt — institutional move
         if spot_slope > 0:
@@ -385,8 +409,27 @@ def _iv_estimation_signal(
     extras["ivSlope"] = round(iv_slope, 4)
 
     if iv_est <= 0 and vix <= 0:
-        return {"score": 0.0, "signal": "NEUTRAL", "label": "IV data unavailable",
-                "weight": EDGE_WEIGHTS["iv_estimation"], "extra": extras}
+        # Fallback: infer from recent IV history if any was ever pushed
+        iv_vals = list(history._iv_buf)
+        if iv_vals:
+            iv_est = iv_vals[-1]
+            extras["ivEstimate"] = round(iv_est, 2)
+            extras["ivSource"] = "history"
+        else:
+            # Use a neutral-leaning default based on spot price volatility
+            spot_vals = list(history._spot_buf)
+            if len(spot_vals) >= 5:
+                returns = [abs(spot_vals[i] - spot_vals[i-1]) / spot_vals[i-1] * 100
+                           for i in range(1, len(spot_vals)) if spot_vals[i-1] > 0]
+                if returns:
+                    avg_move = sum(returns) / len(returns)
+                    # Annualize: avg 5-min move × sqrt(75 candles/day × 252 days)
+                    iv_est = round(avg_move * math.sqrt(75 * 252), 2)
+                    extras["ivEstimate"] = iv_est
+                    extras["ivSource"] = "realized_vol"
+            if iv_est <= 0:
+                return {"score": 0.0, "signal": "NEUTRAL", "label": "IV data unavailable",
+                        "weight": EDGE_WEIGHTS["iv_estimation"], "extra": extras}
 
     # Use VIX as primary IV proxy when available
     effective_iv = iv_est if iv_est > 0 else vix
@@ -451,6 +494,38 @@ def _iv_rank_signal(history: EdgeHistory) -> Dict[str, Any]:
     extras["ivRank"] = round(rank, 1)
     extras["ivPercentile"] = round(percentile, 1)
 
+    # When IV history is too short for reliable rank, use IV direction as proxy
+    iv_history_cold = len(history._iv_history) < 10
+    if iv_history_cold:
+        iv_slope = history.iv_slope
+        extras["ivSlope"] = round(iv_slope, 4)
+        extras["historyWarmup"] = len(history._iv_history)
+        if iv_slope > 0.01:
+            score = -0.15
+            label = "IV rising — getting expensive (limited history)"
+        elif iv_slope < -0.01:
+            score = 0.15
+            label = "IV falling — getting cheaper (limited history)"
+        else:
+            # Use current IV value if available for basic classification
+            iv_vals = list(history._iv_buf)
+            if iv_vals and iv_vals[-1] > 0:
+                current_iv = iv_vals[-1]
+                if current_iv >= 22:
+                    score = -0.25
+                    label = f"High IV {current_iv:.1f} — Options expensive (limited history)"
+                elif current_iv <= 13:
+                    score = 0.25
+                    label = f"Low IV {current_iv:.1f} — Options cheap (limited history)"
+                else:
+                    score = 0.0
+                    label = f"IV Rank warming up — IV {current_iv:.1f} (normal range)"
+            else:
+                score = 0.0
+                label = "IV Rank warming up — collecting data"
+        return {"score": round(score, 4), "signal": _sig(score), "label": label,
+                "weight": EDGE_WEIGHTS["iv_rank"], "extra": extras}
+
     if rank >= 80:
         score = -0.5
         label = f"🔴 EXTREME IV Rank {rank:.0f} — Sell premium zone"
@@ -499,8 +574,29 @@ def _futures_oi_signal(
     profile = "NEUTRAL"
 
     if fut_oi <= 0:
-        return {"score": 0.0, "signal": "NEUTRAL", "label": "Futures OI unavailable",
-                "weight": EDGE_WEIGHTS["futures_oi"], "extra": {"profile": profile}}
+        # Fallback: use spot price slope + PCR for basic positioning
+        spot_slope = history.spot_slope
+        # Try reading PCR from history or cache
+        pcr_vals = list(history._put_oi_buf)
+        call_vals = list(history._call_oi_buf)
+        pcr = pcr_vals[-1] / call_vals[-1] if pcr_vals and call_vals and call_vals[-1] > 0 else 0
+        extras["fallback"] = "spot_pcr"
+        extras["spotSlope"] = round(spot_slope, 4)
+
+        if spot_slope > 0:
+            profile = "LONG_BUILDUP" if pcr >= 1.0 else "SHORT_COVERING"
+            score = _clamp(0.2 + abs(spot_slope) * 20, 0.15, 0.5)
+            label = f"{profile} — price rising (no futures data)"
+        elif spot_slope < 0:
+            profile = "SHORT_BUILDUP" if pcr <= 1.0 else "LONG_UNWINDING"
+            score = _clamp(-0.2 - abs(spot_slope) * 20, -0.5, -0.15)
+            label = f"{profile} — price falling (no futures data)"
+        else:
+            label = "Flat — no futures data available"
+
+        extras["profile"] = profile
+        return {"score": round(score, 4), "signal": _sig(score), "label": label,
+                "weight": EDGE_WEIGHTS["futures_oi"], "extra": extras}
 
     oi_slope = history.fut_oi_slope
     spot_slope = history.spot_slope
@@ -566,6 +662,14 @@ def _futures_basis_signal(
     extras: Dict[str, Any] = {}
 
     if fut_price <= 0 or spot_price <= 0:
+        # Fallback: use spot Price trend as weak basis proxy
+        spot_slope = history.spot_slope
+        if abs(spot_slope) > 0:
+            direction_score = _clamp(spot_slope * 15, -0.3, 0.3)
+            trend_label = "bullish" if spot_slope > 0 else "bearish"
+            return {"score": round(direction_score, 4), "signal": _sig(direction_score),
+                    "label": f"No futures data — spot trend {trend_label}",
+                    "weight": EDGE_WEIGHTS["futures_basis"], "extra": {"fallback": "spot_trend"}}
         return {"score": 0.0, "signal": "NEUTRAL", "label": "Futures data unavailable",
                 "weight": EDGE_WEIGHTS["futures_basis"], "extra": extras}
 
@@ -619,12 +723,26 @@ def _futures_basis_signal(
 def _finalize_edge(
     signals: Dict[str, Dict]
 ) -> Tuple[str, int, float, str]:
-    """Weighted aggregation → direction, confidence, raw_score, action."""
+    """Weighted aggregation → direction, confidence, raw_score, action.
+
+    Confidence uses signal agreement + magnitude + breadth,
+    NOT just abs(raw_score) which produces ~2% when signals cancel.
+    """
     total_score = 0.0
+    bull_weight = 0.0
+    bear_weight = 0.0
+    contributing = 0
+
     for key, sig in signals.items():
         w = sig.get("weight", 0.0)
         s = sig.get("score", 0.0)
         total_score += w * s
+        if abs(s) > 0.05:
+            contributing += 1
+            if s > 0:
+                bull_weight += w * abs(s)
+            else:
+                bear_weight += w * abs(s)
 
     total_score = _clamp(total_score, -1.0, 1.0)
 
@@ -639,7 +757,21 @@ def _finalize_edge(
     else:
         direction, action = "NEUTRAL", "NEUTRAL"
 
-    confidence = int(min(99, max(1, abs(total_score) * 100)))
+    # Agreement-based confidence
+    dominant = max(bull_weight, bear_weight)
+    opposing = min(bull_weight, bear_weight)
+    agreement = (dominant - opposing) / max(0.01, dominant + opposing)
+
+    if direction == "NEUTRAL":
+        edge = abs(total_score) / max(BULL_T, 0.01)
+        confidence = int(25 + edge * 23)  # 25-48%
+    else:
+        raw_contrib = min(1.0, abs(total_score) / 0.60) * 30    # 0-30 pts
+        agree_contrib = agreement * 25                            # 0-25 pts
+        breadth_contrib = min(5, contributing) / 5.0 * 15         # 0-15 pts
+        confidence = int(35 + raw_contrib + agree_contrib + breadth_contrib)
+
+    confidence = max(1, min(99, confidence))
     return direction, confidence, round(total_score, 4), action
 
 
@@ -834,6 +966,19 @@ class MarketEdgeService:
         total_oi = int(spot_data.get("oi") or 0)
         volume = float(spot_data.get("volume") or 0)
         is_live = spot_data.get("status") == "LIVE"
+
+        # Fallback: read PCR directly from PCR service cache if spot data lacks it
+        if call_oi == 0 and put_oi == 0:
+            try:
+                from services.pcr_service import _PCR_CACHE
+                pcr_data = _PCR_CACHE.get(symbol, {})
+                if pcr_data:
+                    call_oi = int(pcr_data.get("callOI") or 0)
+                    put_oi = int(pcr_data.get("putOI") or 0)
+                    if total_oi == 0:
+                        total_oi = call_oi + put_oi
+            except Exception:
+                pass
 
         candles = await self._read_candles(symbol)
         vix = self._read_vix()

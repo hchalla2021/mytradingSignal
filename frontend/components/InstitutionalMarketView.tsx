@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useMemo, memo } from 'react';
+import React, { useMemo, memo, useRef } from 'react';
 import useOrderFlowRealtime, { OrderFlowData } from '@/hooks/useOrderFlowRealtime';
 import { getEnvironmentConfig } from '@/lib/env-detection';
 
@@ -276,8 +276,8 @@ const DeltaBar = memo(({ data }: { data: OrderFlowData }) => {
 
 DeltaBar.displayName = 'DeltaBar';
 
-// ⚔️ BUYER VS SELLER BATTLE — fixed layout
-const BattleIndicator = memo(({ data }: { data: OrderFlowData }) => {
+// ⚡️ BUYER VS SELLER BATTLE — fixed layout with hysteresis
+const BattleIndicator = memo(({ data, stableBuyDom }: { data: OrderFlowData; stableBuyDom: boolean }) => {
   const buyPercentOfTotal = data.buyerAggressionRatio * 100;
   const sellPercentOfTotal = data.sellerAggressionRatio * 100;
   
@@ -307,10 +307,10 @@ const BattleIndicator = memo(({ data }: { data: OrderFlowData }) => {
         </div>
         
         <div className="w-8 text-center">
-          <div className={`text-lg font-bold ${
-            buyPercentOfTotal > 50 ? 'text-green-400' : 'text-red-400'
+          <div className={`text-lg font-bold transition-colors duration-700 ${
+            stableBuyDom ? 'text-green-400' : 'text-red-400'
           }`}>
-            {buyPercentOfTotal > 50 ? '▶️' : '◀️'}
+            {stableBuyDom ? '▶️' : '◀️'}
           </div>
         </div>
         
@@ -330,11 +330,12 @@ const BattleIndicator = memo(({ data }: { data: OrderFlowData }) => {
 
 BattleIndicator.displayName = 'BattleIndicator';
 
-// 💧 MARKET LIQUIDITY — SINGLE FIXED DOM STRUCTURE (no conditional tree swap)
-const MarketLiquidity = memo(({ data }: { data: OrderFlowData }) => {
+// 💧 MARKET LIQUIDITY — SINGLE FIXED DOM STRUCTURE with hysteresis
+const MarketLiquidity = memo(({ data, stableBuyDom }: { data: OrderFlowData; stableBuyDom: boolean }) => {
   const buyPct = data.buyerAggressionRatio * 100;
   const sellPct = data.sellerAggressionRatio * 100;
-  const isBuyDom = buyPct > sellPct;
+  // Use stable (hysteresis) dominance to prevent flicker
+  const isBuyDom = stableBuyDom;
   const pctDiff = Math.abs(buyPct - sellPct);
   const intensity = Math.min(pctDiff, 50) / 50;
 
@@ -344,16 +345,18 @@ const MarketLiquidity = memo(({ data }: { data: OrderFlowData }) => {
     ? (isBuyDom ? 'sm-section-hl-bull' : 'sm-section-hl-bear')
     : '';
   
-  // Colors: highlighted side uses vivid, muted side uses gray
-  const buyBg = isBuyDom ? `rgba(52, 211, 153, ${0.3 + intensity * 0.5})` : 'rgba(107, 114, 128, 0.2)';
-  const buyBorder = isBuyDom ? `rgba(52, 211, 153, ${0.5 + intensity * 0.5})` : 'rgba(107, 114, 128, 0.3)';
-  const buyColor = isBuyDom ? 'rgb(52, 211, 153)' : 'rgba(107, 114, 128, 0.6)';
+  // Colors: highlighted side uses vivid bright colors, muted side uses clear gray
+  const buyBg = isBuyDom ? `rgba(16, 185, 129, ${0.15 + intensity * 0.25})` : 'rgba(55, 65, 81, 0.4)';
+  const buyBorder = isBuyDom ? `rgba(52, 211, 153, ${0.7 + intensity * 0.3})` : 'rgba(75, 85, 99, 0.5)';
+  const buyColor = isBuyDom ? '#34d399' : 'rgba(156, 163, 175, 0.7)';
   const buyLabel = isBuyDom ? '↑ Strong Buying' : '↑ Weak Buying';
+  const buyLabelColor = isBuyDom ? '#6ee7b7' : '#9ca3af';
   
-  const sellBg = !isBuyDom ? `rgba(239, 68, 68, ${0.3 + intensity * 0.5})` : 'rgba(107, 114, 128, 0.2)';
-  const sellBorder = !isBuyDom ? `rgba(239, 68, 68, ${0.5 + intensity * 0.5})` : 'rgba(107, 114, 128, 0.3)';
-  const sellColor = !isBuyDom ? 'rgb(239, 68, 68)' : 'rgba(107, 114, 128, 0.6)';
+  const sellBg = !isBuyDom ? `rgba(239, 68, 68, ${0.15 + intensity * 0.25})` : 'rgba(55, 65, 81, 0.4)';
+  const sellBorder = !isBuyDom ? `rgba(248, 113, 113, ${0.7 + intensity * 0.3})` : 'rgba(75, 85, 99, 0.5)';
+  const sellColor = !isBuyDom ? '#f87171' : 'rgba(156, 163, 175, 0.7)';
   const sellLabel = !isBuyDom ? '↓ Heavy Selling' : '↓ Passive Selling';
+  const sellLabelColor = !isBuyDom ? '#fca5a5' : '#9ca3af';
   
   const barBuyBg = isBuyDom
     ? 'linear-gradient(to right, rgb(16 185 129), rgb(52 211 153))'
@@ -365,68 +368,80 @@ const MarketLiquidity = memo(({ data }: { data: OrderFlowData }) => {
   const domLabel = isBuyDom
     ? `🟢 BUYER DOMINANCE: ${pctDiff.toFixed(1)}% stronger`
     : `🔴 SELLER DOMINANCE: ${pctDiff.toFixed(1)}% stronger`;
-  const domColor = isBuyDom ? 'rgb(52 211 153)' : 'rgb(248 113 113)';
-  const domBg = isBuyDom ? 'rgba(6, 78, 59, 0.2)' : 'rgba(127, 29, 29, 0.2)';
-  const domBorderColor = isBuyDom ? 'rgba(6, 95, 70, 0.5)' : 'rgba(153, 27, 27, 0.5)';
+  const domColor = isBuyDom ? '#34d399' : '#f87171';
+  const domBg = isBuyDom ? 'rgba(6, 78, 59, 0.3)' : 'rgba(127, 29, 29, 0.3)';
+  const domBorderColor = isBuyDom ? 'rgba(52, 211, 153, 0.4)' : 'rgba(248, 113, 113, 0.4)';
   
   return (
     <div>
       <div className="text-xs font-semibold text-gray-300 h-5 leading-5">Market Liquidity</div>
       
-      {/* Buyer / Seller boxes — always both present, same height */}
-      <div className="flex justify-between items-stretch gap-2 mt-1">
+      {/* Buyer / Seller boxes — fixed equal height, no layout shift */}
+      <div className="grid grid-cols-2 gap-2 sm:gap-3 mt-1">
         <div 
-          className="flex-1 rounded-lg p-3"
+          className="rounded-lg p-2.5 sm:p-3 transition-all duration-700 min-h-[88px] flex flex-col justify-between"
           style={{ backgroundColor: buyBg, border: `2px solid ${buyBorder}` }}
         >
-          <div className="text-xs font-semibold" style={{ color: isBuyDom ? 'rgb(156 163 175)' : 'rgb(107 114 128)' }}>BUYERS</div>
-          <div className={`text-2xl font-bold mt-1 h-8 leading-8 ${isBuyDom && liqHlClass ? `inline-block rounded px-1 ${liqHlClass}` : ''}`} style={{ color: buyColor }}>
+          <div className="text-[11px] sm:text-xs font-bold tracking-wide" style={{ color: isBuyDom ? '#d1d5db' : '#6b7280' }}>BUYERS</div>
+          <div 
+            className="text-xl sm:text-2xl font-bold h-8 leading-8 tabular-nums"
+            style={{ color: buyColor, transition: 'color 0.7s', fontVariantNumeric: 'tabular-nums' }}
+          >
             {buyPct.toFixed(1)}%
           </div>
-          <div className={`text-xs mt-1 h-4 ${isBuyDom && liqHlClass ? `inline-block rounded px-1 ${liqHlClass}` : ''}`} style={{ color: isBuyDom ? 'rgb(6 95 70)' : 'rgb(75 85 99)' }}>
+          <div 
+            className="text-[11px] sm:text-xs font-semibold h-4 leading-4 whitespace-nowrap"
+            style={{ color: buyLabelColor, transition: 'color 0.7s' }}
+          >
             {buyLabel}
           </div>
         </div>
         
         <div 
-          className="flex-1 rounded-lg p-3"
+          className="rounded-lg p-2.5 sm:p-3 transition-all duration-700 min-h-[88px] flex flex-col justify-between"
           style={{ backgroundColor: sellBg, border: `2px solid ${sellBorder}` }}
         >
-          <div className="text-xs font-semibold" style={{ color: !isBuyDom ? 'rgb(156 163 175)' : 'rgb(107 114 128)' }}>SELLERS</div>
-          <div className={`text-2xl font-bold mt-1 h-8 leading-8 ${!isBuyDom && liqHlClass ? `inline-block rounded px-1 ${liqHlClass}` : ''}`} style={{ color: sellColor }}>
+          <div className="text-[11px] sm:text-xs font-bold tracking-wide" style={{ color: !isBuyDom ? '#d1d5db' : '#6b7280' }}>SELLERS</div>
+          <div 
+            className="text-xl sm:text-2xl font-bold h-8 leading-8 tabular-nums"
+            style={{ color: sellColor, transition: 'color 0.7s', fontVariantNumeric: 'tabular-nums' }}
+          >
             {sellPct.toFixed(1)}%
           </div>
-          <div className={`text-xs mt-1 h-4 ${!isBuyDom && liqHlClass ? `inline-block rounded px-1 ${liqHlClass}` : ''}`} style={{ color: !isBuyDom ? 'rgb(153 27 27)' : 'rgb(75 85 99)' }}>
+          <div 
+            className="text-[11px] sm:text-xs font-semibold h-4 leading-4 whitespace-nowrap"
+            style={{ color: sellLabelColor, transition: 'color 0.7s' }}
+          >
             {sellLabel}
           </div>
         </div>
       </div>
       
-      {/* Visual Indicator Bar — always present */}
+      {/* Visual Indicator Bar — always present, fixed height */}
       <div 
-        className="h-8 rounded-lg overflow-hidden flex bg-gray-800/50 border border-gray-700/50 mt-1"
+        className="h-7 sm:h-8 rounded-lg overflow-hidden flex bg-gray-800/50 border border-gray-700/50 mt-2"
         style={{ boxShadow: 'inset 0 1px 3px rgba(0,0,0,0.5)' }}
       >
         <div 
-          className="h-full flex items-center justify-center"
+          className="h-full flex items-center justify-center transition-all duration-700"
           style={{ width: `${buyPct}%`, background: barBuyBg }}
         >
-          {buyPct > 30 && <span className="text-white font-bold text-xs drop-shadow">BUY</span>}
+          {buyPct > 30 && <span className="text-white font-bold text-[11px] sm:text-xs drop-shadow">BUY</span>}
         </div>
         <div 
-          className="h-full flex items-center justify-center"
+          className="h-full flex items-center justify-center transition-all duration-700"
           style={{ width: `${sellPct}%`, background: barSellBg }}
         >
-          {sellPct > 30 && <span className="text-white font-bold text-xs drop-shadow">SELL</span>}
+          {sellPct > 30 && <span className="text-white font-bold text-[11px] sm:text-xs drop-shadow">SELL</span>}
         </div>
       </div>
       
-      {/* Dominance Indicator — always present, fixed height */}
+      {/* Dominance Indicator — fixed height, clear text */}
       <div 
-        className={`text-center text-xs p-2 rounded mt-1 h-8 leading-4 ${liqHlClass}`}
-        style={{ backgroundColor: domBg, border: liqHlClass ? undefined : `1px solid ${domBorderColor}` }}
+        className="text-center text-xs sm:text-sm p-2 rounded-md mt-2 h-8 leading-4 transition-all duration-700"
+        style={{ backgroundColor: domBg, border: `1px solid ${domBorderColor}` }}
       >
-        <span className="font-bold" style={{ color: domColor }}>
+        <span className="font-bold tracking-wide" style={{ color: domColor }}>
           {domLabel}
         </span>
       </div>
@@ -569,6 +584,24 @@ SignalBadge.displayName = 'SignalBadge';
 
 // INDIVIDUAL ORDER FLOW CARD — STABLE LAYOUT
 const OrderFlowCard = memo(({ symbol, data, isLoading }: OrderFlowCardProps) => {
+  // ── Hysteresis for buyer/seller dominance ──
+  // Prevents flickering when values oscillate near 50%.
+  // Once a side is dominant, the OTHER side must exceed 52% to flip.
+  const stableDomRef = useRef<boolean>(true); // true = buyer dominant
+  if (data) {
+    const buyPct = data.buyerAggressionRatio * 100;
+    const sellPct = data.sellerAggressionRatio * 100;
+    const HYSTERESIS = 2.0; // 2% dead-zone
+    if (stableDomRef.current) {
+      // Currently buyer-dominant — only flip if sellers clearly win
+      if (sellPct > 50 + HYSTERESIS) stableDomRef.current = false;
+    } else {
+      // Currently seller-dominant — only flip if buyers clearly win
+      if (buyPct > 50 + HYSTERESIS) stableDomRef.current = true;
+    }
+  }
+  const stableBuyDom = stableDomRef.current;
+
   if (isLoading || !data) {
     return (
       <div className="bg-gray-900/60 border border-gray-700/50 rounded-lg p-4 backdrop-blur-sm min-h-[600px]">
@@ -592,8 +625,8 @@ const OrderFlowCard = memo(({ symbol, data, isLoading }: OrderFlowCardProps) => 
   const signalHl = (isBull && data.signalConfidence > 0.55) ? 'sm-section-hl-bull'
     : (isBear && data.signalConfidence > 0.55) ? 'sm-section-hl-bear' : '';
   // 2. Market Liquidity: dominant side with 10%+ gap
-  const liqHl = (smBuyPct > smSellPct && smLiqDiff > 10) ? 'sm-section-hl-bull'
-    : (smSellPct > smBuyPct && smLiqDiff > 10) ? 'sm-section-hl-bear' : '';
+  const liqHl = (stableBuyDom && smLiqDiff > 10) ? 'sm-section-hl-bull'
+    : (!stableBuyDom && smLiqDiff > 10) ? 'sm-section-hl-bear' : '';
   // 3. 5-Min Prediction: direction + dominance > 55%
   const predBull = smPred && smPred.direction?.includes('BUY') && smPred.buyDominancePct > 55;
   const predBear = smPred && smPred.direction?.includes('SELL') && smPred.sellDominancePct > 55;
@@ -669,12 +702,12 @@ const OrderFlowCard = memo(({ symbol, data, isLoading }: OrderFlowCardProps) => 
       
       {/* Battle Indicator */}
       <div className={`p-3 bg-gray-800/50 rounded border border-gray-700/30 mb-4 ${battleHl}`}>
-        <BattleIndicator data={data} />
+        <BattleIndicator data={data} stableBuyDom={stableBuyDom} />
       </div>
       
       {/* Market Liquidity */}
       <div className="p-3 bg-gray-800/50 rounded border border-gray-700/30 mb-4">
-        <MarketLiquidity data={data} />
+        <MarketLiquidity data={data} stableBuyDom={stableBuyDom} />
       </div>
       
       {/* Signal Confidence */}
