@@ -103,7 +103,7 @@
       }
     },
     "metrics": {
-      "price": 24058.85,
+      "price": 24058.45,
       "changePct": 1.19,
       "oi": 289839160,
       "candleCount": 31,
@@ -113,7 +113,7 @@
       "lastSwingLow": 23993.55
     },
     "dataSource": "LIVE",
-    "timestamp": "2026-04-10T15:14:53.809015+05:30"
+    "timestamp": "2026-04-10T15:14:57.885767+05:30"
   },
   "BANKNIFTY": {
     "symbol": "BANKNIFTY",
@@ -219,7 +219,7 @@
       }
     },
     "metrics": {
-      "price": 55921.8,
+      "price": 55923.8,
       "changePct": 2.01,
       "oi": 10380840,
       "candleCount": 31,
@@ -229,7 +229,7 @@
       "lastSwingLow": 55678.15
     },
     "dataSource": "LIVE",
-    "timestamp": "2026-04-10T15:14:53.812562+05:30"
+    "timestamp": "2026-04-10T15:14:57.888845+05:30"
   },
   "SENSEX": {
     "symbol": "SENSEX",
@@ -274,7 +274,7 @@
           "nearest_fvg": {
             "type": "BULLISH",
             "zone": "77398-77497",
-            "dist": 0.14
+            "dist": 0.15
           }
         }
       },
@@ -335,8 +335,8 @@
       }
     },
     "metrics": {
-      "price": 77558.92,
-      "changePct": 1.21,
+      "price": 77565.24,
+      "changePct": 1.22,
       "oi": 4952800,
       "candleCount": 31,
       "swingHighs": 8,
@@ -345,6 +345,6 @@
       "lastSwingLow": 77254.65
     },
     "dataSource": "LIVE",
-    "timestamp": "2026-04-10T15:14:53.816973+05:30"
+    "timestamp": "2026-04-10T15:14:57.891631+05:30"
   }
 }
