@@ -213,7 +213,11 @@ const EdgeCard = memo<{ data: EdgeIndex | null; name: string }>(({ data, name })
       </div>
 
       {/* OI Profile Badge */}
-      <div className={`flex items-center justify-between rounded-lg ${profileCfg.bg} border border-slate-700/30 px-2.5 py-1.5 mb-3`}>
+      <div className={`flex items-center justify-between rounded-lg ${profileCfg.bg} px-2.5 py-1.5 mb-3 ${
+        data.oiProfile === 'LONG_BUILDUP' ? 'border-2 border-emerald-400/70 shadow-[0_0_10px_rgba(16,185,129,0.35)]' :
+        data.oiProfile === 'SHORT_BUILDUP' ? 'border-2 border-red-400/70 shadow-[0_0_10px_rgba(239,68,68,0.35)]' :
+        'border border-slate-700/30'
+      }`}>
         <div className="flex items-center gap-2">
           <span className="text-xs">{profileCfg.icon}</span>
           <span className={`text-[10px] sm:text-xs font-bold ${profileCfg.color} ${data.oiProfile === 'LONG_BUILDUP' || data.oiProfile === 'SHORT_BUILDUP' ? dirHl : ''}`}>

@@ -596,8 +596,12 @@ class MarketFeedService:
             from kiteconnect.exceptions import TokenException
             print("📊 Fetching last traded data from Zerodha...")
             
-            kite = KiteConnect(api_key=settings.zerodha_api_key)
-            kite.set_access_token(settings.zerodha_access_token)
+            # 🔥 FIX: Use fresh settings to pick up token refreshed in .env
+            from config import get_settings
+            fresh = get_settings()
+            
+            kite = KiteConnect(api_key=fresh.zerodha_api_key)
+            kite.set_access_token(fresh.zerodha_access_token)
             
             # 🔥 Fetch prev day OHLC if not already loaded (needed for CRT)
             if not PREV_DAY_OHLC:
@@ -834,8 +838,11 @@ class MarketFeedService:
         kite = None
         try:
             from kiteconnect import KiteConnect
-            kite = KiteConnect(api_key=settings.zerodha_api_key)
-            kite.set_access_token(settings.zerodha_access_token)
+            # 🔥 FIX: Use fresh settings to pick up token refreshed in .env
+            from config import get_settings
+            fresh = get_settings()
+            kite = KiteConnect(api_key=fresh.zerodha_api_key)
+            kite.set_access_token(fresh.zerodha_access_token)
             tokens = list(TOKEN_SYMBOL_MAP.keys())
             # Map tokens to tradingsymbols for quote API
             token_to_symbol = TOKEN_SYMBOL_MAP
@@ -878,8 +885,11 @@ class MarketFeedService:
         try:
             if not kite:
                 from kiteconnect import KiteConnect
-                kite = KiteConnect(api_key=settings.zerodha_api_key)
-                kite.set_access_token(settings.zerodha_access_token)
+                # 🔥 FIX: Use fresh settings to pick up token refreshed in .env
+                from config import get_settings
+                fresh = get_settings()
+                kite = KiteConnect(api_key=fresh.zerodha_api_key)
+                kite.set_access_token(fresh.zerodha_access_token)
 
             from datetime import timedelta
             today = datetime.now(IST).date()
@@ -1042,9 +1052,13 @@ class MarketFeedService:
             from kiteconnect import KiteConnect
             from kiteconnect.exceptions import TokenException
             
+            # 🔥 FIX: Use fresh settings to pick up token refreshed in .env
+            from config import get_settings
+            fresh = get_settings()
+            
             print("🔍 Pre-flight token validation...")
-            kite = KiteConnect(api_key=settings.zerodha_api_key)
-            kite.set_access_token(settings.zerodha_access_token)
+            kite = KiteConnect(api_key=fresh.zerodha_api_key)
+            kite.set_access_token(fresh.zerodha_access_token)
             
             # Simple profile check - if this works, token is valid
             profile = kite.profile()
@@ -1210,9 +1224,12 @@ class MarketFeedService:
             print("🔧 Initializing KiteTicker...")
             
             from kiteconnect import KiteTicker
+            # 🔥 FIX: Use fresh settings to pick up token refreshed in .env
+            from config import get_settings
+            fresh = get_settings()
             self.kws = KiteTicker(
-                settings.zerodha_api_key,
-                settings.zerodha_access_token
+                fresh.zerodha_api_key,
+                fresh.zerodha_access_token
             )
             
             # Assign callbacks

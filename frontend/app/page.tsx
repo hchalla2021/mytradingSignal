@@ -989,7 +989,10 @@ export default function Home() {
           );
         })()}
 
-        {/* P10: 🕯️ CRT-BASED BTST STRATEGIES */}
+        {/* P10: � EXPIRY EXPLOSION ZONE */}
+        <ExpiryExplosionZone />
+
+        {/* P11: 🕯️ CRT-BASED BTST STRATEGIES */}
         <div className="mt-6 sm:mt-6 border-2 border-orange-500/35 rounded-2xl p-3 sm:p-4 bg-gradient-to-br from-orange-950/20 via-dark-card/50 to-dark-elevated/40 backdrop-blur-sm shadow-xl shadow-orange-500/10">
           <div className="flex flex-col gap-1 mb-3 sm:mb-4">
             <SectionTitle
@@ -1013,9 +1016,6 @@ export default function Home() {
             <CRTBTSTCard symbol="SENSEX" name="SENSEX" data={marketData.SENSEX} />
           </div>
         </div>
-
-        {/* P11: 💥 EXPIRY EXPLOSION ZONE */}
-        <ExpiryExplosionZone />
 
       </div>
 

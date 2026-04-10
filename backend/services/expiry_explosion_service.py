@@ -259,6 +259,152 @@ def _hours_to_expiry(symbol: str, now: Optional[datetime] = None) -> float:
     return max(0.0, diff)
 
 
+# ── Smart trade expiry selection ─────────────────────────────────────────────
+
+def _get_available_expiries_from_cache(symbol: str) -> List[date]:
+    """Get available expiry dates from PCR service's cached instruments."""
+    try:
+        from services.pcr_service import _INSTRUMENTS_CACHE, _INSTRUMENTS_CACHE_DATE
+        exchange_map = {"NIFTY": "NFO", "BANKNIFTY": "NFO", "SENSEX": "BFO"}
+        exchange = exchange_map.get(symbol, "NFO")
+        today = datetime.now(IST).date()
+
+        if exchange not in _INSTRUMENTS_CACHE or _INSTRUMENTS_CACHE_DATE.get(exchange) != today:
+            return []
+
+        instruments = _INSTRUMENTS_CACHE[exchange]
+        expiries: set = set()
+        for inst in instruments:
+            if inst.get("name") == symbol and inst.get("instrument_type") in ("CE", "PE"):
+                exp = inst.get("expiry")
+                if exp and exp >= today:
+                    expiries.add(exp)
+        return sorted(expiries)
+    except Exception:
+        return []
+
+
+def _get_recommended_trade_expiry(symbol: str, now: Optional[datetime] = None) -> Tuple[date, bool, str]:
+    """Pick the best expiry for TRADE RECOMMENDATIONS.
+
+    On expiry day → next week's expiry (today's options lose all time value).
+    Otherwise → current week's expiry.
+    Returns: (expiry_date, is_next_expiry, reason)
+    """
+    now = now or datetime.now(IST)
+    today = now.date() if isinstance(now, datetime) else now
+    is_expiry = _is_expiry_day(symbol, now)
+
+    if not is_expiry:
+        exp = _get_next_expiry(symbol, now)
+        return exp.date(), False, f"Current expiry ({exp.strftime('%d %b %a')})"
+
+    # Expiry day → recommend NEXT expiry for better premiums
+    available = _get_available_expiries_from_cache(symbol)
+    if available:
+        future = [e for e in available if e > today]
+        if future:
+            next_exp = future[0]
+            return next_exp, True, f"Next expiry ({next_exp.strftime('%d %b %a')}) — today's options expire, using next for better premiums"
+
+    # Fallback: calendar-based next expiry
+    current = _get_next_expiry(symbol, now)
+    fake_after = current + timedelta(hours=1)
+    next_exp = _get_next_expiry(symbol, fake_after)
+    return next_exp.date(), True, f"Next expiry ({next_exp.strftime('%d %b %a')}) — today's options expire soon"
+
+
+def _fetch_real_option_premiums(
+    symbol: str, expiry_date: date, strikes: List[int], option_type: str
+) -> Dict[int, Dict[str, Any]]:
+    """Fetch real option LTP from Zerodha for given strikes.
+
+    Strategy:
+      1. Try PCR service's cached instruments (no API call needed)
+      2. If cache empty, fetch instruments directly from Kite API
+      3. Map strikes → instrument tokens → kite.quote() for live LTP
+    Returns: {strike: {ltp, oi, volume, tradingsymbol}} or {} if unavailable.
+    """
+    try:
+        from services.pcr_service import (
+            _INSTRUMENTS_CACHE, _INSTRUMENTS_CACHE_DATE,
+        )
+        exchange_map = {"NIFTY": "NFO", "BANKNIFTY": "NFO", "SENSEX": "BFO"}
+        exchange = exchange_map.get(symbol, "NFO")
+        today = datetime.now(IST).date()
+
+        # Get Kite instance first (needed for both instrument fetch and quotes)
+        kite = None
+        try:
+            from services.auth_state_machine import auth_state_manager
+            kite = auth_state_manager.kite
+        except Exception:
+            pass
+        if not kite:
+            try:
+                from services.pcr_service import get_pcr_service
+                svc = get_pcr_service()
+                svc._init_kite()
+                kite = svc.kite
+            except Exception:
+                pass
+        if not kite:
+            return {}
+
+        # Step 1: Try instruments from PCR cache
+        instruments = None
+        if exchange in _INSTRUMENTS_CACHE and _INSTRUMENTS_CACHE_DATE.get(exchange) == today:
+            instruments = _INSTRUMENTS_CACHE[exchange]
+
+        # Step 2: If cache empty, fetch instruments and populate cache
+        if not instruments:
+            try:
+                instruments = kite.instruments(exchange)
+                _INSTRUMENTS_CACHE[exchange] = instruments
+                _INSTRUMENTS_CACHE_DATE[exchange] = today
+                logger.info(f"Fetched {len(instruments)} {exchange} instruments for expiry premium lookup")
+            except Exception as e:
+                logger.debug(f"Instruments fetch failed for {exchange}: {e}")
+                return {}
+
+        strikes_set = set(strikes)
+
+        # Find matching option instruments
+        token_to_strike: Dict[int, int] = {}
+        token_to_tsym: Dict[int, str] = {}
+        for inst in instruments:
+            if (inst.get("name") == symbol
+                    and inst.get("instrument_type") == option_type
+                    and inst.get("expiry") == expiry_date):
+                strike_val = int(inst.get("strike", 0))
+                if strike_val in strikes_set:
+                    token_to_strike[inst["instrument_token"]] = strike_val
+                    token_to_tsym[inst["instrument_token"]] = inst.get("tradingsymbol", "")
+
+        if not token_to_strike:
+            return {}
+
+        # Fetch quotes (limit to 50 per Zerodha best practice)
+        quotes = kite.quote([str(t) for t in list(token_to_strike.keys())[:50]])
+
+        result: Dict[int, Dict[str, Any]] = {}
+        for token, strike_val in token_to_strike.items():
+            q = quotes.get(str(token), {})
+            if q:
+                ltp = float(q.get("last_price", 0))
+                if ltp > 0:
+                    result[strike_val] = {
+                        "ltp": ltp,
+                        "oi": int(q.get("oi", 0)),
+                        "volume": int(q.get("volume", 0)),
+                        "tradingsymbol": token_to_tsym.get(token, ""),
+                    }
+        return result
+    except Exception as e:
+        logger.debug(f"Real premium fetch failed for {symbol}: {e}")
+        return {}
+
+
 def _get_expiry_label(symbol: str, now: Optional[datetime] = None) -> str:
     """Human-readable expiry label like 'Weekly Tue' or 'Monthly (Last Tue)'."""
     now = now or datetime.now(IST)
@@ -1030,75 +1176,303 @@ def _finalize_explosion(
     return direction, confidence, round(total_score, 4), action
 
 
+def _estimate_premium(distance_from_atm: float, atr: float, hours_left: float, price: float) -> Tuple[float, float]:
+    """Estimate option premium range based on moneyness, time, and volatility.
+
+    ``hours_left`` is in **calendar** hours (from _hours_to_expiry).
+    Convert to trading days: ~6.5 trading hours per day, ~5/7 days are trading.
+    Daily range ≈ atr_5m * sqrt(75) ≈ atr_5m * 8.7.
+
+    ATM premium ≈ 0.4 * daily_range * sqrt(trading_days)
+    OTM discount = exp(-0.8 * distance / atm_premium)
+    Returns (low_estimate, high_estimate) in ₹
+    """
+    if atr <= 0:
+        atr = price * 0.005  # fallback: 0.5% of price
+
+    # Scale 5-min ATR to daily expected range
+    daily_range = atr * 8.7  # sqrt(75) ≈ 8.66
+    # Sanity bounds: daily range should be 0.5%–3% of price
+    min_range = price * 0.005
+    max_range = price * 0.03
+    daily_range = max(min_range, min(max_range, daily_range))
+
+    # Convert calendar hours to approximate trading days
+    # ~5/7 of calendar days are trading days, ~6.5 trading hrs per day
+    trading_days = max(0.01, hours_left / 24 * (5 / 7))
+
+    # Base ATM premium scales with sqrt of trading days and volatility
+    atm_base = 0.4 * daily_range * math.sqrt(trading_days)
+
+    # Scale for higher-priced indices (SENSEX premiums are higher absolute)
+    if price > 60000:
+        atm_base *= 1.2
+    elif price > 40000:
+        atm_base *= 1.1
+
+    # OTM decay — exponential drop with distance from ATM
+    if atm_base > 0 and distance_from_atm > 0:
+        decay = math.exp(-0.8 * distance_from_atm / atm_base)
+    else:
+        decay = 1.0
+
+    mid = max(1.0, atm_base * decay)
+    low = max(1.0, mid * 0.82)
+    high = max(2.0, mid * 1.22)
+    return (round(low, 0), round(high, 0))
+
+
 def _compute_strike_recommendation(
-    price: float, direction: str, hours_left: float
+    price: float, direction: str, hours_left: float,
+    symbol: str = "", atr: float = 0, change_pct: float = 0,
+    trade_expiry: Optional[date] = None,
+    is_next_expiry: bool = False,
+    expiry_reason: str = "",
+    real_premiums: Optional[Dict[int, Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """
-    Compute recommended strike levels for expiry day options.
+    Compute recommended strike levels with a CENTERED strike ladder.
 
-    Strategy: Buy slightly OTM options near key round numbers.
-    On expiry, ATM/slight OTM gives max gamma leverage.
+    SMART STRIKE SELECTION:
+    - On expiry day: recommends NEXT WEEK's expiry (today's options expire worthless)
+    - Centered ladder: 2 ITM + ATM + 3 OTM (near-the-money focus)
+    - Best trade: ATM or 1-OTM (not too deep ITM, not too far OTM)
+    - Uses REAL premiums from Zerodha when available
+    - Falls back to ATR-based estimates when real data unavailable
     """
     if price <= 0:
         return {}
 
-    # Round to nearest 50 for NIFTY/SENSEX, 100 for BANKNIFTY
-    # (We don't know exact symbol here, so use price-based heuristic)
-    if price > 30000:
-        step = 100  # BANKNIFTY/SENSEX
+    # Step size per symbol
+    if symbol == "BANKNIFTY":
+        step = 100
+    elif symbol == "SENSEX":
+        step = 100
     else:
-        step = 50   # NIFTY
+        step = 50  # NIFTY default
 
     atm_strike = round(price / step) * step
 
-    if direction == "BULLISH":
-        # Buy CE — ATM or 1 strike OTM
-        entry_strike = atm_strike
-        target_strike = atm_strike + step
-        option_type = "CE"
-        entry_label = f"Buy {atm_strike} CE"
-        target_label = f"Target: price above {atm_strike + step}"
-        stoploss_label = f"SL: price below {atm_strike - step}"
-    elif direction == "BEARISH":
-        entry_strike = atm_strike
-        target_strike = atm_strike - step
-        option_type = "PE"
-        entry_label = f"Buy {atm_strike} PE"
-        target_label = f"Target: price below {atm_strike - step}"
-        stoploss_label = f"SL: price above {atm_strike + step}"
+    # ── Recalculate hours_left for next-week expiry ───────────────────
+    if is_next_expiry and trade_expiry:
+        now = datetime.now(IST)
+        trade_expiry_dt = datetime(trade_expiry.year, trade_expiry.month, trade_expiry.day, 15, 30, 0, tzinfo=IST)
+        hours_left = max(0.0, (trade_expiry_dt - now).total_seconds() / 3600.0)
+
+    # ── BUYER SAFETY ──────────────────────────────────────────────────
+    if hours_left <= 0:
+        buyable = False
+        buyWarning = "EXPIRED — options have no time value. Do NOT buy."
+    elif hours_left < 0.5 and not is_next_expiry:
+        buyable = False
+        buyWarning = "Under 30 min to expiry — theta decay is extreme. Avoid buying."
+    elif hours_left < 2 and not is_next_expiry:
+        buyable = True
+        buyWarning = "Under 2 hours — only for quick scalps. Theta is eating premium fast."
+    elif hours_left < 6 and not is_next_expiry:
+        buyable = True
+        buyWarning = "Same-day expiry — manage position actively."
     else:
-        option_type = "STRADDLE"
-        entry_strike = atm_strike
-        target_strike = atm_strike
-        entry_label = f"No clear direction — avoid or straddle {atm_strike}"
+        buyable = True
+        buyWarning = ""
+
+    # Show expiry reason when using next week
+    if is_next_expiry and expiry_reason:
+        buyWarning = f"📅 {expiry_reason}"
+
+    # Determine option type from direction
+    if direction == "BULLISH":
+        option_type = "CE"
+    elif direction == "BEARISH":
+        option_type = "PE"
+    else:
+        option_type = "CE" if change_pct >= 0 else "PE"
+
+    # ── Build CENTERED strike ladder: 2 ITM + ATM + 3 OTM ────────────
+    # This gives near-the-money strikes (not too deep ITM, not too far OTM)
+    ladder = []
+    offsets = [-2, -1, 0, 1, 2, 3]  # -2=deep ITM, -1=ITM, 0=ATM, 1=OTM, 2=OTM, 3=far OTM
+
+    for offset in offsets:
+        if option_type == "CE":
+            strike = atm_strike + (offset * step)
+            distance_from_price = strike - price  # positive=OTM, negative=ITM
+        else:
+            strike = atm_strike - (offset * step)
+            distance_from_price = price - strike  # positive=OTM, negative=ITM
+
+        distance_otm = max(0, distance_from_price)  # OTM distance (0 if ITM)
+
+        # Status label
+        if offset == 0:
+            status = "ATM"
+        elif offset < 0:
+            status = f"{abs(offset)} ITM"
+        else:
+            status = f"{offset} OTM"
+
+        # Premium: use REAL data from Zerodha if available, else estimate
+        real_data = (real_premiums or {}).get(strike)
+        if real_data and real_data.get("ltp", 0) > 0:
+            ltp = real_data["ltp"]
+            prem_low = int(ltp * 0.97)   # tight bid-ask estimate
+            prem_high = int(ltp * 1.03)
+            prem_mid = ltp
+            premium_source = "LIVE"
+        else:
+            prem_low, prem_high = _estimate_premium(distance_otm, atr, hours_left, price)
+            # Add intrinsic value for ITM options (estimate only covers time value)
+            intrinsic = max(0.0, -distance_from_price)  # ITM = negative distance
+            if intrinsic > 0:
+                prem_low += intrinsic
+                prem_high += intrinsic
+            prem_mid = max(1, (prem_low + prem_high) / 2)
+            premium_source = "EST"
+
+        # Potential calculation
+        daily_atr = atr * 8.7 if atr > 0 else price * 0.01
+        daily_atr = max(price * 0.005, min(price * 0.03, daily_atr))
+        move_1atr = daily_atr
+        move_2atr = daily_atr * 2
+
+        if option_type == "CE":
+            new_dist_1 = max(0, strike - (price + move_1atr))
+            new_dist_2 = max(0, strike - (price + move_2atr))
+            intrinsic_1 = max(0, (price + move_1atr) - strike)
+            intrinsic_2 = max(0, (price + move_2atr) - strike)
+        else:
+            new_dist_1 = max(0, (price - move_1atr) - strike)
+            new_dist_2 = max(0, (price - move_2atr) - strike)
+            intrinsic_1 = max(0, strike - (price - move_1atr))
+            intrinsic_2 = max(0, strike - (price - move_2atr))
+
+        new_prem_1_lo, new_prem_1_hi = _estimate_premium(new_dist_1, atr, max(0, hours_left - 6), price)
+        new_prem_2_lo, new_prem_2_hi = _estimate_premium(new_dist_2, atr, max(0, hours_left - 12), price)
+        new_mid_1 = max(prem_mid, (new_prem_1_lo + new_prem_1_hi) / 2)
+        new_mid_2 = max(prem_mid, (new_prem_2_lo + new_prem_2_hi) / 2)
+
+        # Add intrinsic value gained from the move
+        pot_1atr = max(1.0, (new_mid_1 + intrinsic_1) / prem_mid) if prem_mid > 0 else 1.0
+        pot_2atr = max(1.0, (new_mid_2 + intrinsic_2) / prem_mid) if prem_mid > 0 else 1.0
+        pot_1atr = min(pot_1atr, 20.0)
+        pot_2atr = min(pot_2atr, 20.0)
+
+        ladder.append({
+            "strike": int(strike),
+            "type": option_type,
+            "distanceFromPrice": round(distance_from_price, 1),
+            "premiumLow": int(prem_low),
+            "premiumHigh": int(prem_high),
+            "premiumLabel": f"₹{int(ltp)}" if premium_source == "LIVE" else f"₹{int(prem_low)}–₹{int(prem_high)}",
+            "potential1ATR": round(pot_1atr, 1),
+            "potential2ATR": round(pot_2atr, 1),
+            "status": status,
+            "premiumSource": premium_source,
+            "realPremium": real_data.get("ltp") if real_data else None,
+            "realOI": real_data.get("oi") if real_data else None,
+        })
+
+    # ── Pick BEST TRADE: prefer ATM or slightly ITM ───────────────────
+    # KEY INSIGHT: ATM/ITM options won't expire worthless — they have real
+    # intrinsic value. OTM options can expire at ₹0. For directional trades
+    # with conviction, ATM is the sweet spot (best delta for the price).
+    # Index mapping: 0=2-ITM, 1=1-ITM, 2=ATM, 3=1-OTM, 4=2-OTM, 5=3-OTM
+    best_idx = 2  # Default to ATM (index 2 in centered ladder)
+    best_score = -1.0
+    for idx, s in enumerate(ladder):
+        mid_prem = s.get("realPremium") or ((s["premiumLow"] + s["premiumHigh"]) / 2)
+
+        # Skip options with very low premium (likely to expire worthless)
+        if mid_prem < 5:
+            continue
+
+        # Proximity bonus: ATM highest, then 1-ITM, then 1-OTM
+        # ATM has best delta/premium ratio. ITM has safety (intrinsic value).
+        # OTM is risky — can expire worthless.
+        proximity_scores = {0: 0.8, 1: 1.5, 2: 1.8, 3: 1.2, 4: 0.7, 5: 0.4}
+        prox_bonus = proximity_scores.get(idx, 0.5)
+
+        # Premium quality: prefer ₹150-₹600 range (enough meat, not too expensive)
+        if 150 <= mid_prem <= 600:
+            prem_bonus = 1.5
+        elif 80 <= mid_prem <= 1000:
+            prem_bonus = 1.2
+        elif 40 <= mid_prem <= 2000:
+            prem_bonus = 1.0
+        else:
+            prem_bonus = 0.7
+
+        score = s["potential2ATR"] * prox_bonus * prem_bonus
+        if score > best_score:
+            best_score = score
+            best_idx = idx
+
+    # If no good option found, default to ATM
+    if best_score <= 0:
+        best_idx = 2
+
+    best = ladder[best_idx]
+    ladder[best_idx]["status"] = ladder[best_idx]["status"] + " ★ BEST"
+
+    # ── Build recommendation labels ───────────────────────────────────
+    entry_strike = best["strike"]
+    premium_display = best["premiumLabel"]
+
+    # Build full option trading name (e.g. "SENSEX 16APR 76500 PE")
+    if trade_expiry:
+        exp_str = trade_expiry.strftime("%d%b").upper()  # e.g. "16APR"
+    else:
+        exp_str = ""
+    full_option_name = f"{symbol} {exp_str} {entry_strike} {option_type}".strip()
+
+    entry_label = f"Buy {full_option_name} @ {premium_display}"
+
+    if option_type == "CE":
+        target_price = entry_strike + step * 2
+        stoploss_price = entry_strike - step
+        target_label = f"Target: {symbol} above {target_price} → {best['potential2ATR']}x return"
+        stoploss_label = f"SL: exit if premium drops 50% (max loss {premium_display})"
+    elif option_type == "PE":
+        target_price = entry_strike - step * 2
+        stoploss_price = entry_strike + step
+        target_label = f"Target: {symbol} below {target_price} → {best['potential2ATR']}x return"
+        stoploss_label = f"SL: exit if premium drops 50% (max loss {premium_display})"
+    else:
+        target_price = atm_strike
         target_label = "Wait for breakout confirmation"
         stoploss_label = "Define max loss before entry"
 
-    # Estimated premium range (very rough proxy)
-    if hours_left <= 1:
-        premium_range = "₹5–₹30"
-        potential = "3x–10x on breakout"
-    elif hours_left <= 4:
-        premium_range = "₹20–₹80"
-        potential = "2x–5x on strong move"
-    elif hours_left <= 24:
-        premium_range = "₹50–₹200"
-        potential = "1.5x–3x on trending day"
-    else:
-        premium_range = "₹100+"
-        potential = "1.2x–2x"
+    has_real = any(s.get("premiumSource") == "LIVE" for s in ladder)
+
+    # Get the Zerodha tradingsymbol if available from real data
+    best_tsym = ""
+    if real_premiums:
+        rd = real_premiums.get(entry_strike)
+        if rd:
+            best_tsym = rd.get("tradingsymbol", "")
 
     return {
-        "atmStrike": atm_strike,
+        "atmStrike": int(atm_strike),
         "step": step,
         "optionType": option_type,
         "entryStrike": entry_strike,
-        "targetStrike": target_strike,
+        "targetStrike": int(target_price) if direction != "NEUTRAL" else int(atm_strike),
         "entryLabel": entry_label,
         "targetLabel": target_label,
         "stoplossLabel": stoploss_label,
-        "estimatedPremium": premium_range,
-        "potential": potential,
+        "estimatedPremium": premium_display,
+        "potential": f"{best['potential2ATR']}x on 2-ATR move",
+        "bestTradeIndex": best_idx,
+        "buyable": buyable,
+        "buyWarning": buyWarning,
+        "strikeLadder": ladder,
+        # Smart expiry + real premiums
+        "tradeExpiry": trade_expiry.strftime("%Y-%m-%d") if trade_expiry else None,
+        "isNextExpiry": is_next_expiry,
+        "expiryReason": expiry_reason,
+        "premiumSource": "LIVE" if has_real else "ESTIMATED",
+        "fullOptionName": full_option_name,
+        "tradingSymbol": best_tsym,
     }
 
 
@@ -1330,11 +1704,44 @@ class ExpiryExplosionService:
         direction, confidence, raw_score, action = _finalize_explosion(signals)
         data_source = "LIVE" if is_live else "MARKET_CLOSED"
 
-        # Strike recommendation
-        strike_rec = _compute_strike_recommendation(price, direction, hours_left)
-
-        # Breakout levels
+        # Breakout levels (needed for ATR in strike recommendation)
         breakout = _compute_breakout_levels(price, candles)
+
+        # ── Smart trade expiry: on expiry day → next week for better premiums
+        trade_expiry, is_next_exp, expiry_reason = _get_recommended_trade_expiry(symbol, now)
+
+        # Determine option type for real premium fetch
+        if direction == "BULLISH":
+            opt_type_for_fetch = "CE"
+        elif direction == "BEARISH":
+            opt_type_for_fetch = "PE"
+        else:
+            opt_type_for_fetch = "CE" if change_pct >= 0 else "PE"
+
+        # Build list of strikes to query (centered: 2 ITM + ATM + 3 OTM)
+        step = 100 if symbol in ("BANKNIFTY", "SENSEX") else 50
+        atm_s = round(price / step) * step
+        if opt_type_for_fetch == "CE":
+            strikes_to_query = [atm_s + (offset * step) for offset in range(-2, 4)]
+        else:
+            strikes_to_query = [atm_s - (offset * step) for offset in range(-2, 4)]
+
+        # Fetch REAL option premiums from Zerodha (non-blocking)
+        real_premiums: Dict[int, Dict[str, Any]] = {}
+        try:
+            real_premiums = await asyncio.to_thread(
+                _fetch_real_option_premiums, symbol, trade_expiry, strikes_to_query, opt_type_for_fetch
+            )
+        except Exception:
+            pass
+
+        # Strike recommendation with smart expiry + real premiums
+        strike_rec = _compute_strike_recommendation(
+            price, direction, hours_left,
+            symbol=symbol, atr=breakout.get("atr", 0), change_pct=change_pct,
+            trade_expiry=trade_expiry, is_next_expiry=is_next_exp,
+            expiry_reason=expiry_reason, real_premiums=real_premiums,
+        )
 
         return {
             "symbol": symbol,

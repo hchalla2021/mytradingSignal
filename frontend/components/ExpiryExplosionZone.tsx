@@ -200,37 +200,123 @@ const ExpiryCard = memo<{ data: ExpiryIndex | null; name: string }>(({ data, nam
         </div>
       </div>
 
-      {/* Strike Recommendation */}
+      {/* Strike Recommendation — Buyer Perspective Only */}
       {strike && strike.atmStrike > 0 && (
         <div className="rounded-lg bg-slate-800/60 border border-slate-600/30 p-2.5 mb-3">
-          <div className="flex items-center gap-1.5 mb-2">
-            <span className="text-xs">🎯</span>
-            <span className="text-[10px] sm:text-xs font-bold text-white">Strike Recommendation</span>
-          </div>
-          <div className="space-y-1">
-            <div className="flex justify-between">
-              <span className="text-[10px] text-slate-400">ATM Strike</span>
-              <span className="text-[10px] sm:text-xs font-mono font-bold text-cyan-400">{strike.atmStrike}</span>
+          {/* Buyer Warning — Don't buy near/at expiry */}
+          {strike.buyWarning && (
+            <div className={`rounded-lg p-2 mb-2 border text-[10px] font-bold flex items-center gap-1.5 ${
+              !strike.buyable
+                ? 'bg-red-500/15 border-red-400/40 text-red-300'
+                : 'bg-amber-500/10 border-amber-400/30 text-amber-300'
+            }`}>
+              <span>{!strike.buyable ? '⛔' : '⚠️'}</span>
+              <span>{strike.buyWarning}</span>
             </div>
-            <div className="flex justify-between">
-              <span className="text-[10px] text-slate-400">Entry</span>
-              <span className={`text-[10px] sm:text-xs font-bold ${data.direction === 'BULLISH' ? 'text-emerald-400' : data.direction === 'BEARISH' ? 'text-red-400' : 'text-amber-400'} ${isStrongAction ? dirHl : ''}`}>
-                {strike.entryLabel}
+          )}
+          {/* Best Trade Highlight — only show when buyable */}
+          {strike.buyable !== false && (
+          <div className={`rounded-lg p-2.5 mb-2.5 border ${data.direction === 'BULLISH' ? 'bg-emerald-500/10 border-emerald-400/40' : data.direction === 'BEARISH' ? 'bg-red-500/10 border-red-400/40' : 'bg-amber-500/10 border-amber-400/40'}`}>
+            <div className="flex items-center gap-1.5 mb-1.5">
+              <span className="text-xs">🎯</span>
+              <span className="text-[10px] sm:text-xs font-bold text-white">Best Trade</span>
+              <span className={`text-[8px] px-1.5 py-0.5 rounded-full font-bold ${strike.optionType === 'CE' ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-400/30' : 'bg-red-500/20 text-red-300 border border-red-400/30'}`}>
+                {strike.optionType}
+              </span>
+              {/* Premium source badge */}
+              <span className={`text-[7px] px-1 py-0.5 rounded font-bold ml-auto ${strike.premiumSource === 'LIVE' ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-400/30' : 'bg-slate-600/30 text-slate-400 border border-slate-500/20'}`}>
+                {strike.premiumSource === 'LIVE' ? '🟢 LIVE' : '⚡ EST'}
               </span>
             </div>
-            <div className="flex justify-between">
-              <span className="text-[10px] text-slate-400">Premium</span>
-              <span className="text-[10px] sm:text-xs font-mono text-purple-400">{strike.estimatedPremium}</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-[10px] text-slate-400">Potential</span>
-              <span className="text-[10px] sm:text-xs font-bold text-amber-300">{strike.potential}</span>
-            </div>
-            <div className="pt-1 border-t border-slate-700/30">
-              <p className="text-[9px] text-emerald-400/80">{strike.targetLabel}</p>
-              <p className="text-[9px] text-red-400/80">{strike.stoplossLabel}</p>
+            {/* Full option name for verification */}
+            {strike.fullOptionName && (
+              <div className="mb-1.5 px-2 py-1 bg-slate-700/40 rounded border border-slate-600/20">
+                <span className="text-[10px] sm:text-xs font-mono font-bold text-cyan-300 tracking-wide">
+                  {strike.fullOptionName}
+                </span>
+                {strike.tradingSymbol && (
+                  <span className="text-[8px] text-slate-500 ml-2 font-mono">({strike.tradingSymbol})</span>
+                )}
+              </div>
+            )}
+            {/* Trade expiry info */}
+            {strike.tradeExpiry && (
+              <div className={`flex items-center gap-1.5 mb-1.5 text-[9px] ${strike.isNextExpiry ? 'text-cyan-300' : 'text-slate-400'}`}>
+                <span>📅</span>
+                <span className="font-semibold">Expiry: {strike.tradeExpiry}</span>
+                {strike.isNextExpiry && (
+                  <span className="px-1 py-0.5 bg-cyan-500/15 text-cyan-300 rounded border border-cyan-400/30 text-[8px] font-bold">NEXT WEEK</span>
+                )}
+              </div>
+            )}
+            <div className="space-y-1">
+              <div className="flex justify-between items-center">
+                <span className="text-[10px] text-slate-400">Strike</span>
+                <span className={`text-sm font-mono font-extrabold ${data.direction === 'BULLISH' ? 'text-emerald-400' : data.direction === 'BEARISH' ? 'text-red-400' : 'text-cyan-400'}`}>
+                  {strike.entryStrike} {strike.optionType}
+                </span>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-[10px] text-slate-400">{strike.premiumSource === 'LIVE' ? 'Premium (Live)' : 'Est. Premium'}</span>
+                <span className="text-xs font-mono font-bold text-purple-400">{strike.estimatedPremium}</span>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-[10px] text-slate-400">Potential</span>
+                <span className="text-xs font-bold text-amber-300">{strike.potential}</span>
+              </div>
+              <div className="pt-1.5 border-t border-slate-700/30 space-y-0.5">
+                <p className="text-[9px] text-emerald-400/90">📈 {strike.targetLabel}</p>
+                <p className="text-[9px] text-red-400/80">🛡️ {strike.stoplossLabel}</p>
+              </div>
             </div>
           </div>
+          )}
+
+          {/* Strike Ladder — only show when buyable */}
+          {strike.buyable !== false && strike.strikeLadder && strike.strikeLadder.length > 0 && (
+            <div>
+              <div className="flex items-center gap-1.5 mb-1.5">
+                <span className="text-xs">📊</span>
+                <span className="text-[10px] sm:text-xs font-bold text-white">Strike Ladder ({strike.optionType})</span>
+                <span className="text-[8px] text-slate-500 ml-auto">{strike.premiumSource === 'LIVE' ? '🟢 Live premiums' : 'ATR-based estimates'}</span>
+              </div>
+              <div className="overflow-hidden rounded-lg border border-slate-700/30">
+                {/* Header */}
+                <div className="grid grid-cols-4 gap-0 bg-slate-700/30 px-2 py-1">
+                  <span className="text-[8px] font-bold text-slate-400">STRIKE</span>
+                  <span className="text-[8px] font-bold text-slate-400 text-center">PREMIUM</span>
+                  <span className="text-[8px] font-bold text-slate-400 text-center">POTENTIAL</span>
+                  <span className="text-[8px] font-bold text-slate-400 text-right">STATUS</span>
+                </div>
+                {/* Rows */}
+                {strike.strikeLadder.map((row, idx) => {
+                  const isBest = row.status.includes('BEST');
+                  const isLivePrem = row.premiumSource === 'LIVE';
+                  const rowBg = isBest
+                    ? (data.direction === 'BULLISH' ? 'bg-emerald-500/15' : data.direction === 'BEARISH' ? 'bg-red-500/15' : 'bg-amber-500/15')
+                    : (idx % 2 === 0 ? 'bg-slate-800/30' : 'bg-slate-800/10');
+                  return (
+                    <div key={row.strike} className={`grid grid-cols-4 gap-0 px-2 py-1 ${rowBg} ${isBest ? 'ring-1 ring-inset ring-cyan-400/40' : ''}`}>
+                      <span className={`text-[10px] font-mono font-bold ${isBest ? 'text-cyan-300' : 'text-slate-300'}`}>
+                        {row.strike}
+                      </span>
+                      <span className={`text-[10px] font-mono text-center ${isLivePrem ? 'text-emerald-400' : 'text-purple-400'}`}>
+                        {row.premiumLabel}
+                        {isLivePrem && <span className="text-[7px] ml-0.5 text-emerald-500">●</span>}
+                      </span>
+                      <span className={`text-[10px] font-bold text-center ${row.potential2ATR >= 5 ? 'text-amber-300' : row.potential2ATR >= 2 ? 'text-amber-400' : 'text-slate-400'}`}>
+                        {row.potential2ATR}x
+                      </span>
+                      <span className={`text-[9px] text-right ${isBest ? 'text-cyan-300 font-bold' : 'text-slate-500'}`}>
+                        {row.status}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+              <p className="text-[8px] text-slate-500 mt-1">★ = Best value (near ATM, good premium). {strike.premiumSource === 'LIVE' ? '🟢 Live premiums from Zerodha.' : 'Premiums estimated from ATR & time.'}</p>
+            </div>
+          )}
         </div>
       )}
 

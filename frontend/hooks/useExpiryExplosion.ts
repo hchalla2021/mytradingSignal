@@ -33,6 +33,22 @@ export interface ExpirySignalFactor {
   extra?: Record<string, unknown>;
 }
 
+export interface StrikeLadderEntry {
+  strike: number;
+  type: string;
+  distanceFromPrice: number;
+  premiumLow: number;
+  premiumHigh: number;
+  premiumLabel: string;
+  potential1ATR: number;
+  potential2ATR: number;
+  status: string;
+  premiumSource?: 'LIVE' | 'EST';
+  realPremium?: number | null;
+  realOI?: number | null;
+  tradingSymbol?: string;
+}
+
 export interface StrikeRecommendation {
   atmStrike: number;
   step: number;
@@ -44,6 +60,16 @@ export interface StrikeRecommendation {
   stoplossLabel: string;
   estimatedPremium: string;
   potential: string;
+  bestTradeIndex?: number;
+  buyable: boolean;
+  buyWarning: string;
+  strikeLadder?: StrikeLadderEntry[];
+  tradeExpiry?: string;
+  isNextExpiry?: boolean;
+  expiryReason?: string;
+  premiumSource?: 'LIVE' | 'ESTIMATED';
+  fullOptionName?: string;
+  tradingSymbol?: string;
 }
 
 export interface BreakoutLevels {
