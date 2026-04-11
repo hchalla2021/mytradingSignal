@@ -35,6 +35,7 @@ from routers.liquidity import http_router as liq_http, ws_router as liq_ws
 from routers.ict import http_router as ict_http, ws_router as ict_ws
 from routers.expiry_explosion import http_router as expiry_http, ws_router as expiry_ws
 from routers.market_edge import http_router as edge_http, ws_router as edge_ws
+from routers.candle_intelligence import http_router as candle_intel_http, ws_router as candle_intel_ws
 
 # Windows console fix already applied in config/__init__.py
 
@@ -173,6 +174,14 @@ async def lifespan(app: FastAPI):
             except Exception:
                 pass
 
+        async def start_candle_intelligence():
+            try:
+                from services.candle_intelligence_engine import get_candle_intelligence_service
+                await get_candle_intelligence_service().start()
+                print("🕯️ Candle Intelligence: ON")
+            except Exception:
+                pass
+
         await asyncio.gather(
             start_scheduler(),
             start_oi_broadcaster(),
@@ -181,6 +190,7 @@ async def lifespan(app: FastAPI):
             start_ict(),
             start_expiry_explosion(),
             start_market_edge(),
+            start_candle_intelligence(),
         )
         print("🚀 All services READY")
 
@@ -247,6 +257,13 @@ async def lifespan(app: FastAPI):
     try:
         from services.market_edge_service import get_market_edge_service
         await get_market_edge_service().stop()
+    except Exception:
+        pass
+
+    # Stop Candle Intelligence Engine
+    try:
+        from services.candle_intelligence_engine import get_candle_intelligence_service
+        await get_candle_intelligence_service().stop()
     except Exception:
         pass
     
@@ -335,6 +352,10 @@ app.include_router(expiry_http, prefix="/api", tags=["Expiry Explosion"])
 # 📈 MarketEdge Intelligence
 app.include_router(edge_ws,   prefix="/ws",  tags=["MarketEdge"])
 app.include_router(edge_http, prefix="/api", tags=["MarketEdge"])
+
+# 🕯️ Candle Intelligence Engine
+app.include_router(candle_intel_ws,   prefix="/ws",  tags=["Candle Intelligence"])
+app.include_router(candle_intel_http, prefix="/api", tags=["Candle Intelligence"])
 
 
 @app.get("/")

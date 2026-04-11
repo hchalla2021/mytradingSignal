@@ -140,10 +140,14 @@ class MarketFeedService:
         self.last_update_time: Dict[str, float] = {}  # Track last update time per symbol
         self._tick_lock = threading.Lock()  # Protects last_prices/last_update_time across threads
         self._tick_queue: Queue = Queue()
-        # ── 5-minute candle builder ──────────────────────────────────────────
-        # Accumulates live ticks into proper OHLCV candles and emits one
-        # closed candle every 5 minutes into analysis_candles:{symbol}.
-        self._candle_builders: Dict[str, Dict] = {}  # symbol → candle state
+        # ── Multi-timeframe candle builders ─────────────────────────────────
+        # Accumulates live ticks into proper OHLCV candles at 3m, 5m, 15m.
+        # 5m → analysis_candles:{symbol}   (existing, used by many services)
+        # 3m → analysis_candles_3m:{symbol}
+        # 15m → analysis_candles_15m:{symbol}
+        self._candle_builders: Dict[str, Dict] = {}     # 5m (legacy key)
+        self._candle_builders_3m: Dict[str, Dict] = {}  # 3m
+        self._candle_builders_15m: Dict[str, Dict] = {} # 15m
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._consecutive_403_errors: int = 0  # Track repeated 403 errors
         self._last_connection_attempt: Optional[datetime] = None  # Track last retry
@@ -216,25 +220,33 @@ class MarketFeedService:
             "is_authenticated": auth_state_manager.is_authenticated
         }
     
-    async def _update_5min_candle(self, symbol: str, price: float, volume: int, oi: int, ts: datetime) -> None:
+    async def _update_candle_generic(
+        self,
+        symbol: str,
+        price: float,
+        volume: int,
+        oi: int,
+        ts: datetime,
+        interval_minutes: int,
+        builders: Dict[str, Dict],
+        cache_key_prefix: str,
+        max_candles: int = 200,
+    ) -> None:
         """
-        Aggregate every live tick into a 5-minute OHLCV+OI candle.
-        When the current 5-minute slot closes, push the finished candle to
-        analysis_candles:{symbol} (newest-first list, max 200 candles).
-
-        Volume is stored as *per-candle delta* (not cumulative session volume)
-        so the service's volume_ratio calculation is meaningful.
+        Generic candle builder for any timeframe.
+        `interval_minutes`: 3, 5, or 15.
+        `builders`: the per-symbol state dict for this timeframe.
+        `cache_key_prefix`: e.g. 'analysis_candles' or 'analysis_candles_3m'.
         """
         import json as _json
 
-        # 5-minute bucket: floor timestamp to nearest 5-minute boundary
-        minute_bucket = (ts.minute // 5) * 5
+        minute_bucket = (ts.minute // interval_minutes) * interval_minutes
         candle_ts = ts.replace(minute=minute_bucket, second=0, microsecond=0).isoformat()
 
-        state = self._candle_builders.get(symbol)
+        state = builders.get(symbol)
 
         if state is None or state["ts"] != candle_ts:
-            # A new 5-min candle has started ─ flush the old one first
+            # New candle window — flush old one
             if state is not None:
                 finished = {
                     "timestamp":  state["ts"],
@@ -242,16 +254,15 @@ class MarketFeedService:
                     "high":       state["high"],
                     "low":        state["low"],
                     "close":      state["close"],
-                    "volume":     max(0, state["vol_close"] - state["vol_open"]),  # true per-candle volume
+                    "volume":     max(0, state["vol_close"] - state["vol_open"]),
                     "oi":         state["oi"],
                     "oi_prev":    state["oi_open"],
                 }
-                candle_key = f"analysis_candles:{symbol}"
+                candle_key = f"{cache_key_prefix}:{symbol}"
                 await self.cache.lpush(candle_key, _json.dumps(finished))
-                await self.cache.ltrim(candle_key, 0, 199)  # keep 200 candles
+                await self.cache.ltrim(candle_key, 0, max_candles - 1)
 
-            # Initialise new candle state
-            self._candle_builders[symbol] = {
+            builders[symbol] = {
                 "ts":       candle_ts,
                 "open":     price,
                 "high":     price,
@@ -259,25 +270,20 @@ class MarketFeedService:
                 "close":    price,
                 "oi":       oi,
                 "oi_open":  oi,
-                "vol_open": volume,   # cumulative volume at candle start
-                "vol_close": volume,  # updated each tick
+                "vol_open": volume,
+                "vol_close": volume,
             }
         else:
-            # Update the running candle
             state["high"]      = max(state["high"], price)
             state["low"]       = min(state["low"],  price)
             state["close"]     = price
             state["oi"]        = oi
             state["vol_close"] = volume
-            # Retroactively fix oi_open if it was 0 at candle start
-            # (happens when PCR data wasn't available for the first tick)
             if state["oi_open"] == 0 and oi > 0:
                 state["oi_open"] = oi
 
-        # ── Push live (in-progress) candle to cache every tick ────────────
-        # This allows OI Analysis to see the latest price/OI instead of
-        # waiting up to 5 minutes for the candle to close.
-        state = self._candle_builders[symbol]
+        # Push live (in-progress) candle to cache
+        state = builders[symbol]
         live_candle = {
             "timestamp":  state["ts"],
             "open":       state["open"],
@@ -289,7 +295,35 @@ class MarketFeedService:
             "oi_prev":    state["oi_open"],
             "_live":      True,
         }
-        await self.cache.set(f"analysis_candle_live:{symbol}", live_candle, expire=30)
+        await self.cache.set(f"{cache_key_prefix}_live:{symbol}", live_candle, expire=30)
+
+    async def _update_5min_candle(self, symbol: str, price: float, volume: int, oi: int, ts: datetime) -> None:
+        """
+        Aggregate every live tick into a 5-minute OHLCV+OI candle.
+        When the current 5-minute slot closes, push the finished candle to
+        analysis_candles:{symbol} (newest-first list, max 200 candles).
+        """
+        await self._update_candle_generic(
+            symbol, price, volume, oi, ts,
+            interval_minutes=5,
+            builders=self._candle_builders,
+            cache_key_prefix="analysis_candles",
+        )
+
+    async def _update_all_timeframe_candles(self, symbol: str, price: float, volume: int, oi: int, ts: datetime) -> None:
+        """Build 3m + 15m candles alongside the existing 5m."""
+        await self._update_candle_generic(
+            symbol, price, volume, oi, ts,
+            interval_minutes=3,
+            builders=self._candle_builders_3m,
+            cache_key_prefix="analysis_candles_3m",
+        )
+        await self._update_candle_generic(
+            symbol, price, volume, oi, ts,
+            interval_minutes=15,
+            builders=self._candle_builders_15m,
+            cache_key_prefix="analysis_candles_15m",
+        )
 
     def _normalize_tick(self, tick: Dict[str, Any]) -> Dict[str, Any]:
         """Normalize Zerodha tick data to our format."""
@@ -457,17 +491,16 @@ class MarketFeedService:
             data["putOI"] = 0
             data["oi_change"] = 0.0
         
-        # 5-minute candle building (lightweight)
+        # Multi-timeframe candle building (3m, 5m, 15m)
         try:
             from datetime import datetime as _dt
             _now_ist = _dt.now(IST)
-            await self._update_5min_candle(
-                symbol=data["symbol"],
-                price=data["price"],
-                volume=int(data.get("volume") or 0),
-                oi=int(data.get("oi") or 0),
-                ts=_now_ist,
-            )
+            _sym = data["symbol"]
+            _price = data["price"]
+            _vol = int(data.get("volume") or 0)
+            _oi = int(data.get("oi") or 0)
+            await self._update_5min_candle(_sym, _price, _vol, _oi, _now_ist)
+            await self._update_all_timeframe_candles(_sym, _price, _vol, _oi, _now_ist)
         except Exception:
             pass
         
@@ -753,18 +786,17 @@ class MarketFeedService:
                     # Cache the data
                     await self.cache.set_market_data(symbol_name, data)
 
-                    # 🕯️ Build 5-minute OHLCV candles even in REST fallback mode
+                    # 🕯️ Build multi-timeframe OHLCV candles even in REST fallback mode
                     # Without this, analysis_candles:{symbol} stays empty and OI Momentum
                     # always returns NO_SIGNAL while the WebSocket is down.
                     try:
                         from datetime import datetime as _dt_rest
-                        await self._update_5min_candle(
-                            symbol=symbol_name,
-                            price=data["price"],
-                            volume=int(data.get("volume") or 0),
-                            oi=int(data.get("oi") or 0),
-                            ts=_dt_rest.now(IST),
-                        )
+                        _tf_ts = _dt_rest.now(IST)
+                        _tf_price = data["price"]
+                        _tf_vol = int(data.get("volume") or 0)
+                        _tf_oi = int(data.get("oi") or 0)
+                        await self._update_5min_candle(symbol_name, _tf_price, _tf_vol, _tf_oi, _tf_ts)
+                        await self._update_all_timeframe_candles(symbol_name, _tf_price, _tf_vol, _tf_oi, _tf_ts)
                     except Exception:
                         pass  # candle errors must never interrupt the REST polling loop
                     

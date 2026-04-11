@@ -1,18 +1,18 @@
 {
   "NIFTY": {
     "symbol": "NIFTY",
-    "direction": "BULLISH",
-    "confidence": 51,
-    "rawScore": 0.1316,
+    "direction": "NEUTRAL",
+    "confidence": 15,
+    "rawScore": 0.1074,
     "ictSetup": {
-      "name": "\ud83d\udc8e BOS + OB LONG",
-      "description": "Bullish BOS with order block support",
-      "grade": "A-",
-      "confluences": 3
+      "name": "\u2696\ufe0f NO TRADE ZONE",
+      "description": "ICT signals mixed \u2014 Wait for alignment",
+      "grade": "\u2014",
+      "confluences": 0
     },
     "prediction5m": "BUY",
     "pred5mConf": 66,
-    "pred5mScore": 0.3517,
+    "pred5mScore": 0.3457,
     "signals": {
       "order_blocks": {
         "score": -0.442,
@@ -31,18 +31,18 @@
         }
       },
       "fair_value_gaps": {
-        "score": 0.3107,
+        "score": 0.1893,
         "signal": "BULL",
-        "label": "Bullish FVG @ 24035-24057",
+        "label": "Bullish FVG @ 24022-24027",
         "weight": 0.2,
-        "value": 0.311,
+        "value": 0.189,
         "extra": {
           "bullish_fvgs": 3,
           "bearish_fvgs": 0,
           "nearest_fvg": {
             "type": "BULLISH",
-            "zone": "24035-24057",
-            "dist": 0.05
+            "zone": "24022-24027",
+            "dist": 0.12
           }
         }
       },
@@ -98,17 +98,17 @@
       }
     },
     "metrics": {
-      "price": 24058.9,
-      "changePct": 1.19,
-      "oi": 283600265,
+      "price": 24053.6,
+      "changePct": 1.17,
+      "oi": 278474820,
       "candleCount": 31,
       "swingHighs": 7,
       "swingLows": 9,
       "lastSwingHigh": 24006.15,
       "lastSwingLow": 23993.55
     },
-    "dataSource": "LIVE",
-    "timestamp": "2026-04-10T15:15:17.192625+05:30"
+    "dataSource": "MARKET_CLOSED",
+    "timestamp": "2026-04-10T15:19:56.661107+05:30"
   },
   "BANKNIFTY": {
     "symbol": "BANKNIFTY",
@@ -128,7 +128,7 @@
       "order_blocks": {
         "score": 0.1304,
         "signal": "NEUTRAL",
-        "label": "Bullish OB @ 55896-55957 (0.05% away)",
+        "label": "Bullish OB @ 55896-55957 (0.04% away)",
         "weight": 0.25,
         "value": 0.13,
         "extra": {
@@ -137,7 +137,7 @@
           "nearest_ob": {
             "type": "BULLISH",
             "zone": "55896-55957",
-            "dist": 0.05
+            "dist": 0.04
           }
         }
       },
@@ -153,7 +153,7 @@
           "nearest_fvg": {
             "type": "BULLISH",
             "zone": "55850-55918",
-            "dist": 0.07
+            "dist": 0.06
           }
         }
       },
@@ -214,17 +214,17 @@
       }
     },
     "metrics": {
-      "price": 55925.35,
-      "changePct": 2.01,
-      "oi": 10375170,
+      "price": 55919.5,
+      "changePct": 2.0,
+      "oi": 10358130,
       "candleCount": 31,
       "swingHighs": 7,
       "swingLows": 8,
       "lastSwingHigh": 55800.0,
       "lastSwingLow": 55678.15
     },
-    "dataSource": "LIVE",
-    "timestamp": "2026-04-10T15:15:17.194824+05:30"
+    "dataSource": "MARKET_CLOSED",
+    "timestamp": "2026-04-10T15:19:56.662351+05:30"
   },
   "SENSEX": {
     "symbol": "SENSEX",
@@ -330,16 +330,16 @@
       }
     },
     "metrics": {
-      "price": 77556.21,
-      "changePct": 1.21,
-      "oi": 4952800,
+      "price": 77552.89,
+      "changePct": 1.2,
+      "oi": 4749560,
       "candleCount": 31,
       "swingHighs": 8,
       "swingLows": 8,
       "lastSwingHigh": 77403.34,
       "lastSwingLow": 77254.65
     },
-    "dataSource": "LIVE",
-    "timestamp": "2026-04-10T15:15:17.197284+05:30"
+    "dataSource": "MARKET_CLOSED",
+    "timestamp": "2026-04-10T15:19:56.663564+05:30"
   }
 }

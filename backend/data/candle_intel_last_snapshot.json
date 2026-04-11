@@ -1,0 +1,386 @@
+{
+  "NIFTY": {
+    "pattern": "BULLISH_CANDLE",
+    "all_patterns": [],
+    "structure": "BULLISH_CONTINUATION",
+    "strength": "STRONG",
+    "signal": "STRONG_BUY",
+    "confidence": 40,
+    "confluence": 0,
+    "candle": {
+      "open": 23880.55,
+      "high": 24074.05,
+      "low": 23856.35,
+      "close": 24053.6,
+      "body_ratio": 0.795,
+      "upper_wick_ratio": 0.094,
+      "lower_wick_ratio": 0.111,
+      "is_bullish": true
+    },
+    "trend_context": {
+      "direction": "STRONG_BULLISH",
+      "bullish_count": 4,
+      "bearish_count": 1,
+      "avg_body_ratio": 0.421,
+      "candles_analyzed": 5
+    },
+    "symbol": "NIFTY",
+    "timeframe": "5m",
+    "dataSource": "MARKET_CLOSED",
+    "timestamp": "2026-04-11T23:09:58.423883+05:30",
+    "price": 24053.6,
+    "changePct": 1.17,
+    "timeframes": {
+      "3m": {
+        "pattern": "BULLISH_CANDLE",
+        "all_patterns": [],
+        "structure": "BULLISH_CONTINUATION",
+        "strength": "STRONG",
+        "signal": "STRONG_BUY",
+        "confidence": 40,
+        "confluence": 0,
+        "candle": {
+          "open": 23880.55,
+          "high": 24074.05,
+          "low": 23856.35,
+          "close": 24053.6,
+          "body_ratio": 0.795,
+          "upper_wick_ratio": 0.094,
+          "lower_wick_ratio": 0.111,
+          "is_bullish": true
+        },
+        "trend_context": {
+          "direction": "NEUTRAL",
+          "bullish_count": 0,
+          "bearish_count": 0,
+          "avg_body_ratio": 0
+        },
+        "symbol": "NIFTY",
+        "timeframe": "3m",
+        "dataSource": "MARKET_CLOSED",
+        "timestamp": "2026-04-11T23:09:58.423421+05:30",
+        "price": 24053.6,
+        "changePct": 1.17
+      },
+      "5m": {
+        "pattern": "BULLISH_CANDLE",
+        "all_patterns": [],
+        "structure": "BULLISH_CONTINUATION",
+        "strength": "STRONG",
+        "signal": "STRONG_BUY",
+        "confidence": 40,
+        "confluence": 0,
+        "candle": {
+          "open": 23880.55,
+          "high": 24074.05,
+          "low": 23856.35,
+          "close": 24053.6,
+          "body_ratio": 0.795,
+          "upper_wick_ratio": 0.094,
+          "lower_wick_ratio": 0.111,
+          "is_bullish": true
+        },
+        "trend_context": {
+          "direction": "STRONG_BULLISH",
+          "bullish_count": 4,
+          "bearish_count": 1,
+          "avg_body_ratio": 0.421,
+          "candles_analyzed": 5
+        },
+        "symbol": "NIFTY",
+        "timeframe": "5m",
+        "dataSource": "MARKET_CLOSED",
+        "timestamp": "2026-04-11T23:09:58.423883+05:30",
+        "price": 24053.6,
+        "changePct": 1.17
+      },
+      "15m": {
+        "pattern": "BULLISH_CANDLE",
+        "all_patterns": [],
+        "structure": "BULLISH_CONTINUATION",
+        "strength": "STRONG",
+        "signal": "STRONG_BUY",
+        "confidence": 40,
+        "confluence": 0,
+        "candle": {
+          "open": 23880.55,
+          "high": 24074.05,
+          "low": 23856.35,
+          "close": 24053.6,
+          "body_ratio": 0.795,
+          "upper_wick_ratio": 0.094,
+          "lower_wick_ratio": 0.111,
+          "is_bullish": true
+        },
+        "trend_context": {
+          "direction": "NEUTRAL",
+          "bullish_count": 0,
+          "bearish_count": 0,
+          "avg_body_ratio": 0
+        },
+        "symbol": "NIFTY",
+        "timeframe": "15m",
+        "dataSource": "MARKET_CLOSED",
+        "timestamp": "2026-04-11T23:09:58.423940+05:30",
+        "price": 24053.6,
+        "changePct": 1.17
+      }
+    }
+  },
+  "BANKNIFTY": {
+    "pattern": "BULLISH_CANDLE",
+    "all_patterns": [],
+    "structure": "BULLISH_CONTINUATION",
+    "strength": "STRONG",
+    "signal": "STRONG_BUY",
+    "confidence": 40,
+    "confluence": 0,
+    "candle": {
+      "open": 55182.25,
+      "high": 55978.5,
+      "low": 55145.25,
+      "close": 55919.5,
+      "body_ratio": 0.885,
+      "upper_wick_ratio": 0.071,
+      "lower_wick_ratio": 0.044,
+      "is_bullish": true
+    },
+    "trend_context": {
+      "direction": "BULLISH",
+      "bullish_count": 3,
+      "bearish_count": 2,
+      "avg_body_ratio": 0.425,
+      "candles_analyzed": 5
+    },
+    "symbol": "BANKNIFTY",
+    "timeframe": "5m",
+    "dataSource": "MARKET_CLOSED",
+    "timestamp": "2026-04-11T23:09:58.424401+05:30",
+    "price": 55919.5,
+    "changePct": 2.0,
+    "timeframes": {
+      "3m": {
+        "pattern": "BULLISH_CANDLE",
+        "all_patterns": [],
+        "structure": "BULLISH_CONTINUATION",
+        "strength": "STRONG",
+        "signal": "STRONG_BUY",
+        "confidence": 40,
+        "confluence": 0,
+        "candle": {
+          "open": 55182.25,
+          "high": 55978.5,
+          "low": 55145.25,
+          "close": 55919.5,
+          "body_ratio": 0.885,
+          "upper_wick_ratio": 0.071,
+          "lower_wick_ratio": 0.044,
+          "is_bullish": true
+        },
+        "trend_context": {
+          "direction": "NEUTRAL",
+          "bullish_count": 0,
+          "bearish_count": 0,
+          "avg_body_ratio": 0
+        },
+        "symbol": "BANKNIFTY",
+        "timeframe": "3m",
+        "dataSource": "MARKET_CLOSED",
+        "timestamp": "2026-04-11T23:09:58.423987+05:30",
+        "price": 55919.5,
+        "changePct": 2.0
+      },
+      "5m": {
+        "pattern": "BULLISH_CANDLE",
+        "all_patterns": [],
+        "structure": "BULLISH_CONTINUATION",
+        "strength": "STRONG",
+        "signal": "STRONG_BUY",
+        "confidence": 40,
+        "confluence": 0,
+        "candle": {
+          "open": 55182.25,
+          "high": 55978.5,
+          "low": 55145.25,
+          "close": 55919.5,
+          "body_ratio": 0.885,
+          "upper_wick_ratio": 0.071,
+          "lower_wick_ratio": 0.044,
+          "is_bullish": true
+        },
+        "trend_context": {
+          "direction": "BULLISH",
+          "bullish_count": 3,
+          "bearish_count": 2,
+          "avg_body_ratio": 0.425,
+          "candles_analyzed": 5
+        },
+        "symbol": "BANKNIFTY",
+        "timeframe": "5m",
+        "dataSource": "MARKET_CLOSED",
+        "timestamp": "2026-04-11T23:09:58.424401+05:30",
+        "price": 55919.5,
+        "changePct": 2.0
+      },
+      "15m": {
+        "pattern": "BULLISH_CANDLE",
+        "all_patterns": [],
+        "structure": "BULLISH_CONTINUATION",
+        "strength": "STRONG",
+        "signal": "STRONG_BUY",
+        "confidence": 40,
+        "confluence": 0,
+        "candle": {
+          "open": 55182.25,
+          "high": 55978.5,
+          "low": 55145.25,
+          "close": 55919.5,
+          "body_ratio": 0.885,
+          "upper_wick_ratio": 0.071,
+          "lower_wick_ratio": 0.044,
+          "is_bullish": true
+        },
+        "trend_context": {
+          "direction": "NEUTRAL",
+          "bullish_count": 0,
+          "bearish_count": 0,
+          "avg_body_ratio": 0
+        },
+        "symbol": "BANKNIFTY",
+        "timeframe": "15m",
+        "dataSource": "MARKET_CLOSED",
+        "timestamp": "2026-04-11T23:09:58.424453+05:30",
+        "price": 55919.5,
+        "changePct": 2.0
+      }
+    }
+  },
+  "SENSEX": {
+    "pattern": "BULLISH_CANDLE",
+    "all_patterns": [],
+    "structure": "BULLISH_CONTINUATION",
+    "strength": "MODERATE",
+    "signal": "BUY",
+    "confidence": 30,
+    "confluence": 0,
+    "candle": {
+      "open": 77121.01,
+      "high": 77622.5,
+      "low": 76851.16,
+      "close": 77550.17,
+      "body_ratio": 0.556,
+      "upper_wick_ratio": 0.094,
+      "lower_wick_ratio": 0.35,
+      "is_bullish": true
+    },
+    "trend_context": {
+      "direction": "STRONG_BULLISH",
+      "bullish_count": 4,
+      "bearish_count": 1,
+      "avg_body_ratio": 0.346,
+      "candles_analyzed": 5
+    },
+    "symbol": "SENSEX",
+    "timeframe": "5m",
+    "dataSource": "MARKET_CLOSED",
+    "timestamp": "2026-04-11T23:09:58.424880+05:30",
+    "price": 77550.17,
+    "changePct": 1.2,
+    "timeframes": {
+      "3m": {
+        "pattern": "BULLISH_CANDLE",
+        "all_patterns": [],
+        "structure": "BULLISH_CONTINUATION",
+        "strength": "MODERATE",
+        "signal": "BUY",
+        "confidence": 30,
+        "confluence": 0,
+        "candle": {
+          "open": 77121.01,
+          "high": 77622.5,
+          "low": 76851.16,
+          "close": 77550.17,
+          "body_ratio": 0.556,
+          "upper_wick_ratio": 0.094,
+          "lower_wick_ratio": 0.35,
+          "is_bullish": true
+        },
+        "trend_context": {
+          "direction": "NEUTRAL",
+          "bullish_count": 0,
+          "bearish_count": 0,
+          "avg_body_ratio": 0
+        },
+        "symbol": "SENSEX",
+        "timeframe": "3m",
+        "dataSource": "MARKET_CLOSED",
+        "timestamp": "2026-04-11T23:09:58.424497+05:30",
+        "price": 77550.17,
+        "changePct": 1.2
+      },
+      "5m": {
+        "pattern": "BULLISH_CANDLE",
+        "all_patterns": [],
+        "structure": "BULLISH_CONTINUATION",
+        "strength": "MODERATE",
+        "signal": "BUY",
+        "confidence": 30,
+        "confluence": 0,
+        "candle": {
+          "open": 77121.01,
+          "high": 77622.5,
+          "low": 76851.16,
+          "close": 77550.17,
+          "body_ratio": 0.556,
+          "upper_wick_ratio": 0.094,
+          "lower_wick_ratio": 0.35,
+          "is_bullish": true
+        },
+        "trend_context": {
+          "direction": "STRONG_BULLISH",
+          "bullish_count": 4,
+          "bearish_count": 1,
+          "avg_body_ratio": 0.346,
+          "candles_analyzed": 5
+        },
+        "symbol": "SENSEX",
+        "timeframe": "5m",
+        "dataSource": "MARKET_CLOSED",
+        "timestamp": "2026-04-11T23:09:58.424880+05:30",
+        "price": 77550.17,
+        "changePct": 1.2
+      },
+      "15m": {
+        "pattern": "BULLISH_CANDLE",
+        "all_patterns": [],
+        "structure": "BULLISH_CONTINUATION",
+        "strength": "MODERATE",
+        "signal": "BUY",
+        "confidence": 30,
+        "confluence": 0,
+        "candle": {
+          "open": 77121.01,
+          "high": 77622.5,
+          "low": 76851.16,
+          "close": 77550.17,
+          "body_ratio": 0.556,
+          "upper_wick_ratio": 0.094,
+          "lower_wick_ratio": 0.35,
+          "is_bullish": true
+        },
+        "trend_context": {
+          "direction": "NEUTRAL",
+          "bullish_count": 0,
+          "bearish_count": 0,
+          "avg_body_ratio": 0
+        },
+        "symbol": "SENSEX",
+        "timeframe": "15m",
+        "dataSource": "MARKET_CLOSED",
+        "timestamp": "2026-04-11T23:09:58.424930+05:30",
+        "price": 77550.17,
+        "changePct": 1.2
+      }
+    }
+  }
+}
