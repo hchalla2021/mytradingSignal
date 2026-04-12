@@ -41,6 +41,47 @@ export interface TrendContext {
   candles_analyzed?: number;
 }
 
+// ── 3FA (3 Factor Alignment) Types ────────────────────────────────────────────
+
+export interface ThreeFactorLocation {
+  zone: 'NEAR_PDH' | 'NEAR_PDL' | 'ABOVE_PDH' | 'BELOW_PDL' | 'MID_ZONE' | 'UNKNOWN';
+  pdh: number | null;
+  pdl: number | null;
+  vwap: number | null;
+  distance_to_pdh: number | null;
+  distance_to_pdl: number | null;
+  vwap_position: 'ABOVE' | 'BELOW' | 'AT' | null;
+  tradeable: boolean;
+}
+
+export interface ThreeFactorBehavior {
+  type: 'REJECTION' | 'ABSORPTION' | 'BREAKOUT' | 'NONE';
+  description: string;
+  strength: number;
+}
+
+export interface ThreeFactorConfirmation {
+  volume_ratio: number;
+  volume_confirmed: boolean;
+  body_strong: boolean;
+  close_near_extreme: boolean;
+  candle_confirmed: boolean;
+  confirmed: boolean;
+}
+
+export interface ThreeFactorAlignment {
+  location: ThreeFactorLocation;
+  behavior: ThreeFactorBehavior;
+  confirmation: ThreeFactorConfirmation;
+  alignment_score: number;
+  factors_pass: string[];
+  factors_fail: string[];
+  aligned: boolean;
+  verdict: 'BUY' | 'SELL' | 'NO_TRADE';
+  reason: string;
+  market_active?: boolean;
+}
+
 export type CandleTimeframe = '3m' | '5m' | '15m';
 
 export interface CandleIntelIndex {
@@ -59,6 +100,8 @@ export interface CandleIntelIndex {
   dataSource: CandleDataSource;
   timestamp: string;
   timeframe?: CandleTimeframe;
+  /** 3 Factor Alignment analysis */
+  three_factor?: ThreeFactorAlignment;
   /** Multi-timeframe analysis — each key is a full CandleIntelIndex */
   timeframes?: Record<CandleTimeframe, CandleIntelIndex>;
 }

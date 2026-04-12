@@ -27,9 +27,46 @@
     "symbol": "NIFTY",
     "timeframe": "5m",
     "dataSource": "MARKET_CLOSED",
-    "timestamp": "2026-04-11T23:09:58.423883+05:30",
+    "timestamp": "2026-04-12T19:57:53.443633+05:30",
     "price": 24053.6,
     "changePct": 1.17,
+    "three_factor": {
+      "location": {
+        "zone": "ABOVE_PDH",
+        "pdh": 23990.75,
+        "pdl": 23682.8,
+        "vwap": 24056.65,
+        "distance_to_pdh": 0.262,
+        "distance_to_pdl": 1.566,
+        "vwap_position": "AT",
+        "tradeable": true
+      },
+      "behavior": {
+        "type": "BREAKOUT",
+        "description": "Strong bullish close above PDH (23991)",
+        "strength": 99
+      },
+      "confirmation": {
+        "volume_ratio": 0.0,
+        "volume_confirmed": false,
+        "body_strong": true,
+        "close_near_extreme": true,
+        "candle_confirmed": true,
+        "confirmed": false
+      },
+      "alignment_score": 2,
+      "factors_pass": [
+        "LOCATION",
+        "BEHAVIOR"
+      ],
+      "factors_fail": [
+        "CONFIRMATION"
+      ],
+      "aligned": false,
+      "verdict": "NO_TRADE",
+      "reason": "Missing: CONFIRMATION",
+      "market_active": false
+    },
     "timeframes": {
       "3m": {
         "pattern": "BULLISH_CANDLE",
@@ -58,9 +95,46 @@
         "symbol": "NIFTY",
         "timeframe": "3m",
         "dataSource": "MARKET_CLOSED",
-        "timestamp": "2026-04-11T23:09:58.423421+05:30",
+        "timestamp": "2026-04-12T19:57:53.443382+05:30",
         "price": 24053.6,
-        "changePct": 1.17
+        "changePct": 1.17,
+        "three_factor": {
+          "location": {
+            "zone": "ABOVE_PDH",
+            "pdh": 23990.75,
+            "pdl": 23682.8,
+            "vwap": 24056.65,
+            "distance_to_pdh": 0.262,
+            "distance_to_pdl": 1.566,
+            "vwap_position": "AT",
+            "tradeable": true
+          },
+          "behavior": {
+            "type": "BREAKOUT",
+            "description": "Strong bullish close above PDH (23991)",
+            "strength": 99
+          },
+          "confirmation": {
+            "volume_ratio": 0.0,
+            "volume_confirmed": false,
+            "body_strong": true,
+            "close_near_extreme": true,
+            "candle_confirmed": true,
+            "confirmed": false
+          },
+          "alignment_score": 2,
+          "factors_pass": [
+            "LOCATION",
+            "BEHAVIOR"
+          ],
+          "factors_fail": [
+            "CONFIRMATION"
+          ],
+          "aligned": false,
+          "verdict": "NO_TRADE",
+          "reason": "Missing: CONFIRMATION",
+          "market_active": false
+        }
       },
       "5m": {
         "pattern": "BULLISH_CANDLE",
@@ -90,9 +164,46 @@
         "symbol": "NIFTY",
         "timeframe": "5m",
         "dataSource": "MARKET_CLOSED",
-        "timestamp": "2026-04-11T23:09:58.423883+05:30",
+        "timestamp": "2026-04-12T19:57:53.443633+05:30",
         "price": 24053.6,
-        "changePct": 1.17
+        "changePct": 1.17,
+        "three_factor": {
+          "location": {
+            "zone": "ABOVE_PDH",
+            "pdh": 23990.75,
+            "pdl": 23682.8,
+            "vwap": 24056.65,
+            "distance_to_pdh": 0.262,
+            "distance_to_pdl": 1.566,
+            "vwap_position": "AT",
+            "tradeable": true
+          },
+          "behavior": {
+            "type": "BREAKOUT",
+            "description": "Strong bullish close above PDH (23991)",
+            "strength": 99
+          },
+          "confirmation": {
+            "volume_ratio": 0.0,
+            "volume_confirmed": false,
+            "body_strong": true,
+            "close_near_extreme": true,
+            "candle_confirmed": true,
+            "confirmed": false
+          },
+          "alignment_score": 2,
+          "factors_pass": [
+            "LOCATION",
+            "BEHAVIOR"
+          ],
+          "factors_fail": [
+            "CONFIRMATION"
+          ],
+          "aligned": false,
+          "verdict": "NO_TRADE",
+          "reason": "Missing: CONFIRMATION",
+          "market_active": false
+        }
       },
       "15m": {
         "pattern": "BULLISH_CANDLE",
@@ -121,9 +232,46 @@
         "symbol": "NIFTY",
         "timeframe": "15m",
         "dataSource": "MARKET_CLOSED",
-        "timestamp": "2026-04-11T23:09:58.423940+05:30",
+        "timestamp": "2026-04-12T19:57:53.443690+05:30",
         "price": 24053.6,
-        "changePct": 1.17
+        "changePct": 1.17,
+        "three_factor": {
+          "location": {
+            "zone": "ABOVE_PDH",
+            "pdh": 23990.75,
+            "pdl": 23682.8,
+            "vwap": 24056.65,
+            "distance_to_pdh": 0.262,
+            "distance_to_pdl": 1.566,
+            "vwap_position": "AT",
+            "tradeable": true
+          },
+          "behavior": {
+            "type": "BREAKOUT",
+            "description": "Strong bullish close above PDH (23991)",
+            "strength": 99
+          },
+          "confirmation": {
+            "volume_ratio": 0.0,
+            "volume_confirmed": false,
+            "body_strong": true,
+            "close_near_extreme": true,
+            "candle_confirmed": true,
+            "confirmed": false
+          },
+          "alignment_score": 2,
+          "factors_pass": [
+            "LOCATION",
+            "BEHAVIOR"
+          ],
+          "factors_fail": [
+            "CONFIRMATION"
+          ],
+          "aligned": false,
+          "verdict": "NO_TRADE",
+          "reason": "Missing: CONFIRMATION",
+          "market_active": false
+        }
       }
     }
   },
@@ -155,9 +303,46 @@
     "symbol": "BANKNIFTY",
     "timeframe": "5m",
     "dataSource": "MARKET_CLOSED",
-    "timestamp": "2026-04-11T23:09:58.424401+05:30",
+    "timestamp": "2026-04-12T19:57:53.443944+05:30",
     "price": 55919.5,
     "changePct": 2.0,
+    "three_factor": {
+      "location": {
+        "zone": "ABOVE_PDH",
+        "pdh": 55583.1,
+        "pdl": 54626.85,
+        "vwap": 55922.2,
+        "distance_to_pdh": 0.605,
+        "distance_to_pdl": 2.366,
+        "vwap_position": "AT",
+        "tradeable": true
+      },
+      "behavior": {
+        "type": "BREAKOUT",
+        "description": "Strong bullish close above PDH (55583)",
+        "strength": 100
+      },
+      "confirmation": {
+        "volume_ratio": 0.0,
+        "volume_confirmed": false,
+        "body_strong": true,
+        "close_near_extreme": true,
+        "candle_confirmed": true,
+        "confirmed": false
+      },
+      "alignment_score": 2,
+      "factors_pass": [
+        "LOCATION",
+        "BEHAVIOR"
+      ],
+      "factors_fail": [
+        "CONFIRMATION"
+      ],
+      "aligned": false,
+      "verdict": "NO_TRADE",
+      "reason": "Missing: CONFIRMATION",
+      "market_active": false
+    },
     "timeframes": {
       "3m": {
         "pattern": "BULLISH_CANDLE",
@@ -186,9 +371,46 @@
         "symbol": "BANKNIFTY",
         "timeframe": "3m",
         "dataSource": "MARKET_CLOSED",
-        "timestamp": "2026-04-11T23:09:58.423987+05:30",
+        "timestamp": "2026-04-12T19:57:53.443730+05:30",
         "price": 55919.5,
-        "changePct": 2.0
+        "changePct": 2.0,
+        "three_factor": {
+          "location": {
+            "zone": "ABOVE_PDH",
+            "pdh": 55583.1,
+            "pdl": 54626.85,
+            "vwap": 55922.2,
+            "distance_to_pdh": 0.605,
+            "distance_to_pdl": 2.366,
+            "vwap_position": "AT",
+            "tradeable": true
+          },
+          "behavior": {
+            "type": "BREAKOUT",
+            "description": "Strong bullish close above PDH (55583)",
+            "strength": 100
+          },
+          "confirmation": {
+            "volume_ratio": 0.0,
+            "volume_confirmed": false,
+            "body_strong": true,
+            "close_near_extreme": true,
+            "candle_confirmed": true,
+            "confirmed": false
+          },
+          "alignment_score": 2,
+          "factors_pass": [
+            "LOCATION",
+            "BEHAVIOR"
+          ],
+          "factors_fail": [
+            "CONFIRMATION"
+          ],
+          "aligned": false,
+          "verdict": "NO_TRADE",
+          "reason": "Missing: CONFIRMATION",
+          "market_active": false
+        }
       },
       "5m": {
         "pattern": "BULLISH_CANDLE",
@@ -218,9 +440,46 @@
         "symbol": "BANKNIFTY",
         "timeframe": "5m",
         "dataSource": "MARKET_CLOSED",
-        "timestamp": "2026-04-11T23:09:58.424401+05:30",
+        "timestamp": "2026-04-12T19:57:53.443944+05:30",
         "price": 55919.5,
-        "changePct": 2.0
+        "changePct": 2.0,
+        "three_factor": {
+          "location": {
+            "zone": "ABOVE_PDH",
+            "pdh": 55583.1,
+            "pdl": 54626.85,
+            "vwap": 55922.2,
+            "distance_to_pdh": 0.605,
+            "distance_to_pdl": 2.366,
+            "vwap_position": "AT",
+            "tradeable": true
+          },
+          "behavior": {
+            "type": "BREAKOUT",
+            "description": "Strong bullish close above PDH (55583)",
+            "strength": 100
+          },
+          "confirmation": {
+            "volume_ratio": 0.0,
+            "volume_confirmed": false,
+            "body_strong": true,
+            "close_near_extreme": true,
+            "candle_confirmed": true,
+            "confirmed": false
+          },
+          "alignment_score": 2,
+          "factors_pass": [
+            "LOCATION",
+            "BEHAVIOR"
+          ],
+          "factors_fail": [
+            "CONFIRMATION"
+          ],
+          "aligned": false,
+          "verdict": "NO_TRADE",
+          "reason": "Missing: CONFIRMATION",
+          "market_active": false
+        }
       },
       "15m": {
         "pattern": "BULLISH_CANDLE",
@@ -249,9 +508,46 @@
         "symbol": "BANKNIFTY",
         "timeframe": "15m",
         "dataSource": "MARKET_CLOSED",
-        "timestamp": "2026-04-11T23:09:58.424453+05:30",
+        "timestamp": "2026-04-12T19:57:53.443991+05:30",
         "price": 55919.5,
-        "changePct": 2.0
+        "changePct": 2.0,
+        "three_factor": {
+          "location": {
+            "zone": "ABOVE_PDH",
+            "pdh": 55583.1,
+            "pdl": 54626.85,
+            "vwap": 55922.2,
+            "distance_to_pdh": 0.605,
+            "distance_to_pdl": 2.366,
+            "vwap_position": "AT",
+            "tradeable": true
+          },
+          "behavior": {
+            "type": "BREAKOUT",
+            "description": "Strong bullish close above PDH (55583)",
+            "strength": 100
+          },
+          "confirmation": {
+            "volume_ratio": 0.0,
+            "volume_confirmed": false,
+            "body_strong": true,
+            "close_near_extreme": true,
+            "candle_confirmed": true,
+            "confirmed": false
+          },
+          "alignment_score": 2,
+          "factors_pass": [
+            "LOCATION",
+            "BEHAVIOR"
+          ],
+          "factors_fail": [
+            "CONFIRMATION"
+          ],
+          "aligned": false,
+          "verdict": "NO_TRADE",
+          "reason": "Missing: CONFIRMATION",
+          "market_active": false
+        }
       }
     }
   },
@@ -283,9 +579,46 @@
     "symbol": "SENSEX",
     "timeframe": "5m",
     "dataSource": "MARKET_CLOSED",
-    "timestamp": "2026-04-11T23:09:58.424880+05:30",
+    "timestamp": "2026-04-12T19:57:53.444206+05:30",
     "price": 77550.17,
     "changePct": 1.2,
+    "three_factor": {
+      "location": {
+        "zone": "ABOVE_PDH",
+        "pdh": 77429.33,
+        "pdl": 76347.9,
+        "vwap": 77556.41,
+        "distance_to_pdh": 0.156,
+        "distance_to_pdl": 1.575,
+        "vwap_position": "AT",
+        "tradeable": true
+      },
+      "behavior": {
+        "type": "BREAKOUT",
+        "description": "Strong bullish close above PDH (77429)",
+        "strength": 75
+      },
+      "confirmation": {
+        "volume_ratio": 0.0,
+        "volume_confirmed": false,
+        "body_strong": true,
+        "close_near_extreme": true,
+        "candle_confirmed": true,
+        "confirmed": false
+      },
+      "alignment_score": 2,
+      "factors_pass": [
+        "LOCATION",
+        "BEHAVIOR"
+      ],
+      "factors_fail": [
+        "CONFIRMATION"
+      ],
+      "aligned": false,
+      "verdict": "NO_TRADE",
+      "reason": "Missing: CONFIRMATION",
+      "market_active": false
+    },
     "timeframes": {
       "3m": {
         "pattern": "BULLISH_CANDLE",
@@ -314,9 +647,46 @@
         "symbol": "SENSEX",
         "timeframe": "3m",
         "dataSource": "MARKET_CLOSED",
-        "timestamp": "2026-04-11T23:09:58.424497+05:30",
+        "timestamp": "2026-04-12T19:57:53.444026+05:30",
         "price": 77550.17,
-        "changePct": 1.2
+        "changePct": 1.2,
+        "three_factor": {
+          "location": {
+            "zone": "ABOVE_PDH",
+            "pdh": 77429.33,
+            "pdl": 76347.9,
+            "vwap": 77556.41,
+            "distance_to_pdh": 0.156,
+            "distance_to_pdl": 1.575,
+            "vwap_position": "AT",
+            "tradeable": true
+          },
+          "behavior": {
+            "type": "BREAKOUT",
+            "description": "Strong bullish close above PDH (77429)",
+            "strength": 75
+          },
+          "confirmation": {
+            "volume_ratio": 0.0,
+            "volume_confirmed": false,
+            "body_strong": true,
+            "close_near_extreme": true,
+            "candle_confirmed": true,
+            "confirmed": false
+          },
+          "alignment_score": 2,
+          "factors_pass": [
+            "LOCATION",
+            "BEHAVIOR"
+          ],
+          "factors_fail": [
+            "CONFIRMATION"
+          ],
+          "aligned": false,
+          "verdict": "NO_TRADE",
+          "reason": "Missing: CONFIRMATION",
+          "market_active": false
+        }
       },
       "5m": {
         "pattern": "BULLISH_CANDLE",
@@ -346,9 +716,46 @@
         "symbol": "SENSEX",
         "timeframe": "5m",
         "dataSource": "MARKET_CLOSED",
-        "timestamp": "2026-04-11T23:09:58.424880+05:30",
+        "timestamp": "2026-04-12T19:57:53.444206+05:30",
         "price": 77550.17,
-        "changePct": 1.2
+        "changePct": 1.2,
+        "three_factor": {
+          "location": {
+            "zone": "ABOVE_PDH",
+            "pdh": 77429.33,
+            "pdl": 76347.9,
+            "vwap": 77556.41,
+            "distance_to_pdh": 0.156,
+            "distance_to_pdl": 1.575,
+            "vwap_position": "AT",
+            "tradeable": true
+          },
+          "behavior": {
+            "type": "BREAKOUT",
+            "description": "Strong bullish close above PDH (77429)",
+            "strength": 75
+          },
+          "confirmation": {
+            "volume_ratio": 0.0,
+            "volume_confirmed": false,
+            "body_strong": true,
+            "close_near_extreme": true,
+            "candle_confirmed": true,
+            "confirmed": false
+          },
+          "alignment_score": 2,
+          "factors_pass": [
+            "LOCATION",
+            "BEHAVIOR"
+          ],
+          "factors_fail": [
+            "CONFIRMATION"
+          ],
+          "aligned": false,
+          "verdict": "NO_TRADE",
+          "reason": "Missing: CONFIRMATION",
+          "market_active": false
+        }
       },
       "15m": {
         "pattern": "BULLISH_CANDLE",
@@ -377,9 +784,46 @@
         "symbol": "SENSEX",
         "timeframe": "15m",
         "dataSource": "MARKET_CLOSED",
-        "timestamp": "2026-04-11T23:09:58.424930+05:30",
+        "timestamp": "2026-04-12T19:57:53.444251+05:30",
         "price": 77550.17,
-        "changePct": 1.2
+        "changePct": 1.2,
+        "three_factor": {
+          "location": {
+            "zone": "ABOVE_PDH",
+            "pdh": 77429.33,
+            "pdl": 76347.9,
+            "vwap": 77556.41,
+            "distance_to_pdh": 0.156,
+            "distance_to_pdl": 1.575,
+            "vwap_position": "AT",
+            "tradeable": true
+          },
+          "behavior": {
+            "type": "BREAKOUT",
+            "description": "Strong bullish close above PDH (77429)",
+            "strength": 75
+          },
+          "confirmation": {
+            "volume_ratio": 0.0,
+            "volume_confirmed": false,
+            "body_strong": true,
+            "close_near_extreme": true,
+            "candle_confirmed": true,
+            "confirmed": false
+          },
+          "alignment_score": 2,
+          "factors_pass": [
+            "LOCATION",
+            "BEHAVIOR"
+          ],
+          "factors_fail": [
+            "CONFIRMATION"
+          ],
+          "aligned": false,
+          "verdict": "NO_TRADE",
+          "reason": "Missing: CONFIRMATION",
+          "market_active": false
+        }
       }
     }
   }

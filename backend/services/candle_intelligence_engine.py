@@ -554,6 +554,421 @@ def _empty_result() -> Dict[str, Any]:
         "confluence": 0,
         "candle": None,
         "trend_context": {"direction": "NEUTRAL", "bullish_count": 0, "bearish_count": 0, "avg_body_ratio": 0},
+        "three_factor": _empty_3fa(),
+    }
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# SECTION 7 — 3FA (3 FACTOR ALIGNMENT MODEL)
+# ──────────────────────────────────────────────────────────────────────────────
+#
+# Factor 1: LOCATION  — Where price is (PDH / PDL / VWAP)
+# Factor 2: BEHAVIOR  — What price is doing (Rejection / Absorption / Breakout)
+# Factor 3: CONFIRMATION — Is it real? (Volume above avg + candle body strength)
+#
+# Final Rule:
+#   BUY  only if: near PDH + (absorption|breakout) + strong candle + high volume
+#   SELL only if: near PDL + (absorption|breakout) + strong candle + high volume
+#   If ANY factor missing → NO TRADE
+# ──────────────────────────────────────────────────────────────────────────────
+
+# Proximity threshold: price within 0.3% of level = "near"
+_LOCATION_PROXIMITY_PCT = 0.003
+# Mid-zone: price more than 30% away from both PDH and PDL within the range
+_MIDZONE_PCT = 0.30
+# Volume: ratio above this = "above average"
+_VOLUME_ABOVE_AVG_RATIO = 1.0
+# Candle body strength: body_ratio above this = strong candle for confirmation
+_CONFIRMATION_BODY_RATIO = 0.50
+# Close-near-high threshold (for bullish confirmation): close within top 25% of range
+_CLOSE_NEAR_HIGH_PCT = 0.25
+# Close-near-low threshold (for bearish confirmation): close within bottom 25% of range
+_CLOSE_NEAR_LOW_PCT = 0.25
+# Absorption detection: small body candles holding near level (body_ratio < this)
+_ABSORPTION_BODY_MAX = 0.35
+# Breakout: strong candle closing beyond level (body_ratio > this)
+_BREAKOUT_BODY_MIN = 0.50
+
+
+def _compute_location(
+    price: float,
+    pdh: Optional[float],
+    pdl: Optional[float],
+    vwap: Optional[float],
+) -> Dict[str, Any]:
+    """
+    Factor 1: LOCATION — classify where price sits relative to PDH / PDL / VWAP.
+
+    Returns:
+      zone: "NEAR_PDH" | "NEAR_PDL" | "ABOVE_PDH" | "BELOW_PDL" | "MID_ZONE" | "UNKNOWN"
+      pdh / pdl / vwap: the reference values
+      distance_to_pdh / distance_to_pdl: signed % distance
+      vwap_position: "ABOVE" | "BELOW" | "AT" | None
+      tradeable: bool — False for MID_ZONE / UNKNOWN
+    """
+    if not price or price <= 0:
+        return {"zone": "UNKNOWN", "pdh": pdh, "pdl": pdl, "vwap": vwap,
+                "distance_to_pdh": None, "distance_to_pdl": None,
+                "vwap_position": None, "tradeable": False}
+
+    dist_pdh = ((price - pdh) / pdh) if pdh and pdh > 0 else None
+    dist_pdl = ((price - pdl) / pdl) if pdl and pdl > 0 else None
+
+    zone = "UNKNOWN"
+    tradeable = False
+
+    if pdh and pdl and pdh > pdl:
+        day_range = pdh - pdl
+        mid_low = pdl + day_range * _MIDZONE_PCT
+        mid_high = pdh - day_range * _MIDZONE_PCT
+
+        if price > pdh and dist_pdh is not None and dist_pdh <= _LOCATION_PROXIMITY_PCT * 3:
+            zone = "ABOVE_PDH"
+            tradeable = True
+        elif dist_pdh is not None and abs(dist_pdh) <= _LOCATION_PROXIMITY_PCT:
+            zone = "NEAR_PDH"
+            tradeable = True
+        elif price < pdl and dist_pdl is not None and abs(dist_pdl) <= _LOCATION_PROXIMITY_PCT * 3:
+            zone = "BELOW_PDL"
+            tradeable = True
+        elif dist_pdl is not None and abs(dist_pdl) <= _LOCATION_PROXIMITY_PCT:
+            zone = "NEAR_PDL"
+            tradeable = True
+        elif mid_low <= price <= mid_high:
+            zone = "MID_ZONE"
+            tradeable = False
+        elif price > mid_high:
+            zone = "NEAR_PDH"
+            tradeable = True
+        elif price < mid_low:
+            zone = "NEAR_PDL"
+            tradeable = True
+    elif pdh and dist_pdh is not None:
+        if abs(dist_pdh) <= _LOCATION_PROXIMITY_PCT:
+            zone = "NEAR_PDH"
+            tradeable = True
+    elif pdl and dist_pdl is not None:
+        if abs(dist_pdl) <= _LOCATION_PROXIMITY_PCT:
+            zone = "NEAR_PDL"
+            tradeable = True
+
+    vwap_pos = None
+    if vwap and vwap > 0 and price > 0:
+        vwap_dev = (price - vwap) / vwap
+        if vwap_dev > 0.002:
+            vwap_pos = "ABOVE"
+        elif vwap_dev < -0.002:
+            vwap_pos = "BELOW"
+        else:
+            vwap_pos = "AT"
+
+    return {
+        "zone": zone,
+        "pdh": round(pdh, 2) if pdh else None,
+        "pdl": round(pdl, 2) if pdl else None,
+        "vwap": round(vwap, 2) if vwap else None,
+        "distance_to_pdh": round(dist_pdh * 100, 3) if dist_pdh is not None else None,
+        "distance_to_pdl": round(dist_pdl * 100, 3) if dist_pdl is not None else None,
+        "vwap_position": vwap_pos,
+        "tradeable": tradeable,
+    }
+
+
+def _compute_behavior(
+    candles: List[Dict[str, float]],
+    anatomies: List[Dict[str, float]],
+    location_zone: str,
+    pdh: Optional[float],
+    pdl: Optional[float],
+) -> Dict[str, Any]:
+    """
+    Factor 2: BEHAVIOR — what price is doing at the current location.
+
+    3 Behaviors:
+      REJECTION   — wicks rejecting level (long wick into level, body retreating)
+      ABSORPTION  — small candles holding near level, not falling (accumulation before breakout)
+      BREAKOUT    — strong candle closing beyond the level
+      NONE        — no clear behavior
+
+    Uses last 3 candles for absorption detection.
+    """
+    if not candles or not anatomies:
+        return {"type": "NONE", "description": "Insufficient data", "strength": 0}
+
+    curr = candles[-1]
+    curr_a = anatomies[-1]
+    price = curr.get("close", 0)
+    behavior_type = "NONE"
+    description = "No clear behavior at current level"
+    strength = 0  # 0-100
+
+    is_near_pdh = location_zone in ("NEAR_PDH", "ABOVE_PDH")
+    is_near_pdl = location_zone in ("NEAR_PDL", "BELOW_PDL")
+
+    if is_near_pdh and pdh and pdh > 0:
+        # ── Check BREAKOUT above PDH ──
+        if (curr_a["is_bullish"]
+                and curr_a["body_ratio"] >= _BREAKOUT_BODY_MIN
+                and price > pdh):
+            behavior_type = "BREAKOUT"
+            description = f"Strong bullish close above PDH ({pdh:.0f})"
+            strength = min(100, int(curr_a["body_ratio"] * 100) + 20)
+
+        # ── Check ABSORPTION near PDH ──
+        elif len(candles) >= 3:
+            recent_a = anatomies[-3:]
+            small_bodies = sum(1 for a in recent_a if a["body_ratio"] < _ABSORPTION_BODY_MAX)
+            holding_near = all(
+                abs(c.get("close", 0) - pdh) / pdh < _LOCATION_PROXIMITY_PCT * 2
+                for c in candles[-3:]
+            ) if pdh > 0 else False
+            if small_bodies >= 2 and holding_near:
+                behavior_type = "ABSORPTION"
+                description = f"Price absorbing near PDH ({pdh:.0f}) — breakout building"
+                strength = min(85, 50 + small_bodies * 10)
+
+        # ── Check REJECTION from PDH ──
+        if behavior_type == "NONE":
+            if curr_a["upper_wick_ratio"] > 0.40 and not curr_a["is_bullish"]:
+                behavior_type = "REJECTION"
+                description = f"Wick rejection from PDH ({pdh:.0f}) — sellers strong"
+                strength = min(90, int(curr_a["upper_wick_ratio"] * 100) + 10)
+
+    elif is_near_pdl and pdl and pdl > 0:
+        # ── Check BREAKOUT below PDL (breakdown) ──
+        if (not curr_a["is_bullish"]
+                and curr_a["body_ratio"] >= _BREAKOUT_BODY_MIN
+                and price < pdl):
+            behavior_type = "BREAKOUT"
+            description = f"Strong bearish close below PDL ({pdl:.0f})"
+            strength = min(100, int(curr_a["body_ratio"] * 100) + 20)
+
+        # ── Check ABSORPTION near PDL (bounce building) ──
+        elif len(candles) >= 3:
+            recent_a = anatomies[-3:]
+            small_bodies = sum(1 for a in recent_a if a["body_ratio"] < _ABSORPTION_BODY_MAX)
+            holding_near = all(
+                abs(c.get("close", 0) - pdl) / pdl < _LOCATION_PROXIMITY_PCT * 2
+                for c in candles[-3:]
+            ) if pdl > 0 else False
+            if small_bodies >= 2 and holding_near:
+                behavior_type = "ABSORPTION"
+                description = f"Price absorbing near PDL ({pdl:.0f}) — bounce building"
+                strength = min(85, 50 + small_bodies * 10)
+
+        # ── Check REJECTION from PDL (bounce) ──
+        if behavior_type == "NONE":
+            if curr_a["lower_wick_ratio"] > 0.40 and curr_a["is_bullish"]:
+                behavior_type = "REJECTION"
+                description = f"Wick rejection from PDL ({pdl:.0f}) — buyers strong"
+                strength = min(90, int(curr_a["lower_wick_ratio"] * 100) + 10)
+
+    return {
+        "type": behavior_type,
+        "description": description,
+        "strength": strength,
+    }
+
+
+def _compute_confirmation(
+    curr_a: Dict[str, float],
+    curr_candle: Dict[str, float],
+    candles: List[Dict[str, float]],
+    volume: Optional[int],
+    avg_volume: Optional[float],
+) -> Dict[str, Any]:
+    """
+    Factor 3: CONFIRMATION — validates the move is real.
+
+    Two checks:
+      1. Volume above average → real move
+      2. Candle strength: big body + close near high (bullish) or near low (bearish)
+
+    Returns confirmation dict with pass/fail for each check and overall confirmed bool.
+    """
+    # ── Volume check ──
+    vol_ratio = 0.0
+    volume_confirmed = False
+    if volume and avg_volume and avg_volume > 0:
+        vol_ratio = volume / avg_volume
+        volume_confirmed = vol_ratio >= _VOLUME_ABOVE_AVG_RATIO
+    elif volume and volume > 0:
+        # No average available — check against recent candle volumes
+        recent_vols = [c.get("volume", 0) for c in candles[-10:] if c.get("volume", 0) > 0]
+        if recent_vols:
+            avg_recent = sum(recent_vols) / len(recent_vols)
+            if avg_recent > 0:
+                vol_ratio = volume / avg_recent
+                volume_confirmed = vol_ratio >= _VOLUME_ABOVE_AVG_RATIO
+
+    # ── Candle strength check ──
+    body_strong = curr_a["body_ratio"] >= _CONFIRMATION_BODY_RATIO
+    rng = curr_a["range"]
+    close_val = curr_candle.get("close", 0)
+    high_val = curr_candle.get("high", 0)
+    low_val = curr_candle.get("low", 0)
+
+    if rng > 0 and curr_a["is_bullish"]:
+        # Bullish: close should be near the high
+        close_near_high = (high_val - close_val) / rng <= _CLOSE_NEAR_HIGH_PCT
+    elif rng > 0 and not curr_a["is_bullish"]:
+        # Bearish: close should be near the low
+        close_near_high = (close_val - low_val) / rng <= _CLOSE_NEAR_LOW_PCT
+    else:
+        close_near_high = False
+
+    candle_confirmed = body_strong and close_near_high
+
+    overall = volume_confirmed and candle_confirmed
+
+    return {
+        "volume_ratio": round(vol_ratio, 2),
+        "volume_confirmed": volume_confirmed,
+        "body_strong": body_strong,
+        "close_near_extreme": close_near_high,
+        "candle_confirmed": candle_confirmed,
+        "confirmed": overall,
+    }
+
+
+def _compute_vwap_from_candles(candles: List[Dict[str, float]]) -> Optional[float]:
+    """Compute VWAP from candle data: sum(typical_price * volume) / sum(volume)."""
+    total_tpv = 0.0
+    total_vol = 0
+    for c in candles:
+        vol = c.get("volume", 0)
+        if vol <= 0:
+            continue
+        typical = (c.get("high", 0) + c.get("low", 0) + c.get("close", 0)) / 3
+        total_tpv += typical * vol
+        total_vol += vol
+    if total_vol > 0:
+        return total_tpv / total_vol
+    return None
+
+
+def compute_3fa(
+    candles: List[Dict[str, float]],
+    anatomies: List[Dict[str, float]],
+    price: float,
+    pdh: Optional[float],
+    pdl: Optional[float],
+    vwap: Optional[float],
+    volume: Optional[int],
+    avg_volume: Optional[float],
+) -> Dict[str, Any]:
+    """
+    3 Factor Alignment Model — combines Location + Behavior + Confirmation.
+
+    Returns the full 3FA analysis dict including:
+      - location, behavior, confirmation (individual factors)
+      - aligned: bool — all 3 factors confirm
+      - verdict: "BUY" | "SELL" | "NO_TRADE"
+      - reason: human-readable explanation
+      - alignment_score: 0-3 (how many factors pass)
+    """
+    if not candles or not anatomies:
+        return _empty_3fa()
+
+    # Compute VWAP from candles if not provided
+    if vwap is None:
+        vwap = _compute_vwap_from_candles(candles)
+
+    curr = candles[-1]
+    curr_a = anatomies[-1]
+
+    # ── Factor 1: Location ──
+    location = _compute_location(price, pdh, pdl, vwap)
+
+    # ── Factor 2: Behavior ──
+    behavior = _compute_behavior(candles, anatomies, location["zone"], pdh, pdl)
+
+    # ── Factor 3: Confirmation ──
+    confirmation = _compute_confirmation(curr_a, curr, candles, volume, avg_volume)
+
+    # ── Alignment Logic ──
+    score = 0
+    factors_pass = []
+    factors_fail = []
+
+    # Factor 1 passes if location is tradeable (not mid-zone/unknown)
+    if location["tradeable"]:
+        score += 1
+        factors_pass.append("LOCATION")
+    else:
+        factors_fail.append("LOCATION")
+
+    # Factor 2 passes if behavior is ABSORPTION or BREAKOUT (not REJECTION or NONE)
+    if behavior["type"] in ("ABSORPTION", "BREAKOUT"):
+        score += 1
+        factors_pass.append("BEHAVIOR")
+    else:
+        factors_fail.append("BEHAVIOR")
+
+    # Factor 3 passes if both volume and candle confirmed
+    if confirmation["confirmed"]:
+        score += 1
+        factors_pass.append("CONFIRMATION")
+    else:
+        factors_fail.append("CONFIRMATION")
+
+    # ── Verdict ──
+    aligned = score == 3
+    zone = location["zone"]
+
+    if aligned:
+        if zone in ("NEAR_PDH", "ABOVE_PDH") and behavior["type"] == "BREAKOUT":
+            verdict = "BUY"
+            reason = f"All 3 factors aligned — breakout above PDH with volume + strong candle"
+        elif zone in ("NEAR_PDH", "ABOVE_PDH") and behavior["type"] == "ABSORPTION":
+            verdict = "BUY"
+            reason = f"All 3 factors aligned — absorption at PDH, breakout imminent"
+        elif zone in ("NEAR_PDL", "BELOW_PDL") and behavior["type"] == "BREAKOUT":
+            verdict = "SELL"
+            reason = f"All 3 factors aligned — breakdown below PDL with volume + strong candle"
+        elif zone in ("NEAR_PDL", "BELOW_PDL") and behavior["type"] == "ABSORPTION":
+            verdict = "SELL"
+            reason = f"All 3 factors aligned — absorption at PDL, breakdown imminent"
+        else:
+            verdict = "NO_TRADE"
+            reason = "Factors aligned but direction unclear"
+    else:
+        verdict = "NO_TRADE"
+        missing = ", ".join(factors_fail)
+        reason = f"Missing: {missing}" if factors_fail else "Insufficient alignment"
+
+    return {
+        "location": location,
+        "behavior": behavior,
+        "confirmation": confirmation,
+        "alignment_score": score,
+        "factors_pass": factors_pass,
+        "factors_fail": factors_fail,
+        "aligned": aligned,
+        "verdict": verdict,
+        "reason": reason,
+    }
+
+
+def _empty_3fa() -> Dict[str, Any]:
+    return {
+        "location": {
+            "zone": "UNKNOWN", "pdh": None, "pdl": None, "vwap": None,
+            "distance_to_pdh": None, "distance_to_pdl": None,
+            "vwap_position": None, "tradeable": False,
+        },
+        "behavior": {"type": "NONE", "description": "No data", "strength": 0},
+        "confirmation": {
+            "volume_ratio": 0, "volume_confirmed": False,
+            "body_strong": False, "close_near_extreme": False,
+            "candle_confirmed": False, "confirmed": False,
+        },
+        "alignment_score": 0,
+        "factors_pass": [],
+        "factors_fail": ["LOCATION", "BEHAVIOR", "CONFIRMATION"],
+        "aligned": False,
+        "verdict": "NO_TRADE",
+        "reason": "Waiting for data",
     }
 
 
@@ -763,6 +1178,7 @@ class CandleIntelligenceService:
                     "high": market_data.get("high", 0),
                     "low": market_data.get("low", 0),
                     "close": market_data.get("price", market_data.get("close", 0)),
+                    "volume": market_data.get("volume", 0),
                 }
                 if live_candle["open"] > 0 and live_candle["close"] > 0:
                     if parsed and parsed[-1].get("_live"):
@@ -785,6 +1201,44 @@ class CandleIntelligenceService:
             else:
                 result["price"] = parsed[-1]["close"] if parsed else 0
                 result["changePct"] = 0
+
+            # ── 3FA (3 Factor Alignment) ──
+            pdh = None
+            pdl = None
+            vwap = None
+            current_vol = None
+            avg_vol = None
+
+            if market_data and isinstance(market_data, dict):
+                pdh = market_data.get("prev_day_high")
+                pdl = market_data.get("prev_day_low")
+                # VWAP from analysis data if available
+                analysis = market_data.get("analysis")
+                if isinstance(analysis, dict):
+                    indicators = analysis.get("indicators", {})
+                    vwap = indicators.get("vwap")
+                current_vol = market_data.get("volume", 0) or 0
+
+            # Compute average volume from candle history
+            candle_vols = [c.get("volume", 0) for c in parsed if c.get("volume", 0) > 0]
+            if candle_vols:
+                avg_vol = sum(candle_vols) / len(candle_vols)
+
+            # Recompute anatomies for 3FA (candle_engine doesn't expose them)
+            anatomies_for_3fa = [_anatomy(c) for c in parsed] if parsed else []
+
+            tfa_result = compute_3fa(
+                candles=parsed,
+                anatomies=anatomies_for_3fa,
+                price=result["price"],
+                pdh=pdh,
+                pdl=pdl,
+                vwap=vwap,
+                volume=current_vol,
+                avg_volume=avg_vol,
+            )
+            tfa_result["market_active"] = market_status in ("LIVE", "PRE_OPEN", "FREEZE")
+            result["three_factor"] = tfa_result
 
             return result
 

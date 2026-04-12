@@ -7,6 +7,7 @@ import {
   type CandleSignal,
   type CandleStrength,
   type CandleStructure,
+  type ThreeFactorAlignment,
 } from '@/hooks/useCandleIntelligence';
 import SectionTitle from '@/components/SectionTitle';
 
@@ -182,6 +183,224 @@ const TrendContextMini = memo<{ ctx: CandleIntelIndex['trend_context'] }>(({ ctx
   );
 });
 TrendContextMini.displayName = 'TrendContextMini';
+
+// ── 3FA (3 Factor Alignment) Panel ───────────────────────────────────────────
+
+const ZONE_CFG: Record<string, { label: string; color: string; bg: string; icon: string }> = {
+  NEAR_PDH:  { label: 'Near PDH',  color: 'text-emerald-300', bg: 'bg-emerald-500/15', icon: '🔼' },
+  ABOVE_PDH: { label: 'Above PDH', color: 'text-emerald-200', bg: 'bg-emerald-500/20', icon: '🚀' },
+  NEAR_PDL:  { label: 'Near PDL',  color: 'text-red-300',     bg: 'bg-red-500/15',     icon: '🔽' },
+  BELOW_PDL: { label: 'Below PDL', color: 'text-red-200',     bg: 'bg-red-500/20',     icon: '💥' },
+  MID_ZONE:  { label: 'Mid Zone',  color: 'text-amber-400',   bg: 'bg-amber-500/10',   icon: '⏸️' },
+  UNKNOWN:   { label: 'Unknown',   color: 'text-slate-400',   bg: 'bg-slate-500/10',   icon: '❓' },
+};
+
+const BEHAVIOR_CFG: Record<string, { label: string; color: string; bg: string; icon: string }> = {
+  REJECTION:  { label: 'Rejection',  color: 'text-red-400',     bg: 'bg-red-500/15',     icon: '🛑' },
+  ABSORPTION: { label: 'Absorption', color: 'text-blue-300',    bg: 'bg-blue-500/15',    icon: '🧲' },
+  BREAKOUT:   { label: 'Breakout',   color: 'text-emerald-300', bg: 'bg-emerald-500/15', icon: '⚡' },
+  NONE:       { label: 'None',       color: 'text-slate-400',   bg: 'bg-slate-500/10',   icon: '➖' },
+};
+
+const VERDICT_CFG: Record<string, { label: string; color: string; bg: string; border: string; icon: string }> = {
+  BUY:      { label: 'BUY',      color: 'text-emerald-200', bg: 'bg-gradient-to-r from-emerald-600/30 to-emerald-500/20', border: 'border-emerald-400/60', icon: '✅' },
+  SELL:     { label: 'SELL',     color: 'text-red-200',     bg: 'bg-gradient-to-r from-red-600/30 to-red-500/20',         border: 'border-red-400/60',     icon: '🔴' },
+  NO_TRADE: { label: 'NO TRADE', color: 'text-slate-300',   bg: 'bg-gradient-to-r from-slate-700/40 to-slate-600/30',     border: 'border-slate-500/40',   icon: '🚫' },
+};
+
+const ThreeFactorPanel = memo<{ tfa: ThreeFactorAlignment | undefined }>(({ tfa }) => {
+  if (!tfa) return null;
+
+  const { location, behavior, confirmation, alignment_score, verdict, reason, factors_pass, factors_fail } = tfa;
+  const zoneCfg = ZONE_CFG[location.zone] || ZONE_CFG.UNKNOWN;
+  const behCfg = BEHAVIOR_CFG[behavior.type] || BEHAVIOR_CFG.NONE;
+  const verdictCfg = VERDICT_CFG[verdict] || VERDICT_CFG.NO_TRADE;
+  const scoreColor = alignment_score === 3 ? 'text-emerald-300' : alignment_score >= 2 ? 'text-amber-300' : 'text-red-400';
+  const scoreBarColor = alignment_score === 3 ? 'bg-emerald-500' : alignment_score >= 2 ? 'bg-amber-500' : 'bg-red-500';
+
+  // Sharp highlight: ONLY when all 3 factors aligned AND market is active
+  const isMarketActive = tfa.market_active === true;
+  const allAligned = alignment_score === 3 && isMarketActive;
+  const isBuySignal = allAligned && verdict === 'BUY';
+  const isSellSignal = allAligned && verdict === 'SELL';
+
+  // Outer panel border glow — sharp during alignment
+  const panelBorder = isBuySignal
+    ? 'border-emerald-400/80 shadow-[0_0_16px_rgba(16,185,129,0.35)]'
+    : isSellSignal
+      ? 'border-red-400/80 shadow-[0_0_16px_rgba(239,68,68,0.35)]'
+      : 'border-slate-700/40';
+  const panelBg = isBuySignal
+    ? 'bg-gradient-to-br from-emerald-950/40 via-slate-900/60 to-emerald-950/30'
+    : isSellSignal
+      ? 'bg-gradient-to-br from-red-950/40 via-slate-900/60 to-red-950/30'
+      : 'bg-gradient-to-br from-slate-800/50 to-slate-900/40';
+
+  // Factor cell highlight helper — sharp glow on individual factor when aligned + market live
+  const factorCellClass = (factorKey: string) => {
+    const pass = factors_pass.includes(factorKey);
+    if (!allAligned) {
+      // Normal state
+      return pass
+        ? 'border-emerald-500/40 bg-emerald-500/5'
+        : 'border-slate-700/30 bg-slate-800/30';
+    }
+    // All aligned + market active → sharp highlight each factor
+    if (isBuySignal) return 'border-emerald-400/70 bg-emerald-500/20 shadow-[0_0_10px_rgba(16,185,129,0.3)]';
+    if (isSellSignal) return 'border-red-400/70 bg-red-500/20 shadow-[0_0_10px_rgba(239,68,68,0.3)]';
+    return 'border-emerald-500/40 bg-emerald-500/5';
+  };
+
+  // Pass/Fail badge — sharp color when aligned
+  const passBadgeClass = (factorKey: string) => {
+    const pass = factors_pass.includes(factorKey);
+    if (!allAligned) {
+      return pass
+        ? 'bg-emerald-500/20 text-emerald-400'
+        : 'bg-red-500/15 text-red-400';
+    }
+    if (isBuySignal) return 'bg-emerald-500/40 text-emerald-200 font-extrabold';
+    if (isSellSignal) return 'bg-red-500/40 text-red-200 font-extrabold';
+    return 'bg-emerald-500/20 text-emerald-400';
+  };
+
+  return (
+    <div className={`rounded-xl border ${panelBorder} ${panelBg} p-2.5 mt-2 transition-all duration-500`}>
+      {/* Header */}
+      <div className="flex items-center justify-between mb-2">
+        <div className="flex items-center gap-1.5">
+          <span className="text-xs">🔥</span>
+          <span className={`text-[10px] font-extrabold tracking-wide ${allAligned ? (isBuySignal ? 'text-emerald-200' : isSellSignal ? 'text-red-200' : 'text-white') : 'text-white'}`}>3FA MODEL</span>
+          <span className="text-[8px] text-slate-500 font-medium">3 Factor Alignment</span>
+          {allAligned && (
+            <span className={`ml-1 px-1.5 py-0.5 rounded text-[7px] font-extrabold animate-pulse ${isBuySignal ? 'bg-emerald-500/30 text-emerald-200 border border-emerald-400/50' : 'bg-red-500/30 text-red-200 border border-red-400/50'}`}>
+              ALL ALIGNED
+            </span>
+          )}
+        </div>
+        <div className="flex items-center gap-1">
+          {[0, 1, 2].map(i => (
+            <div key={i} className={`w-2.5 h-2.5 rounded-full transition-all duration-500 ${i < alignment_score
+              ? allAligned
+                ? (isBuySignal ? 'bg-emerald-400 shadow-[0_0_6px_rgba(16,185,129,0.6)]' : isSellSignal ? 'bg-red-400 shadow-[0_0_6px_rgba(239,68,68,0.6)]' : scoreBarColor)
+                : scoreBarColor
+              : 'bg-slate-700/60'
+            }`} />
+          ))}
+          <span className={`text-[10px] font-mono font-bold ml-1 ${allAligned ? (isBuySignal ? 'text-emerald-200' : 'text-red-200') : scoreColor}`}>{alignment_score}/3</span>
+        </div>
+      </div>
+
+      {/* 3 Factor Grid */}
+      <div className="grid grid-cols-3 gap-1.5 mb-2">
+        {/* Factor 1: Location */}
+        <div className={`rounded-lg border p-1.5 transition-all duration-500 ${factorCellClass('LOCATION')}`}>
+          <div className="flex items-center gap-0.5 mb-1">
+            <span className="text-[8px]">{zoneCfg.icon}</span>
+            <span className={`text-[7px] font-bold ${allAligned ? (isBuySignal ? 'text-emerald-300' : isSellSignal ? 'text-red-300' : 'text-slate-400') : 'text-slate-400'}`}>LOCATION</span>
+          </div>
+          <span className={`text-[9px] font-bold block ${allAligned ? (isBuySignal ? 'text-emerald-200' : isSellSignal ? 'text-red-200' : zoneCfg.color) : zoneCfg.color}`}>{zoneCfg.label}</span>
+          {location.vwap_position && (
+            <span className={`text-[7px] block ${allAligned ? (isBuySignal ? 'text-emerald-400/80' : 'text-red-400/80') : 'text-slate-500'}`}>VWAP: {location.vwap_position}</span>
+          )}
+          {location.pdh != null && (
+            <span className="text-[7px] text-slate-600 block">PDH: {location.pdh.toLocaleString('en-IN')}</span>
+          )}
+          {location.pdl != null && (
+            <span className="text-[7px] text-slate-600 block">PDL: {location.pdl.toLocaleString('en-IN')}</span>
+          )}
+          <div className="mt-1">
+            <span className={`inline-block px-1 py-0.5 rounded text-[6px] font-bold ${passBadgeClass('LOCATION')}`}>
+              {factors_pass.includes('LOCATION') ? '✔ PASS' : '✘ FAIL'}
+            </span>
+          </div>
+        </div>
+
+        {/* Factor 2: Behavior */}
+        <div className={`rounded-lg border p-1.5 transition-all duration-500 ${factorCellClass('BEHAVIOR')}`}>
+          <div className="flex items-center gap-0.5 mb-1">
+            <span className="text-[8px]">{behCfg.icon}</span>
+            <span className={`text-[7px] font-bold ${allAligned ? (isBuySignal ? 'text-emerald-300' : isSellSignal ? 'text-red-300' : 'text-slate-400') : 'text-slate-400'}`}>BEHAVIOR</span>
+          </div>
+          <span className={`text-[9px] font-bold block ${allAligned ? (isBuySignal ? 'text-emerald-200' : isSellSignal ? 'text-red-200' : behCfg.color) : behCfg.color}`}>{behCfg.label}</span>
+          <span className={`text-[7px] block truncate ${allAligned ? (isBuySignal ? 'text-emerald-400/70' : 'text-red-400/70') : 'text-slate-500'}`} title={behavior.description}>{behavior.description}</span>
+          {behavior.strength > 0 && (
+            <div className="mt-0.5">
+              <div className="h-1 bg-slate-700/40 rounded-full overflow-hidden">
+                <div className={`h-full rounded-full transition-all duration-500 ${allAligned
+                  ? (isBuySignal ? 'bg-emerald-400' : 'bg-red-400')
+                  : (behavior.type === 'BREAKOUT' ? 'bg-emerald-500' : behavior.type === 'ABSORPTION' ? 'bg-blue-500' : 'bg-red-500')
+                }`} style={{ width: `${behavior.strength}%` }} />
+              </div>
+            </div>
+          )}
+          <div className="mt-1">
+            <span className={`inline-block px-1 py-0.5 rounded text-[6px] font-bold ${passBadgeClass('BEHAVIOR')}`}>
+              {factors_pass.includes('BEHAVIOR') ? '✔ PASS' : '✘ FAIL'}
+            </span>
+          </div>
+        </div>
+
+        {/* Factor 3: Confirmation */}
+        <div className={`rounded-lg border p-1.5 transition-all duration-500 ${factorCellClass('CONFIRMATION')}`}>
+          <div className="flex items-center gap-0.5 mb-1">
+            <span className="text-[8px]">📊</span>
+            <span className={`text-[7px] font-bold ${allAligned ? (isBuySignal ? 'text-emerald-300' : isSellSignal ? 'text-red-300' : 'text-slate-400') : 'text-slate-400'}`}>CONFIRM</span>
+          </div>
+          <div className="space-y-0.5">
+            <div className="flex items-center gap-0.5">
+              <span className={`text-[7px] ${confirmation.volume_confirmed ? (allAligned && isBuySignal ? 'text-emerald-200' : allAligned && isSellSignal ? 'text-red-200' : 'text-emerald-400') : 'text-red-400'}`}>
+                {confirmation.volume_confirmed ? '✔' : '✘'}
+              </span>
+              <span className={`text-[7px] ${allAligned ? (isBuySignal ? 'text-emerald-300/80' : 'text-red-300/80') : 'text-slate-400'}`}>Vol</span>
+              <span className={`text-[7px] font-mono font-bold ${confirmation.volume_ratio >= 1
+                ? (allAligned && isBuySignal ? 'text-emerald-200' : allAligned && isSellSignal ? 'text-red-200' : 'text-emerald-400')
+                : 'text-slate-500'
+              }`}>
+                {confirmation.volume_ratio.toFixed(1)}x
+              </span>
+            </div>
+            <div className="flex items-center gap-0.5">
+              <span className={`text-[7px] ${confirmation.body_strong ? (allAligned && isBuySignal ? 'text-emerald-200' : allAligned && isSellSignal ? 'text-red-200' : 'text-emerald-400') : 'text-red-400'}`}>
+                {confirmation.body_strong ? '✔' : '✘'}
+              </span>
+              <span className={`text-[7px] ${allAligned ? (isBuySignal ? 'text-emerald-300/80' : 'text-red-300/80') : 'text-slate-400'}`}>Body</span>
+            </div>
+            <div className="flex items-center gap-0.5">
+              <span className={`text-[7px] ${confirmation.close_near_extreme ? (allAligned && isBuySignal ? 'text-emerald-200' : allAligned && isSellSignal ? 'text-red-200' : 'text-emerald-400') : 'text-red-400'}`}>
+                {confirmation.close_near_extreme ? '✔' : '✘'}
+              </span>
+              <span className={`text-[7px] ${allAligned ? (isBuySignal ? 'text-emerald-300/80' : 'text-red-300/80') : 'text-slate-400'}`}>Close</span>
+            </div>
+          </div>
+          <div className="mt-1">
+            <span className={`inline-block px-1 py-0.5 rounded text-[6px] font-bold ${passBadgeClass('CONFIRMATION')}`}>
+              {factors_pass.includes('CONFIRMATION') ? '✔ PASS' : '✘ FAIL'}
+            </span>
+          </div>
+        </div>
+      </div>
+
+      {/* Verdict Banner — strongest glow when aligned */}
+      <div className={`flex items-center justify-between rounded-lg border px-2.5 py-1.5 transition-all duration-500 ${
+        allAligned
+          ? isBuySignal
+            ? 'border-emerald-300/80 bg-gradient-to-r from-emerald-600/40 to-emerald-500/25 shadow-[0_0_20px_rgba(16,185,129,0.4)]'
+            : isSellSignal
+              ? 'border-red-300/80 bg-gradient-to-r from-red-600/40 to-red-500/25 shadow-[0_0_20px_rgba(239,68,68,0.4)]'
+              : `${verdictCfg.border} ${verdictCfg.bg}`
+          : `${verdictCfg.border} ${verdictCfg.bg}`
+      }`}>
+        <div className="flex items-center gap-1.5">
+          <span className={`text-sm ${allAligned ? 'animate-pulse' : ''}`}>{verdictCfg.icon}</span>
+          <span className={`text-xs font-extrabold ${allAligned ? (isBuySignal ? 'text-emerald-100' : isSellSignal ? 'text-red-100' : verdictCfg.color) : verdictCfg.color}`}>{verdictCfg.label}</span>
+        </div>
+        <span className={`text-[8px] max-w-[60%] text-right ${allAligned ? (isBuySignal ? 'text-emerald-300/80' : 'text-red-300/80') : 'text-slate-400'}`}>{reason}</span>
+      </div>
+    </div>
+  );
+});
+ThreeFactorPanel.displayName = 'ThreeFactorPanel';
 
 // ── Single Timeframe Candle Column ──────────────────────────────────────────
 // Compact vertical panel showing ONE timeframe's live candle + signal + metrics.
@@ -460,6 +679,9 @@ const CandleIntelCard = memo<{ data: CandleIntelIndex | null; name: string }>(({
 
       {/* ── Trend Context (5M) ── */}
       <TrendContextMini ctx={primary.trend_context} />
+
+      {/* ── 3FA: 3 Factor Alignment Model ── */}
+      <ThreeFactorPanel tfa={primary.three_factor} />
     </div>
   );
 });
