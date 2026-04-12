@@ -18,16 +18,15 @@
       "is_bullish": true
     },
     "trend_context": {
-      "direction": "STRONG_BULLISH",
-      "bullish_count": 4,
-      "bearish_count": 1,
-      "avg_body_ratio": 0.421,
-      "candles_analyzed": 5
+      "direction": "NEUTRAL",
+      "bullish_count": 0,
+      "bearish_count": 0,
+      "avg_body_ratio": 0
     },
     "symbol": "NIFTY",
     "timeframe": "5m",
     "dataSource": "MARKET_CLOSED",
-    "timestamp": "2026-04-12T19:57:53.443633+05:30",
+    "timestamp": "2026-04-12T21:13:45.638247+05:30",
     "price": 24053.6,
     "changePct": 1.17,
     "three_factor": {
@@ -95,7 +94,7 @@
         "symbol": "NIFTY",
         "timeframe": "3m",
         "dataSource": "MARKET_CLOSED",
-        "timestamp": "2026-04-12T19:57:53.443382+05:30",
+        "timestamp": "2026-04-12T21:13:45.638131+05:30",
         "price": 24053.6,
         "changePct": 1.17,
         "three_factor": {
@@ -155,16 +154,15 @@
           "is_bullish": true
         },
         "trend_context": {
-          "direction": "STRONG_BULLISH",
-          "bullish_count": 4,
-          "bearish_count": 1,
-          "avg_body_ratio": 0.421,
-          "candles_analyzed": 5
+          "direction": "NEUTRAL",
+          "bullish_count": 0,
+          "bearish_count": 0,
+          "avg_body_ratio": 0
         },
         "symbol": "NIFTY",
         "timeframe": "5m",
         "dataSource": "MARKET_CLOSED",
-        "timestamp": "2026-04-12T19:57:53.443633+05:30",
+        "timestamp": "2026-04-12T21:13:45.638247+05:30",
         "price": 24053.6,
         "changePct": 1.17,
         "three_factor": {
@@ -232,7 +230,7 @@
         "symbol": "NIFTY",
         "timeframe": "15m",
         "dataSource": "MARKET_CLOSED",
-        "timestamp": "2026-04-12T19:57:53.443690+05:30",
+        "timestamp": "2026-04-12T21:13:45.638386+05:30",
         "price": 24053.6,
         "changePct": 1.17,
         "three_factor": {
@@ -294,16 +292,15 @@
       "is_bullish": true
     },
     "trend_context": {
-      "direction": "BULLISH",
-      "bullish_count": 3,
-      "bearish_count": 2,
-      "avg_body_ratio": 0.425,
-      "candles_analyzed": 5
+      "direction": "NEUTRAL",
+      "bullish_count": 0,
+      "bearish_count": 0,
+      "avg_body_ratio": 0
     },
     "symbol": "BANKNIFTY",
     "timeframe": "5m",
     "dataSource": "MARKET_CLOSED",
-    "timestamp": "2026-04-12T19:57:53.443944+05:30",
+    "timestamp": "2026-04-12T21:13:45.638679+05:30",
     "price": 55919.5,
     "changePct": 2.0,
     "three_factor": {
@@ -371,7 +368,7 @@
         "symbol": "BANKNIFTY",
         "timeframe": "3m",
         "dataSource": "MARKET_CLOSED",
-        "timestamp": "2026-04-12T19:57:53.443730+05:30",
+        "timestamp": "2026-04-12T21:13:45.638543+05:30",
         "price": 55919.5,
         "changePct": 2.0,
         "three_factor": {
@@ -431,16 +428,15 @@
           "is_bullish": true
         },
         "trend_context": {
-          "direction": "BULLISH",
-          "bullish_count": 3,
-          "bearish_count": 2,
-          "avg_body_ratio": 0.425,
-          "candles_analyzed": 5
+          "direction": "NEUTRAL",
+          "bullish_count": 0,
+          "bearish_count": 0,
+          "avg_body_ratio": 0
         },
         "symbol": "BANKNIFTY",
         "timeframe": "5m",
         "dataSource": "MARKET_CLOSED",
-        "timestamp": "2026-04-12T19:57:53.443944+05:30",
+        "timestamp": "2026-04-12T21:13:45.638679+05:30",
         "price": 55919.5,
         "changePct": 2.0,
         "three_factor": {
@@ -508,7 +504,7 @@
         "symbol": "BANKNIFTY",
         "timeframe": "15m",
         "dataSource": "MARKET_CLOSED",
-        "timestamp": "2026-04-12T19:57:53.443991+05:30",
+        "timestamp": "2026-04-12T21:13:45.638765+05:30",
         "price": 55919.5,
         "changePct": 2.0,
         "three_factor": {
@@ -570,16 +566,15 @@
       "is_bullish": true
     },
     "trend_context": {
-      "direction": "STRONG_BULLISH",
-      "bullish_count": 4,
-      "bearish_count": 1,
-      "avg_body_ratio": 0.346,
-      "candles_analyzed": 5
+      "direction": "NEUTRAL",
+      "bullish_count": 0,
+      "bearish_count": 0,
+      "avg_body_ratio": 0
     },
     "symbol": "SENSEX",
     "timeframe": "5m",
     "dataSource": "MARKET_CLOSED",
-    "timestamp": "2026-04-12T19:57:53.444206+05:30",
+    "timestamp": "2026-04-12T21:13:45.638906+05:30",
     "price": 77550.17,
     "changePct": 1.2,
     "three_factor": {
@@ -647,7 +642,7 @@
         "symbol": "SENSEX",
         "timeframe": "3m",
         "dataSource": "MARKET_CLOSED",
-        "timestamp": "2026-04-12T19:57:53.444026+05:30",
+        "timestamp": "2026-04-12T21:13:45.638842+05:30",
         "price": 77550.17,
         "changePct": 1.2,
         "three_factor": {
@@ -707,16 +702,15 @@
           "is_bullish": true
         },
         "trend_context": {
-          "direction": "STRONG_BULLISH",
-          "bullish_count": 4,
-          "bearish_count": 1,
-          "avg_body_ratio": 0.346,
-          "candles_analyzed": 5
+          "direction": "NEUTRAL",
+          "bullish_count": 0,
+          "bearish_count": 0,
+          "avg_body_ratio": 0
         },
         "symbol": "SENSEX",
         "timeframe": "5m",
         "dataSource": "MARKET_CLOSED",
-        "timestamp": "2026-04-12T19:57:53.444206+05:30",
+        "timestamp": "2026-04-12T21:13:45.638906+05:30",
         "price": 77550.17,
         "changePct": 1.2,
         "three_factor": {
@@ -784,7 +778,7 @@
         "symbol": "SENSEX",
         "timeframe": "15m",
         "dataSource": "MARKET_CLOSED",
-        "timestamp": "2026-04-12T19:57:53.444251+05:30",
+        "timestamp": "2026-04-12T21:13:45.638973+05:30",
         "price": 77550.17,
         "changePct": 1.2,
         "three_factor": {
