@@ -744,6 +744,10 @@ def _finalize_edge(
 
     Confidence uses signal agreement + magnitude + breadth,
     NOT just abs(raw_score) which produces ~2% when signals cancel.
+
+    OI-profile alignment: When futures_oi shows a clear directional
+    profile (LONG_BUILDUP / SHORT_BUILDUP), add a bias so the composite
+    action does not contradict the OI profile.
     """
     total_score = 0.0
     bull_weight = 0.0
@@ -760,6 +764,15 @@ def _finalize_edge(
                 bull_weight += w * abs(s)
             else:
                 bear_weight += w * abs(s)
+
+    # OI-profile alignment bonus: prevent LONG_BUILDUP + NEUTRAL contradiction
+    fut_oi_sig = signals.get("futures_oi", {})
+    oi_profile = fut_oi_sig.get("extra", {}).get("profile", "NEUTRAL")
+    oi_score = fut_oi_sig.get("score", 0.0)
+    if oi_profile in ("LONG_BUILDUP", "SHORT_BUILDUP") and abs(oi_score) >= 0.30:
+        # Strong directional OI: nudge composite toward the OI direction
+        bias = 0.06 if oi_score > 0 else -0.06
+        total_score += bias
 
     total_score = _clamp(total_score, -1.0, 1.0)
 

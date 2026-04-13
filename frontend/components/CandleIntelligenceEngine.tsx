@@ -199,6 +199,7 @@ const BEHAVIOR_CFG: Record<string, { label: string; color: string; bg: string; i
   REJECTION:  { label: 'Rejection',  color: 'text-red-400',     bg: 'bg-red-500/15',     icon: '🛑' },
   ABSORPTION: { label: 'Absorption', color: 'text-blue-300',    bg: 'bg-blue-500/15',    icon: '🧲' },
   BREAKOUT:   { label: 'Breakout',   color: 'text-emerald-300', bg: 'bg-emerald-500/15', icon: '⚡' },
+  MOMENTUM:   { label: 'Momentum',   color: 'text-amber-300',   bg: 'bg-amber-500/15',   icon: '🚀' },
   NONE:       { label: 'None',       color: 'text-slate-400',   bg: 'bg-slate-500/10',   icon: '➖' },
 };
 
@@ -218,11 +219,12 @@ const ThreeFactorPanel = memo<{ tfa: ThreeFactorAlignment | undefined }>(({ tfa 
   const scoreColor = alignment_score === 3 ? 'text-emerald-300' : alignment_score >= 2 ? 'text-amber-300' : 'text-red-400';
   const scoreBarColor = alignment_score === 3 ? 'bg-emerald-500' : alignment_score >= 2 ? 'bg-amber-500' : 'bg-red-500';
 
-  // Sharp highlight: ONLY when all 3 factors aligned AND market is active
+  // Sharp highlight: when verdict is actionable AND market is active
   const isMarketActive = tfa.market_active === true;
   const allAligned = alignment_score === 3 && isMarketActive;
-  const isBuySignal = allAligned && verdict === 'BUY';
-  const isSellSignal = allAligned && verdict === 'SELL';
+  const hasVerdict = verdict !== 'NO_TRADE' && isMarketActive;
+  const isBuySignal = hasVerdict && verdict === 'BUY';
+  const isSellSignal = hasVerdict && verdict === 'SELL';
 
   // Outer panel border glow — sharp during alignment
   const panelBorder = isBuySignal
@@ -236,32 +238,32 @@ const ThreeFactorPanel = memo<{ tfa: ThreeFactorAlignment | undefined }>(({ tfa 
       ? 'bg-gradient-to-br from-red-950/40 via-slate-900/60 to-red-950/30'
       : 'bg-gradient-to-br from-slate-800/50 to-slate-900/40';
 
-  // Factor cell highlight helper — sharp glow on individual factor when aligned + market live
+  // Factor cell highlight helper — sharp glow on individual factor when verdict active + market live
   const factorCellClass = (factorKey: string) => {
     const pass = factors_pass.includes(factorKey);
-    if (!allAligned) {
+    if (!hasVerdict) {
       // Normal state
       return pass
         ? 'border-emerald-500/40 bg-emerald-500/5'
         : 'border-slate-700/30 bg-slate-800/30';
     }
-    // All aligned + market active → sharp highlight each factor
-    if (isBuySignal) return 'border-emerald-400/70 bg-emerald-500/20 shadow-[0_0_10px_rgba(16,185,129,0.3)]';
-    if (isSellSignal) return 'border-red-400/70 bg-red-500/20 shadow-[0_0_10px_rgba(239,68,68,0.3)]';
-    return 'border-emerald-500/40 bg-emerald-500/5';
+    // Active verdict → sharp highlight each factor
+    if (isBuySignal) return pass ? 'border-emerald-400/70 bg-emerald-500/20 shadow-[0_0_10px_rgba(16,185,129,0.3)]' : 'border-slate-700/30 bg-slate-800/30';
+    if (isSellSignal) return pass ? 'border-red-400/70 bg-red-500/20 shadow-[0_0_10px_rgba(239,68,68,0.3)]' : 'border-slate-700/30 bg-slate-800/30';
+    return pass ? 'border-emerald-500/40 bg-emerald-500/5' : 'border-slate-700/30 bg-slate-800/30';
   };
 
-  // Pass/Fail badge — sharp color when aligned
+  // Pass/Fail badge — sharp color when verdict active
   const passBadgeClass = (factorKey: string) => {
     const pass = factors_pass.includes(factorKey);
-    if (!allAligned) {
+    if (!hasVerdict) {
       return pass
         ? 'bg-emerald-500/20 text-emerald-400'
         : 'bg-red-500/15 text-red-400';
     }
-    if (isBuySignal) return 'bg-emerald-500/40 text-emerald-200 font-extrabold';
-    if (isSellSignal) return 'bg-red-500/40 text-red-200 font-extrabold';
-    return 'bg-emerald-500/20 text-emerald-400';
+    if (pass && isBuySignal) return 'bg-emerald-500/40 text-emerald-200 font-extrabold';
+    if (pass && isSellSignal) return 'bg-red-500/40 text-red-200 font-extrabold';
+    return pass ? 'bg-emerald-500/20 text-emerald-400' : 'bg-red-500/15 text-red-400';
   };
 
   return (
@@ -275,6 +277,11 @@ const ThreeFactorPanel = memo<{ tfa: ThreeFactorAlignment | undefined }>(({ tfa 
           {allAligned && (
             <span className={`ml-1 px-1.5 py-0.5 rounded text-[7px] font-extrabold animate-pulse ${isBuySignal ? 'bg-emerald-500/30 text-emerald-200 border border-emerald-400/50' : 'bg-red-500/30 text-red-200 border border-red-400/50'}`}>
               ALL ALIGNED
+            </span>
+          )}
+          {!allAligned && hasVerdict && (
+            <span className={`ml-1 px-1.5 py-0.5 rounded text-[7px] font-extrabold ${isBuySignal ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-400/30' : 'bg-red-500/20 text-red-300 border border-red-400/30'}`}>
+              {alignment_score}/3 ALIGNED
             </span>
           )}
         </div>

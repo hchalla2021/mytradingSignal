@@ -714,12 +714,38 @@ def _compute_behavior(
             description = f"Strong bullish close above PDH ({pdh:.0f})"
             strength = min(100, int(curr_a["body_ratio"] * 100) + 20)
 
+        # ── Check MOMENTUM above PDH (continuation after breakout) ──
+        elif price > pdh and len(candles) >= 2:
+            recent_a = anatomies[-min(3, len(anatomies)):]
+            recent_bull = sum(1 for a in recent_a if a["is_bullish"])
+            recent_bear = sum(1 for a in recent_a if not a["is_bullish"])
+            avg_body = sum(a["body_ratio"] for a in recent_a) / len(recent_a) if recent_a else 0
+            if recent_bull >= 2 and curr_a["is_bullish"] and avg_body >= 0.30:
+                behavior_type = "MOMENTUM"
+                description = f"Bullish momentum above PDH ({pdh:.0f})"
+                strength = min(90, int(avg_body * 100) + 15)
+            elif recent_bear >= 2 and not curr_a["is_bullish"] and avg_body >= 0.30:
+                behavior_type = "MOMENTUM"
+                description = f"Bearish pullback from above PDH ({pdh:.0f})"
+                strength = min(90, int(avg_body * 100) + 15)
+            elif curr_a["body_ratio"] >= 0.40:
+                if curr_a["is_bullish"]:
+                    behavior_type = "MOMENTUM"
+                    description = f"Bullish continuation above PDH ({pdh:.0f})"
+                    strength = min(85, int(curr_a["body_ratio"] * 100) + 10)
+                else:
+                    behavior_type = "MOMENTUM"
+                    description = f"Bearish pullback above PDH ({pdh:.0f})"
+                    strength = min(85, int(curr_a["body_ratio"] * 100) + 10)
+
         # ── Check ABSORPTION near PDH ──
-        elif len(candles) >= 3:
+        if behavior_type == "NONE" and len(candles) >= 3:
             recent_a = anatomies[-3:]
             small_bodies = sum(1 for a in recent_a if a["body_ratio"] < _ABSORPTION_BODY_MAX)
+            # Wider proximity for ABOVE_PDH — already broken through
+            prox = _LOCATION_PROXIMITY_PCT * (4 if location_zone == "ABOVE_PDH" else 2)
             holding_near = all(
-                abs(c.get("close", 0) - pdh) / pdh < _LOCATION_PROXIMITY_PCT * 2
+                abs(c.get("close", 0) - pdh) / pdh < prox
                 for c in candles[-3:]
             ) if pdh > 0 else False
             if small_bodies >= 2 and holding_near:
@@ -729,10 +755,24 @@ def _compute_behavior(
 
         # ── Check REJECTION from PDH ──
         if behavior_type == "NONE":
-            if curr_a["upper_wick_ratio"] > 0.40 and not curr_a["is_bullish"]:
+            if curr_a["upper_wick_ratio"] > 0.35 and not curr_a["is_bullish"]:
                 behavior_type = "REJECTION"
                 description = f"Wick rejection from PDH ({pdh:.0f}) — sellers strong"
                 strength = min(90, int(curr_a["upper_wick_ratio"] * 100) + 10)
+            elif not curr_a["is_bullish"] and curr_a["body_ratio"] >= 0.50:
+                behavior_type = "REJECTION"
+                description = f"Bearish reversal near PDH ({pdh:.0f})"
+                strength = min(80, int(curr_a["body_ratio"] * 100))
+            # Check lower wick bounce (bullish defense at PDH area)  
+            elif curr_a["lower_wick_ratio"] > 0.35 and curr_a["is_bullish"]:
+                behavior_type = "REJECTION"
+                description = f"Buyers defending near PDH ({pdh:.0f})"
+                strength = min(80, int(curr_a["lower_wick_ratio"] * 100) + 5)
+            # Indecision candle near level = absorption-like
+            elif curr_a["body_ratio"] < 0.20 and len(candles) >= 2:
+                behavior_type = "ABSORPTION"
+                description = f"Indecision near PDH ({pdh:.0f}) — waiting for direction"
+                strength = min(50, 30 + int((1 - curr_a["body_ratio"]) * 30))
 
     elif is_near_pdl and pdl and pdl > 0:
         # ── Check BREAKOUT below PDL (breakdown) ──
@@ -743,12 +783,40 @@ def _compute_behavior(
             description = f"Strong bearish close below PDL ({pdl:.0f})"
             strength = min(100, int(curr_a["body_ratio"] * 100) + 20)
 
+        # ── Check MOMENTUM below PDL (bearish continuation or bullish bounce) ──
+        elif price < pdl and len(candles) >= 2:
+            recent_a = anatomies[-min(3, len(anatomies)):]
+            recent_bear = sum(1 for a in recent_a if not a["is_bullish"])
+            recent_bull = sum(1 for a in recent_a if a["is_bullish"])
+            avg_body = sum(a["body_ratio"] for a in recent_a) / len(recent_a) if recent_a else 0
+            # Accept momentum if avg body across recent candles is decent (not just current)
+            if recent_bear >= 2 and not curr_a["is_bullish"] and avg_body >= 0.30:
+                behavior_type = "MOMENTUM"
+                description = f"Bearish momentum below PDL ({pdl:.0f})"
+                strength = min(90, int(avg_body * 100) + 15)
+            elif recent_bull >= 2 and curr_a["is_bullish"] and avg_body >= 0.30:
+                behavior_type = "MOMENTUM"
+                description = f"Bullish bounce from below PDL ({pdl:.0f})"
+                strength = min(90, int(avg_body * 100) + 15)
+            # Single strong candle also qualifies
+            elif curr_a["body_ratio"] >= 0.40:
+                if curr_a["is_bullish"]:
+                    behavior_type = "MOMENTUM"
+                    description = f"Bullish momentum below PDL ({pdl:.0f})"
+                    strength = min(85, int(curr_a["body_ratio"] * 100) + 10)
+                else:
+                    behavior_type = "MOMENTUM"
+                    description = f"Bearish continuation below PDL ({pdl:.0f})"
+                    strength = min(85, int(curr_a["body_ratio"] * 100) + 10)
+
         # ── Check ABSORPTION near PDL (bounce building) ──
-        elif len(candles) >= 3:
+        if behavior_type == "NONE" and len(candles) >= 3:
             recent_a = anatomies[-3:]
             small_bodies = sum(1 for a in recent_a if a["body_ratio"] < _ABSORPTION_BODY_MAX)
+            # Wider proximity for BELOW_PDL — already broken through
+            prox = _LOCATION_PROXIMITY_PCT * (4 if location_zone == "BELOW_PDL" else 2)
             holding_near = all(
-                abs(c.get("close", 0) - pdl) / pdl < _LOCATION_PROXIMITY_PCT * 2
+                abs(c.get("close", 0) - pdl) / pdl < prox
                 for c in candles[-3:]
             ) if pdl > 0 else False
             if small_bodies >= 2 and holding_near:
@@ -758,10 +826,24 @@ def _compute_behavior(
 
         # ── Check REJECTION from PDL (bounce) ──
         if behavior_type == "NONE":
-            if curr_a["lower_wick_ratio"] > 0.40 and curr_a["is_bullish"]:
+            if curr_a["lower_wick_ratio"] > 0.35 and curr_a["is_bullish"]:
                 behavior_type = "REJECTION"
                 description = f"Wick rejection from PDL ({pdl:.0f}) — buyers strong"
                 strength = min(90, int(curr_a["lower_wick_ratio"] * 100) + 10)
+            elif curr_a["is_bullish"] and curr_a["body_ratio"] >= 0.50:
+                behavior_type = "REJECTION"
+                description = f"Bullish reversal near PDL ({pdl:.0f})"
+                strength = min(80, int(curr_a["body_ratio"] * 100))
+            # Check upper wick rejection (bearish push down from PDL area)
+            elif curr_a["upper_wick_ratio"] > 0.35 and not curr_a["is_bullish"]:
+                behavior_type = "REJECTION"
+                description = f"Rejection below PDL ({pdl:.0f}) — sellers in control"
+                strength = min(80, int(curr_a["upper_wick_ratio"] * 100) + 5)
+            # Indecision candles near a level = absorption-like (small bodies holding)
+            elif curr_a["body_ratio"] < 0.20 and len(candles) >= 2:
+                behavior_type = "ABSORPTION"
+                description = f"Indecision near PDL ({pdl:.0f}) — waiting for direction"
+                strength = min(50, 30 + int((1 - curr_a["body_ratio"]) * 30))
 
     return {
         "type": behavior_type,
@@ -898,15 +980,29 @@ def compute_3fa(
     else:
         factors_fail.append("LOCATION")
 
-    # Factor 2 passes if behavior is ABSORPTION or BREAKOUT (not REJECTION or NONE)
-    if behavior["type"] in ("ABSORPTION", "BREAKOUT"):
+    # Factor 2 passes if behavior is actionable (not NONE)
+    _btype = behavior["type"]
+    if _btype in ("ABSORPTION", "BREAKOUT", "REJECTION", "MOMENTUM"):
         score += 1
         factors_pass.append("BEHAVIOR")
     else:
         factors_fail.append("BEHAVIOR")
 
-    # Factor 3 passes if both volume and candle confirmed
-    if confirmation["confirmed"]:
+    # Factor 3 passes if candle confirmed OR volume confirmed with decent body
+    # For cash indices (no volume data), use relaxed candle-only confirmation
+    _cc = confirmation["confirmed"]
+    _ccc = confirmation["candle_confirmed"]
+    _vc = confirmation["volume_confirmed"]
+    _br = curr_a["body_ratio"]
+    _no_vol = confirmation["volume_ratio"] == 0  # No volume data available
+    if _cc:
+        score += 1
+        factors_pass.append("CONFIRMATION")
+    elif _ccc or (_vc and _br >= 0.35):
+        score += 1
+        factors_pass.append("CONFIRMATION")
+    elif _no_vol and (_br >= 0.30 or confirmation["close_near_extreme"]):
+        # Cash index fallback: no volume data available, accept body or close position
         score += 1
         factors_pass.append("CONFIRMATION")
     else:
@@ -917,21 +1013,83 @@ def compute_3fa(
     zone = location["zone"]
 
     if aligned:
-        if zone in ("NEAR_PDH", "ABOVE_PDH") and behavior["type"] == "BREAKOUT":
-            verdict = "BUY"
-            reason = f"All 3 factors aligned — breakout above PDH with volume + strong candle"
-        elif zone in ("NEAR_PDH", "ABOVE_PDH") and behavior["type"] == "ABSORPTION":
-            verdict = "BUY"
-            reason = f"All 3 factors aligned — absorption at PDH, breakout imminent"
-        elif zone in ("NEAR_PDL", "BELOW_PDL") and behavior["type"] == "BREAKOUT":
-            verdict = "SELL"
-            reason = f"All 3 factors aligned — breakdown below PDL with volume + strong candle"
-        elif zone in ("NEAR_PDL", "BELOW_PDL") and behavior["type"] == "ABSORPTION":
-            verdict = "SELL"
-            reason = f"All 3 factors aligned — absorption at PDL, breakdown imminent"
+        btype = behavior["type"]
+        if zone in ("NEAR_PDH", "ABOVE_PDH"):
+            if btype == "BREAKOUT" or btype == "MOMENTUM":
+                verdict = "BUY"
+                reason = f"All aligned — bullish {btype.lower()} above PDH"
+            elif btype == "ABSORPTION":
+                verdict = "BUY"
+                reason = f"All aligned — absorption at PDH, breakout imminent"
+            elif btype == "REJECTION":
+                verdict = "SELL"
+                reason = f"All aligned — rejection from PDH, reversal likely"
+            else:
+                verdict = "NO_TRADE"
+                reason = "Factors aligned but direction unclear"
+        elif zone in ("NEAR_PDL", "BELOW_PDL"):
+            if btype == "BREAKOUT":
+                verdict = "SELL"
+                reason = f"All aligned — breakdown below PDL"
+            elif btype == "MOMENTUM":
+                # Momentum below PDL: direction depends on candle
+                if curr_a["is_bullish"]:
+                    verdict = "BUY"
+                    reason = f"All aligned — bullish bounce from below PDL"
+                else:
+                    verdict = "SELL"
+                    reason = f"All aligned — bearish momentum below PDL"
+            elif btype == "ABSORPTION":
+                verdict = "SELL"
+                reason = f"All aligned — absorption at PDL, breakdown imminent"
+            elif btype == "REJECTION":
+                verdict = "BUY"
+                reason = f"All aligned — rejection from PDL, bounce likely"
+            else:
+                verdict = "NO_TRADE"
+                reason = "Factors aligned but direction unclear"
         else:
             verdict = "NO_TRADE"
-            reason = "Factors aligned but direction unclear"
+            reason = "Factors aligned but zone unclear"
+    elif score >= 2:
+        # Partial alignment — show directional bias without full conviction
+        btype = behavior["type"]
+        if zone in ("NEAR_PDH", "ABOVE_PDH") and btype in ("BREAKOUT", "MOMENTUM"):
+            verdict = "BUY"
+            reason = f"2/3 aligned — bullish bias near PDH (missing: {', '.join(factors_fail)})"
+        elif zone in ("NEAR_PDH", "ABOVE_PDH") and btype == "ABSORPTION":
+            verdict = "BUY"
+            reason = f"2/3 aligned — absorption at PDH, breakout likely (missing: {', '.join(factors_fail)})"
+        elif zone in ("NEAR_PDL", "BELOW_PDL") and btype == "BREAKOUT":
+            verdict = "SELL"
+            reason = f"2/3 aligned — bearish bias near PDL (missing: {', '.join(factors_fail)})"
+        elif zone in ("NEAR_PDL", "BELOW_PDL") and btype == "ABSORPTION":
+            verdict = "SELL"
+            reason = f"2/3 aligned — absorption at PDL, breakdown likely (missing: {', '.join(factors_fail)})"
+        elif zone in ("NEAR_PDL", "BELOW_PDL") and btype == "REJECTION":
+            verdict = "BUY"
+            reason = f"2/3 aligned — bounce signal from PDL (missing: {', '.join(factors_fail)})"
+        elif zone in ("NEAR_PDH", "ABOVE_PDH") and btype == "REJECTION":
+            verdict = "SELL"
+            reason = f"2/3 aligned — rejection from PDH (missing: {', '.join(factors_fail)})"
+        elif zone in ("NEAR_PDL", "BELOW_PDL") and btype == "MOMENTUM":
+            if curr_a["is_bullish"]:
+                verdict = "BUY"
+                reason = f"2/3 aligned — bullish bounce below PDL (missing: {', '.join(factors_fail)})"
+            else:
+                verdict = "SELL"
+                reason = f"2/3 aligned — bearish momentum below PDL (missing: {', '.join(factors_fail)})"
+        elif zone in ("NEAR_PDH", "ABOVE_PDH") and btype == "MOMENTUM":
+            if curr_a["is_bullish"]:
+                verdict = "BUY"
+                reason = f"2/3 aligned — bullish momentum near PDH (missing: {', '.join(factors_fail)})"
+            else:
+                verdict = "SELL"
+                reason = f"2/3 aligned — bearish momentum near PDH (missing: {', '.join(factors_fail)})"
+        else:
+            verdict = "NO_TRADE"
+            missing = ", ".join(factors_fail)
+            reason = f"Partial alignment (missing: {missing})"
     else:
         verdict = "NO_TRADE"
         missing = ", ".join(factors_fail)
@@ -1172,19 +1330,41 @@ class CandleIntelligenceService:
             # Get market data (handles TTL + PersistentMarketState fallback)
             market_data = await cache.get_market_data(symbol)
 
-            if market_data and isinstance(market_data, dict):
+            # Read the in-progress live candle for THIS specific timeframe
+            # (built by _update_candle_generic in MarketFeedService)
+            live_key = f"{cache_key_prefix}_live:{symbol}"
+            tf_live_candle = await cache.get(live_key)
+
+            if tf_live_candle and isinstance(tf_live_candle, dict):
+                # Use the timeframe-specific live candle (proper OHLC for this interval)
                 live_candle = {
-                    "open": market_data.get("open", 0),
-                    "high": market_data.get("high", 0),
-                    "low": market_data.get("low", 0),
-                    "close": market_data.get("price", market_data.get("close", 0)),
-                    "volume": market_data.get("volume", 0),
+                    "open": tf_live_candle.get("open", 0),
+                    "high": tf_live_candle.get("high", 0),
+                    "low": tf_live_candle.get("low", 0),
+                    "close": tf_live_candle.get("close", 0),
+                    "volume": tf_live_candle.get("volume", 0),
+                    "_live": True,
                 }
                 if live_candle["open"] > 0 and live_candle["close"] > 0:
                     if parsed and parsed[-1].get("_live"):
                         parsed[-1] = live_candle
                     else:
                         parsed.append(live_candle)
+            elif market_data and isinstance(market_data, dict):
+                # Fallback: use current price to update the last candle's close only
+                current_price = market_data.get("price", 0)
+                if current_price > 0 and parsed:
+                    # Don't replace with day OHLC; just update the close of the last candle
+                    parsed[-1] = {**parsed[-1], "close": current_price}
+                elif current_price > 0:
+                    # No candles at all — create a minimal candle from current price
+                    parsed.append({
+                        "open": current_price,
+                        "high": current_price,
+                        "low": current_price,
+                        "close": current_price,
+                        "volume": market_data.get("volume", 0),
+                    })
 
             # Run engine
             result = candle_engine(parsed)

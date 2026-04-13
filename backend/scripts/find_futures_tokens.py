@@ -64,7 +64,7 @@ print("="*60)
 env_path = "../.env"
 if os.path.exists(env_path):
     print("\n✏️ Updating .env file...")
-    with open(env_path, 'r') as f:
+    with open(env_path, 'r', encoding='utf-8') as f:
         lines = f.readlines()
     
     # Remove old future tokens
@@ -76,7 +76,7 @@ if os.path.exists(env_path):
     if banknifty_fut:
         lines.append(f"BANKNIFTY_FUT_TOKEN={banknifty_fut}\n")
     
-    with open(env_path, 'w') as f:
+    with open(env_path, 'w', encoding='utf-8') as f:
         f.writelines(lines)
     
     print("✅ .env file updated!")
