@@ -36,6 +36,7 @@ from routers.ict import http_router as ict_http, ws_router as ict_ws
 from routers.expiry_explosion import http_router as expiry_http, ws_router as expiry_ws
 from routers.market_edge import http_router as edge_http, ws_router as edge_ws
 from routers.candle_intelligence import http_router as candle_intel_http, ws_router as candle_intel_ws
+from routers.market_regime import http_router as regime_http, ws_router as regime_ws
 
 # Windows console fix already applied in config/__init__.py
 
@@ -182,6 +183,14 @@ async def lifespan(app: FastAPI):
             except Exception:
                 pass
 
+        async def start_market_regime():
+            try:
+                from services.market_regime_service import get_market_regime_service
+                await get_market_regime_service().start()
+                print("📊 Market Regime: ON")
+            except Exception:
+                pass
+
         await asyncio.gather(
             start_scheduler(),
             start_oi_broadcaster(),
@@ -191,6 +200,7 @@ async def lifespan(app: FastAPI):
             start_expiry_explosion(),
             start_market_edge(),
             start_candle_intelligence(),
+            start_market_regime(),
         )
         print("🚀 All services READY")
 
@@ -266,6 +276,13 @@ async def lifespan(app: FastAPI):
         await get_candle_intelligence_service().stop()
     except Exception:
         pass
+
+    # Stop Market Regime Service
+    try:
+        from services.market_regime_service import get_market_regime_service
+        await get_market_regime_service().stop()
+    except Exception:
+        pass
     
     # Stop unified auth monitor
     from services.unified_auth_service import unified_auth
@@ -295,14 +312,48 @@ app = FastAPI(
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
-# CORS — Starlette 0.50+ requires explicit origins (not ["*"]) for preflight to work
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=settings.cors_origins_list,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# CORS — custom middleware for reliable localhost support
+_cors_origins = set([
+    "https://mydailytradesignals.com",
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "http://localhost:3001",
+])
+# Also merge any extra origins from config
+for _o in settings.cors_origins_list:
+    _cors_origins.add(_o)
+_cors_origins = list(_cors_origins)
+print(f"🔧 CORS origins loaded: {_cors_origins}")
+
+
+@app.middleware("http")
+async def cors_middleware(request: Request, call_next):
+    origin = request.headers.get("origin")
+    
+    # Handle preflight OPTIONS
+    if request.method == "OPTIONS" and origin:
+        if origin in _cors_origins:
+            return JSONResponse(
+                content="OK",
+                status_code=200,
+                headers={
+                    "Access-Control-Allow-Origin": origin,
+                    "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS, PATCH, HEAD",
+                    "Access-Control-Allow-Headers": request.headers.get("access-control-request-headers", "*"),
+                    "Access-Control-Allow-Credentials": "true",
+                    "Access-Control-Max-Age": "600",
+                },
+            )
+        else:
+            return JSONResponse(content="Disallowed CORS origin", status_code=400)
+    
+    # Handle simple/actual requests
+    response = await call_next(request)
+    if origin and origin in _cors_origins:
+        response.headers["Access-Control-Allow-Origin"] = origin
+        response.headers["Access-Control-Allow-Credentials"] = "true"
+        response.headers["Vary"] = "Origin"
+    return response
 
 logger = logging.getLogger("mytradingsignal")
 
@@ -356,6 +407,10 @@ app.include_router(edge_http, prefix="/api", tags=["MarketEdge"])
 # 🕯️ Candle Intelligence Engine
 app.include_router(candle_intel_ws,   prefix="/ws",  tags=["Candle Intelligence"])
 app.include_router(candle_intel_http, prefix="/api", tags=["Candle Intelligence"])
+
+# 📊 Market Regime Intelligence
+app.include_router(regime_ws,   prefix="/ws",  tags=["Market Regime"])
+app.include_router(regime_http, prefix="/api", tags=["Market Regime"])
 
 
 @app.get("/")

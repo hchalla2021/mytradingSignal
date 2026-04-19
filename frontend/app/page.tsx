@@ -91,6 +91,20 @@ const CRTBTSTCard = dynamic(() => import('@/components/CRTBTSTCard'), {
   )
 });
 
+const MarketRegimeIntelligence = dynamic(() => import('@/components/MarketRegimeIntelligence'), {
+  ssr: false,
+  loading: () => (
+    <div className="rounded-2xl border border-blue-500/30 bg-slate-800/30 p-5 animate-pulse">
+      <div className="h-5 w-64 bg-slate-700 rounded mb-4" />
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        {[0, 1, 2].map(i => (
+          <div key={i} className="rounded-2xl bg-slate-700/30 h-80" />
+        ))}
+      </div>
+    </div>
+  )
+});
+
 const ExpiryExplosionZone = dynamic(() => import('@/components/ExpiryExplosionZone'), {
   ssr: false,
   loading: () => (
@@ -874,6 +888,9 @@ export default function Home() {
           />
         </div>
         </div>
+
+        {/* P0: 📊 TODAY'S MARKET REGIME — Trending vs Sideways */}
+        <MarketRegimeIntelligence marketData={marketData} vixData={vixData} />
 
         {/* P1: ⚡ PURE LIQUIDITY INTELLIGENCE */}
         <LiquidityIntelligence />

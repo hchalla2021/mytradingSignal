@@ -212,9 +212,6 @@ class Settings(BaseSettings):
             for dev in dev_origins:
                 if dev not in origins:
                     origins.append(dev)
-        else:
-            # Production: strip localhost origins
-            origins = [o for o in origins if 'localhost' not in o and '127.0.0.1' not in o]
         # Always include configured frontend URL
         if self.frontend_url and self.frontend_url not in origins:
             origins.append(self.frontend_url)
