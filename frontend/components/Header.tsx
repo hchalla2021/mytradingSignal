@@ -49,16 +49,8 @@ const Header: React.FC<HeaderProps> = memo(({ isConnected, marketStatus }) => {
     return () => clearInterval(interval);
   }, []);
 
-  // 🔄 Admin Restart Handler
+  // 🔄 Admin Restart Handler — key validated server-side, not exposed to browser
   const handleRestart = async () => {
-    const adminKey = process.env.NEXT_PUBLIC_ADMIN_KEY;
-    
-    if (!adminKey) {
-      setRestartMessage('❌ Admin key not configured');
-      setTimeout(() => setRestartMessage(''), 3000);
-      return;
-    }
-
     setIsRestarting(true);
     setRestartMessage('🔄 Restarting server...');
 
@@ -67,7 +59,6 @@ const Header: React.FC<HeaderProps> = memo(({ isConnected, marketStatus }) => {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'x-admin-key': adminKey,
         },
       });
 

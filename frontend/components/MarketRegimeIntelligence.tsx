@@ -5,6 +5,8 @@ import { useMarketRegime, type RegimeIndex, type RegimeType, type TrendStrength,
 import type { MarketData } from '@/hooks/useMarketSocket';
 import type { VIXData } from '@/hooks/useIndiaVIX';
 import SectionTitle from '@/components/SectionTitle';
+import StrikeIntelligence from '@/components/StrikeIntelligence';
+import ChartIntelligence from '@/components/ChartIntelligence';
 
 // ── Regime visual config ────────────────────────────────────────────────────
 
@@ -392,6 +394,12 @@ const MarketRegimeIntelligence = memo<{
         <RegimeCard data={regimeData.BANKNIFTY} name="BANK NIFTY" liveTick={liveTickMap.BANKNIFTY} liveVix={vixData} />
         <RegimeCard data={regimeData.SENSEX} name="SENSEX" liveTick={liveTickMap.SENSEX} liveVix={vixData} />
       </div>
+
+      {/* 🎯 Strike Intelligence — ATM ± 5, CE/PE, Volume/OI/Liquidity Scoring */}
+      <StrikeIntelligence />
+
+      {/* 📈 Real-Time Chart Intelligence — SMC, FVG, S/R, PDH/PDL, CDH/CDL */}
+      <ChartIntelligence />
     </div>
   );
 });

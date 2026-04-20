@@ -37,6 +37,8 @@ from routers.expiry_explosion import http_router as expiry_http, ws_router as ex
 from routers.market_edge import http_router as edge_http, ws_router as edge_ws
 from routers.candle_intelligence import http_router as candle_intel_http, ws_router as candle_intel_ws
 from routers.market_regime import http_router as regime_http, ws_router as regime_ws
+from routers.strike_intelligence import http_router as strike_intel_http, ws_router as strike_intel_ws
+from routers.chart_intelligence import http_router as chart_intel_http, ws_router as chart_intel_ws
 
 # Windows console fix already applied in config/__init__.py
 
@@ -191,6 +193,22 @@ async def lifespan(app: FastAPI):
             except Exception:
                 pass
 
+        async def start_strike_intelligence():
+            try:
+                from services.strike_intelligence_service import get_strike_intelligence_service
+                await get_strike_intelligence_service().start()
+                print("🎯 Strike Intelligence: ON")
+            except Exception:
+                pass
+
+        async def start_chart_intelligence():
+            try:
+                from services.chart_intelligence_service import get_chart_intelligence_service
+                await get_chart_intelligence_service().start()
+                print("📈 Chart Intelligence: ON")
+            except Exception:
+                pass
+
         await asyncio.gather(
             start_scheduler(),
             start_oi_broadcaster(),
@@ -201,6 +219,8 @@ async def lifespan(app: FastAPI):
             start_market_edge(),
             start_candle_intelligence(),
             start_market_regime(),
+            start_strike_intelligence(),
+            start_chart_intelligence(),
         )
         print("🚀 All services READY")
 
@@ -281,6 +301,20 @@ async def lifespan(app: FastAPI):
     try:
         from services.market_regime_service import get_market_regime_service
         await get_market_regime_service().stop()
+    except Exception:
+        pass
+
+    # Stop Strike Intelligence Service
+    try:
+        from services.strike_intelligence_service import get_strike_intelligence_service
+        await get_strike_intelligence_service().stop()
+    except Exception:
+        pass
+
+    # Stop Chart Intelligence Service
+    try:
+        from services.chart_intelligence_service import get_chart_intelligence_service
+        await get_chart_intelligence_service().stop()
     except Exception:
         pass
     
@@ -411,6 +445,14 @@ app.include_router(candle_intel_http, prefix="/api", tags=["Candle Intelligence"
 # 📊 Market Regime Intelligence
 app.include_router(regime_ws,   prefix="/ws",  tags=["Market Regime"])
 app.include_router(regime_http, prefix="/api", tags=["Market Regime"])
+
+# 🎯 Strike Intelligence
+app.include_router(strike_intel_ws,   prefix="/ws",  tags=["Strike Intelligence"])
+app.include_router(strike_intel_http, prefix="/api", tags=["Strike Intelligence"])
+
+# 📈 Chart Intelligence
+app.include_router(chart_intel_ws,   prefix="/ws",  tags=["Chart Intelligence"])
+app.include_router(chart_intel_http, prefix="/api", tags=["Chart Intelligence"])
 
 
 @app.get("/")

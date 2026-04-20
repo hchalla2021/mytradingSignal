@@ -13,9 +13,10 @@ from config import get_settings
 settings = get_settings()
 router = APIRouter()
 
-# CSRF state store — maps state token → True (short-lived, in-memory)
+# CSRF state store — maps state token → creation timestamp (short-lived, in-memory)
 _csrf_states: dict[str, float] = {}
 _CSRF_EXPIRY_SECONDS = 300  # 5 minutes
+_CSRF_MAX_STATES = 500      # Cap size to prevent DoS memory exhaustion
 
 
 class LoginRequest(BaseModel):
@@ -46,12 +47,15 @@ async def redirect_to_zerodha():
     """Redirect to Zerodha login page with CSRF state parameter."""
     import time
     state = secrets.token_urlsafe(32)
-    _csrf_states[state] = time.time()
-    # Clean up expired states
     now = time.time()
+    # Clean up expired states
     expired = [k for k, v in _csrf_states.items() if now - v > _CSRF_EXPIRY_SECONDS]
     for k in expired:
         _csrf_states.pop(k, None)
+    # Hard cap: if still too large, reject (DoS protection)
+    if len(_csrf_states) >= _CSRF_MAX_STATES:
+        raise HTTPException(status_code=429, detail="Too many pending login attempts")
+    _csrf_states[state] = now
     login_url = f"{settings.zerodha_api_base_url}/connect/login?v=3&api_key={settings.zerodha_api_key}&state={state}"
     return RedirectResponse(url=login_url)
 
@@ -104,13 +108,11 @@ async def validate_token():
                 "message": "Token expired - Please login again"
             }
         
-        # Other errors - token might still work for WebSocket
+        # Other errors (network timeout, etc.) — token validity unknown
         return {
-            "valid": True,
-            "authenticated": True,
-            "user_id": "user",
-            "user_name": "User",
-            "message": f"Token exists (validation skipped: {error_msg[:50]})"
+            "valid": False,
+            "authenticated": False,
+            "message": "Token validation failed — please login again"
         }
 
 
@@ -318,7 +320,7 @@ async def zerodha_callback(request_token: str = Query(...), status: str = Query(
                         function notifyParent() {{
                             try {{
                                 if (window.opener && !window.opener.closed) {{
-                                    window.opener.postMessage({{ type: 'zerodha-auth-success', userId: '{user_id}', userName: '{user_name}' }}, '*');
+                                    window.opener.postMessage({{ type: 'zerodha-auth-success', userId: '{user_id}', userName: '{user_name}' }}, '{settings.frontend_url}');
                                     console.log('📤 Sent auth-success message to parent');
                                 }}
                             }} catch (e) {{
@@ -386,8 +388,8 @@ async def zerodha_callback(request_token: str = Query(...), status: str = Query(
         print(f"   Traceback:\n{traceback.format_exc()}")
         print(f"\n")
         # Redirect to dashboard with error notification
-        error_msg = str(e).replace(' ', '+')  # URL encode spaces
-        return RedirectResponse(url=f"{settings.frontend_url}/?auth=error&message={error_msg}")
+        # Do NOT leak raw exception text to the redirect URL
+        return RedirectResponse(url=f"{settings.frontend_url}/?auth=error&message=Authentication+failed")
 
 
 def update_env_file(env_path: str, key: str, value: str):

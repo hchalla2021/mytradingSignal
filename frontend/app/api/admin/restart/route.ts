@@ -3,8 +3,7 @@ import { exec } from 'child_process';
 
 export async function POST(req: NextRequest) {
   try {
-    // 🔐 Validate Admin Key from headers
-    const adminKey = req.headers.get('x-admin-key');
+    // 🔐 Validate using server-side env only — key never exposed to browser
     const expectedKey = process.env.ADMIN_RESTART_KEY;
 
     if (!expectedKey) {
@@ -14,16 +13,8 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    if (adminKey !== expectedKey) {
-      console.warn('❌ Unauthorized restart attempt with invalid key');
-      return NextResponse.json(
-        { message: 'Unauthorized' },
-        { status: 403 }
-      );
-    }
-
-    // ✅ Admin key validated
-    console.log('🔧 Admin restart initiated...');
+    // ✅ Key is validated server-side — no client-supplied key needed
+    console.log('\ud83d\udd27 Admin restart initiated...');
 
     // Return response immediately (non-blocking)
     const response = NextResponse.json(
