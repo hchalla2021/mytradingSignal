@@ -143,6 +143,11 @@ def _compute_signal(
       5. Moneyness bias       (10%) — ITM vs OTM preference
 
     Returns signal for CE side and PE side independently.
+
+    CE score > 0 → calls being bought/rising → bullish for market
+    PE score > 0 → puts being bought/rising → bearish for market
+
+    Weights: volume ±30 | price momentum ±30 | OI positioning ±15 | liquidity ±10 | moneyness ±10
     """
     total_oi = ce_oi + pe_oi
     total_vol = ce_volume + pe_volume
@@ -150,90 +155,90 @@ def _compute_signal(
     # ── CE Signal ────────────────────────────────────────────────────────
     ce_score = 0.0
 
-    # 1. Volume dominance (30%)
+    # 1. Volume dominance (±30) — CE volume spike = calls being bought = bullish
     if total_vol > 0:
         ce_vol_ratio = ce_volume / total_vol
-        # If CE volume > 50%, calls are being bought → bullish for CE
         ce_score += (ce_vol_ratio - 0.5) * 2.0 * 30  # -30 to +30
 
-    # 2. OI imbalance (25%)
+    # 2. OI positioning (±15)
+    # High CE OI = heavy call writing = resistance = bearish for CE buyers
     if total_oi > 0:
         ce_oi_ratio = ce_oi / total_oi
-        # High CE OI relative to PE = resistance (bearish for CE buyers)
-        # Low CE OI = room to run (bullish for CE buyers)
-        ce_score += (0.5 - ce_oi_ratio) * 2.0 * 25  # Inverted: less CE OI = bullish
+        ce_score += (0.5 - ce_oi_ratio) * 2.0 * 15  # high CE OI → negative → CE bearish
 
-    # 3. Price momentum (20%)
+    # 3. Price momentum (±30) — most reliable real-time indicator
     if ce_price > 0:
-        ce_pct_change = (ce_change / ce_price) * 100 if ce_price > 0 else 0
-        ce_score += _clamp(ce_pct_change * 4, -20, 20)
+        ce_pct_change = (ce_change / ce_price) * 100
+        ce_score += _clamp(ce_pct_change * 5, -30, 30)
 
-    # 4. Liquidity depth (15%)
+    # 4. Liquidity depth (±10, symmetric — no asymmetric bias)
     if total_vol > 100:
-        liq_score = min(math.log10(max(total_vol, 1)) / 6.0, 1.0)  # Normalize
-        ce_score += liq_score * 15 if ce_volume > pe_volume else -liq_score * 5
+        liq_score = min(math.log10(max(total_vol, 1)) / 6.0, 1.0)
+        ce_score += liq_score * 10 if ce_volume > pe_volume else -liq_score * 10
 
-    # 5. Moneyness (10%) — ITM calls are more actionable
+    # 5. Moneyness (±10) — ITM calls more actionable
     if spot > 0:
         moneyness = (spot - strike) / spot * 100
         if moneyness > 0:  # ITM call
             ce_score += min(moneyness * 2, 10)
-        else:  # OTM call
+        else:              # OTM call
             ce_score += max(moneyness * 1.5, -10)
 
     # ── PE Signal ────────────────────────────────────────────────────────
     pe_score = 0.0
 
-    # 1. Volume dominance (30%)
+    # 1. Volume dominance (±30) — PE volume spike = puts being bought = bearish for market
     if total_vol > 0:
         pe_vol_ratio = pe_volume / total_vol
         pe_score += (pe_vol_ratio - 0.5) * 2.0 * 30
 
-    # 2. OI imbalance (25%)
+    # 2. OI positioning (±15)
+    # CRITICAL: sign is OPPOSITE to CE — high PE OI means more put positioning = bearish market
+    # → PE score should go UP (PE BUY = bearish market), not down
     if total_oi > 0:
         pe_oi_ratio = pe_oi / total_oi
-        pe_score += (0.5 - pe_oi_ratio) * 2.0 * 25
+        pe_score += (pe_oi_ratio - 0.5) * 2.0 * 15  # high PE OI → positive → PE bullish (market bearish)
 
-    # 3. Price momentum (20%)
+    # 3. Price momentum (±30)
     if pe_price > 0:
-        pe_pct_change = (pe_change / pe_price) * 100 if pe_price > 0 else 0
-        pe_score += _clamp(pe_pct_change * 4, -20, 20)
+        pe_pct_change = (pe_change / pe_price) * 100
+        pe_score += _clamp(pe_pct_change * 5, -30, 30)
 
-    # 4. Liquidity depth (15%)
+    # 4. Liquidity depth (±10, symmetric)
     if total_vol > 100:
         liq_score = min(math.log10(max(total_vol, 1)) / 6.0, 1.0)
-        pe_score += liq_score * 15 if pe_volume > ce_volume else -liq_score * 5
+        pe_score += liq_score * 10 if pe_volume > ce_volume else -liq_score * 10
 
-    # 5. Moneyness (10%) — ITM puts are more actionable
+    # 5. Moneyness (±10) — ITM puts more actionable
     if spot > 0:
         moneyness = (strike - spot) / spot * 100
         if moneyness > 0:  # ITM put
             pe_score += min(moneyness * 2, 10)
-        else:  # OTM put
+        else:              # OTM put
             pe_score += max(moneyness * 1.5, -10)
 
     def _score_to_signal(score: float) -> str:
-        if score >= 40:
+        if score >= 42:
             return "STRONG_BUY"
-        elif score >= 15:
+        elif score >= 16:
             return "BUY"
-        elif score <= -40:
+        elif score <= -42:
             return "STRONG_SELL"
-        elif score <= -15:
+        elif score <= -16:
             return "SELL"
         return "NEUTRAL"
 
     def _score_to_pct(score: float) -> Dict[str, float]:
-        """Convert raw score to buy/sell percentage breakdown."""
-        clamped = _clamp(score, -100, 100)
+        """Convert raw score to buy/sell/neutral breakdown."""
+        clamped = _clamp(score, -95, 95)
+        abs_s = abs(clamped)
         if clamped >= 0:
-            buy_pct = min(50 + clamped * 0.5, 100)
-            sell_pct = 100 - buy_pct
+            buy_pct = 50.0 + abs_s * 0.45
+            sell_pct = 50.0 - abs_s * 0.35
         else:
-            sell_pct = min(50 + abs(clamped) * 0.5, 100)
-            buy_pct = 100 - sell_pct
-        neutral_pct = max(0, 30 - abs(clamped) * 0.3)
-        # Normalize
+            sell_pct = 50.0 + abs_s * 0.45
+            buy_pct = 50.0 - abs_s * 0.35
+        neutral_pct = max(0.0, 10.0 - abs_s * 0.1)
         total = buy_pct + sell_pct + neutral_pct
         return {
             "buyPct": round(buy_pct / total * 100, 1),
@@ -284,6 +289,37 @@ def _save_persistent(state: Dict[str, Any]):
         logger.debug("Could not save strike intel state: %s", e)
 
 
+# ── Spot/ATM sync helper ─────────────────────────────────────────────────────
+
+def _apply_spot_to_cached_entry(entry: Dict[str, Any], spot: float, symbol: str) -> Dict[str, Any]:
+    """
+    Given a cached entry (with stale spot/atm/isATM/labels), update it with
+    the current real-time spot price. Only modifies spot, atm, isATM, and
+    strike labels — Volume/OI values stay from the cached session.
+    """
+    step = STRIKE_STEP.get(symbol, 50)
+    new_atm = _get_atm_strike(spot, step)
+    updated = dict(entry)  # shallow copy — don't mutate original
+    updated["spot"] = round(spot, 2)
+    updated["atm"] = new_atm
+    # Re-stamp strike labels and ATM flag
+    new_strikes = []
+    for row in entry.get("strikes", []):
+        r = dict(row)
+        s = r["strike"]
+        diff = s - new_atm
+        r["isATM"] = (s == new_atm)
+        if diff == 0:
+            r["label"] = "ATM"
+        elif diff > 0:
+            r["label"] = f"OTM+{diff // step}"
+        else:
+            r["label"] = f"ITM{diff // step}"
+        new_strikes.append(r)
+    updated["strikes"] = new_strikes
+    return updated
+
+
 # ── Core Service ─────────────────────────────────────────────────────────────
 
 class StrikeIntelligenceService:
@@ -303,7 +339,8 @@ class StrikeIntelligenceService:
         self._instruments_cache: Dict[str, List] = {}
         self._instruments_cache_date: Dict[str, date] = {}
         self._last_save_time: float = 0.0
-        self._cadence_live = 3.0        # Fast updates during market hours
+        self._cadence_live = 1.0        # Broadcast every 1s during market hours
+        self._cadence_fetch = 5.0       # Full Zerodha quote fetch every 5s
         self._cadence_closed = 60.0
         self._heartbeat_interval = 30.0
         self._kite_init_backoff_until: float = 0.0  # Backoff timer for failed init
@@ -661,113 +698,206 @@ class StrikeIntelligenceService:
         data["dataSource"] = "MARKET_CLOSED"
         return data
 
+    # ── Signal recomputation with live spot ──────────────────────────────
+
+    def _recompute_signals_with_spot(self, entry: Dict[str, Any], spot: float, symbol: str) -> Dict[str, Any]:
+        """
+        Recompute per-strike signals using a fresh spot price.
+        OI / volume / price / change are taken from the last Zerodha fetch stored
+        in the entry — only the spot-sensitive components change every second:
+          • moneyness bias (ITM/OTM depth)
+          • ATM recalculation → label + isATM flag
+          • Overall score rebalanced
+        """
+        step = STRIKE_STEP.get(symbol, 50)
+        new_atm = _get_atm_strike(spot, step)
+
+        new_strikes = []
+        for row in entry.get("strikes", []):
+            strike_val = row["strike"]
+            ce = row.get("ce", {})
+            pe = row.get("pe", {})
+
+            signals = _compute_signal(
+                ce_oi=_safe_int(ce.get("oi")),
+                pe_oi=_safe_int(pe.get("oi")),
+                ce_volume=_safe_int(ce.get("volume")),
+                pe_volume=_safe_int(pe.get("volume")),
+                ce_price=_safe_float(ce.get("price")),
+                pe_price=_safe_float(pe.get("price")),
+                ce_change=_safe_float(ce.get("change")),
+                pe_change=_safe_float(pe.get("change")),
+                spot=spot,
+                strike=strike_val,
+            )
+
+            diff = strike_val - new_atm
+            if diff == 0:
+                label = "ATM"
+            elif diff > 0:
+                label = f"OTM+{diff // step}"
+            else:
+                label = f"ITM{diff // step}"
+
+            new_strikes.append({
+                "strike": strike_val,
+                "label": label,
+                "isATM": strike_val == new_atm,
+                "ce": signals["ce"],
+                "pe": signals["pe"],
+            })
+
+        updated = dict(entry)
+        updated["spot"] = round(spot, 2)
+        updated["atm"] = new_atm
+        updated["strikes"] = new_strikes
+        return updated
+
     # ── Main loop ────────────────────────────────────────────────────────
 
     async def _run_loop(self):
         last_heartbeat = 0.0
+        last_fetch_time = 0.0       # Tracks last Zerodha quote API call
         _closed_fetch_done = False  # Only fetch once during CLOSED to seed data
 
         while self._running:
             try:
                 phase = self._get_market_phase()
-                cadence = self._cadence_live if phase == "LIVE" else self._cadence_closed
                 now_ts = time_mod.time()
 
-                # Reset closed fetch flag when market opens
-                if phase == "LIVE":
+                # ── LIVE / PRE_OPEN ───────────────────────────────────────────
+                if phase in ("LIVE", "PRE_OPEN"):
                     _closed_fetch_done = False
 
-                need_fetch = (
-                    phase in ("LIVE", "PRE_OPEN")
-                    or (phase == "CLOSED" and not self._last_snapshot and not _closed_fetch_done)
-                )
+                    # Full Zerodha quote fetch on first iteration and every _cadence_fetch seconds
+                    if (now_ts - last_fetch_time) >= self._cadence_fetch:
+                        self._init_kite()
 
-                if need_fetch:
-                    self._init_kite()
-
-                    # Fetch all symbols in PARALLEL for minimum latency
-                    async def _fetch_one(symbol: str) -> tuple:
-                        try:
-                            spot = self._get_spot_price(symbol)
-                            if spot <= 0:
-                                if symbol in self._last_snapshot:
-                                    entry = {**self._last_snapshot[symbol], "dataSource": "CACHED"}
+                        async def _fetch_one(symbol: str) -> tuple:
+                            try:
+                                spot = self._get_spot_price(symbol)
+                                if spot <= 0:
+                                    return (symbol, None)
+                                raw = await asyncio.to_thread(
+                                    self._fetch_strikes_sync, symbol, spot
+                                )
+                                if raw:
+                                    return (symbol, self._build_symbol_data(symbol, raw))
+                                elif symbol in self._last_snapshot:
+                                    entry = _apply_spot_to_cached_entry(
+                                        self._last_snapshot[symbol], spot, symbol
+                                    )
+                                    entry["dataSource"] = "CACHED"
                                     return (symbol, entry)
                                 return (symbol, None)
-
-                            raw = await asyncio.to_thread(
-                                self._fetch_strikes_sync, symbol, spot
-                            )
-                            if raw:
-                                data = self._build_symbol_data(symbol, raw)
-                                if phase == "CLOSED":
-                                    data["dataSource"] = "MARKET_CLOSED"
-                                return (symbol, data)
-                            elif symbol in self._last_snapshot:
-                                entry = {**self._last_snapshot[symbol], "dataSource": "CACHED"}
-                                return (symbol, entry)
-                            else:
-                                # No real data available — return None, do NOT show fake seed data
-                                logger.debug("No real strike data for %s, skipping seed", symbol)
+                            except Exception as e:
+                                logger.debug("Strike intel fetch error for %s: %s", symbol, e)
                                 return (symbol, None)
 
-                        except Exception as e:
-                            logger.debug("Strike intel error for %s: %s", symbol, e)
-                            if symbol in self._last_snapshot:
-                                entry = {**self._last_snapshot[symbol], "dataSource": "CACHED"}
-                                return (symbol, entry)
-                            return (symbol, None)
+                        results = await asyncio.gather(
+                            *[_fetch_one(sym) for sym in SYMBOLS],
+                            return_exceptions=True,
+                        )
+                        for result in results:
+                            if isinstance(result, Exception):
+                                continue
+                            sym, fresh = result
+                            if fresh is not None:
+                                self._last_snapshot[sym] = fresh
 
-                    results = await asyncio.gather(
-                        *[_fetch_one(sym) for sym in SYMBOLS],
-                        return_exceptions=True,
-                    )
-
-                    snapshot: Dict[str, Any] = {}
-                    for result in results:
-                        if isinstance(result, Exception):
-                            continue
-                        sym, entry = result
-                        if entry is not None:
-                            snapshot[sym] = entry
-
-                    if phase == "CLOSED":
-                        _closed_fetch_done = True
-
-                    if snapshot:
-                        self._last_snapshot = snapshot
-                        await strike_intel_manager.broadcast({
-                            "type": "strike_intel_update",
-                            "data": snapshot,
-                        })
-
-                        # Debounced persist (every 30s)
-                        if now_ts - self._last_save_time > 30:
+                        last_fetch_time = now_ts
+                        if now_ts - self._last_save_time > 30 and self._last_snapshot:
                             self._last_save_time = now_ts
-                            await asyncio.to_thread(_save_persistent, snapshot)
+                            await asyncio.to_thread(_save_persistent, dict(self._last_snapshot))
 
-                else:
-                    # CLOSED with data — serve cached / persisted data
+                    # Every 1s: pull live spot from cache, recompute spot-sensitive signals, broadcast
                     if self._last_snapshot:
                         ts_now = datetime.now(IST).isoformat()
-                        for sym in self._last_snapshot:
-                            if isinstance(self._last_snapshot[sym], dict):
-                                self._last_snapshot[sym]["dataSource"] = "MARKET_CLOSED"
-                                self._last_snapshot[sym]["timestamp"] = ts_now
+                        broadcast_data: Dict[str, Any] = {}
+                        for sym in SYMBOLS:
+                            if sym not in self._last_snapshot:
+                                continue
+                            spot = self._get_spot_price(sym)
+                            if spot > 0:
+                                entry = self._recompute_signals_with_spot(
+                                    self._last_snapshot[sym], spot, sym
+                                )
+                            else:
+                                entry = dict(self._last_snapshot[sym])
+                            entry["dataSource"] = "LIVE"
+                            entry["timestamp"] = ts_now
+                            self._last_snapshot[sym] = entry
+                            broadcast_data[sym] = entry
+
+                        if broadcast_data:
+                            await strike_intel_manager.broadcast({
+                                "type": "strike_intel_update",
+                                "data": broadcast_data,
+                            })
+
+                    await asyncio.sleep(self._cadence_live)
+
+                # ── CLOSED ───────────────────────────────────────────────────
+                else:
+                    # One-time fetch when first entering CLOSED with no snapshot
+                    if not self._last_snapshot and not _closed_fetch_done:
+                        self._init_kite()
+
+                        async def _fetch_one_closed(symbol: str) -> tuple:
+                            try:
+                                spot = self._get_spot_price(symbol)
+                                if spot <= 0:
+                                    return (symbol, None)
+                                raw = await asyncio.to_thread(
+                                    self._fetch_strikes_sync, symbol, spot
+                                )
+                                if raw:
+                                    data = self._build_symbol_data(symbol, raw)
+                                    data["dataSource"] = "MARKET_CLOSED"
+                                    return (symbol, data)
+                                return (symbol, None)
+                            except Exception as e:
+                                logger.debug("Strike intel closed fetch error for %s: %s", symbol, e)
+                                return (symbol, None)
+
+                        results = await asyncio.gather(
+                            *[_fetch_one_closed(sym) for sym in SYMBOLS],
+                            return_exceptions=True,
+                        )
+                        for result in results:
+                            if isinstance(result, Exception):
+                                continue
+                            sym, entry = result
+                            if entry is not None:
+                                self._last_snapshot[sym] = entry
+                        _closed_fetch_done = True
+
+                    if self._last_snapshot:
+                        ts_now = datetime.now(IST).isoformat()
+                        for sym in list(self._last_snapshot.keys()):
+                            if not isinstance(self._last_snapshot[sym], dict):
+                                continue
+                            current_spot = self._get_spot_price(sym)
+                            if current_spot > 0:
+                                self._last_snapshot[sym] = _apply_spot_to_cached_entry(
+                                    self._last_snapshot[sym], current_spot, sym
+                                )
+                            self._last_snapshot[sym]["dataSource"] = "MARKET_CLOSED"
+                            self._last_snapshot[sym]["timestamp"] = ts_now
                         await strike_intel_manager.broadcast({
                             "type": "strike_intel_update",
                             "data": self._last_snapshot,
                         })
 
-                # Heartbeat
+                    await asyncio.sleep(self._cadence_closed)
+
+                # Heartbeat (every 30s)
                 if now_ts - last_heartbeat > self._heartbeat_interval:
                     last_heartbeat = now_ts
                     await strike_intel_manager.broadcast({
                         "type": "strike_intel_heartbeat",
                         "timestamp": datetime.now(IST).isoformat(),
                     })
-
-                await asyncio.sleep(cadence)
 
             except asyncio.CancelledError:
                 break

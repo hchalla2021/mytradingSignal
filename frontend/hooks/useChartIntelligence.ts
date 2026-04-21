@@ -139,7 +139,20 @@ function loadFromStorage(): ChartIntelligenceData | null {
   if (typeof window === 'undefined') return null;
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    return raw ? (JSON.parse(raw) as ChartIntelligenceData) : null;
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as ChartIntelligenceData;
+    // Discard data from a previous calendar day — candles are session-specific
+    const today = new Date().toDateString();
+    const hasStaleEntry = (['NIFTY', 'BANKNIFTY', 'SENSEX'] as const).some(sym => {
+      const ts = parsed[sym]?.timestamp;
+      if (!ts) return true;
+      return new Date(ts).toDateString() !== today;
+    });
+    if (hasStaleEntry) {
+      try { localStorage.removeItem(STORAGE_KEY); } catch { /* ok */ }
+      return null;
+    }
+    return parsed;
   } catch { return null; }
 }
 

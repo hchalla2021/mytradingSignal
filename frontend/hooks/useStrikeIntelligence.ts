@@ -116,7 +116,20 @@ function loadFromStorage(): StrikeIntelligenceData | null {
   if (typeof window === 'undefined') return null;
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    return raw ? (JSON.parse(raw) as StrikeIntelligenceData) : null;
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as StrikeIntelligenceData;
+    // Discard data from a previous calendar day — strike chain values are stale
+    const today = new Date().toDateString();
+    const hasStaleEntry = (['NIFTY', 'BANKNIFTY', 'SENSEX'] as const).some(sym => {
+      const ts = parsed[sym]?.timestamp;
+      if (!ts) return true; // no timestamp → treat as stale
+      return new Date(ts).toDateString() !== today;
+    });
+    if (hasStaleEntry) {
+      try { localStorage.removeItem(STORAGE_KEY); } catch { /* ok */ }
+      return null;
+    }
+    return parsed;
   } catch { return null; }
 }
 
@@ -149,7 +162,14 @@ export function useStrikeIntelligence() {
         if (raw[sym]) {
           const incoming = raw[sym];
           const existing = prev[sym];
-          if (existing && existing.timestamp === incoming.timestamp) continue;
+          // Skip only if timestamp AND spot AND atm are all unchanged — avoids blocking
+          // 1s spot-updated broadcasts that don't change OI/vol but DO update ATM/signals
+          if (
+            existing &&
+            existing.timestamp === incoming.timestamp &&
+            existing.spot === incoming.spot &&
+            existing.atm === incoming.atm
+          ) continue;
           next[sym] = typeof structuredClone === 'function'
             ? structuredClone(incoming)
             : JSON.parse(JSON.stringify(incoming));
@@ -280,7 +300,7 @@ export function useStrikeIntelligence() {
             if (json?.data && Object.keys(json.data).length > 0) mergeData(json.data);
           })
           .catch(() => {});
-      }, 3000);
+      }, 1000);
     }
 
     return () => {

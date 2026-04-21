@@ -324,11 +324,18 @@ def _detect_liquidity(candles: List[Dict]) -> List[Dict]:
     return deduped
 
 
-def _compute_support_resistance(candles: List[Dict], window: int = 5) -> Dict[str, List[float]]:
+def _compute_support_resistance(candles: List[Dict], window: int = 3) -> Dict[str, List[float]]:
     """Detect swing highs/lows as support/resistance levels."""
     supports = []
     resistances = []
     if len(candles) < window * 2 + 1:
+        # Not enough candles for swing detection — fall back to recent high/low
+        if candles:
+            recent = candles[-min(20, len(candles)):]
+            return {
+                "support": [round(min(c["l"] for c in recent), 2)],
+                "resistance": [round(max(c["h"] for c in recent), 2)],
+            }
         return {"support": [], "resistance": []}
 
     for i in range(window, len(candles) - window):
@@ -369,7 +376,7 @@ def _compute_support_resistance(candles: List[Dict], window: int = 5) -> Dict[st
                 current = [lv]
         if current:
             clusters.append(round(sum(current) / len(current), 2))
-        return clusters[-5:]  # Top 5 levels
+        return clusters[-8:]  # Keep up to 8 levels
 
     return {
         "support": cluster(supports),
@@ -429,7 +436,7 @@ class ChartIntelligenceService:
         self._daily_cache: Dict[str, Any] = {}  # symbol -> {date, candles}
         self._last_save_time: float = 0.0
         self._last_full_fetch: float = 0.0
-        self._cadence_broadcast = 3.0
+        self._cadence_broadcast = 1.0   # 1s — smooth live candle updates
         self._cadence_fetch = 10.0
         self._cadence_closed = 60.0
         self._heartbeat_interval = 30.0
@@ -477,17 +484,19 @@ class ChartIntelligenceService:
     # ── Spot price ───────────────────────────────────────────────────────
 
     def _get_spot_price(self, symbol: str) -> float:
+        # _SHARED_CACHE stores (json_str, expire_at) tuples — unpack correctly
         cache_key = f"market:{symbol}"
-        cached = _SHARED_CACHE.get(cache_key)
-        if isinstance(cached, str):
+        raw = _SHARED_CACHE.get(cache_key)
+        if raw is not None:
             try:
-                cached = json.loads(cached)
+                value_json, expire_at = raw
+                if time_mod.time() < expire_at:
+                    data = json.loads(value_json)
+                    spot = _sf(data.get("price") or data.get("last_price"))
+                    if spot > 0:
+                        return spot
             except Exception:
-                cached = None
-        if isinstance(cached, dict):
-            spot = _sf(cached.get("price") or cached.get("last_price"))
-            if spot > 0:
-                return spot
+                pass
         try:
             from services.persistent_market_state import PersistentMarketState
             state = PersistentMarketState.get_state(symbol)
@@ -802,8 +811,10 @@ class ChartIntelligenceService:
                             self._last_snapshot = snapshot
                             self._last_full_fetch = now_ts
                     else:
-                        # Between full fetches: update spot on latest candle
+                        # Between full fetches: update current candle with live spot
+                        # and open a new bar if the bar period has elapsed.
                         if self._last_snapshot:
+                            now_ist = datetime.now(IST)
                             for sym in SYMBOLS:
                                 if sym not in self._last_snapshot:
                                     continue
@@ -812,15 +823,75 @@ class ChartIntelligenceService:
                                     continue
                                 entry = self._last_snapshot[sym]
                                 entry["spot"] = round(spot, 2)
-                                entry["timestamp"] = datetime.now(IST).isoformat()
-                                # Update last candle's close/high/low
-                                for tf_key in ("candles3m", "candles5m"):
+                                entry["timestamp"] = now_ist.isoformat()
+
+                                for tf_key, interval_min in [("candles3m", 3), ("candles5m", 5)]:
                                     candles = entry.get(tf_key)
-                                    if candles and len(candles) > 0:
-                                        last = candles[-1]
+                                    if not candles:
+                                        continue
+
+                                    last = candles[-1]
+                                    # Determine if a new bar has opened since the last candle
+                                    try:
+                                        last_t = datetime.fromisoformat(last["t"])
+                                        if last_t.tzinfo is None:
+                                            last_t = IST.localize(last_t)
+                                        next_bar_open = last_t + timedelta(minutes=interval_min)
+                                        if now_ist >= next_bar_open:
+                                            # Open a new candle at the next bar boundary
+                                            new_bar_t = next_bar_open
+                                            minutes_since_open = int(
+                                                (now_ist - datetime.combine(
+                                                    now_ist.date(), time(9, 15), tzinfo=IST
+                                                )).total_seconds() // 60
+                                            )
+                                            aligned_min = (minutes_since_open // interval_min) * interval_min
+                                            bar_open_time = datetime.combine(
+                                                now_ist.date(), time(9, 15), tzinfo=IST
+                                            ) + timedelta(minutes=aligned_min)
+                                            if bar_open_time > last_t:
+                                                new_bar_t = bar_open_time
+                                            candles.append({
+                                                "t": new_bar_t.isoformat(),
+                                                "o": round(spot, 2),
+                                                "h": round(spot, 2),
+                                                "l": round(spot, 2),
+                                                "c": round(spot, 2),
+                                                "v": 0,
+                                            })
+                                            if len(candles) > 200:
+                                                entry[tf_key] = candles[-200:]
+                                                candles = entry[tf_key]
+
+                                            # Recompute all SMC signals on new bar
+                                            fvg_key = "fvg" + tf_key[7:]  # candles3m -> fvg3m
+                                            ob_key = "ob" + tf_key[7:]
+                                            liq_key = "liquidity" + tf_key[7:]
+                                            entry[fvg_key] = _detect_fvg(candles)
+                                            entry[ob_key] = _detect_order_blocks(candles)
+                                            entry[liq_key] = _detect_liquidity(candles)
+                                            # Recompute S/R from 3m candles (authoritative)
+                                            if tf_key == "candles3m":
+                                                sr = _compute_support_resistance(candles)
+                                                entry["levels"]["support"] = sr["support"]
+                                                entry["levels"]["resistance"] = sr["resistance"]
+                                        else:
+                                            # Update last candle with current spot
+                                            last["c"] = round(spot, 2)
+                                            last["h"] = round(max(last["h"], spot), 2)
+                                            last["l"] = round(min(last["l"], spot), 2)
+                                    except Exception:
                                         last["c"] = round(spot, 2)
                                         last["h"] = round(max(last["h"], spot), 2)
                                         last["l"] = round(min(last["l"], spot), 2)
+
+                                # Always update CDH/CDL from latest 3m candles
+                                if tf_key == "candles3m":
+                                    today_str = now_ist.strftime("%Y-%m-%d")
+                                    today_c = [c for c in candles if str(c.get("t", "")).startswith(today_str)]
+                                    if today_c:
+                                        entry["levels"]["cdh"] = round(max(c["h"] for c in today_c), 2)
+                                        entry["levels"]["cdl"] = round(min(c["l"] for c in today_c), 2)
 
                     # Broadcast current data
                     if self._last_snapshot:
