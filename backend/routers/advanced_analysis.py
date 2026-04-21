@@ -738,8 +738,6 @@ async def _get_historical_data(symbol: str, lookback: int = 50) -> pd.DataFrame:
         kite.set_access_token(settings.zerodha_access_token)
         
         print(f"[DATA-FETCH] ✅ Token configured from .env")
-        print(f"   → API Key: {settings.zerodha_api_key[:10]}...")
-        print(f"   → Access Token: {settings.zerodha_access_token[:15]}...")
         
         # Get FUTURES instrument token for symbol (indices don't have volume!)
         # Use futures contracts which have actual traded volume
@@ -874,10 +872,7 @@ async def _get_historical_data_extended(symbol: str, lookback: int = 100, days_b
         get_settings.cache_clear()  # Clear LRU cache to force reload from .env
         settings = get_settings()
         
-        print(f"[DATA-FETCH-EXT] 🔍 Token verification:")
-        print(f"   → Token exists: {bool(settings.zerodha_access_token)}")
-        print(f"   → Token length: {len(settings.zerodha_access_token) if settings.zerodha_access_token else 0} chars")
-        print(f"   → Token preview: {settings.zerodha_access_token[:20] if settings.zerodha_access_token else 'NONE'}...")
+        print(f"[DATA-FETCH-EXT] 🔍 Token verification: exists={bool(settings.zerodha_access_token)}")
         
         # Authenticate Zerodha client
         if not settings.zerodha_api_key:
@@ -890,8 +885,6 @@ async def _get_historical_data_extended(symbol: str, lookback: int = 100, days_b
             return pd.DataFrame()
         
         print(f"[DATA-FETCH-EXT] 🔑 Zerodha credentials loaded from .env")
-        print(f"   → API Key: {settings.zerodha_api_key[:10]}...")
-        print(f"   → Access Token: {settings.zerodha_access_token[:20]}...")
         
         kite = KiteConnect(api_key=settings.zerodha_api_key)
         kite.set_access_token(settings.zerodha_access_token)

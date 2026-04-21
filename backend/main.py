@@ -347,16 +347,18 @@ app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # CORS — custom middleware for reliable localhost support
-_cors_origins = set([
-    "https://mydailytradesignals.com",
-    "http://localhost:3000",
-    "http://127.0.0.1:3000",
-    "http://localhost:3001",
-])
-# Also merge any extra origins from config
+# Production: only the configured domain. Dev: also localhost.
+_cors_base = {"https://mydailytradesignals.com"}
+if settings.debug:
+    _cors_base.update({
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "http://localhost:3001",
+    })
+# Also merge any extra origins from config (includes frontend_url + any CORS_ORIGINS env)
 for _o in settings.cors_origins_list:
-    _cors_origins.add(_o)
-_cors_origins = list(_cors_origins)
+    _cors_base.add(_o)
+_cors_origins = list(_cors_base)
 print(f"🔧 CORS origins loaded: {_cors_origins}")
 
 

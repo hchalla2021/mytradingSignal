@@ -109,9 +109,8 @@ async function fetchWithFallback(): Promise<{ success?: boolean; data?: Record<s
     urlSet.add('http://localhost:8000/api/chart-intelligence');
     urlSet.add(primary);
   } else {
+    // Production: only use configured URLs, never fall back to localhost
     urlSet.add(primary);
-    urlSet.add(fallback);
-    urlSet.add('http://localhost:8000/api/chart-intelligence');
   }
 
   for (const url of Array.from(urlSet)) {
