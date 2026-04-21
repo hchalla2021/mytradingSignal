@@ -85,18 +85,20 @@
       "smart_money_div": {
         "score": 0.0,
         "signal": "NEUTRAL",
-        "label": "Waiting for OI data for divergence analysis",
+        "label": "No significant smart money divergence",
         "weight": 0.1,
-        "value": null,
+        "value": 0.0,
         "extra": {
-          "divergence": "NO_DATA"
+          "divergence": "NONE",
+          "price_change": -0.03,
+          "oi_slope": 1360064.3333
         }
       }
     },
     "metrics": {
-      "price": 24539.3,
+      "price": 24539.2,
       "changePct": 0.72,
-      "oi": 0,
+      "oi": 582510500,
       "candleCount": 31,
       "swingHighs": 6,
       "swingLows": 7,
@@ -104,7 +106,7 @@
       "lastSwingLow": 24527.7
     },
     "dataSource": "LIVE",
-    "timestamp": "2026-04-21T14:08:22.742579+05:30"
+    "timestamp": "2026-04-21T14:08:34.857756+05:30"
   },
   "BANKNIFTY": {
     "symbol": "BANKNIFTY",
@@ -210,9 +212,9 @@
       }
     },
     "metrics": {
-      "price": 57350.4,
-      "changePct": 1.36,
-      "oi": 14323260,
+      "price": 57347.15,
+      "changePct": 1.35,
+      "oi": 14323200,
       "candleCount": 31,
       "swingHighs": 7,
       "swingLows": 7,
@@ -220,7 +222,7 @@
       "lastSwingLow": 57291.5
     },
     "dataSource": "LIVE",
-    "timestamp": "2026-04-21T14:08:22.743345+05:30"
+    "timestamp": "2026-04-21T14:08:34.858913+05:30"
   },
   "SENSEX": {
     "symbol": "SENSEX",
@@ -265,7 +267,7 @@
           "nearest_fvg": {
             "type": "BULLISH",
             "zone": "79113-79166",
-            "dist": 0.05
+            "dist": 0.06
           }
         }
       },
@@ -324,8 +326,8 @@
       }
     },
     "metrics": {
-      "price": 79182.14,
-      "changePct": 0.84,
+      "price": 79188.41,
+      "changePct": 0.85,
       "oi": 13693660,
       "candleCount": 31,
       "swingHighs": 6,
@@ -334,6 +336,6 @@
       "lastSwingLow": 79153.36
     },
     "dataSource": "LIVE",
-    "timestamp": "2026-04-21T14:08:22.744015+05:30"
+    "timestamp": "2026-04-21T14:08:34.859960+05:30"
   }
 }
