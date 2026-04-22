@@ -1,12 +1,6 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
-  eslint: {
-    ignoreDuringBuilds: true,
-  },
-  typescript: {
-    ignoreBuildErrors: true,
-  },
   // Use git-based build ID in production, dynamic in dev
   generateBuildId: async () => {
     if (process.env.NODE_ENV === 'production') {

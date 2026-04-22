@@ -16,7 +16,7 @@ import { useMarketSocket } from '@/hooks/useMarketSocket';
 // ── Chart constants ─────────────────────────────────────────────────────────
 
 const CFG = {
-  PRICE_AXIS_W: 86,
+  PRICE_AXIS_W: 72,
   TIME_AXIS_H: 24,
   PAD_TOP: 8,
   LEGEND_H: 38,        // top legend strip height (2 compact rows)
@@ -92,6 +92,10 @@ const CFG = {
   CHOCH_BEAR: '#9868b0',   // soft plum    — CHoCH ↓ (reversal down)
   IND_COLOR:  '#7a8fa8',   // blue-grey    — Inducement / EQH / EQL
 
+  // ── Fractals — Williams 5-bar ─────────────────────────────────────
+  FRACTAL_TOP: '#e8a030',   // bright amber  — bearish fractal high (▼)
+  FRACTAL_BOT: '#30a8e8',   // bright sky    — bullish fractal low  (▲)
+
   // ── Current price ─────────────────────────────────────────────────
   CURRENT_PRICE: '#9070c0',   // muted violet (calm, nothing else uses this hue)
 
@@ -108,6 +112,21 @@ const CFG = {
 
 function fmtPrice(n: number): string {
   return n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+
+/**
+ * Returns true only during NSE trading hours: Mon–Fri 09:15–15:30 IST.
+ * All proximity-glow and pulse animations are suppressed outside this window.
+ */
+function isMarketOpen(): boolean {
+  // IST = UTC+5:30
+  const now   = new Date();
+  const utcMs = now.getTime() + now.getTimezoneOffset() * 60_000;
+  const ist   = new Date(utcMs + 5.5 * 3_600_000);
+  const day   = ist.getDay();   // 0=Sun … 6=Sat
+  if (day === 0 || day === 6) return false;
+  const hhmm  = ist.getHours() * 100 + ist.getMinutes();
+  return hhmm >= 915 && hhmm < 1530;
 }
 
 function fmtTime(iso: string): string {
@@ -251,6 +270,32 @@ function computeInducements(candles: Candle[], LB = 4): InducementPoint[] {
   return pts.slice(-8);
 }
 
+/** Detect Williams 5-bar fractals (N bars on each side of the middle candle).
+ *  Top fractal: middle candle high > all N neighbours on both sides.
+ *  Bottom fractal: middle candle low < all N neighbours on both sides.
+ */
+interface FractalPoint {
+  idx: number;      // index of the pivot (middle) candle
+  price: number;    // high (top) or low (bottom) of the pivot candle
+  type: 'top' | 'bottom';
+}
+
+function computeFractals(candles: Candle[], N = 2): FractalPoint[] {
+  const pts: FractalPoint[] = [];
+  if (candles.length < N * 2 + 1) return pts;
+  for (let i = N; i < candles.length - N; i++) {
+    let isTop = true, isBot = true;
+    for (let j = i - N; j <= i + N; j++) {
+      if (j === i) continue;
+      if (candles[j].h >= candles[i].h) isTop = false;
+      if (candles[j].l <= candles[i].l) isBot = false;
+    }
+    if (isTop) pts.push({ idx: i, price: candles[i].h, type: 'top' });
+    if (isBot) pts.push({ idx: i, price: candles[i].l, type: 'bottom' });
+  }
+  return pts;
+}
+
 // ── Canvas Chart ────────────────────────────────────────────────────────────
 
 interface CandleChartProps {
@@ -265,10 +310,11 @@ interface CandleChartProps {
   onMaximize?: () => void;
   structure?: StructureEvent[];
   inducements?: InducementPoint[];
+  fractals?: FractalPoint[];
   htfMode?: boolean;
 }
 
-const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, levels, spot, liveSpot, chartHeight, onMaximize, structure = [], inducements = [], htfMode = false }) => {
+const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, levels, spot, liveSpot, chartHeight, onMaximize, structure = [], inducements = [], fractals = [], htfMode = false }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
@@ -410,12 +456,46 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
 
     const priceToY = (p: number) => chartTop + (1 - (p - priceMin) / priceRange) * chartH;
 
+    // ── Approach detection — pulsing glow when price is near a zone ──────────
+    // Glow is ONLY active during NSE market hours (Mon–Fri 09:15–15:30 IST).
+    const _mktOpen = isMarketOpen();
+    const _t  = _mktOpen ? Date.now() : 0;
+    const _pF = _mktOpen ? 0.55 + 0.45 * Math.sin(_t / 280) : 0;   // ~3.5 Hz fast pulse (0.55–1.0) · 0 off-market
+    const _pM = _mktOpen ? 0.55 + 0.45 * Math.sin(_t / 420) : 0;   // ~2.4 Hz med  pulse
+    const HOT_D  = 0.002;  // 0.2% — hot  (candle wick essentially touching the level)
+    const WARM_D = 0.005;  // 0.5% — warm (visibly heading toward the level)
+
+    // Proximity for a price zone [bot … top]
+    const zoneProx = (top: number, bot: number): 'hot' | 'warm' | 'off' => {
+      if (!_mktOpen) return 'off';
+      if (effectiveSpot >= bot && effectiveSpot <= top) return 'hot';
+      const d = effectiveSpot > top
+        ? (effectiveSpot - top) / top
+        : bot > 0 ? (bot - effectiveSpot) / bot : 1;
+      if (d < HOT_D)  return 'hot';
+      if (d < WARM_D) return 'warm';
+      return 'off';
+    };
+
+    // Proximity for a single horizontal price line
+    const lineProx = (level: number): 'hot' | 'warm' | 'off' => {
+      if (!_mktOpen || level <= 0) return 'off';
+      const d = Math.abs(effectiveSpot - level) / level;
+      if (d < HOT_D)  return 'hot';
+      if (d < WARM_D) return 'warm';
+      return 'off';
+    };
+
+    // Alert banner collector — zones push here as they are drawn
+    const alertZones: Array<{ label: string; color: string }> = [];
+
     // ── Proximity alert set ───────────────────────────────────────
     const keyLevels = [
       levels.pdh, levels.pdl, levels.cdh, levels.cdl,
       ...levels.support, ...levels.resistance,
       ...liquidity.map(l => l.level),
       ...ob.filter(o => !o.mitigated).map(o => (o.top + o.bottom) / 2),
+      ...fractals.map(f => f.price),
     ].filter(lv => lv > 0);
 
     const proxSet = new Set<number>();
@@ -530,6 +610,8 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
       cx2 = dItem(cx2, row2Y, CFG.LIQ_BUY,          'BSL');
       cx2 = dItem(cx2, row2Y, CFG.LIQ_SELL,         'SSL');
       cx2 = dItem(cx2, row2Y, CFG.IND_COLOR,         'EQH/EQL');
+      cx2 = lItem(cx2, row2Y, CFG.FRACTAL_TOP,        'FR▼',    []);
+      cx2 = lItem(cx2, row2Y, CFG.FRACTAL_BOT,        'FR▲',    []);
            lItem(cx2, row2Y, CFG.CURRENT_PRICE,     'LTP',    [5, 3]);
     }
 
@@ -596,18 +678,29 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
       grad.addColorStop(1, fillEnd);
       ctx.fillStyle = grad;
       ctx.fillRect(x1, y1, x2 - x1, zoneH);
-      // Left accent bar (4px solid)
-      ctx.fillStyle = borderColor;
-      ctx.fillRect(x1, y1, 5, zoneH);
-      // Top and bottom border lines
+      // Approach detection — OB glows when price enters or nears zone
+      const obProx = o.mitigated ? 'off' as const : zoneProx(o.top, o.bottom);
+      if (obProx !== 'off') alertZones.push({ label: `${isBull ? '▲' : '▼'}OB`, color: borderColor });
+
+      // Left accent bar — widens + glows on approach
+      const obAccW = obProx === 'hot' ? 7 : obProx === 'warm' ? 5 : 2;
+      ctx.save();
+      if (obProx !== 'off') { ctx.shadowColor = borderColor; ctx.shadowBlur = obProx === 'hot' ? 12 + 8 * _pF : 5; }
+      ctx.fillStyle   = borderColor;
+      ctx.globalAlpha = obProx === 'hot' ? 0.8 + 0.2 * _pF : obProx === 'warm' ? 0.75 : (o.mitigated ? CFG.OB_MITIGATED_ALPHA : 0.28);
+      ctx.fillRect(x1, y1, obAccW, zoneH);
+      // Top and bottom border lines — sharp glow on approach
       ctx.strokeStyle = borderColor;
-      ctx.lineWidth = o.mitigated ? 0.5 : 1;
+      ctx.lineWidth   = o.mitigated ? 0.5 : obProx === 'hot' ? 2.5 + _pM : obProx === 'warm' ? 1.8 : 0.6;
       ctx.setLineDash(o.mitigated ? [6, 4] : []);
+      ctx.globalAlpha = obProx === 'hot' ? 0.85 + 0.15 * _pF : obProx === 'warm' ? 0.75 : (o.mitigated ? CFG.OB_MITIGATED_ALPHA : 0.28);
       ctx.beginPath();
-      ctx.moveTo(x1 + 5, y1); ctx.lineTo(x2, y1);
-      ctx.moveTo(x1 + 5, y2); ctx.lineTo(x2, y2);
+      ctx.moveTo(x1 + obAccW, y1); ctx.lineTo(x2, y1);
+      ctx.moveTo(x1 + obAccW, y2); ctx.lineTo(x2, y2);
       ctx.stroke();
       ctx.setLineDash([]);
+      ctx.shadowBlur = 0;
+      ctx.restore();
       // Label: right-aligned inside zone — clear, bigger text
       if (zoneH > 14) {
         const mid = (y1 + y2) / 2;
@@ -670,14 +763,22 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
         ctx.stroke();
       }
       ctx.restore();
+      // Approach detection — FVG borders glow when price is near
+      const fvgProx = zoneProx(f.top, f.bottom);
+      if (fvgProx !== 'off') alertZones.push({ label: `${isBullF ? '▲' : '▼'}FVG`, color: borderColor });
+
+      ctx.save();
+      if (fvgProx !== 'off') { ctx.shadowColor = borderColor; ctx.shadowBlur = fvgProx === 'hot' ? 14 + 8 * _pF : 6; }
       ctx.strokeStyle = borderColor;
-      ctx.lineWidth = 1.5;  // thicker FVG border — clearly visible
+      ctx.lineWidth   = fvgProx === 'hot' ? 3 + _pM : fvgProx === 'warm' ? 1.8 : 0.7;
       ctx.setLineDash([5, 3]);
       ctx.beginPath();
       ctx.moveTo(x1, y1); ctx.lineTo(x2, y1);
       ctx.moveTo(x1, y2); ctx.lineTo(x2, y2);
       ctx.stroke();
       ctx.setLineDash([]);
+      ctx.shadowBlur = 0;
+      ctx.restore();
       const midY = (y1 + y2) / 2;
       ctx.strokeStyle = borderColor;
       ctx.lineWidth = 0.8;
@@ -725,54 +826,69 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
       const y = priceToY(price);
       if (y < chartTop || y > chartBottom) return;
 
-      const isNearSpot = near(effectiveSpot, price, 0.004);
+      const lvProx = lineProx(price);
+      if (lvProx !== 'off') alertZones.push({ label, color });
+      const isHot  = lvProx === 'hot';
+      const isWarm = lvProx === 'warm';
 
-      // ── The line (starts after badge, ends before right axis) ──
+      // ── The line — sharp glow when price is approaching ──────────
       ctx.save();
+      if (lvProx !== 'off') {
+        ctx.shadowColor = color;
+        ctx.shadowBlur  = isHot ? 14 + 8 * _pF : 5 + 3 * _pM;
+      }
       ctx.strokeStyle = color;
-      ctx.lineWidth = isNearSpot ? lineW + 0.8 : lineW;
+      ctx.lineWidth   = isHot ? lineW + 1.5 + _pM * 0.8 : isWarm ? lineW + 0.8 : lineW;
       ctx.setLineDash(dash);
-      ctx.globalAlpha = isNearSpot ? 1 : 0.75;
+      ctx.globalAlpha = isHot ? 0.90 + 0.10 * _pF : isWarm ? 0.75 : 0.20;
       ctx.beginPath();
-      ctx.moveTo(chartLeft + 52, y);   // leave room for left badge
+      ctx.moveTo(chartLeft + 52, y);
       ctx.lineTo(chartRight, y);
       ctx.stroke();
       ctx.setLineDash([]);
+      ctx.shadowBlur = 0;
       ctx.globalAlpha = 1;
       ctx.restore();
 
-      // ── Left badge — solid colored pill with white text ──────────
-      // Large enough to read on mobile
+      // ── Left badge — glows brighter on approach ───────────────────
       const badgeFont = 'bold 10px sans-serif';
       ctx.font = badgeFont;
       const bw = ctx.measureText(label).width + 10;
       const bh = 17;
       const bx = chartLeft + 1;
       const by = y - bh / 2;
-      ctx.fillStyle = color;
-      ctx.globalAlpha = isNearSpot ? 1 : 0.88;
+      ctx.save();
+      if (isHot) { ctx.shadowColor = color; ctx.shadowBlur = 6 + 4 * _pF; }
+      ctx.fillStyle   = color;
+      ctx.globalAlpha = isHot ? 0.9 + 0.1 * _pF : isWarm ? 0.80 : 0.22;
       roundRect(ctx, bx, by, bw, bh, 3);
       ctx.fill();
+      ctx.shadowBlur = 0;
       ctx.globalAlpha = 1;
-      ctx.fillStyle = '#0d1117';   // near-black text on colored pill
-      ctx.textAlign = 'left';
+      ctx.fillStyle   = isHot || isWarm ? '#0d1117' : color;
+      ctx.textAlign   = 'left';
       ctx.fillText(label, bx + 5, by + 12);
+      ctx.restore();
 
-      // ── Right axis price pill ────────────────────────────────────
+      // ── Right axis price pill — glows on approach ─────────────────
       const priceStr = fmtPrice(price);
       ctx.font = 'bold 10px sans-serif';
       const rw = ctx.measureText(priceStr).width + 12;
       const rh = 18;
       const rx = chartRight + 2;
       const ry = y - rh / 2;
-      ctx.fillStyle = color;
-      ctx.globalAlpha = isNearSpot ? 1 : 0.85;
+      ctx.save();
+      if (isHot) { ctx.shadowColor = color; ctx.shadowBlur = 5 + 3 * _pF; }
+      ctx.fillStyle   = color;
+      ctx.globalAlpha = isHot ? 1 : isWarm ? 0.80 : 0.18;
       roundRect(ctx, rx, ry, rw, rh, 4);
       ctx.fill();
+      ctx.shadowBlur = 0;
       ctx.globalAlpha = 1;
-      ctx.fillStyle = '#0d1117';
-      ctx.textAlign = 'left';
+      ctx.fillStyle   = isHot || isWarm ? '#0d1117' : color;
+      ctx.textAlign   = 'left';
       ctx.fillText(priceStr, rx + 6, ry + 13);
+      ctx.restore();
     };
 
     // DAY HIGH — solid 2px electric cyan
@@ -789,62 +905,209 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
     for (const r of levels.resistance) drawLevel(r, CFG.RESISTANCE, [2, 4], 'RES', 1.5);
 
     // ── LIQUIDITY LEVELS ────────────────────────────────────────────
-    // SSL = Sell-side liquidity (below lows) — fuchsia
-    // BSL = Buy-side liquidity  (above highs) — emerald
-    // Swept = faded grey (already taken by market)
+    // SSL = Sell-side liquidity (above equal highs) — swept from downside ↑
+    // BSL = Buy-side liquidity  (below equal lows)  — swept from upside  ↓
+    // Swept = faded grey (market already took liquidity)
+    //
+    // SWEEP DETECTION — 3 states:
+    //   activeSweep : the live/most-recent candle's wick is crossing the level RIGHT NOW
+    //   justSwept   : level is already marked swept in backend data
+    //   approaching : price within WARM_D% but wick not yet touching
     for (const lq of liquidity) {
       const y = priceToY(lq.level);
       if (y < chartTop || y > chartBottom) continue;
-      const isSell = lq.type === 'sell_side';
-      const color = lq.swept ? CFG.LIQ_SWEPT : (isSell ? CFG.LIQ_SELL : CFG.LIQ_BUY);
-      const isNear = near(effectiveSpot, lq.level, 0.005);
+      const isSell  = lq.type === 'sell_side';
+      const baseCol = isSell ? CFG.LIQ_SELL : CFG.LIQ_BUY;
+      const color   = lq.swept ? CFG.LIQ_SWEPT : baseCol;
 
-      // Fine dot pattern [1,4] — clearly different from level lines [14,5]
-      ctx.strokeStyle = color;
-      ctx.lineWidth = isNear ? 1.5 : 0.8;
-      ctx.globalAlpha = lq.swept ? 0.35 : (isNear ? 0.9 : 0.65);
-      ctx.setLineDash([1, 4]);
+      // ── Determine approach direction ──────────────────────────────
+      // SSL sits above price  → approached from DOWNSIDE (price moving up)
+      // BSL sits below price  → approached from UPSIDE   (price moving down)
+      const lqProx = lq.swept ? 'off' as const : lineProx(lq.level);
+
+      // Active sweep: most-recent visible candle's wick crosses the level
+      const lastC      = visible[visible.length - 1];
+      const activeSweep = !lq.swept && lastC && (
+        isSell
+          ? lastC.h >= lq.level   // wick pierced ABOVE SSL — upside sweep
+          : lastC.l <= lq.level   // wick pierced BELOW BSL — downside sweep
+      );
+
+      if (activeSweep) {
+        alertZones.push({ label: isSell ? '⚡SSL SWEEP↑' : '⚡BSL SWEEP↓', color: baseCol });
+      } else if (lqProx === 'hot') {
+        alertZones.push({ label: isSell ? `SSL↑` : `BSL↓`, color: baseCol });
+      }
+
+      // ── STEP 1: Glowing band around level when approached / swept ─
+      if (activeSweep || lqProx === 'hot') {
+        const bandH = activeSweep ? 6 + 4 * _pF : 4 + 2 * _pF;
+        ctx.save();
+        ctx.globalAlpha = 0.18 + 0.12 * _pF;
+        ctx.fillStyle   = baseCol;
+        ctx.fillRect(chartLeft, y - bandH / 2, chartRight - chartLeft, bandH);
+        ctx.restore();
+      }
+
+      // ── STEP 2: Highlight every visible candle whose wick crosses level
+      for (let i = 0; i < visible.length; i++) {
+        const c    = visible[i];
+        const cx_v = idxToX(startIdx + i);
+        const wickCross = isSell
+          ? (c.h >= lq.level && c.l < lq.level)   // wick above, body below → SSL sweep candle
+          : (c.l <= lq.level && c.h > lq.level);  // wick below, body above → BSL sweep candle
+        if (!wickCross) continue;
+
+        const isLive   = i === visible.length - 1;
+        const glowA    = isLive ? (0.22 + 0.14 * _pF) : 0.14;
+        const glowW    = Math.max(8, cw + 4);
+        const bodyTop  = priceToY(Math.max(c.o, c.c));
+        const bodyBot  = priceToY(Math.min(c.o, c.c));
+        const wickTopY = priceToY(c.h);
+        const wickBotY = priceToY(c.l);
+
+        ctx.save();
+        // Translucent candle-wide vertical glow column
+        ctx.globalAlpha = glowA;
+        ctx.fillStyle   = baseCol;
+        ctx.fillRect(cx_v - glowW / 2, wickTopY, glowW, wickBotY - wickTopY);
+        // Brighter rim at the level crossing
+        ctx.globalAlpha = isLive ? 0.55 + 0.3 * _pF : 0.35;
+        ctx.shadowColor = baseCol;
+        ctx.shadowBlur  = isLive ? 10 + 6 * _pF : 5;
+        const crossY = isSell ? priceToY(lq.level) : priceToY(lq.level);
+        ctx.strokeStyle = baseCol;
+        ctx.lineWidth   = isLive ? 2 + _pM * 0.8 : 1.2;
+        ctx.beginPath();
+        ctx.moveTo(cx_v - glowW / 2, crossY);
+        ctx.lineTo(cx_v + glowW / 2, crossY);
+        ctx.stroke();
+        ctx.shadowBlur  = 0;
+        ctx.restore();
+      }
+
+      // ── STEP 3: Level line — solid + thick when being swept, dotted otherwise
+      ctx.save();
+      if (activeSweep) {
+        // Solid bright line during live sweep
+        ctx.shadowColor = baseCol;
+        ctx.shadowBlur  = 14 + 10 * _pF;
+        ctx.strokeStyle = baseCol;
+        ctx.lineWidth   = 2.5 + _pF;
+        ctx.globalAlpha = 0.9 + 0.1 * _pF;
+        ctx.setLineDash([]);
+      } else if (lqProx !== 'off') {
+        ctx.shadowColor = color;
+        ctx.shadowBlur  = lqProx === 'hot' ? 10 + 6 * _pF : 4;
+        ctx.strokeStyle = color;
+        ctx.lineWidth   = lqProx === 'hot' ? 2 + _pM : 1.2;
+        ctx.globalAlpha = lqProx === 'hot' ? 0.85 + 0.15 * _pF : 0.8;
+        ctx.setLineDash([3, 4]);
+      } else {
+        ctx.strokeStyle = color;
+        ctx.lineWidth   = lq.swept ? 0.6 : 0.8;
+        ctx.globalAlpha = lq.swept ? 0.3 : 0.65;
+        ctx.setLineDash([1, 4]);
+      }
       ctx.beginPath();
       ctx.moveTo(chartLeft, y);
       ctx.lineTo(chartRight, y);
       ctx.stroke();
       ctx.setLineDash([]);
+      ctx.shadowBlur  = 0;
       ctx.globalAlpha = 1;
+      ctx.restore();
 
-      // Small diamond markers at both ends (only for active, unswept levels)
-      if (!lq.swept) {
-        const diamond = (cx: number, cy: number, size = 3.5) => {
-          ctx.beginPath();
-          ctx.moveTo(cx, cy - size);
-          ctx.lineTo(cx + size, cy);
-          ctx.lineTo(cx, cy + size);
-          ctx.lineTo(cx - size, cy);
-          ctx.closePath();
-          ctx.fillStyle = color;
-          ctx.globalAlpha = 0.85;
-          ctx.fill();
+      // ── STEP 4: Spark burst — 8 radial lines at the live crossing point ──
+      if (activeSweep) {
+        const sparkX = idxToX(candles.length - 1);  // last candle x
+        if (sparkX >= chartLeft && sparkX <= chartRight) {
+          const sparkR = 7 + 5 * _pF;
+          ctx.save();
+          ctx.shadowColor = baseCol;
+          ctx.shadowBlur  = 8 + 6 * _pF;
+          ctx.strokeStyle = baseCol;
+          ctx.lineWidth   = 1.5;
+          ctx.globalAlpha = 0.65 + 0.35 * _pF;
+          for (let k = 0; k < 8; k++) {
+            const ang = (k * Math.PI) / 4 + (_t / 400);  // slow rotation
+            const innerR = 3;
+            ctx.beginPath();
+            ctx.moveTo(sparkX + Math.cos(ang) * innerR, y + Math.sin(ang) * innerR);
+            ctx.lineTo(sparkX + Math.cos(ang) * sparkR, y + Math.sin(ang) * sparkR);
+            ctx.stroke();
+          }
+          ctx.shadowBlur  = 0;
           ctx.globalAlpha = 1;
+          ctx.restore();
+        }
+      }
+
+      // ── STEP 5: Diamond end-markers — grow + glow ────────────────
+      if (!lq.swept) {
+        const dSize = activeSweep ? 7 + 2 * _pF : lqProx !== 'off' ? 5 + 2 * _pM : 3.5;
+        const dAlpha = activeSweep ? 0.85 + 0.15 * _pF : lqProx !== 'off' ? 0.9 + 0.1 * _pF : 0.85;
+        const diamond = (cx: number, cy: number, sz = dSize) => {
+          ctx.save();
+          if (activeSweep) { ctx.shadowColor = baseCol; ctx.shadowBlur = 8 + 4 * _pF; }
+          ctx.beginPath();
+          ctx.moveTo(cx, cy - sz);
+          ctx.lineTo(cx + sz, cy);
+          ctx.lineTo(cx, cy + sz);
+          ctx.lineTo(cx - sz, cy);
+          ctx.closePath();
+          ctx.fillStyle   = color;
+          ctx.globalAlpha = dAlpha;
+          ctx.fill();
+          ctx.shadowBlur  = 0;
+          ctx.globalAlpha = 1;
+          ctx.restore();
         };
         diamond(chartLeft + 5, y);
         diamond(chartRight - 5, y);
       }
 
-      // Right-axis label pill — bigger font
-      const liqTag = lq.swept
+      // ── STEP 6: Direction arrow near the left diamond ─────────────
+      if (!lq.swept && lqProx !== 'off') {
+        const arrowDir = isSell ? '↑' : '↓';   // which direction price is coming from
+        const arrowLabel = activeSweep
+          ? (isSell ? `SWEEP ↑` : `SWEEP ↓`)
+          : (isSell ? `→SSL ↑` : `→BSL ↓`);
+        ctx.save();
+        ctx.font        = `bold ${activeSweep ? 9.5 : 8.5}px sans-serif`;
+        ctx.fillStyle   = baseCol;
+        ctx.globalAlpha = activeSweep ? 0.9 + 0.1 * _pF : 0.75 + 0.15 * _pM;
+        ctx.textAlign   = 'left';
+        ctx.fillText(arrowLabel, chartLeft + 18, y - 4);
+        ctx.globalAlpha = 1;
+        ctx.restore();
+        void arrowDir; // used above inline
+      }
+
+      // ── STEP 7: Right-axis label pill ─────────────────────────────
+      const liqTag  = lq.swept
         ? `${isSell ? 'SSL ✗' : 'BSL ✗'}`
-        : `${isSell ? 'SSL' : 'BSL'} ×${lq.touchCount}`;
+        : activeSweep
+          ? `${isSell ? '⚡SSL' : '⚡BSL'} ×${lq.touchCount}`
+          : `${isSell ? 'SSL' : 'BSL'} ×${lq.touchCount}`;
       const liqFull = `${liqTag}  ${fmtPrice(lq.level)}`;
       ctx.font = 'bold 10px sans-serif';
-      const llw = ctx.measureText(liqFull).width + 12;
-      const llh = 17;
-      const llx = chartRight + 2, lly = y - llh / 2;
-      ctx.fillStyle = color;
-      ctx.globalAlpha = lq.swept ? 0.35 : 0.85;
-      roundRect(ctx, llx, lly, llw, llh, 3); ctx.fill();
+      const llw  = ctx.measureText(liqFull).width + 12;
+      const llh  = 17;
+      const llx  = chartRight + 2;
+      const lly  = y - llh / 2;
+      ctx.save();
+      if (activeSweep) { ctx.shadowColor = baseCol; ctx.shadowBlur = 6 + 4 * _pF; }
+      ctx.fillStyle   = color;
+      ctx.globalAlpha = lq.swept ? 0.35 : activeSweep ? 0.9 + 0.1 * _pF : 0.85;
+      roundRect(ctx, llx, lly, llw, llh, 3);
+      ctx.fill();
+      ctx.shadowBlur  = 0;
       ctx.globalAlpha = 1;
-      ctx.fillStyle = '#0d1117';
-      ctx.textAlign = 'left';
+      ctx.fillStyle   = lq.swept ? '#94a3b8' : '#0d1117';
+      ctx.textAlign   = 'left';
       ctx.fillText(liqFull, llx + 6, lly + 12);
+      ctx.restore();
     }
 
     // ── CURRENT PRICE LINE ──────────────────────────────────────────
@@ -975,18 +1238,27 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
                   : ev.type === 'CHOCH_BULL' ? CFG.CHOCH_BULL
                   : CFG.CHOCH_BEAR;
 
-      // Line extends to chartRight so it's always visible (not just 18 candles)
-      // ChoCh: solid 2px;  BOS: medium dash 1px
+      // Approach detection — structure line glows when price is near this level
+      const strProx = lineProx(ev.level);
+      if (strProx !== 'off') alertZones.push({ label: isChoCh ? 'CHoCH' : 'BOS', color });
+
+      // Line — sharp glow when price approaching
+      ctx.save();
+      if (strProx !== 'off') { ctx.shadowColor = color; ctx.shadowBlur = strProx === 'hot' ? 12 + 8 * _pF : 5; }
       ctx.strokeStyle = color;
-      ctx.lineWidth = isChoCh ? 2 : 1;
+      ctx.lineWidth   = isChoCh
+        ? (strProx === 'hot' ? 3.5 + _pM : strProx === 'warm' ? 2.5 : 1)
+        : (strProx === 'hot' ? 2 + _pM * 0.6 : strProx === 'warm' ? 1.4 : 0.7);
       ctx.setLineDash(isChoCh ? [] : [5, 4]);
-      ctx.globalAlpha = isChoCh ? 0.9 : 0.7;
+      ctx.globalAlpha = strProx === 'hot' ? 0.75 + 0.25 * _pF : strProx === 'warm' ? (isChoCh ? 0.65 : 0.50) : (isChoCh ? 0.20 : 0.16);
       ctx.beginPath();
       ctx.moveTo(evX, evY);
       ctx.lineTo(chartRight, evY);
       ctx.stroke();
       ctx.setLineDash([]);
+      ctx.shadowBlur = 0;
       ctx.globalAlpha = 1;
+      ctx.restore();
 
       // Vertical tick at the break candle (shows exact break point)
       const tickLen = isChoCh ? 8 : 5;
@@ -1054,30 +1326,111 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
       const indY = priceToY(ind.level);
       if (indY < chartTop || indY > chartBottom) continue;
 
-      const isHigh = ind.side === 'high';
+      const isHigh  = ind.side === 'high';
       const offsetY = isHigh ? -10 : 10;
       const markerY = indY + offsetY;
 
-      // Small diamond marker
-      ctx.fillStyle = CFG.IND_COLOR;
-      ctx.globalAlpha = 0.7;
+      // Approach detection — diamond + label glow when price near this equal H/L
+      const indProx = lineProx(ind.level);
+      if (indProx !== 'off') alertZones.push({ label: isHigh ? 'EQH' : 'EQL', color: CFG.IND_COLOR });
+      const iSize = indProx !== 'off' ? 5 + 1.5 * _pM : 4;
+
+      // Diamond marker — grows + glows on approach
+      ctx.save();
+      if (indProx !== 'off') { ctx.shadowColor = CFG.IND_COLOR; ctx.shadowBlur = indProx === 'hot' ? 8 + 5 * _pF : 3; }
+      ctx.fillStyle   = CFG.IND_COLOR;
+      ctx.globalAlpha = indProx === 'hot' ? 0.7 + 0.3 * _pF : indProx === 'warm' ? 0.60 : 0.28;
       ctx.beginPath();
-      ctx.moveTo(indX, markerY - 4);
-      ctx.lineTo(indX + 3, markerY);
-      ctx.lineTo(indX, markerY + 4);
-      ctx.lineTo(indX - 3, markerY);
+      ctx.moveTo(indX, markerY - iSize);
+      ctx.lineTo(indX + iSize * 0.75, markerY);
+      ctx.lineTo(indX, markerY + iSize);
+      ctx.lineTo(indX - iSize * 0.75, markerY);
+      ctx.closePath();
+      ctx.fill();
+      ctx.shadowBlur = 0;
+      ctx.globalAlpha = 1;
+      ctx.restore();
+
+      // EQH / EQL label — bolder + brighter on approach
+      const tag = isHigh ? 'EQH' : 'EQL';
+      ctx.fillStyle   = CFG.IND_COLOR;
+      ctx.font        = indProx !== 'off' ? 'bold 10px sans-serif' : 'bold 9px sans-serif';
+      ctx.textAlign   = 'center';
+      ctx.globalAlpha = indProx === 'hot' ? 0.85 + 0.15 * _pF : indProx === 'warm' ? 0.65 : 0.28;
+      ctx.fillText(tag, indX, markerY + (isHigh ? -7 : 13));
+      ctx.globalAlpha = 1;
+    }
+
+    // ── FRACTAL MARKERS (Williams 5-bar) ───────────────────────────
+    // ▼ amber triangle above the high of a bearish fractal top
+    // ▲ sky-blue triangle below the low of a bullish fractal bottom
+    // Only draw fractals that fall within the visible candle window
+    for (const fr of fractals) {
+      if (fr.idx < startIdx || fr.idx >= startIdx + visible.length) continue;
+      const fx = idxToX(fr.idx);
+      if (fx < chartLeft || fx > chartRight) continue;
+      const isTop = fr.type === 'top';
+      const fy = priceToY(fr.price);
+      const color = isTop ? CFG.FRACTAL_TOP : CFG.FRACTAL_BOT;
+      const triSize = 4.5;
+      // Offset: top fractal ▼ appears above the high; bottom fractal ▲ below the low
+      const tipY = isTop ? fy - 8 : fy + 8;
+      ctx.fillStyle = color;
+      ctx.globalAlpha = 0.88;
+      ctx.beginPath();
+      if (isTop) {
+        // ▼ pointing down — apex at tipY, base above
+        ctx.moveTo(fx,             tipY + triSize);
+        ctx.lineTo(fx - triSize,   tipY - triSize * 0.8);
+        ctx.lineTo(fx + triSize,   tipY - triSize * 0.8);
+      } else {
+        // ▲ pointing up — apex at tipY, base below
+        ctx.moveTo(fx,             tipY - triSize);
+        ctx.lineTo(fx - triSize,   tipY + triSize * 0.8);
+        ctx.lineTo(fx + triSize,   tipY + triSize * 0.8);
+      }
       ctx.closePath();
       ctx.fill();
       ctx.globalAlpha = 1;
+    }
 
-      // EQH / EQL text — bigger, clearer
-      const tag = isHigh ? 'EQH' : 'EQL';
-      ctx.fillStyle = CFG.IND_COLOR;
-      ctx.font = 'bold 9px sans-serif';
-      ctx.textAlign = 'center';
-      ctx.globalAlpha = 0.8;
-      ctx.fillText(tag, indX, markerY + (isHigh ? -7 : 13));
-      ctx.globalAlpha = 1;
+    // ── APPROACH ALERT BANNER ─────────────────────────────────────────────────
+    // Floats near the top of the chart area when price is near key zones.
+    // Deduplicates labels; border pulses with the zone color.
+    {
+      const seen = new Set<string>();
+      const uniq = alertZones
+        .filter(z => { if (seen.has(z.label)) return false; seen.add(z.label); return true; })
+        .slice(0, 6);
+      if (uniq.length > 0) {
+        const bannerText = `⚡  ${uniq.map(z => z.label).join('  ·  ')}`;
+        ctx.font = 'bold 9.5px sans-serif';
+        const bw = ctx.measureText(bannerText).width + 20;
+        const bh = 20;
+        const bx = Math.max(chartLeft + 4, chartLeft + (chartW - bw) / 2);
+        const by = chartTop + 8;
+        ctx.save();
+        // Dark translucent background
+        ctx.globalAlpha = 0.88;
+        ctx.fillStyle   = 'rgba(8, 10, 22, 0.92)';
+        roundRect(ctx, bx, by, bw, bh, 6);
+        ctx.fill();
+        // Pulsing glow border
+        ctx.shadowColor = uniq[0].color;
+        ctx.shadowBlur  = 8 + 6 * _pF;
+        ctx.strokeStyle = uniq[0].color;
+        ctx.lineWidth   = 1.5;
+        ctx.globalAlpha = 0.65 + 0.35 * _pF;
+        roundRect(ctx, bx, by, bw, bh, 6);
+        ctx.stroke();
+        ctx.shadowBlur  = 0;
+        // White text
+        ctx.globalAlpha = 0.9 + 0.1 * _pF;
+        ctx.fillStyle   = '#f1f5f9';
+        ctx.textAlign   = 'left';
+        ctx.fillText(bannerText, bx + 10, by + bh - 5);
+        ctx.restore();
+      }
     }
 
     // ── KEY LEVELS HUD — hidden (values shown on right axis price pills) ──
@@ -1501,29 +1854,32 @@ function computeChartSignal(
   liquidity: Liquidity[],
   levels: ChartLevels,
   spot: number,
+  structure: StructureEvent[]    = [],
+  inducements: InducementPoint[] = [],
+  fractals: FractalPoint[]       = [],
 ): { signal: ChartSignal; score: number } {
   if (candles.length < 5 || spot <= 0) return { signal: 'NEUTRAL', score: 0 };
 
   let score = 0;
+  const N = candles.length;
 
   // ── 1. SWING STRUCTURE (±30) ─────────────────────────────────────────────
-  // Track actual sequence of swing highs/lows to detect HH/HL vs LH/LL trend
+  // HH/HL sequence = uptrend; LH/LL = downtrend
   const sc = candles.slice(-20);
   let lastSH = -Infinity, lastSL = Infinity;
   let hh = 0, hl = 0, lh = 0, ll = 0;
   for (let i = 1; i < sc.length - 1; i++) {
     const p = sc[i - 1], c = sc[i], n = sc[i + 1];
-    if (c.h > p.h && c.h > n.h) {           // swing high found
+    if (c.h > p.h && c.h > n.h) {
       if (lastSH > -Infinity) { if (c.h > lastSH) hh++; else lh++; }
       lastSH = c.h;
     }
-    if (c.l < p.l && c.l < n.l) {           // swing low found
+    if (c.l < p.l && c.l < n.l) {
       if (lastSL < Infinity)  { if (c.l > lastSL) hl++; else ll++; }
       lastSL = c.l;
     }
   }
   let swingScore = (hh * 4 + hl * 3) - (lh * 3 + ll * 4);
-  // Fallback when too few swings detected: compare first-half vs second-half average close
   if (hh + hl + lh + ll < 2 && sc.length >= 10) {
     const mid = Math.floor(sc.length / 2);
     const firstAvg = sc.slice(0, mid).reduce((s, c) => s + c.c, 0) / mid;
@@ -1536,54 +1892,50 @@ function computeChartSignal(
   // ── 2. KEY LEVELS POSITION (±25) ─────────────────────────────────────────
   let lvl = 0;
   const { pdh = 0, pdl = 0, cdh = 0, cdl = 0, support = [], resistance = [] } = levels;
-
-  // Always have a price-position reference: use PDH/PDL if set, else recent 20-candle range
   const window20 = candles.slice(-20);
   const recentHigh = Math.max(...window20.map(c => c.h));
   const recentLow  = Math.min(...window20.map(c => c.l));
   const hiRef = pdh > 0 ? pdh : recentHigh;
   const loRef = pdl > 0 ? pdl : recentLow;
 
-  if (spot > hiRef * 1.001)      lvl += 14;   // confirmed breakout above reference high
-  else if (spot > hiRef)         lvl += 7;    // above reference high
-  else if (spot < loRef * 0.999) lvl -= 14;   // confirmed breakdown below reference low
-  else if (spot < loRef)         lvl -= 7;    // below reference low
+  if (spot > hiRef * 1.001)      lvl += 14;
+  else if (spot > hiRef)         lvl += 7;
+  else if (spot < loRef * 0.999) lvl -= 14;
+  else if (spot < loRef)         lvl -= 7;
   else {
     const range = hiRef - loRef;
-    if (range > 0) lvl += ((spot - loRef) / range - 0.5) * 16; // position within range ±8
+    if (range > 0) lvl += ((spot - loRef) / range - 0.5) * 16;
   }
-
-  // CDH / CDL — current day session extremes
-  // spot AT/ABOVE CDH = making new intraday highs = BULLISH
-  // spot AT/BELOW CDL = making new intraday lows  = BEARISH
   if (cdh > 0 && cdl > 0) {
     const dayRange = cdh - cdl;
-    if (spot >= cdh * 0.9998)      lvl += 9;   // at/above CDH = new intraday high = bullish
-    else if (spot <= cdl * 1.0002) lvl -= 9;   // at/below CDL = new intraday low  = bearish
-    else if (dayRange > 0) {
-      lvl += ((spot - cdl) / dayRange - 0.5) * 8; // position within today's range ±4
-    }
-  } else if (cdh > 0) {
-    if (spot >= cdh * 0.9998) lvl += 9;
-  } else if (cdl > 0) {
-    if (spot <= cdl * 1.0002) lvl -= 9;
-  }
+    if (spot >= cdh * 0.9998)      lvl += 9;
+    else if (spot <= cdl * 1.0002) lvl -= 9;
+    else if (dayRange > 0)         lvl += ((spot - cdl) / dayRange - 0.5) * 8;
+  } else if (cdh > 0 && spot >= cdh * 0.9998) { lvl += 9; }
+    else if (cdl > 0 && spot <= cdl * 1.0002) { lvl -= 9; }
 
-  // S&R — nearest levels only
   const nearRes = resistance.length > 0 ? resistance[resistance.length - 1] : 0;
   const nearSup = support.length > 0 ? support[0] : 0;
-  if (nearRes > 0) {
-    if (spot > nearRes * 1.001)      lvl += 5;
-    else if (spot > nearRes * 0.997) lvl -= 3;
-  }
-  if (nearSup > 0) {
-    if (spot < nearSup * 0.999)      lvl -= 5;
-    else if (spot < nearSup * 1.003) lvl += 3;
-  }
+  if (nearRes > 0) { if (spot > nearRes * 1.001) lvl += 5; else if (spot > nearRes * 0.997) lvl -= 3; }
+  if (nearSup > 0) { if (spot < nearSup * 0.999) lvl -= 5; else if (spot < nearSup * 1.003) lvl += 3; }
   score += Math.min(25, Math.max(-25, lvl));
 
-  // ── 3. FVG ZONES (±20) ───────────────────────────────────────────────────
-  // Where FVG is relative to spot tells direction of imbalance
+  // ── 3. BOS / CHoCH STRUCTURE EVENTS (±22) ────────────────────────────────
+  // CHoCH = character change (reversal signal) — stronger than BOS (continuation)
+  // Only the last ~15 events matter; recency amplifies weight.
+  let bosRaw = 0;
+  const recentStructure = structure.slice(-15);
+  for (const ev of recentStructure) {
+    const age = N - ev.idx;                               // candles ago
+    const recency = age <= 3 ? 2.0 : age <= 8 ? 1.5 : age <= 15 ? 1.0 : 0.5;
+    const isChoch  = ev.type === 'CHOCH_BULL' || ev.type === 'CHOCH_BEAR';
+    const weight   = isChoch ? 8 : 5;                     // CHoCH > BOS
+    if (ev.type === 'BOS_BULL' || ev.type === 'CHOCH_BULL') bosRaw += weight * recency;
+    else                                                    bosRaw -= weight * recency;
+  }
+  score += Math.min(22, Math.max(-22, bosRaw));
+
+  // ── 4. FVG ZONES (±20) ───────────────────────────────────────────────────
   let fvgRaw = 0;
   for (const f of fvg) {
     if (f.filled) continue;
@@ -1591,80 +1943,120 @@ function computeChartSignal(
     const distPct = Math.abs(mid - spot) / spot;
     const prox = distPct < 0.003 ? 3 : distPct < 0.008 ? 2 : 1;
     const str = f.strength ?? 1;
-
     if (f.type === 'bullish') {
-      if (spot >= f.bottom && spot <= f.top) fvgRaw += 8 * str;   // price INSIDE bullish FVG
-      else if (mid < spot)                   fvgRaw += 3 * prox * str; // FVG below = support
-      else                                   fvgRaw += 1.5 * prox * str; // FVG above = target
+      if (spot >= f.bottom && spot <= f.top) fvgRaw += 8 * str;
+      else if (mid < spot)                   fvgRaw += 3 * prox * str;
+      else                                   fvgRaw += 1.5 * prox * str;
     } else {
-      if (spot >= f.bottom && spot <= f.top) fvgRaw -= 8 * str;   // price INSIDE bearish FVG
-      else if (mid > spot)                   fvgRaw -= 3 * prox * str; // FVG above = resistance
-      else                                   fvgRaw -= 2 * prox * str; // FVG below = broke thru = bearish
+      if (spot >= f.bottom && spot <= f.top) fvgRaw -= 8 * str;
+      else if (mid > spot)                   fvgRaw -= 3 * prox * str;
+      else                                   fvgRaw -= 2 * prox * str;
     }
   }
   score += Math.min(20, Math.max(-20, fvgRaw));
 
-  // ── 4. ORDER BLOCK ANALYSIS (±15) ────────────────────────────────────────
+  // ── 5. ORDER BLOCK ANALYSIS (±18) ────────────────────────────────────────
   let obRaw = 0;
   for (const o of ob) {
     if (o.mitigated) continue;
     const mid = (o.high + o.low) / 2;
     const distPct = Math.abs(mid - spot) / spot;
-    if (distPct > 0.025) continue;             // only OBs within 2.5% matter
+    if (distPct > 0.025) continue;
     const prox = distPct < 0.003 ? 3 : distPct < 0.01 ? 2 : 1;
     const str = o.strength ?? 1;
-
     if (o.type === 'bullish') {
-      obRaw += mid < spot ? 4 * prox * str : -2 * prox * str; // below=demand, above=broke below=bearish
+      obRaw += mid < spot ? 5 * prox * str : -2 * prox * str;
     } else {
-      obRaw -= mid > spot ? 4 * prox * str : 2 * prox * str;  // above=supply, below=broke thru=bearish
+      obRaw -= mid > spot ? 5 * prox * str : 2 * prox * str;
     }
   }
-  score += Math.min(15, Math.max(-15, obRaw));
+  score += Math.min(18, Math.max(-18, obRaw));
 
-  // ── 5. LIQUIDITY ANALYSIS (±15) ──────────────────────────────────────────
-  // Swept SSL (sell-side stops triggered below) = smart money bought = bullish
-  // Swept BSL (buy-side stops triggered above) = smart money sold = bearish
-  // Unswept BSL above price = upside target (magnets) = mild bullish
-  // Unswept SSL below price = downside target = mild bearish
+  // ── 6. LIQUIDITY SWEEP ANALYSIS (±18) ────────────────────────────────────
+  // Swept SSL = smart money absorbed sell stops → bullish reversal
+  // Swept BSL = smart money absorbed buy stops  → bearish reversal
+  // Unswept BSL above / SSL below = price magnets
   let liqRaw = 0;
   for (const l of liquidity) {
     if (l.swept) {
-      const recency = l.sweepIdx !== null && (candles.length - l.sweepIdx) < 6 ? 2 : 1;
-      liqRaw += l.type === 'sell_side' ? 5 * recency : -5 * recency;
+      const age = l.sweepIdx !== null ? N - (l.sweepIdx ?? N) : N;
+      const recency = age <= 3 ? 2.5 : age <= 6 ? 2.0 : age <= 12 ? 1.5 : 1.0;
+      liqRaw += l.type === 'sell_side' ? 6 * recency : -6 * recency;
     } else {
       const distPct = Math.abs(l.level - spot) / spot;
       if (distPct > 0.03) continue;
       const prox = distPct < 0.005 ? 2 : 1;
-      if (l.type === 'buy_side' && l.level > spot)  liqRaw += 2 * prox; // BSL above = upside magnet
-      if (l.type === 'sell_side' && l.level < spot) liqRaw -= 2 * prox; // SSL below = downside magnet
-      if (l.touchCount > 2) liqRaw += l.type === 'buy_side' ? 1 : -1;   // many touches = strong pool
+      if (l.type === 'buy_side'  && l.level > spot) liqRaw += 2 * prox;
+      if (l.type === 'sell_side' && l.level < spot) liqRaw -= 2 * prox;
+      if (l.touchCount > 2) liqRaw += l.type === 'buy_side' ? 1.5 : -1.5;
     }
   }
-  score += Math.min(15, Math.max(-15, liqRaw));
+  score += Math.min(18, Math.max(-18, liqRaw));
 
-  // ── 6. CANDLE MOMENTUM (±10) ─────────────────────────────────────────────
-  // Body ratio: big-body candles count more than doji/spinning tops
+  // ── 7. FRACTALS (±10) ────────────────────────────────────────────────────
+  // A recent fractal top just above spot = resistance/liquidity wall
+  // A recent fractal bottom just below spot = support / demand
+  // Breakout: price just closed ABOVE a fractal top = bullish
+  // Breakdown: price just closed BELOW a fractal bottom = bearish
+  let fracRaw = 0;
+  const lastClose = candles[N - 1]?.c ?? spot;
+  for (const fr of fractals) {
+    const age = N - 1 - fr.idx;
+    if (age > 30) continue;                               // only recent fractals matter
+    const recency = age <= 3 ? 2.0 : age <= 10 ? 1.5 : 1.0;
+    const distPct = Math.abs(fr.price - spot) / spot;
+    if (fr.type === 'top') {
+      if (lastClose > fr.price && distPct < 0.005) fracRaw += 5 * recency; // broke above top fractal
+      else if (fr.price > spot && distPct < 0.01)  fracRaw -= 2 * recency; // fractal top overhead = resistance
+    } else {
+      if (lastClose < fr.price && distPct < 0.005) fracRaw -= 5 * recency; // broke below bot fractal
+      else if (fr.price < spot && distPct < 0.01)  fracRaw += 2 * recency; // fractal bottom below = support
+    }
+  }
+  score += Math.min(10, Math.max(-10, fracRaw));
+
+  // ── 8. INDUCEMENTS / EQH-EQL (±8) ────────────────────────────────────────
+  // Equal highs above = liquidity pool — price drawn to tap them = mild bullish bias
+  // Equal lows below  = liquidity pool — price drawn to tap them = mild bearish bias
+  // Very close = strong magnet; already tapped / below spot = price came from there = structural cue
+  let indRaw = 0;
+  for (const ind of inducements) {
+    const age = N - 1 - ind.idx;
+    if (age > 40) continue;
+    const distPct = Math.abs(ind.level - spot) / spot;
+    if (distPct > 0.03) continue;
+    const prox = distPct < 0.004 ? 3 : distPct < 0.012 ? 2 : 1;
+    if (ind.side === 'high' && ind.level > spot) indRaw += 2 * prox;  // EQH above = upside draw
+    if (ind.side === 'low'  && ind.level < spot) indRaw -= 2 * prox;  // EQL below = downside draw
+    // Price already through the EQ level → structural shift confirmation
+    if (ind.side === 'high' && ind.level < spot) indRaw += 1;
+    if (ind.side === 'low'  && ind.level > spot) indRaw -= 1;
+  }
+  score += Math.min(8, Math.max(-8, indRaw));
+
+  // ── 9. CANDLE MOMENTUM (±10) ─────────────────────────────────────────────
   let momRaw = 0;
   const recent = candles.slice(-6);
   for (let i = 0; i < recent.length; i++) {
     const c = recent[i];
-    const weight = i >= recent.length - 2 ? 2 : 1;  // last 2 candles double weight
+    const weight = i >= recent.length - 2 ? 2 : 1;
     const body = Math.abs(c.c - c.o);
     const range = (c.h - c.l) || 1;
-    const bodyRatio = body / range;                   // 0=doji, 1=full marubozu
+    const bodyRatio = body / range;
     const dir = c.c > c.o ? 1 : c.c < c.o ? -1 : 0;
     momRaw += dir * weight * (0.5 + bodyRatio * 0.5);
   }
   score += Math.min(10, Math.max(-10, momRaw * 1.5));
 
   // ── Map to signal ─────────────────────────────────────────────────────────
+  // Theoretical max ±161 (30+25+22+20+18+18+10+8+10).
+  // Thresholds calibrated so STRONG fires at ~27% of max, BUY at ~11%.
   const s = Math.round(score);
   let signal: ChartSignal;
-  if (s >= 32)       signal = 'STRONG_BUY';
-  else if (s >= 12)  signal = 'BUY';
-  else if (s <= -32) signal = 'STRONG_SELL';
-  else if (s <= -12) signal = 'SELL';
+  if (s >= 44)       signal = 'STRONG_BUY';
+  else if (s >= 18)  signal = 'BUY';
+  else if (s <= -44) signal = 'STRONG_SELL';
+  else if (s <= -18) signal = 'SELL';
   else               signal = 'NEUTRAL';
 
   return { signal, score: s };
@@ -1676,20 +2068,38 @@ const SymbolChartCard = memo<{ data: SymbolChartData | null; name: string; liveS
   const [timeframe, setTimeframe] = useState<'1h' | '15m' | '5m' | '3m'>('5m');
   const [expanded, setExpanded] = useState(false);
   const [isMaximized, setIsMaximized] = useState(false);
+  const [modalMinimized, setModalMinimized] = useState(false);
+  const [modalFullscreen, setModalFullscreen] = useState(false);
   const [modalChartH, setModalChartH] = useState(420);
   const chartH = expanded ? 560 : CFG.CHART_H;
 
+  const openModal = useCallback(() => {
+    setModalMinimized(false);
+    setModalFullscreen(false);
+    setIsMaximized(true);
+  }, []);
+
+  const closeModal = useCallback(() => {
+    setIsMaximized(false);
+    setModalMinimized(false);
+    setModalFullscreen(false);
+  }, []);
+
   useEffect(() => {
-    if (!isMaximized) return;
+    if (!isMaximized || modalMinimized) return;
     const compute = () => {
       const vh = window.innerHeight;
-      const modalH = Math.min(vh * 0.9, 880);
-      setModalChartH(Math.max(260, modalH - 48));
+      if (modalFullscreen) {
+        setModalChartH(Math.max(260, vh - 52));
+      } else {
+        const modalH = Math.min(vh * 0.92, 880);
+        setModalChartH(Math.max(260, modalH - 52));
+      }
     };
     compute();
     window.addEventListener('resize', compute);
     return () => window.removeEventListener('resize', compute);
-  }, [isMaximized]);
+  }, [isMaximized, modalMinimized, modalFullscreen]);
 
   const [signalFlash, setSignalFlash] = useState(false);
   const prevSignalRef = useRef<string>('');
@@ -1734,6 +2144,9 @@ const SymbolChartCard = memo<{ data: SymbolChartData | null; name: string; liveS
   // Equal H/L inducement clusters
   const inducements = useMemo(() => computeInducements(candles, 4), [candles]);
 
+  // Williams 5-bar fractals
+  const fractals = useMemo(() => computeFractals(candles, 2), [candles]);
+
   const levels = useMemo<ChartLevels>(() => {
     if (!data?.levels) return { pdh: 0, pdl: 0, cdh: 0, cdl: 0, support: [], resistance: [] };
     return data.levels;
@@ -1750,14 +2163,21 @@ const SymbolChartCard = memo<{ data: SymbolChartData | null; name: string; liveS
       obBear: activeOb.filter(o => o.type === 'bearish').length,
       ssl: activeLiq.filter(l => l.type === 'sell_side').length,
       bsl: activeLiq.filter(l => l.type === 'buy_side').length,
+      fracTop: fractals.filter(f => f.type === 'top').length,
+      fracBot: fractals.filter(f => f.type === 'bottom').length,
     };
-  }, [fvgList, obList, liqList]);
+  }, [fvgList, obList, liqList, fractals]);
 
   // Chart pattern signal — recomputes on every liveSpot tick (every ~1s)
+  // All 9 factors: swing structure, key levels, BOS/CHoCH, FVG, OB, liquidity sweep,
+  // fractals, inducements, candle momentum.
   const chartSignal = useMemo(() => {
     const effectiveSpot = (liveSpot && liveSpot > 0) ? liveSpot : data?.spot ?? 0;
-    return computeChartSignal(candles, fvgList, obList, liqList, levels, effectiveSpot);
-  }, [candles, fvgList, obList, liqList, levels, liveSpot, data?.spot]);
+    return computeChartSignal(
+      candles, fvgList, obList, liqList, levels, effectiveSpot,
+      structure, inducements, fractals,
+    );
+  }, [candles, fvgList, obList, liqList, levels, liveSpot, data?.spot, structure, inducements, fractals]);
 
   // Trigger flash animation whenever signal category changes
   useEffect(() => {
@@ -1886,61 +2306,118 @@ const SymbolChartCard = memo<{ data: SymbolChartData | null; name: string; liveS
         spot={data.spot}
         liveSpot={liveSpot}
         chartHeight={chartH}
-        onMaximize={() => setIsMaximized(true)}
+        onMaximize={openModal}
         structure={structure}
         inducements={inducements}
+        fractals={fractals}
         htfMode={htfMode}
       />
 
-      {/* Maximized floating modal */}
+      {/* ── Pop-up chart window — no blur, 3-button window chrome ── */}
       {isMaximized && (
         <div
-          className="fixed inset-0 z-[9999] flex items-center justify-center p-3 sm:p-6"
-          style={{ background: 'rgba(2,6,23,0.78)', backdropFilter: 'blur(4px)' }}
-          onClick={() => setIsMaximized(false)}
+          className="fixed inset-0 z-[9999] flex items-start sm:items-center justify-center p-2 sm:p-5"
+          style={{ background: 'rgba(2,6,23,0.92)' }}
+          onClick={closeModal}
         >
           <div
-            className="w-full max-w-5xl flex flex-col rounded-2xl overflow-hidden shadow-[0_8px_48px_rgba(0,0,0,0.75)] border border-slate-700/50"
-            style={{ background: '#0d1117', maxHeight: 'min(90vh, 880px)' }}
+            className={`
+              w-full flex flex-col overflow-hidden
+              shadow-[0_16px_64px_rgba(0,0,0,0.85)] border border-slate-600/50
+              transition-all duration-200
+              ${ modalFullscreen
+                ? 'fixed inset-0 rounded-none'
+                : 'max-w-5xl rounded-xl mt-8 sm:mt-0'
+              }
+            `}
+            style={{
+              background: '#0d1117',
+              ...(!modalFullscreen ? { maxHeight: modalMinimized ? 'auto' : 'min(92vh, 900px)' } : {}),
+            }}
             onClick={e => e.stopPropagation()}
           >
-            {/* Modal header */}
-            <div className="flex items-center justify-between px-3 sm:px-4 py-2.5 border-b border-slate-700/40 bg-slate-900/80 shrink-0">
-              <div className="flex items-center gap-2 min-w-0">
-                <span className="w-[3px] h-5 rounded-full bg-gradient-to-b from-indigo-400 to-purple-500 shrink-0" />
-                <span className="text-[13px] font-bold text-white tracking-tight truncate">{name}</span>
-                <span className="text-[10px] font-mono text-indigo-400/70 shrink-0">{timeframe.toUpperCase()}</span>
-                <span className="hidden sm:inline text-[9px] text-slate-500 truncate">FVG · OB · BOS · ChoCH · Liq</span>
-              </div>
-              <div className="flex items-center gap-1.5 shrink-0">
+            {/* ── Window title bar ── */}
+            <div className="flex items-center gap-2 px-3 py-2 border-b border-slate-700/50 bg-[#161b27] shrink-0 select-none">
+
+              {/* macOS-style traffic lights */}
+              <div className="flex items-center gap-[6px] shrink-0">
+                {/* Close — red */}
                 <button
-                  onClick={() => setTimeframe(tf => tf === '5m' ? '3m' : tf === '3m' ? '15m' : tf === '15m' ? '1h' : '5m')}
-                  className="px-2 py-0.5 rounded text-[10px] font-bold bg-slate-800/80 border border-slate-600/40 text-slate-300 hover:bg-indigo-600/40 hover:text-indigo-200 hover:border-indigo-500/40 transition-all"
-                  title="Switch timeframe"
-                >{timeframe === '5m' ? '→ 3m' : timeframe === '3m' ? '→ 15m' : timeframe === '15m' ? '→ 1h' : '→ 5m'}</button>
-                <button
-                  onClick={() => setIsMaximized(false)}
-                  className="w-7 h-7 rounded bg-slate-800/70 border border-slate-600/40 text-slate-400 text-xs flex items-center justify-center hover:bg-red-600/70 hover:text-white hover:border-red-500/50 active:scale-95 transition-all"
+                  onClick={closeModal}
                   title="Close"
-                >✕</button>
+                  className="w-3 h-3 rounded-full bg-[#ff5f57] hover:bg-[#ff3b30] border border-[#c03b35]/60 flex items-center justify-center group transition-colors"
+                >
+                  <span className="hidden group-hover:flex text-[5px] text-[#4d0000] font-black">✕</span>
+                </button>
+                {/* Minimize — yellow */}
+                <button
+                  onClick={() => setModalMinimized(v => !v)}
+                  title={modalMinimized ? 'Restore' : 'Minimise'}
+                  className="w-3 h-3 rounded-full bg-[#febc2e] hover:bg-[#ffb800] border border-[#b37800]/60 flex items-center justify-center group transition-colors"
+                >
+                  <span className="hidden group-hover:flex text-[7px] text-[#4d3200] font-black leading-none" style={{ lineHeight: 1 }}>─</span>
+                </button>
+                {/* Fullscreen — green */}
+                <button
+                  onClick={() => setModalFullscreen(v => !v)}
+                  title={modalFullscreen ? 'Restore window' : 'Full screen'}
+                  className="w-3 h-3 rounded-full bg-[#28c840] hover:bg-[#00d32c] border border-[#0f6e1a]/60 flex items-center justify-center group transition-colors"
+                >
+                  <span className="hidden group-hover:flex text-[6px] text-[#003a00] font-black">⛶</span>
+                </button>
+              </div>
+
+              {/* Centre title */}
+              <div className="flex-1 flex items-center justify-center gap-2 min-w-0">
+                <span className="text-[11px] sm:text-[12px] font-semibold text-slate-300 truncate">{name}</span>
+                <span className="text-[9px] font-mono text-indigo-400/70 shrink-0 bg-indigo-500/10 border border-indigo-500/20 px-1.5 py-0.5 rounded">{timeframe.toUpperCase()}</span>
+                <span className="hidden sm:inline text-[9px] text-slate-600">FVG · OB · BOS · ChoCH · Liq · Sweep</span>
+              </div>
+
+              {/* Right — timeframe switcher */}
+              <div className="flex items-center gap-1 shrink-0">
+                <div className="flex rounded overflow-hidden border border-slate-700/50">
+                  {(['1h','15m','5m','3m'] as const).map((tf, idx) => (
+                    <button
+                      key={tf}
+                      onClick={() => setTimeframe(tf)}
+                      className={`
+                        px-2 py-1 text-[9px] font-bold transition-colors
+                        ${ idx < 3 ? 'border-r border-slate-700/50' : '' }
+                        ${ timeframe === tf ? 'bg-indigo-500/25 text-indigo-300' : 'text-slate-500 hover:text-slate-300' }
+                      `}
+                    >{tf.toUpperCase()}</button>
+                  ))}
+                </div>
               </div>
             </div>
-            {/* Chart — fills remaining modal height exactly */}
-            <div className="shrink-0">
-              <CandleChart
-                candles={candles}
-                fvg={fvgList}
-                ob={obList}
-                liquidity={liqList}
-                levels={levels}
-                spot={data.spot}
-                liveSpot={liveSpot}
-                chartHeight={modalChartH}
-                structure={structure}
-                inducements={inducements}
-                htfMode={htfMode}
-              />
-            </div>
+
+            {/* ── Chart body — hidden when minimised ── */}
+            {!modalMinimized && (
+              <div className="shrink-0 overflow-hidden">
+                <CandleChart
+                  candles={candles}
+                  fvg={fvgList}
+                  ob={obList}
+                  liquidity={liqList}
+                  levels={levels}
+                  spot={data.spot}
+                  liveSpot={liveSpot}
+                  chartHeight={modalChartH}
+                  structure={structure}
+                  inducements={inducements}
+                  fractals={fractals}
+                  htfMode={htfMode}
+                />
+              </div>
+            )}
+
+            {/* Minimised hint strip */}
+            {modalMinimized && (
+              <div className="px-4 py-2 text-[10px] text-slate-500 text-center">
+                Chart minimised · click <span className="text-yellow-400">●</span> to restore
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -1994,6 +2471,12 @@ const SymbolChartCard = memo<{ data: SymbolChartData | null; name: string; liveS
           <span className="text-[8px] font-mono" style={{ color: CFG.CHOCH_BULL }}>
             ChoCH {structure.filter(e => e.type === 'CHOCH_BULL' || e.type === 'CHOCH_BEAR').length}
           </span>
+          <span className="text-[8px] font-mono" style={{ color: CFG.FRACTAL_TOP }}>
+            FR▼ {stats.fracTop}
+          </span>
+          <span className="text-[8px] font-mono" style={{ color: CFG.FRACTAL_BOT }}>
+            FR▲ {stats.fracBot}
+          </span>
           <span className="ml-auto text-[8px] font-mono text-slate-600">
             {candles.length}c · {lastCandle ? fmtTime(lastCandle.t) : ''}
           </span>
@@ -2033,7 +2516,7 @@ const ChartIntelligence = memo(() => {
             Real-Time Chart Intelligence
           </h3>
           <span className="hidden sm:inline text-[10px] sm:text-[11px] text-indigo-400/60 font-medium">
-            FVG · OB · Liquidity · S/R · PDH/PDL · CDH/CDL
+            FVG · OB · Liquidity · S/R · PDH/PDL · CDH/CDL · Fractals
           </span>
           <span className={`text-[9px] font-mono ${dataStatus.color}`}>
             {dataStatus.label}
@@ -2047,6 +2530,44 @@ const ChartIntelligence = memo(() => {
           <span className="px-1.5 py-0.5 rounded" style={{ background: CFG.FVG_BEAR_FILL, color: CFG.FVG_BEAR_BORDER, border: `1px solid ${CFG.FVG_BEAR_BORDER}` }}>↓ FVG</span>
           <span className="px-1.5 py-0.5 rounded bg-orange-500/10 text-orange-400 border border-orange-500/30">SSL</span>
           <span className="px-1.5 py-0.5 rounded bg-cyan-500/10 text-cyan-400 border border-cyan-500/30">BSL</span>
+          <span className="px-1.5 py-0.5 rounded text-[8px] font-bold" style={{ background: 'rgba(232,160,48,0.1)', color: CFG.FRACTAL_TOP, border: `1px solid ${CFG.FRACTAL_TOP}50` }}>▼ FR Top</span>
+          <span className="px-1.5 py-0.5 rounded text-[8px] font-bold" style={{ background: 'rgba(48,168,232,0.1)', color: CFG.FRACTAL_BOT, border: `1px solid ${CFG.FRACTAL_BOT}50` }}>▲ FR Bot</span>
+        </div>
+      </div>
+
+      {/* SMC Quick-Reference Glossary */}
+      <div className="mb-3 rounded-lg border border-slate-700/40 bg-slate-900/60 px-3 py-2.5 grid grid-cols-2 sm:grid-cols-4 gap-x-4 gap-y-1.5 text-[10px] leading-snug">
+        <div>
+          <span className="font-bold" style={{ color: CFG.BOS_BULL }}>BOS</span>
+          <span className="text-slate-400"> — Break of Structure. Trend continues. Trade in the breakout direction.</span>
+        </div>
+        <div>
+          <span className="font-bold" style={{ color: CFG.CHOCH_BULL }}>CHoCH</span>
+          <span className="text-slate-400"> — Change of Character. Trend may reverse. Watch for entry against prior move.</span>
+        </div>
+        <div>
+          <span className="font-bold" style={{ color: CFG.OB_BULL_BORDER }}>OB</span>
+          <span className="text-slate-400"> — Order Block. Institutional order zone. Expect a strong reaction when price returns.</span>
+        </div>
+        <div>
+          <span className="font-bold" style={{ color: CFG.FVG_BULL_BORDER }}>FVG</span>
+          <span className="text-slate-400"> — Fair Value Gap. Price imbalance. Market tends to revisit and fill this gap.</span>
+        </div>
+        <div>
+          <span className="font-bold text-indigo-400">POI</span>
+          <span className="text-slate-400"> — Point of Interest. BOS + OB + FVG overlap. Highest-probability trade zone.</span>
+        </div>
+        <div>
+          <span className="font-bold" style={{ color: CFG.LIQ_BUY }}>BSL</span>
+          <span className="text-slate-400"> — Buy-Side Liquidity. Stops sitting above recent highs. Bears hunt this to push price up then reverse.</span>
+        </div>
+        <div>
+          <span className="font-bold" style={{ color: CFG.LIQ_SELL }}>SSL</span>
+          <span className="text-slate-400"> — Sell-Side Liquidity. Stops sitting below recent lows. Bulls hunt this to push price down then reverse.</span>
+        </div>
+        <div>
+          <span className="font-bold" style={{ color: CFG.FRACTAL_TOP }}>EQH/EQL</span>
+          <span className="text-slate-400"> — Equal Highs / Equal Lows. Double liquidity pools. Strong magnet for price.</span>
         </div>
       </div>
 

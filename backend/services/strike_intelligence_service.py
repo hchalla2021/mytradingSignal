@@ -127,6 +127,18 @@ def _get_atm_strike(spot: float, step: int) -> int:
     return int(spot / step + 0.5) * step
 
 
+def _approx_delta(spot: float, strike: float) -> float:
+    """
+    Synthetic CE delta using a logistic approximation of Black-Scholes N(d1).
+    ATM (spot==strike) → 0.5  |  deep ITM → ~0.95  |  deep OTM → ~0.05
+    Uses a 5% normalised moneyness as a proxy for one standard deviation.
+    """
+    if spot <= 0 or strike <= 0:
+        return 0.5
+    m = (spot - strike) / (spot * 0.05)   # normalised moneyness
+    return 1.0 / (1.0 + math.exp(-m * 1.6))
+
+
 def _compute_signal(
     ce_oi: int, pe_oi: int, ce_volume: int, pe_volume: int,
     ce_price: float, pe_price: float, ce_change: float, pe_change: float,
@@ -135,135 +147,247 @@ def _compute_signal(
     """
     Compute buy/sell signal for a single strike from CE & PE data.
 
-    Scoring factors (weighted):
-      1. Volume imbalance     (30%) — Which side has more volume
-      2. OI imbalance         (25%) — OI buildup direction
-      3. Price momentum       (20%) — Premium change indicates direction
-      4. Liquidity depth      (15%) — Total volume+OI as liquidity indicator
-      5. Moneyness bias       (10%) — ITM vs OTM preference
+    Scoring factors:
+      1. Volume imbalance     (±30) — Which side has more volume
+      2. OI positioning       (±15) — OI buildup direction (writers vs holders)
+      3. Price momentum       (±30) — Premium % change (most real-time indicator)
+      4. Liquidity depth      (±10) — Total flow as market depth proxy
+      5. Moneyness bias       (±10) — ITM premium is more actionable
 
-    Returns signal for CE side and PE side independently.
+    Advanced factors (new):
+      6. BSL/SSL zone         (±12) — OI concentration above/below spot = institutional walls
+      7. BOS structure        (±10) — CE/PE price divergence at ATM = breakout confirmation
+      8. Delta-weighted vol   (±8)  — Moneyness-adjusted volume pressure (ITM vol > OTM vol)
+      9. Trap detection       (−15) — High volume but price moves against = absorption trap
 
-    CE score > 0 → calls being bought/rising → bullish for market
-    PE score > 0 → puts being bought/rising → bearish for market
-
-    Weights: volume ±30 | price momentum ±30 | OI positioning ±15 | liquidity ±10 | moneyness ±10
+    CE score > 0 → calls active/rising → bullish for underlying
+    PE score > 0 → puts active/rising → bearish for underlying
     """
-    total_oi = ce_oi + pe_oi
+    total_oi  = ce_oi  + pe_oi
     total_vol = ce_volume + pe_volume
 
-    # ── CE Signal ────────────────────────────────────────────────────────
+    # ── CE Score ─────────────────────────────────────────────────────────
+
     ce_score = 0.0
 
-    # 1. Volume dominance (±30) — CE volume spike = calls being bought = bullish
+    # 1. Volume dominance (±30)
     if total_vol > 0:
-        ce_vol_ratio = ce_volume / total_vol
-        ce_score += (ce_vol_ratio - 0.5) * 2.0 * 30  # -30 to +30
+        ce_score += (ce_volume / total_vol - 0.5) * 2.0 * 30
 
-    # 2. OI positioning (±15)
-    # High CE OI = heavy call writing = resistance = bearish for CE buyers
+    # 2. OI positioning (±15) — high CE OI = heavy writing = resistance = bearish for CE
     if total_oi > 0:
-        ce_oi_ratio = ce_oi / total_oi
-        ce_score += (0.5 - ce_oi_ratio) * 2.0 * 15  # high CE OI → negative → CE bearish
+        ce_score += (0.5 - ce_oi / total_oi) * 2.0 * 15
 
-    # 3. Price momentum (±30) — most reliable real-time indicator
+    # 3. Price momentum (±30)
     if ce_price > 0:
-        ce_pct_change = (ce_change / ce_price) * 100
-        ce_score += _clamp(ce_pct_change * 5, -30, 30)
+        ce_score += _clamp((ce_change / ce_price) * 100 * 5, -30, 30)
 
-    # 4. Liquidity depth (±10, symmetric — no asymmetric bias)
+    # 4. Liquidity depth (±10)
     if total_vol > 100:
-        liq_score = min(math.log10(max(total_vol, 1)) / 6.0, 1.0)
-        ce_score += liq_score * 10 if ce_volume > pe_volume else -liq_score * 10
+        liq = min(math.log10(max(total_vol, 1)) / 6.0, 1.0)
+        ce_score += liq * 10 if ce_volume > pe_volume else -liq * 10
 
-    # 5. Moneyness (±10) — ITM calls more actionable
+    # 5. Moneyness (±10)
     if spot > 0:
-        moneyness = (spot - strike) / spot * 100
-        if moneyness > 0:  # ITM call
-            ce_score += min(moneyness * 2, 10)
-        else:              # OTM call
-            ce_score += max(moneyness * 1.5, -10)
+        m = (spot - strike) / spot * 100
+        ce_score += min(m * 2, 10) if m > 0 else max(m * 1.5, -10)
 
-    # ── PE Signal ────────────────────────────────────────────────────────
+    # ── PE Score ─────────────────────────────────────────────────────────
+
     pe_score = 0.0
 
-    # 1. Volume dominance (±30) — PE volume spike = puts being bought = bearish for market
+    # 1. Volume dominance (±30)
     if total_vol > 0:
-        pe_vol_ratio = pe_volume / total_vol
-        pe_score += (pe_vol_ratio - 0.5) * 2.0 * 30
+        pe_score += (pe_volume / total_vol - 0.5) * 2.0 * 30
 
-    # 2. OI positioning (±15)
-    # CRITICAL: sign is OPPOSITE to CE — high PE OI means more put positioning = bearish market
-    # → PE score should go UP (PE BUY = bearish market), not down
+    # 2. OI positioning (±15) — high PE OI = bearish positioning = bullish PE signal
     if total_oi > 0:
-        pe_oi_ratio = pe_oi / total_oi
-        pe_score += (pe_oi_ratio - 0.5) * 2.0 * 15  # high PE OI → positive → PE bullish (market bearish)
+        pe_score += (pe_oi / total_oi - 0.5) * 2.0 * 15
 
     # 3. Price momentum (±30)
     if pe_price > 0:
-        pe_pct_change = (pe_change / pe_price) * 100
-        pe_score += _clamp(pe_pct_change * 5, -30, 30)
+        pe_score += _clamp((pe_change / pe_price) * 100 * 5, -30, 30)
 
-    # 4. Liquidity depth (±10, symmetric)
+    # 4. Liquidity depth (±10)
     if total_vol > 100:
-        liq_score = min(math.log10(max(total_vol, 1)) / 6.0, 1.0)
-        pe_score += liq_score * 10 if pe_volume > ce_volume else -liq_score * 10
+        liq = min(math.log10(max(total_vol, 1)) / 6.0, 1.0)
+        pe_score += liq * 10 if pe_volume > ce_volume else -liq * 10
 
-    # 5. Moneyness (±10) — ITM puts more actionable
+    # 5. Moneyness (±10)
     if spot > 0:
-        moneyness = (strike - spot) / spot * 100
-        if moneyness > 0:  # ITM put
-            pe_score += min(moneyness * 2, 10)
-        else:              # OTM put
-            pe_score += max(moneyness * 1.5, -10)
+        m = (strike - spot) / spot * 100
+        pe_score += min(m * 2, 10) if m > 0 else max(m * 1.5, -10)
+
+    # ═══════════════════════════════════════════════════════════════════════
+    #  ADVANCED FACTOR 6: BSL / SSL Liquidity Zone
+    # ═══════════════════════════════════════════════════════════════════════
+    # BSL (Buy-Side Liquidity) = Stops sitting above spot → large CE OI above ATM
+    #   → call writers defending that ceiling → resistance → headwind for CE buyers
+    # SSL (Sell-Side Liquidity) = Stops sitting below spot → large PE OI below ATM
+    #   → put writers defending that floor → support → tailwind for CE holders
+    #
+    # Only applies when strike is within 2% of spot (high-relevance zone)
+    # ───────────────────────────────────────────────────────────────────────
+    liq_type_ce: Optional[str] = None
+    liq_type_pe: Optional[str] = None
+
+    if spot > 0 and total_oi > 10_000:
+        dist_ratio = (strike - spot) / spot          # + = above spot, – = below
+        oi_weight  = min(math.log10(max(total_oi, 1)) / 7.0, 1.0)
+
+        if 0.0 <= dist_ratio < 0.02:                 # Strike at/just above spot → BSL zone
+            ce_dominance = (ce_oi - pe_oi) / (total_oi + 1)
+            if ce_dominance > 0:                     # Call wall above = resistance
+                liq_type_ce = "BSL"
+                liq_type_pe = "BSL"
+                ce_score -= ce_dominance * oi_weight * 12   # resistance headwind for CE
+                pe_score += ce_dominance * oi_weight * 8    # ceiling confirmed = put support
+
+        elif -0.02 < dist_ratio < 0.0:               # Strike just below spot → SSL zone
+            pe_dominance = (pe_oi - ce_oi) / (total_oi + 1)
+            if pe_dominance > 0:                     # Put wall below = support
+                liq_type_ce = "SSL"
+                liq_type_pe = "SSL"
+                pe_score -= pe_dominance * oi_weight * 12   # floor being defended = bearish for PE
+                ce_score += pe_dominance * oi_weight * 8    # support confirmed = tailwind for CE
+
+    # ═══════════════════════════════════════════════════════════════════════
+    #  ADVANCED FACTOR 7: BOS (Break of Structure)
+    # ═══════════════════════════════════════════════════════════════════════
+    # BOS UP:   CE price surging + PE price falling at near-ATM strike
+    #           = market momentum confirms bullish structural break
+    # BOS DOWN: PE price surging + CE price falling at near-ATM strike
+    #           = market momentum confirms bearish structural break
+    #
+    # Proximity-weighted: strongest at ATM, fades for far OTM/ITM strikes
+    # ───────────────────────────────────────────────────────────────────────
+    bos_signal: Optional[str] = None
+
+    if ce_price > 0 and pe_price > 0 and spot > 0:
+        ce_pct = (ce_change / ce_price) * 100
+        pe_pct = (pe_change / pe_price) * 100
+        # Proximity to ATM: 1.0 at ATM, 0 at 3% away
+        atm_prox = max(0.0, 1.0 - abs(spot - strike) / (spot * 0.03))
+
+        divergence = ce_pct - pe_pct               # CE rising / PE falling = bullish BOS
+        bos_boost  = _clamp(divergence * atm_prox * 0.7, -10, 10)
+        ce_score  += bos_boost
+        pe_score  -= bos_boost                     # inverted for PE
+
+        if divergence > 3.0 and atm_prox > 0.25:
+            bos_signal = "UP"
+        elif divergence < -3.0 and atm_prox > 0.25:
+            bos_signal = "DOWN"
+
+    # ═══════════════════════════════════════════════════════════════════════
+    #  ADVANCED FACTOR 8: Delta-Weighted Volume
+    # ═══════════════════════════════════════════════════════════════════════
+    # Synthetic delta scales volume impact by option moneyness:
+    #   ITM option volume = bigger real market exposure (delta ≈ 0.8–0.95)
+    #   OTM option volume = smaller exposure (delta ≈ 0.05–0.3)
+    # Delta-adjusted CE vol dominating → stronger bullish signal than raw vol alone
+    # ───────────────────────────────────────────────────────────────────────
+    ce_delta = _approx_delta(spot, float(strike))
+    pe_delta = 1.0 - ce_delta                      # put delta complement
+
+    if total_vol > 0:
+        ce_dv = ce_delta * ce_volume / (total_vol + 1)   # 0–1 range
+        pe_dv = pe_delta * pe_volume / (total_vol + 1)
+        delta_push = (ce_dv - pe_dv) * 16               # ±8 max
+        ce_score  += delta_push
+        pe_score  -= delta_push
+
+    # ═══════════════════════════════════════════════════════════════════════
+    #  ADVANCED FACTOR 9: Trap Detection
+    # ═══════════════════════════════════════════════════════════════════════
+    # A trap (absorption) occurs when:
+    #   — One side dominates volume (many retail buyers piling in)
+    #   — BUT that side's option price is flat or falling
+    #   → Institutions are absorbing retail orders = price won't move their way
+    #   → Strong negative signal for the "trapped" side
+    #
+    # Examples:
+    #   CE Trap: CE volume > 60% of total BUT ce_change <= 0 → calls being sold into buyers
+    #   PE Trap: PE volume > 60% of total BUT pe_change <= 0 → puts being sold into buyers
+    # ───────────────────────────────────────────────────────────────────────
+    trap_ce = False
+    trap_pe = False
+
+    if total_vol > 5_000:
+        ce_vol_dom = ce_volume / (total_vol + 1)
+        pe_vol_dom = pe_volume / (total_vol + 1)
+
+        if ce_price > 0 and ce_vol_dom > 0.60:
+            ce_pct_chg_ratio = ce_change / ce_price
+            if ce_pct_chg_ratio < -0.02:             # Vol up but price falling = CE trap
+                trap_ce = True
+                ce_score -= 15
+
+        if pe_price > 0 and pe_vol_dom > 0.60:
+            pe_pct_chg_ratio = pe_change / pe_price
+            if pe_pct_chg_ratio < -0.02:             # Vol up but price falling = PE trap
+                trap_pe = True
+                pe_score -= 15
+
+    # ── Score → Signal conversion ─────────────────────────────────────────
 
     def _score_to_signal(score: float) -> str:
-        if score >= 42:
-            return "STRONG_BUY"
-        elif score >= 16:
-            return "BUY"
-        elif score <= -42:
-            return "STRONG_SELL"
-        elif score <= -16:
-            return "SELL"
+        if   score >=  46: return "STRONG_BUY"
+        elif score >=  18: return "BUY"
+        elif score <= -46: return "STRONG_SELL"
+        elif score <= -18: return "SELL"
         return "NEUTRAL"
 
     def _score_to_pct(score: float) -> Dict[str, float]:
-        """Convert raw score to buy/sell/neutral breakdown."""
-        clamped = _clamp(score, -95, 95)
-        abs_s = abs(clamped)
+        clamped = _clamp(score, -110, 110)
+        abs_s   = abs(clamped)
         if clamped >= 0:
-            buy_pct = 50.0 + abs_s * 0.45
-            sell_pct = 50.0 - abs_s * 0.35
+            buy_pct  = 50.0 + abs_s * 0.40
+            sell_pct = 50.0 - abs_s * 0.32
         else:
-            sell_pct = 50.0 + abs_s * 0.45
-            buy_pct = 50.0 - abs_s * 0.35
-        neutral_pct = max(0.0, 10.0 - abs_s * 0.1)
+            sell_pct = 50.0 + abs_s * 0.40
+            buy_pct  = 50.0 - abs_s * 0.32
+        neutral_pct = max(0.0, 10.0 - abs_s * 0.09)
         total = buy_pct + sell_pct + neutral_pct
-        return {
-            "buyPct": round(buy_pct / total * 100, 1),
-            "sellPct": round(sell_pct / total * 100, 1),
-            "neutralPct": round(neutral_pct / total * 100, 1),
-        }
+        # Integer percentages — avoids decimal bleed like "3.2%N" in the UI
+        b = int(round(buy_pct     / total * 100))
+        s = int(round(sell_pct    / total * 100))
+        n = int(round(neutral_pct / total * 100))
+        # Correct any ±1 rounding error so they always sum to 100
+        diff = 100 - b - s - n
+        b += diff  # absorb rounding error into the dominant (buy/sell) bucket
+        return {"buyPct": b, "sellPct": s, "neutralPct": n}
 
     return {
         "ce": {
-            "signal": _score_to_signal(ce_score),
-            "score": round(ce_score, 1),
+            "signal":    _score_to_signal(ce_score),
+            "score":     round(ce_score, 1),
             "breakdown": _score_to_pct(ce_score),
-            "oi": ce_oi,
-            "volume": ce_volume,
-            "price": round(ce_price, 2),
-            "change": round(ce_change, 2),
+            "oi":        ce_oi,
+            "volume":    ce_volume,
+            "price":     round(ce_price, 2),
+            "change":    round(ce_change, 2),
+            "signals": {
+                "liq":   liq_type_ce,              # "BSL" | "SSL" | null
+                "bos":   bos_signal,               # "UP"  | "DOWN" | null
+                "delta": round(ce_delta, 3),       # synthetic CE delta (0.0–1.0)
+                "trap":  trap_ce,                  # true = absorption trap detected
+            },
         },
         "pe": {
-            "signal": _score_to_signal(pe_score),
-            "score": round(pe_score, 1),
+            "signal":    _score_to_signal(pe_score),
+            "score":     round(pe_score, 1),
             "breakdown": _score_to_pct(pe_score),
-            "oi": pe_oi,
-            "volume": pe_volume,
-            "price": round(pe_price, 2),
-            "change": round(pe_change, 2),
+            "oi":        pe_oi,
+            "volume":    pe_volume,
+            "price":     round(pe_price, 2),
+            "change":    round(pe_change, 2),
+            "signals": {
+                "liq":   liq_type_pe,              # "BSL" | "SSL" | null
+                "bos":   bos_signal,               # "UP"  | "DOWN" | null (same break)
+                "delta": round(pe_delta, 3),       # synthetic PE delta (0.0–1.0)
+                "trap":  trap_pe,                  # true = absorption trap detected
+            },
         },
     }
 
@@ -431,10 +555,11 @@ class StrikeIntelligenceService:
             # Try loading from disk if not yet populated
             persisted = _load_persistent()
             if persisted:
-                # Mark as MARKET_CLOSED since we loaded from disk
+                # Real last-session data from disk — mark as LAST_CLOSE so the
+                # frontend can show signals (unlike synthetic MARKET_CLOSED data)
                 for sym in persisted:
                     if isinstance(persisted[sym], dict):
-                        persisted[sym]["dataSource"] = "MARKET_CLOSED"
+                        persisted[sym]["dataSource"] = "LAST_CLOSE"
                 self._last_snapshot = persisted
         return self._last_snapshot
 
@@ -686,8 +811,11 @@ class StrikeIntelligenceService:
                 "ce_oi": ce_oi, "pe_oi": pe_oi,
                 "ce_volume": ce_vol, "pe_volume": pe_vol,
                 "ce_price": ce_price, "pe_price": pe_price,
-                "ce_change": round(rng.uniform(-5, 5), 2),
-                "pe_change": round(rng.uniform(-5, 5), 2),
+                # Zero changes: no real price movement data when market is closed.
+                # Non-zero values feed the momentum factor (±30) and produce false
+                # directional signals (STRONG BUY / STRONG SELL) from synthetic data.
+                "ce_change": 0.0,
+                "pe_change": 0.0,
             }
 
         raw = {
@@ -702,14 +830,13 @@ class StrikeIntelligenceService:
 
     def _recompute_signals_with_spot(self, entry: Dict[str, Any], spot: float, symbol: str) -> Dict[str, Any]:
         """
-        Recompute per-strike signals using a fresh spot price.
-        OI / volume / price / change are taken from the last Zerodha fetch stored
-        in the entry — only the spot-sensitive components change every second:
-          • moneyness bias (ITM/OTM depth)
-          • ATM recalculation → label + isATM flag
-          • Overall score rebalanced
+        Recompute per-strike signals using a fresh spot price every 1s.
+        OI / volume / price / change are taken from the last Zerodha fetch.
+        Only spot-sensitive components update every second:
+          • moneyness bias, ATM recalculation, delta, BSL/SSL zone
+        The BOS and Trap sub-signals are recomputed from stored price/change data.
         """
-        step = STRIKE_STEP.get(symbol, 50)
+        step    = STRIKE_STEP.get(symbol, 50)
         new_atm = _get_atm_strike(spot, step)
 
         new_strikes = []
@@ -740,16 +867,16 @@ class StrikeIntelligenceService:
                 label = f"ITM{diff // step}"
 
             new_strikes.append({
-                "strike": strike_val,
-                "label": label,
-                "isATM": strike_val == new_atm,
-                "ce": signals["ce"],
-                "pe": signals["pe"],
+                "strike":  strike_val,
+                "label":   label,
+                "isATM":   strike_val == new_atm,
+                "ce":      signals["ce"],
+                "pe":      signals["pe"],
             })
 
-        updated = dict(entry)
-        updated["spot"] = round(spot, 2)
-        updated["atm"] = new_atm
+        updated          = dict(entry)
+        updated["spot"]  = round(spot, 2)
+        updated["atm"]   = new_atm
         updated["strikes"] = new_strikes
         return updated
 

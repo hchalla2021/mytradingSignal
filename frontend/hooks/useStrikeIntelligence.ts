@@ -6,7 +6,18 @@ import { getEnvironmentConfig } from '@/lib/env-detection';
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 export type StrikeSignal = 'STRONG_BUY' | 'BUY' | 'NEUTRAL' | 'SELL' | 'STRONG_SELL';
-export type StrikeDataSource = 'LIVE' | 'CACHED' | 'MARKET_CLOSED';
+export type StrikeDataSource = 'LIVE' | 'CACHED' | 'LAST_CLOSE' | 'MARKET_CLOSED';
+
+export interface StrikeSubSignals {
+  /** Liquidity zone: "BSL" = Buy-Side Liquidity above spot, "SSL" = Sell-Side below */
+  liq: 'BSL' | 'SSL' | null;
+  /** BOS: structural breakout direction detected at/near ATM */
+  bos: 'UP' | 'DOWN' | null;
+  /** Synthetic Black-Scholes delta (0.0–1.0); CE delta, PE delta = 1-ce */
+  delta: number;
+  /** Trap: high volume but price not moving in that direction = absorption */
+  trap: boolean;
+}
 
 export interface StrikeSideData {
   signal: StrikeSignal;
@@ -20,6 +31,8 @@ export interface StrikeSideData {
   volume: number;
   price: number;
   change: number;
+  /** Advanced sub-signal indicators (BSL/SSL, BOS, Delta, Trap) */
+  signals?: StrikeSubSignals;
 }
 
 export interface StrikeRow {
