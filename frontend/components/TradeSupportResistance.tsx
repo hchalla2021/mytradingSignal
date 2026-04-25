@@ -361,42 +361,19 @@ export const TradeSupportResistance: React.FC<TradeSupportResistanceProps> = ({
     };
   }, [data, analysis, marketStatus]);
 
-  // ── Loading skeleton ──────────────────────────────────────────────
-  if (!sig) {
-    return (
-      <div className="bg-dark-surface/60 rounded-2xl p-4 border border-gray-700/30 animate-pulse">
-        <div className="flex items-center justify-between mb-3">
-          <div className="h-4 bg-gray-700/50 rounded w-24" />
-          <div className="h-4 bg-gray-700/50 rounded w-12" />
-        </div>
-        <div className="h-8 bg-gray-700/50 rounded w-full mb-3" />
-        <div className="grid grid-cols-2 gap-2">
-          {[1,2,3,4].map(i => <div key={i} className="h-10 bg-gray-700/40 rounded" />)}
-        </div>
-        <div className="text-center text-xs text-gray-500 mt-3">{symbolName} — awaiting feed…</div>
-      </div>
-    );
-  }
-
-  const {
-    action, confidence, signalReason, style, totalScore, factors,
-    greenFactors, redFactors,
-    trend5min, trend15min, rsi5m, rsiMomStatus, rsi5mRaw, rsiMomentum,
-    emaAlignment, vwapPos, stTrend, trendColor,
-    changePercent, momentum, support, resistance,
-    distToSupport, distToResistance, vwap, vwapDist, volumeStrength,
-  } = sig;
-
   // ── Flash ONLY when signal status actually changes ──────────────
+  // NOTE: All hooks must be declared BEFORE any conditional return (Rules of Hooks).
   const cardRef = useRef<HTMLDivElement>(null);
   const badgeRef = useRef<HTMLDivElement>(null);
   const trend5Ref = useRef<HTMLDivElement>(null);
   const trend15Ref = useRef<HTMLDivElement>(null);
-  const prevAction = useRef(action);
-  const prevTrend5 = useRef(trend5min);
-  const prevTrend15 = useRef(trend15min);
+  const prevAction = useRef<string | null>(null);
+  const prevTrend5 = useRef<string | null>(null);
+  const prevTrend15 = useRef<string | null>(null);
 
   useEffect(() => {
+    if (!sig) return;
+    const { action, trend5min, trend15min } = sig;
     // Card flash — only when the BUY/SELL/STRONG action changes
     if (prevAction.current !== action && cardRef.current) {
       cardRef.current.classList.remove('tz-status-changed');
@@ -424,7 +401,33 @@ export const TradeSupportResistance: React.FC<TradeSupportResistanceProps> = ({
     prevAction.current = action;
     prevTrend5.current = trend5min;
     prevTrend15.current = trend15min;
-  }, [action, trend5min, trend15min]);
+  }, [sig]);
+
+  // ── Loading skeleton ──────────────────────────────────────────────
+  if (!sig) {
+    return (
+      <div className="bg-dark-surface/60 rounded-2xl p-4 border border-gray-700/30 animate-pulse">
+        <div className="flex items-center justify-between mb-3">
+          <div className="h-4 bg-gray-700/50 rounded w-24" />
+          <div className="h-4 bg-gray-700/50 rounded w-12" />
+        </div>
+        <div className="h-8 bg-gray-700/50 rounded w-full mb-3" />
+        <div className="grid grid-cols-2 gap-2">
+          {[1,2,3,4].map(i => <div key={i} className="h-10 bg-gray-700/40 rounded" />)}
+        </div>
+        <div className="text-center text-xs text-gray-500 mt-3">{symbolName} — awaiting feed…</div>
+      </div>
+    );
+  }
+
+  const {
+    action, confidence, signalReason, style, totalScore, factors,
+    greenFactors, redFactors,
+    trend5min, trend15min, rsi5m, rsiMomStatus, rsi5mRaw, rsiMomentum,
+    emaAlignment, vwapPos, stTrend, trendColor,
+    changePercent, momentum, support, resistance,
+    distToSupport, distToResistance, vwap, vwapDist, volumeStrength,
+  } = sig;
 
   const trendIcon  = (t: string) => t === 'UP' ? '▲' : t === 'DOWN' ? '▼' : '─';
   const trendClass = (t: string) =>

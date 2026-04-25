@@ -312,9 +312,13 @@ interface CandleChartProps {
   inducements?: InducementPoint[];
   fractals?: FractalPoint[];
   htfMode?: boolean;
+  /** Changes only on symbol / timeframe switch — resets Y-axis without restarting RAF */
+  chartKey?: string;
+  /** LIVE = fresh Zerodha data; CACHED or MARKET_CLOSED = stale — never distort candle H/L */
+  dataSource?: string;
 }
 
-const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, levels, spot, liveSpot, chartHeight, onMaximize, structure = [], inducements = [], fractals = [], htfMode = false }) => {
+const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, levels, spot, liveSpot, chartHeight, onMaximize, structure = [], inducements = [], fractals = [], htfMode = false, chartKey = '', dataSource = 'LIVE' }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
@@ -346,6 +350,32 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
   const liveSpotRef = useRef<number>(liveSpot ?? spot);
   useEffect(() => { liveSpotRef.current = liveSpot ?? spot; }, [liveSpot, spot]);
 
+  // ── Data refs — updated at render time so RAF loop never restarts on data change ──
+  const candlesRef      = useRef(candles);
+  const fvgRef          = useRef(fvg);
+  const obRef           = useRef(ob);
+  const liquidityRef    = useRef(liquidity);
+  const levelsRef       = useRef(levels);
+  const spotRef         = useRef(spot);
+  const structureRef    = useRef(structure);
+  const inducementsRef  = useRef(inducements);
+  const fractalsRef     = useRef(fractals);
+  const htfModeRef      = useRef(htfMode);
+  const chartHeightRef  = useRef(chartHeight);
+  const dataSourceRef   = useRef(dataSource);
+  candlesRef.current     = candles;
+  fvgRef.current         = fvg;
+  obRef.current          = ob;
+  liquidityRef.current   = liquidity;
+  levelsRef.current      = levels;
+  spotRef.current        = spot;
+  structureRef.current   = structure;
+  inducementsRef.current = inducements;
+  fractalsRef.current    = fractals;
+  htfModeRef.current     = htfMode;
+  chartHeightRef.current = chartHeight;
+  dataSourceRef.current  = dataSource;
+
   // Track last rendered canvas size — only resize when it actually changes
   // (resizing canvas clears it and causes a blank flash = flicker)
   const lastCanvasW = useRef(0);
@@ -358,6 +388,19 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
   const render = useCallback(() => {
     const canvas = canvasRef.current;
     const container = containerRef.current;
+    // Read latest data from refs — avoids recreating this callback on every data update
+    const candles    = candlesRef.current;
+    const fvg        = fvgRef.current;
+    const ob         = obRef.current;
+    const liquidity  = liquidityRef.current;
+    const levels     = levelsRef.current;
+    const spot       = spotRef.current;
+    const structure  = structureRef.current;
+    const inducements = inducementsRef.current;
+    const fractals   = fractalsRef.current;
+    const htfMode    = htfModeRef.current;
+    const chartHeight = chartHeightRef.current;
+    const dataSource = dataSourceRef.current;
     if (!canvas || !container || candles.length === 0) return;
 
     const effectiveSpot = liveSpotRef.current > 0 ? liveSpotRef.current : spot;
@@ -414,12 +457,24 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
     const centreX = chartLeft + chartW / 2 - pixelPanRef.current;
     const idxToX = (arrayIdx: number) => centreX + (arrayIdx - centreIdx) * candleStep;
 
-    // Patch last candle with live spot (no mutation)
+    // Patch last candle close with live spot (no mutation).
+    // H/L of the last candle are ONLY extended when dataSource === 'LIVE':
+    //   - LIVE   : Zerodha data is fresh — safe to extend the current live bar
+    //   - CACHED : data is stale (fetched hours ago) — extending H/L creates monster wicks
+    //             (e.g. cached H=79,100 + live spot=77,836 → 1264 pt red candle)
+    // The current-price dashed line (drawn later) always reflects liveSpot regardless.
     const rawSlice = candles.slice(startIdx, endIdx);
     const visible: Candle[] = rawSlice.map((c, si) => {
       const arrayIdx = startIdx + si;
       if (arrayIdx === candles.length - 1 && effectiveSpot > 0) {
-        return { ...c, c: effectiveSpot, h: Math.max(c.h, effectiveSpot), l: Math.min(c.l, effectiveSpot) };
+        const isLive = dataSource === 'LIVE';
+        const drift  = c.o > 0 ? Math.abs(effectiveSpot - c.o) / c.o : 1;
+        const safeToExtend = isLive && drift < 0.015;
+        if (safeToExtend) {
+          return { ...c, c: effectiveSpot, h: Math.max(c.h, effectiveSpot), l: Math.min(c.l, effectiveSpot) };
+        }
+        // Cached/closed data: only update visual close, never touch H/L
+        return { ...c, c: effectiveSpot };
       }
       return c;
     });
@@ -428,11 +483,16 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
     // ── Price range — driven by CANDLES ONLY so Y-axis stays stable ──
     // Key levels outside the visible range are simply clipped (not drawn).
     // Including distant PDH/PDL in the range made candles tiny + caused jitter.
+    // Skip malformed candles (l<=0, h<=0, l>h) — these come from backend edge-cases
+    // and would massively distort the Y-axis scale.
     let priceMin = Infinity, priceMax = -Infinity;
     for (const c of visible) {
-      if (c.h > priceMax) priceMax = c.h;
-      if (c.l < priceMin) priceMin = c.l;
+      if (c.l > 0 && c.h > 0 && c.l <= c.h) {
+        if (c.h > priceMax) priceMax = c.h;
+        if (c.l < priceMin) priceMin = c.l;
+      }
     }
+    if (priceMin === Infinity || priceMax === -Infinity) return; // all candles malformed
     // Include current spot so the live price line is always visible
     if (effectiveSpot > 0) {
       if (effectiveSpot > priceMax) priceMax = effectiveSpot;
@@ -1559,14 +1619,16 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
         }
       }
     }
-  }, [candles, fvg, ob, liquidity, levels, spot]);
+  }, []);
 
-  // Reset smooth range when symbol/data changes so axis snaps immediately
+  // Reset smooth Y-axis range only when the chart identity changes (symbol or timeframe switch)
+  // NOT on every 3s data update — that was the main cause of visible Y-axis jumping/flickering.
   useEffect(() => {
     smoothMinRef.current = 0;
     smoothMaxRef.current = 0;
     lastCanvasW.current = 0; // force canvas resize on next frame
-  }, [candles, chartHeight]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chartKey]);
 
   // ── Continuous RAF loop — runs at display refresh rate (60fps) ──────
   useEffect(() => {
@@ -1857,6 +1919,7 @@ function computeChartSignal(
   structure: StructureEvent[]    = [],
   inducements: InducementPoint[] = [],
   fractals: FractalPoint[]       = [],
+  liveSpot?: number,   // real-time tick price — may differ from last candle close
 ): { signal: ChartSignal; score: number } {
   if (candles.length < 5 || spot <= 0) return { signal: 'NEUTRAL', score: 0 };
 
@@ -1865,17 +1928,22 @@ function computeChartSignal(
 
   // ── 1. SWING STRUCTURE (±30) ─────────────────────────────────────────────
   // HH/HL sequence = uptrend; LH/LL = downtrend
+  // FIX: Weight swing points in the RECENT half of the 20-candle window 2×
+  // so a reversal in the last 10 candles immediately shifts the score.
   const sc = candles.slice(-20);
   let lastSH = -Infinity, lastSL = Infinity;
   let hh = 0, hl = 0, lh = 0, ll = 0;
+  const midIdx = Math.floor(sc.length / 2);
   for (let i = 1; i < sc.length - 1; i++) {
     const p = sc[i - 1], c = sc[i], n = sc[i + 1];
+    // Candles in the recent half get 2× weight (they reflect the current move)
+    const w = i >= midIdx ? 2 : 1;
     if (c.h > p.h && c.h > n.h) {
-      if (lastSH > -Infinity) { if (c.h > lastSH) hh++; else lh++; }
+      if (lastSH > -Infinity) { if (c.h > lastSH) hh += w; else lh += w; }
       lastSH = c.h;
     }
     if (c.l < p.l && c.l < n.l) {
-      if (lastSL < Infinity)  { if (c.l > lastSL) hl++; else ll++; }
+      if (lastSL < Infinity)  { if (c.l > lastSL) hl += w; else ll += w; }
       lastSL = c.l;
     }
   }
@@ -2034,23 +2102,73 @@ function computeChartSignal(
   }
   score += Math.min(8, Math.max(-8, indRaw));
 
-  // ── 9. CANDLE MOMENTUM (±10) ─────────────────────────────────────────────
+  // ── 9. CANDLE MOMENTUM (±14) ────────────────────────────────────────────────
+  // Body-weighted direction of last 6 candles; last 2 candles get 3× weight.
   let momRaw = 0;
   const recent = candles.slice(-6);
   for (let i = 0; i < recent.length; i++) {
     const c = recent[i];
-    const weight = i >= recent.length - 2 ? 2 : 1;
+    // Last 2 candles are 3× more important (they are the most recent completed bars)
+    const weight = i >= recent.length - 2 ? 3 : 1;
     const body = Math.abs(c.c - c.o);
     const range = (c.h - c.l) || 1;
     const bodyRatio = body / range;
     const dir = c.c > c.o ? 1 : c.c < c.o ? -1 : 0;
     momRaw += dir * weight * (0.5 + bodyRatio * 0.5);
   }
-  score += Math.min(10, Math.max(-10, momRaw * 1.5));
+  score += Math.min(14, Math.max(-14, momRaw * 1.6));
 
-  // ── Map to signal ─────────────────────────────────────────────────────────
-  // Theoretical max ±161 (30+25+22+20+18+18+10+8+10).
-  // Thresholds calibrated so STRONG fires at ~27% of max, BUY at ~11%.
+  // ── 10. LIVE SPOT MOMENTUM (±35) — HIGHEST-PRIORITY, REAL-TIME ──────────
+  //
+  // ROOT-CAUSE FIX for “still shows STRONG SELL during 30-min rally”:
+  // The candle array only refreshes every 10s from Zerodha API. During an
+  // intraday reversal, liveSpot (from WebSocket, every ~0.5s) races ahead of
+  // the stale closes. This factor measures that gap — it fires immediately
+  // on every liveSpot tick, independent of candle-refresh latency.
+  //
+  // Comparison points:
+  //   A) vs last candle close (most immediate — current bar direction)
+  //   B) vs candle[-2].close  (one completed bar ago — short-term trend)
+  //   C) vs candle[-4].close  (4 bars ago — ~12–20 min intraday trend)
+  //   D) vs candle[-8].close  (8 bars ago — ~24–40 min reversal window)
+  //
+  // For each, the magnitude of the price move is bucketed into point tiers.
+  // All four are summed with recency weighting (A most recent = 4×).
+  if (liveSpot && liveSpot > 0 && candles.length >= 2) {
+    let liveRaw = 0;
+
+    const anchors: { idx: number; weight: number }[] = [
+      { idx: candles.length - 1, weight: 4 },   // A: last close (current bar)
+      { idx: candles.length - 2, weight: 3 },   // B: 1 bar ago
+      { idx: Math.max(0, candles.length - 4), weight: 2 }, // C: ~12–20 min ago
+      { idx: Math.max(0, candles.length - 8), weight: 1 }, // D: ~24–40 min ago
+    ];
+
+    for (const { idx, weight } of anchors) {
+      const anchorClose = candles[idx]?.c;
+      if (!anchorClose || anchorClose <= 0) continue;
+      const movePct = ((liveSpot - anchorClose) / anchorClose) * 100;
+
+      // Bucket the move into points, with a cap at 12 per anchor
+      let pts = 0;
+      const abs = Math.abs(movePct);
+      if      (abs >= 0.8) pts = 12;
+      else if (abs >= 0.5) pts = 9;
+      else if (abs >= 0.3) pts = 6;
+      else if (abs >= 0.15) pts = 4;
+      else if (abs >= 0.05) pts = 2;
+      else                  pts = 0;
+
+      liveRaw += movePct >= 0 ? pts * weight : -pts * weight;
+    }
+
+    // Normalise: max possible raw = 12*(4+3+2+1) = 120 → cap to ±35
+    score += Math.min(35, Math.max(-35, liveRaw / 3.5));
+  }
+
+  // ── Map to signal ────────────────────────────────────────────────────
+  // Theoretical max ±196 (30+25+22+20+18+18+10+8+14+35).
+  // Thresholds tuned so STRONG fires when live momentum confirms chart structure.
   const s = Math.round(score);
   let signal: ChartSignal;
   if (s >= 44)       signal = 'STRONG_BUY';
@@ -2109,12 +2227,19 @@ const SymbolChartCard = memo<{ data: SymbolChartData | null; name: string; liveS
   //   15M = resample 3m × 5   (5×3m = 15m)
   //   5M  = direct 5m data
   //   3M  = direct 3m data
+  // Sort by timestamp to fix out-of-order candles from backend new-bar appends
+  // (backend sometimes appends bars with timestamps earlier than already-fetched candles).
   const candles = useMemo(() => {
     if (!data) return [];
-    if (timeframe === '1h')  return resampleCandles(data.candles5m ?? [], 12);
-    if (timeframe === '15m') return resampleCandles(data.candles3m ?? [], 5);
-    if (timeframe === '5m')  return data.candles5m ?? [];
-    return data.candles3m ?? [];
+    let raw: Candle[];
+    if (timeframe === '1h')  raw = resampleCandles(data.candles5m ?? [], 12);
+    else if (timeframe === '15m') raw = resampleCandles(data.candles3m ?? [], 5);
+    else if (timeframe === '5m')  raw = data.candles5m ?? [];
+    else raw = data.candles3m ?? [];
+    // Deduplicate by timestamp and sort chronologically
+    const seen = new Set<string>();
+    const deduped = raw.filter(c => { if (seen.has(c.t)) return false; seen.add(c.t); return true; });
+    return deduped.sort((a, b) => (a.t < b.t ? -1 : a.t > b.t ? 1 : 0));
   }, [data, timeframe]);
 
   const fvgList = useMemo(() => {
@@ -2169,13 +2294,14 @@ const SymbolChartCard = memo<{ data: SymbolChartData | null; name: string; liveS
   }, [fvgList, obList, liqList, fractals]);
 
   // Chart pattern signal — recomputes on every liveSpot tick (every ~1s)
-  // All 9 factors: swing structure, key levels, BOS/CHoCH, FVG, OB, liquidity sweep,
-  // fractals, inducements, candle momentum.
+  // All 10 factors: swing structure, key levels, BOS/CHoCH, FVG, OB, liquidity sweep,
+  // fractals, inducements, candle momentum, live-spot real-time momentum.
   const chartSignal = useMemo(() => {
     const effectiveSpot = (liveSpot && liveSpot > 0) ? liveSpot : data?.spot ?? 0;
     return computeChartSignal(
       candles, fvgList, obList, liqList, levels, effectiveSpot,
       structure, inducements, fractals,
+      liveSpot,   // pass separately so Factor 10 can compare vs stale candle closes
     );
   }, [candles, fvgList, obList, liqList, levels, liveSpot, data?.spot, structure, inducements, fractals]);
 
@@ -2311,6 +2437,8 @@ const SymbolChartCard = memo<{ data: SymbolChartData | null; name: string; liveS
         inducements={inducements}
         fractals={fractals}
         htfMode={htfMode}
+        chartKey={`${name}-${timeframe}`}
+        dataSource={data.dataSource}
       />
 
       {/* ── Pop-up chart window — no blur, 3-button window chrome ── */}
@@ -2408,6 +2536,8 @@ const SymbolChartCard = memo<{ data: SymbolChartData | null; name: string; liveS
                   inducements={inducements}
                   fractals={fractals}
                   htfMode={htfMode}
+                  chartKey={`${name}-${timeframe}-modal`}
+                  dataSource={data.dataSource}
                 />
               </div>
             )}
@@ -2535,39 +2665,27 @@ const ChartIntelligence = memo(() => {
         </div>
       </div>
 
-      {/* SMC Quick-Reference Glossary */}
-      <div className="mb-3 rounded-lg border border-slate-700/40 bg-slate-900/60 px-3 py-2.5 grid grid-cols-2 sm:grid-cols-4 gap-x-4 gap-y-1.5 text-[10px] leading-snug">
-        <div>
-          <span className="font-bold" style={{ color: CFG.BOS_BULL }}>BOS</span>
-          <span className="text-slate-400"> — Break of Structure. Trend continues. Trade in the breakout direction.</span>
+      {/* SMC Scenario Quick-Reference */}
+      <div className="mb-3 rounded-lg border border-slate-700/40 bg-slate-900/60 px-2 py-2 grid grid-cols-2 gap-x-2 gap-y-1 text-[9px] leading-snug sm:px-3 sm:py-2.5 sm:gap-x-6 sm:text-[10px] sm:leading-relaxed">
+        {/* Scenario 1 */}
+        <div className="space-y-0.5">
+          <div className="font-bold text-red-400 mb-1">📉 S1: DOWN→UP→zone</div>
+          <div><span className="font-bold" style={{ color: CFG.FRACTAL_TOP }}>EQH/BSL</span><span className="text-slate-400"> ⬆️→⬇️ </span><span className="text-slate-500 hidden sm:inline">(liquidity grab → SELL)</span></div>
+          <div><span className="font-bold" style={{ color: CFG.OB_BEAR_BORDER }}>Bear OB/POI</span><span className="text-slate-400"> ⬇️ </span><span className="text-slate-500 hidden sm:inline">(rejection → SELL)</span></div>
+          <div><span className="font-bold" style={{ color: CFG.FVG_BEAR_BORDER }}>FVG</span><span className="text-slate-500"> (↑)</span><span className="text-slate-400"> ↩️→⬇️ </span><span className="text-slate-500 hidden sm:inline">(fill → drop)</span></div>
+          <div><span className="font-bold" style={{ color: CFG.BOS_BULL }}>BOS↑</span><span className="text-slate-400"> ⬆️ </span><span className="text-slate-500 hidden sm:inline">(continue up)</span></div>
+          <div><span className="font-bold" style={{ color: CFG.CHOCH_BEAR }}>CHoCH</span><span className="text-slate-500"> (top)</span><span className="text-slate-400"> ⬇️ </span><span className="text-slate-500 hidden sm:inline">(reversal)</span></div>
+          <div className="mt-1 font-semibold text-red-300">✅ ⬆️ zone→⬇️ SELL</div>
         </div>
-        <div>
-          <span className="font-bold" style={{ color: CFG.CHOCH_BULL }}>CHoCH</span>
-          <span className="text-slate-400"> — Change of Character. Trend may reverse. Watch for entry against prior move.</span>
-        </div>
-        <div>
-          <span className="font-bold" style={{ color: CFG.OB_BULL_BORDER }}>OB</span>
-          <span className="text-slate-400"> — Order Block. Institutional order zone. Expect a strong reaction when price returns.</span>
-        </div>
-        <div>
-          <span className="font-bold" style={{ color: CFG.FVG_BULL_BORDER }}>FVG</span>
-          <span className="text-slate-400"> — Fair Value Gap. Price imbalance. Market tends to revisit and fill this gap.</span>
-        </div>
-        <div>
-          <span className="font-bold text-indigo-400">POI</span>
-          <span className="text-slate-400"> — Point of Interest. BOS + OB + FVG overlap. Highest-probability trade zone.</span>
-        </div>
-        <div>
-          <span className="font-bold" style={{ color: CFG.LIQ_BUY }}>BSL</span>
-          <span className="text-slate-400"> — Buy-Side Liquidity. Stops sitting above recent highs. Bears hunt this to push price up then reverse.</span>
-        </div>
-        <div>
-          <span className="font-bold" style={{ color: CFG.LIQ_SELL }}>SSL</span>
-          <span className="text-slate-400"> — Sell-Side Liquidity. Stops sitting below recent lows. Bulls hunt this to push price down then reverse.</span>
-        </div>
-        <div>
-          <span className="font-bold" style={{ color: CFG.FRACTAL_TOP }}>EQH/EQL</span>
-          <span className="text-slate-400"> — Equal Highs / Equal Lows. Double liquidity pools. Strong magnet for price.</span>
+        {/* Scenario 2 */}
+        <div className="space-y-0.5">
+          <div className="font-bold text-emerald-400 mb-1">📈 S2: UP→DOWN→zone</div>
+          <div><span className="font-bold" style={{ color: CFG.FRACTAL_BOT }}>EQL/SSL</span><span className="text-slate-400"> ⬇️→⬆️ </span><span className="text-slate-500 hidden sm:inline">(liquidity grab → BUY)</span></div>
+          <div><span className="font-bold" style={{ color: CFG.OB_BULL_BORDER }}>Bull OB/POI</span><span className="text-slate-400"> ⬆️ </span><span className="text-slate-500 hidden sm:inline">(bounce → BUY)</span></div>
+          <div><span className="font-bold" style={{ color: CFG.FVG_BULL_BORDER }}>FVG</span><span className="text-slate-500"> (↓)</span><span className="text-slate-400"> ↩️→⬆️ </span><span className="text-slate-500 hidden sm:inline">(fill → rise)</span></div>
+          <div><span className="font-bold" style={{ color: CFG.BOS_BEAR }}>BOS↓</span><span className="text-slate-400"> ⬇️ </span><span className="text-slate-500 hidden sm:inline">(continue down)</span></div>
+          <div><span className="font-bold" style={{ color: CFG.CHOCH_BULL }}>CHoCH</span><span className="text-slate-500"> (bot)</span><span className="text-slate-400"> ⬆️ </span><span className="text-slate-500 hidden sm:inline">(reversal)</span></div>
+          <div className="mt-1 font-semibold text-emerald-300">✅ ⬇️ zone→⬆️ BUY</div>
         </div>
       </div>
 

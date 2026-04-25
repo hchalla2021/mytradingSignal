@@ -437,7 +437,7 @@ class ChartIntelligenceService:
         self._last_save_time: float = 0.0
         self._last_full_fetch: float = 0.0
         self._cadence_broadcast = 1.0   # 1s — smooth live candle updates
-        self._cadence_fetch = 10.0
+        self._cadence_fetch = 3.0       # Full Zerodha candle re-fetch every 3s (was 10s — stale candles caused lagging signals)
         self._cadence_closed = 60.0
         self._heartbeat_interval = 30.0
         self._kite_init_backoff_until: float = 0.0
@@ -876,14 +876,20 @@ class ChartIntelligenceService:
                                                 entry["levels"]["support"] = sr["support"]
                                                 entry["levels"]["resistance"] = sr["resistance"]
                                         else:
-                                            # Update last candle with current spot
+                                            # Update last candle with current spot.
+                                            # Only extend H/L if the live price is within
+                                            # 1.5% of the candle open — avoids stretching
+                                            # a stale cached candle into a monster wick.
                                             last["c"] = round(spot, 2)
-                                            last["h"] = round(max(last["h"], spot), 2)
-                                            last["l"] = round(min(last["l"], spot), 2)
+                                            if last.get("o", spot) > 0:
+                                                drift = abs(spot - last["o"]) / last["o"]
+                                                if drift < 0.015:
+                                                    last["h"] = round(max(last["h"], spot), 2)
+                                                    last["l"] = round(min(last["l"], spot), 2)
                                     except Exception:
+                                        # Only update close — never touch h/l in an error path
+                                        # to prevent stale-cache monster candles.
                                         last["c"] = round(spot, 2)
-                                        last["h"] = round(max(last["h"], spot), 2)
-                                        last["l"] = round(min(last["l"], spot), 2)
 
                                 # Always update CDH/CDL from latest 3m candles
                                 if tf_key == "candles3m":

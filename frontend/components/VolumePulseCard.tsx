@@ -185,10 +185,12 @@ const VolumePulseCard = memo<VolumePulseCardProps>(({ symbol, name }) => {
   const [data,    setData]    = useState<VolumePulseData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error,   setError]   = useState<string | null>(null);
-  const prevSigRef = useRef<string>('');
-  const abortRef   = useRef<AbortController | null>(null);
-  const cardRef    = useRef<HTMLDivElement>(null);
-  const batchRef   = useRef<NodeJS.Timeout>();
+  const prevSigRef    = useRef<string>('');
+  const abortRef      = useRef<AbortController | null>(null);
+  const cardRef       = useRef<HTMLDivElement>(null);
+  const batchRef      = useRef<NodeJS.Timeout>();
+  // Track last changePercent seen via WS — immediate refetch on ≥0.15% swing
+  const lastWsChangeRef = useRef<number>(0);
 
   // ── GPU-accelerated flash — DISABLED to avoid thunderstorm flicker ───
   // const triggerFlash = useCallback(() => { ... }, [symbol]);
@@ -217,14 +219,27 @@ const VolumePulseCard = memo<VolumePulseCardProps>(({ symbol, name }) => {
     }
   }, [symbol]);
 
-  // ── WebSocket tick listener + batched re-fetch (150ms window) ────────────
+  // ── WebSocket tick listener + batched re-fetch ───────────────────────────
   useEffect(() => {
     fetchData();
-    // 3s background poll (was 5s)
-    const pollId = setInterval(fetchData, 3000);
+    // 2s background poll (was 3s) — matches backend analysis cache TTL of 2s
+    const pollId = setInterval(fetchData, 2000);
 
-    // Listen for WebSocket market ticks — triggers re-fetch within 150ms
-    const handleTick = () => {
+    // Listen for WebSocket market ticks
+    const handleTick = (e: Event) => {
+      const tick = (e as CustomEvent).detail;
+
+      // Immediate refetch when price moves ≥0.15% — captures intraday reversals
+      // without waiting for the batch timer or the 2s poll.
+      const newChange = tick?.changePercent ?? 0;
+      if (Math.abs(newChange - lastWsChangeRef.current) >= 0.15) {
+        lastWsChangeRef.current = newChange;
+        clearTimeout(batchRef.current);
+        fetchData();
+        return;
+      }
+
+      // For smaller moves: 150ms batch window to avoid excessive re-fetches
       clearTimeout(batchRef.current);
       batchRef.current = setTimeout(fetchData, 150);
     };

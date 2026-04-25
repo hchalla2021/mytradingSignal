@@ -97,7 +97,7 @@ def get_rsi_signal_label(rsi: float) -> str:
 
 # Cache for RSI calculations (symbol -> {data, timestamp})
 _rsi_cache: Dict[str, Dict] = {}
-_RSI_CACHE_TTL = 60  # 1 minute cache (refresh every minute during market hours)
+_RSI_CACHE_TTL = 15  # 15 second cache during live market (was 60s — caused stale signals)
 
 async def fetch_dual_rsi_from_cache(symbol: str, cache, tick_data: Dict[str, Any] = None) -> Dict[str, Any]:
     """
@@ -398,9 +398,9 @@ async def calculate_market_structure_from_cache(cache, symbol: str, tick_data: D
         highs = [c['high'] for c in candles]
         lows = [c['low'] for c in candles]
         
-        # Calculate Swing High/Low (last 5 candles)
-        swing_high = max(highs[-5:]) if len(highs) >= 5 else max(highs)
-        swing_low = min(lows[-5:]) if len(lows) >= 5 else min(lows)
+        # Calculate Swing High/Low (last 3 candles — faster break-of-structure detection)
+        swing_high = max(highs[-3:]) if len(highs) >= 3 else max(highs)
+        swing_low = min(lows[-3:]) if len(lows) >= 3 else min(lows)
         
         # Order Block detection (support level after big move)
         last_candle = candles[-1]
@@ -427,7 +427,8 @@ async def calculate_market_structure_from_cache(cache, symbol: str, tick_data: D
         fvg_bullish = False
         fvg_bearish = False
         if len(candles) >= 3:
-            scan = candles[-15:] if len(candles) >= 15 else candles
+            # 8-candle window = 40 min — prevents morning FVGs from lingering 75 min into rally
+            scan = candles[-8:] if len(candles) >= 8 else candles
             for i in range(len(scan) - 2):
                 c1_high = float(scan[i].get('high', 0))
                 c1_low  = float(scan[i].get('low',  0))
@@ -439,6 +440,12 @@ async def calculate_market_structure_from_cache(cache, symbol: str, tick_data: D
                     fvg_bearish = True
                 if fvg_bullish and fvg_bearish:
                     break
+        # BOS conflict resolution: active BOS direction invalidates stale opposing FVG
+        if fvg_bullish and fvg_bearish:
+            if bos_bullish:
+                fvg_bearish = False  # Active bullish BOS overrides old bearish FVG
+            elif bos_bearish:
+                fvg_bullish = False  # Active bearish BOS overrides old bullish FVG
         
         # Volume Profile (High volume vs low volume candles in last 10)
         avg_volume = sum([c.get('volume', 0) for c in candles[-10:]]) / min(10, len(candles))
@@ -487,8 +494,9 @@ async def calculate_emas_from_cache(cache, symbol: str, tick_data: Dict[str, Any
     try:
         candle_key = f"analysis_candles:{symbol}"
         
-        # Get last 200 candles from cache (need this many for EMA200 + ATR)
-        candles_json = await cache.lrange(candle_key, 0, 199)
+        # Get last 80 candles from cache (80 × 5min = 400min ≈ 6.7h, enough for EMA50 + reactive EMA100)
+        # Reduced from 200: prevents stale morning candles anchoring EMA alignment during intraday reversals.
+        candles_json = await cache.lrange(candle_key, 0, 79)
         
         if not candles_json:
             # No cached candles yet, return with price as fallback
@@ -510,6 +518,22 @@ async def calculate_emas_from_cache(cache, symbol: str, tick_data: Dict[str, Any
         if not candles:
             return tick_data
         
+        # ── Live candle injection: append current in-progress 5-min candle ──
+        # Ensures today's latest half-formed candle influences EMA and ATR immediately.
+        price_val = float(tick_data.get('price', 0))
+        if price_val > 0:
+            try:
+                live_raw = await cache.get(f"analysis_candles_live:{symbol}")
+                if isinstance(live_raw, dict) and float(live_raw.get("open", 0)) > 0:
+                    live_candle = dict(live_raw)
+                    live_candle["close"] = price_val
+                    live_candle["high"]  = max(float(live_raw.get("high", price_val)), price_val)
+                    live_candle["low"]   = min(float(live_raw.get("low",  price_val)), price_val)
+                    candles.append(live_candle)
+                    closes.append(price_val)
+            except Exception:
+                pass
+        
         # Calculate EMAs using all available candles
         ema_20 = calculate_ema(closes, 20)
         ema_50 = calculate_ema(closes, 50)
@@ -520,81 +544,47 @@ async def calculate_emas_from_cache(cache, symbol: str, tick_data: Dict[str, Any
         atr_10 = calculate_atr(candles, 10)
         
         # Calculate trend_structure from swing points (higher highs/lows = UPTREND, lower = DOWNTREND)
+        # REACTIVE WINDOW: 10 candles (50 min) with 2-segment comparison detects reversals in ~25 min.
+        # Old 20-candle 3-segment chain required 60+ min to flip — kept STRONG_SELL during afternoon rallies.
         trend_structure = "SIDEWAYS"  # Default
-        
-        if len(candles) >= 20:
-            # SIMPLIFIED APPROACH: Look at recent trend momentum
-            # Split last 20 candles into 3 segments
-            recent_candles = candles[-20:]
-            
-            segment_size = 7
-            seg1 = recent_candles[:segment_size]      # Oldest 7
-            seg2 = recent_candles[segment_size:segment_size*2]  # Middle 7
-            seg3 = recent_candles[segment_size*2:]    # Recent 6
-            
-            # Get high/low for each segment
-            seg1_high = max([c['high'] for c in seg1])
-            seg2_high = max([c['high'] for c in seg2])
-            seg3_high = max([c['high'] for c in seg3])
-            
-            seg1_low = min([c['low'] for c in seg1])
-            seg2_low = min([c['low'] for c in seg2])
-            seg3_low = min([c['low'] for c in seg3])
-            
+
+        if len(candles) >= 4:
+            # ── STAGE 1: 4-candle consecutive-close override (detects reversal in ~15 min) ─────────
+            # If the last 3 candles all closed higher than the one before → immediate bullish detection
+            last4 = candles[-4:]
+            c3_up   = (last4[3]['close'] > last4[2]['close'] > last4[1]['close'])
+            c3_down = (last4[3]['close'] < last4[2]['close'] < last4[1]['close'])
+            if c3_up:
+                trend_structure = "HIGHER_HIGHS_LOWS"
+            elif c3_down:
+                trend_structure = "LOWER_HIGHS_LOWS"
+
+        if trend_structure == "SIDEWAYS" and len(candles) >= 6:
+            # ── STAGE 2: 2-segment comparison on last 10 candles (50 min) ────────────────────────
+            # Recent-half high > older-half high AND recent close > older close → uptrend
+            window = candles[-10:] if len(candles) >= 10 else candles[-6:]
+            mid    = len(window) // 2
+            seg1   = window[:mid]   # Older half
+            seg2   = window[mid:]   # Recent half
+
+            seg1_high  = max(c['high']  for c in seg1)
+            seg2_high  = max(c['high']  for c in seg2)
             seg1_close = seg1[-1]['close']
             seg2_close = seg2[-1]['close']
-            seg3_close = seg3[-1]['close']
-            
-            # UPTREND: Each segment's high is higher + closes are higher
-            # OR: Recent high > first half high AND close above midpoint
-            if seg3_high > seg2_high > seg1_high:
-                # Clear progression of higher highs
-                if seg3_close > seg2_close and seg2_close > seg1_close:
-                    trend_structure = "HIGHER_HIGHS_LOWS"
-                elif seg3_close > seg1_close:  # Just need recent close > old close
-                    trend_structure = "HIGHER_HIGHS_LOWS"
-            
-            # DOWNTREND: Each segment's high is lower + closes are lower
-            elif seg3_high < seg2_high < seg1_high:
-                if seg3_close < seg2_close and seg2_close < seg1_close:
-                    trend_structure = "LOWER_HIGHS_LOWS"
-                elif seg3_close < seg1_close:
-                    trend_structure = "LOWER_HIGHS_LOWS"
-            
-            # Alternative: Use overall high/low comparison with price momentum
-            elif trend_structure == "SIDEWAYS":
-                overall_high = max([c['high'] for c in recent_candles])
-                overall_low = min([c['low'] for c in recent_candles])
-                overall_close_now = recent_candles[-1]['close']
-                overall_close_then = recent_candles[0]['close']
-                
-                # If price moved significantly up and is above midpoint
-                if overall_close_now > overall_close_then:
-                    # Check recent momentum
-                    recent_high = max([c['high'] for c in seg3])
-                    old_high = max([c['high'] for c in seg1])
-                    if recent_high > old_high:
-                        trend_structure = "HIGHER_HIGHS_LOWS"
-                
-                # If price moved significantly down and is below midpoint
-                elif overall_close_now < overall_close_then:
-                    # Check recent momentum
-                    recent_low = min([c['low'] for c in seg3])
-                    old_low = min([c['low'] for c in seg1])
-                    if recent_low < old_low:
-                        trend_structure = "LOWER_HIGHS_LOWS"
-        
-        elif len(candles) >= 10:
-            # Fallback for fewer candles: simple comparison
-            highs = [c['high'] for c in candles[-10:]]
-            lows = [c['low'] for c in candles[-10:]]
-            closes = [c['close'] for c in candles[-10:]]
-            
-            mid = 5
-            if max(highs[mid:]) > max(highs[:mid]) and closes[-1] > closes[0]:
+
+            if seg2_high >= seg1_high and seg2_close > seg1_close:
                 trend_structure = "HIGHER_HIGHS_LOWS"
-            elif max(highs[mid:]) < max(highs[:mid]) and closes[-1] < closes[0]:
+            elif seg2_high <= seg1_high and seg2_close < seg1_close:
                 trend_structure = "LOWER_HIGHS_LOWS"
+
+            # ── STAGE 3: Slope tie-breaker (first→last close direction) ──────────────────────────
+            if trend_structure == "SIDEWAYS":
+                first_close = window[0]['close']
+                last_close  = window[-1]['close']
+                if last_close > first_close * 1.001:    # 0.1% up
+                    trend_structure = "HIGHER_HIGHS_LOWS"
+                elif last_close < first_close * 0.999:  # 0.1% down
+                    trend_structure = "LOWER_HIGHS_LOWS"
         
         # Update tick_data with calculated values
         tick_data['ema_20'] = ema_20
@@ -766,13 +756,23 @@ class InstantSignal:
                 bearish_score += 12
                 reasons.append(f"✓ Price below VWAP")
             
-            # 4. TREND ALIGNMENT (Weight: 15% = 15 points max)
-            if trend == "bullish":
+            # 4. INTRADAY TREND ALIGNMENT (Weight: 15% = 15 points max)
+            # CRITICAL FIX: Use trend_structure from 20 candles (intraday), NOT daily prev-close trend.
+            # The old code used `trend` = (ltp > prev_day_close) which stays "bearish" ALL DAY even
+            # during a 30-min intraday rally if the market is still net-down on the day.
+            trend_structure = tick_data.get('trend_structure', 'SIDEWAYS')
+            if trend_structure == 'HIGHER_HIGHS_LOWS':
                 bullish_score += 15
-                reasons.append(f"📊 Bullish trend confirmed")
-            elif trend == "bearish":
+                reasons.append(f"📊 Intraday uptrend: Higher highs & lows")
+            elif trend_structure == 'LOWER_HIGHS_LOWS':
                 bearish_score += 15
-                reasons.append(f"📊 Bearish trend confirmed")
+                reasons.append(f"📊 Intraday downtrend: Lower highs & lows")
+            elif trend == "bullish":
+                bullish_score += 8
+                reasons.append(f"📊 Bullish trend (daily bias)")
+            elif trend == "bearish":
+                bearish_score += 8
+                reasons.append(f"📊 Bearish trend (daily bias)")
             
             # 5. VOLUME STRENGTH (Weight: 10% = 10 points max)
             if volume > 5000000:
@@ -824,7 +824,61 @@ class InstantSignal:
             elif low > 0 and abs(price - low) / low < 0.002:  # Within 0.2% of low
                 bullish_score += 8
                 reasons.append(f"✅ Near support at ₹{low:.2f}")
-            
+
+            # 8. RECENT INTRADAY MOMENTUM (Weight: up to 40 points) — HIGHEST PRIORITY
+            # CRITICAL FIX: This factor detects intraday reversals IMMEDIATELY.
+            # Uses the LIVE (in-progress) 5-min candle + last 3 completed 5-min candles.
+            # When the market rallies for 30+ minutes, 3+ bullish candles accumulate and
+            # this factor overpowers the lagging day-level factors (changePercent, daily trend).
+            try:
+                recent_bull = 0
+                recent_bear = 0
+
+                # A) Current live (in-progress) 5-min candle — reflects CURRENT direction
+                live_candle_data = await cache.get(f"analysis_candles_live:{symbol}")
+                if live_candle_data:
+                    lc_open  = float(live_candle_data.get('open',  price))
+                    lc_close = float(live_candle_data.get('close', price))
+                    lc_move_pct = ((lc_close - lc_open) / lc_open * 100) if lc_open > 0 else 0
+                    if   lc_move_pct >  0.5: recent_bull += 20
+                    elif lc_move_pct >  0.15: recent_bull += 12
+                    elif lc_move_pct < -0.5: recent_bear += 20
+                    elif lc_move_pct < -0.15: recent_bear += 12
+                    print(f"🕯️ [{symbol}] Live candle: {lc_open:.2f}→{lc_close:.2f} ({lc_move_pct:+.2f}%) → Bull+{recent_bull} Bear+{recent_bear}")
+
+                # B) Last 3 completed 5-min candles (newest first from lpush cache)
+                rc_json = await cache.lrange(f"analysis_candles:{symbol}", 0, 2)
+                if rc_json and len(rc_json) >= 2:
+                    rc_closes = []
+                    for _cj in rc_json:
+                        try:
+                            _c = json.loads(_cj)
+                            rc_closes.append(float(_c.get('close', 0)))
+                        except Exception:
+                            pass
+                    if len(rc_closes) >= 2:
+                        # Index 0 = most recent completed candle, index 1 = 5 min ago
+                        rises = sum(1 for i in range(len(rc_closes) - 1) if rc_closes[i] > rc_closes[i + 1])
+                        drops = sum(1 for i in range(len(rc_closes) - 1) if rc_closes[i] < rc_closes[i + 1])
+                        total_pairs = len(rc_closes) - 1
+                        if rises == total_pairs:
+                            recent_bull += 20
+                            reasons.append(f"📈 {len(rc_closes)} consecutive bullish candles (reversal detected)")
+                        elif rises >= 1:
+                            recent_bull += 10
+                        if drops == total_pairs:
+                            recent_bear += 20
+                            reasons.append(f"📉 {len(rc_closes)} consecutive bearish candles")
+                        elif drops >= 1:
+                            recent_bear += 10
+                        print(f"🕯️ [{symbol}] Completed candles closes={rc_closes} rises={rises} drops={drops} → Bull+{recent_bull-( recent_bull if not live_candle_data else 0)} Bear+{recent_bear}")
+
+                bullish_score += recent_bull
+                bearish_score += recent_bear
+                reasons.append(f"🕯️ Recent candle momentum: Bull+{recent_bull} Bear+{recent_bear}")
+            except Exception as _rcm_e:
+                print(f"⚠️ [{symbol}] Recent candle factor skipped: {_rcm_e}")
+
             # FINAL DECISION BASED ON TOTAL SCORES
             print(f"[SCORE] {symbol}: Bullish={bullish_score:.1f}, Bearish={bearish_score:.1f}")
             
@@ -1724,7 +1778,21 @@ class InstantSignal:
                 # Mixed/Neutral
                 ema_alignment = "NEUTRAL"
                 ema_alignment_confidence = 50
-            
+
+            # ── REACTIVE EMA ALIGNMENT OVERRIDE (mirrors trend_structure Stage-1) ──
+            # trend_structure is already reactive (detects reversal in ~15 min via 3-stage).
+            # When trend_structure flips but slow EMAs haven't caught up yet, we force
+            # ema_alignment to at least PARTIAL_BULLISH / PARTIAL_BEARISH so the EMA
+            # Stack factor in TradeSupportResistance.tsx stops blocking the signal flip.
+            if trend_structure == "HIGHER_HIGHS_LOWS" and price > ema_20:
+                if ema_alignment in ("ALL_BEARISH", "PARTIAL_BEARISH", "NEUTRAL", "COMPRESSION"):
+                    ema_alignment = "PARTIAL_BULLISH"
+                    ema_alignment_confidence = max(ema_alignment_confidence, 62)
+            elif trend_structure == "LOWER_HIGHS_LOWS" and price < ema_20:
+                if ema_alignment in ("ALL_BULLISH", "PARTIAL_BULLISH", "NEUTRAL", "COMPRESSION"):
+                    ema_alignment = "PARTIAL_BEARISH"
+                    ema_alignment_confidence = max(ema_alignment_confidence, 62)
+
             # ============================================
             # VWMA 20 • ENTRY FILTER SIGNAL (for frontend VWMA filter)
             # ============================================
@@ -1832,6 +1900,20 @@ class InstantSignal:
                 st_10_2_value = hl2
                 st_10_2_trend = "NEUTRAL"
                 st_10_2_signal = "HOLD"
+
+            # ── REACTIVE SUPERTREND OVERRIDE (breaks NEUTRAL lock during reversals) ──
+            # Band-based check uses day-range HL2 which moves slowly. After morning
+            # sell-off, price can be mid-range yet trend_structure already flipped.
+            # Override NEUTRAL → BULLISH/BEARISH when trend_structure and ema_alignment agree.
+            if st_10_2_trend == "NEUTRAL":
+                if trend_structure == "HIGHER_HIGHS_LOWS" and price > ema_20:
+                    st_10_2_trend = "BULLISH"
+                    st_10_2_signal = "BUY"
+                    st_10_2_value = basic_lower_band
+                elif trend_structure == "LOWER_HIGHS_LOWS" and price < ema_20:
+                    st_10_2_trend = "BEARISH"
+                    st_10_2_signal = "SELL"
+                    st_10_2_value = basic_upper_band
             
             # Debug logging every 30 seconds
             import time
@@ -2246,16 +2328,18 @@ class InstantSignal:
                     "trend": trend_map.get(trend, 'SIDEWAYS'),
 
                     # ── DUAL TIMEFRAME TREND (direct keys for Trade Zones UI) ──────────
-                    # 5-min trend: SuperTrend primary → RSI → price change (widened dead zone)
+                    # 5-min trend: SuperTrend primary + RSI 5m agreement
+                    # DOWN requires BOTH ST bearish AND RSI ≤ 50 — avoids false sell on day-change lag
                     "trend_5min": (
-                        "UP" if (st_10_2_trend == "BULLISH" or dual_rsi.get('rsi_5m', 50) >= 53 or (change_percent > 0.2 and trend == "bullish"))
-                        else "DOWN" if (st_10_2_trend == "BEARISH" or dual_rsi.get('rsi_5m', 50) <= 47 or (change_percent < -0.2 and trend == "bearish"))
+                        "UP" if (st_10_2_trend == "BULLISH" or dual_rsi.get('rsi_5m', 50) >= 53)
+                        else "DOWN" if (st_10_2_trend == "BEARISH" and dual_rsi.get('rsi_5m', 50) <= 50)
                         else "NEUTRAL"
                     ),
-                    # 15-min trend: EMA alignment + market structure + trend_color fallback
+                    # 15-min trend: EMA alignment + market structure (trend_color removed — too slow)
+                    # DOWN requires BOTH ema_alignment bearish AND trend_structure bearish
                     "trend_15min": (
-                        "UP" if (ema_alignment in ["ALL_BULLISH", "PARTIAL_BULLISH"] or tick_data.get('trend_structure') == "HIGHER_HIGHS_LOWS" or trend_color == "BULLISH")
-                        else "DOWN" if (ema_alignment in ["ALL_BEARISH", "PARTIAL_BEARISH"] or tick_data.get('trend_structure') == "LOWER_HIGHS_LOWS" or trend_color == "BEARISH")
+                        "UP" if (ema_alignment in ["ALL_BULLISH", "PARTIAL_BULLISH"] or tick_data.get('trend_structure') == "HIGHER_HIGHS_LOWS")
+                        else "DOWN" if (ema_alignment in ["ALL_BEARISH", "PARTIAL_BEARISH"] and tick_data.get('trend_structure') == "LOWER_HIGHS_LOWS")
                         else "NEUTRAL"
                     ),
 

@@ -57,9 +57,11 @@ interface VolumePulseState {
 }
 
 const cache = new Map<string, { data: any; timestamp: number }>();
-const LIVE_CACHE_TTL = 5000; // 5 seconds for live updates
-const NON_TRADING_CACHE_TTL = 60000; // 60 seconds outside trading hours
-const API_POLL_INTERVAL = 3000; // 3 seconds
+// Reduced TTL from 5000ms → 1500ms to match backend 2s analysis cache.
+// Old 5s TTL meant WS-triggered fetch() still returned stale cached data.
+const LIVE_CACHE_TTL = 1500;
+const NON_TRADING_CACHE_TTL = 60000;
+const API_POLL_INTERVAL = 2000; // 2s (was 3s) — matches backend TTL
 
 // Cache helper
 function getCached<T>(key: string): T | null {
@@ -100,10 +102,12 @@ export function useVolumePulseRealtime(symbol: string | null) {
     lastApiCall: 0,
   });
 
-  const batchTimerRef = useRef<NodeJS.Timeout>();
-  const apiTimerRef = useRef<NodeJS.Timeout>();
+  const batchTimerRef    = useRef<NodeJS.Timeout>();
+  const apiTimerRef      = useRef<NodeJS.Timeout>();
   const pendingUpdateRef = useRef(false);
-  const lastPriceRef = useRef(0);
+  const lastPriceRef     = useRef(0);
+  // Track last changePercent — immediate refetch on ≥0.15% swing
+  const lastWsChangeRef  = useRef(0);
 
   // ═══════════════════════════════════════════════════════════════════════════
   // FETCH FROM API (Background Sync)
@@ -173,13 +177,20 @@ export function useVolumePulseRealtime(symbol: string | null) {
       lastPriceRef.current = tickData.ltp || lastPriceRef.current;
       pendingUpdateRef.current = true;
 
-      // Clear existing batch timer
-      clearTimeout(batchTimerRef.current);
+      // Immediate refetch when price moves ≥0.15% — detects intraday reversals
+      const newChange = tickData.changePercent ?? 0;
+      if (Math.abs(newChange - lastWsChangeRef.current) >= 0.15) {
+        lastWsChangeRef.current = newChange;
+        clearTimeout(batchTimerRef.current);
+        fetchVolumePulseData();
+        pendingUpdateRef.current = false;
+        return;
+      }
 
-      // Set new batch timer (200ms intelligent window)
+      // Smaller moves: 200ms batch window
+      clearTimeout(batchTimerRef.current);
       batchTimerRef.current = setTimeout(() => {
         if (pendingUpdateRef.current) {
-          // ✨ Trigger analysis update
           if (isDev) console.log(`[VOLUME-PULSE] 🔄 Batch update triggered for ${symbol}`);
           fetchVolumePulseData();
           pendingUpdateRef.current = false;

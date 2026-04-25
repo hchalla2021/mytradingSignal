@@ -490,6 +490,33 @@ def candle_engine(candles: List[Dict[str, float]]) -> Dict[str, Any]:
     # ── Trend context from recent candles ────────────────────────────────────
     trend_ctx = _compute_trend_context(candles, anatomies)
 
+    # ── Live momentum override ────────────────────────────────────────────────
+    # Root cause of "still STRONG_SELL during 30-min rally":
+    # Single-candle patterns (e.g. THREE_BLACK_CROWS on a brief pullback within
+    # a strong uptrend) override the broader momentum context. Fix: blend live
+    # multi-anchor momentum score + trend_context direction into the final signal.
+    live_price = curr.get("close", 0)
+    if live_price > 0 and len(candles) >= 3:
+        mom = _live_momentum_score(candles, live_price)
+        trend_dir = trend_ctx["direction"]
+
+        # Strong bullish momentum contradicts a bearish signal → flatten to NEUTRAL
+        if mom >= 0.50 and signal in ("STRONG_SELL", "SELL"):
+            signal = "NEUTRAL"
+            confidence = min(confidence, 50)
+        # Very strong bullish momentum + bullish trend → upgrade NEUTRAL to BUY
+        elif mom >= 0.75 and trend_dir in ("STRONG_BULLISH", "BULLISH") and signal == "NEUTRAL":
+            signal = "BUY"
+            confidence = min(75, confidence + 20)
+        # Strong bearish momentum contradicts a bullish signal → flatten to NEUTRAL
+        elif mom <= -0.50 and signal in ("STRONG_BUY", "BUY"):
+            signal = "NEUTRAL"
+            confidence = min(confidence, 50)
+        # Very strong bearish momentum + bearish trend → downgrade NEUTRAL to SELL
+        elif mom <= -0.75 and trend_dir in ("STRONG_BEARISH", "BEARISH") and signal == "NEUTRAL":
+            signal = "SELL"
+            confidence = min(75, confidence + 20)
+
     return {
         "pattern": pattern,
         "all_patterns": all_patterns,
@@ -512,9 +539,57 @@ def candle_engine(candles: List[Dict[str, float]]) -> Dict[str, Any]:
     }
 
 
+def _live_momentum_score(candles: List[Dict], live_price: float) -> float:
+    """
+    Multi-anchor live momentum score: -1.0 (strong bearish) to +1.0 (strong bullish).
+    Compares live price vs completed candle closes at 4 lookback depths.
+    Prevents single-candle pattern signals from contradicting 30-min sustained moves.
+    """
+    if len(candles) < 2 or live_price <= 0:
+        return 0.0
+
+    # Use only completed candles for anchors (exclude the live/current candle)
+    completed = candles[:-1] if candles[-1].get("_live") else candles
+    closes = [float(c.get("close") or 0) for c in completed if float(c.get("close") or 0) > 0]
+    if not closes:
+        return 0.0
+
+    # Weighted anchor comparison — heavier weight on recent anchors
+    anchors = [(1, 4), (3, 3), (5, 2), (8, 1)]  # (lookback_candles_ago, weight)
+    num, den = 0.0, 0.0
+    for lb, w in anchors:
+        if lb <= len(closes):
+            ref = closes[-lb]
+            if ref > 0:
+                pct = (live_price - ref) / ref * 100.0
+                # ±0.3% = full score — captures small intraday moves precisely
+                clamped = max(-1.0, min(1.0, pct / 0.3))
+                num += clamped * w
+                den += w
+    if den == 0:
+        return 0.0
+    anchor_score = num / den
+
+    # Supplement with recent candle direction (last 6, newest 3 weighted 2×)
+    recent = completed[-6:] if len(completed) >= 6 else completed
+    n_r = len(recent)
+    bull_w = bear_w = 0.0
+    for i, c in enumerate(recent):
+        wt = 2.0 if i >= n_r - 3 else 1.0
+        if float(c.get("close") or 0) >= float(c.get("open") or 0):
+            bull_w += wt
+        else:
+            bear_w += wt
+    total = bull_w + bear_w
+    candle_dir = (bull_w - bear_w) / total if total > 0 else 0.0
+
+    # 70% live-price-anchor, 30% candle-direction-bias
+    return max(-1.0, min(1.0, anchor_score * 0.70 + candle_dir * 0.30))
+
+
 def _compute_trend_context(candles: List[Dict], anatomies: List[Dict]) -> Dict[str, Any]:
-    """Compute short-term trend from last 5 candles."""
-    n = min(5, len(candles))
+    """Compute short-term trend from last 8 candles (extended from 5 for better context)."""
+    n = min(8, len(candles))
     if n < 2:
         return {"direction": "NEUTRAL", "bullish_count": 0, "bearish_count": 0, "avg_body_ratio": 0}
 
@@ -523,13 +598,21 @@ def _compute_trend_context(candles: List[Dict], anatomies: List[Dict]) -> Dict[s
     bear_count = n - bull_count
     avg_br = sum(a["body_ratio"] for a in recent_a) / n
 
-    if bull_count >= 4:
+    # Recency-weighted direction: newest 3 candles count 2× in decision
+    newest_3 = anatomies[-3:] if len(anatomies) >= 3 else anatomies
+    recent_bull_w = sum(2.0 if a["is_bullish"] else 0.0 for a in newest_3)
+    recent_bear_w = sum(2.0 if not a["is_bullish"] else 0.0 for a in newest_3)
+    # Blend: 60% overall count + 40% recency-weighted newest-3
+    blended_bull = bull_count * 0.60 + recent_bull_w * 0.40
+    blended_bear = bear_count * 0.60 + recent_bear_w * 0.40
+
+    if blended_bull >= n * 0.75:
         direction = "STRONG_BULLISH"
-    elif bull_count >= 3:
+    elif blended_bull > blended_bear * 1.2:
         direction = "BULLISH"
-    elif bear_count >= 4:
+    elif blended_bear >= n * 0.75:
         direction = "STRONG_BEARISH"
-    elif bear_count >= 3:
+    elif blended_bear > blended_bull * 1.2:
         direction = "BEARISH"
     else:
         direction = "NEUTRAL"
@@ -1191,7 +1274,7 @@ class CandleIntelligenceService:
       - On server restart: load last good snapshot from disk immediately
     """
     SYMBOLS = ["NIFTY", "BANKNIFTY", "SENSEX"]
-    CANDLE_LOOKBACK = 10  # Read last 10 candles for multi-pattern analysis
+    CANDLE_LOOKBACK = 12  # Read last 12 candles for multi-pattern analysis (was 10)
     _DISK_SAVE_INTERVAL = 15.0  # Save to disk at most every 15s
 
     # Multi-timeframe config: (label, cache_key_prefix)
@@ -1276,7 +1359,7 @@ class CandleIntelligenceService:
                 from services.market_feed import get_market_status
                 status = get_market_status()
                 # Fast refresh during any active market phase
-                interval = 2.0 if status in ("LIVE", "PRE_OPEN", "FREEZE") else 30.0
+                interval = 1.0 if status in ("LIVE", "PRE_OPEN", "FREEZE") else 30.0
 
                 snapshot = {}
                 for sym in self.SYMBOLS:

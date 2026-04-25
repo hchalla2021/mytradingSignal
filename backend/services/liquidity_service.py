@@ -668,16 +668,36 @@ def _price_momentum_signal(candles: List[Dict], spot_price: float) -> Dict:
         else:
             ema_score = 0.0
             ema_label = "EMA mixed / flat"
-        parts.append((ema_score, 0.70))
+        parts.append((ema_score, 0.40))  # reduced: EMA crossover is slow mid-session
     else:
         ema_label = "EMA N/A"
 
-    # ── VWAP deviation score (30 % of this signal) ────────────────────────
+    # ── VWAP deviation score (20 % of this signal) ────────────────────────
     vwap_dev = None
     if vwap and vwap > 0:
         vwap_dev = (spot_price - vwap) / vwap * 100
         vwap_score = _clamp(vwap_dev / 0.40, -1.0, 1.0)
-        parts.append((vwap_score, 0.30))
+        parts.append((vwap_score, 0.20))
+
+    # ── Live spot vs multi-anchor closes (40 % of this signal) ───────────
+    # Compares live spot against 4 lookback anchors in the candle history.
+    # Runs on every tick (~1s) — detects mid-session reversals immediately
+    # without waiting for EMA crossover or VWAP to slowly shift.
+    # closes[-1] = newest completed candle close (chronological order).
+    if len(closes) >= 2 and spot_price > 0:
+        anchors = [(1, 4), (3, 3), (6, 2), (12, 1)]  # (candle lookback, weight)
+        anchor_num = 0.0
+        anchor_den = 0.0
+        for lb, w in anchors:
+            if lb < len(closes):
+                ac = closes[-lb]
+                if ac > 0:
+                    pct = (spot_price - ac) / ac * 100
+                    # ±0.3% move vs anchor = full score at that anchor
+                    anchor_num += _clamp(pct / 0.3, -1.0, 1.0) * w
+                    anchor_den += w
+        if anchor_den > 0:
+            parts.append((anchor_num / anchor_den, 0.40))
 
     if not parts:
         return neutral
@@ -732,12 +752,17 @@ def _candle_conviction_signal(candles: List[Dict]) -> Dict:
     if len(candles) < 3:
         return neutral
 
-    recent   = candles[-4:] if len(candles) >= 4 else candles
-    bull_cnt = 0
-    bear_cnt = 0
+    # Use last 6 candles (~30 min). Newest 2 get 2× weight so a mid-session
+    # reversal in the most recent bars immediately overrides morning bearish candles.
+    recent   = candles[-6:] if len(candles) >= 6 else candles
+    n_recent = len(recent)
+    bull_cnt = 0.0
+    bear_cnt = 0.0
     body_pcts: List[float] = []
 
-    for c in recent:
+    for i, c in enumerate(recent):
+        # Candles are oldest-first; last 2 in the window get 2× weight
+        w = 2.0 if i >= n_recent - 2 else 1.0
         o = float(c.get("open")  or 0)
         cl = float(c.get("close") or 0)
         h = float(c.get("high")  or 0)
@@ -749,9 +774,9 @@ def _candle_conviction_signal(candles: List[Dict]) -> Dict:
         body_pct = (body / rng * 100) if rng > 0 else 50.0
         body_pcts.append(body_pct)
         if cl >= o:
-            bull_cnt += 1
+            bull_cnt += w
         else:
-            bear_cnt += 1
+            bear_cnt += w
 
     total = bull_cnt + bear_cnt
     if total == 0:
@@ -766,12 +791,12 @@ def _candle_conviction_signal(candles: List[Dict]) -> Dict:
     if bull_cnt > bear_cnt:
         net = (bull_ratio - 0.5) * 2.0   # 0 at 50/50, 1.0 at 100%
         score = _clamp(net * body_mult, -1.0, 1.0)
-        label = f"{bull_cnt}/{total} bullish candles · avg body {avg_body_pct:.0f}%"
+        label = f"{bull_cnt:.0f}/{total:.0f} bullish candles · avg body {avg_body_pct:.0f}%"
     elif bear_cnt > bull_cnt:
         bear_ratio = bear_cnt / total
         net = (bear_ratio - 0.5) * 2.0
         score = _clamp(-net * body_mult, -1.0, 1.0)
-        label = f"{bear_cnt}/{total} bearish candles · avg body {avg_body_pct:.0f}%"
+        label = f"{bear_cnt:.0f}/{total:.0f} bearish candles · avg body {avg_body_pct:.0f}%"
     else:
         score = 0.0
         label = f"50/50 split — no institutional consensus"
@@ -783,8 +808,8 @@ def _candle_conviction_signal(candles: List[Dict]) -> Dict:
         "weight": WEIGHTS["candle_conviction"],
         "value": round(avg_body_pct, 1),
         "extra": {
-            "bullCount":  bull_cnt,
-            "bearCount":  bear_cnt,
+            "bullCount":  int(round(bull_cnt)),
+            "bearCount":  int(round(bear_cnt)),
             "avgBodyPct": round(avg_body_pct, 2),
         },
     }
@@ -869,7 +894,7 @@ class LiquidityService:
     """
 
     INDICES       = ["NIFTY", "BANKNIFTY", "SENSEX"]
-    TICK_INTERVAL = 1.5   # 1.5-second broadcast cadence (faster than compass)
+    TICK_INTERVAL = 1.0   # 1.0-second broadcast cadence — faster regime detection
 
     def __init__(self, cache: CacheService):
         self._cache = cache

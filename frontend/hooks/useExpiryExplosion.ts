@@ -226,7 +226,7 @@ export function useExpiryExplosion() {
       if (pingRef.current) clearInterval(pingRef.current);
       // Only reconnect/poll if still mounted
       if (!mountedRef.current) return;
-      retryDelay.current = Math.min(retryDelay.current * 1.5, 30000);
+      retryDelay.current = Math.min(retryDelay.current * 1.5, 10000);
       retryRef.current = setTimeout(connect, retryDelay.current);
       if (!pollRef.current) {
         pollRef.current = setInterval(() => {
@@ -236,7 +236,7 @@ export function useExpiryExplosion() {
               if (json?.success && json.data) mergeData(json.data);
             })
             .catch(() => {});
-        }, 4000);
+        }, 2000);
       }
     };
 
@@ -256,8 +256,20 @@ export function useExpiryExplosion() {
 
     connect();
 
+    // Parallel REST poll runs alongside WS — catches updates when WS timestamps
+    // are stale or PCR-based signals need a forced refresh.
+    const parallelPoll = setInterval(() => {
+      fetch(getExpiryApiUrl())
+        .then(r => r.json())
+        .then((json: { success?: boolean; data?: Record<string, ExpiryIndex> }) => {
+          if (json?.success && json.data) mergeData(json.data);
+        })
+        .catch(() => {});
+    }, 2000);
+
     return () => {
       mountedRef.current = false;
+      clearInterval(parallelPoll);
       if (retryRef.current) clearTimeout(retryRef.current);
       if (pingRef.current) clearInterval(pingRef.current);
       if (pollRef.current) clearInterval(pollRef.current);

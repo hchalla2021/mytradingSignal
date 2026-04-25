@@ -82,6 +82,8 @@ export function useTradeZonesRealtime(symbol: string): UseTradeZonesRealtimeRetu
   const batchTimerRef = useRef<NodeJS.Timeout | null>(null);
   const prevSignalRef = useRef<string>('NEUTRAL');
   const abortControllerRef = useRef<AbortController | null>(null);
+  // 🔥 Track last price at refetch — triggers immediate re-fetch on ≥0.15% move
+  const lastWsRefetchPriceRef = useRef<number>(0);
 
   /**
    * 🔥 Trigger visual flash when entry setup detected
@@ -195,8 +197,8 @@ export function useTradeZonesRealtime(symbol: string): UseTradeZonesRealtimeRetu
     // Initial fetch
     fetchTradeZoneData();
 
-    // API refresh timer (3000ms)
-    const apiTimer = setInterval(fetchTradeZoneData, 3000);
+    // API refresh timer (2000ms — matches ws_analysis TTL)
+    const apiTimer = setInterval(fetchTradeZoneData, 2000);
 
     // WebSocket for live updates
     const wsUrl = API_CONFIG.wsUrl;
@@ -224,14 +226,24 @@ export function useTradeZonesRealtime(symbol: string): UseTradeZonesRealtimeRetu
 
             // Handle market tick events
             if (message.type === `market-tick-${symbol}`) {
-              const { price, volume } = message.data || {};
+              const { price } = message.data || {};
+              if (!price) return;
 
-              // Use ref to avoid stale closure and prevent infinite re-render loop
+              // 🔥 Immediate full refetch on significant price move (≥0.15%)
+              // Avoids spreading stale signals — only current_price was updating locally.
+              const lastPrice = lastWsRefetchPriceRef.current;
+              if (lastPrice === 0 || Math.abs(price - lastPrice) / lastPrice >= 0.0015) {
+                lastWsRefetchPriceRef.current = price;
+                fetchTradeZoneData();
+                return;
+              }
+
+              // Minor tick: update price in-place without a full API round-trip
               const current = dataRef.current;
               if (current) {
                 queueZoneUpdate({
                   ...current,
-                  current_price: price || current.current_price,
+                  current_price: price,
                   timestamp: new Date().toISOString(),
                 });
               }

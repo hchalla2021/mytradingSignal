@@ -53,6 +53,10 @@ export interface SymbolStrikeData {
   strikes: StrikeRow[];
   dataSource: StrikeDataSource;
   timestamp: string;
+  spotUpdatedAt?: string;
+  optionChainUpdatedAt?: string;
+  optionChainAgeSec?: number;
+  feedMode?: 'HYBRID_LIVE';
 }
 
 export interface StrikeIntelligenceData {

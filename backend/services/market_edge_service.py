@@ -48,11 +48,12 @@ IST = pytz.timezone("Asia/Kolkata")
 # ── Weights for MarketEdge scoring ───────────────────────────────────────────
 
 EDGE_WEIGHTS: Dict[str, float] = {
-    "oi_spurts":      0.30,   # Sudden OI bursts — highest weight
-    "futures_oi":     0.25,   # Futures OI buildup classification
-    "iv_estimation":  0.20,   # IV level + direction
-    "iv_rank":        0.15,   # IV percentile rank
-    "futures_basis":  0.10,   # Premium/discount to spot
+    "oi_spurts":            0.25,   # Sudden OI bursts — institutional entry
+    "futures_oi":           0.25,   # Futures OI buildup classification
+    "live_price_momentum":  0.20,   # NEW: live spot vs candle anchors — instant reversal detection
+    "iv_estimation":        0.15,   # IV level + direction (slow, reduced weight)
+    "iv_rank":              0.10,   # IV percentile rank (slow, reduced weight)
+    "futures_basis":        0.05,   # Premium/discount to spot
 }
 
 STRONG_BULL_T = 0.35
@@ -623,22 +624,38 @@ def _futures_oi_signal(
     extras["oiVelocity"] = round(oi_vel, 2)
     extras["futOI"] = fut_oi
 
-    # OI × Price direction matrix
-    if spot_slope > 0 and oi_slope > 0:
+    # Blend ring-buffer slope (60% weight) with live vs last-candle-close (40% weight)
+    # so price direction flips immediately during a mid-session reversal instead
+    # of waiting for the full 60-tick ring buffer to fill with new values.
+    live_price_move = 0.0
+    if spot_price > 0 and candles:
+        last_close = float(candles[-1].get("close") or 0)
+        if last_close > 0:
+            live_price_move = (spot_price - last_close) / last_close * 100.0
+    blended_spot = spot_slope * 0.60 + live_price_move * 0.40
+
+    price_up = blended_spot > 0
+    price_dn = blended_spot < 0
+    if not price_up and not price_dn:
+        price_up = spot_slope > 0
+        price_dn = spot_slope < 0
+
+    # OI × Price direction matrix (uses blended price direction)
+    if price_up and oi_slope > 0:
         profile = "LONG_BUILDUP"
         score = _clamp(0.35 + min(abs(oi_vel) * 0.02, 0.35), 0.3, 0.8)
         label = f"LONG BUILDUP — Institutions adding longs (OI vel: {oi_vel:+.1f}%)"
-    elif spot_slope > 0 and oi_slope <= 0:
+    elif price_up and oi_slope <= 0:
         profile = "SHORT_COVERING"
-        score = _clamp(0.15 + spot_slope * 30, 0.1, 0.4)
+        score = _clamp(0.15 + abs(blended_spot) * 10, 0.1, 0.4)
         label = "SHORT COVERING — Shorts exiting, mild bullish"
-    elif spot_slope < 0 and oi_slope > 0:
+    elif price_dn and oi_slope > 0:
         profile = "SHORT_BUILDUP"
         score = _clamp(-0.35 - min(abs(oi_vel) * 0.02, 0.35), -0.8, -0.3)
         label = f"SHORT BUILDUP — Institutions adding shorts (OI vel: {oi_vel:+.1f}%)"
-    elif spot_slope < 0 and oi_slope <= 0:
+    elif price_dn and oi_slope <= 0:
         profile = "LONG_UNWINDING"
-        score = _clamp(-0.15 + spot_slope * 30, -0.4, -0.1)
+        score = _clamp(-0.15 + abs(blended_spot) * -10, -0.4, -0.1)
         label = "LONG UNWINDING — Longs exiting, mild bearish"
 
     extras["profile"] = profile
@@ -732,6 +749,92 @@ def _futures_basis_signal(
         "label": label,
         "weight": EDGE_WEIGHTS["futures_basis"],
         "extra": extras,
+    }
+
+
+# ── Live Price Momentum — multi-anchor reversal detector ────────────────────
+
+def _live_price_momentum_signal(candles: List[Dict], spot_price: float) -> Dict[str, Any]:
+    """
+    Live Price vs Candle-Close Anchors (20% weight) — HIGHEST RESPONSIVENESS.
+
+    Compares live spot against 4 historical candle closes at increasing lookbacks.
+    Runs on every broadcast tick (every 1.5s) — detects mid-session reversals
+    within seconds, completely independent of slow EMA/OI ring-buffer signals.
+
+    candles is oldest-first (chronological order).
+    """
+    if len(candles) < 2 or spot_price <= 0:
+        return {
+            "score": 0.0, "signal": "NEUTRAL",
+            "label": "Insufficient candles for live momentum",
+            "weight": EDGE_WEIGHTS["live_price_momentum"], "extra": {},
+        }
+
+    closes = [float(c.get("close") or 0) for c in candles if float(c.get("close") or 0) > 0]
+    if len(closes) < 2:
+        return {
+            "score": 0.0, "signal": "NEUTRAL",
+            "label": "No valid candle closes",
+            "weight": EDGE_WEIGHTS["live_price_momentum"], "extra": {},
+        }
+
+    # Anchors: (lookback from end of closes list, contribution weight)
+    # Recent anchors matter more — detects reversal in progress
+    anchors = [(1, 4), (3, 3), (6, 2), (12, 1)]
+    num = 0.0
+    den = 0.0
+    anchor_details: Dict[str, float] = {}
+
+    for lb, w in anchors:
+        if lb < len(closes):
+            ac = closes[-lb]
+            if ac > 0:
+                pct = (spot_price - ac) / ac * 100.0
+                # ±0.3% vs anchor = full score at that anchor
+                clamped = _clamp(pct / 0.3, -1.0, 1.0)
+                num += clamped * w
+                den += w
+                anchor_details[f"vs_{lb}c_ago"] = round(pct, 3)
+
+    if den == 0:
+        return {
+            "score": 0.0, "signal": "NEUTRAL",
+            "label": "No anchor data",
+            "weight": EDGE_WEIGHTS["live_price_momentum"], "extra": {},
+        }
+
+    score = _clamp(num / den, -1.0, 1.0)
+
+    # Also factor in the last 6 candles direction (recency-weighted candle consistency)
+    recent = closes[-6:] if len(closes) >= 6 else closes
+    bull_w = sum((2.0 if i >= len(recent) - 2 else 1.0)
+                 for i, (o, c) in enumerate(zip(recent[:-1], recent[1:])) if c > o)
+    bear_w = sum((2.0 if i >= len(recent) - 2 else 1.0)
+                 for i, (o, c) in enumerate(zip(recent[:-1], recent[1:])) if c < o)
+    candle_total = bull_w + bear_w
+    if candle_total > 0:
+        candle_dir = (bull_w - bear_w) / candle_total  # -1 to +1
+        # 30% candle direction, 70% live anchor comparison
+        score = _clamp(score * 0.70 + candle_dir * 0.30, -1.0, 1.0)
+
+    if score >= 0.40:
+        label = f"Strong upward momentum vs recent closes ({anchor_details})"
+    elif score >= 0.15:
+        label = f"Mild bullish momentum vs recent candle closes"
+    elif score <= -0.40:
+        label = f"Strong downward momentum vs recent closes"
+    elif score <= -0.15:
+        label = f"Mild bearish momentum vs recent candle closes"
+    else:
+        label = "Neutral — price near recent candle closes"
+
+    return {
+        "score": round(score, 4),
+        "signal": _sig(score),
+        "label": label,
+        "weight": EDGE_WEIGHTS["live_price_momentum"],
+        "extra": {"anchors": anchor_details, "candleBullW": round(bull_w, 1), "candleBearW": round(bear_w, 1)},
     }
 
 
@@ -860,7 +963,7 @@ class MarketEdgeService:
     """
 
     INDICES = ["NIFTY", "BANKNIFTY", "SENSEX"]
-    TICK_INTERVAL = 3.0    # 3-second broadcast cadence (fast but not wasteful)
+    TICK_INTERVAL = 1.5    # 1.5-second broadcast cadence — faster reversal detection
     FUTURES_REFRESH = 5.0  # Refresh futures quote every 5s
 
     def __init__(self, cache: CacheService):
@@ -1039,13 +1142,15 @@ class MarketEdgeService:
         sig_iv_rank = _iv_rank_signal(hist)
         sig_fut_oi = _futures_oi_signal(fut_oi, fut_price, spot_price, hist, candles)
         sig_basis = _futures_basis_signal(fut_price, spot_price, hist)
+        sig_live_mom = _live_price_momentum_signal(candles, spot_price)
 
         signals = {
-            "oi_spurts":      sig_oi_spurts,
-            "iv_estimation":  sig_iv,
-            "iv_rank":        sig_iv_rank,
-            "futures_oi":     sig_fut_oi,
-            "futures_basis":  sig_basis,
+            "oi_spurts":           sig_oi_spurts,
+            "iv_estimation":       sig_iv,
+            "iv_rank":             sig_iv_rank,
+            "futures_oi":          sig_fut_oi,
+            "futures_basis":       sig_basis,
+            "live_price_momentum": sig_live_mom,
         }
 
         direction, confidence, raw_score, action = _finalize_edge(signals)

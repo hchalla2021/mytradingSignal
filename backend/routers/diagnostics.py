@@ -83,7 +83,7 @@ async def market_data_status(_admin=Depends(_verify_admin_key)):
         }
 
 @router.get("/market-status")
-async def market_status_endpoint():
+async def market_status_endpoint(_admin=Depends(_verify_admin_key)):
     """Get current market status (LIVE, CLOSED, PRE_OPEN, etc)"""
     try:
         from services.market_feed import get_market_status
@@ -96,11 +96,9 @@ async def market_status_endpoint():
             "timestamp": datetime.now().isoformat()
         }
     except Exception as e:
-        import traceback
         return {
             "status": "error",
-            "message": str(e),
-            "traceback": traceback.format_exc(),
+            "message": "Failed to retrieve market status",
             "timestamp": datetime.now().isoformat()
         }
 

@@ -151,7 +151,8 @@ class MarketFeedService:
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._consecutive_403_errors: int = 0  # Track repeated 403 errors
         self._last_connection_attempt: Optional[datetime] = None  # Track last retry
-        self._analysis_semaphore: asyncio.Semaphore = asyncio.Semaphore(1)  # Limit concurrent analysis
+        # Per-symbol semaphores: NIFTY/BANKNIFTY/SENSEX analyse concurrently (was 1 global → dropped 2 of 3)
+        self._analysis_semaphores: Dict[str, asyncio.Semaphore] = {}
         self._retry_delay: int = 5  # Start with 5 seconds, exponential backoff
         self._using_rest_fallback: bool = False  # Flag for REST API fallback mode
     
@@ -557,18 +558,23 @@ class MarketFeedService:
     
     async def _run_background_analysis(self, symbol: str, data: Dict[str, Any], raw_depth: Dict):
         """Run heavy analysis in background without blocking tick broadcasts."""
-        # Use semaphore to prevent multiple heavy analyses competing for CPU
-        if self._analysis_semaphore.locked():
-            return  # Skip if another analysis is already running
-        
-        async with self._analysis_semaphore:
+        # Per-symbol semaphore: each index analyses independently (no cross-symbol blocking)
+        if symbol not in self._analysis_semaphores:
+            self._analysis_semaphores[symbol] = asyncio.Semaphore(1)
+        sem = self._analysis_semaphores[symbol]
+
+        if sem.locked():
+            return  # This symbol is already being analysed — skip duplicate
+
+        async with sem:
             try:
                 await asyncio.sleep(0)
-                
+
                 is_trading = data.get("status") == "LIVE"
-                cache_ttl = 10 if is_trading else 60
+                # TTL 2s during LIVE (was 5s) → analysis refreshes 2.5× faster during intraday reversals
+                cache_ttl = 2 if is_trading else 60
                 cache_key = f"ws_analysis:{symbol}"
-                
+
                 # Check if analysis cache is still valid
                 if is_trading:
                     cached_json = await self.cache.get(cache_key)

@@ -625,6 +625,28 @@ def _gamma_exposure_signal(
             score = 0.0
             label = "Balanced gamma — no clear edge"
 
+    # ── Reactive override: dampen PCR score when price clearly contradicts it ──
+    # Stage A: 3 consecutive same-direction closes = strong confirmation (~15 min reversal)
+    if candles and len(candles) >= 4:
+        last3c = [float(c.get("close") or 0) for c in candles[-3:]]
+        if all(v > 0 for v in last3c):
+            if last3c[2] > last3c[1] > last3c[0] and score < -0.05:
+                # Higher closes contradict bearish PCR — neutralise
+                score = max(-0.05, score * 0.30)
+                label = f"[Price ↑ reversal overrides PCR bias] {label}"
+            elif last3c[2] < last3c[1] < last3c[0] and score > 0.05:
+                # Lower closes contradict bullish PCR — neutralise
+                score = min(0.05, score * 0.30)
+                label = f"[Price ↓ reversal overrides PCR bias] {label}"
+
+    # Stage B: price-direction gradient dampening (smooth, from candles[-5:])
+    if abs(price_direction) > 1.0:
+        price_factor = min(0.30, abs(price_direction) / 200.0)
+        if price_direction > 0 and score < -0.05:
+            score += price_factor
+        elif price_direction < 0 and score > 0.05:
+            score -= price_factor
+
     score = _clamp(score, -1.0, 1.0)
     extras["priceDirection"] = round(price_direction, 4)
 
@@ -806,7 +828,7 @@ def _volume_surge_signal(history: OIHistory, candles: List[Dict]) -> Dict[str, A
     }
 
 
-def _pcr_extreme_signal(pcr: float, history: OIHistory) -> Dict[str, Any]:
+def _pcr_extreme_signal(pcr: float, history: OIHistory, candles: List[Dict] = None) -> Dict[str, Any]:
     """
     PCR Extreme Zone Detection.
 
@@ -856,6 +878,27 @@ def _pcr_extreme_signal(pcr: float, history: OIHistory) -> Dict[str, Any]:
         score += 0.1   # PCR rising = more put writing = bullish
     elif pcr_slope < -0.01:
         score -= 0.1   # PCR falling = puts exiting/calls building = bearish
+
+    # ── Reactive override: dampen stuck PCR when price clearly contradicts it ──
+    # Stage A: 3 consecutive same-direction closes (~15 min price confirmation)
+    if candles and len(candles) >= 4:
+        last3c = [float(c.get("close") or 0) for c in candles[-3:]]
+        if all(v > 0 for v in last3c):
+            if last3c[2] > last3c[1] > last3c[0] and score < -0.05:
+                score = max(-0.05, score * 0.30)
+            elif last3c[2] < last3c[1] < last3c[0] and score > 0.05:
+                score = min(0.05, score * 0.30)
+    # Stage B: OIHistory price buffer slope — fallback when candles unavailable
+    elif len(history._price_buf) >= 5:
+        recent_px = list(history._price_buf)[-10:]
+        if len(recent_px) >= 3:
+            px_slope = _linear_slope(recent_px)
+            if px_slope > 1.0 and score < -0.1:
+                damp = min(abs(score) * 0.45, 0.25)
+                score += damp
+            elif px_slope < -1.0 and score > 0.1:
+                damp = min(abs(score) * 0.45, 0.25)
+                score -= damp
 
     score = _clamp(score, -1.0, 1.0)
 
@@ -1619,7 +1662,7 @@ class ExpiryExplosionService:
             c = _parse_candle(item)
             if c:
                 result.append(c)
-        live = await self._cache.get(f"analysis_candle_live:{symbol}")
+        live = await self._cache.get(f"analysis_candles_live:{symbol}")
         if live and isinstance(live, dict) and float(live.get("close") or 0) > 0:
             if not result or result[-1].get("timestamp") != live.get("timestamp"):
                 result.append(live)
@@ -1686,7 +1729,7 @@ class ExpiryExplosionService:
         sig_gamma = _gamma_exposure_signal(oi_raw, call_oi, put_oi, price, history, hours_left, candles)
         sig_oi = _oi_concentration_signal(oi_raw, call_oi, put_oi, price, history, candles)
         sig_vol = _volume_surge_signal(history, candles)
-        sig_pcr = _pcr_extreme_signal(pcr_val, history)
+        sig_pcr = _pcr_extreme_signal(pcr_val, history, candles)
         sig_delta = _delta_acceleration_signal(price, history, hours_left, candles)
         sig_iv = _iv_behavior_signal(candles, history, hours_left)
         sig_theta = _theta_decay_signal(hours_left, candles)

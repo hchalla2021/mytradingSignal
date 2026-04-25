@@ -62,9 +62,9 @@ SIDEWAYS_THRESHOLD = 25          # Score < 25 → SIDEWAYS  (25-45 = NEUTRAL)
 
 # Factor weights (must sum to 1.0)
 FACTOR_WEIGHTS: Dict[str, float] = {
-    "directional_move":     0.20,
+    "directional_move":     0.15,  # reduced — anchored to open, misses mid-session reversals
     "ema_alignment":        0.15,
-    "candle_consistency":   0.15,
+    "candle_consistency":   0.10,  # reduced — recency now handled by recent_momentum
     "range_expansion":      0.12,
     "opening_range":        0.10,
     "volume_trend":         0.08,
@@ -72,6 +72,7 @@ FACTOR_WEIGHTS: Dict[str, float] = {
     "vix_context":          0.05,
     "pcr_bias":             0.05,
     "oi_conviction":        0.05,
+    "recent_momentum":      0.10,  # NEW — last 8 candles (~40 min), detects mid-session reversals
 }
 
 SYMBOLS = ["NIFTY", "BANKNIFTY", "SENSEX"]
@@ -229,7 +230,7 @@ class MarketRegimeService:
         }
         self._last_snapshot: Dict[str, Any] = {}
         self._last_market: Dict[str, Dict] = {}  # Fallback cache per symbol
-        self._cadence_live = 2.0      # Broadcast every 2s during LIVE
+        self._cadence_live = 1.0      # Broadcast every 1s during LIVE (fast regime updates)
         self._cadence_closed = 30.0   # Every 30s when CLOSED
         self._heartbeat_interval = 30.0
 
@@ -402,6 +403,9 @@ class MarketRegimeService:
         factors["oi_conviction"] = self._factor_oi_conviction(
             candles_5m, oi, intraday_pct
         )
+
+        # 11. Recent Momentum (10%) — last 8 candles (~40 min), detects mid-session reversals
+        factors["recent_momentum"] = self._factor_recent_momentum(candles_5m, price)
 
         # ── Aggregate weighted score ──────────────────────────────────
 
@@ -716,16 +720,20 @@ class MarketRegimeService:
         current_bull_streak = 0
         current_bear_streak = 0
 
-        for c in candles:
+        # candles[0] = newest, candles[-1] = oldest (lpush order)
+        # Give the 6 most recent candles (last 30 min) 3× weight so a mid-session
+        # reversal can override the morning's bearish candles quickly.
+        for i, c in enumerate(candles):
+            w = 3 if i < 6 else 1  # newest 6 = 3× weight
             o = _safe_float(c.get("open"))
             cl = _safe_float(c.get("close"))
             if cl > o:
-                bullish_count += 1
+                bullish_count += w
                 current_bull_streak += 1
                 current_bear_streak = 0
                 max_bull_streak = max(max_bull_streak, current_bull_streak)
             elif cl < o:
-                bearish_count += 1
+                bearish_count += w
                 current_bear_streak += 1
                 current_bull_streak = 0
                 max_bear_streak = max(max_bear_streak, current_bear_streak)
@@ -733,9 +741,9 @@ class MarketRegimeService:
                 current_bull_streak = 0
                 current_bear_streak = 0
 
-        total = len(candles)
+        total_weighted = sum(3 if i < 6 else 1 for i in range(len(candles)))
         dominant_count = max(bullish_count, bearish_count)
-        dominance_pct = (dominant_count / total) * 100 if total > 0 else 50
+        dominance_pct = (dominant_count / total_weighted) * 100 if total_weighted > 0 else 50
         max_streak = max(max_bull_streak, max_bear_streak)
 
         # Score: 50% dominance = 0 score, 100% dominance = 100 score
@@ -1227,6 +1235,70 @@ class MarketRegimeService:
             signal = "FLAT_OI"
             label = "OI flat — no fresh interest"
             direction_bias = 0
+
+        return {
+            "score": score,
+            "label": label,
+            "signal": signal,
+            "direction_bias": direction_bias,
+        }
+
+    def _factor_recent_momentum(self, candles: List[Dict], price: float) -> Dict[str, Any]:
+        """
+        Factor 11: Recent Candle Momentum (10%)
+        Looks at the last 8 completed 5m candles (~40 min window).
+        Completely independent of the day's open price — detects MID-SESSION
+        reversals that full-day metrics (directional_move, candle_consistency) miss.
+
+        candles[0] = newest, candles[-1] = oldest (lpush order).
+        Uses newest 8: candles[:8].
+        """
+        recent = [
+            c for c in candles[:8]
+            if _safe_float(c.get("close")) > 0 and _safe_float(c.get("open")) > 0
+        ]
+        if len(recent) < 3:
+            return {
+                "score": 30,
+                "label": "Insufficient recent candles for momentum",
+                "signal": "NO_DATA",
+                "direction_bias": 0,
+            }
+
+        bull = sum(1 for c in recent if _safe_float(c.get("close")) > _safe_float(c.get("open")))
+        bear = sum(1 for c in recent if _safe_float(c.get("close")) < _safe_float(c.get("open")))
+        total = len(recent)
+
+        # recent[0] = newest candle, recent[-1] = oldest in this 40-min window
+        oldest_close = _safe_float(recent[-1].get("close"))
+        newest_close = _safe_float(recent[0].get("close"))
+
+        # Blend: 70% price change over window, 30% live-vs-latest-candle
+        window_pct = (newest_close - oldest_close) / oldest_close * 100 if oldest_close > 0 else 0
+        live_pct = (price - newest_close) / newest_close * 100 if newest_close > 0 and price > 0 else 0
+        recent_pct = window_pct * 0.7 + live_pct * 0.3
+
+        dominance = max(bull, bear) / total if total > 0 else 0.5
+        is_bull = bull >= bear
+
+        # Score: candle dominance (0-60) + price magnitude (0-40)
+        dominance_score = max(0.0, (dominance - 0.5) * 2.0) * 60.0
+        momentum_score = min(abs(recent_pct) / 0.8 * 40.0, 40.0)
+        score = _clamp(dominance_score + momentum_score, 0, 100)
+
+        direction_bias = (1.0 if is_bull else -1.0) * min(abs(recent_pct) / 0.6, 1.0)
+
+        if score >= 60:
+            signal = "STRONG_MOMENTUM"
+            d = "bullish" if is_bull else "bearish"
+            label = f"Recent {total} candles: {bull} bull/{bear} bear, {recent_pct:+.2f}% (~40min)"
+        elif score >= 30:
+            signal = "MILD_MOMENTUM"
+            d = "bullish" if is_bull else "bearish"
+            label = f"Mild {d} recent momentum ({recent_pct:+.2f}%)"
+        else:
+            signal = "NEUTRAL"
+            label = f"Mixed recent candles ({bull} bull / {bear} bear)"
 
         return {
             "score": score,

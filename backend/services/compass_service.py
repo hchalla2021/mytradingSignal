@@ -565,8 +565,13 @@ def _finalize_direction(
     # score deeply negative.  When the LAST 5 candles clearly move in the
     # opposite direction, blend up to 25 % momentum into the raw score so
     # the compass can flip to NEUTRAL and eventually BULLISH during recoveries.
-    _MOM_GATE    = 0.30   # momentum must exceed this to activate
-    _MOM_BLEND   = 0.25   # max pull toward momentum direction
+    # OLD: _MOM_BLEND=0.25, _MOM_GATE=0.30 — after a deeply bearish morning
+    # (raw ≈ -0.60) a 30-min afternoon rally (momentum ≈ +0.80) only added
+    # +0.20 → raw still -0.40 (BEARISH).  Compass stayed STRONG_SELL.
+    # NEW: blend=0.40, gate=0.15 — same rally now adds +0.32 → raw ≈ -0.28,
+    # pushing toward NEUTRAL/BULLISH much faster (~30 min vs ~60+ min before).
+    _MOM_GATE    = 0.15   # momentum must exceed this to activate
+    _MOM_BLEND   = 0.40   # max pull toward momentum direction
     if abs(recent_momentum) >= _MOM_GATE:
         # Only adjust when momentum CONTRADICTS the score
         if raw < 0 and recent_momentum > _MOM_GATE:
@@ -1067,8 +1072,16 @@ class CompassService:
     # ── Read spot candles from cache ──────────────────────────────────────────
 
     async def _read_spot_candles(self, symbol: str) -> List[Dict]:
-        """Read 5-min spot candles from CacheService (oldest-first for TA)."""
-        raw = await self._cache.lrange(f"analysis_candles:{symbol}", 0, 99)
+        """Read 5-min spot candles from CacheService (oldest-first for TA).
+
+        Window reduced from 100 → 40 candles (200 min rolling).
+        OLD: 100 candles = 500 min = 8+ hours — morning bearish data dominated
+        EMA50, EMA20, RSI-14 all afternoon.  After a 30-min afternoon rally,
+        EMA still reflected the morning downtrend.  Score stayed deeply BEARISH.
+        NEW: 40 candles = 200 min; EMA/RSI respond within 2-3 candle windows;
+        morning context ages out within one session, not across the whole day.
+        """
+        raw = await self._cache.lrange(f"analysis_candles:{symbol}", 0, 39)
         candles = []
         for item in reversed(raw):       # lpush prepends → newest first; reverse for TA
             c = _parse_candle(item)
@@ -1112,6 +1125,23 @@ class CompassService:
 
         # ── Spot 5-min candles ───────────────────────────────────────────────
         spot_candles = await self._read_spot_candles(symbol)
+
+        # ── Inject live/in-progress 5-min candle ────────────────────────────
+        # analysis_candles holds only COMPLETED candles; the current in-progress
+        # candle (up to 4:59 min old) is invisible.  Without injection, all 6
+        # factors (EMA, VWAP, RSI, Trend, Volume) are up to 5 min behind.
+        # With injection we update close/high/low to the current tick price so
+        # the signal engine always sees what price is doing RIGHT NOW.
+        try:
+            live_raw = await self._cache.get(f"analysis_candles_live:{symbol}")
+            if isinstance(live_raw, dict) and float(live_raw.get("open", 0)) > 0:
+                live_candle: Dict[str, Any] = dict(live_raw)
+                live_candle["close"] = spot_price
+                live_candle["high"]  = max(float(live_raw.get("high", spot_price)), spot_price)
+                live_candle["low"]   = min(float(live_raw.get("low",  spot_price)), spot_price)
+                spot_candles.append(live_candle)
+        except Exception:
+            pass
 
         # ── Futures contract info ────────────────────────────────────────────
         contracts = self._contracts.get(symbol, {})
@@ -1168,7 +1198,9 @@ class CompassService:
         )
 
         # ── Recent candle momentum (anti-lag for bounces / reversals) ────
-        candle_momentum = _recent_candle_momentum(spot_candles, n=5)
+        # Widened from n=5 (25 min) to n=8 (40 min) to capture stronger
+        # intraday reversal signal over a 30-min rally window.
+        candle_momentum = _recent_candle_momentum(spot_candles, n=8)
 
         direction, confidence, raw_score, bias = _finalize_direction(
             signals, recent_momentum=candle_momentum,

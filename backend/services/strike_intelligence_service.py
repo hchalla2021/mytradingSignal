@@ -469,6 +469,33 @@ class StrikeIntelligenceService:
         self._heartbeat_interval = 30.0
         self._kite_init_backoff_until: float = 0.0  # Backoff timer for failed init
 
+    def _with_runtime_meta(
+        self,
+        entry: Dict[str, Any],
+        *,
+        spot_timestamp: Optional[str] = None,
+        option_timestamp: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        updated = dict(entry)
+        option_updated_at = option_timestamp or updated.get("optionChainUpdatedAt") or updated.get("timestamp")
+        spot_updated_at = spot_timestamp or updated.get("spotUpdatedAt") or updated.get("timestamp")
+
+        option_age_sec = 0.0
+        if option_updated_at:
+            try:
+                option_age_sec = max(
+                    0.0,
+                    time_mod.time() - datetime.fromisoformat(option_updated_at).timestamp(),
+                )
+            except Exception:
+                option_age_sec = 0.0
+
+        updated["spotUpdatedAt"] = spot_updated_at
+        updated["optionChainUpdatedAt"] = option_updated_at
+        updated["optionChainAgeSec"] = round(option_age_sec, 1)
+        updated["feedMode"] = "HYBRID_LIVE"
+        return updated
+
     # ── KiteConnect init ─────────────────────────────────────────────────
 
     def _init_kite(self):
@@ -730,6 +757,7 @@ class StrikeIntelligenceService:
 
     def _build_symbol_data(self, symbol: str, raw: Dict[str, Any]) -> Dict[str, Any]:
         """Transform raw strike data into the full signal payload."""
+        built_at = datetime.now(IST).isoformat()
         spot = raw["spot"]
         atm = raw["atm"]
         step = raw["step"]
@@ -763,7 +791,7 @@ class StrikeIntelligenceService:
                 "pe": signals["pe"],
             })
 
-        return {
+        payload = {
             "symbol": symbol,
             "spot": spot,
             "atm": atm,
@@ -772,8 +800,9 @@ class StrikeIntelligenceService:
             "strikeCount": len(strikes_out),
             "strikes": strikes_out,
             "dataSource": "LIVE",
-            "timestamp": datetime.now(IST).isoformat(),
+            "timestamp": built_at,
         }
+        return self._with_runtime_meta(payload, spot_timestamp=built_at, option_timestamp=built_at)
 
     # ── Seed data generator ────────────────────────────────────────────
 
@@ -874,11 +903,14 @@ class StrikeIntelligenceService:
                 "pe":      signals["pe"],
             })
 
-        updated          = dict(entry)
-        updated["spot"]  = round(spot, 2)
-        updated["atm"]   = new_atm
+        updated            = dict(entry)
+        updated["spot"]   = round(spot, 2)
+        updated["atm"]    = new_atm
         updated["strikes"] = new_strikes
-        return updated
+        return self._with_runtime_meta(
+            updated,
+            spot_timestamp=datetime.now(IST).isoformat(),
+        )
 
     # ── Main loop ────────────────────────────────────────────────────────
 
@@ -940,19 +972,34 @@ class StrikeIntelligenceService:
                     # Every 1s: pull live spot from cache, recompute spot-sensitive signals, broadcast
                     if self._last_snapshot:
                         ts_now = datetime.now(IST).isoformat()
-                        broadcast_data: Dict[str, Any] = {}
-                        for sym in SYMBOLS:
-                            if sym not in self._last_snapshot:
-                                continue
-                            spot = self._get_spot_price(sym)
+
+                        async def _refresh_one(symbol: str) -> tuple:
+                            entry = self._last_snapshot.get(symbol)
+                            if not isinstance(entry, dict):
+                                return (symbol, None)
+                            spot = self._get_spot_price(symbol)
                             if spot > 0:
-                                entry = self._recompute_signals_with_spot(
-                                    self._last_snapshot[sym], spot, sym
+                                refreshed = await asyncio.to_thread(
+                                    self._recompute_signals_with_spot, entry, spot, symbol
                                 )
                             else:
-                                entry = dict(self._last_snapshot[sym])
-                            entry["dataSource"] = "LIVE"
-                            entry["timestamp"] = ts_now
+                                refreshed = self._with_runtime_meta(dict(entry), spot_timestamp=ts_now)
+                            refreshed["dataSource"] = "LIVE"
+                            refreshed["timestamp"] = ts_now
+                            refreshed = self._with_runtime_meta(refreshed, spot_timestamp=ts_now)
+                            return (symbol, refreshed)
+
+                        broadcast_data: Dict[str, Any] = {}
+                        results = await asyncio.gather(
+                            *[_refresh_one(sym) for sym in SYMBOLS if sym in self._last_snapshot],
+                            return_exceptions=True,
+                        )
+                        for result in results:
+                            if isinstance(result, Exception):
+                                continue
+                            sym, entry = result
+                            if entry is None:
+                                continue
                             self._last_snapshot[sym] = entry
                             broadcast_data[sym] = entry
 

@@ -90,6 +90,8 @@ export function useTrendBaseRealtime(symbol: string) {
   const batchTimerRef = useRef<NodeJS.Timeout | null>(null);
   const apiTimerRef = useRef<NodeJS.Timeout | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  // Track last price seen by WS to detect significant moves → immediate API refetch
+  const lastWsChangeRef = useRef<number>(0);
 
   // ── 🔥 Fast API fetch (3s instead of 5s) ───────────────────────────────────
   const fetchAnalysis = useCallback(async () => {
@@ -197,10 +199,18 @@ export function useTrendBaseRealtime(symbol: string) {
         volume: tick.volume,
       };
 
+      // 🔥 Force immediate API refetch when price moves ≥0.15% from last WS snapshot
+      // This captures intraday reversals without waiting for the 3s polling interval
+      const newChange = tick.changePercent ?? 0;
+      if (Math.abs(newChange - lastWsChangeRef.current) >= 0.15) {
+        lastWsChangeRef.current = newChange;
+        fetchAnalysis();
+      }
+
       // Trigger batch update
       processBatchedUpdate();
     },
-    [symbol, processBatchedUpdate]
+    [symbol, processBatchedUpdate, fetchAnalysis]
   );
 
   // ── Listen for WebSocket events (subscribe/unsubscribe) ───────────────────
@@ -219,14 +229,14 @@ export function useTrendBaseRealtime(symbol: string) {
     };
   }, [symbol, handleWebSocketTick]);
 
-  // ── Initial load + 3s API refresh cycle ──────────────────────────────────
+  // ── Initial load + 2s API refresh cycle ──────────────────────────────────
   useEffect(() => {
     fetchAnalysis();
 
-    // Refresh every 3s (not 5s) for faster signal detection
+    // Refresh every 2s (was 3s) — matches backend analysis cache TTL of 2s
     apiTimerRef.current = setInterval(() => {
       fetchAnalysis();
-    }, 3000);
+    }, 2000);
 
     return () => {
       if (apiTimerRef.current) clearInterval(apiTimerRef.current);

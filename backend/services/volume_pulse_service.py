@@ -164,47 +164,62 @@ class VolumePulseEngine:
         recent_df: pd.DataFrame
     ) -> int:
         """
-        Calculate buying pressure score (0-100)
-        Higher = More buying pressure
-        
-        SIMPLIFIED FORMULA:
-        - 70% weight on green/red volume ratio
-        - 30% weight on recent momentum
+        Reactive pulse score (0-100) — dual-window design.
+
+        OLD ALGORITHM PROBLEM:
+          70% weight on ALL lookback candles (100).  During a 30-min afternoon
+          rally following a bearish morning session the ALL-candle green_pct
+          stays at ~10-20%, giving a base score of 7-14.  Even with the old
+          +30 momentum bonus the total was ~40, still in SELL territory.
+          The score lagged reality by 60-90 minutes.
+
+        NEW ALGORITHM:
+          70% weight on last 6 candles (≈30 min) — captures the live direction.
+          30% weight on last 20 candles (≈100 min) — provides market context.
+          Result: 6 consecutive bullish candles flip the score to ≥70 instantly.
         """
         score = 0
-        
-        # 1. Base score from volume percentage (70 points max)
-        # If 70% green volume → score = 70
-        # If 50% green volume → score = 35
-        # If 30% green volume → score = 21
-        score += int(green_pct * 0.7)  # Direct scaling
-        
-        # 2. Recent momentum bonus (30 points max)
-        # Check last 5 candles for acceleration
-        if len(recent_df) >= 5:
-            last_5 = recent_df.tail(5)
-            close_arr = last_5['close'].values
-            open_arr = last_5['open'].values
-            vol_arr = last_5['volume'].values
-            
-            green_last_5 = np.sum(vol_arr[close_arr > open_arr])
-            red_last_5 = np.sum(vol_arr[close_arr < open_arr])
-            
-            if (green_last_5 + red_last_5) > 0:
-                recent_green_pct = green_last_5 / (green_last_5 + red_last_5) * 100
-                
-                # Momentum bonus/penalty
-                momentum_diff = recent_green_pct - green_pct
-                if momentum_diff > 10:
-                    score += 30  # Strong positive momentum
-                elif momentum_diff > 5:
-                    score += 20  # Moderate positive momentum
-                elif momentum_diff > 0:
-                    score += 10  # Slight positive momentum
-                elif momentum_diff < -10:
-                    score -= 10  # Negative momentum (selling pressure increasing)
-        
-        # Clamp to 0-100 range
+
+        # ── RECENT WINDOW (last 6 candles ≈ 30 min): 70 pts weight ─────────
+        recent_n = min(6, len(recent_df))
+        if recent_n >= 2:
+            last_n    = recent_df.iloc[-recent_n:]
+            c_close   = last_n['close'].values
+            c_open    = last_n['open'].values
+            c_vol     = last_n['volume'].values
+
+            rec_green = int(np.sum(c_vol[c_close > c_open]))
+            rec_red   = int(np.sum(c_vol[c_close < c_open]))
+
+            # Zero-volume fallback: use candle count (for index instruments)
+            if rec_green == 0 and rec_red == 0:
+                rec_green = int(np.sum(c_close > c_open))
+                rec_red   = int(np.sum(c_close < c_open))
+
+            rec_total = rec_green + rec_red
+            if rec_total > 0:
+                rec_green_pct = rec_green / rec_total * 100
+                score += round(rec_green_pct * 0.70)   # 0–70 pts
+
+        # ── CONTEXT WINDOW (last 20 candles ≈ 100 min): 30 pts weight ───────
+        ctx_n   = min(20, len(recent_df))
+        ctx_df  = recent_df.iloc[-ctx_n:]
+        cx_cl   = ctx_df['close'].values
+        cx_op   = ctx_df['open'].values
+        cx_vol  = ctx_df['volume'].values
+
+        ctx_green = int(np.sum(cx_vol[cx_cl > cx_op]))
+        ctx_red   = int(np.sum(cx_vol[cx_cl < cx_op]))
+
+        if ctx_green == 0 and ctx_red == 0:
+            ctx_green = int(np.sum(cx_cl > cx_op))
+            ctx_red   = int(np.sum(cx_cl < cx_op))
+
+        ctx_total = ctx_green + ctx_red
+        if ctx_total > 0:
+            ctx_green_pct = ctx_green / ctx_total * 100
+            score += round(ctx_green_pct * 0.30)   # 0–30 pts
+
         return min(max(score, 0), 100)
     
     # ═══════════════════════════════════════════════════════════════

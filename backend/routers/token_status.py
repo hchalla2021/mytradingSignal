@@ -126,13 +126,13 @@ def _get_next_action(market_status: str, token_valid: bool, has_token: bool) -> 
 
 
 @router.get("/api/health/detailed")
-async def get_detailed_health():
+async def get_detailed_health(_admin=Depends(_verify_admin_key)):
     """Detailed health check with all system status"""
     settings = get_settings()
     
     return {
         "backend": "✅ Running",
-        "redis": "✅ Connected",
+        "redis": "✅ Connected" if settings.redis_url else "⚠️ In-memory only",
         "zerodha": {
             "api_key": "✅ Configured" if settings.zerodha_api_key else "❌ Missing",
             "access_token": "✅ Configured" if settings.zerodha_access_token else "❌ Missing"
@@ -140,8 +140,8 @@ async def get_detailed_health():
         "features": {
             "market_feed": "✅ Active",
             "websocket": "✅ Active",
-            "ai_analysis": "✅ Available" if settings.openai_api_key else "⚠️ Disabled (no OpenAI key)",
-            "news_detection": "✅ Available" if settings.news_api_key else "⚠️ Disabled (no News API key)"
+            "ai_analysis": "⚠️ Disabled",
+            "news_detection": "⚠️ Disabled"
         },
         "auto_reload": "✅ Token auto-reload enabled"
     }

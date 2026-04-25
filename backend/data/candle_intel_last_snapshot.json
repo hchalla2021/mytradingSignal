@@ -1,59 +1,64 @@
 {
   "NIFTY": {
-    "pattern": "BULLISH_MARUBOZU",
+    "pattern": "BEARISH_MARUBOZU",
     "all_patterns": [
       {
-        "name": "BULLISH_MARUBOZU",
-        "structure": "BULLISH_CONTINUATION",
+        "name": "BEARISH_MARUBOZU",
+        "structure": "BEARISH_CONTINUATION",
         "weight": 0.85
+      },
+      {
+        "name": "LONG_UPPER_SHADOW",
+        "structure": "NEUTRAL",
+        "weight": 0.35
       }
     ],
-    "structure": "BULLISH_CONTINUATION",
+    "structure": "BEARISH_CONTINUATION",
     "strength": "STRONG",
-    "signal": "STRONG_BUY",
-    "confidence": 85,
-    "confluence": 1,
+    "signal": "STRONG_SELL",
+    "confidence": 93,
+    "confluence": 2,
     "candle": {
       "open": 24531.45,
       "high": 24543.4,
       "low": 24525.35,
-      "close": 24570.25,
-      "body_ratio": 2.15,
-      "upper_wick_ratio": -1.488,
-      "lower_wick_ratio": 0.338,
-      "is_bullish": true
+      "close": 24166.5,
+      "body_ratio": 20.219,
+      "upper_wick_ratio": 0.662,
+      "lower_wick_ratio": -19.881,
+      "is_bullish": false
     },
     "trend_context": {
-      "direction": "BULLISH",
+      "direction": "BEARISH",
       "bullish_count": 3,
-      "bearish_count": 2,
-      "avg_body_ratio": 0.627,
-      "candles_analyzed": 5
+      "bearish_count": 5,
+      "avg_body_ratio": 2.806,
+      "candles_analyzed": 8
     },
     "symbol": "NIFTY",
     "timeframe": "5m",
     "dataSource": "MARKET_CLOSED",
-    "timestamp": "2026-04-22T23:22:48.795724+05:30",
-    "price": 24570.25,
-    "changePct": 0.84,
+    "timestamp": "2026-04-25T21:53:27.163062+05:30",
+    "price": 24166.5,
+    "changePct": -0.87,
     "three_factor": {
       "location": {
-        "zone": "ABOVE_PDH",
-        "pdh": 24480.65,
-        "pdl": 24241.25,
-        "vwap": 24503.43,
-        "distance_to_pdh": 0.366,
-        "distance_to_pdl": 1.357,
-        "vwap_position": "ABOVE",
+        "zone": "BELOW_PDL",
+        "pdh": 24515.95,
+        "pdl": 24352.9,
+        "vwap": 24204.28,
+        "distance_to_pdh": -1.425,
+        "distance_to_pdl": -0.765,
+        "vwap_position": "AT",
         "tradeable": true
       },
       "behavior": {
         "type": "BREAKOUT",
-        "description": "Strong bullish close above PDH (24481)",
+        "description": "Strong bearish close below PDL (24353)",
         "strength": 100
       },
       "confirmation": {
-        "volume_ratio": 130.93,
+        "volume_ratio": 238.63,
         "volume_confirmed": true,
         "body_strong": true,
         "close_near_extreme": true,
@@ -68,8 +73,8 @@
       ],
       "factors_fail": [],
       "aligned": true,
-      "verdict": "BUY",
-      "reason": "All aligned \u2014 bullish breakout above PDH",
+      "verdict": "SELL",
+      "reason": "All aligned \u2014 breakdown below PDL",
       "market_active": false
     },
     "timeframes": {
@@ -82,10 +87,10 @@
         "confidence": 15,
         "confluence": 0,
         "candle": {
-          "open": 24570.25,
-          "high": 24570.25,
-          "low": 24570.25,
-          "close": 24570.25,
+          "open": 24166.5,
+          "high": 24166.5,
+          "low": 24166.5,
+          "close": 24166.5,
           "body_ratio": 0,
           "upper_wick_ratio": 0,
           "lower_wick_ratio": 0,
@@ -100,18 +105,18 @@
         "symbol": "NIFTY",
         "timeframe": "3m",
         "dataSource": "MARKET_CLOSED",
-        "timestamp": "2026-04-22T23:22:48.794766+05:30",
-        "price": 24570.25,
-        "changePct": 0.84,
+        "timestamp": "2026-04-25T21:53:27.162478+05:30",
+        "price": 24166.5,
+        "changePct": -0.87,
         "three_factor": {
           "location": {
-            "zone": "ABOVE_PDH",
-            "pdh": 24480.65,
-            "pdl": 24241.25,
-            "vwap": 24503.43,
-            "distance_to_pdh": 0.366,
-            "distance_to_pdl": 1.357,
-            "vwap_position": "ABOVE",
+            "zone": "BELOW_PDL",
+            "pdh": 24515.95,
+            "pdl": 24352.9,
+            "vwap": 24204.28,
+            "distance_to_pdh": -1.425,
+            "distance_to_pdl": -0.765,
+            "vwap_position": "AT",
             "tradeable": true
           },
           "behavior": {
@@ -142,60 +147,65 @@
         }
       },
       "5m": {
-        "pattern": "BULLISH_MARUBOZU",
+        "pattern": "BEARISH_MARUBOZU",
         "all_patterns": [
           {
-            "name": "BULLISH_MARUBOZU",
-            "structure": "BULLISH_CONTINUATION",
+            "name": "BEARISH_MARUBOZU",
+            "structure": "BEARISH_CONTINUATION",
             "weight": 0.85
+          },
+          {
+            "name": "LONG_UPPER_SHADOW",
+            "structure": "NEUTRAL",
+            "weight": 0.35
           }
         ],
-        "structure": "BULLISH_CONTINUATION",
+        "structure": "BEARISH_CONTINUATION",
         "strength": "STRONG",
-        "signal": "STRONG_BUY",
-        "confidence": 85,
-        "confluence": 1,
+        "signal": "STRONG_SELL",
+        "confidence": 93,
+        "confluence": 2,
         "candle": {
           "open": 24531.45,
           "high": 24543.4,
           "low": 24525.35,
-          "close": 24570.25,
-          "body_ratio": 2.15,
-          "upper_wick_ratio": -1.488,
-          "lower_wick_ratio": 0.338,
-          "is_bullish": true
+          "close": 24166.5,
+          "body_ratio": 20.219,
+          "upper_wick_ratio": 0.662,
+          "lower_wick_ratio": -19.881,
+          "is_bullish": false
         },
         "trend_context": {
-          "direction": "BULLISH",
+          "direction": "BEARISH",
           "bullish_count": 3,
-          "bearish_count": 2,
-          "avg_body_ratio": 0.627,
-          "candles_analyzed": 5
+          "bearish_count": 5,
+          "avg_body_ratio": 2.806,
+          "candles_analyzed": 8
         },
         "symbol": "NIFTY",
         "timeframe": "5m",
         "dataSource": "MARKET_CLOSED",
-        "timestamp": "2026-04-22T23:22:48.795724+05:30",
-        "price": 24570.25,
-        "changePct": 0.84,
+        "timestamp": "2026-04-25T21:53:27.163062+05:30",
+        "price": 24166.5,
+        "changePct": -0.87,
         "three_factor": {
           "location": {
-            "zone": "ABOVE_PDH",
-            "pdh": 24480.65,
-            "pdl": 24241.25,
-            "vwap": 24503.43,
-            "distance_to_pdh": 0.366,
-            "distance_to_pdl": 1.357,
-            "vwap_position": "ABOVE",
+            "zone": "BELOW_PDL",
+            "pdh": 24515.95,
+            "pdl": 24352.9,
+            "vwap": 24204.28,
+            "distance_to_pdh": -1.425,
+            "distance_to_pdl": -0.765,
+            "vwap_position": "AT",
             "tradeable": true
           },
           "behavior": {
             "type": "BREAKOUT",
-            "description": "Strong bullish close above PDH (24481)",
+            "description": "Strong bearish close below PDL (24353)",
             "strength": 100
           },
           "confirmation": {
-            "volume_ratio": 130.93,
+            "volume_ratio": 238.63,
             "volume_confirmed": true,
             "body_strong": true,
             "close_near_extreme": true,
@@ -210,8 +220,8 @@
           ],
           "factors_fail": [],
           "aligned": true,
-          "verdict": "BUY",
-          "reason": "All aligned \u2014 bullish breakout above PDH",
+          "verdict": "SELL",
+          "reason": "All aligned \u2014 breakdown below PDL",
           "market_active": false
         }
       },
@@ -224,10 +234,10 @@
         "confidence": 15,
         "confluence": 0,
         "candle": {
-          "open": 24570.25,
-          "high": 24570.25,
-          "low": 24570.25,
-          "close": 24570.25,
+          "open": 24166.5,
+          "high": 24166.5,
+          "low": 24166.5,
+          "close": 24166.5,
           "body_ratio": 0,
           "upper_wick_ratio": 0,
           "lower_wick_ratio": 0,
@@ -242,18 +252,18 @@
         "symbol": "NIFTY",
         "timeframe": "15m",
         "dataSource": "MARKET_CLOSED",
-        "timestamp": "2026-04-22T23:22:48.795964+05:30",
-        "price": 24570.25,
-        "changePct": 0.84,
+        "timestamp": "2026-04-25T21:53:27.163243+05:30",
+        "price": 24166.5,
+        "changePct": -0.87,
         "three_factor": {
           "location": {
-            "zone": "ABOVE_PDH",
-            "pdh": 24480.65,
-            "pdl": 24241.25,
-            "vwap": 24503.43,
-            "distance_to_pdh": 0.366,
-            "distance_to_pdl": 1.357,
-            "vwap_position": "ABOVE",
+            "zone": "BELOW_PDL",
+            "pdh": 24515.95,
+            "pdl": 24352.9,
+            "vwap": 24204.28,
+            "distance_to_pdh": -1.425,
+            "distance_to_pdl": -0.765,
+            "vwap_position": "AT",
             "tradeable": true
           },
           "behavior": {
@@ -286,60 +296,65 @@
     }
   },
   "BANKNIFTY": {
-    "pattern": "BULLISH_MARUBOZU",
+    "pattern": "BEARISH_MARUBOZU",
     "all_patterns": [
       {
-        "name": "BULLISH_MARUBOZU",
-        "structure": "BULLISH_CONTINUATION",
+        "name": "BEARISH_MARUBOZU",
+        "structure": "BEARISH_CONTINUATION",
         "weight": 0.85
+      },
+      {
+        "name": "LONG_UPPER_SHADOW",
+        "structure": "NEUTRAL",
+        "weight": 0.35
       }
     ],
-    "structure": "BULLISH_CONTINUATION",
+    "structure": "BEARISH_CONTINUATION",
     "strength": "STRONG",
-    "signal": "STRONG_BUY",
-    "confidence": 85,
-    "confluence": 1,
+    "signal": "STRONG_SELL",
+    "confidence": 93,
+    "confluence": 2,
     "candle": {
       "open": 57313.05,
       "high": 57340.35,
       "low": 57296.85,
-      "close": 57380.5,
-      "body_ratio": 1.551,
-      "upper_wick_ratio": -0.923,
-      "lower_wick_ratio": 0.372,
-      "is_bullish": true
+      "close": 56301.3,
+      "body_ratio": 23.259,
+      "upper_wick_ratio": 0.628,
+      "lower_wick_ratio": -22.886,
+      "is_bullish": false
     },
     "trend_context": {
-      "direction": "STRONG_BULLISH",
-      "bullish_count": 4,
-      "bearish_count": 1,
-      "avg_body_ratio": 0.793,
-      "candles_analyzed": 5
+      "direction": "NEUTRAL",
+      "bullish_count": 5,
+      "bearish_count": 3,
+      "avg_body_ratio": 3.369,
+      "candles_analyzed": 8
     },
     "symbol": "BANKNIFTY",
     "timeframe": "5m",
     "dataSource": "MARKET_CLOSED",
-    "timestamp": "2026-04-22T23:22:48.796871+05:30",
-    "price": 57380.5,
-    "changePct": 1.41,
+    "timestamp": "2026-04-25T21:53:27.163792+05:30",
+    "price": 56301.3,
+    "changePct": -1.44,
     "three_factor": {
       "location": {
-        "zone": "ABOVE_PDH",
-        "pdh": 57085.1,
-        "pdl": 56356.55,
-        "vwap": 57295.82,
-        "distance_to_pdh": 0.517,
-        "distance_to_pdl": 1.817,
-        "vwap_position": "AT",
+        "zone": "NEAR_PDL",
+        "pdh": 57438.2,
+        "pdl": 57002.15,
+        "vwap": 56465.78,
+        "distance_to_pdh": -1.979,
+        "distance_to_pdl": -1.23,
+        "vwap_position": "BELOW",
         "tradeable": true
       },
       "behavior": {
         "type": "BREAKOUT",
-        "description": "Strong bullish close above PDH (57085)",
+        "description": "Strong bearish close below PDL (57002)",
         "strength": 100
       },
       "confirmation": {
-        "volume_ratio": 166.01,
+        "volume_ratio": 253.08,
         "volume_confirmed": true,
         "body_strong": true,
         "close_near_extreme": true,
@@ -354,8 +369,8 @@
       ],
       "factors_fail": [],
       "aligned": true,
-      "verdict": "BUY",
-      "reason": "All aligned \u2014 bullish breakout above PDH",
+      "verdict": "SELL",
+      "reason": "All aligned \u2014 breakdown below PDL",
       "market_active": false
     },
     "timeframes": {
@@ -368,10 +383,10 @@
         "confidence": 15,
         "confluence": 0,
         "candle": {
-          "open": 57380.5,
-          "high": 57380.5,
-          "low": 57380.5,
-          "close": 57380.5,
+          "open": 56301.3,
+          "high": 56301.3,
+          "low": 56301.3,
+          "close": 56301.3,
           "body_ratio": 0,
           "upper_wick_ratio": 0,
           "lower_wick_ratio": 0,
@@ -386,18 +401,18 @@
         "symbol": "BANKNIFTY",
         "timeframe": "3m",
         "dataSource": "MARKET_CLOSED",
-        "timestamp": "2026-04-22T23:22:48.796134+05:30",
-        "price": 57380.5,
-        "changePct": 1.41,
+        "timestamp": "2026-04-25T21:53:27.163330+05:30",
+        "price": 56301.3,
+        "changePct": -1.44,
         "three_factor": {
           "location": {
-            "zone": "ABOVE_PDH",
-            "pdh": 57085.1,
-            "pdl": 56356.55,
-            "vwap": 57380.5,
-            "distance_to_pdh": 0.517,
-            "distance_to_pdl": 1.817,
-            "vwap_position": "AT",
+            "zone": "NEAR_PDL",
+            "pdh": 57438.2,
+            "pdl": 57002.15,
+            "vwap": 56465.78,
+            "distance_to_pdh": -1.979,
+            "distance_to_pdl": -1.23,
+            "vwap_position": "BELOW",
             "tradeable": true
           },
           "behavior": {
@@ -428,60 +443,65 @@
         }
       },
       "5m": {
-        "pattern": "BULLISH_MARUBOZU",
+        "pattern": "BEARISH_MARUBOZU",
         "all_patterns": [
           {
-            "name": "BULLISH_MARUBOZU",
-            "structure": "BULLISH_CONTINUATION",
+            "name": "BEARISH_MARUBOZU",
+            "structure": "BEARISH_CONTINUATION",
             "weight": 0.85
+          },
+          {
+            "name": "LONG_UPPER_SHADOW",
+            "structure": "NEUTRAL",
+            "weight": 0.35
           }
         ],
-        "structure": "BULLISH_CONTINUATION",
+        "structure": "BEARISH_CONTINUATION",
         "strength": "STRONG",
-        "signal": "STRONG_BUY",
-        "confidence": 85,
-        "confluence": 1,
+        "signal": "STRONG_SELL",
+        "confidence": 93,
+        "confluence": 2,
         "candle": {
           "open": 57313.05,
           "high": 57340.35,
           "low": 57296.85,
-          "close": 57380.5,
-          "body_ratio": 1.551,
-          "upper_wick_ratio": -0.923,
-          "lower_wick_ratio": 0.372,
-          "is_bullish": true
+          "close": 56301.3,
+          "body_ratio": 23.259,
+          "upper_wick_ratio": 0.628,
+          "lower_wick_ratio": -22.886,
+          "is_bullish": false
         },
         "trend_context": {
-          "direction": "STRONG_BULLISH",
-          "bullish_count": 4,
-          "bearish_count": 1,
-          "avg_body_ratio": 0.793,
-          "candles_analyzed": 5
+          "direction": "NEUTRAL",
+          "bullish_count": 5,
+          "bearish_count": 3,
+          "avg_body_ratio": 3.369,
+          "candles_analyzed": 8
         },
         "symbol": "BANKNIFTY",
         "timeframe": "5m",
         "dataSource": "MARKET_CLOSED",
-        "timestamp": "2026-04-22T23:22:48.796871+05:30",
-        "price": 57380.5,
-        "changePct": 1.41,
+        "timestamp": "2026-04-25T21:53:27.163792+05:30",
+        "price": 56301.3,
+        "changePct": -1.44,
         "three_factor": {
           "location": {
-            "zone": "ABOVE_PDH",
-            "pdh": 57085.1,
-            "pdl": 56356.55,
-            "vwap": 57295.82,
-            "distance_to_pdh": 0.517,
-            "distance_to_pdl": 1.817,
-            "vwap_position": "AT",
+            "zone": "NEAR_PDL",
+            "pdh": 57438.2,
+            "pdl": 57002.15,
+            "vwap": 56465.78,
+            "distance_to_pdh": -1.979,
+            "distance_to_pdl": -1.23,
+            "vwap_position": "BELOW",
             "tradeable": true
           },
           "behavior": {
             "type": "BREAKOUT",
-            "description": "Strong bullish close above PDH (57085)",
+            "description": "Strong bearish close below PDL (57002)",
             "strength": 100
           },
           "confirmation": {
-            "volume_ratio": 166.01,
+            "volume_ratio": 253.08,
             "volume_confirmed": true,
             "body_strong": true,
             "close_near_extreme": true,
@@ -496,8 +516,8 @@
           ],
           "factors_fail": [],
           "aligned": true,
-          "verdict": "BUY",
-          "reason": "All aligned \u2014 bullish breakout above PDH",
+          "verdict": "SELL",
+          "reason": "All aligned \u2014 breakdown below PDL",
           "market_active": false
         }
       },
@@ -510,10 +530,10 @@
         "confidence": 15,
         "confluence": 0,
         "candle": {
-          "open": 57380.5,
-          "high": 57380.5,
-          "low": 57380.5,
-          "close": 57380.5,
+          "open": 56301.3,
+          "high": 56301.3,
+          "low": 56301.3,
+          "close": 56301.3,
           "body_ratio": 0,
           "upper_wick_ratio": 0,
           "lower_wick_ratio": 0,
@@ -528,18 +548,18 @@
         "symbol": "BANKNIFTY",
         "timeframe": "15m",
         "dataSource": "MARKET_CLOSED",
-        "timestamp": "2026-04-22T23:22:48.797103+05:30",
-        "price": 57380.5,
-        "changePct": 1.41,
+        "timestamp": "2026-04-25T21:53:27.163879+05:30",
+        "price": 56301.3,
+        "changePct": -1.44,
         "three_factor": {
           "location": {
-            "zone": "ABOVE_PDH",
-            "pdh": 57085.1,
-            "pdl": 56356.55,
-            "vwap": 57380.5,
-            "distance_to_pdh": 0.517,
-            "distance_to_pdl": 1.817,
-            "vwap_position": "AT",
+            "zone": "NEAR_PDL",
+            "pdh": 57438.2,
+            "pdl": 57002.15,
+            "vwap": 56465.78,
+            "distance_to_pdh": -1.979,
+            "distance_to_pdl": -1.23,
+            "vwap_position": "BELOW",
             "tradeable": true
           },
           "behavior": {
@@ -572,60 +592,65 @@
     }
   },
   "SENSEX": {
-    "pattern": "BULLISH_MARUBOZU",
+    "pattern": "BEARISH_ENGULFING",
     "all_patterns": [
       {
-        "name": "BULLISH_MARUBOZU",
-        "structure": "BULLISH_CONTINUATION",
+        "name": "BEARISH_ENGULFING",
+        "structure": "BEARISH_REVERSAL",
+        "weight": 0.9
+      },
+      {
+        "name": "BEARISH_MARUBOZU",
+        "structure": "BEARISH_CONTINUATION",
         "weight": 0.85
       }
     ],
-    "structure": "BULLISH_CONTINUATION",
+    "structure": "BEARISH_REVERSAL",
     "strength": "STRONG",
-    "signal": "STRONG_BUY",
-    "confidence": 85,
-    "confluence": 1,
+    "signal": "STRONG_SELL",
+    "confidence": 98,
+    "confluence": 2,
     "candle": {
       "open": 79169.22,
       "high": 79203.72,
       "low": 79139.31,
-      "close": 79274.33,
-      "body_ratio": 1.632,
-      "upper_wick_ratio": -1.096,
-      "lower_wick_ratio": 0.464,
-      "is_bullish": true
+      "close": 77666.16,
+      "body_ratio": 23.336,
+      "upper_wick_ratio": 0.536,
+      "lower_wick_ratio": -22.871,
+      "is_bullish": false
     },
     "trend_context": {
-      "direction": "BULLISH",
+      "direction": "BEARISH",
       "bullish_count": 3,
-      "bearish_count": 2,
-      "avg_body_ratio": 0.56,
-      "candles_analyzed": 5
+      "bearish_count": 5,
+      "avg_body_ratio": 3.24,
+      "candles_analyzed": 8
     },
     "symbol": "SENSEX",
     "timeframe": "5m",
     "dataSource": "MARKET_CLOSED",
-    "timestamp": "2026-04-22T23:22:48.797999+05:30",
-    "price": 79274.33,
-    "changePct": 0.96,
+    "timestamp": "2026-04-25T21:53:27.164290+05:30",
+    "price": 77666.16,
+    "changePct": -1.08,
     "three_factor": {
       "location": {
-        "zone": "ABOVE_PDH",
-        "pdh": 78942.45,
-        "pdl": 78203.3,
-        "vwap": 79036.89,
-        "distance_to_pdh": 0.42,
-        "distance_to_pdl": 1.37,
-        "vwap_position": "ABOVE",
+        "zone": "NEAR_PDL",
+        "pdh": 79031.03,
+        "pdl": 78442.3,
+        "vwap": 79155.3,
+        "distance_to_pdh": -1.727,
+        "distance_to_pdl": -0.989,
+        "vwap_position": "BELOW",
         "tradeable": true
       },
       "behavior": {
         "type": "BREAKOUT",
-        "description": "Strong bullish close above PDH (78942)",
+        "description": "Strong bearish close below PDL (78442)",
         "strength": 100
       },
       "confirmation": {
-        "volume_ratio": 125.59,
+        "volume_ratio": 331.03,
         "volume_confirmed": true,
         "body_strong": true,
         "close_near_extreme": true,
@@ -640,8 +665,8 @@
       ],
       "factors_fail": [],
       "aligned": true,
-      "verdict": "BUY",
-      "reason": "All aligned \u2014 bullish breakout above PDH",
+      "verdict": "SELL",
+      "reason": "All aligned \u2014 breakdown below PDL",
       "market_active": false
     },
     "timeframes": {
@@ -654,10 +679,10 @@
         "confidence": 15,
         "confluence": 0,
         "candle": {
-          "open": 79274.33,
-          "high": 79274.33,
-          "low": 79274.33,
-          "close": 79274.33,
+          "open": 77666.16,
+          "high": 77666.16,
+          "low": 77666.16,
+          "close": 77666.16,
           "body_ratio": 0,
           "upper_wick_ratio": 0,
           "lower_wick_ratio": 0,
@@ -672,18 +697,18 @@
         "symbol": "SENSEX",
         "timeframe": "3m",
         "dataSource": "MARKET_CLOSED",
-        "timestamp": "2026-04-22T23:22:48.797253+05:30",
-        "price": 79274.33,
-        "changePct": 0.96,
+        "timestamp": "2026-04-25T21:53:27.163941+05:30",
+        "price": 77666.16,
+        "changePct": -1.08,
         "three_factor": {
           "location": {
-            "zone": "ABOVE_PDH",
-            "pdh": 78942.45,
-            "pdl": 78203.3,
-            "vwap": 79036.89,
-            "distance_to_pdh": 0.42,
-            "distance_to_pdl": 1.37,
-            "vwap_position": "ABOVE",
+            "zone": "NEAR_PDL",
+            "pdh": 79031.03,
+            "pdl": 78442.3,
+            "vwap": 77666.16,
+            "distance_to_pdh": -1.727,
+            "distance_to_pdl": -0.989,
+            "vwap_position": "AT",
             "tradeable": true
           },
           "behavior": {
@@ -714,60 +739,65 @@
         }
       },
       "5m": {
-        "pattern": "BULLISH_MARUBOZU",
+        "pattern": "BEARISH_ENGULFING",
         "all_patterns": [
           {
-            "name": "BULLISH_MARUBOZU",
-            "structure": "BULLISH_CONTINUATION",
+            "name": "BEARISH_ENGULFING",
+            "structure": "BEARISH_REVERSAL",
+            "weight": 0.9
+          },
+          {
+            "name": "BEARISH_MARUBOZU",
+            "structure": "BEARISH_CONTINUATION",
             "weight": 0.85
           }
         ],
-        "structure": "BULLISH_CONTINUATION",
+        "structure": "BEARISH_REVERSAL",
         "strength": "STRONG",
-        "signal": "STRONG_BUY",
-        "confidence": 85,
-        "confluence": 1,
+        "signal": "STRONG_SELL",
+        "confidence": 98,
+        "confluence": 2,
         "candle": {
           "open": 79169.22,
           "high": 79203.72,
           "low": 79139.31,
-          "close": 79274.33,
-          "body_ratio": 1.632,
-          "upper_wick_ratio": -1.096,
-          "lower_wick_ratio": 0.464,
-          "is_bullish": true
+          "close": 77666.16,
+          "body_ratio": 23.336,
+          "upper_wick_ratio": 0.536,
+          "lower_wick_ratio": -22.871,
+          "is_bullish": false
         },
         "trend_context": {
-          "direction": "BULLISH",
+          "direction": "BEARISH",
           "bullish_count": 3,
-          "bearish_count": 2,
-          "avg_body_ratio": 0.56,
-          "candles_analyzed": 5
+          "bearish_count": 5,
+          "avg_body_ratio": 3.24,
+          "candles_analyzed": 8
         },
         "symbol": "SENSEX",
         "timeframe": "5m",
         "dataSource": "MARKET_CLOSED",
-        "timestamp": "2026-04-22T23:22:48.797999+05:30",
-        "price": 79274.33,
-        "changePct": 0.96,
+        "timestamp": "2026-04-25T21:53:27.164290+05:30",
+        "price": 77666.16,
+        "changePct": -1.08,
         "three_factor": {
           "location": {
-            "zone": "ABOVE_PDH",
-            "pdh": 78942.45,
-            "pdl": 78203.3,
-            "vwap": 79036.89,
-            "distance_to_pdh": 0.42,
-            "distance_to_pdl": 1.37,
-            "vwap_position": "ABOVE",
+            "zone": "NEAR_PDL",
+            "pdh": 79031.03,
+            "pdl": 78442.3,
+            "vwap": 79155.3,
+            "distance_to_pdh": -1.727,
+            "distance_to_pdl": -0.989,
+            "vwap_position": "BELOW",
             "tradeable": true
           },
           "behavior": {
             "type": "BREAKOUT",
-            "description": "Strong bullish close above PDH (78942)",
+            "description": "Strong bearish close below PDL (78442)",
             "strength": 100
           },
           "confirmation": {
-            "volume_ratio": 125.59,
+            "volume_ratio": 331.03,
             "volume_confirmed": true,
             "body_strong": true,
             "close_near_extreme": true,
@@ -782,8 +812,8 @@
           ],
           "factors_fail": [],
           "aligned": true,
-          "verdict": "BUY",
-          "reason": "All aligned \u2014 bullish breakout above PDH",
+          "verdict": "SELL",
+          "reason": "All aligned \u2014 breakdown below PDL",
           "market_active": false
         }
       },
@@ -796,10 +826,10 @@
         "confidence": 15,
         "confluence": 0,
         "candle": {
-          "open": 79274.33,
-          "high": 79274.33,
-          "low": 79274.33,
-          "close": 79274.33,
+          "open": 77666.16,
+          "high": 77666.16,
+          "low": 77666.16,
+          "close": 77666.16,
           "body_ratio": 0,
           "upper_wick_ratio": 0,
           "lower_wick_ratio": 0,
@@ -814,18 +844,18 @@
         "symbol": "SENSEX",
         "timeframe": "15m",
         "dataSource": "MARKET_CLOSED",
-        "timestamp": "2026-04-22T23:22:48.798197+05:30",
-        "price": 79274.33,
-        "changePct": 0.96,
+        "timestamp": "2026-04-25T21:53:27.164380+05:30",
+        "price": 77666.16,
+        "changePct": -1.08,
         "three_factor": {
           "location": {
-            "zone": "ABOVE_PDH",
-            "pdh": 78942.45,
-            "pdl": 78203.3,
-            "vwap": 79036.89,
-            "distance_to_pdh": 0.42,
-            "distance_to_pdl": 1.37,
-            "vwap_position": "ABOVE",
+            "zone": "NEAR_PDL",
+            "pdh": 79031.03,
+            "pdl": 78442.3,
+            "vwap": 77666.16,
+            "distance_to_pdh": -1.727,
+            "distance_to_pdl": -0.989,
+            "vwap_position": "AT",
             "tradeable": true
           },
           "behavior": {

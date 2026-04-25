@@ -178,13 +178,12 @@ async def get_volume_pulse(symbol: str) -> Dict[str, Any]:
         from services.global_token_manager import check_global_token_status
         token_status = await check_global_token_status()
         
-        # 🚀 AGGRESSIVE CACHE - Return immediately if available (10s TTL)
+        # Cache (2s live, 60s closed) — see TTL note below
         cache = get_cache()
         cache_key = f"volume_pulse:{symbol}"
         cached = await cache.get(cache_key)
-        
+
         if cached:
-            # Update cache with current token status
             cached["token_valid"] = token_status["valid"]
             cached["cache_hit"] = True
             return cached
@@ -281,9 +280,12 @@ async def get_volume_pulse(symbol: str) -> Dict[str, Any]:
         is_trading = time_class(9, 15) <= ist.time() <= time_class(15, 30) and ist.weekday() < 5
         
         result["cache_hit"] = False
-        
+
+        # TTL 2s during LIVE (was 10s) — pulse score must reflect candles built
+        # in the last 30 min, not 10 min ago.  During a 30-min afternoon rally
+        # the backend was returning 10-second stale SELL signals.
         if is_trading:
-            await cache.set(cache_key, result, expire=10)
+            await cache.set(cache_key, result, expire=2)
         else:
             await cache.set(cache_key, result, expire=60)
         
@@ -483,9 +485,55 @@ async def get_trend_base(symbol: str) -> Dict[str, Any]:
                      else 0)
         factors['momentum'] = {'score': mom_score, 'max': 4, 'label': f"{round(momentum)}/100"}
         total += mom_score
+
+        # ── FACTOR 8: Recent Candle Momentum (±15 pts) ───────────────────
+        # Reads the live in-progress 5-min candle + last 3 completed candles.
+        # This is the FASTEST-RESPONDING factor: detects reversals in 15–25 min,
+        # overriding lagging EMA/SuperTrend signals during intraday trend changes.
+        rcm_score  = 0
+        rcm_bull   = 0
+        rcm_bear   = 0
+        try:
+            import json as _json
+            # A) Live candle direction (current 5-min bar in progress)
+            live_cd = await cache_service.get(f"analysis_candles_live:{symbol}")
+            if live_cd:
+                lc_o = float(live_cd.get('open', 0))
+                lc_c = float(live_cd.get('close', price))
+                if lc_o > 0:
+                    lc_pct = (lc_c - lc_o) / lc_o * 100
+                    if   lc_pct >  0.2: rcm_bull += 1
+                    elif lc_pct < -0.2: rcm_bear += 1
+
+            # B) Last 3 completed 5-min candles (newest-first from lpush cache)
+            rc_raw = await cache_service.lrange(f"analysis_candles:{symbol}", 0, 2)
+            for cj in (rc_raw or []):
+                try:
+                    c = _json.loads(cj)
+                    co = float(c.get('open',  0))
+                    cc = float(c.get('close', 0))
+                    if co > 0:
+                        if   cc > co * 1.001: rcm_bull += 1
+                        elif cc < co * 0.999: rcm_bear += 1
+                except Exception:
+                    pass
+
+            # Score based on consensus of 4 candles (live + 3 completed)
+            if   rcm_bull >= 3: rcm_score =  15
+            elif rcm_bull == 2: rcm_score =   8
+            elif rcm_bear >= 3: rcm_score = -15
+            elif rcm_bear == 2: rcm_score =  -8
+        except Exception:
+            rcm_score = 0
+
+        factors['recent_candles'] = {
+            'score': rcm_score, 'max': 15,
+            'label': f"Bull:{rcm_bull} Bear:{rcm_bear} of 4"
+        }
+        total += rcm_score
         total  = round(total)
 
-        # ── SIGNAL (calibrated: max ±93, STRONG at ~43% alignment) ────
+        # ── SIGNAL (calibrated: max ±108, STRONG at ~37% alignment) ─────
         if   total >=  40: signal = 'STRONG_BUY';  trend = 'UPTREND'
         elif total >=  15: signal = 'BUY';          trend = 'UPTREND'
         elif total <= -40: signal = 'STRONG_SELL'; trend = 'DOWNTREND'
@@ -2899,14 +2947,29 @@ async def get_trade_zones(symbol: str) -> Dict[str, Any]:
         ema_200 = float(close_series.ewm(span=min(200, len(df)), adjust=False).mean().iloc[-1]) if len(df) >= 20 else current_price
         
         # ── Compute trend structure from swing highs/lows ──
+        # Use last 20 candles (100 min) — matches the reactive window in instant_analysis.py.
+        # Full-df half-split used up to 50+ candles per segment, causing LOWER_HIGHS to persist
+        # through 30+ min afternoon rallies.
         highs = pd.to_numeric(df['high'], errors='coerce').values
         lows = pd.to_numeric(df['low'], errors='coerce').values
         n = len(highs)
         trend_structure = 'SIDEWAYS'
-        if n >= 10:
-            mid = n // 2
-            first_high, second_high = float(max(highs[:mid])), float(max(highs[mid:]))
-            first_low, second_low = float(min(lows[:mid])), float(min(lows[mid:]))
+        if n >= 4:
+            # Stage 1: 4-candle consecutive-close override (reacts in ~15 min)
+            last4_closes = pd.to_numeric(df['close'], errors='coerce').values[-4:]
+            if last4_closes[3] > last4_closes[2] > last4_closes[1]:
+                trend_structure = 'HIGHER_HIGHS_LOWS'
+            elif last4_closes[3] < last4_closes[2] < last4_closes[1]:
+                trend_structure = 'LOWER_HIGHS_LOWS'
+        if trend_structure == 'SIDEWAYS' and n >= 10:
+            # Stage 2: 2-segment on last 20 candles (100 min)
+            win_sz = min(20, n)
+            win_h = highs[-win_sz:]
+            win_l = lows[-win_sz:]
+            win_c = pd.to_numeric(df['close'], errors='coerce').values[-win_sz:]
+            mid = win_sz // 2
+            first_high, second_high = float(max(win_h[:mid])), float(max(win_h[mid:]))
+            first_low, second_low = float(min(win_l[:mid])), float(min(win_l[mid:]))
             if second_high > first_high and second_low > first_low:
                 trend_structure = 'HIGHER_HIGHS_LOWS'
             elif second_high < first_high and second_low < first_low:
@@ -3097,7 +3160,7 @@ async def get_trade_zones(symbol: str) -> Dict[str, Any]:
         
         # Smart cache strategy
         if is_trading:
-            await cache.set(cache_key, result, expire=5)
+            await cache.set(cache_key, result, expire=2)  # 2s during trading — matches ws_analysis TTL
         else:
             await cache.set(cache_key, result, expire=60)
         

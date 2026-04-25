@@ -148,7 +148,8 @@ async def zerodha_callback(request_token: str = Query(...), status: str = Query(
     
     try:
         from kiteconnect import KiteConnect
-        
+        import html as _html
+
         print("📡 Initializing KiteConnect...")
         kite = KiteConnect(api_key=settings.zerodha_api_key)
         
@@ -156,8 +157,8 @@ async def zerodha_callback(request_token: str = Query(...), status: str = Query(
         data = kite.generate_session(request_token, api_secret=settings.zerodha_api_secret)
         
         access_token = data["access_token"]
-        user_id = data["user_id"]
-        user_name = data.get("user_name", "Unknown")
+        user_id = _html.escape(str(data["user_id"]))
+        user_name = _html.escape(str(data.get("user_name", "Unknown")))
         
         print(f"\n✅ SESSION GENERATED SUCCESSFULLY")
         print(f"   User ID: {user_id}")

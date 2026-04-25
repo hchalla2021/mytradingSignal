@@ -164,7 +164,14 @@ export function useCandleIntelligence() {
       let changed = false;
       for (const sym of ['NIFTY', 'BANKNIFTY', 'SENSEX'] as const) {
         if (raw[sym]) {
-          if (prev[sym]?.timestamp === raw[sym].timestamp) continue;
+          // Skip only if timestamp, signal AND price are all identical — prevents
+          // a same-millisecond timestamp from blocking a critical signal flip.
+          const p = prev[sym];
+          if (
+            p?.timestamp === raw[sym].timestamp &&
+            p?.signal === raw[sym].signal &&
+            p?.price === raw[sym].price
+          ) continue;
           next[sym] = typeof structuredClone === 'function'
             ? structuredClone(raw[sym])
             : JSON.parse(JSON.stringify(raw[sym]));

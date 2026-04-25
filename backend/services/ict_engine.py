@@ -250,6 +250,7 @@ def _order_block_signal(candles: List[Dict], price: float) -> Dict:
                 "low": float(c0.get("low", 0)),
                 "strength": strength,
                 "ts": c0.get("timestamp", ""),
+                "idx": i,  # candle index — used for recency decay
             })
 
         # Bearish OB: bullish candle → strong bearish candle
@@ -260,9 +261,14 @@ def _order_block_signal(candles: List[Dict], price: float) -> Dict:
                 "low": float(c0.get("low", 0)),
                 "strength": strength,
                 "ts": c0.get("timestamp", ""),
+                "idx": i,  # candle index — used for recency decay
             })
 
-    # Score: price proximity to OBs (with diminishing returns)
+    # Score: price proximity to OBs (with diminishing returns + recency decay).
+    # OLD: all OBs scored at full weight regardless of age.
+    # NEW: OBs from N candles ago get an age_factor (30%–100%) so morning OBs
+    #      from a 100-min window don't hold the signal bearish all afternoon.
+    n_candles = max(len(candles), 1)
     bull_score = 0.0
     bear_score = 0.0
     nearest_ob = None
@@ -272,17 +278,20 @@ def _order_block_signal(candles: List[Dict], price: float) -> Dict:
     # Check bullish OBs (support zones — price above = bullish)
     bull_hit = 0
     for ob in bullish_obs[-5:]:  # Last 5
+        # Recency: OB from (n_candles-idx) candles ago → age_factor 30%-100%
+        age = n_candles - ob.get("idx", n_candles)
+        age_factor = max(0.3, 1.0 - (age / n_candles) * 0.7)
         dist_pct = (price - ob["low"]) / (price + 0.001) * 100
         if 0 < dist_pct < 1.5:  # Price within 1.5% of bullish OB
             dr = _DR[min(bull_hit, len(_DR) - 1)]
-            bull_score += 0.35 * ob["strength"] * dr
+            bull_score += 0.35 * ob["strength"] * dr * age_factor
             bull_hit += 1
             if abs(dist_pct) < nearest_dist:
                 nearest_dist = abs(dist_pct)
                 nearest_ob = {"type": "BULLISH", "zone": f"{ob['low']:.0f}-{ob['high']:.0f}", "dist": round(dist_pct, 2)}
         elif -0.5 < dist_pct <= 0:  # Price inside bullish OB
             dr = _DR[min(bull_hit, len(_DR) - 1)]
-            bull_score += 0.55 * ob["strength"] * dr
+            bull_score += 0.55 * ob["strength"] * dr * age_factor
             bull_hit += 1
             if abs(dist_pct) < nearest_dist:
                 nearest_dist = abs(dist_pct)
@@ -291,17 +300,19 @@ def _order_block_signal(candles: List[Dict], price: float) -> Dict:
     # Check bearish OBs (resistance zones — price below = bearish)
     bear_hit = 0
     for ob in bearish_obs[-5:]:
+        age = n_candles - ob.get("idx", n_candles)
+        age_factor = max(0.3, 1.0 - (age / n_candles) * 0.7)
         dist_pct = (ob["high"] - price) / (price + 0.001) * 100
         if 0 < dist_pct < 1.5:
             dr = _DR[min(bear_hit, len(_DR) - 1)]
-            bear_score += 0.35 * ob["strength"] * dr
+            bear_score += 0.35 * ob["strength"] * dr * age_factor
             bear_hit += 1
             if abs(dist_pct) < nearest_dist:
                 nearest_dist = abs(dist_pct)
                 nearest_ob = {"type": "BEARISH", "zone": f"{ob['low']:.0f}-{ob['high']:.0f}", "dist": round(dist_pct, 2)}
         elif -0.5 < dist_pct <= 0:
             dr = _DR[min(bear_hit, len(_DR) - 1)]
-            bear_score += 0.55 * ob["strength"] * dr
+            bear_score += 0.55 * ob["strength"] * dr * age_factor
             bear_hit += 1
             if abs(dist_pct) < nearest_dist:
                 nearest_dist = abs(dist_pct)
@@ -446,8 +457,13 @@ def _market_structure_signal(candles: List[Dict], swing_tracker: SwingTracker) -
         }
 
     current_close = float(candles[-1].get("close", 0))
-    current_high = float(candles[-1].get("high", 0))
-    current_low = float(candles[-1].get("low", 0))
+
+    # For CHoCH detection use the recent 3-candle extremes, NOT just the last
+    # candle.  If the rally peaked 2 candles ago and the last candle pulled
+    # back slightly, checking only candles[-1].high would miss the CHoCH.
+    recent_ext = candles[-3:] if len(candles) >= 3 else candles
+    current_high = max(float(c.get("high", 0)) for c in recent_ext)
+    current_low  = min(float(c.get("low",  0)) for c in recent_ext)
 
     highs = swing_tracker.highs
     lows = swing_tracker.lows
@@ -990,15 +1006,45 @@ class ICTService:
         change_pct = float(data.get("changePercent") or data.get("change_percent") or 0)
         oi = int(data.get("oi") or data.get("open_interest") or 0)
 
-        # Get candle data (await async lrange)
+        # Get candle data — 20 completed 5-min candles (100 min rolling window).
+        # Reduced from 31 (155 min) so morning bearish OBs / swing points age
+        # out faster and the afternoon session gets proper weight.
         candle_key = f"analysis_candles:{symbol}"
-        raw_candles = await self._cache.lrange(candle_key, 0, 30)
+        raw_candles = await self._cache.lrange(candle_key, 0, 19)
         candles: List[Dict] = []
         for item in (raw_candles or []):
             c = _parse_candle(item)
             if c:
                 candles.append(c)
         candles.reverse()  # Oldest first
+
+        # ── Inject live/in-progress 5-min candle ────────────────────────
+        # The live candle (up to 4:59 min old) is NOT in analysis_candles yet.
+        # Injecting it with the current price keeps all signal functions aware
+        # of what price is doing RIGHT NOW inside the current candle.
+        live_entry = _SHARED_CACHE.get(f"analysis_candles_live:{symbol}")
+        if live_entry:
+            try:
+                if isinstance(live_entry, tuple):
+                    live_json, live_exp = live_entry
+                    if time.time() < live_exp:
+                        live_data = json.loads(live_json) if isinstance(live_json, str) else live_json
+                    else:
+                        live_data = None
+                elif isinstance(live_entry, dict):
+                    live_data = live_entry
+                else:
+                    live_data = None
+
+                if isinstance(live_data, dict) and float(live_data.get("open", 0)) > 0:
+                    # Update close/high/low to reflect the current tick price
+                    live_candle: Dict = dict(live_data)
+                    live_candle["close"] = price
+                    live_candle["high"]  = max(float(live_data.get("high", price)), price)
+                    live_candle["low"]   = min(float(live_data.get("low",  price)), price)
+                    candles.append(live_candle)
+            except Exception:
+                pass
 
         # Determine data source
         now_ist = datetime.now(IST)
@@ -1014,12 +1060,17 @@ class ICTService:
         swing_tracker = self._swing_trackers[symbol]
 
         # ── Compute all 6 ICT signals ────────────────────────────────────
+        # Market Structure and Liquidity Sweeps use a 12-candle (60-min) rolling
+        # window so that morning bearish swing points age out within one hour
+        # instead of persisting all day (old 20-31 candle window = 100-155 min).
+        struct_candles = candles[-12:] if len(candles) >= 12 else candles
+
         signals = {
-            "order_blocks": _order_block_signal(candles, price),
+            "order_blocks":    _order_block_signal(candles, price),
             "fair_value_gaps": _fair_value_gap_signal(candles, price),
-            "market_structure": _market_structure_signal(candles, swing_tracker),
-            "liquidity_sweeps": _liquidity_sweep_signal(candles, swing_tracker, price),
-            "displacement": _displacement_signal(candles),
+            "market_structure": _market_structure_signal(struct_candles, swing_tracker),
+            "liquidity_sweeps": _liquidity_sweep_signal(struct_candles, swing_tracker, price),
+            "displacement":    _displacement_signal(candles),
             "smart_money_div": _smart_money_divergence_signal(candles, price, oi, change_pct),
         }
 
