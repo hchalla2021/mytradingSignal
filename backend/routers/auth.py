@@ -1,15 +1,18 @@
 """Authentication endpoints."""
-from fastapi import APIRouter, HTTPException, Response, Cookie, Query
+from fastapi import APIRouter, HTTPException, Response, Cookie, Query, Request
 from fastapi.responses import RedirectResponse, HTMLResponse
 from pydantic import BaseModel
 from typing import Optional
 import os
+import asyncio
 import secrets
 import hashlib
+import logging
 
 from services.auth import auth_service
 from config import get_settings
 
+logger = logging.getLogger(__name__)
 settings = get_settings()
 router = APIRouter()
 
@@ -85,8 +88,12 @@ async def validate_token():
         kite = KiteConnect(api_key=settings.zerodha_api_key)
         kite.set_access_token(settings.zerodha_access_token)
         
-        # Quick profile check to validate token
-        profile = kite.profile()
+        # Quick profile check to validate token — run in executor, not blocking event loop
+        loop = asyncio.get_event_loop()
+        profile = await asyncio.wait_for(
+            loop.run_in_executor(None, kite.profile),
+            timeout=10.0
+        )
         
         return {
             "valid": True,
@@ -97,18 +104,14 @@ async def validate_token():
             "message": "Token valid"
         }
     except Exception as e:
-        error_msg = str(e)
-        print(f"⚠️ Token validation failed: {error_msg}")
-        
-        # Check if token expired
-        if "TokenException" in str(type(e).__name__) or "expired" in error_msg.lower() or "invalid" in error_msg.lower():
+        logger.warning("Token validation failed")
+        error_msg_lower = str(e).lower()
+        if "tokenexception" in type(e).__name__.lower() or "expired" in error_msg_lower or "invalid" in error_msg_lower:
             return {
                 "valid": False,
                 "authenticated": False,
                 "message": "Token expired - Please login again"
             }
-        
-        # Other errors (network timeout, etc.) — token validity unknown
         return {
             "valid": False,
             "authenticated": False,
@@ -154,7 +157,14 @@ async def zerodha_callback(request_token: str = Query(...), status: str = Query(
         kite = KiteConnect(api_key=settings.zerodha_api_key)
         
         print("🔄 Generating session with request token...")
-        data = kite.generate_session(request_token, api_secret=settings.zerodha_api_secret)
+        loop = asyncio.get_event_loop()
+        data = await asyncio.wait_for(
+            loop.run_in_executor(
+                None,
+                lambda: kite.generate_session(request_token, api_secret=settings.zerodha_api_secret)
+            ),
+            timeout=15.0
+        )
         
         access_token = data["access_token"]
         user_id = _html.escape(str(data["user_id"]))

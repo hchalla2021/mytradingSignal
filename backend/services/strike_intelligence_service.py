@@ -94,10 +94,6 @@ class StrikeIntelConnectionManager:
         except Exception:
             await self.disconnect(ws)
 
-    @property
-    def client_count(self) -> int:
-        return len(self._connections)
-
 
 strike_intel_manager = StrikeIntelConnectionManager()
 
@@ -143,6 +139,7 @@ def _compute_signal(
     ce_oi: int, pe_oi: int, ce_volume: int, pe_volume: int,
     ce_price: float, pe_price: float, ce_change: float, pe_change: float,
     spot: float, strike: int,
+    ce_oi_change: int = 0, pe_oi_change: int = 0,
 ) -> Dict[str, Any]:
     """
     Compute buy/sell signal for a single strike from CE & PE data.
@@ -154,11 +151,12 @@ def _compute_signal(
       4. Liquidity depth      (±10) — Total flow as market depth proxy
       5. Moneyness bias       (±10) — ITM premium is more actionable
 
-    Advanced factors (new):
+    Advanced factors:
       6. BSL/SSL zone         (±12) — OI concentration above/below spot = institutional walls
       7. BOS structure        (±10) — CE/PE price divergence at ATM = breakout confirmation
-      8. Delta-weighted vol   (±8)  — Moneyness-adjusted volume pressure (ITM vol > OTM vol)
+      8. Delta-weighted vol   (±8)  — Moneyness-adjusted volume pressure
       9. Trap detection       (−15) — High volume but price moves against = absorption trap
+     10. OI Change interp     (±20) — Long Buildup / Short Buildup / SC / LU interpretation
 
     CE score > 0 → calls active/rising → bullish for underlying
     PE score > 0 → puts active/rising → bearish for underlying
@@ -179,8 +177,10 @@ def _compute_signal(
         ce_score += (0.5 - ce_oi / total_oi) * 2.0 * 15
 
     # 3. Price momentum (±30)
+    # Use a floor for premium denominator to avoid extreme ratios on near-zero premiums.
     if ce_price > 0:
-        ce_score += _clamp((ce_change / ce_price) * 100 * 5, -30, 30)
+        ce_momentum_base = max(ce_price, 20.0)
+        ce_score += _clamp((ce_change / ce_momentum_base) * 100 * 5, -30, 30)
 
     # 4. Liquidity depth (±10)
     if total_vol > 100:
@@ -206,7 +206,8 @@ def _compute_signal(
 
     # 3. Price momentum (±30)
     if pe_price > 0:
-        pe_score += _clamp((pe_change / pe_price) * 100 * 5, -30, 30)
+        pe_momentum_base = max(pe_price, 20.0)
+        pe_score += _clamp((pe_change / pe_momentum_base) * 100 * 5, -30, 30)
 
     # 4. Liquidity depth (±10)
     if total_vol > 100:
@@ -264,8 +265,11 @@ def _compute_signal(
     bos_signal: Optional[str] = None
 
     if ce_price > 0 and pe_price > 0 and spot > 0:
-        ce_pct = (ce_change / ce_price) * 100
-        pe_pct = (pe_change / pe_price) * 100
+        # Low premiums can make percentage change unstable; use sensible floors.
+        ce_bos_base = max(ce_price, 20.0)
+        pe_bos_base = max(pe_price, 20.0)
+        ce_pct = (ce_change / ce_bos_base) * 100
+        pe_pct = (pe_change / pe_bos_base) * 100
         # Proximity to ATM: 1.0 at ATM, 0 at 3% away
         atm_prox = max(0.0, 1.0 - abs(spot - strike) / (spot * 0.03))
 
@@ -317,17 +321,78 @@ def _compute_signal(
         ce_vol_dom = ce_volume / (total_vol + 1)
         pe_vol_dom = pe_volume / (total_vol + 1)
 
-        if ce_price > 0 and ce_vol_dom > 0.60:
+        # Ignore ultra-low premiums in trap logic to reduce expiry-day false traps.
+        if ce_price >= 5.0 and ce_vol_dom > 0.60:
             ce_pct_chg_ratio = ce_change / ce_price
             if ce_pct_chg_ratio < -0.02:             # Vol up but price falling = CE trap
                 trap_ce = True
                 ce_score -= 15
 
-        if pe_price > 0 and pe_vol_dom > 0.60:
+        if pe_price >= 5.0 and pe_vol_dom > 0.60:
             pe_pct_chg_ratio = pe_change / pe_price
             if pe_pct_chg_ratio < -0.02:             # Vol up but price falling = PE trap
                 trap_pe = True
                 pe_score -= 15
+
+    # ═══════════════════════════════════════════════════════════════════════
+    #  ADVANCED FACTOR 10: OI Change Interpretation (Long/Short Buildup, Covering)
+    # ═══════════════════════════════════════════════════════════════════════
+    # Pro traders read the OI change quadrant every 5 minutes:
+    #
+    #  Quadrant              OI Δ   Price Δ   Meaning               CE/PE Impact
+    #  ─────────────────────────────────────────────────────────────────────────
+    #  Long Buildup   (LB)   + OI   + Price   Fresh longs entering   CE: +bullish / PE: +bearish
+    #  Short Buildup  (SB)   + OI   − Price   Fresh shorts entering  CE: −bearish / PE: −bullish
+    #  Short Covering (SC)   − OI   + Price   Shorts exiting (mild)  CE: +(mild)   / PE: +(mild)
+    #  Long Unwinding (LU)   − OI   − Price   Longs exiting (mild)   CE: −(mild)   / PE: −(mild)
+    #
+    # Magnitude scales with OI change size; capped at ±20.
+    # Minimum threshold (≥200 contracts) prevents expiry-day micro-noise.
+    # ───────────────────────────────────────────────────────────────────────
+    _OI_MIN_CHANGE = 200   # minimum absolute OI Δ to trigger scoring
+
+    oiInterp_ce: Optional[str] = None
+    oiInterp_pe: Optional[str] = None
+
+    # CE OI change interpretation
+    if ce_oi > 500 and abs(ce_oi_change) >= _OI_MIN_CHANGE:
+        chg_ratio = ce_oi_change / ce_oi      # + = buildup, − = unwinding
+        magnitude = min(abs(chg_ratio) * 200, 20.0)
+        if ce_oi_change > 0:
+            if ce_change >= 0:
+                ce_score += magnitude          # Long Buildup: fresh call buyers → bullish
+                oiInterp_ce = "LB"
+            else:
+                ce_score -= magnitude          # Short Buildup: call writers → bearish
+                oiInterp_ce = "SB"
+        else:
+            half = magnitude * 0.5
+            if ce_change > 0:
+                ce_score += half               # Short Covering: shorts exit → mild bullish
+                oiInterp_ce = "SC"
+            else:
+                ce_score -= half               # Long Unwinding: longs exit → mild bearish
+                oiInterp_ce = "LU"
+
+    # PE OI change interpretation
+    if pe_oi > 500 and abs(pe_oi_change) >= _OI_MIN_CHANGE:
+        chg_ratio = pe_oi_change / pe_oi
+        magnitude = min(abs(chg_ratio) * 200, 20.0)
+        if pe_oi_change > 0:
+            if pe_change >= 0:
+                pe_score += magnitude          # Long Buildup: fresh put buyers → bearish underlying
+                oiInterp_pe = "LB"
+            else:
+                pe_score -= magnitude          # Short Buildup: put writers → bullish underlying
+                oiInterp_pe = "SB"
+        else:
+            half = magnitude * 0.5
+            if pe_change > 0:
+                pe_score += half               # Short Covering in puts
+                oiInterp_pe = "SC"
+            else:
+                pe_score -= half               # Long Unwinding in puts
+                oiInterp_pe = "LU"
 
     # ── Score → Signal conversion ─────────────────────────────────────────
 
@@ -364,14 +429,16 @@ def _compute_signal(
             "score":     round(ce_score, 1),
             "breakdown": _score_to_pct(ce_score),
             "oi":        ce_oi,
+            "oiChange":  ce_oi_change,
             "volume":    ce_volume,
             "price":     round(ce_price, 2),
             "change":    round(ce_change, 2),
             "signals": {
-                "liq":   liq_type_ce,              # "BSL" | "SSL" | null
-                "bos":   bos_signal,               # "UP"  | "DOWN" | null
-                "delta": round(ce_delta, 3),       # synthetic CE delta (0.0–1.0)
-                "trap":  trap_ce,                  # true = absorption trap detected
+                "liq":      liq_type_ce,
+                "bos":      bos_signal,
+                "delta":    round(ce_delta, 3),
+                "trap":     trap_ce,
+                "oiInterp": oiInterp_ce,
             },
         },
         "pe": {
@@ -379,16 +446,273 @@ def _compute_signal(
             "score":     round(pe_score, 1),
             "breakdown": _score_to_pct(pe_score),
             "oi":        pe_oi,
+            "oiChange":  pe_oi_change,
             "volume":    pe_volume,
             "price":     round(pe_price, 2),
             "change":    round(pe_change, 2),
             "signals": {
-                "liq":   liq_type_pe,              # "BSL" | "SSL" | null
-                "bos":   bos_signal,               # "UP"  | "DOWN" | null (same break)
-                "delta": round(pe_delta, 3),       # synthetic PE delta (0.0–1.0)
-                "trap":  trap_pe,                  # true = absorption trap detected
+                "liq":      liq_type_pe,
+                "bos":      bos_signal,
+                "delta":    round(pe_delta, 3),
+                "trap":     trap_pe,
+                "oiInterp": oiInterp_pe,
             },
         },
+    }
+
+
+def _overall_signal_from_score(score: float) -> str:
+    if score >= 30:
+        return "STRONG_BUY"
+    if score >= 12:
+        return "BUY"
+    if score <= -30:
+        return "STRONG_SELL"
+    if score <= -12:
+        return "SELL"
+    return "NEUTRAL"
+
+
+def _compute_max_pain(rows: List[Dict[str, Any]]) -> Optional[int]:
+    """
+    Max Pain = strike where the total intrinsic value of all in-the-money options
+    is minimised.  Option writers (institutions) are net short; they are least
+    hurt — and retail buyers most hurt — at this price.
+    O(N²) over ATM±5 = 11 strikes: negligible cost.
+    """
+    test_strikes = [_safe_int(r.get("strike")) for r in rows if _safe_int(r.get("strike")) > 0]
+    if len(test_strikes) < 3:
+        return None
+    best: Optional[int] = None
+    min_val = float("inf")
+    for T in test_strikes:
+        val = 0
+        for row in rows:
+            K   = _safe_int(row.get("strike"))
+            c_oi = _safe_int((row.get("ce") or {}).get("oi"))
+            p_oi = _safe_int((row.get("pe") or {}).get("oi"))
+            if T > K: val += c_oi * (T - K)   # ITM call at expiry T
+            if K > T: val += p_oi * (K - T)   # ITM put  at expiry T
+        if val < min_val:
+            min_val = val
+            best = T
+    return best
+
+
+def _build_intelligence_summary(
+    symbol: str,
+    strikes: List[Dict[str, Any]],
+    spot: float,
+    atm: int,
+    *,
+    data_source: str = "LIVE",
+    option_age_sec: float = 0.0,
+) -> Dict[str, Any]:
+    """
+    Build a trader-facing symbol summary from per-strike signals.
+    Includes direction, confidence, regime, key levels, and short rationale notes.
+    Confidence is adjusted by feed freshness and data source reliability.
+    """
+    if not strikes:
+        return {
+            "symbol": symbol,
+            "signal": "NEUTRAL",
+            "score": 0.0,
+            "confidence": 0,
+            "regime": "NO_DATA",
+            "agreementPct": 0,
+            "bullPressure": 50,
+            "bearPressure": 50,
+            "trapRiskPct": 0,
+            "actionability": "NONE",
+            "confidenceReason": "No strike data available",
+            "keyLevels": {"support": None, "resistance": None},
+            "insights": ["No strike data available"],
+        }
+
+    sorted_rows = sorted(strikes, key=lambda r: r.get("strike", 0))
+    atm_idx = next((i for i, row in enumerate(sorted_rows) if row.get("isATM")), len(sorted_rows) // 2)
+
+    weighted_net = 0.0
+    total_weight = 0.0
+    active_nets: List[float] = []
+    total_volume = 0
+    trap_ce = 0
+    trap_pe = 0
+    bos_up = 0
+    bos_down = 0
+
+    for i, row in enumerate(sorted_rows):
+        ce = row.get("ce", {})
+        pe = row.get("pe", {})
+        dist = abs(i - atm_idx)
+        prox_weight = 4.0 if dist == 0 else 3.0 if dist == 1 else 2.0 if dist == 2 else 1.3
+
+        strike_volume = _safe_int(ce.get("volume")) + _safe_int(pe.get("volume"))
+        vol_amp = 1.0 + min(math.log10(max(strike_volume, 10)) / 8.0, 1.0)
+        weight = prox_weight * vol_amp
+
+        ce_score = _safe_float(ce.get("score"))
+        pe_score = _safe_float(pe.get("score"))
+        net = ce_score - pe_score
+
+        weighted_net += net * weight
+        total_weight += weight
+        total_volume += strike_volume
+
+        if abs(net) >= 5:
+            active_nets.append(net)
+
+        ce_sigs = ce.get("signals") or {}
+        pe_sigs = pe.get("signals") or {}
+
+        if ce_sigs.get("trap"):
+            trap_ce += 1
+        if pe_sigs.get("trap"):
+            trap_pe += 1
+        if ce_sigs.get("bos") == "UP":
+            bos_up += 1
+        elif ce_sigs.get("bos") == "DOWN":
+            bos_down += 1
+
+    base_score = weighted_net / max(total_weight, 1.0)
+    bos_overlay = _clamp((bos_up - bos_down) * 3.0, -15.0, 15.0)
+    trap_overlay = _clamp((trap_pe - trap_ce) * 2.5, -12.0, 12.0)
+    final_score = round(_clamp(base_score + bos_overlay + trap_overlay, -100.0, 100.0), 1)
+
+    signal = _overall_signal_from_score(final_score)
+    direction = 1 if signal in ("STRONG_BUY", "BUY") else -1 if signal in ("STRONG_SELL", "SELL") else 0
+
+    if active_nets:
+        if direction == 0:
+            agreement = 0.5
+        else:
+            aligned = sum(1 for n in active_nets if (1 if n > 0 else -1) == direction)
+            agreement = aligned / max(len(active_nets), 1)
+    else:
+        agreement = 0.5
+
+    liquidity_quality = min(math.log10(max(total_volume, 10)) / 8.0, 1.0)
+    score_strength = min(abs(final_score) / 60.0, 1.0)
+    trap_ratio = min((trap_ce + trap_pe) / max(len(sorted_rows), 1), 1.0)
+
+    confidence = int(round(_clamp(
+        (0.20 + 0.35 * agreement + 0.25 * liquidity_quality + 0.25 * score_strength - 0.20 * trap_ratio) * 100.0,
+        5.0,
+        99.0,
+    )))
+
+    freshness_mult = 1.0
+    freshness_reason = "Live chain with current confidence model"
+
+    if option_age_sec > 10:
+        # Confidence decays when option-chain staleness grows.
+        freshness_mult *= _clamp(1.0 - (option_age_sec - 10.0) / 120.0, 0.55, 1.0)
+        freshness_reason = f"Chain age {option_age_sec:.1f}s affects confidence"
+
+    if data_source == "CACHED":
+        freshness_mult *= 0.78
+        freshness_reason = "Cached chain snapshot, reduced confidence"
+    elif data_source == "LAST_CLOSE":
+        freshness_mult *= 0.62
+        freshness_reason = "Last close snapshot, directional confidence reduced"
+    elif data_source == "MARKET_CLOSED":
+        freshness_mult *= 0.25
+        freshness_reason = "Market closed fallback, signals are low conviction"
+
+    confidence = int(round(_clamp(confidence * freshness_mult, 1.0, 99.0)))
+
+    if trap_ratio >= 0.30 and abs(final_score) < 22:
+        regime = "TRAP_ZONE"
+    elif abs(final_score) >= 28 and agreement >= 0.62:
+        regime = "TRENDING"
+    elif abs(final_score) <= 10:
+        regime = "RANGE"
+    else:
+        regime = "TRANSITION"
+
+    below_atm = [row for row in sorted_rows if _safe_int(row.get("strike")) <= atm]
+    above_atm = [row for row in sorted_rows if _safe_int(row.get("strike")) >= atm]
+
+    support_row = max(
+        below_atm,
+        key=lambda row: _safe_int((row.get("pe") or {}).get("oi")),
+        default=None,
+    )
+    resistance_row = max(
+        above_atm,
+        key=lambda row: _safe_int((row.get("ce") or {}).get("oi")),
+        default=None,
+    )
+
+    support = _safe_int(support_row.get("strike")) if support_row else None
+    resistance = _safe_int(resistance_row.get("strike")) if resistance_row else None
+
+    support_gap_pct = None
+    resistance_gap_pct = None
+    if spot > 0 and support:
+        support_gap_pct = round((spot - support) / spot * 100.0, 2)
+    if spot > 0 and resistance:
+        resistance_gap_pct = round((resistance - spot) / spot * 100.0, 2)
+
+    bull_pressure = int(round(_clamp(50.0 + final_score * 0.8, 0.0, 100.0)))
+    bear_pressure = 100 - bull_pressure
+
+    # PCR (Put-Call OI ratio) — structural sentiment gauge
+    total_ce_oi = sum(_safe_int((r.get("ce") or {}).get("oi")) for r in sorted_rows)
+    total_pe_oi = sum(_safe_int((r.get("pe") or {}).get("oi")) for r in sorted_rows)
+    pcr = round(total_pe_oi / max(total_ce_oi, 1), 2)
+
+    # Max Pain — strike where option buyers collectively lose most at expiry
+    max_pain = _compute_max_pain(sorted_rows)
+    max_pain_gap_pct: Optional[float] = None
+    if max_pain and spot > 0:
+        max_pain_gap_pct = round((max_pain - spot) / spot * 100.0, 2)
+
+    if confidence >= 75 and abs(final_score) >= 20 and trap_ratio < 0.25 and data_source == "LIVE":
+        actionability = "HIGH"
+    elif confidence >= 55 and abs(final_score) >= 14 and data_source in ("LIVE", "CACHED"):
+        actionability = "MEDIUM"
+    elif confidence >= 35:
+        actionability = "LOW"
+    else:
+        actionability = "NONE"
+
+    insights: List[str] = [
+        f"Flow bias: {signal.replace('_', ' ')} ({final_score:+.1f})",
+        f"Agreement {int(round(agreement * 100))}% across active strikes",
+    ]
+    if support and resistance:
+        insights.append(f"Key levels S:{support} | R:{resistance}")
+    if bos_up > bos_down:
+        insights.append("BOS confirms upside continuation")
+    elif bos_down > bos_up:
+        insights.append("BOS confirms downside continuation")
+    if trap_ratio >= 0.25:
+        insights.append("Elevated trap risk: avoid chasing weak breakouts")
+
+    return {
+        "symbol": symbol,
+        "signal": signal,
+        "score": final_score,
+        "confidence": confidence,
+        "regime": regime,
+        "agreementPct": int(round(agreement * 100)),
+        "bullPressure": bull_pressure,
+        "bearPressure": bear_pressure,
+        "trapRiskPct": int(round(trap_ratio * 100)),
+        "actionability": actionability,
+        "confidenceReason": freshness_reason,
+        "pcr": pcr,
+        "maxPain": max_pain,
+        "maxPainGapPct": max_pain_gap_pct,
+        "keyLevels": {
+            "support": support,
+            "resistance": resistance,
+            "supportGapPct": support_gap_pct,
+            "resistanceGapPct": resistance_gap_pct,
+        },
+        "insights": insights[:4],
     }
 
 
@@ -444,6 +768,13 @@ def _apply_spot_to_cached_entry(entry: Dict[str, Any], spot: float, symbol: str)
     return updated
 
 
+def _is_real_chain_entry(entry: Dict[str, Any]) -> bool:
+    """Return True when the snapshot came from a real option-chain fetch, not synthetic fallback."""
+    if not isinstance(entry, dict):
+        return False
+    return bool(entry.get("strikes")) and bool(entry.get("expiry"))
+
+
 # ── Core Service ─────────────────────────────────────────────────────────────
 
 class StrikeIntelligenceService:
@@ -468,6 +799,8 @@ class StrikeIntelligenceService:
         self._cadence_closed = 60.0
         self._heartbeat_interval = 30.0
         self._kite_init_backoff_until: float = 0.0  # Backoff timer for failed init
+        # OI change tracking: key = "SYMBOL_STRIKE_CE" / "SYMBOL_STRIKE_PE" → prev OI
+        self._prev_oi: Dict[str, int] = {}
 
     def _with_runtime_meta(
         self,
@@ -582,11 +915,9 @@ class StrikeIntelligenceService:
             # Try loading from disk if not yet populated
             persisted = _load_persistent()
             if persisted:
-                # Real last-session data from disk — mark as LAST_CLOSE so the
-                # frontend can show signals (unlike synthetic MARKET_CLOSED data)
                 for sym in persisted:
                     if isinstance(persisted[sym], dict):
-                        persisted[sym]["dataSource"] = "LAST_CLOSE"
+                        persisted[sym]["dataSource"] = "LAST_CLOSE" if _is_real_chain_entry(persisted[sym]) else "MARKET_CLOSED"
                 self._last_snapshot = persisted
         return self._last_snapshot
 
@@ -604,8 +935,8 @@ class StrikeIntelligenceService:
             return "PRE_OPEN"
         return "CLOSED"
 
-    def _get_spot_price(self, symbol: str) -> float:
-        """Get spot price from cache, falling back to persistent market state."""
+    def _get_spot_price(self, symbol: str, *, allow_persistent_fallback: bool = True) -> float:
+        """Get spot price from cache, with optional persistent fallback for closed-market mode."""
         # Try in-memory cache first — _SHARED_CACHE stores (json_str, expire_at) tuples
         cache_key = f"market:{symbol}"
         raw = _SHARED_CACHE.get(cache_key)
@@ -620,11 +951,19 @@ class StrikeIntelligenceService:
             except Exception:
                 pass
 
+        # During LIVE/PRE_OPEN, do not use persistent fallback to avoid stale ATM drift.
+        if not allow_persistent_fallback:
+            return 0.0
+
         # Fallback: persistent market state file
         try:
             from services.persistent_market_state import PersistentMarketState
-            state = PersistentMarketState.get_state(symbol)
+            state = PersistentMarketState.get_last_known_state(symbol)
             if state:
+                persist_ts = _safe_float(state.get("_persist_unix_time"))
+                # Guard against very old persisted values even in fallback mode.
+                if persist_ts > 0 and (time_mod.time() - persist_ts) > (24 * 3600):
+                    return 0.0
                 spot = _safe_float(state.get("price") or state.get("last_price"))
                 if spot > 0:
                     return spot
@@ -638,6 +977,9 @@ class StrikeIntelligenceService:
                 with open(pfile, "r") as f:
                     pdata = json.load(f)
                 sym_data = pdata.get(symbol, {})
+                persist_ts = _safe_float(sym_data.get("_persist_unix_time"))
+                if persist_ts > 0 and (time_mod.time() - persist_ts) > (24 * 3600):
+                    return 0.0
                 spot = _safe_float(sym_data.get("price") or sym_data.get("last_price"))
                 if spot > 0:
                     return spot
@@ -763,15 +1105,32 @@ class StrikeIntelligenceService:
         step = raw["step"]
         strikes_raw = raw["strikes"]
 
+        # ── OI change tracking (vs previous 5-second Zerodha fetch) ────────
+        # Compute change first, then update stored reference values.
+        oi_changes: Dict[int, Dict[str, int]] = {}
+        for strike_val, sd in strikes_raw.items():
+            ce_key = f"{symbol}_{strike_val}_CE"
+            pe_key = f"{symbol}_{strike_val}_PE"
+            prev_ce = self._prev_oi.get(ce_key)
+            prev_pe = self._prev_oi.get(pe_key)
+            oi_changes[strike_val] = {
+                "ce": (sd["ce_oi"] - prev_ce) if prev_ce is not None else 0,
+                "pe": (sd["pe_oi"] - prev_pe) if prev_pe is not None else 0,
+            }
+            self._prev_oi[ce_key] = sd["ce_oi"]
+            self._prev_oi[pe_key] = sd["pe_oi"]
+
         strikes_out = []
         for strike_val in sorted(strikes_raw.keys()):
             sd = strikes_raw[strike_val]
+            chg = oi_changes.get(strike_val, {"ce": 0, "pe": 0})
             signals = _compute_signal(
                 ce_oi=sd["ce_oi"], pe_oi=sd["pe_oi"],
                 ce_volume=sd["ce_volume"], pe_volume=sd["pe_volume"],
                 ce_price=sd["ce_price"], pe_price=sd["pe_price"],
                 ce_change=sd["ce_change"], pe_change=sd["pe_change"],
                 spot=spot, strike=strike_val,
+                ce_oi_change=chg["ce"], pe_oi_change=chg["pe"],
             )
 
             # Determine strike label
@@ -799,61 +1158,18 @@ class StrikeIntelligenceService:
             "expiry": raw.get("expiry", ""),
             "strikeCount": len(strikes_out),
             "strikes": strikes_out,
+            "intelligence": _build_intelligence_summary(
+                symbol,
+                strikes_out,
+                spot,
+                atm,
+                data_source="LIVE",
+                option_age_sec=0.0,
+            ),
             "dataSource": "LIVE",
             "timestamp": built_at,
         }
         return self._with_runtime_meta(payload, spot_timestamp=built_at, option_timestamp=built_at)
-
-    # ── Seed data generator ────────────────────────────────────────────
-
-    def _generate_seed_data(self, symbol: str, spot: float) -> Dict[str, Any]:
-        """
-        Generate realistic strike intelligence data from spot price alone.
-        Used when Zerodha data is unavailable (market closed, no auth, etc.).
-        """
-        import random
-        rng = random.Random(int(spot * 100) + hash(symbol))  # Deterministic per spot+symbol
-
-        step = STRIKE_STEP[symbol]
-        atm = _get_atm_strike(spot, step)
-        strikes = [atm + i * step for i in range(-NUM_STRIKES_EACH_SIDE, NUM_STRIKES_EACH_SIDE + 1)]
-
-        strike_data: Dict[int, Dict] = {}
-        for s in strikes:
-            dist = abs(s - atm) / step
-            # ATM gets highest volume/OI, decays outward
-            base_oi = int(rng.gauss(500000, 100000) * max(0.3, 1.0 - dist * 0.15))
-            base_vol = int(rng.gauss(200000, 50000) * max(0.2, 1.0 - dist * 0.18))
-
-            # CE premium higher for ITM calls, PE premium higher for ITM puts
-            ce_intrinsic = max(0, spot - s)
-            pe_intrinsic = max(0, s - spot)
-            ce_price = round(ce_intrinsic + rng.uniform(5, 80) * max(0.2, 1.0 - dist * 0.12), 2)
-            pe_price = round(pe_intrinsic + rng.uniform(5, 80) * max(0.2, 1.0 - dist * 0.12), 2)
-
-            ce_oi = max(100, base_oi + rng.randint(-50000, 50000))
-            pe_oi = max(100, base_oi + rng.randint(-50000, 50000))
-            ce_vol = max(10, base_vol + rng.randint(-30000, 30000))
-            pe_vol = max(10, base_vol + rng.randint(-30000, 30000))
-
-            strike_data[s] = {
-                "ce_oi": ce_oi, "pe_oi": pe_oi,
-                "ce_volume": ce_vol, "pe_volume": pe_vol,
-                "ce_price": ce_price, "pe_price": pe_price,
-                # Zero changes: no real price movement data when market is closed.
-                # Non-zero values feed the momentum factor (±30) and produce false
-                # directional signals (STRONG BUY / STRONG SELL) from synthetic data.
-                "ce_change": 0.0,
-                "pe_change": 0.0,
-            }
-
-        raw = {
-            "atm": atm, "step": step, "spot": round(spot, 2),
-            "expiry": "", "strikes": strike_data,
-        }
-        data = self._build_symbol_data(symbol, raw)
-        data["dataSource"] = "MARKET_CLOSED"
-        return data
 
     # ── Signal recomputation with live spot ──────────────────────────────
 
@@ -885,6 +1201,9 @@ class StrikeIntelligenceService:
                 pe_change=_safe_float(pe.get("change")),
                 spot=spot,
                 strike=strike_val,
+                # Preserve oiChange from last full Zerodha fetch (not recomputed here)
+                ce_oi_change=_safe_int(ce.get("oiChange", 0)),
+                pe_oi_change=_safe_int(pe.get("oiChange", 0)),
             )
 
             diff = strike_val - new_atm
@@ -907,6 +1226,16 @@ class StrikeIntelligenceService:
         updated["spot"]   = round(spot, 2)
         updated["atm"]    = new_atm
         updated["strikes"] = new_strikes
+        prev_data_source = str(entry.get("dataSource") or "LIVE")
+        prev_option_age = _safe_float(entry.get("optionChainAgeSec"))
+        updated["intelligence"] = _build_intelligence_summary(
+            symbol,
+            new_strikes,
+            round(spot, 2),
+            new_atm,
+            data_source=prev_data_source,
+            option_age_sec=prev_option_age,
+        )
         return self._with_runtime_meta(
             updated,
             spot_timestamp=datetime.now(IST).isoformat(),
@@ -934,7 +1263,7 @@ class StrikeIntelligenceService:
 
                         async def _fetch_one(symbol: str) -> tuple:
                             try:
-                                spot = self._get_spot_price(symbol)
+                                spot = self._get_spot_price(symbol, allow_persistent_fallback=False)
                                 if spot <= 0:
                                     return (symbol, None)
                                 raw = await asyncio.to_thread(
@@ -977,16 +1306,17 @@ class StrikeIntelligenceService:
                             entry = self._last_snapshot.get(symbol)
                             if not isinstance(entry, dict):
                                 return (symbol, None)
-                            spot = self._get_spot_price(symbol)
+                            spot = self._get_spot_price(symbol, allow_persistent_fallback=False)
                             if spot > 0:
                                 refreshed = await asyncio.to_thread(
                                     self._recompute_signals_with_spot, entry, spot, symbol
                                 )
+                                refreshed["dataSource"] = "LIVE"
+                                refreshed["timestamp"] = ts_now
+                                refreshed = self._with_runtime_meta(refreshed, spot_timestamp=ts_now)
                             else:
-                                refreshed = self._with_runtime_meta(dict(entry), spot_timestamp=ts_now)
-                            refreshed["dataSource"] = "LIVE"
-                            refreshed["timestamp"] = ts_now
-                            refreshed = self._with_runtime_meta(refreshed, spot_timestamp=ts_now)
+                                refreshed = self._with_runtime_meta(dict(entry))
+                                refreshed["dataSource"] = "CACHED"
                             return (symbol, refreshed)
 
                         broadcast_data: Dict[str, Any] = {}
@@ -1019,7 +1349,7 @@ class StrikeIntelligenceService:
 
                         async def _fetch_one_closed(symbol: str) -> tuple:
                             try:
-                                spot = self._get_spot_price(symbol)
+                                spot = self._get_spot_price(symbol, allow_persistent_fallback=True)
                                 if spot <= 0:
                                     return (symbol, None)
                                 raw = await asyncio.to_thread(
@@ -1027,8 +1357,12 @@ class StrikeIntelligenceService:
                                 )
                                 if raw:
                                     data = self._build_symbol_data(symbol, raw)
-                                    data["dataSource"] = "MARKET_CLOSED"
+                                    data["dataSource"] = "LAST_CLOSE"
                                     return (symbol, data)
+                                if symbol in self._last_snapshot and _is_real_chain_entry(self._last_snapshot[symbol]):
+                                    entry = dict(self._last_snapshot[symbol])
+                                    entry["dataSource"] = "LAST_CLOSE"
+                                    return (symbol, entry)
                                 return (symbol, None)
                             except Exception as e:
                                 logger.debug("Strike intel closed fetch error for %s: %s", symbol, e)
@@ -1049,15 +1383,25 @@ class StrikeIntelligenceService:
                     if self._last_snapshot:
                         ts_now = datetime.now(IST).isoformat()
                         for sym in list(self._last_snapshot.keys()):
-                            if not isinstance(self._last_snapshot[sym], dict):
+                            entry = self._last_snapshot[sym]
+                            if not isinstance(entry, dict):
                                 continue
-                            current_spot = self._get_spot_price(sym)
-                            if current_spot > 0:
-                                self._last_snapshot[sym] = _apply_spot_to_cached_entry(
-                                    self._last_snapshot[sym], current_spot, sym
+                            if _is_real_chain_entry(entry):
+                                preserved = self._with_runtime_meta(
+                                    dict(entry),
+                                    spot_timestamp=entry.get("spotUpdatedAt") or entry.get("timestamp"),
+                                    option_timestamp=entry.get("optionChainUpdatedAt") or entry.get("timestamp"),
                                 )
-                            self._last_snapshot[sym]["dataSource"] = "MARKET_CLOSED"
-                            self._last_snapshot[sym]["timestamp"] = ts_now
+                                preserved["dataSource"] = "LAST_CLOSE"
+                                self._last_snapshot[sym] = preserved
+                                continue
+
+                            current_spot = self._get_spot_price(sym, allow_persistent_fallback=True)
+                            if current_spot > 0:
+                                entry = _apply_spot_to_cached_entry(entry, current_spot, sym)
+                            entry["dataSource"] = "MARKET_CLOSED"
+                            entry["timestamp"] = ts_now
+                            self._last_snapshot[sym] = entry
                         await strike_intel_manager.broadcast({
                             "type": "strike_intel_update",
                             "data": self._last_snapshot,

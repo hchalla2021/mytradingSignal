@@ -977,7 +977,6 @@ class MarketEdgeService:
         self._latest: Dict[str, Any] = {}
         self._last_spot: Dict[str, Dict] = {}
         self._task: Optional[asyncio.Task] = None
-        self._futures_task: Optional[asyncio.Task] = None
         self._running = False
         self._last_futures_fetch = 0.0
         self._contracts: Dict[str, Dict] = {}
@@ -1085,8 +1084,13 @@ class MarketEdgeService:
 
     async def _compute(self, symbol: str) -> Optional[Dict[str, Any]]:
         """Compute all MarketEdge signals for one index."""
-        spot_data = await self._read_spot(symbol)
+        spot_task = asyncio.create_task(self._read_spot(symbol))
+        candles_task = asyncio.create_task(self._read_candles(symbol))
+
+        spot_data = await spot_task
         if not spot_data:
+            if not candles_task.done():
+                candles_task.cancel()
             return None
 
         spot_price = float(spot_data.get("price") or 0)
@@ -1113,7 +1117,7 @@ class MarketEdgeService:
             except Exception:
                 pass
 
-        candles = await self._read_candles(symbol)
+        candles = await candles_task
         vix = self._read_vix()
 
         # Futures data
@@ -1217,8 +1221,15 @@ class MarketEdgeService:
                 await self._fetch_futures_data()
 
                 payload: Dict[str, Any] = {}
-                for sym in self.INDICES:
-                    result = await self._compute(sym)
+                results = await asyncio.gather(
+                    *(self._compute(sym) for sym in self.INDICES),
+                    return_exceptions=True,
+                )
+
+                for sym, result in zip(self.INDICES, results):
+                    if isinstance(result, Exception):
+                        logger.debug(f"📈 {sym} compute error: {result}")
+                        continue
                     if result:
                         payload[sym] = result
                         self._latest[sym] = result

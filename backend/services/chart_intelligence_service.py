@@ -19,7 +19,6 @@ import json
 import logging
 import math
 import time as time_mod
-import random
 from datetime import datetime, time, date, timedelta
 from typing import Dict, Any, Optional, List, Set
 from pathlib import Path
@@ -598,90 +597,6 @@ class ChartIntelligenceService:
             logger.debug("Chart intel daily fetch %s failed: %s", symbol, e)
             return []
 
-    # ── Seed data generator ──────────────────────────────────────────────
-
-    def _generate_seed_data(self, symbol: str, spot: float) -> Dict[str, Any]:
-        """Generate realistic chart data when Zerodha is unavailable."""
-        rng = random.Random(int(spot * 100) + hash(symbol))
-        now = datetime.now(IST)
-        today = now.date()
-
-        def make_candles(interval_min: int) -> List[Dict]:
-            candles = []
-            t = datetime.combine(today, time(9, 15), tzinfo=IST)
-            end = min(now, datetime.combine(today, time(15, 30), tzinfo=IST))
-            price = spot * (1 - rng.uniform(0.003, 0.012))
-            trend = rng.choice([-1, 1])
-
-            while t <= end:
-                # Periodic trend flip
-                if rng.random() < 0.08:
-                    trend *= -1
-
-                # Occasional impulse candle (every ~20 bars) — creates OB conditions
-                if rng.random() < 0.05:
-                    change = trend * rng.uniform(0.003, 0.008)
-                else:
-                    drift = trend * rng.uniform(0.0002, 0.001)
-                    volatility = rng.gauss(0, 0.001)
-                    change = drift + volatility
-
-                o = price
-                c = price * (1 + change)
-                h = max(o, c) * (1 + rng.uniform(0, 0.003))
-                l = min(o, c) * (1 - rng.uniform(0, 0.003))
-                vol = max(100, int(rng.gauss(80000, 25000)))
-
-                candles.append({
-                    "t": t.isoformat(),
-                    "o": round(o, 2), "h": round(h, 2),
-                    "l": round(l, 2), "c": round(c, 2),
-                    "v": vol,
-                })
-                price = c
-                t += timedelta(minutes=interval_min)
-
-            if candles:
-                candles[-1]["c"] = round(spot, 2)
-                candles[-1]["h"] = round(max(candles[-1]["h"], spot), 2)
-                candles[-1]["l"] = round(min(candles[-1]["l"], spot), 2)
-            return candles
-
-        c3 = make_candles(3)
-        c5 = make_candles(5)
-
-        fvg3 = _detect_fvg(c3)
-        fvg5 = _detect_fvg(c5)
-        ob3 = _detect_order_blocks(c3)
-        ob5 = _detect_order_blocks(c5)
-        liq3 = _detect_liquidity(c3)
-        liq5 = _detect_liquidity(c5)
-
-        # Approximate PDH/PDL
-        pdh = round(spot * (1 + rng.uniform(0.003, 0.012)), 2)
-        pdl = round(spot * (1 - rng.uniform(0.003, 0.012)), 2)
-        daily_seed = [
-            {"h": pdh, "l": pdl, "o": round(spot * 0.998, 2), "c": round(spot * 1.001, 2)},
-            {"h": pdh, "l": pdl, "o": round(spot * 0.998, 2), "c": round(spot * 1.001, 2)},
-        ]
-        levels = _compute_levels(c3, daily_seed, spot)
-
-        return {
-            "symbol": symbol,
-            "spot": round(spot, 2),
-            "candles3m": c3,
-            "candles5m": c5,
-            "fvg3m": fvg3,
-            "fvg5m": fvg5,
-            "ob3m": ob3,
-            "ob5m": ob5,
-            "liquidity3m": liq3,
-            "liquidity5m": liq5,
-            "levels": levels,
-            "dataSource": "MARKET_CLOSED",
-            "timestamp": now.isoformat(),
-        }
-
     # ── Build symbol payload ─────────────────────────────────────────────
 
     def _build_symbol_data(self, symbol: str, c3: List, c5: List, daily: List, spot: float, phase: str) -> Dict:
@@ -789,7 +704,8 @@ class ChartIntelligenceService:
                             elif sym in self._last_snapshot:
                                 return (sym, {**self._last_snapshot[sym], "dataSource": "CACHED"})
                             else:
-                                return (sym, self._generate_seed_data(sym, spot))
+                                logger.warning("Chart Intelligence: no candle data for %s and no cached state", sym)
+                                return (sym, None)
 
                         results = await asyncio.gather(
                             *[_fetch_one(s) for s in SYMBOLS],

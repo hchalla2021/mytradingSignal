@@ -24,7 +24,7 @@ import {
   LiquidityPrediction,
   OIProfile,
 } from '@/hooks/useLiquiditySocket';
-import { Advanced5mPredictionView } from './Advanced5mPredictionView';
+
 
 // ── Colour system ─────────────────────────────────────────────────────────────
 
@@ -207,6 +207,15 @@ function pcrLabel(pcr: number | null): string {
   return 'Extreme Call Wall';
 }
 
+// ── PCR raw color for style props (hex) ──────────────────────────────────────
+function pcrHex(pcr: number | null): string {
+  if (!pcr)        return '#64748b';
+  if (pcr >= 1.3)  return '#22d3ee';
+  if (pcr >= 1.0)  return '#94a3b8';
+  if (pcr >= 0.7)  return '#f97316';
+  return '#ef4444';
+}
+
 // ── Index card ────────────────────────────────────────────────────────────────
 
 const IndexCard = memo(({ data, index }: { data: LiquidityIndex | null; index: string }) => {
@@ -234,6 +243,32 @@ const IndexCard = memo(({ data, index }: { data: LiquidityIndex | null; index: s
   const signalOrder: (keyof typeof data.signals)[] =
     ['pcr_sentiment', 'oi_buildup', 'price_momentum', 'candle_conviction'];
 
+  // Signal confluence: count how many of the 4 signals align in one direction
+  const bullCount     = signalOrder.filter(k => data.signals[k].signal === 'BULL').length;
+  const bearCount     = signalOrder.filter(k => data.signals[k].signal === 'BEAR').length;
+  const confluenceDir = bullCount >= bearCount ? 'BULL' : 'BEAR';
+  const confluenceMax = Math.max(bullCount, bearCount);
+
+  // PCR gauge position within [0.4 → 1.8] range
+  const pcrMin = 0.4, pcrMax = 1.8;
+  const pcrTickPct   = pcr ? Math.max(2, Math.min(98, ((pcr - pcrMin) / (pcrMax - pcrMin)) * 100)) : 50;
+  const pcrTickColor = pcrHex(pcr);
+
+  // PUT / CALL OI split
+  const putOI   = data.metrics.putOI  || 0;
+  const callOI  = data.metrics.callOI || 0;
+  const oiTotal = putOI + callOI;
+  const putPct  = oiTotal > 0 ? Math.round((putOI  / oiTotal) * 100) : 50;
+  const callPct = 100 - putPct;
+
+  // Movement probability via sigmoid of rawScore
+  const rs          = data.rawScore || 0;
+  const bullProbPct = Math.max(5, Math.min(95, Math.round((1 / (1 + Math.exp(-rs * 4))) * 100)));
+  const bearProbPct = 100 - bullProbPct;
+
+  // High conviction: ≥3 signals agree AND overall confidence ≥60%
+  const highConviction = confluenceMax >= 3 && data.confidence >= 60;
+
   return (
     <div className={`w-full rounded-xl bg-[#1a2332] border overflow-hidden
                      transition-all duration-150
@@ -242,22 +277,20 @@ const IndexCard = memo(({ data, index }: { data: LiquidityIndex | null; index: s
 
       {/* ── OI Profile banner ──────────────────────────────────────────────── */}
       <div className={`px-3 py-2 border-b flex items-center justify-between ${oiStyle.bg}`}>
-        <div className="flex items-center gap-1.5 rounded-md border border-green-500/60 bg-green-950/30 px-2 py-1">
+        <div className="flex items-center gap-1.5">
           <span className="text-sm">{oiStyle.icon}</span>
           <span className={`text-[11px] font-black tracking-wider uppercase ${oiStyle.text}`}>
             {oiStyle.label}
           </span>
         </div>
-        <div className="flex items-center gap-1.5">
-          <span className="text-[10px] text-slate-500 font-mono">
-            {data.dataSource === 'MARKET_CLOSED' ? '🕐 Last' : '⚡ Live'}
-          </span>
-        </div>
+        <span className="text-[9px] text-slate-400 font-mono font-semibold tracking-wider">
+          {data.dataSource === 'MARKET_CLOSED' ? '🕐 LAST' : '⚡ LIVE'}
+        </span>
       </div>
 
       <div className="p-3.5 space-y-3">
 
-        {/* ── Header: symbol + price ──────────────────────────────────────── */}
+        {/* ── Header: symbol + price / direction badge ────────────────────── */}
         <div className="flex items-start justify-between">
           <div className="rounded-lg border border-green-500/60 bg-green-950/30 px-2.5 py-1.5">
             <span className="text-sm font-black text-white tracking-wide">{data.symbol}</span>
@@ -270,40 +303,17 @@ const IndexCard = memo(({ data, index }: { data: LiquidityIndex | null; index: s
               </span>
             </div>
           </div>
-          <div className="flex items-stretch gap-2">
-            {/* Individual Liquidity Bias label */}
-            <div className={`rounded-lg border-2 px-2.5 py-2 text-center transition-all duration-700 w-[80px] sm:w-[90px] flex flex-col items-center justify-center ${
-              data.direction === 'BULLISH' ? 'bg-cyan-500/15 border-cyan-500/50' :
-              data.direction === 'BEARISH' ? 'bg-orange-500/15 border-orange-500/50' :
-              'bg-slate-700/25 border-slate-500/40'
-            }`}>
-              <div className={`text-[9px] sm:text-[10px] font-bold uppercase tracking-wider leading-none ${
-                data.direction === 'BULLISH' ? 'text-cyan-400' :
-                data.direction === 'BEARISH' ? 'text-orange-400' :
-                'text-slate-300'
-              }`}>
-                Liquidity
-              </div>
-              <div className={`text-[12px] sm:text-[13px] font-black leading-none mt-1.5 ${
-                data.direction === 'BULLISH' ? 'text-cyan-200' :
-                data.direction === 'BEARISH' ? 'text-orange-200' :
-                'text-slate-200'
-              }`}>
-                {data.direction === 'BULLISH' ? '▲ Bullish' : data.direction === 'BEARISH' ? '▼ Bearish' : '● Neutral'}
-              </div>
+          {/* Direction + confidence — single consolidated badge */}
+          <div className={`rounded-lg border-2 px-3 py-2 text-center transition-all duration-700 flex flex-col items-center justify-center ${pal.badge}`}>
+            <div className="text-[10px] font-black tracking-widest leading-none">
+              {data.direction === 'BULLISH' ? '▲' : data.direction === 'BEARISH' ? '▼' : '●'}
+              &nbsp;{data.direction}
             </div>
-            {/* Main direction badge */}
-            <div className={`rounded-lg border-2 px-2.5 py-2 text-center transition-all duration-700 w-[80px] sm:w-[90px] flex flex-col items-center justify-center ${pal.badge}`}>
-              <div className="text-[9px] sm:text-[10px] font-black tracking-widest leading-none">
-                {data.direction === 'BULLISH' ? '▲' : data.direction === 'BEARISH' ? '▼' : '●'}
-                &nbsp;{data.direction}
-              </div>
-              <div className={`text-[15px] sm:text-[17px] font-black leading-none mt-1 tabular-nums ${pal.text}`}>
-                {data.confidence}%
-              </div>
-              <div className="text-[8px] sm:text-[9px] font-semibold text-slate-400 leading-none mt-1 tracking-wide">
-                Confidence
-              </div>
+            <div className={`text-[17px] font-black leading-none mt-1 tabular-nums ${pal.text}`}>
+              {data.confidence}%
+            </div>
+            <div className="text-[8px] font-semibold text-slate-400 leading-none mt-1 tracking-wide">
+              CONFIDENCE
             </div>
           </div>
         </div>
@@ -311,8 +321,9 @@ const IndexCard = memo(({ data, index }: { data: LiquidityIndex | null; index: s
         {/* Confidence bar */}
         <ConfidenceBar confidence={data.confidence} barColor={pal.bar} />
 
-        {/* ── PCR row ─────────────────────────────────────────────────────── */}
-        <div className="rounded-lg bg-slate-800/50 border border-slate-700/30 px-3 py-2">
+        {/* ── PCR + OI section ─────────────────────────────────────────────── */}
+        <div className="rounded-lg bg-slate-800/50 border border-slate-700/30 px-3 py-2 space-y-2">
+          {/* PCR value + label */}
           <div className="flex items-center justify-between">
             <span className="text-[9px] text-slate-500 uppercase tracking-wider font-semibold">
               Put-Call Ratio
@@ -326,36 +337,76 @@ const IndexCard = memo(({ data, index }: { data: LiquidityIndex | null; index: s
               </span>
             </div>
           </div>
-          <div className="mt-1.5 inline-flex items-center gap-2 text-[10px] font-bold bg-emerald-950/40 border-2 border-emerald-400/50 rounded-md px-2.5 py-1 shadow-sm shadow-emerald-500/10">
-            <span className="text-cyan-400">PUT {fmtOI(data.metrics.putOI)}</span>
-            <span className="text-emerald-400/70 font-black">/</span>
-            <span className="text-orange-400">CALL {fmtOI(data.metrics.callOI)}</span>
-          </div>
+
+          {/* PCR gauge — visual position on bear→bull spectrum */}
+          {pcr && pcr > 0 && (
+            <div>
+              <div className="relative h-[6px] rounded-full bg-gradient-to-r from-red-600/50 via-slate-600/50 to-cyan-500/50">
+                {([
+                  { val: 0.5, c: '#ef4444' }, { val: 0.8, c: '#f97316' },
+                  { val: 1.0, c: '#64748b' }, { val: 1.3, c: '#22d3ee' }, { val: 1.6, c: '#06b6d4' },
+                ] as Array<{ val: number; c: string }>).map(t => (
+                  <div key={t.val} className="absolute top-0 w-px h-full opacity-60"
+                    style={{ left: `${Math.max(2, Math.min(98, ((t.val - pcrMin) / (pcrMax - pcrMin)) * 100))}%`, backgroundColor: t.c }} />
+                ))}
+                <div className="absolute -top-[2px] w-[6px] h-[10px] rounded-sm z-10"
+                  style={{ left: `calc(${pcrTickPct}% - 3px)`, backgroundColor: pcrTickColor }} />
+              </div>
+              <div className="flex justify-between text-[7px] mt-0.5">
+                <span className="text-red-500/60">Bear 0.5</span>
+                <span className="text-slate-500/60">Neutral 1.0</span>
+                <span className="text-cyan-500/60">Bull 1.6</span>
+              </div>
+            </div>
+          )}
+
+          {/* PUT / CALL OI split bar */}
+          {oiTotal > 0 && (
+            <div>
+              <div className="flex items-center justify-between text-[8px] mb-1">
+                <span className="text-cyan-400/80 font-semibold">PUT {fmtOI(putOI)}</span>
+                <span className="text-slate-600 text-[7px] uppercase tracking-wider">OI Split</span>
+                <span className="text-orange-400/80 font-semibold">CALL {fmtOI(callOI)}</span>
+              </div>
+              <div className="flex h-5 rounded overflow-hidden">
+                <div className="flex items-center justify-center bg-cyan-600/35 transition-all duration-500"
+                  style={{ width: `${putPct}%` }}>
+                  <span className="text-[8px] font-bold text-cyan-200 px-1">{putPct}%</span>
+                </div>
+                <div className="flex items-center justify-center bg-orange-600/35 transition-all duration-500"
+                  style={{ width: `${callPct}%` }}>
+                  <span className="text-[8px] font-bold text-orange-200 px-1">{callPct}%</span>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* VWAP deviation */}
           {data.metrics.vwapDev != null && (
-            <div className="mt-1 flex items-center gap-2 text-[9px] text-slate-500">
-              <span className="text-slate-600">·</span>
-              <span className={data.metrics.vwapDev >= 0 ? 'text-cyan-600' : 'text-orange-600'}>
-                VWAP {data.metrics.vwapDev >= 0 ? '+' : ''}{data.metrics.vwapDev.toFixed(2)}%
+            <div className="flex items-center gap-2 text-[9px]">
+              <span className="text-slate-500 uppercase tracking-wider">VWAP Dev</span>
+              <span className={`font-semibold ${data.metrics.vwapDev >= 0 ? 'text-cyan-400' : 'text-orange-400'}`}>
+                {data.metrics.vwapDev >= 0 ? '+' : ''}{data.metrics.vwapDev.toFixed(2)}%
               </span>
             </div>
           )}
         </div>
 
-        {/* ── 5-Min prediction (very prominent) ───────────────────────────── */}
-        <div className="rounded-lg bg-slate-800/60 border border-slate-700/30 px-4 py-3 space-y-3">
+        {/* ── 5-Min prediction ─────────────────────────────────────────────── */}
+        <div className="rounded-lg bg-slate-800/60 border border-slate-700/30 px-3 py-2.5 space-y-2">
           <div className="flex items-center justify-between">
             <div>
-              <div className="text-[11px] text-slate-400 uppercase tracking-widest font-bold mb-2">
-                ⚡5-Min Prediction
+              <div className="text-[9px] text-slate-500 uppercase tracking-widest font-semibold mb-1.5">
+                ⚡ 5-Min Prediction
               </div>
               <Pred5mBadge pred={data.prediction5m} />
             </div>
             <div className="flex flex-col items-end gap-1">
-              <span className="text-[14px] font-black text-white">
+              <span className="text-[15px] font-black text-white tabular-nums">
                 {data.pred5mConf}%
-                <span className="text-[10px] font-semibold text-slate-400 ml-1">CONFIDENCE</span>
               </span>
-              <div className="w-20 h-2 rounded-full bg-slate-700/50 overflow-hidden">
+              <span className="text-[8px] text-slate-500 leading-none">CONFIDENCE</span>
+              <div className="w-16 h-1.5 rounded-full bg-slate-700/50 overflow-hidden mt-0.5">
                 <div
                   className={`h-full rounded-full transition-all duration-300 ${
                     data.prediction5m === 'STRONG_BUY'  ? 'bg-emerald-400' :
@@ -370,123 +421,46 @@ const IndexCard = memo(({ data, index }: { data: LiquidityIndex | null; index: s
             </div>
           </div>
 
-          {/* Micro-Movement Detection Subsection */}
-          <div className="bg-slate-900/50 rounded-lg p-3 border border-slate-700/20 space-y-2">
-            {/* Signal Strength (derived from all 4 weighted signals) */}
-            <div className="flex items-center justify-between bg-slate-900/30 rounded px-2 py-1.5">
-              <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wide">Signal Strength</span>
-              <div className="flex items-center gap-2">
-                <span className={`text-[12px] font-black ${
-                  data.confidence >= 70 ? 'text-emerald-300' :
-                  data.confidence >= 50 ? 'text-cyan-300' :
-                  'text-slate-300'
-                }`}>
-                  {data.confidence}%
-                </span>
-                <div className="w-14 h-2 rounded-full bg-slate-700/50 overflow-hidden">
-                  <div
-                    className={`h-full transition-all duration-300 rounded-full ${
-                      data.direction === 'BULLISH' ? 'bg-gradient-to-r from-cyan-500 to-cyan-400' :
-                      data.direction === 'BEARISH' ? 'bg-gradient-to-r from-orange-500 to-orange-400' :
-                      'bg-gradient-to-r from-slate-500 to-slate-400'
-                    }`}
-                    style={{ width: `${data.confidence}%` }}
-                  />
-                </div>
-              </div>
-            </div>
-
-            {/* Price Momentum Indicator */}
-            <div className="flex items-center justify-between bg-slate-900/30 rounded px-2 py-1.5">
-              <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wide">Price Momentum</span>
-              <div className="flex items-center gap-2">
-                <span className={`font-bold px-2 py-1 rounded text-[10px] ${
-                  data.metrics.changePct > 0.5   ? 'bg-emerald-500/40 text-emerald-200' :
-                  data.metrics.changePct > 0     ? 'bg-emerald-500/25 text-emerald-300' :
-                  data.metrics.changePct < -0.5  ? 'bg-red-500/40 text-red-200' :
-                  data.metrics.changePct < 0     ? 'bg-red-500/25 text-red-300' :
-                                                   'bg-slate-600/25 text-slate-300'
-                }`}>
-                  {data.metrics.changePct > 0 ? '▲' : data.metrics.changePct < 0 ? '▼' : '→'} {Math.abs(data.metrics.changePct).toFixed(2)}%
-                </span>
-              </div>
-            </div>
-
-            {/* OI Momentum Indicator */}
-            <div className="flex items-center justify-between bg-slate-900/30 rounded px-2 py-1.5">
-              <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wide">OI Momentum</span>
-              <div className="flex items-center gap-2">
-                {/* Warn if price is moving but OI signal is still neutral */}
-                {data.signals.oi_buildup.signal === 'NEUTRAL' && Math.abs(data.metrics.changePct) > 0.3 && (
-                  <span className="text-[8px] text-amber-500 font-bold">⏳ syncing</span>
-                )}
-                <span className={`font-bold px-2 py-1 rounded text-[10px] max-w-[140px] ${
-                  data.signals.oi_buildup.score > 0.3  ? 'bg-emerald-500/40 text-emerald-200' :
-                  data.signals.oi_buildup.score > 0    ? 'bg-emerald-500/25 text-emerald-300' :
-                  data.signals.oi_buildup.score < -0.3 ? 'bg-red-500/40 text-red-200' :
-                  data.signals.oi_buildup.score < 0    ? 'bg-red-500/25 text-red-300' :
-                                                         'bg-slate-600/25 text-slate-300'
-                }`}>
-                  {data.signals.oi_buildup.signal === 'BULL' ? '📈' : data.signals.oi_buildup.signal === 'BEAR' ? '📉' : '⚖️'} 
-                  <span className="ml-1">{data.signals.oi_buildup.label}</span>
-                </span>
-              </div>
-            </div>
-
-            {/* Probability Distribution — uses all 4 signals via rawScore */}
-            <div className="pt-2 border-t border-slate-700/20">
-              <div className="flex items-center justify-between mb-2">
-                <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wide">Movement Probability</span>
-              </div>
-              {(() => {
-                const rs = data.rawScore || 0;
-                // Sigmoid mapping: rawScore is a weighted signal score, not a probability.
-                // Sigmoid compresses extreme values and spreads the neutral zone,
-                // giving traders a more honest probability reading.
-                const sigmoid = 1 / (1 + Math.exp(-rs * 4));
-                const bullPct = Math.max(5, Math.min(95, Math.round(sigmoid * 100)));
-                const bearPct = 100 - bullPct;
-                return (
-                  <div className="flex h-7 rounded-md overflow-hidden bg-slate-950/50 border border-slate-700/30">
-                    <div
-                      className="h-full bg-gradient-to-r from-cyan-600 to-cyan-500 transition-all duration-300 flex items-center justify-center"
-                      style={{ width: `${bullPct}%` }}
-                    >
-                      <span className="text-[9px] font-bold text-white px-1 truncate whitespace-nowrap">
-                        {bullPct}%↑
-                      </span>
-                    </div>
-                    <div
-                      className="h-full bg-gradient-to-l from-orange-600 to-orange-500 transition-all duration-300 flex items-center justify-center"
-                      style={{ width: `${bearPct}%` }}
-                    >
-                      <span className="text-[9px] font-bold text-white px-1 truncate whitespace-nowrap">
-                        {bearPct}%↓
-                      </span>
-                    </div>
-                  </div>
-                );
-              })()}
-            </div>
-
-            {/* Early Signal Detection - fixed height to prevent layout shift on mobile */}
-            <div className="pt-2 border-t border-slate-700/20 min-h-[28px]">
-              {(Math.abs(data.metrics.changePct) > 0.15 || Math.abs(data.signals.oi_buildup.score) > 0.4) && (
-                <span className="text-[10px] font-bold text-amber-400 uppercase tracking-wide">
-                  ⚡ Early Signal Detected
-                </span>
+          {/* Movement probability — sigmoid transform of rawScore for honest probability */}
+          <div>
+            <div className="flex items-center justify-between mb-1">
+              <span className="text-[8px] text-slate-500 uppercase tracking-wider font-semibold">Movement Probability</span>
+              {highConviction && (
+                <span className="text-[8px] font-bold text-amber-400">⚡ High Conviction</span>
               )}
             </div>
+            <div className="flex h-6 rounded overflow-hidden bg-slate-950/50 border border-slate-700/30">
+              <div
+                className="h-full bg-gradient-to-r from-cyan-600 to-cyan-500 transition-all duration-300 flex items-center justify-center"
+                style={{ width: `${bullProbPct}%` }}
+              >
+                <span className="text-[8px] font-bold text-white px-1 truncate">{bullProbPct}%↑</span>
+              </div>
+              <div
+                className="h-full bg-gradient-to-l from-orange-600 to-orange-500 transition-all duration-300 flex items-center justify-center"
+                style={{ width: `${bearProbPct}%` }}
+              >
+                <span className="text-[8px] font-bold text-white px-1 truncate">{bearProbPct}%↓</span>
+              </div>
+            </div>
           </div>
-        </div>
 
-        {/* ── Advanced 5-Min Micro-Trend Prediction (DISABLED) ─────────── */}
-        {false && data.advanced5mPrediction && (
-          <Advanced5mPredictionView 
-            data={data.advanced5mPrediction as any} 
-            symbol={data.symbol} 
-          />
-        )}
+          {/* Signal confluence — shown only when ≥3 of 4 signals agree */}
+          {confluenceMax >= 3 && (
+            <div className="flex items-center gap-1.5">
+              <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[9px] font-bold border ${
+                confluenceDir === 'BULL'
+                  ? 'bg-cyan-500/15 text-cyan-300 border-cyan-500/30'
+                  : 'bg-orange-500/15 text-orange-300 border-orange-500/30'
+              }`}>
+                {confluenceMax}/4 {confluenceDir === 'BULL' ? '▲' : '▼'} ALIGNED
+              </span>
+              <span className="text-[8px] text-slate-500">
+                {confluenceMax === 4 ? 'all signals agree' : '3 of 4 agree'}
+              </span>
+            </div>
+          )}
+        </div>
 
         {/* ── 4-Signal breakdown ──────────────────────────────────────────── */}
         <div className="rounded-lg bg-slate-800/40 border border-slate-700/25 px-3 py-2">

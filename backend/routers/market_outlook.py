@@ -13,6 +13,13 @@ from services.order_flow_analyzer import order_flow_analyzer
 
 router = APIRouter(prefix="/api/analysis", tags=["market-outlook"])
 
+
+async def _parallel_by_symbol(symbols, coro_factory):
+    """Run symbol computations concurrently and preserve symbol-keyed results."""
+    tasks = [coro_factory(symbol) for symbol in symbols]
+    outcomes = await asyncio.gather(*tasks, return_exceptions=True)
+    return {symbol: outcome for symbol, outcome in zip(symbols, outcomes)}
+
 class MarketOutlookCalculator:
     """Calculate unified market outlook from 12 integrated signals"""
 
@@ -444,12 +451,13 @@ async def get_all_symbols_market_outlook():
     """Get market outlook for NIFTY, BANKNIFTY, SENSEX"""
     symbols = ['NIFTY', 'BANKNIFTY', 'SENSEX']
     results = {}
-    
-    for symbol in symbols:
-        try:
-            results[symbol] = await get_market_outlook(symbol)
-        except Exception as e:
-            results[symbol] = {'error': str(e)}
+
+    outcomes = await _parallel_by_symbol(symbols, get_market_outlook)
+    for symbol, outcome in outcomes.items():
+        if isinstance(outcome, Exception):
+            results[symbol] = {'error': str(outcome)}
+        else:
+            results[symbol] = outcome
     
     return results
 
@@ -477,42 +485,52 @@ async def get_market_outlook_all_formatted():
     """
     symbols = ['NIFTY', 'BANKNIFTY', 'SENSEX']
     results = {}
-    
-    for symbol in symbols:
-        try:
-            outlook = await get_market_outlook(symbol)
-            
-            # Format for frontend UI with all required fields
-            formatted = {
-                'symbol': symbol,
-                'signal': outlook.get('overall_signal', 'NEUTRAL'),
-                'confidence': outlook.get('overall_confidence', 50),
-                # Map signal counts (normalize to percentages)
-                'buy_signals': int((outlook.get('bullish_signals', 0) / max(outlook.get('bullish_signals', 0) + outlook.get('bearish_signals', 0) + outlook.get('neutral_signals', 0), 1)) * 100),
-                'sell_signals': int((outlook.get('bearish_signals', 0) / max(outlook.get('bullish_signals', 0) + outlook.get('bearish_signals', 0) + outlook.get('neutral_signals', 0), 1)) * 100),
-                # 5-minute prediction from LIVE order flow data
-                'prediction_5m_direction': outlook.get('prediction_5m_direction', 'FLAT'),
-                'prediction_5m_signal': outlook.get('prediction_5m_signal', 'NEUTRAL'),
-                'prediction_5m_confidence': outlook.get('prediction_5m_confidence', 50),
-                # Order flow buy/sell breakdown
-                'order_flow_buy_pct': outlook.get('order_flow_buy_pct', 50.0),
-                'order_flow_sell_pct': outlook.get('order_flow_sell_pct', 50.0),
-                'timestamp': outlook.get('timestamp', datetime.now().isoformat())
-            }
-            results[symbol] = formatted
-        except Exception as e:
+    outcomes = await _parallel_by_symbol(symbols, get_market_outlook)
+
+    for symbol, outcome in outcomes.items():
+        if isinstance(outcome, Exception):
             results[symbol] = {
                 'symbol': symbol,
                 'signal': 'NEUTRAL',
                 'confidence': 50,
-                'buy_signals': 0,
-                'sell_signals': 0,
+                'buy_signals': 50,
+                'sell_signals': 50,
+                'section_count': 0,
                 'prediction_5m_direction': 'FLAT',
                 'prediction_5m_signal': 'NEUTRAL',
                 'prediction_5m_confidence': 50,
+                'order_flow_buy_pct': 50.0,
+                'order_flow_sell_pct': 50.0,
                 'timestamp': datetime.now().isoformat(),
-                'error': str(e)
+                'error': str(outcome)
             }
+            continue
+
+        outlook = outcome
+        bullish = int(outlook.get('bullish_signals', 0))
+        bearish = int(outlook.get('bearish_signals', 0))
+        neutral = int(outlook.get('neutral_signals', 0))
+        total_signals = max(bullish + bearish + neutral, 1)
+
+        buy_pct = int(round((bullish / total_signals) * 100))
+        sell_pct = int(round((bearish / total_signals) * 100))
+        if buy_pct + sell_pct > 100:
+            sell_pct = max(0, 100 - buy_pct)
+
+        results[symbol] = {
+            'symbol': symbol,
+            'signal': outlook.get('overall_signal', 'NEUTRAL'),
+            'confidence': outlook.get('overall_confidence', 50),
+            'buy_signals': buy_pct,
+            'sell_signals': sell_pct,
+            'section_count': total_signals,
+            'prediction_5m_direction': outlook.get('prediction_5m_direction', 'FLAT'),
+            'prediction_5m_signal': outlook.get('prediction_5m_signal', 'NEUTRAL'),
+            'prediction_5m_confidence': outlook.get('prediction_5m_confidence', 50),
+            'order_flow_buy_pct': outlook.get('order_flow_buy_pct', 50.0),
+            'order_flow_sell_pct': outlook.get('order_flow_sell_pct', 50.0),
+            'timestamp': outlook.get('timestamp', datetime.now().isoformat())
+        }
     
     return results
 
@@ -621,11 +639,12 @@ async def get_all_trading_decisions():
     """Get trading decisions with indices for all 3 symbols"""
     symbols = ['NIFTY', 'BANKNIFTY', 'SENSEX']
     results = {}
-    
-    for symbol in symbols:
-        try:
-            results[symbol] = await get_trading_decision_with_indices(symbol)
-        except Exception as e:
-            results[symbol] = {'error': str(e), 'symbol': symbol}
+
+    outcomes = await _parallel_by_symbol(symbols, get_trading_decision_with_indices)
+    for symbol, outcome in outcomes.items():
+        if isinstance(outcome, Exception):
+            results[symbol] = {'error': str(outcome), 'symbol': symbol}
+        else:
+            results[symbol] = outcome
     
     return results

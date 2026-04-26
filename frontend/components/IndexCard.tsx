@@ -6,24 +6,20 @@ import { MarketTick } from '@/hooks/useMarketSocket';
 import AIAlertTooltip from './AIAlertTooltip';
 import type { AIAlertTooltipData } from '@/types/ai';
 
-interface SymbolOutlook {
-  overallConfidence: number;
-  overallSignal: 'STRONG_BUY' | 'BUY' | 'NEUTRAL' | 'SELL' | 'STRONG_SELL';
-  tradeRecommendation: string;
-  riskLevel: 'LOW' | 'MEDIUM' | 'HIGH';
-}
-
 interface IndexCardProps {
   symbol: string;
   name: string;
   data: MarketTick | null;
   isConnected: boolean;
   aiAlertData?: AIAlertTooltipData;
-  outlookData?: SymbolOutlook | null;
 }
 
 // Reusable market analysis utilities
 const MarketUtils = {
+  clamp: (value: number, min: number, max: number): number => {
+    return Math.min(Math.max(value, min), max);
+  },
+
   formatPrice: (price: number): string => {
     return new Intl.NumberFormat('en-IN', {
       maximumFractionDigits: 2,
@@ -131,7 +127,7 @@ const MarketUtils = {
   },
 };
 
-const IndexCard = ({ symbol, name, data, isConnected, aiAlertData, outlookData }: IndexCardProps) => {
+const IndexCard = ({ symbol, name, data, isConnected, aiAlertData }: IndexCardProps) => {
   const [flash, setFlash] = useState<'green' | 'red' | null>(null);
   const [showAlert, setShowAlert] = useState(false);
   const [lastUpdate, setLastUpdate] = useState<string>('');
@@ -153,6 +149,50 @@ const IndexCard = ({ symbol, name, data, isConnected, aiAlertData, outlookData }
   const intradayChange = useMemo(() => {
     return data ? ((data.price - data.open) / data.open * 100) : 0;
   }, [data]);
+  const decisionEngine = useMemo(() => {
+    if (!data) {
+      return {
+        signal: 'NEUTRAL',
+        bullProb: 50,
+        bearProb: 50,
+        confidence: 50,
+        confluence: 0,
+      };
+    }
+
+    const trendScore =
+      analysis.direction === 'bullish'
+        ? analysis.strength / 100
+        : analysis.direction === 'bearish'
+        ? -(analysis.strength / 100)
+        : 0;
+
+    const pcrScore = data.pcr ? MarketUtils.clamp((data.pcr - 1) / 0.6, -1, 1) : 0;
+    const rangeScore = MarketUtils.clamp((rangePos - 50) / 50, -1, 1);
+    const intradayScore = MarketUtils.clamp(intradayChange / 1.5, -1, 1);
+    const totalOi = (data.callOI || 0) + (data.putOI || 0);
+    const oiScore = totalOi > 0 ? MarketUtils.clamp(((data.putOI || 0) - (data.callOI || 0)) / totalOi, -1, 1) : 0;
+
+    const weightedScore =
+      trendScore * 0.3 +
+      pcrScore * 0.25 +
+      rangeScore * 0.15 +
+      oiScore * 0.2 +
+      intradayScore * 0.1;
+
+    const bullProb = Math.round(((weightedScore + 1) / 2) * 100);
+    const bearProb = 100 - bullProb;
+    const confidence = Math.round(Math.abs(weightedScore) * 100);
+    const dominantBull = weightedScore >= 0;
+    const votes = [trendScore, pcrScore, rangeScore, oiScore, intradayScore].filter((v) => Math.abs(v) >= 0.2);
+    const confluence = votes.filter((v) => (dominantBull ? v > 0 : v < 0)).length;
+
+    let signal = 'NEUTRAL';
+    if (bullProb >= 65) signal = bullProb >= 78 ? 'STRONG BUY' : 'BUY';
+    if (bearProb >= 65) signal = bearProb >= 78 ? 'STRONG SELL' : 'SELL';
+
+    return { signal, bullProb, bearProb, confidence, confluence };
+  }, [analysis.direction, analysis.strength, data, intradayChange, rangePos]);
 
   // Flash animation on price change
   useEffect(() => {
@@ -169,6 +209,7 @@ const IndexCard = ({ symbol, name, data, isConnected, aiAlertData, outlookData }
         }
         
         const timeout = setTimeout(() => setFlash(null), 500);
+        prevPriceRef.current = data.price;
         return () => clearTimeout(timeout);
       }
       prevPriceRef.current = data.price;
@@ -178,8 +219,8 @@ const IndexCard = ({ symbol, name, data, isConnected, aiAlertData, outlookData }
   const getTrendIcon = (size = 5) => {
     const cls = `w-${size} h-${size}`;
     if (!data) return <Minus className={cls} />;
-    if (data.trend === 'bullish') return <TrendingUp className={cls} />;
-    if (data.trend === 'bearish') return <TrendingDown className={cls} />;
+    if (analysis.direction === 'bullish') return <TrendingUp className={cls} />;
+    if (analysis.direction === 'bearish') return <TrendingDown className={cls} />;
     return <Minus className={cls} />;
   };
 
@@ -344,6 +385,39 @@ const IndexCard = ({ symbol, name, data, isConnected, aiAlertData, outlookData }
           <span className={`font-bold ${intradayChange >= 0 ? 'text-bullish' : 'text-bearish'}`}>
             {data ? MarketUtils.formatPercent(intradayChange) : '—'}
           </span>
+        </div>
+      </div>
+
+      {/* Decision Engine */}
+      <div className="mt-3 sm:mt-4 pt-3 sm:pt-4 border-t border-slate-600/30 space-y-2">
+        <div className="flex items-center justify-between text-[10px] sm:text-xs">
+          <span className="text-dark-muted font-medium">Decision Engine</span>
+          <span
+            className={`font-bold ${
+              decisionEngine.signal.includes('BUY')
+                ? 'text-bullish'
+                : decisionEngine.signal.includes('SELL')
+                ? 'text-bearish'
+                : 'text-neutral'
+            }`}
+          >
+            {decisionEngine.signal}
+          </span>
+        </div>
+        <div className="relative h-2 bg-dark-border/40 rounded-full overflow-hidden">
+          <div
+            className="absolute left-0 top-0 h-full bg-bullish/70 transition-all duration-500"
+            style={{ width: `${decisionEngine.bullProb}%` }}
+          />
+        </div>
+        <div className="flex items-center justify-between text-[10px] sm:text-xs">
+          <span className="text-bullish font-semibold">Bull {decisionEngine.bullProb}%</span>
+          <span className="text-dark-muted">Conf {decisionEngine.confidence}%</span>
+          <span className="text-bearish font-semibold">Bear {decisionEngine.bearProb}%</span>
+        </div>
+        <div className="flex items-center justify-between text-[10px] sm:text-xs">
+          <span className="text-dark-muted font-medium">Confluence</span>
+          <span className="font-bold text-white">{decisionEngine.confluence}/5</span>
         </div>
       </div>
 

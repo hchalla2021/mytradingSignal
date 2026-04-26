@@ -42,6 +42,36 @@ interface WebSocketMessage {
   timestamp?: string;
 }
 
+function hasMeaningfulTickChange(prev: MarketTick | null, next: MarketTick): boolean {
+  if (!prev) return true;
+
+  if (
+    prev.price !== next.price ||
+    prev.change !== next.change ||
+    prev.changePercent !== next.changePercent ||
+    prev.high !== next.high ||
+    prev.low !== next.low ||
+    prev.open !== next.open ||
+    prev.close !== next.close ||
+    prev.volume !== next.volume ||
+    prev.oi !== next.oi ||
+    prev.pcr !== next.pcr ||
+    prev.callOI !== next.callOI ||
+    prev.putOI !== next.putOI ||
+    prev.trend !== next.trend ||
+    prev.status !== next.status
+  ) {
+    return true;
+  }
+
+  const prevSignal = prev.analysis?.signal;
+  const nextSignal = next.analysis?.signal;
+  const prevConfidence = prev.analysis?.confidence;
+  const nextConfidence = next.analysis?.confidence;
+
+  return prevSignal !== nextSignal || prevConfidence !== nextConfidence;
+}
+
 // Auto-detect WebSocket URL based on environment
 const getWebSocketURL = (): string => {
   const config = getEnvironmentConfig();
@@ -74,8 +104,21 @@ export function useMarketSocket() {
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const pingIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const saveTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const pendingSaveRef = useRef<MarketData | null>(null);
   const hasEverConnectedRef = useRef(false);   // track if we've ever had a successful connection
   const reconnectAttemptsRef = useRef(0);       // for exponential backoff
+
+  const queueMarketDataSave = useCallback((next: MarketData) => {
+    pendingSaveRef.current = next;
+    if (saveTimerRef.current) return;
+
+    saveTimerRef.current = setTimeout(() => {
+      if (pendingSaveRef.current) saveMarketData(pendingSaveRef.current);
+      pendingSaveRef.current = null;
+      saveTimerRef.current = null;
+    }, 800);
+  }, []);
 
   const connect = useCallback(() => {
     // Guard for SSR - window must exist
@@ -149,6 +192,11 @@ export function useMarketSocket() {
                 
                 
                 setMarketData((prev) => {
+                  const prevTick = prev[tick.symbol as keyof MarketData] as MarketTick | null;
+                  if (!hasMeaningfulTickChange(prevTick, tick)) {
+                    return prev;
+                  }
+
                   // Create completely new object to trigger React updates
                   const updated = {
                     NIFTY: prev.NIFTY,
@@ -156,7 +204,7 @@ export function useMarketSocket() {
                     SENSEX: prev.SENSEX,
                     [tick.symbol]: { ...tick } // New object for changed symbol
                   };
-                  saveMarketData(updated);
+                  queueMarketDataSave(updated);
                   log.debug(`✅ Tick received for ${tick.symbol}: ₹${tick.price}, Analysis: ${tick.analysis ? 'YES' : 'NO'}`);
                   return updated;
                 });
@@ -174,7 +222,7 @@ export function useMarketSocket() {
                     BANKNIFTY: snapshot.BANKNIFTY ? { ...snapshot.BANKNIFTY } : null,
                     SENSEX: snapshot.SENSEX ? { ...snapshot.SENSEX } : null,
                   };
-                  saveMarketData(updated);
+                  queueMarketDataSave(updated);
                   return updated;
                 });
               }
@@ -197,7 +245,7 @@ export function useMarketSocket() {
                     }
                   });
                   if (Object.keys(updated).length > 0) {
-                    saveMarketData(updated);
+                    queueMarketDataSave(updated);
                   }
                   return updated;
                 });
@@ -255,7 +303,7 @@ export function useMarketSocket() {
       console.error('Failed to create WebSocket:', error);
       setConnectionStatus('error');
     }
-  }, []);
+  }, [queueMarketDataSave]);
 
   const disconnect = useCallback(() => {
     if (reconnectTimeoutRef.current) {
@@ -267,6 +315,14 @@ export function useMarketSocket() {
     if (wsRef.current) {
       wsRef.current.close();
       wsRef.current = null;
+    }
+    if (saveTimerRef.current) {
+      clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = null;
+    }
+    if (pendingSaveRef.current) {
+      saveMarketData(pendingSaveRef.current);
+      pendingSaveRef.current = null;
     }
   }, []);
 

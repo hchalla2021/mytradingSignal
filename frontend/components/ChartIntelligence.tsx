@@ -2305,6 +2305,49 @@ const SymbolChartCard = memo<{ data: SymbolChartData | null; name: string; liveS
     );
   }, [candles, fvgList, obList, liqList, levels, liveSpot, data?.spot, structure, inducements, fractals]);
 
+  // MTF alignment — compare 3m vs 5m signals to measure confluence confidence.
+  // Computed independently from the user-selected TF so the badge is always consistent.
+  const mtfSignal = useMemo(() => {
+    if (!data) return null;
+    const effectiveSpot = (liveSpot && liveSpot > 0) ? liveSpot : data.spot ?? 0;
+    if (effectiveSpot <= 0) return null;
+    const c3 = data.candles3m ?? [];
+    const c5 = data.candles5m ?? [];
+    if (c3.length < 5 || c5.length < 5) return null;
+    const emptyLevels: ChartLevels = { pdh: 0, pdl: 0, cdh: 0, cdl: 0, support: [], resistance: [] };
+    const lv = data.levels ?? emptyLevels;
+    // Compute lightweight (no structure/fractals) signals for both TFs
+    const sig3 = computeChartSignal(c3, data.fvg3m ?? [], data.ob3m ?? [], data.liquidity3m ?? [], lv, effectiveSpot, [], [], [], liveSpot);
+    const sig5 = computeChartSignal(c5, data.fvg5m ?? [], data.ob5m ?? [], data.liquidity5m ?? [], lv, effectiveSpot, [], [], [], liveSpot);
+    const isBull = (s: ChartSignal) => s === 'STRONG_BUY' || s === 'BUY';
+    const isBear = (s: ChartSignal) => s === 'STRONG_SELL' || s === 'SELL';
+    const aligned = (isBull(sig3.signal) && isBull(sig5.signal)) || (isBear(sig3.signal) && isBear(sig5.signal));
+    const direction: 'bull' | 'bear' | 'split' = aligned ? (isBull(sig3.signal) ? 'bull' : 'bear') : 'split';
+    return { sig3: sig3.signal, score3: sig3.score, sig5: sig5.signal, score5: sig5.score, aligned, direction };
+  }, [data, liveSpot]);
+
+  // Nearest key level for the intelligence strip
+  const nearestLevel = useMemo(() => {
+    if (!data?.levels || !data.spot) return null;
+    const effectiveSpot = (liveSpot && liveSpot > 0) ? liveSpot : data.spot;
+    const candidates: Array<{ label: string; price: number }> = [
+      { label: 'PDH', price: levels.pdh },
+      { label: 'PDL', price: levels.pdl },
+      { label: 'CDH', price: levels.cdh },
+      { label: 'CDL', price: levels.cdl },
+      ...levels.support.map(s => ({ label: 'SUP', price: s })),
+      ...levels.resistance.map(r => ({ label: 'RES', price: r })),
+    ].filter(c => c.price > 0);
+    if (candidates.length === 0) return null;
+    let best = candidates[0];
+    let bestDist = Math.abs(best.price - effectiveSpot) / effectiveSpot;
+    for (const c of candidates) {
+      const d = Math.abs(c.price - effectiveSpot) / effectiveSpot;
+      if (d < bestDist) { bestDist = d; best = c; }
+    }
+    return { ...best, distPct: bestDist * 100, above: best.price > effectiveSpot };
+  }, [data, liveSpot, levels]);
+
   // Trigger flash animation whenever signal category changes
   useEffect(() => {
     if (prevSignalRef.current && prevSignalRef.current !== chartSignal.signal) {
@@ -2382,6 +2425,24 @@ const SymbolChartCard = memo<{ data: SymbolChartData | null; name: string; liveS
               </span>
             );
           })()}
+          {/* MTF Alignment Badge — 3m vs 5m confluence check */}
+          {mtfSignal && (
+            <span
+              title={`MTF Alignment: 3M=${mtfSignal.sig3} (${mtfSignal.score3 > 0 ? '+' : ''}${mtfSignal.score3}) · 5M=${mtfSignal.sig5} (${mtfSignal.score5 > 0 ? '+' : ''}${mtfSignal.score5})`}
+              className={`
+                inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[9px] font-bold border transition-all duration-300
+                ${mtfSignal.aligned
+                  ? mtfSignal.direction === 'bull'
+                    ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'
+                    : 'bg-red-500/10 text-red-400 border-red-500/30'
+                  : 'bg-amber-500/10 text-amber-400 border-amber-500/30'
+                }
+              `}
+            >
+              MTF {mtfSignal.aligned ? (mtfSignal.direction === 'bull' ? '▲' : '▼') : '⊘'}
+              <span className="opacity-60 font-normal">{mtfSignal.aligned ? 'ALIGN' : 'SPLIT'}</span>
+            </span>
+          )}
           <div className="flex rounded-md overflow-hidden border border-slate-700/50">
             {([
               { tf: '1h',  label: '1H',  hint: 'MACRO' },
@@ -2552,21 +2613,74 @@ const SymbolChartCard = memo<{ data: SymbolChartData | null; name: string; liveS
         </div>
       )}
 
-      {/* Footer Legend */}
-      <div className="px-3 py-2 border-t border-slate-700/30 bg-slate-900/40">
-        {/* Row 1: Level + Structure labels */}
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-1 mb-1.5">
+      {/* Footer — Intelligence Panel */}
+      <div className="px-3 py-2 border-t border-slate-700/30 bg-slate-900/40 space-y-1.5">
+        {/* Row 1: Level proximity intel + last structure event */}
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+          {/* Nearest level proximity chip */}
+          {nearestLevel && (
+            <span
+              className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold border ${
+                nearestLevel.distPct < 0.15
+                  ? 'bg-amber-500/15 text-amber-300 border-amber-500/40'
+                  : nearestLevel.distPct < 0.4
+                  ? 'bg-slate-700/40 text-slate-300 border-slate-600/40'
+                  : 'bg-slate-800/40 text-slate-500 border-slate-700/30'
+              }`}
+              title={`Nearest key level: ${nearestLevel.label} @ ${fmtPrice(nearestLevel.price)}`}
+            >
+              {nearestLevel.above ? '↑' : '↓'}{nearestLevel.label}
+              <span className="font-mono opacity-80">{nearestLevel.distPct.toFixed(2)}%</span>
+            </span>
+          )}
+          {/* Last structure event */}
+          {(() => {
+            const last = structure.length > 0 ? structure[structure.length - 1] : null;
+            if (!last) return null;
+            const isChoch = last.type === 'CHOCH_BULL' || last.type === 'CHOCH_BEAR';
+            const isBull  = last.type === 'BOS_BULL'   || last.type === 'CHOCH_BULL';
+            const age = candles.length - 1 - last.idx;
+            const color = isChoch ? (isBull ? CFG.CHOCH_BULL : CFG.CHOCH_BEAR) : (isBull ? CFG.BOS_BULL : CFG.BOS_BEAR);
+            return (
+              <span
+                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold border"
+                style={{ color, background: `${color}12`, borderColor: `${color}40` }}
+                title={`Last structure: ${last.type} @ ${fmtPrice(last.level)} · ${age} bars ago`}
+              >
+                {isChoch ? 'CHoCH' : 'BOS'}{isBull ? '↑' : '↓'}
+                <span className="opacity-60 font-normal">{age}c ago</span>
+              </span>
+            );
+          })()}
+          {/* Active zone counts — compressed chip row */}
+          <div className="flex items-center gap-1.5 ml-auto flex-wrap">
+            {stats.fvgBull > 0 && (
+              <span className="text-[8px] font-mono" style={{ color: CFG.FVG_BULL_BORDER }}>▲FVG {stats.fvgBull}</span>
+            )}
+            {stats.fvgBear > 0 && (
+              <span className="text-[8px] font-mono" style={{ color: CFG.FVG_BEAR_BORDER }}>▼FVG {stats.fvgBear}</span>
+            )}
+            {stats.obBull > 0 && (
+              <span className="text-[8px] font-mono" style={{ color: CFG.OB_BULL_BORDER }}>▲OB {stats.obBull}</span>
+            )}
+            {stats.obBear > 0 && (
+              <span className="text-[8px] font-mono" style={{ color: CFG.OB_BEAR_BORDER }}>▼OB {stats.obBear}</span>
+            )}
+            {stats.ssl > 0 && (
+              <span className="text-[8px] font-mono" style={{ color: CFG.LIQ_SELL }}>SSL {stats.ssl}</span>
+            )}
+            {stats.bsl > 0 && (
+              <span className="text-[8px] font-mono" style={{ color: CFG.LIQ_BUY }}>BSL {stats.bsl}</span>
+            )}
+          </div>
+        </div>
+        {/* Row 2: Level legend + fractal counts + timestamp */}
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5">
           <span className="flex items-center gap-1 text-[8px] font-bold" style={{ color: CFG.PDH }}>
             <span className="w-4 border-t-2 border-dashed inline-block" style={{ borderColor: CFG.PDH }} /> PREV H/L
           </span>
           <span className="flex items-center gap-1 text-[8px] font-bold" style={{ color: CFG.CDH }}>
             <span className="w-4 border-t-2 inline-block" style={{ borderColor: CFG.CDH }} /> DAY H/L
-          </span>
-          <span className="flex items-center gap-1 text-[8px] font-bold" style={{ color: CFG.BOS_BULL }}>
-            <span className="text-[9px]">↑</span> BOS
-          </span>
-          <span className="flex items-center gap-1 text-[8px] font-bold" style={{ color: CFG.CHOCH_BULL }}>
-            <span className="text-[9px]">↑</span> ChoCH
           </span>
           <span className="flex items-center gap-1 text-[8px] font-bold" style={{ color: CFG.IND_COLOR }}>
             ◆ EQH/EQL
@@ -2574,46 +2688,15 @@ const SymbolChartCard = memo<{ data: SymbolChartData | null; name: string; liveS
           <span className="flex items-center gap-1 text-[8px] font-bold" style={{ color: CFG.SUPPORT }}>
             <span className="w-3 border-t border-dotted inline-block" style={{ borderColor: CFG.SUPPORT }} /> SUP/RES
           </span>
-        </div>
-        {/* Row 2: Zone counts + structure count */}
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-          <span className="text-[8px] font-mono" style={{ color: CFG.FVG_BULL_BORDER }}>
-            ▲FVG {stats.fvgBull}
-          </span>
-          <span className="text-[8px] font-mono" style={{ color: CFG.FVG_BEAR_BORDER }}>
-            ▼FVG {stats.fvgBear}
-          </span>
-          <span className="text-[8px] font-mono" style={{ color: CFG.OB_BULL_BORDER }}>
-            ▲OB {stats.obBull}
-          </span>
-          <span className="text-[8px] font-mono" style={{ color: CFG.OB_BEAR_BORDER }}>
-            ▼OB {stats.obBear}
-          </span>
-          <span className="text-[8px] font-mono" style={{ color: CFG.LIQ_SELL }}>
-            SSL {stats.ssl}
-          </span>
-          <span className="text-[8px] font-mono" style={{ color: CFG.LIQ_BUY }}>
-            BSL {stats.bsl}
-          </span>
-          <span className="text-[8px] font-mono" style={{ color: CFG.BOS_BULL }}>
-            BOS {structure.filter(e => e.type === 'BOS_BULL' || e.type === 'BOS_BEAR').length}
-          </span>
-          <span className="text-[8px] font-mono" style={{ color: CFG.CHOCH_BULL }}>
-            ChoCH {structure.filter(e => e.type === 'CHOCH_BULL' || e.type === 'CHOCH_BEAR').length}
-          </span>
-          <span className="text-[8px] font-mono" style={{ color: CFG.FRACTAL_TOP }}>
-            FR▼ {stats.fracTop}
-          </span>
-          <span className="text-[8px] font-mono" style={{ color: CFG.FRACTAL_BOT }}>
-            FR▲ {stats.fracBot}
-          </span>
+          {(stats.fracTop + stats.fracBot) > 0 && (
+            <>
+              <span className="text-[8px] font-mono" style={{ color: CFG.FRACTAL_TOP }}>FR▼ {stats.fracTop}</span>
+              <span className="text-[8px] font-mono" style={{ color: CFG.FRACTAL_BOT }}>FR▲ {stats.fracBot}</span>
+            </>
+          )}
           <span className="ml-auto text-[8px] font-mono text-slate-600">
             {candles.length}c · {lastCandle ? fmtTime(lastCandle.t) : ''}
           </span>
-        </div>
-        {/* Proximity hint */}
-        <div className="mt-1 text-[7.5px] text-slate-600">
-          ⚡ Candles touching/near a level glow · Rejection wicks highlighted · Hover for zone tooltip
         </div>
       </div>
     </div>

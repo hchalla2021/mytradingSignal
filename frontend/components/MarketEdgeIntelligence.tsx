@@ -28,6 +28,7 @@ const SIGNAL_NAMES: Record<string, { label: string; icon: string }> = {
   iv_rank:        { label: 'IV Rank',           icon: '📏' },
   futures_oi:     { label: 'Futures OI',        icon: '📈' },
   futures_basis:  { label: 'Futures Basis',     icon: '💰' },
+  live_price_momentum: { label: 'Live Momentum', icon: '⚡' },
 };
 
 function formatNumber(n: number | undefined | null): string {
@@ -177,6 +178,24 @@ const EdgeCard = memo<{ data: EdgeIndex | null; name: string }>(({ data, name })
 
   const confColor = data.confidence >= 70 ? 'from-emerald-500 to-emerald-400' : data.confidence >= 40 ? 'from-amber-500 to-amber-400' : 'from-red-500 to-red-400';
 
+  const signalKeys = Object.keys(data.signals) as Array<keyof typeof data.signals>;
+  const totalSignals = signalKeys.length || 1;
+  const bullCount = signalKeys.filter((k) => data.signals[k].signal === 'BULL').length;
+  const bearCount = signalKeys.filter((k) => data.signals[k].signal === 'BEAR').length;
+  const neutralCount = totalSignals - bullCount - bearCount;
+  const dominantCount = Math.max(bullCount, bearCount);
+  const confluenceDirection = bullCount >= bearCount ? 'BULL' : 'BEAR';
+  const confluencePct = Math.round((dominantCount / totalSignals) * 100);
+
+  const callOI = Math.max(0, m.callOI || 0);
+  const putOI = Math.max(0, m.putOI || 0);
+  const oiTotal = callOI + putOI;
+  const putPct = oiTotal > 0 ? Math.round((putOI / oiTotal) * 100) : 50;
+  const callPct = 100 - putPct;
+
+  const bullishProbability = Math.max(5, Math.min(95, Math.round((1 / (1 + Math.exp(-data.rawScore * 4))) * 100)));
+  const bearishProbability = 100 - bullishProbability;
+
   return (
     <div className={`rounded-2xl border ${cardBorder} bg-gradient-to-br from-slate-800/70 via-slate-900/70 to-slate-800/50 backdrop-blur-sm p-3 sm:p-4`}>
       {/* Header */}
@@ -299,11 +318,52 @@ const EdgeCard = memo<{ data: EdgeIndex | null; name: string }>(({ data, name })
         </div>
       </div>
 
-      {/* 5-Signal Breakdown */}
+      {/* Intelligence strip */}
+      <div className="rounded-lg bg-slate-800/30 border border-slate-700/20 p-2.5 mb-3 space-y-2">
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-[9px] text-slate-500 uppercase tracking-wider font-semibold">Signal Confluence</span>
+          <span className={`text-[10px] font-bold ${
+            confluenceDirection === 'BULL' ? 'text-emerald-300' : 'text-red-300'
+          }`}>
+            {dominantCount}/{totalSignals} {confluenceDirection} ({confluencePct}%)
+          </span>
+        </div>
+        <div className="flex items-center gap-1.5 text-[9px]">
+          <span className="text-emerald-400">BULL {bullCount}</span>
+          <span className="text-red-400">BEAR {bearCount}</span>
+          <span className="text-slate-500">NEUTRAL {neutralCount}</span>
+          {confluencePct >= 67 && (
+            <span className="ml-auto text-amber-300 font-bold">HIGH ALIGNMENT</span>
+          )}
+        </div>
+        <div className="flex h-5 rounded overflow-hidden bg-slate-900/40 border border-slate-700/20">
+          <div className="h-full bg-gradient-to-r from-emerald-600 to-emerald-500 flex items-center justify-center" style={{ width: `${bullishProbability}%` }}>
+            <span className="text-[8px] font-bold text-white px-1 truncate">{bullishProbability}%↑</span>
+          </div>
+          <div className="h-full bg-gradient-to-l from-red-600 to-red-500 flex items-center justify-center" style={{ width: `${bearishProbability}%` }}>
+            <span className="text-[8px] font-bold text-white px-1 truncate">{bearishProbability}%↓</span>
+          </div>
+        </div>
+        {oiTotal > 0 && (
+          <div>
+            <div className="flex items-center justify-between text-[8px] mb-1">
+              <span className="text-emerald-400/80 font-semibold">PUT {formatNumber(putOI)}</span>
+              <span className="text-slate-600 uppercase tracking-wider">OI Split</span>
+              <span className="text-red-400/80 font-semibold">CALL {formatNumber(callOI)}</span>
+            </div>
+            <div className="flex h-3 rounded overflow-hidden bg-slate-900/40 border border-slate-700/20">
+              <div className="h-full bg-emerald-500/60" style={{ width: `${putPct}%` }} />
+              <div className="h-full bg-red-500/60" style={{ width: `${callPct}%` }} />
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* 6-Signal Breakdown */}
       <div className="rounded-lg bg-slate-800/30 border border-slate-700/20 p-2.5">
         <div className="flex items-center gap-1.5 mb-2">
           <span className="text-xs">📡</span>
-          <span className="text-[10px] sm:text-xs font-bold text-white">5-Signal Scoring Engine</span>
+          <span className="text-[10px] sm:text-xs font-bold text-white">6-Signal Scoring Engine</span>
           <span className="text-[9px] text-slate-500 ml-auto font-mono">
             Score: <span className={data.rawScore > 0 ? 'text-emerald-400' : data.rawScore < 0 ? 'text-red-400' : 'text-amber-400'}>
               {data.rawScore > 0 ? '+' : ''}{data.rawScore.toFixed(3)}
@@ -322,7 +382,7 @@ EdgeCard.displayName = 'EdgeCard';
 // ── Main Component ──────────────────────────────────────────────────────────
 
 const MarketEdgeIntelligence = memo(() => {
-  const { edgeData, isConnected } = useMarketEdge();
+  const { edgeData, isConnected, lastUpdate } = useMarketEdge();
 
   // Fixed section styling — no dynamic color swaps that cause flashing
   const sectionBorder = 'border-teal-500/30';
@@ -334,7 +394,7 @@ const MarketEdgeIntelligence = memo(() => {
       <div className="flex flex-col gap-1 mb-3 sm:mb-4">
         <SectionTitle
           title="MarketEdge Intelligence"
-          subtitle="OI Spurts × IV + IV Rank × Futures OI × Futures Basis • 5-Factor Derivatives Engine"
+          subtitle="OI Spurts × Live Momentum × IV + IV Rank × Futures OI × Futures Basis • 6-Factor Derivatives Engine"
           accentColor="teal"
           badge={
             <span className="relative inline-flex items-center px-2 py-0.5 text-[9px] font-bold bg-gradient-to-r from-teal-600/80 to-cyan-600/80 rounded-md shadow-lg border border-teal-400/30 whitespace-nowrap leading-none">
@@ -347,6 +407,12 @@ const MarketEdgeIntelligence = memo(() => {
           rightContent={
             <div className="flex items-center gap-2">
               <span className={`w-2 h-2 rounded-full ${isConnected ? 'bg-emerald-500 shadow-sm shadow-emerald-500' : 'bg-red-500'}`} />
+              <span className={`text-[9px] font-semibold ${isConnected ? 'text-emerald-300' : 'text-slate-400'}`}>
+                {isConnected ? 'LIVE' : 'SYNC'}
+              </span>
+              <span className="text-[9px] text-slate-500">
+                {lastUpdate ? new Date(lastUpdate).toLocaleTimeString('en-IN', { hour12: false }) : '--:--:--'}
+              </span>
             </div>
           }
         />
@@ -375,7 +441,7 @@ const MarketEdgeIntelligence = memo(() => {
             <span className="w-2 h-2 rounded-full bg-red-500/60" /> Long Unwinding
           </span>
           <span className="text-slate-600">|</span>
-          <span>🔥 OI Spurts • 📊 IV • 📏 IV Rank • 📈 Fut OI • 💰 Basis</span>
+          <span>🔥 OI Spurts • ⚡ Live Momentum • 📊 IV • 📏 IV Rank • 📈 Fut OI • 💰 Basis</span>
         </div>
       </div>
     </div>

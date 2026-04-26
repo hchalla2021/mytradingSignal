@@ -1,6 +1,7 @@
 """Market data WebSocket endpoint."""
 import asyncio
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect, HTTPException
+import logging
+from fastapi import APIRouter, WebSocket, WebSocketDisconnect, HTTPException, Depends, Header
 from datetime import datetime
 from typing import Dict, Any, Optional
 
@@ -10,6 +11,17 @@ from services.cache import CacheService
 
 router = APIRouter()
 settings = get_settings()
+logger = logging.getLogger(__name__)
+
+
+def _verify_admin_key(x_admin_key: str = Header(None, alias="X-Admin-Key")):
+    """Verify admin API key for protected debug endpoints."""
+    expected_key = getattr(settings, 'admin_restart_key', '')
+    if not expected_key or expected_key in ('', 'CHANGE_ME_USE_STRONG_RANDOM_KEY'):
+        raise HTTPException(status_code=503, detail="Admin key not configured")
+    if not x_admin_key or x_admin_key != expected_key:
+        raise HTTPException(status_code=403, detail="Invalid admin key")
+    return True
 
 
 
@@ -34,8 +46,8 @@ async def _get_market_data_with_fallback(cache: CacheService) -> Dict[str, Any]:
 
 
 @router.get("/cache/{symbol}")
-async def get_cache_data(symbol: str):
-    """Debug endpoint to check raw cache data for a symbol"""
+async def get_cache_data(symbol: str, _admin=Depends(_verify_admin_key)):
+    """Debug endpoint to check raw cache data for a symbol — admin only"""
     cache = CacheService()
     await cache.connect()
     try:
@@ -155,11 +167,17 @@ async def get_vwap_live(symbol: str):
             now = datetime.now(IST)
             market_open = now.replace(hour=9, minute=15, second=0, microsecond=0)
             
-            latest_data = kite.historical_data(
-                instrument_token=instrument_token,
-                from_date=market_open,
-                to_date=now,
-                interval="5minute"
+            latest_data = await asyncio.wait_for(
+                loop.run_in_executor(
+                    None,
+                    lambda: kite.historical_data(
+                        instrument_token=instrument_token,
+                        from_date=market_open,
+                        to_date=now,
+                        interval="5minute"
+                    )
+                ),
+                timeout=10.0
             )
             
             if latest_data and len(latest_data) > 0:
@@ -174,9 +192,10 @@ async def get_vwap_live(symbol: str):
             
             print(f"   💹 Live Price: ₹{current_price:,.2f}")
         except Exception as e:
+            logger.error("VWAP price fetch error for %s", symbol, exc_info=True)
             return {
                 "success": False,
-                "error": f"Failed to fetch current price: {str(e)}",
+                "error": "Failed to fetch current price from Zerodha",
                 "symbol": symbol
             }
         
@@ -208,14 +227,11 @@ async def get_vwap_live(symbol: str):
         return result
         
     except Exception as e:
-        print(f"❌ [VWAP-LIVE] Endpoint error: {str(e)}")
-        import traceback
-        traceback.print_exc()
+        logger.error("VWAP-LIVE endpoint error for %s", locals().get('symbol', 'UNKNOWN'), exc_info=True)
         return {
             "success": False,
-            "error": str(e),
-            "symbol": symbol if 'symbol' in locals() else "UNKNOWN",
-            "error_type": type(e).__name__
+            "error": "VWAP calculation failed — check server logs",
+            "symbol": locals().get('symbol', 'UNKNOWN')
         }
 
 

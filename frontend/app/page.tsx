@@ -1,16 +1,13 @@
 'use client';
 
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import dynamic from 'next/dynamic';
 import { useMarketSocket } from '@/hooks/useMarketSocket';
 import { useAnalysis } from '@/hooks/useAnalysis';
 import { useAIAnalysis } from '@/hooks/useAIAnalysis';
-import { useOverallMarketOutlook } from '@/hooks/useOverallMarketOutlook';
 import { useAuth } from '@/hooks/useAuth';
-import { useLiquiditySocket, type LiquidityIndex } from '@/hooks/useLiquiditySocket';
-import { useCompassSocket, type CompassIndex } from '@/hooks/useCompassSocket';
-import { useICTSocket, type ICTIndex } from '@/hooks/useICTSocket';
 import { useIndiaVIX } from '@/hooks/useIndiaVIX';
+import { API_CONFIG } from '@/lib/api-config';
 
 // Dynamic import for Header to prevent SSR hydration errors with time/date
 const Header = dynamic(() => import('@/components/Header'), { ssr: false });
@@ -163,13 +160,9 @@ const ICTIntelligence = dynamic(() => import('@/components/ICTIntelligence'), {
 
 export default function Home() {
   // 🔥 Force fresh mount on page load - fixes desktop browser caching
-  const [mountKey, setMountKey] = useState(0);
   const [currentYear, setCurrentYear] = useState(() => 
     typeof window !== 'undefined' ? new Date().getFullYear() : 2026
   );
-  const [marketConfidence, setMarketConfidence] = useState(50); // Default value for SSR
-  const [bankniftyConfidence, setBankniftyConfidence] = useState(50);
-  const [sensexConfidence, setSensexConfidence] = useState(50);
   const [isClient, setIsClient] = useState(false);
   
   // Mark when we're on the client
@@ -181,18 +174,13 @@ export default function Home() {
   const {
     marketData,
     connectionStatus,
-    isConnected,
-    reconnect
+    isConnected
   } = useMarketSocket();
-  const { alertData, loading: aiLoading, error: aiError } = useAIAnalysis();
-  const { outlookData, loading: outlookLoading } = useOverallMarketOutlook();
+  const { alertData } = useAIAnalysis();
   const { vixData, loading: vixLoading } = useIndiaVIX();
   const { isAuthenticated } = useAuth();
-  const { liquidityData } = useLiquiditySocket();
-  const { compassData } = useCompassSocket();
-  const { ictData } = useICTSocket();
   const [currentTime, setCurrentTime] = useState<string>('');
-  const [updateCounter, setUpdateCounter] = useState(0);
+  const [serverOutlook, setServerOutlook] = useState<Record<string, any> | null>(null);
 
   // 🔥 Clear browser cache on mount (desktop browsers cache aggressively)
   useEffect(() => {
@@ -208,8 +196,7 @@ export default function Home() {
   useEffect(() => {
     if (typeof window === 'undefined') return;
     
-    // Set mount key and current year on client
-    setMountKey(Date.now());
+    // Set current year on client
     setCurrentYear(new Date().getFullYear());
     
     const params = new URLSearchParams(window.location.search);
@@ -250,323 +237,115 @@ export default function Home() {
     };
   }, [apiAnalyses, marketData.NIFTY?.analysis, marketData.BANKNIFTY?.analysis, marketData.SENSEX?.analysis]);
 
-  // Calculate market confidence on client-side to prevent hydration errors
+  const fetchServerOutlook = useCallback(async () => {
+    try {
+      const res = await fetch(API_CONFIG.endpoint('/api/analysis/market-outlook-all'), { cache: 'no-store' });
+      if (!res.ok) return;
+      const next = await res.json();
+      if (next?.NIFTY && next?.BANKNIFTY && next?.SENSEX) {
+        setServerOutlook(next);
+      }
+    } catch {
+      // Keep last good snapshot for UI stability.
+    }
+  }, []);
+
   useEffect(() => {
-    if (!analyses) return;
-    
-    const calculateIndexConfidence = (indexData) => {
-      if (!indexData) return 50;
-      
-      const confidenceValues = [
-        indexData.indicators?.ema200_confidence || (indexData.indicators?.is_above_ema200 ? 85 : 20),
-        indexData.indicators?.vwap_confidence || (indexData.indicators?.vwap_signal ? 88 : 18),
-        indexData.indicators?.ema_alignment_confidence || (indexData.indicators?.ema_alignment ? 75 : 28),
-        indexData.indicators?.zone_confidence || (indexData.analysis?.zoneControl ? 74 : 26),
-        indexData.volume?.volume_confidence || (indexData.volume?.buying_pressure || indexData.volume?.selling_pressure ? 72 : 20),
-        indexData.indicators?.trend_confidence || (indexData.indicators?.trend_structure ? 78 : 25)
-      ].filter(val => val && !isNaN(val));
-      
-      return confidenceValues.length > 0 
-        ? Math.round(confidenceValues.reduce((sum, val) => sum + val, 0) / confidenceValues.length)
-        : 50;
+    fetchServerOutlook();
+    const interval = setInterval(fetchServerOutlook, 3000);
+
+    const onVisibility = () => {
+      if (document.visibilityState === 'visible') fetchServerOutlook();
     };
 
-    setMarketConfidence(calculateIndexConfidence(analyses.NIFTY));
-    setBankniftyConfidence(calculateIndexConfidence(analyses.BANKNIFTY));
-    setSensexConfidence(calculateIndexConfidence(analyses.SENSEX));
-  }, [analyses]);
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
+  }, [fetchServerOutlook]);
 
-  // 🔥🔥🔥 AGGREGATED MARKET SIGNAL CALCULATION - Performance Optimized 🔥🔥🔥
-  // This calculates the total BUY/SELL % based on all section confidences
+  // Server-driven outlook with live tick micro-adjustment for immediacy.
   const aggregatedMarketSignal = useMemo(() => {
-    // 🔥 COMPREHENSIVE AGGREGATION: ALL 9 UI SECTIONS INTEGRATED
-    const calculateAggregatedSignal = (
-      analysisData: any,
-      directData: any,
-      symbol: string,
-      liquidityIndex: LiquidityIndex | null,
-      compassIndex: CompassIndex | null,
-      ictIndex: ICTIndex | null,
-    ) => {
-      const ind = analysisData?.indicators || {};
-      const tick = directData || {};
-      const price = ind.price || tick.price || 0;
-      
-      if (price === 0) {
-        return { buyPercent: 50, sellPercent: 50, totalConfidence: 50, signal: 'NEUTRAL', sectionCount: 0, pred5mConf: 50, pred5mBuyPct: 50, pred5mDir: 'FLAT' as const };
-      }
-      
-      let buyCount = 0;
-      let sellCount = 0;
-      let neutralCount = 0;
-      let totalConfidenceSum = 0;
-      let sectionCount = 0;
+    const clamp = (value: number, min: number, max: number) => Math.min(Math.max(value, min), max);
+    const normalizeSignal = (value: unknown) => {
+      const s = String(value || 'NEUTRAL').toUpperCase();
+      if (s === 'STRONG_BUY' || s === 'BUY' || s === 'NEUTRAL' || s === 'SELL' || s === 'STRONG_SELL') return s;
+      return 'NEUTRAL';
+    };
 
-      // ═══════════════════════════════════════════════════════════════
-      // SECTION 1: Trade Zones • Buy/Sell Signals (5min + 15min Trend)
-      // ═══════════════════════════════════════════════════════════════
-      sectionCount++;
-      const trend5min = String(ind.trend_5min || ind.trend || '').toUpperCase();
-      const trend15min = String(ind.trend_15min || '').toUpperCase();
-      const support = ind.support || 0;
-      const resistance = ind.resistance || 0;
-      const distanceToSupport = support > 0 ? Math.abs((price - support) / price * 100) : 100;
-      const distanceToResistance = resistance > 0 ? Math.abs((resistance - price) / price * 100) : 100;
-      
-      if (trend5min.includes('UP') && trend15min.includes('UP') && distanceToSupport <= 2) {
-        buyCount++;
-        totalConfidenceSum += 95; // STRONG BUY setup
-      } else if (trend5min.includes('DOWN') && trend15min.includes('DOWN') && distanceToResistance <= 2) {
-        sellCount++;
-        totalConfidenceSum += 95; // STRONG SELL setup
-      } else if (trend5min.includes('UP')) {
-        buyCount++;
-        totalConfidenceSum += 70;
-      } else if (trend5min.includes('DOWN')) {
-        sellCount++;
-        totalConfidenceSum += 70;
+    const one = (symbol: 'NIFTY' | 'BANKNIFTY' | 'SENSEX') => {
+      const outlook = serverOutlook?.[symbol] || {};
+      const tick = marketData[symbol];
+
+      let buyPercent = clamp(Number(outlook.buy_signals ?? 50), 0, 100);
+      let sellPercent = clamp(Number(outlook.sell_signals ?? 50), 0, 100);
+      const sum = buyPercent + sellPercent;
+      if (sum > 0) {
+        buyPercent = Math.round((buyPercent / sum) * 100);
+        sellPercent = 100 - buyPercent;
       } else {
-        neutralCount++;
-        totalConfidenceSum += 50;
+        buyPercent = 50;
+        sellPercent = 50;
       }
 
-      // ═══════════════════════════════════════════════════════════════
-      // SECTION 2: Smart Money • Order Logic
-      // ═══════════════════════════════════════════════════════════════
-      sectionCount++;
-      const bosBullish = ind.bos_bullish === true;
-      const bosBearish = ind.bos_bearish === true;
-      const fvgBullish = ind.fvg_bullish === true;
-      const fvgBearish = ind.fvg_bearish === true;
-      const orderBlockBull = Number(ind.order_block_bullish || 0);
-      const orderBlockBear = Number(ind.order_block_bearish || 0);
-      const smFlowStrength = Number(ind.order_flow_strength || 50);
-
-      const smBullish = bosBullish || fvgBullish || (orderBlockBull > 0 && price > orderBlockBull);
-      const smBearish = bosBearish || fvgBearish || (orderBlockBear > 0 && price < orderBlockBear);
-      if (smBullish && !smBearish) {
-        buyCount++;
-        totalConfidenceSum += Math.min(90, 50 + smFlowStrength * 0.4);
-      } else if (smBearish && !smBullish) {
-        sellCount++;
-        totalConfidenceSum += Math.min(90, 50 + (100 - smFlowStrength) * 0.4);
-      } else {
-        neutralCount++;
-        totalConfidenceSum += 50;
+      const tickChangePct = Number(tick?.changePercent || 0);
+      const impulse = clamp(Math.round(Math.abs(tickChangePct) * 22), 0, 18);
+      if (tickChangePct >= 0.25) {
+        buyPercent = clamp(buyPercent + impulse, 0, 100);
+        sellPercent = 100 - buyPercent;
+      } else if (tickChangePct <= -0.25) {
+        sellPercent = clamp(sellPercent + impulse, 0, 100);
+        buyPercent = 100 - sellPercent;
       }
 
-      // ═══════════════════════════════════════════════════════════════
-      // SECTION 3: Intraday Technical Analysis (AI Signals + VWAP + EMA)
-      // ═══════════════════════════════════════════════════════════════
+      let signal = normalizeSignal(outlook.signal);
+      if (tickChangePct <= -0.35 && (signal === 'STRONG_BUY' || signal === 'BUY')) signal = 'NEUTRAL';
+      if (tickChangePct >= 0.35 && (signal === 'STRONG_SELL' || signal === 'SELL')) signal = 'NEUTRAL';
 
-      // ═══════════════════════════════════════════════════════════════
-      // SECTION 3: ICT Smart Money Intelligence
-      // Order Blocks · Fair Value Gaps · Market Structure · Liquidity Sweeps
-      // Sourced from dedicated ICT engine (own WebSocket + API).
-      // ═══════════════════════════════════════════════════════════════
-      sectionCount++;
-      if (ictIndex) {
-        const ictConf = Math.max(1, Math.min(99, ictIndex.confidence));
-        if (ictIndex.direction === 'BULLISH') {
-          buyCount++;
-          totalConfidenceSum += ictConf;
-        } else if (ictIndex.direction === 'BEARISH') {
-          sellCount++;
-          totalConfidenceSum += ictConf;
-        } else {
-          neutralCount++;
-          totalConfidenceSum += ictConf;
-        }
-      } else {
-        neutralCount++;
-        totalConfidenceSum += 50;
-      }
+      const predSignal = normalizeSignal(outlook.prediction_5m_signal);
+      const pred5mConf = clamp(Math.round(Number(outlook.prediction_5m_confidence ?? 50)), 1, 99);
+      const predFromOF = Number(outlook.order_flow_buy_pct);
+      let pred5mBuyPct = Number.isFinite(predFromOF)
+        ? clamp(Math.round(predFromOF), 0, 100)
+        : predSignal === 'STRONG_BUY'
+        ? 78
+        : predSignal === 'BUY'
+        ? 64
+        : predSignal === 'STRONG_SELL'
+        ? 22
+        : predSignal === 'SELL'
+        ? 36
+        : 50;
 
-      // ═══════════════════════════════════════════════════════════════
-      // SECTION 5: Volume Pulse (Candle Volume Analysis)
-      // Backend field: buy_volume_ratio (0-100 %) — not buy_volume
-      // ═══════════════════════════════════════════════════════════════
-      sectionCount++;
-      // buy_volume_ratio is already a percentage (0-100) from instant_analysis
-      const buyVolumeRatio = Number(ind.buy_volume_ratio ?? 50);
+      if (tickChangePct >= 0.2) pred5mBuyPct = clamp(pred5mBuyPct + Math.round(impulse * 0.5), 0, 100);
+      if (tickChangePct <= -0.2) pred5mBuyPct = clamp(pred5mBuyPct - Math.round(impulse * 0.5), 0, 100);
 
-      if (buyVolumeRatio > 65) {
-        buyCount++; // Strong buying pressure
-        totalConfidenceSum += Math.min(95, 50 + (buyVolumeRatio - 50) * 0.9);
-      } else if (buyVolumeRatio > 55) {
-        buyCount++; // Moderate buying pressure
-        totalConfidenceSum += 68;
-      } else if (buyVolumeRatio < 35) {
-        sellCount++; // Strong selling pressure
-        totalConfidenceSum += Math.min(95, 50 + (50 - buyVolumeRatio) * 0.9);
-      } else if (buyVolumeRatio < 45) {
-        sellCount++; // Moderate selling pressure
-        totalConfidenceSum += 68;
-      } else {
-        neutralCount++;
-        totalConfidenceSum += 50;
-      }
+      const pred5mDir =
+        pred5mBuyPct >= 58
+          ? 'UP'
+          : pred5mBuyPct <= 42
+          ? 'DOWN'
+          : String(outlook.prediction_5m_direction || 'FLAT').toUpperCase() === 'UP' || String(outlook.prediction_5m_direction || 'FLAT').toUpperCase() === 'DOWN'
+          ? String(outlook.prediction_5m_direction || 'FLAT').toUpperCase()
+          : 'FLAT';
 
-      // ═══════════════════════════════════════════════════════════════
-      // SECTION 6: Trend Base (Higher-Low Structure)
-      // ═══════════════════════════════════════════════════════════════
-      sectionCount++;
-      const marketStructure = String(ind.market_structure || '').toUpperCase();
-      const swingPattern = String(ind.swing_pattern || '').toUpperCase();
-      const structureConfidence = ind.structure_confidence || 60;
-      
-      if (marketStructure.includes('HIGHER_HIGH') || swingPattern.includes('HIGHER_LOW')) {
-        buyCount++; // Bullish structure
-        totalConfidenceSum += structureConfidence;
-      } else if (marketStructure.includes('LOWER_LOW') || swingPattern.includes('LOWER_HIGH')) {
-        sellCount++; // Bearish structure
-        totalConfidenceSum += structureConfidence;
-      } else {
-        neutralCount++;
-        totalConfidenceSum += 50;
-      }
+      const sectionCount = Number(outlook.section_count || outlook.total_signals || 12) || 12;
+      const totalConfidence = clamp(
+        Math.round(Number(outlook.confidence ?? 50) * 0.65 + pred5mConf * 0.35),
+        1,
+        99
+      );
 
-      // ═══════════════════════════════════════════════════════════════
-      // SECTION 7: Pure Liquidity Intelligence (OI / PCR / Options Flow)
-      // Sourced from the dedicated liquidity engine (separate WebSocket).
-      // ═══════════════════════════════════════════════════════════════
-      sectionCount++;
-      if (liquidityIndex) {
-        const liqConf = liquidityIndex.confidence; // 1–99
-        if (liquidityIndex.direction === 'BULLISH') {
-          buyCount++;
-          totalConfidenceSum += liqConf;
-        } else if (liquidityIndex.direction === 'BEARISH') {
-          sellCount++;
-          totalConfidenceSum += liqConf;
-        } else {
-          neutralCount++;
-          totalConfidenceSum += liqConf;
-        }
-      } else {
-        neutralCount++;
-        totalConfidenceSum += 50;
-      }
-
-      // ═══════════════════════════════════════════════════════════════
-      // SECTION 8: Institutional Market Compass
-      // AI-powered VWAP · EMA · Swing · Futures Premium · RSI · Volume
-      // 6-factor weighted direction engine.
-      // ═══════════════════════════════════════════════════════════════
-      sectionCount++;
-      if (compassIndex) {
-        const cmpConf = compassIndex.confidence; // 1–99
-        if (compassIndex.direction === 'BULLISH') {
-          buyCount++;
-          totalConfidenceSum += cmpConf;
-        } else if (compassIndex.direction === 'BEARISH') {
-          sellCount++;
-          totalConfidenceSum += cmpConf;
-        } else {
-          neutralCount++;
-          totalConfidenceSum += cmpConf;
-        }
-      } else {
-        neutralCount++;
-        totalConfidenceSum += 50;
-      }
-
-      // ═══════════════════════════════════════════════════════════════
-      // 5-MIN PREDICTION ENGINE
-      // All 9 UI sections contribute a factor (F1–F9).
-      // ZERO extra API calls — all values already computed above.
-      //   totalConfidence = average certainty of all 9 static signals
-      //   pred5mConf      = certainty of the SHORT-TERM directional move
-      // ═══════════════════════════════════════════════════════════════
-      let p5Buy = 0, p5Sell = 0, p5ConfSum = 0, p5N = 0;
-
-      // ── TIER 1: Fastest-moving real-time signals (weight ×2 / ×1) ──
-
-      // F2 (S5): Volume Pulse — buying/selling pressure right now
-      const f2 = buyVolumeRatio > 60 ? 2 : buyVolumeRatio > 52 ? 1
-               : buyVolumeRatio < 40 ? -2 : buyVolumeRatio < 48 ? -1 : 0;
-      if (f2 > 0) p5Buy += f2; else if (f2 < 0) p5Sell += Math.abs(f2);
-      p5ConfSum += Math.min(90, 40 + Math.abs(buyVolumeRatio - 50) * 1.2); p5N++;
-
-      // F3 (S7): Pure Liquidity 5-min prediction (OI velocity + PCR momentum)
-      if (liquidityIndex) {
-        const lq5m = liquidityIndex.prediction5m;
-        const lq5mConf = liquidityIndex.pred5mConf; // 1–99
-        const lqF = lq5m === 'STRONG_BUY' ? 2 : lq5m === 'BUY' ? 1
-                  : lq5m === 'STRONG_SELL' ? -2 : lq5m === 'SELL' ? -1 : 0;
-        if (lqF > 0) p5Buy += lqF; else if (lqF < 0) p5Sell += Math.abs(lqF);
-        p5ConfSum += lq5mConf; p5N++;
-      }
-
-      // F4 (S8): Institutional Compass 5-min forecast (VWAP · EMA · Futures · RSI)
-      if (compassIndex) {
-        const cp5m = compassIndex.spot.prediction5m;
-        const cp5mConf = compassIndex.spot.prediction5mConf; // 40–92
-        const cpF = cp5m === 'STRONG_BUY' ? 2 : cp5m === 'BUY' ? 1
-                  : cp5m === 'STRONG_SELL' ? -2 : cp5m === 'SELL' ? -1 : 0;
-        if (cpF > 0) p5Buy += cpF; else if (cpF < 0) p5Sell += Math.abs(cpF);
-        p5ConfSum += cp5mConf; p5N++;
-      }
-
-      // F5 (S3): ICT Smart Money 5-min prediction (Order Blocks · FVG · Structure)
-      if (ictIndex) {
-        const ict5m = ictIndex.prediction5m;
-        const ict5mConf = Math.max(20, Math.min(95, ictIndex.pred5mConf));
-        const ictF = ict5m === 'STRONG_BUY' ? 2 : ict5m === 'BUY' ? 1
-                   : ict5m === 'STRONG_SELL' ? -2 : ict5m === 'SELL' ? -1 : 0;
-        if (ictF > 0) p5Buy += ictF; else if (ictF < 0) p5Sell += Math.abs(ictF);
-        p5ConfSum += ict5mConf; p5N++;
-      }
-
-      // ── TIER 2: Structural / slower-moving confirms ──
-
-      // F7 (S1): Trade Zones — trend alignment across 5min + 15min
-      const f7 = trend5min.includes('UP') && trend15min.includes('UP') ? 2
-                : trend5min.includes('UP') ? 1
-                : trend5min.includes('DOWN') && trend15min.includes('DOWN') ? -2
-                : trend5min.includes('DOWN') ? -1 : 0;
-      if (f7 > 0) p5Buy += f7; else if (f7 < 0) p5Sell += Math.abs(f7);
-      p5ConfSum += (trend5min.includes('UP') || trend5min.includes('DOWN')) ? 72 : 48; p5N++;
-
-      // F8 (S2): Smart Money Flow — BOS / FVG institutional positioning
-      const f8 = (smBullish && !smBearish) ? 1 : (!smBullish && smBearish) ? -1 : 0;
-      if (f8 > 0) p5Buy += f8; else if (f8 < 0) p5Sell += Math.abs(f8);
-      p5ConfSum += Math.min(90, 50 + smFlowStrength * 0.4); p5N++;
-
-      // F9 (S6): Trend Base — higher-high / higher-low structure
-      const f9 = marketStructure.includes('HIGHER_HIGH') || swingPattern.includes('HIGHER_LOW') ?  1
-                : marketStructure.includes('LOWER_LOW')   || swingPattern.includes('LOWER_HIGH') ? -1 : 0;
-      if (f9 > 0) p5Buy += f9; else if (f9 < 0) p5Sell += Math.abs(f9);
-      p5ConfSum += f9 !== 0 ? Math.min(85, structureConfidence) : 50; p5N++;
-
-      const p5Total      = p5Buy + p5Sell;
-      const pred5mBuyPct = p5Total > 0 ? Math.round((p5Buy / p5Total) * 100) : 50;
-      const pred5mConf   = p5N > 0 ? Math.round(Math.min(90, Math.max(35, p5ConfSum / p5N))) : 50;
-      const pred5mDir    = pred5mBuyPct >= 58 ? 'UP' : pred5mBuyPct <= 42 ? 'DOWN' : 'FLAT';
-
-      // ═══════════════════════════════════════════════════════════════
-      // FINAL CALCULATION
-      // ═══════════════════════════════════════════════════════════════
-      const totalSignals = buyCount + sellCount + neutralCount;
-      const buyPercent = totalSignals > 0 ? Math.round(((buyCount + neutralCount * 0.5) / totalSignals) * 100) : 50;
-      const sellPercent = 100 - buyPercent;
-      const avgConfidence = sectionCount > 0 ? Math.round(totalConfidenceSum / sectionCount) : 50;
-
-      let signal = 'NEUTRAL';
-      if (buyPercent >= 70) signal = 'STRONG_BUY';
-      else if (buyPercent >= 55) signal = 'BUY';
-      else if (sellPercent >= 70) signal = 'STRONG_SELL';
-      else if (sellPercent >= 55) signal = 'SELL';
-
-      return { buyPercent, sellPercent, totalConfidence: avgConfidence, signal, sectionCount, pred5mConf, pred5mBuyPct, pred5mDir };
+      return { buyPercent, sellPercent, totalConfidence, signal, sectionCount, pred5mConf, pred5mBuyPct, pred5mDir };
     };
 
     return {
-      NIFTY:     calculateAggregatedSignal(analyses?.NIFTY,     marketData.NIFTY,     'NIFTY',     liquidityData.NIFTY     ?? null, compassData.NIFTY     ?? null, ictData.NIFTY     ?? null),
-      BANKNIFTY: calculateAggregatedSignal(analyses?.BANKNIFTY, marketData.BANKNIFTY, 'BANKNIFTY', liquidityData.BANKNIFTY ?? null, compassData.BANKNIFTY ?? null, ictData.BANKNIFTY ?? null),
-      SENSEX:    calculateAggregatedSignal(analyses?.SENSEX,    marketData.SENSEX,    'SENSEX',    liquidityData.SENSEX    ?? null, compassData.SENSEX    ?? null, ictData.SENSEX    ?? null),
+      NIFTY: one('NIFTY'),
+      BANKNIFTY: one('BANKNIFTY'),
+      SENSEX: one('SENSEX'),
     };
-  }, [analyses, marketData, liquidityData, compassData, ictData]);
+  }, [serverOutlook, marketData]);
 
   // Update current time
   useEffect(() => {
@@ -868,7 +647,6 @@ export default function Home() {
             data={marketData.NIFTY}
             isConnected={isConnected}
             aiAlertData={alertData.NIFTY}
-            outlookData={outlookData.NIFTY}
           />
           <IndexCard
             symbol="BANKNIFTY"
@@ -876,7 +654,6 @@ export default function Home() {
             data={marketData.BANKNIFTY}
             isConnected={isConnected}
             aiAlertData={alertData.BANKNIFTY}
-            outlookData={outlookData.BANKNIFTY}
           />
           <IndexCard
             symbol="SENSEX"
@@ -884,7 +661,6 @@ export default function Home() {
             data={marketData.SENSEX}
             isConnected={isConnected}
             aiAlertData={alertData.SENSEX}
-            outlookData={outlookData.SENSEX}
           />
         </div>
         </div>

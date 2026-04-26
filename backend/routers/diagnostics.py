@@ -173,9 +173,11 @@ async def oi_momentum_debug(_admin=Depends(_verify_admin_key)):
                     }
                     results["debug_info"].append(f"⚠️ {symbol}: No market data found in cache")
             except Exception as e:
+                import logging
+                logging.getLogger(__name__).error("Market data fetch error for %s", symbol, exc_info=True)
                 results["market_data"][symbol] = {
                     "data_available": False,
-                    "error": str(e)
+                    "error": "Market data fetch error — check server logs"
                 }
                 results["debug_info"].append(f"❌ {symbol}: Market data fetch error: {e}")
         
@@ -328,11 +330,11 @@ async def oi_momentum_debug(_admin=Depends(_verify_admin_key)):
         return results
     
     except Exception as e:
-        import traceback
+        import logging
+        logging.getLogger(__name__).error("oi-momentum-debug error", exc_info=True)
         return {
             "status": "error",
-            "message": str(e),
-            "traceback": traceback.format_exc()
+            "message": "Internal diagnostics error — check server logs"
         }
 
 @router.get("/connection-health")

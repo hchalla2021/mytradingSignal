@@ -51,7 +51,7 @@ class Settings(BaseSettings):
     host: str = Field(default="0.0.0.0", env="SERVER_HOST")
     port: int = Field(default=8000, env="SERVER_PORT")
     debug: bool = Field(default=False, env="DEBUG")
-    cors_origins: str = Field(default="*", env="CORS_ORIGINS")  # Comma-separated
+    cors_origins: str = Field(default="https://mydailytradesignals.com", env="CORS_ORIGINS")  # Comma-separated; no wildcard in production
     
     # ==================== MARKET HOURS SCHEDULER ====================
     enable_scheduler: bool = Field(default=True, env="ENABLE_SCHEDULER")

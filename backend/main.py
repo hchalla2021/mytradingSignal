@@ -43,11 +43,17 @@ from routers.chart_intelligence import http_router as chart_intel_http, ws_route
 # Windows console fix already applied in config/__init__.py
 
 settings = get_settings()
+logger = logging.getLogger("mytradingsignal")
 
 market_feed: MarketFeedService | None = None
 
-# Rate limiter — applied globally, individual routes can override
-limiter = Limiter(key_func=get_remote_address, default_limits=["60/minute"])
+# Rate limiter — use a dedicated empty config file so slowapi does not
+# re-read backend/.env with platform-default encoding on Windows.
+limiter = Limiter(
+    key_func=get_remote_address,
+    default_limits=["60/minute"],
+    config_filename=".slowapi.env",
+)
 
 
 @asynccontextmanager
@@ -134,80 +140,80 @@ async def lifespan(app: FastAPI):
                 from services.oi_momentum_broadcaster import start_oi_momentum_broadcaster
                 await start_oi_momentum_broadcaster()
                 print("📊 OI Momentum: ON")
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.error("OI Momentum broadcaster failed to start: %s", exc, exc_info=True)
 
         async def start_compass():
             try:
                 from services.compass_service import get_compass_service
                 await get_compass_service().start()
                 print("🧭 Compass: ON")
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.error("Compass service failed to start: %s", exc, exc_info=True)
 
         async def start_liquidity():
             try:
                 from services.liquidity_service import get_liquidity_service
                 await get_liquidity_service().start()
                 print("⚡ Liquidity: ON")
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.error("Liquidity service failed to start: %s", exc, exc_info=True)
 
         async def start_ict():
             try:
                 from services.ict_engine import get_ict_service
                 await get_ict_service().start()
                 print("🏦 ICT: ON")
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.error("ICT engine failed to start: %s", exc, exc_info=True)
 
         async def start_expiry_explosion():
             try:
                 from services.expiry_explosion_service import get_expiry_explosion_service
                 await get_expiry_explosion_service().start()
                 print("💥 Expiry Explosion: ON")
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.error("Expiry Explosion service failed to start: %s", exc, exc_info=True)
 
         async def start_market_edge():
             try:
                 from services.market_edge_service import get_market_edge_service
                 await get_market_edge_service().start()
                 print("📈 MarketEdge: ON")
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.error("MarketEdge service failed to start: %s", exc, exc_info=True)
 
         async def start_candle_intelligence():
             try:
                 from services.candle_intelligence_engine import get_candle_intelligence_service
                 await get_candle_intelligence_service().start()
                 print("🕯️ Candle Intelligence: ON")
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.error("Candle Intelligence service failed to start: %s", exc, exc_info=True)
 
         async def start_market_regime():
             try:
                 from services.market_regime_service import get_market_regime_service
                 await get_market_regime_service().start()
                 print("📊 Market Regime: ON")
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.error("Market Regime service failed to start: %s", exc, exc_info=True)
 
         async def start_strike_intelligence():
             try:
                 from services.strike_intelligence_service import get_strike_intelligence_service
                 await get_strike_intelligence_service().start()
                 print("🎯 Strike Intelligence: ON")
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.error("Strike Intelligence service failed to start: %s", exc, exc_info=True)
 
         async def start_chart_intelligence():
             try:
                 from services.chart_intelligence_service import get_chart_intelligence_service
                 await get_chart_intelligence_service().start()
                 print("📈 Chart Intelligence: ON")
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.error("Chart Intelligence service failed to start: %s", exc, exc_info=True)
 
         await asyncio.gather(
             start_scheduler(),
@@ -390,9 +396,6 @@ async def cors_middleware(request: Request, call_next):
         response.headers["Access-Control-Allow-Credentials"] = "true"
         response.headers["Vary"] = "Origin"
     return response
-
-logger = logging.getLogger("mytradingsignal")
-
 
 # ── Global exception handler — prevents stack trace leaks ────────────
 @app.exception_handler(Exception)

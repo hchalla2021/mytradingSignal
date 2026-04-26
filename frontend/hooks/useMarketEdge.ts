@@ -61,6 +61,7 @@ export interface EdgeIndex {
     iv_rank: EdgeSignalFactor;
     futures_oi: EdgeSignalFactor;
     futures_basis: EdgeSignalFactor;
+    live_price_momentum: EdgeSignalFactor;
   };
   futures: EdgeFutures;
   metrics: EdgeMetrics;

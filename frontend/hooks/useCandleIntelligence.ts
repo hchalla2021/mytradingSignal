@@ -82,6 +82,17 @@ export interface ThreeFactorAlignment {
   market_active?: boolean;
 }
 
+export interface CandleMtfConsensus {
+  bullCount: number;
+  bearCount: number;
+  neutralCount: number;
+  dominant: 'BULLISH' | 'BEARISH' | 'MIXED';
+  aligned: boolean;
+  alignmentPct: number;
+  probabilityBull: number;
+  probabilityBear: number;
+}
+
 export type CandleTimeframe = '3m' | '5m' | '15m';
 
 export interface CandleIntelIndex {
@@ -104,6 +115,8 @@ export interface CandleIntelIndex {
   three_factor?: ThreeFactorAlignment;
   /** Multi-timeframe analysis — each key is a full CandleIntelIndex */
   timeframes?: Record<CandleTimeframe, CandleIntelIndex>;
+  /** Multi-timeframe consensus summary from backend */
+  mtfConsensus?: CandleMtfConsensus;
 }
 
 export interface CandleIntelData {
@@ -150,6 +163,7 @@ const EMPTY: CandleIntelData = { NIFTY: null, BANKNIFTY: null, SENSEX: null };
 export function useCandleIntelligence() {
   const [data, setData] = useState<CandleIntelData>(EMPTY);
   const [isConnected, setIsConnected] = useState(false);
+  const [lastUpdate, setLastUpdate] = useState<string | null>(null);
 
   const wsRef = useRef<WebSocket | null>(null);
   const retryRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -182,6 +196,7 @@ export function useCandleIntelligence() {
       saveToStorage(next);
       return next;
     });
+    setLastUpdate(new Date().toISOString());
   }, []);
 
   const connect = useCallback(() => {
@@ -264,5 +279,5 @@ export function useCandleIntelligence() {
     };
   }, [connect, mergeData]);
 
-  return { data, isConnected };
+  return { data, isConnected, lastUpdate };
 }

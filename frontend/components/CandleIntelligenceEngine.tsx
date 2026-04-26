@@ -56,53 +56,6 @@ function patternDisplayName(name: string): string {
   return name.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
 }
 
-// ── Strength Bar ─────────────────────────────────────────────────────────────
-
-const StrengthBar = memo<{ strength: CandleStrength }>(({ strength }) => {
-  const cfg = STRENGTH_CFG[strength];
-  return (
-    <div className="flex items-center gap-2">
-      <span className="text-xs">{cfg.icon}</span>
-      <div className="flex-1 h-1.5 bg-slate-700/50 rounded-full overflow-hidden">
-        <div className={`h-full ${strength === 'STRONG' ? 'bg-gradient-to-r from-emerald-500 to-emerald-400' : strength === 'MODERATE' ? 'bg-gradient-to-r from-amber-500 to-amber-400' : 'bg-gradient-to-r from-slate-500 to-slate-400'} rounded-full transition-all duration-500 ${cfg.width}`} />
-      </div>
-      <span className={`text-[10px] font-bold ${cfg.color}`}>{cfg.label}</span>
-    </div>
-  );
-});
-StrengthBar.displayName = 'StrengthBar';
-
-// ── Anatomy Breakdown ────────────────────────────────────────────────────────
-
-const AnatomyBreakdown = memo<{ candle: CandleIntelIndex['candle'] }>(({ candle }) => {
-  if (!candle) return null;
-  const rows = [
-    { label: 'Body', value: (candle.body_ratio * 100).toFixed(1) + '%', color: candle.body_ratio > 0.7 ? 'text-emerald-400' : candle.body_ratio > 0.4 ? 'text-amber-400' : 'text-slate-400', pct: candle.body_ratio * 100 },
-    { label: 'Upper Wick', value: (candle.upper_wick_ratio * 100).toFixed(1) + '%', color: candle.upper_wick_ratio > 0.4 ? 'text-red-400' : 'text-slate-400', pct: candle.upper_wick_ratio * 100 },
-    { label: 'Lower Wick', value: (candle.lower_wick_ratio * 100).toFixed(1) + '%', color: candle.lower_wick_ratio > 0.4 ? 'text-emerald-400' : 'text-slate-400', pct: candle.lower_wick_ratio * 100 },
-  ];
-
-  return (
-    <div className="space-y-1.5">
-      {rows.map(r => (
-        <div key={r.label}>
-          <div className="flex justify-between items-center mb-0.5">
-            <span className="text-[9px] text-slate-500">{r.label}</span>
-            <span className={`text-[10px] font-mono font-bold ${r.color}`}>{r.value}</span>
-          </div>
-          <div className="h-1 bg-slate-700/40 rounded-full overflow-hidden">
-            <div
-              className={`h-full rounded-full transition-all duration-500 ${r.pct > 60 ? 'bg-emerald-500' : r.pct > 30 ? 'bg-amber-500' : 'bg-slate-500'}`}
-              style={{ width: `${Math.min(100, r.pct)}%` }}
-            />
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-});
-AnatomyBreakdown.displayName = 'AnatomyBreakdown';
-
 // ── Pattern Badges ───────────────────────────────────────────────────────────
 
 const PatternBadges = memo<{ patterns: CandleIntelIndex['all_patterns']; primary: string | null }>(({ patterns, primary }) => {
@@ -584,8 +537,9 @@ const CandleIntelCard = memo<{ data: CandleIntelIndex | null; name: string }>(({
     if (t.confidence > maxConf) { maxConf = t.confidence; dominantIdx = i; }
   });
 
-  const allAligned = bull === 3 || bear === 3;
-  const majorityDir = bull >= 2 ? 'BULLISH' : bear >= 2 ? 'BEARISH' : 'MIXED';
+  const backendConsensus = data.mtfConsensus;
+  const allAligned = backendConsensus ? backendConsensus.aligned : (bull === 3 || bear === 3);
+  const majorityDir = backendConsensus ? backendConsensus.dominant : (bull >= 2 ? 'BULLISH' : bear >= 2 ? 'BEARISH' : 'MIXED');
   const consensusLabel = allAligned
     ? `ALL ${majorityDir}`
     : bull >= 2
@@ -593,7 +547,7 @@ const CandleIntelCard = memo<{ data: CandleIntelIndex | null; name: string }>(({
       : bear >= 2
         ? '2/3 BEARISH'
         : 'MIXED SIGNALS';
-  const consensusDots = allAligned ? 3 : (bull >= 2 || bear >= 2) ? 2 : 1;
+  const consensusDots = allAligned ? 3 : ((backendConsensus?.alignmentPct ?? 0) >= 67 || bull >= 2 || bear >= 2) ? 2 : 1;
   const consensusDot = majorityDir === 'BULLISH' ? '🟢' : majorityDir === 'BEARISH' ? '🔴' : '🟡';
   const consensusColor = majorityDir === 'BULLISH'
     ? 'text-emerald-300 bg-emerald-500/15 border-emerald-400/40'
@@ -658,8 +612,32 @@ const CandleIntelCard = memo<{ data: CandleIntelIndex | null; name: string }>(({
         <div className="flex items-center gap-1.5">
           <span className="text-[10px]">{Array.from({ length: consensusDots }, () => consensusDot).join('')}</span>
           <span className="text-[10px] font-extrabold">{consensusLabel}</span>
+          {backendConsensus && (
+            <span className="text-[9px] font-mono text-slate-300/80">
+              {backendConsensus.alignmentPct}%
+            </span>
+          )}
         </div>
       </div>
+
+      {backendConsensus && (
+        <div className="rounded-lg bg-slate-800/35 border border-slate-700/25 p-2 mb-3">
+          <div className="flex items-center justify-between mb-1">
+            <span className="text-[9px] text-slate-500 uppercase tracking-wider font-semibold">MTF Probability</span>
+            <span className="text-[9px] text-slate-400">
+              BULL {backendConsensus.bullCount} · BEAR {backendConsensus.bearCount} · N {backendConsensus.neutralCount}
+            </span>
+          </div>
+          <div className="flex h-5 rounded overflow-hidden bg-slate-900/40 border border-slate-700/20">
+            <div className="h-full bg-gradient-to-r from-emerald-600 to-emerald-500 flex items-center justify-center transition-all duration-500" style={{ width: `${backendConsensus.probabilityBull}%` }}>
+              <span className="text-[8px] font-bold text-white px-1 truncate">{backendConsensus.probabilityBull}%↑</span>
+            </div>
+            <div className="h-full bg-gradient-to-l from-red-600 to-red-500 flex items-center justify-center transition-all duration-500" style={{ width: `${backendConsensus.probabilityBear}%` }}>
+              <span className="text-[8px] font-bold text-white px-1 truncate">{backendConsensus.probabilityBear}%↓</span>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ── 3 Timeframe Columns: All Visible Simultaneously ── */}
       <div className="grid grid-cols-3 gap-1.5 sm:gap-2 mb-3">
@@ -697,7 +675,7 @@ CandleIntelCard.displayName = 'CandleIntelCard';
 // ── Main Component ──────────────────────────────────────────────────────────
 
 const CandleIntelligenceEngine = memo(() => {
-  const { data, isConnected } = useCandleIntelligence();
+  const { data, isConnected, lastUpdate } = useCandleIntelligence();
 
   return (
     <div className="mt-6 sm:mt-6 border-2 border-orange-500/30 rounded-2xl p-3 sm:p-4 bg-gradient-to-br from-orange-950/20 via-dark-card/50 to-dark-elevated/40 backdrop-blur-sm shadow-md">
@@ -717,6 +695,12 @@ const CandleIntelligenceEngine = memo(() => {
           rightContent={
             <div className="flex items-center gap-2">
               <span className={`w-2 h-2 rounded-full ${isConnected ? 'bg-emerald-500 shadow-sm shadow-emerald-500' : 'bg-red-500'}`} />
+              <span className={`text-[9px] font-semibold ${isConnected ? 'text-emerald-300' : 'text-slate-400'}`}>
+                {isConnected ? 'LIVE' : 'SYNC'}
+              </span>
+              <span className="text-[9px] text-slate-500">
+                {lastUpdate ? new Date(lastUpdate).toLocaleTimeString('en-IN', { hour12: false }) : '--:--:--'}
+              </span>
             </div>
           }
         />

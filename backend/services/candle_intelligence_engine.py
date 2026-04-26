@@ -29,18 +29,17 @@ SIGNAL OUTPUT:
 """
 
 import asyncio
-import collections
 import json
 import logging
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Deque, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from fastapi import WebSocket
 import pytz
 
-from services.cache import CacheService, _SHARED_CACHE, get_cache
+from services.cache import get_cache
 
 logger = logging.getLogger(__name__)
 IST = pytz.timezone("Asia/Kolkata")
@@ -1213,6 +1212,24 @@ def _empty_3fa() -> Dict[str, Any]:
     }
 
 
+def _signal_to_bias(signal: str) -> int:
+    if signal in ("STRONG_BUY", "BUY"):
+        return 1
+    if signal in ("STRONG_SELL", "SELL"):
+        return -1
+    return 0
+
+
+def _signal_to_strength(signal: str) -> float:
+    return {
+        "STRONG_BUY": 1.0,
+        "BUY": 0.6,
+        "NEUTRAL": 0.0,
+        "SELL": -0.6,
+        "STRONG_SELL": -1.0,
+    }.get(signal, 0.0)
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # SECTION 6 — LIVE SERVICE (reads cache, broadcasts via WebSocket)
 # ──────────────────────────────────────────────────────────────────────────────
@@ -1361,9 +1378,19 @@ class CandleIntelligenceService:
                 # Fast refresh during any active market phase
                 interval = 1.0 if status in ("LIVE", "PRE_OPEN", "FREEZE") else 30.0
 
-                snapshot = {}
-                for sym in self.SYMBOLS:
-                    snapshot[sym] = await self._analyze_symbol_multi_tf(sym, status)
+                results = await asyncio.gather(
+                    *(self._analyze_symbol_multi_tf(sym, status) for sym in self.SYMBOLS),
+                    return_exceptions=True,
+                )
+
+                snapshot: Dict[str, Any] = {}
+                for sym, result in zip(self.SYMBOLS, results):
+                    if isinstance(result, Exception):
+                        logger.debug(f"🕯️ Candle Intel {sym} loop error: {result}")
+                        # Keep previous snapshot for this symbol when available
+                        snapshot[sym] = self._last_snapshot.get(sym) or self._last_good.get(sym) or _empty_result()
+                        continue
+                    snapshot[sym] = result
 
                 self._last_snapshot = snapshot
 
@@ -1526,15 +1553,55 @@ class CandleIntelligenceService:
             "pattern": ..., "signal": ..., etc.
         }
         """
+        tf_tasks = [
+            self._analyze_single_tf(symbol, market_status, cache_prefix, tf_label)
+            for tf_label, cache_prefix in self.TIMEFRAMES
+        ]
+        tf_values = await asyncio.gather(*tf_tasks, return_exceptions=True)
+
         tf_results: Dict[str, Dict] = {}
-        for tf_label, cache_prefix in self.TIMEFRAMES:
-            tf_results[tf_label] = await self._analyze_single_tf(
-                symbol, market_status, cache_prefix, tf_label
-            )
+        for (tf_label, _), tf_result in zip(self.TIMEFRAMES, tf_values):
+            if isinstance(tf_result, Exception):
+                logger.debug(f"🕯️ Candle Intel {symbol}/{tf_label} task error: {tf_result}")
+                fallback = _empty_result()
+                fallback["symbol"] = symbol
+                fallback["timeframe"] = tf_label
+                fallback["dataSource"] = "MARKET_CLOSED"
+                fallback["timestamp"] = datetime.now(IST).isoformat()
+                fallback["price"] = 0
+                fallback["changePct"] = 0
+                tf_results[tf_label] = fallback
+            else:
+                tf_results[tf_label] = tf_result
 
         # Primary = 5m for backward compatibility
         primary = tf_results.get("5m", tf_results.get("3m", _empty_result()))
-        result = {**primary, "timeframes": tf_results}
+        # Multi-timeframe consensus (faster frontend, consistent intelligence contract)
+        signals = [tf_results[k].get("signal", "NEUTRAL") for k in ("3m", "5m", "15m") if k in tf_results]
+        biases = [_signal_to_bias(s) for s in signals]
+        bull_count = sum(1 for b in biases if b > 0)
+        bear_count = sum(1 for b in biases if b < 0)
+        neutral_count = len(biases) - bull_count - bear_count
+        dominant = max(bull_count, bear_count)
+        dominant_dir = "BULLISH" if bull_count >= bear_count else "BEARISH"
+        alignment_pct = int(round((dominant / max(len(biases), 1)) * 100))
+        weighted_raw = sum(_signal_to_strength(s) for s in signals) / max(len(signals), 1)
+        probability_bull = int(max(5, min(95, round((1 / (1 + pow(2.718281828, -weighted_raw * 3.5))) * 100))))
+
+        result = {
+            **primary,
+            "timeframes": tf_results,
+            "mtfConsensus": {
+                "bullCount": bull_count,
+                "bearCount": bear_count,
+                "neutralCount": neutral_count,
+                "dominant": dominant_dir if dominant > 0 else "MIXED",
+                "aligned": dominant == len(biases) and dominant > 0,
+                "alignmentPct": alignment_pct,
+                "probabilityBull": probability_bull,
+                "probabilityBear": 100 - probability_bull,
+            },
+        }
 
         # Track last good result
         if result.get("pattern") or result.get("price", 0) > 0:

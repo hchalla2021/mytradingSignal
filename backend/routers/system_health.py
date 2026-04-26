@@ -1,20 +1,26 @@
-"""
-System Health Status Endpoint
-✅ Exposes all 3 independent state machines
-✅ Auth State (VALID/EXPIRED/REQUIRED)
-✅ Feed State (CONNECTED/STALE/DISCONNECTED)
-✅ Market Session (PRE_OPEN/LIVE/CLOSED)
-"""
-from fastapi import APIRouter
+"""\nSystem Health Status Endpoint\n\u2705 Exposes all 3 independent state machines\n\u2705 Auth State (VALID/EXPIRED/REQUIRED)\n\u2705 Feed State (CONNECTED/STALE/DISCONNECTED)\n\u2705 Market Session (PRE_OPEN/LIVE/CLOSED)\n"""
+from fastapi import APIRouter, Header, HTTPException
 from datetime import datetime
 import pytz
 
+from config import get_settings
 from services.market_session_controller import market_session, MarketPhase
 from services.auth_state_machine import auth_state_manager
 from services.feed_watchdog import feed_watchdog
 
 router = APIRouter()
 IST = pytz.timezone('Asia/Kolkata')
+
+
+def _verify_admin_key(x_admin_key: str = Header(None, alias="X-Admin-Key")):
+    """Verify admin API key for protected health endpoints."""
+    settings = get_settings()
+    expected_key = getattr(settings, 'admin_restart_key', '')
+    if not expected_key or expected_key in ('', 'CHANGE_ME_USE_STRONG_RANDOM_KEY'):
+        raise HTTPException(status_code=503, detail="Admin key not configured")
+    if not x_admin_key or x_admin_key != expected_key:
+        raise HTTPException(status_code=403, detail="Invalid admin key")
+    return True
 
 
 @router.get("/health")
@@ -134,9 +140,15 @@ async def get_market_status():
 
 
 @router.get("/health/auth")
-async def get_auth_status():
-    """Get only auth status"""
-    return auth_state_manager.get_state_info()
+async def get_auth_status(x_admin_key: str = Header(None, alias="X-Admin-Key")):
+    """Get auth status — admin protected to prevent timing attacks"""
+    _verify_admin_key(x_admin_key)
+    state = auth_state_manager.get_state_info()
+    # Strip sensitive timing fields before returning
+    state.pop('token_age_hours', None)
+    state.pop('last_success', None)
+    state.pop('consecutive_failures', None)
+    return state
 
 
 @router.get("/health/feed")
@@ -146,8 +158,9 @@ async def get_feed_status():
 
 
 @router.post("/health/auth/verify")
-async def verify_token():
-    """Verify token with actual Zerodha API call"""
+async def verify_token(x_admin_key: str = Header(None, alias="X-Admin-Key")):
+    """Verify token with actual Zerodha API call — admin protected"""
+    _verify_admin_key(x_admin_key)
     is_valid, error = await auth_state_manager.verify_token_with_api()
     
     return {

@@ -17,6 +17,8 @@ export interface StrikeSubSignals {
   delta: number;
   /** Trap: high volume but price not moving in that direction = absorption */
   trap: boolean;
+  /** OI Change interpretation: LB=Long Buildup, SB=Short Buildup, SC=Short Covering, LU=Long Unwinding */
+  oiInterp?: 'LB' | 'SB' | 'SC' | 'LU' | null;
 }
 
 export interface StrikeSideData {
@@ -28,10 +30,12 @@ export interface StrikeSideData {
     neutralPct: number;
   };
   oi: number;
+  /** OI change since the previous 5-second fetch (+ = buildup, − = unwinding) */
+  oiChange?: number;
   volume: number;
   price: number;
   change: number;
-  /** Advanced sub-signal indicators (BSL/SSL, BOS, Delta, Trap) */
+  /** Advanced sub-signal indicators (BSL/SSL, BOS, Delta, Trap, OI Interp) */
   signals?: StrikeSubSignals;
 }
 
@@ -43,6 +47,35 @@ export interface StrikeRow {
   pe: StrikeSideData;
 }
 
+export interface StrikeKeyLevels {
+  support: number | null;
+  resistance: number | null;
+  supportGapPct?: number | null;
+  resistanceGapPct?: number | null;
+}
+
+export interface SymbolIntelligenceSummary {
+  symbol: string;
+  signal: StrikeSignal;
+  score: number;
+  confidence: number;
+  regime: 'TRENDING' | 'RANGE' | 'TRANSITION' | 'TRAP_ZONE' | 'NO_DATA';
+  agreementPct: number;
+  bullPressure: number;
+  bearPressure: number;
+  trapRiskPct: number;
+  actionability?: 'HIGH' | 'MEDIUM' | 'LOW' | 'NONE';
+  confidenceReason?: string;
+  /** Put-Call OI ratio (PE OI ÷ CE OI). >1.2 = bullish bias, <0.8 = bearish bias */
+  pcr?: number;
+  /** Max Pain strike — where option buyers collectively lose most at expiry */
+  maxPain?: number | null;
+  /** % gap from current spot to max pain strike (+ = max pain above spot) */
+  maxPainGapPct?: number | null;
+  keyLevels: StrikeKeyLevels;
+  insights: string[];
+}
+
 export interface SymbolStrikeData {
   symbol: string;
   spot: number;
@@ -51,6 +84,7 @@ export interface SymbolStrikeData {
   expiry: string;
   strikeCount: number;
   strikes: StrikeRow[];
+  intelligence?: SymbolIntelligenceSummary;
   dataSource: StrikeDataSource;
   timestamp: string;
   spotUpdatedAt?: string;
@@ -180,12 +214,14 @@ export function useStrikeIntelligence() {
           const incoming = raw[sym];
           const existing = prev[sym];
           // Skip only if timestamp AND spot AND atm are all unchanged — avoids blocking
-          // 1s spot-updated broadcasts that don't change OI/vol but DO update ATM/signals
+          // 1s spot-updated broadcasts that don't change OI/vol but DO update ATM/signals.
+          // Include dataSource so semantic upgrades like MARKET_CLOSED -> LAST_CLOSE reach the UI.
           if (
             existing &&
             existing.timestamp === incoming.timestamp &&
             existing.spot === incoming.spot &&
-            existing.atm === incoming.atm
+            existing.atm === incoming.atm &&
+            existing.dataSource === incoming.dataSource
           ) continue;
           next[sym] = typeof structuredClone === 'function'
             ? structuredClone(incoming)

@@ -1,5 +1,5 @@
 """Authentication service with JWT tokens."""
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional, Dict, Any
 from jose import JWTError, jwt
 from pydantic import BaseModel
@@ -23,7 +23,7 @@ class AuthService:
     def create_access_token(data: Dict[str, Any], expires_delta: Optional[timedelta] = None) -> str:
         """Create a new access token."""
         to_encode = data.copy()
-        expire = datetime.utcnow() + (expires_delta or timedelta(minutes=settings.access_token_expire_minutes))
+        expire = datetime.now(timezone.utc) + (expires_delta or timedelta(minutes=settings.access_token_expire_minutes))
         to_encode.update({
             "exp": expire,
             "type": "access"
@@ -34,7 +34,7 @@ class AuthService:
     def create_refresh_token(data: Dict[str, Any]) -> str:
         """Create a new refresh token (longer expiry)."""
         to_encode = data.copy()
-        expire = datetime.utcnow() + timedelta(days=7)
+        expire = datetime.now(timezone.utc) + timedelta(days=7)
         to_encode.update({
             "exp": expire,
             "type": "refresh"
@@ -53,7 +53,7 @@ class AuthService:
     @staticmethod
     def get_zerodha_login_url() -> str:
         """Get Zerodha login URL for OAuth."""
-        return f"https://kite.zerodha.com/connect/login?v=3&api_key={settings.zerodha_api_key}"
+        return f"{settings.zerodha_api_base_url}/connect/login?v=3&api_key={settings.zerodha_api_key}"
 
 
 auth_service = AuthService()
