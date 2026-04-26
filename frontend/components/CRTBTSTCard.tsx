@@ -199,6 +199,7 @@ LevelRow.displayName = 'LevelRow';
 
 const CRTBTSTCard = memo<CRTBTSTCardProps>(({ symbol, name, data }) => {
   const [showKeyCrtLevels, setShowKeyCrtLevels] = useState(false);
+  const [showCrt8Factor, setShowCrt8Factor] = useState(false);
   const { analysis, isLive, fromCache, loading, flash, factorSummary } = useCRTBTSTRealtime(symbol, data);
 
   // ── Loading State ─────────────────────────────────────────────────
@@ -330,7 +331,11 @@ const CRTBTSTCard = memo<CRTBTSTCardProps>(({ symbol, name, data }) => {
 
         {/* ── 8-Factor CRT Scores ──────────────────────────────────────── */}
         <div>
-          <div className="flex items-center justify-between mb-1.5">
+          <button
+            type="button"
+            onClick={() => setShowCrt8Factor(v => !v)}
+            className="w-full flex items-center justify-between text-left mb-1.5"
+          >
             <p className="text-[9px] text-slate-500 font-semibold tracking-widest uppercase">CRT 8-Factor Analysis</p>
             <div className="flex items-center gap-1.5 text-[9px]">
               <span className="text-emerald-400 font-bold">↑{factorSummary.bullish}</span>
@@ -338,8 +343,10 @@ const CRTBTSTCard = memo<CRTBTSTCardProps>(({ symbol, name, data }) => {
               <span className="text-red-400 font-bold">↓{factorSummary.bearish}</span>
               <span className="text-slate-500">•</span>
               <span className="text-slate-400 font-bold">—{factorSummary.neutral}</span>
+              <span className="text-[10px] text-slate-500 ml-1">{showCrt8Factor ? 'Hide' : 'Show'}</span>
             </div>
-          </div>
+          </button>
+          {showCrt8Factor && (
           <div className="grid grid-cols-2 gap-1.5">
             <FactorRow icon="📐" label="Range Expansion" score={factors.rangeExpansion.score} maxScore={10} description={factors.rangeExpansion.label} />
             <FactorRow icon="🔍" label="PDH/PDL Sweep" score={factors.sweepDetection.score} maxScore={10} description={factors.sweepDetection.label} />
@@ -350,6 +357,7 @@ const CRTBTSTCard = memo<CRTBTSTCardProps>(({ symbol, name, data }) => {
             <FactorRow icon="↩️" label="Range Reclaim" score={factors.rangeReclaim.score} maxScore={8} description={factors.rangeReclaim.label} />
             <FactorRow icon="📈" label="Trend Alignment" score={factors.trendAlignment.score} maxScore={8} description={factors.trendAlignment.label} />
           </div>
+          )}
         </div>
 
         {/* ── Composite Score Bar ───────────────────────────────────────── */}

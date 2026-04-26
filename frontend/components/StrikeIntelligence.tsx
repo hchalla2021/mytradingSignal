@@ -111,13 +111,13 @@ const SideCell = memo<{ side: StrikeSideData; label: 'CE' | 'PE'; volDominant: b
   const sigs = side.signals;
 
   return (
-    <div className={`flex flex-col gap-1 px-1.5 py-1.5 rounded-lg transition-all duration-300 ${signalBg} ${border} ${dominantRing}`}>
+    <div className={`flex flex-col gap-1 px-1 py-1 sm:px-1.5 sm:py-1.5 rounded-lg transition-all duration-300 min-w-0 overflow-hidden ${signalBg} ${border} ${dominantRing}`}>
       {/* Price + signal */}
-      <div className={`flex items-center ${isCE ? 'flex-row' : 'flex-row-reverse'} justify-between gap-1`}>
+      <div className={`flex items-center ${isCE ? 'flex-row' : 'flex-row-reverse'} justify-between gap-0.5 min-w-0`}>
         <SignalBadge signal={side.signal} side={label} />
-        <div className={`flex items-center gap-0.5 ${isCE ? 'text-right' : 'text-left'}`}>
-          <span className="text-[11px] sm:text-[12px] font-mono font-semibold text-slate-200">{side.price.toFixed(2)}</span>
-          <span className={`text-[9px] font-mono ${changeColor} font-bold`}>{changeIcon}{Math.abs(side.change).toFixed(1)}</span>
+        <div className={`flex items-center gap-0.5 min-w-0 flex-1 overflow-hidden ${isCE ? 'justify-end' : 'justify-start'}`}>
+          <span className="text-[10px] sm:text-[12px] font-mono font-semibold text-slate-200 truncate">{side.price.toFixed(1)}</span>
+          <span className={`text-[8px] font-mono ${changeColor} font-bold shrink-0`}>{changeIcon}{Math.abs(side.change).toFixed(1)}</span>
         </div>
       </div>
 
@@ -125,17 +125,17 @@ const SideCell = memo<{ side: StrikeSideData; label: 'CE' | 'PE'; volDominant: b
       <LiquidityBar buyPct={side.breakdown.buyPct} sellPct={side.breakdown.sellPct} neutralPct={side.breakdown.neutralPct} />
 
       {/* Volume + OI */}
-      <div className={`flex gap-1 text-[9px] sm:text-[10px] font-mono ${isCE ? 'flex-row' : 'flex-row-reverse'}`}>
-        <span title="Volume" className={`px-1 py-0.5 rounded font-semibold transition-all duration-300 ${volDominant ? (isCE ? 'text-emerald-300 bg-emerald-500/10 border border-emerald-400/40' : 'text-rose-300 bg-rose-500/10 border border-rose-400/40') : 'text-slate-500'}`}>
+      <div className={`flex gap-0.5 sm:gap-1 text-[8px] sm:text-[10px] font-mono min-w-0 overflow-hidden ${isCE ? 'flex-row' : 'flex-row-reverse'}`}>
+        <span title="Volume" className={`px-0.5 sm:px-1 py-0.5 rounded font-semibold truncate transition-all duration-300 ${volDominant ? (isCE ? 'text-emerald-300 bg-emerald-500/10 border border-emerald-400/40' : 'text-rose-300 bg-rose-500/10 border border-rose-400/40') : 'text-slate-500'}`}>
           V {fmtNum(side.volume)}
         </span>
-        <span title="Open Interest" className={`px-1 py-0.5 rounded font-semibold transition-all duration-300 ${oiDominant ? (isCE ? 'text-cyan-300 bg-cyan-500/10 border border-cyan-400/40' : 'text-orange-300 bg-orange-500/10 border border-orange-400/40') : 'text-slate-500'}`}>
+        <span title="Open Interest" className={`px-0.5 sm:px-1 py-0.5 rounded font-semibold truncate transition-all duration-300 ${oiDominant ? (isCE ? 'text-cyan-300 bg-cyan-500/10 border border-cyan-400/40' : 'text-orange-300 bg-orange-500/10 border border-orange-400/40') : 'text-slate-500'}`}>
           OI {fmtNum(side.oi)}
         </span>
       </div>
 
       {/* B/N/S pills */}
-      <div className={`flex items-center gap-0.5 ${isCE ? 'flex-row' : 'flex-row-reverse'}`}>
+      <div className={`flex items-center gap-0.5 flex-wrap min-w-0 overflow-hidden ${isCE ? 'flex-row' : 'flex-row-reverse'}`}>
         <span className="inline-flex items-center gap-0.5 px-1 py-0 rounded bg-emerald-500/10 text-emerald-400 text-[8px] font-bold border border-emerald-500/20">{Math.round(side.breakdown.buyPct)}%<span className="text-emerald-300">B</span></span>
         {Math.round(side.breakdown.neutralPct) > 0 && (
           <span className="inline-flex items-center gap-0.5 px-1 py-0 rounded bg-amber-500/10 text-amber-400 text-[8px] font-bold border border-amber-500/20">{Math.round(side.breakdown.neutralPct)}%<span className="text-amber-300">N</span></span>
@@ -145,7 +145,7 @@ const SideCell = memo<{ side: StrikeSideData; label: 'CE' | 'PE'; volDominant: b
 
       {/* Smart-money tags */}
       {sigs && (sigs.liq || sigs.bos || sigs.trap || sigs.delta !== undefined) && (
-        <div className={`flex flex-wrap items-center gap-0.5 ${isCE ? 'flex-row' : 'flex-row-reverse'}`}>
+        <div className={`flex flex-wrap items-center gap-0.5 min-w-0 overflow-hidden ${isCE ? 'flex-row' : 'flex-row-reverse'}`}>
           {sigs.liq && (
             <span title={sigs.liq === 'BSL' ? 'Buy-Side Liquidity: call wall above = institutional resistance' : 'Sell-Side Liquidity: put wall below = institutional support'} className={`text-[8px] font-bold px-1 py-0 rounded leading-tight ${sigs.liq === 'BSL' ? 'bg-cyan-500/15 text-cyan-300 border border-cyan-400/40' : 'bg-orange-500/15 text-orange-300 border border-orange-400/40'}`}>{sigs.liq}</span>
           )}
@@ -156,7 +156,7 @@ const SideCell = memo<{ side: StrikeSideData; label: 'CE' | 'PE'; volDominant: b
             <span title="Trap warning: high volume but price not moving (possible institutional absorption)" className="text-[8px] font-bold px-1 py-0 rounded leading-tight bg-amber-500/20 text-amber-300 border border-amber-400/50 animate-pulse">TRAP</span>
           )}
           {sigs.delta !== undefined && (
-            <span title={`Delta ${sigs.delta.toFixed(2)} | ITM ~ 0.9 | ATM ~ 0.5 | OTM ~ 0.1`} className={`text-[8px] font-mono px-1 py-0 rounded leading-tight ${sigs.delta >= 0.65 ? 'bg-indigo-500/15 text-indigo-300 border border-indigo-400/30' : sigs.delta <= 0.35 ? 'bg-slate-700/60 text-slate-500 border border-slate-600/30' : 'bg-slate-700/40 text-slate-400 border border-slate-600/20'}`}>DELTA {sigs.delta.toFixed(2)}</span>
+            <span title={`Delta ${sigs.delta.toFixed(2)} | ITM ~ 0.9 | ATM ~ 0.5 | OTM ~ 0.1`} className={`hidden sm:inline text-[8px] font-mono px-1 py-0 rounded leading-tight ${sigs.delta >= 0.65 ? 'bg-indigo-500/15 text-indigo-300 border border-indigo-400/30' : sigs.delta <= 0.35 ? 'bg-slate-700/60 text-slate-500 border border-slate-600/30' : 'bg-slate-700/40 text-slate-400 border border-slate-600/20'}`}>DELTA {sigs.delta.toFixed(2)}</span>
           )}
           {sigs.oiInterp && side.oiChange !== undefined && side.oiChange !== 0 && (
             <span
@@ -205,7 +205,7 @@ const StrikeRowComponent = memo<{ row: StrikeRow; maxVol: number; maxOI: number 
     volIntensity > 0.7 ? (row.ce.volume > row.pe.volume ? 'bg-emerald-500/[0.04]' : 'bg-red-500/[0.04]') : '';
 
   return (
-    <div className={`grid grid-cols-[1fr_72px_1fr] sm:grid-cols-[1fr_84px_1fr] items-stretch gap-0 rounded-lg overflow-hidden ${rowBg} ${rowBorder} ${isATM ? 'ring-2 ring-cyan-300/45 shadow-md shadow-cyan-400/20' : ''} hover:bg-white/[0.025] transition-colors duration-150`}>
+    <div className={`grid grid-cols-[1fr_60px_1fr] sm:grid-cols-[1fr_84px_1fr] items-stretch gap-0 rounded-lg overflow-hidden ${rowBg} ${rowBorder} ${isATM ? 'ring-2 ring-cyan-300/45 shadow-md shadow-cyan-400/20' : ''} hover:bg-white/[0.025] transition-colors duration-150`}>
       <SideCell side={row.ce} label="CE" volDominant={row.ce.volume > row.pe.volume} oiDominant={row.ce.oi > row.pe.oi} isATM={isATM} />
 
       {/* Strike center */}
@@ -465,7 +465,7 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
       </div>
 
       {/* Strike table header */}
-      <div className="grid grid-cols-[1fr_72px_1fr] sm:grid-cols-[1fr_84px_1fr] rounded-t-lg overflow-hidden border border-slate-700/50 mb-0">
+      <div className="grid grid-cols-[1fr_60px_1fr] sm:grid-cols-[1fr_84px_1fr] rounded-t-lg overflow-hidden border border-slate-700/50 mb-0">
         <div className="flex items-center gap-1.5 px-2 py-1.5 bg-emerald-500/10 border-r border-slate-700/50">
           <span className="w-2 h-2 rounded-full bg-emerald-400 inline-block" />
           <span className="text-[10px] font-black tracking-widest uppercase text-emerald-300">CALL (CE)</span>
@@ -486,7 +486,7 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
       </div>
 
       {/* Sub-header */}
-      <div className="grid grid-cols-[1fr_72px_1fr] sm:grid-cols-[1fr_84px_1fr] border-x border-b border-slate-700/40 bg-slate-900/40 mb-1">
+      <div className="grid grid-cols-[1fr_60px_1fr] sm:grid-cols-[1fr_84px_1fr] border-x border-b border-slate-700/40 bg-slate-900/40 mb-1">
         <div className="flex items-center gap-2 px-2 py-0.5 text-[8px] text-slate-500 border-r border-slate-700/30">
           <span>Signal | Price</span><span className="ml-auto hidden sm:inline">V | OI | B/S%</span>
         </div>
