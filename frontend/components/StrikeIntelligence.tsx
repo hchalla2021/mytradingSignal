@@ -491,7 +491,7 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
           <span>Signal | Price</span><span className="ml-auto hidden sm:inline">V | OI | B/S%</span>
         </div>
         <div className="flex items-center justify-center px-1 py-0.5 border-r border-slate-700/30">
-          <span className="text-[7px] text-slate-600">Vol -> OI</span>
+          <span className="text-[7px] text-slate-600">Vol {'->'} OI</span>
         </div>
         <div className="flex items-center gap-2 px-2 py-0.5 text-[8px] text-slate-500 flex-row-reverse">
           <span>Signal | Price</span><span className="mr-auto hidden sm:inline">V | OI | B/S%</span>
