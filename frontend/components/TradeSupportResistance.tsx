@@ -11,7 +11,7 @@
 
 'use client';
 
-import React, { useMemo, useRef, useEffect } from 'react';
+import React, { useMemo, useRef, useEffect, useState } from 'react';
 
 interface TradeSupportResistanceProps {
   symbol: string;
@@ -59,6 +59,7 @@ export const TradeSupportResistance: React.FC<TradeSupportResistanceProps> = ({
   analysis,
   marketStatus = 'CLOSED',
 }) => {
+  const [showFactorBreakdown, setShowFactorBreakdown] = useState(false);
 
   // ── Core computation ─────────────────────────────────────────────
   const sig = useMemo(() => {
@@ -807,10 +808,17 @@ export const TradeSupportResistance: React.FC<TradeSupportResistanceProps> = ({
           );
         })()}
 
-        {/* Factor rows */}
+        {/* Factor rows (collapsed by default) */}
         <div className="space-y-1 border-t border-gray-700/20 pt-2">
-          <p className="text-[9px] font-bold text-gray-600 uppercase tracking-wide">Factor Breakdown</p>
-          {factors.map(f => {
+          <button
+            type="button"
+            onClick={() => setShowFactorBreakdown(v => !v)}
+            className="w-full flex items-center justify-between text-left"
+          >
+            <p className="text-[9px] font-bold text-gray-600 uppercase tracking-wide">Factor Breakdown</p>
+            <span className="text-[10px] text-gray-500">{showFactorBreakdown ? 'Hide' : 'Show'}</span>
+          </button>
+          {showFactorBreakdown && factors.map(f => {
             const pct = Math.abs(f.value) / f.max * 100;
             const isBull = f.value > 0;
             const isBear = f.value < 0;

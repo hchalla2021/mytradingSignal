@@ -359,7 +359,7 @@ const FACTOR_ORDER = [
 ] as const;
 
 const IndexCompassCard = memo(({ data }: IndexCardProps) => {
-  const [showBreakdown, setShowBreakdown] = useState(true);
+  const [showBreakdown, setShowBreakdown] = useState(false);
   const pal = getPalette(data.direction);
 
   // ── Change-detection refs ──────────────────────────────────────────

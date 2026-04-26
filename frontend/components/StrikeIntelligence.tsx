@@ -3,7 +3,7 @@
 import React, { memo, useMemo } from 'react';
 import { useStrikeIntelligence, type SymbolStrikeData, type StrikeRow, type StrikeSignal, type StrikeSideData } from '@/hooks/useStrikeIntelligence';
 
-// â”€â”€ Signal config â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// Signal config
 
 const SIGNAL_CONFIG: Record<StrikeSignal, {
   label: string;
@@ -23,14 +23,14 @@ const SIGNAL_CONFIG: Record<StrikeSignal, {
 type OverallSignal = StrikeSignal;
 
 const OVERALL_CFG: Record<OverallSignal, { label: string; color: string; bg: string; border: string; glow: string; arrow: string }> = {
-  STRONG_BUY:  { label: 'STRONG BUY',  color: 'text-emerald-200', bg: 'bg-emerald-500/25', border: 'border-emerald-400/70', glow: 'shadow-[0_0_12px_2px_rgba(52,211,153,0.35)]',   arrow: 'â–²â–²' },
-  BUY:         { label: 'BUY',          color: 'text-emerald-300', bg: 'bg-emerald-500/15', border: 'border-emerald-400/40', glow: 'shadow-[0_0_8px_0px_rgba(52,211,153,0.20)]',    arrow: 'â–²'  },
-  NEUTRAL:     { label: 'NEUTRAL',      color: 'text-amber-300',   bg: 'bg-amber-500/15',   border: 'border-amber-400/40',   glow: '',                                              arrow: 'â—†'  },
-  SELL:        { label: 'SELL',         color: 'text-red-300',     bg: 'bg-red-500/15',     border: 'border-red-400/40',     glow: 'shadow-[0_0_8px_0px_rgba(251,113,133,0.20)]',   arrow: 'â–¼'  },
-  STRONG_SELL: { label: 'STRONG SELL',  color: 'text-red-200',     bg: 'bg-red-500/25',     border: 'border-red-400/70',     glow: 'shadow-[0_0_12px_2px_rgba(251,113,133,0.35)]',  arrow: 'â–¼â–¼' },
+  STRONG_BUY:  { label: 'STRONG BUY',  color: 'text-emerald-200', bg: 'bg-emerald-500/25', border: 'border-emerald-400/70', glow: 'shadow-[0_0_12px_2px_rgba(52,211,153,0.35)]',   arrow: 'UP++' },
+  BUY:         { label: 'BUY',          color: 'text-emerald-300', bg: 'bg-emerald-500/15', border: 'border-emerald-400/40', glow: 'shadow-[0_0_8px_0px_rgba(52,211,153,0.20)]',    arrow: 'UP'   },
+  NEUTRAL:     { label: 'NEUTRAL',      color: 'text-amber-300',   bg: 'bg-amber-500/15',   border: 'border-amber-400/40',   glow: '',                                              arrow: 'FLAT' },
+  SELL:        { label: 'SELL',         color: 'text-red-300',     bg: 'bg-red-500/15',     border: 'border-red-400/40',     glow: 'shadow-[0_0_8px_0px_rgba(251,113,133,0.20)]',   arrow: 'DOWN' },
+  STRONG_SELL: { label: 'STRONG SELL',  color: 'text-red-200',     bg: 'bg-red-500/25',     border: 'border-red-400/70',     glow: 'shadow-[0_0_12px_2px_rgba(251,113,133,0.35)]',  arrow: 'DOWN--' },
 };
 
-// â”€â”€ Utilities â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// Utilities
 
 function fmtNum(n: number): string {
   if (n >= 10_000_000) return (n / 10_000_000).toFixed(2) + 'Cr';
@@ -53,7 +53,7 @@ function fmtTs(ts?: string): string {
   return d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
 }
 
-// â”€â”€ Primitives â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// Primitives
 
 const SignalBadge = memo<{ signal: StrikeSignal; side: 'CE' | 'PE' }>(({ signal, side }) => {
   const cfg = SIGNAL_CONFIG[signal];
@@ -87,12 +87,12 @@ const ScoreDot = memo<{ score: number }>(({ score }) => {
 });
 ScoreDot.displayName = 'ScoreDot';
 
-// â”€â”€ Side Cell â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// Side Cell
 
 const SideCell = memo<{ side: StrikeSideData; label: 'CE' | 'PE'; volDominant: boolean; oiDominant: boolean; isATM: boolean }>(({ side, label, volDominant, oiDominant, isATM }) => {
   const isCE = label === 'CE';
   const changeColor = side.change >= 0 ? 'text-emerald-400' : 'text-red-400';
-  const changeIcon  = side.change >= 0 ? 'â–²' : 'â–¼';
+  const changeIcon  = side.change >= 0 ? 'UP' : 'DOWN';
 
   const signalBg =
     side.signal === 'STRONG_BUY'  ? (isCE ? 'bg-emerald-500/[0.12]' : 'bg-red-500/[0.06]') :
@@ -150,13 +150,13 @@ const SideCell = memo<{ side: StrikeSideData; label: 'CE' | 'PE'; volDominant: b
             <span title={sigs.liq === 'BSL' ? 'Buy-Side Liquidity: call wall above = institutional resistance' : 'Sell-Side Liquidity: put wall below = institutional support'} className={`text-[8px] font-bold px-1 py-0 rounded leading-tight ${sigs.liq === 'BSL' ? 'bg-cyan-500/15 text-cyan-300 border border-cyan-400/40' : 'bg-orange-500/15 text-orange-300 border border-orange-400/40'}`}>{sigs.liq}</span>
           )}
           {sigs.bos && (
-            <span title={sigs.bos === 'UP' ? 'BOSâ†‘ CE surging > PE falling: bullish structure break' : 'BOSâ†“ PE surging > CE falling: bearish breakdown'} className={`text-[8px] font-bold px-1 py-0 rounded leading-tight ${sigs.bos === 'UP' ? 'bg-emerald-500/15 text-emerald-300 border border-emerald-400/40' : 'bg-red-500/15 text-red-300 border border-red-400/40'}`}>BOS{sigs.bos === 'UP' ? 'â†‘' : 'â†“'}</span>
+            <span title={sigs.bos === 'UP' ? 'BOS UP: CE surging > PE falling (bullish structure break)' : 'BOS DOWN: PE surging > CE falling (bearish breakdown)'} className={`text-[8px] font-bold px-1 py-0 rounded leading-tight ${sigs.bos === 'UP' ? 'bg-emerald-500/15 text-emerald-300 border border-emerald-400/40' : 'bg-red-500/15 text-red-300 border border-red-400/40'}`}>BOS {sigs.bos === 'UP' ? 'UP' : 'DOWN'}</span>
           )}
           {sigs.trap && (
-            <span title="Trap âš  High volume, price not moving: institutions absorbing retail" className="text-[8px] font-bold px-1 py-0 rounded leading-tight bg-amber-500/20 text-amber-300 border border-amber-400/50 animate-pulse">âš TRP</span>
+            <span title="Trap warning: high volume but price not moving (possible institutional absorption)" className="text-[8px] font-bold px-1 py-0 rounded leading-tight bg-amber-500/20 text-amber-300 border border-amber-400/50 animate-pulse">TRAP</span>
           )}
           {sigs.delta !== undefined && (
-            <span title={`Î”${sigs.delta.toFixed(2)} â€” ITMâ†’0.9 Â· ATMâ†’0.5 Â· OTMâ†’0.1`} className={`text-[8px] font-mono px-1 py-0 rounded leading-tight ${sigs.delta >= 0.65 ? 'bg-indigo-500/15 text-indigo-300 border border-indigo-400/30' : sigs.delta <= 0.35 ? 'bg-slate-700/60 text-slate-500 border border-slate-600/30' : 'bg-slate-700/40 text-slate-400 border border-slate-600/20'}`}>Î”{sigs.delta.toFixed(2)}</span>
+            <span title={`Delta ${sigs.delta.toFixed(2)} | ITM ~ 0.9 | ATM ~ 0.5 | OTM ~ 0.1`} className={`text-[8px] font-mono px-1 py-0 rounded leading-tight ${sigs.delta >= 0.65 ? 'bg-indigo-500/15 text-indigo-300 border border-indigo-400/30' : sigs.delta <= 0.35 ? 'bg-slate-700/60 text-slate-500 border border-slate-600/30' : 'bg-slate-700/40 text-slate-400 border border-slate-600/20'}`}>DELTA {sigs.delta.toFixed(2)}</span>
           )}
           {sigs.oiInterp && side.oiChange !== undefined && side.oiChange !== 0 && (
             <span
@@ -183,7 +183,7 @@ const SideCell = memo<{ side: StrikeSideData; label: 'CE' | 'PE'; volDominant: b
 });
 SideCell.displayName = 'SideCell';
 
-// â”€â”€ Strike Row â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// Strike Row
 
 const StrikeRowComponent = memo<{ row: StrikeRow; maxVol: number; maxOI: number }>(({ row, maxVol, maxOI }) => {
   const isATM = row.isATM;
@@ -230,7 +230,7 @@ const StrikeRowComponent = memo<{ row: StrikeRow; maxVol: number; maxOI: number 
 });
 StrikeRowComponent.displayName = 'StrikeRowComponent';
 
-// â”€â”€ Symbol Card â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// Symbol Card
 
 const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>(({ data, name }) => {
   const strikes      = data?.strikes ?? [];
@@ -245,7 +245,7 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
   const isCachedData = data?.dataSource === 'CACHED';
   const hasRealSignal = isLiveData || isLastClose || isCachedData;
 
-  // Summary: bias + PCR â€” use backend intelligence when available
+  // Summary: bias + PCR - use backend intelligence when available
   const summary = useMemo(() => {
     const totalCEOI = hasData ? strikes.reduce((a, s) => a + s.ce.oi, 0) : 0;
     const totalPEOI = hasData ? strikes.reduce((a, s) => a + s.pe.oi, 0) : 0;
@@ -260,7 +260,7 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
     return { bullPct, bearPct, neutralPct, bias, pcr };
   }, [strikes, hasData, hasRealSignal, intelligence]);
 
-  // Composite signal â€” always comes from backend intelligence (no re-scoring in browser)
+  // Composite signal - always comes from backend intelligence (no re-scoring in browser)
   const symbolSignal = useMemo(() => {
     if (!hasRealSignal || !intelligence) return { signal: 'NEUTRAL' as OverallSignal, score: 0 };
     return { signal: intelligence.signal as OverallSignal, score: Math.round(intelligence.score) };
@@ -282,7 +282,7 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
   const biasBg    = summary.bias === 'BULLISH' ? 'bg-emerald-500/10' : summary.bias === 'BEARISH' ? 'bg-red-500/10' : 'bg-amber-500/10';
 
   const sourceColor = isLiveData ? 'text-emerald-400' : isLastClose || isCachedData ? 'text-amber-400' : 'text-slate-500';
-  const sourceLabel = isLiveData ? 'â— LIVE' : isLastClose ? 'â— LAST CLOSE' : isCachedData ? 'â— CACHED' : 'â—‹ CLOSED';
+  const sourceLabel = isLiveData ? 'LIVE' : isLastClose ? 'LAST CLOSE' : isCachedData ? 'CACHED' : 'CLOSED';
 
   const actionability     = intelligence?.actionability ?? 'NONE';
   const actionabilityTone = actionability === 'HIGH'
@@ -296,10 +296,10 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
   const optionAge  = fmtAgeSeconds(data.optionChainAgeSec);
   const snapTs     = fmtTs(data.optionChainUpdatedAt || data.timestamp);
   const feedLabel  = isLiveData
-    ? (data.feedMode === 'HYBRID_LIVE' ? `Spot live Â· Options ${optionAge}` : 'Live feed')
-    : isLastClose  ? `Last session Â· ${snapTs}`
-    : isCachedData ? `Cached Â· ${snapTs}`
-    : `Closed fallback Â· ${snapTs}`;
+    ? (data.feedMode === 'HYBRID_LIVE' ? `Spot live | Options ${optionAge}` : 'Live feed')
+    : isLastClose  ? `Last session | ${snapTs}`
+    : isCachedData ? `Cached | ${snapTs}`
+    : `Closed fallback | ${snapTs}`;
 
   const expiryPast = data.expiry ? new Date(data.expiry) < new Date(new Date().toISOString().slice(0, 10)) : false;
 
@@ -309,13 +309,13 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
   return (
     <div className="rounded-xl bg-dark-card/60 border border-slate-700/40 p-3 sm:p-4 overflow-hidden">
 
-      {/* â”€â”€ Card Header â”€â”€ */}
+      {/* Card Header */}
       <div className="flex items-start justify-between gap-2 mb-3">
         <div className="flex flex-wrap items-center gap-1.5 min-w-0">
           <span className="inline-flex items-center px-2 py-0.5 rounded-md text-[11px] sm:text-sm font-bold text-emerald-200 bg-emerald-500/5 border border-emerald-500/30 shadow-[0_0_6px_rgba(52,211,153,0.15)] shrink-0">{name}</span>
           <span className="inline-flex flex-wrap items-center gap-1 px-2 py-0.5 rounded-md text-[10px] sm:text-[12px] font-mono font-semibold text-emerald-300 bg-emerald-500/5 border border-emerald-500/30 shrink-0">
             <span className="whitespace-nowrap">ATM: {data.atm.toLocaleString('en-IN')}</span>
-            <span className="text-emerald-500/60">Â·</span>
+            <span className="text-emerald-500/60">|</span>
             <span className="whitespace-nowrap">Spot: {data.spot.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>
           </span>
         </div>
@@ -335,20 +335,20 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
               </span>
             );
           })() : (
-            <span className="inline-flex items-center gap-1 whitespace-nowrap px-2 sm:px-2.5 py-0.5 sm:py-1 rounded-lg text-[10px] sm:text-[12px] font-black tracking-wide border bg-slate-800/40 text-slate-500 border-slate-600/40">â— NO DATA</span>
+            <span className="inline-flex items-center gap-1 whitespace-nowrap px-2 sm:px-2.5 py-0.5 sm:py-1 rounded-lg text-[10px] sm:text-[12px] font-black tracking-wide border bg-slate-800/40 text-slate-500 border-slate-600/40">NO DATA</span>
           )}
           <div className="flex items-center gap-1.5 flex-wrap justify-end">
             <span className={`text-[9px] font-mono ${sourceColor}`}>{sourceLabel}</span>
             {data.expiry && (
               <span className={`text-[8px] font-mono ${expiryPast ? 'text-red-500/70' : 'text-slate-600'}`}>
-                {expiryPast ? 'âš  EXPIRED' : 'Exp:'} {data.expiry}
+                {expiryPast ? 'EXPIRED' : 'Exp:'} {data.expiry}
               </span>
             )}
           </div>
         </div>
       </div>
 
-      {/* â”€â”€ Sentiment bar â”€â”€ */}
+      {/* Sentiment bar */}
       <div className={`flex flex-wrap items-center justify-between gap-x-3 gap-y-1 rounded-lg px-2 sm:px-2.5 py-1.5 mb-3 ${biasBg} border border-slate-700/30`}>
         <div className="flex items-center gap-2">
           <span className={`text-[10px] sm:text-[11px] font-bold ${biasColor}`}>{hasRealSignal ? summary.bias : 'CLOSED'}</span>
@@ -357,18 +357,18 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
         <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[9px] sm:text-[10px] font-mono">
           {hasRealSignal ? (
             <>
-              <span className="text-emerald-400">{summary.bullPct}%â–²</span>
-              <span className="text-slate-600">Â·</span>
-              {summary.neutralPct > 0 && <><span className="text-amber-400/80">{summary.neutralPct}%~</span><span className="text-slate-600">Â·</span></>}
-              <span className="text-red-400">{summary.bearPct}%â–¼</span>
-              <span className="text-slate-600">Â·</span>
+              <span className="text-emerald-400">Bull {summary.bullPct}%</span>
+              <span className="text-slate-600">|</span>
+              {summary.neutralPct > 0 && <><span className="text-amber-400/80">Neutral {summary.neutralPct}%</span><span className="text-slate-600">|</span></>}
+              <span className="text-red-400">Bear {summary.bearPct}%</span>
+              <span className="text-slate-600">|</span>
             </>
-          ) : <span className="text-slate-600">â€”Â·</span>}
+          ) : <span className="text-slate-600">No split data</span>}
           <span className="text-cyan-400/70" title="Put-Call Ratio">PCR:{summary.pcr}</span>
         </div>
       </div>
 
-      {/* â”€â”€ Intelligence Panel â”€â”€ */}
+      {/* Intelligence Panel */}
       {intelligence && (
         <div className="rounded-lg border border-slate-700/50 bg-slate-900/50 mb-3 overflow-hidden">
 
@@ -410,7 +410,7 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
                 {pcr?.toFixed(2) ?? '--'}
               </span>
               <span className={`text-[8px] font-semibold ${(pcr ?? 1) > 1.2 ? 'text-emerald-500' : (pcr ?? 1) < 0.8 ? 'text-red-500' : 'text-amber-500'}`}>
-                {(pcr ?? 1) > 1.2 ? 'â–² Bullish bias' : (pcr ?? 1) < 0.8 ? 'â–¼ Bearish bias' : 'â—† Balanced'}
+                {(pcr ?? 1) > 1.2 ? 'Bullish bias' : (pcr ?? 1) < 0.8 ? 'Bearish bias' : 'Balanced'}
               </span>
             </div>
 
@@ -422,7 +422,7 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
               </span>
               <span className="text-[8px] font-semibold text-violet-400/70">
                 {intelligence.maxPainGapPct != null
-                  ? `${intelligence.maxPainGapPct > 0 ? 'â–² +' : 'â–¼ '}${intelligence.maxPainGapPct}% from spot`
+                  ? `${intelligence.maxPainGapPct > 0 ? '+' : ''}${intelligence.maxPainGapPct}% from spot`
                   : 'Writers\' target'}
               </span>
             </div>
@@ -455,7 +455,7 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
         </div>
       )}
 
-      {/* â”€â”€ Feed status bar â”€â”€ */}
+      {/* Feed status bar */}
       <div className="flex flex-wrap items-center justify-between gap-2 mb-2 rounded-lg border border-slate-700/30 bg-slate-900/40 px-2 py-1">
         <span className="text-[9px] sm:text-[10px] font-medium text-slate-300">{feedLabel}</span>
         <div className="flex flex-wrap items-center gap-2 text-[8px] sm:text-[9px] font-mono text-slate-500">
@@ -464,12 +464,12 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
         </div>
       </div>
 
-      {/* â”€â”€ Strike table header â”€â”€ */}
+      {/* Strike table header */}
       <div className="grid grid-cols-[1fr_72px_1fr] sm:grid-cols-[1fr_84px_1fr] rounded-t-lg overflow-hidden border border-slate-700/50 mb-0">
         <div className="flex items-center gap-1.5 px-2 py-1.5 bg-emerald-500/10 border-r border-slate-700/50">
           <span className="w-2 h-2 rounded-full bg-emerald-400 inline-block" />
           <span className="text-[10px] font-black tracking-widest uppercase text-emerald-300">CALL (CE)</span>
-          <span className="ml-auto text-[8px] text-emerald-500/60 hidden sm:inline">Market UP â–²</span>
+          <span className="ml-auto text-[8px] text-emerald-500/60 hidden sm:inline">Market trend: UP</span>
         </div>
         <div className="flex flex-col items-center justify-center px-1 py-1.5 bg-slate-800/60 border-r border-slate-700/50">
           <span className="text-[9px] font-black tracking-widest uppercase text-cyan-400">STRIKE</span>
@@ -481,31 +481,31 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
         <div className="flex items-center gap-1.5 px-2 py-1.5 bg-red-500/10 flex-row-reverse">
           <span className="w-2 h-2 rounded-full bg-red-400 inline-block" />
           <span className="text-[10px] font-black tracking-widest uppercase text-red-300">PUT (PE)</span>
-          <span className="mr-auto text-[8px] text-red-500/60 hidden sm:inline">Market DOWN â–¼</span>
+          <span className="mr-auto text-[8px] text-red-500/60 hidden sm:inline">Market trend: DOWN</span>
         </div>
       </div>
 
-      {/* â”€â”€ Sub-header â”€â”€ */}
+      {/* Sub-header */}
       <div className="grid grid-cols-[1fr_72px_1fr] sm:grid-cols-[1fr_84px_1fr] border-x border-b border-slate-700/40 bg-slate-900/40 mb-1">
         <div className="flex items-center gap-2 px-2 py-0.5 text-[8px] text-slate-500 border-r border-slate-700/30">
-          <span>Signal Â· Price</span><span className="ml-auto hidden sm:inline">V Â· OI Â· B/S%</span>
+          <span>Signal | Price</span><span className="ml-auto hidden sm:inline">V | OI | B/S%</span>
         </div>
         <div className="flex items-center justify-center px-1 py-0.5 border-r border-slate-700/30">
-          <span className="text-[7px] text-slate-600">Vol â–¸ OI</span>
+          <span className="text-[7px] text-slate-600">Vol -> OI</span>
         </div>
         <div className="flex items-center gap-2 px-2 py-0.5 text-[8px] text-slate-500 flex-row-reverse">
-          <span>Signal Â· Price</span><span className="mr-auto hidden sm:inline">V Â· OI Â· B/S%</span>
+          <span>Signal | Price</span><span className="mr-auto hidden sm:inline">V | OI | B/S%</span>
         </div>
       </div>
 
-      {/* â”€â”€ Strike rows â”€â”€ */}
+      {/* Strike rows */}
       <div className="flex flex-col gap-[2px]">
         {data.strikes.map(row => (
           <StrikeRowComponent key={row.strike} row={row} maxVol={maxVol} maxOI={maxOI} />
         ))}
       </div>
 
-      {/* â”€â”€ Legend â”€â”€ */}
+      {/* Legend */}
       <div className="flex flex-wrap items-center justify-center gap-x-2 gap-y-1 mt-2.5 pt-2 border-t border-slate-700/30 text-[8px] text-slate-600">
         <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />S.Buy</span>
         <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-emerald-600" />Buy</span>
@@ -517,25 +517,25 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
         <span className="flex items-center gap-1"><span className="w-3 h-1 rounded-full bg-blue-400" />OI heat</span>
         <span className="flex items-center gap-1"><span className="text-cyan-400">CYAN</span>=ATM</span>
         <span className="flex items-center gap-1"><span className="text-violet-400">VIOLET</span>=Max Pain</span>
-        <span className="w-full text-center text-[8px] text-slate-500 pt-0.5">CE BUY = call strength (market likely up) Â· PE BUY = put strength (market likely down)</span>
+        <span className="w-full text-center text-[8px] text-slate-500 pt-0.5">CE BUY = call strength (market likely up) | PE BUY = put strength (market likely down)</span>
       </div>
     </div>
   );
 });
 SymbolStrikeCard.displayName = 'SymbolStrikeCard';
 
-// â”€â”€ Main Component â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+// Main Component
 
 const StrikeIntelligence = memo(() => {
   const { strikeData } = useStrikeIntelligence();
 
   const dataStatus = useMemo(() => {
     const sources = (['NIFTY', 'BANKNIFTY', 'SENSEX'] as const).map(s => strikeData[s]?.dataSource).filter(Boolean);
-    if (sources.length === 0)          return { label: 'â—‹ WAITING',    color: 'text-slate-500'   };
-    if (sources.includes('LIVE'))      return { label: 'â— LIVE',        color: 'text-emerald-400' };
-    if (sources.includes('LAST_CLOSE'))return { label: 'â— LAST CLOSE', color: 'text-amber-400'   };
-    if (sources.includes('CACHED'))    return { label: 'â— CACHED',     color: 'text-amber-400'   };
-    return                                    { label: 'â—‹ CLOSED',      color: 'text-slate-500'   };
+    if (sources.length === 0)          return { label: 'WAITING',    color: 'text-slate-500'   };
+    if (sources.includes('LIVE'))      return { label: 'LIVE',       color: 'text-emerald-400' };
+    if (sources.includes('LAST_CLOSE'))return { label: 'LAST CLOSE', color: 'text-amber-400'   };
+    if (sources.includes('CACHED'))    return { label: 'CACHED',     color: 'text-amber-400'   };
+    return                                    { label: 'CLOSED',     color: 'text-slate-500'   };
   }, [strikeData]);
 
   return (
@@ -545,7 +545,7 @@ const StrikeIntelligence = memo(() => {
           <span className="w-[3px] h-6 rounded-full bg-gradient-to-b from-emerald-400 to-green-600 shrink-0" />
           <h3 className="text-[13px] sm:text-[15px] font-bold text-white tracking-tight">Strike Intelligence</h3>
           <span className="hidden sm:inline text-[10px] sm:text-[11px] text-emerald-400/60 font-medium">
-            ATMÂ±5 Â· CE/PE Â· Vol Â· OI Â· PCR Â· Max Pain Â· BSL/SSL Â· BOS Â· Trap
+            ATM +/-5 | CE/PE | Vol | OI | PCR | Max Pain | BSL/SSL | BOS | Trap
           </span>
           <span className={`text-[9px] font-mono ml-1 ${dataStatus.color}`}>{dataStatus.label}</span>
         </div>

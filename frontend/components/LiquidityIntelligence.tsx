@@ -15,7 +15,7 @@
  *   • Key metrics: Price%, PCR, Call OI, Put OI, VWAP Dev
  */
 
-import React, { memo } from 'react';
+import React, { memo, useState } from 'react';
 import {
   useLiquiditySocket,
   LiquidityIndex,
@@ -219,6 +219,7 @@ function pcrHex(pcr: number | null): string {
 // ── Index card ────────────────────────────────────────────────────────────────
 
 const IndexCard = memo(({ data, index }: { data: LiquidityIndex | null; index: string }) => {
+  const [showLiquiditySignals, setShowLiquiditySignals] = useState(false);
   // ── Skeleton ──────────────────────────────────────────────────────────────
   if (!data) {
     return (
@@ -462,14 +463,25 @@ const IndexCard = memo(({ data, index }: { data: LiquidityIndex | null; index: s
           )}
         </div>
 
-        {/* ── 4-Signal breakdown ──────────────────────────────────────────── */}
+        {/* ── 4-Signal breakdown (collapsed by default) ───────────────────── */}
         <div className="rounded-lg bg-slate-800/40 border border-slate-700/25 px-3 py-2">
-          <div className="text-[9px] text-slate-600 uppercase tracking-widest font-semibold mb-1">
-            Liquidity Signals
-          </div>
-          {signalOrder.map(key => (
-            <SignalRow key={key} factorKey={key} factor={data.signals[key]} />
-          ))}
+          <button
+            type="button"
+            onClick={() => setShowLiquiditySignals(v => !v)}
+            className="w-full flex items-center justify-between text-left"
+          >
+            <span className="text-[9px] text-slate-600 uppercase tracking-widest font-semibold">
+              Liquidity Signals
+            </span>
+            <span className="text-[10px] text-slate-500">{showLiquiditySignals ? 'Hide' : 'Show'}</span>
+          </button>
+          {showLiquiditySignals && (
+            <div className="mt-1">
+              {signalOrder.map(key => (
+                <SignalRow key={key} factorKey={key} factor={data.signals[key]} />
+              ))}
+            </div>
+          )}
         </div>
 
         {/* ── Metrics row ─────────────────────────────────────────────────── */}

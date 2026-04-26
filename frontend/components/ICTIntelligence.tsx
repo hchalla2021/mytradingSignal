@@ -16,7 +16,7 @@
  * Fully isolated — own WebSocket, own hook, zero overlap with Liquidity section.
  */
 
-import React, { memo, useRef, useEffect } from 'react';
+import React, { memo, useRef, useEffect, useState } from 'react';
 import {
   useICTSocket,
   type ICTIndex,
@@ -189,6 +189,7 @@ function fmtPrice(n: number): string {
 // ── Index card ────────────────────────────────────────────────────────────────
 
 const IndexCard = memo(({ data, index }: { data: ICTIndex | null; index: string }) => {
+  const [showIctMatrix, setShowIctMatrix] = useState(false);
   const cardRef = useRef<HTMLDivElement>(null);
   const prevDirection = useRef<ICTDirection | null>(null);
   const prevPrediction = useRef<ICTPrediction | null>(null);
@@ -463,14 +464,23 @@ const IndexCard = memo(({ data, index }: { data: ICTIndex | null; index: string 
           </div>
         </div>
 
-        {/* ── 6-Signal breakdown — sharp highlight when core 3 agree ──── */}
+        {/* ── 6-Signal breakdown — collapsed by default ───────────────── */}
         <div className={`rounded-lg bg-slate-800/40 border px-3 py-2 ${core3Bull ? 'ict-section-hl-bull' : core3Bear ? 'ict-section-hl-bear' : 'border-slate-700/25'}`}>
-          <div className="text-[9px] text-slate-600 uppercase tracking-widest font-semibold mb-1">
-            ICT Signal Matrix
-          </div>
-          {signalOrder.map(key => (
-            <SignalRow key={key} factorKey={key} factor={data.signals[key]} />
-          ))}
+          <button
+            type="button"
+            onClick={() => setShowIctMatrix(v => !v)}
+            className="w-full flex items-center justify-between text-left"
+          >
+            <span className="text-[9px] text-slate-600 uppercase tracking-widest font-semibold">ICT Signal Matrix</span>
+            <span className="text-[10px] text-slate-500">{showIctMatrix ? 'Hide' : 'Show'}</span>
+          </button>
+          {showIctMatrix && (
+            <div className="mt-1">
+              {signalOrder.map(key => (
+                <SignalRow key={key} factorKey={key} factor={data.signals[key]} />
+              ))}
+            </div>
+          )}
         </div>
 
         {/* ── Metrics row ─────────────────────────────────────────────── */}

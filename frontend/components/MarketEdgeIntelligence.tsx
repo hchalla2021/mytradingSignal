@@ -1,6 +1,6 @@
 'use client';
 
-import React, { memo } from 'react';
+import React, { memo, useState } from 'react';
 import { useMarketEdge, type EdgeIndex, type EdgeAction, type OIProfile } from '@/hooks/useMarketEdge';
 import SectionTitle from '@/components/SectionTitle';
 
@@ -146,6 +146,7 @@ IVGauge.displayName = 'IVGauge';
 // ── Edge Card (one per index) ───────────────────────────────────────────────
 
 const EdgeCard = memo<{ data: EdgeIndex | null; name: string }>(({ data, name }) => {
+  const [showScoringEngine, setShowScoringEngine] = useState(false);
   if (!data) {
     return (
       <div className="rounded-2xl border border-slate-700/50 bg-gradient-to-br from-slate-800/60 to-slate-900/60 p-4">
@@ -359,9 +360,13 @@ const EdgeCard = memo<{ data: EdgeIndex | null; name: string }>(({ data, name })
         )}
       </div>
 
-      {/* 6-Signal Breakdown */}
+      {/* 6-Signal Breakdown (collapsed by default) */}
       <div className="rounded-lg bg-slate-800/30 border border-slate-700/20 p-2.5">
-        <div className="flex items-center gap-1.5 mb-2">
+        <button
+          type="button"
+          onClick={() => setShowScoringEngine(v => !v)}
+          className="w-full flex items-center gap-1.5"
+        >
           <span className="text-xs">📡</span>
           <span className="text-[10px] sm:text-xs font-bold text-white">6-Signal Scoring Engine</span>
           <span className="text-[9px] text-slate-500 ml-auto font-mono">
@@ -369,10 +374,15 @@ const EdgeCard = memo<{ data: EdgeIndex | null; name: string }>(({ data, name })
               {data.rawScore > 0 ? '+' : ''}{data.rawScore.toFixed(3)}
             </span>
           </span>
-        </div>
-        {Object.entries(data.signals).map(([key, sig]) => (
-          <SignalBar key={key} name={key} score={sig.score} signal={sig.signal} label={sig.label} weight={sig.weight} />
-        ))}
+          <span className="text-[10px] text-slate-500">{showScoringEngine ? 'Hide' : 'Show'}</span>
+        </button>
+        {showScoringEngine && (
+          <div className="mt-2">
+            {Object.entries(data.signals).map(([key, sig]) => (
+              <SignalBar key={key} name={key} score={sig.score} signal={sig.signal} label={sig.label} weight={sig.weight} />
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );

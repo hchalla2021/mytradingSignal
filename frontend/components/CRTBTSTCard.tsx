@@ -15,7 +15,7 @@
 
 'use client';
 
-import React, { memo } from 'react';
+import React, { memo, useState } from 'react';
 import { useCRTBTSTRealtime } from '@/hooks/useCRTBTSTRealtime';
 import type { CRTAnalysis, BTSTSignal } from '@/lib/crt-engine';
 
@@ -198,6 +198,7 @@ LevelRow.displayName = 'LevelRow';
 // ── Main Card Component ────────────────────────────────────────────────
 
 const CRTBTSTCard = memo<CRTBTSTCardProps>(({ symbol, name, data }) => {
+  const [showKeyCrtLevels, setShowKeyCrtLevels] = useState(false);
   const { analysis, isLive, fromCache, loading, flash, factorSummary } = useCRTBTSTRealtime(symbol, data);
 
   // ── Loading State ─────────────────────────────────────────────────
@@ -383,17 +384,26 @@ const CRTBTSTCard = memo<CRTBTSTCardProps>(({ symbol, name, data }) => {
           </div>
         </div>
 
-        {/* ── Key Levels ───────────────────────────────────────────────── */}
+        {/* ── Key Levels (collapsed by default) ────────────────────────── */}
         <div>
-          <p className="text-[9px] text-slate-500 font-semibold tracking-widest uppercase mb-1.5">Key CRT Levels</p>
-          <div className="space-y-1">
-            <LevelRow label="PDH (Prev Day High)" value={keyLevels.pdh} currentPrice={price} color="text-emerald-400" />
-            <LevelRow label="PDL (Prev Day Low)" value={keyLevels.pdl} currentPrice={price} color="text-red-400" />
-            <LevelRow label="PDC (Prev Close)" value={keyLevels.pdc} currentPrice={price} color="text-amber-400" />
-            <LevelRow label="Today High" value={keyLevels.todayHigh} currentPrice={price} color="text-cyan-400" />
-            <LevelRow label="Today Low" value={keyLevels.todayLow} currentPrice={price} color="text-pink-400" />
-            <LevelRow label="Range Midpoint" value={keyLevels.midPoint} currentPrice={price} color="text-purple-400" />
-          </div>
+          <button
+            type="button"
+            onClick={() => setShowKeyCrtLevels(v => !v)}
+            className="w-full flex items-center justify-between text-left"
+          >
+            <p className="text-[9px] text-slate-500 font-semibold tracking-widest uppercase mb-1.5">Key CRT Levels</p>
+            <span className="text-[10px] text-slate-500">{showKeyCrtLevels ? 'Hide' : 'Show'}</span>
+          </button>
+          {showKeyCrtLevels && (
+            <div className="space-y-1">
+              <LevelRow label="PDH (Prev Day High)" value={keyLevels.pdh} currentPrice={price} color="text-emerald-400" />
+              <LevelRow label="PDL (Prev Day Low)" value={keyLevels.pdl} currentPrice={price} color="text-red-400" />
+              <LevelRow label="PDC (Prev Close)" value={keyLevels.pdc} currentPrice={price} color="text-amber-400" />
+              <LevelRow label="Today High" value={keyLevels.todayHigh} currentPrice={price} color="text-cyan-400" />
+              <LevelRow label="Today Low" value={keyLevels.todayLow} currentPrice={price} color="text-pink-400" />
+              <LevelRow label="Range Midpoint" value={keyLevels.midPoint} currentPrice={price} color="text-purple-400" />
+            </div>
+          )}
         </div>
 
         {/* ── Trade Setup ──────────────────────────────────────────────── */}

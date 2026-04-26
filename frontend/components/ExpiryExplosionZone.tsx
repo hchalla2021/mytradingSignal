@@ -1,6 +1,6 @@
 'use client';
 
-import React, { memo, useMemo } from 'react';
+import React, { memo, useMemo, useState } from 'react';
 import { useExpiryExplosion, type ExpiryIndex, type ExpiryAction, type ExpiryPhase } from '@/hooks/useExpiryExplosion';
 import SectionTitle from '@/components/SectionTitle';
 
@@ -89,6 +89,7 @@ SignalBar.displayName = 'SignalBar';
 // ── Expiry Card (one per index) ─────────────────────────────────────────────
 
 const ExpiryCard = memo<{ data: ExpiryIndex | null; name: string }>(({ data, name }) => {
+  const [showGammaExposure, setShowGammaExposure] = useState(false);
   if (!data) {
     return (
       <div className="rounded-2xl border border-slate-700/50 bg-gradient-to-br from-slate-800/60 to-slate-900/60 p-4">
@@ -380,53 +381,64 @@ const ExpiryCard = memo<{ data: ExpiryIndex | null; name: string }>(({ data, nam
         </div>
       </div>
 
-      {/* 7-Signal Breakdown */}
+      {/* Gamma Exposure (25%) and signal engine — collapsed by default */}
       <div className="rounded-lg bg-slate-800/30 border border-slate-700/20 p-2.5">
-        <div className="flex items-center gap-1.5 mb-2">
-          <span className="text-xs">📡</span>
-          <span className="text-[10px] sm:text-xs font-bold text-white">7-Signal Scoring Engine</span>
+        <button
+          type="button"
+          onClick={() => setShowGammaExposure(v => !v)}
+          className="w-full flex items-center gap-1.5"
+        >
+          <span className="text-xs">⚡</span>
+          <span className="text-[10px] sm:text-xs font-bold text-white">Gamma Exposure (25%)</span>
           <span className="text-[9px] text-slate-500 ml-auto font-mono">
             Score: <span className={data.rawScore > 0 ? 'text-emerald-400' : data.rawScore < 0 ? 'text-red-400' : 'text-amber-400'}>
               {data.rawScore > 0 ? '+' : ''}{data.rawScore.toFixed(3)}
             </span>
           </span>
-        </div>
-        {Object.entries(data.signals).map(([key, sig]) => (
-          <SignalBar
-            key={key}
-            name={key}
-            score={sig.score}
-            signal={sig.signal}
-            label={sig.label}
-            weight={sig.weight}
-            highlight={key === 'gamma_exposure' || key === 'volume_surge'}
-          />
-        ))}
-      </div>
+          <span className="text-[10px] text-slate-500">{showGammaExposure ? 'Hide' : 'Show'}</span>
+        </button>
 
-      {/* Gamma Exposure Detail */}
-      {data.signals.gamma_exposure.extra && (
-        <div className="mt-2 rounded-lg bg-gradient-to-br from-purple-900/20 to-slate-800/30 border border-purple-500/20 p-2">
-          <div className="flex items-center gap-1 mb-1">
-            <span className="text-[10px]">⚡</span>
-            <span className="text-[9px] font-bold text-purple-300">Gamma Detail</span>
-          </div>
-          <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 text-[9px]">
-            <span className="text-slate-500">OI Imbalance</span>
-            <span className="text-slate-300 font-mono text-right">
-              {((data.signals.gamma_exposure.extra as Record<string, number>).netOIImbalance * 100)?.toFixed(1) ?? '—'}%
-            </span>
-            <span className="text-slate-500">OI Velocity</span>
-            <span className="text-slate-300 font-mono text-right">
-              {(data.signals.gamma_exposure.extra as Record<string, number>).oiVelocity?.toFixed(1) ?? '—'}%
-            </span>
-            <span className="text-slate-500">Time Multiplier</span>
-            <span className={`font-mono text-right ${((data.signals.gamma_exposure.extra as Record<string, number>).timeMultiplier ?? 1) >= 2 ? 'text-red-400 font-bold' : 'text-slate-300'}`}>
-              {(data.signals.gamma_exposure.extra as Record<string, number>).timeMultiplier?.toFixed(1) ?? '—'}x
-            </span>
-          </div>
-        </div>
-      )}
+        {showGammaExposure && (
+          <>
+            <div className="mt-2">
+              {Object.entries(data.signals).map(([key, sig]) => (
+                <SignalBar
+                  key={key}
+                  name={key}
+                  score={sig.score}
+                  signal={sig.signal}
+                  label={sig.label}
+                  weight={sig.weight}
+                  highlight={key === 'gamma_exposure' || key === 'volume_surge'}
+                />
+              ))}
+            </div>
+
+            {data.signals.gamma_exposure.extra && (
+              <div className="mt-2 rounded-lg bg-gradient-to-br from-purple-900/20 to-slate-800/30 border border-purple-500/20 p-2">
+                <div className="flex items-center gap-1 mb-1">
+                  <span className="text-[10px]">⚡</span>
+                  <span className="text-[9px] font-bold text-purple-300">Gamma Detail</span>
+                </div>
+                <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 text-[9px]">
+                  <span className="text-slate-500">OI Imbalance</span>
+                  <span className="text-slate-300 font-mono text-right">
+                    {((data.signals.gamma_exposure.extra as Record<string, number>).netOIImbalance * 100)?.toFixed(1) ?? '—'}%
+                  </span>
+                  <span className="text-slate-500">OI Velocity</span>
+                  <span className="text-slate-300 font-mono text-right">
+                    {(data.signals.gamma_exposure.extra as Record<string, number>).oiVelocity?.toFixed(1) ?? '—'}%
+                  </span>
+                  <span className="text-slate-500">Time Multiplier</span>
+                  <span className={`font-mono text-right ${((data.signals.gamma_exposure.extra as Record<string, number>).timeMultiplier ?? 1) >= 2 ? 'text-red-400 font-bold' : 'text-slate-300'}`}>
+                    {(data.signals.gamma_exposure.extra as Record<string, number>).timeMultiplier?.toFixed(1) ?? '—'}x
+                  </span>
+                </div>
+              </div>
+            )}
+          </>
+        )}
+      </div>
 
       {/* Expiry Day Badge */}
       {data.isExpiryDay && (
