@@ -154,12 +154,20 @@ interface StructureEvent {
   idx: number;    // candle index where the break occurred
   level: number;  // price level that was broken
   type: 'BOS_BULL' | 'BOS_BEAR' | 'CHOCH_BULL' | 'CHOCH_BEAR';
+  /** HIGH = large displacement (strong institutional move) | LOW = marginal break (possible fakeout) */
+  quality: 'HIGH' | 'LOW';
+  /** % distance close moved past the level — higher = stronger break */
+  displacement: number;
 }
 
 interface InducementPoint {
   idx: number;    // rightmost candle of the equal-high/low cluster
   level: number;  // price of the equal high or low
   side: 'high' | 'low';
+  /** How many swing points form this cluster (2 = STANDARD, 3+ = PREMIUM) */
+  touches: number;
+  /** PREMIUM = 3+ equal highs/lows (strong liquidity magnet) | STANDARD = 2 touches */
+  quality: 'PREMIUM' | 'STANDARD';
 }
 
 /** Resample candles to a higher timeframe (factor × base candles per new candle) */
@@ -210,7 +218,12 @@ function computeStructure(candles: Candle[], LB = 4): StructureEvent[] {
       if (candles[i].c > sh.p) {
         if (i > lastBullIdx + 1 && i > lastBearIdx + 1) {
           const isChoCh = lastBearIdx > lastBullIdx;
-          events.push({ idx: i, level: sh.p, type: isChoCh ? 'CHOCH_BULL' : 'BOS_BULL' });
+          // Measure how far price closed beyond the level — larger = more institutional conviction
+          const disp = sh.p > 0 ? (candles[i].c - sh.p) / sh.p : 0;
+          // CHoCH needs a stronger break (0.6%) to qualify HIGH; BOS needs 0.4%
+          const threshold = isChoCh ? 0.006 : 0.004;
+          const quality: 'HIGH' | 'LOW' = disp >= threshold ? 'HIGH' : 'LOW';
+          events.push({ idx: i, level: sh.p, type: isChoCh ? 'CHOCH_BULL' : 'BOS_BULL', quality, displacement: disp });
           lastBullIdx = i;
         }
         break;
@@ -227,7 +240,10 @@ function computeStructure(candles: Candle[], LB = 4): StructureEvent[] {
       if (candles[i].c < sl.p) {
         if (i > lastBullIdx + 1 && i > lastBearIdx + 1) {
           const isChoCh = lastBullIdx > lastBearIdx;
-          events.push({ idx: i, level: sl.p, type: isChoCh ? 'CHOCH_BEAR' : 'BOS_BEAR' });
+          const disp = sl.p > 0 ? (sl.p - candles[i].c) / sl.p : 0;
+          const threshold = isChoCh ? 0.006 : 0.004;
+          const quality: 'HIGH' | 'LOW' = disp >= threshold ? 'HIGH' : 'LOW';
+          events.push({ idx: i, level: sl.p, type: isChoCh ? 'CHOCH_BEAR' : 'BOS_BEAR', quality, displacement: disp });
           lastBearIdx = i;
         }
         break;
@@ -252,7 +268,14 @@ function computeInducements(candles: Candle[], LB = 4): InducementPoint[] {
     for (let j = i + 1; j < highs.length; j++) {
       if (highs[j].idx - highs[i].idx > 40) break;
       if (Math.abs(highs[i].p - highs[j].p) / highs[i].p <= EQ) {
-        pts.push({ idx: highs[j].idx, level: Math.max(highs[i].p, highs[j].p), side: 'high' });
+        // Count ALL swing highs in this cluster (not just the pair)
+        let touches = 2;
+        for (let k = j + 1; k < highs.length; k++) {
+          if (highs[k].idx - highs[i].idx > 60) break;
+          if (Math.abs(highs[k].p - highs[i].p) / highs[i].p <= EQ) touches++;
+        }
+        const quality: 'PREMIUM' | 'STANDARD' = touches >= 3 ? 'PREMIUM' : 'STANDARD';
+        pts.push({ idx: highs[j].idx, level: Math.max(highs[i].p, highs[j].p), side: 'high', touches, quality });
         break;
       }
     }
@@ -262,7 +285,13 @@ function computeInducements(candles: Candle[], LB = 4): InducementPoint[] {
     for (let j = i + 1; j < lows.length; j++) {
       if (lows[j].idx - lows[i].idx > 40) break;
       if (Math.abs(lows[i].p - lows[j].p) / lows[i].p <= EQ) {
-        pts.push({ idx: lows[j].idx, level: Math.min(lows[i].p, lows[j].p), side: 'low' });
+        let touches = 2;
+        for (let k = j + 1; k < lows.length; k++) {
+          if (lows[k].idx - lows[i].idx > 60) break;
+          if (Math.abs(lows[k].p - lows[i].p) / lows[i].p <= EQ) touches++;
+        }
+        const quality: 'PREMIUM' | 'STANDARD' = touches >= 3 ? 'PREMIUM' : 'STANDARD';
+        pts.push({ idx: lows[j].idx, level: Math.min(lows[i].p, lows[j].p), side: 'low', touches, quality });
         break;
       }
     }
@@ -663,8 +692,8 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
 
       // ROW 2: Zones + liquidity
       let cx2 = 6;
-      cx2 = zItem(cx2, row2Y, CFG.FVG_BULL_BORDER,  'FVG▲');
-      cx2 = zItem(cx2, row2Y, CFG.FVG_BEAR_BORDER,  'FVG▼');
+      cx2 = zItem(cx2, row2Y, CFG.FVG_BULL_BORDER,  '★FVG▲');
+      cx2 = zItem(cx2, row2Y, CFG.FVG_BEAR_BORDER,  '★FVG▼');
       cx2 = zItem(cx2, row2Y, CFG.OB_BULL_BORDER,   'OB▲');
       cx2 = zItem(cx2, row2Y, CFG.OB_BEAR_BORDER,   'OB▼');
       cx2 = dItem(cx2, row2Y, CFG.LIQ_BUY,          'BSL');
@@ -709,7 +738,10 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
     // ── ORDER BLOCKS — gradient fill + accent bar + right-side label ───
     for (const o of ob) {
       const isBull = o.type === 'bullish';
-      const alpha = o.mitigated ? CFG.OB_MITIGATED_ALPHA : 1;
+      // Quality tier: PREMIUM (strong impulse, fresh) | STANDARD | WEAK
+      const obQuality = o.quality ?? (o.strength >= 0.80 ? 'PREMIUM' : o.strength >= 0.45 ? 'STANDARD' : 'WEAK');
+      const qualityAlpha = obQuality === 'PREMIUM' ? 1.0 : obQuality === 'STANDARD' ? 0.70 : 0.30;
+      const alpha = (o.mitigated ? CFG.OB_MITIGATED_ALPHA : 1) * qualityAlpha;
       const borderColor = isBull ? CFG.OB_BULL_BORDER : CFG.OB_BEAR_BORDER;
       const fillStart = isBull ? CFG.OB_BULL_FILL : CFG.OB_BEAR_FILL;
       const fillEnd   = isBull ? CFG.OB_BULL_FILL2 : CFG.OB_BEAR_FILL2;
@@ -740,7 +772,7 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
       ctx.fillRect(x1, y1, x2 - x1, zoneH);
       // Approach detection — OB glows when price enters or nears zone
       const obProx = o.mitigated ? 'off' as const : zoneProx(o.top, o.bottom);
-      if (obProx !== 'off') alertZones.push({ label: `${isBull ? '▲' : '▼'}OB`, color: borderColor });
+      if (obProx !== 'off') alertZones.push({ label: `${obQuality === 'PREMIUM' ? '★' : ''}${isBull ? '▲' : '▼'}OB`, color: borderColor });
 
       // Left accent bar — widens + glows on approach
       const obAccW = obProx === 'hot' ? 7 : obProx === 'warm' ? 5 : 2;
@@ -761,31 +793,93 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
       ctx.setLineDash([]);
       ctx.shadowBlur = 0;
       ctx.restore();
-      // Label: right-aligned inside zone — clear, bigger text
-      if (zoneH > 14) {
+      // Label: right-aligned — ★ for PREMIUM, NEW tag for fresh OBs, hidden for WEAK unless approaching
+      if (zoneH > 10) {
         const mid = (y1 + y2) / 2;
-        const statusStr = o.mitigated ? ' ✗' : ` ×${o.strength.toFixed(1)}`;
-        const tag = (isBull ? '▲ OB' : '▼ OB') + statusStr;
-        ctx.font = 'bold 10px sans-serif';
-        const tw = ctx.measureText(tag).width + 12;
-        const tx = x2 - tw - 6;
-        if (tx > x1 + 20) {
-          roundRect(ctx, tx, mid - 9, tw, 17, 3);
-          ctx.fillStyle = isBull ? 'rgba(234,179,8,0.3)' : 'rgba(192,132,252,0.3)';
-          ctx.fill();
-          ctx.fillStyle = borderColor;
-          ctx.textAlign = 'left';
-          ctx.fillText(tag, tx + 6, mid + 5);
+        const isFreshOB = (o.candles_ago ?? 999) <= 6;
+        const starMark = obQuality === 'PREMIUM' ? '★' : '';
+        const statusStr = o.mitigated ? ' ✗' : (isFreshOB ? ' NEW' : '');
+        const tag = starMark + (isBull ? '▲ OB' : '▼ OB') + statusStr;
+        const showLabel = obQuality !== 'WEAK' || obProx !== 'off';
+        const labelBgAlpha = obQuality === 'PREMIUM' ? 0.55 : obQuality === 'STANDARD' ? 0.28 : 0.16;
+        if (showLabel) {
+          ctx.font = obQuality === 'PREMIUM' ? 'bold 10.5px sans-serif' : 'bold 10px sans-serif';
+          const tw = ctx.measureText(tag).width + 12;
+          const tx = x2 - tw - 6;
+          if (tx > x1 + 20) {
+            roundRect(ctx, tx, mid - 9, tw, 17, 3);
+            ctx.fillStyle = isBull ? `rgba(234,179,8,${labelBgAlpha})` : `rgba(192,132,252,${labelBgAlpha})`;
+            ctx.fill();
+            // PREMIUM: left accent bar on label pill
+            if (obQuality === 'PREMIUM') {
+              ctx.fillStyle = borderColor;
+              ctx.fillRect(tx, mid - 9, 3, 17);
+            }
+            ctx.fillStyle = borderColor;
+            ctx.textAlign = 'left';
+            ctx.fillText(tag, tx + (obQuality === 'PREMIUM' ? 7 : 6), mid + 5);
+          }
         }
       }
       ctx.globalAlpha = 1;
     }
 
-    // ── FVG ZONES — diagonal hatch pattern ─────────────────────────
+    // ── FVG ZONES — quality-tiered rendering ──────────────────────────────────
+    // PREMIUM  : solid thick borders + strong fill + bold label + proximity glow
+    // STANDARD : medium dashed borders + normal fill + compact label
+    // WEAK     : thin dotted borders + very dim fill + no label (just a faint band)
+    // FILLED   : ghost band only (shows where price already retraced)
+    // Partial fill: gradient fill showing how much of the gap is consumed
     for (const f of fvg) {
-      const isBull = f.type === 'bullish';
+      const isBull   = f.type === 'bullish';
+      const quality  = f.quality ?? 'STANDARD';
+      const partial  = f.partialFill ?? 0;
+      const momentum = f.momentum ?? 0;
+
+      // Per-quality visual params
+      const cfg_fvg = quality === 'PREMIUM'
+        ? {
+            fillAlpha:     isBull ? 0.15 : 0.15,
+            hatchAlpha:    isBull ? 0.28 : 0.28,
+            borderW:       2.2,
+            midW:          1.2,
+            midDash:       [6, 3],
+            borderDash:    [] as number[],      // solid border for PREMIUM
+            labelBg:       isBull ? 'rgba(56,210,160,0.45)' : 'rgba(240,80,100,0.45)',
+            labelText:     isBull ? '#c8fff0'  : '#ffe0e8',
+            glowEnabled:   true,
+          }
+        : quality === 'STANDARD'
+        ? {
+            fillAlpha:     isBull ? 0.07 : 0.07,
+            hatchAlpha:    isBull ? 0.14 : 0.14,
+            borderW:       1.2,
+            midW:          0.8,
+            midDash:       [4, 4],
+            borderDash:    [5, 4],
+            labelBg:       isBull ? 'rgba(56,178,166,0.28)' : 'rgba(188,100,140,0.28)',
+            labelText:     isBull ? '#b0f0e8'  : '#f0c0d8',
+            glowEnabled:   true,
+          }
+        : {  // WEAK
+            fillAlpha:     0.025,
+            hatchAlpha:    0.04,
+            borderW:       0.6,
+            midW:          0,
+            midDash:       [] as number[],
+            borderDash:    [3, 6],
+            labelBg:       '',
+            labelText:     '',
+            glowEnabled:   false,
+          };
+
       const borderColor = isBull ? CFG.FVG_BULL_BORDER : CFG.FVG_BEAR_BORDER;
-      const hatchColor  = isBull ? CFG.FVG_BULL_HATCH  : CFG.FVG_BEAR_HATCH;
+      const hatchColor  = isBull
+        ? `rgba(56,178,166,${cfg_fvg.hatchAlpha})`
+        : `rgba(188,100,140,${cfg_fvg.hatchAlpha})`;
+      const fillColor = isBull
+        ? `rgba(56,178,166,${cfg_fvg.fillAlpha})`
+        : `rgba(188,100,140,${cfg_fvg.fillAlpha})`;
 
       let x1: number, x2: number;
       if (htfMode) {
@@ -798,73 +892,166 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
         x1 = idxToX(absDrawFrom) - candleStep / 2;
         x2 = chartRight;
       }
+
       const y1 = priceToY(f.top);
       const y2 = priceToY(f.bottom);
       const zoneH = Math.abs(y2 - y1);
-      const isBullF = f.type === 'bullish';
+      if (zoneH < 1) continue;
+
+      // ── FILLED FVG: ghost band only ────────────────────────────────────
       if (f.filled) {
         ctx.fillStyle = CFG.FVG_FILLED_FILL;
         ctx.fillRect(x1, y1, x2 - x1, zoneH);
+        // Draw a thin strikethrough line to mark it as consumed
+        ctx.save();
+        ctx.strokeStyle = borderColor;
+        ctx.globalAlpha = 0.18;
+        ctx.lineWidth = 1;
+        ctx.setLineDash([4, 6]);
+        ctx.beginPath();
+        ctx.moveTo(x1, (y1 + y2) / 2); ctx.lineTo(x2, (y1 + y2) / 2);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.globalAlpha = 1;
+        ctx.restore();
         continue;
       }
-      ctx.fillStyle = isBullF ? CFG.FVG_BULL_FILL : CFG.FVG_BEAR_FILL;
-      ctx.fillRect(x1, y1, x2 - x1, zoneH);
-      ctx.save();
-      ctx.beginPath();
-      ctx.rect(x1, y1, x2 - x1, zoneH);
-      ctx.clip();
-      ctx.strokeStyle = hatchColor;
-      ctx.lineWidth = 1;
-      const step = 8;
-      for (let lx = x1 - zoneH; lx < x2 + zoneH; lx += step) {
-        ctx.beginPath();
-        ctx.moveTo(lx, y1);
-        ctx.lineTo(lx + zoneH, y2);
-        ctx.stroke();
-      }
-      ctx.restore();
-      // Approach detection — FVG borders glow when price is near
-      const fvgProx = zoneProx(f.top, f.bottom);
-      if (fvgProx !== 'off') alertZones.push({ label: `${isBullF ? '▲' : '▼'}FVG`, color: borderColor });
 
+      // ── PARTIAL FILL: split fill — consumed (grey) vs remaining (colored) ──
+      const consumedH = zoneH * partial;
+      const remainH   = zoneH - consumedH;
+      // For bullish FVG: price comes down from top → consumed portion is at TOP
+      // For bearish FVG: price comes up from bottom → consumed portion is at BOTTOM
+      if (partial > 0) {
+        if (isBull) {
+          // consumed band at top (y1 = top)
+          ctx.fillStyle = 'rgba(148,163,184,0.06)';
+          ctx.fillRect(x1, y1, x2 - x1, consumedH);
+          // remaining band at bottom
+          ctx.fillStyle = fillColor;
+          ctx.fillRect(x1, y1 + consumedH, x2 - x1, remainH);
+        } else {
+          // consumed band at bottom (y2 = bottom)
+          ctx.fillStyle = 'rgba(148,163,184,0.06)';
+          ctx.fillRect(x1, y2 - consumedH, x2 - x1, consumedH);
+          // remaining at top
+          ctx.fillStyle = fillColor;
+          ctx.fillRect(x1, y1, x2 - x1, remainH);
+        }
+      } else {
+        ctx.fillStyle = fillColor;
+        ctx.fillRect(x1, y1, x2 - x1, zoneH);
+      }
+
+      // ── HATCH (clip to zone) ──────────────────────────────────────────────
+      if (quality !== 'WEAK') {
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(x1, y1, x2 - x1, zoneH);
+        ctx.clip();
+        ctx.strokeStyle = hatchColor;
+        ctx.lineWidth = 1;
+        const hatchStep = quality === 'PREMIUM' ? 6 : 10;
+        for (let lx = x1 - zoneH; lx < x2 + zoneH; lx += hatchStep) {
+          ctx.beginPath();
+          ctx.moveTo(lx, y1);
+          ctx.lineTo(lx + zoneH, y2);
+          ctx.stroke();
+        }
+        ctx.restore();
+      }
+
+      // ── APPROACH DETECTION + GLOW ─────────────────────────────────────────
+      const fvgProx = cfg_fvg.glowEnabled ? zoneProx(f.top, f.bottom) : 'off';
+      if (fvgProx !== 'off') alertZones.push({ label: `${isBull ? '▲' : '▼'}FVG${quality === 'PREMIUM' ? '★' : ''}`, color: borderColor });
+
+      // ── BORDERS (top + bottom lines) ─────────────────────────────────────
       ctx.save();
-      if (fvgProx !== 'off') { ctx.shadowColor = borderColor; ctx.shadowBlur = fvgProx === 'hot' ? 14 + 8 * _pF : 6; }
+      if (fvgProx !== 'off') {
+        ctx.shadowColor = borderColor;
+        ctx.shadowBlur  = fvgProx === 'hot' ? 18 + 10 * _pF : 8;
+      }
       ctx.strokeStyle = borderColor;
-      ctx.lineWidth   = fvgProx === 'hot' ? 3 + _pM : fvgProx === 'warm' ? 1.8 : 0.7;
-      ctx.setLineDash([5, 3]);
+      ctx.lineWidth   = fvgProx === 'hot'
+        ? cfg_fvg.borderW + 1.5 + _pM
+        : fvgProx === 'warm'
+          ? cfg_fvg.borderW + 0.6
+          : cfg_fvg.borderW;
+      ctx.setLineDash(cfg_fvg.borderDash);
+      ctx.globalAlpha = quality === 'WEAK' ? 0.35 : 1;
       ctx.beginPath();
-      ctx.moveTo(x1, y1); ctx.lineTo(x2, y1);
-      ctx.moveTo(x1, y2); ctx.lineTo(x2, y2);
+      ctx.moveTo(x1, y1); ctx.lineTo(x2, y1);  // top border
+      ctx.moveTo(x1, y2); ctx.lineTo(x2, y2);  // bottom border
       ctx.stroke();
       ctx.setLineDash([]);
       ctx.shadowBlur = 0;
       ctx.restore();
-      const midY = (y1 + y2) / 2;
-      ctx.strokeStyle = borderColor;
-      ctx.lineWidth = 0.8;
-      ctx.globalAlpha = 0.5;
-      ctx.setLineDash([3, 5]);
-      ctx.beginPath();
-      ctx.moveTo(x1, midY); ctx.lineTo(x2, midY);
-      ctx.stroke();
-      ctx.setLineDash([]);
-      ctx.globalAlpha = 1;
-      // Label: right-aligned near top of FVG zone — clear, bigger text
-      if (zoneH > 16) {
-        const tag = isBullF ? '▲ FVG' : '▼ FVG';
-        ctx.font = 'bold 10px sans-serif';
-        const tw = ctx.measureText(tag).width + 12;
-        const tx = x2 - tw - 6;
-        if (tx > x1 + 10) {
-          roundRect(ctx, tx, y1 + 3, tw, 16, 3);
-          ctx.fillStyle = isBullF ? 'rgba(132,204,22,0.32)' : 'rgba(251,146,60,0.32)';
+
+      // ── MID LINE (equilibrium / 50% level) ────────────────────────────────
+      if (cfg_fvg.midW > 0) {
+        const midY = (y1 + y2) / 2;
+        ctx.save();
+        ctx.strokeStyle = borderColor;
+        ctx.lineWidth   = cfg_fvg.midW;
+        ctx.globalAlpha = quality === 'PREMIUM' ? 0.55 : 0.30;
+        ctx.setLineDash(cfg_fvg.midDash);
+        ctx.beginPath();
+        ctx.moveTo(x1, midY); ctx.lineTo(x2, midY);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.restore();
+      }
+
+      // ── PARTIAL FILL DIVIDER LINE ─────────────────────────────────────────
+      // Dashed line showing exactly where the partial fill reached
+      if (partial > 0.05 && partial < 0.95) {
+        const divY = isBull ? y1 + consumedH : y2 - consumedH;
+        ctx.save();
+        ctx.strokeStyle = borderColor;
+        ctx.lineWidth = 1;
+        ctx.globalAlpha = 0.5;
+        ctx.setLineDash([3, 3]);
+        ctx.beginPath();
+        ctx.moveTo(x1, divY); ctx.lineTo(x2, divY);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.restore();
+      }
+
+      // ── LABEL (PREMIUM + STANDARD only, skip WEAK) ────────────────────────
+      if (quality !== 'WEAK' && zoneH > 12) {
+        const isFresh = (f.candles_ago ?? 999) <= 8;
+        const gapPts  = Math.round(f.top - f.bottom);
+        const star    = quality === 'PREMIUM' ? '★' : '';
+        const freshTag = isFresh ? ' NEW' : '';
+        const partialTag = partial > 0.1 ? ` ${Math.round(partial * 100)}%↓` : '';
+        const tag = quality === 'PREMIUM'
+          ? `${star}${isBull ? '▲' : '▼'} FVG  +${gapPts}${freshTag}${partialTag}`
+          : `${isBull ? '▲' : '▼'} FVG  ${gapPts}${partialTag}`;
+
+        ctx.font = quality === 'PREMIUM' ? 'bold 10.5px sans-serif' : 'bold 9px sans-serif';
+        const tw = ctx.measureText(tag).width + 14;
+        // PREMIUM: pin to right edge; STANDARD: also right edge but smaller
+        const tx = x2 - tw - 4;
+        const labelH = quality === 'PREMIUM' ? 17 : 14;
+        const labelY = isBull ? y1 + 2 : y2 - labelH - 2;
+
+        if (tx > x1 + 8 && cfg_fvg.labelBg) {
+          roundRect(ctx, tx, labelY, tw, labelH, 3);
+          ctx.fillStyle = cfg_fvg.labelBg;
           ctx.fill();
-          ctx.fillStyle = borderColor;
+          // PREMIUM: also draw left accent bar
+          if (quality === 'PREMIUM') {
+            ctx.fillStyle = borderColor;
+            ctx.fillRect(tx, labelY, 3, labelH);
+          }
+          ctx.fillStyle = cfg_fvg.labelText;
           ctx.textAlign = 'left';
-          ctx.fillText(tag, tx + 6, y1 + 14);
+          ctx.fillText(tag, tx + (quality === 'PREMIUM' ? 7 : 5), labelY + labelH - 4);
         }
       }
     }
+
 
     // ── KEY LEVEL LINES ──────────────────────────────────────────────
     // Design system (every type visually distinct):
@@ -1298,9 +1485,16 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
                   : ev.type === 'CHOCH_BULL' ? CFG.CHOCH_BULL
                   : CFG.CHOCH_BEAR;
 
+      // Quality multiplier: HIGH = full visible, LOW = very faint (ghost)
+      const evQuality = ev.quality ?? 'HIGH';
+      const _qMult = evQuality === 'HIGH' ? 1.0 : 0.32;
+
       // Approach detection — structure line glows when price is near this level
       const strProx = lineProx(ev.level);
-      if (strProx !== 'off') alertZones.push({ label: isChoCh ? 'CHoCH' : 'BOS', color });
+      if (strProx !== 'off') alertZones.push({
+        label: `${evQuality === 'HIGH' ? '★' : ''}${isChoCh ? 'CHoCH' : 'BOS'}`,
+        color,
+      });
 
       // Line — sharp glow when price approaching
       ctx.save();
@@ -1310,7 +1504,7 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
         ? (strProx === 'hot' ? 3.5 + _pM : strProx === 'warm' ? 2.5 : 1)
         : (strProx === 'hot' ? 2 + _pM * 0.6 : strProx === 'warm' ? 1.4 : 0.7);
       ctx.setLineDash(isChoCh ? [] : [5, 4]);
-      ctx.globalAlpha = strProx === 'hot' ? 0.75 + 0.25 * _pF : strProx === 'warm' ? (isChoCh ? 0.65 : 0.50) : (isChoCh ? 0.20 : 0.16);
+      ctx.globalAlpha = (strProx === 'hot' ? 0.75 + 0.25 * _pF : strProx === 'warm' ? (isChoCh ? 0.65 : 0.50) : (isChoCh ? 0.20 : 0.16)) * _qMult;
       ctx.beginPath();
       ctx.moveTo(evX, evY);
       ctx.lineTo(chartRight, evY);
@@ -1324,7 +1518,7 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
       const tickLen = isChoCh ? 8 : 5;
       ctx.strokeStyle = color;
       ctx.lineWidth = isChoCh ? 2 : 1.5;
-      ctx.globalAlpha = isChoCh ? 1 : 0.8;
+      ctx.globalAlpha = (isChoCh ? 1 : 0.8) * _qMult;
       ctx.beginPath();
       ctx.moveTo(evX, evY - tickLen);
       ctx.lineTo(evX, evY + tickLen);
@@ -1336,7 +1530,7 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
       const arrowOffY = isChoCh ? 10 : 8;
       const arrowY = isBull ? evY + arrowOffY : evY - arrowOffY;
       ctx.fillStyle = color;
-      ctx.globalAlpha = isChoCh ? 1 : 0.8;
+      ctx.globalAlpha = (isChoCh ? 1 : 0.8) * _qMult;
       ctx.beginPath();
       if (isBull) {
         ctx.moveTo(evX, arrowY + arrowSize);
@@ -1351,16 +1545,23 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
       ctx.fill();
       ctx.globalAlpha = 1;
 
-      // Label pill — solid for ChoCh (reversal), ghost for BOS (continuation)
-      const label = isChoCh ? (isBull ? 'CHoCH ↑' : 'CHoCH ↓') : (isBull ? 'BOS ↑' : 'BOS ↓');
+      // Label pill — ★ for HIGH quality CHoCH; displacement % shown when significant
+      // LOW-quality events: only show label when price is approaching (not on every candle)
+      const evDisp = ev.displacement ?? 0;
+      const dispStr = evQuality === 'HIGH' && evDisp >= 0.003 ? ` +${(evDisp * 100).toFixed(1)}%` : '';
+      const starStr = evQuality === 'HIGH' ? '★' : '';
+      const label = isChoCh
+        ? (isBull ? `${starStr}CHoCH ↑${dispStr}` : `${starStr}CHoCH ↓${dispStr}`)
+        : (isBull ? `BOS ↑${dispStr}` : `BOS ↓${dispStr}`);
       ctx.font = `bold ${isChoCh ? 10 : 9}px sans-serif`;
       const lw = ctx.measureText(label).width + 12;
       const lh = isChoCh ? 17 : 15;
       const lx = evX + 8;
       const ly = isBull ? evY - lh - 4 : evY + 4;
-      if (lx + lw < chartRight - 10) {
-        if (isChoCh) {
-          // Solid pill for ChoCh — high importance
+      // Only show label for HIGH quality, or LOW quality when price is approaching
+      if (lx + lw < chartRight - 10 && (evQuality === 'HIGH' || strProx !== 'off')) {
+        if (isChoCh && evQuality === 'HIGH') {
+          // Solid pill for high-quality CHoCH — real reversal signal
           ctx.fillStyle = color;
           ctx.globalAlpha = 0.95;
           roundRect(ctx, lx, ly, lw, lh, 4);
@@ -1368,7 +1569,7 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
           ctx.globalAlpha = 1;
           ctx.fillStyle = '#0d1117';
         } else {
-          // Ghost pill for BOS — lower importance
+          // Ghost pill for BOS or low-quality CHoCH
           ctx.fillStyle = `${color}28`;
           roundRect(ctx, lx, ly, lw, lh, 3);
           ctx.fill();
@@ -1389,17 +1590,28 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
       const isHigh  = ind.side === 'high';
       const offsetY = isHigh ? -10 : 10;
       const markerY = indY + offsetY;
+      const indPremium = ind.quality === 'PREMIUM';
 
       // Approach detection — diamond + label glow when price near this equal H/L
       const indProx = lineProx(ind.level);
-      if (indProx !== 'off') alertZones.push({ label: isHigh ? 'EQH' : 'EQL', color: CFG.IND_COLOR });
-      const iSize = indProx !== 'off' ? 5 + 1.5 * _pM : 4;
+      if (indProx !== 'off') alertZones.push({
+        label: `${indPremium ? '★' : ''}${isHigh ? 'EQH' : 'EQL'}${indPremium ? `×${ind.touches}` : ''}`,
+        color: CFG.IND_COLOR,
+      });
+      // PREMIUM = larger diamond, STANDARD = normal size, both grow on approach
+      const iSize = indPremium
+        ? (indProx !== 'off' ? 7 + 2 * _pM : 5.5)
+        : (indProx !== 'off' ? 5 + 1.5 * _pM : 4);
 
-      // Diamond marker — grows + glows on approach
+      // Diamond marker — grows + glows on approach; PREMIUM always brighter
       ctx.save();
       if (indProx !== 'off') { ctx.shadowColor = CFG.IND_COLOR; ctx.shadowBlur = indProx === 'hot' ? 8 + 5 * _pF : 3; }
       ctx.fillStyle   = CFG.IND_COLOR;
-      ctx.globalAlpha = indProx === 'hot' ? 0.7 + 0.3 * _pF : indProx === 'warm' ? 0.60 : 0.28;
+      ctx.globalAlpha = indProx === 'hot'
+        ? 0.85 + 0.15 * _pF
+        : indProx === 'warm'
+          ? (indPremium ? 0.75 : 0.60)
+          : (indPremium ? 0.55 : 0.28);
       ctx.beginPath();
       ctx.moveTo(indX, markerY - iSize);
       ctx.lineTo(indX + iSize * 0.75, markerY);
@@ -1411,14 +1623,23 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
       ctx.globalAlpha = 1;
       ctx.restore();
 
-      // EQH / EQL label — bolder + brighter on approach
-      const tag = isHigh ? 'EQH' : 'EQL';
-      ctx.fillStyle   = CFG.IND_COLOR;
-      ctx.font        = indProx !== 'off' ? 'bold 10px sans-serif' : 'bold 9px sans-serif';
-      ctx.textAlign   = 'center';
-      ctx.globalAlpha = indProx === 'hot' ? 0.85 + 0.15 * _pF : indProx === 'warm' ? 0.65 : 0.28;
-      ctx.fillText(tag, indX, markerY + (isHigh ? -7 : 13));
-      ctx.globalAlpha = 1;
+      // Label — PREMIUM: always visible with ★ + touch count
+      //          STANDARD: only when price is approaching
+      const touchStr = ind.touches >= 3 ? `×${ind.touches}` : '';
+      const tag = (indPremium ? '★' : '') + (isHigh ? 'EQH' : 'EQL') + touchStr;
+      const showLabel = indPremium || indProx !== 'off';
+      if (showLabel) {
+        ctx.fillStyle   = CFG.IND_COLOR;
+        ctx.font        = indPremium ? 'bold 10px sans-serif' : (indProx !== 'off' ? 'bold 10px sans-serif' : 'bold 9px sans-serif');
+        ctx.textAlign   = 'center';
+        ctx.globalAlpha = indProx === 'hot'
+          ? 0.90 + 0.10 * _pF
+          : indProx === 'warm'
+            ? 0.75
+            : (indPremium ? 0.65 : 0.28);
+        ctx.fillText(tag, indX, markerY + (isHigh ? -7 : 13));
+        ctx.globalAlpha = 1;
+      }
     }
 
     // ── FRACTAL MARKERS (Williams 5-bar) ───────────────────────────

@@ -124,60 +124,150 @@ def _save_persistent(state: Dict[str, Any]):
 # ── SMC Computations ─────────────────────────────────────────────────────────
 
 def _detect_fvg(candles: List[Dict]) -> List[Dict]:
-    """Detect Fair Value Gaps from candle array."""
+    """
+    Detect Fair Value Gaps with advanced quality scoring.
+
+    Quality tiers:
+      PREMIUM  — high-probability retrace zone (score ≥ 0.72)
+        • Impulse momentum ≥ 0.3% (strong push created the gap)
+        • Gap size ≥ 0.15% of price (meaningful imbalance)
+        • Body-to-range ratio ≥ 0.6 on the impulse candle (conviction, not a wick trap)
+        • NOT overlapping with an existing unfilled FVG (fresh imbalance)
+        • RECENT: formed within last 30 candles
+      STANDARD — medium probability (score 0.42–0.72)
+      WEAK     — low probability, clutter (score < 0.42) — still drawn, but very dim
+
+    Additional fields:
+      partialFill  — how much of the gap (%) has been touched back into (0–1)
+      momentum     — impulse body % move that created the gap (useful for label display)
+      candles_ago  — how many candles back the FVG was formed
+    """
     fvgs = []
     if len(candles) < 3:
         return fvgs
 
-    for i in range(2, len(candles)):
+    n = len(candles)
+
+    for i in range(2, n):
         c0 = candles[i - 2]  # First candle
+        c1 = candles[i - 1]  # Middle candle (the impulse candle)
         c2 = candles[i]      # Third candle
 
-        h0 = c0["h"]
-        l0 = c0["l"]
-        h2 = c2["h"]
-        l2 = c2["l"]
+        h0, l0 = c0["h"], c0["l"]
+        h1, l1, o1, cl1 = c1["h"], c1["l"], c1["o"], c1["c"]
+        h2, l2 = c2["h"], c2["l"]
 
-        # Bullish FVG: gap up — third candle low > first candle high
-        if l2 > h0:
-            gap_size = l2 - h0
-            mid_range = (c0["h"] + c2["l"]) / 2
-            strength = min(1.0, gap_size / (mid_range * 0.005)) if mid_range > 0 else 0.5
-            filled = False
-            # Check if any subsequent candle filled the gap
-            for j in range(i + 1, len(candles)):
-                if candles[j]["l"] <= h0:
-                    filled = True
-                    break
+        candles_ago = n - 1 - i  # 0 = most recent
+
+        for fvg_type in ("bullish", "bearish"):
+            if fvg_type == "bullish":
+                # Bullish FVG: gap up — third candle low > first candle high
+                if l2 <= h0:
+                    continue
+                gap_top    = l2
+                gap_bottom = h0
+                # Impulse candle should be bullish (confirms the gap direction)
+                impulse_body    = (cl1 - o1) / max(o1, 1) if cl1 > o1 else 0.0
+                body_range_rat  = abs(cl1 - o1) / (h1 - l1) if h1 > l1 else 0.0
+                momentum_move   = (h2 - l0) / l0 if l0 > 0 else 0.0  # full swing
+            else:
+                # Bearish FVG: gap down — third candle high < first candle low
+                if h2 >= l0:
+                    continue
+                gap_top    = l0
+                gap_bottom = h2
+                # Impulse candle should be bearish
+                impulse_body    = (o1 - cl1) / max(o1, 1) if o1 > cl1 else 0.0
+                body_range_rat  = abs(cl1 - o1) / (h1 - l1) if h1 > l1 else 0.0
+                momentum_move   = (h0 - l2) / l2 if l2 > 0 else 0.0
+
+            gap_size    = gap_top - gap_bottom
+            mid_price   = (gap_top + gap_bottom) / 2
+            gap_pct     = gap_size / mid_price if mid_price > 0 else 0.0
+
+            # ── Fill detection ─────────────────────────────────────────────
+            filled       = False
+            partial_fill = 0.0
+            max_penetration = 0.0
+            for j in range(i + 1, n):
+                cj = candles[j]
+                if fvg_type == "bullish":
+                    # Price came back down into the gap
+                    if cj["l"] < gap_top:
+                        pen = min(gap_top, max(cj["l"], gap_bottom))
+                        pen_ratio = (gap_top - pen) / gap_size if gap_size > 0 else 0.0
+                        if pen_ratio > max_penetration:
+                            max_penetration = pen_ratio
+                    if cj["l"] <= gap_bottom:
+                        filled = True
+                        max_penetration = 1.0
+                        break
+                else:
+                    if cj["h"] > gap_bottom:
+                        pen = max(gap_bottom, min(cj["h"], gap_top))
+                        pen_ratio = (pen - gap_bottom) / gap_size if gap_size > 0 else 0.0
+                        if pen_ratio > max_penetration:
+                            max_penetration = pen_ratio
+                    if cj["h"] >= gap_top:
+                        filled = True
+                        max_penetration = 1.0
+                        break
+            partial_fill = round(max_penetration, 2)
+
+            # ── Quality scoring ─────────────────────────────────────────────
+            # Each criterion contributes to score (0.0–1.0)
+            score = 0.0
+
+            # 1. Gap size significance (0–0.25): ≥0.15% = full credit
+            score += min(0.25, (gap_pct / 0.0015) * 0.25)
+
+            # 2. Impulse body pct (0–0.25): ≥0.3% move on impulse candle
+            score += min(0.25, (impulse_body / 0.003) * 0.25)
+
+            # 3. Body-to-range ratio (0–0.20): ≥0.6 = conviction candle, not a wick
+            score += min(0.20, (body_range_rat / 0.6) * 0.20)
+
+            # 4. Recency (0–0.15): formed within last 10 candles = full credit
+            recency = max(0.0, 1.0 - candles_ago / 30.0)
+            score += recency * 0.15
+
+            # 5. Not yet touched (partial fill penalty)
+            # FVG that was touched 50%+ loses half its quality
+            score *= (1.0 - partial_fill * 0.55)
+
+            score = round(min(1.0, score), 2)
+
+            # ── Quality tier ────────────────────────────────────────────────
+            if score >= 0.72:
+                quality = "PREMIUM"
+            elif score >= 0.42:
+                quality = "STANDARD"
+            else:
+                quality = "WEAK"
+
             fvgs.append({
-                "type": "bullish",
-                "top": round(l2, 2),
-                "bottom": round(h0, 2),
+                "type": fvg_type,
+                "top": round(gap_top, 2),
+                "bottom": round(gap_bottom, 2),
                 "startIdx": i,
                 "filled": filled,
-                "strength": round(strength, 2),
+                "strength": score,          # backward-compat alias
+                "quality": quality,         # PREMIUM | STANDARD | WEAK
+                "partialFill": partial_fill,
+                "momentum": round(momentum_move * 100, 3),   # % swing that created the gap
+                "candles_ago": candles_ago,
             })
 
-        # Bearish FVG: gap down — third candle high < first candle low
-        if h2 < l0:
-            gap_size = l0 - h2
-            mid_range = (c0["l"] + c2["h"]) / 2
-            strength = min(1.0, gap_size / (mid_range * 0.005)) if mid_range > 0 else 0.5
-            filled = False
-            for j in range(i + 1, len(candles)):
-                if candles[j]["h"] >= l0:
-                    filled = True
-                    break
-            fvgs.append({
-                "type": "bearish",
-                "top": round(l0, 2),
-                "bottom": round(h2, 2),
-                "startIdx": i,
-                "filled": filled,
-                "strength": round(strength, 2),
-            })
+    # Keep: all PREMIUM + STANDARD unfilled, last 3 WEAK unfilled, all filled for fading
+    result = []
+    for q in ("PREMIUM", "STANDARD"):
+        result.extend([f for f in fvgs if f["quality"] == q and not f["filled"]])
+    result.extend([f for f in fvgs if f["quality"] == "WEAK" and not f["filled"]][-3:])
+    result.extend([f for f in fvgs if f["filled"]][-4:])  # keep recent filled for reference
 
-    return fvgs
+    # Sort by startIdx so chart draws in order
+    result.sort(key=lambda f: f["startIdx"])
+    return result
 
 
 def _detect_order_blocks(candles: List[Dict]) -> List[Dict]:
@@ -214,6 +304,12 @@ def _detect_order_blocks(candles: List[Dict]) -> List[Dict]:
                 candles[j]["l"] <= c["l"]
                 for j in range(i + 4, len(candles))
             )
+            ob_strength = round(min(1.0, (imp_high - c["h"]) / (c["h"] * 0.005)), 2)
+            ob_quality = (
+                "PREMIUM" if ob_strength >= 0.80 and not mitigated else
+                "STANDARD" if ob_strength >= 0.45 and not mitigated else
+                "WEAK"
+            )
             obs.append({
                 "type": "bullish",
                 "top": round(max(c["o"], c["c"]), 2),
@@ -222,7 +318,9 @@ def _detect_order_blocks(candles: List[Dict]) -> List[Dict]:
                 "low": round(c["l"], 2),
                 "startIdx": i,
                 "mitigated": mitigated,
-                "strength": round(min(1.0, (imp_high - c["h"]) / (c["h"] * 0.005)), 2),
+                "strength": ob_strength,
+                "quality": ob_quality,
+                "candles_ago": len(candles) - 1 - i,
             })
 
         # Bearish OB: bullish candle, then down-move ≥ 0.15%
@@ -230,6 +328,12 @@ def _detect_order_blocks(candles: List[Dict]) -> List[Dict]:
             mitigated = any(
                 candles[j]["h"] >= c["h"]
                 for j in range(i + 4, len(candles))
+            )
+            ob_strength = round(min(1.0, (c["l"] - imp_low) / (c["l"] * 0.005)), 2)
+            ob_quality = (
+                "PREMIUM" if ob_strength >= 0.80 and not mitigated else
+                "STANDARD" if ob_strength >= 0.45 and not mitigated else
+                "WEAK"
             )
             obs.append({
                 "type": "bearish",
@@ -239,7 +343,9 @@ def _detect_order_blocks(candles: List[Dict]) -> List[Dict]:
                 "low": round(c["l"], 2),
                 "startIdx": i,
                 "mitigated": mitigated,
-                "strength": round(min(1.0, (c["l"] - imp_low) / (c["l"] * 0.005)), 2),
+                "strength": ob_strength,
+                "quality": ob_quality,
+                "candles_ago": len(candles) - 1 - i,
             })
 
     # Keep last 6 unmitigated + up to 3 mitigated
@@ -277,13 +383,21 @@ def _detect_liquidity(candles: List[Dict]) -> List[Dict]:
                 if candles[j]["h"] > h_a * (1 + tol) and candles[j]["c"] < h_a:
                     sweep_idx = j
                     break
+            tc_sell = 1 + len(matches)
+            is_swept_sell = sweep_idx is not None
+            lq_quality_sell = (
+                "PREMIUM" if tc_sell >= 3 and not is_swept_sell else
+                "STANDARD" if not is_swept_sell else
+                "WEAK"
+            )
             liquidity.append({
                 "type": "sell_side",          # liquidity resting above equal highs
                 "level": round(h_a, 2),
                 "startIdx": idx_a,
-                "swept": sweep_idx is not None,
+                "swept": is_swept_sell,
                 "sweepIdx": sweep_idx,
-                "touchCount": 1 + len(matches),
+                "touchCount": tc_sell,
+                "quality": lq_quality_sell,
             })
 
     # Find clusters of equal lows (buy-side liquidity below)
@@ -299,13 +413,21 @@ def _detect_liquidity(candles: List[Dict]) -> List[Dict]:
                 if candles[j]["l"] < l_a * (1 - tol) and candles[j]["c"] > l_a:
                     sweep_idx = j
                     break
+            tc_buy = 1 + len(matches)
+            is_swept_buy = sweep_idx is not None
+            lq_quality_buy = (
+                "PREMIUM" if tc_buy >= 3 and not is_swept_buy else
+                "STANDARD" if not is_swept_buy else
+                "WEAK"
+            )
             liquidity.append({
                 "type": "buy_side",           # liquidity resting below equal lows
                 "level": round(l_a, 2),
                 "startIdx": idx_a,
-                "swept": sweep_idx is not None,
+                "swept": is_swept_buy,
                 "sweepIdx": sweep_idx,
-                "touchCount": 1 + len(matches),
+                "touchCount": tc_buy,
+                "quality": lq_quality_buy,
             })
 
     # Keep strongest 8 (by touch count), deduplicate by level within 0.2%

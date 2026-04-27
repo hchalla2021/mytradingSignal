@@ -14,10 +14,10 @@ const SIGNAL_CONFIG: Record<StrikeSignal, {
   glow: string;
 }> = {
   STRONG_BUY:  { label: 'STRONG BUY',  short: 'S.BUY',  color: 'text-emerald-300', bg: 'bg-emerald-500/20', border: 'border-emerald-400/50', glow: 'shadow-emerald-500/25' },
-  BUY:         { label: 'BUY',          short: 'BUY',    color: 'text-emerald-400', bg: 'bg-emerald-500/10', border: 'border-emerald-400/30', glow: 'shadow-emerald-500/10' },
-  NEUTRAL:     { label: 'NEUTRAL',      short: 'HOLD',   color: 'text-amber-400',   bg: 'bg-amber-500/10',   border: 'border-amber-400/30',   glow: 'shadow-amber-500/10'  },
-  SELL:        { label: 'SELL',         short: 'SELL',   color: 'text-red-400',     bg: 'bg-red-500/10',     border: 'border-red-400/30',     glow: 'shadow-red-500/10'    },
-  STRONG_SELL: { label: 'STRONG SELL',  short: 'S.SELL', color: 'text-red-300',     bg: 'bg-red-500/20',     border: 'border-red-400/50',     glow: 'shadow-red-500/25'    },
+  BUY:         { label: 'BUY',          short: 'BUY  ',  color: 'text-emerald-400', bg: 'bg-emerald-500/10', border: 'border-emerald-400/30', glow: 'shadow-emerald-500/10' },
+  NEUTRAL:     { label: 'NEUTRAL',      short: 'HOLD ',  color: 'text-amber-400',   bg: 'bg-amber-500/10',   border: 'border-amber-400/30',   glow: 'shadow-amber-500/10'  },
+  SELL:        { label: 'SELL',         short: 'SELL ',  color: 'text-red-400',     bg: 'bg-red-500/10',     border: 'border-red-400/30',     glow: 'shadow-red-500/10'    },
+  STRONG_SELL: { label: 'STRONG SELL',  short: 'S.SEL',  color: 'text-red-300',     bg: 'bg-red-500/20',     border: 'border-red-400/50',     glow: 'shadow-red-500/25'    },
 };
 
 type OverallSignal = StrikeSignal;
@@ -25,7 +25,7 @@ type OverallSignal = StrikeSignal;
 const OVERALL_CFG: Record<OverallSignal, { label: string; color: string; bg: string; border: string; glow: string; arrow: string }> = {
   STRONG_BUY:  { label: 'STRONG BUY',  color: 'text-emerald-200', bg: 'bg-emerald-500/25', border: 'border-emerald-400/70', glow: 'shadow-[0_0_12px_2px_rgba(52,211,153,0.35)]',   arrow: 'UP++' },
   BUY:         { label: 'BUY',          color: 'text-emerald-300', bg: 'bg-emerald-500/15', border: 'border-emerald-400/40', glow: 'shadow-[0_0_8px_0px_rgba(52,211,153,0.20)]',    arrow: 'UP'   },
-  NEUTRAL:     { label: 'NEUTRAL',      color: 'text-amber-300',   bg: 'bg-amber-500/15',   border: 'border-amber-400/40',   glow: '',                                              arrow: 'FLAT' },
+  NEUTRAL:     { label: 'NEUTRAL',      color: 'text-amber-300',   bg: 'bg-amber-500/15',   border: 'border-amber-400/40',   glow: '',                                              arrow: '—'    },
   SELL:        { label: 'SELL',         color: 'text-red-300',     bg: 'bg-red-500/15',     border: 'border-red-400/40',     glow: 'shadow-[0_0_8px_0px_rgba(251,113,133,0.20)]',   arrow: 'DOWN' },
   STRONG_SELL: { label: 'STRONG SELL',  color: 'text-red-200',     bg: 'bg-red-500/25',     border: 'border-red-400/70',     glow: 'shadow-[0_0_12px_2px_rgba(251,113,133,0.35)]',  arrow: 'DOWN--' },
 };
@@ -53,13 +53,112 @@ function fmtTs(ts?: string): string {
   return d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
 }
 
+// High-conviction gate for buyer perspective.
+// We only emit STRONG_BUY / STRONG_SELL when participation + positioning are confirmed.
+type SymbolKey = 'NIFTY' | 'BANKNIFTY' | 'SENSEX';
+type ConvictionRules = {
+  minBuyPct: number;
+  minSellPct: number;
+  minOpposingPct: number;
+  minVolume: number;
+  minOI: number;
+  minOIChange: number;
+};
+
+const CONVICTION_RULES_BY_SYMBOL: Record<SymbolKey, ConvictionRules> = {
+  // NIFTY: balanced thresholds
+  NIFTY: {
+    minBuyPct: 62,
+    minSellPct: 62,
+    minOpposingPct: 12,
+    minVolume: 50_000,
+    minOI: 50_000,
+    minOIChange: 500,
+  },
+  // BANKNIFTY: faster and noisier, require stronger participation and depth
+  BANKNIFTY: {
+    minBuyPct: 66,
+    minSellPct: 66,
+    minOpposingPct: 14,
+    minVolume: 80_000,
+    minOI: 70_000,
+    minOIChange: 700,
+  },
+  // SENSEX: thinner options flow, slightly relaxed depth
+  SENSEX: {
+    minBuyPct: 60,
+    minSellPct: 60,
+    minOpposingPct: 10,
+    minVolume: 30_000,
+    minOI: 30_000,
+    minOIChange: 300,
+  },
+};
+
+function normalizeSymbolKey(symbol?: string): SymbolKey {
+  const raw = (symbol ?? '').toUpperCase().replace(/\s+/g, '');
+  if (raw.includes('BANKNIFTY')) return 'BANKNIFTY';
+  if (raw.includes('SENSEX')) return 'SENSEX';
+  return 'NIFTY';
+}
+
+function getHighConvictionSignal(side: StrikeSideData, symbolKey: SymbolKey): StrikeSignal {
+  const rules = CONVICTION_RULES_BY_SYMBOL[symbolKey];
+  const buyPct = side.breakdown.buyPct;
+  const sellPct = side.breakdown.sellPct;
+  const oiChange = Math.abs(side.oiChange ?? 0);
+  const oiInterp = side.signals?.oiInterp;
+
+  const buyerBase = side.signal === 'BUY' || side.signal === 'STRONG_BUY';
+  const sellerBase = side.signal === 'SELL' || side.signal === 'STRONG_SELL';
+
+  const hasTwoWayParticipation = buyPct >= rules.minOpposingPct && sellPct >= rules.minOpposingPct;
+  const hasFlowDepth = side.volume >= rules.minVolume && side.oi >= rules.minOI;
+
+  const buyerOIConfirmed = oiInterp === 'LB' || oiInterp === 'SC' || oiChange >= rules.minOIChange;
+  const sellerOIConfirmed = oiInterp === 'SB' || oiInterp === 'LU' || oiChange >= rules.minOIChange;
+
+  if (
+    buyerBase &&
+    buyPct >= rules.minBuyPct &&
+    hasTwoWayParticipation &&
+    hasFlowDepth &&
+    buyerOIConfirmed
+  ) {
+    return 'STRONG_BUY';
+  }
+
+  if (
+    sellerBase &&
+    sellPct >= rules.minSellPct &&
+    hasTwoWayParticipation &&
+    hasFlowDepth &&
+    sellerOIConfirmed
+  ) {
+    return 'STRONG_SELL';
+  }
+
+  return 'NEUTRAL';
+}
+
 // Primitives
 
 const SignalBadge = memo<{ signal: StrikeSignal; side: 'CE' | 'PE' }>(({ signal, side }) => {
   const cfg = SIGNAL_CONFIG[signal];
-  const short = side === 'CE' ? `C.${cfg.short}` : `P.${cfg.short}`;
+  // CE BUY = market going UP → show upward arrow; PE BUY = market going DOWN → show downward arrow
+  // For SELL signals the direction reverses
+  const isCE     = side === 'CE';
+  const isBuy    = signal === 'STRONG_BUY' || signal === 'BUY';
+  const isSell   = signal === 'STRONG_SELL' || signal === 'SELL';
+  const arrow    = isBuy  ? (isCE ? '↑' : '↓') : isSell ? (isCE ? '↓' : '↑') : '—';
+  const short    = side === 'CE' ? `C.${cfg.short}` : `P.${cfg.short}`;
   return (
-    <span className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] sm:text-[11px] font-bold tracking-wider ${cfg.bg} ${cfg.color} ${cfg.border} border shadow-sm ${cfg.glow} transition-all duration-300`}>
+    <span
+      title={isCE
+        ? (isBuy  ? 'CE is strong → market likely going UP → Buy CE (Call option)' : isSell ? 'CE is weak → market likely going DOWN → Buy PE instead' : 'CE neutral — no clear call signal')
+        : (isBuy  ? 'PE is strong → market likely going DOWN → Buy PE (Put option)' : isSell ? 'PE is weak → market likely going UP → Buy CE instead' : 'PE neutral — no clear put signal')}
+      className={`inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] sm:text-[11px] font-bold tracking-wider ${cfg.bg} ${cfg.color} ${cfg.border} border shadow-sm ${cfg.glow} transition-colors duration-150`}>
+      <span className="text-[9px] leading-none">{arrow}</span>
       {short}
     </span>
   );
@@ -87,95 +186,315 @@ const ScoreDot = memo<{ score: number }>(({ score }) => {
 });
 ScoreDot.displayName = 'ScoreDot';
 
-// Side Cell
+// ── Trade Decision Engine ────────────────────────────────────────────────
+// Rule: CE strong + PE weak → BUY CE (market UP)
+//       PE strong + CE weak → BUY PE (market DOWN)
+//       Both strong         → CONFLICTING (wait)
+//       Neither strong      → WAIT
 
-const SideCell = memo<{ side: StrikeSideData; label: 'CE' | 'PE'; volDominant: boolean; oiDominant: boolean; isATM: boolean }>(({ side, label, volDominant, oiDominant, isATM }) => {
-  const isCE = label === 'CE';
-  const changeColor = side.change >= 0 ? 'text-emerald-400' : 'text-red-400';
-  const changeIcon  = side.change >= 0 ? 'UP' : 'DOWN';
+type TradeDecision = 'BUY_CE' | 'BUY_PE' | 'CONFLICTING' | 'WAIT';
 
-  const signalBg =
-    side.signal === 'STRONG_BUY'  ? (isCE ? 'bg-emerald-500/[0.12]' : 'bg-red-500/[0.06]') :
-    side.signal === 'BUY'         ? (isCE ? 'bg-emerald-500/[0.07]' : 'bg-red-500/[0.03]') :
-    side.signal === 'STRONG_SELL' ? (isCE ? 'bg-red-500/[0.12]'     : 'bg-emerald-500/[0.06]') :
-    side.signal === 'SELL'        ? (isCE ? 'bg-red-500/[0.07]'     : 'bg-emerald-500/[0.03]') : '';
+function deriveTradeDecision(ceSignal: StrikeSignal, peSignal: StrikeSignal): TradeDecision {
+  const isBullish = (s: StrikeSignal) => s === 'STRONG_BUY' || s === 'BUY';
+  const ceBull = isBullish(ceSignal);
+  const peBull = isBullish(peSignal);
+  if (ceBull && !peBull) return 'BUY_CE';
+  if (peBull && !ceBull) return 'BUY_PE';
+  if (ceBull &&  peBull) return 'CONFLICTING';
+  return 'WAIT';
+}
 
-  const border = isATM
-    ? 'border-2 border-cyan-300/65 shadow-[0_0_10px_0_rgba(34,211,238,0.18)]'
-    : isCE ? 'border border-emerald-500/28' : 'border border-red-500/28';
+const DECISION_CFG: Record<TradeDecision, {
+  label: string; icon: string;
+  bg: string; border: string; color: string; subColor: string;
+  decisionBg: string; pulse: boolean;
+}> = {
+  BUY_CE:      { label: 'BUY CALL (CE)',   icon: '▲', bg: 'bg-emerald-950/60',  border: 'border-emerald-400/80',  color: 'text-emerald-200', subColor: 'text-emerald-400',  decisionBg: 'bg-emerald-500/25', pulse: true  },
+  BUY_PE:      { label: 'BUY PUT (PE)',    icon: '▼', bg: 'bg-red-950/60',      border: 'border-red-400/80',      color: 'text-red-200',     subColor: 'text-red-400',      decisionBg: 'bg-red-500/25',     pulse: true  },
+  CONFLICTING: { label: 'CONFLICTING — WAIT', icon: '⚡', bg: 'bg-amber-950/60', border: 'border-amber-400/60',  color: 'text-amber-200',   subColor: 'text-amber-400',    decisionBg: 'bg-amber-500/20',   pulse: false },
+  WAIT:        { label: 'NO CLEAR SIGNAL — WAIT', icon: '■', bg: 'bg-slate-800/60', border: 'border-slate-600/50', color: 'text-slate-400',  subColor: 'text-slate-500',    decisionBg: 'bg-slate-700/40',   pulse: false },
+};
 
-  const dominantRing = volDominant
-    ? (isCE ? 'ring-1 ring-emerald-400/40 shadow-[0_0_6px_0_rgba(52,211,153,0.25)]' : 'ring-1 ring-rose-400/40 shadow-[0_0_6px_0_rgba(251,113,133,0.25)]')
-    : '';
+const SUB_TEXT: Record<TradeDecision, string> = {
+  BUY_CE:      'CE is STRONG  ·  PE is WEAK  →  Market going UP',
+  BUY_PE:      'PE is STRONG  ·  CE is WEAK  →  Market going DOWN',
+  CONFLICTING: 'CE and PE both showing strength — direction unclear, stay out',
+  WAIT:        'Neither CE nor PE is strong enough — no trade setup',
+};
 
-  const sigs = side.signals;
+const TradeActionBanner = memo<{
+  atmCeSignal: StrikeSignal; atmCeScore: number;
+  atmPeSignal: StrikeSignal; atmPeScore: number;
+  overallScore: number; confidence: number;
+}>(({ atmCeSignal, atmCeScore, atmPeSignal, atmPeScore, overallScore, confidence }) => {
+  const decision = deriveTradeDecision(atmCeSignal, atmPeSignal);
+  const cfg      = DECISION_CFG[decision];
+  const ceCfg    = SIGNAL_CONFIG[atmCeSignal];
+  const peCfg    = SIGNAL_CONFIG[atmPeSignal];
+  const ceActive = decision === 'BUY_CE';
+  const peActive = decision === 'BUY_PE';
 
   return (
-    <div className={`flex flex-col gap-1 px-1 py-1 sm:px-1.5 sm:py-1.5 rounded-lg transition-all duration-300 min-w-0 overflow-hidden ${signalBg} ${border} ${dominantRing}`}>
-      {/* Price + signal */}
-      <div className={`flex items-center ${isCE ? 'flex-row' : 'flex-row-reverse'} justify-between gap-0.5 min-w-0`}>
-        <SignalBadge signal={side.signal} side={label} />
-        <div className={`flex items-center gap-0.5 min-w-0 flex-1 overflow-hidden ${isCE ? 'justify-end' : 'justify-start'}`}>
-          <span className="text-[10px] sm:text-[12px] font-mono font-semibold text-slate-200 truncate">{side.price.toFixed(1)}</span>
-          <span className={`text-[8px] font-mono ${changeColor} font-bold shrink-0`}>{changeIcon}{Math.abs(side.change).toFixed(1)}</span>
+    <div className={`rounded-xl border mb-3 overflow-hidden transition-all duration-300 ${cfg.border}`}>
+
+      {/* Row 1: ATM CE  vs  ATM PE — side-by-side comparison */}
+      <div className="grid grid-cols-[1fr_28px_1fr]">
+
+        {/* CE side */}
+        <div className={`flex flex-col items-center gap-0.5 py-2 px-2 transition-all duration-300 ${
+          ceActive ? 'bg-emerald-500/20 shadow-inner' : 'bg-slate-800/50 opacity-60'
+        }`}>
+          <span className="text-[8px] font-black tracking-widest uppercase text-emerald-400/80">CE · CALL</span>
+          <span className={`text-[12px] sm:text-[14px] font-black leading-tight ${ceCfg.color} ${
+            ceActive ? 'scale-105' : ''
+          } transition-transform duration-300`}>
+            {ceActive ? '▲ ' : ''}{ceCfg.label}
+          </span>
+          <span className="text-[9px] font-mono text-slate-500 tabular-nums">
+            score: {atmCeScore > 0 ? '+' : ''}{atmCeScore}
+          </span>
+          {ceActive && (
+            <span className="text-[8px] font-bold text-emerald-300 bg-emerald-500/20 border border-emerald-400/40 px-1.5 py-0 rounded mt-0.5">
+              ✓ ACTIVE SIDE
+            </span>
+          )}
+        </div>
+
+        {/* VS divider */}
+        <div className="flex items-center justify-center bg-slate-900/60 border-x border-slate-700/40">
+          <span className="text-[8px] text-slate-500 font-bold rotate-90 sm:rotate-0">vs</span>
+        </div>
+
+        {/* PE side */}
+        <div className={`flex flex-col items-center gap-0.5 py-2 px-2 transition-all duration-300 ${
+          peActive ? 'bg-red-500/20 shadow-inner' : 'bg-slate-800/50 opacity-60'
+        }`}>
+          <span className="text-[8px] font-black tracking-widest uppercase text-red-400/80">PE · PUT</span>
+          <span className={`text-[12px] sm:text-[14px] font-black leading-tight ${peCfg.color} ${
+            peActive ? 'scale-105' : ''
+          } transition-transform duration-300`}>
+            {peActive ? '▼ ' : ''}{peCfg.label}
+          </span>
+          <span className="text-[9px] font-mono text-slate-500 tabular-nums">
+            score: {atmPeScore > 0 ? '+' : ''}{atmPeScore}
+          </span>
+          {peActive && (
+            <span className="text-[8px] font-bold text-red-300 bg-red-500/20 border border-red-400/40 px-1.5 py-0 rounded mt-0.5">
+              ✓ ACTIVE SIDE
+            </span>
+          )}
         </div>
       </div>
 
-      {/* Pressure bar */}
+      {/* Row 2: Decision — the action to take */}
+      <div className={`flex items-center justify-between gap-2 px-3 py-2 border-t ${cfg.border} ${cfg.decisionBg}`}>
+        <div className="flex items-center gap-2 min-w-0">
+          <span className="text-[18px] leading-none shrink-0">{cfg.icon}</span>
+          <div className="flex flex-col min-w-0">
+            <span className={`text-[13px] sm:text-[16px] font-black tracking-wide leading-tight ${cfg.color} ${
+              cfg.pulse ? 'animate-pulse' : ''
+            }`}>
+              {cfg.label}
+            </span>
+            <span className={`text-[9px] sm:text-[10px] font-medium leading-snug ${cfg.subColor} mt-0.5`}>
+              {SUB_TEXT[decision]}
+            </span>
+          </div>
+        </div>
+        <div className="flex flex-col items-end gap-0.5 shrink-0">
+          <span className={`text-[11px] font-black font-mono ${cfg.color} tabular-nums`}>
+            {overallScore > 0 ? '+' : ''}{overallScore}
+          </span>
+          <span className={`text-[10px] font-bold tabular-nums ${
+            confidence >= 70 ? 'text-emerald-400' : confidence >= 45 ? 'text-amber-400' : 'text-red-400'
+          }`}>{confidence}%</span>
+        </div>
+      </div>
+    </div>
+  );
+});
+TradeActionBanner.displayName = 'TradeActionBanner';
+
+// Side Cell
+
+const SideCell = memo<{ side: StrikeSideData; label: 'CE' | 'PE'; volDominant: boolean; oiDominant: boolean; isATM: boolean; symbolKey: SymbolKey }>(({ side, label, volDominant, oiDominant, isATM, symbolKey }) => {
+  const isCE = label === 'CE';
+
+  // Raw backend signal — all 10 factors, updates every 0.5s
+  const displaySignal    = side.signal;
+  // Conviction gate — only for checklist / glow
+  const convictionSignal = getHighConvictionSignal(side, symbolKey);
+  const isBuyable        = convictionSignal === 'STRONG_BUY';
+  const isStrongSell     = convictionSignal === 'STRONG_SELL';
+  const isFullConviction = isBuyable || isStrongSell;
+
+  const isActive  = displaySignal === 'BUY'  || displaySignal === 'STRONG_BUY';
+  const isSelling = displaySignal === 'SELL' || displaySignal === 'STRONG_SELL';
+  const isNeutral = displaySignal === 'NEUTRAL';
+
+  const sigs    = side.signals;
+  const buyPct  = Math.round(side.breakdown.buyPct);
+  const sellPct = Math.round(side.breakdown.sellPct);
+  const oiChg   = side.oiChange ?? 0;
+  const oiInterp = sigs?.oiInterp;
+  const trap     = sigs?.trap;
+  const bos      = sigs?.bos;
+  const rules    = CONVICTION_RULES_BY_SYMBOL[symbolKey];
+
+  // ── Cell chrome ──────────────────────────────────────────────────────
+  const bg = isFullConviction
+    ? (isCE ? 'bg-emerald-500/[0.15]' : 'bg-red-500/[0.15]')
+    : isActive
+      ? (isCE ? 'bg-emerald-500/[0.08]' : 'bg-red-500/[0.08]')
+      : isSelling
+        ? 'bg-slate-800/50'
+        : 'bg-slate-800/30';
+  const border = isATM
+    ? 'border-2 border-cyan-300/65 shadow-[0_0_10px_0_rgba(34,211,238,0.18)]'
+    : isFullConviction
+      ? (isCE
+          ? 'border-2 border-emerald-400 shadow-[0_0_16px_4px_rgba(52,211,153,0.55),inset_0_0_8px_0_rgba(52,211,153,0.15)]'
+          : 'border-2 border-red-400     shadow-[0_0_16px_4px_rgba(239,68,68,0.55),inset_0_0_8px_0_rgba(239,68,68,0.15)]')
+      : isActive
+        ? (isCE ? 'border-2 border-emerald-600/40' : 'border-2 border-red-600/40')
+        : 'border-2 border-slate-700/30';
+
+  // Price: glow+color on conviction, bright on active — font size FIXED to avoid layout reflow
+  const priceChangeColor = side.change >= 0 ? 'text-emerald-400' : 'text-red-400';
+  const priceCls = isFullConviction
+    ? (isCE
+        ? 'text-emerald-200 text-[12px] font-black drop-shadow-[0_0_6px_rgba(52,211,153,0.9)] tabular-nums'
+        : 'text-red-200 text-[12px] font-black drop-shadow-[0_0_6px_rgba(239,68,68,0.9)] tabular-nums')
+    : isActive
+      ? (isCE ? 'text-emerald-300 text-[12px] font-black tabular-nums' : 'text-red-300 text-[12px] font-black tabular-nums')
+      : 'text-slate-200 text-[12px] font-semibold font-mono tabular-nums';
+
+  // ── OI Change label (highlighted when significant) ───────────────────
+  const oiChgAbs = Math.abs(oiChg);
+  const oiChgStr = oiChg === 0 ? '—' : `${oiChg > 0 ? '+' : ''}${fmtNum(oiChg)}`;
+  // Colour: green/red based on direction; dim when near zero
+  const oiChgCls = oiChgAbs >= rules.minOIChange
+    ? (oiChg > 0 ? 'text-emerald-300 font-black' : 'text-red-300 font-black')
+    : oiChgAbs >= 50
+      ? (oiChg > 0 ? 'text-emerald-500' : 'text-red-500')
+      : 'text-slate-600';
+
+  // OI interpretation badge
+  const oiInterpLabel: Record<string, string> = { LB: 'L.BLD', SB: 'S.BLD', SC: 'S.CVR', LU: 'L.UNW' };
+  const oiInterpCls: Record<string, string> = {
+    LB: 'text-emerald-300 bg-emerald-500/20 border-emerald-500/40',
+    SC: 'text-cyan-300    bg-cyan-500/20    border-cyan-500/40',
+    SB: 'text-red-300     bg-red-500/20     border-red-500/40',
+    LU: 'text-orange-300  bg-orange-500/20  border-orange-500/40',
+  };
+
+  // BOS badge
+  const bosCls = bos === 'UP'
+    ? 'text-emerald-300 bg-emerald-500/20 border-emerald-500/40'
+    : 'text-red-300 bg-red-500/20 border-red-500/40';
+
+  // Volume highlight — bright if dominant
+  const volCls = volDominant
+    ? (isCE ? 'text-emerald-300 font-black' : 'text-red-300 font-black')
+    : 'text-slate-400 font-semibold';
+  // OI highlight — bright if dominant
+  const oiCls = oiDominant
+    ? (isCE ? 'text-cyan-300 font-black' : 'text-orange-300 font-black')
+    : 'text-slate-400 font-semibold';
+
+  // Buy% / Sell% dominant highlight
+  const flowCls = isActive
+    ? (isCE ? 'text-emerald-300 font-black' : 'text-red-300 font-black')
+    : isSelling
+      ? 'text-red-400 font-bold'
+      : 'text-slate-400';
+
+  return (
+    <div style={{ willChange: 'transform' }} className={`flex flex-col gap-[5px] px-1.5 py-1.5 rounded-lg transition-colors duration-150 min-w-0 overflow-hidden ${bg} ${border} ${isNeutral ? 'opacity-55' : ''}`}>
+
+      {/* ── ROW 1: Signal badge + Price + Change ─────────────────────── */}
+      <div className={`flex items-center ${isCE ? 'flex-row' : 'flex-row-reverse'} justify-between gap-0.5 min-w-0`}>
+        <SignalBadge signal={displaySignal} side={label} />
+        <div className={`flex items-center gap-0.5 ${isCE ? 'justify-end' : 'justify-start'} flex-1 min-w-0 overflow-hidden`}>
+          <span className={`truncate transition-all duration-200 ${priceCls}`}>{side.price.toFixed(1)}</span>
+          <span className={`text-[8px] font-mono font-bold shrink-0 ${priceChangeColor}`}>
+            {side.change >= 0 ? '+' : ''}{side.change.toFixed(1)}
+          </span>
+        </div>
+      </div>
+
+      {/* ── ROW 2: Buy%/Sell% pressure bar ──────────────────────────── */}
       <LiquidityBar buyPct={side.breakdown.buyPct} sellPct={side.breakdown.sellPct} neutralPct={side.breakdown.neutralPct} />
 
-      {/* Volume + OI */}
-      <div className={`flex gap-0.5 sm:gap-1 text-[8px] sm:text-[10px] font-mono min-w-0 overflow-hidden ${isCE ? 'flex-row' : 'flex-row-reverse'}`}>
-        <span title="Volume" className={`px-0.5 sm:px-1 py-0.5 rounded font-semibold truncate transition-all duration-300 ${volDominant ? (isCE ? 'text-emerald-300 bg-emerald-500/10 border border-emerald-400/40' : 'text-rose-300 bg-rose-500/10 border border-rose-400/40') : 'text-slate-500'}`}>
-          V {fmtNum(side.volume)}
-        </span>
-        <span title="Open Interest" className={`px-0.5 sm:px-1 py-0.5 rounded font-semibold truncate transition-all duration-300 ${oiDominant ? (isCE ? 'text-cyan-300 bg-cyan-500/10 border border-cyan-400/40' : 'text-orange-300 bg-orange-500/10 border border-orange-400/40') : 'text-slate-500'}`}>
-          OI {fmtNum(side.oi)}
-        </span>
+      {/* ── ROW 3: The 4 most critical live metrics ──────────────────── */}
+      {/* Volume | OI — highlighted when dominant */}
+      <div className={`flex items-center justify-between gap-0.5 min-w-0`}>
+        <span className="text-[7px] text-slate-600 shrink-0">V</span>
+        <span className={`text-[9px] font-mono tabular-nums flex-1 ${isCE ? 'text-left' : 'text-right'} ${volCls}`}>{fmtNum(side.volume)}</span>
+        <span className="text-slate-700 text-[7px] shrink-0">·</span>
+        <span className="text-[7px] text-slate-600 shrink-0">OI</span>
+        <span className={`text-[9px] font-mono tabular-nums flex-1 ${isCE ? 'text-left' : 'text-right'} ${oiCls}`}>{fmtNum(side.oi)}</span>
       </div>
 
-      {/* B/N/S pills */}
-      <div className={`flex items-center gap-0.5 flex-wrap min-w-0 overflow-hidden ${isCE ? 'flex-row' : 'flex-row-reverse'}`}>
-        <span className="inline-flex items-center gap-0.5 px-1 py-0 rounded bg-emerald-500/10 text-emerald-400 text-[8px] font-bold border border-emerald-500/20">{Math.round(side.breakdown.buyPct)}%<span className="text-emerald-300">B</span></span>
-        {Math.round(side.breakdown.neutralPct) > 0 && (
-          <span className="inline-flex items-center gap-0.5 px-1 py-0 rounded bg-amber-500/10 text-amber-400 text-[8px] font-bold border border-amber-500/20">{Math.round(side.breakdown.neutralPct)}%<span className="text-amber-300">N</span></span>
+      {/* ── ROW 4: OI Change + OI Interpretation (most real-time signals) */}
+      <div className={`flex items-center gap-1 min-w-0 ${isCE ? '' : 'flex-row-reverse'}`}>
+        {/* ΔOI — flashes colour on fresh buildup/unwinding */}
+        <span className={`text-[8px] font-mono tabular-nums shrink-0 transition-all duration-200 ${oiChgCls}`}>
+          ΔOI:{oiChgStr}
+        </span>
+
+        {/* OI Interpretation badge — the most informative single value */}
+        {oiInterp && (
+          <span className={`text-[7px] font-black px-1 py-0 rounded border leading-tight shrink-0 ${oiInterpCls[oiInterp] ?? 'text-slate-500'}`}>
+            {oiInterpLabel[oiInterp] ?? oiInterp}
+          </span>
         )}
-        <span className="inline-flex items-center gap-0.5 px-1 py-0 rounded bg-red-500/10 text-red-400 text-[8px] font-bold border border-red-500/20">{Math.round(side.breakdown.sellPct)}%<span className="text-red-300">S</span></span>
+
+        {/* BOS badge — structure break */}
+        {bos && (
+          <span className={`text-[7px] font-black px-1 py-0 rounded border leading-tight shrink-0 ${bosCls}`}>
+            BOS {bos}
+          </span>
+        )}
+
+        {/* TRAP warning */}
+        {trap && (
+          <span className="text-[7px] font-black px-1 py-0 rounded border leading-tight shrink-0 text-amber-300 bg-amber-500/20 border-amber-500/40 animate-pulse">
+            ⚠TRAP
+          </span>
+        )}
+
+        {/* B%/S% flow — only when noteworthy */}
+        {(buyPct >= 60 || sellPct >= 60) && (
+          <span className={`text-[8px] font-mono tabular-nums ml-auto shrink-0 ${flowCls}`}>
+            B{buyPct}·S{sellPct}
+          </span>
+        )}
       </div>
 
-      {/* Smart-money tags */}
-      {sigs && (sigs.liq || sigs.bos || sigs.trap || sigs.delta !== undefined) && (
-        <div className={`flex flex-wrap items-center gap-0.5 min-w-0 overflow-hidden ${isCE ? 'flex-row' : 'flex-row-reverse'}`}>
-          {sigs.liq && (
-            <span title={sigs.liq === 'BSL' ? 'Buy-Side Liquidity: call wall above = institutional resistance' : 'Sell-Side Liquidity: put wall below = institutional support'} className={`text-[8px] font-bold px-1 py-0 rounded leading-tight ${sigs.liq === 'BSL' ? 'bg-cyan-500/15 text-cyan-300 border border-cyan-400/40' : 'bg-orange-500/15 text-orange-300 border border-orange-400/40'}`}>{sigs.liq}</span>
-          )}
-          {sigs.bos && (
-            <span title={sigs.bos === 'UP' ? 'BOS UP: CE surging > PE falling (bullish structure break)' : 'BOS DOWN: PE surging > CE falling (bearish breakdown)'} className={`text-[8px] font-bold px-1 py-0 rounded leading-tight ${sigs.bos === 'UP' ? 'bg-emerald-500/15 text-emerald-300 border border-emerald-400/40' : 'bg-red-500/15 text-red-300 border border-red-400/40'}`}>BOS {sigs.bos === 'UP' ? 'UP' : 'DOWN'}</span>
-          )}
-          {sigs.trap && (
-            <span title="Trap warning: high volume but price not moving (possible institutional absorption)" className="text-[8px] font-bold px-1 py-0 rounded leading-tight bg-amber-500/20 text-amber-300 border border-amber-400/50 animate-pulse">TRAP</span>
-          )}
-          {sigs.delta !== undefined && (
-            <span title={`Delta ${sigs.delta.toFixed(2)} | ITM ~ 0.9 | ATM ~ 0.5 | OTM ~ 0.1`} className={`hidden sm:inline text-[8px] font-mono px-1 py-0 rounded leading-tight ${sigs.delta >= 0.65 ? 'bg-indigo-500/15 text-indigo-300 border border-indigo-400/30' : sigs.delta <= 0.35 ? 'bg-slate-700/60 text-slate-500 border border-slate-600/30' : 'bg-slate-700/40 text-slate-400 border border-slate-600/20'}`}>DELTA {sigs.delta.toFixed(2)}</span>
-          )}
-          {sigs.oiInterp && side.oiChange !== undefined && side.oiChange !== 0 && (
-            <span
-              title={
-                sigs.oiInterp === 'LB' ? 'Long Buildup: OI rising + Price rising — fresh longs entering, strong directional conviction' :
-                sigs.oiInterp === 'SB' ? 'Short Buildup: OI rising + Price falling — fresh shorts entering, selling pressure building' :
-                sigs.oiInterp === 'SC' ? 'Short Covering: OI falling + Price rising — shorts exiting, mild upside relief' :
-                'Long Unwinding: OI falling + Price falling — longs exiting, mild selling pressure'
-              }
-              className={`text-[8px] font-bold px-1 py-0 rounded leading-tight border ${
-                sigs.oiInterp === 'LB' ? 'bg-emerald-500/20 text-emerald-300 border-emerald-400/50' :
-                sigs.oiInterp === 'SB' ? 'bg-red-500/20 text-red-300 border-red-400/50' :
-                sigs.oiInterp === 'SC' ? 'bg-emerald-500/10 text-emerald-400/80 border-emerald-500/30' :
-                'bg-red-500/10 text-red-400/80 border-red-500/30'
-              }`}
-            >
-              {sigs.oiInterp} {side.oiChange > 0 ? '+' : ''}{fmtNum(side.oiChange)}
-            </span>
-          )}
+      {/* ── ROW 5 (conviction only): Pre-Trade checklist ─────────────── */}
+      {isFullConviction && (
+        <div className={`flex flex-col gap-[3px] rounded-md px-1 py-1 border mt-0.5 ${
+          isCE ? 'bg-emerald-950/60 border-emerald-500/40' : 'bg-red-950/60 border-red-500/40'
+        }`}>
+          <span className={`text-[7px] font-black tracking-widest uppercase mb-0.5 ${isCE ? 'text-emerald-400' : 'text-red-400'}`}>
+            ✓ Pre-Trade
+          </span>
+          {[
+            { label: isBuyable ? 'Buy%' : 'Sell%', value: isBuyable ? `${buyPct}%` : `${sellPct}%`, pass: isBuyable ? buyPct >= rules.minBuyPct : sellPct >= rules.minSellPct },
+            { label: 'Volume',   value: fmtNum(side.volume), pass: side.volume >= rules.minVolume },
+            { label: 'OI Depth', value: fmtNum(side.oi),     pass: side.oi >= rules.minOI },
+            { label: 'ΔOI',      value: oiChgStr,            pass: oiChgAbs >= rules.minOIChange || !!oiInterp },
+          ].map((p, i) => (
+            <div key={i} className={`flex items-center justify-between gap-1 ${isCE ? '' : 'flex-row-reverse'}`}>
+              <span className={`text-[7px] font-semibold shrink-0 ${p.pass ? (isCE ? 'text-emerald-400' : 'text-red-400') : 'text-slate-500'}`}>
+                {p.pass ? '✓' : '✗'} {p.label}
+              </span>
+              <span className={`text-[7px] font-mono font-bold tabular-nums px-0.5 rounded truncate ${
+                p.pass ? (isCE ? 'text-emerald-200 bg-emerald-500/20' : 'text-red-200 bg-red-500/20') : 'text-slate-500 bg-slate-800/60'
+              }`}>{p.value}</span>
+            </div>
+          ))}
         </div>
       )}
     </div>
@@ -185,33 +504,75 @@ SideCell.displayName = 'SideCell';
 
 // Strike Row
 
-const StrikeRowComponent = memo<{ row: StrikeRow; maxVol: number; maxOI: number }>(({ row, maxVol, maxOI }) => {
+const StrikeRowComponent = memo<{ row: StrikeRow; maxVol: number; maxOI: number; symbolKey: SymbolKey }>(({ row, maxVol, maxOI, symbolKey }) => {
   const isATM = row.isATM;
   const totalVol  = row.ce.volume + row.pe.volume;
   const totalOI   = row.ce.oi    + row.pe.oi;
   const volIntensity = maxVol > 0 ? Math.min(totalVol / maxVol, 1) : 0;
   const oiIntensity  = maxOI  > 0 ? Math.min(totalOI  / maxOI,  1) : 0;
 
+  // Compute high-conviction signals at the row level for row-wide highlighting
+  const ceConv = getHighConvictionSignal(row.ce, symbolKey);
+  const peConv = getHighConvictionSignal(row.pe, symbolKey);
+  const ceStrong = ceConv === 'STRONG_BUY' || ceConv === 'STRONG_SELL';
+  const peStrong = peConv === 'STRONG_BUY' || peConv === 'STRONG_SELL';
+
+  // Row border: conviction takes priority over everything
   const rowBorder =
-    isATM                          ? 'border-[3px] border-cyan-300/85 shadow-[0_0_14px_0_rgba(34,211,238,0.16)]' :
-    row.ce.signal === 'STRONG_BUY' ? 'border-l-[3px] border-emerald-400/70' :
-    row.pe.signal === 'STRONG_BUY' ? 'border-r-[3px] border-red-400/70' :
-    row.ce.signal === 'BUY'        ? 'border-l-2 border-emerald-500/40' :
-    row.pe.signal === 'BUY'        ? 'border-r-2 border-red-500/40' :
-    'border-l border-r border-transparent';
+    ceStrong && peStrong ? 'border-[3px] border-amber-400/90 shadow-[0_0_20px_4px_rgba(251,191,36,0.35)]' :
+    ceConv === 'STRONG_BUY'  ? 'border-[3px] border-emerald-400/90 shadow-[0_0_20px_4px_rgba(52,211,153,0.35)]' :
+    peConv === 'STRONG_BUY'  ? 'border-[3px] border-red-400/90    shadow-[0_0_20px_4px_rgba(239,68,68,0.35)]' :
+    ceConv === 'STRONG_SELL' ? 'border-[3px] border-red-400/90    shadow-[0_0_20px_4px_rgba(239,68,68,0.35)]' :
+    peConv === 'STRONG_SELL' ? 'border-[3px] border-emerald-400/90 shadow-[0_0_20px_4px_rgba(52,211,153,0.35)]' :
+    isATM ? 'border-[2px] border-cyan-300/70' :
+    'border border-slate-700/30';
 
   const rowBg =
+    ceConv === 'STRONG_BUY'  ? 'bg-emerald-500/[0.09]' :
+    peConv === 'STRONG_BUY'  ? 'bg-red-500/[0.09]' :
+    ceConv === 'STRONG_SELL' ? 'bg-red-500/[0.09]' :
+    peConv === 'STRONG_SELL' ? 'bg-emerald-500/[0.09]' :
     isATM              ? 'bg-cyan-400/[0.10]' :
     volIntensity > 0.7 ? (row.ce.volume > row.pe.volume ? 'bg-emerald-500/[0.04]' : 'bg-red-500/[0.04]') : '';
 
+  // Strike center: number highlight when conviction met on either side
+  const strikeNumberCls = ceStrong || peStrong
+    ? (ceConv === 'STRONG_BUY' || peConv === 'STRONG_SELL'
+        ? 'text-[13px] sm:text-[15px] font-black font-mono text-emerald-200 drop-shadow-[0_0_8px_rgba(52,211,153,0.9)] animate-pulse'
+        : 'text-[13px] sm:text-[15px] font-black font-mono text-red-200 drop-shadow-[0_0_8px_rgba(239,68,68,0.9)] animate-pulse')
+    : isATM ? 'text-[11px] sm:text-[13px] font-black font-mono text-cyan-300'
+    : 'text-[11px] sm:text-[13px] font-black font-mono text-slate-300';
+
+  // "TRADE" badge in strike center when conviction met
+  const tradeBadge = ceConv === 'STRONG_BUY'
+    ? { label: '▲ BUY CE', cls: 'bg-emerald-500/30 text-emerald-200 border border-emerald-400/70' }
+    : peConv === 'STRONG_BUY'
+    ? { label: '▼ BUY PE', cls: 'bg-red-500/30     text-red-200     border border-red-400/70' }
+    : ceConv === 'STRONG_SELL'
+    ? { label: '▼ CE SELL', cls: 'bg-red-500/30    text-red-200     border border-red-400/70' }
+    : peConv === 'STRONG_SELL'
+    ? { label: '▲ PE SELL', cls: 'bg-emerald-500/30 text-emerald-200 border border-emerald-400/70' }
+    : null;
+
   return (
-    <div className={`grid grid-cols-[1fr_60px_1fr] sm:grid-cols-[1fr_84px_1fr] items-stretch gap-0 rounded-lg overflow-hidden ${rowBg} ${rowBorder} ${isATM ? 'ring-2 ring-cyan-300/45 shadow-md shadow-cyan-400/20' : ''} hover:bg-white/[0.025] transition-colors duration-150`}>
-      <SideCell side={row.ce} label="CE" volDominant={row.ce.volume > row.pe.volume} oiDominant={row.ce.oi > row.pe.oi} isATM={isATM} />
+    <div className={`grid grid-cols-[1fr_60px_1fr] sm:grid-cols-[1fr_84px_1fr] items-stretch gap-0 rounded-lg overflow-hidden ${rowBg} ${rowBorder} ${
+      isATM ? 'ring-1 ring-cyan-300/25' : ''
+    } hover:bg-white/[0.025] transition-all duration-300`}>
+      <SideCell side={row.ce} label="CE" volDominant={row.ce.volume > row.pe.volume} oiDominant={row.ce.oi > row.pe.oi} isATM={isATM} symbolKey={symbolKey} />
 
       {/* Strike center */}
-      <div className={`flex flex-col items-center justify-center gap-0.5 px-1 py-1.5 border-x ${isATM ? 'border-cyan-300/50 bg-cyan-400/[0.08]' : 'border-slate-700/40'}`}>
-        <span className={`text-[11px] sm:text-[13px] font-black font-mono tracking-tight ${isATM ? 'text-cyan-300' : 'text-slate-300'}`}>{row.strike.toLocaleString('en-IN')}</span>
-        <span className={`text-[8px] font-bold uppercase tracking-widest px-1 rounded ${isATM ? 'text-cyan-400 bg-cyan-500/15 border border-cyan-400/30' : 'text-slate-600'}`}>{row.label}</span>
+      <div className={`flex flex-col items-center justify-center gap-0.5 px-1 py-1.5 border-x ${
+        ceStrong || peStrong ? 'bg-slate-900/80 border-slate-600/60' :
+        isATM ? 'border-cyan-300/50 bg-cyan-400/[0.08]' : 'border-slate-700/40'
+      }`}>
+        <span className={strikeNumberCls}>{row.strike.toLocaleString('en-IN')}</span>
+        {tradeBadge ? (
+          <span className={`text-[8px] font-black tracking-tight px-1 py-0 rounded animate-pulse ${tradeBadge.cls}`}>{tradeBadge.label}</span>
+        ) : (
+          <span className={`text-[8px] font-bold uppercase tracking-widest px-1 rounded ${
+            isATM ? 'text-cyan-400 bg-cyan-500/15 border border-cyan-400/30' : 'text-slate-600'
+          }`}>{row.label}</span>
+        )}
         <div className="w-10 h-[4px] rounded-full bg-slate-800/80 overflow-hidden mt-0.5" title={`Vol ${Math.round(volIntensity * 100)}%`}>
           <div className={`h-full rounded-full transition-all duration-500 ${volIntensity > 0.7 ? 'bg-amber-400' : volIntensity > 0.4 ? 'bg-amber-500/50' : 'bg-slate-700'}`} style={{ width: `${volIntensity * 100}%` }} />
         </div>
@@ -224,7 +585,7 @@ const StrikeRowComponent = memo<{ row: StrikeRow; maxVol: number; maxOI: number 
         </div>
       </div>
 
-      <SideCell side={row.pe} label="PE" volDominant={row.pe.volume > row.ce.volume} oiDominant={row.pe.oi > row.ce.oi} isATM={isATM} />
+      <SideCell side={row.pe} label="PE" volDominant={row.pe.volume > row.ce.volume} oiDominant={row.pe.oi > row.ce.oi} isATM={isATM} symbolKey={symbolKey} />
     </div>
   );
 });
@@ -236,9 +597,12 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
   const strikes      = data?.strikes ?? [];
   const hasData      = strikes.length > 0;
   const intelligence = data?.intelligence;
+  const symbolKey    = normalizeSymbolKey(data?.symbol || name);
 
   const maxVol = useMemo(() => hasData ? Math.max(...strikes.map(s => s.ce.volume + s.pe.volume), 1) : 1, [strikes, hasData]);
   const maxOI  = useMemo(() => hasData ? Math.max(...strikes.map(s => s.ce.oi    + s.pe.oi),    1) : 1, [strikes, hasData]);
+  // ATM row drives the trade decision (most price-sensitive strike)
+  const atmRow = useMemo(() => strikes.find(s => s.isATM) ?? (strikes.length > 0 ? strikes[Math.floor(strikes.length / 2)] : null), [strikes]);
 
   const isLiveData   = data?.dataSource === 'LIVE';
   const isLastClose  = data?.dataSource === 'LAST_CLOSE';
@@ -455,6 +819,18 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
         </div>
       )}
 
+      {/* ── TRADE ACTION BANNER ────────────────────────────────────────── */}
+      {hasRealSignal && atmRow && (
+        <TradeActionBanner
+          atmCeSignal={atmRow.ce.signal}
+          atmCeScore={Math.round(atmRow.ce.score)}
+          atmPeSignal={atmRow.pe.signal}
+          atmPeScore={Math.round(atmRow.pe.score)}
+          overallScore={symbolSignal.score}
+          confidence={intelligence?.confidence ?? 50}
+        />
+      )}
+
       {/* Feed status bar */}
       <div className="flex flex-wrap items-center justify-between gap-2 mb-2 rounded-lg border border-slate-700/30 bg-slate-900/40 px-2 py-1">
         <span className="text-[9px] sm:text-[10px] font-medium text-slate-300">{feedLabel}</span>
@@ -466,10 +842,15 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
 
       {/* Strike table header */}
       <div className="grid grid-cols-[1fr_60px_1fr] sm:grid-cols-[1fr_84px_1fr] rounded-t-lg overflow-hidden border border-slate-700/50 mb-0">
-        <div className="flex items-center gap-1.5 px-2 py-1.5 bg-emerald-500/10 border-r border-slate-700/50">
-          <span className="w-2 h-2 rounded-full bg-emerald-400 inline-block" />
-          <span className="text-[10px] font-black tracking-widest uppercase text-emerald-300">CALL (CE)</span>
-          <span className="ml-auto text-[8px] text-emerald-500/60 hidden sm:inline">Market trend: UP</span>
+        <div className="flex flex-col gap-0.5 px-2 py-1.5 bg-emerald-500/10 border-r border-slate-700/50">
+          <div className="flex items-center gap-1.5">
+            <span className="w-2 h-2 rounded-full bg-emerald-400 inline-block shrink-0" />
+            <span className="text-[10px] font-black tracking-widest uppercase text-emerald-300">CALL (CE)</span>
+          </div>
+          <span className="text-[8px] font-bold text-emerald-400/80 hidden sm:block">
+            C.S.BUY / C.BUY → <span className="text-emerald-300 font-black">BUY CE</span> (market going UP)
+          </span>
+          <span className="text-[8px] text-emerald-400/80 block sm:hidden">↑ UP → BUY CE</span>
         </div>
         <div className="flex flex-col items-center justify-center px-1 py-1.5 bg-slate-800/60 border-r border-slate-700/50">
           <span className="text-[9px] font-black tracking-widest uppercase text-cyan-400">STRIKE</span>
@@ -478,10 +859,15 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
             <span className="text-[7px] text-blue-400/70">OI</span>
           </div>
         </div>
-        <div className="flex items-center gap-1.5 px-2 py-1.5 bg-red-500/10 flex-row-reverse">
-          <span className="w-2 h-2 rounded-full bg-red-400 inline-block" />
-          <span className="text-[10px] font-black tracking-widest uppercase text-red-300">PUT (PE)</span>
-          <span className="mr-auto text-[8px] text-red-500/60 hidden sm:inline">Market trend: DOWN</span>
+        <div className="flex flex-col gap-0.5 px-2 py-1.5 bg-red-500/10 items-end">
+          <div className="flex items-center gap-1.5 flex-row-reverse">
+            <span className="w-2 h-2 rounded-full bg-red-400 inline-block shrink-0" />
+            <span className="text-[10px] font-black tracking-widest uppercase text-red-300">PUT (PE)</span>
+          </div>
+          <span className="text-[8px] font-bold text-red-400/80 hidden sm:block text-right">
+            P.S.BUY / P.BUY → <span className="text-red-300 font-black">BUY PE</span> (market going DOWN)
+          </span>
+          <span className="text-[8px] text-red-400/80 block sm:hidden">↓ DOWN → BUY PE</span>
         </div>
       </div>
 
@@ -501,7 +887,7 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
       {/* Strike rows */}
       <div className="flex flex-col gap-[2px]">
         {data.strikes.map(row => (
-          <StrikeRowComponent key={row.strike} row={row} maxVol={maxVol} maxOI={maxOI} />
+          <StrikeRowComponent key={row.strike} row={row} maxVol={maxVol} maxOI={maxOI} symbolKey={symbolKey} />
         ))}
       </div>
 
@@ -517,7 +903,19 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
         <span className="flex items-center gap-1"><span className="w-3 h-1 rounded-full bg-blue-400" />OI heat</span>
         <span className="flex items-center gap-1"><span className="text-cyan-400">CYAN</span>=ATM</span>
         <span className="flex items-center gap-1"><span className="text-violet-400">VIOLET</span>=Max Pain</span>
-        <span className="w-full text-center text-[8px] text-slate-500 pt-0.5">CE BUY = call strength (market likely up) | PE BUY = put strength (market likely down)</span>
+        {/* Clear trading rule */}
+        <div className="w-full mt-1 flex flex-col gap-0.5 rounded-lg border border-slate-700/40 bg-slate-900/50 px-2 py-1.5 text-[9px]">
+          <div className="flex items-center justify-center gap-3 flex-wrap">
+            <span className="flex items-center gap-1 text-emerald-400 font-bold">
+              <span className="text-emerald-300">↑ CE BUY</span> = <span className="text-emerald-200">BUY CALL option</span> <span className="text-emerald-500/70 font-normal">(market going UP)</span>
+            </span>
+            <span className="text-slate-600">|</span>
+            <span className="flex items-center gap-1 text-red-400 font-bold">
+              <span className="text-red-300">↓ PE BUY</span> = <span className="text-red-200">BUY PUT option</span> <span className="text-red-500/70 font-normal">(market going DOWN)</span>
+            </span>
+          </div>
+          <p className="text-center text-slate-500 text-[8px] mt-0.5">When CE BUY and PE HOLD → Buy CE. When PE BUY and CE HOLD → Buy PE. When both BUY or both NEUTRAL → Wait.</p>
+        </div>
       </div>
     </div>
   );

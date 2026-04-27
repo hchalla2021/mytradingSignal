@@ -21,6 +21,14 @@ export interface FVG {
   startIdx: number;
   filled: boolean;
   strength: number;
+  /** PREMIUM = high-probability retrace zone | STANDARD = medium | WEAK = low */
+  quality?: 'PREMIUM' | 'STANDARD' | 'WEAK';
+  /** 0–1: how much of the gap has been touched back into */
+  partialFill?: number;
+  /** % momentum swing that created the gap */
+  momentum?: number;
+  /** How many candles ago this FVG was formed */
+  candles_ago?: number;
 }
 
 export interface OrderBlock {
@@ -32,6 +40,10 @@ export interface OrderBlock {
   startIdx: number;
   mitigated: boolean;
   strength: number;
+  /** PREMIUM = strong impulse + fresh | STANDARD = moderate | WEAK = low impulse or mitigated */
+  quality?: 'PREMIUM' | 'STANDARD' | 'WEAK';
+  /** How many candles ago this OB formed — lower = fresher */
+  candles_ago?: number;
 }
 
 export interface Liquidity {
@@ -41,6 +53,8 @@ export interface Liquidity {
   swept: boolean;
   sweepIdx: number | null;
   touchCount: number;
+  /** PREMIUM = 3+ touches unswept | STANDARD = 2 touches unswept | WEAK = already swept */
+  quality?: 'PREMIUM' | 'STANDARD' | 'WEAK';
 }
 
 export interface ChartLevels {

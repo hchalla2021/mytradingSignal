@@ -213,16 +213,9 @@ export function useStrikeIntelligence() {
         if (raw[sym]) {
           const incoming = raw[sym];
           const existing = prev[sym];
-          // Skip only if timestamp AND spot AND atm are all unchanged — avoids blocking
-          // 1s spot-updated broadcasts that don't change OI/vol but DO update ATM/signals.
-          // Include dataSource so semantic upgrades like MARKET_CLOSED -> LAST_CLOSE reach the UI.
-          if (
-            existing &&
-            existing.timestamp === incoming.timestamp &&
-            existing.spot === incoming.spot &&
-            existing.atm === incoming.atm &&
-            existing.dataSource === incoming.dataSource
-          ) continue;
+          // Skip only if timestamp is identical — every backend broadcast sets a fresh
+          // ISO timestamp so this guard only blocks accidental duplicate frames.
+          if (existing && existing.timestamp === incoming.timestamp) continue;
           next[sym] = typeof structuredClone === 'function'
             ? structuredClone(incoming)
             : JSON.parse(JSON.stringify(incoming));

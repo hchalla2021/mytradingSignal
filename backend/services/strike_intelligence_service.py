@@ -349,7 +349,7 @@ def _compute_signal(
     # Magnitude scales with OI change size; capped at ±20.
     # Minimum threshold (≥200 contracts) prevents expiry-day micro-noise.
     # ───────────────────────────────────────────────────────────────────────
-    _OI_MIN_CHANGE = 200   # minimum absolute OI Δ to trigger scoring
+    _OI_MIN_CHANGE = 50    # minimum absolute OI Δ to trigger scoring
 
     oiInterp_ce: Optional[str] = None
     oiInterp_pe: Optional[str] = None
@@ -794,8 +794,8 @@ class StrikeIntelligenceService:
         self._instruments_cache: Dict[str, List] = {}
         self._instruments_cache_date: Dict[str, date] = {}
         self._last_save_time: float = 0.0
-        self._cadence_live = 1.0        # Broadcast every 1s during market hours
-        self._cadence_fetch = 5.0       # Full Zerodha quote fetch every 5s
+        self._cadence_live = 0.5        # Broadcast every 0.5s during market hours
+        self._cadence_fetch = 2.0       # Full Zerodha quote fetch every 2s
         self._cadence_closed = 60.0
         self._heartbeat_interval = 30.0
         self._kite_init_backoff_until: float = 0.0  # Backoff timer for failed init
