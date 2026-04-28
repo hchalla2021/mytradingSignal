@@ -37,7 +37,7 @@ export default function AIAlertTooltip({ data, onDismiss }: Props) {
   useEffect(() => {
     if (!data.showAlert) {
       setVisible(false);
-      return;
+      return undefined;
     }
 
     setVisible(true);
