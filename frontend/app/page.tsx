@@ -191,7 +191,6 @@ export default function Home() {
   } = useMarketSocket();
   const { alertData } = useAIAnalysis();
   const { vixData, loading: vixLoading } = useIndiaVIX();
-  const [currentTime, setCurrentTime] = useState<string>('');
   const [serverOutlook, setServerOutlook] = useState<Record<string, any> | null>(null);
 
   // 🔥 Clear browser cache on mount (desktop browsers cache aggressively)
@@ -358,16 +357,6 @@ export default function Home() {
       SENSEX: one('SENSEX'),
     };
   }, [serverOutlook, marketData]);
-
-  // Update current time
-  useEffect(() => {
-    const updateTime = () => {
-      setCurrentTime(new Date().toLocaleTimeString('en-IN'));
-    };
-    updateTime();
-    const interval = setInterval(updateTime, 1000);
-    return () => clearInterval(interval);
-  }, []);
 
   // Determine market status from actual data, with client-side IST fallback
   // so the UI never shows "MARKET CLOSED" when the Indian market is actually open
