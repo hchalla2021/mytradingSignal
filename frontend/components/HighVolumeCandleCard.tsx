@@ -102,7 +102,6 @@ export const HighVolumeCandleCard: React.FC<HighVolumeCandleCardProps> = ({
   const volumeSpikePctAbs = Math.abs(data.volume_spike_pct);
 
   // Calculate visualization metrics
-  const spikeMagnitude = Math.min(volumeSpikePctAbs / 100, 1); // Normalize to 0-1
   const spikeBarWidth = Math.max(10, Math.min(100, (volumeSpikePctAbs / 150) * 100)); // Clamp for display
 
   return (
