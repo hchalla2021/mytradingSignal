@@ -10,9 +10,6 @@ interface LiveStatusProps {
 
 const LiveStatus: React.FC<LiveStatusProps> = memo(({ status, isConnected }) => {
   const getStatusConfig = () => {
-    // Normalize status to handle both old and new formats
-    const normalizedStatus = status.toLowerCase();
-    
     switch (status) {
       case 'LIVE':
         return {

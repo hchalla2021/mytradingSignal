@@ -268,8 +268,6 @@ const IndexCard = memo(({ data }: { data: ICTIndex | null }) => {
   const core3Bear = obSig === 'BEAR' && stSig === 'BEAR' && fvgSig === 'BEAR';
 
   // Liquidity Sweep active in direction?
-  const sweepBull = data.signals.liquidity_sweeps.signal === 'BULL';
-  const sweepBear = data.signals.liquidity_sweeps.signal === 'BEAR';
 
   // Confidence meets threshold for highlight?
   const confMet = data.confidence >= 40;
@@ -566,12 +564,6 @@ const SummaryStrip = memo(({ data }: { data: { NIFTY: ICTIndex | null; BANKNIFTY
   const buyerPct = Math.max(5, Math.min(95, Math.round(50 + avgRawScore * 62)));
   const sellerPct = 100 - buyerPct;
 
-  let marketBias: string;
-  let biasColor: string;
-  if (bulls > bears)      { marketBias = 'ICT Bullish';   biasColor = 'text-emerald-400'; }
-  else if (bears > bulls) { marketBias = 'ICT Bearish';   biasColor = 'text-red-400'; }
-  else                    { marketBias = 'ICT Neutral';   biasColor = 'text-slate-400'; }
-
   const avgConf = Math.round(indices.reduce((a, b) => a + b.confidence, 0) / indices.length);
   const avgGrade = indices.map(x => x.ictSetup.grade).join(' / ');
 
@@ -640,9 +632,9 @@ function ICTIntelligence() {
                     backdrop-blur-sm shadow-xl shadow-amber-500/10 ${sectionGlow}`}>
       <HeaderBar isConnected={isConnected} lastUpdate={lastUpdate} />
       <div className="flex flex-col lg:flex-row gap-3">
-        <IndexCard index="NIFTY"     data={ictData.NIFTY} />
-        <IndexCard index="BANKNIFTY" data={ictData.BANKNIFTY} />
-        <IndexCard index="SENSEX"    data={ictData.SENSEX} />
+        <IndexCard data={ictData.NIFTY} />
+        <IndexCard data={ictData.BANKNIFTY} />
+        <IndexCard data={ictData.SENSEX} />
       </div>
     </div>
   );

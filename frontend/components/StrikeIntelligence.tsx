@@ -2,7 +2,6 @@
 
 import React, { memo, useMemo, useRef, useState, useEffect } from 'react';
 import { useStrikeIntelligence, type SymbolStrikeData, type StrikeRow, type StrikeSignal, type StrikeSideData } from '@/hooks/useStrikeIntelligence';
-import { BestStrikeCard } from '@/components/BestStrikeCard';
 import { PricePredictionCard } from '@/components/PricePredictionCard';
 
 // Signal config
@@ -263,7 +262,6 @@ const TradeActionBanner = memo<{
   const ceActive = decision === 'BUY_CE' || decision === 'FLOW_BUY_CE';
   // peActive: highlight PE pane for signal-confirmed AND flow-confirmed PE bias
   const peActive = decision === 'BUY_PE' || decision === 'FLOW_BUY_PE';
-  const isFlowDecision = decision === 'FLOW_BUY_CE' || decision === 'FLOW_BUY_PE';
 
   return (
     <div className={`rounded-xl border mb-3 overflow-hidden transition-all duration-300 ${cfg.border}`}>

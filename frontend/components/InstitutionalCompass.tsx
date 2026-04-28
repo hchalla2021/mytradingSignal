@@ -106,8 +106,6 @@ const Pred5mBadge = memo(({ pred, conf }: { pred: Prediction5m; conf?: number })
 });
 Pred5mBadge.displayName = 'Pred5mBadge';
 
-const PRED = PRED5M_CONF;
-
 const fmt = (n: number, d = 2) =>
   n.toLocaleString('en-IN', { minimumFractionDigits: d, maximumFractionDigits: d });
 
@@ -202,15 +200,6 @@ const IndicatorsStrip = memo(({ data, premHighlight }: IndicatorsStripProps) => 
   const vwapDev = spot.vwap && spot.price > 0
     ? ((spot.price - spot.vwap) / spot.vwap * 100)
     : null;
-
-  // EMA alignment text
-  let emaAlign = '—';
-  if (spot.ema9 && spot.ema20 && spot.ema50) {
-    if (spot.ema9 > spot.ema20 && spot.ema20 > spot.ema50) emaAlign = '9>20>50 ↑';
-    else if (spot.ema9 < spot.ema20 && spot.ema20 < spot.ema50) emaAlign = '9<20<50 ↓';
-    else if (spot.ema9 > spot.ema20) emaAlign = '9>20 mild ↑';
-    else emaAlign = '9<20 mild ↓';
-  }
 
   const premTrend = futures.premiumTrend;
   const premColor = premTrend === 'EXPANDING' ? 'text-emerald-400'

@@ -2,7 +2,7 @@
 
 import React from 'react';
 import { PricePredictions } from '@/hooks/useStrikeIntelligence';
-import { ArrowUp, ArrowDown, TrendingUp, TrendingDown } from 'lucide-react';
+import { ArrowUp, ArrowDown, TrendingUp } from 'lucide-react';
 
 interface PricePredictionCardProps {
   predictions: PricePredictions | undefined;
@@ -46,7 +46,7 @@ export const PricePredictionCard: React.FC<PricePredictionCardProps> = ({
     bgColor: string;
     borderColor: string;
     textColor: string;
-  }> = ({ label, prediction, bgColor, borderColor, textColor }) => {
+  }> = ({ label, prediction, bgColor, borderColor }) => {
     if (!prediction || Object.keys(prediction).length === 0) {
       return null;
     }
@@ -55,7 +55,6 @@ export const PricePredictionCard: React.FC<PricePredictionCardProps> = ({
     const isUp = direction === 'UP';
     
     // Confidence color indicator
-    const confColor = confidence >= 70 ? 'emerald' : confidence >= 50 ? 'amber' : 'slate';
     const confBg = confidence >= 70 ? 'bg-emerald-500/15' : confidence >= 50 ? 'bg-amber-500/15' : 'bg-slate-500/10';
     const confBorder = confidence >= 70 ? 'border-emerald-500/30' : confidence >= 50 ? 'border-amber-500/30' : 'border-slate-500/20';
     

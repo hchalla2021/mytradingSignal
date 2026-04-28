@@ -1,7 +1,7 @@
 'use client';
 
 import React, { memo } from 'react';
-import { useMarketRegime, type RegimeIndex, type RegimeType, type TrendStrength, type TradeApproach } from '@/hooks/useMarketRegime';
+import { useMarketRegime, type RegimeIndex, type RegimeType, type TradeApproach } from '@/hooks/useMarketRegime';
 import type { MarketData } from '@/hooks/useMarketSocket';
 import type { VIXData } from '@/hooks/useIndiaVIX';
 import SectionTitle from '@/components/SectionTitle';
@@ -141,7 +141,7 @@ ScoreGauge.displayName = 'ScoreGauge';
 // ── Factor Row ──────────────────────────────────────────────────────────────
 
 const FactorRow = memo<{ name: string; score: number; label: string; signal: string; weight: number }>(
-  ({ name, score, label, signal, weight }) => {
+  ({ name, score, label, weight }) => {
     const info = FACTOR_NAMES[name] || { label: name, icon: '•' };
     const pct = Math.min(100, Math.max(0, score));
     const barColor =

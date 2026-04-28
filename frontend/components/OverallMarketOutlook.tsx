@@ -9,7 +9,7 @@
  * - Zero clutter, maximum clarity
  */
 
-import React, { useState, useEffect, memo, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, memo, useCallback } from 'react';
 import { useIndiaVIX } from '@/hooks/useIndiaVIX';
 import IndiaVIXBadge from '@/components/IndiaVIXBadge';
 import { API_CONFIG } from '@/lib/api-config';

@@ -7,59 +7,10 @@ import { usePivotPointsRealtimeMulti } from '@/hooks/usePivotPointsRealtime';
 // ============================================================================
 // TYPES - Enhanced Pivot Analysis
 // ============================================================================
-interface EnhancedPivotData {
-  symbol: string;
-  status: 'LIVE' | 'CACHED' | 'OFFLINE';
-  
-  // Price info
-  current_price: number;
-  
-  // Pivot levels (stable - never change during market)
-  classic_pivots: {
-    s3: number;
-    s2: number;
-    s1: number;
-    pivot: number;
-    r1: number;
-    r2: number;
-    r3: number;
-  };
-  
-  camarilla_pivots: {
-    l4: number;
-    l3: number;
-    h3: number;
-    h4: number;
-  };
-  
-  // Market status (5-level)
-  market_status: 'STRONG_BULLISH' | 'BULLISH' | 'NEUTRAL' | 'BEARISH' | 'STRONG_BEARISH';
-  
-  // Pivot confidence (0-100)
-  pivot_confidence: number;
-  pivot_confidence_reasons: string[];
-  
-  // Nearest levels
-  nearest_resistance?: {
-    name: string;
-    value: number;
-    distance: number;
-    distance_pct: number;
-  };
-  nearest_support?: {
-    name: string;
-    value: number;
-    distance: number;
-    distance_pct: number;
-  };
-  
-  // 5-minute prediction
-  prediction_direction: 'UP' | 'DOWN' | 'SIDEWAYS';
-  prediction_confidence: number;
-  prediction_reasons: string[];
-  
-  timestamp: string;
-}
+
+// ============================================================================
+// TYPES - Enhanced Pivot Analysis
+// ============================================================================
 
 // ============================================================================
 // HELPER FUNCTIONS
@@ -108,7 +59,7 @@ interface PivotRefactoredProps {
   marketStatus?: string;
 }
 
-const PivotPointsRefactored = memo<PivotRefactoredProps>(({ updates = 0, analyses, marketStatus = 'LIVE' }) => {
+const PivotPointsRefactored = memo<PivotRefactoredProps>(() => {
   const symbolConfigs = [
     { symbol: 'NIFTY', name: 'NIFTY 50' },
     { symbol: 'BANKNIFTY', name: 'BANK NIFTY' },

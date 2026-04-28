@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useMemo, memo, useRef } from 'react';
+import React, { memo, useRef } from 'react';
 import useOrderFlowRealtime, { OrderFlowData } from '@/hooks/useOrderFlowRealtime';
 import { getEnvironmentConfig } from '@/lib/env-detection';
 
@@ -21,7 +21,7 @@ const DELTA_TREND_COLORS = {
 
 interface OrderFlowCardProps {
   symbol: string;
-  data?: OrderFlowData;
+  data?: OrderFlowData | null;
   isLoading: boolean;
 }
 
@@ -340,10 +340,6 @@ const MarketLiquidity = memo(({ data, stableBuyDom }: { data: OrderFlowData; sta
   const intensity = Math.min(pctDiff, 50) / 50;
 
   // ── Inner-element highlight: criteria = gap≥10% AND dominant side >60% ──
-  const liqCriteriaMet = pctDiff >= 10 && (isBuyDom ? buyPct > 60 : sellPct > 60);
-  const liqHlClass = liqCriteriaMet
-    ? (isBuyDom ? 'sm-section-hl-bull' : 'sm-section-hl-bear')
-    : '';
   
   // Colors: highlighted side uses vivid bright colors, muted side uses clear gray
   const buyBg = isBuyDom ? `rgba(16, 185, 129, ${0.15 + intensity * 0.25})` : 'rgba(55, 65, 81, 0.4)';
@@ -616,17 +612,11 @@ const OrderFlowCard = memo(({ symbol, data, isLoading }: OrderFlowCardProps) => 
   // ── Smart Money Section Highlights ──
   const isBull = data.signal === 'STRONG_BUY' || data.signal === 'BUY';
   const isBear = data.signal === 'STRONG_SELL' || data.signal === 'SELL';
-  const smBuyPct = data.buyerAggressionRatio * 100;
-  const smSellPct = data.sellerAggressionRatio * 100;
-  const smLiqDiff = Math.abs(smBuyPct - smSellPct);
   const smPred = data.fiveMinPrediction;
 
   // 1. Signal Badge: signal direction + confidence > 55%
   const signalHl = (isBull && data.signalConfidence > 0.55) ? 'sm-section-hl-bull'
     : (isBear && data.signalConfidence > 0.55) ? 'sm-section-hl-bear' : '';
-  // 2. Market Liquidity: dominant side with 10%+ gap
-  const liqHl = (stableBuyDom && smLiqDiff > 10) ? 'sm-section-hl-bull'
-    : (!stableBuyDom && smLiqDiff > 10) ? 'sm-section-hl-bear' : '';
   // 3. 5-Min Prediction: direction + dominance > 55%
   const predBull = smPred && smPred.direction?.includes('BUY') && smPred.buyDominancePct > 55;
   const predBear = smPred && smPred.direction?.includes('SELL') && smPred.sellDominancePct > 55;

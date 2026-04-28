@@ -214,6 +214,7 @@ const IndexCard = ({ symbol, name, data, isConnected, aiAlertData }: IndexCardPr
       }
       prevPriceRef.current = data.price;
     }
+    return undefined;
   }, [data?.price, data?.timestamp, symbol]);
 
   const getTrendIcon = (size = 5) => {

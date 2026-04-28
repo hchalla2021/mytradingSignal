@@ -218,7 +218,7 @@ function pcrHex(pcr: number | null): string {
 
 // ── Index card ────────────────────────────────────────────────────────────────
 
-const IndexCard = memo(({ data, index }: { data: LiquidityIndex | null; index: string }) => {
+const IndexCard = memo(({ data }: { data: LiquidityIndex | null }) => {
   const [showLiquiditySignals, setShowLiquiditySignals] = useState(false);
   // ── Skeleton ──────────────────────────────────────────────────────────────
   if (!data) {
@@ -564,9 +564,9 @@ function LiquidityIntelligence() {
       {/* 3-column index cards */}
       <div className="px-4 pb-5">
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-          <IndexCard data={liquidityData.NIFTY}     index="NIFTY"     />
-          <IndexCard data={liquidityData.BANKNIFTY}  index="BANKNIFTY" />
-          <IndexCard data={liquidityData.SENSEX}     index="SENSEX"    />
+          <IndexCard data={liquidityData.NIFTY} />
+          <IndexCard data={liquidityData.BANKNIFTY} />
+          <IndexCard data={liquidityData.SENSEX} />
         </div>
       </div>
     </section>

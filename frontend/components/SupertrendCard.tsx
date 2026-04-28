@@ -85,7 +85,8 @@ function getStrength(strength?: string) {
 }
 
 function fmt(n: number | undefined): string {     
-  return (n ?? 0) > 0 ? n.toLocaleString('en-IN', { maximumFractionDigits: 2 }) : '—'; 
+  const val = n ?? 0;
+  return val > 0 ? val.toLocaleString('en-IN', { maximumFractionDigits: 2 }) : '—'; 
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -1,5 +1,5 @@
-import React, { useMemo } from 'react';
-import { useSmartMoneyFlowRealtime, useMemoizedSmartMoneyAnalysis } from '@/hooks/useSmartMoneyFlowRealtime';
+import React from 'react';
+import { useSmartMoneyFlowRealtime } from '@/hooks/useSmartMoneyFlowRealtime';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // 🧠 SMART MONEY FLOW CARD – INSTITUTIONAL ORDER STRUCTURE INTELLIGENCE
@@ -17,11 +17,9 @@ interface SmartMoneyFlowCardProps {
 
 export const SmartMoneyFlowCard: React.FC<SmartMoneyFlowCardProps> = ({
   symbol,
-  price,
   compact = false,
 }) => {
   const { data, loading, error, flash, refetch } = useSmartMoneyFlowRealtime(symbol);
-  const analysis = useMemoizedSmartMoneyAnalysis(data);
 
   // Color scheme for signals
   const getSignalColor = (signal: string) => {

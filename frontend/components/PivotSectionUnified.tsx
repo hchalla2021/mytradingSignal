@@ -1,7 +1,7 @@
 ﻿'use client';
 
 import React, { memo, useEffect, useState, useCallback, useRef, useMemo } from 'react';
-import { Clock, RefreshCw } from 'lucide-react';
+import { Clock } from 'lucide-react';
 import { API_CONFIG } from '@/lib/api-config';
 
 // ============================================================================
@@ -472,7 +472,7 @@ const PivotSectionUnified = memo<{ updates?: number; analyses?: Record<string, a
 
           // Lock pivot levels: once valid, never replace with zeros
           const cp = entry.classic_pivots;
-          const hasPivots = cp && cp.pivot > 0 && cp.r1 > 0 && cp.s1 > 0;
+          const hasPivots = cp.pivot !== null && cp.pivot > 0 && cp.r1 !== null && cp.r1 > 0 && cp.s1 !== null && cp.s1 > 0;
           if (hasPivots) {
             lockedPivotsRef.current[symbol] = { ...cp };
           } else if (lockedPivotsRef.current[symbol]) {
@@ -480,7 +480,7 @@ const PivotSectionUnified = memo<{ updates?: number; analyses?: Record<string, a
           }
 
           const cam = entry.camarilla_pivots;
-          const hasCam = cam && cam.h4 > 0 && cam.l4 > 0;
+          const hasCam = cam.h4 !== null && cam.h4 > 0 && cam.l4 !== null && cam.l4 > 0;
           if (hasCam) {
             lockedCamRef.current[symbol] = { ...cam };
           } else if (lockedCamRef.current[symbol]) {

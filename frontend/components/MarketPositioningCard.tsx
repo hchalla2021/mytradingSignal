@@ -27,9 +27,7 @@ import {
   Minus,
   Activity,
   BarChart2,
-  Zap,
   Clock,
-  AlertTriangle,
   ChevronUp,
   ChevronDown,
 } from "lucide-react";
@@ -190,9 +188,6 @@ function FlowBadge({ value, sub }: { value: number; sub?: string }) {
     </div>
   );
 }
-
-// Keep as alias for any remaining usages
-const DeltaBadge = ({ value }: { value: number }) => <PctBadge value={value} />;
 
 /**
  * ConfidenceGauge — Signal-aware confidence visualization
