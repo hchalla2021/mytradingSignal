@@ -495,7 +495,6 @@ export default function Home() {
               const p5Bull = p5.dir === 'UP', p5Bear = p5.dir === 'DOWN';
               const p5DirIcon = p5Bull ? '▲' : p5Bear ? '▼' : '◆';
               const p5DirColor = p5Bull ? 'text-teal-400' : p5Bear ? 'text-rose-400' : 'text-amber-400';
-              const p5ConfColor = p5Bull ? 'text-teal-300' : p5Bear ? 'text-rose-300' : 'text-amber-300';
               const p5Signal = p5Bull ? (p5.buyPct >= 65 ? 'STRONG BUY' : 'BUY') : p5Bear ? (p5SellPct >= 65 ? 'STRONG SELL' : 'SELL') : 'NEUTRAL';
               const p5SigColor = p5Bull ? 'text-teal-300 border-teal-400/20 bg-teal-500/[0.06]' : p5Bear ? 'text-rose-300 border-rose-400/20 bg-rose-500/[0.06]' : 'text-amber-300 border-amber-400/20 bg-amber-500/[0.06]';
 
