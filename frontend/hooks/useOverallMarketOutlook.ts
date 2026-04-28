@@ -262,7 +262,6 @@ export const useOverallMarketOutlook = () => {
       const price = pivotIndicators.current_price || 0;
       const classic = pivotIndicators.classic_pivots || {};
       const camarilla = pivotIndicators.camarilla_pivots || {};
-      const bias = pivotIndicators.overall_bias || 'NEUTRAL';
       
       // TECHNICAL ANALYSIS ENHANCEMENT (22%): Price action vs key levels
       // Strong signal if price is above major pivots or EMA trends are aligned

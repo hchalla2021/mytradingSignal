@@ -472,7 +472,7 @@ const PivotSectionUnified = memo<{ updates?: number; analyses?: Record<string, a
 
           // Lock pivot levels: once valid, never replace with zeros
           const cp = entry.classic_pivots;
-          const hasPivots = cp.pivot !== null && cp.pivot > 0 && cp.r1 !== null && cp.r1 > 0 && cp.s1 !== null && cp.s1 > 0;
+          const hasPivots = cp && cp.pivot !== null && cp.pivot > 0 && cp.r1 !== null && cp.r1 > 0 && cp.s1 !== null && cp.s1 > 0;
           if (hasPivots) {
             lockedPivotsRef.current[symbol] = { ...cp };
           } else if (lockedPivotsRef.current[symbol]) {
