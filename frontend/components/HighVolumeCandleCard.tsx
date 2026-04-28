@@ -11,7 +11,6 @@ import { useHighVolumeCandleRealtime } from '@/hooks/useHighVolumeCandleRealtime
 
 interface HighVolumeCandleCardProps {
   symbol: string;
-  price?: number;
   compact?: boolean;
 }
 
