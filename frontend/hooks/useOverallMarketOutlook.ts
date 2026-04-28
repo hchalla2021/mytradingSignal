@@ -260,6 +260,7 @@ export const useOverallMarketOutlook = () => {
     
     if (pivotIndicators && pivotIndicators.status !== 'OFFLINE') {
       const price = pivotIndicators.current_price || 0;
+      const bias = pivotIndicators.overall_bias || 'NEUTRAL';
       const classic = pivotIndicators.classic_pivots || {};
       const camarilla = pivotIndicators.camarilla_pivots || {};
       
