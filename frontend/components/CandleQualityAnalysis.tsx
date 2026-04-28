@@ -231,7 +231,6 @@ const CandleQualityAnalysis = memo<CandleQualityAnalysisProps>(({ symbol }) => {
 
   // ── Derived pre-production intelligence ──
   const bodyRating   = data.body_percent > 55 ? 'STRONG' : data.body_percent > 30 ? 'MODERATE' : 'WEAK';
-  const volStatus    = data.volume_above_threshold ? 'HIGH' : 'NORMAL';
   const convictionLv = data.conviction_move ? 'CONFIRMED' : data.momentum_score > 60 ? 'BUILDING' : 'LOW';
 
   // ── Derived 5-min prediction ──

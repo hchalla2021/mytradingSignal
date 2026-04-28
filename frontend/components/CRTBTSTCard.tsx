@@ -17,7 +17,7 @@
 
 import React, { memo, useState } from 'react';
 import { useCRTBTSTRealtime } from '@/hooks/useCRTBTSTRealtime';
-import type { CRTAnalysis, BTSTSignal } from '@/lib/crt-engine';
+import type { BTSTSignal } from '@/lib/crt-engine';
 
 interface CRTBTSTCardProps {
   symbol: string;
@@ -95,7 +95,6 @@ const CandleVisual = memo<{
   bodyPct: number; upperWickPct: number; lowerWickPct: number; isBullish: boolean; type: string;
 }>(({ bodyPct, upperWickPct, lowerWickPct, isBullish, type }) => {
   const candleColor = isBullish ? '#10b981' : '#ef4444';
-  const candleBg = isBullish ? 'rgba(16,185,129,0.15)' : 'rgba(239,68,68,0.15)';
 
   return (
     <div className="flex items-center gap-3">

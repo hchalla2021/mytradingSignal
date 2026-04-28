@@ -50,9 +50,6 @@ export const BestStrikeCard: React.FC<BestStrikeCardProps> = ({
     confBgClass = 'bg-amber-900/20';
   }
 
-  // Subtle pulse for high confidence
-  const pulseClass = '';
-
   return (
     <div
       className={`relative mb-3 overflow-hidden rounded-lg border ${dirBorderClass} 

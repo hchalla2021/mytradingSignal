@@ -1,5 +1,5 @@
-import React, { useMemo } from 'react';
-import { useHighVolumeCandleRealtime, useMemoizedHighVolumeAnalysis } from '@/hooks/useHighVolumeCandleRealtime';
+import React from 'react';
+import { useHighVolumeCandleRealtime } from '@/hooks/useHighVolumeCandleRealtime';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // 🚀 HIGH VOLUME CANDLE SCANNER CARD
@@ -17,11 +17,9 @@ interface HighVolumeCandleCardProps {
 
 export const HighVolumeCandleCard: React.FC<HighVolumeCandleCardProps> = ({
   symbol,
-  price,
   compact = false,
 }) => {
   const { data, loading, error, flash, refetch } = useHighVolumeCandleRealtime(symbol);
-  const analysis = useMemoizedHighVolumeAnalysis(data);
 
   // Color scheme for signals
   const getSignalColor = (signal: string) => {

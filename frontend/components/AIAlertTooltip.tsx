@@ -35,18 +35,19 @@ export default function AIAlertTooltip({ data, onDismiss }: Props) {
   const [visible, setVisible] = useState(false);
 
   useEffect(() => {
-    if (data.showAlert) {
-      setVisible(true);
-      
-      // Auto-dismiss after 5 seconds
-      const timer = setTimeout(() => {
-        handleDismiss();
-      }, 5000);
-      
-      return () => clearTimeout(timer);
-    } else {
+    if (!data.showAlert) {
       setVisible(false);
+      return;
     }
+
+    setVisible(true);
+    
+    // Auto-dismiss after 5 seconds
+    const timer = setTimeout(() => {
+      handleDismiss();
+    }, 5000);
+    
+    return () => clearTimeout(timer);
   }, [data.showAlert, data.message]);
 
   const handleDismiss = () => {

@@ -267,7 +267,6 @@ function ReversalAlertCard({ data }: { data: ReversalAnalysis }) {
 
 export function Advanced5mPredictionView({
   data,
-  symbol,
 }: Advanced5mPredictionViewProps) {
   const predictionColor = useMemo(() => {
     const pred = data?.prediction;

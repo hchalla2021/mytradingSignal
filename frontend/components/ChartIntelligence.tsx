@@ -9,7 +9,6 @@ import {
   type OrderBlock,
   type Liquidity,
   type ChartLevels,
-  type ChartDataSource,
 } from '@/hooks/useChartIntelligence';
 import { useMarketSocket } from '@/hooks/useMarketSocket';
 
@@ -843,7 +842,6 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
       const isBull   = f.type === 'bullish';
       const quality  = f.quality ?? 'STANDARD';
       const partial  = f.partialFill ?? 0;
-      const momentum = f.momentum ?? 0;
 
       // Per-quality visual params
       const cfg_fvg = quality === 'PREMIUM'
@@ -1217,8 +1215,6 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
         const isLive   = i === visible.length - 1;
         const glowA    = isLive ? (0.22 + 0.14 * _pF) : 0.14;
         const glowW    = Math.max(8, cw + 4);
-        const bodyTop  = priceToY(Math.max(c.o, c.c));
-        const bodyBot  = priceToY(Math.min(c.o, c.c));
         const wickTopY = priceToY(c.h);
         const wickBotY = priceToY(c.l);
 
@@ -1984,8 +1980,6 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
       const rect = canvas.getBoundingClientRect();
       const chartRight = rect.width - CFG.PRICE_AXIS_W;
       const chartW = chartRight;
-      const visibleCount = Math.max(1, Math.floor(chartW / candleStep));
-      const halfVisible = Math.floor(visibleCount / 2);
       const centreIdxBefore = candlesRef.current.length - 1 - Math.max(0, scrollRef.current);
       const centreXBefore = chartW / 2 - pixelPanRef.current;
       const mouseX = e.clientX - rect.left;
@@ -2643,6 +2637,7 @@ const SymbolChartCard = memo<{ data: SymbolChartData | null; name: string; liveS
       return () => clearTimeout(t);
     }
     prevSignalRef.current = chartSignal.signal;
+    return;
   }, [chartSignal.signal]);
 
   if (!data || candles.length === 0) {

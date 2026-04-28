@@ -119,6 +119,8 @@ export function GlobalErrorHandler() {
         window.removeEventListener('unhandledrejection', handleUnhandledRejection)
       }
     }
+    
+    return
   }, [])
 
   // This component doesn't render anything

@@ -165,7 +165,7 @@ const VERDICT_CFG: Record<string, { label: string; color: string; bg: string; bo
 const ThreeFactorPanel = memo<{ tfa: ThreeFactorAlignment | undefined }>(({ tfa }) => {
   if (!tfa) return null;
 
-  const { location, behavior, confirmation, alignment_score, verdict, reason, factors_pass, factors_fail } = tfa;
+  const { location, behavior, confirmation, alignment_score, verdict, reason, factors_pass } = tfa;
   const zoneCfg = ZONE_CFG[location.zone] || ZONE_CFG.UNKNOWN;
   const behCfg = BEHAVIOR_CFG[behavior.type] || BEHAVIOR_CFG.NONE;
   const verdictCfg = VERDICT_CFG[verdict] || VERDICT_CFG.NO_TRADE;
