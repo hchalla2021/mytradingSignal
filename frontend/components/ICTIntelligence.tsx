@@ -188,7 +188,7 @@ function fmtPrice(n: number): string {
 
 // ── Index card ────────────────────────────────────────────────────────────────
 
-const IndexCard = memo(({ data, index }: { data: ICTIndex | null; index: string }) => {
+const IndexCard = memo(({ data }: { data: ICTIndex | null }) => {
   const [showIctMatrix, setShowIctMatrix] = useState(false);
   const cardRef = useRef<HTMLDivElement>(null);
   const prevDirection = useRef<ICTDirection | null>(null);
