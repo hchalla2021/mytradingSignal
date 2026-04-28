@@ -14,7 +14,7 @@
 
 'use client';
 
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { API_CONFIG } from '@/lib/api-config';
 
 interface SignalWeight {
@@ -89,7 +89,6 @@ interface OverallOutlookData {
 }
 
 const API_BASE_URL = API_CONFIG.baseUrl;
-const SYMBOLS = (process.env.NEXT_PUBLIC_MARKET_SYMBOLS || 'NIFTY,BANKNIFTY,SENSEX').split(',').filter(Boolean);
 
 // Signal strength weights (total = 100%) - 14 component sources integrated (ORB + SAR removed)
 const SIGNAL_WEIGHTS: SignalWeight = {
@@ -110,7 +109,7 @@ const SIGNAL_WEIGHTS: SignalWeight = {
 }
 
 // 🔥🔥🔥 INSTANT DEFAULT VALUES - Start at 0%, load real data immediately
-const createDefaultOutlook = (symbol: string): SymbolOutlook => ({
+const createDefaultOutlook = (): SymbolOutlook => ({
   overallConfidence: 0,
   overallSignal: 'NEUTRAL',
   tradeRecommendation: '⏳ Calculating...',
@@ -159,7 +158,6 @@ const createDefaultOutlook = (symbol: string): SymbolOutlook => ({
 // 🔥 NO GLOBAL CACHE - Force fresh data every time
 // Desktop browsers cache modules aggressively, causing stale data
 // Mobile browsers reload modules more frequently
-let lastFetchTime = 0;
 let isFetching = false;
 let fetchStartTime = 0; // Track when fetch started to prevent permanent lock
 
@@ -174,9 +172,9 @@ if (typeof window !== 'undefined') {
 export const useOverallMarketOutlook = () => {
   // 🔥 FIX HYDRATION: Always start with defaults, load cache in useEffect
   const [outlookData, setOutlookData] = useState<OverallOutlookData>({
-    NIFTY: createDefaultOutlook('NIFTY'),
-    BANKNIFTY: createDefaultOutlook('BANKNIFTY'),
-    SENSEX: createDefaultOutlook('SENSEX')
+    NIFTY: createDefaultOutlook(),
+    BANKNIFTY: createDefaultOutlook(),
+    SENSEX: createDefaultOutlook()
   });
   const [loading, setLoading] = useState(true);
 
@@ -262,7 +260,6 @@ export const useOverallMarketOutlook = () => {
     
     if (pivotIndicators && pivotIndicators.status !== 'OFFLINE') {
       const price = pivotIndicators.current_price || 0;
-      const st10 = pivotIndicators.supertrend_10_3 || {};
       const classic = pivotIndicators.classic_pivots || {};
       const camarilla = pivotIndicators.camarilla_pivots || {};
       const bias = pivotIndicators.overall_bias || 'NEUTRAL';
@@ -294,7 +291,6 @@ export const useOverallMarketOutlook = () => {
 
     // Calculate market indices momentum signal from price change
     // BUYER-FRIENDLY: Lower thresholds for BUY signals, higher thresholds for SELL signals
-    const priceChange = marketIndicesData?.change || 0;
     const priceChangePercent = marketIndicesData?.changePercent || 0;
     let marketIndicesSignal = 'NEUTRAL';
     let marketIndicesConfidence = 0;
@@ -351,11 +347,6 @@ export const useOverallMarketOutlook = () => {
                                trendStructure.includes('HIGHER') ||
                                trendStructure.includes('UPTREND') ||
                                trendSignal === 'BUY' || trendSignal === 'STRONG_BUY';
-    const isDowntrendStructure = trendStructure === 'LOWER_HIGH_LOWER_LOW' || 
-                                 trendStructure === 'LH_LL' || 
-                                 trendStructure.includes('LOWER') ||
-                                 trendStructure.includes('DOWNTREND') ||
-                                 trendSignal === 'SELL' || trendSignal === 'STRONG_SELL';
     const isTrendIntegrityStrong = trendIntegrity >= 65;
 
     // ═══════════════════════════════════════════════════════════════════════════════
@@ -472,14 +463,12 @@ export const useOverallMarketOutlook = () => {
       const st10 = pivotIndicators.supertrend_10_3 || {};
       const classic = pivotIndicators.classic_pivots || {};
       const camarilla = pivotIndicators.camarilla_pivots || {};
-      const bias = pivotIndicators.overall_bias || 'NEUTRAL';
       
       // Primary signal: Supertrend 10-3 (60% of pivot confidence)
       const stSignal = (st10 as any)?.signal || 'NEUTRAL';
       const stTrend = (st10 as any)?.trend || 'NEUTRAL';
       
       // Secondary: Distance to critical levels (40% of pivot confidence)
-      const pivot = (classic as any)?.pivot || 0;
       const r2 = (classic as any)?.r2 || 0;
       const s2 = (classic as any)?.s2 || 0;
       const h3 = (camarilla as any)?.h3 || 0;
@@ -551,7 +540,6 @@ export const useOverallMarketOutlook = () => {
       if (order_block_bearish) { bearishSignals += 2; totalSignalStrength += 2; }
       
       // Determine signal based on net strength
-      const netSignal = bullishSignals - bearishSignals;
       
       if (bullishSignals > bearishSignals) {
         // Bullish structure confirmed
@@ -745,7 +733,6 @@ export const useOverallMarketOutlook = () => {
     let riskScore = breakdownRisk * 0.4;
     
     // Factor 2: Confidence alignment (30% weight)
-    const avgConfidence = (techConfidence + zoneConfidence + volumeConfidence + trendConfidence + marketIndicesConfidence) / 5;
     const confidenceSpread = Math.max(techConfidence, zoneConfidence, volumeConfidence, trendConfidence, marketIndicesConfidence) - 
                              Math.min(techConfidence, zoneConfidence, volumeConfidence, trendConfidence, marketIndicesConfidence);
     // High spread = high risk (conflicting signals)
@@ -771,7 +758,6 @@ export const useOverallMarketOutlook = () => {
     // Generate TRADER-FRIENDLY recommendation with clear action steps
     // 🔥🔥🔥 MASTER TRADE VALIDATION - 10 GOLDEN RULES STATUS
     let tradeRecommendation = '';
-    const scoreDisplay = totalWeightedScore >= 0 ? `+${totalWeightedScore.toFixed(1)}` : totalWeightedScore.toFixed(1);
     const riskEmoji = riskLevel === 'LOW' ? '🟢' : riskLevel === 'MEDIUM' ? '🟡' : '🔴';
     
     // Build Master Trade Status indicator
@@ -840,12 +826,9 @@ export const useOverallMarketOutlook = () => {
       const st10 = pivotIndicators.supertrend_10_3 || {};
       const classic = pivotIndicators.classic_pivots || {};
       const camarilla = pivotIndicators.camarilla_pivots || {};
-      const bias = pivotIndicators.overall_bias || 'NEUTRAL';
       
       // Detect Supertrend crossing
       const isSupertrend10Crossing = st10.signal && (st10.signal === 'BUY' || st10.signal === 'SELL');
-      const superTrendValue = st10.value || 0;
-      const crossingSignal = st10.signal || 'NONE';
       
       // Detect price near pivot levels (within 0.5%)
       const pivot = classic.pivot || 0;
@@ -877,8 +860,8 @@ export const useOverallMarketOutlook = () => {
       // 1. Supertrend crosses BUY (green highlight)
       // 2. Supertrend crosses SELL (red highlight)
       // 3. Price touches pivot/support/resistance MULTIPLE times (yellow sharp)
-      const stCrossBuy = isSupertrend10Crossing && crossingSignal === 'BUY';
-      const stCrossSell = isSupertrend10Crossing && crossingSignal === 'SELL';
+      const stCrossBuy = isSupertrend10Crossing && st10.signal === 'BUY';
+      const stCrossSell = isSupertrend10Crossing && st10.signal === 'SELL';
       const multipleTouches = touchCount >= 2;
       
       pivotCriticalAlert = {
@@ -986,21 +969,6 @@ export const useOverallMarketOutlook = () => {
     };
   }, []);
 
-  // 🔥🔥🔥 INSTANT - First load from ws/cache (same as Live Market Indices - INSTANT!)
-  const fetchInstantData = useCallback(async (symbol: string) => {
-    try {
-      const res = await Promise.race([
-        fetch(`${API_BASE_URL}/ws/cache/${symbol}`, { cache: 'no-store' }),
-        new Promise<Response>((_, reject) => setTimeout(() => reject(null), 300))
-      ]);
-      if (res.ok) {
-        const data = await res.json();
-        return data?.data || null;
-      }
-    } catch {}
-    return null;
-  }, []);
-
   // 🔥🔥🔥 ULTRA FAST: Use single aggregated endpoint instead of 7 separate calls!
   const fetchFullSymbolData = useCallback(async (symbol: string) => {
     const quickFetch = (url: string) => 
@@ -1066,12 +1034,11 @@ export const useOverallMarketOutlook = () => {
     
     isFetching = true;
     fetchStartTime = now;
-    lastFetchTime = now;
 
     // 🔥 FETCH ONCE: Get initial data and keep it stable
     try {
       // Fetch all 3 symbols in parallel
-      const results = await Promise.all([
+      await Promise.all([
         fetchFullSymbolData('NIFTY').then(data => {
           if (data) silentUpdate('NIFTY', data);
           return data;
@@ -1103,12 +1070,11 @@ export const useOverallMarketOutlook = () => {
     
     // Reset state to 0%
     setOutlookData({
-      NIFTY: createDefaultOutlook('NIFTY'),
-      BANKNIFTY: createDefaultOutlook('BANKNIFTY'),
-      SENSEX: createDefaultOutlook('SENSEX')
+      NIFTY: createDefaultOutlook(),
+      BANKNIFTY: createDefaultOutlook(),
+      SENSEX: createDefaultOutlook()
     });
     
-    lastFetchTime = 0;
     isFetching = false;
     
     fetchAllAnalysis();

@@ -1,5 +1,5 @@
-import React, { useMemo } from 'react';
-import { useTradeZonesRealtime, useMemoizedTradeZoneAnalysis } from '@/hooks/useTradeZonesRealtime';
+import React from 'react';
+import { useTradeZonesRealtime } from '@/hooks/useTradeZonesRealtime';
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // 💰 TRADE ZONES CARD – BUY/SELL SIGNALS WITH SUPPORT/RESISTANCE
@@ -15,9 +15,8 @@ interface TradeZonesCardProps {
   compact?: boolean;
 }
 
-export const TradeZonesCard: React.FC<TradeZonesCardProps> = ({ symbol, price, compact = false }) => {
+export const TradeZonesCard: React.FC<TradeZonesCardProps> = ({ symbol, compact = false }) => {
   const { data, loading, error, flash, refetch } = useTradeZonesRealtime(symbol);
-  const analysis = useMemoizedTradeZoneAnalysis(data);
 
   // Get color for zone classification
   const getZoneColor = (zone: string) => {
@@ -52,12 +51,6 @@ export const TradeZonesCard: React.FC<TradeZonesCardProps> = ({ symbol, price, c
     if (confidence >= 65) return 'bg-gradient-to-r from-blue-600 to-blue-500';
     if (confidence >= 50) return 'bg-gradient-to-r from-yellow-600 to-yellow-500';
     return 'bg-gradient-to-r from-red-600 to-red-500';
-  };
-
-  // Calculate EMA positions on display
-  const getEMADistance = (distance: number) => {
-    // Clamp to display range
-    return Math.max(5, Math.min(95, 50 + distance * 10));
   };
 
   if (loading && !data) {

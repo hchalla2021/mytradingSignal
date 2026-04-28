@@ -81,6 +81,7 @@ export function useAuth() {
       window.addEventListener('message', handleMessage);
       return () => window.removeEventListener('message', handleMessage);
     }
+    return;
   }, []);
 
   const validateToken = useCallback(async () => {

@@ -170,13 +170,8 @@ export const VWMAEMAFilterCard: React.FC<VWMAEMAFilterCardProps> = ({ analysis, 
     : 'WAIT';
 
   // ── 5-min pre-production ──
-  const momentumBuilding = isBuy  ? 'BULLISH BUILD' : isSell ? 'BEARISH BUILD' : 'FLAT';
-  const filterPass       = (isBuy && priceVsVwma === 'ABOVE') || (isSell && priceVsVwma === 'BELOW');
-  const prepReadiness    = filterPass && volLabel !== 'WEAK' ? 'READY' : filterPass ? 'PARTIAL' : 'NOT YET';
 
   // ── 5-min prediction ──
-  const predictedMove   = isBuy  ? 'UPSIDE'   : isSell ? 'DOWNSIDE' : 'SIDEWAYS';
-  const vwmaTrajectory  = isBuy  ? 'RISING'   : isSell ? 'FALLING'  : 'FLAT';
   const entryWindow     = isStrongBuy || isStrongSell ? 'OPEN NOW'
     : isBuy || isSell ? 'OPENING'
     : 'CLOSED';

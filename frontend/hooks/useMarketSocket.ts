@@ -240,8 +240,9 @@ export function useMarketSocket() {
                 setMarketData((prev) => {
                   const updated = { ...prev };
                   Object.keys(updated).forEach(symbol => {
-                    if (updated[symbol]) {
-                      updated[symbol] = { ...updated[symbol]!, status: newStatus };
+                    const key = symbol as keyof typeof updated;
+                    if (updated[key]) {
+                      updated[key] = { ...updated[key]!, status: newStatus };
                     }
                   });
                   if (Object.keys(updated).length > 0) {

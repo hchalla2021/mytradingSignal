@@ -352,7 +352,7 @@ function analyzeBodyWickRatio(
 
 /** Factor 6: AMD Pattern Detection (session-based) */
 function analyzeAMDPattern(
-  timestamp: string, open: number, high: number, low: number, close: number
+  timestamp: string, high: number, low: number, close: number
 ): CRTFactors['amdPattern'] {
   let hour = 15; // Default to afternoon
   try {
@@ -434,9 +434,8 @@ function analyzeRangeReclaim(
 
 /** Factor 8: Trend Alignment & Closing Strength */
 function analyzeTrendAlignment(
-  open: number, close: number, changePercent: number
+  changePercent: number
 ): CRTFactors['trendAlignment'] {
-  const isBullish = close > open;
   let dayTrend: 'BULLISH' | 'BEARISH' | 'NEUTRAL' = 'NEUTRAL';
   let closingStrength: 'STRONG' | 'MODERATE' | 'WEAK' = 'WEAK';
   let score = 0;
@@ -469,7 +468,7 @@ function analyzeTrendAlignment(
 
 // ── BTST Signal Generation ─────────────────────────────────────────────
 
-function generateBTSTRecommendation(factors: CRTFactors, price: number): BTSTRecommendation {
+function generateBTSTRecommendation(factors: CRTFactors): BTSTRecommendation {
   const totalScore =
     factors.rangeExpansion.score +
     factors.sweepDetection.score +
@@ -545,8 +544,8 @@ function generateBTSTRecommendation(factors: CRTFactors, price: number): BTSTRec
 
 export function analyzeCRT(input: CRTInput): CRTAnalysis {
   const {
-    symbol, price, open, high, low, close, volume, change, changePercent,
-    prevDayHigh, prevDayLow, prevDayClose, timestamp, status
+    symbol, price, open, high, low, close, changePercent,
+    prevDayHigh, prevDayLow, prevDayClose, timestamp
   } = input;
 
   const pdh = safe(prevDayHigh, high);
@@ -567,12 +566,12 @@ export function analyzeCRT(input: CRTInput): CRTAnalysis {
     closePosition: analyzeClosePosition(c, h, l, pdc),
     displacement: analyzeDisplacement(o, h, l, c, pdr),
     bodyWickRatio: analyzeBodyWickRatio(o, h, l, c),
-    amdPattern: analyzeAMDPattern(timestamp, o, h, l, c),
+    amdPattern: analyzeAMDPattern(timestamp, h, l, c),
     rangeReclaim: analyzeRangeReclaim(c, h, l, pdh, pdl),
-    trendAlignment: analyzeTrendAlignment(o, c, changePercent),
+    trendAlignment: analyzeTrendAlignment(changePercent),
   };
 
-  const btst = generateBTSTRecommendation(factors, price);
+  const btst = generateBTSTRecommendation(factors);
   const candleStructure = detectCandleType(o, h, l, c);
 
   const keyLevels = {

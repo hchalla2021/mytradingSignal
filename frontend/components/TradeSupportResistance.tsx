@@ -53,7 +53,6 @@ const SIGNAL_STYLES: Record<string, { bg: string; border: string; text: string; 
 // Main component
 // ─────────────────────────────────────────────────────────────────
 export const TradeSupportResistance: React.FC<TradeSupportResistanceProps> = ({
-  symbol,
   symbolName,
   data,
   analysis,
@@ -80,7 +79,6 @@ export const TradeSupportResistance: React.FC<TradeSupportResistanceProps> = ({
     const rsi15m: number = (rsi15mRaw !== 50 || rsiMomentum === 50) ? rsi15mRaw : Math.round(rsiMomentum * 0.85 + 50 * 0.15);
 
     const rsiMomStatus: string  = (ind.rsi_momentum_status ?? '').toUpperCase();
-    const rsiMomConf:   number  = ind.rsi_momentum_confidence ?? 50;
     const emaAlignment: string  = (ind.ema_alignment ?? 'NEUTRAL').toUpperCase();
     const vwapPos:      string  = (ind.vwap_position ?? 'AT_VWAP').toUpperCase();
     const stTrend:      string  = (ind.supertrend_10_2_trend ?? 'NEUTRAL').toUpperCase();
@@ -104,7 +102,6 @@ export const TradeSupportResistance: React.FC<TradeSupportResistanceProps> = ({
     // ind.candle_direction = 'BULLISH' | 'BEARISH' | 'DOJI'
     const trendColor:    string = (ind.trend_color      ?? 'NEUTRAL').toUpperCase();
     const trendMapped:   string = (ind.trend            ?? 'SIDEWAYS').toUpperCase();
-    const candleDir:     string = (ind.candle_direction ?? 'DOJI').toUpperCase();
 
     // ── Dual timeframe trends ─────────────────────────────────────────────
     // Priority: backend explicit key → live RSI → trend_color → momentum → changePercent
@@ -424,10 +421,10 @@ export const TradeSupportResistance: React.FC<TradeSupportResistanceProps> = ({
   const {
     action, confidence, signalReason, style, totalScore, factors,
     greenFactors, redFactors,
-    trend5min, trend15min, rsi5m, rsiMomStatus, rsi5mRaw, rsiMomentum,
+    trend5min, trend15min, rsi5m, rsi5mRaw, rsiMomentum,
     emaAlignment, vwapPos, stTrend, trendColor,
     changePercent, momentum, support, resistance,
-    distToSupport, distToResistance, vwap, vwapDist, volumeStrength,
+    distToSupport, distToResistance, vwapDist, volumeStrength,
   } = sig;
 
   const trendIcon  = (t: string) => t === 'UP' ? '▲' : t === 'DOWN' ? '▼' : '─';

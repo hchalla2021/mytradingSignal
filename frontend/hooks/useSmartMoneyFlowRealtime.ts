@@ -218,7 +218,7 @@ export function useSmartMoneyFlowRealtime(symbol: string): UseSmartMoneyFlowReal
 
             // Handle market tick events
             if (message.type === `market-tick-${symbol}`) {
-              const { price, volume } = message.data || {};
+              const { price } = message.data || {};
 
               // Update data with new price/volume info (will batch)
               if (data) {

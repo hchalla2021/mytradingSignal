@@ -207,7 +207,7 @@ export function useHighVolumeCandleRealtime(symbol: string): UseHighVolumeCandle
 
             // Handle market tick events
             if (message.type === `market-tick-${symbol}`) {
-              const { price, volume } = message.data || {};
+              const { price } = message.data || {};
 
               // Update data with new volume info (will batch)
               if (data) {
