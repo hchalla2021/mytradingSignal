@@ -1,11 +1,8 @@
 'use client'
 
 import Link from 'next/link'
-import { useRouter } from 'next/navigation'
 
 export default function NotFound() {
-  const router = useRouter()
-
   const handleGoBack = () => {
     if (typeof window !== 'undefined') {
       window.history.back()
