@@ -5,7 +5,6 @@ import dynamic from 'next/dynamic';
 import { useMarketSocket } from '@/hooks/useMarketSocket';
 import { useAnalysis } from '@/hooks/useAnalysis';
 import { useAIAnalysis } from '@/hooks/useAIAnalysis';
-import { useAuth } from '@/hooks/useAuth';
 import { useIndiaVIX } from '@/hooks/useIndiaVIX';
 import { API_CONFIG } from '@/lib/api-config';
 
