@@ -4,7 +4,7 @@ import { useEffect } from 'react'
 
 export default function Error({
   error,
-  _reset,
+  reset: _reset,
 }: {
   error: Error & { digest?: string }
   reset: () => void
