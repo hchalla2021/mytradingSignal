@@ -626,7 +626,7 @@ export default function OverallMarketOutlook() {
       </div>
 
       {/* Three-Symbol Grid - ALWAYS VISIBLE */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 lg:gap-8 xl:gap-10">
         {(['NIFTY', 'BANKNIFTY', 'SENSEX'] as const).map(symbol => (
           <SignalCard key={symbol} data={liveData[symbol]} />
         ))}

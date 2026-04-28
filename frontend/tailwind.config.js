@@ -49,18 +49,23 @@ module.exports = {
       },
       animation: {
         'pulse-slow': 'pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite',
-        'flash-green': 'flashGreen 0.4s ease-out',
-        'flash-red': 'flashRed 0.4s ease-out',
+        'flash-green': 'flashGreen 0.7s ease-out forwards',
+        'flash-red': 'flashRed 0.7s ease-out forwards',
         'fadeIn': 'fadeIn 0.3s ease-in',
         'ping-fast': 'ping 1s cubic-bezier(0, 0, 0.2, 1) infinite',
+        'heat-bull': 'heatBull 1.6s ease-in-out infinite',
+        'heat-bear': 'heatBear 1.6s ease-in-out infinite',
+        'iv-spike': 'ivSpike 0.5s ease-out forwards',
       },
       keyframes: {
         flashGreen: {
-          '0%': { backgroundColor: 'rgba(34, 197, 94, 0.15)' },
+          '0%':   { backgroundColor: 'rgba(52, 211, 153, 0.22)' },
+          '60%':  { backgroundColor: 'rgba(52, 211, 153, 0.10)' },
           '100%': { backgroundColor: 'transparent' },
         },
         flashRed: {
-          '0%': { backgroundColor: 'rgba(239, 68, 68, 0.15)' },
+          '0%':   { backgroundColor: 'rgba(239, 68, 68, 0.22)' },
+          '60%':  { backgroundColor: 'rgba(239, 68, 68, 0.10)' },
           '100%': { backgroundColor: 'transparent' },
         },
         fadeIn: {
@@ -72,6 +77,18 @@ module.exports = {
             transform: 'scale(1.05)',
             opacity: '0',
           },
+        },
+        heatBull: {
+          '0%, 100%': { boxShadow: '0 0 6px 1px rgba(52,211,153,0.30)' },
+          '50%':      { boxShadow: '0 0 22px 5px rgba(52,211,153,0.65)' },
+        },
+        heatBear: {
+          '0%, 100%': { boxShadow: '0 0 6px 1px rgba(239,68,68,0.30)' },
+          '50%':      { boxShadow: '0 0 22px 5px rgba(239,68,68,0.65)' },
+        },
+        ivSpike: {
+          '0%':   { color: 'rgb(253,224,71)', transform: 'scale(1.15)' },
+          '100%': { color: 'inherit',         transform: 'scale(1)' },
         },
       },
       screens: {

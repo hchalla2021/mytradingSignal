@@ -69,7 +69,7 @@ function getRegimeWsUrl(): string {
 }
 
 function getLocalWsUrl(): string {
-  const localWs = process.env.NEXT_PUBLIC_LOCAL_WS_URL || 'ws://localhost:8002/ws/market';
+  const localWs = process.env.NEXT_PUBLIC_LOCAL_WS_URL || 'ws://localhost:8000/ws/market';
   const base = localWs.replace(/\/ws\/market$/, '');
   return `${base}/ws/market-regime`;
 }
@@ -81,7 +81,7 @@ function getRegimeApiUrl(): string {
 }
 
 function getLocalApiUrl(): string {
-  const localApi = process.env.NEXT_PUBLIC_LOCAL_API_URL || 'http://localhost:8002';
+  const localApi = process.env.NEXT_PUBLIC_LOCAL_API_URL || 'http://localhost:8000';
   return `${localApi.replace(/\/$/, '')}/api/market-regime`;
 }
 

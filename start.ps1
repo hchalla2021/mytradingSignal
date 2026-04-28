@@ -13,13 +13,18 @@ Write-Host "🔧 Activating Python virtual environment..." -ForegroundColor Yell
 & "$rootDir\.venv\Scripts\Activate.ps1"
 
 # Check if backend is already running
-$backendRunning = Get-NetTCPConnection -LocalPort 8000 -ErrorAction SilentlyContinue
+$backendRunning = Get-NetTCPConnection -LocalPort 8000 -State Listen -ErrorAction SilentlyContinue | Where-Object { $_.OwningProcess -and (Get-Process -Id $_.OwningProcess -ErrorAction SilentlyContinue) }
 if ($backendRunning) {
     Write-Host "⚠️  Backend already running on port 8000" -ForegroundColor Yellow
 } else {
+    # Kill any orphaned python processes holding port 8000
+    Get-NetTCPConnection -LocalPort 8000 -State Listen -ErrorAction SilentlyContinue | ForEach-Object {
+        $proc = Get-Process -Id $_.OwningProcess -ErrorAction SilentlyContinue
+        if ($proc) { Stop-Process -Id $_.OwningProcess -Force -ErrorAction SilentlyContinue }
+    }
     # Start backend in new terminal
     Write-Host "🚀 Starting Backend Server (Port 8000)..." -ForegroundColor Green
-    Start-Process powershell -ArgumentList "-NoExit", "-Command", "cd '$rootDir'; & '.\.venv\Scripts\Activate.ps1'; cd backend; Write-Host '🟢 Backend Server Starting...' -ForegroundColor Green; uvicorn main:app --reload --host 0.0.0.0 --port 8000"
+    Start-Process powershell -ArgumentList "-NoExit", "-Command", "cd '$rootDir\backend'; & '.\.venv\Scripts\python.exe' -m uvicorn main:app --host 127.0.0.1 --port 8000; Write-Host '🟢 Backend Server Starting...' -ForegroundColor Green"
     Start-Sleep -Seconds 3
 }
 

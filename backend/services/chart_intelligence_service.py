@@ -557,11 +557,12 @@ class ChartIntelligenceService:
         self._daily_cache: Dict[str, Any] = {}  # symbol -> {date, candles}
         self._last_save_time: float = 0.0
         self._last_full_fetch: float = 0.0
-        self._cadence_broadcast = 1.0   # 1s — smooth live candle updates
+        self._cadence_broadcast = 0.5   # 0.5s — TradingView-like live candle motion
         self._cadence_fetch = 3.0       # Full Zerodha candle re-fetch every 3s (was 10s — stale candles caused lagging signals)
         self._cadence_closed = 60.0
         self._heartbeat_interval = 30.0
         self._kite_init_backoff_until: float = 0.0
+        self._fetch_task: Optional[asyncio.Task] = None
 
     # ── Kite init ────────────────────────────────────────────────────────
 
@@ -746,6 +747,112 @@ class ChartIntelligenceService:
             "timestamp": datetime.now(IST).isoformat(),
         }
 
+    def _refresh_entry_with_live_spot(self, entry: Dict[str, Any], symbol: str, now_ist: datetime) -> Dict[str, Any]:
+        refreshed = dict(entry)
+        spot = self._get_spot_price(symbol)
+        if spot <= 0:
+            refreshed["timestamp"] = now_ist.isoformat()
+            return refreshed
+
+        refreshed["spot"] = round(spot, 2)
+        refreshed["timestamp"] = now_ist.isoformat()
+
+        last_candles_3m: List[Dict[str, Any]] = refreshed.get("candles3m") or []
+
+        for tf_key, interval_min in (("candles3m", 3), ("candles5m", 5)):
+            candles = [dict(c) for c in (refreshed.get(tf_key) or [])]
+            if not candles:
+                continue
+
+            last = candles[-1]
+            try:
+                last_t = datetime.fromisoformat(last["t"])
+                if last_t.tzinfo is None:
+                    last_t = IST.localize(last_t)
+
+                next_bar_open = last_t + timedelta(minutes=interval_min)
+                if now_ist >= next_bar_open:
+                    session_open = datetime.combine(now_ist.date(), time(9, 15), tzinfo=IST)
+                    minutes_since_open = max(0, int((now_ist - session_open).total_seconds() // 60))
+                    aligned_min = (minutes_since_open // interval_min) * interval_min
+                    new_bar_t = session_open + timedelta(minutes=aligned_min)
+                    if new_bar_t <= last_t:
+                        new_bar_t = next_bar_open
+                    candles.append({
+                        "t": new_bar_t.isoformat(),
+                        "o": round(spot, 2),
+                        "h": round(spot, 2),
+                        "l": round(spot, 2),
+                        "c": round(spot, 2),
+                        "v": 0,
+                    })
+                else:
+                    last["c"] = round(spot, 2)
+                    if last.get("o", spot) > 0:
+                        drift = abs(spot - last["o"]) / last["o"]
+                        if drift < 0.015:
+                            last["h"] = round(max(last["h"], spot), 2)
+                            last["l"] = round(min(last["l"], spot), 2)
+            except Exception:
+                last["c"] = round(spot, 2)
+
+            if len(candles) > 200:
+                candles = candles[-200:]
+
+            candles.sort(key=lambda c: str(c.get("t", "")))
+            refreshed[tf_key] = candles
+            if tf_key == "candles3m":
+                last_candles_3m = candles
+
+        # Recompute all live overlays from the current in-progress candles so
+        # FVG / OB / BSL-SSL / EQH-EQL react immediately to live market structure.
+        refreshed["fvg3m"] = _detect_fvg(refreshed.get("candles3m") or [])
+        refreshed["fvg5m"] = _detect_fvg(refreshed.get("candles5m") or [])
+        refreshed["ob3m"] = _detect_order_blocks(refreshed.get("candles3m") or [])
+        refreshed["ob5m"] = _detect_order_blocks(refreshed.get("candles5m") or [])
+        refreshed["liquidity3m"] = _detect_liquidity(refreshed.get("candles3m") or [])
+        refreshed["liquidity5m"] = _detect_liquidity(refreshed.get("candles5m") or [])
+
+        if isinstance(refreshed.get("levels"), dict):
+            daily = self._fetch_daily_sync(symbol)
+            refreshed["levels"] = _compute_levels(last_candles_3m, daily, spot)
+
+        refreshed["dataSource"] = "LIVE"
+        return refreshed
+
+    async def _bg_fetch_live(self, phase: str) -> None:
+        async def _fetch_one(sym: str):
+            spot = self._get_spot_price(sym)
+            if spot <= 0:
+                if sym in self._last_snapshot:
+                    return (sym, {**self._last_snapshot[sym], "dataSource": "CACHED"})
+                return (sym, None)
+
+            c3 = await asyncio.to_thread(self._fetch_candles_sync, sym, "3minute")
+            c5 = await asyncio.to_thread(self._fetch_candles_sync, sym, "5minute")
+            daily = await asyncio.to_thread(self._fetch_daily_sync, sym)
+
+            if c3:
+                return (sym, self._build_symbol_data(sym, c3, c5 or [], daily, spot, phase))
+            if sym in self._last_snapshot:
+                return (sym, {**self._last_snapshot[sym], "dataSource": "CACHED"})
+            logger.warning("Chart Intelligence: no candle data for %s and no cached state", sym)
+            return (sym, None)
+
+        results = await asyncio.gather(*[_fetch_one(s) for s in SYMBOLS], return_exceptions=True)
+
+        snapshot: Dict[str, Any] = {}
+        for result in results:
+            if isinstance(result, Exception):
+                continue
+            sym, entry = result
+            if entry is not None:
+                snapshot[sym] = entry
+
+        if snapshot:
+            self._last_snapshot = snapshot
+            self._last_full_fetch = time_mod.time()
+
     # ── Lifecycle ────────────────────────────────────────────────────────
 
     async def start(self):
@@ -809,133 +916,38 @@ class ChartIntelligenceService:
 
                     if do_full:
                         self._init_kite()
-
-                        async def _fetch_one(sym: str):
-                            spot = self._get_spot_price(sym)
-                            if spot <= 0:
-                                if sym in self._last_snapshot:
-                                    return (sym, {**self._last_snapshot[sym], "dataSource": "CACHED"})
-                                return (sym, None)
-
-                            c3 = await asyncio.to_thread(self._fetch_candles_sync, sym, "3minute")
-                            c5 = await asyncio.to_thread(self._fetch_candles_sync, sym, "5minute")
-                            daily = await asyncio.to_thread(self._fetch_daily_sync, sym)
-
-                            if c3:
-                                return (sym, self._build_symbol_data(sym, c3, c5 or [], daily, spot, phase))
-                            elif sym in self._last_snapshot:
-                                return (sym, {**self._last_snapshot[sym], "dataSource": "CACHED"})
-                            else:
-                                logger.warning("Chart Intelligence: no candle data for %s and no cached state", sym)
-                                return (sym, None)
-
-                        results = await asyncio.gather(
-                            *[_fetch_one(s) for s in SYMBOLS],
-                            return_exceptions=True,
-                        )
-
-                        snapshot: Dict[str, Any] = {}
-                        for result in results:
-                            if isinstance(result, Exception):
-                                continue
-                            sym, entry = result
-                            if entry is not None:
-                                snapshot[sym] = entry
-
-                        if phase == "CLOSED":
-                            _closed_fetch_done = True
-
-                        if snapshot:
-                            self._last_snapshot = snapshot
-                            self._last_full_fetch = now_ts
+                        fetch_idle = self._fetch_task is None or self._fetch_task.done()
+                        if fetch_idle:
+                            self._fetch_task = asyncio.create_task(self._bg_fetch_live(phase))
+                            if phase == "CLOSED":
+                                _closed_fetch_done = True
                     else:
-                        # Between full fetches: update current candle with live spot
-                        # and open a new bar if the bar period has elapsed.
+                        # Between full fetches: keep all live overlays synced with the
+                        # current in-progress candles every broadcast tick.
                         if self._last_snapshot:
                             now_ist = datetime.now(IST)
-                            for sym in SYMBOLS:
-                                if sym not in self._last_snapshot:
-                                    continue
-                                spot = self._get_spot_price(sym)
-                                if spot <= 0:
-                                    continue
-                                entry = self._last_snapshot[sym]
-                                entry["spot"] = round(spot, 2)
-                                entry["timestamp"] = now_ist.isoformat()
-
-                                for tf_key, interval_min in [("candles3m", 3), ("candles5m", 5)]:
-                                    candles = entry.get(tf_key)
-                                    if not candles:
-                                        continue
-
-                                    last = candles[-1]
-                                    # Determine if a new bar has opened since the last candle
-                                    try:
-                                        last_t = datetime.fromisoformat(last["t"])
-                                        if last_t.tzinfo is None:
-                                            last_t = IST.localize(last_t)
-                                        next_bar_open = last_t + timedelta(minutes=interval_min)
-                                        if now_ist >= next_bar_open:
-                                            # Open a new candle at the next bar boundary
-                                            new_bar_t = next_bar_open
-                                            minutes_since_open = int(
-                                                (now_ist - datetime.combine(
-                                                    now_ist.date(), time(9, 15), tzinfo=IST
-                                                )).total_seconds() // 60
-                                            )
-                                            aligned_min = (minutes_since_open // interval_min) * interval_min
-                                            bar_open_time = datetime.combine(
-                                                now_ist.date(), time(9, 15), tzinfo=IST
-                                            ) + timedelta(minutes=aligned_min)
-                                            if bar_open_time > last_t:
-                                                new_bar_t = bar_open_time
-                                            candles.append({
-                                                "t": new_bar_t.isoformat(),
-                                                "o": round(spot, 2),
-                                                "h": round(spot, 2),
-                                                "l": round(spot, 2),
-                                                "c": round(spot, 2),
-                                                "v": 0,
-                                            })
-                                            if len(candles) > 200:
-                                                entry[tf_key] = candles[-200:]
-                                                candles = entry[tf_key]
-
-                                            # Recompute all SMC signals on new bar
-                                            fvg_key = "fvg" + tf_key[7:]  # candles3m -> fvg3m
-                                            ob_key = "ob" + tf_key[7:]
-                                            liq_key = "liquidity" + tf_key[7:]
-                                            entry[fvg_key] = _detect_fvg(candles)
-                                            entry[ob_key] = _detect_order_blocks(candles)
-                                            entry[liq_key] = _detect_liquidity(candles)
-                                            # Recompute S/R from 3m candles (authoritative)
-                                            if tf_key == "candles3m":
-                                                sr = _compute_support_resistance(candles)
-                                                entry["levels"]["support"] = sr["support"]
-                                                entry["levels"]["resistance"] = sr["resistance"]
-                                        else:
-                                            # Update last candle with current spot.
-                                            # Only extend H/L if the live price is within
-                                            # 1.5% of the candle open — avoids stretching
-                                            # a stale cached candle into a monster wick.
-                                            last["c"] = round(spot, 2)
-                                            if last.get("o", spot) > 0:
-                                                drift = abs(spot - last["o"]) / last["o"]
-                                                if drift < 0.015:
-                                                    last["h"] = round(max(last["h"], spot), 2)
-                                                    last["l"] = round(min(last["l"], spot), 2)
-                                    except Exception:
-                                        # Only update close — never touch h/l in an error path
-                                        # to prevent stale-cache monster candles.
-                                        last["c"] = round(spot, 2)
-
-                                # Always update CDH/CDL from latest 3m candles
-                                if tf_key == "candles3m":
-                                    today_str = now_ist.strftime("%Y-%m-%d")
-                                    today_c = [c for c in candles if str(c.get("t", "")).startswith(today_str)]
-                                    if today_c:
-                                        entry["levels"]["cdh"] = round(max(c["h"] for c in today_c), 2)
-                                        entry["levels"]["cdl"] = round(min(c["l"] for c in today_c), 2)
+                            refreshed_snapshot: Dict[str, Any] = {}
+                            results = await asyncio.gather(
+                                *[
+                                    asyncio.to_thread(
+                                        self._refresh_entry_with_live_spot,
+                                        self._last_snapshot[sym],
+                                        sym,
+                                        now_ist,
+                                    )
+                                    for sym in SYMBOLS
+                                    if sym in self._last_snapshot
+                                ],
+                                return_exceptions=True,
+                            )
+                            for sym, result in zip([s for s in SYMBOLS if s in self._last_snapshot], results):
+                                if isinstance(result, Exception):
+                                    logger.debug("Chart intel live refresh failed for %s: %s", sym, result)
+                                    refreshed_snapshot[sym] = self._last_snapshot[sym]
+                                else:
+                                    refreshed_snapshot[sym] = result
+                            if refreshed_snapshot:
+                                self._last_snapshot = refreshed_snapshot
 
                     # Broadcast current data
                     if self._last_snapshot:

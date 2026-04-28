@@ -405,6 +405,15 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
   chartHeightRef.current = chartHeight;
   dataSourceRef.current  = dataSource;
 
+  // ── Render scheduler refs (performance) ───────────────────────────────
+  // dirtyRef: render only when scene changed (data/interaction/resize)
+  // lastFrameTsRef: frame limiter to avoid wasting 60fps when idle
+  const dirtyRef = useRef(true);
+  const lastFrameTsRef = useRef(0);
+  const markDirty = useCallback(() => {
+    dirtyRef.current = true;
+  }, []);
+
   // Track last rendered canvas size — only resize when it actually changes
   // (resizing canvas clears it and causes a blank flash = flicker)
   const lastCanvasW = useRef(0);
@@ -1840,6 +1849,9 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
         }
       }
     }
+
+    // Scene rendered successfully — clear dirty flag until next data/interaction change
+    dirtyRef.current = false;
   }, []);
 
   // Reset smooth Y-axis range only when the chart identity changes (symbol or timeframe switch)
@@ -1848,25 +1860,49 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
     smoothMinRef.current = 0;
     smoothMaxRef.current = 0;
     lastCanvasW.current = 0; // force canvas resize on next frame
+    dirtyRef.current = true;
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chartKey]);
 
-  // ── Continuous RAF loop — runs at display refresh rate (60fps) ──────
+  // ── Adaptive RAF loop — active drag/zoom gets high fps, idle is throttled ──
   useEffect(() => {
     let rafId: number;
-    const loop = () => { render(); rafId = requestAnimationFrame(loop); };
+    const loop = (ts: number) => {
+      if (typeof document !== 'undefined' && document.hidden) {
+        rafId = requestAnimationFrame(loop);
+        return;
+      }
+      const interacting = isDragging.current || isVDragging.current;
+      const targetFps = interacting ? 60 : 24;
+      const minDt = 1000 / targetFps;
+      const dt = ts - lastFrameTsRef.current;
+      const mustRender = dirtyRef.current || interacting;
+      if (mustRender && dt >= minDt) {
+        lastFrameTsRef.current = ts;
+        render();
+      }
+      rafId = requestAnimationFrame(loop);
+    };
     rafId = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(rafId);
   }, [render]);
+
+  // Mark scene dirty when data changes (no callback recreation needed)
+  useEffect(() => {
+    markDirty();
+  }, [candles, fvg, ob, liquidity, levels, spot, liveSpot, structure, inducements, fractals, dataSource, markDirty]);
 
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
     // Reset cached size so render() re-measures on next RAF tick
-    const ro = new ResizeObserver(() => { lastCanvasW.current = 0; });
+    const ro = new ResizeObserver(() => {
+      lastCanvasW.current = 0;
+      markDirty();
+    });
     ro.observe(container);
     return () => ro.disconnect();
-  }, []);
+  }, [markDirty]);
 
   // ── Interaction handlers ──────────────────────────────────────────
 
@@ -1886,12 +1922,16 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
       const newTotalPx = Math.max(0, totalStartPx - dx);
       scrollRef.current = Math.floor(newTotalPx / candleStep);
       pixelPanRef.current = newTotalPx % candleStep;
+      markDirty();
     }
     if (isVDragging.current) {
       const dy = vDragStartY.current - e.clientY;
       vScaleRef.current = Math.max(0.25, Math.min(8, vDragStartScale.current * Math.exp(dy / 200)));
+      markDirty();
     }
-  }, []);
+    // Crosshair movement also needs redraw
+    markDirty();
+  }, [markDirty]);
 
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     if (e.button === 0) {
@@ -1909,13 +1949,15 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
   const handleMouseUp = useCallback(() => {
     isDragging.current = false;
     isVDragging.current = false;
-  }, []);
+    markDirty();
+  }, [markDirty]);
 
   const handleMouseLeave = useCallback(() => {
     mouseRef.current = { x: -1, y: -1 };
     isDragging.current = false;
     isVDragging.current = false;
-  }, []);
+    markDirty();
+  }, [markDirty]);
 
   const handleContextMenu = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
@@ -1927,7 +1969,8 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
     vScaleRef.current = 1;
     scrollRef.current = 0;
     pixelPanRef.current = 0;
-  }, []);
+    markDirty();
+  }, [markDirty]);
 
   // ── Native listeners: wheel + touch (must be passive:false to preventDefault) ──
   useEffect(() => {
@@ -1938,12 +1981,31 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
       e.preventDefault();
       e.stopPropagation();
       const candleStep = candleWRef.current + candleGapRef.current;
+      const rect = canvas.getBoundingClientRect();
+      const chartRight = rect.width - CFG.PRICE_AXIS_W;
+      const chartW = chartRight;
+      const visibleCount = Math.max(1, Math.floor(chartW / candleStep));
+      const halfVisible = Math.floor(visibleCount / 2);
+      const centreIdxBefore = candlesRef.current.length - 1 - Math.max(0, scrollRef.current);
+      const centreXBefore = chartW / 2 - pixelPanRef.current;
+      const mouseX = e.clientX - rect.left;
+      const anchorArrayIdxBefore = centreIdxBefore + (mouseX - centreXBefore) / candleStep;
+
       if (e.ctrlKey || e.metaKey) {
         // Ctrl/Cmd + scroll → zoom candle width
         const factor = e.deltaY > 0 ? 0.88 : 1.14;
         candleWRef.current = Math.max(2, Math.min(40, candleWRef.current * factor));
         candleGapRef.current = Math.max(1, Math.round(candleWRef.current * 0.43));
-        pixelPanRef.current = 0; // reset sub-pixel on zoom
+
+        // Cursor-anchored zoom: keep candle under cursor stable like TradingView
+        const newStep = candleWRef.current + candleGapRef.current;
+        const newVisible = Math.max(1, Math.floor(chartW / newStep));
+        const newHalf = Math.floor(newVisible / 2);
+        const centreIdxNeeded = anchorArrayIdxBefore - (mouseX - chartW / 2) / newStep;
+        const rawScroll = (candlesRef.current.length - 1) - centreIdxNeeded;
+        const maxScroll = Math.max(0, candlesRef.current.length - newHalf - 1);
+        scrollRef.current = Math.max(0, Math.min(maxScroll, Math.floor(rawScroll)));
+        pixelPanRef.current = 0;
       } else if (e.shiftKey) {
         // Shift + scroll → vertical zoom
         const factor = e.deltaY > 0 ? 0.88 : 1.14;
@@ -1955,6 +2017,7 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
         scrollRef.current = Math.floor(totalPx / candleStep);
         pixelPanRef.current = totalPx % candleStep;
       }
+      markDirty();
     };
 
     // Touch state
@@ -1993,8 +2056,10 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
           const totalPx = Math.max(0, tScroll * candleStep + tPixelPan - dx);
           scrollRef.current = Math.floor(totalPx / candleStep);
           pixelPanRef.current = totalPx % candleStep;
+          markDirty();
         } else if (touchDir === 'v') {
           vScaleRef.current = Math.max(0.25, Math.min(8, tVScale * Math.exp(dy / -180)));
+          markDirty();
         }
       } else if (e.touches.length === 2) {
         // Pinch = horizontal zoom (candle width)
@@ -2005,6 +2070,7 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
         candleWRef.current = Math.max(2, Math.min(40, tCW * ratio));
         candleGapRef.current = Math.max(1, Math.round(candleWRef.current * 0.43));
         pixelPanRef.current = 0;
+        markDirty();
       }
     };
 
@@ -2020,7 +2086,7 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
       canvas.removeEventListener('touchmove', onTouchMove);
       canvas.removeEventListener('touchend', onTouchEnd);
     };
-  }, []);  // empty deps — only runs once; reads refs directly
+  }, [markDirty]);
 
   return (
     <div
@@ -2046,31 +2112,31 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
         <button
           className="pointer-events-auto w-6 h-6 rounded bg-slate-800/80 border border-slate-600/50 text-slate-300 text-xs flex items-center justify-center hover:bg-slate-700/90 active:scale-95 transition-all"
           title="Zoom out (candles)"
-          onMouseDown={e => { e.stopPropagation(); candleWRef.current = Math.max(2, candleWRef.current * 0.8); candleGapRef.current = Math.max(1, Math.round(candleWRef.current * 0.43)); pixelPanRef.current = 0; }}
+          onMouseDown={e => { e.stopPropagation(); candleWRef.current = Math.max(2, candleWRef.current * 0.8); candleGapRef.current = Math.max(1, Math.round(candleWRef.current * 0.43)); pixelPanRef.current = 0; markDirty(); }}
         >−</button>
         {/* Zoom in */}
         <button
           className="pointer-events-auto w-6 h-6 rounded bg-slate-800/80 border border-slate-600/50 text-slate-300 text-xs flex items-center justify-center hover:bg-slate-700/90 active:scale-95 transition-all"
           title="Zoom in (candles)"
-          onMouseDown={e => { e.stopPropagation(); candleWRef.current = Math.min(40, candleWRef.current * 1.25); candleGapRef.current = Math.max(1, Math.round(candleWRef.current * 0.43)); pixelPanRef.current = 0; }}
+          onMouseDown={e => { e.stopPropagation(); candleWRef.current = Math.min(40, candleWRef.current * 1.25); candleGapRef.current = Math.max(1, Math.round(candleWRef.current * 0.43)); pixelPanRef.current = 0; markDirty(); }}
         >+</button>
         {/* Scroll left (older) */}
         <button
           className="pointer-events-auto w-6 h-6 rounded bg-slate-800/80 border border-slate-600/50 text-slate-300 text-xs flex items-center justify-center hover:bg-slate-700/90 active:scale-95 transition-all"
           title="Scroll to older candles"
-          onMouseDown={e => { e.stopPropagation(); scrollRef.current = Math.min(scrollRef.current + 10, 9999); }}
+          onMouseDown={e => { e.stopPropagation(); scrollRef.current = Math.min(scrollRef.current + 10, 9999); markDirty(); }}
         >‹</button>
         {/* Scroll right (newer) */}
         <button
           className="pointer-events-auto w-6 h-6 rounded bg-slate-800/80 border border-slate-600/50 text-slate-300 text-xs flex items-center justify-center hover:bg-slate-700/90 active:scale-95 transition-all"
           title="Scroll to latest"
-          onMouseDown={e => { e.stopPropagation(); scrollRef.current = Math.max(0, scrollRef.current - 10); pixelPanRef.current = 0; }}
+          onMouseDown={e => { e.stopPropagation(); scrollRef.current = Math.max(0, scrollRef.current - 10); pixelPanRef.current = 0; markDirty(); }}
         >›</button>
         {/* Reset */}
         <button
           className="pointer-events-auto w-6 h-6 rounded bg-slate-800/80 border border-slate-600/50 text-slate-400 text-[9px] flex items-center justify-center hover:bg-slate-700/90 active:scale-95 transition-all"
           title="Reset zoom & scroll"
-          onMouseDown={e => { e.stopPropagation(); candleWRef.current = CFG.CANDLE_W; candleGapRef.current = CFG.CANDLE_GAP; vScaleRef.current = 1; scrollRef.current = 0; pixelPanRef.current = 0; }}
+          onMouseDown={e => { e.stopPropagation(); candleWRef.current = CFG.CANDLE_W; candleGapRef.current = CFG.CANDLE_GAP; vScaleRef.current = 1; scrollRef.current = 0; pixelPanRef.current = 0; markDirty(); }}
         >⟳</button>
         {/* Maximize */}
         {onMaximize && (

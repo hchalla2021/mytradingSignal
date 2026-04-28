@@ -135,11 +135,154 @@ def _approx_delta(spot: float, strike: float) -> float:
     return 1.0 / (1.0 + math.exp(-m * 1.6))
 
 
+# ── Black-Scholes Implied Volatility & Greeks ────────────────────────────────
+# Risk-free rate: RBI repo rate approximation for Indian markets.
+_INDIA_RFR = 0.065
+_SQRT_2PI  = math.sqrt(2.0 * math.pi)
+_SQRT_2    = math.sqrt(2.0)
+
+
+def _norm_pdf(x: float) -> float:
+    """Standard normal PDF φ(x)."""
+    return math.exp(-0.5 * x * x) / _SQRT_2PI
+
+
+def _norm_cdf(x: float) -> float:
+    """Standard normal CDF Φ(x) via complementary error function (numerically stable)."""
+    return 0.5 * math.erfc(-x / _SQRT_2)
+
+
+def _bs_price(S: float, K: float, T: float, r: float, sigma: float, opt_type: str) -> float:
+    """Black-Scholes analytical option price.  opt_type: 'CE' (call) or 'PE' (put)."""
+    if T <= 1e-9 or sigma <= 1e-9:
+        return max(0.0, S - K) if opt_type == "CE" else max(0.0, K - S)
+    sqrt_T = math.sqrt(T)
+    d1 = (math.log(S / K) + (r + 0.5 * sigma * sigma) * T) / (sigma * sqrt_T)
+    d2 = d1 - sigma * sqrt_T
+    if opt_type == "CE":
+        return S * _norm_cdf(d1) - K * math.exp(-r * T) * _norm_cdf(d2)
+    return K * math.exp(-r * T) * _norm_cdf(-d2) - S * _norm_cdf(-d1)
+
+
+def _bs_vega_raw(S: float, K: float, T: float, r: float, sigma: float) -> float:
+    """Raw vega ∂Price/∂σ — used by Newton-Raphson IV solver; equals S·φ(d1)·√T."""
+    if T <= 1e-9 or sigma <= 1e-9 or S <= 0:
+        return 0.0
+    sqrt_T = math.sqrt(T)
+    d1 = (math.log(S / K) + (r + 0.5 * sigma * sigma) * T) / (sigma * sqrt_T)
+    return S * _norm_pdf(d1) * sqrt_T
+
+
+def _implied_vol(
+    market_price: float,
+    S: float,
+    K: float,
+    T: float,
+    r: float,
+    opt_type: str,
+    *,
+    max_iter: int = 50,
+    tol: float = 0.005,
+) -> Optional[float]:
+    """
+    Newton-Raphson Implied Volatility solver.
+
+    Returns annualised IV as decimal (e.g. 0.145 = 14.5%), or None on failure.
+    Handles near-zero premiums, expiry-day options, and extreme moneyness robustly.
+
+    Convergence criterion: |BS_price - market_price| < tol (₹0.005 default).
+    """
+    if market_price < 0.5 or S <= 0 or K <= 0 or T < 1e-6:
+        return None
+    intrinsic = max(0.0, S - K) if opt_type == "CE" else max(0.0, K - S)
+    if market_price < intrinsic:
+        return None   # price below intrinsic = data/arbitrage error
+    # Brenner-Subrahmanyam approximation as starting point: σ ≈ √(2π/T) × (price/S)
+    try:
+        sigma = _clamp(math.sqrt(2.0 * math.pi / T) * (market_price / S), 0.01, 4.0)
+    except Exception:
+        sigma = 0.20
+    for _ in range(max_iter):
+        try:
+            diff = _bs_price(S, K, T, r, sigma, opt_type) - market_price
+            if abs(diff) < tol:
+                break
+            vega = _bs_vega_raw(S, K, T, r, sigma)
+            if vega < 1e-8:
+                break
+            sigma = _clamp(sigma - diff / vega, 0.005, 5.0)
+        except (ValueError, ZeroDivisionError, OverflowError):
+            return None
+    if sigma < 0.005 or sigma > 4.99:
+        return None
+    # Validate final convergence (ensure BS price within ₹2 of market)
+    try:
+        if abs(_bs_price(S, K, T, r, sigma, opt_type) - market_price) > 2.0:
+            return None
+    except Exception:
+        return None
+    return round(sigma, 4)
+
+
+def _option_greeks(
+    S: float,
+    K: float,
+    T: float,
+    r: float,
+    sigma: float,
+    opt_type: str,
+) -> Dict[str, Optional[float]]:
+    """
+    Analytical Black-Scholes Greeks.
+      delta : 0→1 for CE, -1→0 for PE  (directional exposure per ₹1 spot move)
+      gamma : ∂delta/∂S per ₹1 spot move — same formula for CE and PE
+      theta : ₹ time decay per calendar day  (negative = premium erodes daily)
+      vega  : ₹ price change per +1% annualised IV  (always positive)
+    """
+    null_g: Dict[str, Optional[float]] = {"delta": None, "gamma": None, "theta": None, "vega": None}
+    if T <= 1e-9 or sigma <= 1e-9 or S <= 0 or K <= 0:
+        return null_g
+    try:
+        sqrt_T = math.sqrt(T)
+        d1     = (math.log(S / K) + (r + 0.5 * sigma * sigma) * T) / (sigma * sqrt_T)
+        d2     = d1 - sigma * sqrt_T
+        pdf_d1 = _norm_pdf(d1)
+        exp_rT = math.exp(-r * T)
+        delta  = _norm_cdf(d1) if opt_type == "CE" else _norm_cdf(d1) - 1.0
+        gamma  = pdf_d1 / (S * sigma * sqrt_T)
+        base_t = -(S * pdf_d1 * sigma) / (2.0 * sqrt_T)
+        theta  = (base_t - r * K * exp_rT * _norm_cdf(d2))  / 365.0 if opt_type == "CE" \
+            else (base_t + r * K * exp_rT * _norm_cdf(-d2)) / 365.0
+        vega   = S * pdf_d1 * sqrt_T / 100.0   # per 1% IV move
+        return {
+            "delta": round(delta, 3),
+            "gamma": round(gamma, 5),
+            "theta": round(theta, 2),
+            "vega":  round(vega,  2),
+        }
+    except (ValueError, ZeroDivisionError, OverflowError):
+        return null_g
+
+
+def _dte_from_expiry(expiry_str: str) -> float:
+    """
+    Calendar days to expiry from a date string (e.g. '2025-01-30').
+    Returns 0.0 on expiry day; defaults to 7 DTE if string cannot be parsed.
+    """
+    try:
+        expiry_date = datetime.strptime(str(expiry_str)[:10], "%Y-%m-%d").date()
+        today = datetime.now(IST).date()
+        return max(0.0, float((expiry_date - today).days))
+    except Exception:
+        return 7.0   # safe fallback: assume ~1 week
+
+
 def _compute_signal(
     ce_oi: int, pe_oi: int, ce_volume: int, pe_volume: int,
     ce_price: float, pe_price: float, ce_change: float, pe_change: float,
     spot: float, strike: int,
     ce_oi_change: int = 0, pe_oi_change: int = 0,
+    dte: float = 0.0,
 ) -> Dict[str, Any]:
     """
     Compute buy/sell signal for a single strike from CE & PE data.
@@ -423,6 +566,29 @@ def _compute_signal(
         b += diff  # absorb rounding error into the dominant (buy/sell) bucket
         return {"buyPct": b, "sellPct": s, "neutralPct": n}
 
+    # ═══════════════════════════════════════════════════════════════════════
+    #  IMPLIED VOLATILITY & GREEKS (Black-Scholes analytical)
+    # ═══════════════════════════════════════════════════════════════════════
+    # T = time fraction in years; floor at 1 calendar day to prevent T→0 instability.
+    T = max(dte, 1.0) / 365.0
+    S = float(spot)
+    K = float(strike)
+
+    # Implied Volatility via Newton-Raphson solver
+    ce_iv: Optional[float] = _implied_vol(ce_price, S, K, T, _INDIA_RFR, "CE") if ce_price >= 0.5 else None
+    pe_iv: Optional[float] = _implied_vol(pe_price, S, K, T, _INDIA_RFR, "PE") if pe_price >= 0.5 else None
+
+    # Greeks — use BS analytical delta when IV solved, else fall back to synthetic delta
+    if ce_iv is not None:
+        ce_g = _option_greeks(S, K, T, _INDIA_RFR, ce_iv, "CE")
+    else:
+        ce_g = {"delta": round(ce_delta, 3), "gamma": None, "theta": None, "vega": None}
+
+    if pe_iv is not None:
+        pe_g = _option_greeks(S, K, T, _INDIA_RFR, pe_iv, "PE")
+    else:
+        pe_g = {"delta": round(pe_delta, 3), "gamma": None, "theta": None, "vega": None}
+
     return {
         "ce": {
             "signal":    _score_to_signal(ce_score),
@@ -436,9 +602,13 @@ def _compute_signal(
             "signals": {
                 "liq":      liq_type_ce,
                 "bos":      bos_signal,
-                "delta":    round(ce_delta, 3),
+                "delta":    ce_g["delta"],
                 "trap":     trap_ce,
                 "oiInterp": oiInterp_ce,
+                "iv":       ce_iv,
+                "gamma":    ce_g["gamma"],
+                "theta":    ce_g["theta"],
+                "vega":     ce_g["vega"],
             },
         },
         "pe": {
@@ -453,9 +623,13 @@ def _compute_signal(
             "signals": {
                 "liq":      liq_type_pe,
                 "bos":      bos_signal,
-                "delta":    round(pe_delta, 3),
+                "delta":    pe_g["delta"],
                 "trap":     trap_pe,
                 "oiInterp": oiInterp_pe,
+                "iv":       pe_iv,
+                "gamma":    pe_g["gamma"],
+                "theta":    pe_g["theta"],
+                "vega":     pe_g["vega"],
             },
         },
     }
@@ -471,6 +645,175 @@ def _overall_signal_from_score(score: float) -> str:
     if score <= -12:
         return "SELL"
     return "NEUTRAL"
+
+
+def _compute_best_strike_recommendation(
+    rows: List[Dict[str, Any]],
+    spot: float,
+    atm: int,
+    direction: Optional[str],  # "BULLISH" or "BEARISH" from overall intelligence
+) -> Optional[Dict[str, Any]]:
+    """
+    AI Strike Recommender: analyzes all 11 strikes, ranks by tradability,
+    returns the **single best strike** to trade with direction prediction + confidence.
+
+    Scoring factors (out of 100):
+      1. Signal quality (0–30): STRONG_BUY/SELL=30, BUY/SELL=20, NEUTRAL=5
+      2. Conviction pass % (0–25): % of pre-trade checklist items passing
+      3. Greeks strength (0–20): (Delta magnitude + Gamma) for directional moves
+      4. Volume+OI confirmation (0–15): Participation depth
+      5. Velocity heat (0–10): EXTREME=10, HOT=8, WARM=4, COLD=0
+
+    Returns:
+      {
+        "strike": 50000,
+        "label": "ATM",
+        "side": "CE" | "PE",
+        "direction": "UP" | "DOWN",
+        "score": 89.5,
+        "confidence": 82,
+        "reason": "STRONG_BUY CE at ATM with 92% conviction, delta 0.68, gamma spike",
+        "greeksSummary": "Δ0.68 | Γ spike | Θ-15 | σ18%"
+      }
+    Returns None if no viable strike found.
+    """
+    if not rows or spot <= 0:
+        return None
+
+    best: Optional[Dict[str, Any]] = None
+    best_score = -1.0
+
+    for row in rows:
+        strike_val = _safe_int(row.get("strike"))
+        label = str(row.get("label", ""))
+        is_atm = bool(row.get("isATM"))
+
+        for side_key in ["ce", "pe"]:
+            side = row.get(side_key, {})
+            if not isinstance(side, dict):
+                continue
+
+            signal = side.get("signal", "NEUTRAL")
+            signals_dict = side.get("signals", {})
+            breakdown = side.get("breakdown", {})
+            velocity = side.get("velocity", "COLD")
+            oi = _safe_int(side.get("oi"))
+            volume = _safe_int(side.get("volume"))
+            oiChange = _safe_int(side.get("oiChange", 0))
+
+            # ── Score 1: Signal quality (0–30) ────────────────────────────────────
+            if signal in ("STRONG_BUY", "STRONG_SELL"):
+                signal_score = 30
+            elif signal in ("BUY", "SELL"):
+                signal_score = 20
+            else:
+                signal_score = 5
+
+            # ── Score 2: Conviction pass % (0–25) ───────────────────────────────
+            # Count checklist items: buyPct/sellPct, volume, OI, oiChange
+            isBuy = signal in ("BUY", "STRONG_BUY")
+            isSell = signal in ("SELL", "STRONG_SELL")
+            checklist_pass = 0
+            checklist_total = 4
+
+            # Determine minimum thresholds (rough, can refine per symbol)
+            min_buy_pct = 62
+            min_volume = 50_000
+            min_oi = 50_000
+            min_oi_change = 500
+
+            if isBuy and breakdown.get("buyPct", 0) >= min_buy_pct:
+                checklist_pass += 1
+            elif isSell and breakdown.get("sellPct", 0) >= min_buy_pct:
+                checklist_pass += 1
+            if volume >= min_volume:
+                checklist_pass += 1
+            if oi >= min_oi:
+                checklist_pass += 1
+            if abs(oiChange) >= min_oi_change:
+                checklist_pass += 1
+
+            conviction_pct = (checklist_pass / checklist_total) * 100.0 if checklist_total > 0 else 0.0
+            conviction_score = min(conviction_pct / 4.0, 25)  # 100% pass → 25 points
+
+            # ── Score 3: Greeks strength (0–20) ──────────────────────────────────
+            delta = _safe_float(signals_dict.get("delta"))
+            gamma = _safe_float(signals_dict.get("gamma"))
+            greeks_score = 0.0
+            if delta is not None:
+                greeks_score += min(abs(delta) * 20, 12)  # delta 0.6+ → max 12 pts
+            if gamma is not None:
+                greeks_score += min(gamma * 5000, 8)      # gamma 0.0016+ → max 8 pts
+            greeks_score = min(greeks_score, 20)
+
+            # ── Score 4: Volume + OI confirmation (0–15) ──────────────────────────
+            vol_norm = min(volume / max(min_volume, 1), 1.0)
+            oi_norm = min(oi / max(min_oi, 1), 1.0)
+            confirmation_score = (vol_norm * 0.6 + oi_norm * 0.4) * 15
+
+            # ── Score 5: Velocity heat (0–10) ────────────────────────────────────
+            velocity_map = {"EXTREME": 10, "HOT": 8, "WARM": 4, "COLD": 0}
+            velocity_score = float(velocity_map.get(velocity, 0))
+
+            # ── Total score (0–100) ──────────────────────────────────────────────
+            total_score = signal_score + conviction_score + greeks_score + confirmation_score + velocity_score
+
+            # ── ATM proximity boost — easier entry/exit ──────────────────────────
+            if is_atm:
+                total_score *= 1.08  # +8% for ATM
+            elif abs(strike_val - int(spot)) <= 50:  # Within 1 strike
+                total_score *= 1.03
+
+            # Only consider strong signals (score > 50) or very high conviction
+            if total_score > best_score and (signal_score >= 20 or conviction_score >= 15):
+                best_score = total_score
+                iv = _safe_float(signals_dict.get("iv"))
+                theta = _safe_float(signals_dict.get("theta"))
+                oiInterp = signals_dict.get("oiInterp")
+
+                # Determine direction: CE = UP, PE = DOWN
+                pred_direction = "UP" if side_key == "ce" else "DOWN"
+
+                # Build Greeks summary for display
+                delta_str = f"{delta:.2f}" if delta is not None else "—"
+                gamma_str = f"spk" if gamma is not None and gamma > 0.001 else ""
+                theta_str = f"{theta:.0f}" if theta is not None else "—"
+                iv_str = f"{(iv * 100):.0f}%" if iv is not None else "—"
+                greeks_summary = f"Δ{delta_str}" + (f" | Γ{gamma_str}" if gamma_str else "") + f" | Θ{theta_str} | σ{iv_str}"
+
+                # Reason string
+                reason_parts = [signal.replace("_", " ")]
+                if side_key == "ce":
+                    reason_parts.append("CE at")
+                else:
+                    reason_parts.append("PE at")
+                reason_parts.append(label)
+                if conviction_pct >= 75:
+                    reason_parts.append(f"({int(conviction_pct)}% conviction)")
+                if velocity in ("EXTREME", "HOT"):
+                    reason_parts.append(f"({velocity} heat)")
+                if oiInterp:
+                    reason_parts.append(f"({oiInterp} signal)")
+
+                # Confidence: blend signal quality, conviction, and velocity
+                confidence = int(round(
+                    (signal_score / 30.0) * 0.4 +
+                    (conviction_pct / 100.0) * 0.4 +
+                    (velocity_score / 10.0) * 0.2
+                ) * 100)
+
+                best = {
+                    "strike": strike_val,
+                    "label": label,
+                    "side": "CE" if side_key == "ce" else "PE",
+                    "direction": pred_direction,
+                    "score": round(best_score, 1),
+                    "confidence": confidence,
+                    "reason": " ".join(reason_parts),
+                    "greeksSummary": greeks_summary,
+                }
+
+    return best
 
 
 def _compute_max_pain(rows: List[Dict[str, Any]]) -> Optional[int]:
@@ -497,6 +840,107 @@ def _compute_max_pain(rows: List[Dict[str, Any]]) -> Optional[int]:
             min_val = val
             best = T
     return best
+
+
+def _compute_price_move_predictions(rows: List[Dict[str, Any]], spot: float) -> Dict[str, Any]:
+    """
+    Predict which low prices will move UP or DOWN.
+    
+    Finds lowest prices in each ITM/OTM CE/PE category and predicts direction.
+    Returns: {
+      "lowestItmCe": {"price": X, "strike": Y, "direction": "UP", "confidence": Z},
+      "lowestOtmCe": {...},
+      "lowestItmPe": {...},
+      "lowestOtmPe": {...}
+    }
+    """
+    predictions = {}
+    
+    # Categorize strikes into ITM and OTM for CE and PE
+    itm_ce = []  # Strike < spot (CE is ITM)
+    otm_ce = []  # Strike > spot (CE is OTM)
+    itm_pe = []  # Strike > spot (PE is ITM)
+    otm_pe = []  # Strike < spot (PE is OTM)
+    
+    for row in rows:
+        strike = _safe_int(row.get("strike"))
+        if strike <= 0:
+            continue
+        ce = row.get("ce", {})
+        pe = row.get("pe", {})
+        
+        # Categorize CEs
+        if strike < spot:
+            itm_ce.append({"strike": strike, "data": ce, "row": row})
+        else:
+            otm_ce.append({"strike": strike, "data": ce, "row": row})
+        
+        # Categorize PEs
+        if strike > spot:
+            itm_pe.append({"strike": strike, "data": pe, "row": row})
+        else:
+            otm_pe.append({"strike": strike, "data": pe, "row": row})
+    
+    # Helper: predict direction and confidence from signal + velocity
+    def predict_direction(side_data: Dict, side_type: str) -> tuple[str, int]:
+        """Returns (direction: UP|DOWN, confidence: 0-100)"""
+        signal = side_data.get("signal", "NEUTRAL")
+        velocity = side_data.get("velocity", "COLD")
+        score = _safe_float(side_data.get("score", 0))
+        
+        # Direction from signal
+        if signal in ("STRONG_BUY", "BUY"):
+            direction = "UP"
+            base_conf = 70 if signal == "STRONG_BUY" else 55
+        elif signal in ("STRONG_SELL", "SELL"):
+            direction = "DOWN"
+            base_conf = 70 if signal == "STRONG_SELL" else 55
+        else:
+            # For NEUTRAL, use score sign
+            if score > 0:
+                direction = "UP"
+                base_conf = 40
+            elif score < 0:
+                direction = "DOWN"
+                base_conf = 40
+            else:
+                direction = "FLAT"
+                base_conf = 30
+        
+        # Boost confidence with velocity
+        velocity_boost = 0
+        if velocity == "EXTREME":
+            velocity_boost = 15
+        elif velocity == "HOT":
+            velocity_boost = 10
+        elif velocity == "WARM":
+            velocity_boost = 5
+        
+        confidence = min(base_conf + velocity_boost, 95)
+        return direction, confidence
+    
+    # Helper: find lowest price in category
+    def find_lowest(category: List[Dict]) -> Dict[str, Any]:
+        """Find lowest priced strike in category with prediction"""
+        if not category:
+            return {}
+        lowest = min(category, key=lambda x: _safe_float(x["data"].get("price", 999999)))
+        direction, confidence = predict_direction(lowest["data"], "ce" if "ce" in str(lowest) else "pe")
+        return {
+            "price": round(_safe_float(lowest["data"].get("price")), 2),
+            "strike": lowest["strike"],
+            "direction": direction,
+            "confidence": confidence,
+            "signal": lowest["data"].get("signal", "NEUTRAL"),
+            "velocity": lowest["data"].get("velocity", "COLD"),
+        }
+    
+    predictions["lowestItmCe"] = find_lowest(itm_ce)
+    predictions["lowestOtmCe"] = find_lowest(otm_ce)
+    predictions["lowestItmPe"] = find_lowest(itm_pe)
+    predictions["lowestOtmPe"] = find_lowest(otm_pe)
+    
+    return predictions
 
 
 def _build_intelligence_summary(
@@ -691,6 +1135,17 @@ def _build_intelligence_summary(
     if trap_ratio >= 0.25:
         insights.append("Elevated trap risk: avoid chasing weak breakouts")
 
+    # Compute AI best strike recommendation
+    best_strike = _compute_best_strike_recommendation(
+        rows=sorted_rows,
+        spot=spot,
+        atm=atm,
+        direction=signal,
+    )
+
+    # Compute lowest price predictions (ITM/OTM with UP/DOWN direction)
+    price_predictions = _compute_price_move_predictions(sorted_rows, spot)
+
     return {
         "symbol": symbol,
         "signal": signal,
@@ -712,6 +1167,8 @@ def _build_intelligence_summary(
             "supportGapPct": support_gap_pct,
             "resistanceGapPct": resistance_gap_pct,
         },
+        "bestStrike": best_strike,
+        "pricePredictions": price_predictions,
         "insights": insights[:4],
     }
 
@@ -795,12 +1252,15 @@ class StrikeIntelligenceService:
         self._instruments_cache_date: Dict[str, date] = {}
         self._last_save_time: float = 0.0
         self._cadence_live = 0.5        # Broadcast every 0.5s during market hours
-        self._cadence_fetch = 2.0       # Full Zerodha quote fetch every 2s
+        self._cadence_fetch = 1.5       # Full Zerodha quote fetch every 1.5s (was 2s)
         self._cadence_closed = 60.0
         self._heartbeat_interval = 30.0
         self._kite_init_backoff_until: float = 0.0  # Backoff timer for failed init
         # OI change tracking: key = "SYMBOL_STRIKE_CE" / "SYMBOL_STRIKE_PE" → prev OI
         self._prev_oi: Dict[str, int] = {}
+        # Price velocity tracking: key = "SYMBOL_STRIKE_CE" / "_PE" → prev LTP
+        # Used to detect fast-moving strikes for real-time auto-highlighting.
+        self._prev_prices: Dict[str, float] = {}
 
     def _with_runtime_meta(
         self,
@@ -1121,6 +1581,7 @@ class StrikeIntelligenceService:
             self._prev_oi[pe_key] = sd["pe_oi"]
 
         strikes_out = []
+        dte = _dte_from_expiry(raw.get("expiry", ""))
         for strike_val in sorted(strikes_raw.keys()):
             sd = strikes_raw[strike_val]
             chg = oi_changes.get(strike_val, {"ce": 0, "pe": 0})
@@ -1131,7 +1592,30 @@ class StrikeIntelligenceService:
                 ce_change=sd["ce_change"], pe_change=sd["pe_change"],
                 spot=spot, strike=strike_val,
                 ce_oi_change=chg["ce"], pe_oi_change=chg["pe"],
+                dte=dte,
             )
+
+            # ── Price velocity: fast-moving detection ───────────────────────
+            # Measures % price change vs the last Zerodha fetch (~1.5s ago).
+            # COLD <0.5% · WARM 0.5–2% · HOT 2–5% · EXTREME >5%
+            ce_pk = f"{symbol}_{strike_val}_CE"
+            pe_pk = f"{symbol}_{strike_val}_PE"
+            prev_ce_p = self._prev_prices.get(ce_pk)
+            prev_pe_p = self._prev_prices.get(pe_pk)
+
+            def _velocity_level(curr: float, prev: Optional[float]) -> str:
+                if prev is None or prev < 0.5:
+                    return "COLD"
+                pct = abs(curr - prev) / prev * 100.0
+                if pct >= 5.0: return "EXTREME"
+                if pct >= 2.0: return "HOT"
+                if pct >= 0.5: return "WARM"
+                return "COLD"
+
+            signals["ce"]["velocity"] = _velocity_level(sd["ce_price"], prev_ce_p)
+            signals["pe"]["velocity"] = _velocity_level(sd["pe_price"], prev_pe_p)
+            self._prev_prices[ce_pk] = sd["ce_price"]
+            self._prev_prices[pe_pk] = sd["pe_price"]
 
             # Determine strike label
             diff = strike_val - atm
@@ -1183,6 +1667,7 @@ class StrikeIntelligenceService:
         """
         step    = STRIKE_STEP.get(symbol, 50)
         new_atm = _get_atm_strike(spot, step)
+        dte     = _dte_from_expiry(str(entry.get("expiry", "")))
 
         new_strikes = []
         for row in entry.get("strikes", []):
@@ -1204,7 +1689,12 @@ class StrikeIntelligenceService:
                 # Preserve oiChange from last full Zerodha fetch (not recomputed here)
                 ce_oi_change=_safe_int(ce.get("oiChange", 0)),
                 pe_oi_change=_safe_int(pe.get("oiChange", 0)),
+                dte=dte,
             )
+            # Preserve velocity from the last full Zerodha fetch —
+            # price doesn't change between 0.5s recompute cycles.
+            signals["ce"]["velocity"] = ce.get("velocity", "COLD")
+            signals["pe"]["velocity"] = pe.get("velocity", "COLD")
 
             diff = strike_val - new_atm
             if diff == 0:
@@ -1241,12 +1731,58 @@ class StrikeIntelligenceService:
             spot_timestamp=datetime.now(IST).isoformat(),
         )
 
+    # ── Background Zerodha fetch (runs as asyncio.Task, never blocks broadcast) ──
+
+    async def _bg_fetch_live(self) -> None:
+        """
+        Fetch full Zerodha option-chain quotes for all symbols in parallel threads.
+        Runs as a fire-and-forget asyncio.Task so the 0.5 s broadcast loop
+        is NEVER paused waiting for the Zerodha HTTP round-trip (1-3 s per symbol).
+        On success each symbol's snapshot is updated in-place; broadcast picks it up
+        in the very next 0.5 s cadence tick.
+        """
+        async def _fetch_one(symbol: str) -> tuple:
+            try:
+                spot = self._get_spot_price(symbol, allow_persistent_fallback=False)
+                if spot <= 0:
+                    return (symbol, None)
+                raw = await asyncio.to_thread(self._fetch_strikes_sync, symbol, spot)
+                if raw:
+                    return (symbol, self._build_symbol_data(symbol, raw))
+                elif symbol in self._last_snapshot:
+                    entry = _apply_spot_to_cached_entry(
+                        self._last_snapshot[symbol], spot, symbol
+                    )
+                    entry["dataSource"] = "CACHED"
+                    return (symbol, entry)
+                return (symbol, None)
+            except Exception as e:
+                logger.debug("Strike intel bg-fetch error for %s: %s", symbol, e)
+                return (symbol, None)
+
+        results = await asyncio.gather(
+            *[_fetch_one(sym) for sym in SYMBOLS],
+            return_exceptions=True,
+        )
+        for result in results:
+            if isinstance(result, Exception):
+                continue
+            sym, fresh = result
+            if fresh is not None:
+                self._last_snapshot[sym] = fresh
+
+        now_ts = time_mod.time()
+        if now_ts - self._last_save_time > 30 and self._last_snapshot:
+            self._last_save_time = now_ts
+            await asyncio.to_thread(_save_persistent, dict(self._last_snapshot))
+
     # ── Main loop ────────────────────────────────────────────────────────
 
     async def _run_loop(self):
         last_heartbeat = 0.0
-        last_fetch_time = 0.0       # Tracks last Zerodha quote API call
-        _closed_fetch_done = False  # Only fetch once during CLOSED to seed data
+        last_fetch_time = 0.0            # Tracks when last bg fetch was STARTED
+        _fetch_task: Optional[asyncio.Task] = None  # Background Zerodha fetch task
+        _closed_fetch_done = False
 
         while self._running:
             try:
@@ -1257,48 +1793,18 @@ class StrikeIntelligenceService:
                 if phase in ("LIVE", "PRE_OPEN"):
                     _closed_fetch_done = False
 
-                    # Full Zerodha quote fetch on first iteration and every _cadence_fetch seconds
-                    if (now_ts - last_fetch_time) >= self._cadence_fetch:
+                    # Fire-and-forget Zerodha fetch every _cadence_fetch seconds.
+                    # We only start a new fetch when the previous one has finished
+                    # so we never pile up concurrent API calls.
+                    fetch_due = (now_ts - last_fetch_time) >= self._cadence_fetch
+                    fetch_idle = _fetch_task is None or _fetch_task.done()
+                    if fetch_due and fetch_idle:
                         self._init_kite()
-
-                        async def _fetch_one(symbol: str) -> tuple:
-                            try:
-                                spot = self._get_spot_price(symbol, allow_persistent_fallback=False)
-                                if spot <= 0:
-                                    return (symbol, None)
-                                raw = await asyncio.to_thread(
-                                    self._fetch_strikes_sync, symbol, spot
-                                )
-                                if raw:
-                                    return (symbol, self._build_symbol_data(symbol, raw))
-                                elif symbol in self._last_snapshot:
-                                    entry = _apply_spot_to_cached_entry(
-                                        self._last_snapshot[symbol], spot, symbol
-                                    )
-                                    entry["dataSource"] = "CACHED"
-                                    return (symbol, entry)
-                                return (symbol, None)
-                            except Exception as e:
-                                logger.debug("Strike intel fetch error for %s: %s", symbol, e)
-                                return (symbol, None)
-
-                        results = await asyncio.gather(
-                            *[_fetch_one(sym) for sym in SYMBOLS],
-                            return_exceptions=True,
-                        )
-                        for result in results:
-                            if isinstance(result, Exception):
-                                continue
-                            sym, fresh = result
-                            if fresh is not None:
-                                self._last_snapshot[sym] = fresh
-
+                        _fetch_task = asyncio.create_task(self._bg_fetch_live())
                         last_fetch_time = now_ts
-                        if now_ts - self._last_save_time > 30 and self._last_snapshot:
-                            self._last_save_time = now_ts
-                            await asyncio.to_thread(_save_persistent, dict(self._last_snapshot))
 
-                    # Every 1s: pull live spot from cache, recompute spot-sensitive signals, broadcast
+                    # Every cadence tick (0.5 s): recompute spot-sensitive signals
+                    # and broadcast — completely decoupled from the Zerodha fetch.
                     if self._last_snapshot:
                         ts_now = datetime.now(IST).isoformat()
 

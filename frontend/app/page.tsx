@@ -158,6 +158,20 @@ const ICTIntelligence = dynamic(() => import('@/components/ICTIntelligence'), {
   )
 });
 
+const StrikeIntelligence = dynamic(() => import('@/components/StrikeIntelligence'), {
+  ssr: false,
+  loading: () => (
+    <div className="rounded-2xl border border-cyan-500/30 bg-slate-800/30 p-5 animate-pulse">
+      <div className="h-5 w-64 bg-slate-700 rounded mb-4" />
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        {[0, 1, 2].map(i => (
+          <div key={i} className="rounded-2xl bg-slate-700/30 h-80" />
+        ))}
+      </div>
+    </div>
+  )
+});
+
 export default function Home() {
   // 🔥 Force fresh mount on page load - fixes desktop browser caching
   const [currentYear, setCurrentYear] = useState(() => 
@@ -450,13 +464,13 @@ export default function Home() {
       <SystemStatusBanner />
       
       {/* Connection Status Bar */}
-      <div className="w-full px-2 sm:px-4 lg:px-6 xl:px-8 py-2">
+      <div className="w-full px-2 sm:px-4 lg:px-8 xl:px-12 py-3 lg:py-4">
         {/* Use same status component for both mobile and desktop */}
         <LiveStatus status={displayStatus} isConnected={isConnected} />
       </div>
 
       {/* Overall Market Outlook */}
-      <div className="w-full px-2 sm:px-4 lg:px-6 xl:px-8 py-2">
+      <div className="w-full px-2 sm:px-4 lg:px-8 xl:px-12 py-3 lg:py-5">
         <div className="rounded-2xl border border-white/[0.09] bg-[#06090e] overflow-hidden shadow-2xl shadow-black/60">
 
           {/* Header */}
@@ -480,7 +494,7 @@ export default function Home() {
           </div>
 
           {/* Index Cards */}
-          <div suppressHydrationWarning className="grid grid-cols-1 lg:grid-cols-3 gap-2.5 p-3">
+          <div suppressHydrationWarning className="grid grid-cols-1 lg:grid-cols-3 gap-3 lg:gap-4 xl:gap-5 p-3 lg:p-5">
             {(['NIFTY','BANKNIFTY','SENSEX'] as const).map((sym) => {
               const s = aggregatedMarketSignal[sym];
               const isBull = s.buyPercent >= 55, isBear = s.sellPercent >= 55;
@@ -576,7 +590,7 @@ export default function Home() {
       </div>
 
       {/* Main Dashboard - Full Width */}
-      <div className="w-full px-2 sm:px-4 lg:px-6 xl:px-8 py-3 sm:py-4">
+      <div className="w-full px-2 sm:px-4 lg:px-8 xl:px-12 py-3 lg:py-5">
         {/* Live Market Indices - With Border */}
         <div className="border-2 border-emerald-500/30 rounded-2xl p-3 sm:p-4 bg-gradient-to-br from-emerald-950/20 via-dark-card/50 to-dark-elevated/40 backdrop-blur-sm shadow-xl shadow-emerald-500/10">
           {/* Section Header */}
@@ -742,6 +756,9 @@ export default function Home() {
         {/* P3: 🏦 ICT SMART MONEY INTELLIGENCE */}
         <ICTIntelligence />
 
+        {/* P4: 🎯 STRIKE INTELLIGENCE */}
+        <StrikeIntelligence />
+
         {/* P5: 🧭 INSTITUTIONAL MARKET COMPASS */}
         <InstitutionalCompass />
 
@@ -830,7 +847,7 @@ export default function Home() {
       </div>
 
       {/* Analysis Info Banner */}
-      <div className="w-full px-2 sm:px-4 lg:px-6 xl:px-8 py-2">
+      <div className="w-full px-2 sm:px-4 lg:px-8 xl:px-12 py-2">
         <div className="mt-4 p-4 bg-black/40 border-2 border-green-500/40 rounded-xl shadow-lg shadow-green-500/20">
           <div className="flex items-start gap-4">
             <div className="text-3xl flex-shrink-0">📊</div>
@@ -860,7 +877,7 @@ export default function Home() {
 
       {/* Footer */}
       <footer className="border-t border-dark-border/40 mt-auto py-4 sm:py-5 bg-gradient-to-r from-dark-surface/50 to-dark-card/50 backdrop-blur-sm">
-        <div className="w-full px-2 sm:px-4 lg:px-6 xl:px-8 flex items-center justify-between text-dark-muted text-xs sm:text-sm font-medium">
+        <div className="w-full px-2 sm:px-4 lg:px-8 xl:px-12 flex items-center justify-between text-dark-muted text-xs sm:text-sm font-medium">
           <span suppressHydrationWarning className="tracking-wide">MyDailyTradingSignals © {currentYear}</span>
           <span className="flex items-center gap-2">
             <span className="w-2 h-2 bg-bullish rounded-full animate-pulse shadow-md shadow-bullish" />

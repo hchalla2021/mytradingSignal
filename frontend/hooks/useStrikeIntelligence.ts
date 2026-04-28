@@ -13,12 +13,20 @@ export interface StrikeSubSignals {
   liq: 'BSL' | 'SSL' | null;
   /** BOS: structural breakout direction detected at/near ATM */
   bos: 'UP' | 'DOWN' | null;
-  /** Synthetic Black-Scholes delta (0.0–1.0); CE delta, PE delta = 1-ce */
+  /** Black-Scholes delta (0→1 CE, -1→0 PE); BS analytical when IV solved, else synthetic */
   delta: number;
   /** Trap: high volume but price not moving in that direction = absorption */
   trap: boolean;
   /** OI Change interpretation: LB=Long Buildup, SB=Short Buildup, SC=Short Covering, LU=Long Unwinding */
   oiInterp?: 'LB' | 'SB' | 'SC' | 'LU' | null;
+  /** Implied Volatility — Black-Scholes Newton-Raphson (annualised decimal: 0.145 = 14.5%) */
+  iv?: number | null;
+  /** Gamma: rate of delta change per ₹1 spot move (same formula CE/PE) */
+  gamma?: number | null;
+  /** Theta: time decay per calendar day in ₹ — negative means premium erodes */
+  theta?: number | null;
+  /** Vega: price sensitivity per +1% annualised IV change in ₹ */
+  vega?: number | null;
 }
 
 export interface StrikeSideData {
@@ -35,8 +43,10 @@ export interface StrikeSideData {
   volume: number;
   price: number;
   change: number;
-  /** Advanced sub-signal indicators (BSL/SSL, BOS, Delta, Trap, OI Interp) */
+  /** Advanced sub-signal indicators (BSL/SSL, BOS, Delta, Trap, OI Interp, IV, Greeks) */
   signals?: StrikeSubSignals;
+  /** Price velocity level — auto-highlights fast-moving CE or PE sides in real-time */
+  velocity?: 'COLD' | 'WARM' | 'HOT' | 'EXTREME' | null;
 }
 
 export interface StrikeRow {
@@ -52,6 +62,33 @@ export interface StrikeKeyLevels {
   resistance: number | null;
   supportGapPct?: number | null;
   resistanceGapPct?: number | null;
+}
+
+export interface BestStrikeRecommendation {
+  strike: number;
+  label: string;
+  side: 'CE' | 'PE';
+  direction: 'UP' | 'DOWN';
+  score: number;
+  confidence: number;
+  reason: string;
+  greeksSummary: string;
+}
+
+export interface PriceMovePrediction {
+  price: number;
+  strike: number;
+  direction: 'UP' | 'DOWN' | 'FLAT';
+  confidence: number;
+  signal: StrikeSignal;
+  velocity: 'COLD' | 'WARM' | 'HOT' | 'EXTREME' | null;
+}
+
+export interface PricePredictions {
+  lowestItmCe: PriceMovePrediction | Record<string, never>;
+  lowestOtmCe: PriceMovePrediction | Record<string, never>;
+  lowestItmPe: PriceMovePrediction | Record<string, never>;
+  lowestOtmPe: PriceMovePrediction | Record<string, never>;
 }
 
 export interface SymbolIntelligenceSummary {
@@ -73,6 +110,10 @@ export interface SymbolIntelligenceSummary {
   /** % gap from current spot to max pain strike (+ = max pain above spot) */
   maxPainGapPct?: number | null;
   keyLevels: StrikeKeyLevels;
+  /** AI Strike Recommender — best single strike to trade with direction prediction */
+  bestStrike?: BestStrikeRecommendation | null;
+  /** Lowest price predictions for ITM/OTM CE/PE with UP/DOWN direction */
+  pricePredictions?: PricePredictions;
   insights: string[];
 }
 
@@ -160,6 +201,12 @@ const STORAGE_KEY = 'strikeIntelligenceData_v1';
 
 function saveToStorage(data: StrikeIntelligenceData): void {
   if (typeof window === 'undefined') return;
+  // Throttle: write to localStorage at most once every 5 s — WS delivers updates
+  // every 500 ms and we don't need to persist each one (last-known is enough).
+  const now = Date.now();
+  const last = (saveToStorage as unknown as { _last?: number })._last ?? 0;
+  if (now - last < 5_000) return;
+  (saveToStorage as unknown as { _last?: number })._last = now;
   try { localStorage.setItem(STORAGE_KEY, JSON.stringify(data)); } catch { /* ok */ }
 }
 

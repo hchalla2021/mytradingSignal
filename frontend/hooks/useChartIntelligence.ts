@@ -145,6 +145,10 @@ const STORAGE_KEY = 'chartIntelligenceData_v1';
 
 function saveToStorage(data: ChartIntelligenceData): void {
   if (typeof window === 'undefined') return;
+  const now = Date.now();
+  const last = (saveToStorage as unknown as { _last?: number })._last ?? 0;
+  if (now - last < 5000) return;
+  (saveToStorage as unknown as { _last?: number })._last = now;
   try { localStorage.setItem(STORAGE_KEY, JSON.stringify(data)); } catch { /* ok */ }
 }
 
@@ -279,7 +283,7 @@ export function useChartIntelligence() {
             fetchWithFallback()
               .then(json => { if (json?.data) mergeData(json.data); })
               .catch(() => {});
-          }, 5000);
+          }, 1500);
         }
       };
 
@@ -301,7 +305,7 @@ export function useChartIntelligence() {
         fetchWithFallback()
           .then(json => { if (json?.data && Object.keys(json.data).length > 0) mergeData(json.data); })
           .catch(() => {});
-      }, 5000);
+      }, 1500);
     }
     return () => {
       mountedRef.current = false;
