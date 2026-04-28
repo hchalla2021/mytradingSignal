@@ -192,7 +192,6 @@ export default function Home() {
   } = useMarketSocket();
   const { alertData } = useAIAnalysis();
   const { vixData, loading: vixLoading } = useIndiaVIX();
-  const { isAuthenticated } = useAuth();
   const [currentTime, setCurrentTime] = useState<string>('');
   const [serverOutlook, setServerOutlook] = useState<Record<string, any> | null>(null);
 
