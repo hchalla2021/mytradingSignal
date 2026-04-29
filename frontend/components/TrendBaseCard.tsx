@@ -32,7 +32,7 @@ const TrendBaseCard = memo<{ symbol: string; name: string }>(({ symbol, name }) 
   const { data, loading, error, flash, refetch } = useTrendBaseRealtime(symbol);
 
   // All hooks must be called before any early returns
-  const factors = data?.factors ?? {};
+  const factors = useMemo(() => data?.factors ?? {}, [data?.factors]);
   const sortedFactors = useMemo(() =>
     FACTOR_ORDER.filter(k => factors[k]).map(k => ({ key: k, ...factors[k] })),
     [factors]

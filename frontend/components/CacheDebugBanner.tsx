@@ -28,6 +28,7 @@ export default function CacheDebugBanner() {
     } catch (e) {
       console.error('Cache read error:', e);
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const hasCache = !!cacheData && (cacheData.NIFTY || cacheData.BANKNIFTY || cacheData.SENSEX);

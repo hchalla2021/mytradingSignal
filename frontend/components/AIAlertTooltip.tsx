@@ -44,10 +44,12 @@ export default function AIAlertTooltip({ data, onDismiss }: Props) {
     
     // Auto-dismiss after 5 seconds
     const timer = setTimeout(() => {
-      handleDismiss();
+      setVisible(false);
+      onDismiss?.();
     }, 5000);
     
     return () => clearTimeout(timer);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data.showAlert, data.message]);
 
   const handleDismiss = () => {

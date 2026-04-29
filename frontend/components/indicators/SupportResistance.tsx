@@ -55,7 +55,7 @@ export const SupportResistance: React.FC<SupportResistanceProps> = ({
     );
     
     return { supportStrength, resistanceStrength, inDecisionZone, nearLiquidity };
-  }, [currentPrice, support, resistance, distanceToSupport, distanceToResistance, liquidityZones]);
+  }, [currentPrice, distanceToSupport, distanceToResistance, liquidityZones]);
   
   // Graduated alert levels
   const isTouchingResistance = distanceToResistance <= 2; // Within 2 points = TOUCHING

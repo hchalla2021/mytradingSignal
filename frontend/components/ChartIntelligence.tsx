@@ -586,6 +586,23 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
     // Alert banner collector — zones push here as they are drawn
     const alertZones: Array<{ label: string; color: string }> = [];
 
+    // ── Inline label helper — draws a pill directly at its zone/candle position ──
+    // cx/cy = centre of the pill; auto-clamped to stay within chart bounds.
+    const drawLabel = (cx: number, cy: number, text: string, fg: string, bg: string, bold = true) => {
+      ctx.save();
+      ctx.shadowBlur = 0;
+      ctx.font = bold ? 'bold 9px sans-serif' : '9px monospace';
+      const tw = ctx.measureText(text).width;
+      const lw = tw + 10; const lh = 15;
+      const lx = Math.max(chartLeft + 1, Math.min(chartRight - lw - 1, cx - lw / 2));
+      const ly = Math.max(chartTop + 1, Math.min(chartBottom - lh - 1, cy - lh / 2));
+      roundRect(ctx, lx, ly, lw, lh, 3);
+      ctx.fillStyle = bg; ctx.globalAlpha = 1; ctx.fill();
+      ctx.fillStyle = fg; ctx.textAlign = 'left';
+      ctx.fillText(text, lx + 4, ly + lh - 4);
+      ctx.restore();
+    };
+
     // ── Proximity alert set ───────────────────────────────────────
     const keyLevels = [
       levels.pdh, levels.pdl, levels.cdh, levels.cdl,
@@ -801,33 +818,16 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
       ctx.setLineDash([]);
       ctx.shadowBlur = 0;
       ctx.restore();
-      // Label: right-aligned — ★ for PREMIUM, NEW tag for fresh OBs, hidden for WEAK unless approaching
-      if (zoneH > 10) {
+      // Label: always shown — ★ for PREMIUM, NEW for fresh, ✗ for mitigated — queued for de-overlap
+      if (zoneH > 6) {
         const mid = (y1 + y2) / 2;
         const isFreshOB = (o.candles_ago ?? 999) <= 6;
         const starMark = obQuality === 'PREMIUM' ? '★' : '';
         const statusStr = o.mitigated ? ' ✗' : (isFreshOB ? ' NEW' : '');
         const tag = starMark + (isBull ? '▲ OB' : '▼ OB') + statusStr;
-        const showLabel = obQuality !== 'WEAK' || obProx !== 'off';
-        const labelBgAlpha = obQuality === 'PREMIUM' ? 0.55 : obQuality === 'STANDARD' ? 0.28 : 0.16;
-        if (showLabel) {
-          ctx.font = obQuality === 'PREMIUM' ? 'bold 10.5px sans-serif' : 'bold 10px sans-serif';
-          const tw = ctx.measureText(tag).width + 12;
-          const tx = x2 - tw - 6;
-          if (tx > x1 + 20) {
-            roundRect(ctx, tx, mid - 9, tw, 17, 3);
-            ctx.fillStyle = isBull ? `rgba(234,179,8,${labelBgAlpha})` : `rgba(192,132,252,${labelBgAlpha})`;
-            ctx.fill();
-            // PREMIUM: left accent bar on label pill
-            if (obQuality === 'PREMIUM') {
-              ctx.fillStyle = borderColor;
-              ctx.fillRect(tx, mid - 9, 3, 17);
-            }
-            ctx.fillStyle = borderColor;
-            ctx.textAlign = 'left';
-            ctx.fillText(tag, tx + (obQuality === 'PREMIUM' ? 7 : 6), mid + 5);
-          }
-        }
+        const lBg = isBull ? `rgba(234,179,8,${obQuality === 'PREMIUM' ? 0.45 : 0.28})` : `rgba(192,132,252,${obQuality === 'PREMIUM' ? 0.45 : 0.28})`;
+        // Draw inline — centred horizontally over the OB zone, vertically at zone mid
+        drawLabel((x1 + x2) / 2, mid, tag, borderColor, lBg);
       }
       ctx.globalAlpha = 1;
     }
@@ -1026,36 +1026,18 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
       }
 
       // ── LABEL (PREMIUM + STANDARD only, skip WEAK) ────────────────────────
-      if (quality !== 'WEAK' && zoneH > 12) {
+      // Always show FVG label regardless of quality tier — queued for de-overlap
+      if (zoneH > 6) {
         const isFresh = (f.candles_ago ?? 999) <= 8;
         const gapPts  = Math.round(f.top - f.bottom);
         const star    = quality === 'PREMIUM' ? '★' : '';
         const freshTag = isFresh ? ' NEW' : '';
         const partialTag = partial > 0.1 ? ` ${Math.round(partial * 100)}%↓` : '';
-        const tag = quality === 'PREMIUM'
-          ? `${star}${isBull ? '▲' : '▼'} FVG  +${gapPts}${freshTag}${partialTag}`
-          : `${isBull ? '▲' : '▼'} FVG  ${gapPts}${partialTag}`;
-
-        ctx.font = quality === 'PREMIUM' ? 'bold 10.5px sans-serif' : 'bold 9px sans-serif';
-        const tw = ctx.measureText(tag).width + 14;
-        // PREMIUM: pin to right edge; STANDARD: also right edge but smaller
-        const tx = x2 - tw - 4;
-        const labelH = quality === 'PREMIUM' ? 17 : 14;
-        const labelY = isBull ? y1 + 2 : y2 - labelH - 2;
-
-        if (tx > x1 + 8 && cfg_fvg.labelBg) {
-          roundRect(ctx, tx, labelY, tw, labelH, 3);
-          ctx.fillStyle = cfg_fvg.labelBg;
-          ctx.fill();
-          // PREMIUM: also draw left accent bar
-          if (quality === 'PREMIUM') {
-            ctx.fillStyle = borderColor;
-            ctx.fillRect(tx, labelY, 3, labelH);
-          }
-          ctx.fillStyle = cfg_fvg.labelText;
-          ctx.textAlign = 'left';
-          ctx.fillText(tag, tx + (quality === 'PREMIUM' ? 7 : 5), labelY + labelH - 4);
-        }
+        const tag = `${star}${isBull ? '▲' : '▼'} FVG ${gapPts}${freshTag}${partialTag}`;
+        const lBg  = cfg_fvg.labelBg  || (isBull ? 'rgba(56,178,166,0.35)' : 'rgba(188,100,140,0.35)');
+        const lTxt = cfg_fvg.labelText || borderColor;
+        // Draw inline — centred over zone, vertically at zone midpoint
+        drawLabel((x1 + x2) / 2, (y1 + y2) / 2, tag, lTxt, lBg);
       }
     }
 
@@ -1094,9 +1076,10 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
       ctx.strokeStyle = color;
       ctx.lineWidth   = isHot ? lineW + 1.5 + _pM * 0.8 : isWarm ? lineW + 0.8 : lineW;
       ctx.setLineDash(dash);
-      ctx.globalAlpha = isHot ? 0.90 + 0.10 * _pF : isWarm ? 0.75 : 0.20;
+      // Always clearly visible — base 0.65, hot 0.95, warm 0.80
+      ctx.globalAlpha = isHot ? 0.90 + 0.10 * _pF : isWarm ? 0.80 : 0.65;
       ctx.beginPath();
-      ctx.moveTo(chartLeft + 52, y);
+      ctx.moveTo(chartLeft, y);
       ctx.lineTo(chartRight, y);
       ctx.stroke();
       ctx.setLineDash([]);
@@ -1104,44 +1087,23 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
       ctx.globalAlpha = 1;
       ctx.restore();
 
-      // ── Left badge — glows brighter on approach ───────────────────
-      const badgeFont = 'bold 10px sans-serif';
-      ctx.font = badgeFont;
-      const bw = ctx.measureText(label).width + 10;
-      const bh = 17;
-      const bx = chartLeft + 1;
-      const by = y - bh / 2;
+      // Name label: sits at ~60 % chart width, above for H/RES, below for L/SUP
+      const labelAbove = label.includes(' H') || label === 'RES';
+      drawLabel(
+        chartLeft + (chartRight - chartLeft) * 0.6,
+        labelAbove ? y - 9 : y + 9,
+        label, color, 'rgba(13,17,23,0.90)',
+      );
+      // Price pill: right price-axis strip (standard axis annotation)
       ctx.save();
-      if (isHot) { ctx.shadowColor = color; ctx.shadowBlur = 6 + 4 * _pF; }
-      ctx.fillStyle   = color;
-      ctx.globalAlpha = isHot ? 0.9 + 0.1 * _pF : isWarm ? 0.80 : 0.22;
-      roundRect(ctx, bx, by, bw, bh, 3);
-      ctx.fill();
       ctx.shadowBlur = 0;
-      ctx.globalAlpha = 1;
-      ctx.fillStyle   = isHot || isWarm ? '#0d1117' : color;
-      ctx.textAlign   = 'left';
-      ctx.fillText(label, bx + 5, by + 12);
-      ctx.restore();
-
-      // ── Right axis price pill — glows on approach ─────────────────
       const priceStr = fmtPrice(price);
-      ctx.font = 'bold 10px sans-serif';
-      const rw = ctx.measureText(priceStr).width + 12;
-      const rh = 18;
-      const rx = chartRight + 2;
-      const ry = y - rh / 2;
-      ctx.save();
-      if (isHot) { ctx.shadowColor = color; ctx.shadowBlur = 5 + 3 * _pF; }
-      ctx.fillStyle   = color;
-      ctx.globalAlpha = isHot ? 1 : isWarm ? 0.80 : 0.18;
-      roundRect(ctx, rx, ry, rw, rh, 4);
-      ctx.fill();
-      ctx.shadowBlur = 0;
-      ctx.globalAlpha = 1;
-      ctx.fillStyle   = isHot || isWarm ? '#0d1117' : color;
-      ctx.textAlign   = 'left';
-      ctx.fillText(priceStr, rx + 6, ry + 13);
+      ctx.font = '9px monospace';
+      const pw = ctx.measureText(priceStr).width + 10;
+      roundRect(ctx, chartRight + 2, y - 7, pw, 14, 3);
+      ctx.fillStyle = color; ctx.globalAlpha = 1; ctx.fill();
+      ctx.fillStyle = '#0d1117'; ctx.textAlign = 'left';
+      ctx.fillText(priceStr, chartRight + 6, y + 4);
       ctx.restore();
     };
 
@@ -1319,22 +1281,8 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
         diamond(chartRight - 5, y);
       }
 
-      // ── STEP 6: Direction arrow near the left diamond ─────────────
-      if (!lq.swept && lqProx !== 'off') {
-        const arrowDir = isSell ? '↑' : '↓';   // which direction price is coming from
-        const arrowLabel = activeSweep
-          ? (isSell ? `SWEEP ↑` : `SWEEP ↓`)
-          : (isSell ? `→SSL ↑` : `→BSL ↓`);
-        ctx.save();
-        ctx.font        = `bold ${activeSweep ? 9.5 : 8.5}px sans-serif`;
-        ctx.fillStyle   = baseCol;
-        ctx.globalAlpha = activeSweep ? 0.9 + 0.1 * _pF : 0.75 + 0.15 * _pM;
-        ctx.textAlign   = 'left';
-        ctx.fillText(arrowLabel, chartLeft + 18, y - 4);
-        ctx.globalAlpha = 1;
-        ctx.restore();
-        void arrowDir; // used above inline
-      }
+      // ── STEP 6: Sweep/approach info is already shown in the right-axis pill ──
+      // (removed floating text at chartLeft+18 — it overlapped candles)
 
       // ── STEP 7: Right-axis label pill ─────────────────────────────
       const liqTag  = lq.swept
@@ -1343,23 +1291,14 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
           ? `${isSell ? '⚡SSL' : '⚡BSL'} ×${lq.touchCount}`
           : `${isSell ? 'SSL' : 'BSL'} ×${lq.touchCount}`;
       const liqFull = `${liqTag}  ${fmtPrice(lq.level)}`;
-      ctx.font = 'bold 10px sans-serif';
-      const llw  = ctx.measureText(liqFull).width + 12;
-      const llh  = 17;
-      const llx  = chartRight + 2;
-      const lly  = y - llh / 2;
-      ctx.save();
-      if (activeSweep) { ctx.shadowColor = baseCol; ctx.shadowBlur = 6 + 4 * _pF; }
-      ctx.fillStyle   = color;
-      ctx.globalAlpha = lq.swept ? 0.35 : activeSweep ? 0.9 + 0.1 * _pF : 0.85;
-      roundRect(ctx, llx, lly, llw, llh, 3);
-      ctx.fill();
-      ctx.shadowBlur  = 0;
-      ctx.globalAlpha = 1;
-      ctx.fillStyle   = lq.swept ? '#94a3b8' : '#0d1117';
-      ctx.textAlign   = 'left';
-      ctx.fillText(liqFull, llx + 6, lly + 12);
-      ctx.restore();
+      // Draw inline — SSL above line, BSL below line, at 70 % chart width
+      const liqBg = lq.swept ? 'rgba(148,163,184,0.22)' : color;
+      const liqFg = lq.swept ? '#94a3b8' : '#0d1117';
+      drawLabel(
+        chartLeft + (chartRight - chartLeft) * 0.7,
+        isSell ? y - 9 : y + 9,
+        liqFull, liqFg, liqBg,
+      );
     }
 
     // ── CURRENT PRICE LINE ──────────────────────────────────────────
@@ -1558,30 +1497,11 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
       const label = isChoCh
         ? (isBull ? `${starStr}CHoCH ↑${dispStr}` : `${starStr}CHoCH ↓${dispStr}`)
         : (isBull ? `BOS ↑${dispStr}` : `BOS ↓${dispStr}`);
-      ctx.font = `bold ${isChoCh ? 10 : 9}px sans-serif`;
-      const lw = ctx.measureText(label).width + 12;
-      const lh = isChoCh ? 17 : 15;
-      const lx = evX + 8;
-      const ly = isBull ? evY - lh - 4 : evY + 4;
-      // Only show label for HIGH quality, or LOW quality when price is approaching
-      if (lx + lw < chartRight - 10 && (evQuality === 'HIGH' || strProx !== 'off')) {
-        if (isChoCh && evQuality === 'HIGH') {
-          // Solid pill for high-quality CHoCH — real reversal signal
-          ctx.fillStyle = color;
-          ctx.globalAlpha = 0.95;
-          roundRect(ctx, lx, ly, lw, lh, 4);
-          ctx.fill();
-          ctx.globalAlpha = 1;
-          ctx.fillStyle = '#0d1117';
-        } else {
-          // Ghost pill for BOS or low-quality CHoCH
-          ctx.fillStyle = `${color}28`;
-          roundRect(ctx, lx, ly, lw, lh, 3);
-          ctx.fill();
-          ctx.fillStyle = color;
-        }
-        ctx.textAlign = 'left';
-        ctx.fillText(label, lx + 6, ly + lh - 4);
+      // Label centred on the break candle, above (bull) or below (bear) the arrow
+      {
+        const bgColor = (isChoCh && evQuality === 'HIGH') ? color : `${color}28`;
+        const fgColor = (isChoCh && evQuality === 'HIGH') ? '#0d1117' : color;
+        drawLabel(evX, isBull ? evY - 22 : evY + 22, label, fgColor, bgColor);
       }
     }
 
@@ -1628,23 +1548,10 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
       ctx.globalAlpha = 1;
       ctx.restore();
 
-      // Label — PREMIUM: always visible with ★ + touch count
-      //          STANDARD: only when price is approaching
+      // Label above diamond (EQH) or below (EQL), centred on its candle
       const touchStr = ind.touches >= 3 ? `×${ind.touches}` : '';
       const tag = (indPremium ? '★' : '') + (isHigh ? 'EQH' : 'EQL') + touchStr;
-      const showLabel = indPremium || indProx !== 'off';
-      if (showLabel) {
-        ctx.fillStyle   = CFG.IND_COLOR;
-        ctx.font        = indPremium ? 'bold 10px sans-serif' : (indProx !== 'off' ? 'bold 10px sans-serif' : 'bold 9px sans-serif');
-        ctx.textAlign   = 'center';
-        ctx.globalAlpha = indProx === 'hot'
-          ? 0.90 + 0.10 * _pF
-          : indProx === 'warm'
-            ? 0.75
-            : (indPremium ? 0.65 : 0.28);
-        ctx.fillText(tag, indX, markerY + (isHigh ? -7 : 13));
-        ctx.globalAlpha = 1;
-      }
+      drawLabel(indX, isHigh ? markerY - 10 : markerY + 10, tag, CFG.IND_COLOR, 'rgba(122,143,168,0.20)');
     }
 
     // ── FRACTAL MARKERS (Williams 5-bar) ───────────────────────────
@@ -1986,7 +1893,17 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
       const anchorArrayIdxBefore = centreIdxBefore + (mouseX - centreXBefore) / candleStep;
 
       if (e.ctrlKey || e.metaKey) {
-        // Ctrl/Cmd + scroll → zoom candle width
+        // Ctrl/Cmd + scroll → vertical zoom (price scale)
+        const factor = e.deltaY > 0 ? 0.88 : 1.14;
+        vScaleRef.current = Math.max(0.25, Math.min(8, vScaleRef.current * factor));
+      } else if (e.shiftKey || e.altKey) {
+        // Shift/Alt + scroll → horizontal pan (scroll through history)
+        const px = e.deltaY * 1.2;
+        const totalPx = Math.max(0, scrollRef.current * candleStep + pixelPanRef.current + px);
+        scrollRef.current = Math.floor(totalPx / candleStep);
+        pixelPanRef.current = totalPx % candleStep;
+      } else {
+        // Plain scroll → zoom candle width (TradingView default — cursor-anchored)
         const factor = e.deltaY > 0 ? 0.88 : 1.14;
         candleWRef.current = Math.max(2, Math.min(40, candleWRef.current * factor));
         candleGapRef.current = Math.max(1, Math.round(candleWRef.current * 0.43));
@@ -2000,16 +1917,6 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
         const maxScroll = Math.max(0, candlesRef.current.length - newHalf - 1);
         scrollRef.current = Math.max(0, Math.min(maxScroll, Math.floor(rawScroll)));
         pixelPanRef.current = 0;
-      } else if (e.shiftKey) {
-        // Shift + scroll → vertical zoom
-        const factor = e.deltaY > 0 ? 0.88 : 1.14;
-        vScaleRef.current = Math.max(0.25, Math.min(8, vScaleRef.current * factor));
-      } else {
-        // Plain scroll → horizontal pan
-        const px = e.deltaY * 1.2; // scale deltaY to pixel amount
-        const totalPx = Math.max(0, scrollRef.current * candleStep + pixelPanRef.current + px);
-        scrollRef.current = Math.floor(totalPx / candleStep);
-        pixelPanRef.current = totalPx % candleStep;
       }
       markDirty();
     };
@@ -2050,13 +1957,15 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
           const totalPx = Math.max(0, tScroll * candleStep + tPixelPan - dx);
           scrollRef.current = Math.floor(totalPx / candleStep);
           pixelPanRef.current = totalPx % candleStep;
-          markDirty();
         } else if (touchDir === 'v') {
           vScaleRef.current = Math.max(0.25, Math.min(8, tVScale * Math.exp(dy / -180)));
-          markDirty();
         }
+        // Update crosshair position for OHLCV tooltip while dragging
+        const rect = canvas.getBoundingClientRect();
+        mouseRef.current = { x: e.touches[0].clientX - rect.left, y: e.touches[0].clientY - rect.top };
+        markDirty();
       } else if (e.touches.length === 2) {
-        // Pinch = horizontal zoom (candle width)
+        // Pinch = horizontal zoom (candle width) — cursor-anchored on midpoint
         const dx = e.touches[1].clientX - e.touches[0].clientX;
         const dy = e.touches[1].clientY - e.touches[0].clientY;
         const dist = Math.sqrt(dx * dx + dy * dy);
@@ -2064,11 +1973,21 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
         candleWRef.current = Math.max(2, Math.min(40, tCW * ratio));
         candleGapRef.current = Math.max(1, Math.round(candleWRef.current * 0.43));
         pixelPanRef.current = 0;
+        // Show crosshair at pinch midpoint
+        const rect = canvas.getBoundingClientRect();
+        const midX = (e.touches[0].clientX + e.touches[1].clientX) / 2 - rect.left;
+        const midY = (e.touches[0].clientY + e.touches[1].clientY) / 2 - rect.top;
+        mouseRef.current = { x: midX, y: midY };
         markDirty();
       }
     };
 
-    const onTouchEnd = () => { touchDir = null; };
+    const onTouchEnd = () => {
+      touchDir = null;
+      // Clear crosshair when finger lifts
+      mouseRef.current = { x: -1, y: -1 };
+      markDirty();
+    };
 
     canvas.addEventListener('wheel', onWheel, { passive: false });
     canvas.addEventListener('touchstart', onTouchStart, { passive: true });
@@ -2102,49 +2021,71 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
 
       {/* ── Zoom / pan toolbar — bottom-right corner ── */}
       <div className="absolute bottom-7 right-20 flex items-center gap-1 pointer-events-none">
-        {/* Zoom out */}
+        {/* Zoom out (candle width) */}
         <button
-          className="pointer-events-auto w-6 h-6 rounded bg-slate-800/80 border border-slate-600/50 text-slate-300 text-xs flex items-center justify-center hover:bg-slate-700/90 active:scale-95 transition-all"
-          title="Zoom out (candles)"
+          className="pointer-events-auto w-8 h-8 sm:w-6 sm:h-6 rounded bg-slate-800/90 border border-slate-600/50 text-slate-300 text-sm sm:text-xs flex items-center justify-center hover:bg-slate-700/90 active:scale-95 transition-all"
+          title="Zoom out (candles) · or use mouse wheel"
           onMouseDown={e => { e.stopPropagation(); candleWRef.current = Math.max(2, candleWRef.current * 0.8); candleGapRef.current = Math.max(1, Math.round(candleWRef.current * 0.43)); pixelPanRef.current = 0; markDirty(); }}
+          onTouchEnd={e => { e.stopPropagation(); e.preventDefault(); candleWRef.current = Math.max(2, candleWRef.current * 0.8); candleGapRef.current = Math.max(1, Math.round(candleWRef.current * 0.43)); pixelPanRef.current = 0; markDirty(); }}
         >−</button>
-        {/* Zoom in */}
+        {/* Zoom in (candle width) */}
         <button
-          className="pointer-events-auto w-6 h-6 rounded bg-slate-800/80 border border-slate-600/50 text-slate-300 text-xs flex items-center justify-center hover:bg-slate-700/90 active:scale-95 transition-all"
-          title="Zoom in (candles)"
+          className="pointer-events-auto w-8 h-8 sm:w-6 sm:h-6 rounded bg-slate-800/90 border border-slate-600/50 text-slate-300 text-sm sm:text-xs flex items-center justify-center hover:bg-slate-700/90 active:scale-95 transition-all"
+          title="Zoom in (candles) · or use mouse wheel"
           onMouseDown={e => { e.stopPropagation(); candleWRef.current = Math.min(40, candleWRef.current * 1.25); candleGapRef.current = Math.max(1, Math.round(candleWRef.current * 0.43)); pixelPanRef.current = 0; markDirty(); }}
+          onTouchEnd={e => { e.stopPropagation(); e.preventDefault(); candleWRef.current = Math.min(40, candleWRef.current * 1.25); candleGapRef.current = Math.max(1, Math.round(candleWRef.current * 0.43)); pixelPanRef.current = 0; markDirty(); }}
         >+</button>
+        {/* Vertical zoom in (price scale) */}
+        <button
+          className="pointer-events-auto w-8 h-8 sm:w-6 sm:h-6 rounded bg-slate-800/90 border border-slate-600/50 text-slate-400 text-[10px] sm:text-[9px] flex items-center justify-center hover:bg-slate-700/90 active:scale-95 transition-all"
+          title="Expand price scale (vertical zoom in) · or Ctrl+wheel"
+          onMouseDown={e => { e.stopPropagation(); vScaleRef.current = Math.min(8, vScaleRef.current * 1.3); markDirty(); }}
+          onTouchEnd={e => { e.stopPropagation(); e.preventDefault(); vScaleRef.current = Math.min(8, vScaleRef.current * 1.3); markDirty(); }}
+        >↕+</button>
+        {/* Vertical zoom out (price scale) */}
+        <button
+          className="pointer-events-auto w-8 h-8 sm:w-6 sm:h-6 rounded bg-slate-800/90 border border-slate-600/50 text-slate-400 text-[10px] sm:text-[9px] flex items-center justify-center hover:bg-slate-700/90 active:scale-95 transition-all"
+          title="Compress price scale (vertical zoom out) · or Ctrl+wheel"
+          onMouseDown={e => { e.stopPropagation(); vScaleRef.current = Math.max(0.25, vScaleRef.current * 0.77); markDirty(); }}
+          onTouchEnd={e => { e.stopPropagation(); e.preventDefault(); vScaleRef.current = Math.max(0.25, vScaleRef.current * 0.77); markDirty(); }}
+        >↕−</button>
         {/* Scroll left (older) */}
         <button
-          className="pointer-events-auto w-6 h-6 rounded bg-slate-800/80 border border-slate-600/50 text-slate-300 text-xs flex items-center justify-center hover:bg-slate-700/90 active:scale-95 transition-all"
-          title="Scroll to older candles"
+          className="pointer-events-auto w-8 h-8 sm:w-6 sm:h-6 rounded bg-slate-800/90 border border-slate-600/50 text-slate-300 text-sm sm:text-xs flex items-center justify-center hover:bg-slate-700/90 active:scale-95 transition-all"
+          title="Scroll to older candles · or drag left"
           onMouseDown={e => { e.stopPropagation(); scrollRef.current = Math.min(scrollRef.current + 10, 9999); markDirty(); }}
+          onTouchEnd={e => { e.stopPropagation(); e.preventDefault(); scrollRef.current = Math.min(scrollRef.current + 10, 9999); markDirty(); }}
         >‹</button>
         {/* Scroll right (newer) */}
         <button
-          className="pointer-events-auto w-6 h-6 rounded bg-slate-800/80 border border-slate-600/50 text-slate-300 text-xs flex items-center justify-center hover:bg-slate-700/90 active:scale-95 transition-all"
-          title="Scroll to latest"
+          className="pointer-events-auto w-8 h-8 sm:w-6 sm:h-6 rounded bg-slate-800/90 border border-slate-600/50 text-slate-300 text-sm sm:text-xs flex items-center justify-center hover:bg-slate-700/90 active:scale-95 transition-all"
+          title="Scroll to latest · or drag right"
           onMouseDown={e => { e.stopPropagation(); scrollRef.current = Math.max(0, scrollRef.current - 10); pixelPanRef.current = 0; markDirty(); }}
+          onTouchEnd={e => { e.stopPropagation(); e.preventDefault(); scrollRef.current = Math.max(0, scrollRef.current - 10); pixelPanRef.current = 0; markDirty(); }}
         >›</button>
         {/* Reset */}
         <button
-          className="pointer-events-auto w-6 h-6 rounded bg-slate-800/80 border border-slate-600/50 text-slate-400 text-[9px] flex items-center justify-center hover:bg-slate-700/90 active:scale-95 transition-all"
-          title="Reset zoom & scroll"
+          className="pointer-events-auto w-8 h-8 sm:w-6 sm:h-6 rounded bg-slate-800/90 border border-slate-600/50 text-slate-400 text-[10px] sm:text-[9px] flex items-center justify-center hover:bg-slate-700/90 active:scale-95 transition-all"
+          title="Reset zoom & scroll · or double-click chart"
           onMouseDown={e => { e.stopPropagation(); candleWRef.current = CFG.CANDLE_W; candleGapRef.current = CFG.CANDLE_GAP; vScaleRef.current = 1; scrollRef.current = 0; pixelPanRef.current = 0; markDirty(); }}
+          onTouchEnd={e => { e.stopPropagation(); e.preventDefault(); candleWRef.current = CFG.CANDLE_W; candleGapRef.current = CFG.CANDLE_GAP; vScaleRef.current = 1; scrollRef.current = 0; pixelPanRef.current = 0; markDirty(); }}
         >⟳</button>
         {/* Maximize */}
         {onMaximize && (
           <button
-            className="pointer-events-auto w-6 h-6 rounded bg-slate-800/80 border border-slate-600/50 text-slate-400 text-[10px] flex items-center justify-center hover:bg-indigo-600/70 hover:text-white hover:border-indigo-500/60 active:scale-95 transition-all"
-            title="Maximize chart"
+            className="pointer-events-auto w-8 h-8 sm:w-6 sm:h-6 rounded bg-slate-800/90 border border-slate-600/50 text-slate-400 text-[11px] sm:text-[10px] flex items-center justify-center hover:bg-indigo-600/70 hover:text-white hover:border-indigo-500/60 active:scale-95 transition-all"
+            title="Maximize chart (fullscreen view)"
             onMouseDown={e => { e.stopPropagation(); onMaximize(); }}
+            onTouchEnd={e => { e.stopPropagation(); e.preventDefault(); onMaximize(); }}
           >⛶</button>
         )}
       </div>
 
       {/* ── Hint strip — bottom left ── */}
-      <div className="absolute bottom-7 left-1 text-[8px] text-slate-600 pointer-events-none select-none">
-        drag·scroll·pinch · dbl-click reset
+      <div className="absolute bottom-7 left-1 text-[8px] text-slate-600 pointer-events-none select-none leading-tight">
+        <span className="hidden sm:inline">wheel zoom · shift+wheel pan · ctrl+wheel ↕ · drag pan · </span>
+        <span className="sm:hidden">pinch zoom · drag pan · </span>
+        dbl-click reset
       </div>
     </div>
   );
@@ -2463,20 +2404,21 @@ function computeChartSignal(
 
 // ── Symbol Chart Card ───────────────────────────────────────────────────────
 
-const SymbolChartCard = memo<{ data: SymbolChartData | null; name: string; liveSpot?: number }>(({ data, name, liveSpot }) => {
+const SymbolChartCard = memo<{ data: SymbolChartData | null; name: string; liveSpot?: number; forceChartHeight?: number; fullPage?: boolean }>(({ data, name, liveSpot, forceChartHeight, fullPage = false }) => {
   const [timeframe, setTimeframe] = useState<'1h' | '15m' | '5m' | '3m'>('5m');
   const [expanded, setExpanded] = useState(false);
+  const [showChartGuide, setShowChartGuide] = useState(false);
   const [isMaximized, setIsMaximized] = useState(false);
   const [modalMinimized, setModalMinimized] = useState(false);
   const [modalFullscreen, setModalFullscreen] = useState(false);
   const [modalChartH, setModalChartH] = useState(420);
-  const chartH = expanded ? 560 : CFG.CHART_H;
+  const chartH = forceChartHeight ?? (expanded ? 560 : CFG.CHART_H);
 
   const openModal = useCallback(() => {
-    setModalMinimized(false);
-    setModalFullscreen(false);
-    setIsMaximized(true);
-  }, []);
+    // Derive the symbol slug: "NIFTY 50" → "NIFTY", "BANK NIFTY" → "BANKNIFTY", "SENSEX" → "SENSEX"
+    const slug = (data?.symbol || name.replace(/\s+/g, '')).toUpperCase();
+    window.open(`/chart/${slug}`, '_blank', 'noopener,noreferrer');
+  }, [data?.symbol, name]);
 
   const closeModal = useCallback(() => {
     setIsMaximized(false);
@@ -2664,7 +2606,7 @@ const SymbolChartCard = memo<{ data: SymbolChartData | null; name: string; liveS
   const changeIcon = change >= 0 ? '▲' : '▼';
 
   return (
-    <div className="rounded-xl bg-dark-card/60 border border-slate-700/40 overflow-hidden">
+    <div className={`${fullPage ? 'bg-dark-card/60' : 'rounded-xl bg-dark-card/60 border border-slate-700/40'} overflow-hidden`}>
       {/* Header — 2-row on mobile, single row on sm+ */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between px-3 sm:px-4 py-2 gap-1.5 border-b border-slate-700/30">
         {/* Row 1: name + price + change */}
@@ -2754,7 +2696,8 @@ const SymbolChartCard = memo<{ data: SymbolChartData | null; name: string; liveS
             })}
           </div>
           <span className={`hidden sm:inline text-[9px] font-mono ${sourceColor}`}>{sourceLabel}</span>
-          {/* Expand / collapse */}
+          {/* Expand / collapse — hidden in full-page mode */}
+          {!fullPage && (
           <button
             onClick={() => setExpanded(v => !v)}
             className="w-6 h-6 rounded bg-slate-700/50 border border-slate-600/40 text-slate-400 text-[10px] flex items-center justify-center hover:bg-slate-600/60 hover:text-slate-200 transition-all"
@@ -2762,6 +2705,7 @@ const SymbolChartCard = memo<{ data: SymbolChartData | null; name: string; liveS
           >
             {expanded ? '⊟' : '⊞'}
           </button>
+          )}
         </div>
       </div>
 
@@ -2775,7 +2719,7 @@ const SymbolChartCard = memo<{ data: SymbolChartData | null; name: string; liveS
         spot={data.spot}
         liveSpot={liveSpot}
         chartHeight={chartH}
-        onMaximize={openModal}
+        onMaximize={fullPage ? undefined : openModal}
         structure={structure}
         inducements={inducements}
         fractals={fractals}
@@ -2980,6 +2924,59 @@ const SymbolChartCard = memo<{ data: SymbolChartData | null; name: string; liveS
             {candles.length}c · {lastCandle ? fmtTime(lastCandle.t) : ''}
           </span>
         </div>
+
+        {/* Chart Intelligence Guide — collapsible, hidden by default */}
+        <div>
+          <button
+            onClick={() => setShowChartGuide(v => !v)}
+            className="flex items-center gap-1 text-[8px] font-bold text-slate-500 hover:text-slate-300 transition-colors select-none"
+          >
+            <span className={`transition-transform duration-200 ${showChartGuide ? 'rotate-90' : ''}`}>▶</span>
+            Real-Time Chart Intelligence Guide
+          </button>
+          {showChartGuide && (
+            <div className="mt-1.5 grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1">
+              {/* S1 — SELL scenario */}
+              <div className="space-y-0.5">
+                <p className="text-[8px] font-bold text-red-400">📉 S1: DOWN → UP → zone (SELL)</p>
+                <div className="space-y-0.5 pl-1 border-l border-red-500/30">
+                  {([
+                    { dot: 'bg-rose-400',   text: 'EQH/BSL ⬆️→⬇️  liquidity grab → SELL' },
+                    { dot: 'bg-purple-400', text: 'Bear OB/POI ⬇️  rejection → SELL' },
+                    { dot: 'bg-teal-400',   text: 'FVG(↑) ↩️→⬇️  fill → drop' },
+                    { dot: 'bg-sky-400',    text: 'BOS↑ ⬆️  continue up (context)' },
+                    { dot: 'bg-fuchsia-400',text: 'CHoCH(top) ⬇️  reversal signal' },
+                  ]).map(({ dot, text }) => (
+                    <div key={text} className="flex items-start gap-1">
+                      <span className={`mt-[3px] w-1.5 h-1.5 rounded-full shrink-0 ${dot}`} />
+                      <span className="text-[8px] text-slate-400 leading-tight">{text}</span>
+                    </div>
+                  ))}
+                  <p className="text-[8px] font-bold text-red-300 pt-0.5">✅ ⬆️ zone → ⬇️ SELL</p>
+                </div>
+              </div>
+              {/* S2 — BUY scenario */}
+              <div className="space-y-0.5">
+                <p className="text-[8px] font-bold text-emerald-400">📈 S2: UP → DOWN → zone (BUY)</p>
+                <div className="space-y-0.5 pl-1 border-l border-emerald-500/30">
+                  {([
+                    { dot: 'bg-emerald-400',text: 'EQL/SSL ⬇️→⬆️  liquidity grab → BUY' },
+                    { dot: 'bg-yellow-400', text: 'Bull OB/POI ⬆️  bounce → BUY' },
+                    { dot: 'bg-teal-400',   text: 'FVG(↓) ↩️→⬆️  fill → rise' },
+                    { dot: 'bg-blue-400',   text: 'BOS↓ ⬇️  continue down (context)' },
+                    { dot: 'bg-green-400',  text: 'CHoCH(bot) ⬆️  reversal signal' },
+                  ]).map(({ dot, text }) => (
+                    <div key={text} className="flex items-start gap-1">
+                      <span className={`mt-[3px] w-1.5 h-1.5 rounded-full shrink-0 ${dot}`} />
+                      <span className="text-[8px] text-slate-400 leading-tight">{text}</span>
+                    </div>
+                  ))}
+                  <p className="text-[8px] font-bold text-emerald-300 pt-0.5">✅ ⬇️ zone → ⬆️ BUY</p>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -3065,4 +3062,5 @@ const ChartIntelligence = memo(() => {
 });
 ChartIntelligence.displayName = 'ChartIntelligence';
 
+export { SymbolChartCard };
 export default ChartIntelligence;
