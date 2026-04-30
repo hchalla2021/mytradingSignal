@@ -558,11 +558,19 @@ class ChartIntelligenceService:
         self._last_save_time: float = 0.0
         self._last_full_fetch: float = 0.0
         self._cadence_broadcast = 0.5   # 0.5s — TradingView-like live candle motion
-        self._cadence_fetch = 3.0       # Full Zerodha candle re-fetch every 3s (was 10s — stale candles caused lagging signals)
+        self._cadence_fetch = 1.5       # Full Zerodha candle re-fetch every 1.5s (fast volume refresh)
         self._cadence_closed = 60.0
         self._heartbeat_interval = 30.0
         self._kite_init_backoff_until: float = 0.0
         self._fetch_task: Optional[asyncio.Task] = None
+        self._need_immediate_fetch: bool = False  # Set True when new bar detected
+        # Real-time candle volume tracking via SHARED_CACHE (tick data)
+        # key = "SYMBOL:Xm"  value = day-cumulative volume at candle-bar start
+        self._candle_start_vol: Dict[str, int] = {}
+        # key = "SYMBOL"  value = last seen day-total volume from cache
+        self._last_day_vol: Dict[str, int] = {}
+        # LOT sizes for futures volume → units conversion
+        self._LOT_SIZES: Dict[str, int] = {"NIFTY": 75, "BANKNIFTY": 30, "SENSEX": 20}
 
     # ── Kite init ────────────────────────────────────────────────────────
 
@@ -640,6 +648,49 @@ class ChartIntelligenceService:
             pass
         return 0.0
 
+    def _get_live_candle_volume(self, symbol: str, candle_t_iso: str, interval_min: int) -> int:
+        """Return current candle's volume using tick-level day-cumulative volume from SHARED_CACHE.
+
+        Strategy:
+        1. Read the latest day-total volume from the market tick cache (updated every 0.5s).
+        2. On each new candle bar, record that moment's day-total as the candle-start baseline.
+        3. current_candle_volume = day_total_now − candle_start_baseline
+
+        Falls back to 0 if cache has no volume data (indices return v=0 from Zerodha ticks,
+        but the futures historical volume injected by _fetch_candles_sync covers those).
+        """
+        try:
+            cache_key = f"market:{symbol}"
+            raw = _SHARED_CACHE.get(cache_key)
+            if raw is None:
+                return 0
+            value_json, expire_at = raw
+            if time_mod.time() >= expire_at:
+                return 0
+            data = json.loads(value_json)
+            day_vol = int(data.get("volume") or 0)
+            if day_vol <= 0:
+                return 0
+
+            # Lot-size conversion: cache volume may be in lots (from QUOTE_VOLUMES)
+            # or raw units — we store both and pick whichever is larger (safer)
+            lot_size = self._LOT_SIZES.get(symbol, 1)
+
+            track_key = f"{symbol}:{interval_min}m"
+            last_t    = self._last_day_vol.get(f"{symbol}:t")
+
+            # Detect new candle bar — reset baseline
+            if last_t != candle_t_iso:
+                self._candle_start_vol[track_key] = day_vol * lot_size
+                self._last_day_vol[f"{symbol}:t"] = candle_t_iso
+
+            self._last_day_vol[symbol] = day_vol * lot_size
+            baseline = self._candle_start_vol.get(track_key, day_vol * lot_size)
+            current_vol = max(0, day_vol * lot_size - baseline)
+            return current_vol
+        except Exception:
+            return 0
+
     # ── Market phase ─────────────────────────────────────────────────────
 
     def _get_market_phase(self) -> str:
@@ -656,7 +707,9 @@ class ChartIntelligenceService:
     # ── Fetch candle data from Zerodha ───────────────────────────────────
 
     def _fetch_candles_sync(self, symbol: str, interval: str) -> List[Dict]:
-        """Fetch intraday candles from Zerodha historical data API."""
+        """Fetch intraday candles from Zerodha historical data API.
+        Index tokens return v=0, so we also fetch futures candles for volume.
+        """
         if not self._kite:
             return []
 
@@ -671,20 +724,61 @@ class ChartIntelligenceService:
 
         try:
             raw = self._kite.historical_data(token, from_dt, to_dt, interval)
-            candles = []
-            for r in raw:
-                candles.append({
-                    "t": r["date"].isoformat() if hasattr(r["date"], "isoformat") else str(r["date"]),
-                    "o": round(float(r["open"]), 2),
-                    "h": round(float(r["high"]), 2),
-                    "l": round(float(r["low"]), 2),
-                    "c": round(float(r["close"]), 2),
-                    "v": int(r.get("volume", 0)),
-                })
-            return candles
         except Exception as e:
             logger.debug("Chart intel fetch %s %s failed: %s", symbol, interval, e)
             return []
+
+        # Build spot candles
+        candles = []
+        for r in raw:
+            candles.append({
+                "t": r["date"].isoformat() if hasattr(r["date"], "isoformat") else str(r["date"]),
+                "o": round(float(r["open"]), 2),
+                "h": round(float(r["high"]), 2),
+                "l": round(float(r["low"]), 2),
+                "c": round(float(r["close"]), 2),
+                "v": int(r.get("volume", 0)),
+            })
+
+        # Inject futures volume — indices return v=0 from Zerodha historical data.
+        # Futures contracts have real traded volume; match by candle timestamp.
+        try:
+            _cfg = get_settings()
+            fut_token_map = {
+                "NIFTY":     getattr(_cfg, "nifty_fut_token",     None),
+                "BANKNIFTY": getattr(_cfg, "banknifty_fut_token", None),
+                "SENSEX":    getattr(_cfg, "sensex_fut_token",    None),
+            }
+            fut_token = fut_token_map.get(symbol)
+            if fut_token:
+                fut_raw = self._kite.historical_data(fut_token, from_dt, to_dt, interval)
+                # Zerodha returns futures volume in contracts (lots).
+                # Multiply by lot size to get actual units traded — this gives
+                # proper K/M scale numbers (e.g. NIFTY 56K lots × 75 = 4.3M).
+                LOT_SIZES: Dict[str, int] = {"NIFTY": 75, "BANKNIFTY": 30, "SENSEX": 20}
+                lot_size = LOT_SIZES.get(symbol, 1)
+                # Build timestamp → volume lookup from futures candles
+                vol_map: Dict[str, int] = {}
+                for r in fut_raw:
+                    ts = r["date"].isoformat() if hasattr(r["date"], "isoformat") else str(r["date"])
+                    # Normalise to minute-level key (strip seconds/tz)
+                    ts_key = ts[:16]
+                    vol_map[ts_key] = int(r.get("volume", 0)) * lot_size
+                # Inject into spot candles
+                injected = 0
+                for c in candles:
+                    if c["v"] == 0:
+                        ts_key = c["t"][:16]
+                        v = vol_map.get(ts_key, 0)
+                        if v > 0:
+                            c["v"] = v
+                            injected += 1
+                logger.debug("Chart intel vol inject %s %s: fut_candles=%d injected=%d (lot_size=%d)",
+                             symbol, interval, len(fut_raw), injected, lot_size)
+        except Exception as e:
+            logger.debug("Chart intel futures vol inject %s failed: %s", symbol, e)
+
+        return candles
 
     def _fetch_daily_sync(self, symbol: str) -> List[Dict]:
         """Fetch last 2 daily candles for PDH/PDL."""
@@ -778,13 +872,16 @@ class ChartIntelligenceService:
                     new_bar_t = session_open + timedelta(minutes=aligned_min)
                     if new_bar_t <= last_t:
                         new_bar_t = next_bar_open
+                    new_bar_t_iso = new_bar_t.isoformat()
+                    # New bar: flag immediate fetch so historical vol arrives fast
+                    self._need_immediate_fetch = True
                     candles.append({
-                        "t": new_bar_t.isoformat(),
+                        "t": new_bar_t_iso,
                         "o": round(spot, 2),
                         "h": round(spot, 2),
                         "l": round(spot, 2),
                         "c": round(spot, 2),
-                        "v": 0,
+                        "v": 0,   # Will be filled by tick-delta or next historical fetch
                     })
                 else:
                     last["c"] = round(spot, 2)
@@ -793,6 +890,15 @@ class ChartIntelligenceService:
                         if drift < 0.015:
                             last["h"] = round(max(last["h"], spot), 2)
                             last["l"] = round(min(last["l"], spot), 2)
+                    # ── Real-time volume injection from tick cache ─────────────
+                    # Try tick-delta volume (day_total_now − candle_start_baseline)
+                    tick_vol = self._get_live_candle_volume(symbol, last["t"][:16], interval_min)
+                    if tick_vol > 0:
+                        # Prefer tick-delta if it's meaningful (≥10% of last historical value)
+                        hist_vol = last.get("v", 0)
+                        if tick_vol >= hist_vol * 0.1 or hist_vol == 0:
+                            last["v"] = tick_vol
+                    # If tick vol is zero and we have historical vol, keep it
             except Exception:
                 last["c"] = round(spot, 2)
 
@@ -831,6 +937,11 @@ class ChartIntelligenceService:
             c3 = await asyncio.to_thread(self._fetch_candles_sync, sym, "3minute")
             c5 = await asyncio.to_thread(self._fetch_candles_sync, sym, "5minute")
             daily = await asyncio.to_thread(self._fetch_daily_sync, sym)
+
+            # If 5m fetch returned empty (API hiccup), fall back to cached candles5m
+            # so the frontend never receives candles5m:[] and flashes the loading state.
+            if not c5 and sym in self._last_snapshot:
+                c5 = self._last_snapshot[sym].get("candles5m") or []
 
             if c3:
                 return (sym, self._build_symbol_data(sym, c3, c5 or [], daily, spot, phase))
@@ -912,7 +1023,13 @@ class ChartIntelligenceService:
                 )
 
                 if need_fetch:
-                    do_full = (now_ts - self._last_full_fetch >= self._cadence_fetch)
+                    # Force immediate fetch when a new candle bar just opened
+                    do_full = (
+                        (now_ts - self._last_full_fetch >= self._cadence_fetch)
+                        or self._need_immediate_fetch
+                    )
+                    if self._need_immediate_fetch:
+                        self._need_immediate_fetch = False  # consume the flag
 
                     if do_full:
                         self._init_kite()

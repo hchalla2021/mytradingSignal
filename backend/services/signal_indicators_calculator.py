@@ -290,8 +290,9 @@ def calculate_trade_zones(analysis_data: Dict[str, Any]) -> Dict[str, Any]:
 
 def calculate_oi_momentum(analysis_data: Dict[str, Any]) -> Dict[str, Any]:
     """Calculate OI Momentum: momentum type and strength"""
-    oi_change = analysis_data.get('oi_change', 0)
-    pcr = analysis_data.get('pcr', 1.0)
+    oi_change = analysis_data.get('oi_change', 0) or 0
+    pcr_raw = analysis_data.get('pcr', 1.0)
+    pcr = float(pcr_raw) if pcr_raw is not None else None
     
     # Determine momentum type from OI change
     if oi_change > 0:
@@ -304,13 +305,14 @@ def calculate_oi_momentum(analysis_data: Dict[str, Any]) -> Dict[str, Any]:
     # Momentum strength: absolute value of OI change
     momentum_strength = min(int(abs(oi_change) / 1000), 100) if oi_change != 0 else 0
     
-    # Adjust for PCR
-    if pcr < 1.0:  # PCR < 1 = more calls = bullish
-        momentum_type = 'bullish'
-        momentum_strength = int((1 - pcr) * 100)
-    elif pcr > 1.0:  # PCR > 1 = more puts = bearish
-        momentum_type = 'bearish'
-        momentum_strength = int((pcr - 1) * 100)
+    # Adjust for PCR (only when PCR is a valid number)
+    if pcr is not None:
+        if pcr < 1.0:  # PCR < 1 = more calls = bullish
+            momentum_type = 'bullish'
+            momentum_strength = int((1 - pcr) * 100)
+        elif pcr > 1.0:  # PCR > 1 = more puts = bearish
+            momentum_type = 'bearish'
+            momentum_strength = int((pcr - 1) * 100)
     
     return {
         'momentum_type': momentum_type,

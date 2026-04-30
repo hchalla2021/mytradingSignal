@@ -19,7 +19,7 @@ const CFG = {
   TIME_AXIS_H: 24,
   PAD_TOP: 8,
   LEGEND_H: 38,        // top legend strip height (2 compact rows)
-  VOL_H: 48,          // volume panel height reserved at bottom (above time axis)
+  VOL_H: 60,          // volume panel height reserved at bottom (above time axis)
   CANDLE_W: 7,
   CANDLE_GAP: 3,
   CHART_H: 380,
@@ -136,10 +136,15 @@ function fmtTime(iso: string): string {
 }
 
 function fmtNum(n: number): string {
-  if (n >= 10_000_000) return (n / 10_000_000).toFixed(1) + 'Cr';
-  if (n >= 100_000) return (n / 100_000).toFixed(1) + 'L';
-  if (n >= 1_000) return (n / 1_000).toFixed(1) + 'K';
-  return n.toString();
+  if (n <= 0) return '0';
+  const fmt = (val: number, suffix: string) => {
+    const s = val % 1 === 0 ? val.toFixed(0) : val.toFixed(1);
+    return s.replace(/\.0$/, '') + suffix;
+  };
+  if (n >= 1_000_000_000) return fmt(n / 1_000_000_000, 'B');
+  if (n >= 1_000_000)     return fmt(n / 1_000_000,     'M');
+  if (n >= 1_000)         return fmt(n / 1_000,         'K');
+  return n.toFixed(0);
 }
 
 /** Returns true if |a-b|/b <= pct */
@@ -1301,15 +1306,19 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
       );
     }
 
-    // ── CURRENT PRICE LINE ──────────────────────────────────────────
+    // ── CURRENT PRICE LINE (dashed only — badge drawn after price axis to stay on top) ──
     if (effectiveSpot > 0) {
       const y = priceToY(effectiveSpot);
       if (y >= chartTop && y <= chartBottom) {
+        const isLive = dataSourceRef.current === 'LIVE';
+        const lastOpen = visible.length > 0 ? visible[visible.length - 1].o : effectiveSpot;
+        const isUp = effectiveSpot >= lastOpen;
+        const lineColor = isLive ? (isUp ? '#22c55e' : '#ef4444') : '#9070c0';
         ctx.save();
-        ctx.shadowColor = CFG.CURRENT_PRICE;
-        ctx.shadowBlur = 8;
-        ctx.strokeStyle = CFG.CURRENT_PRICE;
-        ctx.lineWidth = 1.5;
+        ctx.shadowColor = lineColor;
+        ctx.shadowBlur = isLive ? 14 : 8;
+        ctx.strokeStyle = lineColor;
+        ctx.lineWidth = isLive ? 2 : 1.5;
         ctx.setLineDash([5, 3]);
         ctx.beginPath();
         ctx.moveTo(chartLeft, y);
@@ -1317,15 +1326,6 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
         ctx.stroke();
         ctx.setLineDash([]);
         ctx.restore();
-
-        // Badge
-        ctx.fillStyle = CFG.CURRENT_PRICE;
-        roundRect(ctx, chartRight, y - 10, CFG.PRICE_AXIS_W - 2, 20, 4);
-        ctx.fill();
-        ctx.fillStyle = '#fff';
-        ctx.font = 'bold 10px monospace';
-        ctx.textAlign = 'center';
-        ctx.fillText(fmtPrice(effectiveSpot), chartRight + (CFG.PRICE_AXIS_W - 2) / 2, y + 4);
       }
     }
 
@@ -1378,10 +1378,117 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
       }
     }
 
-    // ── VOLUME BARS ──────────────────────────────────────────────────
+    // ── CURRENT CANDLE VOLUME PILL ───────────────────────────────────
+    // Only the live forming candle. Detects high-volume spike and
+    // renders a sharp bright multi-layer glow for emphasis.
+    {
+      const lastC = visible[visible.length - 1];
+      const lastI = visible.length - 1;
+      if (lastC && lastC.v > 0) {
+        const x      = idxToX(startIdx + lastI);
+        const isBull = lastC.c >= lastC.o;
+
+        // Rolling 20-candle average to detect spikes
+        const lookback = visible.slice(Math.max(0, lastI - 20), lastI);
+        const volSum   = lookback.reduce((s, c) => s + c.v, 0);
+        const volAvg   = lookback.length > 0 ? volSum / lookback.length : 0;
+        // spike = current > 1.5× avg; huge spike > 2.5×
+        const isSpike  = volAvg > 0 && lastC.v > volAvg * 1.5;
+        const isHuge   = volAvg > 0 && lastC.v > volAvg * 2.5;
+
+        const volText = fmtNum(lastC.v);
+
+        ctx.save();
+        ctx.font = `bold ${isHuge ? 13 : 12}px monospace`;
+        ctx.textAlign = 'center';
+
+        const tw  = ctx.measureText(volText).width;
+        const pH  = isHuge ? 21 : 19;
+        const pW  = tw + (isHuge ? 22 : 18);
+        const pY  = Math.max(chartTop + 2, priceToY(lastC.h) - pH - 6);
+
+        // ── Multi-layer glow for spike candles ──────────────────────
+        if (isSpike && _mktOpen) {
+          const glowColor = isHuge
+            ? (isBull ? '#00ffc8' : '#ff4444')   // extreme — bright cyan/red
+            : (isBull ? '#26a69a' : '#ef5350');   // normal spike — teal/red
+
+          // Outer glow (wide, soft)
+          ctx.shadowColor = glowColor;
+          ctx.shadowBlur  = isHuge ? 28 : 18;
+          ctx.strokeStyle = 'transparent';
+          roundRect(ctx, x - pW / 2, pY, pW, pH, 5);
+          ctx.stroke();
+
+          // Middle glow pass
+          ctx.shadowBlur  = isHuge ? 14 : 9;
+          roundRect(ctx, x - pW / 2, pY, pW, pH, 5);
+          ctx.stroke();
+        }
+
+        // ── Background ──────────────────────────────────────────────
+        ctx.shadowBlur = 0;
+        if (isHuge) {
+          // Vivid gradient-like fill for extreme spikes
+          ctx.fillStyle = isBull ? 'rgba(0,60,45,0.98)' : 'rgba(70,5,5,0.98)';
+        } else if (isSpike) {
+          ctx.fillStyle = isBull ? 'rgba(0,48,36,0.98)' : 'rgba(58,5,5,0.98)';
+        } else {
+          ctx.fillStyle = isBull ? 'rgba(0,35,28,0.97)' : 'rgba(45,5,5,0.97)';
+        }
+        ctx.globalAlpha = 1;
+        roundRect(ctx, x - pW / 2, pY, pW, pH, 5);
+        ctx.fill();
+
+        // ── Border ──────────────────────────────────────────────────
+        const bAlpha = _mktOpen ? 0.75 + 0.25 * _pM : 0.65;
+        let borderColor: string;
+        if (isHuge) {
+          borderColor = isBull ? `rgba(0,255,200,${bAlpha})` : `rgba(255,68,68,${bAlpha})`;
+        } else if (isSpike) {
+          borderColor = isBull ? `rgba(38,200,180,${bAlpha})` : `rgba(239,100,80,${bAlpha})`;
+        } else {
+          borderColor = isBull ? `rgba(38,166,154,${bAlpha})` : `rgba(239,83,80,${bAlpha})`;
+        }
+        ctx.strokeStyle = borderColor;
+        ctx.lineWidth   = isHuge ? 2 : isSpike ? 1.8 : 1.5;
+
+        // Sharp inner glow on border for spike
+        if (isSpike && _mktOpen) {
+          ctx.shadowColor = isHuge
+            ? (isBull ? '#00ffc8' : '#ff4444')
+            : (isBull ? '#26a69a' : '#ef5350');
+          ctx.shadowBlur = isHuge ? 10 : 6;
+        }
+        roundRect(ctx, x - pW / 2, pY, pW, pH, 5);
+        ctx.stroke();
+        ctx.shadowBlur = 0;
+
+        // ── Text ────────────────────────────────────────────────────
+        if (isHuge && _mktOpen) {
+          ctx.shadowColor = isBull ? '#00ffc8' : '#ff6666';
+          ctx.shadowBlur  = 8 * _pM;
+        } else if (_mktOpen) {
+          ctx.shadowColor = isBull ? '#26a69a' : '#ef5350';
+          ctx.shadowBlur  = 5 * _pM;
+        }
+        ctx.fillStyle = isHuge
+          ? (isBull ? '#b3fff0' : '#ffaaaa')
+          : isSpike
+            ? (isBull ? '#a7f3d0' : '#fca5a5')
+            : (isBull ? '#6ee7b7' : '#fca5a5');
+        ctx.fillText(volText, x, pY + pH - 5);
+
+        ctx.shadowBlur  = 0;
+        ctx.globalAlpha = 1;
+        ctx.restore();
+      }
+    }
+
+    // ── VOLUME BARS (enhanced — MA spike detection, live badge, axis labels) ─
     {
       const volTop = chartBottom + 3;
-      const volH = CFG.VOL_H - 3;
+      const volH = CFG.VOL_H - 5;
 
       // Separator line above volume
       ctx.strokeStyle = CFG.VOL_SEPARATOR;
@@ -1391,25 +1498,79 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
       ctx.lineTo(chartRight, chartBottom);
       ctx.stroke();
 
-      // Max volume for normalization
+      // Max volume across visible candles (stable scale)
       let maxVol = 1;
       for (const c of visible) if (c.v > maxVol) maxVol = c.v;
 
+      // 20-period volume moving average (per visible index)
+      const MA_PERIOD = 20;
+      const volMA: number[] = new Array(visible.length);
+      for (let i = 0; i < visible.length; i++) {
+        const s = Math.max(0, i - MA_PERIOD + 1);
+        let sum = 0; for (let j = s; j <= i; j++) sum += visible[j].v;
+        volMA[i] = sum / (i - s + 1);
+      }
+      const lastMA = volMA[visible.length - 1] ?? 0;
+
+      // ── Draw bars ────────────────────────────────────────────────
       for (let i = 0; i < visible.length; i++) {
         const c = visible[i];
         const x = idxToX(startIdx + i);
         if (x + cw / 2 < chartLeft || x - cw / 2 > chartRight) continue;
         const isBullV = c.c >= c.o;
         const barH = Math.max(1, (c.v / maxVol) * volH);
-        ctx.fillStyle = isBullV ? CFG.VOL_BULL : CFG.VOL_BEAR;
-        ctx.fillRect(x - cw / 2, volTop + volH - barH, cw, barH);
+        const barTop = volTop + volH - barH;
+        const isSpike = volMA[i] > 0 && c.v > volMA[i] * 1.5;
+
+        // Spike bars = full opacity; normal = muted
+        ctx.fillStyle = isSpike
+          ? (isBullV ? 'rgba(38,166,154,0.88)' : 'rgba(239,83,80,0.88)')
+          : (isBullV ? CFG.VOL_BULL : CFG.VOL_BEAR);
+        ctx.fillRect(x - cw / 2, barTop, cw, barH);
+
+        // Thin border highlight on spike bars
+        if (isSpike && cw >= 4) {
+          ctx.save();
+          ctx.strokeStyle = isBullV ? '#26a69a' : '#ef5350';
+          ctx.lineWidth = 0.8;
+          ctx.globalAlpha = 0.7;
+          ctx.strokeRect(x - cw / 2, barTop, cw, barH);
+          ctx.restore();
+        }
       }
 
-      // "VOL" label
-      ctx.fillStyle = 'rgba(100,116,139,0.6)';
+      // ── Volume MA line (amber dashed) ─────────────────────────────
+      ctx.save();
+      ctx.strokeStyle = 'rgba(251,191,36,0.50)';
+      ctx.lineWidth = 1;
+      ctx.setLineDash([3, 3]);
+      ctx.beginPath();
+      let maLineStarted = false;
+      for (let i = 0; i < visible.length; i++) {
+        const x = idxToX(startIdx + i);
+        if (x + cw / 2 < chartLeft || x - cw / 2 > chartRight) continue;
+        const maY = volTop + volH - Math.max(0, (volMA[i] / maxVol) * volH);
+        if (!maLineStarted) { ctx.moveTo(x, maY); maLineStarted = true; }
+        else ctx.lineTo(x, maY);
+      }
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.restore();
+
+      // ── Volume axis labels ─────────────────────────────────────────
+      ctx.fillStyle = 'rgba(100,116,139,0.55)';
       ctx.font = '8px sans-serif';
       ctx.textAlign = 'left';
       ctx.fillText('VOL', 3, volTop + 9);
+
+      // Max vol (top of axis) and MA vol label on right
+      ctx.font = '8px monospace';
+      ctx.textAlign = 'right';
+      ctx.fillStyle = 'rgba(100,116,139,0.50)';
+      if (maxVol > 1) ctx.fillText(fmtNum(maxVol), chartRight - 2, volTop + 9);
+      // MA label
+      ctx.fillStyle = 'rgba(251,191,36,0.55)';
+      if (lastMA > 0) ctx.fillText(`MA ${fmtNum(Math.round(lastMA))}`, chartRight - 2, volTop + 19);
     }
 
     // ── BOS / ChoCh MARKERS ─────────────────────────────────────────────
@@ -1656,6 +1817,32 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
       const y = chartTop + (chartH / gridSteps) * i;
       const price = priceMax - (priceMax - priceMin) * (i / gridSteps);
       ctx.fillText(fmtPrice(price), W - 4, y + 3);
+    }
+
+    // ── CURRENT PRICE BADGE (drawn after axis bg so it always sits on top) ──
+    if (effectiveSpot > 0) {
+      const y = priceToY(effectiveSpot);
+      if (y >= chartTop && y <= chartBottom) {
+        const isLive = dataSourceRef.current === 'LIVE';
+        // Green if price ≥ current candle open (up), red if below (down)
+        const lastOpen = visible.length > 0 ? visible[visible.length - 1].o : effectiveSpot;
+        const isUp = effectiveSpot >= lastOpen;
+        const badgeBg   = isLive ? (isUp ? '#22c55e' : '#ef4444') : '#7a60b0';
+        const textColor = '#ffffff';
+        // Glow
+        ctx.save();
+        ctx.shadowColor = badgeBg;
+        ctx.shadowBlur = isLive ? 18 : 10;
+        ctx.fillStyle = badgeBg;
+        roundRect(ctx, chartRight + 1, y - 12, CFG.PRICE_AXIS_W - 3, 24, 5);
+        ctx.fill();
+        ctx.restore();
+        // Price text
+        ctx.fillStyle = textColor;
+        ctx.font = 'bold 12px monospace';
+        ctx.textAlign = 'center';
+        ctx.fillText(fmtPrice(effectiveSpot), chartRight + (CFG.PRICE_AXIS_W - 2) / 2, y + 4);
+      }
     }
 
     // ── TIME AXIS ───────────────────────────────────────────────────
@@ -1989,15 +2176,26 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
       markDirty();
     };
 
+    // Global mouseup — stops pan/scale even when mouse released outside canvas
+    const onDocMouseUp = () => {
+      if (isDragging.current || isVDragging.current) {
+        isDragging.current = false;
+        isVDragging.current = false;
+        markDirty();
+      }
+    };
+
     canvas.addEventListener('wheel', onWheel, { passive: false });
     canvas.addEventListener('touchstart', onTouchStart, { passive: true });
     canvas.addEventListener('touchmove', onTouchMove, { passive: false });
     canvas.addEventListener('touchend', onTouchEnd, { passive: true });
+    document.addEventListener('mouseup', onDocMouseUp);
     return () => {
       canvas.removeEventListener('wheel', onWheel);
       canvas.removeEventListener('touchstart', onTouchStart);
       canvas.removeEventListener('touchmove', onTouchMove);
       canvas.removeEventListener('touchend', onTouchEnd);
+      document.removeEventListener('mouseup', onDocMouseUp);
     };
   }, [markDirty]);
 
@@ -2020,54 +2218,58 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
       />
 
       {/* ── Zoom / pan toolbar — bottom-right corner ── */}
-      <div className="absolute bottom-7 right-20 flex items-center gap-1 pointer-events-none">
+      {/* onMouseDown stops propagation so clicks here never start canvas drag */}
+      <div
+        className="absolute bottom-7 right-20 flex items-center gap-1 pointer-events-none"
+        onMouseDown={e => e.stopPropagation()}
+      >
         {/* Zoom out (candle width) */}
         <button
           className="pointer-events-auto w-8 h-8 sm:w-6 sm:h-6 rounded bg-slate-800/90 border border-slate-600/50 text-slate-300 text-sm sm:text-xs flex items-center justify-center hover:bg-slate-700/90 active:scale-95 transition-all"
           title="Zoom out (candles) · or use mouse wheel"
-          onMouseDown={e => { e.stopPropagation(); candleWRef.current = Math.max(2, candleWRef.current * 0.8); candleGapRef.current = Math.max(1, Math.round(candleWRef.current * 0.43)); pixelPanRef.current = 0; markDirty(); }}
+          onClick={() => { candleWRef.current = Math.max(2, candleWRef.current * 0.8); candleGapRef.current = Math.max(1, Math.round(candleWRef.current * 0.43)); pixelPanRef.current = 0; markDirty(); }}
           onTouchEnd={e => { e.stopPropagation(); e.preventDefault(); candleWRef.current = Math.max(2, candleWRef.current * 0.8); candleGapRef.current = Math.max(1, Math.round(candleWRef.current * 0.43)); pixelPanRef.current = 0; markDirty(); }}
         >−</button>
         {/* Zoom in (candle width) */}
         <button
           className="pointer-events-auto w-8 h-8 sm:w-6 sm:h-6 rounded bg-slate-800/90 border border-slate-600/50 text-slate-300 text-sm sm:text-xs flex items-center justify-center hover:bg-slate-700/90 active:scale-95 transition-all"
           title="Zoom in (candles) · or use mouse wheel"
-          onMouseDown={e => { e.stopPropagation(); candleWRef.current = Math.min(40, candleWRef.current * 1.25); candleGapRef.current = Math.max(1, Math.round(candleWRef.current * 0.43)); pixelPanRef.current = 0; markDirty(); }}
+          onClick={() => { candleWRef.current = Math.min(40, candleWRef.current * 1.25); candleGapRef.current = Math.max(1, Math.round(candleWRef.current * 0.43)); pixelPanRef.current = 0; markDirty(); }}
           onTouchEnd={e => { e.stopPropagation(); e.preventDefault(); candleWRef.current = Math.min(40, candleWRef.current * 1.25); candleGapRef.current = Math.max(1, Math.round(candleWRef.current * 0.43)); pixelPanRef.current = 0; markDirty(); }}
         >+</button>
         {/* Vertical zoom in (price scale) */}
         <button
           className="pointer-events-auto w-8 h-8 sm:w-6 sm:h-6 rounded bg-slate-800/90 border border-slate-600/50 text-slate-400 text-[10px] sm:text-[9px] flex items-center justify-center hover:bg-slate-700/90 active:scale-95 transition-all"
           title="Expand price scale (vertical zoom in) · or Ctrl+wheel"
-          onMouseDown={e => { e.stopPropagation(); vScaleRef.current = Math.min(8, vScaleRef.current * 1.3); markDirty(); }}
+          onClick={() => { vScaleRef.current = Math.min(8, vScaleRef.current * 1.3); markDirty(); }}
           onTouchEnd={e => { e.stopPropagation(); e.preventDefault(); vScaleRef.current = Math.min(8, vScaleRef.current * 1.3); markDirty(); }}
         >↕+</button>
         {/* Vertical zoom out (price scale) */}
         <button
           className="pointer-events-auto w-8 h-8 sm:w-6 sm:h-6 rounded bg-slate-800/90 border border-slate-600/50 text-slate-400 text-[10px] sm:text-[9px] flex items-center justify-center hover:bg-slate-700/90 active:scale-95 transition-all"
           title="Compress price scale (vertical zoom out) · or Ctrl+wheel"
-          onMouseDown={e => { e.stopPropagation(); vScaleRef.current = Math.max(0.25, vScaleRef.current * 0.77); markDirty(); }}
+          onClick={() => { vScaleRef.current = Math.max(0.25, vScaleRef.current * 0.77); markDirty(); }}
           onTouchEnd={e => { e.stopPropagation(); e.preventDefault(); vScaleRef.current = Math.max(0.25, vScaleRef.current * 0.77); markDirty(); }}
         >↕−</button>
         {/* Scroll left (older) */}
         <button
           className="pointer-events-auto w-8 h-8 sm:w-6 sm:h-6 rounded bg-slate-800/90 border border-slate-600/50 text-slate-300 text-sm sm:text-xs flex items-center justify-center hover:bg-slate-700/90 active:scale-95 transition-all"
           title="Scroll to older candles · or drag left"
-          onMouseDown={e => { e.stopPropagation(); scrollRef.current = Math.min(scrollRef.current + 10, 9999); markDirty(); }}
+          onClick={() => { scrollRef.current = Math.min(scrollRef.current + 10, 9999); markDirty(); }}
           onTouchEnd={e => { e.stopPropagation(); e.preventDefault(); scrollRef.current = Math.min(scrollRef.current + 10, 9999); markDirty(); }}
         >‹</button>
         {/* Scroll right (newer) */}
         <button
           className="pointer-events-auto w-8 h-8 sm:w-6 sm:h-6 rounded bg-slate-800/90 border border-slate-600/50 text-slate-300 text-sm sm:text-xs flex items-center justify-center hover:bg-slate-700/90 active:scale-95 transition-all"
           title="Scroll to latest · or drag right"
-          onMouseDown={e => { e.stopPropagation(); scrollRef.current = Math.max(0, scrollRef.current - 10); pixelPanRef.current = 0; markDirty(); }}
+          onClick={() => { scrollRef.current = Math.max(0, scrollRef.current - 10); pixelPanRef.current = 0; markDirty(); }}
           onTouchEnd={e => { e.stopPropagation(); e.preventDefault(); scrollRef.current = Math.max(0, scrollRef.current - 10); pixelPanRef.current = 0; markDirty(); }}
         >›</button>
         {/* Reset */}
         <button
           className="pointer-events-auto w-8 h-8 sm:w-6 sm:h-6 rounded bg-slate-800/90 border border-slate-600/50 text-slate-400 text-[10px] sm:text-[9px] flex items-center justify-center hover:bg-slate-700/90 active:scale-95 transition-all"
           title="Reset zoom & scroll · or double-click chart"
-          onMouseDown={e => { e.stopPropagation(); candleWRef.current = CFG.CANDLE_W; candleGapRef.current = CFG.CANDLE_GAP; vScaleRef.current = 1; scrollRef.current = 0; pixelPanRef.current = 0; markDirty(); }}
+          onClick={() => { candleWRef.current = CFG.CANDLE_W; candleGapRef.current = CFG.CANDLE_GAP; vScaleRef.current = 1; scrollRef.current = 0; pixelPanRef.current = 0; markDirty(); }}
           onTouchEnd={e => { e.stopPropagation(); e.preventDefault(); candleWRef.current = CFG.CANDLE_W; candleGapRef.current = CFG.CANDLE_GAP; vScaleRef.current = 1; scrollRef.current = 0; pixelPanRef.current = 0; markDirty(); }}
         >⟳</button>
         {/* Maximize */}
@@ -2075,7 +2277,7 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
           <button
             className="pointer-events-auto w-8 h-8 sm:w-6 sm:h-6 rounded bg-slate-800/90 border border-slate-600/50 text-slate-400 text-[11px] sm:text-[10px] flex items-center justify-center hover:bg-indigo-600/70 hover:text-white hover:border-indigo-500/60 active:scale-95 transition-all"
             title="Maximize chart (fullscreen view)"
-            onMouseDown={e => { e.stopPropagation(); onMaximize(); }}
+            onClick={() => onMaximize()}
             onTouchEnd={e => { e.stopPropagation(); e.preventDefault(); onMaximize(); }}
           >⛶</button>
         )}
@@ -2444,6 +2646,9 @@ const SymbolChartCard = memo<{ data: SymbolChartData | null; name: string; liveS
 
   const [signalFlash, setSignalFlash] = useState(false);
   const prevSignalRef = useRef<string>('');
+  // Keep last non-empty candles so the chart never flashes "Loading..." on a
+  // transient empty update (e.g. 5m API hiccup returns [] for one cycle).
+  const prevCandlesRef = useRef<Candle[]>([]);
 
   // Derive candles for each TF:
   //   1H  = resample 5m × 12  (12×5m = 60m)
@@ -2453,7 +2658,7 @@ const SymbolChartCard = memo<{ data: SymbolChartData | null; name: string; liveS
   // Sort by timestamp to fix out-of-order candles from backend new-bar appends
   // (backend sometimes appends bars with timestamps earlier than already-fetched candles).
   const candles = useMemo(() => {
-    if (!data) return [];
+    if (!data) return prevCandlesRef.current;
     let raw: Candle[];
     if (timeframe === '1h')  raw = resampleCandles(data.candles5m ?? [], 12);
     else if (timeframe === '15m') raw = resampleCandles(data.candles3m ?? [], 5);
@@ -2462,7 +2667,10 @@ const SymbolChartCard = memo<{ data: SymbolChartData | null; name: string; liveS
     // Deduplicate by timestamp and sort chronologically
     const seen = new Set<string>();
     const deduped = raw.filter(c => { if (seen.has(c.t)) return false; seen.add(c.t); return true; });
-    return deduped.sort((a, b) => (a.t < b.t ? -1 : a.t > b.t ? 1 : 0));
+    const sorted = deduped.sort((a, b) => (a.t < b.t ? -1 : a.t > b.t ? 1 : 0));
+    // Never replace good candles with an empty array (transient API hiccup guard)
+    if (sorted.length > 0) prevCandlesRef.current = sorted;
+    return sorted.length > 0 ? sorted : prevCandlesRef.current;
   }, [data, timeframe]);
 
   const fvgList = useMemo(() => {

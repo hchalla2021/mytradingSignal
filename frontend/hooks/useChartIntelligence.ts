@@ -199,6 +199,24 @@ export function useChartIntelligence() {
           const incoming = raw[sym];
           const existing = prev[sym];
           if (existing && existing.timestamp === incoming.timestamp) continue;
+          // Skip updates where candle data is identical to avoid needless re-renders.
+          // The backend updates `timestamp` every 0.5s even if only `spot` changed.
+          // Only clone when something meaningful changed (candle count, last candle close, or spot).
+          if (existing) {
+            const sameCount =
+              (existing.candles5m?.length ?? 0) === (incoming.candles5m?.length ?? 0) &&
+              (existing.candles3m?.length ?? 0) === (incoming.candles3m?.length ?? 0);
+            const lastC5e = existing.candles5m?.at(-1);
+            const lastC5i = incoming.candles5m?.at(-1);
+            const sameLastCandle =
+              lastC5e?.t === lastC5i?.t &&
+              lastC5e?.c === lastC5i?.c &&
+              lastC5e?.h === lastC5i?.h &&
+              lastC5e?.l === lastC5i?.l &&
+              lastC5e?.v === lastC5i?.v;
+            const sameSpot = existing.spot === incoming.spot;
+            if (sameCount && sameLastCandle && sameSpot) continue;
+          }
           next[sym] = typeof structuredClone === 'function'
             ? structuredClone(incoming)
             : JSON.parse(JSON.stringify(incoming));
