@@ -371,8 +371,6 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
 
   // Vertical drag (price scale)
   const isVDragging = useRef(false);
-  const vDragStartY = useRef(0);
-  const vDragStartScale = useRef(1);
 
   // Zoom levels
   const candleWRef = useRef(CFG.CANDLE_W);    // current candle body width (zoom)
@@ -439,7 +437,6 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
     const spot       = spotRef.current;
     const structure  = structureRef.current;
     const inducements = inducementsRef.current;
-    const fractals   = fractalsRef.current;
     const htfMode    = htfModeRef.current;
     const chartHeight = chartHeightRef.current;
     const dataSource = dataSourceRef.current;
@@ -485,7 +482,6 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
     // scroll=0 → latest candle near right edge; scroll+ → pan left into history
     const leftCount  = Math.floor(visibleCount * 0.82) + 2;  // candles to show left of anchor
     const rightCount = Math.floor(visibleCount * 0.26) + 2;  // candles right of anchor (mostly empty)
-    const halfVisible = Math.floor(visibleCount / 2);         // kept for maxScroll compat
     const maxScroll = Math.max(0, candles.length - 1);
     scrollRef.current = Math.max(0, Math.min(scrollRef.current, maxScroll));
 
@@ -2112,8 +2108,6 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
 
         // Cursor-anchored zoom: keep candle under cursor stable like TradingView
         const newStep = candleWRef.current + candleGapRef.current;
-        const newVisible = Math.max(1, Math.floor(chartW / newStep));
-        const newHalf = Math.floor(newVisible / 2);
         const centreIdxNeeded = anchorArrayIdxBefore - (mouseX - Math.round(chartW * 0.78)) / newStep;
         const rawScroll = (candlesRef.current.length - 1) - centreIdxNeeded;
         const maxScroll = Math.max(0, candlesRef.current.length - 1);
