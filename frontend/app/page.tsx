@@ -157,20 +157,6 @@ const ICTIntelligence = dynamic(() => import('@/components/ICTIntelligence'), {
   )
 });
 
-const StrikeIntelligence = dynamic(() => import('@/components/StrikeIntelligence'), {
-  ssr: false,
-  loading: () => (
-    <div className="rounded-2xl border border-cyan-500/30 bg-slate-800/30 p-5 animate-pulse">
-      <div className="h-5 w-64 bg-slate-700 rounded mb-4" />
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        {[0, 1, 2].map(i => (
-          <div key={i} className="rounded-2xl bg-slate-700/30 h-80" />
-        ))}
-      </div>
-    </div>
-  )
-});
-
 export default function Home() {
   // 🔥 Force fresh mount on page load - fixes desktop browser caching
   const [currentYear, setCurrentYear] = useState(() => 
@@ -741,9 +727,6 @@ export default function Home() {
 
         {/* P3: 🏦 ICT SMART MONEY INTELLIGENCE */}
         <ICTIntelligence />
-
-        {/* P4: 🎯 STRIKE INTELLIGENCE */}
-        <StrikeIntelligence />
 
         {/* P5: 🧭 INSTITUTIONAL MARKET COMPASS */}
         <InstitutionalCompass />

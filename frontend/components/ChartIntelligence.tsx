@@ -481,22 +481,23 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
     // How many candles fit across the full chart width
     const visibleCount = Math.max(1, Math.floor(chartW / candleStep));
 
-    // ── CENTER the view: 0 scroll = most recent candle centred in view ──
-    // The "anchor" candle index (in the candles array) drawn at centre
-    const halfVisible = Math.floor(visibleCount / 2);
-    // scrollRef = 0 → latest candle is centred; positive → scroll left (older)
-    const maxScroll = Math.max(0, candles.length - halfVisible - 1);
+    // ── TradingView-style anchor: latest candle at 78% from left, ~22% right padding ──
+    // scroll=0 → latest candle near right edge; scroll+ → pan left into history
+    const leftCount  = Math.floor(visibleCount * 0.82) + 2;  // candles to show left of anchor
+    const rightCount = Math.floor(visibleCount * 0.26) + 2;  // candles right of anchor (mostly empty)
+    const halfVisible = Math.floor(visibleCount / 2);         // kept for maxScroll compat
+    const maxScroll = Math.max(0, candles.length - 1);
     scrollRef.current = Math.max(0, Math.min(scrollRef.current, maxScroll));
 
-    // Index of the candle drawn at the horizontal centre of the chart
+    // Index of the candle drawn at the anchor X position
     const centreIdx = candles.length - 1 - scrollRef.current;
 
-    // Visible index range
-    const startIdx = Math.max(0, centreIdx - halfVisible);
-    const endIdx = Math.min(candles.length, centreIdx + halfVisible + 1);
+    // Visible index range — asymmetric: more history on left, right is mostly empty padding
+    const startIdx = Math.max(0, centreIdx - leftCount);
+    const endIdx   = Math.min(candles.length, centreIdx + rightCount + 1);
 
-    // X position: centreIdx maps to chartW / 2, shifted by sub-candle pixel offset
-    const centreX = chartLeft + chartW / 2 - pixelPanRef.current;
+    // X anchor: latest candle (scroll=0) appears at 78% from left edge (22% right padding)
+    const centreX = chartLeft + Math.round(chartW * 0.78) - pixelPanRef.current;
     const idxToX = (arrayIdx: number) => centreX + (arrayIdx - centreIdx) * candleStep;
 
     // Patch last candle close with live spot (no mutation).
@@ -521,6 +522,60 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
       return c;
     });
     if (visible.length === 0) return;
+
+    // ── Strong-only rendering filters ─────────────────────────────────────
+    // Hide weak/noisy parameters; only high-conviction structures are drawn.
+    const strongTouchPct = 0.0015; // 0.15%
+    const recentCandles = candles.slice(Math.max(0, candles.length - 160));
+    const levelTouchCount = (level: number): number => {
+      if (level <= 0) return 0;
+      let touches = 0;
+      for (const c of recentCandles) {
+        if (
+          (c.h >= level && c.l <= level) ||
+          near(c.h, level, strongTouchPct) ||
+          near(c.l, level, strongTouchPct)
+        ) touches++;
+      }
+      return touches;
+    };
+    const isStrongReferenceLevel = (level: number): boolean => {
+      if (level <= 0) return false;
+      const distPct = Math.abs(effectiveSpot - level) / level;
+      return distPct <= 0.03 || levelTouchCount(level) >= 1;
+    };
+    const isStrongSR = (level: number): boolean => level > 0 && levelTouchCount(level) >= 2;
+
+    const strongFvg = fvg.filter(f => {
+      const q = f.quality ?? (f.strength >= 0.80 ? 'PREMIUM' : f.strength >= 0.55 ? 'STANDARD' : 'WEAK');
+      const freshEnough = (f.candles_ago ?? 999) <= 120;
+      const sizeable = Math.abs(f.top - f.bottom) >= (effectiveSpot * 0.0008);
+      return !f.filled && freshEnough && sizeable && (q === 'PREMIUM' || f.strength >= 0.85);
+    });
+
+    const strongOb = ob.filter(o => {
+      const q = o.quality ?? (o.strength >= 0.80 ? 'PREMIUM' : o.strength >= 0.45 ? 'STANDARD' : 'WEAK');
+      const freshEnough = (o.candles_ago ?? 999) <= 120;
+      return !o.mitigated && freshEnough && (q === 'PREMIUM' || o.strength >= 0.85);
+    });
+
+    const strongLiquidity = liquidity.filter(lq => {
+      const q = lq.quality ?? (lq.touchCount >= 3 && !lq.swept ? 'PREMIUM' : lq.touchCount >= 2 && !lq.swept ? 'STANDARD' : 'WEAK');
+      const recentlySwept = lq.sweepIdx != null && (candles.length - 1 - lq.sweepIdx) <= 20;
+      return q === 'PREMIUM' || (!lq.swept && lq.touchCount >= 3) || recentlySwept;
+    });
+
+    const strongStructure = structure.filter(ev => (ev.quality ?? 'LOW') === 'HIGH');
+    const strongInducements = inducements.filter(ind => (ind.quality ?? (ind.touches >= 3 ? 'PREMIUM' : 'STANDARD')) === 'PREMIUM' || ind.touches >= 3);
+
+    const strongLevels = {
+      pdh: isStrongReferenceLevel(levels.pdh) ? levels.pdh : 0,
+      pdl: isStrongReferenceLevel(levels.pdl) ? levels.pdl : 0,
+      cdh: isStrongReferenceLevel(levels.cdh) ? levels.cdh : 0,
+      cdl: isStrongReferenceLevel(levels.cdl) ? levels.cdl : 0,
+      support: levels.support.filter(isStrongSR),
+      resistance: levels.resistance.filter(isStrongSR),
+    };
 
     // ── Price range — driven by CANDLES ONLY so Y-axis stays stable ──
     // Key levels outside the visible range are simply clipped (not drawn).
@@ -610,11 +665,10 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
 
     // ── Proximity alert set ───────────────────────────────────────
     const keyLevels = [
-      levels.pdh, levels.pdl, levels.cdh, levels.cdl,
-      ...levels.support, ...levels.resistance,
-      ...liquidity.map(l => l.level),
-      ...ob.filter(o => !o.mitigated).map(o => (o.top + o.bottom) / 2),
-      ...fractals.map(f => f.price),
+      strongLevels.pdh, strongLevels.pdl, strongLevels.cdh, strongLevels.cdl,
+      ...strongLevels.support, ...strongLevels.resistance,
+      ...strongLiquidity.map(l => l.level),
+      ...strongOb.map(o => (o.top + o.bottom) / 2),
     ].filter(lv => lv > 0);
 
     const proxSet = new Set<number>();
@@ -729,8 +783,6 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
       cx2 = dItem(cx2, row2Y, CFG.LIQ_BUY,          'BSL');
       cx2 = dItem(cx2, row2Y, CFG.LIQ_SELL,         'SSL');
       cx2 = dItem(cx2, row2Y, CFG.IND_COLOR,         'EQH/EQL');
-      cx2 = lItem(cx2, row2Y, CFG.FRACTAL_TOP,        'FR▼',    []);
-      cx2 = lItem(cx2, row2Y, CFG.FRACTAL_BOT,        'FR▲',    []);
            lItem(cx2, row2Y, CFG.CURRENT_PRICE,     'LTP',    [5, 3]);
     }
 
@@ -766,7 +818,7 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
     }
 
     // ── ORDER BLOCKS — gradient fill + accent bar + right-side label ───
-    for (const o of ob) {
+    for (const o of strongOb) {
       const isBull = o.type === 'bullish';
       // Quality tier: PREMIUM (strong impulse, fresh) | STANDARD | WEAK
       const obQuality = o.quality ?? (o.strength >= 0.80 ? 'PREMIUM' : o.strength >= 0.45 ? 'STANDARD' : 'WEAK');
@@ -843,7 +895,7 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
     // WEAK     : thin dotted borders + very dim fill + no label (just a faint band)
     // FILLED   : ghost band only (shows where price already retraced)
     // Partial fill: gradient fill showing how much of the gap is consumed
-    for (const f of fvg) {
+    for (const f of strongFvg) {
       const isBull   = f.type === 'bullish';
       const quality  = f.quality ?? 'STANDARD';
       const partial  = f.partialFill ?? 0;
@@ -1113,17 +1165,17 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
     };
 
     // DAY HIGH — solid 2px electric cyan
-    drawLevel(levels.cdh, CFG.CDH, [], 'DAY H', 2);
+    drawLevel(strongLevels.cdh, CFG.CDH, [], 'DAY H', 2);
     // DAY LOW — solid 1.5px royal blue
-    drawLevel(levels.cdl, CFG.CDL, [], 'DAY L', 1.5);
+    drawLevel(strongLevels.cdl, CFG.CDL, [], 'DAY L', 1.5);
     // PREV HIGH — long dash [12,4] vivid gold
-    drawLevel(levels.pdh, CFG.PDH, [12, 4], 'PREV H', 1.5);
+    drawLevel(strongLevels.pdh, CFG.PDH, [12, 4], 'PREV H', 1.5);
     // PREV LOW — medium dash [6,4] deep orange (shorter dashes = different rhythm from PREV H)
-    drawLevel(levels.pdl, CFG.PDL, [6, 4], 'PREV L', 1.2);
+    drawLevel(strongLevels.pdl, CFG.PDL, [6, 4], 'PREV L', 1.2);
     // SUPPORT — dash-dot [5,3] neon lime, 1.5px (thick enough to see clearly)
-    for (const s of levels.support) drawLevel(s, CFG.SUPPORT, [5, 3], 'SUP', 1.5);
+    for (const s of strongLevels.support) drawLevel(s, CFG.SUPPORT, [5, 3], 'SUP', 1.5);
     // RESISTANCE — dots [2,4] neon red, 1.5px (different dash from SUP)
-    for (const r of levels.resistance) drawLevel(r, CFG.RESISTANCE, [2, 4], 'RES', 1.5);
+    for (const r of strongLevels.resistance) drawLevel(r, CFG.RESISTANCE, [2, 4], 'RES', 1.5);
 
     // ── LIQUIDITY LEVELS ────────────────────────────────────────────
     // SSL = Sell-side liquidity (above equal highs) — swept from downside ↑
@@ -1134,7 +1186,7 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
     //   activeSweep : the live/most-recent candle's wick is crossing the level RIGHT NOW
     //   justSwept   : level is already marked swept in backend data
     //   approaching : price within WARM_D% but wick not yet touching
-    for (const lq of liquidity) {
+    for (const lq of strongLiquidity) {
       const y = priceToY(lq.level);
       if (y < chartTop || y > chartBottom) continue;
       const isSell  = lq.type === 'sell_side';
@@ -1335,7 +1387,7 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
     for (let i = 0; i < visible.length; i++) {
       const c = visible[i];
       const x = idxToX(startIdx + i);
-      if (x + cw / 2 < chartLeft || x - cw / 2 > chartRight) continue;
+      if (x - cw / 2 < chartLeft || x - cw / 2 > chartRight) continue;
 
       const isBull = c.c >= c.o;
       const bodySize = Math.abs(c.c - c.o);
@@ -1516,7 +1568,7 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
       for (let i = 0; i < visible.length; i++) {
         const c = visible[i];
         const x = idxToX(startIdx + i);
-        if (x + cw / 2 < chartLeft || x - cw / 2 > chartRight) continue;
+        if (x - cw / 2 < chartLeft || x - cw / 2 > chartRight) continue;
         const isBullV = c.c >= c.o;
         const barH = Math.max(1, (c.v / maxVol) * volH);
         const barTop = volTop + volH - barH;
@@ -1548,7 +1600,7 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
       let maLineStarted = false;
       for (let i = 0; i < visible.length; i++) {
         const x = idxToX(startIdx + i);
-        if (x + cw / 2 < chartLeft || x - cw / 2 > chartRight) continue;
+        if (x - cw / 2 < chartLeft || x - cw / 2 > chartRight) continue;
         const maY = volTop + volH - Math.max(0, (volMA[i] / maxVol) * volH);
         if (!maLineStarted) { ctx.moveTo(x, maY); maLineStarted = true; }
         else ctx.lineTo(x, maY);
@@ -1577,7 +1629,7 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
     // Rendering order: BOS first (less important), ChoCh on top (more important)
     // BOS  = break of market structure, continuation signal     → dashed, thinner
     // ChoCh= change of character, REVERSAL signal               → solid, thicker, bright
-    for (const ev of structure) {
+    for (const ev of strongStructure) {
       const evX = idxToX(ev.idx);
       if (evX < chartLeft - 20 || evX > chartRight + 20) continue;
       const evY = priceToY(ev.level);
@@ -1667,7 +1719,7 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
     }
 
     // ── INDUCEMENT MARKERS (Equal H/L) ──────────────────────────────
-    for (const ind of inducements) {
+    for (const ind of strongInducements) {
       const indX = idxToX(ind.idx);
       if (indX < chartLeft || indX > chartRight) continue;
       const indY = priceToY(ind.level);
@@ -1715,38 +1767,7 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
       drawLabel(indX, isHigh ? markerY - 10 : markerY + 10, tag, CFG.IND_COLOR, 'rgba(122,143,168,0.20)');
     }
 
-    // ── FRACTAL MARKERS (Williams 5-bar) ───────────────────────────
-    // ▼ amber triangle above the high of a bearish fractal top
-    // ▲ sky-blue triangle below the low of a bullish fractal bottom
-    // Only draw fractals that fall within the visible candle window
-    for (const fr of fractals) {
-      if (fr.idx < startIdx || fr.idx >= startIdx + visible.length) continue;
-      const fx = idxToX(fr.idx);
-      if (fx < chartLeft || fx > chartRight) continue;
-      const isTop = fr.type === 'top';
-      const fy = priceToY(fr.price);
-      const color = isTop ? CFG.FRACTAL_TOP : CFG.FRACTAL_BOT;
-      const triSize = 4.5;
-      // Offset: top fractal ▼ appears above the high; bottom fractal ▲ below the low
-      const tipY = isTop ? fy - 8 : fy + 8;
-      ctx.fillStyle = color;
-      ctx.globalAlpha = 0.88;
-      ctx.beginPath();
-      if (isTop) {
-        // ▼ pointing down — apex at tipY, base above
-        ctx.moveTo(fx,             tipY + triSize);
-        ctx.lineTo(fx - triSize,   tipY - triSize * 0.8);
-        ctx.lineTo(fx + triSize,   tipY - triSize * 0.8);
-      } else {
-        // ▲ pointing up — apex at tipY, base below
-        ctx.moveTo(fx,             tipY - triSize);
-        ctx.lineTo(fx - triSize,   tipY + triSize * 0.8);
-        ctx.lineTo(fx + triSize,   tipY + triSize * 0.8);
-      }
-      ctx.closePath();
-      ctx.fill();
-      ctx.globalAlpha = 1;
-    }
+    // Fractal markers intentionally hidden from chart rendering to avoid weak/noisy signals.
 
     // ── APPROACH ALERT BANNER ─────────────────────────────────────────────────
     // Floats near the top of the chart area when price is near key zones.
@@ -1944,12 +1965,15 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
     dirtyRef.current = false;
   }, []);
 
-  // Reset smooth Y-axis range only when the chart identity changes (symbol or timeframe switch)
-  // NOT on every 3s data update — that was the main cause of visible Y-axis jumping/flickering.
+  // Reset view when chart identity changes (symbol or timeframe switch).
+  // This ensures candles are correctly anchored at the right edge on every TF switch.
   useEffect(() => {
     smoothMinRef.current = 0;
     smoothMaxRef.current = 0;
     lastCanvasW.current = 0; // force canvas resize on next frame
+    // Reset pan/scroll so latest candle anchors at 78% position on every TF change
+    scrollRef.current = 0;
+    pixelPanRef.current = 0;
     dirtyRef.current = true;
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chartKey]);
@@ -2014,11 +2038,6 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
       pixelPanRef.current = newTotalPx % candleStep;
       markDirty();
     }
-    if (isVDragging.current) {
-      const dy = vDragStartY.current - e.clientY;
-      vScaleRef.current = Math.max(0.25, Math.min(8, vDragStartScale.current * Math.exp(dy / 200)));
-      markDirty();
-    }
     // Crosshair movement also needs redraw
     markDirty();
   }, [markDirty]);
@@ -2029,10 +2048,6 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
       dragStartX.current = e.clientX;
       dragStartScroll.current = scrollRef.current;
       dragStartPixelPan.current = pixelPanRef.current;
-    } else if (e.button === 2) {
-      isVDragging.current = true;
-      vDragStartY.current = e.clientY;
-      vDragStartScale.current = vScaleRef.current;
     }
   }, []);
 
@@ -2075,7 +2090,7 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
       const chartRight = rect.width - CFG.PRICE_AXIS_W;
       const chartW = chartRight;
       const centreIdxBefore = candlesRef.current.length - 1 - Math.max(0, scrollRef.current);
-      const centreXBefore = chartW / 2 - pixelPanRef.current;
+      const centreXBefore = Math.round(chartW * 0.78) - pixelPanRef.current;
       const mouseX = e.clientX - rect.left;
       const anchorArrayIdxBefore = centreIdxBefore + (mouseX - centreXBefore) / candleStep;
 
@@ -2099,9 +2114,9 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
         const newStep = candleWRef.current + candleGapRef.current;
         const newVisible = Math.max(1, Math.floor(chartW / newStep));
         const newHalf = Math.floor(newVisible / 2);
-        const centreIdxNeeded = anchorArrayIdxBefore - (mouseX - chartW / 2) / newStep;
+        const centreIdxNeeded = anchorArrayIdxBefore - (mouseX - Math.round(chartW * 0.78)) / newStep;
         const rawScroll = (candlesRef.current.length - 1) - centreIdxNeeded;
-        const maxScroll = Math.max(0, candlesRef.current.length - newHalf - 1);
+        const maxScroll = Math.max(0, candlesRef.current.length - 1);
         scrollRef.current = Math.max(0, Math.min(maxScroll, Math.floor(rawScroll)));
         pixelPanRef.current = 0;
       }
@@ -2283,12 +2298,7 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
         )}
       </div>
 
-      {/* ── Hint strip — bottom left ── */}
-      <div className="absolute bottom-7 left-1 text-[8px] text-slate-600 pointer-events-none select-none leading-tight">
-        <span className="hidden sm:inline">wheel zoom · shift+wheel pan · ctrl+wheel ↕ · drag pan · </span>
-        <span className="sm:hidden">pinch zoom · drag pan · </span>
-        dbl-click reset
-      </div>
+
     </div>
   );
 });
@@ -2608,13 +2618,11 @@ function computeChartSignal(
 
 const SymbolChartCard = memo<{ data: SymbolChartData | null; name: string; liveSpot?: number; forceChartHeight?: number; fullPage?: boolean }>(({ data, name, liveSpot, forceChartHeight, fullPage = false }) => {
   const [timeframe, setTimeframe] = useState<'1h' | '15m' | '5m' | '3m'>('5m');
-  const [expanded, setExpanded] = useState(false);
-  const [showChartGuide, setShowChartGuide] = useState(false);
   const [isMaximized, setIsMaximized] = useState(false);
   const [modalMinimized, setModalMinimized] = useState(false);
   const [modalFullscreen, setModalFullscreen] = useState(false);
   const [modalChartH, setModalChartH] = useState(420);
-  const chartH = forceChartHeight ?? (expanded ? 560 : CFG.CHART_H);
+  const chartH = forceChartHeight ?? CFG.CHART_H;
 
   const openModal = useCallback(() => {
     // Derive the symbol slug: "NIFTY 50" → "NIFTY", "BANK NIFTY" → "BANKNIFTY", "SENSEX" → "SENSEX"
@@ -2815,54 +2823,68 @@ const SymbolChartCard = memo<{ data: SymbolChartData | null; name: string; liveS
 
   return (
     <div className={`${fullPage ? 'bg-dark-card/60' : 'rounded-xl bg-dark-card/60 border border-slate-700/40'} overflow-hidden`}>
-      {/* Header — 2-row on mobile, single row on sm+ */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between px-3 sm:px-4 py-2 gap-1.5 border-b border-slate-700/30">
-        {/* Row 1: name + price + change */}
-        <div className="flex items-center min-w-0">
-          <span className="inline-flex flex-wrap items-center gap-x-1.5 gap-y-0.5 px-2 py-1 rounded-md bg-emerald-500/5 border border-emerald-500/30 shadow-[0_0_6px_rgba(52,211,153,0.15)] w-full sm:w-auto">
-            <span className="text-[11px] sm:text-xs font-bold text-emerald-200 shrink-0">{name}</span>
-            <span className="text-[12px] sm:text-[13px] font-mono font-semibold text-emerald-300 shrink-0">{fmtPrice(displayPrice)}</span>
-            <span className={`text-[10px] sm:text-[11px] font-mono font-semibold shrink-0 ${changeColor}`}>
+      {/* ── Header: 3 rows on mobile → 2 rows on sm → 1 row on lg ── */}
+      <div className="flex flex-col px-3 py-2 gap-1.5 border-b border-slate-700/30">
+
+        {/* ── ROW A: Symbol name + live price + change ── */}
+        <div className="flex items-center justify-between gap-2 min-w-0">
+          <div className="flex items-center gap-2 min-w-0 overflow-hidden">
+            <span className="text-[11px] sm:text-xs font-bold text-emerald-200 shrink-0 whitespace-nowrap">{name}</span>
+            <span className="text-xs sm:text-[13px] font-mono font-semibold text-emerald-300 shrink-0 tabular-nums whitespace-nowrap">
+              {fmtPrice(displayPrice)}
+            </span>
+            <span className={`text-[10px] sm:text-[11px] font-mono font-semibold shrink-0 tabular-nums whitespace-nowrap ${changeColor}`}>
               {changeIcon}{Math.abs(change).toFixed(2)} ({changePct >= 0 ? '+' : ''}{changePct.toFixed(2)}%)
             </span>
+          </div>
+          {/* LIVE badge — right-anchored on all breakpoints */}
+          <span className={`inline-flex items-center justify-center h-6 px-2 rounded border text-[9px] font-mono tabular-nums whitespace-nowrap shrink-0 ${sourceColor} border-current/30 bg-slate-800/40 min-w-[58px]`}>
+            {sourceLabel}
           </span>
         </div>
-        {/* Row 2 on mobile / right side on desktop: controls */}
-        <div className="flex items-center gap-1.5 shrink-0">
+
+        {/* ── ROW B: Signal badge + MTF badge (+ TF tabs on sm+) ── */}
+        <div className="flex items-center gap-1.5 flex-wrap sm:flex-nowrap">
           {/* Chart Pattern Signal Badge */}
           {(() => {
             const cfg = CHART_SIGNAL_CFG[chartSignal.signal];
             const pulse = chartSignal.signal === 'STRONG_BUY' || chartSignal.signal === 'STRONG_SELL';
             return (
               <span
-                key={chartSignal.signal}
                 title={`Chart pattern score: ${chartSignal.score > 0 ? '+' : ''}${chartSignal.score} · Updates every ~1s with live spot`}
                 className={`
-                  inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold tracking-wide
-                  border shadow-sm transition-all duration-300
+                  inline-flex items-center justify-between gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold tracking-wide
+                  h-7 w-[128px]
+                  border shadow-sm transition-all duration-300 shrink-0
                   ${cfg.bg} ${cfg.color} ${cfg.border} ${cfg.glow ? `shadow-sm ${cfg.glow}` : ''}
                   ${pulse ? 'animate-pulse' : ''}
                   ${signalFlash ? 'ring-1 ring-white/40 scale-105' : 'scale-100'}
                 `}
                 style={{ transition: 'transform 0.2s ease, box-shadow 0.3s ease' }}
               >
-                {chartSignal.signal === 'STRONG_BUY' || chartSignal.signal === 'BUY' ? '▲' : chartSignal.signal === 'STRONG_SELL' || chartSignal.signal === 'SELL' ? '▼' : '●'}
-                {cfg.label}
-                <span className="opacity-70 font-mono text-[9px] tabular-nums">{chartSignal.score > 0 ? '+' : ''}{chartSignal.score}</span>
-                {/* Live heartbeat dot — proves the score is updating every second */}
+                <span className="w-3 text-center shrink-0">
+                  {chartSignal.signal === 'STRONG_BUY' || chartSignal.signal === 'BUY' ? '▲'
+                   : chartSignal.signal === 'STRONG_SELL' || chartSignal.signal === 'SELL' ? '▼' : '●'}
+                </span>
+                <span className="truncate text-center flex-1">{cfg.label}</span>
+                <span className="opacity-70 font-mono text-[9px] tabular-nums w-7 text-right shrink-0">
+                  {chartSignal.score > 0 ? '+' : ''}{chartSignal.score}
+                </span>
                 <span
-                  className="w-1 h-1 rounded-full bg-current opacity-50 animate-ping"
+                  className="w-1 h-1 rounded-full bg-current opacity-50 animate-ping shrink-0"
                   style={{ animationDuration: '1.4s' }}
                 />
               </span>
             );
           })()}
-          {/* MTF Alignment Badge — 3m vs 5m confluence check */}
+
+          {/* MTF Alignment Badge */}
           {mtfSignal && (
             <span
               title={`MTF Alignment: 3M=${mtfSignal.sig3} (${mtfSignal.score3 > 0 ? '+' : ''}${mtfSignal.score3}) · 5M=${mtfSignal.sig5} (${mtfSignal.score5 > 0 ? '+' : ''}${mtfSignal.score5})`}
               className={`
-                inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[9px] font-bold border transition-all duration-300
+                inline-flex items-center justify-between gap-0.5 px-1.5 py-0.5 rounded text-[9px] font-bold border transition-all duration-300
+                h-7 w-[76px] shrink-0
                 ${mtfSignal.aligned
                   ? mtfSignal.direction === 'bull'
                     ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'
@@ -2871,16 +2893,23 @@ const SymbolChartCard = memo<{ data: SymbolChartData | null; name: string; liveS
                 }
               `}
             >
-              MTF {mtfSignal.aligned ? (mtfSignal.direction === 'bull' ? '▲' : '▼') : '⊘'}
-              <span className="opacity-60 font-normal">{mtfSignal.aligned ? 'ALIGN' : 'SPLIT'}</span>
+              <span className="shrink-0">MTF</span>
+              <span className="w-3 text-center shrink-0">
+                {mtfSignal.aligned ? (mtfSignal.direction === 'bull' ? '▲' : '▼') : '⊘'}
+              </span>
+              <span className="opacity-60 font-normal truncate">
+                {mtfSignal.aligned ? 'ALIGN' : 'SPLIT'}
+              </span>
             </span>
           )}
-          <div className="flex rounded-md overflow-hidden border border-slate-700/50">
+
+          {/* TF tabs — hidden on mobile (shown in Row C), visible sm+ */}
+          <div className="hidden sm:flex rounded-md overflow-hidden border border-slate-700/50 shrink-0">
             {([
-              { tf: '1h',  label: '1H',  hint: 'MACRO' },
-              { tf: '15m', label: '15M', hint: 'STRUCT' },
-              { tf: '5m',  label: '5M',  hint: 'EXEC' },
-              { tf: '3m',  label: '3M',  hint: 'ENTRY' },
+              { tf: '1h',  label: '1H',  hint: 'MACRO'   },
+              { tf: '15m', label: '15M', hint: 'STRUCT'  },
+              { tf: '5m',  label: '5M',  hint: 'EXEC'    },
+              { tf: '3m',  label: '3M',  hint: 'ENTRY'   },
             ] as const).map(({ tf, label, hint }, idx, arr) => {
               const active = timeframe === tf;
               const isLast = idx === arr.length - 1;
@@ -2889,32 +2918,44 @@ const SymbolChartCard = memo<{ data: SymbolChartData | null; name: string; liveS
                   key={tf}
                   onClick={() => setTimeframe(tf)}
                   title={hint}
-                  className={`flex flex-col items-center px-2 py-0.5 text-[9px] font-bold transition-colors leading-tight ${
+                  className={`flex flex-col items-center justify-center w-[48px] h-7 px-1 py-0.5 text-[9px] font-bold transition-colors leading-tight ${
                     !isLast ? 'border-r border-slate-700/50' : ''
-                  } ${
-                    active
-                      ? 'bg-indigo-500/20 text-indigo-300'
-                      : 'text-slate-500 hover:text-slate-300'
-                  }`}
+                  } ${active ? 'bg-indigo-500/20 text-indigo-300' : 'text-slate-500 hover:text-slate-300'}`}
                 >
                   <span className="text-[10px]">{label}</span>
-                  <span className={`text-[7px] font-normal ${active ? 'text-indigo-400/70' : 'text-slate-600'}`}>{hint}</span>
+                  <span className={`text-[7px] font-normal leading-none ${active ? 'text-indigo-400/70' : 'text-slate-600'}`}>{hint}</span>
                 </button>
               );
             })}
           </div>
-          <span className={`hidden sm:inline text-[9px] font-mono ${sourceColor}`}>{sourceLabel}</span>
-          {/* Expand / collapse — hidden in full-page mode */}
-          {!fullPage && (
-          <button
-            onClick={() => setExpanded(v => !v)}
-            className="w-6 h-6 rounded bg-slate-700/50 border border-slate-600/40 text-slate-400 text-[10px] flex items-center justify-center hover:bg-slate-600/60 hover:text-slate-200 transition-all"
-            title={expanded ? 'Collapse chart' : 'Expand chart'}
-          >
-            {expanded ? '⊟' : '⊞'}
-          </button>
-          )}
         </div>
+
+        {/* ── ROW C: TF tabs full-width — mobile only (sm: hidden) ── */}
+        <div className="flex sm:hidden rounded-md overflow-hidden border border-slate-700/50">
+          {([
+            { tf: '1h',  label: '1H',  hint: 'MACRO'  },
+            { tf: '15m', label: '15M', hint: 'STRUCT' },
+            { tf: '5m',  label: '5M',  hint: 'EXEC'   },
+            { tf: '3m',  label: '3M',  hint: 'ENTRY'  },
+          ] as const).map(({ tf, label, hint }, idx, arr) => {
+            const active = timeframe === tf;
+            const isLast = idx === arr.length - 1;
+            return (
+              <button
+                key={tf}
+                onClick={() => setTimeframe(tf)}
+                title={hint}
+                className={`flex flex-col items-center justify-center flex-1 h-8 px-1 py-0.5 text-[10px] font-bold transition-colors leading-tight ${
+                  !isLast ? 'border-r border-slate-700/50' : ''
+                } ${active ? 'bg-indigo-500/20 text-indigo-300' : 'text-slate-500 hover:text-slate-300'}`}
+              >
+                <span className="text-[11px]">{label}</span>
+                <span className={`text-[8px] font-normal leading-none ${active ? 'text-indigo-400/70' : 'text-slate-600'}`}>{hint}</span>
+              </button>
+            );
+          })}
+        </div>
+
       </div>
 
       {/* Chart Canvas */}
@@ -3108,7 +3149,7 @@ const SymbolChartCard = memo<{ data: SymbolChartData | null; name: string; liveS
             )}
           </div>
         </div>
-        {/* Row 2: Level legend + fractal counts + timestamp */}
+        {/* Row 2: Level legend + timestamp */}
         <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5">
           <span className="flex items-center gap-1 text-[8px] font-bold" style={{ color: CFG.PDH }}>
             <span className="w-4 border-t-2 border-dashed inline-block" style={{ borderColor: CFG.PDH }} /> PREV H/L
@@ -3122,69 +3163,11 @@ const SymbolChartCard = memo<{ data: SymbolChartData | null; name: string; liveS
           <span className="flex items-center gap-1 text-[8px] font-bold" style={{ color: CFG.SUPPORT }}>
             <span className="w-3 border-t border-dotted inline-block" style={{ borderColor: CFG.SUPPORT }} /> SUP/RES
           </span>
-          {(stats.fracTop + stats.fracBot) > 0 && (
-            <>
-              <span className="text-[8px] font-mono" style={{ color: CFG.FRACTAL_TOP }}>FR▼ {stats.fracTop}</span>
-              <span className="text-[8px] font-mono" style={{ color: CFG.FRACTAL_BOT }}>FR▲ {stats.fracBot}</span>
-            </>
-          )}
           <span className="ml-auto text-[8px] font-mono text-slate-600">
             {candles.length}c · {lastCandle ? fmtTime(lastCandle.t) : ''}
           </span>
         </div>
 
-        {/* Chart Intelligence Guide — collapsible, hidden by default */}
-        <div>
-          <button
-            onClick={() => setShowChartGuide(v => !v)}
-            className="flex items-center gap-1 text-[8px] font-bold text-slate-500 hover:text-slate-300 transition-colors select-none"
-          >
-            <span className={`transition-transform duration-200 ${showChartGuide ? 'rotate-90' : ''}`}>▶</span>
-            Real-Time Chart Intelligence Guide
-          </button>
-          {showChartGuide && (
-            <div className="mt-1.5 grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1">
-              {/* S1 — SELL scenario */}
-              <div className="space-y-0.5">
-                <p className="text-[8px] font-bold text-red-400">📉 S1: DOWN → UP → zone (SELL)</p>
-                <div className="space-y-0.5 pl-1 border-l border-red-500/30">
-                  {([
-                    { dot: 'bg-rose-400',   text: 'EQH/BSL ⬆️→⬇️  liquidity grab → SELL' },
-                    { dot: 'bg-purple-400', text: 'Bear OB/POI ⬇️  rejection → SELL' },
-                    { dot: 'bg-teal-400',   text: 'FVG(↑) ↩️→⬇️  fill → drop' },
-                    { dot: 'bg-sky-400',    text: 'BOS↑ ⬆️  continue up (context)' },
-                    { dot: 'bg-fuchsia-400',text: 'CHoCH(top) ⬇️  reversal signal' },
-                  ]).map(({ dot, text }) => (
-                    <div key={text} className="flex items-start gap-1">
-                      <span className={`mt-[3px] w-1.5 h-1.5 rounded-full shrink-0 ${dot}`} />
-                      <span className="text-[8px] text-slate-400 leading-tight">{text}</span>
-                    </div>
-                  ))}
-                  <p className="text-[8px] font-bold text-red-300 pt-0.5">✅ ⬆️ zone → ⬇️ SELL</p>
-                </div>
-              </div>
-              {/* S2 — BUY scenario */}
-              <div className="space-y-0.5">
-                <p className="text-[8px] font-bold text-emerald-400">📈 S2: UP → DOWN → zone (BUY)</p>
-                <div className="space-y-0.5 pl-1 border-l border-emerald-500/30">
-                  {([
-                    { dot: 'bg-emerald-400',text: 'EQL/SSL ⬇️→⬆️  liquidity grab → BUY' },
-                    { dot: 'bg-yellow-400', text: 'Bull OB/POI ⬆️  bounce → BUY' },
-                    { dot: 'bg-teal-400',   text: 'FVG(↓) ↩️→⬆️  fill → rise' },
-                    { dot: 'bg-blue-400',   text: 'BOS↓ ⬇️  continue down (context)' },
-                    { dot: 'bg-green-400',  text: 'CHoCH(bot) ⬆️  reversal signal' },
-                  ]).map(({ dot, text }) => (
-                    <div key={text} className="flex items-start gap-1">
-                      <span className={`mt-[3px] w-1.5 h-1.5 rounded-full shrink-0 ${dot}`} />
-                      <span className="text-[8px] text-slate-400 leading-tight">{text}</span>
-                    </div>
-                  ))}
-                  <p className="text-[8px] font-bold text-emerald-300 pt-0.5">✅ ⬇️ zone → ⬆️ BUY</p>
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
       </div>
     </div>
   );
@@ -3216,7 +3199,7 @@ const ChartIntelligence = memo(() => {
             Real-Time Chart Intelligence
           </h3>
           <span className="hidden sm:inline text-[10px] sm:text-[11px] text-indigo-400/60 font-medium">
-            FVG · OB · Liquidity · S/R · PDH/PDL · CDH/CDL · Fractals
+            FVG · OB · Liquidity · S/R · PDH/PDL · CDH/CDL · BOS/CHoCH · EQH/EQL
           </span>
           <span className={`text-[9px] font-mono ${dataStatus.color}`}>
             {dataStatus.label}
@@ -3230,32 +3213,6 @@ const ChartIntelligence = memo(() => {
           <span className="px-1.5 py-0.5 rounded" style={{ background: CFG.FVG_BEAR_FILL, color: CFG.FVG_BEAR_BORDER, border: `1px solid ${CFG.FVG_BEAR_BORDER}` }}>↓ FVG</span>
           <span className="px-1.5 py-0.5 rounded bg-orange-500/10 text-orange-400 border border-orange-500/30">SSL</span>
           <span className="px-1.5 py-0.5 rounded bg-cyan-500/10 text-cyan-400 border border-cyan-500/30">BSL</span>
-          <span className="px-1.5 py-0.5 rounded text-[8px] font-bold" style={{ background: 'rgba(232,160,48,0.1)', color: CFG.FRACTAL_TOP, border: `1px solid ${CFG.FRACTAL_TOP}50` }}>▼ FR Top</span>
-          <span className="px-1.5 py-0.5 rounded text-[8px] font-bold" style={{ background: 'rgba(48,168,232,0.1)', color: CFG.FRACTAL_BOT, border: `1px solid ${CFG.FRACTAL_BOT}50` }}>▲ FR Bot</span>
-        </div>
-      </div>
-
-      {/* SMC Scenario Quick-Reference */}
-      <div className="mb-3 rounded-lg border border-slate-700/40 bg-slate-900/60 px-2 py-2 grid grid-cols-2 gap-x-2 gap-y-1 text-[9px] leading-snug sm:px-3 sm:py-2.5 sm:gap-x-6 sm:text-[10px] sm:leading-relaxed">
-        {/* Scenario 1 */}
-        <div className="space-y-0.5">
-          <div className="font-bold text-red-400 mb-1">📉 S1: DOWN→UP→zone</div>
-          <div><span className="font-bold" style={{ color: CFG.FRACTAL_TOP }}>EQH/BSL</span><span className="text-slate-400"> ⬆️→⬇️ </span><span className="text-slate-500 hidden sm:inline">(liquidity grab → SELL)</span></div>
-          <div><span className="font-bold" style={{ color: CFG.OB_BEAR_BORDER }}>Bear OB/POI</span><span className="text-slate-400"> ⬇️ </span><span className="text-slate-500 hidden sm:inline">(rejection → SELL)</span></div>
-          <div><span className="font-bold" style={{ color: CFG.FVG_BEAR_BORDER }}>FVG</span><span className="text-slate-500"> (↑)</span><span className="text-slate-400"> ↩️→⬇️ </span><span className="text-slate-500 hidden sm:inline">(fill → drop)</span></div>
-          <div><span className="font-bold" style={{ color: CFG.BOS_BULL }}>BOS↑</span><span className="text-slate-400"> ⬆️ </span><span className="text-slate-500 hidden sm:inline">(continue up)</span></div>
-          <div><span className="font-bold" style={{ color: CFG.CHOCH_BEAR }}>CHoCH</span><span className="text-slate-500"> (top)</span><span className="text-slate-400"> ⬇️ </span><span className="text-slate-500 hidden sm:inline">(reversal)</span></div>
-          <div className="mt-1 font-semibold text-red-300">✅ ⬆️ zone→⬇️ SELL</div>
-        </div>
-        {/* Scenario 2 */}
-        <div className="space-y-0.5">
-          <div className="font-bold text-emerald-400 mb-1">📈 S2: UP→DOWN→zone</div>
-          <div><span className="font-bold" style={{ color: CFG.FRACTAL_BOT }}>EQL/SSL</span><span className="text-slate-400"> ⬇️→⬆️ </span><span className="text-slate-500 hidden sm:inline">(liquidity grab → BUY)</span></div>
-          <div><span className="font-bold" style={{ color: CFG.OB_BULL_BORDER }}>Bull OB/POI</span><span className="text-slate-400"> ⬆️ </span><span className="text-slate-500 hidden sm:inline">(bounce → BUY)</span></div>
-          <div><span className="font-bold" style={{ color: CFG.FVG_BULL_BORDER }}>FVG</span><span className="text-slate-500"> (↓)</span><span className="text-slate-400"> ↩️→⬆️ </span><span className="text-slate-500 hidden sm:inline">(fill → rise)</span></div>
-          <div><span className="font-bold" style={{ color: CFG.BOS_BEAR }}>BOS↓</span><span className="text-slate-400"> ⬇️ </span><span className="text-slate-500 hidden sm:inline">(continue down)</span></div>
-          <div><span className="font-bold" style={{ color: CFG.CHOCH_BULL }}>CHoCH</span><span className="text-slate-500"> (bot)</span><span className="text-slate-400"> ⬆️ </span><span className="text-slate-500 hidden sm:inline">(reversal)</span></div>
-          <div className="mt-1 font-semibold text-emerald-300">✅ ⬇️ zone→⬆️ BUY</div>
         </div>
       </div>
 

@@ -56,6 +56,7 @@ module.exports = {
         'heat-bull': 'heatBull 1.6s ease-in-out infinite',
         'heat-bear': 'heatBear 1.6s ease-in-out infinite',
         'iv-spike': 'ivSpike 0.5s ease-out forwards',
+        'scale-pop': 'scalePop 0.7s cubic-bezier(0.25,0.46,0.45,0.94) forwards',
       },
       keyframes: {
         flashGreen: {
@@ -89,6 +90,11 @@ module.exports = {
         ivSpike: {
           '0%':   { color: 'rgb(253,224,71)', transform: 'scale(1.15)' },
           '100%': { color: 'inherit',         transform: 'scale(1)' },
+        },
+        scalePop: {
+          '0%':   { transform: 'scale(1.35)', opacity: '1' },
+          '40%':  { transform: 'scale(1.15)', opacity: '1' },
+          '100%': { transform: 'scale(1)',    opacity: '1' },
         },
       },
       screens: {

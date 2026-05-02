@@ -54,6 +54,53 @@ function fmtTs(ts?: string): string {
   return d.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: true });
 }
 
+type MoveDirection = 'up' | 'down' | 'flat';
+type MetricMove = { ce: MoveDirection; pe: MoveDirection; active: boolean };
+type ChainMoves = {
+  volume: MetricMove;
+  oi: MetricMove;
+  oiChange: MetricMove;
+  iv: MetricMove;
+};
+
+const FLAT_MOVE: MetricMove = { ce: 'flat', pe: 'flat', active: false };
+const INITIAL_CHAIN_MOVES: ChainMoves = {
+  volume: { ...FLAT_MOVE },
+  oi: { ...FLAT_MOVE },
+  oiChange: { ...FLAT_MOVE },
+  iv: { ...FLAT_MOVE },
+};
+
+function detectMove(curr: number, prev: number, epsilon = 0): MoveDirection {
+  if (curr > prev + epsilon) return 'up';
+  if (curr < prev - epsilon) return 'down';
+  return 'flat';
+}
+
+function detectNullableMove(curr: number | null, prev: number | null, epsilon = 0): MoveDirection {
+  if (curr == null && prev == null) return 'flat';
+  if (curr != null && prev == null) return 'up';
+  if (curr == null && prev != null) return 'down';
+  return detectMove(curr ?? 0, prev ?? 0, epsilon);
+}
+
+function getMetricCardFlashClass(move: MetricMove): string {
+  if (!move.active) return '';
+  const up = move.ce === 'up' || move.pe === 'up';
+  const down = move.ce === 'down' || move.pe === 'down';
+  if (up && !down) return 'ring-1 ring-emerald-300/80 shadow-[0_0_16px_rgba(16,185,129,0.4)]';
+  if (down && !up) return 'ring-1 ring-red-300/80 shadow-[0_0_16px_rgba(239,68,68,0.4)]';
+  return 'ring-1 ring-amber-300/80 shadow-[0_0_14px_rgba(251,191,36,0.35)]';
+}
+
+function getValueFlashClass(direction: MoveDirection, active: boolean): string {
+  if (!active || direction === 'flat') return '';
+  if (direction === 'up') {
+    return 'bg-emerald-500/25 text-emerald-100 px-1 rounded shadow-[0_0_10px_rgba(16,185,129,0.45)] animate-pulse';
+  }
+  return 'bg-red-500/25 text-red-100 px-1 rounded shadow-[0_0_10px_rgba(239,68,68,0.45)] animate-pulse';
+}
+
 // High-conviction gate for buyer perspective.
 // We only emit STRONG_BUY / STRONG_SELL when participation + positioning are confirmed.
 type SymbolKey = 'NIFTY' | 'BANKNIFTY' | 'SENSEX';
@@ -872,6 +919,19 @@ StrikeRowComponent.displayName = 'StrikeRowComponent';
 
 const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>(({ data, name }) => {
   const [showSMC, setShowSMC] = useState(false);
+  const prevDominantRef = useRef<'BULL' | 'BEAR' | 'NEUTRAL'>('NEUTRAL');
+  const [flashSide, setFlashSide] = useState<'BULL' | 'BEAR' | null>(null);
+  const [chainMoves, setChainMoves] = useState<ChainMoves>(INITIAL_CHAIN_MOVES);
+  const prevChainStatsRef = useRef<{
+    totalCEVol: number; totalPEVol: number;
+    totalCEOI: number; totalPEOI: number;
+    totalCEOIChg: number; totalPEOIChg: number;
+    avgCEIV: number | null; avgPEIV: number | null;
+    ceVolPct: number; peVolPct: number;
+    ceOIPct: number; peOIPct: number;
+    ceOIChgPct: number; peOIChgPct: number;
+  } | null>(null);
+  const chainFlashTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const strikes      = useMemo(() => data?.strikes ?? [], [data?.strikes]);
   const hasData      = strikes.length > 0;
   const intelligence = data?.intelligence;
@@ -886,6 +946,40 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
   const isLastClose  = data?.dataSource === 'LAST_CLOSE';
   const isCachedData = data?.dataSource === 'CACHED';
   const hasRealSignal = isLiveData || isLastClose || isCachedData;
+
+  // Aggregate chain stats — computed every tick when strikes update
+  const chainStats = useMemo(() => {
+    if (!hasData) return null;
+    const totalCEVol = strikes.reduce((a, s) => a + s.ce.volume, 0);
+    const totalPEVol = strikes.reduce((a, s) => a + s.pe.volume, 0);
+    const totalVol   = totalCEVol + totalPEVol;
+    const totalCEOI  = strikes.reduce((a, s) => a + s.ce.oi, 0);
+    const totalPEOI  = strikes.reduce((a, s) => a + s.pe.oi, 0);
+    const totalOI    = totalCEOI + totalPEOI;
+    const totalCEOIChg = strikes.reduce((a, s) => a + (s.ce.oiChange ?? 0), 0);
+    const totalPEOIChg = strikes.reduce((a, s) => a + (s.pe.oiChange ?? 0), 0);
+    // Weighted average IV (only where IV is available and > 0)
+    const ceIVArr = strikes.map(s => s.ce.signals?.iv).filter((v): v is number => v != null && v > 0);
+    const peIVArr = strikes.map(s => s.pe.signals?.iv).filter((v): v is number => v != null && v > 0);
+    const avgCEIV = ceIVArr.length > 0 ? ceIVArr.reduce((a, v) => a + v, 0) / ceIVArr.length : null;
+    const avgPEIV = peIVArr.length > 0 ? peIVArr.reduce((a, v) => a + v, 0) / peIVArr.length : null;
+    const ceVolPct = totalVol > 0 ? Math.round((totalCEVol / totalVol) * 100) : 50;
+    const peVolPct = totalVol > 0 ? Math.round((totalPEVol / totalVol) * 100) : 50;
+    const ceOIPct  = totalOI  > 0 ? Math.round((totalCEOI  / totalOI)  * 100) : 50;
+    const peOIPct  = totalOI  > 0 ? Math.round((totalPEOI  / totalOI)  * 100) : 50;
+    const totalAbsOIChg = Math.abs(totalCEOIChg) + Math.abs(totalPEOIChg);
+    const ceOIChgPct = totalAbsOIChg > 0 ? Math.round((Math.abs(totalCEOIChg) / totalAbsOIChg) * 100) : 50;
+    const peOIChgPct = totalAbsOIChg > 0 ? Math.round((Math.abs(totalPEOIChg) / totalAbsOIChg) * 100) : 50;
+    return {
+      totalCEVol, totalPEVol, totalVol,
+      totalCEOI, totalPEOI, totalOI,
+      totalCEOIChg, totalPEOIChg,
+      avgCEIV, avgPEIV,
+      ceVolPct, peVolPct,
+      ceOIPct, peOIPct,
+      ceOIChgPct, peOIChgPct,
+    };
+  }, [strikes, hasData]);
 
   // Summary: bias + PCR - use backend intelligence when available
   const summary = useMemo(() => {
@@ -907,6 +1001,111 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
     if (!hasRealSignal || !intelligence) return { signal: 'NEUTRAL' as OverallSignal, score: 0 };
     return { signal: intelligence.signal as OverallSignal, score: Math.round(intelligence.score) };
   }, [hasRealSignal, intelligence]);
+
+  // Dominance tracking: highlight the leading side and flash on transition
+  useEffect(() => {
+    if (!hasRealSignal) return undefined;
+    let clearFlashTimer: ReturnType<typeof setTimeout> | null = null;
+    const current: 'BULL' | 'BEAR' | 'NEUTRAL' =
+      summary.bullPct > summary.bearPct ? 'BULL' :
+      summary.bearPct > summary.bullPct ? 'BEAR' : 'NEUTRAL';
+    const prev = prevDominantRef.current;
+    if (prev !== 'NEUTRAL' && current !== 'NEUTRAL' && prev !== current) {
+      setFlashSide(current);
+      clearFlashTimer = setTimeout(() => setFlashSide(null), 1800);
+    }
+    prevDominantRef.current = current;
+    return () => {
+      if (clearFlashTimer) clearTimeout(clearFlashTimer);
+    };
+  }, [summary.bullPct, summary.bearPct, hasRealSignal]);
+
+  // Sharp change detector for chain cards (Volume / OI / OI Change / IV)
+  useEffect(() => {
+    if (!chainStats || !hasRealSignal) return;
+    const prev = prevChainStatsRef.current;
+    if (!prev) {
+      prevChainStatsRef.current = {
+        totalCEVol: chainStats.totalCEVol,
+        totalPEVol: chainStats.totalPEVol,
+        totalCEOI: chainStats.totalCEOI,
+        totalPEOI: chainStats.totalPEOI,
+        totalCEOIChg: chainStats.totalCEOIChg,
+        totalPEOIChg: chainStats.totalPEOIChg,
+        avgCEIV: chainStats.avgCEIV,
+        avgPEIV: chainStats.avgPEIV,
+        ceVolPct: chainStats.ceVolPct,
+        peVolPct: chainStats.peVolPct,
+        ceOIPct: chainStats.ceOIPct,
+        peOIPct: chainStats.peOIPct,
+        ceOIChgPct: chainStats.ceOIChgPct,
+        peOIChgPct: chainStats.peOIChgPct,
+      };
+      return;
+    }
+
+    const volCE = detectMove(chainStats.totalCEVol, prev.totalCEVol, 0);
+    const volPE = detectMove(chainStats.totalPEVol, prev.totalPEVol, 0);
+    const oiCE = detectMove(chainStats.totalCEOI, prev.totalCEOI, 0);
+    const oiPE = detectMove(chainStats.totalPEOI, prev.totalPEOI, 0);
+    const oiChgCE = detectMove(chainStats.totalCEOIChg, prev.totalCEOIChg, 0);
+    const oiChgPE = detectMove(chainStats.totalPEOIChg, prev.totalPEOIChg, 0);
+    const ivCE = detectNullableMove(chainStats.avgCEIV, prev.avgCEIV, 0.0005);
+    const ivPE = detectNullableMove(chainStats.avgPEIV, prev.avgPEIV, 0.0005);
+
+    const nextMoves: ChainMoves = {
+      volume: {
+        ce: volCE,
+        pe: volPE,
+        active: volCE !== 'flat' || volPE !== 'flat' || chainStats.ceVolPct !== prev.ceVolPct || chainStats.peVolPct !== prev.peVolPct,
+      },
+      oi: {
+        ce: oiCE,
+        pe: oiPE,
+        active: oiCE !== 'flat' || oiPE !== 'flat' || chainStats.ceOIPct !== prev.ceOIPct || chainStats.peOIPct !== prev.peOIPct,
+      },
+      oiChange: {
+        ce: oiChgCE,
+        pe: oiChgPE,
+        active: oiChgCE !== 'flat' || oiChgPE !== 'flat' || chainStats.ceOIChgPct !== prev.ceOIChgPct || chainStats.peOIChgPct !== prev.peOIChgPct,
+      },
+      iv: {
+        ce: ivCE,
+        pe: ivPE,
+        active: ivCE !== 'flat' || ivPE !== 'flat',
+      },
+    };
+
+    const anyActive = nextMoves.volume.active || nextMoves.oi.active || nextMoves.oiChange.active || nextMoves.iv.active;
+    if (anyActive) {
+      setChainMoves(nextMoves);
+      if (chainFlashTimerRef.current) clearTimeout(chainFlashTimerRef.current);
+      chainFlashTimerRef.current = setTimeout(() => {
+        setChainMoves(INITIAL_CHAIN_MOVES);
+      }, 1200);
+    }
+
+    prevChainStatsRef.current = {
+      totalCEVol: chainStats.totalCEVol,
+      totalPEVol: chainStats.totalPEVol,
+      totalCEOI: chainStats.totalCEOI,
+      totalPEOI: chainStats.totalPEOI,
+      totalCEOIChg: chainStats.totalCEOIChg,
+      totalPEOIChg: chainStats.totalPEOIChg,
+      avgCEIV: chainStats.avgCEIV,
+      avgPEIV: chainStats.avgPEIV,
+      ceVolPct: chainStats.ceVolPct,
+      peVolPct: chainStats.peVolPct,
+      ceOIPct: chainStats.ceOIPct,
+      peOIPct: chainStats.peOIPct,
+      ceOIChgPct: chainStats.ceOIChgPct,
+      peOIChgPct: chainStats.peOIChgPct,
+    };
+
+    return () => {
+      if (chainFlashTimerRef.current) clearTimeout(chainFlashTimerRef.current);
+    };
+  }, [chainStats, hasRealSignal]);
 
   if (!data || !hasData) {
     return (
@@ -990,24 +1189,181 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
         </div>
       </div>
 
-      {/* Sentiment bar */}
-      <div className={`flex flex-wrap items-center justify-between gap-x-3 gap-y-1 rounded-lg px-2 sm:px-2.5 py-1.5 mb-4 lg:mb-5 ${biasBg} border border-slate-700/30`}>
-        <div className="flex items-center gap-2">
-          <span className={`text-[11px] sm:text-[12px] font-bold ${biasColor}`}>{hasRealSignal ? summary.bias : 'CLOSED'}</span>
-          <span className="hidden sm:inline text-[10px] text-slate-500">{isLiveData ? 'Score-Weighted' : isLastClose ? 'Last Session' : isCachedData ? 'Cached' : 'No live data'}</span>
+      {/* ── SENTIMENT + CHAIN STATS PANEL ─────────────────────────────── */}
+      <div className="rounded-xl border border-slate-700/40 bg-slate-900/70 mb-3 overflow-hidden">
+
+        {/* Top row: Bias pill + Bull/Bear/PCR */}
+        <div className={`flex items-center justify-between gap-2 px-3 py-2 border-b border-slate-700/30 ${biasBg}`}>
+          {/* Left: bias + source */}
+          <div className="flex items-center gap-1.5 shrink-0">
+            <span className={`text-[11px] sm:text-[13px] font-black tracking-wide ${biasColor}`}>
+              {hasRealSignal ? summary.bias : 'CLOSED'}
+            </span>
+            <span className={`text-[9px] font-semibold px-1.5 py-0.5 rounded border ${sourceColor} border-current/30 bg-slate-800/60`}>
+              {sourceLabel}
+            </span>
+          </div>
+          {/* Right: Bull | Bear | PCR */}
+          <div className="flex items-center gap-1.5 font-mono text-[11px] sm:text-[12px]">
+            {hasRealSignal ? (
+              <>
+                <span
+                  key={summary.bullPct > summary.bearPct ? `bull-dom-${summary.bullPct}` : 'bull-sub'}
+                  className={[
+                    'transition-all duration-300',
+                    summary.bullPct > summary.bearPct
+                      ? 'text-emerald-300 font-black px-1.5 py-0.5 rounded border border-emerald-400/70 bg-emerald-500/20 shadow-[0_0_8px_1px_rgba(52,211,153,0.35)]'
+                      : 'text-emerald-500 font-semibold',
+                    flashSide === 'BULL' ? 'animate-scale-pop' : '',
+                  ].join(' ')}
+                >
+                  ▲ {summary.bullPct}%
+                </span>
+                <span className="text-slate-700">|</span>
+                <span
+                  key={summary.bearPct > summary.bullPct ? `bear-dom-${summary.bearPct}` : 'bear-sub'}
+                  className={[
+                    'transition-all duration-300',
+                    summary.bearPct > summary.bullPct
+                      ? 'text-red-300 font-black px-1.5 py-0.5 rounded border border-red-400/70 bg-red-500/20 shadow-[0_0_8px_1px_rgba(239,68,68,0.35)]'
+                      : 'text-red-500 font-semibold',
+                    flashSide === 'BEAR' ? 'animate-scale-pop' : '',
+                  ].join(' ')}
+                >
+                  ▼ {summary.bearPct}%
+                </span>
+                {summary.neutralPct > 0 && (
+                  <><span className="text-slate-700">|</span>
+                  <span className="text-amber-400/70 font-semibold">— {summary.neutralPct}%</span></>
+                )}
+              </>
+            ) : <span className="text-slate-600 text-[10px]">No data</span>}
+            <span className="text-slate-700">|</span>
+            <span className={`font-bold text-[11px] sm:text-[12px] ${(pcr ?? 1) > 1.2 ? 'text-emerald-400' : (pcr ?? 1) < 0.8 ? 'text-red-400' : 'text-amber-400'}`}
+              title="Put-Call Ratio">
+              PCR {pcr?.toFixed(2) ?? '--'}
+            </span>
+          </div>
         </div>
-        <div className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[10px] sm:text-[11px] font-mono">
-          {hasRealSignal ? (
-            <>
-              <span className="text-emerald-400">Bull {summary.bullPct}%</span>
-              <span className="text-slate-600">|</span>
-              {summary.neutralPct > 0 && <><span className="text-amber-400/80">Neutral {summary.neutralPct}%</span><span className="text-slate-600">|</span></>}
-              <span className="text-red-400">Bear {summary.bearPct}%</span>
-              <span className="text-slate-600">|</span>
-            </>
-          ) : <span className="text-slate-600">No split data</span>}
-          <span className="text-cyan-400/70" title="Put-Call Ratio">PCR:{summary.pcr}</span>
-        </div>
+
+        {/* Bottom grid: Vol | OI | OI△ | IV — 4-col desktop, 2-col mobile */}
+        {chainStats && hasRealSignal && (
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 p-1.5 bg-slate-950/40">
+
+            {/* ① Total Volume */}
+            <div className={`flex flex-col gap-1 px-3 py-2 rounded-lg border border-emerald-500/30 bg-emerald-500/5 shadow-[inset_0_0_0_1px_rgba(16,185,129,0.08)] transition-all duration-200 ${getMetricCardFlashClass(chainMoves.volume)}`}
+              title={`Total Volume — CE: ${fmtNum(chainStats.totalCEVol)} | PE: ${fmtNum(chainStats.totalPEVol)}`}>
+              <span className="text-[8px] font-bold tracking-widest uppercase text-slate-500">Total Volume</span>
+              <div className="flex items-center justify-between gap-1 font-mono">
+                <span className="text-[11px] sm:text-[12px] font-black text-emerald-400">
+                  CE <span className={`text-emerald-300 ${getValueFlashClass(chainMoves.volume.ce, chainMoves.volume.active)}`}>{chainStats.ceVolPct}%</span>
+                </span>
+                <span className="text-[9px] text-slate-600">/</span>
+                <span className="text-[11px] sm:text-[12px] font-black text-red-400">
+                  PE <span className={`text-red-300 ${getValueFlashClass(chainMoves.volume.pe, chainMoves.volume.active)}`}>{chainStats.peVolPct}%</span>
+                </span>
+              </div>
+              <div className="flex h-[5px] rounded-full overflow-hidden bg-slate-800/80">
+                <div className="bg-gradient-to-r from-emerald-500 to-emerald-400 transition-all duration-500 rounded-l-full"
+                  style={{ width: `${chainStats.ceVolPct}%` }} />
+                <div className="bg-gradient-to-l from-red-500 to-red-400 transition-all duration-500 rounded-r-full"
+                  style={{ width: `${chainStats.peVolPct}%` }} />
+              </div>
+              <div className="flex justify-between text-[9px] font-mono text-slate-500">
+                <span className={getValueFlashClass(chainMoves.volume.ce, chainMoves.volume.active)}>{fmtNum(chainStats.totalCEVol)}</span>
+                <span className={getValueFlashClass(chainMoves.volume.pe, chainMoves.volume.active)}>{fmtNum(chainStats.totalPEVol)}</span>
+              </div>
+            </div>
+
+            {/* ② Total OI */}
+            <div className={`flex flex-col gap-1 px-3 py-2 rounded-lg border border-cyan-500/30 bg-cyan-500/5 shadow-[inset_0_0_0_1px_rgba(6,182,212,0.08)] transition-all duration-200 ${getMetricCardFlashClass(chainMoves.oi)}`}
+              title={`Total Open Interest — CE: ${fmtNum(chainStats.totalCEOI)} | PE: ${fmtNum(chainStats.totalPEOI)}`}>
+              <span className="text-[8px] font-bold tracking-widest uppercase text-slate-500">Total OI</span>
+              <div className="flex items-center justify-between gap-1 font-mono">
+                <span className="text-[11px] sm:text-[12px] font-black text-emerald-400">
+                  CE <span className={`text-emerald-300 ${getValueFlashClass(chainMoves.oi.ce, chainMoves.oi.active)}`}>{chainStats.ceOIPct}%</span>
+                </span>
+                <span className="text-[9px] text-slate-600">/</span>
+                <span className="text-[11px] sm:text-[12px] font-black text-red-400">
+                  PE <span className={`text-red-300 ${getValueFlashClass(chainMoves.oi.pe, chainMoves.oi.active)}`}>{chainStats.peOIPct}%</span>
+                </span>
+              </div>
+              <div className="flex h-[5px] rounded-full overflow-hidden bg-slate-800/80">
+                <div className="bg-gradient-to-r from-emerald-500 to-emerald-400 transition-all duration-500 rounded-l-full"
+                  style={{ width: `${chainStats.ceOIPct}%` }} />
+                <div className="bg-gradient-to-l from-red-500 to-red-400 transition-all duration-500 rounded-r-full"
+                  style={{ width: `${chainStats.peOIPct}%` }} />
+              </div>
+              <div className="flex justify-between text-[9px] font-mono text-slate-500">
+                <span className={getValueFlashClass(chainMoves.oi.ce, chainMoves.oi.active)}>{fmtNum(chainStats.totalCEOI)}</span>
+                <span className={getValueFlashClass(chainMoves.oi.pe, chainMoves.oi.active)}>{fmtNum(chainStats.totalPEOI)}</span>
+              </div>
+            </div>
+
+            {/* ③ OI Change */}
+            <div className={`flex flex-col gap-1 px-3 py-2 rounded-lg border border-amber-500/30 bg-amber-500/5 shadow-[inset_0_0_0_1px_rgba(245,158,11,0.08)] transition-all duration-200 ${getMetricCardFlashClass(chainMoves.oiChange)}`}
+              title={`OI Change — CE: ${chainStats.totalCEOIChg >= 0 ? '+' : ''}${fmtNum(chainStats.totalCEOIChg)} | PE: ${chainStats.totalPEOIChg >= 0 ? '+' : ''}${fmtNum(chainStats.totalPEOIChg)}`}>
+              <span className="text-[8px] font-bold tracking-widest uppercase text-slate-500">OI Change</span>
+              <div className="flex items-center justify-between gap-1 font-mono">
+                <span className={`text-[11px] sm:text-[12px] font-black ${chainStats.totalCEOIChg >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                  CE <span className={`${chainStats.totalCEOIChg >= 0 ? 'text-emerald-300' : 'text-red-300'} ${getValueFlashClass(chainMoves.oiChange.ce, chainMoves.oiChange.active)}`}>
+                    {chainStats.totalCEOIChg >= 0 ? '+' : ''}{fmtNum(chainStats.totalCEOIChg)}
+                  </span>
+                </span>
+                <span className="text-[9px] text-slate-600">/</span>
+                <span className={`text-[11px] sm:text-[12px] font-black ${chainStats.totalPEOIChg >= 0 ? 'text-red-400' : 'text-emerald-400'}`}>
+                  PE <span className={`${chainStats.totalPEOIChg >= 0 ? 'text-red-300' : 'text-emerald-300'} ${getValueFlashClass(chainMoves.oiChange.pe, chainMoves.oiChange.active)}`}>
+                    {chainStats.totalPEOIChg >= 0 ? '+' : ''}{fmtNum(chainStats.totalPEOIChg)}
+                  </span>
+                </span>
+              </div>
+              <div className="flex h-[5px] rounded-full overflow-hidden bg-slate-800/80">
+                <div className="bg-gradient-to-r from-emerald-500/80 to-emerald-400/80 transition-all duration-500 rounded-l-full"
+                  style={{ width: `${chainStats.ceOIChgPct}%` }} />
+                <div className="bg-gradient-to-l from-red-500/80 to-red-400/80 transition-all duration-500 rounded-r-full"
+                  style={{ width: `${chainStats.peOIChgPct}%` }} />
+              </div>
+              <div className="flex justify-between text-[9px] font-mono text-slate-500">
+                <span className={`text-emerald-600/70 ${getValueFlashClass(chainMoves.oiChange.ce, chainMoves.oiChange.active)}`}>CE {chainStats.ceOIChgPct}%</span>
+                <span className={`text-red-600/70 ${getValueFlashClass(chainMoves.oiChange.pe, chainMoves.oiChange.active)}`}>PE {chainStats.peOIChgPct}%</span>
+              </div>
+            </div>
+
+            {/* ④ Avg IV */}
+            <div className={`flex flex-col gap-1 px-3 py-2 rounded-lg border border-violet-500/30 bg-violet-500/5 shadow-[inset_0_0_0_1px_rgba(139,92,246,0.08)] transition-all duration-200 ${getMetricCardFlashClass(chainMoves.iv)}`} title="Average Implied Volatility across all strikes">
+              <span className="text-[8px] font-bold tracking-widest uppercase text-slate-500">Avg IV</span>
+              <div className="flex items-center justify-between gap-1 font-mono">
+                <span className="text-[11px] sm:text-[12px] font-black text-violet-400">
+                  CE <span className={`text-violet-300 ${getValueFlashClass(chainMoves.iv.ce, chainMoves.iv.active)}`}>
+                    {chainStats.avgCEIV != null ? `${(chainStats.avgCEIV * 100).toFixed(1)}%` : '--'}
+                  </span>
+                </span>
+                <span className="text-[9px] text-slate-600">/</span>
+                <span className="text-[11px] sm:text-[12px] font-black text-pink-400">
+                  PE <span className={`text-pink-300 ${getValueFlashClass(chainMoves.iv.pe, chainMoves.iv.active)}`}>
+                    {chainStats.avgPEIV != null ? `${(chainStats.avgPEIV * 100).toFixed(1)}%` : '--'}
+                  </span>
+                </span>
+              </div>
+              <div className="flex h-[5px] rounded-full overflow-hidden bg-slate-800/80">
+                {chainStats.avgCEIV != null && chainStats.avgPEIV != null ? (() => {
+                  const total = chainStats.avgCEIV + chainStats.avgPEIV;
+                  const cePct = total > 0 ? Math.round((chainStats.avgCEIV / total) * 100) : 50;
+                  return (<>
+                    <div className="bg-gradient-to-r from-violet-500 to-violet-400 transition-all duration-500 rounded-l-full"
+                      style={{ width: `${cePct}%` }} />
+                    <div className="bg-gradient-to-l from-pink-500 to-pink-400 transition-all duration-500 rounded-r-full"
+                      style={{ width: `${100 - cePct}%` }} />
+                  </>);
+                })() : <div className="bg-slate-700 w-full rounded-full" />}
+              </div>
+              <div className="flex justify-between text-[9px] font-mono text-slate-500">
+                <span className="text-violet-600/70">Call side</span>
+                <span className="text-pink-600/70">Put side</span>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Intelligence Panel */}
