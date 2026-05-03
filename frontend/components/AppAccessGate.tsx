@@ -45,6 +45,7 @@ export function AppAccessGate({ children }: { children: ReactNode }) {
       const res = await fetch(API_CONFIG.endpoint('/api/app-access/session'), {
         method: 'GET',
         credentials: 'include',
+        mode: 'cors',
         headers: { 'X-Device-Id': visitorId },
         cache: 'no-store',
       });
@@ -75,6 +76,7 @@ export function AppAccessGate({ children }: { children: ReactNode }) {
       const res = await fetch(API_CONFIG.endpoint('/api/app-access/login'), {
         method: 'POST',
         credentials: 'include',
+        mode: 'cors',
         headers: {
           'Content-Type': 'application/json',
           'X-Device-Id': visitorId,
@@ -83,8 +85,8 @@ export function AppAccessGate({ children }: { children: ReactNode }) {
       });
 
       if (!res.ok) {
-        const data = await res.json().catch(() => ({ detail: 'Login failed' }));
-        setError(data?.detail || 'Invalid username or password');
+        const data = await res.json().catch(() => ({ detail: `Login failed (${res.status})` }));
+        setError(data?.detail || `Invalid username or password (${res.status})`);
         setShake(true);
         setTimeout(() => setShake(false), 600);
         setSubmitting(false);
@@ -94,8 +96,10 @@ export function AppAccessGate({ children }: { children: ReactNode }) {
       setPassword('');
       await checkSession();
       setSubmitting(false);
-    } catch {
-      setError(`Unable to reach server. Check your connection.`);
+    } catch (err) {
+      // Surface the exact endpoint to simplify production debugging on mobile browsers.
+      const message = err instanceof Error ? err.message : 'Unknown network error';
+      setError(`Unable to reach server (${message}). Endpoint: ${API_CONFIG.endpoint('/api/app-access/login')}`);
       setShake(true);
       setTimeout(() => setShake(false), 600);
       setSubmitting(false);

@@ -3,6 +3,7 @@
 import asyncio
 import logging
 from contextlib import asynccontextmanager
+from urllib.parse import urlparse
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -368,14 +369,55 @@ for _o in settings.cors_origins_list:
     _cors_base.add(_o)
 _cors_origins = list(_cors_base)
 _cors_origin_lookup = {origin.rstrip("/").lower() for origin in _cors_origins}
+
+
+def _is_subdomain_origin_allowed(origin: str) -> bool:
+    """Allow secure subdomains of configured production domains.
+
+    This handles real-world host variants like w.example.com/www.example.com
+    while still requiring HTTPS and the same registrable base domain.
+    """
+    try:
+        parsed_origin = urlparse(origin)
+    except Exception:
+        return False
+
+    if parsed_origin.scheme != "https" or not parsed_origin.hostname:
+        return False
+
+    origin_host = parsed_origin.hostname.lower()
+
+    for allowed in _cors_origins:
+        try:
+            parsed_allowed = urlparse(allowed)
+        except Exception:
+            continue
+
+        if parsed_allowed.scheme != "https" or not parsed_allowed.hostname:
+            continue
+
+        allowed_host = parsed_allowed.hostname.lower()
+        if origin_host == allowed_host or origin_host.endswith(f".{allowed_host}"):
+            return True
+
+    return False
+
+
+def _is_origin_allowed(origin: str | None) -> bool:
+    if not origin:
+        return False
+    normalized = origin.rstrip("/").lower()
+    if normalized in _cors_origin_lookup:
+        return True
+    return _is_subdomain_origin_allowed(normalized)
+
 print(f"🔧 CORS origins loaded: {_cors_origins}")
 
 
 @app.middleware("http")
 async def cors_middleware(request: Request, call_next):
     origin = request.headers.get("origin")
-    normalized_origin = (origin or "").rstrip("/").lower()
-    origin_allowed = bool(normalized_origin and normalized_origin in _cors_origin_lookup)
+    origin_allowed = _is_origin_allowed(origin)
     
     # Handle preflight OPTIONS
     if request.method == "OPTIONS" and origin:
