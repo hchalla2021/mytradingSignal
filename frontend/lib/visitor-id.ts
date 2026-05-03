@@ -14,10 +14,27 @@ function randomPart(): string {
 export function getOrCreateVisitorId(): string {
   if (typeof window === 'undefined') return 'server';
 
-  const existing = localStorage.getItem(VISITOR_ID_KEY);
-  if (existing) return existing;
+  try {
+    const existing = localStorage.getItem(VISITOR_ID_KEY);
+    if (existing) return existing;
+  } catch {
+    // Some browsers/privacy modes can block storage access.
+  }
 
   const next = `v-${Date.now().toString(36)}-${randomPart()}`;
-  localStorage.setItem(VISITOR_ID_KEY, next);
+
+  try {
+    localStorage.setItem(VISITOR_ID_KEY, next);
+  } catch {
+    // Fallback to sessionStorage when localStorage is unavailable.
+    try {
+      sessionStorage.setItem(VISITOR_ID_KEY, next);
+      const sessionValue = sessionStorage.getItem(VISITOR_ID_KEY);
+      if (sessionValue) return sessionValue;
+    } catch {
+      // Ignore and continue with in-memory value.
+    }
+  }
+
   return next;
 }

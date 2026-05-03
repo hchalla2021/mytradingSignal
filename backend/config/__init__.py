@@ -13,6 +13,7 @@ from functools import lru_cache
 from typing import Optional
 import os
 import socket
+from urllib.parse import urlparse
 
 
 # Auto-detection removed - using direct .env values
@@ -50,7 +51,7 @@ class Settings(BaseSettings):
     # Preferred format: pbkdf2_sha256$<iterations>$<salt>$<hash>
     app_access_password_hash: str = Field(default="", env="APP_ACCESS_PASSWORD_HASH")
     app_access_session_hours: int = Field(default=24, env="APP_ACCESS_SESSION_HOURS")
-    app_access_single_device: bool = Field(default=True, env="APP_ACCESS_SINGLE_DEVICE")
+    app_access_single_device: bool = Field(default=False, env="APP_ACCESS_SINGLE_DEVICE")
     
     # ==================== ADMIN ====================
     admin_restart_key: str = Field(default="", env="ADMIN_RESTART_KEY")
@@ -223,7 +224,46 @@ class Settings(BaseSettings):
         # Always include configured frontend URL
         if self.frontend_url and self.frontend_url not in origins:
             origins.append(self.frontend_url)
-        return origins
+
+        # Add canonical www/non-www variants for configured hosts.
+        expanded: list[str] = []
+        for origin in origins:
+            normalized = origin.strip().rstrip("/")
+            if not normalized:
+                continue
+            if normalized not in expanded:
+                expanded.append(normalized)
+
+            parsed = urlparse(normalized)
+            if parsed.scheme not in ("http", "https") or not parsed.hostname:
+                continue
+
+            hostname = parsed.hostname.lower()
+            netloc = parsed.netloc
+            port = f":{parsed.port}" if parsed.port else ""
+
+            if hostname.startswith("www."):
+                alt_host = hostname[4:]
+            elif "." in hostname:
+                alt_host = f"www.{hostname}"
+            else:
+                alt_host = ""
+
+            if not alt_host:
+                continue
+
+            original_host_token = parsed.hostname
+            alt_netloc = netloc.replace(original_host_token, alt_host)
+            if parsed.port and f":{parsed.port}" not in alt_netloc:
+                alt_netloc = f"{alt_host}{port}"
+            elif not parsed.port:
+                alt_netloc = alt_host
+
+            alt_origin = f"{parsed.scheme}://{alt_netloc}".rstrip("/")
+            if alt_origin not in expanded:
+                expanded.append(alt_origin)
+
+        return expanded
     
     @property
     def alert_phones_list(self) -> list:

@@ -367,16 +367,19 @@ if settings.debug:
 for _o in settings.cors_origins_list:
     _cors_base.add(_o)
 _cors_origins = list(_cors_base)
+_cors_origin_lookup = {origin.rstrip("/").lower() for origin in _cors_origins}
 print(f"🔧 CORS origins loaded: {_cors_origins}")
 
 
 @app.middleware("http")
 async def cors_middleware(request: Request, call_next):
     origin = request.headers.get("origin")
+    normalized_origin = (origin or "").rstrip("/").lower()
+    origin_allowed = bool(normalized_origin and normalized_origin in _cors_origin_lookup)
     
     # Handle preflight OPTIONS
     if request.method == "OPTIONS" and origin:
-        if origin in _cors_origins:
+        if origin_allowed:
             return JSONResponse(
                 content="OK",
                 status_code=200,
@@ -393,7 +396,7 @@ async def cors_middleware(request: Request, call_next):
     
     # Handle simple/actual requests
     response = await call_next(request)
-    if origin and origin in _cors_origins:
+    if origin and origin_allowed:
         response.headers["Access-Control-Allow-Origin"] = origin
         response.headers["Access-Control-Allow-Credentials"] = "true"
         response.headers["Vary"] = "Origin"
