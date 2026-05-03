@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { getEnvironmentConfig } from '@/lib/env-detection';
+import { getOrCreateVisitorId } from '@/lib/visitor-id';
 
 // Production-safe logging
 const isDev = process.env.NODE_ENV === 'development';
@@ -145,9 +146,13 @@ export function useMarketSocket() {
         setConnectionStatus('error');
         return;
       }
+
+      const visitorId = getOrCreateVisitorId();
+      const wsUrlWithVisitor = new URL(WS_URL);
+      wsUrlWithVisitor.searchParams.set('visitorId', visitorId);
       
-      log.debug('🔌 Attempting WebSocket connection to:', WS_URL);
-      const ws = new WebSocket(WS_URL);
+      log.debug('🔌 Attempting WebSocket connection to:', wsUrlWithVisitor.toString());
+      const ws = new WebSocket(wsUrlWithVisitor.toString());
       wsRef.current = ws;
 
       // Mobile Safari specific timeout - Safari is slower

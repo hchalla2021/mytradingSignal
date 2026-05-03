@@ -7,6 +7,7 @@ import { useAnalysis } from '@/hooks/useAnalysis';
 import { useAIAnalysis } from '@/hooks/useAIAnalysis';
 import { useIndiaVIX } from '@/hooks/useIndiaVIX';
 import { API_CONFIG } from '@/lib/api-config';
+import { getOrCreateVisitorId } from '@/lib/visitor-id';
 
 // Dynamic import for Header to prevent SSR hydration errors with time/date
 const Header = dynamic(() => import('@/components/Header'), { ssr: false });
@@ -158,11 +159,32 @@ const ICTIntelligence = dynamic(() => import('@/components/ICTIntelligence'), {
 });
 
 export default function Home() {
+  type UserAnalyticsSummary = {
+    totals: {
+      logged_in_users: number;
+      login_events: number;
+      app_users: number;
+      active_users: number;
+      visit_events: number;
+    };
+    users: Array<{
+      id: string;
+      display_name: string;
+      source: string;
+      is_active: boolean;
+      login_count: number;
+      visit_count: number;
+      last_seen_at: string;
+    }>;
+    generated_at: string;
+  };
+
   // 🔥 Force fresh mount on page load - fixes desktop browser caching
   const [currentYear, setCurrentYear] = useState(() => 
     typeof window !== 'undefined' ? new Date().getFullYear() : 2026
   );
   const [isClient, setIsClient] = useState(false);
+  const [userAnalytics, setUserAnalytics] = useState<UserAnalyticsSummary | null>(null);
   
   // Mark when we're on the client
   useEffect(() => {
@@ -261,6 +283,44 @@ export default function Home() {
       document.removeEventListener('visibilitychange', onVisibility);
     };
   }, [fetchServerOutlook]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    const visitorId = getOrCreateVisitorId();
+
+    const registerVisit = async () => {
+      try {
+        await fetch(API_CONFIG.endpoint('/api/analytics/visit'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ visitor_id: visitorId }),
+          keepalive: true,
+        });
+      } catch {
+        // Analytics is best-effort only.
+      }
+    };
+
+    const fetchAnalytics = async () => {
+      try {
+        const res = await fetch(API_CONFIG.endpoint('/api/analytics/summary?limit=6'), {
+          cache: 'no-store',
+        });
+        if (!res.ok) return;
+        const payload: UserAnalyticsSummary = await res.json();
+        setUserAnalytics(payload);
+      } catch {
+        // Keep existing analytics data.
+      }
+    };
+
+    registerVisit();
+    fetchAnalytics();
+
+    const timer = setInterval(fetchAnalytics, 10000);
+    return () => clearInterval(timer);
+  }, []);
 
   // Server-driven outlook with live tick micro-adjustment for immediacy.
   const aggregatedMarketSignal = useMemo(() => {
@@ -846,12 +906,39 @@ export default function Home() {
 
       {/* Footer */}
       <footer className="border-t border-dark-border/40 mt-auto py-4 sm:py-5 bg-gradient-to-r from-dark-surface/50 to-dark-card/50 backdrop-blur-sm">
-        <div className="w-full px-2 sm:px-4 lg:px-8 xl:px-12 flex items-center justify-between text-dark-muted text-xs sm:text-sm font-medium">
-          <span suppressHydrationWarning className="tracking-wide">MyDailyTradingSignals © {currentYear}</span>
-          <span className="flex items-center gap-2">
-            <span className="w-2 h-2 bg-bullish rounded-full animate-pulse shadow-md shadow-bullish" />
-            <span className="hidden sm:inline">Built for</span> Harikrishna Challa
-          </span>
+        <div className="w-full px-2 sm:px-4 lg:px-8 xl:px-12 text-dark-muted text-xs sm:text-sm font-medium">
+          <div className="flex items-center justify-between">
+            <span suppressHydrationWarning className="tracking-wide">MyDailyTradingSignals © {currentYear}</span>
+            <span className="flex items-center gap-2">
+              <span className="w-2 h-2 bg-bullish rounded-full animate-pulse shadow-md shadow-bullish" />
+              <span className="hidden sm:inline">Built for</span> Harikrishna Challa
+            </span>
+          </div>
+
+          <div className="mt-2.5 flex flex-wrap items-center gap-2 text-[11px] sm:text-xs">
+            <span className="px-2 py-1 rounded-md border border-cyan-500/40 bg-cyan-900/20 text-cyan-300 font-semibold">
+              Logins: {userAnalytics?.totals.logged_in_users ?? 0}
+            </span>
+            <span className="px-2 py-1 rounded-md border border-emerald-500/40 bg-emerald-900/20 text-emerald-300 font-semibold">
+              App Users: {userAnalytics?.totals.app_users ?? 0}
+            </span>
+            <span className="px-2 py-1 rounded-md border border-amber-500/40 bg-amber-900/20 text-amber-300 font-semibold">
+              Active Now: {userAnalytics?.totals.active_users ?? 0}
+            </span>
+            {(userAnalytics?.users ?? []).map((u) => (
+              <span
+                key={u.id}
+                className={`px-2 py-1 rounded-md border font-medium ${
+                  u.is_active
+                    ? 'border-green-500/50 bg-green-900/20 text-green-300'
+                    : 'border-slate-500/40 bg-slate-800/40 text-slate-300'
+                }`}
+                title={`visits:${u.visit_count} logins:${u.login_count}`}
+              >
+                {u.display_name}
+              </span>
+            ))}
+          </div>
         </div>
       </footer>
     </main>

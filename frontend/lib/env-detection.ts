@@ -6,6 +6,17 @@
 
 export type Environment = 'local' | 'production';
 
+function isLocalHostname(hostname: string): boolean {
+  const name = hostname.toLowerCase();
+  return (
+    name === 'localhost' ||
+    name === '127.0.0.1' ||
+    name.startsWith('192.168.') ||
+    name.startsWith('10.') ||
+    name.endsWith('.local')
+  );
+}
+
 /**
  * Detect current environment based on hostname
  * Can be called from both client and server
@@ -14,6 +25,14 @@ export function detectEnvironment(): Environment {
   // Check explicit environment variable
   const explicitEnv = process.env.NEXT_PUBLIC_ENVIRONMENT?.toLowerCase();
   if (explicitEnv === 'local' || explicitEnv === 'production') {
+    // Safety: if explicit local is baked into a deployed build, do not force
+    // localhost API URLs on public domains.
+    if (typeof window !== 'undefined') {
+      const host = window.location.hostname;
+      if (explicitEnv === 'local' && !isLocalHostname(host)) {
+        return 'production';
+      }
+    }
     return explicitEnv;
   }
 
@@ -36,17 +55,7 @@ export function detectEnvironment(): Environment {
   // Client-side detection based on hostname - with guard
   if (typeof window === 'undefined') return 'local';
   const hostname = window.location.hostname.toLowerCase();
-
-  // Local indicators
-  const localIndicators = [
-    hostname === 'localhost',
-    hostname === '127.0.0.1',
-    hostname.startsWith('192.168.'), // Local network
-    hostname.startsWith('10.'), // Local network
-    hostname.endsWith('.local'),
-  ];
-
-  if (localIndicators.some(Boolean)) {
+  if (isLocalHostname(hostname)) {
     return 'local';
   }
 

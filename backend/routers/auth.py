@@ -10,6 +10,7 @@ import hashlib
 import logging
 
 from services.auth import auth_service
+from services.user_analytics import user_analytics
 from config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -169,6 +170,15 @@ async def zerodha_callback(request_token: str = Query(...), status: str = Query(
         access_token = data["access_token"]
         user_id = _html.escape(str(data["user_id"]))
         user_name = _html.escape(str(data.get("user_name", "Unknown")))
+
+        # Track successful login in analytics (best effort, never block auth flow).
+        try:
+            await user_analytics.register_login(
+                user_id=user_id,
+                user_name=user_name,
+            )
+        except Exception:
+            logger.warning("Failed to record user login analytics", exc_info=True)
         
         print(f"\n✅ SESSION GENERATED SUCCESSFULLY")
         print(f"   User ID: {user_id}")

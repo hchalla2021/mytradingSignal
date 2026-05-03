@@ -29,6 +29,8 @@ from routers import (
     diagnostics,
     market_outlook,
     vix,
+    user_analytics,
+    app_access,
 )
 from routers.compass import http_router as compass_http, ws_router as compass_ws
 from routers.liquidity import http_router as liq_http, ws_router as liq_ws
@@ -413,6 +415,8 @@ app.include_router(system_health.router, prefix="/api/system", tags=["System Hea
 app.include_router(diagnostics.router, tags=["Diagnostics"])
 app.include_router(token_status.router, tags=["Token Status"])
 app.include_router(auth.router, prefix="/api/auth", tags=["Authentication"])
+app.include_router(user_analytics.router, prefix="/api/analytics", tags=["User Analytics"])
+app.include_router(app_access.router, prefix="/api/app-access", tags=["App Access"])
 
 # ✅ IMPORTANT: keep WS router clean
 app.include_router(market.router, prefix="/ws", tags=["Market Data"])

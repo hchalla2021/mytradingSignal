@@ -1,6 +1,7 @@
 """Market data WebSocket endpoint."""
 import asyncio
 import logging
+from uuid import uuid4
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect, HTTPException, Depends, Header
 from datetime import datetime
 from typing import Dict, Any, Optional
@@ -8,6 +9,7 @@ from typing import Dict, Any, Optional
 from config import get_settings
 from services.websocket_manager import manager
 from services.cache import CacheService
+from services.user_analytics import user_analytics
 
 router = APIRouter()
 settings = get_settings()
@@ -251,10 +253,20 @@ async def market_websocket(websocket: WebSocket):
     - Warns about token expiration
     """
     print("🔌 [WS-MARKET] New WebSocket connection request...")
+    session_id = f"ws-{uuid4().hex}"
+    visitor_id = websocket.query_params.get("visitorId") or (websocket.client.host if websocket.client else "guest")
+    user_id = websocket.query_params.get("userId")
+    user_name = websocket.query_params.get("userName")
     
     try:
         await manager.connect(websocket)
         print(f"✅ [WS-MARKET] Client connected. Total clients: {manager.connection_count}")
+        await user_analytics.connect_session(
+            session_id=session_id,
+            visitor_id=visitor_id,
+            user_id=user_id,
+            user_name=user_name,
+        )
     except Exception as e:
         print(f"❌ [WS-MARKET] Failed to connect: {e}")
         import traceback
@@ -516,5 +528,6 @@ async def market_websocket(websocket: WebSocket):
             heartbeat_task.cancel()
         except Exception:
             pass
+        await user_analytics.disconnect_session(session_id)
         await manager.disconnect(websocket)
         await cache.disconnect()

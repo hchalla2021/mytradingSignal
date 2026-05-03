@@ -1,6 +1,7 @@
 import type { Metadata } from 'next'
 import './globals.css'
 import { GlobalErrorHandler } from '@/components/GlobalErrorHandler'
+import { AppAccessGate } from '@/components/AppAccessGate'
 
 export const metadata: Metadata = {
   title: 'MyDailyTradingSignals - Live Market Dashboard',
@@ -41,7 +42,7 @@ export default function RootLayout({
       </head>
       <body className="min-h-screen bg-gradient-to-br from-dark-bg via-dark-surface to-dark-elevated antialiased">
         <GlobalErrorHandler />
-        {children}
+        <AppAccessGate>{children}</AppAccessGate>
         {/* Disable back-forward cache */}
         <script dangerouslySetInnerHTML={{
           __html: `

@@ -43,6 +43,14 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = 30
     refresh_token_expire_days: int = 7
+
+    # ==================== APP ACCESS LOGIN ====================
+    app_access_username: str = Field(default="admin", env="APP_ACCESS_USERNAME")
+    app_access_password: str = Field(default="", env="APP_ACCESS_PASSWORD")
+    # Preferred format: pbkdf2_sha256$<iterations>$<salt>$<hash>
+    app_access_password_hash: str = Field(default="", env="APP_ACCESS_PASSWORD_HASH")
+    app_access_session_hours: int = Field(default=24, env="APP_ACCESS_SESSION_HOURS")
+    app_access_single_device: bool = Field(default=True, env="APP_ACCESS_SINGLE_DEVICE")
     
     # ==================== ADMIN ====================
     admin_restart_key: str = Field(default="", env="ADMIN_RESTART_KEY")
