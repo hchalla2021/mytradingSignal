@@ -313,6 +313,20 @@ interface FractalPoint {
   type: 'top' | 'bottom';
 }
 
+type SetupDirection = 'bullish' | 'bearish';
+type SetupModel = 'REVERSAL_SNIPER' | 'CONTINUATION_POWER' | 'FLIP_ENTRY';
+
+interface PrioritySetup {
+  priority: 1 | 2 | 3;
+  model: SetupModel;
+  direction: SetupDirection;
+  zoneTop: number;
+  zoneBottom: number;
+  entryLine: number;
+  triggerIdx: number;
+  confidence: number;
+}
+
 function computeFractals(candles: Candle[], N = 2): FractalPoint[] {
   const pts: FractalPoint[] = [];
   if (candles.length < N * 2 + 1) return pts;
@@ -327,6 +341,263 @@ function computeFractals(candles: Candle[], N = 2): FractalPoint[] {
     if (isBot) pts.push({ idx: i, price: candles[i].l, type: 'bottom' });
   }
   return pts;
+}
+
+function getCandle(candles: Candle[], idx: number): Candle | null {
+  if (idx < 0 || idx >= candles.length) return null;
+  return candles[idx];
+}
+
+function isStrongDisplacement(candle: Candle | null): boolean {
+  if (!candle || candle.o <= 0) return false;
+  const body = Math.abs(candle.c - candle.o);
+  const range = Math.max(candle.h - candle.l, 0.0001);
+  const bodyPct = body / candle.o;
+  const bodyToRange = body / range;
+  // STRICT: body must be ≥0.5% of price AND fill ≥70% of the candle range
+  return bodyPct >= 0.005 && bodyToRange >= 0.70;
+}
+
+function normalizeZone(top: number, bottom: number): { top: number; bottom: number } {
+  return top >= bottom ? { top, bottom } : { top: bottom, bottom: top };
+}
+
+function overlapZone(
+  aTop: number,
+  aBottom: number,
+  bTop: number,
+  bBottom: number,
+): { top: number; bottom: number } | null {
+  const a = normalizeZone(aTop, aBottom);
+  const b = normalizeZone(bTop, bBottom);
+  const top = Math.min(a.top, b.top);
+  const bottom = Math.max(a.bottom, b.bottom);
+  if (top <= bottom) return null;
+  return { top, bottom };
+}
+
+function modelConfidence(parts: number[]): number {
+  const score = parts.reduce((s, p) => s + p, 0);
+  return Math.max(55, Math.min(95, Math.round(score / parts.length)));
+}
+
+// ── FINAL DECISION LOGIC ────────────────────────────────────────────────────
+// IF Priority 1 conditions met → draw zone (highest priority)
+// ELSE IF Priority 2 conditions met → draw zone
+// ELSE IF Priority 3 conditions met → draw zone
+// ELSE → DO NOT DRAW ANYTHING (returns null)
+// ─────────────────────────────────────────────────────────────────────────────
+function findPrioritySetup(
+  candles: Candle[],
+  fvg: FVG[],
+  ob: OrderBlock[],
+  liquidity: Liquidity[],
+  structure: StructureEvent[],
+): PrioritySetup | null {
+  if (candles.length < 30) return null;
+
+  const lastIdx = candles.length - 1;
+
+  const byRecent = <T extends { startIdx?: number; idx?: number; sweepIdx?: number | null }>(arr: T[]) =>
+    [...arr].sort((a, b) => ((b.startIdx ?? b.idx ?? b.sweepIdx ?? -1) - (a.startIdx ?? a.idx ?? a.sweepIdx ?? -1)));
+
+  // STRICT sweep: PREMIUM liquidity only (3+ touches), swept within 12 candles of the structure break
+  const findSweep = (dir: SetupDirection, beforeIdx: number): Liquidity | null => {
+    const liqType = dir === 'bullish' ? 'buy_side' : 'sell_side';
+    for (const lq of byRecent(liquidity.filter(l => l.swept && l.type === liqType && (l.sweepIdx ?? -1) < beforeIdx))) {
+      const sIdx = lq.sweepIdx ?? -1;
+      if (sIdx < 0) continue;
+      if (beforeIdx - sIdx > 12) continue;          // tightened: was 24
+      if (lq.touchCount < 3) continue;             // tightened: was 2 (PREMIUM sweep only)
+      return lq;
+    }
+    return null;
+  };
+
+  // Overlap must be at least 0.15% wide to be a meaningful confluence zone
+  const isWideEnough = (zone: { top: number; bottom: number }): boolean =>
+    (zone.top - zone.bottom) / zone.bottom >= 0.0015;
+
+  const fvgDir = (dir: SetupDirection) => (dir === 'bullish' ? 'bullish' : 'bearish');
+  const oppositeFvgDir = (dir: SetupDirection) => (dir === 'bullish' ? 'bearish' : 'bullish');
+
+  // Only consider structure events within the last 20 candles (fresh breaks only)
+  const chochCandidates = byRecent(
+    structure.filter(
+      ev =>
+        ev.quality === 'HIGH' &&
+        ev.displacement >= 0.003 &&              // STRICT: ≥0.3% displacement through level
+        lastIdx - ev.idx <= 20 &&               // STRICT: fresh — within last 20 candles
+        (ev.type === 'CHOCH_BULL' || ev.type === 'CHOCH_BEAR'),
+    ),
+  );
+
+  // ── P1: REVERSAL SNIPER ─────────────────────────────────────────────────
+  // ALL 5 conditions must be STRONG: sweep + displacement + PREMIUM FVG + IFVG confirm + PREMIUM OB overlap
+  for (const ev of chochCandidates) {
+    const direction: SetupDirection = ev.type === 'CHOCH_BULL' ? 'bullish' : 'bearish';
+    const sweep = findSweep(direction, ev.idx);
+    if (!sweep) continue;
+    if (!isStrongDisplacement(getCandle(candles, ev.idx))) continue;
+
+    // FVG: PREMIUM quality only, unfilled, within 8 candles of CHoCH
+    const ifvg = byRecent(
+      fvg.filter(
+        z =>
+          !z.filled &&
+          z.quality === 'PREMIUM' &&             // STRICT: PREMIUM FVG only
+          z.type === fvgDir(direction) &&
+          z.startIdx > ev.idx &&
+          z.startIdx - ev.idx <= 8,             // tightened: was 14
+      ),
+    )[0];
+    if (!ifvg) continue;
+
+    // IFVG confirmation: an opposite FVG that was invalidated (filled) within 15 candles before the IFVG
+    const invalidatedFvg = fvg.some(
+      z =>
+        z.filled &&
+        z.type === oppositeFvgDir(direction) &&
+        z.startIdx >= ev.idx - 15 &&           // tightened: was 35
+        z.startIdx < ifvg.startIdx,
+    );
+    if (!invalidatedFvg) continue;
+
+    // OB: PREMIUM quality only, unmitigated, formed within 8 candles of CHoCH
+    const overlapMatch = byRecent(
+      ob.filter(
+        zone =>
+          !zone.mitigated &&
+          zone.quality === 'PREMIUM' &&          // STRICT: PREMIUM OB only
+          zone.type === fvgDir(direction) &&
+          zone.startIdx >= ev.idx - 8,          // tightened: was 20
+      ),
+    )
+      .map(zone => overlapZone(ifvg.top, ifvg.bottom, zone.top, zone.bottom))
+      .find(z => z != null && isWideEnough(z)) ?? null;   // STRICT: meaningful overlap width
+
+    if (!overlapMatch) continue;
+
+    return {
+      priority: 1,
+      model: 'REVERSAL_SNIPER',
+      direction,
+      zoneTop: overlapMatch.top,
+      zoneBottom: overlapMatch.bottom,
+      entryLine: (overlapMatch.top + overlapMatch.bottom) / 2,
+      triggerIdx: ev.idx,
+      confidence: modelConfidence([90, 88, 86, 91, 90]),
+    };
+  }
+
+  // Only consider BOS events within the last 20 candles
+  const bosCandidates = byRecent(
+    structure.filter(
+      ev =>
+        ev.quality === 'HIGH' &&
+        ev.displacement >= 0.003 &&              // STRICT: ≥0.3% displacement
+        lastIdx - ev.idx <= 20 &&               // STRICT: fresh
+        (ev.type === 'BOS_BULL' || ev.type === 'BOS_BEAR'),
+    ),
+  );
+
+  // ── P2: CONTINUATION POWER ─────────────────────────────────────────────
+  // ALL 4 conditions must be STRONG: sweep + displacement + PREMIUM clean FVG + PREMIUM OB overlap
+  for (const ev of bosCandidates) {
+    const direction: SetupDirection = ev.type === 'BOS_BULL' ? 'bullish' : 'bearish';
+    const sweep = findSweep(direction, ev.idx);
+    if (!sweep) continue;
+    if (!isStrongDisplacement(getCandle(candles, ev.idx))) continue;
+
+    // FVG: PREMIUM quality, unfilled, ≤10% touched, within 8 candles of BOS
+    const cleanFvg = byRecent(
+      fvg.filter(
+        z =>
+          !z.filled &&
+          z.quality === 'PREMIUM' &&             // STRICT: PREMIUM FVG only
+          z.type === fvgDir(direction) &&
+          z.startIdx > ev.idx &&
+          z.startIdx - ev.idx <= 8 &&           // tightened: was 14
+          (z.partialFill ?? 0) <= 0.10,         // tightened: was 0.35 — nearly pristine gap
+      ),
+    )[0];
+    if (!cleanFvg) continue;
+
+    // OB: PREMIUM quality only, unmitigated, formed within 8 candles of BOS
+    const overlapMatch = byRecent(
+      ob.filter(
+        zone =>
+          !zone.mitigated &&
+          zone.quality === 'PREMIUM' &&          // STRICT: PREMIUM OB only
+          zone.type === fvgDir(direction) &&
+          zone.startIdx >= ev.idx - 8,          // tightened: was 20
+      ),
+    )
+      .map(zone => overlapZone(cleanFvg.top, cleanFvg.bottom, zone.top, zone.bottom))
+      .find(z => z != null && isWideEnough(z)) ?? null;   // STRICT: meaningful overlap width
+
+    if (!overlapMatch) continue;
+
+    return {
+      priority: 2,
+      model: 'CONTINUATION_POWER',
+      direction,
+      zoneTop: overlapMatch.top,
+      zoneBottom: overlapMatch.bottom,
+      entryLine: (overlapMatch.top + overlapMatch.bottom) / 2,
+      triggerIdx: ev.idx,
+      confidence: modelConfidence([84, 83, 82, 85]),
+    };
+  }
+
+  // ── P3: FLIP ENTRY ──────────────────────────────────────────────────────
+  // ALL 4 conditions must be STRONG: sweep + displacement + filled opp FVG + PREMIUM fresh IFVG (untouched)
+  for (const ev of chochCandidates) {
+    const direction: SetupDirection = ev.type === 'CHOCH_BULL' ? 'bullish' : 'bearish';
+    const sweep = findSweep(direction, ev.idx);
+    if (!sweep) continue;
+    if (!isStrongDisplacement(getCandle(candles, ev.idx))) continue;
+
+    // Broken opposite FVG: filled within 5 candles of CHoCH
+    const brokenFvg = byRecent(
+      fvg.filter(
+        z =>
+          z.filled &&
+          z.type === oppositeFvgDir(direction) &&
+          z.startIdx >= ev.idx &&
+          z.startIdx - ev.idx <= 5,             // tightened: was 8
+      ),
+    )[0];
+    if (!brokenFvg) continue;
+
+    // Fresh IFVG: PREMIUM quality, completely untouched (partialFill === 0), within 5 candles of broken FVG
+    const ifvg = byRecent(
+      fvg.filter(
+        z =>
+          !z.filled &&
+          z.quality === 'PREMIUM' &&             // STRICT: PREMIUM IFVG only
+          (z.partialFill ?? 0) === 0 &&          // STRICT: zero fill — completely fresh
+          z.type === fvgDir(direction) &&
+          z.startIdx > brokenFvg.startIdx &&
+          z.startIdx - brokenFvg.startIdx <= 5, // tightened: was 8
+      ),
+    )[0];
+    if (!ifvg) continue;
+
+    return {
+      priority: 3,
+      model: 'FLIP_ENTRY',
+      direction,
+      zoneTop: ifvg.top,
+      zoneBottom: ifvg.bottom,
+      entryLine: (ifvg.top + ifvg.bottom) / 2,
+      triggerIdx: ev.idx,
+      confidence: modelConfidence([76, 74, 78]),
+    };
+  }
+
+// ── ELSE: No priority setup qualifies → DO NOT DRAW ANYTHING ──────────────
+  return null;
 }
 
 // ── Canvas Chart ────────────────────────────────────────────────────────────
@@ -349,9 +620,10 @@ interface CandleChartProps {
   chartKey?: string;
   /** LIVE = fresh Zerodha data; CACHED or MARKET_CLOSED = stale — never distort candle H/L */
   dataSource?: string;
+  prioritySetup?: PrioritySetup | null;
 }
 
-const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, levels, spot, liveSpot, chartHeight, onMaximize, structure = [], inducements = [], fractals = [], htfMode = false, chartKey = '', dataSource = 'LIVE' }) => {
+const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, levels, spot, liveSpot, chartHeight, onMaximize, structure = [], inducements = [], fractals = [], htfMode = false, chartKey = '', dataSource = 'LIVE', prioritySetup = null }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
@@ -394,6 +666,7 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
   const htfModeRef      = useRef(htfMode);
   const chartHeightRef  = useRef(chartHeight);
   const dataSourceRef   = useRef(dataSource);
+  const prioritySetupRef = useRef(prioritySetup);
   candlesRef.current     = candles;
   fvgRef.current         = fvg;
   obRef.current          = ob;
@@ -406,6 +679,7 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
   htfModeRef.current     = htfMode;
   chartHeightRef.current = chartHeight;
   dataSourceRef.current  = dataSource;
+  prioritySetupRef.current = prioritySetup;
 
   // ── Render scheduler refs (performance) ───────────────────────────────
   // dirtyRef: render only when scene changed (data/interaction/resize)
@@ -440,6 +714,7 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
     const htfMode    = htfModeRef.current;
     const chartHeight = chartHeightRef.current;
     const dataSource = dataSourceRef.current;
+    const prioritySetup = prioritySetupRef.current;
     if (!canvas || !container || candles.length === 0) return;
 
     const effectiveSpot = liveSpotRef.current > 0 ? liveSpotRef.current : spot;
@@ -471,30 +746,59 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
     const chartW = chartRight - chartLeft;
     const chartH = chartBottom - chartTop;
 
+    // Guard: container not yet laid out (first paint) — bail, RAF will retry
+    if (W <= 0 || chartW <= 0 || chartH <= 0) return;
+
     const cw = candleWRef.current;
     const cg = candleGapRef.current;
     const candleStep = cw + cg;
 
-    // How many candles fit across the full chart width
-    const visibleCount = Math.max(1, Math.floor(chartW / candleStep));
-
-    // ── TradingView-style anchor: latest candle at 78% from left, ~22% right padding ──
-    // scroll=0 → latest candle near right edge; scroll+ → pan left into history
-    const leftCount  = Math.floor(visibleCount * 0.82) + 2;  // candles to show left of anchor
-    const rightCount = Math.floor(visibleCount * 0.26) + 2;  // candles right of anchor (mostly empty)
+    // ── Dual-mode anchor: CENTER when candles fit, TradingView-78% when they overflow ──
+    //
+    // Problem: a fixed 78% anchor leaves a huge empty black area on the left for short
+    // history timeframes (3M = 5 candles, 5M = 20 candles early session).
+    //
+    // Solution — two anchor candidates, pick the smaller (further left):
+    //
+    //   centeredAnchorX  — places the entire candle block perfectly centered in chartW.
+    //                       Formula: chartW/2 + (n-1)*step/2
+    //                       → for 5 candles: candles span from chartW/2-2*step to chartW/2+2*step
+    //                       → for 20 candles: spans chartW/2±9.5*step
+    //   defaultAnchorX   — classic TradingView: latest candle at 78% from left.
+    //
+    //   When n is small  → centeredAnchorX < defaultAnchorX → use centeredAnchorX (CENTERED)
+    //   When n overflows → centeredAnchorX > defaultAnchorX → use defaultAnchorX (TV-MODE)
+    //
+    // Crossover at: chartW/2 + (n-1)*step/2 = chartW*0.78
+    //   → (n-1)*step = chartW*0.56  → on mobile(358px,step=10): n≈21
+    //
+    // scroll=0  → latest candle at anchorX
+    // scroll+N  → pan left, older candles come into view
     const maxScroll = Math.max(0, candles.length - 1);
     scrollRef.current = Math.max(0, Math.min(scrollRef.current, maxScroll));
 
-    // Index of the candle drawn at the anchor X position
-    const centreIdx = candles.length - 1 - scrollRef.current;
+    // Index of the candle pinned to anchorX
+    const latestIdx = candles.length - 1;
+    const centreIdx = latestIdx - scrollRef.current;
 
-    // Visible index range — asymmetric: more history on left, right is mostly empty padding
-    const startIdx = Math.max(0, centreIdx - leftCount);
-    const endIdx   = Math.min(candles.length, centreIdx + rightCount + 1);
+    // centeredAnchorX: position of latest candle when entire block is centered
+    // Derivation: center of block = chartLeft + chartW/2
+    //             center = (idxToX(0) + idxToX(n-1)) / 2 = anchorX - (n-1)*step/2
+    //             → anchorX = chartLeft + chartW/2 + (n-1)*step/2
+    const centeredAnchorX = chartLeft + chartW / 2 + (latestIdx * candleStep) / 2;
+    // defaultAnchorX: TradingView-style — latest candle at 78% from left
+    const defaultAnchorX  = chartLeft + Math.round(chartW * 0.78);
+    // Use centered when few candles; TradingView when many
+    const anchorX = Math.min(centeredAnchorX, defaultAnchorX) - pixelPanRef.current;
 
-    // X anchor: latest candle (scroll=0) appears at 78% from left edge (22% right padding)
-    const centreX = chartLeft + Math.round(chartW * 0.78) - pixelPanRef.current;
-    const idxToX = (arrayIdx: number) => centreX + (arrayIdx - centreIdx) * candleStep;
+    // idxToX: positions ANY candle relative to the anchor
+    const idxToX = (arrayIdx: number) => anchorX + (arrayIdx - centreIdx) * candleStep;
+
+    // Compute which candle indices are actually visible (within chartLeft..chartRight)
+    const firstVisibleIdx = Math.max(0, Math.floor((chartLeft - anchorX) / candleStep) + centreIdx - 1);
+    const lastVisibleIdx  = Math.min(candles.length - 1, Math.ceil((chartRight - anchorX) / candleStep) + centreIdx + 1);
+    const startIdx = firstVisibleIdx;
+    const endIdx   = lastVisibleIdx + 1;
 
     // Patch last candle close with live spot (no mutation).
     // H/L of the last candle are ONLY extended when dataSource === 'LIVE':
@@ -542,23 +846,52 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
     };
     const isStrongSR = (level: number): boolean => level > 0 && levelTouchCount(level) >= 2;
 
+    // ── Zone Lifecycle Filters — Create → Track → Degrade → Delete ──────────
+    // Each zone passes through: FRESH → 1ST TOUCH → WEAKENED → CONSUMED (deleted).
+    // Only actionable zones are shown. Used zones are removed, not just faded.
+
     const strongFvg = fvg.filter(f => {
+      if (f.filled) return false;                                    // shown separately as mitigated
+      const partial = f.partialFill ?? 0;
+      if (partial > 0.60) return false;                             // heavily consumed → shown as mitigated
       const q = f.quality ?? (f.strength >= 0.80 ? 'PREMIUM' : f.strength >= 0.55 ? 'STANDARD' : 'WEAK');
-      const freshEnough = (f.candles_ago ?? 999) <= 120;
+      if (q === 'WEAK') return false;
+      const freshEnough = (f.candles_ago ?? 999) <= 80;
       const sizeable = Math.abs(f.top - f.bottom) >= (effectiveSpot * 0.0008);
-      return !f.filled && freshEnough && sizeable && (q === 'PREMIUM' || f.strength >= 0.85);
+      return freshEnough && sizeable && (q === 'PREMIUM' || f.strength >= 0.85);
+    });
+
+    // Mitigated FVG: filled OR heavily consumed (>60%) — shown as historical reference, dimmed
+    const mitigatedFvg = fvg.filter(f => {
+      const q = f.quality ?? (f.strength >= 0.80 ? 'PREMIUM' : f.strength >= 0.55 ? 'STANDARD' : 'WEAK');
+      if (q === 'WEAK') return false;
+      const recentEnough = (f.candles_ago ?? 999) <= 40;           // only recent mitigations
+      const sizeable = Math.abs(f.top - f.bottom) >= (effectiveSpot * 0.0008);
+      const isMitigated = f.filled || (f.partialFill ?? 0) > 0.60;
+      return isMitigated && recentEnough && sizeable;
     });
 
     const strongOb = ob.filter(o => {
+      if (o.mitigated) return false;                                // shown separately as mitigated
       const q = o.quality ?? (o.strength >= 0.80 ? 'PREMIUM' : o.strength >= 0.45 ? 'STANDARD' : 'WEAK');
-      const freshEnough = (o.candles_ago ?? 999) <= 120;
-      return !o.mitigated && freshEnough && (q === 'PREMIUM' || o.strength >= 0.85);
+      if (q === 'WEAK') return false;
+      const freshEnough = (o.candles_ago ?? 999) <= 80;
+      return freshEnough && (q === 'PREMIUM' || o.strength >= 0.85);
+    });
+
+    // Mitigated OB: touched/broken — shown as historical reference, dimmed with strikethrough
+    const mitigatedOb = ob.filter(o => {
+      if (!o.mitigated) return false;
+      const q = o.quality ?? (o.strength >= 0.80 ? 'PREMIUM' : o.strength >= 0.45 ? 'STANDARD' : 'WEAK');
+      if (q === 'WEAK') return false;
+      const recentEnough = (o.candles_ago ?? 999) <= 40;           // only recent mitigations
+      return recentEnough;
     });
 
     const strongLiquidity = liquidity.filter(lq => {
-      const q = lq.quality ?? (lq.touchCount >= 3 && !lq.swept ? 'PREMIUM' : lq.touchCount >= 2 && !lq.swept ? 'STANDARD' : 'WEAK');
-      const recentlySwept = lq.sweepIdx != null && (candles.length - 1 - lq.sweepIdx) <= 20;
-      return q === 'PREMIUM' || (!lq.swept && lq.touchCount >= 3) || recentlySwept;
+      if (lq.swept) return false;                                   // CONSUMED: once taken → remove immediately
+      const q = lq.quality ?? (lq.touchCount >= 3 ? 'PREMIUM' : lq.touchCount >= 2 ? 'STANDARD' : 'WEAK');
+      return q !== 'WEAK';
     });
 
     const strongStructure = structure.filter(ev => (ev.quality ?? 'LOW') === 'HIGH');
@@ -656,6 +989,61 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
       ctx.fillStyle = bg; ctx.globalAlpha = 1; ctx.fill();
       ctx.fillStyle = fg; ctx.textAlign = 'left';
       ctx.fillText(text, lx + 4, ly + lh - 4);
+      ctx.restore();
+    };
+
+    // ── Zone label system — above/below the line, never ON the line ─────────
+    // anchorY : the exact Y of the line or zone-edge being labelled
+    // above   : true  → tag floats ABOVE anchorY (clear gap below tag bottom)
+    //           false → tag floats BELOW anchorY (clear gap above tag top)
+    // X pos   : sits 14 px left from the right edge — not flush against the axis
+    const _usedTagY: number[] = [];
+    const _TAG_H = 13;
+    // Try preferred slot first, then walk away from it in the correct direction
+    const _claimSlot = (prefTagTopY: number, above: boolean): number | null => {
+      const step = _TAG_H + 2;
+      for (let i = 0; i <= 6; i++) {
+        // Try same direction first, opposite direction second
+        const offsets = i === 0 ? [0] : (above ? [-i * step, i * step] : [i * step, -i * step]);
+        for (const d of offsets) {
+          const ty = prefTagTopY + d;
+          const clamped = Math.max(chartTop + 2, Math.min(chartBottom - _TAG_H - 2, ty));
+          const cy = clamped + _TAG_H / 2;
+          if (_usedTagY.every(uy => Math.abs(uy - cy) >= _TAG_H + 1)) {
+            _usedTagY.push(cy);
+            return clamped;
+          }
+        }
+      }
+      return null;
+    };
+    const drawLineTag = (anchorY: number, text: string, color: string, above: boolean, alpha = 1.0) => {
+      ctx.save();
+      ctx.font = 'bold 8px sans-serif';
+      const tw = ctx.measureText(text).width;
+      const tagW = tw + 8;
+      // X: 14 px gap from right edge — label is clearly inside the chart, not glued to axis
+      const tx = chartRight - tagW - 14;
+      // Ideal tag position — above → bottom edge clears anchorY by 3px; below → top edge clears by 3px
+      const idealTagTopY = above ? anchorY - _TAG_H - 3 : anchorY + 3;
+      const finalTagTopY = _claimSlot(idealTagTopY, above);
+      if (finalTagTopY === null) { ctx.restore(); return; }
+      // Pill background
+      roundRect(ctx, tx, finalTagTopY, tagW, _TAG_H, 2);
+      ctx.fillStyle = `${color}18`;
+      ctx.globalAlpha = alpha;
+      ctx.fill();
+      // Pill border
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 0.7;
+      ctx.globalAlpha = 0.45 * alpha;
+      roundRect(ctx, tx, finalTagTopY, tagW, _TAG_H, 2);
+      ctx.stroke();
+      // Text
+      ctx.fillStyle = color;
+      ctx.globalAlpha = 0.92 * alpha;
+      ctx.textAlign = 'left';
+      ctx.fillText(text, tx + 4, finalTagTopY + _TAG_H - 3);
       ctx.restore();
     };
 
@@ -813,13 +1201,110 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
       ctx.stroke();
     }
 
-    // ── ORDER BLOCKS — gradient fill + accent bar + right-side label ───
+    // ── MITIGATED ORDER BLOCKS — historical reference (draw first, below active zones) ──
+    // Dimmed fill + diagonal strikethrough + dashed border + ✗OB tag
+    for (const o of mitigatedOb) {
+      const isBull = o.type === 'bullish';
+      const borderColor = isBull ? CFG.OB_BULL_BORDER : CFG.OB_BEAR_BORDER;
+      let x1: number, x2: number;
+      if (htfMode) { x1 = chartLeft; x2 = chartRight; }
+      else {
+        const relStart = o.startIdx - startIdx;
+        if (relStart >= visible.length) continue;
+        x1 = idxToX(startIdx + Math.max(0, relStart)) - candleStep / 2;
+        x2 = chartRight;
+      }
+      const y1 = priceToY(o.top);
+      const y2 = priceToY(o.bottom);
+      const zoneH = Math.abs(y2 - y1);
+      if (zoneH < 2) continue;
+
+      ctx.save();
+      // Very dim fill — consumed zone memory
+      ctx.globalAlpha = 0.04;
+      ctx.fillStyle = isBull ? CFG.OB_BULL_FILL : CFG.OB_BEAR_FILL;
+      ctx.fillRect(x1, y1, x2 - x1, zoneH);
+      // Dashed border — distinct from active
+      ctx.globalAlpha = 0.22;
+      ctx.strokeStyle = borderColor;
+      ctx.lineWidth = 0.8;
+      ctx.setLineDash([5, 5]);
+      ctx.beginPath();
+      ctx.moveTo(x1, y1); ctx.lineTo(x2, y1);
+      ctx.moveTo(x1, y2); ctx.lineTo(x2, y2);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      // Diagonal strikethrough — signals mitigation clearly
+      ctx.globalAlpha = 0.18;
+      ctx.lineWidth = 1;
+      ctx.setLineDash([4, 6]);
+      ctx.beginPath();
+      ctx.moveTo(x1, y1); ctx.lineTo(x2, y2);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.restore();
+      // Right tag — very dim, compact
+      // tag above zone-top for bearish (zone is above price), below zone-bottom for bullish
+      drawLineTag(isBull ? y2 : y1, `✗${isBull ? '▲' : '▼'}OB·MIT`, borderColor, !isBull, 0.38);
+    }
+
+    // ── MITIGATED FVG — historical reference (draw first, below active zones) ──
+    // Ghost fill + diagonal strikethrough + ✗FVG tag
+    for (const f of mitigatedFvg) {
+      const isBull = f.type === 'bullish';
+      const borderColor = isBull ? CFG.FVG_BULL_BORDER : CFG.FVG_BEAR_BORDER;
+      let x1: number, x2: number;
+      if (htfMode) { x1 = chartLeft; x2 = chartRight; }
+      else {
+        const relStart = f.startIdx - startIdx;
+        if (relStart >= visible.length) continue;
+        x1 = idxToX(startIdx + Math.max(0, relStart)) - candleStep / 2;
+        x2 = chartRight;
+      }
+      const y1 = priceToY(f.top);
+      const y2 = priceToY(f.bottom);
+      const zoneH = Math.abs(y2 - y1);
+      if (zoneH < 2) continue;
+
+      ctx.save();
+      // Very dim ghost fill
+      ctx.globalAlpha = 0.04;
+      ctx.fillStyle = isBull ? 'rgba(56,178,166,1)' : 'rgba(188,100,140,1)';
+      ctx.fillRect(x1, y1, x2 - x1, zoneH);
+      // Dashed border
+      ctx.globalAlpha = 0.20;
+      ctx.strokeStyle = borderColor;
+      ctx.lineWidth = 0.8;
+      ctx.setLineDash([4, 6]);
+      ctx.beginPath();
+      ctx.moveTo(x1, y1); ctx.lineTo(x2, y1);
+      ctx.moveTo(x1, y2); ctx.lineTo(x2, y2);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      // Full diagonal strikethrough — gap is closed
+      ctx.globalAlpha = 0.16;
+      ctx.lineWidth = 1;
+      ctx.setLineDash([3, 7]);
+      ctx.beginPath();
+      ctx.moveTo(x1, y1); ctx.lineTo(x2, y2);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      ctx.restore();
+      // Right tag — very dim
+      const partialTag = f.filled ? '·FULL' : `·${Math.round((f.partialFill ?? 1) * 100)}%`;
+      drawLineTag(isBull ? y2 : y1, `✗${isBull ? '▲' : '▼'}FVG${partialTag}`, borderColor, !isBull, 0.35);
+    }
+
+    // ── ORDER BLOCKS — gradient fill + accent bar + right-side tag label ───
     for (const o of strongOb) {
       const isBull = o.type === 'bullish';
       // Quality tier: PREMIUM (strong impulse, fresh) | STANDARD | WEAK
       const obQuality = o.quality ?? (o.strength >= 0.80 ? 'PREMIUM' : o.strength >= 0.45 ? 'STANDARD' : 'WEAK');
-      const qualityAlpha = obQuality === 'PREMIUM' ? 1.0 : obQuality === 'STANDARD' ? 0.70 : 0.30;
-      const alpha = (o.mitigated ? CFG.OB_MITIGATED_ALPHA : 1) * qualityAlpha;
+      // Lifecycle decay: FRESH (≤8 candles old) = full, OLDER = 70%, near 80-candle limit = 45%
+      const obAge = o.candles_ago ?? 0;
+      const lifecycleAlpha = obAge <= 8 ? 1.0 : obAge <= 30 ? 0.78 : 0.52;
+      const qualityAlpha = obQuality === 'PREMIUM' ? 1.0 : 0.70;
+      const alpha = lifecycleAlpha * qualityAlpha;
       const borderColor = isBull ? CFG.OB_BULL_BORDER : CFG.OB_BEAR_BORDER;
       const fillStart = isBull ? CFG.OB_BULL_FILL : CFG.OB_BEAR_FILL;
       const fillEnd   = isBull ? CFG.OB_BULL_FILL2 : CFG.OB_BEAR_FILL2;
@@ -871,30 +1356,30 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
       ctx.setLineDash([]);
       ctx.shadowBlur = 0;
       ctx.restore();
-      // Label: always shown — ★ for PREMIUM, NEW for fresh, ✗ for mitigated — queued for de-overlap
+      // Label: right-side tag — never overlaps candles
       if (zoneH > 6) {
-        const mid = (y1 + y2) / 2;
-        const isFreshOB = (o.candles_ago ?? 999) <= 6;
+        const isFreshOB = obAge <= 6;
         const starMark = obQuality === 'PREMIUM' ? '★' : '';
-        const statusStr = o.mitigated ? ' ✗' : (isFreshOB ? ' NEW' : '');
-        const tag = starMark + (isBull ? '▲ OB' : '▼ OB') + statusStr;
-        const lBg = isBull ? `rgba(234,179,8,${obQuality === 'PREMIUM' ? 0.45 : 0.28})` : `rgba(192,132,252,${obQuality === 'PREMIUM' ? 0.45 : 0.28})`;
-        // Draw inline — centred horizontally over the OB zone, vertically at zone mid
-        drawLabel((x1 + x2) / 2, mid, tag, borderColor, lBg);
+        const statusStr = isFreshOB ? ' NEW' : '';
+        const tag = starMark + (isBull ? '▲OB' : '▼OB') + statusStr;
+        // bull OB: zone is below price → tag BELOW zone bottom; bear OB: above price → tag ABOVE zone top
+        drawLineTag(isBull ? y2 : y1, tag, borderColor, !isBull, lifecycleAlpha * qualityAlpha);
       }
       ctx.globalAlpha = 1;
     }
 
-    // ── FVG ZONES — quality-tiered rendering ──────────────────────────────────
-    // PREMIUM  : solid thick borders + strong fill + bold label + proximity glow
-    // STANDARD : medium dashed borders + normal fill + compact label
-    // WEAK     : thin dotted borders + very dim fill + no label (just a faint band)
-    // FILLED   : ghost band only (shows where price already retraced)
-    // Partial fill: gradient fill showing how much of the gap is consumed
+    // ── FVG ZONES — quality-tiered rendering with lifecycle decay ─────────────
+    // FRESH (partialFill=0)        : full opacity, bold borders
+    // 1ST TOUCH (fill 1–30%)       : 75% opacity, slightly faded
+    // WEAKENED (fill 30–60%)       : 45% opacity, dim fill, thinner borders
+    // CONSUMED (fill>60% or filled): filtered out above — never reaches here
     for (const f of strongFvg) {
       const isBull   = f.type === 'bullish';
       const quality  = f.quality ?? 'STANDARD';
       const partial  = f.partialFill ?? 0;
+
+      // Lifecycle alpha — decays as zone is consumed
+      const lifecycleAlpha = partial === 0 ? 1.0 : partial < 0.30 ? 0.75 : 0.45;
 
       // Per-quality visual params
       const cfg_fvg = quality === 'PREMIUM'
@@ -904,9 +1389,7 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
             borderW:       2.2,
             midW:          1.2,
             midDash:       [6, 3],
-            borderDash:    [] as number[],      // solid border for PREMIUM
-            labelBg:       isBull ? 'rgba(56,210,160,0.45)' : 'rgba(240,80,100,0.45)',
-            labelText:     isBull ? '#c8fff0'  : '#ffe0e8',
+            borderDash:    [] as number[],
             glowEnabled:   true,
           }
         : quality === 'STANDARD'
@@ -917,19 +1400,15 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
             midW:          0.8,
             midDash:       [4, 4],
             borderDash:    [5, 4],
-            labelBg:       isBull ? 'rgba(56,178,166,0.28)' : 'rgba(188,100,140,0.28)',
-            labelText:     isBull ? '#b0f0e8'  : '#f0c0d8',
             glowEnabled:   true,
           }
-        : {  // WEAK
+        : {  // WEAK — filtered above, but safety fallback
             fillAlpha:     0.025,
             hatchAlpha:    0.04,
             borderW:       0.6,
             midW:          0,
             midDash:       [] as number[],
             borderDash:    [3, 6],
-            labelBg:       '',
-            labelText:     '',
             glowEnabled:   false,
           };
 
@@ -958,43 +1437,22 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
       const zoneH = Math.abs(y2 - y1);
       if (zoneH < 1) continue;
 
-      // ── FILLED FVG: ghost band only ────────────────────────────────────
-      if (f.filled) {
-        ctx.fillStyle = CFG.FVG_FILLED_FILL;
-        ctx.fillRect(x1, y1, x2 - x1, zoneH);
-        // Draw a thin strikethrough line to mark it as consumed
-        ctx.save();
-        ctx.strokeStyle = borderColor;
-        ctx.globalAlpha = 0.18;
-        ctx.lineWidth = 1;
-        ctx.setLineDash([4, 6]);
-        ctx.beginPath();
-        ctx.moveTo(x1, (y1 + y2) / 2); ctx.lineTo(x2, (y1 + y2) / 2);
-        ctx.stroke();
-        ctx.setLineDash([]);
-        ctx.globalAlpha = 1;
-        ctx.restore();
-        continue;
-      }
+      // Filled FVGs are removed by the filter above — nothing to ghost-render.
 
       // ── PARTIAL FILL: split fill — consumed (grey) vs remaining (colored) ──
       const consumedH = zoneH * partial;
       const remainH   = zoneH - consumedH;
-      // For bullish FVG: price comes down from top → consumed portion is at TOP
-      // For bearish FVG: price comes up from bottom → consumed portion is at BOTTOM
+      // Apply lifecycle opacity to all fills
+      ctx.globalAlpha = lifecycleAlpha;
       if (partial > 0) {
         if (isBull) {
-          // consumed band at top (y1 = top)
           ctx.fillStyle = 'rgba(148,163,184,0.06)';
           ctx.fillRect(x1, y1, x2 - x1, consumedH);
-          // remaining band at bottom
           ctx.fillStyle = fillColor;
           ctx.fillRect(x1, y1 + consumedH, x2 - x1, remainH);
         } else {
-          // consumed band at bottom (y2 = bottom)
           ctx.fillStyle = 'rgba(148,163,184,0.06)';
           ctx.fillRect(x1, y2 - consumedH, x2 - x1, consumedH);
-          // remaining at top
           ctx.fillStyle = fillColor;
           ctx.fillRect(x1, y1, x2 - x1, remainH);
         }
@@ -1002,10 +1460,12 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
         ctx.fillStyle = fillColor;
         ctx.fillRect(x1, y1, x2 - x1, zoneH);
       }
+      ctx.globalAlpha = 1;
 
-      // ── HATCH (clip to zone) ──────────────────────────────────────────────
+      // ── HATCH (clip to zone, lifecycle-dimmed) ────────────────────────────
       if (quality !== 'WEAK') {
         ctx.save();
+        ctx.globalAlpha = lifecycleAlpha;
         ctx.beginPath();
         ctx.rect(x1, y1, x2 - x1, zoneH);
         ctx.clip();
@@ -1025,7 +1485,7 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
       const fvgProx = cfg_fvg.glowEnabled ? zoneProx(f.top, f.bottom) : 'off';
       if (fvgProx !== 'off') alertZones.push({ label: `${isBull ? '▲' : '▼'}FVG${quality === 'PREMIUM' ? '★' : ''}`, color: borderColor });
 
-      // ── BORDERS (top + bottom lines) ─────────────────────────────────────
+      // ── BORDERS (top + bottom lines, lifecycle-dimmed) ───────────────────
       ctx.save();
       if (fvgProx !== 'off') {
         ctx.shadowColor = borderColor;
@@ -1038,22 +1498,22 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
           ? cfg_fvg.borderW + 0.6
           : cfg_fvg.borderW;
       ctx.setLineDash(cfg_fvg.borderDash);
-      ctx.globalAlpha = quality === 'WEAK' ? 0.35 : 1;
+      ctx.globalAlpha = lifecycleAlpha * (quality === 'WEAK' ? 0.35 : 1);
       ctx.beginPath();
-      ctx.moveTo(x1, y1); ctx.lineTo(x2, y1);  // top border
-      ctx.moveTo(x1, y2); ctx.lineTo(x2, y2);  // bottom border
+      ctx.moveTo(x1, y1); ctx.lineTo(x2, y1);
+      ctx.moveTo(x1, y2); ctx.lineTo(x2, y2);
       ctx.stroke();
       ctx.setLineDash([]);
       ctx.shadowBlur = 0;
       ctx.restore();
 
-      // ── MID LINE (equilibrium / 50% level) ────────────────────────────────
+      // ── MID LINE (equilibrium / 50% level) ──────────────────────────────
       if (cfg_fvg.midW > 0) {
         const midY = (y1 + y2) / 2;
         ctx.save();
         ctx.strokeStyle = borderColor;
         ctx.lineWidth   = cfg_fvg.midW;
-        ctx.globalAlpha = quality === 'PREMIUM' ? 0.55 : 0.30;
+        ctx.globalAlpha = lifecycleAlpha * (quality === 'PREMIUM' ? 0.55 : 0.30);
         ctx.setLineDash(cfg_fvg.midDash);
         ctx.beginPath();
         ctx.moveTo(x1, midY); ctx.lineTo(x2, midY);
@@ -1062,14 +1522,13 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
         ctx.restore();
       }
 
-      // ── PARTIAL FILL DIVIDER LINE ─────────────────────────────────────────
-      // Dashed line showing exactly where the partial fill reached
+      // ── PARTIAL FILL DIVIDER LINE ────────────────────────────────────────
       if (partial > 0.05 && partial < 0.95) {
         const divY = isBull ? y1 + consumedH : y2 - consumedH;
         ctx.save();
         ctx.strokeStyle = borderColor;
         ctx.lineWidth = 1;
-        ctx.globalAlpha = 0.5;
+        ctx.globalAlpha = 0.4 * lifecycleAlpha;
         ctx.setLineDash([3, 3]);
         ctx.beginPath();
         ctx.moveTo(x1, divY); ctx.lineTo(x2, divY);
@@ -1078,19 +1537,15 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
         ctx.restore();
       }
 
-      // ── LABEL (PREMIUM + STANDARD only, skip WEAK) ────────────────────────
-      // Always show FVG label regardless of quality tier — queued for de-overlap
+      // ── LABEL: right-side tag only — never overlaps candles ──────────────
       if (zoneH > 6) {
         const isFresh = (f.candles_ago ?? 999) <= 8;
-        const gapPts  = Math.round(f.top - f.bottom);
         const star    = quality === 'PREMIUM' ? '★' : '';
-        const freshTag = isFresh ? ' NEW' : '';
-        const partialTag = partial > 0.1 ? ` ${Math.round(partial * 100)}%↓` : '';
-        const tag = `${star}${isBull ? '▲' : '▼'} FVG ${gapPts}${freshTag}${partialTag}`;
-        const lBg  = cfg_fvg.labelBg  || (isBull ? 'rgba(56,178,166,0.35)' : 'rgba(188,100,140,0.35)');
-        const lTxt = cfg_fvg.labelText || borderColor;
-        // Draw inline — centred over zone, vertically at zone midpoint
-        drawLabel((x1 + x2) / 2, (y1 + y2) / 2, tag, lTxt, lBg);
+        const freshTag = isFresh ? '·NEW' : '';
+        const partialTag = partial > 0.10 ? `·${Math.round(partial * 100)}%` : '';
+        const tag = `${star}${isBull ? '▲' : '▼'}FVG${freshTag}${partialTag}`;
+        // bull FVG: zone is below price → tag BELOW zone bottom; bear FVG: above price → tag ABOVE zone top
+        drawLineTag(isBull ? y2 : y1, tag, borderColor, !isBull, lifecycleAlpha);
       }
     }
 
@@ -1140,13 +1595,9 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
       ctx.globalAlpha = 1;
       ctx.restore();
 
-      // Name label: sits at ~60 % chart width, above for H/RES, below for L/SUP
-      const labelAbove = label.includes(' H') || label === 'RES';
-      drawLabel(
-        chartLeft + (chartRight - chartLeft) * 0.6,
-        labelAbove ? y - 9 : y + 9,
-        label, color, 'rgba(13,17,23,0.90)',
-      );
+      // H/RES lines: tag BELOW the line (avoid top of chart); L/SUP: tag ABOVE the line
+      const _lvlAbove = label.includes('L') || label === 'SUP';
+      drawLineTag(y, label, color, _lvlAbove);
       // Price pill: right price-axis strip (standard axis annotation)
       ctx.save();
       ctx.shadowBlur = 0;
@@ -1334,25 +1785,138 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
         diamond(chartRight - 5, y);
       }
 
-      // ── STEP 6: Sweep/approach info is already shown in the right-axis pill ──
-      // (removed floating text at chartLeft+18 — it overlapped candles)
-
-      // ── STEP 7: Right-axis label pill ─────────────────────────────
-      const liqTag  = lq.swept
-        ? `${isSell ? 'SSL ✗' : 'BSL ✗'}`
-        : activeSweep
-          ? `${isSell ? '⚡SSL' : '⚡BSL'} ×${lq.touchCount}`
-          : `${isSell ? 'SSL' : 'BSL'} ×${lq.touchCount}`;
-      const liqFull = `${liqTag}  ${fmtPrice(lq.level)}`;
-      // Draw inline — SSL above line, BSL below line, at 70 % chart width
-      const liqBg = lq.swept ? 'rgba(148,163,184,0.22)' : color;
-      const liqFg = lq.swept ? '#94a3b8' : '#0d1117';
-      drawLabel(
-        chartLeft + (chartRight - chartLeft) * 0.7,
-        isSell ? y - 9 : y + 9,
-        liqFull, liqFg, liqBg,
-      );
+      // ── STEP 6: Right-side tag — never overlaps candles ──────────────
+      const liqTag = activeSweep
+        ? `${isSell ? '⚡SSL' : '⚡BSL'}×${lq.touchCount}`
+        : `${isSell ? 'SSL' : 'BSL'}×${lq.touchCount}`;
+      // SSL (above price): tag BELOW the line; BSL (below price): tag ABOVE the line
+      drawLineTag(y, liqTag, baseCol, !isSell);
     }
+
+    // ── PRIORITY ENTRY LINE ────────────────────────────────────────────────────
+    // FINAL DECISION LOGIC: only ONE of P1/P2/P3 draws — strict waterfall.
+    // findPrioritySetup() returns null when no conditions are met → nothing drawn.
+    if (prioritySetup) {  // IF P1 → draw P1; ELSE IF P2 → draw P2; ELSE IF P3 → draw P3
+      const y = priceToY(prioritySetup.entryLine);
+      if (y >= chartTop && y <= chartBottom) {
+        const isBull  = prioritySetup.direction === 'bullish';
+        const p       = prioritySetup.priority;
+
+        // Eye-friendly color palette — medium saturation, never harsh
+        const pColor  = p === 1
+          ? (isBull ? '#38bdf8' : '#f87171')   // sky-400 / red-400
+          : p === 2
+            ? (isBull ? '#34d399' : '#fbbf24') // emerald-400 / amber-400
+            : (isBull ? '#818cf8' : '#c084fc'); // indigo-400 / purple-400
+
+        const pLabel  = p === 1 ? 'P1 · REVERSAL SNIPER'
+          : p === 2   ? 'P2 · CONTINUATION POWER'
+          :               'P3 · FLIP ENTRY';
+
+        // Gentle breathing pulse — subtle, not distracting
+        const pulse   = p === 1 ? 0.72 + 0.18 * Math.sin(_t / 320)
+          : p === 2             ? 0.72 + 0.14 * Math.sin(_t / 480)
+          :                       0.70 + 0.10 * Math.sin(_t / 600);
+
+        ctx.save();
+
+        // ── Layer 1: Wide soft ambient glow (very low alpha — just a warm halo) ──
+        ctx.shadowBlur  = 0;
+        ctx.strokeStyle = pColor;
+        ctx.lineWidth   = p === 1 ? 14 : p === 2 ? 11 : 8;
+        ctx.globalAlpha = 0.04 * pulse;
+        ctx.setLineDash([]);
+        ctx.beginPath();
+        ctx.moveTo(chartLeft + 4, y);
+        ctx.lineTo(chartRight - 4, y);
+        ctx.stroke();
+
+        // ── Layer 2: Medium glow band ──
+        ctx.lineWidth   = p === 1 ? 6 : p === 2 ? 5 : 4;
+        ctx.globalAlpha = 0.10 * pulse;
+        ctx.beginPath();
+        ctx.moveTo(chartLeft + 4, y);
+        ctx.lineTo(chartRight - 4, y);
+        ctx.stroke();
+
+        // ── Layer 3: Crisp main line — sharp but not aggressive ──
+        ctx.shadowColor  = pColor;
+        ctx.shadowBlur   = p === 1 ? 5 : p === 2 ? 4 : 3;   // tight glow only
+        ctx.lineWidth    = p === 1 ? 1.8 : p === 2 ? 1.5 : 1.2;
+        ctx.globalAlpha  = 0.88 * pulse;
+        ctx.setLineDash(p === 1 ? [] : p === 2 ? [7, 4] : [3, 5]);
+        ctx.beginPath();
+        ctx.moveTo(chartLeft + 4, y);
+        ctx.lineTo(chartRight - 4, y);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.shadowBlur = 0;
+
+        // ── Layer 4: Spark entry marker — small filled diamond at 38.2% width ──
+        // One small accent diamond marks the exact entry confluence point.
+        const sparkX = chartLeft + (chartRight - chartLeft) * 0.382;
+        const sr     = p === 1 ? 4.5 : p === 2 ? 3.8 : 3.2;  // half-size of diamond
+        ctx.globalAlpha = 0.90 * pulse;
+        ctx.fillStyle   = pColor;
+        ctx.shadowColor = pColor;
+        ctx.shadowBlur  = p === 1 ? 8 : 6;
+        ctx.beginPath();
+        ctx.moveTo(sparkX,      y - sr);  // top
+        ctx.lineTo(sparkX + sr, y);       // right
+        ctx.lineTo(sparkX,      y + sr);  // bottom
+        ctx.lineTo(sparkX - sr, y);       // left
+        ctx.closePath();
+        ctx.fill();
+        ctx.shadowBlur = 0;
+
+        // ── Layer 5: Tiny tick marks every ~60px along the line (eye-friendly rhythm) ──
+        ctx.strokeStyle  = pColor;
+        ctx.lineWidth    = 1;
+        ctx.globalAlpha  = 0.22 * pulse;
+        const tickSpacing = 60;
+        for (let tx = chartLeft + 4 + tickSpacing; tx < chartRight - 4; tx += tickSpacing) {
+          if (Math.abs(tx - sparkX) < sr + 4) continue; // skip near diamond
+          ctx.beginPath();
+          ctx.moveTo(tx, y - 3);
+          ctx.lineTo(tx, y + 3);
+          ctx.stroke();
+        }
+
+        ctx.restore();
+
+        // ── Label badge — floats ABOVE line for bull, BELOW for bear ──────
+        // Anchored to the entry line Y; never overlaps the line itself.
+        const labelAbove = isBull;   // bull entry: badge above line; bear entry: badge below
+        const text    = `${pLabel}  ${isBull ? '▲' : '▼'}  ${prioritySetup.confidence}%`;
+        ctx.save();
+        ctx.font      = 'bold 9px sans-serif';
+        const tw      = ctx.measureText(text).width;
+        const bw = tw + 12; const bh = 16;
+        // X: 14 px from right edge (aligned with drawLineTag)
+        const bx = chartRight - bw - 14;
+        // Y: above → bottom of badge clears line by 4px; below → top of badge clears line by 4px
+        const rawBy = labelAbove ? y - bh - 4 : y + 4;
+        const by = Math.max(chartTop + 2, Math.min(chartBottom - bh - 2, rawBy));
+        // Badge background — subtle, readable
+        ctx.globalAlpha = 0.82;
+        roundRect(ctx, bx, by, bw, bh, 4);
+        ctx.fillStyle   = `${pColor}26`;
+        ctx.fill();
+        // Badge border — breathes with pulse
+        ctx.globalAlpha = 0.50 * pulse;
+        ctx.strokeStyle  = pColor;
+        ctx.lineWidth    = 0.8;
+        roundRect(ctx, bx, by, bw, bh, 4);
+        ctx.stroke();
+        // Badge text
+        ctx.globalAlpha  = 0.95;
+        ctx.fillStyle    = '#f1f5f9';
+        ctx.textAlign    = 'left';
+        ctx.fillText(text, bx + 5, by + bh - 4);
+        ctx.restore();
+      }
+    }
+    // ELSE: prioritySetup is null → DO NOT DRAW ANYTHING (block above skipped entirely)
 
     // ── CURRENT PRICE LINE (dashed only — badge drawn after price axis to stay on top) ──
     if (effectiveSpot > 0) {
@@ -1378,12 +1942,20 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
     }
 
     // ── CANDLES — Zerodha Kite exact style ─────────────────────────────
+    // Defensive state reset: zone/line rendering above may leave globalAlpha, shadowBlur
+    // or lineDash in a non-default state despite save/restore pairs (e.g. early returns,
+    // exceptions, or DPR-scaling artefacts). Explicitly reset so candles always render.
+    ctx.globalAlpha = 1;
+    ctx.shadowBlur  = 0;
+    ctx.setLineDash([]);
     // Both bull and bear are solid filled rectangles.
     // Wick is 1px, same color as body. No glow, no stroke on body.
     for (let i = 0; i < visible.length; i++) {
       const c = visible[i];
       const x = idxToX(startIdx + i);
-      if (x - cw / 2 < chartLeft || x - cw / 2 > chartRight) continue;
+      // Correct visibility check: skip only if candle is ENTIRELY off-screen
+      // (right edge < chartLeft  OR  left edge > chartRight)
+      if (x + cw / 2 < chartLeft || x - cw / 2 > chartRight) continue;
 
       const isBull = c.c >= c.o;
       const bodySize = Math.abs(c.c - c.o);
@@ -1902,7 +2474,7 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
       ctx.fillText(fmtPrice(crossPrice), chartRight + CFG.PRICE_AXIS_W / 2, my + 4);
 
       // Time cursor label — find nearest candle by x position
-      const cIdx = Math.round((mx - centreX) / candleStep + centreIdx - startIdx);
+      const cIdx = Math.round((mx - anchorX) / candleStep + centreIdx - startIdx);
       if (cIdx >= 0 && cIdx < visible.length) {
         const tLabel = fmtTime(visible[cIdx].t);
         const tw = ctx.measureText(tLabel).width + 10;
@@ -2000,7 +2572,7 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
   // Mark scene dirty when data changes (no callback recreation needed)
   useEffect(() => {
     markDirty();
-  }, [candles, fvg, ob, liquidity, levels, spot, liveSpot, structure, inducements, fractals, dataSource, markDirty]);
+  }, [candles, fvg, ob, liquidity, levels, spot, liveSpot, structure, inducements, fractals, dataSource, prioritySetup, markDirty]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -2084,9 +2656,13 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
       const candleStep = candleWRef.current + candleGapRef.current;
       const rect = canvas.getBoundingClientRect();
       const chartRight = rect.width - CFG.PRICE_AXIS_W;
-      const chartW = chartRight;
-      const centreIdxBefore = candlesRef.current.length - 1 - Math.max(0, scrollRef.current);
-      const centreXBefore = Math.round(chartW * 0.78) - pixelPanRef.current;
+      const chartW = chartRight; // chartLeft=0
+      const n = candlesRef.current.length;
+      const centreIdxBefore = n - 1 - Math.max(0, scrollRef.current);
+      // Mirror dual-mode anchor from render()
+      const centeredAnchorX = chartW / 2 + ((n - 1) * candleStep) / 2;
+      const defaultAnchorX  = Math.round(chartW * 0.78);
+      const centreXBefore = Math.min(centeredAnchorX, defaultAnchorX) - pixelPanRef.current;
       const mouseX = e.clientX - rect.left;
       const anchorArrayIdxBefore = centreIdxBefore + (mouseX - centreXBefore) / candleStep;
 
@@ -2738,6 +3314,12 @@ const SymbolChartCard = memo<{ data: SymbolChartData | null; name: string; liveS
     );
   }, [candles, fvgList, obList, liqList, levels, liveSpot, data?.spot, structure, inducements, fractals]);
 
+  // Strict priority setup selector (P1 > P2 > P3).
+  // Returns a single highest-conviction setup to avoid chart clutter.
+  const prioritySetup = useMemo(() => {
+    return findPrioritySetup(candles, fvgList, obList, liqList, structure);
+  }, [candles, fvgList, obList, liqList, structure]);
+
   // MTF alignment — compare 3m vs 5m signals to measure confluence confidence.
   // Computed independently from the user-selected TF so the badge is always consistent.
   const mtfSignal = useMemo(() => {
@@ -2969,6 +3551,7 @@ const SymbolChartCard = memo<{ data: SymbolChartData | null; name: string; liveS
         htfMode={htfMode}
         chartKey={`${name}-${timeframe}`}
         dataSource={data.dataSource}
+        prioritySetup={prioritySetup}
       />
 
       {/* ── Pop-up chart window — no blur, 3-button window chrome ── */}
@@ -3068,6 +3651,7 @@ const SymbolChartCard = memo<{ data: SymbolChartData | null; name: string; liveS
                   htfMode={htfMode}
                   chartKey={`${name}-${timeframe}-modal`}
                   dataSource={data.dataSource}
+                  prioritySetup={prioritySetup}
                 />
               </div>
             )}
@@ -3086,6 +3670,27 @@ const SymbolChartCard = memo<{ data: SymbolChartData | null; name: string; liveS
       <div className="px-3 py-2 border-t border-slate-700/30 bg-slate-900/40 space-y-1.5">
         {/* Row 1: Level proximity intel + last structure event */}
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+          {prioritySetup && (
+            <span
+              className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold border ${
+                prioritySetup.priority === 1
+                  ? 'bg-cyan-500/15 text-cyan-300 border-cyan-400/40'
+                  : prioritySetup.priority === 2
+                    ? 'bg-emerald-500/15 text-emerald-300 border-emerald-400/40'
+                    : 'bg-blue-500/15 text-blue-300 border-blue-400/40'
+              }`}
+              title={`Entry line at ${fmtPrice(prioritySetup.entryLine)} from strict overlap model`}
+            >
+              P{prioritySetup.priority}
+              {prioritySetup.model === 'REVERSAL_SNIPER'
+                ? ' SNIPER'
+                : prioritySetup.model === 'CONTINUATION_POWER'
+                  ? ' CONTINUATION'
+                  : ' FLIP'}
+              {prioritySetup.direction === 'bullish' ? ' ▲' : ' ▼'}
+              <span className="font-mono opacity-80">{prioritySetup.confidence}%</span>
+            </span>
+          )}
           {/* Nearest level proximity chip */}
           {nearestLevel && (
             <span

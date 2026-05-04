@@ -387,13 +387,15 @@ export function useStrikeIntelligence() {
     // Start REST polling fallback immediately in case WS takes time
     if (!pollRef.current) {
       pollRef.current = setInterval(() => {
-        if (wsRef.current?.readyState === WebSocket.OPEN) return; // WS is live, skip
+        // Always keep a lightweight REST backup poll alive.
+        // If WS is connected but backend stops pushing updates, this keeps
+        // strike OI/volume cards moving with fresh snapshot data.
         fetchWithFallback()
           .then(json => {
             if (json?.data && Object.keys(json.data).length > 0) mergeData(json.data);
           })
           .catch(() => {});
-      }, 1000);
+      }, 3000);
     }
 
     return () => {

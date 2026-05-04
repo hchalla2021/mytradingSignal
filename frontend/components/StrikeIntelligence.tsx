@@ -956,8 +956,10 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
     const totalCEOI  = strikes.reduce((a, s) => a + s.ce.oi, 0);
     const totalPEOI  = strikes.reduce((a, s) => a + s.pe.oi, 0);
     const totalOI    = totalCEOI + totalPEOI;
-    const totalCEOIChg = strikes.reduce((a, s) => a + (s.ce.oiChange ?? 0), 0);
-    const totalPEOIChg = strikes.reduce((a, s) => a + (s.pe.oiChange ?? 0), 0);
+    // Use gross OI change (sum of absolute per-strike deltas) so opposite moves
+    // across strikes don't net to 0 and freeze the chain-level OI Change widget.
+    const totalCEOIChg = strikes.reduce((a, s) => a + Math.abs(s.ce.oiChange ?? 0), 0);
+    const totalPEOIChg = strikes.reduce((a, s) => a + Math.abs(s.pe.oiChange ?? 0), 0);
     // Weighted average IV (only where IV is available and > 0)
     const ceIVArr = strikes.map(s => s.ce.signals?.iv).filter((v): v is number => v != null && v > 0);
     const peIVArr = strikes.map(s => s.pe.signals?.iv).filter((v): v is number => v != null && v > 0);
