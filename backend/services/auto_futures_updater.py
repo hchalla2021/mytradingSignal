@@ -63,22 +63,25 @@ class AutoFuturesUpdater:
             return False
     
     def _should_update(self) -> bool:
-        """Check if we're within 7 days of expiry or already expired"""
+        """Check if we're within 7 days of expiry or already past previous month's expiry"""
         today = datetime.now()
         
         # Futures expire on last Thursday of month
-        # Check if we're in last week of month
-        last_day = self._get_last_day_of_month(today)
-        last_thursday = self._get_last_thursday(today.year, today.month)
+        current_expiry = self._get_last_thursday(today.year, today.month)
+        days_to_expiry = (current_expiry - today).days
         
-        # Update if within 7 days of expiry or after expiry
-        days_to_expiry = (last_thursday - today).days
+        # Check if last month's contracts have already expired
+        prev_month = today.month - 1 if today.month > 1 else 12
+        prev_year = today.year if today.month > 1 else today.year - 1
+        prev_expiry = self._get_last_thursday(prev_year, prev_month)
+        already_expired = today > prev_expiry
         
         print(f"📅 Today: {today.date()}")
-        print(f"📅 Next Expiry: {last_thursday.date()}")
-        print(f"📅 Days to Expiry: {days_to_expiry}")
+        print(f"📅 Previous Expiry: {prev_expiry.date()} (already passed: {already_expired})")
+        print(f"📅 Current Month Expiry: {current_expiry.date()} (days away: {days_to_expiry})")
         
-        return days_to_expiry <= 7  # Update in last week
+        # Update if already past previous expiry OR within 7 days of current expiry
+        return already_expired or days_to_expiry <= 7
     
     def _get_last_thursday(self, year: int, month: int) -> datetime:
         """Get last Thursday of given month"""
@@ -212,9 +215,15 @@ NIFTY_FUT_TOKEN={new_tokens['NIFTY']}
 BANKNIFTY_FUT_TOKEN={new_tokens['BANKNIFTY']}
 SENSEX_FUT_TOKEN={new_tokens['SENSEX']}"""
             
-            # Replace the futures section
+            # Replace the active futures section (last occurrence, to handle commented-out old sections)
             pattern = r'# FUTURES TOKENS FOR VOLUME DATA.*?\nSENSEX_FUT_TOKEN=\d+'
-            new_content = re.sub(pattern, futures_section, content, flags=re.DOTALL)
+            matches = list(re.finditer(pattern, content, flags=re.DOTALL))
+            if not matches:
+                print("❌ Could not find FUTURES TOKENS section in .env")
+                return False
+            # Replace the last (active) match
+            last_match = matches[-1]
+            new_content = content[:last_match.start()] + futures_section + content[last_match.end():]
             
             # Write back to file
             with open(self.env_file, 'w', encoding='utf-8') as f:

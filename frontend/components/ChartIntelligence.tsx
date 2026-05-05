@@ -224,8 +224,8 @@ function computeStructure(candles: Candle[], LB = 4): StructureEvent[] {
           const isChoCh = lastBearIdx > lastBullIdx;
           // Measure how far price closed beyond the level — larger = more institutional conviction
           const disp = sh.p > 0 ? (candles[i].c - sh.p) / sh.p : 0;
-          // CHoCH needs a stronger break (0.6%) to qualify HIGH; BOS needs 0.4%
-          const threshold = isChoCh ? 0.006 : 0.004;
+          // CHoCH needs a stronger break than BOS, but keep thresholds practical for live intraday charts.
+          const threshold = isChoCh ? 0.0035 : 0.0025;
           const quality: 'HIGH' | 'LOW' = disp >= threshold ? 'HIGH' : 'LOW';
           events.push({ idx: i, level: sh.p, type: isChoCh ? 'CHOCH_BULL' : 'BOS_BULL', quality, displacement: disp });
           lastBullIdx = i;
@@ -245,7 +245,7 @@ function computeStructure(candles: Candle[], LB = 4): StructureEvent[] {
         if (i > lastBullIdx + 1 && i > lastBearIdx + 1) {
           const isChoCh = lastBullIdx > lastBearIdx;
           const disp = sl.p > 0 ? (sl.p - candles[i].c) / sl.p : 0;
-          const threshold = isChoCh ? 0.006 : 0.004;
+          const threshold = isChoCh ? 0.0035 : 0.0025;
           const quality: 'HIGH' | 'LOW' = disp >= threshold ? 'HIGH' : 'LOW';
           events.push({ idx: i, level: sl.p, type: isChoCh ? 'CHOCH_BEAR' : 'BOS_BEAR', quality, displacement: disp });
           lastBearIdx = i;
@@ -343,6 +343,140 @@ function computeFractals(candles: Candle[], N = 2): FractalPoint[] {
   return pts;
 }
 
+// ── Zone Prediction Engine — Institutional Break/Reject Forecaster ────────────
+// Predicts whether price will BREAK through or REJECT from a zone/level.
+// Factors: momentum, volume, structure context, zone freshness, candle body.
+// Pure function — zero async, zero state. Called in RAF only when near spot.
+
+interface ZonePrediction {
+  outcome: 'BREAK' | 'REJECT' | 'WATCH';
+  direction: 'UP' | 'DOWN';
+  confidence: number; // 55–92
+}
+
+function predictZoneOutcome(
+  zoneTop: number,
+  zoneBottom: number,
+  candles: Candle[],
+  spot: number,
+  structure: StructureEvent[],
+  isFreshZone: boolean,
+  touchCount = 1,
+  partialFill = 0,
+): ZonePrediction {
+  if (candles.length < 10 || zoneTop <= 0)
+    return { outcome: 'WATCH', direction: 'UP', confidence: 52 };
+
+  const zoneMid     = (zoneTop + zoneBottom) / 2;
+  const zoneIsAbove = zoneMid > spot;
+
+  // ── Factor 1: Momentum (0–1) ─────────────────────────────────────────────
+  // How many of the last 5 candles are moving TOWARD the zone?
+  const LOOK   = Math.min(5, candles.length - 1);
+  const recent = candles.slice(candles.length - 1 - LOOK, candles.length - 1);
+  let bullCnt = 0, bearCnt = 0;
+  for (const c of recent) {
+    if (c.c > c.o) bullCnt++;
+    else if (c.c < c.o) bearCnt++;
+  }
+  const approachRatio  = zoneIsAbove
+    ? bullCnt / Math.max(recent.length, 1)
+    : bearCnt / Math.max(recent.length, 1);
+  const priceStart     = candles[Math.max(0, candles.length - 6)].c || spot;
+  const priceDeltaPct  = priceStart > 0 ? (spot - priceStart) / priceStart : 0;
+  const momentumDir    = zoneIsAbove ? priceDeltaPct : -priceDeltaPct; // +ve = toward zone
+  const momentumScore  = Math.min(1, Math.max(0,
+    approachRatio * 0.65 + Math.min(1, Math.max(-1, momentumDir * 40)) * 0.35,
+  ));
+
+  // ── Factor 2: Volume (0–1) ───────────────────────────────────────────────
+  // High volume approach = institutional push = BREAK more likely
+  const VOL_LOOK = Math.min(20, candles.length);
+  const volSlice = candles.slice(Math.max(0, candles.length - VOL_LOOK));
+  const avgVol   = volSlice.length > 0
+    ? volSlice.reduce((s, c) => s + c.v, 0) / volSlice.length : 1;
+  const lastV          = candles[candles.length - 1]?.v ?? 0;
+  const prevV          = candles[candles.length - 2]?.v ?? lastV;
+  const recentVolRatio = avgVol > 0 ? (lastV + prevV) / (2 * avgVol) : 1;
+  // 2× avg → break score 1.0; 0.4× avg → break score 0
+  const volumeScore = Math.min(1, Math.max(0, (recentVolRatio - 0.4) / 1.6));
+
+  // ── Factor 3: Structure context (0–1) ────────────────────────────────────
+  // BOS in approach direction = continuation = BREAK
+  // CHoCH opposing           = reversal      = REJECT
+  let structureScore = 0.50;
+  const recentStr = structure.filter(ev => ev.quality === 'HIGH').slice(-3);
+  if (recentStr.length > 0) {
+    const last   = recentStr[recentStr.length - 1];
+    const isBull = last.type === 'BOS_BULL' || last.type === 'CHOCH_BULL';
+    const isBos  = last.type === 'BOS_BULL' || last.type === 'BOS_BEAR';
+    if (zoneIsAbove) {
+      // Zone above: bullish momentum needed to reach/break
+      if (isBos  &&  isBull)  structureScore = 0.82; // BOS up → continuation → BREAK
+      else if (!isBos && isBull)  structureScore = 0.70; // CHoCH up → reversal up → BREAK
+      else if (isBos  && !isBull) structureScore = 0.30; // BOS down → moving away
+      else                        structureScore = 0.22; // CHoCH down → reversal down
+    } else {
+      // Zone below: bearish momentum needed
+      if (isBos  && !isBull)  structureScore = 0.82;
+      else if (!isBos && !isBull) structureScore = 0.70;
+      else if (isBos  &&  isBull) structureScore = 0.30;
+      else                        structureScore = 0.22;
+    }
+  }
+
+  // ── Factor 4: Zone freshness (0–1) ───────────────────────────────────────
+  // Fresh first touch → REJECT (institutional memory)
+  // Repeated tests    → BREAK (liquidity thinning, zone weakening)
+  let freshnessScore = 0.50;
+  if (isFreshZone && partialFill < 0.05 && touchCount <= 1) {
+    freshnessScore = 0.18;
+  } else if (touchCount >= 3 || partialFill >= 0.40) {
+    freshnessScore = 0.80;
+  } else if (touchCount === 2 || partialFill >= 0.20) {
+    freshnessScore = 0.62;
+  }
+
+  // ── Factor 5: Last candle body strength (0–1) ────────────────────────────
+  // Full body toward zone = BREAK; wick-dominated candle = REJECT
+  const lastC = candles[candles.length - 1];
+  let bodyScore = 0.50;
+  if (lastC && lastC.o > 0) {
+    const body      = Math.abs(lastC.c - lastC.o);
+    const range     = Math.max(lastC.h - lastC.l, 0.001);
+    const bodyRatio = body / range;
+    const aligned   = zoneIsAbove ? lastC.c > lastC.o : lastC.c < lastC.o;
+    bodyScore = aligned
+      ? Math.min(1, bodyRatio * 1.2)
+      : Math.max(0, 1 - bodyRatio * 1.2);
+  }
+
+  // ── Weighted composite break score (0–1) ─────────────────────────────────
+  const breakScore =
+    momentumScore  * 0.30 +
+    volumeScore    * 0.25 +
+    structureScore * 0.25 +
+    freshnessScore * 0.15 +
+    bodyScore      * 0.05;
+
+  // ── Classify outcome ─────────────────────────────────────────────────────
+  const outcome: ZonePrediction['outcome'] =
+    breakScore >= 0.60 ? 'BREAK' :
+    breakScore <= 0.40 ? 'REJECT' : 'WATCH';
+
+  // Direction: break = through zone; reject = bounce back
+  const direction: 'UP' | 'DOWN' =
+    outcome === 'BREAK'
+      ? (zoneIsAbove ? 'UP' : 'DOWN')
+      : (zoneIsAbove ? 'DOWN' : 'UP');
+
+  // Confidence: distance from neutral 50% → maps to 55–92%
+  const dist       = Math.abs(breakScore - 0.5);
+  const confidence = Math.round(55 + dist * 74);
+
+  return { outcome, direction, confidence };
+}
+
 function getCandle(candles: Candle[], idx: number): Candle | null {
   if (idx < 0 || idx >= candles.length) return null;
   return candles[idx];
@@ -381,20 +515,20 @@ function modelConfidence(parts: number[]): number {
   return Math.max(55, Math.min(95, Math.round(score / parts.length)));
 }
 
-// ── FINAL DECISION LOGIC ────────────────────────────────────────────────────
-// IF Priority 1 conditions met → draw zone (highest priority)
-// ELSE IF Priority 2 conditions met → draw zone
-// ELSE IF Priority 3 conditions met → draw zone
-// ELSE → DO NOT DRAW ANYTHING (returns null)
+// ── COMBINATION MATCH LOGIC ─────────────────────────────────────────────────
+// Detect ALL valid setup combinations (P1/P2/P3) and return a deduped list.
+// Rendering layer draws each match line so users can see every qualified setup.
 // ─────────────────────────────────────────────────────────────────────────────
-function findPrioritySetup(
+function findPrioritySetups(
   candles: Candle[],
   fvg: FVG[],
   ob: OrderBlock[],
   liquidity: Liquidity[],
   structure: StructureEvent[],
-): PrioritySetup | null {
-  if (candles.length < 30) return null;
+): PrioritySetup[] {
+  if (candles.length < 30) return [];
+
+  const setups: PrioritySetup[] = [];
 
   const lastIdx = candles.length - 1;
 
@@ -478,7 +612,7 @@ function findPrioritySetup(
 
     if (!overlapMatch) continue;
 
-    return {
+    setups.push({
       priority: 1,
       model: 'REVERSAL_SNIPER',
       direction,
@@ -487,7 +621,7 @@ function findPrioritySetup(
       entryLine: (overlapMatch.top + overlapMatch.bottom) / 2,
       triggerIdx: ev.idx,
       confidence: modelConfidence([90, 88, 86, 91, 90]),
-    };
+    });
   }
 
   // Only consider BOS events within the last 20 candles
@@ -538,7 +672,7 @@ function findPrioritySetup(
 
     if (!overlapMatch) continue;
 
-    return {
+    setups.push({
       priority: 2,
       model: 'CONTINUATION_POWER',
       direction,
@@ -547,7 +681,7 @@ function findPrioritySetup(
       entryLine: (overlapMatch.top + overlapMatch.bottom) / 2,
       triggerIdx: ev.idx,
       confidence: modelConfidence([84, 83, 82, 85]),
-    };
+    });
   }
 
   // ── P3: FLIP ENTRY ──────────────────────────────────────────────────────
@@ -584,7 +718,7 @@ function findPrioritySetup(
     )[0];
     if (!ifvg) continue;
 
-    return {
+    setups.push({
       priority: 3,
       model: 'FLIP_ENTRY',
       direction,
@@ -593,11 +727,28 @@ function findPrioritySetup(
       entryLine: (ifvg.top + ifvg.bottom) / 2,
       triggerIdx: ev.idx,
       confidence: modelConfidence([76, 74, 78]),
-    };
+    });
   }
 
-// ── ELSE: No priority setup qualifies → DO NOT DRAW ANYTHING ──────────────
-  return null;
+  // Deduplicate nearly identical lines to avoid visual stacking noise.
+  const ordered = [...setups].sort((a, b) => {
+    if (a.priority !== b.priority) return a.priority - b.priority;
+    if (a.triggerIdx !== b.triggerIdx) return b.triggerIdx - a.triggerIdx;
+    return b.confidence - a.confidence;
+  });
+
+  const deduped: PrioritySetup[] = [];
+  for (const s of ordered) {
+    const isDuplicate = deduped.some(existing => {
+      if (existing.priority !== s.priority) return false;
+      if (existing.direction !== s.direction) return false;
+      const base = Math.max(Math.abs(existing.entryLine), 1);
+      return Math.abs(existing.entryLine - s.entryLine) / base <= 0.0006;
+    });
+    if (!isDuplicate) deduped.push(s);
+  }
+
+  return deduped.slice(0, 4);
 }
 
 // ── Canvas Chart ────────────────────────────────────────────────────────────
@@ -620,10 +771,10 @@ interface CandleChartProps {
   chartKey?: string;
   /** LIVE = fresh Zerodha data; CACHED or MARKET_CLOSED = stale — never distort candle H/L */
   dataSource?: string;
-  prioritySetup?: PrioritySetup | null;
+  prioritySetups?: PrioritySetup[];
 }
 
-const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, levels, spot, liveSpot, chartHeight, onMaximize, structure = [], inducements = [], fractals = [], htfMode = false, chartKey = '', dataSource = 'LIVE', prioritySetup = null }) => {
+const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, levels, spot, liveSpot, chartHeight, onMaximize, structure = [], inducements = [], fractals = [], htfMode = false, chartKey = '', dataSource = 'LIVE', prioritySetups = [] }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
@@ -666,7 +817,7 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
   const htfModeRef      = useRef(htfMode);
   const chartHeightRef  = useRef(chartHeight);
   const dataSourceRef   = useRef(dataSource);
-  const prioritySetupRef = useRef(prioritySetup);
+  const prioritySetupsRef = useRef(prioritySetups);
   candlesRef.current     = candles;
   fvgRef.current         = fvg;
   obRef.current          = ob;
@@ -679,7 +830,7 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
   htfModeRef.current     = htfMode;
   chartHeightRef.current = chartHeight;
   dataSourceRef.current  = dataSource;
-  prioritySetupRef.current = prioritySetup;
+  prioritySetupsRef.current = prioritySetups;
 
   // ── Render scheduler refs (performance) ───────────────────────────────
   // dirtyRef: render only when scene changed (data/interaction/resize)
@@ -714,7 +865,7 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
     const htfMode    = htfModeRef.current;
     const chartHeight = chartHeightRef.current;
     const dataSource = dataSourceRef.current;
-    const prioritySetup = prioritySetupRef.current;
+    const prioritySetups = prioritySetupsRef.current;
     if (!canvas || !container || candles.length === 0) return;
 
     const effectiveSpot = liveSpotRef.current > 0 ? liveSpotRef.current : spot;
@@ -858,7 +1009,7 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
       if (q === 'WEAK') return false;
       const freshEnough = (f.candles_ago ?? 999) <= 80;
       const sizeable = Math.abs(f.top - f.bottom) >= (effectiveSpot * 0.0008);
-      return freshEnough && sizeable && (q === 'PREMIUM' || f.strength >= 0.85);
+      return freshEnough && sizeable;
     });
 
     // Mitigated FVG: filled OR heavily consumed (>60%) — shown as historical reference, dimmed
@@ -876,7 +1027,7 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
       const q = o.quality ?? (o.strength >= 0.80 ? 'PREMIUM' : o.strength >= 0.45 ? 'STANDARD' : 'WEAK');
       if (q === 'WEAK') return false;
       const freshEnough = (o.candles_ago ?? 999) <= 80;
-      return freshEnough && (q === 'PREMIUM' || o.strength >= 0.85);
+      return freshEnough;
     });
 
     // Mitigated OB: touched/broken — shown as historical reference, dimmed with strikethrough
@@ -889,12 +1040,17 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
     });
 
     const strongLiquidity = liquidity.filter(lq => {
-      if (lq.swept) return false;                                   // CONSUMED: once taken → remove immediately
+      const recentSweep = lq.swept && (lq.sweepIdx != null) && ((candles.length - 1) - lq.sweepIdx <= 8);
+      if (lq.swept && !recentSweep) return false;                   // keep only fresh sweeps for visibility
       const q = lq.quality ?? (lq.touchCount >= 3 ? 'PREMIUM' : lq.touchCount >= 2 ? 'STANDARD' : 'WEAK');
       return q !== 'WEAK';
     });
 
-    const strongStructure = structure.filter(ev => (ev.quality ?? 'LOW') === 'HIGH');
+    const strongStructure = structure.filter(ev => {
+      if ((ev.quality ?? 'LOW') === 'HIGH') return true;
+      // Keep meaningful LOW events too; renderer already dims LOW quality via alpha.
+      return (ev.displacement ?? 0) >= 0.0018;
+    });
     const strongInducements = inducements.filter(ind => (ind.quality ?? (ind.touches >= 3 ? 'PREMIUM' : 'STANDARD')) === 'PREMIUM' || ind.touches >= 3);
 
     const strongLevels = {
@@ -970,6 +1126,24 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
       if (d < HOT_D)  return 'hot';
       if (d < WARM_D) return 'warm';
       return 'off';
+    };
+
+    // ── Predictive tag helpers ─────────────────────────────────────────────
+    // shouldPredict: returns true only when price is within 2% of zone AND market is open.
+    // Keeps prediction draws limited to actionable proximity — never clutters distant zones.
+    const shouldPredict = (top: number, bot: number): boolean => {
+      if (!_mktOpen || effectiveSpot <= 0) return false;
+      const mid = top > 0 ? (top + bot) / 2 : 0;
+      return mid > 0 && Math.abs(effectiveSpot - mid) / mid <= 0.02;
+    };
+    // drawPredTag: renders BREAK▲/REJECT▼/WATCH~ confidence% pill using the slot system.
+    // Color: emerald = BREAK, red = REJECT, amber = WATCH.
+    const drawPredTag = (anchorY: number, pred: ZonePrediction, above: boolean) => {
+      const col = pred.outcome === 'BREAK'  ? '#34d399'
+                : pred.outcome === 'REJECT' ? '#f87171'
+                : '#fbbf24';
+      const arr = pred.direction === 'UP' ? '▲' : '▼';
+      drawLineTag(anchorY, `${pred.outcome}${arr} ${pred.confidence}%`, col, above);
     };
 
     // Alert banner collector — zones push here as they are drawn
@@ -1364,6 +1538,11 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
         const tag = starMark + (isBull ? '▲OB' : '▼OB') + statusStr;
         // bull OB: zone is below price → tag BELOW zone bottom; bear OB: above price → tag ABOVE zone top
         drawLineTag(isBull ? y2 : y1, tag, borderColor, !isBull, lifecycleAlpha * qualityAlpha);
+        // Predictive forecast — only when price within 2% proximity
+        if (shouldPredict(o.top, o.bottom)) {
+          const pred = predictZoneOutcome(o.top, o.bottom, candles, effectiveSpot, structure, isFreshOB, 1, 0);
+          drawPredTag(isBull ? y2 : y1, pred, !isBull);
+        }
       }
       ctx.globalAlpha = 1;
     }
@@ -1546,6 +1725,11 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
         const tag = `${star}${isBull ? '▲' : '▼'}FVG${freshTag}${partialTag}`;
         // bull FVG: zone is below price → tag BELOW zone bottom; bear FVG: above price → tag ABOVE zone top
         drawLineTag(isBull ? y2 : y1, tag, borderColor, !isBull, lifecycleAlpha);
+        // Predictive forecast — only when price within 2% proximity
+        if (shouldPredict(f.top, f.bottom)) {
+          const pred = predictZoneOutcome(f.top, f.bottom, candles, effectiveSpot, structure, partial === 0, 1, partial);
+          drawPredTag(isBull ? y2 : y1, pred, !isBull);
+        }
       }
     }
 
@@ -1611,18 +1795,30 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
       ctx.restore();
     };
 
+    // Helper: add prediction tag beside a key level line (only when near spot)
+    const addLevelPred = (level: number, labelAbove: boolean) => {
+      if (!shouldPredict(level, level) || level <= 0) return;
+      const tc   = levelTouchCount(level);
+      const pred = predictZoneOutcome(level * 1.0005, level * 0.9995, candles, effectiveSpot, structure, tc <= 1, tc, 0);
+      drawPredTag(priceToY(level), pred, labelAbove);
+    };
+
     // DAY HIGH — solid 2px electric cyan
     drawLevel(strongLevels.cdh, CFG.CDH, [], 'DAY H', 2);
+    addLevelPred(strongLevels.cdh, false); // CDH above price → rejection bounces down
     // DAY LOW — solid 1.5px royal blue
     drawLevel(strongLevels.cdl, CFG.CDL, [], 'DAY L', 1.5);
+    addLevelPred(strongLevels.cdl, true);  // CDL below price → rejection bounces up
     // PREV HIGH — long dash [12,4] vivid gold
     drawLevel(strongLevels.pdh, CFG.PDH, [12, 4], 'PREV H', 1.5);
+    addLevelPred(strongLevels.pdh, false);
     // PREV LOW — medium dash [6,4] deep orange (shorter dashes = different rhythm from PREV H)
     drawLevel(strongLevels.pdl, CFG.PDL, [6, 4], 'PREV L', 1.2);
+    addLevelPred(strongLevels.pdl, true);
     // SUPPORT — dash-dot [5,3] neon lime, 1.5px (thick enough to see clearly)
-    for (const s of strongLevels.support) drawLevel(s, CFG.SUPPORT, [5, 3], 'SUP', 1.5);
+    for (const s of strongLevels.support) { drawLevel(s, CFG.SUPPORT, [5, 3], 'SUP', 1.5); addLevelPred(s, true); }
     // RESISTANCE — dots [2,4] neon red, 1.5px (different dash from SUP)
-    for (const r of strongLevels.resistance) drawLevel(r, CFG.RESISTANCE, [2, 4], 'RES', 1.5);
+    for (const r of strongLevels.resistance) { drawLevel(r, CFG.RESISTANCE, [2, 4], 'RES', 1.5); addLevelPred(r, false); }
 
     // ── LIQUIDITY LEVELS ────────────────────────────────────────────
     // SSL = Sell-side liquidity (above equal highs) — swept from downside ↑
@@ -1791,12 +1987,18 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
         : `${isSell ? 'SSL' : 'BSL'}×${lq.touchCount}`;
       // SSL (above price): tag BELOW the line; BSL (below price): tag ABOVE the line
       drawLineTag(y, liqTag, baseCol, !isSell);
+      // Predictive forecast for liquidity level
+      if (shouldPredict(lq.level, lq.level)) {
+        const liqTop = lq.level * 1.0005;
+        const liqBot = lq.level * 0.9995;
+        const pred = predictZoneOutcome(liqTop, liqBot, candles, effectiveSpot, structure, !lq.swept, lq.touchCount ?? 1, 0);
+        drawPredTag(y, pred, !isSell);
+      }
     }
 
-    // ── PRIORITY ENTRY LINE ────────────────────────────────────────────────────
-    // FINAL DECISION LOGIC: only ONE of P1/P2/P3 draws — strict waterfall.
-    // findPrioritySetup() returns null when no conditions are met → nothing drawn.
-    if (prioritySetup) {  // IF P1 → draw P1; ELSE IF P2 → draw P2; ELSE IF P3 → draw P3
+    // ── PRIORITY ENTRY LINES ───────────────────────────────────────────────────
+    // Draw all matched combination setups (deduped) so users see each valid setup.
+    for (const prioritySetup of prioritySetups) {
       const y = priceToY(prioritySetup.entryLine);
       if (y >= chartTop && y <= chartBottom) {
         const isBull  = prioritySetup.direction === 'bullish';
@@ -1916,7 +2118,6 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
         ctx.restore();
       }
     }
-    // ELSE: prioritySetup is null → DO NOT DRAW ANYTHING (block above skipped entirely)
 
     // ── CURRENT PRICE LINE (dashed only — badge drawn after price axis to stay on top) ──
     if (effectiveSpot > 0) {
@@ -2284,6 +2485,13 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
         const fgColor = (isChoCh && evQuality === 'HIGH') ? '#0d1117' : color;
         drawLabel(evX, isBull ? evY - 22 : evY + 22, label, fgColor, bgColor);
       }
+      // Predictive forecast when price revisits this structure level
+      if (shouldPredict(ev.level, ev.level)) {
+        const strTop = ev.level * 1.0005;
+        const strBot = ev.level * 0.9995;
+        const pred   = predictZoneOutcome(strTop, strBot, candles, effectiveSpot, structure, true, 1, 0);
+        drawPredTag(evY, pred, !isBull);
+      }
     }
 
     // ── INDUCEMENT MARKERS (Equal H/L) ──────────────────────────────
@@ -2333,6 +2541,13 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
       const touchStr = ind.touches >= 3 ? `×${ind.touches}` : '';
       const tag = (indPremium ? '★' : '') + (isHigh ? 'EQH' : 'EQL') + touchStr;
       drawLabel(indX, isHigh ? markerY - 10 : markerY + 10, tag, CFG.IND_COLOR, 'rgba(122,143,168,0.20)');
+      // Predictive forecast for equal high/low clusters (liquidity magnets)
+      if (shouldPredict(ind.level, ind.level)) {
+        const indTop = ind.level * 1.0005;
+        const indBot = ind.level * 0.9995;
+        const pred   = predictZoneOutcome(indTop, indBot, candles, effectiveSpot, structure, true, ind.touches, 0);
+        drawPredTag(indY + offsetY, pred, !isHigh);
+      }
     }
 
     // Fractal markers intentionally hidden from chart rendering to avoid weak/noisy signals.
@@ -2572,7 +2787,7 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
   // Mark scene dirty when data changes (no callback recreation needed)
   useEffect(() => {
     markDirty();
-  }, [candles, fvg, ob, liquidity, levels, spot, liveSpot, structure, inducements, fractals, dataSource, prioritySetup, markDirty]);
+  }, [candles, fvg, ob, liquidity, levels, spot, liveSpot, structure, inducements, fractals, dataSource, prioritySetups, markDirty]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -3314,10 +3529,9 @@ const SymbolChartCard = memo<{ data: SymbolChartData | null; name: string; liveS
     );
   }, [candles, fvgList, obList, liqList, levels, liveSpot, data?.spot, structure, inducements, fractals]);
 
-  // Strict priority setup selector (P1 > P2 > P3).
-  // Returns a single highest-conviction setup to avoid chart clutter.
-  const prioritySetup = useMemo(() => {
-    return findPrioritySetup(candles, fvgList, obList, liqList, structure);
+  // Combination setup selector: returns all valid setup matches (deduped).
+  const prioritySetups = useMemo(() => {
+    return findPrioritySetups(candles, fvgList, obList, liqList, structure);
   }, [candles, fvgList, obList, liqList, structure]);
 
   // MTF alignment — compare 3m vs 5m signals to measure confluence confidence.
@@ -3551,7 +3765,7 @@ const SymbolChartCard = memo<{ data: SymbolChartData | null; name: string; liveS
         htfMode={htfMode}
         chartKey={`${name}-${timeframe}`}
         dataSource={data.dataSource}
-        prioritySetup={prioritySetup}
+        prioritySetups={prioritySetups}
       />
 
       {/* ── Pop-up chart window — no blur, 3-button window chrome ── */}
@@ -3651,7 +3865,7 @@ const SymbolChartCard = memo<{ data: SymbolChartData | null; name: string; liveS
                   htfMode={htfMode}
                   chartKey={`${name}-${timeframe}-modal`}
                   dataSource={data.dataSource}
-                  prioritySetup={prioritySetup}
+                  prioritySetups={prioritySetups}
                 />
               </div>
             )}
@@ -3670,27 +3884,28 @@ const SymbolChartCard = memo<{ data: SymbolChartData | null; name: string; liveS
       <div className="px-3 py-2 border-t border-slate-700/30 bg-slate-900/40 space-y-1.5">
         {/* Row 1: Level proximity intel + last structure event */}
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-          {prioritySetup && (
+          {prioritySetups.map((setup, idx) => (
             <span
+              key={`${setup.priority}-${setup.model}-${setup.direction}-${setup.triggerIdx}-${idx}`}
               className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold border ${
-                prioritySetup.priority === 1
+                setup.priority === 1
                   ? 'bg-cyan-500/15 text-cyan-300 border-cyan-400/40'
-                  : prioritySetup.priority === 2
+                  : setup.priority === 2
                     ? 'bg-emerald-500/15 text-emerald-300 border-emerald-400/40'
                     : 'bg-blue-500/15 text-blue-300 border-blue-400/40'
               }`}
-              title={`Entry line at ${fmtPrice(prioritySetup.entryLine)} from strict overlap model`}
+              title={`Entry line at ${fmtPrice(setup.entryLine)} from combination overlap model`}
             >
-              P{prioritySetup.priority}
-              {prioritySetup.model === 'REVERSAL_SNIPER'
+              P{setup.priority}
+              {setup.model === 'REVERSAL_SNIPER'
                 ? ' SNIPER'
-                : prioritySetup.model === 'CONTINUATION_POWER'
+                : setup.model === 'CONTINUATION_POWER'
                   ? ' CONTINUATION'
                   : ' FLIP'}
-              {prioritySetup.direction === 'bullish' ? ' ▲' : ' ▼'}
-              <span className="font-mono opacity-80">{prioritySetup.confidence}%</span>
+              {setup.direction === 'bullish' ? ' ▲' : ' ▼'}
+              <span className="font-mono opacity-80">{setup.confidence}%</span>
             </span>
-          )}
+          ))}
           {/* Nearest level proximity chip */}
           {nearestLevel && (
             <span

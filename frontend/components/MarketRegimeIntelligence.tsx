@@ -221,10 +221,31 @@ const RegimeCard = memo<{
   // Sort by weight descending
   factors.sort((a, b) => (b[1].weight || 0) - (a[1].weight || 0));
 
+  // Live context values for supporting metrics (price/open/high/low/PCR/VIX)
+  const livePrice  = liveTick?.price  ?? data.context?.price;
+  const liveOpen   = liveTick?.open   ?? data.context?.open;
+  const liveHigh   = liveTick?.high   ?? data.context?.high;
+  const liveLow    = liveTick?.low    ?? data.context?.low;
+  const livePcr    = liveTick?.pcr    ?? data.context?.pcr;
+  const vixVal     = liveVix?.value ?? liveVix?.price ?? liveVix?.ltp ?? data.context?.vix;
+  const liveChgPct = (liveOpen && livePrice)
+    ? ((livePrice - liveOpen) / liveOpen) * 100
+    : data.context?.changePct;
+
+  // Single source-of-truth direction for this card: backend regime engine
+  const displayDir = data.direction;
+  const dirArrow = displayDir === 'BULLISH' ? '▲' : displayDir === 'BEARISH' ? '▼' : '→';
+  const dirColor = displayDir === 'BULLISH' ? 'text-emerald-400' : displayDir === 'BEARISH' ? 'text-red-400' : 'text-amber-400';
+  const dirBg    = displayDir === 'BULLISH' ? 'bg-emerald-500/10 border-emerald-500/30' : displayDir === 'BEARISH' ? 'bg-red-500/10 border-red-500/30' : 'bg-amber-500/10 border-amber-500/30';
+  const regimeBadgeLabel =
+    (data.regime === 'NEUTRAL' || data.regime === 'SIDEWAYS') && displayDir !== 'NEUTRAL'
+      ? `${cfg.shortLabel} · ${displayDir} BIAS`
+      : cfg.shortLabel;
+
   return (
     <div className={`rounded-2xl border ${cfg.border} bg-gradient-to-br from-slate-800/60 via-slate-800/40 to-slate-900/60 p-3 sm:p-4 shadow-lg ${cfg.glow} transition-all duration-200`}>
       {/* Header: Symbol + Regime Badge */}
-      <div className="flex items-center justify-between mb-3">
+      <div className="flex items-center justify-between mb-2">
         <div className="flex items-center gap-2">
           <span className="text-base sm:text-lg font-black text-white tracking-tight">{name}</span>
           {data.dataSource === 'LIVE' && (
@@ -236,7 +257,38 @@ const RegimeCard = memo<{
         </div>
         <div className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg ${cfg.bg} border ${cfg.border}`}>
           <span className="text-sm">{cfg.icon}</span>
-          <span className={`text-[10px] sm:text-xs font-black ${cfg.color} tracking-wide`}>{cfg.shortLabel}</span>
+          <span className={`text-[10px] sm:text-xs font-black ${cfg.color} tracking-wide`}>{regimeBadgeLabel}</span>
+        </div>
+      </div>
+
+      {/* ── DIRECTION BANNER — aligned with regime engine ── */}
+      <div className={`mb-3 px-3 py-2 rounded-xl border ${dirBg} flex items-center justify-between transition-all duration-150`}>
+        <div className="flex items-center gap-2">
+          <span className={`text-2xl font-black leading-none ${dirColor}`}>{dirArrow}</span>
+          <div>
+            <p className={`text-sm font-black tracking-wide ${dirColor}`}>{displayDir}</p>
+            <p className="text-[9px] text-slate-500 font-medium">Direction · regime engine</p>
+          </div>
+        </div>
+        <div className="flex items-center gap-3">
+          {liveChgPct != null && (
+            <div className="text-center">
+              <p className={`text-lg font-black tabular-nums ${liveChgPct >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                {liveChgPct > 0 ? '+' : ''}{liveChgPct.toFixed(2)}%
+              </p>
+              <p className="text-[8px] text-slate-500 uppercase tracking-wider">vs Open</p>
+            </div>
+          )}
+          <div className="text-center">
+            <p className={`text-lg font-black tabular-nums ${cfg.color}`}>{data.regimeScore?.toFixed(0) ?? '—'}</p>
+            <p className="text-[8px] text-slate-500 uppercase tracking-wider">Score</p>
+          </div>
+          {data.directionStrength != null && data.directionStrength > 0 && (
+            <div className="text-center">
+              <p className={`text-sm font-bold tabular-nums ${dirColor}`}>{data.directionStrength.toFixed(0)}%</p>
+              <p className="text-[8px] text-slate-500 uppercase tracking-wider">Strength</p>
+            </div>
+          )}
         </div>
       </div>
 
@@ -250,14 +302,14 @@ const RegimeCard = memo<{
                 {data.isTrendingDay ? 'TRENDING DAY' : 'NON-TRENDING DAY'}
               </p>
               <p className="text-[9px] text-slate-400">
-                Strength: <span className={`font-bold ${data.trendStrength === 'STRONG' ? 'text-emerald-400' : data.trendStrength === 'MODERATE' ? 'text-blue-400' : 'text-slate-400'}`}>{data.trendStrength}</span>
+                Trend: <span className={`font-bold ${data.trendStrength === 'STRONG' ? 'text-emerald-400' : data.trendStrength === 'MODERATE' ? 'text-blue-400' : 'text-slate-400'}`}>{data.trendStrength}</span>
                 {' '} · Stability: {data.scoreStability?.toFixed(0) ?? '—'}%
               </p>
             </div>
           </div>
-          <div className="text-right">
-            <p className={`text-xl font-black tabular-nums ${cfg.color}`}>{data.regimeScore?.toFixed(0) ?? '—'}</p>
-            <p className="text-[8px] text-slate-500 uppercase tracking-wider">Score</p>
+          <div className={`text-right px-2 py-1 rounded-lg ${dirBg} border`}>
+            <p className={`text-xs font-black ${dirColor}`}>{dirArrow} {displayDir}</p>
+            <p className="text-[8px] text-slate-500">Trend dir</p>
           </div>
         </div>
       </div>
@@ -276,28 +328,26 @@ const RegimeCard = memo<{
         <p className="text-[10px] sm:text-xs text-slate-400 leading-relaxed">{data.actionSummary}</p>
       </div>
 
-      {/* Context Bar — uses live tick data when available for instant updates */}
-      {(data.context || liveTick) && (() => {
-        // Prefer live tick data (updates every tick) over regime snapshot (updates every 2s)
-        const livePrice = liveTick?.price ?? data.context?.price;
-        const liveOpen = liveTick?.open ?? data.context?.open;
-        const liveChgPct = liveOpen && livePrice
-          ? ((livePrice - liveOpen) / liveOpen) * 100
-          : data.context?.changePct;
-        const livePcr = liveTick?.pcr ?? data.context?.pcr;
-        const vixVal = liveVix?.value ?? liveVix?.price ?? liveVix?.ltp ?? data.context?.vix;
-
-        return (
-        <div className="grid grid-cols-4 gap-1.5 mb-3">
+      {/* Context Bar — 6 metrics, live tick data for instant updates */}
+      {(data.context || liveTick) && (
+        <div className="grid grid-cols-3 sm:grid-cols-6 gap-1.5 mb-3">
           <div className="text-center px-1.5 py-1 rounded bg-slate-800/50">
             <p className="text-[8px] text-slate-500">PRICE</p>
             <p className="text-[10px] font-bold text-white tabular-nums">{livePrice?.toLocaleString('en-IN') ?? '—'}</p>
           </div>
           <div className="text-center px-1.5 py-1 rounded bg-slate-800/50">
-            <p className="text-[8px] text-slate-500">CHG%</p>
+            <p className="text-[8px] text-slate-500">vs OPEN</p>
             <p className={`text-[10px] font-bold tabular-nums ${(liveChgPct ?? 0) >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
               {liveChgPct != null ? `${liveChgPct > 0 ? '+' : ''}${liveChgPct.toFixed(2)}%` : '—'}
             </p>
+          </div>
+          <div className="text-center px-1.5 py-1 rounded bg-slate-800/50">
+            <p className="text-[8px] text-emerald-600/80">HIGH</p>
+            <p className="text-[10px] font-bold text-emerald-400 tabular-nums">{liveHigh?.toLocaleString('en-IN') ?? '—'}</p>
+          </div>
+          <div className="text-center px-1.5 py-1 rounded bg-slate-800/50">
+            <p className="text-[8px] text-red-600/80">LOW</p>
+            <p className="text-[10px] font-bold text-red-400 tabular-nums">{liveLow?.toLocaleString('en-IN') ?? '—'}</p>
           </div>
           <div className="text-center px-1.5 py-1 rounded bg-slate-800/50">
             <p className="text-[8px] text-slate-500">VIX</p>
@@ -308,8 +358,7 @@ const RegimeCard = memo<{
             <p className="text-[10px] font-bold text-white tabular-nums">{livePcr ? livePcr.toFixed(2) : '—'}</p>
           </div>
         </div>
-        );
-      })()}
+      )}
 
       {/* Factor Breakdown — collapsed by default */}
       <div className="rounded-xl bg-slate-800/40 border border-slate-700/30 p-2.5">

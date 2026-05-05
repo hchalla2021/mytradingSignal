@@ -2,7 +2,6 @@
 
 import React, { memo, useMemo, useRef, useState, useEffect } from 'react';
 import { useStrikeIntelligence, type SymbolStrikeData, type StrikeRow, type StrikeSignal, type StrikeSideData } from '@/hooks/useStrikeIntelligence';
-import { PricePredictionCard } from '@/components/PricePredictionCard';
 
 // Signal config
 
@@ -85,20 +84,20 @@ function detectNullableMove(curr: number | null, prev: number | null, epsilon = 
 }
 
 function getMetricCardFlashClass(move: MetricMove): string {
-  if (!move.active) return '';
+  if (!move.active) return 'transition-shadow duration-700';
   const up = move.ce === 'up' || move.pe === 'up';
   const down = move.ce === 'down' || move.pe === 'down';
-  if (up && !down) return 'ring-1 ring-emerald-300/80 shadow-[0_0_16px_rgba(16,185,129,0.4)]';
-  if (down && !up) return 'ring-1 ring-red-300/80 shadow-[0_0_16px_rgba(239,68,68,0.4)]';
-  return 'ring-1 ring-amber-300/80 shadow-[0_0_14px_rgba(251,191,36,0.35)]';
+  if (up && !down) return 'shadow-[0_0_12px_rgba(16,185,129,0.30)] transition-shadow duration-700';
+  if (down && !up) return 'shadow-[0_0_12px_rgba(239,68,68,0.30)] transition-shadow duration-700';
+  return 'shadow-[0_0_10px_rgba(251,191,36,0.25)] transition-shadow duration-700';
 }
 
 function getValueFlashClass(direction: MoveDirection, active: boolean): string {
-  if (!active || direction === 'flat') return '';
+  if (!active || direction === 'flat') return 'transition-colors duration-500';
   if (direction === 'up') {
-    return 'bg-emerald-500/25 text-emerald-100 px-1 rounded shadow-[0_0_10px_rgba(16,185,129,0.45)] animate-pulse';
+    return 'bg-emerald-500/20 text-emerald-100 rounded transition-colors duration-500';
   }
-  return 'bg-red-500/25 text-red-100 px-1 rounded shadow-[0_0_10px_rgba(239,68,68,0.45)] animate-pulse';
+  return 'bg-red-500/20 text-red-100 rounded transition-colors duration-500';
 }
 
 // High-conviction gate for buyer perspective.
@@ -285,6 +284,22 @@ const DECISION_CFG: Record<TradeDecision, {
   FLOW_BUY_PE:  { label: 'FLOW: BUY PE ↘',       icon: '↘', bg: 'bg-orange-950/60',  border: 'border-orange-400/60',   color: 'text-orange-200',  subColor: 'text-orange-400',   decisionBg: 'bg-orange-500/20',  pulse: true  },
   CONFLICTING:  { label: 'CONFLICTING — WAIT',   icon: '⚡', bg: 'bg-amber-950/60',  border: 'border-amber-400/60',    color: 'text-amber-200',   subColor: 'text-amber-400',    decisionBg: 'bg-amber-500/20',   pulse: false },
   WAIT:         { label: 'NO CLEAR SIGNAL — WAIT', icon: '■', bg: 'bg-slate-800/60', border: 'border-slate-600/50',  color: 'text-slate-400',   subColor: 'text-slate-500',    decisionBg: 'bg-slate-700/40',   pulse: false },
+};
+
+const DECISION_BADGE_CFG: Record<TradeDecision, {
+  label: string;
+  arrow: string;
+  color: string;
+  bg: string;
+  border: string;
+  glow: string;
+}> = {
+  BUY_CE:      { label: 'BUY CE',     arrow: '▲',  color: 'text-emerald-200', bg: 'bg-emerald-500/25', border: 'border-emerald-400/70', glow: 'shadow-[0_0_12px_2px_rgba(52,211,153,0.35)]' },
+  BUY_PE:      { label: 'BUY PE',     arrow: '▼',  color: 'text-red-200',     bg: 'bg-red-500/25',     border: 'border-red-400/70',     glow: 'shadow-[0_0_12px_2px_rgba(251,113,133,0.35)]' },
+  FLOW_BUY_CE: { label: 'FLOW BUY CE', arrow: '↗', color: 'text-cyan-200',    bg: 'bg-cyan-500/20',    border: 'border-cyan-400/60',    glow: 'shadow-[0_0_10px_1px_rgba(34,211,238,0.25)]' },
+  FLOW_BUY_PE: { label: 'FLOW BUY PE', arrow: '↘', color: 'text-orange-200',  bg: 'bg-orange-500/20',  border: 'border-orange-400/60',  glow: 'shadow-[0_0_10px_1px_rgba(251,146,60,0.25)]' },
+  CONFLICTING: { label: 'WAIT',       arrow: '⚡', color: 'text-amber-200',   bg: 'bg-amber-500/20',   border: 'border-amber-400/60',   glow: '' },
+  WAIT:        { label: 'WAIT',       arrow: '■',  color: 'text-slate-300',   bg: 'bg-slate-700/40',   border: 'border-slate-500/50',   glow: '' },
 };
 
 const SUB_TEXT: Record<TradeDecision, string> = {
@@ -922,11 +937,16 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
   const prevDominantRef = useRef<'BULL' | 'BEAR' | 'NEUTRAL'>('NEUTRAL');
   const [flashSide, setFlashSide] = useState<'BULL' | 'BEAR' | null>(null);
   const [chainMoves, setChainMoves] = useState<ChainMoves>(INITIAL_CHAIN_MOVES);
+  // Flash state for intelligence section — fires whenever the composite score changes
+  const prevScoreRef = useRef<number | null>(null);
+  const [scoreFlash, setScoreFlash] = useState<'up' | 'down' | null>(null);
+  const scoreFlashTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const prevChainStatsRef = useRef<{
     totalCEVol: number; totalPEVol: number;
     totalCEOI: number; totalPEOI: number;
     totalCEOIChg: number; totalPEOIChg: number;
     avgCEIV: number | null; avgPEIV: number | null;
+    ceVolStrikeCount: number; peVolStrikeCount: number; tiedVolStrikeCount: number;
     ceVolPct: number; peVolPct: number;
     ceOIPct: number; peOIPct: number;
     ceOIChgPct: number; peOIChgPct: number;
@@ -950,44 +970,90 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
   // Aggregate chain stats — computed every tick when strikes update
   const chainStats = useMemo(() => {
     if (!hasData) return null;
-    const totalCEVol = strikes.reduce((a, s) => a + s.ce.volume, 0);
-    const totalPEVol = strikes.reduce((a, s) => a + s.pe.volume, 0);
-    const totalVol   = totalCEVol + totalPEVol;
-    const totalCEOI  = strikes.reduce((a, s) => a + s.ce.oi, 0);
-    const totalPEOI  = strikes.reduce((a, s) => a + s.pe.oi, 0);
-    const totalOI    = totalCEOI + totalPEOI;
-    // Use gross OI change (sum of absolute per-strike deltas) so opposite moves
-    // across strikes don't net to 0 and freeze the chain-level OI Change widget.
-    const totalCEOIChg = strikes.reduce((a, s) => a + Math.abs(s.ce.oiChange ?? 0), 0);
-    const totalPEOIChg = strikes.reduce((a, s) => a + Math.abs(s.pe.oiChange ?? 0), 0);
-    // Weighted average IV (only where IV is available and > 0)
-    const ceIVArr = strikes.map(s => s.ce.signals?.iv).filter((v): v is number => v != null && v > 0);
-    const peIVArr = strikes.map(s => s.pe.signals?.iv).filter((v): v is number => v != null && v > 0);
-    const avgCEIV = ceIVArr.length > 0 ? ceIVArr.reduce((a, v) => a + v, 0) / ceIVArr.length : null;
-    const avgPEIV = peIVArr.length > 0 ? peIVArr.reduce((a, v) => a + v, 0) / peIVArr.length : null;
-    const ceVolPct = totalVol > 0 ? Math.round((totalCEVol / totalVol) * 100) : 50;
-    const peVolPct = totalVol > 0 ? Math.round((totalPEVol / totalVol) * 100) : 50;
-    const ceOIPct  = totalOI  > 0 ? Math.round((totalCEOI  / totalOI)  * 100) : 50;
-    const peOIPct  = totalOI  > 0 ? Math.round((totalPEOI  / totalOI)  * 100) : 50;
-    const totalAbsOIChg = Math.abs(totalCEOIChg) + Math.abs(totalPEOIChg);
-    const ceOIChgPct = totalAbsOIChg > 0 ? Math.round((Math.abs(totalCEOIChg) / totalAbsOIChg) * 100) : 50;
-    const peOIChgPct = totalAbsOIChg > 0 ? Math.round((Math.abs(totalPEOIChg) / totalAbsOIChg) * 100) : 50;
+    const serverChainTotals = data?.chainTotals;
+    let totalCEVol = 0;
+    let totalPEVol = 0;
+    let totalCEOI = 0;
+    let totalPEOI = 0;
+    let totalCEOIChg = 0;
+    let totalPEOIChg = 0;
+    let ceVolStrikeCount = 0;
+    let peVolStrikeCount = 0;
+    let tiedVolStrikeCount = 0;
+    let ceIVSum = 0;
+    let peIVSum = 0;
+    let ceIVCount = 0;
+    let peIVCount = 0;
+
+    for (const strike of strikes) {
+      totalCEVol += strike.ce.volume;
+      totalPEVol += strike.pe.volume;
+      totalCEOI += strike.ce.oi;
+      totalPEOI += strike.pe.oi;
+      totalCEOIChg += (strike.ce.oiChange ?? 0);
+      totalPEOIChg += (strike.pe.oiChange ?? 0);
+
+      if (strike.ce.volume > strike.pe.volume) {
+        ceVolStrikeCount += 1;
+      } else if (strike.pe.volume > strike.ce.volume) {
+        peVolStrikeCount += 1;
+      } else {
+        tiedVolStrikeCount += 1;
+      }
+
+      const ceIV = strike.ce.signals?.iv;
+      if (ceIV != null && ceIV > 0) {
+        ceIVSum += ceIV;
+        ceIVCount += 1;
+      }
+
+      const peIV = strike.pe.signals?.iv;
+      if (peIV != null && peIV > 0) {
+        peIVSum += peIV;
+        peIVCount += 1;
+      }
+    }
+
+    const displayCEVol = serverChainTotals?.totalCEVol ?? totalCEVol;
+    const displayPEVol = serverChainTotals?.totalPEVol ?? totalPEVol;
+    const totalVol = (serverChainTotals?.totalVol ?? (displayCEVol + displayPEVol));
+    const displayCEOI = serverChainTotals?.totalCEOI ?? totalCEOI;
+    const displayPEOI = serverChainTotals?.totalPEOI ?? totalPEOI;
+    const totalOI = (serverChainTotals?.totalOI ?? (displayCEOI + displayPEOI));
+    // Prefer full-chain OI change from backend; fall back to signed sum of 11 visible strikes
+    const displayCEOIChg = serverChainTotals?.totalCEOIChg ?? totalCEOIChg;
+    const displayPEOIChg = serverChainTotals?.totalPEOIChg ?? totalPEOIChg;
+    const avgCEIV = ceIVCount > 0 ? ceIVSum / ceIVCount : null;
+    const avgPEIV = peIVCount > 0 ? peIVSum / peIVCount : null;
+    const ceVolPct = totalVol > 0 ? Math.round((displayCEVol / totalVol) * 100) : 50;
+    const peVolPct = totalVol > 0 ? 100 - ceVolPct : 50;
+    const ceOIPct  = totalOI  > 0 ? Math.round((displayCEOI  / totalOI)  * 100) : 50;
+    const peOIPct  = totalOI  > 0 ? 100 - ceOIPct : 50;
+    const totalAbsOIChg = Math.abs(displayCEOIChg) + Math.abs(displayPEOIChg);
+    const ceOIChgPct = totalAbsOIChg > 0 ? Math.round((Math.abs(displayCEOIChg) / totalAbsOIChg) * 100) : 50;
+    const peOIChgPct = totalAbsOIChg > 0 ? 100 - ceOIChgPct : 50;
     return {
-      totalCEVol, totalPEVol, totalVol,
-      totalCEOI, totalPEOI, totalOI,
-      totalCEOIChg, totalPEOIChg,
+      totalCEVol: displayCEVol, totalPEVol: displayPEVol, totalVol,
+      totalCEOI: displayCEOI, totalPEOI: displayPEOI, totalOI,
+      totalCEOIChg: displayCEOIChg, totalPEOIChg: displayPEOIChg,
       avgCEIV, avgPEIV,
+      ceVolStrikeCount, peVolStrikeCount, tiedVolStrikeCount,
       ceVolPct, peVolPct,
       ceOIPct, peOIPct,
       ceOIChgPct, peOIChgPct,
     };
-  }, [strikes, hasData]);
+  }, [strikes, hasData, data?.chainTotals]);
 
   // Summary: bias + PCR - use backend intelligence when available
   const summary = useMemo(() => {
-    const totalCEOI = hasData ? strikes.reduce((a, s) => a + s.ce.oi, 0) : 0;
-    const totalPEOI = hasData ? strikes.reduce((a, s) => a + s.pe.oi, 0) : 0;
-    const pcr = totalCEOI > 0 ? parseFloat((totalPEOI / totalCEOI).toFixed(2)) : 1;
+    // PCR: prefer full-chain OI from chainTotals (covers all strikes, not just ATM±5)
+    const chainCEOI = data?.chainTotals?.totalCEOI ?? 0;
+    const chainPEOI = data?.chainTotals?.totalPEOI ?? 0;
+    const fallbackCEOI = hasData ? strikes.reduce((a, s) => a + s.ce.oi, 0) : 0;
+    const fallbackPEOI = hasData ? strikes.reduce((a, s) => a + s.pe.oi, 0) : 0;
+    const ceoiForPcr = chainCEOI > 0 ? chainCEOI : fallbackCEOI;
+    const peoiForPcr = chainCEOI > 0 ? chainPEOI : fallbackPEOI;
+    const pcr = ceoiForPcr > 0 ? parseFloat((peoiForPcr / ceoiForPcr).toFixed(2)) : 1;
     if (!hasData || !hasRealSignal || !intelligence) {
       return { bullPct: 0, bearPct: 0, neutralPct: 100, bias: 'NEUTRAL' as const, pcr };
     }
@@ -996,13 +1062,24 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
     const neutralPct = Math.max(0, 100 - bullPct - bearPct);
     const bias = bullPct - bearPct >= 10 ? 'BULLISH' as const : bearPct - bullPct >= 10 ? 'BEARISH' as const : 'NEUTRAL' as const;
     return { bullPct, bearPct, neutralPct, bias, pcr };
-  }, [strikes, hasData, hasRealSignal, intelligence]);
+  }, [strikes, hasData, hasRealSignal, intelligence, data?.chainTotals]);
 
   // Composite signal - always comes from backend intelligence (no re-scoring in browser)
   const symbolSignal = useMemo(() => {
     if (!hasRealSignal || !intelligence) return { signal: 'NEUTRAL' as OverallSignal, score: 0 };
     return { signal: intelligence.signal as OverallSignal, score: Math.round(intelligence.score) };
   }, [hasRealSignal, intelligence]);
+
+  const tradeDecision = useMemo(() => {
+    if (!hasRealSignal || !atmRow) return null;
+    return deriveTradeDecision(
+      atmRow.ce.signal,
+      atmRow.pe.signal,
+      Math.round(atmRow.ce.score),
+      Math.round(atmRow.pe.score),
+      symbolSignal.score,
+    );
+  }, [atmRow, hasRealSignal, symbolSignal.score]);
 
   // Dominance tracking: highlight the leading side and flash on transition
   useEffect(() => {
@@ -1036,6 +1113,9 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
         totalPEOIChg: chainStats.totalPEOIChg,
         avgCEIV: chainStats.avgCEIV,
         avgPEIV: chainStats.avgPEIV,
+        ceVolStrikeCount: chainStats.ceVolStrikeCount,
+        peVolStrikeCount: chainStats.peVolStrikeCount,
+        tiedVolStrikeCount: chainStats.tiedVolStrikeCount,
         ceVolPct: chainStats.ceVolPct,
         peVolPct: chainStats.peVolPct,
         ceOIPct: chainStats.ceOIPct,
@@ -1096,6 +1176,9 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
       totalPEOIChg: chainStats.totalPEOIChg,
       avgCEIV: chainStats.avgCEIV,
       avgPEIV: chainStats.avgPEIV,
+      ceVolStrikeCount: chainStats.ceVolStrikeCount,
+      peVolStrikeCount: chainStats.peVolStrikeCount,
+      tiedVolStrikeCount: chainStats.tiedVolStrikeCount,
       ceVolPct: chainStats.ceVolPct,
       peVolPct: chainStats.peVolPct,
       ceOIPct: chainStats.ceOIPct,
@@ -1108,6 +1191,23 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
       if (chainFlashTimerRef.current) clearTimeout(chainFlashTimerRef.current);
     };
   }, [chainStats, hasRealSignal]);
+
+  // Flash the intelligence section (score, regime, PCR, …) when composite score changes
+  useEffect(() => {
+    const score = intelligence?.score ?? null;
+    if (score === null) return;
+    const prev = prevScoreRef.current;
+    if (prev !== null && prev !== score) {
+      const dir = score > prev ? 'up' : 'down';
+      setScoreFlash(dir);
+      if (scoreFlashTimerRef.current) clearTimeout(scoreFlashTimerRef.current);
+      scoreFlashTimerRef.current = setTimeout(() => setScoreFlash(null), 700);
+    }
+    prevScoreRef.current = score;
+    return () => {
+      if (scoreFlashTimerRef.current) clearTimeout(scoreFlashTimerRef.current);
+    };
+  }, [intelligence?.score]);
 
   if (!data || !hasData) {
     return (
@@ -1166,13 +1266,14 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
         {/* Top-right badge */}
         <div className="flex flex-col items-end gap-0.5 shrink-0">
           {hasRealSignal ? (() => {
-            const cfg = OVERALL_CFG[symbolSignal.signal];
-            const pulse = isLiveData && (symbolSignal.signal === 'STRONG_BUY' || symbolSignal.signal === 'STRONG_SELL');
+            const rawCfg = OVERALL_CFG[symbolSignal.signal];
+            const decisionCfg = tradeDecision ? DECISION_BADGE_CFG[tradeDecision] : null;
+            const pulse = isLiveData && tradeDecision != null && tradeDecision !== 'WAIT' && tradeDecision !== 'CONFLICTING';
             return (
-              <span title={`Composite: ${symbolSignal.score > 0 ? '+' : ''}${symbolSignal.score}`}
-                className={`inline-flex items-center gap-1 whitespace-nowrap px-2 sm:px-2.5 py-0.5 sm:py-1 rounded-lg text-[10px] sm:text-[12px] font-black tracking-wide border transition-all duration-300 ${isLastClose ? 'bg-amber-950/40 border-amber-600/40' : cfg.bg + ' ' + cfg.border} ${cfg.color} ${isLastClose ? '' : cfg.glow} ${pulse ? 'animate-pulse' : ''}`}>
-                <span className="opacity-80 text-[10px] sm:text-[11px]">{cfg.arrow}</span>
-                {cfg.label}
+              <span title={`Trader action: ${decisionCfg?.label ?? rawCfg.label} | Flow: ${rawCfg.label} | Composite: ${symbolSignal.score > 0 ? '+' : ''}${symbolSignal.score}`}
+                className={`inline-flex items-center gap-1 whitespace-nowrap px-2 sm:px-2.5 py-0.5 sm:py-1 rounded-lg text-[10px] sm:text-[12px] font-black tracking-wide border transition-all duration-300 ${isLastClose ? 'bg-amber-950/40 border-amber-600/40' : (decisionCfg ? `${decisionCfg.bg} ${decisionCfg.border}` : `${rawCfg.bg} ${rawCfg.border}`)} ${decisionCfg?.color ?? rawCfg.color} ${isLastClose ? '' : (decisionCfg?.glow ?? rawCfg.glow)} ${pulse ? 'animate-pulse' : ''}`}>
+                <span className="opacity-80 text-[10px] sm:text-[11px]">{decisionCfg?.arrow ?? rawCfg.arrow}</span>
+                {decisionCfg?.label ?? rawCfg.label}
                 <span className="text-[10px] font-mono opacity-60">{symbolSignal.score > 0 ? '+' : ''}{symbolSignal.score}</span>
                 {isLastClose && <span className="text-[9px] font-normal opacity-50 ml-0.5">prev</span>}
               </span>
@@ -1210,9 +1311,8 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
             {hasRealSignal ? (
               <>
                 <span
-                  key={summary.bullPct > summary.bearPct ? `bull-dom-${summary.bullPct}` : 'bull-sub'}
                   className={[
-                    'transition-all duration-300',
+                    'tabular-nums transition-all duration-300',
                     summary.bullPct > summary.bearPct
                       ? 'text-emerald-300 font-black px-1.5 py-0.5 rounded border border-emerald-400/70 bg-emerald-500/20 shadow-[0_0_8px_1px_rgba(52,211,153,0.35)]'
                       : 'text-emerald-500 font-semibold',
@@ -1223,9 +1323,8 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
                 </span>
                 <span className="text-slate-700">|</span>
                 <span
-                  key={summary.bearPct > summary.bullPct ? `bear-dom-${summary.bearPct}` : 'bear-sub'}
                   className={[
-                    'transition-all duration-300',
+                    'tabular-nums transition-all duration-300',
                     summary.bearPct > summary.bullPct
                       ? 'text-red-300 font-black px-1.5 py-0.5 rounded border border-red-400/70 bg-red-500/20 shadow-[0_0_8px_1px_rgba(239,68,68,0.35)]'
                       : 'text-red-500 font-semibold',
@@ -1241,8 +1340,8 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
               </>
             ) : <span className="text-slate-600 text-[10px]">No data</span>}
             <span className="text-slate-700">|</span>
-            <span className={`font-bold text-[11px] sm:text-[12px] ${(pcr ?? 1) > 1.2 ? 'text-emerald-400' : (pcr ?? 1) < 0.8 ? 'text-red-400' : 'text-amber-400'}`}
-              title="Put-Call Ratio">
+            <span className={`font-bold text-[11px] sm:text-[12px] tabular-nums transition-colors duration-300 ${(pcr ?? 1) > 1.2 ? 'text-emerald-400' : (pcr ?? 1) < 0.8 ? 'text-red-400' : 'text-amber-400'}`}
+              title="Put-Call Ratio (full chain OI if available, else ATM±5)">
               PCR {pcr?.toFixed(2) ?? '--'}
             </span>
           </div>
@@ -1258,11 +1357,11 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
               <span className="text-[8px] font-bold tracking-widest uppercase text-slate-500">Total Volume</span>
               <div className="flex items-center justify-between gap-1 font-mono">
                 <span className="text-[11px] sm:text-[12px] font-black text-emerald-400">
-                  CE <span className={`text-emerald-300 ${getValueFlashClass(chainMoves.volume.ce, chainMoves.volume.active)}`}>{chainStats.ceVolPct}%</span>
+                  CE <span className={`inline-block w-[34px] text-right tabular-nums text-emerald-300 ${getValueFlashClass(chainMoves.volume.ce, chainMoves.volume.active)}`}>{chainStats.ceVolPct}%</span>
                 </span>
                 <span className="text-[9px] text-slate-600">/</span>
                 <span className="text-[11px] sm:text-[12px] font-black text-red-400">
-                  PE <span className={`text-red-300 ${getValueFlashClass(chainMoves.volume.pe, chainMoves.volume.active)}`}>{chainStats.peVolPct}%</span>
+                  PE <span className={`inline-block w-[34px] text-right tabular-nums text-red-300 ${getValueFlashClass(chainMoves.volume.pe, chainMoves.volume.active)}`}>{chainStats.peVolPct}%</span>
                 </span>
               </div>
               <div className="flex h-[5px] rounded-full overflow-hidden bg-slate-800/80">
@@ -1271,9 +1370,9 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
                 <div className="bg-gradient-to-l from-red-500 to-red-400 transition-all duration-500 rounded-r-full"
                   style={{ width: `${chainStats.peVolPct}%` }} />
               </div>
-              <div className="flex justify-between text-[9px] font-mono text-slate-500">
-                <span className={getValueFlashClass(chainMoves.volume.ce, chainMoves.volume.active)}>{fmtNum(chainStats.totalCEVol)}</span>
-                <span className={getValueFlashClass(chainMoves.volume.pe, chainMoves.volume.active)}>{fmtNum(chainStats.totalPEVol)}</span>
+              <div className="flex justify-between text-[9px] font-mono tabular-nums text-slate-500">
+                <span className={`inline-block min-w-[62px] text-left ${getValueFlashClass(chainMoves.volume.ce, chainMoves.volume.active)}`}>{fmtNum(chainStats.totalCEVol)}</span>
+                <span className={`inline-block min-w-[62px] text-right ${getValueFlashClass(chainMoves.volume.pe, chainMoves.volume.active)}`}>{fmtNum(chainStats.totalPEVol)}</span>
               </div>
             </div>
 
@@ -1373,12 +1472,12 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
         <div className="rounded-lg border border-slate-700/50 bg-slate-900/50 mb-3 overflow-hidden">
 
           {/* Row 1: Signal label + confidence bar + actionability */}
-          <div className="flex items-center justify-between gap-3 px-3 py-2 border-b border-slate-700/30">
+          <div className={`flex items-center justify-between gap-3 px-3 py-2 border-b border-slate-700/30 transition-colors duration-500 ${scoreFlash === 'up' ? 'bg-emerald-500/8' : scoreFlash === 'down' ? 'bg-red-500/8' : ''}`}>
             <div className="flex items-center gap-2">
-              <span className={`text-[12px] sm:text-[14px] font-black tracking-wide ${OVERALL_CFG[symbolSignal.signal].color}`}>
-                {OVERALL_CFG[symbolSignal.signal].arrow} {OVERALL_CFG[symbolSignal.signal].label}
+              <span className={`text-[12px] sm:text-[14px] font-black tracking-wide transition-all duration-300 ${(tradeDecision ? DECISION_BADGE_CFG[tradeDecision].color : OVERALL_CFG[symbolSignal.signal].color)}`}>
+                {tradeDecision ? DECISION_BADGE_CFG[tradeDecision].arrow : OVERALL_CFG[symbolSignal.signal].arrow} {tradeDecision ? DECISION_BADGE_CFG[tradeDecision].label : OVERALL_CFG[symbolSignal.signal].label}
               </span>
-              <span className="text-[9px] font-mono text-slate-500 tabular-nums">
+              <span className={`text-[9px] font-mono tabular-nums transition-colors duration-300 ${scoreFlash === 'up' ? 'text-emerald-300' : scoreFlash === 'down' ? 'text-red-300' : 'text-slate-500'}`}>
                 {symbolSignal.score > 0 ? '+' : ''}{symbolSignal.score}
               </span>
             </div>
@@ -1390,7 +1489,7 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
                     style={{ width: `${intelligence.confidence}%` }}
                   />
                 </div>
-                <span className={`text-[10px] font-bold tabular-nums ${intelligence.confidence >= 70 ? 'text-emerald-400' : intelligence.confidence >= 45 ? 'text-amber-400' : 'text-red-400'}`}>
+                <span className={`text-[10px] font-bold tabular-nums transition-all duration-300 ${intelligence.confidence >= 70 ? 'text-emerald-400' : intelligence.confidence >= 45 ? 'text-amber-400' : 'text-red-400'}`}>
                   {intelligence.confidence}%
                 </span>
               </div>
@@ -1404,23 +1503,23 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
           <div className="grid grid-cols-3 divide-x divide-slate-700/30">
 
             {/* PCR */}
-            <div className="flex flex-col gap-0.5 px-2.5 py-2">
+            <div className={`flex flex-col gap-0.5 px-2.5 py-2 transition-colors duration-500 ${scoreFlash ? (scoreFlash === 'up' ? 'bg-emerald-500/5' : 'bg-red-500/5') : ''}`}>
               <span className="text-[8px] sm:text-[9px] font-bold tracking-widest text-slate-500 uppercase">Put/Call Ratio</span>
-              <span className={`text-[15px] sm:text-[17px] font-black font-mono leading-none tabular-nums ${(pcr ?? 1) > 1.2 ? 'text-emerald-400' : (pcr ?? 1) < 0.8 ? 'text-red-400' : 'text-amber-400'}`}>
+              <span className={`text-[15px] sm:text-[17px] font-black font-mono leading-none tabular-nums transition-colors duration-300 ${(pcr ?? 1) > 1.2 ? 'text-emerald-400' : (pcr ?? 1) < 0.8 ? 'text-red-400' : 'text-amber-400'}`}>
                 {pcr?.toFixed(2) ?? '--'}
               </span>
-              <span className={`text-[9px] font-semibold ${(pcr ?? 1) > 1.2 ? 'text-emerald-500' : (pcr ?? 1) < 0.8 ? 'text-red-500' : 'text-amber-500'}`}>
+              <span className={`text-[9px] font-semibold transition-colors duration-300 ${(pcr ?? 1) > 1.2 ? 'text-emerald-500' : (pcr ?? 1) < 0.8 ? 'text-red-500' : 'text-amber-500'}`}>
                 {(pcr ?? 1) > 1.2 ? 'Bullish bias' : (pcr ?? 1) < 0.8 ? 'Bearish bias' : 'Balanced'}
               </span>
             </div>
 
             {/* Max Pain */}
-            <div className="flex flex-col gap-0.5 px-2.5 py-2">
+            <div className={`flex flex-col gap-0.5 px-2.5 py-2 transition-colors duration-500 ${scoreFlash ? (scoreFlash === 'up' ? 'bg-emerald-500/5' : 'bg-red-500/5') : ''}`}>
               <span className="text-[8px] sm:text-[9px] font-bold tracking-widest text-slate-500 uppercase">Max Pain</span>
               <span className="text-[15px] sm:text-[17px] font-black font-mono leading-none tabular-nums text-violet-300">
                 {intelligence.maxPain?.toLocaleString('en-IN') ?? '--'}
               </span>
-              <span className="text-[9px] font-semibold text-violet-400/70">
+              <span className="text-[9px] font-semibold text-violet-400/70 transition-all duration-300">
                 {intelligence.maxPainGapPct != null
                   ? `${intelligence.maxPainGapPct > 0 ? '+' : ''}${intelligence.maxPainGapPct}% from spot`
                   : 'Writers\' target'}
@@ -1428,12 +1527,12 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
             </div>
 
             {/* Regime + S/R + metrics */}
-            <div className="flex flex-col gap-0.5 px-2.5 py-2">
+            <div className={`flex flex-col gap-0.5 px-2.5 py-2 transition-colors duration-500 ${scoreFlash ? (scoreFlash === 'up' ? 'bg-emerald-500/5' : 'bg-red-500/5') : ''}`}>
               <span className="text-[8px] sm:text-[9px] font-bold tracking-widest text-slate-500 uppercase">Regime</span>
-              <span className="text-[11px] sm:text-[13px] font-black text-slate-200 leading-tight">{intelligence.regime.replace(/_/g, ' ')}</span>
+              <span className="text-[11px] sm:text-[13px] font-black text-slate-200 leading-tight transition-all duration-300">{intelligence.regime.replace(/_/g, ' ')}</span>
               <div className="flex flex-wrap gap-x-2 gap-y-0 text-[8px] font-mono">
-                <span className="text-slate-400">Agree {intelligence.agreementPct}%</span>
-                <span className="text-amber-400/80">Trap {intelligence.trapRiskPct}%</span>
+                <span className="text-slate-400 transition-all duration-300">Agree {intelligence.agreementPct}%</span>
+                <span className="text-amber-400/80 transition-all duration-300">Trap {intelligence.trapRiskPct}%</span>
               </div>
               {(intelligence.keyLevels.support || intelligence.keyLevels.resistance) && (
                 <div className="flex gap-2 text-[8px] font-mono mt-0.5">
@@ -1444,11 +1543,11 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
             </div>
           </div>
 
-          {/* Row 3: Insights */}
+          {/* Row 3: Insights — keyed by content so text changes cause a remount with fade-in */}
           {intelligence.insights?.length > 0 && (
             <div className="flex flex-wrap gap-1 px-2.5 py-1.5 border-t border-slate-700/30 bg-slate-800/30">
-              {intelligence.insights.map((note, idx) => (
-                <span key={`${name}-ins-${idx}`} className="inline-flex items-center rounded border border-slate-700/40 bg-slate-900/60 px-1.5 py-0.5 text-[8px] sm:text-[10px] text-slate-300">{note}</span>
+              {intelligence.insights.map((note) => (
+                <span key={`${name}-ins-${note.slice(0, 28)}`} className="inline-flex items-center rounded border border-slate-700/40 bg-slate-900/60 px-1.5 py-0.5 text-[8px] sm:text-[10px] text-slate-300 transition-all duration-300">{note}</span>
               ))}
             </div>
           )}
@@ -1475,14 +1574,6 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
           <span title="CE/PE option-chain full refresh from Zerodha — every 1.5s">Chain: 1.5s</span>
         </div>
       </div>
-
-      {/* Lowest Price Movement Predictions */}
-      {hasRealSignal && intelligence?.pricePredictions && (
-        <PricePredictionCard 
-          predictions={intelligence.pricePredictions}
-          isLoading={false}
-        />
-      )}
 
       {/* Strike table header */}
       <div className="grid grid-cols-[1fr_60px_1fr] sm:grid-cols-[1fr_84px_1fr] rounded-t-lg overflow-hidden border border-slate-700/50 mb-0">
@@ -1598,7 +1689,14 @@ SymbolStrikeCard.displayName = 'SymbolStrikeCard';
 // Main Component
 
 const StrikeIntelligence = memo(() => {
-  const { strikeData } = useStrikeIntelligence();
+  const { strikeData, isConnected, lastUpdate } = useStrikeIntelligence();
+  const [tickTs, setTickTs] = useState<string>('--:--:--');
+
+  // Update displayed timestamp every time a new WebSocket message arrives
+  useEffect(() => {
+    if (!lastUpdate) return;
+    setTickTs(new Date(lastUpdate).toLocaleTimeString('en-IN', { hour12: false }));
+  }, [lastUpdate]);
 
   const dataStatus = useMemo(() => {
     const sources = (['NIFTY', 'BANKNIFTY', 'SENSEX'] as const).map(s => strikeData[s]?.dataSource).filter(Boolean);
@@ -1619,6 +1717,13 @@ const StrikeIntelligence = memo(() => {
             ATM +/-5 | CE/PE | Vol | OI | PCR | Max Pain | BSL/SSL | BOS | Trap
           </span>
           <span className={`text-[9px] font-mono ml-1 ${dataStatus.color}`}>{dataStatus.label}</span>
+        </div>
+        {/* Live feed indicator — ticks every 0.5s when WebSocket is connected */}
+        <div className="flex items-center gap-1.5 shrink-0">
+          <span className={`inline-block w-2 h-2 rounded-full ${isConnected ? 'bg-emerald-400 animate-pulse' : 'bg-slate-600'}`} title={isConnected ? 'WebSocket connected' : 'Reconnecting…'} />
+          <span className="text-[9px] font-mono text-slate-500" title="Last WebSocket tick">
+            {isConnected ? <span className="text-emerald-400/70">{tickTs}</span> : 'offline'}
+          </span>
         </div>
       </div>
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 lg:gap-5 xl:gap-6">

@@ -108,18 +108,35 @@ export function AppAccessGate({ children }: { children: ReactNode }) {
 
   if (checking) {
     return (
-      <div className="min-h-screen bg-[#0a0e17] flex items-center justify-center">
-        <div className="text-center space-y-4">
-          <div className="relative w-16 h-16 mx-auto">
-            <div className="absolute inset-0 rounded-full border-4 border-cyan-500/20" />
-            <div className="absolute inset-0 rounded-full border-4 border-transparent border-t-cyan-400 animate-spin" />
-            <div className="absolute inset-2 rounded-full bg-cyan-500/10 flex items-center justify-center">
-              <svg className="w-5 h-5 text-cyan-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
-              </svg>
+      <div className="min-h-screen bg-[#0a0e17] flex items-center justify-center p-4">
+        <div className="absolute inset-0 overflow-hidden pointer-events-none">
+          <div className="absolute top-1/3 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[480px] h-[480px] bg-cyan-500/5 rounded-full blur-3xl" />
+          <div className="absolute top-2/3 left-1/3 w-[280px] h-[280px] bg-blue-500/5 rounded-full blur-3xl" />
+        </div>
+
+        <div className="relative w-full max-w-sm rounded-2xl border border-white/10 bg-slate-900/80 backdrop-blur-xl shadow-2xl overflow-hidden">
+          <div className="h-1 w-full bg-gradient-to-r from-cyan-500 via-blue-500 to-indigo-500" />
+          <div className="px-6 py-8 text-center space-y-4">
+            <div className="relative w-16 h-16 mx-auto shrink-0">
+              <div className="absolute inset-0 rounded-full border-4 border-cyan-500/20" />
+              <div className="absolute inset-0 rounded-full border-4 border-transparent border-t-cyan-400 animate-spin" />
+              <div className="absolute inset-2 rounded-full bg-cyan-500/10 flex items-center justify-center">
+                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" className="text-cyan-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+                </svg>
+              </div>
+            </div>
+
+            <div className="space-y-1">
+              <p className="text-sm font-semibold tracking-wide text-cyan-300">Verifying Secure Access</p>
+              <p className="text-xs text-slate-400">Checking your authenticated session and device trust.</p>
+            </div>
+
+            <div className="flex items-center justify-center gap-2 text-[11px] text-slate-500">
+              <span className="inline-block w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse" />
+              <span>Please wait a moment...</span>
             </div>
           </div>
-          <p className="text-slate-400 text-sm tracking-wide">Verifying access...</p>
         </div>
       </div>
     );

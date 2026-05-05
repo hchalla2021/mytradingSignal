@@ -118,6 +118,10 @@ def _clamp(v: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, v))
 
 
+def _chunked(items: List[str], size: int) -> List[List[str]]:
+    return [items[i:i + size] for i in range(0, len(items), size)]
+
+
 def _get_atm_strike(spot: float, step: int) -> int:
     """Round spot price to nearest strike (standard half-up, not banker's rounding)."""
     return int(spot / step + 0.5) * step
@@ -842,105 +846,183 @@ def _compute_max_pain(rows: List[Dict[str, Any]]) -> Optional[int]:
     return best
 
 
-def _compute_price_move_predictions(rows: List[Dict[str, Any]], spot: float) -> Dict[str, Any]:
+def _compute_price_move_predictions(
+    rows: List[Dict[str, Any]],
+    spot: float,
+    final_score: float = 0.0,
+    overall_signal: str = "NEUTRAL",
+) -> Dict[str, Any]:
     """
-    Predict which low prices will move UP or DOWN.
-    
-    Finds lowest prices in each ITM/OTM CE/PE category and predicts direction.
-    Returns: {
-      "lowestItmCe": {"price": X, "strike": Y, "direction": "UP", "confidence": Z},
-      "lowestOtmCe": {...},
-      "lowestItmPe": {...},
-      "lowestOtmPe": {...}
+    High-conviction trade target engine.
+
+    Only surfaces options with conviction >= 65 that are ALIGNED with the current
+    market direction (BULL = buy CE, BEAR = buy PE).  Returns at most two signals.
+
+    Signal semantics (critical):
+      CE STRONG_BUY / BUY  = call buyers active  = CE price rising  = market BULLISH
+      PE STRONG_BUY / BUY  = put  buyers active  = PE price rising  = market BEARISH
+      PE STRONG_SELL / SELL = put WRITING (put sellers) = market BULLISH (opposite!)
+
+    So for BOTH directions we look for STRONG_BUY / BUY on the chosen side.
+    """
+    result: Dict[str, Any] = {
+        "primary": None,
+        "secondary": None,
+        "marketBias": overall_signal,
+        "score": round(final_score, 1),
     }
-    """
-    predictions = {}
-    
-    # Categorize strikes into ITM and OTM for CE and PE
-    itm_ce = []  # Strike < spot (CE is ITM)
-    otm_ce = []  # Strike > spot (CE is OTM)
-    itm_pe = []  # Strike > spot (PE is ITM)
-    otm_pe = []  # Strike < spot (PE is OTM)
-    
+
+    # Direction gate
+    is_bull = final_score > 15      # market bullish  → buy CE (calls)
+    is_bear = final_score < -15     # market bearish  → buy PE (puts)
+    if not is_bull and not is_bear:
+        return result               # no clear direction → no trade setup
+
+    # Expected additional spot move (score-based)
+    score_abs = abs(final_score)
+    if score_abs >= 65:
+        expected_spot_pct = 0.007
+    elif score_abs >= 45:
+        expected_spot_pct = 0.005
+    elif score_abs >= 30:
+        expected_spot_pct = 0.0035
+    else:
+        expected_spot_pct = 0.0025
+    expected_spot_move = spot * expected_spot_pct
+
+    # Candidate scoring
+    candidates: List[Dict[str, Any]] = []
+
     for row in rows:
-        strike = _safe_int(row.get("strike"))
-        if strike <= 0:
+        strike_val = _safe_int(row.get("strike"))
+        if strike_val <= 0:
             continue
-        ce = row.get("ce", {})
-        pe = row.get("pe", {})
-        
-        # Categorize CEs
-        if strike < spot:
-            itm_ce.append({"strike": strike, "data": ce, "row": row})
+        is_atm = bool(row.get("isATM"))
+
+        # Choose the side aligned with market direction
+        # BULL: buy CE  (call options profit when market rises)
+        # BEAR: buy PE  (put  options profit when market falls)
+        side_key   = "ce" if is_bull else "pe"
+        side_label = "CE" if is_bull else "PE"
+        side = row.get(side_key, {}) or {}
+
+        price  = _safe_float(side.get("price"))
+        if price < 1.5:           # too cheap / illiquid
+            continue
+
+        sig       = side.get("signal", "NEUTRAL")
+        score     = _safe_float(side.get("score", 0))
+        volume    = _safe_int(side.get("volume"))
+        oi        = _safe_int(side.get("oi"))
+        sigs      = side.get("signals") or {}
+        delta     = abs(_safe_float(sigs.get("delta", 0)))
+        bos       = sigs.get("bos")
+        trap      = bool(sigs.get("trap", False))
+        oi_interp = sigs.get("oiInterp", "")
+
+        # Delta gate: 0.12 – 0.82
+        if delta < 0.12 or delta > 0.82:
+            continue
+
+        # Signal alignment:
+        #   We want the OPTION being bought so its price goes UP and we profit.
+        #   STRONG_BUY / BUY on either CE or PE = active option buying = price rising.
+        #   For CE: CE BUY = call buying = market bullish.
+        #   For PE: PE BUY = put  buying = market bearish.
+        #   (PE SELL/STRONG_SELL = put WRITING = PE price falling = market bullish — wrong direction!)
+        if sig == "STRONG_BUY":
+            base_pts = 40
+        elif sig == "BUY":
+            base_pts = 26
         else:
-            otm_ce.append({"strike": strike, "data": ce, "row": row})
-        
-        # Categorize PEs
-        if strike > spot:
-            itm_pe.append({"strike": strike, "data": pe, "row": row})
-        else:
-            otm_pe.append({"strike": strike, "data": pe, "row": row})
-    
-    # Helper: predict direction and confidence from signal + velocity
-    def predict_direction(side_data: Dict, side_type: str) -> tuple[str, int]:
-        """Returns (direction: UP|DOWN, confidence: 0-100)"""
-        signal = side_data.get("signal", "NEUTRAL")
-        velocity = side_data.get("velocity", "COLD")
-        score = _safe_float(side_data.get("score", 0))
-        
-        # Direction from signal
-        if signal in ("STRONG_BUY", "BUY"):
-            direction = "UP"
-            base_conf = 70 if signal == "STRONG_BUY" else 55
-        elif signal in ("STRONG_SELL", "SELL"):
-            direction = "DOWN"
-            base_conf = 70 if signal == "STRONG_SELL" else 55
-        else:
-            # For NEUTRAL, use score sign
-            if score > 0:
-                direction = "UP"
-                base_conf = 40
-            elif score < 0:
-                direction = "DOWN"
-                base_conf = 40
-            else:
-                direction = "FLAT"
-                base_conf = 30
-        
-        # Boost confidence with velocity
-        velocity_boost = 0
-        if velocity == "EXTREME":
-            velocity_boost = 15
-        elif velocity == "HOT":
-            velocity_boost = 10
-        elif velocity == "WARM":
-            velocity_boost = 5
-        
-        confidence = min(base_conf + velocity_boost, 95)
-        return direction, confidence
-    
-    # Helper: find lowest price in category
-    def find_lowest(category: List[Dict]) -> Dict[str, Any]:
-        """Find lowest priced strike in category with prediction"""
-        if not category:
-            return {}
-        lowest = min(category, key=lambda x: _safe_float(x["data"].get("price", 999999)))
-        direction, confidence = predict_direction(lowest["data"], "ce" if "ce" in str(lowest) else "pe")
-        return {
-            "price": round(_safe_float(lowest["data"].get("price")), 2),
-            "strike": lowest["strike"],
-            "direction": direction,
-            "confidence": confidence,
-            "signal": lowest["data"].get("signal", "NEUTRAL"),
-            "velocity": lowest["data"].get("velocity", "COLD"),
-        }
-    
-    predictions["lowestItmCe"] = find_lowest(itm_ce)
-    predictions["lowestOtmCe"] = find_lowest(otm_ce)
-    predictions["lowestItmPe"] = find_lowest(itm_pe)
-    predictions["lowestOtmPe"] = find_lowest(otm_pe)
-    
-    return predictions
+            continue          # not being actively bought → skip
+
+        # Score magnitude bonus (0-20)
+        score_pts = min(abs(score) / 100.0 * 20.0, 20.0)
+
+        # Volume participation bonus (log-scale, 0-12)
+        vol_pts = min(math.log10(max(volume, 10)) / 7.0 * 12.0, 12.0) if volume > 0 else 0.0
+
+        # BOS confirmation bonus:
+        # bos_signal is strike-level: "UP"=CE surging+PE falling, "DOWN"=PE surging+CE falling
+        # BULL: BOS "UP" (market bullish breakout)   = good for buying CE
+        # BEAR: BOS "DOWN" (market bearish breakout) = good for buying PE
+        bos_pts = 0.0
+        if is_bull and bos == "UP":
+            bos_pts = 10.0
+        elif is_bear and bos == "DOWN":
+            bos_pts = 10.0
+
+        # Delta quality bonus (sweet-spot 0.35-0.60 = near ATM)
+        delta_pts = max(10.0 - abs(delta - 0.475) * 22.0, 0.0)
+
+        # OI interpretation bonus
+        # oiInterp abbreviated values: "LB"=Long Buildup, "SC"=Short Cover,
+        #   "SB"=Short Buildup, "LU"=Long Unwinding
+        # BULL/CE: CE "LB" (call longs adding) or "SC" (call-short exits) = bullish  ✓
+        # BEAR/PE: PE "LB" (put  longs adding) or "SC" (put-short  exits) = bearish  ✓
+        oi_pts = 6.0 if oi_interp in ("LB", "SC") else 0.0
+
+        # ATM bonus
+        atm_pts = 5.0 if is_atm else 0.0
+
+        # Trap penalty
+        trap_penalty = -18.0 if trap else 0.0
+
+        conviction = int(round(_clamp(
+            base_pts + score_pts + vol_pts + bos_pts + delta_pts + oi_pts + atm_pts + trap_penalty,
+            0.0, 98.0,
+        )))
+
+        # Reason tags
+        reasons: List[str] = []
+        if sig == "STRONG_BUY":
+            reasons.append("STRONG signal")
+        if bos_pts > 0:
+            reasons.append("BOS confirmed")
+        if oi_pts > 0:
+            reasons.append("OI buildup")
+        if is_atm:
+            reasons.append("ATM strike")
+        if trap:
+            reasons.append("\u26a0 trap risk")
+
+        # Target / stop / upside
+        target_price = round(price + delta * expected_spot_move, 1)
+        stop_loss    = round(price * 0.72, 1)
+        upside_pct   = round((target_price - price) / price * 100.0, 1) if price > 0 else 0.0
+
+        candidates.append({
+            "strike":     strike_val,
+            "side":       side_label,
+            "entry":      round(price, 2),
+            "target":     target_price,
+            "stopLoss":   stop_loss,
+            "upsidePct":  upside_pct,
+            "conviction": conviction,
+            "signal":     sig,
+            "delta":      round(delta, 3),
+            "volume":     volume,
+            "oi":         oi,
+            "direction":  "UP",
+            "isATM":      is_atm,
+            "bos":        bos,
+            "reasons":    reasons,
+        })
+
+    # Filter >= 65 % conviction, sort best-first
+    candidates.sort(key=lambda x: x["conviction"], reverse=True)
+    high_conv = [c for c in candidates if c["conviction"] >= 65]
+
+    if high_conv:
+        result["primary"] = high_conv[0]
+    if len(high_conv) > 1:
+        for c in high_conv[1:]:
+            if c["strike"] != high_conv[0]["strike"]:
+                result["secondary"] = c
+                break
+
+    return result
 
 
 def _build_intelligence_summary(
@@ -1099,12 +1181,31 @@ def _build_intelligence_summary(
     if spot > 0 and resistance:
         resistance_gap_pct = round((resistance - spot) / spot * 100.0, 2)
 
-    bull_pressure = int(round(_clamp(50.0 + final_score * 0.8, 0.0, 100.0)))
+    # Bull/Bear pressure — blend score with actual CE/PE volume and OI participation.
+    # Pure score-based formula (×0.8) hits 0% at score=-62.5 which is misleading; instead
+    # we blend three signals so extremes never drop below ~5 % in either direction:
+    #   60 % score-based  (less aggressive multiplier ×0.40)
+    #   25 % CE-vs-PE volume ratio  (CE vol buying = bullish activity)
+    #   15 % CE-vs-PE OI ratio  (structural positioning)
+    total_ce_vol_s = sum(_safe_int((r.get("ce") or {}).get("volume")) for r in sorted_rows)
+    total_pe_vol_s = sum(_safe_int((r.get("pe") or {}).get("volume")) for r in sorted_rows)
+    total_vol_s = max(total_ce_vol_s + total_pe_vol_s, 1)
+    vol_bull_pct = total_ce_vol_s / total_vol_s * 100  # higher CE vol → more call buying → bullish
+
+    total_ce_oi_s = sum(_safe_int((r.get("ce") or {}).get("oi")) for r in sorted_rows)
+    total_pe_oi_s = sum(_safe_int((r.get("pe") or {}).get("oi")) for r in sorted_rows)
+    total_oi_s = max(total_ce_oi_s + total_pe_oi_s, 1)
+    oi_bull_pct = total_ce_oi_s / total_oi_s * 100  # higher CE OI → less put dominance → mild bull
+
+    score_bull_pct = _clamp(50.0 + final_score * 0.40, 5.0, 95.0)  # never hits extremes
+
+    raw_bull = 0.60 * score_bull_pct + 0.25 * vol_bull_pct + 0.15 * oi_bull_pct
+    bull_pressure = int(round(_clamp(raw_bull, 3.0, 97.0)))
     bear_pressure = 100 - bull_pressure
 
-    # PCR (Put-Call OI ratio) — structural sentiment gauge
-    total_ce_oi = sum(_safe_int((r.get("ce") or {}).get("oi")) for r in sorted_rows)
-    total_pe_oi = sum(_safe_int((r.get("pe") or {}).get("oi")) for r in sorted_rows)
+    # PCR (Put-Call OI ratio) — structural sentiment gauge (uses same 11-strike chain)
+    total_ce_oi = total_ce_oi_s
+    total_pe_oi = total_pe_oi_s
     pcr = round(total_pe_oi / max(total_ce_oi, 1), 2)
 
     # Max Pain — strike where option buyers collectively lose most at expiry
@@ -1144,7 +1245,8 @@ def _build_intelligence_summary(
     )
 
     # Compute lowest price predictions (ITM/OTM with UP/DOWN direction)
-    price_predictions = _compute_price_move_predictions(sorted_rows, spot)
+    # Compute price predictions (market-direction-aligned, conviction ≥ 65 % only)
+    price_predictions = _compute_price_move_predictions(sorted_rows, spot, final_score, signal)
 
     return {
         "symbol": symbol,
@@ -1258,6 +1360,8 @@ class StrikeIntelligenceService:
         self._kite_init_backoff_until: float = 0.0  # Backoff timer for failed init
         # OI change tracking: key = "SYMBOL_STRIKE_CE" / "SYMBOL_STRIKE_PE" → prev OI
         self._prev_oi: Dict[str, int] = {}
+        # Full-chain OI snapshot for computing chainTotals OI change (covers ALL strikes)
+        self._prev_chain_oi: Dict[str, Dict[str, int]] = {}
         # Price velocity tracking: key = "SYMBOL_STRIKE_CE" / "_PE" → prev LTP
         # Used to detect fast-moving strikes for real-time auto-highlighting.
         self._prev_prices: Dict[str, float] = {}
@@ -1451,7 +1555,7 @@ class StrikeIntelligenceService:
     # ── Fetch strike data for one symbol ─────────────────────────────────
 
     def _fetch_strikes_sync(self, symbol: str, spot: float) -> Optional[Dict[str, Any]]:
-        """Blocking call — fetch option chain quotes for ATM ± 5 strikes."""
+        """Blocking call — fetch ATM ± 5 strikes plus full-chain nearest-expiry totals."""
         if not self._kite:
             return None
 
@@ -1478,6 +1582,21 @@ class StrikeIntelligenceService:
             return None
 
         today = datetime.now(IST).date()
+        nearest_expiry = None
+        for inst in instruments:
+            if inst.get("name") != config["name"]:
+                continue
+            if inst.get("instrument_type") not in ("CE", "PE"):
+                continue
+            expiry = inst.get("expiry")
+            if not expiry or expiry < today:
+                continue
+            if nearest_expiry is None or expiry < nearest_expiry:
+                nearest_expiry = expiry
+
+        if nearest_expiry is None:
+            return None
+
         ce_map: Dict[int, Dict] = {}
         pe_map: Dict[int, Dict] = {}
 
@@ -1487,17 +1606,20 @@ class StrikeIntelligenceService:
             if inst.get("instrument_type") not in ("CE", "PE"):
                 continue
             expiry = inst.get("expiry")
-            if not expiry or expiry < today:
+            if expiry != nearest_expiry:
                 continue
             strike_val = inst.get("strike")
-            if strike_val not in strikes:
-                continue
             if inst["instrument_type"] == "CE":
-                if strike_val not in ce_map or inst["expiry"] < ce_map[strike_val]["expiry"]:
-                    ce_map[strike_val] = inst
+                ce_map[strike_val] = inst
             else:
-                if strike_val not in pe_map or inst["expiry"] < pe_map[strike_val]["expiry"]:
-                    pe_map[strike_val] = inst
+                pe_map[strike_val] = inst
+
+        # Collect tokens for full nearest-expiry totals.
+        all_tokens_map: Dict[str, Dict[str, Any]] = {}
+        for strike_val, inst in ce_map.items():
+            all_tokens_map[str(inst["instrument_token"])] = {"type": "CE", "strike": strike_val, "inst": inst}
+        for strike_val, inst in pe_map.items():
+            all_tokens_map[str(inst["instrument_token"])] = {"type": "PE", "strike": strike_val, "inst": inst}
 
         # Collect tokens
         tokens_map: Dict[str, Dict] = {}  # token_str -> {type, strike, inst}
@@ -1513,10 +1635,25 @@ class StrikeIntelligenceService:
             return None
 
         try:
-            quotes = self._kite.quote(list(tokens_map.keys()))
+            quotes: Dict[str, Any] = {}
+            for batch in _chunked(list(all_tokens_map.keys()), 200):
+                quotes.update(self._kite.quote(batch))
         except Exception as e:
             logger.debug("Quote fetch failed for %s: %s", symbol, e)
             return None
+
+        total_ce_volume = 0
+        total_pe_volume = 0
+        total_ce_oi = 0
+        total_pe_oi = 0
+        for tk_str, meta in all_tokens_map.items():
+            quote = quotes.get(tk_str, {})
+            if meta["type"] == "CE":
+                total_ce_volume += _safe_int(quote.get("volume"))
+                total_ce_oi += _safe_int(quote.get("oi"))
+            else:
+                total_pe_volume += _safe_int(quote.get("volume"))
+                total_pe_oi += _safe_int(quote.get("oi"))
 
         # Build per-strike data
         strike_data: Dict[int, Dict] = {}
@@ -1547,11 +1684,31 @@ class StrikeIntelligenceService:
                 expiry_str = str(ce_map[s].get("expiry", ""))
                 break
 
+        # ── Full-chain OI change (net signed: positive = buildup, negative = unwinding) ──
+        prev_chain = self._prev_chain_oi.get(symbol, {})
+        prev_ce_oi = prev_chain.get("ce", 0)
+        prev_pe_oi = prev_chain.get("pe", 0)
+        # First fetch → no reference yet; emit 0 so UI shows dash instead of noise
+        total_ce_oi_chg = (total_ce_oi - prev_ce_oi) if prev_chain else 0
+        total_pe_oi_chg = (total_pe_oi - prev_pe_oi) if prev_chain else 0
+        # Always update the stored snapshot for next cycle
+        self._prev_chain_oi[symbol] = {"ce": total_ce_oi, "pe": total_pe_oi}
+
         return {
             "atm": atm,
             "step": step,
             "spot": round(spot, 2),
-            "expiry": expiry_str,
+            "expiry": str(nearest_expiry or expiry_str),
+            "chainTotals": {
+                "totalCEVol": total_ce_volume,
+                "totalPEVol": total_pe_volume,
+                "totalCEOI": total_ce_oi,
+                "totalPEOI": total_pe_oi,
+                "totalVol": total_ce_volume + total_pe_volume,
+                "totalOI": total_ce_oi + total_pe_oi,
+                "totalCEOIChg": total_ce_oi_chg,
+                "totalPEOIChg": total_pe_oi_chg,
+            },
             "strikes": strike_data,
         }
 
@@ -1641,6 +1798,7 @@ class StrikeIntelligenceService:
             "step": step,
             "expiry": raw.get("expiry", ""),
             "strikeCount": len(strikes_out),
+            "chainTotals": raw.get("chainTotals"),
             "strikes": strikes_out,
             "intelligence": _build_intelligence_summary(
                 symbol,
@@ -1659,15 +1817,26 @@ class StrikeIntelligenceService:
 
     def _recompute_signals_with_spot(self, entry: Dict[str, Any], spot: float, symbol: str) -> Dict[str, Any]:
         """
-        Recompute per-strike signals using a fresh spot price every 1s.
-        OI / volume / price / change are taken from the last Zerodha fetch.
-        Only spot-sensitive components update every second:
-          • moneyness bias, ATM recalculation, delta, BSL/SSL zone
-        The BOS and Trap sub-signals are recomputed from stored price/change data.
+        Recompute per-strike signals using a fresh spot price every 0.5s.
+        OI / volume are taken from the last Zerodha fetch (every 1.5s).
+
+        Price momentum is delta-estimated between Zerodha fetches:
+          adj_change = last_change + delta × (current_spot − prev_snapshot_spot)
+
+        This accumulates correctly across 0.5s cycles:
+          • After Zerodha fetch: ce_change = true ltp−close (Zerodha baseline)
+          • Each 0.5s cycle:     ce_change += delta × spot_tick_delta
+          • Next Zerodha fetch:  ce_change reset to new true ltp−close
+        Result: the ±30 price-momentum factor now reacts to every spot tick,
+        not just the 1.5s Zerodha cadence — no delay in signal changes.
         """
-        step    = STRIKE_STEP.get(symbol, 50)
-        new_atm = _get_atm_strike(spot, step)
-        dte     = _dte_from_expiry(str(entry.get("expiry", "")))
+        step      = STRIKE_STEP.get(symbol, 50)
+        new_atm   = _get_atm_strike(spot, step)
+        dte       = _dte_from_expiry(str(entry.get("expiry", "")))
+
+        # Spot delta since the last 0.5 s recompute (or last Zerodha fetch when first cycle)
+        prev_spot   = _safe_float(entry.get("spot", spot))
+        spot_delta  = spot - prev_spot   # signed: + = market moved up, − = down
 
         new_strikes = []
         for row in entry.get("strikes", []):
@@ -1675,15 +1844,36 @@ class StrikeIntelligenceService:
             ce = row.get("ce", {})
             pe = row.get("pe", {})
 
+            ce_price  = _safe_float(ce.get("price"))
+            pe_price  = _safe_float(pe.get("price"))
+            ce_change = _safe_float(ce.get("change"))
+            pe_change = _safe_float(pe.get("change"))
+
+            # ── Delta-estimated price adjustment ──────────────────────────
+            # When spot moves between Zerodha fetches, estimate option price
+            # change via Black-Scholes delta so the ±30 momentum factor stays
+            # reactive to live ticks (not just every 1.5 s).
+            # Threshold of 0.5 pt avoids noise from micro jitter.
+            if abs(spot_delta) >= 0.5:
+                sigs_ce = ce.get("signals") or {}
+                sigs_pe = pe.get("signals") or {}
+                ce_delta_val = _safe_float(sigs_ce.get("delta"))   # e.g. +0.5 for ATM CE
+                pe_delta_val = _safe_float(sigs_pe.get("delta"))   # e.g. −0.5 for ATM PE
+                if ce_delta_val != 0 and ce_price > 0:
+                    ce_change = round(ce_change + ce_delta_val * spot_delta, 2)
+                if pe_delta_val != 0 and pe_price > 0:
+                    pe_change = round(pe_change + pe_delta_val * spot_delta, 2)
+            # ─────────────────────────────────────────────────────────────
+
             signals = _compute_signal(
                 ce_oi=_safe_int(ce.get("oi")),
                 pe_oi=_safe_int(pe.get("oi")),
                 ce_volume=_safe_int(ce.get("volume")),
                 pe_volume=_safe_int(pe.get("volume")),
-                ce_price=_safe_float(ce.get("price")),
-                pe_price=_safe_float(pe.get("price")),
-                ce_change=_safe_float(ce.get("change")),
-                pe_change=_safe_float(pe.get("change")),
+                ce_price=ce_price,
+                pe_price=pe_price,
+                ce_change=ce_change,   # delta-adjusted for live spot tick
+                pe_change=pe_change,   # delta-adjusted for live spot tick
                 spot=spot,
                 strike=strike_val,
                 # Preserve oiChange from last full Zerodha fetch (not recomputed here)

@@ -75,20 +75,29 @@ export interface BestStrikeRecommendation {
   greeksSummary: string;
 }
 
-export interface PriceMovePrediction {
-  price: number;
+export interface TradePrediction {
   strike: number;
-  direction: 'UP' | 'DOWN' | 'FLAT';
-  confidence: number;
+  side: 'CE' | 'PE';
+  entry: number;
+  target: number;
+  stopLoss: number;
+  upsidePct: number;
+  conviction: number;
   signal: StrikeSignal;
-  velocity: 'COLD' | 'WARM' | 'HOT' | 'EXTREME' | null;
+  delta: number;
+  volume: number;
+  oi: number;
+  direction: 'UP' | 'DOWN';
+  isATM: boolean;
+  bos: string | null;
+  reasons: string[];
 }
 
 export interface PricePredictions {
-  lowestItmCe: PriceMovePrediction | Record<string, never>;
-  lowestOtmCe: PriceMovePrediction | Record<string, never>;
-  lowestItmPe: PriceMovePrediction | Record<string, never>;
-  lowestOtmPe: PriceMovePrediction | Record<string, never>;
+  primary: TradePrediction | null;
+  secondary: TradePrediction | null;
+  marketBias: string;
+  score: number;
 }
 
 export interface SymbolIntelligenceSummary {
@@ -124,6 +133,16 @@ export interface SymbolStrikeData {
   step: number;
   expiry: string;
   strikeCount: number;
+  chainTotals?: {
+    totalCEVol: number;
+    totalPEVol: number;
+    totalCEOI?: number;
+    totalPEOI?: number;
+    totalVol?: number;
+    totalOI?: number;
+    totalCEOIChg?: number;
+    totalPEOIChg?: number;
+  };
   strikes: StrikeRow[];
   intelligence?: SymbolIntelligenceSummary;
   dataSource: StrikeDataSource;
