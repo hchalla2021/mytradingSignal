@@ -76,13 +76,6 @@ function detectMove(curr: number, prev: number, epsilon = 0): MoveDirection {
   return 'flat';
 }
 
-function detectNullableMove(curr: number | null, prev: number | null, epsilon = 0): MoveDirection {
-  if (curr == null && prev == null) return 'flat';
-  if (curr != null && prev == null) return 'up';
-  if (curr == null && prev != null) return 'down';
-  return detectMove(curr ?? 0, prev ?? 0, epsilon);
-}
-
 function getMetricCardFlashClass(move: MetricMove): string {
   if (!move.active) return 'transition-shadow duration-700';
   const up = move.ce === 'up' || move.pe === 'up';
@@ -1603,9 +1596,6 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
               const ceLabel = chainStats.ceMomentumLabel;
               const peLabel = chainStats.peMomentumLabel;
 
-              // Is the value actively moving (for glow highlight)?
-              const ceActive = ceLabel === 'SURGING' || ceLabel === 'RISING' || ceLabel === 'FALLING' || ceLabel === 'COLLAPSING';
-              const peActive = peLabel === 'SURGING' || peLabel === 'RISING' || peLabel === 'FALLING' || peLabel === 'COLLAPSING';
               const ceNeutral = ceLabel === 'FLAT';
               const peNeutral = peLabel === 'FLAT';
 

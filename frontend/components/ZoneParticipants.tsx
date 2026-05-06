@@ -155,8 +155,9 @@ function collectZones(data: SymbolChartData, spot: number): ZoneEntry[] {
     const lv = data.levels[key];
     if (!lv || lv <= 0) continue;
     const { txt, above, pct } = distLabel(lv, spot);
-    const p = (data.levels as Record<string, unknown>)[`${key}_participants`] as Partial<ZP> | undefined;
-    const s = (data.levels as Record<string, unknown>)[`${key}_strike_oi`] as Partial<StrikeOI> | undefined;
+    const levelExtras = data.levels as unknown as Record<string, unknown>;
+    const p = levelExtras[`${key}_participants`] as Partial<ZP> | undefined;
+    const s = levelExtras[`${key}_strike_oi`] as Partial<StrikeOI> | undefined;
     zones.push({
       id: `${type}-${idx++}`,
       label,
