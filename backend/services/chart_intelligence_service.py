@@ -270,6 +270,153 @@ def _detect_fvg(candles: List[Dict]) -> List[Dict]:
     return result
 
 
+def _compute_zone_participants(candles: List[Dict], zone_top: float, zone_bottom: float) -> Dict:
+    """
+    Compute bull/bear participant volume at a price zone.
+
+    A candle "participates" in a zone if its high-low range overlaps the zone.
+    Bull participants = volume from bullish (close >= open) candles touching the zone.
+    Bear participants = volume from bearish (close < open) candles touching the zone.
+    In trading: bull_vol = buyers defending/attacking the level,
+                bear_vol = sellers defending/attacking the level.
+
+    Returns:
+        bull_vol    — total volume from bullish candles in the zone
+        bear_vol    — total volume from bearish candles in the zone
+        touch_count — how many candles have overlapped this zone
+        total_vol   — bull_vol + bear_vol
+        defender    — 'BULLS' | 'BEARS' | 'BALANCED' (who dominates the zone)
+        bull_pct    — percentage of total volume that is bullish (0–100)
+    """
+    bull_vol = 0
+    bear_vol = 0
+    touch_count = 0
+
+    for c in candles:
+        # A candle touches the zone when its range overlaps zone [bottom, top]
+        if c["l"] <= zone_top and c["h"] >= zone_bottom:
+            touch_count += 1
+            vol = c.get("v") or 0
+            if c["c"] >= c["o"]:  # bullish or neutral candle — buyers in control
+                bull_vol += vol
+            else:                 # bearish candle — sellers in control
+                bear_vol += vol
+
+    total = bull_vol + bear_vol
+    if total == 0:
+        defender = "BALANCED"
+        bull_pct = 50
+    else:
+        bull_pct = round(bull_vol / total * 100)
+        if bull_vol > bear_vol * 1.25:
+            defender = "BULLS"
+        elif bear_vol > bull_vol * 1.25:
+            defender = "BEARS"
+        else:
+            defender = "BALANCED"
+
+    return {
+        "bull_vol": bull_vol,
+        "bear_vol": bear_vol,
+        "touch_count": touch_count,
+        "total_vol": total,
+        "defender": defender,
+        "bull_pct": bull_pct,
+    }
+
+
+def _inject_participants(candles: List[Dict], fvgs: List[Dict], obs: List[Dict], liqs: List[Dict]) -> None:
+    """Inject participant volume data into FVG, OB, and Liquidity zone lists in-place."""
+    # FVGs — zone spans [bottom, top]
+    for fvg in fvgs:
+        p = _compute_zone_participants(candles, fvg["top"], fvg["bottom"])
+        fvg.update(p)
+
+    # Order Blocks — use the OB body zone [bottom, top] (body of the OB candle)
+    for ob in obs:
+        p = _compute_zone_participants(candles, ob["top"], ob["bottom"])
+        ob.update(p)
+
+    # Liquidity levels — treat as a thin band ±0.12% around the level
+    for liq in liqs:
+        lv = liq["level"]
+        band = lv * 0.0012
+        p = _compute_zone_participants(candles, lv + band, lv - band)
+        liq.update(p)
+
+
+def _inject_level_participants(candles: List[Dict], levels: Dict) -> None:
+    """Inject participant volume into PDH/PDL/CDH/CDL and S/R level dicts."""
+    def _zone_for_level(price: float) -> Dict:
+        band = price * 0.0012  # ±0.12% band around the level
+        return _compute_zone_participants(candles, price + band, price - band)
+
+    for key in ("pdh", "pdl", "cdh", "cdl"):
+        lv = levels.get(key, 0.0)
+        if lv and lv > 0:
+            p = _zone_for_level(lv)
+            levels[f"{key}_participants"] = p
+
+    # Support and resistance arrays — compute per level
+    sr_participants: Dict[str, List[Dict]] = {"support": [], "resistance": []}
+    for lv in levels.get("support", []):
+        sr_participants["support"].append({"price": lv, **_zone_for_level(lv)})
+    for lv in levels.get("resistance", []):
+        sr_participants["resistance"].append({"price": lv, **_zone_for_level(lv)})
+    levels["sr_participants"] = sr_participants
+
+
+def _inject_strike_oi(fvgs: List[Dict], obs: List[Dict], liqs: List[Dict], levels: Dict, symbol: str) -> None:
+    """
+    Inject live CE/PE OI data at the nearest option strike for every zone price.
+    Uses the per-strike OI map maintained by pcr_service (updated every 10s).
+    All data is live option chain data from Zerodha — no historical candle fallback.
+    """
+    try:
+        from services.pcr_service import get_strike_oi
+    except Exception:
+        return
+
+    def _inject(zone: Dict, price: float) -> None:
+        oi = get_strike_oi(symbol, price)
+        zone["strike"]           = oi["strike"]
+        zone["ce_oi"]            = oi["ce_oi"]
+        zone["pe_oi"]            = oi["pe_oi"]
+        zone["ce_oi_chg"]        = oi["ce_oi_chg"]
+        zone["pe_oi_chg"]        = oi["pe_oi_chg"]
+        zone["ce_vol"]           = oi["ce_vol"]
+        zone["pe_vol"]           = oi["pe_vol"]
+        zone["rotation"]         = oi["rotation"]
+        zone["oi_defender"]      = oi["defender"]
+        zone["oi_interpretation"]= oi["oi_interpretation"]
+
+    for fvg in fvgs:
+        _inject(fvg, (fvg["top"] + fvg["bottom"]) / 2)
+    for ob in obs:
+        _inject(ob, (ob["top"] + ob["bottom"]) / 2)
+    for lq in liqs:
+        _inject(lq, lq["level"])
+
+    for key in ("pdh", "pdl", "cdh", "cdl"):
+        lv = levels.get(key, 0.0)
+        if lv and lv > 0:
+            oi = get_strike_oi(symbol, lv)
+            levels[f"{key}_strike_oi"] = oi
+
+    # S/R levels
+    sr_p = levels.get("sr_participants", {})
+    for side in ("support", "resistance"):
+        for entry in sr_p.get(side, []):
+            oi = get_strike_oi(symbol, entry["price"])
+            entry.update({
+                "strike": oi["strike"], "ce_oi": oi["ce_oi"], "pe_oi": oi["pe_oi"],
+                "ce_oi_chg": oi["ce_oi_chg"], "pe_oi_chg": oi["pe_oi_chg"],
+                "ce_vol": oi["ce_vol"], "pe_vol": oi["pe_vol"],
+                "rotation": oi["rotation"], "oi_defender": oi["defender"],
+                "oi_interpretation": oi["oi_interpretation"],
+            })
+
+
 def _detect_order_blocks(candles: List[Dict]) -> List[Dict]:
     """
     Detect Order Blocks: last bullish/bearish candle before a strong impulsive move.
@@ -825,6 +972,15 @@ class ChartIntelligenceService:
         liq5 = _detect_liquidity(c5)
         levels = _compute_levels(c3, daily, spot)
 
+        # Inject participant volume data into all zones
+        _inject_participants(c3, fvg3, ob3, liq3)
+        _inject_participants(c5, fvg5, ob5, liq5)
+        _inject_level_participants(c3, levels)
+
+        # Inject live strike OI (CE/PE at nearest option strike per zone)
+        _inject_strike_oi(fvg3, ob3, liq3, levels, symbol)
+        _inject_strike_oi(fvg5, ob5, liq5, levels, symbol)
+
         return {
             "symbol": symbol,
             "spot": round(spot, 2),
@@ -912,16 +1068,31 @@ class ChartIntelligenceService:
 
         # Recompute all live overlays from the current in-progress candles so
         # FVG / OB / BSL-SSL / EQH-EQL react immediately to live market structure.
-        refreshed["fvg3m"] = _detect_fvg(refreshed.get("candles3m") or [])
-        refreshed["fvg5m"] = _detect_fvg(refreshed.get("candles5m") or [])
-        refreshed["ob3m"] = _detect_order_blocks(refreshed.get("candles3m") or [])
-        refreshed["ob5m"] = _detect_order_blocks(refreshed.get("candles5m") or [])
-        refreshed["liquidity3m"] = _detect_liquidity(refreshed.get("candles3m") or [])
-        refreshed["liquidity5m"] = _detect_liquidity(refreshed.get("candles5m") or [])
+        c3_live = refreshed.get("candles3m") or []
+        c5_live = refreshed.get("candles5m") or []
+        fvg3_live = _detect_fvg(c3_live)
+        fvg5_live = _detect_fvg(c5_live)
+        ob3_live = _detect_order_blocks(c3_live)
+        ob5_live = _detect_order_blocks(c5_live)
+        liq3_live = _detect_liquidity(c3_live)
+        liq5_live = _detect_liquidity(c5_live)
+        _inject_participants(c3_live, fvg3_live, ob3_live, liq3_live)
+        _inject_participants(c5_live, fvg5_live, ob5_live, liq5_live)
+        refreshed["fvg3m"] = fvg3_live
+        refreshed["fvg5m"] = fvg5_live
+        refreshed["ob3m"] = ob3_live
+        refreshed["ob5m"] = ob5_live
+        refreshed["liquidity3m"] = liq3_live
+        refreshed["liquidity5m"] = liq5_live
 
         if isinstance(refreshed.get("levels"), dict):
             daily = self._fetch_daily_sync(symbol)
             refreshed["levels"] = _compute_levels(last_candles_3m, daily, spot)
+            _inject_level_participants(last_candles_3m, refreshed["levels"])
+
+        # Inject live strike OI for all zones (live path)
+        _inject_strike_oi(fvg3_live, ob3_live, liq3_live, refreshed.get("levels", {}), symbol)
+        _inject_strike_oi(fvg5_live, ob5_live, liq5_live, refreshed.get("levels", {}), symbol)
 
         refreshed["dataSource"] = "LIVE"
         return refreshed

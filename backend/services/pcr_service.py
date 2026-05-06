@@ -13,6 +13,118 @@ IST = pytz.timezone('Asia/Kolkata')
 _PCR_CACHE: Dict[str, Dict[str, Any]] = {}
 _LAST_UPDATE: Dict[str, datetime] = {}
 
+# ── Strike-level OI cache (per symbol → per strike → {ce_oi, pe_oi, ce_vol, pe_vol}) ──
+# Updated every 10s alongside PCR. Used by zone participant intelligence.
+_STRIKE_OI_MAP: Dict[str, Dict[int, Dict[str, int]]] = {}   # current snapshot
+_STRIKE_OI_PREV: Dict[str, Dict[int, Dict[str, int]]] = {}  # previous snapshot (for change calc)
+_STRIKE_STEP: Dict[str, int] = {"NIFTY": 50, "BANKNIFTY": 100, "SENSEX": 100}
+
+
+def get_nearest_strike(price: float, symbol: str) -> int:
+    """Return the nearest valid option strike for a given price."""
+    step = _STRIKE_STEP.get(symbol, 50)
+    return int(round(price / step) * step)
+
+
+def get_strike_oi(symbol: str, price: float) -> Dict[str, Any]:
+    """
+    Return live CE/PE OI at the nearest strike to `price`.
+    Also computes OI change vs previous snapshot and detects CE↔PE rotation.
+
+    Returns:
+        {
+          strike          : int,
+          ce_oi           : int,   # Call OI at this strike
+          pe_oi           : int,   # Put OI at this strike
+          ce_oi_chg       : int,   # CE OI change since last fetch (+build / -unwind)
+          pe_oi_chg       : int,   # PE OI change since last fetch
+          ce_vol          : int,   # CE traded volume at this strike
+          pe_vol          : int,   # PE traded volume at this strike
+          rotation        : str,   # 'CE_TO_PE' | 'PE_TO_CE' | 'BUILDING' | 'UNWINDING' | 'STABLE'
+          defender        : str,   # 'CALLS' | 'PUTS' | 'BALANCED'
+          oi_interpretation: str,  # human-readable e.g. "Writers defending resistance"
+        }
+    """
+    empty = {
+        "strike": 0, "ce_oi": 0, "pe_oi": 0,
+        "ce_oi_chg": 0, "pe_oi_chg": 0,
+        "ce_vol": 0, "pe_vol": 0,
+        "rotation": "STABLE", "defender": "BALANCED",
+        "oi_interpretation": "No option data",
+    }
+    strike_map = _STRIKE_OI_MAP.get(symbol)
+    if not strike_map:
+        return empty
+
+    strike = get_nearest_strike(price, symbol)
+    data   = strike_map.get(strike)
+    if not data:
+        # Try ±1 step
+        step = _STRIKE_STEP.get(symbol, 50)
+        data = strike_map.get(strike + step) or strike_map.get(strike - step)
+        if not data:
+            return empty
+
+    ce_oi  = data.get("ce_oi", 0)
+    pe_oi  = data.get("pe_oi", 0)
+    ce_vol = data.get("ce_vol", 0)
+    pe_vol = data.get("pe_vol", 0)
+
+    # Change vs previous
+    prev_map = _STRIKE_OI_PREV.get(symbol, {})
+    prev     = prev_map.get(strike, {})
+    ce_chg   = ce_oi - prev.get("ce_oi", ce_oi)
+    pe_chg   = pe_oi - prev.get("pe_oi", pe_oi)
+
+    # Rotation detection
+    # CE_TO_PE: CE OI dropping + PE OI building → smart money moving to puts (bearish shift)
+    # PE_TO_CE: PE OI dropping + CE OI building → smart money moving to calls (bullish shift)
+    chg_threshold = max(500, min(ce_oi, pe_oi) * 0.02)  # 2% of smaller side or 500 contracts
+    if ce_chg < -chg_threshold and pe_chg > chg_threshold:
+        rotation = "CE_TO_PE"      # Bearish rotation
+    elif pe_chg < -chg_threshold and ce_chg > chg_threshold:
+        rotation = "PE_TO_CE"      # Bullish rotation
+    elif ce_chg > chg_threshold and pe_chg > chg_threshold:
+        rotation = "BUILDING"      # Both sides building — range / indecision
+    elif ce_chg < -chg_threshold and pe_chg < -chg_threshold:
+        rotation = "UNWINDING"     # Both sides closing — move exhausting
+    else:
+        rotation = "STABLE"
+
+    # Who is the dominant writer at this strike?
+    if ce_oi > pe_oi * 1.3:
+        defender = "CALLS"         # Call writers dominate = resistance (bearish)
+        interp = "Call writers defending resistance — expect rejection"
+    elif pe_oi > ce_oi * 1.3:
+        defender = "PUTS"          # Put writers dominate = support (bullish)
+        interp = "Put writers defending support — expect bounce"
+    else:
+        defender = "BALANCED"
+        interp   = "Balanced option writers — no clear OI bias"
+
+    # Rotation override
+    if rotation == "PE_TO_CE":
+        interp = "PE→CE rotation: smart money building calls, bullish shift"
+    elif rotation == "CE_TO_PE":
+        interp = "CE→PE rotation: smart money building puts, bearish shift"
+    elif rotation == "UNWINDING":
+        interp = "OI unwinding at zone — move may exhaust here"
+    elif rotation == "BUILDING":
+        interp = "OI building both sides — expecting a volatile range test"
+
+    return {
+        "strike"          : strike,
+        "ce_oi"           : ce_oi,
+        "pe_oi"           : pe_oi,
+        "ce_oi_chg"       : ce_chg,
+        "pe_oi_chg"       : pe_chg,
+        "ce_vol"          : ce_vol,
+        "pe_vol"          : pe_vol,
+        "rotation"        : rotation,
+        "defender"        : defender,
+        "oi_interpretation": interp,
+    }
+
 # SMART CACHING: Cache instruments for entire day (they don't change)
 _INSTRUMENTS_CACHE: Dict[str, List] = {}  # {"NFO": [...], "BFO": [...]}
 _INSTRUMENTS_CACHE_DATE: Dict[str, date] = {}  # Track when cached
@@ -260,17 +372,43 @@ class PCRService:
                 print(f"        This usually means Zerodha session expired")
                 raise
             
-            # Sum OI
+            # Sum OI + build per-strike map
             total_call_oi = 0
             total_put_oi = 0
-            
-            for token in call_tokens:
+
+            # Build strike→{ce_oi, pe_oi, ce_vol, pe_vol}
+            strike_map: Dict[int, Dict[str, int]] = {}
+
+            for inst in calls:
+                token = inst["instrument_token"]
                 q = quotes.get(str(token), {})
-                total_call_oi += q.get("oi", 0)
-            
-            for token in put_tokens:
+                oi_val  = int(q.get("oi", 0))
+                vol_val = int(q.get("volume", 0))
+                total_call_oi += oi_val
+                strike = int(inst.get("strike", 0))
+                if strike:
+                    if strike not in strike_map:
+                        strike_map[strike] = {"ce_oi": 0, "pe_oi": 0, "ce_vol": 0, "pe_vol": 0}
+                    strike_map[strike]["ce_oi"]  += oi_val
+                    strike_map[strike]["ce_vol"] += vol_val
+
+            for inst in puts:
+                token = inst["instrument_token"]
                 q = quotes.get(str(token), {})
-                total_put_oi += q.get("oi", 0)
+                oi_val  = int(q.get("oi", 0))
+                vol_val = int(q.get("volume", 0))
+                total_put_oi += oi_val
+                strike = int(inst.get("strike", 0))
+                if strike:
+                    if strike not in strike_map:
+                        strike_map[strike] = {"ce_oi": 0, "pe_oi": 0, "ce_vol": 0, "pe_vol": 0}
+                    strike_map[strike]["pe_oi"]  += oi_val
+                    strike_map[strike]["pe_vol"] += vol_val
+
+            # Save previous snapshot before overwriting (for change detection)
+            if symbol in _STRIKE_OI_MAP:
+                _STRIKE_OI_PREV[symbol] = _STRIKE_OI_MAP[symbol]
+            _STRIKE_OI_MAP[symbol] = strike_map
             
             # Calculate PCR
             pcr = round(total_put_oi / total_call_oi, 2) if total_call_oi > 0 else 0.0

@@ -3,6 +3,17 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { getEnvironmentConfig } from '@/lib/env-detection';
 
+// ── Participant data (who's defending each zone) ────────────────────────────
+
+export interface ZoneParticipants {
+  bull_vol: number;      // volume from bullish candles in the zone
+  bear_vol: number;      // volume from bearish candles in the zone
+  total_vol: number;     // total volume at zone
+  touch_count: number;   // how many candles touched the zone
+  defender: 'BULLS' | 'BEARS' | 'BALANCED';  // who dominates
+  bull_pct: number;      // 0–100, % of total volume that is bullish
+}
+
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 export interface Candle {
@@ -21,14 +32,28 @@ export interface FVG {
   startIdx: number;
   filled: boolean;
   strength: number;
-  /** PREMIUM = high-probability retrace zone | STANDARD = medium | WEAK = low */
   quality?: 'PREMIUM' | 'STANDARD' | 'WEAK';
-  /** 0–1: how much of the gap has been touched back into */
   partialFill?: number;
-  /** % momentum swing that created the gap */
   momentum?: number;
-  /** How many candles ago this FVG was formed */
   candles_ago?: number;
+  // Candle volume participants (historical)
+  bull_vol?: number;
+  bear_vol?: number;
+  total_vol?: number;
+  touch_count?: number;
+  defender?: 'BULLS' | 'BEARS' | 'BALANCED';
+  bull_pct?: number;
+  // Live option strike OI
+  strike?: number;
+  ce_oi?: number;
+  pe_oi?: number;
+  ce_oi_chg?: number;
+  pe_oi_chg?: number;
+  ce_vol?: number;
+  pe_vol?: number;
+  rotation?: 'CE_TO_PE' | 'PE_TO_CE' | 'BUILDING' | 'UNWINDING' | 'STABLE';
+  oi_defender?: 'CALLS' | 'PUTS' | 'BALANCED';
+  oi_interpretation?: string;
 }
 
 export interface OrderBlock {
@@ -40,10 +65,26 @@ export interface OrderBlock {
   startIdx: number;
   mitigated: boolean;
   strength: number;
-  /** PREMIUM = strong impulse + fresh | STANDARD = moderate | WEAK = low impulse or mitigated */
   quality?: 'PREMIUM' | 'STANDARD' | 'WEAK';
-  /** How many candles ago this OB formed — lower = fresher */
   candles_ago?: number;
+  // Candle volume participants (historical)
+  bull_vol?: number;
+  bear_vol?: number;
+  total_vol?: number;
+  touch_count?: number;
+  defender?: 'BULLS' | 'BEARS' | 'BALANCED';
+  bull_pct?: number;
+  // Live option strike OI
+  strike?: number;
+  ce_oi?: number;
+  pe_oi?: number;
+  ce_oi_chg?: number;
+  pe_oi_chg?: number;
+  ce_vol?: number;
+  pe_vol?: number;
+  rotation?: 'CE_TO_PE' | 'PE_TO_CE' | 'BUILDING' | 'UNWINDING' | 'STABLE';
+  oi_defender?: 'CALLS' | 'PUTS' | 'BALANCED';
+  oi_interpretation?: string;
 }
 
 export interface Liquidity {
@@ -53,8 +94,59 @@ export interface Liquidity {
   swept: boolean;
   sweepIdx: number | null;
   touchCount: number;
-  /** PREMIUM = 3+ touches unswept | STANDARD = 2 touches unswept | WEAK = already swept */
   quality?: 'PREMIUM' | 'STANDARD' | 'WEAK';
+  // Candle volume participants (historical)
+  bull_vol?: number;
+  bear_vol?: number;
+  total_vol?: number;
+  touch_count?: number;
+  defender?: 'BULLS' | 'BEARS' | 'BALANCED';
+  bull_pct?: number;
+  // Live option strike OI
+  strike?: number;
+  ce_oi?: number;
+  pe_oi?: number;
+  ce_oi_chg?: number;
+  pe_oi_chg?: number;
+  ce_vol?: number;
+  pe_vol?: number;
+  rotation?: 'CE_TO_PE' | 'PE_TO_CE' | 'BUILDING' | 'UNWINDING' | 'STABLE';
+  oi_defender?: 'CALLS' | 'PUTS' | 'BALANCED';
+  oi_interpretation?: string;
+}
+
+export interface StrikeOI {
+  strike: number;
+  ce_oi: number;
+  pe_oi: number;
+  ce_oi_chg: number;
+  pe_oi_chg: number;
+  ce_vol: number;
+  pe_vol: number;
+  rotation: 'CE_TO_PE' | 'PE_TO_CE' | 'BUILDING' | 'UNWINDING' | 'STABLE';
+  oi_defender: 'CALLS' | 'PUTS' | 'BALANCED';
+  oi_interpretation: string;
+}
+
+export interface LevelParticipants {
+  price: number;
+  bull_vol: number;
+  bear_vol: number;
+  total_vol: number;
+  touch_count: number;
+  defender: 'BULLS' | 'BEARS' | 'BALANCED';
+  bull_pct: number;
+  // Strike OI (optionally present)
+  strike?: number;
+  ce_oi?: number;
+  pe_oi?: number;
+  ce_oi_chg?: number;
+  pe_oi_chg?: number;
+  ce_vol?: number;
+  pe_vol?: number;
+  rotation?: string;
+  oi_defender?: string;
+  oi_interpretation?: string;
 }
 
 export interface ChartLevels {
@@ -64,6 +156,18 @@ export interface ChartLevels {
   cdl: number;
   support: number[];
   resistance: number[];
+  pdh_participants?: ZoneParticipants;
+  pdl_participants?: ZoneParticipants;
+  cdh_participants?: ZoneParticipants;
+  cdl_participants?: ZoneParticipants;
+  pdh_strike_oi?: StrikeOI;
+  pdl_strike_oi?: StrikeOI;
+  cdh_strike_oi?: StrikeOI;
+  cdl_strike_oi?: StrikeOI;
+  sr_participants?: {
+    support: LevelParticipants[];
+    resistance: LevelParticipants[];
+  };
 }
 
 export type ChartDataSource = 'LIVE' | 'CACHED' | 'MARKET_CLOSED';

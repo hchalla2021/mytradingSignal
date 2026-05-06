@@ -59,7 +59,7 @@ type ChainMoves = {
   volume: MetricMove;
   oi: MetricMove;
   oiChange: MetricMove;
-  iv: MetricMove;
+  priceAction: MetricMove;
 };
 
 const FLAT_MOVE: MetricMove = { ce: 'flat', pe: 'flat', active: false };
@@ -67,7 +67,7 @@ const INITIAL_CHAIN_MOVES: ChainMoves = {
   volume: { ...FLAT_MOVE },
   oi: { ...FLAT_MOVE },
   oiChange: { ...FLAT_MOVE },
-  iv: { ...FLAT_MOVE },
+  priceAction: { ...FLAT_MOVE },
 };
 
 function detectMove(curr: number, prev: number, epsilon = 0): MoveDirection {
@@ -432,8 +432,9 @@ TradeActionBanner.displayName = 'TradeActionBanner';
 // Weaker signals (BUY, SELL, NEUTRAL) are hidden to reduce noise
 //
 
-const SideCell = memo<{ side: StrikeSideData; label: 'CE' | 'PE'; volDominant: boolean; oiDominant: boolean; isATM: boolean; symbolKey: SymbolKey; isRecommended?: boolean }>(({ side, label, volDominant, oiDominant, isATM, symbolKey, isRecommended = false }) => {
+const SideCell = memo<{ side: StrikeSideData; label: 'CE' | 'PE'; volDominant: boolean; oiDominant: boolean; isATM: boolean; symbolKey: SymbolKey; isRecommended?: boolean; displayVolume?: number }>(({ side, label, volDominant, oiDominant, isATM, symbolKey, isRecommended = false, displayVolume }) => {
   const isCE = label === 'CE';
+  const displayVolumeSafe = Math.max(0, displayVolume ?? side.volume);
 
   // ── Price flash detection — brief highlight on each price tick ────────
   const prevPriceRef = useRef<number>(side.price);
@@ -651,7 +652,7 @@ const SideCell = memo<{ side: StrikeSideData; label: 'CE' | 'PE'; volDominant: b
       {/* Volume | OI — highlighted when dominant */}
       <div className={`flex items-center gap-0.5 text-[8px] sm:text-[10px] font-black`}>
         <span className="text-slate-300 font-bold shrink-0">V</span>
-        <span className={`w-[46px] sm:w-[58px] text-right text-[8px] sm:text-[10px] font-mono font-black tabular-nums truncate ${volCls}`}>{fmtNum(side.volume)}</span>
+        <span className={`w-[46px] sm:w-[58px] text-right text-[8px] sm:text-[10px] font-mono font-black tabular-nums truncate ${volCls}`}>{fmtNum(displayVolumeSafe)}</span>
         <span className="text-slate-400 text-[7px] sm:text-[9px] font-bold shrink-0">·</span>
         <span className="text-slate-300 font-bold shrink-0">OI</span>
         <span className={`w-[46px] sm:w-[58px] text-right text-[8px] sm:text-[10px] font-mono font-black tabular-nums truncate ${oiCls}`}>{fmtNum(side.oi)}</span>
@@ -774,8 +775,10 @@ SideCell.displayName = 'SideCell';
 
 // Strike Row
 
-const StrikeRowComponent = memo<{ row: StrikeRow; maxVol: number; maxOI: number; symbolKey: SymbolKey; isRecommended?: boolean }>(({ row, maxVol, maxOI, symbolKey, isRecommended = false }) => {
+const StrikeRowComponent = memo<{ row: StrikeRow; maxVol: number; maxOI: number; symbolKey: SymbolKey; isRecommended?: boolean; liveCeVolume?: number; livePeVolume?: number }>(({ row, maxVol, maxOI, symbolKey, isRecommended = false, liveCeVolume, livePeVolume }) => {
   const isATM = row.isATM;
+  const ceDisplayVol = Math.max(0, liveCeVolume ?? row.ce.volume);
+  const peDisplayVol = Math.max(0, livePeVolume ?? row.pe.volume);
   const totalVol  = row.ce.volume + row.pe.volume;
   const totalOI   = row.ce.oi    + row.pe.oi;
   const volIntensity = maxVol > 0 ? Math.min(totalVol / maxVol, 1) : 0;
@@ -844,7 +847,7 @@ const StrikeRowComponent = memo<{ row: StrikeRow; maxVol: number; maxOI: number;
     } hover:bg-white/[0.025]`} style={{ overflow: 'visible' }}>
       {/* CE box with light background */}
       <div className="bg-slate-900/30 border border-slate-500/90 rounded-lg overflow-hidden flex-1 min-w-0">
-        <SideCell side={row.ce} label="CE" volDominant={row.ce.volume > row.pe.volume} oiDominant={row.ce.oi > row.pe.oi} isATM={isATM} symbolKey={symbolKey} isRecommended={isRecommended} />
+        <SideCell side={row.ce} label="CE" volDominant={ceDisplayVol > peDisplayVol} oiDominant={row.ce.oi > row.pe.oi} isATM={isATM} symbolKey={symbolKey} isRecommended={isRecommended} displayVolume={ceDisplayVol} />
       </div>
 
       {/* Strike center */}
@@ -923,7 +926,7 @@ const StrikeRowComponent = memo<{ row: StrikeRow; maxVol: number; maxOI: number;
 
       {/* PE box with light background */}
       <div className="bg-slate-900/30 border border-slate-500/90 rounded-lg overflow-hidden flex-1 min-w-0">
-        <SideCell side={row.pe} label="PE" volDominant={row.pe.volume > row.ce.volume} oiDominant={row.pe.oi > row.ce.oi} isATM={isATM} symbolKey={symbolKey} isRecommended={isRecommended} />
+        <SideCell side={row.pe} label="PE" volDominant={peDisplayVol > ceDisplayVol} oiDominant={row.pe.oi > row.ce.oi} isATM={isATM} symbolKey={symbolKey} isRecommended={isRecommended} displayVolume={peDisplayVol} />
       </div>
     </div>
   );
@@ -937,6 +940,9 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
   const prevDominantRef = useRef<'BULL' | 'BEAR' | 'NEUTRAL'>('NEUTRAL');
   const [flashSide, setFlashSide] = useState<'BULL' | 'BEAR' | null>(null);
   const [chainMoves, setChainMoves] = useState<ChainMoves>(INITIAL_CHAIN_MOVES);
+  const [liveVolumeTick, setLiveVolumeTick] = useState<{ ce: number; pe: number; ready: boolean }>({ ce: 0, pe: 0, ready: false });
+  const prevStrikeVolumeRef = useRef<Record<number, { ce: number; pe: number }>>({});
+  const [liveStrikeVolumeMap, setLiveStrikeVolumeMap] = useState<Record<number, { ce: number; pe: number }>>({});
   // Flash state for intelligence section — fires whenever the composite score changes
   const prevScoreRef = useRef<number | null>(null);
   const [scoreFlash, setScoreFlash] = useState<'up' | 'down' | null>(null);
@@ -945,7 +951,7 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
     totalCEVol: number; totalPEVol: number;
     totalCEOI: number; totalPEOI: number;
     totalCEOIChg: number; totalPEOIChg: number;
-    avgCEIV: number | null; avgPEIV: number | null;
+    ceAvgChgPct: number; peAvgChgPct: number;
     ceVolStrikeCount: number; peVolStrikeCount: number; tiedVolStrikeCount: number;
     ceVolPct: number; peVolPct: number;
     ceOIPct: number; peOIPct: number;
@@ -980,10 +986,11 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
     let ceVolStrikeCount = 0;
     let peVolStrikeCount = 0;
     let tiedVolStrikeCount = 0;
-    let ceIVSum = 0;
-    let peIVSum = 0;
-    let ceIVCount = 0;
-    let peIVCount = 0;
+    // Price action accumulators
+    let ceChgWtdSum = 0; let ceVolForPA = 0;
+    let peChgWtdSum = 0; let peVolForPA = 0;
+    let ceHotCount = 0;  let peHotCount = 0;
+    let paStrikeCount = 0;
 
     for (const strike of strikes) {
       totalCEVol += strike.ce.volume;
@@ -1001,17 +1008,22 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
         tiedVolStrikeCount += 1;
       }
 
-      const ceIV = strike.ce.signals?.iv;
-      if (ceIV != null && ceIV > 0) {
-        ceIVSum += ceIV;
-        ceIVCount += 1;
+      // Pure price action: vol-weighted avg change %
+      const cePrev = strike.ce.price - strike.ce.change;
+      const pePrev = strike.pe.price - strike.pe.change;
+      if (cePrev > 0.01 && strike.ce.volume > 0) {
+        ceChgWtdSum += (strike.ce.change / cePrev) * 100 * strike.ce.volume;
+        ceVolForPA += strike.ce.volume;
+      }
+      if (pePrev > 0.01 && strike.pe.volume > 0) {
+        peChgWtdSum += (strike.pe.change / pePrev) * 100 * strike.pe.volume;
+        peVolForPA += strike.pe.volume;
       }
 
-      const peIV = strike.pe.signals?.iv;
-      if (peIV != null && peIV > 0) {
-        peIVSum += peIV;
-        peIVCount += 1;
-      }
+      // Velocity hotness
+      if (strike.ce.velocity === 'HOT' || strike.ce.velocity === 'EXTREME') ceHotCount++;
+      if (strike.pe.velocity === 'HOT' || strike.pe.velocity === 'EXTREME') peHotCount++;
+      paStrikeCount++;
     }
 
     const displayCEVol = serverChainTotals?.totalCEVol ?? totalCEVol;
@@ -1023,8 +1035,18 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
     // Prefer full-chain OI change from backend; fall back to signed sum of 11 visible strikes
     const displayCEOIChg = serverChainTotals?.totalCEOIChg ?? totalCEOIChg;
     const displayPEOIChg = serverChainTotals?.totalPEOIChg ?? totalPEOIChg;
-    const avgCEIV = ceIVCount > 0 ? ceIVSum / ceIVCount : null;
-    const avgPEIV = peIVCount > 0 ? peIVSum / peIVCount : null;
+    const ceAvgChgPct = ceVolForPA > 0 ? ceChgWtdSum / ceVolForPA : 0;
+    const peAvgChgPct = peVolForPA > 0 ? peChgWtdSum / peVolForPA : 0;
+    const ceHotPct = paStrikeCount > 0 ? Math.round((ceHotCount / paStrikeCount) * 100) : 0;
+    const peHotPct = paStrikeCount > 0 ? Math.round((peHotCount / paStrikeCount) * 100) : 0;
+    const getMomentumLabel = (pct: number) =>
+      pct > 3 ? 'SURGING' : pct > 1 ? 'RISING' : pct > -1 ? 'FLAT' : pct > -3 ? 'FALLING' : 'COLLAPSING';
+    const ceMomentumLabel = getMomentumLabel(ceAvgChgPct);
+    const peMomentumLabel = getMomentumLabel(peAvgChgPct);
+    const ceAbsMom = Math.abs(ceAvgChgPct);
+    const peAbsMom = Math.abs(peAvgChgPct);
+    const totalAbsMom = ceAbsMom + peAbsMom;
+    const cePaDomPct = totalAbsMom > 0 ? Math.round((ceAbsMom / totalAbsMom) * 100) : 50;
     const ceVolPct = totalVol > 0 ? Math.round((displayCEVol / totalVol) * 100) : 50;
     const peVolPct = totalVol > 0 ? 100 - ceVolPct : 50;
     const ceOIPct  = totalOI  > 0 ? Math.round((displayCEOI  / totalOI)  * 100) : 50;
@@ -1036,13 +1058,48 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
       totalCEVol: displayCEVol, totalPEVol: displayPEVol, totalVol,
       totalCEOI: displayCEOI, totalPEOI: displayPEOI, totalOI,
       totalCEOIChg: displayCEOIChg, totalPEOIChg: displayPEOIChg,
-      avgCEIV, avgPEIV,
+      ceAvgChgPct, peAvgChgPct, ceHotPct, peHotPct,
+      ceMomentumLabel, peMomentumLabel, cePaDomPct,
       ceVolStrikeCount, peVolStrikeCount, tiedVolStrikeCount,
       ceVolPct, peVolPct,
       ceOIPct, peOIPct,
       ceOIChgPct, peOIChgPct,
     };
   }, [strikes, hasData, data?.chainTotals]);
+
+  // Live tick-volume view (current flow only, not cumulative day total)
+  const liveVolumeStats = useMemo(() => {
+    const ce = Math.max(0, liveVolumeTick.ce);
+    const pe = Math.max(0, liveVolumeTick.pe);
+    const total = ce + pe;
+    const cePct = total > 0 ? Math.round((ce / total) * 100) : 50;
+    const pePct = total > 0 ? 100 - cePct : 50;
+    return { ce, pe, total, cePct, pePct, ready: liveVolumeTick.ready && total > 0 };
+  }, [liveVolumeTick.ce, liveVolumeTick.pe, liveVolumeTick.ready]);
+
+  // Per-strike live tick volumes for CE/PE (current flow only)
+  useEffect(() => {
+    if (!hasData) return;
+    const prevMap = prevStrikeVolumeRef.current;
+    const nextPrev: Record<number, { ce: number; pe: number }> = {};
+    const nextLive: Record<number, { ce: number; pe: number }> = {};
+
+    for (const strike of strikes) {
+      const key = strike.strike;
+      const ceCurr = Math.max(0, strike.ce.volume);
+      const peCurr = Math.max(0, strike.pe.volume);
+      const prev = prevMap[key];
+
+      const ceLive = prev ? (ceCurr >= prev.ce ? ceCurr - prev.ce : ceCurr) : 0;
+      const peLive = prev ? (peCurr >= prev.pe ? peCurr - prev.pe : peCurr) : 0;
+
+      nextLive[key] = { ce: ceLive, pe: peLive };
+      nextPrev[key] = { ce: ceCurr, pe: peCurr };
+    }
+
+    setLiveStrikeVolumeMap(nextLive);
+    prevStrikeVolumeRef.current = nextPrev;
+  }, [strikes, hasData]);
 
   // Summary: bias + PCR - use backend intelligence when available
   const summary = useMemo(() => {
@@ -1104,6 +1161,7 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
     if (!chainStats || !hasRealSignal) return;
     const prev = prevChainStatsRef.current;
     if (!prev) {
+      setLiveVolumeTick({ ce: 0, pe: 0, ready: false });
       prevChainStatsRef.current = {
         totalCEVol: chainStats.totalCEVol,
         totalPEVol: chainStats.totalPEVol,
@@ -1111,8 +1169,8 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
         totalPEOI: chainStats.totalPEOI,
         totalCEOIChg: chainStats.totalCEOIChg,
         totalPEOIChg: chainStats.totalPEOIChg,
-        avgCEIV: chainStats.avgCEIV,
-        avgPEIV: chainStats.avgPEIV,
+        ceAvgChgPct: chainStats.ceAvgChgPct,
+        peAvgChgPct: chainStats.peAvgChgPct,
         ceVolStrikeCount: chainStats.ceVolStrikeCount,
         peVolStrikeCount: chainStats.peVolStrikeCount,
         tiedVolStrikeCount: chainStats.tiedVolStrikeCount,
@@ -1128,12 +1186,16 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
 
     const volCE = detectMove(chainStats.totalCEVol, prev.totalCEVol, 0);
     const volPE = detectMove(chainStats.totalPEVol, prev.totalPEVol, 0);
+    // If provider resets counters (session rollover/reconnect), use current value as live baseline.
+    const ceLive = chainStats.totalCEVol >= prev.totalCEVol ? (chainStats.totalCEVol - prev.totalCEVol) : chainStats.totalCEVol;
+    const peLive = chainStats.totalPEVol >= prev.totalPEVol ? (chainStats.totalPEVol - prev.totalPEVol) : chainStats.totalPEVol;
+    setLiveVolumeTick({ ce: ceLive, pe: peLive, ready: true });
     const oiCE = detectMove(chainStats.totalCEOI, prev.totalCEOI, 0);
     const oiPE = detectMove(chainStats.totalPEOI, prev.totalPEOI, 0);
     const oiChgCE = detectMove(chainStats.totalCEOIChg, prev.totalCEOIChg, 0);
     const oiChgPE = detectMove(chainStats.totalPEOIChg, prev.totalPEOIChg, 0);
-    const ivCE = detectNullableMove(chainStats.avgCEIV, prev.avgCEIV, 0.0005);
-    const ivPE = detectNullableMove(chainStats.avgPEIV, prev.avgPEIV, 0.0005);
+    const paCE = detectMove(chainStats.ceAvgChgPct, prev.ceAvgChgPct, 0.05);
+    const paPE = detectMove(chainStats.peAvgChgPct, prev.peAvgChgPct, 0.05);
 
     const nextMoves: ChainMoves = {
       volume: {
@@ -1151,14 +1213,14 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
         pe: oiChgPE,
         active: oiChgCE !== 'flat' || oiChgPE !== 'flat' || chainStats.ceOIChgPct !== prev.ceOIChgPct || chainStats.peOIChgPct !== prev.peOIChgPct,
       },
-      iv: {
-        ce: ivCE,
-        pe: ivPE,
-        active: ivCE !== 'flat' || ivPE !== 'flat',
+      priceAction: {
+        ce: paCE,
+        pe: paPE,
+        active: paCE !== 'flat' || paPE !== 'flat',
       },
     };
 
-    const anyActive = nextMoves.volume.active || nextMoves.oi.active || nextMoves.oiChange.active || nextMoves.iv.active;
+    const anyActive = nextMoves.volume.active || nextMoves.oi.active || nextMoves.oiChange.active || nextMoves.priceAction.active;
     if (anyActive) {
       setChainMoves(nextMoves);
       if (chainFlashTimerRef.current) clearTimeout(chainFlashTimerRef.current);
@@ -1174,8 +1236,8 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
       totalPEOI: chainStats.totalPEOI,
       totalCEOIChg: chainStats.totalCEOIChg,
       totalPEOIChg: chainStats.totalPEOIChg,
-      avgCEIV: chainStats.avgCEIV,
-      avgPEIV: chainStats.avgPEIV,
+      ceAvgChgPct: chainStats.ceAvgChgPct,
+      peAvgChgPct: chainStats.peAvgChgPct,
       ceVolStrikeCount: chainStats.ceVolStrikeCount,
       peVolStrikeCount: chainStats.peVolStrikeCount,
       tiedVolStrikeCount: chainStats.tiedVolStrikeCount,
@@ -1353,26 +1415,58 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
 
             {/* ① Total Volume */}
             <div className={`flex flex-col gap-1 px-3 py-2 rounded-lg border border-emerald-500/30 bg-emerald-500/5 shadow-[inset_0_0_0_1px_rgba(16,185,129,0.08)] transition-all duration-200 ${getMetricCardFlashClass(chainMoves.volume)}`}
-              title={`Total Volume — CE: ${fmtNum(chainStats.totalCEVol)} | PE: ${fmtNum(chainStats.totalPEVol)}`}>
+              title={`Live Tick Volume — CE: ${liveVolumeStats.ready ? fmtNum(liveVolumeStats.ce) : '--'} | PE: ${liveVolumeStats.ready ? fmtNum(liveVolumeStats.pe) : '--'}`}>
               <span className="text-[8px] font-bold tracking-widest uppercase text-slate-500">Total Volume</span>
               <div className="flex items-center justify-between gap-1 font-mono">
                 <span className="text-[11px] sm:text-[12px] font-black text-emerald-400">
-                  CE <span className={`inline-block w-[34px] text-right tabular-nums text-emerald-300 ${getValueFlashClass(chainMoves.volume.ce, chainMoves.volume.active)}`}>{chainStats.ceVolPct}%</span>
+                  CE <span className={[
+                    'inline-flex items-center rounded border px-1 py-0.5 text-[10px] leading-none transition-all duration-300',
+                    liveVolumeStats.cePct >= liveVolumeStats.pePct
+                      ? 'border-emerald-300/90 bg-emerald-500/18 text-emerald-100 shadow-[0_0_10px_rgba(16,185,129,0.5)]'
+                      : 'border-emerald-300/35 bg-emerald-500/6 text-emerald-300',
+                    getValueFlashClass(chainMoves.volume.ce, chainMoves.volume.active),
+                  ].join(' ')}>{liveVolumeStats.cePct}%</span>
                 </span>
                 <span className="text-[9px] text-slate-600">/</span>
                 <span className="text-[11px] sm:text-[12px] font-black text-red-400">
-                  PE <span className={`inline-block w-[34px] text-right tabular-nums text-red-300 ${getValueFlashClass(chainMoves.volume.pe, chainMoves.volume.active)}`}>{chainStats.peVolPct}%</span>
+                  PE <span className={[
+                    'inline-flex items-center rounded border px-1 py-0.5 text-[10px] leading-none transition-all duration-300',
+                    liveVolumeStats.pePct > liveVolumeStats.cePct
+                      ? 'border-red-300/90 bg-red-500/18 text-red-100 shadow-[0_0_10px_rgba(239,68,68,0.5)]'
+                      : 'border-red-300/35 bg-red-500/6 text-red-300',
+                    getValueFlashClass(chainMoves.volume.pe, chainMoves.volume.active),
+                  ].join(' ')}>{liveVolumeStats.pePct}%</span>
                 </span>
               </div>
               <div className="flex h-[5px] rounded-full overflow-hidden bg-slate-800/80">
                 <div className="bg-gradient-to-r from-emerald-500 to-emerald-400 transition-all duration-500 rounded-l-full"
-                  style={{ width: `${chainStats.ceVolPct}%` }} />
+                  style={{ width: `${liveVolumeStats.cePct}%` }} />
                 <div className="bg-gradient-to-l from-red-500 to-red-400 transition-all duration-500 rounded-r-full"
-                  style={{ width: `${chainStats.peVolPct}%` }} />
+                  style={{ width: `${liveVolumeStats.pePct}%` }} />
               </div>
-              <div className="flex justify-between text-[9px] font-mono tabular-nums text-slate-500">
-                <span className={`inline-block min-w-[62px] text-left ${getValueFlashClass(chainMoves.volume.ce, chainMoves.volume.active)}`}>{fmtNum(chainStats.totalCEVol)}</span>
-                <span className={`inline-block min-w-[62px] text-right ${getValueFlashClass(chainMoves.volume.pe, chainMoves.volume.active)}`}>{fmtNum(chainStats.totalPEVol)}</span>
+              <div className="flex items-center gap-1 text-[8px] font-mono tabular-nums">
+                <span
+                  className={[
+                    'flex-1 min-w-0 rounded border px-1 py-0.5 text-center leading-none whitespace-nowrap transition-all duration-300',
+                    liveVolumeStats.ce >= liveVolumeStats.pe
+                      ? 'border-emerald-400/80 bg-emerald-500/20 text-emerald-200 shadow-[0_0_8px_rgba(16,185,129,0.45)]'
+                      : 'border-slate-600/70 bg-slate-800/70 text-emerald-300/90',
+                    getValueFlashClass(chainMoves.volume.ce, chainMoves.volume.active),
+                  ].join(' ')}
+                >
+                  {liveVolumeStats.ready ? fmtNum(liveVolumeStats.ce) : '--'}
+                </span>
+                <span
+                  className={[
+                    'flex-1 min-w-0 rounded border px-1 py-0.5 text-center leading-none whitespace-nowrap transition-all duration-300',
+                    liveVolumeStats.pe > liveVolumeStats.ce
+                      ? 'border-red-400/80 bg-red-500/20 text-red-200 shadow-[0_0_8px_rgba(239,68,68,0.45)]'
+                      : 'border-slate-600/70 bg-slate-800/70 text-red-300/90',
+                    getValueFlashClass(chainMoves.volume.pe, chainMoves.volume.active),
+                  ].join(' ')}
+                >
+                  {liveVolumeStats.ready ? fmtNum(liveVolumeStats.pe) : '--'}
+                </span>
               </div>
             </div>
 
@@ -1382,11 +1476,23 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
               <span className="text-[8px] font-bold tracking-widest uppercase text-slate-500">Total OI</span>
               <div className="flex items-center justify-between gap-1 font-mono">
                 <span className="text-[11px] sm:text-[12px] font-black text-emerald-400">
-                  CE <span className={`text-emerald-300 ${getValueFlashClass(chainMoves.oi.ce, chainMoves.oi.active)}`}>{chainStats.ceOIPct}%</span>
+                  CE <span className={[
+                    'inline-flex items-center rounded border px-1 py-0.5 text-[10px] leading-none transition-all duration-300',
+                    chainStats.ceOIPct >= chainStats.peOIPct
+                      ? 'border-emerald-300/90 bg-emerald-500/18 text-emerald-200 shadow-[0_0_10px_rgba(16,185,129,0.5)]'
+                      : 'border-emerald-300/35 bg-emerald-500/6 text-emerald-300',
+                    getValueFlashClass(chainMoves.oi.ce, chainMoves.oi.active),
+                  ].join(' ')}>{chainStats.ceOIPct}%</span>
                 </span>
                 <span className="text-[9px] text-slate-600">/</span>
                 <span className="text-[11px] sm:text-[12px] font-black text-red-400">
-                  PE <span className={`text-red-300 ${getValueFlashClass(chainMoves.oi.pe, chainMoves.oi.active)}`}>{chainStats.peOIPct}%</span>
+                  PE <span className={[
+                    'inline-flex items-center rounded border px-1 py-0.5 text-[10px] leading-none transition-all duration-300',
+                    chainStats.peOIPct > chainStats.ceOIPct
+                      ? 'border-red-300/90 bg-red-500/18 text-red-200 shadow-[0_0_10px_rgba(239,68,68,0.5)]'
+                      : 'border-red-300/35 bg-red-500/6 text-red-300',
+                    getValueFlashClass(chainMoves.oi.pe, chainMoves.oi.active),
+                  ].join(' ')}>{chainStats.peOIPct}%</span>
                 </span>
               </div>
               <div className="flex h-[5px] rounded-full overflow-hidden bg-slate-800/80">
@@ -1395,9 +1501,29 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
                 <div className="bg-gradient-to-l from-red-500 to-red-400 transition-all duration-500 rounded-r-full"
                   style={{ width: `${chainStats.peOIPct}%` }} />
               </div>
-              <div className="flex justify-between text-[9px] font-mono text-slate-500">
-                <span className={getValueFlashClass(chainMoves.oi.ce, chainMoves.oi.active)}>{fmtNum(chainStats.totalCEOI)}</span>
-                <span className={getValueFlashClass(chainMoves.oi.pe, chainMoves.oi.active)}>{fmtNum(chainStats.totalPEOI)}</span>
+              <div className="flex items-center gap-1 text-[8px] font-mono tabular-nums">
+                <span
+                  className={[
+                    'flex-1 min-w-0 rounded border px-1 py-0.5 text-center leading-none whitespace-nowrap transition-all duration-300',
+                    chainStats.totalCEOI >= chainStats.totalPEOI
+                      ? 'border-cyan-300/95 bg-cyan-500/18 text-cyan-100 shadow-[0_0_12px_rgba(6,182,212,0.58)] ring-1 ring-cyan-300/40'
+                      : 'border-cyan-300/35 bg-cyan-500/6 text-cyan-200/90',
+                    getValueFlashClass(chainMoves.oi.ce, chainMoves.oi.active),
+                  ].join(' ')}
+                >
+                  {fmtNum(chainStats.totalCEOI)}
+                </span>
+                <span
+                  className={[
+                    'flex-1 min-w-0 rounded border px-1 py-0.5 text-center leading-none whitespace-nowrap transition-all duration-300',
+                    chainStats.totalPEOI > chainStats.totalCEOI
+                      ? 'border-red-300/95 bg-red-500/18 text-red-100 shadow-[0_0_12px_rgba(239,68,68,0.58)] ring-1 ring-red-300/40'
+                      : 'border-red-300/35 bg-red-500/6 text-red-200/90',
+                    getValueFlashClass(chainMoves.oi.pe, chainMoves.oi.active),
+                  ].join(' ')}
+                >
+                  {fmtNum(chainStats.totalPEOI)}
+                </span>
               </div>
             </div>
 
@@ -1407,13 +1533,33 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
               <span className="text-[8px] font-bold tracking-widest uppercase text-slate-500">OI Change</span>
               <div className="flex items-center justify-between gap-1 font-mono">
                 <span className={`text-[11px] sm:text-[12px] font-black ${chainStats.totalCEOIChg >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-                  CE <span className={`${chainStats.totalCEOIChg >= 0 ? 'text-emerald-300' : 'text-red-300'} ${getValueFlashClass(chainMoves.oiChange.ce, chainMoves.oiChange.active)}`}>
+                  CE <span className={[
+                    'inline-flex items-center rounded border px-1 py-0.5 text-[10px] leading-none transition-all duration-300',
+                    Math.abs(chainStats.totalCEOIChg) >= Math.abs(chainStats.totalPEOIChg)
+                      ? (chainStats.totalCEOIChg >= 0
+                          ? 'border-emerald-300/95 bg-emerald-500/18 text-emerald-100 shadow-[0_0_10px_rgba(16,185,129,0.5)]'
+                          : 'border-red-300/95 bg-red-500/18 text-red-100 shadow-[0_0_10px_rgba(239,68,68,0.5)]')
+                      : (chainStats.totalCEOIChg >= 0
+                          ? 'border-emerald-300/35 bg-emerald-500/6 text-emerald-300'
+                          : 'border-red-300/35 bg-red-500/6 text-red-300'),
+                    getValueFlashClass(chainMoves.oiChange.ce, chainMoves.oiChange.active),
+                  ].join(' ')}>
                     {chainStats.totalCEOIChg >= 0 ? '+' : ''}{fmtNum(chainStats.totalCEOIChg)}
                   </span>
                 </span>
                 <span className="text-[9px] text-slate-600">/</span>
                 <span className={`text-[11px] sm:text-[12px] font-black ${chainStats.totalPEOIChg >= 0 ? 'text-red-400' : 'text-emerald-400'}`}>
-                  PE <span className={`${chainStats.totalPEOIChg >= 0 ? 'text-red-300' : 'text-emerald-300'} ${getValueFlashClass(chainMoves.oiChange.pe, chainMoves.oiChange.active)}`}>
+                  PE <span className={[
+                    'inline-flex items-center rounded border px-1 py-0.5 text-[10px] leading-none transition-all duration-300',
+                    Math.abs(chainStats.totalPEOIChg) > Math.abs(chainStats.totalCEOIChg)
+                      ? (chainStats.totalPEOIChg >= 0
+                          ? 'border-red-300/95 bg-red-500/18 text-red-100 shadow-[0_0_10px_rgba(239,68,68,0.5)]'
+                          : 'border-emerald-300/95 bg-emerald-500/18 text-emerald-100 shadow-[0_0_10px_rgba(16,185,129,0.5)]')
+                      : (chainStats.totalPEOIChg >= 0
+                          ? 'border-red-300/35 bg-red-500/6 text-red-300'
+                          : 'border-emerald-300/35 bg-emerald-500/6 text-emerald-300'),
+                    getValueFlashClass(chainMoves.oiChange.pe, chainMoves.oiChange.active),
+                  ].join(' ')}>
                     {chainStats.totalPEOIChg >= 0 ? '+' : ''}{fmtNum(chainStats.totalPEOIChg)}
                   </span>
                 </span>
@@ -1424,45 +1570,138 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
                 <div className="bg-gradient-to-l from-red-500/80 to-red-400/80 transition-all duration-500 rounded-r-full"
                   style={{ width: `${chainStats.peOIChgPct}%` }} />
               </div>
-              <div className="flex justify-between text-[9px] font-mono text-slate-500">
-                <span className={`text-emerald-600/70 ${getValueFlashClass(chainMoves.oiChange.ce, chainMoves.oiChange.active)}`}>CE {chainStats.ceOIChgPct}%</span>
-                <span className={`text-red-600/70 ${getValueFlashClass(chainMoves.oiChange.pe, chainMoves.oiChange.active)}`}>PE {chainStats.peOIChgPct}%</span>
+              <div className="flex items-center gap-1 text-[8px] font-mono tabular-nums">
+                <span
+                  className={[
+                    'flex-1 min-w-0 rounded border px-1 py-0.5 text-center leading-none whitespace-nowrap transition-all duration-300',
+                    chainStats.ceOIChgPct >= chainStats.peOIChgPct
+                      ? 'border-amber-300/90 bg-amber-500/18 text-amber-100 shadow-[0_0_10px_rgba(245,158,11,0.48)]'
+                      : 'border-amber-300/35 bg-amber-500/6 text-amber-300/90',
+                    getValueFlashClass(chainMoves.oiChange.ce, chainMoves.oiChange.active),
+                  ].join(' ')}
+                >
+                  CE {chainStats.ceOIChgPct}%
+                </span>
+                <span
+                  className={[
+                    'flex-1 min-w-0 rounded border px-1 py-0.5 text-center leading-none whitespace-nowrap transition-all duration-300',
+                    chainStats.peOIChgPct > chainStats.ceOIChgPct
+                      ? 'border-red-300/90 bg-red-500/18 text-red-100 shadow-[0_0_10px_rgba(239,68,68,0.48)]'
+                      : 'border-red-300/35 bg-red-500/6 text-red-300/90',
+                    getValueFlashClass(chainMoves.oiChange.pe, chainMoves.oiChange.active),
+                  ].join(' ')}
+                >
+                  PE {chainStats.peOIChgPct}%
+                </span>
               </div>
             </div>
 
-            {/* ④ Avg IV */}
-            <div className={`flex flex-col gap-1 px-3 py-2 rounded-lg border border-violet-500/30 bg-violet-500/5 shadow-[inset_0_0_0_1px_rgba(139,92,246,0.08)] transition-all duration-200 ${getMetricCardFlashClass(chainMoves.iv)}`} title="Average Implied Volatility across all strikes">
-              <span className="text-[8px] font-bold tracking-widest uppercase text-slate-500">Avg IV</span>
-              <div className="flex items-center justify-between gap-1 font-mono">
-                <span className="text-[11px] sm:text-[12px] font-black text-violet-400">
-                  CE <span className={`text-violet-300 ${getValueFlashClass(chainMoves.iv.ce, chainMoves.iv.active)}`}>
-                    {chainStats.avgCEIV != null ? `${(chainStats.avgCEIV * 100).toFixed(1)}%` : '--'}
-                  </span>
-                </span>
-                <span className="text-[9px] text-slate-600">/</span>
-                <span className="text-[11px] sm:text-[12px] font-black text-pink-400">
-                  PE <span className={`text-pink-300 ${getValueFlashClass(chainMoves.iv.pe, chainMoves.iv.active)}`}>
-                    {chainStats.avgPEIV != null ? `${(chainStats.avgPEIV * 100).toFixed(1)}%` : '--'}
-                  </span>
-                </span>
-              </div>
-              <div className="flex h-[5px] rounded-full overflow-hidden bg-slate-800/80">
-                {chainStats.avgCEIV != null && chainStats.avgPEIV != null ? (() => {
-                  const total = chainStats.avgCEIV + chainStats.avgPEIV;
-                  const cePct = total > 0 ? Math.round((chainStats.avgCEIV / total) * 100) : 50;
-                  return (<>
-                    <div className="bg-gradient-to-r from-violet-500 to-violet-400 transition-all duration-500 rounded-l-full"
-                      style={{ width: `${cePct}%` }} />
-                    <div className="bg-gradient-to-l from-pink-500 to-pink-400 transition-all duration-500 rounded-r-full"
-                      style={{ width: `${100 - cePct}%` }} />
-                  </>);
-                })() : <div className="bg-slate-700 w-full rounded-full" />}
-              </div>
-              <div className="flex justify-between text-[9px] font-mono text-slate-500">
-                <span className="text-violet-600/70">Call side</span>
-                <span className="text-pink-600/70">Put side</span>
-              </div>
-            </div>
+            {/* ④ Price Action — CE/PE momentum from live price movement */}
+            {(() => {
+              const cePct = chainStats.ceAvgChgPct;
+              const pePct = chainStats.peAvgChgPct;
+              const ceLabel = chainStats.ceMomentumLabel;
+              const peLabel = chainStats.peMomentumLabel;
+
+              // Is the value actively moving (for glow highlight)?
+              const ceActive = ceLabel === 'SURGING' || ceLabel === 'RISING' || ceLabel === 'FALLING' || ceLabel === 'COLLAPSING';
+              const peActive = peLabel === 'SURGING' || peLabel === 'RISING' || peLabel === 'FALLING' || peLabel === 'COLLAPSING';
+              const ceNeutral = ceLabel === 'FLAT';
+              const peNeutral = peLabel === 'FLAT';
+
+              // Value colour + optional glow when rising/falling
+              const ceValClass =
+                ceLabel === 'SURGING'    ? 'text-emerald-200 drop-shadow-[0_0_6px_rgba(52,211,153,0.8)]' :
+                ceLabel === 'RISING'     ? 'text-emerald-300 drop-shadow-[0_0_4px_rgba(52,211,153,0.5)]' :
+                ceLabel === 'FLAT'       ? 'text-slate-400' :
+                ceLabel === 'FALLING'    ? 'text-red-300 drop-shadow-[0_0_4px_rgba(248,113,113,0.5)]' :
+                                           'text-red-200 drop-shadow-[0_0_6px_rgba(248,113,113,0.8)]';
+              const peValClass =
+                peLabel === 'SURGING'    ? 'text-rose-200 drop-shadow-[0_0_6px_rgba(251,113,133,0.8)]' :
+                peLabel === 'RISING'     ? 'text-rose-300 drop-shadow-[0_0_4px_rgba(251,113,133,0.5)]' :
+                peLabel === 'FLAT'       ? 'text-slate-400' :
+                peLabel === 'FALLING'    ? 'text-sky-300 drop-shadow-[0_0_4px_rgba(56,189,248,0.5)]' :
+                                           'text-sky-200 drop-shadow-[0_0_6px_rgba(56,189,248,0.8)]';
+
+              // Badge colours for state pill
+              const ceBadgeClass =
+                ceLabel === 'SURGING' ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40' :
+                ceLabel === 'RISING'  ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30' :
+                ceLabel === 'FLAT'    ? 'bg-amber-500/10 text-amber-400 border-amber-500/30' :
+                ceLabel === 'FALLING' ? 'bg-red-500/10 text-red-400 border-red-500/30' :
+                                        'bg-red-500/20 text-red-300 border-red-500/40';
+              const peBadgeClass =
+                peLabel === 'SURGING' ? 'bg-rose-500/20 text-rose-300 border-rose-500/40' :
+                peLabel === 'RISING'  ? 'bg-rose-500/10 text-rose-400 border-rose-500/30' :
+                peLabel === 'FLAT'    ? 'bg-amber-500/10 text-amber-400 border-amber-500/30' :
+                peLabel === 'FALLING' ? 'bg-sky-500/10 text-sky-400 border-sky-500/30' :
+                                        'bg-sky-500/20 text-sky-300 border-sky-500/40';
+
+              const shortLabel = (m: string) =>
+                m === 'SURGING' ? '🚀 Surge' : m === 'RISING' ? '↑ Rise' :
+                m === 'FLAT'    ? '⚠ Neutral' : m === 'FALLING' ? '↓ Fall' : '↓↓ Coll';
+
+              const ceVelIcon = chainStats.ceHotPct > 60 ? '🔥' : chainStats.ceHotPct > 30 ? '⚡' : chainStats.ceHotPct > 10 ? '~' : '';
+              const peVelIcon = chainStats.peHotPct > 60 ? '🔥' : chainStats.peHotPct > 30 ? '⚡' : chainStats.peHotPct > 10 ? '~' : '';
+
+              // Neutral warning banner when both sides flat
+              const bothNeutral = ceNeutral && peNeutral;
+
+              return (
+                <div
+                  className={`flex flex-col gap-1 px-2 py-2 rounded-lg border transition-all duration-200 overflow-hidden ${bothNeutral ? 'border-amber-500/40 bg-amber-500/5' : 'border-cyan-500/30 bg-cyan-500/5'} shadow-[inset_0_0_0_1px_rgba(6,182,212,0.06)] ${getMetricCardFlashClass(chainMoves.priceAction)}`}
+                  title={`CE: ${cePct >= 0 ? '+' : ''}${cePct.toFixed(2)}% (${ceLabel}) | PE: ${pePct >= 0 ? '+' : ''}${pePct.toFixed(2)}% (${peLabel})`}
+                >
+                  {/* Header */}
+                  <div className="flex items-center justify-between gap-1 flex-wrap">
+                    <span className="text-[8px] font-bold tracking-widest uppercase text-slate-500">Price Action</span>
+                    {bothNeutral && (
+                      <span className="text-[7px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/40 rounded px-1 py-0.5 whitespace-nowrap">
+                        ⚠ Wait
+                      </span>
+                    )}
+                  </div>
+
+                  {/* CE row — label · value on same line, badge below */}
+                  <div className="flex flex-col gap-0.5">
+                    <div className="flex items-baseline gap-1">
+                      <span className={`text-[9px] font-black shrink-0 ${cePct >= 0 ? 'text-emerald-500' : 'text-red-500'}`}>CE</span>
+                      <span className={`text-[12px] sm:text-[13px] font-black font-mono tabular-nums leading-none transition-all duration-300 ${ceValClass} ${getValueFlashClass(chainMoves.priceAction.ce, chainMoves.priceAction.active)}`}>
+                        {cePct >= 0 ? '+' : ''}{cePct.toFixed(2)}%
+                      </span>
+                    </div>
+                    <span className={`self-start inline-flex items-center gap-0.5 rounded border px-1 py-0.5 text-[7px] font-bold leading-none whitespace-nowrap ${ceBadgeClass}`}>
+                      {shortLabel(ceLabel)}{ceVelIcon && <span>{ceVelIcon}</span>}
+                    </span>
+                  </div>
+
+                  {/* PE row */}
+                  <div className="flex flex-col gap-0.5">
+                    <div className="flex items-baseline gap-1">
+                      <span className={`text-[9px] font-black shrink-0 ${pePct >= 0 ? 'text-rose-500' : 'text-sky-500'}`}>PE</span>
+                      <span className={`text-[12px] sm:text-[13px] font-black font-mono tabular-nums leading-none transition-all duration-300 ${peValClass} ${getValueFlashClass(chainMoves.priceAction.pe, chainMoves.priceAction.active)}`}>
+                        {pePct >= 0 ? '+' : ''}{pePct.toFixed(2)}%
+                      </span>
+                    </div>
+                    <span className={`self-start inline-flex items-center gap-0.5 rounded border px-1 py-0.5 text-[7px] font-bold leading-none whitespace-nowrap ${peBadgeClass}`}>
+                      {shortLabel(peLabel)}{peVelIcon && <span>{peVelIcon}</span>}
+                    </span>
+                  </div>
+
+                  {/* Momentum dominance bar */}
+                  <div className="flex h-[3px] rounded-full overflow-hidden bg-slate-800/80 mt-0.5">
+                    <div
+                      className={`transition-all duration-500 rounded-l-full ${cePct >= 0 ? 'bg-gradient-to-r from-emerald-500/80 to-emerald-400/80' : 'bg-gradient-to-r from-red-500/80 to-red-400/80'}`}
+                      style={{ width: `${chainStats.cePaDomPct}%` }}
+                    />
+                    <div
+                      className={`transition-all duration-500 rounded-r-full ${pePct >= 0 ? 'bg-gradient-to-l from-rose-500/80 to-rose-400/80' : 'bg-gradient-to-l from-sky-500/80 to-sky-400/80'}`}
+                      style={{ width: `${100 - chainStats.cePaDomPct}%` }}
+                    />
+                  </div>
+                </div>
+              );
+            })()}
           </div>
         )}
       </div>
@@ -1554,17 +1793,7 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
         </div>
       )}
 
-      {/* ── TRADE ACTION BANNER ────────────────────────────────────────── */}
-      {hasRealSignal && atmRow && (
-        <TradeActionBanner
-          atmCeSignal={atmRow.ce.signal}
-          atmCeScore={Math.round(atmRow.ce.score)}
-          atmPeSignal={atmRow.pe.signal}
-          atmPeScore={Math.round(atmRow.pe.score)}
-          overallScore={symbolSignal.score}
-          confidence={intelligence?.confidence ?? 50}
-        />
-      )}
+      {/* Trade action banner intentionally hidden to free space */}
 
       {/* Feed status bar */}
       <div className="flex flex-wrap items-center justify-between gap-2 mb-2 rounded-lg border border-slate-700/30 bg-slate-900/40 px-2 py-1">
@@ -1582,10 +1811,6 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
             <span className="w-2 h-2 rounded-full bg-emerald-400 inline-block shrink-0" />
             <span className="text-[11px] font-black tracking-widest uppercase text-emerald-300">CALL (CE)</span>
           </div>
-          <span className="text-[9px] font-bold text-emerald-400/80 hidden sm:block">
-            C.S.BUY / C.BUY → <span className="text-emerald-300 font-black">BUY CE</span> (market going UP)
-          </span>
-          <span className="text-[9px] text-emerald-400/80 block sm:hidden">↑ UP → BUY CE</span>
         </div>
         <div className="flex flex-col items-center justify-center px-1 py-1.5 bg-slate-800/60 border-r border-slate-700/50">
           <span className="text-[10px] font-black tracking-widest uppercase text-cyan-400">STRIKE</span>
@@ -1599,10 +1824,6 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
             <span className="w-2 h-2 rounded-full bg-red-400 inline-block shrink-0" />
             <span className="text-[11px] font-black tracking-widest uppercase text-red-300">PUT (PE)</span>
           </div>
-          <span className="text-[9px] font-bold text-red-400/80 hidden sm:block text-right">
-            P.S.BUY / P.BUY → <span className="text-red-300 font-black">BUY PE</span> (market going DOWN)
-          </span>
-          <span className="text-[9px] text-red-400/80 block sm:hidden">↓ DOWN → BUY PE</span>
         </div>
       </div>
 
@@ -1622,6 +1843,11 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
       {/* Strike rows */}
       <div className="flex flex-col gap-2.5 sm:gap-1.5 md:gap-1">
         {data.strikes.map(row => (
+          // Strike-level V uses live tick delta, not cumulative day volume.
+          // Keeps OI/signal logic intact while showing current traded flow in table cells.
+          (() => {
+            const liveVol = liveStrikeVolumeMap[row.strike];
+            return (
           <StrikeRowComponent 
             key={row.strike} 
             row={row} 
@@ -1629,22 +1855,16 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
             maxOI={maxOI} 
             symbolKey={symbolKey}
             isRecommended={intelligence?.bestStrike?.strike === row.strike}
+            liveCeVolume={liveVol?.ce ?? 0}
+            livePeVolume={liveVol?.pe ?? 0}
           />
+            );
+          })()
         ))}
       </div>
 
       {/* Legend */}
       <div className="flex flex-wrap items-center justify-center gap-x-2 gap-y-1 mt-2.5 pt-2 border-t border-slate-700/30 text-[9px] text-slate-600">
-        <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />S.Buy</span>
-        <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-emerald-600" />Buy</span>
-        <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-amber-400" />Hold</span>
-        <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-red-600" />Sell</span>
-        <span className="flex items-center gap-1"><span className="w-1.5 h-1.5 rounded-full bg-red-400" />S.Sell</span>
-        <span className="text-slate-700 mx-1">|</span>
-        <span className="flex items-center gap-1"><span className="w-3 h-1 rounded-full bg-amber-400" />Vol heat</span>
-        <span className="flex items-center gap-1"><span className="w-3 h-1 rounded-full bg-blue-400" />OI heat</span>
-        <span className="flex items-center gap-1"><span className="text-cyan-400">CYAN</span>=ATM</span>
-        <span className="flex items-center gap-1"><span className="text-violet-400">VIOLET</span>=Max Pain</span>
         {/* SMC/ICT cheat-sheet toggle */}
         <button
           onClick={() => setShowSMC(v => !v)}
