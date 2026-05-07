@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import dynamic from 'next/dynamic';
+import LiveStatus from '@/components/LiveStatus';
 import { useMarketSocket } from '@/hooks/useMarketSocket';
 import { useAnalysis } from '@/hooks/useAnalysis';
 import { useAIAnalysis } from '@/hooks/useAIAnalysis';
@@ -12,17 +13,6 @@ import { getOrCreateVisitorId } from '@/lib/visitor-id';
 // Dynamic import for Header to prevent SSR hydration errors with time/date
 const Header = dynamic(() => import('@/components/Header'), { ssr: false });
 const IndiaVIXBadge = dynamic(() => import('@/components/IndiaVIXBadge'), { ssr: false });
-
-// Import status component for both mobile and desktop
-const LiveStatus = dynamic(() => import('@/components/LiveStatus'), { 
-  ssr: false,
-  loading: () => (
-    <div className="bg-dark-surface/60 rounded-xl p-4 animate-pulse border border-emerald-500/20">
-      <div className="h-4 bg-gray-700 rounded mb-2"></div>
-      <div className="h-3 bg-gray-700 rounded w-3/4"></div>
-    </div>
-  )
-});
 
 const SystemStatusBanner = dynamic(() => import('@/components/SystemStatusBanner'), { 
   ssr: false 

@@ -434,6 +434,9 @@ const SideCell = memo<{ side: StrikeSideData; label: 'CE' | 'PE'; volDominant: b
   const flashTimerRef = useRef<ReturnType<typeof setTimeout>>();
   const [flashAnimKey, setFlashAnimKey] = useState(0);
   const [flashDir, setFlashDir] = useState<'up' | 'down' | null>(null);
+  const prevVolumeRef = useRef<number>(displayVolumeSafe);
+  const volumeFlashTimerRef = useRef<ReturnType<typeof setTimeout>>();
+  const [volumeFlashDir, setVolumeFlashDir] = useState<'up' | 'down' | null>(null);
 
   useEffect(() => {
     const prev = prevPriceRef.current;
@@ -447,6 +450,17 @@ const SideCell = memo<{ side: StrikeSideData; label: 'CE' | 'PE'; volDominant: b
     }
     return () => clearTimeout(flashTimerRef.current);
   }, [side.price]);
+
+  useEffect(() => {
+    const prev = prevVolumeRef.current;
+    const curr = displayVolumeSafe;
+    prevVolumeRef.current = curr;
+    if (curr === prev) return;
+    setVolumeFlashDir(curr > prev ? 'up' : 'down');
+    clearTimeout(volumeFlashTimerRef.current);
+    volumeFlashTimerRef.current = setTimeout(() => setVolumeFlashDir(null), 650);
+    return () => clearTimeout(volumeFlashTimerRef.current);
+  }, [displayVolumeSafe]);
 
   // ── Velocity heat level ───────────────────────────────────────────────
   const heatLevel = side.velocity === 'EXTREME' ? 3
@@ -645,7 +659,7 @@ const SideCell = memo<{ side: StrikeSideData; label: 'CE' | 'PE'; volDominant: b
       {/* Volume | OI — highlighted when dominant */}
       <div className={`flex items-center gap-0.5 text-[8px] sm:text-[10px] font-black`}>
         <span className="text-slate-300 font-bold shrink-0">V</span>
-        <span className={`w-[46px] sm:w-[58px] text-right text-[8px] sm:text-[10px] font-mono font-black tabular-nums truncate ${volCls}`}>{fmtNum(displayVolumeSafe)}</span>
+        <span className={`w-[46px] sm:w-[58px] text-right text-[8px] sm:text-[10px] font-mono font-black tabular-nums truncate transition-all duration-300 ${volCls} ${volumeFlashDir === 'up' ? 'bg-emerald-500/20 text-emerald-100 rounded px-1' : volumeFlashDir === 'down' ? 'bg-red-500/20 text-red-100 rounded px-1' : ''}`}>{fmtNum(displayVolumeSafe)}</span>
         <span className="text-slate-400 text-[7px] sm:text-[9px] font-bold shrink-0">·</span>
         <span className="text-slate-300 font-bold shrink-0">OI</span>
         <span className={`w-[46px] sm:w-[58px] text-right text-[8px] sm:text-[10px] font-mono font-black tabular-nums truncate ${oiCls}`}>{fmtNum(side.oi)}</span>
@@ -768,10 +782,10 @@ SideCell.displayName = 'SideCell';
 
 // Strike Row
 
-const StrikeRowComponent = memo<{ row: StrikeRow; maxVol: number; maxOI: number; symbolKey: SymbolKey; isRecommended?: boolean; liveCeVolume?: number; livePeVolume?: number }>(({ row, maxVol, maxOI, symbolKey, isRecommended = false, liveCeVolume, livePeVolume }) => {
+const StrikeRowComponent = memo<{ row: StrikeRow; maxVol: number; maxOI: number; symbolKey: SymbolKey; isRecommended?: boolean }>(({ row, maxVol, maxOI, symbolKey, isRecommended = false }) => {
   const isATM = row.isATM;
-  const ceDisplayVol = Math.max(0, liveCeVolume ?? row.ce.volume);
-  const peDisplayVol = Math.max(0, livePeVolume ?? row.pe.volume);
+  const ceDisplayVol = Math.max(0, row.ce.volume);
+  const peDisplayVol = Math.max(0, row.pe.volume);
   const totalVol  = row.ce.volume + row.pe.volume;
   const totalOI   = row.ce.oi    + row.pe.oi;
   const volIntensity = maxVol > 0 ? Math.min(totalVol / maxVol, 1) : 0;
@@ -932,10 +946,11 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
   const [showSMC, setShowSMC] = useState(false);
   const prevDominantRef = useRef<'BULL' | 'BEAR' | 'NEUTRAL'>('NEUTRAL');
   const [flashSide, setFlashSide] = useState<'BULL' | 'BEAR' | null>(null);
+  const prevSummaryRef = useRef<{ bullPct: number; bearPct: number; pcr: number } | null>(null);
+  const [summaryFlash, setSummaryFlash] = useState<{ bull: boolean; bear: boolean; pcr: boolean }>({ bull: false, bear: false, pcr: false });
+  const summaryFlashTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [chainMoves, setChainMoves] = useState<ChainMoves>(INITIAL_CHAIN_MOVES);
   const [liveVolumeTick, setLiveVolumeTick] = useState<{ ce: number; pe: number; ready: boolean }>({ ce: 0, pe: 0, ready: false });
-  const prevStrikeVolumeRef = useRef<Record<number, { ce: number; pe: number }>>({});
-  const [liveStrikeVolumeMap, setLiveStrikeVolumeMap] = useState<Record<number, { ce: number; pe: number }>>({});
   // Flash state for intelligence section — fires whenever the composite score changes
   const prevScoreRef = useRef<number | null>(null);
   const [scoreFlash, setScoreFlash] = useState<'up' | 'down' | null>(null);
@@ -1062,37 +1077,23 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
 
   // Live tick-volume view (current flow only, not cumulative day total)
   const liveVolumeStats = useMemo(() => {
+    // Keep UI stable: prefer chain totals for display so CE/PE values never blink to "--".
+    if (chainStats) {
+      const ce = Math.max(0, chainStats.totalCEVol);
+      const pe = Math.max(0, chainStats.totalPEVol);
+      const total = ce + pe;
+      const cePct = total > 0 ? chainStats.ceVolPct : 50;
+      const pePct = total > 0 ? chainStats.peVolPct : 50;
+      return { ce, pe, total, cePct, pePct, ready: total > 0 };
+    }
+
     const ce = Math.max(0, liveVolumeTick.ce);
     const pe = Math.max(0, liveVolumeTick.pe);
     const total = ce + pe;
     const cePct = total > 0 ? Math.round((ce / total) * 100) : 50;
     const pePct = total > 0 ? 100 - cePct : 50;
     return { ce, pe, total, cePct, pePct, ready: liveVolumeTick.ready && total > 0 };
-  }, [liveVolumeTick.ce, liveVolumeTick.pe, liveVolumeTick.ready]);
-
-  // Per-strike live tick volumes for CE/PE (current flow only)
-  useEffect(() => {
-    if (!hasData) return;
-    const prevMap = prevStrikeVolumeRef.current;
-    const nextPrev: Record<number, { ce: number; pe: number }> = {};
-    const nextLive: Record<number, { ce: number; pe: number }> = {};
-
-    for (const strike of strikes) {
-      const key = strike.strike;
-      const ceCurr = Math.max(0, strike.ce.volume);
-      const peCurr = Math.max(0, strike.pe.volume);
-      const prev = prevMap[key];
-
-      const ceLive = prev ? (ceCurr >= prev.ce ? ceCurr - prev.ce : ceCurr) : 0;
-      const peLive = prev ? (peCurr >= prev.pe ? peCurr - prev.pe : peCurr) : 0;
-
-      nextLive[key] = { ce: ceLive, pe: peLive };
-      nextPrev[key] = { ce: ceCurr, pe: peCurr };
-    }
-
-    setLiveStrikeVolumeMap(nextLive);
-    prevStrikeVolumeRef.current = nextPrev;
-  }, [strikes, hasData]);
+  }, [chainStats, liveVolumeTick.ce, liveVolumeTick.pe, liveVolumeTick.ready]);
 
   // Summary: bias + PCR - use backend intelligence when available
   const summary = useMemo(() => {
@@ -1130,6 +1131,94 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
       symbolSignal.score,
     );
   }, [atmRow, hasRealSignal, symbolSignal.score]);
+
+  // Today's Market Regime Engine (live): combines price action, participation,
+  // positioning, pressure and risk into a directional trend score.
+  const todaysRegime = useMemo(() => {
+    const pcrNow = intelligence?.pcr ?? summary.pcr ?? 1;
+    if (!hasRealSignal || !intelligence) {
+      return {
+        trendScore: 0,
+        trendTag: 'NEUTRAL',
+        sidePlan: 'WAIT',
+        strength: 'LOW',
+        reason: 'Waiting for live chain confirmation',
+        scoreTone: 'text-slate-300 border-slate-600/50 bg-slate-700/25',
+        factors: [
+          { k: 'Price', v: '--', pass: false },
+          { k: 'Flow', v: '--', pass: false },
+          { k: 'OI', v: '--', pass: false },
+          { k: 'Risk', v: '--', pass: false },
+        ],
+      };
+    }
+
+    const cePa = chainStats?.ceAvgChgPct ?? 0;
+    const pePa = chainStats?.peAvgChgPct ?? 0;
+    const paEdgeRaw = cePa - pePa; // +ve => CE outperforming => bullish trend
+
+    const ceVolPct = chainStats?.ceVolPct ?? 50;
+    const ceOIPct = chainStats?.ceOIPct ?? 50;
+    const ceOIChgPct = chainStats?.ceOIChgPct ?? 50;
+    const pressureEdgeRaw = summary.bullPct - summary.bearPct;
+
+    const paEdge = Math.max(-32, Math.min(32, paEdgeRaw * 6));
+    const volEdge = Math.max(-16, Math.min(16, (ceVolPct - 50) * 0.7));
+    const oiEdge = Math.max(-14, Math.min(14, (ceOIPct - 50) * 0.6));
+    const oiChgEdge = Math.max(-10, Math.min(10, (ceOIChgPct - 50) * 0.5));
+    const pressureEdge = Math.max(-20, Math.min(20, pressureEdgeRaw * 0.9));
+    const pcrEdge = pcrNow > 1.2 ? 10 : pcrNow < 0.8 ? -10 : (pcrNow - 1) * 20;
+
+    const trapRisk = intelligence.trapRiskPct ?? 0;
+    const confidence = intelligence.confidence ?? 0;
+    const agreement = intelligence.agreementPct ?? 0;
+
+    let rawScore = paEdge + volEdge + oiEdge + oiChgEdge + pressureEdge + pcrEdge;
+    // Trap risk reduces conviction in whichever direction the score is pointing.
+    if (rawScore > 0) rawScore = Math.max(0, rawScore - trapRisk * 0.18);
+    if (rawScore < 0) rawScore = Math.min(0, rawScore + trapRisk * 0.18);
+
+    // Confidence/agreement multiplier keeps trend score realistic in noisy states.
+    const quality = Math.max(0.55, Math.min(1.05, (confidence / 100) * 0.55 + (agreement / 100) * 0.45));
+    const trendScore = Math.round(Math.max(-100, Math.min(100, rawScore * quality)));
+    const absScore = Math.abs(trendScore);
+
+    const trendTag = trendScore >= 18 ? 'UPTREND' : trendScore <= -18 ? 'DOWNTREND' : 'RANGE';
+    const strength = absScore >= 55 ? 'HIGH' : absScore >= 35 ? 'MEDIUM' : absScore >= 18 ? 'BUILDING' : 'LOW';
+
+    const riskHeavy = trapRisk >= 60;
+    const lowQuality = confidence < 48 || agreement < 45;
+    const sidePlan = absScore < 18 || riskHeavy || lowQuality
+      ? 'WAIT'
+      : trendScore > 0
+        ? 'BUY CE'
+        : 'BUY PE';
+
+    const reason = sidePlan === 'WAIT'
+      ? (riskHeavy
+          ? 'High trap risk - avoid directional entry'
+          : absScore < 18
+            ? 'Trend not established yet'
+            : 'Signal quality too low - wait for confirmation')
+      : trendScore > 0
+        ? 'Call side momentum + flow + pressure aligned'
+        : 'Put side momentum + flow + pressure aligned';
+
+    const scoreTone = trendScore > 0
+      ? 'text-emerald-200 border-emerald-500/50 bg-emerald-500/15'
+      : trendScore < 0
+        ? 'text-red-200 border-red-500/50 bg-red-500/15'
+        : 'text-amber-200 border-amber-500/45 bg-amber-500/12';
+
+    const factors = [
+      { k: 'Price', v: `${paEdgeRaw >= 0 ? '+' : ''}${paEdgeRaw.toFixed(2)}%`, pass: Math.abs(paEdgeRaw) >= 0.25 },
+      { k: 'Flow', v: `CE ${ceVolPct}%`, pass: Math.abs(ceVolPct - 50) >= 6 },
+      { k: 'OI', v: `CE ${ceOIPct}%`, pass: Math.abs(ceOIPct - 50) >= 6 || Math.abs(ceOIChgPct - 50) >= 6 },
+      { k: 'Risk', v: `${trapRisk}%`, pass: trapRisk < 45 },
+    ];
+
+    return { trendScore, trendTag, sidePlan, strength, reason, scoreTone, factors };
+  }, [chainStats, hasRealSignal, intelligence, summary.bearPct, summary.bullPct, summary.pcr]);
 
   // Dominance tracking: highlight the leading side and flash on transition
   useEffect(() => {
@@ -1264,6 +1353,30 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
     };
   }, [intelligence?.score]);
 
+  // Border-only flash for summary chips (Bull/Bear/PCR) when fresh values arrive.
+  useEffect(() => {
+    if (!hasRealSignal) return;
+    const currentPcr = intelligence?.pcr ?? summary.pcr;
+    const prev = prevSummaryRef.current;
+    if (prev) {
+      const bullChanged = prev.bullPct !== summary.bullPct;
+      const bearChanged = prev.bearPct !== summary.bearPct;
+      const pcrChanged = Math.abs(prev.pcr - currentPcr) >= 0.01;
+      if (bullChanged || bearChanged || pcrChanged) {
+        setSummaryFlash({ bull: bullChanged, bear: bearChanged, pcr: pcrChanged });
+        if (summaryFlashTimerRef.current) clearTimeout(summaryFlashTimerRef.current);
+        summaryFlashTimerRef.current = setTimeout(() => {
+          setSummaryFlash({ bull: false, bear: false, pcr: false });
+        }, 650);
+      }
+    }
+    prevSummaryRef.current = { bullPct: summary.bullPct, bearPct: summary.bearPct, pcr: currentPcr };
+
+    return () => {
+      if (summaryFlashTimerRef.current) clearTimeout(summaryFlashTimerRef.current);
+    };
+  }, [hasRealSignal, summary.bullPct, summary.bearPct, summary.pcr, intelligence?.pcr]);
+
   if (!data || !hasData) {
     return (
       <div className="rounded-xl bg-dark-card/60 border border-slate-700/40 p-3 sm:p-4">
@@ -1367,11 +1480,11 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
               <>
                 <span
                   className={[
-                    'tabular-nums transition-all duration-300',
+                    'tabular-nums transition-all duration-300 px-1.5 py-0.5 rounded border',
                     summary.bullPct > summary.bearPct
-                      ? 'text-emerald-300 font-black px-1.5 py-0.5 rounded border border-emerald-400/70 bg-emerald-500/20 shadow-[0_0_8px_1px_rgba(52,211,153,0.35)]'
-                      : 'text-emerald-500 font-semibold',
-                    flashSide === 'BULL' ? 'animate-scale-pop' : '',
+                      ? 'text-emerald-300 font-black border-emerald-400/80'
+                      : 'text-emerald-500 font-semibold border-emerald-500/30',
+                    (flashSide === 'BULL' || summaryFlash.bull) ? 'border-emerald-300 shadow-[0_0_10px_1px_rgba(52,211,153,0.55)]' : '',
                   ].join(' ')}
                 >
                   ▲ {summary.bullPct}%
@@ -1379,11 +1492,11 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
                 <span className="text-slate-700">|</span>
                 <span
                   className={[
-                    'tabular-nums transition-all duration-300',
+                    'tabular-nums transition-all duration-300 px-1.5 py-0.5 rounded border',
                     summary.bearPct > summary.bullPct
-                      ? 'text-red-300 font-black px-1.5 py-0.5 rounded border border-red-400/70 bg-red-500/20 shadow-[0_0_8px_1px_rgba(239,68,68,0.35)]'
-                      : 'text-red-500 font-semibold',
-                    flashSide === 'BEAR' ? 'animate-scale-pop' : '',
+                      ? 'text-red-300 font-black border-red-400/80'
+                      : 'text-red-500 font-semibold border-red-500/30',
+                    (flashSide === 'BEAR' || summaryFlash.bear) ? 'border-red-300 shadow-[0_0_10px_1px_rgba(239,68,68,0.55)]' : '',
                   ].join(' ')}
                 >
                   ▼ {summary.bearPct}%
@@ -1395,7 +1508,7 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
               </>
             ) : <span className="text-slate-600 text-[10px]">No data</span>}
             <span className="text-slate-700">|</span>
-            <span className={`font-bold text-[11px] sm:text-[12px] tabular-nums transition-colors duration-300 ${(pcr ?? 1) > 1.2 ? 'text-emerald-400' : (pcr ?? 1) < 0.8 ? 'text-red-400' : 'text-amber-400'}`}
+            <span className={`font-bold text-[11px] sm:text-[12px] tabular-nums transition-all duration-300 px-1.5 py-0.5 rounded border ${(pcr ?? 1) > 1.2 ? 'text-emerald-400 border-emerald-500/40' : (pcr ?? 1) < 0.8 ? 'text-red-400 border-red-500/40' : 'text-amber-400 border-amber-500/40'} ${summaryFlash.pcr ? ((pcr ?? 1) > 1.2 ? 'border-emerald-300 shadow-[0_0_10px_1px_rgba(52,211,153,0.5)]' : (pcr ?? 1) < 0.8 ? 'border-red-300 shadow-[0_0_10px_1px_rgba(239,68,68,0.5)]' : 'border-amber-300 shadow-[0_0_10px_1px_rgba(251,191,36,0.45)]') : ''}`}
               title="Put-Call Ratio (full chain OI if available, else ATM±5)">
               PCR {pcr?.toFixed(2) ?? '--'}
             </span>
@@ -1408,7 +1521,7 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
 
             {/* ① Total Volume */}
             <div className={`flex flex-col gap-1 px-3 py-2 rounded-lg border border-emerald-500/30 bg-emerald-500/5 shadow-[inset_0_0_0_1px_rgba(16,185,129,0.08)] transition-all duration-200 ${getMetricCardFlashClass(chainMoves.volume)}`}
-              title={`Live Tick Volume — CE: ${liveVolumeStats.ready ? fmtNum(liveVolumeStats.ce) : '--'} | PE: ${liveVolumeStats.ready ? fmtNum(liveVolumeStats.pe) : '--'}`}>
+              title={`Total Chain Volume — CE: ${liveVolumeStats.ready ? fmtNum(liveVolumeStats.ce) : '--'} | PE: ${liveVolumeStats.ready ? fmtNum(liveVolumeStats.pe) : '--'}`}>
               <span className="text-[8px] font-bold tracking-widest uppercase text-slate-500">Total Volume</span>
               <div className="flex items-center justify-between gap-1 font-mono">
                 <span className="text-[11px] sm:text-[12px] font-black text-emerald-400">
@@ -1628,11 +1741,25 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
                                         'bg-sky-500/20 text-sky-300 border-sky-500/40';
 
               const shortLabel = (m: string) =>
-                m === 'SURGING' ? '🚀 Surge' : m === 'RISING' ? '↑ Rise' :
-                m === 'FLAT'    ? '⚠ Neutral' : m === 'FALLING' ? '↓ Fall' : '↓↓ Coll';
+                m === 'SURGING' ? 'Strong Up' : m === 'RISING' ? 'Up' :
+                m === 'FLAT'    ? 'Sideways' : m === 'FALLING' ? 'Down' : 'Strong Down';
 
-              const ceVelIcon = chainStats.ceHotPct > 60 ? '🔥' : chainStats.ceHotPct > 30 ? '⚡' : chainStats.ceHotPct > 10 ? '~' : '';
-              const peVelIcon = chainStats.peHotPct > 60 ? '🔥' : chainStats.peHotPct > 30 ? '⚡' : chainStats.peHotPct > 10 ? '~' : '';
+              const ceSpeedTag = chainStats.ceHotPct > 60 ? 'Fast' : chainStats.ceHotPct > 30 ? 'Active' : '';
+              const peSpeedTag = chainStats.peHotPct > 60 ? 'Fast' : chainStats.peHotPct > 30 ? 'Active' : '';
+              const bothDown = cePct < -0.25 && pePct < -0.25;
+              const bothUp = cePct > 0.25 && pePct > 0.25;
+
+              // Market direction from CE/PE price action
+              const marketBias =
+                cePct > 0.25 && pePct < -0.25
+                  ? { tag: 'Market Up', detail: 'Call buyers in control', cls: 'text-emerald-200 bg-emerald-500/15 border-emerald-400/45' }
+                  : pePct > 0.25 && cePct < -0.25
+                  ? { tag: 'Market Down', detail: 'Put buyers in control', cls: 'text-red-200 bg-red-500/15 border-red-400/45' }
+                  : cePct < -0.25 && pePct < -0.25
+                  ? { tag: 'No Clear Trend', detail: 'Both CE and PE falling (premium decay)', cls: 'text-amber-200 bg-amber-500/12 border-amber-400/45' }
+                  : cePct > 0.25 && pePct > 0.25
+                  ? { tag: 'High Volatility', detail: 'Both CE and PE rising', cls: 'text-cyan-200 bg-cyan-500/12 border-cyan-400/45' }
+                  : { tag: 'Balanced', detail: 'Wait for clear direction', cls: 'text-slate-200 bg-slate-700/30 border-slate-500/45' };
 
               // Neutral warning banner when both sides flat
               const bothNeutral = ceNeutral && peNeutral;
@@ -1652,6 +1779,12 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
                     )}
                   </div>
 
+                  {/* Clear market direction cue for non-technical users */}
+                  <div className={`rounded border px-1.5 py-1 text-[8px] sm:text-[9px] leading-tight ${marketBias.cls}`}>
+                    <div className="font-black">{marketBias.tag}</div>
+                    <div className="font-semibold opacity-90">{marketBias.detail}</div>
+                  </div>
+
                   {/* CE row — label · value on same line, badge below */}
                   <div className="flex flex-col gap-0.5">
                     <div className="flex items-baseline gap-1">
@@ -1661,7 +1794,8 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
                       </span>
                     </div>
                     <span className={`self-start inline-flex items-center gap-0.5 rounded border px-1 py-0.5 text-[7px] font-bold leading-none whitespace-nowrap ${ceBadgeClass}`}>
-                      {shortLabel(ceLabel)}{ceVelIcon && <span>{ceVelIcon}</span>}
+                      {bothDown ? 'Premium Decay' : bothUp ? 'IV Expansion' : shortLabel(ceLabel)}
+                      {ceSpeedTag && <span>· {ceSpeedTag}</span>}
                     </span>
                   </div>
 
@@ -1674,7 +1808,8 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
                       </span>
                     </div>
                     <span className={`self-start inline-flex items-center gap-0.5 rounded border px-1 py-0.5 text-[7px] font-bold leading-none whitespace-nowrap ${peBadgeClass}`}>
-                      {shortLabel(peLabel)}{peVelIcon && <span>{peVelIcon}</span>}
+                      {bothDown ? 'Premium Decay' : bothUp ? 'IV Expansion' : shortLabel(peLabel)}
+                      {peSpeedTag && <span>· {peSpeedTag}</span>}
                     </span>
                   </div>
 
@@ -1755,31 +1890,26 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
               </span>
             </div>
 
-            {/* Regime + S/R + metrics */}
-            <div className={`flex flex-col gap-0.5 px-2.5 py-2 transition-colors duration-500 ${scoreFlash ? (scoreFlash === 'up' ? 'bg-emerald-500/5' : 'bg-red-500/5') : ''}`}>
-              <span className="text-[8px] sm:text-[9px] font-bold tracking-widest text-slate-500 uppercase">Regime</span>
-              <span className="text-[11px] sm:text-[13px] font-black text-slate-200 leading-tight transition-all duration-300">{intelligence.regime.replace(/_/g, ' ')}</span>
-              <div className="flex flex-wrap gap-x-2 gap-y-0 text-[8px] font-mono">
-                <span className="text-slate-400 transition-all duration-300">Agree {intelligence.agreementPct}%</span>
-                <span className="text-amber-400/80 transition-all duration-300">Trap {intelligence.trapRiskPct}%</span>
-              </div>
-              {(intelligence.keyLevels.support || intelligence.keyLevels.resistance) && (
-                <div className="flex gap-2 text-[8px] font-mono mt-0.5">
-                  {intelligence.keyLevels.support    && <span className="text-emerald-400/90">S:{intelligence.keyLevels.support.toLocaleString('en-IN')}</span>}
-                  {intelligence.keyLevels.resistance && <span className="text-red-400/90">R:{intelligence.keyLevels.resistance.toLocaleString('en-IN')}</span>}
+            {/* Today's Market Regime Engine */}
+            <div className={`flex flex-col gap-1 px-2.5 py-2 transition-colors duration-500 ${scoreFlash ? (scoreFlash === 'up' ? 'bg-emerald-500/5' : 'bg-red-500/5') : ''}`}>
+              <span className="text-[8px] sm:text-[9px] font-bold tracking-widest text-slate-500 uppercase">Today&apos;s Market Regime</span>
+
+              <div className={`rounded border px-1.5 py-1 ${todaysRegime.scoreTone}`}>
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-[10px] sm:text-[11px] font-black leading-none">{todaysRegime.trendTag}</span>
+                  <span className="text-[10px] font-mono font-black tabular-nums leading-none">
+                    {todaysRegime.trendScore > 0 ? '+' : ''}{todaysRegime.trendScore}
+                  </span>
                 </div>
-              )}
+                <div className="mt-0.5 flex items-center justify-between gap-2">
+                  <span className="text-[9px] font-black">{todaysRegime.sidePlan}</span>
+                  <span className="text-[8px] font-semibold opacity-80">{todaysRegime.strength}</span>
+                </div>
+              </div>
             </div>
           </div>
 
-          {/* Row 3: Insights — keyed by content so text changes cause a remount with fade-in */}
-          {intelligence.insights?.length > 0 && (
-            <div className="flex flex-wrap gap-1 px-2.5 py-1.5 border-t border-slate-700/30 bg-slate-800/30">
-              {intelligence.insights.map((note) => (
-                <span key={`${name}-ins-${note.slice(0, 28)}`} className="inline-flex items-center rounded border border-slate-700/40 bg-slate-900/60 px-1.5 py-0.5 text-[8px] sm:text-[10px] text-slate-300 transition-all duration-300">{note}</span>
-              ))}
-            </div>
-          )}
+          {/* Row 3 (Insights) intentionally hidden to save space */}
         </div>
       )}
 
@@ -1833,11 +1963,6 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
       {/* Strike rows */}
       <div className="flex flex-col gap-2.5 sm:gap-1.5 md:gap-1">
         {data.strikes.map(row => (
-          // Strike-level V uses live tick delta, not cumulative day volume.
-          // Keeps OI/signal logic intact while showing current traded flow in table cells.
-          (() => {
-            const liveVol = liveStrikeVolumeMap[row.strike];
-            return (
           <StrikeRowComponent 
             key={row.strike} 
             row={row} 
@@ -1845,11 +1970,7 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
             maxOI={maxOI} 
             symbolKey={symbolKey}
             isRecommended={intelligence?.bestStrike?.strike === row.strike}
-            liveCeVolume={liveVol?.ce ?? 0}
-            livePeVolume={liveVol?.pe ?? 0}
           />
-            );
-          })()
         ))}
       </div>
 

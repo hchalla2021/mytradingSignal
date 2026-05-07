@@ -1168,23 +1168,21 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
     };
 
     // ── Zone label system — above/below the line, never ON the line ─────────
-    // anchorY : the exact Y of the line or zone-edge being labelled
-    // above   : true  → tag floats ABOVE anchorY (clear gap below tag bottom)
-    //           false → tag floats BELOW anchorY (clear gap above tag top)
-    // X pos   : sits 14 px left from the right edge — not flush against the axis
+    // ONE shared Y pool — right-side labels and left-side count pills
+    // both register into it, so they can NEVER land at the same row.
     const _usedTagY: number[] = [];
-    const _TAG_H = 13;
-    // Try preferred slot first, then walk away from it in the correct direction
+    const _TAG_H = 15;   // slightly taller for 10px font
+    // Walks away from preferred Y (up to 12 steps) until a free slot is found.
+    // min_gap = _TAG_H + 2 ensures a 2px breathing gap between any two pills.
     const _claimSlot = (prefTagTopY: number, above: boolean): number | null => {
       const step = _TAG_H + 2;
-      for (let i = 0; i <= 6; i++) {
-        // Try same direction first, opposite direction second
+      for (let i = 0; i <= 12; i++) {
         const offsets = i === 0 ? [0] : (above ? [-i * step, i * step] : [i * step, -i * step]);
         for (const d of offsets) {
-          const ty = prefTagTopY + d;
+          const ty      = prefTagTopY + d;
           const clamped = Math.max(chartTop + 2, Math.min(chartBottom - _TAG_H - 2, ty));
-          const cy = clamped + _TAG_H / 2;
-          if (_usedTagY.every(uy => Math.abs(uy - cy) >= _TAG_H + 1)) {
+          const cy      = clamped + _TAG_H / 2;
+          if (_usedTagY.every(uy => Math.abs(uy - cy) >= _TAG_H + 2)) {
             _usedTagY.push(cy);
             return clamped;
           }
@@ -1192,13 +1190,15 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
       }
       return null;
     };
+    // Both sides use the same claimer → shared pool, zero cross-side collisions
+    const _claimCountSlot = _claimSlot;
     const drawLineTag = (anchorY: number, text: string, color: string, above: boolean, alpha = 1.0) => {
       ctx.save();
       ctx.font = 'bold 8px sans-serif';
       const tw = ctx.measureText(text).width;
       const tagW = tw + 8;
       // X: 14 px gap from right edge — label is clearly inside the chart, not glued to axis
-      const tx = chartRight - tagW - 14;
+      const tx = Math.max(chartLeft + 2, chartRight - tagW - 14);
       // Ideal tag position — above → bottom edge clears anchorY by 3px; below → top edge clears by 3px
       const idealTagTopY = above ? anchorY - _TAG_H - 3 : anchorY + 3;
       const finalTagTopY = _claimSlot(idealTagTopY, above);
@@ -1220,6 +1220,188 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
       ctx.textAlign = 'left';
       ctx.fillText(text, tx + 4, finalTagTopY + _TAG_H - 3);
       ctx.restore();
+    };
+
+    // Draws line-specific count near first visible candle with a guide connector.
+    // sourceCode keeps identity obvious (OB/FVG/SUP/RES/LIQ/BOS/CH/EQ...)
+    const drawCenterCount = (
+      anchorY: number,
+      countText: string,
+      color: string,
+      above: boolean,
+      alpha = 1.0,
+      fresh = false,
+      sourceCode = '',
+    ) => {
+      const baseCount = countText.replace(/^\s*·\s*/, '').trim();
+      const text = sourceCode ? `${sourceCode} ${baseCount}` : baseCount;
+      if (!text) return;
+
+      // Parse magnitude to drive intensity
+      const parseVal = (s: string): number => {
+        const m = s.match(/([\d.]+)([KkMm]?)/);
+        if (!m) return 0;
+        const n = parseFloat(m[1]);
+        const sfx = m[2].toUpperCase();
+        return sfx === 'M' ? n * 1_000_000 : sfx === 'K' ? n * 1_000 : n;
+      };
+      const nums = Array.from(baseCount.matchAll(/([\d.]+[KkMm]?)/g)).map(m => parseVal(m[1]));
+      const mag       = nums.length ? Math.max(...nums) : 0;
+      const intensity = Math.min(1, mag <= 0 ? 0 : mag < 500 ? 0.20 : mag < 2_000 ? 0.50 : mag < 5_000 ? 0.75 : 1.0);
+
+      const glowBlur = intensity > 0.70 ? 4 + intensity * 8 : 0;
+      const lineW    = 1.0 + intensity * 0.8;
+
+      ctx.save();
+      ctx.font = 'bold 10px "Segoe UI", Arial, sans-serif';
+      const tw   = ctx.measureText(text).width;
+      const tagH = _TAG_H;
+      const tagW = tw + 12;
+
+      // X: pill right-edge sits 8px before first visible candle.
+      // Clamp to chartLeft+4 so it never goes off-screen.
+      const firstCandleX = idxToX(startIdx) - candleStep / 2;
+      const idealTx      = firstCandleX - tagW - 8;
+      const tx           = Math.max(chartLeft + 4, idealTx);
+
+      // Mobile guard: if pill would still overlap the candle body, skip entirely
+      if (tx + tagW > firstCandleX - 2) { ctx.restore(); return; }
+
+      // Claim a Y slot from the shared pool — guarantees no overlap with right labels
+      const idealTagTopY = above ? anchorY - tagH - 3 : anchorY + 3;
+      const finalTy = _claimCountSlot(idealTagTopY, above);
+      if (finalTy === null) { ctx.restore(); return; }
+      const centerY = finalTy + tagH / 2;
+
+      // Guide connector: visually ties this count pill to its exact chart line
+      ctx.beginPath();
+      ctx.moveTo(tx + tagW + 1, centerY);
+      ctx.lineTo(Math.max(tx + tagW + 2, firstCandleX - 2), anchorY);
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 1;
+      ctx.globalAlpha = (0.35 + intensity * 0.35) * alpha;
+      ctx.setLineDash([2, 2]);
+      ctx.stroke();
+      ctx.setLineDash([]);
+
+      // ── NEW-ZONE pulse ring ────────────────────────────────────────────────
+      if (fresh) {
+        const pulse = (Math.sin(_t / 450) + 1) / 2;
+        const ringR = tagW / 2 + 2 + pulse * 5;
+        ctx.beginPath();
+        ctx.arc(tx + tagW / 2, centerY, ringR, 0, Math.PI * 2);
+        ctx.strokeStyle = color;
+        ctx.lineWidth   = 1.2;
+        ctx.globalAlpha = (0.55 - pulse * 0.45) * alpha;
+        ctx.shadowColor = color;
+        ctx.shadowBlur  = 6;
+        ctx.stroke();
+        ctx.shadowBlur  = 0;
+      }
+
+      // Dark opaque background — readable on any chart colour
+      roundRect(ctx, tx, finalTy, tagW, tagH, 3);
+      ctx.fillStyle   = 'rgba(8,12,18,0.90)';
+      ctx.globalAlpha = alpha;
+      ctx.fill();
+
+      // Coloured border — glows at high intensity
+      if (glowBlur > 0) { ctx.shadowColor = color; ctx.shadowBlur = glowBlur; }
+      ctx.strokeStyle = color;
+      ctx.lineWidth   = lineW;
+      ctx.globalAlpha = (0.55 + intensity * 0.45) * alpha;
+      roundRect(ctx, tx, finalTy, tagW, tagH, 3);
+      ctx.stroke();
+      ctx.shadowBlur  = 0;
+
+      // Text — near-white base, zone colour tint at high intensity
+      ctx.fillStyle    = intensity > 0.65 ? color : '#dde3ea';
+      ctx.globalAlpha  = alpha;
+      ctx.textAlign    = 'left';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(text, tx + 6, centerY);
+      ctx.textBaseline = 'alphabetic';
+      ctx.restore();
+    };
+
+    const formatPushTag = (up: number, down: number): string => {
+      const u = Math.max(0, Math.round(up));
+      const d = Math.max(0, Math.round(down));
+      if (u <= 0 && d <= 0) return '';
+      return ` · ↑${fmtNum(u)} ↓${fmtNum(d)}`;
+    };
+
+    const participantPushTag = (src?: {
+      bull_vol?: number;
+      bear_vol?: number;
+      total_vol?: number;
+      bull_pct?: number;
+      touch_count?: number;
+      ce_oi?: number;
+      pe_oi?: number;
+    }): string => {
+      if (!src) return '';
+      const bullVol = Math.max(0, src.bull_vol ?? 0);
+      const bearVol = Math.max(0, src.bear_vol ?? 0);
+      if (bullVol > 0 || bearVol > 0) {
+        return formatPushTag(bullVol, bearVol);
+      }
+      const totalVol = Math.max(0, src.total_vol ?? 0);
+      const bullPct = Math.min(100, Math.max(0, src.bull_pct ?? 0));
+      if (totalVol > 0) {
+        const up = totalVol * (bullPct / 100);
+        const down = Math.max(0, totalVol - up);
+        return formatPushTag(up, down);
+      }
+      const ceOI = Math.max(0, src.ce_oi ?? 0);
+      const peOI = Math.max(0, src.pe_oi ?? 0);
+      if (ceOI > 0 || peOI > 0) {
+        return formatPushTag(peOI, ceOI);
+      }
+      return '';
+    };
+
+    const nearestLevelParticipant = (
+      price: number,
+      arr?: Array<{
+        price: number;
+        bull_vol: number;
+        bear_vol: number;
+        total_vol: number;
+        bull_pct: number;
+        touch_count: number;
+        ce_oi?: number;
+        pe_oi?: number;
+      }>,
+    ) => {
+      if (!arr || arr.length === 0 || price <= 0) return undefined;
+      let best: (typeof arr)[number] | undefined;
+      let bestDiff = Number.POSITIVE_INFINITY;
+      for (const p of arr) {
+        const diff = Math.abs(p.price - price);
+        if (diff < bestDiff) {
+          best = p;
+          bestDiff = diff;
+        }
+      }
+      const tolerance = price * 0.0015;
+      return best && bestDiff <= tolerance ? best : undefined;
+    };
+
+    const eventPushTag = (idx: number): string => {
+      if (!Number.isFinite(idx)) return '';
+      const win = 6;
+      const from = Math.max(0, idx - win);
+      const to = Math.min(candles.length - 1, idx + win);
+      let up = 0;
+      let down = 0;
+      for (let i = from; i <= to; i++) {
+        const c = candles[i];
+        if (!c || c.v <= 0) continue;
+        if (c.c >= c.o) up += c.v;
+        else down += c.v;
+      }
+      return formatPushTag(up, down);
     };
 
     // ── Proximity alert set ───────────────────────────────────────
@@ -1536,9 +1718,12 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
         const isFreshOB = obAge <= 6;
         const starMark = obQuality === 'PREMIUM' ? '★' : '';
         const statusStr = isFreshOB ? ' NEW' : '';
+        const pushTag = participantPushTag(o);
         const tag = starMark + (isBull ? '▲OB' : '▼OB') + statusStr;
         // bull OB: zone is below price → tag BELOW zone bottom; bear OB: above price → tag ABOVE zone top
         drawLineTag(isBull ? y2 : y1, tag, borderColor, !isBull, lifecycleAlpha * qualityAlpha);
+        // Skip count for mitigated OB — zone is invalidated (SL hit), auto-removed
+        if (pushTag && !o.mitigated) drawCenterCount(isBull ? y2 : y1, pushTag, borderColor, !isBull, lifecycleAlpha * qualityAlpha, isFreshOB, isBull ? 'OB+' : 'OB-');
         // Predictive forecast — only when price within 2% proximity
         if (shouldPredict(o.top, o.bottom)) {
           const pred = predictZoneOutcome(o.top, o.bottom, candles, effectiveSpot, structure, isFreshOB, 1, 0);
@@ -1723,9 +1908,11 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
         const star    = quality === 'PREMIUM' ? '★' : '';
         const freshTag = isFresh ? '·NEW' : '';
         const partialTag = partial > 0.10 ? `·${Math.round(partial * 100)}%` : '';
+        const pushTag = participantPushTag(f);
         const tag = `${star}${isBull ? '▲' : '▼'}FVG${freshTag}${partialTag}`;
         // bull FVG: zone is below price → tag BELOW zone bottom; bear FVG: above price → tag ABOVE zone top
         drawLineTag(isBull ? y2 : y1, tag, borderColor, !isBull, lifecycleAlpha);
+        if (pushTag) drawCenterCount(isBull ? y2 : y1, pushTag, borderColor, !isBull, lifecycleAlpha, isFresh, isBull ? 'FVG+' : 'FVG-');
         // Predictive forecast — only when price within 2% proximity
         if (shouldPredict(f.top, f.bottom)) {
           const pred = predictZoneOutcome(f.top, f.bottom, candles, effectiveSpot, structure, partial === 0, 1, partial);
@@ -1750,6 +1937,7 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
       dash: number[],
       label: string,
       lineW: number,
+      pushTag = '',
     ) => {
       if (price <= 0) return;
       const y = priceToY(price);
@@ -1783,6 +1971,7 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
       // H/RES lines: tag BELOW the line (avoid top of chart); L/SUP: tag ABOVE the line
       const _lvlAbove = label.includes('L') || label === 'SUP';
       drawLineTag(y, label, color, _lvlAbove);
+      if (pushTag) drawCenterCount(y, pushTag, color, _lvlAbove, 1.0, false, label.replace('DAY ', 'D').replace('PREV ', 'P'));
       // Price pill: right price-axis strip (standard axis annotation)
       ctx.save();
       ctx.shadowBlur = 0;
@@ -1805,21 +1994,29 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
     };
 
     // DAY HIGH — solid 2px electric cyan
-    drawLevel(strongLevels.cdh, CFG.CDH, [], 'DAY H', 2);
+    drawLevel(strongLevels.cdh, CFG.CDH, [], 'DAY H', 2, participantPushTag(levels.cdh_participants ?? levels.cdh_strike_oi));
     addLevelPred(strongLevels.cdh, false); // CDH above price → rejection bounces down
     // DAY LOW — solid 1.5px royal blue
-    drawLevel(strongLevels.cdl, CFG.CDL, [], 'DAY L', 1.5);
+    drawLevel(strongLevels.cdl, CFG.CDL, [], 'DAY L', 1.5, participantPushTag(levels.cdl_participants ?? levels.cdl_strike_oi));
     addLevelPred(strongLevels.cdl, true);  // CDL below price → rejection bounces up
     // PREV HIGH — long dash [12,4] vivid gold
-    drawLevel(strongLevels.pdh, CFG.PDH, [12, 4], 'PREV H', 1.5);
+    drawLevel(strongLevels.pdh, CFG.PDH, [12, 4], 'PREV H', 1.5, participantPushTag(levels.pdh_participants ?? levels.pdh_strike_oi));
     addLevelPred(strongLevels.pdh, false);
     // PREV LOW — medium dash [6,4] deep orange (shorter dashes = different rhythm from PREV H)
-    drawLevel(strongLevels.pdl, CFG.PDL, [6, 4], 'PREV L', 1.2);
+    drawLevel(strongLevels.pdl, CFG.PDL, [6, 4], 'PREV L', 1.2, participantPushTag(levels.pdl_participants ?? levels.pdl_strike_oi));
     addLevelPred(strongLevels.pdl, true);
     // SUPPORT — dash-dot [5,3] neon lime, 1.5px (thick enough to see clearly)
-    for (const s of strongLevels.support) { drawLevel(s, CFG.SUPPORT, [5, 3], 'SUP', 1.5); addLevelPred(s, true); }
+    for (const s of strongLevels.support) {
+      const sPart = nearestLevelParticipant(s, levels.sr_participants?.support);
+      drawLevel(s, CFG.SUPPORT, [5, 3], 'SUP', 1.5, participantPushTag(sPart));
+      addLevelPred(s, true);
+    }
     // RESISTANCE — dots [2,4] neon red, 1.5px (different dash from SUP)
-    for (const r of strongLevels.resistance) { drawLevel(r, CFG.RESISTANCE, [2, 4], 'RES', 1.5); addLevelPred(r, false); }
+    for (const r of strongLevels.resistance) {
+      const rPart = nearestLevelParticipant(r, levels.sr_participants?.resistance);
+      drawLevel(r, CFG.RESISTANCE, [2, 4], 'RES', 1.5, participantPushTag(rPart));
+      addLevelPred(r, false);
+    }
 
     // ── LIQUIDITY LEVELS ────────────────────────────────────────────
     // SSL = Sell-side liquidity (above equal highs) — swept from downside ↑
@@ -1983,11 +2180,14 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
       }
 
       // ── STEP 6: Right-side tag — never overlaps candles ──────────────
-      const liqTag = activeSweep
+      const liqBase = activeSweep
         ? `${isSell ? '⚡SSL' : '⚡BSL'}×${lq.touchCount}`
         : `${isSell ? 'SSL' : 'BSL'}×${lq.touchCount}`;
+      const liqCount = participantPushTag(lq);
       // SSL (above price): tag BELOW the line; BSL (below price): tag ABOVE the line
-      drawLineTag(y, liqTag, baseCol, !isSell);
+      drawLineTag(y, liqBase, baseCol, !isSell);
+      // Skip count for swept liquidity — level invalidated (SL hit), auto-removed
+      if (liqCount && !lq.swept) drawCenterCount(y, liqCount, baseCol, !isSell, 1.0, activeSweep, isSell ? 'SSL' : 'BSL');
       // Predictive forecast for liquidity level
       if (shouldPredict(lq.level, lq.level)) {
         const liqTop = lq.level * 1.0005;
@@ -2480,6 +2680,9 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
       const label = isChoCh
         ? (isBull ? `${starStr}CHoCH ↑${dispStr}` : `${starStr}CHoCH ↓${dispStr}`)
         : (isBull ? `BOS ↑${dispStr}` : `BOS ↓${dispStr}`);
+      const pushTag = eventPushTag(ev.idx);
+      drawLineTag(evY, label, color, !isBull, 0.92 * _qMult);
+      if (pushTag) drawCenterCount(evY, pushTag, color, !isBull, 0.92 * _qMult, false, isChoCh ? 'CH' : 'BOS');
       // Label centred on the break candle, above (bull) or below (bear) the arrow
       {
         const bgColor = (isChoCh && evQuality === 'HIGH') ? color : `${color}28`;
@@ -2541,6 +2744,9 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
       // Label above diamond (EQH) or below (EQL), centred on its candle
       const touchStr = ind.touches >= 3 ? `×${ind.touches}` : '';
       const tag = (indPremium ? '★' : '') + (isHigh ? 'EQH' : 'EQL') + touchStr;
+      const indPushTag = eventPushTag(ind.idx);
+      drawLineTag(indY, tag, CFG.IND_COLOR, !isHigh, 0.9);
+      if (indPushTag) drawCenterCount(indY, indPushTag, CFG.IND_COLOR, !isHigh, 0.9, false, isHigh ? 'EQH' : 'EQL');
       drawLabel(indX, isHigh ? markerY - 10 : markerY + 10, tag, CFG.IND_COLOR, 'rgba(122,143,168,0.20)');
       // Predictive forecast for equal high/low clusters (liquidity magnets)
       if (shouldPredict(ind.level, ind.level)) {
