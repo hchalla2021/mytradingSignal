@@ -24,20 +24,18 @@
 
 'use client';
 
-import React, { memo, useMemo } from 'react';
+import React, { memo } from 'react';
 import {
   useAdvancedChartIntelligence,
-  ChartIntelligenceData,
-  SupportResistanceZone,
-  OrderBlock,
-  FairValueGap,
-  LiquidityLevel,
-  HeatLevel,
   Quality,
   ZoneType,
 } from '@/hooks/useAdvancedChartIntelligence';
-import { motion } from 'framer-motion';
-
+import type {
+  ChartIntelligenceData,
+  SupportResistanceZone,
+  LiquidityLevel,
+  HeatLevel,
+} from '@/hooks/useAdvancedChartIntelligence';
 // ═══════════════════════════════════════════════════════════════════════════════
 // MAIN PANEL COMPONENT
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -88,10 +86,7 @@ export const ChartIntelligencePanel = memo(function ChartIntelligencePanel({
   }
 
   return (
-    <motion.div
-      initial={{ opacity: 0 }}
-      animate={{ opacity: 1 }}
-      transition={{ duration: 0.3 }}
+    <div
       className={`rounded-lg border border-slate-700/30 bg-slate-900 overflow-hidden ${
         compact ? 'p-4' : 'p-6'
       }`}
@@ -132,7 +127,7 @@ export const ChartIntelligencePanel = memo(function ChartIntelligencePanel({
 
       {/* Footer */}
       <FooterSection data={intel.data} isStale={intel.isStale} />
-    </motion.div>
+    </div>
   );
 });
 
@@ -288,11 +283,7 @@ const ZoneCard = memo(function ZoneCard({
   const heatColor = getHeatColor(zone.heat_level);
 
   return (
-    <motion.div
-      initial={{ opacity: 0, x: -10 }}
-      animate={{ opacity: 1, x: 0 }}
-      className="p-3 rounded bg-slate-800/50 border border-slate-700/30 hover:border-slate-600/50 transition-colors"
-    >
+    <div className="p-3 rounded bg-slate-800/50 border border-slate-700/30 hover:border-slate-600/50 transition-colors">
       <div className="flex items-center justify-between mb-2">
         <div className="flex items-center gap-2">
           <div
@@ -322,7 +313,7 @@ const ZoneCard = memo(function ZoneCard({
           {distancePct.toFixed(3)}% away
         </span>
       </div>
-    </motion.div>
+    </div>
   );
 });
 
@@ -339,13 +330,7 @@ const OrderBlocksSection = memo(function OrderBlocksSection({
 
       <div className="space-y-2">
         {data.order_blocks.slice(0, 3).map((ob, idx) => (
-          <motion.div
-            key={idx}
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: idx * 0.05 }}
-            className="p-3 rounded bg-slate-800/50 border border-slate-700/30"
-          >
+          <div key={idx} className="p-3 rounded bg-slate-800/50 border border-slate-700/30">
             <div className="flex items-center justify-between mb-2">
               <span className={`text-xs font-bold px-2 py-1 rounded ${
                 ob.type === 'BULLISH'
@@ -361,7 +346,7 @@ const OrderBlocksSection = memo(function OrderBlocksSection({
             <div className="text-xs text-slate-300 font-mono">
               ₹{ob.price_low.toFixed(2)} - ₹{ob.price_high.toFixed(2)}
             </div>
-          </motion.div>
+          </div>
         ))}
       </div>
     </div>
@@ -381,13 +366,7 @@ const FairValueGapsSection = memo(function FairValueGapsSection({
 
       <div className="space-y-2">
         {data.fair_value_gaps.slice(0, 3).map((fvg, idx) => (
-          <motion.div
-            key={idx}
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: idx * 0.05 }}
-            className="p-3 rounded bg-slate-800/50 border border-slate-700/30"
-          >
+          <div key={idx} className="p-3 rounded bg-slate-800/50 border border-slate-700/30">
             <div className="flex items-center justify-between mb-2">
               <span className={`text-xs font-bold px-2 py-1 rounded ${
                 fvg.type === 'BULLISH'
@@ -411,7 +390,7 @@ const FairValueGapsSection = memo(function FairValueGapsSection({
             <div className="text-xs text-slate-400 mt-1">
               {(fvg.size_pct * 100).toFixed(3)}% gap • {(fvg.fill_ratio * 100).toFixed(1)}% filled
             </div>
-          </motion.div>
+          </div>
         ))}
       </div>
     </div>
@@ -473,9 +452,7 @@ const StructureSection = memo(function StructureSection({
         Break of Structure
       </h3>
 
-      <motion.div
-        initial={{ opacity: 0, scale: 0.95 }}
-        animate={{ opacity: 1, scale: 1 }}
+      <div
         className={`p-4 rounded border ${
           bos.direction === 'UP'
             ? 'bg-emerald-500/10 border-emerald-500/30'
@@ -498,7 +475,7 @@ const StructureSection = memo(function StructureSection({
         <div className="text-xs text-slate-400 mt-1">
           Strength: {(bos.strength * 100).toFixed(0)}% • Volume: {bos.volume_confirmation.toFixed(2)}x
         </div>
-      </motion.div>
+      </div>
     </div>
   );
 });

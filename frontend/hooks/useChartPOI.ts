@@ -81,7 +81,6 @@ export function useChartPOI(
   });
 
   const { marketData } = useMarketSocket();
-  const rafRef = useRef<number | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const batchWindowRef = useRef<NodeJS.Timeout | null>(null);
@@ -179,7 +178,7 @@ export function useChartPOI(
    * Live price update handler - batched with 200ms window
    */
   useEffect(() => {
-    const spot = marketData[symbol]?.price ?? 0;
+    const spot = marketData[symbol as 'NIFTY' | 'BANKNIFTY' | 'SENSEX']?.price ?? 0;
     if (spot <= 0) return;
 
     liveSpotRef.current = spot;
@@ -305,7 +304,7 @@ export function useChartPOIMulti(
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const fetch = useCallback(async () => {
+  const fetchAll = useCallback(async () => {
     if (!enabled || symbols.length === 0) return;
 
     try {
@@ -335,11 +334,11 @@ export function useChartPOIMulti(
   }, [symbols, enabled]);
 
   useEffect(() => {
-    fetch();
-    const interval = setInterval(fetch, 3000); // Poll every 3s
+    fetchAll();
+    const interval = setInterval(fetchAll, 3000); // Poll every 3s
 
     return () => clearInterval(interval);
-  }, [fetch]);
+  }, [fetchAll]);
 
   return { data, loading, error };
 }

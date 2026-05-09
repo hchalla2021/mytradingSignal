@@ -134,7 +134,7 @@ const ClosestPOICard = memo<{ poi: POILevel; currentPrice: number }>(
                 ₹{poi.level.toFixed(2)}
               </div>
               <div className="text-xs text-slate-400">
-                {poi.poi_type.replace(/_/g, ' ')} • {poi.quality}
+                {poi.type.replace(/_/g, ' ')} • {poi.quality}
               </div>
             </div>
           </div>
@@ -182,9 +182,9 @@ const POILevelCard = memo<{ poi: POILevel; currentPrice: number }>(
       MULTIPLE_TOUCH: '🔄',
       INDUCEMENT: '═',
       VOLUME_IMBALANCE: '⚡',
-    }[poi.poi_type];
+    }[poi.type];
 
-    const typeLabel = poi.poi_type.replace(/_/g, ' ');
+    const typeLabel = poi.type.replace(/_/g, ' ');
     const direction = currentPrice > poi.level ? '↓' : '↑';
 
     return (

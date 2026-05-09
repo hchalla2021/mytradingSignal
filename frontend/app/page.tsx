@@ -195,8 +195,8 @@ export default function Home() {
   const { alertData } = useAIAnalysis();
   const { vixData, loading: vixLoading } = useIndiaVIX();
   const { regimeData } = useMarketRegime();
-  const { data: strikeIntelData } = useStrikeIntelligence();
-  const { data: chartIntelData } = useChartIntelligence();
+  const { strikeData: strikeIntelData } = useStrikeIntelligence();
+  const { chartData: chartIntelData } = useChartIntelligence();
   const [serverOutlook, setServerOutlook] = useState<Record<string, any> | null>(null);
 
   const regimeToFiveState = useCallback((regime?: RegimeType | null): FiveStateSignal | null => {

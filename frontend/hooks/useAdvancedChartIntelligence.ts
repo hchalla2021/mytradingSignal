@@ -23,7 +23,7 @@
 
 'use client';
 
-import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { getEnvironmentConfig } from '@/lib/env-detection';
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -164,7 +164,6 @@ export interface UseAdvancedChartIntelligenceState {
 
 const STALENESS_THRESHOLD_MS = 30000;  // 30 seconds
 const POLLING_INTERVAL_LIVE = 3000;    // 3 seconds during trading hours
-const POLLING_INTERVAL_CLOSED = 30000; // 30 seconds outside trading hours
 const RECONNECT_DELAY_MS = 2000;       // 2 seconds before reconnect attempt
 const MAX_RECONNECT_ATTEMPTS = 5;
 
@@ -177,7 +176,6 @@ export function useAdvancedChartIntelligence(
   enabled: boolean = true,
 ) {
   const config = getEnvironmentConfig();
-  const wsUrlRef = useRef<string | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const reconnectAttemptsRef = useRef(0);
@@ -200,7 +198,7 @@ export function useAdvancedChartIntelligence(
     if (!enabled) return;
 
     try {
-      const wsUrl = `${config.WS_URL}/chart/${symbol}`;
+      const wsUrl = `${config.wsUrl}/chart/${symbol}`;
       
       if (wsRef.current?.readyState === WebSocket.OPEN) {
         console.log(`[CHART-INTEL] Already connected to ${symbol}`);
@@ -293,7 +291,7 @@ export function useAdvancedChartIntelligence(
 
     try {
       const response = await fetch(
-        `${config.API_URL}/chart/advanced/${symbol}`,
+        `${config.apiUrl}/chart/advanced/${symbol}`,
         {
           headers: {
             'Accept': 'application/json',

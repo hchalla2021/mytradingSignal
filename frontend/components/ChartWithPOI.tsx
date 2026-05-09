@@ -265,7 +265,7 @@ export function MultiSymbolPOIDashboard() {
                       </span>
                     </div>
                     <div className="text-xs text-slate-500 mt-1">
-                      {poiData.closest_poi.poi_type.replace(/_/g, ' ')}
+                      {poiData.closest_poi.type.replace(/_/g, ' ')}
                     </div>
                   </div>
                 )}
@@ -320,8 +320,6 @@ export function MultiSymbolPOIDashboard() {
 
 export function POITradingSetup({ symbol }: { symbol: string }) {
   const poi = useChartPOI(symbol);
-  const { marketData } = useMarketSocket();
-  const currentPrice = marketData[symbol]?.price ?? 0;
 
   if (!poi.data) {
     return <div className="text-slate-400">Loading setup analysis...</div>;
@@ -369,7 +367,7 @@ export function POITradingSetup({ symbol }: { symbol: string }) {
         <div>
           POI Type:{' '}
           <span className="text-slate-200 font-semibold">
-            {poi.data.closest_poi?.poi_type.replace(/_/g, ' ')}
+            {poi.data.closest_poi?.type.replace(/_/g, ' ')}
           </span>
         </div>
       </div>
