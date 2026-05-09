@@ -304,6 +304,7 @@ def _compute_signal(
       8. Delta-weighted vol   (±8)  — Moneyness-adjusted volume pressure
       9. Trap detection       (−15) — High volume but price moves against = absorption trap
      10. OI Change interp     (±20) — Long Buildup / Short Buildup / SC / LU interpretation
+         11. Advanced price action(±12) — Impulse continuation vs exhaustion/noise filter
 
     CE score > 0 → calls active/rising → bullish for underlying
     PE score > 0 → puts active/rising → bearish for underlying
@@ -541,6 +542,61 @@ def _compute_signal(
                 pe_score -= half               # Long Unwinding in puts
                 oiInterp_pe = "LU"
 
+    # ═══════════════════════════════════════════════════════════════════════
+    #  ADVANCED FACTOR 11: Premium Impulse Continuation vs Exhaustion
+    # ═══════════════════════════════════════════════════════════════════════
+    # Distinguishes directional continuation from noisy volatility expansion.
+    #
+    # 1) Continuation edge:
+    #    - CE relative move up while PE relative move down (or vice versa)
+    #    - Strong near ATM where directional information quality is highest
+    #
+    # 2) No-edge filter:
+    #    - Both CE and PE expanding in same direction at similar intensity
+    #    - Usually volatility expansion/churn, so reduce both scores
+    #
+    # 3) OTM exhaustion filter:
+    #    - Deep OTM + very low premium + one-sided jump often mean-reverts
+    #    - Penalize those spikes to avoid fragile breakout chasing
+    # ───────────────────────────────────────────────────────────────────────
+    pa_state_ce: Optional[str] = None
+    pa_state_pe: Optional[str] = None
+
+    if ce_price > 0 and pe_price > 0 and spot > 0:
+        ce_rel_move = ce_change / max(ce_price, 20.0)
+        pe_rel_move = pe_change / max(pe_price, 20.0)
+        rel_divergence = ce_rel_move - pe_rel_move
+        near_atm_weight = max(0.15, 1.0 - abs(strike - spot) / (spot * 0.02))
+        same_direction = ce_rel_move * pe_rel_move > 0
+
+        if rel_divergence > 0.045 and not same_direction:
+            impulse_boost = _clamp(rel_divergence * near_atm_weight * 140.0, 0.0, 12.0)
+            ce_score += impulse_boost
+            pe_score -= impulse_boost * 0.8
+            pa_state_ce = "IMPULSE_CONTINUATION"
+            pa_state_pe = "OPPOSITE_WEAKNESS"
+        elif rel_divergence < -0.045 and not same_direction:
+            impulse_boost = _clamp(abs(rel_divergence) * near_atm_weight * 140.0, 0.0, 12.0)
+            pe_score += impulse_boost
+            ce_score -= impulse_boost * 0.8
+            pa_state_pe = "IMPULSE_CONTINUATION"
+            pa_state_ce = "OPPOSITE_WEAKNESS"
+        elif same_direction and abs(ce_rel_move) > 0.03 and abs(pe_rel_move) > 0.03:
+            noise_penalty = _clamp((abs(ce_rel_move) + abs(pe_rel_move)) * 40.0, 0.0, 6.0)
+            ce_score -= noise_penalty
+            pe_score -= noise_penalty
+            pa_state_ce = "VOL_EXPANSION_NO_EDGE"
+            pa_state_pe = "VOL_EXPANSION_NO_EDGE"
+
+        dist_pct = abs(strike - spot) / spot * 100.0
+        if dist_pct > 1.5:
+            if ce_price < 15.0 and ce_rel_move > 0.10:
+                ce_score -= 4.0
+                pa_state_ce = "OTM_EXHAUSTION"
+            if pe_price < 15.0 and pe_rel_move > 0.10:
+                pe_score -= 4.0
+                pa_state_pe = "OTM_EXHAUSTION"
+
     # ── Score → Signal conversion ─────────────────────────────────────────
 
     def _score_to_signal(score: float) -> str:
@@ -606,6 +662,7 @@ def _compute_signal(
             "signals": {
                 "liq":      liq_type_ce,
                 "bos":      bos_signal,
+                "advPriceAction": pa_state_ce,
                 "delta":    ce_g["delta"],
                 "trap":     trap_ce,
                 "oiInterp": oiInterp_ce,
@@ -627,6 +684,7 @@ def _compute_signal(
             "signals": {
                 "liq":      liq_type_pe,
                 "bos":      bos_signal,
+                "advPriceAction": pa_state_pe,
                 "delta":    pe_g["delta"],
                 "trap":     trap_pe,
                 "oiInterp": oiInterp_pe,

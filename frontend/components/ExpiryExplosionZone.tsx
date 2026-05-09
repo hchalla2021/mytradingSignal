@@ -89,6 +89,7 @@ SignalBar.displayName = 'SignalBar';
 // ── Expiry Card (one per index) ─────────────────────────────────────────────
 
 const ExpiryCard = memo<{ data: ExpiryIndex | null; name: string }>(({ data, name }) => {
+  const [isExpanded, setIsExpanded] = useState(false);
   const [showGammaExposure, setShowGammaExposure] = useState(false);
   if (!data) {
     return (
@@ -140,6 +141,43 @@ const ExpiryCard = memo<{ data: ExpiryIndex | null; name: string }>(({ data, nam
           ₹{formatPrice(data.metrics.price)}
         </span>
       </div>
+
+      <button
+        type="button"
+        onClick={() => setIsExpanded(v => !v)}
+        className="w-full flex items-center justify-between rounded-lg border border-slate-700/35 bg-slate-800/35 px-2.5 py-1.5 text-left mb-3"
+      >
+        <span className="text-[10px] text-slate-400 font-semibold tracking-wide">Details</span>
+        <span className="text-[10px] text-slate-500">{isExpanded ? 'Hide' : 'Show'}</span>
+      </button>
+
+      {!isExpanded && (
+        <div className="rounded-lg bg-slate-800/45 border border-slate-700/30 p-2.5 mb-3">
+          <div className="grid grid-cols-3 gap-1.5">
+            <div className="rounded-md bg-slate-800/35 border border-slate-700/25 px-2 py-1.5 text-center">
+              <span className="text-[8px] text-slate-500 uppercase tracking-wider block">Signal</span>
+              <span className={`text-[10px] font-bold ${actionCfg.color}`}>{actionCfg.label}</span>
+            </div>
+            <div className="rounded-md bg-slate-800/35 border border-slate-700/25 px-2 py-1.5 text-center">
+              <span className="text-[8px] text-slate-500 uppercase tracking-wider block">Confidence</span>
+              <span className={`text-[10px] font-bold ${actionCfg.color}`}>{data.confidence}%</span>
+            </div>
+            <div className="rounded-md bg-slate-800/35 border border-slate-700/25 px-2 py-1.5 text-center">
+              <span className="text-[8px] text-slate-500 uppercase tracking-wider block">Phase</span>
+              <span className={`text-[10px] font-bold ${phaseCfg.color}`}>{phaseCfg.label}</span>
+            </div>
+          </div>
+          <div className="mt-2 text-[10px] text-slate-500 flex items-center justify-between">
+            <span>Expiry in</span>
+            <span className={`font-mono font-bold ${data.hoursToExpiry <= 4 ? 'text-red-400' : 'text-cyan-400'}`}>
+              {data.hoursToExpiry <= 1 ? `${Math.round(data.hoursToExpiry * 60)}m` : `${data.hoursToExpiry.toFixed(1)}h`}
+            </span>
+          </div>
+        </div>
+      )}
+
+      {isExpanded && (
+        <>
 
       {/* Action Badge + Confidence */}
       <div className={`rounded-xl ${actionCfg.bg} border ${actionCfg.border} p-2.5 mb-3 ${actionCfg.glow}`}>
@@ -450,6 +488,9 @@ const ExpiryCard = memo<{ data: ExpiryIndex | null; name: string }>(({ data, nam
           </span>
         </div>
       )}
+
+        </>
+      )}
     </div>
   );
 });
@@ -478,7 +519,6 @@ const ExpiryExplosionZone = memo(() => {
       <div className="flex flex-col gap-1 mb-3 sm:mb-4">
         <SectionTitle
           title="Expiry Explosion Zone"
-          subtitle="Weekly: NIFTY(Tue) • BANKNIFTY(Wed) • SENSEX(Thu) | Monthly: Last Tue | Holiday-Aware"
           accentColor="purple"
           badge={
             <span className="relative inline-flex items-center px-2 py-0.5 text-[9px] font-bold bg-gradient-to-r from-purple-600/80 to-pink-600/80 rounded-md shadow-lg border border-purple-400/30 whitespace-nowrap leading-none">

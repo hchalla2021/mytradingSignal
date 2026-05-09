@@ -189,6 +189,7 @@ function fmtPrice(n: number): string {
 // ── Index card ────────────────────────────────────────────────────────────────
 
 const IndexCard = memo(({ data }: { data: ICTIndex | null }) => {
+  const [isExpanded, setIsExpanded] = useState(false);
   const [showIctMatrix, setShowIctMatrix] = useState(false);
   const cardRef = useRef<HTMLDivElement>(null);
   const prevDirection = useRef<ICTDirection | null>(null);
@@ -328,165 +329,188 @@ const IndexCard = memo(({ data }: { data: ICTIndex | null }) => {
           <ConfidenceBar confidence={data.confidence} barColor={pal.bar} />
         </div>
 
-        {/* ── Market Structure Info ──────────────────────────────────── */}
-        <div className="rounded-lg bg-slate-800/50 border border-slate-700/30 px-3 py-2">
-          <div className="flex items-center justify-between">
-            <span className="text-[9px] text-slate-500 uppercase tracking-wider font-semibold">
-              Market Structure
-            </span>
-            <div className="flex items-center gap-1.5">
-              <span className={`text-[10px] font-bold ${
-                data.signals.market_structure.signal === 'BULL' ? 'text-emerald-400' :
-                data.signals.market_structure.signal === 'BEAR' ? 'text-red-400' : 'text-slate-400'
-              }`}>
-                {data.signals.market_structure.extra?.structure as string || 'FORMING'}
-              </span>
-            </div>
-          </div>
-          <div className="mt-1 text-[9px] text-slate-500">{data.signals.market_structure.label}</div>
-          <div className="flex items-center gap-3 mt-1.5 text-[9px]">
-            {data.metrics.lastSwingHigh && (
-              <span className="text-red-400/70">SH: {data.metrics.lastSwingHigh.toFixed(0)}</span>
-            )}
-            {data.metrics.lastSwingLow && (
-              <span className="text-emerald-400/70">SL: {data.metrics.lastSwingLow.toFixed(0)}</span>
-            )}
-            <span className="text-slate-600">
-              {data.metrics.swingHighs}H / {data.metrics.swingLows}L
-            </span>
-          </div>
-        </div>
+        <button
+          type="button"
+          onClick={() => setIsExpanded(v => !v)}
+          className="w-full flex items-center justify-between rounded-lg border border-slate-700/30 bg-slate-800/35 px-2.5 py-1.5 text-left"
+        >
+          <span className="text-[10px] text-slate-400 font-semibold tracking-wide">Details</span>
+          <span className="text-[10px] text-slate-500">{isExpanded ? 'Hide' : 'Show'}</span>
+        </button>
 
-        {/* ── 5-Min ICT Prediction ─────────────────────────────────── */}
-        <div ref={predBadgeRef} className={`rounded-lg bg-slate-800/60 border px-3 py-2 ${
-          data.prediction5m === 'STRONG_BUY' || data.prediction5m === 'STRONG_SELL' ? 'ring-1 ring-current' : ''
-        } ${pred5mBull ? 'ict-section-hl-bull' : pred5mBear ? 'ict-section-hl-bear' : 'border-slate-700/30'}`}>
-          <div className="flex items-center justify-between">
-            <div>
-              <div className="text-[11px] text-slate-400 uppercase tracking-widest font-bold mb-2">
-                🏦 5-Min Prediction
-              </div>
-              <Pred5mBadge pred={data.prediction5m} />
-            </div>
-            <div className="flex flex-col items-end gap-1">
-              <span className="text-[14px] font-black text-white ict-val">
-                {data.pred5mConf}%
-                <span className="text-[10px] font-semibold text-slate-400 ml-1">CONF</span>
-              </span>
-              <div className="w-20 h-2 rounded-full bg-slate-700/50 overflow-hidden">
-                <div
-                  className={`h-full rounded-full ict-bar ${
-                    data.prediction5m === 'STRONG_BUY'  ? 'bg-emerald-400' :
-                    data.prediction5m === 'BUY'         ? 'bg-green-400' :
-                    data.prediction5m === 'STRONG_SELL' ? 'bg-red-400' :
-                    data.prediction5m === 'SELL'        ? 'bg-orange-400' :
-                                                          'bg-slate-500'
-                  }`}
-                  style={{ width: `${data.pred5mConf}%` }}
-                />
-              </div>
+        {!isExpanded && (
+          <div className="rounded-lg bg-slate-800/45 border border-slate-700/30 px-3 py-2">
+            <div className="grid grid-cols-3 gap-1.5">
+              <MetricPill label="Setup" value={data.ictSetup.grade} />
+              <MetricPill label="5m Pred" value={PRED[data.prediction5m]?.label ?? 'Neutral'} />
+              <MetricPill label="Pred Conf" value={`${data.pred5mConf}%`} />
             </div>
           </div>
+        )}
 
-          {/* ICT Signal Confluence */}
-          <div className="mt-2 bg-slate-900/50 rounded-lg p-2 border border-slate-700/20 space-y-1.5">
-            {/* Buy vs Sell Probability */}
-            <div className="flex items-center justify-between bg-slate-900/30 rounded px-2 py-1.5">
-              <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wide">ICT Signal</span>
-              <div className="flex items-center gap-2">
-                <span className={`font-bold px-2 py-1 rounded text-[10px] ${
-                  data.direction === 'BULLISH'  ? 'bg-emerald-500/40 text-emerald-200' :
-                  data.direction === 'BEARISH'  ? 'bg-red-500/40 text-red-200' :
-                                                  'bg-slate-600/25 text-slate-300'
-                }`}>
-                  {data.direction === 'BULLISH' ? '📈 BUY' : data.direction === 'BEARISH' ? '📉 SELL' : '⏸ WAIT'}
+        {isExpanded && (
+          <>
+            {/* ── Market Structure Info ──────────────────────────────────── */}
+            <div className="rounded-lg bg-slate-800/50 border border-slate-700/30 px-3 py-2">
+              <div className="flex items-center justify-between">
+                <span className="text-[9px] text-slate-500 uppercase tracking-wider font-semibold">
+                  Market Structure
+                </span>
+                <div className="flex items-center gap-1.5">
+                  <span className={`text-[10px] font-bold ${
+                    data.signals.market_structure.signal === 'BULL' ? 'text-emerald-400' :
+                    data.signals.market_structure.signal === 'BEAR' ? 'text-red-400' : 'text-slate-400'
+                  }`}>
+                    {data.signals.market_structure.extra?.structure as string || 'FORMING'}
+                  </span>
+                </div>
+              </div>
+              <div className="mt-1 text-[9px] text-slate-500">{data.signals.market_structure.label}</div>
+              <div className="flex items-center gap-3 mt-1.5 text-[9px]">
+                {data.metrics.lastSwingHigh && (
+                  <span className="text-red-400/70">SH: {data.metrics.lastSwingHigh.toFixed(0)}</span>
+                )}
+                {data.metrics.lastSwingLow && (
+                  <span className="text-emerald-400/70">SL: {data.metrics.lastSwingLow.toFixed(0)}</span>
+                )}
+                <span className="text-slate-600">
+                  {data.metrics.swingHighs}H / {data.metrics.swingLows}L
                 </span>
               </div>
             </div>
 
-            {/* Displacement Strength */}
-            <div className="flex items-center justify-between bg-slate-900/30 rounded px-2 py-1.5">
-              <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wide">Displacement</span>
-              <div className="flex items-center gap-2">
-                <span className={`font-bold px-2 py-1 rounded text-[10px] ${
-                  data.signals.displacement.signal === 'BULL' ? 'bg-emerald-500/40 text-emerald-200' :
-                  data.signals.displacement.signal === 'BEAR' ? 'bg-red-500/40 text-red-200' :
-                                                                'bg-slate-600/25 text-slate-300'
-                }`}>
-                  {data.signals.displacement.label.substring(0, 40)}
-                </span>
-              </div>
-            </div>
-
-            {/* Probability Distribution */}
-            {(() => {
-              const buyPct = Math.max(5, Math.min(95, Math.round((data.rawScore + 1) / 2 * 100)));
-              const sellPct = 100 - buyPct;
-              return (
-                <div className="pt-2 border-t border-slate-700/20">
-                  <div className="flex items-center justify-between mb-2">
-                    <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wide">Buy / Sell Probability</span>
+            {/* ── 5-Min ICT Prediction ─────────────────────────────────── */}
+            <div ref={predBadgeRef} className={`rounded-lg bg-slate-800/60 border px-3 py-2 ${
+              data.prediction5m === 'STRONG_BUY' || data.prediction5m === 'STRONG_SELL' ? 'ring-1 ring-current' : ''
+            } ${pred5mBull ? 'ict-section-hl-bull' : pred5mBear ? 'ict-section-hl-bear' : 'border-slate-700/30'}`}>
+              <div className="flex items-center justify-between">
+                <div>
+                  <div className="text-[11px] text-slate-400 uppercase tracking-widest font-bold mb-2">
+                    🏦 5-Min Prediction
                   </div>
-                  <div className="flex items-center h-7 rounded-md overflow-hidden bg-slate-950/50 border border-slate-700/30">
-                    {/* Buy probability */}
+                  <Pred5mBadge pred={data.prediction5m} />
+                </div>
+                <div className="flex flex-col items-end gap-1">
+                  <span className="text-[14px] font-black text-white ict-val">
+                    {data.pred5mConf}%
+                    <span className="text-[10px] font-semibold text-slate-400 ml-1">CONF</span>
+                  </span>
+                  <div className="w-20 h-2 rounded-full bg-slate-700/50 overflow-hidden">
                     <div
-                      className="h-full bg-gradient-to-r from-emerald-600 to-emerald-500 ict-bar flex items-center justify-center"
-                      style={{ width: `${buyPct}%` }}
-                    >
-                      <span className="text-[9px] font-bold text-white px-2 truncate whitespace-nowrap ict-val">
-                        {buyPct}% BUY
-                      </span>
-                    </div>
-                    {/* Sell probability */}
-                    <div
-                      className="h-full bg-gradient-to-l from-red-600 to-red-500 ict-bar flex items-center justify-center"
-                      style={{ width: `${sellPct}%` }}
-                    >
-                      <span className="text-[9px] font-bold text-white px-2 truncate whitespace-nowrap ict-val">
-                        {sellPct}% SELL
-                      </span>
-                    </div>
+                      className={`h-full rounded-full ict-bar ${
+                        data.prediction5m === 'STRONG_BUY'  ? 'bg-emerald-400' :
+                        data.prediction5m === 'BUY'         ? 'bg-green-400' :
+                        data.prediction5m === 'STRONG_SELL' ? 'bg-red-400' :
+                        data.prediction5m === 'SELL'        ? 'bg-orange-400' :
+                                                              'bg-slate-500'
+                      }`}
+                      style={{ width: `${data.pred5mConf}%` }}
+                    />
                   </div>
                 </div>
-              );
-            })()}
-
-            {/* Active Setup Alert */}
-            {data.ictSetup.grade !== '—' && data.ictSetup.confluences >= 2 && (
-              <div className="pt-2 border-t border-slate-700/20">
-                <span className="text-[10px] font-bold text-amber-400 uppercase tracking-wide">
-                  🎯 Active ICT Setup — Grade {data.ictSetup.grade} ({data.ictSetup.confluences} confluences)
-                </span>
               </div>
-            )}
-          </div>
-        </div>
 
-        {/* ── 6-Signal breakdown — collapsed by default ───────────────── */}
-        <div className={`rounded-lg bg-slate-800/40 border px-3 py-2 ${core3Bull ? 'ict-section-hl-bull' : core3Bear ? 'ict-section-hl-bear' : 'border-slate-700/25'}`}>
-          <button
-            type="button"
-            onClick={() => setShowIctMatrix(v => !v)}
-            className="w-full flex items-center justify-between text-left"
-          >
-            <span className="text-[9px] text-slate-600 uppercase tracking-widest font-semibold">ICT Signal Matrix</span>
-            <span className="text-[10px] text-slate-500">{showIctMatrix ? 'Hide' : 'Show'}</span>
-          </button>
-          {showIctMatrix && (
-            <div className="mt-1">
-              {signalOrder.map(key => (
-                <SignalRow key={key} factorKey={key} factor={data.signals[key]} />
-              ))}
+              {/* ICT Signal Confluence */}
+              <div className="mt-2 bg-slate-900/50 rounded-lg p-2 border border-slate-700/20 space-y-1.5">
+                {/* Buy vs Sell Probability */}
+                <div className="flex items-center justify-between bg-slate-900/30 rounded px-2 py-1.5">
+                  <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wide">ICT Signal</span>
+                  <div className="flex items-center gap-2">
+                    <span className={`font-bold px-2 py-1 rounded text-[10px] ${
+                      data.direction === 'BULLISH'  ? 'bg-emerald-500/40 text-emerald-200' :
+                      data.direction === 'BEARISH'  ? 'bg-red-500/40 text-red-200' :
+                                                      'bg-slate-600/25 text-slate-300'
+                    }`}>
+                      {data.direction === 'BULLISH' ? '📈 BUY' : data.direction === 'BEARISH' ? '📉 SELL' : '⏸ WAIT'}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Displacement Strength */}
+                <div className="flex items-center justify-between bg-slate-900/30 rounded px-2 py-1.5">
+                  <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wide">Displacement</span>
+                  <div className="flex items-center gap-2">
+                    <span className={`font-bold px-2 py-1 rounded text-[10px] ${
+                      data.signals.displacement.signal === 'BULL' ? 'bg-emerald-500/40 text-emerald-200' :
+                      data.signals.displacement.signal === 'BEAR' ? 'bg-red-500/40 text-red-200' :
+                                                                    'bg-slate-600/25 text-slate-300'
+                    }`}>
+                      {data.signals.displacement.label.substring(0, 40)}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Probability Distribution */}
+                {(() => {
+                  const buyPct = Math.max(5, Math.min(95, Math.round((data.rawScore + 1) / 2 * 100)));
+                  const sellPct = 100 - buyPct;
+                  return (
+                    <div className="pt-2 border-t border-slate-700/20">
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-[10px] text-slate-400 font-bold uppercase tracking-wide">Buy / Sell Probability</span>
+                      </div>
+                      <div className="flex items-center h-7 rounded-md overflow-hidden bg-slate-950/50 border border-slate-700/30">
+                        {/* Buy probability */}
+                        <div
+                          className="h-full bg-gradient-to-r from-emerald-600 to-emerald-500 ict-bar flex items-center justify-center"
+                          style={{ width: `${buyPct}%` }}
+                        >
+                          <span className="text-[9px] font-bold text-white px-2 truncate whitespace-nowrap ict-val">
+                            {buyPct}% BUY
+                          </span>
+                        </div>
+                        {/* Sell probability */}
+                        <div
+                          className="h-full bg-gradient-to-l from-red-600 to-red-500 ict-bar flex items-center justify-center"
+                          style={{ width: `${sellPct}%` }}
+                        >
+                          <span className="text-[9px] font-bold text-white px-2 truncate whitespace-nowrap ict-val">
+                            {sellPct}% SELL
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })()}
+
+                {/* Active Setup Alert */}
+                {data.ictSetup.grade !== '—' && data.ictSetup.confluences >= 2 && (
+                  <div className="pt-2 border-t border-slate-700/20">
+                    <span className="text-[10px] font-bold text-amber-400 uppercase tracking-wide">
+                      🎯 Active ICT Setup — Grade {data.ictSetup.grade} ({data.ictSetup.confluences} confluences)
+                    </span>
+                  </div>
+                )}
+              </div>
             </div>
-          )}
-        </div>
 
-        {/* ── Metrics row ─────────────────────────────────────────────── */}
-        <div className="grid grid-cols-3 gap-1.5">
-          <MetricPill label="Candles" value={String(data.metrics.candleCount)} />
-          <MetricPill label="Swing H" value={data.metrics.lastSwingHigh?.toFixed(0) ?? '—'} />
-          <MetricPill label="Swing L" value={data.metrics.lastSwingLow?.toFixed(0) ?? '—'} />
-        </div>
+            {/* ── 6-Signal breakdown — collapsed by default ───────────────── */}
+            <div className={`rounded-lg bg-slate-800/40 border px-3 py-2 ${core3Bull ? 'ict-section-hl-bull' : core3Bear ? 'ict-section-hl-bear' : 'border-slate-700/25'}`}>
+              <button
+                type="button"
+                onClick={() => setShowIctMatrix(v => !v)}
+                className="w-full flex items-center justify-between text-left"
+              >
+                <span className="text-[9px] text-slate-600 uppercase tracking-widest font-semibold">ICT Signal Matrix</span>
+                <span className="text-[10px] text-slate-500">{showIctMatrix ? 'Hide' : 'Show'}</span>
+              </button>
+              {showIctMatrix && (
+                <div className="mt-1">
+                  {signalOrder.map(key => (
+                    <SignalRow key={key} factorKey={key} factor={data.signals[key]} />
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* ── Metrics row ─────────────────────────────────────────────── */}
+            <div className="grid grid-cols-3 gap-1.5">
+              <MetricPill label="Candles" value={String(data.metrics.candleCount)} />
+              <MetricPill label="Swing H" value={data.metrics.lastSwingHigh?.toFixed(0) ?? '—'} />
+              <MetricPill label="Swing L" value={data.metrics.lastSwingLow?.toFixed(0) ?? '—'} />
+            </div>
+          </>
+        )}
 
         {/* ── Timestamp ───────────────────────────────────────────────── */}
         <div className="flex items-center justify-between text-[8px] text-slate-600 pt-1">
@@ -539,9 +563,6 @@ const HeaderBar = memo(({ isConnected, lastUpdate }: { isConnected: boolean; las
           </span>
           </div>
         </div>
-        <p className="text-[10px] sm:text-xs text-amber-400 opacity-60 mt-1.5 ml-[15px] sm:ml-[17px] font-medium tracking-wide leading-relaxed">
-          Order Blocks · Fair Value Gaps · Market Structure · Liquidity Sweeps · Displacement · Smart Money
-        </p>
       </div>
     </div>
   );

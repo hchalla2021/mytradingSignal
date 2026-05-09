@@ -4746,82 +4746,206 @@ async def get_pure_liquidity_intelligence(
             # Liquidity strength
             "liquidity_strength_index": round(liquidity_strength_index, 1),
             "liquidity_strength_rating": liquidity_strength_rating,
-            "strength_description": f"Liquidity is {liquidity_strength_rating} with {liquidity_strength_index:.1f}/100 strength",
-            # Execution quality
+            # Execution & slippage
             "execution_quality_score": round(execution_quality_score, 1),
             "execution_quality": execution_quality,
-            "execution_description": f"Execution quality is {execution_quality} for market orders",
-            # Slippage risk
             "slippage_risk_pct": round(slippage_risk_pct, 2),
             "slippage_risk": slippage_risk,
-            "slippage_description": f"Estimated slippage: ~{slippage_risk_pct:.2f}% on market orders",
-            # Trends
+            # Trend and action
             "liquidity_trend": liquidity_trend,
-            "volume_trend": "UP" if volume_trend_score > 100 else ("DOWN" if volume_trend_score < 80 else "STABLE"),
-            "trend_description": f"Volume trend is {liquidity_trend} with recent ratio of {volume_trend_score:.1f}%",
-            # Action & confidence
             "recommended_action": recommended_action,
-            "action_description": f"Recommended: {recommended_action.replace('_', ' ')}",
             "confidence": round(confidence, 1),
-            "status": "OK"
+            "status": "SUCCESS"
         }
-        
-        # Cache the result
-        cache_service.set(
-            cache_key,
-            {
-                "data": response,
-                "cached_duration": 0
-            },
-            ttl=cache_ttl
-        )
-        
-        print(f"[PURE-LIQUIDITY] ✅ Analysis complete - Concentration: {concentration_rating}, "
-              f"Execution: {execution_quality}, Slippage: {slippage_risk}")
         
         return response
         
     except Exception as e:
-        print(f"[PURE-LIQUIDITY-API] ❌ CRITICAL ERROR for {symbol}:")
-        print(f"  {type(e).__name__}: {str(e)}")
-        import traceback
-        traceback.print_exc()
-        
+        print(f"[PURE-LIQUIDITY-API] ❌ Error for {symbol}: {str(e)}")
         return {
             "symbol": symbol,
             "timestamp": datetime.now(timezone.utc).isoformat(),
-            "current_price": 0,
-            "liquidity_concentration": 0,
-            "concentration_rating": "UNKNOWN",
-            "concentration_description": "Error calculating concentration",
-            "volume_absorption_rating": "UNKNOWN",
-            "volume_absorption_score": 0,
-            "absorption_description": "Error calculating absorption",
-            "buy_volume_pct": 50,
-            "sell_volume_pct": 50,
-            "buy_sell_balance": 0,
-            "balance_status": "UNKNOWN",
-            "balance_description": "Error calculating balance",
-            "critical_levels": [],
-            "level_count": 0,
-            "primary_cluster": None,
-            "liquidity_strength_index": 0,
-            "liquidity_strength_rating": "UNKNOWN",
-            "strength_description": "Error calculating strength",
-            "execution_quality_score": 0,
-            "execution_quality": "UNKNOWN",
-            "execution_description": "Error calculating execution quality",
-            "slippage_risk_pct": 0,
-            "slippage_risk": "UNKNOWN",
-            "slippage_description": "Error calculating slippage",
-            "liquidity_trend": "UNKNOWN",
-            "volume_trend": "UNKNOWN",
-            "trend_description": "Error calculating trend",
-            "recommended_action": "ERROR",
-            "action_description": "Error during analysis",
-            "confidence": 0,
             "status": "ERROR",
             "error": str(e)
+        }
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 🎯 REAL-TIME POINT OF INTEREST (POI) ANALYSIS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@router.get("/poi/{symbol}")
+async def get_points_of_interest(symbol: str) -> Dict[str, Any]:
+    """
+    🎯 Real-Time Point of Interest (POI) Detection
+    ═════════════════════════════════════════════════════════════
+    Detects genuine institutional positioning levels using real market data.
+    
+    NO synthetic data — pure market microstructure analysis:
+    ✓ Volume accumulation clusters
+    ✓ Multiple touch support/resistance levels  
+    ✓ Enhanced inducement zones (equal highs/lows + volume confirmation)
+    ✓ Volume imbalance detection
+    ✓ Institutional strength scoring
+    ✓ Heat mapping for visual rendering
+    
+    Response Structure:
+    - pois: List of PointOfInterest objects
+    - top_pois: Strongest 5 POIs by institutional strength
+    - closest_poi: Nearest POI to current price
+    - poi_count: Total POIs detected
+    - analysis_confidence: 0-100 based on data freshness
+    - timestamp: UTC analysis timestamp
+    
+    Caching: 3s live (PREMIUM POIs), 30s outside trading hours
+    Performance: <20ms cached, <100ms live update
+    """
+    try:
+        symbol = symbol.upper()
+        cache = get_cache()
+        
+        # Check cache (3-second for LIVE, 30s for closed)
+        cache_key = f"poi_analysis:{symbol}"
+        cached = await cache.get(cache_key)
+        if cached:
+            return cached
+        
+        # Token validation
+        from services.global_token_manager import check_global_token_status
+        token_status = await check_global_token_status()
+        
+        if not token_status["valid"]:
+            return {
+                "symbol": symbol,
+                "status": "TOKEN_EXPIRED",
+                "token_valid": False,
+                "pois": [],
+                "poi_count": 0,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "message": "Authentication expired"
+            }
+        
+        # Fetch historical data (ONCE)
+        df = await _get_historical_data_extended(symbol, lookback=120, days_back=3)
+        
+        if df.empty:
+            return {
+                "symbol": symbol,
+                "status": "NO_DATA",
+                "token_valid": token_status["valid"],
+                "pois": [],
+                "poi_count": 0,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "message": "No market data available"
+            }
+        
+        # Get current price
+        current_price = float(df.iloc[-1].get('close', 0))
+        
+        # Convert DataFrame to candle list (required by POI analyzer)
+        candles = []
+        for _, row in df.iterrows():
+            candle = {
+                't': str(row.get('timestamp', '')),
+                'o': float(row.get('open', 0)),
+                'h': float(row.get('high', 0)),
+                'l': float(row.get('low', 0)),
+                'c': float(row.get('close', 0)),
+                'v': float(row.get('volume', 0)),
+            }
+            if candle['h'] > 0 and candle['l'] > 0:
+                candles.append(candle)
+        
+        # 🎯 Run POI analysis with real data
+        from services.poi_analyzer import POIAnalyzer
+        analyzer = POIAnalyzer()
+        pois = analyzer.analyze(candles, current_price)
+        
+        # Format response
+        poi_list = []
+        for poi in pois:
+            poi_list.append({
+                "level": round(poi.level, 2),
+                "type": poi.poi_type,
+                "touches": poi.touches,
+                "volume_score": round(poi.volume_score, 3),
+                "quality": poi.quality,
+                "last_touch_idx": poi.last_touch_idx,
+                "age_candles": poi.age_candles,
+                "distance_pct": round(poi.distance_pct * 100, 3),
+                "institutional_strength": round(poi.institutional_strength, 3),
+                "heat_level": poi.heat_level,
+                "confluence_factors": poi.confluence_factors,
+            })
+        
+        # Get top 5 strongest POIs
+        top_pois = poi_list[:5]
+        
+        # Find closest POI to current price
+        closest_poi = None
+        min_distance = float('inf')
+        for poi in poi_list:
+            distance = abs(poi['distance_pct'])
+            if distance < min_distance:
+                min_distance = distance
+                closest_poi = poi
+        
+        # Determine market status for caching
+        from services.market_feed import get_market_status
+        market_status = get_market_status()
+        is_live = market_status == 'LIVE'
+        
+        # Build response
+        response = {
+            "symbol": symbol,
+            "status": "SUCCESS",
+            "current_price": round(current_price, 2),
+            "pois": poi_list,
+            "poi_count": len(poi_list),
+            "top_pois": top_pois,
+            "closest_poi": closest_poi,
+            "market_status": market_status,
+            "candles_analyzed": len(candles),
+            "analysis_confidence": min(100, len(candles) / 1.2),  # max at 100 candles
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "token_valid": token_status["valid"],
+            "message": f"✅ Detected {len(poi_list)} POIs from {len(candles)} candles"
+        }
+        
+        # Cache appropriately
+        cache_ttl = 3 if is_live else 30
+        await cache.set(cache_key, response, expire=cache_ttl)
+        
+        # Backup cache (24 hours)
+        backup_key = f"poi_analysis_backup:{symbol}"
+        await cache.set(backup_key, response, expire=86400)
+        
+        print(f"\n[POI-ANALYSIS] 🎯 POINT OF INTEREST ANALYSIS for {symbol}")
+        print(f"{'='*80}")
+        print(f"📊 Current Price: ₹{response['current_price']:.2f}")
+        print(f"🎯 POIs Detected: {response['poi_count']} (analyzed {response['candles_analyzed']} candles)")
+        if closest_poi:
+            print(f"📍 Closest POI: ₹{closest_poi['level']:.2f} ({closest_poi['poi_type']}) - "
+                  f"{closest_poi['distance_pct']:.3f}% away, Strength: {closest_poi['institutional_strength']:.1%}")
+        print(f"{'='*80}\n")
+        
+        return response
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[POI-API] ❌ Error analyzing POI for {symbol}: {str(e)}")
+        import traceback
+        print(traceback.format_exc())
+        
+        return {
+            "symbol": symbol,
+            "status": "ERROR",
+            "pois": [],
+            "poi_count": 0,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "error": str(e),
+            "message": f"Error: {str(e)}"
         }
 
 

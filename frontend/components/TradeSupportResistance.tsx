@@ -58,6 +58,7 @@ export const TradeSupportResistance: React.FC<TradeSupportResistanceProps> = ({
   analysis,
   marketStatus = 'CLOSED',
 }) => {
+  const [isExpanded, setIsExpanded] = useState(false);
   const [showFactorBreakdown, setShowFactorBreakdown] = useState(false);
 
   // ── Core computation ─────────────────────────────────────────────
@@ -472,7 +473,6 @@ export const TradeSupportResistance: React.FC<TradeSupportResistanceProps> = ({
       <div className="flex items-center justify-between px-4 pt-3 pb-2">
         <div>
           <h3 className="text-sm font-bold text-white tracking-wide">{symbolName}</h3>
-          <p className="text-[10px] text-gray-500 mt-0.5">5min Entry + 15min Trend</p>
         </div>
         <div className="flex items-center gap-2">
           {isLive && (
@@ -486,6 +486,49 @@ export const TradeSupportResistance: React.FC<TradeSupportResistanceProps> = ({
           </span>
         </div>
       </div>
+
+      <div className="px-3 pb-2">
+        <button
+          type="button"
+          onClick={() => setIsExpanded(v => !v)}
+          className="w-full flex items-center justify-between rounded-lg border border-dark-border/40 bg-dark-bg/35 px-2.5 py-1.5 text-left"
+        >
+          <span className="text-[10px] text-gray-400 font-semibold tracking-wide">Details</span>
+          <span className="text-[10px] text-gray-500">{isExpanded ? 'Hide' : 'Show'}</span>
+        </button>
+      </div>
+
+      {!isExpanded && (
+        <div className="px-3 pb-3">
+          <div className="rounded-xl bg-dark-bg/45 border border-dark-border/40 p-2.5">
+            <div className="grid grid-cols-2 gap-2">
+              <div className="rounded-md bg-dark-bg/40 border border-dark-border/30 px-2 py-1.5">
+                <div className="text-[9px] text-gray-500 uppercase tracking-wider font-semibold">Signal</div>
+                <div suppressHydrationWarning className={`text-[11px] font-bold mt-0.5 ${style.text}`}>{action}</div>
+              </div>
+              <div className="rounded-md bg-dark-bg/40 border border-dark-border/30 px-2 py-1.5">
+                <div className="text-[9px] text-gray-500 uppercase tracking-wider font-semibold">Confidence</div>
+                <div suppressHydrationWarning className={`text-[11px] font-bold mt-0.5 ${style.text}`}>{confidence}%</div>
+              </div>
+              <div className="rounded-md bg-dark-bg/40 border border-dark-border/30 px-2 py-1.5">
+                <div className="text-[9px] text-gray-500 uppercase tracking-wider font-semibold">5m</div>
+                <div suppressHydrationWarning className={`text-[11px] font-bold mt-0.5 ${trendClass(trend5min)}`}>
+                  {trendIcon(trend5min)} {trend5min}
+                </div>
+              </div>
+              <div className="rounded-md bg-dark-bg/40 border border-dark-border/30 px-2 py-1.5">
+                <div className="text-[9px] text-gray-500 uppercase tracking-wider font-semibold">15m</div>
+                <div suppressHydrationWarning className={`text-[11px] font-bold mt-0.5 ${trendClass(trend15min)}`}>
+                  {trendIcon(trend15min)} {trend15min}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {isExpanded && (
+        <>
 
       {/* ── DUAL TIMEFRAME ROW — Sharp highlighted when aligned ─── */}
       <div className={`grid grid-cols-2 gap-2 px-3 pb-2 ${bothAligned ? 'tz-aligned-box' : ''} ${alignedBullish ? 'tz-aligned-bullish' : ''} ${alignedBearish ? 'tz-aligned-bearish' : ''}`}>
@@ -862,6 +905,9 @@ export const TradeSupportResistance: React.FC<TradeSupportResistanceProps> = ({
           </div>
         )}
       </div>
+
+        </>
+      )}
 
     </div>
   );

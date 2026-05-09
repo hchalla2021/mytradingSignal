@@ -38,7 +38,6 @@ function fmtNum(n: number): string {
   if (n >= 1_000)      return (n / 1_000).toFixed(1) + 'K';
   return n.toLocaleString('en-IN');
 }
-
 function fmtAgeSeconds(s?: number): string {
   if (s === undefined || Number.isNaN(s)) return '--';
   if (s < 1)  return '<1s';
@@ -468,7 +467,7 @@ const SideCell = memo<{ side: StrikeSideData; label: 'CE' | 'PE'; volDominant: b
     : side.velocity === 'WARM'    ? 1
     : 0;
 
-  // Raw backend signal — all 10 factors, updates every 0.5s
+  // Raw backend signal — all advanced factors, updates every 0.5s
   const displaySignal    = side.signal;
   // Conviction gate — only for checklist / glow
   const convictionSignal = getHighConvictionSignal(side, symbolKey);
@@ -486,7 +485,7 @@ const SideCell = memo<{ side: StrikeSideData; label: 'CE' | 'PE'; volDominant: b
   const oiChg   = side.oiChange ?? 0;
   const oiInterp = sigs?.oiInterp;
   const trap     = sigs?.trap;
-  const bos      = sigs?.bos;
+  const advPA    = sigs?.advPriceAction;
   const rules    = CONVICTION_RULES_BY_SYMBOL[symbolKey];
 
   // ── Cell chrome ──────────────────────────────────────────────────────
@@ -527,24 +526,15 @@ const SideCell = memo<{ side: StrikeSideData; label: 'CE' | 'PE'; volDominant: b
   const priceChangeColor = side.change >= 0 ? 'text-emerald-400' : 'text-red-400';
   const priceCls = isFullConviction
     ? (isCE
-        ? 'text-emerald-200 text-[12px] font-black drop-shadow-[0_0_6px_rgba(52,211,153,0.9)] tabular-nums'
-        : 'text-red-200 text-[12px] font-black drop-shadow-[0_0_6px_rgba(239,68,68,0.9)] tabular-nums')
+        ? 'text-emerald-100 text-[13px] sm:text-[15px] font-black drop-shadow-[0_0_8px_rgba(52,211,153,0.9)] tabular-nums'
+        : 'text-red-100 text-[13px] sm:text-[15px] font-black drop-shadow-[0_0_8px_rgba(239,68,68,0.9)] tabular-nums')
     : isActive
-      ? (isCE ? 'text-emerald-300 text-[12px] font-black tabular-nums' : 'text-red-300 text-[12px] font-black tabular-nums')
-      : 'text-slate-200 text-[12px] font-semibold font-mono tabular-nums';
+      ? (isCE ? 'text-emerald-200 text-[13px] sm:text-[15px] font-black tabular-nums' : 'text-red-200 text-[13px] sm:text-[15px] font-black tabular-nums')
+      : 'text-slate-100 text-[13px] sm:text-[15px] font-semibold font-mono tabular-nums';
 
   // ── OI Change label (highlighted when significant) ───────────────────
   const oiChgAbs = Math.abs(oiChg);
   const oiChgStr = oiChg === 0 ? '—' : `${oiChg > 0 ? '+' : ''}${fmtNum(oiChg)}`;
-  const oiChgCls = oiChgAbs >= rules.minOIChange
-    ? (oiChg > 0 
-        ? 'text-emerald-200 bg-emerald-500/25 border border-emerald-500/60 rounded px-1 py-0.5 font-black' 
-        : 'text-red-200 bg-red-500/25 border border-red-500/60 rounded px-1 py-0.5 font-black')
-    : oiChgAbs >= 50
-      ? (oiChg > 0 
-          ? 'text-emerald-400 bg-emerald-500/15 border border-emerald-500/40 rounded px-1 py-0.5 font-bold' 
-          : 'text-red-400 bg-red-500/15 border border-red-500/40 rounded px-1 py-0.5 font-bold')
-      : 'text-slate-600';
 
   // OI interpretation badge
   const oiInterpLabel: Record<string, string> = { LB: 'L.BLD', SB: 'S.BLD', SC: 'S.CVR', LU: 'L.UNW' };
@@ -555,10 +545,18 @@ const SideCell = memo<{ side: StrikeSideData; label: 'CE' | 'PE'; volDominant: b
     LU: 'text-orange-300  bg-orange-500/20  border-orange-500/40',
   };
 
-  // BOS badge
-  const bosCls = bos === 'UP'
-    ? 'text-emerald-300 bg-emerald-500/20 border-emerald-500/40'
-    : 'text-red-300 bg-red-500/20 border-red-500/40';
+  const advPaLabel: Record<string, string> = {
+    IMPULSE_CONTINUATION: 'PA+IMP',
+    OPPOSITE_WEAKNESS: 'PA-OPP',
+    VOL_EXPANSION_NO_EDGE: 'PA-NSE',
+    OTM_EXHAUSTION: 'PA-EXH',
+  };
+  const advPaCls: Record<string, string> = {
+    IMPULSE_CONTINUATION: 'text-emerald-300 bg-emerald-500/20 border-emerald-500/40',
+    OPPOSITE_WEAKNESS: 'text-red-300 bg-red-500/20 border-red-500/40',
+    VOL_EXPANSION_NO_EDGE: 'text-slate-300 bg-slate-500/20 border-slate-500/40',
+    OTM_EXHAUSTION: 'text-amber-300 bg-amber-500/20 border-amber-500/40',
+  };
 
   // Volume highlight — bright with border if dominant
   const volCls = volDominant
@@ -580,16 +578,15 @@ const SideCell = memo<{ side: StrikeSideData; label: 'CE' | 'PE'; volDominant: b
       ? 'text-red-400 font-bold'
       : 'text-slate-400';
 
-  // Greeks helpers
-  const iv    = sigs?.iv;
-  const gamma = sigs?.gamma;
-  const theta = sigs?.theta;
-  const vega  = sigs?.vega;
-  const delta = sigs?.delta;
-  const hasGreeks = iv != null || gamma != null || theta != null || vega != null;
+  const paBase = Math.max(Math.abs(side.price - side.change), 1.0);
+  const paPct = (side.change / paBase) * 100.0;
+  const paPctStr = `${paPct >= 0 ? '+' : ''}${paPct.toFixed(1)}%`;
+  const paCls = paPct >= 0
+    ? 'text-emerald-200 bg-emerald-500/20 border border-emerald-500/40 rounded px-1 py-0.5 font-black'
+    : 'text-red-200 bg-red-500/20 border border-red-500/40 rounded px-1 py-0.5 font-black';
 
   return (
-    <div style={{ willChange: 'transform' }} className={`relative flex flex-col gap-[2px] sm:gap-[3px] px-0.5 sm:px-1 py-0.5 sm:py-1.5 rounded-lg transition-colors duration-150 w-full shrink-0 ${bg} ${border} ${isNeutral ? 'opacity-55' : ''}`}>
+    <div style={{ willChange: 'transform' }} className={`relative flex flex-col gap-1 sm:gap-1.5 px-1 sm:px-1.5 py-1 sm:py-1.5 rounded-lg transition-colors duration-150 w-full min-w-0 shrink-0 shadow-[inset_0_0_0_1px_rgba(148,163,184,0.12)] ${bg} ${border} ${isNeutral ? 'opacity-65' : ''}`}>
 
       {/* Price flash overlay — remounts on each animKey change to restart animation */}
       {flashDir && (
@@ -635,7 +632,7 @@ const SideCell = memo<{ side: StrikeSideData; label: 'CE' | 'PE'; volDominant: b
         {(displaySignal === 'STRONG_BUY' || displaySignal === 'STRONG_SELL') && <SignalBadge signal={displaySignal} side={label} />}
         {!(displaySignal === 'STRONG_BUY' || displaySignal === 'STRONG_SELL') && <div className="w-[30px] sm:w-[35px]" />}
         <div className={`flex items-center gap-0.5 sm:gap-0.5 ${isCE ? 'justify-end' : 'justify-start'}`}>
-          <span className={`w-[40px] sm:w-[55px] text-right transition-all duration-200 px-0.5 sm:px-1.5 py-0.5 rounded-md whitespace-nowrap text-[10px] sm:text-[12px] tabular-nums ${priceCls} ${
+          <span className={`w-[52px] sm:w-[70px] text-right transition-all duration-200 px-0.5 sm:px-1.5 py-0.5 rounded-md whitespace-nowrap text-[13px] sm:text-[15px] tabular-nums ${priceCls} ${
             isRecommended
               ? (isCE
                   ? 'bg-emerald-600/20 border border-emerald-500/50 shadow-[0_0_6px_1px_rgba(52,211,153,0.12)] sm:shadow-[0_0_8px_2px_rgba(52,211,153,0.15)]'
@@ -644,7 +641,7 @@ const SideCell = memo<{ side: StrikeSideData; label: 'CE' | 'PE'; volDominant: b
           }`}>
             {side.price.toFixed(1 === Math.round(side.price) ? 0 : 1)}
           </span>
-          <span className={`w-[36px] sm:w-[44px] text-right text-[7px] sm:text-[8px] font-mono font-bold shrink-0 tabular-nums truncate ${priceChangeColor}`}>
+          <span className={`w-[44px] sm:w-[58px] text-right text-[10px] sm:text-[12px] font-mono font-bold shrink-0 tabular-nums truncate ${priceChangeColor}`}>
             {side.change >= 0 ? '+' : ''}{side.change.toFixed(1)}
           </span>
         </div>
@@ -655,100 +652,58 @@ const SideCell = memo<{ side: StrikeSideData; label: 'CE' | 'PE'; volDominant: b
         <LiquidityBar buyPct={side.breakdown.buyPct} sellPct={side.breakdown.sellPct} neutralPct={side.breakdown.neutralPct} />
       </div>
 
-      {/* ── ROW 3: The 4 most critical live metrics ──────────────────── */}
-      {/* Volume | OI — highlighted when dominant */}
-      <div className={`flex items-center gap-0.5 text-[8px] sm:text-[10px] font-black`}>
-        <span className="text-slate-300 font-bold shrink-0">V</span>
-        <span className={`w-[46px] sm:w-[58px] text-right text-[8px] sm:text-[10px] font-mono font-black tabular-nums truncate transition-all duration-300 ${volCls} ${volumeFlashDir === 'up' ? 'bg-emerald-500/20 text-emerald-100 rounded px-1' : volumeFlashDir === 'down' ? 'bg-red-500/20 text-red-100 rounded px-1' : ''}`}>{fmtNum(displayVolumeSafe)}</span>
-        <span className="text-slate-400 text-[7px] sm:text-[9px] font-bold shrink-0">·</span>
-        <span className="text-slate-300 font-bold shrink-0">OI</span>
-        <span className={`w-[46px] sm:w-[58px] text-right text-[8px] sm:text-[10px] font-mono font-black tabular-nums truncate ${oiCls}`}>{fmtNum(side.oi)}</span>
+      {/* ── ROW 3: Unified metrics box (Volume | OI | Price Action) ───── */}
+      <div className="min-w-0 rounded-md border border-slate-600/70 bg-slate-900/60 px-1.5 sm:px-2 py-1.5 sm:py-2">
+        <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-2 border-b border-slate-700/40 pb-1 sm:pb-1.5">
+          <span className="text-[9px] sm:text-[11px] font-bold tracking-wide text-slate-200">Volume</span>
+          <span className={`text-right text-[11px] sm:text-[13px] font-mono font-black tabular-nums truncate ${volCls} ${volumeFlashDir === 'up' ? 'bg-emerald-500/20 text-emerald-100 rounded px-1' : volumeFlashDir === 'down' ? 'bg-red-500/20 text-red-100 rounded px-1' : ''}`}>
+            {fmtNum(displayVolumeSafe)}
+          </span>
+        </div>
+        <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-2 border-b border-slate-700/40 py-1 sm:py-1.5">
+          <span className="text-[9px] sm:text-[11px] font-bold tracking-wide text-slate-200">OI</span>
+          <span className={`text-right text-[11px] sm:text-[13px] font-mono font-black tabular-nums truncate ${oiCls}`}>
+            {fmtNum(side.oi)}
+          </span>
+        </div>
+        <div className="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-2 pt-1 sm:pt-1.5">
+          <span className="text-[9px] sm:text-[11px] font-bold tracking-wide text-slate-200">Price Action</span>
+          <span className={`text-right text-[11px] sm:text-[13px] font-mono font-black tabular-nums truncate ${paCls}`}>
+            {paPctStr}
+          </span>
+        </div>
       </div>
 
-      {/* ── ROW 4: OI Change + OI Interpretation (most real-time signals) */}
-      <div className={`flex items-center gap-0.5 flex-nowrap text-[9px] sm:text-[11px] font-black overflow-hidden ${isCE ? '' : 'flex-row-reverse'}`}>
-        {/* ΔOI — flashes colour on fresh buildup/unwinding */}
-        <span className={`font-mono font-black tabular-nums shrink-0 transition-all duration-200 text-[9px] sm:text-[11px] ${oiChgCls}`}>
-          <span className="hidden sm:inline">ΔOI:</span>{oiChgStr}
-        </span>
-
+      {/* ── ROW 4: Compact badges (space-optimized) */}
+      <div className={`flex items-center gap-1.5 flex-wrap text-[10px] sm:text-[12px] font-black min-w-0 ${isCE ? '' : 'flex-row-reverse'}`}>
         {/* OI Interpretation badge — the most informative single value */}
         {oiInterp && (
-          <span className={`font-black px-0.5 sm:px-1 py-0 rounded border leading-tight shrink-0 text-[8px] sm:text-[10px] ${oiInterpCls[oiInterp] ?? 'text-slate-500'}`}>
+          <span className={`font-black px-1 sm:px-1.5 py-0.5 rounded border leading-tight max-w-full shrink-0 text-[9px] sm:text-[11px] ${oiInterpCls[oiInterp] ?? 'text-slate-500'}`}>
             {oiInterpLabel[oiInterp] ?? oiInterp}
           </span>
         )}
 
-        {/* BOS badge — structure break */}
-        {bos && (
-          <span className={`font-black px-0.5 sm:px-1 py-0 rounded border leading-tight shrink-0 text-[8px] sm:text-[10px] ${bosCls}`}>
-            <span className="hidden sm:inline">BOS </span>{bos}
+        {/* Advanced price-action state from CE/PE premium continuation/exhaustion */}
+        {advPA && (
+          <span className={`font-black px-1 sm:px-1.5 py-0.5 rounded border leading-tight max-w-full shrink-0 text-[9px] sm:text-[11px] ${advPaCls[advPA] ?? 'text-slate-500'}`}>
+            {advPaLabel[advPA] ?? advPA}
           </span>
         )}
 
         {/* TRAP warning */}
         {trap && (
-          <span className="font-black px-0.5 sm:px-1 py-0 rounded border leading-tight shrink-0 text-amber-300 bg-amber-500/20 border-amber-500/40 animate-pulse text-[8px] sm:text-[10px]">
+          <span className="font-black px-1 sm:px-1.5 py-0.5 rounded border leading-tight shrink-0 text-amber-200 bg-amber-500/25 border-amber-400/60 animate-pulse text-[9px] sm:text-[11px]">
             ⚠
           </span>
         )}
 
         {/* B%/S% flow — only when noteworthy */}
         {(buyPct >= 60 || sellPct >= 60) && (
-          <span className={`hidden sm:inline font-mono text-[9px] sm:text-[11px] font-black tabular-nums ml-auto shrink-0 ${flowCls}`}>
+          <span className={`hidden sm:inline font-mono text-[10px] sm:text-[12px] font-black tabular-nums ml-auto shrink-0 ${flowCls}`}>
             B{buyPct}·S{sellPct}
           </span>
         )}
       </div>
-
-      {/* ── ROW 5: Greeks & IV strip ────────────────────────────────── */}
-      {/* σ IV | Δ Delta | Γ Gamma | Θ Theta | ν Vega */}
-      {hasGreeks && (
-        <div className={`hidden sm:flex items-center flex-wrap gap-x-1.5 gap-y-0 pt-[2px] border-t border-slate-700/30 ${isCE ? '' : 'flex-row-reverse'}`}>
-          {/* IV — amber/gold: premium/volatility */}
-          {iv != null && (
-            <span
-              title={`Implied Volatility: ${(iv * 100).toFixed(1)}% annualised`}
-              className={`text-[10px] sm:text-[12px] font-mono font-black tabular-nums ${
-                iv >= 0.35 ? 'text-red-300' : iv >= 0.20 ? 'text-amber-300' : 'text-amber-500'
-              }`}>
-              σ{(iv * 100).toFixed(1)}%
-            </span>
-          )}
-          {/* Delta — green CE / red PE: directional sensitivity */}
-          {delta != null && (
-            <span
-              title={`Delta: ₹${Math.abs(delta).toFixed(3)} move per ₹1 spot move`}
-              className={`text-[10px] sm:text-[12px] font-mono font-black tabular-nums ${isCE ? 'text-emerald-400' : 'text-red-400'}`}>
-              Δ{Math.abs(delta).toFixed(2)}
-            </span>
-          )}
-          {/* Gamma — cyan: rate of delta change */}
-          {gamma != null && (
-            <span
-              title={`Gamma: delta changes by ${gamma.toFixed(5)} per ₹1 spot move`}
-              className="text-[10px] sm:text-[12px] font-mono font-black text-cyan-400 tabular-nums">
-              Γ{gamma.toFixed(4)}
-            </span>
-          )}
-          {/* Theta — orange: time decay per day */}
-          {theta != null && (
-            <span
-              title={`Theta: lose ₹${Math.abs(theta).toFixed(2)}/day to time decay`}
-              className={`text-[10px] sm:text-[12px] font-mono font-black tabular-nums ${theta < -20 ? 'text-orange-300' : 'text-orange-400'}`}>
-              Θ{theta.toFixed(1)}
-            </span>
-          )}
-          {/* Vega — blue: IV sensitivity */}
-          {vega != null && (
-            <span
-              title={`Vega: ₹${vega.toFixed(1)} gain/loss per +1% IV move`}
-              className="text-[10px] sm:text-[12px] font-mono font-black text-blue-400 tabular-nums">
-              ν{vega.toFixed(1)}
-            </span>
-          )}
-        </div>
-      )}
 
       {/* ── ROW 6 (conviction only): Pre-Trade checklist ─────────────── */}
       {isFullConviction && (
@@ -858,11 +813,11 @@ const StrikeRowComponent = memo<{ row: StrikeRow; maxVol: number; maxOI: number;
       </div>
 
       {/* Strike center */}
-      <div className={`flex flex-col items-center justify-center gap-0.5 sm:gap-0.5 px-0.5 sm:px-1 py-0.5 sm:py-1.5 border-x shrink-0 ${
+      <div className={`flex flex-col items-center justify-center gap-0.5 sm:gap-0.5 px-1 sm:px-1.5 py-1 sm:py-1.5 border-x shrink-0 ${
         ceStrong || peStrong ? 'bg-slate-900/80 border-slate-600/60' :
         isATM ? 'border-cyan-300/50 bg-cyan-400/[0.08]' : 'border-slate-700/40'
       }`}>
-        <span className={`${strikeNumberCls} text-[11px] sm:text-[14px] md:text-[16px] lg:text-[18px]`}>{row.strike.toLocaleString('en-IN')}</span>
+        <span className={`${strikeNumberCls} text-[13px] sm:text-[16px] md:text-[18px] lg:text-[20px]`}>{row.strike.toLocaleString('en-IN')}</span>
         
         {/* CE and PE prices with divergence highlighting */}
         {(() => {
@@ -876,7 +831,7 @@ const StrikeRowComponent = memo<{ row: StrikeRow; maxVol: number; maxOI: number;
           const isOIDominant = oiRatio > 2 || oiRatio < 0.5;
           
           return (
-            <div className={`flex flex-col items-center gap-1 sm:gap-1.5 text-[7px] sm:text-[9px] md:text-[10px] font-mono font-black mt-0.5 sm:mt-0.5 px-0.5 sm:px-1 py-0.5 sm:py-1 rounded transition-all w-[54px] sm:w-[60px] ${
+            <div className={`flex flex-col items-center gap-1 sm:gap-1.5 text-[9px] sm:text-[11px] md:text-[12px] font-mono font-black mt-0.5 sm:mt-0.5 px-1 sm:px-1.5 py-1 sm:py-1.5 rounded transition-all w-[68px] sm:w-[78px] ${
               isDivergent || isVolDominant || isOIDominant
                 ? 'border-[1px] sm:border-[1.5px] bg-slate-900/60'
                 : 'border border-slate-700/20'
@@ -888,7 +843,7 @@ const StrikeRowComponent = memo<{ row: StrikeRow; maxVol: number; maxOI: number;
               ? 'border-amber-500/60 shadow-[0_0_4px_0.5px_rgba(251,191,36,0.15)] sm:shadow-[0_0_6px_1px_rgba(251,191,36,0.2)]'
               : 'border-slate-700/20'
             }`}>
-              <span className={`w-[45px] text-center font-black tabular-nums text-[8px] sm:text-[9px] ${
+              <span className={`w-[58px] text-center font-black tabular-nums text-[10px] sm:text-[12px] ${
                 ceConv === 'STRONG_BUY' ? 'text-emerald-300' :
                 ceConv === 'STRONG_SELL' ? 'text-red-300' :
                 cePrice > pePrice && isDivergent ? 'text-emerald-300' :
@@ -896,8 +851,8 @@ const StrikeRowComponent = memo<{ row: StrikeRow; maxVol: number; maxOI: number;
               }`}>
                 {cePrice.toFixed(1)}
               </span>
-              <span className="text-slate-400 text-[7px] sm:text-[8px] leading-none font-bold">|</span>
-              <span className={`w-[45px] text-center font-black tabular-nums text-[8px] sm:text-[9px] ${
+              <span className="text-slate-300 text-[9px] sm:text-[10px] leading-none font-bold">|</span>
+              <span className={`w-[58px] text-center font-black tabular-nums text-[10px] sm:text-[12px] ${
                 peConv === 'STRONG_BUY' ? 'text-red-300' :
                 peConv === 'STRONG_SELL' ? 'text-emerald-300' :
                 pePrice > cePrice && isDivergent ? 'text-red-300' :
@@ -910,12 +865,12 @@ const StrikeRowComponent = memo<{ row: StrikeRow; maxVol: number; maxOI: number;
         })()}
         
         {tradeBadge ? (
-          <span className={`text-[9px] sm:text-[11px] md:text-[12px] font-black tracking-tight px-0.5 sm:px-1 py-0.5 rounded animate-pulse ${tradeBadge.cls}`}>
+          <span className={`text-[10px] sm:text-[12px] md:text-[13px] font-black tracking-tight px-1 sm:px-1.5 py-0.5 rounded animate-pulse ${tradeBadge.cls}`}>
             <span className="hidden sm:inline">{tradeBadge.label}</span>
             <span className="sm:hidden">{tradeBadge.label.split(' ')[0]}</span>
           </span>
         ) : (
-          <span className={`text-[9px] sm:text-[11px] md:text-[12px] font-black uppercase tracking-widest px-0.5 sm:px-1 rounded ${
+          <span className={`text-[10px] sm:text-[12px] md:text-[13px] font-black uppercase tracking-widest px-1 sm:px-1.5 rounded ${
             isATM ? 'text-cyan-300 bg-cyan-500/15 border border-cyan-400/50' : 'text-slate-500'
           }`}>{row.label}</span>
         )}
@@ -943,7 +898,6 @@ StrikeRowComponent.displayName = 'StrikeRowComponent';
 // Symbol Card
 
 const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>(({ data, name }) => {
-  const [showSMC, setShowSMC] = useState(false);
   const prevDominantRef = useRef<'BULL' | 'BEAR' | 'NEUTRAL'>('NEUTRAL');
   const [flashSide, setFlashSide] = useState<'BULL' | 'BEAR' | null>(null);
   const prevSummaryRef = useRef<{ bullPct: number; bearPct: number; pcr: number } | null>(null);
@@ -1132,6 +1086,132 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
     );
   }, [atmRow, hasRealSignal, symbolSignal.score]);
 
+  // OI Structure Engine: aggregates strike-level LB/SB/SC/LU states into
+  // one directional institutional positioning signal for this symbol.
+  const oiStructure = useMemo(() => {
+    if (!hasData) return null;
+
+    type OIState = 'LB' | 'SB' | 'SC' | 'LU';
+
+    const deriveState = (side: StrikeRow['ce'] | StrikeRow['pe']): OIState | null => {
+      const explicit = side.signals?.oiInterp;
+      if (explicit === 'LB' || explicit === 'SB' || explicit === 'SC' || explicit === 'LU') return explicit;
+
+      // Fallback classifier when backend oiInterp is temporarily unavailable.
+      const oiChg = side.oiChange ?? 0;
+      const pxChg = side.change ?? 0;
+      if (Math.abs(oiChg) < 0.01 || Math.abs(pxChg) < 0.005) return null;
+      if (oiChg > 0 && pxChg > 0) return 'LB';
+      if (oiChg > 0 && pxChg < 0) return 'SB';
+      if (oiChg < 0 && pxChg > 0) return 'SC';
+      if (oiChg < 0 && pxChg < 0) return 'LU';
+      return null;
+    };
+
+    const ceWeights: Record<OIState, number> = { LB: 0, SB: 0, SC: 0, LU: 0 };
+    const peWeights: Record<OIState, number> = { LB: 0, SB: 0, SC: 0, LU: 0 };
+    const totalWeights: Record<OIState, number> = { LB: 0, SB: 0, SC: 0, LU: 0 };
+
+    const ceImpact: Record<OIState, number> = { LB: 2.0, SC: 1.0, SB: -2.0, LU: -1.0 };
+    const peImpact: Record<OIState, number> = { LB: -2.0, SC: -1.0, SB: 2.0, LU: 1.0 };
+
+    let ceTotalWeight = 0;
+    let peTotalWeight = 0;
+    let directionalWeightedSum = 0;
+
+    for (const strike of strikes) {
+      const ceState = deriveState(strike.ce);
+      const peState = deriveState(strike.pe);
+
+      const ceWeight = Math.max(1, strike.ce.oi * 0.65 + strike.ce.volume * 0.35);
+      const peWeight = Math.max(1, strike.pe.oi * 0.65 + strike.pe.volume * 0.35);
+
+      if (ceState) {
+        ceWeights[ceState] += ceWeight;
+        totalWeights[ceState] += ceWeight;
+        ceTotalWeight += ceWeight;
+        directionalWeightedSum += ceWeight * ceImpact[ceState];
+      }
+
+      if (peState) {
+        peWeights[peState] += peWeight;
+        totalWeights[peState] += peWeight;
+        peTotalWeight += peWeight;
+        directionalWeightedSum += peWeight * peImpact[peState];
+      }
+    }
+
+    const allStates: OIState[] = ['LB', 'SB', 'SC', 'LU'];
+    const pickTop = (src: Record<OIState, number>) =>
+      allStates.reduce((best, k) => (src[k] > src[best] ? k : best), 'LB' as OIState);
+
+    const ceTop = ceTotalWeight > 0 ? pickTop(ceWeights) : null;
+    const peTop = peTotalWeight > 0 ? pickTop(peWeights) : null;
+    const ceTopShare = ceTop && ceTotalWeight > 0 ? ceWeights[ceTop] / ceTotalWeight : 0;
+    const peTopShare = peTop && peTotalWeight > 0 ? peWeights[peTop] / peTotalWeight : 0;
+
+    const norm = ceTotalWeight + peTotalWeight;
+    const biasScore = norm > 0 ? directionalWeightedSum / (norm * 2.0) : 0;
+    const overallTop = norm > 0 ? pickTop(totalWeights) : null;
+    const overallShare = overallTop ? totalWeights[overallTop] / norm : 0;
+
+    const confidence = Math.round(Math.max(ceTopShare, peTopShare) * 100);
+    const biasTag = norm <= 0
+      ? 'NO CLEAR STRUCTURE'
+      : biasScore >= 0.18
+      ? 'BULLISH BUILDUP'
+      : biasScore <= -0.18
+      ? 'BEARISH BUILDUP'
+      : 'MIXED FLOW';
+    const biasTone = norm <= 0
+      ? 'text-slate-300 border-slate-500/45 bg-slate-700/25'
+      : biasScore >= 0.18
+      ? 'text-emerald-300 border-emerald-400/50 bg-emerald-500/10'
+      : biasScore <= -0.18
+      ? 'text-red-300 border-red-400/50 bg-red-500/10'
+      : 'text-amber-300 border-amber-400/50 bg-amber-500/10';
+
+    const stateLabel: Record<OIState, string> = {
+      LB: 'Long Buildup',
+      SB: 'Short Buildup',
+      SC: 'Short Covering',
+      LU: 'Long Unwinding',
+    };
+
+    const stateTone: Record<OIState, string> = {
+      LB: 'text-emerald-300 border-emerald-500/40 bg-emerald-500/10',
+      SB: 'text-red-300 border-red-500/40 bg-red-500/10',
+      SC: 'text-cyan-300 border-cyan-500/40 bg-cyan-500/10',
+      LU: 'text-amber-300 border-amber-500/40 bg-amber-500/10',
+    };
+
+    const oneBoxTone = norm <= 0
+      ? 'text-slate-300 border-slate-500/45 bg-slate-700/25'
+      : overallTop
+      ? stateTone[overallTop]
+      : biasTone;
+
+    return {
+      biasTag,
+      biasTone,
+      score: Math.round(biasScore * 100),
+      confidence,
+      ceTop,
+      peTop,
+      ceTopLabel: ceTop ? stateLabel[ceTop] : 'No clear state',
+      peTopLabel: peTop ? stateLabel[peTop] : 'No clear state',
+      ceTopPct: ceTop ? Math.round(ceTopShare * 100) : null,
+      peTopPct: peTop ? Math.round(peTopShare * 100) : null,
+      ceTone: ceTop ? stateTone[ceTop] : 'text-slate-300 border-slate-500/40 bg-slate-700/20',
+      peTone: peTop ? stateTone[peTop] : 'text-slate-300 border-slate-500/40 bg-slate-700/20',
+      hasAnyState: norm > 0,
+      overallTop,
+      overallTopLabel: overallTop ? stateLabel[overallTop] : 'No clear state',
+      overallTopPct: overallTop ? Math.round(overallShare * 100) : null,
+      oneBoxTone,
+    };
+  }, [hasData, strikes]);
+
   // Today's Market Regime Engine (live): combines price action, participation,
   // positioning, pressure and risk into a directional trend score.
   const todaysRegime = useMemo(() => {
@@ -1140,15 +1220,22 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
       return {
         trendScore: 0,
         trendTag: 'NEUTRAL',
+        marketMode: 'SIDEWAYS',
         sidePlan: 'WAIT',
         strength: 'LOW',
         reason: 'Waiting for live chain confirmation',
         scoreTone: 'text-slate-300 border-slate-600/50 bg-slate-700/25',
         factors: [
-          { k: 'Price', v: '--', pass: false },
-          { k: 'Flow', v: '--', pass: false },
-          { k: 'OI', v: '--', pass: false },
-          { k: 'Risk', v: '--', pass: false },
+          { k: 'Price Action', v: '--', pass: false },
+          { k: 'Volume Flow', v: '--', pass: false },
+          { k: 'OI Positioning', v: '--', pass: false },
+          { k: 'OI Change', v: '--', pass: false },
+          { k: 'Pressure', v: '--', pass: false },
+          { k: 'PCR Context', v: '--', pass: false },
+          { k: 'OI Structure', v: '--', pass: false },
+          { k: 'Confidence', v: '--', pass: false },
+          { k: 'Agreement', v: '--', pass: false },
+          { k: 'Trap Risk', v: '--', pass: false },
         ],
       };
     }
@@ -1168,12 +1255,16 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
     const oiChgEdge = Math.max(-10, Math.min(10, (ceOIChgPct - 50) * 0.5));
     const pressureEdge = Math.max(-20, Math.min(20, pressureEdgeRaw * 0.9));
     const pcrEdge = pcrNow > 1.2 ? 10 : pcrNow < 0.8 ? -10 : (pcrNow - 1) * 20;
+    const oiStructureEdge = Math.max(-14, Math.min(14, (oiStructure?.score ?? 0) * 0.28));
 
     const trapRisk = intelligence.trapRiskPct ?? 0;
     const confidence = intelligence.confidence ?? 0;
     const agreement = intelligence.agreementPct ?? 0;
+    const confidenceEdge = Math.max(-10, Math.min(10, (confidence - 50) * 0.4));
+    const agreementEdge = Math.max(-10, Math.min(10, (agreement - 50) * 0.4));
+    const trapGuardEdge = Math.max(-22, Math.min(8, (45 - trapRisk) * 0.45));
 
-    let rawScore = paEdge + volEdge + oiEdge + oiChgEdge + pressureEdge + pcrEdge;
+    let rawScore = paEdge + volEdge + oiEdge + oiChgEdge + pressureEdge + pcrEdge + oiStructureEdge + confidenceEdge + agreementEdge + trapGuardEdge;
     // Trap risk reduces conviction in whichever direction the score is pointing.
     if (rawScore > 0) rawScore = Math.max(0, rawScore - trapRisk * 0.18);
     if (rawScore < 0) rawScore = Math.min(0, rawScore + trapRisk * 0.18);
@@ -1184,6 +1275,7 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
     const absScore = Math.abs(trendScore);
 
     const trendTag = trendScore >= 18 ? 'UPTREND' : trendScore <= -18 ? 'DOWNTREND' : 'RANGE';
+    const marketMode = absScore >= 18 ? 'TRENDING' : 'SIDEWAYS';
     const strength = absScore >= 55 ? 'HIGH' : absScore >= 35 ? 'MEDIUM' : absScore >= 18 ? 'BUILDING' : 'LOW';
 
     const riskHeavy = trapRisk >= 60;
@@ -1211,14 +1303,20 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
         : 'text-amber-200 border-amber-500/45 bg-amber-500/12';
 
     const factors = [
-      { k: 'Price', v: `${paEdgeRaw >= 0 ? '+' : ''}${paEdgeRaw.toFixed(2)}%`, pass: Math.abs(paEdgeRaw) >= 0.25 },
-      { k: 'Flow', v: `CE ${ceVolPct}%`, pass: Math.abs(ceVolPct - 50) >= 6 },
-      { k: 'OI', v: `CE ${ceOIPct}%`, pass: Math.abs(ceOIPct - 50) >= 6 || Math.abs(ceOIChgPct - 50) >= 6 },
-      { k: 'Risk', v: `${trapRisk}%`, pass: trapRisk < 45 },
+      { k: 'Price Action', v: `${paEdgeRaw >= 0 ? '+' : ''}${paEdgeRaw.toFixed(2)}%`, pass: Math.abs(paEdgeRaw) >= 0.25 },
+      { k: 'Volume Flow', v: `CE ${ceVolPct}%`, pass: Math.abs(ceVolPct - 50) >= 6 },
+      { k: 'OI Positioning', v: `CE ${ceOIPct}%`, pass: Math.abs(ceOIPct - 50) >= 6 },
+      { k: 'OI Change', v: `CE ${ceOIChgPct}%`, pass: Math.abs(ceOIChgPct - 50) >= 6 },
+      { k: 'Pressure', v: `${pressureEdgeRaw >= 0 ? '+' : ''}${Math.round(pressureEdgeRaw)}`, pass: Math.abs(pressureEdgeRaw) >= 10 },
+      { k: 'PCR Context', v: pcrNow.toFixed(2), pass: pcrNow > 1.2 || pcrNow < 0.8 },
+      { k: 'OI Structure', v: oiStructure?.overallTopLabel ?? 'No clear', pass: !!oiStructure?.overallTop },
+      { k: 'Confidence', v: `${confidence}%`, pass: confidence >= 55 },
+      { k: 'Agreement', v: `${agreement}%`, pass: agreement >= 52 },
+      { k: 'Trap Risk', v: `${trapRisk}%`, pass: trapRisk < 45 },
     ];
 
-    return { trendScore, trendTag, sidePlan, strength, reason, scoreTone, factors };
-  }, [chainStats, hasRealSignal, intelligence, summary.bearPct, summary.bullPct, summary.pcr]);
+    return { trendScore, trendTag, marketMode, sidePlan, strength, reason, scoreTone, factors };
+  }, [chainStats, hasRealSignal, intelligence, oiStructure?.overallTop, oiStructure?.overallTopLabel, oiStructure?.score, summary.bearPct, summary.bullPct, summary.pcr]);
 
   // Dominance tracking: highlight the leading side and flash on transition
   useEffect(() => {
@@ -1461,26 +1559,26 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
       </div>
 
       {/* ── SENTIMENT + CHAIN STATS PANEL ─────────────────────────────── */}
-      <div className="rounded-xl border border-slate-700/40 bg-slate-900/70 mb-3 overflow-hidden">
+      <div className="rounded-xl border border-slate-600/60 bg-slate-900/85 mb-3 overflow-hidden shadow-[inset_0_0_0_1px_rgba(148,163,184,0.12)]">
 
         {/* Top row: Bias pill + Bull/Bear/PCR */}
-        <div className={`flex items-center justify-between gap-2 px-3 py-2 border-b border-slate-700/30 ${biasBg}`}>
+        <div className={`flex flex-wrap items-center justify-between gap-2 px-3 py-2.5 border-b border-slate-600/40 ${biasBg}`}>
           {/* Left: bias + source */}
           <div className="flex items-center gap-1.5 shrink-0">
-            <span className={`text-[11px] sm:text-[13px] font-black tracking-wide ${biasColor}`}>
+            <span className={`text-[13px] sm:text-[15px] font-black tracking-wide ${biasColor}`}>
               {hasRealSignal ? summary.bias : 'CLOSED'}
             </span>
-            <span className={`text-[9px] font-semibold px-1.5 py-0.5 rounded border ${sourceColor} border-current/30 bg-slate-800/60`}>
+            <span className={`text-[10px] sm:text-[11px] font-semibold px-2 py-0.5 rounded border ${sourceColor} border-current/40 bg-slate-800/80`}>
               {sourceLabel}
             </span>
           </div>
           {/* Right: Bull | Bear | PCR */}
-          <div className="flex items-center gap-1.5 font-mono text-[11px] sm:text-[12px]">
+          <div className="flex items-center gap-1.5 font-mono text-[12px] sm:text-[14px] flex-wrap justify-end">
             {hasRealSignal ? (
               <>
                 <span
                   className={[
-                    'tabular-nums transition-all duration-300 px-1.5 py-0.5 rounded border',
+                    'tabular-nums transition-all duration-300 px-2 py-0.5 rounded border',
                     summary.bullPct > summary.bearPct
                       ? 'text-emerald-300 font-black border-emerald-400/80'
                       : 'text-emerald-500 font-semibold border-emerald-500/30',
@@ -1492,7 +1590,7 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
                 <span className="text-slate-700">|</span>
                 <span
                   className={[
-                    'tabular-nums transition-all duration-300 px-1.5 py-0.5 rounded border',
+                    'tabular-nums transition-all duration-300 px-2 py-0.5 rounded border',
                     summary.bearPct > summary.bullPct
                       ? 'text-red-300 font-black border-red-400/80'
                       : 'text-red-500 font-semibold border-red-500/30',
@@ -1503,30 +1601,30 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
                 </span>
                 {summary.neutralPct > 0 && (
                   <><span className="text-slate-700">|</span>
-                  <span className="text-amber-400/70 font-semibold">— {summary.neutralPct}%</span></>
+                  <span className="text-amber-300/90 font-semibold">— {summary.neutralPct}%</span></>
                 )}
               </>
             ) : <span className="text-slate-600 text-[10px]">No data</span>}
             <span className="text-slate-700">|</span>
-            <span className={`font-bold text-[11px] sm:text-[12px] tabular-nums transition-all duration-300 px-1.5 py-0.5 rounded border ${(pcr ?? 1) > 1.2 ? 'text-emerald-400 border-emerald-500/40' : (pcr ?? 1) < 0.8 ? 'text-red-400 border-red-500/40' : 'text-amber-400 border-amber-500/40'} ${summaryFlash.pcr ? ((pcr ?? 1) > 1.2 ? 'border-emerald-300 shadow-[0_0_10px_1px_rgba(52,211,153,0.5)]' : (pcr ?? 1) < 0.8 ? 'border-red-300 shadow-[0_0_10px_1px_rgba(239,68,68,0.5)]' : 'border-amber-300 shadow-[0_0_10px_1px_rgba(251,191,36,0.45)]') : ''}`}
+            <span className={`font-bold text-[12px] sm:text-[14px] tabular-nums transition-all duration-300 px-2 py-0.5 rounded border ${(pcr ?? 1) > 1.2 ? 'text-emerald-300 border-emerald-400/60' : (pcr ?? 1) < 0.8 ? 'text-red-300 border-red-400/60' : 'text-amber-300 border-amber-400/60'} ${summaryFlash.pcr ? ((pcr ?? 1) > 1.2 ? 'border-emerald-300 shadow-[0_0_10px_1px_rgba(52,211,153,0.5)]' : (pcr ?? 1) < 0.8 ? 'border-red-300 shadow-[0_0_10px_1px_rgba(239,68,68,0.5)]' : 'border-amber-300 shadow-[0_0_10px_1px_rgba(251,191,36,0.45)]') : ''}`}
               title="Put-Call Ratio (full chain OI if available, else ATM±5)">
               PCR {pcr?.toFixed(2) ?? '--'}
             </span>
           </div>
         </div>
 
-        {/* Bottom grid: Vol | OI | OI△ | IV — 4-col desktop, 2-col mobile */}
+        {/* Bottom grid: Vol | OI | OI△ | Price Action */}
         {chainStats && hasRealSignal && (
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5 p-1.5 bg-slate-950/40">
+          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-2 p-2 bg-slate-950/45">
 
             {/* ① Total Volume */}
-            <div className={`flex flex-col gap-1 px-3 py-2 rounded-lg border border-emerald-500/30 bg-emerald-500/5 shadow-[inset_0_0_0_1px_rgba(16,185,129,0.08)] transition-all duration-200 ${getMetricCardFlashClass(chainMoves.volume)}`}
+            <div className={`flex flex-col gap-1.5 px-3 py-2.5 rounded-lg border border-emerald-400/40 bg-emerald-500/10 shadow-[inset_0_0_0_1px_rgba(16,185,129,0.12)] transition-all duration-200 ${getMetricCardFlashClass(chainMoves.volume)}`}
               title={`Total Chain Volume — CE: ${liveVolumeStats.ready ? fmtNum(liveVolumeStats.ce) : '--'} | PE: ${liveVolumeStats.ready ? fmtNum(liveVolumeStats.pe) : '--'}`}>
-              <span className="text-[8px] font-bold tracking-widest uppercase text-slate-500">Total Volume</span>
+              <span className="text-[10px] sm:text-[11px] font-bold tracking-widest uppercase text-slate-300">Total Volume</span>
               <div className="flex items-center justify-between gap-1 font-mono">
-                <span className="text-[11px] sm:text-[12px] font-black text-emerald-400">
+                <span className="text-[13px] sm:text-[14px] font-black text-emerald-300">
                   CE <span className={[
-                    'inline-flex items-center rounded border px-1 py-0.5 text-[10px] leading-none transition-all duration-300',
+                    'inline-flex items-center rounded border px-1.5 py-0.5 text-[10px] sm:text-[11px] leading-none transition-all duration-300',
                     liveVolumeStats.cePct >= liveVolumeStats.pePct
                       ? 'border-emerald-300/90 bg-emerald-500/18 text-emerald-100 shadow-[0_0_10px_rgba(16,185,129,0.5)]'
                       : 'border-emerald-300/35 bg-emerald-500/6 text-emerald-300',
@@ -1534,9 +1632,9 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
                   ].join(' ')}>{liveVolumeStats.cePct}%</span>
                 </span>
                 <span className="text-[9px] text-slate-600">/</span>
-                <span className="text-[11px] sm:text-[12px] font-black text-red-400">
+                <span className="text-[13px] sm:text-[14px] font-black text-red-300">
                   PE <span className={[
-                    'inline-flex items-center rounded border px-1 py-0.5 text-[10px] leading-none transition-all duration-300',
+                    'inline-flex items-center rounded border px-1.5 py-0.5 text-[10px] sm:text-[11px] leading-none transition-all duration-300',
                     liveVolumeStats.pePct > liveVolumeStats.cePct
                       ? 'border-red-300/90 bg-red-500/18 text-red-100 shadow-[0_0_10px_rgba(239,68,68,0.5)]'
                       : 'border-red-300/35 bg-red-500/6 text-red-300',
@@ -1550,7 +1648,7 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
                 <div className="bg-gradient-to-l from-red-500 to-red-400 transition-all duration-500 rounded-r-full"
                   style={{ width: `${liveVolumeStats.pePct}%` }} />
               </div>
-              <div className="flex items-center gap-1 text-[8px] font-mono tabular-nums">
+              <div className="flex items-center gap-1.5 text-[10px] sm:text-[11px] font-mono tabular-nums">
                 <span
                   className={[
                     'flex-1 min-w-0 rounded border px-1 py-0.5 text-center leading-none whitespace-nowrap transition-all duration-300',
@@ -1577,13 +1675,13 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
             </div>
 
             {/* ② Total OI */}
-            <div className={`flex flex-col gap-1 px-3 py-2 rounded-lg border border-cyan-500/30 bg-cyan-500/5 shadow-[inset_0_0_0_1px_rgba(6,182,212,0.08)] transition-all duration-200 ${getMetricCardFlashClass(chainMoves.oi)}`}
+            <div className={`flex flex-col gap-1.5 px-3 py-2.5 rounded-lg border border-cyan-400/40 bg-cyan-500/10 shadow-[inset_0_0_0_1px_rgba(6,182,212,0.12)] transition-all duration-200 ${getMetricCardFlashClass(chainMoves.oi)}`}
               title={`Total Open Interest — CE: ${fmtNum(chainStats.totalCEOI)} | PE: ${fmtNum(chainStats.totalPEOI)}`}>
-              <span className="text-[8px] font-bold tracking-widest uppercase text-slate-500">Total OI</span>
+              <span className="text-[10px] sm:text-[11px] font-bold tracking-widest uppercase text-slate-300">Total OI</span>
               <div className="flex items-center justify-between gap-1 font-mono">
-                <span className="text-[11px] sm:text-[12px] font-black text-emerald-400">
+                <span className="text-[13px] sm:text-[14px] font-black text-emerald-300">
                   CE <span className={[
-                    'inline-flex items-center rounded border px-1 py-0.5 text-[10px] leading-none transition-all duration-300',
+                    'inline-flex items-center rounded border px-1.5 py-0.5 text-[10px] sm:text-[11px] leading-none transition-all duration-300',
                     chainStats.ceOIPct >= chainStats.peOIPct
                       ? 'border-emerald-300/90 bg-emerald-500/18 text-emerald-200 shadow-[0_0_10px_rgba(16,185,129,0.5)]'
                       : 'border-emerald-300/35 bg-emerald-500/6 text-emerald-300',
@@ -1591,9 +1689,9 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
                   ].join(' ')}>{chainStats.ceOIPct}%</span>
                 </span>
                 <span className="text-[9px] text-slate-600">/</span>
-                <span className="text-[11px] sm:text-[12px] font-black text-red-400">
+                <span className="text-[13px] sm:text-[14px] font-black text-red-300">
                   PE <span className={[
-                    'inline-flex items-center rounded border px-1 py-0.5 text-[10px] leading-none transition-all duration-300',
+                    'inline-flex items-center rounded border px-1.5 py-0.5 text-[10px] sm:text-[11px] leading-none transition-all duration-300',
                     chainStats.peOIPct > chainStats.ceOIPct
                       ? 'border-red-300/90 bg-red-500/18 text-red-200 shadow-[0_0_10px_rgba(239,68,68,0.5)]'
                       : 'border-red-300/35 bg-red-500/6 text-red-300',
@@ -1607,7 +1705,7 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
                 <div className="bg-gradient-to-l from-red-500 to-red-400 transition-all duration-500 rounded-r-full"
                   style={{ width: `${chainStats.peOIPct}%` }} />
               </div>
-              <div className="flex items-center gap-1 text-[8px] font-mono tabular-nums">
+              <div className="flex items-center gap-1.5 text-[10px] sm:text-[11px] font-mono tabular-nums">
                 <span
                   className={[
                     'flex-1 min-w-0 rounded border px-1 py-0.5 text-center leading-none whitespace-nowrap transition-all duration-300',
@@ -1634,13 +1732,13 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
             </div>
 
             {/* ③ OI Change */}
-            <div className={`flex flex-col gap-1 px-3 py-2 rounded-lg border border-amber-500/30 bg-amber-500/5 shadow-[inset_0_0_0_1px_rgba(245,158,11,0.08)] transition-all duration-200 ${getMetricCardFlashClass(chainMoves.oiChange)}`}
+            <div className={`flex flex-col gap-1.5 px-3 py-2.5 rounded-lg border border-amber-400/40 bg-amber-500/10 shadow-[inset_0_0_0_1px_rgba(245,158,11,0.12)] transition-all duration-200 ${getMetricCardFlashClass(chainMoves.oiChange)}`}
               title={`OI Change — CE: ${chainStats.totalCEOIChg >= 0 ? '+' : ''}${fmtNum(chainStats.totalCEOIChg)} | PE: ${chainStats.totalPEOIChg >= 0 ? '+' : ''}${fmtNum(chainStats.totalPEOIChg)}`}>
-              <span className="text-[8px] font-bold tracking-widest uppercase text-slate-500">OI Change</span>
+              <span className="text-[10px] sm:text-[11px] font-bold tracking-widest uppercase text-slate-300">OI Change</span>
               <div className="flex items-center justify-between gap-1 font-mono">
-                <span className={`text-[11px] sm:text-[12px] font-black ${chainStats.totalCEOIChg >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                <span className={`text-[13px] sm:text-[14px] font-black ${chainStats.totalCEOIChg >= 0 ? 'text-emerald-300' : 'text-red-300'}`}>
                   CE <span className={[
-                    'inline-flex items-center rounded border px-1 py-0.5 text-[10px] leading-none transition-all duration-300',
+                    'inline-flex items-center rounded border px-1.5 py-0.5 text-[10px] sm:text-[11px] leading-none transition-all duration-300',
                     Math.abs(chainStats.totalCEOIChg) >= Math.abs(chainStats.totalPEOIChg)
                       ? (chainStats.totalCEOIChg >= 0
                           ? 'border-emerald-300/95 bg-emerald-500/18 text-emerald-100 shadow-[0_0_10px_rgba(16,185,129,0.5)]'
@@ -1654,9 +1752,9 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
                   </span>
                 </span>
                 <span className="text-[9px] text-slate-600">/</span>
-                <span className={`text-[11px] sm:text-[12px] font-black ${chainStats.totalPEOIChg >= 0 ? 'text-red-400' : 'text-emerald-400'}`}>
+                <span className={`text-[13px] sm:text-[14px] font-black ${chainStats.totalPEOIChg >= 0 ? 'text-red-300' : 'text-emerald-300'}`}>
                   PE <span className={[
-                    'inline-flex items-center rounded border px-1 py-0.5 text-[10px] leading-none transition-all duration-300',
+                    'inline-flex items-center rounded border px-1.5 py-0.5 text-[10px] sm:text-[11px] leading-none transition-all duration-300',
                     Math.abs(chainStats.totalPEOIChg) > Math.abs(chainStats.totalCEOIChg)
                       ? (chainStats.totalPEOIChg >= 0
                           ? 'border-red-300/95 bg-red-500/18 text-red-100 shadow-[0_0_10px_rgba(239,68,68,0.5)]'
@@ -1676,7 +1774,7 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
                 <div className="bg-gradient-to-l from-red-500/80 to-red-400/80 transition-all duration-500 rounded-r-full"
                   style={{ width: `${chainStats.peOIChgPct}%` }} />
               </div>
-              <div className="flex items-center gap-1 text-[8px] font-mono tabular-nums">
+              <div className="flex items-center gap-1.5 text-[10px] sm:text-[11px] font-mono tabular-nums">
                 <span
                   className={[
                     'flex-1 min-w-0 rounded border px-1 py-0.5 text-center leading-none whitespace-nowrap transition-all duration-300',
@@ -1766,21 +1864,21 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
 
               return (
                 <div
-                  className={`flex flex-col gap-1 px-2 py-2 rounded-lg border transition-all duration-200 overflow-hidden ${bothNeutral ? 'border-amber-500/40 bg-amber-500/5' : 'border-cyan-500/30 bg-cyan-500/5'} shadow-[inset_0_0_0_1px_rgba(6,182,212,0.06)] ${getMetricCardFlashClass(chainMoves.priceAction)}`}
+                  className={`flex flex-col gap-1.5 px-3 py-2.5 rounded-lg border transition-all duration-200 overflow-hidden ${bothNeutral ? 'border-amber-400/45 bg-amber-500/10' : 'border-cyan-400/45 bg-cyan-500/10'} shadow-[inset_0_0_0_1px_rgba(6,182,212,0.1)] ${getMetricCardFlashClass(chainMoves.priceAction)}`}
                   title={`CE: ${cePct >= 0 ? '+' : ''}${cePct.toFixed(2)}% (${ceLabel}) | PE: ${pePct >= 0 ? '+' : ''}${pePct.toFixed(2)}% (${peLabel})`}
                 >
                   {/* Header */}
                   <div className="flex items-center justify-between gap-1 flex-wrap">
-                    <span className="text-[8px] font-bold tracking-widest uppercase text-slate-500">Price Action</span>
+                    <span className="text-[10px] sm:text-[11px] font-bold tracking-widest uppercase text-slate-300">Price Action</span>
                     {bothNeutral && (
-                      <span className="text-[7px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/40 rounded px-1 py-0.5 whitespace-nowrap">
+                      <span className="text-[9px] font-bold bg-amber-500/20 text-amber-200 border border-amber-400/50 rounded px-1.5 py-0.5 whitespace-nowrap">
                         ⚠ Wait
                       </span>
                     )}
                   </div>
 
                   {/* Clear market direction cue for non-technical users */}
-                  <div className={`rounded border px-1.5 py-1 text-[8px] sm:text-[9px] leading-tight ${marketBias.cls}`}>
+                  <div className={`rounded border px-2 py-1.5 text-[10px] sm:text-[11px] leading-tight ${marketBias.cls}`}>
                     <div className="font-black">{marketBias.tag}</div>
                     <div className="font-semibold opacity-90">{marketBias.detail}</div>
                   </div>
@@ -1788,12 +1886,12 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
                   {/* CE row — label · value on same line, badge below */}
                   <div className="flex flex-col gap-0.5">
                     <div className="flex items-baseline gap-1">
-                      <span className={`text-[9px] font-black shrink-0 ${cePct >= 0 ? 'text-emerald-500' : 'text-red-500'}`}>CE</span>
-                      <span className={`text-[12px] sm:text-[13px] font-black font-mono tabular-nums leading-none transition-all duration-300 ${ceValClass} ${getValueFlashClass(chainMoves.priceAction.ce, chainMoves.priceAction.active)}`}>
+                      <span className={`text-[11px] sm:text-[12px] font-black shrink-0 ${cePct >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>CE</span>
+                      <span className={`text-[14px] sm:text-[16px] font-black font-mono tabular-nums leading-none transition-all duration-300 ${ceValClass} ${getValueFlashClass(chainMoves.priceAction.ce, chainMoves.priceAction.active)}`}>
                         {cePct >= 0 ? '+' : ''}{cePct.toFixed(2)}%
                       </span>
                     </div>
-                    <span className={`self-start inline-flex items-center gap-0.5 rounded border px-1 py-0.5 text-[7px] font-bold leading-none whitespace-nowrap ${ceBadgeClass}`}>
+                    <span className={`self-start inline-flex items-center gap-0.5 rounded border px-1.5 py-0.5 text-[9px] font-bold leading-none whitespace-nowrap ${ceBadgeClass}`}>
                       {bothDown ? 'Premium Decay' : bothUp ? 'IV Expansion' : shortLabel(ceLabel)}
                       {ceSpeedTag && <span>· {ceSpeedTag}</span>}
                     </span>
@@ -1802,12 +1900,12 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
                   {/* PE row */}
                   <div className="flex flex-col gap-0.5">
                     <div className="flex items-baseline gap-1">
-                      <span className={`text-[9px] font-black shrink-0 ${pePct >= 0 ? 'text-rose-500' : 'text-sky-500'}`}>PE</span>
-                      <span className={`text-[12px] sm:text-[13px] font-black font-mono tabular-nums leading-none transition-all duration-300 ${peValClass} ${getValueFlashClass(chainMoves.priceAction.pe, chainMoves.priceAction.active)}`}>
+                      <span className={`text-[11px] sm:text-[12px] font-black shrink-0 ${pePct >= 0 ? 'text-rose-400' : 'text-sky-400'}`}>PE</span>
+                      <span className={`text-[14px] sm:text-[16px] font-black font-mono tabular-nums leading-none transition-all duration-300 ${peValClass} ${getValueFlashClass(chainMoves.priceAction.pe, chainMoves.priceAction.active)}`}>
                         {pePct >= 0 ? '+' : ''}{pePct.toFixed(2)}%
                       </span>
                     </div>
-                    <span className={`self-start inline-flex items-center gap-0.5 rounded border px-1 py-0.5 text-[7px] font-bold leading-none whitespace-nowrap ${peBadgeClass}`}>
+                    <span className={`self-start inline-flex items-center gap-0.5 rounded border px-1.5 py-0.5 text-[9px] font-bold leading-none whitespace-nowrap ${peBadgeClass}`}>
                       {bothDown ? 'Premium Decay' : bothUp ? 'IV Expansion' : shortLabel(peLabel)}
                       {peSpeedTag && <span>· {peSpeedTag}</span>}
                     </span>
@@ -1863,8 +1961,24 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
             </div>
           </div>
 
+          {/* Row 1.5: OI Structure (LB/SB/SC/LU aggregate) */}
+          {oiStructure && (
+            <div className="px-2.5 sm:px-3 py-2 border-b border-slate-700/30 bg-slate-900/35">
+              <div className={`rounded border px-2 py-1.5 min-w-0 ${oiStructure.oneBoxTone}`}>
+                <div className="text-[8px] sm:text-[9px] tracking-widest uppercase opacity-80 font-bold">OI Structure</div>
+                <div className="flex flex-wrap items-center gap-x-2 gap-y-1 min-w-0">
+                  <span className="text-[11px] sm:text-[12px] font-black leading-tight break-words">{oiStructure.overallTopLabel}</span>
+                  {oiStructure.overallTopPct != null && (
+                    <span className="text-[10px] font-mono tabular-nums opacity-90">{oiStructure.overallTopPct}%</span>
+                  )}
+                  <span className="text-[9px] font-semibold opacity-80">{oiStructure.biasTag}</span>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Row 2: PCR | Max Pain | Regime + S/R */}
-          <div className="grid grid-cols-3 divide-x divide-slate-700/30">
+          <div className="grid grid-cols-1 sm:grid-cols-3 divide-y sm:divide-y-0 sm:divide-x divide-slate-700/30">
 
             {/* PCR */}
             <div className={`flex flex-col gap-0.5 px-2.5 py-2 transition-colors duration-500 ${scoreFlash ? (scoreFlash === 'up' ? 'bg-emerald-500/5' : 'bg-red-500/5') : ''}`}>
@@ -1901,8 +2015,8 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
                     {todaysRegime.trendScore > 0 ? '+' : ''}{todaysRegime.trendScore}
                   </span>
                 </div>
-                <div className="mt-0.5 flex items-center justify-between gap-2">
-                  <span className="text-[9px] font-black">{todaysRegime.sidePlan}</span>
+                <div className="mt-0.5 flex flex-wrap items-center justify-between gap-x-2 gap-y-1">
+                  <span className="text-[9px] font-black">{todaysRegime.marketMode} · {todaysRegime.sidePlan}</span>
                   <span className="text-[8px] font-semibold opacity-80">{todaysRegime.strength}</span>
                 </div>
               </div>
@@ -1924,39 +2038,31 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
         </div>
       </div>
 
-      {/* Strike table header */}
-      <div className="grid grid-cols-[1fr_60px_1fr] sm:grid-cols-[1fr_84px_1fr] rounded-t-lg overflow-hidden border border-slate-700/50 mb-0">
-        <div className="flex flex-col gap-0.5 px-2 py-1.5 bg-emerald-500/10 border-r border-slate-700/50">
-          <div className="flex items-center gap-1.5">
+      {/* Strike table header (institutional compact layout) */}
+      <div className="rounded-t-lg overflow-hidden border border-slate-600/70 mb-2 bg-slate-900/70 shadow-[inset_0_0_0_1px_rgba(148,163,184,0.14)]">
+        <div className="grid grid-cols-[minmax(0,1fr)_68px_52px_52px_minmax(0,1fr)] sm:grid-cols-[minmax(0,1fr)_92px_64px_64px_minmax(0,1fr)] items-center">
+          <div className="flex items-center gap-1.5 px-2 sm:px-3 py-1.5 sm:py-2 bg-emerald-500/10 border-r border-slate-700/50 min-w-0">
             <span className="w-2 h-2 rounded-full bg-emerald-400 inline-block shrink-0" />
-            <span className="text-[11px] font-black tracking-widest uppercase text-emerald-300">CALL (CE)</span>
+            <span className="truncate text-[11px] sm:text-[13px] font-black tracking-wide sm:tracking-widest uppercase text-emerald-200">CALL (CE)</span>
           </div>
-        </div>
-        <div className="flex flex-col items-center justify-center px-1 py-1.5 bg-slate-800/60 border-r border-slate-700/50">
-          <span className="text-[10px] font-black tracking-widest uppercase text-cyan-400">STRIKE</span>
-          <div className="flex items-center gap-1 mt-0.5">
-            <span className="text-[9px] text-amber-400/70">VOL</span>
-            <span className="text-[9px] text-blue-400/70">OI</span>
+          <div className="flex items-center justify-center px-1 py-1.5 sm:py-2 bg-slate-800/60 border-r border-slate-700/50">
+            <span className="text-[10px] sm:text-[12px] font-black tracking-wide sm:tracking-widest uppercase text-cyan-300">STRIKE</span>
           </div>
-        </div>
-        <div className="flex flex-col gap-0.5 px-2 py-1.5 bg-red-500/10 items-end">
-          <div className="flex items-center gap-1.5 flex-row-reverse">
+          <div className="flex items-center justify-center px-1 py-1.5 sm:py-2 bg-slate-800/60 border-r border-slate-700/50">
+            <span className="text-[9px] sm:text-[11px] font-black tracking-wide uppercase text-amber-200">VOL</span>
+          </div>
+          <div className="flex items-center justify-center px-1 py-1.5 sm:py-2 bg-slate-800/60 border-r border-slate-700/50">
+            <span className="text-[9px] sm:text-[11px] font-black tracking-wide uppercase text-blue-200">OI</span>
+          </div>
+          <div className="flex items-center justify-end gap-1.5 px-2 sm:px-3 py-1.5 sm:py-2 bg-red-500/10 min-w-0">
+            <span className="truncate text-[11px] sm:text-[13px] font-black tracking-wide sm:tracking-widest uppercase text-red-200">PUT (PE)</span>
             <span className="w-2 h-2 rounded-full bg-red-400 inline-block shrink-0" />
-            <span className="text-[11px] font-black tracking-widest uppercase text-red-300">PUT (PE)</span>
           </div>
         </div>
-      </div>
-
-      {/* Sub-header */}
-      <div className="flex gap-[2px] sm:gap-1 border-b border-slate-700/40 bg-slate-900/40 mb-1 mb-2">
-        <div className="flex items-center gap-2 px-2 py-0.5 text-[10px] text-slate-500 flex-1 bg-slate-900/30 rounded-lg overflow-hidden">
-          <span>Signal | Price</span><span className="ml-auto hidden sm:inline">V | OI | B/S%</span>
-        </div>
-        <div className="flex items-center justify-center px-1 py-0.5 text-[9px] text-slate-600 shrink-0">
-          <span>Vol <span className="hidden sm:inline">{'->'}</span> OI</span>
-        </div>
-        <div className="flex items-center gap-2 px-2 py-0.5 text-[10px] text-slate-500 flex-row-reverse flex-1 bg-slate-900/30 rounded-lg overflow-hidden">
-          <span>Signal | Price</span><span className="hidden sm:inline">V | OI | B/S%</span>
+        <div className="grid grid-cols-[1fr_92px_1fr] items-center border-t border-slate-700/40 bg-slate-900/40 text-[9px] sm:text-[11px]">
+          <div className="px-2 sm:px-3 py-1 text-slate-300 truncate">Signal | Price | V | OI | PA</div>
+          <div className="px-1 py-1 text-center text-slate-200 font-semibold">Core Strike Metrics</div>
+          <div className="px-2 sm:px-3 py-1 text-right text-slate-300 truncate">PA | OI | V | Price | Signal</div>
         </div>
       </div>
 
@@ -1976,41 +2082,6 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
 
       {/* Legend */}
       <div className="flex flex-wrap items-center justify-center gap-x-2 gap-y-1 mt-2.5 pt-2 border-t border-slate-700/30 text-[9px] text-slate-600">
-        {/* SMC/ICT cheat-sheet toggle */}
-        <button
-          onClick={() => setShowSMC(v => !v)}
-          className="w-full mt-1 flex items-center justify-center gap-1 text-[8px] sm:text-[9px] text-slate-600 hover:text-slate-400 transition-colors duration-150"
-        >
-          <span>{showSMC ? '▲' : '▼'}</span>
-          <span>SMC Guide</span>
-        </button>
-        {showSMC && (
-          <div className="w-full mt-1 rounded-lg border border-slate-700/40 bg-slate-900/60 px-2 py-1.5 text-[8px] sm:text-[9px] text-slate-400 space-y-1">
-            <div className="flex flex-col sm:flex-row gap-1 sm:gap-3">
-              {/* S1 */}
-              <div className="flex-1 space-y-0.5">
-                <p className="font-black text-red-400 tracking-wide">📉 S1: DOWN→UP→zone</p>
-                <p><span className="text-amber-300 font-bold">EQH/BSL</span> ⬆️→⬇️ liquidity grab → <span className="text-red-300 font-bold">SELL</span></p>
-                <p><span className="text-orange-300 font-bold">Bear OB/POI</span> ⬇️ rejection → <span className="text-red-300 font-bold">SELL</span></p>
-                <p><span className="text-blue-300 font-bold">FVG(↑)</span> ↩️→⬇️ fill → drop</p>
-                <p><span className="text-emerald-300 font-bold">BOS↑</span> ⬆️ continue up</p>
-                <p><span className="text-red-300 font-bold">CHoCH(top)</span> ⬇️ reversal</p>
-                <p className="text-red-400 font-bold">✅ ⬆️ zone → ⬇️ SELL</p>
-              </div>
-              <div className="hidden sm:block w-px bg-slate-700/40" />
-              {/* S2 */}
-              <div className="flex-1 space-y-0.5">
-                <p className="font-black text-emerald-400 tracking-wide">📈 S2: UP→DOWN→zone</p>
-                <p><span className="text-amber-300 font-bold">EQL/SSL</span> ⬇️→⬆️ liquidity grab → <span className="text-emerald-300 font-bold">BUY</span></p>
-                <p><span className="text-emerald-300 font-bold">Bull OB/POI</span> ⬆️ bounce → <span className="text-emerald-300 font-bold">BUY</span></p>
-                <p><span className="text-blue-300 font-bold">FVG(↓)</span> ↩️→⬆️ fill → rise</p>
-                <p><span className="text-red-300 font-bold">BOS↓</span> ⬇️ continue down</p>
-                <p><span className="text-emerald-300 font-bold">CHoCH(bot)</span> ⬆️ reversal</p>
-                <p className="text-emerald-400 font-bold">✅ ⬇️ zone → ⬆️ BUY</p>
-              </div>
-            </div>
-          </div>
-        )}
       </div>
     </div>
   );
@@ -2045,7 +2116,7 @@ const StrikeIntelligence = memo(() => {
           <span className="w-[3px] h-6 rounded-full bg-gradient-to-b from-emerald-400 to-green-600 shrink-0" />
           <h3 className="text-[13px] sm:text-[15px] font-bold text-white tracking-tight">Strike Intelligence</h3>
           <span className="hidden sm:inline text-[10px] sm:text-[11px] text-emerald-400/60 font-medium">
-            ATM +/-5 | CE/PE | Vol | OI | PCR | Max Pain | BSL/SSL | BOS | Trap
+            ATM +/-5 | CE/PE | Vol | OI | PCR | Max Pain | BSL/SSL | BOS | Adv PA | Trap
           </span>
           <span className={`text-[9px] font-mono ml-1 ${dataStatus.color}`}>{dataStatus.label}</span>
         </div>

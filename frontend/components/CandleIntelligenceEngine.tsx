@@ -1,6 +1,6 @@
 'use client';
 
-import React, { memo } from 'react';
+import React, { memo, useState } from 'react';
 import {
   useCandleIntelligence,
   type CandleIntelIndex,
@@ -503,6 +503,7 @@ TfCandleColumn.displayName = 'TfCandleColumn';
 // Shows ALL 3 timeframes simultaneously — no tab switching needed.
 
 const CandleIntelCard = memo<{ data: CandleIntelIndex | null; name: string }>(({ data, name }) => {
+  const [isExpanded, setIsExpanded] = useState(false);
   if (!data) {
     return (
       <div className="rounded-2xl border border-slate-700/50 bg-gradient-to-br from-slate-800/60 to-slate-900/60 p-4">
@@ -578,6 +579,10 @@ const CandleIntelCard = memo<{ data: CandleIntelIndex | null; name: string }>(({
 
   // Primary 5M for combined sections
   const primary = tf5m;
+  const verdict = primary.three_factor?.verdict ?? 'NO_TRADE';
+  const verdictCfg = VERDICT_CFG[verdict] || VERDICT_CFG.NO_TRADE;
+  const compactBullProb = backendConsensus?.probabilityBull ?? Math.round((bull / allTfs.length) * 100);
+  const compactBearProb = backendConsensus?.probabilityBear ?? Math.round((bear / allTfs.length) * 100);
 
   return (
     <div className={`rounded-2xl border ${cardBorder} bg-gradient-to-br from-slate-800/70 via-slate-900/70 to-slate-800/50 backdrop-blur-sm p-3 sm:p-4 transition-all duration-300`}>
@@ -602,6 +607,47 @@ const CandleIntelCard = memo<{ data: CandleIntelIndex | null; name: string }>(({
           )}
         </div>
       </div>
+
+      <button
+        type="button"
+        onClick={() => setIsExpanded(v => !v)}
+        className="w-full flex items-center justify-between rounded-lg border border-slate-700/35 bg-slate-800/35 px-3 py-2 mb-3 text-left transition-colors duration-150 hover:bg-slate-800/50"
+      >
+        <div className="min-w-0">
+          <div className="text-[9px] font-semibold uppercase tracking-[0.18em] text-slate-500">Candle Details</div>
+          <div className="mt-0.5 text-[10px] font-medium text-slate-300">
+            {isExpanded ? 'Expanded view' : 'Collapsed by default to save space'}
+          </div>
+        </div>
+        <span className="shrink-0 text-[10px] font-bold text-slate-400">{isExpanded ? 'Hide' : 'Show'}</span>
+      </button>
+
+      {!isExpanded && (
+        <div className="grid grid-cols-2 gap-2">
+          <div className="rounded-lg bg-slate-800/35 border border-slate-700/25 p-2">
+            <div className="text-[8px] text-slate-500 uppercase tracking-wider font-semibold">MTF Probability</div>
+            <div className="mt-0.5 flex items-center justify-between text-[10px] font-bold">
+              <span className="text-emerald-400">{compactBullProb}%↑</span>
+              <span className="text-red-400">{compactBearProb}%↓</span>
+            </div>
+          </div>
+          <div className="rounded-lg bg-slate-800/35 border border-slate-700/25 p-2">
+            <div className="text-[8px] text-slate-500 uppercase tracking-wider font-semibold">5M Signal</div>
+            <div className={`mt-0.5 text-[10px] font-bold ${SIGNAL_CFG[tf5m.signal]?.color ?? 'text-amber-400'}`}>{SIGNAL_CFG[tf5m.signal]?.label ?? tf5m.signal}</div>
+          </div>
+          <div className="rounded-lg bg-slate-800/35 border border-slate-700/25 p-2">
+            <div className="text-[8px] text-slate-500 uppercase tracking-wider font-semibold">Structure</div>
+            <div className={`mt-0.5 text-[10px] font-bold ${STRUCTURE_CFG[primary.structure]?.color ?? 'text-slate-400'}`}>{STRUCTURE_CFG[primary.structure]?.label ?? primary.structure}</div>
+          </div>
+          <div className="rounded-lg bg-slate-800/35 border border-slate-700/25 p-2">
+            <div className="text-[8px] text-slate-500 uppercase tracking-wider font-semibold">3FA Verdict</div>
+            <div className={`mt-0.5 text-[10px] font-bold ${verdictCfg.color}`}>{verdictCfg.label}</div>
+          </div>
+        </div>
+      )}
+
+      {isExpanded && (
+        <>
 
       {/* ── AI Multi-TF Consensus Banner ── */}
       <div className={`flex items-center justify-between rounded-lg border px-2.5 py-1.5 mb-3 ${consensusColor}`}>
@@ -667,6 +713,8 @@ const CandleIntelCard = memo<{ data: CandleIntelIndex | null; name: string }>(({
 
       {/* ── 3FA: 3 Factor Alignment Model ── */}
       <ThreeFactorPanel tfa={primary.three_factor} />
+        </>
+      )}
     </div>
   );
 });
@@ -682,7 +730,6 @@ const CandleIntelligenceEngine = memo(() => {
       <div className="flex flex-col gap-1 mb-3 sm:mb-4">
         <SectionTitle
           title="Candle Intelligence Engine"
-          subtitle="23 Patterns × 3 Timeframes (3M · 5M · 15M) × Strength × Market Intent × Trade Signal"
           accentColor="amber"
           badge={
             <span className="relative inline-flex items-center px-2 py-0.5 text-[9px] font-bold bg-gradient-to-r from-orange-600/80 to-amber-600/80 rounded-md shadow-lg border border-orange-400/30 whitespace-nowrap leading-none">

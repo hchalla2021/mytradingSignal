@@ -7,6 +7,9 @@ import { useMarketSocket } from '@/hooks/useMarketSocket';
 import { useAnalysis } from '@/hooks/useAnalysis';
 import { useAIAnalysis } from '@/hooks/useAIAnalysis';
 import { useIndiaVIX } from '@/hooks/useIndiaVIX';
+import { useMarketRegime, type RegimeType } from '@/hooks/useMarketRegime';
+import { useStrikeIntelligence } from '@/hooks/useStrikeIntelligence';
+import { useChartIntelligence } from '@/hooks/useChartIntelligence';
 import { API_CONFIG } from '@/lib/api-config';
 import { getOrCreateVisitorId } from '@/lib/visitor-id';
 
@@ -149,6 +152,8 @@ const ICTIntelligence = dynamic(() => import('@/components/ICTIntelligence'), {
 });
 
 export default function Home() {
+  type FiveStateSignal = 'STRONG_BUY' | 'BUY' | 'NEUTRAL' | 'SELL' | 'STRONG_SELL';
+
   type UserAnalyticsSummary = {
     totals: {
       logged_in_users: number;
@@ -189,7 +194,42 @@ export default function Home() {
   } = useMarketSocket();
   const { alertData } = useAIAnalysis();
   const { vixData, loading: vixLoading } = useIndiaVIX();
+  const { regimeData } = useMarketRegime();
+  const { data: strikeIntelData } = useStrikeIntelligence();
+  const { data: chartIntelData } = useChartIntelligence();
   const [serverOutlook, setServerOutlook] = useState<Record<string, any> | null>(null);
+
+  const regimeToFiveState = useCallback((regime?: RegimeType | null): FiveStateSignal | null => {
+    if (!regime) return null;
+    if (regime === 'STRONG_TRENDING_BULLISH') return 'STRONG_BUY';
+    if (regime === 'TRENDING_BULLISH') return 'BUY';
+    if (regime === 'TRENDING_BEARISH') return 'SELL';
+    if (regime === 'STRONG_TRENDING_BEARISH') return 'STRONG_SELL';
+    return 'NEUTRAL';
+  }, []);
+
+  const chartToFiveState = useCallback((candles?: Array<{ o: number; c: number }> | null): FiveStateSignal | null => {
+    if (!candles || candles.length < 4) return null;
+    const last = candles[candles.length - 1];
+    const prev = candles[candles.length - 2];
+    const ref = candles[Math.max(0, candles.length - 4)];
+    if (!last || !prev || !ref || prev.c <= 0 || ref.c <= 0) return null;
+
+    const r1 = ((last.c - prev.c) / prev.c) * 100;
+    const r3 = ((last.c - ref.c) / ref.c) * 100;
+    const candleBias = last.c > last.o ? 1 : last.c < last.o ? -1 : 0;
+
+    const bullish = r1 > 0.03 && r3 > 0.08 && candleBias >= 0;
+    const bearish = r1 < -0.03 && r3 < -0.08 && candleBias <= 0;
+    const strongBull = r3 >= 0.22 && r1 >= 0.08;
+    const strongBear = r3 <= -0.22 && r1 <= -0.08;
+
+    if (bullish && strongBull) return 'STRONG_BUY';
+    if (bearish && strongBear) return 'STRONG_SELL';
+    if (bullish) return 'BUY';
+    if (bearish) return 'SELL';
+    return 'NEUTRAL';
+  }, []);
 
   // 🔥 Clear browser cache on mount (desktop browsers cache aggressively)
   useEffect(() => {
@@ -394,6 +434,25 @@ export default function Home() {
     };
   }, [serverOutlook, marketData]);
 
+  const overallRegimeSignal = useMemo(() => {
+    const niftyRegime = regimeToFiveState(regimeData.NIFTY?.regime ?? null);
+    return niftyRegime ?? aggregatedMarketSignal.NIFTY.signal;
+  }, [regimeData, regimeToFiveState, aggregatedMarketSignal]);
+
+  const overallStrikeSignal = useMemo(() => {
+    if (!strikeIntelData?.NIFTY?.intelligence?.signal) return null;
+    const strikeSig = strikeIntelData.NIFTY.intelligence.signal;
+    if (strikeSig === 'STRONG_BUY' || strikeSig === 'BUY' || strikeSig === 'NEUTRAL' || strikeSig === 'SELL' || strikeSig === 'STRONG_SELL') {
+      return strikeSig;
+    }
+    return null;
+  }, [strikeIntelData]);
+
+  const overallChartSignal = useMemo(() => {
+    const candles = chartIntelData?.NIFTY?.candles5m ?? null;
+    return chartToFiveState(candles);
+  }, [chartIntelData, chartToFiveState]);
+
   // Determine market status from actual data, with client-side IST fallback
   // so the UI never shows "MARKET CLOSED" when the Indian market is actually open
   const marketStatus = useMemo(() => {
@@ -510,6 +569,33 @@ export default function Home() {
               loading={vixLoading}
             />
             <div className="flex items-center gap-2 ml-auto">
+              <span className={`hidden xl:inline text-[9px] font-black px-2 py-0.5 rounded border tracking-wider ${
+                overallChartSignal === 'STRONG_BUY' || overallChartSignal === 'BUY'
+                  ? 'text-teal-300 border-teal-400/30 bg-teal-500/15'
+                  : overallChartSignal === 'STRONG_SELL' || overallChartSignal === 'SELL'
+                  ? 'text-rose-300 border-rose-400/30 bg-rose-500/15'
+                  : 'text-amber-300 border-amber-400/30 bg-amber-500/15'
+              }`}>
+                CHART {(overallChartSignal ?? 'NEUTRAL').replace('_', ' ')}
+              </span>
+              <span className={`hidden lg:inline text-[9px] font-black px-2 py-0.5 rounded border tracking-wider ${
+                overallStrikeSignal === 'STRONG_BUY' || overallStrikeSignal === 'BUY'
+                  ? 'text-teal-300 border-teal-400/30 bg-teal-500/15'
+                  : overallStrikeSignal === 'STRONG_SELL' || overallStrikeSignal === 'SELL'
+                  ? 'text-rose-300 border-rose-400/30 bg-rose-500/15'
+                  : 'text-amber-300 border-amber-400/30 bg-amber-500/15'
+              }`}>
+                STRIKE {(overallStrikeSignal ?? 'NEUTRAL').replace('_', ' ')}
+              </span>
+              <span className={`hidden md:inline text-[9px] font-black px-2 py-0.5 rounded border tracking-wider ${
+                overallRegimeSignal === 'STRONG_BUY' || overallRegimeSignal === 'BUY'
+                  ? 'text-teal-300 border-teal-400/30 bg-teal-500/15'
+                  : overallRegimeSignal === 'STRONG_SELL' || overallRegimeSignal === 'SELL'
+                  ? 'text-rose-300 border-rose-400/30 bg-rose-500/15'
+                  : 'text-amber-300 border-amber-400/30 bg-amber-500/15'
+              }`}>
+                REGIME {overallRegimeSignal.replace('_', ' ')}
+              </span>
               <span className="hidden sm:inline text-[9px] text-white/60 font-bold">{aggregatedMarketSignal.NIFTY.sectionCount} Signals</span>
               <span className="w-1.5 h-1.5 rounded-full bg-teal-400 animate-pulse" />
               <span className="text-[9px] text-teal-400/50 font-bold">LIVE</span>
@@ -520,10 +606,23 @@ export default function Home() {
           <div suppressHydrationWarning className="grid grid-cols-1 lg:grid-cols-3 gap-3 lg:gap-4 xl:gap-5 p-3 lg:p-5">
             {(['NIFTY','BANKNIFTY','SENSEX'] as const).map((sym) => {
               const s = aggregatedMarketSignal[sym];
+              const chartSignal = chartToFiveState(chartIntelData?.[sym]?.candles5m ?? null);
+              const strikeSignal = strikeIntelData?.[sym]?.intelligence?.signal;
+              const regimeSignal = regimeToFiveState(regimeData?.[sym]?.regime ?? null);
+              const displaySignal =
+                (chartSignal === 'STRONG_BUY' || chartSignal === 'BUY' || chartSignal === 'NEUTRAL' || chartSignal === 'SELL' || chartSignal === 'STRONG_SELL')
+                  ? chartSignal
+                  : (strikeSignal === 'STRONG_BUY' || strikeSignal === 'BUY' || strikeSignal === 'NEUTRAL' || strikeSignal === 'SELL' || strikeSignal === 'STRONG_SELL')
+                  ? strikeSignal
+                  : (regimeSignal ?? s.signal);
               const isBull = s.buyPercent >= 55, isBear = s.sellPercent >= 55;
 
               const accentDot = isBull ? 'bg-teal-400 shadow-teal-400/60' : isBear ? 'bg-rose-400 shadow-rose-400/60' : 'bg-amber-400 shadow-amber-400/60';
-              const sigPill   = isBull ? 'text-teal-300 border-teal-400/30 bg-teal-500/15' : isBear ? 'text-rose-300 border-rose-400/30 bg-rose-500/15' : 'text-amber-300 border-amber-400/30 bg-amber-500/15';
+              const sigPill   = displaySignal === 'STRONG_BUY' || displaySignal === 'BUY'
+                ? 'text-teal-300 border-teal-400/30 bg-teal-500/15'
+                : displaySignal === 'STRONG_SELL' || displaySignal === 'SELL'
+                ? 'text-rose-300 border-rose-400/30 bg-rose-500/15'
+                : 'text-amber-300 border-amber-400/30 bg-amber-500/15';
               const name      = sym === 'NIFTY' ? 'NIFTY 50' : sym === 'BANKNIFTY' ? 'BANK NIFTY' : 'SENSEX';
 
               const p5 = { conf: s.pred5mConf, buyPct: s.pred5mBuyPct, dir: s.pred5mDir };
@@ -547,9 +646,17 @@ export default function Home() {
                       <span className={`w-2.5 h-2.5 rounded-full shrink-0 shadow-[0_0_6px_2px] ${accentDot}`} />
                       <span className="text-sm font-black text-white tracking-tight px-3 py-1.5 rounded-md border border-emerald-400/30 bg-emerald-500/[0.08]">{name}</span>
                     </div>
-                    <span suppressHydrationWarning className={`text-[11px] font-black px-3 py-1.5 rounded-md border tracking-wider min-w-[58px] text-center ${sigPill}`}>
-                      {s.signal.replace('_', ' ')}
-                    </span>
+                    <div className="flex items-center gap-1.5">
+                      <span suppressHydrationWarning className={`text-[11px] font-black px-3 py-1.5 rounded-md border tracking-wider min-w-[58px] text-center ${sigPill}`}>
+                        {displaySignal.replace('_', ' ')}
+                      </span>
+                      <span className="text-[9px] font-bold px-1.5 py-0.5 rounded border border-violet-400/20 bg-violet-500/[0.06] text-violet-300/80">
+                        CHART
+                      </span>
+                      <span className="text-[9px] font-bold px-1.5 py-0.5 rounded border border-cyan-400/20 bg-cyan-500/[0.05] text-cyan-300/80">
+                        STRIKE
+                      </span>
+                    </div>
                   </div>
 
                   {/* Confidence Signals */}
@@ -719,7 +826,6 @@ export default function Home() {
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-3 sm:mb-4">
             <SectionTitle
               title="Smart Money • Order Logic"
-              subtitle="Order Flow • Institutional Positioning • Fair Value Gaps • Order Blocks • Market Imbalances"
               accentColor="purple"
             />
           </div>
@@ -760,7 +866,6 @@ export default function Home() {
               <div className="flex flex-col gap-3 mb-3 sm:mb-4">
                 <SectionTitle
                   title="Volume Pulse (Candle Volume)"
-                  subtitle="Ultra-fast buying/selling pressure • Green vs Red candle volume tracking"
                   accentColor="emerald"
                 />
               </div>
@@ -803,7 +908,6 @@ export default function Home() {
           <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-3 sm:mb-4">
             <SectionTitle
               title="Trade Zones • Buy/Sell Signals"
-              subtitle="5min Entry + 15min Trend • 8-Factor Scoring • Live Confidence • 5-Min Prediction"
               accentColor="emerald"
             />
           </div>

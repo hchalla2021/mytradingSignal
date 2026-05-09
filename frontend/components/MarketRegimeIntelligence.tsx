@@ -21,8 +21,8 @@ const REGIME_CONFIG: Record<RegimeType, {
   barColor: string;
 }> = {
   STRONG_TRENDING_BULLISH: {
-    label: 'STRONG TRENDING — BULLISH',
-    shortLabel: 'STRONG BULL TREND',
+    label: 'STRONG BUY',
+    shortLabel: 'STRONG BUY',
     color: 'text-emerald-300',
     bg: 'bg-emerald-500/20',
     border: 'border-emerald-400/60',
@@ -31,8 +31,8 @@ const REGIME_CONFIG: Record<RegimeType, {
     barColor: 'from-emerald-400 to-emerald-600',
   },
   TRENDING_BULLISH: {
-    label: 'TRENDING — BULLISH',
-    shortLabel: 'BULL TREND',
+    label: 'BUY',
+    shortLabel: 'BUY',
     color: 'text-emerald-400',
     bg: 'bg-emerald-500/10',
     border: 'border-emerald-400/40',
@@ -41,8 +41,8 @@ const REGIME_CONFIG: Record<RegimeType, {
     barColor: 'from-emerald-400 to-emerald-500',
   },
   STRONG_TRENDING_BEARISH: {
-    label: 'STRONG TRENDING — BEARISH',
-    shortLabel: 'STRONG BEAR TREND',
+    label: 'STRONG SELL',
+    shortLabel: 'STRONG SELL',
     color: 'text-red-300',
     bg: 'bg-red-500/20',
     border: 'border-red-400/60',
@@ -51,8 +51,8 @@ const REGIME_CONFIG: Record<RegimeType, {
     barColor: 'from-red-400 to-red-600',
   },
   TRENDING_BEARISH: {
-    label: 'TRENDING — BEARISH',
-    shortLabel: 'BEAR TREND',
+    label: 'SELL',
+    shortLabel: 'SELL',
     color: 'text-red-400',
     bg: 'bg-red-500/10',
     border: 'border-red-400/40',
@@ -61,8 +61,8 @@ const REGIME_CONFIG: Record<RegimeType, {
     barColor: 'from-red-400 to-red-500',
   },
   SIDEWAYS: {
-    label: 'SIDEWAYS / RANGEBOUND',
-    shortLabel: 'SIDEWAYS',
+    label: 'NEUTRAL',
+    shortLabel: 'NEUTRAL',
     color: 'text-amber-400',
     bg: 'bg-amber-500/10',
     border: 'border-amber-400/40',
@@ -71,7 +71,7 @@ const REGIME_CONFIG: Record<RegimeType, {
     barColor: 'from-amber-400 to-amber-500',
   },
   NEUTRAL: {
-    label: 'NEUTRAL — NO CLEAR TREND',
+    label: 'NEUTRAL',
     shortLabel: 'NEUTRAL',
     color: 'text-slate-400',
     bg: 'bg-slate-500/10',
@@ -82,24 +82,31 @@ const REGIME_CONFIG: Record<RegimeType, {
   },
 };
 
+type RegimeSignal = 'STRONG BUY' | 'BUY' | 'NEUTRAL' | 'SELL' | 'STRONG SELL';
+
+function toRegimeSignal(regime: RegimeType): RegimeSignal {
+  if (regime === 'STRONG_TRENDING_BULLISH') return 'STRONG BUY';
+  if (regime === 'TRENDING_BULLISH') return 'BUY';
+  if (regime === 'TRENDING_BEARISH') return 'SELL';
+  if (regime === 'STRONG_TRENDING_BEARISH') return 'STRONG SELL';
+  return 'NEUTRAL';
+}
+
+function signalTone(signal: RegimeSignal): { arrow: string; color: string; bg: string } {
+  if (signal === 'STRONG BUY' || signal === 'BUY') {
+    return { arrow: '▲', color: 'text-emerald-400', bg: 'bg-emerald-500/10 border-emerald-500/30' };
+  }
+  if (signal === 'STRONG SELL' || signal === 'SELL') {
+    return { arrow: '▼', color: 'text-red-400', bg: 'bg-red-500/10 border-red-500/30' };
+  }
+  return { arrow: '→', color: 'text-amber-400', bg: 'bg-amber-500/10 border-amber-500/30' };
+}
+
 const APPROACH_CONFIG: Record<TradeApproach, { label: string; icon: string; color: string }> = {
   DIRECTIONAL_ONLY: { label: 'Directional Only — Ride the Trend', icon: '🎯', color: 'text-emerald-400' },
   DIRECTIONAL_BIAS: { label: 'Directional Bias — Favour Trend Side', icon: '📐', color: 'text-blue-400' },
   WAIT_AND_WATCH:   { label: 'Wait & Watch — No Clear Setup', icon: '👀', color: 'text-amber-400' },
   RANGE_TRADE:      { label: 'Range Trade — S/R Bounces Only', icon: '📊', color: 'text-purple-400' },
-};
-
-const FACTOR_NAMES: Record<string, { label: string; icon: string }> = {
-  directional_move:   { label: 'Directional Move',    icon: '🎯' },
-  ema_alignment:      { label: 'EMA Alignment',       icon: '📐' },
-  candle_consistency: { label: 'Candle Consistency',   icon: '🕯️' },
-  range_expansion:    { label: 'Range Expansion',      icon: '📏' },
-  opening_range:      { label: 'Opening Range (ORB)',  icon: '🔓' },
-  volume_trend:       { label: 'Volume Trend',         icon: '📊' },
-  body_ratio:         { label: 'Body/Range Ratio',     icon: '🏗️' },
-  vix_context:        { label: 'VIX Context',          icon: '⚡' },
-  pcr_bias:           { label: 'PCR Bias',             icon: '⚖️' },
-  oi_conviction:      { label: 'OI Conviction',        icon: '🔥' },
 };
 
 // ── Score Gauge ─────────────────────────────────────────────────────────────
@@ -137,46 +144,6 @@ const ScoreGauge = memo<{ score: number; regime: RegimeType }>(({ score, regime 
   );
 });
 ScoreGauge.displayName = 'ScoreGauge';
-
-// ── Factor Row ──────────────────────────────────────────────────────────────
-
-const FactorRow = memo<{ name: string; score: number; label: string; signal: string; weight: number }>(
-  ({ name, score, label, weight }) => {
-    const info = FACTOR_NAMES[name] || { label: name, icon: '•' };
-    const pct = Math.min(100, Math.max(0, score));
-    const barColor =
-      score >= 70 ? 'bg-emerald-500' :
-      score >= 45 ? 'bg-blue-500' :
-      score >= 25 ? 'bg-amber-500' :
-      'bg-slate-500';
-    const scoreColor =
-      score >= 70 ? 'text-emerald-400' :
-      score >= 45 ? 'text-blue-400' :
-      score >= 25 ? 'text-amber-400' :
-      'text-slate-400';
-
-    return (
-      <div className="py-1.5 border-b border-slate-700/30 last:border-b-0">
-        <div className="flex items-center justify-between mb-0.5">
-          <div className="flex items-center gap-1.5 min-w-0">
-            <span className="text-[10px]">{info.icon}</span>
-            <span className="text-[10px] sm:text-xs font-semibold text-slate-300 truncate">{info.label}</span>
-            <span className="text-[9px] text-slate-500">({weight}%)</span>
-          </div>
-          <span className={`text-[10px] sm:text-xs font-bold tabular-nums ${scoreColor}`}>{score.toFixed(0)}</span>
-        </div>
-        <div className="relative h-1.5 bg-slate-700/50 rounded-full overflow-hidden">
-          <div
-            className={`absolute top-0 left-0 h-full ${barColor} rounded-full transition-all duration-200`}
-            style={{ width: `${pct}%` }}
-          />
-        </div>
-        <p className="text-[9px] text-slate-500 mt-0.5 truncate">{label}</p>
-      </div>
-    );
-  }
-);
-FactorRow.displayName = 'FactorRow';
 
 // ── Live market data types (from main WebSocket feed) ────────────────────────
 
@@ -217,10 +184,6 @@ const RegimeCard = memo<{
   const cfg = REGIME_CONFIG[data.regime] || REGIME_CONFIG.NEUTRAL;
   const approach = APPROACH_CONFIG[data.tradeApproach] || APPROACH_CONFIG.WAIT_AND_WATCH;
 
-  const factors = data.factors ? Object.entries(data.factors) : [];
-  // Sort by weight descending
-  factors.sort((a, b) => (b[1].weight || 0) - (a[1].weight || 0));
-
   // Live context values for supporting metrics (price/open/high/low/PCR/VIX)
   const livePrice  = liveTick?.price  ?? data.context?.price;
   const liveOpen   = liveTick?.open   ?? data.context?.open;
@@ -232,15 +195,8 @@ const RegimeCard = memo<{
     ? ((livePrice - liveOpen) / liveOpen) * 100
     : data.context?.changePct;
 
-  // Single source-of-truth direction for this card: backend regime engine
-  const displayDir = data.direction;
-  const dirArrow = displayDir === 'BULLISH' ? '▲' : displayDir === 'BEARISH' ? '▼' : '→';
-  const dirColor = displayDir === 'BULLISH' ? 'text-emerald-400' : displayDir === 'BEARISH' ? 'text-red-400' : 'text-amber-400';
-  const dirBg    = displayDir === 'BULLISH' ? 'bg-emerald-500/10 border-emerald-500/30' : displayDir === 'BEARISH' ? 'bg-red-500/10 border-red-500/30' : 'bg-amber-500/10 border-amber-500/30';
-  const regimeBadgeLabel =
-    (data.regime === 'NEUTRAL' || data.regime === 'SIDEWAYS') && displayDir !== 'NEUTRAL'
-      ? `${cfg.shortLabel} · ${displayDir} BIAS`
-      : cfg.shortLabel;
+  const displaySignal = toRegimeSignal(data.regime);
+  const tone = signalTone(displaySignal);
 
   return (
     <div className={`rounded-2xl border ${cfg.border} bg-gradient-to-br from-slate-800/60 via-slate-800/40 to-slate-900/60 p-3 sm:p-4 shadow-lg ${cfg.glow} transition-all duration-200`}>
@@ -257,45 +213,39 @@ const RegimeCard = memo<{
         </div>
         <div className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg ${cfg.bg} border ${cfg.border}`}>
           <span className="text-sm">{cfg.icon}</span>
-          <span className={`text-[10px] sm:text-xs font-black ${cfg.color} tracking-wide`}>{regimeBadgeLabel}</span>
+          <span className={`text-[10px] sm:text-xs font-black ${cfg.color} tracking-wide`}>{cfg.shortLabel}</span>
         </div>
       </div>
 
       {/* ── DIRECTION BANNER — aligned with regime engine ── */}
-      <div className={`mb-3 px-3 py-2 rounded-xl border ${dirBg} flex items-center justify-between transition-all duration-150`}>
-        <div className="flex items-center gap-2">
-          <span className={`text-2xl font-black leading-none ${dirColor}`}>{dirArrow}</span>
+      <div className={`mb-3 px-3 py-2 rounded-xl border ${tone.bg} flex flex-wrap items-center justify-between gap-2 transition-all duration-150`}>
+        <div className="flex items-center gap-2 min-w-0">
+          <span className={`text-xl font-black leading-none ${tone.color}`}>{tone.arrow}</span>
           <div>
-            <p className={`text-sm font-black tracking-wide ${dirColor}`}>{displayDir}</p>
-            <p className="text-[9px] text-slate-500 font-medium">Direction · regime engine</p>
+            <p className={`text-sm font-black tracking-wide ${tone.color}`}>{displaySignal}</p>
           </div>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-1.5">
           {liveChgPct != null && (
-            <div className="text-center">
-              <p className={`text-lg font-black tabular-nums ${liveChgPct >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-                {liveChgPct > 0 ? '+' : ''}{liveChgPct.toFixed(2)}%
-              </p>
-              <p className="text-[8px] text-slate-500 uppercase tracking-wider">vs Open</p>
-            </div>
+            <span className={`inline-flex items-center rounded-md border px-2 py-1 text-[10px] font-black tabular-nums ${liveChgPct >= 0 ? 'text-emerald-300 border-emerald-500/35 bg-emerald-500/10' : 'text-red-300 border-red-500/35 bg-red-500/10'}`}>
+              Open {liveChgPct > 0 ? '+' : ''}{liveChgPct.toFixed(2)}%
+            </span>
           )}
-          <div className="text-center">
-            <p className={`text-lg font-black tabular-nums ${cfg.color}`}>{data.regimeScore?.toFixed(0) ?? '—'}</p>
-            <p className="text-[8px] text-slate-500 uppercase tracking-wider">Score</p>
-          </div>
+          <span className={`inline-flex items-center rounded-md border px-2 py-1 text-[10px] font-black tabular-nums ${cfg.color} ${cfg.border} ${cfg.bg}`}>
+            Score {data.regimeScore?.toFixed(0) ?? '—'}
+          </span>
           {data.directionStrength != null && data.directionStrength > 0 && (
-            <div className="text-center">
-              <p className={`text-sm font-bold tabular-nums ${dirColor}`}>{data.directionStrength.toFixed(0)}%</p>
-              <p className="text-[8px] text-slate-500 uppercase tracking-wider">Strength</p>
-            </div>
+            <span className={`inline-flex items-center rounded-md border px-2 py-1 text-[10px] font-black tabular-nums ${tone.color} ${tone.bg}`}>
+              Strength {data.directionStrength.toFixed(0)}%
+            </span>
           )}
         </div>
       </div>
 
       {/* Trending Day Badge */}
       <div className={`mb-3 px-3 py-2 rounded-xl ${data.isTrendingDay ? 'bg-gradient-to-r from-emerald-900/30 to-emerald-800/20 border border-emerald-500/30' : 'bg-gradient-to-r from-amber-900/20 to-amber-800/10 border border-amber-500/20'}`}>
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div className="flex items-center gap-2 min-w-0">
             <span className="text-lg">{data.isTrendingDay ? '🔥' : '➖'}</span>
             <div>
               <p className={`text-xs font-black ${data.isTrendingDay ? 'text-emerald-300' : 'text-amber-400'}`}>
@@ -307,9 +257,8 @@ const RegimeCard = memo<{
               </p>
             </div>
           </div>
-          <div className={`text-right px-2 py-1 rounded-lg ${dirBg} border`}>
-            <p className={`text-xs font-black ${dirColor}`}>{dirArrow} {displayDir}</p>
-            <p className="text-[8px] text-slate-500">Trend dir</p>
+          <div className={`px-2 py-1 rounded-lg ${tone.bg} border`}>
+            <p className={`text-xs font-black ${tone.color}`}>{tone.arrow} {displaySignal}</p>
           </div>
         </div>
       </div>
@@ -360,35 +309,6 @@ const RegimeCard = memo<{
         </div>
       )}
 
-      {/* Factor Breakdown — collapsed by default */}
-      <div className="rounded-xl bg-slate-800/40 border border-slate-700/30 p-2.5">
-        <button
-          type="button"
-          onClick={() => {
-            const el = document.getElementById(`factors-${data.symbol}`);
-            if (el) el.classList.toggle('hidden');
-            const chevron = document.getElementById(`chevron-${data.symbol}`);
-            if (chevron) chevron.classList.toggle('rotate-90');
-          }}
-          className="flex items-center gap-1.5 w-full text-left cursor-pointer hover:opacity-80 transition-opacity"
-        >
-          <span className="text-xs">🔍</span>
-          <span className="text-[10px] sm:text-xs font-bold text-slate-300">Factor Breakdown (10 Signals)</span>
-          <svg id={`chevron-${data.symbol}`} className="w-3 h-3 text-slate-400 ml-auto transition-transform duration-200" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" /></svg>
-        </button>
-        <div id={`factors-${data.symbol}`} className="hidden mt-2">
-          {factors.map(([name, f]) => (
-            <FactorRow
-              key={name}
-              name={name}
-              score={f.score}
-              label={f.label}
-              signal={f.signal}
-              weight={f.weight}
-            />
-          ))}
-        </div>
-      </div>
     </div>
   );
 });
@@ -433,7 +353,6 @@ const MarketRegimeIntelligence = memo<{
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-3 sm:mb-4">
         <SectionTitle
           title="Today's Market Regime"
-          subtitle="10-Factor Regime Engine · Trending vs Sideways · Trade Approach · Real-time Scoring"
           accentColor={sectionAccent}
         />
       </div>

@@ -146,6 +146,7 @@ IVGauge.displayName = 'IVGauge';
 // ── Edge Card (one per index) ───────────────────────────────────────────────
 
 const EdgeCard = memo<{ data: EdgeIndex | null; name: string }>(({ data, name }) => {
+  const [isExpanded, setIsExpanded] = useState(false);
   const [showScoringEngine, setShowScoringEngine] = useState(false);
   if (!data) {
     return (
@@ -232,42 +233,76 @@ const EdgeCard = memo<{ data: EdgeIndex | null; name: string }>(({ data, name })
         </div>
       </div>
 
-      {/* OI Profile Badge */}
-      <div className={`flex items-center justify-between rounded-lg ${profileCfg.bg} px-2.5 py-1.5 mb-3 ${
-        data.oiProfile === 'LONG_BUILDUP' ? 'border-2 border-emerald-400/70 shadow-[0_0_10px_rgba(16,185,129,0.35)]' :
-        data.oiProfile === 'SHORT_BUILDUP' ? 'border-2 border-red-400/70 shadow-[0_0_10px_rgba(239,68,68,0.35)]' :
-        'border border-slate-700/30'
-      }`}>
-        <div className="flex items-center gap-2">
-          <span className="text-xs">{profileCfg.icon}</span>
-          <span className={`text-[10px] sm:text-xs font-bold ${profileCfg.color} ${data.oiProfile === 'LONG_BUILDUP' || data.oiProfile === 'SHORT_BUILDUP' ? dirHl : ''}`}>
-            {profileCfg.label}
-          </span>
-        </div>
-        <span className={`text-[10px] font-mono ${m.changePct >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-          {m.changePct >= 0 ? '+' : ''}{m.changePct.toFixed(2)}%
-        </span>
-      </div>
-
-      {/* OI Spurts Alert */}
-      {data.signals.oi_spurts.extra && (data.signals.oi_spurts.extra as Record<string, number>).peakSpurt >= 1.5 && (
-        <div className={`rounded-lg border p-2 mb-3 ${data.signals.oi_spurts.score > 0 ? 'bg-emerald-500/10 border-emerald-400/40' : data.signals.oi_spurts.score < 0 ? 'bg-red-500/10 border-red-400/40' : 'bg-amber-500/10 border-amber-400/40'}`}>
-          <div className="flex items-center gap-1.5">
-            <span className="text-sm">🔥</span>
-            <span className={`text-[10px] sm:text-xs font-bold ${data.signals.oi_spurts.score > 0 ? 'text-emerald-300' : data.signals.oi_spurts.score < 0 ? 'text-red-300' : 'text-amber-300'}`}>
-              OI SPURT DETECTED — {((data.signals.oi_spurts.extra as Record<string, number>).peakSpurt).toFixed(1)}x above average
-            </span>
+      <button
+        type="button"
+        onClick={() => setIsExpanded(v => !v)}
+        className="w-full flex items-center justify-between rounded-lg border border-slate-700/35 bg-slate-800/35 px-3 py-2 mb-3 text-left transition-colors duration-150 hover:bg-slate-800/50"
+      >
+        <div className="min-w-0">
+          <div className="text-[9px] font-semibold uppercase tracking-[0.18em] text-slate-500">Edge Details</div>
+          <div className="mt-0.5 text-[10px] font-medium text-slate-300">
+            {isExpanded ? 'Expanded view' : 'Collapsed by default to save space'}
           </div>
-          <p className="text-[9px] text-slate-400 mt-0.5 ml-6">{data.signals.oi_spurts.label}</p>
+        </div>
+        <span className="shrink-0 text-[10px] font-bold text-slate-400">{isExpanded ? 'Hide' : 'Show'}</span>
+      </button>
+
+      {!isExpanded && (
+        <div className="grid grid-cols-3 gap-1.5 mb-3">
+          <div className="rounded-lg bg-slate-800/40 border border-slate-700/20 p-1.5 text-center">
+            <span className="text-[9px] text-slate-500 block">IV Rank</span>
+            <span className="text-xs font-bold font-mono text-amber-400">{m.ivRank.toFixed(0)}</span>
+          </div>
+          <div className="rounded-lg bg-slate-800/40 border border-slate-700/20 p-1.5 text-center">
+            <span className="text-[9px] text-slate-500 block">Bias</span>
+            <span className={`text-xs font-bold ${data.direction === 'BULLISH' ? 'text-emerald-400' : data.direction === 'BEARISH' ? 'text-red-400' : 'text-slate-400'}`}>{data.direction}</span>
+          </div>
+          <div className="rounded-lg bg-slate-800/40 border border-slate-700/20 p-1.5 text-center">
+            <span className="text-[9px] text-slate-500 block">Score</span>
+            <span className={`text-xs font-bold font-mono ${data.rawScore > 0 ? 'text-emerald-400' : data.rawScore < 0 ? 'text-red-400' : 'text-slate-400'}`}>{data.rawScore > 0 ? '+' : ''}{data.rawScore.toFixed(3)}</span>
+          </div>
         </div>
       )}
 
-      {/* IV + IV Rank Section */}
-      <IVGauge ivRank={m.ivRank} ivPercentile={m.ivPercentile} ivEst={m.ivEstimate} vix={m.vix} />
+      {isExpanded && (
+        <>
 
-      {/* Futures Section */}
-      {fut.price > 0 && (
-        <div className="rounded-lg bg-slate-800/50 border border-slate-600/30 p-2.5 mt-3">
+        {/* OI Profile Badge */}
+        <div className={`flex items-center justify-between rounded-lg ${profileCfg.bg} px-2.5 py-1.5 mb-3 ${
+          data.oiProfile === 'LONG_BUILDUP' ? 'border-2 border-emerald-400/70 shadow-[0_0_10px_rgba(16,185,129,0.35)]' :
+          data.oiProfile === 'SHORT_BUILDUP' ? 'border-2 border-red-400/70 shadow-[0_0_10px_rgba(239,68,68,0.35)]' :
+          'border border-slate-700/30'
+        }`}>
+          <div className="flex items-center gap-2">
+            <span className="text-xs">{profileCfg.icon}</span>
+            <span className={`text-[10px] sm:text-xs font-bold ${profileCfg.color} ${data.oiProfile === 'LONG_BUILDUP' || data.oiProfile === 'SHORT_BUILDUP' ? dirHl : ''}`}>
+              {profileCfg.label}
+            </span>
+          </div>
+          <span className={`text-[10px] font-mono ${m.changePct >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+            {m.changePct >= 0 ? '+' : ''}{m.changePct.toFixed(2)}%
+          </span>
+        </div>
+
+        {/* OI Spurts Alert */}
+        {data.signals.oi_spurts.extra && (data.signals.oi_spurts.extra as Record<string, number>).peakSpurt >= 1.5 && (
+          <div className={`rounded-lg border p-2 mb-3 ${data.signals.oi_spurts.score > 0 ? 'bg-emerald-500/10 border-emerald-400/40' : data.signals.oi_spurts.score < 0 ? 'bg-red-500/10 border-red-400/40' : 'bg-amber-500/10 border-amber-400/40'}`}>
+            <div className="flex items-center gap-1.5">
+              <span className="text-sm">🔥</span>
+              <span className={`text-[10px] sm:text-xs font-bold ${data.signals.oi_spurts.score > 0 ? 'text-emerald-300' : data.signals.oi_spurts.score < 0 ? 'text-red-300' : 'text-amber-300'}`}>
+                OI SPURT DETECTED — {((data.signals.oi_spurts.extra as Record<string, number>).peakSpurt).toFixed(1)}x above average
+              </span>
+            </div>
+            <p className="text-[9px] text-slate-400 mt-0.5 ml-6">{data.signals.oi_spurts.label}</p>
+          </div>
+        )}
+
+        {/* IV + IV Rank Section */}
+        <IVGauge ivRank={m.ivRank} ivPercentile={m.ivPercentile} ivEst={m.ivEstimate} vix={m.vix} />
+
+        {/* Futures Section */}
+        {fut.price > 0 && (
+          <div className="rounded-lg bg-slate-800/50 border border-slate-600/30 p-2.5 mt-3">
           <div className="flex items-center gap-1.5 mb-2">
             <span className="text-xs">📈</span>
             <span className="text-[10px] sm:text-xs font-bold text-white">Futures — {fut.contractName || 'Near Month'}</span>
@@ -300,11 +335,11 @@ const EdgeCard = memo<{ data: EdgeIndex | null; name: string }>(({ data, name })
               <span className="text-[10px] sm:text-xs font-mono font-bold text-purple-400">{formatNumber(fut.volume)}</span>
             </div>
           </div>
-        </div>
-      )}
+          </div>
+        )}
 
-      {/* Key Metrics Grid */}
-      <div className="grid grid-cols-3 gap-1.5 mt-3 mb-3">
+        {/* Key Metrics Grid */}
+        <div className="grid grid-cols-3 gap-1.5 mt-3 mb-3">
         <div className="rounded-lg bg-slate-800/40 border border-slate-700/20 p-1.5 text-center">
           <span className="text-[9px] text-slate-500 block">Total OI</span>
           <span className="text-xs font-bold font-mono text-cyan-400">{formatNumber(m.totalOI)}</span>
@@ -317,10 +352,10 @@ const EdgeCard = memo<{ data: EdgeIndex | null; name: string }>(({ data, name })
           <span className="text-[9px] text-slate-500 block">Put OI</span>
           <span className="text-xs font-bold font-mono text-emerald-400">{formatNumber(m.putOI)}</span>
         </div>
-      </div>
+        </div>
 
-      {/* Intelligence strip */}
-      <div className="rounded-lg bg-slate-800/30 border border-slate-700/20 p-2.5 mb-3 space-y-2">
+        {/* Intelligence strip */}
+        <div className="rounded-lg bg-slate-800/30 border border-slate-700/20 p-2.5 mb-3 space-y-2">
         <div className="flex items-center justify-between gap-2">
           <span className="text-[9px] text-slate-500 uppercase tracking-wider font-semibold">Signal Confluence</span>
           <span className={`text-[10px] font-bold ${
@@ -358,10 +393,10 @@ const EdgeCard = memo<{ data: EdgeIndex | null; name: string }>(({ data, name })
             </div>
           </div>
         )}
-      </div>
+        </div>
 
-      {/* 6-Signal Breakdown (collapsed by default) */}
-      <div className="rounded-lg bg-slate-800/30 border border-slate-700/20 p-2.5">
+        {/* 6-Signal Breakdown (collapsed by default) */}
+        <div className="rounded-lg bg-slate-800/30 border border-slate-700/20 p-2.5">
         <button
           type="button"
           onClick={() => setShowScoringEngine(v => !v)}
@@ -383,7 +418,9 @@ const EdgeCard = memo<{ data: EdgeIndex | null; name: string }>(({ data, name })
             ))}
           </div>
         )}
-      </div>
+        </div>
+        </>
+      )}
     </div>
   );
 });
@@ -404,7 +441,6 @@ const MarketEdgeIntelligence = memo(() => {
       <div className="flex flex-col gap-1 mb-3 sm:mb-4">
         <SectionTitle
           title="MarketEdge Intelligence"
-          subtitle="OI Spurts × Live Momentum × IV + IV Rank × Futures OI × Futures Basis • 6-Factor Derivatives Engine"
           accentColor="teal"
           badge={
             <span className="relative inline-flex items-center px-2 py-0.5 text-[9px] font-bold bg-gradient-to-r from-teal-600/80 to-cyan-600/80 rounded-md shadow-lg border border-teal-400/30 whitespace-nowrap leading-none">

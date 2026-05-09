@@ -182,6 +182,7 @@ function computePrediction(d: VolumePulseData): Prediction {
 }
 
 const VolumePulseCard = memo<VolumePulseCardProps>(({ symbol, name }) => {
+  const [isExpanded, setIsExpanded] = useState(false);
   const [data,    setData]    = useState<VolumePulseData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error,   setError]   = useState<string | null>(null);
@@ -372,6 +373,44 @@ const VolumePulseCard = memo<VolumePulseCardProps>(({ symbol, name }) => {
           </div>
           <p className="text-[10px] text-gray-400 mt-0.5 leading-tight">{sig.subtext}</p>
         </div>
+
+        <button
+          type="button"
+          onClick={() => setIsExpanded(v => !v)}
+          className="w-full flex items-center justify-between rounded-lg border border-slate-700/35 bg-slate-800/35 px-3 py-2 text-left transition-colors duration-150 hover:bg-slate-800/50"
+        >
+          <div className="min-w-0">
+            <div className="text-[9px] font-semibold uppercase tracking-[0.18em] text-slate-500">Volume Pulse Details</div>
+            <div className="mt-0.5 text-[10px] font-medium text-slate-300">
+              {isExpanded ? 'Expanded view' : 'Collapsed by default to save space'}
+            </div>
+          </div>
+          <span className="shrink-0 text-[10px] font-bold text-slate-400">{isExpanded ? 'Hide' : 'Show'}</span>
+        </button>
+
+        {!isExpanded && (
+          <div className="grid grid-cols-2 gap-2">
+            <div className="rounded-lg bg-slate-800/35 border border-slate-700/25 p-2">
+              <div className="text-[8px] text-slate-500 uppercase tracking-wider font-semibold">Signal Confidence</div>
+              <div className={`mt-0.5 text-[11px] font-bold ${sig.color}`}>{conf}%</div>
+            </div>
+            <div className="rounded-lg bg-slate-800/35 border border-slate-700/25 p-2">
+              <div className="text-[8px] text-slate-500 uppercase tracking-wider font-semibold">Buying Pressure</div>
+              <div className={`mt-0.5 text-[11px] font-bold ${pulse >= 50 ? 'text-emerald-400' : 'text-red-400'}`}>{pulse}%</div>
+            </div>
+            <div className="rounded-lg bg-slate-800/35 border border-slate-700/25 p-2">
+              <div className="text-[8px] text-slate-500 uppercase tracking-wider font-semibold">Buy/Sell Ratio</div>
+              <div className={`mt-0.5 text-[11px] font-bold ${vd.ratio > 1.2 ? 'text-emerald-400' : vd.ratio < 0.85 ? 'text-red-400' : 'text-amber-400'}`}>{vd.ratio === 999 ? '∞' : vd.ratio.toFixed(2)}</div>
+            </div>
+            <div className="rounded-lg bg-slate-800/35 border border-slate-700/25 p-2">
+              <div className="text-[8px] text-slate-500 uppercase tracking-wider font-semibold">5M Prediction</div>
+              <div className={`mt-0.5 text-[11px] font-bold ${pred.color}`}>{pred.icon} {pred.label}</div>
+            </div>
+          </div>
+        )}
+
+        {isExpanded && (
+          <>
 
         {/* ─── SIGNAL CONFIDENCE — highlight when conf≥63 ──────────────── */}
         <div className={`rounded-lg ${vpHl(sigBull, sigBear)}`}>
@@ -691,6 +730,9 @@ const VolumePulseCard = memo<VolumePulseCardProps>(({ symbol, name }) => {
             );
           })()}
         </div>
+
+          </>
+        )}
 
       </div>
 

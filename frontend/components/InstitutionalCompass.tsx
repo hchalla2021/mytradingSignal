@@ -348,6 +348,7 @@ const FACTOR_ORDER = [
 ] as const;
 
 const IndexCompassCard = memo(({ data }: IndexCardProps) => {
+  const [isExpanded, setIsExpanded] = useState(false);
   const [showBreakdown, setShowBreakdown] = useState(false);
   const pal = getPalette(data.direction);
 
@@ -483,14 +484,48 @@ const IndexCompassCard = memo(({ data }: IndexCardProps) => {
         />
       </div>
 
-      {/* ── 5-min Forecast — sharp highlight when BUY+/SELL+ ────────────── */}
-      <div ref={predBadgeRef} className={`rounded-xl bg-slate-900/50 border px-4 py-3 space-y-3 ${
-        pred5mBull ? 'imc-section-hl-bull' : pred5mBear ? 'imc-section-hl-bear' : 'border-slate-700/40'
-      }`}>
-        <div>
-          <p className="text-[11px] font-bold text-slate-400 uppercase tracking-widest mb-2">5-Min Prediction</p>
-          <p className="text-[9px] text-slate-600">EMA · RSI · VWAP · Premium</p>
+      <button
+        type="button"
+        onClick={() => setIsExpanded(v => !v)}
+        className="w-full flex items-center justify-between rounded-xl border border-slate-700/40 bg-slate-900/35 px-3 py-1.5 text-left"
+      >
+        <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Details</span>
+        <span className="text-[10px] text-slate-500">{isExpanded ? 'Hide' : 'Show'}</span>
+      </button>
+
+      {!isExpanded && (
+        <div className="rounded-xl bg-slate-900/45 border border-slate-700/35 px-3 py-2">
+          <div className="grid grid-cols-3 gap-2">
+            <div className="rounded-md bg-slate-800/40 border border-slate-700/30 px-2 py-1 text-center">
+              <p className="text-[8px] uppercase tracking-wider text-slate-500">5m Pred</p>
+              <p className={`text-[10px] font-bold ${pred5mBull ? 'text-emerald-400' : pred5mBear ? 'text-red-400' : 'text-amber-400'}`}>
+                {PRED5M_CONF[pred5m]?.label ?? 'Neutral'}
+              </p>
+            </div>
+            <div className="rounded-md bg-slate-800/40 border border-slate-700/30 px-2 py-1 text-center">
+              <p className="text-[8px] uppercase tracking-wider text-slate-500">Premium</p>
+              <p className={`text-[10px] font-bold ${premExpanding ? 'text-emerald-400' : premContracting ? 'text-red-400' : 'text-amber-400'}`}>
+                {data.futures.premiumTrend}
+              </p>
+            </div>
+            <div className="rounded-md bg-slate-800/40 border border-slate-700/30 px-2 py-1 text-center">
+              <p className="text-[8px] uppercase tracking-wider text-slate-500">Score</p>
+              <p className={`text-[10px] font-bold ${pal.text}`}>{data.rawScore >= 0 ? '+' : ''}{data.rawScore.toFixed(3)}</p>
+            </div>
+          </div>
         </div>
+      )}
+
+      {isExpanded && (
+        <>
+          {/* ── 5-min Forecast — sharp highlight when BUY+/SELL+ ────────────── */}
+          <div ref={predBadgeRef} className={`rounded-xl bg-slate-900/50 border px-4 py-3 space-y-3 ${
+            pred5mBull ? 'imc-section-hl-bull' : pred5mBear ? 'imc-section-hl-bear' : 'border-slate-700/40'
+          }`}>
+            <div>
+              <p className="text-[11px] font-bold text-slate-400 uppercase tracking-widest mb-2">5-Min Prediction</p>
+              <p className="text-[9px] text-slate-600">EMA · RSI · VWAP · Premium</p>
+            </div>
 
         {/* Dual Confidence Comparison */}
         <div className="grid grid-cols-2 gap-2">
@@ -653,50 +688,52 @@ const IndexCompassCard = memo(({ data }: IndexCardProps) => {
             </span>
           </div>
         )}
-      </div>
-
-      {/* ── Key Indicators — Premium sharp highlight ─────────────────── */}
-      <IndicatorsStrip data={data} premHighlight={
-        premExpanding && isBullDir ? 'bull' : premContracting && isBearDir ? 'bear' : null
-      } />
-
-      {/* ── Signal Breakdown — sharp highlight when core 3 agree ──────────── */}
-      <div className={`rounded-xl bg-slate-900/40 border overflow-hidden ${
-        core3Bull ? 'imc-section-hl-bull' : core3Bear ? 'imc-section-hl-bear' : 'border-slate-700/40'
-      }`}>
-        <button
-          onClick={() => setShowBreakdown(v => !v)}
-          className="w-full flex items-center justify-between px-3 py-1.5
-                     bg-slate-800/50 hover:bg-slate-700/50 transition-colors"
-        >
-          <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
-            Signal Breakdown (6 Factors)
-          </span>
-          <span className="text-[10px] text-slate-500">{showBreakdown ? '▲' : '▼'}</span>
-        </button>
-
-        {showBreakdown && (
-          <div className="px-3 pb-2">
-            {FACTOR_ORDER.map(key => {
-              const factor = (data.signals as any)[key] as SignalFactor | undefined;
-              if (!factor) return null;
-              return <SignalRow key={key} factorKey={key} factor={factor} />;
-            })}
-            {/* Weighted total */}
-            <div className="flex items-center justify-between mt-2 pt-1.5 border-t border-slate-700/40">
-              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
-                Weighted Score
-              </span>
-              <span className={`text-xs font-bold tabular-nums imc-val ${pal.text}`}>
-                {data.rawScore >= 0 ? '+' : ''}{data.rawScore.toFixed(4)}
-              </span>
-            </div>
           </div>
-        )}
-      </div>
 
-      {/* ── Futures table ────────────────────────────────────────────────── */}
-      <FuturesTable data={data} />
+          {/* ── Key Indicators — Premium sharp highlight ─────────────────── */}
+          <IndicatorsStrip data={data} premHighlight={
+            premExpanding && isBullDir ? 'bull' : premContracting && isBearDir ? 'bear' : null
+          } />
+
+          {/* ── Signal Breakdown — sharp highlight when core 3 agree ──────────── */}
+          <div className={`rounded-xl bg-slate-900/40 border overflow-hidden ${
+            core3Bull ? 'imc-section-hl-bull' : core3Bear ? 'imc-section-hl-bear' : 'border-slate-700/40'
+          }`}>
+            <button
+              onClick={() => setShowBreakdown(v => !v)}
+              className="w-full flex items-center justify-between px-3 py-1.5
+                         bg-slate-800/50 hover:bg-slate-700/50 transition-colors"
+            >
+              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                Signal Breakdown (6 Factors)
+              </span>
+              <span className="text-[10px] text-slate-500">{showBreakdown ? '▲' : '▼'}</span>
+            </button>
+
+            {showBreakdown && (
+              <div className="px-3 pb-2">
+                {FACTOR_ORDER.map(key => {
+                  const factor = (data.signals as any)[key] as SignalFactor | undefined;
+                  if (!factor) return null;
+                  return <SignalRow key={key} factorKey={key} factor={factor} />;
+                })}
+                {/* Weighted total */}
+                <div className="flex items-center justify-between mt-2 pt-1.5 border-t border-slate-700/40">
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                    Weighted Score
+                  </span>
+                  <span className={`text-xs font-bold tabular-nums imc-val ${pal.text}`}>
+                    {data.rawScore >= 0 ? '+' : ''}{data.rawScore.toFixed(4)}
+                  </span>
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* ── Futures table ────────────────────────────────────────────────── */}
+          <FuturesTable data={data} />
+        </>
+      )}
     </div>
   );
 });
@@ -805,12 +842,6 @@ export const InstitutionalCompass = memo(() => {
               {headerBadge.label}
             </span>
           </div>
-          <p className="text-[11px] sm:text-xs text-blue-300 opacity-80 mt-1.5 ml-[15px] sm:ml-[17px] font-semibold tracking-wide leading-relaxed">
-            AI-Powered Index &amp; Futures Direction Engine
-            <span className="ml-1.5 sm:ml-2 text-[10px] sm:text-[11px] text-blue-400/70 font-medium">
-              VWAP · EMA · Swing · Futures Premium · RSI · Volume
-            </span>
-          </p>
           </div>
         </div>
         <div className="flex flex-col items-end gap-1.5 shrink-0">

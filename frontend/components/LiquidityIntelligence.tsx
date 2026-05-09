@@ -219,6 +219,7 @@ function pcrHex(pcr: number | null): string {
 // ── Index card ────────────────────────────────────────────────────────────────
 
 const IndexCard = memo(({ data }: { data: LiquidityIndex | null }) => {
+  const [isExpanded, setIsExpanded] = useState(false);
   const [showLiquiditySignals, setShowLiquiditySignals] = useState(false);
   // ── Skeleton ──────────────────────────────────────────────────────────────
   if (!data) {
@@ -319,177 +320,204 @@ const IndexCard = memo(({ data }: { data: LiquidityIndex | null }) => {
           </div>
         </div>
 
-        {/* Confidence bar */}
-        <ConfidenceBar confidence={data.confidence} barColor={pal.bar} />
-
-        {/* ── PCR + OI section ─────────────────────────────────────────────── */}
-        <div className="rounded-lg bg-slate-800/50 border border-slate-700/30 px-3 py-2 space-y-2">
-          {/* PCR value + label */}
-          <div className="flex items-center justify-between">
-            <span className="text-[9px] text-slate-500 uppercase tracking-wider font-semibold">
-              Put-Call Ratio
-            </span>
-            <div className="flex items-center gap-1.5">
-              <span className={`text-sm font-black font-mono ${pcrColor(pcr)}`}>
-                {fmtPCR(pcr)}
-              </span>
-              <span className={`text-[9px] font-semibold ${pcrColor(pcr)}`}>
-                {pcrLabel(pcr)}
-              </span>
+        <button
+          type="button"
+          onClick={() => setIsExpanded(v => !v)}
+          className="w-full flex items-center justify-between rounded-lg border border-slate-700/35 bg-slate-800/35 px-3 py-2 text-left transition-colors duration-150 hover:bg-slate-800/50"
+        >
+          <div className="min-w-0">
+            <div className="text-[9px] font-semibold uppercase tracking-[0.18em] text-slate-500">Liquidity Details</div>
+            <div className="mt-0.5 text-[10px] font-medium text-slate-300">
+              {isExpanded ? 'Expanded view' : 'Collapsed by default to save space'}
             </div>
           </div>
+          <span className="shrink-0 text-[10px] font-bold text-slate-400">{isExpanded ? 'Hide' : 'Show'}</span>
+        </button>
 
-          {/* PCR gauge — visual position on bear→bull spectrum */}
-          {pcr && pcr > 0 && (
-            <div>
-              <div className="relative h-[6px] rounded-full bg-gradient-to-r from-red-600/50 via-slate-600/50 to-cyan-500/50">
-                {([
-                  { val: 0.5, c: '#ef4444' }, { val: 0.8, c: '#f97316' },
-                  { val: 1.0, c: '#64748b' }, { val: 1.3, c: '#22d3ee' }, { val: 1.6, c: '#06b6d4' },
-                ] as Array<{ val: number; c: string }>).map(t => (
-                  <div key={t.val} className="absolute top-0 w-px h-full opacity-60"
-                    style={{ left: `${Math.max(2, Math.min(98, ((t.val - pcrMin) / (pcrMax - pcrMin)) * 100))}%`, backgroundColor: t.c }} />
-                ))}
-                <div className="absolute -top-[2px] w-[6px] h-[10px] rounded-sm z-10"
-                  style={{ left: `calc(${pcrTickPct}% - 3px)`, backgroundColor: pcrTickColor }} />
-              </div>
-              <div className="flex justify-between text-[7px] mt-0.5">
-                <span className="text-red-500/60">Bear 0.5</span>
-                <span className="text-slate-500/60">Neutral 1.0</span>
-                <span className="text-cyan-500/60">Bull 1.6</span>
-              </div>
-            </div>
-          )}
-
-          {/* PUT / CALL OI split bar */}
-          {oiTotal > 0 && (
-            <div>
-              <div className="flex items-center justify-between text-[8px] mb-1">
-                <span className="text-cyan-400/80 font-semibold">PUT {fmtOI(putOI)}</span>
-                <span className="text-slate-600 text-[7px] uppercase tracking-wider">OI Split</span>
-                <span className="text-orange-400/80 font-semibold">CALL {fmtOI(callOI)}</span>
-              </div>
-              <div className="flex h-5 rounded overflow-hidden">
-                <div className="flex items-center justify-center bg-cyan-600/35 transition-all duration-500"
-                  style={{ width: `${putPct}%` }}>
-                  <span className="text-[8px] font-bold text-cyan-200 px-1">{putPct}%</span>
-                </div>
-                <div className="flex items-center justify-center bg-orange-600/35 transition-all duration-500"
-                  style={{ width: `${callPct}%` }}>
-                  <span className="text-[8px] font-bold text-orange-200 px-1">{callPct}%</span>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* VWAP deviation */}
-          {data.metrics.vwapDev != null && (
-            <div className="flex items-center gap-2 text-[9px]">
-              <span className="text-slate-500 uppercase tracking-wider">VWAP Dev</span>
-              <span className={`font-semibold ${data.metrics.vwapDev >= 0 ? 'text-cyan-400' : 'text-orange-400'}`}>
-                {data.metrics.vwapDev >= 0 ? '+' : ''}{data.metrics.vwapDev.toFixed(2)}%
-              </span>
-            </div>
-          )}
-        </div>
-
-        {/* ── 5-Min prediction ─────────────────────────────────────────────── */}
-        <div className="rounded-lg bg-slate-800/60 border border-slate-700/30 px-3 py-2.5 space-y-2">
-          <div className="flex items-center justify-between">
-            <div>
-              <div className="text-[9px] text-slate-500 uppercase tracking-widest font-semibold mb-1.5">
-                ⚡ 5-Min Prediction
-              </div>
-              <Pred5mBadge pred={data.prediction5m} />
-            </div>
-            <div className="flex flex-col items-end gap-1">
-              <span className="text-[15px] font-black text-white tabular-nums">
-                {data.pred5mConf}%
-              </span>
-              <span className="text-[8px] text-slate-500 leading-none">CONFIDENCE</span>
-              <div className="w-16 h-1.5 rounded-full bg-slate-700/50 overflow-hidden mt-0.5">
-                <div
-                  className={`h-full rounded-full transition-all duration-300 ${
-                    data.prediction5m === 'STRONG_BUY'  ? 'bg-emerald-400' :
-                    data.prediction5m === 'BUY'         ? 'bg-cyan-400' :
-                    data.prediction5m === 'STRONG_SELL' ? 'bg-red-400' :
-                    data.prediction5m === 'SELL'        ? 'bg-orange-400' :
-                                                          'bg-slate-500'
-                  }`}
-                  style={{ width: `${data.pred5mConf}%` }}
-                />
-              </div>
-            </div>
+        {!isExpanded && (
+          <div className="grid grid-cols-3 gap-1.5">
+            <MetricPill label="PCR" value={fmtPCR(pcr)} />
+            <MetricPill label="VWAP Dev" value={data.metrics.vwapDev != null ? `${data.metrics.vwapDev >= 0 ? '+' : ''}${data.metrics.vwapDev.toFixed(2)}%` : '—'} />
+            <MetricPill label="5M" value={`${data.pred5mConf}%`} />
           </div>
+        )}
 
-          {/* Movement probability — sigmoid transform of rawScore for honest probability */}
-          <div>
-            <div className="flex items-center justify-between mb-1">
-              <span className="text-[8px] text-slate-500 uppercase tracking-wider font-semibold">Movement Probability</span>
-              {highConviction && (
-                <span className="text-[8px] font-bold text-amber-400">⚡ High Conviction</span>
+        {isExpanded && (
+          <>
+
+            {/* Confidence bar */}
+            <ConfidenceBar confidence={data.confidence} barColor={pal.bar} />
+
+            {/* ── PCR + OI section ─────────────────────────────────────────────── */}
+            <div className="rounded-lg bg-slate-800/50 border border-slate-700/30 px-3 py-2 space-y-2">
+              {/* PCR value + label */}
+              <div className="flex items-center justify-between">
+                <span className="text-[9px] text-slate-500 uppercase tracking-wider font-semibold">
+                  Put-Call Ratio
+                </span>
+                <div className="flex items-center gap-1.5">
+                  <span className={`text-sm font-black font-mono ${pcrColor(pcr)}`}>
+                    {fmtPCR(pcr)}
+                  </span>
+                  <span className={`text-[9px] font-semibold ${pcrColor(pcr)}`}>
+                    {pcrLabel(pcr)}
+                  </span>
+                </div>
+              </div>
+
+              {/* PCR gauge — visual position on bear→bull spectrum */}
+              {pcr && pcr > 0 && (
+                <div>
+                  <div className="relative h-[6px] rounded-full bg-gradient-to-r from-red-600/50 via-slate-600/50 to-cyan-500/50">
+                    {([
+                      { val: 0.5, c: '#ef4444' }, { val: 0.8, c: '#f97316' },
+                      { val: 1.0, c: '#64748b' }, { val: 1.3, c: '#22d3ee' }, { val: 1.6, c: '#06b6d4' },
+                    ] as Array<{ val: number; c: string }>).map(t => (
+                      <div key={t.val} className="absolute top-0 w-px h-full opacity-60"
+                        style={{ left: `${Math.max(2, Math.min(98, ((t.val - pcrMin) / (pcrMax - pcrMin)) * 100))}%`, backgroundColor: t.c }} />
+                    ))}
+                    <div className="absolute -top-[2px] w-[6px] h-[10px] rounded-sm z-10"
+                      style={{ left: `calc(${pcrTickPct}% - 3px)`, backgroundColor: pcrTickColor }} />
+                  </div>
+                  <div className="flex justify-between text-[7px] mt-0.5">
+                    <span className="text-red-500/60">Bear 0.5</span>
+                    <span className="text-slate-500/60">Neutral 1.0</span>
+                    <span className="text-cyan-500/60">Bull 1.6</span>
+                  </div>
+                </div>
+              )}
+
+              {/* PUT / CALL OI split bar */}
+              {oiTotal > 0 && (
+                <div>
+                  <div className="flex items-center justify-between text-[8px] mb-1">
+                    <span className="text-cyan-400/80 font-semibold">PUT {fmtOI(putOI)}</span>
+                    <span className="text-slate-600 text-[7px] uppercase tracking-wider">OI Split</span>
+                    <span className="text-orange-400/80 font-semibold">CALL {fmtOI(callOI)}</span>
+                  </div>
+                  <div className="flex h-5 rounded overflow-hidden">
+                    <div className="flex items-center justify-center bg-cyan-600/35 transition-all duration-500"
+                      style={{ width: `${putPct}%` }}>
+                      <span className="text-[8px] font-bold text-cyan-200 px-1">{putPct}%</span>
+                    </div>
+                    <div className="flex items-center justify-center bg-orange-600/35 transition-all duration-500"
+                      style={{ width: `${callPct}%` }}>
+                      <span className="text-[8px] font-bold text-orange-200 px-1">{callPct}%</span>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* VWAP deviation */}
+              {data.metrics.vwapDev != null && (
+                <div className="flex items-center gap-2 text-[9px]">
+                  <span className="text-slate-500 uppercase tracking-wider">VWAP Dev</span>
+                  <span className={`font-semibold ${data.metrics.vwapDev >= 0 ? 'text-cyan-400' : 'text-orange-400'}`}>
+                    {data.metrics.vwapDev >= 0 ? '+' : ''}{data.metrics.vwapDev.toFixed(2)}%
+                  </span>
+                </div>
               )}
             </div>
-            <div className="flex h-6 rounded overflow-hidden bg-slate-950/50 border border-slate-700/30">
-              <div
-                className="h-full bg-gradient-to-r from-cyan-600 to-cyan-500 transition-all duration-300 flex items-center justify-center"
-                style={{ width: `${bullProbPct}%` }}
-              >
-                <span className="text-[8px] font-bold text-white px-1 truncate">{bullProbPct}%↑</span>
+
+            {/* ── 5-Min prediction ─────────────────────────────────────────────── */}
+            <div className="rounded-lg bg-slate-800/60 border border-slate-700/30 px-3 py-2.5 space-y-2">
+              <div className="flex items-center justify-between">
+                <div>
+                  <div className="text-[9px] text-slate-500 uppercase tracking-widest font-semibold mb-1.5">
+                    ⚡ 5-Min Prediction
+                  </div>
+                  <Pred5mBadge pred={data.prediction5m} />
+                </div>
+                <div className="flex flex-col items-end gap-1">
+                  <span className="text-[15px] font-black text-white tabular-nums">
+                    {data.pred5mConf}%
+                  </span>
+                  <span className="text-[8px] text-slate-500 leading-none">CONFIDENCE</span>
+                  <div className="w-16 h-1.5 rounded-full bg-slate-700/50 overflow-hidden mt-0.5">
+                    <div
+                      className={`h-full rounded-full transition-all duration-300 ${
+                        data.prediction5m === 'STRONG_BUY'  ? 'bg-emerald-400' :
+                        data.prediction5m === 'BUY'         ? 'bg-cyan-400' :
+                        data.prediction5m === 'STRONG_SELL' ? 'bg-red-400' :
+                        data.prediction5m === 'SELL'        ? 'bg-orange-400' :
+                                                              'bg-slate-500'
+                      }`}
+                      style={{ width: `${data.pred5mConf}%` }}
+                    />
+                  </div>
+                </div>
               </div>
-              <div
-                className="h-full bg-gradient-to-l from-orange-600 to-orange-500 transition-all duration-300 flex items-center justify-center"
-                style={{ width: `${bearProbPct}%` }}
-              >
-                <span className="text-[8px] font-bold text-white px-1 truncate">{bearProbPct}%↓</span>
+
+              {/* Movement probability — sigmoid transform of rawScore for honest probability */}
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-[8px] text-slate-500 uppercase tracking-wider font-semibold">Movement Probability</span>
+                  {highConviction && (
+                    <span className="text-[8px] font-bold text-amber-400">⚡ High Conviction</span>
+                  )}
+                </div>
+                <div className="flex h-6 rounded overflow-hidden bg-slate-950/50 border border-slate-700/30">
+                  <div
+                    className="h-full bg-gradient-to-r from-cyan-600 to-cyan-500 transition-all duration-300 flex items-center justify-center"
+                    style={{ width: `${bullProbPct}%` }}
+                  >
+                    <span className="text-[8px] font-bold text-white px-1 truncate">{bullProbPct}%↑</span>
+                  </div>
+                  <div
+                    className="h-full bg-gradient-to-l from-orange-600 to-orange-500 transition-all duration-300 flex items-center justify-center"
+                    style={{ width: `${bearProbPct}%` }}
+                  >
+                    <span className="text-[8px] font-bold text-white px-1 truncate">{bearProbPct}%↓</span>
+                  </div>
+                </div>
               </div>
-            </div>
-          </div>
 
-          {/* Signal confluence — shown only when ≥3 of 4 signals agree */}
-          {confluenceMax >= 3 && (
-            <div className="flex items-center gap-1.5">
-              <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[9px] font-bold border ${
-                confluenceDir === 'BULL'
-                  ? 'bg-cyan-500/15 text-cyan-300 border-cyan-500/30'
-                  : 'bg-orange-500/15 text-orange-300 border-orange-500/30'
-              }`}>
-                {confluenceMax}/4 {confluenceDir === 'BULL' ? '▲' : '▼'} ALIGNED
-              </span>
-              <span className="text-[8px] text-slate-500">
-                {confluenceMax === 4 ? 'all signals agree' : '3 of 4 agree'}
-              </span>
+              {/* Signal confluence — shown only when ≥3 of 4 signals agree */}
+              {confluenceMax >= 3 && (
+                <div className="flex items-center gap-1.5">
+                  <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded text-[9px] font-bold border ${
+                    confluenceDir === 'BULL'
+                      ? 'bg-cyan-500/15 text-cyan-300 border-cyan-500/30'
+                      : 'bg-orange-500/15 text-orange-300 border-orange-500/30'
+                  }`}>
+                    {confluenceMax}/4 {confluenceDir === 'BULL' ? '▲' : '▼'} ALIGNED
+                  </span>
+                  <span className="text-[8px] text-slate-500">
+                    {confluenceMax === 4 ? 'all signals agree' : '3 of 4 agree'}
+                  </span>
+                </div>
+              )}
             </div>
-          )}
-        </div>
 
-        {/* ── 4-Signal breakdown (collapsed by default) ───────────────────── */}
-        <div className="rounded-lg bg-slate-800/40 border border-slate-700/25 px-3 py-2">
-          <button
-            type="button"
-            onClick={() => setShowLiquiditySignals(v => !v)}
-            className="w-full flex items-center justify-between text-left"
-          >
-            <span className="text-[9px] text-slate-600 uppercase tracking-widest font-semibold">
-              Liquidity Signals
-            </span>
-            <span className="text-[10px] text-slate-500">{showLiquiditySignals ? 'Hide' : 'Show'}</span>
-          </button>
-          {showLiquiditySignals && (
-            <div className="mt-1">
-              {signalOrder.map(key => (
-                <SignalRow key={key} factorKey={key} factor={data.signals[key]} />
-              ))}
+            {/* ── 4-Signal breakdown (collapsed by default) ───────────────────── */}
+            <div className="rounded-lg bg-slate-800/40 border border-slate-700/25 px-3 py-2">
+              <button
+                type="button"
+                onClick={() => setShowLiquiditySignals(v => !v)}
+                className="w-full flex items-center justify-between text-left"
+              >
+                <span className="text-[9px] text-slate-600 uppercase tracking-widest font-semibold">
+                  Liquidity Signals
+                </span>
+                <span className="text-[10px] text-slate-500">{showLiquiditySignals ? 'Hide' : 'Show'}</span>
+              </button>
+              {showLiquiditySignals && (
+                <div className="mt-1">
+                  {signalOrder.map(key => (
+                    <SignalRow key={key} factorKey={key} factor={data.signals[key]} />
+                  ))}
+                </div>
+              )}
             </div>
-          )}
-        </div>
 
-        {/* ── Metrics row ─────────────────────────────────────────────────── */}
-        <div className="grid grid-cols-3 gap-1.5">
-          <MetricPill label="EMA9" value={data.metrics.ema9 != null ? data.metrics.ema9.toFixed(0) : '—'} />
-          <MetricPill label="EMA20" value={data.metrics.ema20 != null ? data.metrics.ema20.toFixed(0) : '—'} />
-          <MetricPill label="VWAP"  value={data.metrics.vwap  != null ? data.metrics.vwap.toFixed(0)  : '—'} />
-        </div>
+            {/* ── Metrics row ─────────────────────────────────────────────────── */}
+            <div className="grid grid-cols-3 gap-1.5">
+              <MetricPill label="EMA9" value={data.metrics.ema9 != null ? data.metrics.ema9.toFixed(0) : '—'} />
+              <MetricPill label="EMA20" value={data.metrics.ema20 != null ? data.metrics.ema20.toFixed(0) : '—'} />
+              <MetricPill label="VWAP"  value={data.metrics.vwap  != null ? data.metrics.vwap.toFixed(0)  : '—'} />
+            </div>
+          </>
+        )}
 
       </div>
     </div>

@@ -13,6 +13,8 @@ export interface StrikeSubSignals {
   liq: 'BSL' | 'SSL' | null;
   /** BOS: structural breakout direction detected at/near ATM */
   bos: 'UP' | 'DOWN' | null;
+  /** Advanced strike-level price action state from CE/PE premium behavior */
+  advPriceAction?: 'IMPULSE_CONTINUATION' | 'OPPOSITE_WEAKNESS' | 'VOL_EXPANSION_NO_EDGE' | 'OTM_EXHAUSTION' | null;
   /** Black-Scholes delta (0→1 CE, -1→0 PE); BS analytical when IV solved, else synthetic */
   delta: number;
   /** Trap: high volume but price not moving in that direction = absorption */

@@ -1,6 +1,6 @@
 'use client';
 
-import React, { memo, useMemo } from 'react';
+import React, { memo, useMemo, useState } from 'react';
 import { useTrendBaseRealtime } from '@/hooks/useTrendBaseRealtime';
 
 // ─── Signal config (module-level, never recreated) ──────────────────────────
@@ -29,6 +29,7 @@ function fmt(n: number)   { return n.toLocaleString('en-IN', { maximumFractionDi
 
 // ─── Component ──────────────────────────────────────────────────────────────
 const TrendBaseCard = memo<{ symbol: string; name: string }>(({ symbol, name }) => {
+  const [isExpanded, setIsExpanded] = useState(false);
   const { data, loading, error, flash, refetch } = useTrendBaseRealtime(symbol);
 
   // All hooks must be called before any early returns
@@ -154,6 +155,46 @@ const TrendBaseCard = memo<{ symbol: string; name: string }>(({ symbol, name }) 
           </div>
         </div>
 
+        <button
+          type="button"
+          onClick={() => setIsExpanded(v => !v)}
+          className="w-full flex items-center justify-between rounded-lg border border-slate-700/35 bg-slate-800/35 px-3 py-2 text-left transition-colors duration-150 hover:bg-slate-800/50"
+        >
+          <div className="min-w-0">
+            <div className="text-[9px] font-semibold uppercase tracking-[0.18em] text-slate-500">Trend Details</div>
+            <div className="mt-0.5 text-[10px] font-medium text-slate-300">
+              {isExpanded ? 'Expanded view' : 'Collapsed by default to save space'}
+            </div>
+          </div>
+          <span className="shrink-0 text-[10px] font-bold text-slate-400">{isExpanded ? 'Hide' : 'Show'}</span>
+        </button>
+
+        {!isExpanded && (
+          <div className="grid grid-cols-2 gap-2">
+            <div className="bg-slate-800/30 border border-slate-700/30 rounded-lg px-2.5 py-2">
+              <div className="text-[8px] text-slate-500 font-bold uppercase tracking-wider mb-0.5">Structure</div>
+              <div className={`text-[11px] font-bold ${structColor}`}>{structLabel}</div>
+            </div>
+            <div className="bg-slate-800/30 border border-slate-700/30 rounded-lg px-2.5 py-2">
+              <div className="text-[8px] text-slate-500 font-bold uppercase tracking-wider mb-0.5">5m Signal</div>
+              <div className={`text-[11px] font-bold ${dir5Color}`}>{dir5Icon} {sig5m}</div>
+            </div>
+            <div className="bg-slate-800/30 border border-slate-700/30 rounded-lg px-2.5 py-2">
+              <div className="text-[8px] text-slate-500 font-bold uppercase tracking-wider mb-0.5">Total Score</div>
+              <div className={`text-[11px] font-bold ${(data.total_score ?? 0) > 0 ? 'text-emerald-400' : (data.total_score ?? 0) < 0 ? 'text-red-400' : 'text-amber-400'}`}>
+                {(data.total_score ?? 0) > 0 ? '+' : ''}{data.total_score ?? 0}/100
+              </div>
+            </div>
+            <div className="bg-slate-800/30 border border-slate-700/30 rounded-lg px-2.5 py-2">
+              <div className="text-[8px] text-slate-500 font-bold uppercase tracking-wider mb-0.5">5m Confidence</div>
+              <div className={`text-[11px] font-bold ${dir5Color}`}>{conf5}%</div>
+            </div>
+          </div>
+        )}
+
+        {isExpanded && (
+          <>
+
         {/* ── STRUCTURE + TIMEFRAMES ─────────────────────────────────── */}
         <div className="grid grid-cols-3 gap-2">
           <div className="bg-slate-800/30 border border-slate-700/30 rounded-lg px-2.5 py-2">
@@ -263,6 +304,8 @@ const TrendBaseCard = memo<{ symbol: string; name: string }>(({ symbol, name }) 
             </div>
           </div>
         </div>
+          </>
+        )}
       </div>
 
       {/* ── FOOTER ────────────────────────────────────────────────────── */}

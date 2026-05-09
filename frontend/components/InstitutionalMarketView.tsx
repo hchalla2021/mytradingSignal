@@ -580,6 +580,7 @@ SignalBadge.displayName = 'SignalBadge';
 
 // INDIVIDUAL ORDER FLOW CARD — STABLE LAYOUT
 const OrderFlowCard = memo(({ symbol, data, isLoading }: OrderFlowCardProps) => {
+  const [isExpanded, setIsExpanded] = React.useState(false);
   // ── Hysteresis for buyer/seller dominance ──
   // Prevents flickering when values oscillate near 50%.
   // Once a side is dominant, the OTHER side must exceed 52% to flip.
@@ -645,6 +646,50 @@ const OrderFlowCard = memo(({ symbol, data, isLoading }: OrderFlowCardProps) => 
           {new Date(data.timestamp).toLocaleTimeString()}
         </div>
       </div>
+
+      <button
+        type="button"
+        onClick={() => setIsExpanded(v => !v)}
+        className="w-full flex items-center justify-between rounded-lg border border-gray-700/50 bg-gray-800/40 px-3 py-2 mb-3 text-left transition-colors duration-150 hover:bg-gray-800/60"
+      >
+        <div className="min-w-0">
+          <div className="text-[9px] font-semibold uppercase tracking-[0.18em] text-gray-500">Order Logic Details</div>
+          <div className="mt-0.5 text-[10px] font-medium text-gray-300">
+            {isExpanded ? 'Expanded view' : 'Collapsed by default to save space'}
+          </div>
+        </div>
+        <span className="shrink-0 text-[10px] font-bold text-gray-400">{isExpanded ? 'Hide' : 'Show'}</span>
+      </button>
+
+      {!isExpanded && (
+        <div className="grid grid-cols-2 gap-2 mb-3 text-xs">
+          <div className="rounded bg-gray-800/40 border border-gray-700/40 p-2 text-center">
+            <div className="text-gray-500">Signal</div>
+            <div className="font-semibold" style={{ color: SIGNAL_COLORS[data.signal as keyof typeof SIGNAL_COLORS] || '#cbd5e1' }}>
+              {data.signal.replace(/_/g, ' ')}
+            </div>
+          </div>
+          <div className="rounded bg-gray-800/40 border border-gray-700/40 p-2 text-center">
+            <div className="text-gray-500">Delta</div>
+            <div className={`font-semibold ${data.delta > 0 ? 'text-green-400' : data.delta < 0 ? 'text-red-400' : 'text-gray-400'}`}>
+              {data.delta > 0 ? '+' : ''}{data.delta.toFixed(0)}
+            </div>
+          </div>
+          <div className="rounded bg-gray-800/40 border border-gray-700/40 p-2 text-center">
+            <div className="text-gray-500">Confidence</div>
+            <div className="font-semibold text-yellow-400">{(data.signalConfidence * 100).toFixed(0)}%</div>
+          </div>
+          <div className="rounded bg-gray-800/40 border border-gray-700/40 p-2 text-center">
+            <div className="text-gray-500">5M Pred</div>
+            <div className="font-semibold" style={{ color: SIGNAL_COLORS[(smPred?.direction ?? 'HOLD') as keyof typeof SIGNAL_COLORS] || '#cbd5e1' }}>
+              {smPred?.direction ?? 'NEUTRAL'}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {isExpanded && (
+        <>
       
       {/* Signal + Bid/Ask Info */}
       <div className="grid grid-cols-2 gap-3 mb-4">
@@ -715,6 +760,8 @@ const OrderFlowCard = memo(({ symbol, data, isLoading }: OrderFlowCardProps) => 
         <div>Imbalance: {(data.liquidityImbalance * 100).toFixed(2)}%</div>
         <div>Spread %: {data.spreadPct.toFixed(4)}%</div>
       </div>
+      </>
+      )}
     </div>
   );
 });
