@@ -439,20 +439,6 @@ export default function Home() {
     return niftyRegime ?? aggregatedMarketSignal.NIFTY.signal;
   }, [regimeData, regimeToFiveState, aggregatedMarketSignal]);
 
-  const overallStrikeSignal = useMemo(() => {
-    if (!strikeIntelData?.NIFTY?.intelligence?.signal) return null;
-    const strikeSig = strikeIntelData.NIFTY.intelligence.signal;
-    if (strikeSig === 'STRONG_BUY' || strikeSig === 'BUY' || strikeSig === 'NEUTRAL' || strikeSig === 'SELL' || strikeSig === 'STRONG_SELL') {
-      return strikeSig;
-    }
-    return null;
-  }, [strikeIntelData]);
-
-  const overallChartSignal = useMemo(() => {
-    const candles = chartIntelData?.NIFTY?.candles5m ?? null;
-    return chartToFiveState(candles);
-  }, [chartIntelData, chartToFiveState]);
-
   // Determine market status from actual data, with client-side IST fallback
   // so the UI never shows "MARKET CLOSED" when the Indian market is actually open
   const marketStatus = useMemo(() => {

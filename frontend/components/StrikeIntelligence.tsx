@@ -456,7 +456,7 @@ TradeActionBanner.displayName = 'TradeActionBanner';
 // Weaker signals (BUY, SELL, NEUTRAL) are hidden to reduce noise
 //
 
-const SideCell = memo<{ side: StrikeSideData; label: 'CE' | 'PE'; volDominant: boolean; oiDominant: boolean; isATM: boolean; symbolKey: SymbolKey; isRecommended?: boolean; displayVolume?: number; displaySignalOverride?: StrikeSignal }>(({ side, label, volDominant, oiDominant, isATM, symbolKey, isRecommended = false, displayVolume, displaySignalOverride }) => {
+const SideCell = memo<{ side: StrikeSideData; label: 'CE' | 'PE'; volDominant: boolean; oiDominant: boolean; isATM: boolean; symbolKey: SymbolKey; displayVolume?: number; displaySignalOverride?: StrikeSignal }>(({ side, label, volDominant, oiDominant, isATM, symbolKey, displayVolume, displaySignalOverride }) => {
   const isCE = label === 'CE';
   const displayVolumeSafe = Math.max(0, displayVolume ?? side.volume);
 
@@ -516,7 +516,6 @@ const SideCell = memo<{ side: StrikeSideData; label: 'CE' | 'PE'; volDominant: b
   const sellPct = Math.round(side.breakdown.sellPct);
   const oiChg   = side.oiChange ?? 0;
   const oiInterp = sigs?.oiInterp;
-  const trap     = sigs?.trap;
   const advPA    = sigs?.advPriceAction;
   const rules    = CONVICTION_RULES_BY_SYMBOL[symbolKey];
 
@@ -553,16 +552,6 @@ const SideCell = memo<{ side: StrikeSideData; label: 'CE' | 'PE'; volDominant: b
       : isActive
         ? (isCE ? 'border-2 border-emerald-600/40' : 'border-2 border-red-600/40')
         : 'border-2 border-slate-700/30');
-
-  // Price: glow+color on conviction, bright on active — font size FIXED to avoid layout reflow
-  const priceChangeColor = side.change >= 0 ? 'text-emerald-400' : 'text-red-400';
-  const priceCls = isFullConviction
-    ? (isCE
-        ? 'text-emerald-100 text-[13px] sm:text-[15px] font-black drop-shadow-[0_0_8px_rgba(52,211,153,0.9)] tabular-nums'
-        : 'text-red-100 text-[13px] sm:text-[15px] font-black drop-shadow-[0_0_8px_rgba(239,68,68,0.9)] tabular-nums')
-    : isActive
-      ? (isCE ? 'text-emerald-200 text-[13px] sm:text-[15px] font-black tabular-nums' : 'text-red-200 text-[13px] sm:text-[15px] font-black tabular-nums')
-      : 'text-slate-100 text-[13px] sm:text-[15px] font-semibold font-mono tabular-nums';
 
   // ── OI Change label (highlighted when significant) ───────────────────
   const oiChgAbs = Math.abs(oiChg);
@@ -750,7 +739,7 @@ SideCell.displayName = 'SideCell';
 
 // Strike Row
 
-const StrikeRowComponent = memo<{ row: StrikeRow; maxVol: number; maxOI: number; symbolKey: SymbolKey; isRecommended?: boolean }>(({ row, maxVol, maxOI, symbolKey, isRecommended = false }) => {
+const StrikeRowComponent = memo<{ row: StrikeRow; maxVol: number; maxOI: number; symbolKey: SymbolKey }>(({ row, maxVol, maxOI, symbolKey }) => {
   const isATM = row.isATM;
   const ceDisplayVol = Math.max(0, row.ce.volume);
   const peDisplayVol = Math.max(0, row.pe.volume);
@@ -823,7 +812,7 @@ const StrikeRowComponent = memo<{ row: StrikeRow; maxVol: number; maxOI: number;
     } hover:bg-white/[0.025]`} style={{ overflow: 'visible' }}>
       {/* CE box with light background */}
       <div className="bg-slate-900/30 border border-slate-500/90 rounded-lg overflow-hidden flex-1 min-w-0">
-        <SideCell side={row.ce} label="CE" volDominant={ceDisplayVol > peDisplayVol} oiDominant={row.ce.oi > row.pe.oi} isATM={isATM} symbolKey={symbolKey} isRecommended={isRecommended} displayVolume={ceDisplayVol} displaySignalOverride={buyerDisplaySignals.ce} />
+        <SideCell side={row.ce} label="CE" volDominant={ceDisplayVol > peDisplayVol} oiDominant={row.ce.oi > row.pe.oi} isATM={isATM} symbolKey={symbolKey} displayVolume={ceDisplayVol} displaySignalOverride={buyerDisplaySignals.ce} />
       </div>
 
       {/* Strike center */}
@@ -939,7 +928,7 @@ const StrikeRowComponent = memo<{ row: StrikeRow; maxVol: number; maxOI: number;
 
       {/* PE box with light background */}
       <div className="bg-slate-900/30 border border-slate-500/90 rounded-lg overflow-hidden flex-1 min-w-0">
-        <SideCell side={row.pe} label="PE" volDominant={peDisplayVol > ceDisplayVol} oiDominant={row.pe.oi > row.ce.oi} isATM={isATM} symbolKey={symbolKey} isRecommended={isRecommended} displayVolume={peDisplayVol} displaySignalOverride={buyerDisplaySignals.pe} />
+        <SideCell side={row.pe} label="PE" volDominant={peDisplayVol > ceDisplayVol} oiDominant={row.pe.oi > row.ce.oi} isATM={isATM} symbolKey={symbolKey} displayVolume={peDisplayVol} displaySignalOverride={buyerDisplaySignals.pe} />
       </div>
     </div>
   );
@@ -2126,7 +2115,6 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
             maxVol={maxVol} 
             maxOI={maxOI} 
             symbolKey={symbolKey}
-            isRecommended={intelligence?.bestStrike?.strike === row.strike}
           />
         ))}
       </div>

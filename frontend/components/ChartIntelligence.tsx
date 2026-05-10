@@ -10,7 +10,7 @@ import {
   type Liquidity,
   type ChartLevels,
 } from '@/hooks/useChartIntelligence';
-import { useMarketSocket, type MarketTick } from '@/hooks/useMarketSocket';
+import { useMarketSocket } from '@/hooks/useMarketSocket';
 
 // ── Chart constants ─────────────────────────────────────────────────────────
 
@@ -3607,7 +3607,7 @@ function computeChartSignal(
 
 // ── Symbol Chart Card ───────────────────────────────────────────────────────
 
-const SymbolChartCard = memo<{ data: SymbolChartData | null; name: string; liveSpot?: number; liveMarket?: MarketTick | null; forceChartHeight?: number; fullPage?: boolean }>(({ data, name, liveSpot, liveMarket, forceChartHeight, fullPage = false }) => {
+const SymbolChartCard = memo<{ data: SymbolChartData | null; name: string; liveSpot?: number; forceChartHeight?: number; fullPage?: boolean }>(({ data, name, liveSpot, forceChartHeight, fullPage = false }) => {
   const [timeframe, setTimeframe] = useState<'1h' | '15m' | '5m' | '3m'>('5m');
   const [isMaximized, setIsMaximized] = useState(false);
   const [modalMinimized, setModalMinimized] = useState(false);
@@ -4239,9 +4239,9 @@ const ChartIntelligence = memo(() => {
 
       {/* Chart Cards Grid */}
       <div className="grid grid-cols-1 xl:grid-cols-2 2xl:grid-cols-3 gap-3">
-        <SymbolChartCard data={chartData.NIFTY} name="NIFTY 50" liveSpot={marketData.NIFTY?.price} liveMarket={marketData.NIFTY} />
-        <SymbolChartCard data={chartData.BANKNIFTY} name="BANK NIFTY" liveSpot={marketData.BANKNIFTY?.price} liveMarket={marketData.BANKNIFTY} />
-        <SymbolChartCard data={chartData.SENSEX} name="SENSEX" liveSpot={marketData.SENSEX?.price} liveMarket={marketData.SENSEX} />
+        <SymbolChartCard data={chartData.NIFTY} name="NIFTY 50" liveSpot={marketData.NIFTY?.price} />
+        <SymbolChartCard data={chartData.BANKNIFTY} name="BANK NIFTY" liveSpot={marketData.BANKNIFTY?.price} />
+        <SymbolChartCard data={chartData.SENSEX} name="SENSEX" liveSpot={marketData.SENSEX?.price} />
       </div>
     </div>
   );
