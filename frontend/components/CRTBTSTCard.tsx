@@ -199,6 +199,7 @@ LevelRow.displayName = 'LevelRow';
 const CRTBTSTCard = memo<CRTBTSTCardProps>(({ symbol, name, data }) => {
   const [showKeyCrtLevels, setShowKeyCrtLevels] = useState(false);
   const [showCrt8Factor, setShowCrt8Factor] = useState(false);
+  const [showBtstTradeSetup, setShowBtstTradeSetup] = useState(false);
   const { analysis, isLive, fromCache, loading, flash, factorSummary } = useCRTBTSTRealtime(symbol, data);
 
   // ── Loading State ─────────────────────────────────────────────────
@@ -414,49 +415,61 @@ const CRTBTSTCard = memo<CRTBTSTCardProps>(({ symbol, name, data }) => {
         </div>
 
         {/* ── Trade Setup ──────────────────────────────────────────────── */}
-        <div className={`p-2.5 rounded-xl border ${sc.border} bg-slate-800/20`}>
-          <p className="text-[9px] text-slate-500 font-semibold tracking-widest uppercase mb-2">BTST Trade Setup</p>
-          <div className="grid grid-cols-2 gap-x-4 gap-y-1.5">
-            <div>
-              <span className="text-[9px] text-slate-500">Entry Window</span>
-              <p className="text-[11px] text-slate-200 font-semibold leading-tight">{btst.entryWindow}</p>
-            </div>
-            <div>
-              <span className="text-[9px] text-slate-500">Target Gap</span>
-              <p className={`text-[11px] font-semibold leading-tight ${
-                btst.signal.includes('BUY') ? 'text-emerald-300' : btst.signal.includes('SELL') ? 'text-red-300' : 'text-amber-300'
-              }`}>{btst.targetGap}</p>
-            </div>
-            <div>
-              <span className="text-[9px] text-slate-500">Stop Loss</span>
-              <p className="text-[11px] text-slate-200 font-semibold leading-tight">{btst.stopLoss}</p>
-            </div>
-            <div>
-              <span className="text-[9px] text-slate-500">Risk Level</span>
-              <p className={`text-[11px] font-bold leading-tight ${
-                btst.riskLevel === 'LOW' ? 'text-emerald-300' : btst.riskLevel === 'HIGH' ? 'text-red-300' : 'text-amber-300'
-              }`}>{btst.riskLevel}</p>
-            </div>
-          </div>
+        <div className={`rounded-xl border ${sc.border} bg-slate-800/20 overflow-hidden`}>
+          <button
+            type="button"
+            onClick={() => setShowBtstTradeSetup(v => !v)}
+            className="w-full flex items-center justify-between gap-2 px-2.5 py-2 text-left"
+          >
+            <p className="text-[9px] text-slate-500 font-semibold tracking-widest uppercase">BTST Trade Setup</p>
+            <span className="text-[10px] text-slate-500 font-bold">{showBtstTradeSetup ? 'HIDE' : 'SHOW'}</span>
+          </button>
 
-          {/* Additional reasoning */}
-          {btst.reasoning.length > 1 && (
-            <div className="mt-2 pt-2 border-t border-slate-700/30">
-              <p className="text-[9px] text-slate-500 font-semibold mb-1">Key Drivers:</p>
-              <ul className="space-y-0.5">
-                {btst.reasoning.slice(0, 3).map((r, i) => (
-                  <li key={i} className="text-[9px] text-slate-400 flex items-start gap-1">
-                    <span className={`mt-0.5 w-1 h-1 rounded-full flex-shrink-0 ${
-                      r.includes('↑') || r.includes('bullish') || r.includes('Bullish')
-                        ? 'bg-emerald-400'
-                        : r.includes('↓') || r.includes('bearish') || r.includes('Bearish')
-                          ? 'bg-red-400'
-                          : 'bg-slate-400'
-                    }`} />
-                    <span className="leading-tight">{r}</span>
-                  </li>
-                ))}
-              </ul>
+          {showBtstTradeSetup && (
+            <div className="px-2.5 pb-2.5">
+              <div className="grid grid-cols-2 gap-x-4 gap-y-1.5">
+                <div>
+                  <span className="text-[9px] text-slate-500">Entry Window</span>
+                  <p className="text-[11px] text-slate-200 font-semibold leading-tight">{btst.entryWindow}</p>
+                </div>
+                <div>
+                  <span className="text-[9px] text-slate-500">Target Gap</span>
+                  <p className={`text-[11px] font-semibold leading-tight ${
+                    btst.signal.includes('BUY') ? 'text-emerald-300' : btst.signal.includes('SELL') ? 'text-red-300' : 'text-amber-300'
+                  }`}>{btst.targetGap}</p>
+                </div>
+                <div>
+                  <span className="text-[9px] text-slate-500">Stop Loss</span>
+                  <p className="text-[11px] text-slate-200 font-semibold leading-tight">{btst.stopLoss}</p>
+                </div>
+                <div>
+                  <span className="text-[9px] text-slate-500">Risk Level</span>
+                  <p className={`text-[11px] font-bold leading-tight ${
+                    btst.riskLevel === 'LOW' ? 'text-emerald-300' : btst.riskLevel === 'HIGH' ? 'text-red-300' : 'text-amber-300'
+                  }`}>{btst.riskLevel}</p>
+                </div>
+              </div>
+
+              {/* Additional reasoning */}
+              {btst.reasoning.length > 1 && (
+                <div className="mt-2 pt-2 border-t border-slate-700/30">
+                  <p className="text-[9px] text-slate-500 font-semibold mb-1">Key Drivers:</p>
+                  <ul className="space-y-0.5">
+                    {btst.reasoning.slice(0, 3).map((r, i) => (
+                      <li key={i} className="text-[9px] text-slate-400 flex items-start gap-1">
+                        <span className={`mt-0.5 w-1 h-1 rounded-full flex-shrink-0 ${
+                          r.includes('↑') || r.includes('bullish') || r.includes('Bullish')
+                            ? 'bg-emerald-400'
+                            : r.includes('↓') || r.includes('bearish') || r.includes('Bearish')
+                              ? 'bg-red-400'
+                              : 'bg-slate-400'
+                        }`} />
+                        <span className="leading-tight">{r}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
             </div>
           )}
         </div>

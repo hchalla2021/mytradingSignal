@@ -11,7 +11,6 @@ import {
   type ChartLevels,
 } from '@/hooks/useChartIntelligence';
 import { useMarketSocket, type MarketTick } from '@/hooks/useMarketSocket';
-import { ZoneParticipants } from '@/components/ZoneParticipants';
 
 // ── Chart constants ─────────────────────────────────────────────────────────
 
@@ -4191,10 +4190,6 @@ const SymbolChartCard = memo<{ data: SymbolChartData | null; name: string; liveS
 
       </div>
 
-      {/* ── Zone Participant Intelligence ───────────────────────────────── */}
-      <div className="px-3 pb-3">
-        <ZoneParticipants data={data} liveSpot={liveSpot} liveMarket={liveMarket} symbol={name} />
-      </div>
     </div>
   );
 });

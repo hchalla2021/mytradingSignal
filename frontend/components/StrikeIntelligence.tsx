@@ -15,9 +15,9 @@ const SIGNAL_CONFIG: Record<StrikeSignal, {
 }> = {
   STRONG_BUY:  { label: 'STRONG BUY',  short: 'S.BUY',  color: 'text-emerald-300', bg: 'bg-emerald-500/20', border: 'border-emerald-400/50', glow: 'shadow-emerald-500/25' },
   BUY:         { label: 'BUY',          short: 'BUY  ',  color: 'text-emerald-400', bg: 'bg-emerald-500/10', border: 'border-emerald-400/30', glow: 'shadow-emerald-500/10' },
-  NEUTRAL:     { label: 'NEUTRAL',      short: 'HOLD ',  color: 'text-amber-400',   bg: 'bg-amber-500/10',   border: 'border-amber-400/30',   glow: 'shadow-amber-500/10'  },
-  SELL:        { label: 'SELL',         short: 'SELL ',  color: 'text-red-400',     bg: 'bg-red-500/10',     border: 'border-red-400/30',     glow: 'shadow-red-500/10'    },
-  STRONG_SELL: { label: 'STRONG SELL',  short: 'S.SEL',  color: 'text-red-300',     bg: 'bg-red-500/20',     border: 'border-red-400/50',     glow: 'shadow-red-500/25'    },
+  NEUTRAL:     { label: 'NEUTRAL',      short: 'NTRL',   color: 'text-amber-400',   bg: 'bg-amber-500/10',   border: 'border-amber-400/30',   glow: 'shadow-amber-500/10'  },
+  SELL:        { label: 'SELL',         short: 'S.SELL', color: 'text-red-400',     bg: 'bg-red-500/10',     border: 'border-red-400/30',     glow: 'shadow-red-500/10'    },
+  STRONG_SELL: { label: 'STRONG SELL',  short: 'S.SELL', color: 'text-red-300',     bg: 'bg-red-500/20',     border: 'border-red-400/50',     glow: 'shadow-red-500/25'    },
 };
 
 type OverallSignal = StrikeSignal;
@@ -180,6 +180,40 @@ function getHighConvictionSignal(side: StrikeSideData, symbolKey: SymbolKey): St
   return 'NEUTRAL';
 }
 
+function toBuyerPerspectiveSignal(signal: StrikeSignal): StrikeSignal {
+  if (signal === 'STRONG_BUY') return 'STRONG_BUY';
+  if (signal === 'BUY') return 'BUY';
+  return 'NEUTRAL';
+}
+
+function resolveBuyerDisplaySignals(
+  ceSide: StrikeSideData,
+  peSide: StrikeSideData,
+  symbolKey: SymbolKey,
+): { ce: StrikeSignal; pe: StrikeSignal } {
+  const ceConv = getHighConvictionSignal(ceSide, symbolKey);
+  const peConv = getHighConvictionSignal(peSide, symbolKey);
+
+  let ce = ceConv === 'STRONG_BUY' ? 'STRONG_BUY' : toBuyerPerspectiveSignal(ceSide.signal);
+  let pe = peConv === 'STRONG_BUY' ? 'STRONG_BUY' : toBuyerPerspectiveSignal(peSide.signal);
+
+  // Prevent both sides from simultaneously flashing STRONG BUY.
+  // If both are very close in strength, downgrade both to BUY.
+  if (ce === 'STRONG_BUY' && pe === 'STRONG_BUY') {
+    const scoreDiff = (ceSide.score ?? 0) - (peSide.score ?? 0);
+    if (Math.abs(scoreDiff) < 8) {
+      ce = 'BUY';
+      pe = 'BUY';
+    } else if (scoreDiff > 0) {
+      pe = 'BUY';
+    } else {
+      ce = 'BUY';
+    }
+  }
+
+  return { ce, pe };
+}
+
 // Primitives
 
 const SignalBadge = memo<{ signal: StrikeSignal; side: 'CE' | 'PE' }>(({ signal, side }) => {
@@ -189,16 +223,14 @@ const SignalBadge = memo<{ signal: StrikeSignal; side: 'CE' | 'PE' }>(({ signal,
   const isCE     = side === 'CE';
   const isBuy    = signal === 'STRONG_BUY' || signal === 'BUY';
   const isSell   = signal === 'STRONG_SELL' || signal === 'SELL';
-  const arrow    = isBuy  ? (isCE ? '↑' : '↓') : isSell ? (isCE ? '↓' : '↑') : '—';
-  const short    = side === 'CE' ? `C.${cfg.short}` : `P.${cfg.short}`;
+  const fullText = cfg.label;
   return (
     <span
       title={isCE
         ? (isBuy  ? 'CE is strong → market likely going UP → Buy CE (Call option)' : isSell ? 'CE is weak → market likely going DOWN → Buy PE instead' : 'CE neutral — no clear call signal')
         : (isBuy  ? 'PE is strong → market likely going DOWN → Buy PE (Put option)' : isSell ? 'PE is weak → market likely going UP → Buy CE instead' : 'PE neutral — no clear put signal')}
-      className={`inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded text-[10px] sm:text-[12px] font-bold tracking-wider ${cfg.bg} ${cfg.color} ${cfg.border} border shadow-sm ${cfg.glow} transition-colors duration-150`}>
-      <span className="text-[8px] leading-none">{arrow}</span>
-      {short}
+      className={`inline-flex items-center justify-center whitespace-nowrap px-1.5 sm:px-2 py-0.5 rounded text-[9px] sm:text-[11px] font-bold tracking-wide leading-none ${cfg.bg} ${cfg.color} ${cfg.border} border shadow-sm ${cfg.glow} transition-colors duration-150`}>
+      {fullText}
     </span>
   );
 });
@@ -424,7 +456,7 @@ TradeActionBanner.displayName = 'TradeActionBanner';
 // Weaker signals (BUY, SELL, NEUTRAL) are hidden to reduce noise
 //
 
-const SideCell = memo<{ side: StrikeSideData; label: 'CE' | 'PE'; volDominant: boolean; oiDominant: boolean; isATM: boolean; symbolKey: SymbolKey; isRecommended?: boolean; displayVolume?: number }>(({ side, label, volDominant, oiDominant, isATM, symbolKey, isRecommended = false, displayVolume }) => {
+const SideCell = memo<{ side: StrikeSideData; label: 'CE' | 'PE'; volDominant: boolean; oiDominant: boolean; isATM: boolean; symbolKey: SymbolKey; isRecommended?: boolean; displayVolume?: number; displaySignalOverride?: StrikeSignal }>(({ side, label, volDominant, oiDominant, isATM, symbolKey, isRecommended = false, displayVolume, displaySignalOverride }) => {
   const isCE = label === 'CE';
   const displayVolumeSafe = Math.max(0, displayVolume ?? side.volume);
 
@@ -468,7 +500,7 @@ const SideCell = memo<{ side: StrikeSideData; label: 'CE' | 'PE'; volDominant: b
     : 0;
 
   // Raw backend signal — all advanced factors, updates every 0.5s
-  const displaySignal    = side.signal;
+  const displaySignal    = displaySignalOverride ?? side.signal;
   // Conviction gate — only for checklist / glow
   const convictionSignal = getHighConvictionSignal(side, symbolKey);
   const isBuyable        = convictionSignal === 'STRONG_BUY';
@@ -626,24 +658,10 @@ const SideCell = memo<{ side: StrikeSideData; label: 'CE' | 'PE'; volDominant: b
         )}
       </div>
 
-      {/* ── ROW 1: Signal badge + Price + Change ─────────────────────── */}
-      <div className={`flex items-center ${isCE ? 'flex-row' : 'flex-row-reverse'} justify-between gap-0.5 sm:gap-0.5`}>
-        {/* Only show strong conviction signals */}
-        {(displaySignal === 'STRONG_BUY' || displaySignal === 'STRONG_SELL') && <SignalBadge signal={displaySignal} side={label} />}
-        {!(displaySignal === 'STRONG_BUY' || displaySignal === 'STRONG_SELL') && <div className="w-[30px] sm:w-[35px]" />}
-        <div className={`flex items-center gap-0.5 sm:gap-0.5 ${isCE ? 'justify-end' : 'justify-start'}`}>
-          <span className={`w-[52px] sm:w-[70px] text-right transition-all duration-200 px-0.5 sm:px-1.5 py-0.5 rounded-md whitespace-nowrap text-[13px] sm:text-[15px] tabular-nums ${priceCls} ${
-            isRecommended
-              ? (isCE
-                  ? 'bg-emerald-600/20 border border-emerald-500/50 shadow-[0_0_6px_1px_rgba(52,211,153,0.12)] sm:shadow-[0_0_8px_2px_rgba(52,211,153,0.15)]'
-                  : 'bg-red-600/20 border border-red-500/50 shadow-[0_0_6px_1px_rgba(239,68,68,0.12)] sm:shadow-[0_0_8px_2px_rgba(239,68,68,0.15)]')
-              : ''
-          }`}>
-            {side.price.toFixed(1 === Math.round(side.price) ? 0 : 1)}
-          </span>
-          <span className={`w-[44px] sm:w-[58px] text-right text-[10px] sm:text-[12px] font-mono font-bold shrink-0 tabular-nums truncate ${priceChangeColor}`}>
-            {side.change >= 0 ? '+' : ''}{side.change.toFixed(1)}
-          </span>
+      {/* ── ROW 1: Status only ───────────────────────────────────────── */}
+      <div className={`flex items-center ${isCE ? 'justify-start' : 'justify-end'} min-h-[20px]`}>
+        <div className={`${isCE ? 'text-left' : 'text-right'}`}>
+          <SignalBadge signal={toBuyerPerspectiveSignal(displaySignal === 'NEUTRAL' ? side.signal : displaySignal)} side={label} />
         </div>
       </div>
 
@@ -690,12 +708,7 @@ const SideCell = memo<{ side: StrikeSideData; label: 'CE' | 'PE'; volDominant: b
           </span>
         )}
 
-        {/* TRAP warning */}
-        {trap && (
-          <span className="font-black px-1 sm:px-1.5 py-0.5 rounded border leading-tight shrink-0 text-amber-200 bg-amber-500/25 border-amber-400/60 animate-pulse text-[9px] sm:text-[11px]">
-            ⚠
-          </span>
-        )}
+        {/* TRAP warning icon intentionally hidden */}
 
         {/* B%/S% flow — only when noteworthy */}
         {(buyPct >= 60 || sellPct >= 60) && (
@@ -749,6 +762,7 @@ const StrikeRowComponent = memo<{ row: StrikeRow; maxVol: number; maxOI: number;
   // Compute high-conviction signals at the row level for row-wide highlighting
   const ceConv = getHighConvictionSignal(row.ce, symbolKey);
   const peConv = getHighConvictionSignal(row.pe, symbolKey);
+  const buyerDisplaySignals = resolveBuyerDisplaySignals(row.ce, row.pe, symbolKey);
   const ceStrong = ceConv === 'STRONG_BUY' || ceConv === 'STRONG_SELL';
   const peStrong = peConv === 'STRONG_BUY' || peConv === 'STRONG_SELL';
 
@@ -804,20 +818,20 @@ const StrikeRowComponent = memo<{ row: StrikeRow; maxVol: number; maxOI: number;
     : null;
 
   return (
-    <div className={`flex items-stretch gap-0.5 sm:gap-1 rounded-lg transition-all duration-300 overflow-x-hidden ${rowBg} ${rowBorder} ${
+      <div className={`flex items-stretch gap-0.5 sm:gap-1 rounded-lg transition-all duration-300 overflow-x-visible ${rowBg} ${rowBorder} ${
       isATM ? 'ring-1 ring-cyan-300/25' : ''
     } hover:bg-white/[0.025]`} style={{ overflow: 'visible' }}>
       {/* CE box with light background */}
       <div className="bg-slate-900/30 border border-slate-500/90 rounded-lg overflow-hidden flex-1 min-w-0">
-        <SideCell side={row.ce} label="CE" volDominant={ceDisplayVol > peDisplayVol} oiDominant={row.ce.oi > row.pe.oi} isATM={isATM} symbolKey={symbolKey} isRecommended={isRecommended} displayVolume={ceDisplayVol} />
+        <SideCell side={row.ce} label="CE" volDominant={ceDisplayVol > peDisplayVol} oiDominant={row.ce.oi > row.pe.oi} isATM={isATM} symbolKey={symbolKey} isRecommended={isRecommended} displayVolume={ceDisplayVol} displaySignalOverride={buyerDisplaySignals.ce} />
       </div>
 
       {/* Strike center */}
-      <div className={`flex flex-col items-center justify-center gap-0.5 sm:gap-0.5 px-1 sm:px-1.5 py-1 sm:py-1.5 border-x shrink-0 ${
+      <div className={`flex flex-col items-center justify-center gap-0.5 sm:gap-0.5 px-0.5 sm:px-1.5 py-1 sm:py-1.5 border-x shrink-0 min-w-[88px] sm:min-w-0 ${
         ceStrong || peStrong ? 'bg-slate-900/80 border-slate-600/60' :
         isATM ? 'border-cyan-300/50 bg-cyan-400/[0.08]' : 'border-slate-700/40'
       }`}>
-        <span className={`${strikeNumberCls} text-[13px] sm:text-[16px] md:text-[18px] lg:text-[20px]`}>{row.strike.toLocaleString('en-IN')}</span>
+        <span className={`${strikeNumberCls} w-full text-center text-[13px] sm:text-[16px] md:text-[18px] lg:text-[20px] px-1 py-0.5 rounded border border-cyan-400/60 bg-slate-900/70`}>{row.strike.toLocaleString('en-IN')}</span>
         
         {/* CE and PE prices with divergence highlighting */}
         {(() => {
@@ -829,37 +843,74 @@ const StrikeRowComponent = memo<{ row: StrikeRow; maxVol: number; maxOI: number;
           const oiRatio = row.ce.oi / (row.pe.oi > 0 ? row.pe.oi : 1);
           const isVolDominant = volRatio > 2 || volRatio < 0.5;
           const isOIDominant = oiRatio > 2 || oiRatio < 0.5;
-          
+
+          const centerBoxCls = `rounded transition-all w-[92px] sm:w-[104px] ${
+            isDivergent || isVolDominant || isOIDominant
+              ? 'border-[1px] sm:border-[1.5px] bg-slate-900/60'
+              : 'border border-slate-700/20'
+          } ${
+            isDivergent ? (cePrice > pePrice
+              ? 'border-emerald-500/70 shadow-[0_0_6px_1px_rgba(52,211,153,0.2)] sm:shadow-[0_0_8px_2px_rgba(52,211,153,0.25)]'
+              : 'border-red-500/70 shadow-[0_0_6px_1px_rgba(239,68,68,0.2)] sm:shadow-[0_0_8px_2px_rgba(239,68,68,0.25)]')
+            : isVolDominant || isOIDominant
+            ? 'border-amber-500/60 shadow-[0_0_4px_0.5px_rgba(251,191,36,0.15)] sm:shadow-[0_0_6px_1px_rgba(251,191,36,0.2)]'
+            : 'border-slate-700/20'
+          }`;
+
           return (
-            <div className={`flex flex-col items-center gap-1 sm:gap-1.5 text-[9px] sm:text-[11px] md:text-[12px] font-mono font-black mt-0.5 sm:mt-0.5 px-1 sm:px-1.5 py-1 sm:py-1.5 rounded transition-all w-[68px] sm:w-[78px] ${
-              isDivergent || isVolDominant || isOIDominant
-                ? 'border-[1px] sm:border-[1.5px] bg-slate-900/60'
-                : 'border border-slate-700/20'
-            } ${
-              isDivergent ? (cePrice > pePrice
-                ? 'border-emerald-500/70 shadow-[0_0_6px_1px_rgba(52,211,153,0.2)] sm:shadow-[0_0_8px_2px_rgba(52,211,153,0.25)]'
-                : 'border-red-500/70 shadow-[0_0_6px_1px_rgba(239,68,68,0.2)] sm:shadow-[0_0_8px_2px_rgba(239,68,68,0.25)]')
-              : isVolDominant || isOIDominant
-              ? 'border-amber-500/60 shadow-[0_0_4px_0.5px_rgba(251,191,36,0.15)] sm:shadow-[0_0_6px_1px_rgba(251,191,36,0.2)]'
-              : 'border-slate-700/20'
-            }`}>
-              <span className={`w-[58px] text-center font-black tabular-nums text-[10px] sm:text-[12px] ${
-                ceConv === 'STRONG_BUY' ? 'text-emerald-300' :
-                ceConv === 'STRONG_SELL' ? 'text-red-300' :
-                cePrice > pePrice && isDivergent ? 'text-emerald-300' :
-                'text-slate-300'
-              }`}>
-                {cePrice.toFixed(1)}
-              </span>
-              <span className="text-slate-300 text-[9px] sm:text-[10px] leading-none font-bold">|</span>
-              <span className={`w-[58px] text-center font-black tabular-nums text-[10px] sm:text-[12px] ${
-                peConv === 'STRONG_BUY' ? 'text-red-300' :
-                peConv === 'STRONG_SELL' ? 'text-emerald-300' :
-                pePrice > cePrice && isDivergent ? 'text-red-300' :
-                'text-slate-300'
-              }`}>
-                {pePrice.toFixed(1)}
-              </span>
+            <div className={`mt-0.5 sm:mt-0.5 px-1 sm:px-1.5 py-1 sm:py-1.5 font-mono font-black text-[9px] sm:text-[11px] md:text-[12px] ${centerBoxCls}`}>
+              <div className="sm:hidden flex flex-col gap-1 min-w-[78px]">
+                <div className="flex flex-col items-stretch gap-0.5 min-w-0">
+                  <span className="min-w-0 text-center text-[9px] uppercase tracking-[0.18em] text-slate-400 whitespace-nowrap">CE</span>
+                  <span className={`w-full text-center tabular-nums text-[12px] leading-none px-1 py-0.5 rounded border ${
+                    ceConv === 'STRONG_BUY' ? 'text-emerald-300' :
+                    ceConv === 'STRONG_SELL' ? 'text-red-300' :
+                    cePrice > pePrice && isDivergent ? 'text-emerald-300' :
+                    'text-slate-300'
+                  } ${
+                    ceConv === 'STRONG_BUY' ? 'border-emerald-400/60 bg-emerald-500/10' :
+                    ceConv === 'STRONG_SELL' ? 'border-red-400/60 bg-red-500/10' :
+                    'border-slate-600/60 bg-slate-900/70'
+                  }`}>
+                    {cePrice.toFixed(1)}
+                  </span>
+                </div>
+                <div className="flex flex-col items-stretch gap-0.5 min-w-0">
+                  <span className="min-w-0 text-center text-[9px] uppercase tracking-[0.18em] text-slate-400 whitespace-nowrap">PE</span>
+                  <span className={`w-full text-center tabular-nums text-[12px] leading-none px-1 py-0.5 rounded border ${
+                    peConv === 'STRONG_BUY' ? 'text-red-300' :
+                    peConv === 'STRONG_SELL' ? 'text-emerald-300' :
+                    pePrice > cePrice && isDivergent ? 'text-red-300' :
+                    'text-slate-300'
+                  } ${
+                    peConv === 'STRONG_BUY' ? 'border-red-400/60 bg-red-500/10' :
+                    peConv === 'STRONG_SELL' ? 'border-emerald-400/60 bg-emerald-500/10' :
+                    'border-slate-600/60 bg-slate-900/70'
+                  }`}>
+                    {pePrice.toFixed(1)}
+                  </span>
+                </div>
+              </div>
+
+              <div className="hidden sm:flex items-center gap-1">
+                <span className={`flex-1 min-w-0 text-center font-black tabular-nums text-[9px] sm:text-[12px] ${
+                  ceConv === 'STRONG_BUY' ? 'text-emerald-300' :
+                  ceConv === 'STRONG_SELL' ? 'text-red-300' :
+                  cePrice > pePrice && isDivergent ? 'text-emerald-300' :
+                  'text-slate-300'
+                }`}>
+                  {cePrice.toFixed(1)}
+                </span>
+                <span className="text-slate-300 text-[9px] sm:text-[10px] leading-none font-bold">|</span>
+                <span className={`flex-1 min-w-0 text-center font-black tabular-nums text-[9px] sm:text-[12px] ${
+                  peConv === 'STRONG_BUY' ? 'text-red-300' :
+                  peConv === 'STRONG_SELL' ? 'text-emerald-300' :
+                  pePrice > cePrice && isDivergent ? 'text-red-300' :
+                  'text-slate-300'
+                }`}>
+                  {pePrice.toFixed(1)}
+                </span>
+              </div>
             </div>
           );
         })()}
@@ -888,7 +939,7 @@ const StrikeRowComponent = memo<{ row: StrikeRow; maxVol: number; maxOI: number;
 
       {/* PE box with light background */}
       <div className="bg-slate-900/30 border border-slate-500/90 rounded-lg overflow-hidden flex-1 min-w-0">
-        <SideCell side={row.pe} label="PE" volDominant={peDisplayVol > ceDisplayVol} oiDominant={row.pe.oi > row.ce.oi} isATM={isATM} symbolKey={symbolKey} isRecommended={isRecommended} displayVolume={peDisplayVol} />
+        <SideCell side={row.pe} label="PE" volDominant={peDisplayVol > ceDisplayVol} oiDominant={row.pe.oi > row.ce.oi} isATM={isATM} symbolKey={symbolKey} isRecommended={isRecommended} displayVolume={peDisplayVol} displaySignalOverride={buyerDisplaySignals.pe} />
       </div>
     </div>
   );
@@ -1872,7 +1923,7 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
                     <span className="text-[10px] sm:text-[11px] font-bold tracking-widest uppercase text-slate-300">Price Action</span>
                     {bothNeutral && (
                       <span className="text-[9px] font-bold bg-amber-500/20 text-amber-200 border border-amber-400/50 rounded px-1.5 py-0.5 whitespace-nowrap">
-                        ⚠ Wait
+                        Wait
                       </span>
                     )}
                   </div>
@@ -2039,7 +2090,7 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
       </div>
 
       {/* Strike table header (institutional compact layout) */}
-      <div className="rounded-t-lg overflow-hidden border border-slate-600/70 mb-2 bg-slate-900/70 shadow-[inset_0_0_0_1px_rgba(148,163,184,0.14)]">
+      <div className="-mx-1 sm:mx-0 rounded-t-lg overflow-hidden border border-slate-600/70 mb-2 bg-slate-900/70 shadow-[inset_0_0_0_1px_rgba(148,163,184,0.14)]">
         <div className="grid grid-cols-[minmax(0,1fr)_68px_52px_52px_minmax(0,1fr)] sm:grid-cols-[minmax(0,1fr)_92px_64px_64px_minmax(0,1fr)] items-center">
           <div className="flex items-center gap-1.5 px-2 sm:px-3 py-1.5 sm:py-2 bg-emerald-500/10 border-r border-slate-700/50 min-w-0">
             <span className="w-2 h-2 rounded-full bg-emerald-400 inline-block shrink-0" />
@@ -2059,15 +2110,15 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
             <span className="w-2 h-2 rounded-full bg-red-400 inline-block shrink-0" />
           </div>
         </div>
-        <div className="grid grid-cols-[1fr_92px_1fr] items-center border-t border-slate-700/40 bg-slate-900/40 text-[9px] sm:text-[11px]">
-          <div className="px-2 sm:px-3 py-1 text-slate-300 truncate">Signal | Price | V | OI | PA</div>
-          <div className="px-1 py-1 text-center text-slate-200 font-semibold">Core Strike Metrics</div>
-          <div className="px-2 sm:px-3 py-1 text-right text-slate-300 truncate">PA | OI | V | Price | Signal</div>
+        <div className="grid grid-cols-[minmax(0,1fr)_minmax(76px,92px)_minmax(0,1fr)] items-center border-t border-slate-700/40 bg-slate-900/40 text-[8px] sm:text-[11px]">
+          <div className="px-2 sm:px-3 py-1 text-slate-300 truncate leading-tight">Signal | Price | V | OI | PA</div>
+          <div className="px-1 py-1 text-center text-slate-200 font-semibold leading-tight whitespace-nowrap">Core Strike Metrics</div>
+          <div className="px-2 sm:px-3 py-1 text-right text-slate-300 truncate leading-tight">PA | OI | V | Price | Signal</div>
         </div>
       </div>
 
       {/* Strike rows */}
-      <div className="flex flex-col gap-2.5 sm:gap-1.5 md:gap-1">
+      <div className="-mx-1 sm:mx-0 flex flex-col gap-2.5 sm:gap-1.5 md:gap-1">
         {data.strikes.map(row => (
           <StrikeRowComponent 
             key={row.strike} 

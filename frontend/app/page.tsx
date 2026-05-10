@@ -569,24 +569,6 @@ export default function Home() {
               loading={vixLoading}
             />
             <div className="flex items-center gap-2 ml-auto">
-              <span className={`hidden xl:inline text-[9px] font-black px-2 py-0.5 rounded border tracking-wider ${
-                overallChartSignal === 'STRONG_BUY' || overallChartSignal === 'BUY'
-                  ? 'text-teal-300 border-teal-400/30 bg-teal-500/15'
-                  : overallChartSignal === 'STRONG_SELL' || overallChartSignal === 'SELL'
-                  ? 'text-rose-300 border-rose-400/30 bg-rose-500/15'
-                  : 'text-amber-300 border-amber-400/30 bg-amber-500/15'
-              }`}>
-                CHART {(overallChartSignal ?? 'NEUTRAL').replace('_', ' ')}
-              </span>
-              <span className={`hidden lg:inline text-[9px] font-black px-2 py-0.5 rounded border tracking-wider ${
-                overallStrikeSignal === 'STRONG_BUY' || overallStrikeSignal === 'BUY'
-                  ? 'text-teal-300 border-teal-400/30 bg-teal-500/15'
-                  : overallStrikeSignal === 'STRONG_SELL' || overallStrikeSignal === 'SELL'
-                  ? 'text-rose-300 border-rose-400/30 bg-rose-500/15'
-                  : 'text-amber-300 border-amber-400/30 bg-amber-500/15'
-              }`}>
-                STRIKE {(overallStrikeSignal ?? 'NEUTRAL').replace('_', ' ')}
-              </span>
               <span className={`hidden md:inline text-[9px] font-black px-2 py-0.5 rounded border tracking-wider ${
                 overallRegimeSignal === 'STRONG_BUY' || overallRegimeSignal === 'BUY'
                   ? 'text-teal-300 border-teal-400/30 bg-teal-500/15'
@@ -649,12 +631,6 @@ export default function Home() {
                     <div className="flex items-center gap-1.5">
                       <span suppressHydrationWarning className={`text-[11px] font-black px-3 py-1.5 rounded-md border tracking-wider min-w-[58px] text-center ${sigPill}`}>
                         {displaySignal.replace('_', ' ')}
-                      </span>
-                      <span className="text-[9px] font-bold px-1.5 py-0.5 rounded border border-violet-400/20 bg-violet-500/[0.06] text-violet-300/80">
-                        CHART
-                      </span>
-                      <span className="text-[9px] font-bold px-1.5 py-0.5 rounded border border-cyan-400/20 bg-cyan-500/[0.05] text-cyan-300/80">
-                        STRIKE
                       </span>
                     </div>
                   </div>

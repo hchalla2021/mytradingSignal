@@ -382,7 +382,7 @@ const VolumePulseCard = memo<VolumePulseCardProps>(({ symbol, name }) => {
           <div className="min-w-0">
             <div className="text-[9px] font-semibold uppercase tracking-[0.18em] text-slate-500">Volume Pulse Details</div>
             <div className="mt-0.5 text-[10px] font-medium text-slate-300">
-              {isExpanded ? 'Expanded view' : 'Collapsed by default to save space'}
+              {isExpanded ? 'Expanded view' : 'Show'}
             </div>
           </div>
           <span className="shrink-0 text-[10px] font-bold text-slate-400">{isExpanded ? 'Hide' : 'Show'}</span>
