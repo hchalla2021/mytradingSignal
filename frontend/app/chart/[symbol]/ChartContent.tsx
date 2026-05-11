@@ -42,8 +42,18 @@ export default function ChartContent({ symbol: rawSymbol }: { symbol: string }) 
   }, []);
 
   const data = isValid ? (chartData[symbol] ?? null) : null;
-  const liveSpot = isValid ? marketData[symbol]?.price : undefined;
+  const tick = isValid ? marketData[symbol] : null;
+  const liveSpot = tick?.price;
   const label = isValid ? SYMBOL_LABELS[symbol] : symbol;
+
+  const displayPrice = liveSpot ?? data?.spot ?? 0;
+  const change = tick?.change ?? 0;
+  const changePct = tick?.changePercent ?? 0;
+  const trend = tick?.trend ?? 'neutral';
+  const priceColor = change > 0 ? 'text-emerald-400' : change < 0 ? 'text-red-400' : 'text-slate-300';
+  const fmtPrice = (v: number) => v >= 10000
+    ? v.toLocaleString('en-IN', { maximumFractionDigits: 2 })
+    : v.toFixed(2);
 
   if (!isValid) {
     return (
@@ -67,19 +77,47 @@ export default function ChartContent({ symbol: rawSymbol }: { symbol: string }) 
       {/* Top bar */}
       <div
         ref={topBarRef}
-        className="flex items-center gap-3 px-3 sm:px-5 py-2 border-b border-slate-700/50 bg-[#161b27] shrink-0 select-none"
+        className="flex items-center gap-2 sm:gap-3 px-3 sm:px-5 py-2 border-b border-slate-700/50 bg-[#161b27] shrink-0 select-none"
       >
+        {/* Close button */}
         <button
           onClick={() => window.close()}
           title="Close tab"
           className="w-3 h-3 rounded-full bg-[#ff5f57] hover:bg-[#ff3b30] border border-[#c03b35]/60 transition-colors shrink-0"
         />
-        <span className="text-[12px] sm:text-[14px] font-semibold text-slate-200 tracking-tight truncate">
+
+        {/* Symbol name */}
+        <span className="text-[12px] sm:text-[14px] font-bold text-slate-200 tracking-tight shrink-0">
           {label}
         </span>
-        <span className="text-[9px] font-mono text-indigo-400/70 bg-indigo-500/10 border border-indigo-500/20 px-1.5 py-0.5 rounded shrink-0">
-          LIVE CHART
-        </span>
+
+        {/* Live price */}
+        {displayPrice > 0 && (
+          <span className={`text-[13px] sm:text-[15px] font-mono font-bold tabular-nums shrink-0 ${priceColor}`}>
+            {fmtPrice(displayPrice)}
+          </span>
+        )}
+
+        {/* Change */}
+        {tick && (
+          <span className={`text-[10px] font-mono tabular-nums shrink-0 ${priceColor}`}>
+            {change >= 0 ? '+' : ''}{change.toFixed(2)}
+            <span className="opacity-70 ml-0.5">({changePct >= 0 ? '+' : ''}{changePct.toFixed(2)}%)</span>
+          </span>
+        )}
+
+        {/* Trend badge */}
+        {tick && (
+          <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded border shrink-0 ${
+            trend === 'bullish' ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/25'
+            : trend === 'bearish' ? 'bg-red-500/10 text-red-400 border-red-500/25'
+            : 'bg-slate-700/40 text-slate-400 border-slate-600/40'
+          }`}>
+            {trend === 'bullish' ? '▲ BULL' : trend === 'bearish' ? '▼ BEAR' : '● NEUT'}
+          </span>
+        )}
+
+        {/* Right spacer + SMC label */}
         <span className="hidden sm:inline text-[9px] text-slate-600 ml-auto">
           FVG · OB · Liquidity · BOS · CHoCH · Fractals · S/R
         </span>

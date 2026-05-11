@@ -420,8 +420,19 @@ def _inject_strike_oi(fvgs: List[Dict], obs: List[Dict], liqs: List[Dict], level
 def _detect_order_blocks(candles: List[Dict]) -> List[Dict]:
     """
     Detect Order Blocks: last bullish/bearish candle before a strong impulsive move.
-    Bullish OB  = last bearish candle before a strong up-move (≥0.3% body move in next 3 candles).
+    Bullish OB  = last bearish candle before a strong up-move (≥0.15% from candle high in next 3 candles).
     Bearish OB  = last bullish candle before a strong down-move.
+
+    FIXES applied:
+    • Mitigation now uses OB body (open/close range) NOT the wick — wick-based mitigation
+      falsely kept phantom OBs active when their body zone had already been traded through.
+    • impulse_vol added — volume from the 3 candles after the OB that confirmed the move.
+      This lets the UI show the actual directional conviction (buying for bullish OB,
+      selling for bearish OB) instead of the OB candle's own volume which is always
+      the OPPOSITE direction (bearish candle for bullish OB, bullish candle for bearish OB).
+    • Balanced return: up to 4 bullish (demand zones, below price) + 4 bearish (supply zones,
+      above price). Previous code took the last 6 regardless of type, which meant in a trending
+      market all 6 could be one-sided, leaving the other side of the chart empty.
     """
     obs = []
     if len(candles) < 5:
@@ -444,11 +455,19 @@ def _detect_order_blocks(candles: List[Dict]) -> List[Dict]:
             continue
         imp_high = max(f["h"] for f in future)
         imp_low = min(f["l"] for f in future)
+        # impulse_vol = total volume of the 3 candles that moved price away from the OB.
+        # For a bullish OB this is the buying conviction; for bearish OB it is the selling conviction.
+        impulse_vol = sum(f.get("v", 0) for f in future)
 
-        # Bullish OB: bearish candle, then up-move ≥ 0.15%  (relaxed from 0.3%)
+        # OB body bounds — used for proper mitigation check (wick excluded)
+        ob_body_top    = round(max(c["o"], c["c"]), 2)
+        ob_body_bottom = round(min(c["o"], c["c"]), 2)
+
+        # Bullish OB: bearish candle, then up-move ≥ 0.15%
         if is_bear and c["h"] > 0 and (imp_high - c["h"]) / c["h"] >= 0.0015:
+            # FIX: mitigated when price trades back INTO the OB body (not wick low)
             mitigated = any(
-                candles[j]["l"] <= c["l"]
+                candles[j]["l"] <= ob_body_bottom
                 for j in range(i + 4, len(candles))
             )
             ob_strength = round(min(1.0, (imp_high - c["h"]) / (c["h"] * 0.005)), 2)
@@ -459,8 +478,8 @@ def _detect_order_blocks(candles: List[Dict]) -> List[Dict]:
             )
             obs.append({
                 "type": "bullish",
-                "top": round(max(c["o"], c["c"]), 2),
-                "bottom": round(min(c["o"], c["c"]), 2),
+                "top": ob_body_top,
+                "bottom": ob_body_bottom,
                 "high": round(c["h"], 2),
                 "low": round(c["l"], 2),
                 "startIdx": i,
@@ -468,12 +487,14 @@ def _detect_order_blocks(candles: List[Dict]) -> List[Dict]:
                 "strength": ob_strength,
                 "quality": ob_quality,
                 "candles_ago": len(candles) - 1 - i,
+                "impulse_vol": impulse_vol,
             })
 
         # Bearish OB: bullish candle, then down-move ≥ 0.15%
         if is_bull and c["l"] > 0 and (c["l"] - imp_low) / c["l"] >= 0.0015:
+            # FIX: mitigated when price trades back INTO the OB body (not wick high)
             mitigated = any(
-                candles[j]["h"] >= c["h"]
+                candles[j]["h"] >= ob_body_top
                 for j in range(i + 4, len(candles))
             )
             ob_strength = round(min(1.0, (c["l"] - imp_low) / (c["l"] * 0.005)), 2)
@@ -484,8 +505,8 @@ def _detect_order_blocks(candles: List[Dict]) -> List[Dict]:
             )
             obs.append({
                 "type": "bearish",
-                "top": round(max(c["o"], c["c"]), 2),
-                "bottom": round(min(c["o"], c["c"]), 2),
+                "top": ob_body_top,
+                "bottom": ob_body_bottom,
                 "high": round(c["h"], 2),
                 "low": round(c["l"], 2),
                 "startIdx": i,
@@ -493,12 +514,25 @@ def _detect_order_blocks(candles: List[Dict]) -> List[Dict]:
                 "strength": ob_strength,
                 "quality": ob_quality,
                 "candles_ago": len(candles) - 1 - i,
+                "impulse_vol": impulse_vol,
             })
 
-    # Keep last 6 unmitigated + up to 3 mitigated
-    unmitigated = [ob for ob in obs if not ob["mitigated"]][-6:]
-    mitigated_recent = [ob for ob in obs if ob["mitigated"]][-3:]
-    return unmitigated + mitigated_recent
+    # FIX: Balance bullish (demand/below price) and bearish (supply/above price) OBs.
+    # Previous code returned the last 6 regardless of type — in trending markets all 6
+    # were the same direction, leaving the opposite side of the chart with no OBs.
+    bullish_obs = sorted(
+        [ob for ob in obs if ob["type"] == "bullish" and not ob["mitigated"]],
+        key=lambda x: x["startIdx"],
+    )[-4:]
+    bearish_obs = sorted(
+        [ob for ob in obs if ob["type"] == "bearish" and not ob["mitigated"]],
+        key=lambda x: x["startIdx"],
+    )[-4:]
+    mitigated_recent = sorted(
+        [ob for ob in obs if ob["mitigated"]],
+        key=lambda x: x["startIdx"],
+    )[-3:]
+    return bullish_obs + bearish_obs + mitigated_recent
 
 
 def _detect_liquidity(candles: List[Dict]) -> List[Dict]:

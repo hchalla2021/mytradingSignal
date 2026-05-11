@@ -67,6 +67,11 @@ export interface OrderBlock {
   strength: number;
   quality?: 'PREMIUM' | 'STANDARD' | 'WEAK';
   candles_ago?: number;
+  // impulse_vol: volume of the 3 candles AFTER the OB that confirmed the move.
+  // For bullish OB = buying conviction; for bearish OB = selling conviction.
+  // Displayed as ↑impulse on the chart (directionally meaningful, unlike bull_vol/bear_vol
+  // which reflect the OB candle itself — always the opposite direction to the OB type).
+  impulse_vol?: number;
   // Candle volume participants (historical)
   bull_vol?: number;
   bear_vol?: number;

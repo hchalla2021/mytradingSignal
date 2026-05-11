@@ -1026,7 +1026,10 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
       if (o.mitigated) return false;                                // shown separately as mitigated
       const q = o.quality ?? (o.strength >= 0.80 ? 'PREMIUM' : o.strength >= 0.45 ? 'STANDARD' : 'WEAK');
       if (q === 'WEAK') return false;
-      const freshEnough = (o.candles_ago ?? 999) <= 80;
+      // FIX: Extended from 80→160 candles (~2 trading days on 5m TF).
+      // 80 candles = ~6.7 h — too short for structural OBs below support from a prior
+      // session that price has not yet revisited. These were being silently hidden.
+      const freshEnough = (o.candles_ago ?? 999) <= 160;
       return freshEnough;
     });
 
@@ -1328,6 +1331,37 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
       const d = Math.max(0, Math.round(down));
       if (u <= 0 && d <= 0) return '';
       return ` · ↑${fmtNum(u)} ↓${fmtNum(d)}`;
+    };
+
+    /**
+     * OB-specific volume tag — shows directionally meaningful numbers.
+     *
+     * WHY: A bullish OB is formed by the LAST BEARISH candle before an up-impulse.
+     * So bull_vol < bear_vol at the OB zone, causing a misleading "↑low ↓high" display
+     * at a demand zone.  The fix: use impulse_vol (volume of the 3 confirmation candles
+     * AFTER the OB) as the ↑/↓ direction indicator — it always points the same way as
+     * the OB type and represents the actual institutional conviction move.
+     * Zone depth (total_vol at the OB candle) is shown as the second number.
+     */
+    const obVolTag = (o: OrderBlock): string => {
+      const impulse = Math.max(0, Math.round(o.impulse_vol ?? 0));
+      const zoneVol = Math.max(0, Math.round(o.total_vol ?? ((o.bull_vol ?? 0) + (o.bear_vol ?? 0))));
+      if (impulse > 0) {
+        // impulse_vol always aligns with OB direction (buying for bullish OB, selling for bearish OB)
+        return o.type === 'bullish'
+          ? ` · ↑${fmtNum(impulse)} ↓${fmtNum(zoneVol)}`   // ↑ = buying impulse, ↓ = zone depth absorbed
+          : ` · ↓${fmtNum(impulse)} ↑${fmtNum(zoneVol)}`;  // ↓ = selling impulse, ↑ = zone depth absorbed
+      }
+      // Fallback: use CE/PE OI if available (OI is not subject to the candle-direction inversion issue)
+      const ceOI = Math.max(0, o.ce_oi ?? 0);
+      const peOI = Math.max(0, o.pe_oi ?? 0);
+      if (ceOI > 0 || peOI > 0) {
+        // PE OI at a support = puts written = bullish confirmation; CE OI at resistance = bearish
+        return o.type === 'bullish'
+          ? formatPushTag(peOI, ceOI)   // ↑PE (bullish puts) ↓CE (bearish calls)
+          : formatPushTag(peOI, ceOI);  // same convention; higher CE = stronger supply zone
+      }
+      return '';
     };
 
     const participantPushTag = (src?: {
@@ -1717,7 +1751,13 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
         const isFreshOB = obAge <= 6;
         const starMark = obQuality === 'PREMIUM' ? '★' : '';
         const statusStr = isFreshOB ? ' NEW' : '';
-        const pushTag = participantPushTag(o);
+        // FIX: Use obVolTag instead of participantPushTag for OBs.
+        // participantPushTag used bull_vol/bear_vol from the OB candle itself, which is
+        // ALWAYS the opposite direction to the OB type (bullish OB = last bearish candle →
+        // bear_vol dominates → "↓more millions" at a demand zone = false/confusing signal).
+        // obVolTag uses impulse_vol (the 3 candles that confirmed the move), which is
+        // directionally aligned with the OB type and represents institutional conviction.
+        const pushTag = obVolTag(o);
         const tag = starMark + (isBull ? '▲OB' : '▼OB') + statusStr;
         // bull OB: zone is below price → tag BELOW zone bottom; bear OB: above price → tag ABOVE zone top
         drawLineTag(isBull ? y2 : y1, tag, borderColor, !isBull, lifecycleAlpha * qualityAlpha);
@@ -3609,39 +3649,13 @@ function computeChartSignal(
 
 const SymbolChartCard = memo<{ data: SymbolChartData | null; name: string; liveSpot?: number; forceChartHeight?: number; fullPage?: boolean }>(({ data, name, liveSpot, forceChartHeight, fullPage = false }) => {
   const [timeframe, setTimeframe] = useState<'1h' | '15m' | '5m' | '3m'>('5m');
-  const [isMaximized, setIsMaximized] = useState(false);
-  const [modalMinimized, setModalMinimized] = useState(false);
-  const [modalFullscreen, setModalFullscreen] = useState(false);
-  const [modalChartH, setModalChartH] = useState(420);
+  // Chart opens in a dedicated /chart/[symbol] tab — no in-page modal needed.
   const chartH = forceChartHeight ?? CFG.CHART_H;
 
   const openModal = useCallback(() => {
-    // Derive the symbol slug: "NIFTY 50" → "NIFTY", "BANK NIFTY" → "BANKNIFTY", "SENSEX" → "SENSEX"
     const slug = (data?.symbol || name.replace(/\s+/g, '')).toUpperCase();
     window.open(`/chart/${slug}`, '_blank', 'noopener,noreferrer');
   }, [data?.symbol, name]);
-
-  const closeModal = useCallback(() => {
-    setIsMaximized(false);
-    setModalMinimized(false);
-    setModalFullscreen(false);
-  }, []);
-
-  useEffect(() => {
-    if (!isMaximized || modalMinimized) return;
-    const compute = () => {
-      const vh = window.innerHeight;
-      if (modalFullscreen) {
-        setModalChartH(Math.max(260, vh - 52));
-      } else {
-        const modalH = Math.min(vh * 0.92, 880);
-        setModalChartH(Math.max(260, modalH - 52));
-      }
-    };
-    compute();
-    window.addEventListener('resize', compute);
-    return () => window.removeEventListener('resize', compute);
-  }, [isMaximized, modalMinimized, modalFullscreen]);
 
   const [signalFlash, setSignalFlash] = useState(false);
   const prevSignalRef = useRef<string>('');
@@ -3796,11 +3810,19 @@ const SymbolChartCard = memo<{ data: SymbolChartData | null; name: string; liveS
 
   if (!data || candles.length === 0) {
     return (
-      <div className="rounded-xl bg-dark-card/60 border border-slate-700/40 p-3 sm:p-4">
-        <div className="flex items-center gap-2 mb-2">
-          <span className="text-xs sm:text-sm font-bold text-slate-400">{name}</span>
+      <div className={`${fullPage ? '' : 'rounded-xl border border-slate-700/30'} bg-dark-card/50 overflow-hidden`}>
+        <div className="flex items-center gap-2 px-3 py-2.5 border-b border-slate-700/20">
+          <span className="text-[10px] font-bold text-slate-500 tracking-[0.08em] uppercase">{name}</span>
+          <div className="ml-auto flex gap-1.5">
+            {['1H','15M','5M','3M'].map(tf => (
+              <span key={tf} className="w-8 h-5 rounded bg-slate-700/40 animate-pulse inline-block" />
+            ))}
+          </div>
         </div>
-        <div className="text-center py-16 text-slate-600 text-xs">Loading chart data...</div>
+        <div className="flex flex-col items-center justify-center gap-2" style={{ height: chartH }}>
+          <div className="w-5 h-5 rounded-full border-2 border-indigo-500/40 border-t-indigo-400 animate-spin" />
+          <span className="text-[10px] text-slate-600 font-mono">Waiting for market data…</span>
+        </div>
       </div>
     );
   }
@@ -3817,141 +3839,110 @@ const SymbolChartCard = memo<{ data: SymbolChartData | null; name: string; liveS
   const changeColor = change >= 0 ? 'text-emerald-400' : 'text-red-400';
   const changeIcon = change >= 0 ? '▲' : '▼';
 
-  return (
-    <div className={`${fullPage ? 'bg-dark-card/60' : 'rounded-xl bg-dark-card/60 border border-slate-700/40'} overflow-hidden`}>
-      {/* ── Header: 3 rows on mobile → 2 rows on sm → 1 row on lg ── */}
-      <div className="flex flex-col px-3 py-2 gap-1.5 border-b border-slate-700/30">
+  // Determine border tint based on live signal for premium institutional feel
+  const signalBorderTint =
+    chartSignal.signal === 'STRONG_BUY'  ? 'border-emerald-500/40' :
+    chartSignal.signal === 'BUY'         ? 'border-emerald-500/20' :
+    chartSignal.signal === 'STRONG_SELL' ? 'border-red-500/40' :
+    chartSignal.signal === 'SELL'        ? 'border-red-500/20' :
+    'border-slate-700/40';
 
-        {/* ── ROW A: Symbol name + live price + change ── */}
-        <div className="flex items-center justify-between gap-2 min-w-0">
-          <div className="flex items-center gap-2 min-w-0 overflow-hidden">
-            <span className="text-[11px] sm:text-xs font-bold text-emerald-200 shrink-0 whitespace-nowrap">{name}</span>
-            <span className="text-xs sm:text-[13px] font-mono font-semibold text-emerald-300 shrink-0 tabular-nums whitespace-nowrap">
-              {fmtPrice(displayPrice)}
-            </span>
-            <span className={`text-[10px] sm:text-[11px] font-mono font-semibold shrink-0 tabular-nums whitespace-nowrap ${changeColor}`}>
-              {changeIcon}{Math.abs(change).toFixed(2)} ({changePct >= 0 ? '+' : ''}{changePct.toFixed(2)}%)
-            </span>
-          </div>
-          {/* LIVE badge — right-anchored on all breakpoints */}
-          <span className={`inline-flex items-center justify-center h-6 px-2 rounded border text-[9px] font-mono tabular-nums whitespace-nowrap shrink-0 ${sourceColor} border-current/30 bg-slate-800/40 min-w-[58px]`}>
+  return (
+    <div className={`${
+      fullPage ? '' : `rounded-xl border ${signalBorderTint} transition-colors duration-500`
+    } bg-dark-card/60 overflow-hidden flex flex-col`}>
+
+      {/* ─── Header ────────────────────────────────────────────────────────── */}
+      <div className="flex flex-col px-3 pt-2.5 pb-2 gap-1.5 border-b border-slate-700/25 bg-slate-900/20 shrink-0">
+
+        {/* Row 1 — Symbol · Price · Change · Source badge */}
+        <div className="flex items-center gap-2 min-w-0">
+          <span className="text-[10px] font-bold text-slate-400 tracking-[0.1em] uppercase shrink-0 whitespace-nowrap select-none">
+            {name}
+          </span>
+          <span className="text-[13px] font-mono font-bold text-white shrink-0 tabular-nums">
+            {fmtPrice(displayPrice)}
+          </span>
+          <span className={`text-[10px] font-mono shrink-0 tabular-nums ${changeColor}`}>
+            {changeIcon}{Math.abs(change).toFixed(2)}
+            <span className="text-[9px] opacity-70 ml-0.5">({changePct >= 0 ? '+' : ''}{changePct.toFixed(2)}%)</span>
+          </span>
+          <span className={`ml-auto text-[9px] font-mono shrink-0 ${sourceColor}`}>
             {sourceLabel}
           </span>
         </div>
 
-        {/* ── ROW B: Signal badge + MTF badge (+ TF tabs on sm+) ── */}
-        <div className="flex items-center gap-1.5 flex-wrap sm:flex-nowrap">
-          {/* Chart Pattern Signal Badge */}
+        {/* Row 2 — Signal · MTF · TF Tabs (unified, works on all sizes) */}
+        <div className="flex items-center gap-1.5 min-w-0">
+
+          {/* Chart Pattern Signal */}
           {(() => {
             const cfg = CHART_SIGNAL_CFG[chartSignal.signal];
             const pulse = chartSignal.signal === 'STRONG_BUY' || chartSignal.signal === 'STRONG_SELL';
             return (
               <span
-                title={`Chart pattern score: ${chartSignal.score > 0 ? '+' : ''}${chartSignal.score} · Updates every ~1s with live spot`}
+                title={`Chart pattern score: ${chartSignal.score > 0 ? '+' : ''}${chartSignal.score} · live spot updates every tick`}
                 className={`
-                  inline-flex items-center justify-between gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold tracking-wide
-                  h-7 w-[128px]
-                  border shadow-sm transition-all duration-300 shrink-0
-                  ${cfg.bg} ${cfg.color} ${cfg.border} ${cfg.glow ? `shadow-sm ${cfg.glow}` : ''}
+                  inline-flex items-center gap-1 px-2 py-1 rounded text-[9px] font-bold border shrink-0
+                  transition-all duration-300 select-none
+                  ${cfg.bg} ${cfg.color} ${cfg.border}
                   ${pulse ? 'animate-pulse' : ''}
-                  ${signalFlash ? 'ring-1 ring-white/40 scale-105' : 'scale-100'}
+                  ${signalFlash ? 'ring-1 ring-white/25 scale-[1.04]' : 'scale-100'}
                 `}
-                style={{ transition: 'transform 0.2s ease, box-shadow 0.3s ease' }}
               >
-                <span className="w-3 text-center shrink-0">
+                <span className="shrink-0">
                   {chartSignal.signal === 'STRONG_BUY' || chartSignal.signal === 'BUY' ? '▲'
                    : chartSignal.signal === 'STRONG_SELL' || chartSignal.signal === 'SELL' ? '▼' : '●'}
                 </span>
-                <span className="truncate text-center flex-1">{cfg.label}</span>
-                <span className="opacity-70 font-mono text-[9px] tabular-nums w-7 text-right shrink-0">
+                <span className="whitespace-nowrap">{cfg.label}</span>
+                <span className="opacity-60 font-mono text-[8px] tabular-nums">
                   {chartSignal.score > 0 ? '+' : ''}{chartSignal.score}
                 </span>
-                <span
-                  className="w-1 h-1 rounded-full bg-current opacity-50 animate-ping shrink-0"
-                  style={{ animationDuration: '1.4s' }}
-                />
               </span>
             );
           })()}
 
-          {/* MTF Alignment Badge */}
+          {/* MTF Alignment */}
           {mtfSignal && (
             <span
-              title={`MTF Alignment: 3M=${mtfSignal.sig3} (${mtfSignal.score3 > 0 ? '+' : ''}${mtfSignal.score3}) · 5M=${mtfSignal.sig5} (${mtfSignal.score5 > 0 ? '+' : ''}${mtfSignal.score5})`}
+              title={`Multi-timeframe: 3M=${mtfSignal.sig3} (${mtfSignal.score3 > 0 ? '+' : ''}${mtfSignal.score3}) · 5M=${mtfSignal.sig5} (${mtfSignal.score5 > 0 ? '+' : ''}${mtfSignal.score5})`}
               className={`
-                inline-flex items-center justify-between gap-0.5 px-1.5 py-0.5 rounded text-[9px] font-bold border transition-all duration-300
-                h-7 w-[76px] shrink-0
+                inline-flex items-center gap-1 px-1.5 py-1 rounded text-[9px] font-bold border shrink-0 select-none
                 ${mtfSignal.aligned
                   ? mtfSignal.direction === 'bull'
-                    ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/30'
-                    : 'bg-red-500/10 text-red-400 border-red-500/30'
-                  : 'bg-amber-500/10 text-amber-400 border-amber-500/30'
+                    ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/25'
+                    : 'bg-red-500/10 text-red-400 border-red-500/25'
+                  : 'bg-amber-500/10 text-amber-400 border-amber-500/25'
                 }
               `}
             >
-              <span className="shrink-0">MTF</span>
-              <span className="w-3 text-center shrink-0">
-                {mtfSignal.aligned ? (mtfSignal.direction === 'bull' ? '▲' : '▼') : '⊘'}
-              </span>
-              <span className="opacity-60 font-normal truncate">
-                {mtfSignal.aligned ? 'ALIGN' : 'SPLIT'}
-              </span>
+              <span>MTF</span>
+              <span>{mtfSignal.aligned ? (mtfSignal.direction === 'bull' ? '▲' : '▼') : '⊘'}</span>
             </span>
           )}
 
-          {/* TF tabs — hidden on mobile (shown in Row C), visible sm+ */}
-          <div className="hidden sm:flex rounded-md overflow-hidden border border-slate-700/50 shrink-0">
-            {([
-              { tf: '1h',  label: '1H',  hint: 'MACRO'   },
-              { tf: '15m', label: '15M', hint: 'STRUCT'  },
-              { tf: '5m',  label: '5M',  hint: 'EXEC'    },
-              { tf: '3m',  label: '3M',  hint: 'ENTRY'   },
-            ] as const).map(({ tf, label, hint }, idx, arr) => {
-              const active = timeframe === tf;
-              const isLast = idx === arr.length - 1;
-              return (
-                <button
-                  key={tf}
-                  onClick={() => setTimeframe(tf)}
-                  title={hint}
-                  className={`flex flex-col items-center justify-center w-[48px] h-7 px-1 py-0.5 text-[9px] font-bold transition-colors leading-tight ${
-                    !isLast ? 'border-r border-slate-700/50' : ''
-                  } ${active ? 'bg-indigo-500/20 text-indigo-300' : 'text-slate-500 hover:text-slate-300'}`}
-                >
-                  <span className="text-[10px]">{label}</span>
-                  <span className={`text-[7px] font-normal leading-none ${active ? 'text-indigo-400/70' : 'text-slate-600'}`}>{hint}</span>
-                </button>
-              );
-            })}
-          </div>
-        </div>
-
-        {/* ── ROW C: TF tabs full-width — mobile only (sm: hidden) ── */}
-        <div className="flex sm:hidden rounded-md overflow-hidden border border-slate-700/50">
-          {([
-            { tf: '1h',  label: '1H',  hint: 'MACRO'  },
-            { tf: '15m', label: '15M', hint: 'STRUCT' },
-            { tf: '5m',  label: '5M',  hint: 'EXEC'   },
-            { tf: '3m',  label: '3M',  hint: 'ENTRY'  },
-          ] as const).map(({ tf, label, hint }, idx, arr) => {
-            const active = timeframe === tf;
-            const isLast = idx === arr.length - 1;
-            return (
+          {/* TF Tabs — single unified implementation, works across all breakpoints */}
+          <div className="flex rounded-md overflow-hidden border border-slate-700/50 ml-auto shrink-0">
+            {(['1h', '15m', '5m', '3m'] as const).map((tf, idx) => (
               <button
                 key={tf}
                 onClick={() => setTimeframe(tf)}
-                title={hint}
-                className={`flex flex-col items-center justify-center flex-1 h-8 px-1 py-0.5 text-[10px] font-bold transition-colors leading-tight ${
-                  !isLast ? 'border-r border-slate-700/50' : ''
-                } ${active ? 'bg-indigo-500/20 text-indigo-300' : 'text-slate-500 hover:text-slate-300'}`}
+                title={{ '1h': 'Macro (1 hour)', '15m': 'Structure (15 min)', '5m': 'Execution (5 min)', '3m': 'Entry (3 min)' }[tf]}
+                className={`
+                  px-2.5 sm:px-3 py-1.5 text-[10px] font-bold transition-colors select-none
+                  ${idx < 3 ? 'border-r border-slate-700/50' : ''}
+                  ${timeframe === tf
+                    ? 'bg-indigo-500/20 text-indigo-300'
+                    : 'text-slate-500 hover:text-slate-300 active:bg-slate-700/30'
+                  }
+                `}
               >
-                <span className="text-[11px]">{label}</span>
-                <span className={`text-[8px] font-normal leading-none ${active ? 'text-indigo-400/70' : 'text-slate-600'}`}>{hint}</span>
+                {tf.toUpperCase()}
               </button>
-            );
-          })}
-        </div>
+            ))}
+          </div>
 
+        </div>
       </div>
 
       {/* Chart Canvas */}
@@ -3974,217 +3965,125 @@ const SymbolChartCard = memo<{ data: SymbolChartData | null; name: string; liveS
         prioritySetups={prioritySetups}
       />
 
-      {/* ── Pop-up chart window — no blur, 3-button window chrome ── */}
-      {isMaximized && (
-        <div
-          className="fixed inset-0 z-[9999] flex items-start sm:items-center justify-center p-2 sm:p-5"
-          style={{ background: 'rgba(2,6,23,0.92)' }}
-          onClick={closeModal}
-        >
-          <div
-            className={`
-              w-full flex flex-col overflow-hidden
-              shadow-[0_16px_64px_rgba(0,0,0,0.85)] border border-slate-600/50
-              transition-all duration-200
-              ${ modalFullscreen
-                ? 'fixed inset-0 rounded-none'
-                : 'max-w-5xl rounded-xl mt-8 sm:mt-0'
-              }
-            `}
-            style={{
-              background: '#0d1117',
-              ...(!modalFullscreen ? { maxHeight: modalMinimized ? 'auto' : 'min(92vh, 900px)' } : {}),
-            }}
-            onClick={e => e.stopPropagation()}
-          >
-            {/* ── Window title bar ── */}
-            <div className="flex items-center gap-2 px-3 py-2 border-b border-slate-700/50 bg-[#161b27] shrink-0 select-none">
+      {/* ─── Intelligence Footer ────────────────────────────────────────── */}
+      <div className="px-3 pt-2 pb-2.5 border-t border-slate-700/25 bg-slate-900/30 shrink-0 space-y-1.5">
 
-              {/* macOS-style traffic lights */}
-              <div className="flex items-center gap-[6px] shrink-0">
-                {/* Close — red */}
-                <button
-                  onClick={closeModal}
-                  title="Close"
-                  className="w-3 h-3 rounded-full bg-[#ff5f57] hover:bg-[#ff3b30] border border-[#c03b35]/60 flex items-center justify-center group transition-colors"
-                >
-                  <span className="hidden group-hover:flex text-[5px] text-[#4d0000] font-black">✕</span>
-                </button>
-                {/* Minimize — yellow */}
-                <button
-                  onClick={() => setModalMinimized(v => !v)}
-                  title={modalMinimized ? 'Restore' : 'Minimise'}
-                  className="w-3 h-3 rounded-full bg-[#febc2e] hover:bg-[#ffb800] border border-[#b37800]/60 flex items-center justify-center group transition-colors"
-                >
-                  <span className="hidden group-hover:flex text-[7px] text-[#4d3200] font-black leading-none" style={{ lineHeight: 1 }}>─</span>
-                </button>
-                {/* Fullscreen — green */}
-                <button
-                  onClick={() => setModalFullscreen(v => !v)}
-                  title={modalFullscreen ? 'Restore window' : 'Full screen'}
-                  className="w-3 h-3 rounded-full bg-[#28c840] hover:bg-[#00d32c] border border-[#0f6e1a]/60 flex items-center justify-center group transition-colors"
-                >
-                  <span className="hidden group-hover:flex text-[6px] text-[#003a00] font-black">⛶</span>
-                </button>
-              </div>
+        {/* ── Row 1: Priority setups + context chips + zone counts ── */}
+        <div className="flex flex-wrap items-center gap-1">
 
-              {/* Centre title */}
-              <div className="flex-1 flex items-center justify-center gap-2 min-w-0">
-                <span className="text-[11px] sm:text-[12px] font-semibold text-slate-300 truncate">{name}</span>
-                <span className="text-[9px] font-mono text-indigo-400/70 shrink-0 bg-indigo-500/10 border border-indigo-500/20 px-1.5 py-0.5 rounded">{timeframe.toUpperCase()}</span>
-                <span className="hidden sm:inline text-[9px] text-slate-600">FVG · OB · BOS · ChoCH · Liq · Sweep</span>
-              </div>
-
-              {/* Right — timeframe switcher */}
-              <div className="flex items-center gap-1 shrink-0">
-                <div className="flex rounded overflow-hidden border border-slate-700/50">
-                  {(['1h','15m','5m','3m'] as const).map((tf, idx) => (
-                    <button
-                      key={tf}
-                      onClick={() => setTimeframe(tf)}
-                      className={`
-                        px-2 py-1 text-[9px] font-bold transition-colors
-                        ${ idx < 3 ? 'border-r border-slate-700/50' : '' }
-                        ${ timeframe === tf ? 'bg-indigo-500/25 text-indigo-300' : 'text-slate-500 hover:text-slate-300' }
-                      `}
-                    >{tf.toUpperCase()}</button>
-                  ))}
-                </div>
-              </div>
-            </div>
-
-            {/* ── Chart body — hidden when minimised ── */}
-            {!modalMinimized && (
-              <div className="shrink-0 overflow-hidden">
-                <CandleChart
-                  candles={candles}
-                  fvg={fvgList}
-                  ob={obList}
-                  liquidity={liqList}
-                  levels={levels}
-                  spot={data.spot}
-                  liveSpot={liveSpot}
-                  chartHeight={modalChartH}
-                  structure={structure}
-                  inducements={inducements}
-                  fractals={fractals}
-                  htfMode={htfMode}
-                  chartKey={`${name}-${timeframe}-modal`}
-                  dataSource={data.dataSource}
-                  prioritySetups={prioritySetups}
-                />
-              </div>
-            )}
-
-            {/* Minimised hint strip */}
-            {modalMinimized && (
-              <div className="px-4 py-2 text-[10px] text-slate-500 text-center">
-                Chart minimised · click <span className="text-yellow-400">●</span> to restore
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* Footer — Intelligence Panel */}
-      <div className="px-3 py-2 border-t border-slate-700/30 bg-slate-900/40 space-y-1.5">
-        {/* Row 1: Level proximity intel + last structure event */}
-        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+          {/* Priority combination setups — most actionable intel */}
           {prioritySetups.map((setup, idx) => (
             <span
               key={`${setup.priority}-${setup.model}-${setup.direction}-${setup.triggerIdx}-${idx}`}
-              className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold border ${
+              title={`Entry @ ${fmtPrice(setup.entryLine)} · ${setup.model} overlap`}
+              className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold border select-none ${
                 setup.priority === 1
-                  ? 'bg-cyan-500/15 text-cyan-300 border-cyan-400/40'
+                  ? 'bg-cyan-500/12 text-cyan-300 border-cyan-400/35'
                   : setup.priority === 2
-                    ? 'bg-emerald-500/15 text-emerald-300 border-emerald-400/40'
-                    : 'bg-blue-500/15 text-blue-300 border-blue-400/40'
+                    ? 'bg-emerald-500/12 text-emerald-300 border-emerald-400/35'
+                    : 'bg-blue-500/12 text-blue-300 border-blue-400/35'
               }`}
-              title={`Entry line at ${fmtPrice(setup.entryLine)} from combination overlap model`}
             >
-              P{setup.priority}
-              {setup.model === 'REVERSAL_SNIPER'
-                ? ' SNIPER'
-                : setup.model === 'CONTINUATION_POWER'
-                  ? ' CONTINUATION'
-                  : ' FLIP'}
-              {setup.direction === 'bullish' ? ' ▲' : ' ▼'}
-              <span className="font-mono opacity-80">{setup.confidence}%</span>
+              <span className="opacity-60 text-[8px]">P{setup.priority}</span>
+              <span>
+                {setup.model === 'REVERSAL_SNIPER' ? 'SNIPER'
+                  : setup.model === 'CONTINUATION_POWER' ? 'CONT'
+                  : 'FLIP'}
+              </span>
+              <span>{setup.direction === 'bullish' ? '▲' : '▼'}</span>
+              <span className="font-mono text-[8px] opacity-75">{setup.confidence}%</span>
             </span>
           ))}
-          {/* Nearest level proximity chip */}
-          {nearestLevel && (
-            <span
-              className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold border ${
-                nearestLevel.distPct < 0.15
-                  ? 'bg-amber-500/15 text-amber-300 border-amber-500/40'
-                  : nearestLevel.distPct < 0.4
-                  ? 'bg-slate-700/40 text-slate-300 border-slate-600/40'
-                  : 'bg-slate-800/40 text-slate-500 border-slate-700/30'
-              }`}
-              title={`Nearest key level: ${nearestLevel.label} @ ${fmtPrice(nearestLevel.price)}`}
-            >
-              {nearestLevel.above ? '↑' : '↓'}{nearestLevel.label}
-              <span className="font-mono opacity-80">{nearestLevel.distPct.toFixed(2)}%</span>
-            </span>
-          )}
-          {/* Last structure event */}
+
+          {/* Last BOS / CHoCH event */}
           {(() => {
             const last = structure.length > 0 ? structure[structure.length - 1] : null;
             if (!last) return null;
             const isChoch = last.type === 'CHOCH_BULL' || last.type === 'CHOCH_BEAR';
             const isBull  = last.type === 'BOS_BULL'   || last.type === 'CHOCH_BULL';
-            const age = candles.length - 1 - last.idx;
-            const color = isChoch ? (isBull ? CFG.CHOCH_BULL : CFG.CHOCH_BEAR) : (isBull ? CFG.BOS_BULL : CFG.BOS_BEAR);
+            const age     = candles.length - 1 - last.idx;
+            const color   = isChoch ? (isBull ? CFG.CHOCH_BULL : CFG.CHOCH_BEAR) : (isBull ? CFG.BOS_BULL : CFG.BOS_BEAR);
             return (
               <span
-                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold border"
-                style={{ color, background: `${color}12`, borderColor: `${color}40` }}
-                title={`Last structure: ${last.type} @ ${fmtPrice(last.level)} · ${age} bars ago`}
+                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold border select-none"
+                style={{ color, background: `${color}10`, borderColor: `${color}35` }}
+                title={`${last.type} @ ${fmtPrice(last.level)} · ${age} bars ago · displacement ${((last.displacement ?? 0) * 100).toFixed(2)}%`}
               >
-                {isChoch ? 'CHoCH' : 'BOS'}{isBull ? '↑' : '↓'}
-                <span className="opacity-60 font-normal">{age}c ago</span>
+                <span>{isChoch ? 'CHoCH' : 'BOS'}{isBull ? '↑' : '↓'}</span>
+                <span className="opacity-55 font-mono text-[8px]">{age}c</span>
               </span>
             );
           })()}
-          {/* Active zone counts — compressed chip row */}
-          <div className="flex items-center gap-1.5 ml-auto flex-wrap">
-            {stats.fvgBull > 0 && (
-              <span className="text-[8px] font-mono" style={{ color: CFG.FVG_BULL_BORDER }}>▲FVG {stats.fvgBull}</span>
-            )}
-            {stats.fvgBear > 0 && (
-              <span className="text-[8px] font-mono" style={{ color: CFG.FVG_BEAR_BORDER }}>▼FVG {stats.fvgBear}</span>
-            )}
+
+          {/* Nearest key level proximity */}
+          {nearestLevel && (
+            <span
+              className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] font-bold border select-none ${
+                nearestLevel.distPct < 0.15
+                  ? 'bg-amber-500/12 text-amber-300 border-amber-500/35'
+                  : nearestLevel.distPct < 0.40
+                  ? 'bg-slate-700/35 text-slate-300 border-slate-600/35'
+                  : 'bg-slate-800/30 text-slate-500 border-slate-700/25'
+              }`}
+              title={`Nearest key level: ${nearestLevel.label} @ ${fmtPrice(nearestLevel.price)}`}
+            >
+              {nearestLevel.above ? '↑' : '↓'}{nearestLevel.label}
+              <span className="font-mono text-[8px] opacity-70">{nearestLevel.distPct.toFixed(2)}%</span>
+            </span>
+          )}
+
+          {/* Zone inventory — right-anchored, font-mono count badges */}
+          <div className="flex items-center gap-1.5 ml-auto flex-wrap justify-end">
             {stats.obBull > 0 && (
-              <span className="text-[8px] font-mono" style={{ color: CFG.OB_BULL_BORDER }}>▲OB {stats.obBull}</span>
+              <span className="inline-flex items-center gap-0.5 text-[8px] font-mono font-semibold" style={{ color: CFG.OB_BULL_BORDER }}>▲OB<span className="opacity-70">{stats.obBull}</span></span>
             )}
             {stats.obBear > 0 && (
-              <span className="text-[8px] font-mono" style={{ color: CFG.OB_BEAR_BORDER }}>▼OB {stats.obBear}</span>
+              <span className="inline-flex items-center gap-0.5 text-[8px] font-mono font-semibold" style={{ color: CFG.OB_BEAR_BORDER }}>▼OB<span className="opacity-70">{stats.obBear}</span></span>
+            )}
+            {stats.fvgBull > 0 && (
+              <span className="inline-flex items-center gap-0.5 text-[8px] font-mono font-semibold" style={{ color: CFG.FVG_BULL_BORDER }}>▲FVG<span className="opacity-70">{stats.fvgBull}</span></span>
+            )}
+            {stats.fvgBear > 0 && (
+              <span className="inline-flex items-center gap-0.5 text-[8px] font-mono font-semibold" style={{ color: CFG.FVG_BEAR_BORDER }}>▼FVG<span className="opacity-70">{stats.fvgBear}</span></span>
             )}
             {stats.ssl > 0 && (
-              <span className="text-[8px] font-mono" style={{ color: CFG.LIQ_SELL }}>SSL {stats.ssl}</span>
+              <span className="inline-flex items-center gap-0.5 text-[8px] font-mono font-semibold" style={{ color: CFG.LIQ_SELL }}>SSL<span className="opacity-70">{stats.ssl}</span></span>
             )}
             {stats.bsl > 0 && (
-              <span className="text-[8px] font-mono" style={{ color: CFG.LIQ_BUY }}>BSL {stats.bsl}</span>
+              <span className="inline-flex items-center gap-0.5 text-[8px] font-mono font-semibold" style={{ color: CFG.LIQ_BUY }}>BSL<span className="opacity-70">{stats.bsl}</span></span>
             )}
           </div>
         </div>
-        {/* Row 2: Level legend + timestamp */}
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5">
-          <span className="flex items-center gap-1 text-[8px] font-bold" style={{ color: CFG.PDH }}>
-            <span className="w-4 border-t-2 border-dashed inline-block" style={{ borderColor: CFG.PDH }} /> PREV H/L
+
+        {/* ── Row 2: Color legend + candle count + timestamp ── */}
+        <div className="flex flex-wrap items-center gap-x-2.5 gap-y-0.5 min-w-0">
+          <span className="inline-flex items-center gap-1 text-[8px] font-semibold" style={{ color: CFG.OB_BULL_BORDER }}>
+            <span className="w-3 h-2 rounded-sm inline-block opacity-60" style={{ background: CFG.OB_BULL_BORDER }} />
+            Bull OB
           </span>
-          <span className="flex items-center gap-1 text-[8px] font-bold" style={{ color: CFG.CDH }}>
-            <span className="w-4 border-t-2 inline-block" style={{ borderColor: CFG.CDH }} /> DAY H/L
+          <span className="inline-flex items-center gap-1 text-[8px] font-semibold" style={{ color: CFG.OB_BEAR_BORDER }}>
+            <span className="w-3 h-2 rounded-sm inline-block opacity-60" style={{ background: CFG.OB_BEAR_BORDER }} />
+            Bear OB
           </span>
-          <span className="flex items-center gap-1 text-[8px] font-bold" style={{ color: CFG.IND_COLOR }}>
-            ◆ EQH/EQL
+          <span className="inline-flex items-center gap-1 text-[8px] font-semibold" style={{ color: CFG.FVG_BULL_BORDER }}>
+            <span className="w-3 h-1 inline-block opacity-70" style={{ background: CFG.FVG_BULL_BORDER }} />
+            FVG
           </span>
-          <span className="flex items-center gap-1 text-[8px] font-bold" style={{ color: CFG.SUPPORT }}>
-            <span className="w-3 border-t border-dotted inline-block" style={{ borderColor: CFG.SUPPORT }} /> SUP/RES
+          <span className="inline-flex items-center gap-1 text-[8px] font-semibold" style={{ color: CFG.PDH }}>
+            <span className="w-3 border-t border-dashed inline-block" style={{ borderColor: CFG.PDH }} />
+            PDH/L
           </span>
-          <span className="ml-auto text-[8px] font-mono text-slate-600">
-            {candles.length}c · {lastCandle ? fmtTime(lastCandle.t) : ''}
+          <span className="inline-flex items-center gap-1 text-[8px] font-semibold" style={{ color: CFG.CDH }}>
+            <span className="w-3 border-t inline-block" style={{ borderColor: CFG.CDH }} />
+            CDH/L
+          </span>
+          <span className="inline-flex items-center gap-1 text-[8px] font-semibold" style={{ color: CFG.SUPPORT }}>
+            <span className="w-3 border-t border-dotted inline-block" style={{ borderColor: CFG.SUPPORT }} />
+            S/R
+          </span>
+          <span className="ml-auto text-[8px] font-mono text-slate-600 tabular-nums shrink-0">
+            {candles.length}c
+            {lastCandle ? <> · {fmtTime(lastCandle.t)}</> : null}
           </span>
         </div>
 
@@ -4213,32 +4112,35 @@ const ChartIntelligence = memo(() => {
   return (
     <div className="mt-4">
       {/* Section Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-3">
-        <div className="flex items-center gap-2 flex-wrap">
-          <span className="w-[3px] h-6 rounded-full bg-gradient-to-b from-indigo-400 to-purple-500 shrink-0" />
-          <h3 className="text-[13px] sm:text-[15px] font-bold text-white tracking-tight">
-            Real-Time Chart Intelligence
-          </h3>
-          <span className="hidden sm:inline text-[10px] sm:text-[11px] text-indigo-400/60 font-medium">
-            FVG · OB · Liquidity · S/R · PDH/PDL · CDH/CDL · BOS/CHoCH · EQH/EQL
-          </span>
-          <span className={`text-[9px] font-mono ${dataStatus.color}`}>
+      {/* ── Section header ── */}
+      <div className="flex flex-col xs:flex-row xs:items-start xs:justify-between gap-2 mb-3">
+        <div className="flex items-center gap-2.5 min-w-0">
+          <span className="w-[3px] h-5 rounded-full bg-gradient-to-b from-indigo-400 to-purple-500 shrink-0" />
+          <div className="min-w-0">
+            <h3 className="text-[13px] sm:text-[15px] font-bold text-white tracking-tight leading-none">
+              Real-Time Chart Intelligence
+            </h3>
+            <p className="mt-0.5 text-[9px] text-slate-600 tracking-wider uppercase hidden sm:block select-none">
+              FVG · OB · Liquidity · S/R · PDH/PDL · CDH/CDL · BOS/CHoCH · EQH/EQL
+            </p>
+          </div>
+          <span className={`text-[9px] font-mono shrink-0 ${dataStatus.color}`}>
             {dataStatus.label}
           </span>
         </div>
-        {/* Legend pills — hidden on mobile to save space */}
-        <div className="hidden sm:flex flex-wrap items-center gap-1.5 text-[8px] font-bold">
-          <span className="px-1.5 py-0.5 rounded" style={{ background: CFG.OB_BULL_FILL, color: CFG.OB_BULL_BORDER, border: `1px solid ${CFG.OB_BULL_BORDER}` }}>▲ Bull OB</span>
-          <span className="px-1.5 py-0.5 rounded" style={{ background: CFG.OB_BEAR_FILL, color: CFG.OB_BEAR_BORDER, border: `1px solid ${CFG.OB_BEAR_BORDER}` }}>▼ Bear OB</span>
-          <span className="px-1.5 py-0.5 rounded" style={{ background: CFG.FVG_BULL_FILL, color: CFG.FVG_BULL_BORDER, border: `1px solid ${CFG.FVG_BULL_BORDER}` }}>↑ FVG</span>
-          <span className="px-1.5 py-0.5 rounded" style={{ background: CFG.FVG_BEAR_FILL, color: CFG.FVG_BEAR_BORDER, border: `1px solid ${CFG.FVG_BEAR_BORDER}` }}>↓ FVG</span>
-          <span className="px-1.5 py-0.5 rounded bg-orange-500/10 text-orange-400 border border-orange-500/30">SSL</span>
-          <span className="px-1.5 py-0.5 rounded bg-cyan-500/10 text-cyan-400 border border-cyan-500/30">BSL</span>
+        {/* Compact legend — hidden on mobile (each card footer has its own legend) */}
+        <div className="hidden sm:flex flex-wrap items-center gap-1 text-[8px] font-bold shrink-0">
+          <span className="px-1.5 py-0.5 rounded" style={{ background: CFG.OB_BULL_FILL, color: CFG.OB_BULL_BORDER, border: `1px solid ${CFG.OB_BULL_BORDER}40` }}>▲OB</span>
+          <span className="px-1.5 py-0.5 rounded" style={{ background: CFG.OB_BEAR_FILL, color: CFG.OB_BEAR_BORDER, border: `1px solid ${CFG.OB_BEAR_BORDER}40` }}>▼OB</span>
+          <span className="px-1.5 py-0.5 rounded" style={{ background: CFG.FVG_BULL_FILL, color: CFG.FVG_BULL_BORDER, border: `1px solid ${CFG.FVG_BULL_BORDER}40` }}>▲FVG</span>
+          <span className="px-1.5 py-0.5 rounded" style={{ background: CFG.FVG_BEAR_FILL, color: CFG.FVG_BEAR_BORDER, border: `1px solid ${CFG.FVG_BEAR_BORDER}40` }}>▼FVG</span>
+          <span className="px-1.5 py-0.5 rounded bg-orange-500/8 text-orange-400 border border-orange-500/25">SSL</span>
+          <span className="px-1.5 py-0.5 rounded bg-cyan-500/8 text-cyan-400 border border-cyan-500/25">BSL</span>
         </div>
       </div>
 
       {/* Chart Cards Grid */}
-      <div className="grid grid-cols-1 xl:grid-cols-2 2xl:grid-cols-3 gap-3">
+      <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-3">
         <SymbolChartCard data={chartData.NIFTY} name="NIFTY 50" liveSpot={marketData.NIFTY?.price} />
         <SymbolChartCard data={chartData.BANKNIFTY} name="BANK NIFTY" liveSpot={marketData.BANKNIFTY?.price} />
         <SymbolChartCard data={chartData.SENSEX} name="SENSEX" liveSpot={marketData.SENSEX?.price} />
