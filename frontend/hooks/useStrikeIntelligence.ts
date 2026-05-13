@@ -118,6 +118,45 @@ export interface WorldMarketImpact {
   }>;
 }
 
+export interface QuantumFractalTimeframe {
+  score: number;
+  trend: 'STRONG_BULL' | 'BULL' | 'NEUTRAL' | 'BEAR' | 'STRONG_BEAR';
+}
+
+export interface QuantumFractalPrediction {
+  nextMove: 'UP' | 'DOWN' | 'SIDEWAYS';
+  state: 'CONTINUATION' | 'WATCH';
+  probabilityPct: number;
+  horizonSec: string;
+  rationale: string;
+}
+
+export interface QuantumFractalIntelligence {
+  title: string;
+  signal: StrikeSignal;
+  score: number;
+  confidence: number;
+  fractalPressure: number;
+  continuationProbability: number;
+  volatilityRegime: 'EXPANSION' | 'COMPRESSION' | 'BALANCED';
+  tags: string[];
+  mtf: {
+    micro: QuantumFractalTimeframe;
+    medium: QuantumFractalTimeframe;
+    macro: QuantumFractalTimeframe;
+    alignmentPct: number;
+  };
+  components: {
+    trendStrength: number;
+    fractalContinuation: number;
+    volumeLiquidity: number;
+    marketStructure: number;
+    volatilityState: number;
+    directionalConfirmation: number;
+  };
+  prediction: QuantumFractalPrediction;
+}
+
 export interface SymbolIntelligenceSummary {
   symbol: string;
   signal: StrikeSignal;
@@ -143,6 +182,8 @@ export interface SymbolIntelligenceSummary {
   bestStrike?: BestStrikeRecommendation | null;
   /** Lowest price predictions for ITM/OTM CE/PE with UP/DOWN direction */
   pricePredictions?: PricePredictions;
+  /** Multi-timeframe fractal market probe engine */
+  quantumFractal?: QuantumFractalIntelligence;
   insights: string[];
 }
 

@@ -1,7 +1,7 @@
 ﻿'use client';
 
 import React, { memo, useMemo, useRef, useState, useEffect } from 'react';
-import { useStrikeIntelligence, type SymbolStrikeData, type StrikeRow, type StrikeSignal, type StrikeSideData, type WorldMarketImpact } from '@/hooks/useStrikeIntelligence';
+import { useStrikeIntelligence, type SymbolStrikeData, type StrikeRow, type StrikeSignal, type StrikeSideData, type QuantumFractalIntelligence } from '@/hooks/useStrikeIntelligence';
 
 // Signal config
 
@@ -28,6 +28,23 @@ const OVERALL_CFG: Record<OverallSignal, { label: string; color: string; bg: str
   NEUTRAL:     { label: 'NEUTRAL',      color: 'text-amber-300',   bg: 'bg-amber-500/15',   border: 'border-amber-400/40',   glow: '',                                              arrow: '—'    },
   SELL:        { label: 'SELL',         color: 'text-red-300',     bg: 'bg-red-500/15',     border: 'border-red-400/40',     glow: 'shadow-[0_0_8px_0px_rgba(251,113,133,0.20)]',   arrow: 'DOWN' },
   STRONG_SELL: { label: 'STRONG SELL',  color: 'text-red-200',     bg: 'bg-red-500/25',     border: 'border-red-400/70',     glow: 'shadow-[0_0_12px_2px_rgba(251,113,133,0.35)]',  arrow: 'DOWN--' },
+};
+
+const FRACTAL_TREND_TONE: Record<string, string> = {
+  STRONG_BULL: 'text-emerald-200 border-emerald-400/60 bg-emerald-500/16',
+  BULL: 'text-emerald-300 border-emerald-400/45 bg-emerald-500/10',
+  NEUTRAL: 'text-amber-300 border-amber-400/40 bg-amber-500/10',
+  BEAR: 'text-red-300 border-red-400/45 bg-red-500/10',
+  STRONG_BEAR: 'text-red-200 border-red-400/60 bg-red-500/16',
+};
+
+const FRACTAL_TAG_TONE: Record<string, string> = {
+  'Fractal Expansion': 'text-cyan-200 border-cyan-400/45 bg-cyan-500/12',
+  'Structural Breakdown': 'text-red-200 border-red-400/45 bg-red-500/12',
+  'Momentum Alignment': 'text-emerald-200 border-emerald-400/45 bg-emerald-500/12',
+  'Liquidity Absorption': 'text-amber-200 border-amber-400/45 bg-amber-500/12',
+  'Reversal Pressure': 'text-fuchsia-200 border-fuchsia-400/45 bg-fuchsia-500/12',
+  'Breakout Continuation': 'text-blue-200 border-blue-400/45 bg-blue-500/12',
 };
 
 // Utilities
@@ -256,6 +273,258 @@ const ScoreDot = memo<{ score: number }>(({ score }) => {
   return <span className={`inline-block w-2 h-2 rounded-full ${color} ${Math.abs(score) >= 40 ? 'animate-pulse' : ''} shadow-sm`} />;
 });
 ScoreDot.displayName = 'ScoreDot';
+
+// ── Quantum Fractal helpers ──────────────────────────────────────────────────
+
+function qfScoreColor(val: number): string {
+  return val > 30 ? 'text-emerald-300' : val > 10 ? 'text-emerald-400/90'
+    : val < -30 ? 'text-rose-300' : val < -10 ? 'text-rose-400/90' : 'text-slate-300';
+}
+function qfScoreFmt(val: number): string {
+  return (val > 0 ? '+' : '') + val;
+}
+
+/** Bi-directional mini progress bar — positive grows right from centre, negative grows left. */
+const QFMiniBar = memo<{ score: number }>(({ score }) => {
+  const c = Math.max(-100, Math.min(100, score));
+  return (
+    <div className="flex-1 h-2 rounded-full bg-slate-800/60 overflow-hidden relative min-w-0">
+      <div className="absolute inset-y-0 left-1/2 w-px bg-slate-600/50 z-10" />
+      {c > 0
+        ? <div className="absolute inset-y-0 bg-emerald-400/70 rounded-r-full" style={{ left: '50%', width: `${c / 2}%` }} />
+        : c < 0
+        ? <div className="absolute inset-y-0 bg-rose-400/70 rounded-l-full"   style={{ right: '50%', width: `${Math.abs(c) / 2}%` }} />
+        : null}
+    </div>
+  );
+});
+QFMiniBar.displayName = 'QFMiniBar';
+
+const ALLOWED_QF_SIGNALS: readonly StrikeSignal[] = ['STRONG_SELL', 'SELL', 'NEUTRAL', 'BUY', 'STRONG_BUY'] as const;
+
+function normalizeQfSignal(signal: string | undefined): StrikeSignal {
+  if (ALLOWED_QF_SIGNALS.includes(signal as StrikeSignal)) {
+    return signal as StrikeSignal;
+  }
+  return 'NEUTRAL';
+}
+
+const QuantumFractalPanel = memo<{ fractal: QuantumFractalIntelligence; symbol?: string }>(({ fractal, symbol }) => {
+  const normalizedSignal = normalizeQfSignal(fractal.signal);
+  const signalCfg   = OVERALL_CFG[normalizedSignal as OverallSignal] ?? OVERALL_CFG.NEUTRAL;
+  const confidenceTone = fractal.confidence >= 70 ? 'text-emerald-300' : fractal.confidence >= 45 ? 'text-amber-300' : 'text-rose-300';
+  const scoreTone      = fractal.score >= 14 ? 'text-emerald-300' : fractal.score <= -14 ? 'text-rose-300' : 'text-amber-300';
+
+  const regimeTone = fractal.volatilityRegime === 'EXPANSION'
+    ? 'text-cyan-200   border-cyan-400/40   bg-cyan-500/10'
+    : fractal.volatilityRegime === 'COMPRESSION'
+    ? 'text-amber-200  border-amber-400/40  bg-amber-500/10'
+    : 'text-slate-300  border-slate-500/35  bg-slate-700/15';
+
+  // Coloured top-edge accent strip
+  const accentStrip = (fractal.signal === 'STRONG_BUY' || fractal.signal === 'BUY')
+    ? 'from-emerald-500/80 via-emerald-400/40 to-transparent'
+    : (fractal.signal === 'STRONG_SELL' || fractal.signal === 'SELL')
+    ? 'from-rose-500/80    via-rose-400/40    to-transparent'
+    : 'from-amber-500/60   via-amber-400/30   to-transparent';
+
+  // Score gauge (−100 … +100 mapped to 0 … 100%)
+  const scoreGaugePct = Math.max(0, Math.min(100, (fractal.score + 100) / 2));
+  const gaugeGradient = fractal.score >= 14
+    ? 'from-emerald-600/60 to-emerald-400'
+    : fractal.score <= -14
+    ? 'from-rose-600/60    to-rose-400'
+    : 'from-amber-600/60   to-amber-400';
+
+  const tfEntries = [
+    { key: 'micro'  as const, label: 'Micro'  },
+    { key: 'medium' as const, label: 'Medium' },
+    { key: 'macro'  as const, label: 'Macro'  },
+  ] as const;
+
+  const probeRows: [string, number, boolean][] = [
+    ['Trend',     fractal.components.trendStrength,           false],
+    ['Structure', fractal.components.marketStructure,         false],
+    ['Liquidity', fractal.components.volumeLiquidity,         false],
+    ['Confirm',   fractal.components.directionalConfirmation, false],
+    ['Fractal P', fractal.fractalPressure,                    false],
+    ['Cont.',     fractal.continuationProbability,            true ],
+  ];
+
+  const nextIcon = fractal.prediction.nextMove === 'UP' ? '↑'
+    : fractal.prediction.nextMove === 'DOWN' ? '↓' : '→';
+
+  return (
+    <div className="rounded-2xl overflow-hidden flex flex-col border border-slate-600/60 bg-slate-950/90 shadow-lg min-w-0">
+
+      {/* ── Coloured accent strip ───────────────────────────────────────── */}
+      <div className={`h-0.5 w-full bg-gradient-to-r ${accentStrip}`} />
+
+      {/* ── Card header ─────────────────────────────────────────────────── */}
+      <div className="px-4 sm:px-5 pt-4 pb-3 border-b border-slate-700/35 bg-gradient-to-r from-slate-900/70 to-transparent">
+        <div className="flex items-start justify-between gap-2 min-w-0">
+          {/* Left: symbol + signal + regime */}
+          <div className="flex flex-col gap-1.5 min-w-0 flex-1">
+            {symbol && (
+              <span className="inline-flex w-fit items-center rounded-md border border-cyan-400/45 bg-cyan-500/10 px-2 py-1 text-[11px] sm:text-[13px] uppercase tracking-[0.14em] font-black text-cyan-200 leading-none shadow-[0_0_10px_rgba(34,211,238,0.12)]">
+                {symbol}
+              </span>
+            )}
+            <div className="flex flex-wrap items-center gap-1.5">
+              <span className={`inline-flex items-center gap-1 rounded-md border px-2.5 py-1 text-[11px] sm:text-[13px] font-black tracking-wide leading-tight shrink-0 ${signalCfg.bg} ${signalCfg.border} ${signalCfg.color} ${signalCfg.glow}`}>
+                {signalCfg.label}
+              </span>
+              <span className={`inline-flex items-center rounded border px-2 py-0.5 text-[9px] sm:text-[10px] font-bold tracking-[0.1em] uppercase shrink-0 ${regimeTone}`}>
+                {fractal.volatilityRegime}
+              </span>
+            </div>
+          </div>
+          {/* Right: score + confidence */}
+          <div className="flex flex-col items-end gap-0.5 shrink-0 pl-1">
+            <span className={`text-2xl sm:text-3xl font-black font-mono tabular-nums leading-none ${scoreTone}`}>
+              {fractal.score > 0 ? '+' : ''}{fractal.score}
+            </span>
+            <span className={`text-[11px] sm:text-[12px] font-bold font-mono tabular-nums leading-none ${confidenceTone}`}>
+              {fractal.confidence}%
+            </span>
+          </div>
+        </div>
+
+        {/* Score gauge ─────────────────────────────────────────────────── */}
+        <div className="mt-3.5 flex items-center gap-2">
+          <span className="text-[8px] sm:text-[9px] uppercase tracking-widest text-slate-500 font-semibold shrink-0 w-8">Bear</span>
+          <div className="flex-1 h-2 rounded-full bg-slate-800/70 overflow-hidden relative min-w-0">
+            <div className="absolute inset-y-0 left-1/2 w-px bg-slate-500/50 z-10" />
+            <div
+              className={`absolute inset-y-0 left-0 h-full rounded-full transition-all duration-500 ease-out bg-gradient-to-r ${gaugeGradient}`}
+              style={{ width: `${scoreGaugePct}%` }}
+            />
+          </div>
+          <span className="text-[8px] sm:text-[9px] uppercase tracking-widest text-slate-500 font-semibold shrink-0 w-8 text-right">Bull</span>
+        </div>
+        <div className="flex justify-between px-0 mt-0.5">
+          <span className="text-[8px] font-mono text-slate-600">-100</span>
+          <span className="text-[8px] font-mono text-slate-600">0</span>
+          <span className="text-[8px] font-mono text-slate-600">+100</span>
+        </div>
+      </div>
+
+      {/* ── Body: 3 columns on sm+, single column on xs ─────────────────── */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 divide-y sm:divide-y-0 sm:divide-x divide-slate-700/30 flex-1">
+
+        {/* ── Col 1 · Multi-Timeframe Matrix ──────────────────────────── */}
+        <div className="px-4 sm:px-3.5 py-3.5 flex flex-col gap-0 min-w-0">
+          <p className="text-[9px] sm:text-[10px] uppercase tracking-[0.15em] text-slate-400 font-bold mb-2.5">MTF Matrix</p>
+          <div className="flex flex-col gap-2">
+            {tfEntries.map(({ key, label }) => {
+              const tf     = fractal.mtf[key];
+              const tfTone = FRACTAL_TREND_TONE[tf.trend] || FRACTAL_TREND_TONE.NEUTRAL;
+              return (
+                <div key={key} className="flex items-center gap-2 min-w-0">
+                  <span className="text-[10px] sm:text-[11px] text-slate-300 w-12 shrink-0 font-semibold">{label}</span>
+                  <QFMiniBar score={tf.score} />
+                  <span className={`text-[10px] sm:text-[11px] font-mono font-black tabular-nums shrink-0 w-9 text-right ${qfScoreColor(tf.score)}`}>
+                    {qfScoreFmt(tf.score)}
+                  </span>
+                  <span className={`hidden sm:inline-flex items-center rounded border px-1.5 py-0.5 text-[9px] font-bold shrink-0 leading-tight ${tfTone}`}>
+                    {tf.trend.replace('_', ' ')}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+          {/* Alignment bar */}
+          <div className="mt-3 pt-2.5 border-t border-slate-700/25">
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] sm:text-[11px] text-slate-300 shrink-0 font-semibold w-12">Align</span>
+              <div className="flex-1 h-1.5 rounded-full bg-slate-800/60 overflow-hidden min-w-0">
+                <div
+                  className="h-full rounded-full bg-gradient-to-r from-cyan-500 to-emerald-400 transition-all duration-500"
+                  style={{ width: `${Math.max(0, Math.min(100, fractal.mtf.alignmentPct))}%` }}
+                />
+              </div>
+              <span className="text-[11px] sm:text-[12px] font-mono font-black text-cyan-300 tabular-nums shrink-0 w-10 text-right">
+                {fractal.mtf.alignmentPct}%
+              </span>
+            </div>
+          </div>
+        </div>
+
+        {/* ── Col 2 · Probe Components ────────────────────────────────── */}
+        <div className="px-4 sm:px-3.5 py-3.5 min-w-0">
+          <p className="text-[9px] sm:text-[10px] uppercase tracking-[0.15em] text-slate-400 font-bold mb-2.5">Probe Components</p>
+          <div className="flex flex-col gap-1.5">
+            {probeRows.map(([label, val, isPct]) => (
+              <div key={label as string} className="flex items-center gap-2 min-w-0">
+                <span className="text-[10px] sm:text-[11px] text-slate-300 w-16 shrink-0 truncate font-semibold">{label as string}</span>
+                <div className="flex-1 h-1.5 rounded-full bg-slate-800/60 overflow-hidden min-w-0 relative">
+                  <div className="absolute inset-y-0 left-1/2 w-px bg-slate-600/40 z-10" />
+                  {(val as number) >= 0
+                    ? <div className="absolute inset-y-0 left-1/2 h-full rounded-r-full bg-emerald-400/55 transition-all duration-300" style={{ width: `${Math.min(50, Math.abs(val as number) / 2)}%` }} />
+                    : <div className="absolute inset-y-0 right-1/2 h-full rounded-l-full bg-rose-400/55   transition-all duration-300" style={{ width: `${Math.min(50, Math.abs(val as number) / 2)}%` }} />
+                  }
+                </div>
+                <span className={`text-[11px] sm:text-[12px] font-mono font-black tabular-nums shrink-0 w-12 text-right ${qfScoreColor(val as number)}`}>
+                  {qfScoreFmt(val as number)}{isPct ? '%' : ''}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* ── Col 3 · Predictive Behavior ─────────────────────────────── */}
+        <div className="px-4 sm:px-3.5 py-3.5 min-w-0">
+          <p className="text-[9px] sm:text-[10px] uppercase tracking-[0.15em] text-slate-400 font-bold mb-2.5">Predictive Behavior</p>
+          <div className="flex flex-col gap-2">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className={`inline-flex items-center rounded-md border px-2.5 py-1 text-[11px] sm:text-[13px] font-black leading-tight shrink-0 ${signalCfg.bg} ${signalCfg.border} ${signalCfg.color}`}>
+                {nextIcon}&nbsp;{fractal.prediction.nextMove}
+              </span>
+              <span className={`text-[13px] sm:text-[15px] font-mono font-black tabular-nums shrink-0 ${confidenceTone}`}>
+                {fractal.prediction.probabilityPct}%
+              </span>
+            </div>
+            {/* Probability bar */}
+            <div className="flex items-center gap-2">
+              <div className="flex-1 h-1.5 rounded-full bg-slate-800/60 overflow-hidden min-w-0">
+                <div
+                  className={`h-full rounded-full transition-all duration-300 ${fractal.prediction.probabilityPct >= 65 ? 'bg-emerald-400' : fractal.prediction.probabilityPct >= 50 ? 'bg-amber-400' : 'bg-rose-400'}`}
+                  style={{ width: `${Math.max(0, Math.min(100, fractal.prediction.probabilityPct))}%` }}
+                />
+              </div>
+              <span className="text-[10px] sm:text-[11px] font-mono text-slate-400 tabular-nums shrink-0">{fractal.prediction.horizonSec}s</span>
+            </div>
+            {/* State */}
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <span className="text-[10px] sm:text-[11px] text-slate-400 font-medium shrink-0">State</span>
+              <span className={`text-[10px] sm:text-[11px] font-bold tracking-wide ${fractal.prediction.state === 'CONTINUATION' ? 'text-emerald-400' : 'text-amber-400'}`}>
+                {fractal.prediction.state}
+              </span>
+            </div>
+            {/* Rationale */}
+            <p className="text-[10px] sm:text-[11px] text-slate-300 leading-relaxed break-words">{fractal.prediction.rationale}</p>
+          </div>
+        </div>
+      </div>
+
+      {/* ── Tags ────────────────────────────────────────────────────────── */}
+      {fractal.tags.length > 0 && (
+        <div className="px-4 sm:px-5 pb-3.5 pt-2.5 border-t border-slate-700/30 flex flex-wrap gap-1.5">
+          {fractal.tags.map((tag) => (
+            <span
+              key={tag}
+              className={`inline-flex items-center rounded-md border px-2.5 py-1 text-[10px] sm:text-[11px] font-semibold leading-tight ${FRACTAL_TAG_TONE[tag] || 'text-slate-300 border-slate-600/40 bg-slate-700/15'}`}
+            >
+              {tag}
+            </span>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+});
+QuantumFractalPanel.displayName = 'QuantumFractalPanel';
+export { QuantumFractalPanel };
 
 // ── Trade Decision Engine ────────────────────────────────────────────────
 // Rule: CE strong + PE weak → BUY CE (market UP)
@@ -1555,7 +1824,6 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
 
   // PCR from backend intelligence, fallback to computed from strikes
   const pcr = intelligence?.pcr ?? summary.pcr;
-  const worldMarket: WorldMarketImpact | undefined = intelligence?.worldMarket;
 
   return (
     <div className="rounded-xl bg-dark-card/60 border border-slate-700/40 p-3 sm:p-4 lg:p-5 overflow-hidden">
@@ -2063,60 +2331,6 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
               </div>
             </div>
           </div>
-
-          {/* Row 2.5: World Market Impact (Dow/Nasdaq/S&P/DAX/FTSE/Nikkei) */}
-          {worldMarket && (
-            <div className="px-2.5 sm:px-3 py-2 border-t border-slate-700/30 bg-slate-900/35">
-              <div
-                className={`rounded border px-2 py-1.5 ${
-                  worldMarket.bias === 'BULLISH'
-                    ? 'border-emerald-500/45 bg-emerald-500/10'
-                    : worldMarket.bias === 'BEARISH'
-                    ? 'border-red-500/45 bg-red-500/10'
-                    : 'border-amber-500/45 bg-amber-500/10'
-                }`}
-                title={worldMarket.summary}
-              >
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <span className="text-[8px] sm:text-[9px] font-bold tracking-widest text-slate-400 uppercase">World Market Impact</span>
-                  <span className="text-[9px] font-mono text-slate-400">{worldMarket.liveCount}/{worldMarket.totalCount} live</span>
-                </div>
-                <div className="mt-1 flex flex-wrap items-center gap-2">
-                  <span className={`text-[11px] sm:text-[12px] font-black ${
-                    worldMarket.bias === 'BULLISH'
-                      ? 'text-emerald-300'
-                      : worldMarket.bias === 'BEARISH'
-                      ? 'text-red-300'
-                      : 'text-amber-300'
-                  }`}>
-                    {worldMarket.bias}
-                  </span>
-                  <span className="text-[10px] font-mono font-black tabular-nums text-cyan-300">
-                    {worldMarket.influenceScore > 0 ? '+' : ''}{worldMarket.influenceScore}
-                  </span>
-                  <span className="text-[10px] font-mono tabular-nums text-slate-300">
-                    strike {worldMarket.impactPts > 0 ? '+' : ''}{worldMarket.impactPts}
-                  </span>
-                </div>
-                <div className="mt-1.5 flex flex-wrap gap-1">
-                  {worldMarket.components.slice(0, 6).map((c) => (
-                    <span
-                      key={c.symbol}
-                      className={`inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[9px] font-mono tabular-nums ${
-                        c.changePct > 0
-                          ? 'text-emerald-200 border-emerald-500/40 bg-emerald-500/10'
-                          : c.changePct < 0
-                          ? 'text-red-200 border-red-500/40 bg-red-500/10'
-                          : 'text-slate-200 border-slate-500/40 bg-slate-700/20'
-                      }`}
-                    >
-                      {c.symbol} {c.changePct > 0 ? '+' : ''}{c.changePct.toFixed(2)}%
-                    </span>
-                  ))}
-                </div>
-              </div>
-            </div>
-          )}
 
           {/* Row 3 (Insights) intentionally hidden to save space */}
         </div>

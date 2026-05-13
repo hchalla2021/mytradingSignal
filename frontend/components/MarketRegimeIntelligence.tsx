@@ -6,6 +6,7 @@ import type { MarketData } from '@/hooks/useMarketSocket';
 import type { VIXData } from '@/hooks/useIndiaVIX';
 import SectionTitle from '@/components/SectionTitle';
 import StrikeIntelligence from '@/components/StrikeIntelligence';
+import QuantumFractalSection from '@/components/QuantumFractalSection';
 import ChartIntelligence from '@/components/ChartIntelligence';
 
 // ── Regime visual config ────────────────────────────────────────────────────
@@ -366,7 +367,10 @@ const MarketRegimeIntelligence = memo<{
       {/* 🎯 Strike Intelligence — ATM ± 5, CE/PE, Volume/OI/Liquidity Scoring */}
       <StrikeIntelligence />
 
-      {/* 📈 Real-Time Chart Intelligence — SMC, FVG, S/R, PDH/PDL, CDH/CDL */}
+      {/* � Quantum Fractal Intelligence Engine — Multi-timeframe fractal analysis */}
+      <QuantumFractalSection />
+
+      {/* �📈 Real-Time Chart Intelligence — SMC, FVG, S/R, PDH/PDL, CDH/CDL */}
       <ChartIntelligence />
     </div>
   );

@@ -19,6 +19,7 @@ ISOLATION: Own ConnectionManager, own asyncio task, own singleton.
 """
 
 import asyncio
+from collections import deque
 import json
 import logging
 import math
@@ -707,6 +708,26 @@ def _overall_signal_from_score(score: float) -> str:
         return "STRONG_SELL"
     if score <= -12:
         return "SELL"
+    return "NEUTRAL"
+
+
+def _direction_from_score(score: float, threshold: float = 8.0) -> int:
+    if score >= threshold:
+        return 1
+    if score <= -threshold:
+        return -1
+    return 0
+
+
+def _trend_label_from_score(score: float) -> str:
+    if score >= 30:
+        return "STRONG_BULL"
+    if score >= 12:
+        return "BULL"
+    if score <= -30:
+        return "STRONG_BEAR"
+    if score <= -12:
+        return "BEAR"
     return "NEUTRAL"
 
 
@@ -1556,6 +1577,10 @@ class StrikeIntelligenceService:
         # Price velocity tracking: key = "SYMBOL_STRIKE_CE" / "_PE" → prev LTP
         # Used to detect fast-moving strikes for real-time auto-highlighting.
         self._prev_prices: Dict[str, float] = {}
+        # Fractal probe history: bounded score stream per symbol for micro/medium/macro windows.
+        self._fractal_score_history: Dict[str, deque] = {
+            sym: deque(maxlen=240) for sym in SYMBOLS
+        }
 
     def _with_runtime_meta(
         self,
@@ -1583,6 +1608,340 @@ class StrikeIntelligenceService:
         updated["optionChainAgeSec"] = round(option_age_sec, 1)
         updated["feedMode"] = "HYBRID_LIVE"
         return updated
+
+    def _ensure_quantum_fractal(self, entry: Dict[str, Any]) -> None:
+        """Inject quantumFractal into intelligence if it is missing (e.g. loaded from disk)."""
+        intel = entry.get("intelligence")
+        if not isinstance(intel, dict):
+            return
+        if "quantumFractal" in intel:
+            return
+        strikes = entry.get("strikes", [])
+        symbol = entry.get("symbol", "NIFTY")
+        data_source = entry.get("dataSource", "LAST_CLOSE")
+        option_age_sec = _safe_float(entry.get("optionChainAgeSec", 0.0))
+        intel["quantumFractal"] = self._compute_quantum_fractal_intelligence(
+            symbol, strikes, intel,
+            data_source=data_source,
+            option_age_sec=option_age_sec,
+        )
+
+    def _fractal_window_score(self, symbol: str, lookback: int, fallback: float) -> float:
+        hist = self._fractal_score_history.get(symbol)
+        if not hist:
+            return round(fallback, 1)
+        points = list(hist)[-lookback:]
+        if not points:
+            return round(fallback, 1)
+
+        values = [_safe_float(p.get("score")) for p in points]
+        if len(values) == 1:
+            return round(_clamp(values[0], -100.0, 100.0), 1)
+
+        drift = values[-1] - values[0]
+        avg = sum(values) / len(values)
+        half_idx = max(0, len(values) // 2)
+        accel = values[-1] - values[half_idx]
+        blended = _clamp(0.50 * avg + 0.35 * drift + 0.15 * accel, -100.0, 100.0)
+        return round(blended, 1)
+
+    def _compute_quantum_fractal_intelligence(
+        self,
+        symbol: str,
+        strikes: List[Dict[str, Any]],
+        intelligence: Dict[str, Any],
+        *,
+        data_source: str,
+        option_age_sec: float,
+    ) -> Dict[str, Any]:
+        if not strikes:
+            return {
+                "title": "Quantum Fractal Intelligence Engine",
+                "signal": "NEUTRAL",
+                "score": 0.0,
+                "confidence": 0,
+                "fractalPressure": 0.0,
+                "continuationProbability": 0,
+                "volatilityRegime": "BALANCED",
+                "tags": ["Structural Breakdown"],
+                "mtf": {
+                    "micro": {"score": 0.0, "trend": "NEUTRAL"},
+                    "medium": {"score": 0.0, "trend": "NEUTRAL"},
+                    "macro": {"score": 0.0, "trend": "NEUTRAL"},
+                    "alignmentPct": 0,
+                },
+                "components": {
+                    "trendStrength": 0.0,
+                    "fractalContinuation": 0,
+                    "volumeLiquidity": 0.0,
+                    "marketStructure": 0.0,
+                    "volatilityState": 0.0,
+                    "directionalConfirmation": 0.0,
+                },
+                "prediction": {
+                    "nextMove": "SIDEWAYS",
+                    "state": "WATCH",
+                    "probabilityPct": 50,
+                    "horizonSec": "90-180",
+                    "rationale": "Insufficient strike depth for fractal modeling",
+                },
+            }
+
+        sorted_rows = sorted(strikes, key=lambda r: _safe_int(r.get("strike")))
+        atm_idx = next((i for i, row in enumerate(sorted_rows) if row.get("isATM")), len(sorted_rows) // 2)
+        near_rows = [r for i, r in enumerate(sorted_rows) if abs(i - atm_idx) <= 2]
+
+        ce_vol = sum(_safe_int((r.get("ce") or {}).get("volume")) for r in sorted_rows)
+        pe_vol = sum(_safe_int((r.get("pe") or {}).get("volume")) for r in sorted_rows)
+        ce_oi = sum(_safe_int((r.get("ce") or {}).get("oi")) for r in sorted_rows)
+        pe_oi = sum(_safe_int((r.get("pe") or {}).get("oi")) for r in sorted_rows)
+        vol_total = max(ce_vol + pe_vol, 1)
+        oi_total = max(ce_oi + pe_oi, 1)
+        vol_skew = ((ce_vol - pe_vol) / vol_total) * 100.0
+        oi_skew = ((ce_oi - pe_oi) / oi_total) * 100.0
+
+        weighted_net = 0.0
+        total_weight = 0.0
+        bos_up = 0
+        bos_down = 0
+        trap_ce = 0
+        trap_pe = 0
+        ce_hot = 0
+        pe_hot = 0
+        ce_abs_pa = 0.0
+        pe_abs_pa = 0.0
+        pa_samples = 0
+
+        for i, row in enumerate(sorted_rows):
+            ce = row.get("ce") or {}
+            pe = row.get("pe") or {}
+            ce_score = _safe_float(ce.get("score"))
+            pe_score = _safe_float(pe.get("score"))
+            dist = abs(i - atm_idx)
+            w = 3.0 if dist == 0 else 2.2 if dist == 1 else 1.6 if dist == 2 else 1.0
+            weighted_net += (ce_score - pe_score) * w
+            total_weight += w
+
+            ce_sig = ce.get("signals") or {}
+            pe_sig = pe.get("signals") or {}
+            if ce_sig.get("bos") == "UP":
+                bos_up += 1
+            elif ce_sig.get("bos") == "DOWN":
+                bos_down += 1
+
+            if ce_sig.get("trap"):
+                trap_ce += 1
+            if pe_sig.get("trap"):
+                trap_pe += 1
+
+            if (ce.get("velocity") in ("HOT", "EXTREME")):
+                ce_hot += 1
+            if (pe.get("velocity") in ("HOT", "EXTREME")):
+                pe_hot += 1
+
+            ce_price = _safe_float(ce.get("price"))
+            pe_price = _safe_float(pe.get("price"))
+            if ce_price > 0:
+                ce_abs_pa += abs(_safe_float(ce.get("change")) / ce_price) * 100.0
+                pa_samples += 1
+            if pe_price > 0:
+                pe_abs_pa += abs(_safe_float(pe.get("change")) / pe_price) * 100.0
+
+        atm_row = sorted_rows[atm_idx] if sorted_rows else {}
+        atm_net = _safe_float((atm_row.get("ce") or {}).get("score")) - _safe_float((atm_row.get("pe") or {}).get("score"))
+        near_net = 0.0
+        if near_rows:
+            near_net = sum(
+                _safe_float((r.get("ce") or {}).get("score")) - _safe_float((r.get("pe") or {}).get("score"))
+                for r in near_rows
+            ) / len(near_rows)
+        cross_net = weighted_net / max(total_weight, 1.0)
+
+        current_probe_score = _clamp(0.45 * atm_net + 0.35 * near_net + 0.20 * cross_net, -100.0, 100.0)
+        hist = self._fractal_score_history.setdefault(symbol, deque(maxlen=240))
+        now_ts = time_mod.time()
+        if hist and (now_ts - _safe_float(hist[-1].get("ts"))) < 0.45:
+            hist[-1] = {"ts": now_ts, "score": round(current_probe_score, 1)}
+        else:
+            hist.append({"ts": now_ts, "score": round(current_probe_score, 1)})
+
+        medium_base = _safe_float(intelligence.get("score"))
+        micro_score = self._fractal_window_score(symbol, 6, current_probe_score)
+        medium_score = self._fractal_window_score(symbol, 24, medium_base)
+        macro_score = self._fractal_window_score(symbol, 72, medium_base)
+
+        micro_dir = _direction_from_score(micro_score)
+        medium_dir = _direction_from_score(medium_score)
+        macro_dir = _direction_from_score(macro_score)
+
+        non_neutral = [d for d in (micro_dir, medium_dir, macro_dir) if d != 0]
+        if non_neutral:
+            dominant_dir = 1 if sum(non_neutral) > 0 else -1
+            aligned = sum(1 for d in non_neutral if d == dominant_dir)
+            alignment_pct = int(round((aligned / len(non_neutral)) * 100))
+        else:
+            dominant_dir = 0
+            alignment_pct = 0
+
+        trap_ratio = min((trap_ce + trap_pe) / max(len(sorted_rows), 1), 1.0)
+        agreement = _safe_float(intelligence.get("agreementPct")) / 100.0
+
+        bos_count = max(bos_up + bos_down, 1)
+        bos_bias = (bos_up - bos_down) / bos_count
+        if dominant_dir > 0:
+            bos_alignment = _clamp((bos_bias + 1.0) / 2.0, 0.0, 1.0)
+        elif dominant_dir < 0:
+            bos_alignment = _clamp((1.0 - bos_bias) / 2.0, 0.0, 1.0)
+        else:
+            bos_alignment = 0.5
+
+        continuation_prob = int(round(_clamp(
+            (0.35 * min(abs(medium_score) / 60.0, 1.0)
+             + 0.25 * agreement
+             + 0.20 * (alignment_pct / 100.0)
+             + 0.20 * bos_alignment
+             - 0.25 * trap_ratio) * 100.0,
+            5.0,
+            98.0,
+        )))
+
+        hot_ratio = (ce_hot + pe_hot) / max(2.0 * len(sorted_rows), 1.0)
+        avg_abs_pa = (ce_abs_pa + pe_abs_pa) / max(pa_samples, 1)
+        expansion_score = _clamp(hot_ratio * 70.0 + min(avg_abs_pa * 8.0, 30.0), 0.0, 100.0)
+        if expansion_score >= 58:
+            volatility_regime = "EXPANSION"
+        elif expansion_score <= 32:
+            volatility_regime = "COMPRESSION"
+        else:
+            volatility_regime = "BALANCED"
+
+        trend_component = _safe_float(intelligence.get("score"))
+        liquidity_component = _clamp(0.55 * vol_skew + 0.45 * oi_skew, -100.0, 100.0)
+        structure_component = _clamp(
+            (bos_up - bos_down) * 14.0 + (trap_pe - trap_ce) * 6.0 + (atm_net * 0.4),
+            -100.0,
+            100.0,
+        )
+        directional_confirmation_component = _clamp(dominant_dir * alignment_pct, -100.0, 100.0)
+        continuation_signed = 0.0
+        if dominant_dir != 0:
+            continuation_signed = (continuation_prob * 2.0 - 100.0) * dominant_dir
+
+        vol_state_component = _clamp((expansion_score - 50.0) * (1 if (micro_dir or medium_dir) >= 0 else -1), -100.0, 100.0)
+
+        fractal_pressure = _clamp(
+            0.45 * micro_score + 0.35 * medium_score + 0.20 * macro_score + 0.25 * structure_component,
+            -100.0,
+            100.0,
+        )
+
+        overall_score = (
+            0.24 * trend_component
+            + 0.18 * continuation_signed
+            + 0.14 * liquidity_component
+            + 0.16 * structure_component
+            + 0.12 * vol_state_component
+            + 0.16 * directional_confirmation_component
+        )
+
+        freshness_mult = 1.0
+        if option_age_sec > 10:
+            freshness_mult *= _clamp(1.0 - (option_age_sec - 10.0) / 120.0, 0.55, 1.0)
+        if data_source == "CACHED":
+            freshness_mult *= 0.78
+        elif data_source == "LAST_CLOSE":
+            freshness_mult *= 0.62
+        elif data_source == "MARKET_CLOSED":
+            freshness_mult *= 0.28
+
+        overall_score = _clamp(overall_score * freshness_mult, -100.0, 100.0)
+        signal = _overall_signal_from_score(overall_score)
+
+        confidence = int(round(_clamp(
+            (38.0
+             + abs(overall_score) * 0.42
+             + alignment_pct * 0.24
+             + continuation_prob * 0.20
+             - trap_ratio * 30.0) * freshness_mult,
+            5.0,
+            99.0,
+        )))
+
+        tags: List[str] = []
+        if volatility_regime == "EXPANSION" and abs(fractal_pressure) >= 25:
+            tags.append("Fractal Expansion")
+        if structure_component <= -22 or (bos_down > bos_up + 1 and dominant_dir <= 0):
+            tags.append("Structural Breakdown")
+        if alignment_pct >= 70 and abs(medium_score) >= 14:
+            tags.append("Momentum Alignment")
+        if trap_ratio >= 0.24:
+            tags.append("Liquidity Absorption")
+        if abs(micro_score - medium_score) >= 20 or (trap_ratio >= 0.20 and volatility_regime == "COMPRESSION"):
+            tags.append("Reversal Pressure")
+        if continuation_prob >= 65 and volatility_regime == "EXPANSION" and abs(medium_score) >= 15:
+            tags.append("Breakout Continuation")
+        if not tags:
+            tags.append("Momentum Alignment" if abs(medium_score) >= 10 else "Reversal Pressure")
+
+        if signal in ("STRONG_BUY", "BUY"):
+            next_move = "UP"
+            state = "CONTINUATION"
+        elif signal in ("STRONG_SELL", "SELL"):
+            next_move = "DOWN"
+            state = "CONTINUATION"
+        else:
+            next_move = "SIDEWAYS"
+            state = "WATCH"
+
+        probability = 50
+        if next_move != "SIDEWAYS":
+            probability = int(round(_clamp(
+                50.0
+                + abs(overall_score) * 0.35
+                + continuation_prob * 0.30
+                + alignment_pct * 0.15
+                - trap_ratio * 28.0,
+                35.0,
+                95.0,
+            )))
+
+        horizon = "30-90" if volatility_regime == "EXPANSION" else "90-180"
+        rationale = (
+            f"{_trend_label_from_score(medium_score).replace('_', ' ')} | "
+            f"alignment {alignment_pct}% | continuation {continuation_prob}%"
+        )
+
+        return {
+            "title": "Quantum Fractal Intelligence Engine",
+            "signal": signal,
+            "score": round(overall_score, 1),
+            "confidence": confidence,
+            "fractalPressure": round(fractal_pressure, 1),
+            "continuationProbability": continuation_prob,
+            "volatilityRegime": volatility_regime,
+            "tags": tags[:4],
+            "mtf": {
+                "micro": {"score": round(micro_score, 1), "trend": _trend_label_from_score(micro_score)},
+                "medium": {"score": round(medium_score, 1), "trend": _trend_label_from_score(medium_score)},
+                "macro": {"score": round(macro_score, 1), "trend": _trend_label_from_score(macro_score)},
+                "alignmentPct": alignment_pct,
+            },
+            "components": {
+                "trendStrength": round(trend_component, 1),
+                "fractalContinuation": continuation_prob,
+                "volumeLiquidity": round(liquidity_component, 1),
+                "marketStructure": round(structure_component, 1),
+                "volatilityState": round(vol_state_component, 1),
+                "directionalConfirmation": round(directional_confirmation_component, 1),
+            },
+            "prediction": {
+                "nextMove": next_move,
+                "state": state,
+                "probabilityPct": probability,
+                "horizonSec": horizon,
+                "rationale": rationale,
+            },
+        }
 
     # ── KiteConnect init ─────────────────────────────────────────────────
 
@@ -1674,6 +2033,9 @@ class StrikeIntelligenceService:
                     if isinstance(persisted[sym], dict):
                         persisted[sym]["dataSource"] = "LAST_CLOSE" if _is_real_chain_entry(persisted[sym]) else "MARKET_CLOSED"
                 self._last_snapshot = persisted
+                for _sym_entry in self._last_snapshot.values():
+                    if isinstance(_sym_entry, dict):
+                        self._ensure_quantum_fractal(_sym_entry)
         return self._last_snapshot
 
     # ── Market phase detection ───────────────────────────────────────────
@@ -2003,6 +2365,14 @@ class StrikeIntelligenceService:
             "dataSource": "LIVE",
             "timestamp": built_at,
         }
+        if isinstance(payload.get("intelligence"), dict):
+            payload["intelligence"]["quantumFractal"] = self._compute_quantum_fractal_intelligence(
+                symbol,
+                strikes_out,
+                payload["intelligence"],
+                data_source="LIVE",
+                option_age_sec=0.0,
+            )
         return self._with_runtime_meta(payload, spot_timestamp=built_at, option_timestamp=built_at)
 
     # ── Signal recomputation with live spot ──────────────────────────────
@@ -2109,6 +2479,14 @@ class StrikeIntelligenceService:
             option_age_sec=prev_option_age,
             world_snapshot=get_global_indices_service().get_snapshot(),
         )
+        if isinstance(updated.get("intelligence"), dict):
+            updated["intelligence"]["quantumFractal"] = self._compute_quantum_fractal_intelligence(
+                symbol,
+                new_strikes,
+                updated["intelligence"],
+                data_source=prev_data_source,
+                option_age_sec=prev_option_age,
+            )
         return self._with_runtime_meta(
             updated,
             spot_timestamp=datetime.now(IST).isoformat(),
@@ -2282,6 +2660,7 @@ class StrikeIntelligenceService:
                                     option_timestamp=entry.get("optionChainUpdatedAt") or entry.get("timestamp"),
                                 )
                                 preserved["dataSource"] = "LAST_CLOSE"
+                                self._ensure_quantum_fractal(preserved)
                                 self._last_snapshot[sym] = preserved
                                 continue
 

@@ -4744,6 +4744,96 @@ const ChartIntelligence = memo(() => {
   const niftyLiveSpot = useMemo(() => getFreshLiveSpot(marketData.NIFTY), [marketData.NIFTY, getFreshLiveSpot]);
   const bankNiftyLiveSpot = useMemo(() => getFreshLiveSpot(marketData.BANKNIFTY), [marketData.BANKNIFTY, getFreshLiveSpot]);
   const sensexLiveSpot = useMemo(() => getFreshLiveSpot(marketData.SENSEX), [marketData.SENSEX, getFreshLiveSpot]);
+  const [globalNowMs, setGlobalNowMs] = useState(() => Date.now());
+
+  useEffect(() => {
+    const timer = setInterval(() => setGlobalNowMs(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  const globalRiskItems = useMemo(() => [
+    { key: 'DJI', alias: 'DOW', label: 'Dow' },
+    { key: 'IXIC', alias: 'NASDAQ', label: 'Nasdaq' },
+    { key: 'SPX', alias: 'SPX', label: 'S&P' },
+    { key: 'DAX', alias: 'DAX', label: 'DAX' },
+    { key: 'FTSE', alias: 'FTSE', label: 'FTSE' },
+    { key: 'NIKKEI', alias: 'NIKKEI', label: 'Nikkei' },
+  ] as const, []);
+
+  const getGlobalIndexTick = useCallback((key: string, alias?: string) => {
+    const byKey = globalIndices[key];
+    if (byKey) return byKey;
+    if (alias) return globalIndices[alias];
+    return undefined;
+  }, [globalIndices]);
+
+  const globalRiskSnapshots = useMemo(() => {
+    return globalRiskItems.map((item) => {
+      const g = getGlobalIndexTick(item.key, item.alias);
+      const hasData = !!g && g.status !== 'UNAVAILABLE' && Number.isFinite(g?.changePct);
+      const tsMs = Date.parse(g?.timestamp || '');
+      const ageSec = Number.isFinite(tsMs) ? Math.max(0, (globalNowMs - tsMs) / 1000) : Number.POSITIVE_INFINITY;
+
+      let freshness: 'LIVE' | 'STALE' | 'UNAVAILABLE' = 'UNAVAILABLE';
+      if (hasData) {
+        freshness = g?.status === 'LIVE' && ageSec <= 20 ? 'LIVE' : 'STALE';
+      }
+
+      return {
+        item,
+        tick: g,
+        hasData,
+        pct: hasData ? (g?.changePct ?? 0) : 0,
+        freshness,
+        ageSec,
+      };
+    });
+  }, [getGlobalIndexTick, globalNowMs, globalRiskItems]);
+
+  const globalRiskOverview = useMemo(() => {
+    const active = globalRiskSnapshots.filter((s) => s.hasData);
+    const changes = active.map((s) => s.pct);
+
+    const netChange = changes.reduce((a, b) => a + b, 0);
+    const upCount = changes.filter((c) => c > 0.03).length;
+    const downCount = changes.filter((c) => c < -0.03).length;
+    const flatCount = changes.length - upCount - downCount;
+    const liveCount = globalRiskSnapshots.filter((s) => s.freshness === 'LIVE').length;
+    const staleCount = globalRiskSnapshots.filter((s) => s.freshness === 'STALE').length;
+    const unavailableCount = globalRiskSnapshots.filter((s) => s.freshness === 'UNAVAILABLE').length;
+    const latestAgeSec = active.length ? Math.min(...active.map((s) => s.ageSec)) : Number.POSITIVE_INFINITY;
+
+    let status: 'TREND UP' | 'TREND DOWN' | 'NEUTRAL' = 'NEUTRAL';
+    if (!changes.length || (Math.abs(netChange) <= 0.18 && Math.abs(upCount - downCount) <= 1)) {
+      status = 'NEUTRAL';
+    } else if (netChange > 0) {
+      status = 'TREND UP';
+    } else {
+      status = 'TREND DOWN';
+    }
+
+    const tone =
+      status === 'TREND UP'
+        ? 'text-emerald-300 border-emerald-500/35 bg-emerald-500/10'
+        : status === 'TREND DOWN'
+        ? 'text-rose-300 border-rose-500/35 bg-rose-500/10'
+        : 'text-amber-300 border-amber-500/35 bg-amber-500/10';
+
+    return {
+      status,
+      tone,
+      netChange,
+      upCount,
+      downCount,
+      flatCount,
+      liveCount,
+      staleCount,
+      unavailableCount,
+      activeTotal: changes.length,
+      total: globalRiskSnapshots.length,
+      latestAgeSec,
+    };
+  }, [globalRiskSnapshots]);
 
   const dataStatus = useMemo(() => {
     const sources = [chartData.NIFTY?.dataSource, chartData.BANKNIFTY?.dataSource, chartData.SENSEX?.dataSource].filter(Boolean);
@@ -4784,30 +4874,68 @@ const ChartIntelligence = memo(() => {
       </div>
 
       {/* Global risk tape */}
-      <div className="mb-3 rounded-xl border border-slate-700/30 bg-dark-card/60 px-3 py-2">
-        <div className="flex items-center gap-2 mb-1.5">
-          <span className="text-[9px] font-bold tracking-[0.1em] uppercase text-slate-400">Global Risk</span>
-          <span className={`text-[8px] font-mono ${globalConnected ? 'text-emerald-400' : 'text-amber-400'}`}>
-            {globalConnected ? 'LIVE' : 'SNAPSHOT'}
-          </span>
+      <div className="mb-4 rounded-2xl border border-slate-600/45 bg-gradient-to-b from-slate-900/80 to-slate-950/70 px-3.5 sm:px-4 py-3">
+        <div className="flex flex-wrap items-center justify-between gap-2 mb-2.5">
+          <div className="flex items-center gap-2 min-w-0">
+            <span className="w-1 h-4 rounded-full bg-gradient-to-b from-cyan-400 to-cyan-600/40 shrink-0" />
+            <span className="text-[10px] sm:text-[11px] font-black tracking-[0.14em] uppercase text-slate-300">Global Risk</span>
+          </div>
+          <div className="flex items-center gap-1.5 sm:gap-2">
+            <span className={`inline-flex items-center rounded-full border px-2.5 py-1 text-[9px] sm:text-[10px] font-mono font-bold tracking-[0.08em] uppercase ${
+              globalConnected && globalRiskOverview.liveCount > 0
+                ? 'text-emerald-300 border-emerald-500/35 bg-emerald-500/10'
+                : 'text-amber-300 border-amber-500/35 bg-amber-500/10'
+            }`}>
+              {globalConnected && globalRiskOverview.liveCount > 0 ? 'LIVE' : 'SNAPSHOT'}
+            </span>
+            <span className={`inline-flex items-center rounded-full border px-2.5 py-1 text-[9px] sm:text-[10px] font-black tracking-[0.08em] uppercase ${globalRiskOverview.tone}`}>
+              {globalRiskOverview.status}
+            </span>
+          </div>
         </div>
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-1.5">
-          {[
-            { key: 'DOW', label: 'Dow' },
-            { key: 'NASDAQ', label: 'Nasdaq' },
-            { key: 'SPX', label: 'S&P' },
-            { key: 'DAX', label: 'DAX' },
-            { key: 'FTSE', label: 'FTSE' },
-            { key: 'NIKKEI', label: 'Nikkei' },
-          ].map(item => {
-            const g = globalIndices[item.key];
-            const pct = Number.isFinite(g?.changePct) ? g.changePct : 0;
-            const up = pct >= 0;
+
+        <div className="mb-2.5 rounded-lg border border-slate-700/40 bg-slate-900/45 px-2.5 sm:px-3 py-1.5">
+          <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[9px] sm:text-[10px] font-mono text-slate-300">
+            <span className="text-emerald-300">UP {globalRiskOverview.upCount}/{globalRiskOverview.activeTotal || globalRiskOverview.total}</span>
+            <span className="text-rose-300">DOWN {globalRiskOverview.downCount}/{globalRiskOverview.activeTotal || globalRiskOverview.total}</span>
+            <span className="text-amber-300">FLAT {globalRiskOverview.flatCount}/{globalRiskOverview.activeTotal || globalRiskOverview.total}</span>
+            <span className="text-cyan-300">LIVE {globalRiskOverview.liveCount}/{globalRiskOverview.total}</span>
+            <span className="text-orange-300">STALE {globalRiskOverview.staleCount}/{globalRiskOverview.total}</span>
+            <span className="ml-auto font-black tabular-nums text-cyan-300">
+              NET {globalRiskOverview.netChange > 0 ? '+' : ''}{globalRiskOverview.netChange.toFixed(2)}%
+            </span>
+            <span className="font-black tabular-nums text-slate-400">
+              AGE {Number.isFinite(globalRiskOverview.latestAgeSec) ? `${Math.round(globalRiskOverview.latestAgeSec)}s` : '--'}
+            </span>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-2 sm:gap-2.5">
+          {globalRiskSnapshots.map(({ item, hasData, pct, freshness, ageSec }) => {
+            const isUp = hasData ? pct >= 0 : false;
+            const tone = !hasData
+              ? 'text-slate-300 border-slate-500/30 bg-slate-700/20'
+              : freshness === 'STALE'
+              ? 'text-amber-300 border-amber-500/25 bg-amber-500/8'
+              : isUp
+              ? 'text-emerald-300 border-emerald-500/25 bg-emerald-500/8'
+              : 'text-rose-300 border-rose-500/25 bg-rose-500/8';
             return (
-              <div key={item.key} className="rounded-md border border-slate-700/30 bg-slate-900/35 px-2 py-1.5">
-                <div className="text-[8px] uppercase tracking-[0.08em] text-slate-500">{item.label}</div>
-                <div className={`text-[10px] font-mono font-semibold ${up ? 'text-emerald-300' : 'text-rose-300'}`}>
-                  {up ? '+' : ''}{pct.toFixed(2)}%
+              <div
+                key={item.key}
+                className="rounded-lg border border-slate-700/45 bg-slate-900/55 px-2.5 sm:px-3 py-2 min-w-0"
+              >
+                <div className="flex items-center justify-between gap-1 mb-1">
+                  <span className="text-[9px] sm:text-[10px] uppercase tracking-[0.1em] font-semibold text-slate-400 truncate">{item.label}</span>
+                  <span className={`inline-flex items-center rounded border px-1 py-0.5 text-[8px] font-bold leading-none ${tone}`}>
+                    {!hasData ? 'N/A' : freshness === 'STALE' ? 'STALE' : (isUp ? 'UP' : 'DOWN')}
+                  </span>
+                </div>
+                <div className={`text-[13px] sm:text-[15px] font-mono font-black tabular-nums leading-none ${hasData ? (isUp ? 'text-emerald-300' : 'text-rose-300') : 'text-slate-400'}`}>
+                  {hasData ? `${isUp ? '+' : ''}${pct.toFixed(2)}%` : '--'}
+                </div>
+                <div className="mt-1 text-[8px] font-mono text-slate-500 tabular-nums">
+                  {Number.isFinite(ageSec) ? `${Math.round(ageSec)}s ago` : 'no feed'}
                 </div>
               </div>
             );
