@@ -308,6 +308,18 @@ export function useChartIntelligence() {
           const incoming = raw[sym];
           const existing = prev[sym];
           if (existing && existing.timestamp === incoming.timestamp) continue;
+
+          // Live-first: block only degraded CACHED overwrite of a LIVE frame.
+          // Allow MARKET_CLOSED to replace LIVE so UI can transition cleanly after session end.
+          if (existing?.dataSource === 'LIVE' && incoming.dataSource === 'CACHED') continue;
+
+          // Drop out-of-order frames to avoid time-travel flicker during reconnects.
+          if (existing) {
+            const currTs = Date.parse(existing.timestamp || '');
+            const nextTs = Date.parse(incoming.timestamp || '');
+            if (Number.isFinite(currTs) && Number.isFinite(nextTs) && nextTs <= currTs) continue;
+          }
+
           // Skip updates where candle data is identical to avoid needless re-renders.
           // The backend updates `timestamp` every 0.5s even if only `spot` changed.
           // Only clone when something meaningful changed (candle count, last candle close, or spot).

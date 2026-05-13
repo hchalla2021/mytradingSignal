@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import dynamic from 'next/dynamic';
 import { useChartIntelligence } from '@/hooks/useChartIntelligence';
 import { useMarketSocket } from '@/hooks/useMarketSocket';
@@ -43,7 +43,18 @@ export default function ChartContent({ symbol: rawSymbol }: { symbol: string }) 
 
   const data = isValid ? (chartData[symbol] ?? null) : null;
   const tick = isValid ? marketData[symbol] : null;
-  const liveSpot = tick?.price;
+  const liveSpot = useMemo(() => {
+    if (!tick || tick.price <= 0 || tick.status !== 'LIVE') return undefined;
+    const tsMs = Date.parse(tick.timestamp || '');
+    if (!Number.isFinite(tsMs) || Date.now() - tsMs > 6000) return undefined;
+    const base = data?.spot ?? data?.candles5m?.at(-1)?.c ?? 0;
+    if (base <= 0) return undefined;
+    const driftPct = Math.abs(tick.price - base) / base;
+    // Keep full-page chart aligned with chart-engine source (index) and reject
+    // larger basis-like offsets from mismatched feeds.
+    if (driftPct > 0.0018) return undefined;
+    return tick.price;
+  }, [tick, data]);
   const label = isValid ? SYMBOL_LABELS[symbol] : symbol;
 
   const displayPrice = liveSpot ?? data?.spot ?? 0;

@@ -102,6 +102,22 @@ export interface PricePredictions {
   score: number;
 }
 
+export interface WorldMarketImpact {
+  status: 'LIVE' | 'PARTIAL' | 'UNAVAILABLE';
+  bias: 'BULLISH' | 'BEARISH' | 'NEUTRAL';
+  influenceScore: number;
+  impactPts: number;
+  liveCount: number;
+  staleCount: number;
+  totalCount: number;
+  summary: string;
+  components: Array<{
+    symbol: string;
+    changePct: number;
+    status: string;
+  }>;
+}
+
 export interface SymbolIntelligenceSummary {
   symbol: string;
   signal: StrikeSignal;
@@ -120,6 +136,8 @@ export interface SymbolIntelligenceSummary {
   maxPain?: number | null;
   /** % gap from current spot to max pain strike (+ = max pain above spot) */
   maxPainGapPct?: number | null;
+  /** World market risk overlay from Dow/Nasdaq/S&P/DAX/FTSE/Nikkei */
+  worldMarket?: WorldMarketImpact;
   keyLevels: StrikeKeyLevels;
   /** AI Strike Recommender — best single strike to trade with direction prediction */
   bestStrike?: BestStrikeRecommendation | null;
@@ -216,52 +234,12 @@ async function fetchWithFallback(): Promise<{ success?: boolean; data?: Record<s
   return null;
 }
 
-// ── Persistence ───────────────────────────────────────────────────────────────
-
-const STORAGE_KEY = 'strikeIntelligenceData_v1';
-
-function saveToStorage(data: StrikeIntelligenceData): void {
-  if (typeof window === 'undefined') return;
-  // Throttle: write to localStorage at most once every 5 s — WS delivers updates
-  // every 500 ms and we don't need to persist each one (last-known is enough).
-  const now = Date.now();
-  const last = (saveToStorage as unknown as { _last?: number })._last ?? 0;
-  if (now - last < 5_000) return;
-  (saveToStorage as unknown as { _last?: number })._last = now;
-  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(data)); } catch { /* ok */ }
-}
-
-function loadFromStorage(): StrikeIntelligenceData | null {
-  if (typeof window === 'undefined') return null;
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw) as StrikeIntelligenceData;
-    // Discard data from a previous calendar day — strike chain values are stale
-    const today = new Date().toDateString();
-    const hasStaleEntry = (['NIFTY', 'BANKNIFTY', 'SENSEX'] as const).some(sym => {
-      const ts = parsed[sym]?.timestamp;
-      if (!ts) return true; // no timestamp → treat as stale
-      return new Date(ts).toDateString() !== today;
-    });
-    if (hasStaleEntry) {
-      try { localStorage.removeItem(STORAGE_KEY); } catch { /* ok */ }
-      return null;
-    }
-    return parsed;
-  } catch { return null; }
-}
-
 const EMPTY: StrikeIntelligenceData = { NIFTY: null, BANKNIFTY: null, SENSEX: null };
 
 // ── Hook ──────────────────────────────────────────────────────────────────────
 
 export function useStrikeIntelligence() {
-  const [data, setData] = useState<StrikeIntelligenceData>(() => {
-    // Eagerly load from localStorage on mount so last market data shows instantly
-    const cached = loadFromStorage();
-    return cached ?? EMPTY;
-  });
+  const [data, setData] = useState<StrikeIntelligenceData>(EMPTY);
   const [isConnected, setIsConnected] = useState(false);
   const [lastUpdate, setLastUpdate] = useState<string | null>(null);
 
@@ -281,9 +259,16 @@ export function useStrikeIntelligence() {
         if (raw[sym]) {
           const incoming = raw[sym];
           const existing = prev[sym];
-          // Skip only if timestamp is identical — every backend broadcast sets a fresh
-          // ISO timestamp so this guard only blocks accidental duplicate frames.
-          if (existing && existing.timestamp === incoming.timestamp) continue;
+          // Live-first policy: do not let non-live payloads overwrite a live frame.
+          if (existing?.dataSource === 'LIVE' && incoming.dataSource !== 'LIVE') continue;
+
+          // Monotonic freshness guard: drop older or duplicate frames.
+          if (existing) {
+            const currTs = Date.parse(existing.timestamp || '');
+            const nextTs = Date.parse(incoming.timestamp || '');
+            if (Number.isFinite(currTs) && Number.isFinite(nextTs) && nextTs <= currTs) continue;
+          }
+
           next[sym] = typeof structuredClone === 'function'
             ? structuredClone(incoming)
             : JSON.parse(JSON.stringify(incoming));
@@ -291,7 +276,6 @@ export function useStrikeIntelligence() {
         }
       }
       if (!changed) return prev;
-      saveToStorage(next);
       return next;
     });
     setLastUpdate(new Date().toISOString());
@@ -380,7 +364,7 @@ export function useStrikeIntelligence() {
             fetchWithFallback()
               .then(json => { if (json?.data) mergeData(json.data); })
               .catch(() => {});
-          }, 3000);
+          }, 2000);
         }
       };
 
@@ -396,7 +380,7 @@ export function useStrikeIntelligence() {
   useEffect(() => {
     mountedRef.current = true;
 
-    // Fetch REST snapshot immediately (supplements localStorage)
+    // Fetch REST snapshot immediately to hydrate first render before WS updates arrive.
     fetchWithFallback()
       .then(json => {
         if (json?.data && Object.keys(json.data).length > 0) mergeData(json.data);
@@ -404,20 +388,6 @@ export function useStrikeIntelligence() {
       .catch(() => {});
 
     connect();
-
-    // Start REST polling fallback immediately in case WS takes time
-    if (!pollRef.current) {
-      pollRef.current = setInterval(() => {
-        // Always keep a lightweight REST backup poll alive.
-        // If WS is connected but backend stops pushing updates, this keeps
-        // strike OI/volume cards moving with fresh snapshot data.
-        fetchWithFallback()
-          .then(json => {
-            if (json?.data && Object.keys(json.data).length > 0) mergeData(json.data);
-          })
-          .catch(() => {});
-      }, 3000);
-    }
 
     return () => {
       mountedRef.current = false;

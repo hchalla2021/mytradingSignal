@@ -858,12 +858,14 @@ class ChartIntelligenceService:
             lot_size = self._LOT_SIZES.get(symbol, 1)
 
             track_key = f"{symbol}:{interval_min}m"
-            last_t    = self._last_day_vol.get(f"{symbol}:t")
+            candle_marker_key = f"{track_key}:t"
+            last_t = self._last_day_vol.get(candle_marker_key)
 
-            # Detect new candle bar — reset baseline
+            # Track each timeframe independently. Sharing one last-seen candle marker
+            # across 3m/5m bars lets one timeframe reset the other's volume baseline.
             if last_t != candle_t_iso:
                 self._candle_start_vol[track_key] = day_vol * lot_size
-                self._last_day_vol[f"{symbol}:t"] = candle_t_iso
+                self._last_day_vol[candle_marker_key] = candle_t_iso
 
             self._last_day_vol[symbol] = day_vol * lot_size
             baseline = self._candle_start_vol.get(track_key, day_vol * lot_size)

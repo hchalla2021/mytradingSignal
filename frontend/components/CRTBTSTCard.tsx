@@ -200,7 +200,7 @@ const CRTBTSTCard = memo<CRTBTSTCardProps>(({ symbol, name, data }) => {
   const [showKeyCrtLevels, setShowKeyCrtLevels] = useState(false);
   const [showCrt8Factor, setShowCrt8Factor] = useState(false);
   const [showBtstTradeSetup, setShowBtstTradeSetup] = useState(false);
-  const { analysis, isLive, fromCache, loading, flash, factorSummary } = useCRTBTSTRealtime(symbol, data);
+  const { analysis, isLive, fromCache, loading, flash, factorSummary, isLockedSignal, lockedAt, isBTSTWindowActive } = useCRTBTSTRealtime(symbol, data);
 
   // ── Loading State ─────────────────────────────────────────────────
   if (loading && !analysis) {
@@ -252,6 +252,17 @@ const CRTBTSTCard = memo<CRTBTSTCardProps>(({ symbol, name, data }) => {
           <span className={`px-2 py-0.5 rounded-md text-[10px] font-black ${sc.text} bg-slate-800/60 border ${sc.border} shadow-sm`}>
             {sc.label}
           </span>
+          {/* BTST window / locked badge */}
+          {isBTSTWindowActive && (
+            <span className="px-1.5 py-0.5 rounded text-[9px] font-black bg-yellow-400/20 text-yellow-300 border border-yellow-400/50 animate-pulse">
+              3:20 WINDOW
+            </span>
+          )}
+          {isLockedSignal && !isBTSTWindowActive && (
+            <span className="px-1.5 py-0.5 rounded text-[9px] font-black bg-purple-500/20 text-purple-300 border border-purple-400/50">
+              FINAL
+            </span>
+          )}
           {/* Live dot */}
           <span className={`w-2 h-2 rounded-full ${isLive ? 'bg-emerald-400 animate-pulse shadow-emerald-400/50 shadow-md' : fromCache ? 'bg-amber-400' : 'bg-slate-500'}`} title={isLive ? 'Live' : fromCache ? 'Cached' : 'Offline'} />
         </div>
@@ -295,6 +306,35 @@ const CRTBTSTCard = memo<CRTBTSTCardProps>(({ symbol, name, data }) => {
       </div>
 
       <div className="px-3 sm:px-4 py-3 space-y-3">
+
+        {/* ── BTST Critical Window Banner ──────────────────────────────── */}
+        {isBTSTWindowActive && (
+          <div className="px-2.5 py-2 rounded-lg bg-yellow-400/10 border border-yellow-400/40 flex items-center gap-2">
+            <span className="text-yellow-300 text-sm animate-pulse">🎯</span>
+            <div className="flex-1 min-w-0">
+              <p className="text-[10px] text-yellow-300 font-black uppercase tracking-wide leading-none">BTST Window Active — 3:20–3:30 PM IST</p>
+              <p className="text-[9px] text-yellow-400/70 mt-0.5 leading-tight">Near-final candle — signal is being locked each tick. Most accurate overnight call.</p>
+            </div>
+          </div>
+        )}
+        {isLockedSignal && !isBTSTWindowActive && lockedAt && (
+          <div className="px-2.5 py-1.5 rounded-lg bg-purple-500/10 border border-purple-400/30 flex items-center gap-2">
+            <span className="text-purple-300 text-xs">🔒</span>
+            <p className="text-[9px] text-purple-300 font-semibold">
+              Final BTST signal — locked at {new Date(lockedAt).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: false })} IST
+            </p>
+          </div>
+        )}
+
+        {/* ── Data Quality Warning ─────────────────────────────────── */}
+        {analysis.prevDayDataValid === false && (
+          <div className="px-2.5 py-1.5 rounded-lg bg-amber-900/30 border border-amber-500/40 flex items-center gap-2">
+            <span className="text-amber-400 text-xs">⚠</span>
+            <p className="text-[9px] text-amber-400 font-semibold leading-tight">
+              Prev day data unavailable (expired token). Sweep &amp; range factors may be degraded.
+            </p>
+          </div>
+        )}
 
         {/* ── BTST Verdict ─────────────────────────────────────────────── */}
         <div className="flex items-center gap-3">
@@ -348,14 +388,14 @@ const CRTBTSTCard = memo<CRTBTSTCardProps>(({ symbol, name, data }) => {
           </button>
           {showCrt8Factor && (
           <div className="grid grid-cols-2 gap-1.5">
-            <FactorRow icon="📐" label="Range Expansion" score={factors.rangeExpansion.score} maxScore={10} description={factors.rangeExpansion.label} />
+            <FactorRow icon="📐" label="Range Expansion" score={factors.rangeExpansion.score} maxScore={8} description={factors.rangeExpansion.label} />
             <FactorRow icon="🔍" label="PDH/PDL Sweep" score={factors.sweepDetection.score} maxScore={10} description={factors.sweepDetection.label} />
             <FactorRow icon="🎯" label="Close Position" score={factors.closePosition.score} maxScore={10} description={factors.closePosition.label} />
             <FactorRow icon="⚡" label="Displacement" score={factors.displacement.score} maxScore={8} description={factors.displacement.label} />
             <FactorRow icon="📊" label="Body:Wick Ratio" score={factors.bodyWickRatio.score} maxScore={6} description={factors.bodyWickRatio.label} />
             <FactorRow icon="🔄" label="AMD Pattern" score={factors.amdPattern.score} maxScore={6} description={factors.amdPattern.label} />
-            <FactorRow icon="↩️" label="Range Reclaim" score={factors.rangeReclaim.score} maxScore={8} description={factors.rangeReclaim.label} />
-            <FactorRow icon="📈" label="Trend Alignment" score={factors.trendAlignment.score} maxScore={8} description={factors.trendAlignment.label} />
+            <FactorRow icon="💹" label="vs Prev Close" score={factors.prevCloseRelationship.score} maxScore={8} description={factors.prevCloseRelationship.label} />
+            <FactorRow icon="📈" label="Intraday Trend" score={factors.trendAlignment.score} maxScore={8} description={factors.trendAlignment.label} />
           </div>
           )}
         </div>
@@ -477,7 +517,11 @@ const CRTBTSTCard = memo<CRTBTSTCardProps>(({ symbol, name, data }) => {
         {/* ── Footer Status ────────────────────────────────────────────── */}
         <div className="flex items-center justify-between pt-1">
           <span className="text-[8px] text-slate-600 font-mono">
-            {isLive ? '● LIVE CRT' : fromCache ? '● CACHED' : '● OFFLINE'}
+            {isBTSTWindowActive
+              ? '🎯 BTST WINDOW ACTIVE'
+              : isLockedSignal && lockedAt
+                ? `🔒 LOCKED ${new Date(lockedAt).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: false })}`
+                : isLive ? '● LIVE CRT' : fromCache ? '● CACHED' : '● OFFLINE'}
           </span>
           <span className="text-[8px] text-slate-600 font-mono">
             Score: {btst.totalScore}/{btst.maxScore} • Conf: {btst.confidence}%

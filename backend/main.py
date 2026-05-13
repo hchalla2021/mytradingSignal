@@ -34,6 +34,7 @@ from routers import (
     app_access,
 )
 from routers.compass import http_router as compass_http, ws_router as compass_ws
+from routers.global_indices import http_router as global_indices_http, ws_router as global_indices_ws
 from routers.liquidity import http_router as liq_http, ws_router as liq_ws
 from routers.ict import http_router as ict_http, ws_router as ict_ws
 from routers.expiry_explosion import http_router as expiry_http, ws_router as expiry_ws
@@ -218,6 +219,14 @@ async def lifespan(app: FastAPI):
             except Exception as exc:
                 logger.error("Chart Intelligence service failed to start: %s", exc, exc_info=True)
 
+        async def start_global_indices():
+            try:
+                from services.global_indices_service import get_global_indices_service
+                await get_global_indices_service().start()
+                print("🌍 Global Indices: ON")
+            except Exception as exc:
+                logger.error("Global indices service failed to start: %s", exc, exc_info=True)
+
         await asyncio.gather(
             start_scheduler(),
             start_oi_broadcaster(),
@@ -230,6 +239,7 @@ async def lifespan(app: FastAPI):
             start_market_regime(),
             start_strike_intelligence(),
             start_chart_intelligence(),
+            start_global_indices(),
         )
         print("🚀 All services READY")
 
@@ -324,6 +334,13 @@ async def lifespan(app: FastAPI):
     try:
         from services.chart_intelligence_service import get_chart_intelligence_service
         await get_chart_intelligence_service().stop()
+    except Exception:
+        pass
+
+    # Stop Global Indices Service
+    try:
+        from services.global_indices_service import get_global_indices_service
+        await get_global_indices_service().stop()
     except Exception:
         pass
     
@@ -475,6 +492,10 @@ app.include_router(vix.router, tags=["India VIX"])
 # 🧭 Institutional Market Compass
 app.include_router(compass_ws,   prefix="/ws",  tags=["Compass"])
 app.include_router(compass_http, prefix="/api", tags=["Compass"])
+
+# 🌍 Global Indices Adapter Layer
+app.include_router(global_indices_ws,   prefix="/ws",  tags=["Global Indices"])
+app.include_router(global_indices_http, prefix="/api", tags=["Global Indices"])
 
 # ⚡ Pure Liquidity Intelligence
 app.include_router(liq_ws,   prefix="/ws",  tags=["Liquidity"])

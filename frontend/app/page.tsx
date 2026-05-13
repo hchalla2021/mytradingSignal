@@ -3,6 +3,9 @@
 import { useState, useEffect, useMemo, useCallback } from 'react';
 import dynamic from 'next/dynamic';
 import LiveStatus from '@/components/LiveStatus';
+import Header from '@/components/Header';
+import IndiaVIXBadge from '@/components/IndiaVIXBadge';
+import SystemStatusBanner from '@/components/SystemStatusBanner';
 import { useMarketSocket } from '@/hooks/useMarketSocket';
 import { useAnalysis } from '@/hooks/useAnalysis';
 import { useAIAnalysis } from '@/hooks/useAIAnalysis';
@@ -12,14 +15,6 @@ import { useStrikeIntelligence } from '@/hooks/useStrikeIntelligence';
 import { useChartIntelligence } from '@/hooks/useChartIntelligence';
 import { API_CONFIG } from '@/lib/api-config';
 import { getOrCreateVisitorId } from '@/lib/visitor-id';
-
-// Dynamic import for Header to prevent SSR hydration errors with time/date
-const Header = dynamic(() => import('@/components/Header'), { ssr: false });
-const IndiaVIXBadge = dynamic(() => import('@/components/IndiaVIXBadge'), { ssr: false });
-
-const SystemStatusBanner = dynamic(() => import('@/components/SystemStatusBanner'), { 
-  ssr: false 
-});
 
 // Dynamic imports for components that use live data - prevents SSR issues
 const IndexCard = dynamic(() => import('@/components/IndexCard'), { 

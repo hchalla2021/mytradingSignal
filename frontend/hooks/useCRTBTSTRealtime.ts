@@ -24,26 +24,31 @@ import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { analyzeCRT, type CRTAnalysis, type CRTInput } from '@/lib/crt-engine';
 
 const CACHE_KEY_PREFIX = 'crt_btst_';
+const LOCK_KEY_PREFIX  = 'crt_locked_';
 const ANALYSIS_DEBOUNCE = 500; // ms between full CRT recalculations
+
+/** Current IST date as 'YYYY-MM-DD' — used for daily-scoped cache keys. */
+function getISTDate(): string {
+  return new Date(Date.now() + 330 * 60000).toISOString().slice(0, 10);
+}
 
 interface CRTBTSTRealtimeState {
   analysis: CRTAnalysis | null;
   isLive: boolean;
   lastTickTime: number;
   fromCache: boolean;
+  lockedAt: number | null;   // When signal was locked at 3:20 PM (null = not from lock)
 }
 
-// ── localStorage helpers ───────────────────────────────────────────────
+// ── localStorage helpers — date-scoped ('crt_btst_NIFTY_2026-05-12') ──────────
 
 function loadCached(symbol: string): CRTAnalysis | null {
   if (typeof window === 'undefined') return null;
   try {
-    const raw = localStorage.getItem(`${CACHE_KEY_PREFIX}${symbol}`);
+    const key = `${CACHE_KEY_PREFIX}${symbol}_${getISTDate()}`;
+    const raw = localStorage.getItem(key);
     if (!raw) return null;
-    const parsed = JSON.parse(raw) as CRTAnalysis;
-    // Cache valid for 18 hours (covers overnight + pre-market)
-    if (Date.now() - parsed.timestamp < 18 * 60 * 60 * 1000) return parsed;
-    return null;
+    return JSON.parse(raw) as CRTAnalysis;
   } catch {
     return null;
   }
@@ -52,20 +57,62 @@ function loadCached(symbol: string): CRTAnalysis | null {
 function saveToCache(symbol: string, analysis: CRTAnalysis): void {
   if (typeof window === 'undefined') return;
   try {
-    localStorage.setItem(`${CACHE_KEY_PREFIX}${symbol}`, JSON.stringify(analysis));
+    const todayKey = `${CACHE_KEY_PREFIX}${symbol}_${getISTDate()}`;
+    localStorage.setItem(todayKey, JSON.stringify(analysis));
+    // Purge stale keys from previous days
+    const prefix = `${CACHE_KEY_PREFIX}${symbol}_`;
+    for (let i = localStorage.length - 1; i >= 0; i--) {
+      const k = localStorage.key(i);
+      if (k && k.startsWith(prefix) && k !== todayKey) localStorage.removeItem(k);
+    }
   } catch { /* quota exceeded — ignore */ }
+}
+
+// ── Locked signal helpers — snapshot saved at 15:20–15:30 IST ───────────────
+
+interface LockedSignal { analysis: CRTAnalysis; lockedAt: number; }
+
+function loadLocked(symbol: string): LockedSignal | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const key = `${LOCK_KEY_PREFIX}${symbol}_${getISTDate()}`;
+    const raw = localStorage.getItem(key);
+    return raw ? (JSON.parse(raw) as LockedSignal) : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveLocked(symbol: string, analysis: CRTAnalysis): number {
+  if (typeof window === 'undefined') return Date.now();
+  const lockedAt = Date.now();
+  try {
+    const key = `${LOCK_KEY_PREFIX}${symbol}_${getISTDate()}`;
+    localStorage.setItem(key, JSON.stringify({ analysis, lockedAt }));
+    // Purge stale lock keys
+    const prefix = `${LOCK_KEY_PREFIX}${symbol}_`;
+    for (let i = localStorage.length - 1; i >= 0; i--) {
+      const k = localStorage.key(i);
+      if (k && k.startsWith(prefix) && k !== key) localStorage.removeItem(k);
+    }
+  } catch { /* quota exceeded */ }
+  return lockedAt;
 }
 
 // ── Main Hook ──────────────────────────────────────────────────────────
 
 export function useCRTBTSTRealtime(symbol: string, initialData?: any) {
   const [state, setState] = useState<CRTBTSTRealtimeState>(() => {
+    // Priority: today's locked 3:20 PM signal > today's regular cache
+    const locked = loadLocked(symbol);
     const cached = loadCached(symbol);
+    const initial = locked?.analysis ?? cached;
     return {
-      analysis: cached,
+      analysis: initial,
       isLive: false,
-      lastTickTime: cached?.timestamp || 0,
-      fromCache: !!cached,
+      lastTickTime: initial?.timestamp || 0,
+      fromCache: !!initial,
+      lockedAt: locked?.lockedAt ?? null,
     };
   });
   const [flash, setFlash] = useState(false);
@@ -85,9 +132,9 @@ export function useCRTBTSTRealtime(symbol: string, initialData?: any) {
     const ltp = tick.price || tick.ltp || 0;
     const isLiveMarket = tick.status === 'LIVE' || tick.status === 'PRE_OPEN';
 
-    // CRITICAL: During live market, Zerodha's `close` = yesterday's close.
-    // Use LTP as the candle's current close for all factor scoring.
-    const candleClose = isLiveMarket ? ltp : (tick.close || ltp);
+    // Zerodha's `close` field = PREVIOUS DAY'S close in ALL market states (live, closed, pre-open).
+    // LTP (price) is always today's candle close: live price during session, final price after close.
+    const candleClose = ltp;
 
     const input: CRTInput = {
       symbol: tick.symbol || symbol,
@@ -119,15 +166,25 @@ export function useCRTBTSTRealtime(symbol: string, initialData?: any) {
     lastHighRef.current = tick.high || ltp;
     lastLowRef.current = tick.low || ltp;
 
-    // Persist to cache
+    // Persist to regular daily cache
     saveToCache(symbol, analysis);
 
-    setState({
+    // Lock the signal during BTST critical window (15:20–15:30 IST)
+    // Each tick during the window overwrites the lock — final tick (~15:29) is preserved
+    let lockedAt: number | null = null;
+    if (analysis.isBTSTCriticalWindow && isLiveMarket) {
+      lockedAt = saveLocked(symbol, analysis);
+    }
+
+    setState(prev => ({
+      ...prev,
       analysis,
       isLive: isLiveMarket,
       lastTickTime: Date.now(),
       fromCache: false,
-    });
+      // Once locked, keep lockedAt until next day (page reload resets via date-scoped key)
+      lockedAt: lockedAt ?? prev.lockedAt,
+    }));
     setLoading(false);
   }, [symbol]);
 
@@ -146,7 +203,20 @@ export function useCRTBTSTRealtime(symbol: string, initialData?: any) {
 
     if (!priceChanged && !highChanged && !lowChanged && lastPriceRef.current > 0) return;
 
-    // Debounce: schedule analysis, cancel if new tick arrives within window
+    // 0ms delay during BTST window (15:20–15:30 IST) for immediate lock accuracy;
+    // 500ms during regular hours to reduce re-renders on rapid ticks
+    const isNearClose = initialData.status === 'LIVE' &&
+      typeof initialData.timestamp === 'string' &&
+      (() => {
+        try {
+          const t = new Date(initialData.timestamp);
+          const m = t.getUTCHours() * 60 + t.getUTCMinutes() + 330;
+          const h = Math.floor(m / 60) % 24; const min = m % 60;
+          return h === 15 && min >= 20;
+        } catch { return false; }
+      })();
+    const delay = lastPriceRef.current === 0 || isNearClose ? 0 : ANALYSIS_DEBOUNCE;
+
     if (analysisTimerRef.current) clearTimeout(analysisTimerRef.current);
     analysisTimerRef.current = setTimeout(() => {
       runAnalysis({
@@ -169,7 +239,7 @@ export function useCRTBTSTRealtime(symbol: string, initialData?: any) {
         timestamp: initialData.timestamp,
         status: initialData.status,
       });
-    }, lastPriceRef.current === 0 ? 0 : ANALYSIS_DEBOUNCE); // Run immediately on first load
+    }, delay);
   }, [initialData?.price, initialData?.high, initialData?.low, initialData?.status, symbol, runAnalysis]);
 
   // ── Cleanup on unmount ──────────────────────────────────────────────
@@ -186,7 +256,7 @@ export function useCRTBTSTRealtime(symbol: string, initialData?: any) {
     const scores = [
       f.rangeExpansion.score, f.sweepDetection.score, f.closePosition.score,
       f.displacement.score, f.bodyWickRatio.score, f.amdPattern.score,
-      f.rangeReclaim.score, f.trendAlignment.score,
+      f.prevCloseRelationship.score, f.trendAlignment.score,
     ];
     return {
       bullish: scores.filter(s => s > 0).length,
@@ -204,5 +274,9 @@ export function useCRTBTSTRealtime(symbol: string, initialData?: any) {
     loading,
     flash,
     factorSummary,
+    // Signal locking — true if analysis is from the 3:20 PM locked snapshot
+    isLockedSignal: state.lockedAt !== null,
+    lockedAt: state.lockedAt,
+    isBTSTWindowActive: state.analysis?.isBTSTCriticalWindow === true,
   };
 }

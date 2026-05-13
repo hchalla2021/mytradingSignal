@@ -31,6 +31,7 @@ from fastapi import WebSocket
 import pytz
 
 from services.cache import CacheService, _SHARED_CACHE
+from services.global_indices_service import get_global_indices_service
 from config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -709,6 +710,119 @@ def _overall_signal_from_score(score: float) -> str:
     return "NEUTRAL"
 
 
+def _compute_world_market_impact(
+    world_snapshot: Optional[Dict[str, Dict[str, Any]]],
+    symbol: str,
+) -> Dict[str, Any]:
+    """
+    Convert global index moves into a signed strike-intelligence overlay.
+
+    Returns:
+      influenceScore: -100..+100 (normalized risk-on / risk-off)
+      impactPts:      -20..+20  (added to final strike score)
+      bias:           BULLISH / BEARISH / NEUTRAL
+      status:         LIVE / PARTIAL / UNAVAILABLE
+    """
+    if not world_snapshot:
+        return {
+            "status": "UNAVAILABLE",
+            "bias": "NEUTRAL",
+            "influenceScore": 0,
+            "impactPts": 0.0,
+            "liveCount": 0,
+            "staleCount": 0,
+            "totalCount": 0,
+            "components": [],
+            "summary": "Global indices unavailable",
+        }
+
+    # Weights reflect broad risk sensitivity for Indian index direction.
+    component_weights: Dict[str, float] = {
+        "DJI": 0.22,
+        "SPX": 0.24,
+        "IXIC": 0.18,
+        "DAX": 0.14,
+        "FTSE": 0.10,
+        "NIKKEI": 0.12,
+    }
+    symbol_multiplier: Dict[str, float] = {
+        "NIFTY": 1.00,
+        "BANKNIFTY": 0.90,
+        "SENSEX": 0.80,
+    }
+    sym_mult = symbol_multiplier.get(symbol, 1.0)
+
+    weighted_sum = 0.0
+    weight_total = 0.0
+    live_count = 0
+    stale_count = 0
+    components: List[Dict[str, Any]] = []
+
+    for key, weight in component_weights.items():
+        item = world_snapshot.get(key) if isinstance(world_snapshot, dict) else None
+        if not isinstance(item, dict):
+            continue
+        status = str(item.get("status") or "UNAVAILABLE").upper()
+        change_pct = _safe_float(item.get("changePct"))
+        if status == "LIVE":
+            live_count += 1
+        elif status == "STALE":
+            stale_count += 1
+        else:
+            continue
+
+        # Normalize each index move to -1..+1 over a 2% band.
+        norm = _clamp(change_pct / 2.0, -1.0, 1.0)
+        weighted_sum += norm * weight
+        weight_total += weight
+        components.append({
+            "symbol": key,
+            "changePct": round(change_pct, 2),
+            "status": status,
+        })
+
+    if weight_total <= 0:
+        return {
+            "status": "UNAVAILABLE",
+            "bias": "NEUTRAL",
+            "influenceScore": 0,
+            "impactPts": 0.0,
+            "liveCount": live_count,
+            "staleCount": stale_count,
+            "totalCount": len(component_weights),
+            "components": components,
+            "summary": "Global indices unavailable",
+        }
+
+    influence_score = _clamp((weighted_sum / weight_total) * 100.0, -100.0, 100.0)
+    impact_pts = round(_clamp(influence_score * 0.22 * sym_mult, -20.0, 20.0), 1)
+
+    if influence_score >= 8:
+        bias = "BULLISH"
+    elif influence_score <= -8:
+        bias = "BEARISH"
+    else:
+        bias = "NEUTRAL"
+
+    status = "LIVE" if live_count >= 4 else "PARTIAL" if (live_count + stale_count) >= 3 else "UNAVAILABLE"
+    summary = (
+        f"World {bias.lower()} ({influence_score:+.0f}) · "
+        f"{live_count} live/{len(component_weights)}"
+    )
+
+    return {
+        "status": status,
+        "bias": bias,
+        "influenceScore": int(round(influence_score)),
+        "impactPts": impact_pts,
+        "liveCount": live_count,
+        "staleCount": stale_count,
+        "totalCount": len(component_weights),
+        "components": components,
+        "summary": summary,
+    }
+
+
 def _compute_best_strike_recommendation(
     rows: List[Dict[str, Any]],
     spot: float,
@@ -1091,6 +1205,7 @@ def _build_intelligence_summary(
     *,
     data_source: str = "LIVE",
     option_age_sec: float = 0.0,
+    world_snapshot: Optional[Dict[str, Dict[str, Any]]] = None,
 ) -> Dict[str, Any]:
     """
     Build a trader-facing symbol summary from per-strike signals.
@@ -1159,10 +1274,13 @@ def _build_intelligence_summary(
         elif ce_sigs.get("bos") == "DOWN":
             bos_down += 1
 
+    world_market = _compute_world_market_impact(world_snapshot, symbol)
+
     base_score = weighted_net / max(total_weight, 1.0)
     bos_overlay = _clamp((bos_up - bos_down) * 3.0, -15.0, 15.0)
     trap_overlay = _clamp((trap_pe - trap_ce) * 2.5, -12.0, 12.0)
-    final_score = round(_clamp(base_score + bos_overlay + trap_overlay, -100.0, 100.0), 1)
+    world_overlay = _safe_float(world_market.get("impactPts"))
+    final_score = round(_clamp(base_score + bos_overlay + trap_overlay + world_overlay, -100.0, 100.0), 1)
 
     signal = _overall_signal_from_score(final_score)
     direction = 1 if signal in ("STRONG_BUY", "BUY") else -1 if signal in ("STRONG_SELL", "SELL") else 0
@@ -1186,6 +1304,15 @@ def _build_intelligence_summary(
         99.0,
     )))
 
+    # Confluence with global risk regime improves confidence; conflict reduces it.
+    world_dir = 1 if world_market.get("bias") == "BULLISH" else -1 if world_market.get("bias") == "BEARISH" else 0
+    world_strength = abs(_safe_float(world_market.get("impactPts")))
+    if direction != 0 and world_dir != 0:
+        if world_dir == direction:
+            confidence = int(round(_clamp(confidence + min(8.0, world_strength * 0.7), 5.0, 99.0)))
+        else:
+            confidence = int(round(_clamp(confidence - min(12.0, world_strength * 0.9), 5.0, 99.0)))
+
     freshness_mult = 1.0
     freshness_reason = "Live chain with current confidence model"
 
@@ -1205,6 +1332,9 @@ def _build_intelligence_summary(
         freshness_reason = "Market closed fallback, signals are low conviction"
 
     confidence = int(round(_clamp(confidence * freshness_mult, 1.0, 99.0)))
+
+    if world_market.get("status") in ("LIVE", "PARTIAL"):
+        freshness_reason = f"{freshness_reason} | {world_market.get('summary')}"
 
     if trap_ratio >= 0.30 and abs(final_score) < 22:
         regime = "TRAP_ZONE"
@@ -1291,6 +1421,8 @@ def _build_intelligence_summary(
         insights.append("BOS confirms upside continuation")
     elif bos_down > bos_up:
         insights.append("BOS confirms downside continuation")
+    if world_market.get("status") in ("LIVE", "PARTIAL"):
+        insights.append(str(world_market.get("summary")))
     if trap_ratio >= 0.25:
         insights.append("Elevated trap risk: avoid chasing weak breakouts")
 
@@ -1321,6 +1453,7 @@ def _build_intelligence_summary(
         "pcr": pcr,
         "maxPain": max_pain,
         "maxPainGapPct": max_pain_gap_pct,
+        "worldMarket": world_market,
         "keyLevels": {
             "support": support,
             "resistance": resistance,
@@ -1865,6 +1998,7 @@ class StrikeIntelligenceService:
                 atm,
                 data_source="LIVE",
                 option_age_sec=0.0,
+                world_snapshot=get_global_indices_service().get_snapshot(),
             ),
             "dataSource": "LIVE",
             "timestamp": built_at,
@@ -1973,6 +2107,7 @@ class StrikeIntelligenceService:
             new_atm,
             data_source=prev_data_source,
             option_age_sec=prev_option_age,
+            world_snapshot=get_global_indices_service().get_snapshot(),
         )
         return self._with_runtime_meta(
             updated,

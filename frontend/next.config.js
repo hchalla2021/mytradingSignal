@@ -5,17 +5,18 @@ const nextConfig = {
   eslint: {
     ignoreDuringBuilds: true,
   },
-  // Use git-based build ID in production, dynamic in dev
+  // Use git-based build ID in production, stable ID in dev (so webpack cache persists across restarts)
   generateBuildId: async () => {
     if (process.env.NODE_ENV === 'production') {
       return process.env.BUILD_ID || `build-${Date.now()}`
     }
-    return `dev-${Date.now()}`
+    return 'dev'
   },
   experimental: {
     // Use a small ISR cache (0 causes ReadableStream abort crashes in Next 13.5.x)
     isrMemoryCacheSize: 16,
   },
+
   // Cache headers - aggressive no-cache in dev, reasonable caching in production
   async headers() {
     if (process.env.NODE_ENV !== 'production') {

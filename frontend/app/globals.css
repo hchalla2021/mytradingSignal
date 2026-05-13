@@ -3,7 +3,6 @@
 @tailwind utilities;
 
 /* Professional Trading App Theme - Lightweight & Modern */
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
 
 :root {
   /* Lightweight Background Colors */
@@ -59,7 +58,7 @@ body {
   overflow-x: hidden;
   background: linear-gradient(135deg, #0a0e1a 0%, #0f1421 50%, #121827 100%);
   color: var(--text-primary);
-  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-family: var(--font-inter), -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   font-size: 14px;
@@ -78,7 +77,7 @@ h1, h2, h3, h4, h5, h6 {
 .font-mono,
 .price,
 .number {
-  font-family: 'JetBrains Mono', 'SF Mono', Monaco, 'Cascadia Code', monospace;
+  font-family: var(--font-jetbrains-mono), 'SF Mono', Monaco, 'Cascadia Code', monospace;
   font-variant-numeric: tabular-nums;
   letter-spacing: -0.02em;
 }

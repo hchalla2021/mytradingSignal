@@ -77,9 +77,10 @@ export interface CRTFactors {
     phase: 'ACCUMULATION' | 'MANIPULATION' | 'DISTRIBUTION' | 'UNKNOWN';
     label: string;
   };
-  rangeReclaim: {
-    score: number;
-    reclaimed: 'PDH' | 'PDL' | 'BOTH' | 'NONE';
+  prevCloseRelationship: {
+    score: number;         // -8 to +8
+    closeVsPDC: number;    // % diff: (close - PDC) / PDC * 100
+    aboveBelow: 'ABOVE' | 'BELOW' | 'NEUTRAL';
     label: string;
   };
   trendAlignment: {
@@ -103,6 +104,7 @@ export interface BTSTRecommendation {
   targetGap: string;        // Expected gap direction
   stopLoss: string;         // Suggested SL approach
   entryWindow: string;      // Suggested entry time
+  signalQuality: 'BTST_WINDOW' | 'LIVE' | 'POST_MARKET'; // BTST_WINDOW = 15:20–15:30 IST final snapshot
 }
 
 export interface CRTAnalysis {
@@ -128,6 +130,9 @@ export interface CRTAnalysis {
     lowerWickPct: number;
     isBullish: boolean;
   };
+  prevDayDataValid: boolean;  // True when PREV_DAY_OHLC loaded from broker (not fallback)
+  isBTSTCriticalWindow: boolean; // True during 15:20–15:30 IST — final candle, most accurate
+  sessionDate: string;           // 'YYYY-MM-DD' IST — for date-scoped cache validation
   timestamp: number;
 }
 
@@ -350,117 +355,177 @@ function analyzeBodyWickRatio(
   };
 }
 
+/** Factor 6: AMD Pattern Detection (session-based)
+ * ── IST Time Utility ───────────────────────────────────────────────────
+ * Handles both UTC ISO strings (2026-05-12T09:50:00Z)
+ * and IST ISO strings (2026-05-12T15:20:00+05:30) via getUTCHours().
+ */
+function parseISTTime(timestamp: string): { hour: number; minute: number } {
+  try {
+    const d = new Date(timestamp);
+    if (isNaN(d.getTime())) return { hour: 15, minute: 25 };
+    // IST = UTC + 330 minutes
+    const totalIST = d.getUTCHours() * 60 + d.getUTCMinutes() + 330;
+    return { hour: Math.floor(totalIST / 60) % 24, minute: totalIST % 60 };
+  } catch {
+    return { hour: 15, minute: 25 };
+  }
+}
+
+function getISTSessionDate(timestamp: string): string {
+  try {
+    const d = new Date(timestamp);
+    if (isNaN(d.getTime())) return new Date(Date.now() + 330 * 60000).toISOString().slice(0, 10);
+    return new Date(d.getTime() + 330 * 60000).toISOString().slice(0, 10);
+  } catch {
+    return new Date(Date.now() + 330 * 60000).toISOString().slice(0, 10);
+  }
+}
+
 /** Factor 6: AMD Pattern Detection (session-based) */
 function analyzeAMDPattern(
   timestamp: string, high: number, low: number, close: number
 ): CRTFactors['amdPattern'] {
-  let hour = 15; // Default to afternoon
-  try {
-    const d = new Date(timestamp);
-    if (!isNaN(d.getTime())) {
-      // Convert to IST (UTC+5:30)
-      const istHour = (d.getUTCHours() + 5) % 24;
-      const istMinute = d.getUTCMinutes() + 30;
-      hour = istMinute >= 60 ? istHour + 1 : istHour;
-    }
-  } catch { /* use default */ }
+  const { hour, minute } = parseISTTime(timestamp);
+
+  // BTST critical window: 15:20–15:30 IST. Candle is 97%+ formed — highest signal accuracy.
+  const isBTSTWindow = hour === 15 && minute >= 20;
+  // Post-market: after 15:30 IST
+  const isPostMarket = hour > 15 || (hour === 15 && minute > 30);
 
   let phase: 'ACCUMULATION' | 'MANIPULATION' | 'DISTRIBUTION' | 'UNKNOWN' = 'UNKNOWN';
   let score = 0;
   let label = '';
 
+  const range = high - low;
+  const closePos = range > 0 ? (close - low) / range : 0.5;
+
   if (hour >= 9 && hour < 11) {
+    // ── Accumulation (09:15–11:00) ───────────────────────────────────
     phase = 'ACCUMULATION';
     score = 2;
-    label = 'Morning Session — Accumulation phase (institutional positioning)';
+    label = 'Morning session — Accumulation (institutional positioning)';
+
   } else if (hour >= 11 && hour < 14) {
+    // ── Manipulation (11:00–14:00) ───────────────────────────────────
     phase = 'MANIPULATION';
     score = 0;
-    label = 'Mid-Session — Manipulation phase (fake moves, traps)';
-  } else if (hour >= 14 && hour <= 16) {
+    label = 'Mid-session — Manipulation phase (traps & false breakouts)';
+
+  } else if (hour >= 14 && !isBTSTWindow && !isPostMarket) {
+    // ── Early Distribution (14:00–15:19) ────────────────────────────
     phase = 'DISTRIBUTION';
-    // In distribution, closing near high = bullish for BTST
-    const range = high - low;
-    const closePos = range > 0 ? (close - low) / range : 0.5;
-    if (closePos > 0.65) {
+    if (closePos >= 0.70) { score = 6;  label = 'Early distribution — Closing strong ↑ (BTST positioning)'; }
+    else if (closePos >= 0.50) { score = 3;  label = 'Early distribution — Close above midpoint'; }
+    else if (closePos >= 0.30) { score = -3; label = 'Early distribution — Close below midpoint'; }
+    else                       { score = -6; label = 'Early distribution — Closing weak ↓ (bearish carry)'; }
+
+  } else if (isBTSTWindow) {
+    // ── CRITICAL BTST WINDOW (15:20–15:30 IST) ──────────────────────
+    // Candle is near-final. 5-tier scoring with ±8 max.
+    // At 3:20 PM, smart money has completed all positioning for tomorrow.
+    phase = 'DISTRIBUTION';
+    if (closePos >= 0.80) {
+      score = 8;
+      label = `🎯 3:20 PM BTST — Closing at session HIGH (${(closePos * 100).toFixed(0)}%) — Maximum bullish overnight signal`;
+    } else if (closePos >= 0.63) {
       score = 6;
-      label = 'Distribution Phase — Closing strong ↑ (BTST favorable)';
-    } else if (closePos < 0.35) {
+      label = `🎯 3:20 PM BTST — Closing in upper range (${(closePos * 100).toFixed(0)}%) — Bullish overnight setup`;
+    } else if (closePos >= 0.45) {
+      score = 2;
+      label = `🎯 3:20 PM BTST — Closing near midpoint (${(closePos * 100).toFixed(0)}%) — Neutral overnight`;
+    } else if (closePos >= 0.25) {
       score = -6;
-      label = 'Distribution Phase — Closing weak ↓ (avoid BTST)';
+      label = `🎯 3:20 PM BTST — Closing in lower range (${(closePos * 100).toFixed(0)}%) — Bearish overnight setup`;
     } else {
-      score = 0;
-      label = 'Distribution Phase — Neutral close';
+      score = -8;
+      label = `🎯 3:20 PM BTST — Closing at session LOW (${(closePos * 100).toFixed(0)}%) — Maximum bearish overnight signal`;
     }
+
   } else {
-    label = 'Post-Market — Using last session data';
+    // ── Post-Market ─────────────────────────────────────────────────
+    phase = 'UNKNOWN';
+    label = 'Post-market — Using final session close data';
   }
 
   return { score, phase, label };
 }
 
-/** Factor 7: Range Reclaim Detection */
-function analyzeRangeReclaim(
-  close: number, high: number, low: number, pdh: number, pdl: number
-): CRTFactors['rangeReclaim'] {
-  const pdhSwept = high > pdh;
-  const pdlSwept = low < pdl;
-  let reclaimed: 'PDH' | 'PDL' | 'BOTH' | 'NONE' = 'NONE';
+/** Factor 7: Prev Close Relationship — close position vs PDC (Previous Day Close)
+ * Distinct from sweepDetection (which uses PDH/PDL).
+ * Measures net institutional commitment: did they close above or below prior session price?
+ */
+function analyzePrevCloseRelationship(
+  close: number, pdc: number
+): CRTFactors['prevCloseRelationship'] {
+  if (pdc <= 0) return { score: 0, closeVsPDC: 0, aboveBelow: 'NEUTRAL', label: 'No PDC data — prev close unavailable' };
+
+  const closeVsPDC = ((close - pdc) / pdc) * 100;
+  let aboveBelow: 'ABOVE' | 'BELOW' | 'NEUTRAL' = 'NEUTRAL';
   let score = 0;
   let label = '';
 
-  // Range reclaim: price sweeps a level but closes back within prior range
-  const reclaimedPDH = pdhSwept && close < pdh && close > pdl;
-  const reclaimedPDL = pdlSwept && close > pdl && close < pdh;
-
-  if (reclaimedPDH && reclaimedPDL) {
-    reclaimed = 'BOTH';
-    score = 0;
-    label = 'Both levels swept & reclaimed — Extreme volatility';
-  } else if (reclaimedPDL) {
-    reclaimed = 'PDL';
-    score = 8;
-    label = 'PDL Swept & Reclaimed ↑ — Bullish rejection (smart money buy)';
-  } else if (reclaimedPDH) {
-    reclaimed = 'PDH';
-    score = -8;
-    label = 'PDH Swept & Reclaimed ↓ — Bearish rejection (distribution)';
+  if (closeVsPDC > 0.8) {
+    aboveBelow = 'ABOVE'; score = 8;
+    label = `+${closeVsPDC.toFixed(2)}% above PDC — Institutional accumulation above prev close`;
+  } else if (closeVsPDC > 0.3) {
+    aboveBelow = 'ABOVE'; score = 5;
+    label = `+${closeVsPDC.toFixed(2)}% above PDC — Bullish carry above prev close`;
+  } else if (closeVsPDC > 0.05) {
+    aboveBelow = 'ABOVE'; score = 2;
+    label = `Marginally above PDC (+${closeVsPDC.toFixed(2)}%) — Mild bullish close`;
+  } else if (closeVsPDC >= -0.05) {
+    aboveBelow = 'NEUTRAL'; score = 0;
+    label = 'At PDC — No directional commitment vs prior close';
+  } else if (closeVsPDC >= -0.3) {
+    aboveBelow = 'BELOW'; score = -2;
+    label = `Marginally below PDC (${closeVsPDC.toFixed(2)}%) — Mild bearish close`;
+  } else if (closeVsPDC >= -0.8) {
+    aboveBelow = 'BELOW'; score = -5;
+    label = `${closeVsPDC.toFixed(2)}% below PDC — Bearish carry below prev close`;
   } else {
-    label = 'No range reclaim pattern';
+    aboveBelow = 'BELOW'; score = -8;
+    label = `${closeVsPDC.toFixed(2)}% below PDC — Institutional distribution below prev close`;
   }
 
-  return { score, reclaimed, label };
+  return { score, closeVsPDC: Math.round(closeVsPDC * 100) / 100, aboveBelow, label };
 }
 
-/** Factor 8: Trend Alignment & Closing Strength */
+/** Factor 8: Intraday Trend Alignment — open→close session momentum
+ * Uses open-to-close move only, NOT gap-adjusted changePercent.
+ * This is DISTINCT from prevCloseRelationship (which measures full net move vs PDC).
+ * Example: market gaps down -1% then rallies → intradayChg = +0.8% (BULLISH session)
+ * even if changePercent = -0.2% (looks neutral when gap-adjusted).
+ */
 function analyzeTrendAlignment(
-  changePercent: number
+  open: number, close: number
 ): CRTFactors['trendAlignment'] {
   let dayTrend: 'BULLISH' | 'BEARISH' | 'NEUTRAL' = 'NEUTRAL';
   let closingStrength: 'STRONG' | 'MODERATE' | 'WEAK' = 'WEAK';
   let score = 0;
   let label = '';
 
-  const absChange = Math.abs(changePercent);
+  const intradayChg = open > 0 ? ((close - open) / open) * 100 : 0;
+  const absChange = Math.abs(intradayChg);
 
-  if (absChange > 1.0) {
+  if (absChange > 0.8) {
     closingStrength = 'STRONG';
-  } else if (absChange > 0.4) {
+  } else if (absChange > 0.3) {
     closingStrength = 'MODERATE';
   }
 
-  if (changePercent > 0.5) {
+  if (intradayChg > 0.2) {
     dayTrend = 'BULLISH';
     score = closingStrength === 'STRONG' ? 8 : closingStrength === 'MODERATE' ? 5 : 2;
-    label = `Bullish Day (${closingStrength.toLowerCase()} close) — Momentum carry for BTST`;
-  } else if (changePercent < -0.5) {
+    label = `Intraday Bullish +${intradayChg.toFixed(2)}% (open→close, ${closingStrength.toLowerCase()}) — Session momentum carry`;
+  } else if (intradayChg < -0.2) {
     dayTrend = 'BEARISH';
     score = closingStrength === 'STRONG' ? -8 : closingStrength === 'MODERATE' ? -5 : -2;
-    label = `Bearish Day (${closingStrength.toLowerCase()} close) — Negative carry`;
+    label = `Intraday Bearish ${intradayChg.toFixed(2)}% (open→close, ${closingStrength.toLowerCase()}) — Negative session momentum`;
   } else {
     dayTrend = 'NEUTRAL';
     score = 0;
-    label = 'Flat Day — Low directional conviction';
+    label = 'Intraday Flat — Open≈Close, no clear session momentum';
   }
 
   return { score, dayTrend, closingStrength, label };
@@ -468,7 +533,7 @@ function analyzeTrendAlignment(
 
 // ── BTST Signal Generation ─────────────────────────────────────────────
 
-function generateBTSTRecommendation(factors: CRTFactors): BTSTRecommendation {
+function generateBTSTRecommendation(factors: CRTFactors, isBTSTCriticalWindow: boolean): BTSTRecommendation {
   const totalScore =
     factors.rangeExpansion.score +
     factors.sweepDetection.score +
@@ -476,11 +541,13 @@ function generateBTSTRecommendation(factors: CRTFactors): BTSTRecommendation {
     factors.displacement.score +
     factors.bodyWickRatio.score +
     factors.amdPattern.score +
-    factors.rangeReclaim.score +
+    factors.prevCloseRelationship.score +
     factors.trendAlignment.score;
 
-  const maxScore = 10 + 10 + 10 + 8 + 6 + 6 + 8 + 8; // 66
-  const confidence = clamp(Math.round(((totalScore + maxScore) / (2 * maxScore)) * 100), 0, 100);
+  // maxScore: rangeExp(8)+sweep(10)+closePos(10)+disp(8)+bwr(6)+amd(8 in window/6 normal)+pcr(8)+trend(8)
+  // Use 66 during BTST window (AMD max=8), 64 otherwise
+  const MAX_SCORE = isBTSTCriticalWindow ? 66 : 64;
+  const confidence = clamp(Math.round(((totalScore + MAX_SCORE) / (2 * MAX_SCORE)) * 100), 0, 100);
 
   let signal: BTSTSignal;
   let action: string;
@@ -488,63 +555,81 @@ function generateBTSTRecommendation(factors: CRTFactors): BTSTRecommendation {
   let stopLoss: string;
   let riskLevel: 'LOW' | 'MEDIUM' | 'HIGH';
 
-  if (totalScore >= 35) {
+  // Thresholds stay constant — direction decision must be time-independent
+  if (totalScore >= 32) {
     signal = 'STRONG_BUY';
-    action = 'BTST Buy — Strong overnight bullish setup';
-    targetGap = 'Gap-up 0.3-0.8% expected';
-    stopLoss = 'Below today\'s low';
+    action = isBTSTCriticalWindow
+      ? '🎯 FINAL BTST Buy — Strong 3:20 PM bullish close, buy before 3:25 PM'
+      : 'BTST Buy — Strong overnight bullish setup';
+    targetGap = 'Gap-up 0.3-0.8% expected next open';
+    stopLoss = 'SL: Below today\'s low';
     riskLevel = 'LOW';
-  } else if (totalScore >= 18) {
+  } else if (totalScore >= 16) {
     signal = 'BUY';
-    action = 'BTST Buy — Moderate bullish setup';
+    action = isBTSTCriticalWindow
+      ? '🎯 FINAL BTST Buy — Moderate 3:20 PM bullish close'
+      : 'BTST Buy — Moderate bullish setup';
     targetGap = 'Flat to gap-up 0.1-0.4%';
-    stopLoss = 'Below PDL or today\'s low';
+    stopLoss = 'SL: Below PDL or today\'s low';
     riskLevel = 'MEDIUM';
-  } else if (totalScore >= -18) {
+  } else if (totalScore >= -15) {
     signal = 'NEUTRAL';
-    action = 'No BTST — Neutral outlook, avoid overnight risk';
+    action = isBTSTCriticalWindow
+      ? '🎯 FINAL BTST — Neutral 3:20 PM close, skip overnight trade'
+      : 'No BTST — Neutral outlook, avoid overnight risk';
     targetGap = 'Uncertain gap direction';
-    stopLoss = 'N/A';
+    stopLoss = 'N/A — No trade';
     riskLevel = 'HIGH';
-  } else if (totalScore >= -35) {
+  } else if (totalScore >= -31) {
     signal = 'SELL';
-    action = 'BTST Sell — Moderate bearish setup';
+    action = isBTSTCriticalWindow
+      ? '🎯 FINAL BTST Sell — Moderate 3:20 PM bearish close'
+      : 'BTST Sell — Moderate bearish setup';
     targetGap = 'Flat to gap-down 0.1-0.4%';
-    stopLoss = 'Above today\'s high';
+    stopLoss = 'SL: Above today\'s high';
     riskLevel = 'MEDIUM';
   } else {
     signal = 'STRONG_SELL';
-    action = 'BTST Sell — Strong overnight bearish setup';
-    targetGap = 'Gap-down 0.3-0.8% expected';
-    stopLoss = 'Above PDH or today\'s high';
+    action = isBTSTCriticalWindow
+      ? '🎯 FINAL BTST Sell — Strong 3:20 PM bearish close, avoid longs'
+      : 'BTST Sell — Strong overnight bearish setup';
+    targetGap = 'Gap-down 0.3-0.8% expected next open';
+    stopLoss = 'SL: Above PDH or today\'s high';
     riskLevel = 'LOW';
   }
 
-  // Build reasoning
+  const signalQuality: BTSTRecommendation['signalQuality'] = isBTSTCriticalWindow
+    ? 'BTST_WINDOW'
+    : factors.amdPattern.phase === 'UNKNOWN' ? 'POST_MARKET' : 'LIVE';
+
+  // Build reasoning — ordered by signal strength
   const reasoning: string[] = [];
-  if (Math.abs(factors.sweepDetection.score) >= 7) reasoning.push(factors.sweepDetection.label);
-  if (Math.abs(factors.closePosition.score) >= 7) reasoning.push(factors.closePosition.label);
-  if (Math.abs(factors.displacement.score) >= 4) reasoning.push(factors.displacement.label);
-  if (Math.abs(factors.rangeReclaim.score) >= 8) reasoning.push(factors.rangeReclaim.label);
-  if (Math.abs(factors.trendAlignment.score) >= 5) reasoning.push(factors.trendAlignment.label);
-  if (Math.abs(factors.amdPattern.score) >= 6) reasoning.push(factors.amdPattern.label);
-  if (Math.abs(factors.rangeExpansion.score) >= 5) reasoning.push(factors.rangeExpansion.label);
+  if (isBTSTCriticalWindow)                                  reasoning.push(factors.amdPattern.label);
+  if (Math.abs(factors.sweepDetection.score) >= 7)          reasoning.push(factors.sweepDetection.label);
+  if (Math.abs(factors.closePosition.score) >= 7)           reasoning.push(factors.closePosition.label);
+  if (Math.abs(factors.displacement.score) >= 4)            reasoning.push(factors.displacement.label);
+  if (Math.abs(factors.prevCloseRelationship.score) >= 5)   reasoning.push(factors.prevCloseRelationship.label);
+  if (Math.abs(factors.trendAlignment.score) >= 5)          reasoning.push(factors.trendAlignment.label);
+  if (!isBTSTCriticalWindow && Math.abs(factors.amdPattern.score) >= 6) reasoning.push(factors.amdPattern.label);
+  if (Math.abs(factors.rangeExpansion.score) >= 5)          reasoning.push(factors.rangeExpansion.label);
   if (reasoning.length === 0) reasoning.push('No strong individual factors — composite analysis');
 
-  const entryWindow = signal === 'STRONG_BUY' || signal === 'BUY'
-    ? '3:00 PM - 3:25 PM (Last 30 min before close)'
-    : signal === 'STRONG_SELL' || signal === 'SELL'
-      ? 'Sell/Short after 3:00 PM'
-      : 'No entry recommended';
+  const entryWindow = isBTSTCriticalWindow
+    ? 'NOW — 3:20–3:25 PM IST (BTST entry window active)'
+    : signal === 'STRONG_BUY' || signal === 'BUY'
+      ? '3:20 PM - 3:25 PM IST (last 10 min before close)'
+      : signal === 'STRONG_SELL' || signal === 'SELL'
+        ? 'Sell/Short near 3:20–3:25 PM IST'
+        : 'No entry recommended';
 
-  return { signal, confidence, totalScore, maxScore, action, reasoning, riskLevel, targetGap, stopLoss, entryWindow };
+  return { signal, confidence, totalScore, maxScore: MAX_SCORE, action, reasoning, riskLevel, targetGap, stopLoss, entryWindow, signalQuality };
 }
 
 // ── Main Analysis Function ─────────────────────────────────────────────
 
 export function analyzeCRT(input: CRTInput): CRTAnalysis {
   const {
-    symbol, price, open, high, low, close, changePercent,
+    symbol, price, open, high, low, close,
     prevDayHigh, prevDayLow, prevDayClose, timestamp
   } = input;
 
@@ -555,6 +640,17 @@ export function analyzeCRT(input: CRTInput): CRTAnalysis {
   const h = safe(high, price);
   const l = safe(low, price);
   const c = safe(close, price);
+
+  // IST time — used for BTST window detection and session-date cache key
+  const { hour: istHour, minute: istMinute } = parseISTTime(timestamp);
+  const isBTSTCriticalWindow = istHour === 15 && istMinute >= 20;
+  const sessionDate = getISTSessionDate(timestamp);
+
+  // Prev day data is valid only when broker returned real values (not fallback to today's OHLC).
+  // When PREV_DAY_OHLC fetch fails (expired token), pdh/pdl collapse to today's high/low.
+  const prevDayDataValid =
+    safe(prevDayHigh) > 0 && safe(prevDayLow) > 0 &&
+    Math.abs(pdh - h) > 1 && Math.abs(pdl - l) > 1;
 
   const pdr = pdh - pdl;
   const cdr = h - l;
@@ -567,11 +663,11 @@ export function analyzeCRT(input: CRTInput): CRTAnalysis {
     displacement: analyzeDisplacement(o, h, l, c, pdr),
     bodyWickRatio: analyzeBodyWickRatio(o, h, l, c),
     amdPattern: analyzeAMDPattern(timestamp, h, l, c),
-    rangeReclaim: analyzeRangeReclaim(c, h, l, pdh, pdl),
-    trendAlignment: analyzeTrendAlignment(changePercent),
+    prevCloseRelationship: analyzePrevCloseRelationship(c, pdc),
+    trendAlignment: analyzeTrendAlignment(o, c),
   };
 
-  const btst = generateBTSTRecommendation(factors);
+  const btst = generateBTSTRecommendation(factors, isBTSTCriticalWindow);
   const candleStructure = detectCandleType(o, h, l, c);
 
   const keyLevels = {
@@ -585,6 +681,9 @@ export function analyzeCRT(input: CRTInput): CRTAnalysis {
   return {
     symbol, price: safe(price, c),
     factors, btst, keyLevels, candleStructure,
+    prevDayDataValid,
+    isBTSTCriticalWindow,
+    sessionDate,
     timestamp: Date.now(),
   };
 }

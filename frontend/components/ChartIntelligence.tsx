@@ -11,6 +11,8 @@ import {
   type ChartLevels,
 } from '@/hooks/useChartIntelligence';
 import { useMarketSocket } from '@/hooks/useMarketSocket';
+import { useCompassSocket, type CompassIndex } from '@/hooks/useCompassSocket';
+import { useGlobalIndicesSocket } from '@/hooks/useGlobalIndicesSocket';
 
 // ── Chart constants ─────────────────────────────────────────────────────────
 
@@ -761,6 +763,7 @@ interface CandleChartProps {
   levels: ChartLevels;
   spot: number;
   liveSpot?: number;
+  chartSignalScore?: number;
   chartHeight?: number;
   onMaximize?: () => void;
   structure?: StructureEvent[];
@@ -774,7 +777,7 @@ interface CandleChartProps {
   prioritySetups?: PrioritySetup[];
 }
 
-const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, levels, spot, liveSpot, chartHeight, onMaximize, structure = [], inducements = [], fractals = [], htfMode = false, chartKey = '', dataSource = 'LIVE', prioritySetups = [] }) => {
+const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, levels, spot, liveSpot, chartSignalScore = 0, chartHeight, onMaximize, structure = [], inducements = [], fractals = [], htfMode = false, chartKey = '', dataSource = 'LIVE', prioritySetups = [] }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
@@ -1255,9 +1258,11 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
       const lineW    = 1.0 + intensity * 0.8;
 
       ctx.save();
-      ctx.font = 'bold 10px "Segoe UI", Arial, sans-serif';
+      // Scale font UP when count dominates (high intensity = institutional-grade signal)
+      const fontSize = intensity > 0.85 ? 12 : intensity > 0.65 ? 11 : 10;
+      ctx.font = `bold ${fontSize}px "Segoe UI", Arial, sans-serif`;
       const tw   = ctx.measureText(text).width;
-      const tagH = _TAG_H;
+      const tagH = intensity > 0.85 ? 18 : _TAG_H;
       const tagW = tw + 12;
 
       // X: pill right-edge sits 8px before first visible candle.
@@ -1316,12 +1321,45 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
       ctx.stroke();
       ctx.shadowBlur  = 0;
 
-      // Text — near-white base, zone colour tint at high intensity
+      // Text — render full label, then sharply accent only the dominant count token.
       ctx.fillStyle    = intensity > 0.65 ? color : '#dde3ea';
       ctx.globalAlpha  = alpha;
       ctx.textAlign    = 'left';
       ctx.textBaseline = 'middle';
-      ctx.fillText(text, tx + 6, centerY);
+      const textX = tx + 6;
+      ctx.fillText(text, textX, centerY);
+
+      // Detect directional count pair (e.g., "↑15.2K ↓6.8K") and highlight only the larger value.
+      const countTokens = Array.from(text.matchAll(/[↑↓]\s*[\d.]+[KkMm]?/g));
+      if (countTokens.length >= 2) {
+        const v0 = parseVal(countTokens[0][0]);
+        const v1 = parseVal(countTokens[1][0]);
+        const dominantIdx = v0 === v1 ? -1 : (v0 > v1 ? 0 : 1);
+        if (dominantIdx >= 0) {
+          const token = countTokens[dominantIdx];
+          const tokenText = token[0];
+          const start = token.index ?? 0;
+          const tokenX = textX + ctx.measureText(text.slice(0, start)).width;
+          const tokenW = ctx.measureText(tokenText).width;
+          const tokenH = tagH - 6;
+          const tokenY = centerY - tokenH / 2;
+
+          // Focus pill behind just the dominant number.
+          roundRect(ctx, tokenX - 2, tokenY, tokenW + 4, tokenH, 2);
+          ctx.fillStyle = 'rgba(3, 10, 18, 0.88)';
+          ctx.globalAlpha = alpha;
+          ctx.fill();
+
+          // Crisp bright text + glow only for dominant token.
+          ctx.shadowColor = color;
+          ctx.shadowBlur = 8;
+          ctx.fillStyle = color;
+          ctx.font = `900 ${fontSize}px "Segoe UI", Arial, sans-serif`;
+          ctx.fillText(tokenText, tokenX, centerY);
+          ctx.shadowBlur = 0;
+        }
+      }
+
       ctx.textBaseline = 'alphabetic';
       ctx.restore();
     };
@@ -2009,8 +2047,16 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
 
       // H/RES lines: tag BELOW the line (avoid top of chart); L/SUP: tag ABOVE the line
       const _lvlAbove = label.includes('L') || label === 'SUP';
+      const levelCode =
+        label === 'DAY HIGH' ? 'DH' :
+        label === 'DAY LOW'  ? 'DL' :
+        label === 'PREV HIGH' ? 'PH' :
+        label === 'PREV LOW'  ? 'PL' :
+        label === 'SUP' ? 'SUP' :
+        label === 'RES' ? 'RES' :
+        label;
       drawLineTag(y, label, color, _lvlAbove);
-      if (pushTag) drawCenterCount(y, pushTag, color, _lvlAbove, 1.0, false, label.replace('DAY ', 'D').replace('PREV ', 'P'));
+      if (pushTag) drawCenterCount(y, pushTag, color, _lvlAbove, 1.0, false, levelCode);
       // Price pill: right price-axis strip (standard axis annotation)
       ctx.save();
       ctx.shadowBlur = 0;
@@ -2721,7 +2767,7 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
         : (isBull ? `BOS ↑${dispStr}` : `BOS ↓${dispStr}`);
       const pushTag = eventPushTag(ev.idx);
       drawLineTag(evY, label, color, !isBull, 0.92 * _qMult);
-      if (pushTag) drawCenterCount(evY, pushTag, color, !isBull, 0.92 * _qMult, false, isChoCh ? 'CH' : 'BOS');
+      if (pushTag) drawCenterCount(evY, pushTag, color, !isBull, 0.92 * _qMult, false, isChoCh ? 'CHOCH' : 'BOS');
       // Label centred on the break candle, above (bull) or below (bear) the arrow
       {
         const bgColor = (isChoCh && evQuality === 'HIGH') ? color : `${color}28`;
@@ -2797,6 +2843,88 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
     }
 
     // Fractal markers intentionally hidden from chart rendering to avoid weak/noisy signals.
+
+    // ── PREDICTIVE NEXT CANDLE ─────────────────────────────────────────────
+    // Multi-factor projection using trend + momentum + structure + liquidity + setup confluence.
+    // Draw whenever model resolves direction so user always sees next-candle bias.
+    if (_mktOpen && candles.length >= 6) {
+      const lastIdx  = candles.length - 1;
+      const nextX    = idxToX(lastIdx + 1);
+      // Only draw if projected candle x is within the visible chart area
+      if (nextX >= chartLeft - candleStep && nextX <= chartRight + candleStep) {
+        const proj = computeNextCandleProjection(
+          candles,
+          effectiveSpot,
+          chartSignalScore,
+          structure,
+          liquidity,
+          inducements,
+          fractals,
+          prioritySetups,
+        );
+        const projDir = proj?.direction === 'UP' ? 1 : proj?.direction === 'DOWN' ? -1 : 0;
+
+        if (proj && projDir !== 0) {
+          let atrSum = 0;
+          for (let k = Math.max(0, lastIdx - 13); k <= lastIdx; k++) {
+            atrSum += candles[k].h - candles[k].l;
+          }
+          const atr = atrSum / Math.max(1, Math.min(14, candles.length));
+          const open = effectiveSpot;
+          const bodyMove = atr * proj.bodyAtrMult;
+          const wickMove = atr * proj.wickAtrMult;
+
+          const projClose = open + projDir * bodyMove;
+          const projHigh  = Math.max(open, projClose) + wickMove;
+          const projLow   = Math.min(open, projClose) - wickMove;
+          const bodyTop   = priceToY(Math.max(open, projClose));
+          const bodyBot   = priceToY(Math.min(open, projClose));
+          const wickTop   = priceToY(projHigh);
+          const wickBot   = priceToY(projLow);
+          const bodyH     = Math.max(2, bodyBot - bodyTop);
+          const halfW     = Math.max(2, cw * 0.6);
+          const projColor = projDir > 0 ? 'rgba(38,166,154,0.55)' : 'rgba(239,83,80,0.55)';
+          const glowColor = projDir > 0 ? '#26a69a' : '#ef5350';
+
+          ctx.save();
+          ctx.globalAlpha = 0.70 + 0.20 * Math.sin(Date.now() / 480); // gentle breathing
+          // Wick
+          ctx.strokeStyle = projColor;
+          ctx.lineWidth = 1;
+          ctx.setLineDash([3, 2]);
+          ctx.beginPath(); ctx.moveTo(nextX, wickTop); ctx.lineTo(nextX, bodyTop); ctx.stroke();
+          ctx.beginPath(); ctx.moveTo(nextX, bodyBot); ctx.lineTo(nextX, wickBot); ctx.stroke();
+          ctx.setLineDash([]);
+          // Body — dashed outline only (ghost / projected)
+          ctx.strokeStyle = glowColor;
+          ctx.lineWidth = 1.5;
+          ctx.setLineDash([4, 3]);
+          ctx.shadowColor = glowColor;
+          ctx.shadowBlur = 8;
+          ctx.strokeRect(nextX - halfW, bodyTop, halfW * 2, bodyH);
+          ctx.setLineDash([]);
+          ctx.shadowBlur = 0;
+          // Label: "PRED ▲" or "PRED ▼"
+          const predLabel = `${projDir > 0 ? 'PRED ▲' : 'PRED ▼'} ${proj.confidence}%`;
+          ctx.font = '900 10px sans-serif';
+          const tw = ctx.measureText(predLabel).width + 12;
+          const ty = projDir > 0 ? bodyTop - 18 : bodyBot + 5;
+          roundRect(ctx, nextX - tw / 2, ty, tw, 15, 3);
+          ctx.fillStyle = 'rgba(5,10,20,0.92)';
+          ctx.globalAlpha = 0.92;
+          ctx.fill();
+          ctx.strokeStyle = glowColor;
+          ctx.lineWidth = 1;
+          ctx.globalAlpha = 0.85;
+          roundRect(ctx, nextX - tw / 2, ty, tw, 15, 3);
+          ctx.stroke();
+          ctx.fillStyle = '#e2e8f0';
+          ctx.textAlign = 'center';
+          ctx.fillText(predLabel, nextX, ty + 11);
+          ctx.restore();
+        }
+      }
+    }
 
     // ── APPROACH ALERT BANNER ─────────────────────────────────────────────────
     // Floats near the top of the chart area when price is near key zones.
@@ -3354,6 +3482,254 @@ function roundRect(ctx: CanvasRenderingContext2D, x: number, y: number, w: numbe
 
 type ChartSignal = 'STRONG_BUY' | 'BUY' | 'NEUTRAL' | 'SELL' | 'STRONG_SELL';
 
+interface NextCandleProjection {
+  direction: 'UP' | 'DOWN';
+  confidence: number;          // 45..95
+  bodyAtrMult: number;         // projected body size in ATR units
+  wickAtrMult: number;         // projected wick extension in ATR units
+  expectedMovePct: number;     // expected close move vs open
+  confluence: number;          // agreeing major factors count
+  isStrong: boolean;           // true only on high-quality confluence
+  calibrationWinRate: number;  // rolling directional reliability (0..100)
+  calibrationSamples: number;  // evaluated historical samples
+}
+
+function clamp(n: number, min: number, max: number): number {
+  return Math.min(max, Math.max(min, n));
+}
+
+function computeNextCandleProjection(
+  candles: Candle[],
+  spot: number,
+  chartSignalScore: number,
+  structure: StructureEvent[],
+  liquidity: Liquidity[],
+  inducements: InducementPoint[],
+  fractals: FractalPoint[],
+  prioritySetups: PrioritySetup[],
+): NextCandleProjection | null {
+  if (candles.length < 18 || spot <= 0) return null;
+
+  const closes = candles.map(c => c.c);
+  const last = candles[candles.length - 1];
+
+  const ema = (period: number): number => {
+    const k = 2 / (period + 1);
+    let v = closes[0];
+    for (let i = 1; i < closes.length; i++) v = closes[i] * k + v * (1 - k);
+    return v;
+  };
+
+  const atrLookback = Math.min(14, candles.length);
+  let atr = 0;
+  for (let i = candles.length - atrLookback; i < candles.length; i++) atr += (candles[i].h - candles[i].l);
+  atr = atr / atrLookback;
+  if (atr <= 0) return null;
+
+  const ema9 = ema(9);
+  const ema21 = ema(21);
+  const trendScore = clamp(((ema9 - ema21) / spot) * 220, -1, 1);
+
+  const momBaseIdx = Math.max(0, candles.length - 6);
+  const momPct = ((last.c - candles[momBaseIdx].c) / Math.max(candles[momBaseIdx].c, 1)) * 100;
+  const momentumScore = clamp(momPct / 0.55, -1, 1);
+
+  let structureRaw = 0;
+  for (const ev of structure.slice(-8)) {
+    const age = candles.length - 1 - ev.idx;
+    if (age < 0 || age > 20) continue;
+    const rec = age <= 4 ? 1.0 : age <= 10 ? 0.7 : 0.45;
+    const base = ev.type.includes('CHOCH') ? 0.42 : 0.28;
+    structureRaw += (ev.type.endsWith('BULL') ? 1 : -1) * base * rec;
+  }
+  const structureScore = clamp(structureRaw, -1, 1);
+
+  let sweepRaw = 0;
+  for (const lq of liquidity) {
+    if (!lq.swept || lq.sweepIdx == null) continue;
+    const age = candles.length - 1 - lq.sweepIdx;
+    if (age < 0 || age > 16) continue;
+    const rec = age <= 3 ? 1.0 : age <= 8 ? 0.7 : 0.45;
+    sweepRaw += (lq.type === 'sell_side' ? 0.35 : -0.35) * rec;
+  }
+  const liquidityScore = clamp(sweepRaw, -1, 1);
+
+  let setupScore = 0;
+  if (prioritySetups.length > 0) {
+    const s = prioritySetups[0];
+    const confMul = clamp((s.confidence - 60) / 35, 0, 1);
+    setupScore = (s.direction === 'bullish' ? 1 : -1) * (0.45 + confMul * 0.45);
+  }
+  setupScore = clamp(setupScore, -1, 1);
+
+  let inducementRaw = 0;
+  for (const ind of inducements.slice(-8)) {
+    const d = Math.abs(ind.level - spot) / spot;
+    if (d > 0.012) continue;
+    const prox = d < 0.003 ? 1.0 : d < 0.007 ? 0.7 : 0.45;
+    inducementRaw += ind.side === 'high' ? 0.12 * prox : -0.12 * prox;
+  }
+  const inducementScore = clamp(inducementRaw, -1, 1);
+
+  let fractalRaw = 0;
+  const nearFr = fractals.slice(-6);
+  for (const fr of nearFr) {
+    const age = candles.length - 1 - fr.idx;
+    if (age < 0 || age > 18) continue;
+    const d = Math.abs(fr.price - spot) / spot;
+    if (d > 0.01) continue;
+    if (fr.type === 'top' && spot > fr.price) fractalRaw += 0.12;
+    if (fr.type === 'bottom' && spot < fr.price) fractalRaw -= 0.12;
+  }
+  const fractalScore = clamp(fractalRaw, -1, 1);
+
+  const signalScore = clamp(chartSignalScore / 44, -1, 1);
+
+  const composite = clamp(
+    trendScore * 0.22 +
+    momentumScore * 0.20 +
+    structureScore * 0.17 +
+    signalScore * 0.16 +
+    setupScore * 0.12 +
+    liquidityScore * 0.08 +
+    inducementScore * 0.03 +
+    fractalScore * 0.02,
+    -1,
+    1,
+  );
+
+  // Always resolve to UP or DOWN so prediction candle remains visible.
+  const fallbackBias =
+    Math.sign(signalScore) ||
+    Math.sign(momentumScore) ||
+    Math.sign(trendScore) ||
+    1;
+  const direction: NextCandleProjection['direction'] =
+    composite >= 0.12 ? 'UP' : composite <= -0.12 ? 'DOWN' : (fallbackBias >= 0 ? 'UP' : 'DOWN');
+
+  const sameSign = [trendScore, momentumScore, structureScore, signalScore].filter(v => Math.sign(v) === Math.sign(composite) && Math.abs(v) > 0.15).length;
+  const confBase = 52 + Math.abs(composite) * 32 + sameSign * 3;
+  const conflictPenalty = Math.abs(trendScore - momentumScore) > 1.1 ? 6 : 0;
+  const weakStructurePenalty = Math.abs(structureScore) < 0.12 ? 4 : 0;
+  const confRaw = clamp(confBase - conflictPenalty - weakStructurePenalty, 45, 95);
+
+  // Rolling calibration: replay recent completed candles and score directional hit-rate.
+  const emaAt = (period: number, endIdx: number): number => {
+    const k = 2 / (period + 1);
+    let v = closes[0];
+    for (let i = 1; i <= endIdx; i++) v = closes[i] * k + v * (1 - k);
+    return v;
+  };
+
+  const snapshot = (endIdx: number): { dir: 'UP' | 'DOWN'; absComp: number } => {
+    const spotAt = candles[endIdx].c;
+    const t = clamp(((emaAt(9, endIdx) - emaAt(21, endIdx)) / Math.max(spotAt, 1)) * 220, -1, 1);
+    const b = Math.max(0, endIdx - 6);
+    const momAt = ((candles[endIdx].c - candles[b].c) / Math.max(candles[b].c, 1)) * 100;
+    const m = clamp(momAt / 0.55, -1, 1);
+
+    let sRaw = 0;
+    for (const ev of structure) {
+      if (ev.idx > endIdx) continue;
+      const age = endIdx - ev.idx;
+      if (age < 0 || age > 20) continue;
+      const rec = age <= 4 ? 1.0 : age <= 10 ? 0.7 : 0.45;
+      const base = ev.type.includes('CHOCH') ? 0.42 : 0.28;
+      sRaw += (ev.type.endsWith('BULL') ? 1 : -1) * base * rec;
+    }
+    const s = clamp(sRaw, -1, 1);
+
+    let lRaw = 0;
+    for (const lq of liquidity) {
+      if (!lq.swept || lq.sweepIdx == null || lq.sweepIdx > endIdx) continue;
+      const age = endIdx - lq.sweepIdx;
+      if (age < 0 || age > 16) continue;
+      const rec = age <= 3 ? 1.0 : age <= 8 ? 0.7 : 0.45;
+      lRaw += (lq.type === 'sell_side' ? 0.35 : -0.35) * rec;
+    }
+    const l = clamp(lRaw, -1, 1);
+
+    let iRaw = 0;
+    for (const ind of inducements) {
+      if (ind.idx > endIdx) continue;
+      const d = Math.abs(ind.level - spotAt) / Math.max(spotAt, 1);
+      if (d > 0.012) continue;
+      const prox = d < 0.003 ? 1.0 : d < 0.007 ? 0.7 : 0.45;
+      iRaw += ind.side === 'high' ? 0.12 * prox : -0.12 * prox;
+    }
+    const iS = clamp(iRaw, -1, 1);
+
+    let fRaw = 0;
+    for (const fr of fractals) {
+      if (fr.idx > endIdx) continue;
+      const age = endIdx - fr.idx;
+      if (age < 0 || age > 18) continue;
+      const d = Math.abs(fr.price - spotAt) / Math.max(spotAt, 1);
+      if (d > 0.01) continue;
+      if (fr.type === 'top' && spotAt > fr.price) fRaw += 0.12;
+      if (fr.type === 'bottom' && spotAt < fr.price) fRaw -= 0.12;
+    }
+    const fS = clamp(fRaw, -1, 1);
+
+    const sigIdx = Math.max(0, endIdx - 4);
+    const sigAt = clamp((((candles[endIdx].c - candles[sigIdx].c) / Math.max(candles[sigIdx].c, 1)) * 100) / 0.45, -1, 1);
+
+    const comp = clamp(
+      t * 0.24 +
+      m * 0.22 +
+      s * 0.20 +
+      sigAt * 0.16 +
+      l * 0.10 +
+      iS * 0.05 +
+      fS * 0.03,
+      -1,
+      1,
+    );
+
+    const bias = Math.sign(sigAt) || Math.sign(m) || Math.sign(t) || 1;
+    const dir = comp >= 0.12 ? 'UP' : comp <= -0.12 ? 'DOWN' : (bias >= 0 ? 'UP' : 'DOWN');
+    return { dir, absComp: Math.abs(comp) };
+  };
+
+  const histStart = Math.max(24, candles.length - 56);
+  let weightedCorrect = 0;
+  let weightedTotal = 0;
+  let samples = 0;
+  for (let i = histStart; i <= candles.length - 2; i++) {
+    const actual = candles[i + 1].c > candles[i + 1].o ? 'UP' : candles[i + 1].c < candles[i + 1].o ? 'DOWN' : 'FLAT';
+    if (actual === 'FLAT') continue;
+    const snap = snapshot(i);
+    const recencyW = Math.exp(-((candles.length - 2 - i) / 18));
+    const qualityW = 0.65 + snap.absComp * 0.35;
+    const w = recencyW * qualityW;
+    weightedTotal += w;
+    if (snap.dir === actual) weightedCorrect += w;
+    samples += 1;
+  }
+  const reliability = weightedTotal > 0 ? (weightedCorrect / weightedTotal) : 0.5;
+  const trust = clamp(samples / 24, 0, 1);
+  const reliabilityAdjust = (reliability - 0.5) * 30 * trust;
+  const lowSamplePenalty = (1 - trust) * 6;
+  const conf = Math.round(clamp(confRaw + reliabilityAdjust - lowSamplePenalty, 40, 96));
+
+  const moveStrength = clamp(Math.abs(composite), 0.12, 1);
+  const bodyAtrMult = 0.18 + moveStrength * 0.58;
+  const wickAtrMult = 0.08 + moveStrength * 0.22;
+  const expectedMovePct = (atr * bodyAtrMult / Math.max(spot, 1)) * 100 * (direction === 'DOWN' ? -1 : 1);
+
+  return {
+    direction,
+    confidence: conf,
+    bodyAtrMult,
+    wickAtrMult,
+    expectedMovePct,
+    confluence: sameSign,
+    isStrong: conf >= 62 && sameSign >= 3 && Math.abs(composite) >= 0.22,
+    calibrationWinRate: Math.round(reliability * 100),
+    calibrationSamples: samples,
+  };
+}
+
 const CHART_SIGNAL_CFG: Record<ChartSignal, { label: string; color: string; bg: string; border: string; glow: string }> = {
   STRONG_BUY:  { label: 'STRONG BUY',  color: 'text-emerald-300', bg: 'bg-emerald-500/20', border: 'border-emerald-400/60', glow: 'shadow-emerald-500/30' },
   BUY:         { label: 'BUY',          color: 'text-emerald-400', bg: 'bg-emerald-500/10', border: 'border-emerald-400/30', glow: '' },
@@ -3647,7 +4023,7 @@ function computeChartSignal(
 
 // ── Symbol Chart Card ───────────────────────────────────────────────────────
 
-const SymbolChartCard = memo<{ data: SymbolChartData | null; name: string; liveSpot?: number; forceChartHeight?: number; fullPage?: boolean }>(({ data, name, liveSpot, forceChartHeight, fullPage = false }) => {
+const SymbolChartCard = memo<{ data: SymbolChartData | null; name: string; liveSpot?: number; forceChartHeight?: number; fullPage?: boolean; compassIndex?: CompassIndex | null }>(({ data, name, liveSpot, forceChartHeight, fullPage = false, compassIndex }) => {
   const [timeframe, setTimeframe] = useState<'1h' | '15m' | '5m' | '3m'>('5m');
   // Chart opens in a dedicated /chart/[symbol] tab — no in-page modal needed.
   const chartH = forceChartHeight ?? CFG.CHART_H;
@@ -3658,10 +4034,26 @@ const SymbolChartCard = memo<{ data: SymbolChartData | null; name: string; liveS
   }, [data?.symbol, name]);
 
   const [signalFlash, setSignalFlash] = useState(false);
+  const [accuracyHistory, setAccuracyHistory] = useState<Array<{ win: boolean; conf: number; t: string }>>([]);
   const prevSignalRef = useRef<string>('');
+  const pendingForecastRef = useRef<Record<number, { dir: 'UP' | 'DOWN'; conf: number }>>({});
   // Keep last non-empty candles so the chart never flashes "Loading..." on a
   // transient empty update (e.g. 5m API hiccup returns [] for one cycle).
   const prevCandlesRef = useRef<Candle[]>([]);
+
+  // Cross-source guard: use market-tick liveSpot only when it is reasonably close
+  // to chart-engine spot/candle stream. This prevents occasional opposite-direction
+  // rendering when two sources briefly desync.
+  const safeLiveSpot = useMemo(() => {
+    if (!data || !liveSpot || liveSpot <= 0) return undefined;
+    const base = data.spot > 0 ? data.spot : (data.candles5m?.at(-1)?.c ?? 0);
+    if (base <= 0) return undefined;
+    const driftPct = Math.abs(liveSpot - base) / base;
+    // 0.18% tolerance: enough for real intraday move, strict enough to reject
+    // index-vs-futures basis style offsets that make candles look opposite.
+    if (driftPct > 0.0018) return undefined;
+    return liveSpot;
+  }, [data, liveSpot]);
 
   // Derive candles for each TF:
   //   1H  = resample 5m × 12  (12×5m = 60m)
@@ -3725,6 +4117,8 @@ const SymbolChartCard = memo<{ data: SymbolChartData | null; name: string; liveS
     const activeFvg = fvgList.filter(f => !f.filled);
     const activeOb = obList.filter(o => !o.mitigated);
     const activeLiq = liqList.filter(l => !l.swept);
+    const recentStr = structure.filter(e => (candles.length - 1 - e.idx) <= 20);
+    const recentInd = inducements.filter(i => (candles.length - 1 - i.idx) <= 40);
     return {
       fvgBull: activeFvg.filter(f => f.type === 'bullish').length,
       fvgBear: activeFvg.filter(f => f.type === 'bearish').length,
@@ -3734,31 +4128,89 @@ const SymbolChartCard = memo<{ data: SymbolChartData | null; name: string; liveS
       bsl: activeLiq.filter(l => l.type === 'buy_side').length,
       fracTop: fractals.filter(f => f.type === 'top').length,
       fracBot: fractals.filter(f => f.type === 'bottom').length,
+      indHigh: recentInd.filter(i => i.side === 'high').length,
+      indLow: recentInd.filter(i => i.side === 'low').length,
+      bosBull: recentStr.filter(e => e.type === 'BOS_BULL' || e.type === 'CHOCH_BULL').length,
+      bosBear: recentStr.filter(e => e.type === 'BOS_BEAR' || e.type === 'CHOCH_BEAR').length,
     };
-  }, [fvgList, obList, liqList, fractals]);
+  }, [fvgList, obList, liqList, fractals, inducements, structure, candles.length]);
 
   // Chart pattern signal — recomputes on every liveSpot tick (every ~1s)
   // All 10 factors: swing structure, key levels, BOS/CHoCH, FVG, OB, liquidity sweep,
   // fractals, inducements, candle momentum, live-spot real-time momentum.
   const chartSignal = useMemo(() => {
-    const effectiveSpot = (liveSpot && liveSpot > 0) ? liveSpot : data?.spot ?? 0;
+    const effectiveSpot = (safeLiveSpot && safeLiveSpot > 0) ? safeLiveSpot : data?.spot ?? 0;
     return computeChartSignal(
       candles, fvgList, obList, liqList, levels, effectiveSpot,
       structure, inducements, fractals,
-      liveSpot,   // pass separately so Factor 10 can compare vs stale candle closes
+      safeLiveSpot,   // pass separately so Factor 10 can compare vs stale candle closes
     );
-  }, [candles, fvgList, obList, liqList, levels, liveSpot, data?.spot, structure, inducements, fractals]);
+  }, [candles, fvgList, obList, liqList, levels, safeLiveSpot, data?.spot, structure, inducements, fractals]);
 
   // Combination setup selector: returns all valid setup matches (deduped).
   const prioritySetups = useMemo(() => {
     return findPrioritySetups(candles, fvgList, obList, liqList, structure);
   }, [candles, fvgList, obList, liqList, structure]);
 
+  const nextCandleForecast = useMemo(() => {
+    const effectiveSpot = (safeLiveSpot && safeLiveSpot > 0) ? safeLiveSpot : data?.spot ?? 0;
+    return computeNextCandleProjection(
+      candles,
+      effectiveSpot,
+      chartSignal.score,
+      structure,
+      liqList,
+      inducements,
+      fractals,
+      prioritySetups,
+    );
+  }, [candles, safeLiveSpot, data?.spot, chartSignal.score, structure, liqList, inducements, fractals, prioritySetups]);
+
+  const accuracyStats = useMemo(() => {
+    const total = accuracyHistory.length;
+    const wins = accuracyHistory.filter(h => h.win).length;
+    const winRate = total > 0 ? Math.round((wins / total) * 100) : 0;
+    return { total, wins, winRate };
+  }, [accuracyHistory]);
+
+  useEffect(() => {
+    pendingForecastRef.current = {};
+    setAccuracyHistory([]);
+  }, [timeframe]);
+
+  useEffect(() => {
+    if (!nextCandleForecast) return;
+    const targetIndex = candles.length;
+    if (!pendingForecastRef.current[targetIndex]) {
+      pendingForecastRef.current[targetIndex] = {
+        dir: nextCandleForecast.direction,
+        conf: nextCandleForecast.confidence,
+      };
+    }
+  }, [candles.length, nextCandleForecast]);
+
+  useEffect(() => {
+    const outcomes: Array<{ win: boolean; conf: number; t: string }> = [];
+    const entries = Object.entries(pendingForecastRef.current);
+    for (const [idxStr, pred] of entries) {
+      const idx = Number(idxStr);
+      if (Number.isNaN(idx) || idx >= candles.length) continue;
+      const c = candles[idx];
+      const actual = c.c > c.o ? 'UP' : c.c < c.o ? 'DOWN' : 'FLAT';
+      delete pendingForecastRef.current[idx];
+      if (actual === 'FLAT') continue;
+      outcomes.push({ win: actual === pred.dir, conf: pred.conf, t: c.t });
+    }
+    if (outcomes.length > 0) {
+      setAccuracyHistory(prev => [...prev, ...outcomes].slice(-50));
+    }
+  }, [candles]);
+
   // MTF alignment — compare 3m vs 5m signals to measure confluence confidence.
   // Computed independently from the user-selected TF so the badge is always consistent.
   const mtfSignal = useMemo(() => {
     if (!data) return null;
-    const effectiveSpot = (liveSpot && liveSpot > 0) ? liveSpot : data.spot ?? 0;
+    const effectiveSpot = (safeLiveSpot && safeLiveSpot > 0) ? safeLiveSpot : data.spot ?? 0;
     if (effectiveSpot <= 0) return null;
     const c3 = data.candles3m ?? [];
     const c5 = data.candles5m ?? [];
@@ -3766,19 +4218,19 @@ const SymbolChartCard = memo<{ data: SymbolChartData | null; name: string; liveS
     const emptyLevels: ChartLevels = { pdh: 0, pdl: 0, cdh: 0, cdl: 0, support: [], resistance: [] };
     const lv = data.levels ?? emptyLevels;
     // Compute lightweight (no structure/fractals) signals for both TFs
-    const sig3 = computeChartSignal(c3, data.fvg3m ?? [], data.ob3m ?? [], data.liquidity3m ?? [], lv, effectiveSpot, [], [], [], liveSpot);
-    const sig5 = computeChartSignal(c5, data.fvg5m ?? [], data.ob5m ?? [], data.liquidity5m ?? [], lv, effectiveSpot, [], [], [], liveSpot);
+    const sig3 = computeChartSignal(c3, data.fvg3m ?? [], data.ob3m ?? [], data.liquidity3m ?? [], lv, effectiveSpot, [], [], [], safeLiveSpot);
+    const sig5 = computeChartSignal(c5, data.fvg5m ?? [], data.ob5m ?? [], data.liquidity5m ?? [], lv, effectiveSpot, [], [], [], safeLiveSpot);
     const isBull = (s: ChartSignal) => s === 'STRONG_BUY' || s === 'BUY';
     const isBear = (s: ChartSignal) => s === 'STRONG_SELL' || s === 'SELL';
     const aligned = (isBull(sig3.signal) && isBull(sig5.signal)) || (isBear(sig3.signal) && isBear(sig5.signal));
     const direction: 'bull' | 'bear' | 'split' = aligned ? (isBull(sig3.signal) ? 'bull' : 'bear') : 'split';
     return { sig3: sig3.signal, score3: sig3.score, sig5: sig5.signal, score5: sig5.score, aligned, direction };
-  }, [data, liveSpot]);
+  }, [data, safeLiveSpot]);
 
   // Nearest key level for the intelligence strip
   const nearestLevel = useMemo(() => {
     if (!data?.levels || !data.spot) return null;
-    const effectiveSpot = (liveSpot && liveSpot > 0) ? liveSpot : data.spot;
+    const effectiveSpot = (safeLiveSpot && safeLiveSpot > 0) ? safeLiveSpot : data.spot;
     const candidates: Array<{ label: string; price: number }> = [
       { label: 'PDH', price: levels.pdh },
       { label: 'PDL', price: levels.pdl },
@@ -3795,7 +4247,7 @@ const SymbolChartCard = memo<{ data: SymbolChartData | null; name: string; liveS
       if (d < bestDist) { bestDist = d; best = c; }
     }
     return { ...best, distPct: bestDist * 100, above: best.price > effectiveSpot };
-  }, [data, liveSpot, levels]);
+  }, [data, safeLiveSpot, levels]);
 
   // Trigger flash animation whenever signal category changes
   useEffect(() => {
@@ -3833,7 +4285,7 @@ const SymbolChartCard = memo<{ data: SymbolChartData | null; name: string; liveS
   const lastCandle = candles[candles.length - 1];
   const prevClose = candles.length >= 2 ? candles[candles.length - 2].c : lastCandle.o;
   // Use liveSpot for display price if available — same price shown on chart
-  const displayPrice = (liveSpot && liveSpot > 0) ? liveSpot : lastCandle.c;
+  const displayPrice = (safeLiveSpot && safeLiveSpot > 0) ? safeLiveSpot : lastCandle.c;
   const change = displayPrice - prevClose;
   const changePct = prevClose > 0 ? (change / prevClose) * 100 : 0;
   const changeColor = change >= 0 ? 'text-emerald-400' : 'text-red-400';
@@ -3902,6 +4354,40 @@ const SymbolChartCard = memo<{ data: SymbolChartData | null; name: string; liveS
             );
           })()}
 
+          {nextCandleForecast && (
+            <span
+              title={`Projected next candle: ${nextCandleForecast.direction} · ${nextCandleForecast.confidence}% confidence · calibrated WR ${nextCandleForecast.calibrationWinRate}% (${nextCandleForecast.calibrationSamples}) · confluence ${nextCandleForecast.confluence}/4 · expected move ${nextCandleForecast.expectedMovePct >= 0 ? '+' : ''}${nextCandleForecast.expectedMovePct.toFixed(2)}%`}
+              className={`inline-flex items-center gap-1 px-1.5 py-1 rounded text-[9px] font-bold border shrink-0 select-none ${
+                nextCandleForecast.direction === 'UP'
+                  ? 'bg-teal-500/12 text-teal-300 border-teal-400/35'
+                  : 'bg-rose-500/12 text-rose-300 border-rose-400/35'
+              }`}
+              style={{ opacity: nextCandleForecast.isStrong ? 1 : 0.82 }}
+            >
+              <span>NXT</span>
+              <span>{nextCandleForecast.direction === 'UP' ? '▲' : '▼'}</span>
+              <span className="font-mono text-[10px] font-black opacity-95">{nextCandleForecast.confidence}%</span>
+              <span className="font-mono text-[8px] opacity-70">WR {nextCandleForecast.calibrationWinRate}</span>
+            </span>
+          )}
+
+          {accuracyStats.total > 0 && (
+            <span
+              title={`Live forecast accuracy: ${accuracyStats.wins}/${accuracyStats.total}`}
+              className={`inline-flex items-center gap-1 px-1.5 py-1 rounded text-[9px] font-bold border shrink-0 select-none ${
+                accuracyStats.winRate >= 60
+                  ? 'bg-emerald-500/12 text-emerald-300 border-emerald-400/35'
+                  : accuracyStats.winRate >= 45
+                    ? 'bg-amber-500/12 text-amber-300 border-amber-400/35'
+                    : 'bg-rose-500/12 text-rose-300 border-rose-400/35'
+              }`}
+            >
+              <span>ACC</span>
+              <span className="font-mono text-[8px] opacity-85">{accuracyStats.winRate}%</span>
+              <span className="font-mono text-[8px] opacity-65">({accuracyStats.total})</span>
+            </span>
+          )}
+
           {/* MTF Alignment */}
           {mtfSignal && (
             <span
@@ -3953,7 +4439,8 @@ const SymbolChartCard = memo<{ data: SymbolChartData | null; name: string; liveS
         liquidity={liqList}
         levels={levels}
         spot={data.spot}
-        liveSpot={liveSpot}
+        liveSpot={safeLiveSpot}
+        chartSignalScore={chartSignal.score}
         chartHeight={chartH}
         onMaximize={fullPage ? undefined : openModal}
         structure={structure}
@@ -3967,6 +4454,108 @@ const SymbolChartCard = memo<{ data: SymbolChartData | null; name: string; liveS
 
       {/* ─── Intelligence Footer ────────────────────────────────────────── */}
       <div className="px-3 pt-2 pb-2.5 border-t border-slate-700/25 bg-slate-900/30 shrink-0 space-y-1.5">
+
+        {/* ── Row 0: Institutional proxy flow (FII/DII via Compass) ── */}
+        {compassIndex && (() => {
+          const premiumTrend = compassIndex.futures?.premiumTrend ?? 'INSUFFICIENT';
+          const fairValuePct = Number.isFinite(compassIndex.futures?.fairValuePct)
+            ? compassIndex.futures.fairValuePct
+            : 0;
+          const futuresLeading = !!compassIndex.futures?.futuresLeading;
+          const compassDir = compassIndex.direction;
+          const conf = compassIndex.confidence ?? 0;
+          const rsi = compassIndex.spot?.rsi ?? 50;
+          const volSignal = compassIndex.signals?.volume_confirm?.signal ?? 'NEUTRAL';
+          const inst = compassIndex.institutionalPressure;
+
+          const fiiBull = premiumTrend === 'EXPANDING';
+          const fiiBear = premiumTrend === 'CONTRACTING';
+          const fiiColor = fiiBull ? '#10b981' : fiiBear ? '#ef4444' : '#94a3b8';
+          const fiiText = fiiBull ? 'FII BUY' : fiiBear ? 'FII SELL' : 'FII FLAT';
+
+          const diiBull = (rsi >= 55) || volSignal === 'BULL';
+          const diiBear = (rsi <= 45) || volSignal === 'BEAR';
+          const diiColor = diiBull ? '#34d399' : diiBear ? '#f87171' : '#94a3b8';
+          const diiText = diiBull ? 'DII SUPPORT' : diiBear ? 'DII PRESSURE' : 'DII NEUTRAL';
+
+          const dirColor = compassDir === 'BULLISH' ? '#10b981' : compassDir === 'BEARISH' ? '#ef4444' : '#f59e0b';
+
+          return (
+            <div
+              className="rounded-md border px-2 py-1.5 flex flex-wrap items-center gap-x-2 gap-y-1"
+              style={{ borderColor: `${dirColor}55`, background: `${dirColor}10` }}
+            >
+              <span className="text-[8px] font-black tracking-wide" style={{ color: dirColor }}>INST FLOW</span>
+              <span className="text-[8px] font-semibold" style={{ color: fiiColor }}>{fiiText} · {premiumTrend}</span>
+              <span className="text-[8px] font-mono text-slate-300">FV {fairValuePct >= 0 ? '+' : ''}{fairValuePct.toFixed(2)}%</span>
+              {futuresLeading && (
+                <span className="text-[8px] font-bold px-1 rounded border border-cyan-400/30 bg-cyan-500/10 text-cyan-300">FUT LEAD</span>
+              )}
+              <span className="text-[8px] font-semibold" style={{ color: diiColor }}>{diiText}</span>
+              {inst && (
+                <span className={`text-[8px] font-bold px-1 rounded border ${inst.score >= 0 ? 'border-emerald-400/30 bg-emerald-500/10 text-emerald-300' : 'border-red-400/30 bg-red-500/10 text-red-300'}`}>
+                  INST {inst.score >= 0 ? '+' : ''}{inst.score}
+                </span>
+              )}
+              <span className="ml-auto text-[8px] font-mono" style={{ color: dirColor }}>{compassDir} {conf}%</span>
+            </div>
+          );
+        })()}
+
+        {/* ── Directional Dominance Bar ── */}
+        {(() => {
+          const bullCount = stats.obBull + stats.fvgBull + stats.bsl + stats.bosBull + stats.indHigh;
+          const bearCount = stats.obBear + stats.fvgBear + stats.ssl + stats.bosBear + stats.indLow;
+          const total = bullCount + bearCount;
+          if (total === 0) return null;
+          const bullPct = Math.round((bullCount / total) * 100);
+          const bearPct = 100 - bullPct;
+          const isBullDominant = bullCount > bearCount;
+          const isBearDominant = bearCount > bullCount;
+          const dominant = bullPct >= 65 ? 'bull' : bearPct >= 65 ? 'bear' : 'neutral';
+          const domLabel  = dominant === 'bull' ? `▲ BULL ZONE  ·  ${bullCount} signals` : dominant === 'bear' ? `▼ BEAR ZONE  ·  ${bearCount} signals` : `↔ MIXED  ·  ▲${bullCount} vs ▼${bearCount}`;
+          const domColor  = dominant === 'bull' ? '#10b981' : dominant === 'bear' ? '#ef4444' : '#f59e0b';
+          const domBg     = dominant === 'bull' ? 'rgba(16,185,129,0.08)' : dominant === 'bear' ? 'rgba(239,68,68,0.08)' : 'rgba(245,158,11,0.06)';
+          const domBorder = dominant === 'bull' ? 'rgba(16,185,129,0.30)' : dominant === 'bear' ? 'rgba(239,68,68,0.30)' : 'rgba(245,158,11,0.20)';
+          return (
+            <div className="rounded-md overflow-hidden" style={{ border: `1px solid ${domBorder}`, background: domBg }}>
+              {/* Bias label row */}
+              <div className="flex items-center justify-between px-2 py-1">
+                <span className="text-[9px] font-black tracking-wide" style={{ color: domColor, textShadow: dominant !== 'neutral' ? `0 0 8px ${domColor}` : 'none' }}>
+                  {domLabel}
+                </span>
+                <span className="text-[8px] font-mono inline-flex items-center gap-1">
+                  <span
+                    style={{
+                      color: '#34d399',
+                      fontWeight: isBullDominant ? 900 : 600,
+                      textShadow: isBullDominant ? '0 0 8px #34d399' : 'none',
+                      opacity: isBearDominant ? 0.6 : 1,
+                    }}
+                  >
+                    {bullPct}% bull ({bullCount})
+                  </span>
+                  <span className="text-slate-500">·</span>
+                  <span
+                    style={{
+                      color: '#f87171',
+                      fontWeight: isBearDominant ? 900 : 600,
+                      textShadow: isBearDominant ? '0 0 8px #f87171' : 'none',
+                      opacity: isBullDominant ? 0.6 : 1,
+                    }}
+                  >
+                    {bearPct}% bear ({bearCount})
+                  </span>
+                </span>
+              </div>
+              {/* Progress bar */}
+              <div className="h-1.5 flex">
+                <div className="transition-all duration-500" style={{ width: `${bullPct}%`, background: 'linear-gradient(90deg, #10b981, #34d399)' }} />
+                <div className="transition-all duration-500" style={{ width: `${bearPct}%`, background: 'linear-gradient(90deg, #f87171, #ef4444)' }} />
+              </div>
+            </div>
+          );
+        })()}
 
         {/* ── Row 1: Priority setups + context chips + zone counts ── */}
         <div className="flex flex-wrap items-center gap-1">
@@ -4032,26 +4621,65 @@ const SymbolChartCard = memo<{ data: SymbolChartData | null; name: string; liveS
             </span>
           )}
 
-          {/* Zone inventory — right-anchored, font-mono count badges */}
+          {/* Zone inventory — parameter-wise up/down counts with dominant-value emphasis */}
           <div className="flex items-center gap-1.5 ml-auto flex-wrap justify-end">
-            {stats.obBull > 0 && (
-              <span className="inline-flex items-center gap-0.5 text-[8px] font-mono font-semibold" style={{ color: CFG.OB_BULL_BORDER }}>▲OB<span className="opacity-70">{stats.obBull}</span></span>
-            )}
-            {stats.obBear > 0 && (
-              <span className="inline-flex items-center gap-0.5 text-[8px] font-mono font-semibold" style={{ color: CFG.OB_BEAR_BORDER }}>▼OB<span className="opacity-70">{stats.obBear}</span></span>
-            )}
-            {stats.fvgBull > 0 && (
-              <span className="inline-flex items-center gap-0.5 text-[8px] font-mono font-semibold" style={{ color: CFG.FVG_BULL_BORDER }}>▲FVG<span className="opacity-70">{stats.fvgBull}</span></span>
-            )}
-            {stats.fvgBear > 0 && (
-              <span className="inline-flex items-center gap-0.5 text-[8px] font-mono font-semibold" style={{ color: CFG.FVG_BEAR_BORDER }}>▼FVG<span className="opacity-70">{stats.fvgBear}</span></span>
-            )}
-            {stats.ssl > 0 && (
-              <span className="inline-flex items-center gap-0.5 text-[8px] font-mono font-semibold" style={{ color: CFG.LIQ_SELL }}>SSL<span className="opacity-70">{stats.ssl}</span></span>
-            )}
-            {stats.bsl > 0 && (
-              <span className="inline-flex items-center gap-0.5 text-[8px] font-mono font-semibold" style={{ color: CFG.LIQ_BUY }}>BSL<span className="opacity-70">{stats.bsl}</span></span>
-            )}
+            {(() => {
+              const renderPair = (
+                label: string,
+                upCount: number,
+                downCount: number,
+                upColor: string,
+                downColor: string,
+                upLabel: string = '▲',
+                downLabel: string = '▼',
+              ) => {
+                if (upCount <= 0 && downCount <= 0) return null;
+
+                const isUpDominant = upCount > downCount;
+                const isDownDominant = downCount > upCount;
+
+                return (
+                  <span
+                    key={label}
+                    className="inline-flex items-center gap-1 px-1 py-0.5 rounded border text-[8px] font-mono"
+                    style={{ borderColor: '#334155', background: 'rgba(15,23,42,0.45)' }}
+                    title={`${label}: up ${upCount} vs down ${downCount}`}
+                  >
+                    <span className="text-slate-400 font-semibold">{label}</span>
+                    <span
+                      style={{
+                        color: upColor,
+                        fontWeight: isUpDominant ? 900 : 600,
+                        textShadow: isUpDominant ? `0 0 9px ${upColor}` : 'none',
+                        opacity: isDownDominant ? 0.55 : 1,
+                      }}
+                    >
+                      {upLabel}{upCount}
+                    </span>
+                    <span
+                      style={{
+                        color: downColor,
+                        fontWeight: isDownDominant ? 900 : 600,
+                        textShadow: isDownDominant ? `0 0 9px ${downColor}` : 'none',
+                        opacity: isUpDominant ? 0.55 : 1,
+                      }}
+                    >
+                      {downLabel}{downCount}
+                    </span>
+                  </span>
+                );
+              };
+
+              return (
+                <>
+                  {renderPair('OB', stats.obBull, stats.obBear, CFG.OB_BULL_BORDER, CFG.OB_BEAR_BORDER)}
+                  {renderPair('FVG', stats.fvgBull, stats.fvgBear, CFG.FVG_BULL_BORDER, CFG.FVG_BEAR_BORDER)}
+                  {renderPair('LIQ', stats.bsl, stats.ssl, CFG.LIQ_BUY, CFG.LIQ_SELL, '↑', '↓')}
+                  {renderPair('BOS', stats.bosBull, stats.bosBear, CFG.BOS_BULL, CFG.BOS_BEAR, '↑', '↓')}
+                  {renderPair('EQ', stats.indHigh, stats.indLow, CFG.IND_COLOR, '#94a3b8', '↑', '↓')}
+                </>
+              );
+            })()}
           </div>
         </div>
 
@@ -4100,6 +4728,22 @@ const ChartIntelligence = memo(() => {
   const { chartData } = useChartIntelligence();
   // Live tick prices from the main market socket — updates every Zerodha tick (~1s)
   const { marketData } = useMarketSocket();
+  const { data: compassData } = useCompassSocket();
+  const { data: globalIndices, isConnected: globalConnected } = useGlobalIndicesSocket();
+
+  const getFreshLiveSpot = useCallback((tick: typeof marketData.NIFTY | null | undefined): number | undefined => {
+    if (!tick || tick.price <= 0) return undefined;
+    if (tick.status !== 'LIVE') return undefined;
+    const tsMs = Date.parse(tick.timestamp || '');
+    if (!Number.isFinite(tsMs)) return undefined;
+    // Trust market socket spot only if it is very recent; otherwise use chart feed spot.
+    if (Date.now() - tsMs > 6000) return undefined;
+    return tick.price;
+  }, []);
+
+  const niftyLiveSpot = useMemo(() => getFreshLiveSpot(marketData.NIFTY), [marketData.NIFTY, getFreshLiveSpot]);
+  const bankNiftyLiveSpot = useMemo(() => getFreshLiveSpot(marketData.BANKNIFTY), [marketData.BANKNIFTY, getFreshLiveSpot]);
+  const sensexLiveSpot = useMemo(() => getFreshLiveSpot(marketData.SENSEX), [marketData.SENSEX, getFreshLiveSpot]);
 
   const dataStatus = useMemo(() => {
     const sources = [chartData.NIFTY?.dataSource, chartData.BANKNIFTY?.dataSource, chartData.SENSEX?.dataSource].filter(Boolean);
@@ -4139,11 +4783,43 @@ const ChartIntelligence = memo(() => {
         </div>
       </div>
 
+      {/* Global risk tape */}
+      <div className="mb-3 rounded-xl border border-slate-700/30 bg-dark-card/60 px-3 py-2">
+        <div className="flex items-center gap-2 mb-1.5">
+          <span className="text-[9px] font-bold tracking-[0.1em] uppercase text-slate-400">Global Risk</span>
+          <span className={`text-[8px] font-mono ${globalConnected ? 'text-emerald-400' : 'text-amber-400'}`}>
+            {globalConnected ? 'LIVE' : 'SNAPSHOT'}
+          </span>
+        </div>
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-1.5">
+          {[
+            { key: 'DOW', label: 'Dow' },
+            { key: 'NASDAQ', label: 'Nasdaq' },
+            { key: 'SPX', label: 'S&P' },
+            { key: 'DAX', label: 'DAX' },
+            { key: 'FTSE', label: 'FTSE' },
+            { key: 'NIKKEI', label: 'Nikkei' },
+          ].map(item => {
+            const g = globalIndices[item.key];
+            const pct = Number.isFinite(g?.changePct) ? g.changePct : 0;
+            const up = pct >= 0;
+            return (
+              <div key={item.key} className="rounded-md border border-slate-700/30 bg-slate-900/35 px-2 py-1.5">
+                <div className="text-[8px] uppercase tracking-[0.08em] text-slate-500">{item.label}</div>
+                <div className={`text-[10px] font-mono font-semibold ${up ? 'text-emerald-300' : 'text-rose-300'}`}>
+                  {up ? '+' : ''}{pct.toFixed(2)}%
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
       {/* Chart Cards Grid */}
       <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-3">
-        <SymbolChartCard data={chartData.NIFTY} name="NIFTY 50" liveSpot={marketData.NIFTY?.price} />
-        <SymbolChartCard data={chartData.BANKNIFTY} name="BANK NIFTY" liveSpot={marketData.BANKNIFTY?.price} />
-        <SymbolChartCard data={chartData.SENSEX} name="SENSEX" liveSpot={marketData.SENSEX?.price} />
+        <SymbolChartCard data={chartData.NIFTY} name="NIFTY 50" liveSpot={niftyLiveSpot} compassIndex={compassData?.NIFTY} />
+        <SymbolChartCard data={chartData.BANKNIFTY} name="BANK NIFTY" liveSpot={bankNiftyLiveSpot} compassIndex={compassData?.BANKNIFTY} />
+        <SymbolChartCard data={chartData.SENSEX} name="SENSEX" liveSpot={sensexLiveSpot} compassIndex={compassData?.SENSEX} />
       </div>
     </div>
   );

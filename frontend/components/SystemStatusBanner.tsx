@@ -38,6 +38,17 @@ export default function SystemStatusBanner() {
   const [health, setHealth] = useState<SystemHealth | null>(null);
   const [showDetails, setShowDetails] = useState(false);
 
+  const formatElapsed = (seconds: number | null | undefined): string | null => {
+    if (seconds == null || !Number.isFinite(seconds) || seconds < 0) return null;
+    const s = Math.round(seconds);
+    if (s < 60) return `${s}s ago`;
+    const m = Math.floor(s / 60);
+    if (m < 60) return `${m}m ago`;
+    const h = Math.floor(m / 60);
+    const remM = m % 60;
+    return remM > 0 ? `${h}h ${remM}m ago` : `${h}h ago`;
+  };
+
   // Check if we're returning from Zerodha login on mobile
   useEffect(() => {
     if (typeof window !== 'undefined') {
@@ -83,6 +94,11 @@ export default function SystemStatusBanner() {
   }, []);
 
   if (!health) return null;
+
+  const lastTickLabel = formatElapsed(health.feed.last_tick_seconds_ago);
+  const showFeedDisconnected =
+    health.priority_status === 'FEED_DISCONNECTED' &&
+    health.market.is_trading_hours;
 
   const handleLogin = () => {
     const apiUrl = process.env.NEXT_PUBLIC_API_URL;
@@ -208,7 +224,7 @@ export default function SystemStatusBanner() {
   }
 
   // FEED_DISCONNECTED - Warning (during market hours)
-  if (health.priority_status === 'FEED_DISCONNECTED') {
+  if (showFeedDisconnected) {
     return (
       <div className="bg-gradient-to-r from-yellow-900/30 to-orange-900/30 border-b border-yellow-500/30 backdrop-blur-md sticky top-[72px] z-40 shadow-lg">
         <div className="max-w-7xl mx-auto px-3 sm:px-4 py-2">
@@ -222,13 +238,15 @@ export default function SystemStatusBanner() {
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2">
                   <p className="text-xs sm:text-sm font-semibold text-yellow-300 truncate">Reconnecting</p>
-                  {health.feed.last_tick_seconds_ago && (
+                  {lastTickLabel && (
                     <span className="hidden sm:inline-block px-1.5 py-0.5 bg-yellow-500/20 rounded text-[10px] text-yellow-300 font-medium">
-                      {health.feed.last_tick_seconds_ago}s ago
+                      Last tick {lastTickLabel}
                     </span>
                   )}
                 </div>
-                <p className="text-[10px] sm:text-xs text-yellow-200/70 truncate">{health.priority_message}</p>
+                <p className="text-[10px] sm:text-xs text-yellow-200/70 truncate">
+                  {lastTickLabel ? `Feed paused (${lastTickLabel}). Retrying connection...` : health.priority_message}
+                </p>
               </div>
             </div>
             <div className="flex gap-1">

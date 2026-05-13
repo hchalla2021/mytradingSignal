@@ -75,6 +75,13 @@ export interface CompassIndex {
     rsi_momentum:    SignalFactor;
     volume_confirm:  SignalFactor;
   };
+  institutionalPressure?: {
+    score: number;
+    label: string;
+    fiiProxy: number;
+    diiProxy: number;
+    drivers?: Record<string, number>;
+  };
   direction: CompassDirection;
   confidence: number;       // 1–99
   rawScore: number;
@@ -214,5 +221,5 @@ export function useCompassSocket() {
     };
   }, [connect, mergeData]);
 
-  return { compassData, isConnected, lastUpdate };
+  return { data: compassData, compassData, isConnected, lastUpdate };
 }

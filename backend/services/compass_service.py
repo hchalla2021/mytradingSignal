@@ -45,6 +45,7 @@ from config import get_settings
 from services.cache import CacheService
 from services.auth_state_machine import auth_state_manager
 from services.contract_manager import ContractManager
+from services.institutional_pressure_service import compute_institutional_pressure
 
 logger = logging.getLogger(__name__)
 IST = pytz.timezone("Asia/Kolkata")
@@ -1230,6 +1231,25 @@ class CompassService:
         pred_5m, pred_5m_conf = _predict_5m(signals, prem_slope, near_fut_rsi)
         pred_5m_fut = _predict_5m_futures(near_fut_candles, near_fut_rsi, prem_slope)
 
+        # ── Institutional pressure score (FII/DII proxy) ───────────────────
+        global_snapshot = None
+        try:
+            from services.global_indices_service import get_global_indices_service
+            global_snapshot = get_global_indices_service().get_snapshot()
+        except Exception:
+            global_snapshot = None
+
+        institutional_pressure = compute_institutional_pressure(
+            raw_score=raw_score,
+            spot_change_pct=spot_change_pct,
+            near_premium_pct=near_premium_pct,
+            fair_value_pct=fv_pct,
+            rsi=signals["rsi_momentum"]["value"],
+            volume_score=float(signals["volume_confirm"]["score"]),
+            trend_structure_score=float(signals["trend_structure"]["score"]),
+            global_snapshot=global_snapshot,
+        )
+
         if not spot_is_live:
             data_source = "MARKET_CLOSED"
         elif futures_info["near"]:
@@ -1264,6 +1284,7 @@ class CompassService:
                 "prediction5mFut": pred_5m_fut,
             },
             "signals":    signals,
+            "institutionalPressure": institutional_pressure,
             "direction":  direction,
             "confidence": confidence,
             "rawScore":   raw_score,

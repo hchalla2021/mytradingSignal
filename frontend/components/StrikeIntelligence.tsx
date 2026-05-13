@@ -1,7 +1,7 @@
 ﻿'use client';
 
 import React, { memo, useMemo, useRef, useState, useEffect } from 'react';
-import { useStrikeIntelligence, type SymbolStrikeData, type StrikeRow, type StrikeSignal, type StrikeSideData } from '@/hooks/useStrikeIntelligence';
+import { useStrikeIntelligence, type SymbolStrikeData, type StrikeRow, type StrikeSignal, type StrikeSideData, type WorldMarketImpact } from '@/hooks/useStrikeIntelligence';
 
 // Signal config
 
@@ -938,7 +938,7 @@ StrikeRowComponent.displayName = 'StrikeRowComponent';
 // Symbol Card
 
 const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>(({ data, name }) => {
-  const prevDominantRef = useRef<'BULL' | 'BEAR' | 'NEUTRAL'>('NEUTRAL');
+  const lastDirectionalDominantRef = useRef<'BULL' | 'BEAR' | null>(null);
   const [flashSide, setFlashSide] = useState<'BULL' | 'BEAR' | null>(null);
   const prevSummaryRef = useRef<{ bullPct: number; bearPct: number; pcr: number } | null>(null);
   const [summaryFlash, setSummaryFlash] = useState<{ bull: boolean; bear: boolean; pcr: boolean }>({ bull: false, bear: false, pcr: false });
@@ -971,9 +971,7 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
   const atmRow = useMemo(() => strikes.find(s => s.isATM) ?? (strikes.length > 0 ? strikes[Math.floor(strikes.length / 2)] : null), [strikes]);
 
   const isLiveData   = data?.dataSource === 'LIVE';
-  const isLastClose  = data?.dataSource === 'LAST_CLOSE';
-  const isCachedData = data?.dataSource === 'CACHED';
-  const hasRealSignal = isLiveData || isLastClose || isCachedData;
+  const hasRealSignal = isLiveData;
 
   // Aggregate chain stats — computed every tick when strikes update
   const chainStats = useMemo(() => {
@@ -1358,19 +1356,24 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
     return { trendScore, trendTag, marketMode, sidePlan, strength, reason, scoreTone, factors };
   }, [chainStats, hasRealSignal, intelligence, oiStructure?.overallTop, oiStructure?.overallTopLabel, oiStructure?.score, summary.bearPct, summary.bullPct, summary.pcr]);
 
-  // Dominance tracking: highlight the leading side and flash on transition
+  // Dominance tracking: highlight the leading side and flash on transition.
+  // Keep last non-neutral side so BULL -> NEUTRAL -> BEAR still flashes as a flip.
   useEffect(() => {
     if (!hasRealSignal) return undefined;
     let clearFlashTimer: ReturnType<typeof setTimeout> | null = null;
     const current: 'BULL' | 'BEAR' | 'NEUTRAL' =
       summary.bullPct > summary.bearPct ? 'BULL' :
       summary.bearPct > summary.bullPct ? 'BEAR' : 'NEUTRAL';
-    const prev = prevDominantRef.current;
-    if (prev !== 'NEUTRAL' && current !== 'NEUTRAL' && prev !== current) {
-      setFlashSide(current);
-      clearFlashTimer = setTimeout(() => setFlashSide(null), 1800);
+
+    if (current !== 'NEUTRAL') {
+      const lastDirectional = lastDirectionalDominantRef.current;
+      if (lastDirectional && lastDirectional !== current) {
+        setFlashSide(current);
+        clearFlashTimer = setTimeout(() => setFlashSide(null), 1800);
+      }
+      lastDirectionalDominantRef.current = current;
     }
-    prevDominantRef.current = current;
+
     return () => {
       if (clearFlashTimer) clearTimeout(clearFlashTimer);
     };
@@ -1530,8 +1533,8 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
   const biasColor = summary.bias === 'BULLISH' ? 'text-emerald-400' : summary.bias === 'BEARISH' ? 'text-red-400' : 'text-amber-400';
   const biasBg    = summary.bias === 'BULLISH' ? 'bg-emerald-500/10' : summary.bias === 'BEARISH' ? 'bg-red-500/10' : 'bg-amber-500/10';
 
-  const sourceColor = isLiveData ? 'text-emerald-400' : isLastClose || isCachedData ? 'text-amber-400' : 'text-slate-500';
-  const sourceLabel = isLiveData ? 'LIVE' : isLastClose ? 'LAST CLOSE' : isCachedData ? 'CACHED' : 'CLOSED';
+  const sourceColor = isLiveData ? 'text-emerald-400' : 'text-slate-500';
+  const sourceLabel = isLiveData ? 'LIVE' : 'CLOSED';
 
   const actionability     = intelligence?.actionability ?? 'NONE';
   const actionabilityTone = actionability === 'HIGH'
@@ -1546,14 +1549,13 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
   const snapTs     = fmtTs(data.optionChainUpdatedAt || data.timestamp);
   const feedLabel  = isLiveData
     ? (data.feedMode === 'HYBRID_LIVE' ? `Spot live | Options ${optionAge}` : 'Live feed')
-    : isLastClose  ? `Last session | ${snapTs}`
-    : isCachedData ? `Cached | ${snapTs}`
     : `Closed fallback | ${snapTs}`;
 
   const expiryPast = data.expiry ? new Date(data.expiry) < new Date(new Date().toISOString().slice(0, 10)) : false;
 
   // PCR from backend intelligence, fallback to computed from strikes
   const pcr = intelligence?.pcr ?? summary.pcr;
+  const worldMarket: WorldMarketImpact | undefined = intelligence?.worldMarket;
 
   return (
     <div className="rounded-xl bg-dark-card/60 border border-slate-700/40 p-3 sm:p-4 lg:p-5 overflow-hidden">
@@ -1577,11 +1579,10 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
             const pulse = isLiveData && tradeDecision != null && tradeDecision !== 'WAIT' && tradeDecision !== 'CONFLICTING';
             return (
               <span title={`Trader action: ${decisionCfg?.label ?? rawCfg.label} | Flow: ${rawCfg.label} | Composite: ${symbolSignal.score > 0 ? '+' : ''}${symbolSignal.score}`}
-                className={`inline-flex items-center gap-1 whitespace-nowrap px-2 sm:px-2.5 py-0.5 sm:py-1 rounded-lg text-[10px] sm:text-[12px] font-black tracking-wide border transition-all duration-300 ${isLastClose ? 'bg-amber-950/40 border-amber-600/40' : (decisionCfg ? `${decisionCfg.bg} ${decisionCfg.border}` : `${rawCfg.bg} ${rawCfg.border}`)} ${decisionCfg?.color ?? rawCfg.color} ${isLastClose ? '' : (decisionCfg?.glow ?? rawCfg.glow)} ${pulse ? 'animate-pulse' : ''}`}>
+                className={`inline-flex items-center gap-1 whitespace-nowrap px-2 sm:px-2.5 py-0.5 sm:py-1 rounded-lg text-[10px] sm:text-[12px] font-black tracking-wide border transition-all duration-300 ${(decisionCfg ? `${decisionCfg.bg} ${decisionCfg.border}` : `${rawCfg.bg} ${rawCfg.border}`)} ${decisionCfg?.color ?? rawCfg.color} ${decisionCfg?.glow ?? rawCfg.glow} ${pulse ? 'animate-pulse' : ''}`}>
                 <span className="opacity-80 text-[10px] sm:text-[11px]">{decisionCfg?.arrow ?? rawCfg.arrow}</span>
                 {decisionCfg?.label ?? rawCfg.label}
                 <span className="text-[10px] font-mono opacity-60">{symbolSignal.score > 0 ? '+' : ''}{symbolSignal.score}</span>
-                {isLastClose && <span className="text-[9px] font-normal opacity-50 ml-0.5">prev</span>}
               </span>
             );
           })() : (
@@ -1618,7 +1619,7 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
               <>
                 <span
                   className={[
-                    'tabular-nums transition-all duration-300 px-2 py-0.5 rounded border',
+                    'tabular-nums transition-colors duration-100 px-2 py-0.5 rounded border',
                     summary.bullPct > summary.bearPct
                       ? 'text-emerald-300 font-black border-emerald-400/80'
                       : 'text-emerald-500 font-semibold border-emerald-500/30',
@@ -1630,7 +1631,7 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
                 <span className="text-slate-700">|</span>
                 <span
                   className={[
-                    'tabular-nums transition-all duration-300 px-2 py-0.5 rounded border',
+                    'tabular-nums transition-colors duration-100 px-2 py-0.5 rounded border',
                     summary.bearPct > summary.bullPct
                       ? 'text-red-300 font-black border-red-400/80'
                       : 'text-red-500 font-semibold border-red-500/30',
@@ -1688,10 +1689,10 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
                 <div className="bg-gradient-to-l from-red-500 to-red-400 transition-all duration-500 rounded-r-full"
                   style={{ width: `${liveVolumeStats.pePct}%` }} />
               </div>
-              <div className="flex items-center gap-1.5 text-[10px] sm:text-[11px] font-mono tabular-nums">
+              <div className="grid grid-cols-2 gap-1.5 text-[10px] sm:text-[11px] font-mono tabular-nums">
                 <span
                   className={[
-                    'flex-1 min-w-0 rounded border px-1 py-0.5 text-center leading-none whitespace-nowrap transition-all duration-300',
+                    'block w-full min-w-0 rounded border px-1 py-0.5 text-center leading-none whitespace-nowrap overflow-hidden text-ellipsis transition-all duration-300',
                     liveVolumeStats.ce >= liveVolumeStats.pe
                       ? 'border-emerald-400/80 bg-emerald-500/20 text-emerald-200 shadow-[0_0_8px_rgba(16,185,129,0.45)]'
                       : 'border-slate-600/70 bg-slate-800/70 text-emerald-300/90',
@@ -1702,7 +1703,7 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
                 </span>
                 <span
                   className={[
-                    'flex-1 min-w-0 rounded border px-1 py-0.5 text-center leading-none whitespace-nowrap transition-all duration-300',
+                    'block w-full min-w-0 rounded border px-1 py-0.5 text-center leading-none whitespace-nowrap overflow-hidden text-ellipsis transition-all duration-300',
                     liveVolumeStats.pe > liveVolumeStats.ce
                       ? 'border-red-400/80 bg-red-500/20 text-red-200 shadow-[0_0_8px_rgba(239,68,68,0.45)]'
                       : 'border-slate-600/70 bg-slate-800/70 text-red-300/90',
@@ -2062,6 +2063,60 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
               </div>
             </div>
           </div>
+
+          {/* Row 2.5: World Market Impact (Dow/Nasdaq/S&P/DAX/FTSE/Nikkei) */}
+          {worldMarket && (
+            <div className="px-2.5 sm:px-3 py-2 border-t border-slate-700/30 bg-slate-900/35">
+              <div
+                className={`rounded border px-2 py-1.5 ${
+                  worldMarket.bias === 'BULLISH'
+                    ? 'border-emerald-500/45 bg-emerald-500/10'
+                    : worldMarket.bias === 'BEARISH'
+                    ? 'border-red-500/45 bg-red-500/10'
+                    : 'border-amber-500/45 bg-amber-500/10'
+                }`}
+                title={worldMarket.summary}
+              >
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="text-[8px] sm:text-[9px] font-bold tracking-widest text-slate-400 uppercase">World Market Impact</span>
+                  <span className="text-[9px] font-mono text-slate-400">{worldMarket.liveCount}/{worldMarket.totalCount} live</span>
+                </div>
+                <div className="mt-1 flex flex-wrap items-center gap-2">
+                  <span className={`text-[11px] sm:text-[12px] font-black ${
+                    worldMarket.bias === 'BULLISH'
+                      ? 'text-emerald-300'
+                      : worldMarket.bias === 'BEARISH'
+                      ? 'text-red-300'
+                      : 'text-amber-300'
+                  }`}>
+                    {worldMarket.bias}
+                  </span>
+                  <span className="text-[10px] font-mono font-black tabular-nums text-cyan-300">
+                    {worldMarket.influenceScore > 0 ? '+' : ''}{worldMarket.influenceScore}
+                  </span>
+                  <span className="text-[10px] font-mono tabular-nums text-slate-300">
+                    strike {worldMarket.impactPts > 0 ? '+' : ''}{worldMarket.impactPts}
+                  </span>
+                </div>
+                <div className="mt-1.5 flex flex-wrap gap-1">
+                  {worldMarket.components.slice(0, 6).map((c) => (
+                    <span
+                      key={c.symbol}
+                      className={`inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[9px] font-mono tabular-nums ${
+                        c.changePct > 0
+                          ? 'text-emerald-200 border-emerald-500/40 bg-emerald-500/10'
+                          : c.changePct < 0
+                          ? 'text-red-200 border-red-500/40 bg-red-500/10'
+                          : 'text-slate-200 border-slate-500/40 bg-slate-700/20'
+                      }`}
+                    >
+                      {c.symbol} {c.changePct > 0 ? '+' : ''}{c.changePct.toFixed(2)}%
+                    </span>
+                  ))}
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* Row 3 (Insights) intentionally hidden to save space */}
         </div>
