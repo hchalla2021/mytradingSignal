@@ -2,7 +2,6 @@
 
 import React, { memo, useMemo, useRef, useState, useEffect } from 'react';
 import { useStrikeIntelligence, type SymbolStrikeData, type StrikeRow, type StrikeSignal, type StrikeSideData, type QuantumFractalIntelligence } from '@/hooks/useStrikeIntelligence';
-import { useChartIntelligence } from '@/hooks/useChartIntelligence';
 
 // Signal config
 
@@ -2401,7 +2400,6 @@ SymbolStrikeCard.displayName = 'SymbolStrikeCard';
 
 const StrikeIntelligence = memo(() => {
   const { strikeData, isConnected, lastUpdate } = useStrikeIntelligence();
-  const { chartData } = useChartIntelligence();
   const [tickTs, setTickTs] = useState<string>('--:--:--');
 
   // Update displayed timestamp every time a new WebSocket message arrives

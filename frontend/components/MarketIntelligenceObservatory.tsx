@@ -10,7 +10,6 @@ import { memo, useState, useMemo } from 'react';
 import {
   useObservatory,
   type DailyReport,
-  type StrategyRanking,
 } from '@/hooks/useObservatory';
 
 
