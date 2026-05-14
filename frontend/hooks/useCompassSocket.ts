@@ -113,6 +113,7 @@ function getCompassApiUrl(): string {
 // ── Persistence ───────────────────────────────────────────────────────────────
 
 const STORAGE_KEY = 'compassData_v2';
+const STORAGE_FLUSH_MS = 1500;
 
 function saveToStorage(data: CompassData): void {
   if (typeof window === 'undefined') return;
@@ -129,6 +130,38 @@ function loadFromStorage(): CompassData | null {
 
 const EMPTY: CompassData = { NIFTY: null, BANKNIFTY: null, SENSEX: null };
 
+function parseTsMs(ts: string | undefined): number {
+  if (!ts) return Number.NaN;
+  const ms = Date.parse(ts);
+  return Number.isFinite(ms) ? ms : Number.NaN;
+}
+
+function sameSignalState(a: CompassIndex, b: CompassIndex): boolean {
+  return (
+    a.direction === b.direction
+    && a.confidence === b.confidence
+    && a.rawScore === b.rawScore
+    && a.spot.price === b.spot.price
+    && a.spot.changePct === b.spot.changePct
+    && a.spot.prediction5m === b.spot.prediction5m
+    && a.futures.premiumTrend === b.futures.premiumTrend
+  );
+}
+
+function shouldAcceptUpdate(prev: CompassIndex | null, incoming: CompassIndex): boolean {
+  if (!prev) return true;
+
+  const prevTs = parseTsMs(prev.timestamp);
+  const nextTs = parseTsMs(incoming.timestamp);
+
+  if (Number.isFinite(prevTs) && Number.isFinite(nextTs)) {
+    if (nextTs < prevTs) return false;
+    if (nextTs === prevTs) return !sameSignalState(prev, incoming);
+  }
+
+  return !sameSignalState(prev, incoming);
+}
+
 // ── Hook ──────────────────────────────────────────────────────────────────────
 
 export function useCompassSocket() {
@@ -140,23 +173,44 @@ export function useCompassSocket() {
   const retryRef   = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pingRef    = useRef<ReturnType<typeof setInterval> | null>(null);
   const pollRef    = useRef<ReturnType<typeof setInterval> | null>(null);
+  const storageFlushRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pendingStorageRef = useRef<CompassData | null>(null);
+  const mountedRef = useRef(true);
   const retryDelay = useRef(2000);
+
+  const queueStorageSave = useCallback((data: CompassData) => {
+    pendingStorageRef.current = data;
+    if (storageFlushRef.current) return;
+    storageFlushRef.current = setTimeout(() => {
+      storageFlushRef.current = null;
+      const pending = pendingStorageRef.current;
+      pendingStorageRef.current = null;
+      if (pending) saveToStorage(pending);
+    }, STORAGE_FLUSH_MS);
+  }, []);
 
   const mergeData = useCallback((raw: Record<string, CompassIndex>) => {
     setCompassData(prev => {
       const next: CompassData = { ...prev };
+      let changed = false;
       for (const sym of ['NIFTY', 'BANKNIFTY', 'SENSEX'] as const) {
-        if (raw[sym]) next[sym] = raw[sym];
+        const incoming = raw[sym];
+        if (!incoming) continue;
+        if (!shouldAcceptUpdate(prev[sym], incoming)) continue;
+        next[sym] = incoming;
+        changed = true;
       }
-      saveToStorage(next);
+      if (!changed) return prev;
+      queueStorageSave(next);
+      setLastUpdate(new Date().toISOString());
       return next;
     });
-    setLastUpdate(new Date().toISOString());
-  }, []);
+  }, [queueStorageSave]);
 
   const connect = useCallback(() => {
     if (typeof window === 'undefined') return;
-    if (wsRef.current?.readyState === WebSocket.OPEN) return;
+    if (!mountedRef.current) return;
+    if (wsRef.current?.readyState === WebSocket.OPEN || wsRef.current?.readyState === WebSocket.CONNECTING) return;
 
     let ws: WebSocket;
     try { ws = new WebSocket(getCompassWsUrl()); }
@@ -165,10 +219,15 @@ export function useCompassSocket() {
     wsRef.current = ws;
 
     ws.onopen = () => {
+      if (!mountedRef.current) {
+        ws.close();
+        return;
+      }
       setIsConnected(true);
       retryDelay.current = 2000;
       // Stop REST polling — WebSocket is live
       if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
+      if (pingRef.current) { clearInterval(pingRef.current); pingRef.current = null; }
       pingRef.current = setInterval(() => {
         if (ws.readyState === WebSocket.OPEN)
           ws.send(JSON.stringify({ type: 'ping' }));
@@ -184,8 +243,9 @@ export function useCompassSocket() {
     };
 
     ws.onclose = () => {
+      if (!mountedRef.current) return;
       setIsConnected(false);
-      if (pingRef.current) clearInterval(pingRef.current);
+      if (pingRef.current) { clearInterval(pingRef.current); pingRef.current = null; }
       retryDelay.current = Math.min(retryDelay.current * 1.5, 30000);
       retryRef.current = setTimeout(connect, retryDelay.current);
       // Start REST polling fallback while WebSocket is down
@@ -203,6 +263,7 @@ export function useCompassSocket() {
   }, [mergeData]);
 
   useEffect(() => {
+    mountedRef.current = true;
     const cached = loadFromStorage();
     if (cached) setCompassData(cached);
 
@@ -214,10 +275,26 @@ export function useCompassSocket() {
     connect();
 
     return () => {
+      mountedRef.current = false;
       if (retryRef.current) clearTimeout(retryRef.current);
-      if (pingRef.current)  clearInterval(pingRef.current);
-      if (pollRef.current)  clearInterval(pollRef.current);
-      wsRef.current?.close();
+      if (pingRef.current)  { clearInterval(pingRef.current); pingRef.current = null; }
+      if (pollRef.current)  { clearInterval(pollRef.current); pollRef.current = null; }
+      if (storageFlushRef.current) {
+        clearTimeout(storageFlushRef.current);
+        storageFlushRef.current = null;
+      }
+      if (pendingStorageRef.current) {
+        saveToStorage(pendingStorageRef.current);
+        pendingStorageRef.current = null;
+      }
+      if (wsRef.current) {
+        wsRef.current.onopen = null;
+        wsRef.current.onmessage = null;
+        wsRef.current.onclose = null;
+        wsRef.current.onerror = null;
+        wsRef.current.close();
+        wsRef.current = null;
+      }
     };
   }, [connect, mergeData]);
 

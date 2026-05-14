@@ -1827,7 +1827,7 @@ class StrikeIntelligenceService:
         if dominant_dir != 0:
             continuation_signed = (continuation_prob * 2.0 - 100.0) * dominant_dir
 
-        vol_state_component = _clamp((expansion_score - 50.0) * (1 if (micro_dir or medium_dir) >= 0 else -1), -100.0, 100.0)
+        vol_state_component = _clamp((expansion_score - 50.0) * (1 if (micro_dir + medium_dir) >= 0 else -1), -100.0, 100.0)
 
         fractal_pressure = _clamp(
             0.45 * micro_score + 0.35 * medium_score + 0.20 * macro_score + 0.25 * structure_component,

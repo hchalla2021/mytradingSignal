@@ -65,6 +65,16 @@ interface UseTradeZonesRealtimeReturn {
   refetch: () => Promise<void>;
 }
 
+interface MarketSocketTick {
+  symbol?: string;
+  price?: number;
+}
+
+interface MarketSocketMessage {
+  type?: string;
+  data?: MarketSocketTick | Record<string, MarketSocketTick>;
+}
+
 /**
  * 💰 Single Symbol Hook – Live Trade Zone Detection
  * Real-time zone updates via WebSocket + intelligent 200ms batching
@@ -82,8 +92,30 @@ export function useTradeZonesRealtime(symbol: string): UseTradeZonesRealtimeRetu
   const batchTimerRef = useRef<NodeJS.Timeout | null>(null);
   const prevSignalRef = useRef<string>('NEUTRAL');
   const abortControllerRef = useRef<AbortController | null>(null);
+  const requestSeqRef = useRef(0);
+  const reconnectAttemptsRef = useRef(0);
+  const lastWsRefetchAtRef = useRef<number>(0);
   // 🔥 Track last price at refetch — triggers immediate re-fetch on ≥0.15% move
   const lastWsRefetchPriceRef = useRef<number>(0);
+
+  const extractTickPrice = useCallback((message: MarketSocketMessage): number | null => {
+    if (message.type === 'tick') {
+      const tick = message.data as MarketSocketTick | undefined;
+      if (tick?.symbol === symbol && typeof tick.price === 'number') {
+        return tick.price;
+      }
+    }
+
+    if (message.type === 'snapshot') {
+      const snapshot = message.data as Record<string, MarketSocketTick> | undefined;
+      const symbolTick = snapshot?.[symbol];
+      if (symbolTick && typeof symbolTick.price === 'number') {
+        return symbolTick.price;
+      }
+    }
+
+    return null;
+  }, [symbol]);
 
   /**
    * 🔥 Trigger visual flash when entry setup detected
@@ -142,14 +174,22 @@ export function useTradeZonesRealtime(symbol: string): UseTradeZonesRealtimeRetu
   /**
    * 📊 Fetch trade zone data from API
    */
-  const fetchTradeZoneData = useCallback(async () => {
+  const fetchTradeZoneData = useCallback(async (silent = false) => {
     if (!symbol) return;
 
+    const requestId = ++requestSeqRef.current;
+
     try {
-      setLoading(true);
+      if (!silent || !dataRef.current) {
+        setLoading(true);
+      }
       setError(null);
 
-      // Create abort controller for cleanup
+      // Abort stale request before issuing a fresh one.
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+      }
+
       abortControllerRef.current = new AbortController();
 
       const apiUrl = API_CONFIG.baseUrl;
@@ -167,6 +207,11 @@ export function useTradeZonesRealtime(symbol: string): UseTradeZonesRealtimeRetu
 
       const zoneData: TradeZonesData = await response.json();
 
+      // Ignore stale responses that returned after a newer request was sent.
+      if (requestId !== requestSeqRef.current) {
+        return;
+      }
+
       // Queue update for batching
       queueZoneUpdate(zoneData);
       setLoading(false);
@@ -182,7 +227,7 @@ export function useTradeZonesRealtime(symbol: string): UseTradeZonesRealtimeRetu
    * 🔄 Refetch trade zone data
    */
   const refetch = useCallback(async () => {
-    await fetchTradeZoneData();
+    await fetchTradeZoneData(false);
   }, [fetchTradeZoneData]);
 
   /**
@@ -194,59 +239,64 @@ export function useTradeZonesRealtime(symbol: string): UseTradeZonesRealtimeRetu
   useEffect(() => { dataRef.current = data; }, [data]);
 
   useEffect(() => {
-    // Initial fetch
-    fetchTradeZoneData();
+    reconnectAttemptsRef.current = 0;
 
-    // API refresh timer (2000ms — matches ws_analysis TTL)
-    const apiTimer = setInterval(fetchTradeZoneData, 2000);
+    // Initial fetch
+    fetchTradeZoneData(false);
+
+    // API refresh timer (3000ms — WS provides sub-second deltas)
+    const apiTimer = setInterval(() => {
+      fetchTradeZoneData(true);
+    }, 3000);
 
     // WebSocket for live updates
     const wsUrl = API_CONFIG.wsUrl;
     let ws: WebSocket | null = null;
     let wsReconnectTimer: NodeJS.Timeout | null = null;
+    let shouldReconnect = true;
 
     const connectWebSocket = () => {
+      if (!shouldReconnect) {
+        return;
+      }
+
       try {
         ws = new WebSocket(wsUrl);
 
         ws.onopen = () => {
+          reconnectAttemptsRef.current = 0;
           if (isDev) console.log(`[TRADE-ZONES] 🟢 WebSocket connected for ${symbol}`);
-          // Subscribe to market ticks
-          ws?.send(
-            JSON.stringify({
-              type: 'subscribe',
-              instrument_tokens: [symbol],
-            })
-          );
         };
 
         ws.onmessage = (event) => {
           try {
-            const message = JSON.parse(event.data);
+            const message = JSON.parse(event.data) as MarketSocketMessage;
+            const price = extractTickPrice(message);
+            if (price === null) {
+              return;
+            }
 
-            // Handle market tick events
-            if (message.type === `market-tick-${symbol}`) {
-              const { price } = message.data || {};
-              if (!price) return;
+            // 🔥 Immediate full refetch on significant price move (≥0.15%)
+            // Avoids spreading stale signals — only current_price was updating locally.
+            const lastPrice = lastWsRefetchPriceRef.current;
+            const now = Date.now();
+            const hasSignificantMove = lastPrice === 0 || Math.abs(price - lastPrice) / lastPrice >= 0.0015;
+            const canRefetchNow = now - lastWsRefetchAtRef.current >= 800;
+            if (hasSignificantMove && canRefetchNow) {
+              lastWsRefetchPriceRef.current = price;
+              lastWsRefetchAtRef.current = now;
+              fetchTradeZoneData(true);
+              return;
+            }
 
-              // 🔥 Immediate full refetch on significant price move (≥0.15%)
-              // Avoids spreading stale signals — only current_price was updating locally.
-              const lastPrice = lastWsRefetchPriceRef.current;
-              if (lastPrice === 0 || Math.abs(price - lastPrice) / lastPrice >= 0.0015) {
-                lastWsRefetchPriceRef.current = price;
-                fetchTradeZoneData();
-                return;
-              }
-
-              // Minor tick: update price in-place without a full API round-trip
-              const current = dataRef.current;
-              if (current) {
-                queueZoneUpdate({
-                  ...current,
-                  current_price: price,
-                  timestamp: new Date().toISOString(),
-                });
-              }
+            // Minor tick: update price in-place without a full API round-trip
+            const current = dataRef.current;
+            if (current) {
+              queueZoneUpdate({
+                ...current,
+                current_price: price,
+                timestamp: new Date().toISOString(),
+              });
             }
           } catch (err) {
             console.error('[TRADE-ZONES] WebSocket message error:', err);
@@ -261,12 +311,19 @@ export function useTradeZonesRealtime(symbol: string): UseTradeZonesRealtimeRetu
         ws.onclose = () => {
           if (isDev) console.log(`[TRADE-ZONES] 🟠 WebSocket disconnected for ${symbol}`);
 
-          // Attempt reconnection after 5 seconds
-          wsReconnectTimer = setTimeout(connectWebSocket, 5000);
+          if (!shouldReconnect) {
+            return;
+          }
+
+          reconnectAttemptsRef.current += 1;
+          const backoffMs = Math.min(30000, 1000 * (2 ** reconnectAttemptsRef.current));
+          wsReconnectTimer = setTimeout(connectWebSocket, backoffMs);
         };
       } catch (err) {
         console.error('[TRADE-ZONES] WebSocket connection error:', err);
-        wsReconnectTimer = setTimeout(connectWebSocket, 5000);
+        reconnectAttemptsRef.current += 1;
+        const backoffMs = Math.min(30000, 1000 * (2 ** reconnectAttemptsRef.current));
+        wsReconnectTimer = setTimeout(connectWebSocket, backoffMs);
       }
     };
 
@@ -275,6 +332,8 @@ export function useTradeZonesRealtime(symbol: string): UseTradeZonesRealtimeRetu
 
     // Cleanup
     return () => {
+      shouldReconnect = false;
+
       if (batchTimerRef.current) {
         clearTimeout(batchTimerRef.current);
       }

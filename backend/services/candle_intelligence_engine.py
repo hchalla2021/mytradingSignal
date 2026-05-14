@@ -1305,10 +1305,21 @@ class CandleIntelligenceService:
         self._task: Optional[asyncio.Task] = None
         self._running = False
         self._last_snapshot: Dict[str, Any] = {}
+        self._last_broadcast_view: Dict[str, Tuple[str, str, float]] = {}
         self._last_good: Dict[str, Any] = {}  # last non-empty per-symbol results
         self._last_disk_save: float = 0.0
         # Load persisted data on init so get_snapshot() works immediately
         self._load_from_disk()
+
+    def _build_broadcast_view(self, snapshot: Dict[str, Any]) -> Dict[str, Tuple[str, str, float]]:
+        view: Dict[str, Tuple[str, str, float]] = {}
+        for sym in self.SYMBOLS:
+            data = snapshot.get(sym) or {}
+            ts = str(data.get("timestamp", ""))
+            signal = str(data.get("signal", "NEUTRAL"))
+            price = float(data.get("price", 0.0) or 0.0)
+            view[sym] = (ts, signal, price)
+        return view
 
     # ── Disk persistence ──────────────────────────────────────────────────
 
@@ -1367,7 +1378,8 @@ class CandleIntelligenceService:
         logger.info("🕯️ Candle Intelligence Engine stopped")
 
     def get_snapshot(self) -> Dict[str, Any]:
-        return self._last_snapshot
+        # Defensive copy prevents accidental external mutation of shared state.
+        return dict(self._last_snapshot)
 
     async def _loop(self):
         """Main loop — 2s LIVE/PRE_OPEN/FREEZE, 30s CLOSED."""
@@ -1393,16 +1405,21 @@ class CandleIntelligenceService:
                     snapshot[sym] = result
 
                 self._last_snapshot = snapshot
+                view = self._build_broadcast_view(snapshot)
+                changed = view != self._last_broadcast_view
 
                 # Persist to disk periodically (debounced)
-                self._save_to_disk(snapshot)
+                if changed:
+                    self._save_to_disk(snapshot)
 
-                if candle_intel_manager.client_count > 0:
+                if changed and candle_intel_manager.client_count > 0:
                     await candle_intel_manager.broadcast({
                         "type": "candle_intel_update",
                         "data": snapshot,
                         "timestamp": datetime.now(IST).isoformat(),
                     })
+                if changed:
+                    self._last_broadcast_view = view
 
                 await asyncio.sleep(interval)
 

@@ -166,6 +166,9 @@ export function useExpiryExplosion() {
   const retryRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pingRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
+  const requestSeqRef = useRef(0);
+  const reconnectAttemptsRef = useRef(0);
   const retryDelay = useRef(3000);
   const mountedRef = useRef(true);
 
@@ -191,7 +194,7 @@ export function useExpiryExplosion() {
 
   const connect = useCallback(() => {
     if (typeof window === 'undefined') return;
-    if (wsRef.current?.readyState === WebSocket.OPEN) return;
+    if (wsRef.current?.readyState === WebSocket.OPEN || wsRef.current?.readyState === WebSocket.CONNECTING) return;
 
     let ws: WebSocket;
     try { ws = new WebSocket(getExpiryWsUrl()); }
@@ -202,6 +205,7 @@ export function useExpiryExplosion() {
     ws.onopen = () => {
       setIsConnected(true);
       retryDelay.current = 3000;
+      reconnectAttemptsRef.current = 0;
       if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
       pingRef.current = setInterval(() => {
         if (ws.readyState === WebSocket.OPEN)
@@ -226,17 +230,26 @@ export function useExpiryExplosion() {
       if (pingRef.current) clearInterval(pingRef.current);
       // Only reconnect/poll if still mounted
       if (!mountedRef.current) return;
-      retryDelay.current = Math.min(retryDelay.current * 1.5, 10000);
-      retryRef.current = setTimeout(connect, retryDelay.current);
+      reconnectAttemptsRef.current += 1;
+      retryDelay.current = Math.min(30000, 1000 * (2 ** Math.min(6, reconnectAttemptsRef.current)));
+      const jitterMs = Math.floor(Math.random() * 250);
+      if (retryRef.current) clearTimeout(retryRef.current);
+      retryRef.current = setTimeout(connect, retryDelay.current + jitterMs);
       if (!pollRef.current) {
         pollRef.current = setInterval(() => {
-          fetch(getExpiryApiUrl())
-            .then(r => r.json())
-            .then((json: { success?: boolean; data?: Record<string, ExpiryIndex> }) => {
+          const requestId = ++requestSeqRef.current;
+          if (abortRef.current) abortRef.current.abort();
+          abortRef.current = new AbortController();
+          fetch(getExpiryApiUrl(), { cache: 'no-store', signal: abortRef.current.signal })
+            .then(r => (r.ok ? r.json() : null))
+            .then((json: { success?: boolean; data?: Record<string, ExpiryIndex> } | null) => {
+              if (!mountedRef.current || requestId !== requestSeqRef.current) return;
               if (json?.success && json.data) mergeData(json.data);
             })
-            .catch(() => {});
-        }, 2000);
+            .catch((err: unknown) => {
+              if (err instanceof DOMException && err.name === 'AbortError') return;
+            });
+        }, 4000);
       }
     };
 
@@ -244,36 +257,41 @@ export function useExpiryExplosion() {
   }, [mergeData]);
 
   useEffect(() => {
+    mountedRef.current = true;
+
+    const fetchSnapshot = () => {
+      const requestId = ++requestSeqRef.current;
+      if (abortRef.current) {
+        abortRef.current.abort();
+      }
+      abortRef.current = new AbortController();
+
+      fetch(getExpiryApiUrl(), { cache: 'no-store', signal: abortRef.current.signal })
+        .then(r => (r.ok ? r.json() : null))
+        .then((json: { success?: boolean; data?: Record<string, ExpiryIndex> } | null) => {
+          if (!mountedRef.current || requestId !== requestSeqRef.current) return;
+          if (json?.success && json.data) mergeData(json.data);
+        })
+        .catch((err: unknown) => {
+          if (err instanceof DOMException && err.name === 'AbortError') return;
+        });
+    };
+
     const cached = loadFromStorage();
     if (cached) setExpiryData(cached);
 
-    fetch(getExpiryApiUrl())
-      .then(r => r.json())
-      .then((json: { success?: boolean; data?: Record<string, ExpiryIndex> }) => {
-        if (json?.success && json.data) mergeData(json.data);
-      })
-      .catch(() => {});
+    fetchSnapshot();
 
     connect();
 
-    // Parallel REST poll runs alongside WS — catches updates when WS timestamps
-    // are stale or PCR-based signals need a forced refresh.
-    const parallelPoll = setInterval(() => {
-      fetch(getExpiryApiUrl())
-        .then(r => r.json())
-        .then((json: { success?: boolean; data?: Record<string, ExpiryIndex> }) => {
-          if (json?.success && json.data) mergeData(json.data);
-        })
-        .catch(() => {});
-    }, 2000);
-
     return () => {
       mountedRef.current = false;
-      clearInterval(parallelPoll);
       if (retryRef.current) clearTimeout(retryRef.current);
       if (pingRef.current) clearInterval(pingRef.current);
       if (pollRef.current) clearInterval(pollRef.current);
+      if (abortRef.current) abortRef.current.abort();
       wsRef.current?.close();
+      wsRef.current = null;
     };
   }, [connect, mergeData]);
 

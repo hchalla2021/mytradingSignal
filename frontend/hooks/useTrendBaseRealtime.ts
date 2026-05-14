@@ -17,6 +17,8 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { API_CONFIG } from '@/lib/api-config';
 
+const MIN_FETCH_GAP_MS = 250;
+
 interface MarketTick {
   symbol: string;
   time: number;
@@ -67,6 +69,52 @@ interface TrendBaseRealtimeData extends TrendBaseResponse {
   lastUpdateTime: number;
 }
 
+function toTsMs(ts?: string): number {
+  if (!ts) return Number.NaN;
+  const ms = Date.parse(ts);
+  return Number.isFinite(ms) ? ms : Number.NaN;
+}
+
+function isNewerSnapshot(nextTs?: string, prevTs?: string): boolean {
+  const n = toTsMs(nextTs);
+  const p = toTsMs(prevTs);
+  if (!Number.isFinite(n) || !Number.isFinite(p)) return true;
+  return n >= p;
+}
+
+function normalizeTrendBaseResponse(raw: TrendBaseResponse): TrendBaseResponse {
+  const confidence = Math.max(0, Math.min(100, Number(raw.confidence ?? 0)));
+  const confidence5m = Math.max(0, Math.min(100, Number(raw.confidence_5m ?? confidence)));
+  const changePercent = Number(raw.changePercent ?? 0);
+  const price = Math.max(0, Number(raw.price ?? 0));
+
+  return {
+    ...raw,
+    price,
+    changePercent,
+    confidence,
+    confidence_5m: confidence5m,
+    total_score: Number(raw.total_score ?? 0),
+    rsi_5m: Number(raw.rsi_5m ?? 50),
+    rsi_15m: Number(raw.rsi_15m ?? 50),
+  };
+}
+
+function materiallyChanged(prev: TrendBaseRealtimeData, next: TrendBaseResponse): boolean {
+  return (
+    prev.signal !== next.signal
+    || prev.signal_5m !== next.signal_5m
+    || prev.trend !== next.trend
+    || prev.trend_15m !== next.trend_15m
+    || Math.abs((prev.confidence ?? 0) - (next.confidence ?? 0)) >= 0.2
+    || Math.abs((prev.confidence_5m ?? prev.confidence ?? 0) - (next.confidence_5m ?? next.confidence ?? 0)) >= 0.2
+    || Math.abs((prev.total_score ?? 0) - (next.total_score ?? 0)) >= 0.2
+    || Math.abs((prev.price ?? 0) - (next.price ?? 0)) >= 0.01
+    || Math.abs((prev.changePercent ?? 0) - (next.changePercent ?? 0)) >= 0.01
+    || prev.timestamp !== next.timestamp
+  );
+}
+
 /**
  * Hook: Real-time Trend Base Analysis
  * 
@@ -87,14 +135,25 @@ export function useTrendBaseRealtime(symbol: string) {
   const pendingUpdateRef = useRef<boolean>(false);
   const lastUpdateTimeRef = useRef<number>(0);
   const prevSigRef = useRef<string>('');
-  const batchTimerRef = useRef<NodeJS.Timeout | null>(null);
-  const apiTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const batchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const apiTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const flashTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const lastReqSeqRef = useRef(0);
+  const mountedRef = useRef(true);
+  const hasDataRef = useRef(false);
+  const nextFetchAllowedAtRef = useRef(0);
   // Track last price seen by WS to detect significant moves → immediate API refetch
   const lastWsChangeRef = useRef<number>(0);
 
   // ── 🔥 Fast API fetch (3s instead of 5s) ───────────────────────────────────
   const fetchAnalysis = useCallback(async () => {
+    if (!mountedRef.current) return;
+    const now = Date.now();
+    if (now < nextFetchAllowedAtRef.current) return;
+    nextFetchAllowedAtRef.current = now + MIN_FETCH_GAP_MS;
+
+    const reqSeq = ++lastReqSeqRef.current;
     abortRef.current?.abort();
     const ctrl = new AbortController();
     abortRef.current = ctrl;
@@ -107,39 +166,49 @@ export function useTrendBaseRealtime(symbol: string) {
 
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
-      const result: TrendBaseResponse = await res.json();
+      const raw: TrendBaseResponse = await res.json();
+      const result = normalizeTrendBaseResponse(raw);
 
       if (result?.status === 'TOKEN_EXPIRED') {
-        setError('Auth required');
+        if (!hasDataRef.current) setError('Auth required');
         setLoading(false);
         return;
       }
       if (result?.status === 'ERROR') {
-        setError('Feed error');
+        if (!hasDataRef.current) setError('Feed error');
         setLoading(false);
         return;
       }
 
+      if (!mountedRef.current || reqSeq !== lastReqSeqRef.current) return;
+
       // 🔥 Flash on signal change (visual confirmation of trend shift)
       if (prevSigRef.current && prevSigRef.current !== result.signal) {
         setFlash(true);
-        setTimeout(() => setFlash(false), 700);
+        if (flashTimerRef.current) clearTimeout(flashTimerRef.current);
+        flashTimerRef.current = setTimeout(() => setFlash(false), 700);
       }
       prevSigRef.current = result.signal;
 
       // Merge live tick data with API analysis
-      setData({
-        ...result,
-        isLive: result.status === 'LIVE' || result.status === 'ACTIVE',
-        liveTick: liveTickRef.current || undefined,
-        lastUpdateTime: Date.now(),
+      setData((prev) => {
+        if (prev && !isNewerSnapshot(result.timestamp, prev.timestamp)) return prev;
+        if (prev && !materiallyChanged(prev, result)) return prev;
+
+        hasDataRef.current = true;
+        return {
+          ...result,
+          isLive: result.status === 'LIVE' || result.status === 'ACTIVE',
+          liveTick: liveTickRef.current || undefined,
+          lastUpdateTime: Date.now(),
+        };
       });
 
       setError(null);
       setLoading(false);
     } catch (e: any) {
       if (e?.name === 'AbortError') return;
-      setError('Connection error');
+      if (!hasDataRef.current) setError('Connection error');
       setLoading(false);
     }
   }, [symbol]);
@@ -147,6 +216,7 @@ export function useTrendBaseRealtime(symbol: string) {
   // ── 🔥 Process batched live tick updates (200ms window) ───────────────────
   const processBatchedUpdate = useCallback(() => {
     if (!liveTickRef.current) return;
+    if (!mountedRef.current) return;
 
     const tick = liveTickRef.current;
     const now = Date.now();
@@ -163,10 +233,18 @@ export function useTrendBaseRealtime(symbol: string) {
     // Update data with live tick (instant price update) — uses functional setState to avoid stale closure
     setData((prev) => {
       if (!prev) return prev;
+      const nextPrice = tick.price || prev.price;
+      const nextChange = tick.changePercent ?? prev.changePercent;
+      if (
+        Math.abs((nextPrice ?? 0) - (prev.price ?? 0)) < 0.005
+        && Math.abs((nextChange ?? 0) - (prev.changePercent ?? 0)) < 0.005
+      ) {
+        return prev;
+      }
       return {
         ...prev,
-        price: tick.price || prev.price,
-        changePercent: tick.changePercent ?? prev.changePercent,
+        price: nextPrice,
+        changePercent: nextChange,
         liveTick: tick,
         lastUpdateTime: now,
       };
@@ -204,7 +282,10 @@ export function useTrendBaseRealtime(symbol: string) {
       const newChange = tick.changePercent ?? 0;
       if (Math.abs(newChange - lastWsChangeRef.current) >= 0.15) {
         lastWsChangeRef.current = newChange;
-        fetchAnalysis();
+        // Defer to next frame to avoid blocking paint under bursty ticks.
+        requestAnimationFrame(() => {
+          fetchAnalysis();
+        });
       }
 
       // Trigger batch update
@@ -231,6 +312,7 @@ export function useTrendBaseRealtime(symbol: string) {
 
   // ── Initial load + 2s API refresh cycle ──────────────────────────────────
   useEffect(() => {
+    mountedRef.current = true;
     fetchAnalysis();
 
     // Refresh every 2s (was 3s) — matches backend analysis cache TTL of 2s
@@ -239,8 +321,10 @@ export function useTrendBaseRealtime(symbol: string) {
     }, 2000);
 
     return () => {
+      mountedRef.current = false;
       if (apiTimerRef.current) clearInterval(apiTimerRef.current);
       if (batchTimerRef.current) clearTimeout(batchTimerRef.current);
+      if (flashTimerRef.current) clearTimeout(flashTimerRef.current);
       abortRef.current?.abort();
     };
   }, [symbol, fetchAnalysis]);

@@ -8,7 +8,7 @@ import asyncio
 import json
 import logging
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
-from datetime import datetime
+from datetime import datetime, timezone
 
 from services.candle_intelligence_engine import candle_intel_manager, get_candle_intelligence_service
 
@@ -18,19 +18,36 @@ http_router = APIRouter()
 ws_router = APIRouter()
 
 
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
 # ── REST snapshot ─────────────────────────────────────────────────────────────
 
 @http_router.get("/candle-intelligence")
 async def get_candle_intelligence_snapshot():
     """Instant Candle Intelligence snapshot — use on page load before WebSocket connects."""
-    svc = get_candle_intelligence_service()
-    snapshot = svc.get_snapshot()
-    return {
-        "success": True,
-        "data": snapshot,
-        "indices": list(snapshot.keys()),
-        "timestamp": datetime.utcnow().isoformat(),
-    }
+    try:
+        svc = get_candle_intelligence_service()
+        snapshot = svc.get_snapshot()
+        if not isinstance(snapshot, dict):
+            snapshot = {}
+
+        return {
+            "success": True,
+            "data": snapshot,
+            "indices": list(snapshot.keys()),
+            "timestamp": _utc_now_iso(),
+        }
+    except Exception:
+        logger.exception("[CANDLE-INTEL] Snapshot endpoint failure")
+        return {
+            "success": False,
+            "data": {},
+            "indices": [],
+            "timestamp": _utc_now_iso(),
+            "error": "Snapshot unavailable",
+        }
 
 
 # ── WebSocket ─────────────────────────────────────────────────────────────────
@@ -62,6 +79,8 @@ async def candle_intelligence_websocket(websocket: WebSocket):
         while True:
             try:
                 raw = await asyncio.wait_for(websocket.receive_text(), timeout=60)
+                if len(raw) > 2048:
+                    continue
                 msg = json.loads(raw)
                 if msg.get("type") == "ping":
                     await candle_intel_manager.send_personal(websocket, {"type": "pong"})
@@ -69,7 +88,7 @@ async def candle_intelligence_websocket(websocket: WebSocket):
                 try:
                     await candle_intel_manager.send_personal(websocket, {
                         "type": "candle_intel_heartbeat",
-                        "timestamp": datetime.utcnow().isoformat(),
+                        "timestamp": _utc_now_iso(),
                     })
                 except Exception:
                     break
@@ -80,7 +99,7 @@ async def candle_intelligence_websocket(websocket: WebSocket):
 
     except WebSocketDisconnect:
         pass
-    except Exception as e:
-        logger.debug(f"🕯️ Candle Intel WS error: {e}")
+    except Exception:
+        logger.exception("[CANDLE-INTEL] WebSocket session error")
     finally:
         await candle_intel_manager.disconnect(websocket)

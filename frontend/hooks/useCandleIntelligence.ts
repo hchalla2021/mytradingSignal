@@ -3,6 +3,9 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { getEnvironmentConfig } from '@/lib/env-detection';
 
+const REST_FALLBACK_INTERVAL_MS = 5000;
+const MAX_RETRY_DELAY_MS = 30000;
+
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 export type CandleStructure =
@@ -158,6 +161,31 @@ function loadFromStorage(): CandleIntelData | null {
 
 const EMPTY: CandleIntelData = { NIFTY: null, BANKNIFTY: null, SENSEX: null };
 
+function toTsMs(ts?: string): number {
+  if (!ts) return Number.NaN;
+  const ms = Date.parse(ts);
+  return Number.isFinite(ms) ? ms : Number.NaN;
+}
+
+function isNewerSnapshot(next?: CandleIntelIndex | null, prev?: CandleIntelIndex | null): boolean {
+  const n = toTsMs(next?.timestamp);
+  const p = toTsMs(prev?.timestamp);
+  if (!Number.isFinite(n) || !Number.isFinite(p)) return true;
+  return n >= p;
+}
+
+function materiallyChanged(next: CandleIntelIndex, prev: CandleIntelIndex): boolean {
+  return (
+    next.signal !== prev.signal
+    || next.structure !== prev.structure
+    || next.strength !== prev.strength
+    || Math.abs((next.confidence ?? 0) - (prev.confidence ?? 0)) >= 0.2
+    || Math.abs((next.price ?? 0) - (prev.price ?? 0)) >= 0.01
+    || Math.abs((next.changePct ?? 0) - (prev.changePct ?? 0)) >= 0.01
+    || next.timestamp !== prev.timestamp
+  );
+}
+
 // ── Hook ──────────────────────────────────────────────────────────────────────
 
 export function useCandleIntelligence() {
@@ -169,26 +197,31 @@ export function useCandleIntelligence() {
   const retryRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pingRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
+  const requestSeqRef = useRef(0);
+  const reconnectAttemptsRef = useRef(0);
   const retryDelay = useRef(3000);
   const mountedRef = useRef(true);
 
   const mergeData = useCallback((raw: Record<string, CandleIntelIndex>) => {
+    if (!mountedRef.current) return;
     setData(prev => {
       const next: CandleIntelData = { ...prev };
       let changed = false;
       for (const sym of ['NIFTY', 'BANKNIFTY', 'SENSEX'] as const) {
         if (raw[sym]) {
-          // Skip only if timestamp, signal AND price are all identical — prevents
-          // a same-millisecond timestamp from blocking a critical signal flip.
+          const incoming = raw[sym];
           const p = prev[sym];
-          if (
-            p?.timestamp === raw[sym].timestamp &&
-            p?.signal === raw[sym].signal &&
-            p?.price === raw[sym].price
-          ) continue;
+
+          // Drop out-of-order snapshots that arrive after fresher data.
+          if (p && !isNewerSnapshot(incoming, p)) continue;
+
+          // Suppress no-op updates to cut unnecessary re-renders under bursty feeds.
+          if (p && !materiallyChanged(incoming, p)) continue;
+
           next[sym] = typeof structuredClone === 'function'
-            ? structuredClone(raw[sym])
-            : JSON.parse(JSON.stringify(raw[sym]));
+            ? structuredClone(incoming)
+            : JSON.parse(JSON.stringify(incoming));
           changed = true;
         }
       }
@@ -199,19 +232,44 @@ export function useCandleIntelligence() {
     setLastUpdate(new Date().toISOString());
   }, []);
 
+  const fetchSnapshot = useCallback(async () => {
+    const requestId = ++requestSeqRef.current;
+    abortRef.current?.abort();
+    const ctrl = new AbortController();
+    abortRef.current = ctrl;
+
+    try {
+      const res = await fetch(getCandleIntelApiUrl(), { cache: 'no-store', signal: ctrl.signal });
+      if (!res.ok) return;
+      const json = await res.json() as { success?: boolean; data?: Record<string, CandleIntelIndex> };
+
+      if (!mountedRef.current || requestId !== requestSeqRef.current) return;
+      if (json?.success && json.data) mergeData(json.data);
+    } catch (e: any) {
+      if (e?.name === 'AbortError') return;
+    }
+  }, [mergeData]);
+
   const connect = useCallback(() => {
     if (typeof window === 'undefined') return;
-    if (wsRef.current?.readyState === WebSocket.OPEN) return;
+    if (wsRef.current?.readyState === WebSocket.OPEN || wsRef.current?.readyState === WebSocket.CONNECTING) return;
 
     let ws: WebSocket;
     try { ws = new WebSocket(getCandleIntelWsUrl()); }
-    catch { retryRef.current = setTimeout(connect, retryDelay.current); return; }
+    catch {
+      reconnectAttemptsRef.current += 1;
+      retryDelay.current = Math.min(MAX_RETRY_DELAY_MS, 1000 * (2 ** Math.min(6, reconnectAttemptsRef.current)));
+      const jitter = Math.floor(Math.random() * 250);
+      retryRef.current = setTimeout(connect, retryDelay.current + jitter);
+      return;
+    }
 
     wsRef.current = ws;
 
     ws.onopen = () => {
       setIsConnected(true);
       retryDelay.current = 3000;
+      reconnectAttemptsRef.current = 0;
       if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
       pingRef.current = setInterval(() => {
         if (ws.readyState === WebSocket.OPEN)
@@ -235,22 +293,20 @@ export function useCandleIntelligence() {
       setIsConnected(false);
       if (pingRef.current) clearInterval(pingRef.current);
       if (!mountedRef.current) return;
-      retryDelay.current = Math.min(retryDelay.current * 1.5, 30000);
-      retryRef.current = setTimeout(connect, retryDelay.current);
+      reconnectAttemptsRef.current += 1;
+      retryDelay.current = Math.min(MAX_RETRY_DELAY_MS, 1000 * (2 ** Math.min(6, reconnectAttemptsRef.current)));
+      const jitter = Math.floor(Math.random() * 250);
+      if (retryRef.current) clearTimeout(retryRef.current);
+      retryRef.current = setTimeout(connect, retryDelay.current + jitter);
       if (!pollRef.current) {
         pollRef.current = setInterval(() => {
-          fetch(getCandleIntelApiUrl())
-            .then(r => r.json())
-            .then((json: { success?: boolean; data?: Record<string, CandleIntelIndex> }) => {
-              if (json?.success && json.data) mergeData(json.data);
-            })
-            .catch(() => {});
-        }, 5000);
+          fetchSnapshot();
+        }, REST_FALLBACK_INTERVAL_MS);
       }
     };
 
     ws.onerror = () => ws.close();
-  }, [mergeData]);
+  }, [fetchSnapshot, mergeData]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -258,12 +314,7 @@ export function useCandleIntelligence() {
     if (cached) setData(cached);
 
     // Initial REST fetch
-    fetch(getCandleIntelApiUrl())
-      .then(r => r.json())
-      .then((json: { success?: boolean; data?: Record<string, CandleIntelIndex> }) => {
-        if (json?.success && json.data) mergeData(json.data);
-      })
-      .catch(() => {});
+    fetchSnapshot();
 
     connect();
 
@@ -272,12 +323,14 @@ export function useCandleIntelligence() {
       if (retryRef.current) clearTimeout(retryRef.current);
       if (pingRef.current) clearInterval(pingRef.current);
       if (pollRef.current) clearInterval(pollRef.current);
+      abortRef.current?.abort();
       if (wsRef.current) {
         wsRef.current.onclose = null;
         wsRef.current.close();
+        wsRef.current = null;
       }
     };
-  }, [connect, mergeData]);
+  }, [connect, fetchSnapshot]);
 
   return { data, isConnected, lastUpdate };
 }

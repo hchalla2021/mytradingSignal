@@ -43,6 +43,8 @@ interface VolumePulseCardProps {
   name:   string;
 }
 
+const MIN_FETCH_GAP_MS = 200;
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Static config — module-level, never recreated per render
 // ─────────────────────────────────────────────────────────────────────────────
@@ -70,6 +72,52 @@ function fmtVol(v: number): string {
   if (v >= 100_000)    return `${(v / 100_000).toFixed(1)}L`;
   if (v >= 1_000)      return `${(v / 1_000).toFixed(0)}K`;
   return String(v);
+}
+
+function toTsMs(ts?: string): number {
+  if (!ts) return Number.NaN;
+  const ms = Date.parse(ts);
+  return Number.isFinite(ms) ? ms : Number.NaN;
+}
+
+function isNewerSnapshot(nextTs?: string, prevTs?: string): boolean {
+  const n = toTsMs(nextTs);
+  const p = toTsMs(prevTs);
+  if (!Number.isFinite(n) || !Number.isFinite(p)) return true;
+  return n >= p;
+}
+
+function normalizeData(raw: VolumePulseData): VolumePulseData {
+  const safeGreen = Math.max(0, Number(raw.volume_data?.green_candle_volume ?? 0));
+  const safeRed = Math.max(0, Number(raw.volume_data?.red_candle_volume ?? 0));
+  const total = safeGreen + safeRed;
+  const greenPct = total > 0 ? Math.max(0, Math.min(100, (safeGreen / total) * 100)) : 50;
+  const redPct = total > 0 ? Math.max(0, Math.min(100, (safeRed / total) * 100)) : 50;
+
+  return {
+    ...raw,
+    pulse_score: Math.max(0, Math.min(100, Number(raw.pulse_score ?? 50))),
+    confidence: Math.max(0, Math.min(95, Number(raw.confidence ?? 0))),
+    volume_data: {
+      ...raw.volume_data,
+      green_candle_volume: safeGreen,
+      red_candle_volume: safeRed,
+      green_percentage: greenPct,
+      red_percentage: redPct,
+      ratio: safeRed <= 0 ? 999 : safeGreen / safeRed,
+    },
+  };
+}
+
+function materiallyChanged(prev: VolumePulseData, next: VolumePulseData): boolean {
+  return (
+    prev.signal !== next.signal
+    || prev.trend !== next.trend
+    || Math.abs((prev.pulse_score ?? 0) - (next.pulse_score ?? 0)) >= 0.15
+    || Math.abs((prev.confidence ?? 0) - (next.confidence ?? 0)) >= 0.15
+    || Math.abs((prev.volume_data?.ratio ?? 1) - (next.volume_data?.ratio ?? 1)) >= 0.001
+    || prev.timestamp !== next.timestamp
+  );
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -189,7 +237,11 @@ const VolumePulseCard = memo<VolumePulseCardProps>(({ symbol, name }) => {
   const prevSigRef    = useRef<string>('');
   const abortRef      = useRef<AbortController | null>(null);
   const cardRef       = useRef<HTMLDivElement>(null);
-  const batchRef      = useRef<NodeJS.Timeout>();
+  const batchRef      = useRef<ReturnType<typeof setTimeout>>();
+  const lastReqSeqRef = useRef(0);
+  const mountedRef = useRef(true);
+  const nextFetchAllowedAtRef = useRef(0);
+  const hasDataRef = useRef(false);
   // Track last changePercent seen via WS — immediate refetch on ≥0.15% swing
   const lastWsChangeRef = useRef<number>(0);
 
@@ -198,6 +250,12 @@ const VolumePulseCard = memo<VolumePulseCardProps>(({ symbol, name }) => {
 
   // ── Fetch ────────────────────────────────────────────────────────────────
   const fetchData = useCallback(async () => {
+    if (!mountedRef.current) return;
+    const now = Date.now();
+    if (now < nextFetchAllowedAtRef.current) return;
+    nextFetchAllowedAtRef.current = now + MIN_FETCH_GAP_MS;
+
+    const reqSeq = ++lastReqSeqRef.current;
     abortRef.current?.abort();
     const ctrl = new AbortController();
     abortRef.current = ctrl;
@@ -207,21 +265,36 @@ const VolumePulseCard = memo<VolumePulseCardProps>(({ symbol, name }) => {
         { signal: ctrl.signal, cache: 'no-store' },
       );
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const result: VolumePulseData = await res.json();
-      if (!result.volume_data) { setError('No volume data'); setLoading(false); return; }
-      prevSigRef.current = result.signal;
-      setData(result);
+      const raw: VolumePulseData = await res.json();
+      if (!raw.volume_data) {
+        if (!hasDataRef.current) setError('No volume data');
+        setLoading(false);
+        return;
+      }
+
+      if (!mountedRef.current || reqSeq !== lastReqSeqRef.current) return;
+      const result = normalizeData(raw);
+
+      setData((prev) => {
+        if (prev && !isNewerSnapshot(result.timestamp, prev.timestamp)) return prev;
+        if (prev && !materiallyChanged(prev, result)) return prev;
+        prevSigRef.current = result.signal;
+        hasDataRef.current = true;
+        return result;
+      });
+
       setError(null);
       setLoading(false);
     } catch (e: any) {
       if (e?.name === 'AbortError') return;
-      setError('Connection error');
+      if (!hasDataRef.current) setError('Connection error');
       setLoading(false);
     }
   }, [symbol]);
 
   // ── WebSocket tick listener + batched re-fetch ───────────────────────────
   useEffect(() => {
+    mountedRef.current = true;
     fetchData();
     // 2s background poll (was 3s) — matches backend analysis cache TTL of 2s
     const pollId = setInterval(fetchData, 2000);
@@ -247,6 +320,7 @@ const VolumePulseCard = memo<VolumePulseCardProps>(({ symbol, name }) => {
     window.addEventListener(`market-tick-${symbol}`, handleTick);
 
     return () => {
+      mountedRef.current = false;
       clearInterval(pollId);
       clearTimeout(batchRef.current);
       abortRef.current?.abort();
@@ -273,7 +347,7 @@ const VolumePulseCard = memo<VolumePulseCardProps>(({ symbol, name }) => {
   );
 
   // ── Error state ───────────────────────────────────────────────────────────
-  if (error || !data) return (
+  if (!data) return (
     <div className="bg-slate-900/40 border-2 border-rose-500/30 rounded-2xl p-5 min-h-[160px] flex flex-col items-center justify-center gap-2">
       <span className="text-2xl">⚠</span>
       <p className="text-sm font-bold text-rose-300">{name}</p>

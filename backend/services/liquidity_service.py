@@ -33,6 +33,7 @@ Isolation: own ConnectionManager, own asyncio task, own CacheService instance.
 
 import asyncio
 import collections
+import copy
 import json
 import math
 import time
@@ -915,8 +916,17 @@ class LiquidityService:
         }
         self._last_spot_data: Dict[str, Dict] = {}   # no-TTL fallback
         self._latest: Dict[str, Any] = {}
+        self._last_broadcast_view: Dict[str, Tuple[str, str, int, float, float]] = {}
         self._task: Optional[asyncio.Task] = None
         self._running = False
+
+    def _build_broadcast_view(self, row: Dict[str, Any]) -> Tuple[str, str, int, float, float]:
+        direction = str(row.get("direction", "NEUTRAL"))
+        prediction = str(row.get("prediction5m", "NEUTRAL"))
+        confidence = int(row.get("confidence") or 0)
+        price = float(((row.get("metrics") or {}).get("price")) or 0.0)
+        score = float(row.get("rawScore") or 0.0)
+        return (direction, prediction, confidence, price, score)
 
     # ── Kite session helper (same pattern as compass_service) ─────────────────
 
@@ -1241,10 +1251,19 @@ class LiquidityService:
         while self._running:
             try:
                 payload: Dict[str, Any] = {}
-                for sym in self.INDICES:
-                    data = await self._compute(sym)
+                results = await asyncio.gather(
+                    *(self._compute(sym) for sym in self.INDICES),
+                    return_exceptions=True,
+                )
+                for sym, data in zip(self.INDICES, results):
+                    if isinstance(data, Exception):
+                        logger.debug(f"⚡ {sym} compute error: {data}")
+                        continue
                     if data:
-                        payload[sym] = data
+                        view = self._build_broadcast_view(data)
+                        if self._last_broadcast_view.get(sym) != view:
+                            payload[sym] = data
+                            self._last_broadcast_view[sym] = view
                         self._latest[sym] = data
 
                 if payload:
@@ -1256,8 +1275,8 @@ class LiquidityService:
 
             except asyncio.CancelledError:
                 break
-            except Exception as e:
-                logger.error(f"⚡ Liquidity loop error: {e}")
+            except Exception:
+                logger.exception("⚡ Liquidity loop error")
 
             # Throttle during closed market to free event loop for HTTP requests
             try:
@@ -1291,7 +1310,7 @@ class LiquidityService:
                 pass
 
     def get_snapshot(self) -> Dict[str, Any]:
-        return dict(self._latest)
+        return copy.deepcopy(self._latest)
 
 
 # ── Singleton ─────────────────────────────────────────────────────────────────

@@ -50,7 +50,7 @@ const TrendBaseCard = memo<{ symbol: string; name: string }>(({ symbol, name }) 
   );
 
   // ── Error ───────────────────────────────────────────────────────────────
-  if (error || !data) return (
+  if (!data) return (
     <div className="bg-[#0b1120]/80 border border-rose-500/30 rounded-xl p-5 min-h-[180px] flex flex-col items-center justify-center gap-2">
       <p className="text-sm font-bold text-rose-300">{name}</p>
       <p className="text-xs text-rose-400/70">{error ?? 'No data'}</p>
@@ -124,6 +124,12 @@ const TrendBaseCard = memo<{ symbol: string; name: string }>(({ symbol, name }) 
             <span className="flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-emerald-500/15 border border-emerald-500/30">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
               <span className="text-[9px] font-bold text-emerald-400">LIVE</span>
+            </span>
+          )}
+          {error && (
+            <span className="flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-amber-500/10 border border-amber-500/35">
+              <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
+              <span className="text-[9px] font-bold text-amber-300">STALE</span>
             </span>
           )}
         </div>

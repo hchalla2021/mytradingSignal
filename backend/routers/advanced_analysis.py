@@ -10,6 +10,9 @@ from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect, He
 from typing import Dict, Any
 import asyncio
 from datetime import datetime, timezone
+import logging
+import math
+import re
 
 # Lazy pandas import - loaded on first use, not at module load (~1.7s savings)
 class _LazyPandas:
@@ -32,6 +35,7 @@ from services.cache import CacheService
 import os
 
 router = APIRouter(prefix="/api/advanced", tags=["Advanced Technical Analysis"])
+logger = logging.getLogger(__name__)
 
 # Get settings
 settings = get_settings()
@@ -41,6 +45,24 @@ CACHE_TTL = settings.advanced_analysis_cache_ttl
 
 # Global cache instance
 _cache_instance: CacheService | None = None
+_SYMBOL_RE = re.compile(r"^[A-Z0-9_-]{1,20}$")
+
+
+def _safe_float(value: Any, default: float = 0.0) -> float:
+    try:
+        out = float(value)
+        if not math.isfinite(out):
+            return default
+        return out
+    except (TypeError, ValueError):
+        return default
+
+
+def _validate_symbol(symbol: str) -> str:
+    norm = (symbol or "").strip().upper()
+    if not _SYMBOL_RE.match(norm):
+        raise HTTPException(status_code=400, detail="Invalid symbol format")
+    return norm
 
 
 def get_cache() -> CacheService:
@@ -372,11 +394,11 @@ async def get_trend_base(symbol: str) -> Dict[str, Any]:
     Signal thresholds: STRONG_BUY≥40 · BUY≥15 · NEUTRAL±15 · SELL≤-15 · STRONG_SELL≤-40
     """
     try:
-        symbol = symbol.upper()
+        symbol = _validate_symbol(symbol)
         cache_service = get_cache()
 
         from services.instant_analysis import get_instant_analysis
-        analysis = await get_instant_analysis(cache_service, symbol)
+        analysis = await asyncio.wait_for(get_instant_analysis(cache_service, symbol), timeout=2.5)
 
         # ── NO DATA fallback ──────────────────────────────────────────────
         if not analysis or 'indicators' not in analysis:
@@ -396,10 +418,10 @@ async def get_trend_base(symbol: str) -> Dict[str, Any]:
         ind = analysis['indicators']
 
         # ── Raw indicator values ──────────────────────────────────────────
-        price       = float(ind.get('price') or 0)
-        change_pct  = float(ind.get('changePercent') or 0)
-        high        = float(ind.get('high') or price)
-        low         = float(ind.get('low')  or price)
+        price       = _safe_float(ind.get('price'), 0.0)
+        change_pct  = _safe_float(ind.get('changePercent'), 0.0)
+        high        = _safe_float(ind.get('high'), price)
+        low         = _safe_float(ind.get('low'), price)
 
         ts          = (ind.get('trend_structure')      or 'SIDEWAYS').upper()
         st_trend    = (ind.get('supertrend_10_2_trend') or 'NEUTRAL').upper()
@@ -408,10 +430,10 @@ async def get_trend_base(symbol: str) -> Dict[str, Any]:
         rsi_status  = (ind.get('rsi_momentum_status')   or 'NEUTRAL').upper()
         candle_dir  = (ind.get('candle_direction')      or 'DOJI').upper()
 
-        rsi_mom  = float(ind.get('rsi') or 50)          # momentum RSI – always live
-        rsi_5m   = float(ind.get('rsi_5m')  or rsi_mom) # candle-based
-        rsi_15m  = float(ind.get('rsi_15m') or rsi_mom)
-        momentum = float(ind.get('momentum') or 50)
+        rsi_mom  = _safe_float(ind.get('rsi'), 50.0)          # momentum RSI – always live
+        rsi_5m   = _safe_float(ind.get('rsi_5m'), rsi_mom)    # candle-based
+        rsi_15m  = _safe_float(ind.get('rsi_15m'), rsi_mom)
+        momentum = _safe_float(ind.get('momentum'), 50.0)
 
         # ── FACTOR 1: Swing Structure (±20 pts) ──────────────────────────
         ts_score = (20  if ts == 'HIGHER_HIGHS_LOWS'
@@ -616,11 +638,14 @@ async def get_trend_base(symbol: str) -> Dict[str, Any]:
             "vwap_position":   vwap_pos,
         }
 
+    except asyncio.TimeoutError:
+        logger.warning("[TREND-BASE] Timeout while building analysis", extra={"symbol": symbol})
+        raise HTTPException(status_code=504, detail="Trend base analysis timeout")
+    except HTTPException:
+        raise
     except Exception as e:
-        print(f"[TREND-BASE] Error for {symbol}: {e}")
-        import traceback
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=f"Trend base analysis error: {str(e)}")
+        logger.exception("[TREND-BASE] Unhandled error", extra={"symbol": symbol})
+        raise HTTPException(status_code=500, detail="Trend base analysis error") from e
 
 
 @router.get("/trend-base/all")
@@ -639,8 +664,16 @@ async def get_all_trend_base() -> Dict[str, Any]:
         response = {}
         for symbol, result in zip(symbols, results):
             if isinstance(result, Exception):
-                print(f"[TREND-BASE-ALL] Error for {symbol}: {result}")
-                response[symbol] = {"error": str(result)}
+                logger.warning("[TREND-BASE-ALL] Symbol failure", extra={"symbol": symbol, "error": str(result)})
+                response[symbol] = {
+                    "symbol": symbol,
+                    "signal": "NEUTRAL",
+                    "trend": "SIDEWAYS",
+                    "confidence": 0,
+                    "status": "ERROR",
+                    "timestamp": datetime.now().isoformat(),
+                    "message": "Symbol analysis unavailable"
+                }
             else:
                 response[symbol] = result
         
@@ -650,8 +683,8 @@ async def get_all_trend_base() -> Dict[str, Any]:
         }
         
     except Exception as e:
-        print(f"[TREND-BASE-ALL] Error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("[TREND-BASE-ALL] Batch failure")
+        raise HTTPException(status_code=500, detail="Trend base batch analysis error") from e
 
 
 # ═══════════════════════════════════════════════════════════
@@ -2898,6 +2931,8 @@ async def get_trade_zones(symbol: str) -> Dict[str, Any]:
     """
     try:
         symbol = symbol.upper()
+        if symbol not in {"NIFTY", "BANKNIFTY", "SENSEX"}:
+            raise HTTPException(status_code=400, detail=f"Unsupported symbol: {symbol}")
         cache = get_cache()
         
         # Check cache first (5-second cache for ultra-fast response)
@@ -2934,6 +2969,14 @@ async def get_trade_zones(symbol: str) -> Dict[str, Any]:
         # Get current price and volume
         current_price = float(df.iloc[-1].get('close', 0))
         current_volume = int(df.iloc[-1].get('volume', 0))
+        if current_price <= 0:
+            return {
+                "symbol": symbol,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "status": "NO_DATA",
+                "token_valid": token_status["valid"],
+                "message": "Invalid last price in market data"
+            }
         
         # Extract analysis data (volume, vwap, smart money)
         from services.instant_analysis import get_instant_analysis_data
@@ -2982,9 +3025,11 @@ async def get_trade_zones(symbol: str) -> Dict[str, Any]:
             atr_10 = float((high_s - low_s).tail(10).mean())
         else:
             atr_10 = current_price * 0.01
+        atr_10 = max(atr_10, current_price * 0.001)
         
         # Extract volume and strength data
         buy_volume_ratio = float(analysis.get('buy_volume_ratio', 50.0))
+        buy_volume_ratio = max(0.0, min(100.0, buy_volume_ratio))
         volume_strength = analysis.get('volume_strength', 'WEAK_VOLUME')
         vwap_value = float(analysis.get('vwap', current_price))
         
@@ -3055,6 +3100,9 @@ async def get_trade_zones(symbol: str) -> Dict[str, Any]:
             sell_confidence = 30
         
         # Determine overall signal
+        buy_confidence = int(round(max(0, min(100, buy_confidence))))
+        sell_confidence = int(round(max(0, min(100, sell_confidence))))
+
         if buy_confidence >= sell_confidence and buy_signal != "NO_BUY_SIGNAL":
             overall_signal = buy_signal
             signal_confidence = buy_confidence
@@ -3154,9 +3202,13 @@ async def get_trade_zones(symbol: str) -> Dict[str, Any]:
         }
         
         # Determine if trading hours
-        from datetime import datetime as dt
-        now = dt.now()
-        is_trading = 9 <= now.hour <= 15 and now.weekday() < 5
+        from pytz import timezone as pytz_timezone
+        now_ist = datetime.now(pytz_timezone('Asia/Kolkata'))
+        is_trading = (
+            now_ist.weekday() < 5 and
+            ((now_ist.hour > 9) or (now_ist.hour == 9 and now_ist.minute >= 15)) and
+            ((now_ist.hour < 15) or (now_ist.hour == 15 and now_ist.minute <= 30))
+        )
         
         # Smart cache strategy
         if is_trading:

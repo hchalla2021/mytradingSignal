@@ -61,6 +61,20 @@ const LiquidityIntelligence = dynamic(() => import('@/components/LiquidityIntell
   )
 });
 
+const MarketIntelligenceObservatory = dynamic(() => import('@/components/MarketIntelligenceObservatory'), {
+  ssr: false,
+  loading: () => (
+    <div className="mt-6 border-2 border-violet-500/25 rounded-2xl p-4 bg-gradient-to-br from-violet-950/20 via-slate-900/40 to-slate-900/40 animate-pulse">
+      <div className="h-5 w-72 bg-slate-700 rounded mb-4" />
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2">
+        {[0,1,2,3,4,5,6,7].map(i => (
+          <div key={i} className="h-20 bg-slate-700/30 rounded-xl" />
+        ))}
+      </div>
+    </div>
+  ),
+});
+
 const CRTBTSTCard = dynamic(() => import('@/components/CRTBTSTCard'), {
   ssr: false,
   loading: () => (
@@ -130,6 +144,20 @@ const CandleIntelligenceEngine = dynamic(() => import('@/components/CandleIntell
       </div>
     </div>
   )
+});
+
+const GlobalImpactRadar = dynamic(() => import('@/components/GlobalImpactRadar'), {
+  ssr: false,
+  loading: () => (
+    <div className="mt-6 border-2 border-blue-500/25 rounded-2xl p-4 bg-gradient-to-br from-blue-950/20 via-slate-900/40 to-slate-900/40 animate-pulse">
+      <div className="h-5 w-56 bg-slate-700 rounded mb-4" />
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
+        {[0,1,2,3,4,5,6,7].map(i => (
+          <div key={i} className="h-28 bg-slate-700/30 rounded-xl" />
+        ))}
+      </div>
+    </div>
+  ),
 });
 
 const ICTIntelligence = dynamic(() => import('@/components/ICTIntelligence'), {
@@ -765,6 +793,9 @@ export default function Home() {
         </div>
         </div>
 
+        {/* 🌐 GLOBAL IMPACT RADAR */}
+        <GlobalImpactRadar />
+
         {/* P0: 📊 TODAY'S MARKET REGIME — Trending vs Sideways */}
         <MarketRegimeIntelligence marketData={marketData} vixData={vixData} />
 
@@ -896,8 +927,11 @@ export default function Home() {
           );
         })()}
 
-        {/* P10: � EXPIRY EXPLOSION ZONE */}
+        {/* P10: 💥 EXPIRY EXPLOSION ZONE */}
         <ExpiryExplosionZone />
+
+        {/* P11a: 🔭 MARKET INTELLIGENCE OBSERVATORY */}
+        <MarketIntelligenceObservatory />
 
         {/* P11: 🕯️ CRT-BASED BTST STRATEGIES */}
         <div className="mt-6 sm:mt-6 border-2 border-orange-500/35 rounded-2xl p-3 sm:p-4 bg-gradient-to-br from-orange-950/20 via-dark-card/50 to-dark-elevated/40 backdrop-blur-sm shadow-xl shadow-orange-500/10">

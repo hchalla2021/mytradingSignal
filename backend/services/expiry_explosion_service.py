@@ -1566,6 +1566,8 @@ class ExpiryExplosionService:
 
     INDICES = ["NIFTY", "BANKNIFTY", "SENSEX"]
     TICK_INTERVAL = 2.0   # 2-second broadcast cadence
+    PREMIUM_CACHE_TTL_SEC = 8.0
+    PREMIUM_RETRY_MAX_SEC = 30.0
 
     def __init__(self, cache: CacheService):
         self._cache = cache
@@ -1576,6 +1578,53 @@ class ExpiryExplosionService:
         self._latest: Dict[str, Any] = {}
         self._task: Optional[asyncio.Task] = None
         self._running = False
+        self._premium_cache: Dict[str, Tuple[float, Dict[int, Dict[str, Any]]]] = {}
+        self._premium_failures: Dict[str, int] = {}
+        self._premium_next_retry_at: Dict[str, float] = {}
+
+    def _premium_cache_key(self, symbol: str, expiry: date, option_type: str, atm_strike: int) -> str:
+        return f"{symbol}:{expiry.isoformat()}:{option_type}:{atm_strike}"
+
+    async def _get_real_premiums_cached(
+        self,
+        symbol: str,
+        expiry_date: date,
+        strikes_to_query: List[int],
+        option_type: str,
+        atm_strike: int,
+    ) -> Dict[int, Dict[str, Any]]:
+        key = self._premium_cache_key(symbol, expiry_date, option_type, atm_strike)
+        now_mono = time.monotonic()
+
+        cached = self._premium_cache.get(key)
+        if cached and (now_mono - cached[0]) <= self.PREMIUM_CACHE_TTL_SEC:
+            return cached[1]
+
+        next_retry_at = self._premium_next_retry_at.get(key, 0.0)
+        if now_mono < next_retry_at:
+            return cached[1] if cached else {}
+
+        try:
+            premiums = await asyncio.wait_for(
+                asyncio.to_thread(
+                    _fetch_real_option_premiums,
+                    symbol,
+                    expiry_date,
+                    strikes_to_query,
+                    option_type,
+                ),
+                timeout=2.5,
+            )
+            self._premium_cache[key] = (now_mono, premiums)
+            self._premium_failures[key] = 0
+            self._premium_next_retry_at[key] = 0.0
+            return premiums
+        except Exception:
+            failures = self._premium_failures.get(key, 0) + 1
+            self._premium_failures[key] = failures
+            backoff_sec = min(self.PREMIUM_RETRY_MAX_SEC, 2 ** min(failures, 5))
+            self._premium_next_retry_at[key] = now_mono + backoff_sec
+            return cached[1] if cached else {}
 
     def _get_kite(self):
         """Return authenticated KiteConnect instance, or None."""
@@ -1769,14 +1818,14 @@ class ExpiryExplosionService:
         else:
             strikes_to_query = [atm_s - (offset * step) for offset in range(-2, 4)]
 
-        # Fetch REAL option premiums from Zerodha (non-blocking)
-        real_premiums: Dict[int, Dict[str, Any]] = {}
-        try:
-            real_premiums = await asyncio.to_thread(
-                _fetch_real_option_premiums, symbol, trade_expiry, strikes_to_query, opt_type_for_fetch
-            )
-        except Exception:
-            pass
+        # Fetch real premiums with short TTL cache + exponential retry backoff.
+        real_premiums = await self._get_real_premiums_cached(
+            symbol=symbol,
+            expiry_date=trade_expiry,
+            strikes_to_query=strikes_to_query,
+            option_type=opt_type_for_fetch,
+            atm_strike=atm_s,
+        )
 
         # Strike recommendation with smart expiry + real premiums
         strike_rec = _compute_strike_recommendation(
@@ -1820,8 +1869,15 @@ class ExpiryExplosionService:
         while self._running:
             try:
                 payload: Dict[str, Any] = {}
-                for sym in self.INDICES:
-                    result = await self._compute(sym)
+                results = await asyncio.gather(
+                    *(self._compute(sym) for sym in self.INDICES),
+                    return_exceptions=True,
+                )
+
+                for sym, result in zip(self.INDICES, results):
+                    if isinstance(result, Exception):
+                        logger.error("💥 Expiry compute error [%s]: %s", sym, result)
+                        continue
                     if result:
                         payload[sym] = result
                         self._latest[sym] = result

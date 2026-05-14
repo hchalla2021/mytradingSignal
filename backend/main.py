@@ -43,6 +43,8 @@ from routers.candle_intelligence import http_router as candle_intel_http, ws_rou
 from routers.market_regime import http_router as regime_http, ws_router as regime_ws
 from routers.strike_intelligence import http_router as strike_intel_http, ws_router as strike_intel_ws
 from routers.chart_intelligence import http_router as chart_intel_http, ws_router as chart_intel_ws
+from routers.global_news import http_router as global_news_http, ws_router as global_news_ws
+from routers.observatory import http_router as observatory_http
 
 # Windows console fix already applied in config/__init__.py
 
@@ -227,6 +229,22 @@ async def lifespan(app: FastAPI):
             except Exception as exc:
                 logger.error("Global indices service failed to start: %s", exc, exc_info=True)
 
+        async def start_global_news():
+            try:
+                from services.global_news_service import get_global_news_service
+                await get_global_news_service().start()
+                print("📰 Global News: ON")
+            except Exception as exc:
+                logger.error("Global news service failed to start: %s", exc, exc_info=True)
+
+        async def start_observatory():
+            try:
+                from services.observatory_service import get_observatory_service
+                await get_observatory_service().start()
+                print("🔭 Observatory: ON")
+            except Exception as exc:
+                logger.error("Observatory service failed to start: %s", exc, exc_info=True)
+
         await asyncio.gather(
             start_scheduler(),
             start_oi_broadcaster(),
@@ -240,6 +258,8 @@ async def lifespan(app: FastAPI):
             start_strike_intelligence(),
             start_chart_intelligence(),
             start_global_indices(),
+            start_global_news(),
+            start_observatory(),
         )
         print("🚀 All services READY")
 
@@ -341,9 +361,23 @@ async def lifespan(app: FastAPI):
     try:
         from services.global_indices_service import get_global_indices_service
         await get_global_indices_service().stop()
+
+        # Stop Global News Service
+        try:
+            from services.global_news_service import get_global_news_service
+            await get_global_news_service().stop()
+        except Exception:
+            pass
     except Exception:
         pass
     
+    # Stop Observatory Service
+    try:
+        from services.observatory_service import get_observatory_service
+        await get_observatory_service().stop()
+    except Exception:
+        pass
+
     # Stop unified auth monitor
     from services.unified_auth_service import unified_auth
     await unified_auth.stop_auto_refresh_monitor()
@@ -528,6 +562,13 @@ app.include_router(strike_intel_http, prefix="/api", tags=["Strike Intelligence"
 # 📈 Chart Intelligence
 app.include_router(chart_intel_ws,   prefix="/ws",  tags=["Chart Intelligence"])
 app.include_router(chart_intel_http, prefix="/api", tags=["Chart Intelligence"])
+
+# 📰 Global Impact Radar
+app.include_router(global_news_ws,   prefix="/ws",  tags=["Global Impact Radar"])
+app.include_router(global_news_http, prefix="/api", tags=["Global Impact Radar"])
+
+# 🔭 Market Intelligence Observatory
+app.include_router(observatory_http, tags=["Observatory"])
 
 
 @app.get("/")

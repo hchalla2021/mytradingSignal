@@ -1595,6 +1595,8 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
       cx2 = dItem(cx2, row2Y, CFG.LIQ_BUY,          'BSL');
       cx2 = dItem(cx2, row2Y, CFG.LIQ_SELL,         'SSL');
       cx2 = dItem(cx2, row2Y, CFG.IND_COLOR,         'EQH/EQL');
+      cx2 = zItem(cx2, row2Y, '#10b981',             '\u25B2POI');
+      cx2 = zItem(cx2, row2Y, '#ef4444',             '\u25BCPOI');
            lItem(cx2, row2Y, CFG.CURRENT_PRICE,     'LTP',    [5, 3]);
     }
 
@@ -2843,6 +2845,194 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
     }
 
     // Fractal markers intentionally hidden from chart rendering to avoid weak/noisy signals.
+
+    // ── POI + INDUCEMENT OVERLAY ──────────────────────────────────────────────
+    // Drawn AFTER candles so badges sit on top.
+    // POI zones  = unmitigated PREMIUM/STANDARD OBs and unfilled FVGs.
+    // Inducement = unswept strongLiquidity → draw connector toward nearest opposing POI.
+    // Match badge = recently-swept liquidity while price is within 1.2% of opposing POI.
+    {
+      // 1. Build a flat POI list from the already-filtered zone arrays.
+      // Using a plain indexed array (ES5-compatible) to avoid Map/Set allocation.
+      const _poiList: Array<{
+        isDemand: boolean; top: number; bottom: number;
+        isPremium: boolean; source: 'OB' | 'FVG';
+      }> = [];
+
+      for (let _pi = 0; _pi < strongOb.length; _pi++) {
+        const _o = strongOb[_pi];
+        const _yT = priceToY(_o.top);
+        const _yB = priceToY(_o.bottom);
+        if (Math.min(_yT, _yB) > chartBottom || Math.max(_yT, _yB) < chartTop) continue;
+        const _q = _o.quality ?? (_o.strength >= 0.80 ? 'PREMIUM' : _o.strength >= 0.45 ? 'STANDARD' : 'WEAK');
+        if (_q === 'WEAK') continue;
+        _poiList.push({ isDemand: _o.type === 'bullish', top: _o.top, bottom: _o.bottom, isPremium: _q === 'PREMIUM', source: 'OB' });
+      }
+      for (let _pi = 0; _pi < strongFvg.length; _pi++) {
+        const _f = strongFvg[_pi];
+        const _yT = priceToY(_f.top);
+        const _yB = priceToY(_f.bottom);
+        if (Math.min(_yT, _yB) > chartBottom || Math.max(_yT, _yB) < chartTop) continue;
+        const _q = _f.quality ?? (_f.strength >= 0.80 ? 'PREMIUM' : _f.strength >= 0.55 ? 'STANDARD' : 'WEAK');
+        if (_q === 'WEAK') continue;
+        _poiList.push({ isDemand: _f.type === 'bullish', top: _f.top, bottom: _f.bottom, isPremium: _q === 'PREMIUM', source: 'FVG' });
+      }
+
+      // 2. Draw left accent stripe + right-side badge for each POI zone.
+      for (let _pi = 0; _pi < _poiList.length; _pi++) {
+        const _poi = _poiList[_pi];
+        const _yTop = priceToY(_poi.top);
+        const _yBot = priceToY(_poi.bottom);
+        const _zoneTop = Math.max(chartTop, Math.min(_yTop, _yBot));
+        const _zoneBot = Math.min(chartBottom, Math.max(_yTop, _yBot));
+        const _zoneH   = _zoneBot - _zoneTop;
+        if (_zoneH < 2) continue;
+
+        const _poiColor = _poi.isDemand ? '#10b981' : '#ef4444';
+        const _isHot    = zoneProx(_poi.top, _poi.bottom) !== 'off';
+
+        // Bright left stripe — 4px wide, drawn over candles
+        ctx.save();
+        if (_isHot && _mktOpen) { ctx.shadowColor = _poiColor; ctx.shadowBlur = 8 + 5 * _pF; }
+        ctx.fillStyle   = _poiColor;
+        ctx.globalAlpha = (_poi.isPremium ? 0.72 : 0.52) + (_isHot && _mktOpen ? 0.18 * _pF : 0);
+        ctx.fillRect(chartLeft, _zoneTop, 4, _zoneH);
+        // Thin top/bottom edge line for zone boundary visibility
+        ctx.strokeStyle = _poiColor;
+        ctx.lineWidth   = 0.5;
+        ctx.globalAlpha = 0.35;
+        ctx.setLineDash([]);
+        ctx.beginPath();
+        ctx.moveTo(chartLeft + 4, _zoneTop);
+        ctx.lineTo(chartLeft + 14, _zoneTop);
+        ctx.moveTo(chartLeft + 4, _zoneBot);
+        ctx.lineTo(chartLeft + 14, _zoneBot);
+        ctx.stroke();
+        ctx.shadowBlur = 0;
+        ctx.restore();
+
+        // Right-side pill badge: "OB·▲POI★" or "FVG·▼POI"
+        const _poiTag = `${_poi.source}\u00B7${_poi.isDemand ? '\u25B2' : '\u25BC'}POI${_poi.isPremium ? '\u2605' : ''}`;
+        // Anchor at zone bottom for demand (label floats below zone), top for supply (label floats above)
+        const _badgeAnchorY = _poi.isDemand ? _zoneBot : _zoneTop;
+        drawLineTag(_badgeAnchorY, _poiTag, _poiColor, !_poi.isDemand, 0.88);
+      }
+
+      // 3. Inducement → POI connector lines.
+      // For each UNSWEPT strong liquidity level, draw a dashed vertical line toward nearest opposing POI.
+      for (let _li = 0; _li < strongLiquidity.length; _li++) {
+        const _lq = strongLiquidity[_li];
+        if (_lq.swept) continue;
+        const _lqY = priceToY(_lq.level);
+        if (_lqY < chartTop || _lqY > chartBottom) continue;
+
+        const _lqIsSell = _lq.type === 'sell_side'; // above price → supply/demand POI target
+        const _connColor = _lqIsSell ? '#ef4444' : '#10b981';
+
+        // Find nearest POI of the same directional bias
+        let _nearPoiY = -1;
+        let _nearDist = Infinity;
+        for (let _pj = 0; _pj < _poiList.length; _pj++) {
+          const _p = _poiList[_pj];
+          // sell_side liq → market may shoot up to supply POI then reverse bearish; link to supply POI
+          // buy_side  liq → market may shoot down to demand POI then reverse bullish; link to demand POI
+          const _want = _lqIsSell ? false : true;   // sell_side→supply(not demand); buy_side→demand
+          if (_p.isDemand !== _want) continue;
+          const _mid  = (_p.top + _p.bottom) / 2;
+          const _dist = Math.abs(_mid - _lq.level);
+          if (_dist < _nearDist) { _nearDist = _dist; _nearPoiY = priceToY(_mid); }
+        }
+
+        if (_nearPoiY < chartTop || _nearPoiY > chartBottom) continue;
+        // Connector must span the right direction (sell-side liq above → supply POI also above or at same zone)
+        const _bothVisible = _nearPoiY >= chartTop && _nearPoiY <= chartBottom;
+        if (!_bothVisible) continue;
+
+        const _cx = chartLeft + (chartRight - chartLeft) * 0.08; // 8% from left edge
+        ctx.save();
+        ctx.strokeStyle  = _connColor;
+        ctx.lineWidth    = 0.8;
+        ctx.setLineDash([3, 5]);
+        ctx.globalAlpha  = 0.28;
+        ctx.beginPath();
+        ctx.moveTo(_cx, _lqY);
+        ctx.lineTo(_cx, _nearPoiY);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        // Small arrowhead pointing toward the POI
+        const _dir  = _nearPoiY < _lqY ? -1 : 1;
+        const _arrY = _nearPoiY + _dir * 6;
+        ctx.globalAlpha = 0.40;
+        ctx.lineWidth   = 1;
+        ctx.beginPath();
+        ctx.moveTo(_cx - 3, _arrY);
+        ctx.lineTo(_cx, _nearPoiY);
+        ctx.lineTo(_cx + 3, _arrY);
+        ctx.stroke();
+        ctx.restore();
+      }
+
+      // 4. Match detection badge — recently-swept inducement + price within 1.2% of opposing POI.
+      let _matchType: 'BULL' | 'BEAR' | null = null;
+      let _matchConf = 0;
+
+      for (let _li = 0; _li < strongLiquidity.length; _li++) {
+        const _lq = strongLiquidity[_li];
+        if (!_lq.swept || _lq.sweepIdx == null) continue;
+        const _age = (candles.length - 1) - _lq.sweepIdx;
+        if (_age > 6) continue;                             // only fresh sweeps (last 6 bars)
+        const _lqIsSell = _lq.type === 'sell_side';
+        // sell_side swept → SM grabbed buy-stops above → potential bearish reversal from supply POI
+        // buy_side  swept → SM grabbed sell-stops below → potential bullish reversal from demand POI
+        const _wantDemand = !_lqIsSell;
+        for (let _pj = 0; _pj < _poiList.length; _pj++) {
+          const _p = _poiList[_pj];
+          if (_p.isDemand !== _wantDemand) continue;
+          const _spotNow = effectiveSpot > 0 ? effectiveSpot : (candles[candles.length - 1]?.c ?? 0);
+          if (_spotNow <= 0) continue;
+          const _distPct = Math.abs((_p.top + _p.bottom) / 2 - _spotNow) / _spotNow;
+          if (_distPct > 0.012) continue;
+          const _qual = _p.isPremium ? 0.85 : 0.70;
+          const _conf = Math.min(0.95, _qual * (1 - _age * 0.08));
+          if (_conf > _matchConf) {
+            _matchConf = _conf;
+            _matchType = _wantDemand ? 'BULL' : 'BEAR';
+          }
+        }
+      }
+
+      if (_matchType !== null && _matchConf >= 0.60) {
+        const _isBull    = _matchType === 'BULL';
+        const _badgeCol  = _isBull ? '#10b981' : '#ef4444';
+        const _badgeTxt  = `${_isBull ? '\u26A1BULLISH' : '\u26A1BEARISH'} REVERSAL ${Math.round(_matchConf * 100)}%`;
+        ctx.save();
+        ctx.font = 'bold 9px sans-serif';
+        const _tw  = ctx.measureText(_badgeTxt).width;
+        const _bW  = _tw + 14;
+        const _bH  = 17;
+        const _bX  = chartRight - _bW - 4;
+        const _bY  = chartTop + 4;
+        ctx.shadowColor  = _badgeCol;
+        ctx.shadowBlur   = 10 + 5 * _pF;
+        ctx.fillStyle    = `${_badgeCol}22`;
+        roundRect(ctx, _bX, _bY, _bW, _bH, 3);
+        ctx.fill();
+        ctx.globalAlpha  = 0.75;
+        ctx.strokeStyle  = _badgeCol;
+        ctx.lineWidth    = 1;
+        roundRect(ctx, _bX, _bY, _bW, _bH, 3);
+        ctx.stroke();
+        ctx.shadowBlur   = 0;
+        ctx.fillStyle    = _badgeCol;
+        ctx.globalAlpha  = 1;
+        ctx.textAlign    = 'left';
+        ctx.fillText(_badgeTxt, _bX + 7, _bY + _bH - 4);
+        ctx.restore();
+        if (_mktOpen) {
+          alertZones.push({ label: _isBull ? '\uD83C\uDFAF BULL POI' : '\uD83C\uDFAF BEAR POI', color: _badgeCol });
+        }
+      }
+    }
 
     // ── PREDICTIVE NEXT CANDLE ─────────────────────────────────────────────
     // Multi-factor projection using trend + momentum + structure + liquidity + setup confluence.
@@ -4756,7 +4946,8 @@ const ChartIntelligence = memo(() => {
     { key: 'IXIC', alias: 'NASDAQ', label: 'Nasdaq' },
     { key: 'SPX', alias: 'SPX', label: 'S&P' },
     { key: 'DAX', alias: 'DAX', label: 'DAX' },
-    { key: 'FTSE', alias: 'FTSE', label: 'FTSE' },
+    { key: 'FTSE', alias: 'FTSE', label: 'LSE FTSE 100' },
+    { key: 'FTMC', alias: 'FTMC', label: 'LSE FTSE 250' },
     { key: 'NIKKEI', alias: 'NIKKEI', label: 'Nikkei' },
   ] as const, []);
 
@@ -4803,13 +4994,74 @@ const ChartIntelligence = memo(() => {
     const unavailableCount = globalRiskSnapshots.filter((s) => s.freshness === 'UNAVAILABLE').length;
     const latestAgeSec = active.length ? Math.min(...active.map((s) => s.ageSec)) : Number.POSITIVE_INFINITY;
 
+    // Advanced trend engine:
+    // - weights by index importance and data freshness
+    // - uses adaptive threshold based on current cross-market volatility
+    // - confirms direction with weighted breadth before assigning TREND UP/DOWN
+    const INDEX_WEIGHT: Record<string, number> = {
+      SPX: 1.25,
+      IXIC: 1.15,
+      DJI: 1.1,
+      DAX: 0.95,
+      FTSE: 0.9,
+      FTMC: 0.8,
+      NIKKEI: 0.9,
+    };
+
+    let weightedScore = 0;
+    let totalWeight = 0;
+    let weightedAbs = 0;
+    let upWeight = 0;
+    let downWeight = 0;
+
+    for (const s of globalRiskSnapshots) {
+      if (!s.hasData || !s.tick) continue;
+
+      const baseWeight = INDEX_WEIGHT[s.item.key] ?? 1;
+      const freshnessWeight = s.freshness === 'LIVE' ? 1 : s.freshness === 'STALE' ? 0.45 : 0;
+      const agePenalty = Number.isFinite(s.ageSec) ? Math.max(0.55, 1 - Math.min(120, s.ageSec) / 220) : 0.55;
+      const weight = baseWeight * freshnessWeight * agePenalty;
+      if (weight <= 0) continue;
+
+      const boundedPct = Math.max(-3, Math.min(3, s.pct));
+      weightedScore += boundedPct * weight;
+      weightedAbs += Math.abs(boundedPct) * weight;
+      totalWeight += weight;
+    }
+
+    const avgVolatility = totalWeight > 0 ? weightedAbs / totalWeight : 0;
+    const dynamicThreshold = Math.max(0.05, Math.min(0.2, 0.055 + avgVolatility * 0.22));
+
+    for (const s of globalRiskSnapshots) {
+      if (!s.hasData || !s.tick) continue;
+      const baseWeight = INDEX_WEIGHT[s.item.key] ?? 1;
+      const freshnessWeight = s.freshness === 'LIVE' ? 1 : s.freshness === 'STALE' ? 0.45 : 0;
+      const agePenalty = Number.isFinite(s.ageSec) ? Math.max(0.55, 1 - Math.min(120, s.ageSec) / 220) : 0.55;
+      const weight = baseWeight * freshnessWeight * agePenalty;
+      if (weight <= 0) continue;
+
+      if (s.pct > dynamicThreshold) upWeight += weight;
+      else if (s.pct < -dynamicThreshold) downWeight += weight;
+    }
+
+    const directionalStrength = totalWeight > 0 ? Math.abs(weightedScore) / totalWeight : 0;
+    const breadthDen = upWeight + downWeight;
+    const breadthEdge = breadthDen > 0 ? Math.abs(upWeight - downWeight) / breadthDen : 0;
+
     let status: 'TREND UP' | 'TREND DOWN' | 'NEUTRAL' = 'NEUTRAL';
-    if (!changes.length || (Math.abs(netChange) <= 0.18 && Math.abs(upCount - downCount) <= 1)) {
+    if (!changes.length) {
       status = 'NEUTRAL';
-    } else if (netChange > 0) {
+    } else if (liveCount === 0 && Math.abs(weightedScore) < 0.24) {
+      // When only stale data exists, require stronger directional evidence.
+      status = 'NEUTRAL';
+    } else if (directionalStrength < 0.085 && breadthEdge < 0.2) {
+      status = 'NEUTRAL';
+    } else if (weightedScore > 0 && upWeight >= downWeight * 0.9) {
       status = 'TREND UP';
-    } else {
+    } else if (weightedScore < 0 && downWeight >= upWeight * 0.9) {
       status = 'TREND DOWN';
+    } else {
+      status = 'NEUTRAL';
     }
 
     const tone =
@@ -4910,7 +5162,7 @@ const ChartIntelligence = memo(() => {
           </div>
         </div>
 
-        <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-6 gap-2 sm:gap-2.5">
+        <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-7 gap-2 sm:gap-2.5">
           {globalRiskSnapshots.map(({ item, hasData, pct, freshness, ageSec }) => {
             const isUp = hasData ? pct >= 0 : false;
             const tone = !hasData

@@ -975,11 +975,19 @@ class MarketEdgeService:
             sym: FuturesData() for sym in self.INDICES
         }
         self._latest: Dict[str, Any] = {}
+        self._last_broadcast_view: Dict[str, Tuple[str, str, float, float]] = {}
         self._last_spot: Dict[str, Dict] = {}
         self._task: Optional[asyncio.Task] = None
         self._running = False
         self._last_futures_fetch = 0.0
         self._contracts: Dict[str, Dict] = {}
+
+    def _build_broadcast_view(self, row: Dict[str, Any]) -> Tuple[str, str, float, float]:
+        direction = str(row.get("direction", "NEUTRAL"))
+        action = str(row.get("action", "NEUTRAL"))
+        price = float(((row.get("metrics") or {}).get("price")) or 0.0)
+        score = float(row.get("rawScore") or 0.0)
+        return (direction, action, price, score)
 
     def _get_kite(self):
         """Return authenticated KiteConnect instance or None."""
@@ -1231,7 +1239,10 @@ class MarketEdgeService:
                         logger.debug(f"📈 {sym} compute error: {result}")
                         continue
                     if result:
-                        payload[sym] = result
+                        view = self._build_broadcast_view(result)
+                        if self._last_broadcast_view.get(sym) != view:
+                            payload[sym] = result
+                            self._last_broadcast_view[sym] = view
                         self._latest[sym] = result
 
                 if payload:
@@ -1276,6 +1287,7 @@ class MarketEdgeService:
         logger.info("📈 MarketEdge Intelligence Service: STOPPED")
 
     def get_snapshot(self) -> Dict[str, Any]:
+        # Defensive copy avoids accidental external mutation of service state.
         return dict(self._latest)
 
 

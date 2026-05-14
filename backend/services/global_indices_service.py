@@ -73,6 +73,7 @@ class YahooProvider(_Provider):
         "IXIC": "%5EIXIC",
         "DAX": "%5EGDAXI",
         "FTSE": "%5EFTSE",
+        "FTMC": "%5EFTMC",
         "NIKKEI": "%5EN225",
     }
 
@@ -150,7 +151,8 @@ class GlobalIndicesService:
         "SPX": {"name": "S&P 500", "region": "US"},
         "IXIC": {"name": "Nasdaq", "region": "US"},
         "DAX": {"name": "DAX", "region": "EU"},
-        "FTSE": {"name": "FTSE 100", "region": "EU"},
+        "FTSE": {"name": "FTSE 100", "region": "UK"},
+        "FTMC": {"name": "FTSE 250", "region": "UK"},
         "NIKKEI": {"name": "Nikkei 225", "region": "APAC"},
     }
 

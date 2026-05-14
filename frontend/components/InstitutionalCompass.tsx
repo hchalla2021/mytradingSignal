@@ -33,6 +33,15 @@ type Palette = {
   bg: string;
 };
 
+type CTBiasDirection = 'BULLISH_CT' | 'BEARISH_CT' | 'NO_CT';
+
+type CTBiasResult = {
+  direction: CTBiasDirection;
+  confidence: number;
+  label: string;
+  reason: string;
+};
+
 function getPalette(dir: CompassDirection): Palette {
   if (dir === 'BULLISH') return {
     ring:  'ring-emerald-500/40',
@@ -77,6 +86,69 @@ function pctColor(v: number) {
 
 function dirArrow(dir: CompassDirection) {
   return dir === 'BULLISH' ? '↑' : dir === 'BEARISH' ? '↓' : '→';
+}
+
+function computeCTBias(data: CompassIndex): CTBiasResult {
+  const dir = data.direction;
+  const pred = data.spot.prediction5m;
+  const rsi = data.spot.rsi ?? 50;
+  const premiumTrend = data.futures.premiumTrend;
+  const nearChangePct = data.futures.near?.changePct ?? 0;
+  const spotChangePct = data.spot.changePct;
+  const delta = nearChangePct - spotChangePct;
+
+  let bullCt = 0;
+  let bearCt = 0;
+
+  // 1) Prediction contradiction against current directional regime.
+  if (dir === 'BULLISH' && (pred === 'SELL' || pred === 'STRONG_SELL')) bearCt += pred === 'STRONG_SELL' ? 34 : 24;
+  if (dir === 'BEARISH' && (pred === 'BUY' || pred === 'STRONG_BUY')) bullCt += pred === 'STRONG_BUY' ? 34 : 24;
+
+  // 2) RSI exhaustion against prevailing regime.
+  if (dir === 'BULLISH' && rsi >= 71) bearCt += Math.min(24, (rsi - 70) * 2.8);
+  if (dir === 'BEARISH' && rsi <= 29) bullCt += Math.min(24, (30 - rsi) * 2.8);
+
+  // 3) Premium trend contradiction.
+  if (dir === 'BULLISH' && premiumTrend === 'CONTRACTING') bearCt += 18;
+  if (dir === 'BEARISH' && premiumTrend === 'EXPANDING') bullCt += 18;
+
+  // 4) Futures-vs-spot divergence for early reversal warning.
+  if (dir === 'BULLISH' && delta <= -0.22) bearCt += Math.min(18, Math.abs(delta) * 24);
+  if (dir === 'BEARISH' && delta >= 0.22) bullCt += Math.min(18, Math.abs(delta) * 24);
+
+  const bullScore = Math.max(0, Math.min(100, Math.round(bullCt)));
+  const bearScore = Math.max(0, Math.min(100, Math.round(bearCt)));
+
+  if (bullScore >= 32 && bullScore >= bearScore + 8) {
+    return {
+      direction: 'BULLISH_CT',
+      confidence: bullScore,
+      label: 'CT BULLISH',
+      reason: 'Counter-trend long pressure building against prevailing bearish structure.',
+    };
+  }
+
+  if (bearScore >= 32 && bearScore >= bullScore + 8) {
+    return {
+      direction: 'BEARISH_CT',
+      confidence: bearScore,
+      label: 'CT BEARISH',
+      reason: 'Counter-trend short pressure building against prevailing bullish structure.',
+    };
+  }
+
+  return {
+    direction: 'NO_CT',
+    confidence: Math.max(bullScore, bearScore),
+    label: 'CT NEUTRAL',
+    reason: 'No reliable counter-trend edge from prediction, momentum, premium, and divergence checks.',
+  };
+}
+
+function ctBiasTone(direction: CTBiasDirection): string {
+  if (direction === 'BULLISH_CT') return 'text-cyan-200 border-cyan-500/35 bg-cyan-500/10';
+  if (direction === 'BEARISH_CT') return 'text-orange-200 border-orange-500/35 bg-orange-500/10';
+  return 'text-slate-300 border-slate-600/35 bg-slate-700/20';
 }
 
 // ── 5-minute prediction badge ─────────────────────────────────────────────────
@@ -404,6 +476,7 @@ const IndexCompassCard = memo(({ data }: IndexCardProps) => {
   const pred5m = data.spot.prediction5m;
   const pred5mBull = pred5m === 'STRONG_BUY' || pred5m === 'BUY';
   const pred5mBear = pred5m === 'STRONG_SELL' || pred5m === 'SELL';
+  const ctBias = computeCTBias(data);
 
   return (
     <div ref={cardRef} className={`
@@ -482,6 +555,25 @@ const IndexCompassCard = memo(({ data }: IndexCardProps) => {
           className={`h-full rounded-full imc-bar ${pal.bar}`}
           style={{ width: `${data.confidence}%` }}
         />
+      </div>
+
+      <div className="rounded-xl border border-slate-700/35 bg-slate-900/45 px-3 py-2.5">
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-[10px] font-bold uppercase tracking-[0.1em] text-slate-400">CT Bias</span>
+          <span className={`inline-flex min-w-[7.4rem] justify-center rounded-md border px-2.5 py-1 text-[10px] font-black tracking-[0.08em] ${ctBiasTone(ctBias.direction)}`}>
+            {ctBias.label}
+          </span>
+        </div>
+        <div className="mt-2 flex items-center gap-2">
+          <div className="h-1.5 flex-1 rounded-full bg-slate-700/50 overflow-hidden">
+            <div
+              className={`h-full rounded-full transition-[width,background-color] duration-150 ${ctBias.direction === 'BULLISH_CT' ? 'bg-cyan-400' : ctBias.direction === 'BEARISH_CT' ? 'bg-orange-400' : 'bg-slate-500'}`}
+              style={{ width: `${Math.max(8, ctBias.confidence)}%` }}
+            />
+          </div>
+          <span className="w-10 text-right text-[10px] font-mono tabular-nums text-slate-300">{ctBias.confidence}%</span>
+        </div>
+        <p className="mt-1.5 text-[10px] text-slate-400 leading-snug">{ctBias.reason}</p>
       </div>
 
       <button

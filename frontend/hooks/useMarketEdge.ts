@@ -3,6 +3,9 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { getEnvironmentConfig } from '@/lib/env-detection';
 
+const REST_FALLBACK_INTERVAL_MS = 5000;
+const MAX_RETRY_DELAY_MS = 30000;
+
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 export type EdgeDirection = 'BULLISH' | 'BEARISH' | 'NEUTRAL';
@@ -108,6 +111,32 @@ function loadFromStorage(): MarketEdgeData | null {
 
 const EMPTY: MarketEdgeData = { NIFTY: null, BANKNIFTY: null, SENSEX: null };
 
+function toTsMs(ts?: string): number {
+  if (!ts) return Number.NaN;
+  const ms = Date.parse(ts);
+  return Number.isFinite(ms) ? ms : Number.NaN;
+}
+
+function isNewerSnapshot(next?: EdgeIndex | null, prev?: EdgeIndex | null): boolean {
+  const n = toTsMs(next?.timestamp);
+  const p = toTsMs(prev?.timestamp);
+  if (!Number.isFinite(n) || !Number.isFinite(p)) return true;
+  return n >= p;
+}
+
+function materiallyChanged(next: EdgeIndex, prev: EdgeIndex): boolean {
+  return (
+    next.action !== prev.action
+    || next.direction !== prev.direction
+    || next.oiProfile !== prev.oiProfile
+    || Math.abs((next.confidence ?? 0) - (prev.confidence ?? 0)) >= 0.2
+    || Math.abs((next.rawScore ?? 0) - (prev.rawScore ?? 0)) >= 0.002
+    || Math.abs((next.metrics?.price ?? 0) - (prev.metrics?.price ?? 0)) >= 0.01
+    || Math.abs((next.metrics?.changePct ?? 0) - (prev.metrics?.changePct ?? 0)) >= 0.01
+    || next.timestamp !== prev.timestamp
+  );
+}
+
 // ── Hook ──────────────────────────────────────────────────────────────────────
 
 export function useMarketEdge() {
@@ -119,19 +148,26 @@ export function useMarketEdge() {
   const retryRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pingRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
+  const requestSeqRef = useRef(0);
+  const reconnectAttemptsRef = useRef(0);
   const retryDelay = useRef(3000);
   const mountedRef = useRef(true);
 
   const mergeData = useCallback((raw: Record<string, EdgeIndex>) => {
+    if (!mountedRef.current) return;
     setEdgeData(prev => {
       const next: MarketEdgeData = { ...prev };
       let changed = false;
       for (const sym of ['NIFTY', 'BANKNIFTY', 'SENSEX'] as const) {
         if (raw[sym]) {
-          if (prev[sym]?.timestamp === raw[sym].timestamp) continue;
+          const incoming = raw[sym];
+          const current = prev[sym];
+          if (current && !isNewerSnapshot(incoming, current)) continue;
+          if (current && !materiallyChanged(incoming, current)) continue;
           next[sym] = typeof structuredClone === 'function'
-            ? structuredClone(raw[sym])
-            : JSON.parse(JSON.stringify(raw[sym]));
+            ? structuredClone(incoming)
+            : JSON.parse(JSON.stringify(incoming));
           changed = true;
         }
       }
@@ -142,19 +178,43 @@ export function useMarketEdge() {
     setLastUpdate(new Date().toISOString());
   }, []);
 
+  const fetchSnapshot = useCallback(async () => {
+    const requestId = ++requestSeqRef.current;
+    abortRef.current?.abort();
+    const ctrl = new AbortController();
+    abortRef.current = ctrl;
+
+    try {
+      const res = await fetch(getEdgeApiUrl(), { cache: 'no-store', signal: ctrl.signal });
+      if (!res.ok) return;
+      const json = await res.json() as { success?: boolean; data?: Record<string, EdgeIndex> };
+      if (!mountedRef.current || requestId !== requestSeqRef.current) return;
+      if (json?.success && json.data) mergeData(json.data);
+    } catch (e: any) {
+      if (e?.name === 'AbortError') return;
+    }
+  }, [mergeData]);
+
   const connect = useCallback(() => {
     if (typeof window === 'undefined') return;
-    if (wsRef.current?.readyState === WebSocket.OPEN) return;
+    if (wsRef.current?.readyState === WebSocket.OPEN || wsRef.current?.readyState === WebSocket.CONNECTING) return;
 
     let ws: WebSocket;
     try { ws = new WebSocket(getEdgeWsUrl()); }
-    catch { retryRef.current = setTimeout(connect, retryDelay.current); return; }
+    catch {
+      reconnectAttemptsRef.current += 1;
+      retryDelay.current = Math.min(MAX_RETRY_DELAY_MS, 1000 * (2 ** Math.min(6, reconnectAttemptsRef.current)));
+      const jitter = Math.floor(Math.random() * 250);
+      retryRef.current = setTimeout(connect, retryDelay.current + jitter);
+      return;
+    }
 
     wsRef.current = ws;
 
     ws.onopen = () => {
       setIsConnected(true);
       retryDelay.current = 3000;
+      reconnectAttemptsRef.current = 0;
       if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
       pingRef.current = setInterval(() => {
         if (ws.readyState === WebSocket.OPEN)
@@ -178,34 +238,27 @@ export function useMarketEdge() {
       setIsConnected(false);
       if (pingRef.current) clearInterval(pingRef.current);
       if (!mountedRef.current) return;
-      retryDelay.current = Math.min(retryDelay.current * 1.5, 30000);
-      retryRef.current = setTimeout(connect, retryDelay.current);
+      reconnectAttemptsRef.current += 1;
+      retryDelay.current = Math.min(MAX_RETRY_DELAY_MS, 1000 * (2 ** Math.min(6, reconnectAttemptsRef.current)));
+      const jitter = Math.floor(Math.random() * 250);
+      if (retryRef.current) clearTimeout(retryRef.current);
+      retryRef.current = setTimeout(connect, retryDelay.current + jitter);
       if (!pollRef.current) {
         pollRef.current = setInterval(() => {
-          fetch(getEdgeApiUrl())
-            .then(r => r.json())
-            .then((json: { success?: boolean; data?: Record<string, EdgeIndex> }) => {
-              if (json?.success && json.data) mergeData(json.data);
-            })
-            .catch(() => {});
-        }, 5000);
+          fetchSnapshot();
+        }, REST_FALLBACK_INTERVAL_MS);
       }
     };
 
     ws.onerror = () => ws.close();
-  }, [mergeData]);
+  }, [fetchSnapshot, mergeData]);
 
   useEffect(() => {
     mountedRef.current = true;
     const cached = loadFromStorage();
     if (cached) setEdgeData(cached);
 
-    fetch(getEdgeApiUrl())
-      .then(r => r.json())
-      .then((json: { success?: boolean; data?: Record<string, EdgeIndex> }) => {
-        if (json?.success && json.data) mergeData(json.data);
-      })
-      .catch(() => {});
+    fetchSnapshot();
 
     connect();
 
@@ -214,9 +267,11 @@ export function useMarketEdge() {
       if (retryRef.current) clearTimeout(retryRef.current);
       if (pingRef.current) clearInterval(pingRef.current);
       if (pollRef.current) clearInterval(pollRef.current);
+      abortRef.current?.abort();
       wsRef.current?.close();
+      wsRef.current = null;
     };
-  }, [connect, mergeData]);
+  }, [connect, fetchSnapshot]);
 
   return { edgeData, isConnected, lastUpdate };
 }
