@@ -65,8 +65,10 @@ export function detectEnvironment(): Environment {
     return 'production';
   }
 
-  // Default to local for development safety
-  return 'local';
+  // On any non-local hostname, default to production.
+  // This prevents accidental localhost API/WS URLs on deployed domains
+  // when NEXT_PUBLIC_PRODUCTION_DOMAIN is not set.
+  return 'production';
 }
 
 /**

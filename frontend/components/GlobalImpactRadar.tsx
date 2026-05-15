@@ -118,6 +118,11 @@ const VOLATILE_SET    = new Set<SignalKey>(['HIGH_VOLATILITY', 'MARKET_CRASH']);
 const TIER_HIGH_SET   = new Set<SignalKey>(['STRONG_BULLISH', 'STRONG_BEARISH', 'HIGH_VOLATILITY', 'RISK_OFF']);
 const TIER_MEDIUM_SET = new Set<SignalKey>(['BULLISH', 'BEARISH', 'SECTOR_RALLY']);
 
+function getGlobalNewsWsUrl(): string {
+  const baseWs = API_CONFIG.wsUrl.replace(/\/ws\/market\/?$/, '');
+  return `${baseWs}/ws/global-news`;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // § 3 — Pure helpers  (no side-effects, no allocations in hot paths)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -260,7 +265,7 @@ function useGlobalNews() {
     function connect() {
       if (unmounted || typeof WebSocket === 'undefined') return;
       try {
-        const ws = new WebSocket(`${API_CONFIG.wsUrl}/ws/global-news`);
+        const ws = new WebSocket(getGlobalNewsWsUrl());
         wsRef.current = ws;
 
         ws.onopen = () => {

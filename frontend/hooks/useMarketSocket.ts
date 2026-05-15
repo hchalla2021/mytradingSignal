@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { getEnvironmentConfig } from '@/lib/env-detection';
+import { API_CONFIG } from '@/lib/api-config';
 import { getOrCreateVisitorId } from '@/lib/visitor-id';
 
 // Production-safe logging
@@ -75,9 +75,9 @@ function hasMeaningfulTickChange(prev: MarketTick | null, next: MarketTick): boo
 
 // Auto-detect WebSocket URL based on environment
 const getWebSocketURL = (): string => {
-  const config = getEnvironmentConfig();
-  log.debug(`WebSocket connecting to: ${config.wsUrl} (${config.displayName})`);
-  return config.wsUrl;
+  const wsUrl = API_CONFIG.wsUrl;
+  log.debug(`WebSocket connecting to: ${wsUrl}`);
+  return wsUrl;
 };
 
 const STORAGE_KEY = 'lastMarketData';

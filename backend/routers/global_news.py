@@ -63,8 +63,7 @@ async def get_global_news() -> JSONResponse:
     )
 
 
-@ws_router.websocket("/global-news")
-async def ws_global_news(websocket: WebSocket) -> None:
+async def _ws_global_news_handler(websocket: WebSocket) -> None:
     """Live push WebSocket — sends a new snapshot to the client on every RSS refresh."""
     svc = get_global_news_service()
     await websocket.accept()
@@ -93,3 +92,18 @@ async def ws_global_news(websocket: WebSocket) -> None:
             await websocket.close()
         except Exception:
             pass
+
+
+@ws_router.websocket("/global-news")
+async def ws_global_news(websocket: WebSocket) -> None:
+    await _ws_global_news_handler(websocket)
+
+
+@ws_router.websocket("/market/ws/global-news")
+async def ws_global_news_legacy(websocket: WebSocket) -> None:
+    """Compatibility endpoint for older frontend bundles.
+
+    Legacy clients appended /ws/global-news to a /ws/market base URL,
+    producing /ws/market/ws/global-news.
+    """
+    await _ws_global_news_handler(websocket)
