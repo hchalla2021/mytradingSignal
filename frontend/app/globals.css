@@ -5,6 +5,9 @@
 /* Professional Trading App Theme - Lightweight & Modern */
 
 :root {
+  --font-inter: 'Segoe UI', 'Inter', -apple-system, BlinkMacSystemFont, Roboto, sans-serif;
+  --font-jetbrains-mono: 'Cascadia Code', 'JetBrains Mono', 'SF Mono', Monaco, Consolas, monospace;
+
   /* Lightweight Background Colors */
   --bg-primary: #0a0e1a;
   --bg-secondary: #121827;

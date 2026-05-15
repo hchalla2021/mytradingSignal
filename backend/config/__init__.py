@@ -13,10 +13,14 @@ from functools import lru_cache
 from typing import Optional
 import os
 import socket
+from pathlib import Path
 from urllib.parse import urlparse
 
 
 # Auto-detection removed - using direct .env values
+
+BACKEND_DIR = Path(__file__).resolve().parent.parent
+ENV_FILE = BACKEND_DIR / ".env"
 
 
 class Settings(BaseSettings):
@@ -64,6 +68,8 @@ class Settings(BaseSettings):
     
     # ==================== MARKET HOURS SCHEDULER ====================
     enable_scheduler: bool = Field(default=True, env="ENABLE_SCHEDULER")
+    # Fast local dev mode: start core feed first, defer heavy optional services.
+    fast_startup_mode: bool = Field(default=False, env="FAST_STARTUP_MODE")
     
     # ==================== AI / LLM (DISABLED) ====================
     # AI Engine removed - using InstantSignal analysis only
@@ -147,7 +153,7 @@ class Settings(BaseSettings):
     zerodha_max_backoff: int = 60  # seconds
     
     class Config:
-        env_file = ".env"
+        env_file = str(ENV_FILE)
         env_file_encoding = "utf-8"
         extra = "ignore"
     

@@ -102,11 +102,34 @@ class YahooProvider(_Provider):
             return None
         chg = price - prev_close
         chg_pct = (chg / prev_close) * 100
+        market_time_epoch = meta.get("regularMarketTime")
+        market_state = str(meta.get("marketState") or "").upper()
+        source_ts_iso: Optional[str] = None
+        quote_age_sec: Optional[int] = None
+        if market_time_epoch:
+            try:
+                source_dt = datetime.fromtimestamp(int(market_time_epoch), tz=IST)
+                source_ts_iso = source_dt.isoformat()
+                quote_age_sec = max(0, int((datetime.now(IST) - source_dt).total_seconds()))
+            except Exception:
+                source_ts_iso = None
+                quote_age_sec = None
+
+        live_quality = "REALTIME"
+        if market_state in {"CLOSED", "POST", "POSTPOST", "PRE", "PREPRE"}:
+            live_quality = "CLOSED"
+        elif quote_age_sec is not None and quote_age_sec > 90:
+            live_quality = "DELAYED"
+
         return {
             "price": round(price, 4),
             "change": round(chg, 4),
             "changePct": round(chg_pct, 4),
             "source": self.name,
+            "sourceTimestamp": source_ts_iso,
+            "quoteAgeSec": quote_age_sec,
+            "marketState": market_state or "UNKNOWN",
+            "liveQuality": live_quality,
         }
 
 
@@ -142,6 +165,10 @@ class StooqProvider(_Provider):
             "change": round(chg, 4),
             "changePct": round(chg_pct, 4),
             "source": self.name,
+            "sourceTimestamp": None,
+            "quoteAgeSec": None,
+            "marketState": "UNKNOWN",
+            "liveQuality": "DELAYED",
         }
 
 
@@ -166,10 +193,12 @@ class GlobalIndicesService:
 
     def _fetch_one(self, symbol: str) -> Dict[str, Any]:
         meta = self.INDICES[symbol]
+        now_iso = datetime.now(IST).isoformat()
         for provider in self._providers:
             try:
                 q = provider.fetch_quote(symbol)
                 if q:
+                    source_ts = q.get("sourceTimestamp") or now_iso
                     return {
                         "symbol": symbol,
                         "name": meta["name"],
@@ -179,7 +208,11 @@ class GlobalIndicesService:
                         "changePct": q["changePct"],
                         "source": q["source"],
                         "status": "LIVE",
-                        "timestamp": datetime.now(IST).isoformat(),
+                        "timestamp": source_ts,
+                        "fetchedAt": now_iso,
+                        "marketState": q.get("marketState", "UNKNOWN"),
+                        "quoteAgeSec": q.get("quoteAgeSec"),
+                        "liveQuality": q.get("liveQuality", "REALTIME"),
                     }
             except Exception as exc:
                 logger.debug("Global index provider %s failed for %s: %s", provider.name, symbol, exc)
@@ -188,7 +221,8 @@ class GlobalIndicesService:
         if fallback:
             stale = dict(fallback)
             stale["status"] = "STALE"
-            stale["timestamp"] = datetime.now(IST).isoformat()
+            stale["fetchedAt"] = now_iso
+            stale["liveQuality"] = stale.get("liveQuality", "DELAYED")
             return stale
 
         return {
@@ -200,7 +234,11 @@ class GlobalIndicesService:
             "changePct": 0,
             "source": "none",
             "status": "UNAVAILABLE",
-            "timestamp": datetime.now(IST).isoformat(),
+            "timestamp": now_iso,
+            "fetchedAt": now_iso,
+            "marketState": "UNKNOWN",
+            "quoteAgeSec": None,
+            "liveQuality": "UNAVAILABLE",
         }
 
     async def _loop(self):

@@ -56,7 +56,8 @@ def test_market_feed():
         async def test_ws():
             uri = "ws://localhost:8000/ws/market"
             try:
-                async with websockets.connect(uri, ping_interval=None, timeout=5) as ws:
+                # websockets>=12 removed connect(timeout=...), so use wait_for on recv instead.
+                async with websockets.connect(uri, ping_interval=None) as ws:
                     print(f"✅ WebSocket connected to {uri}")
                     
                     # Try to receive one message

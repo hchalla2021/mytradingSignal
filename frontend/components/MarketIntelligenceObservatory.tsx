@@ -33,17 +33,46 @@ const ACCURACY_STYLE = (pct: number) =>
   :             { text: 'text-red-400',     bar: 'bg-red-500'     };
 
 const STRATEGY_DISPLAY: Record<string, { name: string; icon: string }> = {
+  // Core Trading Strategies
   overall_signal:        { name: 'Overall Consensus',   icon: '⚡' },
-  market_regime:         { name: 'Market Regime',       icon: '🌊' },
-  liquidity_score:       { name: 'Liquidity Intel',     icon: '💧' },
-  market_edge:           { name: 'MarketEdge',          icon: '🔮' },
-  candle_intelligence:   { name: 'Candle Intelligence', icon: '🕯'  },
-  trend_base:            { name: 'Trend Base',          icon: '📐' },
-  volume_pulse:          { name: 'Volume Pulse',        icon: '📊' },
+  market_regime:         { name: "Today's Market Regime", icon: '🌊' },
+  liquidity_score:       { name: 'Market Liquidity',    icon: '💧' },
+  market_edge:           { name: 'MarketEdge Intelligence', icon: '🔮' },
+  candle_intelligence:   { name: 'Candle Intelligence Engine', icon: '🕯'  },
+  trend_base:            { name: 'Trend Base (Higher-Low Structure)', icon: '📐' },
+  volume_pulse:          { name: 'Volume Pulse (Candle Volume)', icon: '📊' },
   ict_smart_money:       { name: 'ICT Smart Money',     icon: '🏦' },
-  institutional_compass: { name: 'Inst. Compass',       icon: '🧭' },
-  pred_5m:               { name: '5-Min Prediction',   icon: '⏱'  },
+  ict_bias:              { name: 'ICT Bias',            icon: '🏛' },
+  institutional_compass: { name: 'Institutional Market Compass', icon: '🧭' },
+  institutional_confluence: { name: 'Institutional Confluence Engine', icon: '🏢' },
+  pred_5m:               { name: '5-Min Prediction',    icon: '⏱'  },
+  chart_intelligence:    { name: 'Real-Time Chart Intelligence', icon: '📈' },
+  strike_intelligence:   { name: 'Strike Intelligence', icon: '⚔️'  },
+  order_flow:            { name: 'Order Flow Analysis', icon: '🌊' },
+  smart_money_order_logic: { name: 'Smart Money • Order Logic', icon: '🧠' },
+  trade_zones:           { name: 'Trade Zones • Buy/Sell Signals', icon: '🎯' },
+  market_liquidity:      { name: 'Market Liquidity',    icon: '💦' },
+  quantum_fractal:       { name: 'Quantum Fractal Intelligence Engine', icon: '🧬' },
+  crt_bts:               { name: 'CRT BTS Signal',      icon: '🔄' },
+  
+  // Market Context
+  global_indices:        { name: 'Global Indices',      icon: '🌍' },
+  global_news:           { name: 'Global News Events',  icon: '📰' },
+  global_impact_radar:   { name: 'Global Impact Radar', icon: '🛰' },
+  live_market_indices:   { name: 'Live Market Indices', icon: '📉' },
+  global_risk:           { name: 'Global Risk',         icon: '⚠' },
 };
+
+const HIDDEN_STRATEGY_KEYS = new Set<string>([
+  'expiry_explosion',
+  'feed_health',
+  'api_performance',
+  'cache_status',
+  'error_rate',
+  'data_freshness',
+]);
+
+const isVisibleStrategy = (key: string): boolean => !HIDDEN_STRATEGY_KEYS.has(key);
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -96,7 +125,16 @@ const LiveToday = memo<{
   const strategies = snapshot.current_strategies[activeSymbol] || {};
   const openPrice  = snapshot.open_prices[activeSymbol];
   const snapCount  = snapshot.snapshot_count[activeSymbol] || 0;
-  const entries    = Object.entries(strategies);
+  const entries    = Object.keys(STRATEGY_DISPLAY)
+    .filter(isVisibleStrategy)
+    .map((key) => {
+      const signal = strategies[key] || {
+        signal: 'NEUTRAL',
+        confidence: 0,
+        detail: 'Awaiting live section inputs',
+      };
+      return [key, signal] as const;
+    });
 
   const bullishN = entries.filter(([, v]) => sig(v.signal) === 'BULLISH').length;
   const bearishN = entries.filter(([, v]) => sig(v.signal) === 'BEARISH').length;
@@ -206,7 +244,8 @@ const HeatmapTab = memo<{ reports: DailyReport[] }>(({ reports }) => {
       const sym = rep.symbols?.[activeSymbol];
       if (sym) Object.keys(sym.strategy_performance || {}).forEach(k => keys.add(k));
     }
-    return Array.from(keys);
+    Object.keys(STRATEGY_DISPLAY).forEach(k => keys.add(k));
+    return Array.from(keys).filter(isVisibleStrategy);
   }, [reports, activeSymbol]);
 
   if (reports.length === 0) {
@@ -315,6 +354,7 @@ const RankingsTab = memo<{
   }
 
   const { rankings: list, recommendation, days_analyzed } = rankings;
+  const visibleList = list.filter(r => isVisibleStrategy(r.strategy_key));
   const MEDALS = ['🥇', '🥈', '🥉'];
 
   return (
@@ -326,9 +366,9 @@ const RankingsTab = memo<{
         <p className="text-[13px] text-slate-200 leading-relaxed">{renderBold(recommendation)}</p>
       </div>
 
-      {list.length > 0 ? (
+      {visibleList.length > 0 ? (
         <div className="space-y-1.5">
-          {list.map((r, idx) => {
+          {visibleList.map((r, idx) => {
             const w = r.weighted_accuracy ?? r.accuracy;
             const as_ = ACCURACY_STYLE(w);
             const meta = STRATEGY_DISPLAY[r.strategy_key];
@@ -344,6 +384,9 @@ const RankingsTab = memo<{
                       <span className="text-[12px] font-bold text-slate-200 truncate">{r.strategy_name}</span>
                       {r.category && (
                         <span className="text-[9px] px-1.5 py-0.5 rounded bg-slate-700/50 border border-slate-600/30 text-slate-400 whitespace-nowrap">{r.category}</span>
+                      )}
+                      {(r.priority ?? 50) >= 90 && (
+                        <span className="text-[9px] px-1.5 py-0.5 rounded bg-violet-500/20 border border-violet-400/30 text-violet-300 whitespace-nowrap font-bold">⭐ HIGH</span>
                       )}
                       {(r.streak ?? 0) >= 3 && (
                         <span className="text-[9px] px-1.5 py-0.5 rounded bg-orange-500/15 border border-orange-500/30 text-orange-400 whitespace-nowrap font-bold">🔥 {r.streak}</span>
@@ -435,7 +478,9 @@ const DayLogTab = memo<{
               const d = dir(rawDir);
               const ds = DIR_STYLES[d];
 
-              const perf = Object.values(strategy_performance || {});
+              const perf = Object.entries(strategy_performance || {})
+                .filter(([key]) => isVisibleStrategy(key))
+                .map(([, value]) => value);
               const correct = perf.filter(p => p.was_correct === true).length;
               const total   = perf.filter(p => p.was_correct !== null).length;
               const acc     = total > 0 ? Math.round(correct / total * 100) : null;
@@ -482,19 +527,158 @@ const DayLogTab = memo<{
 });
 DayLogTab.displayName = 'DayLogTab';
 
+// ── Tab: Date-Wise Priority Report ────────────────────────────────────────────
+
+const DateWisePriorityTab = memo<{
+  reports: DailyReport[];
+  rankings: ReturnType<typeof useObservatory>['rankings'];
+}>(({ reports, rankings }) => {
+  const [selectedDate, setSelectedDate] = useState<string | null>(null);
+  const [sortBy, setSortBy] = useState<'priority' | 'accuracy' | 'streak'>('priority');
+
+  if (reports.length === 0) {
+    return (
+      <div className="rounded-xl border border-slate-700/30 bg-slate-900/20 p-8 text-center">
+        <p className="text-slate-500 text-sm">No historical reports yet. Date-wise reports generate daily at 15:31 IST.</p>
+      </div>
+    );
+  }
+
+  const uniqueDates = Array.from(new Set(reports.map(r => r.date))).sort().reverse();
+  const activeDate = selectedDate || uniqueDates[0];
+  const activeReport = reports.find(r => r.date === activeDate);
+
+  return (
+    <div className="space-y-4">
+      {/* Date Selector */}
+      <div className="rounded-xl border border-slate-700/30 bg-slate-900/30 p-3">
+        <p className="text-[10px] font-bold text-slate-400/60 uppercase tracking-widest mb-2">Select Date</p>
+        <div className="flex flex-wrap gap-1">
+          {uniqueDates.map(date => (
+            <button key={date}
+              onClick={() => setSelectedDate(date)}
+              className={`px-2.5 py-1.5 rounded-lg text-[10px] font-bold transition-all ${
+                date === activeDate
+                  ? 'bg-violet-500/30 border border-violet-400/60 text-violet-200'
+                  : 'bg-slate-800/40 border border-slate-600/30 text-slate-400 hover:bg-slate-700/40'
+              }`}>
+              {new Date(date).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Sort Controls */}
+      <div className="rounded-xl border border-slate-700/30 bg-slate-900/30 p-3">
+        <p className="text-[10px] font-bold text-slate-400/60 uppercase tracking-widest mb-2">Sort By</p>
+        <div className="flex gap-1">
+          {(['priority', 'accuracy', 'streak'] as const).map(sort => (
+            <button key={sort}
+              onClick={() => setSortBy(sort)}
+              className={`px-2.5 py-1.5 rounded-lg text-[10px] font-bold transition-all ${
+                sort === sortBy
+                  ? 'bg-violet-500/30 border border-violet-400/60 text-violet-200'
+                  : 'bg-slate-800/40 border border-slate-600/30 text-slate-400 hover:bg-slate-700/40'
+              }`}>
+              {sort === 'priority' && '⭐ Priority'}
+              {sort === 'accuracy' && '🎯 Accuracy'}
+              {sort === 'streak' && '🔥 Streak'}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Strategy Performance for Selected Date */}
+      {activeReport && rankings ? (
+        <div className="space-y-2">
+          {/* Overall Stats */}
+          <div className="rounded-xl border border-slate-700/30 bg-slate-900/30 p-3">
+            <p className="text-[10px] font-bold text-slate-400/60 uppercase tracking-widest mb-2">
+              {new Date(activeDate).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' })} Overview
+            </p>
+            <div className="grid grid-cols-3 gap-2 text-center">
+              {['NIFTY', 'BANKNIFTY', 'SENSEX'].map(sym => {
+                const sym_data = activeReport.symbols?.[sym as 'NIFTY' | 'BANKNIFTY' | 'SENSEX'];
+                const dir = sym_data?.direction === 'UP' ? '▲' : sym_data?.direction === 'DOWN' ? '▼' : '◆';
+                const dsty = sym_data?.direction === 'UP' ? 'text-emerald-400' : sym_data?.direction === 'DOWN' ? 'text-red-400' : 'text-amber-400';
+                const chg = sym_data?.change_pct ?? 0;
+                return (
+                  <div key={sym} className="rounded-lg bg-slate-800/40 border border-slate-700/30 p-2">
+                    <p className="text-[10px] font-bold text-slate-400">{sym}</p>
+                    <p className={`text-[14px] font-black ${dsty} mt-1`}>{dir}</p>
+                    <p className="text-[10px] text-slate-500 mt-1">{chg > 0 ? '+' : ''}{chg.toFixed(2)}%</p>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          {/* All Strategies with Priority Ranking */}
+          <div className="rounded-xl border border-slate-700/30 bg-slate-900/30 p-3 space-y-2">
+            <p className="text-[10px] font-bold text-slate-400/60 uppercase tracking-widest">All Strategies — Priority Sorted</p>
+            {rankings.rankings.filter(strat => isVisibleStrategy(strat.strategy_key)).map((strat, idx) => {
+              const meta = STRATEGY_DISPLAY[strat.strategy_key];
+              const w = strat.weighted_accuracy ?? strat.accuracy;
+              const as_ = ACCURACY_STYLE(w);
+              const priority = strat.priority ?? 50;
+              const isHighPriority = priority >= 90;
+
+              return (
+                <div key={strat.strategy_key} className={`rounded-lg border p-2 flex items-center justify-between ${
+                  isHighPriority
+                    ? 'bg-violet-500/10 border-violet-400/30'
+                    : 'bg-slate-800/40 border-slate-700/30'
+                }`}>
+                  <div className="flex items-center gap-2 flex-1 min-w-0">
+                    <span className="text-[12px] font-bold text-slate-500">#{idx + 1}</span>
+                    <span className="text-[16px]">{meta?.icon ?? '📊'}</span>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-[11px] font-bold text-slate-200 truncate">{strat.strategy_name}</p>
+                      <div className="flex items-center gap-1 mt-0.5">
+                        <ConfBar value={w} color={as_.bar} height="h-1" />
+                      </div>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 text-right shrink-0 ml-2">
+                    {isHighPriority && <span className="text-[9px] px-1 py-0.5 rounded bg-violet-500/20 border border-violet-400/30 text-violet-300 font-bold">⭐</span>}
+                    <span className={`text-[11px] font-black tabular-nums ${as_.text}`}>{w.toFixed(0)}%</span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ) : (
+        <div className="rounded-xl border border-slate-700/30 bg-slate-900/20 p-6 text-center">
+          <p className="text-slate-500 text-sm">Report data not available.</p>
+        </div>
+      )}
+    </div>
+  );
+});
+DateWisePriorityTab.displayName = 'DateWisePriorityTab';
+
 // ── Main Component ────────────────────────────────────────────────────────────
 
-type Tab = 'live' | 'heatmap' | 'rankings' | 'daylog';
+type Tab = 'live' | 'heatmap' | 'rankings' | 'daylog' | 'priority-report';
 
 const TABS: Array<{ id: Tab; icon: string; label: string }> = [
-  { id: 'live',     icon: '📡', label: 'Live Today' },
-  { id: 'heatmap',  icon: '🔥', label: 'Heatmap'    },
-  { id: 'rankings', icon: '🏆', label: 'Rankings'   },
-  { id: 'daylog',   icon: '📅', label: 'Day Log'    },
+  { id: 'live',            icon: '📡', label: 'Live Today'     },
+  { id: 'heatmap',         icon: '🔥', label: 'Heatmap'        },
+  { id: 'rankings',        icon: '🏆', label: 'Rankings'       },
+  { id: 'priority-report', icon: '📊', label: 'Date & Priority' },
+  { id: 'daylog',          icon: '📅', label: 'Day Log'        },
 ];
 
 const MarketIntelligenceObservatory = memo(() => {
   const [activeTab, setActiveTab] = useState<Tab>('live');
+  const [collapsedTabs, setCollapsedTabs] = useState<Record<Tab, boolean>>({
+    live: true,
+    heatmap: true,
+    rankings: true,
+    'priority-report': true,
+    daylog: true,
+  });
   const {
     todaySnapshot,
     historicalReports,
@@ -513,6 +697,13 @@ const MarketIntelligenceObservatory = memo(() => {
     const best = rankings?.best_strategy;
     return { daysObserved, totalStrategies, best };
   }, [historicalReports, rankings]);
+
+  const toggleActiveTabCollapse = () => {
+    setCollapsedTabs((prev) => ({
+      ...prev,
+      [activeTab]: !prev[activeTab],
+    }));
+  };
 
   return (
     <div className="mt-6 border-2 border-violet-500/35 rounded-2xl p-3 sm:p-4 bg-gradient-to-br from-violet-950/20 via-dark-card/50 to-dark-elevated/40 backdrop-blur-sm shadow-xl shadow-violet-500/10">
@@ -590,16 +781,32 @@ const MarketIntelligenceObservatory = memo(() => {
         </div>
       )}
 
+      <div className="mb-3 flex items-center justify-between rounded-lg border border-slate-700/30 bg-slate-900/30 px-3 py-2">
+        <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+          {TABS.find(t => t.id === activeTab)?.label} View
+        </p>
+        <button
+          onClick={toggleActiveTabCollapse}
+          className="px-2.5 py-1 rounded-md border border-violet-400/30 bg-violet-500/10 text-violet-300 text-[10px] font-bold hover:bg-violet-500/20 transition-all"
+          aria-label={collapsedTabs[activeTab] ? 'Show tab details' : 'Hide tab details'}
+        >
+          {collapsedTabs[activeTab] ? '👁 Show' : '🙈 Hide'}
+        </button>
+      </div>
+
       {loading && !todaySnapshot && historicalReports.length === 0 ? (
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
           {[...Array(8)].map((_, i) => <div key={i} className="h-20 bg-slate-800/30 rounded-lg animate-pulse" />)}
         </div>
+      ) : collapsedTabs[activeTab] ? (
+        null
       ) : (
         <>
-          {activeTab === 'live'     && <LiveToday snapshot={todaySnapshot} lastRefreshed={lastRefreshed} />}
-          {activeTab === 'heatmap'  && <HeatmapTab reports={historicalReports} />}
-          {activeTab === 'rankings' && <RankingsTab rankings={rankings} />}
-          {activeTab === 'daylog'   && <DayLogTab reports={historicalReports} reportDays={reportDays} setReportDays={setReportDays} />}
+          {activeTab === 'live'            && <LiveToday snapshot={todaySnapshot} lastRefreshed={lastRefreshed} />}
+          {activeTab === 'heatmap'         && <HeatmapTab reports={historicalReports} />}
+          {activeTab === 'rankings'        && <RankingsTab rankings={rankings} />}
+          {activeTab === 'priority-report' && <DateWisePriorityTab reports={historicalReports} rankings={rankings} />}
+          {activeTab === 'daylog'          && <DayLogTab reports={historicalReports} reportDays={reportDays} setReportDays={setReportDays} />}
         </>
       )}
 

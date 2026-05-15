@@ -192,7 +192,22 @@ const InstitutionalConfluenceEngine = memo<{ strikeData: ReturnType<typeof useSt
       state: ConfluenceState;
     }>;
 
-  if (!symbols.length) return null;
+  if (!symbols.length) {
+    return (
+      <div className="relative mt-6 overflow-hidden rounded-[1.6rem] border border-indigo-500/25 bg-gradient-to-br from-indigo-950/20 via-slate-950/80 to-slate-900/80 p-4 shadow-xl shadow-indigo-500/10 sm:p-5 lg:p-6">
+        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(99,102,241,0.14),transparent_38%)]" />
+        <div className="relative">
+          <h3 className="text-[13px] sm:text-[16px] uppercase tracking-[0.14em] font-black text-indigo-100 leading-tight">
+            Institutional Confluence Engine
+          </h3>
+          <p className="mt-3 text-[11px] sm:text-[12px] text-slate-300 leading-relaxed">
+            Waiting for strike intelligence stream. This panel will auto-populate when backend
+            endpoint /api/strike-intelligence is reachable and live/cached payload arrives.
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="relative mt-6 overflow-hidden rounded-[1.6rem] border border-indigo-500/30 bg-gradient-to-br from-indigo-950/25 via-slate-950/90 to-slate-900/85 p-4 shadow-xl shadow-indigo-500/10 sm:p-5 lg:p-6">
@@ -205,9 +220,6 @@ const InstitutionalConfluenceEngine = memo<{ strikeData: ReturnType<typeof useSt
               <h3 className="text-[14px] sm:text-[18px] uppercase tracking-[0.14em] font-black text-indigo-100 leading-tight">
                 Institutional Confluence Engine
               </h3>
-              <span className="inline-flex items-center rounded border border-indigo-400/35 bg-indigo-500/10 px-2.5 py-1 text-[10px] sm:text-[11px] font-black text-indigo-200 tracking-[0.12em] uppercase">
-                Unified Trade Gate
-              </span>
             </div>
           </div>
         </div>
@@ -230,7 +242,27 @@ const QuantumFractalSection = memo(() => {
   const { strikeData } = useStrikeIntelligence();
 
   const hasAny = SYMBOLS.some((sym) => strikeData[sym]?.intelligence?.quantumFractal);
-  if (!hasAny) return null;
+  if (!hasAny) {
+    return (
+      <section className="w-full mt-6 mb-2 min-w-0">
+        <div className="rounded-2xl border border-cyan-500/25 bg-gradient-to-br from-cyan-950/15 via-slate-950/85 to-slate-900/85 p-4 sm:p-5">
+          <div className="flex flex-wrap items-center gap-2.5">
+            <div className="w-1 h-6 rounded-full bg-gradient-to-b from-cyan-400 to-cyan-600/40 shrink-0" />
+            <h2 className="text-[13px] sm:text-[16px] uppercase tracking-[0.18em] font-black text-cyan-300/95 leading-none">
+              Quantum Fractal Intelligence Engine
+            </h2>
+            <span className="inline-flex items-center rounded border border-amber-500/35 bg-amber-500/10 px-2 py-1 text-[9px] sm:text-[10px] font-black text-amber-200 tracking-[0.14em] uppercase shrink-0">
+              WAITING DATA
+            </span>
+          </div>
+          <p className="mt-3 text-[11px] sm:text-[12px] text-slate-300 leading-relaxed">
+            No fractal payload yet. Verify backend /api/strike-intelligence and websocket
+            /ws/strike-intelligence are available. Section will render automatically when data arrives.
+          </p>
+        </div>
+      </section>
+    );
+  }
 
   return (
     <section className="w-full mt-6 mb-2 min-w-0">
@@ -244,9 +276,6 @@ const QuantumFractalSection = memo(() => {
             <h2 className="text-[13px] sm:text-[16px] uppercase tracking-[0.18em] font-black text-cyan-300/95 leading-none">
               Quantum Fractal Intelligence Engine
             </h2>
-            <span className="inline-flex items-center rounded border border-cyan-500/30 bg-cyan-500/8 px-2 py-1 text-[9px] sm:text-[10px] font-black text-cyan-300 tracking-[0.14em] uppercase shrink-0">
-              LIVE PROBE
-            </span>
           </div>
           <p className="text-[11px] sm:text-[12px] text-slate-400 leading-relaxed pl-4">
             Multi-timeframe fractal analysis · Institutional momentum · Predictive behavior modeling

@@ -136,8 +136,9 @@ async def manual_capture():
     """
     Manually trigger a strategy snapshot (useful for testing outside market hours).
     """
+    from services.observatory_service import _now_ist
     svc = get_observatory_service()
-    await svc._take_snapshot()
+    await svc._take_snapshot(_now_ist())
     return {
         "success": True,
         "message": "Snapshot captured successfully",

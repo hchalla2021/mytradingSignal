@@ -1,6 +1,6 @@
 'use client';
 
-import React, { memo } from 'react';
+import React, { memo, useMemo } from 'react';
 import { useMarketRegime, type RegimeIndex, type RegimeType, type TradeApproach } from '@/hooks/useMarketRegime';
 import type { MarketData } from '@/hooks/useMarketSocket';
 import type { VIXData } from '@/hooks/useIndiaVIX';
@@ -110,6 +110,21 @@ const APPROACH_CONFIG: Record<TradeApproach, { label: string; icon: string; colo
   RANGE_TRADE:      { label: 'Range Trade — S/R Bounces Only', icon: '📊', color: 'text-purple-400' },
 };
 
+function formatTimeStamp(value: string | null): string {
+  if (!value) return 'Waiting for live regime feed';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return 'Waiting for live regime feed';
+  return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
+function getTopDrivers(data: RegimeIndex | null): Array<{ key: string; label: string; score: number; signal: string }> {
+  if (!data?.factors) return [];
+  return Object.entries(data.factors)
+    .map(([key, factor]) => ({ key, label: factor.label, score: factor.score, signal: factor.signal }))
+    .sort((a, b) => Math.abs(b.score) - Math.abs(a.score))
+    .slice(0, 4);
+}
+
 // ── Score Gauge ─────────────────────────────────────────────────────────────
 
 const ScoreGauge = memo<{ score: number; regime: RegimeType }>(({ score, regime }) => {
@@ -198,6 +213,7 @@ const RegimeCard = memo<{
 
   const displaySignal = toRegimeSignal(data.regime);
   const tone = signalTone(displaySignal);
+  const drivers = getTopDrivers(data);
 
   return (
     <div className={`rounded-2xl border ${cfg.border} bg-gradient-to-br from-slate-800/60 via-slate-800/40 to-slate-900/60 p-3 sm:p-4 shadow-lg ${cfg.glow} transition-all duration-200`}>
@@ -310,6 +326,22 @@ const RegimeCard = memo<{
         </div>
       )}
 
+      {drivers.length > 0 && (
+        <div className="flex flex-wrap gap-1.5">
+          {drivers.map(driver => (
+            <span
+              key={`${name}-${driver.key}`}
+              className="inline-flex items-center gap-1.5 rounded-md border border-slate-700/40 bg-slate-950/50 px-2 py-1 text-[9px] font-bold text-slate-300 leading-none"
+            >
+              <span className={`${driver.signal.includes('Bear') || driver.signal.includes('SELL') ? 'text-red-400' : 'text-emerald-400'}`}>
+                {driver.score >= 0 ? '+' : ''}{driver.score.toFixed(0)}
+              </span>
+              <span className="truncate max-w-[120px]">{driver.label}</span>
+            </span>
+          ))}
+        </div>
+      )}
+
     </div>
   );
 });
@@ -321,7 +353,7 @@ const MarketRegimeIntelligence = memo<{
   marketData?: MarketData | null;
   vixData?: VIXData | null;
 }>(({ marketData, vixData }) => {
-  const { regimeData } = useMarketRegime();
+  const { regimeData, isConnected, lastUpdate } = useMarketRegime();
 
   // Determine section accent color from NIFTY regime
   const niftyRegime = regimeData.NIFTY?.regime;
@@ -349,30 +381,143 @@ const MarketRegimeIntelligence = memo<{
     SENSEX: marketData?.SENSEX ?? null,
   };
 
+  const sectionSummary = useMemo(() => {
+    const lead = regimeData.NIFTY ?? regimeData.BANKNIFTY ?? regimeData.SENSEX ?? null;
+    const drivers = getTopDrivers(lead);
+    const volatility = lead?.context?.vix ?? vixData?.value ?? null;
+
+    return {
+      lead,
+      drivers,
+      volatility,
+      updatedAt: formatTimeStamp(lastUpdate ?? lead?.timestamp ?? null),
+      connectionLabel: isConnected ? 'LIVE FEED' : 'RECOVERING',
+    };
+  }, [isConnected, lastUpdate, regimeData.BANKNIFTY, regimeData.NIFTY, regimeData.SENSEX, vixData?.value]);
+
   return (
-    <div className={`mt-6 sm:mt-6 border-2 ${sectionBorder} rounded-2xl p-3 sm:p-4 bg-gradient-to-br ${sectionBg} backdrop-blur-sm shadow-xl`}>
+    <section className={`mt-6 sm:mt-6 border-2 ${sectionBorder} rounded-2xl p-3 sm:p-4 bg-gradient-to-br ${sectionBg} backdrop-blur-sm shadow-xl overflow-hidden`}>
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-3 sm:mb-4">
         <SectionTitle
           title="Today's Market Regime"
           accentColor={sectionAccent}
+          subtitle="Multi-market regime detection, live volatility context, and institutional trade posture"
+          rightContent={
+            <div className="flex flex-wrap items-center justify-end gap-1.5">
+              <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-1 text-[9px] font-black tracking-[0.12em] ${isConnected ? 'border-emerald-500/35 bg-emerald-500/10 text-emerald-300' : 'border-amber-500/35 bg-amber-500/10 text-amber-300'}`}>
+                <span className={`h-1.5 w-1.5 rounded-full ${isConnected ? 'bg-emerald-400' : 'bg-amber-400'}`} />
+                {sectionSummary.connectionLabel}
+              </span>
+              <span className="inline-flex items-center rounded-full border border-slate-700/45 bg-slate-900/55 px-2 py-1 text-[9px] font-black tracking-[0.12em] text-slate-300">
+                Updated {sectionSummary.updatedAt}
+              </span>
+            </div>
+          }
         />
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 2xl:grid-cols-3 gap-3">
-        <RegimeCard data={regimeData.NIFTY} name="NIFTY 50" liveTick={liveTickMap.NIFTY} liveVix={vixData} />
-        <RegimeCard data={regimeData.BANKNIFTY} name="BANK NIFTY" liveTick={liveTickMap.BANKNIFTY} liveVix={vixData} />
-        <RegimeCard data={regimeData.SENSEX} name="SENSEX" liveTick={liveTickMap.SENSEX} liveVix={vixData} />
+      <div className="grid gap-3 xl:grid-cols-[minmax(0,1.7fr)_minmax(300px,0.95fr)]">
+        <div className="grid grid-cols-1 md:grid-cols-2 2xl:grid-cols-3 gap-3">
+          <RegimeCard data={regimeData.NIFTY} name="NIFTY 50" liveTick={liveTickMap.NIFTY} liveVix={vixData} />
+          <RegimeCard data={regimeData.BANKNIFTY} name="BANK NIFTY" liveTick={liveTickMap.BANKNIFTY} liveVix={vixData} />
+          <RegimeCard data={regimeData.SENSEX} name="SENSEX" liveTick={liveTickMap.SENSEX} liveVix={vixData} />
+        </div>
+
+        <aside className="rounded-2xl border border-slate-700/45 bg-slate-950/55 p-3 sm:p-4 shadow-lg shadow-black/20">
+          <div className="flex items-start justify-between gap-3 mb-3">
+            <div className="min-w-0">
+              <p className="text-[9px] font-bold uppercase tracking-[0.18em] text-slate-500">Institutional Readout</p>
+              <h3 className={`mt-1 text-base sm:text-lg font-extrabold tracking-tight ${sectionSummary.lead ? REGIME_CONFIG[sectionSummary.lead.regime].color : 'text-slate-300'}`}>
+                {sectionSummary.lead ? sectionSummary.lead.actionSummary : 'Waiting for live regime snapshot'}
+              </h3>
+            </div>
+            <span className={`inline-flex items-center gap-1 rounded-lg border px-2 py-1 text-[9px] font-black uppercase tracking-[0.14em] ${sectionAccent === 'red' ? 'border-red-500/35 bg-red-500/10 text-red-300' : sectionAccent === 'emerald' ? 'border-emerald-500/35 bg-emerald-500/10 text-emerald-300' : sectionAccent === 'amber' ? 'border-amber-500/35 bg-amber-500/10 text-amber-300' : 'border-blue-500/35 bg-blue-500/10 text-blue-300'}`}>
+              {sectionSummary.lead ? sectionSummary.lead.trendStrength : 'NO DATA'}
+            </span>
+          </div>
+
+          <div className="grid grid-cols-2 gap-2 mb-3">
+            <div className="rounded-xl border border-slate-800/55 bg-slate-900/55 p-2.5">
+              <p className="text-[8px] font-bold uppercase tracking-[0.14em] text-slate-500">Regime Score</p>
+              <p className={`mt-1 text-lg font-black ${sectionSummary.lead ? REGIME_CONFIG[sectionSummary.lead.regime].color : 'text-slate-300'}`}>
+                {sectionSummary.lead?.regimeScore?.toFixed(0) ?? '—'}
+              </p>
+            </div>
+            <div className="rounded-xl border border-slate-800/55 bg-slate-900/55 p-2.5">
+              <p className="text-[8px] font-bold uppercase tracking-[0.14em] text-slate-500">Direction</p>
+              <p className="mt-1 text-lg font-black text-slate-100">
+                {sectionSummary.lead?.direction ?? '—'}
+              </p>
+            </div>
+            <div className="rounded-xl border border-slate-800/55 bg-slate-900/55 p-2.5">
+              <p className="text-[8px] font-bold uppercase tracking-[0.14em] text-slate-500">Strength</p>
+              <p className="mt-1 text-lg font-black text-cyan-300">
+                {sectionSummary.lead?.directionStrength != null ? `${sectionSummary.lead.directionStrength.toFixed(0)}%` : '—'}
+              </p>
+            </div>
+            <div className="rounded-xl border border-slate-800/55 bg-slate-900/55 p-2.5">
+              <p className="text-[8px] font-bold uppercase tracking-[0.14em] text-slate-500">Volatility</p>
+              <p className="mt-1 text-lg font-black text-amber-300">
+                {sectionSummary.volatility != null ? sectionSummary.volatility.toFixed(1) : '—'}
+              </p>
+            </div>
+          </div>
+
+          <div className="mb-3 rounded-xl border border-slate-800/55 bg-slate-900/55 p-3">
+            <div className="flex items-center justify-between gap-2 mb-2">
+              <p className="text-[9px] font-bold uppercase tracking-[0.14em] text-slate-500">Key Drivers</p>
+              <p className="text-[9px] font-black uppercase tracking-[0.14em] text-slate-400">Top factors</p>
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {sectionSummary.drivers.length > 0 ? sectionSummary.drivers.map(driver => (
+                <span key={driver.key} className="inline-flex items-center gap-1 rounded-full border border-slate-700/50 bg-slate-950/55 px-2 py-1 text-[9px] font-bold text-slate-200">
+                  <span className={`${driver.score >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>{driver.score >= 0 ? '+' : ''}{driver.score.toFixed(0)}</span>
+                  <span className="max-w-[120px] truncate">{driver.label}</span>
+                </span>
+              )) : (
+                <span className="text-[10px] text-slate-500">No factor snapshot available yet.</span>
+              )}
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-2 text-[10px]">
+            <div className="rounded-xl border border-slate-800/55 bg-slate-900/55 p-2.5">
+              <p className="text-[8px] font-bold uppercase tracking-[0.14em] text-slate-500">Playbook</p>
+              <p className="mt-1 font-black text-slate-100">{sectionSummary.lead ? APPROACH_CONFIG[sectionSummary.lead.tradeApproach].label : 'Waiting for setup'}</p>
+            </div>
+            <div className="rounded-xl border border-slate-800/55 bg-slate-900/55 p-2.5">
+              <p className="text-[8px] font-bold uppercase tracking-[0.14em] text-slate-500">Stability</p>
+              <p className="mt-1 font-black text-slate-100">{sectionSummary.lead?.scoreStability != null ? `${sectionSummary.lead.scoreStability.toFixed(0)}%` : '—'}</p>
+            </div>
+            <div className="rounded-xl border border-slate-800/55 bg-slate-900/55 p-2.5">
+              <p className="text-[8px] font-bold uppercase tracking-[0.14em] text-slate-500">Data Source</p>
+              <p className="mt-1 font-black text-slate-100">{sectionSummary.lead?.dataSource ?? '—'}</p>
+            </div>
+            <div className="rounded-xl border border-slate-800/55 bg-slate-900/55 p-2.5">
+              <p className="text-[8px] font-bold uppercase tracking-[0.14em] text-slate-500">Trending Day</p>
+              <p className="mt-1 font-black text-slate-100">{sectionSummary.lead ? (sectionSummary.lead.isTrendingDay ? 'YES' : 'NO') : '—'}</p>
+            </div>
+          </div>
+        </aside>
       </div>
 
-      {/* 🎯 Strike Intelligence — ATM ± 5, CE/PE, Volume/OI/Liquidity Scoring */}
-      <StrikeIntelligence />
+      <div className="mt-3 grid gap-3 xl:grid-cols-3">
+        <div className="xl:col-span-3">
+          {/* 🎯 Strike Intelligence — ATM ± 5, CE/PE, Volume/OI/Liquidity Scoring */}
+          <StrikeIntelligence />
+        </div>
 
-      {/* � Quantum Fractal Intelligence Engine — Multi-timeframe fractal analysis */}
-      <QuantumFractalSection />
+        <div className="xl:col-span-3">
+          {/* � Quantum Fractal Intelligence Engine — Multi-timeframe fractal analysis */}
+          <QuantumFractalSection />
+        </div>
 
-      {/* �📈 Real-Time Chart Intelligence — SMC, FVG, S/R, PDH/PDL, CDH/CDL */}
-      <ChartIntelligence />
-    </div>
+        <div className="xl:col-span-3">
+          {/* �📈 Real-Time Chart Intelligence — SMC, FVG, S/R, PDH/PDL, CDH/CDL */}
+          <ChartIntelligence />
+        </div>
+      </div>
+    </section>
   );
 });
 MarketRegimeIntelligence.displayName = 'MarketRegimeIntelligence';

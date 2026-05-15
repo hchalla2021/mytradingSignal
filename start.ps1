@@ -24,7 +24,7 @@ if ($backendRunning) {
     }
     # Start backend in new terminal
     Write-Host "🚀 Starting Backend Server (Port 8000)..." -ForegroundColor Green
-    Start-Process powershell -ArgumentList "-NoExit", "-Command", "cd '$rootDir\backend'; & '.\.venv\Scripts\python.exe' -m uvicorn main:app --host 127.0.0.1 --port 8000; Write-Host '🟢 Backend Server Starting...' -ForegroundColor Green"
+    Start-Process powershell -ArgumentList "-NoExit", "-Command", "$env:FAST_STARTUP_MODE='true'; cd '$rootDir\backend'; & '$rootDir\.venv\Scripts\python.exe' -m uvicorn main:app --reload --host 127.0.0.1 --port 8000; Write-Host '🟢 Backend Server Starting...' -ForegroundColor Green"
     Start-Sleep -Seconds 3
 }
 
@@ -35,7 +35,7 @@ if ($frontendRunning) {
 } else {
     # Start frontend in new terminal
     Write-Host "🚀 Starting Frontend Server (Port 3000)..." -ForegroundColor Green
-    Start-Process powershell -ArgumentList "-NoExit", "-Command", "cd '$rootDir\frontend'; Write-Host '🟢 Frontend Server Starting...' -ForegroundColor Green; npm run dev -- -p 3000"
+    Start-Process powershell -ArgumentList "-NoExit", "-Command", "cd '$rootDir\frontend'; Write-Host '🟢 Frontend Server Starting (fast mode)...' -ForegroundColor Green; npm run dev:fast -- -p 3000"
     Start-Sleep -Seconds 3
 }
 

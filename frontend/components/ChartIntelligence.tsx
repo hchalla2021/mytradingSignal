@@ -12,7 +12,6 @@ import {
 } from '@/hooks/useChartIntelligence';
 import { useMarketSocket } from '@/hooks/useMarketSocket';
 import { useCompassSocket, type CompassIndex } from '@/hooks/useCompassSocket';
-import { useGlobalIndicesSocket } from '@/hooks/useGlobalIndicesSocket';
 
 // ── Chart constants ─────────────────────────────────────────────────────────
 
@@ -4919,7 +4918,6 @@ const ChartIntelligence = memo(() => {
   // Live tick prices from the main market socket — updates every Zerodha tick (~1s)
   const { marketData } = useMarketSocket();
   const { data: compassData } = useCompassSocket();
-  const { data: globalIndices, isConnected: globalConnected } = useGlobalIndicesSocket();
 
   const getFreshLiveSpot = useCallback((tick: typeof marketData.NIFTY | null | undefined): number | undefined => {
     if (!tick || tick.price <= 0) return undefined;
@@ -4934,158 +4932,6 @@ const ChartIntelligence = memo(() => {
   const niftyLiveSpot = useMemo(() => getFreshLiveSpot(marketData.NIFTY), [marketData.NIFTY, getFreshLiveSpot]);
   const bankNiftyLiveSpot = useMemo(() => getFreshLiveSpot(marketData.BANKNIFTY), [marketData.BANKNIFTY, getFreshLiveSpot]);
   const sensexLiveSpot = useMemo(() => getFreshLiveSpot(marketData.SENSEX), [marketData.SENSEX, getFreshLiveSpot]);
-  const [globalNowMs, setGlobalNowMs] = useState(() => Date.now());
-
-  useEffect(() => {
-    const timer = setInterval(() => setGlobalNowMs(Date.now()), 1000);
-    return () => clearInterval(timer);
-  }, []);
-
-  const globalRiskItems = useMemo(() => [
-    { key: 'DJI', alias: 'DOW', label: 'Dow' },
-    { key: 'IXIC', alias: 'NASDAQ', label: 'Nasdaq' },
-    { key: 'SPX', alias: 'SPX', label: 'S&P' },
-    { key: 'DAX', alias: 'DAX', label: 'DAX' },
-    { key: 'FTSE', alias: 'FTSE', label: 'LSE FTSE 100' },
-    { key: 'FTMC', alias: 'FTMC', label: 'LSE FTSE 250' },
-    { key: 'NIKKEI', alias: 'NIKKEI', label: 'Nikkei' },
-  ] as const, []);
-
-  const getGlobalIndexTick = useCallback((key: string, alias?: string) => {
-    const byKey = globalIndices[key];
-    if (byKey) return byKey;
-    if (alias) return globalIndices[alias];
-    return undefined;
-  }, [globalIndices]);
-
-  const globalRiskSnapshots = useMemo(() => {
-    return globalRiskItems.map((item) => {
-      const g = getGlobalIndexTick(item.key, item.alias);
-      const hasData = !!g && g.status !== 'UNAVAILABLE' && Number.isFinite(g?.changePct);
-      const tsMs = Date.parse(g?.timestamp || '');
-      const ageSec = Number.isFinite(tsMs) ? Math.max(0, (globalNowMs - tsMs) / 1000) : Number.POSITIVE_INFINITY;
-
-      let freshness: 'LIVE' | 'STALE' | 'UNAVAILABLE' = 'UNAVAILABLE';
-      if (hasData) {
-        freshness = g?.status === 'LIVE' && ageSec <= 20 ? 'LIVE' : 'STALE';
-      }
-
-      return {
-        item,
-        tick: g,
-        hasData,
-        pct: hasData ? (g?.changePct ?? 0) : 0,
-        freshness,
-        ageSec,
-      };
-    });
-  }, [getGlobalIndexTick, globalNowMs, globalRiskItems]);
-
-  const globalRiskOverview = useMemo(() => {
-    const active = globalRiskSnapshots.filter((s) => s.hasData);
-    const changes = active.map((s) => s.pct);
-
-    const netChange = changes.reduce((a, b) => a + b, 0);
-    const upCount = changes.filter((c) => c > 0.03).length;
-    const downCount = changes.filter((c) => c < -0.03).length;
-    const flatCount = changes.length - upCount - downCount;
-    const liveCount = globalRiskSnapshots.filter((s) => s.freshness === 'LIVE').length;
-    const staleCount = globalRiskSnapshots.filter((s) => s.freshness === 'STALE').length;
-    const unavailableCount = globalRiskSnapshots.filter((s) => s.freshness === 'UNAVAILABLE').length;
-    const latestAgeSec = active.length ? Math.min(...active.map((s) => s.ageSec)) : Number.POSITIVE_INFINITY;
-
-    // Advanced trend engine:
-    // - weights by index importance and data freshness
-    // - uses adaptive threshold based on current cross-market volatility
-    // - confirms direction with weighted breadth before assigning TREND UP/DOWN
-    const INDEX_WEIGHT: Record<string, number> = {
-      SPX: 1.25,
-      IXIC: 1.15,
-      DJI: 1.1,
-      DAX: 0.95,
-      FTSE: 0.9,
-      FTMC: 0.8,
-      NIKKEI: 0.9,
-    };
-
-    let weightedScore = 0;
-    let totalWeight = 0;
-    let weightedAbs = 0;
-    let upWeight = 0;
-    let downWeight = 0;
-
-    for (const s of globalRiskSnapshots) {
-      if (!s.hasData || !s.tick) continue;
-
-      const baseWeight = INDEX_WEIGHT[s.item.key] ?? 1;
-      const freshnessWeight = s.freshness === 'LIVE' ? 1 : s.freshness === 'STALE' ? 0.45 : 0;
-      const agePenalty = Number.isFinite(s.ageSec) ? Math.max(0.55, 1 - Math.min(120, s.ageSec) / 220) : 0.55;
-      const weight = baseWeight * freshnessWeight * agePenalty;
-      if (weight <= 0) continue;
-
-      const boundedPct = Math.max(-3, Math.min(3, s.pct));
-      weightedScore += boundedPct * weight;
-      weightedAbs += Math.abs(boundedPct) * weight;
-      totalWeight += weight;
-    }
-
-    const avgVolatility = totalWeight > 0 ? weightedAbs / totalWeight : 0;
-    const dynamicThreshold = Math.max(0.05, Math.min(0.2, 0.055 + avgVolatility * 0.22));
-
-    for (const s of globalRiskSnapshots) {
-      if (!s.hasData || !s.tick) continue;
-      const baseWeight = INDEX_WEIGHT[s.item.key] ?? 1;
-      const freshnessWeight = s.freshness === 'LIVE' ? 1 : s.freshness === 'STALE' ? 0.45 : 0;
-      const agePenalty = Number.isFinite(s.ageSec) ? Math.max(0.55, 1 - Math.min(120, s.ageSec) / 220) : 0.55;
-      const weight = baseWeight * freshnessWeight * agePenalty;
-      if (weight <= 0) continue;
-
-      if (s.pct > dynamicThreshold) upWeight += weight;
-      else if (s.pct < -dynamicThreshold) downWeight += weight;
-    }
-
-    const directionalStrength = totalWeight > 0 ? Math.abs(weightedScore) / totalWeight : 0;
-    const breadthDen = upWeight + downWeight;
-    const breadthEdge = breadthDen > 0 ? Math.abs(upWeight - downWeight) / breadthDen : 0;
-
-    let status: 'TREND UP' | 'TREND DOWN' | 'NEUTRAL' = 'NEUTRAL';
-    if (!changes.length) {
-      status = 'NEUTRAL';
-    } else if (liveCount === 0 && Math.abs(weightedScore) < 0.24) {
-      // When only stale data exists, require stronger directional evidence.
-      status = 'NEUTRAL';
-    } else if (directionalStrength < 0.085 && breadthEdge < 0.2) {
-      status = 'NEUTRAL';
-    } else if (weightedScore > 0 && upWeight >= downWeight * 0.9) {
-      status = 'TREND UP';
-    } else if (weightedScore < 0 && downWeight >= upWeight * 0.9) {
-      status = 'TREND DOWN';
-    } else {
-      status = 'NEUTRAL';
-    }
-
-    const tone =
-      status === 'TREND UP'
-        ? 'text-emerald-300 border-emerald-500/35 bg-emerald-500/10'
-        : status === 'TREND DOWN'
-        ? 'text-rose-300 border-rose-500/35 bg-rose-500/10'
-        : 'text-amber-300 border-amber-500/35 bg-amber-500/10';
-
-    return {
-      status,
-      tone,
-      netChange,
-      upCount,
-      downCount,
-      flatCount,
-      liveCount,
-      staleCount,
-      unavailableCount,
-      activeTotal: changes.length,
-      total: globalRiskSnapshots.length,
-      latestAgeSec,
-    };
-  }, [globalRiskSnapshots]);
 
   const dataStatus = useMemo(() => {
     const sources = [chartData.NIFTY?.dataSource, chartData.BANKNIFTY?.dataSource, chartData.SENSEX?.dataSource].filter(Boolean);
@@ -5122,76 +4968,6 @@ const ChartIntelligence = memo(() => {
           <span className="px-1.5 py-0.5 rounded" style={{ background: CFG.FVG_BEAR_FILL, color: CFG.FVG_BEAR_BORDER, border: `1px solid ${CFG.FVG_BEAR_BORDER}40` }}>▼FVG</span>
           <span className="px-1.5 py-0.5 rounded bg-orange-500/8 text-orange-400 border border-orange-500/25">SSL</span>
           <span className="px-1.5 py-0.5 rounded bg-cyan-500/8 text-cyan-400 border border-cyan-500/25">BSL</span>
-        </div>
-      </div>
-
-      {/* Global risk tape */}
-      <div className="mb-4 rounded-2xl border border-slate-600/45 bg-gradient-to-b from-slate-900/80 to-slate-950/70 px-3.5 sm:px-4 py-3">
-        <div className="flex flex-wrap items-center justify-between gap-2 mb-2.5">
-          <div className="flex items-center gap-2 min-w-0">
-            <span className="w-1 h-4 rounded-full bg-gradient-to-b from-cyan-400 to-cyan-600/40 shrink-0" />
-            <span className="text-[10px] sm:text-[11px] font-black tracking-[0.14em] uppercase text-slate-300">Global Risk</span>
-          </div>
-          <div className="flex items-center gap-1.5 sm:gap-2">
-            <span className={`inline-flex items-center rounded-full border px-2.5 py-1 text-[9px] sm:text-[10px] font-mono font-bold tracking-[0.08em] uppercase ${
-              globalConnected && globalRiskOverview.liveCount > 0
-                ? 'text-emerald-300 border-emerald-500/35 bg-emerald-500/10'
-                : 'text-amber-300 border-amber-500/35 bg-amber-500/10'
-            }`}>
-              {globalConnected && globalRiskOverview.liveCount > 0 ? 'LIVE' : 'SNAPSHOT'}
-            </span>
-            <span className={`inline-flex items-center rounded-full border px-2.5 py-1 text-[9px] sm:text-[10px] font-black tracking-[0.08em] uppercase ${globalRiskOverview.tone}`}>
-              {globalRiskOverview.status}
-            </span>
-          </div>
-        </div>
-
-        <div className="mb-2.5 rounded-lg border border-slate-700/40 bg-slate-900/45 px-2.5 sm:px-3 py-1.5">
-          <div className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[9px] sm:text-[10px] font-mono text-slate-300">
-            <span className="text-emerald-300">UP {globalRiskOverview.upCount}/{globalRiskOverview.activeTotal || globalRiskOverview.total}</span>
-            <span className="text-rose-300">DOWN {globalRiskOverview.downCount}/{globalRiskOverview.activeTotal || globalRiskOverview.total}</span>
-            <span className="text-amber-300">FLAT {globalRiskOverview.flatCount}/{globalRiskOverview.activeTotal || globalRiskOverview.total}</span>
-            <span className="text-cyan-300">LIVE {globalRiskOverview.liveCount}/{globalRiskOverview.total}</span>
-            <span className="text-orange-300">STALE {globalRiskOverview.staleCount}/{globalRiskOverview.total}</span>
-            <span className="ml-auto font-black tabular-nums text-cyan-300">
-              NET {globalRiskOverview.netChange > 0 ? '+' : ''}{globalRiskOverview.netChange.toFixed(2)}%
-            </span>
-            <span className="font-black tabular-nums text-slate-400">
-              AGE {Number.isFinite(globalRiskOverview.latestAgeSec) ? `${Math.round(globalRiskOverview.latestAgeSec)}s` : '--'}
-            </span>
-          </div>
-        </div>
-
-        <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-7 gap-2 sm:gap-2.5">
-          {globalRiskSnapshots.map(({ item, hasData, pct, freshness, ageSec }) => {
-            const isUp = hasData ? pct >= 0 : false;
-            const tone = !hasData
-              ? 'text-slate-300 border-slate-500/30 bg-slate-700/20'
-              : freshness === 'STALE'
-              ? 'text-amber-300 border-amber-500/25 bg-amber-500/8'
-              : isUp
-              ? 'text-emerald-300 border-emerald-500/25 bg-emerald-500/8'
-              : 'text-rose-300 border-rose-500/25 bg-rose-500/8';
-            return (
-              <div
-                key={item.key}
-                className="rounded-lg border border-slate-700/45 bg-slate-900/55 px-2.5 sm:px-3 py-2 min-w-0"
-              >
-                <div className="flex items-center justify-between gap-1 mb-1">
-                  <span className="text-[9px] sm:text-[10px] uppercase tracking-[0.1em] font-semibold text-slate-400 truncate">{item.label}</span>
-                  <span className={`inline-flex items-center rounded border px-1 py-0.5 text-[8px] font-bold leading-none ${tone}`}>
-                    {!hasData ? 'N/A' : freshness === 'STALE' ? 'STALE' : (isUp ? 'UP' : 'DOWN')}
-                  </span>
-                </div>
-                <div className={`text-[13px] sm:text-[15px] font-mono font-black tabular-nums leading-none ${hasData ? (isUp ? 'text-emerald-300' : 'text-rose-300') : 'text-slate-400'}`}>
-                  {hasData ? `${isUp ? '+' : ''}${pct.toFixed(2)}%` : '--'}
-                </div>
-                <div className="mt-1 text-[8px] font-mono text-slate-500 tabular-nums">
-                  {Number.isFinite(ageSec) ? `${Math.round(ageSec)}s ago` : 'no feed'}
-                </div>
-              </div>
-            );
-          })}
         </div>
       </div>
 

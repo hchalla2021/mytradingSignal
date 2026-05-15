@@ -1,22 +1,7 @@
 import type { Metadata } from 'next'
-import { Inter, JetBrains_Mono } from 'next/font/google'
 import './globals.css'
 import { GlobalErrorHandler } from '@/components/GlobalErrorHandler'
 import { AppAccessGate } from '@/components/AppAccessGate'
-
-const inter = Inter({
-  subsets: ['latin'],
-  weight: ['300', '400', '500', '600', '700', '800'],
-  variable: '--font-inter',
-  display: 'swap',
-})
-
-const jetbrainsMono = JetBrains_Mono({
-  subsets: ['latin'],
-  weight: ['400', '500', '600', '700'],
-  variable: '--font-jetbrains-mono',
-  display: 'swap',
-})
 
 export const metadata: Metadata = {
   title: 'MyDailyTradingSignals - Live Market Dashboard',
@@ -55,7 +40,7 @@ export default function RootLayout({
         <meta httpEquiv="Pragma" content="no-cache" />
         <meta httpEquiv="Expires" content="0" />
       </head>
-      <body className={`min-h-screen bg-gradient-to-br from-dark-bg via-dark-surface to-dark-elevated antialiased ${inter.variable} ${jetbrainsMono.variable}`}>
+      <body className="min-h-screen bg-gradient-to-br from-dark-bg via-dark-surface to-dark-elevated antialiased">
         <GlobalErrorHandler />
         <AppAccessGate>{children}</AppAccessGate>
         {/* Disable back-forward cache */}

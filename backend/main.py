@@ -3,6 +3,7 @@
 import asyncio
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 from urllib.parse import urlparse
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -52,13 +53,14 @@ settings = get_settings()
 logger = logging.getLogger("mytradingsignal")
 
 market_feed: MarketFeedService | None = None
+BACKEND_DIR = Path(__file__).resolve().parent
 
 # Rate limiter — use a dedicated empty config file so slowapi does not
 # re-read backend/.env with platform-default encoding on Windows.
 limiter = Limiter(
     key_func=get_remote_address,
     default_limits=["60/minute"],
-    config_filename=".slowapi.env",
+    config_filename=str(BACKEND_DIR / ".slowapi.env"),
 )
 
 
@@ -122,13 +124,6 @@ async def lifespan(app: FastAPI):
         # Auth monitor
         await unified_auth.start_auto_refresh_monitor()
 
-        # Candle backup restoration (non-critical disk I/O)
-        try:
-            from services.candle_backup_service import CandleBackupService
-            await CandleBackupService.restore_all_symbols(cache)
-        except Exception:
-            pass
-
         # All services in parallel
         async def start_scheduler():
             nonlocal scheduler, feed_task
@@ -140,6 +135,14 @@ async def lifespan(app: FastAPI):
             else:
                 feed_task = asyncio.create_task(market_feed.start())
                 print("🧪 Feed: immediate start")
+
+        async def restore_candles():
+            # Non-critical disk I/O; do not delay core feed availability.
+            try:
+                from services.candle_backup_service import CandleBackupService
+                await CandleBackupService.restore_all_symbols(cache)
+            except Exception:
+                pass
 
         async def start_oi_broadcaster():
             try:
@@ -245,22 +248,48 @@ async def lifespan(app: FastAPI):
             except Exception as exc:
                 logger.error("Observatory service failed to start: %s", exc, exc_info=True)
 
-        await asyncio.gather(
-            start_scheduler(),
-            start_oi_broadcaster(),
-            start_compass(),
-            start_liquidity(),
-            start_ict(),
-            start_expiry_explosion(),
-            start_market_edge(),
-            start_candle_intelligence(),
-            start_market_regime(),
-            start_strike_intelligence(),
-            start_chart_intelligence(),
-            start_global_indices(),
-            start_global_news(),
-            start_observatory(),
-        )
+        # Fast local mode: bring core feed online first, then defer optional heavy services.
+        if settings.fast_startup_mode:
+            print("⚡ FAST_STARTUP_MODE=ON - starting core services first")
+            await start_scheduler()
+
+            # Give backend + frontend a short quiet window for faster first render in dev.
+            await asyncio.sleep(2)
+
+            await asyncio.gather(
+                restore_candles(),
+                start_oi_broadcaster(),
+                start_compass(),
+                start_liquidity(),
+                start_ict(),
+                start_expiry_explosion(),
+                start_market_edge(),
+                start_candle_intelligence(),
+                start_market_regime(),
+                start_strike_intelligence(),
+                start_chart_intelligence(),
+                start_global_indices(),
+                start_global_news(),
+                start_observatory(),
+            )
+        else:
+            await asyncio.gather(
+                start_scheduler(),
+                restore_candles(),
+                start_oi_broadcaster(),
+                start_compass(),
+                start_liquidity(),
+                start_ict(),
+                start_expiry_explosion(),
+                start_market_edge(),
+                start_candle_intelligence(),
+                start_market_regime(),
+                start_strike_intelligence(),
+                start_chart_intelligence(),
+                start_global_indices(),
+                start_global_news(),
+                start_observatory(),
+            )
         print("🚀 All services READY")
 
     # 🔥 Fire background boot — server starts accepting HTTP immediately

@@ -153,6 +153,11 @@ function sectionBg(sig: SignalKey): string {
   return 'from-[#080c18]/90 via-[#060910]/90 to-[#060910]/90';
 }
 
+function truncateText(text: string, maxLength: number): string {
+  if (text.length <= maxLength) return text;
+  return `${text.slice(0, maxLength - 1)}…`;
+}
+
 function fmtAge(pub: string): string {
   if (!pub) return '';
   try {
@@ -640,6 +645,50 @@ export default function GlobalImpactRadar() {
   const visible = useMemo(() => applyFilter(data?.items ?? [], filter), [data?.items, filter]);
   const grouped = useMemo(() => groupAndSort(visible), [visible]);
   const counts  = useMemo(() => computeCounts(data?.items ?? []), [data?.items]);
+  const overview = useMemo(() => {
+    const items = visible;
+    const total = items.length;
+    const topItems = items.slice(0, 4);
+    const sourceCounts = new Map<string, number>();
+    const sectorCounts = new Map<string, number>();
+    let confidenceSum = 0;
+
+    for (const item of items) {
+      sourceCounts.set(item.source, (sourceCounts.get(item.source) ?? 0) + 1);
+      confidenceSum += item.confidence;
+      for (const sector of item.sectors) {
+        sectorCounts.set(sector, (sectorCounts.get(sector) ?? 0) + 1);
+      }
+    }
+
+    let dominantSource = '—';
+    let dominantSourceCount = -1;
+    sourceCounts.forEach((count, key) => {
+      if (count > dominantSourceCount) {
+        dominantSource = key;
+        dominantSourceCount = count;
+      }
+    });
+
+    let dominantSector = '—';
+    let dominantSectorCount = -1;
+    sectorCounts.forEach((count, key) => {
+      if (count > dominantSectorCount) {
+        dominantSector = key;
+        dominantSectorCount = count;
+      }
+    });
+
+    return {
+      topItems,
+      sourceSpread: sourceCounts.size,
+      sectorSpread: sectorCounts.size,
+      dominantSource,
+      dominantSector,
+      averageConfidence: total > 0 ? Math.round(confidenceSum / total) : 0,
+      total,
+    };
+  }, [visible]);
 
   const toggleTier = useCallback((t: ImpactTier) =>
     setCollapsed(prev => {
@@ -651,8 +700,7 @@ export default function GlobalImpactRadar() {
 
   const overallMeta = useMemo(() => getMeta(data?.overall_signal ?? 'NEUTRAL'), [data?.overall_signal]);
   const bg          = useMemo(() => sectionBg(data?.overall_signal ?? 'NEUTRAL'), [data?.overall_signal]);
-  const sig         = data?.overall_signal ?? 'NEUTRAL';
-
+  const sig: SignalKey = data?.overall_signal ?? 'NEUTRAL';
   if (loading && !data) return <Skeleton />;
 
   return (
@@ -718,28 +766,58 @@ export default function GlobalImpactRadar() {
         </header>
 
         {/* ── Metrics row ───────────────────────────────────────────────── */}
-        <div className="grid grid-cols-2 gap-2 mb-3.5 sm:flex sm:flex-row sm:flex-wrap sm:gap-2">
-          <div className="col-span-1">
+        <div className="grid grid-cols-1 gap-2 mb-3.5 md:grid-cols-2 xl:grid-cols-4 xl:gap-2.5">
+          <div className="min-w-0">
             <HeatMeter score={data?.heat_score ?? 50} />
           </div>
-          <div className="col-span-1 sm:flex-1">
+          <div className="min-w-0">
             <SentimentBar
               bullish={data?.bullish_count ?? 0}
               bearish={data?.bearish_count ?? 0}
               neutral={data?.neutral_count ?? 0}
             />
           </div>
-          <div
-            className="col-span-2 sm:hidden flex items-center gap-1.5 px-3 py-2 rounded-xl border text-[11px] font-black justify-center"
-            style={{ color: overallMeta.hex, borderColor: `${overallMeta.hex}28`, backgroundColor: `${overallMeta.hex}0c` }}
-          >
-            {ICONS[sig]} {overallMeta.label}
+          <div className="rounded-xl border border-slate-800/55 bg-slate-950/50 px-3 py-2.5 min-w-0">
+            <div className="flex items-center justify-between gap-2 mb-1.5">
+              <span className="text-[9px] font-bold uppercase tracking-[0.14em] text-slate-500">Coverage</span>
+              <span className="text-[9px] font-black uppercase tracking-[0.08em] text-cyan-300">{overview.total} events</span>
+            </div>
+            <div className="grid grid-cols-2 gap-2 text-[10px] font-mono">
+              <div className="rounded-lg border border-slate-700/45 bg-slate-900/50 px-2.5 py-2">
+                <div className="text-slate-500">Sources</div>
+                <div className="mt-0.5 text-slate-100 font-black">{overview.sourceSpread}</div>
+              </div>
+              <div className="rounded-lg border border-slate-700/45 bg-slate-900/50 px-2.5 py-2">
+                <div className="text-slate-500">Sectors</div>
+                <div className="mt-0.5 text-slate-100 font-black">{overview.sectorSpread}</div>
+              </div>
+            </div>
+          </div>
+          <div className="rounded-xl border border-slate-800/55 bg-slate-950/50 px-3 py-2.5 min-w-0">
+            <div className="flex items-center justify-between gap-2 mb-1.5">
+              <span className="text-[9px] font-bold uppercase tracking-[0.14em] text-slate-500">Signal mix</span>
+              <span className="text-[9px] font-black uppercase tracking-[0.08em] text-slate-300">Avg {overview.averageConfidence}%</span>
+            </div>
+            <div className="flex items-center gap-1.5 flex-wrap">
+              <span
+                className="inline-flex items-center gap-1 px-2 py-[4px] rounded-[6px] border text-[9px] font-black leading-none"
+                style={{ color: overallMeta.hex, borderColor: `${overallMeta.hex}30`, backgroundColor: `${overallMeta.hex}0d` }}
+              >
+                {ICONS[sig]} {overallMeta.label}
+              </span>
+              <span className="inline-flex items-center gap-1 px-2 py-[4px] rounded-[6px] border border-slate-700/55 bg-slate-900/55 text-[9px] font-black text-slate-300 leading-none">
+                {overview.dominantSource}
+              </span>
+              <span className="inline-flex items-center gap-1 px-2 py-[4px] rounded-[6px] border border-slate-700/55 bg-slate-900/55 text-[9px] font-black text-slate-300 leading-none">
+                {overview.dominantSector}
+              </span>
+            </div>
           </div>
         </div>
 
         {/* ── Filter tabs — horizontal scroll on mobile ─────────────────── */}
         <div
-          className="flex gap-1.5 mb-3 pb-3 border-b border-slate-800/50 overflow-x-auto"
+          className="flex gap-1.5 mb-3 pb-2.5 border-b border-slate-800/50 overflow-x-auto"
           style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}
         >
           {FILTER_KEYS.map(f => {
@@ -791,7 +869,44 @@ export default function GlobalImpactRadar() {
 
         {/* ── News region ───────────────────────────────────────────────── */}
         {showNews && (
-          <div id="gir-news-region" role="region" aria-label="News events">
+          <div
+            id="gir-news-region"
+            role="region"
+            aria-label="News events"
+            className="max-h-[70vh] overflow-y-auto pr-1"
+          >
+
+            {overview.topItems.length > 0 && (
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-2.5 mb-3.5">
+                {overview.topItems.map((item) => {
+                  const meta = getMeta(item.signal);
+                  return (
+                    <article
+                      key={item.id}
+                      className="rounded-xl border border-slate-800/55 bg-slate-950/55 px-3 py-2.5 min-w-0"
+                      style={{ boxShadow: `0 0 0 1px ${meta.hex}14 inset` }}
+                    >
+                      <div className="flex items-center justify-between gap-2 mb-1.5">
+                        <span
+                          className="inline-flex items-center gap-1 px-2 py-[4px] rounded-[6px] border text-[9px] font-black leading-none"
+                          style={{ color: meta.hex, borderColor: `${meta.hex}2a`, backgroundColor: `${meta.hex}0c` }}
+                        >
+                          {ICONS[item.signal]} {meta.label}
+                        </span>
+                        <span className="text-[9px] font-mono text-slate-500 tabular-nums">{item.score}</span>
+                      </div>
+                      <div className="text-[11px] sm:text-[12px] font-semibold text-slate-100 leading-snug truncate">
+                        {truncateText(item.title, 70)}
+                      </div>
+                      <div className="mt-1.5 flex items-center justify-between gap-2 text-[9px] font-mono text-slate-500 tabular-nums">
+                        <span className="truncate">{item.source}</span>
+                        <span>{item.confidence}% conf</span>
+                      </div>
+                    </article>
+                  );
+                })}
+              </div>
+            )}
 
             {/* Error */}
             {error && !data && (
@@ -853,7 +968,7 @@ export default function GlobalImpactRadar() {
                       onToggle={() => toggleTier(tier)}
                     />
                     {!collapsed.has(tier) && (
-                      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4 gap-2.5 mb-2.5">
+                      <div className="flex flex-col gap-2.5 mb-2.5">
                         {ti.map(item => <NewsCard key={item.id} item={item} />)}
                       </div>
                     )}

@@ -18,6 +18,8 @@ export interface StrategySignal {
   signal: 'BULLISH' | 'BEARISH' | 'NEUTRAL';
   confidence: number;
   detail: string;
+  drivers?: string[];
+  parameters?: Record<string, unknown>;
 }
 
 export interface TodaySnapshot {
@@ -38,6 +40,16 @@ export interface StrategyPerformance {
   strategy_name: string;
   morning_signal: string;
   morning_confidence: number;
+  morning_detail?: string;
+  morning_drivers?: string[];
+  morning_parameters?: Record<string, unknown>;
+  closing_signal?: string;
+  closing_confidence?: number;
+  closing_detail?: string;
+  closing_drivers?: string[];
+  closing_parameters?: Record<string, unknown>;
+  priority_weight?: number;
+  priority_band?: 'HIGH' | 'MEDIUM' | 'LOW';
   actual_direction: string;
   was_correct: boolean | null;
 }
@@ -61,6 +73,8 @@ export interface StrategyRanking {
   strategy_name: string;
   category?: string;
   icon?: string;
+  priority?: number;
+  priority_band?: 'HIGH' | 'MEDIUM' | 'LOW';
   accuracy: number;
   weighted_accuracy?: number;
   correct: number;
@@ -89,6 +103,39 @@ export interface ObservatoryState {
   refresh: () => void;
 }
 
+function buildObservatoryUrls(path: string): string[] {
+  const endpoint = API_CONFIG.endpoint(path);
+  const local8000 = `http://localhost:8000${path}`;
+  const local127 = `http://127.0.0.1:8000${path}`;
+  const isLocal = typeof window !== 'undefined' &&
+    (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
+
+  const urls = isLocal
+    ? [local8000, local127, endpoint]
+    : [endpoint, local8000, local127];
+
+  // Keep order but remove duplicates.
+  return Array.from(new Set(urls));
+}
+
+async function fetchJsonWithFallback(path: string): Promise<any> {
+  const urls = buildObservatoryUrls(path);
+  for (const url of urls) {
+    try {
+      const res = await fetch(url, {
+        cache: 'no-store',
+        credentials: 'include',
+        signal: AbortSignal.timeout(5000),
+      });
+      if (!res.ok) continue;
+      return await res.json();
+    } catch {
+      // Try next candidate URL.
+    }
+  }
+  return null;
+}
+
 // ── Hook ──────────────────────────────────────────────────────────────────────
 
 export function useObservatory(): ObservatoryState {
@@ -105,9 +152,7 @@ export function useObservatory(): ObservatoryState {
 
   const fetchSnapshot = useCallback(async () => {
     try {
-      const res = await fetch(API_CONFIG.endpoint('/api/observatory/snapshot'), { cache: 'no-store' });
-      if (!res.ok) return;
-      const json = await res.json();
+      const json = await fetchJsonWithFallback('/api/observatory/snapshot');
       if (json.success && json.data) {
         setTodaySnapshot(json.data);
         setLastRefreshed(new Date());
@@ -119,23 +164,20 @@ export function useObservatory(): ObservatoryState {
 
   const fetchReports = useCallback(async (days: number) => {
     try {
-      const [reportRes, rankRes, datesRes] = await Promise.all([
-        fetch(API_CONFIG.endpoint(`/api/observatory/report?days=${days}`), { cache: 'no-store' }),
-        fetch(API_CONFIG.endpoint(`/api/observatory/rankings?days=${days}`), { cache: 'no-store' }),
-        fetch(API_CONFIG.endpoint('/api/observatory/dates'), { cache: 'no-store' }),
+      const [reportsJson, rankingsJson, datesJson] = await Promise.all([
+        fetchJsonWithFallback(`/api/observatory/report?days=${days}`),
+        fetchJsonWithFallback(`/api/observatory/rankings?days=${days}`),
+        fetchJsonWithFallback('/api/observatory/dates'),
       ]);
 
-      if (reportRes.ok) {
-        const rj = await reportRes.json();
-        if (rj.success) setHistoricalReports(rj.reports || []);
+      if (reportsJson?.success) {
+        setHistoricalReports(reportsJson.reports || []);
       }
-      if (rankRes.ok) {
-        const rkj = await rankRes.json();
-        if (rkj.success) setRankings(rkj.data);
+      if (rankingsJson?.success) {
+        setRankings(rankingsJson.data);
       }
-      if (datesRes.ok) {
-        const dj = await datesRes.json();
-        if (dj.success) setAvailableDates(dj.dates || []);
+      if (datesJson?.success) {
+        setAvailableDates(datesJson.dates || []);
       }
     } catch {
       // silently keep last known state
@@ -148,7 +190,7 @@ export function useObservatory(): ObservatoryState {
     try {
       await Promise.all([fetchSnapshot(), fetchReports(reportDays)]);
     } catch (err) {
-      setError('Failed to load observatory data');
+      setError('Failed to load observatory data. Check backend at http://localhost:8000.');
     } finally {
       setLoading(false);
     }

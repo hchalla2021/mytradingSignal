@@ -1,0 +1,162 @@
+{
+  "date": "2026-05-15",
+  "generated_at": "2026-05-15T15:31:10.266800+05:30",
+  "symbols": {
+    "NIFTY": {
+      "open_price": 23828.4,
+      "close_price": 23660.45,
+      "change_pct": -0.7,
+      "direction": "DOWN",
+      "day_classification": "MILD_DOWN",
+      "snapshot_count": 9,
+      "strategy_performance": {
+        "market_regime": {
+          "strategy_name": "Market Regime",
+          "morning_signal": "BULLISH",
+          "morning_confidence": 29,
+          "actual_direction": "DOWN",
+          "was_correct": false
+        },
+        "liquidity_score": {
+          "strategy_name": "Liquidity Intelligence",
+          "morning_signal": "BULLISH",
+          "morning_confidence": 43,
+          "actual_direction": "DOWN",
+          "was_correct": false
+        },
+        "ict_smart_money": {
+          "strategy_name": "ICT Smart Money",
+          "morning_signal": "BULLISH",
+          "morning_confidence": 59,
+          "actual_direction": "DOWN",
+          "was_correct": false
+        },
+        "market_edge": {
+          "strategy_name": "MarketEdge Intelligence",
+          "morning_signal": "NEUTRAL",
+          "morning_confidence": 27,
+          "actual_direction": "DOWN",
+          "was_correct": null
+        },
+        "candle_intelligence": {
+          "strategy_name": "Candle Intelligence",
+          "morning_signal": "BULLISH",
+          "morning_confidence": 48,
+          "actual_direction": "DOWN",
+          "was_correct": false
+        },
+        "institutional_compass": {
+          "strategy_name": "Institutional Compass",
+          "morning_signal": "BULLISH",
+          "morning_confidence": 49,
+          "actual_direction": "DOWN",
+          "was_correct": false
+        }
+      }
+    },
+    "BANKNIFTY": {
+      "open_price": 54282.0,
+      "close_price": 53803.7,
+      "change_pct": -0.88,
+      "direction": "DOWN",
+      "day_classification": "MILD_DOWN",
+      "snapshot_count": 9,
+      "strategy_performance": {
+        "market_regime": {
+          "strategy_name": "Market Regime",
+          "morning_signal": "BULLISH",
+          "morning_confidence": 16,
+          "actual_direction": "DOWN",
+          "was_correct": false
+        },
+        "liquidity_score": {
+          "strategy_name": "Liquidity Intelligence",
+          "morning_signal": "BEARISH",
+          "morning_confidence": 33,
+          "actual_direction": "DOWN",
+          "was_correct": true
+        },
+        "ict_smart_money": {
+          "strategy_name": "ICT Smart Money",
+          "morning_signal": "BULLISH",
+          "morning_confidence": 62,
+          "actual_direction": "DOWN",
+          "was_correct": false
+        },
+        "market_edge": {
+          "strategy_name": "MarketEdge Intelligence",
+          "morning_signal": "NEUTRAL",
+          "morning_confidence": 35,
+          "actual_direction": "DOWN",
+          "was_correct": null
+        },
+        "candle_intelligence": {
+          "strategy_name": "Candle Intelligence",
+          "morning_signal": "NEUTRAL",
+          "morning_confidence": 26,
+          "actual_direction": "DOWN",
+          "was_correct": null
+        },
+        "institutional_compass": {
+          "strategy_name": "Institutional Compass",
+          "morning_signal": "BULLISH",
+          "morning_confidence": 49,
+          "actual_direction": "DOWN",
+          "was_correct": false
+        }
+      }
+    },
+    "SENSEX": {
+      "open_price": 75806.24,
+      "close_price": 75237.99,
+      "change_pct": -0.75,
+      "direction": "DOWN",
+      "day_classification": "MILD_DOWN",
+      "snapshot_count": 9,
+      "strategy_performance": {
+        "market_regime": {
+          "strategy_name": "Market Regime",
+          "morning_signal": "BULLISH",
+          "morning_confidence": 17,
+          "actual_direction": "DOWN",
+          "was_correct": false
+        },
+        "liquidity_score": {
+          "strategy_name": "Liquidity Intelligence",
+          "morning_signal": "BEARISH",
+          "morning_confidence": 39,
+          "actual_direction": "DOWN",
+          "was_correct": true
+        },
+        "ict_smart_money": {
+          "strategy_name": "ICT Smart Money",
+          "morning_signal": "BULLISH",
+          "morning_confidence": 55,
+          "actual_direction": "DOWN",
+          "was_correct": false
+        },
+        "market_edge": {
+          "strategy_name": "MarketEdge Intelligence",
+          "morning_signal": "NEUTRAL",
+          "morning_confidence": 40,
+          "actual_direction": "DOWN",
+          "was_correct": null
+        },
+        "candle_intelligence": {
+          "strategy_name": "Candle Intelligence",
+          "morning_signal": "BULLISH",
+          "morning_confidence": 48,
+          "actual_direction": "DOWN",
+          "was_correct": false
+        },
+        "institutional_compass": {
+          "strategy_name": "Institutional Compass",
+          "morning_signal": "BULLISH",
+          "morning_confidence": 42,
+          "actual_direction": "DOWN",
+          "was_correct": false
+        }
+      }
+    }
+  }
+}

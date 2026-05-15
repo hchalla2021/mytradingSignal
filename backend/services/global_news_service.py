@@ -7,6 +7,7 @@ import hashlib
 import logging
 import html
 import re
+import time
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -301,7 +302,7 @@ async def _fetch_feed(client: httpx.AsyncClient, feed: Dict[str, str]) -> List[D
         if resp.status_code == 200:
             return _parse_rss(resp.text, feed["name"])
     except Exception as exc:
-        logger.warning("Feed fetch failed [%s]: %s", feed["name"], exc)
+        logger.debug("Feed fetch failed [%s]: %s", feed["name"], exc)
     return []
 
 
@@ -317,10 +318,43 @@ class GlobalNewsService:
         self._heat_score: int = 50
         self._task: Optional[asyncio.Task] = None
         self._ws_clients: set = set()  # active WebSocket connections
+        self._feed_failures: Dict[str, int] = {}
+        self._feed_retry_until: Dict[str, float] = {}
+
+    def _feed_is_cooled_down(self, feed_name: str) -> bool:
+        retry_until = self._feed_retry_until.get(feed_name)
+        if retry_until is None:
+            return False
+        if time.monotonic() >= retry_until:
+            self._feed_retry_until.pop(feed_name, None)
+            self._feed_failures.pop(feed_name, None)
+            return False
+        return True
+
+    def _register_feed_result(self, feed_name: str, ok: bool, error_text: str = "") -> None:
+        if ok:
+            self._feed_failures.pop(feed_name, None)
+            self._feed_retry_until.pop(feed_name, None)
+            return
+
+        failure_count = self._feed_failures.get(feed_name, 0) + 1
+        self._feed_failures[feed_name] = failure_count
+
+        normalized = error_text.lower()
+        is_dns_failure = "getaddrinfo failed" in normalized or "name or service not known" in normalized
+        if failure_count >= 2 or is_dns_failure:
+            cooldown_seconds = 300 if is_dns_failure else min(900, 60 * failure_count)
+            self._feed_retry_until[feed_name] = time.monotonic() + cooldown_seconds
+            logger.info(
+                "Pausing feed [%s] for %ds after %d consecutive failure(s)",
+                feed_name,
+                cooldown_seconds,
+                failure_count,
+            )
 
     async def start(self):
-        await self._refresh()
         self._task = asyncio.create_task(self._loop())
+        asyncio.create_task(self._refresh())
         logger.info("GlobalNewsService started")
 
     async def stop(self):
@@ -355,12 +389,20 @@ class GlobalNewsService:
     async def _refresh(self):
         async with self._lock:
             all_items: List[Dict[str, Any]] = []
+            eligible_feeds = [feed for feed in _RSS_FEEDS if not self._feed_is_cooled_down(feed["name"])]
+            if not eligible_feeds:
+                logger.debug("GlobalNews refresh skipped: all feeds are in cooldown")
+                return
+
             async with httpx.AsyncClient() as client:
-                tasks = [_fetch_feed(client, f) for f in _RSS_FEEDS]
+                tasks = [_fetch_feed(client, f) for f in eligible_feeds]
                 results = await asyncio.gather(*tasks, return_exceptions=True)
-                for result in results:
+                for feed, result in zip(eligible_feeds, results):
                     if isinstance(result, list):
                         all_items.extend(result)
+                        self._register_feed_result(feed["name"], ok=True)
+                    else:
+                        self._register_feed_result(feed["name"], ok=False, error_text=str(result))
 
             # Deduplicate by id, limit total
             seen: set[str] = set()

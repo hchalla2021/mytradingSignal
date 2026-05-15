@@ -13,6 +13,10 @@ export interface GlobalIndexTick {
   source: string;
   status: 'LIVE' | 'STALE' | 'UNAVAILABLE';
   timestamp: string;
+  fetchedAt?: string;
+  quoteAgeSec?: number | null;
+  marketState?: string;
+  liveQuality?: 'REALTIME' | 'DELAYED' | 'CLOSED' | 'UNAVAILABLE';
 }
 
 export type GlobalIndicesData = Record<string, GlobalIndexTick>;
