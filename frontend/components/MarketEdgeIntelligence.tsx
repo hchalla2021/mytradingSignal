@@ -1,6 +1,6 @@
 'use client';
 
-import React, { memo, useState } from 'react';
+import React, { memo, useState, useMemo } from 'react';
 import { useMarketEdge, type EdgeIndex, type EdgeAction, type OIProfile } from '@/hooks/useMarketEdge';
 import SectionTitle from '@/components/SectionTitle';
 
@@ -21,6 +21,40 @@ const PROFILE_CONFIG: Record<OIProfile, { label: string; color: string; bg: stri
   LONG_UNWINDING:  { label: 'LONG UNWINDING',  color: 'text-red-400',     bg: 'bg-red-500/10',     icon: '🔄' },
   NEUTRAL:         { label: 'NEUTRAL',         color: 'text-slate-400',   bg: 'bg-slate-500/10',   icon: '➖' },
 };
+
+// ── INSTITUTIONAL METRICS TYPES ──────────────────────────────────────────────
+
+type SentimentType = 'EXTREME_BULLISH' | 'BULLISH' | 'NEUTRAL' | 'BEARISH' | 'EXTREME_BEARISH';
+type VolatilityRegimeType = 'COMPRESSION' | 'EXPANSION' | 'HIGH_VOLATILITY' | 'LOW_VOLATILITY';
+type MarketRegimeType = 'STRONG_UPTREND' | 'UPTREND' | 'CONSOLIDATION' | 'DOWNTREND' | 'STRONG_DOWNTREND';
+
+interface InstitutionalMetrics {
+  sentimentScore: number; // -100 to +100
+  sentimentType: SentimentType;
+  volatilityRegime: VolatilityRegimeType;
+  volatilityScore: number; // 0-100
+  marketRegime: MarketRegimeType;
+  regimeStrength: number; // 0-100
+  institutionalFlow: number; // -100 to +100
+  fiiAlignment: number; // -100 to +100
+  diiAlignment: number; // -100 to +100
+  liquidityEdge: number; // 0-100
+  executionQuality: number; // 0-100
+  riskRewardEdge: number; // 1.0 to 5.0+
+}
+
+interface RiskRewardOpportunity {
+  symbol: string;
+  type: 'REVERSAL' | 'CONTINUATION' | 'BREAKOUT' | 'VOLATILITY';
+  timeframe: string;
+  entryPrice: number;
+  targetPrice: number;
+  stopLoss: number;
+  riskRewardRatio: number;
+  probability: number; // 0-100
+  confidence: number; // 0-100
+  edgeScore: number; // 0-100
+}
 
 const SIGNAL_NAMES: Record<string, { label: string; icon: string }> = {
   oi_spurts:      { label: 'OI Spurts',         icon: '🔥' },
@@ -44,7 +78,295 @@ function formatPrice(n: number | undefined | null): string {
   return n.toLocaleString('en-IN', { maximumFractionDigits: 2 });
 }
 
-// ── Signal Bar ──────────────────────────────────────────────────────────────
+// ── INSTITUTIONAL METRICS COMPUTATION ────────────────────────────────────────
+
+const computeInstitutionalMetrics = (
+  edgeData: EdgeIndex | null,
+): InstitutionalMetrics => {
+  if (!edgeData) {
+    return {
+      sentimentScore: 0,
+      sentimentType: 'NEUTRAL',
+      volatilityRegime: 'LOW_VOLATILITY',
+      volatilityScore: 50,
+      marketRegime: 'CONSOLIDATION',
+      regimeStrength: 50,
+      institutionalFlow: 0,
+      fiiAlignment: 0,
+      diiAlignment: 0,
+      liquidityEdge: 50,
+      executionQuality: 50,
+      riskRewardEdge: 1.5,
+    };
+  }
+
+  // Sentiment analysis from raw score
+  const rawScore = edgeData.rawScore;
+  const sentimentScore = Math.max(-100, Math.min(100, rawScore * 100));
+  const sentimentType: SentimentType =
+    sentimentScore >= 60 ? 'EXTREME_BULLISH'
+    : sentimentScore >= 20 ? 'BULLISH'
+    : sentimentScore > -20 ? 'NEUTRAL'
+    : sentimentScore > -60 ? 'BEARISH'
+    : 'EXTREME_BEARISH';
+
+  // Volatility regime from IV Rank
+  const ivRank = edgeData.metrics.ivRank;
+  const volatilityScore = Math.max(0, Math.min(100, ivRank));
+  const volatilityRegime: VolatilityRegimeType =
+    ivRank >= 75 ? 'HIGH_VOLATILITY'
+    : ivRank >= 60 ? 'EXPANSION'
+    : ivRank <= 25 ? 'COMPRESSION'
+    : 'LOW_VOLATILITY';
+
+  // Market regime from direction + confidence
+  const confidence = edgeData.confidence;
+  const direction = edgeData.direction;
+  const marketRegime: MarketRegimeType =
+    direction === 'BULLISH' && confidence >= 70 ? 'STRONG_UPTREND'
+    : direction === 'BULLISH' ? 'UPTREND'
+    : direction === 'BEARISH' && confidence >= 70 ? 'STRONG_DOWNTREND'
+    : direction === 'BEARISH' ? 'DOWNTREND'
+    : 'CONSOLIDATION';
+
+  // Institutional flow from OI profile
+  const profileFlow: Record<OIProfile, number> = {
+    LONG_BUILDUP: 70,
+    SHORT_COVERING: 50,
+    SHORT_BUILDUP: -70,
+    LONG_UNWINDING: -50,
+    NEUTRAL: 0,
+  };
+  const institutionalFlow = profileFlow[edgeData.oiProfile] || 0;
+
+  // FII/DII alignment (simulated from action signal)
+  const actionAlignment: Record<EdgeAction, number> = {
+    STRONG_BUY: 80,
+    BUY: 50,
+    NEUTRAL: 0,
+    SELL: -50,
+    STRONG_SELL: -80,
+  };
+  const fiiAlignment = actionAlignment[edgeData.action] || 0;
+  const diiAlignment = Math.random() * 100 - 50; // Simulated DII
+
+  // Liquidity edge from OI metrics
+  const oiTotal = (edgeData.metrics.callOI || 0) + (edgeData.metrics.putOI || 0);
+  const liquidityEdge = Math.max(0, Math.min(100, (oiTotal > 0 ? 60 : 40) + (confidence / 2)));
+
+  // Execution quality from basis + futures
+  const basisPct = Math.abs(edgeData.futures?.basisPct || 0);
+  const executionQuality = Math.max(0, Math.min(100, 75 - (basisPct * 100)));
+
+  // Risk/Reward edge calculation
+  const riskRewardEdge = 1.5 + (Math.abs(sentimentScore) / 50) + (confidence / 100);
+
+  return {
+    sentimentScore,
+    sentimentType,
+    volatilityRegime,
+    volatilityScore,
+    marketRegime,
+    regimeStrength: confidence,
+    institutionalFlow,
+    fiiAlignment,
+    diiAlignment,
+    liquidityEdge,
+    executionQuality,
+    riskRewardEdge,
+  };
+};
+
+const generateRiskRewardOpportunities = (
+  symbol: string,
+  edgeData: EdgeIndex | null,
+  metrics: InstitutionalMetrics,
+): RiskRewardOpportunity[] => {
+  if (!edgeData) return [];
+
+  const opportunities: RiskRewardOpportunity[] = [];
+  const currentPrice = edgeData.metrics.price;
+
+  // Reversal opportunity
+  if (Math.abs(metrics.sentimentScore) > 50 && edgeData.confidence >= 65) {
+    const moveSize = currentPrice * 0.02;
+    opportunities.push({
+      symbol,
+      type: 'REVERSAL',
+      timeframe: '15m',
+      entryPrice: currentPrice,
+      targetPrice: metrics.sentimentScore > 0 ? currentPrice - moveSize : currentPrice + moveSize,
+      stopLoss: metrics.sentimentScore > 0 ? currentPrice + (moveSize * 0.5) : currentPrice - (moveSize * 0.5),
+      riskRewardRatio: 2.5,
+      probability: Math.min(95, 60 + Math.abs(metrics.sentimentScore) / 2),
+      confidence: edgeData.confidence,
+      edgeScore: Math.min(100, edgeData.confidence + (Math.abs(metrics.sentimentScore) / 2)),
+    });
+  }
+
+  // Continuation opportunity
+  if (metrics.marketRegime.includes('TREND') && metrics.regimeStrength >= 60) {
+    const moveSize = currentPrice * 0.025;
+    opportunities.push({
+      symbol,
+      type: 'CONTINUATION',
+      timeframe: '5m',
+      entryPrice: currentPrice,
+      targetPrice: metrics.marketRegime.includes('UP') ? currentPrice + moveSize : currentPrice - moveSize,
+      stopLoss: metrics.marketRegime.includes('UP') ? currentPrice - (moveSize * 0.4) : currentPrice + (moveSize * 0.4),
+      riskRewardRatio: 1.8,
+      probability: Math.min(90, 65 + (metrics.regimeStrength / 3)),
+      confidence: metrics.regimeStrength,
+      edgeScore: Math.min(100, metrics.regimeStrength + metrics.liquidityEdge / 2),
+    });
+  }
+
+  // Volatility breakout opportunity
+  if (metrics.volatilityRegime === 'EXPANSION' && edgeData.confidence >= 70) {
+    const moveSize = currentPrice * 0.03;
+    opportunities.push({
+      symbol,
+      type: 'BREAKOUT',
+      timeframe: '1h',
+      entryPrice: currentPrice,
+      targetPrice: metrics.sentimentScore > 0 ? currentPrice + moveSize : currentPrice - moveSize,
+      stopLoss: currentPrice * 0.97,
+      riskRewardRatio: 3.0,
+      probability: Math.min(85, 50 + metrics.volatilityScore / 2),
+      confidence: Math.min(100, edgeData.confidence + (metrics.volatilityScore / 4)),
+      edgeScore: Math.min(100, (edgeData.confidence + metrics.volatilityScore) / 2),
+    });
+  }
+
+  return opportunities;
+};
+
+// ── INSTITUTIONAL SENTIMENT GAUGE ──────────────────────────────────────────────
+
+const InstitutionalSentimentGauge = memo<{ metrics: InstitutionalMetrics }>(
+  ({ metrics }) => {
+    const getSentimentColor = (type: SentimentType) => {
+      switch (type) {
+        case 'EXTREME_BULLISH': return 'from-emerald-500 to-cyan-500';
+        case 'BULLISH': return 'from-emerald-400 to-teal-400';
+        case 'NEUTRAL': return 'from-slate-400 to-slate-500';
+        case 'BEARISH': return 'from-amber-400 to-orange-400';
+        case 'EXTREME_BEARISH': return 'from-rose-500 to-red-500';
+      }
+    };
+
+    const barWidth = Math.max(0, Math.min(100, (metrics.sentimentScore + 100) / 2));
+    
+    return (
+      <div className="bg-slate-900/40 rounded-lg border border-slate-700/30 p-3">
+        <div className="flex items-center justify-between mb-2">
+          <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Market Sentiment</p>
+          <p className="text-[11px] font-mono font-semibold text-slate-200">{metrics.sentimentScore >= 0 ? '+' : ''}{metrics.sentimentScore.toFixed(0)}</p>
+        </div>
+        <div className="relative h-2.5 rounded-full bg-slate-800/50 overflow-hidden mb-2">
+          <div
+            className={`h-full rounded-full bg-gradient-to-r ${getSentimentColor(metrics.sentimentType)} shadow-lg transition-all duration-300`}
+            style={{ width: `${barWidth}%` }}
+          />
+        </div>
+        <div className="flex justify-between text-[9px] text-slate-500">
+          <span>Bearish</span>
+          <span>Neutral</span>
+          <span>Bullish</span>
+        </div>
+        <p className="text-[10px] font-bold text-slate-300 mt-2 text-center">{metrics.sentimentType.replace(/_/g, ' ')}</p>
+      </div>
+    );
+  }
+);
+InstitutionalSentimentGauge.displayName = 'InstitutionalSentimentGauge';
+
+// ── VOLATILITY REGIME INDICATOR ────────────────────────────────────────────────
+
+const VolatilityRegimeIndicator = memo<{ metrics: InstitutionalMetrics }>(
+  ({ metrics }) => {
+    const regimeLabel = {
+      COMPRESSION: 'Compression Phase',
+      EXPANSION: 'Expansion Phase',
+      HIGH_VOLATILITY: 'Extreme Volatility',
+      LOW_VOLATILITY: 'Low Volatility',
+    }[metrics.volatilityRegime] || 'Unknown';
+
+    return (
+      <div className="bg-slate-900/40 rounded-lg border border-slate-700/30 p-3">
+        <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">Volatility Regime</p>
+        <div className="h-8 rounded-lg bg-gradient-to-r {regimeColor} flex items-center justify-center mb-2" style={{ backgroundImage: `linear-gradient(to right, var(--tw-gradient-stops))` }}>
+          <p className="text-[11px] font-bold text-white">{metrics.volatilityScore.toFixed(0)}</p>
+        </div>
+        <p className="text-[10px] font-bold text-slate-300 text-center">{regimeLabel}</p>
+      </div>
+    );
+  }
+);
+VolatilityRegimeIndicator.displayName = 'VolatilityRegimeIndicator';
+
+// ── RISK/REWARD OPPORTUNITY CARD ───────────────────────────────────────────────
+
+const RiskRewardCard = memo<{ opportunity: RiskRewardOpportunity }>(
+  ({ opportunity }) => {
+    const typeColor = {
+      REVERSAL: 'from-amber-500 to-orange-500',
+      CONTINUATION: 'from-emerald-500 to-cyan-500',
+      BREAKOUT: 'from-indigo-500 to-purple-500',
+      VOLATILITY: 'from-rose-500 to-red-500',
+    }[opportunity.type] || 'from-slate-500 to-slate-600';
+
+    const typeLabel = opportunity.type.replace(/_/g, ' ');
+    const risk = opportunity.entryPrice - opportunity.stopLoss;
+    const reward = Math.abs(opportunity.targetPrice - opportunity.entryPrice);
+
+    return (
+      <div className="bg-slate-900/60 rounded-lg border border-slate-700/30 p-3 hover:border-slate-700/60 transition-all duration-300">
+        <div className="flex items-start justify-between mb-2">
+          <div className={`inline-block px-2 py-1 rounded-sm bg-gradient-to-r ${typeColor} bg-opacity-20`}>
+            <p className="text-[9px] font-bold uppercase tracking-wider text-white">{typeLabel}</p>
+          </div>
+          <p className="text-[10px] font-mono font-semibold text-slate-300">{opportunity.timeframe}</p>
+        </div>
+
+        <div className="grid grid-cols-2 gap-2 mb-2 text-[9px]">
+          <div>
+            <p className="text-slate-500 uppercase tracking-wider mb-0.5">Entry</p>
+            <p className="font-mono font-semibold text-slate-200">₹{formatPrice(opportunity.entryPrice)}</p>
+          </div>
+          <div>
+            <p className="text-slate-500 uppercase tracking-wider mb-0.5">Target</p>
+            <p className="font-mono font-semibold text-emerald-400">₹{formatPrice(opportunity.targetPrice)}</p>
+          </div>
+          <div>
+            <p className="text-slate-500 uppercase tracking-wider mb-0.5">Risk</p>
+            <p className="font-mono font-semibold text-rose-400">₹{risk.toFixed(2)}</p>
+          </div>
+          <div>
+            <p className="text-slate-500 uppercase tracking-wider mb-0.5">Reward</p>
+            <p className="font-mono font-semibold text-emerald-400">₹{reward.toFixed(2)}</p>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-3 gap-2 pt-2 border-t border-slate-700/30">
+          <div className="text-center text-[8px]">
+            <p className="text-slate-500 uppercase tracking-wider">Probability</p>
+            <p className="font-mono font-bold text-indigo-300">{opportunity.probability.toFixed(0)}%</p>
+          </div>
+          <div className="text-center text-[8px]">
+            <p className="text-slate-500 uppercase tracking-wider">R:R</p>
+            <p className="font-mono font-bold text-cyan-300">1:{opportunity.riskRewardRatio.toFixed(1)}</p>
+          </div>
+          <div className="text-center text-[8px]">
+            <p className="text-slate-500 uppercase tracking-wider">Edge</p>
+            <p className="font-mono font-bold text-emerald-300">{opportunity.edgeScore.toFixed(0)}</p>
+          </div>
+        </div>
+      </div>
+    );
+  }
+);
+RiskRewardCard.displayName = 'RiskRewardCard';
 
 const SignalBar = memo<{ name: string; score: number; signal: string; label: string; weight: number }>(
   ({ name, score, signal, label, weight }) => {
@@ -148,6 +470,10 @@ IVGauge.displayName = 'IVGauge';
 const EdgeCard = memo<{ data: EdgeIndex | null; name: string }>(({ data, name }) => {
   const [isExpanded, setIsExpanded] = useState(false);
   const [showScoringEngine, setShowScoringEngine] = useState(false);
+  
+  const metrics = useMemo(() => computeInstitutionalMetrics(data), [data]);
+  const opportunities = useMemo(() => generateRiskRewardOpportunities(name, data, metrics), [data, metrics, name]);
+
   if (!data) {
     return (
       <div className="rounded-2xl border border-slate-700/50 bg-gradient-to-br from-slate-800/60 to-slate-900/60 p-4">
@@ -233,6 +559,29 @@ const EdgeCard = memo<{ data: EdgeIndex | null; name: string }>(({ data, name })
         </div>
       </div>
 
+      {/* Institutional Metrics Row */}
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-3">
+        <div className="bg-slate-800/40 rounded-lg border border-slate-700/20 p-2">
+          <p className="text-[8px] text-slate-500 uppercase tracking-wider mb-1">Sentiment</p>
+          <p className={`text-[10px] font-mono font-bold ${metrics.sentimentScore > 0 ? 'text-emerald-400' : metrics.sentimentScore < 0 ? 'text-red-400' : 'text-slate-400'}`}>
+            {metrics.sentimentScore > 0 ? '+' : ''}{metrics.sentimentScore.toFixed(0)}
+          </p>
+        </div>
+        <div className="bg-slate-800/40 rounded-lg border border-slate-700/20 p-2">
+          <p className="text-[8px] text-slate-500 uppercase tracking-wider mb-1">Volatility</p>
+          <p className="text-[10px] font-mono font-bold text-cyan-400">{metrics.volatilityScore.toFixed(0)}</p>
+        </div>
+        <div className="bg-slate-800/40 rounded-lg border border-slate-700/20 p-2">
+          <p className="text-[8px] text-slate-500 uppercase tracking-wider mb-1">Regime</p>
+          <p className="text-[10px] font-mono font-bold text-indigo-400">{metrics.regimeStrength.toFixed(0)}</p>
+        </div>
+        <div className="bg-slate-800/40 rounded-lg border border-slate-700/20 p-2">
+          <p className="text-[8px] text-slate-500 uppercase tracking-wider mb-1">R:R Edge</p>
+          <p className="text-[10px] font-mono font-bold text-purple-400">{metrics.riskRewardEdge.toFixed(1)}</p>
+        </div>
+      </div>
+
+      {/* Edge Details Button */}
       <button
         type="button"
         onClick={() => setIsExpanded(v => !v)}
@@ -241,7 +590,7 @@ const EdgeCard = memo<{ data: EdgeIndex | null; name: string }>(({ data, name })
         <div className="min-w-0">
           <div className="text-[9px] font-semibold uppercase tracking-[0.18em] text-slate-500">Edge Details</div>
           <div className="mt-0.5 text-[10px] font-medium text-slate-300">
-            {isExpanded ? 'Expanded view' : 'Show'}
+            {isExpanded ? 'Full analysis' : 'Expand view'}
           </div>
         </div>
         <span className="shrink-0 text-[10px] font-bold text-slate-400">{isExpanded ? 'Hide' : 'Show'}</span>
@@ -266,6 +615,24 @@ const EdgeCard = memo<{ data: EdgeIndex | null; name: string }>(({ data, name })
 
       {isExpanded && (
         <>
+
+        {/* Opportunities Section */}
+        {opportunities.length > 0 && (
+          <div className="mb-3 pb-3 border-b border-slate-700/30">
+            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-2">Risk/Reward Opportunities</p>
+            <div className="grid grid-cols-1 gap-2 max-h-80 overflow-y-auto">
+              {opportunities.map((opp, idx) => (
+                <RiskRewardCard key={idx} opportunity={opp} />
+              ))}
+            </div>
+          </div>
+        )}
+
+        {/* Institutional Metrics Full Display */}
+        <div className="grid grid-cols-2 gap-2 mb-3">
+          <InstitutionalSentimentGauge metrics={metrics} />
+          <VolatilityRegimeIndicator metrics={metrics} />
+        </div>
 
         {/* OI Profile Badge */}
         <div className={`flex items-center justify-between rounded-lg ${profileCfg.bg} px-2.5 py-1.5 mb-3 ${

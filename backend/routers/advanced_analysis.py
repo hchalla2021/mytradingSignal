@@ -2931,6 +2931,8 @@ async def get_trade_zones(symbol: str) -> Dict[str, Any]:
     """
     try:
         symbol = symbol.upper()
+        if symbol == "ALL":
+            return await get_all_trade_zones()
         if symbol not in {"NIFTY", "BANKNIFTY", "SENSEX"}:
             raise HTTPException(status_code=400, detail=f"Unsupported symbol: {symbol}")
         cache = get_cache()
@@ -3264,6 +3266,84 @@ async def get_trade_zones(symbol: str) -> Dict[str, Any]:
             "status": "ERROR",
             "error": str(e)
         }
+
+
+@router.get("/trade-zones/all")
+async def get_all_trade_zones() -> Dict[str, Any]:
+    """
+    💰 Trade Zones Matrix (All Indices)
+    ═══════════════════════════════════════
+    Aggregates NIFTY, BANKNIFTY, and SENSEX trade-zone signals in one call.
+
+    Engineering goals:
+    - Single network round-trip for terminal rendering
+    - Parallel symbol analysis for low latency
+    - Stable summary object for UI-level filtering/sorting
+    """
+    symbols = ["NIFTY", "BANKNIFTY", "SENSEX"]
+
+    try:
+        tasks = [get_trade_zones(symbol) for symbol in symbols]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        data: Dict[str, Any] = {}
+        bullish_count = 0
+        bearish_count = 0
+        neutral_count = 0
+        confidence_sum = 0.0
+        confidence_count = 0
+
+        for symbol, result in zip(symbols, results):
+            if isinstance(result, Exception):
+                data[symbol] = {
+                    "symbol": symbol,
+                    "status": "ERROR",
+                    "overall_signal": "UNKNOWN",
+                    "signal_confidence": 0,
+                    "entry_quality": "UNKNOWN",
+                    "risk_reward_ratio": 0.0,
+                    "current_price": 0.0,
+                    "zone_classification": "UNKNOWN",
+                    "trend_structure": "UNKNOWN",
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                }
+                continue
+
+            signal = str(result.get("overall_signal", "NEUTRAL")).upper()
+            if signal in ("BUY", "STRONG_BUY"):
+                bullish_count += 1
+            elif signal in ("SELL", "STRONG_SELL"):
+                bearish_count += 1
+            else:
+                neutral_count += 1
+
+            signal_conf = float(result.get("signal_confidence", 0) or 0)
+            confidence_sum += signal_conf
+            confidence_count += 1
+            data[symbol] = result
+
+        avg_conf = int(round(confidence_sum / confidence_count)) if confidence_count > 0 else 0
+
+        dominant_signal = "NEUTRAL"
+        if bullish_count > bearish_count and bullish_count >= neutral_count:
+            dominant_signal = "BULLISH"
+        elif bearish_count > bullish_count and bearish_count >= neutral_count:
+            dominant_signal = "BEARISH"
+
+        return {
+            "data": data,
+            "summary": {
+                "dominant_signal": dominant_signal,
+                "bullish_count": bullish_count,
+                "bearish_count": bearish_count,
+                "neutral_count": neutral_count,
+                "avg_confidence": avg_conf,
+            },
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+    except Exception as e:
+        logger.error("[TRADE-ZONES-ALL] Failed to aggregate symbols: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail="Trade zones aggregation error")
 
 
 # ═══════════════════════════════════════════════════════════

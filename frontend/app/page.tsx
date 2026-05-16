@@ -4,7 +4,6 @@ import { useState, useEffect, useMemo, useCallback } from 'react';
 import dynamic from 'next/dynamic';
 import LiveStatus from '@/components/LiveStatus';
 import Header from '@/components/Header';
-import IndiaVIXBadge from '@/components/IndiaVIXBadge';
 import SystemStatusBanner from '@/components/SystemStatusBanner';
 import { useMarketSocket } from '@/hooks/useMarketSocket';
 import { useAnalysis } from '@/hooks/useAnalysis';
@@ -32,6 +31,7 @@ const VolumePulseCard = dynamic(() => import('@/components/VolumePulseCard'), { 
 const TrendBaseCard = dynamic(() => import('@/components/TrendBaseCard'), { ssr: false });
 const SectionTitle = dynamic(() => import('@/components/SectionTitle'), { ssr: false });
 const TradeSupportResistance = dynamic(() => import('@/components/TradeSupportResistance'), { ssr: false });
+const TradeZonesTerminal = dynamic(() => import('@/components/TradeZonesTerminal'), { ssr: false });
 const InstitutionalMarketView = dynamic(() => import('@/components/InstitutionalMarketView'), { ssr: false });
 const InstitutionalCompass = dynamic(() => import('@/components/InstitutionalCompass'), {
   ssr: false,
@@ -230,7 +230,6 @@ export default function Home() {
     isConnected
   } = useMarketSocket();
   const { alertData } = useAIAnalysis();
-  const { vixData, loading: vixLoading } = useIndiaVIX();
   const { regimeData } = useMarketRegime();
   const { strikeData: strikeIntelData } = useStrikeIntelligence();
   const { chartData: chartIntelData } = useChartIntelligence();
@@ -564,157 +563,16 @@ export default function Home() {
     <main suppressHydrationWarning className="min-h-screen">
       {/* Header */}
       <Header isConnected={isConnected} marketStatus={marketStatus} />
-      
+
+      {/* Market Pulse section removed as requested */}
+
       {/* 🔥 NEW: Professional System Status Banner */}
       <SystemStatusBanner />
-      
+
       {/* Connection Status Bar */}
       <div className="w-full px-2 sm:px-4 lg:px-8 xl:px-12 py-3 lg:py-4">
         {/* Use same status component for both mobile and desktop */}
         <LiveStatus status={displayStatus} isConnected={isConnected} />
-      </div>
-
-      {/* Overall Market Outlook */}
-      <div className="w-full px-2 sm:px-4 lg:px-8 xl:px-12 py-3 lg:py-5">
-        <div className="rounded-2xl border border-white/[0.09] bg-[#06090e] overflow-hidden shadow-2xl shadow-black/60">
-
-          {/* Header */}
-          <div className="px-3 sm:px-5 py-3 flex items-center gap-1.5 sm:gap-3 bg-teal-500/[0.04] rounded-xl border border-emerald-400/25">
-            <div className="flex items-center gap-1.5 sm:gap-2 min-w-0">
-              <span className="w-[3px] h-7 sm:h-9 rounded-full bg-gradient-to-b from-teal-300 to-teal-600 shrink-0 shadow-sm shadow-teal-500/20" />
-              <h2 className="text-[12px] sm:text-[18px] lg:text-[22px] font-extrabold text-white tracking-tight leading-snug whitespace-nowrap">Overall Market Outlook</h2>
-            </div>
-            <IndiaVIXBadge
-              value={vixData.value}
-              changePercent={vixData.changePercent}
-              volatilityLevel={vixData.volatilityLevel}
-              marketFearScore={vixData.marketFearScore}
-              loading={vixLoading}
-            />
-            <div className="flex items-center gap-2 ml-auto">
-              <span className={`hidden md:inline text-[9px] font-black px-2 py-0.5 rounded border tracking-wider ${
-                overallRegimeSignal === 'STRONG_BUY' || overallRegimeSignal === 'BUY'
-                  ? 'text-teal-300 border-teal-400/30 bg-teal-500/15'
-                  : overallRegimeSignal === 'STRONG_SELL' || overallRegimeSignal === 'SELL'
-                  ? 'text-rose-300 border-rose-400/30 bg-rose-500/15'
-                  : 'text-amber-300 border-amber-400/30 bg-amber-500/15'
-              }`}>
-                REGIME {overallRegimeSignal.replace('_', ' ')}
-              </span>
-              <span className="hidden sm:inline text-[9px] text-white/60 font-bold">{aggregatedMarketSignal.NIFTY.sectionCount} Signals</span>
-              <span className="w-1.5 h-1.5 rounded-full bg-teal-400 animate-pulse" />
-              <span className="text-[9px] text-teal-400/50 font-bold">LIVE</span>
-            </div>
-          </div>
-
-          {/* Index Cards */}
-          <div suppressHydrationWarning className="grid grid-cols-1 lg:grid-cols-3 gap-3 lg:gap-4 xl:gap-5 p-3 lg:p-5">
-            {(['NIFTY','BANKNIFTY','SENSEX'] as const).map((sym) => {
-              const s = aggregatedMarketSignal[sym];
-              const chartSignal = chartToFiveState(chartIntelData?.[sym]?.candles5m ?? null);
-              const strikeSignal = strikeIntelData?.[sym]?.intelligence?.signal;
-              const regimeSignal = regimeToFiveState(regimeData?.[sym]?.regime ?? null);
-              const displaySignal =
-                (chartSignal === 'STRONG_BUY' || chartSignal === 'BUY' || chartSignal === 'NEUTRAL' || chartSignal === 'SELL' || chartSignal === 'STRONG_SELL')
-                  ? chartSignal
-                  : (strikeSignal === 'STRONG_BUY' || strikeSignal === 'BUY' || strikeSignal === 'NEUTRAL' || strikeSignal === 'SELL' || strikeSignal === 'STRONG_SELL')
-                  ? strikeSignal
-                  : (regimeSignal ?? s.signal);
-              const isBull = s.buyPercent >= 55, isBear = s.sellPercent >= 55;
-
-              const accentDot = isBull ? 'bg-teal-400 shadow-teal-400/60' : isBear ? 'bg-rose-400 shadow-rose-400/60' : 'bg-amber-400 shadow-amber-400/60';
-              const sigPill   = displaySignal === 'STRONG_BUY' || displaySignal === 'BUY'
-                ? 'text-teal-300 border-teal-400/30 bg-teal-500/15'
-                : displaySignal === 'STRONG_SELL' || displaySignal === 'SELL'
-                ? 'text-rose-300 border-rose-400/30 bg-rose-500/15'
-                : 'text-amber-300 border-amber-400/30 bg-amber-500/15';
-              const name      = sym === 'NIFTY' ? 'NIFTY 50' : sym === 'BANKNIFTY' ? 'BANK NIFTY' : 'SENSEX';
-
-              const p5 = { conf: s.pred5mConf, buyPct: s.pred5mBuyPct, dir: s.pred5mDir };
-              const p5SellPct = 100 - p5.buyPct;
-              const p5Bull = p5.dir === 'UP', p5Bear = p5.dir === 'DOWN';
-              const p5DirIcon = p5Bull ? '▲' : p5Bear ? '▼' : '◆';
-              const p5DirColor = p5Bull ? 'text-teal-400' : p5Bear ? 'text-rose-400' : 'text-amber-400';
-              const p5Signal = p5Bull ? (p5.buyPct >= 65 ? 'STRONG BUY' : 'BUY') : p5Bear ? (p5SellPct >= 65 ? 'STRONG SELL' : 'SELL') : 'NEUTRAL';
-              const p5SigColor = p5Bull ? 'text-teal-300 border-teal-400/20 bg-teal-500/[0.06]' : p5Bear ? 'text-rose-300 border-rose-400/20 bg-rose-500/[0.06]' : 'text-amber-300 border-amber-400/20 bg-amber-500/[0.06]';
-
-              const cardBorder = isBull ? 'border-teal-500/20 hover:border-teal-500/35' : isBear ? 'border-rose-500/20 hover:border-rose-500/35' : 'border-white/[0.08] hover:border-white/[0.14]';
-              const cardBg = isBull ? 'bg-teal-500/[0.03]' : isBear ? 'bg-rose-500/[0.03]' : 'bg-white/[0.015]';
-
-              return (
-                <div key={sym} suppressHydrationWarning
-                  className={`rounded-xl border overflow-hidden transition-all duration-200 flex flex-col ${cardBorder} ${cardBg}`}>
-
-                  {/* Card Header — index name + signal pill */}
-                  <div className="flex items-center justify-between px-4 py-3 border-b border-white/[0.05]">
-                    <div className="flex items-center gap-2.5">
-                      <span className={`w-2.5 h-2.5 rounded-full shrink-0 shadow-[0_0_6px_2px] ${accentDot}`} />
-                      <span className="text-sm font-black text-white tracking-tight px-3 py-1.5 rounded-md border border-emerald-400/30 bg-emerald-500/[0.08]">{name}</span>
-                    </div>
-                    <div className="flex items-center gap-1.5">
-                      <span suppressHydrationWarning className={`text-[11px] font-black px-3 py-1.5 rounded-md border tracking-wider min-w-[58px] text-center ${sigPill}`}>
-                        {displaySignal.replace('_', ' ')}
-                      </span>
-                    </div>
-                  </div>
-
-                  {/* Confidence Signals */}
-                  <div className="px-4 pt-3.5 pb-3 flex-1">
-                    <div className="mb-2.5">
-                      <span className="text-[10px] font-bold text-white/40 uppercase tracking-[0.15em]">{s.sectionCount} Signals</span>
-                    </div>
-                    <div suppressHydrationWarning className="h-2.5 rounded-full overflow-hidden flex bg-white/[0.06] mb-3">
-                      <div className="bg-gradient-to-r from-teal-700 to-teal-400 transition-all duration-700 ease-out" style={{ width: `${s.buyPercent}%` }} />
-                      <div className="bg-gradient-to-r from-rose-400 to-rose-700 flex-1" />
-                    </div>
-                    <div className="flex items-center justify-between text-[12px] font-bold">
-                      <span suppressHydrationWarning className="text-teal-400 tabular-nums">
-                        <span className="text-white/30 mr-1.5">BUY</span>
-                        <span className="inline-block min-w-[32px] text-left">{s.buyPercent}%</span>
-                        <span className="ml-1">▲</span>
-                      </span>
-                      <span suppressHydrationWarning className="text-rose-400 tabular-nums">
-                        <span className="mr-1">▼</span>
-                        <span className="inline-block min-w-[32px] text-right">{s.sellPercent}%</span>
-                        <span className="text-white/30 ml-1.5">SELL</span>
-                      </span>
-                    </div>
-                  </div>
-
-                  {/* 5-Min Forecast */}
-                  <div className="mx-3 mb-3 rounded-lg border border-dashed border-white/[0.08] bg-black/25 px-3.5 py-3">
-                    <div className="flex items-center justify-between mb-2.5">
-                      <div className="flex items-center gap-2">
-                        <span className="text-[10px] font-bold text-cyan-300/50 uppercase tracking-[0.12em]">5-Min</span>
-                        <span suppressHydrationWarning className={`text-[12px] font-black min-w-[50px] ${p5DirColor}`}>{p5DirIcon} {p5.dir}</span>
-                      </div>
-                      <span suppressHydrationWarning className={`text-[10px] font-black px-2 py-1 rounded border min-w-[72px] text-center ${p5SigColor}`}>
-                        {p5Signal}
-                      </span>
-                    </div>
-                    <div suppressHydrationWarning className="h-[6px] rounded-full overflow-hidden flex bg-white/[0.06] mb-2.5">
-                      <div className="bg-gradient-to-r from-teal-600 to-teal-400 transition-all duration-700 ease-out" style={{ width: `${p5.buyPct}%` }} />
-                      <div className="bg-gradient-to-r from-rose-400 to-rose-600 flex-1" />
-                    </div>
-                    <div className="flex items-center justify-between text-[11px] font-bold">
-                      <span suppressHydrationWarning className="text-teal-400/80 tabular-nums">
-                        <span className="text-white/25 mr-1.5">BUY</span>
-                        <span className="inline-block min-w-[32px] text-left">{p5.buyPct}%</span>
-                        <span className="ml-1">▲</span>
-                      </span>
-                      <span suppressHydrationWarning className="text-rose-400/80 tabular-nums">
-                        <span className="mr-1">▼</span>
-                        <span className="inline-block min-w-[32px] text-right">{p5SellPct}%</span>
-                        <span className="text-white/25 ml-1.5">SELL</span>
-                      </span>
-                    </div>
-                  </div>
-
-                </div>
-              );
-            })}
-          </div>
-        </div>
       </div>
 
       {/* Main Dashboard - Full Width */}
@@ -817,7 +675,7 @@ export default function Home() {
         <MarketIntelligenceObservatory />
 
         {/* P0: 📊 TODAY'S MARKET REGIME — Trending vs Sideways */}
-        <MarketRegimeIntelligence marketData={marketData} vixData={vixData} />
+        <MarketRegimeIntelligence marketData={marketData} />
 
         {/* P1: ⚡ PURE LIQUIDITY INTELLIGENCE */}
         <LiquidityIntelligence />
@@ -919,8 +777,10 @@ export default function Home() {
               accentColor="emerald"
             />
           </div>
+
+          <TradeZonesTerminal />
           
-          <div className="grid grid-cols-1 lg:grid-cols-2 2xl:grid-cols-3 gap-3">
+          <div className="mt-3 grid grid-cols-1 lg:grid-cols-2 2xl:grid-cols-3 gap-3">
             <TradeSupportResistance 
               symbol="NIFTY" 
               symbolName="NIFTY 50" 

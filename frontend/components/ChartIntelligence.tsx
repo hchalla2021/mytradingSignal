@@ -13,6 +13,11 @@ import {
 import { useMarketSocket } from '@/hooks/useMarketSocket';
 import { useCompassSocket, type CompassIndex } from '@/hooks/useCompassSocket';
 
+// ── Institutional Chart Intelligence Enhancement Layer ──────────────────────────────
+// Premium Bloomberg-style dashboard with institutional-grade metrics,
+// convergence analysis, and real-time execution readiness scoring.
+// Scaffolded for future convergence metrics expansion.
+
 // ── Chart constants ─────────────────────────────────────────────────────────
 
 const CFG = {
@@ -4909,7 +4914,87 @@ const SymbolChartCard = memo<{ data: SymbolChartData | null; name: string; liveS
     </div>
   );
 });
+
 SymbolChartCard.displayName = 'SymbolChartCard';
+
+// ── Institutional Chart Dashboard Components ────────────────────────────────────
+
+const ChartMetricsHeatmapCell = memo<{
+  value: number;
+  label: string;
+  maxValue?: number;
+  suffix?: string;
+}>(({ value, label, maxValue = 100, suffix = '' }) => {
+  const pct = Math.min(100, (value / maxValue) * 100);
+  const bgColor = value >= 75 ? 'bg-emerald-500/25' : value >= 50 ? 'bg-cyan-500/20' : value >= 35 ? 'bg-amber-500/15' : 'bg-rose-500/15';
+  const textColor = value >= 75 ? 'text-emerald-300' : value >= 50 ? 'text-cyan-300' : value >= 35 ? 'text-amber-300' : 'text-rose-300';
+
+  return (
+    <div className={`rounded-lg border px-2.5 py-2 overflow-hidden ${bgColor} border-slate-700/45 relative`}>
+      <p className="text-[8px] font-bold uppercase tracking-[0.12em] text-slate-500">{label}</p>
+      <p className={`mt-1 text-sm font-black font-mono tabular-nums ${textColor}`}>
+        {Math.round(value)}{suffix}
+      </p>
+      <div className="mt-1.5 h-1 rounded-full bg-slate-800/60 overflow-hidden">
+        <div className={`h-full rounded-full bg-gradient-to-r ${value >= 75 ? 'from-emerald-500 to-cyan-400' : value >= 50 ? 'from-cyan-500 to-blue-400' : value >= 35 ? 'from-amber-500 to-orange-400' : 'from-rose-500 to-red-400'}`} style={{ width: `${pct}%` }} />
+      </div>
+    </div>
+  );
+});
+
+ChartMetricsHeatmapCell.displayName = 'ChartMetricsHeatmapCell';
+
+const InstitutionalChartDashboard = memo<{
+  signal: ChartSignal;
+  signalScore: number;
+  mtfAlignment: 'bullish' | 'bearish' | 'split' | null;
+  executionProb: number;
+  riskRewardRatio: number;
+  structureQuality: 'HIGH' | 'LOW' | null;
+  nextCandleConf: number;
+  accuracyWinRate: number;
+}>(({ signal, signalScore, mtfAlignment, executionProb, riskRewardRatio, structureQuality, nextCandleConf, accuracyWinRate }) => {
+  const isLive = signal === 'STRONG_BUY' || signal === 'STRONG_SELL';
+  const isAligned = mtfAlignment && mtfAlignment !== 'split';
+  const isQualified = structureQuality === 'HIGH';
+  const execReadyScore = Math.round((executionProb * (isAligned ? 1.1 : 0.95)) * (isQualified ? 1.15 : 0.85));
+
+  return (
+    <div className="rounded-xl border border-indigo-500/25 bg-gradient-to-br from-indigo-950/15 via-slate-950/80 to-slate-900/75 p-3 space-y-3 mt-2">
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <span className="w-1 h-5 rounded-full bg-gradient-to-b from-indigo-400 to-cyan-500/40" />
+          <h3 className="text-[11px] font-black uppercase tracking-[0.14em] text-indigo-200">Institutional Metrics</h3>
+        </div>
+        {isLive && <span className="text-[9px] font-black px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">LIVE</span>}
+      </div>
+
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2">
+        <ChartMetricsHeatmapCell value={Math.abs(signalScore)} label="Signal" maxValue={50} />
+        <ChartMetricsHeatmapCell value={execReadyScore} label="Exec Ready" />
+        <ChartMetricsHeatmapCell value={nextCandleConf} label="Next Candle" />
+        <ChartMetricsHeatmapCell value={accuracyWinRate} label="Accuracy" />
+        <ChartMetricsHeatmapCell value={Math.min(250, riskRewardRatio * 25)} label="R:R" maxValue={250} suffix=":1" />
+        <div className="rounded-lg border px-2.5 py-2 bg-slate-900/70 border-slate-700/45">
+          <p className="text-[8px] font-bold uppercase tracking-[0.12em] text-slate-500">MTF</p>
+          <p className={`mt-1 text-sm font-black ${isAligned ? 'text-cyan-300' : 'text-amber-300'}`}>
+            {isAligned ? (mtfAlignment === 'bullish' ? '▲' : '▼') : '⊘'}
+          </p>
+        </div>
+        <div className="rounded-lg border px-2.5 py-2 bg-slate-900/70 border-slate-700/45">
+          <p className="text-[8px] font-bold uppercase tracking-[0.12em] text-slate-500">Structure</p>
+          <p className={`mt-1 text-sm font-black ${isQualified ? 'text-emerald-300' : 'text-slate-400'}`}>
+            {isQualified ? 'HQ' : 'LQ'}
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+});
+
+InstitutionalChartDashboard.displayName = 'InstitutionalChartDashboard';
+
+export { InstitutionalChartDashboard, ChartMetricsHeatmapCell };
 
 // ── Main Component ──────────────────────────────────────────────────────────
 

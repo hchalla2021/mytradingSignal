@@ -33,6 +33,7 @@ from routers import (
     vix,
     user_analytics,
     app_access,
+    trade_status,
 )
 from routers.compass import http_router as compass_http, ws_router as compass_ws
 from routers.global_indices import http_router as global_indices_http, ws_router as global_indices_ws
@@ -46,6 +47,11 @@ from routers.strike_intelligence import http_router as strike_intel_http, ws_rou
 from routers.chart_intelligence import http_router as chart_intel_http, ws_router as chart_intel_ws
 from routers.global_news import http_router as global_news_http, ws_router as global_news_ws
 from routers.observatory import http_router as observatory_http
+from routers import smart_money
+from routers.trend_base import router as trend_base_http, ws_router as trend_base_ws
+from routers.volume_pulse import router as volume_pulse_http, ws_router as volume_pulse_ws
+from routers.ict_bias import router as ict_bias_http, ws_router as ict_bias_ws
+from routers.market_compass import router as market_compass_http, ws_router as market_compass_ws
 
 # Windows console fix already applied in config/__init__.py
 
@@ -551,6 +557,7 @@ app.include_router(advanced_analysis.router, tags=["Advanced Technical Analysis"
 app.include_router(pivot_indicators.router, tags=["Pivot Indicators"])
 app.include_router(market_outlook.router, tags=["Market Outlook"])
 app.include_router(vix.router, tags=["India VIX"])
+app.include_router(trade_status.router, tags=["Trade Status"])
 
 # 🧭 Institutional Market Compass
 app.include_router(compass_ws,   prefix="/ws",  tags=["Compass"])
@@ -559,6 +566,9 @@ app.include_router(compass_http, prefix="/api", tags=["Compass"])
 # 🌍 Global Indices Adapter Layer
 app.include_router(global_indices_ws,   prefix="/ws",  tags=["Global Indices"])
 app.include_router(global_indices_http, prefix="/api", tags=["Global Indices"])
+
+# 🏛️ Smart Money Order Logic (NEW)
+app.include_router(smart_money.router, prefix="/ws", tags=["Smart Money Order Logic"])
 
 # ⚡ Pure Liquidity Intelligence
 app.include_router(liq_ws,   prefix="/ws",  tags=["Liquidity"])
@@ -596,7 +606,19 @@ app.include_router(chart_intel_http, prefix="/api", tags=["Chart Intelligence"])
 app.include_router(global_news_ws,   prefix="/ws",  tags=["Global Impact Radar"])
 app.include_router(global_news_http, prefix="/api", tags=["Global Impact Radar"])
 
-# 🔭 Market Intelligence Observatory
+# � Trend Base - Higher Low Structure Analysis (NEW)
+app.include_router(trend_base_ws,   prefix="/ws",  tags=["Trend Base"])
+app.include_router(trend_base_http, prefix="/api", tags=["Trend Base"])
+# 📊 Volume Pulse - Candle Volume Analysis (NEW)
+app.include_router(volume_pulse_ws,   prefix="/ws",  tags=["Volume Pulse"])
+app.include_router(volume_pulse_http, prefix="/api", tags=["Volume Pulse"])
+# 🎯 ICT Bias - Institutional Bias & Smart Money Analysis (NEW)
+app.include_router(ict_bias_ws,   prefix="/ws",  tags=["ICT Bias"])
+app.include_router(ict_bias_http, prefix="/api", tags=["ICT Bias"])
+# 🧭 Market Compass - Multi-Market Correlation & Global Impact Analysis (NEW)
+app.include_router(market_compass_ws,   prefix="/ws",  tags=["Market Compass"])
+app.include_router(market_compass_http, prefix="/api", tags=["Market Compass"])
+# �🔭 Market Intelligence Observatory
 app.include_router(observatory_http, tags=["Observatory"])
 
 

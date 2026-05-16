@@ -24,7 +24,7 @@ if ($backendRunning) {
     }
     # Start backend in new terminal
     Write-Host "🚀 Starting Backend Server (Port 8000)..." -ForegroundColor Green
-    Start-Process powershell -ArgumentList "-NoExit", "-Command", "$env:FAST_STARTUP_MODE='true'; cd '$rootDir\backend'; & '$rootDir\.venv\Scripts\python.exe' -m uvicorn main:app --reload --host 127.0.0.1 --port 8000; Write-Host '🟢 Backend Server Starting...' -ForegroundColor Green"
+    Start-Process powershell -ArgumentList "-NoExit", "-Command", "$env:FAST_STARTUP_MODE='true'; $env:WATCHFILES_FORCE_POLLING='true'; cd '$rootDir\backend'; & '$rootDir\.venv\Scripts\python.exe' -m uvicorn main:app --reload --reload-delay 0.5 --host 127.0.0.1 --port 8000; Write-Host '🟢 Backend Server Starting...' -ForegroundColor Green"
     Start-Sleep -Seconds 3
 }
 

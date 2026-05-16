@@ -1,7 +1,7 @@
 ﻿'use client';
 
 import React, { memo, useMemo, useRef, useState, useEffect } from 'react';
-import { useStrikeIntelligence, type SymbolStrikeData, type StrikeRow, type StrikeSignal, type StrikeSideData, type QuantumFractalIntelligence } from '@/hooks/useStrikeIntelligence';
+import { useStrikeIntelligence, type SymbolStrikeData, type StrikeRow, type StrikeSignal, type StrikeSideData, type QuantumFractalIntelligence, type StrikeIntelligenceData } from '@/hooks/useStrikeIntelligence';
 
 // Signal config
 
@@ -2396,6 +2396,280 @@ const SymbolStrikeCard = memo<{ data: SymbolStrikeData | null; name: string }>((
 });
 SymbolStrikeCard.displayName = 'SymbolStrikeCard';
 
+type StrikeIntelSymbolKey = keyof StrikeIntelligenceData;
+
+type TerminalOverviewRow = {
+  key: StrikeIntelSymbolKey;
+  label: string;
+  status: 'LIVE' | 'DELAYED' | 'OFFLINE';
+  signal: OverallSignal;
+  score: number;
+  confidence: number;
+  actionability: 'HIGH' | 'MEDIUM' | 'LOW' | 'NONE';
+  regime: string;
+  tradePlan: TradeDecision;
+  bullPressure: number;
+  bearPressure: number;
+  trapRisk: number;
+  pcr: number | null;
+  spot: number | null;
+  worldBias: string | null;
+  worldScore: number | null;
+  flowDepth: number;
+};
+
+const STRIKE_TERMINAL_SYMBOLS: readonly { key: StrikeIntelSymbolKey; label: string }[] = [
+  { key: 'NIFTY', label: 'NIFTY 50' },
+  { key: 'BANKNIFTY', label: 'BANK NIFTY' },
+  { key: 'SENSEX', label: 'SENSEX' },
+] as const;
+
+const ACTIONABILITY_TONE: Record<TerminalOverviewRow['actionability'], string> = {
+  HIGH: 'text-emerald-200 border-emerald-400/50 bg-emerald-500/12',
+  MEDIUM: 'text-cyan-200 border-cyan-400/45 bg-cyan-500/10',
+  LOW: 'text-amber-200 border-amber-400/45 bg-amber-500/10',
+  NONE: 'text-slate-300 border-slate-500/35 bg-slate-700/20',
+};
+
+const STATUS_TONE: Record<TerminalOverviewRow['status'], string> = {
+  LIVE: 'text-emerald-300 border-emerald-400/45 bg-emerald-500/10',
+  DELAYED: 'text-amber-300 border-amber-400/45 bg-amber-500/10',
+  OFFLINE: 'text-slate-300 border-slate-500/35 bg-slate-700/20',
+};
+
+function clampPct(value: number | null | undefined): number {
+  if (value == null || Number.isNaN(value)) return 0;
+  return Math.max(0, Math.min(100, value));
+}
+
+function getFlowDepth(data: SymbolStrikeData | null): number {
+  if (!data) return 0;
+  const totalVol = data.chainTotals?.totalVol ?? ((data.chainTotals?.totalCEVol ?? 0) + (data.chainTotals?.totalPEVol ?? 0));
+  if (totalVol > 0) {
+    return Math.min(100, Math.round(Math.log10(totalVol + 1) * 14));
+  }
+  const visibleVol = data.strikes.reduce((sum, row) => sum + row.ce.volume + row.pe.volume, 0);
+  return visibleVol > 0 ? Math.min(100, Math.round(Math.log10(visibleVol + 1) * 14)) : 0;
+}
+
+function getOverviewTradePlan(data: SymbolStrikeData | null): TradeDecision {
+  const strikes = data?.strikes ?? [];
+  const atmRow = strikes.find((row) => row.isATM) ?? (strikes.length > 0 ? strikes[Math.floor(strikes.length / 2)] : null);
+  const overallScore = Math.round(data?.intelligence?.score ?? 0);
+
+  if (!atmRow) return 'WAIT';
+
+  return deriveTradeDecision(
+    atmRow.ce.signal,
+    atmRow.pe.signal,
+    Math.round(atmRow.ce.score),
+    Math.round(atmRow.pe.score),
+    overallScore,
+  );
+}
+
+function buildTerminalOverviewRow(
+  key: StrikeIntelSymbolKey,
+  label: string,
+  data: SymbolStrikeData | null,
+): TerminalOverviewRow {
+  const intelligence = data?.intelligence;
+  const status: TerminalOverviewRow['status'] = data?.dataSource === 'LIVE'
+    ? 'LIVE'
+    : data?.dataSource
+    ? 'DELAYED'
+    : 'OFFLINE';
+
+  return {
+    key,
+    label,
+    status,
+    signal: (intelligence?.signal as OverallSignal | undefined) ?? 'NEUTRAL',
+    score: Math.round(intelligence?.score ?? 0),
+    confidence: Math.round(intelligence?.confidence ?? 0),
+    actionability: intelligence?.actionability ?? 'NONE',
+    regime: intelligence?.regime ?? 'NO_DATA',
+    tradePlan: getOverviewTradePlan(data),
+    bullPressure: clampPct(intelligence?.bullPressure),
+    bearPressure: clampPct(intelligence?.bearPressure),
+    trapRisk: clampPct(intelligence?.trapRiskPct),
+    pcr: intelligence?.pcr ?? null,
+    spot: data?.spot ?? null,
+    worldBias: intelligence?.worldMarket?.bias ?? null,
+    worldScore: intelligence?.worldMarket?.influenceScore ?? null,
+    flowDepth: getFlowDepth(data),
+  };
+}
+
+const StrikeTerminalOverview = memo<{ strikeData: StrikeIntelligenceData; isConnected: boolean; tickTs: string; statusLabel: string; }>(({ strikeData, isConnected, tickTs, statusLabel }) => {
+  const overviewRows = useMemo(
+    () => STRIKE_TERMINAL_SYMBOLS.map(({ key, label }) => buildTerminalOverviewRow(key, label, strikeData[key])),
+    [strikeData],
+  );
+
+  const liveCount = overviewRows.filter((row) => row.status === 'LIVE').length;
+  const actionableCount = overviewRows.filter((row) => row.actionability === 'HIGH' || row.actionability === 'MEDIUM').length;
+  const avgConfidence = overviewRows.length > 0
+    ? Math.round(overviewRows.reduce((sum, row) => sum + row.confidence, 0) / overviewRows.length)
+    : 0;
+  const avgScore = overviewRows.length > 0
+    ? Math.round(overviewRows.reduce((sum, row) => sum + row.score, 0) / overviewRows.length)
+    : 0;
+  const avgTrapRisk = overviewRows.length > 0
+    ? Math.round(overviewRows.reduce((sum, row) => sum + row.trapRisk, 0) / overviewRows.length)
+    : 0;
+  const avgFlowDepth = overviewRows.length > 0
+    ? Math.round(overviewRows.reduce((sum, row) => sum + row.flowDepth, 0) / overviewRows.length)
+    : 0;
+  const leader = overviewRows.reduce<TerminalOverviewRow | null>((best, row) => {
+    if (!best) return row;
+    const bestWeight = Math.abs(best.score) * 100 + best.confidence;
+    const rowWeight = Math.abs(row.score) * 100 + row.confidence;
+    return rowWeight > bestWeight ? row : best;
+  }, null);
+  const dominantBias = avgScore >= 15 ? 'BULLISH' : avgScore <= -15 ? 'BEARISH' : 'BALANCED';
+  const dominantTone = avgScore >= 15
+    ? 'text-emerald-200 border-emerald-400/45 bg-emerald-500/10'
+    : avgScore <= -15
+    ? 'text-red-200 border-red-400/45 bg-red-500/10'
+    : 'text-amber-200 border-amber-400/45 bg-amber-500/10';
+
+  return (
+    <div className="mb-4 lg:mb-5 rounded-2xl border border-slate-700/50 bg-[radial-gradient(circle_at_top_left,rgba(16,185,129,0.10),transparent_35%),linear-gradient(180deg,rgba(15,23,42,0.95),rgba(2,6,23,0.98))] p-3 sm:p-4 shadow-[inset_0_0_0_1px_rgba(148,163,184,0.06)]">
+      <div className="grid gap-3 xl:grid-cols-[1.25fr_2fr]">
+        <div className="rounded-2xl border border-slate-700/45 bg-slate-950/65 p-3 sm:p-4">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <p className="text-[10px] font-black uppercase tracking-[0.24em] text-emerald-300/80">Institutional Command Deck</p>
+              <p className="mt-1 text-[12px] sm:text-[13px] text-slate-300">Cross-market strike breadth, execution readiness, and live risk posture for the active option complex.</p>
+            </div>
+            <div className="flex items-center gap-2 rounded-full border border-slate-700/50 bg-slate-900/70 px-2.5 py-1 text-[10px] font-mono text-slate-400">
+              <span className={`inline-block h-2 w-2 rounded-full ${isConnected ? 'bg-emerald-400 animate-pulse' : 'bg-slate-600'}`} />
+              <span>{isConnected ? tickTs : 'offline'}</span>
+            </div>
+          </div>
+
+          <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
+            <div className="rounded-xl border border-slate-800/70 bg-slate-900/70 p-2.5">
+              <p className="text-[8px] font-bold uppercase tracking-[0.18em] text-slate-500">Breadth</p>
+              <p className={`mt-1 text-lg font-black font-mono ${avgScore >= 15 ? 'text-emerald-300' : avgScore <= -15 ? 'text-red-300' : 'text-amber-300'}`}>{avgScore > 0 ? '+' : ''}{avgScore}</p>
+              <p className="text-[9px] font-semibold text-slate-400">{dominantBias}</p>
+            </div>
+            <div className="rounded-xl border border-slate-800/70 bg-slate-900/70 p-2.5">
+              <p className="text-[8px] font-bold uppercase tracking-[0.18em] text-slate-500">Confidence</p>
+              <p className="mt-1 text-lg font-black font-mono text-cyan-300">{avgConfidence}%</p>
+              <p className="text-[9px] font-semibold text-slate-400">Composite conviction</p>
+            </div>
+            <div className="rounded-xl border border-slate-800/70 bg-slate-900/70 p-2.5">
+              <p className="text-[8px] font-bold uppercase tracking-[0.18em] text-slate-500">Flow Depth</p>
+              <p className="mt-1 text-lg font-black font-mono text-violet-300">{avgFlowDepth}</p>
+              <p className="text-[9px] font-semibold text-slate-400">Liquidity readiness</p>
+            </div>
+            <div className="rounded-xl border border-slate-800/70 bg-slate-900/70 p-2.5">
+              <p className="text-[8px] font-bold uppercase tracking-[0.18em] text-slate-500">Trap Risk</p>
+              <p className={`mt-1 text-lg font-black font-mono ${avgTrapRisk >= 60 ? 'text-red-300' : avgTrapRisk >= 35 ? 'text-amber-300' : 'text-emerald-300'}`}>{avgTrapRisk}%</p>
+              <p className="text-[9px] font-semibold text-slate-400">Average adverse risk</p>
+            </div>
+          </div>
+
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <span className={`inline-flex items-center rounded-full border px-2.5 py-1 text-[9px] font-black uppercase tracking-[0.16em] ${dominantTone}`}>{dominantBias} regime</span>
+            <span className="inline-flex items-center rounded-full border border-slate-700/45 bg-slate-900/70 px-2.5 py-1 text-[9px] font-bold uppercase tracking-[0.14em] text-slate-300">{liveCount}/3 live books</span>
+            <span className="inline-flex items-center rounded-full border border-slate-700/45 bg-slate-900/70 px-2.5 py-1 text-[9px] font-bold uppercase tracking-[0.14em] text-slate-300">{actionableCount} execution-ready</span>
+            <span className="inline-flex items-center rounded-full border border-slate-700/45 bg-slate-900/70 px-2.5 py-1 text-[9px] font-bold uppercase tracking-[0.14em] text-slate-300">Feed {statusLabel}</span>
+          </div>
+        </div>
+
+        <div className="grid gap-2 sm:grid-cols-3">
+          {overviewRows.map((row) => {
+            const signalCfg = OVERALL_CFG[row.signal] ?? OVERALL_CFG.NEUTRAL;
+            const tradeCfg = DECISION_BADGE_CFG[row.tradePlan];
+            const pressureTotal = Math.max(1, row.bullPressure + row.bearPressure);
+            const bullWidth = (row.bullPressure / pressureTotal) * 100;
+            const bearWidth = (row.bearPressure / pressureTotal) * 100;
+            const trapTone = row.trapRisk >= 60 ? 'text-red-300' : row.trapRisk >= 35 ? 'text-amber-300' : 'text-emerald-300';
+
+            return (
+              <div key={row.key} className="rounded-2xl border border-slate-700/45 bg-slate-950/72 p-3 shadow-[inset_0_0_0_1px_rgba(148,163,184,0.04)]">
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <span className="text-[11px] font-black uppercase tracking-[0.16em] text-slate-100">{row.label}</span>
+                      <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[8px] font-black uppercase tracking-[0.14em] ${STATUS_TONE[row.status]}`}>{row.status}</span>
+                    </div>
+                    <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                      <span className={`inline-flex items-center rounded-md border px-2 py-0.5 text-[9px] font-black uppercase tracking-[0.12em] ${signalCfg.bg} ${signalCfg.border} ${signalCfg.color}`}>{signalCfg.label}</span>
+                      <span className={`inline-flex items-center rounded-md border px-2 py-0.5 text-[8px] font-black uppercase tracking-[0.14em] ${ACTIONABILITY_TONE[row.actionability]}`}>{row.actionability}</span>
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <p className={`text-[18px] font-black font-mono leading-none ${row.score >= 15 ? 'text-emerald-300' : row.score <= -15 ? 'text-red-300' : 'text-amber-300'}`}>{row.score > 0 ? '+' : ''}{row.score}</p>
+                    <p className="mt-1 text-[10px] font-bold font-mono text-cyan-300">{row.confidence}%</p>
+                  </div>
+                </div>
+
+                <div className="mt-3 grid grid-cols-2 gap-2 text-[10px]">
+                  <div className="rounded-xl border border-slate-800/65 bg-slate-900/70 p-2">
+                    <p className="text-[8px] font-bold uppercase tracking-[0.14em] text-slate-500">Trade Plan</p>
+                    <p className={`mt-1 inline-flex items-center rounded-md border px-1.5 py-0.5 text-[9px] font-black uppercase tracking-[0.1em] ${tradeCfg.bg} ${tradeCfg.border} ${tradeCfg.color} ${tradeCfg.glow}`}>{tradeCfg.arrow} {tradeCfg.label}</p>
+                  </div>
+                  <div className="rounded-xl border border-slate-800/65 bg-slate-900/70 p-2">
+                    <p className="text-[8px] font-bold uppercase tracking-[0.14em] text-slate-500">Regime</p>
+                    <p className="mt-1 text-[10px] font-black text-slate-100">{row.regime.replace(/_/g, ' ')}</p>
+                  </div>
+                  <div className="rounded-xl border border-slate-800/65 bg-slate-900/70 p-2">
+                    <p className="text-[8px] font-bold uppercase tracking-[0.14em] text-slate-500">Spot</p>
+                    <p className="mt-1 text-[10px] font-black font-mono text-slate-100">{row.spot != null ? row.spot.toLocaleString('en-IN', { maximumFractionDigits: 2 }) : '--'}</p>
+                  </div>
+                  <div className="rounded-xl border border-slate-800/65 bg-slate-900/70 p-2">
+                    <p className="text-[8px] font-bold uppercase tracking-[0.14em] text-slate-500">PCR</p>
+                    <p className={`mt-1 text-[10px] font-black font-mono ${row.pcr == null ? 'text-slate-400' : row.pcr > 1.2 ? 'text-emerald-300' : row.pcr < 0.8 ? 'text-red-300' : 'text-amber-300'}`}>{row.pcr != null ? row.pcr.toFixed(2) : '--'}</p>
+                  </div>
+                </div>
+
+                <div className="mt-3">
+                  <div className="mb-1 flex items-center justify-between text-[8px] font-bold uppercase tracking-[0.14em] text-slate-500">
+                    <span>Pressure Balance</span>
+                    <span>{row.bullPressure}% / {row.bearPressure}%</span>
+                  </div>
+                  <div className="flex h-2 overflow-hidden rounded-full bg-slate-800/75">
+                    <div className="bg-gradient-to-r from-emerald-500/75 to-emerald-400" style={{ width: `${bullWidth}%` }} />
+                    <div className="bg-gradient-to-r from-red-400 to-red-500/75" style={{ width: `${bearWidth}%` }} />
+                  </div>
+                </div>
+
+                <div className="mt-3 flex items-center justify-between gap-2 text-[9px]">
+                  <span className="font-semibold text-slate-400">Trap Risk <span className={`${trapTone} font-black`}>{row.trapRisk}%</span></span>
+                  <span className="font-semibold text-slate-400">World {row.worldBias ? <span className="text-slate-200 font-black">{row.worldBias}</span> : <span className="text-slate-500">--</span>}</span>
+                  <span className="font-mono font-black text-violet-300">FD {row.flowDepth}</span>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {leader && (
+        <div className="mt-3 rounded-2xl border border-slate-700/45 bg-slate-950/72 px-3 py-2.5">
+          <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-[9px] font-black uppercase tracking-[0.22em] text-slate-500">Lead Contract Cluster</span>
+              <span className="inline-flex items-center rounded-full border border-cyan-400/40 bg-cyan-500/10 px-2.5 py-1 text-[9px] font-black uppercase tracking-[0.14em] text-cyan-200">{leader.label}</span>
+              <span className={`inline-flex items-center rounded-full border px-2.5 py-1 text-[9px] font-black uppercase tracking-[0.14em] ${ACTIONABILITY_TONE[leader.actionability]}`}>{leader.actionability} actionability</span>
+            </div>
+            <div className="flex flex-wrap items-center gap-2 text-[10px]">
+              <span className="rounded-full border border-slate-700/45 bg-slate-900/70 px-2.5 py-1 font-mono font-black text-slate-100">Score {leader.score > 0 ? '+' : ''}{leader.score}</span>
+              <span className="rounded-full border border-slate-700/45 bg-slate-900/70 px-2.5 py-1 font-mono font-black text-cyan-300">Conf {leader.confidence}%</span>
+              <span className={`rounded-full border px-2.5 py-1 font-black ${DECISION_BADGE_CFG[leader.tradePlan].bg} ${DECISION_BADGE_CFG[leader.tradePlan].border} ${DECISION_BADGE_CFG[leader.tradePlan].color}`}>{DECISION_BADGE_CFG[leader.tradePlan].label}</span>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+});
+StrikeTerminalOverview.displayName = 'StrikeTerminalOverview';
+
 // Main Component
 
 const StrikeIntelligence = memo(() => {
@@ -2436,6 +2710,7 @@ const StrikeIntelligence = memo(() => {
           </span>
         </div>
       </div>
+      <StrikeTerminalOverview strikeData={strikeData} isConnected={isConnected} tickTs={tickTs} statusLabel={dataStatus.label} />
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 lg:gap-5 xl:gap-6">
         <SymbolStrikeCard data={strikeData.NIFTY}      name="NIFTY 50"   />
         <SymbolStrikeCard data={strikeData.BANKNIFTY}  name="BANK NIFTY" />
