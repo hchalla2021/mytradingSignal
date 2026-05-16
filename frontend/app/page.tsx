@@ -188,6 +188,7 @@ const ICTIntelligence = dynamic(() => import('@/components/ICTIntelligence'), {
   )
 });
 
+
 export default function Home() {
   type FiveStateSignal = 'STRONG_BUY' | 'BUY' | 'NEUTRAL' | 'SELL' | 'STRONG_SELL';
 
@@ -563,8 +564,6 @@ export default function Home() {
     <main suppressHydrationWarning className="min-h-screen">
       {/* Header */}
       <Header isConnected={isConnected} marketStatus={marketStatus} />
-
-      {/* Market Pulse section removed as requested */}
 
       {/* 🔥 NEW: Professional System Status Banner */}
       <SystemStatusBanner />
