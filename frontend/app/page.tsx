@@ -8,10 +8,6 @@ import SystemStatusBanner from '@/components/SystemStatusBanner';
 import { useMarketSocket } from '@/hooks/useMarketSocket';
 import { useAnalysis } from '@/hooks/useAnalysis';
 import { useAIAnalysis } from '@/hooks/useAIAnalysis';
-import { useIndiaVIX } from '@/hooks/useIndiaVIX';
-import { useMarketRegime, type RegimeType } from '@/hooks/useMarketRegime';
-import { useStrikeIntelligence } from '@/hooks/useStrikeIntelligence';
-import { useChartIntelligence } from '@/hooks/useChartIntelligence';
 import { API_CONFIG } from '@/lib/api-config';
 import { getOrCreateVisitorId } from '@/lib/visitor-id';
 
@@ -190,8 +186,6 @@ const ICTIntelligence = dynamic(() => import('@/components/ICTIntelligence'), {
 
 
 export default function Home() {
-  type FiveStateSignal = 'STRONG_BUY' | 'BUY' | 'NEUTRAL' | 'SELL' | 'STRONG_SELL';
-
   type UserAnalyticsSummary = {
     totals: {
       logged_in_users: number;
@@ -231,42 +225,8 @@ export default function Home() {
     isConnected
   } = useMarketSocket();
   const { alertData } = useAIAnalysis();
-  const { regimeData } = useMarketRegime();
-  const { strikeData: strikeIntelData } = useStrikeIntelligence();
-  const { chartData: chartIntelData } = useChartIntelligence();
   const [serverOutlook, setServerOutlook] = useState<Record<string, any> | null>(null);
 
-  const regimeToFiveState = useCallback((regime?: RegimeType | null): FiveStateSignal | null => {
-    if (!regime) return null;
-    if (regime === 'STRONG_TRENDING_BULLISH') return 'STRONG_BUY';
-    if (regime === 'TRENDING_BULLISH') return 'BUY';
-    if (regime === 'TRENDING_BEARISH') return 'SELL';
-    if (regime === 'STRONG_TRENDING_BEARISH') return 'STRONG_SELL';
-    return 'NEUTRAL';
-  }, []);
-
-  const chartToFiveState = useCallback((candles?: Array<{ o: number; c: number }> | null): FiveStateSignal | null => {
-    if (!candles || candles.length < 4) return null;
-    const last = candles[candles.length - 1];
-    const prev = candles[candles.length - 2];
-    const ref = candles[Math.max(0, candles.length - 4)];
-    if (!last || !prev || !ref || prev.c <= 0 || ref.c <= 0) return null;
-
-    const r1 = ((last.c - prev.c) / prev.c) * 100;
-    const r3 = ((last.c - ref.c) / ref.c) * 100;
-    const candleBias = last.c > last.o ? 1 : last.c < last.o ? -1 : 0;
-
-    const bullish = r1 > 0.03 && r3 > 0.08 && candleBias >= 0;
-    const bearish = r1 < -0.03 && r3 < -0.08 && candleBias <= 0;
-    const strongBull = r3 >= 0.22 && r1 >= 0.08;
-    const strongBear = r3 <= -0.22 && r1 <= -0.08;
-
-    if (bullish && strongBull) return 'STRONG_BUY';
-    if (bearish && strongBear) return 'STRONG_SELL';
-    if (bullish) return 'BUY';
-    if (bearish) return 'SELL';
-    return 'NEUTRAL';
-  }, []);
 
   // 🔥 Clear browser cache on mount (desktop browsers cache aggressively)
   useEffect(() => {
@@ -470,11 +430,6 @@ export default function Home() {
       SENSEX: one('SENSEX'),
     };
   }, [serverOutlook, marketData]);
-
-  const overallRegimeSignal = useMemo(() => {
-    const niftyRegime = regimeToFiveState(regimeData.NIFTY?.regime ?? null);
-    return niftyRegime ?? aggregatedMarketSignal.NIFTY.signal;
-  }, [regimeData, regimeToFiveState, aggregatedMarketSignal]);
 
   // Determine market status from actual data, with client-side IST fallback
   // so the UI never shows "MARKET CLOSED" when the Indian market is actually open
