@@ -39,6 +39,8 @@ type ConvergenceMetrics = {
   riskRewardRatio: number;
   drawdownRisk: number;
   profitFactor: number;
+  liquidityTrapRisk: number;
+  alerts: string[];
 };
 
 type FractalDeskRow = {
@@ -54,6 +56,13 @@ type FractalDeskRow = {
   regime: 'EXPANSION' | 'COMPRESSION' | 'BALANCED';
   status: 'LIVE' | 'DELAYED' | 'OFFLINE';
   flowDepth: number;
+  modelProvider: string;
+  latencyMs: number;
+  eventRate: number;
+  queueDepth: number;
+  fakeBreakoutRisk: number;
+  stopHuntRisk: number;
+  smartAlerts: number;
 };
 
 type ConvergenceRow = FractalDeskRow & ConvergenceMetrics;
@@ -113,6 +122,11 @@ function buildDeskRow(symbol: typeof SYMBOLS[number], data: SymbolStrikeData | n
     ? 'DELAYED'
     : 'OFFLINE';
 
+  const deck = fractal.commandDeck;
+  const aiProvider = data?.intelligence?.ai?.provider;
+  const provider = String(deck?.modelProvider || aiProvider || 'rule_engine');
+  const fallbackRisk = Math.max(0, Math.min(100, Math.round((100 - fractal.continuationProbability) * 0.75)));
+
   return {
     symbol,
     label: SYMBOL_LABELS[symbol],
@@ -126,6 +140,13 @@ function buildDeskRow(symbol: typeof SYMBOLS[number], data: SymbolStrikeData | n
     regime: fractal.volatilityRegime,
     status,
     flowDepth: getFlowDepth(data),
+    modelProvider: provider,
+    latencyMs: deck?.analysisLatencyMs ?? 0,
+    eventRate: deck?.eventRatePerSec ?? 0,
+    queueDepth: deck?.queueDepth ?? 0,
+    fakeBreakoutRisk: deck?.prediction?.fakeBreakoutRisk ?? fallbackRisk,
+    stopHuntRisk: deck?.prediction?.stopHuntRisk ?? fallbackRisk,
+    smartAlerts: Array.isArray(deck?.alerts) ? deck!.alerts.length : 0,
   };
 }
 
@@ -149,6 +170,25 @@ function getStatusTone(status: FractalDeskRow['status']): string {
 
 function computeConvergenceMetrics(row: FractalDeskRow, data: SymbolStrikeData | null): ConvergenceMetrics {
   const fractal = data?.intelligence?.quantumFractal;
+  const confluence = data?.intelligence?.institutionalConfluence;
+
+  if (confluence) {
+    return {
+      confluenceScore: confluence.confluenceScore,
+      riskScore: confluence.riskScore,
+      rewardScore: confluence.rewardScore,
+      executionProbability: confluence.executionProbability,
+      smartMoneyAlignment: confluence.smartMoneyAlignment,
+      institutionalFlow: confluence.institutionalFlow,
+      volatilityRisk: confluence.riskScore,
+      riskRewardRatio: confluence.riskRewardRatio,
+      drawdownRisk: confluence.drawdownRisk,
+      profitFactor: confluence.profitFactor,
+      liquidityTrapRisk: confluence.liquidityTrapRisk,
+      alerts: Array.isArray(confluence.alerts) ? confluence.alerts : [],
+    };
+  }
+
   if (!fractal) return {
     confluenceScore: 0,
     riskScore: 0,
@@ -160,6 +200,8 @@ function computeConvergenceMetrics(row: FractalDeskRow, data: SymbolStrikeData |
     riskRewardRatio: 0,
     drawdownRisk: 0,
     profitFactor: 0,
+    liquidityTrapRisk: 0,
+    alerts: [],
   };
 
   const baseScore = Math.abs(row.score);
@@ -200,6 +242,8 @@ function computeConvergenceMetrics(row: FractalDeskRow, data: SymbolStrikeData |
     riskRewardRatio: Math.round(riskRewardRatio * 100) / 100,
     drawdownRisk: Math.round(drawdownRisk),
     profitFactor: Math.round(profitFactor * 100) / 100,
+    liquidityTrapRisk: Math.round(Math.max(0, Math.min(100, volatilityRisk + (100 - smartMoneyAlignment) * 0.2))),
+    alerts: [],
   };
 }
 
@@ -481,6 +525,8 @@ const InstitutionalConvergenceBoard = memo<{ convergenceRows: ConvergenceRow[] }
   const avgInstitutional = convergenceRows.length ? Math.round(convergenceRows.reduce((sum, r) => sum + r.institutionalFlow, 0) / convergenceRows.length) : 0;
   const bestRiskReward = convergenceRows.length ? Math.max(...convergenceRows.map((r) => r.riskRewardRatio)) : 0;
   const institutionalGradeCount = convergenceRows.filter((r) => r.executionProbability >= 70 && r.smartMoneyAlignment >= 65).length;
+  const avgTrapRisk = convergenceRows.length ? Math.round(convergenceRows.reduce((sum, r) => sum + r.liquidityTrapRisk, 0) / convergenceRows.length) : 0;
+  const totalAlerts = convergenceRows.reduce((sum, r) => sum + (r.alerts?.length ?? 0), 0);
 
   return (
     <div className="rounded-2xl border border-indigo-500/25 bg-gradient-to-br from-indigo-950/15 via-slate-950/85 to-slate-900/80 p-4 sm:p-5 lg:p-6 overflow-hidden">
@@ -508,6 +554,11 @@ const InstitutionalConvergenceBoard = memo<{ convergenceRows: ConvergenceRow[] }
               <p className={`mt-1 text-sm font-black ${avgExecution >= 70 && avgSmartMoney >= 65 ? 'text-emerald-300' : avgExecution >= 55 ? 'text-amber-300' : 'text-slate-300'}`}>
                 {avgExecution >= 70 && avgSmartMoney >= 65 ? 'LIVE' : avgExecution >= 55 ? 'ACTIVE' : 'WATCH'}
               </p>
+            </div>
+            <ConfluenceHeatmapCell value={avgTrapRisk} label="Trap Risk" />
+            <div className="rounded-xl border border-slate-700/45 bg-slate-900/65 px-3 py-2.5">
+              <p className="text-[8px] font-bold uppercase tracking-[0.14em] text-slate-500">Alerts</p>
+              <p className={`mt-1 text-sm font-black ${totalAlerts === 0 ? 'text-slate-300' : totalAlerts <= 3 ? 'text-amber-300' : 'text-rose-300'}`}>{totalAlerts}</p>
             </div>
           </div>
         </div>
@@ -570,6 +621,27 @@ const InstitutionalConfluenceCard = memo<{ convergenceRow: ConvergenceRow }>(({ 
           <p className="font-black text-cyan-300">{convergenceRow.smartMoneyAlignment}%</p>
         </div>
       </div>
+
+      <div className="mt-2 grid grid-cols-2 gap-1.5 text-[9px]">
+        <div className="rounded-lg border border-slate-800/60 bg-slate-900/70 px-2 py-1.5">
+          <p className="text-slate-500">Trap Risk</p>
+          <p className={`font-black ${convergenceRow.liquidityTrapRisk <= 35 ? 'text-emerald-300' : convergenceRow.liquidityTrapRisk <= 60 ? 'text-amber-300' : 'text-rose-300'}`}>
+            {convergenceRow.liquidityTrapRisk}%
+          </p>
+        </div>
+        <div className="rounded-lg border border-slate-800/60 bg-slate-900/70 px-2 py-1.5">
+          <p className="text-slate-500">Alerts</p>
+          <p className={`font-black ${convergenceRow.alerts.length === 0 ? 'text-slate-300' : convergenceRow.alerts.length <= 2 ? 'text-amber-300' : 'text-rose-300'}`}>
+            {convergenceRow.alerts.length}
+          </p>
+        </div>
+      </div>
+
+      {convergenceRow.alerts.length > 0 && (
+        <p className="mt-2 text-[9px] leading-relaxed text-amber-200/90 line-clamp-2">
+          {convergenceRow.alerts[0]}
+        </p>
+      )}
     </div>
   );
 });
@@ -591,6 +663,12 @@ const FractalCommandDeck = memo<{
   const liveBooks = rows.filter((row) => row.status === 'LIVE').length;
   const longCount = visibleRows.filter((row) => row.direction === 'LONG').length;
   const shortCount = visibleRows.filter((row) => row.direction === 'SHORT').length;
+  const avgLatency = rows.length ? Math.round(rows.reduce((sum, row) => sum + row.latencyMs, 0) / rows.length) : 0;
+  const avgEventRate = rows.length ? (rows.reduce((sum, row) => sum + row.eventRate, 0) / rows.length) : 0;
+  const avgTrapRisk = rows.length
+    ? Math.round(rows.reduce((sum, row) => sum + Math.max(row.fakeBreakoutRisk, row.stopHuntRisk), 0) / rows.length)
+    : 0;
+  const alertCount = rows.reduce((sum, row) => sum + row.smartAlerts, 0);
 
   return (
     <div className="relative overflow-hidden rounded-[1.5rem] border border-cyan-500/25 bg-gradient-to-br from-cyan-950/18 via-slate-950/90 to-slate-900/85 p-4 sm:p-5 lg:p-6 shadow-[0_12px_36px_rgba(8,47,73,0.35)]">
@@ -612,7 +690,7 @@ const FractalCommandDeck = memo<{
           </div>
         </div>
 
-        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-6">
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-8">
           <div className="rounded-xl border border-slate-800/55 bg-slate-900/65 p-2.5">
             <p className="text-[8px] font-bold uppercase tracking-[0.14em] text-slate-500">Net Score</p>
             <p className={`mt-1 text-lg font-black font-mono ${netScore >= 25 ? 'text-emerald-300' : netScore <= -25 ? 'text-red-300' : 'text-amber-300'}`}>{netScore > 0 ? '+' : ''}{netScore}</p>
@@ -636,6 +714,24 @@ const FractalCommandDeck = memo<{
           <div className="rounded-xl border border-slate-800/55 bg-slate-900/65 p-2.5">
             <p className="text-[8px] font-bold uppercase tracking-[0.14em] text-slate-500">Visible Bias</p>
             <p className="mt-1 text-sm font-black text-slate-100">L {longCount} · S {shortCount}</p>
+          </div>
+          <div className="rounded-xl border border-slate-800/55 bg-slate-900/65 p-2.5">
+            <p className="text-[8px] font-bold uppercase tracking-[0.14em] text-slate-500">Latency</p>
+            <p className={`mt-1 text-sm font-black font-mono ${avgLatency <= 60 ? 'text-emerald-300' : avgLatency <= 180 ? 'text-amber-300' : 'text-red-300'}`}>
+              {avgLatency}ms
+            </p>
+          </div>
+          <div className="rounded-xl border border-slate-800/55 bg-slate-900/65 p-2.5">
+            <p className="text-[8px] font-bold uppercase tracking-[0.14em] text-slate-500">Events/s</p>
+            <p className="mt-1 text-sm font-black font-mono text-cyan-300">{avgEventRate.toFixed(1)}</p>
+          </div>
+          <div className="rounded-xl border border-slate-800/55 bg-slate-900/65 p-2.5">
+            <p className="text-[8px] font-bold uppercase tracking-[0.14em] text-slate-500">Trap Risk</p>
+            <p className={`mt-1 text-sm font-black font-mono ${avgTrapRisk <= 35 ? 'text-emerald-300' : avgTrapRisk <= 60 ? 'text-amber-300' : 'text-rose-300'}`}>{avgTrapRisk}%</p>
+          </div>
+          <div className="rounded-xl border border-slate-800/55 bg-slate-900/65 p-2.5">
+            <p className="text-[8px] font-bold uppercase tracking-[0.14em] text-slate-500">Alerts</p>
+            <p className={`mt-1 text-sm font-black font-mono ${alertCount === 0 ? 'text-slate-300' : alertCount <= 3 ? 'text-amber-300' : 'text-rose-300'}`}>{alertCount}</p>
           </div>
         </div>
 
@@ -702,6 +798,22 @@ const FractalCommandDeck = memo<{
                 <div className="rounded-lg border border-slate-800/60 bg-slate-900/70 px-2 py-1.5">
                   <p className="text-slate-500">Flow</p>
                   <p className="mt-0.5 font-black text-amber-300">{row.flowDepth}</p>
+                </div>
+              </div>
+              <div className="mt-2 grid grid-cols-3 gap-2 text-[9px]">
+                <div className="rounded-lg border border-slate-800/60 bg-slate-900/70 px-2 py-1.5">
+                  <p className="text-slate-500">Latency</p>
+                  <p className={`mt-0.5 font-black font-mono ${row.latencyMs <= 60 ? 'text-emerald-300' : row.latencyMs <= 180 ? 'text-amber-300' : 'text-rose-300'}`}>{row.latencyMs}ms</p>
+                </div>
+                <div className="rounded-lg border border-slate-800/60 bg-slate-900/70 px-2 py-1.5">
+                  <p className="text-slate-500">Model</p>
+                  <p className="mt-0.5 font-black text-cyan-300 truncate">{row.modelProvider}</p>
+                </div>
+                <div className="rounded-lg border border-slate-800/60 bg-slate-900/70 px-2 py-1.5">
+                  <p className="text-slate-500">Trap</p>
+                  <p className={`mt-0.5 font-black ${Math.max(row.fakeBreakoutRisk, row.stopHuntRisk) <= 35 ? 'text-emerald-300' : Math.max(row.fakeBreakoutRisk, row.stopHuntRisk) <= 60 ? 'text-amber-300' : 'text-rose-300'}`}>
+                    {Math.max(row.fakeBreakoutRisk, row.stopHuntRisk)}%
+                  </p>
                 </div>
               </div>
             </div>

@@ -55,6 +55,83 @@ interface TradeZonesData {
   data_status: string;
   token_valid: boolean;
   candles_analyzed: number;
+  ai?: TradeZonesAIIntelligence;
+}
+
+export interface TradeZonesAIClassProbabilities {
+  STRONG_BUY: number;
+  BUY: number;
+  NEUTRAL: number;
+  SELL: number;
+  STRONG_SELL: number;
+}
+
+export interface TradeZonesAISequencePrediction {
+  nextMove: 'UP' | 'DOWN' | 'SIDEWAYS';
+  nextMovePts: number;
+  trendContinuationProb: number;
+  reversalProb: number;
+  horizonSec: number;
+}
+
+export interface TradeZonesAIMicrostructure {
+  liquidityDensity: number;
+  structureDensity: number;
+  fakeBreakoutRisk: number;
+  stopHuntRisk: number;
+}
+
+export interface TradeZonesAISmc {
+  state: 'ACCUMULATION' | 'DISTRIBUTION' | 'LIQUIDITY_TRAP_RISK' | 'BALANCED';
+  score: number;
+}
+
+export interface TradeZonesAIMultiTimeframe {
+  micro: { trend: 'BULL' | 'BEAR' | 'NEUTRAL'; momentum: number };
+  medium: { trend: 'BULL' | 'BEAR' | 'NEUTRAL'; momentum: number };
+  macro: { trend: 'BULL' | 'BEAR' | 'NEUTRAL'; momentum: number };
+  alignmentPct: number;
+}
+
+export interface TradeZonesAICommandDeck {
+  streamState: 'LIVE' | 'CLOSED';
+  modelProvider: 'tensorflow' | 'numpy_fallback';
+  analysisLatencyMs: number;
+  pipelineCadenceMs: number;
+  eventRatePerSec: number;
+  queueDepth: number;
+  cacheState: 'HOT' | 'WARM';
+  alerts: string[];
+}
+
+export interface TradeZonesAIInstitutionalConfluence {
+  executionProbability: number;
+  smartMoneyAlignment: number;
+  institutionalFlow: number;
+  riskScore: number;
+  rewardScore: number;
+  riskRewardRatio: number;
+}
+
+export interface TradeZonesAIIntelligence {
+  provider: 'tensorflow' | 'numpy_fallback';
+  featureVersion: string;
+  classProbabilities: TradeZonesAIClassProbabilities;
+  sequencePrediction: TradeZonesAISequencePrediction;
+  microstructure: TradeZonesAIMicrostructure;
+  smc: TradeZonesAISmc;
+  multiTimeframe: TradeZonesAIMultiTimeframe;
+  commandDeck: TradeZonesAICommandDeck;
+  institutionalConfluence: TradeZonesAIInstitutionalConfluence;
+  summary: {
+    zoneSignal: string;
+    zoneClassification: string;
+    signalConfidence: number;
+    entryQuality: string;
+    orderStructure: string;
+    structureDescription: string;
+    zoneDescription: string;
+  };
 }
 
 interface UseTradeZonesRealtimeReturn {

@@ -55,6 +55,73 @@ export interface LiquiditySignalFactor {
   extra?: Record<string, unknown>;
 }
 
+export interface LiquidityAIClassProbabilities {
+  STRONG_BUY: number;
+  BUY: number;
+  NEUTRAL: number;
+  SELL: number;
+  STRONG_SELL: number;
+}
+
+export interface LiquidityAISequencePrediction {
+  nextMove: 'UP' | 'DOWN' | 'SIDEWAYS';
+  nextMovePts: number;
+  trendContinuationProb: number;
+  reversalProb: number;
+  horizonSec: number;
+}
+
+export interface LiquidityAIMicrostructure {
+  liquidityDensity: number;
+  structureDensity: number;
+  fakeBreakoutRisk: number;
+  stopHuntRisk: number;
+}
+
+export interface LiquidityAISmc {
+  state: 'BULLISH_IMBALANCE' | 'BEARISH_IMBALANCE' | 'LIQUIDITY_SWEEP_RISK' | 'BALANCED';
+  score: number;
+}
+
+export interface LiquidityAIMultiTimeframe {
+  micro: { trend: 'BULL' | 'BEAR' | 'NEUTRAL'; momentum: number };
+  medium: { trend: 'BULL' | 'BEAR' | 'NEUTRAL'; momentum: number };
+  macro: { trend: 'BULL' | 'BEAR' | 'NEUTRAL'; momentum: number };
+  alignmentPct: number;
+}
+
+export interface LiquidityAICommandDeck {
+  streamState: 'LIVE' | 'CLOSED';
+  modelProvider: 'tensorflow' | 'numpy_fallback';
+  analysisLatencyMs: number;
+  pipelineCadenceMs: number;
+  eventRatePerSec: number;
+  queueDepth: number;
+  cacheState: 'HOT' | 'WARM';
+  alerts: string[];
+}
+
+export interface LiquidityAIInstitutionalConfluence {
+  executionProbability: number;
+  smartMoneyAlignment: number;
+  institutionalFlow: number;
+  riskScore: number;
+  rewardScore: number;
+  riskRewardRatio: number;
+}
+
+export interface LiquidityAIIntelligence {
+  provider: 'tensorflow' | 'numpy_fallback';
+  featureVersion: string;
+  classProbabilities: LiquidityAIClassProbabilities;
+  sequencePrediction: LiquidityAISequencePrediction;
+  microstructure: LiquidityAIMicrostructure;
+  smc: LiquidityAISmc;
+  multiTimeframe: LiquidityAIMultiTimeframe;
+  commandDeck: LiquidityAICommandDeck;
+  institutionalConfluence: LiquidityAIInstitutionalConfluence;
+}
+
 export interface LiquidityIndex {
   symbol: string;
   direction: LiquidityDirection;
@@ -84,6 +151,7 @@ export interface LiquidityIndex {
   dataSource: LiquidityDataSource;
   timestamp: string;
   advanced5mPrediction?: Record<string, unknown>;  // Advanced micro-trend prediction
+  ai?: LiquidityAIIntelligence;
 }
 
 export interface LiquidityData {

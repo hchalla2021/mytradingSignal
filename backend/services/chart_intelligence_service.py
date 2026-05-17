@@ -27,6 +27,7 @@ from fastapi import WebSocket
 import pytz
 
 from services.cache import CacheService, _SHARED_CACHE
+from services.chart_intelligence_ai import ChartIntelligenceAIEngine
 from config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -43,6 +44,7 @@ INDEX_TOKENS: Dict[str, int] = {
 }
 
 PERSISTENT_FILE = Path(__file__).parent.parent / "data" / "chart_intelligence_state.json"
+_CHART_AI_ENGINE = ChartIntelligenceAIEngine()
 
 
 # ── Isolated WebSocket manager ───────────────────────────────────────────────
@@ -1017,6 +1019,19 @@ class ChartIntelligenceService:
         _inject_strike_oi(fvg3, ob3, liq3, levels, symbol)
         _inject_strike_oi(fvg5, ob5, liq5, levels, symbol)
 
+        data_source = "LIVE" if phase == "LIVE" else "MARKET_CLOSED"
+        ai_summary = _CHART_AI_ENGINE.infer(
+            symbol=symbol,
+            spot=round(spot, 2),
+            candles3m=c3,
+            candles5m=c5,
+            fvg3m=fvg3,
+            ob3m=ob3,
+            liquidity3m=liq3,
+            levels=levels,
+            data_source=data_source,
+        )
+
         return {
             "symbol": symbol,
             "spot": round(spot, 2),
@@ -1029,7 +1044,8 @@ class ChartIntelligenceService:
             "liquidity3m": liq3,
             "liquidity5m": liq5,
             "levels": levels,
-            "dataSource": "LIVE" if phase == "LIVE" else "MARKET_CLOSED",
+            "ai": ai_summary,
+            "dataSource": data_source,
             "timestamp": datetime.now(IST).isoformat(),
         }
 
@@ -1131,6 +1147,17 @@ class ChartIntelligenceService:
         _inject_strike_oi(fvg5_live, ob5_live, liq5_live, refreshed.get("levels", {}), symbol)
 
         refreshed["dataSource"] = "LIVE"
+        refreshed["ai"] = _CHART_AI_ENGINE.infer(
+            symbol=symbol,
+            spot=round(spot, 2),
+            candles3m=c3_live,
+            candles5m=c5_live,
+            fvg3m=fvg3_live,
+            ob3m=ob3_live,
+            liquidity3m=liq3_live,
+            levels=refreshed.get("levels", {}) if isinstance(refreshed.get("levels"), dict) else {},
+            data_source="LIVE",
+        )
         return refreshed
 
     async def _bg_fetch_live(self, phase: str) -> None:

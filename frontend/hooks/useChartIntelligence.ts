@@ -175,6 +175,73 @@ export interface ChartLevels {
   };
 }
 
+export interface ChartAIClassProbabilities {
+  STRONG_BUY: number;
+  BUY: number;
+  NEUTRAL: number;
+  SELL: number;
+  STRONG_SELL: number;
+}
+
+export interface ChartAISequencePrediction {
+  nextMove: 'UP' | 'DOWN' | 'SIDEWAYS';
+  nextMovePts: number;
+  trendContinuationProb: number;
+  reversalProb: number;
+  horizonSec: number;
+}
+
+export interface ChartAIMicrostructure {
+  liquidityDensity: number;
+  structureDensity: number;
+  fakeBreakoutRisk: number;
+  stopHuntRisk: number;
+}
+
+export interface ChartAISmc {
+  state: 'BULLISH_IMBALANCE' | 'BEARISH_IMBALANCE' | 'LIQUIDITY_SWEEP_RISK' | 'BALANCED';
+  score: number;
+}
+
+export interface ChartAIMultiTimeframe {
+  micro: { trend: 'BULL' | 'BEAR' | 'NEUTRAL'; momentum: number };
+  medium: { trend: 'BULL' | 'BEAR' | 'NEUTRAL'; momentum: number };
+  macro: { trend: 'BULL' | 'BEAR' | 'NEUTRAL'; momentum: number };
+  alignmentPct: number;
+}
+
+export interface ChartAICommandDeck {
+  streamState: 'LIVE' | 'DELAYED' | 'CLOSED';
+  modelProvider: 'tensorflow' | 'numpy_fallback';
+  analysisLatencyMs: number;
+  pipelineCadenceMs: number;
+  eventRatePerSec: number;
+  queueDepth: number;
+  cacheState: 'HOT' | 'WARM' | 'COLD';
+  alerts: string[];
+}
+
+export interface ChartAIInstitutionalConfluence {
+  executionProbability: number;
+  smartMoneyAlignment: number;
+  institutionalFlow: number;
+  riskScore: number;
+  rewardScore: number;
+  riskRewardRatio: number;
+}
+
+export interface ChartAIIntelligence {
+  provider: 'tensorflow' | 'numpy_fallback';
+  featureVersion: string;
+  classProbabilities: ChartAIClassProbabilities;
+  sequencePrediction: ChartAISequencePrediction;
+  microstructure: ChartAIMicrostructure;
+  smc: ChartAISmc;
+  multiTimeframe: ChartAIMultiTimeframe;
+  commandDeck: ChartAICommandDeck;
+  institutionalConfluence: ChartAIInstitutionalConfluence;
+}
+
 export type ChartDataSource = 'LIVE' | 'CACHED' | 'MARKET_CLOSED';
 
 export interface SymbolChartData {
@@ -189,6 +256,7 @@ export interface SymbolChartData {
   liquidity3m: Liquidity[];
   liquidity5m: Liquidity[];
   levels: ChartLevels;
+  ai?: ChartAIIntelligence;
   dataSource: ChartDataSource;
   timestamp: string;
 }

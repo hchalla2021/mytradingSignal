@@ -23,9 +23,18 @@ from dataclasses import dataclass, field
 import math
 
 from config.market_session import get_market_session
+from services.smart_money_order_logic_ai import SmartMoneyOrderLogicAIEngine
 
 market_config = get_market_session()
 IST = pytz.timezone(market_config.TIMEZONE)
+_SMART_MONEY_AI_ENGINE = SmartMoneyOrderLogicAIEngine()
+
+
+def _safe_float(v: Any, default: float = 0.0) -> float:
+    try:
+        return float(v) if v is not None else default
+    except (TypeError, ValueError):
+        return default
 
 
 @dataclass
@@ -478,9 +487,26 @@ class SmartMoneySignalEngine:
         """Get current institutional signal as JSON."""
         with self.lock:
             signal = self.current_signals.get(symbol)
+            signatures = list(self.institutional_signatures.get(symbol, []))[-50:]
         
         if not signal:
             return {}
+
+        avg_sig_conf = 0.0
+        if signatures:
+            avg_sig_conf = sum(_safe_float(s.confidence) for s in signatures) / len(signatures)
+
+        ai_summary = _SMART_MONEY_AI_ENGINE.infer(
+            symbol=symbol,
+            signal_type=signal.signal_type,
+            confidence=_safe_float(signal.confidence),
+            magnitude=_safe_float(signal.magnitude),
+            risk_score=_safe_float(signal.risk_score),
+            entry_price=_safe_float(signal.entry_price),
+            supporting_patterns_count=len(signal.supporting_patterns),
+            signature_count=len(signatures),
+            avg_signature_confidence=avg_sig_conf,
+        )
         
         return {
             'timestamp': signal.timestamp.isoformat(),
@@ -503,7 +529,8 @@ class SmartMoneySignalEngine:
                     'nextTarget': round(p.next_target, 2) if p.next_target else None
                 }
                 for p in signal.supporting_patterns
-            ]
+            ],
+            'ai': ai_summary,
         }
     
     def get_volume_profile(self, symbol: str) -> Dict[str, Any]:

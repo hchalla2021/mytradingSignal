@@ -314,6 +314,7 @@ const QuantumFractalPanel = memo<{ fractal: QuantumFractalIntelligence; symbol?:
   const signalCfg   = OVERALL_CFG[normalizedSignal as OverallSignal] ?? OVERALL_CFG.NEUTRAL;
   const confidenceTone = fractal.confidence >= 70 ? 'text-emerald-300' : fractal.confidence >= 45 ? 'text-amber-300' : 'text-rose-300';
   const scoreTone      = fractal.score >= 14 ? 'text-emerald-300' : fractal.score <= -14 ? 'text-rose-300' : 'text-amber-300';
+  const commandDeck = fractal.commandDeck;
 
   const regimeTone = fractal.volatilityRegime === 'EXPANSION'
     ? 'text-cyan-200   border-cyan-400/40   bg-cyan-500/10'
@@ -353,6 +354,22 @@ const QuantumFractalPanel = memo<{ fractal: QuantumFractalIntelligence; symbol?:
 
   const nextIcon = fractal.prediction.nextMove === 'UP' ? '↑'
     : fractal.prediction.nextMove === 'DOWN' ? '↓' : '→';
+
+  const latencyTone = !commandDeck
+    ? 'text-slate-300'
+    : commandDeck.analysisLatencyMs <= 60
+    ? 'text-emerald-300'
+    : commandDeck.analysisLatencyMs <= 180
+    ? 'text-amber-300'
+    : 'text-rose-300';
+
+  const queueTone = !commandDeck
+    ? 'text-slate-300'
+    : commandDeck.queueDepth <= 4
+    ? 'text-emerald-300'
+    : commandDeck.queueDepth <= 10
+    ? 'text-amber-300'
+    : 'text-rose-300';
 
   return (
     <div className="rounded-2xl overflow-hidden flex flex-col border border-slate-600/60 bg-slate-950/90 shadow-lg min-w-0">
@@ -503,6 +520,41 @@ const QuantumFractalPanel = memo<{ fractal: QuantumFractalIntelligence; symbol?:
             </div>
             {/* Rationale */}
             <p className="text-[10px] sm:text-[11px] text-slate-300 leading-relaxed break-words">{fractal.prediction.rationale}</p>
+
+            {/* Command Deck telemetry */}
+            {commandDeck && (
+              <div className="mt-2.5 rounded-md border border-slate-700/45 bg-slate-900/55 p-2">
+                <div className="grid grid-cols-2 gap-2 text-[9px]">
+                  <div>
+                    <p className="text-slate-500 uppercase tracking-[0.11em]">Provider</p>
+                    <p className="mt-0.5 text-cyan-300 font-black break-all">{commandDeck.modelProvider}</p>
+                  </div>
+                  <div>
+                    <p className="text-slate-500 uppercase tracking-[0.11em]">Stream</p>
+                    <p className="mt-0.5 text-slate-200 font-black">{commandDeck.streamState}</p>
+                  </div>
+                  <div>
+                    <p className="text-slate-500 uppercase tracking-[0.11em]">Latency</p>
+                    <p className={`mt-0.5 font-black font-mono ${latencyTone}`}>{commandDeck.analysisLatencyMs}ms</p>
+                  </div>
+                  <div>
+                    <p className="text-slate-500 uppercase tracking-[0.11em]">Queue</p>
+                    <p className={`mt-0.5 font-black font-mono ${queueTone}`}>{commandDeck.queueDepth}</p>
+                  </div>
+                </div>
+                <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[9px]">
+                  <span className="rounded border border-amber-400/40 bg-amber-500/10 px-1.5 py-0.5 text-amber-200 font-semibold">
+                    Fake {commandDeck.prediction.fakeBreakoutRisk}%
+                  </span>
+                  <span className="rounded border border-rose-400/40 bg-rose-500/10 px-1.5 py-0.5 text-rose-200 font-semibold">
+                    StopHunt {commandDeck.prediction.stopHuntRisk}%
+                  </span>
+                  <span className="rounded border border-cyan-400/40 bg-cyan-500/10 px-1.5 py-0.5 text-cyan-200 font-semibold">
+                    {commandDeck.eventRatePerSec.toFixed(1)} ev/s
+                  </span>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       </div>

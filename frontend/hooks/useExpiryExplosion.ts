@@ -80,6 +80,83 @@ export interface BreakoutLevels {
   pricePosition: number;
 }
 
+export interface ExpiryAIClassProbabilities {
+  STRONG_BUY: number;
+  BUY: number;
+  NEUTRAL: number;
+  SELL: number;
+  STRONG_SELL: number;
+}
+
+export interface ExpiryAISequencePrediction {
+  nextMove: 'UP' | 'DOWN' | 'SIDEWAYS';
+  nextMovePts: number;
+  trendContinuationProb: number;
+  reversalProb: number;
+  horizonSec: number;
+}
+
+export interface ExpiryAIMicrostructure {
+  liquidityDensity: number;
+  structureDensity: number;
+  fakeBreakoutRisk: number;
+  stopHuntRisk: number;
+}
+
+export interface ExpiryAISmc {
+  state: 'ACCUMULATION' | 'DISTRIBUTION' | 'LIQUIDITY_TRAP_RISK' | 'BALANCED';
+  score: number;
+}
+
+export interface ExpiryAIMultiTimeframe {
+  micro: { trend: 'BULL' | 'BEAR' | 'NEUTRAL'; momentum: number };
+  medium: { trend: 'BULL' | 'BEAR' | 'NEUTRAL'; momentum: number };
+  macro: { trend: 'BULL' | 'BEAR' | 'NEUTRAL'; momentum: number };
+  alignmentPct: number;
+}
+
+export interface ExpiryAICommandDeck {
+  streamState: 'LIVE' | 'CLOSED';
+  modelProvider: 'tensorflow' | 'numpy_fallback';
+  analysisLatencyMs: number;
+  pipelineCadenceMs: number;
+  eventRatePerSec: number;
+  queueDepth: number;
+  cacheState: 'HOT' | 'WARM';
+  alerts: string[];
+}
+
+export interface ExpiryAIInstitutionalConfluence {
+  executionProbability: number;
+  smartMoneyAlignment: number;
+  institutionalFlow: number;
+  riskScore: number;
+  rewardScore: number;
+  riskRewardRatio: number;
+}
+
+export interface ExpiryAIIntelligence {
+  provider: 'tensorflow' | 'numpy_fallback';
+  featureVersion: string;
+  classProbabilities: ExpiryAIClassProbabilities;
+  sequencePrediction: ExpiryAISequencePrediction;
+  microstructure: ExpiryAIMicrostructure;
+  smc: ExpiryAISmc;
+  multiTimeframe: ExpiryAIMultiTimeframe;
+  commandDeck: ExpiryAICommandDeck;
+  institutionalConfluence: ExpiryAIInstitutionalConfluence;
+  summary: {
+    direction: string;
+    action: string;
+    phase: string;
+    expiryLabel: string;
+    strikeAtm: number | undefined;
+    strikeOptionType: string | undefined;
+    breakoutSupport: number | undefined;
+    breakoutResistance: number | undefined;
+  };
+}
+
 export interface ExpiryIndex {
   symbol: string;
   direction: ExpiryDirection;
@@ -112,6 +189,7 @@ export interface ExpiryIndex {
     putOI: number;
     volume: number;
   };
+  ai?: ExpiryAIIntelligence;
   dataSource: ExpiryDataSource;
   timestamp: string;
 }

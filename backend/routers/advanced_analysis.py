@@ -7,6 +7,7 @@ Performance: <10ms response time with caching
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect, Header
+from pydantic import BaseModel
 from typing import Dict, Any
 import asyncio
 from datetime import datetime, timezone
@@ -46,6 +47,26 @@ CACHE_TTL = settings.advanced_analysis_cache_ttl
 # Global cache instance
 _cache_instance: CacheService | None = None
 _SYMBOL_RE = re.compile(r"^[A-Z0-9_-]{1,20}$")
+
+
+class CRTBTSTAIRequest(BaseModel):
+    analysis: Dict[str, Any]
+
+
+@router.post("/crt-btst-ai")
+async def get_crt_btst_ai(request: CRTBTSTAIRequest) -> Dict[str, Any]:
+    """Return AI enrichment for an existing CRT BTST analysis snapshot."""
+    try:
+        from services.crt_btst_ai import crt_btst_ai_engine
+
+        analysis = request.analysis or {}
+        ai = crt_btst_ai_engine.infer(analysis)
+        return {"success": True, "data": ai, "timestamp": datetime.now(timezone.utc).isoformat()}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("[CRT-BTST-AI] Failed to enrich analysis: %s", e, exc_info=True)
+        raise HTTPException(status_code=500, detail="CRT BTST AI enrichment error")
 
 
 def _safe_float(value: Any, default: float = 0.0) -> float:
@@ -287,6 +308,27 @@ async def get_volume_pulse(symbol: str) -> Dict[str, Any]:
         # 📊 ANALYZE VOLUME PULSE WITH REAL CANDLE DATA
         from services.volume_pulse_service import analyze_volume_pulse
         result = await analyze_volume_pulse(symbol, df)
+
+        from services.volume_pulse_ai import volume_pulse_ai_engine
+        pro_metrics = result.get("pro_metrics") or {}
+        vd = result.get("volume_data") or {}
+        result["ai"] = volume_pulse_ai_engine.infer(
+            symbol=symbol,
+            pulse_score=_safe_float(result.get("pulse_score"), 50.0),
+            confidence=int(_safe_float(result.get("confidence"), 0.0)),
+            signal=str(result.get("signal") or "NEUTRAL").upper(),
+            trend=str(result.get("trend") or "NEUTRAL").upper(),
+            market_status=str(result.get("status") or "CLOSED").upper(),
+            green_pct=_safe_float(vd.get("green_percentage"), 50.0),
+            red_pct=_safe_float(vd.get("red_percentage"), 50.0),
+            ratio=_safe_float(vd.get("ratio"), 1.0),
+            participation=_safe_float(pro_metrics.get("participation"), 50.0),
+            aggression=_safe_float(pro_metrics.get("aggression"), 50.0),
+            exhaustion=_safe_float(pro_metrics.get("exhaustion"), 0.0),
+            volume_quality=str(pro_metrics.get("volume_quality") or "NEUTRAL").upper(),
+            candles_analyzed=len(df),
+        )
+
         result["message"] = f"✅ Live data from Zerodha ({len(df)} candles)"
         result["candles_analyzed"] = len(df)
         result["token_valid"] = token_status["valid"]
@@ -605,6 +647,34 @@ async def get_trend_base(symbol: str) -> Dict[str, Any]:
         s15 = ts_score * 0.50 + ema_score * 0.30 + vwap_score * 0.20
         trend_15m = 'BULLISH' if s15 >= 7 else 'BEARISH' if s15 <= -7 else 'NEUTRAL'
 
+        from services.trend_base_ai import trend_base_ai_engine
+
+        ai = trend_base_ai_engine.infer(
+            symbol=symbol,
+            price=price,
+            change_pct=change_pct,
+            signal=signal,
+            signal_5m=signal_5m,
+            trend=trend,
+            trend_15m=trend_15m,
+            total_score=total,
+            confidence=confidence,
+            confidence_5m=confidence_5m,
+            integrity=integrity,
+            market_status=market_status,
+            momentum=momentum,
+            rsi_5m=rsi_5m,
+            rsi_15m=rsi_15m,
+            ts_score=ts_score,
+            st_score=st_score,
+            ema_score=ema_score,
+            rsi_score=rsi_score,
+            vwap_score=vwap_score,
+            day_change_score=chg_score,
+            mom_score=mom_score,
+            recent_candles_score=rcm_score,
+        )
+
         return {
             "symbol":          symbol,
             "price":           price,
@@ -636,6 +706,7 @@ async def get_trend_base(symbol: str) -> Dict[str, Any]:
             "ema_alignment":   ema_align,
             "supertrend":      st_trend,
             "vwap_position":   vwap_pos,
+            "ai":             ai,
         }
 
     except asyncio.TimeoutError:
@@ -2743,6 +2814,56 @@ async def get_smart_money_flow(symbol: str) -> Dict[str, Any]:
         else:
             order_structure = "TRANSITIONAL"
             structure_description = "Order structure transitioning - waiting for next signal"
+
+        zone_control = analysis.get('zone_control', {})
+        absorption_strength = float(zone_control.get('absorption_strength', 50.0)) if isinstance(zone_control, dict) else 50.0
+        wick_dominance = float(zone_control.get('wick_dominance', 50.0)) if isinstance(zone_control, dict) else 50.0
+
+        from services.trade_zones_ai import trade_zones_ai_engine
+
+        try:
+            ai = trade_zones_ai_engine.infer(
+                symbol=symbol,
+                current_price=current_price,
+                zone_classification=zone_classification,
+                zone_description=zone_description,
+                buy_signal=buy_signal,
+                buy_confidence=buy_confidence,
+                buy_volume_pct=buy_volume_ratio,
+                sell_signal=sell_signal,
+                sell_confidence=sell_confidence,
+                sell_volume_pct=100 - buy_volume_ratio,
+                overall_signal=overall_signal,
+                signal_confidence=signal_confidence,
+                entry_quality=entry_quality,
+                risk_reward_ratio=rr_ratio,
+                trend_structure=trend_structure,
+                volume_strength=volume_strength,
+                vwap_price=vwap_value,
+                ema_20=ema_20,
+                ema_50=ema_50,
+                ema_100=ema_100,
+                ema_200=ema_200,
+                distance_to_ema20_pct=distance_to_ema20,
+                distance_to_ema50_pct=distance_to_ema50,
+                distance_to_ema100_pct=distance_to_ema100,
+                current_volume=current_volume,
+                avg_volume=avg_volume,
+                order_flow_imbalance=abs(buy_volume_ratio - 50.0),
+                absorption_strength=absorption_strength,
+                wick_dominance=wick_dominance,
+                smart_money_signal=analysis.get('smart_money_signal', 'NEUTRAL'),
+                smart_money_confidence=smart_money_confidence,
+                fvg_bullish=bool(analysis.get('fvg_bullish', False)),
+                fvg_bearish=bool(analysis.get('fvg_bearish', False)),
+                order_structure=order_structure,
+                structure_description=structure_description,
+                token_valid=token_status["valid"],
+                candles_analyzed=len(df),
+            )
+        except Exception as ai_error:
+            logger.warning("[TRADE-ZONES-AI] Falling back without AI for %s: %s", symbol, ai_error)
+            ai = None
         
         # Calculate overall smart money strength (composite score)
         smart_money_strength = (
@@ -3195,6 +3316,9 @@ async def get_trade_zones(symbol: str) -> Dict[str, Any]:
             "trend_structure": trend_structure,
             "volume_strength": volume_strength,
             "vwap_price": round(vwap_value, 2),
+
+            # AI Intelligence
+            "ai": ai,
             
             # Status
             "status": "LIVE",
@@ -3263,6 +3387,7 @@ async def get_trade_zones(symbol: str) -> Dict[str, Any]:
             "trend_structure": "UNKNOWN",
             "volume_strength": "UNKNOWN",
             "vwap_price": 0,
+            "ai": None,
             "status": "ERROR",
             "error": str(e)
         }

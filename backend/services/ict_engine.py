@@ -1155,6 +1155,28 @@ class ICTService:
             fast_agreement = 0.0
         pred_conf = int(_clamp(fast_agreement * 50 + abs(pred_score) * 48, 5, 99))
 
+        from services.ict_ai import ict_ai_engine
+
+        ai = ict_ai_engine.infer(
+            symbol=symbol,
+            direction=direction,
+            confidence=confidence,
+            raw_score=float(composite),
+            prediction_5m=prediction_5m,
+            pred_5m_conf=pred_conf,
+            pred_5m_score=float(pred_score),
+            market_structure_signal=float(signals["market_structure"]["score"]),
+            liquidity_sweep_signal=float(signals["liquidity_sweeps"]["score"]),
+            displacement_signal=float(signals["displacement"]["score"]),
+            smart_money_div_signal=float(signals["smart_money_div"]["score"]),
+            setup_grade=str(ict_setup.get("grade", "—")),
+            setup_confluences=int(ict_setup.get("confluences", 0)),
+            change_pct=float(change_pct),
+            oi=float(oi),
+            candle_count=len(candles),
+            data_source=data_source,
+        )
+
         return {
             "symbol": symbol,
             "direction": direction,
@@ -1175,6 +1197,7 @@ class ICTService:
                 "lastSwingHigh": swing_tracker.last_swing_high,
                 "lastSwingLow": swing_tracker.last_swing_low,
             },
+            "ai": ai,
             "dataSource": data_source,
             "timestamp": datetime.now(IST).isoformat(),
         }

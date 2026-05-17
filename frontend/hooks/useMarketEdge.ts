@@ -51,6 +51,73 @@ export interface EdgeMetrics {
   vix: number;
 }
 
+export interface EdgeAIClassProbabilities {
+  STRONG_BUY: number;
+  BUY: number;
+  NEUTRAL: number;
+  SELL: number;
+  STRONG_SELL: number;
+}
+
+export interface EdgeAISequencePrediction {
+  nextMove: 'UP' | 'DOWN' | 'SIDEWAYS';
+  nextMovePts: number;
+  trendContinuationProb: number;
+  reversalProb: number;
+  horizonSec: number;
+}
+
+export interface EdgeAIMicrostructure {
+  liquidityDensity: number;
+  structureDensity: number;
+  fakeBreakoutRisk: number;
+  stopHuntRisk: number;
+}
+
+export interface EdgeAISmc {
+  state: 'BULLISH_IMBALANCE' | 'BEARISH_IMBALANCE' | 'LIQUIDITY_SWEEP_RISK' | 'BALANCED';
+  score: number;
+}
+
+export interface EdgeAIMultiTimeframe {
+  micro: { trend: 'BULL' | 'BEAR' | 'NEUTRAL'; momentum: number };
+  medium: { trend: 'BULL' | 'BEAR' | 'NEUTRAL'; momentum: number };
+  macro: { trend: 'BULL' | 'BEAR' | 'NEUTRAL'; momentum: number };
+  alignmentPct: number;
+}
+
+export interface EdgeAICommandDeck {
+  streamState: 'LIVE' | 'CLOSED';
+  modelProvider: 'tensorflow' | 'numpy_fallback';
+  analysisLatencyMs: number;
+  pipelineCadenceMs: number;
+  eventRatePerSec: number;
+  queueDepth: number;
+  cacheState: 'HOT' | 'WARM';
+  alerts: string[];
+}
+
+export interface EdgeAIInstitutionalConfluence {
+  executionProbability: number;
+  smartMoneyAlignment: number;
+  institutionalFlow: number;
+  riskScore: number;
+  rewardScore: number;
+  riskRewardRatio: number;
+}
+
+export interface EdgeAIIntelligence {
+  provider: 'tensorflow' | 'numpy_fallback';
+  featureVersion: string;
+  classProbabilities: EdgeAIClassProbabilities;
+  sequencePrediction: EdgeAISequencePrediction;
+  microstructure: EdgeAIMicrostructure;
+  smc: EdgeAISmc;
+  multiTimeframe: EdgeAIMultiTimeframe;
+  commandDeck: EdgeAICommandDeck;
+  institutionalConfluence: EdgeAIInstitutionalConfluence;
+}
+
 export interface EdgeIndex {
   symbol: string;
   direction: EdgeDirection;
@@ -68,6 +135,7 @@ export interface EdgeIndex {
   };
   futures: EdgeFutures;
   metrics: EdgeMetrics;
+  ai?: EdgeAIIntelligence;
   dataSource: EdgeDataSource;
   timestamp: string;
 }

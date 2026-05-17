@@ -22,6 +22,7 @@
 
 import { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import { analyzeCRT, type CRTAnalysis, type CRTInput } from '@/lib/crt-engine';
+import { getEnvironmentConfig } from '@/lib/env-detection';
 
 const CACHE_KEY_PREFIX = 'crt_btst_';
 const LOCK_KEY_PREFIX  = 'crt_locked_';
@@ -101,6 +102,30 @@ function saveLocked(symbol: string, analysis: CRTAnalysis): number {
 
 // ── Main Hook ──────────────────────────────────────────────────────────
 
+
+async function fetchCrtBtstAi(analysis: CRTAnalysis, signal?: AbortSignal): Promise<CRTAnalysis['ai'] | null> {
+  try {
+    const config = getEnvironmentConfig();
+    const base = config.apiUrl.replace(/\/$/, '');
+    const response = await fetch(`${base}/api/advanced/crt-btst-ai`, {
+      method: 'POST',
+      cache: 'no-store',
+      signal,
+      headers: {
+        'content-type': 'application/json',
+        accept: 'application/json',
+      },
+      body: JSON.stringify({ analysis }),
+    });
+
+    if (!response.ok) return null;
+
+    const payload = await response.json() as { success?: boolean; data?: CRTAnalysis['ai'] };
+    return payload?.success && payload.data ? payload.data : null;
+  } catch {
+    return null;
+  }
+}
 export function useCRTBTSTRealtime(symbol: string, initialData?: any) {
   const [state, setState] = useState<CRTBTSTRealtimeState>(() => {
     // Priority: today's locked 3:20 PM signal > today's regular cache
@@ -123,6 +148,8 @@ export function useCRTBTSTRealtime(symbol: string, initialData?: any) {
   const lastHighRef = useRef<number>(0);
   const lastLowRef = useRef<number>(0);
   const analysisTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const aiAbortRef = useRef<AbortController | null>(null);
+  const aiRequestSeqRef = useRef(0);
   const prevSignalRef = useRef<string>(state.analysis?.btst.signal || '');
 
   // ── Run CRT analysis ───────────────────────────────────────────────
@@ -187,6 +214,37 @@ export function useCRTBTSTRealtime(symbol: string, initialData?: any) {
     }));
     setLoading(false);
   }, [symbol]);
+
+  // ── Backend AI enrichment ────────────────────────────────────────
+  useEffect(() => {
+    const current = state.analysis;
+    if (!current || current.ai) return;
+
+    const requestId = ++aiRequestSeqRef.current;
+    if (aiAbortRef.current) aiAbortRef.current.abort();
+    aiAbortRef.current = new AbortController();
+
+    void (async () => {
+      const ai = await fetchCrtBtstAi(current, aiAbortRef.current?.signal);
+      if (requestId !== aiRequestSeqRef.current || !ai) return;
+
+      setState(prev => {
+        if (!prev.analysis || prev.analysis.timestamp !== current.timestamp) return prev;
+        if (prev.analysis.ai) return prev;
+        return {
+          ...prev,
+          analysis: {
+            ...prev.analysis,
+            ai,
+          },
+        };
+      });
+    })();
+
+    return () => {
+      if (aiAbortRef.current) aiAbortRef.current.abort();
+    };
+  }, [state.analysis]);
 
   // ── Process initialData with debouncing ────────────────────────────
   useEffect(() => {

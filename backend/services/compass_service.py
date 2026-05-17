@@ -1257,6 +1257,34 @@ class CompassService:
         else:
             data_source = "SPOT_ONLY"
 
+        from services.compass_ai import compass_ai_engine
+
+        ai = compass_ai_engine.infer(
+            symbol=symbol,
+            direction=direction,
+            confidence=confidence,
+            raw_score=float(raw_score),
+            bias=bias,
+            spot_price=float(spot_price),
+            spot_change_pct=float(spot_change_pct),
+            spot_rsi=float(signals["rsi_momentum"]["value"] or 50.0),
+            trend_structure=str(signals["trend_structure"]["extra"].get("structure", "RANGING")),
+            premium_trend=str(signals["futures_premium"]["extra"].get("premium_trend", "STABLE")),
+            fair_value_pct=float(fv_pct),
+            days_to_expiry=int(days_to_expiry),
+            futures_leading=bool(futures_leading),
+            prediction_5m=str(pred_5m),
+            prediction_5m_fut=str(pred_5m_fut),
+            futures_change_pct=float(futures_info["near"]["changePct"] if futures_info["near"] else 0.0),
+            institutional_pressure=institutional_pressure,
+            data_source=data_source,
+            vwap_value=signals["vwap"]["value"],
+            ema9=signals["ema_alignment"]["extra"].get("ema9"),
+            ema20=signals["ema_alignment"]["extra"].get("ema20"),
+            ema50=signals["ema_alignment"]["extra"].get("ema50"),
+            near_premium_pct=float(futures_info["near"]["premiumPct"] if futures_info["near"] else 0.0),
+        )
+
         return {
             "symbol":   symbol,
             "spot": {
@@ -1285,6 +1313,7 @@ class CompassService:
             },
             "signals":    signals,
             "institutionalPressure": institutional_pressure,
+            "ai": ai,
             "direction":  direction,
             "confidence": confidence,
             "rawScore":   raw_score,

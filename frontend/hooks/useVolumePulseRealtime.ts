@@ -5,6 +5,73 @@ import { API_CONFIG } from '@/lib/api-config';
 
 const isDev = process.env.NODE_ENV === 'development';
 
+export interface VolumePulseAIClassProbabilities {
+  STRONG_BUY: number;
+  BUY: number;
+  NEUTRAL: number;
+  SELL: number;
+  STRONG_SELL: number;
+}
+
+export interface VolumePulseAISequencePrediction {
+  nextMove: 'UP' | 'DOWN' | 'SIDEWAYS';
+  nextMovePts: number;
+  trendContinuationProb: number;
+  reversalProb: number;
+  horizonSec: number;
+}
+
+export interface VolumePulseAIMicrostructure {
+  liquidityDensity: number;
+  structureDensity: number;
+  fakeBreakoutRisk: number;
+  stopHuntRisk: number;
+}
+
+export interface VolumePulseAISmc {
+  state: 'BULLISH_IMBALANCE' | 'BEARISH_IMBALANCE' | 'LIQUIDITY_SWEEP_RISK' | 'BALANCED';
+  score: number;
+}
+
+export interface VolumePulseAIMultiTimeframe {
+  micro: { trend: 'BULL' | 'BEAR' | 'NEUTRAL'; momentum: number };
+  medium: { trend: 'BULL' | 'BEAR' | 'NEUTRAL'; momentum: number };
+  macro: { trend: 'BULL' | 'BEAR' | 'NEUTRAL'; momentum: number };
+  alignmentPct: number;
+}
+
+export interface VolumePulseAICommandDeck {
+  streamState: 'LIVE' | 'CLOSED';
+  modelProvider: 'tensorflow' | 'numpy_fallback';
+  analysisLatencyMs: number;
+  pipelineCadenceMs: number;
+  eventRatePerSec: number;
+  queueDepth: number;
+  cacheState: 'HOT' | 'WARM';
+  alerts: string[];
+}
+
+export interface VolumePulseAIInstitutionalConfluence {
+  executionProbability: number;
+  smartMoneyAlignment: number;
+  institutionalFlow: number;
+  riskScore: number;
+  rewardScore: number;
+  riskRewardRatio: number;
+}
+
+export interface VolumePulseAIIntelligence {
+  provider: 'tensorflow' | 'numpy_fallback';
+  featureVersion: string;
+  classProbabilities: VolumePulseAIClassProbabilities;
+  sequencePrediction: VolumePulseAISequencePrediction;
+  microstructure: VolumePulseAIMicrostructure;
+  smc: VolumePulseAISmc;
+  multiTimeframe: VolumePulseAIMultiTimeframe;
+  commandDeck: VolumePulseAICommandDeck;
+  institutionalConfluence: VolumePulseAIInstitutionalConfluence;
+}
+
 export interface VolumePulseData {
   symbol: string;
   timestamp: string;
@@ -45,6 +112,7 @@ export interface VolumePulseData {
   data_status: string;
   token_valid: boolean;
   candles_analyzed: number;
+  ai?: VolumePulseAIIntelligence;
   error?: string;
 }
 

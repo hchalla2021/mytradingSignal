@@ -131,6 +131,98 @@ export interface QuantumFractalPrediction {
   rationale: string;
 }
 
+export interface QuantumCommandDeckPrediction {
+  breakoutProbability: number;
+  fakeBreakoutRisk: number;
+  stopHuntRisk: number;
+  liquidityShiftScore: number;
+  institutionalFlowScore: number;
+}
+
+export interface QuantumCommandDeck {
+  streamState: 'LIVE' | 'DELAYED' | 'CLOSED';
+  modelProvider: string;
+  analysisLatencyMs: number;
+  pipelineCadenceMs: number;
+  eventRatePerSec: number;
+  queueDepth: number;
+  cacheState: 'HOT' | 'WARM' | 'COLD';
+  prediction: QuantumCommandDeckPrediction;
+  alerts: string[];
+}
+
+export interface StrikeAIClassProbabilities {
+  STRONG_BUY: number;
+  BUY: number;
+  NEUTRAL: number;
+  SELL: number;
+  STRONG_SELL: number;
+}
+
+export interface StrikeAISequencePrediction {
+  nextMove: 'UP' | 'DOWN' | 'SIDEWAYS';
+  nextMovePts: number;
+  trendContinuationProb: number;
+  reversalProb: number;
+  horizonSec: number;
+}
+
+export interface StrikeAIMicrostructure {
+  liquidityScore: number;
+  fakeBreakoutRisk: number;
+  stopHuntRisk: number;
+  institutionalActivity: number;
+  ceFlowPct: number;
+  peFlowPct: number;
+}
+
+export interface StrikeAISmc {
+  state: 'BULLISH_DISPLACEMENT' | 'BEARISH_DISPLACEMENT' | 'LIQUIDITY_SWEEP_RISK' | 'BALANCED';
+  score: number;
+  bosUpCount: number;
+  bosDownCount: number;
+}
+
+export interface StrikeAIMultiTimeframe {
+  micro: { trend: 'BULL' | 'BEAR' | 'NEUTRAL'; momentum: number };
+  medium: { trend: 'BULL' | 'BEAR' | 'NEUTRAL'; momentum: number };
+  macro: { trend: 'BULL' | 'BEAR' | 'NEUTRAL'; momentum: number };
+  alignmentPct: number;
+  worldCorrelationBias: 'POSITIVE_RISK_ON' | 'RISK_OFF' | 'MIXED';
+}
+
+export interface StrikeAIExecution {
+  preferredSide: 'CE' | 'PE' | 'NONE';
+  actionability: 'HIGH' | 'MEDIUM' | 'LOW';
+  confidence: number;
+}
+
+export interface StrikeAIIntelligence {
+  provider: 'tensorflow' | 'numpy_fallback';
+  featureVersion: string;
+  classProbabilities: StrikeAIClassProbabilities;
+  sequencePrediction: StrikeAISequencePrediction;
+  microstructure: StrikeAIMicrostructure;
+  smc: StrikeAISmc;
+  multiTimeframe: StrikeAIMultiTimeframe;
+  execution: StrikeAIExecution;
+}
+
+export interface InstitutionalConfluenceSummary {
+  confluenceScore: number;
+  executionProbability: number;
+  smartMoneyAlignment: number;
+  institutionalFlow: number;
+  riskScore: number;
+  rewardScore: number;
+  riskRewardRatio: number;
+  drawdownRisk: number;
+  profitFactor: number;
+  liquidityTrapRisk: number;
+  regimeBias: StrikeSignal;
+  alerts: string[];
+}
+
 export interface QuantumFractalIntelligence {
   title: string;
   signal: StrikeSignal;
@@ -155,6 +247,7 @@ export interface QuantumFractalIntelligence {
     directionalConfirmation: number;
   };
   prediction: QuantumFractalPrediction;
+  commandDeck?: QuantumCommandDeck;
 }
 
 export interface SymbolIntelligenceSummary {
@@ -182,6 +275,10 @@ export interface SymbolIntelligenceSummary {
   bestStrike?: BestStrikeRecommendation | null;
   /** Lowest price predictions for ITM/OTM CE/PE with UP/DOWN direction */
   pricePredictions?: PricePredictions;
+  /** TensorFlow-ready strike AI analytics with sequence and microstructure predictions */
+  ai?: StrikeAIIntelligence;
+  /** Institutional confluence analytics synthesized from AI + strike microstructure */
+  institutionalConfluence?: InstitutionalConfluenceSummary;
   /** Multi-timeframe fractal market probe engine */
   quantumFractal?: QuantumFractalIntelligence;
   insights: string[];

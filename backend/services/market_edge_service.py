@@ -41,9 +41,11 @@ from fastapi import WebSocket
 import pytz
 
 from services.cache import CacheService, _SHARED_CACHE
+from services.market_edge_ai import MarketEdgeAIEngine
 
 logger = logging.getLogger(__name__)
 IST = pytz.timezone("Asia/Kolkata")
+_MARKET_EDGE_AI_ENGINE = MarketEdgeAIEngine()
 
 # ── Weights for MarketEdge scoring ───────────────────────────────────────────
 
@@ -1183,6 +1185,31 @@ class MarketEdgeService:
         # OI profile from futures_oi signal
         oi_profile = sig_fut_oi.get("extra", {}).get("profile", "NEUTRAL")
 
+        metrics_payload = {
+            "price": round(spot_price, 2),
+            "changePct": round(change_pct, 2),
+            "totalOI": total_oi,
+            "callOI": call_oi,
+            "putOI": put_oi,
+            "volume": volume,
+            "ivEstimate": iv_est,
+            "ivRank": round(hist.iv_rank, 1),
+            "ivPercentile": round(hist.iv_percentile, 1),
+            "vix": round(vix, 2),
+        }
+
+        ai_summary = _MARKET_EDGE_AI_ENGINE.infer(
+            symbol=symbol,
+            raw_score=raw_score,
+            direction=direction,
+            action=action,
+            confidence=confidence,
+            data_source=data_source,
+            metrics=metrics_payload,
+            futures=futures_section,
+            signals=signals,
+        )
+
         return {
             "symbol": symbol,
             "direction": direction,
@@ -1192,18 +1219,8 @@ class MarketEdgeService:
             "oiProfile": oi_profile,
             "signals": signals,
             "futures": futures_section,
-            "metrics": {
-                "price": round(spot_price, 2),
-                "changePct": round(change_pct, 2),
-                "totalOI": total_oi,
-                "callOI": call_oi,
-                "putOI": put_oi,
-                "volume": volume,
-                "ivEstimate": iv_est,
-                "ivRank": round(hist.iv_rank, 1),
-                "ivPercentile": round(hist.iv_percentile, 1),
-                "vix": round(vix, 2),
-            },
+            "metrics": metrics_payload,
+            "ai": ai_summary,
             "dataSource": data_source,
             "timestamp": datetime.now(IST).isoformat(),
         }

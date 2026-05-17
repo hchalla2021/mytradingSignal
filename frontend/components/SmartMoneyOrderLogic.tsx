@@ -13,6 +13,41 @@ interface SmartMoneySignal {
   takeProfit?: number;
   supportingPatterns: any[];
   riskScore: number;
+  ai?: {
+    provider: 'tensorflow' | 'numpy_fallback';
+    featureVersion: string;
+    sequencePrediction: {
+      nextMove: 'UP' | 'DOWN' | 'SIDEWAYS';
+      nextMovePts: number;
+      trendContinuationProb: number;
+      reversalProb: number;
+      horizonSec: number;
+    };
+    microstructure: {
+      liquidityDensity: number;
+      structureDensity: number;
+      fakeBreakoutRisk: number;
+      stopHuntRisk: number;
+    };
+    commandDeck: {
+      streamState: 'LIVE' | 'DELAYED' | 'CLOSED';
+      modelProvider: 'tensorflow' | 'numpy_fallback';
+      analysisLatencyMs: number;
+      pipelineCadenceMs: number;
+      eventRatePerSec: number;
+      queueDepth: number;
+      cacheState: 'HOT' | 'WARM' | 'COLD';
+      alerts: string[];
+    };
+    institutionalConfluence: {
+      executionProbability: number;
+      smartMoneyAlignment: number;
+      institutionalFlow: number;
+      riskScore: number;
+      rewardScore: number;
+      riskRewardRatio: number;
+    };
+  };
 }
 
 interface InstitutionalActivity {
@@ -254,6 +289,44 @@ export function SmartMoneyOrderLogic({ symbol }: { symbol: string }) {
               ></div>
             </div>
           </div>
+
+          {signal.ai && (
+            <div className="mt-6 pt-6 border-t border-white/10">
+              <div className="rounded-xl border border-cyan-500/30 bg-gradient-to-br from-cyan-950/15 via-slate-950/80 to-slate-900/80 p-3">
+                <div className="flex items-center justify-between gap-2 mb-2">
+                  <div className="flex items-center gap-2">
+                    <span className="h-5 w-1 rounded-full bg-gradient-to-b from-cyan-300 to-blue-400/70" />
+                    <span className="text-[11px] font-black uppercase tracking-[0.12em] text-cyan-200">Smart Money AI Command Deck</span>
+                  </div>
+                  <div className="flex items-center gap-1.5 text-[9px] font-black uppercase tracking-[0.1em]">
+                    <span className="rounded border border-cyan-400/40 bg-cyan-500/10 px-2 py-1 text-cyan-200">{signal.ai.provider}</span>
+                    <span className={`rounded border px-2 py-1 ${signal.ai.commandDeck.streamState === 'LIVE' ? 'border-emerald-400/45 bg-emerald-500/10 text-emerald-200' : signal.ai.commandDeck.streamState === 'DELAYED' ? 'border-amber-400/45 bg-amber-500/10 text-amber-200' : 'border-slate-600/45 bg-slate-700/20 text-slate-300'}`}>
+                      {signal.ai.commandDeck.streamState}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-8 text-[10px]">
+                  <div className="rounded-lg border border-slate-700/45 bg-slate-900/60 px-2 py-1.5"><p className="text-slate-500">Latency</p><p className={signal.ai.commandDeck.analysisLatencyMs <= 60 ? 'font-black text-emerald-300' : signal.ai.commandDeck.analysisLatencyMs <= 180 ? 'font-black text-amber-300' : 'font-black text-rose-300'}>{signal.ai.commandDeck.analysisLatencyMs}ms</p></div>
+                  <div className="rounded-lg border border-slate-700/45 bg-slate-900/60 px-2 py-1.5"><p className="text-slate-500">Events/s</p><p className="font-black text-cyan-300">{signal.ai.commandDeck.eventRatePerSec.toFixed(1)}</p></div>
+                  <div className="rounded-lg border border-slate-700/45 bg-slate-900/60 px-2 py-1.5"><p className="text-slate-500">Queue</p><p className="font-black text-slate-200">{signal.ai.commandDeck.queueDepth}</p></div>
+                  <div className="rounded-lg border border-slate-700/45 bg-slate-900/60 px-2 py-1.5"><p className="text-slate-500">Move</p><p className={`font-black ${signal.ai.sequencePrediction.nextMove === 'UP' ? 'text-emerald-300' : signal.ai.sequencePrediction.nextMove === 'DOWN' ? 'text-rose-300' : 'text-amber-300'}`}>{signal.ai.sequencePrediction.nextMove}</p></div>
+                  <div className="rounded-lg border border-slate-700/45 bg-slate-900/60 px-2 py-1.5"><p className="text-slate-500">Exec</p><p className="font-black text-emerald-300">{signal.ai.institutionalConfluence.executionProbability}%</p></div>
+                  <div className="rounded-lg border border-slate-700/45 bg-slate-900/60 px-2 py-1.5"><p className="text-slate-500">Smart</p><p className="font-black text-cyan-300">{signal.ai.institutionalConfluence.smartMoneyAlignment}%</p></div>
+                  <div className="rounded-lg border border-slate-700/45 bg-slate-900/60 px-2 py-1.5"><p className="text-slate-500">R:R</p><p className="font-black text-violet-300">{signal.ai.institutionalConfluence.riskRewardRatio.toFixed(2)}x</p></div>
+                  <div className="rounded-lg border border-slate-700/45 bg-slate-900/60 px-2 py-1.5"><p className="text-slate-500">Trap</p><p className={`${Math.max(signal.ai.microstructure.fakeBreakoutRisk, signal.ai.microstructure.stopHuntRisk) <= 35 ? 'font-black text-emerald-300' : Math.max(signal.ai.microstructure.fakeBreakoutRisk, signal.ai.microstructure.stopHuntRisk) <= 60 ? 'font-black text-amber-300' : 'font-black text-rose-300'}`}>{Math.max(signal.ai.microstructure.fakeBreakoutRisk, signal.ai.microstructure.stopHuntRisk).toFixed(0)}%</p></div>
+                </div>
+
+                {signal.ai.commandDeck.alerts.length > 0 && (
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    {signal.ai.commandDeck.alerts.map((a) => (
+                      <span key={a} className="rounded border border-amber-400/35 bg-amber-500/10 px-2 py-1 text-[9px] text-amber-200">{a}</span>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
         </div>
       )}
 

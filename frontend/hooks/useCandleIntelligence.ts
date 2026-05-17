@@ -96,6 +96,73 @@ export interface CandleMtfConsensus {
   probabilityBear: number;
 }
 
+export interface CandleAIClassProbabilities {
+  STRONG_BUY: number;
+  BUY: number;
+  NEUTRAL: number;
+  SELL: number;
+  STRONG_SELL: number;
+}
+
+export interface CandleAISequencePrediction {
+  nextMove: 'UP' | 'DOWN' | 'SIDEWAYS';
+  nextMovePts: number;
+  trendContinuationProb: number;
+  reversalProb: number;
+  horizonSec: number;
+}
+
+export interface CandleAIMicrostructure {
+  liquidityDensity: number;
+  structureDensity: number;
+  fakeBreakoutRisk: number;
+  stopHuntRisk: number;
+}
+
+export interface CandleAISmc {
+  state: 'BULLISH_IMBALANCE' | 'BEARISH_IMBALANCE' | 'LIQUIDITY_SWEEP_RISK' | 'BALANCED';
+  score: number;
+}
+
+export interface CandleAIMultiTimeframe {
+  micro: { trend: 'BULL' | 'BEAR' | 'NEUTRAL'; momentum: number };
+  medium: { trend: 'BULL' | 'BEAR' | 'NEUTRAL'; momentum: number };
+  macro: { trend: 'BULL' | 'BEAR' | 'NEUTRAL'; momentum: number };
+  alignmentPct: number;
+}
+
+export interface CandleAICommandDeck {
+  streamState: 'LIVE' | 'DELAYED' | 'CLOSED';
+  modelProvider: 'tensorflow' | 'numpy_fallback';
+  analysisLatencyMs: number;
+  pipelineCadenceMs: number;
+  eventRatePerSec: number;
+  queueDepth: number;
+  cacheState: 'HOT' | 'WARM' | 'COLD';
+  alerts: string[];
+}
+
+export interface CandleAIInstitutionalConfluence {
+  executionProbability: number;
+  smartMoneyAlignment: number;
+  institutionalFlow: number;
+  riskScore: number;
+  rewardScore: number;
+  riskRewardRatio: number;
+}
+
+export interface CandleAIIntelligence {
+  provider: 'tensorflow' | 'numpy_fallback';
+  featureVersion: string;
+  classProbabilities: CandleAIClassProbabilities;
+  sequencePrediction: CandleAISequencePrediction;
+  microstructure: CandleAIMicrostructure;
+  smc: CandleAISmc;
+  multiTimeframe: CandleAIMultiTimeframe;
+  commandDeck: CandleAICommandDeck;
+  institutionalConfluence: CandleAIInstitutionalConfluence;
+}
+
 export type CandleTimeframe = '3m' | '5m' | '15m';
 
 export interface CandleIntelIndex {
@@ -120,6 +187,7 @@ export interface CandleIntelIndex {
   timeframes?: Record<CandleTimeframe, CandleIntelIndex>;
   /** Multi-timeframe consensus summary from backend */
   mtfConsensus?: CandleMtfConsensus;
+  ai?: CandleAIIntelligence;
 }
 
 export interface CandleIntelData {

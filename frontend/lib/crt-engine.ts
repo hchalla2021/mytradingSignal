@@ -107,6 +107,86 @@ export interface BTSTRecommendation {
   signalQuality: 'BTST_WINDOW' | 'LIVE' | 'POST_MARKET'; // BTST_WINDOW = 15:20–15:30 IST final snapshot
 }
 
+export interface CRTBTSTAIClassProbabilities {
+  STRONG_BUY: number;
+  BUY: number;
+  NEUTRAL: number;
+  SELL: number;
+  STRONG_SELL: number;
+}
+
+export interface CRTBTSTAISequencePrediction {
+  nextMove: 'UP' | 'DOWN' | 'SIDEWAYS';
+  nextMovePts: number;
+  trendContinuationProb: number;
+  reversalProb: number;
+  horizonSec: number;
+}
+
+export interface CRTBTSTAIMicrostructure {
+  liquidityDensity: number;
+  structureDensity: number;
+  fakeBreakoutRisk: number;
+  stopHuntRisk: number;
+}
+
+export interface CRTBTSTAISmc {
+  state: 'ACCUMULATION' | 'DISTRIBUTION' | 'LIQUIDITY_TRAP_RISK' | 'BALANCED';
+  score: number;
+}
+
+export interface CRTBTSTAIMultiTimeframe {
+  micro: { trend: 'BULL' | 'BEAR' | 'NEUTRAL'; momentum: number };
+  medium: { trend: 'BULL' | 'BEAR' | 'NEUTRAL'; momentum: number };
+  macro: { trend: 'BULL' | 'BEAR' | 'NEUTRAL'; momentum: number };
+  alignmentPct: number;
+}
+
+export interface CRTBTSTAICommandDeck {
+  streamState: 'LIVE' | 'CLOSED';
+  modelProvider: 'tensorflow' | 'numpy_fallback';
+  analysisLatencyMs: number;
+  pipelineCadenceMs: number;
+  eventRatePerSec: number;
+  queueDepth: number;
+  cacheState: 'HOT' | 'WARM';
+  alerts: string[];
+}
+
+export interface CRTBTSTAIInstitutionalConfluence {
+  executionProbability: number;
+  smartMoneyAlignment: number;
+  institutionalFlow: number;
+  riskScore: number;
+  rewardScore: number;
+  riskRewardRatio: number;
+}
+
+export interface CRTBTSTAIIntelligence {
+  provider: 'tensorflow' | 'numpy_fallback';
+  featureVersion: string;
+  classProbabilities: CRTBTSTAIClassProbabilities;
+  sequencePrediction: CRTBTSTAISequencePrediction;
+  microstructure: CRTBTSTAIMicrostructure;
+  smc: CRTBTSTAISmc;
+  multiTimeframe: CRTBTSTAIMultiTimeframe;
+  commandDeck: CRTBTSTAICommandDeck;
+  institutionalConfluence: CRTBTSTAIInstitutionalConfluence;
+  summary: {
+    signal: string;
+    confidence: number;
+    action: string;
+    riskLevel: string;
+    sessionDate: string;
+    keyLevels: {
+      pdh: number;
+      pdl: number;
+      pdc: number;
+      midPoint: number;
+    };
+  };
+}
+
 export interface CRTAnalysis {
   symbol: string;
   price: number;
@@ -134,6 +214,7 @@ export interface CRTAnalysis {
   isBTSTCriticalWindow: boolean; // True during 15:20–15:30 IST — final candle, most accurate
   sessionDate: string;           // 'YYYY-MM-DD' IST — for date-scoped cache validation
   timestamp: number;
+  ai?: CRTBTSTAIIntelligence;
 }
 
 // ── Core Analysis Functions ────────────────────────────────────────────

@@ -40,9 +40,11 @@ from fastapi import WebSocket
 import pytz
 
 from services.cache import get_cache
+from services.candle_intelligence_ai import CandleIntelligenceAIEngine
 
 logger = logging.getLogger(__name__)
 IST = pytz.timezone("Asia/Kolkata")
+_CANDLE_AI_ENGINE = CandleIntelligenceAIEngine()
 
 # Disk persistence for last good snapshot (survives server restart + market close)
 _CANDLE_PERSIST_FILE = Path(__file__).resolve().parent.parent / "data" / "candle_intel_last_snapshot.json"
@@ -1619,6 +1621,22 @@ class CandleIntelligenceService:
                 "probabilityBear": 100 - probability_bull,
             },
         }
+
+        result["ai"] = _CANDLE_AI_ENGINE.infer(
+            symbol=symbol,
+            signal=str(result.get("signal") or "NEUTRAL"),
+            structure=str(result.get("structure") or "NEUTRAL"),
+            strength=str(result.get("strength") or "WEAK"),
+            confidence=int(result.get("confidence") or 0),
+            price=float(result.get("price") or 0.0),
+            change_pct=float(result.get("changePct") or 0.0),
+            data_source=str(result.get("dataSource") or "MARKET_CLOSED"),
+            mtf_consensus=result.get("mtfConsensus") or {},
+            tf_3m=tf_results.get("3m") or {},
+            tf_5m=tf_results.get("5m") or {},
+            tf_15m=tf_results.get("15m") or {},
+            three_factor=result.get("three_factor"),
+        )
 
         # Track last good result
         if result.get("pattern") or result.get("price", 0) > 0:

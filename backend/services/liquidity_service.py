@@ -49,9 +49,11 @@ from services.advanced_5m_predictor import (
     MicroTrendBuffer,
     calculate_advanced_5m_prediction,
 )
+from services.liquidity_ai import LiquidityAIEngine
 
 logger = logging.getLogger(__name__)
 IST = pytz.timezone("Asia/Kolkata")
+_LIQUIDITY_AI_ENGINE = LiquidityAIEngine()
 
 # ── Factor weights (must sum to 1.0) ─────────────────────────────────────────
 
@@ -1237,6 +1239,19 @@ class LiquidityService:
             "dataSource": data_source,
             "timestamp":  datetime.now(IST).isoformat(),
         }
+
+        response["ai"] = _LIQUIDITY_AI_ENGINE.infer(
+            symbol=symbol,
+            raw_score=raw_score,
+            direction=direction,
+            confidence=confidence,
+            prediction_5m=prediction_5m,
+            pred_5m_conf=pred_conf,
+            data_source=data_source,
+            price=price,
+            metrics=response["metrics"],
+            signals=signals,
+        )
         
         # Add advanced 5-min prediction if available
         if advanced_5m:

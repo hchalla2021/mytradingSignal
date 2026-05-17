@@ -33,6 +33,7 @@ import pytz
 
 from services.cache import CacheService, _SHARED_CACHE
 from services.global_indices_service import get_global_indices_service
+from services.strike_intelligence_ai import StrikeIntelligenceAIEngine
 from config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -52,6 +53,8 @@ NUM_STRIKES_EACH_SIDE = 5  # ATM ± 5
 
 # Persistent file
 PERSISTENT_FILE = Path(__file__).parent.parent / "data" / "strike_intelligence_state.json"
+
+_STRIKE_AI_ENGINE = StrikeIntelligenceAIEngine()
 
 
 # ── Isolated WebSocket manager ───────────────────────────────────────────────
@@ -1459,6 +1462,111 @@ def _build_intelligence_summary(
     # Compute price predictions (market-direction-aligned, conviction ≥ 65 % only)
     price_predictions = _compute_price_move_predictions(sorted_rows, spot, final_score, signal)
 
+    ai_summary = _STRIKE_AI_ENGINE.infer(
+        symbol=symbol,
+        strikes=sorted_rows,
+        spot=spot,
+        atm=atm,
+        signal=signal,
+        score=final_score,
+        confidence=confidence,
+        regime=regime,
+        world_market=world_market,
+    )
+
+    ai_micro = ai_summary.get("microstructure", {}) if isinstance(ai_summary, dict) else {}
+    ai_seq = ai_summary.get("sequencePrediction", {}) if isinstance(ai_summary, dict) else {}
+    ai_smc = ai_summary.get("smc", {}) if isinstance(ai_summary, dict) else {}
+    ai_exec = ai_summary.get("execution", {}) if isinstance(ai_summary, dict) else {}
+
+    execution_probability = int(round(_clamp(
+        0.42 * confidence
+        + 0.25 * _safe_float(ai_seq.get("trendContinuationProb"))
+        + 0.18 * agreement * 100.0
+        + 0.15 * _safe_float(ai_exec.get("confidence", confidence)),
+        1.0,
+        99.0,
+    )))
+
+    smart_money_alignment = int(round(_clamp(
+        0.35 * _safe_float(ai_smc.get("score"))
+        + 0.35 * _safe_float(ai_micro.get("institutionalActivity"))
+        + 0.30 * _safe_float(ai_seq.get("trendContinuationProb")),
+        0.0,
+        100.0,
+    )))
+
+    institutional_flow = int(round(_clamp(
+        0.60 * _safe_float(ai_micro.get("institutionalActivity"))
+        + 0.25 * abs(final_score)
+        + 0.15 * _safe_float(ai_micro.get("liquidityScore")),
+        0.0,
+        100.0,
+    )))
+
+    fake_breakout_risk = _safe_float(ai_micro.get("fakeBreakoutRisk"))
+    stop_hunt_risk = _safe_float(ai_micro.get("stopHuntRisk"))
+    liquidity_trap_risk = int(round(_clamp(max(fake_breakout_risk, stop_hunt_risk), 0.0, 100.0)))
+
+    risk_score = int(round(_clamp(
+        0.45 * liquidity_trap_risk
+        + 0.20 * trap_ratio * 100.0
+        + 0.20 * (100.0 - _safe_float(ai_seq.get("trendContinuationProb")))
+        + 0.15 * (30.0 if regime in ("TRAP_ZONE", "TRANSITION") else 18.0),
+        1.0,
+        99.0,
+    )))
+
+    reward_score = int(round(_clamp(
+        0.40 * abs(final_score)
+        + 0.30 * _safe_float(ai_seq.get("trendContinuationProb"))
+        + 0.20 * agreement * 100.0
+        + 0.10 * smart_money_alignment,
+        1.0,
+        99.0,
+    )))
+
+    risk_reward_ratio = round(reward_score / max(risk_score, 1), 2)
+    drawdown_risk = int(round(_clamp(100.0 - execution_probability + liquidity_trap_risk * 0.25, 1.0, 99.0)))
+    profit_factor = round((reward_score * max(execution_probability, 1)) / max(risk_score * 100.0, 1.0), 2)
+
+    confluence_score = int(round(_clamp(
+        0.30 * execution_probability
+        + 0.25 * smart_money_alignment
+        + 0.20 * institutional_flow
+        + 0.15 * _safe_float(ai_seq.get("trendContinuationProb"))
+        + 0.10 * agreement * 100.0,
+        1.0,
+        99.0,
+    )))
+
+    confluence_alerts: List[str] = []
+    if liquidity_trap_risk >= 60:
+        confluence_alerts.append("Liquidity trap risk elevated")
+    if execution_probability >= 75 and smart_money_alignment >= 70:
+        confluence_alerts.append("Institutional execution window active")
+    if risk_reward_ratio >= 1.6 and reward_score >= 65:
+        confluence_alerts.append("High risk/reward opportunity")
+    if execution_probability < 45:
+        confluence_alerts.append("Low execution probability; reduce size")
+    if not confluence_alerts:
+        confluence_alerts.append("Confluence stable; monitor trigger levels")
+
+    institutional_confluence = {
+        "confluenceScore": confluence_score,
+        "executionProbability": execution_probability,
+        "smartMoneyAlignment": smart_money_alignment,
+        "institutionalFlow": institutional_flow,
+        "riskScore": risk_score,
+        "rewardScore": reward_score,
+        "riskRewardRatio": risk_reward_ratio,
+        "drawdownRisk": drawdown_risk,
+        "profitFactor": profit_factor,
+        "liquidityTrapRisk": liquidity_trap_risk,
+        "regimeBias": signal,
+        "alerts": confluence_alerts[:4],
+    }
+
     return {
         "symbol": symbol,
         "signal": signal,
@@ -1483,6 +1591,8 @@ def _build_intelligence_summary(
         },
         "bestStrike": best_strike,
         "pricePredictions": price_predictions,
+        "ai": ai_summary,
+        "institutionalConfluence": institutional_confluence,
         "insights": insights[:4],
     }
 
@@ -1911,6 +2021,70 @@ class StrikeIntelligenceService:
             f"alignment {alignment_pct}% | continuation {continuation_prob}%"
         )
 
+        ai_block = intelligence.get("ai") if isinstance(intelligence.get("ai"), dict) else {}
+        model_provider = str(ai_block.get("provider") or "rule_engine")
+
+        stream_state = "LIVE"
+        if data_source in ("MARKET_CLOSED", "LAST_CLOSE"):
+            stream_state = "CLOSED"
+        elif data_source == "CACHED" or option_age_sec > 10.0:
+            stream_state = "DELAYED"
+
+        if stream_state == "LIVE":
+            cadence_ms = 500
+        elif stream_state == "DELAYED":
+            cadence_ms = 1500
+        else:
+            cadence_ms = 60_000
+
+        analysis_latency_ms = int(round(_clamp(12.0 + option_age_sec * 1000.0 * 0.35, 12.0, 750.0)))
+        event_rate_per_sec = round(_clamp(1.5 + (ce_hot + pe_hot) * 0.35 + abs(micro_score) / 70.0, 0.2, 18.0), 2)
+        queue_depth = int(round(_clamp(trap_ratio * 20.0 + (2.0 if stream_state == "DELAYED" else 0.0), 0.0, 24.0)))
+        cache_state = "HOT" if option_age_sec <= 4.0 else "WARM" if option_age_sec <= 15.0 else "COLD"
+
+        fake_breakout_risk = int(round(_clamp(
+            trap_ratio * 55.0 + (100.0 - continuation_prob) * 0.35 + (20.0 if volatility_regime == "COMPRESSION" else 0.0),
+            2.0,
+            98.0,
+        )))
+        stop_hunt_risk = int(round(_clamp(
+            trap_ratio * 62.0 + (abs(micro_score - medium_score) * 0.8) + (8.0 if bos_up == bos_down else 0.0),
+            2.0,
+            98.0,
+        )))
+        liquidity_shift_score = int(round(_clamp(abs(liquidity_component), 0.0, 100.0)))
+        institutional_flow_score = int(round(_clamp(abs(liquidity_component) * 0.65 + continuation_prob * 0.35, 0.0, 100.0)))
+
+        smart_alerts: List[str] = []
+        if fake_breakout_risk >= 60:
+            smart_alerts.append("High fake-breakout risk near strike walls")
+        if stop_hunt_risk >= 58:
+            smart_alerts.append("Stop-hunt probability elevated; tighten execution filters")
+        if continuation_prob >= 70 and alignment_pct >= 72:
+            smart_alerts.append("High-probability continuation regime detected")
+        if stream_state != "LIVE":
+            smart_alerts.append("Data stream degraded; confidence auto-adjusted")
+        if not smart_alerts:
+            smart_alerts.append("Order-flow and structure stable; monitor for trigger")
+
+        command_deck = {
+            "streamState": stream_state,
+            "modelProvider": model_provider,
+            "analysisLatencyMs": analysis_latency_ms,
+            "pipelineCadenceMs": cadence_ms,
+            "eventRatePerSec": event_rate_per_sec,
+            "queueDepth": queue_depth,
+            "cacheState": cache_state,
+            "prediction": {
+                "breakoutProbability": continuation_prob,
+                "fakeBreakoutRisk": fake_breakout_risk,
+                "stopHuntRisk": stop_hunt_risk,
+                "liquidityShiftScore": liquidity_shift_score,
+                "institutionalFlowScore": institutional_flow_score,
+            },
+            "alerts": smart_alerts[:4],
+        }
+
         return {
             "title": "Quantum Fractal Intelligence Engine",
             "signal": signal,
@@ -1941,6 +2115,7 @@ class StrikeIntelligenceService:
                 "horizonSec": horizon,
                 "rationale": rationale,
             },
+            "commandDeck": command_deck,
         }
 
     # ── KiteConnect init ─────────────────────────────────────────────────

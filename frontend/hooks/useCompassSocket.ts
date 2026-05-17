@@ -13,6 +13,73 @@ export type TrendStructure = 'HH_HL' | 'LH_LL' | 'RANGING';
 /** 5-minute short-term directional prediction. */
 export type Prediction5m = 'STRONG_BUY' | 'BUY' | 'NEUTRAL' | 'SELL' | 'STRONG_SELL';
 
+export interface CompassAIClassProbabilities {
+  STRONG_BUY: number;
+  BUY: number;
+  NEUTRAL: number;
+  SELL: number;
+  STRONG_SELL: number;
+}
+
+export interface CompassAISequencePrediction {
+  nextMove: 'UP' | 'DOWN' | 'SIDEWAYS';
+  nextMovePts: number;
+  trendContinuationProb: number;
+  reversalProb: number;
+  horizonSec: number;
+}
+
+export interface CompassAIMicrostructure {
+  liquidityDensity: number;
+  structureDensity: number;
+  fakeBreakoutRisk: number;
+  stopHuntRisk: number;
+}
+
+export interface CompassAISmc {
+  state: 'BULLISH_IMBALANCE' | 'BEARISH_IMBALANCE' | 'LIQUIDITY_SWEEP_RISK' | 'BALANCED';
+  score: number;
+}
+
+export interface CompassAIMultiTimeframe {
+  micro: { trend: 'BULL' | 'BEAR' | 'NEUTRAL'; momentum: number };
+  medium: { trend: 'BULL' | 'BEAR' | 'NEUTRAL'; momentum: number };
+  macro: { trend: 'BULL' | 'BEAR' | 'NEUTRAL'; momentum: number };
+  alignmentPct: number;
+}
+
+export interface CompassAICommandDeck {
+  streamState: 'LIVE' | 'CLOSED';
+  modelProvider: 'tensorflow' | 'numpy_fallback';
+  analysisLatencyMs: number;
+  pipelineCadenceMs: number;
+  eventRatePerSec: number;
+  queueDepth: number;
+  cacheState: 'HOT' | 'WARM';
+  alerts: string[];
+}
+
+export interface CompassAIInstitutionalConfluence {
+  executionProbability: number;
+  smartMoneyAlignment: number;
+  institutionalFlow: number;
+  riskScore: number;
+  rewardScore: number;
+  riskRewardRatio: number;
+}
+
+export interface CompassAIIntelligence {
+  provider: 'tensorflow' | 'numpy_fallback';
+  featureVersion: string;
+  classProbabilities: CompassAIClassProbabilities;
+  sequencePrediction: CompassAISequencePrediction;
+  microstructure: CompassAIMicrostructure;
+  smc: CompassAISmc;
+  multiTimeframe: CompassAIMultiTimeframe;
+  commandDeck: CompassAICommandDeck;
+  institutionalConfluence: CompassAIInstitutionalConfluence;
+}
+
 /** One factor in the 6-factor signal breakdown. */
 export interface SignalFactor {
   score: number;           // -1.0 to +1.0
@@ -82,6 +149,7 @@ export interface CompassIndex {
     diiProxy: number;
     drivers?: Record<string, number>;
   };
+  ai?: CompassAIIntelligence;
   direction: CompassDirection;
   confidence: number;       // 1–99
   rawScore: number;

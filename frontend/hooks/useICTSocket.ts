@@ -29,6 +29,73 @@ export interface ICTSetup {
 }
 
 /** Per-index ICT analysis result. */
+export interface ICTAIClassProbabilities {
+  STRONG_BUY: number;
+  BUY: number;
+  NEUTRAL: number;
+  SELL: number;
+  STRONG_SELL: number;
+}
+
+export interface ICTAISequencePrediction {
+  nextMove: 'UP' | 'DOWN' | 'SIDEWAYS';
+  nextMovePts: number;
+  trendContinuationProb: number;
+  reversalProb: number;
+  horizonSec: number;
+}
+
+export interface ICTAIMicrostructure {
+  liquidityDensity: number;
+  structureDensity: number;
+  fakeBreakoutRisk: number;
+  stopHuntRisk: number;
+}
+
+export interface ICTAISmc {
+  state: 'BULLISH_IMBALANCE' | 'BEARISH_IMBALANCE' | 'LIQUIDITY_SWEEP_RISK' | 'BALANCED';
+  score: number;
+}
+
+export interface ICTAIMultiTimeframe {
+  micro: { trend: 'BULL' | 'BEAR' | 'NEUTRAL'; momentum: number };
+  medium: { trend: 'BULL' | 'BEAR' | 'NEUTRAL'; momentum: number };
+  macro: { trend: 'BULL' | 'BEAR' | 'NEUTRAL'; momentum: number };
+  alignmentPct: number;
+}
+
+export interface ICTAICommandDeck {
+  streamState: 'LIVE' | 'CLOSED';
+  modelProvider: 'tensorflow' | 'numpy_fallback';
+  analysisLatencyMs: number;
+  pipelineCadenceMs: number;
+  eventRatePerSec: number;
+  queueDepth: number;
+  cacheState: 'HOT' | 'WARM';
+  alerts: string[];
+}
+
+export interface ICTAIInstitutionalConfluence {
+  executionProbability: number;
+  smartMoneyAlignment: number;
+  institutionalFlow: number;
+  riskScore: number;
+  rewardScore: number;
+  riskRewardRatio: number;
+}
+
+export interface ICTAIIntelligence {
+  provider: 'tensorflow' | 'numpy_fallback';
+  featureVersion: string;
+  classProbabilities: ICTAIClassProbabilities;
+  sequencePrediction: ICTAISequencePrediction;
+  microstructure: ICTAIMicrostructure;
+  smc: ICTAISmc;
+  multiTimeframe: ICTAIMultiTimeframe;
+  commandDeck: ICTAICommandDeck;
+  institutionalConfluence: ICTAIInstitutionalConfluence;
+}
+
 export interface ICTIndex {
   symbol: string;
   direction: ICTDirection;
@@ -56,6 +123,7 @@ export interface ICTIndex {
     lastSwingHigh: number | null;
     lastSwingLow: number | null;
   };
+  ai?: ICTAIIntelligence;
   dataSource: ICTDataSource;
   timestamp: string;
 }

@@ -233,6 +233,7 @@ const CRTBTSTCard = memo<CRTBTSTCardProps>(({ symbol, name, data }) => {
   }
 
   const { btst, factors, keyLevels, candleStructure, price } = analysis;
+  const ai = analysis.ai;
   const sc = SIGNAL_CONFIG[btst.signal];
 
   return (
@@ -368,6 +369,86 @@ const CRTBTSTCard = memo<CRTBTSTCardProps>(({ symbol, name, data }) => {
             type={candleStructure.type}
           />
         </div>
+
+        {ai && (
+          <div className="rounded-xl border border-cyan-500/25 bg-gradient-to-br from-cyan-500/10 to-slate-900/40 p-3 shadow-inner shadow-cyan-500/10">
+            <div className="flex items-center justify-between gap-2 mb-3">
+              <div>
+                <p className="text-[9px] text-cyan-300 font-black uppercase tracking-[0.18em]">AI CRT Command Deck</p>
+                <p className="text-[9px] text-slate-400">{ai.featureVersion} via {ai.provider}</p>
+              </div>
+              <span className="text-[9px] px-2 py-0.5 rounded-full border border-cyan-400/30 bg-cyan-500/10 text-cyan-200 font-bold">
+                {ai.commandDeck.streamState} | {ai.commandDeck.cacheState}
+              </span>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <div className="rounded-lg border border-slate-700/50 bg-slate-950/50 p-2">
+                <div className="flex items-center justify-between text-[10px] text-slate-300 mb-1.5">
+                  <span>Probabilities</span>
+                  <span className="font-mono text-cyan-300">Exec {ai.institutionalConfluence.executionProbability}%</span>
+                </div>
+                <div className="space-y-1 text-[9px] text-slate-300">
+                  <div className="flex items-center justify-between"><span className="text-emerald-300">Strong Buy</span><span className="font-mono">{ai.classProbabilities.STRONG_BUY.toFixed(1)}%</span></div>
+                  <div className="flex items-center justify-between"><span className="text-emerald-400">Buy</span><span className="font-mono">{ai.classProbabilities.BUY.toFixed(1)}%</span></div>
+                  <div className="flex items-center justify-between"><span className="text-slate-300">Neutral</span><span className="font-mono">{ai.classProbabilities.NEUTRAL.toFixed(1)}%</span></div>
+                  <div className="flex items-center justify-between"><span className="text-red-400">Sell</span><span className="font-mono">{ai.classProbabilities.SELL.toFixed(1)}%</span></div>
+                  <div className="flex items-center justify-between"><span className="text-red-300">Strong Sell</span><span className="font-mono">{ai.classProbabilities.STRONG_SELL.toFixed(1)}%</span></div>
+                </div>
+              </div>
+
+              <div className="rounded-lg border border-slate-700/50 bg-slate-950/50 p-2">
+                <div className="flex items-center justify-between text-[10px] text-slate-300 mb-1.5">
+                  <span>Sequence</span>
+                  <span className="font-mono text-cyan-300">{ai.sequencePrediction.nextMove}</span>
+                </div>
+                <div className="space-y-1 text-[9px] text-slate-300">
+                  <div className="flex items-center justify-between"><span>Continuation</span><span className="font-mono">{ai.sequencePrediction.trendContinuationProb.toFixed(1)}%</span></div>
+                  <div className="flex items-center justify-between"><span>Reversal</span><span className="font-mono">{ai.sequencePrediction.reversalProb.toFixed(1)}%</span></div>
+                  <div className="flex items-center justify-between"><span>Horizon</span><span className="font-mono">{ai.sequencePrediction.horizonSec}s</span></div>
+                  <div className="flex items-center justify-between"><span>Next Move</span><span className="font-mono">{ai.sequencePrediction.nextMovePts >= 0 ? '+' : ''}{ai.sequencePrediction.nextMovePts.toFixed(2)}</span></div>
+                </div>
+              </div>
+
+              <div className="rounded-lg border border-slate-700/50 bg-slate-950/50 p-2">
+                <div className="flex items-center justify-between text-[10px] text-slate-300 mb-1.5">
+                  <span>Microstructure</span>
+                  <span className="font-mono text-cyan-300">SMC {ai.smc.score.toFixed(0)}</span>
+                </div>
+                <div className="space-y-1 text-[9px] text-slate-300">
+                  <div className="flex items-center justify-between"><span>Liquidity Density</span><span className="font-mono">{ai.microstructure.liquidityDensity.toFixed(1)}</span></div>
+                  <div className="flex items-center justify-between"><span>Structure Density</span><span className="font-mono">{ai.microstructure.structureDensity.toFixed(1)}</span></div>
+                  <div className="flex items-center justify-between"><span>Fake Breakout Risk</span><span className="font-mono text-amber-300">{ai.microstructure.fakeBreakoutRisk.toFixed(1)}%</span></div>
+                  <div className="flex items-center justify-between"><span>Stop Hunt Risk</span><span className="font-mono text-amber-300">{ai.microstructure.stopHuntRisk.toFixed(1)}%</span></div>
+                </div>
+              </div>
+
+              <div className="rounded-lg border border-slate-700/50 bg-slate-950/50 p-2">
+                <div className="flex items-center justify-between text-[10px] text-slate-300 mb-1.5">
+                  <span>Confluence</span>
+                  <span className="font-mono text-cyan-300">RR {ai.institutionalConfluence.riskRewardRatio.toFixed(2)}x</span>
+                </div>
+                <div className="space-y-1 text-[9px] text-slate-300">
+                  <div className="flex items-center justify-between"><span>Smart Money</span><span className="font-mono">{ai.institutionalConfluence.smartMoneyAlignment}%</span></div>
+                  <div className="flex items-center justify-between"><span>Institutional Flow</span><span className="font-mono">{ai.institutionalConfluence.institutionalFlow}%</span></div>
+                  <div className="flex items-center justify-between"><span>Risk Score</span><span className="font-mono text-red-300">{ai.institutionalConfluence.riskScore}%</span></div>
+                  <div className="flex items-center justify-between"><span>Reward Score</span><span className="font-mono text-emerald-300">{ai.institutionalConfluence.rewardScore}%</span></div>
+                </div>
+              </div>
+            </div>
+
+            {ai.commandDeck.alerts.length > 0 && (
+              <div className="mt-3 rounded-lg border border-cyan-500/20 bg-cyan-500/5 p-2">
+                <p className="text-[9px] text-cyan-300 font-bold uppercase tracking-wide mb-1">Command Alerts</p>
+                <div className="space-y-1 text-[9px] text-slate-200">
+                  {ai.commandDeck.alerts.slice(0, 3).map((alert) => (
+                    <div key={alert} className="rounded bg-slate-950/60 px-2 py-1">{alert}</div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
 
         {/* ── 8-Factor CRT Scores ──────────────────────────────────────── */}
         <div>

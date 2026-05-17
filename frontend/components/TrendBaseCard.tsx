@@ -77,6 +77,7 @@ const TrendBaseCard = memo<{ symbol: string; name: string }>(({ symbol, name }) 
   const isBuy5  = sig5m === 'BUY' || sig5m === 'STRONG_BUY';
   const isSell5 = sig5m === 'SELL' || sig5m === 'STRONG_SELL';
   const conf5   = data.confidence_5m ?? data.confidence;
+  const ai      = data.ai;
   const dir5    = isBuy5 ? 'LONG' : isSell5 ? 'SHORT' : 'FLAT';
   const dir5Icon  = isBuy5 ? '▲' : isSell5 ? '▼' : '─';
   const dir5Color = isBuy5 ? 'text-teal-300' : isSell5 ? 'text-rose-300' : 'text-amber-300';
@@ -310,6 +311,77 @@ const TrendBaseCard = memo<{ symbol: string; name: string }>(({ symbol, name }) 
             </div>
           </div>
         </div>
+
+        {ai && (
+          <div className="bg-slate-800/20 border border-slate-700/30 rounded-lg p-2.5">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">Trend Base AI Command Deck</span>
+              <span className="text-[9px] px-1.5 py-0.5 rounded border border-cyan-500/35 bg-cyan-500/10 text-cyan-300 font-bold uppercase">
+                {ai.commandDeck.modelProvider === 'tensorflow' ? 'TensorFlow' : 'NumPy'}
+              </span>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2 mb-2">
+              <div className="bg-slate-900/45 border border-slate-700/35 rounded px-2 py-1.5">
+                <div className="text-[8px] text-slate-500 font-bold uppercase tracking-wider">Continuation</div>
+                <div className="text-[11px] font-black text-emerald-300">{ai.sequencePrediction.trendContinuationProb.toFixed(1)}%</div>
+              </div>
+              <div className="bg-slate-900/45 border border-slate-700/35 rounded px-2 py-1.5">
+                <div className="text-[8px] text-slate-500 font-bold uppercase tracking-wider">Reversal Risk</div>
+                <div className="text-[11px] font-black text-rose-300">{ai.sequencePrediction.reversalProb.toFixed(1)}%</div>
+              </div>
+              <div className="bg-slate-900/45 border border-slate-700/35 rounded px-2 py-1.5">
+                <div className="text-[8px] text-slate-500 font-bold uppercase tracking-wider">Fake Breakout</div>
+                <div className="text-[11px] font-black text-amber-300">{ai.microstructure.fakeBreakoutRisk.toFixed(1)}%</div>
+              </div>
+              <div className="bg-slate-900/45 border border-slate-700/35 rounded px-2 py-1.5">
+                <div className="text-[8px] text-slate-500 font-bold uppercase tracking-wider">Stop Hunt</div>
+                <div className="text-[11px] font-black text-orange-300">{ai.microstructure.stopHuntRisk.toFixed(1)}%</div>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-3 gap-2 mb-2">
+              <div className="bg-slate-900/45 border border-slate-700/35 rounded px-2 py-1.5 text-center">
+                <div className="text-[8px] text-slate-500 font-bold uppercase tracking-wider">Micro</div>
+                <div className={`text-[10px] font-black ${ai.multiTimeframe.micro.trend === 'BULL' ? 'text-emerald-300' : ai.multiTimeframe.micro.trend === 'BEAR' ? 'text-rose-300' : 'text-amber-300'}`}>{ai.multiTimeframe.micro.trend}</div>
+              </div>
+              <div className="bg-slate-900/45 border border-slate-700/35 rounded px-2 py-1.5 text-center">
+                <div className="text-[8px] text-slate-500 font-bold uppercase tracking-wider">Medium</div>
+                <div className={`text-[10px] font-black ${ai.multiTimeframe.medium.trend === 'BULL' ? 'text-emerald-300' : ai.multiTimeframe.medium.trend === 'BEAR' ? 'text-rose-300' : 'text-amber-300'}`}>{ai.multiTimeframe.medium.trend}</div>
+              </div>
+              <div className="bg-slate-900/45 border border-slate-700/35 rounded px-2 py-1.5 text-center">
+                <div className="text-[8px] text-slate-500 font-bold uppercase tracking-wider">Macro</div>
+                <div className={`text-[10px] font-black ${ai.multiTimeframe.macro.trend === 'BULL' ? 'text-emerald-300' : ai.multiTimeframe.macro.trend === 'BEAR' ? 'text-rose-300' : 'text-amber-300'}`}>{ai.multiTimeframe.macro.trend}</div>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between text-[9px] mb-2">
+              <span className="text-slate-500">MFT Alignment</span>
+              <span className="text-cyan-300 font-bold">{ai.multiTimeframe.alignmentPct.toFixed(0)}%</span>
+            </div>
+
+            <div className="text-[9px] text-slate-400 space-y-0.5">
+              <div className="flex items-center justify-between">
+                <span>Latency</span>
+                <span className="font-bold text-slate-300">{ai.commandDeck.analysisLatencyMs}ms</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span>Cadence</span>
+                <span className="font-bold text-slate-300">{ai.commandDeck.pipelineCadenceMs}ms</span>
+              </div>
+              <div className="flex items-center justify-between">
+                <span>Exec Probability</span>
+                <span className="font-bold text-emerald-300">{ai.institutionalConfluence.executionProbability}%</span>
+              </div>
+            </div>
+
+            {Array.isArray(ai.commandDeck.alerts) && ai.commandDeck.alerts.length > 0 && (
+              <div className="mt-2 text-[9px] text-amber-200 bg-amber-500/8 border border-amber-500/25 rounded px-2 py-1.5 leading-4">
+                {ai.commandDeck.alerts[0]}
+              </div>
+            )}
+          </div>
+        )}
           </>
         )}
       </div>

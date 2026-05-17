@@ -15,7 +15,8 @@ const SIGNAL_CLASS: Record<TradeZoneSignal, string> = {
   UNKNOWN: 'text-slate-300 bg-slate-500/20 border-slate-400/40',
 };
 
-function normalizeSignal(signal: string): TradeZoneSignal {
+function normalizeSignal(signal: string | undefined | null): TradeZoneSignal {
+  if (!signal) return 'UNKNOWN';
   const v = signal.toUpperCase();
   if (v === 'STRONG_BUY' || v === 'BUY' || v === 'NEUTRAL' || v === 'SELL' || v === 'STRONG_SELL') {
     return v;
@@ -31,6 +32,19 @@ function signalScore(signal: string): number {
   if (s === 'SELL') return 2;
   if (s === 'STRONG_SELL') return 1;
   return 0;
+}
+
+function safeNumber(value: unknown, fallback = 0): number {
+  return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+}
+
+function formatFixed(value: unknown, digits = 2, fallback = '-'): string {
+  const n = safeNumber(value, Number.NaN);
+  return Number.isFinite(n) ? n.toFixed(digits) : fallback;
+}
+
+function safeText(value: unknown, fallback = 'N/A'): string {
+  return typeof value === 'string' && value.trim().length > 0 ? value : fallback;
 }
 
 export default function TradeZonesTerminal(): JSX.Element {
@@ -61,8 +75,8 @@ export default function TradeZonesTerminal(): JSX.Element {
 
     out.sort((a, b) => {
       if (sortBy === 'symbol') return a.symbol.localeCompare(b.symbol);
-      if (sortBy === 'confidence') return b.signal_confidence - a.signal_confidence;
-      if (sortBy === 'rr') return b.risk_reward_ratio - a.risk_reward_ratio;
+      if (sortBy === 'confidence') return safeNumber(b.signal_confidence) - safeNumber(a.signal_confidence);
+      if (sortBy === 'rr') return safeNumber(b.risk_reward_ratio) - safeNumber(a.risk_reward_ratio);
       return signalScore(b.overall_signal) - signalScore(a.overall_signal);
     });
 
@@ -161,11 +175,12 @@ export default function TradeZonesTerminal(): JSX.Element {
 
               {filteredRows.map((row) => {
                 const sig = normalizeSignal(row.overall_signal);
+                const confidence = Math.max(2, safeNumber(row.signal_confidence));
                 return (
                   <tr key={row.symbol} className="border-t border-slate-800/80 bg-slate-900/40 hover:bg-slate-800/50">
                     <td className="px-2 py-2 font-semibold text-slate-100">{row.symbol}</td>
-                    <td className="px-2 py-2 text-right font-mono text-slate-200">{row.current_price.toFixed(2)}</td>
-                    <td className="px-2 py-2 text-slate-300">{row.zone_classification}</td>
+                    <td className="px-2 py-2 text-right font-mono text-slate-200">{formatFixed(row.current_price)}</td>
+                    <td className="px-2 py-2 text-slate-300">{safeText(row.zone_classification)}</td>
                     <td className="px-2 py-2">
                       <span className={`inline-flex rounded border px-2 py-0.5 font-semibold ${SIGNAL_CLASS[sig]}`}>
                         {sig.replace('_', ' ')}
@@ -173,15 +188,15 @@ export default function TradeZonesTerminal(): JSX.Element {
                     </td>
                     <td className="px-2 py-2 text-right">
                       <div className="flex items-center justify-end gap-2">
-                        <span className="font-mono text-slate-200">{row.signal_confidence}%</span>
+                        <span className="font-mono text-slate-200">{safeNumber(row.signal_confidence)}%</span>
                         <span className="h-1.5 w-12 overflow-hidden rounded bg-slate-700">
-                          <span className="block h-full bg-gradient-to-r from-cyan-500 to-emerald-400" style={{ width: `${Math.max(2, row.signal_confidence)}%` }} />
+                          <span className="block h-full bg-gradient-to-r from-cyan-500 to-emerald-400" style={{ width: `${confidence}%` }} />
                         </span>
                       </div>
                     </td>
-                    <td className="px-2 py-2 text-right font-mono text-slate-300">{row.risk_reward_ratio.toFixed(2)}</td>
-                    <td className="px-2 py-2 text-slate-300">{row.entry_quality}</td>
-                    <td className="px-2 py-2 text-slate-300">{row.trend_structure.replaceAll('_', ' ')}</td>
+                    <td className="px-2 py-2 text-right font-mono text-slate-300">{formatFixed(row.risk_reward_ratio)}</td>
+                    <td className="px-2 py-2 text-slate-300">{safeText(row.entry_quality)}</td>
+                    <td className="px-2 py-2 text-slate-300">{safeText(row.trend_structure).replaceAll('_', ' ')}</td>
                   </tr>
                 );
               })}

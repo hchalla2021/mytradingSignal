@@ -50,6 +50,7 @@ import pytz
 
 from services.cache import CacheService, _SHARED_CACHE
 from services.persistent_market_state import PersistentMarketState
+from services.market_regime_ai import MarketRegimeAIEngine
 
 logger = logging.getLogger(__name__)
 IST = pytz.timezone("Asia/Kolkata")
@@ -225,6 +226,7 @@ class MarketRegimeService:
         self._running = False
         self._task: Optional[asyncio.Task] = None
         self._cache = CacheService()
+        self._ai_engine = MarketRegimeAIEngine()
         self._history: Dict[str, RegimeHistory] = {
             sym: RegimeHistory() for sym in SYMBOLS
         }
@@ -501,6 +503,19 @@ class MarketRegimeService:
         avg_score = sum(recent_scores) / len(recent_scores) if recent_scores else total_score
         score_volatility = _std_dev(recent_scores) if len(recent_scores) >= 3 else 0
 
+        ai_insights = self._ai_engine.infer(
+            symbol=symbol,
+            regime_score=total_score,
+            direction_strength=abs(net_direction) * 100.0,
+            intraday_pct=intraday_pct,
+            factors=factors,
+            context={
+                "price": price,
+                "vix": vix,
+                "pcr": pcr,
+            },
+        )
+
         return {
             "symbol": symbol,
             "regime": regime,
@@ -534,6 +549,7 @@ class MarketRegimeService:
                 "orbHigh": round(hist._opening_range_high or 0, 2),
                 "orbLow": round(hist._opening_range_low or 0, 2),
             },
+            "ai": ai_insights,
             "dataSource": "LIVE" if self._is_market_live(datetime.now(IST)) else "MARKET_CLOSED",
             "timestamp": datetime.now(IST).isoformat(),
         }

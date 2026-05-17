@@ -1835,6 +1835,35 @@ class ExpiryExplosionService:
             expiry_reason=expiry_reason, real_premiums=real_premiums,
         )
 
+        from services.expiry_explosion_ai import expiry_explosion_ai_engine
+
+        ai = expiry_explosion_ai_engine.infer(
+            symbol=symbol,
+            direction=direction,
+            action=action,
+            confidence=float(confidence),
+            raw_score=float(raw_score),
+            hours_to_expiry=float(hours_left),
+            phase=phase,
+            change_pct=float(change_pct),
+            pcr=float(pcr_val) if pcr_val else None,
+            oi=float(oi_raw),
+            volume=float(volume),
+            gamma_score=float(sig_gamma.get("score", 0.0)),
+            oi_score=float(sig_oi.get("score", 0.0)),
+            volume_score=float(sig_vol.get("score", 0.0)),
+            pcr_score=float(sig_pcr.get("score", 0.0)),
+            delta_score=float(sig_delta.get("score", 0.0)),
+            iv_score=float(sig_iv.get("score", 0.0)),
+            theta_score=float(sig_theta.get("score", 0.0)),
+            strike_data=strike_rec,
+            breakout=breakout,
+            data_source=data_source,
+            is_expiry_day=is_expiry,
+            is_monthly_expiry=is_monthly,
+            expiry_label=expiry_label,
+        )
+
         return {
             "symbol": symbol,
             "direction": direction,
@@ -1850,6 +1879,7 @@ class ExpiryExplosionService:
             "signals": signals,
             "strikeRecommendation": strike_rec,
             "breakoutLevels": breakout,
+            "ai": ai,
             "metrics": {
                 "price": round(price, 2),
                 "changePct": round(change_pct, 2),

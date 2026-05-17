@@ -4,6 +4,132 @@ import React, { memo, useState, useMemo } from 'react';
 import { useMarketEdge, type EdgeIndex, type EdgeAction, type OIProfile } from '@/hooks/useMarketEdge';
 import SectionTitle from '@/components/SectionTitle';
 
+type EdgeAISnapshot = {
+  provider: string;
+  streamState: 'LIVE' | 'CLOSED';
+  avgLatencyMs: number;
+  avgEventRate: number;
+  avgQueueDepth: number;
+  avgExecProb: number;
+  avgSmartMoney: number;
+  avgInstitutionalFlow: number;
+  avgRiskScore: number;
+  avgRewardScore: number;
+  bestRiskReward: number;
+  avgFakeBreakoutRisk: number;
+  avgStopHuntRisk: number;
+  dominantMove: 'UP' | 'DOWN' | 'SIDEWAYS';
+  alerts: string[];
+};
+
+function summarizeEdgeAI(data: [EdgeIndex | null, EdgeIndex | null, EdgeIndex | null]): EdgeAISnapshot {
+  const items = data.filter((d): d is EdgeIndex => Boolean(d));
+  const withAI = items.filter((d) => !!d.ai);
+  const count = Math.max(1, withAI.length);
+
+  if (withAI.length === 0) {
+    return {
+      provider: 'unavailable',
+      streamState: 'CLOSED',
+      avgLatencyMs: 0,
+      avgEventRate: 0,
+      avgQueueDepth: 0,
+      avgExecProb: 0,
+      avgSmartMoney: 0,
+      avgInstitutionalFlow: 0,
+      avgRiskScore: 0,
+      avgRewardScore: 0,
+      bestRiskReward: 0,
+      avgFakeBreakoutRisk: 0,
+      avgStopHuntRisk: 0,
+      dominantMove: 'SIDEWAYS',
+      alerts: [],
+    };
+  }
+
+  const provider = withAI[0]?.ai?.provider ?? 'rule_engine';
+  const streamState = withAI.some((d) => d.ai?.commandDeck.streamState === 'LIVE') ? 'LIVE' : 'CLOSED';
+  const avgLatencyMs = Math.round(withAI.reduce((sum, d) => sum + (d.ai?.commandDeck.analysisLatencyMs ?? 0), 0) / count);
+  const avgEventRate = withAI.reduce((sum, d) => sum + (d.ai?.commandDeck.eventRatePerSec ?? 0), 0) / count;
+  const avgQueueDepth = Math.round(withAI.reduce((sum, d) => sum + (d.ai?.commandDeck.queueDepth ?? 0), 0) / count);
+  const avgExecProb = Math.round(withAI.reduce((sum, d) => sum + (d.ai?.institutionalConfluence.executionProbability ?? 0), 0) / count);
+  const avgSmartMoney = Math.round(withAI.reduce((sum, d) => sum + (d.ai?.institutionalConfluence.smartMoneyAlignment ?? 0), 0) / count);
+  const avgInstitutionalFlow = Math.round(withAI.reduce((sum, d) => sum + (d.ai?.institutionalConfluence.institutionalFlow ?? 0), 0) / count);
+  const avgRiskScore = Math.round(withAI.reduce((sum, d) => sum + (d.ai?.institutionalConfluence.riskScore ?? 0), 0) / count);
+  const avgRewardScore = Math.round(withAI.reduce((sum, d) => sum + (d.ai?.institutionalConfluence.rewardScore ?? 0), 0) / count);
+  const bestRiskReward = Math.max(...withAI.map((d) => d.ai?.institutionalConfluence.riskRewardRatio ?? 0));
+  const avgFakeBreakoutRisk = Math.round(withAI.reduce((sum, d) => sum + (d.ai?.microstructure.fakeBreakoutRisk ?? 0), 0) / count);
+  const avgStopHuntRisk = Math.round(withAI.reduce((sum, d) => sum + (d.ai?.microstructure.stopHuntRisk ?? 0), 0) / count);
+
+  const moves = withAI.map((d) => d.ai?.sequencePrediction.nextMove ?? 'SIDEWAYS');
+  const up = moves.filter((m) => m === 'UP').length;
+  const down = moves.filter((m) => m === 'DOWN').length;
+  const dominantMove = up > down ? 'UP' : down > up ? 'DOWN' : 'SIDEWAYS';
+
+  const alertSet = new Set<string>();
+  for (const d of withAI) {
+    for (const a of d.ai?.commandDeck.alerts ?? []) alertSet.add(a);
+  }
+
+  return {
+    provider,
+    streamState,
+    avgLatencyMs,
+    avgEventRate,
+    avgQueueDepth,
+    avgExecProb,
+    avgSmartMoney,
+    avgInstitutionalFlow,
+    avgRiskScore,
+    avgRewardScore,
+    bestRiskReward,
+    avgFakeBreakoutRisk,
+    avgStopHuntRisk,
+    dominantMove,
+    alerts: Array.from(alertSet).slice(0, 4),
+  };
+}
+
+const EdgeAICommandDeck = memo(({ snapshot }: { snapshot: EdgeAISnapshot }) => {
+  const maxTrapRisk = Math.max(snapshot.avgFakeBreakoutRisk, snapshot.avgStopHuntRisk);
+  const trapTone = maxTrapRisk <= 35 ? 'text-emerald-300' : maxTrapRisk <= 60 ? 'text-amber-300' : 'text-rose-300';
+  return (
+    <div className="mb-3 rounded-xl border border-teal-500/30 bg-gradient-to-br from-teal-950/15 via-slate-950/85 to-slate-900/80 p-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <span className="h-5 w-1 rounded-full bg-gradient-to-b from-teal-300 to-cyan-400/70" />
+          <p className="text-[11px] font-black uppercase tracking-[0.12em] text-teal-200">MarketEdge AI Command Deck</p>
+        </div>
+        <div className="flex items-center gap-1.5 text-[9px] font-black uppercase tracking-[0.1em]">
+          <span className="rounded border border-cyan-400/40 bg-cyan-500/10 px-2 py-1 text-cyan-200">{snapshot.provider}</span>
+          <span className={`rounded border px-2 py-1 ${snapshot.streamState === 'LIVE' ? 'border-emerald-400/45 bg-emerald-500/10 text-emerald-200' : 'border-slate-600/45 bg-slate-700/20 text-slate-300'}`}>
+            {snapshot.streamState}
+          </span>
+        </div>
+      </div>
+      <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-8 text-[10px]">
+        <div className="rounded-lg border border-slate-700/45 bg-slate-900/60 px-2 py-1.5"><p className="text-slate-500">Latency</p><p className={snapshot.avgLatencyMs <= 60 ? 'font-black text-emerald-300' : snapshot.avgLatencyMs <= 180 ? 'font-black text-amber-300' : 'font-black text-rose-300'}>{snapshot.avgLatencyMs}ms</p></div>
+        <div className="rounded-lg border border-slate-700/45 bg-slate-900/60 px-2 py-1.5"><p className="text-slate-500">Events/s</p><p className="font-black text-cyan-300">{snapshot.avgEventRate.toFixed(1)}</p></div>
+        <div className="rounded-lg border border-slate-700/45 bg-slate-900/60 px-2 py-1.5"><p className="text-slate-500">Queue</p><p className="font-black text-slate-200">{snapshot.avgQueueDepth}</p></div>
+        <div className="rounded-lg border border-slate-700/45 bg-slate-900/60 px-2 py-1.5"><p className="text-slate-500">Move</p><p className={`font-black ${snapshot.dominantMove === 'UP' ? 'text-emerald-300' : snapshot.dominantMove === 'DOWN' ? 'text-rose-300' : 'text-amber-300'}`}>{snapshot.dominantMove}</p></div>
+        <div className="rounded-lg border border-slate-700/45 bg-slate-900/60 px-2 py-1.5"><p className="text-slate-500">Exec</p><p className="font-black text-emerald-300">{snapshot.avgExecProb}%</p></div>
+        <div className="rounded-lg border border-slate-700/45 bg-slate-900/60 px-2 py-1.5"><p className="text-slate-500">Smart</p><p className="font-black text-cyan-300">{snapshot.avgSmartMoney}%</p></div>
+        <div className="rounded-lg border border-slate-700/45 bg-slate-900/60 px-2 py-1.5"><p className="text-slate-500">R:R</p><p className="font-black text-violet-300">{snapshot.bestRiskReward.toFixed(2)}x</p></div>
+        <div className="rounded-lg border border-slate-700/45 bg-slate-900/60 px-2 py-1.5"><p className="text-slate-500">Trap</p><p className={`font-black ${trapTone}`}>{maxTrapRisk}%</p></div>
+      </div>
+      {snapshot.alerts.length > 0 && (
+        <div className="mt-2 flex flex-wrap gap-1.5">
+          {snapshot.alerts.map((a) => (
+            <span key={a} className="rounded border border-amber-400/35 bg-amber-500/10 px-2 py-1 text-[9px] text-amber-200">{a}</span>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+});
+
+EdgeAICommandDeck.displayName = 'EdgeAICommandDeck';
+
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 const ACTION_CONFIG: Record<EdgeAction, { label: string; color: string; bg: string; border: string; glow: string; icon: string }> = {
@@ -797,6 +923,10 @@ EdgeCard.displayName = 'EdgeCard';
 
 const MarketEdgeIntelligence = memo(() => {
   const { edgeData, isConnected, lastUpdate } = useMarketEdge();
+  const edgeAISnapshot = useMemo(
+    () => summarizeEdgeAI([edgeData.NIFTY, edgeData.BANKNIFTY, edgeData.SENSEX]),
+    [edgeData.NIFTY, edgeData.BANKNIFTY, edgeData.SENSEX],
+  );
 
   // Fixed section styling — no dynamic color swaps that cause flashing
   const sectionBorder = 'border-teal-500/30';
@@ -832,6 +962,7 @@ const MarketEdgeIntelligence = memo(() => {
       </div>
 
       {/* Cards Grid */}
+      <EdgeAICommandDeck snapshot={edgeAISnapshot} />
       <div className="grid grid-cols-1 lg:grid-cols-2 2xl:grid-cols-3 gap-3 sm:gap-4">
         <EdgeCard data={edgeData.NIFTY} name="NIFTY 50" />
         <EdgeCard data={edgeData.BANKNIFTY} name="BANK NIFTY" />
