@@ -350,6 +350,94 @@ function loadFromStorage(): ChartIntelligenceData | null {
   } catch { return null; }
 }
 
+function parseEpochMs(value: string | null | undefined): number | null {
+  if (!value) return null;
+  const ms = Date.parse(value);
+  return Number.isFinite(ms) ? ms : null;
+}
+
+function hasMaterialChartChange(existing: SymbolChartData | null, incoming: SymbolChartData): boolean {
+  if (!existing) return true;
+
+  if (existing.timestamp !== incoming.timestamp) return true;
+  if (existing.dataSource !== incoming.dataSource) return true;
+  if (existing.spot !== incoming.spot) return true;
+
+  const e5 = existing.candles5m ?? [];
+  const i5 = incoming.candles5m ?? [];
+  if (e5.length !== i5.length) return true;
+  const e3 = existing.candles3m ?? [];
+  const i3 = incoming.candles3m ?? [];
+  if (e3.length !== i3.length) return true;
+
+  const lastE5 = e5.at(-1);
+  const lastI5 = i5.at(-1);
+  if (
+    lastE5?.t !== lastI5?.t ||
+    lastE5?.o !== lastI5?.o ||
+    lastE5?.h !== lastI5?.h ||
+    lastE5?.l !== lastI5?.l ||
+    lastE5?.c !== lastI5?.c ||
+    lastE5?.v !== lastI5?.v
+  ) {
+    return true;
+  }
+
+  const ea = existing.ai;
+  const ia = incoming.ai;
+  if (!ea && ia) return true;
+  if (ea && !ia) return true;
+  if (ea && ia) {
+    const ep = ea.classProbabilities;
+    const ip = ia.classProbabilities;
+    if (
+      ep.STRONG_BUY !== ip.STRONG_BUY ||
+      ep.BUY !== ip.BUY ||
+      ep.NEUTRAL !== ip.NEUTRAL ||
+      ep.SELL !== ip.SELL ||
+      ep.STRONG_SELL !== ip.STRONG_SELL
+    ) {
+      return true;
+    }
+
+    if (
+      ea.sequencePrediction.nextMove !== ia.sequencePrediction.nextMove ||
+      ea.sequencePrediction.nextMovePts !== ia.sequencePrediction.nextMovePts ||
+      ea.sequencePrediction.trendContinuationProb !== ia.sequencePrediction.trendContinuationProb ||
+      ea.sequencePrediction.reversalProb !== ia.sequencePrediction.reversalProb
+    ) {
+      return true;
+    }
+
+    if (
+      ea.commandDeck.streamState !== ia.commandDeck.streamState ||
+      ea.commandDeck.analysisLatencyMs !== ia.commandDeck.analysisLatencyMs ||
+      ea.commandDeck.eventRatePerSec !== ia.commandDeck.eventRatePerSec ||
+      ea.commandDeck.queueDepth !== ia.commandDeck.queueDepth
+    ) {
+      return true;
+    }
+
+    if (
+      ea.institutionalConfluence.executionProbability !== ia.institutionalConfluence.executionProbability ||
+      ea.institutionalConfluence.smartMoneyAlignment !== ia.institutionalConfluence.smartMoneyAlignment ||
+      ea.institutionalConfluence.institutionalFlow !== ia.institutionalConfluence.institutionalFlow ||
+      ea.institutionalConfluence.riskRewardRatio !== ia.institutionalConfluence.riskRewardRatio
+    ) {
+      return true;
+    }
+
+    if (
+      ea.microstructure.fakeBreakoutRisk !== ia.microstructure.fakeBreakoutRisk ||
+      ea.microstructure.stopHuntRisk !== ia.microstructure.stopHuntRisk
+    ) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 const EMPTY: ChartIntelligenceData = { NIFTY: null, BANKNIFTY: null, SENSEX: null };
 
 // ── Hook ──────────────────────────────────────────────────────────────────────
@@ -366,8 +454,13 @@ export function useChartIntelligence() {
   const retryDelay = useRef(1000);
   const mountedRef = useRef(true);
   const wsUrlsRef = useRef<string[]>([]);
+  const rafRef = useRef<number | null>(null);
+  const queuedPayloadRef = useRef<Record<string, SymbolChartData> | null>(null);
 
   const mergeData = useCallback((raw: Record<string, SymbolChartData>) => {
+    let changedAny = false;
+    let newestTs: string | null = null;
+
     setData(prev => {
       const next: ChartIntelligenceData = { ...prev };
       let changed = false;
@@ -375,49 +468,70 @@ export function useChartIntelligence() {
         if (raw[sym]) {
           const incoming = raw[sym];
           const existing = prev[sym];
-          if (existing && existing.timestamp === incoming.timestamp) continue;
 
           // Live-first: block only degraded CACHED overwrite of a LIVE frame.
           // Allow MARKET_CLOSED to replace LIVE so UI can transition cleanly after session end.
           if (existing?.dataSource === 'LIVE' && incoming.dataSource === 'CACHED') continue;
 
-          // Drop out-of-order frames to avoid time-travel flicker during reconnects.
-          if (existing) {
-            const currTs = Date.parse(existing.timestamp || '');
-            const nextTs = Date.parse(incoming.timestamp || '');
-            if (Number.isFinite(currTs) && Number.isFinite(nextTs) && nextTs <= currTs) continue;
+          // Drop older non-live frames during reconnect churn.
+          const currTs = parseEpochMs(existing?.timestamp);
+          const nextTs = parseEpochMs(incoming.timestamp);
+          if (
+            currTs != null &&
+            nextTs != null &&
+            nextTs < currTs &&
+            incoming.dataSource !== 'LIVE'
+          ) {
+            continue;
           }
 
-          // Skip updates where candle data is identical to avoid needless re-renders.
-          // The backend updates `timestamp` every 0.5s even if only `spot` changed.
-          // Only clone when something meaningful changed (candle count, last candle close, or spot).
-          if (existing) {
-            const sameCount =
-              (existing.candles5m?.length ?? 0) === (incoming.candles5m?.length ?? 0) &&
-              (existing.candles3m?.length ?? 0) === (incoming.candles3m?.length ?? 0);
-            const lastC5e = existing.candles5m?.at(-1);
-            const lastC5i = incoming.candles5m?.at(-1);
-            const sameLastCandle =
-              lastC5e?.t === lastC5i?.t &&
-              lastC5e?.c === lastC5i?.c &&
-              lastC5e?.h === lastC5i?.h &&
-              lastC5e?.l === lastC5i?.l &&
-              lastC5e?.v === lastC5i?.v;
-            const sameSpot = existing.spot === incoming.spot;
-            if (sameCount && sameLastCandle && sameSpot) continue;
-          }
+          if (!hasMaterialChartChange(existing ?? null, incoming)) continue;
+
           next[sym] = typeof structuredClone === 'function'
             ? structuredClone(incoming)
             : JSON.parse(JSON.stringify(incoming));
           changed = true;
+
+          changedAny = true;
+          if (incoming.timestamp) {
+            if (!newestTs || Date.parse(incoming.timestamp) > Date.parse(newestTs)) {
+              newestTs = incoming.timestamp;
+            }
+          }
         }
       }
       if (!changed) return prev;
       saveToStorage(next);
       return next;
     });
-    setLastUpdate(new Date().toISOString());
+
+    if (changedAny) {
+      setLastUpdate(newestTs ?? new Date().toISOString());
+    }
   }, []);
+
+  const queueMergeData = useCallback((payload: Record<string, SymbolChartData>) => {
+    const queued = queuedPayloadRef.current ?? {};
+    queuedPayloadRef.current = { ...queued, ...payload };
+
+    if (rafRef.current !== null) return;
+
+    const flush = () => {
+      rafRef.current = null;
+      const batch = queuedPayloadRef.current;
+      queuedPayloadRef.current = null;
+      if (batch && Object.keys(batch).length > 0) {
+        mergeData(batch);
+      }
+    };
+
+    if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
+      rafRef.current = window.requestAnimationFrame(flush);
+      return;
+    }
+
+    rafRef.current = setTimeout(flush, 0) as unknown as number;
+  }, [mergeData]);
 
   const connect = useCallback(() => {
     if (typeof window === 'undefined') return;
@@ -473,7 +587,7 @@ export function useChartIntelligence() {
             data?: Record<string, SymbolChartData>;
           };
           if ((msg.type === 'chart_intel_update' || msg.type === 'chart_intel_snapshot') && msg.data) {
-            mergeData(msg.data);
+            queueMergeData(msg.data);
           }
         } catch { /* ignore */ }
       };
@@ -488,7 +602,7 @@ export function useChartIntelligence() {
         if (!pollRef.current) {
           pollRef.current = setInterval(() => {
             fetchWithFallback()
-              .then(json => { if (json?.data) mergeData(json.data); })
+              .then(json => { if (json?.data) queueMergeData(json.data); })
               .catch(() => {});
           }, 1500);
         }
@@ -498,19 +612,19 @@ export function useChartIntelligence() {
     };
 
     tryConnect(0);
-  }, [mergeData]);
+  }, [queueMergeData]);
 
   useEffect(() => {
     mountedRef.current = true;
     fetchWithFallback()
-      .then(json => { if (json?.data && Object.keys(json.data).length > 0) mergeData(json.data); })
+      .then(json => { if (json?.data && Object.keys(json.data).length > 0) queueMergeData(json.data); })
       .catch(() => {});
     connect();
     if (!pollRef.current) {
       pollRef.current = setInterval(() => {
         if (wsRef.current?.readyState === WebSocket.OPEN) return;
         fetchWithFallback()
-          .then(json => { if (json?.data && Object.keys(json.data).length > 0) mergeData(json.data); })
+          .then(json => { if (json?.data && Object.keys(json.data).length > 0) queueMergeData(json.data); })
           .catch(() => {});
       }, 1500);
     }
@@ -519,9 +633,17 @@ export function useChartIntelligence() {
       if (retryRef.current) clearTimeout(retryRef.current);
       if (pingRef.current) clearInterval(pingRef.current);
       if (pollRef.current) clearInterval(pollRef.current);
+      if (rafRef.current !== null) {
+        if (typeof window !== 'undefined' && typeof window.cancelAnimationFrame === 'function') {
+          window.cancelAnimationFrame(rafRef.current);
+        } else {
+          clearTimeout(rafRef.current as unknown as ReturnType<typeof setTimeout>);
+        }
+        rafRef.current = null;
+      }
       wsRef.current?.close();
     };
-  }, [connect, mergeData]);
+  }, [connect, queueMergeData]);
 
   return { chartData: data, isConnected, lastUpdate };
 }

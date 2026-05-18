@@ -342,6 +342,64 @@ function getLocalApiUrl(): string {
   return `${localApi.replace(/\/$/, '')}/api/strike-intelligence`;
 }
 
+function parseEpochMs(value: string | null | undefined): number | null {
+  if (!value) return null;
+  const ms = Date.parse(value);
+  return Number.isFinite(ms) ? ms : null;
+}
+
+function hasMaterialSymbolChange(existing: SymbolStrikeData | null, incoming: SymbolStrikeData): boolean {
+  if (!existing) return true;
+
+  if (existing.dataSource !== incoming.dataSource) return true;
+  if ((existing.optionChainAgeSec ?? null) !== (incoming.optionChainAgeSec ?? null)) return true;
+  if (existing.timestamp !== incoming.timestamp) return true;
+
+  const a = existing.intelligence;
+  const b = incoming.intelligence;
+  if (!a && b) return true;
+  if (a && !b) return true;
+  if (!a || !b) return false;
+
+  if (a.signal !== b.signal) return true;
+  if (a.score !== b.score) return true;
+  if (a.confidence !== b.confidence) return true;
+  if (a.regime !== b.regime) return true;
+  if (a.agreementPct !== b.agreementPct) return true;
+  if (a.bullPressure !== b.bullPressure) return true;
+  if (a.bearPressure !== b.bearPressure) return true;
+  if (a.trapRiskPct !== b.trapRiskPct) return true;
+
+  const aq = a.quantumFractal;
+  const bq = b.quantumFractal;
+  if (!aq && bq) return true;
+  if (aq && !bq) return true;
+  if (aq && bq) {
+    if (aq.signal !== bq.signal) return true;
+    if (aq.score !== bq.score) return true;
+    if (aq.confidence !== bq.confidence) return true;
+    if (aq.continuationProbability !== bq.continuationProbability) return true;
+    if (aq.prediction.nextMove !== bq.prediction.nextMove) return true;
+    if (aq.prediction.probabilityPct !== bq.prediction.probabilityPct) return true;
+    if (aq.mtf.alignmentPct !== bq.mtf.alignmentPct) return true;
+  }
+
+  const ac = a.institutionalConfluence;
+  const bc = b.institutionalConfluence;
+  if (!ac && bc) return true;
+  if (ac && !bc) return true;
+  if (ac && bc) {
+    if (ac.confluenceScore !== bc.confluenceScore) return true;
+    if (ac.executionProbability !== bc.executionProbability) return true;
+    if (ac.smartMoneyAlignment !== bc.smartMoneyAlignment) return true;
+    if (ac.institutionalFlow !== bc.institutionalFlow) return true;
+    if (ac.riskRewardRatio !== bc.riskRewardRatio) return true;
+    if (ac.liquidityTrapRisk !== bc.liquidityTrapRisk) return true;
+  }
+
+  return false;
+}
+
 async function fetchWithFallback(): Promise<{ success?: boolean; data?: Record<string, SymbolStrikeData> } | null> {
   const primary = getStrikeIntelApiUrl();
   const fallback = getLocalApiUrl();
@@ -388,8 +446,13 @@ export function useStrikeIntelligence() {
   const retryDelay = useRef(1000);
   const mountedRef = useRef(true);
   const wsUrlsRef = useRef<string[]>([]);
+  const rafRef = useRef<number | null>(null);
+  const queuedPayloadRef = useRef<Record<string, SymbolStrikeData> | null>(null);
 
   const mergeData = useCallback((raw: Record<string, SymbolStrikeData>) => {
+    let changedAny = false;
+    let newestTs: string | null = null;
+
     setData(prev => {
       const next: StrikeIntelligenceData = { ...prev };
       let changed = false;
@@ -400,24 +463,63 @@ export function useStrikeIntelligence() {
           // Live-first policy: do not let non-live payloads overwrite a live frame.
           if (existing?.dataSource === 'LIVE' && incoming.dataSource !== 'LIVE') continue;
 
-          // Monotonic freshness guard: drop older or duplicate frames.
-          if (existing) {
-            const currTs = Date.parse(existing.timestamp || '');
-            const nextTs = Date.parse(incoming.timestamp || '');
-            if (Number.isFinite(currTs) && Number.isFinite(nextTs) && nextTs <= currTs) continue;
+          const existingTs = parseEpochMs(existing?.timestamp);
+          const incomingTs = parseEpochMs(incoming.timestamp);
+          if (
+            existingTs != null &&
+            incomingTs != null &&
+            incomingTs < existingTs &&
+            incoming.dataSource !== 'LIVE'
+          ) {
+            continue;
           }
+
+          if (!hasMaterialSymbolChange(existing ?? null, incoming)) continue;
 
           next[sym] = typeof structuredClone === 'function'
             ? structuredClone(incoming)
             : JSON.parse(JSON.stringify(incoming));
           changed = true;
+          changedAny = true;
+
+          if (incoming.timestamp) {
+            if (!newestTs || Date.parse(incoming.timestamp) > Date.parse(newestTs)) {
+              newestTs = incoming.timestamp;
+            }
+          }
         }
       }
       if (!changed) return prev;
       return next;
     });
-    setLastUpdate(new Date().toISOString());
+
+    if (changedAny) {
+      setLastUpdate(newestTs ?? new Date().toISOString());
+    }
   }, []);
+
+  const queueMergeData = useCallback((payload: Record<string, SymbolStrikeData>) => {
+    const queued = queuedPayloadRef.current ?? {};
+    queuedPayloadRef.current = { ...queued, ...payload };
+
+    if (rafRef.current !== null) return;
+
+    const flush = () => {
+      rafRef.current = null;
+      const batch = queuedPayloadRef.current;
+      queuedPayloadRef.current = null;
+      if (batch && Object.keys(batch).length > 0) {
+        mergeData(batch);
+      }
+    };
+
+    if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
+      rafRef.current = window.requestAnimationFrame(flush);
+      return;
+    }
+
+    rafRef.current = setTimeout(flush, 0) as unknown as number;
+  }, [mergeData]);
 
   const connect = useCallback(() => {
     if (typeof window === 'undefined') return;
@@ -485,7 +587,7 @@ export function useStrikeIntelligence() {
             data?: Record<string, SymbolStrikeData>;
           };
           if (msg.type === 'strike_intel_update' || msg.type === 'strike_intel_snapshot') {
-            if (msg.data) mergeData(msg.data);
+            if (msg.data) queueMergeData(msg.data);
           }
         } catch { /* ignore */ }
       };
@@ -500,7 +602,7 @@ export function useStrikeIntelligence() {
         if (!pollRef.current) {
           pollRef.current = setInterval(() => {
             fetchWithFallback()
-              .then(json => { if (json?.data) mergeData(json.data); })
+              .then(json => { if (json?.data) queueMergeData(json.data); })
               .catch(() => {});
           }, 2000);
         }
@@ -513,7 +615,7 @@ export function useStrikeIntelligence() {
     };
 
     tryConnect(0);
-  }, [mergeData]);
+  }, [queueMergeData]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -521,7 +623,7 @@ export function useStrikeIntelligence() {
     // Fetch REST snapshot immediately to hydrate first render before WS updates arrive.
     fetchWithFallback()
       .then(json => {
-        if (json?.data && Object.keys(json.data).length > 0) mergeData(json.data);
+        if (json?.data && Object.keys(json.data).length > 0) queueMergeData(json.data);
       })
       .catch(() => {});
 
@@ -532,9 +634,17 @@ export function useStrikeIntelligence() {
       if (retryRef.current) clearTimeout(retryRef.current);
       if (pingRef.current) clearInterval(pingRef.current);
       if (pollRef.current) clearInterval(pollRef.current);
+      if (rafRef.current !== null) {
+        if (typeof window !== 'undefined' && typeof window.cancelAnimationFrame === 'function') {
+          window.cancelAnimationFrame(rafRef.current);
+        } else {
+          clearTimeout(rafRef.current as unknown as ReturnType<typeof setTimeout>);
+        }
+        rafRef.current = null;
+      }
       wsRef.current?.close();
     };
-  }, [connect, mergeData]);
+  }, [connect, queueMergeData]);
 
   return { strikeData: data, isConnected, lastUpdate };
 }

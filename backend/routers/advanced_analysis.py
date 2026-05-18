@@ -3267,6 +3267,41 @@ async def get_trade_zones(symbol: str) -> Dict[str, Any]:
         rr_ratio_bullish = (reward_bullish / risk) if risk > 0 else 0
         rr_ratio_bearish = (reward_bearish / risk) if risk > 0 else 0
         rr_ratio = max(rr_ratio_bullish, rr_ratio_bearish)
+
+        from services.trade_zones_ai import trade_zones_ai_engine
+
+        try:
+            ai = trade_zones_ai_engine.infer(
+                symbol=symbol,
+                current_price=current_price,
+                zone_classification=zone_classification,
+                zone_description=zone_description,
+                buy_signal=buy_signal,
+                buy_confidence=buy_confidence,
+                buy_volume_pct=buy_volume_ratio,
+                sell_signal=sell_signal,
+                sell_confidence=sell_confidence,
+                sell_volume_pct=100 - buy_volume_ratio,
+                overall_signal=overall_signal,
+                signal_confidence=signal_confidence,
+                entry_quality=entry_quality,
+                risk_reward_ratio=rr_ratio,
+                trend_structure=trend_structure,
+                volume_strength=volume_strength,
+                vwap_price=vwap_value,
+                ema_20=ema_20,
+                ema_50=ema_50,
+                ema_100=ema_100,
+                ema_200=ema_200,
+                distance_to_ema20_pct=distance_to_ema20,
+                distance_to_ema50_pct=distance_to_ema50,
+                distance_to_ema100_pct=distance_to_ema100,
+                current_volume=current_volume,
+                candles_analyzed=len(df),
+            )
+        except Exception as ai_error:
+            logger.warning("[TRADE-ZONES-AI] Falling back without AI for %s: %s", symbol, ai_error)
+            ai = None
         
         result = {
             "symbol": symbol,
@@ -3435,9 +3470,9 @@ async def get_all_trade_zones() -> Dict[str, Any]:
                 continue
 
             signal = str(result.get("overall_signal", "NEUTRAL")).upper()
-            if signal in ("BUY", "STRONG_BUY"):
+            if signal in ("BUY", "STRONG_BUY", "WEAK_BUY"):
                 bullish_count += 1
-            elif signal in ("SELL", "STRONG_SELL"):
+            elif signal in ("SELL", "STRONG_SELL", "WEAK_SELL"):
                 bearish_count += 1
             else:
                 neutral_count += 1

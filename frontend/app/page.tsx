@@ -85,7 +85,7 @@ const GlobalRiskPanel = dynamic(() => import('@/components/GlobalRiskPanel'), {
   ),
 });
 
-const CRTBTSTCard = dynamic(() => import('@/components/CRTBTSTCard'), {
+const CRTBTSTCard = dynamic<{ symbol: string; name: string; data?: unknown }>(() => import('@/components/CRTBTSTCard'), {
   ssr: false,
   loading: () => (
     <div className="rounded-2xl border border-orange-500/30 bg-slate-800/40 p-4 animate-pulse">

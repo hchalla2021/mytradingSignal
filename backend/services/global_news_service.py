@@ -15,6 +15,11 @@ from typing import Any, Dict, List, Optional
 import httpx
 import pytz
 
+try:
+    import tensorflow as tf
+except Exception:  # pragma: no cover - optional dependency
+    tf = None
+
 logger = logging.getLogger(__name__)
 IST = pytz.timezone("Asia/Kolkata")
 
@@ -189,20 +194,88 @@ _RULES: List[Dict[str, Any]] = [
 # RSS feed sources
 # ---------------------------------------------------------------------------
 _RSS_FEEDS: List[Dict[str, str]] = [
+    {"name": "Moneycontrol Markets", "url": "https://www.moneycontrol.com/rss/MCtopnews.xml"},
+    {"name": "Moneycontrol Business", "url": "https://www.moneycontrol.com/rss/business.xml"},
     {"name": "Reuters Business",    "url": "https://feeds.reuters.com/reuters/businessNews"},
     {"name": "Reuters World",       "url": "https://feeds.reuters.com/Reuters/worldNews"},
     {"name": "Economic Times Mkts", "url": "https://economictimes.indiatimes.com/markets/rss.cms"},
     {"name": "LiveMint Markets",    "url": "https://www.livemint.com/rss/markets"},
     {"name": "CNBC Top News",       "url": "https://www.cnbc.com/id/100003114/device/rss/rss.html"},
+    {"name": "CNBC World News",     "url": "https://www.cnbc.com/id/100727362/device/rss/rss.html"},
     {"name": "Yahoo Finance",       "url": "https://finance.yahoo.com/news/rssindex"},
+    {"name": "MarketWatch Top",     "url": "https://feeds.content.dowjones.io/public/rss/mw_topstories"},
+    {"name": "TradingEconomics",    "url": "https://api.tradingeconomics.com/rss?f=all"},
+    {"name": "SEBI Press",          "url": "https://www.sebi.gov.in/sebirss.xml"},
+    {"name": "RBI Press",           "url": "https://www.rbi.org.in/Scripts/RSSFeeds.aspx?Id=1"},
+    {"name": "PIB India",           "url": "https://pib.gov.in/newsite/rss.aspx"},
     {"name": "FT Markets",          "url": "https://www.ft.com/rss/home/uk"},
     {"name": "Business Standard",   "url": "https://www.business-standard.com/rss/markets-106.rss"},
 ]
 
 _FETCH_TIMEOUT = 8.0
 _CACHE_TTL_SECS = 120          # 2 minutes — push cadence for WS clients
-_MAX_ITEMS_PER_FEED = 5
-_MAX_TOTAL_ITEMS = 20
+_MAX_ITEMS_PER_FEED = 8
+_MAX_TOTAL_ITEMS = 48
+
+_SOURCE_PRIORITY: Dict[str, int] = {
+    "Moneycontrol Markets": 12,
+    "Moneycontrol Business": 11,
+    "Economic Times Mkts": 11,
+    "CNBC Top News": 10,
+    "CNBC World News": 9,
+    "Reuters Business": 10,
+    "Reuters World": 9,
+    "LiveMint Markets": 9,
+    "SEBI Press": 11,
+    "RBI Press": 11,
+    "PIB India": 8,
+    "Yahoo Finance": 7,
+    "MarketWatch Top": 7,
+    "TradingEconomics": 8,
+    "Business Standard": 8,
+    "FT Markets": 7,
+}
+
+_ML_TOKENS = [
+    "rate", "cut", "hike", "inflation", "recession", "rally", "crash", "war", "fii", "selling",
+    "buying", "volatility", "vix", "stimulus", "gdp", "jobs", "oil", "yield", "rbi", "fed",
+]
+_ML_WEIGHTS = [
+    2.0, 6.0, -7.0, -5.0, -6.0, 5.0, -10.0, -9.0, 4.0, -4.5,
+    4.5, -6.0, -6.5, 4.0, 3.0, 2.0, -3.0, -3.5, 4.0, -1.0,
+]
+
+
+def _impact_tier(signal: str, score: int) -> str:
+    extremity = abs(score - 50)
+    if signal in ("HIGH_VOLATILITY", "MARKET_CRASH", "RISK_OFF"):
+        return "volatility"
+    if signal == "NO_IMPACT" or extremity < 8:
+        return "low"
+    if extremity >= 20:
+        return "high"
+    return "medium"
+
+
+def _tensorflow_refine_score(title: str, description: str, base_score: int) -> int:
+    """Optional TensorFlow refinement for impact score.
+
+    Uses a tiny keyword vector + tensor dot-product as a low-latency ML pass.
+    If TensorFlow is unavailable, returns the rule-engine score unchanged.
+    """
+    if tf is None:
+        return base_score
+
+    text = (title + " " + description).lower()
+    features = [float(text.count(token)) for token in _ML_TOKENS]
+    try:
+        feature_tensor = tf.constant(features, dtype=tf.float32)
+        weight_tensor = tf.constant(_ML_WEIGHTS, dtype=tf.float32)
+        raw = tf.tensordot(feature_tensor, weight_tensor, axes=1)
+        adjusted = float(tf.clip_by_value(base_score + raw, 0.0, 100.0).numpy())
+        return int(round(adjusted))
+    except Exception:
+        return base_score
 
 
 # ---------------------------------------------------------------------------
@@ -279,6 +352,9 @@ def _parse_rss(xml_text: str, source_name: str) -> List[Dict[str, Any]]:
 
         uid = hashlib.md5(title.encode()).hexdigest()[:12]
         analysis = _classify(title, desc)
+        analysis["score"] = _tensorflow_refine_score(title, desc_clean, analysis["score"])
+        analysis["confidence"] = min(98, max(30, int(abs(analysis["score"] - 50) * 1.8 + 30)))
+        tier = _impact_tier(analysis["signal"], analysis["score"])
         items.append({
             "id": uid,
             "title": title,
@@ -286,6 +362,7 @@ def _parse_rss(xml_text: str, source_name: str) -> List[Dict[str, Any]]:
             "link": link,
             "published": pub,
             "source": source_name,
+            "impact_tier": tier,
             **analysis,
         })
     return items
@@ -412,8 +489,15 @@ class GlobalNewsService:
                     seen.add(item["id"])
                     unique.append(item)
 
-            # Sort: most extreme signals first
-            unique.sort(key=lambda x: abs(x["score"] - 50), reverse=True)
+            # Sort by impact extremity first, then source priority, then confidence.
+            unique.sort(
+                key=lambda x: (
+                    abs(x["score"] - 50),
+                    _SOURCE_PRIORITY.get(x.get("source", ""), 0),
+                    x.get("confidence", 0),
+                ),
+                reverse=True,
+            )
             self._cache = unique[:_MAX_TOTAL_ITEMS]
             self._last_fetch = asyncio.get_running_loop().time()
 
@@ -438,6 +522,9 @@ class GlobalNewsService:
 
     def get_snapshot(self) -> Dict[str, Any]:
         items = self._cache or []
+        high_impact_count = sum(1 for i in items if i.get("impact_tier") == "high")
+        medium_impact_count = sum(1 for i in items if i.get("impact_tier") == "medium")
+        volatility_count = sum(1 for i in items if i.get("impact_tier") == "volatility")
         bullish_count  = sum(1 for i in items if i["signal"] in ("STRONG_BULLISH", "BULLISH", "SECTOR_RALLY"))
         bearish_count  = sum(1 for i in items if i["signal"] in ("STRONG_BEARISH", "BEARISH", "MARKET_CRASH", "RISK_OFF"))
         neutral_count  = len(items) - bullish_count - bearish_count
@@ -455,6 +542,9 @@ class GlobalNewsService:
             "bullish_count": bullish_count,
             "bearish_count": bearish_count,
             "neutral_count": neutral_count,
+            "high_impact_count": high_impact_count,
+            "medium_impact_count": medium_impact_count,
+            "volatility_count": volatility_count,
             "total": len(items),
             "last_updated": datetime.now(IST).isoformat(),
             "signal_meta": SIGNAL_META,

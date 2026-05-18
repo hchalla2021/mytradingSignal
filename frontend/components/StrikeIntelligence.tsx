@@ -2454,6 +2454,10 @@ type TerminalOverviewRow = {
   key: StrikeIntelSymbolKey;
   label: string;
   status: 'LIVE' | 'DELAYED' | 'OFFLINE';
+  hasPayload: boolean;
+  dataSource: string | null;
+  optionChainAgeSec: number | null;
+  timestamp: string | null;
   signal: OverallSignal;
   score: number;
   confidence: number;
@@ -2494,6 +2498,59 @@ function clampPct(value: number | null | undefined): number {
   return Math.max(0, Math.min(100, value));
 }
 
+function normalizePressurePair(bullRaw: number | null | undefined, bearRaw: number | null | undefined): { bull: number; bear: number } {
+  const bull = clampPct(bullRaw);
+  const bear = clampPct(bearRaw);
+  const total = bull + bear;
+  if (total <= 0) return { bull: 50, bear: 50 };
+  return {
+    bull: Math.round((bull / total) * 100),
+    bear: Math.round((bear / total) * 100),
+  };
+}
+
+function derivePressure(data: SymbolStrikeData | null): { bull: number; bear: number } {
+  if (!data) return { bull: 50, bear: 50 };
+
+  const intel = data.intelligence;
+  if (intel && Number.isFinite(intel.bullPressure) && Number.isFinite(intel.bearPressure)) {
+    return normalizePressurePair(intel.bullPressure, intel.bearPressure);
+  }
+
+  const ceVol = data.chainTotals?.totalCEVol ?? 0;
+  const peVol = data.chainTotals?.totalPEVol ?? 0;
+  const total = ceVol + peVol;
+  if (total <= 0) return { bull: 50, bear: 50 };
+
+  const bull = Math.round((ceVol / total) * 100);
+  return { bull, bear: 100 - bull };
+}
+
+function deriveTrapRisk(data: SymbolStrikeData | null): number {
+  if (!data) return 0;
+  if (data.intelligence && Number.isFinite(data.intelligence.trapRiskPct)) {
+    return clampPct(data.intelligence.trapRiskPct);
+  }
+  if (!data.strikes?.length) return 0;
+  const trapped = data.strikes.reduce((acc, row) => {
+    const ceTrap = row.ce?.signals?.trap ? 1 : 0;
+    const peTrap = row.pe?.signals?.trap ? 1 : 0;
+    return acc + ceTrap + peTrap;
+  }, 0);
+  const totalSides = data.strikes.length * 2;
+  return clampPct(Math.round((trapped / Math.max(totalSides, 1)) * 100));
+}
+
+function derivePcr(data: SymbolStrikeData | null): number | null {
+  if (!data) return null;
+  const fromIntel = data.intelligence?.pcr;
+  if (fromIntel != null && Number.isFinite(fromIntel)) return fromIntel;
+  const ceOi = data.chainTotals?.totalCEOI ?? 0;
+  const peOi = data.chainTotals?.totalPEOI ?? 0;
+  if (ceOi <= 0 || peOi <= 0) return null;
+  return peOi / ceOi;
+}
+
 function getFlowDepth(data: SymbolStrikeData | null): number {
   if (!data) return 0;
   const totalVol = data.chainTotals?.totalVol ?? ((data.chainTotals?.totalCEVol ?? 0) + (data.chainTotals?.totalPEVol ?? 0));
@@ -2526,26 +2583,33 @@ function buildTerminalOverviewRow(
   data: SymbolStrikeData | null,
 ): TerminalOverviewRow {
   const intelligence = data?.intelligence;
-  const status: TerminalOverviewRow['status'] = data?.dataSource === 'LIVE'
+  const ageSec = data?.optionChainAgeSec != null ? Math.max(0, data.optionChainAgeSec) : null;
+  const isFreshLive = data?.dataSource === 'LIVE' && ageSec != null && ageSec <= 8;
+  const status: TerminalOverviewRow['status'] = !data
+    ? 'OFFLINE'
+    : isFreshLive
     ? 'LIVE'
-    : data?.dataSource
-    ? 'DELAYED'
-    : 'OFFLINE';
+    : 'DELAYED';
+  const pressure = derivePressure(data);
 
   return {
     key,
     label,
     status,
+    hasPayload: Boolean(data),
+    dataSource: data?.dataSource ?? null,
+    optionChainAgeSec: ageSec,
+    timestamp: data?.timestamp ?? null,
     signal: (intelligence?.signal as OverallSignal | undefined) ?? 'NEUTRAL',
     score: Math.round(intelligence?.score ?? 0),
     confidence: Math.round(intelligence?.confidence ?? 0),
     actionability: intelligence?.actionability ?? 'NONE',
     regime: intelligence?.regime ?? 'NO_DATA',
     tradePlan: getOverviewTradePlan(data),
-    bullPressure: clampPct(intelligence?.bullPressure),
-    bearPressure: clampPct(intelligence?.bearPressure),
-    trapRisk: clampPct(intelligence?.trapRiskPct),
-    pcr: intelligence?.pcr ?? null,
+    bullPressure: pressure.bull,
+    bearPressure: pressure.bear,
+    trapRisk: deriveTrapRisk(data),
+    pcr: derivePcr(data),
     spot: data?.spot ?? null,
     worldBias: intelligence?.worldMarket?.bias ?? null,
     worldScore: intelligence?.worldMarket?.influenceScore ?? null,
@@ -2559,21 +2623,24 @@ const StrikeTerminalOverview = memo<{ strikeData: StrikeIntelligenceData; isConn
     [strikeData],
   );
 
+  const activeRows = useMemo(() => overviewRows.filter((row) => row.hasPayload), [overviewRows]);
+  const rowsForStats = activeRows.length > 0 ? activeRows : overviewRows;
+
   const liveCount = overviewRows.filter((row) => row.status === 'LIVE').length;
-  const actionableCount = overviewRows.filter((row) => row.actionability === 'HIGH' || row.actionability === 'MEDIUM').length;
-  const avgConfidence = overviewRows.length > 0
-    ? Math.round(overviewRows.reduce((sum, row) => sum + row.confidence, 0) / overviewRows.length)
+  const actionableCount = rowsForStats.filter((row) => row.actionability === 'HIGH' || row.actionability === 'MEDIUM').length;
+  const avgConfidence = rowsForStats.length > 0
+    ? Math.round(rowsForStats.reduce((sum, row) => sum + row.confidence, 0) / rowsForStats.length)
     : 0;
-  const avgScore = overviewRows.length > 0
-    ? Math.round(overviewRows.reduce((sum, row) => sum + row.score, 0) / overviewRows.length)
+  const avgScore = rowsForStats.length > 0
+    ? Math.round(rowsForStats.reduce((sum, row) => sum + row.score, 0) / rowsForStats.length)
     : 0;
-  const avgTrapRisk = overviewRows.length > 0
-    ? Math.round(overviewRows.reduce((sum, row) => sum + row.trapRisk, 0) / overviewRows.length)
+  const avgTrapRisk = rowsForStats.length > 0
+    ? Math.round(rowsForStats.reduce((sum, row) => sum + row.trapRisk, 0) / rowsForStats.length)
     : 0;
-  const avgFlowDepth = overviewRows.length > 0
-    ? Math.round(overviewRows.reduce((sum, row) => sum + row.flowDepth, 0) / overviewRows.length)
+  const avgFlowDepth = rowsForStats.length > 0
+    ? Math.round(rowsForStats.reduce((sum, row) => sum + row.flowDepth, 0) / rowsForStats.length)
     : 0;
-  const leader = overviewRows.reduce<TerminalOverviewRow | null>((best, row) => {
+  const leader = rowsForStats.reduce<TerminalOverviewRow | null>((best, row) => {
     if (!best) return row;
     const bestWeight = Math.abs(best.score) * 100 + best.confidence;
     const rowWeight = Math.abs(row.score) * 100 + row.confidence;
@@ -2695,6 +2762,11 @@ const StrikeTerminalOverview = memo<{ strikeData: StrikeIntelligenceData; isConn
                   <span className="font-semibold text-slate-400">World {row.worldBias ? <span className="text-slate-200 font-black">{row.worldBias}</span> : <span className="text-slate-500">--</span>}</span>
                   <span className="font-mono font-black text-violet-300">FD {row.flowDepth}</span>
                 </div>
+
+                <div className="mt-2 flex items-center justify-between gap-2 text-[8px] font-mono text-slate-500">
+                  <span>{row.dataSource ?? 'NO_SOURCE'}</span>
+                  <span>{fmtAgeSeconds(row.optionChainAgeSec ?? undefined)} chain age</span>
+                </div>
               </div>
             );
           })}
@@ -2724,7 +2796,7 @@ StrikeTerminalOverview.displayName = 'StrikeTerminalOverview';
 
 // Main Component
 
-const StrikeIntelligence = memo(() => {
+function StrikeIntelligenceComponent() {
   const { strikeData, isConnected, lastUpdate } = useStrikeIntelligence();
   const [tickTs, setTickTs] = useState<string>('--:--:--');
 
@@ -2770,7 +2842,9 @@ const StrikeIntelligence = memo(() => {
       </div>
     </div>
   );
-});
+}
+
+const StrikeIntelligence = memo(StrikeIntelligenceComponent);
 StrikeIntelligence.displayName = 'StrikeIntelligence';
 
 export default StrikeIntelligence;

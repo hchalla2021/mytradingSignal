@@ -55,8 +55,11 @@ type FractalDeskRow = {
   direction: FractalDirection;
   regime: 'EXPANSION' | 'COMPRESSION' | 'BALANCED';
   status: 'LIVE' | 'DELAYED' | 'OFFLINE';
+  dataSource: string;
+  optionChainAgeSec: number;
   flowDepth: number;
   modelProvider: string;
+  modelLabel: string;
   latencyMs: number;
   eventRate: number;
   queueDepth: number;
@@ -112,19 +115,32 @@ function getFlowDepth(data: SymbolStrikeData | null): number {
   return Math.max(0, Math.min(100, Math.round(raw)));
 }
 
+function normalizeProviderLabel(provider: string): string {
+  const p = provider.trim().toLowerCase();
+  if (!p) return 'ADAPTIVE';
+  if (p.includes('numpy_fallback')) return 'ADAPTIVE';
+  if (p.includes('tensorflow')) return 'TENSORFLOW';
+  if (p.includes('rule')) return 'RULE ENGINE';
+  return provider.toUpperCase();
+}
+
 function buildDeskRow(symbol: typeof SYMBOLS[number], data: SymbolStrikeData | null): FractalDeskRow | null {
   const fractal = data?.intelligence?.quantumFractal;
   if (!fractal) return null;
 
-  const status: FractalDeskRow['status'] = data?.dataSource === 'LIVE'
+  const ageSec = Number.isFinite(data?.optionChainAgeSec)
+    ? Math.max(0, data?.optionChainAgeSec ?? 0)
+    : Number.POSITIVE_INFINITY;
+  const status: FractalDeskRow['status'] = !data?.dataSource
+    ? 'OFFLINE'
+    : data.dataSource === 'LIVE' && ageSec <= 8
     ? 'LIVE'
-    : data?.dataSource
-    ? 'DELAYED'
-    : 'OFFLINE';
+    : 'DELAYED';
 
   const deck = fractal.commandDeck;
   const aiProvider = data?.intelligence?.ai?.provider;
   const provider = String(deck?.modelProvider || aiProvider || 'rule_engine');
+  const modelLabel = normalizeProviderLabel(provider);
   const fallbackRisk = Math.max(0, Math.min(100, Math.round((100 - fractal.continuationProbability) * 0.75)));
 
   return {
@@ -139,8 +155,11 @@ function buildDeskRow(symbol: typeof SYMBOLS[number], data: SymbolStrikeData | n
     direction: getDirection(fractal.signal, fractal.score, fractal.prediction.nextMove),
     regime: fractal.volatilityRegime,
     status,
+    dataSource: data?.dataSource ?? 'UNKNOWN',
+    optionChainAgeSec: Number.isFinite(ageSec) ? ageSec : 0,
     flowDepth: getFlowDepth(data),
     modelProvider: provider,
+    modelLabel,
     latencyMs: deck?.analysisLatencyMs ?? 0,
     eventRate: deck?.eventRatePerSec ?? 0,
     queueDepth: deck?.queueDepth ?? 0,
@@ -148,6 +167,14 @@ function buildDeskRow(symbol: typeof SYMBOLS[number], data: SymbolStrikeData | n
     stopHuntRisk: deck?.prediction?.stopHuntRisk ?? fallbackRisk,
     smartAlerts: Array.isArray(deck?.alerts) ? deck!.alerts.length : 0,
   };
+}
+
+function isFreshLiveFeed(data: SymbolStrikeData | null): boolean {
+  if (!data) return false;
+  const ageSec = Number.isFinite(data.optionChainAgeSec)
+    ? Math.max(0, data.optionChainAgeSec ?? 0)
+    : Number.POSITIVE_INFINITY;
+  return data.dataSource === 'LIVE' && ageSec <= 8;
 }
 
 function getSignalTone(signal: StrikeSignal): string {
@@ -276,6 +303,10 @@ function getConfluenceState(data: SymbolStrikeData | null) {
   const fractal = data?.intelligence?.quantumFractal;
   if (!fractal) return null;
 
+  const freshLive = isFreshLiveFeed(data);
+  const feedAge = Number.isFinite(data?.optionChainAgeSec) ? Math.max(0, data?.optionChainAgeSec ?? 0) : null;
+  const feedDetail = data?.dataSource ? `${data.dataSource}${feedAge != null ? ` · ${Math.round(feedAge)}s` : ''}` : 'UNKNOWN';
+
   const bullishBias = isBuyerSignal(fractal.signal) && fractal.prediction.nextMove === 'UP';
   const bearishBias = isSellerSignal(fractal.signal) && fractal.prediction.nextMove === 'DOWN';
   const directionalBias: FractalDirection = bullishBias ? 'LONG' : bearishBias ? 'SHORT' : 'NEUTRAL';
@@ -294,6 +325,11 @@ function getConfluenceState(data: SymbolStrikeData | null) {
     : fractal.prediction.probabilityPct;
 
   const checks = [
+    {
+      name: 'Feed freshness LIVE <= 8s',
+      pass: freshLive,
+      detail: feedDetail,
+    },
     {
       name: 'Directional signal',
       pass: directionalBias !== 'NEUTRAL',
@@ -337,6 +373,7 @@ function getConfluenceState(data: SymbolStrikeData | null) {
   ];
 
   const blockers = [
+    !freshLive ? 'Feed delayed/stale - confluence in observation mode' : null,
     directionalBias === 'NEUTRAL' ? 'Directional engine has no clear bias' : null,
     fractal.prediction.nextMove === 'SIDEWAYS' && fractal.prediction.probabilityPct >= 55
       ? 'Predictive path is sideways-dominant'
@@ -519,14 +556,24 @@ const RiskRewardMatrix = memo<{ convergenceRows: ConvergenceRow[] }>(({ converge
 RiskRewardMatrix.displayName = 'RiskRewardMatrix';
 
 const InstitutionalConvergenceBoard = memo<{ convergenceRows: ConvergenceRow[] }>(({ convergenceRows }) => {
-  const avgConfluence = convergenceRows.length ? Math.round(convergenceRows.reduce((sum, r) => sum + r.confluenceScore, 0) / convergenceRows.length) : 0;
-  const avgExecution = convergenceRows.length ? Math.round(convergenceRows.reduce((sum, r) => sum + r.executionProbability, 0) / convergenceRows.length) : 0;
-  const avgSmartMoney = convergenceRows.length ? Math.round(convergenceRows.reduce((sum, r) => sum + r.smartMoneyAlignment, 0) / convergenceRows.length) : 0;
-  const avgInstitutional = convergenceRows.length ? Math.round(convergenceRows.reduce((sum, r) => sum + r.institutionalFlow, 0) / convergenceRows.length) : 0;
-  const bestRiskReward = convergenceRows.length ? Math.max(...convergenceRows.map((r) => r.riskRewardRatio)) : 0;
-  const institutionalGradeCount = convergenceRows.filter((r) => r.executionProbability >= 70 && r.smartMoneyAlignment >= 65).length;
-  const avgTrapRisk = convergenceRows.length ? Math.round(convergenceRows.reduce((sum, r) => sum + r.liquidityTrapRisk, 0) / convergenceRows.length) : 0;
-  const totalAlerts = convergenceRows.reduce((sum, r) => sum + (r.alerts?.length ?? 0), 0);
+  const liveRows = convergenceRows.filter((r) => r.status === 'LIVE');
+  const sourceRows = liveRows.length > 0 ? liveRows : convergenceRows;
+
+  const avgConfluence = sourceRows.length ? Math.round(sourceRows.reduce((sum, r) => sum + r.confluenceScore, 0) / sourceRows.length) : 0;
+  const avgExecution = sourceRows.length ? Math.round(sourceRows.reduce((sum, r) => sum + r.executionProbability, 0) / sourceRows.length) : 0;
+  const avgSmartMoney = sourceRows.length ? Math.round(sourceRows.reduce((sum, r) => sum + r.smartMoneyAlignment, 0) / sourceRows.length) : 0;
+  const avgInstitutional = sourceRows.length ? Math.round(sourceRows.reduce((sum, r) => sum + r.institutionalFlow, 0) / sourceRows.length) : 0;
+  const bestRiskReward = sourceRows.length ? Math.max(...sourceRows.map((r) => r.riskRewardRatio)) : 0;
+  const institutionalGradeCount = liveRows.filter((r) => r.executionProbability >= 70 && r.smartMoneyAlignment >= 65).length;
+  const avgTrapRisk = sourceRows.length ? Math.round(sourceRows.reduce((sum, r) => sum + r.liquidityTrapRisk, 0) / sourceRows.length) : 0;
+  const totalAlerts = sourceRows.reduce((sum, r) => sum + (r.alerts?.length ?? 0), 0);
+  const boardStatus = liveRows.length === 0
+    ? 'DELAYED'
+    : avgExecution >= 70 && avgSmartMoney >= 65
+    ? 'LIVE'
+    : avgExecution >= 55
+    ? 'ACTIVE'
+    : 'WATCH';
 
   return (
     <div className="rounded-2xl border border-indigo-500/25 bg-gradient-to-br from-indigo-950/15 via-slate-950/85 to-slate-900/80 p-4 sm:p-5 lg:p-6 overflow-hidden">
@@ -551,9 +598,13 @@ const InstitutionalConvergenceBoard = memo<{ convergenceRows: ConvergenceRow[] }
             <ConfluenceHeatmapCell value={bestRiskReward} label="Best R:R" maxValue={3} suffix="x" />
             <div className="rounded-xl border border-slate-700/45 bg-slate-900/65 px-3 py-2.5">
               <p className="text-[8px] font-bold uppercase tracking-[0.14em] text-slate-500">Status</p>
-              <p className={`mt-1 text-sm font-black ${avgExecution >= 70 && avgSmartMoney >= 65 ? 'text-emerald-300' : avgExecution >= 55 ? 'text-amber-300' : 'text-slate-300'}`}>
-                {avgExecution >= 70 && avgSmartMoney >= 65 ? 'LIVE' : avgExecution >= 55 ? 'ACTIVE' : 'WATCH'}
+              <p className={`mt-1 text-sm font-black ${boardStatus === 'LIVE' ? 'text-emerald-300' : boardStatus === 'DELAYED' ? 'text-amber-300' : boardStatus === 'ACTIVE' ? 'text-cyan-300' : 'text-slate-300'}`}>
+                {boardStatus}
               </p>
+            </div>
+            <div className="rounded-xl border border-slate-700/45 bg-slate-900/65 px-3 py-2.5">
+              <p className="text-[8px] font-bold uppercase tracking-[0.14em] text-slate-500">Live Books</p>
+              <p className="mt-1 text-sm font-black text-emerald-300">{liveRows.length}/{convergenceRows.length}</p>
             </div>
             <ConfluenceHeatmapCell value={avgTrapRisk} label="Trap Risk" />
             <div className="rounded-xl border border-slate-700/45 bg-slate-900/65 px-3 py-2.5">
@@ -637,6 +688,11 @@ const InstitutionalConfluenceCard = memo<{ convergenceRow: ConvergenceRow }>(({ 
         </div>
       </div>
 
+      <div className="mt-2 flex items-center justify-between text-[8px] font-mono text-slate-500">
+        <span>{convergenceRow.dataSource}</span>
+        <span>{Math.round(convergenceRow.optionChainAgeSec)}s age</span>
+      </div>
+
       {convergenceRow.alerts.length > 0 && (
         <p className="mt-2 text-[9px] leading-relaxed text-amber-200/90 line-clamp-2">
           {convergenceRow.alerts[0]}
@@ -659,12 +715,14 @@ const FractalCommandDeck = memo<{
   const avgConfidence = rows.length ? Math.round(rows.reduce((sum, row) => sum + row.confidence, 0) / rows.length) : 0;
   const avgAlignment = rows.length ? Math.round(rows.reduce((sum, row) => sum + row.alignment, 0) / rows.length) : 0;
   const avgFlowDepth = rows.length ? Math.round(rows.reduce((sum, row) => sum + row.flowDepth, 0) / rows.length) : 0;
-  const netScore = rows.reduce((sum, row) => sum + row.score, 0);
+  const netScoreRaw = rows.reduce((sum, row) => sum + row.score, 0);
+  const netScore = Math.round(netScoreRaw * 10) / 10;
   const liveBooks = rows.filter((row) => row.status === 'LIVE').length;
   const longCount = visibleRows.filter((row) => row.direction === 'LONG').length;
   const shortCount = visibleRows.filter((row) => row.direction === 'SHORT').length;
   const avgLatency = rows.length ? Math.round(rows.reduce((sum, row) => sum + row.latencyMs, 0) / rows.length) : 0;
   const avgEventRate = rows.length ? (rows.reduce((sum, row) => sum + row.eventRate, 0) / rows.length) : 0;
+  const avgAgeSec = rows.length ? Math.round(rows.reduce((sum, row) => sum + row.optionChainAgeSec, 0) / rows.length) : 0;
   const avgTrapRisk = rows.length
     ? Math.round(rows.reduce((sum, row) => sum + Math.max(row.fakeBreakoutRisk, row.stopHuntRisk), 0) / rows.length)
     : 0;
@@ -724,6 +782,10 @@ const FractalCommandDeck = memo<{
           <div className="rounded-xl border border-slate-800/55 bg-slate-900/65 p-2.5">
             <p className="text-[8px] font-bold uppercase tracking-[0.14em] text-slate-500">Events/s</p>
             <p className="mt-1 text-sm font-black font-mono text-cyan-300">{avgEventRate.toFixed(1)}</p>
+          </div>
+          <div className="rounded-xl border border-slate-800/55 bg-slate-900/65 p-2.5">
+            <p className="text-[8px] font-bold uppercase tracking-[0.14em] text-slate-500">Feed Age</p>
+            <p className={`mt-1 text-sm font-black font-mono ${avgAgeSec <= 8 ? 'text-emerald-300' : avgAgeSec <= 60 ? 'text-amber-300' : 'text-rose-300'}`}>{avgAgeSec}s</p>
           </div>
           <div className="rounded-xl border border-slate-800/55 bg-slate-900/65 p-2.5">
             <p className="text-[8px] font-bold uppercase tracking-[0.14em] text-slate-500">Trap Risk</p>
@@ -807,7 +869,7 @@ const FractalCommandDeck = memo<{
                 </div>
                 <div className="rounded-lg border border-slate-800/60 bg-slate-900/70 px-2 py-1.5">
                   <p className="text-slate-500">Model</p>
-                  <p className="mt-0.5 font-black text-cyan-300 truncate">{row.modelProvider}</p>
+                  <p className="mt-0.5 font-black text-cyan-300 truncate">{row.modelLabel}</p>
                 </div>
                 <div className="rounded-lg border border-slate-800/60 bg-slate-900/70 px-2 py-1.5">
                   <p className="text-slate-500">Trap</p>
@@ -815,6 +877,11 @@ const FractalCommandDeck = memo<{
                     {Math.max(row.fakeBreakoutRisk, row.stopHuntRisk)}%
                   </p>
                 </div>
+              </div>
+
+              <div className="mt-2 flex items-center justify-between text-[9px] font-mono text-slate-500">
+                <span>{row.dataSource}</span>
+                <span>{Math.round(row.optionChainAgeSec)}s age</span>
               </div>
             </div>
           ))}
@@ -951,6 +1018,18 @@ const QuantumFractalSection = memo(() => {
     [filteredRows],
   );
 
+  const liveBooks = useMemo(() => deskRows.filter((row) => row.status === 'LIVE').length, [deskRows]);
+  const avgAgeSec = useMemo(
+    () => deskRows.length ? Math.round(deskRows.reduce((sum, row) => sum + row.optionChainAgeSec, 0) / deskRows.length) : 0,
+    [deskRows],
+  );
+  const sectionStatusLabel = liveBooks > 0 ? 'LIVE' : deskRows.length > 0 ? 'DELAYED' : 'OFFLINE';
+  const sectionStatusTone = sectionStatusLabel === 'LIVE'
+    ? 'border-emerald-500/25 bg-emerald-500/8 text-emerald-300'
+    : sectionStatusLabel === 'DELAYED'
+    ? 'border-amber-500/35 bg-amber-500/10 text-amber-200'
+    : 'border-slate-600/35 bg-slate-700/15 text-slate-300';
+
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       const target = event.target as HTMLElement | null;
@@ -1043,9 +1122,10 @@ const QuantumFractalSection = memo(() => {
 
         {/* Live indicator */}
         <div className="flex items-center gap-2 shrink-0 self-center">
-          <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-500/25 bg-emerald-500/8 px-3 py-1.5 text-[10px] sm:text-[11px] font-bold text-emerald-300 tracking-[0.1em] uppercase">
-            <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse shrink-0" />
-            LIVE
+          <span className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-[10px] sm:text-[11px] font-bold tracking-[0.1em] uppercase ${sectionStatusTone}`}>
+            <span className={`w-2 h-2 rounded-full shrink-0 ${sectionStatusLabel === 'LIVE' ? 'bg-emerald-400 animate-pulse' : sectionStatusLabel === 'DELAYED' ? 'bg-amber-400' : 'bg-slate-500'}`} />
+            {sectionStatusLabel}
+            <span className="font-mono">{avgAgeSec}s</span>
           </span>
         </div>
       </div>

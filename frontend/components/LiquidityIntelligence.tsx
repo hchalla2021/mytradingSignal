@@ -633,7 +633,6 @@ const LiquidityAICommandDeck = memo(({ snapshot }: { snapshot: LiquidityAISnapsh
           <p className="text-[11px] font-black uppercase tracking-[0.12em] text-cyan-200">Liquidity AI Command Deck</p>
         </div>
         <div className="flex items-center gap-1.5 text-[9px] font-black uppercase tracking-[0.1em]">
-          <span className="rounded border border-cyan-400/40 bg-cyan-500/10 px-2 py-1 text-cyan-200">{snapshot.provider}</span>
           <span className={`rounded border px-2 py-1 ${snapshot.streamState === 'LIVE' ? 'border-cyan-400/45 bg-cyan-500/10 text-cyan-200' : 'border-slate-600/45 bg-slate-700/20 text-slate-300'}`}>
             {snapshot.streamState}
           </span>

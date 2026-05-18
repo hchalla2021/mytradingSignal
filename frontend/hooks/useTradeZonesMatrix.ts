@@ -29,22 +29,24 @@ export interface TradeZoneEvent {
   ts: string;
 }
 
+type TradeZonesSummary = {
+  dominant_signal?: string;
+  bullish_count?: number;
+  bearish_count?: number;
+  neutral_count?: number;
+  avg_confidence?: number;
+};
+
 interface TradeZonesAllResponse {
   data: Record<string, TradeZoneRow>;
-  summary?: {
-    dominant_signal?: string;
-    bullish_count?: number;
-    bearish_count?: number;
-    neutral_count?: number;
-    avg_confidence?: number;
-  };
+  summary?: TradeZonesSummary;
   timestamp: string;
 }
 
 interface UseTradeZonesMatrixResult {
   rows: TradeZoneRow[];
   events: TradeZoneEvent[];
-  summary: TradeZonesAllResponse['summary'];
+  summary: TradeZonesSummary | undefined;
   loading: boolean;
   error: string | null;
   lastUpdate: string | null;
@@ -60,8 +62,38 @@ const SIGNAL_RANK: Record<TradeZoneSignal, number> = {
   UNKNOWN: 0,
 };
 
+function deriveSummary(rows: TradeZoneRow[]): TradeZonesSummary {
+  let bullish = 0;
+  let bearish = 0;
+  let neutral = 0;
+  let confTotal = 0;
+
+  for (const row of rows) {
+    const signal = normalizeSignal(row.overall_signal);
+    if (signal === 'BUY' || signal === 'STRONG_BUY') bullish += 1;
+    else if (signal === 'SELL' || signal === 'STRONG_SELL') bearish += 1;
+    else neutral += 1;
+    confTotal += Number.isFinite(row.signal_confidence) ? row.signal_confidence : 0;
+  }
+
+  const avgConfidence = rows.length > 0 ? Math.round(confTotal / rows.length) : 0;
+  let dominant = 'NEUTRAL';
+  if (bullish > bearish && bullish >= neutral) dominant = 'BULLISH';
+  else if (bearish > bullish && bearish >= neutral) dominant = 'BEARISH';
+
+  return {
+    dominant_signal: dominant,
+    bullish_count: bullish,
+    bearish_count: bearish,
+    neutral_count: neutral,
+    avg_confidence: avgConfidence,
+  };
+}
+
 function normalizeSignal(signal: string | undefined): TradeZoneSignal {
   const v = (signal ?? 'UNKNOWN').toUpperCase();
+  if (v === 'WEAK_BUY') return 'BUY';
+  if (v === 'WEAK_SELL') return 'SELL';
   if (v === 'STRONG_BUY' || v === 'BUY' || v === 'NEUTRAL' || v === 'SELL' || v === 'STRONG_SELL') {
     return v;
   }
@@ -130,7 +162,8 @@ export function useTradeZonesMatrix(refreshMs = 2000): UseTradeZonesMatrixResult
 
       ingestSignalChanges(list);
       setRows(list);
-      setSummary(payload.summary);
+      // Prefer live-derived summary so weak signals and mapping stay consistent in UI.
+      setSummary(deriveSummary(list));
       setLastUpdate(payload.timestamp ?? new Date().toISOString());
       setError(null);
     } catch (err) {

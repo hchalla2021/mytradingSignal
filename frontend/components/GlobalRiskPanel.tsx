@@ -286,10 +286,11 @@ const GlobalRiskPanel = memo(function GlobalRiskPanel() {
             <button
               type="button"
               onClick={() => setExpanded((prev) => !prev)}
+              aria-label={expanded ? 'Collapse Global Risk panel' : 'Expand Global Risk panel'}
+              title={expanded ? 'Collapse panel' : 'Expand panel'}
               className="inline-flex items-center gap-1.5 rounded-full border border-slate-700/60 bg-slate-900/70 px-2.5 py-1 text-[9px] sm:text-[10px] font-bold text-slate-300 hover:text-white hover:border-slate-500/70 transition-colors"
             >
-              <span>{expanded ? '▾' : '▸'}</span>
-              <span>{expanded ? 'Collapse' : 'Expand'}</span>
+              <span aria-hidden="true">{expanded ? '▾' : '▸'}</span>
             </button>
             <span className={`inline-flex items-center rounded-full border px-2.5 py-1 text-[9px] sm:text-[10px] font-black tracking-[0.08em] uppercase ${globalRiskOverview.tone.border} ${globalRiskOverview.tone.bg} ${globalRiskOverview.tone.text}`}>
               {globalRiskOverview.status}

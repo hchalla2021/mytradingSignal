@@ -24,7 +24,7 @@ const CFG = {
   PRICE_AXIS_W: 72,
   TIME_AXIS_H: 24,
   PAD_TOP: 8,
-  LEGEND_H: 38,        // top legend strip height (2 compact rows)
+  LEGEND_H: 8,         // small top spacer; header now carries the liquidity summary
   VOL_H: 60,          // volume panel height reserved at bottom (above time axis)
   CANDLE_W: 7,
   CANDLE_GAP: 3,
@@ -54,20 +54,20 @@ const CFG = {
 
   // ── FVG — muted teal (bull) / dusty rose (bear) ──────────────────
   // Soft mid-tone hues — distinct from levels, easy on eyes for long sessions
-  FVG_BULL_FILL:   'rgba(56,178,166,0.08)',   // #38b2a6 muted teal
+  FVG_BULL_FILL:   'rgba(56,178,166,0.16)',   // #38b2a6 muted teal
   FVG_BULL_BORDER: '#38b2a6',
-  FVG_BULL_HATCH:  'rgba(56,178,166,0.18)',
-  FVG_BEAR_FILL:   'rgba(188,100,140,0.08)',  // #bc648c dusty rose
+  FVG_BULL_HATCH:  'rgba(56,178,166,0.30)',
+  FVG_BEAR_FILL:   'rgba(188,100,140,0.16)',  // #bc648c dusty rose
   FVG_BEAR_BORDER: '#bc648c',
-  FVG_BEAR_HATCH:  'rgba(188,100,140,0.18)',
+  FVG_BEAR_HATCH:  'rgba(188,100,140,0.30)',
   FVG_FILLED_FILL: 'rgba(148,163,184,0.025)',
 
   // ── ORDER BLOCKS — warm sand (bull) / soft lavender (bear) ───────
-  OB_BULL_FILL:  'rgba(194,154,80,0.09)',   // #c29a50 warm sand-gold
-  OB_BULL_FILL2: 'rgba(194,154,80,0.0)',
+  OB_BULL_FILL:  'rgba(194,154,80,0.20)',   // #c29a50 warm sand-gold
+  OB_BULL_FILL2: 'rgba(194,154,80,0.05)',
   OB_BULL_BORDER: '#c29a50',
-  OB_BEAR_FILL:  'rgba(138,104,190,0.09)',  // #8a68be soft lavender
-  OB_BEAR_FILL2: 'rgba(138,104,190,0.0)',
+  OB_BEAR_FILL:  'rgba(138,104,190,0.20)',  // #8a68be soft lavender
+  OB_BEAR_FILL2: 'rgba(138,104,190,0.05)',
   OB_BEAR_BORDER: '#8a68be',
   OB_MITIGATED_ALPHA: 0.28,
 
@@ -1153,7 +1153,7 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
                 : pred.outcome === 'REJECT' ? '#f87171'
                 : '#fbbf24';
       const arr = pred.direction === 'UP' ? '▲' : '▼';
-      drawLineTag(anchorY, `${pred.outcome}${arr} ${pred.confidence}%`, col, above);
+      drawLineTag(anchorY, `${pred.outcome}${arr} ${pred.confidence}%`, col, above, 1.0, false);
     };
 
     // Alert banner collector — zones push here as they are drawn
@@ -1161,212 +1161,144 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
 
     // ── Inline label helper — draws a pill directly at its zone/candle position ──
     // cx/cy = centre of the pill; auto-clamped to stay within chart bounds.
-    const drawLabel = (cx: number, cy: number, text: string, fg: string, bg: string, bold = true) => {
-      ctx.save();
-      ctx.shadowBlur = 0;
-      ctx.font = bold ? 'bold 9px sans-serif' : '9px monospace';
-      const tw = ctx.measureText(text).width;
-      const lw = tw + 10; const lh = 15;
-      const lx = Math.max(chartLeft + 1, Math.min(chartRight - lw - 1, cx - lw / 2));
-      const ly = Math.max(chartTop + 1, Math.min(chartBottom - lh - 1, cy - lh / 2));
-      roundRect(ctx, lx, ly, lw, lh, 3);
-      ctx.fillStyle = bg; ctx.globalAlpha = 1; ctx.fill();
-      ctx.fillStyle = fg; ctx.textAlign = 'left';
-      ctx.fillText(text, lx + 4, ly + lh - 4);
-      ctx.restore();
-    };
+    const drawLabel = (..._args: unknown[]) => { void _args; };
 
     // ── Zone label system — above/below the line, never ON the line ─────────
-    // ONE shared Y pool — right-side labels and left-side count pills
-    // both register into it, so they can NEVER land at the same row.
-    const _usedTagY: number[] = [];
-    const _TAG_H = 15;   // slightly taller for 10px font
-    // Walks away from preferred Y (up to 12 steps) until a free slot is found.
-    // min_gap = _TAG_H + 2 ensures a 2px breathing gap between any two pills.
-    const _claimSlot = (prefTagTopY: number, above: boolean): number | null => {
-      const step = _TAG_H + 2;
-      for (let i = 0; i <= 12; i++) {
-        const offsets = i === 0 ? [0] : (above ? [-i * step, i * step] : [i * step, -i * step]);
-        for (const d of offsets) {
-          const ty      = prefTagTopY + d;
-          const clamped = Math.max(chartTop + 2, Math.min(chartBottom - _TAG_H - 2, ty));
-          const cy      = clamped + _TAG_H / 2;
-          if (_usedTagY.every(uy => Math.abs(uy - cy) >= _TAG_H + 2)) {
-            _usedTagY.push(cy);
-            return clamped;
+    // Responsive sizing: narrower charts (mobile) use slightly smaller pills.
+    const _chartW   = chartRight - chartLeft;
+    const _isNarrow = _chartW < 520;
+    const _TAG_FONT = _isNarrow ? 9 : 10;
+    const _TAG_H    = _isNarrow ? 13 : 15;
+    const _TAG_PAD  = _isNarrow ? 5  : 6;
+    const _TAG_GAP  = 3;        // vertical breathing gap between two pills
+    const _COL_GAP  = 4;        // horizontal gap between staggered columns
+    void _COL_GAP;
+
+    // Multi-column slot system: when the right-most column is full at a given Y,
+    // labels stagger LEFT into a second / third column so they never overlap
+    // each other and never overlap with candles on the right edge.
+    // Each entry is a rectangle [top, bottom, left, right] in pixel space.
+    const _usedRects: Array<[number, number, number, number]> = [];
+    const _rectsOverlap = (
+      aTop: number, aBot: number, aLeft: number, aRight: number,
+      bTop: number, bBot: number, bLeft: number, bRight: number,
+    ) => !(aBot <= bTop || aTop >= bBot || aRight <= bLeft || aLeft >= bRight);
+
+    const _claimRect = (
+      prefTopY: number,
+      above: boolean,
+      tagW: number,
+      seed = 0,
+    ): { x: number; y: number } | null => {
+      const yStep   = _TAG_H + _TAG_GAP;
+      const xStep   = Math.max(18, Math.round(tagW * 0.35));
+      const xRight  = chartRight - 10;
+      const xLeft   = chartLeft + 6;
+      // Distribute starting X across the chart width using the caller-supplied
+      // seed (hash of label text) so labels naturally spread left/middle/right
+      // instead of always clustering at the right edge.
+      const span    = Math.max(0, (xRight - xLeft) - tagW);
+      const startRight = span > 0
+        ? xRight - (Math.abs(seed) % Math.max(1, span))
+        : xRight;
+      for (let i = 0; i <= 10; i++) {
+        const ySteps = i === 0 ? [0] : (above ? [-i * yStep, i * yStep] : [i * yStep, -i * yStep]);
+        for (const dy of ySteps) {
+          const rawTop = prefTopY + dy;
+          const top    = Math.max(chartTop + 2, Math.min(chartBottom - _TAG_H - 2, rawTop));
+          const bot    = top + _TAG_H;
+          // Walk outward from startRight: try this X, then alternate L / R
+          // so adjacent labels on the same line don't pile on the same side.
+          for (let k = 0; k < 80; k++) {
+            const dir  = k === 0 ? 0 : (k % 2 === 1 ? -1 : 1);
+            const off  = Math.ceil(k / 2) * xStep;
+            const right = startRight + dir * off;
+            if (right - tagW < xLeft || right > xRight) continue;
+            const left = right - tagW;
+            const collide = _usedRects.some(([t, b, l, r]) =>
+              _rectsOverlap(top - 1, bot + 1, left - 1, right + 1, t, b, l, r));
+            if (!collide) {
+              _usedRects.push([top, bot, left, right]);
+              return { x: left, y: top };
+            }
           }
         }
       }
       return null;
     };
-    // Both sides use the same claimer → shared pool, zero cross-side collisions
-    const _claimCountSlot = _claimSlot;
-    const drawLineTag = (anchorY: number, text: string, color: string, above: boolean, alpha = 1.0) => {
+
+    // Legacy single-axis claimer kept for drawCenterCount compatibility.
+    // It now derives a wide rect at the leftmost column so it never clashes
+    // with the right-aligned label pills.
+    const _claimCountSlot = (prefTagTopY: number, above: boolean): number | null => {
+      const guess = _claimRect(prefTagTopY, above, 28);
+      return guess?.y ?? null;
+    };
+    void _claimCountSlot;
+
+    const drawLineTag = (
+      anchorY: number,
+      text: string,
+      color: string,
+      above: boolean,
+      alpha = 1.0,
+      _compactIgnored = true,
+    ) => {
       ctx.save();
-      ctx.font = 'bold 8px sans-serif';
-      const tw = ctx.measureText(text).width;
-      const tagW = tw + 8;
-      // X: 14 px gap from right edge — label is clearly inside the chart, not glued to axis
-      const tx = Math.max(chartLeft + 2, chartRight - tagW - 14);
-      // Ideal tag position — above → bottom edge clears anchorY by 3px; below → top edge clears by 3px
+      ctx.font = `900 ${_TAG_FONT}px sans-serif`;
+      const tw   = ctx.measureText(text).width;
+      const tagW = Math.ceil(tw + _TAG_PAD * 2);
+      // Ideal Y: above → bottom edge clears anchorY by 3px; below → top edge clears by 3px.
       const idealTagTopY = above ? anchorY - _TAG_H - 3 : anchorY + 3;
-      const finalTagTopY = _claimSlot(idealTagTopY, above);
-      if (finalTagTopY === null) { ctx.restore(); return; }
-      // Pill background
-      roundRect(ctx, tx, finalTagTopY, tagW, _TAG_H, 2);
-      ctx.fillStyle = `${color}18`;
+      // Group labels by CATEGORY (all SUP near each other, all OB together,
+      // all BOS in one column, etc.) so the chart reads as organized clusters
+      // instead of random scatter. Each category gets its own column slot.
+      let catKey: string;
+      if      (/OB/i.test(text))                catKey = 'OB';
+      else if (/FVG/i.test(text))               catKey = 'FVG';
+      else if (/SSL/i.test(text))               catKey = 'SSL';
+      else if (/BSL/i.test(text))               catKey = 'BSL';
+      else if (/EQ[HL]/i.test(text))            catKey = 'EQ';
+      else if (/CH[oO]?CH/i.test(text))         catKey = 'CHOCH';
+      else if (/BOS/i.test(text))               catKey = 'BOS';
+      else if (/SUP/i.test(text))               catKey = 'SUP';
+      else if (/RES/i.test(text))               catKey = 'RES';
+      else if (/DAY\s*H/i.test(text))           catKey = 'DAYH';
+      else if (/DAY\s*L/i.test(text))           catKey = 'DAYL';
+      else if (/PREV\s*H/i.test(text))          catKey = 'PREVH';
+      else if (/PREV\s*L/i.test(text))          catKey = 'PREVL';
+      else                                       catKey = 'GEN';
+      let seed = 0;
+      for (let i = 0; i < catKey.length; i++) seed = (seed * 131 + catKey.charCodeAt(i)) | 0;
+      const slot = _claimRect(idealTagTopY, above, tagW, seed);
+      if (!slot) { ctx.restore(); return; }
+      const { x: tx, y: ty } = slot;
+      // Opaque dark pill so the colored text always reads cleanly on the chart.
+      roundRect(ctx, tx, ty, tagW, _TAG_H, 3);
+      ctx.fillStyle   = 'rgba(10,15,25,0.88)';
       ctx.globalAlpha = alpha;
       ctx.fill();
-      // Pill border
+      // Strong colored border so each label clearly carries its line's identity.
       ctx.strokeStyle = color;
-      ctx.lineWidth = 0.7;
-      ctx.globalAlpha = 0.45 * alpha;
-      roundRect(ctx, tx, finalTagTopY, tagW, _TAG_H, 2);
+      ctx.lineWidth   = 1.2;
+      ctx.globalAlpha = 0.95 * alpha;
+      roundRect(ctx, tx, ty, tagW, _TAG_H, 3);
       ctx.stroke();
-      // Text
-      ctx.fillStyle = color;
-      ctx.globalAlpha = 0.92 * alpha;
-      ctx.textAlign = 'left';
-      ctx.fillText(text, tx + 4, finalTagTopY + _TAG_H - 3);
+      // Label text — full opacity, with a soft glow that gives it weight on dark candles.
+      ctx.shadowColor = 'rgba(0,0,0,0.9)';
+      ctx.shadowBlur  = 2;
+      ctx.fillStyle   = color;
+      ctx.globalAlpha = alpha;
+      ctx.textAlign   = 'left';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(text, tx + _TAG_PAD, ty + _TAG_H / 2 + 0.5);
+      ctx.shadowBlur  = 0;
       ctx.restore();
     };
 
     // Draws line-specific count near first visible candle with a guide connector.
     // sourceCode keeps identity obvious (OB/FVG/SUP/RES/LIQ/BOS/CH/EQ...)
-    const drawCenterCount = (
-      anchorY: number,
-      countText: string,
-      color: string,
-      above: boolean,
-      alpha = 1.0,
-      fresh = false,
-      sourceCode = '',
-    ) => {
-      const baseCount = countText.replace(/^\s*·\s*/, '').trim();
-      const text = sourceCode ? `${sourceCode} ${baseCount}` : baseCount;
-      if (!text) return;
-
-      // Parse magnitude to drive intensity
-      const parseVal = (s: string): number => {
-        const m = s.match(/([\d.]+)([KkMm]?)/);
-        if (!m) return 0;
-        const n = parseFloat(m[1]);
-        const sfx = m[2].toUpperCase();
-        return sfx === 'M' ? n * 1_000_000 : sfx === 'K' ? n * 1_000 : n;
-      };
-      const nums = Array.from(baseCount.matchAll(/([\d.]+[KkMm]?)/g)).map(m => parseVal(m[1]));
-      const mag       = nums.length ? Math.max(...nums) : 0;
-      const intensity = Math.min(1, mag <= 0 ? 0 : mag < 500 ? 0.20 : mag < 2_000 ? 0.50 : mag < 5_000 ? 0.75 : 1.0);
-
-      const glowBlur = intensity > 0.70 ? 4 + intensity * 8 : 0;
-      const lineW    = 1.0 + intensity * 0.8;
-
-      ctx.save();
-      // Scale font UP when count dominates (high intensity = institutional-grade signal)
-      const fontSize = intensity > 0.85 ? 12 : intensity > 0.65 ? 11 : 10;
-      ctx.font = `bold ${fontSize}px "Segoe UI", Arial, sans-serif`;
-      const tw   = ctx.measureText(text).width;
-      const tagH = intensity > 0.85 ? 18 : _TAG_H;
-      const tagW = tw + 12;
-
-      // X: pill right-edge sits 8px before first visible candle.
-      // Clamp to chartLeft+4 so it never goes off-screen.
-      const firstCandleX = idxToX(startIdx) - candleStep / 2;
-      const idealTx      = firstCandleX - tagW - 8;
-      const tx           = Math.max(chartLeft + 4, idealTx);
-
-      // Mobile guard: if pill would still overlap the candle body, skip entirely
-      if (tx + tagW > firstCandleX - 2) { ctx.restore(); return; }
-
-      // Claim a Y slot from the shared pool — guarantees no overlap with right labels
-      const idealTagTopY = above ? anchorY - tagH - 3 : anchorY + 3;
-      const finalTy = _claimCountSlot(idealTagTopY, above);
-      if (finalTy === null) { ctx.restore(); return; }
-      const centerY = finalTy + tagH / 2;
-
-      // Guide connector: visually ties this count pill to its exact chart line
-      ctx.beginPath();
-      ctx.moveTo(tx + tagW + 1, centerY);
-      ctx.lineTo(Math.max(tx + tagW + 2, firstCandleX - 2), anchorY);
-      ctx.strokeStyle = color;
-      ctx.lineWidth = 1;
-      ctx.globalAlpha = (0.35 + intensity * 0.35) * alpha;
-      ctx.setLineDash([2, 2]);
-      ctx.stroke();
-      ctx.setLineDash([]);
-
-      // ── NEW-ZONE pulse ring ────────────────────────────────────────────────
-      if (fresh) {
-        const pulse = (Math.sin(_t / 450) + 1) / 2;
-        const ringR = tagW / 2 + 2 + pulse * 5;
-        ctx.beginPath();
-        ctx.arc(tx + tagW / 2, centerY, ringR, 0, Math.PI * 2);
-        ctx.strokeStyle = color;
-        ctx.lineWidth   = 1.2;
-        ctx.globalAlpha = (0.55 - pulse * 0.45) * alpha;
-        ctx.shadowColor = color;
-        ctx.shadowBlur  = 6;
-        ctx.stroke();
-        ctx.shadowBlur  = 0;
-      }
-
-      // Dark opaque background — readable on any chart colour
-      roundRect(ctx, tx, finalTy, tagW, tagH, 3);
-      ctx.fillStyle   = 'rgba(8,12,18,0.90)';
-      ctx.globalAlpha = alpha;
-      ctx.fill();
-
-      // Coloured border — glows at high intensity
-      if (glowBlur > 0) { ctx.shadowColor = color; ctx.shadowBlur = glowBlur; }
-      ctx.strokeStyle = color;
-      ctx.lineWidth   = lineW;
-      ctx.globalAlpha = (0.55 + intensity * 0.45) * alpha;
-      roundRect(ctx, tx, finalTy, tagW, tagH, 3);
-      ctx.stroke();
-      ctx.shadowBlur  = 0;
-
-      // Text — render full label, then sharply accent only the dominant count token.
-      ctx.fillStyle    = intensity > 0.65 ? color : '#dde3ea';
-      ctx.globalAlpha  = alpha;
-      ctx.textAlign    = 'left';
-      ctx.textBaseline = 'middle';
-      const textX = tx + 6;
-      ctx.fillText(text, textX, centerY);
-
-      // Detect directional count pair (e.g., "↑15.2K ↓6.8K") and highlight only the larger value.
-      const countTokens = Array.from(text.matchAll(/[↑↓]\s*[\d.]+[KkMm]?/g));
-      if (countTokens.length >= 2) {
-        const v0 = parseVal(countTokens[0][0]);
-        const v1 = parseVal(countTokens[1][0]);
-        const dominantIdx = v0 === v1 ? -1 : (v0 > v1 ? 0 : 1);
-        if (dominantIdx >= 0) {
-          const token = countTokens[dominantIdx];
-          const tokenText = token[0];
-          const start = token.index ?? 0;
-          const tokenX = textX + ctx.measureText(text.slice(0, start)).width;
-          const tokenW = ctx.measureText(tokenText).width;
-          const tokenH = tagH - 6;
-          const tokenY = centerY - tokenH / 2;
-
-          // Focus pill behind just the dominant number.
-          roundRect(ctx, tokenX - 2, tokenY, tokenW + 4, tokenH, 2);
-          ctx.fillStyle = 'rgba(3, 10, 18, 0.88)';
-          ctx.globalAlpha = alpha;
-          ctx.fill();
-
-          // Crisp bright text + glow only for dominant token.
-          ctx.shadowColor = color;
-          ctx.shadowBlur = 8;
-          ctx.fillStyle = color;
-          ctx.font = `900 ${fontSize}px "Segoe UI", Arial, sans-serif`;
-          ctx.fillText(tokenText, tokenX, centerY);
-          ctx.shadowBlur = 0;
-        }
-      }
-
-      ctx.textBaseline = 'alphabetic';
-      ctx.restore();
-    };
+    const drawCenterCount = (..._args: unknown[]) => { void _args; };
 
     const formatPushTag = (up: number, down: number): string => {
       const u = Math.max(0, Math.round(up));
@@ -1501,108 +1433,7 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
     ctx.fillStyle = CFG.BG;
     ctx.fillRect(0, 0, W, H);
 
-    // ── LEGEND STRIP — always visible top bar ────────────────────────
-    // Two rows × 19px. Each item: colored swatch + short label.
-    // Row 1: Day levels + Previous levels + Structure
-    // Row 2: Zones (FVG, OB, Liquidity)
-    {
-      const lY = CFG.PAD_TOP;          // strip top
-      const lH = CFG.LEGEND_H;         // strip height
-      const row1Y = lY + 13;           // text baseline row 1
-      const row2Y = lY + 28;           // text baseline row 2
-
-      // Strip background
-      ctx.fillStyle = 'rgba(13,17,28,0.97)';
-      ctx.fillRect(0, lY, W, lH);
-      // Bottom border
-      ctx.strokeStyle = 'rgba(255,255,255,0.08)';
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.moveTo(0, lY + lH);
-      ctx.lineTo(W, lY + lH);
-      ctx.stroke();
-
-      ctx.font = 'bold 9.5px sans-serif';
-      ctx.textAlign = 'left';
-
-      // Helper: draw colored line swatch + text
-      const lItem = (x: number, y: number, color: string, text: string, dash: number[] = []) => {
-        // Swatch (horizontal line segment)
-        ctx.save();
-        ctx.strokeStyle = color;
-        ctx.lineWidth = 2;
-        ctx.setLineDash(dash);
-        ctx.beginPath();
-        ctx.moveTo(x, y - 3);
-        ctx.lineTo(x + 14, y - 3);
-        ctx.stroke();
-        ctx.setLineDash([]);
-        ctx.restore();
-        // Label
-        ctx.fillStyle = color;
-        ctx.fillText(text, x + 17, y);
-        const tw = ctx.measureText(text).width;
-        return x + 17 + tw + 10;  // next x
-      };
-
-      // Helper: draw colored filled rect swatch + text
-      const zItem = (x: number, y: number, color: string, text: string) => {
-        ctx.fillStyle = color;
-        ctx.globalAlpha = 0.8;
-        ctx.fillRect(x, y - 8, 12, 9);
-        ctx.globalAlpha = 1;
-        // slim border
-        ctx.strokeStyle = color;
-        ctx.lineWidth = 1;
-        ctx.strokeRect(x, y - 8, 12, 9);
-        ctx.fillStyle = color;
-        ctx.fillText(text, x + 15, y);
-        const tw = ctx.measureText(text).width;
-        return x + 15 + tw + 10;
-      };
-
-      // Helper: draw diamond swatch + text
-      const dItem = (x: number, y: number, color: string, text: string) => {
-        ctx.fillStyle = color;
-        ctx.beginPath();
-        ctx.moveTo(x + 5, y - 7);
-        ctx.lineTo(x + 10, y - 3);
-        ctx.lineTo(x + 5, y + 1);
-        ctx.lineTo(x, y - 3);
-        ctx.closePath();
-        ctx.fill();
-        ctx.fillStyle = color;
-        ctx.fillText(text, x + 14, y);
-        const tw = ctx.measureText(text).width;
-        return x + 14 + tw + 10;
-      };
-
-      // ROW 1: Key levels + structure lines
-      let cx = 6;
-      cx = lItem(cx, row1Y, CFG.CDH,        'DAY H',  []);
-      cx = lItem(cx, row1Y, CFG.CDL,        'DAY L',  []);
-      cx = lItem(cx, row1Y, CFG.PDH,        'PREV H', [8, 4]);
-      cx = lItem(cx, row1Y, CFG.PDL,        'PREV L', [8, 4]);
-      cx = lItem(cx, row1Y, CFG.SUPPORT,    'SUP',    [2, 4]);
-      cx = lItem(cx, row1Y, CFG.RESISTANCE, 'RES',    [2, 4]);
-      cx = lItem(cx, row1Y, CFG.BOS_BULL,   'BOS↑',   [4, 3]);
-      cx = lItem(cx, row1Y, CFG.BOS_BEAR,   'BOS↓',   [4, 3]);
-      cx = lItem(cx, row1Y, CFG.CHOCH_BULL, 'CHoCH↑', []);
-           lItem(cx, row1Y, CFG.CHOCH_BEAR, 'CHoCH↓', []);
-
-      // ROW 2: Zones + liquidity
-      let cx2 = 6;
-      cx2 = zItem(cx2, row2Y, CFG.FVG_BULL_BORDER,  '★FVG▲');
-      cx2 = zItem(cx2, row2Y, CFG.FVG_BEAR_BORDER,  '★FVG▼');
-      cx2 = zItem(cx2, row2Y, CFG.OB_BULL_BORDER,   'OB▲');
-      cx2 = zItem(cx2, row2Y, CFG.OB_BEAR_BORDER,   'OB▼');
-      cx2 = dItem(cx2, row2Y, CFG.LIQ_BUY,          'BSL');
-      cx2 = dItem(cx2, row2Y, CFG.LIQ_SELL,         'SSL');
-      cx2 = dItem(cx2, row2Y, CFG.IND_COLOR,         'EQH/EQL');
-      cx2 = zItem(cx2, row2Y, '#10b981',             '\u25B2POI');
-      cx2 = zItem(cx2, row2Y, '#ef4444',             '\u25BCPOI');
-           lItem(cx2, row2Y, CFG.CURRENT_PRICE,     'LTP',    [5, 3]);
-    }
+    // Canvas legend removed; header now carries the summary and the plot starts higher.
 
     // ── Grid — alternating band shading ───────────────────────────
     const gridSteps = 8;
@@ -1776,11 +1607,11 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
       ctx.save();
       if (obProx !== 'off') { ctx.shadowColor = borderColor; ctx.shadowBlur = obProx === 'hot' ? 12 + 8 * _pF : 5; }
       ctx.fillStyle   = borderColor;
-      ctx.globalAlpha = obProx === 'hot' ? 0.8 + 0.2 * _pF : obProx === 'warm' ? 0.75 : (o.mitigated ? CFG.OB_MITIGATED_ALPHA : 0.28);
+      ctx.globalAlpha = obProx === 'hot' ? 0.85 + 0.15 * _pF : obProx === 'warm' ? 0.80 : (o.mitigated ? CFG.OB_MITIGATED_ALPHA : 0.60);
       ctx.fillRect(x1, y1, obAccW, zoneH);
       // Top and bottom border lines — sharp glow on approach
       ctx.strokeStyle = borderColor;
-      ctx.lineWidth   = o.mitigated ? 0.5 : obProx === 'hot' ? 2.5 + _pM : obProx === 'warm' ? 1.8 : 0.6;
+      ctx.lineWidth   = o.mitigated ? 0.8 : obProx === 'hot' ? 2.8 + _pM : obProx === 'warm' ? 2.0 : 1.3;
       ctx.setLineDash(o.mitigated ? [6, 4] : []);
       ctx.globalAlpha = obProx === 'hot' ? 0.85 + 0.15 * _pF : obProx === 'warm' ? 0.75 : (o.mitigated ? CFG.OB_MITIGATED_ALPHA : 0.28);
       ctx.beginPath();
@@ -1842,10 +1673,10 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
           }
         : quality === 'STANDARD'
         ? {
-            fillAlpha:     isBull ? 0.07 : 0.07,
-            hatchAlpha:    isBull ? 0.14 : 0.14,
-            borderW:       1.2,
-            midW:          0.8,
+            fillAlpha:     isBull ? 0.09 : 0.09,
+            hatchAlpha:    isBull ? 0.18 : 0.18,
+            borderW:       1.6,
+            midW:          0.9,
             midDash:       [4, 4],
             borderDash:    [5, 4],
             glowEnabled:   true,
@@ -2038,10 +1869,10 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
         ctx.shadowBlur  = isHot ? 14 + 8 * _pF : 5 + 3 * _pM;
       }
       ctx.strokeStyle = color;
-      ctx.lineWidth   = isHot ? lineW + 1.5 + _pM * 0.8 : isWarm ? lineW + 0.8 : lineW;
+      ctx.lineWidth   = isHot ? lineW + 1.5 + _pM * 0.8 : isWarm ? lineW + 0.9 : lineW + 0.4;
       ctx.setLineDash(dash);
-      // Always clearly visible — base 0.65, hot 0.95, warm 0.80
-      ctx.globalAlpha = isHot ? 0.90 + 0.10 * _pF : isWarm ? 0.80 : 0.65;
+      // Always clearly visible — base 0.85, hot 0.95+, warm 0.92
+      ctx.globalAlpha = isHot ? 0.92 + 0.08 * _pF : isWarm ? 0.92 : 0.85;
       ctx.beginPath();
       ctx.moveTo(chartLeft, y);
       ctx.lineTo(chartRight, y);
@@ -4219,6 +4050,18 @@ function computeChartSignal(
 
 const SymbolChartCard = memo<{ data: SymbolChartData | null; name: string; liveSpot?: number; forceChartHeight?: number; fullPage?: boolean; compassIndex?: CompassIndex | null }>(({ data, name, liveSpot, forceChartHeight, fullPage = false, compassIndex }) => {
   const [timeframe, setTimeframe] = useState<'1h' | '15m' | '5m' | '3m'>('5m');
+  const chartToneStyles = {
+    emerald: { color: '#bbf7d0', backgroundColor: 'rgba(16, 185, 129, 0.30)', borderColor: 'rgba(16, 185, 129, 0.70)' },
+    rose:    { color: '#fecdd3', backgroundColor: 'rgba(244, 63, 94, 0.30)', borderColor: 'rgba(244, 63, 94, 0.70)' },
+    amber:   { color: '#fde68a', backgroundColor: 'rgba(245, 158, 11, 0.30)', borderColor: 'rgba(245, 158, 11, 0.70)' },
+    violet:  { color: '#ddd6fe', backgroundColor: 'rgba(139, 92, 246, 0.30)', borderColor: 'rgba(139, 92, 246, 0.70)' },
+    sky:     { color: '#bae6fd', backgroundColor: 'rgba(14, 165, 233, 0.30)', borderColor: 'rgba(14, 165, 233, 0.70)' },
+    orange:  { color: '#fed7aa', backgroundColor: 'rgba(249, 115, 22, 0.30)', borderColor: 'rgba(249, 115, 22, 0.70)' },
+    cyan:    { color: '#a5f3fc', backgroundColor: 'rgba(34, 211, 238, 0.30)', borderColor: 'rgba(34, 211, 238, 0.70)' },
+    blue:    { color: '#bfdbfe', backgroundColor: 'rgba(59, 130, 246, 0.30)', borderColor: 'rgba(59, 130, 246, 0.70)' },
+    slate:   { color: '#e2e8f0', backgroundColor: 'rgba(100, 116, 139, 0.45)', borderColor: 'rgba(148, 163, 184, 0.70)' },
+  } as const;
+
   // Chart opens in a dedicated /chart/[symbol] tab — no in-page modal needed.
   const chartH = forceChartHeight ?? CFG.CHART_H;
 
@@ -4328,6 +4171,116 @@ const SymbolChartCard = memo<{ data: SymbolChartData | null; name: string; liveS
       bosBear: recentStr.filter(e => e.type === 'BOS_BEAR' || e.type === 'CHOCH_BEAR').length,
     };
   }, [fvgList, obList, liqList, fractals, inducements, structure, candles.length]);
+
+  const liquidityUpFeed = stats.fvgBull + stats.obBull + stats.bsl + stats.indHigh;
+  const liquidityDownFeed = stats.fvgBear + stats.obBear + stats.ssl + stats.indLow;
+
+  // ── LIVE PARTICIPANT BREAKDOWN per draw line ─────────────────────────────
+  // At every zone (FVG / OB / SSL / BSL / EQH / EQL / BOS / CHoCH / DAY /
+  // PREV / SUP / RES) we want to know who is actually defending it:
+  //   ▲ UP   = bulls pushing the price up at that level
+  //          = PE writers (sold puts → bullish floor)  +  buy-side candle vol
+  //   ▼ DOWN = bears pushing the price down at that level
+  //          = CE writers (sold calls → bearish ceiling) + sell-side candle vol
+  // So a trader can read e.g. "SSL ▲5.2M ▼3.1M" as "5.2M bulls defending
+  // this floor vs 3.1M bears trying to break it down". Recomputes every
+  // tick (deps include candles + spot + all source arrays).
+  const volStats = useMemo(() => {
+    const activeFvg = fvgList.filter(f => !f.filled);
+    const activeOb  = obList.filter(o => !o.mitigated);
+    const activeLiq = liqList.filter(l => !l.swept);
+    const recentStr = structure.filter(e => (candles.length - 1 - e.idx) <= 20);
+    const recentInd = inducements.filter(i => (candles.length - 1 - i.idx) <= 40);
+
+    type Bucket = { up: number; down: number; upCount: number; downCount: number; touched: boolean };
+    const mkBucket = (): Bucket => ({ up: 0, down: 0, upCount: 0, downCount: 0, touched: false });
+
+    // Live touch detection — is the current price reaching this zone now?
+    // Tight threshold (10 bps of price) so the highlight only fires when the
+    // candle is genuinely testing the level, not just "in the neighbourhood".
+    const currentPrice = (safeLiveSpot && safeLiveSpot > 0)
+      ? safeLiveSpot
+      : (data?.spot || candles[candles.length - 1]?.c || 0);
+    const tol = currentPrice > 0 ? currentPrice * 0.001 : 0;
+    const touchLine = (price: number): boolean =>
+      tol > 0 && Number.isFinite(price) && price > 0 && Math.abs(price - currentPrice) <= tol;
+    const touchZone = (top: number, bottom: number): boolean =>
+      currentPrice > 0 && currentPrice >= bottom - tol && currentPrice <= top + tol;
+
+    // Split one line's participants into bulls-up / bears-down.
+    // OI (live, true participant count) is preferred; candle bull/bear volume
+    // is added on top so historical conviction is also reflected. If neither
+    // signal is present we fall back to splitting total_vol 50/50.
+    const splitItem = (
+      b: Bucket,
+      x: { ce_oi?: number; pe_oi?: number; bull_vol?: number; bear_vol?: number; total_vol?: number },
+    ) => {
+      const ce = Number(x?.ce_oi)   || 0;
+      const pe = Number(x?.pe_oi)   || 0;
+      const bv = Number(x?.bull_vol) || 0;
+      const sv = Number(x?.bear_vol) || 0;
+      let up = pe + bv;
+      let dn = ce + sv;
+      if (up === 0 && dn === 0) {
+        const tv = Number(x?.total_vol) || 0;
+        if (tv > 0) { up = tv / 2; dn = tv / 2; }
+      }
+      if (up === 0 && dn === 0) return;
+      b.up += up; b.down += dn;
+      if (up >= dn) b.upCount += 1; else b.downCount += 1;
+    };
+
+    // Structure / inducement events have only a single candle to read from —
+    // split its volume by candle direction (green = bulls, red = bears).
+    const splitEvent = (b: Bucket, idx: number) => {
+      const c = candles[idx];
+      if (!c) return;
+      const v = Number(c.v) || 0;
+      if (v <= 0) return;
+      let up = 0, dn = 0;
+      if (c.c > c.o) up = v;
+      else if (c.c < c.o) dn = v;
+      else { up = v / 2; dn = v / 2; }
+      b.up += up; b.down += dn;
+      if (up >= dn) b.upCount += 1; else b.downCount += 1;
+    };
+
+    const fvg = mkBucket(), ob = mkBucket(), bsl = mkBucket(), ssl = mkBucket();
+    const eqH = mkBucket(), eqL = mkBucket(), bos = mkBucket();
+    const dayH = mkBucket(), dayL = mkBucket(), prevH = mkBucket(), prevL = mkBucket();
+    const sup = mkBucket(), res = mkBucket();
+
+    activeFvg.forEach(f => { splitItem(fvg, f); if (touchZone(f.top, f.bottom)) fvg.touched = true; });
+    activeOb .forEach(o => { splitItem(ob,  o); if (touchZone(o.top, o.bottom)) ob.touched  = true; });
+    activeLiq.filter(l => l.type === 'buy_side') .forEach(l => { splitItem(bsl, l); if (touchLine(l.level)) bsl.touched = true; });
+    activeLiq.filter(l => l.type === 'sell_side').forEach(l => { splitItem(ssl, l); if (touchLine(l.level)) ssl.touched = true; });
+    recentInd.filter(i => i.side === 'high').forEach(i => { splitEvent(eqH, i.idx); if (touchLine(candles[i.idx]?.h ?? 0)) eqH.touched = true; });
+    recentInd.filter(i => i.side === 'low') .forEach(i => { splitEvent(eqL, i.idx); if (touchLine(candles[i.idx]?.l ?? 0)) eqL.touched = true; });
+    recentStr.forEach(e => {
+      splitEvent(bos, e.idx);
+      const c = candles[e.idx];
+      if (!c) return;
+      const isBull = e.type === 'BOS_BULL' || e.type === 'CHOCH_BULL';
+      if (touchLine(isBull ? c.h : c.l)) bos.touched = true;
+    });
+    if (levels?.cdh_participants) { splitItem(dayH,  levels.cdh_participants); if (touchLine(levels.cdh)) dayH.touched  = true; }
+    if (levels?.cdl_participants) { splitItem(dayL,  levels.cdl_participants); if (touchLine(levels.cdl)) dayL.touched  = true; }
+    if (levels?.pdh_participants) { splitItem(prevH, levels.pdh_participants); if (touchLine(levels.pdh)) prevH.touched = true; }
+    if (levels?.pdl_participants) { splitItem(prevL, levels.pdl_participants); if (touchLine(levels.pdl)) prevL.touched = true; }
+    (levels?.sr_participants?.support    ?? []).forEach(p => { splitItem(sup, p); if (touchLine(p.price)) sup.touched = true; });
+    (levels?.sr_participants?.resistance ?? []).forEach(p => { splitItem(res, p); if (touchLine(p.price)) res.touched = true; });
+
+    return { fvg, ob, bos, bsl, ssl, eqH, eqL, dayH, dayL, prevH, prevL, sup, res };
+  }, [fvgList, obList, liqList, structure, inducements, levels, candles, safeLiveSpot, data?.spot]);
+
+  // Compact volume formatter — Indian market scale (K / L / Cr) + global (M).
+  const fmtVol = (n: number): string => {
+    if (!Number.isFinite(n) || n <= 0) return '0';
+    if (n >= 1e7) return (n / 1e7).toFixed(n >= 1e8 ? 0 : 1) + 'Cr';
+    if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';
+    if (n >= 1e3) return (n / 1e3).toFixed(n >= 1e4 ? 0 : 1) + 'K';
+    return String(Math.round(n));
+  };
 
   // Chart pattern signal — recomputes on every liveSpot tick (every ~1s)
   // All 10 factors: swing structure, key levels, BOS/CHoCH, FVG, OB, liquidity sweep,
@@ -4623,6 +4576,58 @@ const SymbolChartCard = memo<{ data: SymbolChartData | null; name: string; liveS
           </div>
 
         </div>
+
+        <div className="flex min-w-0 items-center gap-1.5 overflow-x-auto rounded-lg border border-slate-700/50 bg-slate-950/40 px-1.5 py-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+          <span className="inline-flex shrink-0 items-center rounded-full border border-slate-600/70 bg-slate-800/90 px-2 py-0.5 text-[9px] font-black uppercase tracking-[0.16em] text-slate-100">
+            Liquidity
+          </span>
+          {([
+            { label: 'FVG',    b: volStats.fvg   },
+            { label: 'OB',     b: volStats.ob    },
+            { label: 'BOS',    b: volStats.bos   },
+            { label: 'BSL',    b: volStats.bsl   },
+            { label: 'SSL',    b: volStats.ssl   },
+            { label: 'EQH',    b: volStats.eqH   },
+            { label: 'EQL',    b: volStats.eqL   },
+            { label: 'DAY H',  b: volStats.dayH  },
+            { label: 'DAY L',  b: volStats.dayL  },
+            { label: 'PREV H', b: volStats.prevH },
+            { label: 'PREV L', b: volStats.prevL },
+            { label: 'SUP',    b: volStats.sup   },
+            { label: 'RES',    b: volStats.res   },
+          ]).map(item => {
+            const { up, down, upCount, downCount, touched } = item.b;
+            const total = up + down;
+            const dominant = total === 0 ? 'eq' : (up === down ? 'eq' : (up > down ? 'up' : 'down'));
+            return (
+              <div
+                key={item.label}
+                className={`inline-flex shrink-0 items-center gap-1 rounded-full border px-1.5 py-0.5 transition-all ${
+                  touched
+                    ? 'border-amber-300 bg-amber-400/15 shadow-[0_0_14px_rgba(251,191,36,0.85)] ring-2 ring-amber-300/80 animate-pulse'
+                    : 'border-slate-600/70 bg-slate-900/85'
+                }`}
+                title={`${item.label}  ▲ ${upCount} line${upCount === 1 ? '' : 's'} (${fmtVol(up)}) bulls  ·  ▼ ${downCount} line${downCount === 1 ? '' : 's'} (${fmtVol(down)}) bears${touched ? '  • LIVE TOUCH' : ''}`}
+              >
+                <span className={`text-[9px] font-black uppercase tracking-[0.08em] ${touched ? 'text-amber-100' : 'text-slate-100'}`}>{item.label}{touched ? ' ◉' : ''}</span>
+                <span
+                  className="inline-flex items-center gap-1 rounded-full border px-1.5 py-[1px] text-[10px] font-mono font-black tabular-nums"
+                  style={{ ...chartToneStyles.emerald, opacity: dominant === 'down' ? 0.55 : 1 }}
+                >
+                  ▲{fmtVol(up)}
+                  <span className="opacity-90 text-[9px] font-black">·{upCount}</span>
+                </span>
+                <span
+                  className="inline-flex items-center gap-1 rounded-full border px-1.5 py-[1px] text-[10px] font-mono font-black tabular-nums"
+                  style={{ ...chartToneStyles.rose, opacity: dominant === 'up' ? 0.55 : 1 }}
+                >
+                  ▼{fmtVol(down)}
+                  <span className="opacity-90 text-[9px] font-black">·{downCount}</span>
+                </span>
+              </div>
+            );
+          })}
+        </div>
       </div>
 
       {/* Chart Canvas */}
@@ -4871,37 +4876,37 @@ const SymbolChartCard = memo<{ data: SymbolChartData | null; name: string; liveS
                   {renderPair('LIQ', stats.bsl, stats.ssl, CFG.LIQ_BUY, CFG.LIQ_SELL, '↑', '↓')}
                   {renderPair('BOS', stats.bosBull, stats.bosBear, CFG.BOS_BULL, CFG.BOS_BEAR, '↑', '↓')}
                   {renderPair('EQ', stats.indHigh, stats.indLow, CFG.IND_COLOR, '#94a3b8', '↑', '↓')}
+                  <span
+                    className="inline-flex items-center gap-1 px-1 py-0.5 rounded border text-[8px] font-mono"
+                    style={{ borderColor: '#334155', background: 'rgba(15,23,42,0.45)', color: CFG.SUPPORT }}
+                    title={`Support liquidity levels: ${levels?.support?.length ?? 0}`}
+                  >
+                    <span className="text-slate-400 font-semibold">SUP</span>
+                    <span className="font-bold">{levels?.support?.length ?? 0}</span>
+                  </span>
+                  <span
+                    className="inline-flex items-center gap-1 px-1 py-0.5 rounded border text-[8px] font-mono"
+                    style={{ borderColor: '#334155', background: 'rgba(15,23,42,0.45)', color: CFG.RESISTANCE }}
+                    title={`Resistance liquidity levels: ${levels?.resistance?.length ?? 0}`}
+                  >
+                    <span className="text-slate-400 font-semibold">RES</span>
+                    <span className="font-bold">{levels?.resistance?.length ?? 0}</span>
+                  </span>
                 </>
               );
             })()}
           </div>
         </div>
-
-        {/* ── Row 2: Color legend + candle count + timestamp ── */}
-        <div className="flex flex-wrap items-center gap-x-2.5 gap-y-0.5 min-w-0">
-          <span className="inline-flex items-center gap-1 text-[8px] font-semibold" style={{ color: CFG.OB_BULL_BORDER }}>
-            <span className="w-3 h-2 rounded-sm inline-block opacity-60" style={{ background: CFG.OB_BULL_BORDER }} />
-            Bull OB
+        {/* ── Row 2: compact live status ── */}
+        <div className="flex items-center gap-1.5 min-w-0 overflow-x-auto whitespace-nowrap scrollbar-none">
+          <span className="inline-flex items-center rounded-full border border-slate-700/50 bg-slate-900/60 px-2 py-0.5 text-[8px] font-bold uppercase tracking-[0.14em] text-slate-400 shrink-0">
+            LIVE FEED
           </span>
-          <span className="inline-flex items-center gap-1 text-[8px] font-semibold" style={{ color: CFG.OB_BEAR_BORDER }}>
-            <span className="w-3 h-2 rounded-sm inline-block opacity-60" style={{ background: CFG.OB_BEAR_BORDER }} />
-            Bear OB
+          <span className="inline-flex items-center rounded-full border px-2 py-0.5 text-[8px] font-mono font-bold shrink-0" style={{ borderColor: CFG.LIQ_BUY, color: CFG.LIQ_BUY, background: 'rgba(15,23,42,0.45)' }} title="Up-side liquidity signals">
+            UP {liquidityUpFeed}
           </span>
-          <span className="inline-flex items-center gap-1 text-[8px] font-semibold" style={{ color: CFG.FVG_BULL_BORDER }}>
-            <span className="w-3 h-1 inline-block opacity-70" style={{ background: CFG.FVG_BULL_BORDER }} />
-            FVG
-          </span>
-          <span className="inline-flex items-center gap-1 text-[8px] font-semibold" style={{ color: CFG.PDH }}>
-            <span className="w-3 border-t border-dashed inline-block" style={{ borderColor: CFG.PDH }} />
-            PDH/L
-          </span>
-          <span className="inline-flex items-center gap-1 text-[8px] font-semibold" style={{ color: CFG.CDH }}>
-            <span className="w-3 border-t inline-block" style={{ borderColor: CFG.CDH }} />
-            CDH/L
-          </span>
-          <span className="inline-flex items-center gap-1 text-[8px] font-semibold" style={{ color: CFG.SUPPORT }}>
-            <span className="w-3 border-t border-dotted inline-block" style={{ borderColor: CFG.SUPPORT }} />
-            S/R
+          <span className="inline-flex items-center rounded-full border px-2 py-0.5 text-[8px] font-mono font-bold shrink-0" style={{ borderColor: CFG.LIQ_SELL, color: CFG.LIQ_SELL, background: 'rgba(15,23,42,0.45)' }} title="Down-side liquidity signals">
+            DOWN {liquidityDownFeed}
           </span>
           <span className="ml-auto text-[8px] font-mono text-slate-600 tabular-nums shrink-0">
             {candles.length}c

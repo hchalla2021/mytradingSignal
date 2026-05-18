@@ -18,6 +18,8 @@ const SIGNAL_CLASS: Record<TradeZoneSignal, string> = {
 function normalizeSignal(signal: string | undefined | null): TradeZoneSignal {
   if (!signal) return 'UNKNOWN';
   const v = signal.toUpperCase();
+  if (v === 'WEAK_BUY') return 'BUY';
+  if (v === 'WEAK_SELL') return 'SELL';
   if (v === 'STRONG_BUY' || v === 'BUY' || v === 'NEUTRAL' || v === 'SELL' || v === 'STRONG_SELL') {
     return v;
   }

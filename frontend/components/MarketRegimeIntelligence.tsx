@@ -117,12 +117,32 @@ function formatTimeStamp(value: string | null): string {
   return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
+function parseTime(value: string | null | undefined): number | null {
+  if (!value) return null;
+  const ms = Date.parse(value);
+  return Number.isNaN(ms) ? null : ms;
+}
+
 function getTopDrivers(data: RegimeIndex | null): Array<{ key: string; label: string; score: number; signal: string }> {
   if (!data?.factors) return [];
   return Object.entries(data.factors)
     .map(([key, factor]) => ({ key, label: factor.label, score: factor.score, signal: factor.signal }))
     .sort((a, b) => Math.abs(b.score) - Math.abs(a.score))
     .slice(0, 4);
+}
+
+function getTradeGateState(directionStrength: number | null | undefined, isTrendingDay: boolean): {
+  strengthReady: boolean;
+  trendingReady: boolean;
+  tradeReady: boolean;
+} {
+  const strengthReady = (directionStrength ?? 0) >= 50;
+  const trendingReady = isTrendingDay;
+  return {
+    strengthReady,
+    trendingReady,
+    tradeReady: strengthReady && trendingReady,
+  };
 }
 
 // ── Score Gauge ─────────────────────────────────────────────────────────────
@@ -214,6 +234,7 @@ const RegimeCard = memo<{
   const displaySignal = toRegimeSignal(data.regime);
   const tone = signalTone(displaySignal);
   const drivers = getTopDrivers(data);
+  const gate = getTradeGateState(data.directionStrength, data.isTrendingDay);
 
   return (
     <div className={`rounded-2xl border ${cfg.border} bg-gradient-to-br from-slate-800/60 via-slate-800/40 to-slate-900/60 p-3 sm:p-4 shadow-lg ${cfg.glow} transition-all duration-200`}>
@@ -252,7 +273,13 @@ const RegimeCard = memo<{
             Score {data.regimeScore?.toFixed(0) ?? '—'}
           </span>
           {data.directionStrength != null && data.directionStrength > 0 && (
-            <span className={`inline-flex items-center rounded-md border px-2 py-1 text-[10px] font-black tabular-nums ${tone.color} ${tone.bg}`}>
+            <span
+              className={`inline-flex items-center rounded-md border px-2 py-1 text-[10px] font-black tabular-nums transition-all duration-200 ${
+                gate.strengthReady
+                  ? 'text-emerald-200 border-emerald-400/70 bg-emerald-500/25 shadow-[0_0_14px_rgba(16,185,129,0.45)] ring-1 ring-emerald-400/45'
+                  : `${tone.color} ${tone.bg}`
+              }`}
+            >
               Strength {data.directionStrength.toFixed(0)}%
             </span>
           )}
@@ -260,12 +287,18 @@ const RegimeCard = memo<{
       </div>
 
       {/* Trending Day Badge */}
-      <div className={`mb-3 px-3 py-2 rounded-xl ${data.isTrendingDay ? 'bg-gradient-to-r from-emerald-900/30 to-emerald-800/20 border border-emerald-500/30' : 'bg-gradient-to-r from-amber-900/20 to-amber-800/10 border border-amber-500/20'}`}>
+      <div
+        className={`mb-3 px-3 py-2 rounded-xl transition-all duration-200 ${
+          gate.trendingReady
+            ? 'bg-gradient-to-r from-emerald-900/40 to-emerald-800/25 border border-emerald-400/60 shadow-[0_0_16px_rgba(16,185,129,0.35)] ring-1 ring-emerald-400/35'
+            : 'bg-gradient-to-r from-amber-900/20 to-amber-800/10 border border-amber-500/20'
+        }`}
+      >
         <div className="flex flex-wrap items-center justify-between gap-2">
           <div className="flex items-center gap-2 min-w-0">
             <span className="text-lg">{data.isTrendingDay ? '🔥' : '➖'}</span>
             <div>
-              <p className={`text-xs font-black ${data.isTrendingDay ? 'text-emerald-300' : 'text-amber-400'}`}>
+              <p className={`text-xs font-black ${gate.trendingReady ? 'text-emerald-200' : 'text-amber-400'}`}>
                 {data.isTrendingDay ? 'TRENDING DAY' : 'NON-TRENDING DAY'}
               </p>
               <p className="text-[9px] text-slate-400">
@@ -274,8 +307,15 @@ const RegimeCard = memo<{
               </p>
             </div>
           </div>
-          <div className={`px-2 py-1 rounded-lg ${tone.bg} border`}>
-            <p className={`text-xs font-black ${tone.color}`}>{tone.arrow} {displaySignal}</p>
+          <div className="flex items-center gap-1.5">
+            <div className={`px-2 py-1 rounded-lg ${tone.bg} border`}>
+              <p className={`text-xs font-black ${tone.color}`}>{tone.arrow} {displaySignal}</p>
+            </div>
+            {gate.tradeReady && (
+              <span className="inline-flex items-center rounded-md border border-emerald-300/75 bg-emerald-500/25 px-2 py-1 text-[9px] font-black uppercase tracking-[0.14em] text-emerald-100 shadow-[0_0_14px_rgba(16,185,129,0.45)]">
+                Trade Ready
+              </span>
+            )}
           </div>
         </div>
       </div>
@@ -382,18 +422,45 @@ const MarketRegimeIntelligence = memo<{
   };
 
   const sectionSummary = useMemo(() => {
-    const lead = regimeData.NIFTY ?? regimeData.BANKNIFTY ?? regimeData.SENSEX ?? null;
+    const all = [regimeData.NIFTY, regimeData.BANKNIFTY, regimeData.SENSEX].filter((v): v is RegimeIndex => Boolean(v));
+    const lead = all.length > 0
+      ? all
+          .slice()
+          .sort((a, b) => {
+            const tA = parseTime(a.timestamp) ?? 0;
+            const tB = parseTime(b.timestamp) ?? 0;
+            if (tA !== tB) return tB - tA;
+            const scoreA = Math.abs(a.directionStrength ?? 0) + (a.regimeScore ?? 0) * 0.3;
+            const scoreB = Math.abs(b.directionStrength ?? 0) + (b.regimeScore ?? 0) * 0.3;
+            return scoreB - scoreA;
+          })[0]
+      : null;
     const drivers = getTopDrivers(lead);
     const volatility = lead?.context?.vix ?? vixData?.value ?? null;
+    const leadTs = parseTime(lead?.timestamp);
+    const leadAgeSec = leadTs != null ? Math.max(0, (Date.now() - leadTs) / 1000) : null;
+
+    let connectionLabel = 'RECOVERING';
+    if (lead?.dataSource === 'MARKET_CLOSED') {
+      connectionLabel = 'MARKET CLOSED';
+    } else if (isConnected) {
+      connectionLabel = leadAgeSec != null && leadAgeSec > 12 ? 'LIVE FEED DELAYED' : 'LIVE FEED';
+    }
 
     return {
       lead,
       drivers,
       volatility,
-      updatedAt: formatTimeStamp(lastUpdate ?? lead?.timestamp ?? null),
-      connectionLabel: isConnected ? 'LIVE FEED' : 'RECOVERING',
+      updatedAt: formatTimeStamp(lead?.timestamp ?? lastUpdate ?? null),
+      connectionLabel,
+      leadAgeSec,
     };
   }, [isConnected, lastUpdate, regimeData.BANKNIFTY, regimeData.NIFTY, regimeData.SENSEX, vixData?.value]);
+
+  const leadGate = getTradeGateState(
+    sectionSummary.lead?.directionStrength,
+    sectionSummary.lead?.isTrendingDay ?? false
+  );
 
   return (
     <section className={`mt-6 sm:mt-6 border-2 ${sectionBorder} rounded-2xl p-3 sm:p-4 bg-gradient-to-br ${sectionBg} backdrop-blur-sm shadow-xl overflow-hidden`}>
@@ -451,7 +518,13 @@ const MarketRegimeIntelligence = memo<{
             </div>
             <div className="rounded-xl border border-slate-800/55 bg-slate-900/55 p-2.5">
               <p className="text-[8px] font-bold uppercase tracking-[0.14em] text-slate-500">Strength</p>
-              <p className="mt-1 text-lg font-black text-cyan-300">
+              <p
+                className={`mt-1 text-lg font-black transition-all duration-200 ${
+                  leadGate.strengthReady
+                    ? 'text-emerald-200 drop-shadow-[0_0_8px_rgba(16,185,129,0.55)]'
+                    : 'text-cyan-300'
+                }`}
+              >
                 {sectionSummary.lead?.directionStrength != null ? `${sectionSummary.lead.directionStrength.toFixed(0)}%` : '—'}
               </p>
             </div>
@@ -491,13 +564,32 @@ const MarketRegimeIntelligence = memo<{
             </div>
             <div className="rounded-xl border border-slate-800/55 bg-slate-900/55 p-2.5">
               <p className="text-[8px] font-bold uppercase tracking-[0.14em] text-slate-500">Data Source</p>
-              <p className="mt-1 font-black text-slate-100">{sectionSummary.lead?.dataSource ?? '—'}</p>
+              <p className="mt-1 font-black text-slate-100">
+                {sectionSummary.lead?.dataSource ?? '—'}
+                {sectionSummary.leadAgeSec != null && sectionSummary.lead?.dataSource === 'LIVE' ? ` · ${Math.round(sectionSummary.leadAgeSec)}s ago` : ''}
+              </p>
             </div>
-            <div className="rounded-xl border border-slate-800/55 bg-slate-900/55 p-2.5">
+            <div
+              className={`rounded-xl border p-2.5 transition-all duration-200 ${
+                leadGate.trendingReady
+                  ? 'border-emerald-400/60 bg-emerald-900/20 shadow-[0_0_12px_rgba(16,185,129,0.28)]'
+                  : 'border-slate-800/55 bg-slate-900/55'
+              }`}
+            >
               <p className="text-[8px] font-bold uppercase tracking-[0.14em] text-slate-500">Trending Day</p>
-              <p className="mt-1 font-black text-slate-100">{sectionSummary.lead ? (sectionSummary.lead.isTrendingDay ? 'YES' : 'NO') : '—'}</p>
+              <p className={`mt-1 font-black ${leadGate.trendingReady ? 'text-emerald-200' : 'text-slate-100'}`}>
+                {sectionSummary.lead ? (sectionSummary.lead.isTrendingDay ? 'YES' : 'NO') : '—'}
+              </p>
             </div>
           </div>
+
+          {leadGate.tradeReady && (
+            <div className="mt-2 rounded-xl border border-emerald-300/70 bg-emerald-500/20 px-3 py-2 text-center shadow-[0_0_16px_rgba(16,185,129,0.35)]">
+              <p className="text-[10px] font-black uppercase tracking-[0.16em] text-emerald-100">
+                Priority Match: Trending Day YES + Strength &gt;= 50%
+              </p>
+            </div>
+          )}
         </aside>
       </div>
 

@@ -101,7 +101,6 @@ const EdgeAICommandDeck = memo(({ snapshot }: { snapshot: EdgeAISnapshot }) => {
           <p className="text-[11px] font-black uppercase tracking-[0.12em] text-teal-200">MarketEdge AI Command Deck</p>
         </div>
         <div className="flex items-center gap-1.5 text-[9px] font-black uppercase tracking-[0.1em]">
-          <span className="rounded border border-cyan-400/40 bg-cyan-500/10 px-2 py-1 text-cyan-200">{snapshot.provider}</span>
           <span className={`rounded border px-2 py-1 ${snapshot.streamState === 'LIVE' ? 'border-emerald-400/45 bg-emerald-500/10 text-emerald-200' : 'border-slate-600/45 bg-slate-700/20 text-slate-300'}`}>
             {snapshot.streamState}
           </span>

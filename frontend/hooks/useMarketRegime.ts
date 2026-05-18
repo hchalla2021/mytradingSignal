@@ -160,7 +160,6 @@ export function useMarketRegime() {
       saveToStorage(next);
       return next;
     });
-    setLastUpdate(new Date().toISOString());
   }, []);
 
   const wsUrlsRef = useRef<string[]>([]);
@@ -275,6 +274,12 @@ export function useMarketRegime() {
       wsRef.current?.close();
     };
   }, [connect, mergeData]);
+
+  useEffect(() => {
+    if (regimeData.NIFTY || regimeData.BANKNIFTY || regimeData.SENSEX) {
+      setLastUpdate(new Date().toISOString());
+    }
+  }, [regimeData]);
 
   return { regimeData, isConnected, lastUpdate };
 }

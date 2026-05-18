@@ -616,4 +616,32 @@ const CRTBTSTCard = memo<CRTBTSTCardProps>(({ symbol, name, data }) => {
 CRTBTSTCard.displayName = 'CRTBTSTCard';
 
 export { CRTBTSTCard };
-export default CRTBTSTCard;
+
+/**
+ * Add "Show" toggle functionality for BTST Trade Setup.
+ */
+const BTSTTradeSetup = memo(() => {
+  const [isVisible, setIsVisible] = useState(false);
+
+  const toggleVisibility = () => setIsVisible(!isVisible);
+
+  return (
+    <div className="btst-trade-setup">
+      <button
+        className="toggle-button bg-blue-500 text-white px-4 py-2 rounded"
+        onClick={toggleVisibility}
+      >
+        {isVisible ? 'Hide' : 'Show'}
+      </button>
+      {isVisible && (
+        <div className="trade-setup-details">
+          {/* Add detailed BTST Trade Setup content here */}
+          <p>High-probability CRT continuation setup</p>
+          <p>BTST signal is in an extreme conviction state</p>
+        </div>
+      )}
+    </div>
+  );
+});
+BTSTTradeSetup.displayName = 'BTSTTradeSetup';
+export default BTSTTradeSetup;
