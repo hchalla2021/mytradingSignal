@@ -435,11 +435,6 @@ const RiskBar: React.FC<{ label: string; value: number }> = ({ label, value }) =
   );
 };
 
-// Skeleton block for loading state
-const Skeleton: React.FC<{ className?: string }> = ({ className = '' }) => (
-  <div className={`animate-pulse rounded-md bg-slate-800/60 ${className}`} />
-);
-
 // ── main component ───────────────────────────────────────────────────────────
 
 export default function ChartContent({ symbol: rawSymbol }: { symbol: string }) {

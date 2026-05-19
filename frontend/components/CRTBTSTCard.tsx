@@ -371,7 +371,7 @@ const CRTBTSTCard = memo<CRTBTSTCardProps>(({ symbol, name, data }) => {
         </div>
 
         {/* AI CRT Command Deck hidden (was flickering) */}
-        {false && ai && (
+        {ai && (false as boolean) && (
           <div className="rounded-xl border border-cyan-500/25 bg-gradient-to-br from-cyan-500/10 to-slate-900/40 p-3 shadow-inner shadow-cyan-500/10">
             <div className="flex items-center justify-between gap-2 mb-3">
               <div>
