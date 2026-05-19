@@ -1,0 +1,42 @@
+
+> mydailytradingsignals-frontend@1.0.0 build
+> next build
+
+   Creating an optimized production build ...
+ ✓ Compiled successfully
+   Skipping linting
+   Checking validity of types ...
+   Collecting page data ...
+   Generating static pages (0/8) ...
+   Generating static pages (2/8) 
+   Generating static pages (4/8) 
+   Generating static pages (6/8) 
+ ✓ Generating static pages (8/8) 
+   Finalizing page optimization ...
+   Collecting build traces ...
+
+Route (app)                                Size     First Load JS
+┌ λ /                                      15.4 kB        99.2 kB
+├ λ /_not-found                            0 B                0 B
+├ λ /api/admin/restart                     0 B                0 B
+├ λ /chart-intel                           175 B          88.2 kB
+├ λ /chart-intel/[symbol]                  64.4 kB         148 kB
+├ λ /chart/[symbol]                        1.53 kB        82.6 kB
+├ λ /dashboard                             6.18 kB          90 kB
+└ λ /login                                 2.4 kB         83.5 kB
++ First Load JS shared by all              81.1 kB
+  ├ chunks/472-2bc40310185f92a3.js         27.5 kB
+  ├ chunks/fd9d1056-6fdb0316872d9bf0.js    51.1 kB
+  ├ chunks/main-app-8366edd6b899b633.js    227 B
+  └ chunks/webpack-f8f5ed1bf6d19c1c.js     2.29 kB
+
+Route (pages)                              Size     First Load JS
+─   /_app                                  0 B            80.8 kB
++ First Load JS shared by all              80.8 kB
+  ├ chunks/framework-5fedab720816c92f.js   45.4 kB
+  ├ chunks/main-895b45be87c850b9.js        32.9 kB
+  ├ chunks/pages/_app-ecf6aca8d7b1a880.js  299 B
+  └ chunks/webpack-f8f5ed1bf6d19c1c.js     2.29 kB
+
+λ  (Server)  server-side renders at runtime (uses getInitialProps or getServerSideProps)
+

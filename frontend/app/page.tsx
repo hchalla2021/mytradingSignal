@@ -23,6 +23,9 @@ const IndexCard = dynamic(() => import('@/components/IndexCard'), {
   )
 });
 
+const TopAISignalBar = dynamic(() => import('@/components/TopAISignalBar'), { ssr: false });
+const MarketPulseStrip = dynamic(() => import('@/components/MarketPulseStrip'), { ssr: false });
+const FIIDIIFlowStrip = dynamic(() => import('@/components/FIIDIIFlowStrip'), { ssr: false });
 const VolumePulseCard = dynamic(() => import('@/components/VolumePulseCard'), { ssr: false });
 const TrendBaseCard = dynamic(() => import('@/components/TrendBaseCard'), { ssr: false });
 const SectionTitle = dynamic(() => import('@/components/SectionTitle'), { ssr: false });
@@ -531,6 +534,15 @@ export default function Home() {
 
       {/* Main Dashboard - Full Width */}
       <div className="w-full px-2 sm:px-4 lg:px-8 xl:px-12 py-3 lg:py-5">
+        {/* 📊 MARKET PULSE STRIP — institutional bird's-eye KPIs */}
+        <MarketPulseStrip marketData={marketData} isConnected={isConnected} />
+
+        {/* 💸 FII / DII FLOW — live tick-derived intraday proxy */}
+        <FIIDIIFlowStrip marketData={marketData} isConnected={isConnected} />
+
+        {/* 🧠 AI SIGNAL DECK — institutional-grade per-index status cards */}
+        <TopAISignalBar marketData={marketData} isConnected={isConnected} />
+
         {/* Live Market Indices - With Border */}
         <div className="border-2 border-emerald-500/30 rounded-2xl p-3 sm:p-4 bg-gradient-to-br from-emerald-950/20 via-dark-card/50 to-dark-elevated/40 backdrop-blur-sm shadow-xl shadow-emerald-500/10">
           {/* Section Header */}

@@ -12,9 +12,9 @@ export default function LoginPage() {
 
   // Handle callback from Zerodha
   useEffect(() => {
-    const status = searchParams.get("status");
-    const userId = searchParams.get("user_id");
-    const errorMessage = searchParams.get("message");
+    const status = searchParams?.get("status");
+    const userId = searchParams?.get("user_id");
+    const errorMessage = searchParams?.get("message");
 
     if (status === "success" && userId) {
       setLoading(false);

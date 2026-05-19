@@ -16,6 +16,9 @@ const nextConfig = {
     // Use a small ISR cache (0 causes ReadableStream abort crashes in Next 13.5.x)
     isrMemoryCacheSize: 16,
   },
+  // Disable build-trace collection: Next 13.5.x on Windows looks for pages-router
+  // _app.js.nft.json even in pure App Router projects, breaking `next build`.
+  outputFileTracing: false,
 
   // Cache headers - aggressive no-cache in dev, reasonable caching in production
   async headers() {
