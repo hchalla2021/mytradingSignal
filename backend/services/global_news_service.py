@@ -210,12 +210,17 @@ _RSS_FEEDS: List[Dict[str, str]] = [
     {"name": "PIB India",           "url": "https://pib.gov.in/newsite/rss.aspx"},
     {"name": "FT Markets",          "url": "https://www.ft.com/rss/home/uk"},
     {"name": "Business Standard",   "url": "https://www.business-standard.com/rss/markets-106.rss"},
+    # Zerodha Pulse — HTML aggregator covering NDTV Profit, ET Markets, The
+    # Hindu Business, Moneycontrol, Finshots and more. High signal density for
+    # Indian markets. Uses the `pulse` parser branch in _fetch_feed.
+    {"name": "Zerodha Pulse",       "url": "https://pulse.zerodha.com/", "parser": "pulse"},
 ]
 
 _FETCH_TIMEOUT = 8.0
 _CACHE_TTL_SECS = 120          # 2 minutes — push cadence for WS clients
 _MAX_ITEMS_PER_FEED = 8
-_MAX_TOTAL_ITEMS = 48
+_MAX_PULSE_ITEMS = 40          # Pulse aggregates many publishers — allow more
+_MAX_TOTAL_ITEMS = 64
 
 _SOURCE_PRIORITY: Dict[str, int] = {
     "Moneycontrol Markets": 12,
@@ -234,7 +239,15 @@ _SOURCE_PRIORITY: Dict[str, int] = {
     "TradingEconomics": 8,
     "Business Standard": 8,
     "FT Markets": 7,
+    # Pulse items keep their publisher name ("Pulse · NDTV Business"); see
+    # _pulse_source_priority for prefix-based lookup in _refresh().
+    "Zerodha Pulse": 13,
 }
+
+# Pulse items carry source names like "Pulse · NDTV Business"; treat all Pulse
+# items as top-priority regardless of the publisher suffix.
+_PULSE_SOURCE_PREFIX = "Pulse · "
+_PULSE_PRIORITY = 13
 
 _ML_TOKENS = [
     "rate", "cut", "hike", "inflation", "recession", "rally", "crash", "war", "fii", "selling",
@@ -377,10 +390,94 @@ async def _fetch_feed(client: httpx.AsyncClient, feed: Dict[str, str]) -> List[D
             follow_redirects=True,
         )
         if resp.status_code == 200:
+            parser = feed.get("parser", "rss")
+            if parser == "pulse":
+                return _parse_pulse_html(resp.text)
             return _parse_rss(resp.text, feed["name"])
     except Exception as exc:
         logger.debug("Feed fetch failed [%s]: %s", feed["name"], exc)
     return []
+
+
+# ---------------------------------------------------------------------------
+# Zerodha Pulse HTML scraper (https://pulse.zerodha.com/)
+# ---------------------------------------------------------------------------
+# Pulse aggregates Indian market news from many publishers (NDTV Profit,
+# Economic Times, The Hindu Business, Moneycontrol, Finshots, ...). Each item
+# carries the original publisher name, so we preserve it as `source` and let the
+# normal classification/impact-tier pipeline filter the high/medium/volatility
+# items for the Global Impact Radar UI.
+_PULSE_ITEM_RE = re.compile(
+    r'<li[^>]*class="[^"]*\bbox\b[^"]*\bitem\b[^"]*"[^>]*>(.*?)</li>',
+    re.S | re.I,
+)
+_PULSE_TITLE_RE = re.compile(
+    r'<h2[^>]*class="[^"]*title[^"]*"[^>]*>\s*<a[^>]*href="([^"]+)"[^>]*>(.*?)</a>',
+    re.S | re.I,
+)
+_PULSE_DESC_RE = re.compile(
+    r'<div[^>]*class="[^"]*desc[^"]*"[^>]*>(.*?)</div>',
+    re.S | re.I,
+)
+_PULSE_DATE_RE = re.compile(
+    r'<span[^>]*class="[^"]*date[^"]*"[^>]*(?:title="([^"]*)")?[^>]*>(.*?)</span>',
+    re.S | re.I,
+)
+_PULSE_FEED_RE = re.compile(
+    r'<span[^>]*class="[^"]*feed[^"]*"[^>]*>(.*?)</span>',
+    re.S | re.I,
+)
+
+
+def _clean_html(snippet: str) -> str:
+    return html.unescape(re.sub(r"<[^>]+>", "", snippet or "")).strip()
+
+
+def _parse_pulse_html(html_text: str) -> List[Dict[str, Any]]:
+    """Parse Pulse by Zerodha homepage HTML into normalized news items."""
+    items: List[Dict[str, Any]] = []
+    for raw in _PULSE_ITEM_RE.findall(html_text):
+        title_m = _PULSE_TITLE_RE.search(raw)
+        if not title_m:
+            continue
+        link = html.unescape(title_m.group(1)).strip()
+        title = _clean_html(title_m.group(2))
+        if not title:
+            continue
+
+        desc_m = _PULSE_DESC_RE.search(raw)
+        desc_clean = _clean_html(desc_m.group(1)) if desc_m else ""
+
+        date_m = _PULSE_DATE_RE.search(raw)
+        published = ""
+        if date_m:
+            published = (date_m.group(1) or _clean_html(date_m.group(2)) or "").strip()
+
+        feed_m = _PULSE_FEED_RE.search(raw)
+        publisher = _clean_html(feed_m.group(1)) if feed_m else ""
+        # "— NDTV Business" → "NDTV Business"
+        publisher = re.sub(r"^[\u2014\u2013\-\s]+", "", publisher).strip() or "Pulse"
+        source_name = f"Pulse · {publisher}"
+
+        uid = hashlib.md5(f"pulse::{title}".encode()).hexdigest()[:12]
+        analysis = _classify(title, desc_clean)
+        analysis["score"] = _tensorflow_refine_score(title, desc_clean, analysis["score"])
+        analysis["confidence"] = min(98, max(30, int(abs(analysis["score"] - 50) * 1.8 + 30)))
+        tier = _impact_tier(analysis["signal"], analysis["score"])
+
+        items.append({
+            "id": uid,
+            "title": title,
+            "description": desc_clean[:200],
+            "link": link,
+            "published": published,
+            "source": source_name,
+            "impact_tier": tier,
+            **analysis,
+        })
+        if len(items) >= _MAX_PULSE_ITEMS:
+            break
+    return items
 
 
 # ---------------------------------------------------------------------------
@@ -490,10 +587,15 @@ class GlobalNewsService:
                     unique.append(item)
 
             # Sort by impact extremity first, then source priority, then confidence.
+            def _src_priority(src: str) -> int:
+                if src.startswith(_PULSE_SOURCE_PREFIX):
+                    return _PULSE_PRIORITY
+                return _SOURCE_PRIORITY.get(src, 0)
+
             unique.sort(
                 key=lambda x: (
                     abs(x["score"] - 50),
-                    _SOURCE_PRIORITY.get(x.get("source", ""), 0),
+                    _src_priority(x.get("source", "")),
                     x.get("confidence", 0),
                 ),
                 reverse=True,
