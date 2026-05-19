@@ -827,9 +827,11 @@ const IndexCompassCard = memo(({ data }: IndexCardProps) => {
             <div className="rounded-xl bg-slate-900/40 border border-slate-700/40 overflow-hidden">
               <div className="flex items-center justify-between px-3 py-1.5 bg-slate-800/50 border-b border-slate-700/35">
                 <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Compass AI Command Deck</span>
-                <span className="text-[9px] px-1.5 py-0.5 rounded border border-cyan-500/35 bg-cyan-500/10 text-cyan-300 font-bold uppercase">
-                  {ai.commandDeck.modelProvider === 'tensorflow' ? 'TensorFlow' : 'NumPy'}
-                </span>
+                {ai.commandDeck.modelProvider === 'tensorflow' && (
+                  <span className="text-[9px] px-1.5 py-0.5 rounded border border-cyan-500/35 bg-cyan-500/10 text-cyan-300 font-bold uppercase">
+                    TensorFlow
+                  </span>
+                )}
               </div>
               <div className="p-3 space-y-3">
                 <div className="grid grid-cols-2 gap-2">

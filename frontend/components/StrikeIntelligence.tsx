@@ -525,10 +525,12 @@ const QuantumFractalPanel = memo<{ fractal: QuantumFractalIntelligence; symbol?:
             {commandDeck && (
               <div className="mt-2.5 rounded-md border border-slate-700/45 bg-slate-900/55 p-2">
                 <div className="grid grid-cols-2 gap-2 text-[9px]">
-                  <div>
-                    <p className="text-slate-500 uppercase tracking-[0.11em]">Provider</p>
-                    <p className="mt-0.5 text-cyan-300 font-black break-all">{commandDeck.modelProvider}</p>
-                  </div>
+                  {commandDeck.modelProvider === 'tensorflow' && (
+                    <div>
+                      <p className="text-slate-500 uppercase tracking-[0.11em]">Provider</p>
+                      <p className="mt-0.5 text-cyan-300 font-black break-all">TensorFlow</p>
+                    </div>
+                  )}
                   <div>
                     <p className="text-slate-500 uppercase tracking-[0.11em]">Stream</p>
                     <p className="mt-0.5 text-slate-200 font-black">{commandDeck.streamState}</p>

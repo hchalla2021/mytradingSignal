@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 from datetime import datetime
+from time import monotonic as _monotonic
 from typing import Any, Dict, Optional, Set
 from urllib.parse import quote_plus
 
@@ -84,12 +85,26 @@ class YahooProvider(_Provider):
         "Accept-Language": "en-US,en;q=0.9",
     }
 
+    def __init__(self) -> None:
+        self._cooldown_until: float = 0.0
+
     def fetch_quote(self, symbol: str) -> Optional[Dict[str, Any]]:
         ticker = self._MAP.get(symbol)
         if not ticker:
             return None
+        # Honor short cooldown after a 429 to avoid hammering the host
+        now_mono = _monotonic()
+        if now_mono < self._cooldown_until:
+            return None
         url = f"https://query2.finance.yahoo.com/v8/finance/chart/{ticker}"
-        resp = requests.get(url, params={"interval": "1d", "range": "2d"}, headers=self._HEADERS, timeout=5)
+        try:
+            resp = requests.get(url, params={"interval": "1d", "range": "2d"}, headers=self._HEADERS, timeout=5)
+        except requests.RequestException:
+            raise
+        if resp.status_code == 429:
+            # Back off Yahoo for 60s; let other providers / cache cover the gap
+            self._cooldown_until = now_mono + 60
+            return None
         resp.raise_for_status()
         data = resp.json() or {}
         result = ((data.get("chart") or {}).get("result") or [None])[0]
@@ -118,7 +133,9 @@ class YahooProvider(_Provider):
         live_quality = "REALTIME"
         if market_state in {"CLOSED", "POST", "POSTPOST", "PRE", "PREPRE"}:
             live_quality = "CLOSED"
-        elif quote_age_sec is not None and quote_age_sec > 90:
+        elif quote_age_sec is not None and quote_age_sec > 600:
+            # Yahoo's chart meta refreshes on minute boundaries (sometimes 3-5min
+            # for lower-volume indices). Only flag DELAYED past 10min of staleness.
             live_quality = "DELAYED"
 
         return {
@@ -160,15 +177,39 @@ class StooqProvider(_Provider):
             return None
         chg = close - open_
         chg_pct = (chg / open_) * 100
+
+        # Parse Stooq's date2 (YYYY-MM-DD) + time2 (HH:MM:SS, exchange-local UTC)
+        source_ts_iso: Optional[str] = None
+        quote_age_sec: Optional[int] = None
+        try:
+            d2 = str(row.get("date") or row.get("date2") or "").strip()
+            t2 = str(row.get("time") or row.get("time2") or "").strip()
+            if d2 and t2:
+                # Stooq publishes UTC timestamps
+                src_utc = datetime.strptime(f"{d2} {t2}", "%Y-%m-%d %H:%M:%S").replace(tzinfo=pytz.UTC)
+                src_ist = src_utc.astimezone(IST)
+                source_ts_iso = src_ist.isoformat()
+                quote_age_sec = max(0, int((datetime.now(IST) - src_ist).total_seconds()))
+        except Exception:
+            source_ts_iso = None
+            quote_age_sec = None
+
+        if quote_age_sec is None:
+            live_quality = "DELAYED"
+        elif quote_age_sec <= 600:
+            live_quality = "REALTIME"
+        else:
+            live_quality = "DELAYED"
+
         return {
             "price": round(close, 4),
             "change": round(chg, 4),
             "changePct": round(chg_pct, 4),
             "source": self.name,
-            "sourceTimestamp": None,
-            "quoteAgeSec": None,
+            "sourceTimestamp": source_ts_iso,
+            "quoteAgeSec": quote_age_sec,
             "marketState": "UNKNOWN",
-            "liveQuality": "DELAYED",
+            "liveQuality": live_quality,
         }
 
 
@@ -183,7 +224,7 @@ class GlobalIndicesService:
         "NIKKEI": {"name": "Nikkei 225", "region": "APAC"},
     }
 
-    POLL_INTERVAL = 4
+    POLL_INTERVAL = 8
 
     def __init__(self):
         self._providers = [YahooProvider(), StooqProvider()]
@@ -222,7 +263,21 @@ class GlobalIndicesService:
             stale = dict(fallback)
             stale["status"] = "STALE"
             stale["fetchedAt"] = now_iso
-            stale["liveQuality"] = stale.get("liveQuality", "DELAYED")
+            # Preserve original liveQuality (CLOSED stays CLOSED). Only downgrade to
+            # DELAYED if the cached source timestamp itself is older than 10min and
+            # the original quality was REALTIME.
+            prev_quality = stale.get("liveQuality") or "DELAYED"
+            try:
+                src_ts = stale.get("timestamp")
+                cached_age = None
+                if src_ts:
+                    cached_age = (datetime.now(IST) - datetime.fromisoformat(src_ts)).total_seconds()
+                if prev_quality == "REALTIME" and cached_age is not None and cached_age > 600:
+                    stale["liveQuality"] = "DELAYED"
+                else:
+                    stale["liveQuality"] = prev_quality
+            except Exception:
+                stale["liveQuality"] = prev_quality
             return stale
 
         return {

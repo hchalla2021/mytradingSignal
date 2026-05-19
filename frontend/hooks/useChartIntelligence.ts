@@ -230,6 +230,19 @@ export interface ChartAIInstitutionalConfluence {
   riskRewardRatio: number;
 }
 
+export interface ChartAIEnsemble {
+  provider: string;
+  version: string;
+  unifiedProbUp: number;
+  confidence: number;
+  classProbabilities: ChartAIClassProbabilities;
+  signedScore: number;
+  calibrator: { w: number; b: number };
+  hitRatePct: number;
+  samples: number;
+  trail: number[];
+}
+
 export interface ChartAIIntelligence {
   provider: 'tensorflow' | 'numpy_fallback';
   featureVersion: string;
@@ -240,6 +253,7 @@ export interface ChartAIIntelligence {
   multiTimeframe: ChartAIMultiTimeframe;
   commandDeck: ChartAICommandDeck;
   institutionalConfluence: ChartAIInstitutionalConfluence;
+  ensemble?: ChartAIEnsemble;
 }
 
 export type ChartDataSource = 'LIVE' | 'CACHED' | 'MARKET_CLOSED';
@@ -306,7 +320,7 @@ async function fetchWithFallback(): Promise<{ success?: boolean; data?: Record<s
 
   for (const url of Array.from(urlSet)) {
     try {
-      const r = await fetch(url, { signal: AbortSignal.timeout(8000) });
+      const r = await fetch(url, { signal: AbortSignal.timeout(15000) });
       if (r.ok) {
         const j = await r.json();
         if (j?.success && j.data && Object.keys(j.data).length > 0) return j;

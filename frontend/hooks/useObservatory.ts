@@ -153,7 +153,7 @@ export function useObservatory(): ObservatoryState {
   const fetchSnapshot = useCallback(async () => {
     try {
       const json = await fetchJsonWithFallback('/api/observatory/snapshot');
-      if (json.success && json.data) {
+      if (json && json.success && json.data) {
         setTodaySnapshot(json.data);
         setLastRefreshed(new Date());
       }
@@ -196,14 +196,17 @@ export function useObservatory(): ObservatoryState {
     }
   }, [fetchSnapshot, fetchReports, reportDays]);
 
+  const reportDaysRef = useRef(reportDays);
+  useEffect(() => { reportDaysRef.current = reportDays; }, [reportDays]);
+
   // Initial load + periodic refresh
   useEffect(() => {
     refresh();
 
     // Snapshot refreshes every 60 seconds
     snapshotTimerRef.current = setInterval(fetchSnapshot, 60_000);
-    // Rankings/reports refresh every 5 minutes
-    reportTimerRef.current = setInterval(() => fetchReports(reportDays), 300_000);
+    // Rankings/reports refresh every 5 minutes (read latest reportDays via ref)
+    reportTimerRef.current = setInterval(() => fetchReports(reportDaysRef.current), 300_000);
 
     return () => {
       if (snapshotTimerRef.current) clearInterval(snapshotTimerRef.current);

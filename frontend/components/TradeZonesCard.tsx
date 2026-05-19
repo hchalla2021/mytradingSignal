@@ -241,7 +241,7 @@ export const TradeZonesCard: React.FC<TradeZonesCardProps> = ({ symbol, compact 
           <div className="flex items-center justify-between gap-2 mb-3">
             <div>
               <div className="text-xs font-semibold uppercase tracking-[0.2em] text-cyan-300">AI Intelligence</div>
-              <div className="text-[11px] text-slate-400">{ai.featureVersion} via {ai.provider}</div>
+              <div className="text-[11px] text-slate-400">{ai.featureVersion}{ai.provider === 'tensorflow' ? ' via TensorFlow' : ''}</div>
             </div>
             <div className="rounded-full border border-cyan-400/30 bg-cyan-500/10 px-2 py-1 text-[10px] font-bold text-cyan-200">
               {ai.commandDeck.streamState} | {ai.commandDeck.cacheState}

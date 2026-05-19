@@ -272,11 +272,17 @@ class ObservatoryService:
                 demo_mode = os.environ.get('DEMO_CAPTURE_MODE', '').lower() in ('true', '1', 'yes')
                 in_session = MARKET_OPEN_MIN <= mins <= MARKET_CLOSE_MIN or demo_mode
                 should_snap = False
-                if in_session and (mins in SNAP_MINUTES or demo_mode):
-                    async with self._lock:
-                        if mins != self._last_snap_minute or demo_mode:
-                            self._last_snap_minute = mins
-                            should_snap = True
+                # Catch up to the most recent SNAP_MINUTES tick we haven't captured yet.
+                # The previous (mins in SNAP_MINUTES) check missed the 30-min mark
+                # whenever the 55s sleep landed on a non-set minute.
+                if in_session:
+                    snap_minutes_sorted = sorted(SNAP_MINUTES)
+                    due_mins = max((m for m in snap_minutes_sorted if m <= mins), default=None)
+                    if demo_mode or (due_mins is not None and due_mins != self._last_snap_minute):
+                        async with self._lock:
+                            if demo_mode or due_mins != self._last_snap_minute:
+                                self._last_snap_minute = due_mins if due_mins is not None else mins
+                                should_snap = True
                 if should_snap:
                     await self._take_snapshot(now)
 
@@ -328,7 +334,10 @@ class ObservatoryService:
                                 self._low_prices.get(symbol, float("inf")), price
                             )
 
-                strategies = await self._extract_all_strategies(symbol, market_data, analysis)
+                strategies = await asyncio.wait_for(
+                    self._extract_all_strategies(symbol, market_data, analysis),
+                    timeout=20.0,
+                )
                 snap = {"time": snap_time, "timestamp": now.isoformat(), "strategies": strategies}
                 async with self._lock:
                     self._today_snapshots.setdefault(symbol, []).append(snap)
@@ -336,6 +345,11 @@ class ObservatoryService:
                 logger.debug(
                     "🔭 Observatory: %s @ %s — %d strategies captured",
                     symbol, snap_time, len(strategies),
+                )
+            except asyncio.TimeoutError:
+                logger.warning(
+                    "🔭 Observatory: extraction timed out for %s — skipping this snap",
+                    symbol,
                 )
             except Exception as exc:
                 logger.warning("🔭 Observatory: snapshot error for %s — %s", symbol, exc)
@@ -517,7 +531,7 @@ class ObservatoryService:
         try:
             from services.ict_engine import get_ict_service  # type: ignore
             ict = get_ict_service()
-            snap = await ict.get_snapshot() if ict else {}
+            snap = await asyncio.wait_for(ict.get_snapshot(), timeout=3.0) if ict else {}
             sym_data = (snap or {}).get(symbol, {})
             if sym_data:
                 strategies["ict_smart_money"] = entry(
@@ -636,7 +650,7 @@ class ObservatoryService:
         try:
             from services.strike_intelligence_service import get_strike_intelligence_service  # type: ignore
             strike = get_strike_intelligence_service()
-            snap = await strike.get_snapshot() if strike else {}
+            snap = await asyncio.wait_for(strike.get_snapshot(), timeout=3.0) if strike else {}
             sym_data = (snap or {}).get(symbol, {})
             if sym_data:
                 strategies["strike_intelligence"] = entry(
@@ -841,7 +855,10 @@ class ObservatoryService:
             from services.expiry_explosion_service import get_expiry_explosion_service  # type: ignore
             exp_svc = get_expiry_explosion_service()
             if exp_svc:
-                snap = await exp_svc.get_snapshot() if hasattr(exp_svc, 'get_snapshot') and asyncio.iscoroutinefunction(exp_svc.get_snapshot) else (exp_svc.get_snapshot() if hasattr(exp_svc, 'get_snapshot') else {})
+                if hasattr(exp_svc, 'get_snapshot') and asyncio.iscoroutinefunction(exp_svc.get_snapshot):
+                    snap = await asyncio.wait_for(exp_svc.get_snapshot(), timeout=3.0)
+                else:
+                    snap = exp_svc.get_snapshot() if hasattr(exp_svc, 'get_snapshot') else {}
                 if snap and isinstance(snap, dict):
                     sym_data = snap.get(symbol, {})
                     if sym_data:

@@ -370,12 +370,13 @@ const CRTBTSTCard = memo<CRTBTSTCardProps>(({ symbol, name, data }) => {
           />
         </div>
 
-        {ai && (
+        {/* AI CRT Command Deck hidden (was flickering) */}
+        {false && ai && (
           <div className="rounded-xl border border-cyan-500/25 bg-gradient-to-br from-cyan-500/10 to-slate-900/40 p-3 shadow-inner shadow-cyan-500/10">
             <div className="flex items-center justify-between gap-2 mb-3">
               <div>
                 <p className="text-[9px] text-cyan-300 font-black uppercase tracking-[0.18em]">AI CRT Command Deck</p>
-                <p className="text-[9px] text-slate-400">{ai.featureVersion} via {ai.provider}</p>
+                <p className="text-[9px] text-slate-400">{ai.featureVersion}{ai.provider === 'tensorflow' ? ' via TensorFlow' : ''}</p>
               </div>
               <span className="text-[9px] px-2 py-0.5 rounded-full border border-cyan-400/30 bg-cyan-500/10 text-cyan-200 font-bold">
                 {ai.commandDeck.streamState} | {ai.commandDeck.cacheState}
@@ -616,32 +617,4 @@ const CRTBTSTCard = memo<CRTBTSTCardProps>(({ symbol, name, data }) => {
 CRTBTSTCard.displayName = 'CRTBTSTCard';
 
 export { CRTBTSTCard };
-
-/**
- * Add "Show" toggle functionality for BTST Trade Setup.
- */
-const BTSTTradeSetup = memo(() => {
-  const [isVisible, setIsVisible] = useState(false);
-
-  const toggleVisibility = () => setIsVisible(!isVisible);
-
-  return (
-    <div className="btst-trade-setup">
-      <button
-        className="toggle-button bg-blue-500 text-white px-4 py-2 rounded"
-        onClick={toggleVisibility}
-      >
-        {isVisible ? 'Hide' : 'Show'}
-      </button>
-      {isVisible && (
-        <div className="trade-setup-details">
-          {/* Add detailed BTST Trade Setup content here */}
-          <p>High-probability CRT continuation setup</p>
-          <p>BTST signal is in an extreme conviction state</p>
-        </div>
-      )}
-    </div>
-  );
-});
-BTSTTradeSetup.displayName = 'BTSTTradeSetup';
-export default BTSTTradeSetup;
+export default CRTBTSTCard;

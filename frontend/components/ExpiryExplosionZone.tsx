@@ -245,7 +245,7 @@ const ExpiryCard = memo<{ data: ExpiryIndex | null; name: string }>(({ data, nam
           <div className="mb-3 flex items-center justify-between gap-2">
             <div>
               <div className="text-[10px] font-extrabold uppercase tracking-[0.2em] text-cyan-300">AI Expiry Intelligence</div>
-              <div className="text-[9px] text-slate-400">{ai.featureVersion} via {ai.provider}</div>
+              <div className="text-[9px] text-slate-400">{ai.featureVersion}{ai.provider === 'tensorflow' ? ' via TensorFlow' : ''}</div>
             </div>
             <div className="rounded-full border border-cyan-400/30 bg-cyan-500/10 px-2 py-1 text-[9px] font-bold text-cyan-200">
               {ai.commandDeck.streamState} | {ai.commandDeck.cacheState}

@@ -1148,10 +1148,11 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
     };
     // drawPredTag: renders BREAK▲/REJECT▼/WATCH~ confidence% pill using the slot system.
     // Color: emerald = BREAK, red = REJECT, amber = WATCH.
+    // Only render BREAK or REJECT at 100% confidence — WATCH and anything <100% is suppressed.
     const drawPredTag = (anchorY: number, pred: ZonePrediction, above: boolean) => {
-      const col = pred.outcome === 'BREAK'  ? '#34d399'
-                : pred.outcome === 'REJECT' ? '#f87171'
-                : '#fbbf24';
+      if (pred.outcome === 'WATCH') return;
+      if (pred.confidence < 100) return;
+      const col = pred.outcome === 'BREAK' ? '#34d399' : '#f87171';
       const arr = pred.direction === 'UP' ? '▲' : '▼';
       drawLineTag(anchorY, `${pred.outcome}${arr} ${pred.confidence}%`, col, above, 1.0, false);
     };
@@ -2929,23 +2930,25 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
           ctx.strokeRect(nextX - halfW, bodyTop, halfW * 2, bodyH);
           ctx.setLineDash([]);
           ctx.shadowBlur = 0;
-          // Label: "PRED ▲" or "PRED ▼"
-          const predLabel = `${projDir > 0 ? 'PRED ▲' : 'PRED ▼'} ${proj.confidence}%`;
-          ctx.font = '900 10px sans-serif';
-          const tw = ctx.measureText(predLabel).width + 12;
-          const ty = projDir > 0 ? bodyTop - 18 : bodyBot + 5;
-          roundRect(ctx, nextX - tw / 2, ty, tw, 15, 3);
-          ctx.fillStyle = 'rgba(5,10,20,0.92)';
-          ctx.globalAlpha = 0.92;
-          ctx.fill();
-          ctx.strokeStyle = glowColor;
-          ctx.lineWidth = 1;
-          ctx.globalAlpha = 0.85;
-          roundRect(ctx, nextX - tw / 2, ty, tw, 15, 3);
-          ctx.stroke();
-          ctx.fillStyle = '#e2e8f0';
-          ctx.textAlign = 'center';
-          ctx.fillText(predLabel, nextX, ty + 11);
+          // Label: "PRED ▲" or "PRED ▼" — only render at 100% confidence; otherwise show the projected candle silently
+          if (proj.confidence >= 100) {
+            const predLabel = `${projDir > 0 ? 'PRED ▲' : 'PRED ▼'} ${proj.confidence}%`;
+            ctx.font = '900 10px sans-serif';
+            const tw = ctx.measureText(predLabel).width + 12;
+            const ty = projDir > 0 ? bodyTop - 18 : bodyBot + 5;
+            roundRect(ctx, nextX - tw / 2, ty, tw, 15, 3);
+            ctx.fillStyle = 'rgba(5,10,20,0.92)';
+            ctx.globalAlpha = 0.92;
+            ctx.fill();
+            ctx.strokeStyle = glowColor;
+            ctx.lineWidth = 1;
+            ctx.globalAlpha = 0.85;
+            roundRect(ctx, nextX - tw / 2, ty, tw, 15, 3);
+            ctx.stroke();
+            ctx.fillStyle = '#e2e8f0';
+            ctx.textAlign = 'center';
+            ctx.fillText(predLabel, nextX, ty + 11);
+          }
           ctx.restore();
         }
       }
@@ -5109,7 +5112,9 @@ const ChartAICommandDeck = memo<{ snapshot: ChartAISnapshot }>(({ snapshot }) =>
           <p className="text-[11px] font-black uppercase tracking-[0.14em] text-indigo-200">Chart AI Command Deck</p>
         </div>
         <div className="flex items-center gap-1.5 text-[9px] font-black uppercase tracking-[0.1em]">
-          <span className="rounded border border-cyan-400/45 bg-cyan-500/10 px-2 py-1 text-cyan-200">{snapshot.provider}</span>
+          {snapshot.provider === 'tensorflow' && (
+            <span className="rounded border border-cyan-400/45 bg-cyan-500/10 px-2 py-1 text-cyan-200">TensorFlow</span>
+          )}
           <span className={`rounded border px-2 py-1 ${snapshot.streamState === 'LIVE' ? 'border-emerald-400/45 bg-emerald-500/10 text-emerald-200' : snapshot.streamState === 'DELAYED' ? 'border-amber-400/45 bg-amber-500/10 text-amber-200' : 'border-slate-600/45 bg-slate-700/20 text-slate-300'}`}>
             {snapshot.streamState}
           </span>

@@ -100,7 +100,7 @@ function normalizeSignal(signal: string | undefined): TradeZoneSignal {
   return 'UNKNOWN';
 }
 
-export function useTradeZonesMatrix(refreshMs = 2000): UseTradeZonesMatrixResult {
+export function useTradeZonesMatrix(refreshMs = 5000): UseTradeZonesMatrixResult {
   const [rows, setRows] = useState<TradeZoneRow[]>([]);
   const [events, setEvents] = useState<TradeZoneEvent[]>([]);
   const [summary, setSummary] = useState<TradeZonesAllResponse['summary']>();
@@ -110,6 +110,7 @@ export function useTradeZonesMatrix(refreshMs = 2000): UseTradeZonesMatrixResult
 
   const prevSignalMapRef = useRef<Record<string, TradeZoneSignal>>({});
   const abortRef = useRef<AbortController | null>(null);
+  const inFlightRef = useRef(false);
 
   const ingestSignalChanges = useCallback((nextRows: TradeZoneRow[]) => {
     const now = new Date().toISOString();
@@ -119,7 +120,12 @@ export function useTradeZonesMatrix(refreshMs = 2000): UseTradeZonesMatrixResult
       const nextSignal = normalizeSignal(row.overall_signal);
       const prevSignal = prevSignalMapRef.current[row.symbol];
 
-      if (prevSignal && prevSignal !== nextSignal) {
+      // Skip transitions to/from UNKNOWN — those reflect a transient backend
+      // error rather than a real signal change.
+      if (
+        prevSignal && prevSignal !== nextSignal
+        && prevSignal !== 'UNKNOWN' && nextSignal !== 'UNKNOWN'
+      ) {
         newEvents.push({
           id: `${row.symbol}-${now}-${nextSignal}`,
           symbol: row.symbol,
@@ -130,7 +136,10 @@ export function useTradeZonesMatrix(refreshMs = 2000): UseTradeZonesMatrixResult
         });
       }
 
-      prevSignalMapRef.current[row.symbol] = nextSignal;
+      // Only remember real signals so an UNKNOWN blip doesn't become the new baseline.
+      if (nextSignal !== 'UNKNOWN') {
+        prevSignalMapRef.current[row.symbol] = nextSignal;
+      }
     }
 
     if (newEvents.length > 0) {
@@ -139,10 +148,12 @@ export function useTradeZonesMatrix(refreshMs = 2000): UseTradeZonesMatrixResult
   }, []);
 
   const fetchAll = useCallback(async () => {
+    if (inFlightRef.current) {
+      // Previous poll still running (backend can take ~30-45s on cold cache). Skip.
+      return;
+    }
+    inFlightRef.current = true;
     try {
-      if (abortRef.current) {
-        abortRef.current.abort();
-      }
       const controller = new AbortController();
       abortRef.current = controller;
 
@@ -172,6 +183,7 @@ export function useTradeZonesMatrix(refreshMs = 2000): UseTradeZonesMatrixResult
       }
       setError(err instanceof Error ? err.message : 'Unknown error');
     } finally {
+      inFlightRef.current = false;
       setLoading(false);
     }
   }, [ingestSignalChanges]);

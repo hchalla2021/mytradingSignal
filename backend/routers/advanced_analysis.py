@@ -3446,6 +3446,25 @@ async def get_all_trade_zones() -> Dict[str, Any]:
         tasks = [get_trade_zones(symbol) for symbol in symbols]
         results = await asyncio.gather(*tasks, return_exceptions=True)
 
+        # Retry once for any symbol whose parallel call errored. Cold caches and
+        # transient upstream hiccups occasionally cause one of the three to throw
+        # while the others succeed; a serial retry recovers it without affecting
+        # the fast-path latency for healthy symbols.
+        retry_indices = [i for i, r in enumerate(results) if isinstance(r, Exception)]
+        for i in retry_indices:
+            try:
+                logger.warning(
+                    "[TRADE-ZONES-ALL] Retrying %s after parallel error: %s",
+                    symbols[i], results[i],
+                )
+                results[i] = await get_trade_zones(symbols[i])
+            except Exception as retry_err:
+                logger.error(
+                    "[TRADE-ZONES-ALL] Retry failed for %s: %s",
+                    symbols[i], retry_err,
+                )
+                results[i] = retry_err
+
         data: Dict[str, Any] = {}
         bullish_count = 0
         bearish_count = 0

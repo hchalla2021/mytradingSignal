@@ -11,6 +11,8 @@ from typing import Any, Deque, Dict, List
 
 import numpy as np
 
+from .ai_ensemble import compute_ensemble
+
 try:
     import tensorflow as tf
 except Exception:  # pragma: no cover - optional dependency
@@ -193,16 +195,24 @@ class ChartIntelligenceAIEngine:
         reward_score = int(round(min(99.0, max(1.0, continuation_prob * 0.55 + trend_strength * 0.45))))
         rr = round(reward_score / max(risk_score, 1), 2)
 
+        class_probs = {
+            "STRONG_BUY": round(float(probs[0]) * 100.0, 2),
+            "BUY": round(float(probs[1]) * 100.0, 2),
+            "NEUTRAL": round(float(probs[2]) * 100.0, 2),
+            "SELL": round(float(probs[3]) * 100.0, 2),
+            "STRONG_SELL": round(float(probs[4]) * 100.0, 2),
+        }
+
+        ensemble = compute_ensemble(
+            symbol=symbol,
+            spot=float(spot),
+            engine_probs=class_probs,
+        )
+
         return {
             "provider": provider,
             "featureVersion": "chart_ai_v1",
-            "classProbabilities": {
-                "STRONG_BUY": round(float(probs[0]) * 100.0, 2),
-                "BUY": round(float(probs[1]) * 100.0, 2),
-                "NEUTRAL": round(float(probs[2]) * 100.0, 2),
-                "SELL": round(float(probs[3]) * 100.0, 2),
-                "STRONG_SELL": round(float(probs[4]) * 100.0, 2),
-            },
+            "classProbabilities": class_probs,
             "sequencePrediction": {
                 "nextMove": next_move,
                 "nextMovePts": round(float(projected_pts), 2),
@@ -244,4 +254,5 @@ class ChartIntelligenceAIEngine:
                 "rewardScore": reward_score,
                 "riskRewardRatio": rr,
             },
+            "ensemble": ensemble,
         }

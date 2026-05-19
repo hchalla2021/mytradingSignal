@@ -509,9 +509,11 @@ const IndexCard = memo(({ data }: { data: ICTIndex | null }) => {
               <div className="rounded-lg bg-slate-800/40 border border-slate-700/25 px-3 py-2">
                 <div className="flex items-center justify-between mb-2">
                   <span className="text-[9px] text-slate-600 uppercase tracking-widest font-semibold">ICT AI Command Deck</span>
-                  <span className="text-[9px] px-1.5 py-0.5 rounded border border-cyan-500/35 bg-cyan-500/10 text-cyan-300 font-bold uppercase">
-                    {ai.commandDeck.modelProvider === 'tensorflow' ? 'TensorFlow' : 'NumPy'}
-                  </span>
+                  {ai.commandDeck.modelProvider === 'tensorflow' && (
+                    <span className="text-[9px] px-1.5 py-0.5 rounded border border-cyan-500/35 bg-cyan-500/10 text-cyan-300 font-bold uppercase">
+                      TensorFlow
+                    </span>
+                  )}
                 </div>
 
                 <div className="grid grid-cols-2 gap-2 mb-2">
