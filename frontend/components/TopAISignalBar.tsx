@@ -16,6 +16,52 @@ const INDICES: { key: IndexKey; name: string }[] = [
   { key: 'SENSEX', name: 'SENSEX' },
 ];
 
+// Smoothly animate displayed numeric values between ticks using rAF (ease-out cubic).
+function useTween(target: number, durationMs = 600): number {
+  const [display, setDisplay] = useState(target);
+  const fromRef = useRef(target);
+  const toRef = useRef(target);
+  const startRef = useRef(0);
+  const rafRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (!isFinite(target)) return;
+    if (toRef.current === target) return;
+    fromRef.current = display;
+    toRef.current = target;
+    startRef.current = performance.now();
+    const step = (now: number) => {
+      const t = Math.min(1, (now - startRef.current) / durationMs);
+      const eased = 1 - Math.pow(1 - t, 3);
+      setDisplay(fromRef.current + (toRef.current - fromRef.current) * eased);
+      if (t < 1) rafRef.current = requestAnimationFrame(step);
+      else rafRef.current = null;
+    };
+    if (rafRef.current) cancelAnimationFrame(rafRef.current);
+    rafRef.current = requestAnimationFrame(step);
+    return () => { if (rafRef.current) cancelAnimationFrame(rafRef.current); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [target, durationMs]);
+  return display;
+}
+
+// Flash on value change — returns a class + direction for inline ▲/▼ arrows.
+function useFlash(value: number): { cls: string; dir: 'up' | 'down' | 'flat' } {
+  const prevRef = useRef(value);
+  const [cls, setCls] = useState('');
+  const [dir, setDir] = useState<'up' | 'down' | 'flat'>('flat');
+  useEffect(() => {
+    if (prevRef.current === value) return;
+    const d = value - prevRef.current;
+    prevRef.current = value;
+    const nextDir: 'up' | 'down' | 'flat' = d > 0 ? 'up' : d < 0 ? 'down' : 'flat';
+    setDir(nextDir);
+    setCls(nextDir === 'up' ? 'flash-up' : 'flash-down');
+    const t = setTimeout(() => setCls(''), 480);
+    return () => clearTimeout(t);
+  }, [value]);
+  return { cls, dir };
+}
+
 const fmtPrice = (v: number) =>
   new Intl.NumberFormat('en-IN', { maximumFractionDigits: 2, minimumFractionDigits: 2 }).format(v);
 
@@ -154,32 +200,34 @@ const VOL_STYLES: Record<SignalView['volLabel'], string> = {
 
 const Bar = ({ value, tone, leftLabel, rightLabel }: { value: number; tone: SignalView['tone']; leftLabel?: string; rightLabel?: string }) => {
   const t = TONE[tone];
+  const anim = useTween(value, 600);
   return (
     <div>
       {(leftLabel || rightLabel) && (
         <div className="flex items-center justify-between text-[11px] font-bold text-slate-400">
           <span>{leftLabel}</span>
-          <span className={t.text}>{rightLabel}</span>
+          <span className={`${t.text} tabular-nums`}>{rightLabel}</span>
         </div>
       )}
       <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-slate-800/70">
-        <div className={`h-full rounded-full bg-gradient-to-r ${t.bar} transition-all duration-300`} style={{ width: `${Math.max(2, Math.min(100, value))}%` }} />
+        <div className={`h-full rounded-full bg-gradient-to-r ${t.bar}`} style={{ width: `${Math.max(2, Math.min(100, anim))}%` }} />
       </div>
     </div>
   );
 };
 
 const TwoSidedBar = ({ value }: { value: number }) => {
-  const buy = Math.max(2, Math.min(98, value));
+  const anim = useTween(value, 600);
+  const buy = Math.max(2, Math.min(98, anim));
   return (
     <div className="flex h-2 overflow-hidden rounded-full border border-slate-700/60 bg-slate-900">
-      <div className="h-full bg-gradient-to-r from-rose-500/80 to-rose-400/60 transition-all duration-300" style={{ width: `${100 - buy}%` }} />
-      <div className="h-full bg-gradient-to-r from-emerald-400/60 to-emerald-500/80 transition-all duration-300" style={{ width: `${buy}%` }} />
+      <div className="h-full bg-gradient-to-r from-rose-500/80 to-rose-400/60" style={{ width: `${100 - buy}%` }} />
+      <div className="h-full bg-gradient-to-r from-emerald-400/60 to-emerald-500/80" style={{ width: `${buy}%` }} />
     </div>
   );
 };
 
-const Metric = ({ label, value, tone = 'slate', hot }: { label: string; value: React.ReactNode; tone?: 'slate' | 'bull' | 'bear' | 'neutral' | 'info'; hot?: boolean }) => {
+const Metric = ({ label, value, tone = 'slate', hot, numeric }: { label: string; value: React.ReactNode; tone?: 'slate' | 'bull' | 'bear' | 'neutral' | 'info'; hot?: boolean; numeric?: number }) => {
   const colorMap = {
     slate: 'text-slate-200',
     bull: 'text-emerald-300',
@@ -194,10 +242,11 @@ const Metric = ({ label, value, tone = 'slate', hot }: { label: string; value: R
     neutral: 'ring-1 ring-amber-200/50 border-amber-200/40',
     info: 'ring-1 ring-cyan-200/50 border-cyan-200/40',
   };
+  const flash = useFlash(numeric ?? 0);
   return (
-    <div className={`rounded-md border bg-slate-900/40 px-2 py-1.5 transition-all ${hot ? ringMap[tone] : 'border-slate-700/30'}`}>
+    <div className={`rounded-md border bg-slate-900/40 px-2 py-1.5 transition-all duration-150 ${hot ? ringMap[tone] : 'border-slate-700/30'} ${numeric !== undefined ? flash.cls : ''}`}>
       <p className="text-[10px] font-bold uppercase tracking-wider text-slate-500">{label}</p>
-      <p className={`mt-0.5 truncate font-mono text-[13px] font-black leading-tight lg:text-sm ${colorMap[tone]}`}>{value}</p>
+      <p className={`mt-0.5 truncate font-mono text-[13px] font-black leading-tight lg:text-sm tabular-nums ${colorMap[tone]}`}>{value}</p>
     </div>
   );
 };
@@ -231,6 +280,26 @@ const SignalCard = React.memo(function SignalCard({ name, tick }: { name: string
 
   const sig = useMemo(() => deriveSignal(tick, oiDeltaPct), [tick, oiDeltaPct]);
 
+  const pct = tick?.changePercent ?? 0;
+
+  // Tween displayed numerics so they glide between ticks instead of snapping.
+  // Hooks must be called unconditionally — fall back to 0 when tick/sig are absent.
+  const animPrice = useTween(tick?.price ?? 0, 500);
+  const animChange = useTween(tick?.change ?? 0, 500);
+  const animPct = useTween(pct, 500);
+  const animConfidence = useTween(sig?.confidence ?? 0, 600);
+  const animBuyPressure = useTween(sig?.buyPressure ?? 0, 600);
+  const animLiqStr = useTween(sig?.liquidityStrength ?? 0, 600);
+  const animBreakout = useTween(sig?.breakoutProb ?? 0, 600);
+  const animReversal = useTween(sig?.reversalProb ?? 0, 600);
+  const animMomentum = useTween(sig?.momentum ?? 0, 600);
+  const animOiDelta = useTween(oiDeltaPct, 600);
+  const animRangePos = useTween(sig?.rangePos ?? 0, 600);
+  const animVolExp = useTween(sig?.volExpansion ?? 0, 600);
+  const animVolume = useTween(tick?.volume || 0, 600);
+  const animOi = useTween(tick?.oi || 0, 600);
+  const animLiquidity = useTween(sig?.liquidity ?? 0, 600);
+
   if (!sig || !tick) {
     return (
       <div className="rounded-xl border border-slate-700/40 bg-slate-950/60 px-3 py-4 text-center">
@@ -241,7 +310,6 @@ const SignalCard = React.memo(function SignalCard({ name, tick }: { name: string
   }
 
   const t = TONE[sig.tone];
-  const pct = tick.changePercent ?? 0;
   const flashCls = flash === 'up' ? 'ring-1 ring-emerald-300/50' : flash === 'down' ? 'ring-1 ring-rose-300/50' : '';
 
   return (
@@ -249,9 +317,9 @@ const SignalCard = React.memo(function SignalCard({ name, tick }: { name: string
       <div className="flex items-center justify-between gap-2">
         <div className="min-w-0">
           <p className="truncate text-sm font-black tracking-wider text-slate-200 lg:text-base">{name}</p>
-          <p className="font-mono text-2xl font-black leading-tight text-slate-100 lg:text-3xl">{fmtPrice(tick.price)}</p>
-          <p className={`text-xs font-bold lg:text-sm ${t.text}`}>
-            {tick.change >= 0 ? '+' : ''}{tick.change.toFixed(2)} · {pct >= 0 ? '+' : ''}{pct.toFixed(2)}%
+          <p className="font-mono text-2xl font-black leading-tight text-slate-100 lg:text-3xl tabular-nums">{fmtPrice(animPrice)}</p>
+          <p className={`text-xs font-bold lg:text-sm tabular-nums ${t.text}`}>
+            {animChange >= 0 ? '+' : ''}{animChange.toFixed(2)} · {animPct >= 0 ? '+' : ''}{animPct.toFixed(2)}%
           </p>
         </div>
         <div className="flex flex-col items-end gap-1">
@@ -259,42 +327,44 @@ const SignalCard = React.memo(function SignalCard({ name, tick }: { name: string
             <span aria-hidden>{sig.signalArrow}</span>
             <span>{sig.signalLabel}</span>
           </span>
-          <span className={`rounded border px-1.5 py-0.5 text-[11px] font-bold ${VOL_STYLES[sig.volLabel]} ${sig.volLabel === 'HIGH' ? 'ring-1 ring-rose-300/50' : ''}`}>
-            VOL · {sig.volLabel} {sig.volExpansion.toFixed(2)}%
+          <span className={`rounded border px-1.5 py-0.5 text-[11px] font-bold tabular-nums ${VOL_STYLES[sig.volLabel]} ${sig.volLabel === 'HIGH' ? 'ring-1 ring-rose-300/50' : ''}`}>
+            VOL · {sig.volLabel} {animVolExp.toFixed(2)}%
           </span>
         </div>
       </div>
 
       <div className={`mt-3 rounded-md p-1 transition-all ${sig.confidence >= 70 ? `ring-1 ${sig.tone === 'bull' ? 'ring-emerald-300/50' : sig.tone === 'bear' ? 'ring-rose-300/50' : 'ring-amber-300/50'}` : ''}`}>
-        <Bar value={sig.confidence} tone={sig.tone} leftLabel="AI CONFIDENCE" rightLabel={`${sig.confidence}%`} />
+        <Bar value={animConfidence} tone={sig.tone} leftLabel="AI CONFIDENCE" rightLabel={`${animConfidence.toFixed(0)}%`} />
       </div>
 
       <div className={`mt-2 rounded-md p-1 transition-all ${sig.buyPressure >= 75 || sig.buyPressure <= 25 ? `ring-1 ${sig.buyPressure >= 75 ? 'ring-emerald-300/50' : 'ring-rose-300/50'}` : ''}`}>
-        <div className="flex items-center justify-between text-[11px] font-bold">
-          <span className="text-rose-300">SELL {100 - sig.buyPressure}%</span>
+        <div className="flex items-center justify-between text-[11px] font-bold tabular-nums">
+          <span className="text-rose-300">SELL {(100 - animBuyPressure).toFixed(0)}%</span>
           <span className="text-slate-400">PRESSURE</span>
-          <span className="text-emerald-300">BUY {sig.buyPressure}%</span>
+          <span className="text-emerald-300">BUY {animBuyPressure.toFixed(0)}%</span>
         </div>
-        <div className="mt-1"><TwoSidedBar value={sig.buyPressure} /></div>
+        <div className="mt-1"><TwoSidedBar value={animBuyPressure} /></div>
       </div>
 
       <div className="mt-2.5 grid grid-cols-3 gap-1.5">
-        <Metric label="Volume" value={fmtCompact(tick.volume)} tone="info" />
-        <Metric label="Liquidity" value={`₹${fmtCompact(sig.liquidity)}`} tone="info" />
-        <Metric label="OI" value={fmtCompact(tick.oi)} tone="info" />
+        <Metric label="Volume" value={fmtCompact(animVolume)} tone="info" numeric={animVolume} />
+        <Metric label="Liquidity" value={`₹${fmtCompact(animLiquidity)}`} tone="info" numeric={animLiquidity} />
+        <Metric label="OI" value={fmtCompact(animOi)} tone="info" numeric={animOi} />
         <Metric
           label="ΔOI %"
-          value={`${oiDeltaPct >= 0 ? '+' : ''}${oiDeltaPct.toFixed(2)}%`}
-          tone={Math.abs(oiDeltaPct) < 0.2 ? 'slate' : oiDeltaPct > 0 ? 'bull' : 'bear'}
-          hot={Math.abs(oiDeltaPct) >= 0.5}
+          value={`${animOiDelta >= 0 ? '+' : ''}${animOiDelta.toFixed(2)}%`}
+          tone={Math.abs(animOiDelta) < 0.2 ? 'slate' : animOiDelta > 0 ? 'bull' : 'bear'}
+          hot={Math.abs(animOiDelta) >= 0.5}
+          numeric={animOiDelta}
         />
         <Metric
           label="Momentum"
-          value={`${sig.momentum >= 0 ? '+' : ''}${sig.momentum}`}
-          tone={sig.momentum > 10 ? 'bull' : sig.momentum < -10 ? 'bear' : 'neutral'}
-          hot={Math.abs(sig.momentum) >= 40}
+          value={`${animMomentum >= 0 ? '+' : ''}${animMomentum.toFixed(0)}`}
+          tone={animMomentum > 10 ? 'bull' : animMomentum < -10 ? 'bear' : 'neutral'}
+          hot={Math.abs(animMomentum) >= 40}
+          numeric={animMomentum}
         />
-        <Metric label="Range Pos" value={`${Math.round(sig.rangePos)}%`} tone="slate" hot={sig.rangePos <= 15 || sig.rangePos >= 85} />
+        <Metric label="Range Pos" value={`${animRangePos.toFixed(0)}%`} tone="slate" hot={animRangePos <= 15 || animRangePos >= 85} numeric={animRangePos} />
         <Metric label="Smart Money" value={sig.smartMoney.label} tone={sig.smartMoney.tone} hot={sig.smartMoney.label === 'ACCUMULATING' || sig.smartMoney.label === 'DISTRIBUTING'} />
         <Metric label="Inst. Flow" value={sig.institutional.label} tone={sig.institutional.tone} hot={sig.institutional.tone !== 'neutral'} />
         <Metric label="AI Trend" value={sig.aiTrend} tone={sig.tone} hot={sig.aiTrend.includes('Continuation') || sig.aiTrend.includes('Distribution')} />
@@ -302,13 +372,13 @@ const SignalCard = React.memo(function SignalCard({ name, tick }: { name: string
 
       <div className="mt-3 space-y-1.5">
         <div className={`rounded-md p-1 transition-all ${sig.liquidityStrength >= 90 ? 'ring-1 ring-emerald-300/50' : ''}`}>
-          <Bar value={sig.liquidityStrength} tone="bull" leftLabel="LIQUIDITY STRENGTH" rightLabel={`${sig.liquidityStrength}%`} />
+          <Bar value={animLiqStr} tone="bull" leftLabel="LIQUIDITY STRENGTH" rightLabel={`${animLiqStr.toFixed(0)}%`} />
         </div>
         <div className={`rounded-md p-1 transition-all ${sig.breakoutProb >= 65 ? 'ring-1 ring-emerald-300/50' : ''}`}>
-          <Bar value={sig.breakoutProb} tone="bull" leftLabel="BREAKOUT PROB" rightLabel={`${sig.breakoutProb}%`} />
+          <Bar value={animBreakout} tone="bull" leftLabel="BREAKOUT PROB" rightLabel={`${animBreakout.toFixed(0)}%`} />
         </div>
         <div className={`rounded-md p-1 transition-all ${sig.reversalProb >= 65 ? 'ring-1 ring-rose-300/50' : ''}`}>
-          <Bar value={sig.reversalProb} tone="bear" leftLabel="REVERSAL PROB" rightLabel={`${sig.reversalProb}%`} />
+          <Bar value={animReversal} tone="bear" leftLabel="REVERSAL PROB" rightLabel={`${animReversal.toFixed(0)}%`} />
         </div>
       </div>
     </div>
@@ -316,20 +386,54 @@ const SignalCard = React.memo(function SignalCard({ name, tick }: { name: string
 });
 
 const TopAISignalBar = ({ marketData, isConnected }: TopAISignalBarProps) => {
+  // Track latest tick arrival across all symbols for the freshness badge.
+  const lastTickMsRef = useRef<number>(Date.now());
+  const sigRef = useRef<string>('');
+  useEffect(() => {
+    const sig = INDICES
+      .map(({ key }) => {
+        const t = marketData[key];
+        return t ? `${t.price}|${t.volume}|${t.oi}` : '-';
+      })
+      .join('#');
+    if (sig !== sigRef.current) {
+      sigRef.current = sig;
+      lastTickMsRef.current = Date.now();
+    }
+  }, [marketData]);
+
+  // 1s heartbeat keeps the "ago" label and tween cadence visible.
+  const [, force] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => force((n) => n + 1), 1000);
+    return () => clearInterval(id);
+  }, []);
+
+  const agoSec = Math.max(0, Math.round((Date.now() - lastTickMsRef.current) / 1000));
+  const agoLabel = agoSec < 2 ? 'NOW' : agoSec < 60 ? `${agoSec}s ago` : `${Math.round(agoSec / 60)}m ago`;
+  const freshness = agoSec < 3 ? 'text-emerald-300' : agoSec < 15 ? 'text-amber-300' : 'text-rose-300';
+
   return (
     <section
       aria-label="AI Signal Deck"
       className="mb-3 rounded-xl border border-cyan-400/15 bg-gradient-to-br from-slate-950 via-slate-900/80 to-cyan-950/10 px-3 py-3 sm:px-4"
     >
-      <div className="mb-2.5 flex items-center justify-between px-0.5">
-        <div className="flex items-center gap-3">
+      <style jsx>{`
+        :global(.flash-up)   { box-shadow: inset 0 0 0 1px rgba(52, 211, 153, 0.55), 0 0 10px rgba(52, 211, 153, 0.22); }
+        :global(.flash-down) { box-shadow: inset 0 0 0 1px rgba(244, 114, 128, 0.55), 0 0 10px rgba(244, 114, 128, 0.22); }
+      `}</style>
+      <div className="mb-2.5 flex items-center justify-between px-0.5 flex-wrap gap-1">
+        <div className="flex items-center gap-3 min-w-0">
           <span className="text-lg font-black tracking-[0.22em] text-cyan-300 lg:text-2xl">AI SIGNAL DECK</span>
-          <span className="hidden text-sm font-semibold text-slate-400 sm:inline">· Institutional-grade observation · &lt; 3s read</span>
+          <span className="hidden text-sm font-semibold text-slate-400 sm:inline truncate">· Institutional-grade observation · &lt; 3s read</span>
         </div>
-        <span className="flex items-center gap-1.5 rounded-full border border-slate-600 bg-slate-900/80 px-2.5 py-1 text-[11px] font-bold text-slate-300">
-          <span className={`h-2 w-2 rounded-full ${isConnected ? 'bg-emerald-400 animate-pulse' : 'bg-rose-400'}`} />
-          {isConnected ? 'LIVE' : 'SYNC'}
-        </span>
+        <div className="flex items-center gap-2">
+          <span className={`text-[10px] font-bold tracking-widest tabular-nums ${freshness}`}>{agoLabel}</span>
+          <span className="flex items-center gap-1.5 rounded-full border border-slate-600 bg-slate-900/80 px-2.5 py-1 text-[11px] font-bold text-slate-300">
+            <span className={`h-2 w-2 rounded-full ${isConnected ? 'bg-emerald-400 animate-pulse' : 'bg-rose-400'}`} />
+            {isConnected ? 'LIVE' : 'SYNC'}
+          </span>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">

@@ -282,6 +282,373 @@ function buildLevelRows(data: SymbolChartData | null, spot: number): LevelRow[] 
   return rows;
 }
 
+// ── Liquidity Intelligence (12-parameter dashboard) ──────────────────────────
+
+type LiqKey =
+  | 'OB' | 'FVG' | 'BOS' | 'CHOCH'
+  | 'EQ_HIGH' | 'EQ_LOW' | 'INTERNAL' | 'EXTERNAL'
+  | 'DAY_HIGH' | 'DAY_LOW' | 'PREV_HIGH' | 'PREV_LOW';
+
+interface LiqParam {
+  key: LiqKey;
+  label: string;
+  short: string;
+  icon: string;
+  side: 'BUY' | 'SELL' | 'BOTH';
+  buy: number;
+  sell: number;
+  total: number;
+  share: number;     // % of all-param total
+  strength: number;  // 0-100
+}
+
+const LIQ_META: Record<LiqKey, { label: string; short: string; icon: string; ring: string; accent: string }> = {
+  OB:        { label: 'OB (ORDER BLOCK)',         short: 'OB',        icon: '▦', ring: '#fb923c', accent: 'text-amber-300' },
+  FVG:       { label: 'FVG (FAIR VALUE GAP)',     short: 'FVG',       icon: '▤', ring: '#22d3ee', accent: 'text-cyan-300' },
+  BOS:       { label: 'BOS (BREAK OF STRUCTURE)', short: 'BOS',       icon: '↗', ring: '#34d399', accent: 'text-emerald-300' },
+  CHOCH:     { label: 'CHOCH (CHANGE OF CHARACTER)', short: 'CHOCH', icon: '↻', ring: '#a78bfa', accent: 'text-violet-300' },
+  EQ_HIGH:   { label: 'EQUAL HIGHS LIQUIDITY',    short: 'EQ HIGH',   icon: '═', ring: '#f59e0b', accent: 'text-amber-300' },
+  EQ_LOW:    { label: 'EQUAL LOWS LIQUIDITY',     short: 'EQ LOW',    icon: '═', ring: '#84cc16', accent: 'text-lime-300' },
+  INTERNAL:  { label: 'INTERNAL LIQUIDITY',       short: 'INTERNAL',  icon: '◉', ring: '#38bdf8', accent: 'text-sky-300' },
+  EXTERNAL:  { label: 'EXTERNAL LIQUIDITY',       short: 'EXTERNAL',  icon: '◎', ring: '#f472b6', accent: 'text-pink-300' },
+  DAY_HIGH:  { label: 'DAY HIGH LIQUIDITY',       short: 'DAY HIGH',  icon: '☀', ring: '#60a5fa', accent: 'text-blue-300' },
+  DAY_LOW:   { label: 'DAY LOW LIQUIDITY',        short: 'DAY LOW',   icon: '☾', ring: '#f87171', accent: 'text-red-300' },
+  PREV_HIGH: { label: 'PREV HIGH LIQUIDITY',      short: 'PREV HIGH', icon: 'PH', ring: '#c084fc', accent: 'text-purple-300' },
+  PREV_LOW:  { label: 'PREV LOW LIQUIDITY',       short: 'PREV LOW',  icon: 'PL', ring: '#fb7185', accent: 'text-rose-300' },
+};
+
+function computeLiquidityIntel(data: SymbolChartData | null, spot: number): LiqParam[] {
+  if (!data) return [];
+
+  const c5 = data.candles5m ?? [];
+  const recent = c5.slice(-80);
+  const avgVol = recent.length
+    ? recent.reduce((a, c) => a + c.v, 0) / recent.length
+    : 0;
+  const SCALE = 1.2e8; // converts notional units to ~B-range for display
+
+  // OB liquidity (bullish→buy, bearish→sell)
+  const obs = (data.ob5m?.length ? data.ob5m : data.ob3m) ?? [];
+  let obBuy = 0, obSell = 0;
+  for (const o of obs) {
+    if (o.mitigated) continue;
+    const w = (o.strength ?? 1) * qualityRank(o.quality) * SCALE + (o.total_vol ?? 0) * 80;
+    if (o.type === 'bullish') obBuy += w;
+    else obSell += w;
+  }
+
+  // FVG liquidity
+  const fvgs = (data.fvg5m?.length ? data.fvg5m : data.fvg3m) ?? [];
+  let fvgBuy = 0, fvgSell = 0;
+  for (const f of fvgs) {
+    if (f.filled) continue;
+    const w = (f.strength ?? 1) * qualityRank(f.quality) * SCALE * 0.85 + (f.total_vol ?? 0) * 70;
+    if (f.type === 'bullish') fvgBuy += w;
+    else fvgSell += w;
+  }
+
+  // BOS — count higher-highs / lower-lows transitions in recent window
+  let bosBuy = 0, bosSell = 0;
+  if (recent.length > 6) {
+    let lastHi = recent[0].h, lastLo = recent[0].l;
+    for (let i = 3; i < recent.length; i++) {
+      const k = recent[i];
+      if (k.c > lastHi) { bosBuy += k.v * 90 + avgVol * 60; lastHi = k.h; }
+      if (k.c < lastLo) { bosSell += k.v * 90 + avgVol * 60; lastLo = k.l; }
+      lastHi = Math.max(lastHi, k.h);
+      lastLo = Math.min(lastLo, k.l);
+    }
+  }
+
+  // CHOCH — direction-change candles weighted by body
+  let chBuy = 0, chSell = 0;
+  for (let i = 1; i < recent.length; i++) {
+    const prev = recent[i - 1];
+    const k = recent[i];
+    const prevBull = prev.c >= prev.o;
+    const curBull = k.c >= k.o;
+    if (prevBull !== curBull) {
+      const body = Math.abs(k.c - k.o) * k.v * 30;
+      if (curBull) chBuy += body + avgVol * 35;
+      else chSell += body + avgVol * 35;
+    }
+  }
+
+  // EQ HIGHS / LOWS from liquidity zones
+  const liqZones = (data.liquidity5m?.length ? data.liquidity5m : data.liquidity3m) ?? [];
+  let eqHigh = 0, eqLow = 0;
+  for (const z of liqZones) {
+    if (z.swept) continue;
+    const w = (z.touchCount ?? z.touch_count ?? 1) * qualityRank(z.quality) * SCALE * 0.55
+            + (z.total_vol ?? 0) * 60;
+    if (z.type === 'sell_side') eqHigh += w;
+    else eqLow += w;
+  }
+
+  // INTERNAL vs EXTERNAL zones (relative to spot range)
+  const ranges = recent.length
+    ? [Math.min(...recent.map(c => c.l)), Math.max(...recent.map(c => c.h))]
+    : [0, 0];
+  const mid = (ranges[0] + ranges[1]) / 2;
+  const halfRange = (ranges[1] - ranges[0]) / 2 || 1;
+  let intBuy = 0, intSell = 0, extBuy = 0, extSell = 0;
+  const accumZone = (top: number, bottom: number, side: 'BUY' | 'SELL', weight: number) => {
+    const center = (top + bottom) / 2;
+    const offset = Math.abs(center - mid) / halfRange; // 0..1+
+    const inside = offset < 0.5;
+    if (inside) {
+      if (side === 'BUY') intBuy += weight; else intSell += weight;
+    } else {
+      if (side === 'BUY') extBuy += weight; else extSell += weight;
+    }
+  };
+  for (const o of obs) {
+    if (o.mitigated) continue;
+    const w = (o.strength ?? 1) * qualityRank(o.quality) * SCALE * 0.6;
+    accumZone(o.top, o.bottom, o.type === 'bullish' ? 'BUY' : 'SELL', w);
+  }
+  for (const f of fvgs) {
+    if (f.filled) continue;
+    const w = (f.strength ?? 1) * qualityRank(f.quality) * SCALE * 0.5;
+    accumZone(f.top, f.bottom, f.type === 'bullish' ? 'BUY' : 'SELL', w);
+  }
+
+  // Day / Prev levels — weight by volume + proximity to spot
+  const proximityBoost = (lvl: number) => {
+    if (!lvl || !spot) return 1;
+    const d = Math.abs(spot - lvl) / spot;
+    return 1 + Math.max(0, 0.6 - d * 200);
+  };
+  const lvlVol = recent.slice(-30).reduce((a, c) => a + c.v, 0);
+  const baseLvl = lvlVol * 55 + 0.35e9;
+  const dayHigh = data.levels?.cdh ? baseLvl * proximityBoost(data.levels.cdh) : 0;
+  const dayLow  = data.levels?.cdl ? baseLvl * proximityBoost(data.levels.cdl) : 0;
+  const prevHigh = data.levels?.pdh ? baseLvl * 0.8 * proximityBoost(data.levels.pdh) : 0;
+  const prevLow  = data.levels?.pdl ? baseLvl * 0.8 * proximityBoost(data.levels.pdl) : 0;
+
+  const raw: Array<{ key: LiqKey; buy: number; sell: number; side: 'BUY' | 'SELL' | 'BOTH' }> = [
+    { key: 'OB',        buy: obBuy,  sell: obSell,  side: 'BOTH' },
+    { key: 'FVG',       buy: fvgBuy, sell: fvgSell, side: 'BOTH' },
+    { key: 'BOS',       buy: bosBuy, sell: bosSell, side: 'BOTH' },
+    { key: 'CHOCH',     buy: chBuy,  sell: chSell,  side: 'BOTH' },
+    { key: 'EQ_HIGH',   buy: 0,      sell: eqHigh,  side: 'SELL' },
+    { key: 'EQ_LOW',    buy: eqLow,  sell: 0,       side: 'BUY' },
+    { key: 'INTERNAL',  buy: intBuy, sell: intSell, side: 'BOTH' },
+    { key: 'EXTERNAL',  buy: extBuy, sell: extSell, side: 'BOTH' },
+    { key: 'DAY_HIGH',  buy: 0,      sell: dayHigh, side: 'SELL' },
+    { key: 'DAY_LOW',   buy: dayLow, sell: 0,       side: 'BUY' },
+    { key: 'PREV_HIGH', buy: 0,      sell: prevHigh,side: 'SELL' },
+    { key: 'PREV_LOW',  buy: prevLow,sell: 0,       side: 'BUY' },
+  ];
+
+  const grandTotal = raw.reduce((a, r) => a + r.buy + r.sell, 0) || 1;
+  const maxParam = Math.max(...raw.map(r => r.buy + r.sell), 1);
+
+  return raw.map(r => {
+    const total = r.buy + r.sell;
+    const share = (total / grandTotal) * 100;
+    const strength = clampPct((total / maxParam) * 100);
+    const m = LIQ_META[r.key];
+    return {
+      key: r.key,
+      label: m.label,
+      short: m.short,
+      icon: m.icon,
+      side: r.side,
+      buy: r.buy,
+      sell: r.sell,
+      total,
+      share,
+      strength,
+    };
+  });
+}
+
+// AI smart-signal feed
+type SmartSignal = {
+  id: string;
+  kind: 'TRAP' | 'FAKE' | 'STOP_HUNT' | 'SMC' | 'OB' | 'FVG' | 'MTF' | 'AI' | 'INFO';
+  severity: 'HIGH' | 'MED' | 'LOW';
+  title: string;
+  detail: string;
+};
+
+function deriveSmartSignals(data: SymbolChartData | null, spot: number): SmartSignal[] {
+  if (!data) return [];
+  const out: SmartSignal[] = [];
+
+  for (const a of data.ai?.commandDeck?.alerts ?? []) {
+    out.push({ id: `cd-${a}`, kind: 'AI', severity: 'MED', title: 'AI ALERT', detail: a });
+  }
+
+  const liqAll = [...(data.liquidity5m ?? []), ...(data.liquidity3m ?? [])];
+  const sweptHigh = liqAll.find(z => z.swept && z.type === 'sell_side');
+  const sweptLow  = liqAll.find(z => z.swept && z.type === 'buy_side');
+  if (sweptHigh) out.push({
+    id: 'trap-hi', kind: 'TRAP', severity: 'HIGH',
+    title: 'BUY-SIDE LIQUIDITY SWEPT',
+    detail: `Sell-side raid @ ${fmtPrice(sweptHigh.level)} — reversal setup forming`,
+  });
+  if (sweptLow) out.push({
+    id: 'trap-lo', kind: 'TRAP', severity: 'HIGH',
+    title: 'SELL-SIDE LIQUIDITY SWEPT',
+    detail: `Buy-side raid @ ${fmtPrice(sweptLow.level)} — long entry zone`,
+  });
+
+  const ms = data.ai?.microstructure;
+  if (ms) {
+    if (ms.fakeBreakoutRisk >= 65) out.push({
+      id: 'fake', kind: 'FAKE',
+      severity: ms.fakeBreakoutRisk >= 80 ? 'HIGH' : 'MED',
+      title: 'FAKE BREAKOUT RISK ELEVATED',
+      detail: `Risk score ${ms.fakeBreakoutRisk.toFixed(0)}% — avoid breakout entries`,
+    });
+    if (ms.stopHuntRisk >= 60) out.push({
+      id: 'sh', kind: 'STOP_HUNT',
+      severity: ms.stopHuntRisk >= 80 ? 'HIGH' : 'MED',
+      title: 'STOP-HUNT ACTIVITY',
+      detail: `Hunt probability ${ms.stopHuntRisk.toFixed(0)}% — tighten / widen stops`,
+    });
+  }
+
+  if (data.ai?.smc) {
+    const sev: SmartSignal['severity'] = data.ai.smc.score >= 70 ? 'HIGH' : data.ai.smc.score >= 40 ? 'MED' : 'LOW';
+    out.push({
+      id: 'smc', kind: 'SMC', severity: sev,
+      title: `SMC ${data.ai.smc.state.replace(/_/g, ' ')}`,
+      detail: `Conviction ${data.ai.smc.score.toFixed(0)}%`,
+    });
+  }
+
+  const obs = (data.ob5m?.length ? data.ob5m : data.ob3m) ?? [];
+  for (const o of obs) {
+    if (o.mitigated || qualityRank(o.quality) < 2) continue;
+    const center = (o.top + o.bottom) / 2;
+    if (Math.abs(spot - center) / Math.max(spot, 1) < 0.0035) {
+      out.push({
+        id: `ob-${center.toFixed(0)}`, kind: 'OB', severity: 'MED',
+        title: `${o.type === 'bullish' ? 'BULLISH' : 'BEARISH'} OB IN PLAY`,
+        detail: `${o.quality} block ${fmtPrice(o.bottom)}–${fmtPrice(o.top)}`,
+      });
+      break;
+    }
+  }
+
+  const fvgs = (data.fvg5m?.length ? data.fvg5m : data.fvg3m) ?? [];
+  for (const f of fvgs) {
+    if (f.filled) continue;
+    if (spot >= Math.min(f.top, f.bottom) && spot <= Math.max(f.top, f.bottom)) {
+      out.push({
+        id: `fvg-${f.top.toFixed(0)}`, kind: 'FVG', severity: 'MED',
+        title: `${f.type === 'bullish' ? 'BULLISH' : 'BEARISH'} FVG FILLING`,
+        detail: `Gap ${fmtPrice(f.bottom)}–${fmtPrice(f.top)} actively reacting`,
+      });
+      break;
+    }
+  }
+
+  if (data.ai?.multiTimeframe && data.ai.multiTimeframe.alignmentPct >= 75) {
+    const dom = data.ai.multiTimeframe.macro.trend;
+    out.push({
+      id: 'mtf', kind: 'MTF', severity: 'MED',
+      title: 'MULTI-TIMEFRAME ALIGNED',
+      detail: `${dom} bias across MICRO·MEDIUM·MACRO (${data.ai.multiTimeframe.alignmentPct.toFixed(0)}%)`,
+    });
+  }
+
+  if (data.ai?.ensemble) {
+    const e = data.ai.ensemble;
+    const conviction = Math.abs(e.unifiedProbUp - 50);
+    if (e.confidence >= 70 && conviction >= 15) {
+      out.push({
+        id: 'ai-conv', kind: 'AI', severity: 'HIGH',
+        title: e.unifiedProbUp >= 50 ? 'AI HIGH-CONVICTION LONG' : 'AI HIGH-CONVICTION SHORT',
+        detail: `P(up) ${e.unifiedProbUp.toFixed(1)}% · conf ${e.confidence.toFixed(0)}% · hit ${e.hitRatePct.toFixed(0)}%`,
+      });
+    }
+  }
+
+  return out.slice(0, 14);
+}
+
+// Project a synthetic next-N price path from current sequence prediction
+function projectSequence(data: SymbolChartData | null, spot: number, steps = 8): number[] {
+  if (!data?.ai?.sequencePrediction || !spot) return [];
+  const p = data.ai.sequencePrediction;
+  const sign = p.nextMove === 'UP' ? 1 : p.nextMove === 'DOWN' ? -1 : 0;
+  const target = spot + sign * (p.nextMovePts || 0);
+  const noise = (data.candles5m ?? []).slice(-20);
+  const vol = noise.length
+    ? noise.reduce((a, c) => a + Math.abs(c.h - c.l), 0) / noise.length
+    : Math.max(spot * 0.0008, 1);
+  const out: number[] = [];
+  for (let i = 1; i <= steps; i++) {
+    const t = i / steps;
+    const drift = spot + (target - spot) * t;
+    const jitter = (Math.sin(i * 1.7) + Math.cos(i * 0.9)) * vol * 0.18;
+    out.push(drift + jitter);
+  }
+  return out;
+}
+
+const strengthTone = (v: number) =>
+  v >= 60 ? { tag: 'STRONG', cls: 'text-emerald-400' }
+  : v >= 30 ? { tag: 'MODERATE', cls: 'text-amber-300' }
+  : { tag: 'WEAK', cls: 'text-slate-500' };
+
+// Semi-circle gauge for the Liquidity Strength Meter strip — value glides via rAF.
+const Gauge: React.FC<{ value: number; color: string; size?: number }> = ({ value, color, size = 56 }) => {
+  const target = clampPct(value);
+  const [v, setV] = useState(target);
+  const fromRef = useRef(target);
+  const startRef = useRef(0);
+  const rafRef = useRef<number | null>(null);
+  const lastTargetRef = useRef(target);
+  useEffect(() => {
+    if (target === lastTargetRef.current) return;
+    fromRef.current = v;
+    lastTargetRef.current = target;
+    startRef.current = performance.now();
+    if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
+    const step = (now: number) => {
+      const t = Math.min(1, (now - startRef.current) / 500);
+      const eased = 1 - Math.pow(1 - t, 3);
+      setV(fromRef.current + (target - fromRef.current) * eased);
+      if (t < 1) rafRef.current = requestAnimationFrame(step);
+      else rafRef.current = null;
+    };
+    rafRef.current = requestAnimationFrame(step);
+    return () => { if (rafRef.current != null) cancelAnimationFrame(rafRef.current); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [target]);
+  const r = (size - 8) / 2;
+  const cx = size / 2;
+  const cy = size / 2 + r / 4;
+  const start = { x: cx - r, y: cy };
+  const end = { x: cx + r, y: cy };
+  const arcLength = Math.PI * r;
+  const dash = (v / 100) * arcLength;
+  return (
+    <svg width={size} height={size * 0.7} viewBox={`0 0 ${size} ${size * 0.75}`} className="block">
+      <path
+        d={`M ${start.x} ${start.y} A ${r} ${r} 0 0 1 ${end.x} ${end.y}`}
+        fill="none" stroke="#1f2937" strokeWidth="6" strokeLinecap="round"
+      />
+      <path
+        d={`M ${start.x} ${start.y} A ${r} ${r} 0 0 1 ${end.x} ${end.y}`}
+        fill="none" stroke={color} strokeWidth="6" strokeLinecap="round"
+        strokeDasharray={`${dash} ${arcLength}`}
+      />
+      <circle
+        cx={cx + r * Math.cos(Math.PI - (v / 100) * Math.PI)}
+        cy={cy - r * Math.sin(Math.PI - (v / 100) * Math.PI)}
+        r="3"
+        fill={color}
+      />
+    </svg>
+  );
+};
+
 // ── constants ─────────────────────────────────────────────────────────────────
 
 const SMC_TABS = [
@@ -388,11 +755,29 @@ const Stat: React.FC<{ k: string; v: string }> = ({ k, v }) => (
   </div>
 );
 
-const SummaryCell: React.FC<{ label: string; value: string; sub?: string; color: string }> = ({ label, value, sub, color }) => (
+const SummaryCell: React.FC<{
+  label: string;
+  value: string;
+  sub?: string;
+  color: string;
+  numericValue?: number;
+  format?: (n: number) => string;
+  numericSub?: number;
+  subFormat?: (n: number) => string;
+}> = ({ label, value, sub, color, numericValue, format, numericSub, subFormat }) => (
   <div>
     <div className="text-[8.5px] tracking-widest text-slate-400 font-bold">{label}</div>
     <div className={`text-[15px] font-bold tabular-nums ${color}`}>
-      {value} {sub && <span className="text-[9px] text-slate-500 font-normal">{sub}</span>}
+      {numericValue !== undefined && format
+        ? <LiveNumber value={numericValue} format={format} />
+        : value}
+      {(sub || numericSub !== undefined) && (
+        <span className="text-[9px] text-slate-500 font-normal ml-1">
+          {numericSub !== undefined && subFormat
+            ? <LiveNumber value={numericSub} format={subFormat} flash={false} />
+            : sub}
+        </span>
+      )}
     </div>
   </div>
 );
@@ -471,6 +856,35 @@ export default function ChartContent({ symbol: rawSymbol }: { symbol: string }) 
   const derived = useDerived(data);
   const levelRows = useMemo(() => buildLevelRows(data, displayPrice), [data, displayPrice]);
   const sparkData = useMemo(() => (data?.candles5m ?? []).slice(-40).map(c => c.c), [data]);
+  const liqIntel = useMemo(() => computeLiquidityIntel(data, displayPrice), [data, displayPrice]);
+
+  const liqTotals = useMemo(() => {
+    const buy = liqIntel.reduce((a, p) => a + p.buy, 0);
+    const sell = liqIntel.reduce((a, p) => a + p.sell, 0);
+    const total = buy + sell || 1;
+    return {
+      buy,
+      sell,
+      total,
+      buyPct: (buy / total) * 100,
+      sellPct: (sell / total) * 100,
+    };
+  }, [liqIntel]);
+
+  const buyBreakdown = useMemo(() => liqIntel
+    .filter(p => p.buy > 0)
+    .map(p => ({ ...p, value: p.buy, share: liqTotals.buy > 0 ? (p.buy / liqTotals.buy) * 100 : 0 }))
+    .sort((a, b) => b.value - a.value),
+  [liqIntel, liqTotals.buy]);
+
+  const sellBreakdown = useMemo(() => liqIntel
+    .filter(p => p.sell > 0)
+    .map(p => ({ ...p, value: p.sell, share: liqTotals.sell > 0 ? (p.sell / liqTotals.sell) * 100 : 0 }))
+    .sort((a, b) => b.value - a.value),
+  [liqIntel, liqTotals.sell]);
+
+  const smartSignals = useMemo(() => deriveSmartSignals(data, displayPrice), [data, displayPrice]);
+  const seqPath = useMemo(() => projectSequence(data, displayPrice), [data, displayPrice]);
 
   const futNear = displayPrice > 0 ? displayPrice * (1 + (changePct >= 0 ? 0.0035 : -0.0028)) : 0;
   const futFar = displayPrice > 0 ? displayPrice * (1 + (changePct >= 0 ? 0.0070 : -0.0055)) : 0;
@@ -885,6 +1299,477 @@ export default function ChartContent({ symbol: rawSymbol }: { symbol: string }) 
         </section>
       )}
 
+      {/* 3.55) AI COMMAND CENTER — TensorFlow predictive intelligence */}
+      {data?.ai && (
+        <section className="px-3 sm:px-5 flex flex-col gap-3">
+          {/* Pipeline status bar */}
+          <Card className="p-2 sm:p-3">
+            <div className="flex items-center flex-wrap gap-x-3 gap-y-1.5 text-[10px]">
+              <div className="flex items-center gap-1.5">
+                <span className={`w-1.5 h-1.5 rounded-full ${
+                  data.ai.commandDeck.streamState === 'LIVE' ? 'bg-emerald-400 animate-pulse'
+                  : data.ai.commandDeck.streamState === 'DELAYED' ? 'bg-amber-300'
+                  : 'bg-red-400'
+                }`} />
+                <span className="text-[9px] tracking-widest font-bold text-emerald-300">AI COMMAND CENTER</span>
+                <span className="text-[8.5px] text-slate-500 tracking-widest">
+                  {data.ai.provider.toUpperCase()} · v{data.ai.featureVersion}
+                </span>
+              </div>
+              <span className="text-slate-400">LAT <span className={`tabular-nums font-bold ${
+                data.ai.commandDeck.analysisLatencyMs < 80 ? 'text-emerald-400'
+                : data.ai.commandDeck.analysisLatencyMs < 200 ? 'text-amber-300'
+                : 'text-red-400'
+              }`}><LiveNumber value={data.ai.commandDeck.analysisLatencyMs} format={(n) => `${n.toFixed(0)}ms`} flash={false} /></span></span>
+              <span className="text-slate-400">CADENCE <span className="text-slate-200 tabular-nums">
+                <LiveNumber value={data.ai.commandDeck.pipelineCadenceMs} format={(n) => `${n.toFixed(0)}ms`} flash={false} /></span></span>
+              <span className="text-slate-400">EV/S <span className="text-slate-200 tabular-nums">
+                <LiveNumber value={data.ai.commandDeck.eventRatePerSec} format={(n) => n.toFixed(1)} flash={false} /></span></span>
+              <span className="text-slate-400">QUEUE <span className={`tabular-nums font-bold ${
+                data.ai.commandDeck.queueDepth < 5 ? 'text-emerald-400' : data.ai.commandDeck.queueDepth < 20 ? 'text-amber-300' : 'text-red-400'
+              }`}><LiveNumber value={data.ai.commandDeck.queueDepth} format={(n) => `${Math.round(n)}`} flash={false} /></span></span>
+              <span className="text-slate-400">CACHE <span className={`font-bold ${
+                data.ai.commandDeck.cacheState === 'HOT' ? 'text-emerald-400'
+                : data.ai.commandDeck.cacheState === 'WARM' ? 'text-amber-300'
+                : 'text-slate-500'
+              }`}>{data.ai.commandDeck.cacheState}</span></span>
+              <span className="ml-auto text-[8.5px] text-slate-500 tracking-widest hidden sm:block">
+                TF SEQUENCE · MTF · INSTITUTIONAL FLOW · MICROSTRUCTURE · ENSEMBLE
+              </span>
+            </div>
+          </Card>
+
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-2 sm:gap-3">
+            {/* Sequence forecast mini-chart */}
+            <Card className="p-3 lg:col-span-2 min-w-0">
+              <div className="flex items-center justify-between mb-2 flex-wrap gap-1">
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] tracking-widest font-bold text-violet-300">AI SEQUENCE FORECAST</span>
+                  <span className="text-[8.5px] text-slate-500 tracking-widest">
+                    HORIZON <span className="text-slate-300 tabular-nums">{Math.round((data.ai.sequencePrediction.horizonSec ?? 0) / 60)}m</span>
+                  </span>
+                </div>
+                <span className={`text-[10px] font-bold tracking-widest tabular-nums ${
+                  data.ai.sequencePrediction.nextMove === 'UP' ? 'text-emerald-400'
+                  : data.ai.sequencePrediction.nextMove === 'DOWN' ? 'text-red-400'
+                  : 'text-slate-300'
+                }`}>
+                  {data.ai.sequencePrediction.nextMove}
+                  {' '}
+                  {data.ai.sequencePrediction.nextMovePts >= 0 ? '+' : ''}
+                  {data.ai.sequencePrediction.nextMovePts.toFixed(1)} pts
+                </span>
+              </div>
+
+              {/* Past 40 candles + projected forecast */}
+              {(() => {
+                const past = sparkData;
+                const proj = seqPath;
+                const all = [...past, ...proj];
+                if (!all.length) return <div className="h-[90px] flex items-center justify-center text-[10px] text-slate-500">awaiting sequence model…</div>;
+                const min = Math.min(...all);
+                const max = Math.max(...all);
+                const range = max - min || 1;
+                const W = 600;
+                const H = 90;
+                const total = all.length;
+                const xAt = (i: number) => (i / Math.max(1, total - 1)) * W;
+                const yAt = (v: number) => H - ((v - min) / range) * (H - 6) - 3;
+                const pathPast = past.map((v, i) => `${i === 0 ? 'M' : 'L'}${xAt(i).toFixed(1)},${yAt(v).toFixed(1)}`).join(' ');
+                const pathProj = proj.length
+                  ? `M${xAt(past.length - 1).toFixed(1)},${yAt(past[past.length - 1] ?? min).toFixed(1)} ` +
+                    proj.map((v, i) => `L${xAt(past.length + i).toFixed(1)},${yAt(v).toFixed(1)}`).join(' ')
+                  : '';
+                const projColor = data.ai!.sequencePrediction.nextMove === 'UP' ? '#34d399' : data.ai!.sequencePrediction.nextMove === 'DOWN' ? '#f87171' : '#94a3b8';
+                return (
+                  <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" className="w-full h-[90px] sm:h-[110px]">
+                    <defs>
+                      <linearGradient id="forecastFill" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0%" stopColor={projColor} stopOpacity="0.35" />
+                        <stop offset="100%" stopColor={projColor} stopOpacity="0" />
+                      </linearGradient>
+                    </defs>
+                    {/* divider */}
+                    <line x1={xAt(past.length - 1)} y1="0" x2={xAt(past.length - 1)} y2={H} stroke="#334155" strokeDasharray="3 3" strokeWidth="1" />
+                    <path d={pathPast} stroke="#64748b" strokeWidth="1.4" fill="none" />
+                    {pathProj && (
+                      <>
+                        <path d={`${pathProj} L${W},${H} L${xAt(past.length - 1)},${H} Z`} fill="url(#forecastFill)" />
+                        <path d={pathProj} stroke={projColor} strokeWidth="1.8" fill="none" strokeDasharray="4 3" />
+                      </>
+                    )}
+                  </svg>
+                );
+              })()}
+
+              <div className="mt-2 grid grid-cols-2 gap-2 text-[10px]">
+                <div className="flex items-center justify-between bg-emerald-500/5 border border-emerald-500/20 rounded px-2 py-1">
+                  <span className="text-emerald-300 tracking-widest font-bold">CONTINUATION</span>
+                  <span className="text-emerald-400 font-bold tabular-nums">
+                    <LiveNumber value={data.ai.sequencePrediction.trendContinuationProb} format={(n) => `${n.toFixed(0)}%`} flash={false} />
+                  </span>
+                </div>
+                <div className="flex items-center justify-between bg-red-500/5 border border-red-500/20 rounded px-2 py-1">
+                  <span className="text-red-300 tracking-widest font-bold">REVERSAL</span>
+                  <span className="text-red-400 font-bold tabular-nums">
+                    <LiveNumber value={data.ai.sequencePrediction.reversalProb} format={(n) => `${n.toFixed(0)}%`} flash={false} />
+                  </span>
+                </div>
+              </div>
+            </Card>
+
+            {/* SMC regime + microstructure mega-card */}
+            <Card className="p-3 flex flex-col gap-2 min-w-0">
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] tracking-widest font-bold text-cyan-300">SMC REGIME</span>
+                <span className={`text-[8.5px] font-bold px-1.5 py-0.5 rounded tracking-widest ${
+                  data.ai.smc.state === 'BULLISH_IMBALANCE' ? 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/30'
+                  : data.ai.smc.state === 'BEARISH_IMBALANCE' ? 'bg-red-500/15 text-red-300 border border-red-500/30'
+                  : data.ai.smc.state === 'LIQUIDITY_SWEEP_RISK' ? 'bg-amber-500/15 text-amber-300 border border-amber-500/30'
+                  : 'bg-slate-500/15 text-slate-300 border border-slate-500/30'
+                }`}>
+                  {data.ai.smc.state.replace(/_/g, ' ')}
+                </span>
+              </div>
+              <div className="flex items-baseline gap-2">
+                <span className="text-[28px] font-bold tabular-nums text-slate-100 leading-none">
+                  <LiveNumber value={data.ai.smc.score} format={(n) => `${n.toFixed(0)}`} />
+                </span>
+                <span className="text-[10px] text-slate-500 tracking-widest">CONVICTION</span>
+              </div>
+              <div className="h-1.5 rounded-full bg-slate-800 overflow-hidden">
+                <div
+                  className={`h-full transition-all duration-700 ${
+                    data.ai.smc.state === 'BULLISH_IMBALANCE' ? 'bg-emerald-400'
+                    : data.ai.smc.state === 'BEARISH_IMBALANCE' ? 'bg-red-400'
+                    : data.ai.smc.state === 'LIQUIDITY_SWEEP_RISK' ? 'bg-amber-400'
+                    : 'bg-slate-500'
+                  }`}
+                  style={{ width: `${clampPct(data.ai.smc.score)}%` }}
+                />
+              </div>
+
+              <div className="mt-2 pt-2 border-t border-slate-800/60 grid grid-cols-2 gap-2 text-[10px]">
+                <div className={`p-2 rounded-md border ${
+                  data.ai.microstructure.fakeBreakoutRisk >= 65 ? 'bg-red-500/10 border-red-500/30' : 'bg-slate-800/40 border-slate-700/50'
+                }`}>
+                  <div className="text-[8.5px] tracking-widest text-slate-400 font-bold">FAKE BREAK</div>
+                  <div className={`text-[18px] font-bold tabular-nums ${
+                    data.ai.microstructure.fakeBreakoutRisk >= 65 ? 'text-red-400'
+                    : data.ai.microstructure.fakeBreakoutRisk >= 40 ? 'text-amber-300'
+                    : 'text-emerald-400'
+                  }`}>
+                    <LiveNumber value={data.ai.microstructure.fakeBreakoutRisk} format={(n) => `${n.toFixed(0)}%`} flash={false} />
+                  </div>
+                </div>
+                <div className={`p-2 rounded-md border ${
+                  data.ai.microstructure.stopHuntRisk >= 60 ? 'bg-amber-500/10 border-amber-500/30' : 'bg-slate-800/40 border-slate-700/50'
+                }`}>
+                  <div className="text-[8.5px] tracking-widest text-slate-400 font-bold">STOP HUNT</div>
+                  <div className={`text-[18px] font-bold tabular-nums ${
+                    data.ai.microstructure.stopHuntRisk >= 60 ? 'text-amber-300'
+                    : data.ai.microstructure.stopHuntRisk >= 40 ? 'text-amber-200'
+                    : 'text-emerald-400'
+                  }`}>
+                    <LiveNumber value={data.ai.microstructure.stopHuntRisk} format={(n) => `${n.toFixed(0)}%`} flash={false} />
+                  </div>
+                </div>
+              </div>
+            </Card>
+          </div>
+
+          {/* Smart alerts feed */}
+          <Card className="p-3">
+            <div className="flex items-center justify-between mb-2 flex-wrap gap-1">
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] tracking-widest font-bold text-amber-300">SMART ALERTS · LIVE FEED</span>
+                <span className="text-[8.5px] text-slate-500 tracking-widest">
+                  <span className="text-amber-300 tabular-nums">{smartSignals.length}</span> ACTIVE
+                </span>
+              </div>
+              <div className="hidden sm:flex items-center gap-2 text-[8.5px] tracking-widest">
+                <span className="text-red-400">● HIGH</span>
+                <span className="text-amber-300">● MED</span>
+                <span className="text-slate-500">● LOW</span>
+              </div>
+            </div>
+            {smartSignals.length === 0 ? (
+              <div className="text-[10px] text-slate-500 italic px-1 py-2">
+                No actionable signals — AI monitoring market structure…
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2 max-h-[260px] overflow-y-auto pr-1">
+                {smartSignals.map(s => {
+                  const tone =
+                    s.severity === 'HIGH' ? 'border-red-500/40 bg-red-500/5'
+                    : s.severity === 'MED'  ? 'border-amber-500/30 bg-amber-500/5'
+                    : 'border-slate-700/50 bg-slate-800/40';
+                  const dot =
+                    s.severity === 'HIGH' ? 'bg-red-400'
+                    : s.severity === 'MED'  ? 'bg-amber-300'
+                    : 'bg-slate-500';
+                  const kindLabel: Record<SmartSignal['kind'], string> = {
+                    TRAP: 'TRAP', FAKE: 'FAKE BO', STOP_HUNT: 'STOP HUNT',
+                    SMC: 'SMC', OB: 'OB', FVG: 'FVG', MTF: 'MTF', AI: 'AI', INFO: 'INFO',
+                  };
+                  return (
+                    <div key={s.id} className={`rounded-md border ${tone} p-2 flex flex-col gap-0.5 min-w-0`}>
+                      <div className="flex items-center gap-1.5">
+                        <span className={`w-1.5 h-1.5 rounded-full ${dot} shrink-0`} />
+                        <span className="text-[8.5px] tracking-widest font-bold text-slate-300 truncate">{kindLabel[s.kind]}</span>
+                        <span className={`ml-auto text-[8px] tracking-widest font-bold ${
+                          s.severity === 'HIGH' ? 'text-red-300'
+                          : s.severity === 'MED'  ? 'text-amber-200'
+                          : 'text-slate-500'
+                        }`}>{s.severity}</span>
+                      </div>
+                      <div className="text-[11px] font-bold text-slate-100 leading-tight truncate">{s.title}</div>
+                      <div className="text-[10px] text-slate-400 leading-snug line-clamp-2">{s.detail}</div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </Card>
+        </section>
+      )}
+
+      {/* 3.6) REAL-TIME CHART INTELLIGENCE — LIQUIDITY DASHBOARD */}
+      <section className="px-3 sm:px-5 flex flex-col gap-3">
+        {/* Header strip */}
+        <div className="flex items-center justify-between flex-wrap gap-2 pt-1">
+          <div className="flex items-center gap-2">
+            <div className="text-[10px] sm:text-[11px] tracking-[0.25em] font-bold text-emerald-400">
+              REAL-TIME CHART INTELLIGENCE
+            </div>
+            <span className="px-1.5 py-0.5 rounded bg-emerald-500/10 border border-emerald-500/30 text-[8px] tracking-widest text-emerald-300 font-bold">
+              LIVE
+            </span>
+          </div>
+          <div className="text-[9px] tracking-widest text-slate-500">
+            12 PARAMETERS · DYNAMIC LIQUIDITY MAP
+          </div>
+        </div>
+
+        {/* Row 1 — big buy/sell hero cards */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 sm:gap-3">
+          <Card className="p-3 sm:p-4 relative overflow-hidden">
+            <div className="absolute inset-0 bg-gradient-to-br from-emerald-500/10 via-transparent to-transparent pointer-events-none" />
+            <div className="relative flex items-start justify-between gap-2">
+              <div className="min-w-0">
+                <div className="text-[9px] sm:text-[10px] tracking-widest text-slate-400 font-bold">BUY SIDE LIQUIDITY</div>
+                <div className="mt-1 flex items-baseline gap-2 flex-wrap">
+                  <div className="text-emerald-400 font-bold tabular-nums text-[22px] sm:text-[28px] leading-none truncate">
+                    <LiveNumber value={liqTotals.buy} format={fmtBig} />
+                  </div>
+                  <div className="text-emerald-300 text-[11px] sm:text-[12px] font-bold tabular-nums">
+                    <LiveNumber value={liqTotals.buyPct} format={(n) => `${n.toFixed(0)}%`} />
+                  </div>
+                </div>
+                <div className="mt-1 text-[9px] text-slate-500 tracking-wider">
+                  STACKED BIDS · {buyBreakdown.length} ACTIVE ZONES
+                </div>
+              </div>
+              <div className="text-[24px] text-emerald-400/70 leading-none">▲</div>
+            </div>
+            <div className="mt-3 h-1.5 rounded-full bg-slate-800 overflow-hidden">
+              <div
+                className="h-full bg-gradient-to-r from-emerald-500 to-emerald-300 transition-all duration-700"
+                style={{ width: `${clampPct(liqTotals.buyPct)}%` }}
+              />
+            </div>
+          </Card>
+
+          <Card className="p-3 sm:p-4 relative overflow-hidden">
+            <div className="absolute inset-0 bg-gradient-to-br from-red-500/10 via-transparent to-transparent pointer-events-none" />
+            <div className="relative flex items-start justify-between gap-2">
+              <div className="min-w-0">
+                <div className="text-[9px] sm:text-[10px] tracking-widest text-slate-400 font-bold">SELL SIDE LIQUIDITY</div>
+                <div className="mt-1 flex items-baseline gap-2 flex-wrap">
+                  <div className="text-red-400 font-bold tabular-nums text-[22px] sm:text-[28px] leading-none truncate">
+                    <LiveNumber value={liqTotals.sell} format={fmtBig} />
+                  </div>
+                  <div className="text-red-300 text-[11px] sm:text-[12px] font-bold tabular-nums">
+                    <LiveNumber value={liqTotals.sellPct} format={(n) => `${n.toFixed(0)}%`} />
+                  </div>
+                </div>
+                <div className="mt-1 text-[9px] text-slate-500 tracking-wider">
+                  STACKED ASKS · {sellBreakdown.length} ACTIVE ZONES
+                </div>
+              </div>
+              <div className="text-[24px] text-red-400/70 leading-none">▼</div>
+            </div>
+            <div className="mt-3 h-1.5 rounded-full bg-slate-800 overflow-hidden">
+              <div
+                className="h-full bg-gradient-to-r from-red-500 to-red-300 transition-all duration-700"
+                style={{ width: `${clampPct(liqTotals.sellPct)}%` }}
+              />
+            </div>
+          </Card>
+        </div>
+
+        {/* Row 2 — 12-parameter overview grid */}
+        <Card className="p-3 sm:p-4">
+          <div className="flex items-center justify-between mb-3">
+            <div className="text-[10px] tracking-widest text-slate-300 font-bold">
+              LIQUIDITY INTELLIGENCE OVERVIEW
+            </div>
+            <div className="text-[9px] tracking-widest text-slate-500">
+              TOTAL · <span className="text-slate-200 tabular-nums">{fmtBig(liqTotals.total)}</span>
+            </div>
+          </div>
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-2">
+            {liqIntel.map(p => {
+              const meta = LIQ_META[p.key];
+              const tone = strengthTone(p.strength);
+              return (
+                <div
+                  key={p.key}
+                  className="relative rounded-lg border border-slate-800/70 bg-[#0b1220]/80 p-2.5 hover:border-slate-600/60 transition-colors min-w-0"
+                >
+                  <div className="flex items-center justify-between gap-1 min-w-0">
+                    <div className="flex items-center gap-1.5 min-w-0">
+                      <span className={`text-[12px] ${meta.accent}`}>{meta.icon}</span>
+                      <span className="text-[9px] tracking-widest text-slate-400 font-bold truncate">{meta.short}</span>
+                    </div>
+                    <span className={`text-[8px] tracking-widest font-bold ${tone.cls}`}>{tone.tag}</span>
+                  </div>
+                  <div className="mt-1.5 text-[15px] sm:text-[16px] font-bold tabular-nums text-slate-100 truncate">
+                    <LiveNumber value={p.total} format={fmtBig} />
+                  </div>
+                  <div className="text-[9px] text-slate-500 tabular-nums">
+                    <LiveNumber value={p.share} format={(n) => `${n.toFixed(1)}% share`} />
+                  </div>
+                  <div className="mt-2 h-1 rounded-full bg-slate-800 overflow-hidden">
+                    <div
+                      className="h-full transition-all duration-700"
+                      style={{ width: `${clampPct(p.strength)}%`, background: meta.ring }}
+                    />
+                  </div>
+                  <div className="mt-1.5 flex items-center justify-between text-[8px] tabular-nums">
+                    <span className="text-emerald-400">B {fmtBig(p.buy)}</span>
+                    <span className="text-red-400">S {fmtBig(p.sell)}</span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </Card>
+
+        {/* Row 3 — buy & sell breakdown tables */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-2 sm:gap-3">
+          <Card className="p-3 sm:p-4">
+            <div className="flex items-center justify-between mb-2">
+              <div className="text-[10px] tracking-widest font-bold text-emerald-400">
+                BUY SIDE LIQUIDITY BREAKDOWN
+              </div>
+              <div className="text-[9px] tabular-nums text-slate-500">{fmtBig(liqTotals.buy)}</div>
+            </div>
+            <div className="grid grid-cols-[1fr_auto_auto] gap-x-2 gap-y-1.5 text-[10px] sm:text-[11px]">
+              <div className="text-[8px] tracking-widest text-slate-500 font-bold">PARAMETER</div>
+              <div className="text-[8px] tracking-widest text-slate-500 font-bold text-right">LIQUIDITY</div>
+              <div className="text-[8px] tracking-widest text-slate-500 font-bold text-right pl-3">% SHARE</div>
+              {buyBreakdown.length === 0 && (
+                <div className="col-span-3 text-center text-slate-600 text-[10px] py-2">No buy-side data</div>
+              )}
+              {buyBreakdown.map(p => {
+                const meta = LIQ_META[p.key];
+                return (
+                  <React.Fragment key={p.key}>
+                    <div className="flex items-center gap-1.5 min-w-0">
+                      <span className={`${meta.accent}`}>{meta.icon}</span>
+                      <span className="text-slate-300 truncate">{p.label}</span>
+                    </div>
+                    <div className="text-emerald-300 tabular-nums font-bold text-right whitespace-nowrap">
+                      <LiveNumber value={p.value} format={fmtBig} />
+                    </div>
+                    <div className="flex items-center gap-1.5 justify-end pl-3 min-w-[80px] sm:min-w-[110px]">
+                      <div className="flex-1 h-1 rounded-full bg-slate-800 overflow-hidden hidden sm:block">
+                        <div className="h-full bg-emerald-500 transition-all duration-700" style={{ width: `${clampPct(p.share)}%` }} />
+                      </div>
+                      <span className="text-slate-400 tabular-nums text-[10px] whitespace-nowrap">
+                        <LiveNumber value={p.share} format={(n) => `${n.toFixed(1)}%`} flash={false} />
+                      </span>
+                    </div>
+                  </React.Fragment>
+                );
+              })}
+            </div>
+          </Card>
+
+          <Card className="p-3 sm:p-4">
+            <div className="flex items-center justify-between mb-2">
+              <div className="text-[10px] tracking-widest font-bold text-red-400">
+                SELL SIDE LIQUIDITY BREAKDOWN
+              </div>
+              <div className="text-[9px] tabular-nums text-slate-500">{fmtBig(liqTotals.sell)}</div>
+            </div>
+            <div className="grid grid-cols-[1fr_auto_auto] gap-x-2 gap-y-1.5 text-[10px] sm:text-[11px]">
+              <div className="text-[8px] tracking-widest text-slate-500 font-bold">PARAMETER</div>
+              <div className="text-[8px] tracking-widest text-slate-500 font-bold text-right">LIQUIDITY</div>
+              <div className="text-[8px] tracking-widest text-slate-500 font-bold text-right pl-3">% SHARE</div>
+              {sellBreakdown.length === 0 && (
+                <div className="col-span-3 text-center text-slate-600 text-[10px] py-2">No sell-side data</div>
+              )}
+              {sellBreakdown.map(p => {
+                const meta = LIQ_META[p.key];
+                return (
+                  <React.Fragment key={p.key}>
+                    <div className="flex items-center gap-1.5 min-w-0">
+                      <span className={`${meta.accent}`}>{meta.icon}</span>
+                      <span className="text-slate-300 truncate">{p.label}</span>
+                    </div>
+                    <div className="text-red-300 tabular-nums font-bold text-right whitespace-nowrap">
+                      <LiveNumber value={p.value} format={fmtBig} />
+                    </div>
+                    <div className="flex items-center gap-1.5 justify-end pl-3 min-w-[80px] sm:min-w-[110px]">
+                      <div className="flex-1 h-1 rounded-full bg-slate-800 overflow-hidden hidden sm:block">
+                        <div className="h-full bg-red-500 transition-all duration-700" style={{ width: `${clampPct(p.share)}%` }} />
+                      </div>
+                      <span className="text-slate-400 tabular-nums text-[10px] whitespace-nowrap">
+                        <LiveNumber value={p.share} format={(n) => `${n.toFixed(1)}%`} flash={false} />
+                      </span>
+                    </div>
+                  </React.Fragment>
+                );
+              })}
+            </div>
+          </Card>
+        </div>
+
+        {/* Row 4 — liquidity strength meter strip */}
+        <Card className="p-3 sm:p-4">
+          <div className="flex items-center justify-between mb-3">
+            <div className="text-[10px] tracking-widest font-bold text-slate-300">
+              LIQUIDITY STRENGTH METER · ALL PARAMETERS
+            </div>
+            <div className="hidden sm:flex items-center gap-2 text-[8px] tracking-widest">
+              <span className="text-emerald-400">● STRONG</span>
+              <span className="text-amber-300">● MODERATE</span>
+              <span className="text-slate-500">● WEAK</span>
+            </div>
+          </div>
+          <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 lg:grid-cols-12 gap-2">
+            {liqIntel.map(p => {
+              const meta = LIQ_META[p.key];
+              const tone = strengthTone(p.strength);
+              return (
+                <div key={p.key} className="flex flex-col items-center gap-0.5 min-w-0">
+                  <Gauge value={p.strength} color={meta.ring} size={56} />
+                  <div className={`text-[14px] font-bold tabular-nums ${meta.accent} leading-none`}>
+                    <LiveNumber value={p.strength} format={(n) => n.toFixed(0)} flash={false} /><span className="text-[8px] text-slate-500">%</span>
+                  </div>
+                  <div className="text-[8px] tracking-widest text-slate-500 font-bold truncate max-w-full">
+                    {meta.short}
+                  </div>
+                  <div className={`text-[8px] font-bold tracking-widest ${tone.cls}`}>{tone.tag}</div>
+                </div>
+              );
+            })}
+          </div>
+        </Card>
+      </section>
+
       {/* 4) LIQUIDITY SUMMARY + HEATMAP */}
       <section className="px-3 sm:px-5 grid grid-cols-1 lg:grid-cols-2 gap-2 sm:gap-3">
         <Card className="p-3">
@@ -892,11 +1777,31 @@ export default function ChartContent({ symbol: rawSymbol }: { symbol: string }) 
             LIQUIDITY SUMMARY
           </div>
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-center">
-            <SummaryCell label="TOTAL LIQUIDITY" value={fmtBig(derived.totalLiq)} color="text-slate-100" />
-            <SummaryCell label="BUY SIDE" value={fmtBig(derived.buyLiq)} sub={`(${derived.buyLiqPct.toFixed(0)}%)`} color="text-emerald-400" />
-            <SummaryCell label="SELL SIDE" value={fmtBig(derived.sellLiq)} sub={`(${derived.sellLiqPct.toFixed(0)}%)`} color="text-red-400" />
+            <SummaryCell label="TOTAL LIQUIDITY" numericValue={derived.totalLiq} format={fmtBig} value={fmtBig(derived.totalLiq)} color="text-slate-100" />
+            <SummaryCell
+              label="BUY SIDE"
+              numericValue={derived.buyLiq}
+              format={fmtBig}
+              value={fmtBig(derived.buyLiq)}
+              numericSub={derived.buyLiqPct}
+              subFormat={(n) => `(${n.toFixed(0)}%)`}
+              sub={`(${derived.buyLiqPct.toFixed(0)}%)`}
+              color="text-emerald-400"
+            />
+            <SummaryCell
+              label="SELL SIDE"
+              numericValue={derived.sellLiq}
+              format={fmtBig}
+              value={fmtBig(derived.sellLiq)}
+              numericSub={derived.sellLiqPct}
+              subFormat={(n) => `(${n.toFixed(0)}%)`}
+              sub={`(${derived.sellLiqPct.toFixed(0)}%)`}
+              color="text-red-400"
+            />
             <SummaryCell
               label="NET LIQUIDITY"
+              numericValue={derived.netLiq}
+              format={(n) => `${n >= 0 ? '+' : '-'}${fmtBig(Math.abs(n))}`}
               value={`${derived.netLiq >= 0 ? '+' : '-'}${fmtBig(Math.abs(derived.netLiq))}`}
               color={derived.netLiq >= 0 ? 'text-emerald-400' : 'text-red-400'}
             />

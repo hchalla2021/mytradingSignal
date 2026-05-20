@@ -38,27 +38,38 @@ export function useCandleAggregator(
     if (typeof window === 'undefined') return;
     try {
       const raw = sessionStorage.getItem(cacheKey);
+      const nowSec = Math.floor(Date.now() / 1000);
+      const sec = TF_SECONDS[tf];
+      // Drop cache if newest candle is older than the visible window — prevents
+      // a stale day's bars from dragging the viewport off real-time.
+      const MAX_STALE = Math.max(sec * MAX_CANDLES, 6 * 3600);
+      let cached: Candle[] | null = null;
       if (raw) {
         const parsed: State = JSON.parse(raw);
-        if (Array.isArray(parsed.candles)) setCandles(parsed.candles);
-      } else {
-        // Seed synthetic warm-up around current price so chart isn't blank.
-        if (livePrice && livePrice > 0) {
-          const now = Math.floor(Date.now() / 1000);
-          const sec = TF_SECONDS[tf];
-          const seed: Candle[] = [];
-          let px = livePrice * 0.985;
-          for (let i = 80; i > 0; i--) {
-            const drift = (Math.random() - 0.5) * livePrice * 0.0015;
-            const o = px;
-            const c = Math.max(1, px + drift);
-            const h = Math.max(o, c) + Math.random() * livePrice * 0.0008;
-            const l = Math.min(o, c) - Math.random() * livePrice * 0.0008;
-            seed.push({ time: now - i * sec, open: o, high: h, low: l, close: c, volume: Math.random() * 1000 });
-            px = c;
-          }
-          setCandles(seed);
+        if (Array.isArray(parsed.candles) && parsed.candles.length > 0) {
+          const newest = parsed.candles[parsed.candles.length - 1].time as number;
+          if (nowSec - newest <= MAX_STALE) cached = parsed.candles;
+          else sessionStorage.removeItem(cacheKey);
         }
+      }
+      if (cached) {
+        setCandles(cached);
+      } else if (livePrice && livePrice > 0) {
+        // Seed synthetic warm-up aligned to bucket boundaries so the very
+        // first live tick continues the series cleanly.
+        const nowBucket = Math.floor(nowSec / sec) * sec;
+        const seed: Candle[] = [];
+        let px = livePrice * 0.985;
+        for (let i = 80; i > 0; i--) {
+          const drift = (Math.random() - 0.5) * livePrice * 0.0015;
+          const o = px;
+          const c = Math.max(1, px + drift);
+          const h = Math.max(o, c) + Math.random() * livePrice * 0.0008;
+          const l = Math.min(o, c) - Math.random() * livePrice * 0.0008;
+          seed.push({ time: nowBucket - i * sec, open: o, high: h, low: l, close: c, volume: Math.random() * 1000 });
+          px = c;
+        }
+        setCandles(seed);
       }
     } catch { /* ignore */ }
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -87,11 +98,28 @@ export function useCandleAggregator(
           volume: vDelta,
         });
         while (out.length > MAX_CANDLES) out.shift();
+      } else if (last.time === bStart) {
+        // Immutable update so downstream consumers (lightweight-charts, memos)
+        // detect the change reliably instead of seeing a mutated object identity.
+        const updated = {
+          ...last,
+          high: Math.max(last.high, livePrice),
+          low: Math.min(last.low, livePrice),
+          close: livePrice,
+          volume: last.volume + vDelta,
+        };
+        if (
+          updated.high === last.high &&
+          updated.low === last.low &&
+          updated.close === last.close &&
+          updated.volume === last.volume
+        ) {
+          return prev;
+        }
+        out[out.length - 1] = updated;
       } else {
-        last.high = Math.max(last.high, livePrice);
-        last.low = Math.min(last.low, livePrice);
-        last.close = livePrice;
-        last.volume += vDelta;
+        // Out-of-order tick (timestamp older than current bucket) — ignore.
+        return prev;
       }
       try {
         if (typeof window !== 'undefined') {

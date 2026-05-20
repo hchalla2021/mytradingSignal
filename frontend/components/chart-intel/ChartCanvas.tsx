@@ -27,6 +27,9 @@ export default function ChartCanvas({ candles, visiblePlots, onSMC }: Props) {
   const chartRef = useRef<IChartApi | null>(null);
   const seriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null);
   const overlayRef = useRef<HTMLCanvasElement | null>(null);
+  const lastSetTimeRef = useRef<number | null>(null);
+  const lastSetLenRef = useRef<number>(0);
+  const didInitialFitRef = useRef<boolean>(false);
 
   const smc = useMemo(() => analyzeSMC(candles), [candles]);
 
@@ -86,14 +89,49 @@ export default function ChartCanvas({ candles, visiblePlots, onSMC }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Push data
+  // Push data — use incremental `update()` for tick-level changes so the chart
+  // actually animates in real time. Fall back to `setData()` for bulk loads /
+  // timeframe switches where the array shape changes.
   useEffect(() => {
-    if (!seriesRef.current || candles.length === 0) return;
-    const data: CandlestickData[] = candles.map(c => ({
-      time: c.time as UTCTimestamp,
-      open: c.open, high: c.high, low: c.low, close: c.close,
-    }));
-    seriesRef.current.setData(data);
+    const series = seriesRef.current;
+    const chart = chartRef.current;
+    if (!series || !chart || candles.length === 0) return;
+
+    const lastCandle = candles[candles.length - 1];
+    const lastTime = lastCandle.time as number;
+    const prevLen = lastSetLenRef.current;
+    const prevLastTime = lastSetTimeRef.current;
+
+    const lenDiff = candles.length - prevLen;
+    const isAppend = prevLastTime !== null && lenDiff === 1 && lastTime > prevLastTime;
+    const isInPlaceUpdate = prevLastTime !== null && lenDiff === 0 && lastTime === prevLastTime;
+
+    if (isAppend || isInPlaceUpdate) {
+      series.update({
+        time: lastTime as UTCTimestamp,
+        open: lastCandle.open,
+        high: lastCandle.high,
+        low: lastCandle.low,
+        close: lastCandle.close,
+      });
+    } else {
+      const data: CandlestickData[] = candles.map(c => ({
+        time: c.time as UTCTimestamp,
+        open: c.open, high: c.high, low: c.low, close: c.close,
+      }));
+      series.setData(data);
+      if (!didInitialFitRef.current) {
+        chart.timeScale().fitContent();
+        didInitialFitRef.current = true;
+      }
+    }
+    lastSetTimeRef.current = lastTime;
+    lastSetLenRef.current = candles.length;
+
+    // Keep the latest candle in view as new bars print.
+    if (isAppend) {
+      try { chart.timeScale().scrollToRealTime(); } catch { /* ignore */ }
+    }
 
     // Markers for BOS / CHOCH
     if (visiblePlots.bos) {
@@ -104,15 +142,11 @@ export default function ChartCanvas({ candles, visiblePlots, onSMC }: Props) {
         shape: s.dir === 'UP' ? 'arrowUp' : 'arrowDown',
         text: s.kind,
       }));
-      seriesRef.current.setMarkers(markers.filter(m => m.time != null));
+      series.setMarkers(markers.filter(m => m.time != null));
     } else {
-      seriesRef.current.setMarkers([]);
+      series.setMarkers([]);
     }
 
-    // Price lines for SUP / RES + Day / Prev day
-    seriesRef.current.applyOptions({});
-    // Clean previous price lines by recreating series options would be costly;
-    // we'll just keep stable price lines by adding them once via a ref map.
     drawOverlay();
   }, [candles, smc, visiblePlots]);
 

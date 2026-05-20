@@ -447,6 +447,111 @@ function hasMaterialChartChange(existing: SymbolChartData | null, incoming: Symb
     ) {
       return true;
     }
+
+    // Additional fields consumed by Liquidity Intelligence, AI Command Center,
+    // Smart Alerts, AI Ensemble, MTF, SMC, Sentiment sections — must invalidate
+    // when any of these tick-level signals mutate.
+    if (
+      ea.microstructure.liquidityDensity !== ia.microstructure.liquidityDensity ||
+      ea.microstructure.structureDensity !== ia.microstructure.structureDensity
+    ) {
+      return true;
+    }
+
+    if (
+      ea.smc?.state !== ia.smc?.state ||
+      ea.smc?.score !== ia.smc?.score
+    ) {
+      return true;
+    }
+
+    if (
+      ea.multiTimeframe?.alignmentPct !== ia.multiTimeframe?.alignmentPct ||
+      ea.multiTimeframe?.micro?.trend !== ia.multiTimeframe?.micro?.trend ||
+      ea.multiTimeframe?.micro?.momentum !== ia.multiTimeframe?.micro?.momentum ||
+      ea.multiTimeframe?.medium?.trend !== ia.multiTimeframe?.medium?.trend ||
+      ea.multiTimeframe?.medium?.momentum !== ia.multiTimeframe?.medium?.momentum ||
+      ea.multiTimeframe?.macro?.trend !== ia.multiTimeframe?.macro?.trend ||
+      ea.multiTimeframe?.macro?.momentum !== ia.multiTimeframe?.macro?.momentum
+    ) {
+      return true;
+    }
+
+    if (
+      ea.commandDeck.pipelineCadenceMs !== ia.commandDeck.pipelineCadenceMs ||
+      ea.commandDeck.cacheState !== ia.commandDeck.cacheState ||
+      ea.commandDeck.modelProvider !== ia.commandDeck.modelProvider ||
+      (ea.commandDeck.alerts ?? []).length !== (ia.commandDeck.alerts ?? []).length ||
+      (ea.commandDeck.alerts ?? []).join('|') !== (ia.commandDeck.alerts ?? []).join('|')
+    ) {
+      return true;
+    }
+
+    if (ea.ensemble || ia.ensemble) {
+      const eens = ea.ensemble;
+      const iens = ia.ensemble;
+      if (!eens || !iens) return true;
+      if (
+        eens.unifiedProbUp !== iens.unifiedProbUp ||
+        eens.confidence !== iens.confidence ||
+        eens.signedScore !== iens.signedScore ||
+        eens.hitRatePct !== iens.hitRatePct ||
+        eens.samples !== iens.samples ||
+        eens.calibrator?.w !== iens.calibrator?.w ||
+        eens.calibrator?.b !== iens.calibrator?.b ||
+        (eens.trail ?? []).length !== (iens.trail ?? []).length ||
+        eens.classProbabilities.STRONG_BUY !== iens.classProbabilities.STRONG_BUY ||
+        eens.classProbabilities.BUY !== iens.classProbabilities.BUY ||
+        eens.classProbabilities.NEUTRAL !== iens.classProbabilities.NEUTRAL ||
+        eens.classProbabilities.SELL !== iens.classProbabilities.SELL ||
+        eens.classProbabilities.STRONG_SELL !== iens.classProbabilities.STRONG_SELL
+      ) {
+        return true;
+      }
+    }
+  }
+
+  // Liquidity zone mutations (sweeps, new zones, touch counts) drive Liquidity Intelligence sections.
+  const liqSig = (z?: Liquidity[]) => {
+    const arr = z ?? [];
+    if (arr.length === 0) return `0`;
+    const last = arr[arr.length - 1];
+    return `${arr.length}|${last?.swept ? 1 : 0}|${last?.touchCount ?? last?.touch_count ?? 0}|${last?.level ?? 0}|${last?.total_vol ?? 0}`;
+  };
+  if (liqSig(existing.liquidity5m) !== liqSig(incoming.liquidity5m)) return true;
+  if (liqSig(existing.liquidity3m) !== liqSig(incoming.liquidity3m)) return true;
+
+  // OB / FVG mutations (new blocks, mitigation, fills) drive OB & FVG breakdown rows.
+  const obSig = (z?: OrderBlock[]) => {
+    const arr = z ?? [];
+    if (arr.length === 0) return `0`;
+    const last = arr[arr.length - 1];
+    return `${arr.length}|${last?.mitigated ? 1 : 0}|${last?.strength ?? 0}|${last?.top ?? 0}|${last?.total_vol ?? 0}`;
+  };
+  if (obSig(existing.ob5m) !== obSig(incoming.ob5m)) return true;
+  if (obSig(existing.ob3m) !== obSig(incoming.ob3m)) return true;
+
+  const fvgSig = (z?: FVG[]) => {
+    const arr = z ?? [];
+    if (arr.length === 0) return `0`;
+    const last = arr[arr.length - 1];
+    return `${arr.length}|${last?.filled ? 1 : 0}|${last?.strength ?? 0}|${last?.top ?? 0}|${last?.total_vol ?? 0}`;
+  };
+  if (fvgSig(existing.fvg5m) !== fvgSig(incoming.fvg5m)) return true;
+  if (fvgSig(existing.fvg3m) !== fvgSig(incoming.fvg3m)) return true;
+
+  // Levels (cdh/cdl/pdh/pdl) drive DAY/PREV liquidity cards.
+  const el = existing.levels;
+  const il = incoming.levels;
+  if (
+    el?.cdh !== il?.cdh ||
+    el?.cdl !== il?.cdl ||
+    el?.pdh !== il?.pdh ||
+    el?.pdl !== il?.pdl ||
+    (el?.support ?? []).length !== (il?.support ?? []).length ||
+    (el?.resistance ?? []).length !== (il?.resistance ?? []).length
+  ) {
+    return true;
   }
 
   return false;
