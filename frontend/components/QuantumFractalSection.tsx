@@ -508,53 +508,6 @@ const ConfluenceHeatmapCell = memo<{
 
 ConfluenceHeatmapCell.displayName = 'ConfluenceHeatmapCell';
 
-const RiskRewardMatrix = memo<{ convergenceRows: ConvergenceRow[] }>(({ convergenceRows }) => {
-  const maxReward = Math.max(...convergenceRows.map((r) => r.rewardScore), 50);
-  const maxRisk = Math.max(...convergenceRows.map((r) => r.riskScore), 50);
-
-  return (
-    <div className="rounded-2xl border border-slate-700/35 bg-slate-950/70 p-4 overflow-hidden">
-      <p className="text-[11px] font-black uppercase tracking-[0.16em] text-slate-300 mb-4">Risk / Reward Distribution</p>
-      <div className="relative h-[280px] border border-slate-700/50 rounded-xl bg-slate-900/50 p-4 overflow-auto">
-        <svg width="100%" height="280" className="absolute inset-0" style={{ minWidth: '400px' }}>
-          <defs>
-            <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
-              <path d="M 40 0 L 0 0 0 40" fill="none" stroke="rgba(100,116,139,0.1)" strokeWidth="0.5" />
-            </pattern>
-          </defs>
-          <rect width="100%" height="100%" fill="url(#grid)" />
-          <line x1="40" y1="260" x2="360" y2="260" stroke="rgba(148,163,184,0.3)" strokeWidth="1" />
-          <line x1="40" y1="260" x2="40" y2="20" stroke="rgba(148,163,184,0.3)" strokeWidth="1" />
-          {convergenceRows.map((row, idx) => {
-            const x = 50 + (row.riskScore / maxRisk) * 300;
-            const y = 250 - (row.rewardScore / maxReward) * 220;
-            const color = row.direction === 'LONG' ? '#10b981' : row.direction === 'SHORT' ? '#ef4444' : '#94a3b8';
-            return (
-              <g key={idx}>
-                <circle cx={x} cy={y} r="5" fill={color} opacity="0.6" />
-                <circle cx={x} cy={y} r="7" fill="none" stroke={color} strokeWidth="1.5" opacity="0.3" />
-              </g>
-            );
-          })}
-        </svg>
-        <div className="relative z-10 text-[8px] text-slate-500 pointer-events-none">
-          <span className="absolute bottom-2 left-2">0 Risk</span>
-          <span className="absolute bottom-2 right-2">High Risk</span>
-          <span className="absolute top-2 left-0 -rotate-90 origin-left">Low Reward</span>
-          <span className="absolute top-2 right-0 -rotate-90 origin-right">High Reward</span>
-        </div>
-      </div>
-      <div className="mt-3 flex flex-wrap gap-3 text-[10px]">
-        <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-emerald-500" /> Long Setup</span>
-        <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-red-500" /> Short Setup</span>
-        <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-full bg-slate-500" /> Neutral</span>
-      </div>
-    </div>
-  );
-});
-
-RiskRewardMatrix.displayName = 'RiskRewardMatrix';
-
 const InstitutionalConvergenceBoard = memo<{ convergenceRows: ConvergenceRow[] }>(({ convergenceRows }) => {
   const liveRows = convergenceRows.filter((r) => r.status === 'LIVE');
   const sourceRows = liveRows.length > 0 ? liveRows : convergenceRows;
@@ -625,76 +578,70 @@ const InstitutionalConfluenceCard = memo<{ convergenceRow: ConvergenceRow }>(({ 
   const rewardColor = convergenceRow.rewardScore >= 65 ? 'text-emerald-300' : convergenceRow.rewardScore >= 45 ? 'text-cyan-300' : 'text-slate-300';
   const execColor = convergenceRow.executionProbability >= 70 ? 'text-emerald-300' : convergenceRow.executionProbability >= 55 ? 'text-amber-300' : 'text-slate-300';
 
+  const Stat = ({ label, value, tone }: { label: string; value: string; tone: string }) => (
+    <div className="rounded-md border border-slate-800/60 bg-slate-900/70 px-2 py-1.5">
+      <p className="text-[9.5px] sm:text-[10px] font-semibold uppercase tracking-wider text-slate-400 leading-tight">{label}</p>
+      <p className={`mt-0.5 text-[13px] sm:text-[14px] font-black font-mono tabular-nums leading-none ${tone}`}>{value}</p>
+    </div>
+  );
+
   return (
-    <div className="rounded-2xl border border-slate-700/45 bg-slate-950/70 p-3.5 overflow-hidden group hover:border-slate-600/60 transition-colors duration-200">
-      <div className="flex items-start justify-between gap-2 mb-3">
-        <div>
-          <p className="text-[11px] font-black uppercase tracking-[0.14em] text-slate-100">{convergenceRow.label}</p>
-          <div className="mt-2 flex flex-wrap gap-1.5">
-            <span className={`inline-flex items-center rounded border px-1.5 py-0.5 text-[8px] font-black uppercase ${getDirectionTone(convergenceRow.direction)}`}>
+    <div className="rounded-xl border border-slate-700/45 bg-slate-950/70 p-3 sm:p-3.5 overflow-hidden group hover:border-slate-600/60 transition-colors duration-200">
+      {/* Header: symbol + tags ↔ confluence % */}
+      <div className="flex items-start justify-between gap-2 mb-2.5 sm:mb-3">
+        <div className="min-w-0">
+          <p className="text-[12.5px] sm:text-[13.5px] font-black uppercase tracking-[0.12em] text-slate-100 truncate leading-tight">{convergenceRow.label}</p>
+          <div className="mt-1.5 flex flex-wrap gap-1">
+            <span className={`inline-flex items-center rounded border px-1.5 py-[1px] text-[9.5px] sm:text-[10px] font-black uppercase tracking-wide ${getDirectionTone(convergenceRow.direction)}`}>
               {convergenceRow.direction}
             </span>
-            <span className={`inline-flex items-center rounded border px-1.5 py-0.5 text-[8px] font-black uppercase ${getStatusTone(convergenceRow.status)}`}>
+            <span className={`inline-flex items-center rounded border px-1.5 py-[1px] text-[9.5px] sm:text-[10px] font-black uppercase tracking-wide ${getStatusTone(convergenceRow.status)}`}>
               {convergenceRow.status}
             </span>
           </div>
         </div>
-        <div className="text-right">
-          <p className={`text-[16px] font-black font-mono leading-none ${convergenceRow.confluenceScore >= 75 ? 'text-emerald-300' : convergenceRow.confluenceScore >= 50 ? 'text-cyan-300' : 'text-slate-300'}`}>
-            {convergenceRow.confluenceScore}%
+        <div className="text-right shrink-0">
+          <p className={`text-[22px] sm:text-[24px] font-black font-mono tabular-nums leading-none ${convergenceRow.confluenceScore >= 75 ? 'text-emerald-300' : convergenceRow.confluenceScore >= 50 ? 'text-cyan-300' : 'text-slate-300'}`}>
+            {convergenceRow.confluenceScore}<span className="text-[13px] sm:text-[14px]">%</span>
           </p>
-          <p className="text-[9px] font-mono text-slate-400 mt-1">confluence</p>
+          <p className="text-[9.5px] sm:text-[10px] font-semibold uppercase tracking-wider text-slate-500 mt-0.5">Confluence</p>
         </div>
       </div>
 
-      <div className="grid grid-cols-3 gap-1.5 text-[9px] mb-3">
-        <div className="rounded-lg border border-slate-800/60 bg-slate-900/70 px-2 py-1.5">
-          <p className="text-slate-500">Reward</p>
-          <p className={`font-black ${rewardColor}`}>{convergenceRow.rewardScore}%</p>
-        </div>
-        <div className="rounded-lg border border-slate-800/60 bg-slate-900/70 px-2 py-1.5">
-          <p className="text-slate-500">Risk</p>
-          <p className={`font-black ${riskColor}`}>{convergenceRow.riskScore}%</p>
-        </div>
-        <div className="rounded-lg border border-slate-800/60 bg-slate-900/70 px-2 py-1.5">
-          <p className="text-slate-500">R:R</p>
-          <p className="font-black text-violet-300">{convergenceRow.riskRewardRatio.toFixed(1)}x</p>
-        </div>
+      {/* Reward / Risk / R:R */}
+      <div className="grid grid-cols-3 gap-1.5 mb-1.5">
+        <Stat label="Reward" value={`${convergenceRow.rewardScore}%`} tone={rewardColor} />
+        <Stat label="Risk" value={`${convergenceRow.riskScore}%`} tone={riskColor} />
+        <Stat label="R:R" value={`${convergenceRow.riskRewardRatio.toFixed(1)}x`} tone="text-violet-300" />
       </div>
 
-      <div className="grid grid-cols-2 gap-1.5 text-[9px]">
-        <div className="rounded-lg border border-slate-800/60 bg-slate-900/70 px-2 py-1.5">
-          <p className="text-slate-500">Exec</p>
-          <p className={`font-black ${execColor}`}>{convergenceRow.executionProbability}%</p>
-        </div>
-        <div className="rounded-lg border border-slate-800/60 bg-slate-900/70 px-2 py-1.5">
-          <p className="text-slate-500">SmartMoney</p>
-          <p className="font-black text-cyan-300">{convergenceRow.smartMoneyAlignment}%</p>
-        </div>
+      {/* Exec / Smart Money */}
+      <div className="grid grid-cols-2 gap-1.5 mb-1.5">
+        <Stat label="Exec" value={`${convergenceRow.executionProbability}%`} tone={execColor} />
+        <Stat label="Smart $" value={`${convergenceRow.smartMoneyAlignment}%`} tone="text-cyan-300" />
       </div>
 
-      <div className="mt-2 grid grid-cols-2 gap-1.5 text-[9px]">
-        <div className="rounded-lg border border-slate-800/60 bg-slate-900/70 px-2 py-1.5">
-          <p className="text-slate-500">Trap Risk</p>
-          <p className={`font-black ${convergenceRow.liquidityTrapRisk <= 35 ? 'text-emerald-300' : convergenceRow.liquidityTrapRisk <= 60 ? 'text-amber-300' : 'text-rose-300'}`}>
-            {convergenceRow.liquidityTrapRisk}%
-          </p>
-        </div>
-        <div className="rounded-lg border border-slate-800/60 bg-slate-900/70 px-2 py-1.5">
-          <p className="text-slate-500">Alerts</p>
-          <p className={`font-black ${convergenceRow.alerts.length === 0 ? 'text-slate-300' : convergenceRow.alerts.length <= 2 ? 'text-amber-300' : 'text-rose-300'}`}>
-            {convergenceRow.alerts.length}
-          </p>
-        </div>
+      {/* Trap / Alerts */}
+      <div className="grid grid-cols-2 gap-1.5">
+        <Stat
+          label="Trap Risk"
+          value={`${convergenceRow.liquidityTrapRisk}%`}
+          tone={convergenceRow.liquidityTrapRisk <= 35 ? 'text-emerald-300' : convergenceRow.liquidityTrapRisk <= 60 ? 'text-amber-300' : 'text-rose-300'}
+        />
+        <Stat
+          label="Alerts"
+          value={String(convergenceRow.alerts.length)}
+          tone={convergenceRow.alerts.length === 0 ? 'text-slate-300' : convergenceRow.alerts.length <= 2 ? 'text-amber-300' : 'text-rose-300'}
+        />
       </div>
 
-      <div className="mt-2 flex items-center justify-between text-[8px] font-mono text-slate-500">
-        <span>{convergenceRow.dataSource}</span>
-        <span>{Math.round(convergenceRow.optionChainAgeSec)}s age</span>
+      <div className="mt-2 flex items-center justify-between text-[9.5px] sm:text-[10px] font-mono text-slate-500">
+        <span className="truncate">{convergenceRow.dataSource}</span>
+        <span className="tabular-nums">{Math.round(convergenceRow.optionChainAgeSec)}s age</span>
       </div>
 
       {convergenceRow.alerts.length > 0 && (
-        <p className="mt-2 text-[9px] leading-relaxed text-amber-200/90 line-clamp-2">
+        <p className="mt-1.5 text-[10.5px] sm:text-[11px] leading-snug text-amber-200/90 line-clamp-2">
           {convergenceRow.alerts[0]}
         </p>
       )}
@@ -945,38 +892,35 @@ const InstitutionalConfluenceEngine = memo<{ strikeData: ReturnType<typeof useSt
                 Institutional Confluence Engine
               </h3>
             </div>
-            <p className="mt-2 text-[11px] sm:text-[12px] text-slate-300">Enterprise-grade confluence analytics with risk/reward matrix, execution probability, and smart money alignment.</p>
+            <p className="mt-2 text-[11px] sm:text-[12px] text-slate-300">Enterprise-grade confluence analytics with execution probability and smart money alignment.</p>
           </div>
         </div>
 
         <InstitutionalConvergenceBoard convergenceRows={convergenceRows} />
 
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          <RiskRewardMatrix convergenceRows={convergenceRows} />
-          <div className="rounded-2xl border border-slate-700/35 bg-slate-950/70 p-4 overflow-y-auto max-h-[380px]">
-            <p className="text-[11px] font-black uppercase tracking-[0.16em] text-slate-300 mb-3 sticky top-0 bg-slate-950/70 pb-2">Convergence Signals</p>
-            <div className="flex flex-col gap-2.5">
-              {confluenceSymbols.slice(0, 6).map(({ sym, state }) => (
-                <div key={sym} className="rounded-lg border border-slate-700/40 bg-slate-900/50 p-2.5">
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="text-[10px] font-black text-cyan-300 uppercase">{SYMBOL_LABELS[sym]}</span>
-                    <span className={`text-[11px] font-black px-1.5 py-0.5 rounded ${state.action === 'LONG READY' ? 'text-emerald-300 bg-emerald-500/20' : state.action === 'SHORT READY' ? 'text-red-300 bg-red-500/20' : 'text-amber-300 bg-amber-500/20'}`}>
-                      {state.action}
-                    </span>
-                  </div>
-                  <div className="mt-1.5 flex gap-1.5 text-[8px]">
-                    <span className="text-slate-400">Conf: <span className="text-slate-200 font-bold">{state.confluenceScore}%</span></span>
-                    <span className="text-slate-400">Gates: <span className="text-slate-200 font-bold">{state.passed}/{state.total}</span></span>
-                  </div>
+        <div className="rounded-2xl border border-slate-700/35 bg-slate-950/70 p-3 sm:p-4 overflow-y-auto max-h-[380px]">
+          <p className="text-[11px] font-black uppercase tracking-[0.16em] text-slate-300 mb-3 sticky top-0 bg-slate-950/70 pb-2">Convergence Signals</p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2.5">
+            {confluenceSymbols.slice(0, 6).map(({ sym, state }) => (
+              <div key={sym} className="rounded-lg border border-slate-700/40 bg-slate-900/50 p-2.5">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-[10px] font-black text-cyan-300 uppercase">{SYMBOL_LABELS[sym]}</span>
+                  <span className={`text-[11px] font-black px-1.5 py-0.5 rounded ${state.action === 'LONG READY' ? 'text-emerald-300 bg-emerald-500/20' : state.action === 'SHORT READY' ? 'text-red-300 bg-red-500/20' : 'text-amber-300 bg-amber-500/20'}`}>
+                    {state.action}
+                  </span>
                 </div>
-              ))}
-            </div>
+                <div className="mt-1.5 flex gap-1.5 text-[8px]">
+                  <span className="text-slate-400">Conf: <span className="text-slate-200 font-bold">{state.confluenceScore}%</span></span>
+                  <span className="text-slate-400">Gates: <span className="text-slate-200 font-bold">{state.passed}/{state.total}</span></span>
+                </div>
+              </div>
+            ))}
           </div>
         </div>
 
-        <section className="rounded-2xl border border-slate-700/40 bg-slate-900/45 p-3.5 sm:p-4">
-          <p className="text-[11px] font-black uppercase tracking-[0.16em] text-slate-300 mb-3">Convergence Cards (Executive Desk)</p>
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+        <section className="rounded-2xl border border-slate-700/40 bg-slate-900/45 p-2.5 sm:p-3 lg:p-4">
+          <p className="text-[10px] sm:text-[11px] font-black uppercase tracking-[0.16em] text-slate-300 mb-2.5">Convergence Cards (Executive Desk)</p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-2 sm:gap-2.5">
             {convergenceRows.map((row) => (
               <InstitutionalConfluenceCard key={row.symbol} convergenceRow={row} />
             ))}

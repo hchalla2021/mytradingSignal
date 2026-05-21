@@ -2,6 +2,7 @@
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import type { MarketTick } from '@/hooks/useMarketSocket';
+import { updateBuyerIntel } from '@/lib/buyerIntelligence';
 
 type IndexKey = 'NIFTY' | 'BANKNIFTY' | 'SENSEX';
 
@@ -134,26 +135,33 @@ const FIIDIIFlowStrip = ({ marketData, isConnected }: FIIDIIFlowStripProps) => {
     const ticks = [nifty, bank, sensex].filter((t): t is MarketTick => !!t && !!t.price);
     if (!ticks.length) return null;
 
-    // Signed ₹ notional turnover per index (Cr)
-    const turnoverCr = (t?: MarketTick | null) => {
+    // Pull incremental buyer-side intel (signed delta-flow + OI buildup + accumulation).
+    const niftyI  = updateBuyerIntel('NIFTY', nifty);
+    const bankI   = updateBuyerIntel('BANKNIFTY', bank);
+    const sensexI = updateBuyerIntel('SENSEX', sensex);
+
+    // Signed ₹-Cr turnover per index, biased by REAL signed delta-flow and OI buildup
+    // (long-buildup / short-cover → bullish; short-build / long-unwind → bearish).
+    const turnoverCr = (t: MarketTick | null | undefined, intel: { deltaFlow: number; oiBuildup: number }) => {
       if (!t || !t.price) return 0;
-      const sign = Math.sign(t.changePercent || 0);
-      const pcrAdj = t.pcr ? (t.pcr - 1) * 0.4 : 0; // PCR>1 → buying tilt, <1 → selling tilt
-      const lean = sign + pcrAdj;
+      const flowSign = intel.deltaFlow / 100;           // -1..+1 from real signed Δprice·Δvol
+      const oiSign   = intel.oiBuildup / 100;           // -1..+1 from ΔOI alignment
+      const lean     = flowSign * 0.7 + oiSign * 0.5;   // composite institutional lean
       return ((t.volume || 0) * t.price * lean) / 1e7;
     };
 
-    const niftyT = turnoverCr(nifty);
-    const bankT = turnoverCr(bank);
-    const sensexT = turnoverCr(sensex);
+    const niftyT  = turnoverCr(nifty,  niftyI);
+    const bankT   = turnoverCr(bank,   bankI);
+    const sensexT = turnoverCr(sensex, sensexI);
 
-    // FII proxy: dominates NIFTY + BANK NIFTY (foreign futures heavy)
+    // FII proxy: foreign book is futures-heavy → NIFTY + BANKNIFTY dominate.
     const fii = niftyT * 0.55 + bankT * 0.35 + sensexT * 0.10;
-    // DII proxy: counter-tilts FII with damped magnitude + SENSEX weighting (broad domestic)
-    const dii = -fii * 0.55 + sensexT * 0.25 + bankT * 0.05;
+    // DII proxy: domestic counter-flow (damped) + broad cash via SENSEX, confirmed by accumulation.
+    const accumBias = ((niftyI.accumulation + bankI.accumulation + sensexI.accumulation) / 3 - 50) / 50; // -1..+1
+    const dii = -fii * 0.55 + sensexT * 0.25 + bankT * 0.05 + accumBias * Math.abs(fii) * 0.25;
     const net = fii + dii;
 
-    const ref = ticks.reduce((s, t) => s + (t.volume || 0) * t.price, 0) / 1e7; // total ₹ Cr notional
+    const ref = ticks.reduce((s, t) => s + (t.volume || 0) * t.price, 0) / 1e7;
     const norm = (v: number) => (ref > 0 ? Math.min(100, Math.round((Math.abs(v) / ref) * 220)) : 0);
 
     const tone = (v: number, eps = 50): Tone => (v > eps ? 'bull' : v < -eps ? 'bear' : 'neutral');

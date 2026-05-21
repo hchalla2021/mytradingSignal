@@ -12,6 +12,7 @@ import {
 } from '@/hooks/useChartIntelligence';
 import { useMarketSocket } from '@/hooks/useMarketSocket';
 import { useCompassSocket, type CompassIndex } from '@/hooks/useCompassSocket';
+import { updateBuyerIntel, aggregateIntel, type BuyerIntel } from '@/lib/buyerIntelligence';
 
 // ── Institutional Chart Intelligence Enhancement Layer ──────────────────────────────
 // Premium Bloomberg-style dashboard with institutional-grade metrics,
@@ -5147,6 +5148,89 @@ ChartAICommandDeck.displayName = 'ChartAICommandDeck';
 
 // ── Main Component ──────────────────────────────────────────────────────────
 
+// ── Buyer-Side Institutional Micro-Strip ────────────────────────────────────
+// Ultra-compact, tick-driven row showing BOS / CHoCH / FVG / OB / BSL / PDH /
+// Support / ΔOI / δFlow / VolExp / AI confidence per index plus a basket roll-up.
+// Allocation-free per render; reuses the shared buyerIntelligence engine.
+interface BuyerIntelRow { label: string; intel: BuyerIntel }
+const BuyerIntelMicroStrip = memo(({ agg, rows }: { agg: BuyerIntel; rows: BuyerIntelRow[] }) => {
+  const Chip = ({ on, color, text }: { on: boolean; color: 'em' | 'cy' | 'am'; text: string }) => {
+    if (!on) return null;
+    const cls = color === 'em'
+      ? 'border-emerald-400/40 bg-emerald-500/10 text-emerald-300'
+      : color === 'cy'
+      ? 'border-cyan-400/40 bg-cyan-500/10 text-cyan-300'
+      : 'border-amber-400/40 bg-amber-500/10 text-amber-300';
+    return <span className={`rounded border ${cls} px-1.5 py-0.5 text-[9px] font-bold tracking-wide`}>{text}</span>;
+  };
+  const probTone = (p: number) => p >= 65 ? 'text-bullish' : p <= 35 ? 'text-bearish' : 'text-neutral';
+  const signedTone = (v: number) => v > 0 ? 'text-bullish' : v < 0 ? 'text-bearish' : 'text-neutral';
+
+  return (
+    <div className="mb-3 rounded-xl border border-emerald-500/20 bg-gradient-to-br from-slate-900/80 via-slate-900/60 to-emerald-950/20 p-2 sm:p-2.5">
+      {/* Basket roll-up */}
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-700/40 pb-1.5 mb-1.5">
+        <div className="flex items-center gap-2 min-w-0">
+          <span className="text-[9px] font-black tracking-[0.18em] text-emerald-300 uppercase">Buyer-Side AI</span>
+          <span className={`text-[11px] font-extrabold tabular-nums ${probTone(agg.bullishProb)}`}>{agg.bullishProb}% Bull</span>
+          <span className="text-[9px] text-dark-muted">Conf <span className="text-white font-bold">{agg.instBuying}%</span></span>
+        </div>
+        <div className="flex flex-wrap items-center gap-1">
+          <span className={`rounded border border-slate-700/50 bg-slate-900/60 px-1.5 py-0.5 text-[9px] font-bold ${signedTone(agg.marketPulse)} tabular-nums`}>Pulse {agg.marketPulse >= 0 ? '+' : ''}{agg.marketPulse}</span>
+          <span className={`rounded border border-slate-700/50 bg-slate-900/60 px-1.5 py-0.5 text-[9px] font-bold ${signedTone(agg.deltaFlow)} tabular-nums`}>δ {agg.deltaFlow >= 0 ? '+' : ''}{agg.deltaFlow}</span>
+          <span className={`rounded border border-slate-700/50 bg-slate-900/60 px-1.5 py-0.5 text-[9px] font-bold ${signedTone(agg.oiBuildup)} tabular-nums`}>ΔOI {agg.oiBuildup >= 0 ? '+' : ''}{agg.oiBuildup}</span>
+          <span className="rounded border border-slate-700/50 bg-slate-900/60 px-1.5 py-0.5 text-[9px] font-bold text-cyan-300 tabular-nums">VolExp {agg.volExpansion}%</span>
+          <span className="rounded border border-slate-700/50 bg-slate-900/60 px-1.5 py-0.5 text-[9px] font-bold text-amber-300 tabular-nums">Accum {agg.accumulation}%</span>
+        </div>
+      </div>
+
+      {/* Per-symbol rows */}
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-1.5">
+        {rows.map(({ label, intel }) => {
+          const noStructure = !intel.bos && !intel.choch && !intel.bullFvg && !intel.bullOb && !intel.bslSwept && !intel.pdhBroken && intel.supportHold < 70;
+          return (
+            <div key={label} className="rounded-lg border border-slate-700/40 bg-slate-900/40 px-2 py-1.5">
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-[10px] font-extrabold tracking-wider text-white">{label}</span>
+                <span className={`text-[10px] font-extrabold tabular-nums ${probTone(intel.bullishProb)}`}>{intel.bullishProb}%</span>
+              </div>
+              <div className="flex flex-wrap items-center gap-1 mb-1 min-h-[18px]">
+                <Chip on={intel.bos} color="em" text="BOS ↑" />
+                <Chip on={intel.choch} color="em" text="CHoCH ↑" />
+                <Chip on={intel.bullFvg} color="cy" text="FVG" />
+                <Chip on={intel.bullOb} color="cy" text="OB" />
+                <Chip on={intel.bslSwept} color="am" text="BSL" />
+                <Chip on={intel.pdhBroken} color="em" text="PDH" />
+                <Chip on={intel.supportHold >= 70} color="em" text={`SUPP ${intel.supportHold}%`} />
+                {noStructure && <span className="rounded border border-slate-700/60 bg-slate-900/60 px-1.5 py-0.5 text-[9px] font-bold text-slate-500">NO STRUCTURE</span>}
+              </div>
+              <div className="grid grid-cols-4 gap-0.5 text-center">
+                <div className="rounded bg-dark-bg/40 px-1 py-0.5">
+                  <p className="text-[7px] text-dark-muted font-semibold uppercase">δFlow</p>
+                  <p className={`text-[9px] font-bold tabular-nums ${signedTone(intel.deltaFlow)}`}>{intel.deltaFlow >= 0 ? '+' : ''}{intel.deltaFlow}</p>
+                </div>
+                <div className="rounded bg-dark-bg/40 px-1 py-0.5">
+                  <p className="text-[7px] text-dark-muted font-semibold uppercase">ΔOI</p>
+                  <p className={`text-[9px] font-bold tabular-nums ${signedTone(intel.oiBuildup)}`}>{intel.oiBuildup >= 0 ? '+' : ''}{intel.oiBuildup}</p>
+                </div>
+                <div className="rounded bg-dark-bg/40 px-1 py-0.5">
+                  <p className="text-[7px] text-dark-muted font-semibold uppercase">VolX</p>
+                  <p className="text-[9px] font-bold tabular-nums text-cyan-300">{intel.volExpansion}%</p>
+                </div>
+                <div className="rounded bg-dark-bg/40 px-1 py-0.5">
+                  <p className="text-[7px] text-dark-muted font-semibold uppercase">Accum</p>
+                  <p className={`text-[9px] font-bold tabular-nums ${intel.accumulation >= 55 ? 'text-bullish' : intel.accumulation <= 25 ? 'text-bearish' : 'text-neutral'}`}>{intel.accumulation}%</p>
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+});
+BuyerIntelMicroStrip.displayName = 'BuyerIntelMicroStrip';
+
 const ChartIntelligence = memo(() => {
   const { chartData } = useChartIntelligence();
   // Live tick prices from the main market socket — updates every Zerodha tick (~1s)
@@ -5180,6 +5264,13 @@ const ChartIntelligence = memo(() => {
     [chartData.NIFTY, chartData.BANKNIFTY, chartData.SENSEX],
   );
 
+  // Incremental buyer-side intel — O(1) per tick, shared engine, zero backend round-trips.
+  // Drives the compact institutional strip rendered under the AI Command Deck.
+  const niftyIntel = useMemo(() => updateBuyerIntel('NIFTY', marketData.NIFTY), [marketData.NIFTY]);
+  const bankIntel = useMemo(() => updateBuyerIntel('BANKNIFTY', marketData.BANKNIFTY), [marketData.BANKNIFTY]);
+  const sensexIntel = useMemo(() => updateBuyerIntel('SENSEX', marketData.SENSEX), [marketData.SENSEX]);
+  const aggIntel = useMemo(() => aggregateIntel([niftyIntel, bankIntel, sensexIntel]), [niftyIntel, bankIntel, sensexIntel]);
+
   return (
     <div className="mt-4">
       {/* Section Header */}
@@ -5211,6 +5302,16 @@ const ChartIntelligence = memo(() => {
       </div>
 
       <ChartAICommandDeck snapshot={chartAISnapshot} />
+
+      {/* Buyer-Side Institutional Intelligence Strip — tick-driven, no new section */}
+      <BuyerIntelMicroStrip
+        agg={aggIntel}
+        rows={[
+          { label: 'NIFTY', intel: niftyIntel },
+          { label: 'BANK', intel: bankIntel },
+          { label: 'SENSEX', intel: sensexIntel },
+        ]}
+      />
 
       {/* Chart Cards Grid */}
       <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-3">

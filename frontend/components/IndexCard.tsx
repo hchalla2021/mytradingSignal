@@ -5,6 +5,7 @@ import { TrendingUp, TrendingDown, Minus, Activity } from 'lucide-react';
 import { MarketTick } from '@/hooks/useMarketSocket';
 import AIAlertTooltip from './AIAlertTooltip';
 import type { AIAlertTooltipData } from '@/types/ai';
+import { updateBuyerIntel } from '@/lib/buyerIntelligence';
 
 interface IndexCardProps {
   symbol: string;
@@ -149,6 +150,10 @@ const IndexCard = ({ symbol, name, data, isConnected, aiAlertData }: IndexCardPr
   const intradayChange = useMemo(() => {
     return data ? ((data.price - data.open) / data.open * 100) : 0;
   }, [data]);
+  // Incremental buyer-side intel from the shared tick engine (O(1) per tick).
+  // Drives Decision Engine, structural-event chips, and liquidity context below.
+  const intel = useMemo(() => updateBuyerIntel(symbol, data), [symbol, data]);
+
   const decisionEngine = useMemo(() => {
     if (!data) {
       return {
@@ -160,39 +165,44 @@ const IndexCard = ({ symbol, name, data, isConnected, aiAlertData }: IndexCardPr
       };
     }
 
-    const trendScore =
-      analysis.direction === 'bullish'
-        ? analysis.strength / 100
-        : analysis.direction === 'bearish'
-        ? -(analysis.strength / 100)
-        : 0;
-
-    const pcrScore = data.pcr ? MarketUtils.clamp((data.pcr - 1) / 0.6, -1, 1) : 0;
-    const rangeScore = MarketUtils.clamp((rangePos - 50) / 50, -1, 1);
-    const intradayScore = MarketUtils.clamp(intradayChange / 1.5, -1, 1);
-    const totalOi = (data.callOI || 0) + (data.putOI || 0);
-    const oiScore = totalOi > 0 ? MarketUtils.clamp(((data.putOI || 0) - (data.callOI || 0)) / totalOi, -1, 1) : 0;
-
-    const weightedScore =
-      trendScore * 0.3 +
-      pcrScore * 0.25 +
-      rangeScore * 0.15 +
-      oiScore * 0.2 +
-      intradayScore * 0.1;
-
-    const bullProb = Math.round(((weightedScore + 1) / 2) * 100);
+    // bullProb from the logistic blend (BOS / CHoCH / FVG / OB / BSL / PDH / ΔOI / delta-flow / vol-expansion / PCR).
+    const bullProb = intel.bullishProb;
     const bearProb = 100 - bullProb;
-    const confidence = Math.round(Math.abs(weightedScore) * 100);
-    const dominantBull = weightedScore >= 0;
-    const votes = [trendScore, pcrScore, rangeScore, oiScore, intradayScore].filter((v) => Math.abs(v) >= 0.2);
-    const confluence = votes.filter((v) => (dominantBull ? v > 0 : v < 0)).length;
+
+    // Confidence: directional strength + structural confirmation + accumulation/buyer pressure.
+    const directional = bullProb >= 50 ? bullProb : 100 - bullProb;
+    const structuralBoost =
+      (intel.bos ? 6 : 0) + (intel.choch ? 5 : 0) + (intel.bullFvg ? 3 : 0)
+      + (intel.bullOb ? 3 : 0) + (intel.bslSwept ? 5 : 0) + (intel.pdhBroken ? 4 : 0);
+    const confidence = MarketUtils.clamp(
+      Math.round(directional * 0.6 + structuralBoost + Math.abs(intel.deltaFlow) * 0.08 + Math.max(0, intel.volExpansion - 50) * 0.15),
+      40, 99
+    );
+
+    // Confluence: count of bullish (or bearish) confirmations across 5 institutional dimensions.
+    const dominantBull = bullProb >= 50;
+    const checks = [
+      // 1. Structural break (BOS or CHoCH)
+      dominantBull ? (intel.bos || intel.choch) : (!intel.bos && !intel.choch && intel.supportHold < 30),
+      // 2. Smart-money zone active (FVG / OB / BSL sweep / PDH break)
+      dominantBull
+        ? (intel.bullFvg || intel.bullOb || intel.bslSwept || intel.pdhBroken)
+        : (!intel.bullFvg && !intel.bullOb),
+      // 3. OI buildup aligned
+      dominantBull ? intel.oiBuildup > 25 : intel.oiBuildup < -25,
+      // 4. Aggressive delta flow aligned
+      dominantBull ? intel.deltaFlow > 20 : intel.deltaFlow < -20,
+      // 5. Buyer-pressure / accumulation aligned
+      dominantBull ? intel.buyerPressure >= 60 || intel.accumulation >= 55 : intel.buyerPressure <= 40,
+    ];
+    const confluence = checks.filter(Boolean).length;
 
     let signal = 'NEUTRAL';
     if (bullProb >= 65) signal = bullProb >= 78 ? 'STRONG BUY' : 'BUY';
-    if (bearProb >= 65) signal = bearProb >= 78 ? 'STRONG SELL' : 'SELL';
+    else if (bearProb >= 65) signal = bearProb >= 78 ? 'STRONG SELL' : 'SELL';
 
     return { signal, bullProb, bearProb, confidence, confluence };
-  }, [analysis.direction, analysis.strength, data, intradayChange, rangePos]);
+  }, [data, intel]);
 
   // Flash animation on price change
   useEffect(() => {
@@ -419,6 +429,44 @@ const IndexCard = ({ symbol, name, data, isConnected, aiAlertData }: IndexCardPr
         <div className="flex items-center justify-between text-[10px] sm:text-xs">
           <span className="text-dark-muted font-medium">Confluence</span>
           <span className="font-bold text-white">{decisionEngine.confluence}/5</span>
+        </div>
+
+        {/* Smart-money structural events — tick-driven (BOS / CHoCH / FVG / OB / BSL / PDH / Support) */}
+        <div className="flex flex-wrap items-center gap-1 pt-1">
+          {intel.bos && <span className="rounded border border-emerald-400/40 bg-emerald-500/10 px-1.5 py-0.5 text-[9px] font-bold text-emerald-300">BOS ↑</span>}
+          {intel.choch && <span className="rounded border border-emerald-400/40 bg-emerald-500/10 px-1.5 py-0.5 text-[9px] font-bold text-emerald-300">CHoCH ↑</span>}
+          {intel.bullFvg && <span className="rounded border border-cyan-400/40 bg-cyan-500/10 px-1.5 py-0.5 text-[9px] font-bold text-cyan-300">FVG</span>}
+          {intel.bullOb && <span className="rounded border border-cyan-400/40 bg-cyan-500/10 px-1.5 py-0.5 text-[9px] font-bold text-cyan-300">OB</span>}
+          {intel.bslSwept && <span className="rounded border border-amber-400/40 bg-amber-500/10 px-1.5 py-0.5 text-[9px] font-bold text-amber-300">BSL SWEPT</span>}
+          {intel.pdhBroken && <span className="rounded border border-emerald-400/40 bg-emerald-500/10 px-1.5 py-0.5 text-[9px] font-bold text-emerald-300">PDH BREAK</span>}
+          {intel.supportHold >= 70 && <span className="rounded border border-emerald-400/30 bg-emerald-500/5 px-1.5 py-0.5 text-[9px] font-bold text-emerald-300/90">SUPP {intel.supportHold}%</span>}
+          {!intel.bos && !intel.choch && !intel.bullFvg && !intel.bullOb && !intel.bslSwept && !intel.pdhBroken && intel.supportHold < 70 && (
+            <span className="rounded border border-slate-700/60 bg-slate-900/60 px-1.5 py-0.5 text-[9px] font-bold text-slate-500">NO STRUCTURE</span>
+          )}
+        </div>
+
+        {/* Buyer-side flow micro-strip — accumulation · buyer pressure · ΔOI · delta · vol-expansion */}
+        <div className="grid grid-cols-5 gap-1 pt-0.5">
+          <div className="rounded bg-dark-surface/60 border border-slate-700/40 px-1 py-0.5 text-center">
+            <p className="text-[8px] text-dark-muted font-semibold uppercase tracking-wider">Accum</p>
+            <p className={`text-[10px] font-bold tabular-nums ${intel.accumulation >= 55 ? 'text-bullish' : intel.accumulation <= 25 ? 'text-bearish' : 'text-neutral'}`}>{intel.accumulation}%</p>
+          </div>
+          <div className="rounded bg-dark-surface/60 border border-slate-700/40 px-1 py-0.5 text-center">
+            <p className="text-[8px] text-dark-muted font-semibold uppercase tracking-wider">Buyer</p>
+            <p className={`text-[10px] font-bold tabular-nums ${intel.buyerPressure >= 60 ? 'text-bullish' : intel.buyerPressure <= 40 ? 'text-bearish' : 'text-neutral'}`}>{intel.buyerPressure}%</p>
+          </div>
+          <div className="rounded bg-dark-surface/60 border border-slate-700/40 px-1 py-0.5 text-center">
+            <p className="text-[8px] text-dark-muted font-semibold uppercase tracking-wider">ΔOI</p>
+            <p className={`text-[10px] font-bold tabular-nums ${intel.oiBuildup > 0 ? 'text-bullish' : intel.oiBuildup < 0 ? 'text-bearish' : 'text-neutral'}`}>{intel.oiBuildup >= 0 ? '+' : ''}{intel.oiBuildup}</p>
+          </div>
+          <div className="rounded bg-dark-surface/60 border border-slate-700/40 px-1 py-0.5 text-center">
+            <p className="text-[8px] text-dark-muted font-semibold uppercase tracking-wider">δ Flow</p>
+            <p className={`text-[10px] font-bold tabular-nums ${intel.deltaFlow > 0 ? 'text-bullish' : intel.deltaFlow < 0 ? 'text-bearish' : 'text-neutral'}`}>{intel.deltaFlow >= 0 ? '+' : ''}{intel.deltaFlow}</p>
+          </div>
+          <div className="rounded bg-dark-surface/60 border border-slate-700/40 px-1 py-0.5 text-center">
+            <p className="text-[8px] text-dark-muted font-semibold uppercase tracking-wider">Vol Exp</p>
+            <p className={`text-[10px] font-bold tabular-nums ${intel.volExpansion >= 70 ? 'text-amber-300' : intel.volExpansion >= 40 ? 'text-cyan-300' : 'text-dark-muted'}`}>{intel.volExpansion}%</p>
+          </div>
         </div>
       </div>
 

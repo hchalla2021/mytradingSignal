@@ -2,6 +2,7 @@
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import type { MarketTick } from '@/hooks/useMarketSocket';
+import { updateBuyerIntel, type BuyerIntel } from '@/lib/buyerIntelligence';
 
 type IndexKey = 'NIFTY' | 'BANKNIFTY' | 'SENSEX';
 
@@ -96,7 +97,7 @@ interface SignalView {
   aiTrend: string;
 }
 
-const deriveSignal = (tick: MarketTick | null | undefined, oiDeltaPct: number): SignalView | null => {
+const deriveSignal = (tick: MarketTick | null | undefined, _oiDeltaPct: number, intel: BuyerIntel): SignalView | null => {
   if (!tick || !tick.price) return null;
 
   const pct = tick.changePercent ?? 0;
@@ -110,55 +111,79 @@ const deriveSignal = (tick: MarketTick | null | undefined, oiDeltaPct: number): 
   let trendLabel = 'Sideways';
   let aiTrend = 'Range Bound';
 
-  if (pct > 0.05) {
-    tone = 'bull';
-    signalArrow = '▲';
-    if (abs >= 1) { signalLabel = 'STRONG BUY'; trendLabel = 'Strong Bullish'; aiTrend = 'Trend Continuation ↑'; }
-    else if (abs >= 0.4) { signalLabel = 'BUY'; trendLabel = 'Bullish'; aiTrend = 'Bullish Drift'; }
+  // Tone & label now driven primarily by the bullish probability from the intel engine,
+  // with price-action as a tiebreaker — this honours smart-money structure (BOS / CHoCH / FVG / OB / BSL).
+  const bp = intel.bullishProb;
+  if (bp >= 70 || (bp >= 60 && pct > 0)) {
+    tone = 'bull'; signalArrow = '▲';
+    if (bp >= 82 || abs >= 1) { signalLabel = 'STRONG BUY'; trendLabel = 'Strong Bullish'; aiTrend = 'Trend Continuation ↑'; }
+    else if (bp >= 70) { signalLabel = 'BUY'; trendLabel = 'Bullish'; aiTrend = 'Bullish Drift'; }
     else { signalLabel = 'BUY ZONE'; trendLabel = 'Mild Bullish'; aiTrend = 'Accumulation'; }
-  } else if (pct < -0.05) {
-    tone = 'bear';
-    signalArrow = '▼';
-    if (abs >= 1) { signalLabel = 'STRONG SELL'; trendLabel = 'Strong Bearish'; aiTrend = 'Distribution ↓'; }
-    else if (abs >= 0.4) { signalLabel = 'SELL'; trendLabel = 'Bearish'; aiTrend = 'Bearish Drift'; }
+  } else if (bp <= 30 || (bp <= 40 && pct < 0)) {
+    tone = 'bear'; signalArrow = '▼';
+    if (bp <= 18 || abs >= 1) { signalLabel = 'STRONG SELL'; trendLabel = 'Strong Bearish'; aiTrend = 'Distribution ↓'; }
+    else if (bp <= 30) { signalLabel = 'SELL'; trendLabel = 'Bearish'; aiTrend = 'Bearish Drift'; }
     else { signalLabel = 'SELL ZONE'; trendLabel = 'Mild Bearish'; aiTrend = 'Light Selling'; }
   } else {
-    aiTrend = 'Awaiting Breakout';
+    aiTrend = intel.accumulation >= 55 ? 'Quiet Accumulation' : 'Awaiting Breakout';
   }
 
-  const confidence = Math.max(40, Math.min(95, Math.round(45 + abs * 28 + Math.min(range, 2) * 6 + Math.min(Math.abs(oiDeltaPct), 3) * 3)));
+  // Confidence: blend of bullish prob (or its inverse for bearish), structural events and OI buildup.
+  const directional = tone === 'bear' ? 100 - bp : bp;
+  const structuralBoost =
+    (intel.bos ? 6 : 0) + (intel.choch ? 6 : 0) + (intel.bullFvg ? 3 : 0)
+    + (intel.bullOb ? 3 : 0) + (intel.bslSwept ? 5 : 0) + (intel.pdhBroken ? 4 : 0);
+  const confidence = Math.max(40, Math.min(95, Math.round(directional * 0.7 + structuralBoost + Math.min(range, 2) * 4)));
 
   let volLabel: SignalView['volLabel'] = 'LOW';
-  if (range >= 1.2) volLabel = 'HIGH';
-  else if (range >= 0.5) volLabel = 'MEDIUM';
+  if (intel.volExpansion >= 70 || range >= 1.2) volLabel = 'HIGH';
+  else if (intel.volExpansion >= 40 || range >= 0.5) volLabel = 'MEDIUM';
 
   const liquidity = (tick.volume || 0) * (tick.price || 0);
   const liquidityStrength = Math.max(5, Math.min(100, Math.round(Math.log10(Math.max(1, liquidity)) * 10)));
 
-  const pcr = tick.pcr || 0;
+  // Smart money: drive from accumulation score, not raw PCR.
   let smartMoney: SignalView['smartMoney'] = { label: 'BALANCED', tone: 'neutral' };
-  if (pcr >= 1.3) smartMoney = { label: 'ACCUMULATING', tone: 'bull' };
-  else if (pcr >= 1.05) smartMoney = { label: 'BUYING', tone: 'bull' };
-  else if (pcr > 0 && pcr <= 0.7) smartMoney = { label: 'DISTRIBUTING', tone: 'bear' };
-  else if (pcr > 0 && pcr <= 0.9) smartMoney = { label: 'CAUTIOUS', tone: 'bear' };
+  if (intel.accumulation >= 70) smartMoney = { label: 'ACCUMULATING', tone: 'bull' };
+  else if (intel.accumulation >= 50) smartMoney = { label: 'BUYING', tone: 'bull' };
+  else if (intel.accumulation <= 25) smartMoney = { label: 'DISTRIBUTING', tone: 'bear' };
+  else if (intel.accumulation <= 40) smartMoney = { label: 'CAUTIOUS', tone: 'bear' };
 
+  // Institutional flow from OI buildup sign + ΔOI%.
   let institutional: SignalView['institutional'] = { label: 'NEUTRAL', tone: 'neutral' };
-  if (oiDeltaPct > 0.3 && pct > 0) institutional = { label: 'LONG BUILD', tone: 'bull' };
-  else if (oiDeltaPct > 0.3 && pct < 0) institutional = { label: 'SHORT BUILD', tone: 'bear' };
-  else if (oiDeltaPct < -0.3 && pct > 0) institutional = { label: 'SHORT COVER', tone: 'bull' };
-  else if (oiDeltaPct < -0.3 && pct < 0) institutional = { label: 'LONG UNWIND', tone: 'bear' };
+  if (intel.oiBuildup >= 50) institutional = { label: 'LONG BUILD', tone: 'bull' };
+  else if (intel.oiBuildup >= 25) institutional = { label: 'SHORT COVER', tone: 'bull' };
+  else if (intel.oiBuildup <= -50) institutional = { label: 'SHORT BUILD', tone: 'bear' };
+  else if (intel.oiBuildup <= -25) institutional = { label: 'LONG UNWIND', tone: 'bear' };
 
-  const momentum = Math.max(-100, Math.min(100, Math.round(pct * 50 + (rangePos - 50) * 0.8 + oiDeltaPct * 10)));
+  // Momentum: signed pulse from the engine, not just pct.
+  const momentum = intel.marketPulse;
 
-  let buyPressure: number;
-  if (pcr > 0) buyPressure = Math.max(5, Math.min(95, Math.round(40 + (pcr - 1) * 30 + (rangePos - 50) * 0.4 + Math.sign(pct) * 8)));
-  else buyPressure = Math.max(5, Math.min(95, Math.round(50 + (rangePos - 50) * 0.5 + Math.sign(pct) * 10)));
+  // Buyer pressure: real composite from engine.
+  const buyPressure = intel.buyerPressure;
 
+  // Breakout prob: closer to internal/external BSL with positive flow lifts probability.
   const edgeDistance = Math.min(rangePos, 100 - rangePos);
-  const breakoutProb = Math.max(5, Math.min(95, Math.round(20 + range * 15 + Math.max(0, 25 - edgeDistance) * 1.5)));
+  let breakoutProb = Math.round(
+    20
+    + Math.min(range, 2) * 12
+    + Math.max(0, 25 - edgeDistance) * 1.2
+    + (intel.bslSwept ? 18 : 0)
+    + (intel.pdhBroken ? 12 : 0)
+    + Math.max(0, intel.volExpansion - 50) * 0.4
+    + Math.max(0, intel.deltaFlow) * 0.15
+  );
+  breakoutProb = Math.max(5, Math.min(95, breakoutProb));
 
-  let reversalProb = Math.max(5, Math.min(95, Math.round(25 + (abs > 1 ? abs * 8 : 0) + edgeDistance * 0.2)));
-  if ((pct > 0 && pcr > 0 && pcr < 0.8) || (pct < 0 && pcr >= 1.3)) reversalProb = Math.min(95, reversalProb + 20);
+  let reversalProb = Math.round(
+    25
+    + (abs > 1 ? abs * 6 : 0)
+    + edgeDistance * 0.2
+    + (intel.oiBuildup < 0 && pct > 0 ? 18 : 0)   // shorts building into strength
+    + (intel.oiBuildup > 0 && pct < 0 ? 14 : 0)   // longs adding into weakness
+    + (intel.supportHold < 25 ? 10 : 0)
+  );
+  reversalProb = Math.max(5, Math.min(95, reversalProb));
 
   return {
     tone, signalLabel, signalArrow, confidence, trendLabel,
@@ -251,7 +276,7 @@ const Metric = ({ label, value, tone = 'slate', hot, numeric }: { label: string;
   );
 };
 
-const SignalCard = React.memo(function SignalCard({ name, tick }: { name: string; tick: MarketTick | null | undefined }) {
+const SignalCard = React.memo(function SignalCard({ name, indexKey, tick }: { name: string; indexKey: IndexKey; tick: MarketTick | null | undefined }) {
   const prevRef = useRef<Snapshot | null>(null);
   const [flash, setFlash] = useState<'up' | 'down' | null>(null);
 
@@ -278,7 +303,9 @@ const SignalCard = React.memo(function SignalCard({ name, tick }: { name: string
     return () => clearTimeout(id);
   }, [tick]);
 
-  const sig = useMemo(() => deriveSignal(tick, oiDeltaPct), [tick, oiDeltaPct]);
+  // Per-tick incremental buyer-side intel (BOS / CHoCH / FVG / OB / BSL / ΔOI / delta-flow / accumulation / bullishProb).
+  const intel = useMemo(() => updateBuyerIntel(indexKey, tick), [indexKey, tick]);
+  const sig = useMemo(() => deriveSignal(tick, oiDeltaPct, intel), [tick, oiDeltaPct, intel]);
 
   const pct = tick?.changePercent ?? 0;
 
@@ -371,6 +398,22 @@ const SignalCard = React.memo(function SignalCard({ name, tick }: { name: string
       </div>
 
       <div className="mt-3 space-y-1.5">
+        {/* Smart-money structural events — incremental, tick-driven (BOS / CHoCH / FVG / OB / BSL / PDH) */}
+        <div className="flex flex-wrap items-center gap-1">
+          {intel.bos && <span className="rounded border border-emerald-400/40 bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-bold text-emerald-300">BOS ↑</span>}
+          {intel.choch && <span className="rounded border border-emerald-400/40 bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-bold text-emerald-300">CHoCH ↑</span>}
+          {intel.bullFvg && <span className="rounded border border-cyan-400/40 bg-cyan-500/10 px-1.5 py-0.5 text-[10px] font-bold text-cyan-300">BULL FVG</span>}
+          {intel.bullOb && <span className="rounded border border-cyan-400/40 bg-cyan-500/10 px-1.5 py-0.5 text-[10px] font-bold text-cyan-300">BULL OB</span>}
+          {intel.bslSwept && <span className="rounded border border-amber-400/40 bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-bold text-amber-300">BSL SWEPT</span>}
+          {intel.pdhBroken && <span className="rounded border border-emerald-400/40 bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-bold text-emerald-300">PDH BREAK</span>}
+          {intel.supportHold >= 70 && <span className="rounded border border-emerald-400/30 bg-emerald-500/5 px-1.5 py-0.5 text-[10px] font-bold text-emerald-300/90">SUPPORT HELD {intel.supportHold}%</span>}
+          {!intel.bos && !intel.choch && !intel.bullFvg && !intel.bullOb && !intel.bslSwept && !intel.pdhBroken && intel.supportHold < 70 && (
+            <span className="rounded border border-slate-700/60 bg-slate-900/60 px-1.5 py-0.5 text-[10px] font-bold text-slate-500">NO STRUCTURE</span>
+          )}
+          <span className="ml-auto rounded border border-cyan-400/30 bg-cyan-500/10 px-1.5 py-0.5 text-[10px] font-black text-cyan-200 tabular-nums">
+            BULLISH {intel.bullishProb}%
+          </span>
+        </div>
         <div className={`rounded-md p-1 transition-all ${sig.liquidityStrength >= 90 ? 'ring-1 ring-emerald-300/50' : ''}`}>
           <Bar value={animLiqStr} tone="bull" leftLabel="LIQUIDITY STRENGTH" rightLabel={`${animLiqStr.toFixed(0)}%`} />
         </div>
@@ -438,7 +481,7 @@ const TopAISignalBar = ({ marketData, isConnected }: TopAISignalBarProps) => {
 
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
         {INDICES.map(({ key, name }) => (
-          <SignalCard key={key} name={name} tick={marketData[key]} />
+          <SignalCard key={key} name={name} indexKey={key} tick={marketData[key]} />
         ))}
       </div>
     </section>

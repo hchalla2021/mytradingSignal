@@ -2,6 +2,7 @@
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import type { MarketTick } from '@/hooks/useMarketSocket';
+import { updateBuyerIntel, aggregateIntel } from '@/lib/buyerIntelligence';
 
 type IndexKey = 'NIFTY' | 'BANKNIFTY' | 'SENSEX';
 
@@ -96,46 +97,58 @@ const MarketPulseStrip = ({ marketData, isConnected }: MarketPulseStripProps) =>
     const ticks = KEYS.map((k) => marketData[k]).filter((t): t is MarketTick => !!t && !!t.price);
     if (!ticks.length) return null;
 
+    // Incremental buyer-side intel per index (O(1) per tick) then aggregate.
+    const intels = KEYS
+      .map((k) => updateBuyerIntel(k, marketData[k]))
+      .filter((i) => i.lastUpdate > 0);
+    const agg = aggregateIntel(intels);
+
     const totalVolume = ticks.reduce((s, t) => s + (t.volume || 0), 0);
     const totalOI = ticks.reduce((s, t) => s + (t.oi || 0), 0);
     const totalLiquidity = ticks.reduce((s, t) => s + (t.volume || 0) * (t.price || 0), 0);
-
     const avgPct = ticks.reduce((s, t) => s + (t.changePercent || 0), 0) / ticks.length;
-    const avgVol = ticks.reduce((s, t) => {
-      const r = t.high && t.low && t.low > 0 ? ((t.high - t.low) / t.low) * 100 : 0;
-      return s + r;
-    }, 0) / ticks.length;
     const avgPcr = ticks.reduce((s, t) => s + (t.pcr || 0), 0) / Math.max(1, ticks.filter((t) => t.pcr).length);
 
-    const bullCount = ticks.filter((t) => t.changePercent > 0.05).length;
-    const bearCount = ticks.filter((t) => t.changePercent < -0.05).length;
+    // — Pulse: signed market momentum from buyer-intel —
+    const pulseTone: 'bull' | 'bear' | 'neutral' =
+      agg.marketPulse > 15 ? 'bull' : agg.marketPulse < -15 ? 'bear' : 'neutral';
+    const pulseLabel =
+      agg.marketPulse >= 50 ? 'STRONG ↑'
+      : agg.marketPulse >= 15 ? 'WARM ↑'
+      : agg.marketPulse <= -50 ? 'STRONG ↓'
+      : agg.marketPulse <= -15 ? 'COOL ↓'
+      : 'FLAT';
 
-    let direction: { label: string; tone: 'bull' | 'bear' | 'neutral' } = { label: 'MIXED', tone: 'neutral' };
-    if (bullCount === ticks.length) direction = { label: 'RISK ON', tone: 'bull' };
-    else if (bearCount === ticks.length) direction = { label: 'RISK OFF', tone: 'bear' };
-    else if (bullCount > bearCount) direction = { label: 'BULL TILT', tone: 'bull' };
-    else if (bearCount > bullCount) direction = { label: 'BEAR TILT', tone: 'bear' };
+    // — Volatility: real volume-expansion vs short-window baseline —
+    const volTone: 'bull' | 'bear' | 'neutral' =
+      agg.volExpansion >= 70 ? 'bear' : agg.volExpansion >= 40 ? 'neutral' : 'bull';
+    const volLabel = agg.volExpansion >= 70 ? 'EXPANDING' : agg.volExpansion >= 40 ? 'MODERATE' : 'COMPRESSED';
 
-    let smartMoney: { label: string; tone: 'bull' | 'bear' | 'neutral' } = { label: 'BALANCED', tone: 'neutral' };
-    if (avgPcr >= 1.2) smartMoney = { label: 'ACCUMULATING', tone: 'bull' };
-    else if (avgPcr >= 1.0) smartMoney = { label: 'BUYING', tone: 'bull' };
-    else if (avgPcr > 0 && avgPcr < 0.7) smartMoney = { label: 'DISTRIBUTING', tone: 'bear' };
-    else if (avgPcr > 0 && avgPcr < 0.9) smartMoney = { label: 'CAUTIOUS', tone: 'bear' };
+    // — Inst. Flow: composite institutional buying pressure —
+    const inst: { label: string; tone: 'bull' | 'bear' | 'neutral' } =
+      agg.instBuying >= 60 ? { label: 'STRONG INFLOW', tone: 'bull' }
+      : agg.instBuying >= 35 ? { label: 'INFLOW', tone: 'bull' }
+      : agg.oiBuildup < -20 ? { label: 'OUTFLOW', tone: 'bear' }
+      : { label: 'NEUTRAL', tone: 'neutral' };
 
-    const inst =
-      avgPcr >= 1.1 && avgPct > 0 ? { label: 'INFLOW', tone: 'bull' as const }
-      : avgPcr <= 0.8 && avgPct < 0 ? { label: 'OUTFLOW', tone: 'bear' as const }
-      : { label: 'NEUTRAL', tone: 'neutral' as const };
+    // — AI Direction: bullish probability from logistic blend —
+    const direction: { label: string; tone: 'bull' | 'bear' | 'neutral' } =
+      agg.bullishProb >= 70 ? { label: 'RISK ON', tone: 'bull' }
+      : agg.bullishProb >= 55 ? { label: 'BULL TILT', tone: 'bull' }
+      : agg.bullishProb <= 30 ? { label: 'RISK OFF', tone: 'bear' }
+      : agg.bullishProb <= 45 ? { label: 'BEAR TILT', tone: 'bear' }
+      : { label: 'MIXED', tone: 'neutral' };
 
-    const volTone: 'bull' | 'bear' | 'neutral' = avgVol >= 1.2 ? 'bear' : avgVol >= 0.5 ? 'neutral' : 'bull';
-    const volLabel = avgVol >= 1.2 ? 'EXPANDING' : avgVol >= 0.5 ? 'MODERATE' : 'COMPRESSED';
-
-    const pulseLabel = avgPct >= 0.5 ? 'STRONG ↑' : avgPct >= 0.1 ? 'WARM ↑' : avgPct <= -0.5 ? 'STRONG ↓' : avgPct <= -0.1 ? 'COOL ↓' : 'FLAT';
-    const pulseTone: 'bull' | 'bear' | 'neutral' = avgPct > 0.1 ? 'bull' : avgPct < -0.1 ? 'bear' : 'neutral';
+    // — Smart Money: accumulation score —
+    const smartMoney: { label: string; tone: 'bull' | 'bear' | 'neutral' } =
+      agg.accumulation >= 70 ? { label: 'ACCUMULATING', tone: 'bull' }
+      : agg.accumulation >= 50 ? { label: 'BUYING', tone: 'bull' }
+      : agg.accumulation >= 30 ? { label: 'CAUTIOUS', tone: 'neutral' }
+      : { label: 'DISTRIBUTING', tone: 'bear' };
 
     return {
       totalVolume, totalOI, totalLiquidity,
-      avgPct, avgVol, avgPcr,
+      avgPct, avgPcr, agg,
       direction, smartMoney, inst,
       volTone, volLabel, pulseLabel, pulseTone,
       lastTickMs: Date.now(),
@@ -195,11 +208,11 @@ const MarketPulseStrip = ({ marketData, isConnected }: MarketPulseStripProps) =>
         <Tile
           label="Pulse"
           value={m.pulseLabel}
-          sub={`${m.avgPct >= 0 ? '+' : ''}${m.avgPct.toFixed(2)}%`}
-          numeric={m.avgPct}
+          sub={`${m.agg.marketPulse >= 0 ? '+' : ''}${m.agg.marketPulse} idx`}
+          numeric={m.agg.marketPulse}
           tone={m.pulseTone}
           pulse
-          hot={Math.abs(m.avgPct) >= 0.4}
+          hot={Math.abs(m.agg.marketPulse) >= 50}
         />
         <Tile label="Liquidity" value={fmtCompact(m.totalLiquidity)} sub="₹ notional" numeric={m.totalLiquidity} tone="info" />
         <Tile label="Volume"    value={fmtCompact(m.totalVolume)}    sub="aggregate" numeric={m.totalVolume} tone="info" />
@@ -207,36 +220,36 @@ const MarketPulseStrip = ({ marketData, isConnected }: MarketPulseStripProps) =>
         <Tile
           label="Volatility"
           value={m.volLabel}
-          sub={`${m.avgVol.toFixed(2)}% range`}
-          numeric={m.avgVol}
+          sub={`${m.agg.volExpansion}% expansion`}
+          numeric={m.agg.volExpansion}
           tone={m.volTone}
-          hot={m.avgVol >= 1.2}
+          hot={m.agg.volExpansion >= 70}
         />
         <Tile
           label="Inst. Flow"
           value={m.inst.label}
-          sub={`PCR ${m.avgPcr ? m.avgPcr.toFixed(2) : '—'}`}
-          numeric={m.avgPcr}
+          sub={`Buying ${m.agg.instBuying}% · ΔOI ${m.agg.oiBuildup >= 0 ? '+' : ''}${m.agg.oiBuildup}`}
+          numeric={m.agg.instBuying}
           tone={m.inst.tone}
           pulse={m.inst.tone !== 'neutral'}
-          hot={m.inst.tone !== 'neutral'}
+          hot={m.agg.instBuying >= 60}
         />
         <Tile
           label="AI Direction"
           value={m.direction.label}
-          sub={`${m.avgPct >= 0 ? '+' : ''}${m.avgPct.toFixed(2)}% avg`}
-          numeric={m.avgPct}
+          sub={`Bullish ${m.agg.bullishProb}%`}
+          numeric={m.agg.bullishProb}
           tone={m.direction.tone}
           pulse
-          hot={m.direction.label === 'RISK ON' || m.direction.label === 'RISK OFF'}
+          hot={m.agg.bullishProb >= 70 || m.agg.bullishProb <= 30}
         />
         <Tile
           label="Smart Money"
           value={m.smartMoney.label}
-          sub={`PCR ${m.avgPcr ? m.avgPcr.toFixed(2) : '—'}`}
-          numeric={m.avgPcr}
+          sub={`Accum ${m.agg.accumulation}% · δ ${m.agg.deltaFlow >= 0 ? '+' : ''}${m.agg.deltaFlow}`}
+          numeric={m.agg.accumulation}
           tone={m.smartMoney.tone}
-          hot={m.smartMoney.label === 'ACCUMULATING' || m.smartMoney.label === 'DISTRIBUTING'}
+          hot={m.agg.accumulation >= 70 || m.agg.accumulation <= 25}
         />
       </div>
     </section>
