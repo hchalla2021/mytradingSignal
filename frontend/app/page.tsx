@@ -117,6 +117,20 @@ const MarketRegimeIntelligence = dynamic(() => import('@/components/MarketRegime
   )
 });
 
+const TradingIntelligenceEngine = dynamic(() => import('@/components/TradingIntelligenceEngine'), {
+  ssr: false,
+  loading: () => (
+    <div className="rounded-2xl border border-slate-800/60 bg-[#0b1220]/40 p-5 animate-pulse">
+      <div className="h-6 w-56 bg-slate-700 rounded mb-4" />
+      <div className="flex flex-col gap-3">
+        {[0, 1, 2].map(i => (
+          <div key={i} className="rounded-xl bg-slate-700/30 h-32" />
+        ))}
+      </div>
+    </div>
+  )
+});
+
 const ChartIntelligence = dynamic(() => import('@/components/ChartIntelligence'), {
   ssr: false,
   loading: () => (
@@ -652,6 +666,9 @@ export default function Home() {
 
         {/* P11b: 📈 REAL-TIME CHART INTELLIGENCE — SMC, FVG, S/R, PDH/PDL, CDH/CDL */}
         <ChartIntelligence />
+
+        {/* ⚡ GREEKS OVERVIEW — Real-time Greeks analysis and buy/sell signals */}
+        <TradingIntelligenceEngine marketData={marketData} />
 
         {/* P0: 📊 TODAY'S MARKET REGIME — Trending vs Sideways */}
         <MarketRegimeIntelligence marketData={marketData} />

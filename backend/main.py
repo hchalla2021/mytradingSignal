@@ -52,6 +52,7 @@ from routers.trend_base import router as trend_base_http, ws_router as trend_bas
 from routers.volume_pulse import router as volume_pulse_http, ws_router as volume_pulse_ws
 from routers.ict_bias import router as ict_bias_http, ws_router as ict_bias_ws
 from routers.market_compass import router as market_compass_http, ws_router as market_compass_ws
+from routers.trading_intelligence import http_router as tie_http, ws_router as tie_ws
 
 # Windows console fix already applied in config/__init__.py
 
@@ -618,6 +619,9 @@ app.include_router(ict_bias_http, prefix="/api", tags=["ICT Bias"])
 # 🧭 Market Compass - Multi-Market Correlation & Global Impact Analysis (NEW)
 app.include_router(market_compass_ws,   prefix="/ws",  tags=["Market Compass"])
 app.include_router(market_compass_http, prefix="/api", tags=["Market Compass"])
+# ⚡ Trading Intelligence Engine — NumPy + LightGBM + PyTorch LSTM + TensorFlow
+app.include_router(tie_ws,   prefix="/ws",  tags=["Trading Intelligence"])
+app.include_router(tie_http, prefix="/api", tags=["Trading Intelligence"])
 # �🔭 Market Intelligence Observatory
 app.include_router(observatory_http, tags=["Observatory"])
 
