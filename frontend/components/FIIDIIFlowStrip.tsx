@@ -105,13 +105,19 @@ const FlowTile = ({
   const flash = useFlash(amountCr);
   const animAmount = useTween(amountCr, 650);
   const animStrength = useTween(strength, 650);
+  // Price value color follows the SIGN of the amount (green up / red down),
+  // independent of the neutral-threshold label so traders see direction instantly.
+  const valueColor =
+    animAmount > 0.5 ? 'text-emerald-300'
+    : animAmount < -0.5 ? 'text-rose-300'
+    : 'text-amber-300';
   return (
     <div className={`relative rounded-lg border bg-slate-950/50 px-3 py-2 transition-all duration-150 ${hot ? toneMap.ring : toneMap.border} ${flash.cls}`}>
       <div className="flex items-center justify-between">
         <p className="text-[11px] font-bold uppercase tracking-wider text-slate-400">{label}</p>
         <span className={`text-[11px] font-black ${toneMap.text}`}>{toneMap.arrow} {flowLabel}</span>
       </div>
-      <p className={`mt-1 font-mono text-lg font-black leading-tight lg:text-xl tabular-nums ${toneMap.text}`}>
+      <p className={`mt-1 font-mono text-lg font-black leading-tight lg:text-xl tabular-nums ${valueColor}`}>
         {animAmount >= 0 ? '+' : '−'}₹{fmtCr(Math.abs(animAmount))}
         {flash.dir !== 'flat' && Math.abs(flash.delta) >= 1 && (
           <span className={`ml-2 text-[10px] font-bold align-middle ${flash.dir === 'up' ? 'text-emerald-400' : 'text-rose-400'}`}>
@@ -141,13 +147,24 @@ const FIIDIIFlowStrip = ({ marketData, isConnected }: FIIDIIFlowStripProps) => {
     const sensexI = updateBuyerIntel('SENSEX', sensex);
 
     // Signed ₹-Cr turnover per index, biased by REAL signed delta-flow and OI buildup
-    // (long-buildup / short-cover → bullish; short-build / long-unwind → bearish).
+    // when available; falls back to price-direction proxy on index ticks where
+    // Zerodha broadcasts no per-tick volume delta / OI (NIFTY/BANKNIFTY/SENSEX).
     const turnoverCr = (t: MarketTick | null | undefined, intel: { deltaFlow: number; oiBuildup: number }) => {
       if (!t || !t.price) return 0;
       const flowSign = intel.deltaFlow / 100;           // -1..+1 from real signed Δprice·Δvol
       const oiSign   = intel.oiBuildup / 100;           // -1..+1 from ΔOI alignment
-      const lean     = flowSign * 0.7 + oiSign * 0.5;   // composite institutional lean
-      return ((t.volume || 0) * t.price * lean) / 1e7;
+      const chgPct   = t.changePercent || 0;
+      // Saturate at ±0.5% — typical intraday foreign-flow inflection band
+      const chgSign  = Math.max(-1, Math.min(1, chgPct / 0.5));
+      const haveMicro = Math.abs(flowSign) > 0.02 || Math.abs(oiSign) > 0.02;
+      const lean = haveMicro
+        ? flowSign * 0.7 + oiSign * 0.5
+        : chgSign * 0.6;                                // index-tick fallback
+      // Notional in ₹-Cr from cumulative volume; if volume is sparse (indices),
+      // scale by |change%| so a meaningful directional signal still emerges.
+      const notionalCr = ((t.volume || 0) * t.price) / 1e7;
+      const baseCr     = Math.max(notionalCr, Math.abs(chgPct) * 1500);
+      return baseCr * lean;
     };
 
     const niftyT  = turnoverCr(nifty,  niftyI);

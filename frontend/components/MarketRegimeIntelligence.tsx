@@ -7,7 +7,6 @@ import type { VIXData } from '@/hooks/useIndiaVIX';
 import SectionTitle from '@/components/SectionTitle';
 import StrikeIntelligence from '@/components/StrikeIntelligence';
 import QuantumFractalSection from '@/components/QuantumFractalSection';
-import ChartIntelligence from '@/components/ChartIntelligence';
 
 // ── Regime visual config ────────────────────────────────────────────────────
 
@@ -602,11 +601,6 @@ const MarketRegimeIntelligence = memo<{
         <div className="xl:col-span-3">
           {/* � Quantum Fractal Intelligence Engine — Multi-timeframe fractal analysis */}
           <QuantumFractalSection />
-        </div>
-
-        <div className="xl:col-span-3">
-          {/* �📈 Real-Time Chart Intelligence — SMC, FVG, S/R, PDH/PDL, CDH/CDL */}
-          <ChartIntelligence />
         </div>
       </div>
     </section>

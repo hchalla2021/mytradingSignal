@@ -124,8 +124,12 @@ export function analyzeSMC(c: Candle[]): SMC {
     }
   }
 
-  // Liquidity pools: cluster swing highs (BSL) / lows (SSL)
-  const tol = (c[c.length - 1].close) * 0.0015; // 0.15% bucket
+  // Liquidity pools: cluster swing highs (BSL) / lows (SSL).
+  // ICT semantics: BSL = resting buy-stops ABOVE current price (sweep targets
+  // overhead). SSL = resting sell-stops BELOW current price. So we filter swing
+  // points by their position relative to spot, not just by H/L type.
+  const spot = c[c.length - 1].close;
+  const tol = spot * 0.0015; // 0.15% bucket
   const pools: LiquidityPool[] = [];
   const cluster = (arr: Swing[], side: 'BSL' | 'SSL') => {
     const sorted = arr.slice().sort((a, b) => a.price - b.price);
@@ -140,8 +144,9 @@ export function analyzeSMC(c: Candle[]): SMC {
       i = j;
     }
   };
-  cluster(swings.filter(s => s.type === 'H'), 'BSL');
-  cluster(swings.filter(s => s.type === 'L'), 'SSL');
+  // Only swing highs ABOVE spot are untouched BSL; only swing lows BELOW spot are SSL.
+  cluster(swings.filter(s => s.type === 'H' && s.price > spot), 'BSL');
+  cluster(swings.filter(s => s.type === 'L' && s.price < spot), 'SSL');
 
   const bsl = pools.filter(p => p.side === 'BSL').reduce((a, p) => a + p.strength, 0);
   const ssl = pools.filter(p => p.side === 'SSL').reduce((a, p) => a + p.strength, 0);

@@ -34,3 +34,21 @@ kiteconnect==5.0.1
 
 # Rate Limiting
 slowapi==0.1.9
+
+# ── Optional ML stack for Strike Intelligence AI engine ──────────────────
+# All three are OPTIONAL — strike_intelligence_ai.py degrades gracefully
+# (NumPy-only fallback) when any are missing. Install on production hosts
+# that have at least ~2GB free RAM headroom for the warm-start models.
+#
+# LightGBM is small (~5 MB wheel) and CPU-only — safe everywhere.
+# PyTorch CPU is ~200 MB — needed for the LSTM next-move predictor.
+# TensorFlow is ~500 MB and OPTIONAL (softmax path falls back to NumPy).
+#
+# To install on a deploy host:
+#   pip install lightgbm==4.5.0 torch==2.4.1 --index-url https://download.pytorch.org/whl/cpu
+# Add TensorFlow only if you really want the TF softmax path:
+#   pip install tensorflow==2.17.0
+lightgbm==4.5.0
+# torch==2.4.1   # uncomment + install from CPU wheel index
+# tensorflow==2.17.0  # optional, large dep
+

@@ -186,7 +186,7 @@ export default function ChartCanvas({ candles, visiblePlots, onSMC }: Props) {
         ctx.strokeRect(x1, Math.min(y1, y2), Math.max(2, x2 - x1), Math.abs(y2 - y1));
         ctx.fillStyle = '#cbd5ff';
         ctx.font = '10px ui-sans-serif';
-        ctx.fillText(`FVG  ${fmtINR(z.bottom,0)}–${fmtINR(z.top,0)}  ${fmtCompact((z.liquidity||0)*1e6)}`, x1 + 6, Math.min(y1, y2) + 12);
+        ctx.fillText(`FVG  ${fmtINR(z.bottom,0)}–${fmtINR(z.top,0)}  ${fmtCompact(z.liquidity||0)}`, x1 + 6, Math.min(y1, y2) + 12);
       }
     }
 

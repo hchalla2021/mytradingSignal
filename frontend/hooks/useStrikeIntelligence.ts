@@ -197,8 +197,33 @@ export interface StrikeAIExecution {
   confidence: number;
 }
 
+export interface StrikeAIMLLightGBM {
+  available: boolean;
+  bullishProb: number | null;
+  buyerMomentum: number | null;
+  liquidityImbalance: number | null;
+}
+
+export interface StrikeAIMLLSTM {
+  available: boolean;
+  nextReturnPct: number | null;
+  nextMovePts: number | null;
+  confidence: number | null;
+  seqLen: number;
+  samples: number;
+}
+
+export interface StrikeAIMLScoring {
+  provider: string;
+  engines: string[];
+  lgbm: StrikeAIMLLightGBM;
+  lstm: StrikeAIMLLSTM;
+  softmaxProvider: 'tensorflow' | 'numpy_fallback';
+}
+
 export interface StrikeAIIntelligence {
-  provider: 'tensorflow' | 'numpy_fallback';
+  /** Aggregate engine label, e.g. "lightgbm+torch_lstm+tensorflow" or "numpy_fallback" */
+  provider: string;
   featureVersion: string;
   classProbabilities: StrikeAIClassProbabilities;
   sequencePrediction: StrikeAISequencePrediction;
@@ -206,6 +231,8 @@ export interface StrikeAIIntelligence {
   smc: StrikeAISmc;
   multiTimeframe: StrikeAIMultiTimeframe;
   execution: StrikeAIExecution;
+  /** v2: LightGBM + PyTorch LSTM scoring block (optional for older payloads) */
+  mlScoring?: StrikeAIMLScoring;
 }
 
 export interface InstitutionalConfluenceSummary {

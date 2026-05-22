@@ -117,6 +117,16 @@ const MarketRegimeIntelligence = dynamic(() => import('@/components/MarketRegime
   )
 });
 
+const ChartIntelligence = dynamic(() => import('@/components/ChartIntelligence'), {
+  ssr: false,
+  loading: () => (
+    <div className="rounded-2xl border border-emerald-500/25 bg-slate-800/30 p-5 animate-pulse">
+      <div className="h-5 w-72 bg-slate-700 rounded mb-4" />
+      <div className="h-80 bg-slate-700/30 rounded-2xl" />
+    </div>
+  )
+});
+
 const ExpiryExplosionZone = dynamic(() => import('@/components/ExpiryExplosionZone'), {
   ssr: false,
   loading: () => (
@@ -639,6 +649,9 @@ export default function Home() {
 
         {/* P11a: 🔭 MARKET INTELLIGENCE OBSERVATORY */}
         <MarketIntelligenceObservatory />
+
+        {/* P11b: 📈 REAL-TIME CHART INTELLIGENCE — SMC, FVG, S/R, PDH/PDL, CDH/CDL */}
+        <ChartIntelligence />
 
         {/* P0: 📊 TODAY'S MARKET REGIME — Trending vs Sideways */}
         <MarketRegimeIntelligence marketData={marketData} />

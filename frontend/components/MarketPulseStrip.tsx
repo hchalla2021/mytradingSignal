@@ -125,18 +125,24 @@ const MarketPulseStrip = ({ marketData, isConnected }: MarketPulseStripProps) =>
     const volLabel = agg.volExpansion >= 70 ? 'EXPANDING' : agg.volExpansion >= 40 ? 'MODERATE' : 'COMPRESSED';
 
     // — Inst. Flow: composite institutional buying pressure —
+    // Indices send oi=0 (no OI feed). Fall back to price-direction + buyer pressure when oiBuildup is flat.
+    const noOiFeed = agg.oiBuildup === 0;
     const inst: { label: string; tone: 'bull' | 'bear' | 'neutral' } =
       agg.instBuying >= 60 ? { label: 'STRONG INFLOW', tone: 'bull' }
       : agg.instBuying >= 35 ? { label: 'INFLOW', tone: 'bull' }
       : agg.oiBuildup < -20 ? { label: 'OUTFLOW', tone: 'bear' }
+      : noOiFeed && avgPct >= 0.15 && agg.buyerPressure >= 55 ? { label: 'INFLOW', tone: 'bull' }
+      : noOiFeed && avgPct <= -0.15 && agg.buyerPressure <= 45 ? { label: 'OUTFLOW', tone: 'bear' }
       : { label: 'NEUTRAL', tone: 'neutral' };
 
-    // — AI Direction: bullish probability from logistic blend —
+    // — AI Direction: bullish probability from logistic blend, with avgPct tiebreaker in the dead zone —
     const direction: { label: string; tone: 'bull' | 'bear' | 'neutral' } =
       agg.bullishProb >= 70 ? { label: 'RISK ON', tone: 'bull' }
       : agg.bullishProb >= 55 ? { label: 'BULL TILT', tone: 'bull' }
       : agg.bullishProb <= 30 ? { label: 'RISK OFF', tone: 'bear' }
       : agg.bullishProb <= 45 ? { label: 'BEAR TILT', tone: 'bear' }
+      : avgPct >= 0.15 ? { label: 'BULL TILT', tone: 'bull' }
+      : avgPct <= -0.15 ? { label: 'BEAR TILT', tone: 'bear' }
       : { label: 'MIXED', tone: 'neutral' };
 
     // — Smart Money: accumulation score —
@@ -228,7 +234,7 @@ const MarketPulseStrip = ({ marketData, isConnected }: MarketPulseStripProps) =>
         <Tile
           label="Inst. Flow"
           value={m.inst.label}
-          sub={`Buying ${m.agg.instBuying}% · ΔOI ${m.agg.oiBuildup >= 0 ? '+' : ''}${m.agg.oiBuildup}`}
+          sub={`Buying ${m.agg.instBuying}% · ΔOI ${m.agg.oiBuildup === 0 ? 'N/A' : (m.agg.oiBuildup >= 0 ? '+' : '') + m.agg.oiBuildup}`}
           numeric={m.agg.instBuying}
           tone={m.inst.tone}
           pulse={m.inst.tone !== 'neutral'}

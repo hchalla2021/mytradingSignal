@@ -111,9 +111,22 @@ const deriveSignal = (tick: MarketTick | null | undefined, _oiDeltaPct: number, 
   let trendLabel = 'Sideways';
   let aiTrend = 'Range Bound';
 
+  // Blend bullishProb with price-action when OI feed + structural events are absent
+  // (index spots send oi=0, so the engine's bullishProb collapses to ~30% baseline).
+  const noOi = !tick.oi;
+  const noStruct = !intel.bos && !intel.choch && !intel.bullFvg && !intel.bullOb && !intel.bslSwept && !intel.pdhBroken;
+  let bp = intel.bullishProb;
+  if (noOi && noStruct) {
+    const priceScore = 50
+      + Math.max(-28, Math.min(28, pct * 18))                     // ±28 from %change
+      + Math.max(-18, Math.min(18, (rangePos - 50) * 0.35))       // ±18 from range position
+      + Math.max(-12, Math.min(12, (intel.supportHold - 50) * 0.25)) // ±12 from support hold
+      + Math.max(-10, Math.min(10, intel.deltaFlow * 0.1));        // ±10 from delta flow
+    bp = Math.round(intel.bullishProb * 0.35 + Math.max(5, Math.min(95, priceScore)) * 0.65);
+  }
+
   // Tone & label now driven primarily by the bullish probability from the intel engine,
   // with price-action as a tiebreaker — this honours smart-money structure (BOS / CHoCH / FVG / OB / BSL).
-  const bp = intel.bullishProb;
   if (bp >= 70 || (bp >= 60 && pct > 0)) {
     tone = 'bull'; signalArrow = '▲';
     if (bp >= 82 || abs >= 1) { signalLabel = 'STRONG BUY'; trendLabel = 'Strong Bullish'; aiTrend = 'Trend Continuation ↑'; }
@@ -140,7 +153,9 @@ const deriveSignal = (tick: MarketTick | null | undefined, _oiDeltaPct: number, 
   else if (intel.volExpansion >= 40 || range >= 0.5) volLabel = 'MEDIUM';
 
   const liquidity = (tick.volume || 0) * (tick.price || 0);
-  const liquidityStrength = Math.max(5, Math.min(100, Math.round(Math.log10(Math.max(1, liquidity)) * 10)));
+  // Liquidity strength = ring-relative volume expansion (real "is liquidity hot vs recent" signal).
+  // Old log10(notional)×10 always saturated to 100% for index spots, making the gauge useless.
+  const liquidityStrength = Math.max(5, Math.min(100, intel.volExpansion || Math.round(Math.log10(Math.max(1, liquidity)) * 10)));
 
   // Smart money: drive from accumulation score, not raw PCR.
   let smartMoney: SignalView['smartMoney'] = { label: 'BALANCED', tone: 'neutral' };
@@ -162,26 +177,30 @@ const deriveSignal = (tick: MarketTick | null | undefined, _oiDeltaPct: number, 
   // Buyer pressure: real composite from engine.
   const buyPressure = intel.buyerPressure;
 
-  // Breakout prob: closer to internal/external BSL with positive flow lifts probability.
+  // Breakout prob: closer to range edge with positive flow / momentum lifts probability.
   const edgeDistance = Math.min(rangePos, 100 - rangePos);
   let breakoutProb = Math.round(
-    20
+    18
     + Math.min(range, 2) * 12
     + Math.max(0, 25 - edgeDistance) * 1.2
     + (intel.bslSwept ? 18 : 0)
     + (intel.pdhBroken ? 12 : 0)
     + Math.max(0, intel.volExpansion - 50) * 0.4
     + Math.max(0, intel.deltaFlow) * 0.15
+    + (rangePos >= 80 || rangePos <= 20 ? 8 : 0)            // sitting at the edge → coil
+    + Math.max(0, intel.buyerPressure - 60) * 0.25          // strong pressure lifts breakout
   );
   breakoutProb = Math.max(5, Math.min(95, breakoutProb));
 
   let reversalProb = Math.round(
-    25
+    22
     + (abs > 1 ? abs * 6 : 0)
     + edgeDistance * 0.2
     + (intel.oiBuildup < 0 && pct > 0 ? 18 : 0)   // shorts building into strength
     + (intel.oiBuildup > 0 && pct < 0 ? 14 : 0)   // longs adding into weakness
     + (intel.supportHold < 25 ? 10 : 0)
+    + (rangePos >= 85 && pct > 0 ? 10 : 0)         // exhausted rally near day-high
+    + (rangePos <= 15 && pct < 0 ? 10 : 0)         // capitulation near day-low
   );
   reversalProb = Math.max(5, Math.min(95, reversalProb));
 
@@ -345,7 +364,11 @@ const SignalCard = React.memo(function SignalCard({ name, indexKey, tick }: { na
         <div className="min-w-0">
           <p className="truncate text-sm font-black tracking-wider text-slate-200 lg:text-base">{name}</p>
           <p className="font-mono text-2xl font-black leading-tight text-slate-100 lg:text-3xl tabular-nums">{fmtPrice(animPrice)}</p>
-          <p className={`text-xs font-bold lg:text-sm tabular-nums ${t.text}`}>
+          <p className={`text-xs font-bold lg:text-sm tabular-nums ${
+            animChange > 0 ? 'text-emerald-400'
+            : animChange < 0 ? 'text-rose-400'
+            : 'text-amber-300'
+          }`}>
             {animChange >= 0 ? '+' : ''}{animChange.toFixed(2)} · {animPct >= 0 ? '+' : ''}{animPct.toFixed(2)}%
           </p>
         </div>
@@ -379,9 +402,9 @@ const SignalCard = React.memo(function SignalCard({ name, indexKey, tick }: { na
         <Metric label="OI" value={fmtCompact(animOi)} tone="info" numeric={animOi} />
         <Metric
           label="ΔOI %"
-          value={`${animOiDelta >= 0 ? '+' : ''}${animOiDelta.toFixed(2)}%`}
-          tone={Math.abs(animOiDelta) < 0.2 ? 'slate' : animOiDelta > 0 ? 'bull' : 'bear'}
-          hot={Math.abs(animOiDelta) >= 0.5}
+          value={tick && tick.oi ? `${animOiDelta >= 0 ? '+' : ''}${animOiDelta.toFixed(2)}%` : 'N/A'}
+          tone={!tick?.oi ? 'slate' : Math.abs(animOiDelta) < 0.2 ? 'slate' : animOiDelta > 0 ? 'bull' : 'bear'}
+          hot={!!tick?.oi && Math.abs(animOiDelta) >= 0.5}
           numeric={animOiDelta}
         />
         <Metric

@@ -97,20 +97,24 @@ export function predict(candles: Candle[]): AIPrediction {
 
   // Hand-tuned weights (replaceable with trained model.json later)
   const bullScore = (
-    20 * f.trendEma +
-    18 * f.pxAboveEma +
-    1.6 * f.rsiNorm +
-    8 * f.ret5 +
-    4 * f.ret20 +
+    22 * f.trendEma +
+    20 * f.pxAboveEma +
+    3.5 * f.rsiNorm +
+    10 * f.ret5 +
+    5 * f.ret20 +
     0.3 * f.vol
   );
   const bearScore = -bullScore;
 
-  const [buyProb, sellProb] = softmax2(bullScore, bearScore);
+  const [buyProbRaw, sellProbRaw] = softmax2(bullScore, bearScore);
+  // Guard against NaN/Infinity from degenerate candle inputs
+  const buyProb = Number.isFinite(buyProbRaw) ? buyProbRaw : 0.5;
+  const sellProb = Number.isFinite(sellProbRaw) ? sellProbRaw : 0.5;
 
   const dominant = Math.max(buyProb, sellProb);
-  const bias: AIPrediction['bias'] = dominant < 0.55 ? 'NEUTRAL' : (buyProb > sellProb ? 'BULLISH' : 'BEARISH');
-  const confidence = Math.round((Math.abs(buyProb - 0.5) * 2) * 100); // 0..100
+  // 0.52 threshold keeps NEUTRAL for true coin-flips but lets small directional edges register
+  const bias: AIPrediction['bias'] = dominant < 0.52 ? 'NEUTRAL' : (buyProb > sellProb ? 'BULLISH' : 'BEARISH');
+  const confidence = Math.round((dominant - 0.5) * 2 * 100); // 0..100, always >= 0
 
   // RSI-driven reversal pressure
   const reversal = sigmoid((Math.abs(r - 50) - 25) / 8);

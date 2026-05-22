@@ -325,14 +325,20 @@ function computeLiquidityIntel(data: SymbolChartData | null, spot: number): LiqP
   const avgVol = recent.length
     ? recent.reduce((a, c) => a + c.v, 0) / recent.length
     : 0;
-  const SCALE = 1.2e8; // converts notional units to ~B-range for display
+  // Notional-anchored scale: avg candle notional (vol × spot). Falls back to a
+  // small spot-based baseline so indices (which broadcast near-zero tick volume)
+  // still produce comparable values across symbols instead of arbitrary B-range.
+  const notionalScale = avgVol > 0
+    ? avgVol * Math.max(spot, 1)
+    : Math.max(spot, 1) * 5e3;
+  const SCALE = notionalScale * 0.6;
 
   // OB liquidity (bullish→buy, bearish→sell)
   const obs = (data.ob5m?.length ? data.ob5m : data.ob3m) ?? [];
   let obBuy = 0, obSell = 0;
   for (const o of obs) {
     if (o.mitigated) continue;
-    const w = (o.strength ?? 1) * qualityRank(o.quality) * SCALE + (o.total_vol ?? 0) * 80;
+    const w = (o.strength ?? 1) * qualityRank(o.quality) * SCALE + (o.total_vol ?? 0) * Math.max(spot, 1) * 0.5;
     if (o.type === 'bullish') obBuy += w;
     else obSell += w;
   }
@@ -342,25 +348,34 @@ function computeLiquidityIntel(data: SymbolChartData | null, spot: number): LiqP
   let fvgBuy = 0, fvgSell = 0;
   for (const f of fvgs) {
     if (f.filled) continue;
-    const w = (f.strength ?? 1) * qualityRank(f.quality) * SCALE * 0.85 + (f.total_vol ?? 0) * 70;
+    const w = (f.strength ?? 1) * qualityRank(f.quality) * SCALE * 0.85 + (f.total_vol ?? 0) * Math.max(spot, 1) * 0.45;
     if (f.type === 'bullish') fvgBuy += w;
     else fvgSell += w;
   }
 
-  // BOS — count higher-highs / lower-lows transitions in recent window
+  // BOS — weight breaks by price displacement so indices with zero tick-volume still register
   let bosBuy = 0, bosSell = 0;
   if (recent.length > 6) {
     let lastHi = recent[0].h, lastLo = recent[0].l;
     for (let i = 3; i < recent.length; i++) {
       const k = recent[i];
-      if (k.c > lastHi) { bosBuy += k.v * 90 + avgVol * 60; lastHi = k.h; }
-      if (k.c < lastLo) { bosSell += k.v * 90 + avgVol * 60; lastLo = k.l; }
+      const volTerm = (k.v || avgVol || 1) * Math.max(spot, 1);
+      if (k.c > lastHi) {
+        const disp = (k.c - lastHi) / Math.max(lastHi, 1);
+        bosBuy += volTerm * (1 + disp * 200);
+        lastHi = k.h;
+      }
+      if (k.c < lastLo) {
+        const disp = (lastLo - k.c) / Math.max(lastLo, 1);
+        bosSell += volTerm * (1 + disp * 200);
+        lastLo = k.l;
+      }
       lastHi = Math.max(lastHi, k.h);
       lastLo = Math.min(lastLo, k.l);
     }
   }
 
-  // CHOCH — direction-change candles weighted by body
+  // CHOCH — direction-change candles weighted by body displacement (volume-independent fallback)
   let chBuy = 0, chSell = 0;
   for (let i = 1; i < recent.length; i++) {
     const prev = recent[i - 1];
@@ -368,19 +383,21 @@ function computeLiquidityIntel(data: SymbolChartData | null, spot: number): LiqP
     const prevBull = prev.c >= prev.o;
     const curBull = k.c >= k.o;
     if (prevBull !== curBull) {
-      const body = Math.abs(k.c - k.o) * k.v * 30;
-      if (curBull) chBuy += body + avgVol * 35;
-      else chSell += body + avgVol * 35;
+      const bodyPct = Math.abs(k.c - k.o) / Math.max(k.o, 1);
+      const volTerm = (k.v || avgVol || 1) * Math.max(spot, 1);
+      const w = volTerm * (0.4 + bodyPct * 150);
+      if (curBull) chBuy += w;
+      else chSell += w;
     }
   }
 
-  // EQ HIGHS / LOWS from liquidity zones
+  // EQ HIGHS / LOWS from liquidity zones (backend convention: sell_side = above price, buy_side = below)
   const liqZones = (data.liquidity5m?.length ? data.liquidity5m : data.liquidity3m) ?? [];
   let eqHigh = 0, eqLow = 0;
   for (const z of liqZones) {
     if (z.swept) continue;
     const w = (z.touchCount ?? z.touch_count ?? 1) * qualityRank(z.quality) * SCALE * 0.55
-            + (z.total_vol ?? 0) * 60;
+            + (z.total_vol ?? 0) * Math.max(spot, 1) * 0.4;
     if (z.type === 'sell_side') eqHigh += w;
     else eqLow += w;
   }
@@ -413,14 +430,15 @@ function computeLiquidityIntel(data: SymbolChartData | null, spot: number): LiqP
     accumZone(f.top, f.bottom, f.type === 'bullish' ? 'BUY' : 'SELL', w);
   }
 
-  // Day / Prev levels — weight by volume + proximity to spot
+  // Day / Prev levels — weight by recent notional + proximity to spot (no synthetic floor)
   const proximityBoost = (lvl: number) => {
     if (!lvl || !spot) return 1;
     const d = Math.abs(spot - lvl) / spot;
-    return 1 + Math.max(0, 0.6 - d * 200);
+    // 2.0× at the level, fading linearly to 1.0× over ~1% distance
+    return 1 + Math.max(0, 1 - d * 100);
   };
   const lvlVol = recent.slice(-30).reduce((a, c) => a + c.v, 0);
-  const baseLvl = lvlVol * 55 + 0.35e9;
+  const baseLvl = (lvlVol > 0 ? lvlVol * Math.max(spot, 1) * 0.4 : notionalScale * 30);
   const dayHigh = data.levels?.cdh ? baseLvl * proximityBoost(data.levels.cdh) : 0;
   const dayLow  = data.levels?.cdl ? baseLvl * proximityBoost(data.levels.cdl) : 0;
   const prevHigh = data.levels?.pdh ? baseLvl * 0.8 * proximityBoost(data.levels.pdh) : 0;
@@ -476,34 +494,48 @@ type SmartSignal = {
 function deriveSmartSignals(data: SymbolChartData | null, spot: number): SmartSignal[] {
   if (!data) return [];
   const out: SmartSignal[] = [];
+  const seen = new Set<string>();
+  const push = (s: SmartSignal) => { if (!seen.has(s.id)) { seen.add(s.id); out.push(s); } };
 
-  for (const a of data.ai?.commandDeck?.alerts ?? []) {
-    out.push({ id: `cd-${a}`, kind: 'AI', severity: 'MED', title: 'AI ALERT', detail: a });
+  // AI command-deck alerts — dedupe by hash, infer severity from text tokens
+  const alerts = data.ai?.commandDeck?.alerts ?? [];
+  for (let i = 0; i < alerts.length; i++) {
+    const a = alerts[i];
+    if (!a || typeof a !== 'string') continue;
+    const upper = a.toUpperCase();
+    const sev: SmartSignal['severity'] =
+      /\b(HIGH|CRITICAL|EXTREME|STRONG|URGENT)\b/.test(upper) ? 'HIGH'
+      : /\b(LOW|WEAK|MILD)\b/.test(upper) ? 'LOW'
+      : 'MED';
+    const hash = a.slice(0, 48).replace(/\s+/g, '_');
+    push({ id: `cd-${i}-${hash}`, kind: 'AI', severity: sev, title: 'AI ALERT', detail: a });
   }
 
+  // Liquidity sweeps — backend convention: sell_side zone = resting above price,
+  // buy_side zone = resting below price. Use consistent ICT wording (BSL = buy-stops above).
   const liqAll = [...(data.liquidity5m ?? []), ...(data.liquidity3m ?? [])];
   const sweptHigh = liqAll.find(z => z.swept && z.type === 'sell_side');
   const sweptLow  = liqAll.find(z => z.swept && z.type === 'buy_side');
-  if (sweptHigh) out.push({
-    id: 'trap-hi', kind: 'TRAP', severity: 'HIGH',
+  if (sweptHigh) push({
+    id: `trap-hi-${sweptHigh.level.toFixed(0)}`, kind: 'TRAP', severity: 'HIGH',
     title: 'BUY-SIDE LIQUIDITY SWEPT',
-    detail: `Sell-side raid @ ${fmtPrice(sweptHigh.level)} — reversal setup forming`,
+    detail: `Stops above ${fmtPrice(sweptHigh.level)} taken — watch for bearish reversal`,
   });
-  if (sweptLow) out.push({
-    id: 'trap-lo', kind: 'TRAP', severity: 'HIGH',
+  if (sweptLow) push({
+    id: `trap-lo-${sweptLow.level.toFixed(0)}`, kind: 'TRAP', severity: 'HIGH',
     title: 'SELL-SIDE LIQUIDITY SWEPT',
-    detail: `Buy-side raid @ ${fmtPrice(sweptLow.level)} — long entry zone`,
+    detail: `Stops below ${fmtPrice(sweptLow.level)} taken — watch for bullish reversal`,
   });
 
   const ms = data.ai?.microstructure;
   if (ms) {
-    if (ms.fakeBreakoutRisk >= 65) out.push({
+    if (ms.fakeBreakoutRisk >= 65) push({
       id: 'fake', kind: 'FAKE',
       severity: ms.fakeBreakoutRisk >= 80 ? 'HIGH' : 'MED',
       title: 'FAKE BREAKOUT RISK ELEVATED',
       detail: `Risk score ${ms.fakeBreakoutRisk.toFixed(0)}% — avoid breakout entries`,
     });
-    if (ms.stopHuntRisk >= 60) out.push({
+    if (ms.stopHuntRisk >= 60) push({
       id: 'sh', kind: 'STOP_HUNT',
       severity: ms.stopHuntRisk >= 80 ? 'HIGH' : 'MED',
       title: 'STOP-HUNT ACTIVITY',
@@ -511,9 +543,10 @@ function deriveSmartSignals(data: SymbolChartData | null, spot: number): SmartSi
     });
   }
 
-  if (data.ai?.smc) {
-    const sev: SmartSignal['severity'] = data.ai.smc.score >= 70 ? 'HIGH' : data.ai.smc.score >= 40 ? 'MED' : 'LOW';
-    out.push({
+  // SMC — only emit when score is meaningful and state is named (otherwise it's just noise every tick)
+  if (data.ai?.smc && data.ai.smc.score >= 35 && data.ai.smc.state) {
+    const sev: SmartSignal['severity'] = data.ai.smc.score >= 70 ? 'HIGH' : 'MED';
+    push({
       id: 'smc', kind: 'SMC', severity: sev,
       title: `SMC ${data.ai.smc.state.replace(/_/g, ' ')}`,
       detail: `Conviction ${data.ai.smc.score.toFixed(0)}%`,
@@ -525,7 +558,7 @@ function deriveSmartSignals(data: SymbolChartData | null, spot: number): SmartSi
     if (o.mitigated || qualityRank(o.quality) < 2) continue;
     const center = (o.top + o.bottom) / 2;
     if (Math.abs(spot - center) / Math.max(spot, 1) < 0.0035) {
-      out.push({
+      push({
         id: `ob-${center.toFixed(0)}`, kind: 'OB', severity: 'MED',
         title: `${o.type === 'bullish' ? 'BULLISH' : 'BEARISH'} OB IN PLAY`,
         detail: `${o.quality} block ${fmtPrice(o.bottom)}–${fmtPrice(o.top)}`,
@@ -538,7 +571,7 @@ function deriveSmartSignals(data: SymbolChartData | null, spot: number): SmartSi
   for (const f of fvgs) {
     if (f.filled) continue;
     if (spot >= Math.min(f.top, f.bottom) && spot <= Math.max(f.top, f.bottom)) {
-      out.push({
+      push({
         id: `fvg-${f.top.toFixed(0)}`, kind: 'FVG', severity: 'MED',
         title: `${f.type === 'bullish' ? 'BULLISH' : 'BEARISH'} FVG FILLING`,
         detail: `Gap ${fmtPrice(f.bottom)}–${fmtPrice(f.top)} actively reacting`,
@@ -547,27 +580,62 @@ function deriveSmartSignals(data: SymbolChartData | null, spot: number): SmartSi
     }
   }
 
+  // MTF alignment — must have a directional bias; NEUTRAL alignment is meaningless to surface
   if (data.ai?.multiTimeframe && data.ai.multiTimeframe.alignmentPct >= 75) {
-    const dom = data.ai.multiTimeframe.macro.trend;
-    out.push({
-      id: 'mtf', kind: 'MTF', severity: 'MED',
-      title: 'MULTI-TIMEFRAME ALIGNED',
-      detail: `${dom} bias across MICRO·MEDIUM·MACRO (${data.ai.multiTimeframe.alignmentPct.toFixed(0)}%)`,
-    });
-  }
-
-  if (data.ai?.ensemble) {
-    const e = data.ai.ensemble;
-    const conviction = Math.abs(e.unifiedProbUp - 50);
-    if (e.confidence >= 70 && conviction >= 15) {
-      out.push({
-        id: 'ai-conv', kind: 'AI', severity: 'HIGH',
-        title: e.unifiedProbUp >= 50 ? 'AI HIGH-CONVICTION LONG' : 'AI HIGH-CONVICTION SHORT',
-        detail: `P(up) ${e.unifiedProbUp.toFixed(1)}% · conf ${e.confidence.toFixed(0)}% · hit ${e.hitRatePct.toFixed(0)}%`,
+    const dom = data.ai.multiTimeframe.macro?.trend;
+    if (dom && dom !== 'NEUTRAL') {
+      push({
+        id: 'mtf', kind: 'MTF', severity: 'MED',
+        title: 'MULTI-TIMEFRAME ALIGNED',
+        detail: `${dom} bias across MICRO·MEDIUM·MACRO (${data.ai.multiTimeframe.alignmentPct.toFixed(0)}%)`,
       });
     }
   }
 
+  // BOS — surface fresh structural break on the most recent closed 5m candle
+  const c5 = data.candles5m ?? [];
+  if (c5.length >= 8) {
+    const last = c5[c5.length - 1];
+    const prior = c5.slice(-12, -1);
+    const priorHi = Math.max(...prior.map(k => k.h));
+    const priorLo = Math.min(...prior.map(k => k.l));
+    if (last.c > priorHi) {
+      const disp = (last.c - priorHi) / Math.max(priorHi, 1);
+      push({
+        id: `bos-up-${last.t}`, kind: 'SMC',
+        severity: disp > 0.002 ? 'HIGH' : 'MED',
+        title: 'BOS — BULLISH BREAK OF STRUCTURE',
+        detail: `Close ${fmtPrice(last.c)} cleared swing high ${fmtPrice(priorHi)} (+${(disp*100).toFixed(2)}%)`,
+      });
+    } else if (last.c < priorLo) {
+      const disp = (priorLo - last.c) / Math.max(priorLo, 1);
+      push({
+        id: `bos-dn-${last.t}`, kind: 'SMC',
+        severity: disp > 0.002 ? 'HIGH' : 'MED',
+        title: 'BOS — BEARISH BREAK OF STRUCTURE',
+        detail: `Close ${fmtPrice(last.c)} broke swing low ${fmtPrice(priorLo)} (−${(disp*100).toFixed(2)}%)`,
+      });
+    }
+  }
+
+  // AI ensemble conviction — require warmed calibrator (samples>=5) and either confidence or directional edge
+  if (data.ai?.ensemble) {
+    const e = data.ai.ensemble;
+    const conviction = Math.abs(e.unifiedProbUp - 50);
+    const warm = (e.samples ?? 0) >= 5;
+    if (warm && conviction >= 12 && e.confidence >= 50) {
+      const sev: SmartSignal['severity'] = (e.confidence >= 70 && conviction >= 18) ? 'HIGH' : 'MED';
+      push({
+        id: 'ai-conv', kind: 'AI', severity: sev,
+        title: e.unifiedProbUp >= 50 ? 'AI HIGH-CONVICTION LONG' : 'AI HIGH-CONVICTION SHORT',
+        detail: `P(up) ${e.unifiedProbUp.toFixed(1)}% · conf ${e.confidence.toFixed(0)}% · hit ${e.hitRatePct.toFixed(0)}% (${e.samples})`,
+      });
+    }
+  }
+
+  // Rank: HIGH → MED → LOW so the most actionable signals lead the feed
+  const sevRank: Record<SmartSignal['severity'], number> = { HIGH: 0, MED: 1, LOW: 2 };
+  out.sort((a, b) => sevRank[a.severity] - sevRank[b.severity]);
   return out.slice(0, 14);
 }
 
@@ -1137,11 +1205,18 @@ export default function ChartContent({ symbol: rawSymbol }: { symbol: string }) 
                   <span className="text-[9px] text-slate-500 tracking-widest font-mono">{data.ai.ensemble.version}</span>
                 </div>
                 <div className="flex items-center gap-3 text-[10px] font-mono">
-                  <span className="text-slate-400">HIT RATE <span className={`tabular-nums font-bold ${
-                    data.ai.ensemble.hitRatePct >= 60 ? 'text-emerald-400'
-                    : data.ai.ensemble.hitRatePct >= 45 ? 'text-amber-300'
-                    : 'text-red-400'
-                  }`}><LiveNumber value={data.ai.ensemble.hitRatePct} format={(n) => `${n.toFixed(0)}%`} flash={false} /></span> <span className="text-slate-500">(<LiveNumber value={data.ai.ensemble.samples} format={(n) => `${Math.round(n)}`} flash={false} />)</span></span>
+                  <span className="text-slate-400">HIT RATE {data.ai.ensemble.samples < 5 ? (
+                    <span className="text-slate-500 tabular-nums">— <span className="text-[9px]">(warming {data.ai.ensemble.samples}/5)</span></span>
+                  ) : (
+                    <>
+                      <span className={`tabular-nums font-bold ${
+                        data.ai.ensemble.hitRatePct >= 60 ? 'text-emerald-400'
+                        : data.ai.ensemble.hitRatePct >= 45 ? 'text-amber-300'
+                        : 'text-red-400'
+                      }`}><LiveNumber value={data.ai.ensemble.hitRatePct} format={(n) => `${n.toFixed(0)}%`} flash={false} /></span>{' '}
+                      <span className="text-slate-500">(<LiveNumber value={data.ai.ensemble.samples} format={(n) => `${Math.round(n)}`} flash={false} />)</span>
+                    </>
+                  )}</span>
                   <span className="text-slate-400">W <span className="text-slate-200 tabular-nums"><LiveNumber value={data.ai.ensemble.calibrator.w} format={(n) => n.toFixed(2)} flash={false} /></span></span>
                   <span className="text-slate-400">b <span className="text-slate-200 tabular-nums"><LiveNumber value={data.ai.ensemble.calibrator.b} format={(n) => n.toFixed(2)} flash={false} /></span></span>
                 </div>

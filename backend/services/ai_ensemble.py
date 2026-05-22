@@ -56,14 +56,18 @@ class OnlineCalibrator:
 
     Updates lazily: only when we observe a realised outcome for a previously
     issued prediction. Weights persist in-process for the session lifetime.
+    Uses a higher warm-up learning rate for the first 20 observations so the
+    calibrator escapes the (w=1, b=0) identity prior quickly on a live tape.
     """
 
-    __slots__ = ("_w", "_b", "_lr", "_lock")
+    __slots__ = ("_w", "_b", "_lr", "_warm_lr", "_n_updates", "_lock")
 
     def __init__(self, lr: float = 0.05):
         self._w = 1.0   # weight on signed score
         self._b = 0.0   # bias
         self._lr = lr
+        self._warm_lr = max(lr * 3.0, 0.15)  # boosted lr for first 20 samples
+        self._n_updates = 0
         self._lock = Lock()
 
     def predict(self, score: float) -> float:
@@ -80,10 +84,13 @@ class OnlineCalibrator:
         with self._lock:
             p = self.predict(score)
             err = p - float(y_up)
-            self._w -= self._lr * err * float(score)
-            self._b -= self._lr * err
-            # Light L2 regularization to prevent runaway weights
-            self._w *= 0.9995
+            lr = self._warm_lr if self._n_updates < 20 else self._lr
+            self._w -= lr * err * float(score)
+            self._b -= lr * err
+            # Clamp weights to a sane range to prevent runaway after long sessions
+            self._w = float(np.clip(self._w * 0.9995, -8.0, 8.0))
+            self._b = float(np.clip(self._b, -4.0, 4.0))
+            self._n_updates += 1
 
     def snapshot(self) -> Dict[str, float]:
         return {"w": round(self._w, 4), "b": round(self._b, 4)}
@@ -114,13 +121,19 @@ class SymbolEnsembleAgent:
         self._last_spot: float = 0.0
 
     @staticmethod
-    def _outcome(spot_then: float, spot_now: float, predicted_up: bool) -> int:
+    def _outcome(spot_then: float, spot_now: float, predicted_up: bool) -> Optional[int]:
+        """Score a settled prediction.
+
+        Returns 1 = hit, 0 = miss, None = flat move inside the deadband
+        (caller should skip both trail-append and calibrator-update so the
+        deadband cannot bias either direction).
+        """
         if spot_then <= 0 or spot_now <= 0:
-            return 0
+            return None
         move_pct = (spot_now - spot_then) / spot_then
-        # 5 bps deadband to avoid learning noise on flat moves
+        # 5 bps symmetric deadband → no-decision rather than asymmetric reward
         if abs(move_pct) < 5e-5:
-            return 1 if not predicted_up and abs(move_pct) < 2e-5 else 0
+            return None
         went_up = move_pct > 0
         return 1 if (went_up == predicted_up) else 0
 
@@ -133,11 +146,12 @@ class SymbolEnsembleAgent:
             if self._pending is not None and (now - self._pending.ts) >= 30.0 and spot > 0:
                 pred_up = self._pending.p_up >= 0.5
                 hit = self._outcome(self._pending.spot, spot, pred_up)
-                # Train calibrator on realised label (1 if price went up)
-                realised_up = 1 if spot > self._pending.spot else 0
-                self.calibrator.update(self._pending.score, realised_up)
-                self._trail.append(hit)
-                self._hist_p.append(self._pending.p_up)
+                if hit is not None:
+                    # Only train + record when the move escaped the deadband
+                    realised_up = 1 if spot > self._pending.spot else 0
+                    self.calibrator.update(self._pending.score, realised_up)
+                    self._trail.append(hit)
+                    self._hist_p.append(self._pending.p_up)
                 self._pending = None
 
             # Issue new prediction
@@ -172,9 +186,9 @@ class SymbolEnsembleAgent:
     def _reweight(probs: Dict[str, float], p_up: float) -> Dict[str, float]:
         """Blend engine class distribution with the calibrator's P(up).
 
-        Splits target mass: P(up) into STRONG_BUY+BUY, (1-P(up)) into
-        SELL+STRONG_SELL, and a fixed neutral floor of 8%. Preserves the
-        relative ratios within bull and bear sides from the engine.
+        Uncertainty-aware: NEUTRAL mass scales with how close P(up) is to 0.5.
+          neutral = 6% (high conviction) … up to 35% (true 50/50)
+        Preserves the relative ratios within bull and bear sides from the engine.
         """
         sb = max(0.0, float(probs.get("STRONG_BUY", 0.0)))
         b  = max(0.0, float(probs.get("BUY", 0.0)))
@@ -186,7 +200,9 @@ class SymbolEnsembleAgent:
         bull_ratio_sb = (sb / bull_sum) if bull_sum > 0 else 0.5
         bear_ratio_ss = (ss / bear_sum) if bear_sum > 0 else 0.5
 
-        neutral = 8.0
+        # Conviction ∈ [0, 1]: 0 at p_up=0.5, 1 at p_up=0 or 1
+        conviction = min(1.0, abs(float(p_up) - 0.5) * 2.0)
+        neutral = round(6.0 + (1.0 - conviction) * 29.0, 2)  # 6 .. 35
         avail = 100.0 - neutral
         bull_total = avail * float(p_up)
         bear_total = avail * float(1.0 - p_up)
@@ -194,7 +210,7 @@ class SymbolEnsembleAgent:
         return {
             "STRONG_BUY":  round(bull_total * bull_ratio_sb, 2),
             "BUY":         round(bull_total * (1.0 - bull_ratio_sb), 2),
-            "NEUTRAL":     round(neutral, 2),
+            "NEUTRAL":     neutral,
             "SELL":        round(bear_total * (1.0 - bear_ratio_ss), 2),
             "STRONG_SELL": round(bear_total * bear_ratio_ss, 2),
         }
