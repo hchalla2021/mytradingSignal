@@ -561,7 +561,7 @@ export default function Home() {
         {/* 📊 MARKET PULSE STRIP — institutional bird's-eye KPIs */}
         <MarketPulseStrip marketData={marketData} isConnected={isConnected} />
 
-        {/* 💸 FII / DII FLOW — live tick-derived intraday proxy */}
+        {/* 💸 FII / DII FLOW — official NSE cash-segment numbers */}
         <FIIDIIFlowStrip marketData={marketData} isConnected={isConnected} />
 
         {/* 🧠 AI SIGNAL DECK — institutional-grade per-index status cards */}
