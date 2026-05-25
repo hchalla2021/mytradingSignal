@@ -27,7 +27,7 @@
     "symbol": "NIFTY",
     "timeframe": "5m",
     "dataSource": "MARKET_CLOSED",
-    "timestamp": "2026-05-22T22:53:40.945210+05:30",
+    "timestamp": "2026-05-25T21:52:57.384489+05:30",
     "price": 23719.3,
     "changePct": 0.27,
     "three_factor": {
@@ -95,7 +95,7 @@
         "symbol": "NIFTY",
         "timeframe": "3m",
         "dataSource": "MARKET_CLOSED",
-        "timestamp": "2026-05-22T22:53:40.944761+05:30",
+        "timestamp": "2026-05-25T21:52:57.383505+05:30",
         "price": 23719.3,
         "changePct": 0.27,
         "three_factor": {
@@ -163,7 +163,7 @@
         "symbol": "NIFTY",
         "timeframe": "5m",
         "dataSource": "MARKET_CLOSED",
-        "timestamp": "2026-05-22T22:53:40.945210+05:30",
+        "timestamp": "2026-05-25T21:52:57.384489+05:30",
         "price": 23719.3,
         "changePct": 0.27,
         "three_factor": {
@@ -231,7 +231,7 @@
         "symbol": "NIFTY",
         "timeframe": "15m",
         "dataSource": "MARKET_CLOSED",
-        "timestamp": "2026-05-22T22:53:40.945380+05:30",
+        "timestamp": "2026-05-25T21:52:57.384752+05:30",
         "price": 23719.3,
         "changePct": 0.27,
         "three_factor": {
@@ -283,27 +283,27 @@
       "probabilityBear": 76
     },
     "ai": {
-      "provider": "tensorflow",
+      "provider": "numpy_fallback",
       "featureVersion": "candle_ai_v1",
       "classProbabilities": {
         "STRONG_BUY": 0.01,
         "BUY": 0.01,
         "NEUTRAL": 0.01,
-        "SELL": 4.82,
-        "STRONG_SELL": 95.15
+        "SELL": 4.69,
+        "STRONG_SELL": 95.28
       },
       "sequencePrediction": {
-        "nextMove": "DOWN",
-        "nextMovePts": -86.46,
-        "trendContinuationProb": 64.11,
-        "reversalProb": 46.26,
+        "nextMove": "SIDEWAYS",
+        "nextMovePts": 0.0,
+        "trendContinuationProb": 69.24,
+        "reversalProb": 37.23,
         "horizonSec": 300
       },
       "microstructure": {
         "liquidityDensity": 33.0,
         "structureDensity": 57.0,
-        "fakeBreakoutRisk": 43.19,
-        "stopHuntRisk": 44.54
+        "fakeBreakoutRisk": 26.95,
+        "stopHuntRisk": 44.0
       },
       "smc": {
         "state": "BALANCED",
@@ -326,23 +326,23 @@
       },
       "commandDeck": {
         "streamState": "CLOSED",
-        "modelProvider": "tensorflow",
-        "analysisLatencyMs": 289,
+        "modelProvider": "numpy_fallback",
+        "analysisLatencyMs": 260,
         "pipelineCadenceMs": 30000,
         "eventRatePerSec": 3.46,
-        "queueDepth": 5,
+        "queueDepth": 4,
         "cacheState": "COLD",
         "alerts": [
           "Market closed; confidence auto-degraded"
         ]
       },
       "institutionalConfluence": {
-        "executionProbability": 50,
+        "executionProbability": 52,
         "smartMoneyAlignment": 45,
         "institutionalFlow": 66,
-        "riskScore": 45,
-        "rewardScore": 57,
-        "riskRewardRatio": 1.27
+        "riskScore": 42,
+        "rewardScore": 60,
+        "riskRewardRatio": 1.43
       }
     }
   },
@@ -374,7 +374,7 @@
     "symbol": "BANKNIFTY",
     "timeframe": "5m",
     "dataSource": "MARKET_CLOSED",
-    "timestamp": "2026-05-22T22:53:40.947504+05:30",
+    "timestamp": "2026-05-25T21:52:57.385720+05:30",
     "price": 54055.35,
     "changePct": 1.15,
     "three_factor": {
@@ -441,7 +441,7 @@
         "symbol": "BANKNIFTY",
         "timeframe": "3m",
         "dataSource": "MARKET_CLOSED",
-        "timestamp": "2026-05-22T22:53:40.945462+05:30",
+        "timestamp": "2026-05-25T21:52:57.384869+05:30",
         "price": 54055.35,
         "changePct": 1.15,
         "three_factor": {
@@ -510,7 +510,7 @@
         "symbol": "BANKNIFTY",
         "timeframe": "5m",
         "dataSource": "MARKET_CLOSED",
-        "timestamp": "2026-05-22T22:53:40.947504+05:30",
+        "timestamp": "2026-05-25T21:52:57.385720+05:30",
         "price": 54055.35,
         "changePct": 1.15,
         "three_factor": {
@@ -577,7 +577,7 @@
         "symbol": "BANKNIFTY",
         "timeframe": "15m",
         "dataSource": "MARKET_CLOSED",
-        "timestamp": "2026-05-22T22:53:40.947777+05:30",
+        "timestamp": "2026-05-25T21:52:57.385995+05:30",
         "price": 54055.35,
         "changePct": 1.15,
         "three_factor": {
@@ -630,30 +630,30 @@
       "probabilityBear": 76
     },
     "ai": {
-      "provider": "tensorflow",
+      "provider": "numpy_fallback",
       "featureVersion": "candle_ai_v1",
       "classProbabilities": {
         "STRONG_BUY": 0.01,
         "BUY": 0.01,
         "NEUTRAL": 0.01,
-        "SELL": 4.84,
-        "STRONG_SELL": 95.13
+        "SELL": 4.31,
+        "STRONG_SELL": 95.66
       },
       "sequencePrediction": {
-        "nextMove": "DOWN",
-        "nextMovePts": -839.21,
-        "trendContinuationProb": 63.39,
-        "reversalProb": 57.96,
+        "nextMove": "SIDEWAYS",
+        "nextMovePts": 0.0,
+        "trendContinuationProb": 85.24,
+        "reversalProb": 21.23,
         "horizonSec": 300
       },
       "microstructure": {
         "liquidityDensity": 33.0,
         "structureDensity": 81.0,
-        "fakeBreakoutRisk": 88.95,
-        "stopHuntRisk": 14.3
+        "fakeBreakoutRisk": 26.95,
+        "stopHuntRisk": 12.0
       },
       "smc": {
-        "state": "LIQUIDITY_SWEEP_RISK",
+        "state": "BALANCED",
         "score": 76.15
       },
       "multiTimeframe": {
@@ -673,25 +673,24 @@
       },
       "commandDeck": {
         "streamState": "CLOSED",
-        "modelProvider": "tensorflow",
-        "analysisLatencyMs": 363,
+        "modelProvider": "numpy_fallback",
+        "analysisLatencyMs": 260,
         "pipelineCadenceMs": 30000,
         "eventRatePerSec": 3.46,
-        "queueDepth": 5,
+        "queueDepth": 4,
         "cacheState": "COLD",
         "alerts": [
-          "Fake breakout risk elevated on candle alignment breakdown",
           "3FA execution bias active: SELL",
           "Market closed; confidence auto-degraded"
         ]
       },
       "institutionalConfluence": {
-        "executionProbability": 55,
+        "executionProbability": 66,
         "smartMoneyAlignment": 61,
         "institutionalFlow": 82,
-        "riskScore": 80,
-        "rewardScore": 56,
-        "riskRewardRatio": 0.7
+        "riskScore": 25,
+        "rewardScore": 72,
+        "riskRewardRatio": 2.88
       }
     }
   },
@@ -723,7 +722,7 @@
     "symbol": "SENSEX",
     "timeframe": "5m",
     "dataSource": "MARKET_CLOSED",
-    "timestamp": "2026-05-22T22:53:40.948341+05:30",
+    "timestamp": "2026-05-25T21:52:57.387038+05:30",
     "price": 75415.35,
     "changePct": 0.31,
     "three_factor": {
@@ -791,7 +790,7 @@
         "symbol": "SENSEX",
         "timeframe": "3m",
         "dataSource": "MARKET_CLOSED",
-        "timestamp": "2026-05-22T22:53:40.947899+05:30",
+        "timestamp": "2026-05-25T21:52:57.386148+05:30",
         "price": 75415.35,
         "changePct": 0.31,
         "three_factor": {
@@ -859,7 +858,7 @@
         "symbol": "SENSEX",
         "timeframe": "5m",
         "dataSource": "MARKET_CLOSED",
-        "timestamp": "2026-05-22T22:53:40.948341+05:30",
+        "timestamp": "2026-05-25T21:52:57.387038+05:30",
         "price": 75415.35,
         "changePct": 0.31,
         "three_factor": {
@@ -927,7 +926,7 @@
         "symbol": "SENSEX",
         "timeframe": "15m",
         "dataSource": "MARKET_CLOSED",
-        "timestamp": "2026-05-22T22:53:40.948478+05:30",
+        "timestamp": "2026-05-25T21:52:57.387209+05:30",
         "price": 75415.35,
         "changePct": 0.31,
         "three_factor": {
@@ -979,27 +978,27 @@
       "probabilityBear": 76
     },
     "ai": {
-      "provider": "tensorflow",
+      "provider": "numpy_fallback",
       "featureVersion": "candle_ai_v1",
       "classProbabilities": {
         "STRONG_BUY": 0.01,
         "BUY": 0.01,
         "NEUTRAL": 0.01,
-        "SELL": 4.84,
-        "STRONG_SELL": 95.13
+        "SELL": 4.69,
+        "STRONG_SELL": 95.28
       },
       "sequencePrediction": {
-        "nextMove": "DOWN",
-        "nextMovePts": -315.61,
-        "trendContinuationProb": 63.35,
-        "reversalProb": 47.51,
+        "nextMove": "SIDEWAYS",
+        "nextMovePts": 0.0,
+        "trendContinuationProb": 69.24,
+        "reversalProb": 37.23,
         "horizonSec": 300
       },
       "microstructure": {
         "liquidityDensity": 33.0,
         "structureDensity": 57.0,
-        "fakeBreakoutRisk": 45.27,
-        "stopHuntRisk": 44.62
+        "fakeBreakoutRisk": 26.95,
+        "stopHuntRisk": 44.0
       },
       "smc": {
         "state": "BALANCED",
@@ -1022,23 +1021,23 @@
       },
       "commandDeck": {
         "streamState": "CLOSED",
-        "modelProvider": "tensorflow",
-        "analysisLatencyMs": 292,
+        "modelProvider": "numpy_fallback",
+        "analysisLatencyMs": 260,
         "pipelineCadenceMs": 30000,
         "eventRatePerSec": 3.46,
-        "queueDepth": 5,
+        "queueDepth": 4,
         "cacheState": "COLD",
         "alerts": [
           "Market closed; confidence auto-degraded"
         ]
       },
       "institutionalConfluence": {
-        "executionProbability": 49,
+        "executionProbability": 52,
         "smartMoneyAlignment": 45,
         "institutionalFlow": 66,
-        "riskScore": 46,
-        "rewardScore": 56,
-        "riskRewardRatio": 1.22
+        "riskScore": 42,
+        "rewardScore": 60,
+        "riskRewardRatio": 1.43
       }
     }
   }

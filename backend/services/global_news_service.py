@@ -15,10 +15,7 @@ from typing import Any, Dict, List, Optional
 import httpx
 import pytz
 
-try:
-    import tensorflow as tf
-except Exception:  # pragma: no cover - optional dependency
-    tf = None
+tf = None  # TensorFlow disabled - numpy softmax fallback used (faster startup)
 
 logger = logging.getLogger(__name__)
 IST = pytz.timezone("Asia/Kolkata")

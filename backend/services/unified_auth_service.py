@@ -76,26 +76,20 @@ class UnifiedAuthService:
                 print("🔴 UNIFIED AUTH: LOGIN REQUIRED (no token)")
                 return
             
-            # Token exists - check file timestamp
+            # Token exists - trust on load; real validity confirmed by API calls.
+            # File mtime is unreliable (manual edits, restored backups, container
+            # volume mounts) and must not gate the auth state on its own.
             env_path = Path(__file__).parent.parent / ".env"
             if env_path.exists():
-                mtime = datetime.fromtimestamp(env_path.stat().st_mtime, tz=IST)
-                self._token_timestamp = mtime
-                
-                # Check age
-                age_hours = (datetime.now(IST) - mtime).total_seconds() / 3600
-                
-                if age_hours > 20:
-                    self._status = AuthStatus.EXPIRED
-                    print(f"🟠 UNIFIED AUTH: EXPIRED (age: {age_hours:.1f}h)")
-                else:
-                    self._status = AuthStatus.VALID
-                    self._token = token
-                    print(f"🟢 UNIFIED AUTH: VALID (age: {age_hours:.1f}h)")
+                self._token_timestamp = datetime.fromtimestamp(env_path.stat().st_mtime, tz=IST)
+                age_hours = (datetime.now(IST) - self._token_timestamp).total_seconds() / 3600
+                print(f"🟢 UNIFIED AUTH: VALID (token present, file age: {age_hours:.1f}h — verified on API call)")
             else:
-                self._status = AuthStatus.VALID
-                self._token = token
+                self._token_timestamp = datetime.now(IST)
                 print("🟢 UNIFIED AUTH: VALID (new token)")
+
+            self._status = AuthStatus.VALID
+            self._token = token
                 
         except Exception as e:
             print(f"⚠️ UNIFIED AUTH: Error loading token: {e}")

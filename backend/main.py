@@ -1,5 +1,13 @@
 """Main FastAPI application entry point (production safe)."""
 
+# Silence TensorFlow / oneDNN logs in case any optional dep pulls TF in.
+# (Project uses numpy softmax fallback — these vars also prevent oneDNN init noise.)
+import os as _os
+_os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "3")
+_os.environ.setdefault("TF_ENABLE_ONEDNN_OPTS", "0")
+_os.environ.setdefault("GRPC_VERBOSITY", "ERROR")
+_os.environ.setdefault("GLOG_minloglevel", "3")
+
 import asyncio
 import logging
 from contextlib import asynccontextmanager

@@ -48,12 +48,9 @@ except Exception:  # pragma: no cover - optional dependency
     nn = None  # type: ignore
     _HAS_TORCH = False
 
-try:
-    import tensorflow as tf  # type: ignore
-    _HAS_TF = True
-except Exception:  # pragma: no cover - optional dependency
-    tf = None  # type: ignore
-    _HAS_TF = False
+# TensorFlow disabled - numpy softmax fallback used (faster startup)
+tf = None  # type: ignore
+_HAS_TF = False
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────

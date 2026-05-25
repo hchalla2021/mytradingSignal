@@ -6,47 +6,20 @@ Format: YYYY-MM-DD: Holiday Name
 
 from datetime import date, timedelta
 
-NSE_HOLIDAYS = {
-    # 2025 Holidays
-    "2025-01-26": "Republic Day",
-    "2025-02-26": "Maha Shivaratri",
-    "2025-03-14": "Holi",
-    "2025-03-31": "Id-Ul-Fitr",
-    "2025-04-10": "Shri Mahavir Jayanti",
-    "2025-04-14": "Dr. Ambedkar Jayanti",
-    "2025-04-18": "Good Friday",
-    "2025-05-01": "Maharashtra Day",
-    "2025-06-07": "Bakri Id",
-    "2025-08-15": "Independence Day",
-    "2025-08-27": "Ganesh Chaturthi",
-    "2025-10-02": "Mahatma Gandhi Jayanti",
-    "2025-10-21": "Diwali Laxmi Pujan",
-    "2025-10-22": "Diwali Balipratipada",
-    "2025-11-05": "Gurunanak Jayanti",
-    "2025-12-25": "Christmas",
-    # 2026 Holidays (NSE tentative calendar)
-    "2026-01-26": "Republic Day",
-    "2026-02-17": "Maha Shivaratri",
-    "2026-03-03": "Holi",
-    "2026-03-20": "Id-Ul-Fitr",
-    "2026-03-25": "Holi (Dhuleti)",
-    "2026-04-02": "Ram Navami",
-    "2026-04-03": "Good Friday",
-    "2026-04-14": "Dr. Ambedkar Jayanti",
-    "2026-05-01": "Maharashtra Day",
-    "2026-05-25": "Buddha Purnima",
-    "2026-05-28": "Bakri Id (Eid al-Adha)",
-    "2026-06-26": "Muharram",
-    "2026-08-15": "Independence Day",
-    "2026-08-26": "Janmashtami",
-    "2026-09-16": "Ganesh Chaturthi",
-    "2026-10-02": "Mahatma Gandhi Jayanti",
-    "2026-10-09": "Dussehra",
-    "2026-10-28": "Diwali Laxmi Pujan",
-    "2026-10-29": "Diwali Balipratipada",
-    "2026-11-19": "Gurunanak Jayanti",
-    "2026-12-25": "Christmas",
-}
+# Holiday list disabled — exchange-driven (Zerodha tick activity) is the source of truth.
+NSE_HOLIDAYS: dict[str, str] = {}
+
+# Previous static holiday entries (kept commented for reference only):
+# 2025: 01-26 Republic Day, 02-26 Maha Shivaratri, 03-14 Holi, 03-31 Id-Ul-Fitr,
+#       04-10 Mahavir Jayanti, 04-14 Ambedkar Jayanti, 04-18 Good Friday,
+#       05-01 Maharashtra Day, 06-07 Bakri Id, 08-15 Independence Day,
+#       08-27 Ganesh Chaturthi, 10-02 Gandhi Jayanti, 10-21 Diwali Laxmi Pujan,
+#       10-22 Diwali Balipratipada, 11-05 Gurunanak Jayanti, 12-25 Christmas.
+# 2026: 01-15 Municipal Election, 01-26 Republic Day, 03-03 Holi,
+#       03-26 Ram Navami, 03-31 Mahavir Jayanti, 04-03 Good Friday,
+#       04-14 Ambedkar Jayanti, 05-01 Maharashtra Day, 05-28 Bakri Id,
+#       06-26 Muharram, 09-14 Ganesh Chaturthi, 10-02 Gandhi Jayanti,
+#       10-20 Dussehra, 11-10 Diwali-Balipratipada, 11-24 Gurunanak Jayanti, 12-25 Christmas.
 
 
 def is_holiday(date_str: str) -> bool:

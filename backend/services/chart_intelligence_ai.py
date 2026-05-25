@@ -13,10 +13,7 @@ import numpy as np
 
 from .ai_ensemble import compute_ensemble
 
-try:
-    import tensorflow as tf
-except Exception:  # pragma: no cover - optional dependency
-    tf = None
+tf = None  # TensorFlow disabled - numpy softmax fallback used (faster startup)
 
 
 def _safe_float(v: Any, default: float = 0.0) -> float:

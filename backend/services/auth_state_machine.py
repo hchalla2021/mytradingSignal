@@ -64,29 +64,25 @@ class AuthStateManager:
                 print("🔴 AUTH STATE: LOGIN_REQUIRED (no token found)")
                 return
             
-            # Token exists - check if it's likely expired
+            # Token exists - trust it on load. Real validity is determined
+            # by actual API calls via mark_api_success / mark_api_failure.
+            # Do NOT mark EXPIRED based on file mtime alone — mtime can lag
+            # behind real token freshness (manual edits, restored backups,
+            # container volumes) and would falsely block a working token.
             self._token = token
-            
-            # Check token file modification time
+
             env_path = Path(__file__).parent.parent / ".env"
             if env_path.exists():
-                mtime = datetime.fromtimestamp(env_path.stat().st_mtime, tz=IST)
-                self._token_created_at = mtime
-                
-                # Zerodha tokens expire after ~24 hours (expire at 7:30 AM IST next day)
-                # Conservative check: if token file is > 20 hours old, consider expired
-                age_hours = (datetime.now(IST) - mtime).total_seconds() / 3600
-                
-                if age_hours > 20:
-                    self._state = AuthState.EXPIRED
-                    print(f"🟠 AUTH STATE: EXPIRED (token age: {age_hours:.1f} hours)")
-                else:
-                    self._state = AuthState.VALID
-                    print(f"🟢 AUTH STATE: VALID (token age: {age_hours:.1f} hours)")
+                self._token_created_at = datetime.fromtimestamp(
+                    env_path.stat().st_mtime, tz=IST
+                )
+                age_hours = (datetime.now(IST) - self._token_created_at).total_seconds() / 3600
+                print(f"🟢 AUTH STATE: VALID (token present, file age: {age_hours:.1f}h — verified on API call)")
             else:
-                # No .env file, assume token is fresh
-                self._state = AuthState.VALID
+                self._token_created_at = datetime.now(IST)
                 print("🟢 AUTH STATE: VALID (token found)")
+
+            self._state = AuthState.VALID
                 
         except Exception as e:
             print(f"⚠️ Error checking token: {e}")

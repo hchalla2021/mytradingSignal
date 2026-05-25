@@ -5,10 +5,7 @@ from typing import Any, Deque, Dict
 
 import numpy as np
 
-try:
-    import tensorflow as tf
-except Exception:  # pragma: no cover
-    tf = None
+tf = None  # TensorFlow disabled - numpy softmax fallback used (faster startup)
 
 
 class TrendBaseAIEngine:
