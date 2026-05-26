@@ -22,6 +22,6 @@ Insufficient data. Observe for at least 5 trading days to identify reliable patt
 
 | Date | NIFTY | BANKNIFTY | SENSEX |
 |------|-------|-----------|--------|
+| 2026-05-26 | ➡️ +0.00% (SIDEWAYS) | ➡️ +0.00% (SIDEWAYS) | ➡️ +0.00% (SIDEWAYS) |
 | 2026-05-22 | ➡️ +0.00% (SIDEWAYS) | ➡️ +0.00% (SIDEWAYS) | ➡️ +0.00% (SIDEWAYS) |
 | 2026-05-20 | 📈 +0.32% (SIDEWAYS) | 📈 +0.75% (MILD_UP) | ➡️ +0.00% (SIDEWAYS) |
-| 2026-05-17 | ➡️ +0.00% (SIDEWAYS) | ➡️ +0.00% (SIDEWAYS) | ➡️ +0.00% (SIDEWAYS) |

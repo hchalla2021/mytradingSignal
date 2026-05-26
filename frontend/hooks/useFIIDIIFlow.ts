@@ -59,12 +59,27 @@ export interface FIIDIIHistoryPoint {
   diiGrossCr: number;
 }
 
+export type FIIDIIPublishStatus =
+  | 'TODAY_LIVE'
+  | 'AWAITING_TODAY'
+  | 'PRIOR_FINAL';
+
+export interface FIIDIIPublish {
+  status: FIIDIIPublishStatus;
+  label: string;
+  note: string;
+  isToday: boolean;
+  inPublishWindow: boolean;
+  nextUpdateAt: string;
+}
+
 export interface FIIDIISnapshot {
   success: boolean;
   source: string;        // 'NSE'
   endpoint?: string;
   fetchedAt: string;
   tradeDate?: string;
+  publish?: FIIDIIPublish;
   fii: FIIDIIRow | null;
   dii: FIIDIIRow | null;
   netInstitutionalCr?: number;
@@ -88,8 +103,11 @@ function buildHttpUrl(force = false): string {
 
 /* ── Hook ──────────────────────────────────────────────────────────────── */
 
-const REFRESH_MS = 5 * 60 * 1000;        // 5 min poll
-const RETRY_ON_ERROR_MS = 60 * 1000;     // 1 min on failure
+const REFRESH_DEFAULT_MS = 5 * 60 * 1000;       // 5 min normal poll
+const REFRESH_PUBLISH_MS = 60 * 1000;           // 1 min while NSE publish window open
+const REFRESH_LIVE_MS = 90 * 1000;              // 90 s when today's number is already live
+const RETRY_ON_ERROR_MS = 60 * 1000;            // 1 min on failure
+const FOCUS_REFRESH_COOLDOWN_MS = 30 * 1000;    // de-dupe focus refreshes
 
 export function useFIIDIIFlow() {
   const [data, setData] = useState<FIIDIISnapshot | null>(null);
@@ -98,6 +116,7 @@ export function useFIIDIIFlow() {
   const inFlightRef = useRef(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const closedRef = useRef(false);
+  const lastFetchMsRef = useRef(0);
 
   const fetchOnce = useCallback(async (force = false) => {
     if (inFlightRef.current) return;
@@ -109,6 +128,7 @@ export function useFIIDIIFlow() {
       if (closedRef.current) return;
       setData(json);
       setError(json.success ? null : (json.message || json.error || 'Unknown error'));
+      lastFetchMsRef.current = Date.now();
     } catch (e) {
       if (closedRef.current) return;
       setError(e instanceof Error ? e.message : String(e));
@@ -118,26 +138,53 @@ export function useFIIDIIFlow() {
     }
   }, []);
 
+  // Decide poll interval from latest snapshot's publish status.
+  const nextDelayMs = useCallback((): number => {
+    if (error) return RETRY_ON_ERROR_MS;
+    const pub = data?.publish;
+    if (pub?.inPublishWindow) return REFRESH_PUBLISH_MS;
+    if (pub?.isToday) return REFRESH_LIVE_MS;
+    return REFRESH_DEFAULT_MS;
+  }, [data, error]);
+
   useEffect(() => {
     closedRef.current = false;
     fetchOnce(false);
 
     const schedule = () => {
       if (timerRef.current) clearTimeout(timerRef.current);
-      const ms = error ? RETRY_ON_ERROR_MS : REFRESH_MS;
       timerRef.current = setTimeout(async () => {
         await fetchOnce(false);
         schedule();
-      }, ms);
+      }, nextDelayMs());
     };
     schedule();
+
+    // Refresh when tab regains focus / becomes visible (debounced).
+    const onFocus = () => {
+      if (Date.now() - lastFetchMsRef.current < FOCUS_REFRESH_COOLDOWN_MS) return;
+      fetchOnce(false);
+    };
+    const onVisibility = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'visible') {
+        onFocus();
+      }
+    };
+    if (typeof window !== 'undefined') {
+      window.addEventListener('focus', onFocus);
+      document.addEventListener('visibilitychange', onVisibility);
+    }
 
     return () => {
       closedRef.current = true;
       if (timerRef.current) clearTimeout(timerRef.current);
+      if (typeof window !== 'undefined') {
+        window.removeEventListener('focus', onFocus);
+        document.removeEventListener('visibilitychange', onVisibility);
+      }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fetchOnce]);
+  }, [fetchOnce, nextDelayMs]);
 
   return {
     data,

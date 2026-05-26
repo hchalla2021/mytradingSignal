@@ -31,6 +31,13 @@ _NSE_HOME = "https://www.nseindia.com"
 _NSE_REPORT_PAGE = "https://www.nseindia.com/reports/fii-dii"
 _NSE_FII_DII_API = "https://www.nseindia.com/api/fiidiiTradeReact"
 
+# Moneycontrol page — used for HISTORY BACKFILL only (past N days of net flows).
+# NSE only returns the single latest trade-day row, so DoD/5D/streak metrics
+# stay at zero until the cache organically accumulates days. MC's SSR page
+# embeds the prior days' net values in __NEXT_DATA__ JSON, which we parse once
+# on cold start to seed the history.
+_MC_FII_DII_PAGE = "https://www.moneycontrol.com/stocks/marketstats/fii_dii_activity/index.php"
+
 # India Standard Time (UTC+5:30)
 _IST = timezone(timedelta(hours=5, minutes=30))
 
@@ -252,6 +259,85 @@ class FIIDIIService:
 
     # --- rolling history --------------------------------------------------
 
+    async def _backfill_history_from_mc(self) -> List[Dict[str, Any]]:
+        """
+        Pull prior-days FII/DII NET flows from Moneycontrol's SSR page so the
+        DoD / 5D / streak metrics show real numbers from day one instead of
+        zeros while we wait for the local NSE cache to accumulate.
+
+        Source: __NEXT_DATA__ JSON embedded in MC's fii_dii_activity page.
+        Returns up to _HISTORY_MAX rows (oldest -> newest), each with keys
+        compatible with the cached history schema. Buy/sell split is NOT in
+        the SSR payload, so grossCr fields are 0 for backfilled rows (the
+        latest row from NSE will have real gross values).
+        """
+        try:
+            async with httpx.AsyncClient(
+                headers={**_DEFAULT_HEADERS, "Referer": "https://www.moneycontrol.com/"},
+                follow_redirects=True,
+                timeout=12.0,
+            ) as client:
+                resp = await client.get(_MC_FII_DII_PAGE)
+                resp.raise_for_status()
+                html = resp.text
+
+            m = re.search(
+                r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>',
+                html, re.DOTALL,
+            )
+            if not m:
+                return []
+            import json
+            blob = json.loads(m.group(1))
+            rows = (
+                blob.get("props", {})
+                    .get("pageProps", {})
+                    .get("FiiDiiData", {})
+                    .get("fiiDiiData", [])
+            ) or []
+
+            def _num(s: Any) -> float:
+                if s is None:
+                    return 0.0
+                try:
+                    return float(str(s).replace(",", "").replace("\u20b9", "").strip())
+                except ValueError:
+                    return 0.0
+
+            def _fmt_date(s: str) -> str:
+                # MC sends "YYYY-MM-DD" → convert to NSE "DD-Mon-YYYY"
+                try:
+                    d = datetime.strptime(str(s)[:10], "%Y-%m-%d")
+                    return d.strftime("%d-%b-%Y")
+                except Exception:
+                    return str(s)
+
+            out: List[Dict[str, Any]] = []
+            for r in rows:
+                date_raw = r.get("date") or r.get("fDate") or ""
+                trade_date = _fmt_date(date_raw)
+                if not trade_date:
+                    continue
+                fii_net = _num(r.get("fiiCM"))
+                dii_net = _num(r.get("diiCM"))
+                out.append({
+                    "tradeDate": trade_date,
+                    "fiiNetCr": round(fii_net, 2),
+                    "diiNetCr": round(dii_net, 2),
+                    "netCr": round(fii_net + dii_net, 2),
+                    "fiiGrossCr": 0.0,
+                    "diiGrossCr": 0.0,
+                })
+
+            # MC lists newest-first; history is oldest-first
+            out.reverse()
+            return out[-_HISTORY_MAX:]
+        except Exception as exc:
+            logger.warning("FII/DII: MC backfill failed: %s", exc)
+            return []
+
+    # --- rolling history --------------------------------------------------
+
     async def _update_history(
         self, cache: Any, fii: "_FlowRow", dii: "_FlowRow"
     ) -> List[Dict[str, Any]]:
@@ -262,6 +348,17 @@ class FIIDIIService:
                 existing = []
         except Exception:
             existing = []
+
+        # Cold-start / sparse-cache backfill: if we have fewer than 2 days,
+        # pull prior trade days from Moneycontrol so DoD / 5D / streak are
+        # real from the first request instead of zero.
+        if len(existing) < 2:
+            seed = await self._backfill_history_from_mc()
+            if seed:
+                # merge: seed provides prior days, existing may have today
+                seen_dates = {h.get("tradeDate") for h in existing}
+                merged = [h for h in seed if h.get("tradeDate") not in seen_dates] + existing
+                existing = merged[-_HISTORY_MAX:]
 
         trade_date = fii.date or dii.date
         if not trade_date:
@@ -347,15 +444,79 @@ class FIIDIIService:
         return datetime.now(_IST)
 
     def _ttl_for(self, now_ist: datetime) -> int:
-        # NSE publishes the day's provisional FII/DII roughly between 17:00 and 18:30 IST.
+        # NSE publishes the day's provisional FII/DII roughly between 17:00 and 19:00 IST.
         # During the live cash session (09:15–15:30) numbers are still yesterday's
         # close — refresh slowly. Right around publish window refresh fast.
         h, m = now_ist.hour, now_ist.minute
-        if (h == 17) or (h == 18 and m < 30):
-            return 120   # publish window — poll often
+        if 17 <= h < 19:
+            return 60    # publish window — poll every minute
         if 9 <= h < 16:
             return _TTL_LIVE
         return _TTL_PUBLISHED
+
+    @staticmethod
+    def _parse_trade_date(s: str) -> Optional[datetime]:
+        """Parse NSE 'DD-Mon-YYYY' as IST midnight."""
+        if not s:
+            return None
+        for fmt in ("%d-%b-%Y", "%d-%B-%Y"):
+            try:
+                d = datetime.strptime(s, fmt)
+                return d.replace(tzinfo=_IST)
+            except ValueError:
+                continue
+        return None
+
+    def _publish_status(self, trade_date_str: str, now_ist: datetime) -> Dict[str, Any]:
+        """
+        Tell the UI whether the snapshot is today's provisional, prior-day final,
+        or we're waiting for today's publish. Includes next expected refresh time.
+        """
+        td = self._parse_trade_date(trade_date_str)
+        today_ist = now_ist.replace(hour=0, minute=0, second=0, microsecond=0)
+        publish_open = now_ist.replace(hour=17, minute=0, second=0, microsecond=0)
+        publish_close = now_ist.replace(hour=19, minute=0, second=0, microsecond=0)
+
+        is_today = td is not None and td.date() == today_ist.date()
+        in_publish_window = publish_open <= now_ist < publish_close
+
+        if is_today:
+            status = "TODAY_LIVE"
+            label = "LIVE"
+            note = "Today's provisional NSE figures."
+        elif in_publish_window:
+            status = "AWAITING_TODAY"
+            label = "AWAITING TODAY"
+            note = "NSE publish window open — today's figures expected shortly."
+        elif now_ist < publish_open:
+            status = "PRIOR_FINAL"
+            label = "EOD"
+            note = f"Prior trade day final ({trade_date_str}). Today's publish ~17:00 IST."
+        else:
+            # past publish window without today's data — likely weekend/holiday
+            status = "PRIOR_FINAL"
+            label = "EOD"
+            note = f"Last available trade day ({trade_date_str})."
+
+        # next-update hint
+        if in_publish_window and not is_today:
+            next_update = now_ist + timedelta(seconds=60)
+        elif is_today and in_publish_window:
+            next_update = now_ist + timedelta(seconds=60)
+        elif now_ist < publish_open:
+            next_update = publish_open
+        else:
+            # roll to tomorrow's publish window
+            next_update = (now_ist + timedelta(days=1)).replace(hour=17, minute=0, second=0, microsecond=0)
+
+        return {
+            "status": status,
+            "label": label,
+            "note": note,
+            "isToday": is_today,
+            "inPublishWindow": in_publish_window,
+            "nextUpdateAt": next_update.isoformat(),
+        }
 
     # --- public API -------------------------------------------------------
 
@@ -414,12 +575,16 @@ class FIIDIIService:
             history = await self._update_history(cache, fii, dii)
             trend = self._trend_from_history(history)
 
+            trade_date_str = fii.date or dii.date
+            publish = self._publish_status(trade_date_str, now_ist)
+
             snapshot: Dict[str, Any] = {
                 "success": True,
                 "source": "NSE",
                 "endpoint": _NSE_FII_DII_API,
                 "fetchedAt": now_ist.isoformat(),
-                "tradeDate": fii.date or dii.date,
+                "tradeDate": trade_date_str,
+                "publish": publish,
                 "fii": {**fii.as_dict(), **derived["fii"]},
                 "dii": {**dii.as_dict(), **derived["dii"]},
                 "netInstitutionalCr": round(fii.net_value + dii.net_value, 2),

@@ -314,6 +314,9 @@ const FIIDIIFlowStrip = ({ isConnected }: FIIDIIFlowStripProps) => {
           <span className="text-lg font-black tracking-[0.22em] text-violet-300 lg:text-2xl">FII / DII FLOW</span>
           <span className="hidden text-sm font-semibold text-slate-400 sm:inline truncate">
             · Official NSE cash-segment · {view.tradeDate}
+            {data?.publish && !data.publish.isToday && (
+              <span className="ml-1 text-amber-300/80">· awaiting today</span>
+            )}
           </span>
         </div>
         <div className="flex items-center gap-2">
@@ -327,10 +330,28 @@ const FIIDIIFlowStrip = ({ isConnected }: FIIDIIFlowStripProps) => {
           >
             ↻
           </button>
-          <span className="flex items-center gap-1.5 rounded-full border border-slate-600 bg-slate-900/80 px-2.5 py-1 text-[11px] font-bold text-slate-300">
-            <span className={`h-2 w-2 rounded-full ${isConnected ? 'bg-emerald-400 animate-pulse' : 'bg-rose-400'}`} />
-            {isConnected ? 'LIVE' : 'SYNC'}
-          </span>
+          {(() => {
+            const pub = data?.publish;
+            const status = pub?.status ?? (isConnected ? 'PRIOR_FINAL' : undefined);
+            const dotCls =
+              status === 'TODAY_LIVE' ? 'bg-emerald-400 animate-pulse'
+              : status === 'AWAITING_TODAY' ? 'bg-amber-400 animate-pulse'
+              : status === 'PRIOR_FINAL' ? 'bg-sky-400'
+              : 'bg-rose-400';
+            const label = pub?.label ?? (isConnected ? 'EOD' : 'SYNC');
+            const nextTip = pub?.nextUpdateAt
+              ? `Next update ~${new Date(pub.nextUpdateAt).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', hour12: false })} IST`
+              : '';
+            return (
+              <span
+                className="flex items-center gap-1.5 rounded-full border border-slate-600 bg-slate-900/80 px-2.5 py-1 text-[11px] font-bold text-slate-300"
+                title={pub?.note ? `${pub.note} ${nextTip}`.trim() : nextTip}
+              >
+                <span className={`h-2 w-2 rounded-full ${dotCls}`} />
+                {label}
+              </span>
+            );
+          })()}
         </div>
       </div>
       <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
