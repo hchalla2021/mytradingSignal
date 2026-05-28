@@ -59,27 +59,44 @@ export interface FIIDIIHistoryPoint {
   diiGrossCr: number;
 }
 
-export type FIIDIIPublishStatus =
-  | 'TODAY_LIVE'
-  | 'AWAITING_TODAY'
-  | 'PRIOR_FINAL';
+export interface FIIDIIFnOBreakdown {
+  indexFuturesCr: number;
+  indexOptionsCr: number;
+  stockFuturesCr: number;
+  stockOptionsCr: number;
+  totalFnOCr: number;
+  stance: {
+    indexFutures: 'bullish' | 'bearish' | 'neutral';
+    indexOptions: 'bullish' | 'bearish' | 'neutral';
+    stockFutures: 'bullish' | 'bearish' | 'neutral';
+    stockOptions: 'bullish' | 'bearish' | 'neutral';
+    overall: 'bullish' | 'bearish' | 'neutral';
+  };
+}
 
-export interface FIIDIIPublish {
-  status: FIIDIIPublishStatus;
-  label: string;
-  note: string;
-  isToday: boolean;
-  inPublishWindow: boolean;
-  nextUpdateAt: string;
+export interface FIIDIIMarketContext {
+  niftyClose: number;
+  niftyPrevClose: number;
+  niftyChange: number;
+  niftyChangePct: number;
+  sensexClose: number;
+  sensexPrevClose: number;
+  sensexChange: number;
+  sensexChangePct: number;
 }
 
 export interface FIIDIISnapshot {
   success: boolean;
-  source: string;        // 'NSE'
+  source: string;        // 'Moneycontrol'
   endpoint?: string;
   fetchedAt: string;
+  // Freshness, provided by backend; recomputed on every response (incl. cache hits)
+  dataAgeSec?: number;
+  nextRefreshAt?: string;
+  nextRefreshInSec?: number;
+  recommendedPollSec?: number;
+  staleness?: 'fresh' | 'recent' | 'stale';
   tradeDate?: string;
-  publish?: FIIDIIPublish;
   fii: FIIDIIRow | null;
   dii: FIIDIIRow | null;
   netInstitutionalCr?: number;
@@ -89,6 +106,8 @@ export interface FIIDIISnapshot {
   regime: FIIDIIRegime | null;
   trend?: FIIDIITrend;
   history?: FIIDIIHistoryPoint[];
+  fiiFnO?: FIIDIIFnOBreakdown;
+  marketContext?: FIIDIIMarketContext;
   fromCache?: boolean;
   error?: string;
   message?: string;
@@ -103,9 +122,9 @@ function buildHttpUrl(force = false): string {
 
 /* ── Hook ──────────────────────────────────────────────────────────────── */
 
-const REFRESH_DEFAULT_MS = 5 * 60 * 1000;       // 5 min normal poll
-const REFRESH_PUBLISH_MS = 60 * 1000;           // 1 min while NSE publish window open
-const REFRESH_LIVE_MS = 90 * 1000;              // 90 s when today's number is already live
+const REFRESH_FALLBACK_MS = 5 * 60 * 1000;      // used when server omits recommendedPollSec
+const REFRESH_MIN_MS = 15 * 1000;               // safety floor — never thrash the API
+const REFRESH_MAX_MS = 30 * 60 * 1000;          // safety ceiling
 const RETRY_ON_ERROR_MS = 60 * 1000;            // 1 min on failure
 const FOCUS_REFRESH_COOLDOWN_MS = 30 * 1000;    // de-dupe focus refreshes
 
@@ -113,6 +132,7 @@ export function useFIIDIIFlow() {
   const [data, setData] = useState<FIIDIISnapshot | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [secsSinceFetch, setSecsSinceFetch] = useState(0);
   const inFlightRef = useRef(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const closedRef = useRef(false);
@@ -129,6 +149,7 @@ export function useFIIDIIFlow() {
       setData(json);
       setError(json.success ? null : (json.message || json.error || 'Unknown error'));
       lastFetchMsRef.current = Date.now();
+      setSecsSinceFetch(json.dataAgeSec ?? 0);
     } catch (e) {
       if (closedRef.current) return;
       setError(e instanceof Error ? e.message : String(e));
@@ -138,13 +159,14 @@ export function useFIIDIIFlow() {
     }
   }, []);
 
-  // Decide poll interval from latest snapshot's publish status.
+  // Trust the backend's recommendedPollSec (it knows the publish window).
   const nextDelayMs = useCallback((): number => {
     if (error) return RETRY_ON_ERROR_MS;
-    const pub = data?.publish;
-    if (pub?.inPublishWindow) return REFRESH_PUBLISH_MS;
-    if (pub?.isToday) return REFRESH_LIVE_MS;
-    return REFRESH_DEFAULT_MS;
+    const rec = data?.recommendedPollSec;
+    if (typeof rec === 'number' && rec > 0) {
+      return Math.max(REFRESH_MIN_MS, Math.min(REFRESH_MAX_MS, rec * 1000));
+    }
+    return REFRESH_FALLBACK_MS;
   }, [data, error]);
 
   useEffect(() => {
@@ -186,10 +208,22 @@ export function useFIIDIIFlow() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fetchOnce, nextDelayMs]);
 
+  // 1-Hz freshness counter so the UI can show "AS OF HH:MM · +Ns" / countdown.
+  useEffect(() => {
+    if (!data?.fetchedAt) return;
+    const base = Date.parse(data.fetchedAt);
+    if (Number.isNaN(base)) return;
+    const tick = () => setSecsSinceFetch(Math.max(0, Math.floor((Date.now() - base) / 1000)));
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, [data?.fetchedAt]);
+
   return {
     data,
     isLoading,
     error,
+    secsSinceFetch,
     refresh: () => fetchOnce(true),
   };
 }

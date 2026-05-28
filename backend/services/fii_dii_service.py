@@ -1,18 +1,34 @@
 """
 FII / DII real-flow service.
 
-Fetches official Foreign and Domestic Institutional cash-segment numbers
-straight from NSE's public report endpoint (the same JSON that powers
-https://www.nseindia.com/reports/fii-dii). Replaces the synthetic
-tick-derived proxy that previously showed inverted signs.
+Single source: Moneycontrol's `fii_dii_activity` SSR page.
+The page embeds the latest N trade days of FII/DII cash-segment NET flows
+inside a `__NEXT_DATA__` JSON blob. We parse that blob, treat the newest
+row as the "current" snapshot and the rest as rolling history.
+
+NSE's official report endpoint is intentionally NOT used — it is heavily
+rate-limited and frequently 403s without a cookie dance, and returns only
+the single latest trade-day row (no built-in history).
+
+Buy/sell split is NOT available from this source. Only net flows + the
+derived trend metrics. Consumers should treat buyValue/sellValue/gross
+fields as 0 when `source == 'Moneycontrol'`.
 
 Public surface:
     await fii_dii_service.get_snapshot() -> dict
+
+Extra payload (when available from source row):
+        fiiFnO: FII segment-wise flows in ₹ Cr
+            - indexFuturesCr, indexOptionsCr, stockFuturesCr, stockOptionsCr
+            - totalFnOCr
+            - stance per segment + overall (bullish/bearish/neutral)
+        marketContext: NIFTY/SENSEX daily change context from same row
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
 import time
@@ -26,16 +42,8 @@ from services.cache import get_cache
 
 logger = logging.getLogger(__name__)
 
-# NSE endpoints
-_NSE_HOME = "https://www.nseindia.com"
-_NSE_REPORT_PAGE = "https://www.nseindia.com/reports/fii-dii"
-_NSE_FII_DII_API = "https://www.nseindia.com/api/fiidiiTradeReact"
-
-# Moneycontrol page — used for HISTORY BACKFILL only (past N days of net flows).
-# NSE only returns the single latest trade-day row, so DoD/5D/streak metrics
-# stay at zero until the cache organically accumulates days. MC's SSR page
-# embeds the prior days' net values in __NEXT_DATA__ JSON, which we parse once
-# on cold start to seed the history.
+# Moneycontrol — primary (and only) source.
+_MC_HOME = "https://www.moneycontrol.com/"
 _MC_FII_DII_PAGE = "https://www.moneycontrol.com/stocks/marketstats/fii_dii_activity/index.php"
 
 # India Standard Time (UTC+5:30)
@@ -45,19 +53,29 @@ _CACHE_KEY = "fii_dii:snapshot"
 _HISTORY_KEY = "fii_dii:history"   # rolling list of past trade-date snapshots
 _HISTORY_MAX = 10                  # keep last 10 trade days
 _HISTORY_TTL = 60 * 60 * 24 * 30   # 30 days
-_TTL_LIVE = 300       # 5 min while market window active
-_TTL_PUBLISHED = 1800  # 30 min after daily publish
+
+# Refresh cadences (seconds) — Moneycontrol updates its SSR blob at most every
+# few minutes; we poll fast enough to catch the post-close provisional update.
+_TTL_PUBLISH_WINDOW = 30    # 16:30–19:30 IST Mon–Fri — catches provisional publish ASAP
+_TTL_MARKET_HOURS = 120     # 09:15–15:30 IST Mon–Fri — backstop during cash session
+_TTL_OFF_HOURS = 1800       # weekday evenings / early morning — every 30 min
+_TTL_WEEKEND = 6 * 3600     # Sat / Sun — no fresh prints; 6 h is plenty
 
 _DEFAULT_HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
         "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
     ),
-    "Accept": "application/json, text/plain, */*",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.9",
-    "Referer": _NSE_REPORT_PAGE,
+    "Referer": _MC_HOME,
     "Connection": "keep-alive",
 }
+
+_NEXT_DATA_RE = re.compile(
+    r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>',
+    re.DOTALL,
+)
 
 # -------------------------------------------------------------------- types --
 
@@ -82,62 +100,51 @@ class _FlowRow:
 # -------------------------------------------------------------------- impl --
 
 class FIIDIIService:
-    """Singleton service that pulls FII/DII flow numbers from NSE."""
+    """Singleton service that pulls FII/DII flow numbers from Moneycontrol."""
 
     def __init__(self) -> None:
         self._lock = asyncio.Lock()
-        self._cookie_jar: Optional[httpx.Cookies] = None
         self._last_fetch_ms: int = 0
 
     # --- network ----------------------------------------------------------
 
-    async def _bootstrap_cookies(self, client: httpx.AsyncClient) -> None:
-        """NSE blocks API calls unless the client first 'visits' the site."""
-        try:
-            await client.get(_NSE_HOME, timeout=8.0)
-            await client.get(_NSE_REPORT_PAGE, timeout=8.0)
-            self._cookie_jar = client.cookies
-        except Exception as exc:
-            logger.warning("FII/DII: cookie bootstrap failed: %s", exc)
+    async def _fetch_mc_rows(self) -> List[Dict[str, Any]]:
+        """
+        GET the Moneycontrol fii_dii_activity page and extract the
+        `fiiDiiData` array (newest-first) from its __NEXT_DATA__ blob.
 
-    async def _fetch_raw(self) -> List[Dict[str, Any]]:
-        """Hit the NSE JSON endpoint. Returns the raw list."""
+        Each element has: date (YYYY-MM-DD), fDate, fiiCM (cash net ₹Cr,
+        comma-formatted signed string), diiCM, plus F&O sub-segments which
+        we don't expose.
+        """
         async with httpx.AsyncClient(
             headers=_DEFAULT_HEADERS,
             follow_redirects=True,
-            timeout=10.0,
+            timeout=12.0,
         ) as client:
-            if self._cookie_jar is None:
-                await self._bootstrap_cookies(client)
-            elif self._cookie_jar:
-                client.cookies = self._cookie_jar
+            resp = await client.get(_MC_FII_DII_PAGE)
+            resp.raise_for_status()
+            html = resp.text
 
-            try:
-                resp = await client.get(_NSE_FII_DII_API, timeout=10.0)
-                if resp.status_code in (401, 403):
-                    # cookie expired — re-bootstrap once
-                    self._cookie_jar = None
-                    await self._bootstrap_cookies(client)
-                    resp = await client.get(_NSE_FII_DII_API, timeout=10.0)
-                resp.raise_for_status()
-                data = resp.json()
-                if not isinstance(data, list):
-                    raise ValueError(f"unexpected payload shape: {type(data)}")
-                return data
-            except (httpx.HTTPError, ValueError) as exc:
-                logger.warning("FII/DII: NSE fetch failed: %s", exc)
-                raise
+        m = _NEXT_DATA_RE.search(html)
+        if not m:
+            raise ValueError("Moneycontrol: __NEXT_DATA__ blob not found in HTML")
+        try:
+            blob = json.loads(m.group(1))
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"Moneycontrol: __NEXT_DATA__ not valid JSON: {exc}") from exc
+
+        rows = (
+            blob.get("props", {})
+                .get("pageProps", {})
+                .get("FiiDiiData", {})
+                .get("fiiDiiData", [])
+        ) or []
+        if not isinstance(rows, list) or not rows:
+            raise ValueError("Moneycontrol: fiiDiiData array missing / empty")
+        return rows
 
     # --- parsing ----------------------------------------------------------
-
-    @staticmethod
-    def _classify(category: str) -> Optional[str]:
-        c = (category or "").upper()
-        if "FII" in c or "FPI" in c:
-            return "FII"
-        if "DII" in c:
-            return "DII"
-        return None
 
     @staticmethod
     def _to_float(v: Any) -> float:
@@ -145,30 +152,48 @@ class FIIDIIService:
             return 0.0
         if isinstance(v, (int, float)):
             return float(v)
-        s = re.sub(r"[,\s₹]", "", str(v))
+        s = re.sub(r"[,\s\u20b9]", "", str(v))
         try:
             return float(s)
         except ValueError:
             return 0.0
 
-    def _parse(self, raw: List[Dict[str, Any]]) -> List[_FlowRow]:
-        rows: List[_FlowRow] = []
+    @staticmethod
+    def _segment_stance(value_cr: float, eps: float = 100.0) -> str:
+        if value_cr > eps:
+            return "bullish"
+        if value_cr < -eps:
+            return "bearish"
+        return "neutral"
+
+    @staticmethod
+    def _fmt_date(raw: Any) -> str:
+        """Convert MC 'YYYY-MM-DD' (or 'DD-Mon-YYYY' already) into 'DD-Mon-YYYY'."""
+        if not raw:
+            return ""
+        s = str(raw)[:10]
+        for fmt in ("%Y-%m-%d", "%d-%b-%Y", "%d-%B-%Y"):
+            try:
+                return datetime.strptime(s, fmt).strftime("%d-%b-%Y")
+            except ValueError:
+                continue
+        return s
+
+    def _parse_day_rows(self, raw: List[Dict[str, Any]]) -> List[Tuple[str, float, float]]:
+        """Return list of (tradeDate, fii_net_cr, dii_net_cr) — newest first."""
+        out: List[Tuple[str, float, float]] = []
         seen: set[str] = set()
         for entry in raw:
-            cat = self._classify(entry.get("category", ""))
-            if cat is None or cat in seen:
+            d = self._fmt_date(entry.get("date") or entry.get("fDate"))
+            if not d or d in seen:
                 continue
-            seen.add(cat)
-            rows.append(
-                _FlowRow(
-                    category=cat,
-                    date=str(entry.get("date", "")),
-                    buy_value=self._to_float(entry.get("buyValue")),
-                    sell_value=self._to_float(entry.get("sellValue")),
-                    net_value=self._to_float(entry.get("netValue")),
-                )
-            )
-        return rows
+            seen.add(d)
+            out.append((
+                d,
+                self._to_float(entry.get("fiiCM")),
+                self._to_float(entry.get("diiCM")),
+            ))
+        return out
 
     # --- regime reasoning -------------------------------------------------
 
@@ -259,89 +284,18 @@ class FIIDIIService:
 
     # --- rolling history --------------------------------------------------
 
-    async def _backfill_history_from_mc(self) -> List[Dict[str, Any]]:
-        """
-        Pull prior-days FII/DII NET flows from Moneycontrol's SSR page so the
-        DoD / 5D / streak metrics show real numbers from day one instead of
-        zeros while we wait for the local NSE cache to accumulate.
-
-        Source: __NEXT_DATA__ JSON embedded in MC's fii_dii_activity page.
-        Returns up to _HISTORY_MAX rows (oldest -> newest), each with keys
-        compatible with the cached history schema. Buy/sell split is NOT in
-        the SSR payload, so grossCr fields are 0 for backfilled rows (the
-        latest row from NSE will have real gross values).
-        """
-        try:
-            async with httpx.AsyncClient(
-                headers={**_DEFAULT_HEADERS, "Referer": "https://www.moneycontrol.com/"},
-                follow_redirects=True,
-                timeout=12.0,
-            ) as client:
-                resp = await client.get(_MC_FII_DII_PAGE)
-                resp.raise_for_status()
-                html = resp.text
-
-            m = re.search(
-                r'<script id="__NEXT_DATA__"[^>]*>(.*?)</script>',
-                html, re.DOTALL,
-            )
-            if not m:
-                return []
-            import json
-            blob = json.loads(m.group(1))
-            rows = (
-                blob.get("props", {})
-                    .get("pageProps", {})
-                    .get("FiiDiiData", {})
-                    .get("fiiDiiData", [])
-            ) or []
-
-            def _num(s: Any) -> float:
-                if s is None:
-                    return 0.0
-                try:
-                    return float(str(s).replace(",", "").replace("\u20b9", "").strip())
-                except ValueError:
-                    return 0.0
-
-            def _fmt_date(s: str) -> str:
-                # MC sends "YYYY-MM-DD" → convert to NSE "DD-Mon-YYYY"
-                try:
-                    d = datetime.strptime(str(s)[:10], "%Y-%m-%d")
-                    return d.strftime("%d-%b-%Y")
-                except Exception:
-                    return str(s)
-
-            out: List[Dict[str, Any]] = []
-            for r in rows:
-                date_raw = r.get("date") or r.get("fDate") or ""
-                trade_date = _fmt_date(date_raw)
-                if not trade_date:
-                    continue
-                fii_net = _num(r.get("fiiCM"))
-                dii_net = _num(r.get("diiCM"))
-                out.append({
-                    "tradeDate": trade_date,
-                    "fiiNetCr": round(fii_net, 2),
-                    "diiNetCr": round(dii_net, 2),
-                    "netCr": round(fii_net + dii_net, 2),
-                    "fiiGrossCr": 0.0,
-                    "diiGrossCr": 0.0,
-                })
-
-            # MC lists newest-first; history is oldest-first
-            out.reverse()
-            return out[-_HISTORY_MAX:]
-        except Exception as exc:
-            logger.warning("FII/DII: MC backfill failed: %s", exc)
-            return []
-
-    # --- rolling history --------------------------------------------------
-
     async def _update_history(
-        self, cache: Any, fii: "_FlowRow", dii: "_FlowRow"
+        self,
+        cache: Any,
+        day_rows: List[Tuple[str, float, float]],
     ) -> List[Dict[str, Any]]:
-        """Persist last N trade-date snapshots in cache (dedup by date)."""
+        """
+        Persist last N trade-date snapshots in cache.
+
+        `day_rows` is the freshly-parsed MC list (newest first). We merge it
+        with whatever is in the cache, dedup by trade date (MC values win
+        because they are the latest available), and keep at most _HISTORY_MAX.
+        """
         try:
             existing = await cache.get(_HISTORY_KEY) or []
             if not isinstance(existing, list):
@@ -349,38 +303,40 @@ class FIIDIIService:
         except Exception:
             existing = []
 
-        # Cold-start / sparse-cache backfill: if we have fewer than 2 days,
-        # pull prior trade days from Moneycontrol so DoD / 5D / streak are
-        # real from the first request instead of zero.
-        if len(existing) < 2:
-            seed = await self._backfill_history_from_mc()
-            if seed:
-                # merge: seed provides prior days, existing may have today
-                seen_dates = {h.get("tradeDate") for h in existing}
-                merged = [h for h in seed if h.get("tradeDate") not in seen_dates] + existing
-                existing = merged[-_HISTORY_MAX:]
+        fresh_by_date: Dict[str, Dict[str, Any]] = {}
+        for trade_date, fii_net, dii_net in day_rows:
+            if not trade_date:
+                continue
+            fresh_by_date[trade_date] = {
+                "tradeDate": trade_date,
+                "fiiNetCr": round(fii_net, 2),
+                "diiNetCr": round(dii_net, 2),
+                "netCr": round(fii_net + dii_net, 2),
+                "fiiGrossCr": 0.0,
+                "diiGrossCr": 0.0,
+            }
 
-        trade_date = fii.date or dii.date
-        if not trade_date:
-            return existing[-_HISTORY_MAX:]
+        # Start with cached rows that MC didn't return (preserve older days
+        # that have aged off the SSR page), then layer fresh MC rows on top.
+        merged_map: Dict[str, Dict[str, Any]] = {}
+        for h in existing:
+            d = h.get("tradeDate")
+            if d:
+                merged_map[d] = h
+        merged_map.update(fresh_by_date)
 
-        # dedup by trade date — replace if same day, append if new
-        kept = [h for h in existing if h.get("tradeDate") != trade_date]
-        kept.append({
-            "tradeDate": trade_date,
-            "fiiNetCr": round(fii.net_value, 2),
-            "diiNetCr": round(dii.net_value, 2),
-            "netCr": round(fii.net_value + dii.net_value, 2),
-            "fiiGrossCr": round(fii.buy_value + fii.sell_value, 2),
-            "diiGrossCr": round(dii.buy_value + dii.sell_value, 2),
-        })
-        kept = kept[-_HISTORY_MAX:]
+        # Sort oldest → newest by parsed date (fallback: lexical on raw string)
+        def _key(h: Dict[str, Any]) -> Tuple[int, str]:
+            d = self._parse_trade_date(h.get("tradeDate", ""))
+            return (int(d.timestamp()) if d else 0, h.get("tradeDate", ""))
+
+        merged = sorted(merged_map.values(), key=_key)[-_HISTORY_MAX:]
 
         try:
-            await cache.set(_HISTORY_KEY, kept, expire=_HISTORY_TTL)
+            await cache.set(_HISTORY_KEY, merged, expire=_HISTORY_TTL)
         except Exception as exc:
             logger.warning("FII/DII: history persist failed: %s", exc)
-        return kept
+        return merged
 
     @staticmethod
     def _trend_from_history(history: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -444,15 +400,19 @@ class FIIDIIService:
         return datetime.now(_IST)
 
     def _ttl_for(self, now_ist: datetime) -> int:
-        # NSE publishes the day's provisional FII/DII roughly between 17:00 and 19:00 IST.
-        # During the live cash session (09:15–15:30) numbers are still yesterday's
-        # close — refresh slowly. Right around publish window refresh fast.
-        h, m = now_ist.hour, now_ist.minute
-        if 17 <= h < 19:
-            return 60    # publish window — poll every minute
-        if 9 <= h < 16:
-            return _TTL_LIVE
-        return _TTL_PUBLISHED
+        # Trading day windows (IST, Mon–Fri):
+        #   16:30–19:30 → publish window, poll every 30 s
+        #   09:15–15:30 → cash session, backstop poll every 2 min
+        #   anything else weekday → every 30 min
+        # Saturday / Sunday → no fresh print is possible; 6 h cache.
+        if now_ist.weekday() >= 5:
+            return _TTL_WEEKEND
+        mins = now_ist.hour * 60 + now_ist.minute
+        if 16 * 60 + 30 <= mins < 19 * 60 + 30:
+            return _TTL_PUBLISH_WINDOW
+        if 9 * 60 + 15 <= mins < 15 * 60 + 30:
+            return _TTL_MARKET_HOURS
+        return _TTL_OFF_HOURS
 
     @staticmethod
     def _parse_trade_date(s: str) -> Optional[datetime]:
@@ -467,137 +427,165 @@ class FIIDIIService:
                 continue
         return None
 
-    def _publish_status(self, trade_date_str: str, now_ist: datetime) -> Dict[str, Any]:
+    # --- freshness helpers ------------------------------------------------
+
+    @staticmethod
+    def _staleness_bucket(age_sec: int, ttl_sec: int) -> str:
+        if age_sec <= max(60, ttl_sec // 2):
+            return "fresh"
+        if age_sec <= ttl_sec * 2:
+            return "recent"
+        return "stale"
+
+    def _apply_freshness(self, snap: Dict[str, Any], now_ist: datetime) -> Dict[str, Any]:
+        """Recompute dataAgeSec / nextRefreshAt / recommendedPollSec / staleness.
+
+        Called both on a fresh build (age ≈ 0) and every cache hit so the UI
+        always sees an accurate countdown rather than the value at write-time.
         """
-        Tell the UI whether the snapshot is today's provisional, prior-day final,
-        or we're waiting for today's publish. Includes next expected refresh time.
-        """
-        td = self._parse_trade_date(trade_date_str)
-        today_ist = now_ist.replace(hour=0, minute=0, second=0, microsecond=0)
-        publish_open = now_ist.replace(hour=17, minute=0, second=0, microsecond=0)
-        publish_close = now_ist.replace(hour=19, minute=0, second=0, microsecond=0)
-
-        is_today = td is not None and td.date() == today_ist.date()
-        in_publish_window = publish_open <= now_ist < publish_close
-
-        if is_today:
-            status = "TODAY_LIVE"
-            label = "LIVE"
-            note = "Today's provisional NSE figures."
-        elif in_publish_window:
-            status = "AWAITING_TODAY"
-            label = "AWAITING TODAY"
-            note = "NSE publish window open — today's figures expected shortly."
-        elif now_ist < publish_open:
-            status = "PRIOR_FINAL"
-            label = "EOD"
-            note = f"Prior trade day final ({trade_date_str}). Today's publish ~17:00 IST."
-        else:
-            # past publish window without today's data — likely weekend/holiday
-            status = "PRIOR_FINAL"
-            label = "EOD"
-            note = f"Last available trade day ({trade_date_str})."
-
-        # next-update hint
-        if in_publish_window and not is_today:
-            next_update = now_ist + timedelta(seconds=60)
-        elif is_today and in_publish_window:
-            next_update = now_ist + timedelta(seconds=60)
-        elif now_ist < publish_open:
-            next_update = publish_open
-        else:
-            # roll to tomorrow's publish window
-            next_update = (now_ist + timedelta(days=1)).replace(hour=17, minute=0, second=0, microsecond=0)
-
-        return {
-            "status": status,
-            "label": label,
-            "note": note,
-            "isToday": is_today,
-            "inPublishWindow": in_publish_window,
-            "nextUpdateAt": next_update.isoformat(),
-        }
+        ttl = self._ttl_for(now_ist)
+        try:
+            fetched = datetime.fromisoformat(snap.get("fetchedAt", ""))
+        except (TypeError, ValueError):
+            fetched = now_ist
+        if fetched.tzinfo is None:
+            fetched = fetched.replace(tzinfo=_IST)
+        age = max(0, int((now_ist - fetched).total_seconds()))
+        next_refresh = fetched + timedelta(seconds=ttl)
+        next_in = max(0, int((next_refresh - now_ist).total_seconds()))
+        snap["dataAgeSec"] = age
+        snap["nextRefreshAt"] = next_refresh.isoformat()
+        snap["nextRefreshInSec"] = next_in
+        snap["recommendedPollSec"] = ttl
+        snap["staleness"] = self._staleness_bucket(age, ttl)
+        return snap
 
     # --- public API -------------------------------------------------------
 
     async def get_snapshot(self, force: bool = False) -> Dict[str, Any]:
         cache = get_cache()
+        now_ist = self._ist_now()
         if not force:
             cached = await cache.get(_CACHE_KEY)
             if cached:
                 cached["fromCache"] = True
-                return cached
+                return self._apply_freshness(cached, now_ist)
 
         async with self._lock:
             # double-check inside the lock
+            now_ist = self._ist_now()
             if not force:
                 cached = await cache.get(_CACHE_KEY)
                 if cached:
                     cached["fromCache"] = True
-                    return cached
-
-            now_ist = self._ist_now()
+                    return self._apply_freshness(cached, now_ist)
             try:
-                raw = await self._fetch_raw()
-                rows = self._parse(raw)
+                raw = await self._fetch_mc_rows()
+                day_rows = self._parse_day_rows(raw)
             except Exception as exc:
                 logger.error("FII/DII: snapshot build failed: %s", exc)
                 return {
                     "success": False,
-                    "error": "NSE_FETCH_FAILED",
+                    "error": "MC_FETCH_FAILED",
                     "message": str(exc),
-                    "source": "NSE",
+                    "source": "Moneycontrol",
                     "fetchedAt": now_ist.isoformat(),
                     "fii": None,
                     "dii": None,
                     "regime": None,
                 }
 
-            fii = next((r for r in rows if r.category == "FII"), None)
-            dii = next((r for r in rows if r.category == "DII"), None)
-
-            if fii is None or dii is None:
+            if not day_rows:
                 return {
                     "success": False,
                     "error": "INCOMPLETE_PAYLOAD",
-                    "message": "FII or DII row missing in NSE response.",
-                    "source": "NSE",
+                    "message": "Moneycontrol fiiDiiData empty after parse.",
+                    "source": "Moneycontrol",
                     "fetchedAt": now_ist.isoformat(),
-                    "fii": fii.as_dict() if fii else None,
-                    "dii": dii.as_dict() if dii else None,
+                    "fii": None,
+                    "dii": None,
                     "regime": None,
                 }
+
+            # Newest row = current snapshot; the rest go into history.
+            latest_date, fii_net, dii_net = day_rows[0]
+            latest_row = next(
+                (
+                    e for e in raw
+                    if self._fmt_date(e.get("date") or e.get("fDate")) == latest_date
+                ),
+                raw[0] if raw else {},
+            )
+            fii = _FlowRow(category="FII", date=latest_date, buy_value=0.0,
+                           sell_value=0.0, net_value=fii_net)
+            dii = _FlowRow(category="DII", date=latest_date, buy_value=0.0,
+                           sell_value=0.0, net_value=dii_net)
+
+            # Segment-wise FII F&O flows (₹ Cr) available in Moneycontrol row.
+            # Useful to mirror participant-segment style dashboards intraday.
+            fii_idx_fut = self._to_float(latest_row.get("fiiIdxFut"))
+            fii_idx_opt = self._to_float(latest_row.get("fiiIdxOpt"))
+            fii_stk_fut = self._to_float(latest_row.get("fiiStkFut"))
+            fii_stk_opt = self._to_float(latest_row.get("fiiStkOpt"))
+            fii_fno_total = fii_idx_fut + fii_idx_opt + fii_stk_fut + fii_stk_opt
+
+            fii_fno = {
+                "indexFuturesCr": round(fii_idx_fut, 2),
+                "indexOptionsCr": round(fii_idx_opt, 2),
+                "stockFuturesCr": round(fii_stk_fut, 2),
+                "stockOptionsCr": round(fii_stk_opt, 2),
+                "totalFnOCr": round(fii_fno_total, 2),
+                "stance": {
+                    "indexFutures": self._segment_stance(fii_idx_fut),
+                    "indexOptions": self._segment_stance(fii_idx_opt),
+                    "stockFutures": self._segment_stance(fii_stk_fut),
+                    "stockOptions": self._segment_stance(fii_stk_opt),
+                    "overall": self._segment_stance(fii_fno_total),
+                },
+            }
+
+            market_context = {
+                "niftyClose": round(self._to_float(latest_row.get("niftyClose")), 2),
+                "niftyPrevClose": round(self._to_float(latest_row.get("niftyPrevClose")), 2),
+                "niftyChange": round(self._to_float(latest_row.get("niftyChange")), 2),
+                "niftyChangePct": round(self._to_float(latest_row.get("niftyChangePer")), 3),
+                "sensexClose": round(self._to_float(latest_row.get("sensexClose")), 2),
+                "sensexPrevClose": round(self._to_float(latest_row.get("sensexPrevClose")), 2),
+                "sensexChange": round(self._to_float(latest_row.get("sensexChange")), 2),
+                "sensexChangePct": round(self._to_float(latest_row.get("sensexChangePer")), 3),
+            }
 
             regime = self._regime(fii.net_value, dii.net_value)
             derived = self._derive_metrics(fii, dii)
 
-            # Update rolling history and compute trend metrics (5d cumulative, slope, etc.)
-            history = await self._update_history(cache, fii, dii)
+            # Persist + merge history (MC always ships ~30+ prior days, so
+            # DoD / 5D / streak are accurate from the very first request).
+            history = await self._update_history(cache, day_rows)
             trend = self._trend_from_history(history)
-
-            trade_date_str = fii.date or dii.date
-            publish = self._publish_status(trade_date_str, now_ist)
 
             snapshot: Dict[str, Any] = {
                 "success": True,
-                "source": "NSE",
-                "endpoint": _NSE_FII_DII_API,
+                "source": "Moneycontrol",
+                "endpoint": _MC_FII_DII_PAGE,
                 "fetchedAt": now_ist.isoformat(),
-                "tradeDate": trade_date_str,
-                "publish": publish,
+                "tradeDate": latest_date,
                 "fii": {**fii.as_dict(), **derived["fii"]},
                 "dii": {**dii.as_dict(), **derived["dii"]},
                 "netInstitutionalCr": round(fii.net_value + dii.net_value, 2),
                 "grossTurnoverCr": derived["grossTurnoverCr"],
                 "dominance": derived["dominance"],
                 "absorptionPct": derived["absorptionPct"],
+                "fiiFnO": fii_fno,
+                "marketContext": market_context,
                 "regime": regime,
                 "trend": trend,
                 "history": history,
+                "hasBuySellSplit": False,  # MC only exposes net flows
                 "fromCache": False,
             }
 
             self._last_fetch_ms = int(time.time() * 1000)
+            self._apply_freshness(snapshot, now_ist)
             await cache.set(_CACHE_KEY, snapshot, expire=self._ttl_for(now_ist))
             return snapshot
 

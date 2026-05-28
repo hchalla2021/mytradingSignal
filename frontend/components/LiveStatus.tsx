@@ -108,19 +108,21 @@ const LiveStatus: React.FC<LiveStatusProps> = memo(({ status, isConnected }) => 
   return (
     <div
       className={`
-        flex items-center gap-2.5 px-4 py-2.5 rounded-xl text-sm sm:text-base font-semibold
-        border-2 transition-all duration-200
+        flex items-center justify-between gap-3 rounded-2xl border px-4 py-3 sm:px-5 sm:py-3.5
+        text-sm sm:text-base font-semibold transition-all duration-200
         ${config.bgColor} ${config.borderColor} ${config.textColor} ${config.glowClass}
       `}
     >
-      {config.icon}
-      <span className="hidden sm:inline font-bold">{config.text}</span>
-      <span className="sm:hidden font-bold">{config.shortText}</span>
+      <div className="flex min-w-0 items-center gap-2.5 sm:gap-3">
+        {config.icon}
+        <span className="hidden sm:inline truncate font-bold tracking-wide">{config.text}</span>
+        <span className="sm:hidden truncate font-bold tracking-wide">{config.shortText}</span>
+      </div>
       
       {isConnected && (
-        <span className="ml-auto flex items-center gap-1.5 text-xs sm:text-sm font-black">
-          <Zap className="w-4 h-4 fill-teal-400 text-teal-400" />
-          <span className="text-teal-300">Live</span>
+        <span className="inline-flex flex-shrink-0 items-center gap-1.5 rounded-full border border-teal-400/35 bg-teal-500/10 px-2.5 py-1 text-[11px] sm:text-xs font-black tracking-wide text-teal-200">
+          <Zap className="h-3.5 w-3.5 fill-teal-400 text-teal-400" />
+          <span>Live</span>
         </span>
       )}
     </div>

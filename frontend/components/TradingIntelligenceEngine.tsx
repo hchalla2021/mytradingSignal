@@ -318,31 +318,6 @@ const IntelligenceRow = memo(function IntelligenceRow({ intel }: { intel: NonNul
   );
 });
 
-/* ── Signal guide legend ────────────────────────────────────────────────── */
-
-function SignalGuide() {
-  const items: TIESignal[] = ['STRONG_BUY', 'BUY', 'NEUTRAL', 'SELL', 'STRONG_SELL'];
-  return (
-    <div className="mt-4 sm:mt-5 rounded-xl border border-slate-800/60 bg-slate-900/30 px-3 sm:px-4 py-3">
-      <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
-        <span className="text-[10px] sm:text-xs font-bold tracking-[0.2em] text-slate-400 uppercase">Signal Guide</span>
-        {items.map(k => {
-          const s = SIGNAL_STYLE[k];
-          return (
-            <div key={k} className="flex items-center gap-2">
-              <span className="w-2 h-2 rounded-full" style={{ background: s.color, boxShadow: `0 0 8px ${s.color}` }} />
-              <div className="flex flex-col leading-tight">
-                <span className="text-[11px] sm:text-xs font-semibold" style={{ color: s.color }}>{s.label}</span>
-                <span className="text-[9px] sm:text-[10px] text-slate-500">{s.tone}</span>
-              </div>
-            </div>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
 /* ── Main section ───────────────────────────────────────────────────────── */
 
 interface Props {
@@ -447,8 +422,6 @@ export default function TradingIntelligenceEngine({ marketData }: Props) {
             />
           ))}
         </div>
-
-        <SignalGuide />
       </div>
     </section>
   );

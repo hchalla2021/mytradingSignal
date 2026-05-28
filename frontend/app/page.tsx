@@ -551,17 +551,20 @@ export default function Home() {
       <SystemStatusBanner />
 
       {/* Connection Status Bar */}
-      <div className="w-full px-2 sm:px-4 lg:px-8 xl:px-12 py-3 lg:py-4">
+      <div className="w-full px-3 sm:px-5 lg:px-8 xl:px-10 py-3 lg:py-4">
         {/* Use same status component for both mobile and desktop */}
-        <LiveStatus status={displayStatus} isConnected={isConnected} />
+        <div className="mx-auto w-full max-w-[1820px]">
+          <LiveStatus status={displayStatus} isConnected={isConnected} />
+        </div>
       </div>
 
       {/* Main Dashboard - Full Width */}
-      <div className="w-full px-2 sm:px-4 lg:px-8 xl:px-12 py-3 lg:py-5">
+      <div className="w-full px-3 sm:px-5 lg:px-8 xl:px-10 py-3 lg:py-5">
+        <div className="mx-auto w-full max-w-[1820px]">
         {/* 📊 MARKET PULSE STRIP — institutional bird's-eye KPIs */}
         <MarketPulseStrip marketData={marketData} isConnected={isConnected} />
 
-        {/* 💸 FII / DII FLOW — official NSE cash-segment numbers */}
+        {/* 💸 FII / DII FLOW — institutional flow matrix */}
         <FIIDIIFlowStrip marketData={marketData} isConnected={isConnected} />
 
         {/* 🧠 AI SIGNAL DECK — institutional-grade per-index status cards */}
@@ -831,6 +834,7 @@ export default function Home() {
           </div>
         </div>
 
+        </div>
       </div>
 
       {/* Analysis Info Banner */}

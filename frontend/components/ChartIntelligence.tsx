@@ -5110,9 +5110,9 @@ const ChartAICommandDeck = memo<{ snapshot: ChartAISnapshot }>(({ snapshot }) =>
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-2">
           <span className="h-5 w-1 rounded-full bg-gradient-to-b from-indigo-400 to-cyan-500/50" />
-          <p className="text-[11px] font-black uppercase tracking-[0.14em] text-indigo-200">Chart AI Command Deck</p>
+          <p className="text-[12px] sm:text-[13px] font-black uppercase tracking-[0.12em] text-indigo-200">Chart AI Command Deck</p>
         </div>
-        <div className="flex items-center gap-1.5 text-[9px] font-black uppercase tracking-[0.1em]">
+        <div className="flex items-center gap-1.5 text-[10px] sm:text-[11px] font-black uppercase tracking-[0.08em]">
           {snapshot.provider === 'tensorflow' && (
             <span className="rounded border border-cyan-400/45 bg-cyan-500/10 px-2 py-1 text-cyan-200">TensorFlow</span>
           )}
@@ -5122,21 +5122,21 @@ const ChartAICommandDeck = memo<{ snapshot: ChartAISnapshot }>(({ snapshot }) =>
         </div>
       </div>
 
-      <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-8 text-[10px]">
-        <div className="rounded-lg border border-slate-700/45 bg-slate-900/60 px-2 py-1.5"><p className="text-slate-500">Latency</p><p className={`font-black ${latencyTone}`}>{snapshot.avgLatencyMs}ms</p></div>
-        <div className="rounded-lg border border-slate-700/45 bg-slate-900/60 px-2 py-1.5"><p className="text-slate-500">Events/s</p><p className="font-black text-cyan-300">{snapshot.avgEventRate.toFixed(1)}</p></div>
-        <div className="rounded-lg border border-slate-700/45 bg-slate-900/60 px-2 py-1.5"><p className="text-slate-500">Queue</p><p className="font-black text-slate-200">{snapshot.avgQueueDepth}</p></div>
-        <div className="rounded-lg border border-slate-700/45 bg-slate-900/60 px-2 py-1.5"><p className="text-slate-500">Move</p><p className={`font-black ${snapshot.dominantMove === 'UP' ? 'text-emerald-300' : snapshot.dominantMove === 'DOWN' ? 'text-rose-300' : 'text-amber-300'}`}>{snapshot.dominantMove}</p></div>
-        <div className="rounded-lg border border-slate-700/45 bg-slate-900/60 px-2 py-1.5"><p className="text-slate-500">Exec</p><p className="font-black text-emerald-300">{snapshot.avgExecProb}%</p></div>
-        <div className="rounded-lg border border-slate-700/45 bg-slate-900/60 px-2 py-1.5"><p className="text-slate-500">Smart</p><p className="font-black text-cyan-300">{snapshot.avgSmartMoney}%</p></div>
-        <div className="rounded-lg border border-slate-700/45 bg-slate-900/60 px-2 py-1.5"><p className="text-slate-500">R:R</p><p className="font-black text-violet-300">{snapshot.bestRiskReward.toFixed(2)}x</p></div>
-        <div className="rounded-lg border border-slate-700/45 bg-slate-900/60 px-2 py-1.5"><p className="text-slate-500">Trap</p><p className={`font-black ${riskTone}`}>{Math.max(snapshot.avgFakeBreakoutRisk, snapshot.avgStopHuntRisk)}%</p></div>
+      <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4 lg:grid-cols-8 text-[11px] sm:text-[12px]">
+        <div className="rounded-lg border border-slate-700/45 bg-slate-900/60 px-2.5 py-2"><p className="text-[10px] sm:text-[11px] text-slate-500">Latency</p><p className={`text-[13px] sm:text-[14px] font-black leading-tight ${latencyTone}`}>{snapshot.avgLatencyMs}ms</p></div>
+        <div className="rounded-lg border border-slate-700/45 bg-slate-900/60 px-2.5 py-2"><p className="text-[10px] sm:text-[11px] text-slate-500">Events/s</p><p className="text-[13px] sm:text-[14px] font-black leading-tight text-cyan-300">{snapshot.avgEventRate.toFixed(1)}</p></div>
+        <div className="rounded-lg border border-slate-700/45 bg-slate-900/60 px-2.5 py-2"><p className="text-[10px] sm:text-[11px] text-slate-500">Queue</p><p className="text-[13px] sm:text-[14px] font-black leading-tight text-slate-200">{snapshot.avgQueueDepth}</p></div>
+        <div className="rounded-lg border border-slate-700/45 bg-slate-900/60 px-2.5 py-2"><p className="text-[10px] sm:text-[11px] text-slate-500">Move</p><p className={`text-[13px] sm:text-[14px] font-black leading-tight ${snapshot.dominantMove === 'UP' ? 'text-emerald-300' : snapshot.dominantMove === 'DOWN' ? 'text-rose-300' : 'text-amber-300'}`}>{snapshot.dominantMove}</p></div>
+        <div className="rounded-lg border border-slate-700/45 bg-slate-900/60 px-2.5 py-2"><p className="text-[10px] sm:text-[11px] text-slate-500">Exec</p><p className="text-[13px] sm:text-[14px] font-black leading-tight text-emerald-300">{snapshot.avgExecProb}%</p></div>
+        <div className="rounded-lg border border-slate-700/45 bg-slate-900/60 px-2.5 py-2"><p className="text-[10px] sm:text-[11px] text-slate-500">Smart</p><p className="text-[13px] sm:text-[14px] font-black leading-tight text-cyan-300">{snapshot.avgSmartMoney}%</p></div>
+        <div className="rounded-lg border border-slate-700/45 bg-slate-900/60 px-2.5 py-2"><p className="text-[10px] sm:text-[11px] text-slate-500">R:R</p><p className="text-[13px] sm:text-[14px] font-black leading-tight text-violet-300">{snapshot.bestRiskReward.toFixed(2)}x</p></div>
+        <div className="rounded-lg border border-slate-700/45 bg-slate-900/60 px-2.5 py-2"><p className="text-[10px] sm:text-[11px] text-slate-500">Trap</p><p className={`text-[13px] sm:text-[14px] font-black leading-tight ${riskTone}`}>{Math.max(snapshot.avgFakeBreakoutRisk, snapshot.avgStopHuntRisk)}%</p></div>
       </div>
 
       {snapshot.alerts.length > 0 && (
         <div className="mt-2 flex flex-wrap gap-1.5">
           {snapshot.alerts.map((a) => (
-            <span key={a} className="rounded border border-amber-400/40 bg-amber-500/10 px-2 py-1 text-[9px] text-amber-200">{a}</span>
+            <span key={a} className="rounded border border-amber-400/40 bg-amber-500/10 px-2 py-1 text-[10px] text-amber-200">{a}</span>
           ))}
         </div>
       )}
@@ -5171,16 +5171,16 @@ const BuyerIntelMicroStrip = memo(({ agg, rows }: { agg: BuyerIntel; rows: Buyer
       {/* Basket roll-up */}
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-700/40 pb-1.5 mb-1.5">
         <div className="flex items-center gap-2 min-w-0">
-          <span className="text-[9px] font-black tracking-[0.18em] text-emerald-300 uppercase">Buyer-Side AI</span>
-          <span className={`text-[11px] font-extrabold tabular-nums ${probTone(agg.bullishProb)}`}>{agg.bullishProb}% Bull</span>
-          <span className="text-[9px] text-dark-muted">Conf <span className="text-white font-bold">{agg.instBuying}%</span></span>
+          <span className="text-[10px] sm:text-[11px] font-black tracking-[0.14em] text-emerald-300 uppercase">Buyer-Side AI</span>
+          <span className={`text-[13px] sm:text-[15px] font-extrabold tabular-nums ${probTone(agg.bullishProb)}`}>{agg.bullishProb}% Bull</span>
+          <span className="text-[10px] sm:text-[11px] text-dark-muted">Conf <span className="text-white font-bold">{agg.instBuying}%</span></span>
         </div>
         <div className="flex flex-wrap items-center gap-1">
-          <span className={`rounded border border-slate-700/50 bg-slate-900/60 px-1.5 py-0.5 text-[9px] font-bold ${signedTone(agg.marketPulse)} tabular-nums`}>Pulse {agg.marketPulse >= 0 ? '+' : ''}{agg.marketPulse}</span>
-          <span className={`rounded border border-slate-700/50 bg-slate-900/60 px-1.5 py-0.5 text-[9px] font-bold ${signedTone(agg.deltaFlow)} tabular-nums`}>δ {agg.deltaFlow >= 0 ? '+' : ''}{agg.deltaFlow}</span>
-          <span className={`rounded border border-slate-700/50 bg-slate-900/60 px-1.5 py-0.5 text-[9px] font-bold ${signedTone(agg.oiBuildup)} tabular-nums`}>ΔOI {agg.oiBuildup >= 0 ? '+' : ''}{agg.oiBuildup}</span>
-          <span className="rounded border border-slate-700/50 bg-slate-900/60 px-1.5 py-0.5 text-[9px] font-bold text-cyan-300 tabular-nums">VolExp {agg.volExpansion}%</span>
-          <span className="rounded border border-slate-700/50 bg-slate-900/60 px-1.5 py-0.5 text-[9px] font-bold text-amber-300 tabular-nums">Accum {agg.accumulation}%</span>
+          <span className={`rounded border border-slate-700/50 bg-slate-900/60 px-1.5 py-0.5 text-[10px] sm:text-[11px] font-bold ${signedTone(agg.marketPulse)} tabular-nums`}>Pulse {agg.marketPulse >= 0 ? '+' : ''}{agg.marketPulse}</span>
+          <span className={`rounded border border-slate-700/50 bg-slate-900/60 px-1.5 py-0.5 text-[10px] sm:text-[11px] font-bold ${signedTone(agg.deltaFlow)} tabular-nums`}>δ {agg.deltaFlow >= 0 ? '+' : ''}{agg.deltaFlow}</span>
+          <span className={`rounded border border-slate-700/50 bg-slate-900/60 px-1.5 py-0.5 text-[10px] sm:text-[11px] font-bold ${signedTone(agg.oiBuildup)} tabular-nums`}>ΔOI {agg.oiBuildup >= 0 ? '+' : ''}{agg.oiBuildup}</span>
+          <span className="rounded border border-slate-700/50 bg-slate-900/60 px-1.5 py-0.5 text-[10px] sm:text-[11px] font-bold text-cyan-300 tabular-nums">VolExp {agg.volExpansion}%</span>
+          <span className="rounded border border-slate-700/50 bg-slate-900/60 px-1.5 py-0.5 text-[10px] sm:text-[11px] font-bold text-amber-300 tabular-nums">Accum {agg.accumulation}%</span>
         </div>
       </div>
 
@@ -5191,8 +5191,8 @@ const BuyerIntelMicroStrip = memo(({ agg, rows }: { agg: BuyerIntel; rows: Buyer
           return (
             <div key={label} className="rounded-lg border border-slate-700/40 bg-slate-900/40 px-2 py-1.5">
               <div className="flex items-center justify-between mb-1">
-                <span className="text-[10px] font-extrabold tracking-wider text-white">{label}</span>
-                <span className={`text-[10px] font-extrabold tabular-nums ${probTone(intel.bullishProb)}`}>{intel.bullishProb}%</span>
+                <span className="text-[11px] sm:text-[12px] font-extrabold tracking-wider text-white">{label}</span>
+                <span className={`text-[12px] sm:text-[13px] font-extrabold tabular-nums ${probTone(intel.bullishProb)}`}>{intel.bullishProb}%</span>
               </div>
               <div className="flex flex-wrap items-center gap-1 mb-1 min-h-[18px]">
                 <Chip on={intel.bos} color="em" text="BOS ↑" />
@@ -5202,24 +5202,24 @@ const BuyerIntelMicroStrip = memo(({ agg, rows }: { agg: BuyerIntel; rows: Buyer
                 <Chip on={intel.bslSwept} color="am" text="BSL" />
                 <Chip on={intel.pdhBroken} color="em" text="PDH" />
                 <Chip on={intel.supportHold >= 70} color="em" text={`SUPP ${intel.supportHold}%`} />
-                {noStructure && <span className="rounded border border-slate-700/60 bg-slate-900/60 px-1.5 py-0.5 text-[9px] font-bold text-slate-500">NO STRUCTURE</span>}
+                {noStructure && <span className="rounded border border-slate-700/60 bg-slate-900/60 px-1.5 py-0.5 text-[10px] font-bold text-slate-500">NO STRUCTURE</span>}
               </div>
               <div className="grid grid-cols-4 gap-0.5 text-center">
                 <div className="rounded bg-dark-bg/40 px-1 py-0.5">
-                  <p className="text-[7px] text-dark-muted font-semibold uppercase">δFlow</p>
-                  <p className={`text-[9px] font-bold tabular-nums ${signedTone(intel.deltaFlow)}`}>{intel.deltaFlow >= 0 ? '+' : ''}{intel.deltaFlow}</p>
+                  <p className="text-[8px] sm:text-[9px] text-dark-muted font-semibold uppercase">δFlow</p>
+                  <p className={`text-[10px] sm:text-[11px] font-bold tabular-nums ${signedTone(intel.deltaFlow)}`}>{intel.deltaFlow >= 0 ? '+' : ''}{intel.deltaFlow}</p>
                 </div>
                 <div className="rounded bg-dark-bg/40 px-1 py-0.5">
-                  <p className="text-[7px] text-dark-muted font-semibold uppercase">ΔOI</p>
-                  <p className={`text-[9px] font-bold tabular-nums ${signedTone(intel.oiBuildup)}`}>{intel.oiBuildup >= 0 ? '+' : ''}{intel.oiBuildup}</p>
+                  <p className="text-[8px] sm:text-[9px] text-dark-muted font-semibold uppercase">ΔOI</p>
+                  <p className={`text-[10px] sm:text-[11px] font-bold tabular-nums ${signedTone(intel.oiBuildup)}`}>{intel.oiBuildup >= 0 ? '+' : ''}{intel.oiBuildup}</p>
                 </div>
                 <div className="rounded bg-dark-bg/40 px-1 py-0.5">
-                  <p className="text-[7px] text-dark-muted font-semibold uppercase">VolX</p>
-                  <p className="text-[9px] font-bold tabular-nums text-cyan-300">{intel.volExpansion}%</p>
+                  <p className="text-[8px] sm:text-[9px] text-dark-muted font-semibold uppercase">VolX</p>
+                  <p className="text-[10px] sm:text-[11px] font-bold tabular-nums text-cyan-300">{intel.volExpansion}%</p>
                 </div>
                 <div className="rounded bg-dark-bg/40 px-1 py-0.5">
-                  <p className="text-[7px] text-dark-muted font-semibold uppercase">Accum</p>
-                  <p className={`text-[9px] font-bold tabular-nums ${intel.accumulation >= 55 ? 'text-bullish' : intel.accumulation <= 25 ? 'text-bearish' : 'text-neutral'}`}>{intel.accumulation}%</p>
+                  <p className="text-[8px] sm:text-[9px] text-dark-muted font-semibold uppercase">Accum</p>
+                  <p className={`text-[10px] sm:text-[11px] font-bold tabular-nums ${intel.accumulation >= 55 ? 'text-bullish' : intel.accumulation <= 25 ? 'text-bearish' : 'text-neutral'}`}>{intel.accumulation}%</p>
                 </div>
               </div>
             </div>

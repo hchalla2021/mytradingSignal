@@ -490,7 +490,7 @@ const TopAISignalBar = ({ marketData, isConnected }: TopAISignalBarProps) => {
       `}</style>
       <div className="mb-2.5 flex items-center justify-between px-0.5 flex-wrap gap-1">
         <div className="flex items-center gap-3 min-w-0">
-          <span className="text-lg font-black tracking-[0.22em] text-cyan-300 lg:text-2xl">AI SIGNAL DECK</span>
+          <span className="text-[14px] sm:text-[18px] lg:text-[22px] font-extrabold tracking-tight text-cyan-300">AI SIGNAL DECK</span>
           <span className="hidden text-sm font-semibold text-slate-400 sm:inline truncate">· Institutional-grade observation · &lt; 3s read</span>
         </div>
         <div className="flex items-center gap-2">
