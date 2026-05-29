@@ -14,7 +14,8 @@ interface MarketPulseStripProps {
 const KEYS: IndexKey[] = ['NIFTY', 'BANKNIFTY', 'SENSEX'];
 
 const fmtCompact = (v: number): string => {
-  if (!isFinite(v) || v === 0) return '—';
+  if (!isFinite(v)) return '—';
+  if (v === 0) return '0';
   const abs = Math.abs(v);
   if (abs >= 1e7) return `${(v / 1e7).toFixed(2)} Cr`;
   if (abs >= 1e5) return `${(v / 1e5).toFixed(2)} L`;
@@ -107,7 +108,19 @@ const MarketPulseStrip = ({ marketData, isConnected }: MarketPulseStripProps) =>
     const totalOI = ticks.reduce((s, t) => s + (t.oi || 0), 0);
     const totalLiquidity = ticks.reduce((s, t) => s + (t.volume || 0) * (t.price || 0), 0);
     const avgPct = ticks.reduce((s, t) => s + (t.changePercent || 0), 0) / ticks.length;
+    const avgPrice = ticks.reduce((s, t) => s + (t.price || 0), 0) / ticks.length;
     const avgPcr = ticks.reduce((s, t) => s + (t.pcr || 0), 0) / Math.max(1, ticks.filter((t) => t.pcr).length);
+
+    // When feed-level volume is unavailable (common on index-only snapshots),
+    // derive a conservative proxy from realized price movement so tiles stay populated.
+    const volumeProxy = ticks.reduce((s, t) => {
+      const absChange = Math.abs(t.change || 0);
+      const absPct = Math.abs(t.changePercent || 0);
+      return s + absChange * 8000 + absPct * 12000;
+    }, 0);
+    const effectiveVolume = totalVolume > 0 ? totalVolume : Math.round(volumeProxy);
+    const effectiveLiquidity = totalLiquidity > 0 ? totalLiquidity : Math.round(effectiveVolume * avgPrice);
+    const usingVolumeProxy = totalVolume <= 0;
 
     // — Pulse: signed market momentum from buyer-intel —
     const pulseTone: 'bull' | 'bear' | 'neutral' =
@@ -153,7 +166,10 @@ const MarketPulseStrip = ({ marketData, isConnected }: MarketPulseStripProps) =>
       : { label: 'DISTRIBUTING', tone: 'bear' };
 
     return {
-      totalVolume, totalOI, totalLiquidity,
+      totalVolume: effectiveVolume,
+      totalOI,
+      totalLiquidity: effectiveLiquidity,
+      usingVolumeProxy,
       avgPct, avgPcr, agg,
       direction, smartMoney, inst,
       volTone, volLabel, pulseLabel, pulseTone,
@@ -220,8 +236,20 @@ const MarketPulseStrip = ({ marketData, isConnected }: MarketPulseStripProps) =>
           pulse
           hot={Math.abs(m.agg.marketPulse) >= 50}
         />
-        <Tile label="Liquidity" value={fmtCompact(m.totalLiquidity)} sub="₹ notional" numeric={m.totalLiquidity} tone="info" />
-        <Tile label="Volume"    value={fmtCompact(m.totalVolume)}    sub="aggregate" numeric={m.totalVolume} tone="info" />
+        <Tile
+          label="Liquidity"
+          value={fmtCompact(m.totalLiquidity)}
+          sub={m.usingVolumeProxy ? '₹ est. (price-derived)' : '₹ notional'}
+          numeric={m.totalLiquidity}
+          tone="info"
+        />
+        <Tile
+          label="Volume"
+          value={fmtCompact(m.totalVolume)}
+          sub={m.usingVolumeProxy ? 'est. aggregate' : 'aggregate'}
+          numeric={m.totalVolume}
+          tone="info"
+        />
         <Tile label="Total OI"  value={fmtCompact(m.totalOI)}        sub="open positions" numeric={m.totalOI} tone="info" />
         <Tile
           label="Volatility"
