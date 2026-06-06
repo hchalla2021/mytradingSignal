@@ -113,13 +113,53 @@ function useDerived(data: SymbolChartData | null) {
 
     const c5 = data.candles5m ?? [];
     const recent = c5.slice(-60);
+    const spotRef = data.spot > 0 ? data.spot : (c5.at(-1)?.c ?? 0);
+    const hasVolume = recent.some(k => (k.v ?? 0) > 0);
     let buyV = 0;
     let sellV = 0;
     for (const k of recent) {
-      if (k.c > k.o) buyV += k.v;
-      else if (k.c < k.o) sellV += k.v;
-      else { buyV += k.v * 0.5; sellV += k.v * 0.5; }
+      const bodyPct = Math.abs(k.c - k.o) / Math.max(k.o || 1, 1);
+      const syntheticFlow = bodyPct * Math.max(spotRef, 1) * 2e5;
+      const baseFlow = hasVolume ? Math.max(k.v ?? 0, 0) : syntheticFlow;
+      if (k.c > k.o) buyV += baseFlow;
+      else if (k.c < k.o) sellV += baseFlow;
+      else { buyV += baseFlow * 0.5; sellV += baseFlow * 0.5; }
     }
+
+    // Secondary fallback: when directional candles are unavailable/flat, use
+    // structural liquidity pools so UI does not stick at synthetic 50/50.
+    if (buyV + sellV <= 0) {
+      const obs = (data.ob5m?.length ? data.ob5m : data.ob3m) ?? [];
+      for (const o of obs) {
+        if (o.mitigated) continue;
+        const w = (o.strength ?? 1) * qualityRank(o.quality) * Math.max(spotRef, 1) * 40;
+        if (o.type === 'bullish') buyV += w;
+        else sellV += w;
+      }
+
+      const fvgs = (data.fvg5m?.length ? data.fvg5m : data.fvg3m) ?? [];
+      for (const f of fvgs) {
+        if (f.filled) continue;
+        const w = (f.strength ?? 1) * qualityRank(f.quality) * Math.max(spotRef, 1) * 30;
+        if (f.type === 'bullish') buyV += w;
+        else sellV += w;
+      }
+
+      const liq = (data.liquidity5m?.length ? data.liquidity5m : data.liquidity3m) ?? [];
+      for (const z of liq) {
+        if (z.swept) continue;
+        const w = (z.touchCount ?? z.touch_count ?? 1) * qualityRank(z.quality) * Math.max(spotRef, 1) * 20;
+        if (z.type === 'buy_side') buyV += w;
+        else sellV += w;
+      }
+    }
+
+    if (buyV + sellV <= 0 && data.ai?.classProbabilities) {
+      const cp = data.ai.classProbabilities;
+      buyV = Math.max((cp.STRONG_BUY ?? 0) + (cp.BUY ?? 0), 0);
+      sellV = Math.max((cp.STRONG_SELL ?? 0) + (cp.SELL ?? 0), 0);
+    }
+
     const scale = 100;
     const buyLiq = buyV * scale;
     const sellLiq = sellV * scale;
@@ -1082,22 +1122,25 @@ export default function ChartContent({ symbol: rawSymbol }: { symbol: string }) 
           <div className="text-[9px] tracking-widest text-slate-400 font-bold mb-2">
             <span className="text-emerald-400">ADVANCED</span> LIQUIDITY
           </div>
+          <div className="text-[8px] text-slate-500 mb-1 tracking-wider">
+            SYNCED WITH DYNAMIC LIQUIDITY MAP
+          </div>
           <div className="flex flex-col gap-1.5">
             <div className="text-[10px] text-slate-400">BUY SIDE LIQUIDITY</div>
             <div className="flex items-baseline justify-between">
-              <span className="text-[18px] font-bold text-emerald-400 tabular-nums"><LiveNumber value={derived.buyLiq} format={fmtBig} /></span>
-              <span className="text-[10px] text-slate-500 tabular-nums"><LiveNumber value={derived.buyLiqPct} format={(n) => `${n.toFixed(0)}%`} flash={false} /></span>
+              <span className="text-[18px] font-bold text-emerald-400 tabular-nums"><LiveNumber value={liqTotals.buy} format={fmtBig} /></span>
+              <span className="text-[10px] text-slate-500 tabular-nums"><LiveNumber value={liqTotals.buyPct} format={(n) => `${n.toFixed(0)}%`} flash={false} /></span>
             </div>
             <div className="h-1 rounded-full bg-slate-700/40 overflow-hidden">
-              <div className="h-full bg-emerald-500 transition-[width] duration-500 ease-out" style={{ width: `${derived.buyLiqPct}%` }} />
+              <div className="h-full bg-emerald-500 transition-[width] duration-500 ease-out" style={{ width: `${clampPct(liqTotals.buyPct)}%` }} />
             </div>
             <div className="text-[10px] text-slate-400 mt-1">SELL SIDE LIQUIDITY</div>
             <div className="flex items-baseline justify-between">
-              <span className="text-[18px] font-bold text-red-400 tabular-nums"><LiveNumber value={derived.sellLiq} format={fmtBig} /></span>
-              <span className="text-[10px] text-slate-500 tabular-nums"><LiveNumber value={derived.sellLiqPct} format={(n) => `${n.toFixed(0)}%`} flash={false} /></span>
+              <span className="text-[18px] font-bold text-red-400 tabular-nums"><LiveNumber value={liqTotals.sell} format={fmtBig} /></span>
+              <span className="text-[10px] text-slate-500 tabular-nums"><LiveNumber value={liqTotals.sellPct} format={(n) => `${n.toFixed(0)}%`} flash={false} /></span>
             </div>
             <div className="h-1 rounded-full bg-slate-700/40 overflow-hidden">
-              <div className="h-full bg-red-500 transition-[width] duration-500 ease-out" style={{ width: `${derived.sellLiqPct}%` }} />
+              <div className="h-full bg-red-500 transition-[width] duration-500 ease-out" style={{ width: `${clampPct(liqTotals.sellPct)}%` }} />
             </div>
           </div>
         </Card>

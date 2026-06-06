@@ -85,6 +85,26 @@ export interface FIIDIIMarketContext {
   sensexChangePct: number;
 }
 
+export interface FIIDIIRealtimeAggregate {
+  fiiScore: number;
+  diiScore: number;
+  aggregateScore: number;
+  confidence: number;
+  signal: string;
+  inflowCr: number;
+  outflowCr: number;
+  netCr: number;
+  grossCr: number;
+  note?: string;
+}
+
+export interface FIIDIIRealtimeSnapshot {
+  generatedAt: string;
+  aggregate: FIIDIIRealtimeAggregate;
+  indices?: Record<string, unknown>;
+  models?: Record<string, boolean>;
+}
+
 export interface FIIDIISnapshot {
   success: boolean;
   source: string;        // 'Moneycontrol'
@@ -108,6 +128,7 @@ export interface FIIDIISnapshot {
   history?: FIIDIIHistoryPoint[];
   fiiFnO?: FIIDIIFnOBreakdown;
   marketContext?: FIIDIIMarketContext;
+  realtime?: FIIDIIRealtimeSnapshot;
   fromCache?: boolean;
   error?: string;
   message?: string;
@@ -120,6 +141,32 @@ function buildHttpUrl(force = false): string {
   return `${base}/api/fii-dii${force ? '?force=1' : ''}`;
 }
 
+function buildWsUrl(): string {
+  const fromApi = (API_CONFIG.baseUrl || '').replace(/\/+$/, '');
+  if (fromApi) {
+    try {
+      const u = new URL(fromApi);
+      u.protocol = u.protocol === 'https:' ? 'wss:' : 'ws:';
+      u.pathname = '/ws/fii-dii';
+      u.search = '';
+      return u.toString();
+    } catch {
+      // fall through to wsUrl handling
+    }
+  }
+
+  const wsBase = (API_CONFIG.wsUrl || '').replace(/\/+$/, '');
+  if (!wsBase) return '';
+  try {
+    const u = new URL(wsBase);
+    u.pathname = '/ws/fii-dii';
+    u.search = '';
+    return u.toString();
+  } catch {
+    return '';
+  }
+}
+
 /* ── Hook ──────────────────────────────────────────────────────────────── */
 
 const REFRESH_FALLBACK_MS = 5 * 60 * 1000;      // used when server omits recommendedPollSec
@@ -127,6 +174,7 @@ const REFRESH_MIN_MS = 15 * 1000;               // safety floor — never thrash
 const REFRESH_MAX_MS = 30 * 60 * 1000;          // safety ceiling
 const RETRY_ON_ERROR_MS = 60 * 1000;            // 1 min on failure
 const FOCUS_REFRESH_COOLDOWN_MS = 30 * 1000;    // de-dupe focus refreshes
+const WS_RECONNECT_MS = 5000;
 
 export function useFIIDIIFlow() {
   const [data, setData] = useState<FIIDIISnapshot | null>(null);
@@ -135,6 +183,8 @@ export function useFIIDIIFlow() {
   const [secsSinceFetch, setSecsSinceFetch] = useState(0);
   const inFlightRef = useRef(false);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const wsRef = useRef<WebSocket | null>(null);
+  const wsRetryRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const closedRef = useRef(false);
   const lastFetchMsRef = useRef(0);
 
@@ -218,6 +268,104 @@ export function useFIIDIIFlow() {
     const id = setInterval(tick, 1000);
     return () => clearInterval(id);
   }, [data?.fetchedAt]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    closedRef.current = false;
+
+    const connect = () => {
+      if (closedRef.current) return;
+      const url = buildWsUrl();
+      if (!url) return;
+
+      try {
+        const ws = new WebSocket(url);
+        wsRef.current = ws;
+
+        ws.onmessage = (ev) => {
+          let msg: unknown;
+          try {
+            msg = JSON.parse(ev.data);
+          } catch {
+            return;
+          }
+          if (!msg || typeof msg !== 'object') return;
+
+          const packet = msg as {
+            type?: string;
+            data?: {
+              official?: FIIDIISnapshot;
+              realtime?: FIIDIIRealtimeSnapshot;
+            } | FIIDIIRealtimeSnapshot | FIIDIISnapshot;
+          };
+
+          if (packet.type === 'fii_dii_snapshot' && packet.data && typeof packet.data === 'object') {
+            const base = packet.data as { official?: FIIDIISnapshot; realtime?: FIIDIIRealtimeSnapshot };
+            if (base.official) {
+              setData({
+                ...base.official,
+                realtime: base.realtime ?? base.official.realtime,
+              });
+              setError(base.official.success ? null : (base.official.message || base.official.error || 'Unknown error'));
+              return;
+            }
+          }
+
+          if (packet.type === 'fii_dii_official_update' && packet.data && typeof packet.data === 'object') {
+            const official = packet.data as FIIDIISnapshot;
+            setData((prev) => ({
+              ...(prev || {}),
+              ...official,
+              realtime: official.realtime ?? prev?.realtime,
+            } as FIIDIISnapshot));
+            setError(official.success ? null : (official.message || official.error || 'Unknown error'));
+            return;
+          }
+
+          if (packet.type === 'fii_dii_realtime_update' && packet.data && typeof packet.data === 'object') {
+            const realtime = packet.data as FIIDIIRealtimeSnapshot;
+            setData((prev) => {
+              if (!prev) return prev;
+              return {
+                ...prev,
+                realtime,
+              };
+            });
+          }
+        };
+
+        ws.onclose = () => {
+          wsRef.current = null;
+          if (closedRef.current) return;
+          wsRetryRef.current = setTimeout(connect, WS_RECONNECT_MS);
+        };
+
+        ws.onerror = () => {
+          try {
+            ws.close();
+          } catch {
+            // no-op
+          }
+        };
+      } catch {
+        wsRetryRef.current = setTimeout(connect, WS_RECONNECT_MS);
+      }
+    };
+
+    connect();
+
+    return () => {
+      closedRef.current = true;
+      if (wsRetryRef.current) clearTimeout(wsRetryRef.current);
+      if (wsRef.current) {
+        try {
+          wsRef.current.close();
+        } catch {
+          // no-op
+        }
+      }
+    };
+  }, []);
 
   return {
     data,

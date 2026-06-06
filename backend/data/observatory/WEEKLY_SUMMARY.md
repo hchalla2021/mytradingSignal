@@ -1,5 +1,5 @@
 # 🔭 Weekly Strategy Performance Summary
-*Auto-generated — covers last 3 trading day(s)*
+*Auto-generated — covers last 1 trading day(s)*
 
 ## Strategy Rankings (Confidence-Weighted Accuracy)
 
@@ -14,6 +14,4 @@ Insufficient data. Observe for at least 5 trading days to identify reliable patt
 
 | Date | NIFTY | BANKNIFTY | SENSEX |
 |------|-------|-----------|--------|
-| 2026-05-28 | ➡️ +0.00% (SIDEWAYS) | ➡️ +0.00% (SIDEWAYS) | ➡️ +0.00% (SIDEWAYS) |
-| 2026-05-26 | ➡️ +0.00% (SIDEWAYS) | ➡️ +0.00% (SIDEWAYS) | ➡️ +0.00% (SIDEWAYS) |
-| 2026-05-22 | ➡️ +0.00% (SIDEWAYS) | ➡️ +0.00% (SIDEWAYS) | ➡️ +0.00% (SIDEWAYS) |
+| 2026-06-05 | ➡️ +0.00% (SIDEWAYS) | ➡️ +0.00% (SIDEWAYS) | ➡️ +0.00% (SIDEWAYS) |

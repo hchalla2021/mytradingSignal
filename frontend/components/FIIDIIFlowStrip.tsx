@@ -60,6 +60,27 @@ const FIIDIIFlowStrip = ({ isConnected, marketData }: FIIDIIFlowStripProps) => {
   const { data, isLoading, error, refresh } = useFIIDIIFlow();
 
   const liveProxy = useMemo<LiveProxy>(() => {
+    const serverRt = data?.realtime;
+    const serverMs = serverRt?.generatedAt ? Date.parse(serverRt.generatedAt) : NaN;
+    if (serverRt?.aggregate && Number.isFinite(serverMs)) {
+      const tickAgeSec = Math.max(0, Math.floor((Date.now() - serverMs) / 1000));
+      const quality: LiveProxy['quality'] =
+        tickAgeSec <= LIVE_TICK_MEDIUM_AGE_SEC ? 'high' :
+        tickAgeSec <= LIVE_TICK_MAX_AGE_SEC ? 'medium' : 'low';
+      const active = tickAgeSec <= LIVE_TICK_MAX_AGE_SEC;
+      return {
+        active,
+        hasTicks: true,
+        tickAgeSec,
+        quality,
+        fiiScore: Number(serverRt.aggregate.fiiScore || 0),
+        diiScore: Number(serverRt.aggregate.diiScore || 0),
+        aggScore: Number(serverRt.aggregate.aggregateScore || 0),
+        confidence: Number(serverRt.aggregate.confidence || 0),
+        note: serverRt.aggregate.note || 'Live inferred from backend FII/DII AI engine.',
+      };
+    }
+
     const nifty = marketData?.NIFTY ?? null;
     const bank = marketData?.BANKNIFTY ?? null;
     const sensex = marketData?.SENSEX ?? null;
@@ -137,7 +158,7 @@ const FIIDIIFlowStrip = ({ isConnected, marketData }: FIIDIIFlowStripProps) => {
         ? 'Live inferred from order-flow, OI momentum, and buyer pressure.'
         : 'Live proxy paused - waiting for fresh market ticks.',
     };
-  }, [marketData, isConnected]);
+  }, [marketData, isConnected, data?.realtime]);
 
   const participantRealtime = useMemo(() => {
     const snapshots = (['NIFTY', 'BANKNIFTY', 'SENSEX'] as const).map((sym) => {

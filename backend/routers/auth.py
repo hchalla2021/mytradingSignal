@@ -76,7 +76,9 @@ async def validate_token():
         - user_id, user_name, email: User info from Zerodha
         - message: Status message
     """
-    if not settings.zerodha_access_token:
+    current_settings = get_settings()
+
+    if not current_settings.zerodha_access_token:
         return {
             "valid": False,
             "authenticated": False,
@@ -86,8 +88,8 @@ async def validate_token():
     # 🔥 FIX: Actually validate token by making a quick API call
     try:
         from kiteconnect import KiteConnect
-        kite = KiteConnect(api_key=settings.zerodha_api_key)
-        kite.set_access_token(settings.zerodha_access_token)
+        kite = KiteConnect(api_key=current_settings.zerodha_api_key)
+        kite.set_access_token(current_settings.zerodha_access_token)
         
         # Quick profile check to validate token — run in executor, not blocking event loop
         loop = asyncio.get_event_loop()
