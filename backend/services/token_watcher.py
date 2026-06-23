@@ -4,6 +4,7 @@ Watches .env file and auto-reconnects when token changes
 NO RESTART NEEDED - Hot reload token changes
 """
 import asyncio
+import inspect
 import os
 from datetime import datetime
 from pathlib import Path
@@ -74,8 +75,10 @@ class TokenWatcher(FileSystemEventHandler):
                 # Update stored token
                 self.last_token = new_token
                 
-                # 🔥 UPDATE UNIFIED AUTH SERVICE (centralized)
-                await self.unified_auth.update_token(new_token)
+                # Update unified auth regardless of sync/async implementation.
+                maybe_awaitable = self.unified_auth.update_token(new_token)
+                if inspect.isawaitable(maybe_awaitable):
+                    await maybe_awaitable
                 
                 # Legacy: Also update auth state manager for backward compatibility
                 from services.auth_state_machine import auth_state_manager

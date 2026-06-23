@@ -40,6 +40,11 @@ logger = logging.getLogger(__name__)
 IST = pytz.timezone("Asia/Kolkata")
 settings = get_settings()
 
+
+def _current_settings():
+    """Fetch latest cached settings object (updated after token refresh)."""
+    return get_settings()
+
 SYMBOLS = ["NIFTY", "BANKNIFTY", "SENSEX"]
 
 # Strike step sizes per index
@@ -2121,7 +2126,8 @@ class StrikeIntelligenceService:
     # ── KiteConnect init ─────────────────────────────────────────────────
 
     def _init_kite(self):
-        current_token = settings.zerodha_access_token
+        cfg = _current_settings()
+        current_token = cfg.zerodha_access_token
         if current_token and current_token != self._last_token:
             self._kite_initialized = False
             self._last_token = current_token
@@ -2135,14 +2141,14 @@ class StrikeIntelligenceService:
         if now < self._kite_init_backoff_until:
             return
 
-        if not settings.zerodha_api_key or not settings.zerodha_access_token:
+        if not cfg.zerodha_api_key or not cfg.zerodha_access_token:
             self._kite_init_backoff_until = now + 60  # Check again in 60s
             return
 
         try:
             from kiteconnect import KiteConnect
-            self._kite = KiteConnect(api_key=settings.zerodha_api_key)
-            self._kite.set_access_token(settings.zerodha_access_token)
+            self._kite = KiteConnect(api_key=cfg.zerodha_api_key)
+            self._kite.set_access_token(cfg.zerodha_access_token)
             try:
                 self._kite.profile()
                 self._kite_initialized = True

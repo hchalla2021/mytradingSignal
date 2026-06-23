@@ -83,7 +83,7 @@ class UnifiedAuthService:
             if env_path.exists():
                 self._token_timestamp = datetime.fromtimestamp(env_path.stat().st_mtime, tz=IST)
                 age_hours = (datetime.now(IST) - self._token_timestamp).total_seconds() / 3600
-                print(f"🟢 UNIFIED AUTH: VALID (token present, file age: {age_hours:.1f}h — verified on API call)")
+                print(f"🟢 UNIFIED AUTH: VALID (token present, file age: {age_hours:.1f}h — API not yet verified)")
             else:
                 self._token_timestamp = datetime.now(IST)
                 print("🟢 UNIFIED AUTH: VALID (new token)")

@@ -8,10 +8,10 @@
     "confidence": 15,
     "confluence": 0,
     "candle": {
-      "open": 23366.7,
-      "high": 23366.7,
-      "low": 23366.7,
-      "close": 23366.7,
+      "open": 23824.1,
+      "high": 23824.1,
+      "low": 23824.1,
+      "close": 23824.1,
       "body_ratio": 0,
       "upper_wick_ratio": 0,
       "lower_wick_ratio": 0,
@@ -26,19 +26,19 @@
     "symbol": "NIFTY",
     "timeframe": "5m",
     "dataSource": "MARKET_CLOSED",
-    "timestamp": "2026-06-05T23:00:54.909162+05:30",
-    "price": 23366.7,
-    "changePct": -0.21,
+    "timestamp": "2026-06-23T18:06:40.366479+05:30",
+    "price": 23824.1,
+    "changePct": -1.16,
     "three_factor": {
       "location": {
-        "zone": "MID_ZONE",
-        "pdh": 23465.3,
-        "pdl": 23247.3,
-        "vwap": 23366.7,
-        "distance_to_pdh": -0.42,
-        "distance_to_pdl": 0.514,
-        "vwap_position": "AT",
-        "tradeable": false
+        "zone": "NEAR_PDL",
+        "pdh": 24168.05,
+        "pdl": 24073.15,
+        "vwap": 23914.85,
+        "distance_to_pdh": -1.423,
+        "distance_to_pdl": -1.035,
+        "vwap_position": "BELOW",
+        "tradeable": true
       },
       "behavior": {
         "type": "NONE",
@@ -46,23 +46,24 @@
         "strength": 0
       },
       "confirmation": {
-        "volume_ratio": 0.0,
-        "volume_confirmed": false,
+        "volume_ratio": 1.0,
+        "volume_confirmed": true,
         "body_strong": false,
         "close_near_extreme": false,
         "candle_confirmed": false,
         "confirmed": false
       },
-      "alignment_score": 0,
-      "factors_pass": [],
+      "alignment_score": 1,
+      "factors_pass": [
+        "LOCATION"
+      ],
       "factors_fail": [
-        "LOCATION",
         "BEHAVIOR",
         "CONFIRMATION"
       ],
       "aligned": false,
       "verdict": "NO_TRADE",
-      "reason": "Missing: LOCATION, BEHAVIOR, CONFIRMATION",
+      "reason": "Missing: BEHAVIOR, CONFIRMATION",
       "market_active": false
     },
     "timeframes": {
@@ -75,10 +76,10 @@
         "confidence": 15,
         "confluence": 0,
         "candle": {
-          "open": 23366.7,
-          "high": 23366.7,
-          "low": 23366.7,
-          "close": 23366.7,
+          "open": 23824.1,
+          "high": 23824.1,
+          "low": 23824.1,
+          "close": 23824.1,
           "body_ratio": 0,
           "upper_wick_ratio": 0,
           "lower_wick_ratio": 0,
@@ -93,19 +94,19 @@
         "symbol": "NIFTY",
         "timeframe": "3m",
         "dataSource": "MARKET_CLOSED",
-        "timestamp": "2026-06-05T23:00:54.909017+05:30",
-        "price": 23366.7,
-        "changePct": -0.21,
+        "timestamp": "2026-06-23T18:06:40.366325+05:30",
+        "price": 23824.1,
+        "changePct": -1.16,
         "three_factor": {
           "location": {
-            "zone": "MID_ZONE",
-            "pdh": 23465.3,
-            "pdl": 23247.3,
-            "vwap": 23366.7,
-            "distance_to_pdh": -0.42,
-            "distance_to_pdl": 0.514,
-            "vwap_position": "AT",
-            "tradeable": false
+            "zone": "NEAR_PDL",
+            "pdh": 24168.05,
+            "pdl": 24073.15,
+            "vwap": 23914.85,
+            "distance_to_pdh": -1.423,
+            "distance_to_pdl": -1.035,
+            "vwap_position": "BELOW",
+            "tradeable": true
           },
           "behavior": {
             "type": "NONE",
@@ -113,23 +114,24 @@
             "strength": 0
           },
           "confirmation": {
-            "volume_ratio": 0.0,
-            "volume_confirmed": false,
+            "volume_ratio": 1.0,
+            "volume_confirmed": true,
             "body_strong": false,
             "close_near_extreme": false,
             "candle_confirmed": false,
             "confirmed": false
           },
-          "alignment_score": 0,
-          "factors_pass": [],
+          "alignment_score": 1,
+          "factors_pass": [
+            "LOCATION"
+          ],
           "factors_fail": [
-            "LOCATION",
             "BEHAVIOR",
             "CONFIRMATION"
           ],
           "aligned": false,
           "verdict": "NO_TRADE",
-          "reason": "Missing: LOCATION, BEHAVIOR, CONFIRMATION",
+          "reason": "Missing: BEHAVIOR, CONFIRMATION",
           "market_active": false
         }
       },
@@ -142,10 +144,10 @@
         "confidence": 15,
         "confluence": 0,
         "candle": {
-          "open": 23366.7,
-          "high": 23366.7,
-          "low": 23366.7,
-          "close": 23366.7,
+          "open": 23824.1,
+          "high": 23824.1,
+          "low": 23824.1,
+          "close": 23824.1,
           "body_ratio": 0,
           "upper_wick_ratio": 0,
           "lower_wick_ratio": 0,
@@ -160,19 +162,19 @@
         "symbol": "NIFTY",
         "timeframe": "5m",
         "dataSource": "MARKET_CLOSED",
-        "timestamp": "2026-06-05T23:00:54.909162+05:30",
-        "price": 23366.7,
-        "changePct": -0.21,
+        "timestamp": "2026-06-23T18:06:40.366479+05:30",
+        "price": 23824.1,
+        "changePct": -1.16,
         "three_factor": {
           "location": {
-            "zone": "MID_ZONE",
-            "pdh": 23465.3,
-            "pdl": 23247.3,
-            "vwap": 23366.7,
-            "distance_to_pdh": -0.42,
-            "distance_to_pdl": 0.514,
-            "vwap_position": "AT",
-            "tradeable": false
+            "zone": "NEAR_PDL",
+            "pdh": 24168.05,
+            "pdl": 24073.15,
+            "vwap": 23914.85,
+            "distance_to_pdh": -1.423,
+            "distance_to_pdl": -1.035,
+            "vwap_position": "BELOW",
+            "tradeable": true
           },
           "behavior": {
             "type": "NONE",
@@ -180,23 +182,24 @@
             "strength": 0
           },
           "confirmation": {
-            "volume_ratio": 0.0,
-            "volume_confirmed": false,
+            "volume_ratio": 1.0,
+            "volume_confirmed": true,
             "body_strong": false,
             "close_near_extreme": false,
             "candle_confirmed": false,
             "confirmed": false
           },
-          "alignment_score": 0,
-          "factors_pass": [],
+          "alignment_score": 1,
+          "factors_pass": [
+            "LOCATION"
+          ],
           "factors_fail": [
-            "LOCATION",
             "BEHAVIOR",
             "CONFIRMATION"
           ],
           "aligned": false,
           "verdict": "NO_TRADE",
-          "reason": "Missing: LOCATION, BEHAVIOR, CONFIRMATION",
+          "reason": "Missing: BEHAVIOR, CONFIRMATION",
           "market_active": false
         }
       },
@@ -209,10 +212,10 @@
         "confidence": 15,
         "confluence": 0,
         "candle": {
-          "open": 23366.7,
-          "high": 23366.7,
-          "low": 23366.7,
-          "close": 23366.7,
+          "open": 23824.1,
+          "high": 23824.1,
+          "low": 23824.1,
+          "close": 23824.1,
           "body_ratio": 0,
           "upper_wick_ratio": 0,
           "lower_wick_ratio": 0,
@@ -227,19 +230,19 @@
         "symbol": "NIFTY",
         "timeframe": "15m",
         "dataSource": "MARKET_CLOSED",
-        "timestamp": "2026-06-05T23:00:54.909765+05:30",
-        "price": 23366.7,
-        "changePct": -0.21,
+        "timestamp": "2026-06-23T18:06:40.366610+05:30",
+        "price": 23824.1,
+        "changePct": -1.16,
         "three_factor": {
           "location": {
-            "zone": "MID_ZONE",
-            "pdh": 23465.3,
-            "pdl": 23247.3,
-            "vwap": 23366.7,
-            "distance_to_pdh": -0.42,
-            "distance_to_pdl": 0.514,
-            "vwap_position": "AT",
-            "tradeable": false
+            "zone": "NEAR_PDL",
+            "pdh": 24168.05,
+            "pdl": 24073.15,
+            "vwap": 23914.85,
+            "distance_to_pdh": -1.423,
+            "distance_to_pdl": -1.035,
+            "vwap_position": "BELOW",
+            "tradeable": true
           },
           "behavior": {
             "type": "NONE",
@@ -247,23 +250,24 @@
             "strength": 0
           },
           "confirmation": {
-            "volume_ratio": 0.0,
-            "volume_confirmed": false,
+            "volume_ratio": 1.0,
+            "volume_confirmed": true,
             "body_strong": false,
             "close_near_extreme": false,
             "candle_confirmed": false,
             "confirmed": false
           },
-          "alignment_score": 0,
-          "factors_pass": [],
+          "alignment_score": 1,
+          "factors_pass": [
+            "LOCATION"
+          ],
           "factors_fail": [
-            "LOCATION",
             "BEHAVIOR",
             "CONFIRMATION"
           ],
           "aligned": false,
           "verdict": "NO_TRADE",
-          "reason": "Missing: LOCATION, BEHAVIOR, CONFIRMATION",
+          "reason": "Missing: BEHAVIOR, CONFIRMATION",
           "market_active": false
         }
       }
@@ -297,13 +301,13 @@
       },
       "microstructure": {
         "liquidityDensity": 0.0,
-        "structureDensity": 0.0,
+        "structureDensity": 12.0,
         "fakeBreakoutRisk": 38.5,
-        "stopHuntRisk": 72.0
+        "stopHuntRisk": 56.0
       },
       "smc": {
-        "state": "LIQUIDITY_SWEEP_RISK",
-        "score": 0.0
+        "state": "BALANCED",
+        "score": 12.0
       },
       "multiTimeframe": {
         "micro": {
@@ -329,17 +333,16 @@
         "queueDepth": 4,
         "cacheState": "COLD",
         "alerts": [
-          "Stop-hunt probability elevated around weak confirmation structure",
           "Market closed; confidence auto-degraded"
         ]
       },
       "institutionalConfluence": {
-        "executionProbability": 19,
-        "smartMoneyAlignment": 0,
-        "institutionalFlow": 0,
-        "riskScore": 73,
+        "executionProbability": 22,
+        "smartMoneyAlignment": 8,
+        "institutionalFlow": 8,
+        "riskScore": 62,
         "rewardScore": 27,
-        "riskRewardRatio": 0.37
+        "riskRewardRatio": 0.44
       }
     }
   },
@@ -352,10 +355,10 @@
     "confidence": 15,
     "confluence": 0,
     "candle": {
-      "open": 54496.25,
-      "high": 54496.25,
-      "low": 54496.25,
-      "close": 54496.25,
+      "open": 57183.75,
+      "high": 57183.75,
+      "low": 57183.75,
+      "close": 57183.75,
       "body_ratio": 0,
       "upper_wick_ratio": 0,
       "lower_wick_ratio": 0,
@@ -370,18 +373,18 @@
     "symbol": "BANKNIFTY",
     "timeframe": "5m",
     "dataSource": "MARKET_CLOSED",
-    "timestamp": "2026-06-05T23:00:54.910110+05:30",
-    "price": 54496.25,
-    "changePct": 0.35,
+    "timestamp": "2026-06-23T18:06:40.366859+05:30",
+    "price": 57183.75,
+    "changePct": -1.3,
     "three_factor": {
       "location": {
-        "zone": "ABOVE_PDH",
-        "pdh": 54461,
-        "pdl": 53829.4,
-        "vwap": 54496.25,
-        "distance_to_pdh": 0.065,
-        "distance_to_pdl": 1.239,
-        "vwap_position": "AT",
+        "zone": "NEAR_PDL",
+        "pdh": 58009.1,
+        "pdl": 57720.1,
+        "vwap": 57411.03,
+        "distance_to_pdh": -1.423,
+        "distance_to_pdl": -0.929,
+        "vwap_position": "BELOW",
         "tradeable": true
       },
       "behavior": {
@@ -390,8 +393,8 @@
         "strength": 0
       },
       "confirmation": {
-        "volume_ratio": 0.0,
-        "volume_confirmed": false,
+        "volume_ratio": 1.0,
+        "volume_confirmed": true,
         "body_strong": false,
         "close_near_extreme": false,
         "candle_confirmed": false,
@@ -420,10 +423,10 @@
         "confidence": 15,
         "confluence": 0,
         "candle": {
-          "open": 54496.25,
-          "high": 54496.25,
-          "low": 54496.25,
-          "close": 54496.25,
+          "open": 57183.75,
+          "high": 57183.75,
+          "low": 57183.75,
+          "close": 57183.75,
           "body_ratio": 0,
           "upper_wick_ratio": 0,
           "lower_wick_ratio": 0,
@@ -438,18 +441,18 @@
         "symbol": "BANKNIFTY",
         "timeframe": "3m",
         "dataSource": "MARKET_CLOSED",
-        "timestamp": "2026-06-05T23:00:54.909982+05:30",
-        "price": 54496.25,
-        "changePct": 0.35,
+        "timestamp": "2026-06-23T18:06:40.366730+05:30",
+        "price": 57183.75,
+        "changePct": -1.3,
         "three_factor": {
           "location": {
-            "zone": "ABOVE_PDH",
-            "pdh": 54461,
-            "pdl": 53829.4,
-            "vwap": 54496.25,
-            "distance_to_pdh": 0.065,
-            "distance_to_pdl": 1.239,
-            "vwap_position": "AT",
+            "zone": "NEAR_PDL",
+            "pdh": 58009.1,
+            "pdl": 57720.1,
+            "vwap": 57411.03,
+            "distance_to_pdh": -1.423,
+            "distance_to_pdl": -0.929,
+            "vwap_position": "BELOW",
             "tradeable": true
           },
           "behavior": {
@@ -458,8 +461,8 @@
             "strength": 0
           },
           "confirmation": {
-            "volume_ratio": 0.0,
-            "volume_confirmed": false,
+            "volume_ratio": 1.0,
+            "volume_confirmed": true,
             "body_strong": false,
             "close_near_extreme": false,
             "candle_confirmed": false,
@@ -488,10 +491,10 @@
         "confidence": 15,
         "confluence": 0,
         "candle": {
-          "open": 54496.25,
-          "high": 54496.25,
-          "low": 54496.25,
-          "close": 54496.25,
+          "open": 57183.75,
+          "high": 57183.75,
+          "low": 57183.75,
+          "close": 57183.75,
           "body_ratio": 0,
           "upper_wick_ratio": 0,
           "lower_wick_ratio": 0,
@@ -506,18 +509,18 @@
         "symbol": "BANKNIFTY",
         "timeframe": "5m",
         "dataSource": "MARKET_CLOSED",
-        "timestamp": "2026-06-05T23:00:54.910110+05:30",
-        "price": 54496.25,
-        "changePct": 0.35,
+        "timestamp": "2026-06-23T18:06:40.366859+05:30",
+        "price": 57183.75,
+        "changePct": -1.3,
         "three_factor": {
           "location": {
-            "zone": "ABOVE_PDH",
-            "pdh": 54461,
-            "pdl": 53829.4,
-            "vwap": 54496.25,
-            "distance_to_pdh": 0.065,
-            "distance_to_pdl": 1.239,
-            "vwap_position": "AT",
+            "zone": "NEAR_PDL",
+            "pdh": 58009.1,
+            "pdl": 57720.1,
+            "vwap": 57411.03,
+            "distance_to_pdh": -1.423,
+            "distance_to_pdl": -0.929,
+            "vwap_position": "BELOW",
             "tradeable": true
           },
           "behavior": {
@@ -526,8 +529,8 @@
             "strength": 0
           },
           "confirmation": {
-            "volume_ratio": 0.0,
-            "volume_confirmed": false,
+            "volume_ratio": 1.0,
+            "volume_confirmed": true,
             "body_strong": false,
             "close_near_extreme": false,
             "candle_confirmed": false,
@@ -556,10 +559,10 @@
         "confidence": 15,
         "confluence": 0,
         "candle": {
-          "open": 54496.25,
-          "high": 54496.25,
-          "low": 54496.25,
-          "close": 54496.25,
+          "open": 57183.75,
+          "high": 57183.75,
+          "low": 57183.75,
+          "close": 57183.75,
           "body_ratio": 0,
           "upper_wick_ratio": 0,
           "lower_wick_ratio": 0,
@@ -574,18 +577,18 @@
         "symbol": "BANKNIFTY",
         "timeframe": "15m",
         "dataSource": "MARKET_CLOSED",
-        "timestamp": "2026-06-05T23:00:54.910211+05:30",
-        "price": 54496.25,
-        "changePct": 0.35,
+        "timestamp": "2026-06-23T18:06:40.366978+05:30",
+        "price": 57183.75,
+        "changePct": -1.3,
         "three_factor": {
           "location": {
-            "zone": "ABOVE_PDH",
-            "pdh": 54461,
-            "pdl": 53829.4,
-            "vwap": 54496.25,
-            "distance_to_pdh": 0.065,
-            "distance_to_pdl": 1.239,
-            "vwap_position": "AT",
+            "zone": "NEAR_PDL",
+            "pdh": 58009.1,
+            "pdl": 57720.1,
+            "vwap": 57411.03,
+            "distance_to_pdh": -1.423,
+            "distance_to_pdl": -0.929,
+            "vwap_position": "BELOW",
             "tradeable": true
           },
           "behavior": {
@@ -594,8 +597,8 @@
             "strength": 0
           },
           "confirmation": {
-            "volume_ratio": 0.0,
-            "volume_confirmed": false,
+            "volume_ratio": 1.0,
+            "volume_confirmed": true,
             "body_strong": false,
             "close_near_extreme": false,
             "candle_confirmed": false,
@@ -699,10 +702,10 @@
     "confidence": 15,
     "confluence": 0,
     "candle": {
-      "open": 74243.34,
-      "high": 74243.34,
-      "low": 74243.34,
-      "close": 74243.34,
+      "open": 76200.68,
+      "high": 76200.68,
+      "low": 76200.68,
+      "close": 76200.68,
       "body_ratio": 0,
       "upper_wick_ratio": 0,
       "lower_wick_ratio": 0,
@@ -717,19 +720,19 @@
     "symbol": "SENSEX",
     "timeframe": "5m",
     "dataSource": "MARKET_CLOSED",
-    "timestamp": "2026-06-05T23:00:54.910429+05:30",
-    "price": 74243.34,
-    "changePct": -0.16,
+    "timestamp": "2026-06-23T18:06:40.367291+05:30",
+    "price": 76200.68,
+    "changePct": -1.16,
     "three_factor": {
       "location": {
-        "zone": "MID_ZONE",
-        "pdh": 74544.24,
-        "pdl": 73807.3,
-        "vwap": 74243.34,
-        "distance_to_pdh": -0.404,
-        "distance_to_pdl": 0.591,
-        "vwap_position": "AT",
-        "tradeable": false
+        "zone": "NEAR_PDL",
+        "pdh": 77325.56,
+        "pdl": 77008.02,
+        "vwap": 76492.67,
+        "distance_to_pdh": -1.455,
+        "distance_to_pdl": -1.048,
+        "vwap_position": "BELOW",
+        "tradeable": true
       },
       "behavior": {
         "type": "NONE",
@@ -737,23 +740,24 @@
         "strength": 0
       },
       "confirmation": {
-        "volume_ratio": 0.0,
-        "volume_confirmed": false,
+        "volume_ratio": 1.0,
+        "volume_confirmed": true,
         "body_strong": false,
         "close_near_extreme": false,
         "candle_confirmed": false,
         "confirmed": false
       },
-      "alignment_score": 0,
-      "factors_pass": [],
+      "alignment_score": 1,
+      "factors_pass": [
+        "LOCATION"
+      ],
       "factors_fail": [
-        "LOCATION",
         "BEHAVIOR",
         "CONFIRMATION"
       ],
       "aligned": false,
       "verdict": "NO_TRADE",
-      "reason": "Missing: LOCATION, BEHAVIOR, CONFIRMATION",
+      "reason": "Missing: BEHAVIOR, CONFIRMATION",
       "market_active": false
     },
     "timeframes": {
@@ -766,10 +770,10 @@
         "confidence": 15,
         "confluence": 0,
         "candle": {
-          "open": 74243.34,
-          "high": 74243.34,
-          "low": 74243.34,
-          "close": 74243.34,
+          "open": 76200.68,
+          "high": 76200.68,
+          "low": 76200.68,
+          "close": 76200.68,
           "body_ratio": 0,
           "upper_wick_ratio": 0,
           "lower_wick_ratio": 0,
@@ -784,19 +788,19 @@
         "symbol": "SENSEX",
         "timeframe": "3m",
         "dataSource": "MARKET_CLOSED",
-        "timestamp": "2026-06-05T23:00:54.910321+05:30",
-        "price": 74243.34,
-        "changePct": -0.16,
+        "timestamp": "2026-06-23T18:06:40.367163+05:30",
+        "price": 76200.68,
+        "changePct": -1.16,
         "three_factor": {
           "location": {
-            "zone": "MID_ZONE",
-            "pdh": 74544.24,
-            "pdl": 73807.3,
-            "vwap": 74243.34,
-            "distance_to_pdh": -0.404,
-            "distance_to_pdl": 0.591,
-            "vwap_position": "AT",
-            "tradeable": false
+            "zone": "NEAR_PDL",
+            "pdh": 77325.56,
+            "pdl": 77008.02,
+            "vwap": 76492.67,
+            "distance_to_pdh": -1.455,
+            "distance_to_pdl": -1.048,
+            "vwap_position": "BELOW",
+            "tradeable": true
           },
           "behavior": {
             "type": "NONE",
@@ -804,23 +808,24 @@
             "strength": 0
           },
           "confirmation": {
-            "volume_ratio": 0.0,
-            "volume_confirmed": false,
+            "volume_ratio": 1.0,
+            "volume_confirmed": true,
             "body_strong": false,
             "close_near_extreme": false,
             "candle_confirmed": false,
             "confirmed": false
           },
-          "alignment_score": 0,
-          "factors_pass": [],
+          "alignment_score": 1,
+          "factors_pass": [
+            "LOCATION"
+          ],
           "factors_fail": [
-            "LOCATION",
             "BEHAVIOR",
             "CONFIRMATION"
           ],
           "aligned": false,
           "verdict": "NO_TRADE",
-          "reason": "Missing: LOCATION, BEHAVIOR, CONFIRMATION",
+          "reason": "Missing: BEHAVIOR, CONFIRMATION",
           "market_active": false
         }
       },
@@ -833,10 +838,10 @@
         "confidence": 15,
         "confluence": 0,
         "candle": {
-          "open": 74243.34,
-          "high": 74243.34,
-          "low": 74243.34,
-          "close": 74243.34,
+          "open": 76200.68,
+          "high": 76200.68,
+          "low": 76200.68,
+          "close": 76200.68,
           "body_ratio": 0,
           "upper_wick_ratio": 0,
           "lower_wick_ratio": 0,
@@ -851,19 +856,19 @@
         "symbol": "SENSEX",
         "timeframe": "5m",
         "dataSource": "MARKET_CLOSED",
-        "timestamp": "2026-06-05T23:00:54.910429+05:30",
-        "price": 74243.34,
-        "changePct": -0.16,
+        "timestamp": "2026-06-23T18:06:40.367291+05:30",
+        "price": 76200.68,
+        "changePct": -1.16,
         "three_factor": {
           "location": {
-            "zone": "MID_ZONE",
-            "pdh": 74544.24,
-            "pdl": 73807.3,
-            "vwap": 74243.34,
-            "distance_to_pdh": -0.404,
-            "distance_to_pdl": 0.591,
-            "vwap_position": "AT",
-            "tradeable": false
+            "zone": "NEAR_PDL",
+            "pdh": 77325.56,
+            "pdl": 77008.02,
+            "vwap": 76492.67,
+            "distance_to_pdh": -1.455,
+            "distance_to_pdl": -1.048,
+            "vwap_position": "BELOW",
+            "tradeable": true
           },
           "behavior": {
             "type": "NONE",
@@ -871,23 +876,24 @@
             "strength": 0
           },
           "confirmation": {
-            "volume_ratio": 0.0,
-            "volume_confirmed": false,
+            "volume_ratio": 1.0,
+            "volume_confirmed": true,
             "body_strong": false,
             "close_near_extreme": false,
             "candle_confirmed": false,
             "confirmed": false
           },
-          "alignment_score": 0,
-          "factors_pass": [],
+          "alignment_score": 1,
+          "factors_pass": [
+            "LOCATION"
+          ],
           "factors_fail": [
-            "LOCATION",
             "BEHAVIOR",
             "CONFIRMATION"
           ],
           "aligned": false,
           "verdict": "NO_TRADE",
-          "reason": "Missing: LOCATION, BEHAVIOR, CONFIRMATION",
+          "reason": "Missing: BEHAVIOR, CONFIRMATION",
           "market_active": false
         }
       },
@@ -900,10 +906,10 @@
         "confidence": 15,
         "confluence": 0,
         "candle": {
-          "open": 74243.34,
-          "high": 74243.34,
-          "low": 74243.34,
-          "close": 74243.34,
+          "open": 76200.68,
+          "high": 76200.68,
+          "low": 76200.68,
+          "close": 76200.68,
           "body_ratio": 0,
           "upper_wick_ratio": 0,
           "lower_wick_ratio": 0,
@@ -918,19 +924,19 @@
         "symbol": "SENSEX",
         "timeframe": "15m",
         "dataSource": "MARKET_CLOSED",
-        "timestamp": "2026-06-05T23:00:54.910510+05:30",
-        "price": 74243.34,
-        "changePct": -0.16,
+        "timestamp": "2026-06-23T18:06:40.367402+05:30",
+        "price": 76200.68,
+        "changePct": -1.16,
         "three_factor": {
           "location": {
-            "zone": "MID_ZONE",
-            "pdh": 74544.24,
-            "pdl": 73807.3,
-            "vwap": 74243.34,
-            "distance_to_pdh": -0.404,
-            "distance_to_pdl": 0.591,
-            "vwap_position": "AT",
-            "tradeable": false
+            "zone": "NEAR_PDL",
+            "pdh": 77325.56,
+            "pdl": 77008.02,
+            "vwap": 76492.67,
+            "distance_to_pdh": -1.455,
+            "distance_to_pdl": -1.048,
+            "vwap_position": "BELOW",
+            "tradeable": true
           },
           "behavior": {
             "type": "NONE",
@@ -938,23 +944,24 @@
             "strength": 0
           },
           "confirmation": {
-            "volume_ratio": 0.0,
-            "volume_confirmed": false,
+            "volume_ratio": 1.0,
+            "volume_confirmed": true,
             "body_strong": false,
             "close_near_extreme": false,
             "candle_confirmed": false,
             "confirmed": false
           },
-          "alignment_score": 0,
-          "factors_pass": [],
+          "alignment_score": 1,
+          "factors_pass": [
+            "LOCATION"
+          ],
           "factors_fail": [
-            "LOCATION",
             "BEHAVIOR",
             "CONFIRMATION"
           ],
           "aligned": false,
           "verdict": "NO_TRADE",
-          "reason": "Missing: LOCATION, BEHAVIOR, CONFIRMATION",
+          "reason": "Missing: BEHAVIOR, CONFIRMATION",
           "market_active": false
         }
       }
@@ -988,13 +995,13 @@
       },
       "microstructure": {
         "liquidityDensity": 0.0,
-        "structureDensity": 0.0,
+        "structureDensity": 12.0,
         "fakeBreakoutRisk": 38.5,
-        "stopHuntRisk": 72.0
+        "stopHuntRisk": 56.0
       },
       "smc": {
-        "state": "LIQUIDITY_SWEEP_RISK",
-        "score": 0.0
+        "state": "BALANCED",
+        "score": 12.0
       },
       "multiTimeframe": {
         "micro": {
@@ -1020,17 +1027,16 @@
         "queueDepth": 4,
         "cacheState": "COLD",
         "alerts": [
-          "Stop-hunt probability elevated around weak confirmation structure",
           "Market closed; confidence auto-degraded"
         ]
       },
       "institutionalConfluence": {
-        "executionProbability": 19,
-        "smartMoneyAlignment": 0,
-        "institutionalFlow": 0,
-        "riskScore": 73,
+        "executionProbability": 22,
+        "smartMoneyAlignment": 8,
+        "institutionalFlow": 8,
+        "riskScore": 62,
         "rewardScore": 27,
-        "riskRewardRatio": 0.37
+        "riskRewardRatio": 0.44
       }
     }
   }

@@ -7,9 +7,11 @@ Format: YYYY-MM-DD: Holiday Name
 from datetime import date, timedelta
 
 # Holiday list disabled — exchange-driven (Zerodha tick activity) is the source of truth.
+# Keep this empty in live mode to avoid stale calendar blocking live feeds.
 NSE_HOLIDAYS: dict[str, str] = {}
 
-# Previous static holiday entries (kept commented for reference only):
+# Reference holiday entries (kept commented for documentation only):
+# Note: 2026-06-23 is NOT a configured holiday in this reference list.
 # 2025: 01-26 Republic Day, 02-26 Maha Shivaratri, 03-14 Holi, 03-31 Id-Ul-Fitr,
 #       04-10 Mahavir Jayanti, 04-14 Ambedkar Jayanti, 04-18 Good Friday,
 #       05-01 Maharashtra Day, 06-07 Bakri Id, 08-15 Independence Day,

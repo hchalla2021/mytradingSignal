@@ -5,6 +5,7 @@ import dynamic from 'next/dynamic';
 import LiveStatus from '@/components/LiveStatus';
 import Header from '@/components/Header';
 import SystemStatusBanner from '@/components/SystemStatusBanner';
+import SmartAIAlgoSection from '@/components/SmartAIAlgoSection';
 import { useMarketSocket } from '@/hooks/useMarketSocket';
 import { useAnalysis } from '@/hooks/useAnalysis';
 import { useAIAnalysis } from '@/hooks/useAIAnalysis';
@@ -210,7 +211,6 @@ const ICTIntelligence = dynamic(() => import('@/components/ICTIntelligence'), {
     </div>
   )
 });
-
 
 export default function Home() {
   type UserAnalyticsSummary = {
@@ -561,6 +561,9 @@ export default function Home() {
       {/* Main Dashboard - Full Width */}
       <div className="w-full px-3 sm:px-5 lg:px-8 xl:px-10 py-3 lg:py-5">
         <div className="mx-auto w-full max-w-[1820px]">
+        {/* 🤖 SMART AI ALGO — above Market Pulse */}
+        <SmartAIAlgoSection />
+
         {/* 📊 MARKET PULSE STRIP — institutional bird's-eye KPIs */}
         <MarketPulseStrip marketData={marketData} isConnected={isConnected} />
 

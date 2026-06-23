@@ -13,7 +13,7 @@ from services.websocket_manager import ConnectionManager
 from services.pcr_service import get_pcr_service
 from services.feed_watchdog import feed_watchdog
 from services.auth_state_machine import auth_state_manager
-from services.market_session_controller import market_session
+from services.market_session_controller import market_session, MarketPhase
 from config.market_session import get_market_session
 from config.nse_holidays import is_holiday, get_holiday_name
 
@@ -53,40 +53,40 @@ def get_market_status() -> str:
     this function trusts the exchange over local holiday/weekend config.
     """
     global _zerodha_ticks_active, _zerodha_last_tick_time
-    
+
     now = datetime.now(IST)
     current_time = now.time()
-    
-    # Check if weekend (Saturday=5, Sunday=6)
-    is_weekend = now.weekday() in market_config.WEEKEND_DAYS
-    
-    # Check if holiday (using centralized configuration)
-    date_str = now.strftime("%Y-%m-%d")
-    is_hol = is_holiday(date_str)
-    
-    # Normal market phase logic (when not weekend/holiday)
-    if not is_weekend and not is_hol:
-        if PRE_OPEN_START <= current_time < PRE_OPEN_END:
-            return "PRE_OPEN"
-        if PRE_OPEN_END <= current_time < MARKET_OPEN:
-            return "FREEZE"
-        if MARKET_OPEN <= current_time <= MARKET_CLOSE:
-            return "LIVE"
-        return "CLOSED"
-    
-    # It's marked as weekend or holiday — but check if Zerodha disagrees.
-    # If we received a tick in the last 120 seconds during plausible market hours,
-    # the exchange IS open despite our holiday list. Trust the exchange.
+
+    # If the exchange is clearly sending fresh ticks during market hours,
+    # trust the live feed even when a holiday/weekend calendar is stale.
     in_market_window = time(8, 55) <= current_time <= time(15, 35)
     ticks_recent = (time_module.time() - _zerodha_last_tick_time) < 120
-    
     if in_market_window and _zerodha_ticks_active and ticks_recent:
-        # Zerodha is sending data — market IS open
-        if MARKET_OPEN <= current_time <= MARKET_CLOSE:
-            return "LIVE"
         if PRE_OPEN_START <= current_time < MARKET_OPEN:
             return "PRE_OPEN"
-    
+        if MARKET_OPEN <= current_time <= MARKET_CLOSE:
+            return "LIVE"
+
+    phase = market_session.get_current_phase(now)
+    if phase == MarketPhase.PRE_OPEN:
+        return "PRE_OPEN"
+    if phase == MarketPhase.AUCTION_FREEZE:
+        return "FREEZE"
+    if phase == MarketPhase.LIVE:
+        return "LIVE"
+
+    # Fallback to the configured calendar only when the session controller
+    # says the market is closed and there are no recent live ticks.
+    date_str = now.strftime("%Y-%m-%d")
+    if now.weekday() in market_config.WEEKEND_DAYS or is_holiday(date_str):
+        return "CLOSED"
+
+    if PRE_OPEN_START <= current_time < PRE_OPEN_END:
+        return "PRE_OPEN"
+    if PRE_OPEN_END <= current_time < MARKET_OPEN:
+        return "FREEZE"
+    if MARKET_OPEN <= current_time <= MARKET_CLOSE:
+        return "LIVE"
     return "CLOSED"
 
 

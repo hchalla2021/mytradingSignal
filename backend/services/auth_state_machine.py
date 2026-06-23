@@ -77,7 +77,7 @@ class AuthStateManager:
                     env_path.stat().st_mtime, tz=IST
                 )
                 age_hours = (datetime.now(IST) - self._token_created_at).total_seconds() / 3600
-                print(f"🟢 AUTH STATE: VALID (token present, file age: {age_hours:.1f}h — verified on API call)")
+                print(f"🟢 AUTH STATE: VALID (token present, file age: {age_hours:.1f}h — API not yet verified)")
             else:
                 self._token_created_at = datetime.now(IST)
                 print("🟢 AUTH STATE: VALID (token found)")

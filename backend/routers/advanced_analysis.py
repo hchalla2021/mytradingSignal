@@ -3268,6 +3268,40 @@ async def get_trade_zones(symbol: str) -> Dict[str, Any]:
         rr_ratio_bearish = (reward_bearish / risk) if risk > 0 else 0
         rr_ratio = max(rr_ratio_bullish, rr_ratio_bearish)
 
+        avg_volume = int(analysis.get('avg_volume', current_volume))
+        order_flow_imbalance = abs(buy_volume_ratio - 50.0)
+        zone_control = analysis.get('zone_control', {})
+        absorption_strength = float(zone_control.get('absorption_strength', 50.0)) if isinstance(zone_control, dict) else 50.0
+        wick_dominance = float(zone_control.get('wick_dominance', 50.0)) if isinstance(zone_control, dict) else 50.0
+
+        smart_money_signal = str(analysis.get('smart_money_signal', 'NEUTRAL'))
+        _sm_conf_raw = analysis.get('smart_money_confidence', 0.3)
+        try:
+            _sm_conf = float(_sm_conf_raw)
+        except (TypeError, ValueError):
+            _sm_conf = 30.0
+        smart_money_confidence = int(_sm_conf * 100) if _sm_conf <= 1.0 else int(_sm_conf)
+        smart_money_confidence = max(0, min(100, smart_money_confidence))
+
+        fvg_bullish = bool(analysis.get('fvg_bullish', False))
+        fvg_bearish = bool(analysis.get('fvg_bearish', False))
+
+        if current_price > ema_20 and current_price > vwap_value and buy_volume_ratio > 55:
+            order_structure = "ACCUMULATION_KICK_OFF"
+            structure_description = "Strong buying above VWAP with trend support"
+        elif current_price < ema_20 and current_price < vwap_value and buy_volume_ratio < 45:
+            order_structure = "DISTRIBUTION_BREAKDOWN"
+            structure_description = "Selling pressure below VWAP with bearish structure"
+        elif absorption_strength > 70 and wick_dominance > 60:
+            order_structure = "LIQUIDITY_HUNT_SETUP"
+            structure_description = "High absorption + wick dominance suggests trap risk"
+        elif abs(order_flow_imbalance) < 5:
+            order_structure = "EQUILIBRIUM_PHASE"
+            structure_description = "Balanced order flow around fair value"
+        else:
+            order_structure = "TRANSITIONAL"
+            structure_description = "Mixed signals, waiting for confirmation"
+
         from services.trade_zones_ai import trade_zones_ai_engine
 
         try:
@@ -3297,6 +3331,17 @@ async def get_trade_zones(symbol: str) -> Dict[str, Any]:
                 distance_to_ema50_pct=distance_to_ema50,
                 distance_to_ema100_pct=distance_to_ema100,
                 current_volume=current_volume,
+                avg_volume=avg_volume,
+                order_flow_imbalance=order_flow_imbalance,
+                absorption_strength=absorption_strength,
+                wick_dominance=wick_dominance,
+                smart_money_signal=smart_money_signal,
+                smart_money_confidence=smart_money_confidence,
+                fvg_bullish=fvg_bullish,
+                fvg_bearish=fvg_bearish,
+                order_structure=order_structure,
+                structure_description=structure_description,
+                token_valid=token_status["valid"],
                 candles_analyzed=len(df),
             )
         except Exception as ai_error:

@@ -20,6 +20,15 @@ const nextConfig = {
   // _app.js.nft.json even in pure App Router projects, breaking `next build`.
   outputFileTracing: false,
 
+  // Next's dev webpack pack cache can become stale on Windows and emit ENOENT
+  // warnings for missing .pack.gz files after file moves/reloads.
+  webpack(config, { dev }) {
+    if (dev) {
+      config.cache = false
+    }
+    return config
+  },
+
   // Cache headers - aggressive no-cache in dev, reasonable caching in production
   async headers() {
     if (process.env.NODE_ENV !== 'production') {

@@ -62,6 +62,7 @@ from routers.ict_bias import router as ict_bias_http, ws_router as ict_bias_ws
 from routers.market_compass import router as market_compass_http, ws_router as market_compass_ws
 from routers.trading_intelligence import http_router as tie_http, ws_router as tie_ws
 from routers.fii_dii import router as fii_dii_router, ws_router as fii_dii_ws
+from routers.smart_ai_algo import http_router as algo_http, ws_router as algo_ws
 
 # Windows console fix already applied in config/__init__.py
 
@@ -264,6 +265,14 @@ async def lifespan(app: FastAPI):
             except Exception as exc:
                 logger.error("Observatory service failed to start: %s", exc, exc_info=True)
 
+        async def start_smart_ai_algo():
+            try:
+                from services.smart_ai_algo_service import get_algo_service
+                asyncio.create_task(get_algo_service().start())
+                print("🤖 Smart AI Algo: ON")
+            except Exception as exc:
+                logger.error("Smart AI Algo failed to start: %s", exc, exc_info=True)
+
         # Fast local mode: bring core feed online first, then defer optional heavy services.
         if settings.fast_startup_mode:
             print("⚡ FAST_STARTUP_MODE=ON - starting core services first")
@@ -287,6 +296,7 @@ async def lifespan(app: FastAPI):
                 start_global_indices(),
                 start_global_news(),
                 start_observatory(),
+                start_smart_ai_algo(),
             )
         else:
             await asyncio.gather(
@@ -305,6 +315,7 @@ async def lifespan(app: FastAPI):
                 start_global_indices(),
                 start_global_news(),
                 start_observatory(),
+                start_smart_ai_algo(),
             )
         print("🚀 All services READY")
 
@@ -633,8 +644,9 @@ app.include_router(tie_ws,   prefix="/ws",  tags=["Trading Intelligence"])
 app.include_router(tie_http, prefix="/api", tags=["Trading Intelligence"])
 # 💸 FII / DII real flow (NSE-sourced)
 app.include_router(fii_dii_ws, prefix="/ws", tags=["FII / DII"])
-app.include_router(fii_dii_router, prefix="/api", tags=["FII / DII"])
-# �🔭 Market Intelligence Observatory
+app.include_router(fii_dii_router, prefix="/api", tags=["FII / DII"])# 🤖 Smart AI Algo — entry/SL/target/TSL with OpenAI enrichment
+app.include_router(algo_http, tags=["Smart AI Algo"])
+app.include_router(algo_ws, tags=["Smart AI Algo"])# �🔭 Market Intelligence Observatory
 app.include_router(observatory_http, tags=["Observatory"])
 
 
