@@ -41,6 +41,11 @@ logger = logging.getLogger(__name__)
 IST = pytz.timezone("Asia/Kolkata")
 settings = get_settings()
 
+
+def _settings():
+    """Fetch latest settings to avoid stale env/token values during runtime."""
+    return get_settings()
+
 # ── Constants ────────────────────────────────────────────────────────────────
 SYMBOLS = ["NIFTY", "BANKNIFTY", "SENSEX"]
 DEFAULT_SL_POINTS = 10
@@ -103,7 +108,7 @@ class SmartAIAlgoService:
         self._running = False
         self._ai_semaphore = asyncio.Semaphore(MAX_CONCURRENT_AI)
         # AI enabled by default when OpenAI is configured; user can still toggle it off.
-        self._ai_enabled: bool = bool(settings.openai_api_key)
+        self._ai_enabled: bool = bool(_settings().openai_api_key)
         # Track last AI call time and last signal per symbol for change-detection
         self._last_ai_call: Dict[str, float] = {s: 0.0 for s in SYMBOLS}
         self._last_signal: Dict[str, str] = {s: "WAIT" for s in SYMBOLS}
@@ -257,18 +262,20 @@ class SmartAIAlgoService:
             asyncio.create_task(self._ai_batch(candidates))
 
     def _get_live_tradingsymbol(self, symbol: str) -> str:
+        cfg = _settings()
         mapping = {
-            "NIFTY": settings.algo_live_symbol_nifty,
-            "BANKNIFTY": settings.algo_live_symbol_banknifty,
-            "SENSEX": settings.algo_live_symbol_sensex,
+            "NIFTY": cfg.algo_live_symbol_nifty,
+            "BANKNIFTY": cfg.algo_live_symbol_banknifty,
+            "SENSEX": cfg.algo_live_symbol_sensex,
         }
         return (mapping.get(symbol) or "").strip()
 
     def _get_live_token(self, symbol: str) -> int:
+        cfg = _settings()
         token_map = {
-            "NIFTY": int(getattr(settings, "nifty_fut_token", 0) or 0),
-            "BANKNIFTY": int(getattr(settings, "banknifty_fut_token", 0) or 0),
-            "SENSEX": int(getattr(settings, "sensex_fut_token", 0) or 0),
+            "NIFTY": int(getattr(cfg, "nifty_fut_token", 0) or 0),
+            "BANKNIFTY": int(getattr(cfg, "banknifty_fut_token", 0) or 0),
+            "SENSEX": int(getattr(cfg, "sensex_fut_token", 0) or 0),
         }
         return token_map.get(symbol, 0)
 
@@ -469,7 +476,41 @@ class SmartAIAlgoService:
             return None
 
         candidates.sort(key=lambda c: (c["expiry"], c["dist"]))
-        chosen = candidates[0]
+
+        nearest_expiry = candidates[0]["expiry"]
+        same_expiry = [c for c in candidates if c["expiry"] == nearest_expiry]
+        shortlist = same_expiry[:14]
+        quote_keys = [f"{exchange}:{c['tradingsymbol']}" for c in shortlist]
+        quote_map: Dict[str, Any] = {}
+        if quote_keys:
+            try:
+                quote_map = kite.quote(quote_keys) or {}
+            except Exception:
+                quote_map = {}
+
+        def _contract_score(c: Dict[str, Any]) -> tuple:
+            q = quote_map.get(f"{exchange}:{c['tradingsymbol']}") or {}
+            ltp = float(q.get("last_price", 0) or 0)
+            vol = float(q.get("volume", 0) or 0)
+            oi = float(q.get("oi", 0) or 0)
+            depth = q.get("depth") or {}
+            buy_depth = depth.get("buy") if isinstance(depth, dict) else []
+            sell_depth = depth.get("sell") if isinstance(depth, dict) else []
+            bid = float((buy_depth[0] or {}).get("price", 0) or 0) if isinstance(buy_depth, list) and buy_depth else 0.0
+            ask = float((sell_depth[0] or {}).get("price", 0) or 0) if isinstance(sell_depth, list) and sell_depth else 0.0
+            spread = (ask - bid) if ask > 0 and bid > 0 else 9999.0
+            # Prioritize liquid/tight contracts first; then near ATM distance.
+            return (
+                0 if ltp > 0 else 1,
+                0 if ask > 0 else 1,
+                spread,
+                -vol,
+                -oi,
+                c["dist"],
+            )
+
+        shortlist.sort(key=_contract_score)
+        chosen = shortlist[0]
         chosen["expiry"] = chosen["expiry"].isoformat()
         return chosen
 
@@ -490,27 +531,40 @@ class SmartAIAlgoService:
         near_high = bool(ind.get("near_high", False))
         near_low = bool(ind.get("near_low", False))
 
+        continuation_context = False
         if side == "BUY":
+            continuation_context = (
+                p >= (e20 * 0.998 if e20 > 0 else p)
+                and e20 >= e100
+                and change_pct >= 0.35
+                and rsi >= 52
+            )
             checks = [
-                (p > e20, "price <= EMA20"),
-                (e20 >= e100 >= e200, "EMA stack not bullish"),
+                (p >= (e20 * 0.998 if e20 > 0 else p), "price materially below EMA20"),
+                (e20 >= e100, "EMA stack not bullish"),
                 (p >= vwap, "price below VWAP"),
-                (48 <= rsi <= 72, "RSI outside bullish range"),
+                (40 <= rsi <= 82, "RSI outside bullish range"),
                 (oi_trend in ("LONG_BUILDUP", "SHORT_COVERING"), "OI trend not bullish"),
                 (change_pct >= 0.25, "change% too weak for CE"),
-                (pcr >= 0.85, "PCR too bearish for CE"),
-                (near_high or near_low, "no liquidity sweep context"),
+                (pcr == 0 or pcr >= 0.70, "PCR too bearish for CE"),
+                (near_high or near_low or continuation_context, "no sweep/continuation context"),
             ]
         else:
+            continuation_context = (
+                p <= (e20 * 1.002 if e20 > 0 else p)
+                and e20 <= e100
+                and change_pct <= -0.35
+                and rsi <= 48
+            )
             checks = [
-                (p < e20, "price >= EMA20"),
-                (e20 <= e100 <= e200, "EMA stack not bearish"),
+                (p <= (e20 * 1.002 if e20 > 0 else p), "price materially above EMA20"),
+                (e20 <= e100, "EMA stack not bearish"),
                 (p <= vwap, "price above VWAP"),
-                (28 <= rsi <= 52, "RSI outside bearish range"),
+                (22 <= rsi <= 60, "RSI outside bearish range"),
                 (oi_trend in ("SHORT_BUILDUP", "LONG_UNWINDING"), "OI trend not bearish"),
                 (change_pct <= -0.25, "change% too weak for PE"),
                 (pcr <= 1.05, "PCR too bullish for PE"),
-                (near_high or near_low, "no liquidity sweep context"),
+                (near_high or near_low or continuation_context, "no sweep/continuation context"),
             ]
 
         failed = [msg for ok, msg in checks if not ok]
@@ -525,8 +579,11 @@ class SmartAIAlgoService:
         ind: Dict[str, Any],
         rule_signal: Dict[str, Any],
     ) -> tuple[bool, str, int]:
-        if not self._ai_enabled or not settings.openai_api_key:
-            return False, "AI confirmation required but OpenAI is not configured/enabled", 0
+        cfg = _settings()
+        if not self._ai_enabled or not cfg.openai_api_key:
+            # Fallback to rule-engine execution when AI is unavailable.
+            # This prevents hard blocking of otherwise valid live setups.
+            return True, "AI unavailable; fallback to rule-based execution", 60
 
         user_prompt = (
             f"Symbol={symbol}; Signal={side}; Entry={rule_signal.get('entry_price', 0)}; "
@@ -539,7 +596,7 @@ class SmartAIAlgoService:
         )
 
         payload = {
-            "model": settings.openai_model,
+            "model": cfg.openai_model,
             "messages": [
                 {"role": "system", "content": "You are a strict intraday options execution validator. Return JSON only."},
                 {"role": "user", "content": user_prompt},
@@ -549,12 +606,12 @@ class SmartAIAlgoService:
         }
 
         try:
-            async with httpx.AsyncClient(timeout=settings.openai_timeout) as client:
+            async with httpx.AsyncClient(timeout=cfg.openai_timeout) as client:
                 resp = await client.post(
                     "https://api.openai.com/v1/chat/completions",
                     json=payload,
                     headers={
-                        "Authorization": f"Bearer {settings.openai_api_key}",
+                        "Authorization": f"Bearer {cfg.openai_api_key}",
                         "Content-Type": "application/json",
                     },
                 )
@@ -577,7 +634,9 @@ class SmartAIAlgoService:
             return False, f"AI confirmation failed: {exc}", 0
 
     async def _maybe_execute_trade(self, symbol: str, tick: Dict[str, Any], signal: Dict[str, Any]) -> None:
-        if not settings.algo_auto_trade_enabled:
+        cfg = _settings()
+
+        if not cfg.algo_auto_trade_enabled:
             logger.debug("Smart AI trade skipped for %s: auto trade disabled", symbol)
             return
 
@@ -592,27 +651,38 @@ class SmartAIAlgoService:
 
         confidence = int(signal.get("confidence", 0) or 0)
         strength = int(signal.get("strength", 0) or 0)
-        if confidence < settings.algo_min_trade_confidence:
+        indicators = signal.get("indicators") or {}
+        change_pct = float(indicators.get("change_pct", 0) or 0)
+        trend = str(indicators.get("trend", "") or "").upper()
+
+        # Adaptive threshold: allow slightly lower strength on strong directional continuation days.
+        min_strength_required = int(cfg.algo_min_trade_strength)
+        if side == "BUY" and change_pct >= 0.8 and trend in ("BULLISH", "STRONG_BUY"):
+            min_strength_required = max(20, min_strength_required - 10)
+        elif side == "SELL" and change_pct <= -0.8 and trend in ("BEARISH", "STRONG_SELL"):
+            min_strength_required = max(20, min_strength_required - 10)
+
+        if confidence < cfg.algo_min_trade_confidence:
             logger.debug(
                 "Smart AI trade skipped for %s %s: confidence %s < %s",
                 symbol,
                 side,
                 confidence,
-                settings.algo_min_trade_confidence,
+                cfg.algo_min_trade_confidence,
             )
             return
-        if strength < settings.algo_min_trade_strength:
+        if strength < min_strength_required:
             logger.debug(
                 "Smart AI trade skipped for %s %s: strength %s < %s",
                 symbol,
                 side,
                 strength,
-                settings.algo_min_trade_strength,
+                min_strength_required,
             )
             return
 
         now = time.time()
-        cooldown = max(0, int(settings.algo_trade_cooldown_sec))
+        cooldown = max(0, int(cfg.algo_trade_cooldown_sec))
         if now - self._last_trade_time[symbol] < cooldown:
             logger.debug("Smart AI trade skipped for %s %s: cooldown active", symbol, side)
             return
@@ -631,12 +701,12 @@ class SmartAIAlgoService:
             "confidence": confidence,
             "strength": strength,
             "timestamp": datetime.now(IST).isoformat(),
-            "mode": settings.algo_auto_trade_mode,
+            "mode": cfg.algo_auto_trade_mode,
             "status": "PENDING",
             "reason": signal.get("reasoning", ""),
         }
 
-        mode = (settings.algo_auto_trade_mode or "paper").lower().strip()
+        mode = (cfg.algo_auto_trade_mode or "paper").lower().strip()
         if mode not in ("paper", "live"):
             mode = "paper"
 
@@ -659,15 +729,15 @@ class SmartAIAlgoService:
         tradingsymbol = ""
         live_exchange = ""
 
-        if not settings.zerodha_api_key or not settings.zerodha_access_token:
+        if not cfg.zerodha_api_key or not cfg.zerodha_access_token:
             trade_event["status"] = "SKIPPED"
             trade_event["error"] = "Zerodha credentials missing"
             self._record_trade(symbol, side, now, trade_event)
             logger.warning("Smart AI LIVE trade skipped for %s %s: Zerodha credentials missing", symbol, side)
             return
 
-        kite = KiteConnect(api_key=settings.zerodha_api_key)
-        kite.set_access_token(settings.zerodha_access_token)
+        kite = KiteConnect(api_key=cfg.zerodha_api_key)
+        kite.set_access_token(cfg.zerodha_access_token)
 
         try:
             # For options strategy, we always BUY contracts (CE or PE).
@@ -784,7 +854,7 @@ class SmartAIAlgoService:
             price_offset = max(tick_size, option_ltp * 0.003)
             raw_limit = option_ltp + price_offset
             limit_price = self._round_price_to_tick(raw_limit, tick_size, "BUY")
-            requested_qty = max(1, int(settings.algo_trade_quantity))
+            requested_qty = max(1, int(cfg.algo_trade_quantity))
             quantity = int(math.ceil(requested_qty / lot_size) * lot_size)
             order_id = None
             for attempt in range(3):
@@ -1180,18 +1250,21 @@ class SmartAIAlgoService:
                 f"OI={ind['oi_trend']}, RSI={ind['rsi']}"
             )
 
-        # Keep execution-side strict gate and signal-side confluence aligned.
+        # Keep directional signal from rule engine; enforce strict gate only in
+        # execution stage so valid momentum setups are not prematurely flattened to WAIT.
         buy_gate_ok, buy_gate_reason = self._passes_advanced_option_gate(ind, "BUY")
         sell_gate_ok, sell_gate_reason = self._passes_advanced_option_gate(ind, "SELL")
 
-        if signal == "BUY" and not buy_gate_ok:
-            signal = "WAIT"
-            regime = "SIDEWAYS"
-            reasoning = f"Waiting: BUY gate blocked ({buy_gate_reason})"
-        elif signal == "SELL" and not sell_gate_ok:
-            signal = "WAIT"
-            regime = "SIDEWAYS"
-            reasoning = f"Waiting: SELL gate blocked ({sell_gate_reason})"
+        if signal == "BUY":
+            reasoning = (
+                reasoning if buy_gate_ok
+                else f"BUY setup forming; execution gate pending ({buy_gate_reason})"
+            )
+        elif signal == "SELL":
+            reasoning = (
+                reasoning if sell_gate_ok
+                else f"SELL setup forming; execution gate pending ({sell_gate_reason})"
+            )
 
         # Determine market regime only when there is no actionable signal.
         if signal == "WAIT":
