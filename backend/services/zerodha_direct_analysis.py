@@ -222,7 +222,7 @@ class ZerodhaDirectAnalysis:
     
     def _fallback_analysis(self, symbol: str, error: str = None) -> Dict[str, Any]:
         """Fallback when API unavailable - provides valid structure"""
-        
+        settings = get_settings()
         return {
             "symbol": symbol,
             "symbol_name": self.symbols.get(symbol, {}).get("name", symbol),

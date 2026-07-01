@@ -346,6 +346,8 @@ export function useMemoizedSmartMoneyAnalysis(data: SmartMoneyFlowData | null) {
  * Fetches order flow data for multiple symbols in parallel
  */
 export function useSmartMoneyFlowMultiRealtime(symbols: string[]) {
+  // symbols is a stable constant tuple in all call-sites; hook count is fixed across renders.
+  // eslint-disable-next-line react-hooks/rules-of-hooks
   const hooks = symbols.map((symbol) => useSmartMoneyFlowRealtime(symbol));
 
   const allData = useMemo(() => {

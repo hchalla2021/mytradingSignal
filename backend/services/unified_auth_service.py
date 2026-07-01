@@ -131,6 +131,27 @@ class UnifiedAuthService:
             True if token is valid, False otherwise
         """
         now = datetime.now(IST)
+
+        # Always refresh settings/token from .env before validation.
+        # Scheduler calls this during feed startup; stale in-memory token must
+        # never block a valid post-login token from being used.
+        try:
+            get_settings.cache_clear()
+            self.settings = get_settings()
+            latest_token = self.settings.zerodha_access_token
+            if latest_token and latest_token != self._token:
+                self._token = latest_token
+                env_path = Path(__file__).parent.parent / ".env"
+                if env_path.exists():
+                    self._token_timestamp = datetime.fromtimestamp(env_path.stat().st_mtime, tz=IST)
+                else:
+                    self._token_timestamp = now
+                # Reset expired/required states when a fresh token is detected.
+                if self._status in (AuthStatus.EXPIRED, AuthStatus.REQUIRED):
+                    self._status = AuthStatus.VALID
+        except Exception:
+            # Keep existing state if reload fails; validation below handles result.
+            pass
         
         # Use cached result if recently checked (unless forced)
         if not force and self._last_validation:

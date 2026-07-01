@@ -316,6 +316,8 @@ export function useMemoizedHighVolumeAnalysis(data: HighVolumeCandleData | null)
  * Fetches volume data for multiple symbols in parallel
  */
 export function useHighVolumeCandleMultiRealtime(symbols: string[]) {
+  // symbols is a stable constant tuple in all call-sites; hook count is fixed across renders.
+  // eslint-disable-next-line react-hooks/rules-of-hooks
   const hooks = symbols.map((symbol) => useHighVolumeCandleRealtime(symbol));
 
   const allData = useMemo(() => {

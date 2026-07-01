@@ -733,7 +733,7 @@ class AnalysisEngine:
         
         return AnalysisSignal(
             symbol="",
-            rsi_60_40_momentum=rsi_momentum,
+            rsi_60_40_momentum=None,
             signal_type=signal_type,
             confidence_score=confidence,
             indicators=indicators,

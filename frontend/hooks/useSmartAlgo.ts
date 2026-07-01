@@ -37,21 +37,59 @@ export interface AlgoSignal {
   confidence: number;
   sl_points: number;
   target_points: number;
-  regime: 'TRENDING_UP' | 'TRENDING_DOWN' | 'SIDEWAYS' | 'VOLATILE' | 'UNKNOWN';
+  regime: string;
   strength: number;
   reasoning: string;
   indicators: AlgoIndicators;
   ai_powered: boolean;
   last_updated: number;
   market_status: string;
+  // QuantEdge quant payload
+  alpha_score?: number;
+  factor_scores?: { momentum: number; trend: number; structure: number; sentiment: number };
+  regime_detail?: { volatility: string; trend: string; favorable: boolean };
+  edge_triggers?: string[];
+  win_probability?: number;
+  expected_value_points?: number;
+  risk_reward_ratio?: number;
+  kelly_fraction?: number;
+  confluence_gate?: {
+    passed: boolean;
+    reasons: string[];
+    bull_gate?: number;
+    bear_gate?: number;
+    fatigue_penalty?: number;
+    recent_attempts_15m?: number;
+    exec_gate_ok?: boolean;
+    exec_gate_reason?: string;
+  };
+  signal_quality?: number;
+  signal_grade?: 'ELITE' | 'STRONG' | 'GOOD' | 'WATCH';
+  ml_prediction?: {
+    direction: 'UP' | 'DOWN' | 'FLAT' | 'UNKNOWN';
+    probability: number;
+    confidence: number;
+    horizon_ticks: number;
+    expected_move_pct: number;
+    samples_trained: number;
+    buffer_size: number;
+    backend: string;
+    model_status: 'warmup' | 'live' | 'error';
+  };
+  ml_feedback?: { applied: boolean; note: string };
   option_tradingsymbol?: string;
   option_type?: 'CE' | 'PE';
   option_expiry?: string;
   option_strike?: number;
+  option_moneyness?: string;
   option_ltp?: number;
   option_best_bid_price?: number;
   option_best_ask_price?: number;
   option_best_buy_price?: number;
+  option_quality_ok?: boolean;
+  option_spread_pct?: number;
+  option_volume?: number;
+  option_oi?: number;
   option_price_updated_at?: number;
   option_entry_buy_price?: number;
   option_unrealized_pnl_points?: number;
@@ -65,6 +103,8 @@ export interface AlgoSignal {
   auto_buy_ai_passed?: boolean;
   auto_buy_ai_reason?: string;
   auto_buy_ai_confidence?: number;
+  data_status?: 'LIVE' | 'SLOW' | 'STALE' | 'NO_DATA' | 'UNKNOWN' | 'ERROR';
+  tick_age_seconds?: number;
 }
 
 export type AlgoData = Record<string, AlgoSignal>;

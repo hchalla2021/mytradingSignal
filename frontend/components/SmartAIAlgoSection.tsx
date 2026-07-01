@@ -72,11 +72,24 @@ const SIG = {
 type SigKey = keyof typeof SIG;
 
 const REGIME: Record<string, { icon: string; label: string; color: string }> = {
-  TRENDING_UP:   { icon: '↑', label: 'Trending Up',   color: 'text-emerald-400' },
-  TRENDING_DOWN: { icon: '↓', label: 'Trending Down', color: 'text-red-400'     },
-  SIDEWAYS:      { icon: '↔', label: 'Sideways',      color: 'text-amber-400'   },
-  VOLATILE:      { icon: '⚡', label: 'Volatile',      color: 'text-violet-400'  },
-  UNKNOWN:       { icon: '·', label: 'Detecting…',    color: 'text-slate-500'   },
+  TRENDING_UP:        { icon: '↑', label: 'Trending Up',      color: 'text-emerald-400' },
+  TRENDING_WEAK_UP:   { icon: '↗', label: 'Weak Uptrend',     color: 'text-emerald-300' },
+  TRENDING_DOWN:      { icon: '↓', label: 'Trending Down',    color: 'text-red-400'     },
+  TRENDING_WEAK_DOWN: { icon: '↘', label: 'Weak Downtrend',   color: 'text-red-300'     },
+  SIDEWAYS:           { icon: '↔', label: 'Sideways',         color: 'text-amber-400'   },
+  RANGING:            { icon: '↔', label: 'Range-bound',      color: 'text-amber-400'   },
+  NEUTRAL:            { icon: '○', label: 'Neutral',          color: 'text-slate-400'   },
+  VOLATILE:           { icon: '⚡', label: 'Volatile',         color: 'text-violet-400'  },
+  UNKNOWN:            { icon: '·', label: 'Detecting…',       color: 'text-slate-500'   },
+};
+
+const GRADE: Record<string, { label: string; color: string; bg: string }> = {
+  ELITE:    { label: 'ELITE',    color: 'text-emerald-100', bg: 'bg-gradient-to-r from-emerald-600 to-teal-500 border-emerald-300/70 shadow-[0_0_14px_rgba(16,185,129,0.55)]' },
+  STRONG:   { label: 'STRONG',   color: 'text-emerald-200', bg: 'bg-gradient-to-r from-emerald-700/70 to-teal-700/60 border-emerald-500/50' },
+  GOOD:     { label: 'GOOD',     color: 'text-cyan-200',    bg: 'bg-gradient-to-r from-cyan-800/60 to-sky-800/60 border-cyan-500/50' },
+  CLOSE:    { label: 'CLOSE',    color: 'text-amber-100',   bg: 'bg-gradient-to-r from-amber-700/70 to-orange-700/60 border-amber-400/60 shadow-[0_0_10px_rgba(251,191,36,0.35)]' },
+  BUILDING: { label: 'BUILDING', color: 'text-sky-200',     bg: 'bg-gradient-to-r from-sky-800/60 to-indigo-800/60 border-sky-500/50' },
+  WATCH:    { label: 'WATCH',    color: 'text-slate-300',   bg: 'bg-gradient-to-r from-slate-700/70 to-slate-800/60 border-slate-600/50' },
 };
 
 // ─── flash hook ───────────────────────────────────────────────────────────────
@@ -139,7 +152,68 @@ const PriceCell = React.memo(function PriceCell({
   );
 });
 
-// ─── IndicatorPill ────────────────────────────────────────────────────────────
+// ─── FreshnessBadge ───────────────────────────────────────────────────────────
+// Shows whether the reasoning line is fresh (LIVE), lagging (SLOW), or frozen (STALE/NO_DATA).
+// Traders instantly know if "No-trade: …" reflects the current tape or a snapshot from minutes ago.
+
+const FreshnessBadge = React.memo(function FreshnessBadge({
+  status, ageSec,
+}: { status?: 'LIVE' | 'SLOW' | 'STALE' | 'NO_DATA' | 'UNKNOWN' | 'ERROR'; ageSec?: number }) {
+  const s = status ?? 'UNKNOWN';
+  const age = typeof ageSec === 'number' ? ageSec : -1;
+  const cls =
+    s === 'LIVE'    ? 'border-emerald-500/60 bg-emerald-900/30 text-emerald-200' :
+    s === 'SLOW'    ? 'border-amber-500/60   bg-amber-900/25   text-amber-200'   :
+    s === 'STALE'   ? 'border-red-500/60     bg-red-900/25     text-red-200'     :
+    s === 'NO_DATA' ? 'border-red-500/60     bg-red-950/40     text-red-300'     :
+    s === 'ERROR'   ? 'border-red-600/70     bg-red-950/50     text-red-200'     :
+                      'border-slate-600/50   bg-slate-800/40   text-slate-300';
+  const dotCls =
+    s === 'LIVE'    ? 'bg-emerald-400 animate-pulse' :
+    s === 'SLOW'    ? 'bg-amber-400'   :
+    s === 'STALE'   ? 'bg-red-400'     :
+    s === 'NO_DATA' ? 'bg-red-500'     :
+    s === 'ERROR'   ? 'bg-red-600 animate-pulse' :
+                      'bg-slate-500';
+  const ageTxt =
+    s === 'NO_DATA' ? 'no tick' :
+    s === 'ERROR'   ? 'engine err' :
+    age < 0         ? '—'       :
+    age < 60        ? `${age}s` :
+                      `${Math.floor(age / 60)}m ${age % 60}s`;
+  return (
+    <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded border ${cls} text-[9px] font-black tracking-wider`}>
+      <span className={`w-1.5 h-1.5 rounded-full ${dotCls}`} />
+      {s} {ageTxt}
+    </span>
+  );
+});
+
+// ─── MarketStatusBadge ────────────────────────────────────────────────────────
+// Distinguishes LIVE tape vs weekend/holiday close vs pre-open. Without this,
+// a genuine "WAIT / Neutral" on a closed market looks identical to a broken engine.
+
+const MarketStatusBadge = React.memo(function MarketStatusBadge({
+  status,
+}: { status?: string }) {
+  const s = (status ?? 'CLOSED').toUpperCase();
+  const cls =
+    s === 'LIVE'     ? 'border-emerald-500/60 bg-emerald-900/25 text-emerald-200' :
+    s === 'PRE_OPEN' ? 'border-sky-500/60     bg-sky-900/25     text-sky-200'     :
+    s === 'CLOSED'   ? 'border-slate-600/60   bg-slate-800/50   text-slate-300'   :
+                       'border-slate-600/50   bg-slate-800/40   text-slate-300';
+  const dotCls =
+    s === 'LIVE'     ? 'bg-emerald-400 animate-pulse' :
+    s === 'PRE_OPEN' ? 'bg-sky-400'    :
+                       'bg-slate-500';
+  const label = s === 'PRE_OPEN' ? 'PRE-OPEN' : s;
+  return (
+    <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded border ${cls} text-[9px] font-black tracking-wider`}>
+      <span className={`w-1.5 h-1.5 rounded-full ${dotCls}`} />
+      {label}
+    </span>
+  );
+});// ─── IndicatorPill ────────────────────────────────────────────────────────────
 
 const IndicatorPill = React.memo(function IndicatorPill({
   label, value, ok,
@@ -226,7 +300,6 @@ const SymbolCard = React.memo(function SymbolCard({
   const ind: Partial<AlgoIndicators> = algo.indicators ?? {};
   const flashCls = useFlashClass(algo.entry_price);
   const isActive = sig !== 'WAIT';
-  const hasSignalPrices = isActive && algo.entry_price > 0;
 
   const vwapOk = typeof ind.price === 'number' && typeof ind.vwap === 'number' && ind.vwap > 0
     ? ind.price > ind.vwap : null;
@@ -239,21 +312,44 @@ const SymbolCard = React.memo(function SymbolCard({
   const pnlColor = pnlAmt > 0 ? 'text-emerald-300' : pnlAmt < 0 ? 'text-red-300' : 'text-slate-200';
   const autoReady = Boolean(algo.auto_buy_ready);
   const inferredSide = sig === 'BUY' ? 'CE' : sig === 'SELL' ? 'PE' : undefined;
-  const autoSide = algo.recommended_option_side ?? algo.option_type ?? inferredSide ?? 'CE/PE';
+  const autoSide = algo.recommended_option_side || algo.option_type || inferredSide || '—';
   const autoBestBuy = [
     algo.option_best_buy_price,
     algo.option_best_ask_price,
     algo.option_ltp,
   ].find((v) => typeof v === 'number' && (v as number) > 0) ?? 0;
-  const autoBestBuyLabel = autoBestBuy > 0 ? fmt(autoBestBuy) : 'Calculating...';
+  const autoBestBuyLabel = autoBestBuy > 0 ? fmt(autoBestBuy) : (isActive ? 'Awaiting option feed' : '—');
   const gatePassed = Boolean(algo.auto_buy_gate_passed);
   const aiPassed = Boolean(algo.auto_buy_ai_passed);
   const aiConf = algo.auto_buy_ai_confidence ?? 0;
+
+  // Prefer real backend reasoning — it now carries the exact "why WAIT" text.
+  const backendReason = algo.reasoning?.trim() || '';
   const autoReason =
     algo.auto_buy_block_reason ||
     algo.auto_buy_gate_reason ||
     algo.auto_buy_ai_reason ||
+    backendReason ||
     (isActive ? 'Monitoring confluence and AI confirmation.' : 'Waiting for directional setup.');
+
+  // QuantEdge intelligence — always visible, even on WAIT so the trader sees the setup being watched.
+  const alphaScore = typeof algo.alpha_score === 'number' ? algo.alpha_score : 50;
+  const grade = algo.signal_grade && GRADE[algo.signal_grade] ? GRADE[algo.signal_grade] : GRADE.WATCH;
+  const qualityScore = typeof algo.signal_quality === 'number' ? algo.signal_quality : 0;
+  const edges = algo.edge_triggers ?? [];
+  const factors = algo.factor_scores;
+  const rr = algo.risk_reward_ratio ?? 0;
+  const evPts = algo.expected_value_points ?? 0;
+  const winProb = algo.win_probability ?? 0;
+  const mlPred = algo.ml_prediction;
+  const mlLive = mlPred?.model_status === 'live';
+  const mlNote = algo.ml_feedback?.note || '';
+
+  // Watched levels: always show current market price + would-be SL/TGT so the trader
+  // sees exactly what the algo is monitoring, even before a genuine signal fires.
+  const showPrices = algo.entry_price > 0;
+  const entryLabel = isActive ? 'ENTRY' : 'WATCHING';
+  const priceSublabel = isActive ? 'confirmed' : 'live px';
 
   return (
     <div className={`
@@ -315,6 +411,57 @@ const SymbolCard = React.memo(function SymbolCard({
           </div>
         </div>
 
+        {/* QuantEdge intelligence strip — always visible so the trader sees the setup being watched */}
+        <div className="rounded-lg border border-slate-700/50 bg-gradient-to-r from-slate-900/60 to-slate-800/40 px-3 py-2.5 space-y-2">
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            <div className="flex items-center gap-2">
+              <span className={`px-2 py-0.5 rounded-md text-[10px] font-black border tracking-wider ${grade.bg} ${grade.color}`}>
+                {grade.label}
+              </span>
+              <span className="text-[10px] sm:text-[11px] text-slate-400 font-semibold">
+                Quality <span className="text-white font-black">{qualityScore.toFixed(0)}</span>/100
+              </span>
+              <span className="text-[10px] sm:text-[11px] text-slate-400 font-semibold">
+                Alpha <span className={alphaScore >= 60 ? 'text-emerald-300 font-black' : alphaScore <= 40 ? 'text-red-300 font-black' : 'text-slate-200 font-black'}>{alphaScore.toFixed(0)}</span>
+              </span>
+            </div>
+            {mlPred && (
+              <span className={`text-[10px] sm:text-[11px] font-semibold ${mlLive ? (mlPred.direction === 'UP' ? 'text-emerald-300' : mlPred.direction === 'DOWN' ? 'text-red-300' : 'text-slate-300') : 'text-slate-500'}`}>
+                ML: {mlLive ? `${mlPred.direction} · p=${(mlPred.probability ?? 0.5).toFixed(2)}` : `warm-up (${mlPred.samples_trained ?? 0}/120)`}
+              </span>
+            )}
+          </div>
+          {factors && (
+            <div className="grid grid-cols-4 gap-1.5 text-[10px] sm:text-[11px]">
+              <span className="text-center rounded-md py-1 border border-slate-700/50 bg-slate-800/40">
+                <span className="text-slate-400">Mom </span><span className={factors.momentum >= 55 ? 'text-emerald-300 font-black' : factors.momentum <= 45 ? 'text-red-300 font-black' : 'text-slate-200 font-black'}>{factors.momentum.toFixed(0)}</span>
+              </span>
+              <span className="text-center rounded-md py-1 border border-slate-700/50 bg-slate-800/40">
+                <span className="text-slate-400">Trend </span><span className={factors.trend >= 55 ? 'text-emerald-300 font-black' : factors.trend <= 45 ? 'text-red-300 font-black' : 'text-slate-200 font-black'}>{factors.trend.toFixed(0)}</span>
+              </span>
+              <span className="text-center rounded-md py-1 border border-slate-700/50 bg-slate-800/40">
+                <span className="text-slate-400">Struct </span><span className={factors.structure >= 55 ? 'text-emerald-300 font-black' : factors.structure <= 45 ? 'text-red-300 font-black' : 'text-slate-200 font-black'}>{factors.structure.toFixed(0)}</span>
+              </span>
+              <span className="text-center rounded-md py-1 border border-slate-700/50 bg-slate-800/40">
+                <span className="text-slate-400">Sent </span><span className={factors.sentiment >= 55 ? 'text-emerald-300 font-black' : factors.sentiment <= 45 ? 'text-red-300 font-black' : 'text-slate-200 font-black'}>{factors.sentiment.toFixed(0)}</span>
+              </span>
+            </div>
+          )}
+          <div className="flex items-center justify-between gap-2 text-[10px] sm:text-[11px] flex-wrap">
+            <span className="text-slate-400 font-semibold">
+              Edges: <span className="text-cyan-200 font-mono">{edges.length > 0 ? edges.join(', ') : 'none armed'}</span>
+            </span>
+            {isActive && (
+              <span className="text-slate-400 font-semibold">
+                p_win <span className="text-white font-black">{(winProb * 100).toFixed(0)}%</span> · R:R <span className="text-white font-black">{rr.toFixed(2)}</span> · EV <span className={evPts > 0 ? 'text-emerald-300 font-black' : 'text-red-300 font-black'}>{evPts >= 0 ? '+' : ''}{evPts.toFixed(1)}pt</span>
+              </span>
+            )}
+          </div>
+          {mlNote && (
+            <div className="text-[10px] text-slate-400 italic">{mlNote}</div>
+          )}
+        </div>
+
         {/* Auto-buy preview directly under confidence */}
         <div className="rounded-lg border border-cyan-600/30 bg-gradient-to-r from-slate-900/45 to-cyan-900/15 px-3 py-2.5 space-y-2">
           <div className="flex items-center justify-between gap-2">
@@ -324,8 +471,32 @@ const SymbolCard = React.memo(function SymbolCard({
             </span>
           </div>
           <div className="mt-1.5 flex items-center justify-between gap-2 text-[10px] sm:text-[11px]">
-            <span className="text-slate-300 font-semibold">
-              Side: <span className="text-white font-black">{autoSide}</span>
+            <span className="text-slate-300 font-semibold flex items-center gap-1.5">
+              Side:
+              {(() => {
+                const s = String(autoSide).toUpperCase();
+                if (s === 'CE') {
+                  return (
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md border-2 border-emerald-400 bg-emerald-900/40 text-emerald-200 font-black text-[11px] sm:text-xs shadow-[0_0_8px_rgba(16,185,129,0.5)]">
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                      CE
+                    </span>
+                  );
+                }
+                if (s === 'PE') {
+                  return (
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md border-2 border-red-400 bg-red-900/40 text-red-200 font-black text-[11px] sm:text-xs shadow-[0_0_8px_rgba(239,68,68,0.5)]">
+                      <span className="w-1.5 h-1.5 rounded-full bg-red-400 animate-pulse" />
+                      PE
+                    </span>
+                  );
+                }
+                return (
+                  <span className="inline-flex items-center px-2 py-0.5 rounded-md border border-slate-600 bg-slate-800/60 text-slate-300 font-bold text-[11px]">
+                    {autoSide}
+                  </span>
+                );
+              })()}
             </span>
             <span className="text-slate-300 font-semibold">
               Best Buy: <span className="text-emerald-300 font-black">{autoBestBuyLabel}</span>
@@ -342,7 +513,7 @@ const SymbolCard = React.memo(function SymbolCard({
               EXEC {autoReady ? 'ARMED' : 'HOLD'}
             </span>
           </div>
-          <div className="text-[10px] sm:text-[11px] text-slate-300 leading-relaxed">
+          <div className="h-12 overflow-y-auto pr-1 text-[10px] sm:text-[11px] text-slate-300 leading-relaxed">
             {autoReason}
           </div>
         </div>
@@ -350,24 +521,24 @@ const SymbolCard = React.memo(function SymbolCard({
         {/* Price grid: always mounted to avoid flicker on state transitions */}
         <div className="space-y-2.5">
           <div className="grid grid-cols-4 gap-2.5">
-            <div className={hasSignalPrices ? flashCls : ''}>
-              <PriceCell label="ENTRY" value={hasSignalPrices ? fmt(algo.entry_price) : '—'} color="text-white font-black" />
+            <div className={showPrices ? flashCls : ''}>
+              <PriceCell label={entryLabel} value={showPrices ? fmt(algo.entry_price) : '—'} color={isActive ? 'text-white font-black' : 'text-slate-100'} sublabel={showPrices ? priceSublabel : undefined} />
             </div>
             <PriceCell
-              label="SL"
-              value={hasSignalPrices ? fmt(algo.stop_loss) : '—'}
+              label={isActive ? 'SL' : 'SL LEVEL'}
+              value={showPrices ? fmt(algo.stop_loss) : '—'}
               color="text-red-400"
               sublabel={`−${slPoints}pt`}
             />
             <PriceCell
-              label="TARGET"
-              value={hasSignalPrices ? fmt(algo.target) : '—'}
+              label={isActive ? 'TARGET' : 'TGT LEVEL'}
+              value={showPrices ? fmt(algo.target) : '—'}
               color="text-emerald-400"
               sublabel={`+${targetPoints}pt`}
             />
             <PriceCell
               label="TSL"
-              value={hasSignalPrices ? fmt(algo.trailing_stop_loss) : '—'}
+              value={showPrices ? fmt(algo.trailing_stop_loss) : '—'}
               color="text-amber-300"
               sublabel="trailing"
             />
@@ -376,10 +547,89 @@ const SymbolCard = React.memo(function SymbolCard({
           {(algo.option_tradingsymbol || (algo.option_best_buy_price ?? 0) > 0) && (
             <div className="rounded-lg border border-cyan-600/30 bg-gradient-to-r from-slate-900/40 to-cyan-900/10 p-2.5 space-y-2">
               <div className="flex items-center justify-between gap-2">
-                <span className="text-[10px] sm:text-[11px] font-bold text-cyan-300 tracking-wide">OPTION EXECUTION PRICE</span>
-                <span className="text-[10px] sm:text-[11px] font-mono text-slate-300 truncate max-w-[60%] text-right">
+                <div className="flex items-center gap-2 min-w-0">
+                  <span className="text-[10px] sm:text-[11px] font-bold text-cyan-300 tracking-wide">OPTION EXECUTION PRICE</span>
+                  {/* Quality badge: green when broker data passes all gates, amber otherwise. */}
+                  {algo.option_quality_ok ? (
+                    <span className="text-[9px] font-black px-1.5 py-0.5 rounded bg-emerald-900/50 text-emerald-300 border border-emerald-500/40 shadow-[0_0_6px_rgba(16,185,129,0.3)]">
+                      ✓ QUALITY OK
+                    </span>
+                  ) : (
+                    <span className="text-[9px] font-black px-1.5 py-0.5 rounded bg-amber-900/40 text-amber-300 border border-amber-500/40">
+                      ⏳ QUALITY LOW
+                    </span>
+                  )}
+                </div>
+                <span className="text-[10px] sm:text-[11px] font-mono text-slate-300 truncate max-w-[45%] text-right">
                   {algo.option_tradingsymbol || '—'}
                 </span>
+              </div>
+              {/* Strike / spot / tier / expiry — the backend now picks ITM+1 or ATM+1 for best delta/spread */}
+              {(() => {
+                const strike = Number(algo.option_strike ?? 0);
+                const spot = Number(algo.entry_price ?? 0) || Number(algo.indicators?.price ?? 0);
+                const optType = String(algo.option_type ?? algo.recommended_option_side ?? '');
+                const tier = String(algo.option_moneyness ?? '').toUpperCase();
+                let tierColor = 'text-slate-300';
+                if (tier === 'ITM+1') tierColor = 'text-emerald-300';
+                else if (tier === 'ATM+1') tierColor = 'text-cyan-300';
+                else if (tier === 'ATM') tierColor = 'text-amber-300';
+                let expiryTxt = '—';
+                const rawExp = String(algo.option_expiry ?? '');
+                if (rawExp) {
+                  const d = new Date(rawExp);
+                  expiryTxt = Number.isNaN(d.getTime())
+                    ? rawExp
+                    : d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: '2-digit' });
+                }
+                const strikeTxt = strike > 0 ? strike.toLocaleString('en-IN') : '—';
+                const spotTxt = spot > 0 ? spot.toLocaleString('en-IN', { maximumFractionDigits: 2 }) : '—';
+                return (
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                    <div className="rounded-md border border-cyan-500/30 bg-slate-900/50 px-2 py-1.5">
+                      <div className="text-[9px] text-slate-400 font-bold tracking-widest uppercase">STRIKE</div>
+                      <div className="text-sm font-black font-mono text-white leading-tight">
+                        {strikeTxt} <span className={`text-xs ${optType === 'PE' ? 'text-red-300' : 'text-emerald-300'}`}>{optType || ''}</span>
+                      </div>
+                    </div>
+                    <div className="rounded-md border border-slate-600/40 bg-slate-900/50 px-2 py-1.5">
+                      <div className="text-[9px] text-slate-400 font-bold tracking-widest uppercase">SPOT</div>
+                      <div className="text-sm font-black font-mono text-white leading-tight">{spotTxt}</div>
+                    </div>
+                    <div className="rounded-md border border-slate-600/40 bg-slate-900/50 px-2 py-1.5">
+                      <div className="text-[9px] text-slate-400 font-bold tracking-widest uppercase">TIER</div>
+                      <div className={`text-sm font-black font-mono leading-tight ${tierColor}`}>{tier || '—'}</div>
+                    </div>
+                    <div className="rounded-md border border-slate-600/40 bg-slate-900/50 px-2 py-1.5">
+                      <div className="text-[9px] text-slate-400 font-bold tracking-widest uppercase">EXPIRY</div>
+                      <div className="text-sm font-black font-mono text-white leading-tight">{expiryTxt}</div>
+                    </div>
+                  </div>
+                );
+              })()}
+              {/* Liquidity row — spread%, OI, volume. Traders scan these first. */}
+              <div className="grid grid-cols-3 gap-2">
+                <div className="rounded-md border border-slate-600/40 bg-slate-900/50 px-2 py-1.5">
+                  <div className="text-[9px] text-slate-400 font-bold tracking-widest uppercase">SPREAD</div>
+                  <div className={`text-sm font-black font-mono leading-tight ${
+                    (algo.option_spread_pct ?? 0) > 0 && (algo.option_spread_pct ?? 0) <= 5 ? 'text-emerald-300' :
+                    (algo.option_spread_pct ?? 0) <= 15 ? 'text-amber-300' : 'text-red-300'
+                  }`}>
+                    {(algo.option_spread_pct ?? 0) > 0 ? `${(algo.option_spread_pct ?? 0).toFixed(1)}%` : '—'}
+                  </div>
+                </div>
+                <div className="rounded-md border border-slate-600/40 bg-slate-900/50 px-2 py-1.5">
+                  <div className="text-[9px] text-slate-400 font-bold tracking-widest uppercase">OI</div>
+                  <div className="text-sm font-black font-mono text-white leading-tight">
+                    {(algo.option_oi ?? 0) > 0 ? Math.round(algo.option_oi ?? 0).toLocaleString('en-IN') : '—'}
+                  </div>
+                </div>
+                <div className="rounded-md border border-slate-600/40 bg-slate-900/50 px-2 py-1.5">
+                  <div className="text-[9px] text-slate-400 font-bold tracking-widest uppercase">VOL</div>
+                  <div className="text-sm font-black font-mono text-white leading-tight">
+                    {(algo.option_volume ?? 0) > 0 ? Math.round(algo.option_volume ?? 0).toLocaleString('en-IN') : '—'}
+                  </div>
+                </div>
               </div>
               <div className="grid grid-cols-4 gap-2">
                 <PriceCell label="OPT LTP" value={fmt(algo.option_ltp ?? 0)} color="text-slate-100" />
@@ -392,14 +642,43 @@ const SymbolCard = React.memo(function SymbolCard({
                 <PriceCell label="P/L PTS" value={fmt(pnlPts)} color={pnlColor} />
                 <PriceCell label="P/L ₹" value={fmt(pnlAmt)} color={pnlColor} />
               </div>
-              <div className="rounded-md border border-slate-600/40 bg-slate-900/40 p-2">
-                <div className="flex items-center justify-between gap-2">
-                  <span className="text-[10px] sm:text-[11px] font-bold text-slate-200">AUTO-BUY (OPTIONS ONLY)</span>
+              <div className="rounded-md border border-slate-600/40 bg-slate-900/40 p-2 space-y-2">
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <span className="text-[10px] sm:text-[11px] font-bold text-slate-200">AUTO-BUY (OPTIONS ONLY)</span>
+                    <MarketStatusBadge status={algo.market_status} />
+                    <FreshnessBadge status={algo.data_status} ageSec={algo.tick_age_seconds} />
+                  </div>
                   <span className={`text-[10px] sm:text-[11px] font-black ${autoReady ? 'text-emerald-300' : 'text-amber-300'}`}>
-                    {autoReady ? 'ALL MATCHED' : 'WAITING MATCH'}
+                    {autoReady ? '✅ ALL MATCHED' : '⏳ WAITING MATCH'}
                   </span>
                 </div>
-                <div className="mt-1 text-[10px] sm:text-[11px] text-slate-300 leading-relaxed">
+                {/* Sequential 3-step checklist: Confluence → AI → Execute */}
+                <div className="grid grid-cols-3 gap-1.5">
+                  <div className={`flex items-center gap-1.5 px-2 py-1 rounded border ${
+                    gatePassed ? 'border-emerald-500/50 bg-emerald-900/25 text-emerald-200'
+                               : 'border-amber-500/40 bg-amber-900/15 text-amber-200'
+                  }`}>
+                    <span className="text-[11px] font-black">{gatePassed ? '①✓' : '①'}</span>
+                    <span className="text-[9px] font-bold tracking-wide">CONFLUENCE</span>
+                  </div>
+                  <div className={`flex items-center gap-1.5 px-2 py-1 rounded border ${
+                    aiPassed ? 'border-emerald-500/50 bg-emerald-900/25 text-emerald-200'
+                             : gatePassed ? 'border-violet-500/50 bg-violet-900/20 text-violet-200'
+                                          : 'border-slate-600/40 bg-slate-800/40 text-slate-400'
+                  }`}>
+                    <span className="text-[11px] font-black">{aiPassed ? '②✓' : '②'}</span>
+                    <span className="text-[9px] font-bold tracking-wide">AI {aiPassed ? `${aiConf}%` : 'CHECK'}</span>
+                  </div>
+                  <div className={`flex items-center gap-1.5 px-2 py-1 rounded border ${
+                    autoReady ? 'border-emerald-500/50 bg-emerald-900/25 text-emerald-200'
+                              : 'border-slate-600/40 bg-slate-800/40 text-slate-400'
+                  }`}>
+                    <span className="text-[11px] font-black">{autoReady ? '③✓' : '③'}</span>
+                    <span className="text-[9px] font-bold tracking-wide">{autoReady ? 'ARMED' : 'HOLD'}</span>
+                  </div>
+                </div>
+                <div className="h-12 overflow-y-auto pr-1 text-[10px] sm:text-[11px] text-slate-300 leading-relaxed">
                   {autoReady
                     ? `Ready to auto-buy ${algo.recommended_option_side ?? 'OPTION'} at best buy ${fmt(algo.option_best_buy_price ?? 0)}.`
                     : (algo.auto_buy_block_reason || algo.auto_buy_gate_reason || algo.auto_buy_ai_reason || 'Waiting for all parameters and AI confirmation.')}
@@ -407,17 +686,6 @@ const SymbolCard = React.memo(function SymbolCard({
               </div>
             </div>
           )}
-        </div>
-
-        {/* Confluence status strip: always mounted to avoid appear/disappear flicker */}
-        <div className={`flex items-center justify-center min-h-[44px] py-3 rounded-xl border shadow-[0_0_12px_rgba(34,211,238,0.08)] ${
-          isActive
-            ? 'border-emerald-600/25 bg-gradient-to-r from-emerald-900/15 to-teal-900/10'
-            : 'border-cyan-600/25 bg-gradient-to-r from-slate-800/30 to-cyan-900/15'
-        }`}>
-          <span className={`text-[11px] font-medium ${isActive ? 'text-emerald-300' : 'text-slate-400'}`}>
-            {isActive ? '✅ Confluence matched. Signal active.' : '⏳ Waiting for strong confluence…'}
-          </span>
         </div>
 
         {/* SL / Target steppers */}
@@ -471,7 +739,7 @@ const SymbolCard = React.memo(function SymbolCard({
         {/* AI reasoning */}
         <div className="flex items-start gap-2 px-2.5 py-2.5 rounded-lg border border-cyan-600/25 bg-gradient-to-r from-slate-900/50 to-cyan-900/10 shadow-[0_0_8px_rgba(34,211,238,0.1)]">
           <span className="text-[10px] shrink-0 mt-0.5">{algo.ai_powered ? '🤖' : '⚙️'}</span>
-          <p className="text-[10px] sm:text-[11px] text-slate-300 leading-relaxed">
+          <p className="h-12 overflow-y-auto pr-1 text-[10px] sm:text-[11px] text-slate-300 leading-relaxed">
             {algo.reasoning || 'Analysing market structure…'}
           </p>
         </div>

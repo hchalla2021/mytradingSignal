@@ -2819,51 +2819,11 @@ async def get_smart_money_flow(symbol: str) -> Dict[str, Any]:
         absorption_strength = float(zone_control.get('absorption_strength', 50.0)) if isinstance(zone_control, dict) else 50.0
         wick_dominance = float(zone_control.get('wick_dominance', 50.0)) if isinstance(zone_control, dict) else 50.0
 
-        from services.trade_zones_ai import trade_zones_ai_engine
-
-        try:
-            ai = trade_zones_ai_engine.infer(
-                symbol=symbol,
-                current_price=current_price,
-                zone_classification=zone_classification,
-                zone_description=zone_description,
-                buy_signal=buy_signal,
-                buy_confidence=buy_confidence,
-                buy_volume_pct=buy_volume_ratio,
-                sell_signal=sell_signal,
-                sell_confidence=sell_confidence,
-                sell_volume_pct=100 - buy_volume_ratio,
-                overall_signal=overall_signal,
-                signal_confidence=signal_confidence,
-                entry_quality=entry_quality,
-                risk_reward_ratio=rr_ratio,
-                trend_structure=trend_structure,
-                volume_strength=volume_strength,
-                vwap_price=vwap_value,
-                ema_20=ema_20,
-                ema_50=ema_50,
-                ema_100=ema_100,
-                ema_200=ema_200,
-                distance_to_ema20_pct=distance_to_ema20,
-                distance_to_ema50_pct=distance_to_ema50,
-                distance_to_ema100_pct=distance_to_ema100,
-                current_volume=current_volume,
-                avg_volume=avg_volume,
-                order_flow_imbalance=abs(buy_volume_ratio - 50.0),
-                absorption_strength=absorption_strength,
-                wick_dominance=wick_dominance,
-                smart_money_signal=analysis.get('smart_money_signal', 'NEUTRAL'),
-                smart_money_confidence=smart_money_confidence,
-                fvg_bullish=bool(analysis.get('fvg_bullish', False)),
-                fvg_bearish=bool(analysis.get('fvg_bearish', False)),
-                order_structure=order_structure,
-                structure_description=structure_description,
-                token_valid=token_status["valid"],
-                candles_analyzed=len(df),
-            )
-        except Exception as ai_error:
-            logger.warning("[TRADE-ZONES-AI] Falling back without AI for %s: %s", symbol, ai_error)
-            ai = None
+        # AI enrichment via trade_zones_ai_engine.infer(...) requires the full
+        # trade-zones feature set (zone_classification, buy/sell signals, EMAs, etc.)
+        # which is not computed in this endpoint. Kept as None so downstream code
+        # (which already handles the no-AI path) renders the pure order-flow view.
+        ai = None
         
         # Calculate overall smart money strength (composite score)
         smart_money_strength = (
