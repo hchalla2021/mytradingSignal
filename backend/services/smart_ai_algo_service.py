@@ -77,6 +77,7 @@ from kiteconnect.exceptions import PermissionException
 
 from services.cache import CacheService
 from services.quantedge_ml import QuantEdgeMLPredictor, extract_features
+from services.algo_strategy_lab import StrategyLab
 from config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -355,6 +356,9 @@ class SmartAIAlgoService:
         self._price_history: Dict[str, List[float]] = {s: [] for s in SYMBOLS}
         self._last_trade_time: Dict[str, float] = {s: 0.0 for s in SYMBOLS}
         self._last_trade_side: Dict[str, str] = {s: "" for s in SYMBOLS}
+        # Rate-limits FULL execution attempts (gates + AI + broker) per symbol so
+        # a persistent setup doesn't hammer OpenAI/Kite every 2s rule tick.
+        self._last_exec_attempt: Dict[str, float] = {s: 0.0 for s in SYMBOLS}
         self._trade_history: List[Dict[str, Any]] = []
         self._instrument_token_map: Dict[int, Dict[str, str]] = {}
         self._instrument_meta_map: Dict[str, Dict[str, float]] = {}
@@ -372,6 +376,9 @@ class SmartAIAlgoService:
         # QuantEdge Layer-8: online ML predictor (LightGBM or NumPy fallback).
         # Cheap to construct; heavy work only happens after warm-up samples.
         self._ml_predictor = QuantEdgeMLPredictor(list(SYMBOLS))
+        # Strategy Lab: 8 proven Indian intraday strategies, rolling-backtested
+        # on live 5-min candles. Consensus can promote WAIT → BUY CE / BUY PE.
+        self._strategy_lab = StrategyLab(cache)
 
     @staticmethod
     def _empty(symbol: str) -> Dict[str, Any]:
@@ -413,12 +420,51 @@ class SmartAIAlgoService:
                 "backend": "none", "model_status": "warmup",
             },
             "ml_feedback": {"applied": False, "note": ""},
+            # Strategy Lab defaults (proven Indian intraday strategies + backtest)
+            "strategy_lab": {
+                "updated": 0,
+                "bars_tested": 0,
+                "window_label": "warming up",
+                "consensus": {
+                    "signal": "NEUTRAL", "fired": False, "aligned": 0, "total": 8,
+                    "bull_count": 0, "bear_count": 0, "strength": 0.0, "needed": 5,
+                    "leaders": [],
+                },
+                "strategies": [],
+            },
+            "market_direction": {
+                "score": 0.0, "label": "SIDEWAYS", "arrow": "→",
+                "crash_alert": False, "surge_alert": False,
+                "velocity_pct_per_min": 0.0, "detail": "—",
+            },
+            "trade_plan": {
+                "action": "WAIT", "instrument": "", "entry_zone": 0.0,
+                "stop_loss": 0.0, "target": 0.0, "risk_points": 0.0,
+                "reward_points": 0.0, "risk_reward": 0.0, "confidence": 0,
+                "source": "", "message": "Waiting for market data…",
+            },
+            # Position lifecycle (auto SL/TGT/TSL exit manager)
+            "position_state": "FLAT",
+            "position_exit_levels": {
+                "sl": 0.0, "target": 0.0, "tsl": 0.0, "extreme": 0.0, "tsl_armed": False,
+            },
+            # Early-warning turn detector (anticipatory, leading indicators)
+            "early_warning": {
+                "state": "NONE", "confidence": 0, "up_score": 0, "down_score": 0,
+                "signals": [], "message": "Warming up…",
+            },
+            # Gate-by-gate auto-buy readiness (why Zerodha order fires / doesn't)
+            "exec_diagnostics": {
+                "checks": [], "passed": 0, "total": 0, "ready": False,
+                "blockers": [], "summary": "Awaiting market data…",
+            },
             # UI preview defaults (kept present so the frontend never renders "undefined")
             "option_tradingsymbol": "",
             "option_type": "",
             "option_expiry": "",
             "option_strike": 0,
             "option_moneyness": "",
+            "option_pick_reason": "",
             "option_ltp": 0.0,
             "option_best_bid_price": 0.0,
             "option_best_ask_price": 0.0,
@@ -564,6 +610,21 @@ class SmartAIAlgoService:
         rule_result["ml_prediction"] = ml_pred
         self._apply_ml_feedback(rule_result, ml_pred)
 
+        # Strategy Lab — rolling backtest of 8 proven Indian intraday strategies
+        # on live 5-min candles. Adds strategy_lab + market_direction payloads and
+        # can promote WAIT → BUY/SELL when enough strategies align (BUY CE / BUY PE).
+        try:
+            lab = await self._strategy_lab.evaluate(symbol, tick, indicators)
+            rule_result["strategy_lab"] = lab.get("strategy_lab") or self._empty(symbol)["strategy_lab"]
+            rule_result["market_direction"] = lab.get("market_direction") or self._empty(symbol)["market_direction"]
+            rule_result["early_warning"] = lab.get("early_warning") or self._empty(symbol)["early_warning"]
+            self._apply_strategy_consensus(symbol, rule_result)
+        except Exception as lab_exc:
+            logger.debug("Strategy Lab failed for %s: %s", symbol, lab_exc)
+            rule_result.setdefault("strategy_lab", self._empty(symbol)["strategy_lab"])
+            rule_result.setdefault("market_direction", self._empty(symbol)["market_direction"])
+            rule_result.setdefault("early_warning", self._empty(symbol)["early_warning"])
+
         # Merge last option execution snapshot for continuity across ticks.
         merged_result = {**rule_result, "ai_powered": False}
         last_exec = self._last_option_exec_info.get(symbol) or {}
@@ -587,6 +648,20 @@ class SmartAIAlgoService:
         # Always surface a UI-visible preview so the AUTO BUY panel never renders blanks.
         self._populate_preview_fields(merged_result)
 
+        # Client-facing trade plan — one plain-English instruction card the trader
+        # can act on directly (BUY CE / BUY PE / WAIT with exact levels & R:R).
+        try:
+            self._build_trade_plan(merged_result)
+        except Exception as plan_exc:
+            logger.debug("Trade plan build failed for %s: %s", symbol, plan_exc)
+
+        # Auto-buy readiness checklist — live gate-by-gate diagnostics so the
+        # client can see EXACTLY which condition is blocking Zerodha execution.
+        try:
+            self._build_exec_diagnostics(symbol, merged_result)
+        except Exception as diag_exc:
+            logger.debug("Exec diagnostics failed for %s: %s", symbol, diag_exc)
+
         # Dynamic trailing stop: lock profits only when structure extends in favour.
         try:
             self._apply_structure_trailing_stop(symbol, tick, merged_result)
@@ -594,6 +669,13 @@ class SmartAIAlgoService:
             logger.debug("Trailing SL adjustment failed for %s: %s", symbol, tsl_exc)
 
         self._results[symbol] = merged_result
+
+        # Position exit manager: enforces SL / target / trailing SL / EOD square-off
+        # automatically on any open CE/PE position (paper AND live), every tick.
+        try:
+            await self._manage_open_position(symbol, tick, self._results[symbol])
+        except Exception as pos_exc:
+            logger.debug("Position manager failed for %s: %s", symbol, pos_exc)
 
         # Auto-trade execution (paper/live). Isolated so a broker error can't blank the UI.
         try:
@@ -783,6 +865,7 @@ class SmartAIAlgoService:
             ("option_expiry", ""),
             ("option_strike", 0),
             ("option_moneyness", ""),
+            ("option_pick_reason", ""),
             ("option_ltp", 0.0),
             ("option_best_bid_price", 0.0),
             ("option_best_ask_price", 0.0),
@@ -800,6 +883,225 @@ class SmartAIAlgoService:
             result.setdefault(key, default)
 
         result["last_updated"] = int(time.time() * 1000)
+
+    def _apply_strategy_consensus(self, symbol: str, result: Dict[str, Any]) -> None:
+        """Fuse the Strategy Lab consensus with the QuantEdge signal.
+
+        Contract requested by the desk:
+          • When >=FIRE_ALIGN backtested strategies align bullish → BUY (CE).
+          • When they align bearish → SELL (PE).
+          • Agreement with an already-fired QuantEdge signal boosts confidence.
+          • Opposition to a fired signal trims confidence (never hard-vetoes —
+            the QuantEdge gate is already the strictest filter in the stack).
+        Promotion is blocked only by the volatility circuit breaker (EXTREME).
+        """
+        lab = result.get("strategy_lab") or {}
+        consensus = lab.get("consensus") or {}
+        c_sig = str(consensus.get("signal", "NEUTRAL") or "NEUTRAL")
+        fired = bool(consensus.get("fired", False))
+        aligned = int(consensus.get("aligned", 0) or 0)
+        total = int(consensus.get("total", 8) or 8)
+        strength = float(consensus.get("strength", 0.0) or 0.0)
+        leaders = consensus.get("leaders") or []
+
+        signal = str(result.get("signal", "WAIT") or "WAIT").upper()
+        vol_regime = str(
+            (result.get("regime_detail") or {}).get("volatility", "UNKNOWN")
+        ).upper()
+        confidence = int(result.get("confidence", 0) or 0)
+
+        lab_note = f"{aligned}/{total} strategies aligned ({strength:.0f}% weight)"
+
+        if fired and c_sig in ("BUY_CE", "BUY_PE"):
+            lab_dir = "BUY" if c_sig == "BUY_CE" else "SELL"
+
+            if signal == lab_dir:
+                # Agreement — boost conviction.
+                bonus = 5 + min(5, aligned - 5)
+                result["confidence"] = min(95, confidence + bonus)
+                result["reasoning"] = (
+                    f"{result.get('reasoning', '')} | Strategy Lab confirms: {lab_note}"
+                )
+            elif signal == "WAIT" and vol_regime != "EXTREME":
+                # Promotion — the aligned, backtested strategies fire the trade.
+                entry = float(result.get("entry_price", 0) or 0)
+                sl_pts = float(result.get("sl_points", DEFAULT_SL_POINTS) or DEFAULT_SL_POINTS)
+                tgt_pts = float(result.get("target_points", DEFAULT_TARGET_POINTS) or DEFAULT_TARGET_POINTS)
+                if entry > 0:
+                    result["signal"] = lab_dir
+                    if lab_dir == "BUY":
+                        result["stop_loss"] = round(entry - sl_pts, 2)
+                        result["target"] = round(entry + tgt_pts, 2)
+                        result["trailing_stop_loss"] = round(entry - sl_pts * 0.5, 2)
+                        result["regime"] = "TRENDING_UP" if strength >= 75 else "TRENDING_WEAK_UP"
+                    else:
+                        result["stop_loss"] = round(entry + sl_pts, 2)
+                        result["target"] = round(entry - tgt_pts, 2)
+                        result["trailing_stop_loss"] = round(entry + sl_pts * 0.5, 2)
+                        result["regime"] = "TRENDING_DOWN" if strength >= 75 else "TRENDING_WEAK_DOWN"
+                    lab_conf = int(min(92, 62 + aligned * 3 + strength / 10))
+                    result["confidence"] = max(confidence, lab_conf)
+                    result["strength"] = max(int(result.get("strength", 0) or 0), lab_conf)
+                    result["signal_quality"] = max(
+                        float(result.get("signal_quality", 0.0) or 0.0), 76.0
+                    )
+                    result["signal_grade"] = self._grade_from_quality(
+                        lab_dir, result["signal_quality"]
+                    )
+                    gate = result.setdefault("confluence_gate", {"passed": False, "reasons": []})
+                    gate["passed"] = True
+                    gate["reasons"] = []
+                    gate["strategy_lab_promoted"] = True
+                    leaders_txt = ",".join(leaders[:3]) if leaders else "multiple"
+                    result["reasoning"] = (
+                        f"{lab_dir} {'CE' if lab_dir == 'BUY' else 'PE'} — Strategy Lab: {lab_note}; "
+                        f"leaders: {leaders_txt}; backtested on live 5m tape"
+                    )
+        elif signal in ("BUY", "SELL") and c_sig in ("BUY_CE", "BUY_PE", "LEAN_CE", "LEAN_PE"):
+            lab_dir = "BUY" if c_sig.endswith("CE") else "SELL"
+            if lab_dir != signal and strength >= 55:
+                # Opposition from the lab — trim conviction, keep the signal.
+                result["confidence"] = max(0, confidence - 10)
+                result["reasoning"] = (
+                    f"{result.get('reasoning', '')} | Caution: Strategy Lab leans opposite ({lab_note})"
+                )
+
+    @staticmethod
+    def _build_trade_plan(result: Dict[str, Any]) -> None:
+        """One plain-English instruction card the client can act on directly."""
+        symbol = str(result.get("symbol", "") or "")
+        signal = str(result.get("signal", "WAIT") or "WAIT").upper()
+        entry = float(result.get("entry_price", 0) or 0)
+        sl = float(result.get("stop_loss", 0) or 0)
+        tgt = float(result.get("target", 0) or 0)
+        sl_pts = float(result.get("sl_points", 0) or 0)
+        tgt_pts = float(result.get("target_points", 0) or 0)
+        rr = float(result.get("risk_reward_ratio", 0) or 0)
+        if rr <= 0 and sl_pts > 0:
+            rr = round(tgt_pts / sl_pts, 2)
+        confidence = int(result.get("confidence", 0) or 0)
+        lab = result.get("strategy_lab") or {}
+        consensus = lab.get("consensus") or {}
+        aligned = int(consensus.get("aligned", 0) or 0)
+        total = int(consensus.get("total", 8) or 8)
+        needed = int(consensus.get("needed", 5) or 5)
+        lab_fired = bool(consensus.get("fired", False))
+        promoted = bool((result.get("confluence_gate") or {}).get("strategy_lab_promoted", False))
+        direction = result.get("market_direction") or {}
+        dir_label = str(direction.get("label", "SIDEWAYS") or "SIDEWAYS")
+
+        opt_symbol = str(result.get("option_tradingsymbol", "") or "")
+        side_txt = "CE" if signal == "BUY" else "PE"
+        instrument = opt_symbol or (f"{symbol} ATM {side_txt}" if signal in ("BUY", "SELL") else "")
+
+        if signal in ("BUY", "SELL"):
+            source = (
+                "STRATEGY LAB + QUANTEDGE" if (lab_fired and not promoted)
+                else ("STRATEGY LAB" if promoted else "QUANTEDGE")
+            )
+            action = f"BUY {side_txt}"
+            message = (
+                f"BUY {symbol} {side_txt} now · Entry ~{entry:.1f} · "
+                f"SL {sl:.1f} (−{sl_pts:.0f}pt) · Target {tgt:.1f} (+{tgt_pts:.0f}pt) · "
+                f"R:R {rr:.2f} · {aligned}/{total} strategies aligned · Market {dir_label}"
+            )
+        else:
+            source = "STRATEGY LAB"
+            action = "WAIT"
+            if bool(direction.get("crash_alert")):
+                message = (
+                    f"⚠ Market {dir_label} — avoid fresh CE buys. "
+                    f"{aligned}/{total} strategies aligned; PE setup arms at {needed}+."
+                )
+            elif bool(direction.get("surge_alert")):
+                message = (
+                    f"Market {dir_label} — momentum strong. "
+                    f"{aligned}/{total} strategies aligned; CE setup arms at {needed}+."
+                )
+            else:
+                message = (
+                    f"WAIT — {aligned}/{total} strategies aligned (need {needed}+ to fire). "
+                    f"Market {dir_label}. Levels being watched: SL {sl:.1f} / TGT {tgt:.1f}."
+                )
+
+        result["trade_plan"] = {
+            "action": action,
+            "instrument": instrument,
+            "entry_zone": round(entry, 2),
+            "stop_loss": round(sl, 2),
+            "target": round(tgt, 2),
+            "risk_points": round(sl_pts, 1),
+            "reward_points": round(tgt_pts, 1),
+            "risk_reward": round(rr, 2),
+            "confidence": confidence,
+            "source": source,
+            "message": message,
+        }
+
+    def _build_exec_diagnostics(self, symbol: str, result: Dict[str, Any]) -> None:
+        """Gate-by-gate auto-buy readiness checklist, refreshed every tick.
+
+        Mirrors every condition `_maybe_execute_trade` enforces — the client
+        sees EXACTLY why a Zerodha order fires or doesn't, in real time.
+        """
+        cfg = _settings()
+        now = time.time()
+        checks: List[Dict[str, Any]] = []
+
+        def add(name: str, ok: bool, detail: str) -> None:
+            checks.append({"name": name, "ok": bool(ok), "detail": str(detail)[:90]})
+
+        mode = (cfg.algo_auto_trade_mode or "paper").lower().strip()
+        add("Auto-trade enabled", bool(cfg.algo_auto_trade_enabled), f"mode: {mode.upper()}")
+
+        market_status = str(result.get("market_status", "CLOSED") or "CLOSED").upper()
+        add("Market LIVE", market_status == "LIVE", market_status)
+
+        signal = str(result.get("signal", "WAIT") or "WAIT").upper()
+        add("Signal fired", signal in ("BUY", "SELL"),
+            f"BUY {'CE' if signal == 'BUY' else ''}" if signal == "BUY"
+            else ("BUY PE" if signal == "SELL" else "WAIT — confluence pending"))
+
+        conf = int(result.get("confidence", 0) or 0)
+        add(f"Confidence ≥ {cfg.algo_min_trade_confidence}%",
+            conf >= int(cfg.algo_min_trade_confidence), f"{conf}%")
+
+        strength = int(result.get("strength", 0) or 0)
+        add(f"Strength ≥ {cfg.algo_min_trade_strength}",
+            strength >= int(cfg.algo_min_trade_strength), f"{strength}")
+
+        cooldown_left = max(0.0, float(cfg.algo_trade_cooldown_sec) - (now - self._last_trade_time.get(symbol, 0.0)))
+        add("Cooldown clear", cooldown_left <= 0, "ready" if cooldown_left <= 0 else f"{int(cooldown_left)}s left")
+
+        pos_open = bool((self._open_option_position.get(symbol) or {}).get("tradingsymbol"))
+        add("No open position", not pos_open,
+            "position OPEN — exit manager active" if pos_open else "flat")
+
+        if mode == "live":
+            creds_ok = bool(cfg.zerodha_api_key and cfg.zerodha_access_token)
+            add("Zerodha credentials", creds_ok, "OK" if creds_ok else "API key / access token missing")
+            ip_block_left = max(0.0, self._live_block_until_ts - now)
+            add("Broker access", ip_block_left <= 0,
+                "OK" if ip_block_left <= 0 else f"IP-whitelist block, retry in {int(ip_block_left)}s")
+
+        add("Option liquidity gate", bool(result.get("auto_buy_gate_passed")),
+            str(result.get("auto_buy_gate_reason", "") or "pending"))
+        add("AI confirmation", bool(result.get("auto_buy_ai_passed")),
+            str(result.get("auto_buy_ai_reason", "") or "runs at execution"))
+
+        failed = [c for c in checks if not c["ok"]]
+        result["exec_diagnostics"] = {
+            "checks": checks,
+            "passed": len(checks) - len(failed),
+            "total": len(checks),
+            "ready": not failed,
+            "blockers": [f"{c['name']} — {c['detail']}" for c in failed[:3]],
+            "summary": (
+                "ALL GATES GREEN — auto-buy armed"
+                if not failed
+                else f"Blocked: {failed[0]['name']} ({failed[0]['detail']})"
+            ),
+        }
 
     def _get_live_tradingsymbol(self, symbol: str) -> str:
         cfg = _settings()
@@ -1199,6 +1501,13 @@ class SmartAIAlgoService:
             return None
 
         chosen["expiry"] = chosen["expiry"].isoformat()
+        # Human-readable rationale for WHY this exact contract was selected.
+        chosen["pick_reason"] = (
+            f"{chosen.get('moneyness', '')} {int(chosen['strike'])}{opt_type} — "
+            f"spread {chosen.get('spread_pct', 0):.1f}%, "
+            f"OI {int(chosen.get('oi', 0)):,}, vol {int(chosen.get('vol', 0)):,}"
+            + (" · best delta/liquidity balance" if chosen.get("quality_ok") else " · fallback (best available)")
+        )
         return chosen
 
     def _refresh_option_preview(
@@ -1279,6 +1588,7 @@ class SmartAIAlgoService:
             "option_expiry": contract.get("expiry"),
             "option_strike": contract.get("strike"),
             "option_moneyness": contract.get("moneyness", ""),
+            "option_pick_reason": str(contract.get("pick_reason", "") or ""),
             "option_ltp": option_ltp,
             "option_best_bid_price": option_bid,
             "option_best_ask_price": option_ask,
@@ -1395,7 +1705,11 @@ class SmartAIAlgoService:
                     },
                 )
             if resp.status_code != 200:
-                return False, f"AI confirmation HTTP {resp.status_code}", 0
+                # Infrastructure failure — NOT an AI rejection. The QuantEdge gate
+                # + Strategy Lab already passed, so fail-open with reduced conf
+                # instead of silently blocking every Zerodha order while the AI
+                # service is degraded. Explicit AI rejections below stay fail-closed.
+                return True, f"AI unavailable (HTTP {resp.status_code}) — rule+lab gates already passed", 55
 
             text = resp.json()["choices"][0]["message"]["content"].strip()
             if "```" in text:
@@ -1410,7 +1724,8 @@ class SmartAIAlgoService:
                 return False, reason or "AI rejected setup", ai_conf
             return True, reason or "AI approved", ai_conf
         except Exception as exc:
-            return False, f"AI confirmation failed: {exc}", 0
+            # Network timeout / JSON parse failure — infra error, fail-open (see above).
+            return True, f"AI unavailable ({type(exc).__name__}) — rule+lab gates already passed", 55
 
     async def _maybe_execute_trade(self, symbol: str, tick: Dict[str, Any], signal: Dict[str, Any]) -> None:
         cfg = _settings()
@@ -1466,10 +1781,19 @@ class SmartAIAlgoService:
             logger.debug("Smart AI trade skipped for %s %s: cooldown active", symbol, side)
             return
 
-        # Prevent repeated same-side spam orders for same symbol.
-        if self._last_trade_side[symbol] == side:
-            logger.debug("Smart AI trade skipped for %s %s: duplicate side suppression", symbol, side)
+        # Position-aware entry control: while a CE/PE position is OPEN the exit
+        # manager owns this symbol. The lock clears automatically on exit, so
+        # same-side re-entry is possible after SL/target — unlike the old
+        # "duplicate side suppression" which permanently blocked re-entries
+        # (one skipped BUY attempt poisoned every future BUY).
+        if (self._open_option_position.get(symbol) or {}).get("tradingsymbol"):
+            logger.debug("Smart AI trade skipped for %s %s: position already open", symbol, side)
             return
+
+        # Full-attempt rate limit (gates + AI + broker quotes) — 20s per symbol.
+        if now - self._last_exec_attempt.get(symbol, 0.0) < 20:
+            return
+        self._last_exec_attempt[symbol] = now
 
         trade_event: Dict[str, Any] = {
             "symbol": symbol,
@@ -1490,10 +1814,24 @@ class SmartAIAlgoService:
             mode = "paper"
 
         if mode == "paper":
+            # Paper entry now opens a TRACKED position so the exit manager runs
+            # the full SL/target/TSL lifecycle exactly like live mode.
+            opt_symbol = str(signal.get("option_tradingsymbol", "") or "")
+            opt_entry = float(signal.get("option_best_buy_price", 0) or signal.get("option_ltp", 0) or 0)
+            qty = max(1, int(cfg.algo_trade_quantity))
             trade_event["status"] = "PAPER_EXECUTED"
             trade_event["broker_order_id"] = None
-            self._record_trade(symbol, side, now, trade_event)
-            logger.info("Smart AI PAPER trade recorded: %s %s", symbol, side)
+            trade_event["tradingsymbol"] = opt_symbol
+            trade_event["option_entry_price"] = opt_entry
+            trade_event["quantity"] = qty
+            self._record_trade(symbol, side, now, trade_event, executed=True)
+            self._open_position(
+                symbol, side, signal, mode="paper",
+                tradingsymbol=opt_symbol or f"{symbol}-PAPER-{'CE' if side == 'BUY' else 'PE'}",
+                exchange="", quantity=qty, option_entry=opt_entry,
+                lot_size=qty, tick_size=0.05,
+            )
+            logger.info("Smart AI PAPER trade recorded: %s %s (exit manager armed)", symbol, side)
             return
 
         if now < self._live_block_until_ts:
@@ -1599,6 +1937,18 @@ class SmartAIAlgoService:
 
             ind = signal.get("indicators") or {}
             gate_ok, gate_reason = self._passes_advanced_option_gate(ind, side)
+            # Strategy Lab override: when >=5/8 backtested strategies fire in this
+            # direction, the lab has already validated VWAP/EMA/RSI/OI context on
+            # the live tape — honour the aligned consensus instead of blocking.
+            lab_cons = (signal.get("strategy_lab") or {}).get("consensus") or {}
+            lab_sig = str(lab_cons.get("signal", "") or "")
+            lab_dir = "BUY" if lab_sig.endswith("CE") else ("SELL" if lab_sig.endswith("PE") else "")
+            if not gate_ok and bool(lab_cons.get("fired")) and lab_dir == side:
+                gate_ok = True
+                gate_reason = (
+                    f"Strategy Lab consensus override "
+                    f"({lab_cons.get('aligned', 0)}/{lab_cons.get('total', 8)} strategies aligned)"
+                )
             signal["auto_buy_gate_passed"] = gate_ok
             signal["auto_buy_gate_reason"] = gate_reason
             if not gate_ok:
@@ -1709,12 +2059,12 @@ class SmartAIAlgoService:
                 "option_best_buy_price": best_buy_price,
                 "option_price_updated_at": int(time.time() * 1000),
             }
-            self._open_option_position[symbol] = {
-                "tradingsymbol": tradingsymbol,
-                "entry_buy_price": limit_price,
-                "quantity": quantity,
-                "ts": int(time.time() * 1000),
-            }
+            self._open_position(
+                symbol, side, signal, mode="live",
+                tradingsymbol=tradingsymbol, exchange=live_exchange,
+                quantity=quantity, option_entry=limit_price,
+                lot_size=lot_size, tick_size=tick_size,
+            )
 
             signal["option_entry_buy_price"] = limit_price
             signal["option_unrealized_pnl_points"] = round(option_ltp - limit_price, 2)
@@ -1725,7 +2075,7 @@ class SmartAIAlgoService:
                 else ("LOSS" if option_ltp < limit_price else "FLAT")
             )
 
-            self._record_trade(symbol, side, now, trade_event)
+            self._record_trade(symbol, side, now, trade_event, executed=True)
             logger.info("Smart AI Algo LIVE order placed: %s %s -> %s", symbol, side, order_id)
         except Exception as exc:
             error_msg = str(exc)
@@ -1745,14 +2095,277 @@ class SmartAIAlgoService:
                 self._record_trade(symbol, side, now, trade_event)
             logger.error("Smart AI Algo LIVE order failed for %s: %s", symbol, exc, exc_info=True)
 
-    def _record_trade(self, symbol: str, side: str, ts: float, event: Dict[str, Any]) -> None:
-        if side in ("BUY", "SELL"):
+    def _record_trade(
+        self, symbol: str, side: str, ts: float, event: Dict[str, Any], executed: bool = False
+    ) -> None:
+        """Append a trade event. Only EXECUTED entries update the side/time locks.
+
+        Previously every skipped/rejected attempt updated `_last_trade_side`,
+        which — combined with duplicate-side suppression — permanently blocked
+        all future same-side entries after a single gate skip. Executed-only
+        marking fixes the \"auto-buy never fires\" failure mode.
+        """
+        if executed and side in ("BUY", "SELL"):
             self._last_trade_side[symbol] = side
             self._last_trade_time[symbol] = ts
 
         self._trade_history.append(event)
         if len(self._trade_history) > 200:
             self._trade_history = self._trade_history[-200:]
+
+    # ── Position lifecycle: open → manage (SL/TGT/TSL) → exit ───────────────
+
+    def _open_position(
+        self, symbol: str, side: str, signal: Dict[str, Any], *,
+        mode: str, tradingsymbol: str, exchange: str, quantity: int,
+        option_entry: float, lot_size: int, tick_size: float,
+    ) -> None:
+        """Record an open CE/PE position with the spot exit levels the manager enforces."""
+        spot_entry = float(signal.get("entry_price", 0) or 0)
+        self._open_option_position[symbol] = {
+            "tradingsymbol": tradingsymbol,
+            "exchange": exchange,
+            "option_type": "CE" if side == "BUY" else "PE",
+            "side": side,
+            "mode": mode,
+            "quantity": int(quantity),
+            "lot_size": max(1, int(lot_size)),
+            "tick_size": max(0.01, float(tick_size)),
+            "entry_buy_price": float(option_entry),
+            "spot_entry": spot_entry,
+            "spot_sl": float(signal.get("stop_loss", 0) or 0),
+            "spot_target": float(signal.get("target", 0) or 0),
+            "spot_tsl": 0.0,
+            "spot_extreme": spot_entry,
+            "sl_points": float(signal.get("sl_points", DEFAULT_SL_POINTS) or DEFAULT_SL_POINTS),
+            "ts": int(time.time() * 1000),
+        }
+        logger.info(
+            "Smart AI position OPEN %s %s qty=%s | spot entry=%.1f SL=%.1f TGT=%.1f (auto-exit armed)",
+            symbol, tradingsymbol, quantity, spot_entry,
+            self._open_option_position[symbol]["spot_sl"],
+            self._open_option_position[symbol]["spot_target"],
+        )
+
+    async def _manage_open_position(
+        self, symbol: str, tick: Dict[str, Any], signal: Dict[str, Any]
+    ) -> None:
+        """Software OCO: auto SL / target / trailing-SL / reversal / EOD square-off.
+
+        Runs every rule tick on the open position (paper AND live). Exits sell
+        the option back (live) or mark the paper exit, then release the symbol
+        so the algo can re-enter on the next fresh setup.
+        """
+        pos = self._open_option_position.get(symbol) or {}
+        if not pos.get("tradingsymbol"):
+            signal["position_state"] = "FLAT"
+            return
+
+        market_status = str(signal.get("market_status") or (tick or {}).get("status") or "CLOSED").upper()
+        if market_status != "LIVE":
+            # Never act on stale/closed data; broker squares off MIS at EOD anyway.
+            signal["position_state"] = "OPEN"
+            return
+
+        spot = float((tick or {}).get("price", 0) or 0)
+        if spot <= 0:
+            return
+
+        side = str(pos.get("side", "BUY") or "BUY").upper()
+        spot_entry = float(pos.get("spot_entry", 0) or 0)
+        spot_sl = float(pos.get("spot_sl", 0) or 0)
+        spot_target = float(pos.get("spot_target", 0) or 0)
+        sl_points = float(pos.get("sl_points", DEFAULT_SL_POINTS) or DEFAULT_SL_POINTS)
+        extreme = float(pos.get("spot_extreme", spot_entry) or spot_entry)
+        tsl = float(pos.get("spot_tsl", 0) or 0)
+
+        # Trailing SL: arms only once price moves 0.5×SL in favour (profit locked).
+        if side == "BUY":
+            if spot > extreme:
+                extreme = spot
+                candidate = round(extreme - sl_points * TRAILING_SL_TRIGGER_RATIO, 2)
+                if candidate > spot_entry:
+                    tsl = max(tsl, candidate)
+        else:
+            if spot < extreme:
+                extreme = spot
+                candidate = round(extreme + sl_points * TRAILING_SL_TRIGGER_RATIO, 2)
+                if candidate < spot_entry:
+                    tsl = candidate if tsl <= 0 else min(tsl, candidate)
+        pos["spot_extreme"] = extreme
+        pos["spot_tsl"] = tsl
+
+        exit_reason = ""
+        if side == "BUY":
+            if spot_sl > 0 and spot <= spot_sl:
+                exit_reason = "SL_HIT"
+            elif tsl > 0 and spot <= tsl:
+                exit_reason = "TSL_HIT"
+            elif spot_target > 0 and spot >= spot_target:
+                exit_reason = "TARGET_HIT"
+        else:
+            if spot_sl > 0 and spot >= spot_sl:
+                exit_reason = "SL_HIT"
+            elif tsl > 0 and spot >= tsl:
+                exit_reason = "TSL_HIT"
+            elif spot_target > 0 and spot <= spot_target:
+                exit_reason = "TARGET_HIT"
+
+        # Opposite fired signal → reversal exit (fresh consensus flipped sides).
+        new_side = str(signal.get("signal", "WAIT") or "WAIT").upper()
+        if not exit_reason and new_side in ("BUY", "SELL") and new_side != side:
+            exit_reason = "REVERSAL_EXIT"
+
+        # MIS square-off protection: exit by 15:15 IST before broker force-close.
+        if not exit_reason:
+            now_ist = datetime.now(IST)
+            if (now_ist.hour, now_ist.minute) >= (15, 15):
+                exit_reason = "EOD_SQUAREOFF"
+
+        if not exit_reason:
+            self._surface_position_pnl(pos, signal)
+            return
+
+        await self._exit_position(symbol, pos, exit_reason, signal)
+
+    async def _exit_position(
+        self, symbol: str, pos: Dict[str, Any], exit_reason: str, signal: Dict[str, Any]
+    ) -> None:
+        """Sell the open option back (live) or record the paper exit, then unlock the symbol."""
+        mode = str(pos.get("mode", "paper") or "paper").lower()
+        tradingsymbol = str(pos.get("tradingsymbol", "") or "")
+        exchange = str(pos.get("exchange", "") or "")
+        qty = int(pos.get("quantity", 0) or 0)
+        entry_opt = float(pos.get("entry_buy_price", 0) or 0)
+        exit_opt = 0.0
+        order_id = None
+        status = "PAPER_EXIT"
+        error = ""
+
+        if mode == "live" and exchange and tradingsymbol and qty > 0:
+            cfg = _settings()
+            try:
+                kite = KiteConnect(api_key=cfg.zerodha_api_key)
+                kite.set_access_token(cfg.zerodha_access_token)
+                bid = ltp = 0.0
+                try:
+                    q = kite.quote([f"{exchange}:{tradingsymbol}"]) or {}
+                    item = q.get(f"{exchange}:{tradingsymbol}") or {}
+                    ltp = float(item.get("last_price", 0) or 0)
+                    depth = item.get("depth") or {}
+                    buy_d = depth.get("buy") if isinstance(depth, dict) else []
+                    if isinstance(buy_d, list) and buy_d:
+                        bid = float((buy_d[0] or {}).get("price", 0) or 0)
+                except Exception:
+                    pass
+                ref = bid if bid > 0 else ltp
+                tick_size = float(pos.get("tick_size", 0.05) or 0.05)
+                if ref <= 0:
+                    raise RuntimeError("No live quote for exit")
+                # Protective limit slightly below bid so the exit fills immediately.
+                limit_price = self._round_price_to_tick(
+                    max(tick_size, ref - max(tick_size, ref * 0.003)), tick_size, "SELL"
+                )
+                order_id = kite.place_order(
+                    variety=kite.VARIETY_REGULAR,
+                    exchange=exchange,
+                    tradingsymbol=tradingsymbol,
+                    transaction_type=kite.TRANSACTION_TYPE_SELL,
+                    quantity=qty,
+                    order_type=kite.ORDER_TYPE_LIMIT,
+                    price=limit_price,
+                    product=kite.PRODUCT_MIS,
+                )
+                exit_opt = limit_price
+                status = "LIVE_EXIT"
+            except Exception as exc:
+                status = "LIVE_EXIT_FAILED"
+                error = str(exc)
+                logger.error("Smart AI exit order failed for %s (%s): %s", symbol, exit_reason, exc)
+        else:
+            # Paper exit — use the live option quote when the preview contract
+            # matches; else a conservative 0.5-delta spot-move estimate.
+            if str(signal.get("option_tradingsymbol", "") or "") == tradingsymbol:
+                exit_opt = float(signal.get("option_ltp", 0) or 0)
+            if exit_opt <= 0 and entry_opt > 0:
+                spot = float(signal.get("entry_price", 0) or 0)
+                spot_entry = float(pos.get("spot_entry", 0) or 0)
+                if spot > 0 and spot_entry > 0:
+                    move = (spot - spot_entry) if pos.get("side") == "BUY" else (spot_entry - spot)
+                    exit_opt = max(0.05, entry_opt + move * 0.5)
+
+        pnl_pts = round(exit_opt - entry_opt, 2) if entry_opt > 0 and exit_opt > 0 else 0.0
+        pnl_amt = round(pnl_pts * qty, 2)
+        now = time.time()
+        event: Dict[str, Any] = {
+            "symbol": symbol,
+            "side": "EXIT",
+            "exit_reason": exit_reason,
+            "tradingsymbol": tradingsymbol,
+            "quantity": qty,
+            "entry_option_price": entry_opt,
+            "exit_option_price": exit_opt,
+            "pnl_points": pnl_pts,
+            "pnl_amount": pnl_amt,
+            "broker_order_id": order_id,
+            "timestamp": datetime.now(IST).isoformat(),
+            "mode": mode,
+            "status": status,
+        }
+        if error:
+            event["error"] = error
+        self._trade_history.append(event)
+        if len(self._trade_history) > 200:
+            self._trade_history = self._trade_history[-200:]
+
+        if status == "LIVE_EXIT_FAILED":
+            return  # keep the position; manager retries next tick
+
+        # Release the symbol: post-exit cooldown, then fresh setups can re-enter.
+        self._open_option_position[symbol] = {}
+        self._last_trade_time[symbol] = now
+        self._last_trade_side[symbol] = ""
+        signal["position_state"] = "FLAT"
+        signal["option_entry_buy_price"] = entry_opt
+        signal["option_unrealized_pnl_points"] = pnl_pts
+        signal["option_unrealized_pnl_amount"] = pnl_amt
+        signal["option_pnl_status"] = "PROFIT" if pnl_amt > 0 else ("LOSS" if pnl_amt < 0 else "FLAT")
+        logger.info(
+            "Smart AI position EXIT %s %s: %s pnl=%s pts (%s)",
+            symbol, tradingsymbol, exit_reason, pnl_pts, status,
+        )
+
+    @staticmethod
+    def _surface_position_pnl(pos: Dict[str, Any], signal: Dict[str, Any]) -> None:
+        """Push live position P/L + armed exit levels into the UI payload each tick."""
+        entry_opt = float(pos.get("entry_buy_price", 0) or 0)
+        qty = int(pos.get("quantity", 0) or 0)
+        signal["position_state"] = "OPEN"
+        signal["position_exit_levels"] = {
+            "sl": float(pos.get("spot_sl", 0) or 0),
+            "target": float(pos.get("spot_target", 0) or 0),
+            "tsl": float(pos.get("spot_tsl", 0) or 0),
+            "extreme": float(pos.get("spot_extreme", 0) or 0),
+            "tsl_armed": float(pos.get("spot_tsl", 0) or 0) > 0,
+        }
+        if entry_opt <= 0 or qty <= 0:
+            return
+        cur = 0.0
+        if str(signal.get("option_tradingsymbol", "") or "") == str(pos.get("tradingsymbol", "") or ""):
+            cur = float(signal.get("option_ltp", 0) or 0)
+        if cur <= 0:
+            spot = float(signal.get("entry_price", 0) or 0)
+            spot_entry = float(pos.get("spot_entry", 0) or 0)
+            if spot > 0 and spot_entry > 0:
+                move = (spot - spot_entry) if pos.get("side") == "BUY" else (spot_entry - spot)
+                cur = max(0.05, entry_opt + move * 0.5)
+        if cur <= 0:
+            return
+        pnl_pts = round(cur - entry_opt, 2)
+        signal["option_entry_buy_price"] = entry_opt
+        signal["option_unrealized_pnl_points"] = pnl_pts
+        signal["option_unrealized_pnl_amount"] = round(pnl_pts * qty, 2)
+        signal["option_pnl_status"] = "PROFIT" if pnl_pts > 0 else ("LOSS" if pnl_pts < 0 else "FLAT")
 
     def _apply_structure_trailing_stop(self, symbol: str, tick: Dict[str, Any], signal: Dict[str, Any]) -> None:
         side = str(signal.get("signal", "WAIT") or "WAIT").upper()

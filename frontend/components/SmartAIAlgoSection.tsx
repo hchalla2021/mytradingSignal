@@ -9,7 +9,7 @@
  */
 
 import React, { useMemo, useCallback, useState, useRef, useEffect } from 'react';
-import { useSmartAlgo, AlgoSignal, AlgoIndicators } from '@/hooks/useSmartAlgo';
+import { useSmartAlgo, AlgoSignal, AlgoIndicators, StrategyLabPayload, MarketDirection, TradePlan, EarlyWarning, ExecDiagnostics } from '@/hooks/useSmartAlgo';
 
 // ─── formatters ───────────────────────────────────────────────────────────────
 
@@ -276,6 +276,279 @@ const Stepper = React.memo(function Stepper({
   );
 });
 
+// ─── TradePlanPanel ───────────────────────────────────────────────────────────
+// Plain-English instruction card — the ONE thing the client reads to take a trade.
+
+const TradePlanPanel = React.memo(function TradePlanPanel({ plan }: { plan?: TradePlan }) {
+  if (!plan) return null;
+  const isBuyCE = plan.action === 'BUY CE';
+  const isBuyPE = plan.action === 'BUY PE';
+  const active = isBuyCE || isBuyPE;
+  const frame = isBuyCE
+    ? 'border-emerald-400/70 bg-gradient-to-r from-emerald-950/70 to-teal-900/30 shadow-[0_0_24px_rgba(16,185,129,0.3)]'
+    : isBuyPE
+    ? 'border-red-400/70 bg-gradient-to-r from-red-950/70 to-pink-900/30 shadow-[0_0_24px_rgba(239,68,68,0.3)]'
+    : 'border-slate-600/50 bg-gradient-to-r from-slate-900/60 to-slate-800/40';
+  const badge = isBuyCE
+    ? 'bg-emerald-500 text-emerald-950'
+    : isBuyPE
+    ? 'bg-red-500 text-red-950'
+    : 'bg-slate-700 text-slate-300';
+  return (
+    <div className={`rounded-xl border px-3 py-2.5 space-y-1.5 ${frame}`}>
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <div className="flex items-center gap-2">
+          <span className={`px-2.5 py-1 rounded-lg text-xs sm:text-sm font-black tracking-wider ${badge} ${active ? 'animate-pulse' : ''}`}>
+            {plan.action}
+          </span>
+          {plan.instrument && (
+            <span className="text-[10px] sm:text-[11px] font-mono font-bold text-white truncate max-w-[160px]">
+              {plan.instrument}
+            </span>
+          )}
+        </div>
+        <span className="text-[9px] font-black tracking-widest text-slate-400 uppercase">{plan.source || 'TRADE PLAN'}</span>
+      </div>
+      {active && (
+        <div className="grid grid-cols-4 gap-1.5 text-center">
+          <div className="rounded-md bg-slate-900/60 border border-slate-600/40 px-1 py-1">
+            <div className="text-[8px] text-slate-400 font-bold uppercase tracking-wider">Entry</div>
+            <div className="text-[11px] sm:text-xs font-black font-mono text-white">{fmt(plan.entry_zone)}</div>
+          </div>
+          <div className="rounded-md bg-slate-900/60 border border-red-500/30 px-1 py-1">
+            <div className="text-[8px] text-slate-400 font-bold uppercase tracking-wider">Stop</div>
+            <div className="text-[11px] sm:text-xs font-black font-mono text-red-300">{fmt(plan.stop_loss)}</div>
+          </div>
+          <div className="rounded-md bg-slate-900/60 border border-emerald-500/30 px-1 py-1">
+            <div className="text-[8px] text-slate-400 font-bold uppercase tracking-wider">Target</div>
+            <div className="text-[11px] sm:text-xs font-black font-mono text-emerald-300">{fmt(plan.target)}</div>
+          </div>
+          <div className="rounded-md bg-slate-900/60 border border-cyan-500/30 px-1 py-1">
+            <div className="text-[8px] text-slate-400 font-bold uppercase tracking-wider">R:R</div>
+            <div className="text-[11px] sm:text-xs font-black font-mono text-cyan-300">{plan.risk_reward > 0 ? plan.risk_reward.toFixed(2) : '—'}</div>
+          </div>
+        </div>
+      )}
+      <p className="text-[10px] sm:text-[11px] text-slate-200 leading-relaxed font-medium">{plan.message}</p>
+    </div>
+  );
+});
+
+// ─── MarketDirectionMeter ─────────────────────────────────────────────────────
+// Instantly shows whether the market is falling or rising (−100 … +100 gauge).
+
+const MarketDirectionMeter = React.memo(function MarketDirectionMeter({ dir }: { dir?: MarketDirection }) {
+  if (!dir) return null;
+  const score = Math.max(-100, Math.min(100, dir.score ?? 0));
+  const pct = (score + 100) / 2; // 0..100 position on bar
+  const labelColor =
+    score >= 40 ? 'text-emerald-300' :
+    score >= 15 ? 'text-emerald-200' :
+    score > -15 ? 'text-amber-300'   :
+    score > -40 ? 'text-red-200'     : 'text-red-300';
+  return (
+    <div className={`rounded-lg border px-3 py-2 space-y-1.5 ${
+      dir.crash_alert ? 'border-red-500/70 bg-red-950/40 shadow-[0_0_16px_rgba(239,68,68,0.35)]' :
+      dir.surge_alert ? 'border-emerald-500/70 bg-emerald-950/40 shadow-[0_0_16px_rgba(16,185,129,0.35)]' :
+      'border-slate-700/50 bg-slate-900/50'
+    }`}>
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-[9px] font-black tracking-widest text-slate-400 uppercase">Market Direction</span>
+        <span className={`text-[11px] sm:text-xs font-black ${labelColor}`}>
+          {dir.arrow} {dir.label} <span className="font-mono">{score > 0 ? '+' : ''}{score.toFixed(0)}</span>
+        </span>
+      </div>
+      <div className="relative h-2 rounded-full bg-gradient-to-r from-red-500 via-amber-400 to-emerald-500 opacity-90">
+        <span
+          className="absolute -top-0.5 w-3 h-3 rounded-full bg-white border-2 border-slate-900 shadow-[0_0_6px_rgba(255,255,255,0.8)] transition-[left] duration-700 ease-out"
+          style={{ left: `calc(${pct}% - 6px)` }}
+        />
+      </div>
+      <div className="flex items-center justify-between text-[9px] text-slate-500">
+        <span>FALLING</span>
+        {(dir.crash_alert || dir.surge_alert) && (
+          <span className={`font-black tracking-wide ${dir.crash_alert ? 'text-red-300' : 'text-emerald-300'}`}>
+            {dir.crash_alert ? '⚠ CRASH ALERT' : '⚡ SURGE'}
+          </span>
+        )}
+        <span>RISING</span>
+      </div>
+      {dir.detail && dir.detail !== '—' && (
+        <div className="text-[9px] text-slate-400 font-medium truncate">{dir.detail}</div>
+      )}
+    </div>
+  );
+});
+
+// ─── StrategyLabPanel ─────────────────────────────────────────────────────────
+// 8 proven Indian intraday strategies, rolling-backtested on live 5m candles.
+// When enough align → consensus fires BUY CE / BUY PE into the algo signal.
+
+const CONSENSUS_STYLE: Record<string, { label: string; cls: string }> = {
+  BUY_CE:  { label: '▲ BUY CE FIRED',  cls: 'bg-emerald-500 text-emerald-950 animate-pulse' },
+  BUY_PE:  { label: '▼ BUY PE FIRED',  cls: 'bg-red-500 text-red-950 animate-pulse' },
+  LEAN_CE: { label: '↗ LEANING CE',    cls: 'bg-emerald-900/60 text-emerald-300 border border-emerald-500/50' },
+  LEAN_PE: { label: '↘ LEANING PE',    cls: 'bg-red-900/60 text-red-300 border border-red-500/50' },
+  NEUTRAL: { label: '○ NO ALIGNMENT',  cls: 'bg-slate-800 text-slate-400 border border-slate-600/50' },
+};
+
+const StrategyLabPanel = React.memo(function StrategyLabPanel({ lab }: { lab?: StrategyLabPayload }) {
+  if (!lab || !lab.strategies || lab.strategies.length === 0) return null;
+  const cons = lab.consensus;
+  const cstyle = CONSENSUS_STYLE[cons?.signal ?? 'NEUTRAL'] ?? CONSENSUS_STYLE.NEUTRAL;
+  return (
+    <details className="group rounded-lg border border-violet-600/30 bg-gradient-to-br from-slate-900/60 to-violet-950/20">
+      {/* Collapsed header — always shows consensus status + alignment so nothing critical is hidden */}
+      <summary className="flex items-center justify-between gap-2 flex-wrap px-3 py-2.5 cursor-pointer select-none list-none [&::-webkit-details-marker]:hidden hover:bg-violet-950/20 rounded-lg transition-colors">
+        <div className="flex items-center gap-2 min-w-0">
+          <span className="text-slate-500 group-open:rotate-90 transition-transform duration-200 text-[10px] shrink-0">▶</span>
+          <span className="text-[9px] font-black tracking-widest text-violet-300 uppercase shrink-0">Strategy Lab</span>
+          <span className="text-[10px] font-black text-white font-mono shrink-0">{cons?.aligned ?? 0}/{cons?.total ?? 8}</span>
+          <span className="hidden sm:inline text-[9px] text-slate-500 font-medium truncate">{lab.window_label}</span>
+        </div>
+        <span className={`px-2 py-0.5 rounded-md text-[9px] sm:text-[10px] font-black tracking-wider shrink-0 ${cstyle.cls}`}>
+          {cstyle.label}
+        </span>
+      </summary>
+
+      <div className="px-3 pb-2.5 space-y-2">
+      {/* Alignment meter */}
+      <div className="flex items-center gap-2">
+        <div className="flex-1 h-1.5 rounded-full bg-slate-800 overflow-hidden">
+          <div
+            className={`h-full rounded-full transition-[width] duration-700 ${
+              (cons?.bull_count ?? 0) >= (cons?.bear_count ?? 0)
+                ? 'bg-gradient-to-r from-emerald-600 to-emerald-400'
+                : 'bg-gradient-to-r from-red-600 to-red-400'
+            }`}
+            style={{ width: `${Math.min(100, ((cons?.aligned ?? 0) / Math.max(1, cons?.total ?? 8)) * 100)}%` }}
+          />
+        </div>
+        <span className="text-[10px] font-black text-white font-mono shrink-0">
+          {cons?.aligned ?? 0}/{cons?.total ?? 8}
+        </span>
+        <span className="text-[9px] text-slate-400 shrink-0">need {cons?.needed ?? 5}+</span>
+      </div>
+      {/* Strategy rows */}
+      <div className="grid grid-cols-1 gap-1">
+        {lab.strategies.map((st) => {
+          const chip =
+            st.signal === 'CE' ? 'bg-emerald-900/50 text-emerald-300 border-emerald-500/50' :
+            st.signal === 'PE' ? 'bg-red-900/50 text-red-300 border-red-500/50' :
+                                 'bg-slate-800/60 text-slate-500 border-slate-700/50';
+          const wrColor = st.win_rate >= 55 ? 'text-emerald-300' : st.win_rate >= 40 ? 'text-amber-300' : st.trades === 0 ? 'text-slate-500' : 'text-red-300';
+          return (
+            <div key={st.id} className="flex items-center gap-2 px-2 py-1 rounded-md bg-slate-900/40 border border-slate-800/60">
+              <span className={`w-10 shrink-0 text-center px-1 py-0.5 rounded border text-[9px] font-black ${chip}`}>
+                {st.signal}
+              </span>
+              <span className="flex-1 min-w-0 text-[9px] sm:text-[10px] font-semibold text-slate-300 truncate" title={st.note}>
+                {st.name}
+              </span>
+              <span className="hidden sm:block text-[9px] text-slate-500 truncate max-w-[110px]">{st.note}</span>
+              <span className={`w-12 shrink-0 text-right text-[9px] font-mono font-bold ${wrColor}`}>
+                {st.trades > 0 ? `${st.win_rate.toFixed(0)}% WR` : '—'}
+              </span>
+              <span className="w-12 shrink-0 text-right text-[9px] font-mono text-slate-400">
+                {st.trades > 0 ? `PF ${st.profit_factor.toFixed(1)}` : 'no bt'}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+      <div className="text-[8px] text-slate-500 leading-relaxed">
+        Live rolling backtest · ATR exits (SL 1× / TGT 1.75×) · win-rate & profit-factor drive each strategy’s vote weight
+      </div>
+      </div>
+    </details>
+  );
+});
+
+// ─── EarlyWarningBanner ───────────────────────────────────────────────────────
+// Fires BEFORE the move forms — RSI divergence, deceleration, squeeze, VWAP
+// crossing-in-progress, OI flow. The client's "about to fall / about to rise" alarm.
+
+const EW_STYLE: Record<string, { frame: string; badge: string; icon: string; title: string }> = {
+  TURNING_UP: {
+    frame: 'border-emerald-400/80 bg-gradient-to-r from-emerald-950/80 to-teal-900/40 shadow-[0_0_28px_rgba(16,185,129,0.4)]',
+    badge: 'bg-emerald-400 text-emerald-950', icon: '▲', title: 'ABOUT TO TURN UP',
+  },
+  TURNING_DOWN: {
+    frame: 'border-red-400/80 bg-gradient-to-r from-red-950/80 to-rose-900/40 shadow-[0_0_28px_rgba(239,68,68,0.4)]',
+    badge: 'bg-red-400 text-red-950', icon: '▼', title: 'ABOUT TO TURN DOWN',
+  },
+  BREAKOUT_SOON: {
+    frame: 'border-violet-400/80 bg-gradient-to-r from-violet-950/80 to-indigo-900/40 shadow-[0_0_28px_rgba(139,92,246,0.4)]',
+    badge: 'bg-violet-400 text-violet-950', icon: '⚡', title: 'BREAKOUT IMMINENT',
+  },
+};
+
+const EarlyWarningBanner = React.memo(function EarlyWarningBanner({ ew }: { ew?: EarlyWarning }) {
+  if (!ew || ew.state === 'NONE') return null;
+  const st = EW_STYLE[ew.state];
+  if (!st) return null;
+  return (
+    <div className={`rounded-xl border-2 px-3 py-2.5 space-y-1.5 ${st.frame}`}>
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <span className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-black tracking-wider animate-pulse ${st.badge}`}>
+          {st.icon} {st.title}
+        </span>
+        <span className="text-[10px] font-black text-white font-mono">conf {ew.confidence}%</span>
+      </div>
+      <p className="text-[10px] sm:text-[11px] text-slate-100 font-semibold leading-relaxed">{ew.message}</p>
+      {ew.signals.length > 0 && (
+        <ul className="space-y-0.5">
+          {ew.signals.map((s) => (
+            <li key={s} className="text-[9px] sm:text-[10px] text-slate-300 flex items-start gap-1.5">
+              <span className="text-cyan-300 shrink-0 mt-px">‣</span>{s}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+});
+
+// ─── ExecReadinessPanel ───────────────────────────────────────────────────────
+// Gate-by-gate checklist — exactly why the Zerodha auto-buy fires or doesn't.
+
+const ExecReadinessPanel = React.memo(function ExecReadinessPanel({ diag }: { diag?: ExecDiagnostics }) {
+  if (!diag || !diag.checks || diag.checks.length === 0) return null;
+  return (
+    <details className={`group rounded-lg border ${diag.ready ? 'border-emerald-500/60 bg-emerald-950/25' : 'border-amber-600/40 bg-slate-900/50'}`}>
+      <summary className="flex items-center justify-between gap-2 px-3 py-2.5 cursor-pointer select-none list-none [&::-webkit-details-marker]:hidden hover:bg-slate-800/40 rounded-lg transition-colors">
+        <div className="flex items-center gap-2 min-w-0">
+          <span className="text-slate-500 group-open:rotate-90 transition-transform duration-200 text-[10px] shrink-0">▶</span>
+          <span className={`text-[9px] font-black tracking-widest uppercase shrink-0 ${diag.ready ? 'text-emerald-300' : 'text-amber-300'}`}>
+            Auto-Buy Readiness
+          </span>
+          <span className="text-[10px] font-black text-white font-mono shrink-0">{diag.passed}/{diag.total}</span>
+        </div>
+        <span className={`text-[9px] sm:text-[10px] font-bold truncate max-w-[55%] text-right ${diag.ready ? 'text-emerald-300' : 'text-amber-200'}`}>
+          {diag.summary}
+        </span>
+      </summary>
+      <div className="px-3 pb-2.5 space-y-1">
+        {diag.checks.map((c) => (
+          <div key={c.name} className={`flex items-center justify-between gap-2 px-2 py-1 rounded-md border ${
+            c.ok ? 'border-emerald-800/50 bg-emerald-950/20' : 'border-red-800/50 bg-red-950/20'
+          }`}>
+            <span className="flex items-center gap-1.5 min-w-0">
+              <span className={`text-[10px] font-black shrink-0 ${c.ok ? 'text-emerald-400' : 'text-red-400'}`}>
+                {c.ok ? '✓' : '✗'}
+              </span>
+              <span className="text-[9px] sm:text-[10px] font-semibold text-slate-300 truncate">{c.name}</span>
+            </span>
+            <span className={`text-[9px] font-mono text-right truncate max-w-[50%] ${c.ok ? 'text-slate-400' : 'text-red-300 font-bold'}`}>
+              {c.detail}
+            </span>
+          </div>
+        ))}
+      </div>
+    </details>
+  );
+});
+
 // ─── SymbolCard ───────────────────────────────────────────────────────────────
 
 interface SymbolCardProps {
@@ -391,6 +664,18 @@ const SymbolCard = React.memo(function SymbolCard({
       {/* Card body */}
       <div className="flex flex-col gap-4 p-4 sm:p-5">
 
+        {/* Early warning — "about to fall / about to rise" fires BEFORE the move */}
+        <EarlyWarningBanner ew={algo.early_warning} />
+
+        {/* Trade plan — the single actionable instruction (BUY CE / BUY PE / WAIT) */}
+        <TradePlanPanel plan={algo.trade_plan} />
+
+        {/* Crash / rally detector */}
+        <MarketDirectionMeter dir={algo.market_direction} />
+
+        {/* Gate-by-gate Zerodha execution readiness */}
+        <ExecReadinessPanel diag={algo.exec_diagnostics} />
+
         {/* Confidence row */}
         <div className="flex items-center gap-4">
           <ConfidenceRing value={algo.confidence} signal={sig} />
@@ -461,6 +746,9 @@ const SymbolCard = React.memo(function SymbolCard({
             <div className="text-[10px] text-slate-400 italic">{mlNote}</div>
           )}
         </div>
+
+        {/* Strategy Lab — 8 backtested Indian strategies voting on CE/PE */}
+        <StrategyLabPanel lab={algo.strategy_lab} />
 
         {/* Auto-buy preview directly under confidence */}
         <div className="rounded-lg border border-cyan-600/30 bg-gradient-to-r from-slate-900/45 to-cyan-900/15 px-3 py-2.5 space-y-2">
@@ -564,6 +852,12 @@ const SymbolCard = React.memo(function SymbolCard({
                   {algo.option_tradingsymbol || '—'}
                 </span>
               </div>
+              {/* WHY this exact contract was picked (delta/spread/liquidity rationale) */}
+              {algo.option_pick_reason && (
+                <div className="text-[9px] text-cyan-200/80 font-medium leading-relaxed">
+                  🎯 {algo.option_pick_reason}
+                </div>
+              )}
               {/* Strike / spot / tier / expiry — the backend now picks ITM+1 or ATM+1 for best delta/spread */}
               {(() => {
                 const strike = Number(algo.option_strike ?? 0);
@@ -683,6 +977,29 @@ const SymbolCard = React.memo(function SymbolCard({
                     ? `Ready to auto-buy ${algo.recommended_option_side ?? 'OPTION'} at best buy ${fmt(algo.option_best_buy_price ?? 0)}.`
                     : (algo.auto_buy_block_reason || algo.auto_buy_gate_reason || algo.auto_buy_ai_reason || 'Waiting for all parameters and AI confirmation.')}
                 </div>
+                {/* Open-position banner: auto-exit manager is live on this symbol */}
+                {algo.position_state === 'OPEN' && (
+                  <div className="rounded-md border border-emerald-500/50 bg-emerald-950/40 px-2 py-1.5 space-y-1 shadow-[0_0_10px_rgba(16,185,129,0.25)]">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="flex items-center gap-1.5 text-[10px] font-black text-emerald-300 tracking-wide">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
+                        POSITION OPEN — AUTO EXIT ARMED
+                      </span>
+                      <span className={`text-[10px] font-black font-mono ${pnlColor}`}>
+                        {pnlAmt >= 0 ? '+' : ''}{fmt(pnlAmt)}
+                      </span>
+                    </div>
+                    {algo.position_exit_levels && (
+                      <div className="flex items-center justify-between gap-1 text-[9px] font-mono">
+                        <span className="text-red-300">SL {fmt(algo.position_exit_levels.sl)}</span>
+                        <span className={algo.position_exit_levels.tsl_armed ? 'text-amber-300 font-black' : 'text-slate-500'}>
+                          TSL {algo.position_exit_levels.tsl_armed ? fmt(algo.position_exit_levels.tsl) : 'arming…'}
+                        </span>
+                        <span className="text-emerald-300">TGT {fmt(algo.position_exit_levels.target)}</span>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             </div>
           )}
@@ -714,8 +1031,24 @@ const SymbolCard = React.memo(function SymbolCard({
           </span>
         </div>
 
-        {/* Indicators grid */}
-        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+        {/* Indicators grid — collapsed by default; expand to inspect raw levels */}
+        <details className="group rounded-lg border border-slate-700/50 bg-slate-900/40">
+          <summary className="flex items-center justify-between gap-2 px-3 py-2.5 cursor-pointer select-none list-none [&::-webkit-details-marker]:hidden hover:bg-slate-800/40 rounded-lg transition-colors">
+            <div className="flex items-center gap-2 min-w-0">
+              <span className="text-slate-500 group-open:rotate-90 transition-transform duration-200 text-[10px] shrink-0">▶</span>
+              <span className="text-[9px] font-black tracking-widest text-slate-300 uppercase shrink-0">Indicators</span>
+              <span className="text-[9px] text-slate-500 font-medium hidden sm:inline">EMA · RSI · VWAP · PCR · OI</span>
+            </div>
+            <div className="flex items-center gap-2 shrink-0 text-[10px] font-mono font-bold">
+              <span className={typeof ind.rsi === 'number' && ind.rsi > 50 ? 'text-emerald-300' : 'text-red-300'}>
+                RSI {fmt(ind.rsi ?? 50, 0)}
+              </span>
+              <span className={typeof ind.change_pct === 'number' && ind.change_pct >= 0 ? 'text-emerald-300' : 'text-red-300'}>
+                {fmtPct(ind.change_pct ?? 0)}
+              </span>
+            </div>
+          </summary>
+          <div className="px-3 pb-3 grid grid-cols-2 sm:grid-cols-3 gap-2">
           <IndicatorPill label="EMA 20"   value={fmt(ind.ema20 ?? 0)}   ok={ind.price_above_ema20} />
           <IndicatorPill label="EMA 100"  value={fmt(ind.ema100 ?? 0)}  ok={ind.price_above_ema100} />
           <IndicatorPill label="EMA 200"  value={fmt(ind.ema200 ?? 0)}  ok={ind.price_above_ema200} />
@@ -734,7 +1067,8 @@ const SymbolCard = React.memo(function SymbolCard({
           <IndicatorPill label="Liq Sweep" value={liqSweepLabel} ok={liqSweepOk} />
           <IndicatorPill label="Change"    value={fmtPct(ind.change_pct ?? 0)}
             ok={typeof ind.change_pct === 'number' ? ind.change_pct > 0 : null} />
-        </div>
+          </div>
+        </details>
 
         {/* AI reasoning */}
         <div className="flex items-start gap-2 px-2.5 py-2.5 rounded-lg border border-cyan-600/25 bg-gradient-to-r from-slate-900/50 to-cyan-900/10 shadow-[0_0_8px_rgba(34,211,238,0.1)]">
@@ -1008,7 +1342,7 @@ export default function SmartAIAlgoSection() {
                 </div>
               </div>
               <p className="text-[10px] sm:text-[11px] md:text-xs text-slate-400 mt-2 leading-relaxed tracking-wide">
-                EMA 20/100/200 · RSI · PCR · OI · VWAP · Liq Sweep · SMC · GPT-4o-mini
+                8 backtested strategies · ORB · VWAP · Supertrend · EMA · RSI 60/40 · BB Squeeze · CPR · OI — aligned 5+ fires BUY CE / BUY PE
               </p>
             </div>
           </div>

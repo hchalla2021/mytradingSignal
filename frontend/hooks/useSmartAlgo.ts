@@ -77,11 +77,27 @@ export interface AlgoSignal {
     model_status: 'warmup' | 'live' | 'error';
   };
   ml_feedback?: { applied: boolean; note: string };
+  /** Strategy Lab — 8 proven Indian intraday strategies, rolling-backtested on live 5m candles */
+  strategy_lab?: StrategyLabPayload;
+  /** Fast crash/rally detector (−100 falling … +100 rising) */
+  market_direction?: MarketDirection;
+  /** Plain-English actionable trade instruction for the client */
+  trade_plan?: TradePlan;
+  /** OPEN while the auto-exit manager (SL/TGT/TSL) holds a CE/PE position */
+  position_state?: 'OPEN' | 'FLAT';
+  position_exit_levels?: {
+    sl: number; target: number; tsl: number; extreme: number; tsl_armed: boolean;
+  };
+  /** Anticipatory turn detector — fires BEFORE the move fully forms */
+  early_warning?: EarlyWarning;
+  /** Gate-by-gate auto-buy readiness — shows exactly why Zerodha fires or not */
+  exec_diagnostics?: ExecDiagnostics;
   option_tradingsymbol?: string;
   option_type?: 'CE' | 'PE';
   option_expiry?: string;
   option_strike?: number;
   option_moneyness?: string;
+  option_pick_reason?: string;
   option_ltp?: number;
   option_best_bid_price?: number;
   option_best_ask_price?: number;
@@ -108,6 +124,87 @@ export interface AlgoSignal {
 }
 
 export type AlgoData = Record<string, AlgoSignal>;
+
+export interface StrategyRow {
+  id: string;
+  name: string;
+  signal: 'CE' | 'PE' | 'FLAT';
+  win_rate: number;
+  profit_factor: number;
+  trades: number;
+  net_points: number;
+  avg_points: number;
+  weight: number;
+  note: string;
+}
+
+export interface StrategyConsensus {
+  signal: 'BUY_CE' | 'BUY_PE' | 'LEAN_CE' | 'LEAN_PE' | 'NEUTRAL';
+  fired: boolean;
+  aligned: number;
+  total: number;
+  bull_count: number;
+  bear_count: number;
+  strength: number;
+  needed: number;
+  leaders: string[];
+}
+
+export interface StrategyLabPayload {
+  updated: number;
+  bars_tested: number;
+  window_label: string;
+  consensus: StrategyConsensus;
+  strategies: StrategyRow[];
+}
+
+export interface MarketDirection {
+  score: number;
+  label: string;
+  arrow: string;
+  crash_alert: boolean;
+  surge_alert: boolean;
+  velocity_pct_per_min: number;
+  detail: string;
+}
+
+export interface TradePlan {
+  action: string;
+  instrument: string;
+  entry_zone: number;
+  stop_loss: number;
+  target: number;
+  risk_points: number;
+  reward_points: number;
+  risk_reward: number;
+  confidence: number;
+  source: string;
+  message: string;
+}
+
+export interface EarlyWarning {
+  state: 'TURNING_UP' | 'TURNING_DOWN' | 'BREAKOUT_SOON' | 'NONE';
+  confidence: number;
+  up_score: number;
+  down_score: number;
+  signals: string[];
+  message: string;
+}
+
+export interface ExecCheck {
+  name: string;
+  ok: boolean;
+  detail: string;
+}
+
+export interface ExecDiagnostics {
+  checks: ExecCheck[];
+  passed: number;
+  total: number;
+  ready: boolean;
+  blockers: string[];
+  summary: string;
+}
 
 interface UseSmartAlgoReturn {
   data: AlgoData;
