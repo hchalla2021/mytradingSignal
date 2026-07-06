@@ -359,6 +359,10 @@ class SmartAIAlgoService:
         # Rate-limits FULL execution attempts (gates + AI + broker) per symbol so
         # a persistent setup doesn't hammer OpenAI/Kite every 2s rule tick.
         self._last_exec_attempt: Dict[str, float] = {s: 0.0 for s in SYMBOLS}
+        # Last execution attempt outcome per symbol (SKIPPED/FAILED/EXECUTED/...)
+        # so exec diagnostics can show the REAL broker error instead of stale
+        # "pending" placeholders after the per-tick result dict is rebuilt.
+        self._last_exec_outcome: Dict[str, Dict[str, Any]] = {s: {} for s in SYMBOLS}
         self._trade_history: List[Dict[str, Any]] = []
         self._instrument_token_map: Dict[int, Dict[str, str]] = {}
         self._instrument_meta_map: Dict[str, Dict[str, float]] = {}
@@ -1088,6 +1092,23 @@ class SmartAIAlgoService:
             str(result.get("auto_buy_gate_reason", "") or "pending"))
         add("AI confirmation", bool(result.get("auto_buy_ai_passed")),
             str(result.get("auto_buy_ai_reason", "") or "runs at execution"))
+
+        # Surface the REAL outcome of the last broker execution attempt — the
+        # per-tick result dict is rebuilt every cycle, so without this the UI
+        # shows stale "pending" placeholders while orders silently fail.
+        last = self._last_exec_outcome.get(symbol) or {}
+        last_status = str(last.get("status", "") or "")
+        if last_status:
+            order_ok = last_status in ("LIVE_EXECUTED", "PAPER_EXECUTED")
+            detail = last_status
+            err = str(last.get("error", "") or "")
+            if err:
+                detail = f"{last_status}: {err}"
+            elif last.get("broker_order_id"):
+                detail = f"{last_status} #{last.get('broker_order_id')}"
+            add("Broker order", order_ok, detail)
+            if not order_ok and err and not result.get("auto_buy_block_reason"):
+                result["auto_buy_block_reason"] = err
 
         failed = [c for c in checks if not c["ok"]]
         result["exec_diagnostics"] = {
@@ -2079,14 +2100,27 @@ class SmartAIAlgoService:
             logger.info("Smart AI Algo LIVE order placed: %s %s -> %s", symbol, side, order_id)
         except Exception as exc:
             error_msg = str(exc)
-            if isinstance(exc, PermissionException) and "No IPs configured for this app" in error_msg:
-                # Zerodha app-level IP whitelist rejection. Pause live attempts briefly.
+            # Zerodha app-level IP whitelist rejection comes in multiple phrasings:
+            #   "No IPs configured for this app"
+            #   "IP (x.x.x.x) is not allowed to place orders for this app"
+            # Match broadly so we actually pause instead of hammering the broker
+            # with a FAILED order every 20 seconds.
+            ip_block = (
+                "No IPs configured" in error_msg
+                or "not allowed to place orders" in error_msg
+                or "allowed IPs" in error_msg
+            )
+            if isinstance(exc, PermissionException) or ip_block:
+                # Zerodha app-level permission/IP whitelist rejection. Pause live attempts briefly.
                 self._live_block_until_ts = time.time() + 300
                 trade_event["status"] = "LIVE_BLOCKED_IP"
                 trade_event["error"] = (
-                    "No IPs configured for this Kite app. Whitelist your server IP in Zerodha developer console. "
+                    f"Broker blocked order: {error_msg} "
+                    "Whitelist your current public IP in the Zerodha developer console (My apps → your app → Allowed IPs). "
                     "Live retries paused for 5 minutes."
                 )
+                signal["auto_buy_ready"] = False
+                signal["auto_buy_block_reason"] = trade_event["error"]
                 # Mark attempt time/side so symbol-level cooldown and duplicate suppression also apply.
                 self._record_trade(symbol, side, now, trade_event)
             else:
@@ -2109,6 +2143,7 @@ class SmartAIAlgoService:
             self._last_trade_side[symbol] = side
             self._last_trade_time[symbol] = ts
 
+        self._last_exec_outcome[symbol] = dict(event)
         self._trade_history.append(event)
         if len(self._trade_history) > 200:
             self._trade_history = self._trade_history[-200:]

@@ -195,6 +195,14 @@ class FeedWatchdog:
                 traceback.print_exc()
                 await asyncio.sleep(5)
     
+    async def trigger_reconnect(self):
+        """Public entry point: force a reconnect attempt.
+
+        Used by the market feed's stale-feed detection (no ticks for 30s+
+        during market hours).
+        """
+        await self._trigger_reconnect()
+
     async def _trigger_reconnect(self):
         """Trigger reconnection logic"""
         if self._reconnect_count >= self._max_reconnect_attempts:

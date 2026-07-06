@@ -8,7 +8,7 @@
  * Performance: React.memo, useMemo, CSS transitions only (no JS animation loops)
  */
 
-import React, { useMemo, useCallback, useState, useRef, useEffect } from 'react';
+import React, { useMemo, useCallback, useState, useEffect } from 'react';
 import { useSmartAlgo, AlgoSignal, AlgoIndicators, StrategyLabPayload, MarketDirection, TradePlan, EarlyWarning, ExecDiagnostics } from '@/hooks/useSmartAlgo';
 
 // ─── formatters ───────────────────────────────────────────────────────────────
@@ -92,22 +92,6 @@ const GRADE: Record<string, { label: string; color: string; bg: string }> = {
   WATCH:    { label: 'WATCH',    color: 'text-slate-300',   bg: 'bg-gradient-to-r from-slate-700/70 to-slate-800/60 border-slate-600/50' },
 };
 
-// ─── flash hook ───────────────────────────────────────────────────────────────
-
-function useFlashClass(value: number): string {
-  const prev = useRef(value);
-  const [cls, setCls] = useState('');
-  useEffect(() => {
-    if (prev.current === value) return;
-    const up = value > prev.current;
-    prev.current = value;
-    setCls(up ? 'animate-flash-green' : 'animate-flash-red');
-    const t = setTimeout(() => setCls(''), 700);
-    return () => clearTimeout(t);
-  }, [value]);
-  return cls;
-}
-
 // ─── ConfidenceRing ───────────────────────────────────────────────────────────
 
 const ConfidenceRing = React.memo(function ConfidenceRing({
@@ -140,14 +124,14 @@ const PriceCell = React.memo(function PriceCell({
   label, value, color, sublabel,
 }: { label: string; value: string; color: string; sublabel?: string }) {
   return (
-    <div className="flex flex-col items-center justify-center gap-1 py-3 px-2 rounded-lg bg-gradient-to-b from-slate-700/30 to-slate-800/50 border border-slate-600/50 shadow-[0_4px_12px_rgba(0,0,0,0.3)]">
-      <span className="text-[9px] sm:text-[10px] md:text-xs font-bold text-slate-300 tracking-widest uppercase leading-none">
+    <div className="flex flex-col items-center justify-between py-3 px-2 min-h-[92px] rounded-lg bg-gradient-to-b from-slate-700/30 to-slate-800/50 border border-slate-600/50 shadow-[0_4px_12px_rgba(0,0,0,0.3)]">
+      <span className="h-3 text-[9px] sm:text-[10px] md:text-xs font-bold text-slate-300 tracking-widest uppercase leading-none">
         {label}
       </span>
-      <span className={`text-sm sm:text-base md:text-lg font-black font-mono leading-tight ${color}`}>
+      <span className={`h-6 inline-flex items-center justify-center text-sm sm:text-base md:text-lg font-black font-mono tabular-nums leading-tight min-w-[7ch] ${color}`}>
         {value}
       </span>
-      {sublabel && <span className="text-[9px] sm:text-[10px] text-slate-400 font-medium">{sublabel}</span>}
+      <span className={`h-3 text-[9px] sm:text-[10px] text-slate-400 font-medium ${sublabel ? '' : 'invisible'}`}>{sublabel || '•'}</span>
     </div>
   );
 });
@@ -169,11 +153,11 @@ const FreshnessBadge = React.memo(function FreshnessBadge({
     s === 'ERROR'   ? 'border-red-600/70     bg-red-950/50     text-red-200'     :
                       'border-slate-600/50   bg-slate-800/40   text-slate-300';
   const dotCls =
-    s === 'LIVE'    ? 'bg-emerald-400 animate-pulse' :
+    s === 'LIVE'    ? 'bg-emerald-400' :
     s === 'SLOW'    ? 'bg-amber-400'   :
     s === 'STALE'   ? 'bg-red-400'     :
     s === 'NO_DATA' ? 'bg-red-500'     :
-    s === 'ERROR'   ? 'bg-red-600 animate-pulse' :
+    s === 'ERROR'   ? 'bg-red-600' :
                       'bg-slate-500';
   const ageTxt =
     s === 'NO_DATA' ? 'no tick' :
@@ -203,7 +187,7 @@ const MarketStatusBadge = React.memo(function MarketStatusBadge({
     s === 'CLOSED'   ? 'border-slate-600/60   bg-slate-800/50   text-slate-300'   :
                        'border-slate-600/50   bg-slate-800/40   text-slate-300';
   const dotCls =
-    s === 'LIVE'     ? 'bg-emerald-400 animate-pulse' :
+    s === 'LIVE'     ? 'bg-emerald-400' :
     s === 'PRE_OPEN' ? 'bg-sky-400'    :
                        'bg-slate-500';
   const label = s === 'PRE_OPEN' ? 'PRE-OPEN' : s;
@@ -571,7 +555,6 @@ const SymbolCard = React.memo(function SymbolCard({
   const s = SIG[sig];
   const r = REGIME[algo.regime] ?? REGIME.UNKNOWN;
   const ind: Partial<AlgoIndicators> = algo.indicators ?? {};
-  const flashCls = useFlashClass(algo.entry_price);
   const isActive = sig !== 'WAIT';
 
   const vwapOk = typeof ind.price === 'number' && typeof ind.vwap === 'number' && ind.vwap > 0
@@ -595,6 +578,32 @@ const SymbolCard = React.memo(function SymbolCard({
   const gatePassed = Boolean(algo.auto_buy_gate_passed);
   const aiPassed = Boolean(algo.auto_buy_ai_passed);
   const aiConf = algo.auto_buy_ai_confidence ?? 0;
+  const execSummary = String(algo.exec_diagnostics?.summary || '');
+  const execBlockRaw = String(algo.auto_buy_block_reason || execSummary || '');
+  const execBlock = execBlockRaw.toLowerCase();
+
+  // Single execution-stage model used across all sub-panels to avoid mixed
+  // messaging like BUY + WAITING without explicit blocker context.
+  let execStage: 'NO_SIGNAL' | 'GATE_CHECK' | 'AI_PENDING' | 'BROKER_BLOCKED' | 'HOLD' | 'ARMED' = 'HOLD';
+  if (!isActive) execStage = 'NO_SIGNAL';
+  else if (autoReady) execStage = 'ARMED';
+  else if (execBlock.includes('broker') || execBlock.includes('ip') || execBlock.includes('live_blocked')) execStage = 'BROKER_BLOCKED';
+  else if (!gatePassed) execStage = 'GATE_CHECK';
+  else if (!aiPassed) execStage = 'AI_PENDING';
+
+  const execStageLabel =
+    execStage === 'ARMED' ? 'READY' :
+    execStage === 'AI_PENDING' ? 'AI PENDING' :
+    execStage === 'GATE_CHECK' ? 'GATE CHECK' :
+    execStage === 'BROKER_BLOCKED' ? 'BROKER BLOCKED' :
+    execStage === 'NO_SIGNAL' ? 'NO SIGNAL' :
+    'HOLD';
+  const execStageClass =
+    execStage === 'ARMED' ? 'text-emerald-300' :
+    execStage === 'BROKER_BLOCKED' ? 'text-red-300' :
+    execStage === 'AI_PENDING' ? 'text-violet-300' :
+    execStage === 'GATE_CHECK' ? 'text-amber-300' :
+    'text-slate-300';
 
   // Prefer real backend reasoning — it now carries the exact "why WAIT" text.
   const backendReason = algo.reasoning?.trim() || '';
@@ -630,13 +639,13 @@ const SymbolCard = React.memo(function SymbolCard({
       ${s.outerBorder} ${s.innerGlow}
       bg-gradient-to-br from-[#0f141f] via-[#0a0f1a] to-[#050810]
       shadow-[0_8px_32px_rgba(0,0,0,0.4)]
-      transition-all duration-300
+      transition-colors duration-300
       ${!algoEnabled ? 'opacity-60 grayscale-[30%]' : ''}
     `}>
       {/* Header band */}
       <div className={`relative flex items-center justify-between px-4 sm:px-5 py-3 bg-gradient-to-r ${s.headerBg}`}>
         <div className="flex items-center gap-2.5 min-w-0">
-          <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${s.dot} ${isActive ? 'animate-pulse' : ''}`} />
+          <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${s.dot}`} />
           <span className="text-base sm:text-lg md:text-xl font-black text-white tracking-tight leading-none">
             {algo.symbol}
           </span>
@@ -651,6 +660,15 @@ const SymbolCard = React.memo(function SymbolCard({
         <div className="flex items-center gap-1.5 shrink-0">
           <span className={`px-2.5 sm:px-3 py-1 rounded-lg text-[11px] sm:text-xs font-black border ${s.badgeBg} ${s.badgeGlow} tracking-wider`}>
             {s.label}
+          </span>
+          <span className={`px-2 py-1 rounded-md text-[10px] font-black tracking-wide border ${
+            execStage === 'ARMED' ? 'border-emerald-500/50 bg-emerald-900/25 text-emerald-200' :
+            execStage === 'BROKER_BLOCKED' ? 'border-red-500/50 bg-red-900/25 text-red-200' :
+            execStage === 'AI_PENDING' ? 'border-violet-500/50 bg-violet-900/20 text-violet-200' :
+            execStage === 'GATE_CHECK' ? 'border-amber-500/50 bg-amber-900/20 text-amber-200' :
+            'border-slate-600/40 bg-slate-800/40 text-slate-300'
+          }`}>
+            EXEC {execStageLabel}
           </span>
           <span className={`hidden sm:flex items-center gap-0.5 text-[10px] font-semibold ${r.color}`}>
             <span>{r.icon}</span><span className="hidden md:inline">{r.label}</span>
@@ -754,8 +772,8 @@ const SymbolCard = React.memo(function SymbolCard({
         <div className="rounded-lg border border-cyan-600/30 bg-gradient-to-r from-slate-900/45 to-cyan-900/15 px-3 py-2.5 space-y-2">
           <div className="flex items-center justify-between gap-2">
             <span className="text-[10px] sm:text-[11px] font-bold text-cyan-300 tracking-wide">AUTO BUY PREVIEW</span>
-            <span className={`text-[10px] sm:text-[11px] font-black ${autoReady ? 'text-emerald-300' : 'text-amber-300'}`}>
-              {autoReady ? 'READY' : 'WAITING'}
+            <span className={`text-[10px] sm:text-[11px] font-black ${execStageClass}`}>
+              {execStageLabel}
             </span>
           </div>
           <div className="mt-1.5 flex items-center justify-between gap-2 text-[10px] sm:text-[11px]">
@@ -766,7 +784,7 @@ const SymbolCard = React.memo(function SymbolCard({
                 if (s === 'CE') {
                   return (
                     <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md border-2 border-emerald-400 bg-emerald-900/40 text-emerald-200 font-black text-[11px] sm:text-xs shadow-[0_0_8px_rgba(16,185,129,0.5)]">
-                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
                       CE
                     </span>
                   );
@@ -774,7 +792,7 @@ const SymbolCard = React.memo(function SymbolCard({
                 if (s === 'PE') {
                   return (
                     <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md border-2 border-red-400 bg-red-900/40 text-red-200 font-black text-[11px] sm:text-xs shadow-[0_0_8px_rgba(239,68,68,0.5)]">
-                      <span className="w-1.5 h-1.5 rounded-full bg-red-400 animate-pulse" />
+                      <span className="w-1.5 h-1.5 rounded-full bg-red-400" />
                       PE
                     </span>
                   );
@@ -794,11 +812,21 @@ const SymbolCard = React.memo(function SymbolCard({
             <span className={`px-2 py-1 rounded-md text-[9px] sm:text-[10px] font-bold text-center border ${gatePassed ? 'text-emerald-200 border-emerald-500/40 bg-emerald-900/20' : 'text-amber-200 border-amber-500/40 bg-amber-900/20'}`}>
               ALGO {gatePassed ? 'PASS' : 'CHECK'}
             </span>
-            <span className={`px-2 py-1 rounded-md text-[9px] sm:text-[10px] font-bold text-center border ${aiPassed ? 'text-emerald-200 border-emerald-500/40 bg-emerald-900/20' : 'text-violet-200 border-violet-500/40 bg-violet-900/20'}`}>
-              AI {aiPassed ? `PASS ${aiConf}%` : 'PENDING'}
+            <span className={`px-2 py-1 rounded-md text-[9px] sm:text-[10px] font-bold text-center border ${
+              aiPassed ? 'text-emerald-200 border-emerald-500/40 bg-emerald-900/20' :
+              execStage === 'GATE_CHECK' ? 'text-slate-300 border-slate-600/40 bg-slate-800/40' :
+              'text-violet-200 border-violet-500/40 bg-violet-900/20'
+            }`}>
+              AI {aiPassed ? `PASS ${aiConf}%` : (execStage === 'GATE_CHECK' ? 'WAIT GATE' : 'PENDING')}
             </span>
-            <span className={`px-2 py-1 rounded-md text-[9px] sm:text-[10px] font-bold text-center border ${autoReady ? 'text-emerald-200 border-emerald-500/40 bg-emerald-900/20' : 'text-slate-200 border-slate-600/40 bg-slate-800/40'}`}>
-              EXEC {autoReady ? 'ARMED' : 'HOLD'}
+            <span className={`px-2 py-1 rounded-md text-[9px] sm:text-[10px] font-bold text-center border ${
+              execStage === 'ARMED' ? 'text-emerald-200 border-emerald-500/40 bg-emerald-900/20' :
+              execStage === 'BROKER_BLOCKED' ? 'text-red-200 border-red-500/40 bg-red-900/20' :
+              execStage === 'AI_PENDING' ? 'text-violet-200 border-violet-500/40 bg-violet-900/20' :
+              execStage === 'GATE_CHECK' ? 'text-amber-200 border-amber-500/40 bg-amber-900/20' :
+              'text-slate-200 border-slate-600/40 bg-slate-800/40'
+            }`}>
+              EXEC {execStage === 'ARMED' ? 'ARMED' : execStage === 'BROKER_BLOCKED' ? 'BLOCKED' : execStage === 'AI_PENDING' ? 'AI WAIT' : execStage === 'GATE_CHECK' ? 'CHECK' : 'HOLD'}
             </span>
           </div>
           <div className="h-12 overflow-y-auto pr-1 text-[10px] sm:text-[11px] text-slate-300 leading-relaxed">
@@ -809,7 +837,7 @@ const SymbolCard = React.memo(function SymbolCard({
         {/* Price grid: always mounted to avoid flicker on state transitions */}
         <div className="space-y-2.5">
           <div className="grid grid-cols-4 gap-2.5">
-            <div className={showPrices ? flashCls : ''}>
+            <div>
               <PriceCell label={entryLabel} value={showPrices ? fmt(algo.entry_price) : '—'} color={isActive ? 'text-white font-black' : 'text-slate-100'} sublabel={showPrices ? priceSublabel : undefined} />
             </div>
             <PriceCell
@@ -832,8 +860,7 @@ const SymbolCard = React.memo(function SymbolCard({
             />
           </div>
 
-          {(algo.option_tradingsymbol || (algo.option_best_buy_price ?? 0) > 0) && (
-            <div className="rounded-lg border border-cyan-600/30 bg-gradient-to-r from-slate-900/40 to-cyan-900/10 p-2.5 space-y-2">
+          <div className="rounded-lg border border-cyan-600/30 bg-gradient-to-r from-slate-900/40 to-cyan-900/10 p-2.5 space-y-2">
               <div className="flex items-center justify-between gap-2">
                 <div className="flex items-center gap-2 min-w-0">
                   <span className="text-[10px] sm:text-[11px] font-bold text-cyan-300 tracking-wide">OPTION EXECUTION PRICE</span>
@@ -848,16 +875,14 @@ const SymbolCard = React.memo(function SymbolCard({
                     </span>
                   )}
                 </div>
-                <span className="text-[10px] sm:text-[11px] font-mono text-slate-300 truncate max-w-[45%] text-right">
+                <span className="text-[10px] sm:text-[11px] font-mono tabular-nums text-slate-300 truncate max-w-[45%] text-right min-h-[16px]">
                   {algo.option_tradingsymbol || '—'}
                 </span>
               </div>
               {/* WHY this exact contract was picked (delta/spread/liquidity rationale) */}
-              {algo.option_pick_reason && (
-                <div className="text-[9px] text-cyan-200/80 font-medium leading-relaxed">
-                  🎯 {algo.option_pick_reason}
-                </div>
-              )}
+              <div className={`text-[9px] text-cyan-200/80 font-medium leading-relaxed min-h-[14px] ${algo.option_pick_reason ? '' : 'opacity-60'}`}>
+                {algo.option_pick_reason ? `🎯 ${algo.option_pick_reason}` : '—'}
+              </div>
               {/* Strike / spot / tier / expiry — the backend now picks ITM+1 or ATM+1 for best delta/spread */}
               {(() => {
                 const strike = Number(algo.option_strike ?? 0);
@@ -943,8 +968,8 @@ const SymbolCard = React.memo(function SymbolCard({
                     <MarketStatusBadge status={algo.market_status} />
                     <FreshnessBadge status={algo.data_status} ageSec={algo.tick_age_seconds} />
                   </div>
-                  <span className={`text-[10px] sm:text-[11px] font-black ${autoReady ? 'text-emerald-300' : 'text-amber-300'}`}>
-                    {autoReady ? '✅ ALL MATCHED' : '⏳ WAITING MATCH'}
+                  <span className={`text-[10px] sm:text-[11px] font-black ${execStageClass}`}>
+                    {execStage === 'ARMED' ? '✅ ALL MATCHED' : `⏳ ${execStageLabel}`}
                   </span>
                 </div>
                 {/* Sequential 3-step checklist: Confluence → AI → Execute */}
@@ -962,14 +987,15 @@ const SymbolCard = React.memo(function SymbolCard({
                                           : 'border-slate-600/40 bg-slate-800/40 text-slate-400'
                   }`}>
                     <span className="text-[11px] font-black">{aiPassed ? '②✓' : '②'}</span>
-                    <span className="text-[9px] font-bold tracking-wide">AI {aiPassed ? `${aiConf}%` : 'CHECK'}</span>
+                    <span className="text-[9px] font-bold tracking-wide">AI {aiPassed ? `${aiConf}%` : (execStage === 'GATE_CHECK' ? 'WAIT GATE' : 'CHECK')}</span>
                   </div>
                   <div className={`flex items-center gap-1.5 px-2 py-1 rounded border ${
-                    autoReady ? 'border-emerald-500/50 bg-emerald-900/25 text-emerald-200'
-                              : 'border-slate-600/40 bg-slate-800/40 text-slate-400'
+                    execStage === 'ARMED' ? 'border-emerald-500/50 bg-emerald-900/25 text-emerald-200'
+                    : execStage === 'BROKER_BLOCKED' ? 'border-red-500/50 bg-red-900/25 text-red-200'
+                    : 'border-slate-600/40 bg-slate-800/40 text-slate-400'
                   }`}>
-                    <span className="text-[11px] font-black">{autoReady ? '③✓' : '③'}</span>
-                    <span className="text-[9px] font-bold tracking-wide">{autoReady ? 'ARMED' : 'HOLD'}</span>
+                    <span className="text-[11px] font-black">{execStage === 'ARMED' ? '③✓' : '③'}</span>
+                    <span className="text-[9px] font-bold tracking-wide">{execStage === 'ARMED' ? 'ARMED' : execStage === 'BROKER_BLOCKED' ? 'BLOCKED' : 'HOLD'}</span>
                   </div>
                 </div>
                 <div className="h-12 overflow-y-auto pr-1 text-[10px] sm:text-[11px] text-slate-300 leading-relaxed">
@@ -982,7 +1008,7 @@ const SymbolCard = React.memo(function SymbolCard({
                   <div className="rounded-md border border-emerald-500/50 bg-emerald-950/40 px-2 py-1.5 space-y-1 shadow-[0_0_10px_rgba(16,185,129,0.25)]">
                     <div className="flex items-center justify-between gap-2">
                       <span className="flex items-center gap-1.5 text-[10px] font-black text-emerald-300 tracking-wide">
-                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
                         POSITION OPEN — AUTO EXIT ARMED
                       </span>
                       <span className={`text-[10px] font-black font-mono ${pnlColor}`}>
@@ -1001,8 +1027,7 @@ const SymbolCard = React.memo(function SymbolCard({
                   </div>
                 )}
               </div>
-            </div>
-          )}
+          </div>
         </div>
 
         {/* SL / Target steppers */}

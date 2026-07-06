@@ -48,6 +48,19 @@ except Exception:  # pragma: no cover
 _SYMBOLS = ("NIFTY", "BANKNIFTY", "SENSEX")
 _LSTM_SEQ = 24
 
+# ── Big Player Radar thresholds ───────────────────────────────────────
+# A single-tick futures print is flagged as a "big player" (non-retail scale)
+# when its notional clears BOTH the absolute floor and the statistical gate
+# (mean + Zσ of the rolling per-tick notional baseline). Retail flow almost
+# never prints ≥10 Cr in one tick on index futures.
+_BLOCK_MIN_CR = {"NIFTY": 12.0, "BANKNIFTY": 8.0, "SENSEX": 6.0}
+_BLOCK_Z = 2.5            # BLOCK gate (z-score over rolling baseline)
+_MEGA_Z = 5.0             # MEGA prints — very likely institutional program flow
+_BASELINE_MIN_TICKS = 20  # need this many notional samples before flagging
+_EVENTS_MAX = 40          # rolling feed size
+_MAX_SAMPLE_GAP_SEC = 8.0 # volume deltas across longer gaps are multi-trade
+                          # aggregates, not single prints — baseline-only
+
 
 def _clip(v: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, v))
@@ -161,6 +174,21 @@ class FIIDIIRealtimeAIEngine:
         self._oi_hist: Dict[str, Deque[float]] = {s: deque(maxlen=96) for s in _SYMBOLS}
         self._tick_no: Dict[str, int] = {s: 0 for s in _SYMBOLS}
         self._last_symbol: Dict[str, Dict[str, Any]] = {}
+        # ── Big Player Radar state ─────────────────────────────────────
+        self._bp_last_cum_vol: Dict[str, float] = {s: -1.0 for s in _SYMBOLS}
+        self._bp_last_oi: Dict[str, float] = {s: 0.0 for s in _SYMBOLS}
+        self._bp_last_sample_ts: Dict[str, float] = {s: 0.0 for s in _SYMBOLS}
+        self._bp_notional_hist: Dict[str, Deque[float]] = {s: deque(maxlen=180) for s in _SYMBOLS}
+        self._bp_events: Deque[Dict[str, Any]] = deque(maxlen=_EVENTS_MAX)
+        self._bp_session: Dict[str, Dict[str, float]] = {
+            s: {"buyCr": 0.0, "sellCr": 0.0} for s in _SYMBOLS
+        }
+        self._bp_session_date: str = time.strftime("%Y-%m-%d")
+        # True once the KiteTicker futures feed drives the radar directly —
+        # the slower snapshot path must then stop consuming the same counter.
+        self._bp_direct_feed: Dict[str, bool] = {s: False for s in _SYMBOLS}
+        # Futures contract price path (tick rule for aggressor side).
+        self._bp_price_hist: Dict[str, Deque[float]] = {s: deque(maxlen=8) for s in _SYMBOLS}
         self._last_snapshot: Dict[str, Any] = {
             "generatedAt": "",
             "aggregate": {},
@@ -310,6 +338,150 @@ class FIIDIIRealtimeAIEngine:
             },
         }
 
+    def _detect_big_print(
+        self, symbol: str, price: float, cum_volume: float, oi: float
+    ) -> None:
+        """Flag single-tick prints too large to be retail (live block detector).
+
+        Uses cumulative futures volume deltas: Δvol × price = notional traded
+        in this tick. Big players (FII/DII/prop/HNI desks) leave ≥10 Cr
+        single-tick footprints; retail order flow almost never does. Side is
+        read from tick price direction, refined by OI delta:
+          price↑ + OI↑ = aggressive long entry, price↓ + OI↑ = short entry,
+          price↓ + OI↓ = long exit,          price↑ + OI↓ = short covering.
+        """
+        # Session day rollover → reset cumulative counters.
+        today = time.strftime("%Y-%m-%d")
+        if today != self._bp_session_date:
+            self._bp_session_date = today
+            for s in _SYMBOLS:
+                self._bp_session[s] = {"buyCr": 0.0, "sellCr": 0.0}
+            self._bp_events.clear()
+
+        last_cum = self._bp_last_cum_vol[symbol]
+        self._bp_last_cum_vol[symbol] = cum_volume
+        now_mono = time.monotonic()
+        gap = now_mono - self._bp_last_sample_ts[symbol] if self._bp_last_sample_ts[symbol] > 0 else 1e9
+        self._bp_last_sample_ts[symbol] = now_mono
+        if last_cum < 0 or cum_volume <= 0 or price <= 0:
+            self._bp_last_oi[symbol] = oi
+            return
+        dvol = cum_volume - last_cum
+        if dvol <= 0:  # feed replay / day reset / no fresh trades
+            self._bp_last_oi[symbol] = oi
+            return
+
+        notional_cr = (dvol * price) / 1e7  # ₹ Cr traded in this tick
+        hist = self._bp_notional_hist[symbol]
+        baseline = np.asarray(hist, dtype=float) if hist else np.array([], dtype=float)
+        # A delta spanning a long sampling gap aggregates many trades — it can
+        # NOT be attributed to one big player. Feed the baseline, never flag.
+        flaggable = gap <= _MAX_SAMPLE_GAP_SEC
+        hist.append(notional_cr)
+
+        d_oi = oi - self._bp_last_oi[symbol] if self._bp_last_oi[symbol] > 0 else 0.0
+        self._bp_last_oi[symbol] = oi
+
+        if baseline.size < _BASELINE_MIN_TICKS or not flaggable:
+            return
+        mean = float(np.mean(baseline))
+        std = float(np.std(baseline))
+        if std <= 0:
+            std = max(0.5, mean * 0.5)
+        z = (notional_cr - mean) / std
+        floor_cr = _BLOCK_MIN_CR.get(symbol, 10.0)
+        if z < _BLOCK_Z or notional_cr < floor_cr:
+            return
+
+        # Aggressor side from tick direction; OI refines the read.
+        # Prefer the futures contract's own price path (direct KiteTicker
+        # feed); fall back to spot returns when running off snapshot polling.
+        fut_prices = self._bp_price_hist[symbol]
+        if len(fut_prices) >= 2:
+            last_ret = fut_prices[-1] - fut_prices[-2]
+            if abs(last_ret) < 1e-9:
+                last_ret = fut_prices[-1] - fut_prices[0]
+        else:
+            rets = self._ret_hist[symbol]
+            last_ret = rets[-1] if rets else 0.0
+            if abs(last_ret) < 1e-9 and len(rets) >= 3:
+                last_ret = sum(list(rets)[-3:])
+        side = "BUY" if last_ret > 0 else ("SELL" if last_ret < 0 else ("BUY" if d_oi > 0 else "SELL"))
+
+        if side == "BUY":
+            read = "Fresh long entry" if d_oi > 0 else ("Short covering" if d_oi < 0 else "Aggressive buying")
+        else:
+            read = "Fresh short entry" if d_oi > 0 else ("Long unwinding" if d_oi < 0 else "Aggressive selling")
+
+        kind = "MEGA" if z >= _MEGA_Z else "BLOCK"
+        confidence = int(round(_clip(40.0 + z * 12.0, 40.0, 96.0)))
+
+        self._bp_session[symbol]["buyCr" if side == "BUY" else "sellCr"] += notional_cr
+        self._bp_events.appendleft({
+            "ts": time.strftime("%H:%M:%S"),
+            "symbol": symbol,
+            "side": side,
+            "notionalCr": round(notional_cr, 2),
+            "price": round(price, 2),
+            "zScore": round(z, 1),
+            "kind": kind,
+            "oiDelta": round(d_oi, 0),
+            "read": read,
+            "confidence": confidence,
+        })
+
+    def ingest_futures_tick(
+        self, symbol: str, price: float, cum_volume: float, oi: float
+    ) -> None:
+        """Feed a real single-tick futures print into the Big Player Radar.
+
+        Called from the KiteTicker thread with the current-month futures
+        contract's cumulative volume — true per-tick deltas, which is the
+        signal `_detect_big_print` was designed for. Index spot ticks carry
+        no volume, so without this feed the radar never arms. Marks the
+        symbol as direct-fed so the snapshot path won't consume the same
+        volume counter twice.
+        """
+        if symbol not in _SYMBOLS:
+            return
+        with self._lock:
+            self._bp_direct_feed[symbol] = True
+            if price > 0:
+                self._bp_price_hist[symbol].append(price)
+            try:
+                self._detect_big_print(symbol, price, cum_volume, oi)
+            except Exception:  # noqa: BLE001 - radar must never break the feed
+                pass
+
+    def _big_players_payload(self) -> Dict[str, Any]:
+        per_symbol: Dict[str, Any] = {}
+        total_buy = total_sell = 0.0
+        for s in _SYMBOLS:
+            b = self._bp_session[s]["buyCr"]
+            sl = self._bp_session[s]["sellCr"]
+            total_buy += b
+            total_sell += sl
+            per_symbol[s] = {
+                "buyCr": round(b, 2),
+                "sellCr": round(sl, 2),
+                "netCr": round(b - sl, 2),
+            }
+        events = list(self._bp_events)[:12]
+        return {
+            "sessionDate": self._bp_session_date,
+            "sessionBuyCr": round(total_buy, 2),
+            "sessionSellCr": round(total_sell, 2),
+            "sessionNetCr": round(total_buy - total_sell, 2),
+            "eventsToday": len(self._bp_events),
+            "perSymbol": per_symbol,
+            "events": events,
+            "note": (
+                "Live large-lot detector on index futures prints — single-tick notional "
+                f"≥ z{_BLOCK_Z}σ over rolling baseline AND above per-symbol ₹ Cr floor. "
+                "Institutional/HNI-scale footprints; official FII/DII attribution only at EOD."
+            ),
+        }
+
     def update_tick(self, symbol: str, tick: Dict[str, Any]) -> Dict[str, Any]:
         if symbol not in _SYMBOLS:
             return self.get_snapshot()
@@ -332,6 +504,16 @@ class FIIDIIRealtimeAIEngine:
                 rh.append(0.0)
             vh.append(volume)
             oh.append(oi)
+
+            # Live large-lot (big player) print detection on this tick.
+            # Skipped when the KiteTicker futures feed drives the radar
+            # directly — both paths read the same cumulative volume counter
+            # and double-feeding would split/duplicate the deltas.
+            if not self._bp_direct_feed.get(symbol):
+                try:
+                    self._detect_big_print(symbol, price, volume, oi)
+                except Exception:  # noqa: BLE001 - radar must never break scoring
+                    pass
 
             self._tick_no[symbol] += 1
             recompute = self._tick_no[symbol] % 2 == 0 or symbol not in self._last_symbol
@@ -371,6 +553,7 @@ class FIIDIIRealtimeAIEngine:
                     "note": "Realtime blend: NumPy + LightGBM + LSTM (+ TensorFlow softmax when installed).",
                 },
                 "indices": indices,
+                "bigPlayers": self._big_players_payload(),
                 "models": {
                     "numpy": True,
                     "lightgbm": _LGB_MODEL is not None,
@@ -383,7 +566,10 @@ class FIIDIIRealtimeAIEngine:
 
     def get_snapshot(self) -> Dict[str, Any]:
         with self._lock:
-            return dict(self._last_snapshot)
+            snap = dict(self._last_snapshot)
+            # Always ship radar state, even before the first full recompute.
+            snap["bigPlayers"] = self._big_players_payload()
+            return snap
 
 
 fii_dii_realtime_ai_engine = FIIDIIRealtimeAIEngine()

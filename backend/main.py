@@ -8,6 +8,36 @@ _os.environ.setdefault("TF_ENABLE_ONEDNN_OPTS", "0")
 _os.environ.setdefault("GRPC_VERBOSITY", "ERROR")
 _os.environ.setdefault("GLOG_minloglevel", "3")
 
+# ── Outbound IP family control (env-configurable, production safe) ──────────
+# FORCE_OUTBOUND_IPV4=true (default) resolves outbound hosts to IPv4 only so
+# broker API calls (Zerodha Kite) always egress via the IPv4 address that is
+# whitelisted in the Kite developer console. Dual-stack hosts otherwise prefer
+# IPv6, which rotates and triggers "IP ... is not allowed to place orders".
+# Set FORCE_OUTBOUND_IPV4=false on IPv6-only infrastructure.
+# Load .env FIRST so the flag is honoured from the backend .env file, not
+# only from process/OS environment variables.
+try:
+    from dotenv import load_dotenv as _load_dotenv
+    _load_dotenv(_os.path.join(_os.path.dirname(_os.path.abspath(__file__)), ".env"))
+except ImportError:
+    pass
+if _os.getenv("FORCE_OUTBOUND_IPV4", "true").strip().lower() in ("1", "true", "yes", "on"):
+    import socket as _socket
+
+    _orig_getaddrinfo = _socket.getaddrinfo
+
+    def _ipv4_preferred_getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):  # noqa: A002
+        if family in (0, _socket.AF_UNSPEC):
+            try:
+                return _orig_getaddrinfo(host, port, _socket.AF_INET, type, proto, flags)
+            except _socket.gaierror:
+                # Host has no A record (IPv6-only service) — fall back to the
+                # original resolver instead of breaking the connection.
+                return _orig_getaddrinfo(host, port, family, type, proto, flags)
+        return _orig_getaddrinfo(host, port, family, type, proto, flags)
+
+    _socket.getaddrinfo = _ipv4_preferred_getaddrinfo
+
 import asyncio
 import logging
 from contextlib import asynccontextmanager
@@ -273,6 +303,22 @@ async def lifespan(app: FastAPI):
             except Exception as exc:
                 logger.error("Smart AI Algo failed to start: %s", exc, exc_info=True)
 
+        async def refresh_futures_tokens():
+            # Self-heal monthly futures token rotation in .env (fallback source
+            # for services reading settings.*_fut_token; live feed resolves
+            # its own tokens via ContractManager on connect).
+            # Runs in a worker thread: the updater makes blocking Kite HTTP
+            # calls (instruments dump) that must not stall the event loop.
+            try:
+                from services.auto_futures_updater import check_and_update_futures_on_startup
+
+                def _run_sync() -> None:
+                    asyncio.run(check_and_update_futures_on_startup())
+
+                await asyncio.to_thread(_run_sync)
+            except Exception as exc:
+                logger.error("Futures token auto-update failed: %s", exc, exc_info=True)
+
         # Fast local mode: bring core feed online first, then defer optional heavy services.
         if settings.fast_startup_mode:
             print("⚡ FAST_STARTUP_MODE=ON - starting core services first")
@@ -297,6 +343,7 @@ async def lifespan(app: FastAPI):
                 start_global_news(),
                 start_observatory(),
                 start_smart_ai_algo(),
+                refresh_futures_tokens(),
             )
         else:
             await asyncio.gather(
@@ -316,6 +363,7 @@ async def lifespan(app: FastAPI):
                 start_global_news(),
                 start_observatory(),
                 start_smart_ai_algo(),
+                refresh_futures_tokens(),
             )
         print("🚀 All services READY")
 

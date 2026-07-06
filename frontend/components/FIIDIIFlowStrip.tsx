@@ -389,13 +389,208 @@ const FIIDIIFlowStrip = ({ isConnected, marketData }: FIIDIIFlowStripProps) => {
   }
 
   const viewSafe = view;
+  const fmv = data?.fundManagerView;
+  const hasSplit = Boolean(data?.hasBuySellSplit);
+  const bigPlayers = data?.realtime?.bigPlayers;
+
+  const entryChip = (style?: string): { label: string; cls: string } => {
+    switch (style) {
+      case 'CAMPAIGN_ACCUMULATION': return { label: '📈 CAMPAIGN BUY', cls: 'border-emerald-400/50 bg-emerald-500/15 text-emerald-200' };
+      case 'ABSORPTION_BUY':        return { label: '🧲 ABSORBING SUPPLY', cls: 'border-emerald-400/40 bg-emerald-500/10 text-emerald-200' };
+      case 'CONVICTION_BUY':        return { label: '🚀 CONVICTION BUY', cls: 'border-emerald-300/60 bg-emerald-400/20 text-emerald-100' };
+      case 'CAMPAIGN_DISTRIBUTION': return { label: '📉 CAMPAIGN SELL', cls: 'border-rose-400/50 bg-rose-500/15 text-rose-200' };
+      case 'SUPPLY_INTO_RALLIES':   return { label: '🪤 SELLING RALLIES', cls: 'border-rose-400/40 bg-rose-500/10 text-rose-200' };
+      case 'CONVICTION_SELL':       return { label: '⚠ CONVICTION SELL', cls: 'border-rose-300/60 bg-rose-400/20 text-rose-100' };
+      case 'ROTATION':              return { label: '🔄 ROTATION', cls: 'border-amber-400/40 bg-amber-500/10 text-amber-200' };
+      default:                      return { label: '· INACTIVE', cls: 'border-slate-600/50 bg-slate-800/50 text-slate-300' };
+    }
+  };
 
   return (
     <section
       aria-label="FII DII Flow"
       className="mb-3 rounded-xl border border-violet-400/15 bg-gradient-to-br from-slate-950 via-slate-900/80 to-violet-950/10 px-3 py-3 sm:px-4"
     >
-      {false && viewSafe && <div />}
+      {viewSafe && (
+        <div className="rounded-xl border border-cyan-400/25 bg-gradient-to-br from-cyan-500/10 via-slate-950/80 to-violet-500/10 px-3 py-3 shadow-[0_0_0_1px_rgba(34,211,238,0.08)]">
+          <div className="mb-2 flex items-center justify-between gap-2 flex-wrap">
+            <span className="text-[13px] sm:text-[16px] font-extrabold tracking-tight text-cyan-100">
+              OFFICIAL CASH FLOW · {viewSafe.tradeDate}
+            </span>
+            <div className="flex items-center gap-1.5">
+              <span className="rounded-full border border-cyan-300/40 bg-cyan-500/10 px-2 py-0.5 text-[9px] font-black text-cyan-100">
+                {data?.source ?? 'NSE'}
+              </span>
+              <span className={`rounded-full border px-2 py-0.5 text-[9px] font-black ${hasSplit ? 'border-emerald-300/40 bg-emerald-500/10 text-emerald-100' : 'border-amber-300/40 bg-amber-500/10 text-amber-100'}`}>
+                {hasSplit ? 'BUY/SELL SPLIT · NSE VERIFIED' : 'NET ONLY · SPLIT PENDING'}
+              </span>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 gap-2.5 lg:grid-cols-2">
+            {([
+              { key: 'FII', row: viewSafe.fii, entry: fmv?.fiiEntry },
+              { key: 'DII', row: viewSafe.dii, entry: fmv?.diiEntry },
+            ] as const).map(({ key, row, entry }) => {
+              const chip = entryChip(entry?.style);
+              const netCls = row.tone === 'bull' ? 'text-emerald-300' : row.tone === 'bear' ? 'text-rose-300' : 'text-amber-300';
+              return (
+                <div key={key} className="rounded-lg border border-slate-700/60 bg-slate-950/80 p-2.5">
+                  <div className="flex items-center justify-between gap-2 flex-wrap">
+                    <div className="flex items-center gap-2">
+                      <span className="text-base font-black tracking-wide text-slate-100">{key}</span>
+                      <span className={`rounded border px-1.5 py-0.5 text-[9px] font-black ${chip.cls}`}>{chip.label}</span>
+                    </div>
+                    <span className={`font-mono font-black text-sm ${netCls}`}>{signed(row.amount)}</span>
+                  </div>
+                  <div className="mt-2 grid grid-cols-3 gap-1.5 text-[10px] font-mono">
+                    <div className="rounded border border-emerald-400/20 bg-emerald-500/10 px-2 py-1">
+                      <div className="text-slate-400">BOUGHT</div>
+                      <div className="font-black text-emerald-300">{row.buy > 0 ? `₹${fmtCr(row.buy)}` : '—'}</div>
+                    </div>
+                    <div className="rounded border border-rose-400/20 bg-rose-500/10 px-2 py-1">
+                      <div className="text-slate-400">SOLD</div>
+                      <div className="font-black text-rose-300">{row.sell > 0 ? `₹${fmtCr(row.sell)}` : '—'}</div>
+                    </div>
+                    <div className="rounded border border-slate-700/70 bg-slate-900/80 px-2 py-1">
+                      <div className="text-slate-400">5-DAY</div>
+                      <div className={`font-black ${Number(row.cum5d ?? 0) >= 0 ? 'text-emerald-300' : 'text-rose-300'}`}>{signed(Number(row.cum5d ?? 0))}</div>
+                    </div>
+                  </div>
+                  <div className="mt-1.5 flex items-center gap-1.5 flex-wrap text-[9px]">
+                    <span className="rounded border border-slate-600/70 bg-slate-900/80 px-1.5 py-0.5 text-slate-300">
+                      {row.streak ?? 0}d streak · {(row.streakTrend ?? 'flat').toUpperCase()}
+                    </span>
+                    {typeof entry?.churnRatio === 'number' && hasSplit && (
+                      <span className="rounded border border-slate-600/70 bg-slate-900/80 px-1.5 py-0.5 text-slate-300">
+                        CHURN {(entry.churnRatio * 100).toFixed(0)}%
+                      </span>
+                    )}
+                  </div>
+                  {entry?.note && (
+                    <p className="mt-1.5 text-[10px] leading-relaxed text-slate-300 font-medium">{entry.note}</p>
+                  )}
+                  {entry?.hedgeRead && (
+                    <p className="mt-1 text-[10px] leading-relaxed text-violet-200 font-semibold">🛡 {entry.hedgeRead}</p>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+
+          <div className="mt-2 rounded-lg border border-violet-400/25 bg-violet-500/10 px-2.5 py-2 text-[10px] sm:text-[11px] font-semibold text-violet-100 leading-relaxed">
+            ⚔ {fmv?.battleNote ?? viewSafe.regime?.note ?? 'Institutional tape balanced.'}
+          </div>
+
+          <div className="mt-2 flex flex-wrap items-center gap-1.5 text-[9px] lg:text-[10px]">
+            <span className={`rounded border px-1.5 py-0.5 font-black ${viewSafe.regime?.bias?.startsWith('bull') ? 'border-emerald-400/35 bg-emerald-500/10 text-emerald-100' : viewSafe.regime?.bias === 'bearish' ? 'border-rose-400/35 bg-rose-500/10 text-rose-100' : 'border-amber-400/35 bg-amber-500/10 text-amber-100'}`}>
+              {viewSafe.regime?.label ?? 'MIXED'} · {viewSafe.regime?.confidence ?? 0}%
+            </span>
+            <span className="rounded border border-slate-600/70 bg-slate-900/80 px-1.5 py-0.5 text-slate-300">
+              NET INSTITUTIONAL {signed(viewSafe.netCr)}
+            </span>
+            {typeof viewSafe.absorption === 'number' && viewSafe.absorption > 0 && (
+              <span className="rounded border border-cyan-300/35 bg-cyan-500/10 px-1.5 py-0.5 text-cyan-100">
+                ABSORPTION {viewSafe.absorption.toFixed(0)}%
+              </span>
+            )}
+            {data?.fiiFnO && (
+              <span className={`rounded border px-1.5 py-0.5 font-black ${data.fiiFnO.stance.overall === 'bullish' ? 'border-emerald-400/35 bg-emerald-500/10 text-emerald-100' : data.fiiFnO.stance.overall === 'bearish' ? 'border-rose-400/35 bg-rose-500/10 text-rose-100' : 'border-slate-600/70 bg-slate-900/80 text-slate-300'}`}>
+                FII F&O {signed(data.fiiFnO.totalFnOCr)} · {data.fiiFnO.stance.overall.toUpperCase()}
+              </span>
+            )}
+          </div>
+
+          {fmv?.diiComposition && (
+            <p className="mt-1.5 text-[9px] leading-relaxed text-slate-500">
+              ℹ {fmv.diiComposition}
+            </p>
+          )}
+        </div>
+      )}
+
+      {/* BIG PLAYER RADAR — live large-lot prints (non-retail scale) */}
+      {bigPlayers && (
+        <div className="mt-2 rounded-xl border border-amber-400/25 bg-gradient-to-br from-amber-500/10 via-slate-950/85 to-rose-500/5 px-3 py-3">
+          <div className="mb-2 flex items-center justify-between gap-2 flex-wrap">
+            <span className="flex items-center gap-2 text-[13px] sm:text-[15px] font-extrabold tracking-tight text-amber-100">
+              🐘 BIG PLAYER RADAR
+              <span className="rounded-full border border-emerald-300/40 bg-emerald-500/10 px-1.5 py-0.5 text-[8px] font-black text-emerald-200">LIVE</span>
+            </span>
+            <span className="rounded-full border border-slate-600/70 bg-slate-900/75 px-2 py-0.5 text-[9px] font-bold text-slate-300">
+              {bigPlayers.eventsToday} LARGE PRINTS TODAY · {bigPlayers.sessionDate}
+            </span>
+          </div>
+
+          <div className="grid grid-cols-3 gap-1.5 text-[10px] font-mono lg:text-[11px]">
+            <div className="rounded border border-emerald-400/25 bg-emerald-500/10 px-2 py-1.5">
+              <div className="text-slate-300">BIG BUYING</div>
+              <div className="text-emerald-300 font-black text-sm lg:text-base">+₹{fmtCr(bigPlayers.sessionBuyCr)}</div>
+            </div>
+            <div className="rounded border border-rose-400/25 bg-rose-500/10 px-2 py-1.5">
+              <div className="text-slate-300">BIG SELLING</div>
+              <div className="text-rose-300 font-black text-sm lg:text-base">-₹{fmtCr(bigPlayers.sessionSellCr)}</div>
+            </div>
+            <div className="rounded border border-slate-700/70 bg-slate-900/80 px-2 py-1.5">
+              <div className="text-slate-300">NET BIG FLOW</div>
+              <div className={`font-black text-sm lg:text-base ${bigPlayers.sessionNetCr > 0 ? 'text-emerald-300' : bigPlayers.sessionNetCr < 0 ? 'text-rose-300' : 'text-amber-300'}`}>
+                {signed(bigPlayers.sessionNetCr)}
+              </div>
+            </div>
+          </div>
+
+          <div className="mt-2 grid grid-cols-3 gap-1.5 text-[9px] font-mono">
+            {(['NIFTY', 'BANKNIFTY', 'SENSEX'] as const).map((sym) => {
+              const ps = bigPlayers.perSymbol?.[sym];
+              if (!ps) return null;
+              return (
+                <div key={sym} className="rounded border border-slate-700/60 bg-slate-950/70 px-2 py-1">
+                  <div className="font-black text-slate-200">{sym}</div>
+                  <div className="flex items-center justify-between gap-1">
+                    <span className="text-emerald-300">+₹{fmtCr(ps.buyCr)}</span>
+                    <span className="text-rose-300">-₹{fmtCr(ps.sellCr)}</span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+
+          {bigPlayers.events.length > 0 ? (
+            <div className="mt-2 space-y-1 max-h-40 overflow-y-auto pr-1">
+              {bigPlayers.events.map((ev, i) => (
+                <div
+                  key={`${ev.ts}-${ev.symbol}-${i}`}
+                  className={`flex items-center justify-between gap-2 rounded border px-2 py-1 text-[9px] lg:text-[10px] font-mono ${
+                    ev.side === 'BUY'
+                      ? 'border-emerald-400/25 bg-emerald-500/5'
+                      : 'border-rose-400/25 bg-rose-500/5'
+                  }`}
+                >
+                  <span className="flex items-center gap-1.5 min-w-0">
+                    <span className="text-slate-500 shrink-0">{ev.ts}</span>
+                    <span className={`font-black shrink-0 ${ev.side === 'BUY' ? 'text-emerald-300' : 'text-rose-300'}`}>
+                      {ev.kind === 'MEGA' ? '🔥' : '▪'} {ev.symbol} {ev.side}
+                    </span>
+                    <span className="text-slate-400 truncate hidden sm:inline">{ev.read}</span>
+                  </span>
+                  <span className="flex items-center gap-1.5 shrink-0">
+                    <span className={`font-black ${ev.side === 'BUY' ? 'text-emerald-200' : 'text-rose-200'}`}>₹{fmtCr(ev.notionalCr)}</span>
+                    <span className="text-slate-500">z{ev.zScore}</span>
+                  </span>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="mt-2 text-[9px] text-slate-500 font-medium">
+              No institutional-scale prints detected yet this session — radar arms after ~20 live ticks of baseline.
+            </p>
+          )}
+
+          {bigPlayers.note && (
+            <p className="mt-1.5 text-[8px] leading-relaxed text-slate-600">{bigPlayers.note}</p>
+          )}
+        </div>
+      )}
       {segregated && (
         <div className="mt-2 rounded-xl border border-emerald-400/25 bg-gradient-to-br from-emerald-500/10 via-slate-950/80 to-cyan-500/10 px-3 py-3 shadow-[0_0_0_1px_rgba(16,185,129,0.08),0_16px_34px_-22px_rgba(16,185,129,0.5)]">
           <div className="mb-2 flex items-center justify-between gap-2 flex-wrap">

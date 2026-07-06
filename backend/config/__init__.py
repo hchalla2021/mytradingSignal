@@ -70,6 +70,9 @@ class Settings(BaseSettings):
     enable_scheduler: bool = Field(default=True, env="ENABLE_SCHEDULER")
     # Fast local dev mode: start core feed first, defer heavy optional services.
     fast_startup_mode: bool = Field(default=False, env="FAST_STARTUP_MODE")
+    # Prefer IPv4 for outbound HTTP (Kite IP whitelist works on IPv4). Applied
+    # at process startup in main.py; set false on IPv6-only infrastructure.
+    force_outbound_ipv4: bool = Field(default=True, env="FORCE_OUTBOUND_IPV4")
     
     # ==================== AI / LLM (Smart AI Algo) ====================
     openai_api_key: Optional[str] = Field(default=None, env="OPENAI_API_KEY")

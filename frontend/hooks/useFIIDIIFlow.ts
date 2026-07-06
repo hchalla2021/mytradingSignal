@@ -98,10 +98,59 @@ export interface FIIDIIRealtimeAggregate {
   note?: string;
 }
 
+export interface FIIDIIEntryStyle {
+  style:
+    | 'CAMPAIGN_ACCUMULATION'
+    | 'ABSORPTION_BUY'
+    | 'CONVICTION_BUY'
+    | 'CAMPAIGN_DISTRIBUTION'
+    | 'SUPPLY_INTO_RALLIES'
+    | 'CONVICTION_SELL'
+    | 'ROTATION'
+    | 'INACTIVE';
+  action: 'BUYING' | 'SELLING' | 'CHURN' | 'WAIT';
+  churnRatio: number;
+  note: string;
+  hedgeRead?: string | null;
+}
+
+export interface FIIDIIFundManagerView {
+  fiiEntry: FIIDIIEntryStyle;
+  diiEntry: FIIDIIEntryStyle;
+  battleNote: string;
+  diiComposition: string;
+  splitAvailable: boolean;
+}
+
+export interface FIIDIIBigPlayerEvent {
+  ts: string;
+  symbol: string;
+  side: 'BUY' | 'SELL';
+  notionalCr: number;
+  price: number;
+  zScore: number;
+  kind: 'BLOCK' | 'MEGA';
+  oiDelta: number;
+  read: string;
+  confidence: number;
+}
+
+export interface FIIDIIBigPlayers {
+  sessionDate: string;
+  sessionBuyCr: number;
+  sessionSellCr: number;
+  sessionNetCr: number;
+  eventsToday: number;
+  perSymbol: Record<string, { buyCr: number; sellCr: number; netCr: number }>;
+  events: FIIDIIBigPlayerEvent[];
+  note?: string;
+}
+
 export interface FIIDIIRealtimeSnapshot {
   generatedAt: string;
   aggregate: FIIDIIRealtimeAggregate;
   indices?: Record<string, unknown>;
+  bigPlayers?: FIIDIIBigPlayers;
   models?: Record<string, boolean>;
 }
 
@@ -128,6 +177,8 @@ export interface FIIDIISnapshot {
   history?: FIIDIIHistoryPoint[];
   fiiFnO?: FIIDIIFnOBreakdown;
   marketContext?: FIIDIIMarketContext;
+  fundManagerView?: FIIDIIFundManagerView;
+  hasBuySellSplit?: boolean;
   realtime?: FIIDIIRealtimeSnapshot;
   fromCache?: boolean;
   error?: string;

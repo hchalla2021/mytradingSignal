@@ -1,18 +1,15 @@
 """
 FII / DII real-flow service.
 
-Single source: Moneycontrol's `fii_dii_activity` SSR page.
-The page embeds the latest N trade days of FII/DII cash-segment NET flows
-inside a `__NEXT_DATA__` JSON blob. We parse that blob, treat the newest
-row as the "current" snapshot and the rest as rolling history.
+Sources (merged):
+  1. NSE official `fiidiiTradeReact` API — real BUY/SELL split for the latest
+     trade day (cookie bootstrap: home page + report page first, else 403).
+  2. Moneycontrol `fii_dii_activity` SSR page — rolling ~30-day history of
+     net flows, FII F&O segment legs, NIFTY/SENSEX day context.
 
-NSE's official report endpoint is intentionally NOT used — it is heavily
-rate-limited and frequently 403s without a cookie dance, and returns only
-the single latest trade-day row (no built-in history).
-
-Buy/sell split is NOT available from this source. Only net flows + the
-derived trend metrics. Consumers should treat buyValue/sellValue/gross
-fields as 0 when `source == 'Moneycontrol'`.
+NSE gives the split (how FII/DII actually entered — gross buying vs gross
+selling); Moneycontrol gives depth (history, derivatives legs). Either source
+failing alone degrades gracefully instead of blanking the panel.
 
 Public surface:
     await fii_dii_service.get_snapshot() -> dict
@@ -23,6 +20,7 @@ Extra payload (when available from source row):
             - totalFnOCr
             - stance per segment + overall (bullish/bearish/neutral)
         marketContext: NIFTY/SENSEX daily change context from same row
+        fundManagerView: entry-style classification + desk-note insights
 """
 
 from __future__ import annotations
@@ -42,9 +40,14 @@ from services.cache import get_cache
 
 logger = logging.getLogger(__name__)
 
-# Moneycontrol — primary (and only) source.
+# Moneycontrol — history + F&O legs + market context.
 _MC_HOME = "https://www.moneycontrol.com/"
 _MC_FII_DII_PAGE = "https://www.moneycontrol.com/stocks/marketstats/fii_dii_activity/index.php"
+
+# NSE official — real buy/sell split for the latest trade day.
+_NSE_HOME = "https://www.nseindia.com/"
+_NSE_REPORT_PAGE = "https://www.nseindia.com/reports/fii-dii"
+_NSE_API = "https://www.nseindia.com/api/fiidiiTradeReact"
 
 # India Standard Time (UTC+5:30)
 _IST = timezone(timedelta(hours=5, minutes=30))
@@ -144,6 +147,55 @@ class FIIDIIService:
             raise ValueError("Moneycontrol: fiiDiiData array missing / empty")
         return rows
 
+    async def _fetch_nse_split(self) -> Optional[Dict[str, Dict[str, Any]]]:
+        """
+        GET NSE's official FII/DII trade report (cash segment) for the latest
+        trade day. Returns {'fii': {date,buy,sell,net}, 'dii': {...}} or None.
+
+        NSE 403s bare API hits — bootstrap cookies by visiting the home page
+        and the report page first, inside the SAME client session.
+        """
+        async with httpx.AsyncClient(
+            headers=_DEFAULT_HEADERS,
+            follow_redirects=True,
+            timeout=10.0,
+        ) as client:
+            try:
+                await client.get(_NSE_HOME)
+                await client.get(_NSE_REPORT_PAGE)
+            except httpx.HTTPError:
+                pass  # cookie warm-up best effort; API call below decides
+            resp = await client.get(
+                _NSE_API,
+                headers={
+                    **_DEFAULT_HEADERS,
+                    "Accept": "application/json, text/plain, */*",
+                    "Referer": _NSE_REPORT_PAGE,
+                },
+            )
+            resp.raise_for_status()
+            rows = resp.json()
+
+        if not isinstance(rows, list):
+            return None
+        out: Dict[str, Dict[str, Any]] = {}
+        for r in rows:
+            if not isinstance(r, dict):
+                continue
+            cat = str(r.get("category", "")).upper()
+            key = "fii" if cat.startswith("FII") else ("dii" if cat.startswith("DII") else None)
+            if not key:
+                continue
+            out[key] = {
+                "date": self._fmt_date(r.get("date")),
+                "buy": self._to_float(r.get("buyValue")),
+                "sell": self._to_float(r.get("sellValue")),
+                "net": self._to_float(r.get("netValue")),
+            }
+        if "fii" in out and "dii" in out and out["fii"]["date"]:
+            return out
+        return None
+
     # --- parsing ----------------------------------------------------------
 
     @staticmethod
@@ -168,13 +220,21 @@ class FIIDIIService:
 
     @staticmethod
     def _fmt_date(raw: Any) -> str:
-        """Convert MC 'YYYY-MM-DD' (or 'DD-Mon-YYYY' already) into 'DD-Mon-YYYY'."""
+        """Convert MC 'YYYY-MM-DD' or NSE 'DD-Mon-YYYY' into 'DD-Mon-YYYY'.
+
+        NOTE: never blind-slice to 10 chars — 'DD-Mon-YYYY' is 11 chars and
+        truncation silently breaks date matching between NSE and MC rows.
+        """
         if not raw:
             return ""
-        s = str(raw)[:10]
-        for fmt in ("%Y-%m-%d", "%d-%b-%Y", "%d-%B-%Y"):
+        s = str(raw).strip()
+        for candidate, fmt in (
+            (s[:10], "%Y-%m-%d"),      # MC ISO date (safe to slice: exactly 10)
+            (s, "%d-%b-%Y"),           # NSE '03-Jul-2026'
+            (s, "%d-%B-%Y"),
+        ):
             try:
-                return datetime.strptime(s, fmt).strftime("%d-%b-%Y")
+                return datetime.strptime(candidate, fmt).strftime("%d-%b-%Y")
             except ValueError:
                 continue
         return s
@@ -280,6 +340,150 @@ class FIIDIIService:
             "grossTurnoverCr": round(gross_total, 2),
             "dominance": dominance,
             "absorptionPct": round(absorption_pct, 1),
+        }
+
+    # --- fund-manager view (how institutions ENTER, in desk language) ------
+
+    @staticmethod
+    def _entry_style(
+        who: str,
+        buy: float,
+        sell: float,
+        net: float,
+        streak_days: int,
+        cum5d: float,
+        fno_total: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """Classify HOW a participant is entering/exiting the market today.
+
+        Institutional playbook heuristics (cash segment):
+          • churn ratio = min(buy,sell)/max(buy,sell) — 1.0 means two-sided day
+            (rotation), low means one-sided conviction flow.
+          • streak + 5-day cumulative separates campaign accumulation from a
+            one-day tactical print.
+          • FII cash vs F&O divergence → hedged entry (cash buy + derivative
+            short = covered carry, not conviction).
+        """
+        gross = buy + sell
+        churn = (min(buy, sell) / max(buy, sell)) if max(buy, sell) > 0 else 0.0
+        eps = 250.0
+
+        if gross <= 0 and abs(net) <= eps:
+            style, action = "INACTIVE", "WAIT"
+            note = f"{who} flows negligible today — no fresh positioning."
+        elif abs(net) <= eps:
+            style, action = "ROTATION", "CHURN"
+            note = (
+                f"{who} traded ₹{gross:,.0f} Cr two-sided but net ≈ flat — "
+                "sector rotation / rebalancing, not directional entry."
+            )
+        elif net > 0:
+            action = "BUYING"
+            if streak_days >= 3 and cum5d > 0:
+                style = "CAMPAIGN_ACCUMULATION"
+                note = (
+                    f"{who} buying {streak_days} sessions in a row "
+                    f"(₹{cum5d:,.0f} Cr over 5d) — laddered campaign entry, "
+                    "typically staggered VWAP/basket buying through the day."
+                )
+            elif churn >= 0.85:
+                style = "ABSORPTION_BUY"
+                note = (
+                    f"{who} bought ₹{buy:,.0f} Cr against ₹{sell:,.0f} Cr sold — "
+                    "absorbing supply near support; stealth accumulation."
+                )
+            else:
+                style = "CONVICTION_BUY"
+                note = (
+                    f"{who} one-sided net buy ₹{net:,.0f} Cr — fresh directional "
+                    "entry (block/basket style), usually front-loaded at open & close auctions."
+                )
+        else:
+            action = "SELLING"
+            if streak_days >= 3 and cum5d < 0:
+                style = "CAMPAIGN_DISTRIBUTION"
+                note = (
+                    f"{who} selling {streak_days} straight sessions "
+                    f"(₹{cum5d:,.0f} Cr over 5d) — systematic distribution into strength."
+                )
+            elif churn >= 0.85:
+                style = "SUPPLY_INTO_RALLIES"
+                note = (
+                    f"{who} sold ₹{sell:,.0f} Cr while buying ₹{buy:,.0f} Cr — "
+                    "selling rallies but recycling into select names (rotation with a sell bias)."
+                )
+            else:
+                style = "CONVICTION_SELL"
+                note = (
+                    f"{who} one-sided net sell ₹{net:,.0f} Cr — risk-off exit; "
+                    "watch for follow-through tomorrow."
+                )
+
+        hedged = None
+        if who == "FII" and fno_total is not None and abs(net) > eps:
+            # Cash and derivatives pointing opposite ways = hedged entry.
+            if net > 0 > fno_total and abs(fno_total) > eps:
+                hedged = "Cash buying hedged with F&O shorts — carry/arb entry, weaker conviction."
+            elif net < 0 < fno_total and abs(fno_total) > eps:
+                hedged = "Cash selling with F&O longs — index-level hedge unwind, not a bearish call."
+            elif (net > eps and fno_total > eps) or (net < -eps and fno_total < -eps):
+                hedged = "Cash and F&O aligned — high-conviction directional book."
+
+        return {
+            "style": style,
+            "action": action,
+            "churnRatio": round(churn, 3),
+            "note": note,
+            "hedgeRead": hedged,
+        }
+
+    def _fund_manager_view(
+        self,
+        fii: "_FlowRow",
+        dii: "_FlowRow",
+        trend: Dict[str, Any],
+        fii_fno_total: float,
+        has_split: bool,
+    ) -> Dict[str, Any]:
+        """Desk-note style read of today's institutional tape."""
+        fii_entry = self._entry_style(
+            "FII", fii.buy_value, fii.sell_value, fii.net_value,
+            int(trend.get("fiiStreakDays", 0) or 0),
+            float(trend.get("fiiCum5dCr", 0.0) or 0.0),
+            fno_total=fii_fno_total,
+        )
+        dii_entry = self._entry_style(
+            "DII", dii.buy_value, dii.sell_value, dii.net_value,
+            int(trend.get("diiStreakDays", 0) or 0),
+            float(trend.get("diiCum5dCr", 0.0) or 0.0),
+        )
+
+        # Tug-of-war: who controls the tape and what usually follows.
+        f_net, d_net = fii.net_value, dii.net_value
+        eps = 250.0
+        if f_net > eps and d_net < -eps:
+            battle = (
+                "FIIs lifting offers while DIIs (mutual funds/insurers) book profits — "
+                "foreign momentum tape: dips get bought until FII cash turns."
+            )
+        elif f_net < -eps and d_net > eps:
+            battle = (
+                "FIIs exiting into DII bids — mutual-fund SIP money is the floor; "
+                "upside capped until foreign selling exhausts."
+            )
+        elif f_net > eps and d_net > eps:
+            battle = "Both books buying — strongest demand regime; breadth usually expands."
+        elif f_net < -eps and d_net < -eps:
+            battle = "Both books selling — defend cash; rallies are for exit until this flips."
+        else:
+            battle = "Balanced institutional tape — intraday flows will decide direction."
+
+        return {
+            "fiiEntry": fii_entry,
+            "diiEntry": dii_entry,
+            "battleNote": battle,
+            "diiComposition": "DII = domestic mutual funds (~60-70% of DII cash, incl. SIP flows), insurance (LIC etc.), banks, pension funds & AIFs. NSE/exchanges do not publish an MF-only daily split; SEBI MF data arrives with a 2-3 day lag.",
+            "splitAvailable": bool(has_split),
         }
 
     # --- rolling history --------------------------------------------------
@@ -516,10 +720,45 @@ class FIIDIIService:
                 ),
                 raw[0] if raw else {},
             )
-            fii = _FlowRow(category="FII", date=latest_date, buy_value=0.0,
-                           sell_value=0.0, net_value=fii_net)
-            dii = _FlowRow(category="DII", date=latest_date, buy_value=0.0,
-                           sell_value=0.0, net_value=dii_net)
+
+            # NSE official split — gives REAL gross buy/sell (how they entered).
+            # Best-effort: any failure keeps MC nets so the panel never blanks.
+            nse_split: Optional[Dict[str, Dict[str, Any]]] = None
+            try:
+                nse_split = await self._fetch_nse_split()
+            except Exception as nse_exc:
+                logger.warning("FII/DII: NSE split fetch failed (using MC nets): %s", nse_exc)
+
+            has_split = False
+            fii_buy = fii_sell = dii_buy = dii_sell = 0.0
+            source = "Moneycontrol"
+            if nse_split:
+                nse_date = nse_split["fii"]["date"]
+                if nse_date == latest_date:
+                    # Same trade day — adopt NSE buy/sell + authoritative nets.
+                    fii_buy, fii_sell = nse_split["fii"]["buy"], nse_split["fii"]["sell"]
+                    dii_buy, dii_sell = nse_split["dii"]["buy"], nse_split["dii"]["sell"]
+                    fii_net = nse_split["fii"]["net"] or fii_net
+                    dii_net = nse_split["dii"]["net"] or dii_net
+                    has_split = True
+                    source = "NSE+Moneycontrol"
+                else:
+                    nse_dt = self._parse_trade_date(nse_date)
+                    mc_dt = self._parse_trade_date(latest_date)
+                    if nse_dt and mc_dt and nse_dt > mc_dt:
+                        # NSE has a NEWER trade day than MC's SSR blob — promote it.
+                        latest_date = nse_date
+                        fii_buy, fii_sell = nse_split["fii"]["buy"], nse_split["fii"]["sell"]
+                        dii_buy, dii_sell = nse_split["dii"]["buy"], nse_split["dii"]["sell"]
+                        fii_net, dii_net = nse_split["fii"]["net"], nse_split["dii"]["net"]
+                        day_rows.insert(0, (latest_date, fii_net, dii_net))
+                        has_split = True
+                        source = "NSE+Moneycontrol"
+
+            fii = _FlowRow(category="FII", date=latest_date, buy_value=fii_buy,
+                           sell_value=fii_sell, net_value=fii_net)
+            dii = _FlowRow(category="DII", date=latest_date, buy_value=dii_buy,
+                           sell_value=dii_sell, net_value=dii_net)
 
             # Segment-wise FII F&O flows (₹ Cr) available in Moneycontrol row.
             # Useful to mirror participant-segment style dashboards intraday.
@@ -562,10 +801,13 @@ class FIIDIIService:
             # DoD / 5D / streak are accurate from the very first request).
             history = await self._update_history(cache, day_rows)
             trend = self._trend_from_history(history)
+            fund_manager_view = self._fund_manager_view(
+                fii, dii, trend, fii_fno_total, has_split
+            )
 
             snapshot: Dict[str, Any] = {
                 "success": True,
-                "source": "Moneycontrol",
+                "source": source,
                 "endpoint": _MC_FII_DII_PAGE,
                 "fetchedAt": now_ist.isoformat(),
                 "tradeDate": latest_date,
@@ -580,7 +822,8 @@ class FIIDIIService:
                 "regime": regime,
                 "trend": trend,
                 "history": history,
-                "hasBuySellSplit": False,  # MC only exposes net flows
+                "fundManagerView": fund_manager_view,
+                "hasBuySellSplit": has_split,
                 "fromCache": False,
             }
 

@@ -44,6 +44,16 @@ class AutoFuturesUpdater:
                 print("❌ Could not fetch new futures tokens")
                 return False
             
+            # Skip rewrite when configured tokens already match target contracts
+            current = {
+                'NIFTY': self.settings.nifty_fut_token,
+                'BANKNIFTY': self.settings.banknifty_fut_token,
+                'SENSEX': self.settings.sensex_fut_token,
+            }
+            if all(int(current.get(k) or 0) == int(v) for k, v in new_tokens.items()):
+                print("✅ Futures tokens already current — no .env change needed")
+                return False
+            
             # Update .env file
             success = self._update_env_file(new_tokens)
             
@@ -106,8 +116,20 @@ class AutoFuturesUpdater:
         else:
             return datetime(date.year, date.month + 1, 1) - timedelta(days=1)
     
+    def _target_contract_month(self) -> tuple:
+        """Near-month contract target: current month until its expiry passes,
+        then next month. (Old logic always targeted NEXT month, skipping the
+        actively-traded near-month contract.)"""
+        today = datetime.now()
+        expiry = self._get_last_thursday(today.year, today.month)
+        if today.date() <= expiry.date():
+            return today.year, today.month
+        if today.month == 12:
+            return today.year + 1, 1
+        return today.year, today.month + 1
+    
     async def _fetch_new_futures_tokens(self) -> Optional[Dict[str, int]]:
-        """Fetch next month's futures tokens from Zerodha"""
+        """Fetch the near-month futures tokens from Zerodha"""
         try:
             if not self.settings.zerodha_api_key or not self.settings.zerodha_access_token:
                 print("❌ Zerodha credentials not configured")
@@ -116,16 +138,10 @@ class AutoFuturesUpdater:
             kite = KiteConnect(api_key=self.settings.zerodha_api_key)
             kite.set_access_token(self.settings.zerodha_access_token)
             
-            print("🔍 Searching for next month futures contracts...")
+            print("🔍 Searching for near-month futures contracts...")
             
-            # Get current + next month for safety
-            today = datetime.now()
-            if today.month == 12:
-                next_month = 1
-                next_year = today.year + 1
-            else:
-                next_month = today.month + 1
-                next_year = today.year
+            # Target the actively-traded near-month contract
+            target_year, target_month = self._target_contract_month()
             
             # Month codes for futures
             month_codes = {
@@ -134,8 +150,7 @@ class AutoFuturesUpdater:
                 9: "SEP", 10: "OCT", 11: "NOV", 12: "DEC"
             }
             
-            current_code = month_codes[today.month]
-            next_code = month_codes[next_month]
+            target_code = month_codes[target_month]
             
             # Search for futures symbols
             instruments = kite.instruments("NFO")  # NSE Futures & Options
@@ -143,32 +158,32 @@ class AutoFuturesUpdater:
             
             tokens = {}
             
-            # Find NIFTY futures (prefer next month)
-            print(f"   → Searching NIFTY{next_year % 100}{next_code}FUT...")
+            # Find NIFTY futures (near month)
+            print(f"   → Searching NIFTY{target_year % 100}{target_code}FUT...")
             for inst in instruments:
-                if inst['tradingsymbol'] == f"NIFTY{next_year % 100}{next_code}FUT":
+                if inst['tradingsymbol'] == f"NIFTY{target_year % 100}{target_code}FUT":
                     tokens['NIFTY'] = inst['instrument_token']
                     print(f"   ✅ Found NIFTY: {inst['instrument_token']}")
                     break
             
             # Find BANKNIFTY futures
-            print(f"   → Searching BANKNIFTY{next_year % 100}{next_code}FUT...")
+            print(f"   → Searching BANKNIFTY{target_year % 100}{target_code}FUT...")
             for inst in instruments:
-                if inst['tradingsymbol'] == f"BANKNIFTY{next_year % 100}{next_code}FUT":
+                if inst['tradingsymbol'] == f"BANKNIFTY{target_year % 100}{target_code}FUT":
                     tokens['BANKNIFTY'] = inst['instrument_token']
                     print(f"   ✅ Found BANKNIFTY: {inst['instrument_token']}")
                     break
             
             # Find SENSEX futures (on BFO exchange)
-            print(f"   → Searching SENSEX{next_year % 100}{next_code}FUT...")
+            print(f"   → Searching SENSEX{target_year % 100}{target_code}FUT...")
             for inst in bfo_instruments:
-                if inst['tradingsymbol'] == f"SENSEX{next_year % 100}{next_code}FUT":
+                if inst['tradingsymbol'] == f"SENSEX{target_year % 100}{target_code}FUT":
                     tokens['SENSEX'] = inst['instrument_token']
                     print(f"   ✅ Found SENSEX: {inst['instrument_token']}")
                     break
             
             if len(tokens) == 3:
-                print(f"✅ All 3 futures tokens found for {next_code} {next_year}")
+                print(f"✅ All 3 futures tokens found for {target_code} {target_year}")
                 return tokens
             else:
                 print(f"⚠️ Only found {len(tokens)}/3 tokens")
@@ -189,27 +204,20 @@ class AutoFuturesUpdater:
             with open(self.env_file, 'r', encoding='utf-8') as f:
                 content = f.read()
             
-            # Calculate expiry date
-            today = datetime.now()
-            if today.month == 12:
-                next_month = 1
-                next_year = today.year + 1
-            else:
-                next_month = today.month + 1
-                next_year = today.year
-            
-            last_thursday = self._get_last_thursday(next_year, next_month)
+            # Calculate expiry date for the target (near-month) contract
+            target_year, target_month = self._target_contract_month()
+            last_thursday = self._get_last_thursday(target_year, target_month)
             
             month_codes = {
                 1: "JAN", 2: "FEB", 3: "MAR", 4: "APR",
                 5: "MAY", 6: "JUN", 7: "JUL", 8: "AUG",
                 9: "SEP", 10: "OCT", 11: "NOV", 12: "DEC"
             }
-            expiry_month = month_codes[next_month]
+            expiry_month = month_codes[target_month]
             
             # Update futures tokens section
             futures_section = f"""# FUTURES TOKENS FOR VOLUME DATA (Update monthly before expiry!)
-# Current: {expiry_month} {next_year} (Expiry: {last_thursday.strftime('%d-%b-%Y')}) ✅ AUTO-UPDATED!
+# Current: {expiry_month} {target_year} (Expiry: {last_thursday.strftime('%d-%b-%Y')}) ✅ AUTO-UPDATED!
 # Next update: ~{(last_thursday - timedelta(days=7)).strftime('%d-%b-%Y')}
 NIFTY_FUT_TOKEN={new_tokens['NIFTY']}
 BANKNIFTY_FUT_TOKEN={new_tokens['BANKNIFTY']}

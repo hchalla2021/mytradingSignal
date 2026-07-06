@@ -3,9 +3,12 @@ import asyncio
 import threading
 import time as time_module
 from datetime import datetime, time
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, TYPE_CHECKING
 from queue import Queue
 import pytz
+
+if TYPE_CHECKING:  # annotation-only import; runtime imports stay lazy
+    from kiteconnect import KiteTicker
 
 from config import get_settings
 from services.cache import CacheService
@@ -125,6 +128,10 @@ PREV_DAY_OHLC: Dict[str, Dict[str, float]] = {}  # {"NIFTY": {"high": ..., "low"
 # Quote volumes - Preserved for indices (since tick volume_traded is 0 for indices)
 QUOTE_VOLUMES = {}
 
+# Current-month futures token -> index symbol (resolved dynamically at connect;
+# feeds live futures volume/OI into index ticks and the Big Player Radar)
+FUT_TOKEN_MAP: Dict[int, str] = {}
+
 
 class MarketFeedService:
     """Service to handle Zerodha KiteTicker market data feed."""
@@ -132,7 +139,7 @@ class MarketFeedService:
     def __init__(self, cache: CacheService, ws_manager: ConnectionManager):
         self.cache = cache
         self.ws_manager = ws_manager
-        self.kws: Optional[KiteTicker] = None
+        self.kws: Optional["KiteTicker"] = None
         self.running = False
         self._is_connected: bool = False  # Track connection state
         self.last_prices: Dict[str, float] = {}
@@ -387,6 +394,66 @@ class MarketFeedService:
             "_raw_bid": tick.get("last_price", 0) - (tick.get("depth", {}).get("buy", [{}])[0].get("price", 0) if tick.get("depth", {}).get("buy") else 0),
         }
     
+    def _resolve_futures_tokens(self, kite=None) -> None:
+        """Resolve current-month futures tokens dynamically (self-healing).
+
+        Configured .env tokens go stale after monthly expiry — ContractManager
+        always returns the live near-month contract. Falls back to configured
+        tokens if resolution fails.
+        """
+        try:
+            if kite is None:
+                from kiteconnect import KiteConnect
+                from config import get_settings
+                fresh = get_settings()
+                kite = KiteConnect(api_key=fresh.zerodha_api_key)
+                kite.set_access_token(fresh.zerodha_access_token)
+            from services.contract_manager import ContractManager
+            manager = ContractManager(kite)
+            mapping: Dict[int, str] = {}
+            for symbol in ("NIFTY", "BANKNIFTY", "SENSEX"):
+                token = manager.get_current_contract_token(symbol)
+                if token:
+                    mapping[int(token)] = symbol
+            if mapping:
+                FUT_TOKEN_MAP.clear()
+                FUT_TOKEN_MAP.update(mapping)
+                print(f"🐘 Futures map: { {v: k for k, v in FUT_TOKEN_MAP.items()} }")
+                return
+            print("⚠️ ContractManager returned no futures tokens")
+        except Exception as e:
+            print(f"⚠️ Dynamic futures token resolution failed: {e}")
+        # Fallback: configured tokens (may be stale after monthly rotation)
+        if not FUT_TOKEN_MAP:
+            from config import get_settings
+            fresh = get_settings()
+            for tok, sym in (
+                (fresh.nifty_fut_token, "NIFTY"),
+                (fresh.banknifty_fut_token, "BANKNIFTY"),
+                (fresh.sensex_fut_token, "SENSEX"),
+            ):
+                if tok:
+                    FUT_TOKEN_MAP[int(tok)] = sym
+            print(f"⚠️ Using configured futures tokens (verify monthly): {FUT_TOKEN_MAP}")
+
+    def _handle_futures_tick(self, symbol: str, tick: Dict[str, Any]) -> None:
+        """Process a futures tick: live index volume + Big Player Radar feed.
+
+        Futures ticks are NOT broadcast as market symbols — they only supply
+        real per-tick cumulative volume/OI that index spot ticks lack.
+        """
+        try:
+            price = float(tick.get("last_price") or 0)
+            cum_vol = float(tick.get("volume_traded") or 0)
+            oi = float(tick.get("oi") or 0)
+            if cum_vol > 0:
+                # Live futures volume — picked up by _normalize_tick for index ticks/candles
+                QUOTE_VOLUMES[symbol] = int(cum_vol)
+            from services.fii_dii_realtime_ai import fii_dii_realtime_ai_engine
+            fii_dii_realtime_ai_engine.ingest_futures_tick(symbol, price, cum_vol, oi)
+        except Exception:
+            pass
+
     def _on_ticks(self, ws, ticks):
         """Callback when ticks are received (runs in KiteTicker thread)."""
         global _zerodha_ticks_active, _zerodha_last_tick_time
@@ -396,6 +463,12 @@ class MarketFeedService:
         
         for tick in ticks:
             try:
+                # 🐘 Futures ticks: live volume/OI feed for radar — not broadcast
+                fut_symbol = FUT_TOKEN_MAP.get(tick.get("instrument_token"))
+                if fut_symbol:
+                    self._handle_futures_tick(fut_symbol, tick)
+                    continue
+
                 data = self._normalize_tick(tick)
                 symbol = data["symbol"]
                 
@@ -909,12 +982,18 @@ class MarketFeedService:
         except Exception as e:
             print(f"⚠️ Failed to fetch prev day OHLC: {e}")
 
-        # Subscribe to instrument tokens
-        tokens = list(TOKEN_SYMBOL_MAP.keys())
+        # 🐘 Resolve current-month futures tokens (live volume + Big Player Radar)
+        try:
+            self._resolve_futures_tokens(kite)
+        except Exception as e:
+            print(f"⚠️ Futures token resolution error: {e}")
+
+        # Subscribe to instrument tokens (indices + current-month futures)
+        tokens = list(TOKEN_SYMBOL_MAP.keys()) + list(FUT_TOKEN_MAP.keys())
         print(f"📊 Subscribing to tokens: {tokens}")
         ws.subscribe(tokens)
         ws.set_mode(ws.MODE_FULL, tokens)
-        print(f"📊 Subscribed to: {list(TOKEN_SYMBOL_MAP.values())}")
+        print(f"📊 Subscribed to: {list(TOKEN_SYMBOL_MAP.values()) + [f'{s} FUT' for s in FUT_TOKEN_MAP.values()]}")
         print("✅ Market feed is now LIVE - Waiting for ticks...")
     
     def _fetch_prev_day_ohlc(self, kite=None):
@@ -1044,8 +1123,8 @@ class MarketFeedService:
         # but we must re-subscribe to get ticks again
         try:
             if ws and hasattr(ws, 'subscribe'):
-                tokens = list(TOKEN_SYMBOL_MAP.keys())
-                print(f"   📡 Re-subscribing to {len(tokens)} tokens: {list(TOKEN_SYMBOL_MAP.values())}")
+                tokens = list(TOKEN_SYMBOL_MAP.keys()) + list(FUT_TOKEN_MAP.keys())
+                print(f"   📡 Re-subscribing to {len(tokens)} tokens: {list(TOKEN_SYMBOL_MAP.values()) + [f'{s} FUT' for s in FUT_TOKEN_MAP.values()]}")
                 ws.subscribe(tokens)
                 ws.set_mode(ws.MODE_FULL, tokens)
                 print("   ✅ Re-subscription sent")
