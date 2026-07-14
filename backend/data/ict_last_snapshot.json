@@ -170,14 +170,14 @@
         "riskRewardRatio": 2.33
       }
     },
-    "dataSource": "LIVE",
+    "dataSource": "MARKET_CLOSED",
     "timestamp": "2026-07-06T14:23:38.151867+05:30"
   },
   "BANKNIFTY": {
     "symbol": "BANKNIFTY",
     "direction": "BEARISH",
-    "confidence": 61,
-    "rawScore": -0.1463,
+    "confidence": 48,
+    "rawScore": -0.1225,
     "ictSetup": {
       "name": "\u25bc ICT LEAN SHORT",
       "description": "Mild bearish bias from ICT framework",
@@ -185,21 +185,21 @@
       "confluences": 1
     },
     "prediction5m": "NEUTRAL",
-    "pred5mConf": 56,
-    "pred5mScore": -0.1278,
+    "pred5mConf": 55,
+    "pred5mScore": -0.1135,
     "signals": {
       "order_blocks": {
-        "score": -0.0138,
+        "score": 0.0814,
         "signal": "NEUTRAL",
-        "label": "Bullish OB @ 58340-58397 (0% away)",
+        "label": "Bearish OB @ 58319-58333 (0% away)",
         "weight": 0.25,
-        "value": -0.014,
+        "value": 0.081,
         "extra": {
           "bullish_obs": 3,
-          "bearish_obs": 3,
+          "bearish_obs": 2,
           "nearest_ob": {
-            "type": "BULLISH_RETEST",
-            "zone": "58340-58397",
+            "type": "BEARISH_RETEST",
+            "zone": "58319-58333",
             "dist": 0
           }
         }
@@ -230,7 +230,7 @@
           "structure": "BEARISH_TREND",
           "swing_highs": 2,
           "swing_lows": 4,
-          "last_swing_high": 58367.9,
+          "last_swing_high": 58454.15,
           "last_swing_low": 58319.65
         }
       },
@@ -264,42 +264,42 @@
         "value": 0.0,
         "extra": {
           "divergence": "NONE",
-          "price_change": -0.12,
-          "oi_slope": 14759.0
+          "price_change": -0.14,
+          "oi_slope": 13875.0
         }
       }
     },
     "metrics": {
-      "price": 58336.15,
-      "changePct": 0.69,
+      "price": 58333.65,
+      "changePct": 0.68,
       "oi": 21216270,
-      "candleCount": 21,
+      "candleCount": 20,
       "swingHighs": 2,
       "swingLows": 4,
-      "lastSwingHigh": 58367.9,
+      "lastSwingHigh": 58454.15,
       "lastSwingLow": 58319.65
     },
     "ai": {
       "provider": "numpy_fallback",
       "featureVersion": "ict_ai_v1",
       "classProbabilities": {
-        "STRONG_BUY": 4.03,
-        "BUY": 3.7,
-        "NEUTRAL": 12.85,
-        "SELL": 22.17,
-        "STRONG_SELL": 57.26
+        "STRONG_BUY": 4.57,
+        "BUY": 4.28,
+        "NEUTRAL": 15.65,
+        "SELL": 22.39,
+        "STRONG_SELL": 53.12
       },
       "sequencePrediction": {
         "nextMove": "SIDEWAYS",
         "nextMovePts": 0.11,
-        "trendContinuationProb": 48.85,
-        "reversalProb": 59.32,
+        "trendContinuationProb": 42.56,
+        "reversalProb": 65.94,
         "horizonSec": 300
       },
       "microstructure": {
         "liquidityDensity": 0.0,
         "structureDensity": 15.3,
-        "fakeBreakoutRisk": 37.1,
+        "fakeBreakoutRisk": 38.65,
         "stopHuntRisk": 27.0
       },
       "smc": {
@@ -309,41 +309,41 @@
       "multiTimeframe": {
         "micro": {
           "trend": "NEUTRAL",
-          "momentum": -12.78
+          "momentum": -11.35
         },
         "medium": {
           "trend": "BEAR",
-          "momentum": -14.63
+          "momentum": -12.25
         },
         "macro": {
           "trend": "BEAR",
-          "momentum": 22.0
+          "momentum": -4.0
         },
         "alignmentPct": 33.33
       },
       "commandDeck": {
         "streamState": "LIVE",
         "modelProvider": "numpy_fallback",
-        "analysisLatencyMs": 16,
+        "analysisLatencyMs": 21,
         "pipelineCadenceMs": 2000,
-        "eventRatePerSec": 2.43,
-        "queueDepth": 0,
+        "eventRatePerSec": 2.4,
+        "queueDepth": 1,
         "cacheState": "HOT",
         "alerts": [
           "ICT structure stable; wait for trigger confirmation"
         ]
       },
       "institutionalConfluence": {
-        "executionProbability": 49,
+        "executionProbability": 44,
         "smartMoneyAlignment": 22,
         "institutionalFlow": 15,
-        "riskScore": 43,
-        "rewardScore": 51,
-        "riskRewardRatio": 1.19
+        "riskScore": 46,
+        "rewardScore": 46,
+        "riskRewardRatio": 1.0
       }
     },
     "dataSource": "LIVE",
-    "timestamp": "2026-07-06T14:23:38.154079+05:30"
+    "timestamp": "2026-07-14T14:41:37.128179+05:30"
   },
   "SENSEX": {
     "symbol": "SENSEX",
@@ -516,7 +516,7 @@
         "riskRewardRatio": 0.69
       }
     },
-    "dataSource": "LIVE",
+    "dataSource": "MARKET_CLOSED",
     "timestamp": "2026-07-06T14:23:38.156089+05:30"
   }
 }
