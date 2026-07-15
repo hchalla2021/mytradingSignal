@@ -14,7 +14,6 @@
 # ============================================================
 set -euo pipefail
 
-PROJECT_PATH="/var/www/mytradingSignal"
 LOG_DIR="/var/log/mytradingSignal"
 START_SCRIPT="/usr/local/bin/market-9am-start.sh"
 
@@ -27,9 +26,37 @@ cat > "$START_SCRIPT" <<'EOF'
 # Auto-start trading backend (invoked by systemd timer at 9:00 AM IST Mon-Fri)
 LOG="/var/log/mytradingSignal/market-9am-start.log"
 PROJECT_PATH="/var/www/mytradingSignal"
+BACKEND_NAME="backend"
+BACKEND_PORT=8000
 export PATH="/usr/local/bin:/usr/bin:/bin:$PATH"
 
 log() { echo "[$(TZ=Asia/Kolkata date '+%Y-%m-%d %H:%M:%S IST')] $1" >> "$LOG"; }
+
+# Returns pm2 status of backend: online / stopped / errored / missing
+backend_status() {
+    pm2 jlist 2>/dev/null | python3 -c "
+import sys, json
+try:
+    for p in json.load(sys.stdin):
+        if p.get('name') == '$BACKEND_NAME':
+            print(p['pm2_env']['status']); break
+    else:
+        print('missing')
+except Exception:
+    print('unknown')
+" 2>/dev/null
+}
+
+# Kill any orphan process holding the backend port (stale uvicorn = crash loop)
+free_backend_port() {
+    local pids
+    pids=$(ss -ltnp 2>/dev/null | grep ":$BACKEND_PORT " | grep -oP 'pid=\K[0-9]+' | sort -u)
+    if [ -n "$pids" ]; then
+        log "Killing stale process(es) on port $BACKEND_PORT: $pids"
+        kill -9 $pids 2>/dev/null || true
+        sleep 2
+    fi
+}
 
 log "===== 9AM auto-start triggered ====="
 cd "$PROJECT_PATH" || { log "ERROR: project path missing"; exit 1; }
@@ -40,12 +67,39 @@ if ! pm2 pid >/dev/null 2>&1 || [ -z "$(pm2 pid 2>/dev/null)" ]; then
     pm2 resurrect >> "$LOG" 2>&1 || true
 fi
 
-# Restart everything (same as your manual: cd /var/www/mytradingSignal && pm2 restart all)
-if pm2 restart all --update-env >> "$LOG" 2>&1; then
-    log "pm2 restart all: SUCCESS"
+# Stop backend cleanly, then clear any orphan holding port 8000
+# (known pitfall: stale uvicorn on port 8000 causes instant crash loop)
+pm2 stop "$BACKEND_NAME" >> "$LOG" 2>&1 || true
+sleep 2
+free_backend_port
+
+# Restart everything
+pm2 restart all --update-env >> "$LOG" 2>&1 || pm2 resurrect >> "$LOG" 2>&1 || true
+
+# Verify backend actually stays online; retry up to 3 times
+for attempt in 1 2 3; do
+    sleep 15
+    STATUS=$(backend_status)
+    log "Verify attempt $attempt: backend status = $STATUS"
+    if [ "$STATUS" = "online" ]; then
+        break
+    fi
+    log "Backend not online - capturing last errors:"
+    tail -n 30 /root/.pm2/logs/${BACKEND_NAME}-error.log >> "$LOG" 2>/dev/null || true
+    pm2 stop "$BACKEND_NAME" >> "$LOG" 2>&1 || true
+    sleep 2
+    free_backend_port
+    pm2 restart "$BACKEND_NAME" --update-env >> "$LOG" 2>&1 || pm2 start "$BACKEND_NAME" >> "$LOG" 2>&1 || true
+done
+
+# Final health check on the API itself
+sleep 5
+if curl -sf -m 10 "http://127.0.0.1:$BACKEND_PORT/api/system/health" > /dev/null 2>&1 \
+   || curl -sf -m 10 "http://127.0.0.1:$BACKEND_PORT/" > /dev/null 2>&1; then
+    log "HEALTH CHECK: backend responding on port $BACKEND_PORT - OK"
 else
-    log "pm2 restart all failed - trying pm2 resurrect as fallback"
-    pm2 resurrect >> "$LOG" 2>&1 || log "ERROR: resurrect also failed"
+    log "WARNING: backend not responding on port $BACKEND_PORT - status: $(backend_status)"
+    pm2 list >> "$LOG" 2>&1 || true
 fi
 
 pm2 save >> "$LOG" 2>&1 || true
