@@ -26,6 +26,19 @@ const IndexCard = dynamic(() => import('@/components/IndexCard'), {
 
 const TopAISignalBar = dynamic(() => import('@/components/TopAISignalBar'), { ssr: false });
 const MarketPulseStrip = dynamic(() => import('@/components/MarketPulseStrip'), { ssr: false });
+const SMCStructureSection = dynamic(() => import('@/components/SMCStructureSection'), {
+  ssr: false,
+  loading: () => (
+    <div className="mb-3 rounded-xl border border-indigo-400/20 bg-slate-900/50 p-4 animate-pulse">
+      <div className="h-4 w-72 bg-slate-700 rounded mb-3" />
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-2.5">
+        {[0, 1, 2].map(i => (
+          <div key={i} className="h-56 bg-slate-800/60 rounded-xl" />
+        ))}
+      </div>
+    </div>
+  )
+});
 const FIIDIIFlowStrip = dynamic(() => import('@/components/FIIDIIFlowStrip'), { ssr: false });
 const VolumePulseCard = dynamic(() => import('@/components/VolumePulseCard'), { ssr: false });
 const TrendBaseCard = dynamic(() => import('@/components/TrendBaseCard'), { ssr: false });
@@ -566,6 +579,9 @@ export default function Home() {
 
         {/* 📊 MARKET PULSE STRIP — institutional bird's-eye KPIs */}
         <MarketPulseStrip marketData={marketData} isConnected={isConnected} />
+
+        {/* 🏛️ ADVANCED SMC & MARKET STRUCTURE — institutional structure engine */}
+        <SMCStructureSection />
 
         {/* 💸 FII / DII FLOW — institutional flow matrix */}
         <FIIDIIFlowStrip marketData={marketData} isConnected={isConnected} />

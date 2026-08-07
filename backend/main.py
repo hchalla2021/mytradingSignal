@@ -93,6 +93,7 @@ from routers.market_compass import router as market_compass_http, ws_router as m
 from routers.trading_intelligence import http_router as tie_http, ws_router as tie_ws
 from routers.fii_dii import router as fii_dii_router, ws_router as fii_dii_ws
 from routers.smart_ai_algo import http_router as algo_http, ws_router as algo_ws
+from routers.smc import http_router as smc_http, ws_router as smc_ws
 
 # Windows console fix already applied in config/__init__.py
 
@@ -215,6 +216,14 @@ async def lifespan(app: FastAPI):
             except Exception as exc:
                 logger.error("Liquidity service failed to start: %s", exc, exc_info=True)
 
+        async def start_smc():
+            try:
+                from services.smc_service import get_smc_service
+                await get_smc_service().start()
+                print("🏛️ SMC Structure: ON")
+            except Exception as exc:
+                logger.error("SMC Structure service failed to start: %s", exc, exc_info=True)
+
         async def start_ict():
             try:
                 from services.ict_engine import get_ict_service
@@ -332,6 +341,7 @@ async def lifespan(app: FastAPI):
                 start_oi_broadcaster(),
                 start_compass(),
                 start_liquidity(),
+                start_smc(),
                 start_ict(),
                 start_expiry_explosion(),
                 start_market_edge(),
@@ -352,6 +362,7 @@ async def lifespan(app: FastAPI):
                 start_oi_broadcaster(),
                 start_compass(),
                 start_liquidity(),
+                start_smc(),
                 start_ict(),
                 start_expiry_explosion(),
                 start_market_edge(),
@@ -409,6 +420,13 @@ async def lifespan(app: FastAPI):
     try:
         from services.liquidity_service import get_liquidity_service
         await get_liquidity_service().stop()
+    except Exception:
+        pass
+
+    # Stop SMC Structure Service
+    try:
+        from services.smc_service import get_smc_service
+        await get_smc_service().stop()
     except Exception:
         pass
 
@@ -642,6 +660,10 @@ app.include_router(smart_money.router, prefix="/ws", tags=["Smart Money Order Lo
 # ⚡ Pure Liquidity Intelligence
 app.include_router(liq_ws,   prefix="/ws",  tags=["Liquidity"])
 app.include_router(liq_http, prefix="/api", tags=["Liquidity"])
+
+# 🏛️ Advanced SMC & Market Structure
+app.include_router(smc_ws,   prefix="/ws",  tags=["SMC Structure"])
+app.include_router(smc_http, prefix="/api", tags=["SMC Structure"])
 
 # 🏦 ICT Smart Money Intelligence
 app.include_router(ict_ws,   prefix="/ws",  tags=["ICT"])
