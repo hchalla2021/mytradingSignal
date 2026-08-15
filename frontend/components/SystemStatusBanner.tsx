@@ -37,6 +37,7 @@ interface SystemHealth {
 export default function SystemStatusBanner() {
   const [health, setHealth] = useState<SystemHealth | null>(null);
   const [showDetails, setShowDetails] = useState(false);
+  const [autoLoginState, setAutoLoginState] = useState<'idle' | 'busy' | 'done'>('idle');
 
   const formatElapsed = (seconds: number | null | undefined): string | null => {
     if (seconds == null || !Number.isFinite(seconds) || seconds < 0) return null;
@@ -100,11 +101,31 @@ export default function SystemStatusBanner() {
     health.priority_status === 'FEED_DISCONNECTED' &&
     health.market.is_trading_hours;
 
-  const handleLogin = () => {
+  const handleLogin = async () => {
     const apiUrl = process.env.NEXT_PUBLIC_API_URL;
     if (!apiUrl) return;
     const loginUrl = `${apiUrl}/api/auth/login`;
-    
+
+    // One-click path: backend performs the full Zerodha handshake itself
+    // (needs ZERODHA_USER_ID/PASSWORD/TOTP_SECRET in backend .env).
+    if (autoLoginState === 'busy') return;
+    try {
+      setAutoLoginState('busy');
+      const res = await fetch(`${apiUrl}/api/auth/auto-login`, { method: 'POST' });
+      const json = await res.json();
+      if (json?.success) {
+        setAutoLoginState('done');
+        // token saved server-side — wait for feed reconnect then refresh
+        setTimeout(() => window.location.reload(), 5000);
+        return;
+      }
+      if (json?.configured) {
+        // credentials configured but handshake failed — surface reason
+        alert(`One-click login failed: ${json?.message ?? 'unknown error'}\n\nFalling back to Zerodha login page.`);
+      }
+    } catch { /* backend unreachable — fall through to manual flow */ }
+    setAutoLoginState('idle');
+
     // Detect mobile device
     const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent) || window.innerWidth <= 768;
     
@@ -209,13 +230,13 @@ export default function SystemStatusBanner() {
             </div>
             <button
               onClick={handleLogin}
-              className="flex-shrink-0 px-3 py-1.5 sm:px-4 sm:py-2 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white font-semibold rounded-md transition-all active:scale-95 shadow-md text-xs sm:text-sm flex items-center gap-1.5"
+              disabled={autoLoginState !== 'idle'}
+              className="flex-shrink-0 px-3 py-1.5 sm:px-4 sm:py-2 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 disabled:opacity-60 text-white font-semibold rounded-md transition-all active:scale-95 shadow-md text-xs sm:text-sm flex items-center gap-1.5"
             >
               <svg className="w-3 h-3 sm:w-3.5 sm:h-3.5" fill="currentColor" viewBox="0 0 20 20">
                 <path fillRule="evenodd" d="M5 9V7a5 5 0 0110 0v2a2 2 0 012 2v5a2 2 0 01-2 2H5a2 2 0 01-2-2v-5a2 2 0 012-2zm8-2v2H7V7a3 3 0 016 0z" clipRule="evenodd" />
               </svg>
-              <span className="hidden sm:inline">Login</span>
-              <span className="sm:hidden">Login</span>
+              <span>{autoLoginState === 'busy' ? 'Logging in…' : autoLoginState === 'done' ? 'Reconnecting…' : 'Login'}</span>
             </button>
           </div>
         </div>

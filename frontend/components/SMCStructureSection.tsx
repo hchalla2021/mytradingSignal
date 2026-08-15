@@ -16,6 +16,14 @@ const fmt = (v: number | null | undefined, nd = 2): string =>
 const fmtZone = (zone: (number | null)[] | null): string =>
   zone && zone[0] != null && zone[1] != null ? `${fmt(zone[0])} – ${fmt(zone[1])}` : '—';
 
+const tickAge = (timestamp?: string | null): string => {
+  if (!timestamp) return 'tick time unavailable';
+  const parsed = Date.parse(timestamp);
+  if (!Number.isFinite(parsed)) return 'tick time unavailable';
+  const age = Math.max(0, Math.round((Date.now() - parsed) / 1000));
+  return `${age}s ago`;
+};
+
 const verdictMeta: Record<SMCVerdict, { label: string; cls: string; bar: string }> = {
   STRONG_BUY: { label: 'STRONG BUY', cls: 'border-emerald-300/60 bg-emerald-500/20 text-emerald-100', bar: 'bg-emerald-400' },
   BUY: { label: 'BUY', cls: 'border-emerald-400/40 bg-emerald-500/10 text-emerald-200', bar: 'bg-emerald-500' },
@@ -33,6 +41,13 @@ const chip = (text: string, cls: string, key?: string) => (
   </span>
 );
 
+const Level = ({ label, value, tone }: { label: string; value: string; tone: string }) => (
+  <div className="rounded-lg border border-slate-700/60 bg-slate-900/70 px-1 py-1.5">
+    <div className="text-[8px] font-black tracking-widest text-slate-500">{label}</div>
+    <div className={`font-mono text-[11px] font-black leading-tight ${tone}`}>{value}</div>
+  </div>
+);
+
 // ── Probability bar ───────────────────────────────────────────────────────────
 
 function ProbBar({ probs }: { probs: SMCIndexData['probabilities'] }) {
@@ -48,6 +63,50 @@ function ProbBar({ probs }: { probs: SMCIndexData['probabilities'] }) {
         <span>CHOP {probs.chop}%</span>
         <span className="text-rose-300">REV {probs.reversal}%</span>
       </div>
+    </div>
+  );
+}
+
+// ── Trader action banner: the exact command to execute ─────────────────────
+
+function ActionBanner({ row }: { row: SMCIndexData }) {
+  const action = row.tradePlan.traderAction;
+  if (!action) return null;
+
+  const isBuy = action.call === 'BUY CE';
+  const isSell = action.call === 'BUY PE';
+  const tone = isBuy
+    ? 'border-emerald-400/60 bg-gradient-to-r from-emerald-500/25 via-emerald-500/10 to-transparent'
+    : isSell
+      ? 'border-rose-400/60 bg-gradient-to-r from-rose-500/25 via-rose-500/10 to-transparent'
+      : 'border-amber-400/40 bg-gradient-to-r from-amber-500/15 via-amber-500/5 to-transparent';
+  const callTone = isBuy ? 'text-emerald-300' : isSell ? 'text-rose-300' : 'text-amber-300';
+  const mark = isBuy ? '▲' : isSell ? '▼' : '⏸';
+  const urgencyChip = action.urgency === 'NOW'
+    ? <span className="animate-pulse rounded border border-white/30 bg-white/10 px-1.5 py-0.5 text-[9px] font-black text-white">EXECUTE NOW</span>
+    : action.urgency === 'HIGH'
+      ? <span className="rounded border border-white/20 bg-white/5 px-1.5 py-0.5 text-[9px] font-black text-slate-100">HIGH URGENCY</span>
+      : action.urgency === 'ON_PULLBACK'
+        ? <span className="rounded border border-slate-500/40 bg-slate-800/60 px-1.5 py-0.5 text-[9px] font-black text-slate-300">ON PULLBACK</span>
+        : null;
+
+  return (
+    <div className={`rounded-lg border-2 px-2.5 py-2 ${tone}`}>
+      <div className="flex items-center justify-between gap-2 flex-wrap">
+        <div className="flex items-center gap-2">
+          <span className={`text-base font-black tracking-wide ${callTone}`}>{mark} {action.call}</span>
+          {action.instrument && (
+            <span className="rounded border border-slate-500/40 bg-slate-900/70 px-1.5 py-0.5 text-[10px] font-black text-slate-100">
+              {action.instrument}
+            </span>
+          )}
+        </div>
+        <div className="flex items-center gap-1.5">
+          {urgencyChip}
+          <span className="text-[9px] font-bold text-slate-400">{action.validity}</span>
+        </div>
+      </div>
+      <div className="mt-1 text-[11px] font-semibold text-slate-200">{action.instruction}</div>
     </div>
   );
 }
@@ -110,6 +169,42 @@ function PredictionPanel({ prediction }: { prediction: NonNullable<SMCIndexData[
   );
 }
 
+function InstitutionalTape({ row }: { row: SMCIndexData }) {
+  const map = row.institutionalMap;
+  const technical = row.technical;
+  if (!map) return null;
+  const controlTone = map.control === 'BUYERS' ? 'text-emerald-300' : map.control === 'SELLERS' ? 'text-rose-300' : 'text-amber-300';
+  const rangeTone = map.dealingRange === 'DISCOUNT' ? 'text-emerald-300' : map.dealingRange === 'PREMIUM' ? 'text-rose-300' : 'text-amber-300';
+  const poi = map.activePoi;
+
+  return (
+    <div className="rounded-lg border border-indigo-400/25 bg-indigo-950/20 p-2 text-[10px]">
+      <div className="mb-1 flex items-center justify-between gap-2">
+        <span className="font-black tracking-wide text-indigo-200">INSTITUTIONAL TAPE · {map.exchange} {row.symbol}</span>
+        <span className={`font-black ${controlTone}`}>{map.control} IN CONTROL</span>
+      </div>
+      <div className="grid grid-cols-2 gap-x-3 gap-y-1 font-mono">
+        <div><span className="text-slate-500">Structure</span> <span className="font-bold text-slate-200">{map.structureRead}</span></div>
+        <div><span className="text-slate-500">Phase</span> <span className="font-bold text-slate-200">{map.phase} {map.phaseConfidence}%</span></div>
+        <div><span className="text-slate-500">BSL</span> <span className="font-bold text-emerald-300">{map.nearestBuySideLiquidity ? `${map.nearestBuySideLiquidity.kind} @ ${fmt(map.nearestBuySideLiquidity.level)}` : '—'}</span></div>
+        <div><span className="text-slate-500">SSL</span> <span className="font-bold text-rose-300">{map.nearestSellSideLiquidity ? `${map.nearestSellSideLiquidity.kind} @ ${fmt(map.nearestSellSideLiquidity.level)}` : '—'}</span></div>
+        <div><span className="text-slate-500">POI</span> <span className="font-bold text-cyan-200">{poi ? `${poi.type} ${poi.side} ${fmtZone([poi.low, poi.high])}` : 'No active zone'}</span></div>
+        <div><span className="text-slate-500">Location</span> <span className={`font-bold ${rangeTone}`}>{map.dealingRange} · VWAP {fmt(map.vwap)}</span></div>
+      </div>
+      <div className="mt-1 text-slate-400">OI: {map.oiRead} · PCR: {fmt(map.pcr, 2)} · {map.regime}</div>
+      {technical && (
+        <div className="mt-1 border-t border-indigo-400/15 pt-1 font-mono text-slate-400">
+          <span className="text-slate-500">Trend filter</span>{' '}
+          <span className={technical.ema.direction === 'BULLISH' ? 'text-emerald-300' : technical.ema.direction === 'BEARISH' ? 'text-rose-300' : 'text-amber-300'}>
+            EMA20 {fmt(technical.ema.ema20)} · EMA50 {fmt(technical.ema.ema50)} · EMA200 {fmt(technical.ema.ema200)} · {technical.ema.priceVs200}
+          </span>
+          <span className="text-slate-500"> · PDH {fmt(technical.previousDay.high)} · PDL {fmt(technical.previousDay.low)} · 4H {technical.fourHour.status === 'READY' ? technical.fourHour.direction : 'WAIT FOR HISTORY'}</span>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Per-index card ────────────────────────────────────────────────────────────
 
 function SMCCard({ row }: { row: SMCIndexData }) {
@@ -140,88 +235,133 @@ function SMCCard({ row }: { row: SMCIndexData }) {
           <span className="rounded-md border border-slate-600/60 bg-slate-900/80 px-1.5 py-0.5 text-[10px] font-black text-slate-200">
             {row.confidence}%
           </span>
+          <span className={`rounded-md border px-1.5 py-0.5 text-[9px] font-black ${
+            row.dataSource === 'LIVE' && row.metrics.feedStatus === 'LIVE'
+              ? 'border-emerald-400/30 bg-emerald-500/10 text-emerald-300'
+              : 'border-amber-400/30 bg-amber-500/10 text-amber-300'
+          }`}>
+            {row.dataSource === 'LIVE' && row.metrics.feedStatus === 'LIVE' ? `LIVE · ${tickAge(row.metrics.tickTimestamp)}` : 'STALE'}
+          </span>
         </div>
+      </div>
+
+      <ActionBanner row={row} />
+
+      {row.alignment && (
+        <div className="flex items-center justify-between gap-2 rounded-md border border-slate-700/60 bg-slate-900/60 px-2 py-1 text-[9px] font-black">
+          <span className="text-slate-500">DECISION ALIGNMENT</span>
+          <span className={row.alignment.status === 'UNANIMOUS' ? 'text-emerald-300' : row.alignment.status === 'ALIGNED' ? 'text-cyan-300' : 'text-amber-300'}>
+            {row.alignment.alignedSignals}/{row.alignment.activeSignals} SIGNALS · {row.alignment.status}
+          </span>
+          <span className="text-slate-500">EMA200 {row.technical?.ema.status === 'READY' ? 'READY' : 'WARMING UP'} · 4H {row.technical?.fourHour.status === 'READY' ? 'READY' : 'WARMING UP'}</span>
+        </div>
+      )}
+
+      {/* Key levels — the four numbers an intraday trader acts on */}
+      {plan.entryZone ? (
+        <div className="grid grid-cols-4 gap-1.5 text-center">
+          <Level label="ENTRY" value={fmtZone(plan.entryZone)} tone="text-cyan-200" />
+          <Level label="STOP" value={fmt(plan.stopLoss)} tone="text-rose-300" />
+          <Level label="TARGET" value={fmt(plan.targets[0]?.level)} tone="text-emerald-300" />
+          <Level label="R:R" value={plan.riskReward != null ? `1:${fmt(plan.riskReward, 1)}` : '—'} tone="text-slate-100" />
+        </div>
+      ) : (
+        <div className="rounded-lg border border-slate-700/60 bg-slate-900/60 px-2 py-1.5 text-[10px] font-semibold text-slate-400">
+          {plan.entryNote}
+        </div>
+      )}
+
+      {/* One-line market read */}
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px] font-bold text-slate-400">
+        <span>5m <span className={biasCls(ltf.bias)}>{ltf.bias}</span>{row.structure.aligned && <span className="text-cyan-300"> ✓15m</span>}</span>
+        <span className="text-slate-700">|</span>
+        <span className={dr.zone === 'DISCOUNT' ? 'text-emerald-300' : dr.zone === 'PREMIUM' ? 'text-rose-300' : 'text-amber-300'}>
+          {dr.zone}{dr.positionPct != null ? ` ${dr.positionPct}%` : ''}
+        </span>
+        {row.prediction && (
+          <>
+            <span className="text-slate-700">|</span>
+            <span className={row.prediction.direction === 'UP' ? 'text-emerald-300' : row.prediction.direction === 'DOWN' ? 'text-rose-300' : 'text-amber-300'}>
+              NEXT {row.prediction.direction === 'UP' ? '▲' : row.prediction.direction === 'DOWN' ? '▼' : '•'} {row.prediction.conviction}%
+              {row.prediction.magnet ? ` → ${fmt(row.prediction.magnet.level, 0)}` : ''}
+            </span>
+          </>
+        )}
+        <span className="text-slate-700">|</span>
+        <span className={riskTone}>RISK {plan.riskScore}</span>
+        {trap && chip('🪤 TRAP', 'border-orange-400/50 bg-orange-500/15 text-orange-200')}
       </div>
 
       <ProbBar probs={row.probabilities} />
-
-      {/* Structure + location row */}
-      <div className="grid grid-cols-2 gap-1.5 text-[10px]">
-        <div className="rounded-lg border border-slate-700/60 bg-slate-900/60 px-2 py-1.5">
-          <div className="text-slate-500 font-bold">STRUCTURE 15m / 5m</div>
-          <div className="font-black">
-            <span className={biasCls(htf.bias)}>{htf.bias}</span>
-            <span className="text-slate-500"> / </span>
-            <span className={biasCls(ltf.bias)}>{ltf.bias}</span>
-            {row.structure.aligned && <span className="ml-1 text-cyan-300">✓ ALIGNED</span>}
-          </div>
-          {ltf.lastEvent && (
-            <div className="mt-0.5 font-mono text-slate-400">
-              {ltf.lastEvent.type} {ltf.lastEvent.direction === 'BULLISH' ? '▲' : '▼'} @ {fmt(ltf.lastEvent.level)}
-              {ltf.lastEvent.displacement ? ' ⚡' : ''}
-            </div>
-          )}
-        </div>
-        <div className="rounded-lg border border-slate-700/60 bg-slate-900/60 px-2 py-1.5">
-          <div className="text-slate-500 font-bold">DEALING RANGE</div>
-          <div className={`font-black ${dr.zone === 'DISCOUNT' ? 'text-emerald-300' : dr.zone === 'PREMIUM' ? 'text-rose-300' : 'text-amber-300'}`}>
-            {dr.zone} {dr.positionPct != null ? `· ${dr.positionPct}%` : ''}
-          </div>
-          <div className="mt-0.5 font-mono text-slate-400">
-            EQ {fmt(dr.equilibrium)} · {fmt(dr.low, 0)}–{fmt(dr.high, 0)}
-          </div>
-        </div>
-      </div>
-
-      {/* Context chips */}
-      <div className="flex flex-wrap gap-1">
-        {chip(`${row.regime.market} · ${row.regime.volatility}`, 'border-blue-400/40 bg-blue-500/10 text-blue-200')}
-        {chip(row.session.name.replaceAll('_', ' '), 'border-purple-400/40 bg-purple-500/10 text-purple-200')}
-        {chip(`${row.intent.phase} ${row.intent.direction === 'NEUTRAL' ? '' : row.intent.direction === 'BULLISH' ? '▲' : '▼'}`,
-          row.intent.direction === 'BULLISH' ? 'border-emerald-400/40 bg-emerald-500/10 text-emerald-200'
-            : row.intent.direction === 'BEARISH' ? 'border-rose-400/40 bg-rose-500/10 text-rose-200'
-              : 'border-slate-600/60 bg-slate-800/60 text-slate-300')}
-        {trap && chip('🪤 TRAP CONFIRMED', 'border-orange-400/50 bg-orange-500/15 text-orange-200')}
-        {row.liquidity.inducement && chip('🎣 INDUCEMENT', 'border-yellow-400/40 bg-yellow-500/10 text-yellow-200')}
-        {row.smt.state !== 'IN_SYNC' && row.smt.state !== 'NO_PEER_DATA' &&
-          chip(`SMT: ${row.smt.state.replaceAll('_', ' ')}`, 'border-cyan-400/40 bg-cyan-500/10 text-cyan-200')}
-        {row.behavior.absorption && chip('🧲 ABSORPTION', 'border-teal-400/40 bg-teal-500/10 text-teal-200')}
-        {row.behavior.exhaustion && chip('⛽ EXHAUSTION', 'border-pink-400/40 bg-pink-500/10 text-pink-200')}
-      </div>
-
-      {row.prediction && <PredictionPanel prediction={row.prediction} />}
-
-      {/* Trade plan */}
-      <div className="rounded-lg border border-slate-700/70 bg-slate-900/70 p-2 text-[10px]">
-        <div className="mb-1 flex items-center justify-between">
-          <span className="font-black text-slate-300">TRADE PLAN</span>
-          <span className={`font-black ${riskTone}`}>RISK {plan.riskScore}/100</span>
-        </div>
-        {plan.entryZone ? (
-          <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 font-mono">
-            <div><span className="text-slate-500">Entry</span> <span className="text-cyan-200 font-bold">{fmtZone(plan.entryZone)}</span></div>
-            <div><span className="text-slate-500">SL</span> <span className="text-rose-300 font-bold">{fmt(plan.stopLoss)}</span></div>
-            <div><span className="text-slate-500">T1</span> <span className="text-emerald-300 font-bold">{fmt(plan.targets[0]?.level)}</span> <span className="text-slate-500">{plan.targets[0]?.label ?? ''}</span></div>
-            <div><span className="text-slate-500">T2</span> <span className="text-emerald-300 font-bold">{fmt(plan.targets[1]?.level)}</span> <span className="text-slate-500">{plan.targets[1]?.label ?? ''}</span></div>
-            <div><span className="text-slate-500">Invalidation</span> <span className="text-amber-200 font-bold">{fmt(plan.invalidation)}</span></div>
-            <div><span className="text-slate-500">R:R</span> <span className="text-slate-200 font-bold">{plan.riskReward != null ? `1:${fmt(plan.riskReward)}` : '—'}</span></div>
-          </div>
-        ) : (
-          <div className="text-slate-400 font-semibold">{plan.entryNote}</div>
-        )}
-        {plan.entryZone && <div className="mt-1 text-slate-500">{plan.entryNote}</div>}
-      </div>
 
       {/* Expand: zones, liquidity, factors, reasoning */}
       <button
         onClick={() => setOpen(o => !o)}
         className="w-full rounded-md border border-slate-700/60 bg-slate-900/60 py-1 text-[10px] font-black text-slate-400 hover:text-slate-200 hover:bg-slate-800/60 transition-colors"
       >
-        {open ? '▲ HIDE INSTITUTIONAL DETAIL' : '▼ ORDER BLOCKS · LIQUIDITY MAP · REASONING'}
+        {open ? '▲ HIDE INSTITUTIONAL DETAIL' : '▼ NEXT MOVE · ORDER BLOCKS · LIQUIDITY MAP · REASONING'}
       </button>
 
       {open && (
         <div className="flex flex-col gap-2 text-[10px]">
+          <InstitutionalTape row={row} />
+          {row.prediction && <PredictionPanel prediction={row.prediction} />}
+
+          {/* Structure + location */}
+          <div className="grid grid-cols-2 gap-1.5">
+            <div className="rounded-lg border border-slate-700/60 bg-slate-900/60 px-2 py-1.5">
+              <div className="text-slate-500 font-bold">STRUCTURE 15m / 5m</div>
+              <div className="font-black">
+                <span className={biasCls(htf.bias)}>{htf.bias}</span>
+                <span className="text-slate-500"> / </span>
+                <span className={biasCls(ltf.bias)}>{ltf.bias}</span>
+                {row.structure.aligned && <span className="ml-1 text-cyan-300">✓ ALIGNED</span>}
+              </div>
+              {ltf.lastEvent && (
+                <div className="mt-0.5 font-mono text-slate-400">
+                  {ltf.lastEvent.type} {ltf.lastEvent.direction === 'BULLISH' ? '▲' : '▼'} @ {fmt(ltf.lastEvent.level)}
+                  {ltf.lastEvent.displacement ? ' ⚡' : ''}
+                </div>
+              )}
+            </div>
+            <div className="rounded-lg border border-slate-700/60 bg-slate-900/60 px-2 py-1.5">
+              <div className="text-slate-500 font-bold">DEALING RANGE</div>
+              <div className={`font-black ${dr.zone === 'DISCOUNT' ? 'text-emerald-300' : dr.zone === 'PREMIUM' ? 'text-rose-300' : 'text-amber-300'}`}>
+                {dr.zone} {dr.positionPct != null ? `· ${dr.positionPct}%` : ''}
+              </div>
+              <div className="mt-0.5 font-mono text-slate-400">
+                EQ {fmt(dr.equilibrium)} · {fmt(dr.low, 0)}–{fmt(dr.high, 0)}
+              </div>
+            </div>
+          </div>
+
+          {/* Context chips */}
+          <div className="flex flex-wrap gap-1">
+            {chip(`${row.regime.market} · ${row.regime.volatility}`, 'border-blue-400/40 bg-blue-500/10 text-blue-200')}
+            {chip(row.session.name.replaceAll('_', ' '), 'border-purple-400/40 bg-purple-500/10 text-purple-200')}
+            {chip(`${row.intent.phase} ${row.intent.direction === 'NEUTRAL' ? '' : row.intent.direction === 'BULLISH' ? '▲' : '▼'}`,
+              row.intent.direction === 'BULLISH' ? 'border-emerald-400/40 bg-emerald-500/10 text-emerald-200'
+                : row.intent.direction === 'BEARISH' ? 'border-rose-400/40 bg-rose-500/10 text-rose-200'
+                  : 'border-slate-600/60 bg-slate-800/60 text-slate-300')}
+            {row.liquidity.inducement && chip('🎣 INDUCEMENT', 'border-yellow-400/40 bg-yellow-500/10 text-yellow-200')}
+            {row.smt.state !== 'IN_SYNC' && row.smt.state !== 'NO_PEER_DATA' &&
+              chip(`SMT: ${row.smt.state.replaceAll('_', ' ')}`, 'border-cyan-400/40 bg-cyan-500/10 text-cyan-200')}
+            {row.behavior.absorption && chip('🧲 ABSORPTION', 'border-teal-400/40 bg-teal-500/10 text-teal-200')}
+            {row.behavior.exhaustion && chip('⛽ EXHAUSTION', 'border-pink-400/40 bg-pink-500/10 text-pink-200')}
+          </div>
+
+          {/* Full trade plan */}
+          {plan.entryZone && (
+            <div className="rounded-lg border border-slate-700/60 bg-slate-900/50 p-2">
+              <div className="mb-1 font-black text-slate-400">FULL TRADE PLAN</div>
+              <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 font-mono">
+                <div><span className="text-slate-500">T2</span> <span className="text-emerald-300 font-bold">{fmt(plan.targets[1]?.level)}</span> <span className="text-slate-500">{plan.targets[1]?.label ?? ''}</span></div>
+                <div><span className="text-slate-500">Invalidation</span> <span className="text-amber-200 font-bold">{fmt(plan.invalidation)}</span></div>
+              </div>
+              <div className="mt-1 text-slate-500">{plan.entryNote}</div>
+            </div>
+          )}
+
           {/* Liquidity pools */}
           <div className="rounded-lg border border-slate-700/60 bg-slate-900/50 p-2">
             <div className="mb-1 font-black text-slate-400">LIQUIDITY POOLS (draw targets)</div>

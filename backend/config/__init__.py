@@ -32,6 +32,11 @@ class Settings(BaseSettings):
     zerodha_access_token: str = ""
     zerodha_api_base_url: str = "https://kite.zerodha.com"
     zerodha_developers_url: str = "https://developers.kite.trade/apps"
+
+    # One-click auto login (optional): personal credentials, local .env only
+    zerodha_user_id: str = Field(default="", env="ZERODHA_USER_ID")
+    zerodha_password: str = Field(default="", env="ZERODHA_PASSWORD")
+    zerodha_totp_secret: str = Field(default="", env="ZERODHA_TOTP_SECRET")
     
     # ==================== OAUTH & REDIRECT ====================
     # Direct URLs from .env file

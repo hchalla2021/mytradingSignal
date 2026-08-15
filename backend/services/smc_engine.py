@@ -153,6 +153,36 @@ def _ema(series: List[float], period: int) -> Optional[float]:
     return val
 
 
+def ema_context(closes: List[float], price: float, atr: float) -> Dict[str, Any]:
+    """Trend filter used for conviction, never as a standalone signal."""
+    values = [v for v in closes if v > 0]
+    ema20 = _ema(values, 20)
+    ema50 = _ema(values, 50)
+    ema200 = _ema(values, 200) if len(values) >= 200 else None
+    if ema20 is None or ema50 is None:
+        return {"status": "INSUFFICIENT_HISTORY", "ema20": _rnd(ema20),
+                "ema50": _rnd(ema50), "ema200": _rnd(ema200),
+                "direction": "NEUTRAL", "score": 0.0, "priceVs200": "UNAVAILABLE"}
+
+    votes = 0
+    votes += 1 if price > ema20 else -1
+    votes += 1 if ema20 > ema50 else -1
+    if ema200 is not None:
+        votes += 1 if price > ema200 else -1
+    score = votes / (3 if ema200 is not None else 2)
+    distance = ((price - ema200) / atr) if ema200 is not None and atr > 0 else None
+    return {
+        "status": "READY" if ema200 is not None else "PARTIAL",
+        "ema20": _rnd(ema20), "ema50": _rnd(ema50), "ema200": _rnd(ema200),
+        "direction": "BULLISH" if score >= 0.34 else "BEARISH" if score <= -0.34 else "NEUTRAL",
+        "score": _rnd(_clamp(score, -1.0, 1.0), 3),
+        "priceVs200": ("ABOVE" if distance is not None and distance > 0.15
+                       else "BELOW" if distance is not None and distance < -0.15
+                       else "AT_OR_NEAR" if distance is not None else "UNAVAILABLE"),
+        "distanceAtr": _rnd(distance, 2),
+    }
+
+
 def _rsi(closes: List[float], period: int = 14) -> Optional[float]:
     if len(closes) < period + 1:
         return None
@@ -920,6 +950,45 @@ def _early_warnings(closed: List[Candle], price: float, atr: float,
     return warns[:4]
 
 
+def _institutional_map(symbol: str, price: float, htf: Dict[str, Any],
+                       ltf: Dict[str, Any], aligned: bool,
+                       intent: Dict[str, Any], dr: Dict[str, Any],
+                       pools: List[Dict[str, Any]], obs: List[Dict[str, Any]],
+                       fvgs: List[Dict[str, Any]], conf: Dict[str, Any],
+                       regime: Dict[str, Any], decision: float) -> Dict[str, Any]:
+    """Turn the raw SMC map into the few institutional facts traders verify."""
+    above = sorted((p for p in pools if not p.get("swept") and (p.get("level") or 0) > price),
+                   key=lambda p: p["level"])
+    below = sorted((p for p in pools if not p.get("swept") and 0 < (p.get("level") or 0) < price),
+                   key=lambda p: p["level"], reverse=True)
+    active_obs = [o for o in obs if o["state"] != "BREAKER"]
+    active_fvgs = [g for g in fvgs if g["state"] != "INVERTED"]
+    poi = active_obs[0] if active_obs else active_fvgs[0] if active_fvgs else None
+    side = "BUYERS" if decision > 0.10 else "SELLERS" if decision < -0.10 else "BALANCED"
+    event = (ltf.get("lastEvent") or htf.get("lastEvent") or {}).get("type", "NO CONFIRMED BREAK")
+    return {
+        "exchange": "BSE" if symbol == "SENSEX" else "NSE",
+        "control": side,
+        "structureRead": f"15m {htf['bias']} / 5m {ltf['bias']} · {event}",
+        "timeframeAlignment": aligned,
+        "phase": intent["phase"],
+        "phaseDirection": intent["direction"],
+        "phaseConfidence": intent["confidence"],
+        "dealingRange": dr.get("zone", "UNKNOWN"),
+        "nearestBuySideLiquidity": ({"kind": above[0]["kind"], "level": above[0]["level"],
+                                      "scope": above[0]["scope"]} if above else None),
+        "nearestSellSideLiquidity": ({"kind": below[0]["kind"], "level": below[0]["level"],
+                                       "scope": below[0]["scope"]} if below else None),
+        "activePoi": ({"type": "OB" if poi in active_obs else "FVG", "side": poi["side"],
+                       "state": poi["state"], "low": poi["low"], "high": poi["high"]}
+                      if poi else None),
+        "vwap": conf["vwap"]["value"],
+        "pcr": conf["pcr"]["value"],
+        "oiRead": conf["oi"]["note"],
+        "regime": regime["market"],
+    }
+
+
 def forecast_next_move(closed: List[Candle], price: float, atr: float,
                        ltf: Dict[str, Any], pools: List[Dict[str, Any]],
                        sweeps: List[Dict[str, Any]],
@@ -1114,6 +1183,7 @@ def analyze_symbol(symbol: str,
     day_low = float(spot.get("low") or 0)
 
     atr = _atr(closed)
+    ema = ema_context([_f(c, "close") for c in closed], price, atr)
 
     # ── LTF structure ──────────────────────────────────────────────────────
     swings = detect_swings(closed)
@@ -1128,6 +1198,7 @@ def analyze_symbol(symbol: str,
     htf_swings = detect_swings(htf_candles)
     htf = walk_structure(htf_candles, htf_swings, _atr(htf_candles))
     htf_score, htf_note = structure_score(htf)
+    four_hour_count = len(htf_candles) // 16
     aligned = htf["bias"] != "NEUTRAL" and htf["bias"] == ltf["bias"]
     struct_combined = _clamp(0.6 * htf_score + 0.4 * ltf_score, -1.0, 1.0)
     if aligned:
@@ -1236,48 +1307,104 @@ def analyze_symbol(symbol: str,
         "confluence": {"score": conf["score"] or 0.0, "note": conf["vwap"]["note"]},
         "smt": {"score": smt["score"], "note": smt["note"]},
         "intent": {"score": intent_score, "note": intent["note"]},
+        "ema": {"score": ema["score"],
+                "note": (f"EMA20 {ema['ema20']} / EMA50 {ema['ema50']} / EMA200 {ema['ema200']} · "
+                         f"price {ema['priceVs200']}"
+                         if ema["status"] != "INSUFFICIENT_HISTORY"
+                         else "EMA stack warming up — need 200 closed 5m candles")},
     }
-    score = sum(weights[k] * factors[k]["score"] for k in weights)
+    score = sum(weights[k] * factors[k]["score"] for k in weights) * 0.90 + ema["score"] * 0.10
     score = _clamp(score * session["qualityMod"] / 1.0, -1.0, 1.0)
     for k in factors:
-        factors[k]["weight"] = weights[k]
+        factors[k]["weight"] = weights.get(k, 0.10 if k == "ema" else 0.0)
         factors[k]["score"] = _rnd(factors[k]["score"], 3)
 
+    # ── Decisive action layer ─────────────────────────────────────────────
+    # A professional never averages opposing factors into paralysis:
+    # DIRECTION comes from the dominant narrative (structure, intent,
+    # momentum, trend, confluence) — location/liquidity shape ENTRY & RISK.
+    trend_sign = (1.0 if ts["direction"] == "BULLISH"
+                  else -1.0 if ts["direction"] == "BEARISH" else 0.0)
+    mom_full = float(factors["momentum"]["score"] or 0.0)
+    narrative = _clamp(
+        0.30 * struct_combined
+        + 0.24 * intent_score
+        + 0.18 * mom_full
+        + 0.14 * trend_sign * (ts["value"] / 100.0)
+        + 0.12 * (conf["score"] or 0.0)
+        + 0.10 * ema["score"],
+        -1.0, 1.0)
+    decision = _clamp(0.55 * narrative + 0.45 * score, -1.0, 1.0)
+
+    dir_signals = [struct_combined, intent_score, mom_full, trend_sign,
+                   float(conf["score"] or 0.0), ema["score"]]
+    active = [s for s in dir_signals if abs(s) > 0.10]
+    aligned_votes = (sum(1 for s in active if (s > 0) == (decision > 0))
+                     if active and decision != 0 else 0)
+    # conviction bonus: near-unanimous directional checklist
+    if decision != 0 and len(active) >= 3 and aligned_votes >= max(3, len(active) - 1):
+        decision = _clamp(decision * 1.25, -1.0, 1.0)
+
+    # Counter-evidence AGAINST the decision: traps, exhaustion, SMT, location
+    counter = 0.0
+    if behavior.get("exhaustion") and ((behavior["exhaustion"]["side"] == "BEARISH") == (decision > 0)):
+        counter += 0.30
+    trap_recent = next((s for s in sweeps if s["trapConfirmed"] and s["barsAgo"] <= 6), None)
+    if trap_recent and ((trap_recent["side"] == "BSL") == (decision > 0)):
+        counter += 0.35
+    if abs(smt["score"]) > 0.3 and (smt["score"] > 0) != (decision > 0) and decision != 0:
+        counter += 0.25
+    if dr_zone == "PREMIUM" and decision > 0:
+        counter += 0.15
+    if dr_zone == "DISCOUNT" and decision < 0:
+        counter += 0.15
+
     # ── Verdict, confidence, probabilities ────────────────────────────────
-    if score >= 0.42:
-        verdict = "STRONG_BUY"
-    elif score >= 0.16:
-        verdict = "BUY"
-    elif score <= -0.42:
-        verdict = "STRONG_SELL"
-    elif score <= -0.16:
-        verdict = "SELL"
+    mag = abs(decision)
+    if mag >= 0.40:
+        verdict = "STRONG_BUY" if decision > 0 else "STRONG_SELL"
+    elif mag >= 0.14:
+        verdict = "BUY" if decision > 0 else "SELL"
     else:
         verdict = "NEUTRAL"
 
-    signs = [f["score"] for f in factors.values() if abs(f["score"] or 0) > 0.08]
-    agree = (sum(1 for s in signs if (s > 0) == (score > 0)) / len(signs)) if signs and score != 0 else 0.5
-    confidence = 32 + 48 * abs(score) + 14 * agree
+    # Intraday tape override: on the 5m timeframe, LTF structure + intent +
+    # trend/momentum all pointing one way IS the trade — HTF is only context.
+    if verdict == "NEUTRAL" and ltf["bias"] != "NEUTRAL":
+        tape_sign = 1.0 if ltf["bias"] == "BULLISH" else -1.0
+        tape_votes = sum([
+            intent["direction"] == ltf["bias"],
+            ts["direction"] == ltf["bias"],
+            (mom_full > 0.10) == (tape_sign > 0) and abs(mom_full) > 0.10,
+            ((conf["score"] or 0.0) > 0.10) == (tape_sign > 0) and abs(conf["score"] or 0.0) > 0.10,
+        ])
+        opposing = decision != 0 and (decision > 0) != (tape_sign > 0) and abs(decision) > 0.08
+        if tape_votes >= 2 and not opposing:
+            verdict = "BUY" if tape_sign > 0 else "SELL"
+            decision = tape_sign * max(mag, 0.18)
+            mag = abs(decision)
+
+    # heavy counter-evidence downgrades one notch (never flips direction)
+    if counter >= 0.45 and verdict in ("STRONG_BUY", "STRONG_SELL"):
+        verdict = "BUY" if decision > 0 else "SELL"
+
+    agree = (aligned_votes / len(active)) if active and decision != 0 else 0.5
+    confidence = 34 + 46 * mag + 16 * agree - 18 * counter
     if vol["state"] == "EXTREME":
         confidence -= 8
     if session["name"] == "MIDDAY_CHOP":
         confidence -= 5
     confidence = int(_clamp(confidence, 5, 95))
+    alignment = {
+        "alignedSignals": aligned_votes,
+        "activeSignals": len(active),
+        "ratio": _rnd(aligned_votes / len(active), 2) if active else 0.0,
+        "status": "UNANIMOUS" if active and aligned_votes == len(active)
+                  else "ALIGNED" if aligned_votes >= max(3, len(active) - 1)
+                  else "MIXED",
+    }
 
-    counter = 0.0
-    if behavior.get("exhaustion") and ((behavior["exhaustion"]["side"] == "BEARISH") == (score > 0)):
-        counter += 0.30
-    trap_recent = next((s for s in sweeps if s["trapConfirmed"] and s["barsAgo"] <= 6), None)
-    if trap_recent and ((trap_recent["side"] == "BSL") == (score > 0)):
-        counter += 0.35
-    if abs(smt["score"]) > 0.3 and (smt["score"] > 0) != (score > 0) and score != 0:
-        counter += 0.25
-    if dr_zone == "PREMIUM" and score > 0:
-        counter += 0.15
-    if dr_zone == "DISCOUNT" and score < 0:
-        counter += 0.15
-
-    trend_conf = abs(score) * agree
+    trend_conf = mag * agree
     continuation = _clamp(38 + 45 * trend_conf - 25 * counter, 5, 92)
     reversal = _clamp(18 + 55 * counter + (8 if vol["state"] in ("HIGH", "EXTREME") else 0), 5, 88)
     chop = _clamp(100 - continuation - reversal, 3, 90)
@@ -1285,7 +1412,7 @@ def analyze_symbol(symbol: str,
     continuation, reversal, chop = (round(x / total * 100, 1) for x in (continuation, reversal, chop))
 
     # ── Trade plan ─────────────────────────────────────────────────────────
-    bull = score > 0
+    bull = decision > 0
     plan: Dict[str, Any] = {"action": verdict, "entryZone": None, "entryNote": "Stand aside — no edge",
                             "stopLoss": None, "invalidation": None, "targets": [],
                             "liquidityTarget": None, "riskReward": None}
@@ -1363,13 +1490,54 @@ def analyze_symbol(symbol: str,
             plan["riskReward"] = _rnd(abs(t1_level - entry_ref) / abs(entry_ref - sl), 2)
     plan["riskScore"] = risk_score
 
+    # ── Trader command: exact instruction to execute right now ────────────
+    strong = verdict in ("STRONG_BUY", "STRONG_SELL")
+    if verdict == "NEUTRAL":
+        edge_hi = dr.get("high")
+        edge_lo = dr.get("low")
+        wait_note = (f"WAIT — no edge. Act only on a sweep of {edge_lo}–{edge_hi} range edges"
+                     if edge_hi and edge_lo else "WAIT — no edge, two-way auction")
+        action = {"call": "WAIT", "instrument": None, "urgency": "NONE",
+                  "instruction": wait_note, "validity": "Until a range edge is swept"}
+    else:
+        instrument = "CE (Call)" if bull else "PE (Put)"
+        call = f"BUY {'CE' if bull else 'PE'}"  # index options: direction expressed via CE/PE
+        ez = plan.get("entryZone") or [None, None]
+        ez_txt = (f"{ez[0]}–{ez[1]}" if ez[0] is not None and ez[1] is not None else "market")
+        t1_lvl = plan["targets"][0]["level"] if plan.get("targets") else None
+        urgency = ("NOW" if strong and session["qualityMod"] >= 0.9
+                   else "HIGH" if strong else "ON_PULLBACK")
+        entry_style = ("Enter NOW at market" if urgency == "NOW"
+                       else f"Enter at zone {ez_txt}" if plan.get("entryZone")
+                       else "Enter on first pullback")
+        action = {
+            "call": call,
+            "instrument": f"{symbol} ATM {instrument}",
+            "urgency": urgency,
+            "instruction": (f"{entry_style} · SL {plan.get('stopLoss')} spot"
+                            + (f" · Target {t1_lvl}" if t1_lvl is not None else "")
+                            + f" · Exit if spot closes {'below' if bull else 'above'} {plan.get('invalidation')}"),
+            "validity": f"{session['name'].replace('_', ' ').title()} window",
+        }
+    plan["traderAction"] = action
+
+    institutional = _institutional_map(
+        symbol, price, htf, ltf, aligned, intent, dr, pools, obs, fvgs, conf,
+        {"market": regime_key}, decision,
+    )
+
     # ── Predictive layer ───────────────────────────────────────────────────
     prediction = forecast_next_move(live_series, price, atr, ltf, pools, sweeps,
                                     inducement, dr, vol, session, intent,
-                                    behavior, score, regime_key, now_ist)
+                                    behavior, decision, regime_key, now_ist)
 
     # ── Reasoning ──────────────────────────────────────────────────────────
     reasoning: List[str] = []
+    if verdict != "NEUTRAL":
+        reasoning.append(
+            f"DECISION: {verdict.replace('_', ' ')} — {aligned_votes}/{len(active) or 1} directional "
+            f"signals aligned {'bullish' if decision > 0 else 'bearish'}"
+            + (f"; counter-evidence {int(counter * 100)}% respected in sizing" if counter >= 0.3 else ""))
     reasoning.append(f"HTF(15m) {htf['bias'].lower()}, LTF(5m) {ltf['bias'].lower()}"
                      + (" — timeframes ALIGNED" if aligned else " — timeframes split, lower conviction"))
     if ltf.get("lastEvent"):
@@ -1396,8 +1564,10 @@ def analyze_symbol(symbol: str,
         "symbol": symbol,
         "verdict": verdict,
         "confidence": confidence,
-        "score": _rnd(score, 4),
+        "score": _rnd(decision, 4),
+        "factorScore": _rnd(score, 4),
         "probabilities": {"continuation": continuation, "reversal": reversal, "chop": chop},
+        "alignment": alignment,
         "structure": {
             "htf": {"bias": htf["bias"], "lastEvent": htf.get("lastEvent"),
                     "protectedHigh": htf.get("protectedHigh"), "protectedLow": htf.get("protectedLow")},
@@ -1418,6 +1588,12 @@ def analyze_symbol(symbol: str,
         "session": session,
         "behavior": behavior,
         "intent": intent,
+        "technical": {"ema": ema, "previousDay": {"high": _rnd(pdh) or None,
+                                                     "low": _rnd(pdl) or None},
+                      "fourHour": {"status": "READY" if four_hour_count >= 20 else "INSUFFICIENT_HISTORY",
+                                    "closedCandles": four_hour_count,
+                                    "direction": htf["bias"] if four_hour_count >= 4 else "UNAVAILABLE"}},
+        "institutionalMap": institutional,
         "tradePlan": plan,
         "prediction": prediction,
         "factors": factors,
@@ -1425,6 +1601,8 @@ def analyze_symbol(symbol: str,
         "metrics": {"price": _rnd(price), "changePct": _rnd(change_pct),
                     "vwap": conf["vwap"]["value"], "pdh": _rnd(pdh) or None,
                     "pdl": _rnd(pdl) or None, "dayHigh": _rnd(day_high) or None,
-                    "dayLow": _rnd(day_low) or None},
+                    "dayLow": _rnd(day_low) or None,
+                    "tickTimestamp": spot.get("timestamp"),
+                    "feedStatus": spot.get("status", "UNKNOWN")},
         "candlesUsed": {"ltf": len(closed), "htf": len(htf_candles)},
     }

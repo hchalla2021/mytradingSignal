@@ -83,6 +83,47 @@ export interface SMCFactor {
   weight: number;
 }
 
+export interface SMCTraderAction {
+  call: 'BUY CE' | 'BUY PE' | 'WAIT';
+  instrument: string | null;
+  urgency: 'NOW' | 'HIGH' | 'ON_PULLBACK' | 'NONE';
+  instruction: string;
+  validity: string;
+}
+
+export interface SMCInstitutionalMap {
+  exchange: 'NSE' | 'BSE';
+  control: 'BUYERS' | 'SELLERS' | 'BALANCED';
+  structureRead: string;
+  timeframeAlignment: boolean;
+  phase: string;
+  phaseDirection: SMCBias;
+  phaseConfidence: number;
+  dealingRange: string;
+  nearestBuySideLiquidity: { kind: string; level: number | null; scope: string } | null;
+  nearestSellSideLiquidity: { kind: string; level: number | null; scope: string } | null;
+  activePoi: { type: 'OB' | 'FVG'; side: string; state: string; low: number | null; high: number | null } | null;
+  vwap: number | null;
+  pcr: number | null;
+  oiRead: string;
+  regime: string;
+}
+
+export interface SMCTechnicalContext {
+  ema: {
+    status: 'READY' | 'PARTIAL' | 'INSUFFICIENT_HISTORY';
+    ema20: number | null;
+    ema50: number | null;
+    ema200: number | null;
+    direction: SMCBias;
+    score: number;
+    priceVs200: string;
+    distanceAtr?: number | null;
+  };
+  previousDay: { high: number | null; low: number | null };
+  fourHour: { status: 'READY' | 'INSUFFICIENT_HISTORY'; closedCandles: number; direction: string };
+}
+
 export interface SMCTradePlan {
   action: SMCVerdict;
   entryZone: (number | null)[] | null;
@@ -93,6 +134,7 @@ export interface SMCTradePlan {
   liquidityTarget: { level: number | null; kind: string; scope: string } | null;
   riskReward: number | null;
   riskScore: number;
+  traderAction?: SMCTraderAction | null;
 }
 
 export interface SMCMagnet {
@@ -124,7 +166,9 @@ export interface SMCIndexData {
   verdict: SMCVerdict;
   confidence: number;
   score: number;
+  factorScore?: number;
   probabilities: { continuation: number; reversal: number; chop: number };
+  alignment?: { alignedSignals: number; activeSignals: number; ratio: number; status: 'UNANIMOUS' | 'ALIGNED' | 'MIXED' };
   structure: {
     htf: SMCTimeframeStructure;
     ltf: SMCTimeframeStructure;
@@ -164,6 +208,8 @@ export interface SMCIndexData {
     exhaustion: { side: SMCBias; note: string } | null;
   };
   intent: { phase: string; direction: SMCBias; note: string; confidence: number };
+  technical?: SMCTechnicalContext;
+  institutionalMap?: SMCInstitutionalMap;
   tradePlan: SMCTradePlan;
   prediction?: SMCPrediction | null;
   factors: Record<string, SMCFactor>;
@@ -176,6 +222,8 @@ export interface SMCIndexData {
     pdl: number | null;
     dayHigh: number | null;
     dayLow: number | null;
+    tickTimestamp?: string | null;
+    feedStatus?: string;
   };
   dataSource: 'LIVE' | 'MARKET_CLOSED';
   timestamp: string;

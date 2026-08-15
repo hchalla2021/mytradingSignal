@@ -8,7 +8,7 @@
  * Performance: React.memo, useMemo, CSS transitions only (no JS animation loops)
  */
 
-import React, { useMemo, useCallback, useState, useEffect } from 'react';
+import React, { useMemo, useCallback, useState, useEffect, useRef } from 'react';
 import { useSmartAlgo, AlgoSignal, AlgoIndicators, StrategyLabPayload, MarketDirection, TradePlan, EarlyWarning, ExecDiagnostics } from '@/hooks/useSmartAlgo';
 
 // ─── formatters ───────────────────────────────────────────────────────────────
@@ -468,21 +468,58 @@ const EW_STYLE: Record<string, { frame: string; badge: string; icon: string; tit
 };
 
 const EarlyWarningBanner = React.memo(function EarlyWarningBanner({ ew }: { ew?: EarlyWarning }) {
-  if (!ew || ew.state === 'NONE') return null;
-  const st = EW_STYLE[ew.state];
-  if (!st) return null;
+  const [visibleWarning, setVisibleWarning] = useState<EarlyWarning | undefined>(
+    ew && ew.state !== 'NONE' ? ew : undefined,
+  );
+  const clearTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    if (clearTimer.current) clearTimeout(clearTimer.current);
+    if (ew && ew.state !== 'NONE') {
+      // Do not replace the message on every tick. Only a real warning-state
+      // change updates the text, preventing live-frame content flicker.
+      setVisibleWarning((current) => (
+        current?.state === ew.state ? current : ew
+      ));
+    } else {
+      // Keep a borderline warning mounted briefly so live frames cannot
+      // make the card jump as the detector crosses its threshold.
+      clearTimer.current = setTimeout(() => setVisibleWarning(undefined), 3500);
+    }
+    return () => {
+      if (clearTimer.current) clearTimeout(clearTimer.current);
+    };
+  }, [ew]);
+
+  const st = visibleWarning ? EW_STYLE[visibleWarning.state] : undefined;
+  const isActive = Boolean(visibleWarning && st);
   return (
-    <div className={`rounded-xl border-2 px-3 py-2.5 space-y-1.5 ${st.frame}`}>
+    <div className={`min-h-[118px] rounded-xl border-2 px-3 py-2.5 space-y-1.5 flex flex-col justify-center ${
+      isActive && st
+        ? st.frame
+        : 'border-slate-700/50 bg-slate-900/40'
+    }`}>
       <div className="flex items-center justify-between gap-2 flex-wrap">
-        <span className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-black tracking-wider animate-pulse ${st.badge}`}>
-          {st.icon} {st.title}
+        <span className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-black tracking-wider ${
+          isActive && st ? st.badge : 'bg-slate-800 text-slate-400'
+        }`}>
+          <span className="flex items-center gap-1.5">
+            {isActive && st ? `${st.icon} ${st.title}` : '◌ BREAKOUT WATCH'}
+            {isActive && (
+              <span className="h-1.5 w-1.5 rounded-full bg-white/80 animate-pulse" aria-label="Live warning" />
+            )}
+          </span>
         </span>
-        <span className="text-[10px] font-black text-white font-mono">conf {ew.confidence}%</span>
+        <span className="text-[10px] font-black text-white font-mono">
+          {isActive && visibleWarning ? `conf ${visibleWarning.confidence}%` : 'monitoring'}
+        </span>
       </div>
-      <p className="text-[10px] sm:text-[11px] text-slate-100 font-semibold leading-relaxed">{ew.message}</p>
-      {ew.signals.length > 0 && (
+      <p className="text-[10px] sm:text-[11px] text-slate-100 font-semibold leading-relaxed">
+        {isActive && visibleWarning ? visibleWarning.message : 'Monitoring volatility, VWAP, momentum, and acceleration for a confirmed breakout.'}
+      </p>
+      {isActive && visibleWarning && visibleWarning.signals.length > 0 && (
         <ul className="space-y-0.5">
-          {ew.signals.map((s) => (
+          {visibleWarning.signals.map((s) => (
             <li key={s} className="text-[9px] sm:text-[10px] text-slate-300 flex items-start gap-1.5">
               <span className="text-cyan-300 shrink-0 mt-px">‣</span>{s}
             </li>
@@ -769,13 +806,17 @@ const SymbolCard = React.memo(function SymbolCard({
         <StrategyLabPanel lab={algo.strategy_lab} />
 
         {/* Auto-buy preview directly under confidence */}
-        <div className="rounded-lg border border-cyan-600/30 bg-gradient-to-r from-slate-900/45 to-cyan-900/15 px-3 py-2.5 space-y-2">
-          <div className="flex items-center justify-between gap-2">
-            <span className="text-[10px] sm:text-[11px] font-bold text-cyan-300 tracking-wide">AUTO BUY PREVIEW</span>
+        <details className="group rounded-lg border border-cyan-600/30 bg-gradient-to-r from-slate-900/45 to-cyan-900/15 px-3 py-2.5">
+          <summary className="flex cursor-pointer list-none items-center justify-between gap-2 select-none [&::-webkit-details-marker]:hidden">
+            <span className="flex items-center gap-2">
+              <span className="text-slate-500 transition-transform duration-200 group-open:rotate-90">▶</span>
+              <span className="text-[10px] sm:text-[11px] font-bold text-cyan-300 tracking-wide">AUTO BUY PREVIEW</span>
+            </span>
             <span className={`text-[10px] sm:text-[11px] font-black ${execStageClass}`}>
               {execStageLabel}
             </span>
-          </div>
+          </summary>
+          <div className="space-y-2 pt-2">
           <div className="mt-1.5 flex items-center justify-between gap-2 text-[10px] sm:text-[11px]">
             <span className="text-slate-300 font-semibold flex items-center gap-1.5">
               Side:
@@ -832,7 +873,8 @@ const SymbolCard = React.memo(function SymbolCard({
           <div className="h-12 overflow-y-auto pr-1 text-[10px] sm:text-[11px] text-slate-300 leading-relaxed">
             {autoReason}
           </div>
-        </div>
+          </div>
+        </details>
 
         {/* Price grid: always mounted to avoid flicker on state transitions */}
         <div className="space-y-2.5">
@@ -860,9 +902,10 @@ const SymbolCard = React.memo(function SymbolCard({
             />
           </div>
 
-          <div className="rounded-lg border border-cyan-600/30 bg-gradient-to-r from-slate-900/40 to-cyan-900/10 p-2.5 space-y-2">
-              <div className="flex items-center justify-between gap-2">
+          <details className="group rounded-lg border border-cyan-600/30 bg-gradient-to-r from-slate-900/40 to-cyan-900/10 p-2.5">
+              <summary className="flex cursor-pointer list-none items-center justify-between gap-2 select-none [&::-webkit-details-marker]:hidden">
                 <div className="flex items-center gap-2 min-w-0">
+                  <span className="text-slate-500 transition-transform duration-200 group-open:rotate-90">▶</span>
                   <span className="text-[10px] sm:text-[11px] font-bold text-cyan-300 tracking-wide">OPTION EXECUTION PRICE</span>
                   {/* Quality badge: green when broker data passes all gates, amber otherwise. */}
                   {algo.option_quality_ok ? (
@@ -878,7 +921,8 @@ const SymbolCard = React.memo(function SymbolCard({
                 <span className="text-[10px] sm:text-[11px] font-mono tabular-nums text-slate-300 truncate max-w-[45%] text-right min-h-[16px]">
                   {algo.option_tradingsymbol || '—'}
                 </span>
-              </div>
+              </summary>
+              <div className="space-y-2 pt-2">
               {/* WHY this exact contract was picked (delta/spread/liquidity rationale) */}
               <div className={`text-[9px] text-cyan-200/80 font-medium leading-relaxed min-h-[14px] ${algo.option_pick_reason ? '' : 'opacity-60'}`}>
                 {algo.option_pick_reason ? `🎯 ${algo.option_pick_reason}` : '—'}
@@ -961,9 +1005,10 @@ const SymbolCard = React.memo(function SymbolCard({
                 <PriceCell label="P/L PTS" value={fmt(pnlPts)} color={pnlColor} />
                 <PriceCell label="P/L ₹" value={fmt(pnlAmt)} color={pnlColor} />
               </div>
-              <div className="rounded-md border border-slate-600/40 bg-slate-900/40 p-2 space-y-2">
-                <div className="flex items-center justify-between gap-2 flex-wrap">
+              <details className="group rounded-md border border-slate-600/40 bg-slate-900/40 p-2">
+                <summary className="flex cursor-pointer list-none items-center justify-between gap-2 flex-wrap select-none [&::-webkit-details-marker]:hidden">
                   <div className="flex items-center gap-1.5 flex-wrap">
+                    <span className="text-slate-500 transition-transform duration-200 group-open:rotate-90">▶</span>
                     <span className="text-[10px] sm:text-[11px] font-bold text-slate-200">AUTO-BUY (OPTIONS ONLY)</span>
                     <MarketStatusBadge status={algo.market_status} />
                     <FreshnessBadge status={algo.data_status} ageSec={algo.tick_age_seconds} />
@@ -971,7 +1016,8 @@ const SymbolCard = React.memo(function SymbolCard({
                   <span className={`text-[10px] sm:text-[11px] font-black ${execStageClass}`}>
                     {execStage === 'ARMED' ? '✅ ALL MATCHED' : `⏳ ${execStageLabel}`}
                   </span>
-                </div>
+                </summary>
+                <div className="space-y-2 pt-2">
                 {/* Sequential 3-step checklist: Confluence → AI → Execute */}
                 <div className="grid grid-cols-3 gap-1.5">
                   <div className={`flex items-center gap-1.5 px-2 py-1 rounded border ${
@@ -1026,8 +1072,10 @@ const SymbolCard = React.memo(function SymbolCard({
                     )}
                   </div>
                 )}
+                </div>
+              </details>
               </div>
-          </div>
+            </details>
         </div>
 
         {/* SL / Target steppers */}
@@ -1384,16 +1432,6 @@ export default function SmartAIAlgoSection() {
         {/* Summary bar */}
         <SummaryBar data={data} isConnected={isConnected} />
 
-        {/* Disclaimer */}
-        <div className="flex items-start gap-2.5 px-3.5 py-2.5 rounded-lg
-          bg-amber-900/15 border border-amber-600/25 text-[10px] sm:text-[11px] text-amber-300/80">
-          <span className="shrink-0 mt-px text-lg">⚠</span>
-          <span className="leading-relaxed">
-            Signals are informational only. Verify with your own analysis before trading.
-            SL / Target values are in <strong className="text-amber-400 font-bold">index points</strong>.
-            Trailing SL activates at 50% of target distance.
-          </span>
-        </div>
       </div>
 
       {/* ALGO OFF global banner */}
@@ -1439,7 +1477,7 @@ export default function SmartAIAlgoSection() {
       )}
 
       {/* Cards grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 sm:gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 items-start gap-3 sm:gap-4">
         {SYMBOLS.map(sym => (
           <SymbolCard
             key={sym}
@@ -1457,39 +1495,6 @@ export default function SmartAIAlgoSection() {
         ))}
       </div>
 
-      {/* Collapsible legend */}
-      <details className="mt-4 sm:mt-6 group">
-        <summary className="flex items-center gap-2.5 cursor-pointer px-4 py-3 rounded-xl
-          bg-gradient-to-r from-slate-800/40 to-slate-700/30 border border-cyan-600/25 hover:border-cyan-500/40 hover:bg-slate-800/50
-          transition-all duration-150 select-none list-none shadow-[0_0_8px_rgba(34,211,238,0.05)]">
-          <span className="text-slate-500 group-open:rotate-90 transition-transform duration-200 text-base">▶</span>
-          <span className="text-[11px] sm:text-xs text-slate-400 hover:text-cyan-300 transition-colors font-bold tracking-wide">
-            Parameter Reference
-          </span>
-        </summary>
-        <div className="mt-2 grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2
-          px-3 py-3 rounded-xl bg-gradient-to-br from-slate-800/30 to-slate-700/20 border border-cyan-600/20 shadow-[0_0_16px_rgba(34,211,238,0.08)]" >
-          {([
-            ['EMA 20',    'Short momentum. Price above = bullish bias.'],
-            ['EMA 100',   'Medium trend. Cross = trend change.'],
-            ['EMA 200',   'Long-term institutional level.'],
-            ['RSI 14',    '>55 bull · <45 bear · >70 overbought.'],
-            ['VWAP',      'Intraday institutional average price.'],
-            ['PCR',       '>1.2 bullish · <0.8 bearish sentiment.'],
-            ['OI Trend',  'Long Buildup = smart longs entering.'],
-            ['Liq Sweep', 'Price near H/L = SMC reversal zone.'],
-            ['EMA Stack', '20>100>200 = strong bull alignment.'],
-            ['TSL',       'Auto-trails SL as price moves in favour.'],
-            ['AI ✦',      'GPT-4o-mini confirms rule signal.'],
-            ['Regime',    'Trending / Sideways / Volatile state.'],
-          ] as [string, string][]).map(([k, v]) => (
-            <div key={k} className="flex flex-col gap-0.5 py-0.5">
-              <span className="text-[9px] font-bold text-slate-300">{k}</span>
-              <span className="text-[8px] text-slate-500 leading-relaxed">{v}</span>
-            </div>
-          ))}
-        </div>
-      </details>
     </section>
   );
 }

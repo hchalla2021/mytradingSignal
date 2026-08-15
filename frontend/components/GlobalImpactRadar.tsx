@@ -222,7 +222,6 @@ const GlobalImpactRadar = () => {
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <h3 className="text-base font-black tracking-wide text-cyan-200 sm:text-lg">Global Impact Radar</h3>
-            <p className="text-xs text-slate-400">High-impact and medium-impact financial news with volatility watch</p>
           </div>
           <div className="flex items-center gap-2 rounded-full border border-slate-600 bg-slate-900/80 px-3 py-1 text-[11px]">
             <span className={`h-2 w-2 rounded-full ${connected ? 'bg-emerald-400' : 'bg-rose-400'}`} />

@@ -102,6 +102,40 @@ print("OBs          :", [(o["side"], o["state"]) for o in r1["zones"]["orderBloc
 print("FVGs         :", [(g["side"], g["state"]) for g in r1["zones"]["fvgs"]])
 print("INTENT       :", r1["intent"]["phase"], r1["intent"]["direction"])
 print("PLAN         : entry", plan["entryZone"], "| SL", plan["stopLoss"], "| targets", [t["level"] for t in plan["targets"]], "| RR", plan["riskReward"], "| risk", plan["riskScore"])
+act = plan.get("traderAction") or {}
+print("ACTION       :", act.get("call"), "|", act.get("instrument"), "| urgency", act.get("urgency"))
+print("  →", act.get("instruction"))
+assert act.get("call") in ("BUY CE", "BUY PE", "WAIT"), f"bad traderAction call: {act}"
+if r1["verdict"] in ("BUY", "STRONG_BUY"):
+    assert act["call"] == "BUY CE"
+elif r1["verdict"] in ("SELL", "STRONG_SELL"):
+    assert act["call"] == "BUY PE"
+else:
+    assert act["call"] == "WAIT"
+
+# strongly trending bull tape must NOT read NEUTRAL
+def make_trend_candles(n=120, seed=3, base=24000.0, step=9.0):
+    rng = random.Random(seed)
+    out, price = [], base
+    t0 = IST.localize(datetime(2026, 8, 7, 9, 15))
+    for i in range(n):
+        o = price
+        c = o + step + rng.uniform(-6, 8)
+        h = max(o, c) + rng.uniform(1, 8)
+        l = min(o, c) - rng.uniform(1, 8)
+        out.append({"timestamp": (t0 + timedelta(minutes=5 * i)).isoformat(),
+                    "open": round(o, 2), "high": round(h, 2), "low": round(l, 2),
+                    "close": round(c, 2), "volume": rng.randint(80_000, 200_000),
+                    "oi": 1_000_000 + i * 1500, "oi_prev": 1_000_000 + (i - 1) * 1500})
+        price = c
+    return out
+
+bull_candles = make_trend_candles()
+r_bull = run("NIFTY", bull_candles, make_trend_candles(seed=5, base=51000.0))
+print("\nBULL TREND   :", r_bull["verdict"], f"({r_bull['confidence']}% conf, score {r_bull['score']})",
+      "| action:", (r_bull["tradePlan"].get("traderAction") or {}).get("call"))
+assert r_bull["verdict"] in ("BUY", "STRONG_BUY"), f"trending bull tape read as {r_bull['verdict']}"
+
 print("REASONING    :")
 for line in r1["reasoning"]:
     print("  •", line)

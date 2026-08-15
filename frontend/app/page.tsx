@@ -25,7 +25,6 @@ const IndexCard = dynamic(() => import('@/components/IndexCard'), {
 });
 
 const TopAISignalBar = dynamic(() => import('@/components/TopAISignalBar'), { ssr: false });
-const MarketPulseStrip = dynamic(() => import('@/components/MarketPulseStrip'), { ssr: false });
 const SMCStructureSection = dynamic(() => import('@/components/SMCStructureSection'), {
   ssr: false,
   loading: () => (
@@ -573,24 +572,29 @@ export default function Home() {
 
       {/* Main Dashboard - Full Width */}
       <div className="w-full px-3 sm:px-5 lg:px-8 xl:px-10 py-3 lg:py-5">
-        <div className="mx-auto w-full max-w-[1820px]">
-        {/* 🤖 SMART AI ALGO — above Market Pulse */}
-        <SmartAIAlgoSection />
+        <div className="mx-auto flex w-full max-w-[1820px] flex-col">
+        {/* 🤖 SMART AI ALGO — fixed first in the dashboard stack */}
+        <div style={{ order: -10 }}>
+          <SmartAIAlgoSection />
+        </div>
 
-        {/* 📊 MARKET PULSE STRIP — institutional bird's-eye KPIs */}
-        <MarketPulseStrip marketData={marketData} isConnected={isConnected} />
+        {/* 💸 FII / DII FLOW + BIG PLAYER RADAR — below Smart AI Algo */}
+        <div style={{ order: -9 }}>
+          <FIIDIIFlowStrip marketData={marketData} isConnected={isConnected} />
+        </div>
 
-        {/* 🏛️ ADVANCED SMC & MARKET STRUCTURE — institutional structure engine */}
-        <SMCStructureSection />
-
-        {/* 💸 FII / DII FLOW — institutional flow matrix */}
-        <FIIDIIFlowStrip marketData={marketData} isConnected={isConnected} />
+        {/* 🏛️ ADVANCED SMC & MARKET STRUCTURE — directly below FII/DII Flow */}
+        <div style={{ order: -8 }}>
+          <SMCStructureSection />
+        </div>
 
         {/* 🧠 AI SIGNAL DECK — institutional-grade per-index status cards */}
-        <TopAISignalBar marketData={marketData} isConnected={isConnected} />
+        <div style={{ order: -1 }}>
+          <TopAISignalBar marketData={marketData} isConnected={isConnected} />
+        </div>
 
         {/* Live Market Indices - With Border */}
-        <div className="border-2 border-emerald-500/30 rounded-2xl p-3 sm:p-4 bg-gradient-to-br from-emerald-950/20 via-dark-card/50 to-dark-elevated/40 backdrop-blur-sm shadow-xl shadow-emerald-500/10">
+        <div style={{ order: -4 }} className="border-2 border-emerald-500/30 rounded-2xl p-3 sm:p-4 bg-gradient-to-br from-emerald-950/20 via-dark-card/50 to-dark-elevated/40 backdrop-blur-sm shadow-xl shadow-emerald-500/10">
           {/* Section Header */}
           <div className="flex flex-col gap-3 mb-3 sm:mb-4">
             <SectionTitle

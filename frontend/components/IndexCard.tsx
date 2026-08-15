@@ -150,6 +150,9 @@ const IndexCard = ({ symbol, name, data, isConnected, aiAlertData }: IndexCardPr
   const intradayChange = useMemo(() => {
     return data ? ((data.price - data.open) / data.open * 100) : 0;
   }, [data]);
+  const callOI = Number(data?.callOI ?? 0);
+  const putOI = Number(data?.putOI ?? 0);
+  const higherOI: 'CALL' | 'PUT' | 'TIE' = callOI > putOI ? 'CALL' : putOI > callOI ? 'PUT' : 'TIE';
   // Incremental buyer-side intel from the shared tick engine (O(1) per tick).
   // Drives Decision Engine, structural-event chips, and liquidity context below.
   const intel = useMemo(() => updateBuyerIntel(symbol, data), [symbol, data]);
@@ -534,13 +537,23 @@ const IndexCard = ({ symbol, name, data, isConnected, aiAlertData }: IndexCardPr
 
         {/* Call vs Put OI */}
         <div className="grid grid-cols-2 gap-2">
-          <div className="bg-dark-surface/60 rounded-lg p-1.5 text-center border border-slate-600/30">
+          <div className={`relative rounded-lg p-1.5 text-center border-2 transition-colors duration-200 ${
+            higherOI === 'CALL'
+              ? 'border-rose-300 bg-rose-950/45 shadow-[0_0_14px_rgba(251,113,133,0.45)]'
+              : 'border-slate-600/30 bg-dark-surface/60'
+          }`}>
+            {higherOI === 'CALL' && <span className="absolute right-1 top-0.5 text-[8px] font-black text-rose-200">HIGHER OI</span>}
             <p className="text-[9px] sm:text-[10px] text-dark-muted font-medium">Call OI</p>
-            <p className="text-[10px] sm:text-xs text-bearish font-bold">{data?.callOI ? MarketUtils.formatOI(data.callOI) : '—'}</p>
+            <p className="text-[10px] sm:text-xs text-bearish font-bold">{callOI > 0 ? MarketUtils.formatOI(callOI) : '—'}</p>
           </div>
-          <div className="bg-dark-surface/60 rounded-lg p-1.5 text-center border border-slate-600/30">
+          <div className={`relative rounded-lg p-1.5 text-center border-2 transition-colors duration-200 ${
+            higherOI === 'PUT'
+              ? 'border-emerald-300 bg-emerald-950/45 shadow-[0_0_14px_rgba(52,211,153,0.45)]'
+              : 'border-slate-600/30 bg-dark-surface/60'
+          }`}>
+            {higherOI === 'PUT' && <span className="absolute right-1 top-0.5 text-[8px] font-black text-emerald-200">HIGHER OI</span>}
             <p className="text-[9px] sm:text-[10px] text-dark-muted font-medium">Put OI</p>
-            <p className="text-[10px] sm:text-xs text-bullish font-bold">{data?.putOI ? MarketUtils.formatOI(data.putOI) : '—'}</p>
+            <p className="text-[10px] sm:text-xs text-bullish font-bold">{putOI > 0 ? MarketUtils.formatOI(putOI) : '—'}</p>
           </div>
         </div>
       </div>

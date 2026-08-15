@@ -30,11 +30,11 @@ export default function LoginPage() {
     }
   }, [searchParams, router]);
 
-  const handleLoginClick = () => {
+  const handleLoginClick = async () => {
     if (typeof window === 'undefined') return;
     
     setLoading(true);
-    setMessage("Opening Zerodha login...");
+    setMessage("Logging in...");
     
     const apiUrl = process.env.NEXT_PUBLIC_API_URL;
     if (!apiUrl) {
@@ -42,6 +42,22 @@ export default function LoginPage() {
       setLoading(false);
       return;
     }
+
+    // One-click path: backend performs the Zerodha handshake itself
+    try {
+      const res = await fetch(`${apiUrl}/api/auth/auto-login`, { method: 'POST' });
+      const json = await res.json();
+      if (json?.success) {
+        setMessage(`✅ Logged in as ${json.user_id || 'trader'} — reconnecting feed...`);
+        setTimeout(() => router.push('/'), 4000);
+        return;
+      }
+      if (json?.configured) {
+        setError(`One-click login failed: ${json?.message ?? 'unknown error'}. Opening Zerodha login...`);
+      }
+    } catch { /* backend unreachable — fall through */ }
+
+    setMessage("Opening Zerodha login...");
     
     // Detect mobile device - guarded for SSR
     const isMobile = typeof navigator !== 'undefined' && 

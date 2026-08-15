@@ -31,7 +31,7 @@ INDICES = ["NIFTY", "BANKNIFTY", "SENSEX"]
 SMT_PEER = {"NIFTY": "BANKNIFTY", "BANKNIFTY": "NIFTY", "SENSEX": "NIFTY"}
 LIVE_INTERVAL = 2.0
 IDLE_INTERVAL = 30.0
-CANDLE_DEPTH = 120
+CANDLE_DEPTH = 200
 
 
 class SMCConnectionManager:
@@ -168,6 +168,7 @@ class SMCStructureService:
         """Compact fingerprint — broadcast only when something material moved."""
         plan = row.get("tradePlan") or {}
         pred = row.get("prediction") or {}
+        act = plan.get("traderAction") or {}
         return (
             row.get("verdict"),
             row.get("confidence"),
@@ -175,6 +176,8 @@ class SMCStructureService:
             (row.get("structure") or {}).get("ltf", {}).get("bias"),
             (row.get("probabilities") or {}).get("continuation"),
             plan.get("stopLoss"),
+            act.get("call"),
+            act.get("urgency"),
             round(float((row.get("metrics") or {}).get("price") or 0), 1),
             pred.get("direction"),
             pred.get("conviction"),

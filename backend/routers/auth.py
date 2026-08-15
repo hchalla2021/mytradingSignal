@@ -64,6 +64,58 @@ async def redirect_to_zerodha():
     return RedirectResponse(url=login_url)
 
 
+async def _persist_access_token(access_token: str) -> None:
+    """Save token to .env and reset every cached-settings consumer."""
+    env_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env")
+    update_env_file(env_path, "ZERODHA_ACCESS_TOKEN", access_token)
+
+    from config import get_settings as _gs
+    _gs.cache_clear()
+
+    from services.global_token_manager import get_token_manager
+    get_token_manager().force_recheck()
+
+    from services.auth_state_machine import auth_state_manager
+    auth_state_manager.force_recheck()
+    logger.info("\U0001f4be Access token saved — file watcher will reconnect the feed")
+
+
+@router.post("/auto-login")
+async def one_click_auto_login():
+    """One-click token refresh: full Zerodha handshake server-side using
+    ZERODHA_USER_ID / ZERODHA_PASSWORD / ZERODHA_TOTP_SECRET from .env.
+    No browser navigation to Zerodha needed."""
+    from services.zerodha_auto_login import AutoLoginError, auto_login
+
+    current = get_settings()
+    try:
+        data = await auto_login(current)
+    except AutoLoginError as e:
+        return {"success": False, "configured": "not configured" not in str(e),
+                "message": str(e)}
+    except asyncio.TimeoutError:
+        return {"success": False, "configured": True,
+                "message": "Zerodha login timed out — try again"}
+    except Exception:
+        logger.exception("Auto-login failed unexpectedly")
+        return {"success": False, "configured": True,
+                "message": "Auto-login failed — use manual Zerodha login"}
+
+    await _persist_access_token(data["access_token"])
+    try:
+        await user_analytics.register_login(
+            user_id=str(data.get("user_id", "")),
+            user_name=str(data.get("user_name", "Unknown")),
+        )
+    except Exception:
+        logger.warning("Failed to record auto-login analytics", exc_info=True)
+
+    return {"success": True, "configured": True,
+            "user_id": data.get("user_id", ""),
+            "user_name": data.get("user_name", ""),
+            "message": "Logged in — live feed reconnecting"}
+
+
 @router.get("/validate")
 async def validate_token():
     """Check if current access token is configured and valid.
