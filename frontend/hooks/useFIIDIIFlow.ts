@@ -270,6 +270,13 @@ export function useFIIDIIFlow() {
     return REFRESH_FALLBACK_MS;
   }, [data, error]);
 
+  // Read the delay through a ref: listing nextDelayMs as an effect dependency
+  // restarts the poll loop on every response, firing an immediate refetch each time.
+  const nextDelayRef = useRef(nextDelayMs);
+  useEffect(() => {
+    nextDelayRef.current = nextDelayMs;
+  }, [nextDelayMs]);
+
   useEffect(() => {
     closedRef.current = false;
     fetchOnce(false);
@@ -279,7 +286,7 @@ export function useFIIDIIFlow() {
       timerRef.current = setTimeout(async () => {
         await fetchOnce(false);
         schedule();
-      }, nextDelayMs());
+      }, nextDelayRef.current());
     };
     schedule();
 
@@ -307,7 +314,7 @@ export function useFIIDIIFlow() {
       }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fetchOnce, nextDelayMs]);
+  }, [fetchOnce]);
 
   // 1-Hz freshness counter so the UI can show "AS OF HH:MM · +Ns" / countdown.
   useEffect(() => {

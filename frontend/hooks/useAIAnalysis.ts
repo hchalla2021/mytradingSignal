@@ -53,38 +53,44 @@ export function useAIAnalysis(): UseAIAnalysisReturn {
   };
 
   // Build alert data from analysis
+  // `/api/analysis/analyze/all` returns a flat shape (signal as a string plus
+  // confidence/warnings), so normalise before reading the richer AIAnalysis fields.
   const buildAlertData = (analysis: AIAnalysis): AIAlertTooltipData => {
-    // Check for critical alerts
-    const criticalAlerts = analysis.alerts.filter(
-      alert => alert.level === 'CRITICAL' && alert.show_popup
+    const raw = analysis as unknown as Record<string, any>;
+    const signal = raw?.signal;
+    const isSignalObject = signal !== null && typeof signal === 'object';
+
+    const direction: string = isSignalObject ? signal.direction ?? 'NEUTRAL' : String(signal ?? 'NEUTRAL');
+    const strength: number = Number(isSignalObject ? signal.strength : raw?.confidence) || 0;
+
+    const criticalAlerts = (Array.isArray(raw?.alerts) ? raw.alerts : []).filter(
+      (alert: any) => alert?.level === 'CRITICAL' && alert?.show_popup
     );
-    
-    // Check for high signal strength
-    const strongSignal = analysis.signal.strength >= 80;
-    
+
     if (criticalAlerts.length > 0) {
       return {
         showAlert: true,
         level: 'CRITICAL',
         message: criticalAlerts[0].message,
-        signalStrength: analysis.signal.strength,
+        signalStrength: strength,
       };
     }
-    
-    if (strongSignal) {
-      const direction = analysis.signal.direction;
+
+    if (strength >= 80 && direction !== 'NEUTRAL') {
+      const nextMove = raw?.next_move ?? (Array.isArray(raw?.reasons) ? raw.reasons[0] : '') ?? '';
       return {
         showAlert: true,
         level: 'HIGH',
-        message: `Strong ${direction} signal detected! ${analysis.next_move}`,
-        signalStrength: analysis.signal.strength,
+        message: `Strong ${direction} signal detected! ${nextMove}`.trim(),
+        signalStrength: strength,
       };
     }
-    
+
     return {
       showAlert: false,
       level: 'INFO',
       message: '',
+      signalStrength: strength,
     };
   };
 

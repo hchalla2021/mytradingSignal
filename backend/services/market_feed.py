@@ -22,6 +22,19 @@ from config.nse_holidays import is_holiday, get_holiday_name
 
 settings = get_settings()
 
+
+def reload_settings():
+    """Re-read .env, bypassing the lru_cache on get_settings().
+
+    Zerodha access tokens are rewritten into .env after login, so any cached
+    Settings snapshot taken at import time holds an empty/expired token.
+    """
+    global settings
+    get_settings.cache_clear()
+    settings = get_settings()
+    return settings
+
+
 # Load market session configuration (from environment, not hardcoded)
 market_config = get_market_session()
 
@@ -162,6 +175,7 @@ class MarketFeedService:
         self._analysis_semaphores: Dict[str, asyncio.Semaphore] = {}
         self._retry_delay: int = 5  # Start with 5 seconds, exponential backoff
         self._using_rest_fallback: bool = False  # Flag for REST API fallback mode
+        self._feed_loop_active: bool = False  # Guards against duplicate start() loops
     
     @property
     def is_connected(self) -> bool:
@@ -1296,14 +1310,25 @@ class MarketFeedService:
     async def start(self):
         """Start the market feed service."""
         from kiteconnect.exceptions import TokenException
+
+        # The scheduler retries every 10s while disconnected; without this guard
+        # each retry spawns another feed loop and another KiteTicker.
+        if self._feed_loop_active:
+            print("ℹ️ Market feed loop already active — skipping duplicate start")
+            return
+        self._feed_loop_active = True
+
         self.running = True
         self._loop = asyncio.get_event_loop()
         
-        # Check if we have valid credentials
-        if not settings.zerodha_api_key or not settings.zerodha_access_token:
+        # Check if we have valid credentials (re-read .env: the token is
+        # written after login, long after this module was imported)
+        fresh = reload_settings()
+        if not fresh.zerodha_api_key or not fresh.zerodha_access_token:
             print("❌ Zerodha credentials not configured")
             print("⚠️ Set ZERODHA_API_KEY and ZERODHA_ACCESS_TOKEN in .env file")
             auth_state_manager.force_reauth()
+            self._feed_loop_active = False
             return
         
         # 🔥 Start feed watchdog with auto-reconnect
@@ -1342,8 +1367,8 @@ class MarketFeedService:
             
             from kiteconnect import KiteTicker
             # 🔥 FIX: Use fresh settings to pick up token refreshed in .env
-            from config import get_settings
-            fresh = get_settings()
+            fresh = reload_settings()
+            print(f"🔑 Using access token …{(fresh.zerodha_access_token or '')[-6:]}")
             self.kws = KiteTicker(
                 fresh.zerodha_api_key,
                 fresh.zerodha_access_token
@@ -1480,11 +1505,12 @@ class MarketFeedService:
                 print("⚠️ Market may be closed (9:15 AM - 3:30 PM IST)")
             
             await self._wait_and_retry()
+        finally:
+            self._feed_loop_active = False
     
     async def _wait_and_retry(self):
         """Wait and retry connection."""
-        from config import get_settings
-        settings = get_settings()
+        settings = reload_settings()
         retry_interval = settings.market_feed_retry_interval
         print(f"⏰ Will retry connection in {retry_interval} seconds...")
         print("💡 TIP: Make sure market is open (9:15 AM - 3:30 PM IST on trading days)")
@@ -1502,9 +1528,10 @@ class MarketFeedService:
                 
                 # Re-initialize connection
                 from kiteconnect import KiteTicker
+                fresh = reload_settings()
                 self.kws = KiteTicker(
-                    settings.zerodha_api_key,
-                    settings.zerodha_access_token
+                    fresh.zerodha_api_key,
+                    fresh.zerodha_access_token
                 )
                 
                 # Assign callbacks
@@ -1540,6 +1567,7 @@ class MarketFeedService:
     async def stop(self):
         """Stop the market feed service."""
         self.running = False
+        self._feed_loop_active = False
         if self.kws:
             self.kws.close()
         print("🛑 Market feed stopped")

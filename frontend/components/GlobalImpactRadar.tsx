@@ -62,7 +62,7 @@ const resolveTier = (item: RadarNewsItem): ImpactTier => {
 const resolveGlobalNewsWsUrl = (): string | null => {
   const base = API_CONFIG.wsUrl;
   if (!base) return null;
-  if (base.endsWith('/ws/market')) return `${base}/ws/global-news`;
+  if (base.endsWith('/ws/market')) return `${base.replace(/\/ws\/market$/, '')}/ws/global-news`;
   if (base.endsWith('/ws')) return `${base}/global-news`;
   return `${base}/ws/global-news`;
 };
