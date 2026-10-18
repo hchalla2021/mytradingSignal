@@ -6,6 +6,42 @@
 
 ---
 
+## Frontend validation and CSS hot reload
+
+Before deployment, run from `frontend`:
+
+```bash
+npm run lint -- --max-warnings 0
+npx tsc --noEmit --incremental false
+node --test tests/css-hmr.test.cjs tests/chart-crosshair.test.cjs tests/chart-workspace.test.cjs tests/chart-indicators.test.cjs
+npm run build
+```
+
+Production builds enforce ESLint and TypeScript; they no longer skip lint.
+Use `npm run start` to serve the built application, not `npm run dev`.
+`NEXT_DIST_DIR` optionally selects an isolated build directory. Use the same
+value for build and start; omit it for normal `.next` deployments.
+
+Next 13.5.6's development CSS hot-reload callbacks can run after navigation or
+another refresh has removed the original stylesheet link. A development-only
+webpack loader in [css-hmr-loader](frontend/build-tools/css-hmr-loader.cjs)
+changes those two removal callbacks to idempotent DOM removal. No installed
+package files are edited and production bundles do not use this loader.
+The compatibility test reproduces the upstream error and checks both load and
+error callbacks. It fails explicitly if the upstream implementation changes.
+
+After updating [next.config.js](frontend/next.config.js), restart the development
+server and hard-refresh any existing tab once so it discards the old HMR runtime.
+Do not run a production build into a directory currently used by `next dev`.
+An outdated Browserslist database warning is advisory, not a failed build.
+
+Chart crosshair synchronization checks pane visibility, matching timestamps,
+finite values and initialized time/price scales before calling Lightweight
+Charts. Hidden panes, indicator warm-up whitespace and ranges outside loaded
+history clear the target crosshair instead. The regression suite covers these
+states and recovery after the pane becomes ready; synchronization locks reset
+with `finally` rather than hiding unexpected library errors.
+
 ## 🚀 Quick Start
 
 ### Prerequisites
@@ -528,4 +564,3 @@ git push origin v1.0.0-prod
 ```
 
 🎉 **Your application is live in production!**
-

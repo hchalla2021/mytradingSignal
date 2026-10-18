@@ -1,10 +1,7 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   reactStrictMode: true,
-  // Skip ESLint during build (TypeScript still enforced) - avoids unused var blockers
-  eslint: {
-    ignoreDuringBuilds: true,
-  },
+  distDir: process.env.NEXT_DIST_DIR || '.next',
   // Use git-based build ID in production, stable ID in dev (so webpack cache persists across restarts)
   generateBuildId: async () => {
     if (process.env.NODE_ENV === 'production') {
@@ -25,6 +22,12 @@ const nextConfig = {
   webpack(config, { dev }) {
     if (dev) {
       config.cache = false
+      // Next 13 CSS HMR callbacks may run after React has detached the old link.
+      config.module.rules.push({
+        test: require.resolve('next/dist/compiled/mini-css-extract-plugin/hmr/hotModuleReplacement.js'),
+        enforce: 'pre',
+        use: [require.resolve('./build-tools/css-hmr-loader.cjs')],
+      })
     }
     return config
   },

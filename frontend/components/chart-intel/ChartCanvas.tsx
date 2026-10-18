@@ -30,6 +30,7 @@ export default function ChartCanvas({ candles, visiblePlots, onSMC }: Props) {
   const lastSetTimeRef = useRef<number | null>(null);
   const lastSetLenRef = useRef<number>(0);
   const didInitialFitRef = useRef<boolean>(false);
+  const drawOverlayRef = useRef<() => void>(() => {});
 
   const smc = useMemo(() => analyzeSMC(candles), [candles]);
 
@@ -75,18 +76,20 @@ export default function ChartCanvas({ candles, visiblePlots, onSMC }: Props) {
     chartRef.current = chart;
     seriesRef.current = series;
 
-    const ro = new ResizeObserver(() => drawOverlay());
+    const drawLatestOverlay = () => drawOverlayRef.current();
+    const ro = new ResizeObserver(drawLatestOverlay);
     ro.observe(containerRef.current);
-    chart.timeScale().subscribeVisibleTimeRangeChange(drawOverlay);
-    chart.subscribeCrosshairMove(drawOverlay);
+    chart.timeScale().subscribeVisibleTimeRangeChange(drawLatestOverlay);
+    chart.subscribeCrosshairMove(drawLatestOverlay);
 
     return () => {
       ro.disconnect();
+      chart.timeScale().unsubscribeVisibleTimeRangeChange(drawLatestOverlay);
+      chart.unsubscribeCrosshairMove(drawLatestOverlay);
       chart.remove();
       chartRef.current = null;
       seriesRef.current = null;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Push data — use incremental `update()` for tick-level changes so the chart
@@ -147,7 +150,7 @@ export default function ChartCanvas({ candles, visiblePlots, onSMC }: Props) {
       series.setMarkers([]);
     }
 
-    drawOverlay();
+    drawOverlayRef.current();
   }, [candles, smc, visiblePlots]);
 
   // Overlay zones (FVG / OB / Liquidity pools) drawn on a canvas above the chart
@@ -258,6 +261,8 @@ export default function ChartCanvas({ candles, visiblePlots, onSMC }: Props) {
       drawLevel(smc.prevDayLow,  '#fb923c', 'PREV LOW');
     }
   }
+
+  drawOverlayRef.current = drawOverlay;
 
   return (
     <div className="relative w-full h-full">

@@ -28,6 +28,7 @@ import pytz
 
 from services.cache import CacheService, _SHARED_CACHE
 from services.chart_intelligence_ai import ChartIntelligenceAIEngine
+from services.chart_history_service import request_chart_candles
 from config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -693,6 +694,26 @@ def _compute_support_resistance(candles: List[Dict], window: int = 3) -> Dict[st
     }
 
 
+def _previous_session_ohlc(candles: List[Dict], daily_candles: List[Dict]) -> Optional[Dict]:
+    session_date = max((str(c.get("t", ""))[:10] for c in candles), default="")
+    if not session_date:
+        return None
+    previous = [
+        candle for candle in daily_candles
+        if str(candle.get("t", ""))[:10] < session_date
+        and str(candle.get("t", ""))[:10]
+    ]
+    if not previous:
+        return None
+    candle = max(previous, key=lambda item: str(item["t"]))
+    high = _sf(candle.get("h", candle.get("high")))
+    low = _sf(candle.get("l", candle.get("low")))
+    close = _sf(candle.get("c", candle.get("close")))
+    if not (high >= close >= low > 0):
+        return None
+    return {"date": str(candle["t"])[:10], "high": high, "low": low, "close": close}
+
+
 def _compute_levels(candles_3m: List[Dict], daily_candles: List[Dict], spot: float) -> Dict:
     """Compute PDH/PDL, CDH/CDL, and S/R levels."""
     # PDH / PDL from daily candles
@@ -727,6 +748,7 @@ def _compute_levels(candles_3m: List[Dict], daily_candles: List[Dict], spot: flo
         "cdh": cdh, "cdl": cdl,
         "support": sr["support"],
         "resistance": sr["resistance"],
+        "previousSession": _previous_session_ohlc(candles_3m, daily_candles),
     }
 
 
@@ -914,7 +936,7 @@ class ChartIntelligenceService:
         to_dt = now
 
         try:
-            raw = self._kite.historical_data(token, from_dt, to_dt, interval)
+            raw = request_chart_candles(self._kite, token, from_dt, to_dt, interval)
         except Exception as e:
             logger.debug("Chart intel fetch %s %s failed: %s", symbol, interval, e)
             return []
@@ -942,7 +964,7 @@ class ChartIntelligenceService:
             }
             fut_token = fut_token_map.get(symbol)
             if fut_token:
-                fut_raw = self._kite.historical_data(fut_token, from_dt, to_dt, interval)
+                fut_raw = request_chart_candles(self._kite, fut_token, from_dt, to_dt, interval)
                 # Zerodha returns futures volume in contracts (lots).
                 # Multiply by lot size to get actual units traded — this gives
                 # proper K/M scale numbers (e.g. NIFTY 56K lots × 75 = 4.3M).
@@ -988,7 +1010,7 @@ class ChartIntelligenceService:
 
         from_dt = today - timedelta(days=5)
         try:
-            raw = self._kite.historical_data(token, from_dt, today, "day")
+            raw = request_chart_candles(self._kite, token, from_dt, today, "day")
             candles = []
             for r in raw:
                 candles.append({

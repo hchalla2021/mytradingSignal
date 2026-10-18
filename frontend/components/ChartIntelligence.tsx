@@ -10,7 +10,7 @@ import {
   type Liquidity,
   type ChartLevels,
 } from '@/hooks/useChartIntelligence';
-import { useMarketSocket } from '@/hooks/useMarketSocket';
+import { useMarketSocket, type MarketTick } from '@/hooks/useMarketSocket';
 import { useCompassSocket, type CompassIndex } from '@/hooks/useCompassSocket';
 import { updateBuyerIntel, aggregateIntel, type BuyerIntel } from '@/lib/buyerIntelligence';
 
@@ -822,6 +822,7 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
   const structureRef    = useRef(structure);
   const inducementsRef  = useRef(inducements);
   const fractalsRef     = useRef(fractals);
+  const chartSignalScoreRef = useRef(chartSignalScore);
   const htfModeRef      = useRef(htfMode);
   const chartHeightRef  = useRef(chartHeight);
   const dataSourceRef   = useRef(dataSource);
@@ -835,6 +836,7 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
   structureRef.current   = structure;
   inducementsRef.current = inducements;
   fractalsRef.current    = fractals;
+  chartSignalScoreRef.current = chartSignalScore;
   htfModeRef.current     = htfMode;
   chartHeightRef.current = chartHeight;
   dataSourceRef.current  = dataSource;
@@ -2882,11 +2884,11 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
         const proj = computeNextCandleProjection(
           candles,
           effectiveSpot,
-          chartSignalScore,
+          chartSignalScoreRef.current,
           structure,
           liquidity,
           inducements,
-          fractals,
+          fractalsRef.current,
           prioritySetups,
         );
         const projDir = proj?.direction === 'UP' ? 1 : proj?.direction === 'DOWN' ? -1 : 0;
@@ -3190,7 +3192,7 @@ const CandleChart = memo<CandleChartProps>(({ candles, fvg, ob, liquidity, level
   // Mark scene dirty when data changes (no callback recreation needed)
   useEffect(() => {
     markDirty();
-  }, [candles, fvg, ob, liquidity, levels, spot, liveSpot, structure, inducements, fractals, dataSource, prioritySetups, markDirty]);
+  }, [candles, fvg, ob, liquidity, levels, spot, liveSpot, structure, inducements, fractals, chartSignalScore, dataSource, prioritySetups, markDirty]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -5237,7 +5239,7 @@ const ChartIntelligence = memo(() => {
   const { marketData } = useMarketSocket();
   const { data: compassData } = useCompassSocket();
 
-  const getFreshLiveSpot = useCallback((tick: typeof marketData.NIFTY | null | undefined): number | undefined => {
+  const getFreshLiveSpot = useCallback((tick: MarketTick | null | undefined): number | undefined => {
     if (!tick || tick.price <= 0) return undefined;
     if (tick.status !== 'LIVE') return undefined;
     const tsMs = Date.parse(tick.timestamp || '');

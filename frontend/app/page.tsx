@@ -9,6 +9,7 @@ import SmartAIAlgoSection from '@/components/SmartAIAlgoSection';
 import { useMarketSocket } from '@/hooks/useMarketSocket';
 import { useAnalysis } from '@/hooks/useAnalysis';
 import { useAIAnalysis } from '@/hooks/useAIAnalysis';
+import type { FIIDIISnapshot } from '@/hooks/useFIIDIIFlow';
 import { API_CONFIG } from '@/lib/api-config';
 import { getOrCreateVisitorId } from '@/lib/visitor-id';
 
@@ -144,7 +145,7 @@ const TradingIntelligenceEngine = dynamic(() => import('@/components/TradingInte
   )
 });
 
-const ChartIntelligence = dynamic(() => import('@/components/ChartIntelligence'), {
+const ChartWorkspace = dynamic(() => import('@/components/ChartWorkspace'), {
   ssr: false,
   loading: () => (
     <div className="rounded-2xl border border-emerald-500/25 bg-slate-800/30 p-5 animate-pulse">
@@ -265,6 +266,7 @@ export default function Home() {
   } = useMarketSocket();
   const { alertData } = useAIAnalysis();
   const [serverOutlook, setServerOutlook] = useState<Record<string, any> | null>(null);
+  const [institutionalData, setInstitutionalData] = useState<FIIDIISnapshot | null>(null);
 
 
   // 🔥 Clear browser cache on mount (desktop browsers cache aggressively)
@@ -580,7 +582,7 @@ export default function Home() {
 
         {/* 💸 FII / DII FLOW + BIG PLAYER RADAR — below Smart AI Algo */}
         <div style={{ order: -9 }}>
-          <FIIDIIFlowStrip marketData={marketData} isConnected={isConnected} />
+          <FIIDIIFlowStrip marketData={marketData} isConnected={isConnected} onSnapshot={setInstitutionalData} />
         </div>
 
         {/* 🏛️ ADVANCED SMC & MARKET STRUCTURE — directly below FII/DII Flow */}
@@ -681,17 +683,16 @@ export default function Home() {
         </div>
         </div>
 
+        <div style={{ order: -3 }} className="min-w-0">
+          <MarketIntelligenceObservatory />
+          <ChartWorkspace marketData={marketData} institutionalData={institutionalData} />
+        </div>
+
         {/* 🌐 GLOBAL IMPACT RADAR */}
         <GlobalImpactRadar />
 
         {/* 🌐 GLOBAL RISK */}
         <GlobalRiskPanel />
-
-        {/* P11a: 🔭 MARKET INTELLIGENCE OBSERVATORY */}
-        <MarketIntelligenceObservatory />
-
-        {/* P11b: 📈 REAL-TIME CHART INTELLIGENCE — SMC, FVG, S/R, PDH/PDL, CDH/CDL */}
-        <ChartIntelligence />
 
         {/* ⚡ GREEKS OVERVIEW — Real-time Greeks analysis and buy/sell signals */}
         <TradingIntelligenceEngine marketData={marketData} />

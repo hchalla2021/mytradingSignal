@@ -155,6 +155,7 @@ export interface LevelParticipants {
 }
 
 export interface ChartLevels {
+  previousSession?: { date: string; high: number; low: number; close: number } | null;
   pdh: number;
   pdl: number;
   cdh: number;

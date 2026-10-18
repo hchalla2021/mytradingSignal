@@ -103,11 +103,11 @@ export const TrendBaseAnalysisDashboard: React.FC<TrendBaseAnalysisDashboardProp
     }
   }, [symbol]);
 
-  const handleRefresh = async () => {
+  const handleRefresh = useCallback(async () => {
     setRefreshing(true);
     await Promise.all([fetchTrendData(), fetchSwingPoints(), fetchPatterns()]);
     setRefreshing(false);
-  };
+  }, [fetchTrendData, fetchSwingPoints, fetchPatterns]);
 
   useEffect(() => {
     // Initial load
@@ -122,7 +122,7 @@ export const TrendBaseAnalysisDashboard: React.FC<TrendBaseAnalysisDashboardProp
         clearInterval(refreshIntervalRef.current);
       }
     };
-  }, [symbol, fetchTrendData, fetchSwingPoints, fetchPatterns]);
+  }, [handleRefresh, fetchTrendData, fetchSwingPoints, fetchPatterns]);
 
   if (loading) {
     return (

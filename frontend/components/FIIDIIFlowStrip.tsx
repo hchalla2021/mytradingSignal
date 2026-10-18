@@ -1,11 +1,12 @@
 'use client';
 
-import React, { useMemo } from 'react';
+import React, { useEffect, useMemo } from 'react';
 import type { MarketTick } from '@/hooks/useMarketSocket';
 import {
   useFIIDIIFlow,
   FIIDIIRow,
   FIIDIIHistoryPoint,
+  type FIIDIISnapshot,
 } from '@/hooks/useFIIDIIFlow';
 import { aggregateIntel, updateBuyerIntel } from '@/lib/buyerIntelligence';
 import { aggregateParticipantFlowRealtime, updateParticipantFlowRealtime } from '@/lib/participantFlowRealtime';
@@ -17,6 +18,7 @@ interface FIIDIIFlowStripProps {
   // Reused for live inferred institutional pressure from websocket ticks.
   marketData?: Partial<Record<IndexKey, MarketTick | null | undefined>>;
   isConnected: boolean;
+  onSnapshot?: (snapshot: FIIDIISnapshot | null) => void;
 }
 
 const fmtCr = (v: number): string => {
@@ -56,8 +58,11 @@ interface LiveProxy {
 const LIVE_TICK_MAX_AGE_SEC = 30;
 const LIVE_TICK_MEDIUM_AGE_SEC = 10;
 
-const FIIDIIFlowStrip = ({ isConnected, marketData }: FIIDIIFlowStripProps) => {
+const FIIDIIFlowStrip = ({ isConnected, marketData, onSnapshot }: FIIDIIFlowStripProps) => {
   const { data, isLoading, error, refresh } = useFIIDIIFlow();
+  useEffect(() => {
+    onSnapshot?.(error ? null : data);
+  }, [data, error, onSnapshot]);
 
   const liveProxy = useMemo<LiveProxy>(() => {
     const serverRt = data?.realtime;

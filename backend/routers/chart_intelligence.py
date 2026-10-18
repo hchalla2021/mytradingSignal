@@ -7,15 +7,27 @@ REST:       GET /api/chart-intelligence  → instant snapshot for page load
 import asyncio
 import json
 import logging
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
-from datetime import datetime
+from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconnect
+from datetime import date, datetime
+from typing import Optional
 
 from services.chart_intelligence_service import chart_intel_manager, get_chart_intelligence_service
+from services.chart_history_service import chart_history_service, ChartHistoryUnavailable
 
 logger = logging.getLogger(__name__)
 
 http_router = APIRouter()
 ws_router = APIRouter()
+
+
+@http_router.get("/chart-intelligence/history")
+async def get_chart_history(symbol: str = "NIFTY", interval: str = Query("5"), before: Optional[date] = None):
+    try:
+        return await chart_history_service.page(symbol, interval, before)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    except ChartHistoryUnavailable as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
 
 
 @http_router.get("/chart-intelligence")

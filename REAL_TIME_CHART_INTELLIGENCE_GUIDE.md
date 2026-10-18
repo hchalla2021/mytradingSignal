@@ -1,6 +1,218 @@
 # 🎯 REAL-TIME CHART INTELLIGENCE ADVANCED SYSTEM
 ## Enterprise-Grade Implementation Guide
 
+### Dashboard chart workspace
+
+The dashboard now uses [ChartWorkspace](frontend/components/ChartWorkspace.tsx)
+in place of the old three-card chart section. Market Intelligence Observatory
+and the chart are grouped directly below Live Market Indices in the dashboard's
+flex order. Standalone symbol chart pages are unchanged.
+
+- Indicator names, values, controls and setup risk details live in one left
+  rail, never in a scrolling box over the candles. The OHLC header occupies
+  its own row outside the plot. The rail is collapsible with **Indicators &
+  setup**; below 1024 CSS pixels it starts folded beneath the full-width chart.
+  Responsive chart height, wrapping controls and touch targets support narrow
+  phones and portrait/landscape tablets without workspace horizontal overflow.
+- **Confluence focus** is the initial visual preset: EMA 9/20/50/200, VWAP, CPR,
+  RSI and volume. Core checkboxes have a subtle accent. The priority guide
+  orders trend/breakout, VWAP/volume and CPR/RSI as a combination, not a claim
+  that one indicator is universally strongest. Other selected indicators still
+  work; use the full or image preset to display them. Long EMAs have heavier
+  dashed/dotted lines, core EMAs use solid lines, and VWAP is gold/dotted.
+  EMA 200 is selected and core-highlighted by default for broader trend context;
+  it waits for 200 actual bars and uses a thicker pink dotted line. Camarilla,
+  Traditional pivots, EMA 100, Supertrend, MACD and ATR remain optional to avoid
+  overlapping default overlays. Saved custom templates are not overwritten.
+  This preset is not a verified win-rate ranking and does not silently change
+  the entry rules: advance price-action and confirmed confluence modes retain
+  their separate gates. Cash-index VWAP remains unavailable without genuine
+  index volume; futures-volume proxies are not substituted.
+- Selected indicator lines have matching-color name/value labels at the chart's
+  right edge: EMA periods, VWAP, active Supertrend direction and every available
+  pivot level. `Pivot R3/S3` means Traditional pivots; `Cam R3/S3` means
+  Camarilla. CPR has TC/P/BC (not R3/S3). RSI, MACD/signal/histogram, ATR and
+  volume are named in their own panes. Native price-scale label alignment reduces
+  collisions without adding labels to every candle. Disabled, warm-up and
+  currently inactive Supertrend lines do not show stale endpoint labels.
+- The trade plan draws only **BUY/SELL ENTRY**, **EXIT (profit target)** and
+  **STOP**, with distinct colors and exact price-axis labels. Support/resistance
+  and entry-zone shading are no longer drawn by the plan. Selected technical
+  indicators and user drawings remain independent. Automatic scaling includes
+  the three plan levels when its reference candle is visible.
+  Compact ENTRY + index price and EXIT TARGET + price callouts sit inside the
+  plot, connected to their price levels at the proposal's reference candle.
+  There is no separate top summary box. Conditional ENTRY labels say IF BUY/SELL;
+  their tooltip states the required timeframe close. These are proposed levels,
+  not historical fills or predictions of a future candle. Callouts track chart
+  pan/zoom and incoming data and disappear when the reference candle is outside
+  view, the live setup is invalid/unavailable, or trade overlays are disabled.
+- **Advance conditional price action** is the default Entry mode in Chart
+  Settings. It uses at most 251 recent bars: 50 completed candles for trend,
+  EMA 9/20/50 alignment, directional candles and higher-low/lower-high structure.
+  ENTRY is beyond the last five completed highs/lows with a volatility buffer.
+  STOP is beyond the last three-bar swing; risk above 2.5 ATR is rejected.
+  Prices are rounded to 0.05-point increments. EXIT is at most 2R and capped
+  before the nearest high/low in up to 20 available prior official daily bars
+  (previous-day and approximately month-length context, not full-month claims).
+  Less than 1R of available reward rejects the plan. Missing daily context
+  leaves the explicitly rule-based 2R target; no daily levels are invented.
+  This mode does not require or invent cash-index volume/VWAP.
+- Advance levels are conditional, not predictions, positions or executions.
+  Wait for a candle close beyond ENTRY and reassess; a forming candle touching
+  ENTRY or STOP, or a latest spot quote crossing either, withdraws the proposal
+  rather than claiming a fill. Each new
+  completed candle can revise the plan. EXIT is a proposed profit-taking price,
+  not a guaranteed fill; gaps and slippage can exceed STOP. Fresh weekday
+  cash-session data is mandatory. Cached, delayed, date-jump and higher-timeframe
+  views show no intraday plan and explain why.
+- **Confirmed EMA / VWAP confluence** preserves the existing stricter signal
+  rules as an opt-in mode. Its visible EXIT is the first 1R target; 2R/3R remain
+  internal rather than adding chart clutter. Rule alignment is not a calibrated
+  win probability. Closed-candle loss of EMA 20 or VWAP invalidates that setup;
+  no executed position is tracked. One plan is revised, not appended repeatedly.
+- The rail reuses the existing FII/DII strip's snapshot, without adding a
+  second polling loop or WebSocket. Reported cash-flow date and source are
+  displayed separately from intraday rules. ISO and provider DD-MMM-YYYY dates
+  are validated; missing, failed, nonfinite, future, stale, over-30-minute-old
+  snapshots or reports older than seven calendar days show unavailable.
+  Market-wide daily flows are context only, not evidence of live index-specific
+  institutional trades, and never inflate intraday confidence.
+
+- NIFTY 50, BANKNIFTY and SENSEX tabs share one full-width dark chart workspace.
+- Candles, EMA 9/20/50/100/200, EMA Cross 13/21, Supertrend (ATR 10,
+  multiplier 2), session HLC3 VWAP, Camarilla/Traditional pivots, CPR, volume,
+  Wilder RSI (14), MACD (12,26,9), and Wilder ATR (14) render actual chart
+  series. Disabled overlays are removed; re-enabling restores loaded-history
+  values without recreating the charts. Supertrend has green/red segments
+  without misleading lines bridging inactive periods. Crossover and trend
+  arrows are indicator events, not independently verified BUY/SELL setups;
+  latest-bar arrows are marked forming and can change.
+- The dashboard fetches native Zerodha 3m/5m/15m/30m/1h historical candles in
+  14-calendar-day pages. Scroll left or click **Load older**, or use **Go to
+  session** to jump directly to a date. There is no application-level one-year
+  or two-year retention limit: coverage depends on Zerodha's actual instrument
+  and interval archives. Empty ranges are shown explicitly and can be skipped
+  with another date or older page; no missing bars are synthesized.
+- **1D / 1W / 1M** are enabled candle intervals for all three indices. 1D uses
+  Zerodha `day` OHLCV, 1W aggregates actual daily records into Monday-based weeks,
+  and 1M aggregates calendar months. These intervals fetch about one year of
+  daily records per page, aligned to week/month boundaries so paging does not
+  split a period. Holidays/weekends are not filled with invented daily bars.
+  Use **Recent** or **All** for higher-timeframe visible ranges; **Load older**
+  and date jumps work with all intervals. More history may be needed for long
+  EMA warm-up periods (for example, EMA 50 on a monthly chart).
+- **Latest session** returns from historical browsing. Date jumps disable live
+  signals. History is deduplicated by timestamp and prepending pages preserves
+  the chart's logical viewport. Changing index/timeframe cancels obsolete
+  requests. Native 3m/5m stream candles and 15m/30m/1h stream aggregations
+  continue the current session; unsupported 1m remains disabled. On 1D/1W/1M,
+  the existing current-period candle can update from the live index session
+  without replacing its official open or inserting futures volume. The current
+  period is forming, not confirmed; intraday signals, daily CPR and session VWAP
+  are disabled on these higher timeframes. Auto pivots remain available using
+  their appropriate monthly/yearly anchors.
+- Indicators can be toggled or searched. Quick templates apply immediately;
+  Save / Save as Template persists a custom indicator template in this browser.
+- **Image Layout** enables the screenshot's EMAs, Supertrend, Camarilla,
+  session VWAP, CPR, RSI and ATR, with Traditional pivots, EMA Cross, volume
+  and MACD hidden. The left control rail provides checkboxes and
+  crosshair-aligned values, including warm-up/missing-data explanations.
+  Pivot details expand within the rail, not over the chart. An empty volume
+  pane is hidden when all loaded index volume is zero; its selected checkbox
+  and unavailable explanation remain visible in the rail.
+  Existing saved templates migrate new indicator keys while preserving all
+  previously saved visibility choices.
+- Pivot **Auto 15** means automatic anchor selection and the last 15 chart
+  periods, not a 15-minute indicator: up to 15-minute candles use daily
+  anchors; 30-minute/1-hour candles use weekly anchors; daily candles use
+  monthly anchors; weekly/monthly candles use yearly anchors. Only the
+  previous completed anchor's real daily OHLC is used, never the current
+  period's eventual high/low/close. Traditional and Camarilla P/R1-R5/S1-S5
+  use stepped lines, with resistance red, support green and pivot blue.
+  Key price-axis labels avoid crowding; all level values remain in the rail.
+  CPR has session-bounded shading and TC/P/BC lines, rather than extending
+  today's band across unrelated historical sessions. Pivot levels do not
+  stretch autoscale to distant R5/S5 values.
+- The synchronized panels support pan, zoom and crosshair inspection. Drawing
+  tools include trend lines, horizontal levels, rectangles, magnet snapping,
+  undo, visibility and deletion. Drawings are per index and last for this visit.
+- Chart settings expose grid, logarithmic/auto price scales and magnet mode.
+  Fullscreen and PNG series export are available; export excludes drawing overlays.
+- Missing history, previous-session OHLC or volume is shown as unavailable rather
+  than replaced with invented values. Warm-up periods apply to EMA/RSI/MACD.
+  Cash indices may have zero volume, in which case session VWAP is unavailable.
+- The dashboard history chart does not use the legacy stream's injected futures
+  volume. Cash-index OHLC and volume remain instrument-consistent; when index
+  volume is unavailable, VWAP-dependent setups remain WAIT. Other dashboard
+  modules using futures-volume proxies have not been changed.
+- The optional confirmed mode retains the original BUY/SELL setup monitoring
+  calculations, without support/resistance bands or entry-zone shading on the
+  plot. It displays ENTRY, STOP and the first target as EXIT. Its signals require
+  fresh live data during the weekday 09:15–15:30 IST cash session, at least 50
+  candles, valid previous-session OHLC, a fully closed 3m/5m/15m/30m/1h candle,
+  a five-bar breakout, EMA 9/20/50 and VWAP alignment, plus a configurable
+  minimum confluence score. CPR/pivot, RSI (52–68 long / 32–48 short), and
+  relative volume (configurable 1.2x/1.5x/2x of the prior 20-bar average) add
+  confluence. The default requires 5 of 6 checks; stale, cached, out-of-session,
+  incomplete-history, and oversized-stop setups remain WAIT. Stops use the
+  prior three-bar swing plus an ATR buffer and reject risk wider than 2.5 ATR.
+  Targets are risk multiples, not forecasts or guaranteed outcomes.
+
+#### History API and operation
+
+`GET /api/chart-intelligence/history?symbol=NIFTY&interval=5&before=2024-10-15`
+returns `candles`, `dailyCandles` for pivot context, an exclusive `nextBefore`
+date cursor, `cached`, and source
+metadata. Omit `before` to start with recent history. Supported symbols are
+NIFTY/BANKNIFTY/SENSEX and supported intervals are 3/5/15/30/60 minutes
+or `D`/`W`/`M`. Example: `?symbol=BANKNIFTY&interval=W`.
+The technical minimum query date (1970) is not a claim of data availability.
+
+The backend stores pages in the ignored `backend/data/chart_history.sqlite3`
+file using the Python standard-library SQLite driver. Completed historical
+pages persist across restarts; current-day pages expire after 20 seconds and
+partial live-day pages are refreshed before becoming immutable history.
+Chart history and chart snapshot requests share a per-process request pacer.
+Other application modules also consume the API key's historical request quota;
+provider throttling remains an explicit retryable error, not synthetic data.
+Uncached requests require an authenticated Zerodha session and historical-data
+entitlement. Invalid sessions return an explicit reconnect message (503).
+
+Only requested pages are sent to the browser; switching index/timeframe releases
+the previous selection's in-memory history. Normal candle/volume tail updates use
+Lightweight Charts `update`, while page changes use `setData`. Enabled indicator
+calculations keep per-candle state: revising the forming candle recalculates
+only that candle, without counting its volume twice. Prepending history,
+correcting earlier candles, or changing settings rebuilds the affected data.
+Price-only changes reuse cached pivot levels; new sessions/context rebuild them.
+Supertrend rebuilds its segmented drawing on direction changes/new candles
+because Lightweight Charts v4 otherwise connects whitespace gaps.
+EMA uses a full-period SMA seed; RSI/ATR use Wilder smoothing; MACD requires
+its EMA and signal warm-up. Loaded history and initialization affect values,
+so exact parity with a broker using a different history/seed is not guaranteed.
+This is a canvas chart, not a TradingView
+Advanced Charts integration, and contains no broker execution integration.
+
+Live data retains the existing chart-intelligence stream's approximately
+3-second broadcast / 10-second historical refresh cadence. This change does not
+promise tick-for-tick parity or zero latency. A true lower-latency upgrade would
+need exchange-timestamped KiteTicker candle construction and reconnect gap repair.
+
+Trade-plan/reference calculations live in [chart-workspace](frontend/lib/chart-workspace.ts);
+the incremental rendering engine lives in [chart-indicators](frontend/lib/chart-indicators.ts).
+The history endpoint caches official daily pivot context alongside requested
+chart pages; restart the backend to enable this additive response field.
+The existing chart-intelligence payload additionally exposes optional
+`levels.previousSession` (date/high/low/close) from real daily candles, so pivots
+remain available even when the intraday feed contains only one session. Restart
+the backend after deployment to enable this additive field. Older snapshots use
+previous intraday-session OHLC if available, otherwise show unavailable levels.
+
+Validation: `cd frontend` then
+`node --test tests/chart-workspace.test.cjs tests/chart-indicators.test.cjs`;
+`cd backend` then `python -m unittest test_chart_history test_chart_workspace_levels`.
+
 ---
 
 ## 📋 TABLE OF CONTENTS
