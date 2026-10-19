@@ -8,21 +8,70 @@ in place of the old three-card chart section. Market Intelligence Observatory
 and the chart are grouped directly below Live Market Indices in the dashboard's
 flex order. Standalone symbol chart pages are unchanged.
 
+- Timeframe history is retained in a bounded 12-page in-memory LRU cache,
+  isolated by symbol, native interval, cursor and current IST session date.
+  Returning to a loaded timeframe displays candles immediately. Pages younger
+  than 20 seconds avoid another request; older pages stay visible while
+  refreshing. Requests are deduplicated and switched-away responses only warm
+  their own cache, never overwrite the selected interval. After 3m/5m loads,
+  its companion interval is preloaded; hovering/focusing other interval buttons
+  starts their native history request early. First-time uncached requests still
+  depend on broker/network latency. No cross-timeframe candles are substituted.
+
+- **Level bounce / breakout + trend** is the default entry mode. The initial
+  page renders first; native intraday history then warms in the background
+  toward 35 calendar days, rounded to whole 14-day pages (typically 42 days).
+  Six recent symbol/interval context windows are retained separately from the
+  12-page cache, so timeframe switches preserve the warmed history. Date-jump
+  views do not automatically load today's context. No synthetic candles or
+  fabricated volume are inserted.
+- The incremental level-analysis engine always calculates EMA 9/20/50/100/200,
+  RSI, ATR and genuine-volume VWAP, regardless of visual toggles. All loaded
+  bars seed indicators. Evidence counts are bounded to the latest 500 bars per
+  EMA and the current session for static levels, recalculating only when a
+  completed bar or daily context changes. Forming updates reuse the evidence.
+  The expandable **Level intelligence** map shows exact prices, support or
+  resistance location, the last closed-candle reaction, and observed
+  touches/holds/crosses. Location is not a promise that a level will hold.
+- Daily Traditional and Camarilla pivots and CPR use only the prior completed
+  daily OHLC. Prior-day, prior-week and prior-month highs/lows are also reviewed;
+  week/month ranges explicitly say **loaded** because missing sessions are
+  never invented. These daily analysis levels are independent of the visual
+  pivots' Auto anchor (which can be weekly on 30m/1h charts).
+- A level entry requires a completed-candle support bounce, resistance
+  rejection or cross with directional body/close evidence, aligned EMA 9/20
+  trend, EMA 50 location and RSI momentum. EMA reactions test the EMA known
+  before that candle, not its revised closing EMA. EMA 100/200 remain eligible
+  levels and nearest-barrier context. Entries wait for at least 201 completed
+  bars; there is no fake EMA 200 warm-up value.
+- Entries use the signal close rounded to 0.05, a three-candle/level structural
+  stop bounded to 0.25–2.5 ATR, and a target no farther than 2R, capped before
+  the next available level. Less than 1R reward room means **NO TRADE**.
+  Price more than 0.35 ATR from entry is not chased. A subsequent candle's
+  stop/target touch withdraws the setup even if price recovers. All signals
+  require fresh live weekday cash-session data.
+- Real volume must meet the relative-volume threshold and align with VWAP when
+  available. Missing cash-index volume is explicitly **UNVERIFIED**, not a
+  positive confirmation and not a reason to fabricate volume. This new
+  price-action mode can issue a close-confirmed entry with unverified volume;
+  the optional legacy confirmed-only mode still requires verified volume.
+  Holds/crosses are descriptive counts, not calibrated odds or predictions.
+
 - Indicator names, values, controls and setup risk details live in one left
   rail, never in a scrolling box over the candles. The OHLC header occupies
   its own row outside the plot. The rail is collapsible with **Indicators &
   setup**; below 1024 CSS pixels it starts folded beneath the full-width chart.
   Responsive chart height, wrapping controls and touch targets support narrow
   phones and portrait/landscape tablets without workspace horizontal overflow.
-- **Confluence focus** is the initial visual preset: EMA 9/20/50/200, VWAP, CPR,
+- **Confluence focus** is the initial visual preset: EMA 9/20/50/100/200, VWAP, CPR,
   RSI and volume. Core checkboxes have a subtle accent. The priority guide
   orders trend/breakout, VWAP/volume and CPR/RSI as a combination, not a claim
   that one indicator is universally strongest. Other selected indicators still
   work; use the full or image preset to display them. Long EMAs have heavier
   dashed/dotted lines, core EMAs use solid lines, and VWAP is gold/dotted.
-  EMA 200 is selected and core-highlighted by default for broader trend context;
+  EMA 100 and EMA 200 are selected and core-highlighted by default for broader trend context;
   it waits for 200 actual bars and uses a thicker pink dotted line. Camarilla,
-  Traditional pivots, EMA 100, Supertrend, MACD and ATR remain optional to avoid
+  Traditional pivots, Supertrend, MACD and ATR remain optional to avoid
   overlapping default overlays. Saved custom templates are not overwritten.
   This preset is not a verified win-rate ranking and does not silently change
   the entry rules: advance price-action and confirmed confluence modes retain
@@ -39,16 +88,21 @@ flex order. Standalone symbol chart pages are unchanged.
   **STOP**, with distinct colors and exact price-axis labels. Support/resistance
   and entry-zone shading are no longer drawn by the plan. Selected technical
   indicators and user drawings remain independent. Automatic scaling includes
-  the three plan levels when its reference candle is visible.
-  Compact ENTRY + index price and EXIT TARGET + price callouts sit inside the
-  plot, connected to their price levels at the proposal's reference candle.
-  There is no separate top summary box. Conditional ENTRY labels say IF BUY/SELL;
+  all three active plan levels. Compact ENTRY, TARGET / EXIT and STOP-LOSS price
+  callouts sit inside the plot, connected to their exact price levels at the
+  setup's reference candle. Collision-aware layout keeps all three labels
+  separated and within the plot on narrow screens. Offscreen anchors are
+  clamped to the plot edge without drawing a false candle marker; the tooltip
+  identifies the offscreen anchor. The Observatory's **Entry / exit chart** link
+  jumps to this chart. An always-visible summary shows **NO TRADE**, the reason,
+  or the active prices even when chart controls are collapsed.
+  Conditional ENTRY labels say WATCH BUY/SELL;
   their tooltip states the required timeframe close. These are proposed levels,
   not historical fills or predictions of a future candle. Callouts track chart
-  pan/zoom and incoming data and disappear when the reference candle is outside
-  view, the live setup is invalid/unavailable, or trade overlays are disabled.
-- **Advance conditional price action** is the default Entry mode in Chart
-  Settings. It uses at most 251 recent bars: 50 completed candles for trend,
+  pan/zoom, price scaling, resizing and incoming data and disappear when the
+  live setup is invalid/unavailable or trade overlays are disabled.
+- **Advance conditional price action** remains an optional Entry mode in Chart
+  Settings, explicitly labeled unconfirmed. It uses at most 251 recent bars: 50 completed candles for trend,
   EMA 9/20/50 alignment, directional candles and higher-low/lower-high structure.
   ENTRY is beyond the last five completed highs/lows with a volatility buffer.
   STOP is beyond the last three-bar swing; risk above 2.5 ATR is rejected.
@@ -66,11 +120,30 @@ flex order. Standalone symbol chart pages are unchanged.
   not a guaranteed fill; gaps and slippage can exceed STOP. Fresh weekday
   cash-session data is mandatory. Cached, delayed, date-jump and higher-timeframe
   views show no intraday plan and explain why.
-- **Confirmed EMA / VWAP confluence** preserves the existing stricter signal
-  rules as an opt-in mode. Its visible EXIT is the first 1R target; 2R/3R remain
+- **Live watch + confirmed signals** remains an optional Entry mode. It prefers a
+  fully confirmed trade; otherwise it shows one valid conditional price-action
+  plan in amber as **WATCH BUY/SELL**, while the trade status remains
+  **NO TRADE**. This avoids an empty overlay merely because cash-index volume
+  is unavailable, without inventing confirmation. Watch plans still require
+  fresh live cash-session data, trend/swing alignment, enough completed candles,
+  bounded structural risk and adequate target room. Cached data, touched
+  triggers/stops and conflicting setups do not produce watch prices.
+  One candle arrow and three short price-level lines (entry, target, stop)
+  replace full-width trade lines. Only the current setup is drawn: no repeated
+  historical arrows, target ladders or extra zones.
+- **Confirmed EMA / VWAP confluence** is available as confirmed-only mode. A fresh
+  completed-candle five-bar breakout, EMA 9/20/50 alignment, session VWAP,
+  relative-volume threshold, sufficient history and the selected confluence
+  count are mandatory. RSI and prior-session CPR/pivots contribute to the
+  six-rule score. Missing genuine cash-index volume produces **NO TRADE**;
+  volume is never invented. Prior swing and supplied support/resistance levels
+  must leave at least 1R reward room; the signal candle's wick is not treated
+  as a pre-existing barrier. Its visible EXIT is the first 1R target; 2R/3R remain
   internal rather than adding chart clutter. Rule alignment is not a calibrated
   win probability. Closed-candle loss of EMA 20 or VWAP invalidates that setup;
-  no executed position is tracked. One plan is revised, not appended repeatedly.
+  no executed position is tracked. A later candle touching the target or stop
+  withdraws the setup even if its price recovers before close. One plan is
+  revised, not appended repeatedly.
 - The rail reuses the existing FII/DII strip's snapshot, without adding a
   second polling loop or WebSocket. Reported cash-flow date and source are
   displayed separately from intraday rules. ISO and provider DD-MMM-YYYY dates

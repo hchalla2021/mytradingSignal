@@ -27,6 +27,19 @@ export interface TradePlan {
   riskPoints?: number;
   conditional?: boolean;
   exitPrice?: number;
+  volumeVerified?: boolean;
+  basis?: string;
+}
+
+export type TradeOverlayMode = 'live' | 'confirmed' | 'conditional';
+
+export function selectTradeOverlay(confirmed: TradePlan, watch: TradePlan, mode: TradeOverlayMode): TradePlan {
+  if (mode === 'conditional') return watch;
+  if (mode === 'confirmed' || confirmed.direction !== 'WAIT' || watch.direction === 'WAIT') return confirmed;
+  return {
+    ...watch,
+    watchReason: `NO TRADE confirmed. ${confirmed.watchReason} ${watch.watchReason}`,
+  };
 }
 
 export function institutionalContext(snapshot: FIIDIISnapshot | null, nowMs: number) {
@@ -86,7 +99,7 @@ export const DEFAULT_INDICATORS: IndicatorSettings = {
 
 export const TEMPLATES: Record<string, IndicatorSettings> = {
   'Intraday Default': DEFAULT_INDICATORS,
-  'Confluence focus': { ...DEFAULT_INDICATORS, ema100: false, supertrend: false, camarilla: false, pivots: false, macd: false, atr: false },
+  'Confluence focus': { ...DEFAULT_INDICATORS, supertrend: false, camarilla: false, pivots: false, macd: false, atr: false },
   'Image Layout': { ...DEFAULT_INDICATORS, pivots: false, volume: false, macd: false },
   Scalping: { ...DEFAULT_INDICATORS, ema50: false, pivots: false, cpr: false, macd: false },
   Breakout: { ...DEFAULT_INDICATORS, ema9: false, ema20: false, macd: false },
@@ -421,29 +434,27 @@ export function deriveTradePlan(
   const candleFresh = nowMs - (lastTime * 1000 + timeframe * 60_000) < timeframe * 60_000;
   const freshLiveSession = options.live && withinMarketHours && lastSession === currentSession && candleClosed && candleFresh;
   const direction = freshLiveSession && validHistory
-    ? longScore >= requiredScore && longChecks[0] && longChecks[1] && longChecks[5]
+    ? longScore >= requiredScore && longChecks[0] && longChecks[1] && longChecks[4] && longChecks[5]
       ? 'BUY'
-      : shortScore >= requiredScore && shortChecks[0] && shortChecks[1] && shortChecks[5]
+      : shortScore >= requiredScore && shortChecks[0] && shortChecks[1] && shortChecks[4] && shortChecks[5]
         ? 'SELL'
         : 'WAIT'
     : 'WAIT';
   const supportPrices = [
     ...(data.levels?.support ?? []),
     data.levels?.pdl,
-    data.levels?.cdl,
     daily?.S1,
     daily?.S2,
     daily?.BC,
-    ...closed.slice(-20).map(candle => candle.l),
+    ...closed.slice(-21, -1).map(candle => candle.l),
   ];
   const resistancePrices = [
     ...(data.levels?.resistance ?? []),
     data.levels?.pdh,
-    data.levels?.cdh,
     daily?.R1,
     daily?.R2,
     daily?.TC,
-    ...closed.slice(-20).map(candle => candle.h),
+    ...closed.slice(-21, -1).map(candle => candle.h),
   ];
   const support = nearestZone(supportPrices, last.c, atr || last.c * 0.001, 'below');
   const resistance = nearestZone(resistancePrices, last.c, atr || last.c * 0.001, 'above');
@@ -460,7 +471,8 @@ export function deriveTradePlan(
         ? 'Waiting for 50 candles, current-session volume and valid previous-session OHLC.'
         : !candleFresh ? 'Waiting for a fresh closed candle; the last completed candle is delayed.'
         : sessionVwap === undefined ? 'Index volume unavailable: VWAP confirmation cannot be verified. No entry.'
-        : `WAIT · ${Math.max(shortScore, longScore)}/${requiredScore} required confirmations; a closed-candle breakout and aligned trend/VWAP are mandatory.`;
+        : relativeVolume < options.minVolumeRatio ? 'NO TRADE · Breakout volume is below the required relative-volume threshold.'
+        : `NO TRADE · ${Math.max(shortScore, longScore)}/${requiredScore} required confirmations; a closed-candle breakout, relative volume and aligned trend/VWAP are mandatory.`;
 
   if (direction === 'WAIT' || atr <= 0) {
     return { direction: 'WAIT', score: Math.max(longScore, shortScore), requiredScore, confirmation, watchReason, support, resistance, candleTime: lastTime };
@@ -479,9 +491,21 @@ export function deriveTradePlan(
       support, resistance, candleTime: lastTime,
     };
   }
+  const barrier = isBuy ? resistance?.low : support?.high;
+  if (barrier !== undefined && (isBuy ? barrier - entry : entry - barrier) < risk) {
+    return {
+      direction: 'WAIT', score: isBuy ? longScore : shortScore, requiredScore, confirmation,
+      watchReason: 'NO TRADE · Nearby support/resistance leaves less than 1R room before the first target.',
+      support, resistance, candleTime: lastTime,
+    };
+  }
   const entryHalfWidth = atr * 0.12;
   const latestPrice = candles.at(-1)?.c ?? entry;
-  if (isBuy ? latestPrice <= stopLoss || latestPrice >= entry + risk : latestPrice >= stopLoss || latestPrice <= entry - risk) {
+  const subsequent = candles.filter(candle => candleTime(candle) > lastTime && candleTime(candle) * 1000 <= nowMs);
+  const levelTouched = subsequent.some(candle => isBuy
+    ? candle.l <= stopLoss || candle.h >= entry + risk
+    : candle.h >= stopLoss || candle.l <= entry - risk);
+  if (levelTouched || (isBuy ? latestPrice <= stopLoss || latestPrice >= entry + risk : latestPrice >= stopLoss || latestPrice <= entry - risk)) {
     return {
       direction: 'WAIT', score: isBuy ? longScore : shortScore, requiredScore, confirmation,
       watchReason: 'Setup expired: current price has reached its stop or first target. Wait for a new closed-candle setup.',
@@ -496,6 +520,7 @@ export function deriveTradePlan(
     watchReason: '',
     entry,
     stopLoss,
+    exitPrice: isBuy ? entry + risk : entry - risk,
     riskPoints: risk,
     targets: isBuy
       ? [entry + risk, entry + 2 * risk, entry + 3 * risk]

@@ -51,9 +51,21 @@
 .setupHeadline b { color: #dce6f0; font-size: 11px; }
 .setupHeadline small { color: var(--muted); font-size: 9px; line-height: 1.4; }
 .signalBadge { display: grid; place-items: center; min-width: 54px; min-height: 30px; border: 1px solid #456073; border-radius: 5px; background: #0a2433; color: #c1d2dd; font-size: 12px; }
+.tradeReadout { display: flex; flex-wrap: wrap; gap: 8px 16px; font-size: 10px; font-variant-numeric: tabular-nums; }
+.tradeReadout span { display: grid; gap: 3px; color: var(--muted); }
+.tradeReadout b { color: #dce6f0; font-size: 12px; }
+.levelContext { padding: 9px 12px; border-bottom: 1px solid var(--border); background: #021722; }
+.levelContext summary { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 16px; cursor: pointer; font-size: 10px; color: #9bbbd0; }
+.levelContext summary strong { color: #cbdde9; }
+.levelContext p { margin: 10px 0; color: var(--muted); font-size: 10px; line-height: 1.6; }
+.levelTableWrap { overflow-x: auto; max-height: 320px; }
+.levelTable { width: 100%; border-collapse: collapse; font-size: 10px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.levelTable th, .levelTable td { text-align: left; padding: 6px 9px; border-bottom: 1px solid var(--border); }
+.levelTable td small { display: block; color: var(--muted); font-size: 9px; margin-top: 3px; }
 .setupSummary[data-signal="buy"] .signalBadge { border-color: #00b67a88; background: #003c35; color: #00e3a0; }
 .setupSummary[data-signal="sell"] .signalBadge { border-color: #ff506588; background: #421b2a; color: #ff7180; }
 .setupSummary[data-signal="off"] .signalBadge { color: #8195a4; }
+.setupSummary[data-signal="watch"] .signalBadge { border-color: #efbc6b88; color: #efbc6b; background: #302713; }
 .setupLevels { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; margin: 10px 0; }
 .setupLevels > span { display: grid; gap: 5px; min-width: 0; padding: 8px; border: 1px solid #123044; border-radius: 5px; background: #00101a; }
 .setupLevels small { color: #8195a4; font-size: 8px; }

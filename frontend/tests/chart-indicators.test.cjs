@@ -36,11 +36,11 @@ const plain = value => JSON.parse(JSON.stringify(value));
 test('balanced startup preset enables complementary indicators and renders only their calculated series', () => {
   const settings = TEMPLATES['Confluence focus'];
   assert.deepEqual(Object.keys(settings).filter(id => settings[id]).sort(),
-    ['ema9', 'ema20', 'ema50', 'ema200', 'volume', 'vwap', 'cpr', 'rsi'].sort());
+    ['ema9', 'ema20', 'ema50', 'ema100', 'ema200', 'volume', 'vwap', 'cpr', 'rsi'].sort());
   const input = candles(250);
   const engine = createIndicatorEngine();
   const first = engine.calculate(input, settings, true);
-  assert.deepEqual(Object.keys(first.series).sort(), ['ema9', 'ema20', 'ema50', 'ema200', 'vwap', 'rsi'].sort());
+  assert.deepEqual(Object.keys(first.series).sort(), ['ema9', 'ema20', 'ema50', 'ema100', 'ema200', 'vwap', 'rsi'].sort());
   for (const id of Object.keys(first.series)) assert.ok(Number.isFinite(first.series[id].at(-1).value), id);
   const initialValues = Object.fromEntries(Object.entries(first.series).map(([id, values]) => [id, values.at(-1).value]));
   const revised = input.slice();

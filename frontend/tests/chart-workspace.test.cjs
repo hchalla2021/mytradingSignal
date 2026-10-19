@@ -11,7 +11,7 @@ const compiled = ts.transpileModule(source, {
 }).outputText;
 const context = { exports: {} };
 vm.runInNewContext(compiled, context);
-const { candleTime, workspaceCandles, mergeChartHistory, updatePeriodCandle, timeframeLabel, ema, rsi, macd, vwap, dailyLevels, deriveTradePlan, deriveConditionalTradePlan, institutionalContext, isCashSession, isIndicatorSettings, DEFAULT_INDICATORS } = context.exports;
+const { candleTime, workspaceCandles, mergeChartHistory, updatePeriodCandle, timeframeLabel, ema, rsi, macd, vwap, dailyLevels, deriveTradePlan, deriveConditionalTradePlan, selectTradeOverlay, institutionalContext, isCashSession, isIndicatorSettings, DEFAULT_INDICATORS } = context.exports;
 const base = Date.parse('2026-10-15T09:15:00+05:30');
 const candle = (index, close = 100, volume = 10) => ({
   t: new Date(base + index * 300000).toISOString(),
@@ -248,6 +248,43 @@ test('advance price-action mode proposes symmetric conditional entry, exit and s
   }
 });
 
+test('live overlay shows cash-index watch prices without promoting missing-volume setups to confirmed trades', () => {
+  for (const sell of [false, true]) {
+    const { candles, options } = advanceFixture(sell);
+    const confirmed = deriveTradePlan(candles, {
+      levels: { previousSession: { date: '2026-10-15', high: 110, low: 90, close: 100 } },
+    }, 5, { ...options, minConfluences: 5, minVolumeRatio: 1.2 });
+    const watch = deriveConditionalTradePlan(candles, 5, options);
+    const overlay = selectTradeOverlay(confirmed, watch, 'live');
+    assert.equal(confirmed.direction, 'WAIT');
+    assert.equal(overlay.direction, sell ? 'SELL' : 'BUY');
+    assert.equal(overlay.conditional, true);
+    assert.ok(overlay.entry && overlay.exitPrice && overlay.stopLoss);
+    assert.match(overlay.watchReason, /NO TRADE confirmed/);
+    assert.equal(selectTradeOverlay(confirmed, watch, 'confirmed').direction, 'WAIT');
+    assert.equal(selectTradeOverlay(confirmed, watch, 'conditional'), watch);
+  }
+});
+
+test('live overlay prefers confirmed trades and hides watch prices on stale or invalid data', () => {
+  const { candles, snapshot, nowMs } = confirmedBreakoutFixture();
+  const confirmed = deriveTradePlan(candles, snapshot, 5, {
+    live: true, minConfluences: 5, minVolumeRatio: 1.2, nowMs,
+  });
+  const fixture = advanceFixture();
+  const watch = deriveConditionalTradePlan(fixture.candles, 5, fixture.options);
+  assert.equal(selectTradeOverlay(confirmed, watch, 'live'), confirmed);
+  const staleConfirmed = deriveTradePlan(candles, snapshot, 5, {
+    live: false, minConfluences: 5, minVolumeRatio: 1.2, nowMs,
+  });
+  const staleWatch = deriveConditionalTradePlan(fixture.candles, 5, { ...fixture.options, live: false });
+  const hidden = selectTradeOverlay(staleConfirmed, staleWatch, 'live');
+  assert.equal(hidden.direction, 'WAIT');
+  assert.equal(hidden.entry, undefined);
+  assert.equal(hidden.exitPrice, undefined);
+  assert.equal(hidden.stopLoss, undefined);
+});
+
 test('advance mode withdraws after an intrabar trigger or stop touch, even if price returns', () => {
   for (const sell of [false, true]) {
     const { candles, options } = advanceFixture(sell);
@@ -397,6 +434,55 @@ test('missing index volume never produces a VWAP-confirmed entry', () => {
   assert.match(plan.watchReason, /volume unavailable/);
 });
 
+test('relative volume is mandatory even when the other five confirmations align', () => {
+  const { candles, snapshot, nowMs } = confirmedBreakoutFixture();
+  const plan = deriveTradePlan(candles.map(bar => ({ ...bar, v: 100 })), snapshot, 5, {
+    live: true, minConfluences: 4, minVolumeRatio: 1.2, nowMs,
+  });
+  assert.equal(plan.direction, 'WAIT');
+  assert.equal(plan.entry, undefined);
+  assert.match(plan.watchReason, /relative-volume/);
+});
+
+test('nearby resistance blocks an otherwise confirmed BUY when reward room is below 1R', () => {
+  const { candles, snapshot, nowMs } = confirmedBreakoutFixture();
+  snapshot.levels.resistance = [candles.at(-1).c + 0.2];
+  const plan = deriveTradePlan(candles, snapshot, 5, {
+    live: true, minConfluences: 5, minVolumeRatio: 1.2, nowMs,
+  });
+  assert.equal(plan.direction, 'WAIT');
+  assert.equal(plan.exitPrice, undefined);
+  assert.match(plan.watchReason, /support\/resistance/);
+});
+
+test('the breakout candle current-day high is not a pre-existing resistance barrier', () => {
+  const { candles, snapshot, nowMs } = confirmedBreakoutFixture();
+  snapshot.levels.cdh = candles.at(-1).h;
+  snapshot.levels.cdl = candles.at(-1).l;
+  const plan = deriveTradePlan(candles, snapshot, 5, {
+    live: true, minConfluences: 5, minVolumeRatio: 1.2, nowMs,
+  });
+  assert.equal(plan.direction, 'BUY');
+  assert.equal(plan.exitPrice, plan.targets[0]);
+});
+
+test('a recovered intrabar stop or target touch cannot resurrect a confirmed setup', () => {
+  const { candles, snapshot, nowMs } = confirmedBreakoutFixture();
+  const options = { live: true, minConfluences: 5, minVolumeRatio: 1.2, nowMs };
+  const original = deriveTradePlan(candles, snapshot, 5, options);
+  for (const stop of [true, false]) {
+    const forming = {
+      t: new Date(nowMs).toISOString(), o: original.entry, c: original.entry,
+      h: stop ? original.entry + 0.01 : original.targets[0],
+      l: stop ? original.stopLoss : original.entry - 0.01, v: 100,
+    };
+    const plan = deriveTradePlan([...candles, forming], snapshot, 5, { ...options, nowMs: nowMs + 10_000 });
+    assert.equal(plan.direction, 'WAIT');
+    assert.equal(plan.stopLoss, undefined);
+    assert.match(plan.watchReason, /Setup expired/);
+  }
+});
+
 test('institutional context validates source dates, freshness and finite reported flows', () => {
   const nowMs = Date.parse('2026-10-18T12:00:00+05:30');
   const snapshot = {
@@ -453,6 +539,11 @@ test('trade plan builds a symmetrical SELL setup after confirmed downside breakd
   near(plan.riskPoints, plan.stopLoss - plan.entry);
   plan.targets.forEach((target, index) => near((plan.entry - target) / plan.riskPoints, index + 1));
   assert.match(plan.invalidation, /close above/);
+  const obstructed = deriveTradePlan(candles, {
+    ...snapshot, levels: { ...snapshot.levels, support: [plan.entry - plan.riskPoints * 0.5] },
+  }, 5, { live: true, minConfluences: 5, minVolumeRatio: 1.2, nowMs: start + 70 * 300_000 });
+  assert.equal(obstructed.direction, 'WAIT');
+  assert.match(obstructed.watchReason, /support\/resistance/);
   for (const close of [plan.stopLoss, plan.targets[0]]) {
     const nowMs = start + 70 * 300_000;
     const forming = { t: new Date(nowMs).toISOString(), o: close, c: close, h: close + .1, l: close - .1, v: 100 };

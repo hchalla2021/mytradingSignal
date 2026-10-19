@@ -725,6 +725,9 @@ const MarketIntelligenceObservatory = memo(() => {
               🔭 OBSERVABILITY
             </span>
           </div>
+          <a href="#observatory-trade-chart" className="shrink-0 px-2.5 py-1.5 rounded-lg border border-violet-400/30 text-violet-200 text-[10px] font-bold">
+            Entry / exit chart
+          </a>
           <button onClick={refresh} disabled={loading}
             className="shrink-0 px-2.5 py-1.5 rounded-lg border border-violet-400/30 bg-violet-500/10 text-violet-300 text-[10px] font-bold hover:bg-violet-500/20 transition-all disabled:opacity-40">
             {loading ? '⏳' : '↺'} Refresh
