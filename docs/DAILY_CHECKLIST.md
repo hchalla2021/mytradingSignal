@@ -49,6 +49,34 @@ System auto-stops (no action needed)
 
 ## 🆘 If You Forget to Login
 
+### Production shows no candles or live feed
+
+Check these public endpoints independently:
+
+```bash
+curl -sS https://mydailytradesignals.com/api/market-status
+curl -sS https://mydailytradesignals.com/api/auth/validate
+curl -sS https://mydailytradesignals.com/api/system/health/feed
+curl -sS 'https://mydailytradesignals.com/api/chart-intelligence/history?symbol=NIFTY&interval=5'
+```
+
+- `LIVE` is the market schedule, not proof of a connected broker feed.
+- If token validation returns `valid: false` and history reports an expired
+  session, log in to Zerodha **on the production dashboard**. A working local
+  login/cache does not establish a production session.
+- Login updates both authentication services immediately. The scheduler resumes
+  during market hours; an already running feed reconnects on token rotation.
+  Click **Retry history** after login to reload a failed chart request.
+- In Docker, the saved `ZERODHA_ACCESS_TOKEN` in the mounted backend `.env`
+  takes precedence over the stale token injected at container creation. Other
+  configuration retains normal environment-variable precedence. The polling
+  watcher also detects external changes to the bind-mounted file.
+- Verify that feed `total_ticks` increases and `last_tick_seconds_ago` stays
+  recent. `/health` alone only proves the HTTP server is responding.
+- If a fresh production login still fails, inspect backend logs and the
+  production Kite API key/secret pairing and callback URL. Do not paste tokens
+  or credentials into logs or support messages.
+
 ### Old System (Before Fix) ❌
 ```
 9:00 AM: "reconnecting, reconnecting..."

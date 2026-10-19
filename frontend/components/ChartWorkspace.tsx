@@ -681,7 +681,7 @@ function ChartWorkspace({ marketData, institutionalData = null }: { marketData: 
           <button disabled title="The chart feed provides 3-minute and 5-minute candles, not 1-minute candles">1m</button>
           {([3, 5, 15, 30, 60, 'D', 'W', 'M'] as const).map(value => <button key={value} aria-pressed={timeframe === value} onClick={() => { setTimeframe(value); setRange('1D'); setDraft(null); setPreview(null); setBrowsingDate(''); setHistoryDate(''); }}>{timeframeLabel(value)}</button>)}
         </div>
-        <div className={styles.status} data-live={live}><i /><span>{browsingDate ? 'Historical view' : live ? 'Market Open' : !sessionOpen || source === 'MARKET_CLOSED' ? 'Market Closed' : data ? 'Cached Data' : 'Connecting'}<small>{browsingDate ? 'No live signals' : live ? 'Live' : data ? 'Last available session' : 'Waiting for feed'}</small></span></div>
+        <div className={styles.status} data-live={live}><i /><span>{browsingDate ? 'Historical view' : live ? 'Market Open' : !sessionOpen ? 'Market Closed' : data ? 'Cached Data' : 'Connecting'}<small>{browsingDate ? 'No live signals' : live ? 'Live' : data ? 'Last available session' : 'Waiting for feed'}</small></span></div>
         <div className={styles.actions}>
           <button className={styles.button} onClick={() => { setPanel('Indicators'); setControlsOpen(value => !value); }} aria-expanded={controlsOpen} aria-controls="chart-controls-content" title="Indicator controls"><LayoutTemplate size={14} /><span>Indicators & setup</span><ChevronDown size={11} /></button>
           <button className={styles.button} onClick={saveTemplate} title="Save current indicator template"><Save size={14} />Save</button>

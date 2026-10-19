@@ -64,6 +64,12 @@ test('history/live handoff deduplicates by timestamp and does not inject futures
   assert.equal(mergeChartHistory([historical], [next], null).length, 1);
 });
 
+test('chart does not mistake a cached closed-session snapshot for the current market schedule', () => {
+  const component = readFileSync(path.join(__dirname, '..', 'components', 'ChartWorkspace.tsx'), 'utf8');
+  assert.ok(component.includes("!sessionOpen ? 'Market Closed'"));
+  assert.ok(!component.includes("!sessionOpen || source === 'MARKET_CLOSED'"));
+});
+
 test('higher-timeframe controls have explicit labels and never masquerade as intraday bars', () => {
   assert.equal(timeframeLabel('D'), '1D');
   assert.equal(timeframeLabel('W'), '1W');

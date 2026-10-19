@@ -158,7 +158,7 @@ async def lifespan(app: FastAPI):
     diagnostics_module.set_market_feed_instance(market_feed)
 
     # Token watcher (file system monitor — instant)
-    token_observer = start_token_watcher(market_feed, auth_state_manager)
+    token_observer = start_token_watcher(market_feed, unified_auth)
 
     # ── Variables shared with shutdown ────────────────────────────────
     scheduler = None

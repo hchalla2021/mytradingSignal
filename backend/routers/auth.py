@@ -76,8 +76,11 @@ async def _persist_access_token(access_token: str) -> None:
     get_token_manager().force_recheck()
 
     from services.auth_state_machine import auth_state_manager
-    auth_state_manager.force_recheck()
-    logger.info("\U0001f4be Access token saved — file watcher will reconnect the feed")
+    auth_state_manager.update_token(access_token)
+
+    from services.unified_auth_service import unified_auth
+    await unified_auth.update_token(access_token)
+    logger.info("Access token saved and authentication services updated")
 
 
 @router.post("/auto-login")
@@ -149,6 +152,10 @@ async def validate_token():
             loop.run_in_executor(None, kite.profile),
             timeout=10.0
         )
+
+        from services.auth_state_machine import auth_state_manager
+        if get_settings().zerodha_access_token == current_settings.zerodha_access_token:
+            auth_state_manager.mark_api_success()
         
         return {
             "valid": True,
@@ -162,6 +169,9 @@ async def validate_token():
         logger.warning("Token validation failed")
         error_msg_lower = str(e).lower()
         if "tokenexception" in type(e).__name__.lower() or "expired" in error_msg_lower or "invalid" in error_msg_lower:
+            from services.auth_state_machine import auth_state_manager
+            if get_settings().zerodha_access_token == current_settings.zerodha_access_token:
+                auth_state_manager.mark_api_failure(e)
             return {
                 "valid": False,
                 "authenticated": False,
@@ -238,37 +248,7 @@ async def zerodha_callback(request_token: str = Query(...), status: str = Query(
         print(f"   User ID: {user_id}")
         print(f"   User Name: {user_name}")
         
-        # Save access token to .env file for persistence
-        env_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env")
-        update_env_file(env_path, "ZERODHA_ACCESS_TOKEN", access_token)
-        
-        # Clear settings cache to reload new token immediately
-        from config import get_settings
-        get_settings.cache_clear()
-        
-        # 🔥 CRITICAL: Clear global token manager cache
-        from services.global_token_manager import get_token_manager
-        token_manager = get_token_manager()
-        token_manager.force_recheck()
-        print("🔄 Global token manager cache cleared - will revalidate immediately")
-        
-        # 🔥 CRITICAL: Also update auth state manager
-        from services.auth_state_machine import auth_state_manager
-        auth_state_manager.force_recheck()
-        print("🔄 Auth state manager reset - will show as authenticated")
-        
-        # Verify token was saved correctly
-        reloaded_settings = get_settings()
-        saved_token = reloaded_settings.zerodha_access_token
-        
-        print(f"💾 Access token saved to .env file")
-        print(f"🔄 Settings cache cleared - all services will use new token")
-        print(f"✅ Verification: Token in memory matches saved token: {saved_token == access_token}")
-        if saved_token != access_token:
-            print(f"   ⚠️ WARNING: Token mismatch! Saved token does not match.")
-        
-        print(f"\n✅ TOKEN SAVED! File watcher will trigger automatic reconnection...")
-        print(f"   No backend restart needed - connection will resume automatically")
+        await _persist_access_token(access_token)
         
         print(f"\n🎉 AUTHENTICATION COMPLETE - Redirecting to dashboard...\n")
         

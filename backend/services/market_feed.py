@@ -1386,6 +1386,7 @@ class MarketFeedService:
             print("🔗 Connecting to Zerodha KiteTicker...")
             self.kws.connect(threaded=True)
             print("✅ Connection initiated (running in background)")
+            last_access_token = fresh.zerodha_access_token
             
             # Process tick queue in async loop
             last_refresh_time = datetime.now(IST)
@@ -1394,9 +1395,17 @@ class MarketFeedService:
             while self.running:
                 current_time = datetime.now(IST)
                 
-                # � Detect token refresh - check if auth state changed from "requires_login" to "authenticated"
                 current_auth_state = auth_state_manager.requires_login
-                if last_auth_state and not current_auth_state:
+                token_changed = False
+                if (current_time - last_token_check_time).total_seconds() >= 1:
+                    current_token = get_settings().zerodha_access_token
+                    token_changed = bool(current_token and current_token != last_access_token)
+                    if token_changed:
+                        last_access_token = current_token
+                        self._last_connection_attempt = None
+                        self._retry_delay = 5
+                    last_token_check_time = current_time
+                if token_changed or (last_auth_state and not current_auth_state):
                     print("\n" + "="*80)
                     print("🔐 AUTH STATE CHANGE DETECTED: User logged in!")
                     print("="*80)

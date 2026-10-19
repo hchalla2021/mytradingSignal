@@ -182,6 +182,8 @@ class UnifiedAuthService:
             return True
             
         except TokenException as e:
+            from services.auth_state_machine import auth_state_manager
+            auth_state_manager.mark_api_failure(e)
             print(f"❌ UNIFIED AUTH: Token invalid - {e}")
             self._status = AuthStatus.EXPIRED
             self._token = None
@@ -202,7 +204,6 @@ class UnifiedAuthService:
         """
         print(f"\n{'='*80}")
         print("🔄 UNIFIED AUTH: TOKEN UPDATE")
-        print(f"   New Token: {new_token[:20]}...")
         print(f"{'='*80}")
         
         # Clear settings cache

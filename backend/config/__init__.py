@@ -8,6 +8,7 @@ if sys.platform == "win32":
     sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
 from pydantic_settings import BaseSettings
+from dotenv import dotenv_values
 from pydantic import Field
 from functools import lru_cache
 from typing import Optional
@@ -305,7 +306,12 @@ class Settings(BaseSettings):
 
 @lru_cache()
 def get_settings() -> Settings:
-    """Get cached settings instance."""
+    """Get cached settings, preferring the persisted, refreshable broker token."""
+    # Docker env_file values are frozen at container creation. Only the token
+    # is mutable at runtime; other settings retain normal environment precedence.
+    token = dotenv_values(ENV_FILE).get("ZERODHA_ACCESS_TOKEN")
+    if token is not None:
+        return Settings(zerodha_access_token=token)
     return Settings()
 
 __all__ = ["Settings", "get_settings"]
