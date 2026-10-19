@@ -93,10 +93,42 @@ def aggregate_daily_candles(candles, interval):
     return list(periods.values())
 
 
+MARKET_OPEN = (9, 15)
+# Small buffer after 15:30 so Zerodha has published the final candle before we treat the day as settled.
+MARKET_SETTLED = (15, 32)
+
+
+def next_market_open(moment):
+    """Next 09:15 IST on a weekday strictly after `moment` (exchange holidays are not modelled)."""
+    moment = moment.astimezone(IST)
+    candidate = moment.replace(hour=MARKET_OPEN[0], minute=MARKET_OPEN[1], second=0, microsecond=0)
+    if candidate <= moment:
+        candidate += timedelta(days=1)
+    while candidate.weekday() >= 5:
+        candidate += timedelta(days=1)
+    return candidate
+
+
+def settled_snapshot(fetched, now):
+    """A snapshot taken while the market is shut stays valid until the next session opens."""
+    fetched = fetched.astimezone(IST)
+    settled = fetched.replace(hour=MARKET_SETTLED[0], minute=MARKET_SETTLED[1], second=0, microsecond=0)
+    opened = fetched.replace(hour=MARKET_OPEN[0], minute=MARKET_OPEN[1], second=0, microsecond=0)
+    closed = fetched.weekday() >= 5 or fetched >= settled or fetched < opened
+    return closed and now < next_market_open(fetched)
+
+
 class ChartHistoryService:
     def __init__(self, db_path=None):
         self.db_path = db_path or Path(__file__).resolve().parent.parent / "data" / "chart_history.sqlite3"
-        self._lock = asyncio.Lock()
+        # One lock per page so different symbols/intervals load concurrently; identical requests still coalesce.
+        self._locks = {}
+
+    def _lock_for(self, key):
+        lock = self._locks.get(key)
+        if lock is None:
+            lock = self._locks[key] = asyncio.Lock()
+        return lock
 
     @contextmanager
     def _connect(self):
@@ -113,16 +145,20 @@ class ChartHistoryService:
         finally:
             connection.close()
 
-    def _read(self, symbol, interval, start, end, mutable):
+    def _read(self, symbol, interval, start, end, mutable, now=None):
         with self._connect() as connection:
             row = connection.execute(
                 "SELECT fetched, payload FROM pages WHERE symbol=? AND interval=? AND start=? AND end=?",
                 (symbol, interval, start, end),
             ).fetchone()
-        finalized = row is not None and row[0] >= datetime.fromisoformat(end).timestamp()
-        if row and (time.time() - row[0] < 20 if mutable else finalized):
-            return json.loads(row[1])
-        return None
+        if row is None:
+            return None
+        if mutable:
+            now = now or datetime.now(IST)
+            fresh = now.timestamp() - row[0] < 20 or settled_snapshot(datetime.fromtimestamp(row[0], IST), now)
+        else:
+            fresh = row[0] >= datetime.fromisoformat(end).timestamp()
+        return json.loads(row[1]) if fresh else None
 
     def _fetch(self, symbol, interval, start, end):
         interval = str(interval)
@@ -161,9 +197,9 @@ class ChartHistoryService:
         end_dt = IST.localize(datetime.combine(end_date, datetime.min.time())) - timedelta(seconds=1)
         end = end_dt.isoformat()
         mutable = end_date > now.date()
-        async with self._lock:
+        async with self._lock_for((symbol, interval, start, end)):
             try:
-                candles = await asyncio.to_thread(self._read, symbol, interval, start, end, mutable)
+                candles = await asyncio.to_thread(self._read, symbol, interval, start, end, mutable, now)
                 cached = candles is not None
                 if candles is None:
                     candles = await asyncio.to_thread(self._fetch, symbol, interval, start, end)
@@ -172,9 +208,10 @@ class ChartHistoryService:
                     else max(earliest, start_date - timedelta(days=62))
                 )
                 context_start = IST.localize(datetime.combine(context_date, datetime.min.time())).isoformat()
-                daily = await asyncio.to_thread(self._read, symbol, "D", context_start, end, mutable)
-                if daily is None:
-                    daily = await asyncio.to_thread(self._fetch, symbol, "D", context_start, end)
+                async with self._lock_for((symbol, "D", context_start, end)):
+                    daily = await asyncio.to_thread(self._read, symbol, "D", context_start, end, mutable, now)
+                    if daily is None:
+                        daily = await asyncio.to_thread(self._fetch, symbol, "D", context_start, end)
             except ChartHistoryUnavailable:
                 raise
             except TokenException as error:

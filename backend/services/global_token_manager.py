@@ -45,8 +45,8 @@ class GlobalTokenManager:
             kite = KiteConnect(api_key=self.settings.zerodha_api_key)
             kite.set_access_token(self.settings.zerodha_access_token)
             
-            # Lightweight API call
-            profile = kite.profile()
+            # Lightweight API call, kept off the event loop
+            profile = await asyncio.to_thread(kite.profile)
             
             self._is_valid = True
             self._user_info = profile

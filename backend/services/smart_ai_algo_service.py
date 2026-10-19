@@ -636,8 +636,10 @@ class SmartAIAlgoService:
             merged_result.update(last_exec)
 
         # Refresh live option quote for the AUTO-BUY PREVIEW panel (regardless of signal).
+        # Broker quote + instrument scan are blocking; run them in a worker thread so the
+        # event loop keeps serving charts and websockets.
         try:
-            self._refresh_option_preview(symbol, tick, merged_result)
+            await asyncio.to_thread(self._refresh_option_preview, symbol, tick, merged_result)
         except Exception as prev_exc:
             logger.debug("Option preview refresh failed for %s: %s", symbol, prev_exc)
 

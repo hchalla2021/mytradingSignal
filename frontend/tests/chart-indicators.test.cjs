@@ -22,7 +22,7 @@ const workspace = load('chart-workspace');
 const { createIndicatorEngine, createPivotEngine, calculatePivotSeries, autoPivotAnchor, pivotValues, segmentedLine, indicatorLineTitle } =
   load('chart-indicators', { './chart-workspace': workspace });
 const { DEFAULT_INDICATORS, TEMPLATES, candleTime, restoreIndicatorSettings } = workspace;
-const all = { ...DEFAULT_INDICATORS, emaCross: true };
+const all = { ...DEFAULT_INDICATORS, emaCross: true, macd: true, pivots: true };
 const base = Date.parse('2026-10-01T09:15:00+05:30');
 const candle = (index, close = 100, volume = 10) => ({
   t: new Date(base + index * 300000).toISOString(),
@@ -36,18 +36,18 @@ const plain = value => JSON.parse(JSON.stringify(value));
 test('balanced startup preset enables complementary indicators and renders only their calculated series', () => {
   const settings = TEMPLATES['Confluence focus'];
   assert.deepEqual(Object.keys(settings).filter(id => settings[id]).sort(),
-    ['ema9', 'ema20', 'ema50', 'ema100', 'ema200', 'volume', 'vwap', 'cpr', 'rsi'].sort());
+    ['ema9', 'ema20', 'ema50', 'ema100', 'ema200', 'supertrend', 'camarilla', 'volume', 'vwap', 'cpr', 'rsi', 'atr'].sort());
   const input = candles(250);
   const engine = createIndicatorEngine();
   const first = engine.calculate(input, settings, true);
-  assert.deepEqual(Object.keys(first.series).sort(), ['ema9', 'ema20', 'ema50', 'ema100', 'ema200', 'vwap', 'rsi'].sort());
-  for (const id of Object.keys(first.series)) assert.ok(Number.isFinite(first.series[id].at(-1).value), id);
+  assert.deepEqual(Object.keys(first.series).sort(), ['ema9', 'ema20', 'ema50', 'ema100', 'ema200', 'vwap', 'rsi', 'atr', 'supertrendUp', 'supertrendDown'].sort());
+  for (const id of Object.keys(first.series).filter(id => !id.startsWith('supertrend'))) assert.ok(Number.isFinite(first.series[id].at(-1).value), id);
   const initialValues = Object.fromEntries(Object.entries(first.series).map(([id, values]) => [id, values.at(-1).value]));
   const revised = input.slice();
   revised[249] = { ...input[249], c: input[249].c + 1, h: input[249].h + 1 };
   const live = engine.calculate(revised, settings, true);
   assert.equal(live.processedBars, 1);
-  for (const id of Object.keys(live.series)) assert.notEqual(live.series[id].at(-1).value, initialValues[id], id);
+  for (const id of ['ema9', 'ema20', 'ema50', 'ema100', 'ema200', 'vwap', 'rsi']) assert.notEqual(live.series[id].at(-1).value, initialValues[id], id);
   const noVolume = createIndicatorEngine().calculate(input.map(bar => ({ ...bar, v: 0 })), settings, true);
   assert.equal(defined(noVolume.series.vwap).length, 0);
   assert.equal(defined(createIndicatorEngine().calculate(input.slice(0, 199), settings, true).series.ema200).length, 0);

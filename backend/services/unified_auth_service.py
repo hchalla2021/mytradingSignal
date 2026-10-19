@@ -172,7 +172,8 @@ class UnifiedAuthService:
             kite.set_access_token(self._token)
             
             # Quick profile check
-            profile = kite.profile()
+            # Network call runs off the event loop so a slow broker never stalls other requests.
+            profile = await asyncio.to_thread(kite.profile)
             
             self._status = AuthStatus.VALID
             self._user_info = profile

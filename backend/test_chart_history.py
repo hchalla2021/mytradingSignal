@@ -123,6 +123,37 @@ class HistoryPagingTests(unittest.IsolatedAsyncioTestCase):
             )
         self.assertIsNone(self.service._read("NIFTY", 5, start, end, False))
 
+    async def test_latest_page_fetched_after_close_is_reused_until_next_open(self):
+        start, end = "2026-10-05T00:00:00+05:30", "2026-10-19T23:59:59+05:30"
+        def store(fetched):
+            with self.service._connect() as connection:
+                connection.execute("INSERT OR REPLACE INTO pages VALUES (?, ?, ?, ?, ?, ?)",
+                                   ("NIFTY", "5", start, end, fetched.timestamp(), "[1]"))
+        at = lambda *args: IST.localize(datetime(2026, 10, *args))
+        store(at(19, 15, 40))  # Monday after close
+        self.assertEqual(self.service._read("NIFTY", "5", start, end, True, at(19, 22, 30)), [1])
+        self.assertEqual(self.service._read("NIFTY", "5", start, end, True, at(20, 9, 14)), [1])
+        self.assertIsNone(self.service._read("NIFTY", "5", start, end, True, at(20, 9, 16)))
+        store(at(19, 11, 0))  # During market hours: 20s freshness only
+        self.assertEqual(self.service._read("NIFTY", "5", start, end, True, at(19, 11, 0, 10)), [1])
+        self.assertIsNone(self.service._read("NIFTY", "5", start, end, True, at(19, 11, 1)))
+        store(at(17, 12, 0))  # Saturday snapshot lasts until Monday open
+        self.assertEqual(self.service._read("NIFTY", "5", start, end, True, at(19, 9, 0)), [1])
+
+    async def test_different_symbols_load_concurrently(self):
+        import asyncio, threading
+        barrier = threading.Barrier(2, timeout=5)
+        def fetch(symbol, interval, start, end):
+            if interval != "D":
+                barrier.wait()  # deadlocks (BrokenBarrierError) if requests were serialized
+            return []
+        with patch.object(self.service, "_fetch", side_effect=fetch):
+            pages = await asyncio.gather(
+                self.service.page("BANKNIFTY", 5, date(2024, 10, 15), self.now),
+                self.service.page("SENSEX", 5, date(2024, 10, 15), self.now),
+            )
+        self.assertEqual(len(pages), 2)
+
     async def test_higher_timeframe_page_cursors_align_without_split_periods(self):
         for interval in ("D", "W", "M"):
             with patch.object(self.service, "_fetch", return_value=[]) as fetch:

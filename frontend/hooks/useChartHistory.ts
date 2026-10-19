@@ -22,7 +22,8 @@ interface HistoryState {
   jumpRevision: number;
 }
 
-const pageCache = createHistoryPageCache<HistoryPage>();
+// 3 indices × 8 timeframes stay warm, plus room for older pages.
+const pageCache = createHistoryPageCache<HistoryPage>(36);
 const contextCache = createHistoryPageCache<HistoryPage>(6);
 const pageKey = (symbol: ChartSymbol, timeframe: Timeframe, before?: string) =>
   `${symbol}:${timeframe}:${before ?? `latest:${sessionDate(Date.now() / 1000)}`}`;

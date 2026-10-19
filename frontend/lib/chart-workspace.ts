@@ -80,26 +80,23 @@ export const INDICATORS: { id: Indicator; label: string; color: string; group: s
   { id: 'ema100', label: 'EMA 100 close 0', color: '#ab47db', group: 'Trend & Moving Averages' },
   { id: 'ema200', label: 'EMA 200', color: '#ed277b', group: 'Trend & Moving Averages' },
   { id: 'supertrend', label: 'Supertrend 10 2', color: '#00bba5', group: 'Trend & Moving Averages' },
-  { id: 'emaCross', label: 'EMA Cross 13 21', color: '#e2b74d', group: 'Trend & Moving Averages' },
   { id: 'volume', label: 'Volume (Bars)', color: '#00b9a4', group: 'Volume & Price' },
   { id: 'vwap', label: 'VWAP hlc3 Session', color: '#ffc45c', group: 'Volume & Price' },
   { id: 'camarilla', label: 'Pivots Camarilla Auto 15', color: '#e9b85d', group: 'Pivots & CPR' },
-  { id: 'pivots', label: 'Pivots Traditional Auto 15', color: '#6c99eb', group: 'Pivots & CPR' },
   { id: 'cpr', label: 'CPR (TC, Pivot, BC)', color: '#ef355c', group: 'Pivots & CPR' },
   { id: 'rsi', label: 'RSI (14)', color: '#c05bea', group: 'Momentum' },
-  { id: 'macd', label: 'MACD (12, 26, 9)', color: '#ef7900', group: 'Momentum' },
   { id: 'atr', label: 'ATR (14)', color: '#cc6979', group: 'Momentum' },
 ];
 
 export const DEFAULT_INDICATORS: IndicatorSettings = {
   ema9: true, ema20: true, ema50: true, ema100: true, ema200: true,
   supertrend: true, emaCross: false, camarilla: true,
-  volume: true, vwap: true, pivots: true, cpr: true, rsi: true, macd: true, atr: true,
+  volume: true, vwap: true, pivots: false, cpr: true, rsi: true, macd: false, atr: true,
 };
 
 export const TEMPLATES: Record<string, IndicatorSettings> = {
   'Intraday Default': DEFAULT_INDICATORS,
-  'Confluence focus': { ...DEFAULT_INDICATORS, supertrend: false, camarilla: false, pivots: false, macd: false, atr: false },
+  'Confluence focus': { ...DEFAULT_INDICATORS, pivots: false, macd: false },
   'Image Layout': { ...DEFAULT_INDICATORS, pivots: false, volume: false, macd: false },
   Scalping: { ...DEFAULT_INDICATORS, ema50: false, pivots: false, cpr: false, macd: false },
   Breakout: { ...DEFAULT_INDICATORS, ema9: false, ema20: false, macd: false },
@@ -543,7 +540,7 @@ export function restoreIndicatorSettings(value: unknown): IndicatorSettings | nu
   const added = new Set<Indicator>(['supertrend', 'emaCross', 'camarilla', 'atr']);
   if (!INDICATORS.every(({ id }) => id in value
     ? typeof Reflect.get(value, id) === 'boolean' : added.has(id))) return null;
-  return Object.fromEntries(INDICATORS.map(({ id }) => [
+  return { ...Object.fromEntries(INDICATORS.map(({ id }) => [
     id, id in value ? Reflect.get(value, id) : DEFAULT_INDICATORS[id],
-  ])) as IndicatorSettings;
+  ])), macd: false, pivots: false, emaCross: false } as IndicatorSettings;
 }

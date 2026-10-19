@@ -3,7 +3,7 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   createChart, ColorType, CrosshairMode, LineStyle, LineType, PriceScaleMode,
-  type IChartApi, type ISeriesApi, type IPriceLine, type UTCTimestamp, type LogicalRange, type MouseEventParams, type AutoscaleInfo,
+  type IChartApi, type ISeriesApi, type UTCTimestamp, type LogicalRange, type MouseEventParams, type AutoscaleInfo,
 } from 'lightweight-charts';
 import {
   Camera, Maximize, Minimize, Save, Search, Crosshair, TrendingUp,
@@ -15,8 +15,8 @@ import type { MarketData } from '@/hooks/useMarketSocket';
 import type { FIIDIISnapshot } from '@/hooks/useFIIDIIFlow';
 import {
   INDICATORS, TEMPLATES, candleTime, workspaceCandles,
-  restoreIndicatorSettings, deriveTradePlan, deriveConditionalTradePlan, selectTradeOverlay, institutionalContext, isCashSession, mergeChartHistory, sessionDate, updatePeriodCandle, timeframeLabel,
-  type ChartSymbol, type Timeframe, type IndicatorSettings, type TradeOverlayMode,
+  restoreIndicatorSettings, institutionalContext, isCashSession, mergeChartHistory, sessionDate, updatePeriodCandle, timeframeLabel,
+  type ChartSymbol, type Timeframe, type IndicatorSettings,
 } from '@/lib/chart-workspace';
 import {
   createIndicatorEngine, createPivotEngine, autoPivotAnchor, segmentedLine, indicatorLineTitle,
@@ -27,6 +27,8 @@ import { synchronizeCrosshair } from '@/lib/chart-crosshair';
 import { layoutTradeLabels } from '@/lib/chart-trade-labels';
 import { createLevelAnalysisEngine } from '@/lib/chart-level-analysis';
 import { createChartPaperAnalyzer } from '@/lib/chart-paper-trading';
+import { createRejectionEngine } from '@/lib/chart-rejection-engine';
+import { SignalLabelPrimitive, type ChartSignalLabel } from '@/lib/chart-signal-labels';
 import ChartPaperTrading, { usePaperSignalRecorder } from './ChartPaperTrading';
 import { useChartPaperTrading } from '@/hooks/useChartPaperTrading';
 import { chartPaperLevels, paperEventCandle, selectChartPaperTrade } from '@/lib/chart-paper-overlay';
@@ -47,6 +49,7 @@ type Range = '1D' | '5D' | 'All';
 interface ChartRuntime {
   charts: IChartApi[];
   candles: ISeriesApi<'Candlestick'>;
+  signalLabels: SignalLabelPrimitive;
   volume: ISeriesApi<'Histogram'>;
   overlays: Record<string, ISeriesApi<'Line'>>;
   rsi: ISeriesApi<'Line'>;
@@ -81,11 +84,8 @@ function ChartWorkspace({ marketData, institutionalData = null }: { marketData: 
   const [range, setRange] = useState<Range>('1D');
   const [fullscreen, setFullscreen] = useState(false);
   const [showTradePlan, setShowTradePlan] = useState(true);
-  const [showPaperLevels, setShowPaperLevels] = useState(true);
+  const [showPaperLevels, setShowPaperLevels] = useState(false);
   const [selectedPaperTradeId, setSelectedPaperTradeId] = useState<string | null>(null);
-  const [entryMode, setEntryMode] = useState<TradeOverlayMode | 'levels'>('levels');
-  const [minConfluences, setMinConfluences] = useState(5);
-  const [minVolumeRatio, setMinVolumeRatio] = useState(1.2);
   const [now, setNow] = useState(() => Date.now());
   const [historyDate, setHistoryDate] = useState('');
   const [browsingDate, setBrowsingDate] = useState('');
@@ -103,15 +103,31 @@ function ChartWorkspace({ marketData, institutionalData = null }: { marketData: 
   const pivotEngine = useRef(createPivotEngine());
   const levelEngine = useRef(createLevelAnalysisEngine());
   const paperAnalyzer = useRef(createChartPaperAnalyzer());
+  const rejectionEngine = useRef(createRejectionEngine());
   const previousCalculation = useRef<{ key: string; daily: Candle[]; trend?: string }>({ key: '', daily: [] });
   const loadOlderRef = useRef<() => void>(() => {});
   const historyGesture = useRef(false);
   const data = chartData[symbol];
   const history = useChartHistory(symbol, timeframe);
   useEffect(() => {
-    if (history.loading || history.error || ![3, 5].includes(Number(timeframe))) return;
-    const timer = setTimeout(() => { void prefetchChartHistory(symbol, timeframe === 3 ? 5 : 3); }, 300);
-    return () => clearTimeout(timer);
+    if (history.loading || history.error) return;
+    // After the visible chart is ready, warm every other timeframe and the other indices so switching is instant.
+    const others = SYMBOLS.map(item => item.id).filter(id => id !== symbol);
+    const frames = ([5, 3, 15, 30, 60, 'D', 'W', 'M'] as const).filter(frame => frame !== timeframe);
+    const jobs: [ChartSymbol, Timeframe][] = [
+      ...frames.map(frame => [symbol, frame] as [ChartSymbol, Timeframe]),
+      ...others.map(id => [id, timeframe] as [ChartSymbol, Timeframe]),
+    ];
+    let cancelled = false;
+    const timer = setTimeout(() => {
+      void (async () => {
+        for (const [id, frame] of jobs) {
+          if (cancelled) return;
+          await prefetchChartHistory(id, frame);
+        }
+      })();
+    }, 300);
+    return () => { cancelled = true; clearTimeout(timer); };
   }, [symbol, timeframe, history.loading, history.error]);
   const liveCandles = useMemo(() => workspaceCandles(data, timeframe), [data, timeframe]);
   const streamAge = data ? now - Date.parse(data.timestamp) : NaN;
@@ -159,19 +175,14 @@ function ChartWorkspace({ marketData, institutionalData = null }: { marketData: 
   const sessionOpen = isCashSession(now);
   const live = !browsingDate && freshStream && sessionOpen;
   const levelAnalysis = useMemo(() => levelEngine.current.analyze(candles, history.dailyCandles, timeframe, {
-    live, nowMs: now, latestPrice: data?.spot, minVolumeRatio,
-  }), [candles, history.dailyCandles, timeframe, live, now, data?.spot, minVolumeRatio]);
-  const conditionalPlan = useMemo(() => entryMode === 'levels' ? levelAnalysis.plan : deriveConditionalTradePlan(candles, timeframe, {
-    live, nowMs: now, dailyCandles: history.dailyCandles, latestPrice: data?.spot,
-  }), [entryMode, levelAnalysis.plan, candles, timeframe, live, now, history.dailyCandles, data?.spot]);
-  const confirmedPlan = useMemo(() => entryMode === 'levels' ? levelAnalysis.plan : deriveTradePlan(candles, browsingDate ? null : data, timeframe, {
-    live, minConfluences, minVolumeRatio, nowMs: now,
-  }), [entryMode, levelAnalysis.plan, candles, data, browsingDate, timeframe, live, minConfluences, minVolumeRatio, now]);
-  const tradePlan = useMemo(() => entryMode === 'levels' ? levelAnalysis.plan : selectTradeOverlay(confirmedPlan, conditionalPlan, entryMode),
-    [confirmedPlan, conditionalPlan, entryMode, levelAnalysis.plan]);
+    live, nowMs: now, latestPrice: data?.spot, minVolumeRatio: 1.2,
+  }), [candles, history.dailyCandles, timeframe, live, now, data?.spot]);
+  const rejection = useMemo(() => !history.loading
+    ? rejectionEngine.current.analyze(candles, history.dailyCandles, timeframe, { live, nowMs: now, early: true }) : null,
+  [history.loading, candles, history.dailyCandles, timeframe, live, now]);
   const paperFrame = useMemo(() => live && !history.loading && !history.error
-    ? paperAnalyzer.current.analyze(symbol, candles, history.dailyCandles, timeframe, now, tradePlan) : null,
-    [live, history.loading, history.error, symbol, candles, history.dailyCandles, timeframe, now, tradePlan]);
+    ? paperAnalyzer.current.analyze(symbol, candles, history.dailyCandles, timeframe, now, levelAnalysis.plan) : null,
+    [live, history.loading, history.error, symbol, candles, history.dailyCandles, timeframe, now, levelAnalysis.plan]);
   const paperRecorderError = usePaperSignalRecorder(paperFrame);
   const paperDay = sessionDate(Math.floor(now / 1000));
   const paper = useChartPaperTrading(symbol, timeframe, paperDay);
@@ -181,22 +192,11 @@ function ChartWorkspace({ marketData, institutionalData = null }: { marketData: 
     if (selectedPaperTradeId && !paper.snapshot?.trades.some(trade => trade.id === selectedPaperTradeId))
       setSelectedPaperTradeId(null);
   }, [paper.snapshot?.trades, selectedPaperTradeId]);
-  const exitPrice = tradePlan.exitPrice ?? tradePlan.targets?.[0];
-  const rewardRisk = exitPrice !== undefined && tradePlan.entry !== undefined && tradePlan.riskPoints
-    ? Math.abs(exitPrice - tradePlan.entry) / tradePlan.riskPoints : undefined;
   const institutional = useMemo(() => institutionalContext(institutionalData, now), [institutionalData, now]);
 
   useEffect(() => {
-    const desktop = window.matchMedia('(min-width: 1024px)');
-    const update = () => setControlsOpen(desktop.matches);
-    update();
-    desktop.addEventListener('change', update);
-    return () => desktop.removeEventListener('change', update);
-  }, []);
-
-  useEffect(() => {
-    if (!controlsOpen || !window.matchMedia('(max-width: 1023px)').matches) return;
-    const frame = requestAnimationFrame(() => rootRef.current?.querySelector('aside')?.scrollIntoView({ block: 'start', behavior: 'smooth' }));
+    if (!controlsOpen) return;
+    const frame = requestAnimationFrame(() => rootRef.current?.querySelector('aside')?.scrollIntoView({ block: 'nearest', behavior: 'smooth' }));
     return () => cancelAnimationFrame(frame);
   }, [controlsOpen]);
 
@@ -239,7 +239,14 @@ function ChartWorkspace({ marketData, institutionalData = null }: { marketData: 
     const candleSeries = main.addCandlestickSeries({
       upColor: UP, downColor: DOWN, wickUpColor: UP, wickDownColor: DOWN,
       borderVisible: false, priceLineColor: UP,
+      // Pixel headroom so BUY/SELL/EXIT labels at the highest/lowest candles stay on screen.
+      autoscaleInfoProvider: (original: () => AutoscaleInfo | null) => {
+        const info = original();
+        return info && { ...info, margins: { above: 40, below: 40 } };
+      },
     });
+    const signalLabels = new SignalLabelPrimitive();
+    candleSeries.attachPrimitive(signalLabels);
     const overlays: ChartRuntime['overlays'] = {};
     const volume = charts[1].addHistogramSeries({ title: indicatorLineTitle('volume'), priceFormat: { type: 'volume' }, priceLineVisible: false });
     const rsiSeries = charts[2].addLineSeries({ title: indicatorLineTitle('rsi'), color: '#c05bea', lineWidth: 1, priceLineVisible: false, autoscaleInfoProvider: () => ({ priceRange: { minValue: 0, maxValue: 100 } }) });
@@ -248,7 +255,7 @@ function ChartWorkspace({ marketData, institutionalData = null }: { marketData: 
     const signal = charts[3].addLineSeries({ title: indicatorLineTitle('signal'), color: '#ff8800', lineWidth: 1, priceLineVisible: false });
     const histogram = charts[3].addHistogramSeries({ title: indicatorLineTitle('histogram'), priceLineVisible: false, lastValueVisible: true });
     const atr = charts[4].addLineSeries({ title: indicatorLineTitle('atr'), color: '#cc6979', lineWidth: 1, priceLineVisible: false });
-    runtime.current = { charts, candles: candleSeries, volume, overlays, rsi: rsiSeries, macd: macdSeries, signal, histogram, atr };
+    runtime.current = { charts, candles: candleSeries, signalLabels, volume, overlays, rsi: rsiSeries, macd: macdSeries, signal, histogram, atr };
     revision.current = '';
     let syncing = false;
     let frame = 0;
@@ -428,43 +435,6 @@ function ChartWorkspace({ marketData, institutionalData = null }: { marketData: 
     }));
     if (tailOnly && indicators.macd) bars.forEach(bar => api.histogram.update(bar));
     else api.histogram.setData(bars);
-    const crossFast = analytics.ema13;
-    const crossSlow = analytics.ema21;
-    if (api.overlays.ema13 && crossFast && crossSlow) {
-      const markers: Parameters<ISeriesApi<'Line'>['setMarkers']>[0] = [];
-      for (let index = 1; index < candles.length; index++) {
-        const fast = crossFast[index]?.value;
-        const slow = crossSlow[index]?.value;
-        const previousFast = crossFast[index - 1]?.value;
-        const previousSlow = crossSlow[index - 1]?.value;
-        if (fast === undefined || slow === undefined || previousFast === undefined || previousSlow === undefined) continue;
-        const up = fast > slow && previousFast <= previousSlow;
-        const down = fast < slow && previousFast >= previousSlow;
-        if (up || down) markers.push({
-          time: candleTime(candles[index]) as UTCTimestamp, position: up ? 'belowBar' : 'aboveBar',
-          color: up ? UP : DOWN, shape: up ? 'arrowUp' : 'arrowDown',
-          text: index === candles.length - 1 ? '13/21 forming' : '13/21',
-        });
-      }
-      api.overlays.ema13.setMarkers(markers.slice(-6));
-    }
-    if (api.overlays.supertrendUp && api.overlays.supertrendDown) {
-      for (const direction of ['Up', 'Down'] as const) {
-        const values = analytics[`supertrend${direction}`];
-        const markers: Parameters<ISeriesApi<'Line'>['setMarkers']>[0] = [];
-        for (let index = 10; index < candles.length; index++) {
-          if (values[index]?.value === undefined || values[index - 1]?.value !== undefined) continue;
-          markers.push({
-            time: candleTime(candles[index]) as UTCTimestamp,
-            position: direction === 'Up' ? 'belowBar' : 'aboveBar',
-            color: direction === 'Up' ? UP : DOWN,
-            shape: direction === 'Up' ? 'arrowUp' : 'arrowDown',
-            text: `ST ${direction.toLowerCase()}${index === candles.length - 1 ? ' forming' : ''}`,
-          });
-        }
-        api.overlays[`supertrend${direction}`].setMarkers(markers.slice(-3));
-      }
-    }
     previousCalculation.current = { key: historyKey, daily: history.dailyCandles, trend };
     const nextRevision = historyKey;
     if (candles.length && revision.current !== nextRevision) {
@@ -482,46 +452,46 @@ function ChartWorkspace({ marketData, institutionalData = null }: { marketData: 
   useEffect(() => {
     const api = runtime.current;
     if (!api) return;
-    const priceLines: IPriceLine[] = [];
-    if (showTradePlan && tradePlan.direction !== 'WAIT' && tradePlan.entry !== undefined &&
-        tradePlan.stopLoss !== undefined && exitPrice !== undefined) {
-      const buy = tradePlan.direction === 'BUY';
-      priceLines.push(api.candles.createPriceLine({
-        price: tradePlan.entry, title: '', color: buy ? '#00d895' : '#38bdf8',
-        lineVisible: false, lineWidth: 2, lineStyle: LineStyle.Solid, axisLabelVisible: true,
-      }));
-      priceLines.push(api.candles.createPriceLine({
-        price: tradePlan.stopLoss, title: '', color: '#ff5065',
-        lineVisible: false, lineWidth: 1, lineStyle: LineStyle.Dashed, axisLabelVisible: true,
-      }));
-      priceLines.push(api.candles.createPriceLine({
-        price: exitPrice, title: '', color: '#c084fc',
-        lineVisible: false, lineWidth: 2, lineStyle: LineStyle.Dotted, axisLabelVisible: true,
-      }));
-      if (tradePlan.candleTime !== undefined) api.candles.setMarkers([{
-        time: tradePlan.candleTime as UTCTimestamp,
-        position: buy ? 'belowBar' : 'aboveBar',
-        shape: buy ? 'arrowUp' : 'arrowDown',
-        color: tradePlan.conditional ? '#efbc6b' : buy ? '#00d895' : '#ff5065',
-        text: `${tradePlan.conditional ? 'WATCH ' : ''}${tradePlan.direction}`,
-      }]);
-      const levels = [tradePlan.entry, tradePlan.stopLoss, exitPrice];
-      api.candles.applyOptions({ autoscaleInfoProvider: (original: () => AutoscaleInfo | null) => {
-        const info = original();
-        if (!info) return info;
-        return { ...info, priceRange: {
-          minValue: Math.min(info.priceRange.minValue, ...levels),
-          maxValue: Math.max(info.priceRange.maxValue, ...levels),
-        } };
-      } });
+    if (!rejection || !showTradePlan) { api.signalLabels.setData([], []); return; }
+    // Clean chart: BUY / SELL at entry and EXIT where the trade closed, each with its exact price.
+    const exact = (value: number) => value.toLocaleString('en-IN', { maximumFractionDigits: 2 });
+    const bars = candles.map(candle => ({ time: candleTime(candle), h: candle.h, l: candle.l }));
+    const byTime = new Map(bars.map(bar => [bar.time, bar]));
+    const labels: ChartSignalLabel[] = [];
+    const signals = rejection.active?.early ? [...rejection.signals, rejection.active] : rejection.signals;
+    for (const signal of signals) {
+      const buy = signal.side === 'BUY';
+      labels.push({
+        id: signal.id, time: signal.time, price: signal.entry, kind: signal.side, placement: buy ? 'below' : 'above',
+        text: `${signal.early ? 'EARLY ' : ''}${signal.side} ${exact(signal.entry)}`, early: signal.early,
+      });
+      const { exitTime, exitPrice, netPoints, resolved } = signal.outcome;
+      const exitBar = exitTime !== undefined ? byTime.get(exitTime) : undefined;
+      if (!resolved || exitBar === undefined || exitPrice === undefined) continue;
+      labels.push({
+        id: `${signal.id}:exit`, time: exitBar.time, price: exitPrice, kind: 'EXIT',
+        // Opposite side from the entry label so ENTRY and EXIT never share a spot.
+        placement: buy ? 'above' : 'below',
+        text: `EXIT ${exact(exitPrice)}`,
+        ...(netPoints !== undefined ? { detail: `${netPoints >= 0 ? '+' : ''}${netPoints.toFixed(1)} pts`, detailPositive: netPoints >= 0 } : {}),
+      });
     }
-    return () => {
-      priceLines.forEach(line => api.candles.removePriceLine(line));
-      api.candles.setMarkers([]);
-      api.candles.applyOptions({ autoscaleInfoProvider: undefined });
-    };
-  }, [showTradePlan,
-    tradePlan.direction, tradePlan.conditional, tradePlan.candleTime, tradePlan.entry, tradePlan.stopLoss, exitPrice]);
+    api.signalLabels.setData(labels, bars);
+  }, [rejection, showTradePlan, candles]);
+
+  const activeTrade = showTradePlan && rejection?.active ? rejection.active : null;
+  const activeLevels = activeTrade ? `${activeTrade.stopLoss}|${activeTrade.target1}|${activeTrade.target2}` : '';
+  useEffect(() => {
+    const api = runtime.current;
+    if (!api || !activeLevels) return;
+    const [stopLoss, target1, target2] = activeLevels.split('|').map(Number);
+    // Open trade only: where it exits (stop / targets) is visible before price gets there.
+    const lines = ([['SL', stopLoss, '#ff4d5e'], ['T1', target1, '#38d6b0'], ['T2', target2, '#c084fc']] as const)
+      .map(([title, value, color]) => api.candles.createPriceLine({
+        price: value, color, title, lineWidth: 1, lineStyle: LineStyle.Dashed, axisLabelVisible: true,
+      }));
+    return () => lines.forEach(line => api.candles.removePriceLine(line));
+  }, [activeLevels]);
 
   useEffect(() => {
     const api = runtime.current;
@@ -531,7 +501,8 @@ function ChartWorkspace({ marketData, institutionalData = null }: { marketData: 
       crosshair: { mode: magnet ? CrosshairMode.Magnet : CrosshairMode.Normal },
     }));
     api.charts[0].priceScale('right').applyOptions({ mode: logScale ? PriceScaleMode.Logarithmic : PriceScaleMode.Normal, autoScale });
-  }, [grid, logScale, autoScale, magnet, indicators.volume, indicators.rsi, indicators.macd]);
+    // Dragging the axis turns library auto-scale off silently; re-apply it whenever the instrument or timeframe changes.
+  }, [grid, logScale, autoScale, magnet, indicators.volume, indicators.rsi, indicators.macd, symbol, timeframe]);
 
   const changeSymbol = (next: ChartSymbol) => {
     setSymbol(next); setDraft(null); setPreview(null); setHoverTime(null); setBrowsingDate(''); setHistoryDate('');
@@ -658,39 +629,6 @@ function ChartWorkspace({ marketData, institutionalData = null }: { marketData: 
     if (drawing.tool === 'rectangle') return <rect key={drawing.id} x={Math.min(start.x, end.x)} y={Math.min(start.y, end.y)} width={Math.max(1, Math.abs(end.x - start.x))} height={Math.max(1, Math.abs(end.y - start.y))} fill="#008cff22" stroke="#00b9ff" />;
     return <line key={drawing.id} x1={start.x} y1={start.y} x2={end.x} y2={end.y} stroke="#00b9ff" strokeWidth="1.5" />;
   };
-  const renderTradeLabels = () => {
-    const api = runtime.current;
-    const container = priceRef.current;
-    if (!showTradePlan || !live || tradePlan.direction === 'WAIT' ||
-        tradePlan.candleTime === undefined || !api || !container) return null;
-    const plotWidth = container.clientWidth - api.charts[0].priceScale('right').width() - api.charts[0].priceScale('left').width();
-    const x = api.charts[0].timeScale().timeToCoordinate(tradePlan.candleTime as UTCTimestamp);
-    if (x === null) return null;
-    const levels = [
-      { id: 'entry', value: tradePlan.entry, text: `${tradePlan.conditional ? 'WATCH ' : ''}${tradePlan.direction} ENTRY`, color: tradePlan.conditional ? '#efbc6b' : tradePlan.direction === 'BUY' ? '#00d895' : '#38bdf8' },
-      { id: 'exit', value: exitPrice, text: 'TARGET / EXIT', color: '#c084fc' },
-      { id: 'stop', value: tradePlan.stopLoss, text: 'STOP-LOSS', color: '#ff5065' },
-    ].flatMap(level => {
-      if (level.value === undefined) return [];
-      const y = api.candles.priceToCoordinate(level.value);
-      if (y === null) return [];
-      const text = `${level.text} ${price(level.value)}`;
-      return [{ ...level, text, x, y, width: text.length * 6.5 + 16 }];
-    });
-    return layoutTradeLabels(levels, plotWidth, container.clientHeight).map(label => {
-      const level = levels.find(level => level.id === label.id)!;
-      return <g role="img" aria-label={level.text} key={label.id}>
-        <title>{`${level.text} · ${timeLabel(tradePlan.candleTime!)} IST · ${tradePlan.conditional ? 'Conditional; candle-close confirmation required' : 'Confirmed closed-candle setup'}${label.onScreen ? '' : ' · Anchor outside visible chart'} · Suggested level, not an executed fill.`}</title>
-        {label.onScreen && <circle cx={label.anchorX} cy={label.anchorY} r="3" fill={level.color} />}
-        <line x1={label.anchorX} y1={label.anchorY} x2={plotWidth - 4} y2={label.anchorY}
-          stroke={level.color} strokeWidth={label.id === 'entry' ? 1.5 : 1} strokeDasharray={label.id === 'entry' && !tradePlan.conditional ? undefined : '5 4'} opacity="0.7" />
-        <line x1={label.anchorX} y1={label.anchorY} x2={label.x + 8} y2={label.y + label.height / 2} stroke={level.color} strokeWidth="1" strokeDasharray="3 3" />
-        <rect x={label.x} y={label.y} width={label.width} height={label.height} rx="4" fill="#00131f" stroke={level.color} />
-        <text x={label.x + 8} y={label.y + 15} fill={level.color} fontSize="11" fontFamily="Arial, sans-serif"
-          textLength={Math.min(level.text.length * 6.2, label.width - 16)} lengthAdjust="spacingAndGlyphs">{level.text}</text>
-      </g>;
-    });
-  };
   const renderCprBands = () => {
     const api = runtime.current;
     if (!api) return null;
@@ -791,40 +729,6 @@ function ChartWorkspace({ marketData, institutionalData = null }: { marketData: 
         {history.error && <div role="alert">{history.error} <button className={styles.button} onClick={history.retry}>Retry history</button></div>}
         {!history.loading && !history.error && history.candles.length === 0 && <span>No Zerodha candles in this date range. Try another date or load an older page.</span>}
       </div>
-      <div className={styles.setupSummary} data-signal={!showTradePlan ? 'off' : tradePlan.conditional ? 'watch' : tradePlan.direction.toLowerCase()} role="status" aria-live="polite">
-        <div className={styles.setupHeadline}>
-          <strong className={styles.signalBadge}>{!showTradePlan ? 'OFF' : tradePlan.direction === 'WAIT' || tradePlan.conditional ? 'NO TRADE' : tradePlan.direction}</strong>
-          <span><b>{selected.name} · {timeframeLabel(timeframe)} · {tradePlan.direction === 'WAIT' ? 'Confirmation insufficient' : tradePlan.conditional ? `WATCH ${tradePlan.direction} — not confirmed` : tradePlan.basis ?? 'Candle-close confirmed'}</b>
-            <small title={tradePlan.watchReason || tradePlan.confirmation.join(' · ')}>{tradePlan.conditional && tradePlan.direction !== 'WAIT'
-              ? `Watch levels only. Wait for a ${timeframeLabel(timeframe)} close ${tradePlan.direction === 'BUY' ? 'above' : 'below'} entry and recheck confluence.`
-              : tradePlan.watchReason || `${tradePlan.confirmation.join(' · ')}. Suggested levels; no execution tracked.`}</small></span>
-        </div>
-        {showTradePlan && tradePlan.direction !== 'WAIT' && <div className={styles.tradeReadout}>
-          <span>{tradePlan.conditional ? 'WATCH ENTRY' : 'ENTRY'} <b>{price(tradePlan.entry)}</b></span><span>TARGET / EXIT <b>{price(exitPrice)}</b></span><span>STOP-LOSS <b>{price(tradePlan.stopLoss)}</b></span>
-        </div>}
-      </div>
-      <details className={styles.levelContext}>
-        <summary>
-          <strong>Level intelligence · {levelAnalysis.trend}</strong>
-          <span>Support {levelAnalysis.support ? `${levelAnalysis.support.label} ${price(levelAnalysis.support.price)}` : '--'}</span>
-          <span>Resistance {levelAnalysis.resistance ? `${levelAnalysis.resistance.label} ${price(levelAnalysis.resistance.price)}` : '--'}</span>
-          <span>Volume: {levelAnalysis.volume}</span>
-        </summary>
-        <p>{levelAnalysis.reviewedBars.toLocaleString('en-IN')} completed bars in memory
-          {levelAnalysis.from && levelAnalysis.through ? ` · ${sessionDate(Date.parse(levelAnalysis.from) / 1000)} to ${sessionDate(Date.parse(levelAnalysis.through) / 1000)}` : ''}.
-          EMA reactions use the preceding candle&apos;s EMA. Daily pivots, Camarilla and CPR use prior-session OHLC; week/month ranges use loaded daily records only.
-          Observed holds and crosses describe past candles, not the probability of the next bounce.</p>
-        <div className={styles.levelTableWrap}>
-          <table className={styles.levelTable}>
-            <thead><tr><th>Level</th><th>Price</th><th>Location</th><th>Last close</th><th>Touches / holds / crosses</th></tr></thead>
-            <tbody>{levelAnalysis.levels.map(level => <tr key={level.id}>
-              <th scope="row">{level.label}</th><td>{price(level.price)}</td><td>{level.role}</td><td>{level.reaction}</td>
-              <td title={level.scope}>{level.touches} / {level.holds} / {level.crosses}<small>{level.scope}</small></td>
-            </tr>)}</tbody>
-          </table>
-          {!levelAnalysis.levels.length && <p>Loading enough completed candles to analyze EMA 200 and prior levels.</p>}
-        </div>
-      </details>
       <div className={styles.body} data-controls-open={controlsOpen}>
         <div className={styles.left} id="index-chart-panel" role="tabpanel" aria-labelledby={`chart-tab-${symbol}`}>
           <div className={styles.tools} role="toolbar" aria-label="Chart drawing tools">
@@ -849,7 +753,6 @@ function ChartWorkspace({ marketData, institutionalData = null }: { marketData: 
                 {indicators.cpr && renderCprBands()}
                 {showDrawings && selectedDrawings.map(renderDrawing)}
                 {draft && preview && tool !== 'cursor' && renderDrawing({ id: -1, tool, start: draft, end: preview })}
-                {renderTradeLabels()}
                 {showPaperLevels && selectedPaperTrade && (() => {
                   const api = runtime.current;
                   if (!api || typeof timeframe !== 'number') return null;
@@ -880,7 +783,7 @@ function ChartWorkspace({ marketData, institutionalData = null }: { marketData: 
             </div>
             <div className={styles.pane} style={{ display: volumeVisible ? 'block' : 'none' }}><span className={styles.paneLabel}>Index volume <span style={{ color: UP }}>{hovered?.v ? compact(hovered.v) : 'Not provided by feed'}</span></span><div ref={volumeRef} style={{ height: 64 }} /></div>
             <div className={styles.pane} style={{ display: indicators.rsi ? 'block' : 'none', background: '#140e2b' }}><span className={styles.paneLabel}>RSI (14) <span style={{ color: '#c05bea' }}>{price(indicatorValue('rsi'))}</span></span><div ref={rsiRef} style={{ height: 80 }} /></div>
-            <div className={styles.pane} style={{ display: indicators.macd ? 'block' : 'none' }}><span className={styles.paneLabel}>MACD &nbsp;12 26 9 <span style={{ color: '#008cff' }}>{price(indicatorValue('macd'))}</span><span style={{ color: '#ff8800' }}>{price(indicatorValue('signal'))}</span><span>{price(indicatorValue('histogram'))}</span></span><div ref={macdRef} style={{ height: 94 }} /></div>
+            <div className={styles.pane} style={{ display: 'none' }}><div ref={macdRef} style={{ height: 94 }} /></div>
             <div className={styles.pane} style={{ display: indicators.atr ? 'block' : 'none' }}><span className={styles.paneLabel}>ATR (14) <span style={{ color: '#cc6979' }}>{price(indicatorValue('atr'))}</span></span><div ref={atrRef} style={{ height: 80 }} /></div>
             <div className={styles.footer}>
               {(['1D', '5D', 'All'] as const).filter(choice => typeof timeframe === 'number' || choice !== '5D').map(choice => <button key={choice} className={range === choice ? styles.selectedRange : ''} onClick={() => { setRange(choice); applyRange(choice); }}>{typeof timeframe !== 'number' && choice === '1D' ? 'Recent' : choice}</button>)}
@@ -892,28 +795,28 @@ function ChartWorkspace({ marketData, institutionalData = null }: { marketData: 
         </div>
         <aside className={styles.sidebar} aria-label="Chart controls">
           <div className={styles.controlsHeading}><strong>Chart controls</strong>
-            <button className={styles.button} onClick={() => {
-              setControlsOpen(false);
-              priceRef.current?.parentElement?.scrollIntoView({ block: 'start', behavior: 'smooth' });
-            }}>Chart only</button>
+            <button className={styles.button} onClick={() => setControlsOpen(false)}>Close</button>
           </div>
-          <details className={styles.riskPanel} open>
-            <summary>Setup & risk <span>{showTradePlan ? tradePlan.direction === 'WAIT' ? 'NO TRADE' : tradePlan.conditional ? `WATCH ${tradePlan.direction} · NO TRADE confirmed` : tradePlan.direction : 'OFF'}</span></summary>
+          <details className={styles.riskPanel}>
+            <summary>Setup & risk <span>{!showTradePlan ? 'OFF' : rejection?.active ? `${rejection.active.side} open` : 'No open trade'}</span></summary>
             <div className={styles.setupLevels}>
               {([
-                ['ENTRY', tradePlan.entry, '#00d895'], ['EXIT · TARGET', exitPrice, '#c084fc'], ['STOP', tradePlan.stopLoss, '#ff5065'],
+                ['ENTRY', rejection?.active?.entry, '#00d895'], ['STOP', rejection?.active?.stopLoss, '#ff5065'],
+                ['TARGET 1', rejection?.active?.target1, '#38d6b0'], ['TARGET 2', rejection?.active?.target2, '#c084fc'],
               ] as const).map(([label, value, color]) => <span key={label}><small style={{ color }}>{label}</small><b>{showTradePlan ? price(value) : '--'}</b></span>)}
             </div>
             <div className={styles.setupNotes}>
-              <span>Risk: {showTradePlan ? price(tradePlan.riskPoints) : '--'} points · R:R {showTradePlan && rewardRisk !== undefined ? `1:${rewardRisk.toFixed(2)}` : '--'}</span>
-              <span>{tradePlan.conditional ? 'Conditional price-action plan; not a confirmed entry or a next-candle prediction.' :
-                entryMode === 'levels' ? `Level-close rules: ${tradePlan.score}/${tradePlan.requiredScore} minimum. Volume ${levelAnalysis.volume.toLowerCase()}.` :
-                  `Rule alignment: ${tradePlan.score}/6; not a calibrated win probability.`}</span>
-              <details><summary>Confirmation & exit conditions</summary>
-                <p>{tradePlan.confirmation.join(' · ') || 'No aligned confirmations yet.'}</p>
-                <p>{tradePlan.invalidation || tradePlan.watchReason}</p>
-                <p>Suggested levels only. No position or broker execution is tracked. Repeated updates revise this one setup, not additional entries.</p>
-              </details>
+              <span>Only strong rejections at support/resistance (EMA, CPR, Camarilla, pivots, swing high/low) confirmed by EMA 9/20, SuperTrend and RSI. BUY/SELL confirm on candle close; a dashed EARLY label shows a setup building on the live candle and can still change before close. One trade at a time; SL/T1/T2 lines show the open trade&apos;s exits. EXIT is the stop, target or session close (D/W/M hold across sessions). Rule-based signals, not a guaranteed prediction.</span>
+              {rejection && <details open><summary>Rejection replay · {rejection.signals.length} signals</summary>
+                <table className={styles.replayTable}><thead><tr><th>Set</th><th>Trades</th><th>Win%</th><th>Exp pts</th><th>PF</th><th>T1/T2</th></tr></thead>
+                  <tbody>{([['All', rejection.stats.all], ['In-sample 70%', rejection.stats.inSample], ['Out-of-sample 30%', rejection.stats.outOfSample]] as const).map(([name, stat]) => <tr key={name}>
+                    <td>{name}</td><td>{stat.trades}</td><td>{stat.winRate === null ? '--' : `${stat.winRate}%`}</td>
+                    <td>{stat.expectancy === null ? '--' : stat.expectancy.toFixed(1)}</td><td>{stat.profitFactor === null ? '--' : stat.profitFactor.toFixed(2)}</td>
+                    <td>{stat.t1Rate === null ? '--' : `${stat.t1Rate}/${stat.t2Rate ?? 0}%`}</td>
+                  </tr>)}</tbody></table>
+                <p>Replay on loaded candles: fill at next bar open + {rejection.costs.slippagePoints} pt slippage, {rejection.costs.feePoints} pt fees per trade, stop counted first when SL and target share a bar, 50% booked at T1 then stop to breakeven. Fixed rules; the 30% out-of-sample split is chronological. Past replay does not guarantee future results.</p>
+                <p>{rejection.vwapStatus}. Levels are index prices; futures/options execution prices differ.</p>
+              </details>}
             </div>
           </details>
           <details className={styles.institutionalPanel}>
@@ -934,7 +837,7 @@ function ChartWorkspace({ marketData, institutionalData = null }: { marketData: 
                 <button className={styles.button} onClick={() => chooseTemplate('Confluence focus')}>Use confluence focus</button>
               </div>
               <label className={styles.search}><Search size={14} /><input type="search" placeholder="Search indicators..." aria-label="Search indicators" value={query} onChange={event => setQuery(event.target.value)} /></label>
-              <div>
+              <div className={styles.groupGrid}>
                 {Array.from(new Set(INDICATORS.map(item => item.group))).map(group => {
                   const matches = INDICATORS.filter(item => item.group === group && `${item.label} ${group}`.toLowerCase().includes(query.toLowerCase()));
                   return matches.length > 0 && <details key={group} className={styles.group} open><summary>{group}</summary>{matches.map(item => (
@@ -970,36 +873,12 @@ function ChartWorkspace({ marketData, institutionalData = null }: { marketData: 
               <label>Auto price scale<input type="checkbox" checked={autoScale} onChange={event => setAutoScale(event.target.checked)} /></label>
               <label>Magnet crosshair<input type="checkbox" checked={magnet} onChange={event => setMagnet(event.target.checked)} /></label>
               <h4>Trade setup overlays</h4>
-              <label>Show entry / exit / stop<input type="checkbox" checked={showTradePlan} onChange={event => setShowTradePlan(event.target.checked)} /></label>
-              <label>Entry mode
-                <select aria-label="Entry mode" value={entryMode} onChange={event => setEntryMode(event.target.value === 'levels' ? 'levels' : event.target.value === 'confirmed' ? 'confirmed' : event.target.value === 'conditional' ? 'conditional' : 'live')}>
-                  <option value="levels">Level bounce / breakout + trend</option>
-                  <option value="live">Live watch + confirmed signals</option>
-                  <option value="conditional">Advance conditional price action</option>
-                  <option value="confirmed">Confirmed EMA / VWAP confluence</option>
-                </select>
-              </label>
-              {entryMode !== 'conditional' && <>
-                {entryMode !== 'levels' && <label>Minimum confluences
-                  <select value={minConfluences} onChange={event => setMinConfluences(Number(event.target.value))}>
-                    <option value={4}>4 of 6</option><option value={5}>5 of 6</option><option value={6}>6 of 6</option>
-                  </select>
-                </label>}
-                <label>Relative volume threshold
-                  <select value={minVolumeRatio} onChange={event => setMinVolumeRatio(Number(event.target.value))}>
-                    <option value={1.2}>1.2× average</option><option value={1.5}>1.5× average</option><option value={2}>2.0× average</option>
-                  </select>
-                </label>
-                <p>Confirmed-only mode requires fresh live data, a closed-candle breakout, aligned EMA 9/20/50 and VWAP, sufficient relative volume, and the selected confluence threshold. Nearby support/resistance must leave at least 1R room. EXIT uses the first 1R target; the calculation retains 2R/3R internally. Missing cash-index volume means NO TRADE in that mode, not assumed confirmation.</p>
-              </>}
-              <p>Level bounce / breakout + trend is the default. It requires a completed-candle reaction at an EMA, daily pivot/CPR/Camarilla, prior range or swing, EMA 9/20 trend, EMA 50 price location and RSI, bounded risk and at least 1R room. EMA 100/200 and prior week/month levels are included even if hidden visually. Genuine volume verifies or rejects the setup when available; missing volume is explicitly UNVERIFIED. Price must remain close to entry, and touched stops/targets withdraw it. No next-candle outcome is guaranteed.</p>
-              <p>Live watch + confirmed signals remains optional: show one confirmed setup when available, otherwise one amber WATCH setup. WATCH is not an entry signal. Only one entry, one target and one stop are displayed.</p>
-              <p>Advance mode uses completed candles, trend and swing structure, a buffered five-bar trigger and a structural stop capped at 2.5 ATR. EXIT is at most 2R, limited by available prior daily highs/lows (up to 20 completed sessions); setups with less than 1R room are rejected. Missing volume is not fabricated or treated as VWAP confirmation. Only ENTRY, EXIT and STOP are drawn for the plan. These are conditional analysis levels, not guaranteed outcomes.</p>
+              <label>Show BUY / SELL / EXIT markers<input type="checkbox" checked={showTradePlan} onChange={event => setShowTradePlan(event.target.checked)} /></label>
               <button className={styles.button} onClick={() => { setRange('1D'); applyRange('1D'); setAutoScale(true); }}>Reset chart view</button>
               <p>Times are displayed in IST. Historical candles use native Zerodha intervals, loaded in 14-day pages and cached on the server. Scroll left or jump to a date for the maximum history available from Zerodha; availability varies by instrument and interval. No missing candles are invented.</p>
               <p>1D uses Zerodha daily OHLCV. 1W groups daily candles from Monday; 1M groups calendar months. Higher-timeframe history loads one year of daily records per page. The current period is forming, not a confirmed closed candle. Intraday signals, session VWAP and daily CPR are disabled; Auto pivots use monthly/yearly anchors.</p>
               <p>Cash-index prices are never mixed with futures volume. Index volume and VWAP are unavailable when Zerodha provides no traded volume. Live updates retain the existing stream cadence; zero latency or exact tick-for-tick parity with broker charts cannot be guaranteed.</p>
-              <p>EMA, RSI and MACD need sufficient candle history. VWAP requires volume; cash-index feeds may not provide it. Daily pivots and CPR require previous-session OHLC.</p>
+              <p>EMA and RSI need sufficient candle history. VWAP requires volume; cash-index feeds may not provide it. Daily pivots and CPR require previous-session OHLC.</p>
             </div>}
           </div>
         </aside>
