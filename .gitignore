@@ -67,6 +67,7 @@ desktop.ini
 dump.rdb
 *.rdb
 backend/data/chart_history.sqlite3*
+backend/data/paper_trading/
 
 # Testing
 .pytest_cache/

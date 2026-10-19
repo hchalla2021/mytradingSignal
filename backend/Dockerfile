@@ -16,6 +16,7 @@ COPY . .
 
 # Create non-root user
 RUN addgroup --system appuser && adduser --system --ingroup appuser appuser
+RUN mkdir -p /app/data/paper_trading
 RUN chown -R appuser:appuser /app
 USER appuser
 

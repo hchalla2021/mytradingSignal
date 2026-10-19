@@ -26,6 +26,10 @@ import styles from './ChartWorkspace.module.css';
 import { synchronizeCrosshair } from '@/lib/chart-crosshair';
 import { layoutTradeLabels } from '@/lib/chart-trade-labels';
 import { createLevelAnalysisEngine } from '@/lib/chart-level-analysis';
+import { createChartPaperAnalyzer } from '@/lib/chart-paper-trading';
+import ChartPaperTrading, { usePaperSignalRecorder } from './ChartPaperTrading';
+import { useChartPaperTrading } from '@/hooks/useChartPaperTrading';
+import { chartPaperLevels, paperEventCandle, selectChartPaperTrade } from '@/lib/chart-paper-overlay';
 
 const SYMBOLS = [{ id: 'NIFTY', name: 'NIFTY 50', exchange: 'NSE' }, { id: 'BANKNIFTY', name: 'BANKNIFTY', exchange: 'NSE' }, { id: 'SENSEX', name: 'SENSEX', exchange: 'BSE' }] as const;
 const STORAGE_KEY = 'chartWorkspaceTemplate_v1';
@@ -55,6 +59,7 @@ interface ChartRuntime {
 function ChartWorkspace({ marketData, institutionalData = null }: { marketData: MarketData; institutionalData?: FIIDIISnapshot | null }) {
   const { chartData, isConnected } = useChartIntelligence();
   const [symbol, setSymbol] = useState<ChartSymbol>('NIFTY');
+  const [workspaceTab, setWorkspaceTab] = useState<'chart' | 'paper'>('chart');
   const [timeframe, setTimeframe] = useState<Timeframe>(5);
   const [indicators, setIndicators] = useState<IndicatorSettings>({ ...TEMPLATES['Confluence focus'] });
   const [controlsOpen, setControlsOpen] = useState(false);
@@ -76,6 +81,8 @@ function ChartWorkspace({ marketData, institutionalData = null }: { marketData: 
   const [range, setRange] = useState<Range>('1D');
   const [fullscreen, setFullscreen] = useState(false);
   const [showTradePlan, setShowTradePlan] = useState(true);
+  const [showPaperLevels, setShowPaperLevels] = useState(true);
+  const [selectedPaperTradeId, setSelectedPaperTradeId] = useState<string | null>(null);
   const [entryMode, setEntryMode] = useState<TradeOverlayMode | 'levels'>('levels');
   const [minConfluences, setMinConfluences] = useState(5);
   const [minVolumeRatio, setMinVolumeRatio] = useState(1.2);
@@ -95,6 +102,7 @@ function ChartWorkspace({ marketData, institutionalData = null }: { marketData: 
   const indicatorEngine = useRef(createIndicatorEngine());
   const pivotEngine = useRef(createPivotEngine());
   const levelEngine = useRef(createLevelAnalysisEngine());
+  const paperAnalyzer = useRef(createChartPaperAnalyzer());
   const previousCalculation = useRef<{ key: string; daily: Candle[]; trend?: string }>({ key: '', daily: [] });
   const loadOlderRef = useRef<() => void>(() => {});
   const historyGesture = useRef(false);
@@ -161,6 +169,18 @@ function ChartWorkspace({ marketData, institutionalData = null }: { marketData: 
   }), [entryMode, levelAnalysis.plan, candles, data, browsingDate, timeframe, live, minConfluences, minVolumeRatio, now]);
   const tradePlan = useMemo(() => entryMode === 'levels' ? levelAnalysis.plan : selectTradeOverlay(confirmedPlan, conditionalPlan, entryMode),
     [confirmedPlan, conditionalPlan, entryMode, levelAnalysis.plan]);
+  const paperFrame = useMemo(() => live && !history.loading && !history.error
+    ? paperAnalyzer.current.analyze(symbol, candles, history.dailyCandles, timeframe, now, tradePlan) : null,
+    [live, history.loading, history.error, symbol, candles, history.dailyCandles, timeframe, now, tradePlan]);
+  const paperRecorderError = usePaperSignalRecorder(paperFrame);
+  const paperDay = sessionDate(Math.floor(now / 1000));
+  const paper = useChartPaperTrading(symbol, timeframe, paperDay);
+  const selectedPaperTrade = useMemo(() => selectChartPaperTrade(paper.snapshot?.trades ?? [], selectedPaperTradeId),
+    [paper.snapshot?.trades, selectedPaperTradeId]);
+  useEffect(() => {
+    if (selectedPaperTradeId && !paper.snapshot?.trades.some(trade => trade.id === selectedPaperTradeId))
+      setSelectedPaperTradeId(null);
+  }, [paper.snapshot?.trades, selectedPaperTradeId]);
   const exitPrice = tradePlan.exitPrice ?? tradePlan.targets?.[0];
   const rewardRisk = exitPrice !== undefined && tradePlan.entry !== undefined && tradePlan.riskPoints
     ? Math.abs(exitPrice - tradePlan.entry) / tradePlan.riskPoints : undefined;
@@ -687,6 +707,33 @@ function ChartWorkspace({ marketData, institutionalData = null }: { marketData: 
   };
   return (
     <section id="observatory-trade-chart" ref={rootRef} className={styles.workspace} aria-label="Market Intelligence Observatory trade chart">
+      <div className="flex gap-2 p-3" role="tablist" aria-label="Observatory chart view">
+        <button id="observatory-chart-tab" role="tab" aria-selected={workspaceTab === 'chart'} aria-controls="observatory-chart-content"
+          className={styles.button} onClick={() => setWorkspaceTab('chart')}>Advanced Chart</button>
+        <button id="observatory-paper-tab" role="tab" aria-selected={workspaceTab === 'paper'} aria-controls="observatory-paper-content"
+          className={styles.button} onClick={() => setWorkspaceTab('paper')}>Automated Paper Trading</button>
+      </div>
+      {paperRecorderError && <p role="alert" className="p-3 text-red-400">{paperRecorderError}</p>}
+      <div id="observatory-paper-content" role="tabpanel" aria-labelledby="observatory-paper-tab" hidden={workspaceTab !== 'paper'}>
+        {workspaceTab === 'paper' && <ChartPaperTrading recorderError={paperRecorderError} />}
+      </div>
+      <div id="observatory-chart-content" role="tabpanel" aria-labelledby="observatory-chart-tab" hidden={workspaceTab !== 'chart'}>
+      <div className="flex flex-wrap items-center gap-2 px-3 pb-2 text-xs">
+        <label className="flex items-center gap-2"><input type="checkbox" checked={showPaperLevels}
+          onChange={event => setShowPaperLevels(event.target.checked)} />
+          Automated paper levels on chart</label>
+        {paper.error && <span className="text-red-400">{paper.error}</span>}
+        {!paper.error && paper.snapshot && <span>{paper.snapshot.health.running ? 'Paper engine running' : 'Paper engine not running'} ·
+          {paper.snapshot.pending_count} pending signals · {paper.snapshot.trades.length} recent paper trades</span>}
+        {paper.snapshot && paper.snapshot.trades.length > 0 && <select
+          aria-label="Select paper trade overlay" className={styles.button}
+          value={selectedPaperTrade?.id ?? ''} onChange={event => setSelectedPaperTradeId(event.target.value || null)}>
+          <option value="">Auto-select latest</option>
+          {paper.snapshot.trades.map(trade => <option key={trade.id} value={trade.id}>
+            {trade.strategy} | {trade.side} | {trade.exit_at ? trade.exit_reason : 'OPEN'}
+          </option>)}
+        </select>}
+      </div>
       <div className={styles.toolbar}>
         <div className={styles.symbols} role="tablist" aria-label="Chart index">
           {SYMBOLS.map(item => {
@@ -803,6 +850,31 @@ function ChartWorkspace({ marketData, institutionalData = null }: { marketData: 
                 {showDrawings && selectedDrawings.map(renderDrawing)}
                 {draft && preview && tool !== 'cursor' && renderDrawing({ id: -1, tool, start: draft, end: preview })}
                 {renderTradeLabels()}
+                {showPaperLevels && selectedPaperTrade && (() => {
+                  const api = runtime.current;
+                  if (!api || typeof timeframe !== 'number') return null;
+                  const plotWidth = (priceRef.current?.clientWidth ?? 0) - api.charts[0].priceScale('right').width() - api.charts[0].priceScale('left').width();
+                  if (!Number.isFinite(plotWidth) || plotWidth <= 0) return null;
+                  const labels = chartPaperLevels(selectedPaperTrade).flatMap(level => {
+                    const anchor = paperEventCandle(candles, level.at, timeframe);
+                    if (anchor === null) return [];
+                    const x = api.charts[0].timeScale().timeToCoordinate(anchor as UTCTimestamp);
+                    const y = api.candles.priceToCoordinate(level.value);
+                    if (x === null || y === null) return [];
+                    const text = `${level.text} ${price(level.value)}`;
+                    return [{ ...level, text, x, y, width: text.length * 6.5 + 16 }];
+                  });
+                  return layoutTradeLabels(labels, plotWidth, priceRef.current?.clientHeight ?? 0).map(label => {
+                    const level = labels.find(item => item.id === label.id)!;
+                    return <g role="img" aria-label={level.text} key={`paper-${label.id}`}>
+                      <line x1={label.anchorX} y1={label.anchorY} x2={plotWidth - 4} y2={label.anchorY}
+                        stroke={level.color} strokeWidth={label.id === 'entry' ? 2 : 1.5} strokeDasharray={label.id === 'entry' ? undefined : '5 4'} opacity="0.85" />
+                      <line x1={label.anchorX} y1={label.anchorY} x2={label.x + 8} y2={label.y + label.height / 2} stroke={level.color} strokeWidth="1" strokeDasharray="3 3" />
+                      <rect x={label.x} y={label.y} width={label.width} height={label.height} rx="4" fill="#00131f" stroke={level.color} />
+                      <text x={label.x + 8} y={label.y + 15} fill={level.color} fontSize="11" fontFamily="Arial, sans-serif">{level.text}</text>
+                    </g>;
+                  });
+                })()}
               </svg>
               {!candles.length && <div className={styles.empty} role="status"><strong>Waiting for {selected.name} candles</strong><p>No chart data is available yet. The chart will update automatically when the market feed connects.</p></div>}
             </div>
@@ -934,6 +1006,7 @@ function ChartWorkspace({ marketData, institutionalData = null }: { marketData: 
       </div>
       {notice && <div className={styles.notice} role="status">{notice}</div>}
       {tool !== 'cursor' && <div className={styles.notice}>{tool === 'horizontal' ? 'Click a price to place a horizontal line.' : draft ? 'Click the second point to finish. Use Crosshair to cancel.' : 'Click the first point on the chart. Use Crosshair to cancel.'}</div>}
+      </div>
     </section>
   );
 }

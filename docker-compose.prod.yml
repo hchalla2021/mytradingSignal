@@ -43,6 +43,7 @@ services:
       - ./backend/access_token.txt:/app/access_token.txt
       # Mount logs directory (optional)
       - ./backend/logs:/app/logs
+      - paper-trading-data:/app/data/paper_trading
     depends_on:
       redis:
         condition: service_healthy
@@ -86,3 +87,4 @@ networks:
 # Persistent Volumes
 volumes:
   redis-data:
+  paper-trading-data:

@@ -485,6 +485,8 @@ class MarketFeedService:
 
                 data = self._normalize_tick(tick)
                 symbol = data["symbol"]
+                from services.paper_trading import get_paper_trading_service
+                get_paper_trading_service().enqueue_tick(symbol, tick)
                 
                 # 🔥 CRITICAL: Notify watchdog of tick received
                 feed_watchdog.on_tick(symbol)
