@@ -33,24 +33,6 @@ const MarketCompassDashboard = dynamic(() => import('@/components/MarketCompassD
   loading: ModuleSkeleton,
 });
 
-const GlobalImpactRadar = dynamic(() => import('@/components/GlobalImpactRadar'), {
-  ssr: false,
-  loading: ModuleSkeleton,
-});
-
-const GlobalRiskPanel = dynamic(() => import('@/components/GlobalRiskPanel'), {
-  ssr: false,
-  loading: ModuleSkeleton,
-});
-
-const MarketIntelligenceObservatory = dynamic(
-  () => import('@/components/MarketIntelligenceObservatory'),
-  {
-    ssr: false,
-    loading: ModuleSkeleton,
-  }
-);
-
 const TradingSignalPanel = dynamic(() => import('@/components/TradingSignalPanel'), {
   ssr: false,
   loading: ModuleSkeleton,
@@ -118,50 +100,5 @@ export const TRADE_STATUS_PLUGINS: TradeStatusPluginDefinition[] = [
     render: ({ symbol }) => (
       <TradingSignalPanel symbol={symbol} accountSize={100000} refreshInterval={5000} />
     ),
-  },
-  {
-    id: 'global_impact',
-    title: 'Global Impact Radar',
-    subtitle: 'Macro and news-driven pressure mapping',
-    description: 'Maps global events to impact tiers and directional risk transfer.',
-    zone: 'global',
-    priority: 60,
-    minHeightPx: 360,
-    dense: true,
-    supportsSymbols: false,
-    supportsCollapse: true,
-    defaultEnabled: true,
-    health: 'healthy',
-    render: () => <GlobalImpactRadar />,
-  },
-  {
-    id: 'global_risk',
-    title: 'Global Risk Matrix',
-    subtitle: 'Cross-region volatility and risk-off pressure',
-    description: 'Real-time regional pulse for risk-on and risk-off transitions.',
-    zone: 'risk',
-    priority: 70,
-    minHeightPx: 340,
-    dense: true,
-    supportsSymbols: false,
-    supportsCollapse: true,
-    defaultEnabled: true,
-    health: 'healthy',
-    render: () => <GlobalRiskPanel />,
-  },
-  {
-    id: 'observatory',
-    title: 'Intelligence Observatory',
-    subtitle: 'Coverage, rankings, and strategy-level telemetry',
-    description: 'Tracks strategy outcomes and confidence quality across the session.',
-    zone: 'intel',
-    priority: 80,
-    minHeightPx: 460,
-    dense: false,
-    supportsSymbols: true,
-    supportsCollapse: true,
-    defaultEnabled: true,
-    health: 'healthy',
-    render: () => <MarketIntelligenceObservatory />,
   },
 ];

@@ -13,11 +13,35 @@ from typing import Optional
 
 from services.chart_intelligence_service import chart_intel_manager, get_chart_intelligence_service
 from services.chart_history_service import chart_history_service, ChartHistoryUnavailable
+from services.futures_chart_service import futures_chart_service
 
 logger = logging.getLogger(__name__)
 
 http_router = APIRouter()
 ws_router = APIRouter()
+
+
+@http_router.get("/chart-intelligence/futures/contracts")
+async def get_futures_contracts(symbol: str = "NIFTY"):
+    try:
+        return {"contracts": await futures_chart_service.contracts(symbol)}
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    except ChartHistoryUnavailable as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
+
+
+@http_router.get("/chart-intelligence/futures/history")
+async def get_futures_history(
+    token: int = Query(..., gt=0), symbol: str = "NIFTY",
+    interval: str = Query("5"), before: Optional[date] = None,
+):
+    try:
+        return await futures_chart_service.page(symbol, interval, token, before)
+    except ValueError as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+    except ChartHistoryUnavailable as error:
+        raise HTTPException(status_code=503, detail=str(error)) from error
 
 
 @http_router.get("/chart-intelligence/history")

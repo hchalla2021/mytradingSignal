@@ -83,6 +83,7 @@ from routers.candle_intelligence import http_router as candle_intel_http, ws_rou
 from routers.market_regime import http_router as regime_http, ws_router as regime_ws
 from routers.strike_intelligence import http_router as strike_intel_http, ws_router as strike_intel_ws
 from routers.chart_intelligence import http_router as chart_intel_http, ws_router as chart_intel_ws
+from routers.order_flow import http_router as order_flow_http, ws_router as order_flow_ws
 from routers.global_news import http_router as global_news_http, ws_router as global_news_ws
 from routers.observatory import http_router as observatory_http
 from routers.paper_trading import router as paper_trading_http
@@ -696,6 +697,8 @@ app.include_router(strike_intel_http, prefix="/api", tags=["Strike Intelligence"
 # 📈 Chart Intelligence
 app.include_router(chart_intel_ws,   prefix="/ws",  tags=["Chart Intelligence"])
 app.include_router(chart_intel_http, prefix="/api", tags=["Chart Intelligence"])
+app.include_router(order_flow_ws,   prefix="/ws",  tags=["Order Flow"])
+app.include_router(order_flow_http, prefix="/api", tags=["Order Flow"])
 
 # 📰 Global Impact Radar
 app.include_router(global_news_ws,   prefix="/ws",  tags=["Global Impact Radar"])

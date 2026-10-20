@@ -11,7 +11,7 @@ const compiled = ts.transpileModule(source, {
 }).outputText;
 const context = { exports: {} };
 vm.runInNewContext(compiled, context);
-const { candleTime, workspaceCandles, mergeChartHistory, updatePeriodCandle, timeframeLabel, ema, rsi, macd, vwap, dailyLevels, deriveTradePlan, deriveConditionalTradePlan, selectTradeOverlay, institutionalContext, isCashSession, isIndicatorSettings, DEFAULT_INDICATORS } = context.exports;
+const { candleTime, workspaceCandles, mergeChartHistory, updatePeriodCandle, timeframeLabel, ema, rsi, macd, vwap, dailyLevels, deriveTradePlan, deriveConditionalTradePlan, selectTradeOverlay, institutionalContext, isCashSession, stableLiveSession, isIndicatorSettings, DEFAULT_INDICATORS } = context.exports;
 const base = Date.parse('2026-10-15T09:15:00+05:30');
 const candle = (index, close = 100, volume = 10) => ({
   t: new Date(base + index * 300000).toISOString(),
@@ -553,4 +553,14 @@ test('trade plan builds a symmetrical SELL setup after confirmed downside breakd
     assert.equal(expired.direction, 'WAIT');
     assert.match(expired.watchReason, /Setup expired/);
   }
+});
+
+test('keeps today merged when the feed flips LIVE/CACHED so bars do not jump sideways', () => {
+  const live = [candle(0), candle(1)];
+  const nowMs = base + 3600000;
+  assert.equal(stableLiveSession(live, nowMs), '2026-10-15');
+  assert.equal(stableLiveSession(live, nowMs + 86400000), null);
+  assert.equal(stableLiveSession([], nowMs), null);
+  const history = [candle(-1)];
+  assert.equal(mergeChartHistory(history, live, stableLiveSession(live, nowMs)).length, 3);
 });

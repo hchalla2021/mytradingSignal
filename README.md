@@ -2,6 +2,69 @@
 
 Real-time trading dashboard for NIFTY, BANKNIFTY, and SENSEX with Zerodha Kite API integration.
 
+The Advanced Chart synchronizes visible pane ranges only when they differ and resizes canvases
+only when their actual dimensions change. Unchanged live OHLCV frames skip redundant candle writes;
+indicator tail updates start at the engine's first changed bar to avoid repeatedly resetting plotted data.
+
+### Futures Chart
+
+The Observatory's **Futures Chart** tab is separate from the cash-index chart and paper trading.
+Select NIFTY, BANKNIFTY, or SENSEX, then an expiry year and contract. Contracts come from
+Zerodha's NFO/BFO instrument master using actual exchange expiry dates, not estimated month-end dates.
+October/November/December 2026 and 2027 expiries appear only if currently listed by Zerodha;
+future candles and unavailable contracts are never invented. The nearest listed expiry is the default.
+
+Candles refresh every 20 seconds after each request while the tab is open (not tick-by-tick streaming).
+The chart plots EMA 9/20, session VWAP and traded volume from the **same selected contract**.
+EMA 9/20 use the existing SMA-seeded incremental engine and need 9/20 candles respectively.
+RVOL 20 is current candle volume divided by the average volume of the previous 20 candles,
+excluding the current bar. Intraday windows reset each IST session; daily windows span days.
+No ratio is shown before a full baseline or when baseline volume is zero. Forming RVOL is provisional.
+Volume bars at RVOL >= 2 are highlighted; green/red represents candle direction, not aggressor delta.
+True volume-at-price footprint and buyer/seller delta are explicitly unavailable: Zerodha historical
+OHLCV does not contain the trade-level aggressor data required to reconstruct them accurately.
+No candle-color or synthetic bid/ask estimates are presented as real footprint/delta.
+Unchanged history does not reset chart data; candle-tail revisions/appends use series updates,
+while historical corrections, contract switches, and interval changes rebuild the series.
+The futures endpoint skips unused daily-pivot context, making one broker history request per
+uncached page rather than two. Recently viewed contract/interval snapshots are retained in a
+bounded browser memory cache and shown immediately on return while refreshing; their original
+refresh timestamps are preserved so cached snapshots cannot masquerade as fresh data.
+Contract lists are cached for one hour within the IST date; Refresh / retry forces revalidation.
+After the selected futures chart loads, the nearest contracts for the other indices are warmed
+sequentially at the selected interval. Switching to a warm chart displays its snapshot immediately;
+foreground loads share any in-flight preload, and a fresh snapshot is not fetched twice.
+Warm-up failures are logged and remain retryable; snapshots never cross contract/index/interval keys.
+VWAP uses cumulative HLC3 times volume divided by cumulative volume, resetting each IST date.
+It is unavailable on daily charts or without volume.
+The latest history window is 14 days intraday or one year daily, limited by the contract's available history.
+Changing expiry never stitches contracts or mixes futures volume with cash-index prices.
+This tab does not generate paper orders.
+
+**VWAP-only entry/exit guidance:** a closed candle must cross its session VWAP or bounce/reject
+VWAP as support/resistance, close in the trade direction and directional half of its range,
+and have volume at least the average of the
+previous five same-session bars. No EMA/RSI/Supertrend confirmations are calculated for this strategy.
+Support bounces start above the prior VWAP, wick through both prior and current VWAP, and close
+back above both; resistance rejections use the symmetric below-to-above wick and close below both.
+Stops use the latest three-bar swing plus one actual contract tick; targets are 1R and 2R.
+Only one setup is tracked at a time, with no new setup whose candle closes at/after 15:10 IST.
+The chart always shows BUY/SELL entry, T1 50%, and EXIT labels directly on candles, without a signal checkbox or separate
+signal panels, entry/stop/target boxes, or horizontal guidance lines.
+These are hypothetical closed-OHLC replay levels, not executed trades: entry uses the next completed
+bar's open, T1 books half, and the remaining stop moves to breakeven starting the following bar.
+Stop takes priority when stop and target both occur in one candle; adverse stop gaps use the worse open.
+The position exits at session close (or the last observed candle if session-end data is missing).
+Fees and slippage are excluded. Polling delays both entries and exits; no guaranteed performance is implied.
+Current guidance is disabled on daily intervals, failed/stale refreshes, delayed candles, or outside
+the weekday IST trading session; historical labels remain explicitly replay-only.
+
+APIs: `GET /api/chart-intelligence/futures/contracts?symbol=NIFTY` and
+`GET /api/chart-intelligence/futures/history?symbol=NIFTY&token=<listed-token>&interval=5`.
+The history API also accepts `before=YYYY-MM-DD` for earlier pages.
+A valid Zerodha session and applicable exchange/historical-data permissions are required.
+Failures are shown explicitly; refresh and last-candle timestamps distinguish stale candles from fresh requests.
+
 ---
 
 ## 🚀 Quick Start
@@ -143,6 +206,43 @@ API: `POST /api/paper-trading/signals` (chart-only frame),
 `GET /api/paper-trading/events?trade_id=...`, `GET /api/paper-trading/report?day=YYYY-MM-DD`.
 The tab exports a consistent complete day JSON ledger/report including all trade
 events, and paginates without deleting older trades.
+
+---
+
+## Order Flow (Futures Chart + Advanced Chart)
+
+Drawn directly on the candles (no panels): only **big-player Buy Order Flow / Sell
+Order Flow** prints, at most 2 per session. A closed candle qualifies only when all of
+these hold (score >= 85):
+
+- a setup: stop-run reversal (sweeps the 10-bar extreme and closes back), absorption
+  wick (>= 55% of range) or an aggressive drive candle (body >= 65%, range >= 1.6x avg);
+- big participation: volume >= 2.5x the 20-bar average (range >= 2x when volume is absent);
+- a major level: PDH/PDL/PDC, day high/low, opening range, VWAP, EMA20/50 or a round
+  number (NIFTY 100, BANKNIFTY/SENSEX 500); crash/climax moves into the level add weight;
+- recorded tick flow (when available) must not disagree; opposing delta vetoes the print.
+
+Every print is then validated: entry at the close, stop beyond the candle extreme, and it
+must reach the minimum points (NIFTY 20, BANKNIFTY 50, SENSEX 60, or 0.8 ATR if larger)
+within 10 bars before the stop. Confirmed prints show `+N pts`; the newest unresolved
+print is a dashed "confirming" label; failed prints are hidden but still counted in the
+"Flow valid X/Y" figure next to the chart, so the hit rate is never overstated.
+FII/DII identity is not in any live feed: "big player" means volume and range anomalies
+at key levels, which is an estimate, not a guarantee.
+Labels never overlap: ENTRY/EXIT labels take priority, and on the futures chart labels
+stay above the volume bars. The
+heavier overlays (footprint, profile, POC/VAH/VAL, walls, delta strip, SL/T1/T2 plan)
+remain available via `OrderFlowPrimitive({ detail: true, ... })`.
+
+- `GET /api/order-flow/snapshot?symbol=NIFTY&interval=5m`
+- `GET /api/order-flow/replay?symbol=NIFTY&interval=5m` (paper replay, fees + slippage)
+- `WS /ws/order-flow?symbol=NIFTY&interval=5m`
+
+Limits (shown in the UI tooltip): the aggressor side is **estimated** (Lee-Ready on
+Kite ~1/s full-mode snapshots), only the near-month contract is recorded, the
+footprint exists only from when the backend started recording, confidence is a
+rule score rather than a probability, and nothing is ever executed — paper only.
+Restart the backend after updating so the order-flow router is loaded.
 
 ---
 

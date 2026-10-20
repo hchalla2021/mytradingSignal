@@ -169,7 +169,7 @@ class ChartHistoryService:
         client.set_access_token(settings.zerodha_access_token)
         rows = request_chart_candles(
             client,
-            TOKENS[symbol], datetime.fromisoformat(start), datetime.fromisoformat(end),
+            self._instrument_token(symbol), datetime.fromisoformat(start), datetime.fromisoformat(end),
             INTERVALS[interval], continuous=False,
         )
         candles = aggregate_daily_candles(normalize_candles(rows), interval)
@@ -180,10 +180,16 @@ class ChartHistoryService:
             )
         return candles
 
+    def _instrument_token(self, symbol):
+        return TOKENS[symbol]
+
     async def page(self, symbol, interval, before=None, now=None):
         interval = str(interval)
         if symbol not in TOKENS or interval not in INTERVALS:
             raise ValueError("Unsupported chart symbol or interval")
+        return await self._page(symbol, interval, before, now)
+
+    async def _page(self, symbol, interval, before=None, now=None, include_daily=True):
         now = now or datetime.now(IST)
         if now.tzinfo is None:
             now = IST.localize(now)
@@ -203,15 +209,17 @@ class ChartHistoryService:
                 cached = candles is not None
                 if candles is None:
                     candles = await asyncio.to_thread(self._fetch, symbol, interval, start, end)
-                context_date = (
-                    date(max(1970, start_date.year - 1), 1, 1) if interval in ("W", "M")
-                    else max(earliest, start_date - timedelta(days=62))
-                )
-                context_start = IST.localize(datetime.combine(context_date, datetime.min.time())).isoformat()
-                async with self._lock_for((symbol, "D", context_start, end)):
-                    daily = await asyncio.to_thread(self._read, symbol, "D", context_start, end, mutable, now)
-                    if daily is None:
-                        daily = await asyncio.to_thread(self._fetch, symbol, "D", context_start, end)
+                daily = []
+                if include_daily:
+                    context_date = (
+                        date(max(1970, start_date.year - 1), 1, 1) if interval in ("W", "M")
+                        else max(earliest, start_date - timedelta(days=62))
+                    )
+                    context_start = IST.localize(datetime.combine(context_date, datetime.min.time())).isoformat()
+                    async with self._lock_for((symbol, "D", context_start, end)):
+                        daily = await asyncio.to_thread(self._read, symbol, "D", context_start, end, mutable, now)
+                        if daily is None:
+                            daily = await asyncio.to_thread(self._fetch, symbol, "D", context_start, end)
             except ChartHistoryUnavailable:
                 raise
             except TokenException as error:

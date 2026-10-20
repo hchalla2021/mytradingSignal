@@ -180,6 +180,31 @@ test('VWAP resets each IST session, never invents volume, and is intraday only',
   assert.equal(engine.calculate(input, all, false).series.vwap, undefined);
 });
 
+test('futures VWAP uses contract volume and switching expiry replaces all prior-contract calculations', () => {
+  const settings = { ...TEMPLATES['Clean Chart'], vwap: true };
+  const engine = createIndicatorEngine();
+  const october = candles(250);
+  const november = october.map((bar, index) => ({
+    ...bar, o: bar.o + 50, h: bar.h + 50, l: bar.l + 50, c: bar.c + 50, v: (index + 1) * 65,
+  }));
+  engine.calculate(october, settings, true);
+  const switched = engine.calculate(november, settings, true);
+  const fresh = createIndicatorEngine().calculate(november, settings, true);
+  assert.deepEqual(plain(switched.series), plain(fresh.series));
+  assert.deepEqual(Object.keys(switched.series), ['vwap']);
+  const session = workspace.sessionDate(candleTime(november.at(-1)));
+  const current = november.filter(bar => workspace.sessionDate(candleTime(bar)) === session);
+  const expected = current.reduce((sum, bar) => sum + (bar.h + bar.l + bar.c) / 3 * bar.v, 0) /
+    current.reduce((sum, bar) => sum + bar.v, 0);
+  near(switched.series.vwap.at(-1).value, expected);
+  const changed = november.slice();
+  changed[249] = { ...changed[249], c: changed[249].c + 1, h: changed[249].h + 1, v: changed[249].v + 650 };
+  const updated = engine.calculate(changed, settings, true);
+  assert.equal(updated.processedBars, 1);
+  assert.deepEqual(plain(updated.series), plain(createIndicatorEngine().calculate(changed, settings, true).series));
+  assert.equal(createIndicatorEngine().calculate(november, settings, false).series.vwap, undefined);
+});
+
 test('pivot formulas include all Traditional/Camarilla levels and ordered CPR', () => {
   const result = pivotValues(120, 100, 110);
   near(result.traditional.P, 110);

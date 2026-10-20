@@ -467,6 +467,11 @@ class MarketFeedService:
             fii_dii_realtime_ai_engine.ingest_futures_tick(symbol, price, cum_vol, oi)
         except Exception:
             pass
+        try:
+            from services.order_flow_engine import order_flow_engine
+            order_flow_engine.ingest_futures(symbol, int(tick.get("instrument_token") or 0), tick)
+        except Exception as error:
+            print(f"?? Order flow ingest error: {error}")
 
     def _on_ticks(self, ws, ticks):
         """Callback when ticks are received (runs in KiteTicker thread)."""
@@ -485,6 +490,8 @@ class MarketFeedService:
 
                 data = self._normalize_tick(tick)
                 symbol = data["symbol"]
+                from services.order_flow_engine import order_flow_engine
+                order_flow_engine.ingest_spot(symbol, float(data.get("price") or 0))
                 from services.paper_trading import get_paper_trading_service
                 get_paper_trading_service().enqueue_tick(symbol, tick)
                 

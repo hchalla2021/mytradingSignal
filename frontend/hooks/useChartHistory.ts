@@ -63,7 +63,7 @@ export async function prefetchChartHistory(symbol: ChartSymbol, timeframe: Timef
   }
 }
 
-function parsePage(value: unknown): HistoryPage {
+export function parsePage(value: unknown): HistoryPage {
   if (typeof value !== 'object' || value === null || !('candles' in value) ||
       !Array.isArray(value.candles) || !('nextBefore' in value) ||
       !(value.nextBefore === null || typeof value.nextBefore === 'string')) {

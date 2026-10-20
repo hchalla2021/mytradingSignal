@@ -26,22 +26,6 @@ MODULE_MANIFEST: list[dict[str, Any]] = [
         "supportsSymbols": True,
         "defaultEnabled": True,
     },
-    {
-        "id": "global_impact",
-        "title": "Global Impact Radar",
-        "zone": "global",
-        "priority": 40,
-        "supportsSymbols": False,
-        "defaultEnabled": True,
-    },
-    {
-        "id": "global_risk",
-        "title": "Global Risk Panel",
-        "zone": "risk",
-        "priority": 50,
-        "supportsSymbols": False,
-        "defaultEnabled": True,
-    },
 ]
 
 TRACKED_SYMBOLS = ("NIFTY", "BANKNIFTY", "SENSEX")

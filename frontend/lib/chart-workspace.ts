@@ -114,6 +114,15 @@ export function isCashSession(nowMs: number): boolean {
   return ist.getUTCDay() > 0 && ist.getUTCDay() < 6 && minute >= 555 && minute < 930;
 }
 
+// Today's bars stay merged even if the feed briefly reports CACHED or goes quiet;
+// toggling them on/off changes the bar count and makes the chart jump sideways.
+export function stableLiveSession(live: Candle[], nowMs: number): string | null {
+  const last = live.at(-1);
+  if (!last) return null;
+  const today = sessionDate(Math.floor(nowMs / 1000));
+  return sessionDate(candleTime(last)) === today ? today : null;
+}
+
 export function candleTime(candle: Candle): number {
   // The service normally sends offsets; naive exchange timestamps are IST.
   const timestamp = /(?:Z|[+-]\d{2}:\d{2})$/i.test(candle.t) ? candle.t : `${candle.t}+05:30`;

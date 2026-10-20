@@ -1,6 +1,7 @@
 'use client';
 
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import dynamic from 'next/dynamic';
 import {
   createChart, ColorType, CrosshairMode, LineStyle, LineType, PriceScaleMode,
   type IChartApi, type ISeriesApi, type UTCTimestamp, type LogicalRange, type MouseEventParams, type AutoscaleInfo,
@@ -15,7 +16,7 @@ import type { MarketData } from '@/hooks/useMarketSocket';
 import type { FIIDIISnapshot } from '@/hooks/useFIIDIIFlow';
 import {
   INDICATORS, TEMPLATES, candleTime, workspaceCandles,
-  restoreIndicatorSettings, institutionalContext, isCashSession, mergeChartHistory, sessionDate, updatePeriodCandle, timeframeLabel,
+  restoreIndicatorSettings, institutionalContext, isCashSession, mergeChartHistory, sessionDate, stableLiveSession, updatePeriodCandle, timeframeLabel,
   type ChartSymbol, type Timeframe, type IndicatorSettings,
 } from '@/lib/chart-workspace';
 import {
@@ -24,16 +25,22 @@ import {
 } from '@/lib/chart-indicators';
 import styles from './ChartWorkspace.module.css';
 import { synchronizeCrosshair } from '@/lib/chart-crosshair';
+import { resizeChartIfChanged, synchronizeChartRange } from '@/lib/chart-render-sync';
 import { layoutTradeLabels } from '@/lib/chart-trade-labels';
 import { createLevelAnalysisEngine } from '@/lib/chart-level-analysis';
 import { createChartPaperAnalyzer } from '@/lib/chart-paper-trading';
 import { createRejectionEngine } from '@/lib/chart-rejection-engine';
 import { SignalLabelPrimitive, type ChartSignalLabel } from '@/lib/chart-signal-labels';
+import { candleFlowLabels, flowStats, OrderFlowPrimitive } from '@/lib/chart-order-flow';
+import { candleFlowCallouts, FLOW_MIN_POINTS, FLOW_ROUND_STEP, recordedFlowMap } from '@/lib/order-flow';
+import { useOrderFlow } from '@/hooks/useOrderFlow';
+import OrderFlowReadout from './OrderFlowReadout';
 import ChartPaperTrading, { usePaperSignalRecorder } from './ChartPaperTrading';
 import { useChartPaperTrading } from '@/hooks/useChartPaperTrading';
 import { chartPaperLevels, paperEventCandle, selectChartPaperTrade } from '@/lib/chart-paper-overlay';
 
 const SYMBOLS = [{ id: 'NIFTY', name: 'NIFTY 50', exchange: 'NSE' }, { id: 'BANKNIFTY', name: 'BANKNIFTY', exchange: 'NSE' }, { id: 'SENSEX', name: 'SENSEX', exchange: 'BSE' }] as const;
+const FuturesChart = dynamic(() => import('./FuturesChart'), { ssr: false, loading: () => <p className="p-3">Loading futures chart...</p> });
 const STORAGE_KEY = 'chartWorkspaceTemplate_v1';
 const UP = '#00bba5';
 const DOWN = '#ee4053';
@@ -50,6 +57,7 @@ interface ChartRuntime {
   charts: IChartApi[];
   candles: ISeriesApi<'Candlestick'>;
   signalLabels: SignalLabelPrimitive;
+  orderFlow: OrderFlowPrimitive;
   volume: ISeriesApi<'Histogram'>;
   overlays: Record<string, ISeriesApi<'Line'>>;
   rsi: ISeriesApi<'Line'>;
@@ -62,7 +70,7 @@ interface ChartRuntime {
 function ChartWorkspace({ marketData, institutionalData = null }: { marketData: MarketData; institutionalData?: FIIDIISnapshot | null }) {
   const { chartData, isConnected } = useChartIntelligence();
   const [symbol, setSymbol] = useState<ChartSymbol>('NIFTY');
-  const [workspaceTab, setWorkspaceTab] = useState<'chart' | 'paper'>('chart');
+  const [workspaceTab, setWorkspaceTab] = useState<'chart' | 'futures' | 'paper'>('chart');
   const [timeframe, setTimeframe] = useState<Timeframe>(5);
   const [indicators, setIndicators] = useState<IndicatorSettings>({ ...TEMPLATES['Confluence focus'] });
   const [controlsOpen, setControlsOpen] = useState(false);
@@ -132,14 +140,17 @@ function ChartWorkspace({ marketData, institutionalData = null }: { marketData: 
   const liveCandles = useMemo(() => workspaceCandles(data, timeframe), [data, timeframe]);
   const streamAge = data ? now - Date.parse(data.timestamp) : NaN;
   const freshStream = isConnected && data?.dataSource === 'LIVE' && streamAge >= 0 && streamAge < 30000;
-  const liveSession = freshStream ? sessionDate(Math.floor(now / 1000)) : null;
+  const liveFiveMinute = useMemo(() => workspaceCandles(data, 5), [data]);
+  const liveSession = stableLiveSession(liveFiveMinute, now);
   const candles = useMemo(() => mergeChartHistory(
     typeof timeframe !== 'number' && !browsingDate && liveSession
-      ? updatePeriodCandle(history.candles, workspaceCandles(data, 5).filter(candle => sessionDate(candleTime(candle)) === liveSession), timeframe)
+      ? updatePeriodCandle(history.candles, liveFiveMinute.filter(candle => sessionDate(candleTime(candle)) === liveSession), timeframe)
       : history.candles,
     browsingDate ? [] : liveCandles, liveSession,
-  ), [history.candles, liveCandles, liveSession, browsingDate, timeframe, data]);
+  ), [history.candles, liveCandles, liveSession, browsingDate, timeframe, liveFiveMinute]);
   const historyKey = `${symbol}:${timeframe}:${history.jumpRevision}:${browsingDate}`;
+  // Near-month futures flow, basis-shifted onto the cash index; only for the live session.
+  const flow = useOrderFlow(symbol, timeframe, null, workspaceTab === 'chart' && !browsingDate);
   const volumeAvailable = useMemo(() => candles.some(candle => candle.v > 0), [candles]);
   const volumeVisible = indicators.volume && volumeAvailable;
   useEffect(() => {
@@ -247,6 +258,9 @@ function ChartWorkspace({ marketData, institutionalData = null }: { marketData: 
     });
     const signalLabels = new SignalLabelPrimitive();
     candleSeries.attachPrimitive(signalLabels);
+    // Delta/CVD strip uses the empty bottom margin of the price pane (candles stop at 92%).
+    const orderFlow = new OrderFlowPrimitive({ detail: false, footprint: false, basisAdjust: true, strip: { top: .925, bottom: .995 } });
+    candleSeries.attachPrimitive(orderFlow);
     const overlays: ChartRuntime['overlays'] = {};
     const volume = charts[1].addHistogramSeries({ title: indicatorLineTitle('volume'), priceFormat: { type: 'volume' }, priceLineVisible: false });
     const rsiSeries = charts[2].addLineSeries({ title: indicatorLineTitle('rsi'), color: '#c05bea', lineWidth: 1, priceLineVisible: false, autoscaleInfoProvider: () => ({ priceRange: { minValue: 0, maxValue: 100 } }) });
@@ -255,7 +269,7 @@ function ChartWorkspace({ marketData, institutionalData = null }: { marketData: 
     const signal = charts[3].addLineSeries({ title: indicatorLineTitle('signal'), color: '#ff8800', lineWidth: 1, priceLineVisible: false });
     const histogram = charts[3].addHistogramSeries({ title: indicatorLineTitle('histogram'), priceLineVisible: false, lastValueVisible: true });
     const atr = charts[4].addLineSeries({ title: indicatorLineTitle('atr'), color: '#cc6979', lineWidth: 1, priceLineVisible: false });
-    runtime.current = { charts, candles: candleSeries, signalLabels, volume, overlays, rsi: rsiSeries, macd: macdSeries, signal, histogram, atr };
+    runtime.current = { charts, candles: candleSeries, signalLabels, orderFlow, volume, overlays, rsi: rsiSeries, macd: macdSeries, signal, histogram, atr };
     revision.current = '';
     let syncing = false;
     let frame = 0;
@@ -265,11 +279,11 @@ function ChartWorkspace({ marketData, institutionalData = null }: { marketData: 
     };
     const rangeHandlers = charts.map((chart, index) => {
       const handler = (next: LogicalRange | null) => {
-        if (!next || syncing) return;
+        if (!next || syncing || !containers[index]!.clientWidth || !containers[index]!.clientHeight) return;
         syncing = true;
         try {
           charts.forEach((other, otherIndex) => {
-            if (otherIndex !== index) other.timeScale().setVisibleLogicalRange(next);
+            if (otherIndex !== index) synchronizeChartRange(other, containers[otherIndex]!, next);
           });
         } finally {
           syncing = false;
@@ -301,11 +315,11 @@ function ChartWorkspace({ marketData, institutionalData = null }: { marketData: 
       return handler;
     });
     const observer = new ResizeObserver(() => {
+      let changed = false;
       charts.forEach((chart, index) => {
-        const container = containers[index]!;
-        if (container.clientWidth > 0 && container.clientHeight > 0) chart.resize(container.clientWidth, container.clientHeight);
+        if (resizeChartIfChanged(chart, containers[index]!)) changed = true;
       });
-      scheduleRedraw();
+      if (changed) scheduleRedraw();
     });
     containers.forEach(container => observer.observe(container!));
     return () => {
@@ -364,7 +378,11 @@ function ChartWorkspace({ marketData, institutionalData = null }: { marketData: 
         return candleTime(bar) === candleTime(next) && bar.o === next.o && bar.h === next.h &&
           bar.l === next.l && bar.c === next.c && bar.v === next.v;
       }) && candleTime(old.candles[old.candles.length - 1]) === candleTime(candles[old.candles.length - 1]);
-    const changedCandles = incremental ? candles.slice(old.candles.length - 1) : candles;
+    const unchangedCandles = incremental && old.candles.length === candles.length &&
+      old.candles.at(-1)?.o === candles.at(-1)?.o && old.candles.at(-1)?.h === candles.at(-1)?.h &&
+      old.candles.at(-1)?.l === candles.at(-1)?.l && old.candles.at(-1)?.c === candles.at(-1)?.c &&
+      old.candles.at(-1)?.v === candles.at(-1)?.v;
+    const changedCandles = unchangedCandles ? [] : incremental ? candles.slice(old.candles.length - 1) : candles;
     const priceBars = changedCandles.map(candle => ({ time: candleTime(candle) as UTCTimestamp, open: candle.o, high: candle.h, low: candle.l, close: candle.c }));
     const volumeBars = changedCandles.map(candle => ({ time: candleTime(candle) as UTCTimestamp, value: candle.v, color: candle.c >= candle.o ? '#00bba599' : '#ee405399' }));
     if (incremental) {
@@ -377,7 +395,7 @@ function ChartWorkspace({ marketData, institutionalData = null }: { marketData: 
     const previous = previousCalculation.current;
     const trend = analytics.supertrendUp?.at(-1)?.value !== undefined ? 'up' : 'down';
     const tailOnly = incremental && !calculation.rebuilt && previous.key === historyKey;
-    const tailFrom = Math.min(calculation.changedFrom, Math.max(0, old.candles.length - 1));
+    const tailFrom = calculation.changedFrom;
     const syncLine = (series: ISeriesApi<'Line'>, values: IndicatorSample[], tail: boolean) => {
       if (tail) points(values.slice(tailFrom)).forEach(point => series.update(point));
       else series.setData(points(values));
@@ -405,7 +423,7 @@ function ChartWorkspace({ marketData, institutionalData = null }: { marketData: 
           ['ema100', 'ema200'].includes(id) ? 3 : 1,
         lineType: pivot ? LineType.WithSteps : LineType.Simple,
         lineStyle: id.startsWith('camarilla:') || id === 'ema100' ? LineStyle.Dashed :
-          id === 'vwap' || id === 'ema200' ? LineStyle.Dotted : LineStyle.Solid,
+          id === 'ema200' ? LineStyle.Dotted : LineStyle.Solid,
         priceLineVisible: false,
         lastValueVisible: false,
         autoscaleInfoProvider: pivot ? () => null : undefined,
@@ -444,20 +462,46 @@ function ChartWorkspace({ marketData, institutionalData = null }: { marketData: 
       api.charts[0].timeScale().setVisibleLogicalRange({
         from: oldRange.from + prepended, to: oldRange.to + prepended,
       } as LogicalRange);
+    } else if (!incremental && oldRange && old.key === historyKey && old.candles.length &&
+        candles.length !== old.candles.length && oldRange.to >= old.candles.length - 1) {
+      // A full reset with a different bar count would otherwise slide the candles sideways.
+      const shift = candles.length - old.candles.length;
+      api.charts[0].timeScale().setVisibleLogicalRange({
+        from: oldRange.from + shift, to: oldRange.to + shift,
+      } as LogicalRange);
     }
     previousBars.current = { key: historyKey, candles };
     redraw(value => value + 1);
   }, [candles, analytics, calculation, pivotSeries, history.dailyCandles, indicators, historyKey, range, applyRange]);
 
   useEffect(() => {
+    runtime.current?.orderFlow.setData(flow.snapshot);
+  }, [flow.snapshot]);
+
+  // Candle-inferred buy / sell flow for every candle without recorded tick order flow; the forming candle is skipped.
+  const recordedFlow = useMemo(() => recordedFlowMap(flow.snapshot), [flow.snapshot]);
+  const candleFlow = useMemo(() => candleFlowCallouts(
+    candles.map(bar => ({ time: candleTime(bar), o: bar.o, h: bar.h, l: bar.l, c: bar.c, v: bar.v })),
+    {
+      closedBefore: Date.now() / 1000 - (typeof timeframe === 'number' ? timeframe * 60 : 86400) + 1,
+      minPoints: FLOW_MIN_POINTS[symbol], roundStep: FLOW_ROUND_STEP[symbol], recorded: recordedFlow,
+    },
+  ), [candles, timeframe, symbol, recordedFlow]);
+  const candleFlowSummary = useMemo(() => flowStats(candleFlow), [candleFlow]);
+
+  useEffect(() => {
+    runtime.current?.orderFlow.setEstimated(candleFlow);
+  }, [candleFlow]);
+
+  useEffect(() => {
     const api = runtime.current;
     if (!api) return;
-    if (!rejection || !showTradePlan) { api.signalLabels.setData([], []); return; }
+    const bars = candles.map(candle => ({ time: candleTime(candle), h: candle.h, l: candle.l }));
+    const labels: ChartSignalLabel[] = candleFlowLabels(candleFlow);
+    if (!rejection || !showTradePlan) { api.signalLabels.setData(labels, labels.length ? bars : []); return; }
     // Clean chart: BUY / SELL at entry and EXIT where the trade closed, each with its exact price.
     const exact = (value: number) => value.toLocaleString('en-IN', { maximumFractionDigits: 2 });
-    const bars = candles.map(candle => ({ time: candleTime(candle), h: candle.h, l: candle.l }));
     const byTime = new Map(bars.map(bar => [bar.time, bar]));
-    const labels: ChartSignalLabel[] = [];
     const signals = rejection.active?.early ? [...rejection.signals, rejection.active] : rejection.signals;
     for (const signal of signals) {
       const buy = signal.side === 'BUY';
@@ -477,7 +521,7 @@ function ChartWorkspace({ marketData, institutionalData = null }: { marketData: 
       });
     }
     api.signalLabels.setData(labels, bars);
-  }, [rejection, showTradePlan, candles]);
+  }, [rejection, showTradePlan, candles, candleFlow]);
 
   const activeTrade = showTradePlan && rejection?.active ? rejection.active : null;
   const activeLevels = activeTrade ? `${activeTrade.stopLoss}|${activeTrade.target1}|${activeTrade.target2}` : '';
@@ -645,11 +689,16 @@ function ChartWorkspace({ marketData, institutionalData = null }: { marketData: 
   };
   return (
     <section id="observatory-trade-chart" ref={rootRef} className={styles.workspace} aria-label="Market Intelligence Observatory trade chart">
-      <div className="flex gap-2 p-3" role="tablist" aria-label="Observatory chart view">
+      <div className={styles.viewTabs} role="tablist" aria-label="Observatory chart view">
         <button id="observatory-chart-tab" role="tab" aria-selected={workspaceTab === 'chart'} aria-controls="observatory-chart-content"
-          className={styles.button} onClick={() => setWorkspaceTab('chart')}>Advanced Chart</button>
+          className={styles.viewTab} onClick={() => setWorkspaceTab('chart')}>Advanced Chart</button>
+        <button id="observatory-futures-tab" role="tab" aria-selected={workspaceTab === 'futures'} aria-controls="observatory-futures-content"
+          className={styles.viewTab} onClick={() => setWorkspaceTab('futures')}>Futures Chart</button>
         <button id="observatory-paper-tab" role="tab" aria-selected={workspaceTab === 'paper'} aria-controls="observatory-paper-content"
-          className={styles.button} onClick={() => setWorkspaceTab('paper')}>Automated Paper Trading</button>
+          className={styles.viewTab} onClick={() => setWorkspaceTab('paper')}>Automated Paper Trading</button>
+      </div>
+      <div id="observatory-futures-content" role="tabpanel" aria-labelledby="observatory-futures-tab" hidden={workspaceTab !== 'futures'}>
+        {workspaceTab === 'futures' && <FuturesChart />}
       </div>
       {paperRecorderError && <p role="alert" className="p-3 text-red-400">{paperRecorderError}</p>}
       <div id="observatory-paper-content" role="tabpanel" aria-labelledby="observatory-paper-tab" hidden={workspaceTab !== 'paper'}>
@@ -743,6 +792,12 @@ function ChartWorkspace({ marketData, institutionalData = null }: { marketData: 
             onWheelCapture={() => { historyGesture.current = true; }}>
             <div className={styles.chartHeading}>
               <strong>{selected.name} · {timeframeLabel(timeframe)} · {selected.exchange}</strong>
+              {indicators.vwap && <span className={styles.vwapReadout}>
+                VWAP <b>{typeof timeframe !== 'number' ? 'Intraday only' :
+                  indicatorValue('vwap') === undefined ? 'Volume unavailable' : price(indicatorValue('vwap'))}</b>
+              </span>}
+              {!browsingDate && <OrderFlowReadout state={flow} intraday={typeof timeframe === 'number'} label="FUT flow" />}
+              <span className="text-slate-400" title={'Big-player prints only (max 2 per session): stop-run / absorption / drive setup + volume >= 2.5x average (range >= 2x on the cash index) + major level (PDH/PDL/PDC, day H/L, opening range, round number). A print is valid only if price made the minimum points before its stop; failed prints are hidden. Candle-based estimate: FII/DII identity is not in any live feed.'}>Flow valid {candleFlowSummary.valid}/{candleFlowSummary.resolved}{candleFlowSummary.pending ? ` ? ${candleFlowSummary.pending} confirming` : ''}</span>
               {hovered && <span className={hovered.c >= hovered.o ? styles.up : styles.down}>O {price(hovered.o)} · H {price(hovered.h)} · L {price(hovered.l)} · C {price(hovered.c)}</span>}
             </div>
             <div className={styles.price} onPointerMove={event => { if (event.buttons) redraw(value => value + 1); }} onPointerUp={() => redraw(value => value + 1)} onWheel={() => requestAnimationFrame(() => redraw(value => value + 1))}>

@@ -1,80 +1,70 @@
 {
   "NIFTY": {
-    "pattern": "EVENING_STAR",
-    "all_patterns": [
-      {
-        "name": "EVENING_STAR",
-        "structure": "BEARISH_REVERSAL",
-        "weight": 0.95
-      },
-      {
-        "name": "BEARISH_MARUBOZU",
-        "structure": "BEARISH_CONTINUATION",
-        "weight": 0.85
-      }
-    ],
-    "structure": "BEARISH_REVERSAL",
-    "strength": "STRONG",
-    "signal": "STRONG_SELL",
-    "confidence": 98,
-    "confluence": 2,
+    "pattern": null,
+    "all_patterns": [],
+    "structure": "NEUTRAL",
+    "strength": "WEAK",
+    "signal": "NEUTRAL",
+    "confidence": 15,
+    "confluence": 0,
     "candle": {
-      "open": 22893.6,
-      "high": 22893.65,
-      "low": 22852.45,
-      "close": 22854.25,
-      "body_ratio": 0.955,
-      "upper_wick_ratio": 0.001,
-      "lower_wick_ratio": 0.044,
-      "is_bullish": false
+      "open": 22888.95,
+      "high": 22888.95,
+      "low": 22888.95,
+      "close": 22888.95,
+      "body_ratio": 0,
+      "upper_wick_ratio": 0,
+      "lower_wick_ratio": 0,
+      "is_bullish": true
     },
     "trend_context": {
-      "direction": "BULLISH",
-      "bullish_count": 4,
-      "bearish_count": 4,
-      "avg_body_ratio": 0.557,
+      "direction": "STRONG_BULLISH",
+      "bullish_count": 7,
+      "bearish_count": 1,
+      "avg_body_ratio": 0.295,
       "candles_analyzed": 8
     },
     "symbol": "NIFTY",
     "timeframe": "5m",
     "dataSource": "MARKET_CLOSED",
-    "timestamp": "2026-10-19T23:41:40.914738+05:30",
-    "price": 22854.25,
-    "changePct": -1.26,
+    "timestamp": "2026-10-20T16:11:05.826907+05:30",
+    "price": 22888.95,
+    "changePct": 0.0,
     "three_factor": {
       "location": {
-        "zone": "BELOW_PDL",
-        "pdh": 23149.85,
-        "pdl": 22913.8,
-        "vwap": 22958.32,
-        "distance_to_pdh": -1.277,
-        "distance_to_pdl": -0.26,
-        "vwap_position": "BELOW",
+        "zone": "NEAR_PDL",
+        "pdh": 23175.25,
+        "pdl": 22845,
+        "vwap": 22888.95,
+        "distance_to_pdh": -1.235,
+        "distance_to_pdl": 0.192,
+        "vwap_position": "AT",
         "tradeable": true
       },
       "behavior": {
-        "type": "BREAKOUT",
-        "description": "Strong bearish close below PDL (22914)",
-        "strength": 100
+        "type": "ABSORPTION",
+        "description": "Price absorbing near PDL (22845) \u2014 bounce building",
+        "strength": 80
       },
       "confirmation": {
-        "volume_ratio": 358.72,
-        "volume_confirmed": true,
-        "body_strong": true,
-        "close_near_extreme": true,
-        "candle_confirmed": true,
-        "confirmed": true
+        "volume_ratio": 0.0,
+        "volume_confirmed": false,
+        "body_strong": false,
+        "close_near_extreme": false,
+        "candle_confirmed": false,
+        "confirmed": false
       },
-      "alignment_score": 3,
+      "alignment_score": 2,
       "factors_pass": [
         "LOCATION",
-        "BEHAVIOR",
+        "BEHAVIOR"
+      ],
+      "factors_fail": [
         "CONFIRMATION"
       ],
-      "factors_fail": [],
-      "aligned": true,
+      "aligned": false,
       "verdict": "SELL",
-      "reason": "All aligned \u2014 breakdown below PDL",
+      "reason": "2/3 aligned \u2014 absorption at PDL, breakdown likely (missing: CONFIRMATION)",
       "market_active": false
     },
     "timeframes": {
@@ -87,10 +77,10 @@
         "confidence": 15,
         "confluence": 0,
         "candle": {
-          "open": 22854.25,
-          "high": 22854.25,
-          "low": 22854.25,
-          "close": 22854.25,
+          "open": 22888.95,
+          "high": 22888.95,
+          "low": 22888.95,
+          "close": 22888.95,
           "body_ratio": 0,
           "upper_wick_ratio": 0,
           "lower_wick_ratio": 0,
@@ -105,18 +95,18 @@
         "symbol": "NIFTY",
         "timeframe": "3m",
         "dataSource": "MARKET_CLOSED",
-        "timestamp": "2026-10-19T23:41:40.913545+05:30",
-        "price": 22854.25,
-        "changePct": -1.26,
+        "timestamp": "2026-10-20T16:11:05.826328+05:30",
+        "price": 22888.95,
+        "changePct": 0.0,
         "three_factor": {
           "location": {
-            "zone": "BELOW_PDL",
-            "pdh": 23149.85,
-            "pdl": 22913.8,
-            "vwap": 22958.32,
-            "distance_to_pdh": -1.277,
-            "distance_to_pdl": -0.26,
-            "vwap_position": "BELOW",
+            "zone": "NEAR_PDL",
+            "pdh": 23175.25,
+            "pdl": 22845,
+            "vwap": 22888.95,
+            "distance_to_pdh": -1.235,
+            "distance_to_pdl": 0.192,
+            "vwap_position": "AT",
             "tradeable": true
           },
           "behavior": {
@@ -125,8 +115,8 @@
             "strength": 0
           },
           "confirmation": {
-            "volume_ratio": 1.0,
-            "volume_confirmed": true,
+            "volume_ratio": 0.0,
+            "volume_confirmed": false,
             "body_strong": false,
             "close_near_extreme": false,
             "candle_confirmed": false,
@@ -147,81 +137,71 @@
         }
       },
       "5m": {
-        "pattern": "EVENING_STAR",
-        "all_patterns": [
-          {
-            "name": "EVENING_STAR",
-            "structure": "BEARISH_REVERSAL",
-            "weight": 0.95
-          },
-          {
-            "name": "BEARISH_MARUBOZU",
-            "structure": "BEARISH_CONTINUATION",
-            "weight": 0.85
-          }
-        ],
-        "structure": "BEARISH_REVERSAL",
-        "strength": "STRONG",
-        "signal": "STRONG_SELL",
-        "confidence": 98,
-        "confluence": 2,
+        "pattern": null,
+        "all_patterns": [],
+        "structure": "NEUTRAL",
+        "strength": "WEAK",
+        "signal": "NEUTRAL",
+        "confidence": 15,
+        "confluence": 0,
         "candle": {
-          "open": 22893.6,
-          "high": 22893.65,
-          "low": 22852.45,
-          "close": 22854.25,
-          "body_ratio": 0.955,
-          "upper_wick_ratio": 0.001,
-          "lower_wick_ratio": 0.044,
-          "is_bullish": false
+          "open": 22888.95,
+          "high": 22888.95,
+          "low": 22888.95,
+          "close": 22888.95,
+          "body_ratio": 0,
+          "upper_wick_ratio": 0,
+          "lower_wick_ratio": 0,
+          "is_bullish": true
         },
         "trend_context": {
-          "direction": "BULLISH",
-          "bullish_count": 4,
-          "bearish_count": 4,
-          "avg_body_ratio": 0.557,
+          "direction": "STRONG_BULLISH",
+          "bullish_count": 7,
+          "bearish_count": 1,
+          "avg_body_ratio": 0.295,
           "candles_analyzed": 8
         },
         "symbol": "NIFTY",
         "timeframe": "5m",
         "dataSource": "MARKET_CLOSED",
-        "timestamp": "2026-10-19T23:41:40.914738+05:30",
-        "price": 22854.25,
-        "changePct": -1.26,
+        "timestamp": "2026-10-20T16:11:05.826907+05:30",
+        "price": 22888.95,
+        "changePct": 0.0,
         "three_factor": {
           "location": {
-            "zone": "BELOW_PDL",
-            "pdh": 23149.85,
-            "pdl": 22913.8,
-            "vwap": 22958.32,
-            "distance_to_pdh": -1.277,
-            "distance_to_pdl": -0.26,
-            "vwap_position": "BELOW",
+            "zone": "NEAR_PDL",
+            "pdh": 23175.25,
+            "pdl": 22845,
+            "vwap": 22888.95,
+            "distance_to_pdh": -1.235,
+            "distance_to_pdl": 0.192,
+            "vwap_position": "AT",
             "tradeable": true
           },
           "behavior": {
-            "type": "BREAKOUT",
-            "description": "Strong bearish close below PDL (22914)",
-            "strength": 100
+            "type": "ABSORPTION",
+            "description": "Price absorbing near PDL (22845) \u2014 bounce building",
+            "strength": 80
           },
           "confirmation": {
-            "volume_ratio": 358.72,
-            "volume_confirmed": true,
-            "body_strong": true,
-            "close_near_extreme": true,
-            "candle_confirmed": true,
-            "confirmed": true
+            "volume_ratio": 0.0,
+            "volume_confirmed": false,
+            "body_strong": false,
+            "close_near_extreme": false,
+            "candle_confirmed": false,
+            "confirmed": false
           },
-          "alignment_score": 3,
+          "alignment_score": 2,
           "factors_pass": [
             "LOCATION",
-            "BEHAVIOR",
+            "BEHAVIOR"
+          ],
+          "factors_fail": [
             "CONFIRMATION"
           ],
-          "factors_fail": [],
-          "aligned": true,
+          "aligned": false,
           "verdict": "SELL",
-          "reason": "All aligned \u2014 breakdown below PDL",
+          "reason": "2/3 aligned \u2014 absorption at PDL, breakdown likely (missing: CONFIRMATION)",
           "market_active": false
         }
       },
@@ -234,10 +214,10 @@
         "confidence": 15,
         "confluence": 0,
         "candle": {
-          "open": 22854.25,
-          "high": 22854.25,
-          "low": 22854.25,
-          "close": 22854.25,
+          "open": 22888.95,
+          "high": 22888.95,
+          "low": 22888.95,
+          "close": 22888.95,
           "body_ratio": 0,
           "upper_wick_ratio": 0,
           "lower_wick_ratio": 0,
@@ -252,18 +232,18 @@
         "symbol": "NIFTY",
         "timeframe": "15m",
         "dataSource": "MARKET_CLOSED",
-        "timestamp": "2026-10-19T23:41:40.915267+05:30",
-        "price": 22854.25,
-        "changePct": -1.26,
+        "timestamp": "2026-10-20T16:11:05.827222+05:30",
+        "price": 22888.95,
+        "changePct": 0.0,
         "three_factor": {
           "location": {
-            "zone": "BELOW_PDL",
-            "pdh": 23149.85,
-            "pdl": 22913.8,
-            "vwap": 22958.32,
-            "distance_to_pdh": -1.277,
-            "distance_to_pdl": -0.26,
-            "vwap_position": "BELOW",
+            "zone": "NEAR_PDL",
+            "pdh": 23175.25,
+            "pdl": 22845,
+            "vwap": 22888.95,
+            "distance_to_pdh": -1.235,
+            "distance_to_pdl": 0.192,
+            "vwap_position": "AT",
             "tradeable": true
           },
           "behavior": {
@@ -272,8 +252,8 @@
             "strength": 0
           },
           "confirmation": {
-            "volume_ratio": 1.0,
-            "volume_confirmed": true,
+            "volume_ratio": 0.0,
+            "volume_confirmed": false,
             "body_strong": false,
             "close_near_extreme": false,
             "candle_confirmed": false,
@@ -296,40 +276,40 @@
     },
     "mtfConsensus": {
       "bullCount": 0,
-      "bearCount": 1,
-      "neutralCount": 2,
-      "dominant": "BEARISH",
+      "bearCount": 0,
+      "neutralCount": 3,
+      "dominant": "MIXED",
       "aligned": false,
-      "alignmentPct": 33,
-      "probabilityBull": 24,
-      "probabilityBear": 76
+      "alignmentPct": 0,
+      "probabilityBull": 50,
+      "probabilityBear": 50
     },
     "ai": {
       "provider": "numpy_fallback",
       "featureVersion": "candle_ai_v1",
       "classProbabilities": {
-        "STRONG_BUY": 0.01,
-        "BUY": 0.01,
-        "NEUTRAL": 0.01,
-        "SELL": 5.49,
-        "STRONG_SELL": 94.47
+        "STRONG_BUY": 16.54,
+        "BUY": 13.52,
+        "NEUTRAL": 39.88,
+        "SELL": 13.52,
+        "STRONG_SELL": 16.54
       },
       "sequencePrediction": {
         "nextMove": "SIDEWAYS",
         "nextMovePts": 0.0,
-        "trendContinuationProb": 97.24,
-        "reversalProb": 9.23,
+        "trendContinuationProb": 40.0,
+        "reversalProb": 69.24,
         "horizonSec": 300
       },
       "microstructure": {
-        "liquidityDensity": 33.0,
-        "structureDensity": 81.0,
-        "fakeBreakoutRisk": 26.95,
-        "stopHuntRisk": 12.0
+        "liquidityDensity": 0.0,
+        "structureDensity": 24.0,
+        "fakeBreakoutRisk": 38.5,
+        "stopHuntRisk": 40.0
       },
       "smc": {
         "state": "BALANCED",
-        "score": 76.15
+        "score": 24.0
       },
       "multiTimeframe": {
         "micro": {
@@ -337,21 +317,21 @@
           "momentum": 15.0
         },
         "medium": {
-          "trend": "BEAR",
-          "momentum": 98.0
+          "trend": "NEUTRAL",
+          "momentum": 15.0
         },
         "macro": {
           "trend": "NEUTRAL",
           "momentum": 15.0
         },
-        "alignmentPct": 33.0
+        "alignmentPct": 0.0
       },
       "commandDeck": {
         "streamState": "CLOSED",
         "modelProvider": "numpy_fallback",
         "analysisLatencyMs": 260,
         "pipelineCadenceMs": 30000,
-        "eventRatePerSec": 3.46,
+        "eventRatePerSec": 2.0,
         "queueDepth": 4,
         "cacheState": "COLD",
         "alerts": [
@@ -360,80 +340,81 @@
         ]
       },
       "institutionalConfluence": {
-        "executionProbability": 83,
-        "smartMoneyAlignment": 61,
-        "institutionalFlow": 82,
-        "riskScore": 22,
-        "rewardScore": 97,
-        "riskRewardRatio": 4.41
+        "executionProbability": 29,
+        "smartMoneyAlignment": 16,
+        "institutionalFlow": 16,
+        "riskScore": 48,
+        "rewardScore": 32,
+        "riskRewardRatio": 0.67
       }
     }
   },
   "BANKNIFTY": {
-    "pattern": "BEARISH_CANDLE",
+    "pattern": null,
     "all_patterns": [],
-    "structure": "BEARISH_CONTINUATION",
-    "strength": "STRONG",
-    "signal": "STRONG_SELL",
-    "confidence": 40,
+    "structure": "NEUTRAL",
+    "strength": "WEAK",
+    "signal": "NEUTRAL",
+    "confidence": 15,
     "confluence": 0,
     "candle": {
-      "open": 55520.7,
-      "high": 55532.45,
-      "low": 55426.35,
-      "close": 55445.0,
-      "body_ratio": 0.713,
-      "upper_wick_ratio": 0.111,
-      "lower_wick_ratio": 0.176,
-      "is_bullish": false
+      "open": 55488.1,
+      "high": 55488.1,
+      "low": 55488.1,
+      "close": 55488.1,
+      "body_ratio": 0,
+      "upper_wick_ratio": 0,
+      "lower_wick_ratio": 0,
+      "is_bullish": true
     },
     "trend_context": {
-      "direction": "BULLISH",
-      "bullish_count": 4,
-      "bearish_count": 4,
-      "avg_body_ratio": 0.393,
+      "direction": "STRONG_BULLISH",
+      "bullish_count": 6,
+      "bearish_count": 2,
+      "avg_body_ratio": 0.214,
       "candles_analyzed": 8
     },
     "symbol": "BANKNIFTY",
     "timeframe": "5m",
     "dataSource": "MARKET_CLOSED",
-    "timestamp": "2026-10-19T23:41:40.916612+05:30",
-    "price": 55445.0,
-    "changePct": -0.71,
+    "timestamp": "2026-10-20T16:11:05.827761+05:30",
+    "price": 55488.1,
+    "changePct": 0.0,
     "three_factor": {
       "location": {
-        "zone": "BELOW_PDL",
-        "pdh": 55989.55,
-        "pdl": 55526.3,
-        "vwap": 55553.42,
-        "distance_to_pdh": -0.973,
-        "distance_to_pdl": -0.146,
+        "zone": "NEAR_PDL",
+        "pdh": 55883.7,
+        "pdl": 55331.1,
+        "vwap": 55488.1,
+        "distance_to_pdh": -0.708,
+        "distance_to_pdl": 0.284,
         "vwap_position": "AT",
         "tradeable": true
       },
       "behavior": {
-        "type": "BREAKOUT",
-        "description": "Strong bearish close below PDL (55526)",
-        "strength": 91
+        "type": "ABSORPTION",
+        "description": "Price absorbing near PDL (55331) \u2014 bounce building",
+        "strength": 80
       },
       "confirmation": {
-        "volume_ratio": 248.22,
-        "volume_confirmed": true,
-        "body_strong": true,
-        "close_near_extreme": true,
-        "candle_confirmed": true,
-        "confirmed": true
+        "volume_ratio": 0.0,
+        "volume_confirmed": false,
+        "body_strong": false,
+        "close_near_extreme": false,
+        "candle_confirmed": false,
+        "confirmed": false
       },
-      "alignment_score": 3,
+      "alignment_score": 2,
       "factors_pass": [
         "LOCATION",
-        "BEHAVIOR",
+        "BEHAVIOR"
+      ],
+      "factors_fail": [
         "CONFIRMATION"
       ],
-      "factors_fail": [],
-      "aligned": true,
+      "aligned": false,
       "verdict": "SELL",
-      "reason": "All aligned \u2014 breakdown below PDL",
+      "reason": "2/3 aligned \u2014 absorption at PDL, breakdown likely (missing: CONFIRMATION)",
       "market_active": false
     },
     "timeframes": {
@@ -446,10 +427,10 @@
         "confidence": 15,
         "confluence": 0,
         "candle": {
-          "open": 55445.0,
-          "high": 55445.0,
-          "low": 55445.0,
-          "close": 55445.0,
+          "open": 55488.1,
+          "high": 55488.1,
+          "low": 55488.1,
+          "close": 55488.1,
           "body_ratio": 0,
           "upper_wick_ratio": 0,
           "lower_wick_ratio": 0,
@@ -464,17 +445,17 @@
         "symbol": "BANKNIFTY",
         "timeframe": "3m",
         "dataSource": "MARKET_CLOSED",
-        "timestamp": "2026-10-19T23:41:40.915454+05:30",
-        "price": 55445.0,
-        "changePct": -0.71,
+        "timestamp": "2026-10-20T16:11:05.827310+05:30",
+        "price": 55488.1,
+        "changePct": 0.0,
         "three_factor": {
           "location": {
-            "zone": "BELOW_PDL",
-            "pdh": 55989.55,
-            "pdl": 55526.3,
-            "vwap": 55553.42,
-            "distance_to_pdh": -0.973,
-            "distance_to_pdl": -0.146,
+            "zone": "NEAR_PDL",
+            "pdh": 55883.7,
+            "pdl": 55331.1,
+            "vwap": 55488.1,
+            "distance_to_pdh": -0.708,
+            "distance_to_pdl": 0.284,
             "vwap_position": "AT",
             "tradeable": true
           },
@@ -484,8 +465,8 @@
             "strength": 0
           },
           "confirmation": {
-            "volume_ratio": 1.0,
-            "volume_confirmed": true,
+            "volume_ratio": 0.0,
+            "volume_confirmed": false,
             "body_strong": false,
             "close_near_extreme": false,
             "candle_confirmed": false,
@@ -506,70 +487,71 @@
         }
       },
       "5m": {
-        "pattern": "BEARISH_CANDLE",
+        "pattern": null,
         "all_patterns": [],
-        "structure": "BEARISH_CONTINUATION",
-        "strength": "STRONG",
-        "signal": "STRONG_SELL",
-        "confidence": 40,
+        "structure": "NEUTRAL",
+        "strength": "WEAK",
+        "signal": "NEUTRAL",
+        "confidence": 15,
         "confluence": 0,
         "candle": {
-          "open": 55520.7,
-          "high": 55532.45,
-          "low": 55426.35,
-          "close": 55445.0,
-          "body_ratio": 0.713,
-          "upper_wick_ratio": 0.111,
-          "lower_wick_ratio": 0.176,
-          "is_bullish": false
+          "open": 55488.1,
+          "high": 55488.1,
+          "low": 55488.1,
+          "close": 55488.1,
+          "body_ratio": 0,
+          "upper_wick_ratio": 0,
+          "lower_wick_ratio": 0,
+          "is_bullish": true
         },
         "trend_context": {
-          "direction": "BULLISH",
-          "bullish_count": 4,
-          "bearish_count": 4,
-          "avg_body_ratio": 0.393,
+          "direction": "STRONG_BULLISH",
+          "bullish_count": 6,
+          "bearish_count": 2,
+          "avg_body_ratio": 0.214,
           "candles_analyzed": 8
         },
         "symbol": "BANKNIFTY",
         "timeframe": "5m",
         "dataSource": "MARKET_CLOSED",
-        "timestamp": "2026-10-19T23:41:40.916612+05:30",
-        "price": 55445.0,
-        "changePct": -0.71,
+        "timestamp": "2026-10-20T16:11:05.827761+05:30",
+        "price": 55488.1,
+        "changePct": 0.0,
         "three_factor": {
           "location": {
-            "zone": "BELOW_PDL",
-            "pdh": 55989.55,
-            "pdl": 55526.3,
-            "vwap": 55553.42,
-            "distance_to_pdh": -0.973,
-            "distance_to_pdl": -0.146,
+            "zone": "NEAR_PDL",
+            "pdh": 55883.7,
+            "pdl": 55331.1,
+            "vwap": 55488.1,
+            "distance_to_pdh": -0.708,
+            "distance_to_pdl": 0.284,
             "vwap_position": "AT",
             "tradeable": true
           },
           "behavior": {
-            "type": "BREAKOUT",
-            "description": "Strong bearish close below PDL (55526)",
-            "strength": 91
+            "type": "ABSORPTION",
+            "description": "Price absorbing near PDL (55331) \u2014 bounce building",
+            "strength": 80
           },
           "confirmation": {
-            "volume_ratio": 248.22,
-            "volume_confirmed": true,
-            "body_strong": true,
-            "close_near_extreme": true,
-            "candle_confirmed": true,
-            "confirmed": true
+            "volume_ratio": 0.0,
+            "volume_confirmed": false,
+            "body_strong": false,
+            "close_near_extreme": false,
+            "candle_confirmed": false,
+            "confirmed": false
           },
-          "alignment_score": 3,
+          "alignment_score": 2,
           "factors_pass": [
             "LOCATION",
-            "BEHAVIOR",
+            "BEHAVIOR"
+          ],
+          "factors_fail": [
             "CONFIRMATION"
           ],
-          "factors_fail": [],
-          "aligned": true,
+          "aligned": false,
           "verdict": "SELL",
-          "reason": "All aligned \u2014 breakdown below PDL",
+          "reason": "2/3 aligned \u2014 absorption at PDL, breakdown likely (missing: CONFIRMATION)",
           "market_active": false
         }
       },
@@ -582,10 +564,10 @@
         "confidence": 15,
         "confluence": 0,
         "candle": {
-          "open": 55445.0,
-          "high": 55445.0,
-          "low": 55445.0,
-          "close": 55445.0,
+          "open": 55488.1,
+          "high": 55488.1,
+          "low": 55488.1,
+          "close": 55488.1,
           "body_ratio": 0,
           "upper_wick_ratio": 0,
           "lower_wick_ratio": 0,
@@ -600,17 +582,17 @@
         "symbol": "BANKNIFTY",
         "timeframe": "15m",
         "dataSource": "MARKET_CLOSED",
-        "timestamp": "2026-10-19T23:41:40.916896+05:30",
-        "price": 55445.0,
-        "changePct": -0.71,
+        "timestamp": "2026-10-20T16:11:05.827872+05:30",
+        "price": 55488.1,
+        "changePct": 0.0,
         "three_factor": {
           "location": {
-            "zone": "BELOW_PDL",
-            "pdh": 55989.55,
-            "pdl": 55526.3,
-            "vwap": 55553.42,
-            "distance_to_pdh": -0.973,
-            "distance_to_pdl": -0.146,
+            "zone": "NEAR_PDL",
+            "pdh": 55883.7,
+            "pdl": 55331.1,
+            "vwap": 55488.1,
+            "distance_to_pdh": -0.708,
+            "distance_to_pdl": 0.284,
             "vwap_position": "AT",
             "tradeable": true
           },
@@ -620,8 +602,8 @@
             "strength": 0
           },
           "confirmation": {
-            "volume_ratio": 1.0,
-            "volume_confirmed": true,
+            "volume_ratio": 0.0,
+            "volume_confirmed": false,
             "body_strong": false,
             "close_near_extreme": false,
             "candle_confirmed": false,
@@ -644,40 +626,40 @@
     },
     "mtfConsensus": {
       "bullCount": 0,
-      "bearCount": 1,
-      "neutralCount": 2,
-      "dominant": "BEARISH",
+      "bearCount": 0,
+      "neutralCount": 3,
+      "dominant": "MIXED",
       "aligned": false,
-      "alignmentPct": 33,
-      "probabilityBull": 24,
-      "probabilityBear": 76
+      "alignmentPct": 0,
+      "probabilityBull": 50,
+      "probabilityBear": 50
     },
     "ai": {
       "provider": "numpy_fallback",
       "featureVersion": "candle_ai_v1",
       "classProbabilities": {
-        "STRONG_BUY": 0.01,
-        "BUY": 0.01,
-        "NEUTRAL": 0.01,
-        "SELL": 4.31,
-        "STRONG_SELL": 95.66
+        "STRONG_BUY": 16.54,
+        "BUY": 13.52,
+        "NEUTRAL": 39.88,
+        "SELL": 13.52,
+        "STRONG_SELL": 16.54
       },
       "sequencePrediction": {
         "nextMove": "SIDEWAYS",
         "nextMovePts": 0.0,
-        "trendContinuationProb": 85.24,
-        "reversalProb": 21.23,
+        "trendContinuationProb": 40.0,
+        "reversalProb": 69.24,
         "horizonSec": 300
       },
       "microstructure": {
-        "liquidityDensity": 33.0,
-        "structureDensity": 81.0,
-        "fakeBreakoutRisk": 26.95,
-        "stopHuntRisk": 12.0
+        "liquidityDensity": 0.0,
+        "structureDensity": 24.0,
+        "fakeBreakoutRisk": 38.5,
+        "stopHuntRisk": 40.0
       },
       "smc": {
         "state": "BALANCED",
-        "score": 76.15
+        "score": 24.0
       },
       "multiTimeframe": {
         "micro": {
@@ -685,21 +667,21 @@
           "momentum": 15.0
         },
         "medium": {
-          "trend": "BEAR",
-          "momentum": 40.0
+          "trend": "NEUTRAL",
+          "momentum": 15.0
         },
         "macro": {
           "trend": "NEUTRAL",
           "momentum": 15.0
         },
-        "alignmentPct": 33.0
+        "alignmentPct": 0.0
       },
       "commandDeck": {
         "streamState": "CLOSED",
         "modelProvider": "numpy_fallback",
         "analysisLatencyMs": 260,
         "pipelineCadenceMs": 30000,
-        "eventRatePerSec": 3.46,
+        "eventRatePerSec": 2.0,
         "queueDepth": 4,
         "cacheState": "COLD",
         "alerts": [
@@ -708,86 +690,81 @@
         ]
       },
       "institutionalConfluence": {
-        "executionProbability": 66,
-        "smartMoneyAlignment": 61,
-        "institutionalFlow": 82,
-        "riskScore": 25,
-        "rewardScore": 72,
-        "riskRewardRatio": 2.88
+        "executionProbability": 29,
+        "smartMoneyAlignment": 16,
+        "institutionalFlow": 16,
+        "riskScore": 48,
+        "rewardScore": 32,
+        "riskRewardRatio": 0.67
       }
     }
   },
   "SENSEX": {
-    "pattern": "EVENING_STAR",
-    "all_patterns": [
-      {
-        "name": "EVENING_STAR",
-        "structure": "BEARISH_REVERSAL",
-        "weight": 0.95
-      }
-    ],
-    "structure": "BEARISH_REVERSAL",
-    "strength": "STRONG",
-    "signal": "STRONG_SELL",
-    "confidence": 95,
-    "confluence": 1,
+    "pattern": null,
+    "all_patterns": [],
+    "structure": "NEUTRAL",
+    "strength": "WEAK",
+    "signal": "NEUTRAL",
+    "confidence": 15,
+    "confluence": 0,
     "candle": {
-      "open": 73856.06,
-      "high": 73872.9,
-      "low": 73750.22,
-      "close": 73752.97,
-      "body_ratio": 0.84,
-      "upper_wick_ratio": 0.137,
-      "lower_wick_ratio": 0.022,
-      "is_bullish": false
+      "open": 73852.9,
+      "high": 73852.9,
+      "low": 73852.9,
+      "close": 73852.9,
+      "body_ratio": 0,
+      "upper_wick_ratio": 0,
+      "lower_wick_ratio": 0,
+      "is_bullish": true
     },
     "trend_context": {
-      "direction": "BULLISH",
-      "bullish_count": 4,
-      "bearish_count": 4,
-      "avg_body_ratio": 0.573,
+      "direction": "STRONG_BULLISH",
+      "bullish_count": 7,
+      "bearish_count": 1,
+      "avg_body_ratio": 0.281,
       "candles_analyzed": 8
     },
     "symbol": "SENSEX",
     "timeframe": "5m",
     "dataSource": "MARKET_CLOSED",
-    "timestamp": "2026-10-19T23:41:40.917942+05:30",
-    "price": 73752.97,
-    "changePct": -1.31,
+    "timestamp": "2026-10-20T16:11:05.828270+05:30",
+    "price": 73852.9,
+    "changePct": 0.0,
     "three_factor": {
       "location": {
-        "zone": "BELOW_PDL",
-        "pdh": 74778.78,
-        "pdl": 74012.99,
-        "vwap": 74103.83,
-        "distance_to_pdh": -1.372,
-        "distance_to_pdl": -0.351,
-        "vwap_position": "BELOW",
+        "zone": "NEAR_PDL",
+        "pdh": 74849.75,
+        "pdl": 73708.54,
+        "vwap": 73852.9,
+        "distance_to_pdh": -1.332,
+        "distance_to_pdl": 0.196,
+        "vwap_position": "AT",
         "tradeable": true
       },
       "behavior": {
-        "type": "BREAKOUT",
-        "description": "Strong bearish close below PDL (74013)",
-        "strength": 100
+        "type": "ABSORPTION",
+        "description": "Price absorbing near PDL (73709) \u2014 bounce building",
+        "strength": 80
       },
       "confirmation": {
-        "volume_ratio": 204.59,
-        "volume_confirmed": true,
-        "body_strong": true,
-        "close_near_extreme": true,
-        "candle_confirmed": true,
-        "confirmed": true
+        "volume_ratio": 0.0,
+        "volume_confirmed": false,
+        "body_strong": false,
+        "close_near_extreme": false,
+        "candle_confirmed": false,
+        "confirmed": false
       },
-      "alignment_score": 3,
+      "alignment_score": 2,
       "factors_pass": [
         "LOCATION",
-        "BEHAVIOR",
+        "BEHAVIOR"
+      ],
+      "factors_fail": [
         "CONFIRMATION"
       ],
-      "factors_fail": [],
-      "aligned": true,
+      "aligned": false,
       "verdict": "SELL",
-      "reason": "All aligned \u2014 breakdown below PDL",
+      "reason": "2/3 aligned \u2014 absorption at PDL, breakdown likely (missing: CONFIRMATION)",
       "market_active": false
     },
     "timeframes": {
@@ -800,10 +777,10 @@
         "confidence": 15,
         "confluence": 0,
         "candle": {
-          "open": 73752.97,
-          "high": 73752.97,
-          "low": 73752.97,
-          "close": 73752.97,
+          "open": 73852.9,
+          "high": 73852.9,
+          "low": 73852.9,
+          "close": 73852.9,
           "body_ratio": 0,
           "upper_wick_ratio": 0,
           "lower_wick_ratio": 0,
@@ -818,18 +795,18 @@
         "symbol": "SENSEX",
         "timeframe": "3m",
         "dataSource": "MARKET_CLOSED",
-        "timestamp": "2026-10-19T23:41:40.917058+05:30",
-        "price": 73752.97,
-        "changePct": -1.31,
+        "timestamp": "2026-10-20T16:11:05.827923+05:30",
+        "price": 73852.9,
+        "changePct": 0.0,
         "three_factor": {
           "location": {
-            "zone": "BELOW_PDL",
-            "pdh": 74778.78,
-            "pdl": 74012.99,
-            "vwap": 74103.83,
-            "distance_to_pdh": -1.372,
-            "distance_to_pdl": -0.351,
-            "vwap_position": "BELOW",
+            "zone": "NEAR_PDL",
+            "pdh": 74849.75,
+            "pdl": 73708.54,
+            "vwap": 73852.9,
+            "distance_to_pdh": -1.332,
+            "distance_to_pdl": 0.196,
+            "vwap_position": "AT",
             "tradeable": true
           },
           "behavior": {
@@ -838,8 +815,8 @@
             "strength": 0
           },
           "confirmation": {
-            "volume_ratio": 1.0,
-            "volume_confirmed": true,
+            "volume_ratio": 0.0,
+            "volume_confirmed": false,
             "body_strong": false,
             "close_near_extreme": false,
             "candle_confirmed": false,
@@ -860,76 +837,71 @@
         }
       },
       "5m": {
-        "pattern": "EVENING_STAR",
-        "all_patterns": [
-          {
-            "name": "EVENING_STAR",
-            "structure": "BEARISH_REVERSAL",
-            "weight": 0.95
-          }
-        ],
-        "structure": "BEARISH_REVERSAL",
-        "strength": "STRONG",
-        "signal": "STRONG_SELL",
-        "confidence": 95,
-        "confluence": 1,
+        "pattern": null,
+        "all_patterns": [],
+        "structure": "NEUTRAL",
+        "strength": "WEAK",
+        "signal": "NEUTRAL",
+        "confidence": 15,
+        "confluence": 0,
         "candle": {
-          "open": 73856.06,
-          "high": 73872.9,
-          "low": 73750.22,
-          "close": 73752.97,
-          "body_ratio": 0.84,
-          "upper_wick_ratio": 0.137,
-          "lower_wick_ratio": 0.022,
-          "is_bullish": false
+          "open": 73852.9,
+          "high": 73852.9,
+          "low": 73852.9,
+          "close": 73852.9,
+          "body_ratio": 0,
+          "upper_wick_ratio": 0,
+          "lower_wick_ratio": 0,
+          "is_bullish": true
         },
         "trend_context": {
-          "direction": "BULLISH",
-          "bullish_count": 4,
-          "bearish_count": 4,
-          "avg_body_ratio": 0.573,
+          "direction": "STRONG_BULLISH",
+          "bullish_count": 7,
+          "bearish_count": 1,
+          "avg_body_ratio": 0.281,
           "candles_analyzed": 8
         },
         "symbol": "SENSEX",
         "timeframe": "5m",
         "dataSource": "MARKET_CLOSED",
-        "timestamp": "2026-10-19T23:41:40.917942+05:30",
-        "price": 73752.97,
-        "changePct": -1.31,
+        "timestamp": "2026-10-20T16:11:05.828270+05:30",
+        "price": 73852.9,
+        "changePct": 0.0,
         "three_factor": {
           "location": {
-            "zone": "BELOW_PDL",
-            "pdh": 74778.78,
-            "pdl": 74012.99,
-            "vwap": 74103.83,
-            "distance_to_pdh": -1.372,
-            "distance_to_pdl": -0.351,
-            "vwap_position": "BELOW",
+            "zone": "NEAR_PDL",
+            "pdh": 74849.75,
+            "pdl": 73708.54,
+            "vwap": 73852.9,
+            "distance_to_pdh": -1.332,
+            "distance_to_pdl": 0.196,
+            "vwap_position": "AT",
             "tradeable": true
           },
           "behavior": {
-            "type": "BREAKOUT",
-            "description": "Strong bearish close below PDL (74013)",
-            "strength": 100
+            "type": "ABSORPTION",
+            "description": "Price absorbing near PDL (73709) \u2014 bounce building",
+            "strength": 80
           },
           "confirmation": {
-            "volume_ratio": 204.59,
-            "volume_confirmed": true,
-            "body_strong": true,
-            "close_near_extreme": true,
-            "candle_confirmed": true,
-            "confirmed": true
+            "volume_ratio": 0.0,
+            "volume_confirmed": false,
+            "body_strong": false,
+            "close_near_extreme": false,
+            "candle_confirmed": false,
+            "confirmed": false
           },
-          "alignment_score": 3,
+          "alignment_score": 2,
           "factors_pass": [
             "LOCATION",
-            "BEHAVIOR",
+            "BEHAVIOR"
+          ],
+          "factors_fail": [
             "CONFIRMATION"
           ],
-          "factors_fail": [],
-          "aligned": true,
+          "aligned": false,
           "verdict": "SELL",
-          "reason": "All aligned \u2014 breakdown below PDL",
+          "reason": "2/3 aligned \u2014 absorption at PDL, breakdown likely (missing: CONFIRMATION)",
           "market_active": false
         }
       },
@@ -942,10 +914,10 @@
         "confidence": 15,
         "confluence": 0,
         "candle": {
-          "open": 73752.97,
-          "high": 73752.97,
-          "low": 73752.97,
-          "close": 73752.97,
+          "open": 73852.9,
+          "high": 73852.9,
+          "low": 73852.9,
+          "close": 73852.9,
           "body_ratio": 0,
           "upper_wick_ratio": 0,
           "lower_wick_ratio": 0,
@@ -960,18 +932,18 @@
         "symbol": "SENSEX",
         "timeframe": "15m",
         "dataSource": "MARKET_CLOSED",
-        "timestamp": "2026-10-19T23:41:40.918532+05:30",
-        "price": 73752.97,
-        "changePct": -1.31,
+        "timestamp": "2026-10-20T16:11:05.828368+05:30",
+        "price": 73852.9,
+        "changePct": 0.0,
         "three_factor": {
           "location": {
-            "zone": "BELOW_PDL",
-            "pdh": 74778.78,
-            "pdl": 74012.99,
-            "vwap": 74103.83,
-            "distance_to_pdh": -1.372,
-            "distance_to_pdl": -0.351,
-            "vwap_position": "BELOW",
+            "zone": "NEAR_PDL",
+            "pdh": 74849.75,
+            "pdl": 73708.54,
+            "vwap": 73852.9,
+            "distance_to_pdh": -1.332,
+            "distance_to_pdl": 0.196,
+            "vwap_position": "AT",
             "tradeable": true
           },
           "behavior": {
@@ -980,8 +952,8 @@
             "strength": 0
           },
           "confirmation": {
-            "volume_ratio": 1.0,
-            "volume_confirmed": true,
+            "volume_ratio": 0.0,
+            "volume_confirmed": false,
             "body_strong": false,
             "close_near_extreme": false,
             "candle_confirmed": false,
@@ -1004,40 +976,40 @@
     },
     "mtfConsensus": {
       "bullCount": 0,
-      "bearCount": 1,
-      "neutralCount": 2,
-      "dominant": "BEARISH",
+      "bearCount": 0,
+      "neutralCount": 3,
+      "dominant": "MIXED",
       "aligned": false,
-      "alignmentPct": 33,
-      "probabilityBull": 24,
-      "probabilityBear": 76
+      "alignmentPct": 0,
+      "probabilityBull": 50,
+      "probabilityBear": 50
     },
     "ai": {
       "provider": "numpy_fallback",
       "featureVersion": "candle_ai_v1",
       "classProbabilities": {
-        "STRONG_BUY": 0.01,
-        "BUY": 0.01,
-        "NEUTRAL": 0.01,
-        "SELL": 5.43,
-        "STRONG_SELL": 94.54
+        "STRONG_BUY": 16.54,
+        "BUY": 13.52,
+        "NEUTRAL": 39.88,
+        "SELL": 13.52,
+        "STRONG_SELL": 16.54
       },
       "sequencePrediction": {
         "nextMove": "SIDEWAYS",
         "nextMovePts": 0.0,
-        "trendContinuationProb": 96.49,
-        "reversalProb": 9.98,
+        "trendContinuationProb": 40.0,
+        "reversalProb": 69.24,
         "horizonSec": 300
       },
       "microstructure": {
-        "liquidityDensity": 33.0,
-        "structureDensity": 81.0,
-        "fakeBreakoutRisk": 26.95,
-        "stopHuntRisk": 12.0
+        "liquidityDensity": 0.0,
+        "structureDensity": 24.0,
+        "fakeBreakoutRisk": 38.5,
+        "stopHuntRisk": 40.0
       },
       "smc": {
         "state": "BALANCED",
-        "score": 76.15
+        "score": 24.0
       },
       "multiTimeframe": {
         "micro": {
@@ -1045,21 +1017,21 @@
           "momentum": 15.0
         },
         "medium": {
-          "trend": "BEAR",
-          "momentum": 95.0
+          "trend": "NEUTRAL",
+          "momentum": 15.0
         },
         "macro": {
           "trend": "NEUTRAL",
           "momentum": 15.0
         },
-        "alignmentPct": 33.0
+        "alignmentPct": 0.0
       },
       "commandDeck": {
         "streamState": "CLOSED",
         "modelProvider": "numpy_fallback",
         "analysisLatencyMs": 260,
         "pipelineCadenceMs": 30000,
-        "eventRatePerSec": 3.46,
+        "eventRatePerSec": 2.0,
         "queueDepth": 4,
         "cacheState": "COLD",
         "alerts": [
@@ -1068,12 +1040,12 @@
         ]
       },
       "institutionalConfluence": {
-        "executionProbability": 82,
-        "smartMoneyAlignment": 61,
-        "institutionalFlow": 82,
-        "riskScore": 22,
-        "rewardScore": 96,
-        "riskRewardRatio": 4.36
+        "executionProbability": 29,
+        "smartMoneyAlignment": 16,
+        "institutionalFlow": 16,
+        "riskScore": 48,
+        "rewardScore": 32,
+        "riskRewardRatio": 0.67
       }
     }
   }

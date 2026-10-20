@@ -7,7 +7,6 @@ import Header from '@/components/Header';
 import SystemStatusBanner from '@/components/SystemStatusBanner';
 import SmartAIAlgoSection from '@/components/SmartAIAlgoSection';
 import { useMarketSocket } from '@/hooks/useMarketSocket';
-import { useAnalysis } from '@/hooks/useAnalysis';
 import { useAIAnalysis } from '@/hooks/useAIAnalysis';
 import type { FIIDIISnapshot } from '@/hooks/useFIIDIIFlow';
 import { API_CONFIG } from '@/lib/api-config';
@@ -43,8 +42,6 @@ const FIIDIIFlowStrip = dynamic(() => import('@/components/FIIDIIFlowStrip'), { 
 const VolumePulseCard = dynamic(() => import('@/components/VolumePulseCard'), { ssr: false });
 const TrendBaseCard = dynamic(() => import('@/components/TrendBaseCard'), { ssr: false });
 const SectionTitle = dynamic(() => import('@/components/SectionTitle'), { ssr: false });
-const TradeSupportResistance = dynamic(() => import('@/components/TradeSupportResistance'), { ssr: false });
-const TradeZonesTerminal = dynamic(() => import('@/components/TradeZonesTerminal'), { ssr: false });
 const InstitutionalMarketView = dynamic(() => import('@/components/InstitutionalMarketView'), { ssr: false });
 const InstitutionalCompass = dynamic(() => import('@/components/InstitutionalCompass'), {
   ssr: false,
@@ -72,34 +69,6 @@ const LiquidityIntelligence = dynamic(() => import('@/components/LiquidityIntell
       </div>
     </div>
   )
-});
-
-const MarketIntelligenceObservatory = dynamic(() => import('@/components/MarketIntelligenceObservatory'), {
-  ssr: false,
-  loading: () => (
-    <div className="mt-6 border-2 border-violet-500/25 rounded-2xl p-4 bg-gradient-to-br from-violet-950/20 via-slate-900/40 to-slate-900/40 animate-pulse">
-      <div className="h-5 w-72 bg-slate-700 rounded mb-4" />
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2">
-        {[0,1,2,3,4,5,6,7].map(i => (
-          <div key={i} className="h-20 bg-slate-700/30 rounded-xl" />
-        ))}
-      </div>
-    </div>
-  ),
-});
-
-const GlobalRiskPanel = dynamic(() => import('@/components/GlobalRiskPanel'), {
-  ssr: false,
-  loading: () => (
-    <div className="mt-6 border-2 border-emerald-500/25 rounded-2xl p-4 bg-gradient-to-br from-emerald-950/20 via-slate-900/40 to-slate-900/40 animate-pulse">
-      <div className="h-5 w-56 bg-slate-700 rounded mb-4" />
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
-        {[0,1,2,3].map(i => (
-          <div key={i} className="h-20 bg-slate-700/30 rounded-xl" />
-        ))}
-      </div>
-    </div>
-  ),
 });
 
 const CRTBTSTCard = dynamic<{ symbol: string; name: string; data?: unknown }>(() => import('@/components/CRTBTSTCard'), {
@@ -197,20 +166,6 @@ const CandleIntelligenceEngine = dynamic(() => import('@/components/CandleIntell
   )
 });
 
-const GlobalImpactRadar = dynamic(() => import('@/components/GlobalImpactRadar'), {
-  ssr: false,
-  loading: () => (
-    <div className="mt-6 border-2 border-blue-500/25 rounded-2xl p-4 bg-gradient-to-br from-blue-950/20 via-slate-900/40 to-slate-900/40 animate-pulse">
-      <div className="h-5 w-56 bg-slate-700 rounded mb-4" />
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-3">
-        {[0,1,2,3,4,5,6,7].map(i => (
-          <div key={i} className="h-28 bg-slate-700/30 rounded-xl" />
-        ))}
-      </div>
-    </div>
-  ),
-});
-
 const ICTIntelligence = dynamic(() => import('@/components/ICTIntelligence'), {
   ssr: false,
   loading: () => (
@@ -300,29 +255,6 @@ export default function Home() {
       window.history.replaceState({}, '', '/');
     }
   }, []);
-
-  // ✅ FETCH: Use REST API hook instead of WebSocket analysis (more reliable)
-  const { analyses: apiAnalyses } = useAnalysis({
-    autoConnect: true,
-    pollingInterval: 2000 // Poll every 2 seconds for fresh data
-  });
-
-  // ✅ INSTANT: Combine API analysis with WebSocket data (live data only — no fabricated fallbacks)
-  const analyses = useMemo(() => {
-    if (apiAnalyses) return apiAnalyses;
-
-    const niftyAnalysis = marketData.NIFTY?.analysis ?? null;
-    const bankniftyAnalysis = marketData.BANKNIFTY?.analysis ?? null;
-    const sensexAnalysis = marketData.SENSEX?.analysis ?? null;
-
-    if (!niftyAnalysis && !bankniftyAnalysis && !sensexAnalysis) return null;
-
-    return {
-      NIFTY: niftyAnalysis,
-      BANKNIFTY: bankniftyAnalysis,
-      SENSEX: sensexAnalysis,
-    };
-  }, [apiAnalyses, marketData.NIFTY?.analysis, marketData.BANKNIFTY?.analysis, marketData.SENSEX?.analysis]);
 
   const fetchServerOutlook = useCallback(async () => {
     try {
@@ -684,15 +616,8 @@ export default function Home() {
         </div>
 
         <div style={{ order: -3 }} className="min-w-0">
-          <MarketIntelligenceObservatory />
           <ChartWorkspace marketData={marketData} institutionalData={institutionalData} />
         </div>
-
-        {/* 🌐 GLOBAL IMPACT RADAR */}
-        <GlobalImpactRadar />
-
-        {/* 🌐 GLOBAL RISK */}
-        <GlobalRiskPanel />
 
         {/* ⚡ GREEKS OVERVIEW — Real-time Greeks analysis and buy/sell signals */}
         <TradingIntelligenceEngine marketData={marketData} />
@@ -775,60 +700,6 @@ export default function Home() {
         {/* P5: 🧭 INSTITUTIONAL MARKET COMPASS */}
         <InstitutionalCompass />
 
-        {/* P7: 🎯 TRADE ZONES – Buy/Sell Signals (Multi-factor, dual timeframe) */}
-        {(() => {
-          // Dynamic section highlighting based on dominant signal
-          const tzSignal = aggregatedMarketSignal.NIFTY.signal;
-          const tzSectionGlow = 
-            tzSignal === 'STRONG_BUY' ? 'tz-section-strong-buy' :
-            tzSignal === 'BUY' ? 'tz-section-buy' :
-            tzSignal === 'STRONG_SELL' ? 'tz-section-strong-sell' :
-            tzSignal === 'SELL' ? 'tz-section-sell' : '';
-          const tzBorderColor = 
-            tzSignal === 'STRONG_BUY' || tzSignal === 'BUY' ? 'border-emerald-500/60' :
-            tzSignal === 'STRONG_SELL' || tzSignal === 'SELL' ? 'border-red-500/60' :
-            'border-emerald-600/40';
-          const tzBg = 
-            tzSignal === 'STRONG_BUY' || tzSignal === 'BUY' ? 'from-emerald-950/30 via-dark-card/50 to-dark-elevated/40' :
-            tzSignal === 'STRONG_SELL' || tzSignal === 'SELL' ? 'from-red-950/30 via-dark-card/50 to-dark-elevated/40' :
-            'from-emerald-950/20 via-dark-card/50 to-dark-elevated/40';
-          return (
-        <div className={`mt-6 sm:mt-6 border ${tzBorderColor} rounded-2xl p-3 sm:p-4 bg-gradient-to-br ${tzBg} backdrop-blur-sm shadow-md ${tzSectionGlow}`}>
-          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-3 sm:mb-4">
-            <SectionTitle
-              title="Trade Zones • Buy/Sell Signals"
-              accentColor="emerald"
-            />
-          </div>
-
-          <TradeZonesTerminal />
-          
-          <div className="mt-3 grid grid-cols-1 lg:grid-cols-2 2xl:grid-cols-3 gap-3">
-            <TradeSupportResistance 
-              symbol="NIFTY" 
-              symbolName="NIFTY 50" 
-              data={marketData.NIFTY} 
-              analysis={analyses?.NIFTY}
-              marketStatus={marketStatus}
-            />
-            <TradeSupportResistance 
-              symbol="BANKNIFTY" 
-              symbolName="BANK NIFTY" 
-              data={marketData.BANKNIFTY} 
-              analysis={analyses?.BANKNIFTY}
-              marketStatus={marketStatus}
-            />
-            <TradeSupportResistance 
-              symbol="SENSEX" 
-              symbolName="SENSEX" 
-              data={marketData.SENSEX} 
-              analysis={analyses?.SENSEX}
-              marketStatus={marketStatus}
-            />
-          </div>
-        </div>
-          );
-        })()}
 
         {/* P10: 💥 EXPIRY EXPLOSION ZONE */}
         <ExpiryExplosionZone />

@@ -17,6 +17,10 @@ export interface ChartSignalLabel {
   detailPositive?: boolean;
   placement: 'above' | 'below';
   early?: boolean;
+  /** Second, smaller line (order-flow callouts). */
+  subtitle?: string;
+  /** 'flow' = dark outlined callout coloured by side, used for buy / sell order-flow bars. */
+  variant?: 'solid' | 'flow';
 }
 
 export interface SignalLabelBar { time: number; h: number; l: number }
@@ -54,8 +58,11 @@ export class SignalLabelPrimitive implements ISeriesPrimitive<Time> {
   private labels: ChartSignalLabel[] = [];
   private bars: SignalLabelBar[] = [];
   private readonly views: readonly ISeriesPrimitivePaneView[];
+  /** Lowest usable fraction of the pane height (keeps labels off a volume band sharing the pane). */
+  private readonly maxBottom: number;
 
-  constructor() {
+  constructor(options: { maxBottom?: number } = {}) {
+    this.maxBottom = options.maxBottom ?? 1;
     const renderer: ISeriesPrimitivePaneRenderer = {
       draw: target => target.useMediaCoordinateSpace(({ context, mediaSize }) => this.draw(context, mediaSize.width, mediaSize.height)),
     };
@@ -79,7 +86,8 @@ export class SignalLabelPrimitive implements ISeriesPrimitive<Time> {
   }
 
   setData(labels: ChartSignalLabel[], bars: SignalLabelBar[]) {
-    this.labels = [...labels].sort((a, b) => a.time - b.time);
+    // Trade labels claim space first; order-flow callouts fill the gaps and are dropped when crowded.
+    this.labels = [...labels].sort((a, b) => Number(a.variant === 'flow') - Number(b.variant === 'flow') || a.time - b.time);
     this.bars = bars;
     this.requestUpdate?.();
   }
@@ -101,7 +109,7 @@ export class SignalLabelPrimitive implements ISeriesPrimitive<Time> {
     const spacing = Math.max(1, timeScale.options().barSpacing);
     const compact = width < 520;
     const font = compact ? 10 : 11;
-    const boxHeight = font + 8;
+    const lineHeight = font + 8;
     const mainFont = `700 ${font}px Inter, "Segoe UI", Roboto, Arial, sans-serif`;
     const detailFont = `700 ${font - 1}px Inter, "Segoe UI", Roboto, Arial, sans-serif`;
     const placed: Box[] = [];
@@ -109,18 +117,21 @@ export class SignalLabelPrimitive implements ISeriesPrimitive<Time> {
     ctx.textBaseline = 'middle';
     for (const label of this.labels) {
       const x = timeScale.timeToCoordinate(label.time as Time);
-      if (x === null || x < -60 || x > width + 60) continue;
+      if (x === null || x < 0 || x > width) continue;
       const theme = THEME[label.kind];
       const above = label.placement === 'above';
       ctx.font = mainFont;
       const mainWidth = ctx.measureText(label.text).width;
       ctx.font = detailFont;
       const detailWidth = label.detail ? ctx.measureText(label.detail).width + 6 : 0;
-      const boxWidth = Math.ceil(mainWidth + detailWidth + 14);
+      const subtitleWidth = label.subtitle ? ctx.measureText(label.subtitle).width : 0;
+      const boxWidth = Math.ceil(Math.max(mainWidth + detailWidth, subtitleWidth) + 14);
+      const boxHeight = lineHeight + (label.subtitle ? font + 1 : 0);
+      const flow = label.variant === 'flow';
 
       // Clear every candle the pill spans horizontally, not just the signal candle.
       const index = this.barIndex(label.time);
-      const reach = Math.ceil(boxWidth / 2 / spacing) + 1;
+      const reach = Math.ceil(boxWidth / 2 / spacing - 0.5);
       let extreme = above ? -Infinity : Infinity;
       for (let k = Math.max(0, index - reach); k <= Math.min(this.bars.length - 1, index + reach); k++) {
         extreme = above ? Math.max(extreme, this.bars[k].h) : Math.min(extreme, this.bars[k].l);
@@ -130,21 +141,25 @@ export class SignalLabelPrimitive implements ISeriesPrimitive<Time> {
       const wickY = series.priceToCoordinate(above ? own.h : own.l);
       if (edgeY === null || wickY === null || wickY < 0 || wickY > height) continue;
 
-      const box: Box = { x0: x - boxWidth / 2, x1: x + boxWidth / 2, y0: 0, y1: 0 };
+      const x0 = Math.min(Math.max(2, x - boxWidth / 2), width - 2 - boxWidth);
+      const box: Box = { x0, x1: x0 + boxWidth, y0: 0, y1: 0 };
       let y0 = above ? edgeY - GAP - 10 - boxHeight : edgeY + GAP + 10;
       let fits = false;
-      for (let attempt = 0; attempt < STACK_LIMIT; attempt++) {
+      const tries = flow ? 2 : STACK_LIMIT;
+      for (let attempt = 0; attempt < tries; attempt++) {
         box.y0 = y0; box.y1 = y0 + boxHeight;
         if (!placed.some(other => overlaps(box, other))) { fits = true; break; }
         y0 += above ? -(boxHeight + 4) : boxHeight + 4;
       }
       // Never pin labels to the pane edge, where they would pile up away from their candle.
-      if (!fits || box.y0 < 2 || box.y1 > height - 2) continue;
-      placed.push({ ...box });
-
-      // Arrow from the pill to this label's own candle wick (BUY points up, SELL down, EXIT toward its candle).
+      if (!fits || box.y0 < 2 || box.y1 > height * this.maxBottom - 2) continue;
       const tipY = above ? wickY - 3 : wickY + 3;
       const tailY = above ? box.y1 : box.y0;
+      const stem: Box = { x0: x - 5, x1: x + 5, y0: Math.min(tipY, tailY), y1: Math.max(tipY, tailY) };
+      if (placed.some(other => overlaps(stem, other))) continue;
+      placed.push({ ...box }, stem);
+
+      // Arrow from the pill to this label's own candle wick (BUY points up, SELL down, EXIT toward its candle).
       ctx.strokeStyle = theme.border;
       ctx.fillStyle = theme.border;
       ctx.lineWidth = 2;
@@ -164,10 +179,10 @@ export class SignalLabelPrimitive implements ISeriesPrimitive<Time> {
       roundedRect(ctx, box.x0, box.y0, boxWidth, boxHeight, 4);
       ctx.shadowColor = 'rgba(0, 0, 0, 0.45)';
       ctx.shadowBlur = 6;
-      ctx.fillStyle = label.early ? 'rgba(8, 24, 34, 0.92)' : theme.fill;
+      ctx.fillStyle = label.early || flow ? 'rgba(8, 24, 34, 0.92)' : theme.fill;
       ctx.fill();
       ctx.shadowBlur = 0;
-      if (label.early || label.kind === 'EXIT') {
+      if (label.early || flow || label.kind === 'EXIT') {
         ctx.setLineDash(label.early ? [3, 2] : []);
         ctx.lineWidth = 1.2;
         ctx.strokeStyle = theme.border;
@@ -175,14 +190,19 @@ export class SignalLabelPrimitive implements ISeriesPrimitive<Time> {
         ctx.setLineDash([]);
       }
       ctx.font = mainFont;
-      ctx.fillStyle = label.early ? theme.border : theme.text;
+      ctx.fillStyle = label.early || flow ? theme.border : theme.text;
       ctx.textAlign = 'left';
-      const textY = box.y0 + boxHeight / 2 + 0.5;
+      const textY = box.y0 + lineHeight / 2 + 0.5;
       ctx.fillText(label.text, box.x0 + 7, textY);
       if (label.detail) {
         ctx.font = detailFont;
         ctx.fillStyle = label.detailPositive ? '#3dffb5' : '#ff7a87';
         ctx.fillText(label.detail, box.x0 + 7 + mainWidth + 6, textY);
+      }
+      if (label.subtitle) {
+        ctx.font = detailFont;
+        ctx.fillStyle = '#c9d6e0';
+        ctx.fillText(label.subtitle, box.x0 + 7, box.y0 + lineHeight + font / 2 - 2);
       }
     }
     ctx.restore();
