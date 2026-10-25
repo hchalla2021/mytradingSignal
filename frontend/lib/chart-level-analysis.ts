@@ -30,7 +30,7 @@ export interface LevelAnalysis {
 const SETTINGS = {
   ...DEFAULT_INDICATORS,
   supertrend: false, emaCross: false, camarilla: false, pivots: false, cpr: false,
-  volume: false, macd: false,
+  volume: false, macd: false, vwap: false,
 };
 const positive = (value: number | undefined): value is number =>
   value !== undefined && Number.isFinite(value) && value > 0;
@@ -179,11 +179,9 @@ export function createLevelAnalysisEngine() {
       const priorVolume = candles.slice(index - 20, index);
       const volumeKnown = last.v > 0 && priorVolume.every(bar => bar.v > 0);
       const averageVolume = priorVolume.reduce((sum, bar) => sum + bar.v, 0) / 20;
-      const sessionVwap = series.vwap?.[index]?.value;
       const buy = trend === 'Bullish';
       const volume = !volumeKnown ? 'Unverified' :
-        last.v >= averageVolume * options.minVolumeRatio && sessionVwap !== undefined &&
-          (buy ? last.c > sessionVwap : last.c < sessionVwap) ? 'Verified' : 'Weak / conflicting';
+        last.v >= averageVolume * options.minVolumeRatio ? 'Verified' : 'Weak / conflicting';
       const support = levels.filter(level => level.price < last.c).sort((a, b) => b.price - a.price)[0];
       const resistance = levels.filter(level => level.price > last.c).sort((a, b) => a.price - b.price)[0];
       const result: LevelAnalysis = {
@@ -204,7 +202,7 @@ export function createLevelAnalysisEngine() {
         : level.reaction === 'Resistance rejection' || level.reaction === 'Break below');
       if (trend === 'Mixed' || !candidates.length) return reject('NO TRADE · No completed-candle level bounce/breakout with aligned EMA trend.');
       if (buy ? momentum < 50 || momentum > 72 : momentum > 50 || momentum < 28) return reject('NO TRADE · RSI does not confirm the level reaction.');
-      if (volume === 'Weak / conflicting') return reject('NO TRADE · Observed volume or VWAP conflicts with the setup.');
+      if (volume === 'Weak / conflicting') return reject('NO TRADE · Observed volume conflicts with the setup.');
       const event = candidates.sort((a, b) => Math.abs(a.price - last.c) - Math.abs(b.price - last.c))[0];
       const entry = buy ? roundUp(last.c) : roundDown(last.c);
       const swing = candles.slice(index - 2, index + 1);
@@ -227,7 +225,7 @@ export function createLevelAnalysisEngine() {
       result.plan = {
         direction: buy ? 'BUY' : 'SELL', conditional: false, score: volume === 'Verified' ? 4 : 3, requiredScore: 3,
         confirmation: [`${event.reaction} at ${event.label}`, 'EMA 9/20 trend + EMA 50 location', `RSI ${momentum.toFixed(1)}`,
-          volume === 'Verified' ? 'Relative volume + VWAP verified' : 'Volume UNVERIFIED: cash-index volume unavailable'],
+          volume === 'Verified' ? 'Relative volume verified' : 'Volume UNVERIFIED: cash-index volume unavailable'],
         watchReason: '', entry, stopLoss, exitPrice: target, riskPoints: risk, candleTime: signalTime,
         volumeVerified: volume === 'Verified', basis: `${event.reaction} · ${event.label}`,
         invalidation: `Exit analysis at stop ${stopLoss.toFixed(2)} or target ${target.toFixed(2)}. Reassess after every close. Volume ${volume.toLowerCase()}; no fill is tracked and no bounce is guaranteed.`,

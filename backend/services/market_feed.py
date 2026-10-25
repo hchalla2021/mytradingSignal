@@ -470,6 +470,8 @@ class MarketFeedService:
         try:
             from services.order_flow_engine import order_flow_engine
             order_flow_engine.ingest_futures(symbol, int(tick.get("instrument_token") or 0), tick)
+            from services.paper_trading import get_paper_trading_service
+            get_paper_trading_service().enqueue_futures_tick(symbol, tick)
         except Exception as error:
             print(f"?? Order flow ingest error: {error}")
 

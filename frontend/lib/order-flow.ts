@@ -14,6 +14,17 @@ export interface OrderFlowBar {
   imb: { buy: [number, number][]; sell: [number, number][] };
   book: number | null; depth: number | null; spread: number | null; basis: number | null;
   complete: boolean; closed: boolean; coverage: number; flags: string[];
+  ohlcvComplete?: boolean;
+  /** Exchange OI at the bar's last / first recorded tick; null when Kite sent no OI. */
+  oi: number | null; oiOpen: number | null;
+}
+
+/** Latest Zerodha 5-level depth: pending orders [price, quantity, orders], not executed trades. */
+export interface OrderFlowDom {
+  ts: number; ltp: number; token: number | null;
+  bids: [number, number, number][]; asks: [number, number, number][];
+  totalBid: number | null; totalAsk: number | null;
+  oi: number | null; oiHigh: number | null; oiLow: number | null;
 }
 
 export interface OrderFlowEvent { t: number; kind: string; side: OrderFlowSide; price: number }
@@ -40,11 +51,12 @@ export interface OrderFlowReplay {
 
 export interface OrderFlowSnapshot {
   available: boolean; symbol: string; interval: number; date: string; reason: string | null;
-  row: number; token: number | null; recordedToken: number | null; method: string; lastTick: number | null; generatedAt: number;
+  row: number; token: number | null; recordedToken: number | null; latestRecorded: boolean; method: string; lastTick: number | null; generatedAt: number;
   recordedFrom: number | null;
   bars: OrderFlowBar[]; events: OrderFlowEvent[]; zones: OrderFlowZone[]; signals: OrderFlowSignal[];
   profile: { poc: number; vah: number; val: number; volume: number } | null;
   guidance: OrderFlowGuidance; replay: OrderFlowReplay | null;
+  dom: OrderFlowDom | null;
   summary: { delta: number; cvd: number; buy: number; sell: number; book: number | null; coverage: number; basis: number | null };
 }
 
@@ -68,7 +80,21 @@ function parseBar(value: unknown): OrderFlowBar | null {
     imb: { buy: ranges(imb.buy), sell: ranges(imb.sell) },
     poc: num(value.poc), book: num(value.book), depth: num(value.depth), spread: num(value.spread), basis: num(value.basis),
     complete: value.complete === true, closed: value.closed === true, coverage: num(value.coverage) ?? 0,
+    ohlcvComplete: value.ohlcvComplete === true,
+    oi: num(value.oi), oiOpen: num(value.oiOpen),
     flags: Array.isArray(value.flags) ? value.flags.filter((flag): flag is string => typeof flag === 'string') : [],
+  };
+}
+
+function parseDom(value: unknown): OrderFlowDom | null {
+  if (!isObject(value) || num(value.ts) === null || num(value.ltp) === null) return null;
+  const side = (rows: unknown) => Array.isArray(rows) ? rows.filter((row): row is [number, number, number] =>
+    Array.isArray(row) && row.length === 3 && row.every(item => num(item) !== null) && row[0] > 0 && row[1] > 0) : [];
+  return {
+    ts: value.ts as number, ltp: value.ltp as number, token: num(value.token),
+    bids: side(value.bids).sort((a, b) => b[0] - a[0]), asks: side(value.asks).sort((a, b) => a[0] - b[0]),
+    totalBid: num(value.totalBid), totalAsk: num(value.totalAsk),
+    oi: num(value.oi), oiHigh: num(value.oiHigh), oiLow: num(value.oiLow),
   };
 }
 
@@ -82,7 +108,7 @@ export function parseOrderFlow(value: unknown): OrderFlowSnapshot | null {
   return {
     available: value.available, symbol: value.symbol, interval: num(value.interval) ?? 5,
     date: typeof value.date === 'string' ? value.date : '', reason: typeof value.reason === 'string' ? value.reason : null,
-    row: num(value.row) ?? 1, token: num(value.token), recordedToken: num(value.recordedToken), method: typeof value.method === 'string' ? value.method : '',
+    row: num(value.row) ?? 1, token: num(value.token), recordedToken: num(value.recordedToken), latestRecorded: value.latestRecorded === true, method: typeof value.method === 'string' ? value.method : '',
     lastTick: num(value.lastTick), generatedAt: num(value.generatedAt) ?? 0, recordedFrom: num(value.recordedFrom),
     bars: bars.sort((a, b) => a.t - b.t),
     events: Array.isArray(value.events) ? value.events as OrderFlowEvent[] : [],
@@ -91,6 +117,7 @@ export function parseOrderFlow(value: unknown): OrderFlowSnapshot | null {
     profile: isObject(value.profile) ? value.profile as OrderFlowSnapshot['profile'] : null,
     guidance: { ...guidance, reasons: Array.isArray(guidance.reasons) ? guidance.reasons : [] },
     replay: isObject(value.replay) ? value.replay as unknown as OrderFlowReplay : null,
+    dom: parseDom(value.dom),
     summary: {
       delta: num(summary.delta) ?? 0, cvd: num(summary.cvd) ?? 0, buy: num(summary.buy) ?? 0, sell: num(summary.sell) ?? 0,
       book: num(summary.book), coverage: num(summary.coverage) ?? 0, basis: num(summary.basis),
@@ -172,6 +199,7 @@ export interface FlowOptions {
   /** Bars allowed for the follow-through. */
   horizon?: number;
   recorded?: Map<number, RecordedFlow>;
+  useVwap?: boolean;
 }
 
 export type FlowStatus = 'confirmed' | 'pending' | 'failed';
@@ -215,7 +243,7 @@ interface Context {
  * only if price makes `minPoints` (or 0.8 ATR, whichever is larger) before the stop within `horizon` bars.
  */
 export function candleFlowCallouts(candles: FlowCandle[], options: FlowOptions = {}): ValidatedFlow[] {
-  const { closedBefore = Infinity, minPoints = 0, roundStep = 0, horizon = 10, recorded } = options;
+  const { closedBefore = Infinity, minPoints = 0, roundStep = 0, horizon = 10, recorded, useVwap = true } = options;
   const out: ValidatedFlow[] = [];
   if (candles.length < 25) return out;
   let atr = 0, ema20 = candles[0].c, ema50 = candles[0].c;
@@ -273,7 +301,7 @@ export function candleFlowCallouts(candles: FlowCandle[], options: FlowOptions =
     if (ranges.length > 20) { rangeSum -= ranges.shift()!; volumeSum -= volumes.shift()!; }
     dayHigh = Math.max(dayHigh, bar.h); dayLow = Math.min(dayLow, bar.l);
     if (bar.time < dayStart + 900) { orHigh = Math.max(orHigh, bar.h); orLow = Math.min(orLow, bar.l); }
-    if (bar.v > 0) { pv += bar.v * (bar.h + bar.l + bar.c) / 3; vol += bar.v; }
+    if (useVwap && bar.v > 0) { pv += bar.v * (bar.h + bar.l + bar.c) / 3; vol += bar.v; }
   }
   // Keep only the strongest prints of each session (ties go to the earlier print).
   const keep = new Set<ValidatedFlow>();

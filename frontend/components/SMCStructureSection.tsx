@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState } from 'react';
+import IndexTabs from '@/components/IndexTabs';
 import {
   useSMCStructure,
   SMCIndexData,
@@ -453,9 +454,6 @@ function SMCCard({ row }: { row: SMCIndexData }) {
 
 export default function SMCStructureSection() {
   const { data, isConnected, lastUpdate } = useSMCStructure();
-  const rows = (['NIFTY', 'BANKNIFTY', 'SENSEX'] as const)
-    .map(sym => data[sym])
-    .filter((r): r is SMCIndexData => r !== null);
 
   return (
     <section
@@ -463,11 +461,11 @@ export default function SMCStructureSection() {
       className="mb-3 rounded-xl border border-indigo-400/20 bg-gradient-to-br from-slate-950 via-slate-900/80 to-indigo-950/20 px-3 py-3 sm:px-4"
     >
       <div className="mb-2.5 flex items-center justify-between gap-2 flex-wrap">
-        <div className="flex items-center gap-2">
-          <span className="text-[13px] sm:text-[16px] font-extrabold tracking-tight text-indigo-100">
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
+          <span className="text-base sm:text-lg font-bold tracking-tight text-indigo-100">
             🏛️ ADVANCED SMC & MARKET STRUCTURE
           </span>
-          <span className="rounded-full border border-indigo-300/40 bg-indigo-500/10 px-2 py-0.5 text-[9px] font-black text-indigo-100">
+          <span className="rounded-xl border border-indigo-300/40 bg-indigo-500/10 px-2 py-0.5 text-xs font-semibold text-indigo-100">
             HTF+LTF · BOS/CHoCH/MSS · OB/FVG · LIQUIDITY MAP
           </span>
         </div>
@@ -485,16 +483,17 @@ export default function SMCStructureSection() {
         </div>
       </div>
 
-      {rows.length === 0 ? (
-        <div className="rounded-lg border border-slate-700/50 bg-slate-900/50 px-3 py-4 text-center text-xs font-semibold text-slate-400">
-          Building structure map… engine needs ~1 hour of 5m candles after market open.
-          {lastUpdate === null && ' Waiting for first data frame.'}
-        </div>
-      ) : (
-        <div className="grid grid-cols-1 gap-2.5 md:grid-cols-2 xl:grid-cols-3">
-          {rows.map(row => <SMCCard key={row.symbol} row={row} />)}
-        </div>
-      )}
+      <IndexTabs idPrefix="smc-structure" label="SMC structure index">
+        {(symbol, name) => {
+          const row = data[symbol];
+          return row ? <SMCCard row={row} /> : (
+            <div role="status" className="rounded-lg border border-slate-700/50 bg-slate-900/50 px-3 py-4 text-center text-xs font-semibold text-slate-400">
+              {name} · Building structure map… engine needs ~1 hour of 5m candles after market open.
+              {lastUpdate === null && ' Waiting for first data frame.'}
+            </div>
+          );
+        }}
+      </IndexTabs>
 
       <p className="mt-2 text-[9px] font-medium text-slate-500">
         Institutional-behavior model on closed candles only — swings need 2-bar confirmation, events never repaint.

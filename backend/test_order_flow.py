@@ -81,6 +81,19 @@ class OrderFlowEngineTests(unittest.TestCase):
 
 
 class OrderFlowAnalysisTests(unittest.TestCase):
+    def test_live_ohlcv_requires_contiguous_minutes_from_bucket_open_without_gaps(self):
+        minutes = make_bar(OPEN, 100, 102, 99, 101, 100, 100)
+        forming = aggregate(minutes[:2], 5)[0]
+        self.assertFalse(forming["complete"])
+        self.assertTrue(forming["ohlcvComplete"])
+        payload = analyze([forming], row=1.0, tick=0.05, now=OPEN + 61)
+        self.assertTrue(payload["bars"][0]["ohlcvComplete"])
+        self.assertFalse(payload["bars"][0]["closed"])
+        self.assertFalse(aggregate(minutes[1:3], 5)[0]["ohlcvComplete"], "mid-bucket startup")
+        self.assertFalse(aggregate([minutes[0], minutes[2]], 5)[0]["ohlcvComplete"], "missing minute")
+        minutes[1]["gap"] = True
+        self.assertFalse(aggregate(minutes[:2], 5)[0]["ohlcvComplete"], "feed gap or reset")
+
     def test_value_area_and_stacked_imbalance(self):
         profile = value_area({100.0: [10, 10], 101.0: [50, 50], 102.0: [20, 20], 103.0: [1, 1]}, 1.0)
         self.assertEqual(profile["poc"], 101.0)
@@ -141,6 +154,41 @@ class OrderFlowAnalysisTests(unittest.TestCase):
 
 
 class OrderFlowApiTests(unittest.TestCase):
+    def test_websocket_delivers_verified_forming_ohlcv_and_incremental_same_contract_ticks(self):
+        from routers import order_flow
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        engine = OrderFlowEngine(Path(directory.name) / "flow.sqlite3")
+        engine.ingest_futures("NIFTY", 7, tick(datetime(2026, 10, 19, 9, 19, 59), 100, 1000, 99, 100))
+        engine.ingest_futures("NIFTY", 7, tick(datetime(2026, 10, 19, 9, 20, 0), 101, 1050, 100, 101))
+        app = FastAPI()
+        app.include_router(order_flow.ws_router, prefix="/ws")
+        with patch.object(order_flow, "order_flow_engine", engine), \
+                patch.object(order_flow, "_contract", return_value=None), \
+                patch.object(order_flow, "_today", return_value="2026-10-19"):
+            order_flow._cache.clear()
+            with TestClient(app) as client:
+                with client.websocket_connect("/ws/order-flow?symbol=NIFTY&interval=5&token=7") as ws:
+                    initial = ws.receive_json()
+                    self.assertEqual(initial["type"], "snapshot")
+                    forming = initial["data"]["bars"][-1]
+                    self.assertTrue(forming["ohlcvComplete"])
+                    self.assertFalse(forming["complete"])
+                    self.assertEqual((forming["c"], forming["v"]), (101, 50))
+                    engine.ingest_futures("NIFTY", 7, tick(
+                        datetime(2026, 10, 19, 9, 20, 1), 102, 1100, 101, 102))
+                    order_flow._cache.clear()
+                    update = ws.receive_json()
+                    self.assertEqual(update["type"], "update")
+                    self.assertEqual(update["data"]["token"], 7)
+                    self.assertTrue(update["data"]["bars"][-1]["ohlcvComplete"])
+                    self.assertEqual((update["data"]["bars"][-1]["c"], update["data"]["bars"][-1]["v"]), (102, 100))
+                with client.websocket_connect("/ws/order-flow?symbol=NIFTY&interval=5&token=8") as ws:
+                    unavailable = ws.receive_json()["data"]
+                    self.assertFalse(unavailable["available"])
+                    self.assertEqual(unavailable["recordedToken"], 7)
+            order_flow._cache.clear()
+
     def test_snapshot_reports_unavailable_then_recorded_flow(self):
         from routers import order_flow
         directory = tempfile.TemporaryDirectory()

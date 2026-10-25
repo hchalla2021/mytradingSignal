@@ -4,12 +4,13 @@
  * SmartAIAlgoSection — Premium Institutional Algo Trading Panel
  * =============================================================
  * Bloomberg Terminal × Dark Glass aesthetic
- * Mobile-first responsive: 1-col (mobile) → 2-col (tablet) → 3-col (desktop)
+ * Mobile-first responsive, with optional focused-index workspace layout.
  * Performance: React.memo, useMemo, CSS transitions only (no JS animation loops)
  */
 
 import React, { useMemo, useCallback, useState, useEffect, useRef } from 'react';
 import { useSmartAlgo, AlgoSignal, AlgoIndicators, StrategyLabPayload, MarketDirection, TradePlan, EarlyWarning, ExecDiagnostics } from '@/hooks/useSmartAlgo';
+import type { IndexSymbol } from '@/components/IndexTabs';
 
 // ─── formatters ───────────────────────────────────────────────────────────────
 
@@ -234,13 +235,13 @@ const Stepper = React.memo(function Stepper({
   min: number; max: number; onChange: (v: number) => void; color: string;
 }) {
   return (
-    <div className="flex items-center gap-2 flex-1 min-w-0">
+    <div className="grid grid-cols-[auto_minmax(0,1fr)] items-center gap-2 flex-1 min-w-0">
       <span className="text-lg sm:text-xl leading-none shrink-0">{icon}</span>
-      <span className={`text-[11px] sm:text-xs md:text-sm font-bold w-14 sm:w-16 shrink-0 truncate ${color}`}>{label}</span>
-      <div className="flex items-center gap-1.5 flex-1">
+      <span className={`text-xs sm:text-sm font-bold ${color}`}>{label}</span>
+      <div className="col-span-2 flex items-center justify-between gap-1.5">
         <button
           onClick={() => onChange(Math.max(min, value - step))}
-          className="w-8 h-8 sm:w-9 sm:h-9 rounded-lg bg-slate-800/80 hover:bg-slate-700 active:scale-95
+          className="w-11 h-11 shrink-0 rounded-lg bg-slate-800/80 hover:bg-slate-700 active:scale-95
             border border-slate-600/50 text-slate-300 text-base font-bold
             flex items-center justify-center transition-all duration-100
             select-none touch-manipulation"
@@ -249,7 +250,7 @@ const Stepper = React.memo(function Stepper({
         <span className="text-sm sm:text-base font-black text-white w-10 sm:w-12 text-center tabular-nums">{value}</span>
         <button
           onClick={() => onChange(Math.min(max, value + step))}
-          className="w-8 h-8 sm:w-9 sm:h-9 rounded-lg bg-slate-800/80 hover:bg-slate-700 active:scale-95
+          className="w-11 h-11 shrink-0 rounded-lg bg-slate-800/80 hover:bg-slate-700 active:scale-95
             border border-slate-600/50 text-slate-300 text-base font-bold
             flex items-center justify-center transition-all duration-100
             select-none touch-manipulation"
@@ -878,7 +879,7 @@ const SymbolCard = React.memo(function SymbolCard({
 
         {/* Price grid: always mounted to avoid flicker on state transitions */}
         <div className="space-y-2.5">
-          <div className="grid grid-cols-4 gap-2.5">
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
             <div>
               <PriceCell label={entryLabel} value={showPrices ? fmt(algo.entry_price) : '—'} color={isActive ? 'text-white font-black' : 'text-slate-100'} sublabel={showPrices ? priceSublabel : undefined} />
             </div>
@@ -994,7 +995,7 @@ const SymbolCard = React.memo(function SymbolCard({
                   </div>
                 </div>
               </div>
-              <div className="grid grid-cols-4 gap-2">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                 <PriceCell label="OPT LTP" value={fmt(algo.option_ltp ?? 0)} color="text-slate-100" />
                 <PriceCell label="BEST BUY" value={fmt(algo.option_best_buy_price ?? 0)} color="text-emerald-300" sublabel="ask" />
                 <PriceCell label="BID" value={fmt(algo.option_best_bid_price ?? 0)} color="text-cyan-300" />
@@ -1079,18 +1080,18 @@ const SymbolCard = React.memo(function SymbolCard({
         </div>
 
         {/* SL / Target steppers */}
-        <div className={`flex items-center gap-3 px-4 py-3 rounded-xl border ${s.pillBorder} ${s.pillBg}`}>
+        <div className={`grid grid-cols-1 sm:grid-cols-2 items-center gap-3 px-3 sm:px-4 py-3 rounded-xl border ${s.pillBorder} ${s.pillBg}`}>
           <Stepper label="Stop Loss" icon="🛑" value={slPoints}     step={5} min={5} max={200} onChange={onSlChange}   color="text-red-400" />
-          <div className="w-px h-8 bg-slate-700/50 shrink-0" />
           <Stepper label="Target"    icon="🎯" value={targetPoints} step={5} min={5} max={500} onChange={onTargetChange} color="text-emerald-400" />
         </div>
 
         {/* Lot size controls with explicit save */}
-        <div className={`flex items-center gap-3 px-4 py-3 rounded-xl border ${s.pillBorder} ${s.pillBg}`}>
+        <div className={`flex flex-wrap items-center gap-3 px-3 sm:px-4 py-3 rounded-xl border ${s.pillBorder} ${s.pillBg}`}>
           <Stepper label="Lots" icon="📦" value={lotCount} step={1} min={1} max={50} onChange={onLotChange} color="text-cyan-300" />
+          <div className="flex w-full sm:w-auto items-center justify-between gap-3">
           <button
             onClick={onSaveLot}
-            className={`px-3 py-2 rounded-lg border text-[10px] sm:text-xs font-black tracking-wide transition-all duration-150 ${
+            className={`min-h-[44px] px-3 py-2 rounded-lg border text-xs font-bold tracking-wide transition-all duration-150 ${
               isLotDirty
                 ? 'bg-gradient-to-r from-cyan-600/70 to-sky-600/70 text-white border-cyan-400/60 hover:brightness-110'
                 : 'bg-slate-800/70 text-slate-300 border-slate-600/60'
@@ -1102,6 +1103,7 @@ const SymbolCard = React.memo(function SymbolCard({
           <span className={`text-[10px] sm:text-[11px] font-semibold ${isLotDirty ? 'text-amber-300' : 'text-emerald-300'}`}>
             {isLotDirty ? 'Unsaved' : 'Saved'}
           </span>
+          </div>
         </div>
 
         {/* Indicators grid — collapsed by default; expand to inspect raw levels */}
@@ -1304,7 +1306,7 @@ const SummaryBar = React.memo(function SummaryBar({
 
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
-export default function SmartAIAlgoSection() {
+export default function SmartAIAlgoSection({ selectedSymbol }: { selectedSymbol?: IndexSymbol } = {}) {
   const { data, isConnected, aiEnabled, adjustSLTarget, toggleAlgo } = useSmartAlgo();
   const defaultLots = 1;
   const LOTS_STORAGE_KEY = 'smart_ai_algo_lots_v1';
@@ -1372,7 +1374,7 @@ export default function SmartAIAlgoSection() {
   }), [sl, tgt]);
 
   return (
-    <section className="mt-6 sm:mt-8">
+    <section className={selectedSymbol ? 'min-w-0' : 'mt-6 sm:mt-8'}>
 
       {/* Section header */}
       <div className="flex flex-col gap-3 mb-4 sm:mb-6 px-4 sm:px-5 py-4 sm:py-5 rounded-2xl
@@ -1391,7 +1393,7 @@ export default function SmartAIAlgoSection() {
             </div>
             <div>
               <div className="flex items-center gap-3 flex-wrap">
-                <h2 className="text-xl sm:text-2xl font-black text-white tracking-tight leading-none">
+                <h2 className="text-base sm:text-lg font-bold text-white tracking-tight leading-snug">
                   Smart AI Algo
                 </h2>
                 <AlgoToggle enabled={algoEnabled} onToggle={() => toggleAlgo(!algoEnabled)} />
@@ -1477,10 +1479,10 @@ export default function SmartAIAlgoSection() {
       )}
 
       {/* Cards grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 items-start gap-3 sm:gap-4">
+      <div className={selectedSymbol ? 'min-w-0' : 'grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 items-start gap-3 sm:gap-4'}>
         {SYMBOLS.map(sym => (
+          <div key={sym} hidden={Boolean(selectedSymbol && selectedSymbol !== sym)} className="min-w-0">
           <SymbolCard
-            key={sym}
             algo={data[sym] ?? emptyAlgo(sym)}
             slPoints={sl[sym] ?? 10}
             targetPoints={tgt[sym] ?? 15}
@@ -1492,6 +1494,7 @@ export default function SmartAIAlgoSection() {
             onLotChange={v => handleLot(sym, v)}
             onSaveLot={() => handleSaveLot(sym)}
           />
+          </div>
         ))}
       </div>
 

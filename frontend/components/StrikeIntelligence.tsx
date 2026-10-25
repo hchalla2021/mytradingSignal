@@ -1,6 +1,7 @@
 ﻿'use client';
 
 import React, { memo, useMemo, useRef, useState, useEffect } from 'react';
+import IndexTabs from '@/components/IndexTabs';
 import { useStrikeIntelligence, type SymbolStrikeData, type StrikeRow, type StrikeSignal, type StrikeSideData, type QuantumFractalIntelligence, type StrikeIntelligenceData } from '@/hooks/useStrikeIntelligence';
 
 // Signal config
@@ -2837,11 +2838,11 @@ function StrikeIntelligenceComponent() {
         </div>
       </div>
       <StrikeTerminalOverview strikeData={strikeData} isConnected={isConnected} tickTs={tickTs} statusLabel={dataStatus.label} />
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-3 lg:gap-5 xl:gap-6">
-        <SymbolStrikeCard data={strikeData.NIFTY}      name="NIFTY 50"   />
-        <SymbolStrikeCard data={strikeData.BANKNIFTY}  name="BANK NIFTY" />
-        <SymbolStrikeCard data={strikeData.SENSEX}     name="SENSEX"     />
-      </div>
+      <IndexTabs idPrefix="strike-intelligence" label="Strike intelligence index">
+        {(symbol, name) => (
+          <SymbolStrikeCard data={strikeData[symbol]} name={name} />
+        )}
+      </IndexTabs>
     </div>
   );
 }

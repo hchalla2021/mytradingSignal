@@ -76,7 +76,8 @@ export function parsePage(value: unknown): HistoryPage {
         !('l' in row) || typeof row.l !== 'number' ||
         !('c' in row) || typeof row.c !== 'number' ||
         !('v' in row) || typeof row.v !== 'number') throw new Error('Invalid historical candle.');
-    const candle = { t: row.t, o: row.o, h: row.h, l: row.l, c: row.c, v: row.v };
+    const candle: Candle = { t: row.t, o: row.o, h: row.h, l: row.l, c: row.c, v: row.v };
+    if ('oi' in row && typeof row.oi === 'number' && Number.isFinite(row.oi) && row.oi >= 0) candle.oi = row.oi;
     if (!Number.isFinite(candleTime(candle)) ||
         ![row.o, row.h, row.l, row.c, row.v].every(Number.isFinite) ||
         row.l <= 0 || row.h < Math.max(row.o, row.c) || row.l > Math.min(row.o, row.c) || row.v < 0) {

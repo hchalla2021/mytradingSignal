@@ -1,0 +1,50 @@
+.workspace {
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid rgb(52 211 153 / 25%);
+  border-radius: 20px;
+  background: linear-gradient(135deg, #101e2c, #0b1220 55%, #0c2024);
+  font-family: var(--font-inter), system-ui, sans-serif;
+  color: #e2e8f0;
+}
+.header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.header h2 { font-size: 18px; font-weight: 700; line-height: 1.4; }
+.eyebrow { font-size: 11px; font-weight: 700; letter-spacing: .12em; color: #6ee7b7; margin-bottom: 4px; }
+.description { font-size: 12px; line-height: 1.6; color: #94a3b8; margin: 4px 0 12px; }
+.scope { padding: 8px 12px; border: 1px solid #334155; border-radius: 999px; font-size: 12px; font-weight: 600; color: #a7f3d0; }
+.features { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; margin-bottom: 16px; }
+.features button {
+  min-width: 0;
+  min-height: 44px;
+  padding: 10px 8px;
+  border: 1px solid #334155;
+  border-radius: 10px;
+  background: rgb(15 23 42 / 70%);
+  color: #cbd5e1;
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.4;
+  touch-action: manipulation;
+  transition: background-color .2s, border-color .2s;
+}
+.features button:hover { border-color: #64748b; background: #1e293b; }
+.features button[aria-selected="true"] { border-color: #34d399; background: rgb(16 185 129 / 15%); color: #a7f3d0; }
+.features button:focus-visible, .workspace [role="tabpanel"]:focus-visible { outline: 2px solid #6ee7b7; outline-offset: 3px; }
+.content { min-width: 0; overflow-wrap: anywhere; }
+.content :global(.font-mono) { font-family: inherit; font-variant-numeric: tabular-nums; }
+.content [class*="text-[8px]"], .content [class*="text-[9px]"],
+.content [class*="text-[10px]"], .content [class*="text-[11px]"] { font-size: 12px; line-height: 1.5; }
+@media (min-width: 640px) {
+  .workspace { padding: 20px; }
+  .header h2 { font-size: 20px; }
+  .description, .features button { font-size: 13px; }
+  .features { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+}
+@media (prefers-reduced-motion: reduce) { .features button { transition: none; } }

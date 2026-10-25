@@ -40,7 +40,8 @@ def aggregate(minutes: Iterable[Dict[str, Any]], interval: int) -> List[Dict[str
         if bar is None:
             bar = bars[key] = {"t": key, "o": m["o"], "h": m["h"], "l": m["l"], "c": m["c"], "v": 0.0, "b": 0.0,
                                "s": 0.0, "n": 0.0, "lv": {}, "bk": [0.0, 0.0, 0], "dp": [0.0, 0.0, 0],
-                               "sp": [0.0, 0], "spot": None, "gap": False, "count": 0}
+                               "sp": [0.0, 0], "spot": None, "gap": False, "count": 0, "first": m["t"], "last": m["t"],
+                               "oi": None, "oio": None}
         bar["h"], bar["l"], bar["c"] = max(bar["h"], m["h"]), min(bar["l"], m["l"]), m["c"]
         for field in ("v", "b", "s", "n"):
             bar[field] += m[field]
@@ -54,8 +55,13 @@ def aggregate(minutes: Iterable[Dict[str, Any]], interval: int) -> List[Dict[str
         bar["sp"][0] += m["sp"][0]
         bar["sp"][1] += m["sp"][1]
         bar["spot"] = m.get("spot") or bar["spot"]
+        if m.get("oi") is not None:
+            bar["oi"] = m["oi"]
+            if bar["oio"] is None:
+                bar["oio"] = m.get("oio") if m.get("oio") is not None else m["oi"]
         bar["gap"] = bar["gap"] or bool(m.get("gap"))
         bar["count"] += 1
+        bar["last"] = m["t"]
     out = []
     for key in sorted(bars):
         bar = bars[key]
@@ -63,6 +69,11 @@ def aggregate(minutes: Iterable[Dict[str, Any]], interval: int) -> List[Dict[str
         expected = max(1, min(interval, (close - key) // 60))
         bar["end"] = min(key + interval * 60, close)
         bar["complete"] = bar["count"] >= expected and not bar["gap"]
+        # Forming OHLCV is usable only when every minute since the bucket open was recorded.
+        bar["ohlcvComplete"] = (
+            bar["first"] == key and not bar["gap"]
+            and bar["count"] == (bar["last"] - key) // 60 + 1
+        )
         out.append(bar)
     return out
 
@@ -163,7 +174,11 @@ def analyze(bars: List[Dict[str, Any]], *, row: float, tick: float, now: float, 
             "spread": round(bar["sp"][0] / bar["sp"][1], 2) if bar["sp"][1] else None,
             "basis": round(bar["c"] - bar["spot"], 2) if bar.get("spot") else None,
             "complete": bar["complete"], "closed": bar["end"] <= now,
+            "ohlcvComplete": bar["ohlcvComplete"],
             "coverage": round(classified / bar["v"], 3) if bar["v"] else 0.0,
+            # Exchange-reported open interest at the bar's last recorded tick; null when not recorded.
+            "oi": round(bar["oi"]) if bar.get("oi") is not None else None,
+            "oiOpen": round(bar["oio"]) if bar.get("oio") is not None else None,
         })
 
     # ── per-bar detections on closed, fully-observed bars ──────────────────

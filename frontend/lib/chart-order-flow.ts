@@ -17,6 +17,8 @@ export interface OrderFlowLayerOptions {
   basisAdjust: boolean;
   /** Vertical band (fractions of pane height) for the delta / CVD strip; must be outside the candle margin. */
   strip: { top: number; bottom: number };
+  /** Draw the server order-flow trade plan (entry / SL / targets). Defaults to true. */
+  plan?: boolean;
 }
 
 const BUY = '#00d39b';
@@ -362,6 +364,7 @@ export class OrderFlowPrimitive implements ISeriesPrimitive<Time> {
   /** Active plan only: entry / stop / targets as short dashed segments from the signal bar. */
   private drawPlan(frame: Frame) {
     const guidance = this.snapshot!.guidance;
+    if (this.options.plan === false) return;
     if ((guidance.action !== 'BUY' && guidance.action !== 'SELL') || guidance.time === undefined) return;
     const shift = this.shift(guidance.time);
     const start = frame.x(guidance.time);

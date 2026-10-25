@@ -10,8 +10,6 @@ import React, { useMemo } from 'react';
  * - Liquidity inflow/outflow flow
  * - Potential reversal signals
  * - Order flow imbalance
- * 
- * Designed to work within LiquidityIntelligence component
  */
 
 interface MicroMomentum {

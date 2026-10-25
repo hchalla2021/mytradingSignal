@@ -23,6 +23,8 @@ export interface Candle {
   l: number;
   c: number;
   v: number;
+  /** Exchange open interest at candle close (futures history only; absent when not reported). */
+  oi?: number;
 }
 
 export interface FVG {
@@ -664,7 +666,7 @@ export function useChartIntelligence() {
       const isLocal = window.location.hostname === 'localhost';
       const urlSet = new Set<string>();
       if (isLocal) { urlSet.add(local); urlSet.add(port8000); urlSet.add(primary); }
-      else { urlSet.add(primary); urlSet.add(local); urlSet.add(port8000); }
+      else { urlSet.add(primary); }
       wsUrlsRef.current = Array.from(urlSet);
     }
 

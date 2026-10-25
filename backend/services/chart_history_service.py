@@ -63,6 +63,10 @@ def normalize_candles(records):
             "t": timestamp.astimezone(IST).isoformat(),
             "o": op, "h": high, "l": low, "c": close, "v": volume,
         }
+        # Open interest exists only for derivatives fetched with oi=True; it is never synthesized.
+        oi = row.get("oi")
+        if isinstance(oi, (int, float)) and math.isfinite(oi) and oi >= 0:
+            candles[epoch]["oi"] = int(oi)
     return [candles[key] for key in sorted(candles)]
 
 
@@ -90,6 +94,8 @@ def aggregate_daily_candles(candles, interval):
             bar["l"] = min(bar["l"], candle["l"])
             bar["c"] = candle["c"]
             bar["v"] += candle["v"]
+            if "oi" in candle:
+                bar["oi"] = candle["oi"]
     return list(periods.values())
 
 
@@ -119,6 +125,8 @@ def settled_snapshot(fetched, now):
 
 
 class ChartHistoryService:
+    include_oi = False
+
     def __init__(self, db_path=None):
         self.db_path = db_path or Path(__file__).resolve().parent.parent / "data" / "chart_history.sqlite3"
         # One lock per page so different symbols/intervals load concurrently; identical requests still coalesce.
@@ -170,7 +178,7 @@ class ChartHistoryService:
         rows = request_chart_candles(
             client,
             self._instrument_token(symbol), datetime.fromisoformat(start), datetime.fromisoformat(end),
-            INTERVALS[interval], continuous=False,
+            INTERVALS[interval], continuous=False, **({"oi": True} if self.include_oi else {}),
         )
         candles = aggregate_daily_candles(normalize_candles(rows), interval)
         with self._connect() as connection:

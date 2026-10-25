@@ -5,7 +5,10 @@ import dynamic from 'next/dynamic';
 import LiveStatus from '@/components/LiveStatus';
 import Header from '@/components/Header';
 import SystemStatusBanner from '@/components/SystemStatusBanner';
-import SmartAIAlgoSection from '@/components/SmartAIAlgoSection';
+import InstitutionalWorkspace from '@/components/InstitutionalWorkspace';
+import LiveMarketIndexTabs from '@/components/LiveMarketIndexTabs';
+import IndexTabs from '@/components/IndexTabs';
+import MarketAnalysisTabs from '@/components/MarketAnalysisTabs';
 import { useMarketSocket } from '@/hooks/useMarketSocket';
 import { useAIAnalysis } from '@/hooks/useAIAnalysis';
 import type { FIIDIISnapshot } from '@/hooks/useFIIDIIFlow';
@@ -13,17 +16,6 @@ import { API_CONFIG } from '@/lib/api-config';
 import { getOrCreateVisitorId } from '@/lib/visitor-id';
 
 // Dynamic imports for components that use live data - prevents SSR issues
-const IndexCard = dynamic(() => import('@/components/IndexCard'), { 
-  ssr: false,
-  loading: () => (
-    <div className="bg-dark-surface/60 rounded-xl p-6 animate-pulse border border-emerald-500/20">
-      <div className="h-6 bg-gray-700 rounded mb-4"></div>
-      <div className="h-4 bg-gray-700 rounded mb-2"></div>
-      <div className="h-4 bg-gray-700 rounded w-3/4"></div>
-    </div>
-  )
-});
-
 const TopAISignalBar = dynamic(() => import('@/components/TopAISignalBar'), { ssr: false });
 const SMCStructureSection = dynamic(() => import('@/components/SMCStructureSection'), {
   ssr: false,
@@ -38,11 +30,9 @@ const SMCStructureSection = dynamic(() => import('@/components/SMCStructureSecti
     </div>
   )
 });
-const FIIDIIFlowStrip = dynamic(() => import('@/components/FIIDIIFlowStrip'), { ssr: false });
 const VolumePulseCard = dynamic(() => import('@/components/VolumePulseCard'), { ssr: false });
 const TrendBaseCard = dynamic(() => import('@/components/TrendBaseCard'), { ssr: false });
 const SectionTitle = dynamic(() => import('@/components/SectionTitle'), { ssr: false });
-const InstitutionalMarketView = dynamic(() => import('@/components/InstitutionalMarketView'), { ssr: false });
 const InstitutionalCompass = dynamic(() => import('@/components/InstitutionalCompass'), {
   ssr: false,
   loading: () => (
@@ -51,20 +41,6 @@ const InstitutionalCompass = dynamic(() => import('@/components/InstitutionalCom
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         {[0, 1, 2].map(i => (
           <div key={i} className="rounded-2xl bg-slate-700/30 h-64" />
-        ))}
-      </div>
-    </div>
-  )
-});
-
-const LiquidityIntelligence = dynamic(() => import('@/components/LiquidityIntelligence'), {
-  ssr: false,
-  loading: () => (
-    <div className="rounded-2xl border border-slate-700/40 bg-slate-800/30 p-5 animate-pulse">
-      <div className="h-4 w-56 bg-slate-700 rounded mb-3" />
-      <div className="flex flex-col lg:flex-row gap-4">
-        {[0, 1, 2].map(i => (
-          <div key={i} className="flex-1 rounded-xl bg-slate-700/25 h-80" />
         ))}
       </div>
     </div>
@@ -142,20 +118,6 @@ const MarketEdgeIntelligence = dynamic(() => import('@/components/MarketEdgeInte
   ssr: false,
   loading: () => (
     <div className="rounded-2xl border border-teal-500/30 bg-slate-800/30 p-5 animate-pulse">
-      <div className="h-5 w-64 bg-slate-700 rounded mb-4" />
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        {[0, 1, 2].map(i => (
-          <div key={i} className="rounded-2xl bg-slate-700/30 h-80" />
-        ))}
-      </div>
-    </div>
-  )
-});
-
-const CandleIntelligenceEngine = dynamic(() => import('@/components/CandleIntelligenceEngine'), {
-  ssr: false,
-  loading: () => (
-    <div className="rounded-2xl border border-orange-500/30 bg-slate-800/30 p-5 animate-pulse">
       <div className="h-5 w-64 bg-slate-700 rounded mb-4" />
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
         {[0, 1, 2].map(i => (
@@ -507,28 +469,12 @@ export default function Home() {
       {/* Main Dashboard - Full Width */}
       <div className="w-full px-3 sm:px-5 lg:px-8 xl:px-10 py-3 lg:py-5">
         <div className="mx-auto flex w-full max-w-[1820px] flex-col">
-        {/* 🤖 SMART AI ALGO — fixed first in the dashboard stack */}
-        <div style={{ order: -10 }}>
-          <SmartAIAlgoSection />
-        </div>
-
-        {/* 💸 FII / DII FLOW + BIG PLAYER RADAR — below Smart AI Algo */}
-        <div style={{ order: -9 }}>
-          <FIIDIIFlowStrip marketData={marketData} isConnected={isConnected} onSnapshot={setInstitutionalData} />
-        </div>
-
-        {/* 🏛️ ADVANCED SMC & MARKET STRUCTURE — directly below FII/DII Flow */}
-        <div style={{ order: -8 }}>
-          <SMCStructureSection />
-        </div>
-
-        {/* 🧠 AI SIGNAL DECK — institutional-grade per-index status cards */}
-        <div style={{ order: -1 }}>
-          <TopAISignalBar marketData={marketData} isConnected={isConnected} />
+        <div style={{ order: -11 }} className="min-w-0">
+          <ChartWorkspace marketData={marketData} institutionalData={institutionalData} />
         </div>
 
         {/* Live Market Indices - With Border */}
-        <div style={{ order: -4 }} className="border-2 border-emerald-500/30 rounded-2xl p-3 sm:p-4 bg-gradient-to-br from-emerald-950/20 via-dark-card/50 to-dark-elevated/40 backdrop-blur-sm shadow-xl shadow-emerald-500/10">
+        <div style={{ order: -10 }} className="border-2 border-emerald-500/30 rounded-2xl p-3 sm:p-4 bg-gradient-to-br from-emerald-950/20 via-dark-card/50 to-dark-elevated/40 backdrop-blur-sm shadow-xl shadow-emerald-500/10">
           {/* Section Header */}
           <div className="flex flex-col gap-3 mb-3 sm:mb-4">
             <SectionTitle
@@ -589,145 +535,90 @@ export default function Home() {
             <p className="text-dark-tertiary text-[10px] sm:text-xs ml-4 sm:ml-5 font-medium tracking-wide">Real-time NSE & BSE Index Data with GPT-4 Intelligence</p>
           </div>
         
-          {/* Index Cards Grid - Full Width Responsive */}
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 sm:gap-3">
-          <IndexCard
-            symbol="NIFTY"
-            name="NIFTY 50"
-            data={marketData.NIFTY}
-            isConnected={isConnected}
-            aiAlertData={alertData.NIFTY}
-          />
-          <IndexCard
-            symbol="BANKNIFTY"
-            name="BANK NIFTY"
-            data={marketData.BANKNIFTY}
-            isConnected={isConnected}
-            aiAlertData={alertData.BANKNIFTY}
-          />
-          <IndexCard
-            symbol="SENSEX"
-            name="SENSEX"
-            data={marketData.SENSEX}
-            isConnected={isConnected}
-            aiAlertData={alertData.SENSEX}
-          />
-        </div>
+          <LiveMarketIndexTabs marketData={marketData} isConnected={isConnected} alertData={alertData} />
         </div>
 
-        <div style={{ order: -3 }} className="min-w-0">
-          <ChartWorkspace marketData={marketData} institutionalData={institutionalData} />
+        {/* Shared algo and institutional-flow workspace */}
+        <div style={{ order: -9 }}>
+          <InstitutionalWorkspace marketData={marketData} isConnected={isConnected} onSnapshot={setInstitutionalData} />
         </div>
 
-        {/* ⚡ GREEKS OVERVIEW — Real-time Greeks analysis and buy/sell signals */}
-        <TradingIntelligenceEngine marketData={marketData} />
-
-        {/* P0: 📊 TODAY'S MARKET REGIME — Trending vs Sideways */}
-        <MarketRegimeIntelligence marketData={marketData} />
-
-        {/* P1: ⚡ PURE LIQUIDITY INTELLIGENCE */}
-        <LiquidityIntelligence />
-
-        {/* P12: 📈 MARKETEDGE INTELLIGENCE */}
-        <MarketEdgeIntelligence />
-
-        {/* P13: 🕯️ CANDLE INTELLIGENCE ENGINE */}
-        <CandleIntelligenceEngine />
-
-        {/* P4: Smart Money • Order Logic */}
-        <div className="mt-6 sm:mt-6 border-2 border-purple-600/40 rounded-2xl p-3 sm:p-4 bg-gradient-to-br from-purple-950/20 via-dark-card/50 to-dark-elevated/40 backdrop-blur-sm shadow-xl shadow-purple-600/15">
-          {/* Section Header */}
-          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 mb-3 sm:mb-4">
-            <SectionTitle
-              title="Smart Money • Order Logic"
-              accentColor="purple"
-            />
-          </div>
-          
-          <div className="grid grid-cols-1 lg:grid-cols-2 2xl:grid-cols-3 gap-3">
-            <InstitutionalMarketView symbol="NIFTY" />
-            <InstitutionalMarketView symbol="BANKNIFTY" />
-            <InstitutionalMarketView symbol="SENSEX" />
-          </div>
+        {/* 🧠 AI SIGNAL DECK — institutional-grade per-index status cards */}
+        <div style={{ order: -1 }}>
+          <TopAISignalBar marketData={marketData} isConnected={isConnected} />
         </div>
 
-        {/* P2: Trend Base Section */}
-        <div className="mt-6 sm:mt-6">
-          <div className="flex flex-col gap-1 mb-3 sm:mb-4">
-            <SectionTitle
-              title="Trend Base (Higher-Low Structure)"
-              subtitle="Live swing structure · 8-factor analysis · 5-min prediction"
-              accentColor="green"
-            />
-          </div>
-          <div className="grid grid-cols-1 lg:grid-cols-2 2xl:grid-cols-3 gap-3">
-            <TrendBaseCard symbol="NIFTY" name="NIFTY 50" />
-            <TrendBaseCard symbol="BANKNIFTY" name="BANK NIFTY" />
-            <TrendBaseCard symbol="SENSEX" name="SENSEX" />
-          </div>
+        <div style={{ order: -8 }} className="min-w-0">
+          <MarketAnalysisTabs sections={{
+            smc: <SMCStructureSection />,
+            greeks: <TradingIntelligenceEngine marketData={marketData} />,
+            regime: <MarketRegimeIntelligence marketData={marketData} />,
+            ict: <ICTIntelligence />,
+            compass: <InstitutionalCompass />,
+            volume: (() => {
+              const niftySig = aggregatedMarketSignal.NIFTY.signal;
+              const vpSectionClass =
+                niftySig === 'STRONG_BUY'  ? 'vp-section-strong-buy' :
+                niftySig === 'BUY'         ? 'vp-section-buy' :
+                niftySig === 'STRONG_SELL' ? 'vp-section-strong-sell' :
+                niftySig === 'SELL'        ? 'vp-section-sell' : '';
+              return (
+                <div className={`border-2 border-emerald-500/30 rounded-2xl p-3 sm:p-4 bg-gradient-to-br from-emerald-950/20 via-dark-card/50 to-dark-elevated/40 backdrop-blur-sm shadow-xl shadow-emerald-500/10 ${vpSectionClass}`}>
+                  <div className="flex flex-col gap-3 mb-3 sm:mb-4">
+                    <SectionTitle
+                      title="Volume Pulse (Candle Volume)"
+                      accentColor="emerald"
+                    />
+                  </div>
+
+                  <IndexTabs idPrefix="volume-pulse" label="Volume pulse index">
+                    {(symbol, name) => <VolumePulseCard symbol={symbol} name={name} />}
+                  </IndexTabs>
+                </div>
+              );
+            })(),
+          }} />
         </div>
 
-        {/* P2b: Volume Pulse Section — dynamic glow based on NIFTY volume signal */}
-        {(() => {
-          const niftySig = aggregatedMarketSignal.NIFTY.signal;
-          const vpSectionClass =
-            niftySig === 'STRONG_BUY'  ? 'vp-section-strong-buy' :
-            niftySig === 'BUY'         ? 'vp-section-buy' :
-            niftySig === 'STRONG_SELL' ? 'vp-section-strong-sell' :
-            niftySig === 'SELL'        ? 'vp-section-sell' : '';
-          return (
-            <div className={`mt-6 sm:mt-6 border-2 border-emerald-500/30 rounded-2xl p-3 sm:p-4 bg-gradient-to-br from-emerald-950/20 via-dark-card/50 to-dark-elevated/40 backdrop-blur-sm shadow-xl shadow-emerald-500/10 ${vpSectionClass}`}>
-              <div className="flex flex-col gap-3 mb-3 sm:mb-4">
+
+        <MarketAnalysisTabs variant="strategy" sections={{
+          edge: <MarketEdgeIntelligence />,
+          trend: (
+            <div className="min-w-0">
+              <div className="mb-4">
+                <SectionTitle title="Trend Base (Higher-Low Structure)"
+                  subtitle="Live swing structure · 8-factor analysis · 5-min prediction" accentColor="green" />
+              </div>
+              <IndexTabs idPrefix="strategy-trend" label="Trend base index">
+                {(symbol, name) => <TrendBaseCard symbol={symbol} name={name} />}
+              </IndexTabs>
+            </div>
+          ),
+          expiry: <ExpiryExplosionZone />,
+          btst: (
+            <div className="border-2 border-orange-500/35 rounded-2xl p-3 sm:p-4 bg-gradient-to-br from-orange-950/20 via-dark-card/50 to-dark-elevated/40 backdrop-blur-sm shadow-xl shadow-orange-500/10">
+              <div className="flex flex-col gap-1 mb-3 sm:mb-4">
                 <SectionTitle
-                  title="Volume Pulse (Candle Volume)"
-                  accentColor="emerald"
+                  title="CRT-Based BTST Strategies"
+                  subtitle="Candle Range Theory • 8-Factor Scoring • PDH/PDL Sweep Detection • AMD Pattern • Evening BTST Signals"
+                  accentColor="amber"
+                  badge={
+                    <span className="relative inline-flex items-center px-2 py-0.5 text-[9px] font-bold bg-gradient-to-r from-orange-600/80 to-amber-600/80 rounded-md shadow-lg border border-orange-400/30 whitespace-nowrap leading-none">
+                      <span className="relative z-10 inline-flex items-center gap-0.5">
+                        <span>🕯️</span>
+                        <span className="bg-gradient-to-r from-white via-amber-100 to-white bg-clip-text text-transparent font-extrabold">BTST ENGINE</span>
+                      </span>
+                    </span>
+                  }
                 />
               </div>
 
-              {/* Volume Pulse Cards Grid */}
-              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 sm:gap-4">
-                <VolumePulseCard symbol="NIFTY" name="NIFTY 50" />
-                <VolumePulseCard symbol="BANKNIFTY" name="BANK NIFTY" />
-                <VolumePulseCard symbol="SENSEX" name="SENSEX" />
-              </div>
+              <IndexTabs idPrefix="strategy-btst" label="BTST strategy index">
+                {(symbol, name) => <CRTBTSTCard symbol={symbol} name={name} data={marketData[symbol]} />}
+              </IndexTabs>
             </div>
-          );
-        })()}
-
-        {/* P3: 🏦 ICT SMART MONEY INTELLIGENCE */}
-        <ICTIntelligence />
-
-        {/* P5: 🧭 INSTITUTIONAL MARKET COMPASS */}
-        <InstitutionalCompass />
-
-
-        {/* P10: 💥 EXPIRY EXPLOSION ZONE */}
-        <ExpiryExplosionZone />
-
-        {/* P11: 🕯️ CRT-BASED BTST STRATEGIES */}
-        <div className="mt-6 sm:mt-6 border-2 border-orange-500/35 rounded-2xl p-3 sm:p-4 bg-gradient-to-br from-orange-950/20 via-dark-card/50 to-dark-elevated/40 backdrop-blur-sm shadow-xl shadow-orange-500/10">
-          <div className="flex flex-col gap-1 mb-3 sm:mb-4">
-            <SectionTitle
-              title="CRT-Based BTST Strategies"
-              subtitle="Candle Range Theory • 8-Factor Scoring • PDH/PDL Sweep Detection • AMD Pattern • Evening BTST Signals"
-              accentColor="amber"
-              badge={
-                <span className="relative inline-flex items-center px-2 py-0.5 text-[9px] font-bold bg-gradient-to-r from-orange-600/80 to-amber-600/80 rounded-md shadow-lg border border-orange-400/30 whitespace-nowrap leading-none">
-                  <span className="relative z-10 inline-flex items-center gap-0.5">
-                    <span>🕯️</span>
-                    <span className="bg-gradient-to-r from-white via-amber-100 to-white bg-clip-text text-transparent font-extrabold">BTST ENGINE</span>
-                  </span>
-                </span>
-              }
-            />
-          </div>
-
-          <div className="grid grid-cols-1 lg:grid-cols-2 2xl:grid-cols-3 gap-3">
-            <CRTBTSTCard symbol="NIFTY" name="NIFTY 50" data={marketData.NIFTY} />
-            <CRTBTSTCard symbol="BANKNIFTY" name="BANK NIFTY" data={marketData.BANKNIFTY} />
-            <CRTBTSTCard symbol="SENSEX" name="SENSEX" data={marketData.SENSEX} />
-          </div>
-        </div>
+          ),
+        }} />
 
         </div>
       </div>

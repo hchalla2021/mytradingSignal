@@ -34,7 +34,7 @@ export function createChartPaperAnalyzer() {
       const previous = candles[index - 1];
       const at = candleTime(bar);
       if (sessionDate(at) !== sessionDate(nowMs / 1000) || nowMs / 1000 >= at + timeframe * 120) return null;
-      const { series } = engine.calculate(candles, DEFAULT_INDICATORS, true);
+      const { series } = engine.calculate(candles, { ...DEFAULT_INDICATORS, vwap: false }, true);
       const atr = series.atr[index]?.value;
       if (atr === undefined || atr <= 0) return null;
       const ema = Object.fromEntries(PERIODS.map(period => [`ema${period}`, {
@@ -63,10 +63,6 @@ export function createChartPaperAnalyzer() {
         levels.push({ id: 'Previous day high', price: priorDaily.h, reference: priorDaily.h },
           { id: 'Previous day low', price: priorDaily.l, reference: priorDaily.l });
       }
-      const vwap = series.vwap[index]?.value;
-      const previousVwap = series.vwap[index - 1]?.value;
-      if (vwap !== undefined && previousVwap !== undefined && bar.v > 0)
-        levels.push({ id: 'Cash session VWAP', price: vwap, reference: previousVwap });
       const prior = candles.slice(index - 20, index);
       const volumeKnown = bar.v > 0 && prior.every(item => item.v > 0);
       const average = prior.reduce((sum, item) => sum + item.v, 0) / 20;
@@ -91,7 +87,6 @@ export function createChartPaperAnalyzer() {
         const tags = [strategy];
         if (trend === side) tags.push('EMA 9/20/50 trend');
         if (relativeVolume !== null && relativeVolume >= 1.2) tags.push('Relative volume >= 1.2');
-        if (vwap !== undefined && bar.v > 0 && (side === 'BUY' ? bar.c > vwap : bar.c < vwap)) tags.push('Cash VWAP aligned');
         if (structure === side) tags.push('20-bar structure break');
         tags.push(...patterns.filter(pattern => pattern.startsWith(side === 'BUY' ? 'Bullish' : 'Bearish')));
         signals.push({ strategy, side, signal_price: bar.c, tags, rationale });
@@ -137,7 +132,6 @@ export function createChartPaperAnalyzer() {
             lower_high: bar.h < previous.h, lower_low: bar.l < previous.l },
           volume: { source: 'Cash-index chart candles only', value: bar.v, relative: relativeVolume,
             status: volumeKnown ? 'OBSERVED' : 'UNAVAILABLE' },
-          vwap: { value: bar.v > 0 ? vwap ?? null : null, source: 'Cash-index chart only; futures not substituted' },
           chart_plan: chartPlan, execution_profile: 'Independent comparison books: 10-point stop, 20-point target',
         },
         signals,

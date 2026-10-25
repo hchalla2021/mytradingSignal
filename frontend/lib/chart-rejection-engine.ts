@@ -4,7 +4,7 @@ import { candleTime, DEFAULT_INDICATORS, sessionDate, type IndicatorSettings, ty
 
 /**
  * Rejection-trading engine for the Observatory chart. It only reads the chart's existing
- * indicators (EMA 9/20/50/100/200, EMA 13/21, VWAP, SuperTrend 10/2, Camarilla, Traditional
+ * indicators (EMA 9/20/50/100/200, EMA 13/21, SuperTrend 10/2, Camarilla, Traditional
  * pivots, CPR, RSI 14, ATR 14). Prices are INDEX levels; futures/options fills differ.
  */
 export type RejectionSide = 'BUY' | 'SELL';
@@ -68,7 +68,6 @@ export interface RejectionResult {
   watch: RejectionWatch | null;
   plan: TradePlan;
   stats: { all: ReplayStats; inSample: ReplayStats; outOfSample: ReplayStats };
-  vwapStatus: string;
   costs: { slippagePoints: number; feePoints: number };
   evaluatedBars: number;
 }
@@ -90,7 +89,7 @@ interface Candidate {
 }
 type Evaluation = { candidate: Candidate | null; watch: RejectionWatch | null };
 
-const ENGINE_SETTINGS: IndicatorSettings = { ...DEFAULT_INDICATORS, emaCross: true, macd: false, pivots: true, camarilla: true, cpr: true };
+const ENGINE_SETTINGS: IndicatorSettings = { ...DEFAULT_INDICATORS, vwap: false, emaCross: true, macd: false, pivots: true, camarilla: true, cpr: true };
 const EMA_WEIGHT: Record<number, number> = { 9: 1, 20: 1, 50: 2, 100: 2, 200: 3 };
 const PIVOT_LEVELS: [string, string, number][] = [
   ['cpr:TC', 'CPR TC', 3], ['cpr:P', 'CPR P', 3], ['cpr:BC', 'CPR BC', 3],
@@ -199,9 +198,6 @@ export function createRejectionEngine() {
       const value = series[`ema${period}`]?.[at]?.value;
       if (finite(value)) levels.push({ id: `EMA ${period}`, price: value, weight: EMA_WEIGHT[period] });
     }
-    // Session VWAP only exists when the chart candles carry real traded volume.
-    const vwap = series.vwap?.[at]?.value;
-    if (finite(vwap) && candles[i].v > 0) levels.push({ id: 'VWAP', price: vwap, weight: 3 });
     for (const [key, id, weight] of PIVOT_LEVELS) {
       const value = pivotSeries[key]?.[i]?.value;
       if (finite(value)) levels.push({ id, price: value, weight });
@@ -451,9 +447,6 @@ export function createRejectionEngine() {
       const resolved = signals.filter(signal => signal.outcome.resolved);
       const split = Math.floor(resolved.length * 0.7);
       const stats = { all: replayStats(resolved), inSample: replayStats(resolved.slice(0, split)), outOfSample: replayStats(resolved.slice(split)) };
-      const volumeBars = candles.some(bar => bar.v > 0);
-      const vwapStatus = volumeBars ? 'Session VWAP from chart candle volume' :
-        'VWAP not used: spot index has no traded volume and no futures VWAP is in this feed';
       const plan: TradePlan = active ? {
         direction: active.side, score: active.confidence, requiredScore: minConfidence, confirmation: active.reasons,
         watchReason: '', entry: active.entry, stopLoss: active.stopLoss, targets: [active.target1, active.target2, active.target2],
@@ -461,8 +454,8 @@ export function createRejectionEngine() {
         basis: `${active.setup} @ ${active.level}`,
         invalidation: `Exit if price trades through SL ${active.stopLoss.toFixed(2)}. Book 50% at T1 ${active.target1.toFixed(2)} (${active.t1Basis}), trail rest to breakeven, T2 ${active.target2.toFixed(2)} (${active.t2Basis}). Index levels — futures/options fills differ.`,
       } : wait(!options.live ? 'Live session required for new rejection entries; historical signals stay on the chart.' :
-        watch ? `WAIT: ${watch.reason}.` : 'WAIT: no validated rejection at EMA / VWAP / CPR / Camarilla / pivot levels.');
-      return { signals, active, watch, plan, stats, vwapStatus, costs, evaluatedBars: closedCount };
+        watch ? `WAIT: ${watch.reason}.` : 'WAIT: no validated rejection at EMA / CPR / Camarilla / pivot levels.');
+      return { signals, active, watch, plan, stats, costs, evaluatedBars: closedCount };
     },
   };
 }

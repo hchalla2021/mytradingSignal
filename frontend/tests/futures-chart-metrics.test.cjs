@@ -62,3 +62,9 @@ test('20,000-bar RVOL and tail-change detection stay within a 250ms calculation 
   assert.ok(duration < 250, `20,000 bars took ${duration.toFixed(1)}ms`);
   t.diagnostic(`20,000 bars RVOL + change detection: ${duration.toFixed(1)}ms; render tail: 1 candle`);
 });
+
+test('history reconciliation accepts equivalent exchange-offset and streamed UTC timestamps', () => {
+  const previous = [{ ...bar(0), t: '2026-10-20T09:15:00+05:30' }, bar(1)];
+  const reconciled = [{ ...previous[0], t: '2026-10-20T03:45:00.000Z' }, { ...previous[1], c: 102 }];
+  assert.equal(futuresChangedFrom(previous, reconciled), 1, 'equivalent timestamps must not rebuild history');
+});

@@ -63,6 +63,19 @@ interface History {
   health: { running: boolean; error: string | null; last_received: string | null; queued_ticks: number };
   signals: Record<string, number>;
   quotes: Record<string, { at: string; price: number }>;
+  order_flow?: FlowBook;
+}
+interface FlowSetup {
+  id: string; symbol: string; token: number; side: 'BUY' | 'SELL';
+  status: string; reason: string; signal_at: string; observed_at: string; updated_at: string;
+  entry_at: string | null; entry_price?: number; exit_at: string | null; exit_price?: number;
+  stop: number; target: number; points: number | null; unrealized_points?: number;
+  data_gaps: number; mfe: number; mae: number; contract?: { tradingSymbol: string } | null;
+  plan: { reasons: string[]; confidence: number };
+}
+interface FlowBook {
+  policy: Record<string, string>; setups: FlowSetup[]; counts: Record<string, number>;
+  total: number; net_points: number; error: string | null; last_scan: string | null; running: boolean;
 }
 interface TradeEvent { at: string; kind: string; payload: Record<string, unknown> }
 const number = (value: number | null | undefined) => value == null ? '--' : value.toFixed(2);
@@ -72,6 +85,70 @@ async function getJson<T>(path: string, signal?: AbortSignal): Promise<T> {
   const response = await fetch(API_CONFIG.endpoint(path), { cache: 'no-store', credentials: 'include', signal });
   if (!response.ok) throw new Error(`Paper trading request failed (${response.status})`);
   return response.json();
+}
+
+function FlowSetupDetails({ setup }: { setup: FlowSetup }) {
+  const [events, setEvents] = useState<TradeEvent[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    const controller = new AbortController();
+    getJson<TradeEvent[]>(`/api/paper-trading/events?trade_id=${encodeURIComponent(setup.id)}`, controller.signal)
+      .then(value => { setEvents(value); setError(null); })
+      .catch(cause => { if (!controller.signal.aborted) setError(String(cause)); });
+    return () => controller.abort();
+  }, [setup.id, setup.status, setup.updated_at, setup.data_gaps]);
+  return <div className="space-y-2 rounded-lg bg-slate-950 p-3">
+    <p>Recorded OF confidence {setup.plan.confidence}; {setup.plan.reasons.join(' | ')}</p>
+    <p>Observed {time(setup.observed_at)}. {setup.reason}. Quote gaps: {setup.data_gaps}.
+      MFE {number(setup.mfe)} / MAE {number(setup.mae)} points.</p>
+    {error && <p role="alert" className="text-red-400">{error}</p>}
+    {events.map((event, index) => <p key={index}>{time(event.at)} IST | {event.kind} | {JSON.stringify(event.payload)}</p>)}
+    <details><summary className="cursor-pointer">Full recorded setup and confirmation</summary>
+      <pre className="max-h-96 overflow-auto whitespace-pre-wrap">{JSON.stringify(setup, null, 2)}</pre>
+    </details>
+  </div>;
+}
+
+function OrderFlowLedger({ book, offset, onOffset }: { book: FlowBook; offset: number; onOffset: (value: number) => void }) {
+  const [selected, setSelected] = useState<string | null>(null);
+  const active = book.setups.find(row => row.id === selected);
+  return <section className="space-y-3 rounded-xl border border-emerald-500/30 bg-slate-900/60 p-3 sm:p-4">
+    <h4 className="text-base font-bold text-emerald-300 sm:text-lg">Recorded Order Flow - Confirm, Then Trade</h4>
+    <p>All three indices / near-month futures / 5m. Same recorded OF BUY/SELL signals shown on both charts,
+      counted once. Wait one full candle for price + delta confirmation, then a fresh tick with at least 1.5R remaining.
+      Existing chart indicator strategies below are unchanged.</p>
+    <p>{book.running ? 'Backend monitor running' : 'Backend monitor stopped'} | Last scan {time(book.last_scan)} |
+      Closed net {number(book.net_points)} futures points per unit (fees excluded; not cash-index or rupee P&amp;L).</p>
+    {book.error && <p role="alert" className="text-red-400">{book.error}</p>}
+    <div className="flex flex-wrap gap-3">{['WATCHING', 'ARMED', 'OPEN', 'CLOSED', 'REJECTED', 'EXPIRED'].map(status =>
+      <span key={status}>{status}: {book.counts[status] ?? 0}</span>)}</div>
+    <div className="overflow-x-auto"><table className="w-full min-w-[820px] text-left text-sm">
+      <caption className="py-2 text-left">Every observed setup, including skipped and expired decisions</caption>
+      <thead><tr>{['Contract / side', 'Signal close IST', 'Decision', 'Entry / exit IST', 'Fill / stop / target', 'Points', 'Reason'].map(label =>
+        <th className="p-2" key={label}>{label}</th>)}</tr></thead>
+      <tbody>{book.setups.map(row => <tr key={row.id} className="border-t border-slate-700">
+        <td className="p-2">{row.contract?.tradingSymbol ?? `${row.symbol} (${row.token})`} / {row.side}</td>
+        <td className="p-2">{time(row.signal_at)}</td>
+        <td className="p-2"><button className="min-h-[44px] text-emerald-300 underline" onClick={() => setSelected(row.id)}>{row.status}</button></td>
+        <td className="p-2">{time(row.entry_at)} / {time(row.exit_at)}</td>
+        <td className="p-2">{number(row.entry_price)} / {number(row.stop)} / {number(row.target)}
+          {row.exit_at && <> / exit {number(row.exit_price)}</>}</td>
+        <td className="p-2">{row.exit_at ? number(row.points) : row.status === 'OPEN'
+          ? `${number(row.unrealized_points)} unrealized` : '--'}</td>
+        <td className="p-2">{row.reason}</td>
+      </tr>)}</tbody>
+    </table></div>
+    {!book.total && <p>No newly observed recorded OF signals for this day. Historical chart replay trades are not imported.</p>}
+    <div className="flex flex-wrap items-center gap-3">
+      <button className="min-h-[44px]" disabled={offset === 0} onClick={() => onOffset(Math.max(0, offset - 100))}>Previous 100 OF setups</button>
+      <span>{book.total ? offset + 1 : 0}-{Math.min(offset + 100, book.total)} of {book.total}</span>
+      <button className="min-h-[44px]" disabled={offset + 100 >= book.total} onClick={() => onOffset(offset + 100)}>Next 100 OF setups</button>
+    </div>
+    {active && <FlowSetupDetails setup={active} />}
+    <details><summary className="min-h-[44px] cursor-pointer">Order-flow execution rules</summary>
+      {Object.entries(book.policy).map(([key, value]) => <p key={key}>{key}: {value}</p>)}
+    </details>
+  </section>;
 }
 
 function TradeDetails({ trade }: { trade: Trade }) {
@@ -103,6 +180,7 @@ function TradeDetails({ trade }: { trade: Trade }) {
 export default function ChartPaperTrading({ recorderError }: { recorderError: string | null }) {
   const [day, setDay] = useState('');
   const [offset, setOffset] = useState(0);
+  const [flowOffset, setFlowOffset] = useState(0);
   const [history, setHistory] = useState<History | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [updated, setUpdated] = useState<Date | null>(null);
@@ -116,7 +194,7 @@ export default function ChartPaperTrading({ recorderError }: { recorderError: st
     let timer: ReturnType<typeof setTimeout>;
     const load = async () => {
       try {
-        const params = new URLSearchParams({ limit: '100', offset: String(offset) });
+        const params = new URLSearchParams({ limit: '100', offset: String(offset), flow_offset: String(flowOffset) });
         if (day) params.set('day', day);
         const result = await getJson<History>(`/api/paper-trading/history?${params}`, controller.signal);
         setHistory(result); setError(null); setUpdated(new Date());
@@ -128,7 +206,7 @@ export default function ChartPaperTrading({ recorderError }: { recorderError: st
     };
     void load();
     return () => { controller.abort(); clearTimeout(timer); };
-  }, [day, offset, refreshKey]);
+  }, [day, offset, flowOffset, refreshKey]);
   const download = useCallback(async () => {
     try {
       const params = new URLSearchParams();
@@ -148,14 +226,14 @@ export default function ChartPaperTrading({ recorderError }: { recorderError: st
     <div className="flex flex-wrap items-center gap-3">
       <h3 className="font-bold text-amber-300">Automated Paper Trading - SIMULATED ONLY</h3>
       <label>Session (IST) <input aria-label="Paper trading session" type="date" value={day}
-        onChange={event => { setDay(event.target.value); setOffset(0); setSelected(null); setHistory(null); }}
+        onChange={event => { setDay(event.target.value); setOffset(0); setFlowOffset(0); setSelected(null); setHistory(null); }}
         className="rounded bg-slate-800 p-2" /></label>
-      <button onClick={() => { setDay(''); setOffset(0); setHistory(null); }}>Today</button>
+      <button onClick={() => { setDay(''); setOffset(0); setFlowOffset(0); setHistory(null); }}>Today</button>
       <button onClick={() => setRefreshKey(key => key + 1)}>Refresh</button>
       <button onClick={() => void download()}>Export day report (JSON)</button>
       <span>Updated {updated?.toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata' }) ?? '--'} IST</span>
     </div>
-    <p>Only this live Observatory chart creates signals, using its selected index and intraday timeframe.
+    <p>The existing cash-index indicator strategies use this live Observatory chart, its selected index and intraday timeframe.
       Keep the chart open for new signals; existing paper trades continue on the backend.
       Hidden indicators are still evaluated. Historical browsing and daily/weekly/monthly charts do not create entries.</p>
     <p>Independent strategy books | 10-point stop | 20-point target (2R) | 0.5-point adverse slippage per market fill |
@@ -167,6 +245,8 @@ export default function ChartPaperTrading({ recorderError }: { recorderError: st
       {error || recorderError || history?.health.error} Results may be stale or incomplete.
     </p>}
     {!history ? <p role="status">Loading paper history...</p> : <>
+      {history.order_flow && <OrderFlowLedger book={history.order_flow} offset={flowOffset} onOffset={setFlowOffset} />}
+      <h4 className="text-base font-bold text-amber-300">Existing Cash-Index Indicator Strategies</h4>
       <p>Engine: {history.health.running ? 'running' : 'STOPPED'} | queued ticks {history.health.queued_ticks} |
         report {history.report_status} | last tick {time(history.health.last_received)} IST</p>
       <p>Quote times: {Object.entries(history.quotes).map(([symbol, quote]) => `${symbol}: ${time(quote.at)} IST`).join(' | ') || 'Waiting for live quotes'}</p>
@@ -182,7 +262,7 @@ export default function ChartPaperTrading({ recorderError }: { recorderError: st
       <p>Best today: {summary?.best_strategy?.name ?? '--'} | Worst today: {summary?.worst_strategy?.name ?? '--'}</p>
       <p>Recorded signal outcomes: {Object.entries(history.signals).map(([key, count]) => `${key}: ${count}`).join(' | ') || 'None yet'}</p>
       <p>Recorded sessions: {history.dates.map(date => <button className="mr-2 underline" key={date}
-        onClick={() => { setDay(date); setOffset(0); setHistory(null); }}>{date}</button>)}</p>
+        onClick={() => { setDay(date); setOffset(0); setFlowOffset(0); setHistory(null); }}>{date}</button>)}</p>
       <div className="overflow-x-auto">
         <table className="w-full text-left">
           <caption className="py-2 text-left font-bold">Day-wise paper ledger - all books (overlapping exposure)</caption>

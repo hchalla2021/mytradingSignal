@@ -2,19 +2,105 @@
 
 Real-time trading dashboard for NIFTY, BANKNIFTY, and SENSEX with Zerodha Kite API integration.
 
+**Strategy Workspace** groups MarketEdge Intelligence, Trend Base (Higher-Low Structure),
+Expiry Explosion Zone, and CRT-Based BTST Strategies into four section tabs. The selector uses
+two columns on phones/iPads and four on desktop, consistent sans-serif typography, readable
+12px minimum small text, and 48px minimum touch targets. All panels remain mounted for live
+updates and state preservation. Trend Base and BTST include independent index tabs.
+
+**Market Analysis** combines Advanced SMC & Market Structure, Greeks Overview, Today's Market
+Regime, Volume Pulse, ICT Bias, and Institutional Compass into six section tabs. Only one section
+is visible; all stay mounted to preserve live updates and nested index selections. The selector
+uses two columns on phones, three on tablets, and six on wide desktops, with keyboard navigation
+and 48px minimum touch targets. Volume Pulse now also has NIFTY / BANKNIFTY / SENSEX index tabs.
+
+**Smart AI & Institutional Flow** combines Smart AI Algo, Big Player Radar, FII/DII Flow,
+and Official Cash Flow into one workspace. A shared NIFTY / BANKNIFTY / SENSEX selector
+controls the three index-specific views. Official Cash Flow is market-wide with its reporting
+date, so the index selector is hidden there. Feature tabs use a two-by-two phone layout and
+a single row on tablets/desktops, with 44px touch targets and consistent sans-serif typography.
+Algo cards remain mounted, preserving unsaved lots and parameters; a single flow provider
+keeps chart snapshots updating even when the Algo view is selected. Per-index flow figures
+are estimates, not official transactions; allocated fallback values are labeled accordingly.
+
+**Live Market Indices** uses compact NIFTY, BANKNIFTY, and SENSEX tabs, with NIFTY selected
+by default and one full-width card visible at a time on mobile and desktop. All three cards
+continue receiving live updates while hidden. Use Left/Right arrows or Home/End to switch
+tabs with the keyboard. Equal-width, touch-friendly tabs use an emerald selected state and
+underline; exchange badges appear on tablet/desktop and collapse on phones to keep labels aligned.
+**AI Signal Deck** uses the same tabs with its own independent selection, defaulting to NIFTY.
+Hidden signal cards stay mounted and continue receiving ticks, preserving analysis and animation state.
+**Advanced SMC & Market Structure** and **Greeks Overview** share the same responsive index tabs.
+Each defaults independently to NIFTY; hidden cards keep their state and live updates. Missing SMC
+data shows a building-structure message for the selected index instead of hiding its tab.
+**Strike Intelligence** also uses these tabs for its detailed per-index strike cards, keeping the
+cross-index terminal overview above them. Its selection is independent and hidden cards retain live data.
+
+The standalone **Market Liquidity** dashboard section and its dedicated browser stream/polling
+hook have been removed. Other liquidity views and the backend liquidity service remain available;
+the Observatory still consumes that service.
+The main dashboard also omits **Candle Intelligence Engine** and **Smart Money / Order Logic**.
+The candle engine remains available in the trade-status module; shared order-flow hooks and
+backend services are preserved for other consumers.
+
 The Advanced Chart synchronizes visible pane ranges only when they differ and resizes canvases
 only when their actual dimensions change. Unchanged live OHLCV frames skip redundant candle writes;
 indicator tail updates start at the engine's first changed bar to avoid repeatedly resetting plotted data.
 
 ### Futures Chart
 
+Chart views adapt to phones and tablets (including touch-screen iPad landscape).
+Manual drawing controls and their sidebar tab are removed from Advanced Chart, preserving
+the full plot width. Chart panning, zooming, crosshair, indicators, CPR and paper-level overlays remain available.
+Indicator/setup controls overlay the plot instead of pushing it down. History, paper overlays,
+futures contract settings and detailed readouts use expandable menus without remounting charts.
+Timeframes scroll horizontally; controls retain 44px touch targets, and mobile selects use 16px
+text to avoid iOS input zoom. **Full chart** expands either view to the browser viewport without
+requiring the native Fullscreen API (works on iOS); Exit full chart or Escape restores the dashboard.
+The page scroll lock is restored on exit/unmount. Charts resize with viewport/orientation changes;
+desktop drawing rails remain available. Pan/zoom and data/strategy calculations are unchanged.
+
+Switching index/contract or interval fits a recent candle group in both charts, with balanced
+left/right padding and width-aware spacing for phones, tablets and desktops instead of leaving
+half the plot empty. Sparse new sessions are centred too. Hidden charts defer this until they have a visible size. Resizing preserves
+centring only while the view is still centred; manual panning and live ticks do not continually
+reset the view. Explicit Advanced Chart history/range controls keep their selected range.
+
+The Advanced Chart / Futures Chart / Automated Paper Trading workspace is the first dashboard
+section, below the shared header and system/connection status banners. **Live Market Indices**
+is the second section, immediately below the chart workspace. Its institutional snapshot
+continues to come from the institutional-flow workspace, regardless of visual section order.
+
+The Advanced Chart, Futures Chart, Futures Advanced Chart, and Automated Paper Trading view
+selectors use matching section-title typography, emerald active styling, and at least 52px
+touch targets. Phones show a two-column grid; tablets and desktops show four aligned,
+equal-width tabs. All working tabs remain available.
+
+The cash-index Advanced Chart omits the unsupported 1-minute option. Working chart controls
+still disable temporarily when loading or when their action is not currently available,
+including futures contract selection and the footprint view before order flow is recorded.
+
+All three charts use the same near-month futures delta box for the selected index.
+The measured delta remains labelled estimated; stale, disconnected, archived, future-dated,
+off-session or failed feeds show WAIT rather than a current BUY/SELL call. Production
+cash-chart WebSocket reconnects use the configured/same-origin server, never localhost fallbacks.
+
 The Observatory's **Futures Chart** tab is separate from the cash-index chart and paper trading.
-Select NIFTY, BANKNIFTY, or SENSEX, then an expiry year and contract. Contracts come from
+Use the responsive NIFTY / BANKNIFTY / SENSEX index tabs (not an index dropdown),
+then select an expiry year and contract. The tabs share the dashboard's emerald active style,
+equal-width touch targets and Arrow/Home/End keyboard navigation. Switching index resets the
+expiry selection to its nearest listed contract while retaining the interval.
+Contracts come from
 Zerodha's NFO/BFO instrument master using actual exchange expiry dates, not estimated month-end dates.
 October/November/December 2026 and 2027 expiries appear only if currently listed by Zerodha;
 future candles and unavailable contracts are never invented. The nearest listed expiry is the default.
 
-Candles refresh every 20 seconds after each request while the tab is open (not tick-by-tick streaming).
+Near-month intraday candles use the existing same-contract order-flow WebSocket (about one update
+per second when ticks change). Only contiguous, gap-free recordings from the candle's opening minute
+can supply live OHLCV; partial startup/gap recordings never replace official historical candles.
+The status distinguishes LIVE from HISTORY; stale/disconnected, off-session, daily and other-expiry
+views do not claim to be live. Official history reconciles every 20 seconds after each request.
+Recorded ticks are sampled, not an exchange trade-by-trade feed.
 The chart plots EMA 9/20, session VWAP and traded volume from the **same selected contract**.
 EMA 9/20 use the existing SMA-seeded incremental engine and need 9/20 candles respectively.
 RVOL 20 is current candle volume divided by the average volume of the previous 20 candles,
@@ -31,6 +117,10 @@ uncached page rather than two. Recently viewed contract/interval snapshots are r
 bounded browser memory cache and shown immediately on return while refreshing; their original
 refresh timestamps are preserved so cached snapshots cannot masquerade as fresh data.
 Contract lists are cached for one hour within the IST date; Refresh / retry forces revalidation.
+The default NIFTY five-minute contract/history and futures bundle warm in the background shortly
+after the chart workspace mounts, instead of waiting for the Futures tab click. Warm data renders
+on the first frame. After first opening, the futures view remains mounted across workspace tab
+switches to preserve expiry/interval/zoom; its polling and stream pause while hidden.
 After the selected futures chart loads, the nearest contracts for the other indices are warmed
 sequentially at the selected interval. Switching to a warm chart displays its snapshot immediately;
 foreground loads share any in-flight preload, and a fresh snapshot is not fetched twice.
@@ -131,14 +221,44 @@ Zerodha WebSocket → Python Backend → Redis Cache → FastAPI WebSocket → N
 **Frontend:** Next.js 14 + TypeScript + TailwindCSS  
 **Deployment:** Docker Compose on Digital Ocean
 
-## Automated Paper Trading (Observatory chart only)
+## Automated Paper Trading (Chart strategies + confirmed recorded order flow)
 
 Open **Market Intelligence Observatory - Entry / exit chart - Automated Paper Trading**.
 The Advanced Chart tab and its existing overlays/settings remain unchanged.
-Only that chart's selected index, selected intraday timeframe and completed candles
-create paper signals. Other dashboard sections, external predictions and historical
+The existing cash-index indicator books use only that chart's selected index, selected intraday
+timeframe and completed candles. Other dashboard sections, external predictions and historical
 browsing never generate paper entries. Keep the live chart mounted for new signals;
 the backend continues monitoring accepted trades when the browser is closed.
+
+### Recorded order flow: confirm, then trade
+
+A separate durable futures paper book observes the **same recorded OF BUY/SELL signals** displayed
+on Advanced and Futures charts. It does not read chart pixels or count the same signal twice.
+Candle-inferred big-player labels are excluded. The backend monitors NIFTY, BANKNIFTY and SENSEX
+near-month futures at five-minute resolution, even when no chart/paper tab or browser is open.
+The backend/feed must remain running and connected. Existing indicator strategies are unchanged.
+
+- Newly observed signals enter `WATCHING`, not a trade. Old historical replay fills are never imported;
+  a signal must be first seen within 30 seconds of its candle closing, on a fresh recorded feed.
+- Confidence must be at least 60. Wait for the **next full five-minute candle** to close with complete
+  recording, directional price movement beyond the signal close, and same-direction recorded delta.
+  Stop/T1 touches (including recovered touches), opposing OF signals, and contract changes reject the setup.
+- A successful confirmation becomes `ARMED`. Entry requires a subsequent fresh **same-token exchange
+  tick**, within 15 seconds; no historical close or confirmation-time tick is used as a fill.
+  Price must still hold the signal level, risk must remain within 1.25x the original structural risk,
+  and at least 1.5R must remain to the original T2. No chasing/rebasing of targets to make a trade fit.
+- One active OF setup/trade per index. No new entry at/after 15:10 IST. Original structural stop/T2
+  are monitored from received futures ticks; first observed quote from 15:25 squares off.
+  An unquoted old contract remains open/awaiting exit quotes, never closed using a new expiry or cash price.
+- Market fills include adverse max(0.5, tick size) points; targets use the resting target price.
+  Gaps over 30 seconds are recorded; unobserved intra-gap stop/target paths are unknown.
+  Results are **futures points per unit, excluding fees**, not rupee or cash-index P&L.
+
+The paper tab has a separate OF ledger and counts for `WATCHING`, `ARMED`, `OPEN`, `CLOSED`,
+`REJECTED` and `EXPIRED`, with independently paginated history, per-setup decisions/events,
+immutable original signal and confirmation evidence, and day-report JSON export. Futures totals
+are deliberately not combined with the cash-index strategy rankings. This is a conservative,
+deterministic paper experiment, not a profitability guarantee or live broker execution.
 
 Independent strategy books compare price/EMA crosses and bounces (9/20/50/100/200),
 all EMA-pair crosses, daily CPR/traditional/Camarilla level reactions, previous-day
@@ -147,8 +267,12 @@ chart's confirmed setup. Indicator calculations and level-reaction rules reuse t
 existing chart helpers. Hidden chart indicators are still evaluated; indicator
 warm-up and missing previous-day data limit which strategies are available.
 The full closed-candle setup, EMA values, level reactions, volume availability,
-VWAP, candle patterns and market structure are saved with each entry.
-Cash-index volume/VWAP are explicitly unavailable when absent; futures prices
+Candles, patterns and market structure are saved with each entry.
+VWAP is removed from the cash-index Advanced Chart: no control, overlay, rejection level,
+level-confirmation filter, inferred-flow confluence, or new cash-paper VWAP strategy/tag is evaluated.
+Saved templates cannot re-enable it. Historical paper records remain unchanged.
+Futures VWAP and futures-only guidance remain available.
+Cash-index volume is explicitly unavailable when absent; futures prices
 and volume are **not** substituted into the Observatory's cash-index chart.
 
 ### Paper execution assumptions
@@ -202,7 +326,8 @@ Processing failures are logged and exposed in paper-engine health; do not trust
 results while feed/engine errors are shown.
 
 API: `POST /api/paper-trading/signals` (chart-only frame),
-`GET /api/paper-trading/history?day=YYYY-MM-DD&limit=100&offset=0`,
+`GET /api/paper-trading/history?day=YYYY-MM-DD&limit=100&offset=0&flow_offset=0`
+(`order_flow` contains the separate confirmed-futures ledger),
 `GET /api/paper-trading/events?trade_id=...`, `GET /api/paper-trading/report?day=YYYY-MM-DD`.
 The tab exports a consistent complete day JSON ledger/report including all trade
 events, and paginates without deleting older trades.
@@ -315,8 +440,22 @@ npm run dev
 
 ### Docker
 ```bash
-docker-compose up --build
+docker compose -f docker-compose.prod.yml config --quiet
+docker compose -f docker-compose.prod.yml up -d --build
 ```
+
+Production images exclude local environment files and keep backend secrets in the runtime
+`env_file`/mount. The frontend defaults to same-origin API/WebSocket URLs; configure the production
+reverse proxy to forward `/api` and `/ws` to the backend. `NEXT_PUBLIC_*` values, when explicitly
+supplied, must be present at frontend build time, not just container startup.
+Health checks use Python/Node already installed in the respective images, without requiring curl.
+The frontend build creates an empty `public` directory when no static assets exist.
+Keep the `paper-trading-data` volume when rebuilding so both paper ledgers survive deployments.
+Keep `order-flow-data` too: `ORDER_FLOW_DB_PATH` points the live footprint/delta recording
+database into that volume so recordings survive container recreation. Existing deployments
+must back up and migrate any old `/app/data/order_flow.sqlite3` recording before switching
+to `/app/data/order_flow/order_flow.sqlite3`; the new volume does not import it automatically.
+Custom `.next*` build-check directories are excluded from the frontend Docker context.
 
 ---
 

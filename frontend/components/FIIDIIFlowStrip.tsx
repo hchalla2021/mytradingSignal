@@ -11,6 +11,9 @@ import {
 import { aggregateIntel, updateBuyerIntel } from '@/lib/buyerIntelligence';
 import { aggregateParticipantFlowRealtime, updateParticipantFlowRealtime } from '@/lib/participantFlowRealtime';
 import { updateIndexMoneyFlow, type IndexMoneyFlow } from '@/lib/indexMoneyFlowRealtime';
+import type { IndexSymbol } from '@/components/IndexTabs';
+
+export type InstitutionalFlowView = 'official' | 'radar' | 'flow';
 
 type IndexKey = 'NIFTY' | 'BANKNIFTY' | 'SENSEX';
 
@@ -19,6 +22,8 @@ interface FIIDIIFlowStripProps {
   marketData?: Partial<Record<IndexKey, MarketTick | null | undefined>>;
   isConnected: boolean;
   onSnapshot?: (snapshot: FIIDIISnapshot | null) => void;
+  selectedSymbol?: IndexSymbol;
+  activeView?: InstitutionalFlowView;
 }
 
 const fmtCr = (v: number): string => {
@@ -58,7 +63,7 @@ interface LiveProxy {
 const LIVE_TICK_MAX_AGE_SEC = 30;
 const LIVE_TICK_MEDIUM_AGE_SEC = 10;
 
-const FIIDIIFlowStrip = ({ isConnected, marketData, onSnapshot }: FIIDIIFlowStripProps) => {
+const FIIDIIFlowStrip = ({ isConnected, marketData, onSnapshot, selectedSymbol, activeView }: FIIDIIFlowStripProps) => {
   const { data, isLoading, error, refresh } = useFIIDIIFlow();
   useEffect(() => {
     onSnapshot?.(error ? null : data);
@@ -397,6 +402,12 @@ const FIIDIIFlowStrip = ({ isConnected, marketData, onSnapshot }: FIIDIIFlowStri
   const fmv = data?.fundManagerView;
   const hasSplit = Boolean(data?.hasBuySellSplit);
   const bigPlayers = data?.realtime?.bigPlayers;
+  const radarSymbol = selectedSymbol ? bigPlayers?.perSymbol?.[selectedSymbol] : undefined;
+  const radarEvents = bigPlayers?.events.filter(event => !selectedSymbol || event.symbol === selectedSymbol) ?? [];
+  const visibleCalls = indexQuickCalls.filter(call => !selectedSymbol || call.symbol === selectedSymbol);
+  const radarBuyCr = selectedSymbol ? radarSymbol?.buyCr : bigPlayers?.sessionBuyCr;
+  const radarSellCr = selectedSymbol ? radarSymbol?.sellCr : bigPlayers?.sessionSellCr;
+  const radarNetCr = radarBuyCr !== undefined && radarSellCr !== undefined ? radarBuyCr - radarSellCr : undefined;
 
   const entryChip = (style?: string): { label: string; cls: string } => {
     switch (style) {
@@ -416,12 +427,15 @@ const FIIDIIFlowStrip = ({ isConnected, marketData, onSnapshot }: FIIDIIFlowStri
       aria-label="FII DII Flow"
       className="mb-3 rounded-xl border border-violet-400/15 bg-gradient-to-br from-slate-950 via-slate-900/80 to-violet-950/10 px-3 py-3 sm:px-4"
     >
+      <div hidden={Boolean(activeView && activeView !== 'official')}>
+      {!viewSafe && <p className="p-3 text-sm text-slate-400">Official cash flow is unavailable. It is market-wide, not per-index.</p>}
       {viewSafe && (
         <div className="rounded-xl border border-cyan-400/25 bg-gradient-to-br from-cyan-500/10 via-slate-950/80 to-violet-500/10 px-3 py-3 shadow-[0_0_0_1px_rgba(34,211,238,0.08)]">
           <div className="mb-2 flex items-center justify-between gap-2 flex-wrap">
-            <span className="text-[13px] sm:text-[16px] font-extrabold tracking-tight text-cyan-100">
+            <span className="text-base sm:text-lg font-bold tracking-tight text-cyan-100">
               OFFICIAL CASH FLOW · {viewSafe.tradeDate}
             </span>
+            <span className="text-xs text-slate-400">Market-wide · reported cash activity, not per-index</span>
             <div className="flex items-center gap-1.5">
               <span className="rounded-full border border-cyan-300/40 bg-cyan-500/10 px-2 py-0.5 text-[9px] font-black text-cyan-100">
                 {data?.source ?? 'NSE'}
@@ -513,39 +527,42 @@ const FIIDIIFlowStrip = ({ isConnected, marketData, onSnapshot }: FIIDIIFlowStri
           )}
         </div>
       )}
+      </div>
 
       {/* BIG PLAYER RADAR — live large-lot prints (non-retail scale) */}
+      <div hidden={Boolean(activeView && activeView !== 'radar')}>
+      {!bigPlayers && <p className="p-3 text-sm text-slate-400">Big Player Radar · waiting for radar data.</p>}
       {bigPlayers && (
         <div className="mt-2 rounded-xl border border-amber-400/25 bg-gradient-to-br from-amber-500/10 via-slate-950/85 to-rose-500/5 px-3 py-3">
           <div className="mb-2 flex items-center justify-between gap-2 flex-wrap">
-            <span className="flex items-center gap-2 text-[13px] sm:text-[15px] font-extrabold tracking-tight text-amber-100">
+            <span className="flex flex-wrap items-center gap-2 text-base sm:text-lg font-bold tracking-tight text-amber-100">
               🐘 BIG PLAYER RADAR
               <span className="rounded-full border border-emerald-300/40 bg-emerald-500/10 px-1.5 py-0.5 text-[8px] font-black text-emerald-200">LIVE</span>
             </span>
             <span className="rounded-full border border-slate-600/70 bg-slate-900/75 px-2 py-0.5 text-[9px] font-bold text-slate-300">
-              {bigPlayers.eventsToday} LARGE PRINTS TODAY · {bigPlayers.sessionDate}
+              {selectedSymbol ? `${selectedSymbol} · ${radarEvents.length} RECENT PRINTS` : `${bigPlayers.eventsToday} LARGE PRINTS TODAY`} · {bigPlayers.sessionDate}
             </span>
           </div>
 
           <div className="grid grid-cols-3 gap-1.5 text-[10px] font-mono lg:text-[11px]">
             <div className="rounded border border-emerald-400/25 bg-emerald-500/10 px-2 py-1.5">
               <div className="text-slate-300">BIG BUYING</div>
-              <div className="text-emerald-300 font-black text-sm lg:text-base">+₹{fmtCr(bigPlayers.sessionBuyCr)}</div>
+              <div className="text-emerald-300 font-black text-sm lg:text-base">{radarBuyCr === undefined ? '—' : `+₹${fmtCr(radarBuyCr)}`}</div>
             </div>
             <div className="rounded border border-rose-400/25 bg-rose-500/10 px-2 py-1.5">
               <div className="text-slate-300">BIG SELLING</div>
-              <div className="text-rose-300 font-black text-sm lg:text-base">-₹{fmtCr(bigPlayers.sessionSellCr)}</div>
+              <div className="text-rose-300 font-black text-sm lg:text-base">{radarSellCr === undefined ? '—' : `-₹${fmtCr(radarSellCr)}`}</div>
             </div>
             <div className="rounded border border-slate-700/70 bg-slate-900/80 px-2 py-1.5">
               <div className="text-slate-300">NET BIG FLOW</div>
-              <div className={`font-black text-sm lg:text-base ${bigPlayers.sessionNetCr > 0 ? 'text-emerald-300' : bigPlayers.sessionNetCr < 0 ? 'text-rose-300' : 'text-amber-300'}`}>
-                {signed(bigPlayers.sessionNetCr)}
+              <div className={`font-black text-sm lg:text-base ${(radarNetCr ?? 0) > 0 ? 'text-emerald-300' : (radarNetCr ?? 0) < 0 ? 'text-rose-300' : 'text-amber-300'}`}>
+                {radarNetCr === undefined ? '—' : signed(radarNetCr)}
               </div>
             </div>
           </div>
 
-          <div className="mt-2 grid grid-cols-3 gap-1.5 text-[9px] font-mono">
-            {(['NIFTY', 'BANKNIFTY', 'SENSEX'] as const).map((sym) => {
+          <div className={`mt-2 grid ${selectedSymbol ? 'grid-cols-1' : 'grid-cols-3'} gap-1.5 text-[9px] font-mono`}>
+            {(['NIFTY', 'BANKNIFTY', 'SENSEX'] as const).filter(sym => !selectedSymbol || sym === selectedSymbol).map((sym) => {
               const ps = bigPlayers.perSymbol?.[sym];
               if (!ps) return null;
               return (
@@ -560,9 +577,9 @@ const FIIDIIFlowStrip = ({ isConnected, marketData, onSnapshot }: FIIDIIFlowStri
             })}
           </div>
 
-          {bigPlayers.events.length > 0 ? (
+          {radarEvents.length > 0 ? (
             <div className="mt-2 space-y-1 max-h-40 overflow-y-auto pr-1">
-              {bigPlayers.events.map((ev, i) => (
+              {radarEvents.map((ev, i) => (
                 <div
                   key={`${ev.ts}-${ev.symbol}-${i}`}
                   className={`flex items-center justify-between gap-2 rounded border px-2 py-1 text-[9px] lg:text-[10px] font-mono ${
@@ -596,16 +613,18 @@ const FIIDIIFlowStrip = ({ isConnected, marketData, onSnapshot }: FIIDIIFlowStri
           )}
         </div>
       )}
+      </div>
+      <div hidden={Boolean(activeView && activeView !== 'flow')}>
       {segregated && (
         <div className="mt-2 rounded-xl border border-emerald-400/25 bg-gradient-to-br from-emerald-500/10 via-slate-950/80 to-cyan-500/10 px-3 py-3 shadow-[0_0_0_1px_rgba(16,185,129,0.08),0_16px_34px_-22px_rgba(16,185,129,0.5)]">
           <div className="mb-2 flex items-center justify-between gap-2 flex-wrap">
-            <span className="text-[14px] sm:text-[18px] lg:text-[22px] font-extrabold tracking-tight text-emerald-100">FII/DII FLOW</span>
+            <span className="text-base sm:text-lg font-bold tracking-tight text-emerald-100">FII/DII FLOW</span>
             <span className="rounded-full border border-slate-600/70 bg-slate-900/75 px-2 py-1 text-[10px] font-bold text-slate-300">
-              INSTITUTIONAL FLOW MATRIX · NIFTY · BANKNIFTY · SENSEX
+              INSTITUTIONAL FLOW MATRIX · {selectedSymbol ?? 'NIFTY · BANKNIFTY · SENSEX'}
             </span>
           </div>
-          <div className="grid grid-cols-1 gap-2.5 lg:grid-cols-3">
-            {indexQuickCalls.map((c) => {
+          <div className={`grid grid-cols-1 gap-2.5 ${selectedSymbol ? '' : 'lg:grid-cols-3'}`}>
+            {visibleCalls.map((c) => {
               const row = segregated.indexRows.find((r) => r.name === c.symbol);
               if (!row) return null;
               const netCls = row.netCr > 0 ? 'text-emerald-300' : row.netCr < 0 ? 'text-rose-300' : 'text-amber-300';
@@ -631,7 +650,7 @@ const FIIDIIFlowStrip = ({ isConnected, marketData, onSnapshot }: FIIDIIFlowStri
                     <span className="text-base font-black tracking-wide text-slate-100 lg:text-lg">{c.symbol}</span>
                     <div className="flex items-center gap-1">
                       {row.source === 'official' && (
-                        <span className="rounded border border-cyan-300/35 bg-cyan-500/10 px-1.5 py-0.5 text-[8px] font-black text-cyan-100">OFFICIAL</span>
+                        <span className="rounded border border-amber-300/35 bg-amber-500/10 px-1.5 py-0.5 text-[8px] font-black text-amber-100">ALLOCATED ESTIMATE</span>
                       )}
                       <span className={`rounded border px-1.5 py-0.5 text-[9px] font-black ${biasCls}`}>{row.bias}</span>
                     </div>
@@ -668,6 +687,11 @@ const FIIDIIFlowStrip = ({ isConnected, marketData, onSnapshot }: FIIDIIFlowStri
               );
             })}
           </div>
+          <p className="mt-2 text-xs leading-relaxed text-slate-400">
+            Index and participant flows are inferred estimates, not official per-index FII/DII transactions.
+            Allocated estimates distribute market-wide net data and may reconstruct a buy/sell split.
+          </p>
+          <div hidden={Boolean(selectedSymbol)}>
           <div className="mt-2 grid grid-cols-2 gap-1.5 text-[10px] font-mono lg:grid-cols-4 lg:text-[11px]">
             <div className="rounded border border-emerald-400/30 bg-emerald-500/10 px-2 py-1.5 text-emerald-100">TOTAL IN: +₹{fmtCr(segregated.indexTotalIn)}</div>
             <div className="rounded border border-rose-400/30 bg-rose-500/10 px-2 py-1.5 text-rose-100">TOTAL OUT: -₹{fmtCr(segregated.indexTotalOut)}</div>
@@ -692,12 +716,13 @@ const FIIDIIFlowStrip = ({ isConnected, marketData, onSnapshot }: FIIDIIFlowStri
               </span>
             )}
           </div>
+          </div>
           <p className="hidden" aria-hidden="true">
             Index cards use live tick-derived flow when available and automatically apply weighted fallback allocation from participant totals when index feed depth is low.
           </p>
         </div>
       )}
-      {false && participantRealtime && <div />}
+      </div>
     </section>
   );
 };

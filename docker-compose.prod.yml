@@ -36,6 +36,7 @@ services:
       - REDIS_URL=redis://redis:6379
       # CRITICAL: Enable scheduler for automatic market hours management
       - ENABLE_SCHEDULER=true
+      - ORDER_FLOW_DB_PATH=/app/data/order_flow/order_flow.sqlite3
     volumes:
       # Mount .env for token hot-reload (token watcher)
       - ./backend/.env:/app/.env
@@ -44,11 +45,12 @@ services:
       # Mount logs directory (optional)
       - ./backend/logs:/app/logs
       - paper-trading-data:/app/data/paper_trading
+      - order-flow-data:/app/data/order_flow
     depends_on:
       redis:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5).close()"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -67,13 +69,13 @@ services:
     environment:
       # NOTE: NEXT_PUBLIC_* vars are baked into the Next.js build at image build time.
       # They CANNOT be overridden at container runtime via environment:.
-      # Production values are read from frontend/.env.local during `docker build`.
-      # Ensure frontend/.env.local has correct production URLs before building.
+      # .env.local is excluded from the image context. Without baked-in public URLs,
+      # the frontend uses same-origin API/WebSocket URLs; proxy /api and /ws to backend.
       - NODE_ENV=production
     depends_on:
       - backend
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000"]
+      test: ["CMD", "node", "-e", "const http=require('http'); const req=http.get('http://127.0.0.1:3000/',res=>{res.resume();if(res.statusCode<200||res.statusCode>=400)process.exit(1)});req.setTimeout(5000,()=>req.destroy(new Error('Health check timeout')));req.on('error',()=>process.exit(1));"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -88,3 +90,4 @@ networks:
 volumes:
   redis-data:
   paper-trading-data:
+  order-flow-data:

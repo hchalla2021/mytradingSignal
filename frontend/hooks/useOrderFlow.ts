@@ -21,9 +21,9 @@ const orderFlowWsUrl = () => {
  * that only sends the last bars + refreshed session analytics. Disabled for non-intraday intervals.
  * `token` restricts the view to one contract; the server records the near-month contract only.
  */
-export function useOrderFlow(symbol: string, interval: unknown, token?: number | null, enabled = true): OrderFlowState {
+export function useOrderFlow(symbol: string, interval: unknown, token?: number | null, enabled = true, latestRecorded = false): OrderFlowState {
   const active = enabled && isOrderFlowInterval(interval);
-  const key = active ? `${symbol}:${String(interval)}:${token ?? ''}` : '';
+  const key = active ? `${symbol}:${String(interval)}:${token ?? ''}:${latestRecorded ? 'L' : ''}` : '';
   const [state, setState] = useState<OrderFlowState>({ key: '', snapshot: null, error: null, live: false });
 
   useEffect(() => {
@@ -36,6 +36,8 @@ export function useOrderFlow(symbol: string, interval: unknown, token?: number |
     const controller = new AbortController();
     const params = new URLSearchParams({ symbol, interval: String(interval) });
     if (token) params.set('token', String(token));
+    // Display-only: before today's recording starts, show the last recorded session (flagged latestRecorded).
+    if (latestRecorded) params.set('latest', '1');
 
     const loadSnapshot = async () => {
       try {
@@ -99,7 +101,7 @@ export function useOrderFlow(symbol: string, interval: unknown, token?: number |
       clearInterval(pingTimer);
       if (socket) { socket.onclose = null; socket.close(); }
     };
-  }, [active, key, symbol, interval, token]);
+  }, [active, key, symbol, interval, token, latestRecorded]);
 
   return state.key === key ? state : { key, snapshot: null, error: null, live: false };
 }

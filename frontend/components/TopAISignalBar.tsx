@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import IndexTabs from '@/components/IndexTabs';
 import type { MarketTick } from '@/hooks/useMarketSocket';
 import { updateBuyerIntel, type BuyerIntel } from '@/lib/buyerIntelligence';
 
@@ -502,11 +503,11 @@ const TopAISignalBar = ({ marketData, isConnected }: TopAISignalBarProps) => {
         </div>
       </div>
 
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-        {INDICES.map(({ key, name }) => (
-          <SignalCard key={key} name={name} indexKey={key} tick={marketData[key]} />
-        ))}
-      </div>
+      <IndexTabs idPrefix="ai-signal" label="AI signal index">
+        {(symbol, name) => (
+          <SignalCard name={name} indexKey={symbol} tick={marketData[symbol]} />
+        )}
+      </IndexTabs>
     </section>
   );
 };

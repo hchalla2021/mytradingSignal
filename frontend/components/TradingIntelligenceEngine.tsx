@@ -1,6 +1,7 @@
 'use client';
 
 import React, { memo, useEffect, useMemo, useRef, useState } from 'react';
+import IndexTabs from '@/components/IndexTabs';
 import type { MarketData, MarketTick } from '@/hooks/useMarketSocket';
 import { useTradingIntelligence, TIEData, TIESignal, TIESymbol, TIEBias, TIEAlertTone } from '@/hooks/useTradingIntelligence';
 
@@ -383,7 +384,7 @@ export default function TradingIntelligenceEngine({ marketData }: Props) {
               <span className="text-lg sm:text-xl">⚡</span>
             </div>
             <div>
-              <h2 className="text-xl sm:text-2xl lg:text-[26px] font-extrabold tracking-tight leading-tight">
+              <h2 className="text-base sm:text-lg font-bold tracking-tight leading-snug">
                 <span className="bg-gradient-to-r from-slate-50 via-slate-100 to-slate-300 bg-clip-text text-transparent">
                   GREEKS OVERVIEW
                 </span>
@@ -410,18 +411,17 @@ export default function TradingIntelligenceEngine({ marketData }: Props) {
         </div>
 
         {/* Cards */}
-        <div className="flex flex-col gap-3 sm:gap-4">
-          {ORDER.map(sym => (
+        <IndexTabs idPrefix="greeks-overview" label="Greeks overview index">
+          {sym => (
             <IndexCard
-              key={sym}
               symbol={sym}
               ai={aiData[sym]}
               tick={marketData[sym]}
               livePrice={lastPriceRef.current[sym]}
               liveSparkline={sparksRef.current[sym]}
             />
-          ))}
-        </div>
+          )}
+        </IndexTabs>
       </div>
     </section>
   );

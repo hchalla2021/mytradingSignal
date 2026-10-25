@@ -7,15 +7,14 @@ import {
   type IChartApi, type ISeriesApi, type UTCTimestamp, type LogicalRange, type MouseEventParams, type AutoscaleInfo,
 } from 'lightweight-charts';
 import {
-  Camera, Maximize, Minimize, Save, Search, Crosshair, TrendingUp,
-  Minus, Square, Trash2, Undo2, Magnet, Eye, EyeOff, ChevronDown, LayoutTemplate,
+  Camera, Maximize, Minimize, Save, Search, ChevronDown, LayoutTemplate,
 } from 'lucide-react';
 import { useChartIntelligence, type Candle } from '@/hooks/useChartIntelligence';
 import { useChartHistory, prefetchChartHistory } from '@/hooks/useChartHistory';
 import type { MarketData } from '@/hooks/useMarketSocket';
 import type { FIIDIISnapshot } from '@/hooks/useFIIDIIFlow';
 import {
-  INDICATORS, TEMPLATES, candleTime, workspaceCandles,
+  CASH_INDICATORS as INDICATORS, cashIndicatorSettings, TEMPLATES, candleTime, workspaceCandles,
   restoreIndicatorSettings, institutionalContext, isCashSession, mergeChartHistory, sessionDate, stableLiveSession, updatePeriodCandle, timeframeLabel,
   type ChartSymbol, type Timeframe, type IndicatorSettings,
 } from '@/lib/chart-workspace';
@@ -23,9 +22,10 @@ import {
   createIndicatorEngine, createPivotEngine, autoPivotAnchor, segmentedLine, indicatorLineTitle,
   type IndicatorSample,
 } from '@/lib/chart-indicators';
+import DeltaStrengthBox from './DeltaStrength';
 import styles from './ChartWorkspace.module.css';
 import { synchronizeCrosshair } from '@/lib/chart-crosshair';
-import { resizeChartIfChanged, synchronizeChartRange } from '@/lib/chart-render-sync';
+import { centerLatestCandle, isLatestCandleCentered, resizeChartIfChanged, synchronizeChartRange } from '@/lib/chart-render-sync';
 import { layoutTradeLabels } from '@/lib/chart-trade-labels';
 import { createLevelAnalysisEngine } from '@/lib/chart-level-analysis';
 import { createChartPaperAnalyzer } from '@/lib/chart-paper-trading';
@@ -41,6 +41,7 @@ import { chartPaperLevels, paperEventCandle, selectChartPaperTrade } from '@/lib
 
 const SYMBOLS = [{ id: 'NIFTY', name: 'NIFTY 50', exchange: 'NSE' }, { id: 'BANKNIFTY', name: 'BANKNIFTY', exchange: 'NSE' }, { id: 'SENSEX', name: 'SENSEX', exchange: 'BSE' }] as const;
 const FuturesChart = dynamic(() => import('./FuturesChart'), { ssr: false, loading: () => <p className="p-3">Loading futures chart...</p> });
+const FuturesTerminal = dynamic(() => import('./FuturesTerminal'), { ssr: false, loading: () => <p className="p-3">Loading futures advanced chart...</p> });
 const STORAGE_KEY = 'chartWorkspaceTemplate_v1';
 const UP = '#00bba5';
 const DOWN = '#ee4053';
@@ -48,10 +49,7 @@ const timeLabel = (time: number) => new Date(time * 1000).toLocaleTimeString('en
 const price = (value: number | undefined) => value === undefined || !Number.isFinite(value) ? '--' : value.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const compact = (value: number | undefined) => value === undefined ? '--' : Intl.NumberFormat('en', { notation: 'compact', maximumFractionDigits: 2 }).format(value);
 const points = (data: IndicatorSample[]) => data.map(point => ({ ...point, time: point.time as UTCTimestamp }));
-type Tool = 'cursor' | 'trend' | 'horizontal' | 'rectangle';
-type Anchor = { time: number; price: number };
-type Drawing = { id: number; tool: Exclude<Tool, 'cursor'>; start: Anchor; end: Anchor };
-type Panel = 'Indicators' | 'Drawing Tools' | 'Chart Settings';
+type Panel = 'Indicators' | 'Chart Settings';
 type Range = '1D' | '5D' | 'All';
 interface ChartRuntime {
   charts: IChartApi[];
@@ -70,9 +68,18 @@ interface ChartRuntime {
 function ChartWorkspace({ marketData, institutionalData = null }: { marketData: MarketData; institutionalData?: FIIDIISnapshot | null }) {
   const { chartData, isConnected } = useChartIntelligence();
   const [symbol, setSymbol] = useState<ChartSymbol>('NIFTY');
-  const [workspaceTab, setWorkspaceTab] = useState<'chart' | 'futures' | 'paper'>('chart');
+  const [workspaceTab, setWorkspaceTab] = useState<'chart' | 'futures' | 'terminal' | 'paper'>('chart');
+  const [futuresOpened, setFuturesOpened] = useState(false);
+  const [terminalOpened, setTerminalOpened] = useState(false);
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      void import('./FuturesChart').then(module => module.warmFuturesChart())
+        .catch(error => console.error('Futures chart warm-up:', error));
+    }, 500);
+    return () => clearTimeout(timer);
+  }, []);
   const [timeframe, setTimeframe] = useState<Timeframe>(5);
-  const [indicators, setIndicators] = useState<IndicatorSettings>({ ...TEMPLATES['Confluence focus'] });
+  const [indicators, setIndicators] = useState<IndicatorSettings>(cashIndicatorSettings(TEMPLATES['Confluence focus']));
   const [controlsOpen, setControlsOpen] = useState(false);
   const [panel, setPanel] = useState<Panel>('Indicators');
   const [query, setQuery] = useState('');
@@ -83,14 +90,10 @@ function ChartWorkspace({ marketData, institutionalData = null }: { marketData: 
   const [logScale, setLogScale] = useState(false);
   const [autoScale, setAutoScale] = useState(true);
   const [magnet, setMagnet] = useState(true);
-  const [tool, setTool] = useState<Tool>('cursor');
-  const [showDrawings, setShowDrawings] = useState(true);
-  const [drawings, setDrawings] = useState<Partial<Record<ChartSymbol, Drawing[]>>>({});
-  const [draft, setDraft] = useState<Anchor | null>(null);
-  const [preview, setPreview] = useState<Anchor | null>(null);
   const [hoverTime, setHoverTime] = useState<number | null>(null);
   const [range, setRange] = useState<Range>('1D');
   const [fullscreen, setFullscreen] = useState(false);
+  const pendingCenter = useRef(false);
   const [showTradePlan, setShowTradePlan] = useState(true);
   const [showPaperLevels, setShowPaperLevels] = useState(false);
   const [selectedPaperTradeId, setSelectedPaperTradeId] = useState<string | null>(null);
@@ -181,7 +184,6 @@ function ChartWorkspace({ marketData, institutionalData = null }: { marketData: 
   const selected = SYMBOLS.find(item => item.id === symbol)!;
   const last = candles[candles.length - 1];
   const hovered = candles.find(candle => candleTime(candle) === hoverTime) ?? last;
-  const selectedDrawings = drawings[symbol] ?? [];
   const source = data?.dataSource;
   const sessionOpen = isCashSession(now);
   const live = !browsingDate && freshStream && sessionOpen;
@@ -222,16 +224,28 @@ function ChartWorkspace({ marketData, institutionalData = null }: { marketData: 
       if (stored !== null) {
         const restored = restoreIndicatorSettings(stored);
         if (!restored) throw new Error('Invalid saved chart template');
-        setCustom(restored);
+        setCustom(cashIndicatorSettings(restored));
       }
     } catch (error) {
       console.error('Unable to restore chart template:', error);
       setNotice('Saved chart template could not be loaded. Default settings are in use.');
     }
-    const onFullscreen = () => setFullscreen(document.fullscreenElement === rootRef.current);
-    document.addEventListener('fullscreenchange', onFullscreen);
-    return () => document.removeEventListener('fullscreenchange', onFullscreen);
   }, []);
+
+  useEffect(() => {
+    if (!fullscreen && !controlsOpen) return;
+    const onEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      setFullscreen(false); setControlsOpen(false);
+    };
+    document.addEventListener('keydown', onEscape);
+    const previousOverflow = document.body.style.overflow;
+    if (fullscreen) document.body.style.overflow = 'hidden';
+    return () => {
+      document.removeEventListener('keydown', onEscape);
+      if (fullscreen) document.body.style.overflow = previousOverflow;
+    };
+  }, [fullscreen, controlsOpen]);
 
   useEffect(() => {
     const containers = [priceRef.current, volumeRef.current, rsiRef.current, macdRef.current, atrRef.current];
@@ -315,10 +329,14 @@ function ChartWorkspace({ marketData, institutionalData = null }: { marketData: 
       return handler;
     });
     const observer = new ResizeObserver(() => {
+      const count = previousBars.current.candles.length;
+      const centered = isLatestCandleCentered(charts[0], count);
       let changed = false;
       charts.forEach((chart, index) => {
         if (resizeChartIfChanged(chart, containers[index]!)) changed = true;
       });
+      if ((pendingCenter.current || changed && centered) &&
+          centerLatestCandle(charts[0], containers[0]!, count)) pendingCenter.current = false;
       if (changed) scheduleRedraw();
     });
     containers.forEach(container => observer.observe(container!));
@@ -419,7 +437,7 @@ function ChartWorkspace({ marketData, institutionalData = null }: { marketData: 
           name.startsWith('S') || name === 'BC' ? '#00bba5' : '#6c99eb' : metadata?.color ?? '#00cbb8';
       const existed = !!api.overlays[id];
       if (!existed) api.overlays[id] = api.charts[0].addLineSeries({
-        color, lineWidth: id.startsWith('supertrend') || ['ema9', 'ema20', 'ema50', 'vwap'].includes(id) ? 2 :
+        color, lineWidth: id.startsWith('supertrend') || ['ema9', 'ema20', 'ema50'].includes(id) ? 2 :
           ['ema100', 'ema200'].includes(id) ? 3 : 1,
         lineType: pivot ? LineType.WithSteps : LineType.Simple,
         lineStyle: id.startsWith('camarilla:') || id === 'ema100' ? LineStyle.Dashed :
@@ -457,7 +475,12 @@ function ChartWorkspace({ marketData, institutionalData = null }: { marketData: 
     const nextRevision = historyKey;
     if (candles.length && revision.current !== nextRevision) {
       revision.current = nextRevision;
-      applyRange(range);
+      if (browsingDate) {
+        pendingCenter.current = false;
+        applyRange(range);
+      } else {
+        pendingCenter.current = !centerLatestCandle(api.charts[0], priceRef.current!, candles.length);
+      }
     } else if (prepended > 0 && oldRange) {
       api.charts[0].timeScale().setVisibleLogicalRange({
         from: oldRange.from + prepended, to: oldRange.to + prepended,
@@ -472,7 +495,7 @@ function ChartWorkspace({ marketData, institutionalData = null }: { marketData: 
     }
     previousBars.current = { key: historyKey, candles };
     redraw(value => value + 1);
-  }, [candles, analytics, calculation, pivotSeries, history.dailyCandles, indicators, historyKey, range, applyRange]);
+  }, [candles, analytics, calculation, pivotSeries, history.dailyCandles, indicators, historyKey, range, applyRange, browsingDate]);
 
   useEffect(() => {
     runtime.current?.orderFlow.setData(flow.snapshot);
@@ -484,7 +507,7 @@ function ChartWorkspace({ marketData, institutionalData = null }: { marketData: 
     candles.map(bar => ({ time: candleTime(bar), o: bar.o, h: bar.h, l: bar.l, c: bar.c, v: bar.v })),
     {
       closedBefore: Date.now() / 1000 - (typeof timeframe === 'number' ? timeframe * 60 : 86400) + 1,
-      minPoints: FLOW_MIN_POINTS[symbol], roundStep: FLOW_ROUND_STEP[symbol], recorded: recordedFlow,
+      minPoints: FLOW_MIN_POINTS[symbol], roundStep: FLOW_ROUND_STEP[symbol], recorded: recordedFlow, useVwap: false,
     },
   ), [candles, timeframe, symbol, recordedFlow]);
   const candleFlowSummary = useMemo(() => flowStats(candleFlow), [candleFlow]);
@@ -549,12 +572,14 @@ function ChartWorkspace({ marketData, institutionalData = null }: { marketData: 
   }, [grid, logScale, autoScale, magnet, indicators.volume, indicators.rsi, indicators.macd, symbol, timeframe]);
 
   const changeSymbol = (next: ChartSymbol) => {
-    setSymbol(next); setDraft(null); setPreview(null); setHoverTime(null); setBrowsingDate(''); setHistoryDate('');
+    if (next === symbol) return;
+    setAutoScale(true);
+    setSymbol(next); setHoverTime(null); setBrowsingDate(''); setHistoryDate('');
   };
   const chooseTemplate = (name: string) => {
     const next = name === 'Custom' ? custom : TEMPLATES[name];
     if (!next) { setNotice('Save a custom template first using "Save as Template".'); return; }
-    setIndicators({ ...next }); setTemplate(name); setNotice('');
+    setIndicators(cashIndicatorSettings(next)); setTemplate(name); setNotice('');
   };
   const saveTemplate = () => {
     try {
@@ -565,15 +590,7 @@ function ChartWorkspace({ marketData, institutionalData = null }: { marketData: 
       setNotice('Could not save the template. Browser storage may be unavailable.');
     }
   };
-  const toggleFullscreen = async () => {
-    try {
-      if (document.fullscreenElement === rootRef.current) await document.exitFullscreen();
-      else await rootRef.current?.requestFullscreen();
-    } catch (error) {
-      console.error('Unable to change chart fullscreen:', error);
-      setNotice('Fullscreen is unavailable in this browser.');
-    }
-  };
+  const toggleFullscreen = () => setFullscreen(value => !value);
   const downloadImage = () => {
     const api = runtime.current;
     if (!api) return;
@@ -591,49 +608,12 @@ function ChartWorkspace({ marketData, institutionalData = null }: { marketData: 
       chartImages.forEach(image => { context.drawImage(image, 0, y); y += image.height; });
       const anchor = document.createElement('a');
       anchor.download = `${symbol}-${timeframeLabel(timeframe)}-chart.png`; anchor.href = canvas.toDataURL('image/png'); anchor.click();
-      setNotice('Chart image downloaded (chart series only; drawings are not included).');
+      setNotice('Chart image downloaded (chart series only; CPR bands and paper-level overlays are not included).');
     } catch (error) {
       console.error('Unable to export chart image:', error);
       setNotice('The chart image could not be exported.');
     }
   };
-  const pointerAnchor = (event: React.PointerEvent<SVGSVGElement>): Anchor | null => {
-    const api = runtime.current;
-    if (!api || !candles.length) return null;
-    const rect = event.currentTarget.getBoundingClientRect();
-    const x = event.clientX - rect.left;
-    const y = event.clientY - rect.top;
-    const logical = api.charts[0].timeScale().coordinateToLogical(x);
-    const value = api.candles.coordinateToPrice(y);
-    if (logical === null || value === null) return null;
-    const index = Math.max(0, Math.min(candles.length - 1, Math.round(logical)));
-    const candle = candles[index];
-    const snap = magnet ? [candle.o, candle.h, candle.l, candle.c].reduce((a, b) => Math.abs(a - value) < Math.abs(b - value) ? a : b) : value;
-    return { time: candleTime(candle), price: snap };
-  };
-  const addDrawing = (event: React.PointerEvent<SVGSVGElement>) => {
-    const anchor = pointerAnchor(event);
-    if (!anchor || tool === 'cursor') return;
-    if (tool === 'horizontal' || draft) {
-      const drawing: Drawing = { id: Date.now(), tool, start: draft ?? anchor, end: anchor };
-      setDrawings(current => ({ ...current, [symbol]: [...(current[symbol] ?? []), drawing] }));
-      setDraft(null); setPreview(null); setTool('cursor');
-    } else { setDraft(anchor); setPreview(anchor); }
-  };
-  const drawingCoordinates = (anchor: Anchor) => {
-    const api = runtime.current;
-    if (!api) return null;
-    const x = api.charts[0].timeScale().timeToCoordinate(anchor.time as UTCTimestamp);
-    const y = api.candles.priceToCoordinate(anchor.price);
-    return x === null || y === null ? null : { x, y };
-  };
-  const setDrawingTool = (next: Tool) => { setTool(next); setDraft(null); setPreview(null); setShowDrawings(true); };
-  const tools = [
-    { id: 'cursor', label: 'Crosshair', icon: Crosshair },
-    { id: 'trend', label: 'Trend line', icon: TrendingUp },
-    { id: 'horizontal', label: 'Horizontal line', icon: Minus },
-    { id: 'rectangle', label: 'Rectangle zone', icon: Square },
-  ] as const;
   const hoveredIndex = hoverTime === null ? candles.length - 1 : candles.findIndex(candle => candleTime(candle) === hoverTime);
   const indicatorValue = (id: string) => (analytics[id] ?? pivotSeries[id])?.[hoveredIndex]?.value;
   const toggleIndicator = (id: keyof IndicatorSettings) => {
@@ -660,18 +640,8 @@ function ChartWorkspace({ marketData, institutionalData = null }: { marketData: 
       return available.length ? available.map(name => `${name} ${price(indicatorValue(`${key}:${name}`))}`).join('  ') :
         'Previous completed period OHLC unavailable';
     }
-    if (id === 'vwap') return typeof timeframe !== 'number' ? 'Session VWAP: intraday only' :
-      indicatorValue('vwap') === undefined ? 'Unavailable: index volume not provided' : price(indicatorValue('vwap'));
     const value = indicatorValue(id);
     return value === undefined ? id.startsWith('ema') ? `Warm-up: ${id.slice(3)} candles required` : 'Waiting for sufficient history' : price(value);
-  };
-  const renderDrawing = (drawing: Drawing) => {
-    const start = drawingCoordinates(drawing.start);
-    const end = drawingCoordinates(drawing.end);
-    if (!start || !end) return null;
-    if (drawing.tool === 'horizontal') return <line key={drawing.id} x1="0" x2="100%" y1={start.y} y2={start.y} stroke="#00b9ff" strokeWidth="1.5" />;
-    if (drawing.tool === 'rectangle') return <rect key={drawing.id} x={Math.min(start.x, end.x)} y={Math.min(start.y, end.y)} width={Math.max(1, Math.abs(end.x - start.x))} height={Math.max(1, Math.abs(end.y - start.y))} fill="#008cff22" stroke="#00b9ff" />;
-    return <line key={drawing.id} x1={start.x} y1={start.y} x2={end.x} y2={end.y} stroke="#00b9ff" strokeWidth="1.5" />;
   };
   const renderCprBands = () => {
     const api = runtime.current;
@@ -688,23 +658,43 @@ function ChartWorkspace({ marketData, institutionalData = null }: { marketData: 
     });
   };
   return (
-    <section id="observatory-trade-chart" ref={rootRef} className={styles.workspace} aria-label="Market Intelligence Observatory trade chart">
+    <section id="observatory-trade-chart" ref={rootRef} className={`${styles.workspace} ${fullscreen ? styles.focusMode : ''}`} aria-label="Market Intelligence Observatory trade chart">
+      <div className={styles.chartViewActions}>
+        <span>Swipe to pan · Pinch to zoom</span>
+        <button className={styles.button} onClick={toggleFullscreen} aria-pressed={fullscreen}>
+          {fullscreen ? <Minimize size={16} /> : <Maximize size={16} />}
+          {fullscreen ? 'Exit full chart' : 'Full chart'}
+        </button>
+      </div>
       <div className={styles.viewTabs} role="tablist" aria-label="Observatory chart view">
         <button id="observatory-chart-tab" role="tab" aria-selected={workspaceTab === 'chart'} aria-controls="observatory-chart-content"
           className={styles.viewTab} onClick={() => setWorkspaceTab('chart')}>Advanced Chart</button>
         <button id="observatory-futures-tab" role="tab" aria-selected={workspaceTab === 'futures'} aria-controls="observatory-futures-content"
-          className={styles.viewTab} onClick={() => setWorkspaceTab('futures')}>Futures Chart</button>
+          className={styles.viewTab} onClick={() => {
+            setFuturesOpened(true);
+            setWorkspaceTab('futures');
+          }}>Futures Chart</button>
+        <button id="observatory-terminal-tab" role="tab" aria-selected={workspaceTab === 'terminal'} aria-controls="observatory-terminal-content"
+          className={styles.viewTab} onClick={() => {
+            setTerminalOpened(true);
+            setWorkspaceTab('terminal');
+          }}>Futures Advanced Chart</button>
         <button id="observatory-paper-tab" role="tab" aria-selected={workspaceTab === 'paper'} aria-controls="observatory-paper-content"
           className={styles.viewTab} onClick={() => setWorkspaceTab('paper')}>Automated Paper Trading</button>
       </div>
       <div id="observatory-futures-content" role="tabpanel" aria-labelledby="observatory-futures-tab" hidden={workspaceTab !== 'futures'}>
-        {workspaceTab === 'futures' && <FuturesChart />}
+        {futuresOpened && <FuturesChart active={workspaceTab === 'futures'} />}
+      </div>
+      <div id="observatory-terminal-content" role="tabpanel" aria-labelledby="observatory-terminal-tab" hidden={workspaceTab !== 'terminal'}>
+        {terminalOpened && <FuturesTerminal active={workspaceTab === 'terminal'} />}
       </div>
       {paperRecorderError && <p role="alert" className="p-3 text-red-400">{paperRecorderError}</p>}
       <div id="observatory-paper-content" role="tabpanel" aria-labelledby="observatory-paper-tab" hidden={workspaceTab !== 'paper'}>
         {workspaceTab === 'paper' && <ChartPaperTrading recorderError={paperRecorderError} />}
       </div>
       <div id="observatory-chart-content" role="tabpanel" aria-labelledby="observatory-chart-tab" hidden={workspaceTab !== 'chart'}>
+      <details className={styles.compactDetails}>
+      <summary>Paper trade overlays</summary>
       <div className="flex flex-wrap items-center gap-2 px-3 pb-2 text-xs">
         <label className="flex items-center gap-2"><input type="checkbox" checked={showPaperLevels}
           onChange={event => setShowPaperLevels(event.target.checked)} />
@@ -721,6 +711,7 @@ function ChartWorkspace({ marketData, institutionalData = null }: { marketData: 
           </option>)}
         </select>}
       </div>
+      </details>
       <div className={styles.toolbar}>
         <div className={styles.symbols} role="tablist" aria-label="Chart index">
           {SYMBOLS.map(item => {
@@ -739,20 +730,22 @@ function ChartWorkspace({ marketData, institutionalData = null }: { marketData: 
           })}
         </div>
         <div className={styles.intervals} aria-label="Chart timeframe">
-          <button disabled title="The chart feed provides 3-minute and 5-minute candles, not 1-minute candles">1m</button>
           {([3, 5, 15, 30, 60, 'D', 'W', 'M'] as const).map(value => <button key={value} aria-pressed={timeframe === value}
             onPointerEnter={() => { if (value !== timeframe) void prefetchChartHistory(symbol, value); }}
             onFocus={() => { if (value !== timeframe) void prefetchChartHistory(symbol, value); }}
-            onClick={() => { setTimeframe(value); setRange('1D'); setDraft(null); setPreview(null); setBrowsingDate(''); setHistoryDate(''); }}>{timeframeLabel(value)}</button>)}
+            onClick={() => { setTimeframe(value); setRange('1D'); setBrowsingDate(''); setHistoryDate(''); }}>{timeframeLabel(value)}</button>)}
         </div>
         <div className={styles.status} data-live={live}><i /><span>{browsingDate ? 'Historical view' : live ? 'Market Open' : !sessionOpen ? 'Market Closed' : data ? 'Cached Data' : 'Connecting'}<small>{browsingDate ? 'No live signals' : live ? 'Live' : data ? 'Last available session' : 'Waiting for feed'}</small></span></div>
         <div className={styles.actions}>
+          <DeltaStrengthBox symbol={symbol} active={workspaceTab === 'chart'} />
           <button className={styles.button} onClick={() => { setPanel('Indicators'); setControlsOpen(value => !value); }} aria-expanded={controlsOpen} aria-controls="chart-controls-content" title="Indicator controls"><LayoutTemplate size={14} /><span>Indicators & setup</span><ChevronDown size={11} /></button>
           <button className={styles.button} onClick={saveTemplate} title="Save current indicator template"><Save size={14} />Save</button>
           <button className={styles.button} onClick={downloadImage} aria-label="Download chart image"><Camera size={15} /></button>
           <button className={styles.button} onClick={toggleFullscreen} aria-label={fullscreen ? 'Exit chart fullscreen' : 'Chart fullscreen'}>{fullscreen ? <Minimize size={15} /> : <Maximize size={15} />}</button>
         </div>
       </div>
+      <details className={styles.compactDetails}>
+      <summary>History & session navigation {browsingDate && '· Historical view'}{history.error && ' · History error'}</summary>
       <div className={styles.historyBar} aria-label="Chart history navigation">
         <button className={styles.button} disabled={history.loading || !history.hasMore} onClick={history.loadOlder}>
           {history.loading ? 'Loading history...' : 'Load older'}
@@ -778,36 +771,23 @@ function ChartWorkspace({ marketData, institutionalData = null }: { marketData: 
         {history.error && <div role="alert">{history.error} <button className={styles.button} onClick={history.retry}>Retry history</button></div>}
         {!history.loading && !history.error && history.candles.length === 0 && <span>No Zerodha candles in this date range. Try another date or load an older page.</span>}
       </div>
+      </details>
       <div className={styles.body} data-controls-open={controlsOpen}>
         <div className={styles.left} id="index-chart-panel" role="tabpanel" aria-labelledby={`chart-tab-${symbol}`}>
-          <div className={styles.tools} role="toolbar" aria-label="Chart drawing tools">
-            {tools.map(({ id, label, icon: Icon }) => <button key={id} className={styles.tool} title={label} aria-label={label} aria-pressed={tool === id} onClick={() => setDrawingTool(id)}><Icon size={19} strokeWidth={1.4} /></button>)}
-            <div className={styles.toolDivider} />
-            <button className={styles.tool} title="Snap drawing points to candle prices" aria-label="Magnet mode" aria-pressed={magnet} onClick={() => setMagnet(value => !value)}><Magnet size={19} strokeWidth={1.4} /></button>
-            <button className={styles.tool} aria-label="Undo last drawing" disabled={!selectedDrawings.length} onClick={() => setDrawings(current => ({ ...current, [symbol]: selectedDrawings.slice(0, -1) }))}><Undo2 size={19} strokeWidth={1.4} /></button>
-            <button className={styles.tool} aria-label={showDrawings ? 'Hide drawings' : 'Show drawings'} onClick={() => setShowDrawings(value => !value)}>{showDrawings ? <Eye size={19} strokeWidth={1.4} /> : <EyeOff size={19} strokeWidth={1.4} />}</button>
-            <button className={styles.tool} aria-label="Clear drawings" disabled={!selectedDrawings.length} onClick={() => setDrawings(current => ({ ...current, [symbol]: [] }))}><Trash2 size={19} strokeWidth={1.4} /></button>
-          </div>
           <div className={styles.plots} onPointerDownCapture={() => { historyGesture.current = true; }}
             onWheelCapture={() => { historyGesture.current = true; }}>
             <div className={styles.chartHeading}>
               <strong>{selected.name} · {timeframeLabel(timeframe)} · {selected.exchange}</strong>
-              {indicators.vwap && <span className={styles.vwapReadout}>
-                VWAP <b>{typeof timeframe !== 'number' ? 'Intraday only' :
-                  indicatorValue('vwap') === undefined ? 'Volume unavailable' : price(indicatorValue('vwap'))}</b>
-              </span>}
               {!browsingDate && <OrderFlowReadout state={flow} intraday={typeof timeframe === 'number'} label="FUT flow" />}
               <span className="text-slate-400" title={'Big-player prints only (max 2 per session): stop-run / absorption / drive setup + volume >= 2.5x average (range >= 2x on the cash index) + major level (PDH/PDL/PDC, day H/L, opening range, round number). A print is valid only if price made the minimum points before its stop; failed prints are hidden. Candle-based estimate: FII/DII identity is not in any live feed.'}>Flow valid {candleFlowSummary.valid}/{candleFlowSummary.resolved}{candleFlowSummary.pending ? ` ? ${candleFlowSummary.pending} confirming` : ''}</span>
               {hovered && <span className={hovered.c >= hovered.o ? styles.up : styles.down}>O {price(hovered.o)} · H {price(hovered.h)} · L {price(hovered.l)} · C {price(hovered.c)}</span>}
             </div>
             <div className={styles.price} onPointerMove={event => { if (event.buttons) redraw(value => value + 1); }} onPointerUp={() => redraw(value => value + 1)} onWheel={() => requestAnimationFrame(() => redraw(value => value + 1))}>
               <div ref={priceRef} style={{ width: '100%', height: '100%' }} />
-              <svg className={`${styles.drawing} ${tool !== 'cursor' ? styles.drawingEnabled : ''}`}
+              <svg className={styles.drawing}
                 style={{ right: runtime.current?.charts[0].priceScale('right').width() ?? 72, width: `calc(100% - ${runtime.current?.charts[0].priceScale('right').width() ?? 72}px)` }}
-                onPointerDown={addDrawing} onPointerMove={event => { if (draft) setPreview(pointerAnchor(event)); }} onKeyDown={event => { if (event.key === 'Escape') setDrawingTool('cursor'); }} tabIndex={tool === 'cursor' ? -1 : 0} aria-label="Chart drawing surface">
+                aria-label="Chart level overlays">
                 {indicators.cpr && renderCprBands()}
-                {showDrawings && selectedDrawings.map(renderDrawing)}
-                {draft && preview && tool !== 'cursor' && renderDrawing({ id: -1, tool, start: draft, end: preview })}
                 {showPaperLevels && selectedPaperTrade && (() => {
                   const api = runtime.current;
                   if (!api || typeof timeframe !== 'number') return null;
@@ -870,7 +850,7 @@ function ChartWorkspace({ marketData, institutionalData = null }: { marketData: 
                     <td>{stat.t1Rate === null ? '--' : `${stat.t1Rate}/${stat.t2Rate ?? 0}%`}</td>
                   </tr>)}</tbody></table>
                 <p>Replay on loaded candles: fill at next bar open + {rejection.costs.slippagePoints} pt slippage, {rejection.costs.feePoints} pt fees per trade, stop counted first when SL and target share a bar, 50% booked at T1 then stop to breakeven. Fixed rules; the 30% out-of-sample split is chronological. Past replay does not guarantee future results.</p>
-                <p>{rejection.vwapStatus}. Levels are index prices; futures/options execution prices differ.</p>
+                <p>Levels are index prices; futures/options execution prices differ.</p>
               </details>}
             </div>
           </details>
@@ -881,14 +861,14 @@ function ChartWorkspace({ marketData, institutionalData = null }: { marketData: 
             <p>Reported market-wide daily cash flows, not live index-specific trades. Context only; excluded from intraday confidence and entries.</p>
           </details>
           <div className={styles.panelTabs} role="tablist" aria-label="Chart controls panel">
-            {(['Indicators', 'Drawing Tools', 'Chart Settings'] as const).map(name => <button role="tab" key={name} aria-selected={panel === name} aria-controls="chart-controls-content" onClick={() => setPanel(name)}>{name}</button>)}
+            {(['Indicators', 'Chart Settings'] as const).map(name => <button role="tab" key={name} aria-selected={panel === name} aria-controls="chart-controls-content" onClick={() => setPanel(name)}>{name}</button>)}
           </div>
           <div className={styles.panelContent} id="chart-controls-content">
             {panel === 'Indicators' && <>
               <div className={styles.priority}>
                 <b>EMA 9/20/50 + EMA 200 context</b>
-                <span>VWAP + volume · Daily CPR · RSI 14</span>
-                <p>Balanced default, not a win-rate ranking. EMA 200 needs 200 bars. Cash-index VWAP needs genuine index volume; futures volume is never substituted. Camarilla and other pivots stay optional to avoid duplicate levels.</p>
+                <span>Daily CPR · RSI 14 · Observed volume</span>
+                <p>Balanced default, not a win-rate ranking. EMA 200 needs 200 bars. Futures volume is never substituted. Camarilla and other pivots stay optional to avoid duplicate levels.</p>
                 <button className={styles.button} onClick={() => chooseTemplate('Confluence focus')}>Use confluence focus</button>
               </div>
               <label className={styles.search}><Search size={14} /><input type="search" placeholder="Search indicators..." aria-label="Search indicators" value={query} onChange={event => setQuery(event.target.value)} /></label>
@@ -914,13 +894,6 @@ function ChartWorkspace({ marketData, institutionalData = null }: { marketData: 
                 <button className={`${styles.button} ${styles.saveTemplate}`} onClick={saveTemplate}>Save as Template</button>
               </div>
             </>}
-            {panel === 'Drawing Tools' && <div className={styles.settings}>
-              <h4>Drawing Tools</h4><p>Choose a tool, then click the chart. Trend lines and rectangles use two clicks. Drawings are kept separately for each index during this visit.</p>
-              {tools.map(({ id, label, icon: Icon }) => <button key={id} className={`${styles.button} ${tool === id ? styles.active : ''}`} onClick={() => setDrawingTool(id)}><Icon size={15} />{label}</button>)}
-              <p>{draft ? 'Click the second point to complete the drawing.' : tool === 'cursor' ? 'Drag to pan. Scroll to zoom.' : 'Click the chart to place the first point.'}</p>
-              {tool !== 'cursor' && <button className={styles.button} onClick={() => setDrawingTool('cursor')}>Cancel drawing</button>}
-              <div className={styles.drawingList}>{selectedDrawings.map((drawing, index) => <div className={styles.drawingRow} key={drawing.id}><span>{drawing.tool} {index + 1}</span><button className={styles.button} aria-label={`Delete drawing ${index + 1}`} onClick={() => setDrawings(current => ({ ...current, [symbol]: selectedDrawings.filter(item => item.id !== drawing.id) }))}><Trash2 size={12} /></button></div>)}</div>
-            </div>}
             {panel === 'Chart Settings' && <div className={styles.settings}>
               <h4>Chart Settings</h4>
               <label>Grid lines<input type="checkbox" checked={grid} onChange={event => setGrid(event.target.checked)} /></label>
@@ -931,15 +904,14 @@ function ChartWorkspace({ marketData, institutionalData = null }: { marketData: 
               <label>Show BUY / SELL / EXIT markers<input type="checkbox" checked={showTradePlan} onChange={event => setShowTradePlan(event.target.checked)} /></label>
               <button className={styles.button} onClick={() => { setRange('1D'); applyRange('1D'); setAutoScale(true); }}>Reset chart view</button>
               <p>Times are displayed in IST. Historical candles use native Zerodha intervals, loaded in 14-day pages and cached on the server. Scroll left or jump to a date for the maximum history available from Zerodha; availability varies by instrument and interval. No missing candles are invented.</p>
-              <p>1D uses Zerodha daily OHLCV. 1W groups daily candles from Monday; 1M groups calendar months. Higher-timeframe history loads one year of daily records per page. The current period is forming, not a confirmed closed candle. Intraday signals, session VWAP and daily CPR are disabled; Auto pivots use monthly/yearly anchors.</p>
-              <p>Cash-index prices are never mixed with futures volume. Index volume and VWAP are unavailable when Zerodha provides no traded volume. Live updates retain the existing stream cadence; zero latency or exact tick-for-tick parity with broker charts cannot be guaranteed.</p>
-              <p>EMA and RSI need sufficient candle history. VWAP requires volume; cash-index feeds may not provide it. Daily pivots and CPR require previous-session OHLC.</p>
+              <p>1D uses Zerodha daily OHLCV. 1W groups daily candles from Monday; 1M groups calendar months. Higher-timeframe history loads one year of daily records per page. The current period is forming, not a confirmed closed candle. Intraday signals and daily CPR are disabled; Auto pivots use monthly/yearly anchors.</p>
+              <p>Cash-index prices are never mixed with futures volume. Index volume is unavailable when Zerodha provides no traded volume. Live updates retain the existing stream cadence; zero latency or exact tick-for-tick parity with broker charts cannot be guaranteed.</p>
+              <p>EMA and RSI need sufficient candle history. Daily pivots and CPR require previous-session OHLC.</p>
             </div>}
           </div>
         </aside>
       </div>
       {notice && <div className={styles.notice} role="status">{notice}</div>}
-      {tool !== 'cursor' && <div className={styles.notice}>{tool === 'horizontal' ? 'Click a price to place a horizontal line.' : draft ? 'Click the second point to finish. Use Crosshair to cancel.' : 'Click the first point on the chart. Use Crosshair to cancel.'}</div>}
       </div>
     </section>
   );

@@ -34,6 +34,7 @@ market_auto_start.py
 # Documentation
 *.md
 *.txt
+!requirements.txt
 
 # Persistent data (rebuilt at runtime)
 data/

@@ -16,6 +16,8 @@ logger = logging.getLogger(__name__)
 
 
 class FuturesChartService(ChartHistoryService):
+    include_oi = True  # Kite returns per-candle open interest for F&O contracts
+
     def __init__(self, db_path=None):
         super().__init__(db_path)
         self._instruments = {}

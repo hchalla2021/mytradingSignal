@@ -14,6 +14,7 @@ What the data really is (shown to users as-is):
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import threading
 import time
@@ -85,6 +86,28 @@ def _levels(levels: Any) -> List[tuple]:
     return out
 
 
+def _dom_side(levels: Any) -> List[List[float]]:
+    """Exact 5-level depth rows [price, quantity, orders]; empty/zero rows are dropped, never filled."""
+    out: List[List[float]] = []
+    if isinstance(levels, list):
+        for level in levels[:5]:
+            try:
+                price, qty = float(level.get("price") or 0), float(level.get("quantity") or 0)
+                orders = int(level.get("orders") or 0)
+            except (AttributeError, TypeError, ValueError):
+                continue
+            if price > 0 and qty > 0:
+                out.append([price, qty, orders])
+    return out
+
+
+def _oi(tick: Dict[str, Any]) -> Optional[float]:
+    value = tick.get("oi")
+    if isinstance(value, (int, float)) and value > 0:
+        return float(value)
+    return None
+
+
 class _State:
     def __init__(self, token: int):
         self.token = token
@@ -97,13 +120,15 @@ class _State:
         self.minute: Optional[Dict[str, Any]] = None
         self.spot: Optional[float] = None
         self.zones: Dict[tuple, Dict[str, Any]] = {}
+        self.dom: Optional[Dict[str, Any]] = None
 
 
 def new_minute(t: int, price: float, baseline: bool) -> Dict[str, Any]:
     # gap=True means part of this minute's flow was not observed (no baseline at its start).
+    # oi / oio: last and first open interest seen in the minute (None when Kite sent no OI).
     return {"t": t, "o": price, "h": price, "l": price, "c": price, "v": 0.0, "b": 0.0, "s": 0.0, "n": 0.0,
             "lv": {}, "bk": [0.0, 0.0, 0], "dp": [0.0, 0.0, 0], "sp": [0.0, 0], "spot": None,
-            "gap": not baseline, "q": [0, 0, 0]}
+            "gap": not baseline, "q": [0, 0, 0], "oi": None, "oio": None}
 
 
 def classify(price: float, bid: Optional[float], ask: Optional[float],
@@ -130,12 +155,12 @@ def classify(price: float, bid: Optional[float], ask: Optional[float],
 
 
 class OrderFlowEngine:
-    def __init__(self, db_path: Path = DB_PATH):
+    def __init__(self, db_path: Optional[Path] = None):
         self._lock = threading.Lock()
         self._states: Dict[str, _State] = {}
         self._today: Dict[str, List[Dict[str, Any]]] = {}
         self._loaded: Dict[str, str] = {}
-        self._db_path = db_path
+        self._db_path = db_path if db_path is not None else Path(os.environ.get("ORDER_FLOW_DB_PATH") or DB_PATH)
         self._db_ready = False
 
     # ── storage ──────────────────────────────────────────────────────────────
@@ -262,6 +287,20 @@ class OrderFlowEngine:
                 minute["sp"][1] += 1
             if state.spot:
                 minute["spot"] = state.spot
+            oi = _oi(tick)
+            if oi is not None:
+                minute["oi"] = oi
+                if minute.get("oio") is None:
+                    minute["oio"] = oi
+            dom_bids, dom_asks = _dom_side(depth.get("buy")), _dom_side(depth.get("sell"))
+            state.dom = {
+                "ts": ts, "ltp": price, "bids": dom_bids, "asks": dom_asks,
+                "totalBid": float(total_bid) if total_bid else None,
+                "totalAsk": float(total_ask) if total_ask else None,
+                "oi": oi, "oiHigh": float(tick["oi_day_high"]) if tick.get("oi_day_high") else None,
+                "oiLow": float(tick["oi_day_low"]) if tick.get("oi_day_low") else None,
+                "volume": volume,
+            }
             self._track_zones(state, bids, asks, price, ts, row)
             state.prev_volume = volume
             state.prev_bid, state.prev_ask = bid, ask
@@ -308,6 +347,16 @@ class OrderFlowEngine:
         with self._lock:
             state = self._states.get(symbol)
             return state.last_ts if state else None
+
+    def dom(self, symbol: str) -> Optional[Dict[str, Any]]:
+        """Latest 5-level depth of the recorded contract (pending orders, not executed trades)."""
+        with self._lock:
+            state = self._states.get(symbol)
+            if not state or not state.dom:
+                return None
+            dom = dict(state.dom, bids=[list(r) for r in state.dom["bids"]], asks=[list(r) for r in state.dom["asks"]])
+            dom["token"] = state.token
+            return dom
 
     def session_minutes(self, symbol: str, day: str) -> List[Dict[str, Any]]:
         start = int(datetime.strptime(day, "%Y-%m-%d").replace(tzinfo=timezone.utc).timestamp()) - IST_OFFSET

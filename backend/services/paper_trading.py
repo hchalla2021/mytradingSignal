@@ -12,6 +12,7 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from services.order_flow_paper import OrderFlowPaperBook
 
 logger = logging.getLogger(__name__)
 IST = timezone(timedelta(hours=5, minutes=30))
@@ -76,12 +77,14 @@ class PaperTradingService:
         self.lock = threading.RLock()
         self.queue = queue.SimpleQueue()
         self.task = None
+        self.flow_task = None
         self.error = None
         self.last_received = None
         self._retry_batch = []
         self._schema_ready = False
         # Dedicated workers keep paper I/O from starving the shared asyncio thread pool.
         self.executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="paper-trading")
+        self.order_flow = OrderFlowPaperBook(self)
 
     async def run(self, fn, *args):
         return await asyncio.get_running_loop().run_in_executor(self.executor, fn, *args)
@@ -114,6 +117,7 @@ class PaperTradingService:
                     CREATE TABLE IF NOT EXISTS quotes (symbol TEXT PRIMARY KEY, payload TEXT NOT NULL);
                     CREATE TABLE IF NOT EXISTS reports (day TEXT PRIMARY KEY, payload TEXT NOT NULL);
                 """)
+            self.order_flow.schema(db)
         finally:
             db.close()
         self._schema_ready = True
@@ -186,6 +190,17 @@ class PaperTradingService:
             raise ValueError(f"Invalid paper quote for {symbol}")
         self.queue.put((symbol, price, parse_time(source_at),
                         received, "exchange" if tick.get("exchange_timestamp") else "receipt"))
+
+    def enqueue_futures_tick(self, symbol, tick):
+        if symbol not in SYMBOLS:
+            raise ValueError("Invalid futures paper symbol")
+        # Entries require real exchange timestamps, never a receipt-time substitute.
+        source_at = tick.get("exchange_timestamp")
+        if source_at is None:
+            logger.warning("Futures paper tick missing exchange timestamp for %s", symbol)
+            return
+        self.order_flow.enqueue(symbol, int(tick["instrument_token"]), float(tick["last_price"]),
+                                parse_time(source_at).timestamp(), now_ist().timestamp())
 
     def _close(self, db, trade, price, at, reason):
         direction = 1 if trade["side"] == "BUY" else -1
@@ -302,7 +317,7 @@ class PaperTradingService:
             db.execute("UPDATE signals SET status='FILLED' WHERE id=?", (row["id"],))
         self.last_received = received.isoformat()
 
-    def snapshot(self, day=None, limit=100, offset=0):
+    def snapshot(self, day=None, limit=100, offset=0, flow_offset=0):
         day = day or now_ist().date().isoformat()
         with self.connect() as db:
             all_trades = [json.loads(row["payload"]) for row in db.execute(
@@ -319,14 +334,22 @@ class PaperTradingService:
             pending = dict(db.execute("SELECT status, count(*) FROM signals WHERE day=? GROUP BY status", (day,)).fetchall())
             quotes = {row["symbol"]: json.loads(row["payload"]) for row in db.execute("SELECT * FROM quotes")}
             dates = [r[0] for r in db.execute(
-                "SELECT day FROM trades UNION SELECT day FROM signals UNION SELECT day FROM reports ORDER BY day DESC")]
+                "SELECT day FROM trades UNION SELECT day FROM signals UNION SELECT day FROM reports "
+                "UNION SELECT day FROM of_paper ORDER BY day DESC")]
+            flow_book = self.order_flow.snapshot(db, day, limit, flow_offset)
             return {
                 "day": day, "policy": POLICY, "summary": summary,
                 "report_status": "PROVISIONAL" if day == now_ist().date().isoformat() and in_session(now_ist())
-                else "AWAITING_EXIT_QUOTES" if summary["open"] else "FINAL",
+                else "AWAITING_EXIT_QUOTES" if summary["open"] or flow_book["counts"].get("OPEN", 0) else "FINAL",
                 "trades": page, "total": len(selected),
                 "offset": offset, "limit": limit, "dates": dates, "rankings": ranking,
                 "signals": pending, "quotes": quotes,
+                "order_flow": {
+                    **flow_book,
+                    "running": bool(self.task and not self.task.done() and
+                                    self.flow_task and not self.flow_task.done()),
+                    "queued_ticks": self.order_flow.queue.qsize(),
+                },
                 "health": {"running": bool(self.task and not self.task.done()), "error": self.error,
                            "last_received": self.last_received, "queued_ticks": self.queue.qsize()},
             }
@@ -377,11 +400,25 @@ class PaperTradingService:
                 dict(row) | {"payload": json.loads(row["payload"])}
                 for row in db.execute(
                     "SELECT events.trade_id, events.at, events.kind, events.payload FROM events "
-                    "JOIN trades ON trades.id=events.trade_id WHERE trades.day=? ORDER BY events.id",
-                    (report["day"],),
+                    "WHERE events.trade_id IN (SELECT id FROM trades WHERE day=? "
+                    "UNION SELECT id FROM of_paper WHERE day=?) ORDER BY events.id",
+                    (report["day"], report["day"]),
                 )
             ]
         return report
+
+    async def _scan_order_flow(self):
+        from routers.order_flow import build_snapshot
+        from services.order_flow_engine import order_flow_engine
+        failures = []
+        for symbol in SYMBOLS:
+            try:
+                snapshot = await build_snapshot(symbol, 5, token=order_flow_engine.current_token(symbol))
+                await self.run(self.order_flow.observe, snapshot, now_ist().timestamp())
+            except (ValueError, OSError, sqlite3.Error, RuntimeError) as exc:
+                failures.append(f"{symbol}: {exc}")
+                logger.exception("Confirmed order-flow paper scan failed for %s", symbol)
+        self.order_flow.error = "; ".join(failures) or None
 
     def _drain(self, batch_size=500):
         with self.lock:
@@ -406,14 +443,19 @@ class PaperTradingService:
                     db.execute("UPDATE signals SET status='EXPIRED' WHERE id=?", (row["id"],))
             include_today = at.hour * 60 + at.minute >= 930
             days = [row[0] for row in db.execute(
-                "SELECT DISTINCT day FROM trades WHERE day<? OR (day=? AND ?)",
-                (at.date().isoformat(), at.date().isoformat(), include_today))]
+                "SELECT day FROM trades WHERE day<? OR (day=? AND ?) UNION "
+                "SELECT day FROM of_paper WHERE day<? OR (day=? AND ?)",
+                (at.date().isoformat(), at.date().isoformat(), include_today,
+                 at.date().isoformat(), at.date().isoformat(), include_today))]
             if at.weekday() < 5 and include_today and at.date().isoformat() not in days:
                 days.append(at.date().isoformat())
             for day in days:
                 trades = [json.loads(row[0]) for row in db.execute("SELECT payload FROM trades WHERE day=?", (day,))]
+                flow = self.order_flow.snapshot(db, day, limit=0)
                 report = {"day": day, "generated_at": at.isoformat(), "summary": metrics(trades),
-                          "rankings": self._rank(trades), "final": all(t["exit_at"] for t in trades)}
+                          "rankings": self._rank(trades),
+                          "order_flow": {"counts": flow["counts"], "net_points": flow["net_points"]},
+                          "final": all(t["exit_at"] for t in trades) and not flow["counts"].get("OPEN", 0)}
                 db.execute("INSERT OR REPLACE INTO reports VALUES (?,?)", (day, json.dumps(report)))
 
     async def start(self):
@@ -421,6 +463,12 @@ class PaperTradingService:
             return
         await self.run(self._initialize)
         self.task = asyncio.create_task(self._run())
+        self.flow_task = asyncio.create_task(self._run_order_flow())
+
+    async def _run_order_flow(self):
+        while True:
+            await self._scan_order_flow()
+            await asyncio.sleep(1)
 
     def _initialize(self):
         with self.lock:
@@ -431,6 +479,7 @@ class PaperTradingService:
         while True:
             try:
                 await self.run(self._drain)
+                await self.run(self.order_flow.drain)
                 minute = now_ist().isoformat()[:16]
                 if minute != last_report:
                     await self.run(self._finalize, now_ist())
@@ -441,6 +490,13 @@ class PaperTradingService:
             await asyncio.sleep(0.2)
 
     async def stop(self):
+        if self.flow_task:
+            self.flow_task.cancel()
+            try:
+                await self.flow_task
+            except asyncio.CancelledError:
+                pass
+            self.flow_task = None
         if self.task:
             self.task.cancel()
             try:
@@ -448,6 +504,8 @@ class PaperTradingService:
             except asyncio.CancelledError:
                 pass
             self.task = None
+        while self.order_flow.retry or not self.order_flow.queue.empty():
+            await self.run(self.order_flow.drain)
         while self._retry_batch or not self.queue.empty():
             await self.run(self._drain)
         await self.run(self._finalize, now_ist())

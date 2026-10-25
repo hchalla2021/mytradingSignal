@@ -14,13 +14,17 @@ import { calculateVwapSignals } from '@/lib/chart-vwap-signals';
 import { SignalLabelPrimitive } from '@/lib/chart-signal-labels';
 import { futuresChangedFrom, relativeVolume } from '@/lib/futures-chart-metrics';
 import { createHistoryPageCache } from '@/lib/chart-history-cache';
+import { isFreshFuturesFlow, mergeFuturesLiveCandles } from '@/lib/futures-live-candles';
+import { centerLatestCandle, isLatestCandleCentered, resizeChartIfChanged } from '@/lib/chart-render-sync';
 import { candleFlowLabels, flowStats, OrderFlowPrimitive } from '@/lib/chart-order-flow';
 import { candleFlowCallouts, FLOW_MIN_POINTS, FLOW_ROUND_STEP, recordedFlowMap } from '@/lib/order-flow';
 import { useOrderFlow } from '@/hooks/useOrderFlow';
 import OrderFlowReadout from './OrderFlowReadout';
+import { IndexTabList } from './IndexTabs';
+import DeltaStrengthBox from './DeltaStrength';
 import styles from './ChartWorkspace.module.css';
 
-interface FuturesContract {
+export interface FuturesContract {
   token: number;
   symbol: ChartSymbol;
   tradingSymbol: string;
@@ -30,7 +34,7 @@ interface FuturesContract {
   tickSize: number;
 }
 interface ContractState { symbol: ChartSymbol; items: FuturesContract[]; error: string | null; loading: boolean }
-interface CandleState { key: string; candles: Candle[]; error: string | null; updated: number | null }
+export interface CandleState { key: string; candles: Candle[]; error: string | null; updated: number | null }
 const candleCache = createHistoryPageCache<CandleState>(24);
 const contractCache = createHistoryPageCache<FuturesContract[]>(3, 3_600_000);
 const contractCacheKey = (symbol: ChartSymbol) => `${symbol}:${new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' })}`;
@@ -39,7 +43,7 @@ const EMPTY_CANDLES: Candle[] = [];
 const formatPrice = (value: number | undefined) => value === undefined ? '--' :
   value.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const formatTime = (time: number) => new Date(time).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', hour12: false });
-const formatExpiry = (expiry: string) => new Date(`${expiry}T00:00:00+05:30`).toLocaleDateString('en-IN', {
+export const formatExpiry = (expiry: string) => new Date(`${expiry}T00:00:00+05:30`).toLocaleDateString('en-IN', {
   timeZone: 'Asia/Kolkata', month: 'long', year: 'numeric', day: '2-digit',
 });
 
@@ -74,7 +78,7 @@ function parseContracts(value: unknown, symbol: ChartSymbol): FuturesContract[] 
   });
 }
 
-async function loadContracts(symbol: ChartSymbol, force = false) {
+export async function loadContracts(symbol: ChartSymbol, force = false) {
   const key = contractCacheKey(symbol);
   const saved = contractCache.read(key);
   if (saved?.fresh && !force) return saved.value;
@@ -92,7 +96,7 @@ async function loadContracts(symbol: ChartSymbol, force = false) {
   });
 }
 
-async function loadCandles(symbol: ChartSymbol, token: number, timeframe: Timeframe): Promise<CandleState> {
+export async function loadCandles(symbol: ChartSymbol, token: number, timeframe: Timeframe): Promise<CandleState> {
   const key = `${symbol}:${token}:${timeframe}`;
   return candleCache.load(key, async () => {
     const controller = new AbortController();
@@ -115,18 +119,35 @@ async function loadCandles(symbol: ChartSymbol, token: number, timeframe: Timefr
   });
 }
 
-export default function FuturesChart() {
+/** Shared cache reads so other futures views paint instantly from already-loaded data. */
+export const readCachedContracts = (symbol: ChartSymbol) => contractCache.read(contractCacheKey(symbol));
+export const readCachedCandles = (symbol: ChartSymbol, token: number, timeframe: Timeframe) =>
+  candleCache.read(`${symbol}:${token}:${timeframe}`);
+
+export async function warmFuturesChart(): Promise<void> {
+  const contracts = await loadContracts('NIFTY');
+  const nearest = contracts[0];
+  if (!nearest) return;
+  const saved = candleCache.read(`NIFTY:${nearest.token}:5`);
+  if (!saved?.fresh) await loadCandles('NIFTY', nearest.token, 5);
+}
+
+export default function FuturesChart({ active = true }: { active?: boolean } = {}) {
   const [symbol, setSymbol] = useState<ChartSymbol>('NIFTY');
   const [token, setToken] = useState<number | null>(null);
   const [year, setYear] = useState('');
   const [timeframe, setTimeframe] = useState<Timeframe>(5);
   const [retry, setRetry] = useState(0);
-  const [contracts, setContracts] = useState<ContractState>({ symbol, items: [], error: null, loading: true });
+  const [contracts, setContracts] = useState<ContractState>(() => {
+    const saved = contractCache.read(contractCacheKey('NIFTY'));
+    return { symbol: 'NIFTY', items: saved?.value ?? [], error: null, loading: !saved?.fresh };
+  });
   const [data, setData] = useState<CandleState>({ key: '', candles: [], error: null, updated: null });
   const [hoverTime, setHoverTime] = useState<number | null>(null);
   const [showVwap, setShowVwap] = useState(true);
   const [now, setNow] = useState(Date.now);
   const containerRef = useRef<HTMLDivElement>(null);
+  const pendingCenter = useRef(false);
   const engine = useRef(createIndicatorEngine());
   const previousBars = useRef<{ key: string; candles: Candle[] }>({ key: '', candles: [] });
   const runtime = useRef<{
@@ -140,7 +161,22 @@ export default function FuturesChart() {
   const matching = items.filter(item => item.expiry.startsWith(selectedYear));
   const contract = matching.find(item => item.token === token) ?? matching[0];
   const key = `${symbol}:${contract?.token ?? ''}:${timeframe}`;
-  const candles = data.key === key ? data.candles : EMPTY_CANDLES;
+  const flow = useOrderFlow(symbol, timeframe, contract?.token, active && contract !== undefined);
+  const history = data.key === key ? data : candleCache.read(key)?.value;
+  const historyCandles = history?.candles ?? EMPTY_CANDLES;
+  const liveHistory = useRef({ key: '', history: EMPTY_CANDLES, candles: EMPTY_CANDLES });
+  const candles = useMemo(() => {
+    const prior = liveHistory.current;
+    const base = prior.key === key && prior.history === historyCandles ? prior.candles : historyCandles;
+    const merged = mergeFuturesLiveCandles(
+      base, flow.snapshot, symbol, contract?.token, timeframe, flow.live, Date.now(), history?.updated ?? 0,
+    );
+    liveHistory.current = { key, history: historyCandles, candles: merged };
+    return merged;
+  }, [historyCandles, flow.snapshot, symbol, contract?.token, timeframe, flow.live, key, history?.updated]);
+  const liveCandles = isFreshFuturesFlow(flow.snapshot, symbol, contract?.token, timeframe, flow.live, Date.now()) &&
+    flow.snapshot.bars.some(bar => bar.ohlcvComplete &&
+      bar.t <= flow.snapshot!.lastTick! && bar.end > flow.snapshot!.lastTick!);
   const calculation = useMemo(() => engine.current.calculate(candles, SETTINGS, typeof timeframe === 'number'),
     [candles, timeframe]);
   const hoveredIndex = hoverTime === null ? -1 : candles.findIndex(candle => candleTime(candle) === hoverTime);
@@ -152,17 +188,19 @@ export default function FuturesChart() {
   const contractError = contracts.symbol === symbol ? contracts.error : null;
   const historyError = data.key === key ? data.error : null;
   const signals = useMemo(() => calculateVwapSignals(candles, timeframe, {
-    nowMs: now, fetchedAt: data.key === key ? data.updated : null,
+    nowMs: now, fetchedAt: history?.updated ?? null,
     error: Boolean(contractError || historyError), tickSize: contract?.tickSize ?? 0,
-  }), [candles, timeframe, now, data.key, data.updated, key, contractError, historyError, contract?.tickSize]);
-  const flow = useOrderFlow(symbol, timeframe, contract?.token, contract !== undefined);
+  }), [candles, timeframe, now, history?.updated, contractError, historyError, contract?.tickSize]);
 
   useEffect(() => {
+    if (!active) return;
+    setNow(Date.now());
     const timer = setInterval(() => setNow(Date.now()), 5000);
     return () => clearInterval(timer);
-  }, []);
+  }, [active]);
 
   useEffect(() => {
+    if (!active) return;
     let cancelled = false;
     const saved = contractCache.read(contractCacheKey(symbol));
     setContracts(previous => ({
@@ -179,11 +217,11 @@ export default function FuturesChart() {
         setContracts(previous => ({ ...previous, symbol, error: message, loading: false }));
       });
     return () => { cancelled = true; };
-  }, [symbol, retry]);
+  }, [symbol, retry, active]);
 
   const hasCandles = candles.length > 0;
   useEffect(() => {
-    if (!hasCandles) return;
+    if (!active || !hasCandles) return;
     let cancelled = false;
     void (async () => {
       for (const other of ['NIFTY', 'BANKNIFTY', 'SENSEX'] as const) {
@@ -202,11 +240,11 @@ export default function FuturesChart() {
       }
     })();
     return () => { cancelled = true; };
-  }, [symbol, timeframe, hasCandles]);
+  }, [symbol, timeframe, hasCandles, active]);
 
   const contractToken = contract?.token;
   useEffect(() => {
-    if (contractToken === undefined) return;
+    if (!active || contractToken === undefined) return;
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout>;
     const saved = candleCache.read(key);
@@ -233,7 +271,7 @@ export default function FuturesChart() {
     if (saved?.fresh && retry === 0) timer = setTimeout(() => void load(), Math.max(0, 20_000 - (Date.now() - (saved.value.updated ?? 0))));
     else void load();
     return () => { cancelled = true; clearTimeout(timer); };
-  }, [symbol, contractToken, timeframe, key, retry]);
+  }, [symbol, contractToken, timeframe, key, retry, active]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -279,7 +317,11 @@ export default function FuturesChart() {
     const onCrosshair = (event: { time?: unknown }) => setHoverTime(typeof event.time === 'number' ? event.time : null);
     chart.subscribeCrosshairMove(onCrosshair);
     const observer = new ResizeObserver(() => {
-      if (container.clientWidth > 0) chart.resize(container.clientWidth, container.clientHeight);
+      const count = previousBars.current.candles.length;
+      const centered = isLatestCandleCentered(chart, count);
+      const resized = resizeChartIfChanged(chart, container);
+      if ((pendingCenter.current || resized && centered) &&
+          centerLatestCandle(chart, container, count)) pendingCenter.current = false;
     });
     observer.observe(container);
     return () => {
@@ -315,7 +357,7 @@ export default function FuturesChart() {
       else samples.forEach(point => api[id].update(point));
     }
     previousBars.current = { key, candles };
-    api.chart.applyOptions({ timeScale: { timeVisible: typeof timeframe === 'number',
+    if (api.key !== key) api.chart.applyOptions({ timeScale: { timeVisible: typeof timeframe === 'number',
       tickMarkFormatter: (time: number) => new Date(time * 1000).toLocaleString('en-IN', {
         timeZone: 'Asia/Kolkata', ...(typeof timeframe === 'number'
           ? { hour: '2-digit', minute: '2-digit', hour12: false } : { day: '2-digit', month: 'short' }),
@@ -323,7 +365,8 @@ export default function FuturesChart() {
     } });
     if (candles.length && api.key !== key) {
       api.key = key;
-      api.chart.timeScale().setVisibleLogicalRange({ from: Math.max(0, candles.length - 80), to: candles.length + 5 });
+      api.chart.priceScale('right').applyOptions({ autoScale: true });
+      pendingCenter.current = !centerLatestCandle(api.chart, containerRef.current!, candles.length);
     }
   }, [candles, calculation, timeframe, key, rvol]);
 
@@ -355,14 +398,20 @@ export default function FuturesChart() {
       candles.map(bar => ({ time: candleTime(bar), h: bar.h, l: bar.l })));
   }, [candles, signals, candleFlow]);
 
-  return <div className="space-y-3 p-3">
-    <div className="flex flex-wrap items-center gap-3">
-      <label>Index <select className={styles.button} value={symbol} onChange={event => {
-        setSymbol(event.target.value as ChartSymbol); setToken(null); setYear('');
-      }}>
-        <option value="NIFTY">NIFTY Futures</option><option value="BANKNIFTY">BANKNIFTY Futures</option>
-        <option value="SENSEX">SENSEX Futures</option>
-      </select></label>
+  return <div className={styles.futuresWorkspace}>
+    <IndexTabList idPrefix="futures-index" label="Futures chart index" activeSymbol={symbol}
+      panelId="futures-index-content" onSelect={next => {
+        if (next === symbol) return;
+        setSymbol(next); setToken(null); setYear('');
+      }} />
+    <div id="futures-index-content" role="tabpanel" aria-labelledby={`futures-index-tab-${symbol}`}
+      tabIndex={0} className="min-w-0 space-y-3 rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400">
+    <div className="flex flex-wrap items-center gap-2">
+      <DeltaStrengthBox symbol={symbol} active={active} />
+    </div>
+    <details className={styles.compactDetails}>
+    <summary>Contract & chart settings · {timeframeLabel(timeframe)} · {contract?.tradingSymbol ?? symbol}</summary>
+    <div className={styles.futuresControls}>
       <label>Expiry year <select className={styles.button} value={selectedYear} disabled={!years.length}
         onChange={event => { setYear(event.target.value); setToken(null); }}>
         {!years.length && <option value="">Loading...</option>}
@@ -382,8 +431,10 @@ export default function FuturesChart() {
     <p className="text-xs text-slate-400">
       Zerodha-listed contracts only: October, November, December 2026 and 2027 appear when the exchange lists them.
       No future candles or synthetic rollover history. Prices and volume always belong to the selected contract.
-      Refreshes every 20 seconds while this tab is open; not a tick-by-tick live feed. No futures paper orders.
+      Near-month intraday candles update from the recorded live stream when fully observed (about once per second).
+      History reconciles every 20 seconds; other expiries and incomplete recordings use history polling. No futures paper orders.
     </p>
+    </details>
     {(contractError || historyError) && <p role="alert" className="rounded border border-red-500/40 p-2 text-red-300">
       {contractError || historyError} Displayed data may be stale.
     </p>}
@@ -391,9 +442,14 @@ export default function FuturesChart() {
       {contracts.symbol !== symbol || contracts.loading ? 'Loading futures contracts...' :
         'Zerodha returned no currently listed futures for this index. No prices have been substituted.'}
     </p>}
+    <details className={styles.compactDetails}>
+    <summary>Live values & indicators · {contract?.tradingSymbol ?? symbol} · {liveCandles ? 'LIVE' : 'HISTORY'}</summary>
     <div className={styles.chartHeading}>
       <strong>{contract ? `${contract.tradingSymbol} · ${contract.exchange} · ${timeframeLabel(timeframe)}` : 'Futures Chart'}</strong>
       {contract && <span>Expiry {contract.expiry} · Lot {contract.lotSize}</span>}
+      <span className={liveCandles ? 'text-emerald-300' : 'text-amber-300'}>
+        {liveCandles ? 'LIVE · recorded futures ticks' : 'HISTORY · 20s refresh'}
+      </span>
       {selectedCandle && <span>O {formatPrice(selectedCandle.o)} · H {formatPrice(selectedCandle.h)} ·
         L {formatPrice(selectedCandle.l)} · C {formatPrice(selectedCandle.c)} · Volume {selectedCandle.v.toLocaleString('en-IN')}</span>}
       <span className="text-teal-300">EMA 9 {formatPrice(calculation.series.ema9?.[readoutIndex]?.value)}</span>
@@ -412,12 +468,15 @@ export default function FuturesChart() {
         ? typeof timeframe !== 'number' ? '(intraday only)' : '(waiting for traded volume)'
         : formatPrice(vwapValue)}
     </label>
+    </details>
     {contract && !candles.length && !historyError && <p role="status">
       {data.key === key && data.updated ? 'No candles returned for this contract in the latest history window.' : 'Loading futures candles...'}
     </p>}
     <div ref={containerRef} className={styles.price} aria-label="Selected futures contract candlestick chart with EMA 9, EMA 20, VWAP, volume, relative volume and entry/exit signals" />
+    <details className={styles.compactDetails}>
+    <summary>Data freshness & calculation details</summary>
     <p className="text-xs text-slate-400">
-      Last refresh {data.key === key && data.updated ? `${formatTime(data.updated)} IST` : '--'} ·
+      Last history refresh {history?.updated ? `${formatTime(history.updated)} IST` : '--'} ·
       Last candle {candles.length ? `${formatTime(candleTime(candles[candles.length - 1]) * 1000)} IST` : '--'}.
       VWAP = session sum(HLC3 x traded volume) / session volume, reset each IST date. Forming candles can change.
       Session VWAP is intraday only. Broker historical-data permissions are required.
@@ -430,5 +489,7 @@ export default function FuturesChart() {
       Entry/exit labels are hypothetical closed-candle VWAP cross/bounce/rejection replay, not broker fills;
       50% exit at 1R, remainder at 2R or stop/session close. Fees/slippage excluded. {signals.reason}
     </p>
+    </details>
+    </div>
   </div>;
 }

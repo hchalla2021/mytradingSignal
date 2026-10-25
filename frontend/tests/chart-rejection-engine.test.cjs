@@ -74,7 +74,8 @@ test('every rejection signal is a validated touch-and-reject with structural SL 
     else { assert.ok(signal.index - lastSell >= 5, 'duplicate SELL suppressed'); lastSell = signal.index; }
     assert.ok(signal.reasons.length >= 3);
   }
-  assert.match(result.vwapStatus, /VWAP/);
+  assert.equal(result.vwapStatus, undefined);
+  assert.ok(result.signals.every(signal => !signal.level.includes('VWAP')));
 });
 
 test('only one trade at a time: every new entry comes after the previous EXIT, strong levels only', () => {

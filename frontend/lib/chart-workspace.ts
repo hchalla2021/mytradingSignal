@@ -108,6 +108,11 @@ export function sessionDate(time: number): string {
   return new Date((time + 19800) * 1000).toISOString().slice(0, 10);
 }
 
+export const CASH_INDICATORS = INDICATORS.filter(item => item.id !== 'vwap');
+export function cashIndicatorSettings(settings: IndicatorSettings): IndicatorSettings {
+  return { ...settings, vwap: false };
+}
+
 export function isCashSession(nowMs: number): boolean {
   const ist = new Date(nowMs + 19_800_000);
   const minute = ist.getUTCHours() * 60 + ist.getUTCMinutes();

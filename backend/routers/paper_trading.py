@@ -41,9 +41,9 @@ async def accept_chart_signals(frame: ChartFrame):
 
 @router.get("/history")
 async def history(day: date | None = None, limit: int = Query(100, ge=1, le=500),
-                  offset: int = Query(0, ge=0)):
+                  offset: int = Query(0, ge=0), flow_offset: int = Query(0, ge=0)):
     return await get_paper_trading_service().run(get_paper_trading_service().snapshot,
-                                   day.isoformat() if day else None, limit, offset)
+                                   day.isoformat() if day else None, limit, offset, flow_offset)
 
 
 @router.get("/events")

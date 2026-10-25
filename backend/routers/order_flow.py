@@ -56,13 +56,22 @@ def _today() -> str:
     return session_date(time.time())
 
 
-async def build_snapshot(symbol: str, interval: int, day: Optional[str] = None, token: Optional[int] = None) -> Dict[str, Any]:
+def _dom(symbol: str, token: Optional[int]) -> Optional[Dict[str, Any]]:
+    dom = order_flow_engine.dom(symbol)
+    return dom if dom and (token is None or dom.get("token") == token) else None
+
+
+async def build_snapshot(symbol: str, interval: int, day: Optional[str] = None, token: Optional[int] = None,
+                         latest_recorded: bool = False) -> Dict[str, Any]:
+    """`latest_recorded` (display only): when today has no recording yet, return the most recent recorded session,
+    flagged with `latestRecorded`, instead of an empty snapshot. Trading/paper callers must leave it off."""
+    requested_today = day is None
     day = day or _today()
     live_token = order_flow_engine.current_token(symbol)
     if token is not None and day == _today() and live_token is not None and token != live_token:
         return {"available": False, "symbol": symbol, "interval": interval, "date": day,
                 "reason": "Order flow is recorded live for the near-month contract only.", "recordedToken": live_token}
-    key = (symbol, interval, day, token)
+    key = (symbol, interval, day, token, latest_recorded and requested_today)
     now = time.time()
     cached = _cache.get(key)
     if cached and now - cached[0] < 0.8:
@@ -70,6 +79,14 @@ async def build_snapshot(symbol: str, interval: int, day: Optional[str] = None, 
     minutes = await asyncio.to_thread(order_flow_engine.session_minutes, symbol, day)
     if token is not None:
         minutes = [m for m in minutes if m.get("token") == token]
+    if not minutes and requested_today and latest_recorded:
+        sessions = await asyncio.to_thread(order_flow_engine.stored_sessions, symbol, 5)
+        earlier = next((session for session in sessions if session < day), None)
+        if earlier:
+            previous = await build_snapshot(symbol, interval, earlier, token)
+            if previous.get("available"):
+                return {**previous, "latestRecorded": True, "lastTick": order_flow_engine.last_tick(symbol),
+                        "reason": f"No order flow recorded today yet; showing the last recorded session ({earlier})."}
     contract_token = token or (minutes[-1].get("token") if minutes else live_token)
     contract = await _contract(symbol, contract_token)
     row = ROW_SIZE[symbol]
@@ -84,6 +101,7 @@ async def build_snapshot(symbol: str, interval: int, day: Optional[str] = None, 
         "reason": None if minutes else "No order flow recorded for this session yet (recording starts when the backend receives futures ticks).",
         "recordedFrom": minutes[0]["t"] if minutes else None, "lastTick": last_tick, "generatedAt": now,
         "zones": order_flow_engine.zones(symbol) if day == _today() else [],
+        "dom": _dom(symbol, contract_token) if day == _today() else None,
         **result,
     }
     for stale in [k for k, (at, _) in _cache.items() if now - at > 60]:
@@ -94,9 +112,9 @@ async def build_snapshot(symbol: str, interval: int, day: Optional[str] = None, 
 
 @http_router.get("/snapshot")
 async def order_flow_snapshot(symbol: str = "NIFTY", interval: int = Query(5), date_: Optional[date] = Query(None, alias="date"),
-                              token: Optional[int] = None):
+                              token: Optional[int] = None, latest: bool = False):
     symbol = _validate(symbol, interval)
-    return await build_snapshot(symbol, interval, date_.isoformat() if date_ else None, token)
+    return await build_snapshot(symbol, interval, date_.isoformat() if date_ else None, token, latest_recorded=latest)
 
 
 @http_router.get("/replay")
@@ -132,13 +150,14 @@ async def order_flow_websocket(websocket: WebSocket):
         interval = int(websocket.query_params.get("interval", "5"))
         raw_token = websocket.query_params.get("token")
         token = int(raw_token) if raw_token else None
+        latest = websocket.query_params.get("latest") in ("1", "true")
     except (HTTPException, ValueError) as error:
         await websocket.send_text(json.dumps({"type": "error", "detail": getattr(error, "detail", str(error))}))
         await websocket.close()
         return
     signature = None
     try:
-        snapshot = await build_snapshot(symbol, interval, None, token)
+        snapshot = await build_snapshot(symbol, interval, None, token, latest_recorded=latest)
         await websocket.send_text(json.dumps({"type": "snapshot", "data": snapshot}, separators=(",", ":")))
         if "bars" not in snapshot:  # requested contract is not the recorded one; nothing to stream
             await websocket.close()
@@ -152,7 +171,7 @@ async def order_flow_websocket(websocket: WebSocket):
                 continue
             except asyncio.TimeoutError:
                 pass
-            snapshot = await build_snapshot(symbol, interval, None, token)
+            snapshot = await build_snapshot(symbol, interval, None, token, latest_recorded=latest)
             current = (snapshot["lastTick"], len(snapshot["bars"]))
             if current == signature:
                 continue

@@ -135,7 +135,7 @@ test('observed weak volume is rejected rather than treated as missing, and a vol
   const engine = createLevelAnalysisEngine();
   const weak = engine.analyze(bars, emptyDaily, 5, options);
   assert.equal(weak.plan.direction, 'WAIT');
-  assert.match(weak.plan.watchReason, /volume or VWAP/);
+  assert.match(weak.plan.watchReason, /Observed volume/);
   const strong = engine.analyze([...bars.slice(0, -1), { ...bars.at(-1), v: 200 }], emptyDaily, 5, options);
   assert.equal(strong.plan.direction, 'BUY');
   assert.equal(strong.plan.volumeVerified, true);

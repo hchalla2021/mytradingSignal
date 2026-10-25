@@ -49,7 +49,7 @@ test('paper analysis uses exact chart EMA/pivot formulas and records missing cas
   assert.equal(frame.setup.levels.find(level => level.id === 'cpr TC').price, pivots.cpr.TC);
   assert.equal(frame.setup.levels.find(level => level.id === 'camarilla R3').price, pivots.camarilla.R3);
   assert.equal(frame.setup.volume.status, 'UNAVAILABLE');
-  assert.equal(frame.setup.vwap.value, null);
+  assert.equal(frame.setup.vwap, undefined);
   assert.ok(!frame.signals.some(signal => signal.tags.includes('Cash VWAP aligned')));
   assert.equal(frame.setup.previous_day.t, daily[0].t);
 });
@@ -61,6 +61,15 @@ test('forming candles cannot change confirmed signals or setup evidence', () => 
   const forming = { t: new Date(now).toISOString(), o: 100, h: 1000, l: 1, c: 900, v: 100000 };
   const actual = analyzer.analyze('NIFTY', [...bars, forming], daily, 5, now, plan);
   assert.deepEqual(plain(actual), plain(expected));
+});
+
+test('cash paper books never evaluate VWAP even when candles carry positive volume', () => {
+  const bars = fixture().map(bar => ({ ...bar, v: 1000 }));
+  const frame = createChartPaperAnalyzer().analyze('NIFTY', bars, daily, 5, now, plan);
+  assert.ok(frame);
+  assert.equal(frame.setup.vwap, undefined);
+  assert.ok(frame.setup.levels.every(level => !level.id.includes('VWAP')));
+  assert.ok(frame.signals.every(signal => !JSON.stringify(signal).includes('VWAP')));
 });
 
 test('rejects stale candles, future candles, closed markets and higher timeframes', () => {

@@ -10,6 +10,7 @@ RUN npm ci
 
 # Copy application code
 COPY . .
+RUN mkdir -p public
 
 # Build the application for production
 RUN npm run build
