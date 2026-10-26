@@ -84,6 +84,11 @@ test('a warmed default contract and candles render immediately without a loading
     '@/lib/chart-order-flow': { flowStats: () => ({ valid: 0, resolved: 0, pending: 0 }) },
     './OrderFlowReadout': { default: () => null },
     './DeltaStrength': { default: () => null },
+    './ProSignal': { default: () => null },
+    './LevelBattle': { default: () => null },
+    '@/hooks/useLevelBattle': { useLevelBattle: () => ({ active: [], price: null, mapped: false }) },
+    '@/lib/level-battle-primitive': { LevelBattlePrimitive: class {} },
+    '@/hooks/useProConfluence': { useProConfluence: () => ({ contract: null, replay: null, open: null, decision: null }) },
     './ChartWorkspace.module.css': { default: {} },
   });
   const warm = chart.warmFuturesChart();

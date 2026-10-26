@@ -31,9 +31,15 @@ import { createLevelAnalysisEngine } from '@/lib/chart-level-analysis';
 import { createChartPaperAnalyzer } from '@/lib/chart-paper-trading';
 import { createRejectionEngine } from '@/lib/chart-rejection-engine';
 import { SignalLabelPrimitive, type ChartSignalLabel } from '@/lib/chart-signal-labels';
-import { candleFlowLabels, flowStats, OrderFlowPrimitive } from '@/lib/chart-order-flow';
-import { candleFlowCallouts, FLOW_MIN_POINTS, FLOW_ROUND_STEP, recordedFlowMap } from '@/lib/order-flow';
+import { flowStats, OrderFlowPrimitive } from '@/lib/chart-order-flow';
+import { basisAt, candleFlowCallouts, FLOW_MIN_POINTS, FLOW_ROUND_STEP, recordedFlowMap } from '@/lib/order-flow';
+import { proSignalLabels, timeframeSeconds } from '@/lib/pro-confluence';
 import { useOrderFlow } from '@/hooks/useOrderFlow';
+import { useProConfluence } from '@/hooks/useProConfluence';
+import ProSignalPanel from './ProSignal';
+import LevelBattlePanel from './LevelBattle';
+import { useLevelBattle } from '@/hooks/useLevelBattle';
+import { LevelBattlePrimitive } from '@/lib/level-battle-primitive';
 import OrderFlowReadout from './OrderFlowReadout';
 import ChartPaperTrading, { usePaperSignalRecorder } from './ChartPaperTrading';
 import { useChartPaperTrading } from '@/hooks/useChartPaperTrading';
@@ -56,6 +62,7 @@ interface ChartRuntime {
   candles: ISeriesApi<'Candlestick'>;
   signalLabels: SignalLabelPrimitive;
   orderFlow: OrderFlowPrimitive;
+  levelBattle: LevelBattlePrimitive;
   volume: ISeriesApi<'Histogram'>;
   overlays: Record<string, ISeriesApi<'Line'>>;
   rsi: ISeriesApi<'Line'>;
@@ -154,6 +161,7 @@ function ChartWorkspace({ marketData, institutionalData = null }: { marketData: 
   const historyKey = `${symbol}:${timeframe}:${history.jumpRevision}:${browsingDate}`;
   // Near-month futures flow, basis-shifted onto the cash index; only for the live session.
   const flow = useOrderFlow(symbol, timeframe, null, workspaceTab === 'chart' && !browsingDate);
+  const pro = useProConfluence(symbol, workspaceTab === 'chart');
   const volumeAvailable = useMemo(() => candles.some(candle => candle.v > 0), [candles]);
   const volumeVisible = indicators.volume && volumeAvailable;
   useEffect(() => {
@@ -273,8 +281,10 @@ function ChartWorkspace({ marketData, institutionalData = null }: { marketData: 
     const signalLabels = new SignalLabelPrimitive();
     candleSeries.attachPrimitive(signalLabels);
     // Delta/CVD strip uses the empty bottom margin of the price pane (candles stop at 92%).
-    const orderFlow = new OrderFlowPrimitive({ detail: false, footprint: false, basisAdjust: true, strip: { top: .925, bottom: .995 } });
+    const orderFlow = new OrderFlowPrimitive({ detail: false, footprint: false, basisAdjust: true, strip: { top: .925, bottom: .995 }, plan: false });
     candleSeries.attachPrimitive(orderFlow);
+    const levelBattle = new LevelBattlePrimitive();
+    candleSeries.attachPrimitive(levelBattle);
     const overlays: ChartRuntime['overlays'] = {};
     const volume = charts[1].addHistogramSeries({ title: indicatorLineTitle('volume'), priceFormat: { type: 'volume' }, priceLineVisible: false });
     const rsiSeries = charts[2].addLineSeries({ title: indicatorLineTitle('rsi'), color: '#c05bea', lineWidth: 1, priceLineVisible: false, autoscaleInfoProvider: () => ({ priceRange: { minValue: 0, maxValue: 100 } }) });
@@ -283,7 +293,7 @@ function ChartWorkspace({ marketData, institutionalData = null }: { marketData: 
     const signal = charts[3].addLineSeries({ title: indicatorLineTitle('signal'), color: '#ff8800', lineWidth: 1, priceLineVisible: false });
     const histogram = charts[3].addHistogramSeries({ title: indicatorLineTitle('histogram'), priceLineVisible: false, lastValueVisible: true });
     const atr = charts[4].addLineSeries({ title: indicatorLineTitle('atr'), color: '#cc6979', lineWidth: 1, priceLineVisible: false });
-    runtime.current = { charts, candles: candleSeries, signalLabels, orderFlow, volume, overlays, rsi: rsiSeries, macd: macdSeries, signal, histogram, atr };
+    runtime.current = { charts, candles: candleSeries, signalLabels, orderFlow, levelBattle, volume, overlays, rsi: rsiSeries, macd: macdSeries, signal, histogram, atr };
     revision.current = '';
     let syncing = false;
     let frame = 0;
@@ -516,38 +526,32 @@ function ChartWorkspace({ marketData, institutionalData = null }: { marketData: 
     runtime.current?.orderFlow.setEstimated(candleFlow);
   }, [candleFlow]);
 
+  // Clean chart: only pro-gate-confirmed entries / exits, futures prices moved onto the cash index by the recorded basis.
+  const proShift = useMemo(() => {
+    const snapshot = pro.snapshot;
+    return (time: number) => snapshot ? basisAt(snapshot.bars, time, snapshot.summary.basis) : null;
+  }, [pro.snapshot]);
+  const proTrades = pro.replay?.trades;
   useEffect(() => {
     const api = runtime.current;
     if (!api) return;
     const bars = candles.map(candle => ({ time: candleTime(candle), h: candle.h, l: candle.l }));
-    const labels: ChartSignalLabel[] = candleFlowLabels(candleFlow);
-    if (!rejection || !showTradePlan) { api.signalLabels.setData(labels, labels.length ? bars : []); return; }
-    // Clean chart: BUY / SELL at entry and EXIT where the trade closed, each with its exact price.
-    const exact = (value: number) => value.toLocaleString('en-IN', { maximumFractionDigits: 2 });
-    const byTime = new Map(bars.map(bar => [bar.time, bar]));
-    const signals = rejection.active?.early ? [...rejection.signals, rejection.active] : rejection.signals;
-    for (const signal of signals) {
-      const buy = signal.side === 'BUY';
-      labels.push({
-        id: signal.id, time: signal.time, price: signal.entry, kind: signal.side, placement: buy ? 'below' : 'above',
-        text: `${signal.early ? 'EARLY ' : ''}${signal.side} ${exact(signal.entry)}`, early: signal.early,
-      });
-      const { exitTime, exitPrice, netPoints, resolved } = signal.outcome;
-      const exitBar = exitTime !== undefined ? byTime.get(exitTime) : undefined;
-      if (!resolved || exitBar === undefined || exitPrice === undefined) continue;
-      labels.push({
-        id: `${signal.id}:exit`, time: exitBar.time, price: exitPrice, kind: 'EXIT',
-        // Opposite side from the entry label so ENTRY and EXIT never share a spot.
-        placement: buy ? 'above' : 'below',
-        text: `EXIT ${exact(exitPrice)}`,
-        ...(netPoints !== undefined ? { detail: `${netPoints >= 0 ? '+' : ''}${netPoints.toFixed(1)} pts`, detailPositive: netPoints >= 0 } : {}),
-      });
-    }
-    api.signalLabels.setData(labels, bars);
-  }, [rejection, showTradePlan, candles, candleFlow]);
+    const labels: ChartSignalLabel[] = showTradePlan && !browsingDate
+      ? proSignalLabels(proTrades ?? [], bars.map(bar => bar.time), timeframeSeconds(timeframe), proShift) : [];
+    api.signalLabels.setData(labels, labels.length ? bars : []);
+  }, [proTrades, proShift, showTradePlan, browsingDate, candles, timeframe]);
 
-  const activeTrade = showTradePlan && rejection?.active ? rejection.active : null;
-  const activeLevels = activeTrade ? `${activeTrade.stopLoss}|${activeTrade.target1}|${activeTrade.target2}` : '';
+  // Cash levels, measured in the futures recording through the latest basis (futures − spot). Live session only.
+  const levelBars = useMemo(() => browsingDate ? null
+    : candles.map(candle => ({ time: candleTime(candle), o: candle.o, h: candle.h, l: candle.l, c: candle.c, v: candle.v })), [candles, browsingDate]);
+  const latestBasis = pro.snapshot ? basisAt(pro.snapshot.bars, Number.MAX_SAFE_INTEGER, pro.snapshot.summary.basis) : null;
+  const battle = useLevelBattle(pro, levelBars, { intraday: typeof timeframe === 'number', vwap: false, offset: latestBasis });
+  useEffect(() => { runtime.current?.levelBattle.setData(battle.active); }, [battle]);
+
+  const activeTrade = showTradePlan && !browsingDate ? pro.open : null;
+  const activeShift = activeTrade ? proShift(activeTrade.entryTime ?? activeTrade.signalTime) : null;
+  const activeLevels = activeTrade && activeShift !== null
+    ? [activeTrade.t1Hit ? activeTrade.entry : activeTrade.stop, activeTrade.t1, activeTrade.t2].map(value => value - activeShift).join('|') : '';
   useEffect(() => {
     const api = runtime.current;
     if (!api || !activeLevels) return;
@@ -737,13 +741,15 @@ function ChartWorkspace({ marketData, institutionalData = null }: { marketData: 
         </div>
         <div className={styles.status} data-live={live}><i /><span>{browsingDate ? 'Historical view' : live ? 'Market Open' : !sessionOpen ? 'Market Closed' : data ? 'Cached Data' : 'Connecting'}<small>{browsingDate ? 'No live signals' : live ? 'Live' : data ? 'Last available session' : 'Waiting for feed'}</small></span></div>
         <div className={styles.actions}>
-          <DeltaStrengthBox symbol={symbol} active={workspaceTab === 'chart'} />
+          <DeltaStrengthBox symbol={symbol} active={workspaceTab === 'chart'} decision={pro.decision} />
           <button className={styles.button} onClick={() => { setPanel('Indicators'); setControlsOpen(value => !value); }} aria-expanded={controlsOpen} aria-controls="chart-controls-content" title="Indicator controls"><LayoutTemplate size={14} /><span>Indicators & setup</span><ChevronDown size={11} /></button>
           <button className={styles.button} onClick={saveTemplate} title="Save current indicator template"><Save size={14} />Save</button>
           <button className={styles.button} onClick={downloadImage} aria-label="Download chart image"><Camera size={15} /></button>
           <button className={styles.button} onClick={toggleFullscreen} aria-label={fullscreen ? 'Exit chart fullscreen' : 'Chart fullscreen'}>{fullscreen ? <Minimize size={15} /> : <Maximize size={15} />}</button>
         </div>
       </div>
+      <ProSignalPanel pro={pro} />
+      <LevelBattlePanel state={battle} />
       <details className={styles.compactDetails}>
       <summary>History & session navigation {browsingDate && '· Historical view'}{history.error && ' · History error'}</summary>
       <div className={styles.historyBar} aria-label="Chart history navigation">
@@ -833,16 +839,16 @@ function ChartWorkspace({ marketData, institutionalData = null }: { marketData: 
             <button className={styles.button} onClick={() => setControlsOpen(false)}>Close</button>
           </div>
           <details className={styles.riskPanel}>
-            <summary>Setup & risk <span>{!showTradePlan ? 'OFF' : rejection?.active ? `${rejection.active.side} open` : 'No open trade'}</span></summary>
+            <summary>Setup & risk <span>{!showTradePlan ? 'OFF' : pro.open ? `PRO ${pro.open.side} open` : 'No open trade'}</span></summary>
             <div className={styles.setupLevels}>
               {([
-                ['ENTRY', rejection?.active?.entry, '#00d895'], ['STOP', rejection?.active?.stopLoss, '#ff5065'],
-                ['TARGET 1', rejection?.active?.target1, '#38d6b0'], ['TARGET 2', rejection?.active?.target2, '#c084fc'],
+                ['ENTRY (FUT)', pro.open?.entry, '#00d895'], ['STOP (FUT)', pro.open ? (pro.open.t1Hit ? pro.open.entry : pro.open.stop) : undefined, '#ff5065'],
+                ['TARGET 1 (FUT)', pro.open?.t1, '#38d6b0'], ['TARGET 2 (FUT)', pro.open?.t2, '#c084fc'],
               ] as const).map(([label, value, color]) => <span key={label}><small style={{ color }}>{label}</small><b>{showTradePlan ? price(value) : '--'}</b></span>)}
             </div>
             <div className={styles.setupNotes}>
-              <span>Only strong rejections at support/resistance (EMA, CPR, Camarilla, pivots, swing high/low) confirmed by EMA 9/20, SuperTrend and RSI. BUY/SELL confirm on candle close; a dashed EARLY label shows a setup building on the live candle and can still change before close. One trade at a time; SL/T1/T2 lines show the open trade&apos;s exits. EXIT is the stop, target or session close (D/W/M hold across sessions). Rule-based signals, not a guaranteed prediction.</span>
-              {rejection && <details open><summary>Rejection replay · {rejection.signals.length} signals</summary>
+              <span>Chart BUY / SELL / EXIT labels and SL/T1/T2 lines come only from the pro confirmation gate: every check must pass on a closed 5m near-month futures candle (EMA 9/21/50 stack, VWAP, 15m &amp; 60m trend, candle close, recorded delta &amp; CVD, OI, stretch, stop size, room to target, confluence score, no flip). Futures prices are moved onto the index by the recorded basis; levels above are futures prices. One trade at a time; half booked at T1 with the stop moved to breakeven, rest at T2 or 15:15. Rule-based, not a guaranteed prediction — always use the stop.</span>
+              {rejection && <details><summary>Rejection strategy replay (reference only — not drawn as signals) · {rejection.signals.length} signals</summary>
                 <table className={styles.replayTable}><thead><tr><th>Set</th><th>Trades</th><th>Win%</th><th>Exp pts</th><th>PF</th><th>T1/T2</th></tr></thead>
                   <tbody>{([['All', rejection.stats.all], ['In-sample 70%', rejection.stats.inSample], ['Out-of-sample 30%', rejection.stats.outOfSample]] as const).map(([name, stat]) => <tr key={name}>
                     <td>{name}</td><td>{stat.trades}</td><td>{stat.winRate === null ? '--' : `${stat.winRate}%`}</td>

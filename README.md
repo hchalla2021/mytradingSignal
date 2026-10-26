@@ -81,9 +81,58 @@ still disable temporarily when loading or when their action is not currently ava
 including futures contract selection and the footprint view before order flow is recorded.
 
 All three charts use the same near-month futures delta box for the selected index.
-The measured delta remains labelled estimated; stale, disconnected, archived, future-dated,
-off-session or failed feeds show WAIT rather than a current BUY/SELL call. Production
+The measured delta remains labelled estimated and is shown as **Buyer / Seller pressure** only.
+The box shows 🟢 BUY / 🔴 SELL only on the candle where the PRO gate (below) confirms an entry,
+🔵 HOLD while that trade is open, and 🟡 WAIT otherwise; stale, disconnected, archived, future-dated,
+off-session or failed feeds always show WAIT. Production
 cash-chart WebSocket reconnects use the configured/same-origin server, never localhost fallbacks.
+
+### PRO confirmation gate (the only source of BUY / SELL)
+
+Advanced Chart, Futures Chart and Futures Advanced Chart all show one shared **PRO GATE** panel
+(`frontend/lib/pro-confluence.ts`, `frontend/hooks/useProConfluence.ts`). It evaluates **closed 5m
+near-month futures candles** with recorded order flow and gives BUY or SELL only when **every** check passes:
+
+| Check | BUY (SELL is the mirror) |
+|---|---|
+| History / window | ≥ 50 closed candles; signal candle closes 09:30–15:00 IST |
+| Trend | EMA 9 > 21 > 50, close above session VWAP |
+| Higher timeframes | 15m and 60m: none against, at least one with |
+| Candle | Green, closes in the upper half of its range |
+| Delta / CVD | Recorded delta ≥ +15% of volume (≥ 60% coverage), CVD rising over 3 candles |
+| Open interest | Not short build-up (passes when OI is not reported) |
+| Stretch / stop | ≤ 1.5 ATR from EMA 21; engine stop 0.3–2 ATR away |
+| Room | Nearest resistance / PDH at least 1.5R away |
+| Score / flip | Confluence score ≥ 70 with gap ≥ 35; previous candle did not lean the other way |
+
+Each check is listed with ✔ / ✘ and its live value, so the reason for every WAIT is visible.
+Plan: entry = signal close (replay enters next candle open), SL = engine stop, T1 = 1.5R (book half,
+SL to breakeven), T2 = 3R, exit by 15:15 IST, 3-candle cool-down after a stop. Today's signals are
+replayed without look-ahead and drawn as `✔ BUY/SELL` and `EXIT` labels plus SL/T1/T2 lines on all three
+charts (shifted by the recorded basis onto the cash Advanced Chart); the panel shows today's W/L and points.
+The older VWAP, rejection-engine, recorded-OF, candle-flow and server-guidance BUY/SELL labels are no
+longer drawn; the Futures Advanced "Score engine" shows bias only. Delta aggressor side is estimated
+from Kite ticks, and bars without a recording fail the delta check by design.
+**No system wins every trade** — the gate filters weak and counter-trend entries; always use the stop-loss.
+
+### Level battle (break or reject?)
+
+All three charts also show a **LEVEL BATTLE** panel and a chart overlay (`frontend/lib/level-battle.ts`,
+`frontend/lib/level-battle-primitive.ts`, `frontend/hooks/useLevelBattle.ts`, `frontend/components/LevelBattle.tsx`).
+Levels come from each chart's own candles: EMA 9/20/21/50/100/200, session VWAP (futures charts), and from
+the previous session Camarilla R1–R4/S1–S4, CPR TC/P/BC, pivot R1/R2/S1/S2 and PDH/PDL. Lines closer than
+two zones merge into one confluence zone.
+
+- **Zone** = 0.25 × ATR(14) of 5m near-month futures; a level is **AT** inside the zone, **NEAR** within 1.2 ATR.
+  The nearest support and resistance are always shown (max 4 levels).
+- **Buyers / Sellers** = recorded futures volume traded inside the zone today and in the last 30 minutes,
+  plus resting bids/asks from the 5-level book when the level is close. The cash chart maps levels to futures via the recorded basis.
+- **Factors** (positive = level holds): zone and recent buy/sell imbalance, last 3 candles' delta push,
+  approach speed, earlier rejects/breaks today, repeated tests, confluence, EMA 21 vs 50 trend and book ratio.
+- **Call:** hold ≥ 65% → **REJECT**, ≤ 35% → **BREAK**, otherwise **NEUTRAL**; shown as ↑% / ↓% with points
+  to the next level above and below. The zone flashes while price is testing it.
+
+These are estimates from sampled, aggressor-estimated ticks — wait for the candle to close at the level and always use the stop-loss.
 
 The Observatory's **Futures Chart** tab is separate from the cash-index chart and paper trading.
 Use the responsive NIFTY / BANKNIFTY / SENSEX index tabs (not an index dropdown),
@@ -131,7 +180,7 @@ The latest history window is 14 days intraday or one year daily, limited by the 
 Changing expiry never stitches contracts or mixes futures volume with cash-index prices.
 This tab does not generate paper orders.
 
-**VWAP-only entry/exit guidance:** a closed candle must cross its session VWAP or bounce/reject
+**VWAP-only entry/exit calculation (reference):** a closed candle must cross its session VWAP or bounce/reject
 VWAP as support/resistance, close in the trade direction and directional half of its range,
 and have volume at least the average of the
 previous five same-session bars. No EMA/RSI/Supertrend confirmations are calculated for this strategy.
@@ -139,8 +188,7 @@ Support bounces start above the prior VWAP, wick through both prior and current 
 back above both; resistance rejections use the symmetric below-to-above wick and close below both.
 Stops use the latest three-bar swing plus one actual contract tick; targets are 1R and 2R.
 Only one setup is tracked at a time, with no new setup whose candle closes at/after 15:10 IST.
-The chart always shows BUY/SELL entry, T1 50%, and EXIT labels directly on candles, without a signal checkbox or separate
-signal panels, entry/stop/target boxes, or horizontal guidance lines.
+Its BUY/SELL, T1 and EXIT labels are no longer drawn on the chart; chart labels come only from the PRO gate.
 These are hypothetical closed-OHLC replay levels, not executed trades: entry uses the next completed
 bar's open, T1 books half, and the remaining stop moves to breakeven starting the following bar.
 Stop takes priority when stop and target both occur in one candle; adverse stop gaps use the worse open.

@@ -96,10 +96,11 @@ test('VWAP retests require a real wick touch and directional recovery, not an ab
   assert.ok(run(belowClose).trades.every(trade => trade.side !== 'BUY'));
 });
 
-test('futures signal labels are always wired to the chart with no signal checkbox or dashboard', () => {
+test('futures chart draws only PRO-confirmed BUY/SELL labels, never raw VWAP or candle-flow labels', () => {
   const source = readFileSync(path.join(__dirname, '..', 'components', 'FuturesChart.tsx'), 'utf8');
-  assert.match(source, /signalLabels\.setData\(\[\.\.\.signals\.labels/);
-  assert.doesNotMatch(source, /showSignals|setShowSignals|VWAP-only entry \/ exit signals|styles\.setupLevels|createPriceLine/);
+  assert.match(source, /signalLabels\.setData\(proSignalLabels\(/);
+  assert.doesNotMatch(source, /signalLabels\.setData\(\[\.\.\.signals\.labels|candleFlowLabels/);
+  assert.doesNotMatch(source, /showSignals|setShowSignals|VWAP-only entry \/ exit signals|styles\.setupLevels/);
 });
 
 test('forming cross never confirms; closed cross stays pending until a completed next bar', () => {

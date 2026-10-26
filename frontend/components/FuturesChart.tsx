@@ -16,12 +16,18 @@ import { futuresChangedFrom, relativeVolume } from '@/lib/futures-chart-metrics'
 import { createHistoryPageCache } from '@/lib/chart-history-cache';
 import { isFreshFuturesFlow, mergeFuturesLiveCandles } from '@/lib/futures-live-candles';
 import { centerLatestCandle, isLatestCandleCentered, resizeChartIfChanged } from '@/lib/chart-render-sync';
-import { candleFlowLabels, flowStats, OrderFlowPrimitive } from '@/lib/chart-order-flow';
+import { flowStats, OrderFlowPrimitive } from '@/lib/chart-order-flow';
 import { candleFlowCallouts, FLOW_MIN_POINTS, FLOW_ROUND_STEP, recordedFlowMap } from '@/lib/order-flow';
+import { proSignalLabels, timeframeSeconds } from '@/lib/pro-confluence';
 import { useOrderFlow } from '@/hooks/useOrderFlow';
+import { useProConfluence } from '@/hooks/useProConfluence';
 import OrderFlowReadout from './OrderFlowReadout';
 import { IndexTabList } from './IndexTabs';
 import DeltaStrengthBox from './DeltaStrength';
+import ProSignalPanel from './ProSignal';
+import LevelBattlePanel from './LevelBattle';
+import { useLevelBattle } from '@/hooks/useLevelBattle';
+import { LevelBattlePrimitive } from '@/lib/level-battle-primitive';
 import styles from './ChartWorkspace.module.css';
 
 export interface FuturesContract {
@@ -153,7 +159,7 @@ export default function FuturesChart({ active = true }: { active?: boolean } = {
   const runtime = useRef<{
     chart: IChartApi; candles: ISeriesApi<'Candlestick'>; volume: ISeriesApi<'Histogram'>;
     vwap: ISeriesApi<'Line'>; ema9: ISeriesApi<'Line'>; ema20: ISeriesApi<'Line'>;
-    signalLabels: SignalLabelPrimitive; orderFlow: OrderFlowPrimitive; key: string;
+    signalLabels: SignalLabelPrimitive; orderFlow: OrderFlowPrimitive; levelBattle: LevelBattlePrimitive; key: string;
   } | null>(null);
   const items = contracts.symbol === symbol ? contracts.items : [];
   const years = Array.from(new Set(items.map(item => item.expiry.slice(0, 4))));
@@ -162,6 +168,7 @@ export default function FuturesChart({ active = true }: { active?: boolean } = {
   const contract = matching.find(item => item.token === token) ?? matching[0];
   const key = `${symbol}:${contract?.token ?? ''}:${timeframe}`;
   const flow = useOrderFlow(symbol, timeframe, contract?.token, active && contract !== undefined);
+  const pro = useProConfluence(symbol, active);
   const history = data.key === key ? data : candleCache.read(key)?.value;
   const historyCandles = history?.candles ?? EMPTY_CANDLES;
   const liveHistory = useRef({ key: '', history: EMPTY_CANDLES, candles: EMPTY_CANDLES });
@@ -295,8 +302,10 @@ export default function FuturesChart({ active = true }: { active?: boolean } = {
     const signalLabels = new SignalLabelPrimitive({ maxBottom: .8 });
     candleSeries.attachPrimitive(signalLabels);
     // Delta/CVD strip sits in the gap between the candle margin (bottom 24%) and the volume band (top 82%).
-    const orderFlow = new OrderFlowPrimitive({ detail: false, footprint: true, basisAdjust: false, strip: { top: .765, bottom: .815 } });
+    const orderFlow = new OrderFlowPrimitive({ detail: false, footprint: true, basisAdjust: false, strip: { top: .765, bottom: .815 }, plan: false });
     candleSeries.attachPrimitive(orderFlow);
+    const levelBattle = new LevelBattlePrimitive();
+    candleSeries.attachPrimitive(levelBattle);
     const volume = chart.addHistogramSeries({
       title: 'Volume', priceFormat: { type: 'volume' }, priceScaleId: 'volume',
       priceLineVisible: false, lastValueVisible: false,
@@ -312,7 +321,7 @@ export default function FuturesChart({ active = true }: { active?: boolean } = {
     const ema20 = chart.addLineSeries({
       title: 'EMA 20', color: '#008cff', lineWidth: 2, priceLineVisible: false,
     });
-    runtime.current = { chart, candles: candleSeries, volume, vwap, ema9, ema20, signalLabels, orderFlow, key: '' };
+    runtime.current = { chart, candles: candleSeries, volume, vwap, ema9, ema20, signalLabels, orderFlow, levelBattle, key: '' };
     previousBars.current = { key: '', candles: [] };
     const onCrosshair = (event: { time?: unknown }) => setHoverTime(typeof event.time === 'number' ? event.time : null);
     chart.subscribeCrosshairMove(onCrosshair);
@@ -393,10 +402,34 @@ export default function FuturesChart({ active = true }: { active?: boolean } = {
     runtime.current?.orderFlow.setEstimated(candleFlow);
   }, [candleFlow]);
 
+  // Only gate-confirmed entries / exits are labelled; prices are this contract's, so other expiries get none.
+  const proTrades = pro.contract?.token === contract?.token ? pro.replay?.trades : undefined;
   useEffect(() => {
-    runtime.current?.signalLabels.setData([...signals.labels, ...candleFlowLabels(candleFlow)],
+    const times = candles.map(candleTime);
+    runtime.current?.signalLabels.setData(proSignalLabels(proTrades ?? [], times, timeframeSeconds(timeframe)),
       candles.map(bar => ({ time: candleTime(bar), h: bar.h, l: bar.l })));
-  }, [candles, signals, candleFlow]);
+  }, [candles, proTrades, timeframe]);
+
+  const proOpen = pro.contract?.token === contract?.token ? pro.open : null;
+  const proLevels = proOpen ? `${proOpen.t1Hit ? proOpen.entry : proOpen.stop}|${proOpen.t1}|${proOpen.t2}` : '';
+  useEffect(() => {
+    const api = runtime.current;
+    if (!api || !proLevels) return;
+    const [stop, t1, t2] = proLevels.split('|').map(Number);
+    const lines = ([['SL', stop, '#ff4d5e'], ['T1', t1, '#38d6b0'], ['T2', t2, '#c084fc']] as const)
+      .map(([title, value, color]) => api.candles.createPriceLine({
+        price: value, color, title, lineWidth: 1, lineStyle: LineStyle.Dashed, axisLabelVisible: true,
+      }));
+    return () => lines.forEach(line => api.candles.removePriceLine(line));
+  }, [proLevels]);
+
+  // Levels come from this chart's candles; buyers/sellers can only be measured when it is the recorded near-month contract.
+  const levelBars = useMemo(() => candles.map(bar => ({ time: candleTime(bar), o: bar.o, h: bar.h, l: bar.l, c: bar.c, v: bar.v })), [candles]);
+  const battle = useLevelBattle(pro, levelBars, {
+    intraday: typeof timeframe === 'number', vwap: true,
+    offset: contract && pro.contract?.token === contract.token ? 0 : null,
+  });
+  useEffect(() => { runtime.current?.levelBattle.setData(battle.active); }, [battle]);
 
   return <div className={styles.futuresWorkspace}>
     <IndexTabList idPrefix="futures-index" label="Futures chart index" activeSymbol={symbol}
@@ -407,8 +440,10 @@ export default function FuturesChart({ active = true }: { active?: boolean } = {
     <div id="futures-index-content" role="tabpanel" aria-labelledby={`futures-index-tab-${symbol}`}
       tabIndex={0} className="min-w-0 space-y-3 rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400">
     <div className="flex flex-wrap items-center gap-2">
-      <DeltaStrengthBox symbol={symbol} active={active} />
+      <DeltaStrengthBox symbol={symbol} active={active} decision={pro.decision} />
     </div>
+    <ProSignalPanel pro={pro} />
+    <LevelBattlePanel state={battle} />
     <details className={styles.compactDetails}>
     <summary>Contract & chart settings · {timeframeLabel(timeframe)} · {contract?.tradingSymbol ?? symbol}</summary>
     <div className={styles.futuresControls}>
@@ -485,9 +520,9 @@ export default function FuturesChart({ active = true }: { active?: boolean } = {
       Order flow (footprint bid x ask, delta/CVD strip, POC/VAH/VAL, walls, A=absorption E=exhaustion F=failed auction, OF BUY/SELL)
       is recorded live from Zerodha full-mode ticks for the near-month contract only, from when the backend started recording;
       trade side is estimated (quote/tick rule), not exchange-flagged. Zoom in for footprint numbers.
-      OF paper trades: next-bar-open fill + spread slippage, Zerodha fees, 2 lots (T1, then T2/breakeven). No live orders.
-      Entry/exit labels are hypothetical closed-candle VWAP cross/bounce/rejection replay, not broker fills;
-      50% exit at 1R, remainder at 2R or stop/session close. Fees/slippage excluded. {signals.reason}
+      Chart BUY / SELL / EXIT labels come only from the pro confirmation gate (every check passed on a closed 5m near-month candle);
+      the replay books half at T1 (stop to breakeven), the rest at T2 or 15:15. Raw VWAP crosses, order-flow callouts and
+      server OF plans are not drawn as signals. Fees/slippage excluded. {signals.reason}
     </p>
     </details>
     </div>

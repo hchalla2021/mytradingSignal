@@ -95,7 +95,10 @@ test('config is clamped and invalid values fall back to defaults', () => {
   assert.equal(sanitizeDeltaConfig(null).window, DEFAULT_DELTA_CONFIG.window);
 });
 
-function renderDelta({ age = 1, live = true, latestRecorded = false, sessionOpen = true, error = null } = {}) {
+const ENTRY_BUY = { action: 'BUY', stage: 'ENTRY', headline: 'BUY', reason: 'All checks confirmed' };
+const GATE_WAIT = { action: 'WAIT', stage: 'WAIT', headline: 'WAIT', reason: '9/14 checks' };
+
+function renderDelta({ age = 1, live = true, latestRecorded = false, sessionOpen = true, error = null, decision = ENTRY_BUY } = {}) {
   const React = require('react');
   const { renderToStaticMarkup } = require('react-dom/server');
   const now = Date.parse('2026-10-26T10:00:00+05:30');
@@ -122,12 +125,19 @@ function renderDelta({ age = 1, live = true, latestRecorded = false, sessionOpen
     module: component, exports: component.exports, Date: { now: () => now },
     require: name => Object.hasOwn(mocks, name) ? mocks[name] : require(name),
   });
-  return renderToStaticMarkup(React.createElement(component.exports.default, { symbol: 'NIFTY', active: true }));
+  return renderToStaticMarkup(React.createElement(component.exports.default, { symbol: 'NIFTY', active: true, decision }));
 }
 
-test('delta box allows BUY only for fresh connected in-session recorded flow', () => {
+test('delta box shows BUY only when the pro gate confirms on a fresh connected in-session feed', () => {
   assert.match(renderDelta(), /🟢 BUY/);
   assert.match(renderDelta({ age: 20 }), /🟢 BUY/);
+});
+
+test('strong buyer delta alone is pressure, not an order: WAIT until the pro gate confirms', () => {
+  const html = renderDelta({ decision: GATE_WAIT });
+  assert.match(html, /🟡 WAIT/);
+  assert.match(html, /Buyer pressure/);
+  assert.doesNotMatch(html, /🟢 BUY|🔴 SELL/);
 });
 
 test('delta box keeps the measured value but shows WAIT on stale, closed, archived, disconnected, future or failed feeds', () => {
@@ -136,7 +146,7 @@ test('delta box keeps the measured value but shows WAIT on stale, closed, archiv
     { live: false }, { age: -1 }, { error: 'Feed failed' },
   ]) {
     const html = renderDelta(options);
-    assert.match(html, /⚪ WAIT/, JSON.stringify(options));
+    assert.match(html, /WAIT/, JSON.stringify(options));
     assert.doesNotMatch(html, /🟢 BUY|🔴 SELL/, JSON.stringify(options));
     assert.match(html, /\+2000/, 'Recorded delta remains visible for reference');
     assert.match(html, /est\./);

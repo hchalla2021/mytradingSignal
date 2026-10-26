@@ -15,7 +15,7 @@ import { centerLatestCandle, resizeChartIfChanged, synchronizeChartRange } from 
 import { futuresChangedFrom } from '@/lib/futures-chart-metrics';
 import { mergeFuturesLiveCandles } from '@/lib/futures-live-candles';
 import {
-  compactVolume, type OrderFlowBar, type OrderFlowDom, type OrderFlowEvent, type OrderFlowGuidance,
+  compactVolume, type OrderFlowBar, type OrderFlowDom, type OrderFlowEvent,
   type OrderFlowSnapshot, type OrderFlowZone,
 } from '@/lib/order-flow';
 import {
@@ -26,6 +26,12 @@ import {
 } from '@/lib/futures-terminal';
 import { IndexTabList } from './IndexTabs';
 import DeltaStrengthBox from './DeltaStrength';
+import ProSignalPanel from './ProSignal';
+import LevelBattlePanel from './LevelBattle';
+import { useLevelBattle } from '@/hooks/useLevelBattle';
+import { LevelBattlePrimitive } from '@/lib/level-battle-primitive';
+import { useProConfluence } from '@/hooks/useProConfluence';
+import { snapTime } from '@/lib/pro-confluence';
 import {
   formatExpiry, loadCandles, loadContracts, readCachedCandles, readCachedContracts,
   type CandleState, type FuturesContract,
@@ -169,7 +175,7 @@ interface Runtime {
   emas: Record<EmaPeriod, ISeriesApi<'Line'>>;
   deltaBars: ISeriesApi<'Histogram'>; cvd: ISeriesApi<'Line'>;
   oiLine: ISeriesApi<'Line'>; oiChange: ISeriesApi<'Histogram'>;
-  orderFlow: OrderFlowPrimitive; lines: Map<string, IPriceLine>;
+  orderFlow: OrderFlowPrimitive; levelBattle: LevelBattlePrimitive; lines: Map<string, IPriceLine>;
 }
 
 export default function FuturesTerminal({ active = true }: { active?: boolean }) {
@@ -191,10 +197,13 @@ export default function FuturesTerminal({ active = true }: { active?: boolean })
     return next;
   });
 
-  const items = contracts.symbol === symbol ? contracts.items : [];
+  const items = contracts.symbol === symbol ? contracts.items : readCachedContracts(symbol)?.value ?? [];
+  // Until the contracts effect runs for a newly selected index, the state still belongs to the old one.
+  const contractsLoading = contracts.symbol !== symbol || contracts.loading;
   const contract = items.find(item => item.token === token) ?? items[0];
   const key = `${symbol}:${contract?.token ?? ''}:${timeframe}`;
   const flow = useOrderFlow(symbol, timeframe, contract?.token, active && contract !== undefined, true);
+  const pro = useProConfluence(symbol, active);
   const [footprint, setFootprint] = useState(false);
   const history = data.key === key ? data : contract ? readCachedCandles(symbol, contract.token, timeframe)?.value : undefined;
   const historyCandles = history?.candles ?? EMPTY_CANDLES;
@@ -340,6 +349,8 @@ export default function FuturesTerminal({ active = true }: { active?: boolean })
     });
     const orderFlow = new OrderFlowPrimitive({ detail: true, footprint: true, basisAdjust: false, strip: { top: 0, bottom: 0 }, plan: false });
     candles.attachPrimitive(orderFlow);
+    const levelBattle = new LevelBattlePrimitive();
+    candles.attachPrimitive(levelBattle);
     const volume = main.addHistogramSeries({ priceScaleId: 'vol', priceFormat: { type: 'volume' }, priceLineVisible: false, lastValueVisible: false });
     volume.priceScale().applyOptions({ scaleMargins: { top: .84, bottom: 0 }, visible: false });
     const vwap = main.addLineSeries({ title: 'VWAP', color: '#ffc45c', lineWidth: 2, priceLineVisible: false, crosshairMarkerVisible: false });
@@ -353,16 +364,29 @@ export default function FuturesTerminal({ active = true }: { active?: boolean })
     const oiLine = oi.addLineSeries({ title: 'OI', color: '#60a5fa', lineWidth: 2, priceFormat: { type: 'volume' }, priceLineVisible: false });
     const oiChange = oi.addHistogramSeries({ priceScaleId: 'oichg', priceFormat: { type: 'volume' }, priceLineVisible: false, lastValueVisible: false });
     oiChange.priceScale().applyOptions({ visible: false, scaleMargins: { top: .55, bottom: 0 } });
-    runtime.current = { main, delta, oi, candles, volume, vwap, emas, deltaBars, cvd, oiLine, oiChange, orderFlow, lines: new Map() };
+    runtime.current = { main, delta, oi, candles, volume, vwap, emas, deltaBars, cvd, oiLine, oiChange, orderFlow, levelBattle, lines: new Map() };
     previous.current = { key: '', candles: [] };
     centeredKey.current = '';
 
     const panes: [IChartApi, HTMLElement, ISeriesApi<'Candlestick'> | ISeriesApi<'Histogram'> | ISeriesApi<'Line'>][] =
       [[main, mainEl, candles], [delta, deltaEl, deltaBars], [oi, oiEl, oiLine]];
     const unsubscribers: (() => void)[] = [];
+    // Only the pane under the pointer may drive the others; data loads in the delta/OI panes otherwise
+    // emit stale ranges (their empty-data right offset) that would drag the price chart off its candles.
+    let driver: IChartApi = main;
+    for (const [chart, el] of panes) {
+      const enter = () => { driver = chart; };
+      const leave = () => { if (driver === chart) driver = main; };
+      el.addEventListener('pointerenter', enter);
+      el.addEventListener('pointerleave', leave);
+      unsubscribers.push(() => {
+        el.removeEventListener('pointerenter', enter);
+        el.removeEventListener('pointerleave', leave);
+      });
+    }
     for (const [chart] of panes) {
       const onRange = (range: LogicalRange | null) => {
-        if (!range) return;
+        if (!range || chart !== driver) return;
         for (const [other, el] of panes) if (other !== chart) synchronizeChartRange(other, el, range);
       };
       const onCrosshair = (event: MouseEventParams) => {
@@ -410,8 +434,12 @@ export default function FuturesTerminal({ active = true }: { active?: boolean })
     const line = (values: readonly (number | null)[]) => range.map(i => values[i] == null ? { time: time(i) } : { time: time(i), value: values[i]! });
     apply(api.vwap, line(indicators.vwap));
     for (const period of EMA_PERIODS) apply(api.emas[period], line(indicators.emas[period]));
+    // Live order-flow bars can paint before the history arrives; when history is prepended the
+    // old viewport points past the data, so re-center instead of leaving the latest bar pinned left.
+    const prepended = from < 0 && prior.key === key && prior.candles.length > 0 && candles.length > 0 &&
+      candleTime(candles[0]) < candleTime(prior.candles[0]);
     previous.current = { key, candles };
-    if (candles.length && centeredKey.current !== key) {
+    if (candles.length && (centeredKey.current !== key || prepended)) {
       api.main.priceScale('right').applyOptions({ autoScale: true });
       centeredKey.current = centerLatestCandle(api.main, mainRef.current!, candles.length) ? key : 'pending';
     }
@@ -436,6 +464,11 @@ export default function FuturesTerminal({ active = true }: { active?: boolean })
         const change = indicators.oiChange[i];
         return change === null ? { time: time(bar) } : { time: time(bar), value: change, color: change >= 0 ? '#60a5fa88' : '#f9731688' };
       }));
+      const range = api.main.timeScale().getVisibleLogicalRange();
+      if (range) {
+        if (deltaRef.current) synchronizeChartRange(api.delta, deltaRef.current, range);
+        if (oiRef.current) synchronizeChartRange(api.oi, oiRef.current, range);
+      }
     });
     return () => cancelAnimationFrame(frame);
   }, [bars, flowMap, indicators]);
@@ -471,12 +504,23 @@ export default function FuturesTerminal({ active = true }: { active?: boolean })
         text: mark.label, size: mark.kind === 'pattern' ? 0.6 : 1,
       });
     }
-    if (prefs.plan && confirmed && confirmed.action !== 'WAIT') {
-      markers.push({
-        time: confirmed.time as UTCTimestamp, position: confirmed.action === 'BUY' ? 'belowBar' : 'aboveBar',
-        shape: confirmed.action === 'BUY' ? 'arrowUp' : 'arrowDown', color: confirmed.action === 'BUY' ? '#00ffa3' : '#ff2e4d',
-        text: `${confirmed.action} ${confirmed.confidence}`, size: 2,
-      });
+    const proTrades = pro.contract?.token === contractToken ? pro.replay?.trades ?? [] : [];
+    if (prefs.plan) {
+      const times = bars.map(bar => bar.time);
+      for (const trade of proTrades) {
+        const buy = trade.side === 'BUY';
+        const entryAt = snapTime(times, trade.entryTime ?? trade.signalTime, timeframe * 60);
+        if (entryAt !== null) markers.push({
+          time: entryAt as UTCTimestamp, position: buy ? 'belowBar' : 'aboveBar', shape: buy ? 'arrowUp' : 'arrowDown',
+          color: buy ? '#00ffa3' : '#ff2e4d', text: `✔ ${trade.side} ${trade.entry.toFixed(1)}`, size: 2,
+        });
+        const exitAt = trade.exitTime !== undefined ? snapTime(times, trade.exitTime, timeframe * 60) : null;
+        if (exitAt !== null && trade.points !== undefined) markers.push({
+          time: exitAt as UTCTimestamp, position: buy ? 'aboveBar' : 'belowBar', shape: 'square',
+          color: trade.points >= 0 ? '#00d39b' : '#ff4d5e',
+          text: `EXIT ${trade.exitReason} ${trade.points >= 0 ? '+' : ''}${trade.points.toFixed(1)}`, size: 1,
+        });
+      }
     }
     markers.sort((a, b) => (a.time as number) - (b.time as number));
     api.candles.setMarkers(markers);
@@ -491,18 +535,23 @@ export default function FuturesTerminal({ active = true }: { active?: boolean })
       structure.levels.resistances.forEach((level, i) => lines.push({ id: `r${i}`, price: level.price, color: '#f8717188', title: `R${i + 1}`, style: LineStyle.SparseDotted }));
       structure.levels.supports.forEach((level, i) => lines.push({ id: `s${i}`, price: level.price, color: '#34d39988', title: `S${i + 1}`, style: LineStyle.SparseDotted }));
     }
-    const plan = confirmed && confirmed.action !== 'WAIT' ? confirmed : early && early.action !== 'WAIT' ? early : null;
-    if (prefs.plan && plan?.entry && plan.stop !== null) {
-      const tag = plan.stage === 'EARLY' ? ' (early)' : '';
+    // Plan lines only for a gate-confirmed open trade; partial or forming-bar setups never draw an entry.
+    const open = proTrades.find(trade => trade.status === 'open');
+    if (prefs.plan && open) {
       lines.push(
-        { id: 'entryA', price: plan.entry[0], color: '#e2e8f0', title: `Entry${tag}`, style: LineStyle.Solid },
-        { id: 'entryB', price: plan.entry[1], color: '#e2e8f0', title: '', style: LineStyle.Solid },
-        { id: 'sl', price: plan.stop, color: '#ff4d5e', title: 'SL', style: LineStyle.Solid, width: 2 },
-        ...plan.targets.map((target, i) => ({ id: `t${i}`, price: target, color: '#00d39b', title: `T${i + 1}`, style: LineStyle.Solid })),
+        { id: 'entryA', price: open.entry, color: '#e2e8f0', title: `PRO ${open.side}`, style: LineStyle.Solid },
+        { id: 'sl', price: open.t1Hit ? open.entry : open.stop, color: '#ff4d5e', title: open.t1Hit ? 'SL (BE)' : 'SL', style: LineStyle.Solid, width: 2 },
+        { id: 't0', price: open.t1, color: '#00d39b', title: 'T1', style: LineStyle.Solid },
+        { id: 't1', price: open.t2, color: '#00d39b', title: 'T2', style: LineStyle.Solid },
       );
     }
     syncPriceLines(api.candles, api.lines, lines);
-  }, [structure, bars, prefs, confirmed, early]);
+  }, [structure, bars, prefs, pro.contract?.token, pro.replay, contractToken, timeframe]);
+
+  const battle = useLevelBattle(pro, bars, {
+    intraday: true, vwap: true, offset: contractToken !== undefined && pro.contract?.token === contractToken ? 0 : null,
+  });
+  useEffect(() => { runtime.current?.levelBattle.setData(battle.active); }, [battle]);
 
   const toggleFootprint = () => {
     const api = runtime.current;
@@ -535,7 +584,7 @@ export default function FuturesTerminal({ active = true }: { active?: boolean })
       <div className={styles.toolbar}>
         <label className={styles.field}><span>Contract</span>
           <select value={contract?.token ?? ''} disabled={!items.length} onChange={event => setToken(Number(event.target.value))}>
-            {!items.length && <option value="">{contracts.loading ? 'Loading…' : 'No listed contracts'}</option>}
+            {!items.length && <option value="">{contractsLoading ? 'Loading…' : 'No listed contracts'}</option>}
             {items.map(item => <option key={item.token} value={item.token}>{item.tradingSymbol} · {formatExpiry(item.expiry)}</option>)}
           </select>
         </label>
@@ -561,13 +610,13 @@ export default function FuturesTerminal({ active = true }: { active?: boolean })
             <button className={styles.tool} onClick={() => updatePrefs(() => DEFAULT_PREFS)}>Reset defaults</button>
           </div>
         </details>
-        <DeltaStrengthBox symbol={symbol} active={active} />
+        <DeltaStrengthBox symbol={symbol} active={active} decision={pro.decision} />
         <FreshnessBadge lastTick={snapshot?.lastTick ?? null} historyUpdated={history?.updated ?? null} live={flow.live} />
       </div>
 
       {(contractError || historyError) && <p role="alert" className={styles.alert}>{contractError || historyError} Displayed data may be stale.</p>}
       {!contractError && !contract && <p role="status" className={styles.note}>
-        {contracts.loading ? 'Loading futures contracts…' : 'Zerodha returned no listed futures for this index. Nothing has been substituted.'}</p>}
+        {contractsLoading ? 'Loading futures contracts…' : 'Zerodha returned no listed futures for this index. Nothing has been substituted.'}</p>}
 
       <div className={styles.quote}>
         <strong>{contract?.tradingSymbol ?? symbol}</strong>
@@ -604,7 +653,9 @@ export default function FuturesTerminal({ active = true }: { active?: boolean })
           <div ref={oiRef} className={styles.subChart} hidden={!prefs.oiPane} />
         </div>
         <aside className={styles.side}>
-          {prefs.signal && <SignalPanel confirmed={confirmed} early={early} guidance={snapshot?.guidance ?? null} fresh={fresh} />}
+          <ProSignalPanel pro={pro} open />
+          <LevelBattlePanel state={battle} />
+          {prefs.signal && <SignalPanel confirmed={confirmed} early={early} fresh={fresh} />}
           {prefs.flow && <BarPanel hover={hover} data={panelData} timeframe={timeframe} />}
           {prefs.dom && <DomPanel dom={dom} recordedOther={flow.snapshot?.recordedToken != null} />}
         </aside>
@@ -644,37 +695,29 @@ const FreshnessBadge = memo(function FreshnessBadge({ lastTick, historyUpdated, 
   </span>;
 });
 
-const SignalPanel = memo(function SignalPanel({ confirmed, early, guidance, fresh }: {
-  confirmed: TerminalSignal | null; early: TerminalSignal | null; guidance: OrderFlowGuidance | null; fresh: Freshness;
+const SignalPanel = memo(function SignalPanel({ confirmed, early, fresh }: {
+  confirmed: TerminalSignal | null; early: TerminalSignal | null; fresh: Freshness;
 }) {
-  if (!confirmed) return <section className={styles.card}><h3>Signal engine</h3><p className={styles.muted}>Waiting for candles…</p></section>;
-  const warn = early && (early.action !== confirmed.action || early.bias !== confirmed.bias) && early.bias !== 'NEUTRAL';
-  return <section className={styles.card} aria-label="Signal engine">
-    <h3>Signal engine <small>closed bar {clock(confirmed.time)}</small></h3>
+  if (!confirmed) return <section className={styles.card}><h3>Score engine</h3><p className={styles.muted}>Waiting for candles…</p></section>;
+  const warn = early && early.bias !== confirmed.bias && early.bias !== 'NEUTRAL';
+  return <section className={styles.card} aria-label="Score engine">
+    <h3>Score engine <small>closed bar {clock(confirmed.time)} · one input of the pro gate</small></h3>
     <div className={styles.signalHead}>
-      <span className={`${styles.action} ${biasClass(confirmed.action)}`}>{confirmed.action}</span>
+      <span className={`${styles.action} ${biasClass(confirmed.bias)}`}>{confirmed.bias}</span>
       <div className={styles.meter} title="Rule score 0-95, not a probability">
-        <span>Confidence {confirmed.confidence}</span>
+        <span>Score {confirmed.confidence}</span>
         <div><i className={biasClass(confirmed.bias)} style={{ width: `${confirmed.confidence}%` }} /></div>
-        <small>Bull {confirmed.bullScore} · Bear {confirmed.bearScore} · bias {confirmed.bias}</small>
+        <small>Bull {confirmed.bullScore} · Bear {confirmed.bearScore}</small>
       </div>
     </div>
-    {confirmed.entry && confirmed.stop !== null && <dl className={styles.plan}>
-      <div><dt>Entry zone</dt><dd>{price(confirmed.entry[0])} – {price(confirmed.entry[1])}</dd></div>
-      <div><dt>Stop-loss</dt><dd className={styles.bear}>{price(confirmed.stop)}</dd></div>
-      {confirmed.targets.map((target, i) => <div key={i}><dt>Target {i + 1}</dt><dd className={styles.bull}>{price(target)}</dd></div>)}
-      <div><dt>R:R to T1</dt><dd>{confirmed.riskReward === null ? '—' : `${confirmed.riskReward.toFixed(2)}R`}</dd></div>
-    </dl>}
-    {confirmed.action === 'WAIT' && confirmed.entry && <p className={styles.muted}>Plan shown for the leading bias only; conditions for an actionable signal are not met.</p>}
+    <p className={styles.muted}>Bias only — not an order. BUY / SELL comes from the pro gate above when every check passes.</p>
     {warn && <div className={`${styles.early} ${biasClass(early!.bias)}`} role="status">
-      ⚡ Early warning (forming bar): {early!.action === 'WAIT' ? `${early!.bias} bias building` : early!.action} · score {early!.confidence}
-      <small>Can change before the candle closes. {early!.reasons.slice(0, 2).join(' · ')}</small>
+      ⚡ Forming bar: {early!.bias} bias building · score {early!.confidence}
+      <small>Information only; can change before the candle closes. {early!.reasons.slice(0, 2).join(' · ')}</small>
     </div>}
     {confirmed.reasons.length > 0 && <><h4>Why</h4><ul>{confirmed.reasons.slice(0, 7).map(text => <li key={text}>{text}</li>)}</ul></>}
     {confirmed.against.length > 0 && <><h4>Against</h4><ul className={styles.against}>{confirmed.against.slice(0, 4).map(text => <li key={text}>{text}</li>)}</ul></>}
     {confirmed.cautions.length > 0 && <ul className={styles.cautions}>{confirmed.cautions.map(text => <li key={text}>{text}</li>)}</ul>}
-    {guidance && <p className={styles.server}>Recorded order-flow engine: <b className={biasClass(guidance.action)}>{guidance.action}</b>
-      {guidance.confidence !== undefined && ` (${guidance.confidence})`} — {guidance.reasons[0] ?? 'no trigger'}</p>}
     <p className={styles.tiny}>{fresh.label}. Suggestions only — no orders are placed.</p>
   </section>;
 });

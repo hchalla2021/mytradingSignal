@@ -8,14 +8,16 @@ import {
   type DeltaState, type DeltaStrengthConfig,
 } from '@/lib/delta-strength';
 import { compactVolume } from '@/lib/order-flow';
+import type { ProDecision } from '@/lib/pro-confluence';
 import styles from './DeltaStrength.module.css';
 
 const CONFIG_KEY = 'deltaStrengthConfig_v1';
-const VIEW: Record<DeltaState, { action: string; label: string; tone: string }> = {
-  BUYERS: { action: '🟢 BUY', label: 'Buyer Stronger', tone: styles.buy },
-  SELLERS: { action: '🔴 SELL', label: 'Seller Stronger', tone: styles.sell },
-  SIDEWAYS: { action: '🟡 WAIT', label: 'Sideways', tone: styles.wait },
-  UNAVAILABLE: { action: '⚪ WAIT', label: 'Delta unavailable', tone: styles.na },
+// Delta alone is pressure, never an order: BUY / SELL text comes only from the pro confirmation gate.
+const VIEW: Record<DeltaState, { label: string; tone: string }> = {
+  BUYERS: { label: 'Buyer pressure', tone: styles.wait },
+  SELLERS: { label: 'Seller pressure', tone: styles.wait },
+  SIDEWAYS: { label: 'Sideways', tone: styles.wait },
+  UNAVAILABLE: { label: 'Delta unavailable', tone: styles.na },
 };
 
 type Feed = 'live' | 'delayed' | 'stale' | 'session' | 'closed' | 'waiting';
@@ -29,7 +31,9 @@ const signedQty = (value: number) => `${value > 0 ? '+' : value < 0 ? '−' : ''
  * One compact Live Delta Strength box for the selected index's near-month future: delta value + BUY / SELL / WAIT.
  * Recomputed on every order-flow update; memoized so ticks never re-render the chart around it.
  */
-const DeltaStrengthBox = memo(function DeltaStrengthBox({ symbol, active }: { symbol: ChartSymbol; active: boolean }) {
+const DeltaStrengthBox = memo(function DeltaStrengthBox({ symbol, active, decision }: {
+  symbol: ChartSymbol; active: boolean; decision: ProDecision;
+}) {
   const [config, setConfig] = useState<DeltaStrengthConfig>(DEFAULT_DELTA_CONFIG);
   useEffect(() => {
     try { setConfig(sanitizeDeltaConfig(JSON.parse(localStorage.getItem(CONFIG_KEY) ?? 'null'))); } catch { /* defaults */ }
@@ -51,15 +55,22 @@ const DeltaStrengthBox = memo(function DeltaStrengthBox({ symbol, active }: { sy
   const result = deltaStrength(snapshot?.bars ?? [], config, canSignal ? previous.current.state : null);
   previous.current.state = canSignal ? result.state : null;
 
-  const view = !canSignal && result.state !== 'UNAVAILABLE'
-    ? { action: '⚪ WAIT', label: flow.error ? 'Feed error' : !flow.live ? 'Disconnected' : FEED_TEXT[feed], tone: styles.na }
+  const pressure = !canSignal && result.state !== 'UNAVAILABLE'
+    ? { label: flow.error ? 'Feed error' : !flow.live ? 'Disconnected' : FEED_TEXT[feed], tone: styles.na }
     : VIEW[result.state];
+  const entry = canSignal && decision.stage === 'ENTRY';
+  const view = {
+    ...pressure,
+    action: entry ? (decision.action === 'BUY' ? '🟢 BUY' : '🔴 SELL') : decision.stage === 'HOLD' ? `🔵 ${decision.headline}` : '🟡 WAIT',
+    tone: entry ? (decision.action === 'BUY' ? styles.buy : styles.sell) : pressure.tone,
+  };
   const reason = flow.error ?? (snapshot ? canSignal ? result.reason : 'Recorded delta is shown for reference only; fresh live data is required for BUY / SELL.'
     : (feed === 'waiting' ? 'Connecting to the order-flow stream…'
     : 'No order flow recorded yet — it is recorded from live Kite ticks during market hours (09:15–15:30 IST).'));
   const detail = [
     `${symbol} futures (near-month) · ${config.interval}m candles × ${config.window} rolling window`,
-    `${view.action} · ${view.label} — ${reason}`,
+    `${view.action} — Pro gate: ${decision.reason}`,
+    `Delta: ${view.label} — ${reason}`,
     result.delta !== null ? `Delta (est.): ${signedQty(result.delta)} · ${result.deltaPct?.toFixed(1)}% of classified volume` : null,
     result.strength !== null ? `Weighted strength: ${result.strength.toFixed(1)}% (call at ±${config.threshold}%)` : null,
     result.cvd !== null ? `Session CVD (est.): ${signedQty(result.cvd)}` : null,
@@ -90,8 +101,9 @@ const DeltaStrengthBox = memo(function DeltaStrengthBox({ symbol, active }: { sy
         <label>Hold call down to × threshold
           <input type="number" min={0.2} max={1} step={0.05} value={config.hysteresis} onChange={event => update({ hysteresis: Number(event.target.value) })} /></label>
         <button type="button" onClick={() => update(DEFAULT_DELTA_CONFIG)}>Reset</button>
-        <p>BUY / SELL needs weighted strength past the threshold, agreement of window delta and session CVD trend, normal
-          volume and adequate recording coverage; otherwise WAIT. Unclassified volume is never assigned a side.</p>
+        <p>These settings tune the buyer / seller pressure reading only. BUY / SELL is shown only when the pro gate confirms every
+          check (trend, VWAP, 15m &amp; 60m, candle, 5m delta &amp; CVD, OI, risk, room) on a closed 5m candle; otherwise WAIT.
+          Unclassified volume is never assigned a side.</p>
       </div>
     </details>
   </div>;
