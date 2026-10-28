@@ -2,7 +2,7 @@ import type { Candle, SymbolChartData } from '@/hooks/useChartIntelligence';
 import type { FIIDIISnapshot } from '@/hooks/useFIIDIIFlow';
 
 export type ChartSymbol = 'NIFTY' | 'BANKNIFTY' | 'SENSEX';
-export type Timeframe = 3 | 5 | 15 | 30 | 60 | 'D' | 'W' | 'M';
+export type Timeframe = 1 | 3 | 5 | 15 | 30 | 60 | 'D' | 'W' | 'M';
 export function timeframeLabel(timeframe: Timeframe): string {
   return typeof timeframe === 'number' ? timeframe === 60 ? '1h' : `${timeframe}m` : `1${timeframe}`;
 }
@@ -135,8 +135,9 @@ export function candleTime(candle: Candle): number {
 }
 
 export function workspaceCandles(data: SymbolChartData | null, timeframe: Timeframe): Candle[] {
-  if (typeof timeframe !== 'number') return [];
-  const source = timeframe === 3 ? data?.candles3m : data?.candles5m;
+  // The analytics stream only carries 3m/5m bars; 1m cannot be derived from them.
+  if (typeof timeframe !== 'number' || timeframe < 3) return [];
+  const source =  timeframe === 3 ? data?.candles3m : data?.candles5m;
   const sorted = new Map<number, Candle>();
   for (const candle of source ?? []) {
     const time = candleTime(candle);
@@ -207,6 +208,60 @@ export function updatePeriodCandle(history: Candle[], today: Candle[], timeframe
   const merged = new Map(history.map(candle => [candleTime(candle), candle]));
   merged.set(timestamp, bar);
   return Array.from(merged.entries()).sort(([a], [b]) => a - b).map(([, candle]) => candle);
+}
+
+export interface LiveTick { price: number; time: number }
+export interface LiveTickExtremes { time: number; o: number; h: number; l: number }
+
+const SESSION_OPEN_SECONDS = (9 * 60 + 15) * 60;
+const SESSION_SECONDS = 375 * 60;
+const MAX_TICK_JUMP = 0.05;
+
+function tickBucket(time: number, timeframe: Timeframe): number | null {
+  const day = Math.floor((time + 19800) / 86400) * 86400 - 19800;
+  const open = day + SESSION_OPEN_SECONDS;
+  if (time < open || time >= open + SESSION_SECONDS) return null;
+  if (typeof timeframe === 'number') return open + Math.floor((time - open) / (timeframe * 60)) * timeframe * 60;
+  const date = new Date(`${sessionDate(time)}T00:00:00Z`);
+  if (timeframe === 'W') date.setUTCDate(date.getUTCDate() - (date.getUTCDay() + 6) % 7);
+  if (timeframe === 'M') date.setUTCDate(1);
+  return Date.parse(`${date.toISOString().slice(0, 10)}T00:00:00+05:30`) / 1000;
+}
+
+/**
+ * Moves the forming candle with the latest exchange tick so price action is not held back by the
+ * slower analytics stream. `extremes` keeps tick highs/lows of the forming bar so a later, coarser
+ * snapshot cannot shrink a wick that the tape already printed.
+ */
+export function applyLiveTick(
+  candles: Candle[], tick: LiveTick | null, timeframe: Timeframe, extremes: LiveTickExtremes | null = null,
+): { candles: Candle[]; extremes: LiveTickExtremes | null } {
+  const last = candles.at(-1);
+  if (!last || !tick || !Number.isFinite(tick.price) || tick.price <= 0 || !Number.isFinite(tick.time)) {
+    return { candles, extremes: null };
+  }
+  const bucket = tickBucket(tick.time, timeframe);
+  const lastTime = candleTime(last);
+  if (bucket === null || bucket < lastTime || Math.abs(tick.price - last.c) / last.c > MAX_TICK_JUMP) {
+    return { candles, extremes: null };
+  }
+  const prior = extremes?.time === bucket ? extremes : null;
+  if (bucket === lastTime) {
+    const h = Math.max(last.h, tick.price, prior?.h ?? tick.price);
+    const l = Math.min(last.l, tick.price, prior?.l ?? tick.price);
+    const next = { time: bucket, o: last.o, h, l };
+    if (last.h === h && last.l === l && last.c === tick.price) return { candles, extremes: next };
+    return { candles: [...candles.slice(0, -1), { ...last, h, l, c: tick.price }], extremes: next };
+  }
+  // A new intraday bucket opened before the next snapshot arrived: start it from the tick.
+  if (typeof timeframe !== 'number' || sessionDate(bucket) !== sessionDate(lastTime)) return { candles, extremes: null };
+  const o = prior?.o ?? tick.price;
+  const h = Math.max(o, tick.price, prior?.h ?? tick.price);
+  const l = Math.min(o, tick.price, prior?.l ?? tick.price);
+  return {
+    candles: [...candles, { t: new Date(bucket * 1000).toISOString(), o, h, l, c: tick.price, v: 0 }],
+    extremes: { time: bucket, o, h, l },
+  };
 }
 
 export function ema(candles: Candle[], period: number): ChartPoint[] {

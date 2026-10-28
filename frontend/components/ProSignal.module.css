@@ -7,7 +7,7 @@
 .wait { border-left-color: #fbbf24; }
 
 .summary {
-  display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; padding: 7px 10px; cursor: pointer; list-style: none;
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 6px 12px; padding: 6px 10px; cursor: pointer; list-style: none;
 }
 .summary::-webkit-details-marker { display: none; }
 .title { color: #8b9dae; font-size: 10px; font-weight: 800; letter-spacing: .05em; white-space: nowrap; }
@@ -21,8 +21,9 @@
 .meter i { display: block; height: 100%; background: #fbbf24; }
 .buy .meter i { background: #00d39b; }
 .sell .meter i { background: #ff4d5e; }
-.reason { flex: 1 1 260px; color: #a3b5c4; font-size: 11.5px; }
+.reason { flex: 0 1 auto; color: #a3b5c4; font-size: 11.5px; text-align: center; }
 .record { color: #8b9dae; font-size: 11px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.panel:not([open]) .record { display: none; }
 .pos { color: #00d39b; }
 .neg { color: #ff4d5e; }
 

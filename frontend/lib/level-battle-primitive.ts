@@ -25,8 +25,11 @@ export class LevelBattlePrimitive implements ISeriesPrimitive<Time> {
   private battles: LevelBattle[] = [];
   private timer: ReturnType<typeof setInterval> | null = null;
   private readonly views: readonly ISeriesPrimitivePaneView[];
+  private readonly callouts: boolean;
 
-  constructor() {
+  /** Callout boxes are off by default: the battle is still computed and shown in the Level Battle panel. */
+  constructor({ callouts = false }: { callouts?: boolean } = {}) {
+    this.callouts = callouts;
     const renderer: ISeriesPrimitivePaneRenderer = {
       draw: target => target.useMediaCoordinateSpace(({ context, mediaSize }) => this.draw(context, mediaSize.width, mediaSize.height)),
     };
@@ -93,6 +96,7 @@ export class LevelBattlePrimitive implements ISeriesPrimitive<Time> {
       ctx.lineTo(width, y);
       ctx.stroke();
       ctx.setLineDash([]);
+      if (!this.callouts) continue;
 
       const lines = [
         `${at ? '⚡ ' : ''}${battle.label} ${fmt(battle.price)} · ${battleHeadline(battle)}`,

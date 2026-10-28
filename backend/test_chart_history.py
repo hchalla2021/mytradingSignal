@@ -1,15 +1,61 @@
+import json
 import tempfile
+import threading
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime
 from pathlib import Path
 from unittest.mock import Mock, patch
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from kiteconnect.exceptions import TokenException
 
 from services.chart_history_service import (
     ChartHistoryService, ChartHistoryUnavailable, IST, normalize_candles, aggregate_daily_candles,
+    kite_client,
 )
+
+
+class HistoryClientTests(unittest.TestCase):
+    def setUp(self):
+        local = patch("services.chart_history_service._client_local", threading.local())
+        local.start()
+        self.addCleanup(local.stop)
+
+    def test_client_reuses_session_and_rotates_on_credentials_change(self):
+        settings = Mock(zerodha_api_key="test-key", zerodha_access_token="first-token")
+        with patch("services.chart_history_service.KiteConnect") as factory:
+            first, second, third = Mock(), Mock(), Mock()
+            factory.side_effect = [first, second, third]
+            self.assertIs(kite_client(settings), first)
+            self.assertIs(kite_client(settings), first)
+            factory.assert_called_once_with(api_key="test-key", timeout=15)
+            first.set_access_token.assert_called_once_with("first-token")
+            settings.zerodha_access_token = "second-token"
+            self.assertIs(kite_client(settings), second)
+            first.reqsession.close.assert_called_once()
+            second.set_access_token.assert_called_once_with("second-token")
+            settings.zerodha_api_key = "new-key"
+            self.assertIs(kite_client(settings), third)
+            second.reqsession.close.assert_called_once()
+
+    def test_parallel_workers_have_separate_sessions(self):
+        settings = Mock(zerodha_api_key="test-key", zerodha_access_token="test-token")
+        barrier = threading.Barrier(2)
+
+        def worker():
+            client = kite_client(settings)
+            barrier.wait(timeout=5)
+            self.assertIs(kite_client(settings), client)
+            return client
+
+        with patch("services.chart_history_service.KiteConnect", side_effect=lambda **_: Mock()) as factory:
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                one = executor.submit(worker)
+                two = executor.submit(worker)
+                self.assertIsNot(one.result(timeout=10), two.result(timeout=10))
+            self.assertEqual(factory.call_count, 2)
 
 
 def record(timestamp="2024-10-14T09:15:00+05:30", close=102):
@@ -64,9 +110,13 @@ class HistoryNormalizationTests(unittest.TestCase):
 
 class HistoryPagingTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
+        local = patch("services.chart_history_service._client_local", threading.local())
+        local.start()
+        self.addCleanup(local.stop)
         self.directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
         self.service = ChartHistoryService(Path(self.directory.name) / "history.sqlite3")
+        self.service.retry_delay = 0
         self.now = IST.localize(datetime(2026, 10, 18, 12))
 
     async def test_multi_year_page_is_cached_across_service_instances(self):
@@ -92,6 +142,17 @@ class HistoryPagingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(cached["candles"], page["candles"])
         self.assertEqual(cached["dailyCandles"], page["dailyCandles"])
 
+    async def test_one_minute_pages_use_kite_minute_bars_and_a_short_window(self):
+        settings = Mock(zerodha_api_key="test", zerodha_access_token="test")
+        with patch("services.chart_history_service.get_settings", return_value=settings), \
+             patch("services.chart_history_service.KiteConnect"), \
+             patch("services.chart_history_service.request_chart_candles", return_value=[record()]) as request:
+            page = await self.service.page("NIFTY", 1, date(2024, 10, 15), self.now)
+        chart_call = request.call_args_list[0]
+        self.assertEqual(chart_call.args[4], "minute")
+        self.assertEqual(request.call_args_list[1].args[4], "day")
+        self.assertEqual(page["nextBefore"], "2024-10-10")
+
     async def test_empty_page_has_an_older_cursor_instead_of_inventing_candles(self):
         with patch.object(self.service, "_fetch", return_value=[]):
             page = await self.service.page("SENSEX", 3, date(2024, 10, 15), self.now)
@@ -100,7 +161,7 @@ class HistoryPagingTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_invalid_symbol_interval_and_future_dates_are_rejected(self):
         for symbol, interval, before in [
-            ("INVALID", 5, None), ("NIFTY", 1, None),
+            ("INVALID", 5, None), ("NIFTY", 2, None),
             ("NIFTY", 5, date(2027, 1, 1)), ("NIFTY", 5, date(1960, 1, 1)),
         ]:
             with self.assertRaises(ValueError):
@@ -111,6 +172,37 @@ class HistoryPagingTests(unittest.IsolatedAsyncioTestCase):
              self.assertLogs("services.chart_history_service", level="ERROR"):
             with self.assertRaises(ChartHistoryUnavailable):
                 await self.service.page("BANKNIFTY", 15, date(2024, 10, 15), self.now)
+
+    async def test_transient_provider_failure_is_retried_once(self):
+        candle = normalize_candles([record()])
+        with patch.object(self.service, "_fetch", side_effect=[RuntimeError("Too many requests"), candle, []]) as fetch, \
+             self.assertLogs("services.chart_history_service", level="WARNING"):
+            page = await self.service.page("NIFTY", 5, date(2024, 10, 15), self.now)
+        self.assertEqual(page["candles"], candle)
+        self.assertFalse(page["stale"])
+        self.assertEqual(fetch.call_count, 3)
+
+    async def test_repeated_provider_failure_serves_the_stored_page_marked_stale(self):
+        end = "2024-10-14T23:59:59+05:30"
+        stored = normalize_candles([record()])
+        partial_fetch = datetime.fromisoformat(end).timestamp() - 3600
+        with self.service._connect() as connection:
+            connection.executemany("INSERT INTO pages VALUES (?, ?, ?, ?, ?, ?)", [
+                ("NIFTY", "5", "2024-10-01T00:00:00+05:30", end, partial_fetch, json.dumps(stored)),
+                ("NIFTY", "D", "2024-07-31T00:00:00+05:30", end, partial_fetch, "[]"),
+            ])
+        with patch.object(self.service, "_fetch", side_effect=RuntimeError("timeout")), \
+             self.assertLogs("services.chart_history_service", level="WARNING"):
+            page = await self.service.page("NIFTY", 5, date(2024, 10, 15), self.now)
+        self.assertEqual(page["candles"], stored)
+        self.assertTrue(page["stale"])
+
+    async def test_session_errors_are_not_masked_by_stored_pages(self):
+        with patch.object(self.service, "_fetch", side_effect=TokenException("expired")) as fetch, \
+             self.assertLogs("services.chart_history_service", level="WARNING"):
+            with self.assertRaises(ChartHistoryUnavailable):
+                await self.service.page("NIFTY", 5, date(2024, 10, 15), self.now)
+        self.assertEqual(fetch.call_count, 1)
 
     async def test_partial_live_day_cache_is_not_treated_as_final_history(self):
         end = "2024-10-14T23:59:59+05:30"

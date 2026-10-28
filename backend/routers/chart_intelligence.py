@@ -1,13 +1,14 @@
 """
 📈 Chart Intelligence — API Router
 ====================================
-WebSocket:  /ws/chart-intelligence       → real-time chart data (3s cadence)
+WebSocket:  /ws/chart-intelligence       → real-time chart data (0.5s cadence)
 REST:       GET /api/chart-intelligence  → instant snapshot for page load
 """
 import asyncio
 import json
 import logging
 from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi.responses import JSONResponse
 from datetime import date, datetime
 from typing import Optional
 
@@ -37,7 +38,8 @@ async def get_futures_history(
     interval: str = Query("5"), before: Optional[date] = None,
 ):
     try:
-        return await futures_chart_service.page(symbol, interval, token, before)
+        payload = await futures_chart_service.page(symbol, interval, token, before)
+        return await asyncio.to_thread(JSONResponse, content=payload)
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
     except ChartHistoryUnavailable as error:
@@ -47,7 +49,8 @@ async def get_futures_history(
 @http_router.get("/chart-intelligence/history")
 async def get_chart_history(symbol: str = "NIFTY", interval: str = Query("5"), before: Optional[date] = None):
     try:
-        return await chart_history_service.page(symbol, interval, before)
+        payload = await chart_history_service.page(symbol, interval, before)
+        return await asyncio.to_thread(JSONResponse, content=payload)
     except ValueError as error:
         raise HTTPException(status_code=422, detail=str(error)) from error
     except ChartHistoryUnavailable as error:
@@ -58,12 +61,13 @@ async def get_chart_history(symbol: str = "NIFTY", interval: str = Query("5"), b
 async def get_chart_intelligence_snapshot():
     svc = get_chart_intelligence_service()
     snapshot = svc.get_snapshot()
-    return {
+    payload = {
         "success": True,
         "data": snapshot,
         "indices": list(snapshot.keys()),
         "timestamp": datetime.utcnow().isoformat(),
     }
+    return await asyncio.to_thread(JSONResponse, content=payload)
 
 
 @ws_router.websocket("/chart-intelligence")

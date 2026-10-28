@@ -21,11 +21,26 @@ logger = logging.getLogger(__name__)
 IST = pytz.timezone("Asia/Kolkata")
 TOKENS = {"NIFTY": 256265, "BANKNIFTY": 260105, "SENSEX": 265}
 INTERVALS = {
-    "3": "3minute", "5": "5minute", "15": "15minute", "30": "30minute", "60": "60minute",
+    "1": "minute", "3": "3minute", "5": "5minute", "15": "15minute", "30": "30minute", "60": "60minute",
     "D": "day", "W": "day", "M": "day",
 }
 _request_lock = threading.Lock()
 _last_request = 0.0
+_client_local = threading.local()
+
+
+def kite_client(settings):
+    """Reuse TLS connections without sharing a requests Session across worker threads."""
+    key = (settings.zerodha_api_key, settings.zerodha_access_token)
+    cached = getattr(_client_local, "client", None)
+    if cached is None or cached[0] != key:
+        client = KiteConnect(api_key=key[0], timeout=15)
+        client.set_access_token(key[1])
+        if cached is not None:
+            cached[1].reqsession.close()
+        _client_local.client = (key, client)
+        return client
+    return cached[1]
 
 
 def request_chart_candles(client, *args, **kwargs):
@@ -168,13 +183,44 @@ class ChartHistoryService:
             fresh = row[0] >= datetime.fromisoformat(end).timestamp()
         return json.loads(row[1]) if fresh else None
 
+    def _read_stored(self, symbol, interval, start, end):
+        """Last stored copy of a page regardless of age (real Zerodha data, just older)."""
+        with self._connect() as connection:
+            row = connection.execute(
+                "SELECT payload FROM pages WHERE symbol=? AND interval=? AND start=? AND end=?",
+                (symbol, interval, start, end),
+            ).fetchone()
+        return json.loads(row[0]) if row else None
+
+    retry_delay = 0.8
+
+    def _fetch_resilient(self, symbol, interval, start, end):
+        """Retry one transient Kite failure (429/timeout/network), then fall back to the stored page.
+
+        Returns (candles, stale). Auth/configuration errors are never masked.
+        """
+        for attempt in range(2):
+            try:
+                return self._fetch(symbol, interval, start, end), False
+            except (ChartHistoryUnavailable, TokenException):
+                raise
+            except Exception as error:
+                if attempt == 0:
+                    logger.warning("Chart history fetch failed for %s/%s (%s); retrying", symbol, interval, error)
+                    time.sleep(self.retry_delay)
+                    continue
+                stored = self._read_stored(symbol, interval, start, end)
+                if stored is None:
+                    raise
+                logger.warning("Serving stored chart history for %s/%s after Zerodha failure", symbol, interval)
+                return stored, True
+
     def _fetch(self, symbol, interval, start, end):
         interval = str(interval)
         settings = get_settings()
         if not settings.zerodha_api_key or not settings.zerodha_access_token:
             raise ChartHistoryUnavailable("Connect Zerodha to load uncached chart history.")
-        client = KiteConnect(api_key=settings.zerodha_api_key, timeout=15)
-        client.set_access_token(settings.zerodha_access_token)
+        client = kite_client(settings)
         rows = request_chart_candles(
             client,
             self._instrument_token(symbol), datetime.fromisoformat(start), datetime.fromisoformat(end),
@@ -205,7 +251,8 @@ class ChartHistoryService:
         end_date = before or now.date() + timedelta(days=1)
         if end_date > now.date() + timedelta(days=1) or end_date <= earliest:
             raise ValueError("History date must be after 1970-01-01 and not in the future")
-        page_days = 365 if interval in ("D", "W", "M") else 14
+        # 1m pages stay short: ~5 sessions is already ~1,900 bars.
+        page_days = 365 if interval in ("D", "W", "M") else 5 if interval == "1" else 14
         start_date = max(earliest, period_start(end_date - timedelta(days=page_days), interval))
         start = IST.localize(datetime.combine(start_date, datetime.min.time())).isoformat()
         end_dt = IST.localize(datetime.combine(end_date, datetime.min.time())) - timedelta(seconds=1)
@@ -215,8 +262,9 @@ class ChartHistoryService:
             try:
                 candles = await asyncio.to_thread(self._read, symbol, interval, start, end, mutable, now)
                 cached = candles is not None
+                stale = False
                 if candles is None:
-                    candles = await asyncio.to_thread(self._fetch, symbol, interval, start, end)
+                    candles, stale = await asyncio.to_thread(self._fetch_resilient, symbol, interval, start, end)
                 daily = []
                 if include_daily:
                     context_date = (
@@ -227,7 +275,7 @@ class ChartHistoryService:
                     async with self._lock_for((symbol, "D", context_start, end)):
                         daily = await asyncio.to_thread(self._read, symbol, "D", context_start, end, mutable, now)
                         if daily is None:
-                            daily = await asyncio.to_thread(self._fetch, symbol, "D", context_start, end)
+                            daily, _ = await asyncio.to_thread(self._fetch_resilient, symbol, "D", context_start, end)
             except ChartHistoryUnavailable:
                 raise
             except TokenException as error:
@@ -248,6 +296,7 @@ class ChartHistoryService:
             "source": "ZERODHA_INDEX",
             "volumeSource": "INDEX_ONLY",
             "cached": cached,
+            "stale": stale,
         }
 
 

@@ -12,6 +12,7 @@ interface HistoryPage {
   nextBefore: string | null;
   cached: boolean;
 }
+export type { HistoryPage };
 interface HistoryState {
   key: string;
   candles: Candle[];
@@ -53,6 +54,10 @@ async function fetchPage(symbol: ChartSymbol, timeframe: Timeframe, before?: str
     }
   });
 }
+
+/** Latest page through the shared, de-duplicated cache (other chart views reuse the same requests). */
+export const loadLatestChartHistory = (symbol: ChartSymbol, timeframe: Timeframe) => fetchPage(symbol, timeframe);
+export const readCachedChartHistory = (symbol: ChartSymbol, timeframe: Timeframe) => pageCache.read(pageKey(symbol, timeframe));
 
 export async function prefetchChartHistory(symbol: ChartSymbol, timeframe: Timeframe) {
   if (pageCache.read(pageKey(symbol, timeframe))?.fresh) return;

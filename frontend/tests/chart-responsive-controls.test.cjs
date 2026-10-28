@@ -100,7 +100,7 @@ test('cleanup removes permanently disabled controls but preserves all working ch
   collect(ast);
   assert.deepEqual(tabs, [
     'observatory-chart-tab', 'observatory-futures-tab',
-    'observatory-terminal-tab', 'observatory-paper-tab',
+    'observatory-terminal-tab', 'observatory-mtf-tab', 'observatory-paper-tab',
   ]);
   assert.deepEqual(permanentlyDisabled, []);
   assert.match(source, /disabled=\{history.loading \|\| !history.hasMore\}/);
@@ -108,7 +108,7 @@ test('cleanup removes permanently disabled controls but preserves all working ch
   const css = postcss.parse(readFileSync(path.join(folder, 'ChartWorkspace.module.css'), 'utf8'));
   const columns = nodes => nodes.find(node => node.selector === '.viewTabs')?.nodes
     .find(node => node.prop === 'grid-template-columns')?.value;
-  assert.equal(columns(css.nodes), 'repeat(4, minmax(0, 1fr))');
+  assert.equal(columns(css.nodes), 'repeat(5, minmax(0, 1fr))');
   const phone = css.nodes.find(node => node.type === 'atrule' && node.params === '(max-width: 639px)');
   assert.equal(columns(phone.nodes), 'repeat(2, minmax(0, 1fr))');
 });

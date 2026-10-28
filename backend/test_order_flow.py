@@ -1,8 +1,10 @@
 import tempfile
+import asyncio
+import threading
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -151,6 +153,31 @@ class OrderFlowAnalysisTests(unittest.TestCase):
         self.assertEqual(result["bars"][-1]["cvd"], sum(b["d"] for b in result["bars"]))
         self.assertIsNotNone(result["profile"]["poc"])
         self.assertIn("points", result["replay"]["unit"])
+
+
+class OrderFlowSnapshotConcurrencyTests(unittest.IsolatedAsyncioTestCase):
+    async def test_parallel_subscribers_share_analytics_off_the_event_loop(self):
+        from routers import order_flow
+        loop_thread = threading.get_ident()
+
+        def analytics(*args, **kwargs):
+            self.assertNotEqual(threading.get_ident(), loop_thread)
+            return {"bars": []}
+
+        with patch.object(order_flow, "_cache", {}), \
+             patch.object(order_flow, "_snapshot_locks", {}), \
+             patch.object(order_flow, "_contract", AsyncMock(return_value=None)), \
+             patch.object(order_flow.order_flow_engine, "current_token", return_value=None), \
+             patch.object(order_flow.order_flow_engine, "session_minutes", return_value=[]) as read, \
+             patch.object(order_flow.order_flow_engine, "last_tick", return_value=None), \
+             patch.object(order_flow.order_flow_engine, "zones", return_value=[]), \
+             patch.object(order_flow, "analyze", side_effect=analytics) as analyze_once:
+            results = await asyncio.gather(*[
+                order_flow.build_snapshot("NIFTY", 5) for _ in range(5)
+            ])
+            self.assertTrue(all(result is results[0] for result in results))
+            read.assert_called_once()
+            analyze_once.assert_called_once()
 
 
 class OrderFlowApiTests(unittest.TestCase):

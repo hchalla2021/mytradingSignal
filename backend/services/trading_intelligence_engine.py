@@ -597,7 +597,12 @@ class TradingIntelligenceEngine:
         tick = await self.cache.get_market_data(symbol)
         if not tick:
             return self._state[symbol].snapshot
-        return self.infer(symbol, tick)
+
+        def inference():
+            with self._lock:
+                return self.infer(symbol, tick)
+
+        return await asyncio.to_thread(inference)
 
     async def snapshot_all(self) -> Dict[str, Any]:
         out: Dict[str, Any] = {}

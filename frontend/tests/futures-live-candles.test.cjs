@@ -73,15 +73,31 @@ test('rejects stale/disconnected/wrong contract, symbol, interval, date and clos
     'NIFTY', 101, 5, true, Date.parse('2026-10-24T10:00:00+05:30')), false);
 });
 
-test('partial recordings, invalid OHLCV, misaligned buckets and older ticks never overwrite official history', () => {
+test('invalid OHLCV, misaligned buckets and older ticks never overwrite official history', () => {
   const history = [candle()];
   for (const patch of [
-    { ohlcvComplete: false }, { h: 90 }, { l: 110 }, { v: -1 }, { c: NaN },
+    { h: 90 }, { l: 110 }, { v: -1 }, { c: NaN },
     { t: start + 60 }, { end: start }, { end: start + 299 }, { end: start + 301 },
     { t: start - 300, end: start },
   ]) assert.equal(apply(history, snapshot({ bars: [bar(patch)] })), history);
   assert.equal(apply(history, snapshot(), now, true, now), history);
   assert.equal(apply(history, snapshot(), now, true, now + 1000), history);
+});
+
+test('partial recording updates official forming prices immediately without inventing open or volume', () => {
+  const history = [{ ...candle(), oi: 12345 }];
+  const flow = snapshot({ bars: [bar({ ohlcvComplete: false, o: 102, v: 999 })] });
+  const result = apply(history, flow);
+  assert.equal(result[0].c, 103);
+  assert.equal(result[0].o, history[0].o);
+  assert.equal(result[0].h, 104);
+  assert.equal(result[0].l, 98);
+  assert.equal(result[0].v, history[0].v);
+  assert.equal(result[0].oi, 12345);
+  assert.equal(apply([], flow).length, 0, 'partial recording cannot invent a new candle');
+  assert.equal(apply([candle(start - 300)], flow).length, 1, 'missing official open stays unavailable');
+  assert.equal(apply(history, { ...flow, lastTick: start + 301 }, (start + 301) * 1000), history,
+    'partial recording cannot revise a closed candle');
 });
 
 test('each supported intraday bucket and the shortened closing-session bucket keep exchange alignment', () => {

@@ -33,6 +33,9 @@ export function useOrderFlow(symbol: string, interval: unknown, token?: number |
     let retryTimer: ReturnType<typeof setTimeout> | undefined;
     let pingTimer: ReturnType<typeof setInterval> | undefined;
     let attempts = 0;
+    let streamRevision = 0;
+    let streamDate: string | null = null;
+    let recordedElsewhere = false;
     const controller = new AbortController();
     const params = new URLSearchParams({ symbol, interval: String(interval) });
     if (token) params.set('token', String(token));
@@ -40,6 +43,7 @@ export function useOrderFlow(symbol: string, interval: unknown, token?: number |
     if (latestRecorded) params.set('latest', '1');
 
     const loadSnapshot = async () => {
+      const revision = streamRevision;
       try {
         const response = await fetch(API_CONFIG.endpoint(`/api/order-flow/snapshot?${params}`), {
           signal: controller.signal, credentials: 'include',
@@ -47,10 +51,12 @@ export function useOrderFlow(symbol: string, interval: unknown, token?: number |
         const snapshot = parseOrderFlow(await response.json());
         if (!response.ok || !snapshot) throw new Error(`Order flow unavailable (${response.status}).`);
         if (cancelled) return null;
+        if (revision !== streamRevision) return snapshot;
+        streamDate = snapshot.date;
         setState(previous => ({ key, snapshot, error: null, live: previous.key === key && previous.live }));
         return snapshot;
       } catch (error) {
-        if (!cancelled && !controller.signal.aborted) {
+        if (!cancelled && !controller.signal.aborted && revision === streamRevision) {
           setState(previous => ({ ...(previous.key === key ? previous : { snapshot: null, live: false }), key,
             error: error instanceof Error ? error.message : 'Order flow unavailable.' }));
         }
@@ -71,29 +77,31 @@ export function useOrderFlow(symbol: string, interval: unknown, token?: number |
         if (typeof message !== 'object' || message === null || !('type' in message) || !('data' in message)) return;
         const incoming = parseOrderFlow(message.data);
         if (!incoming || cancelled) return;
+        if (message.type !== 'snapshot' && message.type !== 'update') return;
+        if (message.type === 'update' && streamDate !== null && streamDate !== incoming.date) {
+          void loadSnapshot();
+          return;
+        }
+        streamRevision++;
+        streamDate = incoming.date;
+        recordedElsewhere = incoming.recordedToken != null;
         setState(previous => {
           const prior = previous.key === key ? previous.snapshot : null;
-          if (message.type === 'update' && prior && prior.date !== incoming.date) {
-            void loadSnapshot();  // session rolled over: partial bars must not replace the day
-            return previous;
-          }
           const snapshot = message.type === 'snapshot' ? incoming : mergeOrderFlowUpdate(prior, incoming);
-          return { key, snapshot, error: null, live: true };
+          return { key, snapshot, error: null, live: !recordedElsewhere };
         });
       };
       socket.onclose = () => {
         clearInterval(pingTimer);
-        if (cancelled) return;
+        if (cancelled || recordedElsewhere) return;
         setState(previous => previous.key === key ? { ...previous, live: false } : previous);
         retryTimer = setTimeout(connect, Math.min(30_000, 1_000 * 2 ** attempts++));
       };
       socket.onerror = () => socket?.close();
     };
 
-    void loadSnapshot().then(snapshot => {
-      // Flow is recorded for the near-month contract only; another expiry gets the reason, not a stream.
-      if (!cancelled && snapshot?.recordedToken == null) connect();
-    });
+    connect();
+    void loadSnapshot();
     return () => {
       cancelled = true;
       controller.abort();

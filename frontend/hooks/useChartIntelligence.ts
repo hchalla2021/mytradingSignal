@@ -389,13 +389,21 @@ function hasMaterialChartChange(existing: SymbolChartData | null, incoming: Symb
 
   const lastE5 = e5.at(-1);
   const lastI5 = i5.at(-1);
+  const lastE3 = e3.at(-1);
+  const lastI3 = i3.at(-1);
   if (
     lastE5?.t !== lastI5?.t ||
     lastE5?.o !== lastI5?.o ||
     lastE5?.h !== lastI5?.h ||
     lastE5?.l !== lastI5?.l ||
     lastE5?.c !== lastI5?.c ||
-    lastE5?.v !== lastI5?.v
+    lastE5?.v !== lastI5?.v ||
+    lastE3?.t !== lastI3?.t ||
+    lastE3?.o !== lastI3?.o ||
+    lastE3?.h !== lastI3?.h ||
+    lastE3?.l !== lastI3?.l ||
+    lastE3?.c !== lastI3?.c ||
+    lastE3?.v !== lastI3?.v
   ) {
     return true;
   }
@@ -595,14 +603,13 @@ export function useChartIntelligence() {
           // Allow MARKET_CLOSED to replace LIVE so UI can transition cleanly after session end.
           if (existing?.dataSource === 'LIVE' && incoming.dataSource === 'CACHED') continue;
 
-          // Drop older non-live frames during reconnect churn.
+          // A delayed initial snapshot must not rewind a newer live frame.
           const currTs = parseEpochMs(existing?.timestamp);
           const nextTs = parseEpochMs(incoming.timestamp);
           if (
             currTs != null &&
             nextTs != null &&
-            nextTs < currTs &&
-            incoming.dataSource !== 'LIVE'
+            nextTs < currTs
           ) {
             continue;
           }
@@ -634,7 +641,15 @@ export function useChartIntelligence() {
 
   const queueMergeData = useCallback((payload: Record<string, SymbolChartData>) => {
     const queued = queuedPayloadRef.current ?? {};
-    queuedPayloadRef.current = { ...queued, ...payload };
+    for (const sym of ['NIFTY', 'BANKNIFTY', 'SENSEX'] as const) {
+      const incoming = payload[sym];
+      if (!incoming) continue;
+      const previousTime = parseEpochMs(queued[sym]?.timestamp);
+      const incomingTime = parseEpochMs(incoming.timestamp);
+      if (previousTime != null && incomingTime != null && incomingTime < previousTime) continue;
+      queued[sym] = incoming;
+    }
+    queuedPayloadRef.current = queued;
 
     if (rafRef.current !== null) return;
 
@@ -657,7 +672,8 @@ export function useChartIntelligence() {
 
   const connect = useCallback(() => {
     if (typeof window === 'undefined') return;
-    if (wsRef.current?.readyState === WebSocket.OPEN) return;
+    if (wsRef.current && (wsRef.current.readyState === WebSocket.OPEN ||
+        wsRef.current.readyState === WebSocket.CONNECTING)) return;
 
     if (wsUrlsRef.current.length === 0) {
       const primary = getWsUrl();
@@ -671,6 +687,7 @@ export function useChartIntelligence() {
     }
 
     const tryConnect = (urlIndex: number) => {
+      if (!mountedRef.current) return;
       if (urlIndex >= wsUrlsRef.current.length) {
         retryDelay.current = Math.min(retryDelay.current * 1.5, 15000);
         retryRef.current = setTimeout(() => tryConnect(0), retryDelay.current);
@@ -682,13 +699,14 @@ export function useChartIntelligence() {
       catch { tryConnect(urlIndex + 1); return; }
 
       const connectTimeout = setTimeout(() => {
-        if (ws.readyState !== WebSocket.OPEN) { ws.close(); tryConnect(urlIndex + 1); }
+        if (ws.readyState !== WebSocket.OPEN) ws.close();
       }, 4000);
 
       wsRef.current = ws;
 
       ws.onopen = () => {
         clearTimeout(connectTimeout);
+        if (!mountedRef.current || wsRef.current !== ws) { ws.close(); return; }
         setIsConnected(true);
         retryDelay.current = 1000;
         if (urlIndex > 0) {
@@ -703,6 +721,7 @@ export function useChartIntelligence() {
       };
 
       ws.onmessage = (event) => {
+        if (!mountedRef.current || wsRef.current !== ws) return;
         try {
           const msg = JSON.parse(event.data as string) as {
             type: string;
@@ -716,11 +735,13 @@ export function useChartIntelligence() {
 
       ws.onclose = () => {
         clearTimeout(connectTimeout);
+        if (!mountedRef.current || wsRef.current !== ws) return;
         setIsConnected(false);
         if (pingRef.current) clearInterval(pingRef.current);
-        if (!mountedRef.current) return;
         retryDelay.current = Math.min(retryDelay.current * 1.5, 15000);
-        retryRef.current = setTimeout(() => tryConnect(0), retryDelay.current);
+        retryRef.current = setTimeout(() => tryConnect(
+          urlIndex + 1 < wsUrlsRef.current.length ? urlIndex + 1 : 0,
+        ), retryDelay.current);
         if (!pollRef.current) {
           pollRef.current = setInterval(() => {
             fetchWithFallback()
@@ -763,7 +784,15 @@ export function useChartIntelligence() {
         }
         rafRef.current = null;
       }
-      wsRef.current?.close();
+      const ws = wsRef.current;
+      if (ws) {
+        ws.onopen = null;
+        ws.onmessage = null;
+        ws.onclose = null;
+        ws.onerror = null;
+        ws.close();
+      }
+      wsRef.current = null;
     };
   }, [connect, queueMergeData]);
 

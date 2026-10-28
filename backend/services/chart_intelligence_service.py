@@ -7,7 +7,7 @@ support/resistance, PDH/PDL, CDH/CDL for NIFTY/BANKNIFTY/SENSEX.
 DATA SOURCE: Zerodha historical_data API (3minute / 5minute intervals).
              Spot price from CacheService for latest candle updates.
 
-CADENCE:     Live market  → full fetch every 10s, broadcast every 3s
+CADENCE:     Live market  → history reconciliation every 20s, live refresh/broadcast every 0.5s
              Closed       → serve persisted, broadcast every 60s
 
 ISOLATION:   Own ConnectionManager, own asyncio task, own singleton.
@@ -73,14 +73,19 @@ class ChartIntelConnectionManager:
         if not self._connections:
             return
         msg = json.dumps(data, default=str)
-        dead: Set[WebSocket] = set()
         async with self._lock:
             clients = list(self._connections)
-        for ws in clients:
+
+        async def _send(ws: WebSocket) -> Optional[WebSocket]:
             try:
                 await asyncio.wait_for(ws.send_text(msg), timeout=3.0)
+                return None
             except Exception:
-                dead.add(ws)
+                return ws
+
+        # Concurrent sends: one slow client must not delay candle frames for everyone else.
+        results = await asyncio.gather(*(_send(ws) for ws in clients))
+        dead = {ws for ws in results if ws is not None}
         if dead:
             async with self._lock:
                 self._connections -= dead
@@ -768,7 +773,7 @@ class ChartIntelligenceService:
         self._last_save_time: float = 0.0
         self._last_full_fetch: float = 0.0
         self._cadence_broadcast = 0.5   # 0.5s — TradingView-like live candle motion
-        self._cadence_fetch = 1.5       # Full Zerodha candle re-fetch every 1.5s (fast volume refresh)
+        self._cadence_fetch = 20.0      # Reconcile history; live price updates do not wait for REST.
         self._cadence_closed = 60.0
         self._heartbeat_interval = 30.0
         self._kite_init_backoff_until: float = 0.0
@@ -1007,6 +1012,9 @@ class ChartIntelligenceService:
         cached = self._daily_cache.get(symbol)
         if cached and cached.get("date") == today:
             return cached["candles"]
+        # The live refresh calls this every cadence; a failing REST call must not block each frame.
+        if cached and cached.get("retry_at", 0.0) > time_mod.time():
+            return []
 
         from_dt = today - timedelta(days=5)
         try:
@@ -1025,6 +1033,7 @@ class ChartIntelligenceService:
             return candles
         except Exception as e:
             logger.debug("Chart intel daily fetch %s failed: %s", symbol, e)
+            self._daily_cache[symbol] = {"date": None, "candles": [], "retry_at": time_mod.time() + 30.0}
             return []
 
     # ── Build symbol payload ─────────────────────────────────────────────
@@ -1206,6 +1215,9 @@ class ChartIntelligenceService:
                 c5 = self._last_snapshot[sym].get("candles5m") or []
 
             if c3:
+                latest_spot = self._get_spot_price(sym)
+                if latest_spot > 0:
+                    spot = latest_spot
                 return (sym, self._build_symbol_data(sym, c3, c5 or [], daily, spot, phase))
             if sym in self._last_snapshot:
                 return (sym, {**self._last_snapshot[sym], "dataSource": "CACHED"})
@@ -1300,33 +1312,31 @@ class ChartIntelligenceService:
                             self._fetch_task = asyncio.create_task(self._bg_fetch_live(phase))
                             if phase == "CLOSED":
                                 _closed_fetch_done = True
-                    else:
-                        # Between full fetches: keep all live overlays synced with the
-                        # current in-progress candles every broadcast tick.
-                        if self._last_snapshot:
-                            now_ist = datetime.now(IST)
-                            refreshed_snapshot: Dict[str, Any] = {}
-                            results = await asyncio.gather(
-                                *[
-                                    asyncio.to_thread(
-                                        self._refresh_entry_with_live_spot,
-                                        self._last_snapshot[sym],
-                                        sym,
-                                        now_ist,
-                                    )
-                                    for sym in SYMBOLS
-                                    if sym in self._last_snapshot
-                                ],
-                                return_exceptions=True,
-                            )
-                            for sym, result in zip([s for s in SYMBOLS if s in self._last_snapshot], results):
-                                if isinstance(result, Exception):
-                                    logger.debug("Chart intel live refresh failed for %s: %s", sym, result)
-                                    refreshed_snapshot[sym] = self._last_snapshot[sym]
-                                else:
-                                    refreshed_snapshot[sym] = result
-                            if refreshed_snapshot:
-                                self._last_snapshot = refreshed_snapshot
+                    # Tick refresh must continue while a slow history reconciliation is pending.
+                    if self._last_snapshot:
+                        now_ist = datetime.now(IST)
+                        refreshed_snapshot: Dict[str, Any] = {}
+                        results = await asyncio.gather(
+                            *[
+                                asyncio.to_thread(
+                                    self._refresh_entry_with_live_spot,
+                                    self._last_snapshot[sym],
+                                    sym,
+                                    now_ist,
+                                )
+                                for sym in SYMBOLS
+                                if sym in self._last_snapshot
+                            ],
+                            return_exceptions=True,
+                        )
+                        for sym, result in zip([s for s in SYMBOLS if s in self._last_snapshot], results):
+                            if isinstance(result, Exception):
+                                logger.debug("Chart intel live refresh failed for %s: %s", sym, result)
+                                refreshed_snapshot[sym] = self._last_snapshot[sym]
+                            else:
+                                refreshed_snapshot[sym] = result
+                        if refreshed_snapshot:
+                            self._last_snapshot = refreshed_snapshot
 
                     # Broadcast current data
                     if self._last_snapshot:
@@ -1339,7 +1349,9 @@ class ChartIntelligenceService:
                             self._last_save_time = now_ts
                             await asyncio.to_thread(_save_persistent, self._last_snapshot)
 
-                    await asyncio.sleep(self._cadence_broadcast)
+                    # Fixed cadence: refresh + broadcast time is part of the interval, not added to it.
+                    elapsed = time_mod.time() - now_ts
+                    await asyncio.sleep(max(0.05, self._cadence_broadcast - elapsed))
 
                 else:
                     # CLOSED with data

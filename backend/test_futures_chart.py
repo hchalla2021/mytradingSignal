@@ -1,4 +1,5 @@
 import tempfile
+import threading
 import unittest
 from datetime import date, datetime
 from pathlib import Path
@@ -21,6 +22,9 @@ def instrument(symbol, token, expiry, exchange="NFO", kind="FUT"):
 
 class FuturesChartTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
+        local = patch("services.chart_history_service._client_local", threading.local())
+        local.start()
+        self.addCleanup(local.stop)
         self.directory = tempfile.TemporaryDirectory()
         self.addCleanup(self.directory.cleanup)
         self.path = Path(self.directory.name) / "history.sqlite3"
@@ -65,7 +69,7 @@ class FuturesChartTests(unittest.IsolatedAsyncioTestCase):
                 with self.assertRaises(ValueError):
                     await self.service.page("NIFTY", "5", token, now=self.now)
             with self.assertRaises(ValueError):
-                await self.service.page("NIFTY", "1", 101, now=self.now)
+                await self.service.page("NIFTY", "2", 101, now=self.now)
             with self.assertRaises(ValueError):
                 await self.service.contracts("INVALID", self.now)
 

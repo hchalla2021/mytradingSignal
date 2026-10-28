@@ -145,11 +145,22 @@ October/November/December 2026 and 2027 expiries appear only if currently listed
 future candles and unavailable contracts are never invented. The nearest listed expiry is the default.
 
 Near-month intraday candles use the existing same-contract order-flow WebSocket (about one update
-per second when ticks change). Only contiguous, gap-free recordings from the candle's opening minute
-can supply live OHLCV; partial startup/gap recordings never replace official historical candles.
+per second when ticks change). The stream connects in parallel with the initial REST snapshot;
+late REST responses cannot rewind newer streamed data. Only contiguous, gap-free recordings from
+the candle's opening minute can create live OHLCV bars. Partial startup/gap recordings may update
+the price/extrema of an existing official forming candle, preserving its official open and volume;
+they never create missing bars or revise closed candles.
 The status distinguishes LIVE from HISTORY; stale/disconnected, off-session, daily and other-expiry
 views do not claim to be live. Official history reconciles every 20 seconds after each request.
 Recorded ticks are sampled, not an exchange trade-by-trade feed.
+The cash Advanced Chart refreshes its current price every broadcast cycle (target 0.5 seconds),
+including while broker history reconciliation is pending. History reconciles every 20 seconds,
+separately from live-price refresh, so slow historical requests do not freeze candle motion.
+Order-flow subscribers for the same symbol/interval share cached analytics; calculation runs
+off the API event loop so it does not block delivery to other charts.
+Dashboard model inference also runs off the event loop, serialized by the engine's lock.
+The chart stream ignores older frames (including frames queued for the next animation),
+keeps a single reconnect chain, and cancels reconnects on unmount.
 The chart plots EMA 9/20, session VWAP and traded volume from the **same selected contract**.
 EMA 9/20 use the existing SMA-seeded incremental engine and need 9/20 candles respectively.
 RVOL 20 is current candle volume divided by the average volume of the previous 20 candles,
@@ -162,7 +173,10 @@ No candle-color or synthetic bid/ask estimates are presented as real footprint/d
 Unchanged history does not reset chart data; candle-tail revisions/appends use series updates,
 while historical corrections, contract switches, and interval changes rebuild the series.
 The futures endpoint skips unused daily-pivot context, making one broker history request per
-uncached page rather than two. Recently viewed contract/interval snapshots are retained in a
+uncached page rather than two. History and contract lookup reuse a Kite HTTP session per
+worker thread to avoid repeated TLS handshakes without sharing sessions across concurrent
+workers. A credential change replaces and closes that thread's old session; TLS verification
+remains enabled. Recently viewed contract/interval snapshots are retained in a
 bounded browser memory cache and shown immediately on return while refreshing; their original
 refresh timestamps are preserved so cached snapshots cannot masquerade as fresh data.
 Contract lists are cached for one hour within the IST date; Refresh / retry forces revalidation.
@@ -477,6 +491,15 @@ See [docs/CONFIGURATION.md](docs/CONFIGURATION.md) for complete setup.
 cd backend
 pip install -r requirements.txt
 uvicorn main:app --reload --host 0.0.0.0 --port 8000
+```
+
+On Windows, run the backend with the project's virtual environment so it uses the pinned
+dependencies (including `requests==2.32.3`), not a globally installed Python:
+
+```powershell
+cd backend
+..\.venv\Scripts\python.exe -m pip install -r requirements.txt
+..\.venv\Scripts\python.exe -m uvicorn main:app --reload --host 127.0.0.1 --port 8000
 ```
 
 ### Frontend

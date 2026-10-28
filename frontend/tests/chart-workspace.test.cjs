@@ -564,3 +564,51 @@ test('keeps today merged when the feed flips LIVE/CACHED so bars do not jump sid
   const history = [candle(-1)];
   assert.equal(mergeChartHistory(history, live, stableLiveSession(live, nowMs)).length, 3);
 });
+test('live ticks move the forming candle immediately and keep tick wicks across snapshots', () => {
+  const { applyLiveTick } = context.exports;
+  const bars = [candle(0, 100), candle(1, 101)];
+  const at = seconds => base / 1000 + 300 + seconds;
+  const first = applyLiveTick(bars, { price: 104, time: at(30) }, 5);
+  assert.equal(first.candles.length, 2);
+  assert.deepEqual([first.candles[1].o, first.candles[1].h, first.candles[1].l, first.candles[1].c], [100, 104, 99, 104]);
+  assert.equal(bars[1].c, 101, 'input candles are not mutated');
+  // A coarser snapshot without the 104 high must not shrink the wick the tape printed.
+  const second = applyLiveTick(bars, { price: 102, time: at(60) }, 5, first.extremes);
+  assert.deepEqual([second.candles[1].h, second.candles[1].c], [104, 102]);
+  const same = applyLiveTick(second.candles, { price: 102, time: at(61) }, 5, second.extremes);
+  assert.equal(same.candles, second.candles, 'unchanged ticks keep the same array');
+});
+
+test('live ticks open the next bucket before the snapshot and preserve its open', () => {
+  const { applyLiveTick } = context.exports;
+  const bars = [candle(0, 100), candle(1, 101)];
+  const next = base / 1000 + 600;
+  const opened = applyLiveTick(bars, { price: 100.5, time: next + 2 }, 5);
+  assert.equal(opened.candles.length, 3);
+  assert.equal(candleTime(opened.candles[2]), next);
+  const moved = applyLiveTick(bars, { price: 99.5, time: next + 20 }, 5, opened.extremes);
+  assert.deepEqual([moved.candles[2].o, moved.candles[2].h, moved.candles[2].l, moved.candles[2].c, moved.candles[2].v], [100.5, 100.5, 99.5, 99.5, 0]);
+  // 3m buckets align to 09:15 as well.
+  const three = applyLiveTick([{ ...candle(0, 100), t: new Date(base + 360000).toISOString() }], { price: 100, time: base / 1000 + 540 }, 3);
+  assert.equal(candleTime(three.candles.at(-1)), base / 1000 + 540);
+});
+
+test('live ticks ignore stale, out-of-session, cross-session and outlier prices', () => {
+  const { applyLiveTick } = context.exports;
+  const bars = [candle(0, 100), candle(1, 101)];
+  assert.equal(applyLiveTick(bars, { price: 102, time: base / 1000 + 10 }, 5).candles, bars, 'older bucket');
+  assert.equal(applyLiveTick(bars, { price: 102, time: base / 1000 - 60 }, 5).candles, bars, 'pre-open');
+  assert.equal(applyLiveTick(bars, { price: 102, time: base / 1000 + 86400 + 60 }, 5).candles, bars, 'next session');
+  assert.equal(applyLiveTick(bars, { price: 150, time: base / 1000 + 330 }, 5).candles, bars, 'bad print');
+  assert.equal(applyLiveTick(bars, null, 5).candles, bars);
+  assert.equal(applyLiveTick([], { price: 100, time: base / 1000 }, 5).candles.length, 0);
+});
+
+test('live ticks update the current daily candle without creating future periods', () => {
+  const { applyLiveTick } = context.exports;
+  const day = Date.parse('2026-10-15T00:00:00+05:30');
+  const daily = [{ t: new Date(day).toISOString(), o: 100, h: 102, l: 99, c: 101, v: 0 }];
+  const moved = applyLiveTick(daily, { price: 103, time: base / 1000 + 3600 }, 'D');
+  assert.deepEqual([moved.candles[0].h, moved.candles[0].c], [103, 103]);
+  assert.equal(applyLiveTick(daily, { price: 103, time: base / 1000 + 86400 + 3600 }, 'D').candles, daily);
+});

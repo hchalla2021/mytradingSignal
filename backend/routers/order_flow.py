@@ -2,7 +2,7 @@
 
 HTTP: GET /api/order-flow/snapshot?symbol=&interval=&date=&token=
       GET /api/order-flow/replay?symbol=&interval=&days=
-WS:   /ws/order-flow?symbol=&interval=   → snapshot, then incremental updates (≈1/s, only when changed)
+WS:   /ws/order-flow?symbol=&interval=   → snapshot, then incremental updates (≈4/s, only on new ticks)
 No orders are ever placed from here.
 """
 
@@ -14,6 +14,7 @@ from datetime import date
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi.responses import JSONResponse
 
 from services.order_flow_analysis import aggregate, analyze
 from services.order_flow_engine import ROW_SIZE, order_flow_engine, session_date
@@ -28,6 +29,7 @@ METHOD = ("Aggressor side estimated per ~1s KiteTicker snapshot: quote rule vs p
           "midpoint rule inside the spread, then tick rule. Zerodha does not publish trade-by-trade aggressor flags.")
 _contracts: Dict[int, Dict[str, Any]] = {}
 _cache: Dict[tuple, tuple] = {}
+_snapshot_locks: Dict[tuple, asyncio.Lock] = {}
 
 
 def _validate(symbol: str, interval: int) -> str:
@@ -63,6 +65,13 @@ def _dom(symbol: str, token: Optional[int]) -> Optional[Dict[str, Any]]:
 
 async def build_snapshot(symbol: str, interval: int, day: Optional[str] = None, token: Optional[int] = None,
                          latest_recorded: bool = False) -> Dict[str, Any]:
+    lock = _snapshot_locks.setdefault((symbol, interval), asyncio.Lock())
+    async with lock:
+        return await _build_snapshot(symbol, interval, day, token, latest_recorded)
+
+
+async def _build_snapshot(symbol: str, interval: int, day: Optional[str] = None, token: Optional[int] = None,
+                          latest_recorded: bool = False) -> Dict[str, Any]:
     """`latest_recorded` (display only): when today has no recording yet, return the most recent recorded session,
     flagged with `latestRecorded`, instead of an empty snapshot. Trading/paper callers must leave it off."""
     requested_today = day is None
@@ -74,7 +83,7 @@ async def build_snapshot(symbol: str, interval: int, day: Optional[str] = None, 
     key = (symbol, interval, day, token, latest_recorded and requested_today)
     now = time.time()
     cached = _cache.get(key)
-    if cached and now - cached[0] < 0.8:
+    if cached and now - cached[0] < 0.5:
         return cached[1]
     minutes = await asyncio.to_thread(order_flow_engine.session_minutes, symbol, day)
     if token is not None:
@@ -83,7 +92,7 @@ async def build_snapshot(symbol: str, interval: int, day: Optional[str] = None, 
         sessions = await asyncio.to_thread(order_flow_engine.stored_sessions, symbol, 5)
         earlier = next((session for session in sessions if session < day), None)
         if earlier:
-            previous = await build_snapshot(symbol, interval, earlier, token)
+            previous = await _build_snapshot(symbol, interval, earlier, token)
             if previous.get("available"):
                 return {**previous, "latestRecorded": True, "lastTick": order_flow_engine.last_tick(symbol),
                         "reason": f"No order flow recorded today yet; showing the last recorded session ({earlier})."}
@@ -91,10 +100,13 @@ async def build_snapshot(symbol: str, interval: int, day: Optional[str] = None, 
     contract = await _contract(symbol, contract_token)
     row = ROW_SIZE[symbol]
     last_tick = order_flow_engine.last_tick(symbol)
-    result = analyze(aggregate(minutes, interval), row=row, tick=(contract or {}).get("tickSize", 0.05) or 0.05,
-                     now=now, exchange="BFO" if symbol == "SENSEX" else "NFO",
-                     lot_size=(contract or {}).get("lotSize"),
-                     feed_age=(now - last_tick) if last_tick and day == _today() else None)
+    def analytics():
+        return analyze(aggregate(minutes, interval), row=row, tick=(contract or {}).get("tickSize", 0.05) or 0.05,
+                       now=now, exchange="BFO" if symbol == "SENSEX" else "NFO",
+                       lot_size=(contract or {}).get("lotSize"),
+                       feed_age=(now - last_tick) if last_tick and day == _today() else None)
+
+    result = await asyncio.to_thread(analytics)
     payload = {
         "available": bool(minutes), "symbol": symbol, "interval": interval, "date": day, "row": row,
         "token": contract_token, "contract": contract, "source": "ZERODHA_KITE_TICKER_FULL", "method": METHOD,
@@ -106,7 +118,7 @@ async def build_snapshot(symbol: str, interval: int, day: Optional[str] = None, 
     }
     for stale in [k for k, (at, _) in _cache.items() if now - at > 60]:
         del _cache[stale]
-    _cache[key] = (now, payload)
+    _cache[key] = (time.time(), payload)
     return payload
 
 
@@ -114,7 +126,8 @@ async def build_snapshot(symbol: str, interval: int, day: Optional[str] = None, 
 async def order_flow_snapshot(symbol: str = "NIFTY", interval: int = Query(5), date_: Optional[date] = Query(None, alias="date"),
                               token: Optional[int] = None, latest: bool = False):
     symbol = _validate(symbol, interval)
-    return await build_snapshot(symbol, interval, date_.isoformat() if date_ else None, token, latest_recorded=latest)
+    payload = await build_snapshot(symbol, interval, date_.isoformat() if date_ else None, token, latest_recorded=latest)
+    return await asyncio.to_thread(JSONResponse, content=payload)
 
 
 @http_router.get("/replay")
@@ -165,12 +178,15 @@ async def order_flow_websocket(websocket: WebSocket):
         signature = (snapshot["lastTick"], len(snapshot["bars"]))
         while True:
             try:
-                raw = await asyncio.wait_for(websocket.receive_text(), timeout=1.0)
+                raw = await asyncio.wait_for(websocket.receive_text(), timeout=0.25)
                 if raw == "ping":
                     await websocket.send_text('{"type":"pong"}')
                 continue
             except asyncio.TimeoutError:
                 pass
+            # Cheap gate: bars only change when a new futures tick is recorded.
+            if order_flow_engine.last_tick(symbol) == signature[0]:
+                continue
             snapshot = await build_snapshot(symbol, interval, None, token, latest_recorded=latest)
             current = (snapshot["lastTick"], len(snapshot["bars"]))
             if current == signature:

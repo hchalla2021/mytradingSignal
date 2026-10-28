@@ -5,11 +5,9 @@ import logging
 import time
 from datetime import date, datetime
 
-from kiteconnect import KiteConnect
-
 from config import get_settings
 from services.chart_history_service import (
-    ChartHistoryService, ChartHistoryUnavailable, INTERVALS, IST, TOKENS,
+    ChartHistoryService, ChartHistoryUnavailable, INTERVALS, IST, TOKENS, kite_client,
 )
 
 logger = logging.getLogger(__name__)
@@ -30,9 +28,7 @@ class FuturesChartService(ChartHistoryService):
         settings = get_settings()
         if not settings.zerodha_api_key or not settings.zerodha_access_token:
             raise ChartHistoryUnavailable("Connect Zerodha to load futures contracts.")
-        client = KiteConnect(api_key=settings.zerodha_api_key, timeout=15)
-        client.set_access_token(settings.zerodha_access_token)
-        return client.instruments(exchange)
+        return kite_client(settings).instruments(exchange)
 
     async def contracts(self, symbol, now=None):
         if symbol not in TOKENS:

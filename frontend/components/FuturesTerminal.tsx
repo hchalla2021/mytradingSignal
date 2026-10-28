@@ -28,10 +28,15 @@ import { IndexTabList } from './IndexTabs';
 import DeltaStrengthBox from './DeltaStrength';
 import ProSignalPanel from './ProSignal';
 import LevelBattlePanel from './LevelBattle';
+import InsightDock from './InsightDock';
 import { useLevelBattle } from '@/hooks/useLevelBattle';
 import { LevelBattlePrimitive } from '@/lib/level-battle-primitive';
 import { useProConfluence } from '@/hooks/useProConfluence';
 import { snapTime } from '@/lib/pro-confluence';
+import {
+  EMPTY_SMART_MONEY, applyFormingBar, blockLabel, detectSmartMoney, effectiveScore, poolLabel, type SmartMoney,
+} from '@/lib/smart-money';
+import { SmartMoneyPrimitive } from '@/lib/smart-money-primitive';
 import {
   formatExpiry, loadCandles, loadContracts, readCachedCandles, readCachedContracts,
   type CandleState, type FuturesContract,
@@ -56,14 +61,17 @@ interface Prefs {
   vwap: boolean; volume: boolean; orderFlow: boolean; pdhl: boolean; levels: boolean;
   patterns: boolean; crosses: boolean; sweeps: boolean; plan: boolean;
   dom: boolean; signal: boolean; flow: boolean; info: boolean; deltaPane: boolean; oiPane: boolean;
+  orderBlocks: boolean; liquidity: boolean; smc: boolean;
 }
 const DEFAULT_PREFS: Prefs = {
   ema: { 9: true, 21: true, 25: false, 50: false, 100: false, 200: false },
   vwap: true, volume: true, orderFlow: true, pdhl: true, levels: true,
   patterns: false, crosses: false, sweeps: true, plan: true,
   dom: true, signal: true, flow: true, info: true, deltaPane: true, oiPane: true,
+  orderBlocks: true, liquidity: true, smc: true,
 };
 const PREF_LABELS: [Exclude<keyof Prefs, 'ema'>, string][] = [
+  ['orderBlocks', 'Order & breaker blocks'], ['liquidity', 'Buy-side / sell-side liquidity'], ['smc', 'Smart money panel'],
   ['vwap', 'VWAP'], ['volume', 'Volume'], ['orderFlow', 'Footprint / profile / walls'], ['pdhl', 'Prev-day H/L/C'],
   ['levels', 'Support / resistance'], ['crosses', 'EMA crossovers'], ['patterns', 'Price-action patterns'],
   ['sweeps', 'Liquidity sweeps'], ['plan', 'Signal plan lines'], ['deltaPane', 'Delta / CVD pane'],
@@ -175,7 +183,7 @@ interface Runtime {
   emas: Record<EmaPeriod, ISeriesApi<'Line'>>;
   deltaBars: ISeriesApi<'Histogram'>; cvd: ISeriesApi<'Line'>;
   oiLine: ISeriesApi<'Line'>; oiChange: ISeriesApi<'Histogram'>;
-  orderFlow: OrderFlowPrimitive; levelBattle: LevelBattlePrimitive; lines: Map<string, IPriceLine>;
+  orderFlow: OrderFlowPrimitive; levelBattle: LevelBattlePrimitive; smartMoney: SmartMoneyPrimitive; lines: Map<string, IPriceLine>;
 }
 
 export default function FuturesTerminal({ active = true }: { active?: boolean }) {
@@ -293,6 +301,15 @@ export default function FuturesTerminal({ active = true }: { active?: boolean })
     ].sort((a, b) => a.index - b.index);
     return { prevDay, levels, marks };
   }, [bars, closed, indicators]);
+  // Smart-money detection runs only when a candle closes (or history changes); live ticks just re-apply the forming bar.
+  const lastClosed = closed ? bars[closed - 1] : undefined;
+  const smcSignature = `${key}|${closed}|${bars[0]?.time}|${lastClosed?.time}|${lastClosed?.h}|${lastClosed?.l}|${lastClosed?.c}`;
+  const smcCache = useRef<{ signature: string; value: SmartMoney }>({ signature: '', value: EMPTY_SMART_MONEY });
+  if (smcCache.current.signature !== smcSignature) {
+    smcCache.current = { signature: smcSignature, value: detectSmartMoney(bars, closed, indicators.atr) };
+  }
+  const smcClosed = smcCache.current.value;
+  const smc = useMemo(() => applyFormingBar(smcClosed, bars, closed), [smcClosed, bars, closed]);
   const higher = useMemo(() => HIGHER[timeframe].map(minutes => ({
     label: timeframeLabel(minutes as Intraday), ...trendBias(resample(bars.slice(0, closed), minutes)),
   })), [bars, closed, timeframe]);
@@ -349,6 +366,8 @@ export default function FuturesTerminal({ active = true }: { active?: boolean })
     });
     const orderFlow = new OrderFlowPrimitive({ detail: true, footprint: true, basisAdjust: false, strip: { top: 0, bottom: 0 }, plan: false });
     candles.attachPrimitive(orderFlow);
+    const smartMoney = new SmartMoneyPrimitive();
+    candles.attachPrimitive(smartMoney);
     const levelBattle = new LevelBattlePrimitive();
     candles.attachPrimitive(levelBattle);
     const volume = main.addHistogramSeries({ priceScaleId: 'vol', priceFormat: { type: 'volume' }, priceLineVisible: false, lastValueVisible: false });
@@ -364,7 +383,7 @@ export default function FuturesTerminal({ active = true }: { active?: boolean })
     const oiLine = oi.addLineSeries({ title: 'OI', color: '#60a5fa', lineWidth: 2, priceFormat: { type: 'volume' }, priceLineVisible: false });
     const oiChange = oi.addHistogramSeries({ priceScaleId: 'oichg', priceFormat: { type: 'volume' }, priceLineVisible: false, lastValueVisible: false });
     oiChange.priceScale().applyOptions({ visible: false, scaleMargins: { top: .55, bottom: 0 } });
-    runtime.current = { main, delta, oi, candles, volume, vwap, emas, deltaBars, cvd, oiLine, oiChange, orderFlow, levelBattle, lines: new Map() };
+    runtime.current = { main, delta, oi, candles, volume, vwap, emas, deltaBars, cvd, oiLine, oiChange, orderFlow, levelBattle, smartMoney, lines: new Map() };
     previous.current = { key: '', candles: [] };
     centeredKey.current = '';
 
@@ -476,6 +495,10 @@ export default function FuturesTerminal({ active = true }: { active?: boolean })
   useEffect(() => {
     runtime.current?.orderFlow.setData(prefs.orderFlow && snapshot?.interval === timeframe ? snapshot : null);
   }, [snapshot, prefs.orderFlow, timeframe]);
+
+  useEffect(() => {
+    runtime.current?.smartMoney.setData(smc, { blocks: prefs.orderBlocks, liquidity: prefs.liquidity });
+  }, [smc, prefs.orderBlocks, prefs.liquidity]);
 
   useEffect(() => {
     const api = runtime.current;
@@ -636,29 +659,28 @@ export default function FuturesTerminal({ active = true }: { active?: boolean })
         </span>
       </div>
 
-      <div className={`${styles.layout} ${prefs.signal || prefs.dom || prefs.flow ? '' : styles.full}`}>
-        <div className={styles.charts}>
-          <div className={styles.mainWrap}>
-            <div ref={mainRef} className={styles.mainChart} />
-            <Legend prefs={prefs} />
-            <span className={`${styles.flowChip} ${styles[flowStatus.tone]}`} title={flowStatus.detail}>
-              <i />{flowStatus.text}</span>
-            {flowStatus.tone === 'none' && prefs.orderFlow && <div className={styles.flowEmpty} role="status">
-              <strong>{flowStatus.text}</strong><span>{flowStatus.detail}</span></div>}
-          </div>
-          <div className={styles.paneLabel} hidden={!prefs.deltaPane}>
-            {flowBars ? 'Delta per bar & CVD · aggressor side estimated' : 'Delta & CVD · appears once order flow is recorded'}</div>
-          <div ref={deltaRef} className={styles.subChart} hidden={!prefs.deltaPane || !flowBars} />
-          <div className={styles.paneLabel} hidden={!prefs.oiPane}>Open interest & change per bar · blank where the exchange did not report OI</div>
-          <div ref={oiRef} className={styles.subChart} hidden={!prefs.oiPane} />
+      <InsightDock lead={<ProSignalPanel pro={pro} />}>
+        <LevelBattlePanel state={battle} />
+        {prefs.smc && <SmartMoneyPanel smc={smc} />}
+        {prefs.signal && <SignalPanel confirmed={confirmed} early={early} fresh={fresh} />}
+        {prefs.flow && <BarPanel hover={hover} data={panelData} timeframe={timeframe} />}
+        {prefs.dom && <DomPanel dom={dom} recordedOther={flow.snapshot?.recordedToken != null} />}
+      </InsightDock>
+
+      <div className={styles.charts}>
+        <div className={styles.mainWrap}>
+          <div ref={mainRef} className={styles.mainChart} />
+          <Legend prefs={prefs} />
+          <span className={`${styles.flowChip} ${styles[flowStatus.tone]}`} title={flowStatus.detail}>
+            <i />{flowStatus.text}</span>
+          {flowStatus.tone === 'none' && prefs.orderFlow && <div className={styles.flowEmpty} role="status">
+            <strong>{flowStatus.text}</strong><span>{flowStatus.detail}</span></div>}
         </div>
-        <aside className={styles.side}>
-          <ProSignalPanel pro={pro} open />
-          <LevelBattlePanel state={battle} />
-          {prefs.signal && <SignalPanel confirmed={confirmed} early={early} fresh={fresh} />}
-          {prefs.flow && <BarPanel hover={hover} data={panelData} timeframe={timeframe} />}
-          {prefs.dom && <DomPanel dom={dom} recordedOther={flow.snapshot?.recordedToken != null} />}
-        </aside>
+        <div className={styles.paneLabel} hidden={!prefs.deltaPane}>
+          {flowBars ? 'Delta per bar & CVD · aggressor side estimated' : 'Delta & CVD · appears once order flow is recorded'}</div>
+        <div ref={deltaRef} className={styles.subChart} hidden={!prefs.deltaPane || !flowBars} />
+        <div className={styles.paneLabel} hidden={!prefs.oiPane}>Open interest & change per bar · blank where the exchange did not report OI</div>
+        <div ref={oiRef} className={styles.subChart} hidden={!prefs.oiPane} />
       </div>
       {prefs.info && <InfoPanels prevDay={structure.prevDay} levels={structure.levels} zones={snapshot?.zones ?? EMPTY_ZONES}
         profile={snapshot?.profile ?? null} marks={structure.marks} events={events} bars={bars} />}
@@ -679,7 +701,48 @@ const Legend = memo(function Legend({ prefs }: { prefs: Prefs }) {
     {EMA_PERIODS.filter(period => prefs.ema[period]).map(period => <span key={period}><i style={{ background: EMA_COLORS[period] }} />EMA {period}</span>)}
     {prefs.pdhl && <span><i style={{ background: '#fb923c' }} />PDH/PDL</span>}
     {prefs.sweeps && <span><i style={{ background: '#22d3ee' }} />Sweep</span>}
+    {prefs.orderBlocks && <span><i style={{ background: 'linear-gradient(90deg, #00c896 50%, #ff4d5e 50%)' }} />OB</span>}
+    {prefs.liquidity && <span><i style={{ background: 'linear-gradient(90deg, #f472b6 50%, #22d3ee 50%)' }} />BSL/SSL</span>}
   </div>;
+});
+
+const SmartMoneyPanel = memo(function SmartMoneyPanel({ smc }: { smc: SmartMoney }) {
+  const at = smc.price;
+  const zones = smc.blocks.filter(block => block.kind === 'OB');
+  const bull = zones.filter(block => block.side === 'bull').sort((a, b) => b.top - a.top)[0];
+  const bear = zones.filter(block => block.side === 'bear').sort((a, b) => a.bottom - b.bottom)[0];
+  const resting = smc.pools.filter(pool => pool.state === 'RESTING');
+  const bsl = resting.filter(pool => pool.side === 'BSL').sort((a, b) => a.price - b.price)[0];
+  const ssl = resting.filter(pool => pool.side === 'SSL').sort((a, b) => b.price - a.price)[0];
+  const sweep = smc.pools.filter(pool => pool.state !== 'RESTING').sort((a, b) => (b.sweptAt ?? 0) - (a.sweptAt ?? 0))[0];
+  const inZone = zones.find(block => at >= block.bottom && at <= block.top);
+  const trend = smc.trend === 1 ? 'BULL' : smc.trend === -1 ? 'BEAR' : 'NEUTRAL';
+  const distance = (value: number) => `${value >= at ? '+' : '−'}${Math.abs(value - at).toFixed(1)} pts`;
+  return <section className={styles.card} aria-label="Smart money structure">
+    <h3>Smart money <small>order blocks · liquidity · closed bars</small></h3>
+    <div className={styles.signalHead}>
+      <span className={`${styles.action} ${biasClass(trend)}`}>{trend}</span>
+      <p className={styles.muted}>{smc.lastBreak ? `Last ${smc.lastBreak.kind} ${smc.lastBreak.side === 'bull' ? '↑' : '↓'} through ${price(smc.lastBreak.price)}` : 'No structure break yet'}
+        {smc.target && <><br />🎯 Draw on liquidity: <b className={smc.target.side === 'BSL' ? styles.bull : styles.bear}>{smc.target.side} {price(smc.target.price)}</b> ({distance(smc.target.price)})</>}
+      </p>
+    </div>
+    {inZone && <div className={`${styles.early} ${biasClass(inZone.side === 'bull' ? 'BULL' : 'BEAR')}`} role="status">
+      ⚡ Price inside {blockLabel(inZone)} {price(inZone.bottom)}–{price(inZone.top)} · watch for {inZone.side === 'bull' ? 'a bullish' : 'a bearish'} reaction
+    </div>}
+    <dl className={styles.grid}>
+      <div><dt>Bear OB (supply)</dt><dd className={styles.bear}>{bear ? `${price(bear.bottom)}–${price(bear.top)}` : '—'}</dd></div>
+      <div><dt>Score / dist.</dt><dd>{bear ? `${effectiveScore(bear)} · ${distance(bear.bottom)}` : '—'}</dd></div>
+      <div><dt>Bull OB (demand)</dt><dd className={styles.bull}>{bull ? `${price(bull.bottom)}–${price(bull.top)}` : '—'}</dd></div>
+      <div><dt>Score / dist.</dt><dd>{bull ? `${effectiveScore(bull)} · ${distance(bull.top)}` : '—'}</dd></div>
+      <div><dt>BSL above</dt><dd className={styles.bull}>{bsl ? `${price(bsl.price)} ${poolLabel(bsl).replace(/^BSL ?·? ?/, '')}` : '—'}</dd></div>
+      <div><dt>Distance</dt><dd>{bsl ? distance(bsl.price) : '—'}</dd></div>
+      <div><dt>SSL below</dt><dd className={styles.bear}>{ssl ? `${price(ssl.price)} ${poolLabel(ssl).replace(/^SSL ?·? ?/, '')}` : '—'}</dd></div>
+      <div><dt>Distance</dt><dd>{ssl ? distance(ssl.price) : '—'}</dd></div>
+    </dl>
+    {sweep && <p className={styles.muted}>Last run: <b className={sweep.side === 'BSL' ? styles.bear : styles.bull}>{sweep.side} {sweep.state.toLowerCase()}</b> at {price(sweep.price)}
+      {sweep.state === 'SWEPT' ? (sweep.side === 'BSL' ? ' — stop hunt above, sellers may take control' : ' — stop hunt below, buyers may take control') : ''}</p>}
+    <p className={styles.tiny}>OB score = displacement + volume expansion + FVG + CHoCH, minus retests. Price-action analytics only — no orders.</p>
+  </section>;
 });
 
 const FreshnessBadge = memo(function FreshnessBadge({ lastTick, historyUpdated, live }: { lastTick: number | null; historyUpdated: number | null; live: boolean }) {

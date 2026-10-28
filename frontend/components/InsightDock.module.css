@@ -1,0 +1,40 @@
+.stack { display: grid; gap: 6px; min-width: 0; }
+.lead { min-width: 0; }
+.dock { min-width: 0; }
+.summary {
+  display: flex; align-items: baseline; gap: 10px; width: fit-content; padding: 2px 4px 6px; cursor: pointer;
+  color: #a6c7d7; font-size: 11px; font-weight: 800; letter-spacing: .05em; text-transform: uppercase; list-style: none;
+}
+.summary::-webkit-details-marker { display: none; }
+.summary::before { content: '▸'; transition: transform .15s ease; }
+.dock[open] > .summary::before { transform: rotate(90deg); }
+.summary small { color: #6f8496; font-size: 10.5px; font-weight: 600; letter-spacing: 0; text-transform: none; }
+.dock:not([open]) .summary small { display: none; }
+
+/* Single row: cards share the width while each can stay >= 300px, then the row scrolls sideways. */
+.track {
+  display: grid; grid-auto-flow: column; gap: 8px; align-items: start;
+  grid-auto-columns: max(300px, calc((100% - (var(--cards) - 1) * 8px) / var(--cards)));
+  overflow-x: auto; overscroll-behavior-x: contain; scroll-snap-type: x proximity; scroll-padding: 0 2px;
+  padding-bottom: 4px; scrollbar-width: thin; scrollbar-color: #1d4357 transparent;
+}
+.track::-webkit-scrollbar { height: 6px; }
+.track::-webkit-scrollbar-thumb { background: #1d4357; border-radius: 3px; }
+.slot {
+  display: grid; min-width: 0; max-height: 240px; overflow-y: auto; scroll-snap-align: start; border-radius: 8px;
+  scrollbar-width: thin; scrollbar-color: #1d4357 transparent;
+}
+.slot::-webkit-scrollbar { width: 5px; }
+.slot::-webkit-scrollbar-thumb { background: #1d4357; border-radius: 3px; }
+
+/* iPad: two cards per view. */
+@media (max-width: 1024px) {
+  .track { grid-auto-columns: calc((100% - 8px) / 2); }
+}
+/* Phones: one card per swipe with the next one peeking. */
+@media (max-width: 640px) {
+  .track { grid-auto-columns: 88%; scroll-snap-type: x mandatory; }
+  .slot { max-height: 220px; }
+  .summary small { display: none; }
+}
+.track[data-single] { grid-auto-columns: 100%; }

@@ -26,6 +26,7 @@ import { IndexTabList } from './IndexTabs';
 import DeltaStrengthBox from './DeltaStrength';
 import ProSignalPanel from './ProSignal';
 import LevelBattlePanel from './LevelBattle';
+import InsightDock from './InsightDock';
 import { useLevelBattle } from '@/hooks/useLevelBattle';
 import { LevelBattlePrimitive } from '@/lib/level-battle-primitive';
 import styles from './ChartWorkspace.module.css';
@@ -182,7 +183,8 @@ export default function FuturesChart({ active = true }: { active?: boolean } = {
     return merged;
   }, [historyCandles, flow.snapshot, symbol, contract?.token, timeframe, flow.live, key, history?.updated]);
   const liveCandles = isFreshFuturesFlow(flow.snapshot, symbol, contract?.token, timeframe, flow.live, Date.now()) &&
-    flow.snapshot.bars.some(bar => bar.ohlcvComplete &&
+    flow.snapshot.bars.some(bar => (bar.ohlcvComplete || bar.complete ||
+      historyCandles.some(candle => candleTime(candle) === bar.t)) &&
       bar.t <= flow.snapshot!.lastTick! && bar.end > flow.snapshot!.lastTick!);
   const calculation = useMemo(() => engine.current.calculate(candles, SETTINGS, typeof timeframe === 'number'),
     [candles, timeframe]);
@@ -442,8 +444,9 @@ export default function FuturesChart({ active = true }: { active?: boolean } = {
     <div className="flex flex-wrap items-center gap-2">
       <DeltaStrengthBox symbol={symbol} active={active} decision={pro.decision} />
     </div>
-    <ProSignalPanel pro={pro} />
-    <LevelBattlePanel state={battle} />
+    <InsightDock lead={<ProSignalPanel pro={pro} />}>
+      <LevelBattlePanel state={battle} />
+    </InsightDock>
     <details className={styles.compactDetails}>
     <summary>Contract & chart settings · {timeframeLabel(timeframe)} · {contract?.tradingSymbol ?? symbol}</summary>
     <div className={styles.futuresControls}>

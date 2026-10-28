@@ -16,7 +16,7 @@ import type { FIIDIISnapshot } from '@/hooks/useFIIDIIFlow';
 import {
   CASH_INDICATORS as INDICATORS, cashIndicatorSettings, TEMPLATES, candleTime, workspaceCandles,
   restoreIndicatorSettings, institutionalContext, isCashSession, mergeChartHistory, sessionDate, stableLiveSession, updatePeriodCandle, timeframeLabel,
-  type ChartSymbol, type Timeframe, type IndicatorSettings,
+  applyLiveTick, type ChartSymbol, type Timeframe, type IndicatorSettings, type LiveTickExtremes,
 } from '@/lib/chart-workspace';
 import {
   createIndicatorEngine, createPivotEngine, autoPivotAnchor, segmentedLine, indicatorLineTitle,
@@ -38,6 +38,7 @@ import { useOrderFlow } from '@/hooks/useOrderFlow';
 import { useProConfluence } from '@/hooks/useProConfluence';
 import ProSignalPanel from './ProSignal';
 import LevelBattlePanel from './LevelBattle';
+import InsightDock from './InsightDock';
 import { useLevelBattle } from '@/hooks/useLevelBattle';
 import { LevelBattlePrimitive } from '@/lib/level-battle-primitive';
 import OrderFlowReadout from './OrderFlowReadout';
@@ -48,6 +49,7 @@ import { chartPaperLevels, paperEventCandle, selectChartPaperTrade } from '@/lib
 const SYMBOLS = [{ id: 'NIFTY', name: 'NIFTY 50', exchange: 'NSE' }, { id: 'BANKNIFTY', name: 'BANKNIFTY', exchange: 'NSE' }, { id: 'SENSEX', name: 'SENSEX', exchange: 'BSE' }] as const;
 const FuturesChart = dynamic(() => import('./FuturesChart'), { ssr: false, loading: () => <p className="p-3">Loading futures chart...</p> });
 const FuturesTerminal = dynamic(() => import('./FuturesTerminal'), { ssr: false, loading: () => <p className="p-3">Loading futures advanced chart...</p> });
+const MultiTimeframeChart = dynamic(() => import('./MultiTimeframeChart'), { ssr: false, loading: () => <p className="p-3">Loading multi-timeframe charts...</p> });
 const STORAGE_KEY = 'chartWorkspaceTemplate_v1';
 const UP = '#00bba5';
 const DOWN = '#ee4053';
@@ -75,9 +77,10 @@ interface ChartRuntime {
 function ChartWorkspace({ marketData, institutionalData = null }: { marketData: MarketData; institutionalData?: FIIDIISnapshot | null }) {
   const { chartData, isConnected } = useChartIntelligence();
   const [symbol, setSymbol] = useState<ChartSymbol>('NIFTY');
-  const [workspaceTab, setWorkspaceTab] = useState<'chart' | 'futures' | 'terminal' | 'paper'>('chart');
+  const [workspaceTab, setWorkspaceTab] = useState<'chart' | 'futures' | 'terminal' | 'mtf' | 'paper'>('chart');
   const [futuresOpened, setFuturesOpened] = useState(false);
   const [terminalOpened, setTerminalOpened] = useState(false);
+  const [mtfOpened, setMtfOpened] = useState(false);
   useEffect(() => {
     const timer = setTimeout(() => {
       void import('./FuturesChart').then(module => module.warmFuturesChart())
@@ -152,13 +155,28 @@ function ChartWorkspace({ marketData, institutionalData = null }: { marketData: 
   const freshStream = isConnected && data?.dataSource === 'LIVE' && streamAge >= 0 && streamAge < 30000;
   const liveFiveMinute = useMemo(() => workspaceCandles(data, 5), [data]);
   const liveSession = stableLiveSession(liveFiveMinute, now);
-  const candles = useMemo(() => mergeChartHistory(
+  const snapshotCandles = useMemo(() => mergeChartHistory(
     typeof timeframe !== 'number' && !browsingDate && liveSession
       ? updatePeriodCandle(history.candles, liveFiveMinute.filter(candle => sessionDate(candleTime(candle)) === liveSession), timeframe)
       : history.candles,
     browsingDate ? [] : liveCandles, liveSession,
   ), [history.candles, liveCandles, liveSession, browsingDate, timeframe, liveFiveMinute]);
   const historyKey = `${symbol}:${timeframe}:${history.jumpRevision}:${browsingDate}`;
+  // Exchange ticks arrive faster than the analytics snapshot; they drive the forming candle directly.
+  const tick = marketData[symbol];
+  const tickPrice = tick?.status === 'LIVE' ? tick.price : undefined;
+  const tickTime = tick?.timestamp ? Date.parse(tick.timestamp) / 1000 : NaN;
+  const tickExtremes = useRef<{ key: string; value: LiveTickExtremes | null }>({ key: '', value: null });
+  const candles = useMemo(() => {
+    const nowMs = Date.now();
+    if (browsingDate || tickPrice === undefined || !isCashSession(nowMs) || !(Math.abs(nowMs / 1000 - tickTime) < 60)) {
+      return snapshotCandles;
+    }
+    const tracked = tickExtremes.current.key === historyKey ? tickExtremes.current.value : null;
+    const result = applyLiveTick(snapshotCandles, { price: tickPrice, time: tickTime }, timeframe, tracked);
+    tickExtremes.current = { key: historyKey, value: result.extremes };
+    return result.candles;
+  }, [snapshotCandles, browsingDate, tickPrice, tickTime, timeframe, historyKey]);
   // Near-month futures flow, basis-shifted onto the cash index; only for the live session.
   const flow = useOrderFlow(symbol, timeframe, null, workspaceTab === 'chart' && !browsingDate);
   const pro = useProConfluence(symbol, workspaceTab === 'chart');
@@ -196,8 +214,8 @@ function ChartWorkspace({ marketData, institutionalData = null }: { marketData: 
   const sessionOpen = isCashSession(now);
   const live = !browsingDate && freshStream && sessionOpen;
   const levelAnalysis = useMemo(() => levelEngine.current.analyze(candles, history.dailyCandles, timeframe, {
-    live, nowMs: now, latestPrice: data?.spot, minVolumeRatio: 1.2,
-  }), [candles, history.dailyCandles, timeframe, live, now, data?.spot]);
+    live, nowMs: now, latestPrice: tickPrice ?? data?.spot, minVolumeRatio: 1.2,
+  }), [candles, history.dailyCandles, timeframe, live, now, tickPrice, data?.spot]);
   const rejection = useMemo(() => !history.loading
     ? rejectionEngine.current.analyze(candles, history.dailyCandles, timeframe, { live, nowMs: now, early: true }) : null,
   [history.loading, candles, history.dailyCandles, timeframe, live, now]);
@@ -683,6 +701,12 @@ function ChartWorkspace({ marketData, institutionalData = null }: { marketData: 
             setTerminalOpened(true);
             setWorkspaceTab('terminal');
           }}>Futures Advanced Chart</button>
+        <button id="observatory-mtf-tab" role="tab" aria-selected={workspaceTab === 'mtf'} aria-controls="observatory-mtf-content"
+          onPointerEnter={() => { void import('./MultiTimeframeChart'); }} onFocus={() => { void import('./MultiTimeframeChart'); }}
+          className={styles.viewTab} onClick={() => {
+            setMtfOpened(true);
+            setWorkspaceTab('mtf');
+          }}>Multi-Timeframe</button>
         <button id="observatory-paper-tab" role="tab" aria-selected={workspaceTab === 'paper'} aria-controls="observatory-paper-content"
           className={styles.viewTab} onClick={() => setWorkspaceTab('paper')}>Automated Paper Trading</button>
       </div>
@@ -691,6 +715,9 @@ function ChartWorkspace({ marketData, institutionalData = null }: { marketData: 
       </div>
       <div id="observatory-terminal-content" role="tabpanel" aria-labelledby="observatory-terminal-tab" hidden={workspaceTab !== 'terminal'}>
         {terminalOpened && <FuturesTerminal active={workspaceTab === 'terminal'} />}
+      </div>
+      <div id="observatory-mtf-content" role="tabpanel" aria-labelledby="observatory-mtf-tab" hidden={workspaceTab !== 'mtf'}>
+        {mtfOpened && <MultiTimeframeChart active={workspaceTab === 'mtf'} marketData={marketData} chartData={chartData} />}
       </div>
       {paperRecorderError && <p role="alert" className="p-3 text-red-400">{paperRecorderError}</p>}
       <div id="observatory-paper-content" role="tabpanel" aria-labelledby="observatory-paper-tab" hidden={workspaceTab !== 'paper'}>
@@ -720,7 +747,7 @@ function ChartWorkspace({ marketData, institutionalData = null }: { marketData: 
         <div className={styles.symbols} role="tablist" aria-label="Chart index">
           {SYMBOLS.map(item => {
             const tick = marketData[item.id];
-            const quote = chartData[item.id]?.spot ?? tick?.price;
+            const quote = tick?.status === 'LIVE' ? tick.price : chartData[item.id]?.spot ?? tick?.price;
             return <button key={item.id} id={`chart-tab-${item.id}`} role="tab" aria-selected={symbol === item.id} aria-controls="index-chart-panel" className={styles.symbol} onClick={() => changeSymbol(item.id)}
               onKeyDown={event => {
                 if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
@@ -748,8 +775,9 @@ function ChartWorkspace({ marketData, institutionalData = null }: { marketData: 
           <button className={styles.button} onClick={toggleFullscreen} aria-label={fullscreen ? 'Exit chart fullscreen' : 'Chart fullscreen'}>{fullscreen ? <Minimize size={15} /> : <Maximize size={15} />}</button>
         </div>
       </div>
-      <ProSignalPanel pro={pro} />
-      <LevelBattlePanel state={battle} />
+      <InsightDock lead={<ProSignalPanel pro={pro} />}>
+        <LevelBattlePanel state={battle} />
+      </InsightDock>
       <details className={styles.compactDetails}>
       <summary>History & session navigation {browsingDate && '· Historical view'}{history.error && ' · History error'}</summary>
       <div className={styles.historyBar} aria-label="Chart history navigation">
@@ -911,7 +939,7 @@ function ChartWorkspace({ marketData, institutionalData = null }: { marketData: 
               <button className={styles.button} onClick={() => { setRange('1D'); applyRange('1D'); setAutoScale(true); }}>Reset chart view</button>
               <p>Times are displayed in IST. Historical candles use native Zerodha intervals, loaded in 14-day pages and cached on the server. Scroll left or jump to a date for the maximum history available from Zerodha; availability varies by instrument and interval. No missing candles are invented.</p>
               <p>1D uses Zerodha daily OHLCV. 1W groups daily candles from Monday; 1M groups calendar months. Higher-timeframe history loads one year of daily records per page. The current period is forming, not a confirmed closed candle. Intraday signals and daily CPR are disabled; Auto pivots use monthly/yearly anchors.</p>
-              <p>Cash-index prices are never mixed with futures volume. Index volume is unavailable when Zerodha provides no traded volume. Live updates retain the existing stream cadence; zero latency or exact tick-for-tick parity with broker charts cannot be guaranteed.</p>
+              <p>Cash-index prices are never mixed with futures volume. Index volume is unavailable when Zerodha provides no traded volume. Live candles move with every exchange tick from the market stream; analytics overlays follow the slower intelligence stream. Zero latency or exact tick-for-tick parity with broker charts cannot be guaranteed.</p>
               <p>EMA and RSI need sufficient candle history. Daily pivots and CPR require previous-session OHLC.</p>
             </div>}
           </div>

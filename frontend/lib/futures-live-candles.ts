@@ -13,7 +13,7 @@ export function isFreshFuturesFlow(
     nowMs / 1000 - snapshot.lastTick <= 10);
 }
 
-/** Patch only fully observed same-contract session bars; never invent missing opens or volume. */
+/** Partial recordings can move an official forming candle's price, but cannot create OHLCV history. */
 export function mergeFuturesLiveCandles(
   history: Candle[], snapshot: OrderFlowSnapshot | null, symbol: string, token: number | undefined,
   interval: unknown, connected: boolean, nowMs: number, historyUpdated = 0,
@@ -26,7 +26,8 @@ export function mergeFuturesLiveCandles(
   const seconds = Number(interval) * 60;
   const latest = history.length ? candleTime(history[history.length - 1]) : 0;
   const eligible = snapshot.bars.filter(bar =>
-    (bar.ohlcvComplete || bar.complete) && bar.t >= latest && bar.t <= lastTick &&
+    (bar.ohlcvComplete || bar.complete || (bar.t === latest && lastTick < bar.end)) &&
+    bar.t >= latest && bar.t <= lastTick &&
     bar.t >= sessionOpen && bar.t < sessionClose && (bar.t - sessionOpen) % seconds === 0 &&
     bar.end === Math.min(bar.t + seconds, sessionClose) &&
     [bar.o, bar.h, bar.l, bar.c, bar.v].every(Number.isFinite) &&
@@ -44,7 +45,9 @@ export function mergeFuturesLiveCandles(
     const next: Candle = {
       t: prior?.t ?? new Date(bar.t * 1000).toISOString(),
       o: prior?.o ?? bar.o, h: Math.max(prior?.h ?? bar.h, bar.h),
-      l: Math.min(prior?.l ?? bar.l, bar.l), c: bar.c, v: Math.max(prior?.v ?? 0, bar.v),
+      l: Math.min(prior?.l ?? bar.l, bar.l), c: bar.c,
+      v: bar.ohlcvComplete || bar.complete ? Math.max(prior?.v ?? 0, bar.v) : prior?.v ?? 0,
+      ...(prior?.oi !== undefined ? { oi: prior.oi } : {}),
     };
     if (prior && prior.o === next.o && prior.h === next.h && prior.l === next.l &&
         prior.c === next.c && prior.v === next.v) continue;
