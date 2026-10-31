@@ -61,7 +61,7 @@ function elements(tree, visibleOnly = false) {
 }
 const find = (tree, id) => elements(tree).find(node => node.props?.id === id);
 
-test('chart workspace is first in dashboard DOM and visual order without duplicating its data providers', () => {
+test('AQTE precedes charts and live indices without duplicating dashboard providers', () => {
   const page = readFileSync(path.join(components, '..', 'app', 'page.tsx'), 'utf8');
   const source = ts.createSourceFile('page.tsx', page, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
   let dashboard;
@@ -78,7 +78,8 @@ test('chart workspace is first in dashboard DOM and visual order without duplica
   visit(source);
   assert.ok(dashboard, 'Dashboard flex container must exist');
   const children = dashboard.children.filter(child => ts.isJsxElement(child) || ts.isJsxSelfClosingElement(child));
-  assert.match(children[0].getText(source), /<ChartWorkspace marketData=\{marketData\} institutionalData=\{institutionalData\}/);
+  assert.match(children[0].getText(source), /<AQTESection marketData=\{marketData\} isConnected=\{isConnected\}\s*\/>/);
+  assert.match(children[1].getText(source), /<ChartWorkspace marketData=\{marketData\} institutionalData=\{institutionalData\}/);
   const orderOf = node => {
     const opening = ts.isJsxElement(node) ? node.openingElement : node;
     const style = opening.attributes.properties.find(attribute =>
@@ -87,8 +88,10 @@ test('chart workspace is first in dashboard DOM and visual order without duplica
     return match ? Number(match[1]) : 0;
   };
   assert.ok(children.slice(1).every(child => orderOf(child) > orderOf(children[0])));
-  assert.match(children[1].getText(source), /<LiveMarketIndexTabs\b/);
+  assert.match(children[2].getText(source), /<LiveMarketIndexTabs\b/);
   assert.ok(children.slice(2).every(child => orderOf(child) > orderOf(children[1])));
+  assert.ok(children.slice(3).every(child => orderOf(child) > orderOf(children[2])));
+  assert.equal((page.match(/<AQTESection\b/g) ?? []).length, 1);
   assert.equal((page.match(/<LiveMarketIndexTabs\b/g) ?? []).length, 1);
   assert.equal((page.match(/<ChartWorkspace\b/g) ?? []).length, 1);
   assert.equal((page.match(/<InstitutionalWorkspace\b/g) ?? []).length, 1);

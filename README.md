@@ -2,6 +2,18 @@
 
 Real-time trading dashboard for NIFTY, BANKNIFTY, and SENSEX with Zerodha Kite API integration.
 
+**AQTE - Adaptive Quantitative Trading Engine** adds compact NIFTY / BANK NIFTY /
+SENSEX section above the charts. Its backend-only, explainable rule baseline uses an isolated
+paper book, fresh option quotes, conservative limit entries, risk checks and a durable journal.
+Paper mode never places real orders. The opt-in Real Trade controller supports explicitly armed,
+one-lot broker orders with static-IP preflight, fill reconciliation and protective stops;
+live enablement and paper-acceptance flags default to false. Its header automation switch defaults
+OFF; ON authorizes automatic qualifying entries after daily arming, without per-order approval.
+OFF blocks new entries while existing broker protection, trailing stops and exits continue.
+It does not claim validated ML predictions.
+See [AQTE architecture,
+APIs, storage, validation and staged rollout](docs/AQTE.md).
+
 **Strategy Workspace** groups MarketEdge Intelligence, Trend Base (Higher-Low Structure),
 Expiry Explosion Zone, and CRT-Based BTST Strategies into four section tabs. The selector uses
 two columns on phones/iPads and four on desktop, consistent sans-serif typography, readable
@@ -66,9 +78,9 @@ half the plot empty. Sparse new sessions are centred too. Hidden charts defer th
 centring only while the view is still centred; manual panning and live ticks do not continually
 reset the view. Explicit Advanced Chart history/range controls keep their selected range.
 
-The Advanced Chart / Futures Chart / Automated Paper Trading workspace is the first dashboard
-section, below the shared header and system/connection status banners. **Live Market Indices**
-is the second section, immediately below the chart workspace. Its institutional snapshot
+AQTE is the first dashboard section below the shared header and system/connection banners.
+The Advanced Chart / Futures Chart / Automated Paper Trading workspace follows it.
+**Live Market Indices** remains immediately below the chart workspace. Its institutional snapshot
 continues to come from the institutional-flow workspace, regardless of visual section order.
 
 The Advanced Chart, Futures Chart, Futures Advanced Chart, and Automated Paper Trading view

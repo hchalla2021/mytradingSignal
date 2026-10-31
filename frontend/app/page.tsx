@@ -17,6 +17,7 @@ import { getOrCreateVisitorId } from '@/lib/visitor-id';
 
 // Dynamic imports for components that use live data - prevents SSR issues
 const TopAISignalBar = dynamic(() => import('@/components/TopAISignalBar'), { ssr: false });
+const AQTESection = dynamic(() => import('@/components/AQTESection'), { ssr: false });
 const SMCStructureSection = dynamic(() => import('@/components/SMCStructureSection'), {
   ssr: false,
   loading: () => (
@@ -469,6 +470,9 @@ export default function Home() {
       {/* Main Dashboard - Full Width */}
       <div className="w-full px-3 sm:px-5 lg:px-8 xl:px-10 py-3 lg:py-5">
         <div className="mx-auto flex w-full max-w-[1820px] flex-col">
+        <div style={{ order: -12 }} className="min-w-0">
+          <AQTESection marketData={marketData} isConnected={isConnected} />
+        </div>
         <div style={{ order: -11 }} className="min-w-0">
           <ChartWorkspace marketData={marketData} institutionalData={institutionalData} />
         </div>

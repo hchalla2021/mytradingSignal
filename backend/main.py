@@ -40,6 +40,7 @@ if _os.getenv("FORCE_OUTBOUND_IPV4", "true").strip().lower() in ("1", "true", "y
 
 import asyncio
 import logging
+import sqlite3
 from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import urlparse
@@ -87,6 +88,7 @@ from routers.order_flow import http_router as order_flow_http, ws_router as orde
 from routers.global_news import http_router as global_news_http, ws_router as global_news_ws
 from routers.observatory import http_router as observatory_http
 from routers.paper_trading import router as paper_trading_http
+from routers.aqte import router as aqte_http
 from routers import smart_money
 from routers.trend_base import router as trend_base_http, ws_router as trend_base_ws
 from routers.volume_pulse import router as volume_pulse_http, ws_router as volume_pulse_ws
@@ -160,6 +162,17 @@ async def lifespan(app: FastAPI):
     diagnostics_module.set_market_feed_instance(market_feed)
     from services.paper_trading import get_paper_trading_service
     await get_paper_trading_service().start()
+    from services.aqte_service import get_aqte_service
+    try:
+        await get_aqte_service().start()
+    except (OSError, ValueError, TypeError, KeyError, sqlite3.Error):
+        logger.exception("AQTE unavailable; existing dashboard services will continue")
+    from services.aqte_live import get_live_service
+    try:
+        await get_live_service().start()
+    except (OSError, ValueError, TypeError, KeyError, sqlite3.Error):
+        logger.exception("AQTE live controller unavailable; real trading remains blocked")
+        get_live_service().release_owner()
 
     # Token watcher (file system monitor — instant)
     token_observer = start_token_watcher(market_feed, unified_auth)
@@ -510,9 +523,11 @@ async def lifespan(app: FastAPI):
     
     if scheduler:
         await scheduler.stop()
+    await get_live_service().stop()
     if market_feed:
         await market_feed.stop()
     await get_paper_trading_service().stop()
+    await get_aqte_service().stop()
     if feed_task:
         feed_task.cancel()
 
@@ -726,6 +741,7 @@ app.include_router(algo_http, tags=["Smart AI Algo"])
 app.include_router(algo_ws, tags=["Smart AI Algo"])# �🔭 Market Intelligence Observatory
 app.include_router(observatory_http, tags=["Observatory"])
 app.include_router(paper_trading_http, tags=["Paper Trading"])
+app.include_router(aqte_http)
 
 
 @app.get("/")

@@ -100,6 +100,15 @@ class Settings(BaseSettings):
     algo_live_symbol_nifty: str = Field(default="", env="ALGO_LIVE_SYMBOL_NIFTY")
     algo_live_symbol_banknifty: str = Field(default="", env="ALGO_LIVE_SYMBOL_BANKNIFTY")
     algo_live_symbol_sensex: str = Field(default="", env="ALGO_LIVE_SYMBOL_SENSEX")
+
+    # AQTE live requires daily arming and its default-OFF automation switch.
+    aqte_live_enabled: bool = False
+    aqte_live_paper_validated: bool = False
+    aqte_live_static_ip: str = "122.177.245.101"
+    aqte_live_risk_per_trade: float = Field(default=500, gt=0, le=500)
+    aqte_live_daily_loss: float = Field(default=2000, gt=0, le=2000)
+    aqte_live_max_trades: int = Field(default=5, ge=1, le=5)
+    aqte_live_max_losses: int = Field(default=3, ge=1, le=3)
     
     # ==================== NEWS API (DISABLED) ====================
     # news_api_key: Optional[str] = None

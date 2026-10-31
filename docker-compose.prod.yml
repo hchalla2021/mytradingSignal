@@ -46,6 +46,7 @@ services:
       - ./backend/logs:/app/logs
       - paper-trading-data:/app/data/paper_trading
       - order-flow-data:/app/data/order_flow
+      - aqte-data:/app/data/aqte
     depends_on:
       redis:
         condition: service_healthy
@@ -91,3 +92,4 @@ volumes:
   redis-data:
   paper-trading-data:
   order-flow-data:
+  aqte-data:

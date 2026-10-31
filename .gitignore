@@ -68,6 +68,7 @@ dump.rdb
 *.rdb
 backend/data/chart_history.sqlite3*
 backend/data/paper_trading/
+backend/data/aqte/
 
 # Testing
 .pytest_cache/

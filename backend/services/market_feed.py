@@ -487,11 +487,19 @@ class MarketFeedService:
                 # 🐘 Futures ticks: live volume/OI feed for radar — not broadcast
                 fut_symbol = FUT_TOKEN_MAP.get(tick.get("instrument_token"))
                 if fut_symbol:
+                    from services.aqte_service import get_aqte_service
+                    get_aqte_service().enqueue(fut_symbol, "future", tick)
                     self._handle_futures_tick(fut_symbol, tick)
+                    continue
+                from services.aqte_service import get_aqte_service
+                if get_aqte_service().option_tick(tick):
+                    continue
+                if tick.get("instrument_token") not in TOKEN_SYMBOL_MAP:
                     continue
 
                 data = self._normalize_tick(tick)
                 symbol = data["symbol"]
+                get_aqte_service().enqueue(symbol, "spot", tick)
                 from services.order_flow_engine import order_flow_engine
                 order_flow_engine.ingest_spot(symbol, float(data.get("price") or 0))
                 from services.paper_trading import get_paper_trading_service
@@ -1018,6 +1026,8 @@ class MarketFeedService:
         print(f"📊 Subscribing to tokens: {tokens}")
         ws.subscribe(tokens)
         ws.set_mode(ws.MODE_FULL, tokens)
+        from services.aqte_service import get_aqte_service
+        get_aqte_service().attach(kite, ws, PREV_CLOSE, PREV_DAY_OHLC)
         print(f"📊 Subscribed to: {list(TOKEN_SYMBOL_MAP.values()) + [f'{s} FUT' for s in FUT_TOKEN_MAP.values()]}")
         print("✅ Market feed is now LIVE - Waiting for ticks...")
     
