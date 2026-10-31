@@ -287,7 +287,7 @@ class ServiceTests(unittest.TestCase):
             self.service.persist(db, [tick("option")])
         self.service.engine.events.clear()
         self.service.kill()
-        restored = AQTEService(self.path)
+        restored = AQTEService(self.path, paper_enabled=True)
         restored.initialize()
         self.assertTrue(restored.engine.killed)
         self.assertEqual(restored.engine.orders, self.service.engine.orders)
@@ -325,6 +325,7 @@ class ServiceTests(unittest.TestCase):
         self.assertTrue(all(s["decision"] == "WAIT" for s in self.service.snapshot()["data"].values()))
 
     def test_authenticated_kill_and_bounded_journal(self):
+        self.service.engine.paper_enabled = True
         from routers.aqte import router
         from services.auth import auth_service
         app = FastAPI()
@@ -342,6 +343,46 @@ class ServiceTests(unittest.TestCase):
             result = client.get("/api/aqte/snapshot")
             self.assertEqual(result.json()["mode"], "PAPER_ONLY")
             self.assertEqual(result.headers["cache-control"], "no-store")
+
+    def test_production_analysis_disables_paper_and_preserves_saved_state(self):
+        paper = ready_engine()
+        paper.killed = True
+        self.service.engine = paper
+        with self.service.connect() as db:
+            self.service.persist(db)
+            saved = db.execute("SELECT payload FROM aqte_state WHERE id=1").fetchone()["payload"]
+        analysis = AQTEService(self.path)
+        analysis.initialize()
+        self.assertFalse(analysis.engine.paper_enabled)
+        self.assertFalse(analysis.engine.killed, "Archived paper stops must not block live analysis")
+        self.assertEqual(analysis.engine.orders, {})
+        self.assertEqual(analysis.engine.trades, [])
+        analysis.engine = ready_engine()
+        analysis.engine.paper_enabled = False
+        analysis.engine.orders.clear()
+        analysis.engine.events.clear()
+        analysis.engine.ingest(tick(at=NOW + 1, volume=203_000))
+        analysis.engine.manage(NOW + 2, tick("option", at=NOW + 2, ask=99, bid=98))
+        self.assertEqual(analysis.engine.signals["NIFTY"]["decision"], "BUY CE")
+        self.assertEqual(analysis.engine.orders, {})
+        self.assertFalse(any(event["kind"] in ("LIMIT_CREATED", "FILLED", "CLOSED")
+                             for event in analysis.engine.events))
+        with analysis.connect() as db:
+            analysis.persist(db)
+            self.assertEqual(db.execute("SELECT payload FROM aqte_state WHERE id=1").fetchone()["payload"], saved)
+        self.assertEqual(analysis.snapshot()["mode"], "ANALYSIS_ONLY")
+
+    def test_disabled_paper_kill_cannot_stop_real_analysis(self):
+        from routers.aqte import router
+        from services.auth import auth_service
+        app = FastAPI()
+        app.include_router(router)
+        client = TestClient(app)
+        access = auth_service.create_access_token({"sub": "operator"})
+        with patch("routers.aqte.get_aqte_service", return_value=self.service):
+            response = client.post("/api/aqte/kill", headers={"Authorization": f"Bearer {access}"})
+        self.assertEqual(response.status_code, 410)
+        self.assertFalse(self.service.engine.killed)
 
 
 class ReplayTests(unittest.TestCase):

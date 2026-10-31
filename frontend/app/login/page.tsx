@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { useSearchParams, useRouter } from "next/navigation";
+import { API_CONFIG } from "@/lib/api-config";
 
 export default function LoginPage() {
   const [loading, setLoading] = useState(false);
@@ -35,19 +36,15 @@ export default function LoginPage() {
     
     setLoading(true);
     setMessage("Logging in...");
+    setError("");
     
-    const apiUrl = process.env.NEXT_PUBLIC_API_URL;
-    if (!apiUrl) {
-      setMessage("❌ API URL not configured in .env.local");
-      setLoading(false);
-      return;
-    }
+    const loginUrl = API_CONFIG.endpoint('/api/auth/login');
 
     // One-click path: backend performs the Zerodha handshake itself
     try {
-      const res = await fetch(`${apiUrl}/api/auth/auto-login`, { method: 'POST' });
+      const res = await fetch(API_CONFIG.endpoint('/api/auth/auto-login'), { method: 'POST' });
       const json = await res.json();
-      if (json?.success) {
+      if (res.ok && json?.success) {
         setMessage(`✅ Logged in as ${json.user_id || 'trader'} — reconnecting feed...`);
         setTimeout(() => router.push('/'), 4000);
         return;
@@ -55,7 +52,10 @@ export default function LoginPage() {
       if (json?.configured) {
         setError(`One-click login failed: ${json?.message ?? 'unknown error'}. Opening Zerodha login...`);
       }
-    } catch { /* backend unreachable — fall through */ }
+    } catch (cause) {
+      console.error('One-click Zerodha login unavailable; opening broker login', cause);
+      setError('One-click login unavailable. Opening Zerodha login instead.');
+    }
 
     setMessage("Opening Zerodha login...");
     
@@ -65,11 +65,11 @@ export default function LoginPage() {
     
     if (isMobile) {
       // Mobile: Direct navigation
-      window.location.href = `${apiUrl}/api/auth/login`;
+      window.location.href = loginUrl;
     } else {
       // Desktop: Open in popup with larger size for 2FA
       const popup = window.open(
-        `${apiUrl}/api/auth/login`,
+        loginUrl,
         'ZerodhaLogin',
         'width=800,height=800,scrollbars=yes,resizable=yes,top=100,left=200'
       );
@@ -78,7 +78,7 @@ export default function LoginPage() {
         // Popup blocked, fallback to direct navigation
         setMessage("Popup blocked! Redirecting in same window...");
         setTimeout(() => {
-          window.location.href = `${apiUrl}/api/auth/login`;
+          window.location.href = loginUrl;
         }, 1500);
         return;
       }

@@ -208,8 +208,9 @@ def round_tick(price, tick_size, up=False):
 
 
 class AQTEEngine:
-    def __init__(self, policy=None):
+    def __init__(self, policy=None, *, paper_enabled=True):
         self.policy = policy or Policy()
+        self.paper_enabled = paper_enabled
         self.book = CandleBook()
         self.contracts: dict[int, Contract] = {}
         self.spot: dict[str, Tick] = {}
@@ -392,6 +393,8 @@ class AQTEEngine:
                                "Limit at or below midpoint; never chase the ask",
                                "Rule score is not a calibrated probability; paper only"])
         key = (name, side, info["at"], contract.token)
+        if not self.paper_enabled:
+            return
         last = self.last_setup.get(symbol)
         if symbol in self.orders or (last and (last["key"] == key or now - last["at"] < self.policy.cooldown)):
             return
@@ -408,6 +411,8 @@ class AQTEEngine:
         self.event("LIMIT_CREATED", now, order=dict(order))
 
     def manage(self, now, tick=None):
+        if not self.paper_enabled:
+            return
         for symbol, order in list(self.orders.items()):
             if order["entry_at"] is None:
                 reason = self.risk_reason(now)
@@ -489,7 +494,8 @@ class AQTEEngine:
             } if order else None
             signal["spot"] = self.spot[symbol].price if symbol in self.spot else None
             data[symbol] = signal
-        return dict(mode="PAPER_ONLY", live_enabled=False, model_status="UNVALIDATED_RULE_BASELINE",
+        return dict(mode="PAPER_ONLY" if self.paper_enabled else "ANALYSIS_ONLY",
+                    live_enabled=False, model_status="UNVALIDATED_RULE_BASELINE",
                     generated_at=now, data=data, risk={**asdict(self.policy), **self.daily(now),
                     "killed": self.killed, "blocked_reason": risk,
                     "marked_equity_pnl": self.mark_to_market(now)}, fault=self.fault)

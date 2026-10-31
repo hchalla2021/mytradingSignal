@@ -4,7 +4,6 @@ import { memo, useEffect, useState } from 'react';
 import { API_CONFIG } from '@/lib/api-config';
 import AQTELivePanel, { type LiveState } from '@/components/AQTELivePanel';
 import AQTEAutomationSwitch, { type AutomationState } from '@/components/AQTEAutomationSwitch';
-import AQTEPosition from '@/components/AQTEPosition';
 import type { MarketData } from '@/hooks/useMarketSocket';
 import AQTEDailyControl from '@/components/AQTEDailyControl';
 import AQTETerminal from '@/components/AQTETerminal';
@@ -17,11 +16,9 @@ const INDEX_STYLES = {
   BANKNIFTY: { border: 'border-indigo-400/30', bar: 'bg-indigo-400', text: 'text-indigo-300' },
   SENSEX: { border: 'border-violet-400/30', bar: 'bg-violet-400', text: 'text-violet-300' },
 };
-const MODES = ['paper', 'real'] as const;
-const MODE_LABELS = { paper: 'Paper Trade', real: 'Real Trade' };
 type SymbolName = typeof SYMBOLS[number];
 type Snapshot = {
-  mode: 'PAPER_ONLY';
+  mode: 'ANALYSIS_ONLY';
   generated_at: number;
   data: Record<SymbolName, AQTESignal>;
   risk: { realized_pnl: number; trades: number; max_trades: number; killed: boolean };
@@ -35,7 +32,7 @@ const number = (value: number) => value.toLocaleString('en-IN', { maximumFractio
 function isSnapshot(value: unknown): value is Snapshot {
   if (!value || typeof value !== 'object') return false;
   const data = value as Partial<Snapshot>;
-  return data.mode === 'PAPER_ONLY' && typeof data.generated_at === 'number' &&
+  return data.mode === 'ANALYSIS_ONLY' && typeof data.generated_at === 'number' &&
     !!data.risk && typeof data.risk.realized_pnl === 'number' && !!data.data &&
     SYMBOLS.every(symbol => {
       const signal = data.data?.[symbol];
@@ -45,7 +42,6 @@ function isSnapshot(value: unknown): value is Snapshot {
 }
 
 function AQTESection({ marketData, isConnected = false }: { marketData?: MarketData; isConnected?: boolean }) {
-  const [mode, setMode] = useState<typeof MODES[number]>('real');
   const [selectedSymbol, setSelectedSymbol] = useState<SymbolName>('NIFTY');
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -87,7 +83,6 @@ function AQTESection({ marketData, isConnected = false }: { marketData?: MarketD
   }, []);
 
   const unavailable = !!error || !snapshot || !snapshot.recording || !!snapshot.fault;
-  const real = mode === 'real';
   const liveOn = automationStatus?.automation_on === true && !automationStatus.killed;
   const liveStopped = automationStatus?.killed === true;
   return (
@@ -105,54 +100,25 @@ function AQTESection({ marketData, isConnected = false }: { marketData?: MarketD
             <span className="font-bold tracking-widest text-cyan-200">AQTE</span>
             <span className="text-slate-400"> — Adaptive Quantitative Trading Engine</span>
           </h2>
-          <p className="mt-1 text-xs leading-relaxed text-slate-400">Backend analysis · Paper &amp; gated live execution · Unvalidated rule baseline</p>
+          <p className="mt-1 text-xs leading-relaxed text-slate-400">Backend analysis · Gated real execution only · Unvalidated rule baseline</p>
           </div>
         </div>
         <span role="status" aria-label="AQTE view status" className={`inline-flex shrink-0 items-center gap-2 rounded-full border px-3 py-1.5 text-[11px] font-bold tracking-wider ${
-          real ? liveStopped ? 'border-rose-400/40 bg-rose-400/10 text-rose-200' :
+          liveStopped ? 'border-rose-400/40 bg-rose-400/10 text-rose-200' :
             liveOn ? 'border-emerald-400/40 bg-emerald-400/10 text-emerald-200' :
-              'border-amber-400/40 bg-amber-400/10 text-amber-200' : 'border-cyan-400/30 bg-cyan-400/10 text-cyan-200'
+              'border-amber-400/40 bg-amber-400/10 text-amber-200'
         }`}>
-          <span aria-hidden="true" className={`h-1.5 w-1.5 rounded-full ${real ? liveStopped ? 'bg-rose-300' : liveOn ? 'bg-emerald-300' : 'bg-amber-300' : 'bg-cyan-300'}`} />
-          {real ? `LIVE CONTROL · ${!automationStatus ? 'STATUS UNKNOWN' : liveStopped ? 'EMERGENCY STOP' : liveOn ? 'ON' : 'OFF'}` : snapshot?.risk.killed ? 'STOPPED' : unavailable ? 'WAITING FOR DATA' : 'PAPER ONLY'}
+          <span aria-hidden="true" className={`h-1.5 w-1.5 rounded-full ${liveStopped ? 'bg-rose-300' : liveOn ? 'bg-emerald-300' : 'bg-amber-300'}`} />
+          {`LIVE CONTROL · ${!automationStatus ? 'STATUS UNKNOWN' : liveStopped ? 'EMERGENCY STOP' : liveOn ? 'ON' : 'OFF'}`}
         </span>
         <AQTEAutomationSwitch onStatus={setAutomationStatus} />
       </div>
       <div className="p-2 sm:p-3">
-      <div role="tablist" aria-label="AQTE trading view" className="aqte-rich-tabs mb-4 grid grid-cols-2 gap-2 rounded-xl border border-slate-700/70 bg-slate-950/70 p-1.5 sm:max-w-md">
-        {MODES.map((value, index) => (
-          <button
-            key={value}
-            id={`aqte-tab-${value}`}
-            type="button"
-            role="tab"
-            aria-selected={mode === value}
-            aria-controls="aqte-trading-panel"
-            tabIndex={mode === value ? 0 : -1}
-            onClick={() => { setLiveStatus(null); setMode(value); }}
-            onKeyDown={event => {
-              let next: number;
-              if (event.key === 'ArrowRight' || event.key === 'ArrowLeft') next = (index + 1) % MODES.length;
-              else if (event.key === 'Home') next = 0;
-              else if (event.key === 'End') next = MODES.length - 1;
-              else return;
-              event.preventDefault();
-              setLiveStatus(null);
-              setMode(MODES[next]);
-              event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>('[role="tab"]')[next]?.focus();
-            }}
-            className={`aqte-rich-tab aqte-tab-${value} flex min-h-[48px] min-w-0 flex-wrap items-center justify-center gap-2 rounded-lg border px-2 py-2 text-xs font-semibold transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-300 sm:text-sm ${
-              mode === value
-                ? value === 'real' ? 'border-amber-400/40 bg-amber-400/10 text-amber-100 shadow-sm' : 'border-cyan-400/40 bg-cyan-400/15 text-cyan-100 shadow-sm'
-                : 'border-transparent text-slate-400 hover:border-slate-600 hover:bg-slate-800 hover:text-slate-200'
-            }`}
-          >
-            {MODE_LABELS[value]}
-            {value === 'real' && <span className="rounded border border-amber-400/25 bg-amber-400/10 px-1.5 py-0.5 text-[10px] text-amber-300">Auto</span>}
-          </button>
-        ))}
+      <div className="mb-4 flex flex-wrap items-center gap-2 rounded-xl border border-amber-400/30 bg-amber-400/5 px-3 py-2">
+        <h3 id="aqte-real-view" className="text-sm font-semibold text-amber-100">Real Trade · Auto</h3>
+        <p className="text-xs text-slate-400">Paper trading disabled · Automation defaults OFF</p>
       </div>
-      <div id="aqte-trading-panel" role="tabpanel" aria-labelledby={`aqte-tab-${mode}`} tabIndex={0} className="rounded-xl focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-cyan-300">
+      <div id="aqte-trading-panel" role="region" aria-labelledby="aqte-real-view" tabIndex={0} className="rounded-xl focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-cyan-300">
       <div role="tablist" aria-label="AQTE index" className="aqte-rich-tabs mb-4 grid grid-cols-3 gap-2 rounded-xl border border-slate-700/70 bg-slate-950/70 p-1.5">
         {SYMBOLS.map((symbol, index) => (
           <button key={symbol} type="button" role="tab" id={`aqte-index-tab-${symbol}`}
@@ -186,8 +152,7 @@ function AQTESection({ marketData, isConnected = false }: { marketData?: MarketD
       <div>
         {SYMBOLS.map(symbol => {
           const signal = snapshot?.data[symbol];
-          const decision = real || unavailable ? 'WAIT' : signal?.decision ?? 'WAIT';
-          const position = real ? null : signal?.position;
+          const decision = 'WAIT';
           const accent = INDEX_STYLES[symbol];
           const tick = marketData?.[symbol];
           const tickAt = tick ? Date.parse(tick.timestamp) / 1000 : NaN;
@@ -205,8 +170,7 @@ function AQTESection({ marketData, isConnected = false }: { marketData?: MarketD
               <div className="flex items-center justify-between gap-2 px-3 pt-2">
                 <h3 className={`text-xs font-bold tracking-widest ${accent.text}`}>{LABELS[symbol]}</h3>
                 <span className={`rounded-md border px-2 py-1 text-[11px] font-bold tracking-wide ${
-                  decision === 'BUY CE' ? 'border-emerald-400/30 bg-emerald-500/10 text-emerald-300' :
-                    decision === 'BUY PE' ? 'border-rose-400/30 bg-rose-500/10 text-rose-300' : 'border-slate-600/70 bg-slate-800/70 text-slate-300'
+                  'border-slate-600/70 bg-slate-800/70 text-slate-300'
                 }`}>{decision}</span>
               </div>
               <div className="aqte-underlying-strip mx-2 mb-2 mt-2 flex flex-wrap items-center justify-between gap-2 rounded-md border border-slate-700/50 bg-slate-900/40 px-3 py-2">
@@ -224,28 +188,15 @@ function AQTESection({ marketData, isConnected = false }: { marketData?: MarketD
                     </p>
                   )}
                 </div>
-                {decision !== 'WAIT' && signal?.confidence != null && <span className="rounded-md border border-cyan-400/20 bg-cyan-400/5 px-2 py-1 text-[11px] text-cyan-200">Rule score {signal.confidence}/100</span>}
               </div>
-              <AQTETerminal symbol={symbol} mode={mode} signal={signal} unavailable={unavailable}
-                liveStatus={real ? liveStatus : null}
+              <AQTETerminal symbol={symbol} mode="real" signal={signal} unavailable={unavailable}
+                liveStatus={liveStatus}
                 active={selectedSymbol === symbol} tick={streaming ? tick : null}
-                controls={real && selectedSymbol === symbol ? <AQTEDailyControl /> : undefined}
-                execution={!real && (position ? (
-                <AQTEPosition compact mode="paper" contract={position.contract.trading_symbol}
-                  state={position.entry_at ? 'OPEN' : 'LIMIT_PENDING'}
-                  entry={position.entry_price} entryAt={position.entry_at} limit={position.limit}
-                  initialStop={position.initial_stop} stop={position.stop} target={position.target}
-                  peak={position.peak} trailing={position.stop > position.initial_stop}
-                  metrics={position.metrics} unavailable={unavailable} />
-              ) : (
-                <AQTEPosition compact mode="paper" contract={LABELS[symbol]} empty unavailable={unavailable} />
-              ))} />
+                controls={selectedSymbol === symbol ? <AQTEDailyControl /> : undefined} execution={null} />
               <details className="mx-2 mb-2 mt-2 rounded-lg border border-slate-700/50 px-3">
-              <summary className="cursor-pointer py-2 text-xs font-medium text-slate-400 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-300">{real ? 'Execution protection' : 'Signal intelligence'}</summary>
+              <summary className="cursor-pointer py-2 text-xs font-medium text-slate-400 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-300">Execution protection</summary>
               <p className="break-words pb-3 text-xs leading-relaxed text-slate-400">
-                {real ? 'Automatic entries require daily arming and the header switch ON. OFF blocks new entries; protective exits continue.' :
-                  unavailable ? (error || snapshot?.fault || 'Waiting for backend data') :
-                  signal?.reasons.join(' · ') || 'Waiting for a confirmed setup'}
+                Automatic entries require daily arming and the header switch ON. OFF blocks new entries; protective exits continue.
               </p>
               </details>
             </article>
@@ -253,17 +204,11 @@ function AQTESection({ marketData, isConnected = false }: { marketData?: MarketD
           );
         })}
       </div>
-      {real && <div id="aqte-live-execution" className="mt-2"><AQTELivePanel selectedSymbol={selectedSymbol} onStatus={setLiveStatus} /></div>}
+      <div id="aqte-live-execution" className="mt-2"><AQTELivePanel selectedSymbol={selectedSymbol} onStatus={setLiveStatus} /></div>
       <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-slate-700/60 pt-3">
-        {!real && snapshot && (
-          <div className="flex flex-wrap gap-2 text-xs tabular-nums">
-            <span className="rounded-lg border border-slate-700/70 bg-slate-900/80 px-3 py-2 text-slate-300">Paper realized P&L <span className="ml-1 font-semibold text-slate-100">{number(snapshot.risk.realized_pnl)}</span></span>
-            <span className="rounded-lg border border-slate-700/70 bg-slate-900/80 px-3 py-2 text-slate-400"><span className="font-semibold text-slate-200">{snapshot.risk.trades}/{snapshot.risk.max_trades}</span> trades today</span>
-          </div>
-        )}
         <details className="text-[11px] leading-relaxed text-slate-500">
           <summary className="cursor-pointer py-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-300">Execution notes</summary>
-          <p className="max-w-xl pb-2">{real ? 'ON authorizes automated real entries after daily arming. Watch broker acknowledgements and protective stops in Kite.' : 'Paper signals never place real orders. The separate header switch controls real automation.'}</p>
+          <p className="max-w-xl pb-2">ON authorizes automated real entries after daily arming. Watch broker acknowledgements and protective stops in Kite.</p>
         </details>
       </div>
       </div>

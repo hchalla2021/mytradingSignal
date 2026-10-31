@@ -98,7 +98,7 @@ function fixture() {
   const waiting = { decision: 'WAIT', reasons: ['No setup'], spot: 22000,
     at: Date.now() / 1000, confidence: null, entry: null, contract: null, position: null };
   return {
-    mode: 'PAPER_ONLY', generated_at: Date.now() / 1000, recording: true,
+    mode: 'ANALYSIS_ONLY', generated_at: Date.now() / 1000, recording: true,
     fault: null, subscription_error: null,
     risk: { realized_pnl: 0, trades: 0, max_trades: 5, killed: false },
     data: {
@@ -377,8 +377,9 @@ test('live control badge is green only for confirmed ON, yellow for OFF/unknown 
 test('AQTE defaults to Real Trade without submitting or exposing paper trades', async () => {
   const h = harness();
   let tree = h.render();
-  assert.equal(nodes(tree).find(n => n.props?.id === 'aqte-tab-real').props['aria-selected'], true);
-  assert.equal(nodes(tree).find(n => n.props?.id === 'aqte-tab-paper').props['aria-selected'], false);
+  assert.match(text(tree), /Real Trade.*Auto/);
+  assert.match(text(tree), /Paper trading disabled.*Automation defaults OFF/);
+  assert.equal(nodes(tree).filter(n => n.props?.id === 'aqte-tab-paper').length, 0);
   const cleanup = h.mount(fixture());
   await settle();
   tree = h.render();
@@ -390,10 +391,9 @@ test('AQTE defaults to Real Trade without submitting or exposing paper trades', 
 
 test('AQTE has three index-only cards above charts, without execution controls', async () => {
   const h = harness();
-  nodes(h.render()).find(n => n.props?.id === 'aqte-tab-paper').props.onClick();
   let tree = h.render();
   assert.equal(nodes(tree).filter(n => n.type === 'article').length, 3);
-  assert.equal(nodes(tree).filter(n => n.props?.role === 'tab').length, 5);
+  assert.equal(nodes(tree).filter(n => n.props?.role === 'tab').length, 3);
   assert.equal(nodes(tree).filter(n => ['input', 'select'].includes(n.type)).length, 0);
   assert.ok(nodes(tree).filter(n => n.type === 'button').every(n => n.props.role === 'tab'));
   assert.match(text(tree), /Adaptive Quantitative Trading Engine/);
@@ -401,8 +401,7 @@ test('AQTE has three index-only cards above charts, without execution controls',
   await settle();
   tree = h.render();
   const cards = nodes(tree).filter(n => n.type === 'article');
-  assert.match(text(cards[0]), /NIFTY_TEST_CE/);
-  assert.match(text(cards[0]), /BUY CE/);
+  assert.doesNotMatch(text(cards[0]), /NIFTY_TEST_CE|BUY CE/);
   assert.match(text(cards[1]), /BANK NIFTY/);
   assert.doesNotMatch(text(cards[1]), /BUY CE|NIFTY_TEST_CE/);
   assert.doesNotMatch(text(cards[2]), /BUY CE|NIFTY_TEST_CE/);
@@ -411,23 +410,22 @@ test('AQTE has three index-only cards above charts, without execution controls',
   assert.equal(h.timers.size, 0);
 });
 
-test('connection failure hides an old BUY entry and successful retry recovers', async () => {
+test('connection failure reports unavailable analysis and successful retry recovers without paper entries', async () => {
   const h = harness();
-  nodes(h.render()).find(n => n.props?.id === 'aqte-tab-paper').props.onClick();
   h.render();
   const cleanup = h.mount(fixture());
   await settle();
-  assert.match(text(h.render()), /BUY CE/);
+  assert.doesNotMatch(text(h.render()), /BUY CE|NIFTY_TEST_CE/);
   await h.poll(new Error('Offline'));
   assert.doesNotMatch(text(h.render()), /BUY CE|NIFTY_TEST_CE/);
+  assert.match(text(h.render()), /AQTE connection unavailable/);
   await h.poll(fixture());
-  assert.match(text(h.render()), /BUY CE/);
+  assert.doesNotMatch(text(h.render()), /AQTE connection unavailable|BUY CE|NIFTY_TEST_CE/);
   cleanup();
 });
 
 test('underlying price follows the shared live feed immediately without waiting for AQTE polling', async () => {
   const h = harness();
-  nodes(h.render()).find(n => n.props?.id === 'aqte-tab-paper').props.onClick();
   h.render();
   const cleanup = h.mount(fixture());
   await settle();
@@ -444,7 +442,7 @@ test('underlying price follows the shared live feed immediately without waiting 
   } } })).find(n => n.props?.id === 'aqte-index-panel-NIFTY');
   assert.match(text(first), /23,112.75/);
   assert.equal(h.requests.length, 1, 'Streaming changes must not fetch snapshots or open another feed');
-  assert.match(text(first), /BUY CE/, 'Display price must not replace backend decisions');
+  assert.match(text(first), /WAIT/, 'Streaming prices must not authorize real entries');
   for (const change of [
     { isConnected: false },
     { marketData: { ...props.marketData, NIFTY: { ...tick, status: 'DEMO' } } },
@@ -464,7 +462,6 @@ test('invalid, stale and failed-recorder responses cannot show BUY', async () =>
     { ...fixture(), recording: false }, { ...fixture(), fault: 'Journal failed' },
   ]) {
     const h = harness();
-    nodes(h.render()).find(n => n.props?.id === 'aqte-tab-paper').props.onClick();
     h.render();
     const cleanup = h.mount(payload);
     await settle();
@@ -473,9 +470,8 @@ test('invalid, stale and failed-recorder responses cannot show BUY', async () =>
   }
 });
 
-test('real tab is locked and never shows paper entries, positions or P&L; switching back preserves updates', async () => {
+test('real-only view never shows retained paper entries, positions or P&L during polling', async () => {
   const h = harness();
-  nodes(h.render()).find(n => n.props?.id === 'aqte-tab-paper').props.onClick();
   h.render();
   const payload = fixture();
   payload.data.NIFTY.position = { entry_at: 123, entry_price: 100, limit: 100, stop: 80, target: 140,
@@ -483,50 +479,29 @@ test('real tab is locked and never shows paper entries, positions or P&L; switch
   const cleanup = h.mount(payload);
   await settle();
   let tree = h.render();
-  assert.equal(nodes(tree).find(n => n.props?.id === 'aqte-tab-paper').props['aria-selected'], true);
-  assert.match(text(tree), /Paper position/);
-  nodes(tree).find(n => n.props?.id === 'aqte-tab-real').props.onClick();
-  tree = h.render();
-  assert.equal(nodes(tree).find(n => n.props?.role === 'tabpanel').props['aria-labelledby'], 'aqte-tab-real');
-  assert.equal(nodes(tree).find(n => n.props?.id === 'aqte-tab-real').props['aria-selected'], true);
+  assert.equal(nodes(tree).find(n => n.props?.id === 'aqte-trading-panel').props['aria-labelledby'], 'aqte-real-view');
+  assert.equal(nodes(tree).filter(n => n.props?.id === 'aqte-tab-paper').length, 0);
   assert.match(text(tree), /LIVE CONTROL/);
   assert.doesNotMatch(text(tree), /BUY CE|NIFTY_TEST_CE|Paper position|Paper realized P&L/);
   assert.equal(nodes(tree).filter(n => n.type === 'article').length, 3);
   await h.poll(payload);
   assert.doesNotMatch(text(h.render()), /BUY CE|NIFTY_TEST_CE/);
-  nodes(h.render()).find(n => n.props?.id === 'aqte-tab-paper').props.onClick();
-  assert.match(text(h.render()), /BUY CE/);
-  assert.match(text(h.render()), /Paper position/);
+  assert.doesNotMatch(text(h.render()), /Paper position|NIFTY_POSITION_CE/);
   cleanup();
 });
 
-test('trading tabs support arrow keys, Home and End with roving focus', () => {
+test('real-only view has a labelled region and no paper mode navigation', () => {
   const h = harness();
-  h.render();
-  let focused;
-  const event = key => ({
-    key, preventDefault() {},
-    currentTarget: { parentElement: { querySelectorAll: () => [
-      { focus: () => { focused = 'paper'; } }, { focus: () => { focused = 'real'; } },
-    ] } },
-  });
-
-  for (const [from, key, expected] of [
-    ['paper', 'ArrowRight', 'real'], ['real', 'ArrowRight', 'paper'],
-    ['paper', 'ArrowLeft', 'real'], ['real', 'Home', 'paper'], ['paper', 'End', 'real'],
-  ]) {
-    nodes(h.render()).find(n => n.props?.id === `aqte-tab-${from}`).props.onKeyDown(event(key));
-    const tabs = nodes(h.render()).filter(n => n.props?.role === 'tab' && n.props.id.startsWith('aqte-tab-'));
-    assert.equal(tabs.find(n => n.props['aria-selected']).props.id, `aqte-tab-${expected}`);
-    assert.equal(tabs.find(n => n.props['aria-selected']).props.tabIndex, 0);
-    assert.equal(tabs.find(n => !n.props['aria-selected']).props.tabIndex, -1);
-    assert.equal(focused, expected);
-  }
+  const tree = h.render();
+  const region = nodes(tree).find(n => n.props?.id === 'aqte-trading-panel');
+  assert.equal(region.props.role, 'region');
+  assert.equal(region.props['aria-labelledby'], 'aqte-real-view');
+  assert.equal(nodes(tree).filter(n => n.props?.['aria-label'] === 'AQTE trading view').length, 0);
+  assert.equal(nodes(tree).filter(n => n.props?.role === 'tab').length, 3);
 });
 
 test('terminal presentation has bordered index cards and separated risk readouts without extra controls', async () => {
   const h = harness();
-  nodes(h.render()).find(n => n.props?.id === 'aqte-tab-paper').props.onClick();
   h.render();
   const cleanup = h.mount(fixture());
   await settle();
@@ -535,7 +510,7 @@ test('terminal presentation has bordered index cards and separated risk readouts
   for (const card of cards) {
     assert.match(card.props.className, /\bborder\b/);
     assert.match(text(card), /Underlying index/);
-    assert.match(text(card), /Signal intelligence/);
+    assert.match(text(card), /Execution protection/);
   }
   assert.match(cards[0].props.className, /border-cyan-400/);
   assert.match(cards[1].props.className, /border-indigo-400/);
@@ -543,7 +518,7 @@ test('terminal presentation has bordered index cards and separated risk readouts
   const setup = nodes(cards[0]).find(n => n.type === 'section' && /Trade Setup/.test(text(n)));
   assert.ok(setup);
   assert.deepEqual(nodes(setup).filter(n => n.type === 'dt').map(text), ['Signal', 'Maximum buy', 'Entry range', 'Stop loss', 'Target', 'Reward / risk']);
-  assert.equal(nodes(tree).filter(n => n.type === 'button').length, 5);
+  assert.equal(nodes(tree).filter(n => n.type === 'button').length, 3);
   cleanup();
 });
 
@@ -568,7 +543,6 @@ function positionFixture() {
 
 test('waiting index cards keep all requested metrics visible without any paper position', async () => {
   const h = harness();
-  nodes(h.render()).find(n => n.props?.id === 'aqte-tab-paper').props.onClick();
   h.render();
   const payload = fixture();
   for (const signal of Object.values(payload.data)) signal.position = null;
@@ -577,14 +551,13 @@ test('waiting index cards keep all requested metrics visible without any paper p
   const cards = nodes(h.render()).filter(n => n.type === 'article');
   for (const card of cards) {
     const value = text(card);
-    for (const label of ['Buy entry price', 'Running option LTP', 'Initial stop loss',
-      'Current paper SL', 'Points gained', 'Open P&L', 'Trailing stop loss', 'Entry time']) {
+    for (const label of ['Trade Setup', 'Signal', 'Maximum buy', 'Entry range',
+      'Stop loss', 'Target', 'Reward / risk', 'Execution protection']) {
       assert.ok(value.includes(label), label);
     }
-    assert.match(value, /WAITING FOR ENTRY/);
-    assert.match(value, /No position values are simulated/);
+    assert.match(value, /WAIT/);
     assert.match(value, /--/);
-    assert.doesNotMatch(value, /Limit pending @|FRESH QUOTE|WAITING FOR \+1R/);
+    assert.doesNotMatch(value, /Limit pending @|FRESH QUOTE|WAITING FOR \+1R|Paper position/);
   }
   assert.ok(h.requests.every(r => r.options.method !== 'POST'));
   cleanup();
@@ -608,10 +581,7 @@ test('index tabs show one full-width panel and preserve selection and polling ac
     assert.ok(tabs().filter(n => !n.props['aria-selected']).every(n => n.props.tabIndex === -1));
   }
   tabs().find(n => n.props.id === 'aqte-index-tab-SENSEX').props.onClick();
-  for (const mode of ['real', 'paper']) {
-    nodes(h.render()).find(n => n.props?.id === `aqte-tab-${mode}`).props.onClick();
-    assert.equal(panels().find(n => !n.props.hidden).props.id, 'aqte-index-panel-SENSEX');
-  }
+  assert.equal(nodes(h.render()).filter(n => n.props?.id === 'aqte-tab-paper').length, 0);
   await h.poll(fixture());
   assert.equal(panels().find(n => !n.props.hidden).props.id, 'aqte-index-panel-SENSEX');
   assert.equal(h.requests.length, 2, 'Switching index tabs must not fetch or submit orders');
@@ -634,7 +604,7 @@ test('index tabs wrap keyboard selection and support Home and End independently 
     assert.equal(focused, expected);
     const selected = nodes(h.render()).find(n => n.props?.id === `aqte-index-tab-${expected}`);
     assert.equal(selected.props['aria-selected'], true);
-    assert.equal(nodes(h.render()).find(n => n.props?.id === 'aqte-tab-real').props['aria-selected'], true);
+    assert.match(text(h.render()), /Real Trade.*Auto/);
   }
 });
 

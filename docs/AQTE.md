@@ -8,26 +8,30 @@ with one full-width index panel visible at a time (NIFTY by default).
 There is no full option-chain interface or strategy
 configuration panel. The separate opt-in live controller requires explicit daily arming and ON confirmation.
 All quantitative decisions run in Python.
-Two tabs, **Paper Trade** and **Real Trade** (default), switch the AQTE
-view only; switching tabs never submits orders.
-Selecting Real Trade by default does not arm a session, enable automation
+AQTE now displays **Real Trade only**. Paper Trade navigation, positions and
+paper P&L are removed from this section. The production AQTE service runs
+**ANALYSIS_ONLY**: candles, signals, tick recording and Real AQTE quote/metrics
+support continue, but simulated order creation, fills and management are disabled.
+Saved paper state, completed trades and audit records are preserved, not deleted
+or replayed into production. Historical replay retains its isolated simulation.
+The authenticated paper kill endpoint returns **410** while paper trading is disabled.
+Other application paper modules are unchanged.
+Selecting Real Trade does not arm a session, enable automation
 or submit orders; the existing default-OFF and explicit approval requirements remain.
 Real Trade has an authenticated live
 controller, locked by default. Its three index cards show WAIT without
 paper entries, paper positions or paper P&L. An actual matching AQTE-owned fill
 can show LONG OPEN, its broker average and confirmed protection instead.
-Switching tabs neither places orders
-nor stops backend paper execution. The shared polling session stays mounted, and
-returning to Paper Trade displays its latest state. Tabs support arrow keys, Home/End
-and visible keyboard focus.
+The shared analysis polling session stays mounted. Index tabs support arrow keys,
+Home/End and visible keyboard focus.
 The terminal-style layout uses a bordered gradient shell, distinct cyan/amber
 selected tabs, per-index accent borders, prominent tabular index prices and separated
 signal/risk readouts. Index tabs support arrow keys, Home/End and visible focus.
-Mode/index tabs use restrained tinted borders, layered dark backgrounds and a
-static selected underline: amber for Real, cyan for Paper/NIFTY, indigo for
+Index tabs use restrained tinted borders, layered dark backgrounds and a
+static selected underline: cyan for NIFTY, indigo for
 BANK NIFTY and violet for SENSEX. The visual treatment adds no animations,
 layout shifts or changes to trading behavior.
-Selection persists across Paper/Real changes without extra polling or order actions.
+Index selection changes do not add polling or order actions.
 Hidden index panels remain mounted; the embedded chart mounts only for the selected index.
 Real positions only appear under their own
 index; other tabs retain an explicit warning when another index holds a position.
@@ -51,8 +55,8 @@ planned, unconfirmed protection is labelled explicitly. Best observed gain is
 the peak bid seen by the engine since entry, not a guaranteed achievable profit.
 The existing two-second, non-overlapping snapshot polls use cached market state;
 position display adds no broker requests. The embedded price chart is described below.
-Metric panels remain visible before entry: each paper index card and the live
-execution panel show the same labels with `--` values and a waiting-for-entry
+Metric panels remain visible before entry: the live
+execution panel shows labels with `--` values and a waiting-for-entry
 message. Missing positions never hide the readouts or imply a zero profit.
 Explanations, full position breakdowns, calculation notes and live setup/limits use native
 details disclosures, collapsed by default. Summary values, entry time, quantity, trailing
@@ -233,7 +237,7 @@ There is **no LLM tick processing, synthetic option contract, fabricated quote o
 prediction**. The baseline uses a conservative premium-distance stop; a learned
 optimal-entry model is a later milestone.
 
-### Entry and paper execution
+### Entry and paper execution (isolated historical replay only)
 
 - Select actual, unexpired instruments with broker-provided lot size and tick size.
 - Require fresh spot, futures and option quotes; derivatives require exchange time.
@@ -323,7 +327,7 @@ secrets or order permissions are changed by recording this address.
 |---|---|---|
 | GET | `/api/aqte/snapshot` | Three signals, intelligence, entries, positions, risk and health |
 | GET | `/api/aqte/journal?limit=100` | Most recent trades and audit events; limit 1-500 |
-| POST | `/api/aqte/kill` | One-way paper emergency stop; valid existing application access JWT required |
+| POST | `/api/aqte/kill` | Disabled in production (410); historical paper controls require an access JWT |
 
 The kill endpoint accepts `Authorization: Bearer <application-access-JWT>`, **not** a
 Kite access token or refresh JWT. There is deliberately no unauthenticated control,
@@ -586,7 +590,17 @@ They do not accept Kite access tokens from the browser.
 | POST | `/api/aqte/live/confirm` | Compatibility confirmation path; blocked while OFF and still subject to all risk checks |
 | POST | `/api/aqte/live/stop` | Latch emergency stop and request a reconciled exit |
 
-These controls are independent of the older paper-only `/api/aqte/kill`.
+These controls are independent of the older paper-only `/api/aqte/kill`, which is
+disabled in production and cannot stop Real AQTE analysis.
+
+### Production Zerodha login
+
+The login page uses the shared `API_CONFIG.endpoint()` resolver for both one-click
+and broker login, including same-origin production routing when no public API
+URL was baked into the frontend image. It no longer blocks login simply because
+`NEXT_PUBLIC_API_URL` is absent. One-click login failures are reported before
+opening the existing broker login flow. Production still requires correct Nginx
+`/api` routing, backend credentials and the configured Kite redirect URL.
 Broker fees remain conservative estimates, not actual contract-note charges. No
 profitability claim, IP-compliance certification or live fill verification is implied.
 Validate the controller using `python -m unittest test_aqte_live`; all broker and IP

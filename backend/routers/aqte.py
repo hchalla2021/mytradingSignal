@@ -51,6 +51,8 @@ async def journal(response: Response, limit: int = Query(100, ge=1, le=500)):
 
 @router.post("/kill", dependencies=[Depends(operator)])
 async def kill():
+    if not get_aqte_service().engine.paper_enabled:
+        raise HTTPException(status_code=410, detail="AQTE paper trading is disabled; use the separate AQTE live controls")
     try:
         return await asyncio.to_thread(get_aqte_service().kill)
     except sqlite3.Error as exc:

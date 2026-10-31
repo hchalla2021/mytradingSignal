@@ -47,10 +47,10 @@ def normalize(symbol, kind, raw, received):
 
 
 class AQTEService:
-    def __init__(self, path=None):
+    def __init__(self, path=None, *, paper_enabled=False):
         self.path = Path(path or os.getenv("AQTE_DB_PATH") or
                          Path(__file__).resolve().parent.parent / "data" / "aqte" / "aqte.sqlite3")
-        self.engine = AQTEEngine()
+        self.engine = AQTEEngine(paper_enabled=paper_enabled)
         self.lock = threading.RLock()
         self.queue = queue.Queue(maxsize=20_000)
         self.stop_event = threading.Event()
@@ -96,7 +96,7 @@ class AQTEService:
                 CREATE INDEX IF NOT EXISTS aqte_event_time ON aqte_events(at);
             """)
             state = db.execute("SELECT payload FROM aqte_state WHERE id=1").fetchone()
-            if state:
+            if state and self.engine.paper_enabled:
                 payload = json.loads(state["payload"])
                 self.engine.orders = payload["orders"]
                 self.engine.killed = payload["killed"]
@@ -106,8 +106,9 @@ class AQTEService:
                 for order in self.engine.orders.values():
                     contract = Contract(**order["contract"])
                     self.engine.contracts[contract.token] = contract
-            self.engine.trades = [json.loads(r["payload"]) for r in db.execute(
-                "SELECT payload FROM aqte_trades ORDER BY exit_at, rowid")]
+            if self.engine.paper_enabled:
+                self.engine.trades = [json.loads(r["payload"]) for r in db.execute(
+                    "SELECT payload FROM aqte_trades ORDER BY exit_at, rowid")]
             midnight = datetime.now(IST).replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
             for row in db.execute("SELECT payload FROM aqte_ticks WHERE kind='future' AND received>=? "
                                   "ORDER BY received,id", (midnight,)):
@@ -129,9 +130,10 @@ class AQTEService:
                 trade = event["trade"]
                 db.execute("INSERT INTO aqte_trades VALUES(?,?,?)",
                            (trade["id"], trade["exit_at"], json.dumps(trade)))
-        state = dict(orders=self.engine.orders, killed=self.engine.killed, last_setup=self.engine.last_setup)
-        db.execute("INSERT INTO aqte_state VALUES(1,?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload",
-                   (json.dumps(state),))
+        if self.engine.paper_enabled:
+            state = dict(orders=self.engine.orders, killed=self.engine.killed, last_setup=self.engine.last_setup)
+            db.execute("INSERT INTO aqte_state VALUES(1,?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload",
+                       (json.dumps(state),))
 
     def run(self):
         try:
@@ -172,7 +174,7 @@ class AQTEService:
         await asyncio.to_thread(self.initialize)
         self.stop_event.clear()
         self.started = True
-        self.worker = threading.Thread(target=self.run, name="aqte-paper", daemon=True)
+        self.worker = threading.Thread(target=self.run, name="aqte-analysis", daemon=True)
         self.worker.start()
         self.refresh_task = asyncio.create_task(self.refresh(), name="aqte-subscriptions")
 
