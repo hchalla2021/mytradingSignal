@@ -22,6 +22,7 @@ logs/
 test_*.py
 ws_*.py
 _*.py
+!__init__.py
 debug_*.py
 diagnose_*.py
 check_*.py

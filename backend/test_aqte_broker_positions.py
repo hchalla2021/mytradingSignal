@@ -1,4 +1,5 @@
 import unittest
+import threading
 from datetime import datetime
 from unittest.mock import Mock, patch
 
@@ -26,7 +27,12 @@ class BrokerPositionTests(unittest.TestCase):
         }
         self.client.orders.return_value = [self.order(), self.order(product="NRML"),
                                            self.order(status="CANCELLED"), self.order(transaction_type="BUY")]
-        self.service = BrokerPositions(lambda: self.client)
+        self.market = Mock()
+        self.market.lock = threading.RLock()
+        self.market.started = True
+        self.market.failed = threading.Event()
+        self.market.engine.fresh.return_value = True
+        self.service = BrokerPositions(lambda: self.client, lambda: self.market)
 
     def quote(self, price):
         return dict(instrument_token=30, last_price=price,
@@ -75,6 +81,37 @@ class BrokerPositionTests(unittest.TestCase):
         self.client.positions.side_effect = TimeoutError("Broker unavailable")
         with self.assertRaises(TimeoutError):
             self.service.snapshot()
+
+    def test_closed_session_and_weekends_pause_without_any_broker_requests(self):
+        for at in [datetime(2026, 10, 30, 9, 14, tzinfo=IST),
+                   datetime(2026, 10, 30, 15, 30, tzinfo=IST),
+                   datetime(2026, 10, 31, 10, 0, tzinfo=IST)]:
+            with self.subTest(at=at), patch("services.aqte_broker_positions.time.time", return_value=at.timestamp()):
+                result = self.service.snapshot()
+                self.assertTrue(result["paused"])
+                self.assertIn("Market closed", result["reason"])
+                self.assertEqual(result["positions"], [])
+        self.client.positions.assert_not_called()
+        self.client.orders.assert_not_called()
+        self.client.quote.assert_not_called()
+
+    def test_lost_or_stale_feed_pauses_and_resume_reads_broker_again(self):
+        self.service.snapshot()
+        self.market.engine.fresh.return_value = False
+        paused = self.service.snapshot()
+        self.assertTrue(paused["paused"])
+        self.assertIn("Waiting for live market feed", paused["reason"])
+        self.assertIsNone(self.service.cached)
+        self.assertEqual(self.client.positions.call_count, 1)
+        self.market.engine.fresh.return_value = True
+        self.market.failed.set()
+        self.assertTrue(self.service.snapshot()["paused"])
+        self.market.failed.clear()
+        self.market.started = False
+        self.assertTrue(self.service.snapshot()["paused"])
+        self.market.started = True
+        self.assertFalse(self.service.snapshot()["paused"])
+        self.assertEqual(self.client.positions.call_count, 2)
 
 
 if __name__ == "__main__":

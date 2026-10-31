@@ -32,7 +32,7 @@
   outline: 2px solid #00b9ff; outline-offset: -2px;
 }
 .viewTabs {
-  display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px;
+  display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px;
   padding: 14px; border-bottom: 1px solid var(--border);
   background: linear-gradient(135deg, #101e2c, #0b1220 65%, #0c2024);
 }

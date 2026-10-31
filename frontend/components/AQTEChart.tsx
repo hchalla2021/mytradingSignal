@@ -38,7 +38,7 @@ function AQTEChart({ symbol, tick }: { symbol: AQTESymbol; tick: MarketTick | nu
     if (!element) return;
     const chart = createChart(element, {
       width: element.clientWidth, height: element.clientHeight,
-      layout: { background: { type: ColorType.Solid, color: '#070f1a' }, textColor: '#98abc3', fontSize: 10 },
+      layout: { background: { type: ColorType.Solid, color: '#070f1a' }, textColor: '#c4d5e8', fontSize: 12 },
       grid: { vertLines: { color: '#132031' }, horzLines: { color: '#132031' } },
       crosshair: { mode: CrosshairMode.Normal },
       rightPriceScale: { borderColor: '#26394f' },

@@ -56,8 +56,11 @@ function parse(value: unknown): Snapshot {
   return result;
 }
 
+// Last good snapshot survives tab-switch remounts so the card renders instantly.
+let lastSnapshot: Snapshot | null = null;
+
 export default function AQTEDailyControl() {
-  const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
+  const [snapshot, setSnapshot] = useState<Snapshot | null>(lastSnapshot);
   const [symbol, setSymbol] = useState<SymbolName>('NIFTY');
   const [drafts, setDrafts] = useState<Partial<Record<SymbolName, Config>>>({});
   const [limits, setLimits] = useState<Partial<Record<SymbolName, number>>>({});
@@ -84,7 +87,7 @@ export default function AQTEDailyControl() {
         const payload = await response.json();
         if (!response.ok) throw new Error(payload.detail || 'Daily controls unavailable');
         const result = parse(payload);
-        if (active && !saving.current && generation.current === version) { setSnapshot(result); setError(null); }
+        if (active && !saving.current && generation.current === version) { lastSnapshot = result; setSnapshot(result); setError(null); }
       } catch (cause) {
         if (active && !saving.current && generation.current === version) setError(cause instanceof Error ? cause.message : 'Daily controls unavailable');
       } finally {
@@ -124,6 +127,7 @@ export default function AQTEDailyControl() {
       if (!response.ok) throw new Error(payload.detail || 'Daily controls were not saved');
       const result = parse(payload);
       if (!mounted.current) return;
+      lastSnapshot = result;
       setSnapshot(result);
       if (limitOnly) setLimits({ ...limits, [target]: undefined });
       else setDrafts({ ...drafts, [target]: undefined });
@@ -138,7 +142,7 @@ export default function AQTEDailyControl() {
   };
   const input = 'mt-1 min-h-[44px] w-full min-w-0 rounded-lg border border-slate-600 bg-slate-950 px-2 text-xs text-slate-100 disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-300';
   return (
-    <section aria-label="Daily Trade Control" className="w-full min-w-0 rounded-xl border border-slate-600/70 bg-slate-950/70 p-2 text-xs sm:max-w-sm">
+    <section aria-label="Daily Trade Control" className="aqte-daily-control w-full min-w-0 rounded-xl border border-slate-600/70 bg-slate-950/70 p-2 text-xs">
       <div className="mb-2 flex flex-wrap items-center justify-between gap-1 px-1">
         <h3 className="font-semibold text-cyan-100">Daily trade limit</h3>
         <span className="text-[10px] text-slate-400">Account {snapshot?.account.remaining ?? '--'} / {snapshot?.account.max_trades ?? '--'} left</span>
@@ -153,8 +157,8 @@ export default function AQTEDailyControl() {
             setNotice(null);
           };
           const small = 'flex min-h-[44px] min-w-[44px] items-center justify-center rounded-md border border-slate-600 bg-slate-900 text-slate-100 disabled:opacity-30 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-300';
-          return <div key={index} className="aqte-metric grid min-w-0 grid-cols-[minmax(0,1fr)_44px_24px_44px_44px] items-center gap-1 rounded-lg border bg-slate-900/40 p-1.5">
-            <div className="min-w-0">
+          return <div key={index} className="aqte-daily-row aqte-metric grid min-w-0 grid-cols-[minmax(0,1fr)_44px_24px_44px_44px] items-center gap-1 rounded-lg border bg-slate-900/40 p-1.5">
+            <div className="aqte-daily-label min-w-0">
               <p className="text-[11px] font-semibold text-slate-100">{label(index)}</p>
               <p className="text-[9px] leading-relaxed text-slate-400">Done {error ? '--' : current?.executed ?? '--'} · Left {error ? '--' : current?.remaining ?? '--'}</p>
             </div>

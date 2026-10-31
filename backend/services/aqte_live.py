@@ -24,10 +24,22 @@ from services.aqte_daily_control import IndexControl, counts, defaults, quality_
 
 logger = logging.getLogger(__name__)
 TERMINAL = {"COMPLETE", "CANCELLED", "REJECTED"}
+KILL_TAG = "AQTEKILL"
+KILL_EXCHANGES = {"NFO", "BFO", "NSE", "BSE"}
+KILL_MAX_REJECTS = 5
+KILL_SETTLE_SECONDS = 4
+# Marketable limit: fills at the best available price, bounded to stay inside exchange price bands.
+KILL_SLIPPAGE = 0.05
 
 
 class LiveBlocked(ValueError):
     pass
+
+
+def kill_price(ltp, side):
+    steps = ltp * (1 - KILL_SLIPPAGE if side == "SELL" else 1 + KILL_SLIPPAGE) / 0.05
+    steps = math.floor(steps + 1e-9) if side == "SELL" else math.ceil(steps - 1e-9)
+    return round(max(1, steps) * 0.05, 2)
 
 
 def outbound_ip():
@@ -65,6 +77,8 @@ class AQTELiveService:
         self.task = None
         self.stop_event = asyncio.Event()
         self.owner_file = None
+        self.kill_sent = {}
+        self.kill_seen = set()
 
     def acquire_owner(self):
         self.owner_file = open(str(self.path) + ".lock", "a+b")
@@ -105,6 +119,7 @@ class AQTELiveService:
         self.state["automation_on"] = False
         self.state.setdefault("daily_controls", defaults())
         self.state.setdefault("daily_entries", [])
+        self.state.setdefault("flatten_pending", False)
         if set(self.state["daily_controls"]) != set(SYMBOLS):
             raise LiveBlocked("Invalid saved daily-control index set; journal requires repair before trading")
         self.state["daily_controls"] = {
@@ -149,7 +164,8 @@ class AQTELiveService:
                 "armed": self.state["armed_day"] == day(time.time()) and not self.state["killed"],
                 "automation_on": bool(self.state.get("automation_on")) and
                     self.state["armed_day"] == day(time.time()) and not self.state["killed"],
-                "killed": self.state["killed"], "active": active, "error": self.error,
+                "killed": self.state["killed"], "flatten_pending": bool(self.state.get("flatten_pending")),
+                "active": active, "error": self.error,
                 "ready": self.ready, "trades": copy.deepcopy(self.state["trades"][-20:]),
                 "limits": {"risk_per_trade": cfg.aqte_live_risk_per_trade,
                            "daily_loss": cfg.aqte_live_daily_loss, "max_trades": cfg.aqte_live_max_trades,
@@ -341,6 +357,20 @@ class AQTELiveService:
         if pnl <= -cfg.aqte_live_daily_loss:
             raise LiveBlocked("Daily live loss limit reached")
         return cfg, pnl
+
+    def start_automation(self):
+        with self.lock:
+            self.config_guard()
+            if self.state["killed"]:
+                raise LiveBlocked("Emergency stop is latched; operator review is required before restarting")
+            now = time.time()
+            dt = datetime.fromtimestamp(now, IST)
+            if not session(now) or dt.hour * 60 + dt.minute >= 915:
+                raise LiveBlocked("New automated entries are permitted only on trading weekdays from 09:15 until 15:15 IST")
+            if self.state["armed_day"] != day(now):
+                self.preflight()
+                self.arm()
+            return self.set_automation(True)
 
     def set_automation(self, enabled):
         with self.lock:
@@ -717,13 +747,144 @@ class AQTELiveService:
             self.error = None
             self.save("RECONCILED")
 
+    def audit(self, kind, **payload):
+        # Emergency square-off must continue even when the journal cannot be written.
+        try:
+            self.save(kind, **payload)
+        except (sqlite3.Error, OSError, ValueError):
+            logger.exception("AQTE emergency audit write failed; continuing broker square-off")
+
     def stop_entries(self):
         with self.lock:
-            self.state.update(armed_day=None, automation_on=False, killed=True)
+            self.state.update(armed_day=None, automation_on=False, killed=True, flatten_pending=True)
             self.proposals.clear()
+            self.kill_sent.clear()
             if self.state["active"]:
                 self.state["active"]["exit_requested"] = "EMERGENCY_STOP"
-            self.save("EMERGENCY_STOP")
+            self.audit("EMERGENCY_STOP", scope="ALL_KITE_POSITIONS_AND_ORDERS")
+            try:
+                self.emergency_flatten()
+            except Exception as exc:
+                self.error = f"Emergency square-off retrying: {type(exc).__name__}: {exc}"
+                logger.exception("AQTE emergency square-off attempt failed; monitor will retry")
+            return self.status()
+
+    def emergency_flatten(self):
+        """Cancel every working order and close every open Kite position. Repeats until flat."""
+        with self.lock:
+            if not self.state.get("flatten_pending"):
+                return
+            broker = self.broker()
+            orders = broker.orders()
+            positions = [p for p in broker.positions()["net"] if int(p["quantity"])]
+            working = [o for o in orders if o["status"] not in TERMINAL]
+            now = time.time()
+            keep, problems = set(), []
+            complete = {str(o["order_id"]) for o in orders if o["status"] == "COMPLETE"}
+            fresh_fills = complete - self.kill_seen
+            self.kill_seen |= complete
+            for position in positions:
+                quantity = int(position["quantity"])
+                side = "SELL" if quantity > 0 else "BUY"
+                exchange, symbol = position["exchange"], position["tradingsymbol"]
+                key = f'{exchange}:{symbol}:{position["product"]}'
+                same = [o for o in orders if o["exchange"] == exchange and o["tradingsymbol"] == symbol]
+                exits = [o for o in same if o["status"] not in TERMINAL and o["transaction_type"] == side]
+                if exchange not in KILL_EXCHANGES:
+                    problems.append(f"{symbol}: {exchange} not supported; square off in Kite")
+                    keep.update(str(o["order_id"]) for o in exits)
+                    continue
+                rejects = [o for o in same if o.get("tag") == KILL_TAG and o["status"] == "REJECTED"]
+                if len(rejects) >= KILL_MAX_REJECTS:
+                    problems.append(f"{symbol}: exit rejected {len(rejects)} times "
+                                    f"({rejects[-1].get('status_message') or 'no reason'}); square off in Kite")
+                    keep.update(str(o["order_id"]) for o in exits)
+                    continue
+                ltp = float(position.get("last_price") or 0)
+                if not math.isfinite(ltp) or ltp <= 0:
+                    problems.append(f"{symbol}: broker price unavailable; retrying")
+                    keep.update(str(o["order_id"]) for o in exits)
+                    continue
+                # Positions can lag a just-completed fill; wait rather than risk a reverse position.
+                if any(str(o["order_id"]) in fresh_fills and o["transaction_type"] == side for o in same):
+                    self.kill_sent[key] = now
+                price = kill_price(ltp, side)
+                settling = now - self.kill_sent.get(key, 0) < KILL_SETTLE_SECONDS
+                remaining = [int(o["quantity"]) - int(o.get("filled_quantity") or 0) for o in exits]
+                if len(exits) == 1 and remaining[0] == abs(quantity):
+                    order = exits[0]
+                    keep.add(str(order["order_id"]))
+                    if settling or (order["order_type"] == "LIMIT" and abs(float(order.get("price") or 0) - price) < 0.025):
+                        continue
+                    self.audit("EMERGENCY_EXIT_REPRICE_INTENT", order_id=str(order["order_id"]), symbol=symbol, price=price)
+                    try:
+                        broker.modify_order(variety=order.get("variety") or "regular", order_id=order["order_id"],
+                                            order_type="LIMIT", price=price, trigger_price=0)
+                    except Exception as exc:
+                        problems.append(f"{symbol}: reprice failed ({type(exc).__name__}); retrying")
+                        logger.exception("AQTE emergency reprice failed for %s", symbol)
+                    self.kill_sent[key] = now
+                elif not exits and not settling:
+                    self.audit("EMERGENCY_EXIT_INTENT", symbol=symbol, side=side, quantity=abs(quantity), price=price)
+                    try:
+                        broker.place_order(variety="regular", exchange=exchange, tradingsymbol=symbol,
+                                           transaction_type=side, quantity=abs(quantity), product=position["product"],
+                                           order_type="LIMIT", price=price, validity="DAY", tag=KILL_TAG)
+                    except Exception as exc:
+                        problems.append(f"{symbol}: exit order failed ({type(exc).__name__}); retrying")
+                        logger.exception("AQTE emergency exit failed for %s", symbol)
+                    self.kill_sent[key] = now
+            for order in working:
+                if str(order["order_id"]) in keep:
+                    continue
+                self.audit("EMERGENCY_CANCEL_INTENT", order_id=str(order["order_id"]), symbol=order["tradingsymbol"])
+                try:
+                    broker.cancel_order(variety=order.get("variety") or "regular", order_id=order["order_id"])
+                except Exception as exc:
+                    problems.append(f'{order["tradingsymbol"]}: cancel failed ({type(exc).__name__}); retrying')
+                    logger.exception("AQTE emergency cancel failed for order %s", order["order_id"])
+            if not positions and not working:
+                self.finish_emergency(orders)
+                return
+            self.error = "; ".join(problems) or "Emergency square-off in progress; verify in Kite"
+
+    def finish_emergency(self, orders):
+        active = self.state["active"]
+        if active:
+            entry = next((o for o in orders if o.get("tag") == active["id"] + "E"), None)
+            filled = int(entry["filled_quantity"]) if entry else int(active.get("filled") or 0)
+            if filled:
+                entry_price = float(entry["average_price"]) if entry and float(entry.get("average_price") or 0) > 0 \
+                    else float(active.get("entry_price") or 0)
+                sells = [o for o in orders if o["tradingsymbol"] == active["contract"]["trading_symbol"] and
+                         o["transaction_type"] == "SELL" and int(o.get("filled_quantity") or 0) > 0 and
+                         o.get("tag") in (active["id"] + "S", KILL_TAG)]
+                sold = sum(int(o["filled_quantity"]) for o in sells)
+                exit_price = round(sum(float(o["average_price"]) * int(o["filled_quantity"]) for o in sells) / sold, 2) \
+                    if sold else None
+                net = round((exit_price - entry_price) * filled - self.costs(entry_price, filled) -
+                            self.costs(exit_price, filled), 2) if exit_price else 0.0
+                self.state["trades"].append({**active, "filled": filled, "entry_price": entry_price,
+                                             "exit_at": time.time(), "exit_price": exit_price,
+                                             "exit_reason": "EMERGENCY_STOP", "net_pnl": net,
+                                             "exit_unverified": exit_price is None})
+            self.state["active"] = None
+        self.state["flatten_pending"] = False
+        self.kill_sent.clear()
+        self.error = None
+        self.audit("EMERGENCY_FLAT", note="Kite reports no open positions or working orders")
+
+    def reset_emergency(self):
+        with self.lock:
+            if not self.ready:
+                raise LiveBlocked("Live journal is unavailable")
+            if not self.state["killed"]:
+                raise LiveBlocked("Emergency stop is not latched")
+            if self.state.get("flatten_pending") or self.state["active"]:
+                raise LiveBlocked("Emergency square-off still in progress; wait until Kite shows no open positions or orders")
+            self.state.update(killed=False, armed_day=None, automation_on=False)
+            self.error = None
+            self.save("EMERGENCY_RESET", note="Operator reviewed; automation remains OFF")
             return self.status()
 
     def fault_stop(self, message):
@@ -740,8 +901,11 @@ class AQTELiveService:
     async def monitor(self):
         while True:
             try:
-                await asyncio.to_thread(self.reconcile)
-                await asyncio.to_thread(self.automated_entry)
+                if self.state.get("flatten_pending"):
+                    await asyncio.to_thread(self.emergency_flatten)
+                else:
+                    await asyncio.to_thread(self.reconcile)
+                    await asyncio.to_thread(self.automated_entry)
             except Exception as exc:
                 logger.exception("AQTE live reconciliation requires attention; inspect broker terminal")
                 await asyncio.to_thread(self.fault_stop, f"{type(exc).__name__}: {exc}")

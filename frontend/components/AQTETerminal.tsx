@@ -1,6 +1,6 @@
 'use client';
 
-import { memo, type ReactNode } from 'react';
+import { memo, useState, type ReactNode } from 'react';
 import dynamic from 'next/dynamic';
 import { aqteLabel, aqteOverview, aqtePrice, aqteSigned, type AQTEMode, type AQTESignal, type AQTESymbol } from '@/lib/aqte-display';
 import type { MarketTick } from '@/hooks/useMarketSocket';
@@ -36,6 +36,9 @@ function AQTETerminal({ symbol, mode, signal, unavailable, active, tick, control
   active: boolean; tick: MarketTick | null; controls?: ReactNode; execution: ReactNode;
   liveStatus?: LiveState | null;
 }) {
+  // Once opened, the chart stays mounted so returning to this tab is instant.
+  const [chartOpened, setChartOpened] = useState(active);
+  if (active && !chartOpened) setChartOpened(true);
   const view = aqteOverview(signal, mode, unavailable);
   const { entry, info, position } = view;
   const real = mode === 'real';
@@ -56,45 +59,44 @@ function AQTETerminal({ symbol, mode, signal, unavailable, active, tick, control
         <div className="aqte-overview-grid" id={`${prefix}-overview`}>
           <div className="aqte-terminal-card aqte-overview-tile">
             <CardTitle icon="brain">Market View</CardTitle>
-            <strong className={`aqte-hero-value ${view.direction === 'BULLISH' ? 'aqte-up' : view.direction === 'BEARISH' ? 'aqte-down' : 'aqte-muted'}`}>{view.direction}</strong>
-            <p className="aqte-muted">{info ? `${info.structure.replaceAll('_', ' ')} · Futures intelligence` : 'Waiting for confirmed market intelligence'}</p>
+            <strong className={`aqte-hero-value ${view.direction === 'BULLISH' ? 'aqte-up' : view.direction === 'BEARISH' ? 'aqte-down' : 'aqte-muted'}`}>{view.direction === 'WAITING' ? '--' : view.direction}</strong>
+            <p className="aqte-muted">{info ? info.structure.replaceAll('_', ' ') : 'No live intelligence'}</p>
           </div>
           <div className="aqte-terminal-card aqte-overview-tile">
             <CardTitle icon="signal" tone="red">Trade Signal</CardTitle>
-            <strong className={`aqte-hero-value ${live?.filled || view.decision !== 'WAIT' ? 'aqte-up' : 'aqte-muted'}`}>{live?.filled ? 'LONG OPEN' : view.decision}</strong>
-            <p className="aqte-contract">{contract ?? (real ? 'See real execution below' : 'No qualifying contract')}</p>
-            <div className="aqte-confidence"><span>Rule score</span><strong>{view.confidence == null ? '--' : `${view.confidence}/100`}</strong></div>
-            <div className="aqte-confidence-track" aria-hidden="true"><span style={{ width: `${Math.min(100, Math.max(0, view.confidence ?? 0))}%` }} /></div>
+            <strong className={`aqte-hero-value ${live?.filled || view.decision !== 'WAIT' ? 'aqte-up' : 'aqte-muted'}`}>{live?.filled ? 'LONG OPEN' : view.decision === 'WAIT' ? '--' : view.decision}</strong>
+            {contract && <p className="aqte-contract">{contract}</p>}
+            {view.confidence != null && <div className="aqte-confidence"><span>Rule score</span><strong>{view.confidence}/100</strong></div>}
           </div>
           <div className="aqte-terminal-card aqte-overview-tile">
             <CardTitle icon="entry" tone="cyan">Entry Price</CardTitle>
             <strong className="aqte-hero-value">{aqtePrice(entryPrice)}</strong>
-            <p className="aqte-muted">{real ? live ? 'Broker average entry' : 'Broker-confirmed prices below' : 'Suggested range'}</p>
-            <p>{live ? `Live LTP: ${aqtePrice(liveCurrent ? live.metrics.ltp : null)}` : entry ? `${aqtePrice(entry.low)} – ${aqtePrice(entry.high)}` : '--'}</p>
+            <p className="aqte-muted">{real ? live && live.filled > 0 ? 'Broker average' : 'Awaiting fill' : 'Suggested range'}</p>
+            {live ? <p>LTP: {aqtePrice(liveCurrent ? live.metrics.ltp : null)}</p> :
+              entry && <p>{aqtePrice(entry.low)} – {aqtePrice(entry.high)}</p>}
           </div>
           <div className="aqte-terminal-card aqte-overview-tile">
             <CardTitle icon="shield" tone="red">Stop Loss</CardTitle>
             <strong className="aqte-hero-value aqte-down">{aqtePrice(stop)}</strong>
             <p className="aqte-muted">{real ? live?.protection_confirmed ? 'Broker-confirmed SL' : 'Protection not confirmed' : position ? 'Current paper SL' : 'Planned initial stop'}</p>
-            <p className="aqte-down">{entry ? `${aqteSigned(entry.stop - entry.maximum)} pts` : '--'}</p>
+            {entry && <p className="aqte-down">{aqteSigned(entry.stop - entry.maximum)} pts</p>}
           </div>
           <div className="aqte-terminal-card aqte-overview-tile">
             <CardTitle icon="trail" tone="purple">Trailing Stop Loss</CardTitle>
-            <strong className={`aqte-hero-value ${trailing ? 'aqte-up' : 'aqte-muted'}`}>{trailing ? 'ACTIVE' : real && !live ? 'SEE BELOW' : 'WAITING'}</strong>
-            <p className={trailing ? 'aqte-up' : 'aqte-muted'}>{real ? live ? `Trail starts after +${live.trail_start_r ?? 1}R` : 'Confirmed status in position' : position ? 'Paper · starts after +1R' : 'Awaiting entry'}</p>
-            <p>Current TSL: {trailing ? aqtePrice(stop) : '--'}</p>
+            <strong className={`aqte-hero-value ${trailing ? 'aqte-up' : 'aqte-muted'}`}>{trailing ? 'ACTIVE' : '--'}</strong>
+            {live || position ? <p className={trailing ? 'aqte-up' : 'aqte-muted'}>{real ? `Starts at +${live?.trail_start_r ?? 1}R` : 'Starts at +1R'}</p> : null}
+            {trailing && <p>Current TSL: {aqtePrice(stop)}</p>}
           </div>
           <div className="aqte-terminal-card aqte-overview-tile">
             <CardTitle icon="target" tone="gold">Targets</CardTitle>
+            <strong className="aqte-hero-value aqte-up">{aqtePrice(target)}</strong>
             <dl className="aqte-target-list">
-              <Readout label="Target" value={aqtePrice(target)} tone="aqte-up" />
               <Readout label="Net R / R" value={entry ? `${entry.reward_risk} : 1` : '--'} />
-              <Readout label="Mode" value={real ? 'Real · gated' : 'Paper only'} tone="aqte-cyan" />
             </dl>
           </div>
         </div>
         <div className="aqte-market-grid" id={`${prefix}-market`}>
-          {active ? <Chart symbol={symbol} tick={tick} /> : <div className="aqte-terminal-card aqte-chart-loading">Chart opens with this index tab.</div>}
+          {chartOpened ? <Chart symbol={symbol} tick={tick} /> : <div className="aqte-terminal-card aqte-chart-loading">Chart opens with this index tab.</div>}
           <section className="aqte-terminal-card aqte-flow-card" aria-label="Order book and market intelligence">
             <h4 className="aqte-small-title">Order Book <span className="aqte-muted">· Selected option</span></h4>
             <div className="aqte-depth-table" role="table" aria-label="Option depth availability">
@@ -125,6 +127,8 @@ function AQTETerminal({ symbol, mode, signal, unavailable, active, tick, control
             <p className="aqte-control-note">{real ? 'Daily limits do not force trades. Emergency stop and broker acknowledgements remain in the execution panel below.' : 'The header switch controls real trading separately. Paper mode never sends real entry orders.'}</p>
           </aside>
         </div>
+        <details className="aqte-terminal-card" id={`${prefix}-research`}>
+        <summary className="min-h-[44px] cursor-pointer py-3 font-semibold focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-300">Analysis, trade setup, strategy &amp; expected profit</summary>
         <div className="aqte-research-grid" id={`${prefix}-analysis`}>
           <section className="aqte-terminal-card">
             <CardTitle icon="brain" tone="cyan">Analysis</CardTitle>
@@ -166,6 +170,7 @@ function AQTETerminal({ symbol, mode, signal, unavailable, active, tick, control
             <p className="aqte-control-note">Illustration only, before fees and slippage. Target execution and profits are not guaranteed. No extra targets or scalp returns are invented.</p>
           </section>
         </div>
+        </details>
         {!real && <section id={`${prefix}-execution`} className="aqte-execution-dock" aria-label={`${aqteLabel(symbol)} execution workspace`}>
           <h4 className="aqte-dock-title"><Icon kind="entry" tone="blue" />Positions &amp; P&amp;L <span>{real ? 'REAL · BROKER STATE' : 'PAPER · SIMULATION'}</span></h4>
           {execution}

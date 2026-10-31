@@ -14,6 +14,7 @@ export type LiveState = {
   armed: boolean;
   automation_on: boolean;
   killed: boolean;
+  flatten_pending?: boolean;
   error: string | null;
   preflight: { ip: string; at: number; account: string } | null;
   limits: { risk_per_trade: number; daily_loss: number; max_trades: number; max_losses: number; max_lots: number };
@@ -66,6 +67,7 @@ export default function AQTELivePanel({ selectedSymbol, onStatus }: {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [connected, setConnected] = useState(false);
+  const [confirm, setConfirm] = useState<'stop' | 'reset' | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -115,6 +117,7 @@ export default function AQTELivePanel({ selectedSymbol, onStatus }: {
     }
   };
   const blocked = !connected || !status?.ready || !status.enabled || !status.paper_validated || status.killed;
+  const canReset = connected && !!status?.ready && status.killed && !status.flatten_pending && !status.active;
   const selectedPosition = status?.active && (!selectedSymbol || status.active.symbol === selectedSymbol) ? status.active : null;
   const button = 'min-h-[44px] rounded-lg border px-3 py-2 text-xs font-semibold disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-300';
   return (
@@ -127,38 +130,44 @@ export default function AQTELivePanel({ selectedSymbol, onStatus }: {
             connected && status?.automation_on ? 'border-emerald-400/40 bg-emerald-400/10 text-emerald-200' :
               'border-amber-400/40 bg-amber-400/10 text-amber-200'
         }`}>
-          {!connected ? 'STATUS UNAVAILABLE' : status?.killed ? 'EMERGENCY STOP' : status?.automation_on ? 'AUTOMATION ON' : status?.armed ? 'ARMED · AUTOMATION OFF' : 'LIVE LOCKED'}
+          {!connected ? 'STATUS UNAVAILABLE' : status?.killed && status.flatten_pending ? 'EMERGENCY · CLOSING ALL' : status?.killed ? 'EMERGENCY STOP' : status?.automation_on ? 'AUTOMATION ON' : status?.armed ? 'ARMED · AUTOMATION OFF' : 'LIVE LOCKED'}
         </span>
         </div>
-        <button type="button" className={`${button} ml-auto w-full border-rose-400/50 bg-rose-500/10 text-rose-100 shadow-sm transition-colors hover:bg-rose-500/20 sm:w-auto`} disabled={busy || !status?.ready} onClick={() => void act('stop', {})}>Emergency stop &amp; request exit</button>
+        <div className="ml-auto flex w-full flex-wrap gap-2 sm:w-auto sm:justify-end">
+          {status?.killed && (
+            <button type="button" className={`${button} w-full border-amber-400/40 text-amber-100 sm:w-auto`} disabled={busy || !canReset} onClick={() => setConfirm('reset')}>Reset emergency stop</button>
+          )}
+          <button type="button" className={`${button} ml-auto w-full border-rose-400/50 bg-rose-500/10 text-rose-100 shadow-sm transition-colors hover:bg-rose-500/20 sm:w-auto`} disabled={busy || !status} onClick={() => setConfirm('stop')}>Emergency stop · close all</button>
+        </div>
       </div>
-      <p className="text-xs leading-relaxed text-rose-200">AQTE auto trades only. For a temporary pause, use AUTO REAL TRADING OFF. Emergency Stop blocks entries and requests exit of AQTE-managed positions; it does not exit manual Kite trades.</p>
-      <details className="rounded-lg border border-amber-400/20 px-3 text-xs text-slate-400">
-      <summary className="cursor-pointer py-2 font-medium focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-300">Setup, limits &amp; safety details</summary>
-      <div className="space-y-3 pb-3">
-      <p>Switching tabs never places orders. After daily arming, use the header ON/OFF switch to authorize automatic real entries.</p>
-      {status && (
-        <div className="grid gap-2 text-xs text-slate-300 sm:grid-cols-3">
-          <p className="min-w-0 rounded-lg border border-slate-600/60 bg-slate-950/60 p-3">Configured static IP <strong className="mt-1 block break-words text-slate-100 tabular-nums">{status.expected_ip}</strong></p>
-          <p className="min-w-0 rounded-lg border border-slate-600/60 bg-slate-950/60 p-3">Risk / trade <strong className="mt-1 block break-words text-slate-100 tabular-nums">INR {money(status.limits.risk_per_trade)} · {status.limits.max_lots} lot max</strong></p>
-          <p className="min-w-0 rounded-lg border border-slate-600/60 bg-slate-950/60 p-3">Daily limits <strong className="mt-1 block break-words text-slate-100 tabular-nums">INR {money(status.limits.daily_loss)} · {status.limits.max_trades} trades · {status.limits.max_losses} losses</strong></p>
+      {confirm && (
+        <div role="alertdialog" aria-label={confirm === 'stop' ? 'Confirm emergency stop' : 'Confirm emergency reset'} className="space-y-2 rounded-lg border border-rose-400/50 bg-rose-500/10 p-3 text-xs leading-relaxed text-rose-100">
+          <p>{confirm === 'stop'
+            ? 'Close ALL open Kite positions (AQTE and manual) at marketable limit prices and cancel ALL open Kite orders? Automation turns OFF and stays locked until reset.'
+            : 'Kite shows no open positions or orders. Clear the emergency latch? Automation stays OFF until you switch it ON again.'}</p>
+          <div className="flex flex-wrap gap-2">
+            <button type="button" className={`${button} border-rose-400/60 bg-rose-500/20 text-rose-50`} disabled={busy} onClick={() => {
+              const kind = confirm;
+              setConfirm(null);
+              void act(kind, { confirmation: kind === 'stop' ? 'CLOSE ALL KITE POSITIONS' : 'RESET EMERGENCY STOP' });
+            }}>{confirm === 'stop' ? 'Yes, close everything now' : 'Yes, reset'}</button>
+            <button type="button" className={`${button} border-slate-500/50 text-slate-200`} onClick={() => setConfirm(null)}>Cancel</button>
+          </div>
         </div>
       )}
+      <p className="text-xs leading-relaxed text-rose-200">For a temporary pause, use AUTO REAL TRADING OFF. Emergency Stop is for crashes or broker problems: it cancels every open Kite order and squares off every open Kite position, including manual trades, retrying every 2 seconds until Kite is flat.</p>
+      <details className="rounded-lg border border-amber-400/20 px-3 text-xs text-slate-400">
+      <summary className="cursor-pointer py-2 font-medium focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-300">Live setup</summary>
+      <div className="space-y-3 pb-3">
       {(!status?.enabled || !status?.paper_validated) && (
         <p className="text-xs leading-relaxed text-amber-200">
-          Real trading is not enabled until AQTE_LIVE_ENABLED and AQTE_LIVE_PAPER_VALIDATED are approved in backend settings.
-          An IP whitelist alone is not validation. No real orders have been authorized by this view.
+          Real trading locked · Backend enablement and paper-validation approval required.
         </p>
-      )}
-      {status?.preflight && (
-        <p className="text-xs text-cyan-200">Last preflight: {status.preflight.ip} · Account {status.preflight.account} · {new Date(status.preflight.at * 1000).toLocaleTimeString()} (not continuous IP verification)</p>
       )}
       <div aria-label="Live setup controls" className="grid grid-cols-1 gap-2 sm:grid-cols-2">
         <button type="button" className={`${button} border-cyan-400/30 text-cyan-200`} disabled={busy || blocked || !!status?.active} onClick={() => void act('preflight', {})}>Check static IP &amp; Kite</button>
         <button type="button" className={`${button} border-amber-400/30 text-amber-200`} disabled={busy || blocked || !status?.preflight || status.armed || !!status.active} onClick={() => void act('arm', { confirmation: 'ARM REAL TRADING' })}>Arm real trading today</button>
       </div>
-      <p>Emergency exit is a request, not a fill guarantee. Broker stop-limit orders can remain unfilled after gaps. Keep Kite open; use its order book if a protection or reconciliation alert appears.</p>
-      <p>Trailing starts at the saved R threshold captured for each entry (default +1R), follows the highest fresh bid by the initial risk distance and never moves down. It updates the same broker stop; pending changes are not shown as confirmed. Protective exits and trailing continue while automation is OFF.</p>
       </div>
       </details>
       {(error || status?.error || status?.active?.error) && (
@@ -187,7 +196,10 @@ export default function AQTELivePanel({ selectedSymbol, onStatus }: {
           <p className="text-xs text-slate-400">{status?.active
             ? `An active ${status.active.symbol} live position is managed in its own index tab. Protective management continues; emergency stop remains account-wide.`
             : 'No AQTE-managed trade · Checking actual Zerodha positions below'}</p>
-          <AQTEBrokerPositions selectedSymbol={selectedSymbol ?? 'NIFTY'} />
+          <details open className="mt-2 min-w-0 rounded-lg border border-slate-600/60 px-3">
+            <summary className="min-h-[44px] cursor-pointer py-3 text-xs font-semibold text-cyan-200 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-300">Manual Zerodha positions · Read-only</summary>
+            <AQTEBrokerPositions selectedSymbol={selectedSymbol ?? 'NIFTY'} />
+          </details>
         </div>
       )}
       {!!status?.trades.length && <p className="text-xs text-slate-400">Last closed live trade: {status.trades[status.trades.length - 1].symbol} · Net estimate INR {money(status.trades[status.trades.length - 1].net_pnl)} (estimated costs, not broker contract-note charges)</p>}

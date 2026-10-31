@@ -42,7 +42,7 @@ import InsightDock from './InsightDock';
 import { useLevelBattle } from '@/hooks/useLevelBattle';
 import { LevelBattlePrimitive } from '@/lib/level-battle-primitive';
 import OrderFlowReadout from './OrderFlowReadout';
-import ChartPaperTrading, { usePaperSignalRecorder } from './ChartPaperTrading';
+import { usePaperSignalRecorder } from './ChartPaperTrading';
 import { useChartPaperTrading } from '@/hooks/useChartPaperTrading';
 import { chartPaperLevels, paperEventCandle, selectChartPaperTrade } from '@/lib/chart-paper-overlay';
 
@@ -77,7 +77,7 @@ interface ChartRuntime {
 function ChartWorkspace({ marketData, institutionalData = null }: { marketData: MarketData; institutionalData?: FIIDIISnapshot | null }) {
   const { chartData, isConnected } = useChartIntelligence();
   const [symbol, setSymbol] = useState<ChartSymbol>('NIFTY');
-  const [workspaceTab, setWorkspaceTab] = useState<'chart' | 'futures' | 'terminal' | 'mtf' | 'paper'>('chart');
+  const [workspaceTab, setWorkspaceTab] = useState<'chart' | 'futures' | 'terminal' | 'mtf'>('chart');
   const [futuresOpened, setFuturesOpened] = useState(false);
   const [terminalOpened, setTerminalOpened] = useState(false);
   const [mtfOpened, setMtfOpened] = useState(false);
@@ -707,8 +707,6 @@ function ChartWorkspace({ marketData, institutionalData = null }: { marketData: 
             setMtfOpened(true);
             setWorkspaceTab('mtf');
           }}>Multi-Timeframe</button>
-        <button id="observatory-paper-tab" role="tab" aria-selected={workspaceTab === 'paper'} aria-controls="observatory-paper-content"
-          className={styles.viewTab} onClick={() => setWorkspaceTab('paper')}>Automated Paper Trading</button>
       </div>
       <div id="observatory-futures-content" role="tabpanel" aria-labelledby="observatory-futures-tab" hidden={workspaceTab !== 'futures'}>
         {futuresOpened && <FuturesChart active={workspaceTab === 'futures'} />}
@@ -720,9 +718,6 @@ function ChartWorkspace({ marketData, institutionalData = null }: { marketData: 
         {mtfOpened && <MultiTimeframeChart active={workspaceTab === 'mtf'} marketData={marketData} chartData={chartData} />}
       </div>
       {paperRecorderError && <p role="alert" className="p-3 text-red-400">{paperRecorderError}</p>}
-      <div id="observatory-paper-content" role="tabpanel" aria-labelledby="observatory-paper-tab" hidden={workspaceTab !== 'paper'}>
-        {workspaceTab === 'paper' && <ChartPaperTrading recorderError={paperRecorderError} />}
-      </div>
       <div id="observatory-chart-content" role="tabpanel" aria-labelledby="observatory-chart-tab" hidden={workspaceTab !== 'chart'}>
       <details className={styles.compactDetails}>
       <summary>Paper trade overlays</summary>

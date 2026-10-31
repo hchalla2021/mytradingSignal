@@ -100,7 +100,8 @@ class LiveTests(unittest.TestCase):
         filled = CONTRACT.lot_size if filled is None else filled
         self.orders[0].update(status="COMPLETE" if filled == CONTRACT.lot_size else "CANCELLED",
                               filled_quantity=filled, average_price=price)
-        self.positions = [{"instrument_token": CONTRACT.token, "product": "MIS", "quantity": filled}]
+        self.positions = [{"instrument_token": CONTRACT.token, "product": "MIS", "quantity": filled,
+                           "exchange": CONTRACT.exchange, "tradingsymbol": CONTRACT.trading_symbol, "last_price": 99}]
         return proposal
 
     def protect(self, filled=None):
@@ -446,29 +447,93 @@ class LiveTests(unittest.TestCase):
         self.assertGreater(self.live.state["active"]["stop"], old_stop)
         self.broker.modify_order.assert_called_once()
 
-    def test_unknown_modify_not_retried_unless_broker_confirms_it(self):
+    def test_emergency_stop_forces_exit_through_existing_stop_even_with_stale_feed(self):
         self.protect()
-        self.live.stop_entries()
-        self.broker.modify_order.side_effect = TimeoutError("Unknown modify")
-        with self.assertRaises(TimeoutError):
-            self.live.reconcile()
-        with self.assertRaisesRegex(LiveBlocked, "modification outcome unresolved"):
-            self.live.reconcile()
-        self.broker.modify_order.assert_called_once()
-
-    def test_stale_quote_preserves_stop_and_emergency_stop_latches(self):
-        self.protect()
-        self.live.stop_entries()
         self.market.engine.options[CONTRACT.token] = tick("option", at=NOW - 20)
-        self.live.reconcile()
-        self.broker.modify_order.assert_not_called()
-        self.assertIn("Broker stop remains", self.live.state["active"]["error"])
-        self.assertTrue(self.live.state["killed"])
+        placed = self.broker.place_order.call_count
+        result = self.live.stop_entries()
+        self.assertTrue(result["killed"])
+        self.assertTrue(result["flatten_pending"])
+        self.assertFalse(result["automation_on"])
+        modify = self.broker.modify_order.call_args.kwargs
+        self.assertEqual((modify["order_id"], modify["order_type"], modify["price"]), ("2", "LIMIT", 94.05))
+        self.assertEqual(self.broker.place_order.call_count, placed)
         with self.assertRaisesRegex(LiveBlocked, "latched"):
             self.live.arm()
-        self.market.engine.options[CONTRACT.token] = tick("option")
-        self.live.reconcile()
-        self.assertEqual(self.broker.modify_order.call_args.kwargs["order_id"], "2")
+        self.live.emergency_flatten()
+        self.broker.modify_order.assert_called_once()
+        self.orders[1].update(status="COMPLETE", filled_quantity=CONTRACT.lot_size, average_price=94.05)
+        self.positions[0]["quantity"] = 0
+        self.live.emergency_flatten()
+        status = self.live.status()
+        self.assertFalse(status["flatten_pending"])
+        self.assertIsNone(status["active"])
+        trade = self.live.state["trades"][-1]
+        self.assertEqual((trade["exit_reason"], trade["exit_price"]), ("EMERGENCY_STOP", 94.05))
+        self.assertLess(trade["net_pnl"], 0)
+
+    def test_emergency_stop_closes_manual_positions_cancels_orders_then_resets_off(self):
+        self.positions = [{"exchange": "NFO", "tradingsymbol": "BANKNIFTYMANUALPE", "product": "NRML",
+                           "quantity": -30, "last_price": 200, "instrument_token": 7}]
+        self.orders = [{"order_id": "M1", "status": "OPEN", "exchange": "NFO", "tradingsymbol": "NIFTYMANUALCE",
+                        "transaction_type": "BUY", "quantity": 75, "filled_quantity": 0, "variety": "regular",
+                        "order_type": "LIMIT", "price": 10, "tag": None}]
+        self.live.stop_entries()
+        exit_order = self.broker.place_order.call_args.kwargs
+        self.assertEqual((exit_order["transaction_type"], exit_order["quantity"], exit_order["price"],
+                          exit_order["product"], exit_order["tag"]), ("BUY", 30, 210.0, "NRML", "AQTEKILL"))
+        self.broker.cancel_order.assert_called_once_with(variety="regular", order_id="M1")
+        self.live.emergency_flatten()
+        self.assertEqual(self.broker.place_order.call_count, 1)
+        self.orders[0]["status"] = "CANCELLED"
+        self.orders[1].update(status="COMPLETE", filled_quantity=30, average_price=205)
+        with patch("services.aqte_live.time.time", return_value=NOW + 10):
+            self.live.emergency_flatten()
+        self.assertEqual(self.broker.place_order.call_count, 1, "lagging positions must not double exit")
+        with self.assertRaisesRegex(LiveBlocked, "in progress"):
+            self.live.reset_emergency()
+        self.positions = []
+        self.live.emergency_flatten()
+        self.assertFalse(self.live.status()["flatten_pending"])
+        result = self.live.reset_emergency()
+        self.assertFalse(result["killed"])
+        self.assertFalse(result["automation_on"])
+        self.assertFalse(result["armed"])
+
+    def test_emergency_exit_rejections_stop_at_cap_and_keep_reset_blocked(self):
+        self.positions = [{"exchange": "NFO", "tradingsymbol": "NIFTYMANUALCE", "product": "MIS",
+                           "quantity": 75, "last_price": 50, "instrument_token": 8}]
+
+        def reject(**params):
+            order_id = self.place(**params)
+            self.orders[-1].update(status="REJECTED", status_message="Price band")
+            return order_id
+
+        self.broker.place_order.side_effect = reject
+        self.live.stop_entries()
+        for step in range(1, 8):
+            with patch("services.aqte_live.time.time", return_value=NOW + step * 5):
+                self.live.emergency_flatten()
+        self.assertEqual(self.broker.place_order.call_count, 5)
+        self.assertIn("square off in Kite", self.live.status()["error"])
+        with self.assertRaisesRegex(LiveBlocked, "in progress"):
+            self.live.reset_emergency()
+
+    def test_emergency_stop_latches_during_broker_outage_and_resumes_after_restart(self):
+        self.broker.orders.side_effect = ConnectionError("Kite down")
+        result = self.live.stop_entries()
+        self.assertTrue(result["killed"])
+        self.assertTrue(result["flatten_pending"])
+        self.assertIn("retrying", result["error"])
+        self.live.release_owner()
+        restored = self.new_service()
+        restored.initialize()
+        self.addCleanup(restored.release_owner)
+        self.assertTrue(restored.status()["flatten_pending"])
+        self.broker.orders.side_effect = lambda: copy.deepcopy(self.orders)
+        restored.emergency_flatten()
+        self.assertFalse(restored.status()["flatten_pending"])
+        self.assertTrue(restored.status()["killed"])
 
     def test_manual_quantity_change_and_previous_session_fail_closed(self):
         self.protect()
@@ -548,6 +613,39 @@ class LiveTests(unittest.TestCase):
         with self.assertRaisesRegex(LiveBlocked, "OFF"):
             self.live.proposal("NIFTY")
         self.assertFalse(self.live.status()["automation_on"])
+
+    def test_confirmed_start_checks_and_arms_then_off_can_pause_and_resume(self):
+        self.assertFalse(self.live.status()["automation_on"])
+        result = self.live.start_automation()
+        self.assertTrue(result["armed"])
+        self.assertTrue(result["automation_on"])
+        self.ip.assert_called()
+        self.broker.place_order.assert_not_called()
+        self.live.set_automation(False)
+        self.assertFalse(self.live.status()["automation_on"])
+        self.assertTrue(self.live.start_automation()["automation_on"])
+        self.broker.place_order.assert_not_called()
+
+    def test_confirmed_start_never_clears_emergency_or_bypasses_configuration(self):
+        self.live.stop_entries()
+        with self.assertRaisesRegex(LiveBlocked, "operator review"):
+            self.live.start_automation()
+        self.assertTrue(self.live.state["killed"])
+        self.assertFalse(self.live.status()["automation_on"])
+        self.ip.assert_not_called()
+        self.broker.place_order.assert_not_called()
+
+    def test_confirmed_start_failed_preflight_or_closed_session_stays_off(self):
+        self.ip.return_value = "1.2.3.4"
+        with self.assertRaises(LiveBlocked):
+            self.live.start_automation()
+        self.assertFalse(self.live.status()["automation_on"])
+        self.assertFalse(self.live.status()["armed"])
+        closed = datetime(2026, 10, 31, 10, 0, tzinfo=IST).timestamp()
+        with patch("services.aqte_live.time.time", return_value=closed):
+            with self.assertRaisesRegex(LiveBlocked, "09:15"):
+                self.live.start_automation()
+        self.broker.place_order.assert_not_called()
 
     def test_on_automatically_enters_one_signal_and_off_blocks_further_entries(self):
         with self.assertRaisesRegex(LiveBlocked, "explicitly arm"):
@@ -634,6 +732,19 @@ class LiveTests(unittest.TestCase):
 
 
 class LiveAPITests(unittest.TestCase):
+    def test_invalid_kite_token_is_explicit_and_does_not_mutate_broker(self):
+        from kiteconnect.exceptions import TokenException
+        from routers.aqte import live_call
+        import asyncio
+        from fastapi import HTTPException
+        reader = Mock(side_effect=TokenException("Incorrect api_key or access_token"))
+        with self.assertRaises(HTTPException) as raised:
+            asyncio.run(live_call(reader))
+        self.assertEqual(raised.exception.status_code, 409)
+        self.assertIn("Sign in again", raised.exception.detail)
+        self.assertIn("App-access login is separate", raised.exception.detail)
+        reader.assert_called_once_with()
+
     def setUp(self):
         from routers.aqte import router
         app = FastAPI()
@@ -685,6 +796,19 @@ class LiveAPITests(unittest.TestCase):
             self.assertEqual(self.client.post("/api/aqte/live/automation", headers=self.headers,
                                              json={"enabled": False, "confirmation": "STOP NEW ENTRIES"}).status_code, 200)
             controller.set_automation.assert_called_once_with(False)
+            controller.stop_entries.return_value = {"killed": True}
+            controller.reset_emergency.return_value = {"killed": False}
+            self.assertEqual(self.client.post("/api/aqte/live/stop", headers=self.headers, json={}).status_code, 422)
+            controller.stop_entries.assert_not_called()
+            self.assertEqual(self.client.post("/api/aqte/live/stop", headers=self.headers,
+                                             json={"confirmation": "CLOSE ALL KITE POSITIONS"}).status_code, 200)
+            controller.stop_entries.assert_called_once()
+            self.assertEqual(self.client.post("/api/aqte/live/reset", headers=self.headers,
+                                             json={"confirmation": "CLOSE ALL KITE POSITIONS"}).status_code, 422)
+            controller.reset_emergency.assert_not_called()
+            self.assertEqual(self.client.post("/api/aqte/live/reset", headers=self.headers,
+                                             json={"confirmation": "RESET EMERGENCY STOP"}).status_code, 200)
+            controller.reset_emergency.assert_called_once()
 
     def test_daily_control_routes_are_owner_only_strict_and_do_not_arm_or_submit(self):
         controller = Mock()

@@ -7,12 +7,14 @@ import threading
 import time
 
 from services.aqte_live import broker_client
-from services.aqte_service import normalize
+from services.aqte_service import get_aqte_service, normalize
+from services.aqte_engine import SYMBOLS, session
 
 
 class BrokerPositions:
-    def __init__(self, broker=None):
+    def __init__(self, broker=None, market=None):
         self.broker = broker or broker_client
+        self.market = market or get_aqte_service
         self.lock = threading.Lock()
         self.cached = None
         self.cached_at = 0
@@ -20,6 +22,20 @@ class BrokerPositions:
     def snapshot(self):
         with self.lock:
             now = time.time()
+            reason = None
+            if not session(now):
+                reason = "Market closed. Broker readout resumes during 09:15–15:30 IST on trading weekdays."
+            else:
+                market = self.market()
+                with market.lock:
+                    live = market.started and not market.failed.is_set() and any(
+                        market.engine.fresh(market.engine.spot.get(symbol), now) for symbol in SYMBOLS)
+                if not live:
+                    reason = "Waiting for live market feed. Broker readout is paused; check Zerodha login if the feed does not resume."
+            if reason:
+                self.cached = None
+                self.cached_at = 0
+                return dict(generated_at=now, positions=[], read_only=True, paused=True, reason=reason)
             client = self.broker()
             # Credentials are never returned or stored in the display payload.
             identity = (client.api_key, client.access_token)
@@ -81,7 +97,7 @@ class BrokerPositions:
                     points=points, return_pct=percent, gross_pnl=gross,
                     stops=stops, exit_orders=exits,
                 ))
-            payload = dict(generated_at=time.time(), positions=result, read_only=True)
+            payload = dict(generated_at=time.time(), positions=result, read_only=True, paused=False)
             self.cached, self.cached_at, self.identity = payload, time.time(), identity
             return copy.deepcopy(payload)
 

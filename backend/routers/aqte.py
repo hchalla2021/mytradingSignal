@@ -8,6 +8,7 @@ from typing import Literal
 from fastapi import APIRouter, Cookie, Depends, Header, HTTPException, Query, Request, Response
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from kiteconnect.exceptions import TokenException
 
 from services.aqte_service import get_aqte_service
 from services.auth import auth_service
@@ -81,6 +82,12 @@ async def live_operator(
 async def live_call(method, *args):
     try:
         return await asyncio.to_thread(method, *args)
+    except TokenException as exc:
+        logger.warning("AQTE live request blocked: Kite session expired or invalid; broker login required")
+        raise HTTPException(status_code=409, detail=(
+            "Kite session expired or invalid. Sign in again using the existing Zerodha login; "
+            "verify the configured Kite app if login still fails. App-access login is separate."
+        )) from exc
     except LiveBlocked as exc:
         logger.warning("AQTE live request blocked: %s", exc)
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -105,6 +112,14 @@ class ConfirmLive(BaseModel):
 class AutomationLive(BaseModel):
     enabled: bool = Field(strict=True)
     confirmation: Literal["START AUTOMATED REAL TRADING", "STOP NEW ENTRIES"]
+
+
+class EmergencyStop(BaseModel):
+    confirmation: Literal["CLOSE ALL KITE POSITIONS"]
+
+
+class EmergencyReset(BaseModel):
+    confirmation: Literal["RESET EMERGENCY STOP"]
 
 
 class DailyControlUpdate(BaseModel):
@@ -168,8 +183,13 @@ async def live_confirm(body: ConfirmLive):
 
 
 @router.post("/live/stop", dependencies=[Depends(live_operator)])
-async def live_stop():
+async def live_stop(body: EmergencyStop):
     return await live_call(get_live_service().stop_entries)
+
+
+@router.post("/live/reset", dependencies=[Depends(live_operator)])
+async def live_reset(body: EmergencyReset):
+    return await live_call(get_live_service().reset_emergency)
 
 
 @router.post("/live/automation", dependencies=[Depends(live_operator)])
@@ -178,3 +198,10 @@ async def live_automation(body: AutomationLive):
     if body.confirmation != expected:
         raise HTTPException(status_code=422, detail="Automation confirmation does not match the requested state")
     return await live_call(get_live_service().set_automation, body.enabled)
+
+
+@router.post("/live/start", dependencies=[Depends(live_operator)])
+async def live_start(body: AutomationLive):
+    if not body.enabled or body.confirmation != "START AUTOMATED REAL TRADING":
+        raise HTTPException(status_code=422, detail="Explicit real-money ON confirmation required")
+    return await live_call(get_live_service().start_automation)

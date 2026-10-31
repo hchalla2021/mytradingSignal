@@ -5,7 +5,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 const ts = require('typescript');
 
-function harness(filename = 'AQTESection.tsx') {
+function harness(filename = 'AQTESection.tsx', now) {
   const states = [];
   const timers = new Map();
   const requests = [];
@@ -30,6 +30,7 @@ function harness(filename = 'AQTESection.tsx') {
   }).outputText;
   const context = {
     exports: {}, AbortController,
+    Date: now === undefined ? Date : class extends Date { static now() { return now; } },
     setTimeout: (fn, delay) => { timers.set(++timer, { fn, delay }); return timer; },
     clearTimeout: id => timers.delete(id),
     fetch: async (url, options) => {
@@ -45,6 +46,7 @@ function harness(filename = 'AQTESection.tsx') {
       if (id === '@/components/AQTEAutomationSwitch') return { default: () => null };
       if (id === '@/components/AQTEDailyControl') return { default: () => null };
       if (id === 'next/dynamic') return { default: () => () => null };
+      if (id === '@/hooks/useChartHistory') return { prefetchChartHistory: async () => {} };
       if (id === '@/lib/aqte-display') {
         const code = ts.transpileModule(readFileSync(path.join(__dirname, '..', 'lib', 'aqte-display.ts'), 'utf8'),
           { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 } }).outputText;
@@ -276,6 +278,40 @@ test('terminal real overview uses only matching broker fills and confirmed stops
   assert.doesNotMatch(text(tree), /NIFTY_REAL_CE|102.50|110.00/);
 });
 
+test('overview keeps concise readable green-bordered cards without placeholder explanations', () => {
+  const tree = harness('AQTETerminal.tsx').render({
+    symbol: 'SENSEX', mode: 'real', unavailable: true, active: true, tick: null, execution: null,
+  });
+
+  test('AQTE typography stays readable without shrinking mobile labels', () => {
+    const styles = readFileSync(path.join(__dirname, '..', 'app', 'globals.css'), 'utf8');
+    assert.match(styles, /\.aqte-theme \{ font-size: 0\.875rem; line-height: 1\.6; \}/);
+    assert.match(styles, /\.aqte-theme #aqte-title \{[^}]*font-size: clamp\(1\.125rem, 1\.5cqw, 1\.5rem\)/);
+    assert.match(styles, /\.aqte-theme \.aqte-position-cell dd \{ font-size: 1rem; \}/);
+    assert.match(styles, /\.aqte-theme \.aqte-overview-tile \.aqte-hero-value \{\s*font-size: 1\.5rem; font-weight: 700/);
+    assert.match(styles, /font-family: var\(--font-inter\), 'Segoe UI', sans-serif; letter-spacing: normal/);
+    assert.match(styles, /@container \(max-width: 380px\) \{\s*\.aqte-theme \.aqte-overview-grid \{ grid-template-columns: minmax\(0, 1fr\); \}/);
+  });
+
+  test('broker metrics have individual light-green bordered tiles within a matching panel', () => {
+    const tree = harness('AQTEBrokerPositions.tsx').render({ selectedSymbol: 'SENSEX' });
+    assert.match(tree.props.className, /aqte-broker-panel/);
+    const styles = readFileSync(path.join(__dirname, '..', 'app', 'globals.css'), 'utf8');
+    assert.match(styles, /\.aqte-theme \.aqte-broker-panel \.aqte-position-table \{\s*gap: 8px; padding: 10px/);
+    assert.match(styles, /\.aqte-theme \.aqte-broker-panel \.aqte-position-cell \{\s*border: 1px solid rgb\(134 239 172 \/ 0\.35\); border-radius: 8px/);
+  });
+  const overview = nodes(tree).find(n => n.props?.className === 'aqte-overview-grid');
+  assert.equal(overview.props.children.length, 6);
+  assert.doesNotMatch(text(overview), /See real execution below|Broker-confirmed prices below|SEE BELOW|Confirmed status in position|Rule score|Real · gated/);
+  const values = nodes(overview).filter(n => n.props?.className?.includes('aqte-hero-value')).map(text);
+  assert.deepEqual(values, ['--', '--', '--', '--', '--', '--']);
+  assert.match(text(overview), /No live intelligence|Awaiting fill/);
+  assert.match(text(overview), /Protection not confirmed/);
+  const styles = readFileSync(path.join(__dirname, '..', 'app', 'globals.css'), 'utf8');
+  assert.match(styles, /\.aqte-theme \.aqte-overview-tile \{[\s\S]*?border-color: rgb\(134 239 172 \/ 0\.45\)/);
+  assert.match(styles, /\.aqte-theme \.aqte-overview-tile \.aqte-muted \{ color: #c4d5d2; \}/);
+});
+
 test('compact position row keeps live entry, stop, trailing, net profit, points and percent visible', () => {
   const tree = harness('AQTEPosition.tsx').render({ ...positionFixture(), compact: true });
   const summary = nodes(tree).find(n => n.props?.['aria-label'] === 'Compact position summary');
@@ -353,37 +389,49 @@ test('AQTE tabs have scoped accent styling without changing keyboard or selectio
   }
 });
 
-test('live control badge is green only for confirmed ON, yellow for OFF/unknown and red for emergency stop', () => {
-  const h = harness();
-  const badge = () => nodes(h.render()).find(n => n.props?.['aria-label'] === 'AQTE view status');
-  const report = nodes(h.render()).find(n => n.props?.onStatus && !n.props.selectedSymbol).props.onStatus;
-  assert.match(text(badge()), /STATUS UNKNOWN/);
-  assert.match(badge().props.className, /text-amber/);
-  report({ automation_on: false, killed: false });
-  assert.match(text(badge()), /LIVE CONTROL · OFF/);
-  assert.match(badge().props.className, /text-amber/);
-  report({ automation_on: true, killed: false });
-  assert.match(text(badge()), /LIVE CONTROL · ON/);
-  assert.match(badge().props.className, /text-emerald/);
-  report(null);
-  assert.match(text(badge()), /STATUS UNKNOWN/);
-  assert.doesNotMatch(badge().props.className, /text-emerald/);
-  report({ automation_on: true, killed: true });
-  assert.match(text(badge()), /EMERGENCY STOP/);
-  assert.match(badge().props.className, /text-rose/);
-  assert.equal(h.requests.length, 0);
+test('market badge requires fresh weekday feed and distinguishes OFF from CLOSED', () => {
+  for (const [at, connected, age, expected] of [
+    ['2026-10-30T09:15:00+05:30', true, 0, 'LIVE'],
+    ['2026-10-30T10:00:00+05:30', false, 0, 'FEED OFF'],
+    ['2026-10-30T10:00:00+05:30', true, 10, 'FEED OFF'],
+    ['2026-10-30T15:30:00+05:30', true, 0, 'CLOSED'],
+    ['2026-10-31T10:00:00+05:30', true, 0, 'CLOSED'],
+  ]) {
+    const now = Date.parse(at);
+    const h = harness('AQTESection.tsx', now);
+    const tree = h.render({ isConnected: connected, marketData: {
+      NIFTY: { price: 23000, status: 'LIVE', timestamp: new Date(now - age * 1000).toISOString() },
+    } });
+    const badge = nodes(tree).find(n => n.props?.['aria-label'] === 'AQTE view status');
+    assert.equal(text(badge).trim(), expected);
+    const title = nodes(tree).find(n => n.props?.id === 'aqte-title');
+    assert.equal(nodes(title).find(n => n.props?.['aria-label'] === 'AQTE view status'), badge);
+    assert.match(text(title), /Trading Engine\s+(LIVE|FEED OFF|CLOSED)$/);
+    assert.match(badge.props.className, expected === 'LIVE' ? /text-emerald/ : /text-amber/);
+    assert.equal(h.requests.length, 0);
+  }
+});
+
+test('AQTE title wraps within a shrinkable column and keeps the status badge together', () => {
+  const styles = readFileSync(path.join(__dirname, '..', 'app', 'globals.css'), 'utf8');
+  assert.match(styles, /\.aqte-theme \.aqte-heading \{\s*display: grid; grid-template-columns: 44px minmax\(0, 1fr\); align-items: start/);
+  assert.match(styles, /grid-template-columns: 32px minmax\(0, 1fr\); gap: 8px/);
+  assert.match(styles, /\.aqte-theme #aqte-title \{[^}]*white-space: normal; word-break: normal; overflow-wrap: anywhere/s);
+  assert.match(styles, /\.aqte-theme \.aqte-view-status \{[^}]*white-space: nowrap/s);
+  assert.doesNotMatch(styles, /\.aqte-theme \.aqte-heading \{[^}]*padding-right:/);
 });
 
 test('AQTE defaults to Real Trade without submitting or exposing paper trades', async () => {
   const h = harness();
   let tree = h.render();
   assert.match(text(tree), /Real Trade.*Auto/);
-  assert.match(text(tree), /Paper trading disabled.*Automation defaults OFF/);
+  assert.match(nodes(tree).find(n => n.props?.id === 'aqte-real-view').props.className, /sr-only/);
+  assert.doesNotMatch(text(tree), /Paper trading disabled.*Automation defaults OFF/);
   assert.equal(nodes(tree).filter(n => n.props?.id === 'aqte-tab-paper').length, 0);
   const cleanup = h.mount(fixture());
   await settle();
   tree = h.render();
-  assert.match(text(tree), /LIVE CONTROL/);
+  assert.match(text(tree), /CLOSED|FEED OFF|LIVE/);
   assert.doesNotMatch(text(tree), /BUY CE|NIFTY_TEST_CE|Paper realized P&L/);
   assert.ok(h.requests.every(request => !request.options.method || request.options.method === 'GET'));
   cleanup();
@@ -405,7 +453,7 @@ test('AQTE has three index-only cards above charts, without execution controls',
   assert.match(text(cards[1]), /BANK NIFTY/);
   assert.doesNotMatch(text(cards[1]), /BUY CE|NIFTY_TEST_CE/);
   assert.doesNotMatch(text(cards[2]), /BUY CE|NIFTY_TEST_CE/);
-  assert.match(text(tree), /Unvalidated rule baseline/);
+  assert.doesNotMatch(text(tree), /Backend analysis · Gated real execution only|Execution notes/);
   cleanup();
   assert.equal(h.timers.size, 0);
 });
@@ -481,7 +529,7 @@ test('real-only view never shows retained paper entries, positions or P&L during
   let tree = h.render();
   assert.equal(nodes(tree).find(n => n.props?.id === 'aqte-trading-panel').props['aria-labelledby'], 'aqte-real-view');
   assert.equal(nodes(tree).filter(n => n.props?.id === 'aqte-tab-paper').length, 0);
-  assert.match(text(tree), /LIVE CONTROL/);
+  assert.match(text(tree), /CLOSED|FEED OFF|LIVE/);
   assert.doesNotMatch(text(tree), /BUY CE|NIFTY_TEST_CE|Paper position|Paper realized P&L/);
   assert.equal(nodes(tree).filter(n => n.type === 'article').length, 3);
   await h.poll(payload);
@@ -657,24 +705,34 @@ test('explanatory text is collapsed by default without hiding trading metrics or
   const cleanup = live.mount(liveFixture());
   await settle();
   const tree = live.render();
-  const setup = nodes(tree).find(n => n.type === 'details' && text(n).includes('Setup, limits'));
+  const setup = nodes(tree).find(n => n.type === 'details' && text(n).startsWith('Live setup'));
   assert.ok(setup);
   assert.ok(!setup.props.open);
-  assert.match(text(setup), /122.177.245.101/);
-  assert.match(text(setup), /stop-limit orders/);
+  assert.doesNotMatch(text(setup), /Configured static IP|Risk \/ trade|Daily limits|Trailing starts|Switching tabs/);
   assert.match(text(setup), /Check static IP & Kite/);
   assert.match(text(setup), /Arm real trading today/);
-  assert.doesNotMatch(text(setup), /Emergency stop & request exit/);
+  assert.doesNotMatch(text(setup), /Emergency stop · close all/);
+  assert.match(text(tree), /including manual trades/);
   const topControls = nodes(tree).find(n => n.props?.['aria-label'] === 'Live trading controls');
-  assert.match(text(topControls), /Emergency stop & request exit/);
-  assert.doesNotMatch(text(topControls), /Check static IP|Arm real trading today/);
+  assert.match(text(topControls), /Emergency stop · close all/);
+  assert.doesNotMatch(text(topControls), /Check static IP|Arm real trading today|Reset emergency stop/);
   const emergency = nodes(topControls).find(n => n.type === 'button');
   assert.match(emergency.props.className, /ml-auto/);
   assert.match(emergency.props.className, /sm:w-auto/);
-  await emergency.props.onClick();
+  emergency.props.onClick();
+  await settle();
+  assert.equal(live.requests.filter(r => r.options.method === 'POST').length, 0, 'emergency stop requires confirmation');
+  let dialog = nodes(live.render()).find(n => n.props?.role === 'alertdialog');
+  assert.match(text(dialog), /Close ALL open Kite positions \(AQTE and manual\)/);
+  nodes(dialog).find(n => n.type === 'button' && text(n) === 'Cancel').props.onClick();
+  assert.ok(!nodes(live.render()).some(n => n.props?.role === 'alertdialog'));
+  emergency.props.onClick();
+  dialog = nodes(live.render()).find(n => n.props?.role === 'alertdialog');
+  nodes(dialog).find(n => n.type === 'button' && text(n).startsWith('Yes')).props.onClick();
   await settle();
   const sent = live.requests.find(r => r.options.method === 'POST');
   assert.ok(sent.url.endsWith('/live/stop'));
+  assert.deepEqual(JSON.parse(sent.options.body), { confirmation: 'CLOSE ALL KITE POSITIONS' });
   assert.ok(nodes(tree).some(n => n.type === 'button' && text(n).includes('Emergency stop')));
   const section = harness().render();
   for (const detail of nodes(section).filter(n => n.type === 'details')) assert.ok(!detail.props.open);
@@ -726,7 +784,10 @@ test('responsive AQTE avoids clipped containers and keeps tabs and live actions 
   assert.match(section.props.className, /\baqte-theme\b/);
   const styles = readFileSync(path.join(__dirname, '..', 'app', 'globals.css'), 'utf8');
   assert.match(styles, /\.aqte-theme \.aqte-metric\s*\{\s*border-color: rgb\(134 239 172 \/ 0\.3\)/);
-  assert.doesNotMatch(styles, /\.aqte-theme :is\(/);
+  assert.match(styles, /\.aqte-theme :is\(p, h2, h3, h4, dt, dd, summary, label, output\) \{ overflow-wrap: anywhere; \}/);
+  assert.match(styles, /@container \(max-width: 900px\)/);
+  assert.match(styles, /@container \(max-width: 300px\)/);
+  assert.match(styles, /\.aqte-theme \.aqte-daily-label[\s\S]*?grid-column: 1 \/ -1/);
   assert.match(section.props.className, /border-slate-600/);
   assert.doesNotMatch(section.props.className, /overflow-hidden/);
   for (const tab of nodes(tree).filter(n => n.props?.role === 'tab')) {
@@ -816,7 +877,7 @@ test('real controller polls status only and keeps entry controls disabled by def
   const cleanup = h.mount(liveFixture());
   await settle();
   const tree = h.render();
-  assert.match(text(tree), /122.177.245.101/);
+  assert.match(text(tree), /Backend enablement and paper-validation approval required/);
   assert.match(text(tree), /LIVE LOCKED/);
   const buttons = nodes(tree).filter(n => n.type === 'button');
   assert.ok(buttons.filter(n => !text(n).includes('Emergency')).every(n => n.props.disabled));
@@ -829,14 +890,12 @@ test('real controller polls status only and keeps entry controls disabled by def
 test('header switch defaults OFF and only confirmed ON sends automation command', async () => {
   const h = harness('AQTEAutomationSwitch.tsx');
   h.render();
-  const status = { ...liveFixture(), enabled: true, paper_validated: true, armed: true };
+  const status = { ...liveFixture(), enabled: true, paper_validated: true, armed: false };
   const cleanup = h.mount(status);
   await settle();
-  const schedule = nodes(h.render()).find(n => n.props?.['aria-label'] === 'AQTE auto trading schedule');
-  assert.match(text(schedule), /AQTE auto trading only.*9:15 AM–3:30 PM IST/);
-  assert.match(text(schedule), /New entries until 3:15 PM.*Square-off starts 3:25 PM/);
-  assert.match(text(schedule), /saved index limits and risk settings/);
-  assert.match(text(schedule), /OFF: pause new entries; open-position protection continues/);
+  assert.equal(nodes(h.render()).filter(n => n.props?.['aria-label'] === 'AQTE auto trading schedule').length, 0);
+  assert.equal(nodes(h.render()).filter(n => n.type === 'details').length, 0);
+  assert.match(nodes(h.render()).find(n => n.props?.id === 'aqte-automation-help').props.className, /sr-only/);
   assert.equal(nodes(h.render()).find(n => n.props?.role === 'switch').props['aria-checked'], false);
   assert.ok(h.requests.every(r => r.options.method === 'GET'));
   nodes(h.render()).find(n => n.props?.role === 'switch').props.onClick();
@@ -845,12 +904,12 @@ test('header switch defaults OFF and only confirmed ON sends automation command'
   assert.equal(h.requests.filter(r => r.options.method === 'POST').length, 0);
   nodes(h.render()).find(n => n.type === 'button' && /Confirm ON/.test(text(n))).props.onClick();
   await settle();
-  const sent = h.requests.find(r => r.url.endsWith('/automation'));
+  const sent = h.requests.find(r => r.url.endsWith('/start'));
   assert.deepEqual(JSON.parse(sent.options.body), { enabled: true, confirmation: 'START AUTOMATED REAL TRADING' });
   assert.doesNotMatch(text(h.render()), /Start automated real-money orders/);
   await h.poll({ ...status, automation_on: true });
   assert.equal(nodes(h.render()).find(n => n.props?.role === 'switch').props['aria-checked'], true);
-  nodes(h.render()).find(n => n.props?.role === 'switch').props.onClick();
+  nodes(h.render()).find(n => n.props?.['aria-label'] === 'Stop AQTE new entries').props.onClick();
   await settle();
   const off = h.requests.filter(r => r.options.method === 'POST').at(-1);
   assert.deepEqual(JSON.parse(off.options.body), { enabled: false, confirmation: 'STOP NEW ENTRIES' });
@@ -865,8 +924,10 @@ test('header switch blocks ON before arming and never shows failed request as su
   assert.equal(nodes(h.render()).find(n => n.props?.role === 'switch').props.disabled, true);
   await h.poll(new Error('Network failed'));
   assert.match(text(h.render()), /UNKNOWN/);
-  assert.equal(nodes(h.render()).find(n => n.props?.role === 'switch').props.disabled, false);
-  nodes(h.render()).find(n => n.props?.role === 'switch').props.onClick();
+  assert.match(nodes(h.render()).find(n => n.props?.role === 'status').props.className, /sr-only/);
+  assert.equal(nodes(h.render()).find(n => n.props?.role === 'switch').props.disabled, true);
+  assert.equal(nodes(h.render()).find(n => n.props?.['aria-label'] === 'Stop AQTE new entries').props.disabled, false);
+  nodes(h.render()).find(n => n.props?.['aria-label'] === 'Stop AQTE new entries').props.onClick();
   await settle();
   assert.match(text(h.render()), /UNKNOWN/);
   assert.deepEqual(JSON.parse(h.requests.at(-1).options.body), { enabled: false, confirmation: 'STOP NEW ENTRIES' });
@@ -887,9 +948,14 @@ test('AQTE refresh restores highlighted backend ON, OFF and emergency states usi
     const control = nodes(tree).find(n => n.props?.role === 'switch');
     assert.match(control.props.className, new RegExp(`border-${color}`));
     assert.match(control.props.className, /border-2/);
-    assert.ok(nodes(control).some(n => n.type === 'span' && text(n) === label));
+    assert.match(text(control), /ON.*Auto Trading/);
+    const off = nodes(tree).find(n => n.props?.['aria-label'] === 'Stop AQTE new entries');
+    assert.equal(off.props['aria-pressed'], label !== 'ON');
+    if (label === 'EMERGENCY STOP') assert.equal(control.props.disabled, true);
     assert.equal(control.props['aria-checked'], label === 'ON');
-    assert.match(text(tree), label === 'EMERGENCY STOP' ? /Emergency stop latched/ : /Backend confirmed.*Restored on page refresh/);
+    assert.match(text(tree), label === 'EMERGENCY STOP' ? /Emergency stop latched/ : /Backend confirmed/);
+    assert.equal(nodes(tree).filter(n => n.type === 'h3').length, 0);
+    assert.equal(nodes(tree).filter(n => n.props?.className === 'aqte-auto-heading').length, 0);
     assert.ok(h.requests.every(r => r.options.method === 'GET'));
     cleanup();
   }
@@ -902,9 +968,9 @@ test('AQTE acknowledges automatic save only after command response and removes i
   const cleanup = h.mount(on);
   await settle();
   h.respond({ ...on, automation_on: false });
-  nodes(h.render()).find(n => n.props?.role === 'switch').props.onClick();
+  nodes(h.render()).find(n => n.props?.['aria-label'] === 'Stop AQTE new entries').props.onClick();
   await settle();
-  assert.match(text(h.render()), /Saved automatically.*OFF.*Restored on page refresh/);
+  assert.match(text(h.render()), /Saved automatically.*OFF/);
   await h.poll(new Error('Lost connection'));
   assert.doesNotMatch(text(h.render()), /Saved automatically|Backend confirmed/);
   assert.match(text(h.render()), /Do not assume OFF/);
@@ -912,4 +978,89 @@ test('AQTE acknowledges automatic save only after command response and removes i
   assert.match(text(h.render()), /Backend confirmed.*ON/);
   assert.equal(nodes(h.render()).filter(n => n.props?.role === 'alert').length, 0);
   cleanup();
+});
+
+test('manual broker readout shows a market-hours pause rather than claiming no positions', async () => {
+  const h = harness('AQTEBrokerPositions.tsx');
+  h.render({ selectedSymbol: 'NIFTY' });
+  const cleanup = h.mount({
+    read_only: true, generated_at: Date.now() / 1000, positions: [], paused: true,
+    reason: 'Market closed. Broker readout resumes during 09:15–15:30 IST on trading weekdays.',
+  });
+  await settle();
+  const tree = h.render({ selectedSymbol: 'NIFTY' });
+  assert.match(text(tree), /Broker readout paused · Positions unverified/);
+  assert.doesNotMatch(text(tree), /Manual trades are not managed by AQTE|Broker readout resumes/);
+  assert.match(nodes(tree).find(n => n.props?.role === 'status').props.title, /Market closed.*09:15–15:30 IST/);
+  assert.doesNotMatch(text(tree), /No open Zerodha derivative position|FRESH QUOTE/);
+  assert.ok(h.requests.every(r => !r.options.method || r.options.method === 'GET'));
+  cleanup();
+});
+
+test('research starts collapsed and manual broker panel starts open without hiding emergency controls', async () => {
+  const terminal = harness('AQTETerminal.tsx').render({
+    symbol: 'NIFTY', mode: 'real', signal: fixture().data.NIFTY,
+    unavailable: false, active: true, tick: null, execution: null,
+  });
+  const research = nodes(terminal).find(n => n.props?.id === 'aqte-terminal-NIFTY-research');
+  assert.equal(research.type, 'details');
+  assert.ok(!research.props.open);
+  assert.match(text(research), /Analysis.*Trade Setup.*Strategy Logic.*Expected Profit/);
+  const h = harness('AQTELivePanel.tsx');
+  h.render();
+  const cleanup = h.mount(liveFixture());
+  await settle();
+  const tree = h.render();
+  const manual = nodes(tree).find(n => n.type === 'details' && text(n).startsWith('Manual Zerodha positions'));
+  assert.ok(manual);
+  assert.equal(manual.props.open, true);
+  const top = nodes(tree).find(n => n.props?.['aria-label'] === 'Live trading controls');
+  assert.match(text(top), /Emergency stop · close all/);
+  cleanup();
+});
+
+test('emergency reset stays disabled while square-off runs and needs confirmation once flat', async () => {
+  const h = harness('AQTELivePanel.tsx');
+  h.render();
+  const cleanup = h.mount({ ...liveFixture(), killed: true, flatten_pending: true, error: 'Emergency square-off in progress; verify in Kite' });
+  await settle();
+  let tree = h.render();
+  assert.match(text(tree), /EMERGENCY · CLOSING ALL/);
+  const reset = () => nodes(h.render()).find(n => n.type === 'button' && text(n) === 'Reset emergency stop');
+  assert.ok(reset().props.disabled);
+  cleanup();
+  const flat = harness('AQTELivePanel.tsx');
+  flat.render();
+  const done = flat.mount({ ...liveFixture(), killed: true, flatten_pending: false });
+  await settle();
+  tree = flat.render();
+  const button = nodes(tree).find(n => n.type === 'button' && text(n) === 'Reset emergency stop');
+  assert.ok(!button.props.disabled);
+  button.props.onClick();
+  assert.equal(flat.requests.filter(r => r.options.method === 'POST').length, 0);
+  const dialog = nodes(flat.render()).find(n => n.props?.role === 'alertdialog');
+  assert.match(text(dialog), /Automation stays OFF/);
+  nodes(dialog).find(n => n.type === 'button' && text(n) === 'Yes, reset').props.onClick();
+  await settle();
+  const sent = flat.requests.find(r => r.options.method === 'POST');
+  assert.ok(sent.url.endsWith('/live/reset'));
+  assert.deepEqual(JSON.parse(sent.options.body), { confirmation: 'RESET EMERGENCY STOP' });
+  done();
+});
+test('mobile title keeps the market badge in the same row beside the wrapping title', () => {
+  const styles = readFileSync(path.join(__dirname, '..', 'app', 'globals.css'), 'utf8');
+  const mobile = styles.match(/@container \(max-width: 620px\) \{\s*\.aqte-theme #aqte-title \{[^}]*\}[\s\S]*?\n\}/)?.[0];
+  assert.ok(mobile, 'mobile title rules');
+  assert.match(mobile, /#aqte-title \{ display: flex; align-items: center/);
+  assert.match(mobile, /#aqte-title > span:first-child \{[^}]*white-space: nowrap/);
+  assert.match(mobile, /#aqte-title > span:nth-child\(2\) \{[^}]*min-width: 0/);
+  assert.match(mobile, /#aqte-title \.aqte-view-status \{[^}]*flex: 0 0 auto/);
+});
+test('index tabs switch instantly: charts prefetch, stay mounted and controls reuse last data', () => {
+  const read = name => readFileSync(path.join(__dirname, '..', 'components', name), 'utf8');
+  assert.match(read('AQTESection.tsx'), /SYMBOLS\.forEach\(symbol => void prefetchChartHistory\(symbol, 5\)\)/);
+  const terminal = read('AQTETerminal.tsx');
+  assert.match(terminal, /if \(active && !chartOpened\) setChartOpened\(true\)/);
+  assert.match(terminal, /\{chartOpened \? <Chart /);
+  assert.match(read('AQTEDailyControl.tsx'), /useState<Snapshot \| null>\(lastSnapshot\)/);
 });

@@ -12,7 +12,7 @@ type Position = {
   stops: Array<{ order_id: string; quantity: number; trigger: number; status: string }>;
   exit_orders: Array<{ order_id: string; quantity: number; price: number; status: string }>;
 };
-type Snapshot = { generated_at: number; positions: Position[]; read_only: true };
+type Snapshot = { generated_at: number; positions: Position[]; read_only: true; paused?: boolean; reason?: string };
 const formatter = new Intl.NumberFormat('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const value = (n: number | null) => n == null ? '--' : formatter.format(n);
 
@@ -37,6 +37,9 @@ export default function AQTEBrokerPositions({ selectedSymbol }: { selectedSymbol
             typeof payload.generated_at !== 'number' || Date.now() / 1000 - payload.generated_at > 10) {
           throw new Error('Zerodha position response is invalid or stale');
         }
+        if (payload.paused === true && (typeof payload.reason !== 'string' || !payload.reason)) {
+          throw new Error('Zerodha pause reason is unavailable');
+        }
         if (active) { setSnapshot(payload); setError(null); }
       } catch (cause) {
         if (active) setError(cause instanceof Error ? cause.message : 'Zerodha positions unavailable; check Kite');
@@ -51,15 +54,15 @@ export default function AQTEBrokerPositions({ selectedSymbol }: { selectedSymbol
   const positions = snapshot?.positions.filter(p => p.symbol === selectedSymbol) ?? [];
   const indexLabel = selectedSymbol === 'BANKNIFTY' ? 'BANK NIFTY' : selectedSymbol;
   return (
-    <div className="my-3 min-w-0 space-y-3 rounded-xl border border-slate-600/60 bg-slate-950/60 p-3">
+    <div className="aqte-broker-panel my-3 min-w-0 space-y-3 rounded-xl border border-slate-600/60 bg-slate-950/60 p-3">
       <div className="flex flex-wrap justify-between gap-2">
         <h3 className="text-sm font-semibold text-slate-100">Zerodha positions · {indexLabel}</h3>
-        <span className="text-xs text-cyan-200">Read-only · Includes Kite trades</span>
+        <span className="text-xs text-cyan-200" title="Manual trades are not managed or exited by AQTE. Manage stops and exits in Kite.">Read-only · Manage in Kite</span>
       </div>
-      <p className="text-xs text-amber-200">Manual trades are not managed by AQTE. Emergency stop does not exit these trades. Manage their stops and exits in Kite.</p>
       {error && <p role="alert" className="text-xs text-rose-300">{error}</p>}
+      {snapshot?.paused && !error && <p role="status" className="text-xs text-slate-300" title={snapshot.reason}>Broker readout paused · Positions unverified</p>}
       {!snapshot && !error && <p className="text-xs text-slate-400">Loading actual broker positions…</p>}
-      {snapshot && !positions.length && !error && <p className="text-xs text-slate-400">No open Zerodha derivative position for this index. Check other index tabs.</p>}
+      {snapshot && !snapshot.paused && !positions.length && !error && <p className="text-xs text-slate-400">No open Zerodha derivative position for this index. Check other index tabs.</p>}
       {positions.map(p => {
         const current = !error && p.ltp != null;
         const stop = !error && p.stops.length === 1 ? p.stops[0].trigger : null;
@@ -91,7 +94,7 @@ export default function AQTEBrokerPositions({ selectedSymbol }: { selectedSymbol
         );
       })}
       {!positions.length && (
-        <AQTEPosition compact mode="real" contract={indexLabel} empty unavailable={!!error || !snapshot} />
+        <AQTEPosition compact mode="real" contract={indexLabel} empty unavailable={!!error || !snapshot || !!snapshot.paused} />
       )}
     </div>
   );

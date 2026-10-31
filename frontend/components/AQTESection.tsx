@@ -3,11 +3,12 @@
 import { memo, useEffect, useState } from 'react';
 import { API_CONFIG } from '@/lib/api-config';
 import AQTELivePanel, { type LiveState } from '@/components/AQTELivePanel';
-import AQTEAutomationSwitch, { type AutomationState } from '@/components/AQTEAutomationSwitch';
+import AQTEAutomationSwitch from '@/components/AQTEAutomationSwitch';
 import type { MarketData } from '@/hooks/useMarketSocket';
 import AQTEDailyControl from '@/components/AQTEDailyControl';
 import AQTETerminal from '@/components/AQTETerminal';
 import type { AQTESignal } from '@/lib/aqte-display';
+import { prefetchChartHistory } from '@/hooks/useChartHistory';
 
 const SYMBOLS = ['NIFTY', 'BANKNIFTY', 'SENSEX'] as const;
 const LABELS = { NIFTY: 'NIFTY', BANKNIFTY: 'BANK NIFTY', SENSEX: 'SENSEX' };
@@ -46,7 +47,12 @@ function AQTESection({ marketData, isConnected = false }: { marketData?: MarketD
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [liveStatus, setLiveStatus] = useState<LiveState | null>(null);
-  const [automationStatus, setAutomationStatus] = useState<AutomationState | null>(null);
+
+  // Warm the chart bundle and every index's default 5m history so tab switches render from cache.
+  useEffect(() => {
+    void import('@/components/AQTEChart');
+    SYMBOLS.forEach(symbol => void prefetchChartHistory(symbol, 5));
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -83,13 +89,20 @@ function AQTESection({ marketData, isConnected = false }: { marketData?: MarketD
   }, []);
 
   const unavailable = !!error || !snapshot || !snapshot.recording || !!snapshot.fault;
-  const liveOn = automationStatus?.automation_on === true && !automationStatus.killed;
-  const liveStopped = automationStatus?.killed === true;
+  const now = Date.now();
+  const ist = new Date(now + 330 * 60_000);
+  const minute = ist.getUTCHours() * 60 + ist.getUTCMinutes();
+  const marketHours = ist.getUTCDay() >= 1 && ist.getUTCDay() <= 5 && minute >= 555 && minute < 930;
+  const liveFeed = marketHours && isConnected && SYMBOLS.some(symbol => {
+    const tick = marketData?.[symbol];
+    const age = tick ? (now - Date.parse(tick.timestamp)) / 1000 : Infinity;
+    return tick?.status === 'LIVE' && Number.isFinite(tick.price) && tick.price > 0 && age >= -1 && age <= 5;
+  });
   return (
     <section aria-labelledby="aqte-title" className="aqte-theme aqte-terminal-shell relative mb-5 w-full min-w-0 max-w-full break-words rounded-xl border border-slate-600/60 bg-[#060d18] shadow-lg shadow-black/15">
       <div aria-hidden="true" className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-cyan-300/80 to-transparent" />
       <div className="aqte-shell-header flex flex-wrap items-center justify-between gap-3 border-b border-slate-700/60 px-3 py-3 sm:px-4">
-        <div className="flex min-w-0 items-center gap-3">
+        <div className="aqte-heading flex min-w-0 items-center gap-3">
           <div aria-hidden="true" className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-cyan-400/30 bg-cyan-400/10 text-cyan-300 shadow-inner">
             <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
               <path d="M3 17l5-6 4 3 8-10M15 4h5v5M3 21h18" strokeLinecap="round" strokeLinejoin="round" />
@@ -99,25 +112,21 @@ function AQTESection({ marketData, isConnected = false }: { marketData?: MarketD
           <h2 id="aqte-title" className="text-sm font-semibold leading-relaxed text-slate-100 sm:text-base">
             <span className="font-bold tracking-widest text-cyan-200">AQTE</span>
             <span className="text-slate-400"> — Adaptive Quantitative Trading Engine</span>
+            {' '}
+            <span role="status" aria-label="AQTE view status" className={`aqte-view-status inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-[11px] font-bold tracking-wider ${
+              liveFeed ? 'border-emerald-400/40 bg-emerald-400/10 text-emerald-200' :
+                'border-amber-400/40 bg-amber-400/10 text-amber-200'
+            }`}>
+              <span aria-hidden="true" className={`h-1.5 w-1.5 rounded-full ${liveFeed ? 'bg-emerald-300' : 'bg-amber-300'}`} />
+              {liveFeed ? 'LIVE' : marketHours ? 'FEED OFF' : 'CLOSED'}
+            </span>
           </h2>
-          <p className="mt-1 text-xs leading-relaxed text-slate-400">Backend analysis · Gated real execution only · Unvalidated rule baseline</p>
           </div>
         </div>
-        <span role="status" aria-label="AQTE view status" className={`inline-flex shrink-0 items-center gap-2 rounded-full border px-3 py-1.5 text-[11px] font-bold tracking-wider ${
-          liveStopped ? 'border-rose-400/40 bg-rose-400/10 text-rose-200' :
-            liveOn ? 'border-emerald-400/40 bg-emerald-400/10 text-emerald-200' :
-              'border-amber-400/40 bg-amber-400/10 text-amber-200'
-        }`}>
-          <span aria-hidden="true" className={`h-1.5 w-1.5 rounded-full ${liveStopped ? 'bg-rose-300' : liveOn ? 'bg-emerald-300' : 'bg-amber-300'}`} />
-          {`LIVE CONTROL · ${!automationStatus ? 'STATUS UNKNOWN' : liveStopped ? 'EMERGENCY STOP' : liveOn ? 'ON' : 'OFF'}`}
-        </span>
-        <AQTEAutomationSwitch onStatus={setAutomationStatus} />
+        <AQTEAutomationSwitch />
       </div>
       <div className="p-2 sm:p-3">
-      <div className="mb-4 flex flex-wrap items-center gap-2 rounded-xl border border-amber-400/30 bg-amber-400/5 px-3 py-2">
-        <h3 id="aqte-real-view" className="text-sm font-semibold text-amber-100">Real Trade · Auto</h3>
-        <p className="text-xs text-slate-400">Paper trading disabled · Automation defaults OFF</p>
-      </div>
+      <h3 id="aqte-real-view" className="sr-only">Real Trade · Auto</h3>
       <div id="aqte-trading-panel" role="region" aria-labelledby="aqte-real-view" tabIndex={0} className="rounded-xl focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-cyan-300">
       <div role="tablist" aria-label="AQTE index" className="aqte-rich-tabs mb-4 grid grid-cols-3 gap-2 rounded-xl border border-slate-700/70 bg-slate-950/70 p-1.5">
         {SYMBOLS.map((symbol, index) => (
@@ -205,12 +214,6 @@ function AQTESection({ marketData, isConnected = false }: { marketData?: MarketD
         })}
       </div>
       <div id="aqte-live-execution" className="mt-2"><AQTELivePanel selectedSymbol={selectedSymbol} onStatus={setLiveStatus} /></div>
-      <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-slate-700/60 pt-3">
-        <details className="text-[11px] leading-relaxed text-slate-500">
-          <summary className="cursor-pointer py-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-300">Execution notes</summary>
-          <p className="max-w-xl pb-2">ON authorizes automated real entries after daily arming. Watch broker acknowledgements and protective stops in Kite.</p>
-        </details>
-      </div>
       </div>
       </div>
     </section>

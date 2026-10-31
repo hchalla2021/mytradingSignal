@@ -8,8 +8,10 @@ with one full-width index panel visible at a time (NIFTY by default).
 There is no full option-chain interface or strategy
 configuration panel. The separate opt-in live controller requires explicit daily arming and ON confirmation.
 All quantitative decisions run in Python.
-AQTE now displays **Real Trade only**. Paper Trade navigation, positions and
-paper P&L are removed from this section. The production AQTE service runs
+AQTE now displays **Real Trade only**.
+The redundant Real Trade / paper-disabled banner is visually hidden; the region
+retains its screen-reader heading and automation still defaults OFF.
+Paper Trade navigation, positions and paper P&L are removed from this section. The production AQTE service runs
 **ANALYSIS_ONLY**: candles, signals, tick recording and Real AQTE quote/metrics
 support continue, but simulated order creation, fills and management are disabled.
 Saved paper state, completed trades and audit records are preserved, not deleted
@@ -61,7 +63,79 @@ message. Missing positions never hide the readouts or imply a zero profit.
 Explanations, full position breakdowns, calculation notes and live setup/limits use native
 details disclosures, collapsed by default. Summary values, entry time, quantity, trailing
 status, pending stop acknowledgements, controller alerts and emergency controls
-remain visible. Automation help opens automatically when its status is unknown.
+remain visible. The AQTE header omits the schedule card and expanded automation
+help to keep it compact, including when status is unknown. The switch retains
+screen-reader help, visible save/status/error messages and explicit ON confirmation.
+The redundant header subtitle and bottom Execution notes block are omitted.
+The separate Automated Paper Trading tab and its panel are removed from the
+chart workspace. Its four remaining chart tabs fill the tab row (two columns on
+phones). Existing chart paper overlays/recording, historical records and AQTE
+Real controls are unchanged; this removal does not disable a backend engine.
+Header columns stack on phones, split across two rows on tablets and align inline
+on wide desktops. Tablet charts take the full available row, with depth and daily
+controls below; narrow daily counters put labels above their 44px touch controls.
+Text and contract identifiers wrap without truncation, and very narrow position
+summaries use two columns. These layout changes are scoped to AQTE only.
+The research cards (Analysis, Trade Setup, Strategy Logic and Expected Profit)
+start collapsed behind keyboard-accessible summaries. The manual Zerodha readout
+starts expanded. Long yellow read-only and closed-market paragraphs are replaced
+by "Read-only · Manage in Kite" and "Broker readout paused · Positions unverified";
+the pause reason remains available in the status tooltip.
+Manual broker position summaries use individually bordered light-green metric
+tiles with consistent spacing, within a matching dark outer panel. The existing
+responsive column layout and read-only/stale semantics are unchanged.
+Their existing data polling remains mounted; expanding never starts trading.
+Emergency Stop, controller errors and active AQTE-owned positions remain visible.
+The six overview cards use light-green borders and higher-contrast labels/values.
+Redundant navigation hints, empty rule-score bars and duplicate mode/placeholder
+rows are omitted. Missing intelligence, awaiting fills and unconfirmed stops remain
+explicit; actual contract names, filled prices and confirmed trailing values stay visible.
+Overview values use `--` for unavailable market direction, a WAIT trade decision
+or inactive trailing, consistent with missing prices. The underlying WAIT decision
+is unchanged; actionable signals, LONG OPEN, confirmed market direction and ACTIVE
+trailing remain unchanged.
+AQTE uses a 14px (0.875rem) minimum for labels, controls and explanatory text,
+16px card titles and position values, a responsive 18–24px section title and
+consistent 24px overview values. All six cards share the same sans-serif font,
+16px semibold headings and 14px regular supporting labels; the target uses the
+same primary-value layout as entry and stop. Chart-axis text is 12px. Very narrow overview layouts
+stack into one column to preserve readable text rather than shrinking fonts.
+Live setup remains collapsed by default and contains only the required preflight,
+daily-arm actions and a concise backend-approval notice. Redundant static-IP/risk
+summary boxes, account details and lengthy setup explanations are omitted from
+the UI; backend checks, risk limits and protective management are unchanged.
+The header uses an illustrated-style Automated Trading Control with separate ON
+and OFF buttons. Confirmed ON is bright green; OFF is amber and a latched emergency
+stop is red. Unknown status never highlights a confirmed state. ON still requires
+daily arming and real-money confirmation; OFF requests only a new-entry pause,
+never emergency reset or cancellation of existing protection.
+The control heading and ON/OFF buttons align in a compact row with 44px minimum
+touch targets and a short acknowledgement beneath. Repeated captions and refresh
+explanations are omitted visually; backend persistence and emergency locking remain.
+Confirmed header ON now calls owner-authenticated `POST /api/aqte/live/start`.
+Under the existing controller lock, it validates approval, weekday/entry hours
+and the emergency latch, runs Kite/static-IP preflight and daily arming when
+needed, then enables scanning. It does not itself submit an entry: only qualifying
+signals passing existing daily/quality/risk gates can buy. OFF pauses entries;
+ON can resume an already armed ordinary OFF session. Restart/new day still
+defaults OFF; a latched emergency is not an ordinary pause and cannot be cleared
+by ON — use the confirmed emergency reset once Kite is flat. Invalid token, failed checks or missing validation still prevent starting.
+The compact header badge describes the market feed, not automation. LIVE requires
+a fresh shared index tick and socket connection during weekday 09:15–15:30 IST
+hours; otherwise it shows FEED OFF during those hours or CLOSED outside them.
+The badge follows the title text inline and wraps naturally with it on phones
+and tablets, rather than occupying a separate header column. LIVE is green;
+CLOSED and FEED OFF are amber/yellow. Feed detection is unchanged.
+The heading uses a shrinkable text column alongside a top-aligned icon (smaller
+on phones). Title words wrap without truncation; the compact status badge stays
+together and moves onto the next line when space is insufficient.
+Emergency locking and ON/OFF remain explicit in the separate automation control.
+The decorative gear and Auto Trading heading are omitted; the compact ON/OFF
+group retains accessible labels and visible emergency, save and error messages.
+Removing the heading does not unlock emergency-latched automation.
+The verbose unknown/verifying acknowledgement is screen-reader-only to avoid
+header clutter. ON remains blocked while status is unknown; explicit error alerts
+and the OFF-request action remain visible.
 Index prices, entry ranges, maximum buys, stops, targets, position prices, entry
 time, quantity and trailing metrics use separate compact bordered tiles. Labels
 have consistent contrast, numbers are tabular, and long values/contracts wrap
@@ -420,7 +494,7 @@ Backend restarts, session rollover and safety stops still reset automation OFF.
 The badge consumes the existing switch status poll and acknowledged actions, adding
 no polling. Selecting the Real Trade view alone never makes the badge green.
 
-- The switch displays the regular **09:15–15:30 IST** session, the **15:15**
+- The backend enforces the regular **09:15–15:30 IST** session, the **15:15**
   new-entry cutoff and the **15:25** square-off start. Entry automation changes to
   OFF at the cutoff even with an open AQTE position; protection and reconciliation
   continue. Square-off requests are not guaranteed fills.
@@ -428,8 +502,7 @@ no polling. Selecting the Real Trade view alone never makes the badge green.
   trade counts and risk settings. It does not force a trade or control paper
   trading, market data or manually opened Kite positions.
 - OFF is the reversible pause for new entries and remains available outside
-  market hours. Emergency Stop is not a pause: it latches entry blocking and
-  requests exit of AQTE-managed positions, requiring operator review to rearm.
+  market hours. Emergency Stop is not a pause: see **Emergency Stop · close all** below.
 - New installations, every backend restart and daily arming start **OFF**.
 - Complete IP/Kite preflight and explicitly arm the current session first.
 - Click the header switch, then **Confirm ON · real money**. This authorizes automatic
@@ -570,8 +643,31 @@ not retried. Unresolved order modifications block further changes until observed
 broker book. Broker position quantity must match AQTE fills. Restart disarms entries
 but preserves active order identities and reconciles protection. Previous-session
 unresolved trades, rejected/cancelled stops and manual position changes block automation
-and require broker-terminal reconciliation. Emergency stop is latched and requests exit;
-no rearm/reset endpoint is provided without a separately reviewed recovery procedure.
+and require broker-terminal reconciliation.
+
+### Emergency Stop · close all
+
+For market crashes or broker problems. After a confirmation step
+(`POST /api/aqte/live/stop` with `{"confirmation": "CLOSE ALL KITE POSITIONS"}`) the
+backend immediately latches `killed`, turns automation OFF, disarms, and sets
+`flatten_pending`. It then, on the call and every 2 seconds until Kite is flat:
+
+- cancels **every** open Kite order (AQTE and manual);
+- closes **every** non-zero Kite net position (NFO/BFO/NSE/BSE, AQTE and manual) with a
+  marketable LIMIT DAY order 5% through the broker LTP, tagged `AQTEKILL`, using the
+  position's product. An existing matching AQTE stop order is repriced instead of duplicated;
+- does not depend on the AQTE tick feed, so stale market data cannot block the exit;
+- waits 4 seconds after each send (and after newly completed fills) so lagging position
+  data cannot create a reverse position; broker errors are logged and retried;
+- after 5 rejected exits for an instrument, or an unsupported exchange, stops retrying it
+  and shows "square off in Kite".
+
+`flatten_pending` persists, so square-off resumes after a backend restart. When Kite
+reports no open positions or orders, the AQTE trade is journaled with its emergency exit
+fills. **Reset emergency stop** (`POST /api/aqte/live/reset` with
+`{"confirmation": "RESET EMERGENCY STOP"}`) is only accepted when flat; automation stays OFF
+until confirmed ON again. Fills are not guaranteed: price bands, freeze quantity (no
+auto-slicing), holdings and other brokers are not covered — always verify in Kite.
 
 All `/api/aqte/live/*` endpoints require the existing owner app-access cookie, matching
 `X-Device-Id`, `X-AQTE-Intent: manual-live-control`, and an allowed browser Origin.
@@ -601,6 +697,28 @@ URL was baked into the frontend image. It no longer blocks login simply because
 `NEXT_PUBLIC_API_URL` is absent. One-click login failures are reported before
 opening the existing broker login flow. Production still requires correct Nginx
 `/api` routing, backend credentials and the configured Kite redirect URL.
+
+### Deployment and login diagnostics
+
+- A working homepage with **502** on `/api/app-access/session` and backend health
+  indicates an unavailable Nginx backend upstream, not incorrect app credentials.
+  Inspect backend startup logs and Nginx errors before changing login settings.
+- The backend Docker context must preserve package `__init__.py` files. The
+  `_*.py` private-script exclusion has an explicit `!__init__.py` exception:
+  otherwise `config.get_settings` is missing in the built image.
+- After deploying this correction, rebuild the backend image and verify backend
+  health and app-access session before attempting login. Do not delete data volumes.
+- Kite `TokenException` is a separate broker-session failure. AQTE live endpoints
+  report **409** with a Zerodha re-login instruction, never empty successful positions
+  or an authentication bypass. App-access authentication remains separate.
+- The manual Kite position readout contacts the broker only during the regular
+  09:15–15:30 IST weekday session with a healthy recorder and fresh index feed.
+  Outside that window or during feed loss it returns an explicit paused reason,
+  not a claim that no positions exist, and clears the short-lived readout cache.
+  The UI keeps status polling so the readout resumes when fresh feed returns.
+  AQTE-owned position reconciliation, stops and emergency controls are NOT paused.
+  Exchange holidays are handled by the absent fresh feed; token renewal may still
+  be necessary before the next session. App login remains available after hours.
 Broker fees remain conservative estimates, not actual contract-note charges. No
 profitability claim, IP-compliance certification or live fill verification is implied.
 Validate the controller using `python -m unittest test_aqte_live`; all broker and IP
