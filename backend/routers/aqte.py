@@ -122,6 +122,12 @@ class EmergencyReset(BaseModel):
     confirmation: Literal["RESET EMERGENCY STOP"]
 
 
+class ExitLive(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    trade_id: str = Field(pattern=r"^[0-9a-f]{16}$")
+    confirmation: Literal["CLOSE SELECTED AQTE TRADE"]
+
+
 class DailyControlUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
     symbol: Literal["NIFTY", "BANKNIFTY", "SENSEX"]
@@ -185,6 +191,11 @@ async def live_confirm(body: ConfirmLive):
 @router.post("/live/stop", dependencies=[Depends(live_operator)])
 async def live_stop(body: EmergencyStop):
     return await live_call(get_live_service().stop_entries)
+
+
+@router.post("/live/exit", dependencies=[Depends(live_operator)])
+async def live_exit(body: ExitLive):
+    return await live_call(get_live_service().request_exit, body.trade_id)
 
 
 @router.post("/live/reset", dependencies=[Depends(live_operator)])

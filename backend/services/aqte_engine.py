@@ -391,7 +391,7 @@ class AQTEEngine:
                                  reward_risk=round(net_reward / risk, 2)),
                       reasons=[name.replace("_", " "), f"RSI {info['rsi']:.1f}; volume {info['volume_ratio']:.2f}x",
                                "Limit at or below midpoint; never chase the ask",
-                               "Rule score is not a calibrated probability; paper only"])
+                               "Rule score is not a calibrated probability"])
         key = (name, side, info["at"], contract.token)
         if not self.paper_enabled:
             return

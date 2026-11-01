@@ -39,14 +39,18 @@ def counts(state, now, symbol=None):
                 reserved=sum(not e["filled"] and e.get("pending", True) for e in selected))
 
 
-def quality_reason(signal, control):
+def quality_reason(signal, control, allow_unvalidated_rules=False):
+    """Strict mode always blocks; the explicit opt-in still requires every directional check."""
     if signal.get("decision") not in ("BUY CE", "BUY PE") or not signal.get("entry"):
         return "No confirmed LONG CE/PE opportunity"
     score = signal.get("confidence")
-    if not isinstance(score, (float, int)) or not math.isfinite(score) or score < control["min_confidence"]:
+    if not isinstance(score, (float, int)) or not math.isfinite(score):
         return f'Rule score below {control["min_confidence"]}/100; do not trade'
-    if signal.get("model_validated") is not True:
-        return "Signal model has not passed paper validation"
+    if not allow_unvalidated_rules:
+        if score < control["min_confidence"]:
+            return f'Rule score below {control["min_confidence"]}/100; do not trade'
+        if signal.get("model_validated") is not True:
+            return "Signal model has not passed paper validation"
     info = signal.get("intelligence") or {}
     side = 1 if signal["decision"] == "BUY CE" else -1
     try:
@@ -69,5 +73,7 @@ def quality_reason(signal, control):
             return "Directional breakout, volume, CPR, RSI or order-flow confirmation missing"
     except (KeyError, TypeError, ValueError):
         return "Incomplete market intelligence; WAIT"
+    if allow_unvalidated_rules:
+        return None
     # These are intentionally not inferred from unrelated metrics or model scores.
     return "Validated option-chain OI/PCR/Greeks and liquidity-sweep confirmation are unavailable"

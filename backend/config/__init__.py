@@ -12,8 +12,6 @@ from dotenv import dotenv_values
 from pydantic import Field
 from functools import lru_cache
 from typing import Optional
-import os
-import socket
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -105,6 +103,8 @@ class Settings(BaseSettings):
     aqte_live_enabled: bool = False
     aqte_live_paper_validated: bool = False
     aqte_live_static_ip: str = "122.177.245.101"
+    # Real-money opt-in: lets fully aligned, unvalidated rule setups enter one lot.
+    aqte_live_allow_unvalidated_rules: bool = False
     aqte_live_risk_per_trade: float = Field(default=500, gt=0, le=500)
     aqte_live_daily_loss: float = Field(default=2000, gt=0, le=2000)
     aqte_live_max_trades: int = Field(default=5, ge=1, le=5)
@@ -191,7 +191,7 @@ class Settings(BaseSettings):
     def __init__(self, **kwargs):
         """Initialize settings from .env file."""
         super().__init__(**kwargs)
-        print(f"🔧 Configuration loaded from .env")
+        print("🔧 Configuration loaded from .env")
         print(f"   → Redirect URL: {self.redirect_url}")
         print(f"   → Frontend URL: {self.frontend_url}")
         

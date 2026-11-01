@@ -35,6 +35,30 @@ class QualityTests(unittest.TestCase):
         signal["intelligence"]["breakout"] = 0
         self.assertIn("confirmation missing", quality_reason(signal, config))
 
+    def test_unvalidated_rule_opt_in_still_requires_every_directional_check(self):
+        config = IndexControl().model_dump()
+        intelligence = dict(
+            ema={"9": 90, "20": 92, "50": 94, "100": 96, "200": 98},
+            close=89, vwap=95, rsi=40, cpr={"top": 97, "bottom": 93},
+            supertrend="BEARISH", volume_ratio=2, imbalance=-0.3,
+            breakout=-1, structure="LOWER_LOW",
+        )
+        signal = dict(decision="BUY PE", entry={"maximum": 100}, confidence=80,
+                      model_validated=False, intelligence=intelligence)
+        self.assertIn("90", quality_reason(signal, config))
+        self.assertIsNone(quality_reason(signal, config, allow_unvalidated_rules=True))
+        for decision in ("SELL PE", "WAIT"):
+            self.assertIn("LONG", quality_reason({**signal, "decision": decision}, config, True))
+        for score in (None, float("nan"), "80"):
+            self.assertIn("score", quality_reason({**signal, "confidence": score}, config, True))
+        for key, value in (("rsi", 50), ("volume_ratio", 1.4), ("imbalance", -0.1), ("breakout", 0),
+                           ("structure", "RANGE"), ("supertrend", "BULLISH"), ("vwap", None)):
+            weak = {**signal, "intelligence": {**intelligence, key: value}}
+            self.assertIn("confirmation missing", quality_reason(weak, config, True))
+        unaligned = {**signal, "intelligence": {**intelligence, "ema": {**intelligence["ema"], "50": 91}}}
+        self.assertIn("EMA", quality_reason(unaligned, config, True))
+        self.assertIn("Incomplete", quality_reason({**signal, "intelligence": {}}, config, True))
+
 
 if __name__ == "__main__":
     unittest.main()

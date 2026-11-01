@@ -26,9 +26,6 @@ import DeltaStrengthBox from './DeltaStrength';
 import styles from './ChartWorkspace.module.css';
 import { synchronizeCrosshair } from '@/lib/chart-crosshair';
 import { centerLatestCandle, isLatestCandleCentered, resizeChartIfChanged, synchronizeChartRange } from '@/lib/chart-render-sync';
-import { layoutTradeLabels } from '@/lib/chart-trade-labels';
-import { createLevelAnalysisEngine } from '@/lib/chart-level-analysis';
-import { createChartPaperAnalyzer } from '@/lib/chart-paper-trading';
 import { createRejectionEngine } from '@/lib/chart-rejection-engine';
 import { SignalLabelPrimitive, type ChartSignalLabel } from '@/lib/chart-signal-labels';
 import { flowStats, OrderFlowPrimitive } from '@/lib/chart-order-flow';
@@ -42,9 +39,6 @@ import InsightDock from './InsightDock';
 import { useLevelBattle } from '@/hooks/useLevelBattle';
 import { LevelBattlePrimitive } from '@/lib/level-battle-primitive';
 import OrderFlowReadout from './OrderFlowReadout';
-import { usePaperSignalRecorder } from './ChartPaperTrading';
-import { useChartPaperTrading } from '@/hooks/useChartPaperTrading';
-import { chartPaperLevels, paperEventCandle, selectChartPaperTrade } from '@/lib/chart-paper-overlay';
 
 const SYMBOLS = [{ id: 'NIFTY', name: 'NIFTY 50', exchange: 'NSE' }, { id: 'BANKNIFTY', name: 'BANKNIFTY', exchange: 'NSE' }, { id: 'SENSEX', name: 'SENSEX', exchange: 'BSE' }] as const;
 const FuturesChart = dynamic(() => import('./FuturesChart'), { ssr: false, loading: () => <p className="p-3">Loading futures chart...</p> });
@@ -105,8 +99,6 @@ function ChartWorkspace({ marketData, institutionalData = null }: { marketData: 
   const [fullscreen, setFullscreen] = useState(false);
   const pendingCenter = useRef(false);
   const [showTradePlan, setShowTradePlan] = useState(true);
-  const [showPaperLevels, setShowPaperLevels] = useState(false);
-  const [selectedPaperTradeId, setSelectedPaperTradeId] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const [historyDate, setHistoryDate] = useState('');
   const [browsingDate, setBrowsingDate] = useState('');
@@ -122,8 +114,6 @@ function ChartWorkspace({ marketData, institutionalData = null }: { marketData: 
   const previousBars = useRef<{ key: string; candles: Candle[] }>({ key: '', candles: [] });
   const indicatorEngine = useRef(createIndicatorEngine());
   const pivotEngine = useRef(createPivotEngine());
-  const levelEngine = useRef(createLevelAnalysisEngine());
-  const paperAnalyzer = useRef(createChartPaperAnalyzer());
   const rejectionEngine = useRef(createRejectionEngine());
   const previousCalculation = useRef<{ key: string; daily: Candle[]; trend?: string }>({ key: '', daily: [] });
   const loadOlderRef = useRef<() => void>(() => {});
@@ -213,24 +203,9 @@ function ChartWorkspace({ marketData, institutionalData = null }: { marketData: 
   const source = data?.dataSource;
   const sessionOpen = isCashSession(now);
   const live = !browsingDate && freshStream && sessionOpen;
-  const levelAnalysis = useMemo(() => levelEngine.current.analyze(candles, history.dailyCandles, timeframe, {
-    live, nowMs: now, latestPrice: tickPrice ?? data?.spot, minVolumeRatio: 1.2,
-  }), [candles, history.dailyCandles, timeframe, live, now, tickPrice, data?.spot]);
   const rejection = useMemo(() => !history.loading
     ? rejectionEngine.current.analyze(candles, history.dailyCandles, timeframe, { live, nowMs: now, early: true }) : null,
   [history.loading, candles, history.dailyCandles, timeframe, live, now]);
-  const paperFrame = useMemo(() => live && !history.loading && !history.error
-    ? paperAnalyzer.current.analyze(symbol, candles, history.dailyCandles, timeframe, now, levelAnalysis.plan) : null,
-    [live, history.loading, history.error, symbol, candles, history.dailyCandles, timeframe, now, levelAnalysis.plan]);
-  const paperRecorderError = usePaperSignalRecorder(paperFrame);
-  const paperDay = sessionDate(Math.floor(now / 1000));
-  const paper = useChartPaperTrading(symbol, timeframe, paperDay);
-  const selectedPaperTrade = useMemo(() => selectChartPaperTrade(paper.snapshot?.trades ?? [], selectedPaperTradeId),
-    [paper.snapshot?.trades, selectedPaperTradeId]);
-  useEffect(() => {
-    if (selectedPaperTradeId && !paper.snapshot?.trades.some(trade => trade.id === selectedPaperTradeId))
-      setSelectedPaperTradeId(null);
-  }, [paper.snapshot?.trades, selectedPaperTradeId]);
   const institutional = useMemo(() => institutionalContext(institutionalData, now), [institutionalData, now]);
 
   useEffect(() => {
@@ -630,7 +605,7 @@ function ChartWorkspace({ marketData, institutionalData = null }: { marketData: 
       chartImages.forEach(image => { context.drawImage(image, 0, y); y += image.height; });
       const anchor = document.createElement('a');
       anchor.download = `${symbol}-${timeframeLabel(timeframe)}-chart.png`; anchor.href = canvas.toDataURL('image/png'); anchor.click();
-      setNotice('Chart image downloaded (chart series only; CPR bands and paper-level overlays are not included).');
+      setNotice('Chart image downloaded (chart series only; CPR band overlays are not included).');
     } catch (error) {
       console.error('Unable to export chart image:', error);
       setNotice('The chart image could not be exported.');
@@ -717,27 +692,7 @@ function ChartWorkspace({ marketData, institutionalData = null }: { marketData: 
       <div id="observatory-mtf-content" role="tabpanel" aria-labelledby="observatory-mtf-tab" hidden={workspaceTab !== 'mtf'}>
         {mtfOpened && <MultiTimeframeChart active={workspaceTab === 'mtf'} marketData={marketData} chartData={chartData} />}
       </div>
-      {paperRecorderError && <p role="alert" className="p-3 text-red-400">{paperRecorderError}</p>}
       <div id="observatory-chart-content" role="tabpanel" aria-labelledby="observatory-chart-tab" hidden={workspaceTab !== 'chart'}>
-      <details className={styles.compactDetails}>
-      <summary>Paper trade overlays</summary>
-      <div className="flex flex-wrap items-center gap-2 px-3 pb-2 text-xs">
-        <label className="flex items-center gap-2"><input type="checkbox" checked={showPaperLevels}
-          onChange={event => setShowPaperLevels(event.target.checked)} />
-          Automated paper levels on chart</label>
-        {paper.error && <span className="text-red-400">{paper.error}</span>}
-        {!paper.error && paper.snapshot && <span>{paper.snapshot.health.running ? 'Paper engine running' : 'Paper engine not running'} ·
-          {paper.snapshot.pending_count} pending signals · {paper.snapshot.trades.length} recent paper trades</span>}
-        {paper.snapshot && paper.snapshot.trades.length > 0 && <select
-          aria-label="Select paper trade overlay" className={styles.button}
-          value={selectedPaperTrade?.id ?? ''} onChange={event => setSelectedPaperTradeId(event.target.value || null)}>
-          <option value="">Auto-select latest</option>
-          {paper.snapshot.trades.map(trade => <option key={trade.id} value={trade.id}>
-            {trade.strategy} | {trade.side} | {trade.exit_at ? trade.exit_reason : 'OPEN'}
-          </option>)}
-        </select>}
-      </div>
-      </details>
       <div className={styles.toolbar}>
         <div className={styles.symbols} role="tablist" aria-label="Chart index">
           {SYMBOLS.map(item => {
@@ -817,31 +772,6 @@ function ChartWorkspace({ marketData, institutionalData = null }: { marketData: 
                 style={{ right: runtime.current?.charts[0].priceScale('right').width() ?? 72, width: `calc(100% - ${runtime.current?.charts[0].priceScale('right').width() ?? 72}px)` }}
                 aria-label="Chart level overlays">
                 {indicators.cpr && renderCprBands()}
-                {showPaperLevels && selectedPaperTrade && (() => {
-                  const api = runtime.current;
-                  if (!api || typeof timeframe !== 'number') return null;
-                  const plotWidth = (priceRef.current?.clientWidth ?? 0) - api.charts[0].priceScale('right').width() - api.charts[0].priceScale('left').width();
-                  if (!Number.isFinite(plotWidth) || plotWidth <= 0) return null;
-                  const labels = chartPaperLevels(selectedPaperTrade).flatMap(level => {
-                    const anchor = paperEventCandle(candles, level.at, timeframe);
-                    if (anchor === null) return [];
-                    const x = api.charts[0].timeScale().timeToCoordinate(anchor as UTCTimestamp);
-                    const y = api.candles.priceToCoordinate(level.value);
-                    if (x === null || y === null) return [];
-                    const text = `${level.text} ${price(level.value)}`;
-                    return [{ ...level, text, x, y, width: text.length * 6.5 + 16 }];
-                  });
-                  return layoutTradeLabels(labels, plotWidth, priceRef.current?.clientHeight ?? 0).map(label => {
-                    const level = labels.find(item => item.id === label.id)!;
-                    return <g role="img" aria-label={level.text} key={`paper-${label.id}`}>
-                      <line x1={label.anchorX} y1={label.anchorY} x2={plotWidth - 4} y2={label.anchorY}
-                        stroke={level.color} strokeWidth={label.id === 'entry' ? 2 : 1.5} strokeDasharray={label.id === 'entry' ? undefined : '5 4'} opacity="0.85" />
-                      <line x1={label.anchorX} y1={label.anchorY} x2={label.x + 8} y2={label.y + label.height / 2} stroke={level.color} strokeWidth="1" strokeDasharray="3 3" />
-                      <rect x={label.x} y={label.y} width={label.width} height={label.height} rx="4" fill="#00131f" stroke={level.color} />
-                      <text x={label.x + 8} y={label.y + 15} fill={level.color} fontSize="11" fontFamily="Arial, sans-serif">{level.text}</text>
-                    </g>;
-                  });
-                })()}
               </svg>
               {!candles.length && <div className={styles.empty} role="status"><strong>Waiting for {selected.name} candles</strong><p>No chart data is available yet. The chart will update automatically when the market feed connects.</p></div>}
             </div>

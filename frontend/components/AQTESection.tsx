@@ -2,12 +2,13 @@
 
 import { memo, useEffect, useState } from 'react';
 import { API_CONFIG } from '@/lib/api-config';
-import AQTELivePanel, { type LiveState } from '@/components/AQTELivePanel';
+import AQTELiveController from '@/components/AQTELiveController';
 import AQTEAutomationSwitch from '@/components/AQTEAutomationSwitch';
-import type { MarketData } from '@/hooks/useMarketSocket';
+import type { MarketData, MarketTick } from '@/hooks/useMarketSocket';
 import AQTEDailyControl from '@/components/AQTEDailyControl';
 import AQTETerminal from '@/components/AQTETerminal';
-import type { AQTESignal } from '@/lib/aqte-display';
+import AQTEBrokerPositions from '@/components/AQTEBrokerPositions';
+import { aqteCanExit, aqteDaySummary, aqteLiveMetrics, type AQTELiveState, type AQTEExitRequest, type AQTESignal } from '@/lib/aqte-display';
 import { prefetchChartHistory } from '@/hooks/useChartHistory';
 
 const SYMBOLS = ['NIFTY', 'BANKNIFTY', 'SENSEX'] as const;
@@ -28,7 +29,31 @@ type Snapshot = {
   recording: boolean;
 };
 
-const number = (value: number) => value.toLocaleString('en-IN', { maximumFractionDigits: 2 });
+const number = (value: number) => value.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const signed = (value: number | null | undefined) =>
+  value == null || !Number.isFinite(value) ? '--' : `${value > 0 ? '+' : ''}${number(value)}`;
+const tone = (value: number | null | undefined) =>
+  value == null || !Number.isFinite(value) || value === 0 ? 'aqx-flat' : value > 0 ? 'aqx-up' : 'aqx-down';
+const exitClock = new Intl.DateTimeFormat('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: false });
+type Quote = { signal?: AQTESignal; streaming: boolean; tick: MarketTick | null; price: number | null };
+
+// Recent live prices per index for the tab sparklines; survives remounts and dedupes by tick time.
+const sparks: Record<string, { at: string; values: number[] }> = {};
+function recordSpark(symbol: string, at: string, price: number) {
+  const entry = sparks[symbol] ?? (sparks[symbol] = { at: '', values: [] });
+  if (entry.at === at) return;
+  entry.at = at;
+  entry.values.push(price);
+  if (entry.values.length > 60) entry.values.shift();
+}
+function sparkPath(symbol: string) {
+  const values = sparks[symbol]?.values ?? [];
+  if (values.length < 2) return null;
+  const low = Math.min(...values);
+  const range = Math.max(...values) - low || 1;
+  return values.map((value, index) =>
+    `${index ? 'L' : 'M'}${(index / (values.length - 1) * 100).toFixed(1)},${(30 - (value - low) / range * 28).toFixed(1)}`).join(' ');
+}
 
 function isSnapshot(value: unknown): value is Snapshot {
   if (!value || typeof value !== 'object') return false;
@@ -46,7 +71,9 @@ function AQTESection({ marketData, isConnected = false }: { marketData?: MarketD
   const [selectedSymbol, setSelectedSymbol] = useState<SymbolName>('NIFTY');
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [liveStatus, setLiveStatus] = useState<LiveState | null>(null);
+  const [liveStatus, setLiveStatus] = useState<AQTELiveState | null>(null);
+  const [panel, setPanel] = useState<'active' | 'today' | 'positions' | 'performance' | 'controls'>('active');
+  const [exitRequest, setExitRequest] = useState<AQTEExitRequest | null>(null);
 
   // Warm the chart bundle and every index's default 5m history so tab switches render from cache.
   useEffect(() => {
@@ -98,38 +125,80 @@ function AQTESection({ marketData, isConnected = false }: { marketData?: MarketD
     const age = tick ? (now - Date.parse(tick.timestamp)) / 1000 : Infinity;
     return tick?.status === 'LIVE' && Number.isFinite(tick.price) && tick.price > 0 && age >= -1 && age <= 5;
   });
+  const quotes = Object.fromEntries(SYMBOLS.map(symbol => {
+    const signal = snapshot?.data[symbol];
+    const tick = marketData?.[symbol];
+    const tickAt = tick ? Date.parse(tick.timestamp) / 1000 : NaN;
+    const age = now / 1000 - tickAt;
+    const streaming = isConnected && tick?.status === 'LIVE' &&
+      Number.isFinite(tick.price) && tick.price > 0 && age >= -1 && age <= 5 &&
+      tickAt >= (snapshot?.generated_at ?? 0) - 5;
+    if (streaming) recordSpark(symbol, tick.timestamp, tick.price);
+    return [symbol, { signal, streaming, tick: streaming ? tick : null, price: streaming ? tick.price : signal?.spot ?? null }];
+  })) as Record<SymbolName, Quote>;
+
+  const { known, trades: todays, realized, openPnl, dayPnl, wins, losses, breakeven, consecutiveLosses, tradeCount, lossLeft } =
+    aqteDaySummary(liveStatus, now / 1000);
+  const active = liveStatus?.active ?? null;
+  const risk = !known || !liveStatus || liveStatus.connection_error || liveStatus.error || active?.error
+    ? { label: 'Unverified', note: 'Inspect controller / Kite', tone: 'aqx-flat' } :
+    liveStatus.killed ? { label: 'Stopped', note: 'Emergency latch', tone: 'aqx-down' } :
+      active?.exit_requested ? { label: 'Exiting', note: 'Awaiting broker fill', tone: 'aqx-flat' } :
+        active && (!active.protection_confirmed || openPnl == null) ? { label: 'Review', note: 'Quote / stop unverified', tone: 'aqx-down' } :
+      lossLeft === 0 ? { label: 'Limit hit', note: 'Daily loss reached', tone: 'aqx-down' } :
+        (tradeCount ?? 0) >= liveStatus.limits.max_trades || consecutiveLosses >= liveStatus.limits.max_losses
+          ? { label: 'Limit hit', note: 'Entries blocked', tone: 'aqx-down' } :
+          !liveStatus.enabled || !liveStatus.paper_validated
+            ? { label: 'Locked', note: 'Live approval required', tone: 'aqx-flat' } :
+            !liveStatus.armed ? { label: 'Not armed', note: 'Arms when Auto Trade turns ON', tone: 'aqx-flat' } :
+            !liveStatus.automation_on ? { label: 'Paused', note: 'Protection continues', tone: 'aqx-flat' } :
+              { label: 'Within limits', note: `Loss left ₹${number(lossLeft ?? 0)}`, tone: 'aqx-up' };
+  const panels = [
+    ['active', `Active Trades (${known ? active ? 1 : 0 : '--'})`],
+    ['today', `Today's Trades (${known ? todays.length : '--'})`],
+    ['positions', 'Positions'],
+    ['performance', 'Performance'],
+    ['controls', 'Controls'],
+  ] as const;
+
   return (
-    <section aria-labelledby="aqte-title" className="aqte-theme aqte-terminal-shell relative mb-5 w-full min-w-0 max-w-full break-words rounded-xl border border-slate-600/60 bg-[#060d18] shadow-lg shadow-black/15">
+    <section aria-labelledby="aqte-title" className="aqte-theme aqte-terminal-shell aqx-shell relative mb-5 w-full min-w-0 max-w-full break-words rounded-xl border border-slate-600/60 bg-[#060d18] shadow-lg shadow-black/15">
       <div aria-hidden="true" className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-cyan-300/80 to-transparent" />
-      <div className="aqte-shell-header flex flex-wrap items-center justify-between gap-3 border-b border-slate-700/60 px-3 py-3 sm:px-4">
+      <div className="aqte-shell-header aqx-header flex flex-wrap items-center justify-between gap-3 border-b border-slate-700/60 px-3 py-3 sm:px-4">
         <div className="aqte-heading flex min-w-0 items-center gap-3">
-          <div aria-hidden="true" className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-cyan-400/30 bg-cyan-400/10 text-cyan-300 shadow-inner">
-            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-              <path d="M3 17l5-6 4 3 8-10M15 4h5v5M3 21h18" strokeLinecap="round" strokeLinejoin="round" />
+          <div aria-hidden="true" className="aqx-logo flex h-11 w-11 shrink-0 items-center justify-center rounded-xl">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8">
+              <path d="M4 20v-5m5 5V10m5 10V6m5 14V3" strokeLinecap="round" />
             </svg>
           </div>
           <div className="min-w-0">
           <h2 id="aqte-title" className="text-sm font-semibold leading-relaxed text-slate-100 sm:text-base">
-            <span className="font-bold tracking-widest text-cyan-200">AQTE</span>
+            <span className="aqx-brand font-bold tracking-widest">AQTE<span aria-hidden="true" className="aqx-infinity"> ∞</span></span>
             <span className="text-slate-400"> — Adaptive Quantitative Trading Engine</span>
-            {' '}
+            {marketHours && <>{' '}
             <span role="status" aria-label="AQTE view status" className={`aqte-view-status inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-[11px] font-bold tracking-wider ${
               liveFeed ? 'border-emerald-400/40 bg-emerald-400/10 text-emerald-200' :
                 'border-amber-400/40 bg-amber-400/10 text-amber-200'
             }`}>
               <span aria-hidden="true" className={`h-1.5 w-1.5 rounded-full ${liveFeed ? 'bg-emerald-300' : 'bg-amber-300'}`} />
-              {liveFeed ? 'LIVE' : marketHours ? 'FEED OFF' : 'CLOSED'}
-            </span>
+              {liveFeed ? 'LIVE (Zerodha)' : 'FEED OFF'}
+            </span></>}
           </h2>
           </div>
         </div>
         <AQTEAutomationSwitch />
       </div>
-      <div className="p-2 sm:p-3">
+      <div className="aqx-body p-2 sm:p-3">
       <h3 id="aqte-real-view" className="sr-only">Real Trade · Auto</h3>
       <div id="aqte-trading-panel" role="region" aria-labelledby="aqte-real-view" tabIndex={0} className="rounded-xl focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-cyan-300">
-      <div role="tablist" aria-label="AQTE index" className="aqte-rich-tabs mb-4 grid grid-cols-3 gap-2 rounded-xl border border-slate-700/70 bg-slate-950/70 p-1.5">
-        {SYMBOLS.map((symbol, index) => (
+      <div className="aqx-top">
+      <div role="tablist" aria-label="AQTE index" className="aqte-rich-tabs aqx-index-tabs">
+        {SYMBOLS.map((symbol, index) => {
+          const quote = quotes[symbol];
+          const change = quote.tick && Number.isFinite(quote.tick.change) ? quote.tick.change : null;
+          const pct = quote.tick && Number.isFinite(quote.tick.changePercent) ? quote.tick.changePercent : null;
+          const path = sparkPath(symbol);
+          return (
           <button key={symbol} type="button" role="tab" id={`aqte-index-tab-${symbol}`}
             aria-selected={selectedSymbol === symbol} aria-controls={`aqte-index-panel-${symbol}`}
             tabIndex={selectedSymbol === symbol ? 0 : -1}
@@ -145,75 +214,142 @@ function AQTESection({ marketData, isConnected = false }: { marketData?: MarketD
               setSelectedSymbol(SYMBOLS[next]);
               event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>('[role="tab"]')[next]?.focus();
             }}
-            className={`aqte-rich-tab aqte-tab-${symbol} min-h-[44px] min-w-0 rounded-lg border px-1 py-2 text-xs font-bold tracking-wide transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-300 sm:px-2 sm:text-sm ${
-              selectedSymbol === symbol ? `${INDEX_STYLES[symbol].border} ${INDEX_STYLES[symbol].text} bg-slate-800` :
-                'border-transparent text-slate-400 hover:bg-slate-800/60 hover:text-slate-200'
-            }`}>
-            {LABELS[symbol]}
+            className={`aqte-rich-tab aqte-tab-${symbol} aqx-index-card min-h-[48px] min-w-0 ${selectedSymbol === symbol ? INDEX_STYLES[symbol].text : ''}`}>
+            <span className="aqx-index-name">{LABELS[symbol]}</span>
+            <span className="aqx-index-price">{quote.price != null ? number(quote.price) : 'No live quote'}</span>
+            <span className={`aqx-index-change ${change == null ? 'aqx-flat' : change > 0 ? 'aqx-up' : change < 0 ? 'aqx-down' : 'aqx-flat'}`}>
+              {change != null && pct != null ? `${change > 0 ? '+' : ''}${number(change)} (${pct > 0 ? '+' : ''}${number(pct)}%)` : quote.streaming ? 'LIVE FEED' : unavailable ? 'LAST SNAPSHOT' : 'AQTE SNAPSHOT'}
+            </span>
+            {path && <svg aria-hidden="true" className={`aqx-spark ${change != null && change < 0 ? 'aqx-spark-down' : ''}`} viewBox="0 0 100 32" preserveAspectRatio="none"><path d={path} /></svg>}
           </button>
-        ))}
+          );
+        })}
       </div>
+      <dl className="aqx-stats" aria-label="Today summary">
+        <div className="aqx-stat"><span aria-hidden="true" className="aqx-stat-icon aqx-icon-pnl">◎</span><div><dt>Today P&amp;L</dt><dd className={dayPnl == null ? 'aqx-flat' : dayPnl > 0 ? 'aqx-up' : dayPnl < 0 ? 'aqx-down' : 'aqx-flat'}>{dayPnl == null ? '--' : `${dayPnl > 0 ? '+' : ''}₹${number(dayPnl)}`}</dd></div></div>
+        <div className="aqx-stat"><span aria-hidden="true" className="aqx-stat-icon aqx-icon-win">🏆</span><div><dt>Win Rate</dt><dd className="aqx-up">{todays.length ? `${Math.round(wins / todays.length * 100)}%` : '--'}</dd></div></div>
+        <div className="aqx-stat"><span aria-hidden="true" className="aqx-stat-icon aqx-icon-trades">≋</span><div><dt>Trades</dt><dd>{tradeCount != null && liveStatus ? `${tradeCount} / ${liveStatus.limits.max_trades}` : '--'}</dd></div></div>
+        <div className="aqx-stat aqx-stat-risk"><span aria-hidden="true" className="aqx-stat-icon aqx-icon-risk">🛡</span><div><dt>Risk</dt><dd className={risk.tone}>{risk.label}</dd><p>{risk.note}</p></div></div>
+      </dl>
+      </div>
+      <p className="aqx-footnote mb-2">AQTE only · Today&apos;s P&amp;L includes available open net estimates · One managed position maximum</p>
       {(error || snapshot?.fault || snapshot?.subscription_error) && (
-        <p role="status" className="mb-4 break-words rounded-lg border border-amber-400/20 bg-amber-400/5 px-3 py-2 text-xs text-amber-200">
+        <p role="status" className="aqx-alert mb-3 break-words rounded-lg border border-amber-400/20 bg-amber-400/5 px-3 py-2 text-xs text-amber-200">
           {error || snapshot?.fault || snapshot?.subscription_error}
         </p>
       )}
       <div>
-        {SYMBOLS.map(symbol => {
-          const signal = snapshot?.data[symbol];
-          const decision = 'WAIT';
-          const accent = INDEX_STYLES[symbol];
-          const tick = marketData?.[symbol];
-          const tickAt = tick ? Date.parse(tick.timestamp) / 1000 : NaN;
-          const age = Date.now() / 1000 - tickAt;
-          const streaming = isConnected && tick?.status === 'LIVE' &&
-            Number.isFinite(tick.price) && tick.price > 0 && age >= -1 && age <= 5 &&
-            tickAt >= (snapshot?.generated_at ?? 0) - 5;
-          const price = streaming ? tick.price : signal?.spot;
-          return (
-            <div key={symbol} id={`aqte-index-panel-${symbol}`} role="tabpanel"
-              aria-labelledby={`aqte-index-tab-${symbol}`} hidden={selectedSymbol !== symbol}
-              tabIndex={selectedSymbol === symbol ? 0 : -1}
-              className="rounded-xl focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-300">
-            <article className={`aqte-index-workspace relative flex min-w-0 flex-col rounded-lg border ${accent.border} bg-[#060e19]`}>
-              <div className="flex items-center justify-between gap-2 px-3 pt-2">
-                <h3 className={`text-xs font-bold tracking-widest ${accent.text}`}>{LABELS[symbol]}</h3>
-                <span className={`rounded-md border px-2 py-1 text-[11px] font-bold tracking-wide ${
-                  'border-slate-600/70 bg-slate-800/70 text-slate-300'
-                }`}>{decision}</span>
-              </div>
-              <div className="aqte-underlying-strip mx-2 mb-2 mt-2 flex flex-wrap items-center justify-between gap-2 rounded-md border border-slate-700/50 bg-slate-900/40 px-3 py-2">
-                <div className="min-w-0 flex-1">
-                  <div className="mb-1 flex flex-wrap items-center justify-between gap-2">
-                    <p className="text-[11px] font-medium uppercase tracking-wider text-slate-300">Underlying index</p>
-                    <span className={`rounded border px-2 py-0.5 text-[10px] font-semibold ${streaming ? 'border-emerald-400/30 bg-emerald-400/10 text-emerald-200' : 'border-slate-600 text-slate-400'}`}>
-                      {streaming ? 'LIVE FEED' : unavailable ? 'LAST SNAPSHOT' : 'AQTE SNAPSHOT'}
-                    </span>
-                  </div>
-                  <p className="break-words text-xl font-semibold tracking-tight text-slate-100 tabular-nums">{price != null ? number(price) : 'No live quote'}</p>
-                  {streaming && Number.isFinite(tick.change) && Number.isFinite(tick.changePercent) && (
-                    <p className={`mt-1 text-xs font-medium tabular-nums ${tick.change > 0 ? 'text-emerald-300' : tick.change < 0 ? 'text-rose-300' : 'text-slate-300'}`}>
-                      {tick.change > 0 ? '+' : ''}{number(tick.change)} pts · {tick.changePercent > 0 ? '+' : ''}{number(tick.changePercent)}% today
-                    </p>
-                  )}
-                </div>
-              </div>
-              <AQTETerminal symbol={symbol} mode="real" signal={signal} unavailable={unavailable}
-                liveStatus={liveStatus}
-                active={selectedSymbol === symbol} tick={streaming ? tick : null}
-                controls={selectedSymbol === symbol ? <AQTEDailyControl /> : undefined} execution={null} />
-              <details className="mx-2 mb-2 mt-2 rounded-lg border border-slate-700/50 px-3">
-              <summary className="cursor-pointer py-2 text-xs font-medium text-slate-400 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-300">Execution protection</summary>
-              <p className="break-words pb-3 text-xs leading-relaxed text-slate-400">
-                Automatic entries require daily arming and the header switch ON. OFF blocks new entries; protective exits continue.
-              </p>
-              </details>
-            </article>
-            </div>
-          );
-        })}
+        {SYMBOLS.map(symbol => (
+          <div key={symbol} id={`aqte-index-panel-${symbol}`} role="tabpanel"
+            aria-labelledby={`aqte-index-tab-${symbol}`} hidden={selectedSymbol !== symbol}
+            tabIndex={selectedSymbol === symbol ? 0 : -1}
+            className="rounded-xl focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-300">
+            <AQTETerminal symbol={symbol} signal={quotes[symbol].signal} unavailable={unavailable}
+              liveStatus={liveStatus} active={selectedSymbol === symbol} tick={quotes[symbol].tick}
+              onExit={setExitRequest} />
+          </div>
+        ))}
       </div>
-      <div id="aqte-live-execution" className="mt-2"><AQTELivePanel selectedSymbol={selectedSymbol} onStatus={setLiveStatus} /></div>
+      <section className="aqx-card aqx-book" aria-label="Trades, positions and controls">
+        <div className="aqx-book-head">
+          <div role="tablist" aria-label="AQTE trade book" className="aqx-book-tabs">
+            {panels.map(([key, title], index) => (
+              <button key={key} type="button" role="tab" id={`aqte-book-tab-${key}`} aria-selected={panel === key}
+                aria-controls={`aqte-book-${key}`} tabIndex={panel === key ? 0 : -1}
+                onClick={() => setPanel(key)}
+                onKeyDown={event => {
+                  let next: number;
+                  if (event.key === 'ArrowRight') next = (index + 1) % panels.length;
+                  else if (event.key === 'ArrowLeft') next = (index + panels.length - 1) % panels.length;
+                  else if (event.key === 'Home') next = 0;
+                  else if (event.key === 'End') next = panels.length - 1;
+                  else return;
+                  event.preventDefault();
+                  setPanel(panels[next][0]);
+                  event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>('[role="tab"]')[next]?.focus();
+                }}
+                className="aqx-book-tab min-h-[44px] min-w-0">{title}</button>
+            ))}
+          </div>
+          <p className="aqx-risk-chips">
+            <span>Risk/trade: {liveStatus ? `₹${number(liveStatus.limits.risk_per_trade)}` : '--'}</span>
+            <span>Daily loss limit: {liveStatus ? `₹${number(liveStatus.limits.daily_loss)}` : '--'}</span>
+          </p>
+        </div>
+        <div id="aqte-book-active" role="tabpanel" aria-labelledby="aqte-book-tab-active" hidden={panel !== 'active'} className="aqx-table-wrap">
+          <table className="aqx-table">
+            <thead><tr><th>#</th><th>Instrument</th><th>Side</th><th>Entry</th><th>LTP</th><th>Initial SL</th><th>Current SL / TSL</th><th>Target</th><th>P&amp;L (Pts)</th><th>Net est. (₹)</th><th>Return %</th><th>Action</th></tr></thead>
+            <tbody>
+              {active ? (() => {
+                const metrics = aqteLiveMetrics(liveStatus);
+                const confirmed = known && !liveStatus?.error && !active.error && !!active.protection_confirmed;
+                return (
+                  <tr>
+                    <td>1</td><td className="aqx-instrument">{active.contract.trading_symbol}</td>
+                    <td><span className="aqx-chip aqx-chip-buy">BUY</span></td>
+                    <td>{active.filled > 0 ? number(active.entry_price) : `Limit ${number(active.limit)}`}</td>
+                    <td>{metrics?.ltp != null ? number(metrics.ltp) : '--'}</td>
+                    <td className="aqx-down">{number(active.initial_stop)}</td>
+                    <td className="aqx-cyan">{number(active.stop)}<small>{confirmed ? active.trailing_active ? 'Trailing · confirmed' : 'Confirmed SL' : 'Unverified'}</small></td>
+                    <td>{number(active.target)}</td>
+                    <td className={tone(metrics?.points)}>{signed(metrics?.points)}</td>
+                    <td className={tone(metrics?.net_pnl)}>{signed(metrics?.net_pnl)}</td>
+                    <td className={tone(metrics?.return_pct)}>{metrics?.return_pct != null ? `${signed(metrics.return_pct)}%` : '--'}</td>
+                    <td><button type="button" className="aqx-table-exit" disabled={!aqteCanExit(liveStatus) || !!active.exit_requested}
+                      onClick={() => setExitRequest({ tradeId: active.id, contract: active.contract.trading_symbol,
+                        quantity: Math.max(0, active.filled - (active.exited ?? 0)), action: 'exit' })}>{active.exit_requested ? 'Exit requested' : 'Exit'}</button></td>
+                  </tr>
+                );
+              })() : <tr><td colSpan={12} className="aqx-empty-row">{known
+                ? 'No AQTE trade open · Entries need daily arming, Auto Trade ON and a qualifying signal'
+                : 'Live positions are unverified · Check the controller and Kite'}</td></tr>}
+            </tbody>
+          </table>
+        </div>
+        <div id="aqte-book-today" role="tabpanel" aria-labelledby="aqte-book-tab-today" hidden={panel !== 'today'} className="aqx-table-wrap">
+          <table className="aqx-table">
+            <thead><tr><th>#</th><th>Instrument</th><th>Side</th><th>Entry</th><th>Exit</th><th>Exit time</th><th>Reason</th><th>Net P&amp;L (₹)</th></tr></thead>
+            <tbody>
+              {todays.length ? todays.map((trade, index) => (
+                <tr key={`${trade.exit_at}:${index}`}>
+                  <td>{index + 1}</td><td className="aqx-instrument">{trade.contract?.trading_symbol ?? LABELS[trade.symbol as SymbolName] ?? trade.symbol}</td>
+                  <td><span className="aqx-chip aqx-chip-buy">BUY</span></td>
+                  <td>{trade.entry_price != null ? number(trade.entry_price) : '--'}</td>
+                  <td>{trade.exit_price != null ? number(trade.exit_price) : '--'}</td>
+                  <td>{exitClock.format(new Date(trade.exit_at * 1000))}</td>
+                  <td>{trade.exit_requested ? trade.exit_requested.replaceAll('_', ' ') : 'Broker SL'}</td>
+                  <td className={tone(trade.net_pnl)}>{signed(trade.net_pnl)}</td>
+                </tr>
+              )) : <tr><td colSpan={8} className="aqx-empty-row">{known ? 'No closed AQTE trades today' : 'Trade history unavailable'}</td></tr>}
+            </tbody>
+          </table>
+          <p className="aqx-footnote">Net uses estimated charges, not broker contract notes.</p>
+        </div>
+        <div id="aqte-book-positions" role="tabpanel" aria-labelledby="aqte-book-tab-positions" hidden={panel !== 'positions'}>
+          {panel === 'positions' && <AQTEBrokerPositions selectedSymbol={selectedSymbol} />}
+        </div>
+        <div id="aqte-book-performance" role="tabpanel" aria-labelledby="aqte-book-tab-performance" hidden={panel !== 'performance'}>
+          <dl className="aqx-perf">
+            {([
+              ['Closed trades', known ? String(todays.length) : '--', ''],
+              ['Wins / Losses / Flat', known ? `${wins} / ${losses} / ${breakeven}` : '--', ''],
+              ['Win rate', todays.length ? `${Math.round(wins / todays.length * 100)}%` : '--', 'aqx-up'],
+              ['Realized net', realized != null ? `₹${signed(realized)}` : '--', tone(realized)],
+              ['Open net', openPnl != null ? `₹${signed(openPnl)}` : '--', tone(openPnl)],
+              ['Best trade', todays.length ? `₹${signed(Math.max(...todays.map(t => t.net_pnl)))}` : '--', tone(todays.length ? Math.max(...todays.map(t => t.net_pnl)) : null)],
+              ['Worst trade', todays.length ? `₹${signed(Math.min(...todays.map(t => t.net_pnl)))}` : '--', tone(todays.length ? Math.min(...todays.map(t => t.net_pnl)) : null)],
+              ['Loss budget left', lossLeft != null ? `₹${number(lossLeft)}` : '--', ''],
+            ] as const).map(([label, value, color]) => (
+              <div key={label} className="aqx-perf-cell"><dt>{label}</dt><dd className={color}>{value}</dd></div>
+            ))}
+          </dl>
+          <p className="aqx-footnote">Today only (IST) · Net uses estimated charges · Past results do not predict future trades.</p>
+        </div>
+        <div id="aqte-book-controls" role="tabpanel" aria-labelledby="aqte-book-tab-controls" hidden={panel !== 'controls'} className="aqx-controls">
+          <AQTEDailyControl />
+        </div>
+      </section>
+      <AQTELiveController onStatus={setLiveStatus} exitRequest={exitRequest} />
       </div>
       </div>
     </section>

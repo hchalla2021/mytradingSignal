@@ -1,8 +1,11 @@
 import copy
+import json
 import os
+import sqlite3
 import tempfile
 import threading
 import unittest
+from contextlib import closing
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -17,7 +20,8 @@ from test_aqte import CONTRACT, IST, NOW, ready_engine, tick
 
 def settings(**overrides):
     values = dict(aqte_live_enabled=True, aqte_live_paper_validated=True,
-                  aqte_live_static_ip="122.177.245.101", aqte_live_risk_per_trade=500,
+                  aqte_live_static_ip="122.177.245.101", aqte_live_allow_unvalidated_rules=False,
+                  aqte_live_risk_per_trade=500,
                   aqte_live_daily_loss=2000, aqte_live_max_trades=5, aqte_live_max_losses=3,
                   force_outbound_ipv4=True, algo_auto_trade_enabled=False, algo_auto_trade_mode="paper",
                   frontend_url="http://localhost:3000", cors_origins="http://localhost:3000",
@@ -283,6 +287,84 @@ class LiveTests(unittest.TestCase):
             self.live.preflight()
         self.broker.place_order.assert_not_called()
 
+    def test_selected_exit_pauses_entries_and_only_reprices_its_existing_stop(self):
+        self.protect()
+        active = self.live.state["active"]
+        trade_id = active["id"]
+        self.positions.append({"instrument_token": 999, "product": "MIS", "quantity": 10})
+        self.broker.reset_mock()
+        result = self.live.request_exit(trade_id)
+        self.assertEqual(result["active"]["exit_requested"], "MANUAL_EXIT")
+        self.assertFalse(result["automation_on"])
+        self.assertFalse(result["killed"])
+        self.assertFalse(result["flatten_pending"])
+        self.assertTrue(result["armed"])
+        self.broker.modify_order.assert_not_called()
+        self.live.request_exit(trade_id)
+        self.live.reconcile()
+        self.broker.modify_order.assert_called_once()
+        self.assertEqual(self.broker.modify_order.call_args.kwargs["order_id"], active["protect_id"])
+        self.assertEqual(self.broker.modify_order.call_args.kwargs["order_type"], "LIMIT")
+        self.broker.place_order.assert_not_called()
+        self.broker.cancel_order.assert_not_called()
+        self.orders[1].update(status="OPEN")
+        self.live.reconcile()
+        self.assertFalse(self.live.status()["active"]["protection_confirmed"])
+        self.broker.modify_order.assert_called_once()
+
+    def test_selected_exit_rejects_wrong_trade_pending_fill_and_emergency(self):
+        with self.assertRaisesRegex(LiveBlocked, "no longer active"):
+            self.live.request_exit("a" * 16)
+        self.enter()
+        active = self.live.state["active"]
+        with self.assertRaisesRegex(LiveBlocked, "confirmed remaining fill"):
+            self.live.request_exit(active["id"])
+        self.live.reconcile()
+        with self.assertRaisesRegex(LiveBlocked, "no longer active"):
+            self.live.request_exit("b" * 16)
+        self.assertIsNone(active["exit_requested"])
+        self.assertTrue(self.live.state["automation_on"])
+        self.live.state["killed"] = True
+        with self.assertRaisesRegex(LiveBlocked, "emergency"):
+            self.live.request_exit(active["id"])
+
+    def test_selected_exit_persists_and_preserves_stop_when_quote_or_mutation_is_uncertain(self):
+        self.protect()
+        trade_id = self.live.state["active"]["id"]
+        self.live.request_exit(trade_id)
+        self.live.release_owner()
+        restored = self.new_service()
+        restored.initialize()
+        self.addCleanup(restored.release_owner)
+        self.assertEqual(restored.state["active"]["exit_requested"], "MANUAL_EXIT")
+        self.market.failed.set()
+        restored.reconcile()
+        self.broker.modify_order.assert_not_called()
+        self.assertIn("Broker stop remains", restored.status()["active"]["error"])
+        self.market.failed.clear()
+        self.broker.modify_order.side_effect = TimeoutError("Unknown exit outcome")
+        with self.assertRaises(TimeoutError):
+            restored.reconcile()
+        with self.assertRaisesRegex(LiveBlocked, "modification outcome unresolved"):
+            restored.reconcile()
+        self.broker.modify_order.assert_called_once()
+        self.assertEqual(len(self.orders), 2)
+
+    def test_status_includes_all_today_trades_counts_and_current_generation_time(self):
+        self.live.state["trades"] = [
+            {"id": str(n), "entry_at": NOW, "exit_at": NOW, "net_pnl": n, "symbol": "NIFTY"}
+            for n in range(25)
+        ]
+        self.live.state["daily_entries"] = [
+            {"id": "0", "at": NOW, "symbol": "NIFTY", "filled": True, "pending": False},
+            {"id": "two", "at": NOW, "symbol": "BANKNIFTY", "filled": False, "pending": True},
+        ]
+        result = self.live.status()
+        self.assertEqual(len(result["trades"]), 25)
+        self.assertEqual(result["generated_at"], NOW)
+        self.assertEqual(result["daily_counts"], {"executed": 25, "reserved": 1})
+        self.broker.orders.assert_not_called()
+
     def test_preflight_only_then_explicit_arm_then_expiring_confirm(self):
         self.live.preflight()
         self.broker.place_order.assert_not_called()
@@ -500,6 +582,50 @@ class LiveTests(unittest.TestCase):
         self.assertFalse(result["automation_on"])
         self.assertFalse(result["armed"])
 
+    def test_market_open_and_restart_do_not_clear_an_emergency_latch(self):
+        self.live.state.update(killed=True, flatten_pending=False, automation_on=False, armed_day=None)
+        self.live.save("EMERGENCY_STOP")
+        self.live.release_owner()
+        restarted = self.new_service()
+        self.addCleanup(restarted.release_owner)
+        restarted.initialize()
+        market_open = datetime(2026, 11, 2, 9, 15, tzinfo=IST).timestamp()
+        with patch("services.aqte_live.time.time", return_value=market_open):
+            with self.assertRaisesRegex(LiveBlocked, "Emergency stop is latched"):
+                restarted.start_automation()
+            self.assertTrue(restarted.status()["killed"])
+            self.assertFalse(restarted.status()["automation_on"])
+        self.ip.assert_not_called()
+        self.broker.place_order.assert_not_called()
+
+    def test_owner_reset_keeps_off_then_header_start_respects_weekday_entry_hours(self):
+        self.live.state.update(killed=True, flatten_pending=False, automation_on=False, armed_day=None)
+        sunday = datetime(2026, 11, 1, 23, 28, tzinfo=IST).timestamp()
+        with patch("services.aqte_live.time.time", return_value=sunday):
+            reset = self.live.reset_emergency()
+            self.assertFalse(reset["killed"])
+            self.assertFalse(reset["armed"])
+            self.assertFalse(reset["automation_on"])
+            with self.assertRaisesRegex(LiveBlocked, "weekdays"):
+                self.live.start_automation()
+        self.ip.assert_not_called()
+        for hour, minute, allowed in [(9, 14, False), (9, 15, True), (15, 14, True), (15, 15, False)]:
+            with self.subTest(hour=hour, minute=minute):
+                at = datetime(2026, 11, 2, hour, minute, tzinfo=IST).timestamp()
+                with patch("services.aqte_live.time.time", return_value=at):
+                    if allowed:
+                        result = self.live.start_automation()
+                        self.assertTrue(result["automation_on"])
+                        self.assertTrue(result["armed"])
+                    else:
+                        with self.assertRaisesRegex(LiveBlocked, "15:15"):
+                            self.live.start_automation()
+                    self.assertFalse(self.live.set_automation(False)["automation_on"])
+        self.ip.assert_called_once()
+        self.broker.place_order.assert_not_called()
+        self.broker.cancel_order.assert_not_called()
+        self.broker.modify_order.assert_not_called()
+
     def test_emergency_exit_rejections_stop_at_cap_and_keep_reset_blocked(self):
         self.positions = [{"exchange": "NFO", "tradingsymbol": "NIFTYMANUALCE", "product": "MIS",
                            "quantity": 75, "last_price": 50, "instrument_token": 8}]
@@ -613,6 +739,66 @@ class LiveTests(unittest.TestCase):
         with self.assertRaisesRegex(LiveBlocked, "OFF"):
             self.live.proposal("NIFTY")
         self.assertFalse(self.live.status()["automation_on"])
+
+    def aligned_snapshot(self):
+        snapshot = self.market.engine.snapshot(NOW) | {"recording": True}
+        signal = snapshot["data"]["NIFTY"]
+        side = 1 if signal["decision"] == "BUY CE" else -1
+        signal.update(confidence=80, model_validated=False, intelligence={
+            **signal["intelligence"],
+            "ema": {str(n): 100 + side * (10 - i * 2) for i, n in enumerate((9, 20, 50, 100, 200))},
+            "close": 100 + side * 11, "vwap": 100 + side * 5, "rsi": 60 if side > 0 else 40,
+            "cpr": {"top": 100 + side * 7, "bottom": 100 + side * 3} if side > 0 else
+                   {"top": 100 + side * 3, "bottom": 100 + side * 7},
+            "supertrend": "BULLISH" if side > 0 else "BEARISH", "volume_ratio": 2,
+            "imbalance": side * 0.3, "breakout": side,
+            "structure": "HIGHER_HIGH" if side > 0 else "LOWER_LOW",
+        })
+        return snapshot
+
+    def test_unvalidated_rule_opt_in_is_reported_and_forwarded_to_quality_gate(self):
+        signal = self.market.snapshot()["data"]["NIFTY"]
+        self.assertFalse(self.live.status()["unvalidated_rules"])
+        with patch("services.aqte_live.quality_reason", return_value=None) as quality:
+            self.live.control_reason("NIFTY", signal)
+            self.assertIs(quality.call_args.args[2], False)
+            self.cfg.aqte_live_allow_unvalidated_rules = True
+            self.live.control_reason("NIFTY", signal)
+            self.assertIs(quality.call_args.args[2], True)
+        self.assertTrue(self.live.status()["unvalidated_rules"])
+
+    def test_real_gate_blocks_strict_mode_and_opt_in_enters_one_aligned_lot(self):
+        self.quality.stop()
+        self.market.snapshot.side_effect = self.aligned_snapshot
+        self.armed()
+        self.live.automated_entry()
+        self.assertIn("90", self.live.control_reason("NIFTY", self.aligned_snapshot()["data"]["NIFTY"]))
+        self.broker.place_order.assert_not_called()
+        self.cfg.aqte_live_allow_unvalidated_rules = True
+        self.live.automated_entry()
+        self.assertEqual(self.broker.place_order.call_count, 1)
+        params = self.broker.place_order.call_args.kwargs
+        self.assertEqual((params["transaction_type"], params["quantity"]), ("BUY", CONTRACT.lot_size))
+        self.live.automated_entry()
+        self.assertEqual(self.broker.place_order.call_count, 1, "Only one live position at a time")
+
+    def test_repeated_monitor_fault_is_journaled_once_with_reason(self):
+        self.armed()
+        for _ in range(3):
+            self.live.fault_stop("ConnectionError: Kite down")
+        self.live.fault_stop("TokenException: expired")
+        self.live.fault_stop("TokenException: expired")
+        self.armed()
+        self.live.fault_stop("TokenException: expired")
+        with closing(sqlite3.connect(str(self.path))) as db:
+            rows = db.execute("SELECT payload FROM live_audit WHERE kind='AUTOMATION_FAULT_STOPPED' "
+                              "ORDER BY id").fetchall()
+        self.assertEqual([json.loads(row[0])["error"] for row in rows],
+                         ["ConnectionError: Kite down", "TokenException: expired", "TokenException: expired"])
+        status = self.live.status()
+        self.assertEqual(status["error"], "TokenException: expired")
+        self.assertFalse(status["armed"])
+        self.assertFalse(status["automation_on"])
 
     def test_confirmed_start_checks_and_arms_then_off_can_pause_and_resume(self):
         self.assertFalse(self.live.status()["automation_on"])
@@ -732,6 +918,27 @@ class LiveTests(unittest.TestCase):
 
 
 class LiveAPITests(unittest.TestCase):
+    def test_selected_exit_requires_owner_intent_origin_trade_identity_and_confirmation(self):
+        controller = Mock()
+        controller.request_exit.return_value = {"automation_on": False}
+        body = {"trade_id": "0123456789abcdef", "confirmation": "CLOSE SELECTED AQTE TRADE"}
+        with patch("routers.aqte.get_live_service", return_value=controller), patch(
+            "routers.aqte.get_settings", return_value=settings()
+        ), patch("routers.aqte.app_access_service.validate_session", new_callable=AsyncMock) as session:
+            session.return_value = {"authenticated": False}
+            self.assertEqual(self.client.post("/api/aqte/live/exit", headers=self.headers, json=body).status_code, 401)
+            session.return_value = {"authenticated": True, "username": "admin"}
+            self.assertEqual(self.client.post("/api/aqte/live/exit", json=body).status_code, 403)
+            self.assertEqual(self.client.post("/api/aqte/live/exit", headers=self.headers | {
+                "Origin": "https://untrusted.example"}, json=body).status_code, 403)
+            for invalid in ({}, {**body, "trade_id": "bad"}, {**body, "quantity": 5},
+                            {**body, "confirmation": "CLOSE ALL KITE POSITIONS"}):
+                self.assertEqual(self.client.post("/api/aqte/live/exit", headers=self.headers, json=invalid).status_code, 422)
+            controller.request_exit.assert_not_called()
+            self.assertEqual(self.client.post("/api/aqte/live/exit", headers=self.headers, json=body).status_code, 200)
+            controller.request_exit.assert_called_once_with(body["trade_id"])
+            controller.stop_entries.assert_not_called()
+
     def test_invalid_kite_token_is_explicit_and_does_not_mutate_broker(self):
         from kiteconnect.exceptions import TokenException
         from routers.aqte import live_call

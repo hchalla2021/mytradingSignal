@@ -16,7 +16,8 @@ COPY . .
 
 # Create non-root user
 RUN addgroup --system appuser && adduser --system --ingroup appuser appuser
-RUN mkdir -p /app/data/paper_trading
+# Named volumes copy these image directories' ownership when first created.
+RUN mkdir -p /app/data/paper_trading /app/data/aqte /app/data/order_flow
 RUN chown -R appuser:appuser /app
 USER appuser
 

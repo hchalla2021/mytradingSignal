@@ -73,7 +73,7 @@ test('touch layout removes left rail and opens controls without consuming plot g
   assert.match(source, /\['Indicators', 'Chart Settings'\]/);
   assert.match(source, /aria-label="Chart level overlays"/);
   assert.match(source, /indicators.cpr && renderCprBands\(\)/);
-  assert.match(source, /showPaperLevels && selectedPaperTrade/);
+  assert.doesNotMatch(source, /showPaperLevels|selectedPaperTrade/);
   const overlay = css.nodes.find(node => node.selector === '.drawing');
   assert.equal(overlay.nodes.find(node => node.prop === 'pointer-events').value, 'none');
   assert.doesNotMatch(source, /requestFullscreen\(/, 'iOS focus mode must not depend on native fullscreen');
@@ -104,8 +104,7 @@ test('cleanup removes permanently disabled controls but preserves all working ch
   ]);
   assert.deepEqual(permanentlyDisabled, []);
   assert.doesNotMatch(source, /observatory-paper-(tab|content)|<ChartPaperTrading|setWorkspaceTab\('paper'\)/);
-  assert.match(source, /usePaperSignalRecorder\(paperFrame\)/);
-  assert.match(source, /<summary>Paper trade overlays<\/summary>/);
+  assert.doesNotMatch(source, /usePaperSignalRecorder|useChartPaperTrading|Paper trade overlays|chart-paper/);
   assert.match(source, /disabled=\{history.loading \|\| !history.hasMore\}/);
 
   const css = postcss.parse(readFileSync(path.join(folder, 'ChartWorkspace.module.css'), 'utf8'));

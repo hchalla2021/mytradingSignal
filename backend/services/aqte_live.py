@@ -146,6 +146,7 @@ class AQTELiveService:
     def status(self):
         with self.lock:
             cfg = self.settings()
+            now = time.time()
             active = copy.deepcopy(self.state["active"])
             if active:
                 market = self.service()
@@ -157,16 +158,20 @@ class AQTELiveService:
                             quantity / active["filled"] if active["filled"] else 0,
                     }
                     active["metrics"] = market.engine.position_metrics(
-                        order, time.time(), healthy=market.started and not market.failed.is_set())
+                        order, now, healthy=market.started and not market.failed.is_set())
+            trades = self.state["trades"]
+            visible_trades = [trade for trade in trades[:-20] if day(trade["exit_at"]) == day(now)] + trades[-20:]
             return {
+                "generated_at": now, "daily_counts": counts(self.state, now),
                 "enabled": cfg.aqte_live_enabled, "paper_validated": cfg.aqte_live_paper_validated,
+                "unvalidated_rules": cfg.aqte_live_allow_unvalidated_rules,
                 "expected_ip": cfg.aqte_live_static_ip, "preflight": copy.deepcopy(self.check),
                 "armed": self.state["armed_day"] == day(time.time()) and not self.state["killed"],
                 "automation_on": bool(self.state.get("automation_on")) and
                     self.state["armed_day"] == day(time.time()) and not self.state["killed"],
                 "killed": self.state["killed"], "flatten_pending": bool(self.state.get("flatten_pending")),
                 "active": active, "error": self.error,
-                "ready": self.ready, "trades": copy.deepcopy(self.state["trades"][-20:]),
+                "ready": self.ready, "trades": copy.deepcopy(visible_trades),
                 "limits": {"risk_per_trade": cfg.aqte_live_risk_per_trade,
                            "daily_loss": cfg.aqte_live_daily_loss, "max_trades": cfg.aqte_live_max_trades,
                            "max_losses": cfg.aqte_live_max_losses, "max_lots": 1},
@@ -198,7 +203,7 @@ class AQTELiveService:
                 price = (signal.get("entry") or {}).get("maximum")
                 if price and (time.time() - entry["at"] < 300 or abs(price - entry["price"]) / entry["price"] < 0.01):
                     return "Duplicate/near-identical contract entry blocked"
-        return quality_reason(signal, control)
+        return quality_reason(signal, control, self.settings().aqte_live_allow_unvalidated_rules)
 
     def daily_controls(self):
         with self.lock:
@@ -532,6 +537,7 @@ class AQTELiveService:
                 "trail_start_r": control["trail_start_r"], "daily_loss_limit": control["daily_loss"],
                 "state": "ENTRY_UNKNOWN", "entry_id": None, "protect_id": None,
                 "filled": 0, "entry_price": 0, "entry_at": now, "account": self.state["account"],
+                "signal_at": proposal["signal_at"],
                 "entry_day": day(now), "exit_requested": None, "error": None,
             }
             self.state["active"] = active
@@ -546,13 +552,34 @@ class AQTELiveService:
                     order_type="LIMIT", price=entry["maximum"], validity="IOC", tag=active["id"] + "E")
                 if not order_id:
                     raise ValueError("Broker did not return an order ID")
-                active.update(entry_id=str(order_id), state="ENTRY_PENDING")
+                active.update(entry_id=str(order_id), entry_ack_at=time.time(), state="ENTRY_PENDING")
                 self.save("ENTRY_ACK", order_id=str(order_id))
             except Exception:
                 logger.exception("AQTE live entry outcome uncertain; automatic resubmission prohibited")
                 active["error"] = "Entry outcome uncertain; reconcile broker order book. Do not retry."
                 self.state["armed_day"] = None
                 self.save("ENTRY_UNCERTAIN")
+            return self.status()
+
+    def request_exit(self, trade_id):
+        with self.lock:
+            if not self.ready:
+                raise LiveBlocked("Live journal is unavailable; manage the position in Kite")
+            if self.state["killed"] or self.state.get("flatten_pending"):
+                raise LiveBlocked("Account-wide emergency stop is active; monitor square-off in Kite")
+            active = self.state["active"]
+            if not active or active["id"] != trade_id:
+                raise LiveBlocked("The selected AQTE trade is no longer active; refresh before acting")
+            if active["entry_day"] != day(time.time()):
+                raise LiveBlocked("Previous-session trade requires reconciliation in Kite")
+            if active["filled"] <= active.get("exited", 0):
+                raise LiveBlocked("No confirmed remaining fill to close; inspect the pending order in Kite")
+            self.state["automation_on"] = False
+            self.proposals.clear()
+            if not active["exit_requested"]:
+                active.update(exit_requested="MANUAL_EXIT", exit_request_at=time.time())
+            # The monitor reconciles identity/quantity, then modifies only this trade's existing sell order.
+            self.save("MANUAL_EXIT_REQUESTED", trade_id=trade_id, scope="SELECTED_AQTE_TRADE")
             return self.status()
 
     def find_order(self, orders, active, leg):
@@ -629,6 +656,8 @@ class AQTELiveService:
             matches = [p for p in positions if int(p["instrument_token"]) == active["contract"]["token"] and p["product"] == "MIS"]
             quantity = sum(int(p["quantity"]) for p in matches)
             protection = self.find_order(orders, active, "S")
+            active["protection_confirmed"] = bool(
+                protection and protection["status"] == "TRIGGER PENDING" and protection["order_type"] == "SL")
             exited = int(protection["filled_quantity"]) if protection else 0
             if quantity != filled - exited:
                 raise LiveBlocked("Live quantity differs from AQTE fills; possible manual intervention. Manage in Kite.")
@@ -666,7 +695,8 @@ class AQTELiveService:
             if protection["status"] not in ("TRIGGER PENDING", "OPEN"):
                 active["state"] = "PROTECTION_PENDING"
                 return
-            active["protection_confirmed"] = True
+            if active["protection_confirmed"] and not active.get("protect_at"):
+                active["protect_at"] = time.time()
             active["state"] = "PROTECTED" if protection["status"] == "TRIGGER PENDING" else "EXIT_PENDING"
             # Acknowledged modify/cancel must settle before another mutation is considered.
             if active.get("modify"):
@@ -683,6 +713,7 @@ class AQTELiveService:
                 if broker_stop > active["stop"]:
                     active["stop"] = broker_stop
                     active["trailing_active"] = True
+                    active["trail_at"] = time.time()
                     self.save("TRAIL_CONFIRMED", stop=broker_stop, order_id=active["protect_id"])
             market = self.service()
             with market.lock:
@@ -727,6 +758,7 @@ class AQTELiveService:
                 if protection["order_type"] == "LIMIT" and abs(float(protection["price"]) - price) < 1e-6:
                     return
                 active.update(exit_requested=reason or "STOP_TRIGGERED", modify=expected)
+                active.setdefault("exit_request_at", now)
                 self.mutation("EXIT_REPRICE", broker, active, "modify_order", variety="regular",
                               order_id=active["protect_id"], **expected)
                 self.save("EXIT_REPRICE_ACK")
@@ -889,12 +921,15 @@ class AQTELiveService:
 
     def fault_stop(self, message):
         with self.lock:
+            # Monitor retries every ~2s; journal only new faults or an actual disarm.
+            changed = message != self.error or self.state["armed_day"] is not None or bool(
+                self.state.get("automation_on"))
             self.error = message
             self.state["armed_day"] = None
             self.state["automation_on"] = False
-            if self.ready:
+            if self.ready and changed:
                 try:
-                    self.save("AUTOMATION_FAULT_STOPPED")
+                    self.save("AUTOMATION_FAULT_STOPPED", error=message[:500])
                 except (sqlite3.Error, OSError, ValueError):
                     logger.exception("Could not persist automation fault stop")
 

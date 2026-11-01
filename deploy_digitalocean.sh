@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # ==============================================================================
-# Quick Deploy to Digital Ocean - Uses standard .env files
+# Quick Deploy to Digital Ocean - Uses runtime backend settings
 # Backend: backend/.env
-# Frontend: frontend/.env.local
+# Frontend: same-origin API/WebSocket through the production reverse proxy
 # ==============================================================================
 
-set -e  # Exit on error
+set -eu  # Exit on error
 
 echo "=============================================="
 echo "🚀 Quick Deploy to Digital Ocean"
@@ -18,54 +18,37 @@ cd /root/mytradingSignal
 # Pull latest code
 echo "📥 Pulling latest code..."
 git pull origin main
+source scripts/ensure-docker-compose.sh
 
-# NOTE: Using existing .env files (no copying needed)
-# Backend: backend/.env (committed or set manually)
-# Frontend: frontend/.env.local (committed or set manually)
-echo "⚙️  Using existing configuration files..."
-if [ ! -f backend/.env ]; then
-    echo "❌ ERROR: backend/.env not found!"
-    echo "   Create backend/.env with production settings"
-    exit 1
-fi
-if [ ! -f frontend/.env.local ]; then
-    echo "❌ ERROR: frontend/.env.local not found!"
-    echo "   Create frontend/.env.local with production settings"
-    exit 1
-fi
-
-# Stop containers
-echo "🛑 Stopping containers..."
-docker-compose -f docker-compose.prod.yml down
-
-# Clear caches
-echo "🧹 Clearing caches..."
-docker rmi trading-frontend trading-backend 2>/dev/null || true
-rm -rf frontend/.next
-docker builder prune -f
+# Backend secrets must be provisioned on the host, not committed.
+echo "⚙️  Checking server-only configuration..."
+bash scripts/check-production-env.sh backend/.env
+# Docker would create a directory for a missing bind-mounted token file.
+touch backend/access_token.txt
+"${COMPOSE[@]}" -f docker-compose.prod.yml config --quiet
 
 # Rebuild
 echo "🔨 Building (5-10 minutes)..."
-docker-compose -f docker-compose.prod.yml build --no-cache
+"${COMPOSE[@]}" -f docker-compose.prod.yml build
 
 # Start
 echo "🚀 Starting services..."
-docker-compose -f docker-compose.prod.yml up -d
+"${COMPOSE[@]}" -f docker-compose.prod.yml up -d
 
 # Wait and check
 echo "⏳ Waiting for services..."
 sleep 15
 
-docker-compose -f docker-compose.prod.yml ps
+"${COMPOSE[@]}" -f docker-compose.prod.yml ps
 
 # Test
 echo ""
 echo "🧪 Testing backend..."
-curl -s http://localhost:8000/health | jq . || echo "Backend not ready yet"
+curl --fail --show-error --connect-timeout 5 --max-time 15 http://localhost:8000/health
 
 echo ""
 echo "=============================================="
-echo "✅ DEPLOYMENT COMPLETE"
+echo "Container startup completed; verify all services are healthy."
 echo "=============================================="
 echo ""
 echo "📱 Test on:"
@@ -74,7 +57,7 @@ echo ""
 echo "🧹 Clear browser cache or use Incognito mode"
 echo ""
 echo "📋 View logs:"
-echo "  docker-compose -f docker-compose.prod.yml logs -f"
+echo "  ${COMPOSE[*]} -f docker-compose.prod.yml logs -f"
 echo ""
 echo "=============================================="
 echo "🔐 IMPORTANT: TOKEN AUTHENTICATION"

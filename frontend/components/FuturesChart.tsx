@@ -470,7 +470,7 @@ export default function FuturesChart({ active = true }: { active?: boolean } = {
       Zerodha-listed contracts only: October, November, December 2026 and 2027 appear when the exchange lists them.
       No future candles or synthetic rollover history. Prices and volume always belong to the selected contract.
       Near-month intraday candles update from the recorded live stream when fully observed (about once per second).
-      History reconciles every 20 seconds; other expiries and incomplete recordings use history polling. No futures paper orders.
+      History reconciles every 20 seconds; other expiries and incomplete recordings use history polling.
     </p>
     </details>
     {(contractError || historyError) && <p role="alert" className="rounded border border-red-500/40 p-2 text-red-300">

@@ -10,7 +10,13 @@ one-lot broker orders with static-IP preflight, fill reconciliation and protecti
 live enablement and paper-acceptance flags default to false. Its header automation switch defaults
 OFF; ON authorizes automatic qualifying entries after daily arming, without per-order approval.
 OFF blocks new entries while existing broker protection, trailing stops and exits continue.
-It does not claim validated ML predictions.
+The compact Auto Trade pill shows backend-confirmed state; unavailable status never
+masquerades as OFF. Book All / Exit Now confirm and close only the selected AQTE trade,
+separately from the account-wide emergency stop. The one-lot limit remains: percentage
+booking and extra staged targets are explicitly unavailable, not simulated.
+It does not claim validated ML predictions: by default the live quality gate blocks every
+entry, and only the owner opt-in `AQTE_LIVE_ALLOW_UNVALIDATED_RULES=true` lets fully aligned
+rule setups place real one-lot orders.
 See [AQTE architecture,
 APIs, storage, validation and staged rollout](docs/AQTE.md).
 
@@ -532,6 +538,30 @@ Production images exclude local environment files and keep backend secrets in th
 reverse proxy to forward `/api` and `/ws` to the backend. `NEXT_PUBLIC_*` values, when explicitly
 supplied, must be present at frontend build time, not just container startup.
 Health checks use Python/Node already installed in the respective images, without requiring curl.
+Both deployment scripts detect the Compose plugin (`docker compose`) or standalone
+`docker-compose` independently of Docker. If neither works, they install standalone Compose
+on the root-owned Linux deployment host. Upload, download, configuration and startup failures
+stop deployment instead of printing success. Invoke the Windows script from any directory;
+it uploads a checked source archive of this repository (excluding `.env*`, the Kite token,
+runtime data, dependencies and build output, so server settings are never overwritten),
+then runs the remote commands with Bash. Both scripts run `scripts/check-production-env.sh`
+on the server first: localhost URLs fail the deploy; missing AQTE approvals or an outbound
+IPv4 that differs from `AQTE_LIVE_STATIC_IP` are reported without printing secrets.
+See the AQTE [production checklist](docs/AQTE.md#production-checklist-digitalocean).
+Windows PowerShell logging stays ASCII and uploaded shell line endings are normalized
+before execution. Deployment regression checks (mocked commands; no server access):
+
+```powershell
+powershell -NoProfile -ExecutionPolicy RemoteSigned -File scripts\tests\test-deploy-to-do.ps1
+```
+```bash
+bash scripts/tests/test-compose.sh
+```
+
+Neither script brings down running containers or prunes shared Docker caches before building.
+Container startup is not a readiness guarantee: check every service's health and the
+same-origin reverse proxy before allowing live traffic. Docker builds do not require
+`frontend/.env.local` (it is deliberately excluded from the image).
 The frontend build creates an empty `public` directory when no static assets exist.
 Keep the `paper-trading-data` volume when rebuilding so both paper ledgers survive deployments.
 Keep `order-flow-data` too: `ORDER_FLOW_DB_PATH` points the live footprint/delta recording
@@ -539,6 +569,9 @@ database into that volume so recordings survive container recreation. Existing d
 must back up and migrate any old `/app/data/order_flow.sqlite3` recording before switching
 to `/app/data/order_flow/order_flow.sqlite3`; the new volume does not import it automatically.
 Custom `.next*` build-check directories are excluded from the frontend Docker context.
+Keep `aqte-data` for the AQTE recording and live-order journals. New volumes inherit the
+non-root app user's image-directory ownership. Existing volumes may need an ownership
+repair after a backup; do not delete trading journals to fix permissions.
 
 ---
 

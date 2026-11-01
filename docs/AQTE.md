@@ -85,7 +85,9 @@ Manual broker position summaries use individually bordered light-green metric
 tiles with consistent spacing, within a matching dark outer panel. The existing
 responsive column layout and read-only/stale semantics are unchanged.
 Their existing data polling remains mounted; expanding never starts trading.
-Emergency Stop, controller errors and active AQTE-owned positions remain visible.
+The header reports automation faults and emergency-latch status; controller/position
+faults remain explicit in the trade hero. Active AQTE-owned positions remain visible
+in the terminal and trade book.
 The six overview cards use light-green borders and higher-contrast labels/values.
 Redundant navigation hints, empty rule-score bars and duplicate mode/placeholder
 rows are omitted. Missing intelligence, awaiting fills and unconfirmed stops remain
@@ -100,18 +102,29 @@ consistent 24px overview values. All six cards share the same sans-serif font,
 16px semibold headings and 14px regular supporting labels; the target uses the
 same primary-value layout as entry and stop. Chart-axis text is 12px. Very narrow overview layouts
 stack into one column to preserve readable text rather than shrinking fonts.
-Live setup remains collapsed by default and contains only the required preflight,
-daily-arm actions and a concise backend-approval notice. Redundant static-IP/risk
-summary boxes, account details and lengthy setup explanations are omitted from
-the UI; backend checks, risk limits and protective management are unchanged.
-The header uses an illustrated-style Automated Trading Control with separate ON
-and OFF buttons. Confirmed ON is bright green; OFF is amber and a latched emergency
-stop is red. Unknown status never highlights a confirmed state. ON still requires
-daily arming and real-money confirmation; OFF requests only a new-entry pause,
-never emergency reset or cancellation of existing protection.
-The control heading and ON/OFF buttons align in a compact row with 44px minimum
-touch targets and a short acknowledgement beneath. Repeated captions and refresh
-explanations are omitted visually; backend persistence and emergency locking remain.
+The separate Safety & emergency panel and Live setup controls are removed.
+The header's confirmed ON flow still performs preflight and daily arming.
+Live-status polling and selected-trade exit confirmation remain mounted without
+an extra panel; exit-request failures remain explicit. Backend approval, emergency
+stop/reset APIs, risk limits and protective management are unchanged.
+The header uses a single compact navy **Auto Trade** pill with a green track and
+white thumb for backend-confirmed ON, and a neutral track for confirmed OFF.
+The same 44px-minimum button requests OFF when ON; from OFF it opens the real-money
+ON confirmation. It supports native keyboard activation, visible focus and reduced
+motion. Initial loading says Checking; failed, unauthorized, malformed or stale
+responses say UNKNOWN, never a confirmed OFF. UNKNOWN disables starting and retains
+a separate OFF-request recovery action. A latched emergency is red and cannot be
+cleared by ON or by market reopening. Only while latched, a compact **Reset emergency
+stop** action appears beside the switch; it requires fresh controller status,
+completed square-off, no active AQTE trade and explicit owner confirmation.
+Reset calls the existing authenticated reset endpoint and must acknowledge a cleared
+latch with automation OFF and unarmed. It never starts trading; ON requires its own
+confirmation during weekday 09:15–15:15 IST entry hours. Pending, failed or unverified
+resets cannot enable ON. The removed safety/setup panel stays removed.
+Successful acknowledgements remain available to screen readers;
+errors, saving and emergency messages stay visible. No optimistic state or local
+storage can enable trading; duplicate clicks and older in-flight polls cannot
+overwrite command results. OFF does not cancel existing protection.
 Confirmed header ON now calls owner-authenticated `POST /api/aqte/live/start`.
 Under the existing controller lock, it validates approval, weekday/entry hours
 and the emergency latch, runs Kite/static-IP preflight and daily arming when
@@ -120,6 +133,12 @@ signals passing existing daily/quality/risk gates can buy. OFF pauses entries;
 ON can resume an already armed ordinary OFF session. Restart/new day still
 defaults OFF; a latched emergency is not an ordinary pause and cannot be cleared
 by ON — use the confirmed emergency reset once Kite is flat. Invalid token, failed checks or missing validation still prevent starting.
+The ON confirmation states the server's entry mode (strict scan-only, or unvalidated
+rule entries allowed). **Cancel · stay OFF** and Escape only close the confirmation;
+they send no command because automation is already OFF. The risk card shows
+**Locked · Live approval required** only when `AQTE_LIVE_ENABLED` or
+`AQTE_LIVE_PAPER_VALIDATED` is not true; with approvals present but automation not
+started today it shows **Not armed · Arms when Auto Trade turns ON**.
 The compact header badge describes the market feed, not automation. LIVE requires
 a fresh shared index tick and socket connection during weekday 09:15–15:30 IST
 hours; otherwise it shows FEED OFF during those hours or CLOSED outside them.
@@ -168,22 +187,41 @@ AQTE does not disable or change any other module's independently configured exec
 
 ### Reference-style frontend terminal
 
-The AQTE section alone now uses the supplied dark-terminal visual layout:
-six overview cards (market view, signal, entry, SL,
-trailing SL and target), central candlesticks, an order-flow/indicator readout,
-a control rail, four analysis/setup/strategy/illustrative-return cards and a compact
-position summary. Native disclosures retain the full position breakdown and
-calculation notes. Other dashboard sections and the backend are unchanged by this
-redesign. Existing index/mode keyboard navigation, daily saves, ON confirmation,
-emergency stop, manual-Kite read-only behavior and risk gates are preserved.
+The current reference-style trade hero includes initial SL separately from the
+broker-confirmed current/trailing stop, an open-P&L ring, targets, position quantity,
+index chart, lifecycle, futures evidence, protection rules and a tabbed trade book.
+**Book All** and **Exit Now** request an exit of the selected AQTE trade only, after
+confirmation. Account-wide emergency liquidation remains a separate owner-authenticated
+backend operation. The header's confirmed emergency reset only restores OFF.
+The status payload includes generation time, executed/reserved counts, all today's
+closed trades (not a truncated 20-trade day), and recent earlier exits. Unknown or
+stale open marks never contribute a fictitious zero to today's P&L. Missing controller
+state shows unverified positions/risk rather than a flat account or "Safe"; last-known
+entry/stop levels survive disconnects. Breakeven trades are not counted as losses.
+
+The one-lot/single-position execution limit is unchanged. Book 25%/50%/75% are
+explicitly unavailable; T2/T3 have no invented prices. There is one full-position
+target. Reaching it uses the executable sell bid, not LTP, and is not labelled an
+exit fill. Buyer/seller figures are labelled futures depth shares, OI change remains
+unavailable, and rule scores are not calibrated win probabilities. Seller-spike,
+OI-drop, EMA/VWAP/RSI exit rules from the picture are not enabled or simulated.
+Protective-management status is independent of the new-entry switch: OFF continues
+existing stops/trailing/exit reconciliation. Cancelled stops and repriced LIMIT exits
+are not presented as confirmed trigger-pending SL protection. The chart remains
+underlying-index history, so option entry/SL levels are not plotted on its price scale.
+
+This presentation is confined to the AQTE section. Other dashboard sections are
+unchanged. Existing index/trade-book keyboard navigation, daily saves, ON
+confirmation, emergency stop, manual-Kite read-only behavior and risk gates are
+preserved.
 The optional left-side Dashboard, Live Market, Analysis, Positions & P&L and Risk
 Control shortcuts are not rendered. Their sidebar column is removed at every
 viewport size; all corresponding content and trading controls remain available.
 
 - The chart lazy-loads the existing `lightweight-charts` dependency and reuses
   `useChartHistory` and its shared request cache. Supported view-only frames are
-  1m, 3m, 5m (default), 15m and 1h. There is only one embedded chart, regardless of the number
-  of index panels. It reuses the already-connected index feed; no extra WebSocket
+  1m, 3m, 5m (default), 15m and 1h. Only the selected index chart is visible. Each chart
+  mounts on first selection and stays cached for later tab switches. It reuses the already-connected index feed; no extra WebSocket
   and no faster analytical/broker polling are introduced.
 - Live candles and EMA overlays update incrementally without recreating the chart,
   uploading the whole history on ticks or resetting the user's chart viewport.
@@ -198,8 +236,8 @@ viewport size; all corresponding content and trading controls remain available.
 - The current AQTE dashboard API does not expose a five-level option book or Greeks.
   The reference's fabricated-looking depth, IV/Greek values, calibrated ML percentages,
   extra targets and scalp profits are **not copied as data**. Unavailable fields
-  show `--` with explanations. Expected profit is a gross arithmetic illustration
-  of the actual paper entry/target/quantity only, never a forecast or execution promise.
+  show `--` with explanations. Open P&L is a quote-based estimate with estimated
+  costs, never a forecast or execution promise.
 - Real overview values come from the already-polled live controller, limited to the
   selected index. Unconfirmed stop requests are not promoted to confirmed SL/TSL.
   Manual Kite prices remain in the separate read-only position summary below.
@@ -211,8 +249,9 @@ viewport size; all corresponding content and trading controls remain available.
   There is no tick-flash animation or new animation/rendering dependency.
 
 The paper engine never submits broker orders. An **opt-in, explicitly armed automated live
-pilot** now exists in `backend/services/aqte_live.py`, with owner-authenticated controls
-in `frontend/components/AQTELivePanel.tsx`. It remains disabled by default.
+pilot** now exists in `backend/services/aqte_live.py`, with owner-authenticated automation
+in `frontend/components/AQTEAutomationSwitch.tsx` and status/selected-trade exits in
+`frontend/components/AQTELiveController.tsx`. It remains disabled by default.
 Scores are explainable rule scores, not calibrated ML probabilities. There are no
 profitability or fill guarantees.
 
@@ -220,9 +259,8 @@ profitability or fill guarantees.
 
 ### Manually purchased Kite positions
 
-When there is no AQTE-managed position for the selected index, the Real Trade
-execution box displays read-only Zerodha positions in the same compact price,
-points/percentage and P&L layout instead of an unrelated waiting-for-entry box.
+The trade book's Positions tab displays read-only Zerodha positions for the
+selected index in the compact price, points/percentage and P&L layout.
 The source is explicitly labelled Kite read-only; gross LTP P&L is never labelled
 net. Unavailable initial stop, target, entry time and trailing history are not
 fabricated. A single working stop trigger is displayed in the current-SL tile;
@@ -240,7 +278,8 @@ Only same-contract/exchange/product opposite-side working SL/SL-M orders are
 listed, including remaining quantities and status. Coverage may be partial;
 GTT/external stops are not verified. Current triggers do not establish initial SL
 or trailing history, which remain explicitly unavailable. Manual positions must
-be managed in Kite: AQTE's emergency stop does not liquidate these positions.
+be managed in Kite during normal operation. The selected-trade exit never touches
+them; the separately confirmed account-wide emergency stop does close them.
 This display does not approve or enable real automation.
 
 - FastAPI lifespan owns a shared `MarketFeedService` and KiteTicker connection.
@@ -393,7 +432,9 @@ address, not a verified egress measurement. Allowlist it in the existing Kite ap
 only for a backend host that actually egresses through that address. A DigitalOcean
 droplet may have a different outbound IP from a local workstation; verify on the
 deployment host. No machine network configuration, broker allowlist, environment
-secrets or order permissions are changed by recording this address.
+secrets or order permissions are changed by recording this address. For the
+DigitalOcean deployment, set `AQTE_LIVE_STATIC_IP` to the droplet's measured outbound
+IPv4 and add that address to Kite as well (see **Production checklist** below).
 
 ### APIs
 
@@ -483,10 +524,9 @@ visible from either tab. It controls real entries, not market recording or the s
 paper book. The browser never starts automation merely by mounting or changing tabs.
 Backend state is authoritative. Status failures display UNKNOWN with an OFF-request
 action instead of pretending automation is stopped.
-The header LIVE CONTROL badge and automation button use green text for confirmed
-automation ON and amber/yellow for OFF or unknown status; emergency stop is red.
-The switch uses a prominent solid ON/OFF/EMERGENCY STOP label and stronger matching
-border. ON/OFF actions are automatically journalled by the existing backend.
+The compact Auto Trade pill uses a green track only for confirmed ON, a neutral
+OFF track, an explicitly UNKNOWN state on failure, and a red emergency state.
+ON/OFF actions are automatically journalled by the existing backend.
 Page refresh restores the authoritative state using GET only, never by replaying
 an ON request or trusting local storage. A saved/confirmed acknowledgement is
 shown only after a successful response; unknown outcomes remain explicit.
@@ -567,22 +607,43 @@ journal. Paper trading and read-only manual Kite positions are unaffected.
 
 **Important current limitation:** these controls do not train or validate a predictive
 model. The existing rule baseline tops out at 80, is unvalidated and cannot pass the
-minimum 90. Even a synthetic higher score must pass directional EMA 9/20/50/100/200,
-VWAP, SuperTrend, RSI, CPR, volume, order-flow and breakout checks. Validated option-chain
-OI/PCR/Greeks and liquidity-sweep confirmation are **not implemented**; their absence
-is an explicit final blocker, not inferred or replaced by an inflated confidence score.
-Consequently this stricter live policy remains WAIT until the missing evidence and
-validation are actually implemented. A rule score is not a calibrated win probability;
-none of these checks guarantee profitable trades or execution.
+minimum 90. Validated option-chain OI/PCR/Greeks and liquidity-sweep confirmation are
+**not implemented**. In the default **strict** mode their absence is an explicit final
+blocker, so Auto Trade ON scans but never places an entry.
+
+`AQTE_LIVE_ALLOW_UNVALIDATED_RULES=true` is a separate, default-off owner opt-in for
+real money. It skips only the minimum rule score, model-validation and missing
+option-chain blockers. Every entry must still pass directional EMA 9/20/50/100/200,
+VWAP, SuperTrend, RSI band, CPR, volume (at least 1.5x), order-flow imbalance (at least
+0.15), breakout and structure checks, plus all risk, broker and one-position guards.
+A non-numeric score always blocks. The ON confirmation and `GET /api/aqte/live/status`
+(`unvalidated_rules`) report the active mode.
+
+Even with the opt-in, entries are rare by design:
+
+- Analysis needs 201 contiguous completed one-minute futures candles from the current
+  session, so the earliest signal is about **12:36 IST**; gaps or a restart reset warm-up.
+- The engine only emits BUY when one lot of the nearest-strike option fits about INR 500
+  of risk (0.5% of its INR 100,000 paper capital) with a stop of at least 20% of premium
+  (or 3 spreads / 4 ticks), i.e. roughly premium x lot size x 20% + costs <= INR 500.
+  The live proposal then applies the saved SL percentage and the INR 500 cap. A lower
+  saved SL percentage reduces live risk but does not widen engine eligibility, so
+  entries are mostly limited to low-premium contracts; the cap is never raised
+  automatically.
+
+A rule score is not a calibrated win probability; none of these checks guarantee
+profitable trades or execution.
 
 The centralized settings are in `backend/config/__init__.py`; environment overrides
-are documented in `backend/.env.production.example`. The default static IP is
-`122.177.245.101`. Development did not change your private environment or submit orders.
+are documented in `backend/.env.production.example`. The built-in static IP default is
+`122.177.245.101` (a local workstation); production must set the droplet's outbound
+IPv4. Development did not change your private environment or submit orders.
 
 ```dotenv
 AQTE_LIVE_ENABLED=false
 AQTE_LIVE_PAPER_VALIDATED=false
-AQTE_LIVE_STATIC_IP=122.177.245.101
+AQTE_LIVE_STATIC_IP=159.65.147.167
+AQTE_LIVE_ALLOW_UNVALIDATED_RULES=false
 AQTE_LIVE_RISK_PER_TRADE=500
 AQTE_LIVE_DAILY_LOSS=2000
 AQTE_LIVE_MAX_TRADES=5
@@ -600,13 +661,43 @@ block the pilot. Matching this public-IP check cannot prove the broker's own all
 Kite's actual permission checks remain authoritative. Do not edit machine routing to
 impersonate an allowlisted address.
 
-In **Real Trade**, the signed-in configured app owner performs:
+The signed-in configured app owner, on each weekday between 09:15 and 15:15 IST:
 
-1. **Check static IP & Kite** (read-only broker calls).
-2. **Arm real trading today** within 60 seconds of preflight during the regular session.
-3. Switch **AUTO REAL TRADING ON** in the heading and confirm real-money automation.
-4. The monitor consumes qualifying signals automatically through the same short-lived,
+1. Clicks the header **Auto Trade** switch and **Confirm ON · real money**.
+2. The backend runs the static-IP, Kite profile and flat-account preflight and arms the
+   current session; any failure keeps automation OFF with the reason shown.
+3. The monitor consumes qualifying signals automatically through the same short-lived,
    server-generated proposal and broker revalidation path; no individual BUY click is needed.
+
+### Production checklist (DigitalOcean)
+
+Live automation runs only where the backend's outbound IPv4 is in the Kite allowlist.
+Use one trading host: disable live trading locally (`AQTE_LIVE_ENABLED=false`) once
+production is live.
+
+1. **Kite Connect app:** add the droplet IPv4 (for example `159.65.147.167`) to the
+   developer profile IP whitelist and set the redirect URL to
+   `https://mydailytradesignals.com/api/auth/callback`. Kite accepts one redirect URL
+   per app, so production login and local login conflict.
+2. **Server `backend/.env`** (never uploaded by the deploy scripts): production
+   `FRONTEND_URL`, `REDIRECT_URL` and `CORS_ORIGINS`; `APP_ACCESS_USERNAME` and
+   `APP_ACCESS_PASSWORD_HASH`; `AQTE_LIVE_ENABLED=true`, `AQTE_LIVE_PAPER_VALIDATED=true`,
+   `AQTE_LIVE_STATIC_IP=<droplet IPv4>`, `FORCE_OUTBOUND_IPV4=true`; Smart AI Algo not
+   in live mode; no proxy variables. Set `AQTE_LIVE_ALLOW_UNVALIDATED_RULES=true` only
+   if you accept unvalidated real-money entries; otherwise ON only scans.
+3. **Verify egress** on the server: `curl -4 https://api.ipify.org` must print the
+   same IPv4 as `AQTE_LIVE_STATIC_IP`. `bash scripts/check-production-env.sh` reports
+   localhost URLs, missing approvals and IP mismatches without printing secrets.
+4. **Deploy:** `scripts/deploy-to-do.ps1 <droplet-ip>` uploads a checked source archive
+   that excludes `.env*`, the Kite token and runtime data, and `deploy_digitalocean.sh`
+   uses `git pull`. Both run the settings check and stop before rebuilding on errors.
+   After editing `backend/.env`, recreate the backend:
+   `docker compose -f docker-compose.prod.yml up -d backend` (a plain restart keeps
+   the old environment).
+5. **Each trading day:** complete the Kite login on the production site, keep the
+   desired indices enabled in the Real tab controls (they default to disabled and are
+   stored in the production journal), then turn Auto Trade ON after 09:15 IST.
+   Production has its own journal; reset an emergency latch there only once Kite is flat.
 
 Automatic entries are permitted **only while ON and armed**. The controller does not trust browser prices or quantity.
 It rechecks settings, IP, account identity, flat account, current signal, timestamp,
@@ -645,6 +736,20 @@ but preserves active order identities and reconciles protection. Previous-sessio
 unresolved trades, rejected/cancelled stops and manual position changes block automation
 and require broker-terminal reconciliation.
 
+### Selected trade exit / Book All
+
+`POST /api/aqte/live/exit` requires the captured 16-character AQTE `trade_id` and
+`{"confirmation":"CLOSE SELECTED AQTE TRADE"}`. The controller rejects changed,
+missing, unfilled or previous-session trades and emergency-latched sessions.
+It durably records the request and pauses new entries without setting the emergency
+latch. The normal monitor rechecks broker account, order identity and remaining
+quantity, then reprices only that trade's existing protective SELL to a marketable
+LIMIT. It never creates a competing exit, closes another position, or cancels manual
+orders. Stale quotes retain the stop and surface an explicit warning; uncertain
+modifications must reconcile before another mutation. Requests survive restart;
+an acknowledgement is not a fill guarantee. The confirmation keeps the original
+trade identity even when tabs/polls change, traps keyboard focus and supports Escape.
+
 ### Emergency Stop · close all
 
 For market crashes or broker problems. After a confirmation step
@@ -675,16 +780,18 @@ They do not accept Kite access tokens from the browser.
 
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/api/aqte/live/status` | Readiness, IP preflight, limits, real order status and recent exits |
+| GET | `/api/aqte/live/status` | Generation time, readiness, limits, executed/reserved counts, real order status, today's exits and recent history |
 | GET | `/api/aqte/live/daily-controls` | Owner-only saved index settings, IST executed/reserved counts and quality blockers |
 | POST | `/api/aqte/live/daily-controls` | Save `{"symbol":"NIFTY","config":{...}}` while OFF; strict `IndexControl` schema; no broker mutation |
 | POST | `/api/aqte/live/daily-limit` | Save `{"symbol":"NIFTY","max_trades":3}` while ON or OFF; only the 1–10 entry cap changes, never lot size or protection |
 | POST | `/api/aqte/live/preflight` | Verify direct outbound IPv4 and existing Kite account |
 | POST | `/api/aqte/live/arm` | Body `{"confirmation":"ARM REAL TRADING"}` |
 | POST | `/api/aqte/live/automation` | `{"enabled":true,"confirmation":"START AUTOMATED REAL TRADING"}` or `{"enabled":false,"confirmation":"STOP NEW ENTRIES"}` |
+| POST | `/api/aqte/live/start` | Confirmed ON: preflight/arm if needed, then enable scanning under existing gates |
 | POST | `/api/aqte/live/proposal` | Compatibility/internal proposal path; blocked while OFF |
 | POST | `/api/aqte/live/confirm` | Compatibility confirmation path; blocked while OFF and still subject to all risk checks |
-| POST | `/api/aqte/live/stop` | Latch emergency stop and request a reconciled exit |
+| POST | `/api/aqte/live/exit` | Pause new entries and request only the confirmed, identified AQTE trade's exit |
+| POST | `/api/aqte/live/stop` | Latch account-wide emergency, cancel open Kite orders and square off all Kite positions |
 
 These controls are independent of the older paper-only `/api/aqte/kill`, which is
 disabled in production and cannot stop Real AQTE analysis.

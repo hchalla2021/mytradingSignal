@@ -4,7 +4,6 @@ import { useState, useEffect, useMemo, useCallback } from 'react';
 import dynamic from 'next/dynamic';
 import LiveStatus from '@/components/LiveStatus';
 import Header from '@/components/Header';
-import SystemStatusBanner from '@/components/SystemStatusBanner';
 import InstitutionalWorkspace from '@/components/InstitutionalWorkspace';
 import LiveMarketIndexTabs from '@/components/LiveMarketIndexTabs';
 import IndexTabs from '@/components/IndexTabs';
@@ -455,9 +454,6 @@ export default function Home() {
     <main suppressHydrationWarning className="min-h-screen">
       {/* Header */}
       <Header isConnected={isConnected} marketStatus={marketStatus} />
-
-      {/* 🔥 NEW: Professional System Status Banner */}
-      <SystemStatusBanner />
 
       {/* Connection Status Bar */}
       <div className="w-full px-3 sm:px-5 lg:px-8 xl:px-10 py-3 lg:py-4">

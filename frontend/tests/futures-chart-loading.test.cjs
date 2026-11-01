@@ -86,6 +86,7 @@ test('a warmed default contract and candles render immediately without a loading
     './DeltaStrength': { default: () => null },
     './ProSignal': { default: () => null },
     './LevelBattle': { default: () => null },
+    './InsightDock': { default: () => null },
     '@/hooks/useLevelBattle': { useLevelBattle: () => ({ active: [], price: null, mapped: false }) },
     '@/lib/level-battle-primitive': { LevelBattlePrimitive: class {} },
     '@/hooks/useProConfluence': { useProConfluence: () => ({ contract: null, replay: null, open: null, decision: null }) },
