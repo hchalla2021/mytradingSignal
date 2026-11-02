@@ -1228,6 +1228,10 @@ h1, h2, h3, h4, h5, h6 {
   box-shadow: 0 0 0 1px rgb(var(--aqte-tab-accent) / 0.35), 0 0 18px rgb(var(--aqte-tab-accent) / 0.18);
 }
 .aqte-theme .aqx-index-name { grid-column: 1; font-size: 0.875rem; font-weight: 800; letter-spacing: 0.04em; color: #f8fafc; }
+.aqte-theme .aqx-index-tag {
+  display: inline-block; margin-left: 6px; padding: 0 6px; border: 1px solid rgb(148 163 184 / 0.35); border-radius: 999px;
+  font-size: 0.625rem; font-weight: 700; letter-spacing: 0.06em; line-height: 1.5; color: #9fb2c9; text-transform: uppercase; vertical-align: middle;
+}
 .aqte-theme .aqx-index-price { grid-column: 1; font-size: 1.25rem; font-weight: 700; color: #f8fafc; font-variant-numeric: tabular-nums; line-height: 1.3; white-space: nowrap; }
 .aqte-theme .aqx-index-change { grid-column: 1 / -1; font-size: 0.875rem; font-weight: 600; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 .aqte-theme .aqx-spark { grid-column: 2; grid-row: 1 / span 2; align-self: center; width: 100%; height: 34px; overflow: visible; }
@@ -1504,8 +1508,9 @@ h1, h2, h3, h4, h5, h6 {
   .aqte-theme .aqx-action strong { font-size: 0.875rem; }
   .aqte-theme .aqx-action small { font-size: 0.875rem; }
   .aqte-theme .aqx-actions { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .aqte-theme .aqx-timeline { display: flex; gap: 0; overflow-x: auto; padding-bottom: 4px; }
-  .aqte-theme .aqx-timeline li { flex: 0 0 84px; font-size: 0.6875rem; }
+  .aqte-theme .aqx-timeline { grid-template-columns: repeat(3, minmax(0, 1fr)); row-gap: 10px; }
+  .aqte-theme .aqx-timeline li { font-size: 0.6875rem; }
+  .aqte-theme .aqx-timeline li:nth-child(3n + 1)::before { display: none; }
   .aqte-theme .aqx-book-tab { min-height: 44px; padding: 4px 10px; font-size: 0.875rem; }
   .aqte-theme .aqx-risk-chips { width: 100%; font-size: 0.75rem; }
   .aqte-theme .aqx-risk-chips span { flex: 1 1 50%; padding: 4px 8px; }
@@ -1543,12 +1548,16 @@ h1, h2, h3, h4, h5, h6 {
 .aqte-theme .aqx-clock b { font-size: 1rem; font-weight: 800; color: #f8fafc; }
 .aqte-theme .aqx-clock small { font-size: 0.6875rem; font-weight: 700; color: #8fb3d9; }
 .aqte-theme .aqx-clock span { grid-column: 1 / -1; font-size: 0.75rem; color: #9fb2c9; }
+.aqte-theme .aqx-clock abbr { text-decoration: none; }
 .aqte-theme .aqx-icon-btn {
   position: relative; display: grid; place-items: center; width: 40px; height: 40px;
   border: 1px solid rgb(56 116 190 / 0.45); border-radius: 10px; background: rgb(15 30 52 / 0.8); color: #cbd5e1;
 }
 .aqte-theme .aqx-icon-btn svg { width: 18px; height: 18px; }
 .aqte-theme .aqx-icon-btn:hover { border-color: #5cc8ff; color: #fff; }
+@media (pointer: coarse) {
+  .aqte-theme .aqx-icon-btn { width: 44px; height: 44px; }
+}
 .aqte-theme .aqx-icon-count {
   position: absolute; top: -6px; right: -6px; min-width: 18px; height: 18px; padding: 0 4px; border-radius: 999px;
   background: #ef4444; color: #fff; font-size: 0.625rem; font-weight: 800; line-height: 18px; text-align: center;
@@ -1737,6 +1746,12 @@ h1, h2, h3, h4, h5, h6 {
 .aqte-theme .aqx-cpanel { flex: 1 1 auto; min-width: 0; }
 .aqte-theme .aqx-cpanel-scroll { height: 352px; overflow: auto; scrollbar-gutter: stable; overscroll-behavior: contain; }
 .aqte-theme .aqx-cc-chart .aqx-chart .aqte-chart-canvas { height: 300px; }
+/* Desktop: the chart grows into the height set by the trade/risk columns instead of leaving a gap.
+   Size containment keeps the chart's own pixel height from feeding back into the row height. */
+.aqte-theme .aqx-cc-chart .aqx-chart:not([hidden]),
+.aqte-theme .aqx-cc-chart .aqx-chart-slot:not([hidden]) { display: flex; flex-direction: column; flex: 1 1 auto; min-width: 0; }
+.aqte-theme .aqx-cc-chart .aqx-chart .aqte-terminal-chart { display: flex; flex-direction: column; flex: 1 1 auto; }
+.aqte-theme .aqx-cc-chart .aqx-chart .aqte-chart-canvas { flex: 1 1 auto; height: auto; min-height: 300px; contain: size; }
 .aqte-theme .aqx-tab-note { margin-top: 8px; font-size: 0.75rem; color: #8fa6c1; }
 .aqte-theme .aqx-facts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px; margin-bottom: 8px; }
 .aqte-theme .aqx-facts > div { display: flex; justify-content: space-between; gap: 8px; min-width: 0; padding: 6px 10px; border: 1px solid rgb(56 116 190 / 0.3); border-radius: 8px; background: rgb(15 30 52 / 0.7); font-size: 0.8125rem; }
@@ -1968,6 +1983,10 @@ h1, h2, h3, h4, h5, h6 {
 .aqte-theme .aqx-pnl-loss { border-color: rgb(239 68 68 / 0.55); background: linear-gradient(150deg, rgb(127 29 29 / 0.4), rgb(9 14 28 / 0.4)); }
 .aqte-theme .aqx-health { border-color: rgb(34 197 94 / 0.5); }
 .aqte-theme .aqx-live-dot { background: var(--aqx-green); }
+.aqte-theme .aqx-live-dot.aqx-live-dot-off { background: #64748b; box-shadow: none; animation: none; }
+/* Daily Risk: let the used/limit figure wrap below the label instead of being clipped in narrow cells */
+.aqte-theme .aqx-perfbar .aqx-perf-risk dd { white-space: normal; }
+.aqte-theme .aqx-perfbar .aqx-perf-risk dd small { display: inline-block; white-space: nowrap; }
 .aqte-theme .aqx-risk-bar i { background: linear-gradient(90deg, var(--aqx-green), var(--aqx-amber), var(--aqx-red)); opacity: 1; }
 /* light green section borders */
 .aqte-theme.aqx-shell { --aqx-line: rgb(134 239 172 / 0.42); border-color: rgb(134 239 172 / 0.45); }
@@ -1998,11 +2017,13 @@ h1, h2, h3, h4, h5, h6 {
   .aqte-theme .aqx-ticker { grid-template-columns: minmax(0, 1fr); }
   .aqte-theme .aqx-pnl-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .aqte-theme .aqx-facts { grid-template-columns: minmax(0, 1fr); }
-  .aqte-theme .aqx-cc-chart .aqx-chart .aqte-chart-canvas { height: 240px; }
+  .aqte-theme .aqx-cc-chart .aqx-chart .aqte-chart-canvas { min-height: 240px; }
   .aqte-theme .aqx-cpanel-scroll { height: 292px; }
-  .aqte-theme .aqx-clock { flex: 1 0 100%; justify-content: start; padding-left: 0; border-left: 0; }
+  .aqte-theme .aqx-clock { flex: 1 1 auto; justify-content: start; padding-left: 0; border-left: 0; }
   .aqte-theme .aqx-head-tools { gap: 8px; }
-  .aqte-theme .aqx-head-tools .aqte-automation-control { margin-right: auto; align-items: flex-start; }
+  /* Phones: clock + icon buttons share the first row; the switch and its status take a full row below. */
+  .aqte-theme .aqx-head-tools .aqte-automation-control { order: 1; flex: 1 0 100%; max-width: none; margin-right: 0; align-items: flex-start; }
+  .aqte-theme .aqx-head-tools .aqte-automation-control > :is(p, [role="alert"]) { text-align: left; }
 }
 @container aqxdeck (max-width: 880px) {
   .aqte-theme .aqx-deck-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
@@ -2018,6 +2039,17 @@ h1, h2, h3, h4, h5, h6 {
   }
   .aqte-theme .aqx-eng-name { font-size: 0.875rem; line-height: 1.2; white-space: normal; overflow-wrap: normal; }
   .aqte-theme .aqx-eng-badge { justify-self: start; }
+}
+@container aqxdeck (max-width: 300px) {
+  /* Smallest phones: the badge takes the full row instead of overflowing beside the icon. */
+  .aqte-theme .aqx-eng-card { grid-template-areas: "num name" "badge badge" "meta meta" "bar bar"; padding: 8px; }
+  .aqte-theme .aqx-eng-icon { display: none; }
+  .aqte-theme .aqx-eng-badge { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .aqte-theme .aqx-eng-meta { font-size: 0.75rem; }
+  .aqte-theme .aqx-eng-rules-word { display: none; }
+}
+@media (pointer: coarse) {
+  .aqte-theme .aqx-deck-filter { min-height: 44px; }
 }
 @container aqxopp (max-width: 340px) {
   .aqte-theme .aqx-opp-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }

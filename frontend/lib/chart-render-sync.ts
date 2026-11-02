@@ -34,12 +34,17 @@ export function synchronizeChartRange(chart: IChartApi, container: HTMLElement, 
   scale.setVisibleLogicalRange(next);
 }
 
+// lightweight-charts resize() does not update options().width/height, so the last applied size is tracked here;
+// comparing against options() would skip a resize back to the creation size (e.g. after a phone rotation).
+const appliedSizes = new WeakMap<IChartApi, { width: number; height: number }>();
+
 export function resizeChartIfChanged(chart: IChartApi, container: HTMLElement): boolean {
   const width = container.clientWidth;
   const height = container.clientHeight;
   if (width <= 0 || height <= 0) return false;
-  const options = chart.options();
-  if (options.width === width && options.height === height) return false;
+  const current = appliedSizes.get(chart) ?? chart.options();
+  if (current.width === width && current.height === height) return false;
   chart.resize(width, height);
+  appliedSizes.set(chart, { width, height });
   return true;
 }

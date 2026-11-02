@@ -28,8 +28,9 @@ export type AQTELiveState = {
   } | null;
   trades: Array<{
     symbol: AQTESymbol; net_pnl: number; exit_at: number;
-    entry_at?: number; entry_price?: number; exit_price?: number; filled?: number;
+    entry_at?: number; entry_price?: number; exit_price?: number | null; filled?: number;
     initial_stop?: number; stop?: number; target?: number; exit_requested?: string | null;
+    exit_unverified?: boolean;
     contract?: { trading_symbol: string };
   }>;
 };
@@ -65,7 +66,10 @@ export function isAqteLiveState(value: unknown): value is AQTELiveState {
   if (value.preflight !== null && (!record(value.preflight) || typeof value.preflight.ip !== 'string' ||
       typeof value.preflight.account !== 'string' || !finite(value.preflight.at))) return false;
   if (!value.trades.every(trade => record(trade) && symbolName(trade.symbol) && finite(trade.net_pnl) &&
-      finite(trade.exit_at) && ['entry_at', 'entry_price', 'exit_price', 'filled', 'initial_stop', 'stop', 'target'].every(key => optionalNumber(trade[key])) &&
+      finite(trade.exit_at) && ['entry_at', 'entry_price', 'filled', 'initial_stop', 'stop', 'target'].every(key => optionalNumber(trade[key])) &&
+      // Backend emergency square-off records exit_price null + exit_unverified when Kite shows no SELL fill.
+      (trade.exit_price === undefined || nullableNumber(trade.exit_price)) &&
+      (trade.exit_unverified === undefined || typeof trade.exit_unverified === 'boolean') &&
       (trade.exit_requested === undefined || nullableText(trade.exit_requested)) &&
       (trade.contract === undefined || (record(trade.contract) && typeof trade.contract.trading_symbol === 'string')))) return false;
   if (value.active === null) return true;
@@ -107,20 +111,23 @@ export function aqteCanExit(status: AQTELiveState | null | undefined) {
 export function aqteDaySummary(status: AQTELiveState | null | undefined, now = Date.now() / 1000) {
   const known = aqteControllerCurrent(status, now);
   const trades = known ? status?.trades.filter(trade => aqteIstDay(trade.exit_at) === aqteIstDay(now)) ?? [] : [];
-  const realized = trades.reduce((sum, trade) => sum + trade.net_pnl, 0);
+  // An unverified exit carries a placeholder net_pnl of 0, so realised P&L is unknown rather than flat.
+  const verified = trades.filter(trade => !trade.exit_unverified);
+  const unverified = trades.length - verified.length;
+  const realized = unverified ? null : verified.reduce((sum, trade) => sum + trade.net_pnl, 0);
   const metrics = aqteLiveMetrics(status, now);
   const openPnl = metrics?.net_pnl ?? null;
-  const dayPnl = known && !status?.error && (!status?.active || openPnl != null) ? realized + (openPnl ?? 0) : null;
-  const wins = trades.filter(trade => trade.net_pnl > 0).length;
-  const losses = trades.filter(trade => trade.net_pnl < 0).length;
+  const dayPnl = known && realized != null && !status?.error && (!status?.active || openPnl != null) ? realized + (openPnl ?? 0) : null;
+  const wins = verified.filter(trade => trade.net_pnl > 0).length;
+  const losses = verified.filter(trade => trade.net_pnl < 0).length;
   let consecutiveLosses = 0;
-  for (const trade of [...trades].reverse()) {
+  for (const trade of [...verified].reverse()) {
     if (trade.net_pnl >= 0) break;
     consecutiveLosses += 1;
   }
   return {
     known, trades, realized: known ? realized : null, openPnl, dayPnl, wins, losses,
-    breakeven: trades.length - wins - losses, consecutiveLosses,
+    breakeven: verified.length - wins - losses, unverified, consecutiveLosses,
     tradeCount: known && status ? status.daily_counts.executed + status.daily_counts.reserved : null,
     lossLeft: dayPnl != null && status ? Math.max(0, status.limits.daily_loss + dayPnl) : null,
   };
@@ -341,6 +348,20 @@ export function aqteRanking(data: Partial<Record<AQTESymbol, AQTESignal>> | unde
     const [x, y] = [keys.get(a)!, keys.get(b)!];
     return y[0] - x[0] || y[1] - x[1] || y[2] - x[2];
   });
+}
+
+/**
+ * The index the central controller would enter next. automated_entry walks the ranking and skips any
+ * index whose entry checks fail, so the first unblocked index wins; otherwise the top ranked one explains the wait.
+ */
+export function aqteOpportunitySymbol(ranking: readonly AQTESymbol[],
+  blocks?: Partial<Record<AQTESymbol, string | null>> | null): AQTESymbol | null {
+  return ranking.find(symbol => blocks?.[symbol] === null) ?? ranking[0] ?? null;
+}
+
+/** Value equality for small JSON payloads; lets memoised views skip polls that carry identical data. */
+export function aqteSameJson(a: unknown, b: unknown) {
+  return a === b || JSON.stringify(a) === JSON.stringify(b);
 }
 
 /** Keep the last backend-confirmed view this long through browser-side connection drops. */

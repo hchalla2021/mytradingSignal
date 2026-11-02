@@ -13,6 +13,13 @@ const clock = (seconds: number | null | undefined) =>
 const toneOf = (value: number | null | undefined) =>
   value == null || !Number.isFinite(value) ? 'aqx-flat' : value > 0 ? 'aqx-up' : value < 0 ? 'aqx-down' : 'aqx-flat';
 const titleCase = (value: string) => value.charAt(0) + value.slice(1).toLowerCase();
+const rupees = (value: number | null | undefined) =>
+  value == null || !Number.isFinite(value) ? '--' : `${value > 0 ? '+' : value < 0 ? '−' : ''}₹${aqtePrice(Math.abs(value))}`;
+const lots = (units: number, lotSize: number | undefined) => {
+  if (!units || !lotSize) return '1 lot max';
+  const count = units / lotSize;
+  return `${Number.isInteger(count) ? count : aqtePrice(count)} ${count === 1 ? 'lot' : 'lots'}`;
+};
 
 type Tone = 'up' | 'down' | 'wait' | 'flat';
 type Intelligence = NonNullable<AQTESignal['intelligence']>;
@@ -122,10 +129,14 @@ function Row({ label, children, tone = '', extra }: { label: string; children: R
   );
 }
 
-function AQTETerminal({ symbol, signal, unavailable, liveStatus, onExit, now = Date.now() / 1000 }: {
+type TerminalProps = {
   symbol: AQTESymbol; signal?: AQTESignal; unavailable: boolean; liveStatus?: AQTELiveState | null;
   onExit?: (request: AQTEExitRequest) => void; now?: number;
-}) {
+  /** Hidden index tab: keep the last render (and open details) instead of re-rendering on every tick. */
+  paused?: boolean;
+};
+
+function AQTETerminal({ symbol, signal, unavailable, liveStatus, onExit, now = Date.now() / 1000 }: TerminalProps) {
   const { info } = aqteOverview(signal, 'real', unavailable, now);
   const currentStatus = aqteControllerCurrent(liveStatus, now);
   const style = currentStatus ? liveStatus?.styles?.[symbol] : undefined;
@@ -237,10 +248,10 @@ function AQTETerminal({ symbol, signal, unavailable, liveStatus, onExit, now = D
             <Row label="LTP" tone={toneOf(points)} extra={points != null && points !== 0 ? <span aria-hidden="true"> {points > 0 ? '↗' : '↘'}</span> : null}>
               {metrics?.ltp != null ? `₹${aqtePrice(metrics.ltp)}` : '--'}
             </Row>
-            <Row label="Stop Loss (SL)" tone="aqx-down" extra={live ? <small>Initial level</small> : null}>
+            <Row label="Stop Loss (SL)" tone={live ? 'aqx-down' : ''} extra={live ? <small>Initial level</small> : null}>
               {live ? `₹${aqtePrice(live.initial_stop)}` : '--'}
             </Row>
-            <Row label="Trailing SL (TSL)" tone="aqx-cyan" extra={live ? <small>{confirmed ? 'Broker-confirmed SL' : 'Protection unverified'}</small> : null}>
+            <Row label="Trailing SL (TSL)" tone={live ? 'aqx-cyan' : ''} extra={live ? <small>{confirmed ? 'Broker-confirmed SL' : 'Protection unverified'}</small> : null}>
               {trailing ? <><span aria-hidden="true">🔒 </span>₹{aqtePrice(live.stop)}</> :
                 live?.trailing_active ? `Last ₹${aqtePrice(live.stop)}` : live ? `From +${trailR}R` : '--'}
             </Row>
@@ -253,8 +264,8 @@ function AQTETerminal({ symbol, signal, unavailable, liveStatus, onExit, now = D
             </svg>
             <div className="aqx-ring-text">
               <span>Open P&amp;L</span>
-              <strong className={toneOf(points)}>{aqteSigned(points)} pts</strong>
-              <em className={toneOf(metrics?.net_pnl)}>{metrics?.net_pnl != null ? `₹${aqteSigned(metrics.net_pnl)}` : '--'}</em>
+              <strong className={toneOf(points)}>{points != null ? `${aqteSigned(points)} pts` : '--'}</strong>
+              <em className={toneOf(metrics?.net_pnl)}>{rupees(metrics?.net_pnl)}</em>
               <b className={toneOf(metrics?.return_pct)}>{metrics?.return_pct != null ? `${aqteSigned(metrics.return_pct)}%` : '--'}</b>
             </div>
           </div>
@@ -268,7 +279,7 @@ function AQTETerminal({ symbol, signal, unavailable, liveStatus, onExit, now = D
             </section>
             <section className="aqx-mini" aria-label="Position">
               <h5>Position</h5>
-              <p className="aqx-position-line"><span>{filled && live.contract.lot_size ? `${aqtePrice(remaining / live.contract.lot_size)} lots` : '1 lot max'}</span><span>Qty: {filled ? remaining : '--'}</span></p>
+              <p className="aqx-position-line"><span>{lots(filled ? remaining : 0, live?.contract.lot_size)}</span><span>Qty: {filled ? remaining : '--'}</span></p>
               <p className="aqx-footnote">Peak bid: {live && live.peak > 0 ? `₹${aqtePrice(live.peak)}` : '--'}</p>
             </section>
           </div>
@@ -344,7 +355,7 @@ function AQTETerminal({ symbol, signal, unavailable, liveStatus, onExit, now = D
           <h4 className="aqx-panel-title"><span aria-hidden="true" className="aqx-target-icon">◎</span>Auto Exit Rules
             <span className={`aqx-exit-state ${managing ? 'aqx-exit-state-on' : ''}`}>{!currentStatus ? 'UNKNOWN' : managing ? 'ACTIVE' : live ? 'VERIFY' : 'WAITING'}</span></h4>
           <ul className="aqx-rule-list">
-            <li><Check tone={confirmed ? 'up' : 'flat'} /><span>Broker SL order</span><b>{confirmed ? `₹${aqtePrice(live?.stop)}` : 'Unverified'}</b></li>
+            <li><Check tone={confirmed ? 'up' : 'flat'} /><span>Broker SL order</span><b>{!live ? 'After entry' : confirmed ? `₹${aqtePrice(live.stop)}` : 'Unverified'}</b></li>
             <li><Check tone={trailing ? 'up' : 'flat'} /><span>Trailing SL</span><b>+{trailR}R</b></li>
             <li><Check tone={managing ? 'up' : 'flat'} /><span>Target exit</span><b>{live ? `₹${aqtePrice(live.target)}` : 'Bid ≥ T1'}</b></li>
             <li><Check tone={managing ? 'up' : 'flat'} /><span>Session exit</span><b>15:25 IST</b></li>
@@ -362,4 +373,10 @@ function AQTETerminal({ symbol, signal, unavailable, liveStatus, onExit, now = D
   );
 }
 
-export default memo(AQTETerminal);
+export function aqteTerminalPropsEqual(prev: TerminalProps, next: TerminalProps) {
+  if (prev.paused && next.paused) return true;
+  const keys = Object.keys(next) as Array<keyof TerminalProps>;
+  return keys.length === Object.keys(prev).length && keys.every(key => Object.is(prev[key], next[key]));
+}
+
+export default memo(AQTETerminal, aqteTerminalPropsEqual);

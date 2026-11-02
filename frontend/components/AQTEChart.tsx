@@ -58,7 +58,8 @@ function AQTEChart({ symbol, tick }: { symbol: AQTESymbol; tick: MarketTick | nu
       borderVisible: false, priceLineColor: '#00d58d',
     });
     candle.priceScale().applyOptions({ scaleMargins: { top: 0.1, bottom: 0.2 } });
-    const volume = chart.addHistogramSeries({ priceFormat: { type: 'volume' }, priceScaleId: '' });
+    // Volume is an overlay; its last value must not put a stray label (e.g. "0" for index candles) on the price axis.
+    const volume = chart.addHistogramSeries({ priceFormat: { type: 'volume' }, priceScaleId: '', lastValueVisible: false, priceLineVisible: false });
     volume.priceScale().applyOptions({ scaleMargins: { top: 0.83, bottom: 0 } });
     const lines = COLORS.map(color => chart.addLineSeries({
       color, lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,

@@ -94,3 +94,14 @@ test('resize observer leaves unchanged and hidden canvases alone but applies act
   assert.equal(resizeChartIfChanged(chart, { clientWidth: 900, clientHeight: 450 }), false);
   assert.equal(calls, 1);
 });
+
+test('resize returns to the creation size even though lightweight-charts options() keeps the creation size', () => {
+  const created = { width: 693, height: 300 };
+  const sizes = [];
+  // Mirrors lightweight-charts 4.x: resize() changes the canvas but options() still reports the creation size.
+  const chart = { options: () => created, resize: (width, height) => { sizes.push([width, height]); } };
+  assert.equal(resizeChartIfChanged(chart, { clientWidth: 262, clientHeight: 240 }), true);
+  assert.equal(resizeChartIfChanged(chart, { clientWidth: 693, clientHeight: 300 }), true);
+  assert.equal(resizeChartIfChanged(chart, { clientWidth: 693, clientHeight: 300 }), false);
+  assert.deepEqual(sizes, [[262, 240], [693, 300]]);
+});

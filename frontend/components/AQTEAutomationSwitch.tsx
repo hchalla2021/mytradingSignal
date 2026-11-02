@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
+import { memo, useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { API_CONFIG } from '@/lib/api-config';
 import { notifyAppAccessExpired } from '@/lib/app-access-events';
 import { getOrCreateVisitorId } from '@/lib/visitor-id';
@@ -9,6 +9,13 @@ import { AQTE_RECONNECT_GRACE_MS, aqteConnectionDrop, aqteControllerCurrent, aqt
 
 export type AutomationState = AQTELiveState;
 type Command = 'on' | 'off' | 'reset';
+const UNTRUSTED_ORIGIN = 'Untrusted live-control origin';
+
+function originRejected(): string {
+  const domain = process.env.NEXT_PUBLIC_PRODUCTION_DOMAIN;
+  const site = domain ? `https://${domain}` : 'the production site';
+  return `Production rejects Auto Trade switching from ${window.location.origin}. Use ${site}, or add this origin to production CORS_ORIGINS.`;
+}
 
 function automationState(value: unknown): AutomationState {
   if (!isAqteLiveState(value)) {
@@ -39,11 +46,7 @@ async function request(command?: Command): Promise<AutomationState> {
     if (!response.ok) {
       if (response.status === 401) notifyAppAccessExpired();
       const detail = value && typeof value === 'object' && 'detail' in value ? value.detail : null;
-      if (response.status === 403 && detail === 'Untrusted live-control origin') {
-        const domain = process.env.NEXT_PUBLIC_PRODUCTION_DOMAIN;
-        const site = domain ? `https://${domain}` : 'the production site';
-        throw new Error(`Production rejects Auto Trade switching from ${window.location.origin}. Use ${site}, or add this origin to production CORS_ORIGINS.`);
-      }
+      if (response.status === 403 && detail === UNTRUSTED_ORIGIN) throw new Error(originRejected());
       throw new Error(typeof detail === 'string' ? detail : 'Switch request failed. Check server status before retrying.');
     }
     const state = automationState(value);
@@ -62,19 +65,26 @@ async function request(command?: Command): Promise<AutomationState> {
   }
 }
 
-export default function AQTEAutomationSwitch({ onStatus }: {
+function AQTEAutomationSwitch({ onStatus, feed, feedError = null }: {
   onStatus?: (status: AutomationState | null) => void;
+  /** Status from the page's single live-status poll ('pending' until its first answer). When given, the switch does not poll. */
+  feed?: AutomationState | null | 'pending';
+  /** Why the shared poll failed when `feed` is null. */
+  feedError?: string | null;
 } = {}) {
-  const [status, setStatus] = useState<AutomationState | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [ownStatus, setStatus] = useState<AutomationState | null>(null);
+  const [commandError, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [confirming, setConfirming] = useState<'on' | 'reset' | null>(null);
-  const [unknown, setUnknown] = useState(false);
-  const [saved, setSaved] = useState(false);
+  const [ownUnknown, setUnknown] = useState(false);
+  const [savedOk, setSaved] = useState(false);
+  const [failedAt, setFailedAt] = useState<number | null>(null);
   const changing = useRef(false);
   const revision = useRef(0);
+  const shared = feed !== undefined;
 
   useEffect(() => {
+    if (shared) return;
     let lastOk = 0;
     let active = true;
     const poll = async () => {
@@ -102,7 +112,7 @@ export default function AQTEAutomationSwitch({ onStatus }: {
     };
     const stopPolling = aqtePollLoop(poll);
     return () => { active = false; stopPolling(); };
-  }, [onStatus]);
+  }, [onStatus, shared]);
 
   const act = async (command: Command) => {
     if (changing.current) return;
@@ -117,16 +127,29 @@ export default function AQTEAutomationSwitch({ onStatus }: {
       setStatus(value);
       onStatus?.(value);
       setUnknown(false);
+      setFailedAt(null);
       setSaved(true);
     } catch (cause) {
       setUnknown(true);
-      onStatus?.(null);
+      setFailedAt(Date.now() / 1000);
+      // In shared mode the page's poll owns the live status; only this switch's outcome is unknown.
+      if (!shared) onStatus?.(null);
       setError(cause instanceof Error ? cause.message : 'Switch outcome unknown. Check Kite and server status.');
     } finally {
       changing.current = false;
       setBusy(false);
     }
   };
+  // Shared mode shows the newest backend answer: a poll started before a command can resolve after it.
+  const feedStatus = feed && feed !== 'pending' ? feed : null;
+  const status = !shared ? ownStatus :
+    feedStatus && (!ownStatus || feedStatus.generated_at >= ownStatus.generated_at) ? feedStatus : ownStatus;
+  // A failed command stays unknown until a status generated after it (with 1 s clock-skew margin) arrives.
+  const commandUnknown = failedAt != null && (!feedStatus || feedStatus.generated_at <= failedAt + 1);
+  const unknown = !shared ? ownUnknown : feed === null || !!feedStatus?.connection_error || commandUnknown;
+  const feedFault = feedStatus?.connection_error ?? (feed === null ? feedError ?? 'Automation status unavailable; verify in Kite before assuming ON or OFF.' : null);
+  const error = !shared || commandUnknown ? commandError : feedFault === UNTRUSTED_ORIGIN ? originRejected() : feedFault;
+  const saved = savedOk && !unknown;
   const known = !unknown && !!status;
   const on = known && (status.automation_wanted ?? status.automation_on) === true && !status.killed;
   const waiting = on && !status.automation_on;
@@ -218,3 +241,6 @@ export default function AQTEAutomationSwitch({ onStatus }: {
     </div>
   );
 }
+
+// The section re-renders every second for its clock; the switch only needs to re-render when its feed changes.
+export default memo(AQTEAutomationSwitch);

@@ -1,6 +1,6 @@
 'use client';
 
-import { memo, useEffect, useState } from 'react';
+import { memo, useCallback, useEffect, useState } from 'react';
 import dynamic from 'next/dynamic';
 import { API_CONFIG } from '@/lib/api-config';
 import AQTELiveController from '@/components/AQTELiveController';
@@ -41,10 +41,12 @@ type Snapshot = {
 const number = (value: number) => value.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const signed = (value: number | null | undefined) =>
   value == null || !Number.isFinite(value) ? '--' : `${value > 0 ? '+' : ''}${number(value)}`;
+const money = (value: number | null | undefined) =>
+  value == null || !Number.isFinite(value) ? '--' : `${value > 0 ? '+' : value < 0 ? '−' : ''}₹${number(Math.abs(value))}`;
 const tone = (value: number | null | undefined) =>
   value == null || !Number.isFinite(value) || value === 0 ? 'aqx-flat' : value > 0 ? 'aqx-up' : 'aqx-down';
 const exitClock = new Intl.DateTimeFormat('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: false });
-const headClock = new Intl.DateTimeFormat('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
+const headClock = new Intl.DateTimeFormat('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' });
 const headDate = new Intl.DateTimeFormat('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', year: 'numeric' });
 type Quote = { signal?: AQTESignal; streaming: boolean; tick: MarketTick | null; price: number | null };
 type Panel = 'active' | 'today' | 'positions' | 'performance' | 'controls';
@@ -63,6 +65,117 @@ const contextTone = (kind: 'regime' | 'volatility' | 'liquidity', value: string 
 function NavIcon({ path }: { path: string }) {
   return <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d={path} /></svg>;
 }
+
+type CardView = { price: number | null; change: number | null; pct: number | null; note: string | null; tag: string | null };
+const finiteOrNull = (value: number | null | undefined) => value != null && Number.isFinite(value) ? value : null;
+/**
+ * What an index card shows. Only a fresh LIVE tick streams; a backend CLOSED tick is the official
+ * session close and is shown tagged "Closed". Stale, demo or disconnected LIVE ticks are never shown.
+ */
+function indexCardView(quote: Quote, tick: MarketTick | null | undefined, unavailable: boolean, marketHours: boolean): CardView {
+  if (quote.streaming && quote.tick) {
+    const change = finiteOrNull(quote.tick.change), pct = finiteOrNull(quote.tick.changePercent);
+    return { price: quote.tick.price, change, pct, note: change == null || pct == null ? 'LIVE FEED' : null, tag: null };
+  }
+  if (!marketHours && tick?.status === 'CLOSED' && Number.isFinite(tick.price) && tick.price > 0) {
+    const change = finiteOrNull(tick.change), pct = finiteOrNull(tick.changePercent);
+    return { price: tick.price, change, pct, note: change == null || pct == null ? 'LAST CLOSE' : null, tag: 'Closed' };
+  }
+  if (quote.price != null) return { price: quote.price, change: null, pct: null, note: unavailable ? 'LAST SNAPSHOT' : 'AQTE SNAPSHOT', tag: null };
+  return { price: null, change: null, pct: null, tag: null,
+    note: unavailable ? 'AQTE OFFLINE' : marketHours ? 'WAITING FOR LIVE FEED' : 'MARKET CLOSED' };
+}
+
+const IndexCard = memo(function IndexCard({ symbol, index, selected, price, change, pct, note, tag, spark, onSelect }: CardView & {
+  symbol: SymbolName; index: number; selected: boolean; spark: string | null; onSelect: (symbol: SymbolName) => void;
+}) {
+  const direction = change == null || change === 0 ? 'aqx-flat' : change > 0 ? 'aqx-up' : 'aqx-down';
+  return (
+    <button type="button" role="tab" id={`aqte-index-tab-${symbol}`}
+      aria-selected={selected} aria-controls={`aqte-index-panel-${symbol}`} tabIndex={selected ? 0 : -1}
+      onClick={() => onSelect(symbol)}
+      onKeyDown={event => {
+        const next = event.key === 'ArrowRight' ? (index + 1) % SYMBOLS.length
+          : event.key === 'ArrowLeft' ? (index + SYMBOLS.length - 1) % SYMBOLS.length
+            : event.key === 'Home' ? 0 : event.key === 'End' ? SYMBOLS.length - 1 : -1;
+        if (next < 0) return;
+        event.preventDefault();
+        onSelect(SYMBOLS[next]);
+        event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>('[role="tab"]')[next]?.focus();
+      }}
+      className={`aqte-rich-tab aqte-tab-${symbol} aqx-index-card min-h-[48px] min-w-0 ${selected ? INDEX_STYLES[symbol].text : ''}`}>
+      <span className="aqx-index-name">{LABELS[symbol]}{tag && <small className="aqx-index-tag">{tag}</small>}</span>
+      <span className="aqx-index-price">{price != null ? number(price) : 'No live quote'}</span>
+      <span className={`aqx-index-change ${direction}`}>
+        {change != null && pct != null ? `${change > 0 ? '+' : ''}${number(change)} (${pct > 0 ? '+' : ''}${number(pct)}%)` : note}
+      </span>
+      {spark && <svg aria-hidden="true" className={`aqx-spark ${change != null && change < 0 ? 'aqx-spark-down' : ''}`} viewBox="0 0 100 32" preserveAspectRatio="none"><path d={spark} /></svg>}
+    </button>
+  );
+});
+
+const CONTEXT_SOURCES = [
+  'EMA 9/20/50/200 stack with Supertrend on live futures bars',
+  'India VIX band (live, fresh ticks only)',
+  'Worst bid-ask spread of the subscribed ATM options',
+  'Put/Call open-interest ratio of AQTE-subscribed strikes',
+  'India VIX level and change (live, fresh ticks only)',
+];
+const fixed2 = (value: number | null) => value != null ? value.toFixed(2) : '--';
+const MarketContext = memo(function MarketContext({ regime, volatility, liquidity, pcr, vix, vixChange, live }: {
+  regime: string | null; volatility: string | null; liquidity: string | null;
+  pcr: number | null; vix: number | null; vixChange: number | null; live: boolean;
+}) {
+  const tiles = [
+    ['Market Regime', regime ?? '--', contextTone('regime', regime), null],
+    ['Volatility', volatility ?? '--', contextTone('volatility', volatility), null],
+    ['Liquidity', liquidity ?? '--', contextTone('liquidity', liquidity), null],
+    ['PCR', fixed2(pcr), 'aqx-white', null],
+    ['India VIX', fixed2(vix), 'aqx-white', vix != null ? vixChange : null],
+  ] as const;
+  return (
+    <dl className="aqx-context" aria-label="Market context">
+      {tiles.map(([label, value, color, extra], index) => (
+        <div key={label} className="aqx-context-tile"
+          title={`${CONTEXT_SOURCES[index]}${live ? '' : ' · shows -- until AQTE has live data'}`}>
+          <span aria-hidden="true" className={`aqx-context-icon ${color}`}><NavIcon path={CONTEXT_ICONS[index]} /></span>
+          <dt>{label}</dt>
+          <dd className={color}>{value}{extra != null && <small className={tone(extra)}>{` (${extra > 0 ? '+' : ''}${extra.toFixed(2)}%)`}</small>}</dd>
+        </div>
+      ))}
+    </dl>
+  );
+});
+
+type PerformanceView = {
+  tradeCount: number | null; maxTrades: number | null; winRate: number | null; dayPnl: number | null;
+  dayReturn: number | null; totalPoints: number | null; drawdown: number | null; openPositions: number | null;
+  riskLabel: string; riskNote: string; riskTone: string; riskUsed: number | null; dailyLoss: number | null; riskShare: number | null;
+};
+// Primitive props only, so the 1 s clock re-renders this strip only when a displayed value changes.
+const PerformanceStrip = memo(function PerformanceStrip(view: PerformanceView) {
+  const { tradeCount, maxTrades, winRate, dayPnl, dayReturn, totalPoints, drawdown, openPositions } = view;
+  return (
+    <section className="aqx-card aqx-perfbar-wrap" aria-labelledby="aqte-perf-title" id="aqte-dash-perf">
+      <h3 id="aqte-perf-title" className="aqx-perf-title"><NavIcon path={ICONS.performance} />Today&apos;s Performance</h3>
+      <dl className="aqx-perfbar" aria-label="Today summary">
+        <div><dt>Trades</dt><dd>{tradeCount != null && maxTrades != null ? `${tradeCount} / ${maxTrades}` : '--'}</dd></div>
+        <div><dt>Win Rate</dt><dd className={winRate == null ? '' : winRate >= 50 ? 'aqx-up' : 'aqx-down'}>{winRate != null ? `${winRate}%` : '--'}</dd></div>
+        <div><dt>Today P&amp;L</dt><dd className={tone(dayPnl)}>{money(dayPnl)}</dd></div>
+        <div><dt>Return</dt><dd className={tone(dayReturn)}>{dayReturn != null ? `${signed(dayReturn)}%` : '--'}</dd></div>
+        <div><dt>Total Points</dt><dd className={tone(totalPoints)}>{signed(totalPoints)}</dd></div>
+        <div><dt>Max Drawdown</dt><dd className={drawdown ? 'aqx-down' : ''}>{drawdown != null ? `${drawdown > 0 ? '−' : ''}₹${number(drawdown)}` : '--'}</dd></div>
+        <div className="aqx-perf-risk"><dt>Daily Risk</dt>
+          <dd className={view.riskTone}>{view.riskLabel}{view.riskUsed != null && view.dailyLoss != null && <small>₹{number(view.riskUsed)} / ₹{number(view.dailyLoss)}</small>}</dd>
+          <span aria-hidden="true" className="aqx-risk-bar"><i style={{ transform: `scaleX(${view.riskShare ?? 0})` }} /></span>
+          <p title={view.riskNote}>{view.riskNote}</p>
+        </div>
+        <div><dt>Open Positions</dt><dd>{openPositions ?? '--'}</dd></div>
+      </dl>
+      <p className="aqx-footnote">AQTE only · Net uses estimated charges · Return on deployed premium · One managed position maximum</p>
+    </section>
+  );
+});
 
 // Recent live prices per index for the tab sparklines; survives remounts and dedupes by tick time.
 const sparks: Record<string, { at: string; values: number[] }> = {};
@@ -112,6 +225,15 @@ function AQTESection({ marketData, isConnected = false }: { marketData?: MarketD
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [liveStatus, setLiveStatus] = useState<AQTELiveState | null>(null);
+  const [liveChecked, setLiveChecked] = useState(false);
+  const [liveError, setLiveError] = useState<string | null>(null);
+  // One live-status poll (AQTELiveController) feeds the whole section, including the header switch.
+  const publishLive = useCallback((next: AQTELiveState | null, failure?: string) => {
+    setLiveChecked(true);
+    setLiveError(next ? null : failure ?? null);
+    // A poll that started before a switch command can resolve after it; never roll back to the older state.
+    setLiveStatus(prev => next && prev && !next.connection_error && next.generated_at < prev.generated_at ? prev : next);
+  }, []);
   const [panel, setPanel] = useState<Panel>('active');
   const [exitRequest, setExitRequest] = useState<AQTEExitRequest | null>(null);
   // Each index chart mounts on first view and then stays mounted so switching back is instant.
@@ -189,8 +311,10 @@ function AQTESection({ marketData, isConnected = false }: { marketData?: MarketD
     return [symbol, { signal, streaming, tick: streaming ? tick : null, price: streaming ? tick.price : signal?.spot ?? null }];
   })) as Record<SymbolName, Quote>;
 
-  const { known, trades: todays, realized, openPnl, dayPnl, wins, losses, breakeven, consecutiveLosses, tradeCount, lossLeft } =
+  const { known, trades: todays, realized, openPnl, dayPnl, wins, losses, breakeven, unverified, consecutiveLosses, tradeCount, lossLeft } =
     aqteDaySummary(liveStatus, now / 1000);
+  const decided = todays.length - unverified;
+  const winRate = decided ? Math.round(wins / decided * 100) : null;
   const active = liveStatus?.active ?? null;
   const risk = !known || !liveStatus || liveStatus.connection_error || liveStatus.error || active?.error
     ? { label: 'Unverified', note: 'Inspect controller / Kite', tone: 'aqx-flat' } :
@@ -222,7 +346,8 @@ function AQTESection({ marketData, isConnected = false }: { marketData?: MarketD
   const policy = snapshot?.engine_policy && typeof snapshot.engine_policy.veto === 'boolean' &&
     Number.isInteger(snapshot.engine_policy.veto_min) ? snapshot.engine_policy : null;
   const selectedTick = quotes[selectedSymbol].tick;
-  const tickAge = liveFeed && selectedTick ? Math.max(0, now - Date.parse(selectedTick.timestamp)) : null;
+  // Measured against the wall clock at render (each tick re-renders), not the 1 s UI clock, so it is not quantised.
+  const tickAge = liveFeed && selectedTick ? Math.max(0, Date.now() - Date.parse(selectedTick.timestamp)) : null;
   const health = unavailable ? ['Offline', 'aqx-down'] : marketHours && !liveFeed ? ['Degraded', 'aqx-wait'] : ['Healthy', 'aqx-up'];
   const dataState = unavailable ? 'Off' : liveFeed ? 'Live' : marketHours ? 'Stale' : 'Market closed';
 
@@ -237,13 +362,19 @@ function AQTESection({ marketData, isConnected = false }: { marketData?: MarketD
   const deployed = known && deployedParts.every(part => part != null)
     ? deployedParts.reduce<number>((sum, part) => sum + (part ?? 0), 0) + (active && active.filled > 0 ? active.entry_price * active.filled : 0) : null;
   const dayReturn = dayPnl != null && deployed ? dayPnl / deployed * 100 : null;
-  let equity = 0, peak = 0, drawdown = 0;
+  let equity = 0, peak = 0, drawdown: number | null = unverified ? null : 0;
   for (const trade of ordered) {
     equity += trade.net_pnl;
     peak = Math.max(peak, equity);
-    drawdown = Math.max(drawdown, peak - equity);
+    if (drawdown != null) drawdown = Math.max(drawdown, peak - equity);
   }
-  if (openPnl != null) drawdown = Math.max(drawdown, peak - (equity + openPnl));
+  if (openPnl != null && drawdown != null) drawdown = Math.max(drawdown, peak - (equity + openPnl));
+  let best: number | null = null, worst: number | null = null;
+  for (const trade of todays) {
+    if (trade.exit_unverified) continue;
+    best = best == null ? trade.net_pnl : Math.max(best, trade.net_pnl);
+    worst = worst == null ? trade.net_pnl : Math.min(worst, trade.net_pnl);
+  }
   const riskUsed = dayPnl != null ? Math.max(0, -dayPnl) : null;
   const riskShare = riskUsed != null && liveStatus && liveStatus.limits.daily_loss > 0
     ? Math.min(1, riskUsed / liveStatus.limits.daily_loss) : null;
@@ -279,11 +410,11 @@ function AQTESection({ marketData, isConnected = false }: { marketData?: MarketD
           </div>
         </div>
         <div className="aqx-head-tools">
-          <p className="aqx-clock" aria-label="Indian Standard Time">
-            <b suppressHydrationWarning>{headClock.format(now)}</b> <small>IST</small>
+          <p className="aqx-clock">
+            <b suppressHydrationWarning>{headClock.format(now)}</b> <small><abbr title="Indian Standard Time">IST</abbr></small>
             <span suppressHydrationWarning>{headDate.format(now)}</span>
           </p>
-          <AQTEAutomationSwitch />
+          <AQTEAutomationSwitch feed={liveChecked ? liveStatus : 'pending'} feedError={liveError} onStatus={publishLive} />
           <button type="button" className="aqx-icon-btn aqx-viewonly" aria-label={`Engine events (${events.length})`}
             onClick={() => go('aqte-dash-events')}>
             <NavIcon path="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9M13.7 21a2 2 0 0 1-3.4 0" />
@@ -309,55 +440,15 @@ function AQTESection({ marketData, isConnected = false }: { marketData?: MarketD
       <div className="aqx-dash-main">
       <div className="aqx-top">
       <div role="tablist" aria-label="AQTE index" className="aqte-rich-tabs aqx-index-tabs">
-        {SYMBOLS.map((symbol, index) => {
-          const quote = quotes[symbol];
-          const change = quote.tick && Number.isFinite(quote.tick.change) ? quote.tick.change : null;
-          const pct = quote.tick && Number.isFinite(quote.tick.changePercent) ? quote.tick.changePercent : null;
-          const path = sparkPath(symbol);
-          return (
-          <button key={symbol} type="button" role="tab" id={`aqte-index-tab-${symbol}`}
-            aria-selected={selectedSymbol === symbol} aria-controls={`aqte-index-panel-${symbol}`}
-            tabIndex={selectedSymbol === symbol ? 0 : -1}
-            onClick={() => setSelectedSymbol(symbol)}
-            onKeyDown={event => {
-              let next: number;
-              if (event.key === 'ArrowRight') next = (index + 1) % SYMBOLS.length;
-              else if (event.key === 'ArrowLeft') next = (index + SYMBOLS.length - 1) % SYMBOLS.length;
-              else if (event.key === 'Home') next = 0;
-              else if (event.key === 'End') next = SYMBOLS.length - 1;
-              else return;
-              event.preventDefault();
-              setSelectedSymbol(SYMBOLS[next]);
-              event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>('[role="tab"]')[next]?.focus();
-            }}
-            className={`aqte-rich-tab aqte-tab-${symbol} aqx-index-card min-h-[48px] min-w-0 ${selectedSymbol === symbol ? INDEX_STYLES[symbol].text : ''}`}>
-            <span className="aqx-index-name">{LABELS[symbol]}</span>
-            <span className="aqx-index-price">{quote.price != null ? number(quote.price) : 'No live quote'}</span>
-            <span className={`aqx-index-change ${change == null ? 'aqx-flat' : change > 0 ? 'aqx-up' : change < 0 ? 'aqx-down' : 'aqx-flat'}`}>
-              {change != null && pct != null ? `${change > 0 ? '+' : ''}${number(change)} (${pct > 0 ? '+' : ''}${number(pct)}%)` : quote.streaming ? 'LIVE FEED' : unavailable ? 'LAST SNAPSHOT' : 'AQTE SNAPSHOT'}
-            </span>
-            {path && <svg aria-hidden="true" className={`aqx-spark ${change != null && change < 0 ? 'aqx-spark-down' : ''}`} viewBox="0 0 100 32" preserveAspectRatio="none"><path d={path} /></svg>}
-          </button>
-          );
-        })}
-      </div>
-      <dl className="aqx-context" aria-label="Market context">
-        {([
-          ['Market Regime', market?.regime ?? '--', contextTone('regime', market?.regime), null],
-          ['Volatility', market?.volatility ?? '--', contextTone('volatility', market?.volatility), null],
-          ['Liquidity', market?.liquidity ?? '--', contextTone('liquidity', market?.liquidity), null],
-          ['PCR', market?.pcr != null && Number.isFinite(market.pcr) ? market.pcr.toFixed(2) : '--', 'aqx-white', null],
-          ['India VIX', market?.vix != null && Number.isFinite(market.vix) ? market.vix.toFixed(2) : '--', 'aqx-white',
-            market?.vix != null && market.vix_change_pct != null && Number.isFinite(market.vix_change_pct)
-              ? `${market.vix_change_pct > 0 ? '+' : ''}${market.vix_change_pct.toFixed(2)}%` : null],
-        ] as const).map(([label, value, color, extra], index) => (
-          <div key={label} className="aqx-context-tile">
-            <span aria-hidden="true" className={`aqx-context-icon ${color}`}><NavIcon path={CONTEXT_ICONS[index]} /></span>
-            <dt>{label}</dt>
-            <dd className={color}>{value}{extra && <small className={tone(extra.startsWith('-') ? -1 : 1)}> ({extra})</small>}</dd>
-          </div>
+        {SYMBOLS.map((symbol, index) => (
+          <IndexCard key={symbol} symbol={symbol} index={index} selected={selectedSymbol === symbol}
+            spark={sparkPath(symbol)} onSelect={setSelectedSymbol}
+            {...indexCardView(quotes[symbol], marketData?.[symbol], unavailable, marketHours)} />
         ))}
-      </dl>
+      </div>
+      <MarketContext regime={market?.regime ?? null} volatility={market?.volatility ?? null} liquidity={market?.liquidity ?? null}
+        pcr={finiteOrNull(market?.pcr)} vix={finiteOrNull(market?.vix)} vixChange={finiteOrNull(market?.vix_change_pct)}
+        live={liveFeed} />
       {(error || snapshot?.fault || snapshot?.subscription_error) && (
         <p role="status" className="aqx-alert break-words rounded-lg border border-amber-400/20 bg-amber-400/5 px-3 py-2 text-xs text-amber-200">
           {error || snapshot?.fault || snapshot?.subscription_error}
@@ -371,24 +462,11 @@ function AQTESection({ marketData, isConnected = false }: { marketData?: MarketD
             {chartsOpened[symbol] ? <Chart symbol={symbol} tick={quotes[symbol].tick} /> : null}
           </div>
         ))} />
-      <section className="aqx-card aqx-perfbar-wrap" aria-labelledby="aqte-perf-title" id="aqte-dash-perf">
-        <h3 id="aqte-perf-title" className="aqx-perf-title"><NavIcon path={ICONS.performance} />Today&apos;s Performance</h3>
-        <dl className="aqx-perfbar" aria-label="Today summary">
-          <div><dt>Trades</dt><dd>{tradeCount != null && liveStatus ? `${tradeCount} / ${liveStatus.limits.max_trades}` : '--'}</dd></div>
-          <div><dt>Win Rate</dt><dd className="aqx-up">{todays.length ? `${Math.round(wins / todays.length * 100)}%` : '--'}</dd></div>
-          <div><dt>Today P&amp;L</dt><dd className={tone(dayPnl)}>{dayPnl == null ? '--' : `${dayPnl > 0 ? '+' : dayPnl < 0 ? '−' : ''}₹${number(Math.abs(dayPnl))}`}</dd></div>
-          <div><dt>Return</dt><dd className={tone(dayReturn)}>{dayReturn != null ? `${signed(dayReturn)}%` : '--'}</dd></div>
-          <div><dt>Total Points</dt><dd className={tone(totalPoints)}>{signed(totalPoints)}</dd></div>
-          <div><dt>Max Drawdown</dt><dd className={known && drawdown > 0 ? 'aqx-down' : ''}>{known ? `${drawdown > 0 ? '−' : ''}₹${number(drawdown)}` : '--'}</dd></div>
-          <div className="aqx-perf-risk"><dt>Daily Risk</dt>
-            <dd className={risk.tone}>{risk.label}{riskUsed != null && liveStatus && <small>₹{number(riskUsed)} / ₹{number(liveStatus.limits.daily_loss)}</small>}</dd>
-            <span aria-hidden="true" className="aqx-risk-bar"><i style={{ transform: `scaleX(${riskShare ?? 0})` }} /></span>
-            <p>{risk.note}</p>
-          </div>
-          <div><dt>Open Positions</dt><dd>{known ? openFilled > 0 ? 1 : 0 : '--'}</dd></div>
-        </dl>
-        <p className="aqx-footnote">AQTE only · Net uses estimated charges · Return on deployed premium · One managed position maximum</p>
-      </section>
+      <PerformanceStrip tradeCount={tradeCount} maxTrades={liveStatus?.limits.max_trades ?? null}
+        winRate={winRate} dayPnl={dayPnl} dayReturn={dayReturn}
+        totalPoints={totalPoints} drawdown={known ? drawdown : null} openPositions={known ? openFilled > 0 ? 1 : 0 : null}
+        riskLabel={risk.label} riskNote={risk.note} riskTone={risk.tone} riskUsed={riskUsed}
+        dailyLoss={liveStatus?.limits.daily_loss ?? null} riskShare={riskShare} />
       <section className="aqx-dash-term" id="aqte-dash-trades" aria-labelledby="aqte-term-title">
         <h3 id="aqte-term-title" className="aqx-perf-title"><NavIcon path={ICONS.trades} />Live Trade Terminal <span>· {LABELS[selectedSymbol]}</span></h3>
         {SYMBOLS.map(symbol => (
@@ -397,7 +475,7 @@ function AQTESection({ marketData, isConnected = false }: { marketData?: MarketD
             tabIndex={selectedSymbol === symbol ? 0 : -1}
             className="rounded-xl focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-300">
             <AQTETerminal symbol={symbol} signal={quotes[symbol].signal} unavailable={unavailable}
-              liveStatus={liveStatus} now={now / 1000} onExit={setExitRequest} />
+              liveStatus={liveStatus} now={now / 1000} onExit={setExitRequest} paused={selectedSymbol !== symbol} />
           </div>
         ))}
       </section>
@@ -432,7 +510,7 @@ function AQTESection({ marketData, isConnected = false }: { marketData?: MarketD
             <thead><tr><th>#</th><th>Instrument</th><th>Side</th><th>Entry</th><th>LTP</th><th>Initial SL</th><th>Current SL / TSL</th><th>Target</th><th>P&amp;L (Pts)</th><th>Net est. (₹)</th><th>Return %</th><th>Action</th></tr></thead>
             <tbody>
               {active ? (() => {
-                const metrics = aqteLiveMetrics(liveStatus);
+                const metrics = openMetrics;
                 const confirmed = known && !liveStatus?.error && !active.error && !!active.protection_confirmed;
                 return (
                   <tr>
@@ -466,10 +544,12 @@ function AQTESection({ marketData, isConnected = false }: { marketData?: MarketD
                   <td>{index + 1}</td><td className="aqx-instrument">{trade.contract?.trading_symbol ?? LABELS[trade.symbol as SymbolName] ?? trade.symbol}</td>
                   <td><span className="aqx-chip aqx-chip-buy">BUY</span></td>
                   <td>{trade.entry_price != null ? number(trade.entry_price) : '--'}</td>
-                  <td>{trade.exit_price != null ? number(trade.exit_price) : '--'}</td>
+                  <td>{trade.exit_price != null ? number(trade.exit_price) : trade.exit_unverified ? 'Unverified' : '--'}</td>
                   <td>{exitClock.format(new Date(trade.exit_at * 1000))}</td>
                   <td>{trade.exit_requested ? trade.exit_requested.replaceAll('_', ' ') : 'Broker SL'}</td>
-                  <td className={tone(trade.net_pnl)}>{signed(trade.net_pnl)}</td>
+                  {trade.exit_unverified
+                    ? <td className="aqx-flat" title="No SELL fill found in Kite; verify the exit there">Unverified</td>
+                    : <td className={tone(trade.net_pnl)}>{signed(trade.net_pnl)}</td>}
                 </tr>
               )) : <tr><td colSpan={8} className="aqx-empty-row">{known ? 'No closed AQTE trades today' : 'Trade history unavailable'}</td></tr>}
             </tbody>
@@ -483,12 +563,12 @@ function AQTESection({ marketData, isConnected = false }: { marketData?: MarketD
           <dl className="aqx-perf">
             {([
               ['Closed trades', known ? String(todays.length) : '--', ''],
-              ['Wins / Losses / Flat', known ? `${wins} / ${losses} / ${breakeven}` : '--', ''],
-              ['Win rate', todays.length ? `${Math.round(wins / todays.length * 100)}%` : '--', 'aqx-up'],
-              ['Realized net', realized != null ? `₹${signed(realized)}` : '--', tone(realized)],
-              ['Open net', openPnl != null ? `₹${signed(openPnl)}` : '--', tone(openPnl)],
-              ['Best trade', todays.length ? `₹${signed(Math.max(...todays.map(t => t.net_pnl)))}` : '--', tone(todays.length ? Math.max(...todays.map(t => t.net_pnl)) : null)],
-              ['Worst trade', todays.length ? `₹${signed(Math.min(...todays.map(t => t.net_pnl)))}` : '--', tone(todays.length ? Math.min(...todays.map(t => t.net_pnl)) : null)],
+              ['Wins / Losses / Flat', known ? `${wins} / ${losses} / ${breakeven}${unverified ? ` · ${unverified} unverified` : ''}` : '--', ''],
+              ['Win rate', winRate != null ? `${winRate}%` : '--', winRate == null ? '' : winRate >= 50 ? 'aqx-up' : 'aqx-down'],
+              ['Realized net', money(realized), tone(realized)],
+              ['Open net', money(openPnl), tone(openPnl)],
+              ['Best trade', money(best), tone(best)],
+              ['Worst trade', money(worst), tone(worst)],
               ['Loss budget left', lossLeft != null ? `₹${number(lossLeft)}` : '--', ''],
             ] as const).map(([label, value, color]) => (
               <div key={label} className="aqx-perf-cell"><dt>{label}</dt><dd className={color}>{value}</dd></div>
@@ -500,7 +580,7 @@ function AQTESection({ marketData, isConnected = false }: { marketData?: MarketD
           <AQTEDailyControl />
         </div>
       </section>
-      <AQTELiveController onStatus={setLiveStatus} exitRequest={exitRequest} />
+      <AQTELiveController onStatus={publishLive} exitRequest={exitRequest} />
       </div>
       </div>
       </div>

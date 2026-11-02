@@ -1,7 +1,8 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { memo, useEffect, useRef, useState } from 'react';
 import { API_CONFIG } from '@/lib/api-config';
+import { notifyAppAccessExpired } from '@/lib/app-access-events';
 import { getOrCreateVisitorId } from '@/lib/visitor-id';
 import { AQTE_RECONNECT_GRACE_MS, aqteCanExit, aqteConnectionDrop, aqteErrorText, aqtePollLoop, isAqteLiveState,
   type AQTELiveState, type AQTEExitRequest } from '@/lib/aqte-display';
@@ -20,6 +21,8 @@ async function request(path: 'status' | 'exit', body?: object, signal?: AbortSig
   });
   const payload: unknown = await response.json();
   if (!response.ok) {
+    // This is the page's only live-status poll, so it owns the sign-in prompt for an expired session.
+    if (response.status === 401) notifyAppAccessExpired();
     const detail = payload && typeof payload === 'object' && 'detail' in payload ? payload.detail : null;
     throw new Error(typeof detail === 'string' ? detail : `Live operation failed (${response.status}); inspect Kite before retrying`);
   }
@@ -33,8 +36,8 @@ function liveState(value: unknown): AQTELiveState {
   return value;
 }
 
-export default function AQTELiveController({ onStatus, exitRequest = null }: {
-  onStatus?: (status: AQTELiveState | null) => void;
+function AQTELiveController({ onStatus, exitRequest = null }: {
+  onStatus?: (status: AQTELiveState | null, error?: string) => void;
   exitRequest?: AQTEExitRequest | null;
 }) {
   const [status, setStatus] = useState<AQTELiveState | null>(null);
@@ -87,7 +90,7 @@ export default function AQTELiveController({ onStatus, exitRequest = null }: {
         if (active && started === revision.current && !acting.current) {
           const message = aqteErrorText(cause, 'Live status unavailable; inspect Kite');
           setConnected(false);
-          onStatus?.(latest.current ? { ...latest.current, connection_error: message } : null);
+          onStatus?.(latest.current ? { ...latest.current, connection_error: message } : null, message);
         }
       } finally {
         clearTimeout(timeout);
@@ -119,7 +122,7 @@ export default function AQTELiveController({ onStatus, exitRequest = null }: {
         cause instanceof Error ? cause.message : 'Live action failed. Check Kite before retrying.';
       setError(message);
       setConnected(false);
-      onStatus?.(latest.current ? { ...latest.current, connection_error: message } : null);
+      onStatus?.(latest.current ? { ...latest.current, connection_error: message } : null, message);
     } finally {
       clearTimeout(timeout);
       acting.current = false;
@@ -163,3 +166,5 @@ export default function AQTELiveController({ onStatus, exitRequest = null }: {
     </>
   );
 }
+
+export default memo(AQTELiveController);

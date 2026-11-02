@@ -15,9 +15,11 @@ function harness(filename = 'AQTESection.tsx', now, sharedProduction = false) {
     useState: initial => {
       const index = cursor++;
       if (!(index in states)) states[index] = initial;
-      return [states[index], value => { states[index] = value; }];
+      return [states[index], value => { states[index] = typeof value === 'function' ? value(states[index]) : value; }];
     },
     useEffect: fn => { effect = fn; },
+    useMemo: fn => fn(),
+    useCallback: fn => fn,
     useRef: initial => {
       const index = cursor++;
       if (!(index in states)) states[index] = { current: initial };
@@ -91,6 +93,7 @@ function harness(filename = 'AQTESection.tsx', now, sharedProduction = false) {
       await pending[1].fn();
     },
     timers, requests,
+    exports: context.exports,
     get accessExpired() { return accessExpired; },
   };
 }
@@ -1034,6 +1037,100 @@ test('underlying price follows the shared live feed immediately without waiting 
   cleanup();
 });
 
+test('index cards show the official close after hours without unlocking live gating', async () => {
+  const now = Date.parse('2026-11-02T18:00:00+05:30');
+  const h = harness('AQTESection.tsx', now);
+  h.render();
+  const snapshot = fixture();
+  snapshot.generated_at = now / 1000;
+  const cleanup = h.mount(snapshot);
+  await settle();
+  const closed = { price: 23331.1, change: 278, changePercent: 1.21, status: 'CLOSED', timestamp: '2026-11-02T15:25:54+05:30' };
+  const card = tree => nodes(tree).find(n => n.props?.id === 'aqte-index-tab-NIFTY');
+  let tree = h.render({ isConnected: true, marketData: { NIFTY: closed, BANKNIFTY: null, SENSEX: null } });
+  const value = text(card(tree));
+  assert.match(value, /23,331.10/);
+  assert.match(value, /\+278.00 \(\+1.21%\)/);
+  assert.equal(text(nodes(card(tree)).find(n => n.props?.className === 'aqx-index-tag')), 'Closed');
+  assert.doesNotMatch(text(nodes(tree).find(n => n.props?.['aria-label'] === 'System health')), /Live|\d+ ms/,
+    'A closed tick must not be reported as a live feed');
+  for (const status of ['DEMO', 'OFFLINE', 'LIVE']) {
+    tree = h.render({ isConnected: true, marketData: { NIFTY: { ...closed, status }, BANKNIFTY: null, SENSEX: null } });
+    assert.doesNotMatch(text(card(tree)), /23,331.10|Closed/, `${status} ticks after hours must not be shown`);
+  }
+  tree = h.render({ isConnected: true, marketData: { NIFTY: { ...closed, price: 0 }, BANKNIFTY: null, SENSEX: null } });
+  assert.doesNotMatch(text(card(tree)), /Closed/);
+  cleanup();
+});
+
+test('index cards explain a missing quote instead of claiming a snapshot', async () => {
+  for (const [at, expected] of [['2026-11-02T18:00:00+05:30', /MARKET CLOSED/], ['2026-11-02T10:00:00+05:30', /WAITING FOR LIVE FEED/]]) {
+    const now = Date.parse(at);
+    const h = harness('AQTESection.tsx', now);
+    h.render();
+    const snapshot = fixture();
+    snapshot.generated_at = now / 1000;
+    for (const symbol of ['NIFTY', 'BANKNIFTY', 'SENSEX']) snapshot.data[symbol].spot = null;
+    const cleanup = h.mount(snapshot);
+    await settle();
+    const value = text(nodes(h.render()).find(n => n.props?.id === 'aqte-index-tab-NIFTY'));
+    assert.match(value, /No live quote/);
+    assert.match(value, expected);
+    assert.doesNotMatch(value, /SNAPSHOT/);
+    cleanup();
+  }
+  const h = harness();
+  const value = text(nodes(h.render()).find(n => n.props?.id === 'aqte-index-tab-NIFTY'));
+  assert.match(value, /No live quote\s*AQTE OFFLINE/);
+});
+
+test('tick age uses the wall clock at render instead of the one-second UI clock', async () => {
+  let clock = Date.now();
+  const h = harness('AQTESection.tsx', () => clock);
+  h.render();
+  const snapshot = fixture();
+  const at = Date.parse('2026-10-30T10:00:00+05:30');
+  clock = at;
+  snapshot.generated_at = at / 1000;
+  snapshot.data.NIFTY.at = at / 1000;
+  snapshot.data.NIFTY.feed_ready = true;
+  const cleanup = h.mount(snapshot);
+  await settle();
+  h.render();
+  clock = at + 640;
+  const tick = { price: 23000, status: 'LIVE', timestamp: new Date(at + 400).toISOString() };
+  const health = nodes(h.render({ isConnected: true, marketData: { NIFTY: tick } }))
+    .find(n => n.props?.['aria-label'] === 'System health');
+  assert.match(text(health), /Tick age\s*240 ms/);
+  cleanup();
+});
+
+test('market context colours a zero VIX change as flat and explains each value source', () => {
+  const h = harness();
+  const tree = h.render();
+  const tiles = nodes(tree).filter(n => n.props?.className === 'aqx-context-tile');
+  assert.equal(tiles.length, 5);
+  for (const tile of tiles) assert.match(tile.props.title, /\S+/);
+  assert.match(tiles[0].props.title, /shows -- until AQTE has live data/);
+});
+
+test('market context VIX change tone is numeric: zero is flat, negative is down', async () => {
+  for (const [change, expected, shown] of [[0, 'aqx-flat', /\(0\.00%\)/], [-0.8, 'aqx-down', /\(-0\.80%\)/], [1.5, 'aqx-up', /\(\+1\.50%\)/]]) {
+    const h = harness();
+    h.render();
+    const snapshot = fixture();
+    snapshot.data.NIFTY = { ...snapshot.data.NIFTY, ...engineSet({ ce: 3 }) };
+    snapshot.data.NIFTY.market = { ...snapshot.data.NIFTY.market, vix_change_pct: change };
+    const cleanup = h.mount(snapshot);
+    await settle();
+    const tile = nodes(h.render()).filter(n => n.props?.className === 'aqx-context-tile')[4];
+    const small = nodes(tile).find(n => n.type === 'small');
+    assert.equal(small.props.className, expected);
+    assert.match(text(tile).replace(/\s+/g, ''), shown);
+    cleanup();
+  }
+});
+
 test('invalid, stale and failed-recorder responses cannot show BUY', async () => {
   for (const payload of [
     { broken: true }, { ...fixture(), generated_at: Date.now() / 1000 - 20 },
@@ -1371,16 +1468,16 @@ test('real position receives backend metrics and hides them after disconnect', a
     symbol, liveStatus, active: true, unavailable: false, tick: null,
   }));
   assert.equal(liveStatus.active, payload.active);
-  assert.match(terminal('NIFTY'), /\+255\.05/);
+  assert.match(terminal('NIFTY'), /\+₹255\.05/);
   const otherIndex = terminal('BANKNIFTY');
-  assert.doesNotMatch(otherIndex, /NIFTY_POSITION_CE|\+255\.05/);
-  assert.match(terminal('NIFTY'), /\+255\.05/);
+  assert.doesNotMatch(otherIndex, /NIFTY_POSITION_CE|255\.05/);
+  assert.match(terminal('NIFTY'), /\+₹255\.05/);
   assert.equal(h.requests.length, 1);
   await h.poll({ __httpStatus: 503, __body: { detail: 'Offline' } });
   assert.equal(liveStatus.connection_error, 'Offline');
   assert.equal(liveStatus.active, payload.active);
   assert.match(terminal('NIFTY'), /POSITION UNVERIFIED/);
-  assert.doesNotMatch(terminal('NIFTY'), /\+255\.05/);
+  assert.doesNotMatch(terminal('NIFTY'), /\+₹255\.05/);
   cleanup();
   assert.equal(h.timers.size, 0);
 });
@@ -2138,6 +2235,94 @@ test('engine deck keeps stable placeholders when engines are unavailable or AQTE
   assert.match(text(nodes(missing).find(n => n.props?.['aria-label'] === 'Top opportunity')), /Controller status unavailable/);
 });
 
+test('top opportunity follows the controller: first unblocked ranked index, else the top-ranked block reason', () => {
+  const display = displayModule();
+  assert.equal(display.aqteOpportunitySymbol(['NIFTY', 'BANKNIFTY', 'SENSEX'], { NIFTY: 'Daily index trade limit reached', BANKNIFTY: null }), 'BANKNIFTY');
+  assert.equal(display.aqteOpportunitySymbol(['NIFTY', 'BANKNIFTY'], { NIFTY: 'x', BANKNIFTY: 'y' }), 'NIFTY');
+  assert.equal(display.aqteOpportunitySymbol(['SENSEX'], undefined), 'SENSEX');
+  assert.equal(display.aqteOpportunitySymbol([], {}), null);
+
+  const h = harness('AQTEEngineDeck.tsx');
+  const data = fixture().data;
+  data.NIFTY = { ...data.NIFTY, ...engineSet({ ce: 4 }), scalp: scalpSignal('BUY CE', 90) };
+  data.BANKNIFTY = { ...data.BANKNIFTY, ...engineSet({ pe: 3 }), scalp: scalpSignal('BUY PE', 75) };
+  const live = { ...liveFixture(), enabled: true, paper_validated: true, armed: true, automation_on: true,
+    ranking: ['NIFTY', 'BANKNIFTY', 'SENSEX'], entry_blocks: { NIFTY: 'Daily index trade limit reached', BANKNIFTY: null, SENSEX: 'No setup' } };
+  const props = { symbol: 'NIFTY', data, liveStatus: live, unavailable: false, policy: { veto: true, veto_min: 2 }, events: [] };
+  // automated_entry would skip the blocked NIFTY and enter BANKNIFTY, so the panel must show BANKNIFTY.
+  const panel = text(nodes(h.render(props)).find(n => n.props?.['aria-label'] === 'Top opportunity'));
+  assert.match(panel, /NIFTY_SCALP_PE/);
+  assert.match(panel, /3 aligned · 0 opposed/);
+  assert.match(panel, /Auto Execution:\s+READY/);
+  assert.doesNotMatch(panel, /Daily index trade limit/);
+  // When every index is blocked the top-ranked index explains why nothing will trade.
+  const blocked = text(nodes(h.render({ ...props, liveStatus: { ...live, entry_blocks: { ...live.entry_blocks, BANKNIFTY: 'No setup' } } }))
+    .find(n => n.props?.['aria-label'] === 'Top opportunity'));
+  assert.match(blocked, /NIFTY_SCALP_CE/);
+  assert.match(blocked, /Daily index trade limit reached/);
+  assert.doesNotMatch(blocked, /READY|Eligible/);
+});
+
+test('un-evaluated engines read as awaiting data with the backend reason, and empty levels stay neutral', () => {
+  const display = displayModule();
+  assert.equal(display.aqteSameJson({ a: [1, { b: null }] }, { a: [1, { b: null }] }), true);
+  assert.equal(display.aqteSameJson({ a: [1] }, { a: [2] }), false);
+  assert.equal(display.aqteSameJson(null, null), true);
+
+  const h = harness('AQTEEngineDeck.tsx');
+  const data = fixture().data;
+  const reason = 'Outside regular market session';
+  const idle = engineSet();
+  data.NIFTY = { ...data.NIFTY, scalp: scalpSignal('WAIT'),
+    engines: idle.engines.map(engine => ({ ...engine, status: 'MONITORING', side: null, passed: 0, total: 0, score: null, rules: [], reason })),
+    orchestration: { satisfied: 0, partial: 0, monitoring: 12, not_satisfied: 0, ce: 0, pe: 0, consensus: null, conflict: false, evaluated: 0, consensus_pct: null } };
+  const tree = h.render({ symbol: 'NIFTY', data, liveStatus: { ...liveFixture(), ranking: ['NIFTY'], entry_blocks: { NIFTY: reason } },
+    unavailable: false, policy: null, events: [] });
+  const cards = nodes(tree).filter(n => String(n.props?.className).includes('aqx-eng-card'));
+  assert.equal(cards.length, 12);
+  assert.ok(cards.every(card => !card.props.disabled && card.props.title === reason));
+  assert.ok(cards.every(card => /Awaiting live data/.test(text(card)) && !/0 \/ 0/.test(text(card))));
+  const head = text(nodes(tree).find(n => n.props?.className === 'aqx-deck-title'));
+  assert.match(head, /All engines monitoring/);
+  assert.match(head, /Outside regular market session/);
+  const levels = nodes(nodes(tree).find(n => n.props?.['aria-label'] === 'Top opportunity')).filter(n => n.type === 'dd');
+  assert.equal(levels.length, 5);
+  assert.ok(levels.every(dd => !dd.props.className), 'No buy/sell colour without an entry plan');
+  const management = nodes(nodes(tree).find(n => n.props?.['aria-label'] === 'Enterprise trade management')).filter(n => n.type === 'dd');
+  assert.equal(management.length, 6);
+  assert.ok(management.every(dd => !dd.props.className), 'Empty stop/target rows are not coloured');
+  const risk = nodes(nodes(tree).find(n => n.props?.['aria-label'] === 'Orchestration and risk')).find(n => n.type === 'li' && /Risk Validation/.test(text(n)));
+  assert.equal(risk.props.title, reason, 'Blocked risk check explains why');
+});
+
+test('trade management and risk checks for a pending and a protected controller position', () => {
+  const h = harness('AQTEEngineDeck.tsx');
+  const data = fixture().data;
+  data.NIFTY = { ...data.NIFTY, ...engineSet({ ce: 3 }), scalp: scalpSignal('WAIT') };
+  // Controller semantics: entry_price stays 0 until the broker fill; trail_start_r may be omitted (backend default 1R).
+  const pending = livePositionFixture({ state: 'PENDING', filled: 0, entry_price: 0, fill_at: undefined, limit: 100,
+    initial_stop: 80, stop: 80, peak: 0, trailing_active: false, protection_confirmed: false, protect_id: null });
+  const live = { ...liveFixture(), enabled: true, armed: true, automation_on: true, active: pending,
+    limits: { ...liveFixture().limits, max_lots: 2 }, ranking: ['NIFTY'], entry_blocks: { NIFTY: 'One managed position already open' } };
+  const props = { symbol: 'NIFTY', data, liveStatus: live, unavailable: false, policy: null, events: [] };
+  let tree = h.render(props);
+  const management = text(nodes(tree).find(n => n.props?.['aria-label'] === 'Enterprise trade management'));
+  assert.match(management, /Trail Step\s+₹20\.00 · from \+1\.0R/, 'Pending entry measures 1R from its limit, not entry_price 0');
+  assert.match(management, /Initial Stop Loss\s+₹80\.00\s+\(\s*-20\.00%\s*\)/);
+  const checks = nodes(nodes(tree).find(n => n.props?.['aria-label'] === 'Orchestration and risk')).filter(n => n.type === 'li');
+  const check = label => checks.find(li => text(li).includes(label));
+  assert.equal(check('Position & Exposure').props.className, 'aqx-pending', 'An open trade is capacity in use, not a failure');
+  assert.match(text(check('Position & Exposure')), /1 \/ 1 open/);
+  assert.match(text(check('Quantity Control')), /2 lots \(enforced\)/);
+  assert.equal(check('Trailing Stop').props.className, 'aqx-fail');
+  assert.match(text(check('Trailing Stop')), /SL unconfirmed/);
+
+  tree = h.render({ ...props, liveStatus: { ...live, active: livePositionFixture({ trailing_active: false, trail_start_r: undefined }) } });
+  const protectedChecks = text(nodes(tree).find(n => n.props?.['aria-label'] === 'Orchestration and risk'));
+  assert.match(protectedChecks, /Trailing Stop\s+Arms at \+1\.0R/);
+  assert.match(text(nodes(tree).find(n => n.props?.['aria-label'] === 'Enterprise trade management')), /Trail Step\s+₹20\.00 · from \+1\.0R/);
+});
+
 test('AQTE section renders the engine deck from the snapshot and drops malformed engine events', async () => {
   const h = harness();
   h.render();
@@ -2163,4 +2348,231 @@ test('AQTE section renders the engine deck from the snapshot and drops malformed
   assert.equal(nav.length, 0);
   assert.match(text(nodes(h.render()).find(n => n.props?.['aria-label'] === 'System health')), /System\s+(Healthy|Degraded|Offline)/);
   cleanup();
+});
+
+test('live trade terminal keeps empty levels neutral and formats ring, lots and signed rupees', () => {
+  const h = harness('AQTETerminal.tsx');
+  const dd = (tree, label) => nodes(nodes(tree).find(n => n.props?.['aria-label'] === 'Trade prices'))
+    .find(n => n.props?.className === 'aqx-price-row' && text(n).trim().startsWith(label)).props.children[1];
+  const ring = tree => nodes(nodes(tree).find(n => n.props?.['aria-label'] === 'Open profit and loss'));
+  let tree = h.render({ symbol: 'NIFTY', signal: fixture().data.NIFTY, unavailable: false, liveStatus: liveFixture() });
+  assert.equal(dd(tree, 'Stop Loss').props.className, '', 'No red placeholder without a trade');
+  assert.equal(dd(tree, 'Trailing SL').props.className, '', 'No cyan placeholder without a trade');
+  assert.equal(text(ring(tree).find(n => n.type === 'strong')).trim(), '--', 'No "-- pts" placeholder');
+  assert.match(text(nodes(tree).find(n => n.props?.['aria-label'] === 'Position')), /1 lot max/);
+
+  const live = liveFixture();
+  live.active = livePositionFixture({ metrics: { ...positionFixture().metrics, points: -4, net_pnl: -72.5, return_pct: -4 } });
+  tree = h.render({ symbol: 'NIFTY', signal: fixture().data.NIFTY, unavailable: false, liveStatus: live });
+  assert.equal(dd(tree, 'Stop Loss').props.className, 'aqx-down');
+  assert.equal(dd(tree, 'Trailing SL').props.className, 'aqx-cyan');
+  assert.match(text(ring(tree).find(n => n.type === 'strong')), /-4\.00\s+pts/);
+  assert.equal(text(ring(tree).find(n => n.type === 'em')).trim(), '−₹72.50', 'Sign precedes the currency symbol');
+  const position = text(nodes(tree).find(n => n.props?.['aria-label'] === 'Position'));
+  assert.match(position, /\b1 lot\b/);
+  assert.doesNotMatch(position, /1\.00 lots/);
+  live.active = livePositionFixture({ filled: 30 });
+  tree = h.render({ symbol: 'NIFTY', signal: fixture().data.NIFTY, unavailable: false, liveStatus: live });
+  assert.match(text(nodes(tree).find(n => n.props?.['aria-label'] === 'Position')), /\b2 lots\b/);
+});
+
+test('hidden index terminals skip re-renders until their tab is selected again', () => {
+  const equal = harness('AQTETerminal.tsx').exports.aqteTerminalPropsEqual;
+  const base = { symbol: 'NIFTY', unavailable: false, liveStatus: null, now: 100, paused: true };
+  assert.equal(equal(base, { ...base, now: 101, liveStatus: liveFixture() }), true, 'Hidden tab ignores clock and status churn');
+  assert.equal(equal(base, { ...base, now: 101, paused: false }), false, 'Re-selecting renders current data at once');
+  const shown = { ...base, paused: false };
+  assert.equal(equal(shown, { ...shown }), true);
+  assert.equal(equal(shown, { ...shown, now: 101 }), false, 'Visible tab follows the clock');
+  const h = harness();
+  const terminals = nodes(h.render()).filter(n => n.props && 'paused' in n.props && 'onExit' in n.props);
+  assert.deepEqual(terminals.map(n => [n.props.symbol, n.props.paused]),
+    [['NIFTY', false], ['BANKNIFTY', true], ['SENSEX', true]]);
+});
+
+test('today performance keeps the win-rate placeholder neutral and colours real win rates', () => {
+  const h = harness();
+  const publish = status => nodes(h.render()).find(n => n.props?.onStatus && 'exitRequest' in n.props).props.onStatus(status);
+  const winRate = () => nodes(nodes(h.render()).find(n => n.props?.['aria-label'] === 'Today summary'))
+    .filter(n => n.type === 'div').find(n => /^Win Rate/.test(text(n).trim())).props.children[1];
+  assert.equal(winRate().props.className, '');
+  assert.equal(text(winRate()).trim(), '--');
+  const at = Date.now() / 1000;
+  publish({ ...liveFixture(), trades: [10, -5, -2].map(net_pnl => ({ symbol: 'NIFTY', net_pnl, exit_at: at })) });
+  assert.equal(text(winRate()).trim(), '33%');
+  assert.equal(winRate().props.className, 'aqx-down');
+  publish({ ...liveFixture(), trades: [10, 5, -2].map(net_pnl => ({ symbol: 'NIFTY', net_pnl, exit_at: at })) });
+  assert.equal(text(winRate()).trim(), '67%');
+  assert.equal(winRate().props.className, 'aqx-up');
+});
+
+test('live engine events show an offline dot and label when AQTE data is unavailable', () => {
+  const deck = harness('AQTEEngineDeck.tsx');
+  const head = props => nodes(nodes(deck.render(props)).find(n => n.props?.['aria-label'] === 'Live engine events')).find(n => n.type === 'h3');
+  const base = { symbol: 'NIFTY', data: fixture().data, liveStatus: null, events: [], policy: null, now: Date.now() / 1000 };
+  let h3 = head({ ...base, unavailable: true });
+  assert.match(text(h3), /\(Offline\)/);
+  assert.match(nodes(h3).find(n => n.type === 'span').props.className, /aqx-live-dot-off/);
+  h3 = head({ ...base, unavailable: false });
+  assert.match(text(h3), /\(Real-time\)/);
+  assert.doesNotMatch(nodes(h3).find(n => n.type === 'span').props.className, /off/);
+  const styles = readFileSync(path.join(__dirname, '..', 'app', 'globals.css'), 'utf8');
+  assert.match(styles, /\.aqx-live-dot\.aqx-live-dot-off \{[^}]*animation: none/);
+  assert.match(styles, /\.aqx-perfbar \.aqx-perf-risk dd \{ white-space: normal; \}/, 'Daily Risk figure wraps on narrow cells');
+});
+test('emergency trades with an unverified exit keep the live status valid and never count as flat P&L', () => {
+  const { isAqteLiveState, aqteDaySummary } = displayModule();
+  const at = Date.now() / 1000;
+  const status = { ...liveFixture(), generated_at: at, trades: [
+    { symbol: 'NIFTY', net_pnl: 25, exit_at: at - 60, exit_price: 120, entry_price: 100 },
+    { symbol: 'NIFTY', net_pnl: 0, exit_at: at, exit_price: null, entry_price: 100, exit_unverified: true, exit_requested: 'EMERGENCY_STOP' },
+  ] };
+  assert.equal(isAqteLiveState(status), true);
+  assert.equal(isAqteLiveState({ ...status, trades: [{ ...status.trades[1], exit_unverified: 'yes' }] }), false);
+  assert.equal(isAqteLiveState({ ...status, trades: [{ ...status.trades[1], exit_price: 'x' }] }), false);
+  const day = aqteDaySummary(status, at);
+  assert.equal(day.realized, null);
+  assert.equal(day.dayPnl, null);
+  assert.equal(day.lossLeft, null);
+  assert.deepEqual([day.wins, day.losses, day.breakeven, day.unverified], [1, 0, 0, 1]);
+  const verified = aqteDaySummary({ ...status, trades: [status.trades[0]] }, at);
+  assert.deepEqual([verified.realized, verified.dayPnl, verified.unverified], [25, 25, 0]);
+
+  const h = harness();
+  nodes(h.render()).find(n => n.props?.onStatus && 'exitRequest' in n.props).props.onStatus(status);
+  const tree = h.render();
+  const today = text(nodes(tree).find(n => n.props?.id === 'aqte-book-today'));
+  assert.match(today, /EMERGENCY STOP/);
+  assert.match(today, /Unverified/);
+  const perf = text(nodes(tree).find(n => n.props?.id === 'aqte-book-performance'));
+  assert.match(perf, /Wins \/ Losses \/ Flat\s+1 \/ 0 \/ 0 · 1 unverified/);
+  assert.match(perf, /Win rate\s+100%/);
+  assert.match(perf, /Realized net\s+--/);
+  assert.match(perf, /Best trade\s+\+₹25\.00/);
+  assert.match(perf, /Worst trade\s+\+₹25\.00/);
+  const summary = text(nodes(tree).find(n => n.props?.['aria-label'] === 'Today summary'));
+  assert.match(summary, /Today P&L\s+--/);
+  assert.match(summary, /Max Drawdown\s+--/);
+});
+
+test('performance tab uses sign-first rupees and neutral/up/down win-rate tones', () => {
+  const h = harness();
+  const publish = status => nodes(h.render()).find(n => n.props?.onStatus && 'exitRequest' in n.props).props.onStatus(status);
+  const cell = label => nodes(nodes(h.render()).find(n => n.props?.id === 'aqte-book-performance'))
+    .find(n => n.props?.className === 'aqx-perf-cell' && text(n).trim().startsWith(label)).props.children[1];
+  assert.equal(cell('Win rate').props.className, '');
+  const at = Date.now() / 1000;
+  publish({ ...liveFixture(), trades: [10, -72.5, -2].map(net_pnl => ({ symbol: 'NIFTY', net_pnl, exit_at: at })) });
+  assert.equal(cell('Win rate').props.className, 'aqx-down');
+  assert.equal(text(cell('Realized net')).trim(), '−₹64.50');
+  assert.equal(text(cell('Best trade')).trim(), '+₹10.00');
+  assert.equal(cell('Best trade').props.className, 'aqx-up');
+  assert.equal(text(cell('Worst trade')).trim(), '−₹72.50');
+  assert.equal(cell('Worst trade').props.className, 'aqx-down');
+  publish({ ...liveFixture(), trades: [10, 5].map(net_pnl => ({ symbol: 'NIFTY', net_pnl, exit_at: at })) });
+  assert.equal(cell('Win rate').props.className, 'aqx-up');
+  assert.equal(text(cell('Realized net')).trim(), '+₹15.00');
+});
+
+test('broker SL rule reads "After entry" without a trade and the stop price once confirmed', () => {
+  const rule = props => nodes(nodes(harness('AQTETerminal.tsx').render(props)).find(n => n.props?.['aria-label'] === 'Auto exit rules'))
+    .filter(n => n.type === 'li').find(n => /Broker SL order/.test(text(n)));
+  const base = { symbol: 'NIFTY', active: true, unavailable: false, tick: null, onExit() {} };
+  assert.match(text(rule({ ...base, liveStatus: liveFixture() })), /After entry/);
+  assert.doesNotMatch(text(rule({ ...base, liveStatus: liveFixture() })), /Unverified/);
+  assert.match(text(rule({ ...base, liveStatus: { ...liveFixture(), active: livePositionFixture() } })), /₹105\.00/);
+  assert.match(text(rule({ ...base, liveStatus: { ...liveFixture(), active: livePositionFixture({ protection_confirmed: false }) } })), /Unverified/);
+});
+
+test('phone timeline wraps all six lifecycle steps instead of hiding Exit in a sideways scroll', () => {
+  const css = readFileSync(path.join(__dirname, '..', 'app', 'globals.css'), 'utf8');
+  const phone = css.slice(css.indexOf('@container aqte (max-width: 620px)'));
+  const block = phone.slice(0, phone.indexOf('\n}\n'));
+  assert.match(block, /\.aqx-timeline \{ grid-template-columns: repeat\(3, minmax\(0, 1fr\)\)/);
+  assert.match(block, /\.aqx-timeline li:nth-child\(3n \+ 1\)::before \{ display: none; \}/);
+  assert.doesNotMatch(block, /\.aqx-timeline \{[^}]*overflow-x: auto/);
+});
+test('header switch reads the shared live feed without its own status poll', async () => {
+  const h = harness('AQTEAutomationSwitch.tsx');
+  assert.match(text(autoSwitch(h.render({ feed: 'pending' }))), /Checking/);
+  assert.equal(h.mount(), undefined, 'shared mode starts no poll loop');
+  await settle();
+  assert.equal(h.requests.length, 0);
+  assert.equal(h.timers.size, 0);
+  const on = { ...liveFixture(), enabled: true, paper_validated: true, armed: true, automation_on: true };
+  let tree = h.render({ feed: on });
+  assert.equal(autoSwitch(tree).props['aria-checked'], true);
+  assert.match(text(tree), /Backend confirmed · ON/);
+  tree = h.render({ feed: null, feedError: 'Sign in again' });
+  assert.match(text(autoSwitch(tree)), /UNKNOWN/);
+  assert.equal(autoSwitch(tree).props['aria-checked'], undefined);
+  assert.match(text(tree), /Sign in again/);
+  assert.ok(nodes(tree).find(n => n.props?.['aria-label'] === 'Stop AQTE new entries'), 'unknown state keeps Request OFF');
+  tree = h.render({ feed: { ...on, connection_error: 'Live status unavailable; inspect Kite' } });
+  assert.match(text(autoSwitch(tree)), /UNKNOWN/);
+  assert.match(text(tree), /Live status unavailable; inspect Kite/);
+  assert.equal(h.requests.length, 0);
+});
+
+test('shared switch publishes command results and ignores a poll that started before the command', async () => {
+  const h = harness('AQTEAutomationSwitch.tsx');
+  const published = [];
+  const onStatus = value => published.push(value);
+  const t = Date.now() / 1000;
+  const on = { ...liveFixture(), generated_at: t - 1, enabled: true, paper_validated: true, armed: true, automation_on: true };
+  h.render({ feed: on, onStatus });
+  h.respond({ ...on, generated_at: t, automation_on: false });
+  autoSwitch(h.render({ feed: on, onStatus })).props.onClick();
+  await settle();
+  assert.deepEqual(h.requests.map(r => r.url), ['/api/aqte/live/automation']);
+  assert.equal(published.length, 1);
+  assert.equal(published[0].automation_on, false);
+  // The parent's in-flight poll from before the command still reports ON; the newer OFF must stay.
+  let tree = h.render({ feed: on, onStatus });
+  assert.equal(autoSwitch(tree).props['aria-checked'], false);
+  assert.match(text(tree), /Saved automatically · OFF/);
+  h.respondHTTP(500, { detail: 'Broker timeout' });
+  autoSwitch(tree).props.onClick();
+  nodes(h.render({ feed: on, onStatus })).find(n => n.type === 'button' && /Confirm ON/.test(text(n))).props.onClick();
+  await settle();
+  assert.equal(published.length, 1, 'a failed command does not blank the shared live status');
+  tree = h.render({ feed: { ...on, generated_at: Date.now() / 1000 + 0.5 } });
+  assert.match(text(autoSwitch(tree)), /UNKNOWN/, 'a status within clock skew of the failed command cannot resolve it');
+  assert.match(text(tree), /Broker timeout/);
+  tree = h.render({ feed: { ...on, generated_at: Date.now() / 1000 + 2 } });
+  assert.equal(autoSwitch(tree).props['aria-checked'], true);
+  assert.doesNotMatch(text(tree), /Broker timeout/);
+});
+
+test('live controller owns the sign-in prompt and forwards poll errors with the null status', async () => {
+  const h = harness('AQTELiveController.tsx');
+  const published = [];
+  h.render({ onStatus: (value, error) => published.push([value, error]) });
+  const cleanup = h.mount({ __httpStatus: 401, __body: { detail: 'Sign in with the configured owner app-access session' } });
+  await settle();
+  assert.equal(h.accessExpired, 1);
+  assert.deepEqual(published.at(-1), [null, 'Sign in with the configured owner app-access session']);
+  cleanup();
+});
+
+test('section polls live status once and feeds the header switch with the newest state', () => {
+  const h = harness();
+  const switchNode = () => nodes(h.render()).find(n => n.props && 'feed' in n.props);
+  const controller = () => nodes(h.render()).find(n => n.props?.onStatus && 'exitRequest' in n.props);
+  assert.equal(switchNode().props.feed, 'pending');
+  const t = Date.now() / 1000;
+  const fresh = { ...liveFixture(), generated_at: t, automation_on: true };
+  switchNode().props.onStatus(fresh);
+  assert.equal(switchNode().props.feed, fresh, 'a switch command result reaches the section state');
+  controller().props.onStatus({ ...liveFixture(), generated_at: t - 1 });
+  assert.equal(switchNode().props.feed, fresh, 'an older poll cannot roll back a newer switch result');
+  const failed = { ...fresh, generated_at: t - 1, connection_error: 'Live status unavailable; inspect Kite' };
+  controller().props.onStatus(failed);
+  assert.equal(switchNode().props.feed, failed, 'connection errors always surface');
+  controller().props.onStatus(null, 'Untrusted live-control origin');
+  assert.equal(switchNode().props.feed, null);
+  assert.equal(switchNode().props.feedError, 'Untrusted live-control origin');
+  const source = readFileSync(path.join(__dirname, '..', 'components', 'AQTESection.tsx'), 'utf8');
+  assert.match(source, /hourCycle: 'h23'/, 'midnight renders 00, never 24');
+  assert.doesNotMatch(source, /className="aqx-clock" aria-label/);
 });
