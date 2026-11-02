@@ -2108,8 +2108,7 @@ test('AQTE section renders the engine deck from the snapshot and drops malformed
   assert.match(context, /PCR\s+1\.18/);
   assert.match(context, /India VIX\s+14\.20\s+\(\s*\+1\.50%\s*\)/);
   const nav = nodes(h.render()).filter(n => String(n.props?.className).includes('aqx-nav-item'));
-  assert.equal(nav.length, 10);
-  assert.ok(nav.every(n => /\baqx-viewonly\b/.test(n.props.className)));
+  assert.equal(nav.length, 0);
   assert.match(text(nodes(h.render()).find(n => n.props?.['aria-label'] === 'System health')), /System\s+(Healthy|Degraded|Offline)/);
   cleanup();
 });

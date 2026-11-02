@@ -1553,32 +1553,18 @@ h1, h2, h3, h4, h5, h6 {
   position: absolute; top: -6px; right: -6px; min-width: 18px; height: 18px; padding: 0 4px; border-radius: 999px;
   background: #ef4444; color: #fff; font-size: 0.625rem; font-weight: 800; line-height: 18px; text-align: center;
 }
-.aqte-theme :is(.aqx-icon-btn, .aqx-nav-item, .aqx-ctab, .aqx-link, .aqx-deck-filter, .aqx-eng-card):focus-visible { outline: 2px solid #7dd3fc; outline-offset: 2px; }
+.aqte-theme :is(.aqx-icon-btn, .aqx-ctab, .aqx-link, .aqx-deck-filter, .aqx-eng-card):focus-visible { outline: 2px solid #7dd3fc; outline-offset: 2px; }
 
-.aqte-theme .aqx-dash { display: grid; grid-template-columns: 152px minmax(0, 1fr); gap: 10px; align-items: start; }
-.aqte-theme .aqx-rail {
-  position: sticky; top: 8px; display: grid; gap: 10px; align-content: start; min-width: 0; padding: 8px;
-  border: 1px solid var(--aqx-line); border-radius: 14px; background: var(--aqx-card); box-shadow: var(--aqx-glow);
-}
-.aqte-theme .aqx-rail ul { display: grid; gap: 2px; list-style: none; }
-.aqte-theme .aqx-nav-item {
-  display: flex; align-items: center; gap: 9px; width: 100%; min-height: 38px; padding: 6px 10px;
-  border: 1px solid transparent; border-radius: 9px; color: #aabbd0; font-size: 0.8125rem; font-weight: 600; text-align: left; white-space: nowrap;
-}
-.aqte-theme .aqx-nav-item svg { flex: 0 0 auto; width: 17px; height: 17px; }
-.aqte-theme .aqx-nav-item:hover { background: rgb(30 58 95 / 0.4); color: #f1f5f9; }
-.aqte-theme .aqx-nav-item[aria-current="true"] {
-  border-color: rgb(92 200 255 / 0.45); color: #fff;
-  background: linear-gradient(90deg, rgb(37 99 235 / 0.45), rgb(14 116 144 / 0.2)); box-shadow: inset 3px 0 0 #5cc8ff;
-}
+.aqte-theme .aqx-dash { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; align-items: start; }
+.aqte-theme .aqx-rail { min-width: 0; }
 .aqte-theme .aqx-health {
-  display: grid; gap: 4px; padding: 10px; border: 1px solid rgb(74 222 128 / 0.3); border-radius: 10px;
-  background: linear-gradient(160deg, rgb(20 83 45 / 0.3), rgb(8 17 31 / 0.6)); font-size: 0.75rem; color: #aabbd0;
+  display: flex; flex-wrap: wrap; align-items: center; gap: 4px 18px; padding: 6px 12px; border: 1px solid rgb(74 222 128 / 0.3); border-radius: 10px;
+  background: linear-gradient(90deg, rgb(20 83 45 / 0.28), rgb(8 17 31 / 0.6)); font-size: 0.75rem; color: #aabbd0;
 }
 .aqte-theme .aqx-health-state { display: flex; align-items: center; gap: 6px; font-size: 0.8125rem; font-weight: 800; }
 .aqte-theme .aqx-health-state span { width: 8px; height: 8px; border-radius: 50%; background: currentColor; box-shadow: 0 0 8px currentColor; }
-.aqte-theme .aqx-health dl { display: grid; gap: 2px; }
-.aqte-theme .aqx-health dl > div { display: flex; justify-content: space-between; gap: 6px; }
+.aqte-theme .aqx-health dl { display: flex; flex-wrap: wrap; gap: 4px 16px; }
+.aqte-theme .aqx-health dl > div { display: flex; gap: 6px; }
 .aqte-theme .aqx-health dd { font-weight: 700; color: #e2e8f0; font-variant-numeric: tabular-nums; white-space: nowrap; }
 
 .aqte-theme .aqx-dash-main {
@@ -1839,18 +1825,8 @@ h1, h2, h3, h4, h5, h6 {
 .aqte-theme .aqx-clock b { font-size: 1.375rem; }
 .aqte-theme .aqx-clock span { font-size: 0.8125rem; color: #9fb2cc; }
 .aqte-theme .aqx-icon-btn { border-color: rgb(72 94 138 / 0.5); background: rgb(17 26 46 / 0.85); color: #cbd5e1; }
-.aqte-theme .aqx-rail { gap: 12px; }
-.aqte-theme .aqx-nav-item { min-height: 40px; font-size: 0.9375rem; font-weight: 600; color: #cbd5e1; }
-.aqte-theme .aqx-nav-item svg { width: 19px; height: 19px; color: #94a8c6; }
-.aqte-theme .aqx-nav-item:hover { background: rgb(51 70 105 / 0.35); }
-.aqte-theme .aqx-nav-item[aria-current="true"] {
-  border-color: rgb(96 130 190 / 0.45); color: #f1f5f9; box-shadow: none;
-  background: linear-gradient(90deg, rgb(52 78 128 / 0.6), rgb(52 78 128 / 0.2));
-}
-.aqte-theme .aqx-nav-item[aria-current="true"] svg { color: #dbe6f5; }
-.aqte-theme .aqx-health { justify-items: center; text-align: center; border-color: rgb(74 160 120 / 0.35); font-size: 0.8125rem; color: #cbd5e1; }
+.aqte-theme .aqx-health { border-color: rgb(74 160 120 / 0.35); font-size: 0.8125rem; color: #cbd5e1; }
 .aqte-theme .aqx-health-state { font-size: 0.9375rem; }
-.aqte-theme .aqx-health dl { justify-items: center; }
 .aqte-theme .aqx-context-tile dt { font-size: 0.8125rem; color: #9fb2cc; }
 .aqte-theme .aqx-context-tile {
   grid-template-columns: 22px minmax(0, 1fr); grid-template-areas: "label label" "icon value"; row-gap: 4px; padding: 8px 12px;
@@ -1995,13 +1971,6 @@ h1, h2, h3, h4, h5, h6 {
 .aqte-theme .aqx-risk-bar i { background: linear-gradient(90deg, var(--aqx-green), var(--aqx-amber), var(--aqx-red)); opacity: 1; }
 /* responsive: laptop → tablet → phone */
 @container aqte (max-width: 1180px) {
-  .aqte-theme .aqx-dash { grid-template-columns: minmax(0, 1fr); }
-  .aqte-theme .aqx-rail { position: static; grid-template-columns: minmax(0, 1fr) auto; align-items: center; padding: 6px; }
-  .aqte-theme .aqx-rail ul { display: flex; gap: 4px; overflow-x: auto; scrollbar-width: none; }
-  .aqte-theme .aqx-rail ul::-webkit-scrollbar { display: none; }
-  .aqte-theme .aqx-nav-item { width: auto; min-height: 36px; }
-  .aqte-theme .aqx-health { display: flex; flex-wrap: wrap; align-items: center; gap: 2px 10px; padding: 6px 10px; }
-  .aqte-theme .aqx-health dl { display: flex; gap: 10px; }
   .aqte-theme .aqx-dash-main {
     grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr);
     grid-template-areas: "top top" "eng opp" "chart chart" "trade risk" "perf perf" "events events" "term term" "book book";
@@ -2011,7 +1980,6 @@ h1, h2, h3, h4, h5, h6 {
 }
 @container aqte (max-width: 900px) {
   .aqte-theme .aqx-dash-main { grid-template-columns: minmax(0, 1fr); grid-template-areas: "top" "eng" "opp" "chart" "trade" "risk" "perf" "events" "term" "book"; }
-  .aqte-theme .aqx-rail { grid-template-columns: minmax(0, 1fr); }
   .aqte-theme .aqx-context { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .aqte-theme .aqx-perfbar { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
   .aqte-theme .aqx-perfbar > div { padding: 6px 8px; border: 1px solid rgb(56 116 190 / 0.25); border-radius: 8px; }
