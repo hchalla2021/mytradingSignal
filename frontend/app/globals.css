@@ -1963,6 +1963,36 @@ h1, h2, h3, h4, h5, h6 {
 .aqte-theme :is(.aqx-dash-main, .aqx-rail) :is(.aqx-buy, .aqx-up) { color: #5fcf98; }
 .aqte-theme :is(.aqx-dash-main, .aqx-rail) :is(.aqx-sell, .aqx-down) { color: #e88a95; }
 .aqte-theme :is(.aqx-dash-main, .aqx-rail) .aqx-wait { color: #d6b45a; }
+
+/* trading colours (reference image): navy panels stay calm; status, P&L and sides use clear green / red */
+.aqte-theme.aqx-shell { --aqx-green: #22c55e; --aqx-green-text: #4ade80; --aqx-red: #ef4444; --aqx-red-text: #f87171; --aqx-amber: #f5b83d; --aqx-blue: #5b9cf5; }
+.aqte-theme .aqx-st-satisfied { --st: var(--aqx-green); }
+.aqte-theme .aqx-st-partial { --st: var(--aqx-amber); }
+.aqte-theme .aqx-st-not_satisfied { --st: var(--aqx-red); }
+.aqte-theme .aqx-st-monitoring { --st: var(--aqx-blue); }
+.aqte-theme .aqx-eng-badge {
+  border-color: color-mix(in srgb, var(--st) 75%, transparent);
+  background: color-mix(in srgb, var(--st) 18%, transparent); color: color-mix(in srgb, var(--st) 70%, white);
+}
+.aqte-theme .aqx-eng-bar i { opacity: 1; }
+.aqte-theme .aqx-st-satisfied .aqx-eng-bar i { background: linear-gradient(90deg, #16a34a, var(--aqx-green-text)); }
+.aqte-theme :is(.aqx-dash-main, .aqx-rail) :is(.aqx-buy, .aqx-up) { color: var(--aqx-green-text); }
+.aqte-theme :is(.aqx-dash-main, .aqx-rail) :is(.aqx-sell, .aqx-down) { color: var(--aqx-red-text); }
+.aqte-theme :is(.aqx-dash-main, .aqx-rail) .aqx-wait { color: var(--aqx-amber); }
+.aqte-theme .aqx-pass > span:first-child { color: var(--aqx-green-text); }
+.aqte-theme .aqx-fail > span:first-child { color: var(--aqx-red-text); }
+.aqte-theme .aqx-pending > span:first-child { color: var(--aqx-amber); }
+.aqte-theme .aqx-chip-ce, .aqte-theme .aqx-chip-buy { background: #16a34a; color: #f0fdf4; box-shadow: inset 0 0 0 1px rgb(74 222 128 / 0.55); }
+.aqte-theme .aqx-chip-pe, .aqte-theme .aqx-chip-sell { background: #dc2626; color: #fef2f2; box-shadow: inset 0 0 0 1px rgb(248 113 113 / 0.55); }
+.aqte-theme .aqx-chip-wait { background: rgb(245 184 61 / 0.16); color: var(--aqx-amber); box-shadow: inset 0 0 0 1px rgb(245 184 61 / 0.45); }
+.aqte-theme .aqx-status-open { background: #16a34a; color: #f0fdf4; }
+.aqte-theme .aqx-exec-ready, .aqte-theme .aqx-sent.aqx-exec-ready { border-color: rgb(34 197 94 / 0.75); background: linear-gradient(90deg, rgb(22 101 52 / 0.45), rgb(22 101 52 / 0.15)); }
+.aqte-theme .aqx-exec-ready .aqx-exec-mark { color: var(--aqx-green-text); }
+.aqte-theme .aqx-pnl-hero { border-color: rgb(34 197 94 / 0.55); background: linear-gradient(150deg, rgb(22 101 52 / 0.4), rgb(9 14 28 / 0.4)); }
+.aqte-theme .aqx-pnl-loss { border-color: rgb(239 68 68 / 0.55); background: linear-gradient(150deg, rgb(127 29 29 / 0.4), rgb(9 14 28 / 0.4)); }
+.aqte-theme .aqx-health { border-color: rgb(34 197 94 / 0.5); }
+.aqte-theme .aqx-live-dot { background: var(--aqx-green); }
+.aqte-theme .aqx-risk-bar i { background: linear-gradient(90deg, var(--aqx-green), var(--aqx-amber), var(--aqx-red)); opacity: 1; }
 /* responsive: laptop → tablet → phone */
 @container aqte (max-width: 1180px) {
   .aqte-theme .aqx-dash { grid-template-columns: minmax(0, 1fr); }
