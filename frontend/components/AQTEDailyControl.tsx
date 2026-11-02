@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { API_CONFIG } from '@/lib/api-config';
 import { getOrCreateVisitorId } from '@/lib/visitor-id';
+import { AQTE_RECONNECT_GRACE_MS, aqteConnectionDrop, aqteErrorText, aqtePollLoop } from '@/lib/aqte-display';
 
 const SYMBOLS = ['NIFTY', 'BANKNIFTY', 'SENSEX'] as const;
 type SymbolName = typeof SYMBOLS[number];
@@ -76,8 +77,8 @@ export default function AQTEDailyControl() {
   useEffect(() => {
     mounted.current = true;
     let active = true;
-    let timer: ReturnType<typeof setTimeout>;
     let controller: AbortController | null = null;
+    let lastOk = 0;
     const poll = async () => {
       const version = generation.current;
       controller = new AbortController();
@@ -89,16 +90,17 @@ export default function AQTEDailyControl() {
         const payload = await response.json();
         if (!response.ok) throw new Error(payload.detail || 'Daily controls unavailable');
         const result = parse(payload);
+        lastOk = Date.now();
         if (active && !saving.current && generation.current === version) { lastSnapshot = result; setSnapshot(result); setError(null); }
       } catch (cause) {
-        if (active && !saving.current && generation.current === version) setError(cause instanceof Error ? cause.message : 'Daily controls unavailable');
+        if (aqteConnectionDrop(cause) && Date.now() - lastOk < AQTE_RECONNECT_GRACE_MS) return;
+        if (active && !saving.current && generation.current === version) setError(aqteErrorText(cause, 'Daily controls unavailable'));
       } finally {
         clearTimeout(timeout);
-        if (active) timer = setTimeout(poll, 2000);
       }
     };
-    void poll();
-    return () => { active = false; mounted.current = false; clearTimeout(timer); controller?.abort(); saveController.current?.abort(); };
+    const stopPolling = aqtePollLoop(poll);
+    return () => { active = false; mounted.current = false; stopPolling(); controller?.abort(); saveController.current?.abort(); };
   }, []);
   const row = snapshot?.data[symbol];
   const config = drafts[symbol] ?? row?.config;

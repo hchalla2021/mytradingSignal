@@ -342,3 +342,63 @@ export function aqteRanking(data: Partial<Record<AQTESymbol, AQTESignal>> | unde
     return y[0] - x[0] || y[1] - x[1] || y[2] - x[2];
   });
 }
+
+/** Keep the last backend-confirmed view this long through browser-side connection drops. */
+export const AQTE_RECONNECT_GRACE_MS = 10_000;
+export const AQTE_CONNECTION_LOST = 'Server not reachable from this browser · reconnecting automatically. Server-side auto trade does not depend on this page.';
+
+/** True when the browser itself failed to reach the server (offline, sleep, timeout), not a backend answer. */
+export function aqteConnectionDrop(cause: unknown): boolean {
+  if (!cause || typeof cause !== 'object' || !('name' in cause)) return false;
+  const { name, message } = cause as { name?: unknown; message?: unknown };
+  return name === 'AbortError' ||
+    (name === 'TypeError' && typeof message === 'string' && /fetch|network|load failed/i.test(message));
+}
+
+export function aqteErrorText(cause: unknown, fallback: string): string {
+  if (aqteConnectionDrop(cause)) return AQTE_CONNECTION_LOST;
+  const message = cause && typeof cause === 'object' && 'message' in cause ? (cause as { message?: unknown }).message : null;
+  return typeof message === 'string' && message ? message : fallback;
+}
+
+/**
+ * Runs `tick` now and `everyMs` after each completion. Browsers throttle hidden tabs, so it also
+ * re-runs at once when the tab becomes visible, the window regains focus or the network returns.
+ */
+export function aqtePollLoop(tick: () => Promise<void>, everyMs = 2000): () => void {
+  let active = true;
+  let running = false;
+  let queued = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const run = async (): Promise<void> => {
+    if (!active) return;
+    if (running) { queued = true; return; }
+    clearTimeout(timer);
+    running = true;
+    try {
+      await tick();
+    } finally {
+      running = false;
+      if (active) {
+        if (queued) { queued = false; void run(); } else timer = setTimeout(run, everyMs);
+      }
+    }
+  };
+  const browser = typeof window !== 'undefined' && typeof document !== 'undefined';
+  const wake = () => { if (document.visibilityState === 'visible') void run(); };
+  if (browser) {
+    document.addEventListener('visibilitychange', wake);
+    window.addEventListener('online', wake);
+    window.addEventListener('focus', wake);
+  }
+  void run();
+  return () => {
+    active = false;
+    clearTimeout(timer);
+    if (browser) {
+      document.removeEventListener('visibilitychange', wake);
+      window.removeEventListener('online', wake);
+      window.removeEventListener('focus', wake);
+    }
+  };
+}

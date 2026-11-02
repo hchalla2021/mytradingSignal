@@ -53,7 +53,7 @@ function harness(filename = 'AQTESection.tsx', now, sharedProduction = false) {
         const code = ts.transpileModule(readFileSync(path.join(__dirname, '..', 'lib', 'aqte-display.ts'), 'utf8'),
           { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 } }).outputText;
         const exports = {};
-        vm.runInNewContext(code, { exports, Intl, Date: context.Date });
+        vm.runInNewContext(code, { exports, Intl, Date: context.Date, setTimeout: context.setTimeout, clearTimeout: context.clearTimeout });
         return exports;
       }
       if (id === '@/components/AQTETerminal') {
@@ -762,7 +762,7 @@ test('manual Kite positions show actual price and stops without pretending to ma
   assert.match(value, /No working broker SL found/);
   await h.poll(new Error('Broker offline'));
   value = text(h.render({ selectedSymbol: 'NIFTY' }));
-  assert.match(value, /Zerodha positions unavailable/);
+  assert.match(value, /Broker offline/);
   assert.match(value, /Last known, unverified/);
   assert.doesNotMatch(value, /120.00|300.00/);
   assert.ok(h.requests.every(r => !r.options.method || r.options.method === 'GET'));
@@ -941,12 +941,64 @@ test('connection failure reports unavailable analysis and successful retry recov
   const cleanup = h.mount(fixture());
   await settle();
   assert.doesNotMatch(text(h.render()), /BUY CE|NIFTY_TEST_CE/);
-  await h.poll(new Error('Offline'));
+  await h.poll(new Error('Backend refused'));
   assert.doesNotMatch(text(h.render()), /BUY CE|NIFTY_TEST_CE/);
-  assert.match(text(h.render()), /AQTE connection unavailable/);
+  assert.match(text(h.render()), /Backend refused/);
   await h.poll(fixture());
-  assert.doesNotMatch(text(h.render()), /AQTE connection unavailable|BUY CE|NIFTY_TEST_CE/);
+  assert.doesNotMatch(text(h.render()), /Backend refused|BUY CE|NIFTY_TEST_CE/);
   cleanup();
+});
+
+test('a brief browser network drop keeps the confirmed view, then reports reconnecting without blaming auto trade', async () => {
+  let clock = Date.now();
+  const h = harness('AQTESection.tsx', () => clock);
+  h.render();
+  const cleanup = h.mount(fixture());
+  await settle();
+  await h.poll(new TypeError('Failed to fetch'));
+  assert.doesNotMatch(text(h.render()), /Server not reachable|Failed to fetch/);
+  clock += 11_000;
+  await h.poll(new TypeError('Failed to fetch'));
+  const value = text(h.render());
+  assert.match(value, /Server not reachable from this browser/);
+  assert.match(value, /Server-side auto trade does not depend on this page/);
+  clock = Date.now();
+  await h.poll(fixture());
+  assert.doesNotMatch(text(h.render()), /Server not reachable/);
+  cleanup();
+  assert.equal([...h.timers.values()].filter(t => t.delay === 2000).length, 0);
+});
+
+test('AQTE polling re-runs at once when the tab, focus or network comes back', async () => {
+  const code = ts.transpileModule(readFileSync(path.join(__dirname, '..', 'lib', 'aqte-display.ts'), 'utf8'),
+    { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 } }).outputText;
+  const listeners = {};
+  const on = (event, fn) => { listeners[event] = fn; };
+  const off = event => { delete listeners[event]; };
+  const document = { visibilityState: 'hidden', addEventListener: on, removeEventListener: off };
+  const window = { addEventListener: on, removeEventListener: off };
+  const exports = {};
+  vm.runInNewContext(code, { exports, Intl, Date, setTimeout, clearTimeout, document, window });
+  let runs = 0;
+  const stop = exports.aqtePollLoop(async () => { runs++; }, 60_000);
+  await settle();
+  assert.equal(runs, 1);
+  listeners.visibilitychange();
+  await settle();
+  assert.equal(runs, 1, 'hidden tab does not trigger an extra poll');
+  document.visibilityState = 'visible';
+  listeners.visibilitychange();
+  await settle();
+  assert.equal(runs, 2);
+  listeners.online();
+  await settle();
+  assert.equal(runs, 3);
+  stop();
+  assert.deepEqual(Object.keys(listeners), []);
+  assert.equal(exports.aqteConnectionDrop(new TypeError('Failed to fetch')), true);
+  assert.equal(exports.aqteConnectionDrop(Object.assign(new Error('aborted'), { name: 'AbortError' })), true);
+  assert.equal(exports.aqteConnectionDrop(new Error('Explicit live-control intent header required')), false);
+  assert.equal(exports.aqteConnectionDrop(new TypeError('Cannot read properties of null')), false);
 });
 
 test('underlying price follows the shared live feed immediately without waiting for AQTE polling', async () => {

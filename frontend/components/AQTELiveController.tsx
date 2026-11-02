@@ -3,7 +3,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { API_CONFIG } from '@/lib/api-config';
 import { getOrCreateVisitorId } from '@/lib/visitor-id';
-import { aqteCanExit, isAqteLiveState, type AQTELiveState, type AQTEExitRequest } from '@/lib/aqte-display';
+import { AQTE_RECONNECT_GRACE_MS, aqteCanExit, aqteConnectionDrop, aqteErrorText, aqtePollLoop, isAqteLiveState,
+  type AQTELiveState, type AQTEExitRequest } from '@/lib/aqte-display';
 
 const headers = () => ({
   'Content-Type': 'application/json',
@@ -66,14 +67,15 @@ export default function AQTELiveController({ onStatus, exitRequest = null }: {
 
   useEffect(() => {
     let active = true;
-    let timer: ReturnType<typeof setTimeout>;
     let controller: AbortController | null = null;
+    let lastOk = 0;
     const poll = async () => {
       const started = revision.current;
       controller = new AbortController();
       const timeout = setTimeout(() => controller?.abort(), 8000);
       try {
         const value = liveState(await request('status', undefined, controller.signal));
+        lastOk = Date.now();
         if (active && started === revision.current && !acting.current) {
           latest.current = value;
           setStatus(value);
@@ -81,18 +83,18 @@ export default function AQTELiveController({ onStatus, exitRequest = null }: {
           onStatus?.(value);
         }
       } catch (cause) {
+        if (aqteConnectionDrop(cause) && Date.now() - lastOk < AQTE_RECONNECT_GRACE_MS) return;
         if (active && started === revision.current && !acting.current) {
-          const message = cause instanceof Error ? cause.message : 'Live status unavailable; inspect Kite';
+          const message = aqteErrorText(cause, 'Live status unavailable; inspect Kite');
           setConnected(false);
           onStatus?.(latest.current ? { ...latest.current, connection_error: message } : null);
         }
       } finally {
         clearTimeout(timeout);
-        if (active) timer = setTimeout(poll, 2000);
       }
     };
-    void poll();
-    return () => { active = false; clearTimeout(timer); controller?.abort(); };
+    const stopPolling = aqtePollLoop(poll);
+    return () => { active = false; stopPolling(); controller?.abort(); };
   }, [onStatus]);
 
   const exitTrade = async (tradeId: string) => {

@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react';
 import { API_CONFIG } from '@/lib/api-config';
 import { getOrCreateVisitorId } from '@/lib/visitor-id';
 import AQTEPosition from '@/components/AQTEPosition';
+import { AQTE_RECONNECT_GRACE_MS, aqteConnectionDrop, aqteErrorText, aqtePollLoop } from '@/lib/aqte-display';
 
 type Position = {
   symbol: string; trading_symbol: string; exchange: string; product: string;
@@ -21,8 +22,8 @@ export default function AQTEBrokerPositions({ selectedSymbol }: { selectedSymbol
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
     let active = true;
-    let timer: ReturnType<typeof setTimeout>;
     let controller: AbortController | null = null;
+    let lastOk = 0;
     const poll = async () => {
       controller = new AbortController();
       const timeout = setTimeout(() => controller?.abort(), 15000);
@@ -40,16 +41,17 @@ export default function AQTEBrokerPositions({ selectedSymbol }: { selectedSymbol
         if (payload.paused === true && (typeof payload.reason !== 'string' || !payload.reason)) {
           throw new Error('Zerodha pause reason is unavailable');
         }
+        lastOk = Date.now();
         if (active) { setSnapshot(payload); setError(null); }
       } catch (cause) {
-        if (active) setError(cause instanceof Error ? cause.message : 'Zerodha positions unavailable; check Kite');
+        if (aqteConnectionDrop(cause) && Date.now() - lastOk < AQTE_RECONNECT_GRACE_MS) return;
+        if (active) setError(aqteErrorText(cause, 'Zerodha positions unavailable; check Kite'));
       } finally {
         clearTimeout(timeout);
-        if (active) timer = setTimeout(poll, 2000);
       }
     };
-    void poll();
-    return () => { active = false; controller?.abort(); clearTimeout(timer); };
+    const stopPolling = aqtePollLoop(poll);
+    return () => { active = false; controller?.abort(); stopPolling(); };
   }, []);
   const positions = snapshot?.positions.filter(p => p.symbol === selectedSymbol) ?? [];
   const indexLabel = selectedSymbol === 'BANKNIFTY' ? 'BANK NIFTY' : selectedSymbol;

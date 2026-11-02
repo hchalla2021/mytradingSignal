@@ -10,7 +10,8 @@ import AQTEDailyControl from '@/components/AQTEDailyControl';
 import AQTETerminal from '@/components/AQTETerminal';
 import AQTEBrokerPositions from '@/components/AQTEBrokerPositions';
 import AQTEEngineDeck from '@/components/AQTEEngineDeck';
-import { aqteCanExit, aqteDaySummary, aqteEngineView, aqteFeedCurrent, aqteLiveMetrics, isAqteEngineEvent, isAqteIntelligence, isAqteRuleChecks,
+import { AQTE_RECONNECT_GRACE_MS, aqteCanExit, aqteConnectionDrop, aqteDaySummary, aqteEngineView, aqteErrorText, aqteFeedCurrent, aqteLiveMetrics,
+  aqtePollLoop, isAqteEngineEvent, isAqteIntelligence, isAqteRuleChecks,
   type AQTEEngineEvent, type AQTEEnginePolicy, type AQTELiveState, type AQTEExitRequest, type AQTESignal } from '@/lib/aqte-display';
 import { prefetchChartHistory } from '@/hooks/useChartHistory';
 
@@ -125,9 +126,9 @@ function AQTESection({ marketData, isConnected = false }: { marketData?: MarketD
 
   useEffect(() => {
     let active = true;
-    let timer: ReturnType<typeof setTimeout>;
     let freshnessTimer: ReturnType<typeof setTimeout>;
     let controller: AbortController | null = null;
+    let lastOk = 0;
     const advanceClock = () => {
       if (!active) return;
       setNow(Date.now());
@@ -145,21 +146,22 @@ function AQTESection({ marketData, isConnected = false }: { marketData?: MarketD
         const payload: unknown = await response.json();
         if (!isSnapshot(payload)) throw new Error('Invalid AQTE response');
         if (Date.now() / 1000 - payload.generated_at > 10) throw new Error('AQTE response is stale');
+        lastOk = Date.now();
         if (active) {
           setSnapshot(payload);
           setError(null);
         }
       } catch (cause) {
-        if (active) setError(cause instanceof Error ? cause.message : 'AQTE connection unavailable');
+        if (aqteConnectionDrop(cause) && Date.now() - lastOk < AQTE_RECONNECT_GRACE_MS) return;
+        if (active) setError(aqteErrorText(cause, 'AQTE connection unavailable'));
       } finally {
         clearTimeout(timeout);
-        if (active) timer = setTimeout(poll, 2000);
       }
     };
-    void poll();
+    const stopPolling = aqtePollLoop(poll);
     return () => {
       active = false;
-      clearTimeout(timer);
+      stopPolling();
       clearTimeout(freshnessTimer);
       controller?.abort();
     };

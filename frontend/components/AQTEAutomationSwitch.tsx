@@ -4,7 +4,8 @@ import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { API_CONFIG } from '@/lib/api-config';
 import { notifyAppAccessExpired } from '@/lib/app-access-events';
 import { getOrCreateVisitorId } from '@/lib/visitor-id';
-import { aqteControllerCurrent, isAqteLiveState, type AQTELiveState } from '@/lib/aqte-display';
+import { AQTE_RECONNECT_GRACE_MS, aqteConnectionDrop, aqteControllerCurrent, aqteErrorText, aqtePollLoop, isAqteLiveState,
+  type AQTELiveState } from '@/lib/aqte-display';
 
 export type AutomationState = AQTELiveState;
 type Command = 'on' | 'off' | 'reset';
@@ -74,32 +75,33 @@ export default function AQTEAutomationSwitch({ onStatus }: {
   const revision = useRef(0);
 
   useEffect(() => {
+    let lastOk = 0;
     let active = true;
-    let timer: ReturnType<typeof setTimeout>;
     const poll = async () => {
-      if (!changing.current) {
-        const version = revision.current;
-        try {
-          const value = await request();
-          if (active && !changing.current && version === revision.current) {
-            setStatus(value);
-            setUnknown(false);
-            setError(null);
-            onStatus?.(value);
-          }
-        } catch (cause) {
-          if (active && !changing.current && version === revision.current) {
-            setUnknown(true);
-            setSaved(false);
-            onStatus?.(null);
-            setError(cause instanceof Error ? cause.message : 'Automation status unavailable');
-          }
+      if (changing.current) return;
+      const version = revision.current;
+      try {
+        const value = await request();
+        lastOk = Date.now();
+        if (active && !changing.current && version === revision.current) {
+          setStatus(value);
+          setUnknown(false);
+          setError(null);
+          onStatus?.(value);
+        }
+      } catch (cause) {
+        // A brief browser-side drop keeps the state the backend confirmed moments ago.
+        if (aqteConnectionDrop(cause) && Date.now() - lastOk < AQTE_RECONNECT_GRACE_MS) return;
+        if (active && !changing.current && version === revision.current) {
+          setUnknown(true);
+          setSaved(false);
+          onStatus?.(null);
+          setError(aqteErrorText(cause, 'Automation status unavailable'));
         }
       }
-      if (active) timer = setTimeout(poll, 2000);
     };
-    void poll();
-    return () => { active = false; clearTimeout(timer); };
+    const stopPolling = aqtePollLoop(poll);
+    return () => { active = false; stopPolling(); };
   }, [onStatus]);
 
   const act = async (command: Command) => {
