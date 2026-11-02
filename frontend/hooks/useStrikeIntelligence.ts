@@ -432,9 +432,10 @@ async function fetchWithFallback(): Promise<{ success?: boolean; data?: Record<s
   const fallback = getLocalApiUrl();
   const isLocal = typeof window !== 'undefined' && window.location.hostname === 'localhost';
 
-  // Build URL list: try local-first when on localhost, always include localhost:8000 as last resort
   const urlSet = new Set<string>();
-  if (isLocal) {
+  if (getEnvironmentConfig().sharedProduction) {
+    urlSet.add(primary);
+  } else if (isLocal) {
     urlSet.add(fallback);
     urlSet.add('http://localhost:8000/api/strike-intelligence');
     urlSet.add(primary);
@@ -557,9 +558,10 @@ export function useStrikeIntelligence() {
       const local = getLocalWsUrl();
       const port8000 = 'ws://localhost:8000/ws/strike-intelligence';
       const isLocal = typeof window !== 'undefined' && window.location.hostname === 'localhost';
-      // Build unique URL list — always include localhost:8000
       const urlSet = new Set<string>();
-      if (isLocal) {
+      if (getEnvironmentConfig().sharedProduction) {
+        urlSet.add(primary);
+      } else if (isLocal) {
         urlSet.add(local);
         urlSet.add(port8000);
         urlSet.add(primary);

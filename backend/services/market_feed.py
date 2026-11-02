@@ -145,6 +145,8 @@ QUOTE_VOLUMES = {}
 # feeds live futures volume/OI into index ticks and the Big Player Radar)
 FUT_TOKEN_MAP: Dict[int, str] = {}
 
+REST_WS_RECOVERY_SECONDS = 30
+
 
 class MarketFeedService:
     """Service to handle Zerodha KiteTicker market data feed."""
@@ -175,6 +177,7 @@ class MarketFeedService:
         self._analysis_semaphores: Dict[str, asyncio.Semaphore] = {}
         self._retry_delay: int = 5  # Start with 5 seconds, exponential backoff
         self._using_rest_fallback: bool = False  # Flag for REST API fallback mode
+        self._ws_recovery_after: Optional[float] = None  # Monotonic deadline for leaving REST fallback
         self._feed_loop_active: bool = False  # Guards against duplicate start() loops
     
     @property
@@ -971,6 +974,8 @@ class MarketFeedService:
         # 🔥 Set connection flag
         self._is_connected = True
         self._using_rest_fallback = False
+        self._consecutive_403_errors = 0
+        self._ws_recovery_after = None
         
         # 🔥 Notify watchdog of connection
         feed_watchdog.on_connect()
@@ -1099,8 +1104,9 @@ class MarketFeedService:
         """Callback on error."""
         error_msg = f"{code} - {reason}"
         
-        # 🔥 Track 403 errors to prevent spam
-        is_403_error = code == 1006 or "403" in str(reason) or "Forbidden" in str(reason)
+        # KiteTicker reports every unclean close as 1006; only a rejected handshake is an auth failure.
+        reason_text = str(reason)
+        is_403_error = "403" in reason_text or "forbidden" in reason_text.lower()
         
         if is_403_error:
             self._consecutive_403_errors += 1
@@ -1116,7 +1122,7 @@ class MarketFeedService:
                 print("   1. Click LOGIN button in the UI")
                 print("   2. Or run: python quick_token_fix.py")
                 print("\n🔄 Switching to REST API fallback mode...")
-                print("   (No more WebSocket retry attempts until token refresh)")
+                print(f"   (WebSocket recovery retried every {REST_WS_RECOVERY_SECONDS}s+ during market hours)")
                 print("="*80 + "\n")
                 
                 # Notify watchdog and auth manager
@@ -1213,14 +1219,13 @@ class MarketFeedService:
             kite.set_access_token(fresh.zerodha_access_token)
             
             # Simple profile check - if this works, token is valid
-            profile = kite.profile()
+            profile = await asyncio.to_thread(kite.profile)
             print(f"✅ Token validated - User: {profile.get('user_name', 'Unknown')}")
             print(f"   Email: {profile.get('email', 'Unknown')}")
             
-            # Reset error counters on successful validation
+            # Keep REST fallback until KiteTicker actually connects.
             self._consecutive_403_errors = 0
             self._retry_delay = 5
-            self._using_rest_fallback = False
             
             return True
             
@@ -1248,6 +1253,17 @@ class MarketFeedService:
             print(f"⚠️ Background data fetch failed: {e}")
             print("   → Will continue with live WebSocket data")
     
+    def _rest_ws_recovery_due(self) -> bool:
+        """REST quotes keep the dashboard alive, but AQTE needs KiteTicker ticks."""
+        if not (self.running and self._using_rest_fallback and is_market_open()):
+            self._ws_recovery_after = None
+            return False
+        now = time_module.monotonic()
+        if self._ws_recovery_after is None:
+            self._ws_recovery_after = now + REST_WS_RECOVERY_SECONDS
+            return False
+        return now >= self._ws_recovery_after
+
     async def _attempt_reconnect(self):
         """Attempt to reconnect with exponential backoff and token validation."""
         try:
@@ -1462,6 +1478,13 @@ class MarketFeedService:
                                 print("📡 REST API fallback: Market data fetched and broadcast")
                         
                         last_rest_poll_time = current_time
+
+                if self._rest_ws_recovery_due():
+                    print("📡 REST fallback cannot feed AQTE live ticks - retrying Zerodha WebSocket")
+                    await self._attempt_reconnect()
+                    self._ws_recovery_after = time_module.monotonic() + max(
+                        REST_WS_RECOVERY_SECONDS, self._retry_delay
+                    )
                 
                 # Refresh last traded data every 5 minutes (keeps data fresh even after market)
                 if (current_time - last_refresh_time).total_seconds() > 300:  # 5 minutes

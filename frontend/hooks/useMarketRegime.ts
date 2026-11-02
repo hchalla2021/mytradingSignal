@@ -91,7 +91,8 @@ async function fetchRegimeWithFallback(): Promise<{ success?: boolean; data?: Re
   
   // Try local first when running on localhost (faster, avoids CORS issues with production)
   const isLocal = typeof window !== 'undefined' && window.location.hostname === 'localhost';
-  const urls = isLocal && fallback !== primary ? [fallback, primary] : [primary, fallback];
+  const urls = getEnvironmentConfig().sharedProduction ? [primary] :
+    isLocal && fallback !== primary ? [fallback, primary] : [primary, fallback];
   
   for (const url of urls) {
     try {
@@ -173,7 +174,7 @@ export function useMarketRegime() {
       const primary = getRegimeWsUrl();
       const local = getLocalWsUrl();
       const isLocal = typeof window !== 'undefined' && window.location.hostname === 'localhost';
-      if (primary !== local) {
+      if (!getEnvironmentConfig().sharedProduction && primary !== local) {
         wsUrlsRef.current = isLocal ? [local, primary] : [primary, local];
       } else {
         wsUrlsRef.current = [primary];

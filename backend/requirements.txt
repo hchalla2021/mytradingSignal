@@ -50,6 +50,6 @@ slowapi==0.1.9
 # Add TensorFlow only if you really want the TF softmax path:
 #   pip install tensorflow==2.17.0
 lightgbm==4.5.0
+# Also used by optional AQTE offline training/shadow inference; no live ML order authority.
 # torch==2.4.1   # uncomment + install from CPU wheel index
 # tensorflow==2.17.0  # optional, large dep
-

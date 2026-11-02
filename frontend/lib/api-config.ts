@@ -56,6 +56,9 @@ function shouldRejectLocalUrlOnPublicHost(value: string): boolean {
  * Uses environment detection to automatically switch between local and production
  */
 export function getApiUrl(): string {
+  const config = getEnvironmentConfig();
+  if (config.sharedProduction) return config.apiUrl;
+
   // Priority 1: Explicit environment variable
   if (process.env.NEXT_PUBLIC_API_URL) {
     const explicit = normalizeResolvedUrl(process.env.NEXT_PUBLIC_API_URL);
@@ -65,7 +68,6 @@ export function getApiUrl(): string {
   }
 
   // Priority 2: Environment-based detection
-  const config = getEnvironmentConfig();
   const detected = normalizeResolvedUrl(config.apiUrl || '');
   if (detected && !shouldRejectLocalUrlOnPublicHost(detected)) {
     return detected;
@@ -79,6 +81,9 @@ export function getApiUrl(): string {
  * Get WebSocket URL based on environment
  */
 export function getWebSocketUrl(): string {
+  const config = getEnvironmentConfig();
+  if (config.sharedProduction) return config.wsUrl;
+
   // Priority 1: Explicit environment variable
   if (process.env.NEXT_PUBLIC_WS_URL) {
     const explicit = normalizeResolvedUrl(process.env.NEXT_PUBLIC_WS_URL);
@@ -88,7 +93,6 @@ export function getWebSocketUrl(): string {
   }
 
   // Priority 2: Environment-based detection
-  const config = getEnvironmentConfig();
   const detected = normalizeResolvedUrl(config.wsUrl || '');
   if (detected && !shouldRejectLocalUrlOnPublicHost(detected)) {
     return detected;
@@ -102,6 +106,10 @@ export function getWebSocketUrl(): string {
  * Use this throughout the app for consistency
  */
 export const API_CONFIG = {
+  get sharedProduction(): boolean {
+    return getEnvironmentConfig().sharedProduction;
+  },
+
   /**
    * Get base API URL
    */

@@ -102,6 +102,16 @@ function AQTETerminal({ symbol, signal, unavailable, active, tick, liveStatus, o
       live.error || liveStatus?.error ? 'CHECK KITE' : filled ? 'LIVE TRADE' : 'ORDER PENDING';
   const ring = 2 * Math.PI * 52;
   const automation = currentStatus && liveStatus?.automation_on && !liveStatus.killed;
+  const automationWaiting = currentStatus && !automation && liveStatus?.automation_wanted && !liveStatus.killed;
+  const waitingReason = !currentStatus ? 'Live controller status unavailable; entry state unverified' :
+    liveStatus?.error ? liveStatus.error :
+    liveStatus?.killed ? 'Emergency stop latched; new entries blocked' :
+    !automation && !automationWaiting ? 'Auto Trade OFF; new entries blocked' :
+    automationWaiting ? liveStatus?.automation_waiting || 'Waiting for daily preflight and arming' :
+    unavailable ? 'Current signal data unavailable; do not assume an entry is ready' :
+    signal?.reasons.length ? signal.reasons.join(' · ') :
+      'Waiting for a qualifying CE/PE setup and live quality, risk and broker checks';
+  const warmup = !unavailable ? signal?.warmup : undefined;
   const managing = currentStatus && filled && !!metrics && !liveStatus?.error;
   const prefix = `aqte-terminal-${symbol}`;
   return (
@@ -117,7 +127,7 @@ function AQTETerminal({ symbol, signal, unavailable, active, tick, liveStatus, o
           <div className="aqx-chips">
             {live ? <>
               <span className="aqx-chip aqx-chip-buy">BUY</span>
-              <span className={`aqx-chip ${automation ? 'aqx-chip-auto' : ''}`}>{!currentStatus ? 'AUTO UNKNOWN' : automation ? 'AUTO ON' : 'ENTRIES OFF'}</span>
+              <span className={`aqx-chip ${automation ? 'aqx-chip-auto' : ''}`}>{!currentStatus ? 'AUTO UNKNOWN' : automation ? 'AUTO ON' : automationWaiting ? 'AUTO WAITING' : 'ENTRIES OFF'}</span>
             </> : (
               <span className={`aqx-chip ${direction === 'BULLISH' ? 'aqx-chip-buy' : direction === 'BEARISH' ? 'aqx-chip-sell' : ''}`}>
                 {direction === 'WAITING' ? 'NO BIAS' : direction}
@@ -127,6 +137,14 @@ function AQTETerminal({ symbol, signal, unavailable, active, tick, liveStatus, o
         </div>
         {(live?.error || liveStatus?.error) && (
           <p role="alert" className="aqx-footnote aqx-down">{live?.error || liveStatus?.error}</p>
+        )}
+        {!live && (
+          <p role="status" aria-label="Entry readiness" className="aqx-footnote">
+            {waitingReason}
+            {warmup && warmup.completed < warmup.required && (
+              <span> · Warm-up: {warmup.completed}/{warmup.required} consecutive completed futures candles</span>
+            )}
+          </p>
         )}
         <div className="aqx-hero-grid">
           <dl className="aqx-price-list" aria-label="Trade prices">
@@ -208,8 +226,8 @@ function AQTETerminal({ symbol, signal, unavailable, active, tick, liveStatus, o
         </ol>
       </article>
       <aside className="aqx-aside" id={`${prefix}-risk`}>
-        <section className="aqx-card aqx-engine" aria-label="AI Trade Engine">
-          <h4 className="aqx-panel-title"><span className="aqx-badge-ai" aria-hidden="true">AI</span>AI Trade Engine</h4>
+        <section className="aqx-card aqx-engine" aria-label="Rule-Based Trade Engine">
+          <h4 className="aqx-panel-title"><span className="aqx-badge-ai" aria-hidden="true">R</span>Rule-Based Trade Engine</h4>
           {checks.length ? <ul className="aqx-check-list">
             {checks.map(check => (
               <li key={check.label}><Check tone={check.tone} /><span>{check.label}:</span><strong className={`aqx-${check.tone}`}>{check.value}</strong></li>
@@ -217,7 +235,7 @@ function AQTETerminal({ symbol, signal, unavailable, active, tick, liveStatus, o
             <li><Check tone={score != null ? 'up' : 'flat'} /><span>Rule score:</span>
               <strong className="aqx-pill">{score != null ? `${aqtePrice(score)} / 100` : '--'}</strong></li>
           </ul> : <p className="aqx-empty">{unavailable ? 'Waiting for current backend evidence' : 'No live intelligence yet'}</p>}
-          <p className="aqx-footnote">Explainable futures rules · Depth shares are not traded buyer/seller volume · Not a win probability</p>
+          <p className="aqx-footnote">Unvalidated futures rules · No ML order decisions · Not a win probability. Depth shares are not traded buyer/seller volume.</p>
         </section>
         <section className="aqx-card aqx-exit-rules" aria-label="Auto exit rules">
           <h4 className="aqx-panel-title"><span aria-hidden="true" className="aqx-target-icon">◎</span>Auto Exit Rules

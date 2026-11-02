@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { API_CONFIG } from '@/lib/api-config';
+import { notifyAppAccessExpired } from '@/lib/app-access-events';
 import { getOrCreateVisitorId } from '@/lib/visitor-id';
 import { aqteControllerCurrent, isAqteLiveState, type AQTELiveState } from '@/lib/aqte-display';
 
@@ -35,11 +36,19 @@ async function request(command?: Command): Promise<AutomationState> {
     });
     const value: unknown = await response.json();
     if (!response.ok) {
+      if (response.status === 401) notifyAppAccessExpired();
       const detail = value && typeof value === 'object' && 'detail' in value ? value.detail : null;
+      if (response.status === 403 && detail === 'Untrusted live-control origin') {
+        const domain = process.env.NEXT_PUBLIC_PRODUCTION_DOMAIN;
+        const site = domain ? `https://${domain}` : 'the production site';
+        throw new Error(`Production rejects Auto Trade switching from ${window.location.origin}. Use ${site}, or add this origin to production CORS_ORIGINS.`);
+      }
       throw new Error(typeof detail === 'string' ? detail : 'Switch request failed. Check server status before retrying.');
     }
     const state = automationState(value);
-    if ((command === 'on' || command === 'off') && state.automation_on !== (command === 'on')) {
+    // Older backends lack automation_wanted; fall back to automation_on there.
+    const wanted = state.automation_wanted ?? state.automation_on;
+    if ((command === 'on' && !wanted) || (command === 'off' && (wanted || state.automation_on))) {
       throw new Error('Backend did not confirm the requested automation state. Verify status before retrying.');
     }
     if (command === 'reset' && (state.killed || state.automation_on || state.armed ||
@@ -117,7 +126,8 @@ export default function AQTEAutomationSwitch({ onStatus }: {
     }
   };
   const known = !unknown && !!status;
-  const on = !unknown && status?.automation_on === true && !status.killed;
+  const on = known && (status.automation_wanted ?? status.automation_on) === true && !status.killed;
+  const waiting = on && !status.automation_on;
   const canStart = !unknown && !!status?.ready && status.enabled && status.paper_validated && !status.killed;
   const canReset = known && aqteControllerCurrent(status) && status.killed &&
     status.flatten_pending === false && status.active === null;
@@ -130,6 +140,9 @@ export default function AQTEAutomationSwitch({ onStatus }: {
   };
   return (
     <div className="aqte-automation-control">
+      {API_CONFIG.sharedProduction && (
+        <p className="text-right text-xs text-amber-200">Shared production · REAL ORDERS</p>
+      )}
       <button
         type="button" role={known ? 'switch' : undefined} aria-checked={known ? on : undefined}
         aria-label={`AQTE automated real trading${known ? '' : ' · status unavailable'}`}
@@ -159,9 +172,14 @@ export default function AQTEAutomationSwitch({ onStatus }: {
       </p>
       <p id="aqte-automation-help" className="sr-only">
         {unknown ? 'Status unknown. Use this control to request OFF; verify acknowledgement.' :
-          on ? 'Automatic real entries enabled. OFF blocks new entries; protective exits continue.' :
-            'Default OFF. Confirm ON to run preflight and arm today. Backend approval is required.'}
+          on ? 'Auto trade stays ON until you switch it OFF. OFF blocks new entries; protective exits continue.' :
+            'Default OFF. Confirm ON any time; it arms itself during weekday entry hours. Backend approval is required.'}
       </p>
+      {waiting && (
+        <p role="status" className="text-right text-xs text-amber-200">
+          ON · {status.automation_waiting || 'Waiting to arm for the market session'}
+        </p>
+      )}
       {known && !status.killed && !on && (!status.ready || !status.enabled || !status.paper_validated) && (
         <p role="status" className="text-right text-xs text-amber-200">
           {!status.ready ? 'ON locked · Live controller is not ready' : 'ON locked · Backend live-trading approval is required'}
@@ -170,7 +188,7 @@ export default function AQTEAutomationSwitch({ onStatus }: {
       {confirming === 'on' && (
         <div role="group" aria-label="Confirm automated real trading" onKeyDown={cancelOnEscape}
           className="space-y-2 rounded-lg border border-amber-400/40 bg-slate-950 p-3 text-xs">
-          <p className="leading-relaxed text-amber-100">Start automated real-money orders? ON checks Kite and static IP, arms today and scans for qualifying one-lot BUY CE/BUY PE entries using your saved settings. New entries stop at 3:15 PM IST. No qualifying signal means no trade.</p>
+          <p className="leading-relaxed text-amber-100">Start automated real-money orders? ON stays saved until you switch OFF, even when the market is closed. Every weekday from 9:15 AM IST it checks Kite and static IP, arms itself and scans for qualifying one-lot BUY CE/BUY PE entries using your saved settings. New entries stop at 3:15 PM IST. No qualifying signal means no trade.</p>
           <p className={`leading-relaxed ${status?.unvalidated_rules ? 'text-rose-200' : 'text-slate-300'}`}>
             {status?.unvalidated_rules
               ? 'Server allows unvalidated rule entries: fully aligned setups can place real one-lot orders.'

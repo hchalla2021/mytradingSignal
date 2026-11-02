@@ -30,10 +30,19 @@ KILL_MAX_REJECTS = 5
 KILL_SETTLE_SECONDS = 4
 # Marketable limit: fills at the best available price, bounded to stay inside exchange price bands.
 KILL_SLIPPAGE = 0.05
+# A standing ON request retries preflight/arming at most once per minute while it waits.
+ACTIVATION_RETRY_SECONDS = 60
+ENTRY_CUTOFF_MINUTE = 15 * 60 + 15
+MARKET_WAIT = "Waiting for market: auto trade arms on weekdays 09:15 to 15:15 IST"
 
 
 class LiveBlocked(ValueError):
     pass
+
+
+def entry_window(at):
+    dt = datetime.fromtimestamp(at, IST)
+    return session(at) and dt.hour * 60 + dt.minute < ENTRY_CUTOFF_MINUTE
 
 
 def kill_price(ltp, side):
@@ -68,11 +77,14 @@ class AQTELiveService:
         self.broker = broker or broker_client
         self.ip_check = ip_check or outbound_ip
         self.lock = threading.RLock()
-        self.state = {"armed_day": None, "automation_on": False, "killed": False, "account": None,
-                      "active": None, "trades": [], "used": [], "daily_controls": defaults(), "daily_entries": []}
+        self.state = {"armed_day": None, "automation_on": False, "automation_wanted": False, "killed": False,
+                      "account": None, "active": None, "trades": [], "used": [], "daily_controls": defaults(),
+                      "daily_entries": []}
         self.proposals = {}
         self.check = None
         self.error = None
+        self.waiting = None
+        self.next_activation = 0.0
         self.ready = False
         self.task = None
         self.stop_event = asyncio.Event()
@@ -120,13 +132,15 @@ class AQTELiveService:
         self.state.setdefault("daily_controls", defaults())
         self.state.setdefault("daily_entries", [])
         self.state.setdefault("flatten_pending", False)
+        # Standing ON survives restarts; the monitor re-runs preflight before any new entry.
+        self.state["automation_wanted"] = bool(self.state.get("automation_wanted")) and not self.state["killed"]
         if set(self.state["daily_controls"]) != set(SYMBOLS):
             raise LiveBlocked("Invalid saved daily-control index set; journal requires repair before trading")
         self.state["daily_controls"] = {
             symbol: IndexControl(**control).model_dump()
             for symbol, control in self.state["daily_controls"].items()
         }
-        self.save("RESTART_DISARMED")
+        self.save("RESTART_DISARMED", automation_wanted=self.state["automation_wanted"])
         self.ready = True
 
     def save(self, kind, **payload):
@@ -140,6 +154,7 @@ class AQTELiveService:
             self.ready = False
             self.state["armed_day"] = None
             self.state["automation_on"] = False
+            self.state["automation_wanted"] = False
             logger.exception("AQTE live journal failed; broker mutations blocked")
             raise
 
@@ -161,14 +176,18 @@ class AQTELiveService:
                         order, now, healthy=market.started and not market.failed.is_set())
             trades = self.state["trades"]
             visible_trades = [trade for trade in trades[:-20] if day(trade["exit_at"]) == day(now)] + trades[-20:]
+            automation_on = bool(self.state.get("automation_on")) and \
+                self.state["armed_day"] == day(now) and not self.state["killed"]
+            wanted = bool(self.state.get("automation_wanted")) and not self.state["killed"]
             return {
                 "generated_at": now, "daily_counts": counts(self.state, now),
                 "enabled": cfg.aqte_live_enabled, "paper_validated": cfg.aqte_live_paper_validated,
                 "unvalidated_rules": cfg.aqte_live_allow_unvalidated_rules,
                 "expected_ip": cfg.aqte_live_static_ip, "preflight": copy.deepcopy(self.check),
-                "armed": self.state["armed_day"] == day(time.time()) and not self.state["killed"],
-                "automation_on": bool(self.state.get("automation_on")) and
-                    self.state["armed_day"] == day(time.time()) and not self.state["killed"],
+                "armed": self.state["armed_day"] == day(now) and not self.state["killed"],
+                "automation_on": automation_on, "automation_wanted": wanted,
+                "automation_waiting": self.waiting_reason(now) if wanted and not automation_on else None,
+                "entry_window": entry_window(now),
                 "killed": self.state["killed"], "flatten_pending": bool(self.state.get("flatten_pending")),
                 "active": active, "error": self.error,
                 "ready": self.ready, "trades": copy.deepcopy(visible_trades),
@@ -364,23 +383,66 @@ class AQTELiveService:
         return cfg, pnl
 
     def start_automation(self):
+        """Standing ON: accepted any time; arms itself inside each weekday 09:15-15:15 IST window."""
         with self.lock:
             self.config_guard()
             if self.state["killed"]:
                 raise LiveBlocked("Emergency stop is latched; operator review is required before restarting")
-            now = time.time()
-            dt = datetime.fromtimestamp(now, IST)
-            if not session(now) or dt.hour * 60 + dt.minute >= 915:
-                raise LiveBlocked("New automated entries are permitted only on trading weekdays from 09:15 until 15:15 IST")
+            if not self.state.get("automation_wanted"):
+                self.state["automation_wanted"] = True
+                self.save("AUTOMATION_REQUESTED", note="Stays ON until OFF or emergency stop")
+            self.waiting = None
+            self.next_activation = 0.0
+            if entry_window(time.time()):
+                self.try_activate()
+            return self.status()
+
+    def waiting_reason(self, now):
+        if not entry_window(now):
+            return MARKET_WAIT
+        if self.state["active"]:
+            return "Waiting for the open AQTE trade to finish before arming"
+        return self.waiting or "Arming for today's session"
+
+    def try_activate(self):
+        now = time.time()
+        try:
             if self.state["armed_day"] != day(now):
                 self.preflight()
                 self.arm()
-            return self.set_automation(True)
+            self.set_automation(True)
+            self.waiting = None
+            return True
+        except Exception as exc:
+            reason = str(exc) if isinstance(exc, LiveBlocked) else f"{type(exc).__name__}: {exc}"
+            self.next_activation = now + ACTIVATION_RETRY_SECONDS
+            if reason != self.waiting:
+                self.waiting = reason
+                logger.warning("AQTE auto trade ON is waiting: %s", reason)
+                if self.ready:
+                    try:
+                        self.save("AUTOMATION_WAITING", reason=reason[:500])
+                    except (sqlite3.Error, OSError, ValueError):
+                        logger.exception("Could not persist automation waiting reason")
+            return False
+
+    def auto_activate(self):
+        with self.lock:
+            now = time.time()
+            if (not self.state.get("automation_wanted") or self.state["killed"] or not self.ready or
+                    self.state.get("flatten_pending") or self.state["active"] or
+                    now < self.next_activation or not entry_window(now)):
+                return
+            if self.state.get("automation_on") and self.state["armed_day"] == day(now):
+                return
+            self.try_activate()
 
     def set_automation(self, enabled):
         with self.lock:
             if not enabled:
                 self.state["automation_on"] = False
+                self.state["automation_wanted"] = False
+                self.waiting = None
                 self.proposals.clear()
                 self.save("AUTOMATION_OFF", note="New entries blocked; existing protection and exits continue")
                 return self.status()
@@ -393,6 +455,7 @@ class AQTELiveService:
             if dt.hour * 60 + dt.minute >= 915:
                 raise LiveBlocked("No new automated entries after 15:15 IST")
             self.state["automation_on"] = True
+            self.state["automation_wanted"] = True
             self.error = None
             self.save("AUTOMATION_ON", account=self.state["account"])
             return self.status()
@@ -575,6 +638,8 @@ class AQTELiveService:
             if active["filled"] <= active.get("exited", 0):
                 raise LiveBlocked("No confirmed remaining fill to close; inspect the pending order in Kite")
             self.state["automation_on"] = False
+            self.state["automation_wanted"] = False
+            self.waiting = None
             self.proposals.clear()
             if not active["exit_requested"]:
                 active.update(exit_requested="MANUAL_EXIT", exit_request_at=time.time())
@@ -788,7 +853,9 @@ class AQTELiveService:
 
     def stop_entries(self):
         with self.lock:
-            self.state.update(armed_day=None, automation_on=False, killed=True, flatten_pending=True)
+            self.state.update(armed_day=None, automation_on=False, automation_wanted=False,
+                              killed=True, flatten_pending=True)
+            self.waiting = None
             self.proposals.clear()
             self.kill_sent.clear()
             if self.state["active"]:
@@ -914,8 +981,9 @@ class AQTELiveService:
                 raise LiveBlocked("Emergency stop is not latched")
             if self.state.get("flatten_pending") or self.state["active"]:
                 raise LiveBlocked("Emergency square-off still in progress; wait until Kite shows no open positions or orders")
-            self.state.update(killed=False, armed_day=None, automation_on=False)
+            self.state.update(killed=False, armed_day=None, automation_on=False, automation_wanted=False)
             self.error = None
+            self.waiting = None
             self.save("EMERGENCY_RESET", note="Operator reviewed; automation remains OFF")
             return self.status()
 
@@ -927,6 +995,8 @@ class AQTELiveService:
             self.error = message
             self.state["armed_day"] = None
             self.state["automation_on"] = False
+            # A standing ON request re-arms through a fresh preflight after the retry delay.
+            self.next_activation = time.time() + ACTIVATION_RETRY_SECONDS
             if self.ready and changed:
                 try:
                     self.save("AUTOMATION_FAULT_STOPPED", error=message[:500])
@@ -940,6 +1010,7 @@ class AQTELiveService:
                     await asyncio.to_thread(self.emergency_flatten)
                 else:
                     await asyncio.to_thread(self.reconcile)
+                    await asyncio.to_thread(self.auto_activate)
                     await asyncio.to_thread(self.automated_entry)
             except Exception as exc:
                 logger.exception("AQTE live reconciliation requires attention; inspect broker terminal")

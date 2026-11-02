@@ -76,26 +76,35 @@ export function detectEnvironment(): Environment {
  */
 export function getEnvironmentConfig() {
   const env = detectEnvironment();
+  const sharedProduction = process.env.NODE_ENV === 'development' &&
+    process.env.NEXT_PUBLIC_SHARED_PRODUCTION === 'true';
+  const browser = typeof window !== 'undefined';
+  const sharedApiUrl = browser ? window.location.origin : '';
+  const sharedWsUrl = browser
+    ? `${window.location.protocol === 'https:' ? 'wss:' : 'ws:'}//${window.location.host}/ws/market`
+    : '';
 
   const config = {
     environment: env,
+    sharedProduction,
     isProduction: env === 'production',
     isLocal: env === 'local',
 
     // API URLs - NO FALLBACKS, must be set in .env.local
     apiUrl:
-      env === 'production'
+      sharedProduction ? sharedApiUrl : env === 'production'
         ? process.env.NEXT_PUBLIC_PRODUCTION_API_URL || process.env.NEXT_PUBLIC_API_URL || ''
         : process.env.NEXT_PUBLIC_LOCAL_API_URL || process.env.NEXT_PUBLIC_API_URL || '',
 
     // WebSocket URLs - NO FALLBACKS, must be set in .env.local
     wsUrl:
-      env === 'production'
+      sharedProduction ? sharedWsUrl : env === 'production'
         ? process.env.NEXT_PUBLIC_PRODUCTION_WS_URL || process.env.NEXT_PUBLIC_WS_URL || ''
         : process.env.NEXT_PUBLIC_LOCAL_WS_URL || process.env.NEXT_PUBLIC_WS_URL || '',
 
     // Display info
-    displayName: env === 'production' ? 'Production' : 'Local Development',
+    displayName: sharedProduction ? 'Local UI / Shared Production (real orders)' :
+      env === 'production' ? 'Production' : 'Local Development',
     badge: env === 'production' ? '🏭 PROD' : '🧪 DEV',
   };
 

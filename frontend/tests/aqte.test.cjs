@@ -5,11 +5,11 @@ const path = require('node:path');
 const vm = require('node:vm');
 const ts = require('typescript');
 
-function harness(filename = 'AQTESection.tsx', now) {
+function harness(filename = 'AQTESection.tsx', now, sharedProduction = false) {
   const states = [];
   const timers = new Map();
   const requests = [];
-  let effect, cursor, timer = 0, response;
+  let effect, cursor, timer = 0, response, accessExpired = 0;
   const react = {
     memo: component => component,
     useState: initial => {
@@ -43,7 +43,7 @@ function harness(filename = 'AQTESection.tsx', now) {
     require: id => {
       if (id === 'react') return react;
       if (id === 'react/jsx-runtime') return require(id);
-      if (id === '@/lib/api-config') return { API_CONFIG: { endpoint: p => p } };
+      if (id === '@/lib/api-config') return { API_CONFIG: { endpoint: p => p, sharedProduction } };
       if (id === '@/components/AQTELiveController') return { default: () => null };
       if (id === '@/components/AQTEAutomationSwitch') return { default: () => null };
       if (id === '@/components/AQTEDailyControl') return { default: () => null };
@@ -69,6 +69,7 @@ function harness(filename = 'AQTESection.tsx', now) {
         return { default: props => component.render(props) };
       }
       if (id === '@/lib/visitor-id') return { getOrCreateVisitorId: () => 'test-device' };
+      if (id === '@/lib/app-access-events') return { notifyAppAccessExpired: () => { accessExpired++; } };
       throw new Error(`Unexpected dependency ${id}`);
     },
   };
@@ -86,6 +87,7 @@ function harness(filename = 'AQTESection.tsx', now) {
       await pending[1].fn();
     },
     timers, requests,
+    get accessExpired() { return accessExpired; },
   };
 }
 function nodes(tree) {
@@ -244,7 +246,7 @@ test('mockup terminal shows waiting hero, explainable engine and real exit rules
   const value = text(tree);
   for (const title of ['STATUS UNAVAILABLE', 'NIFTY · Position status unverified', 'Entry', 'LTP', 'Stop Loss (SL)',
     'Trailing SL (TSL)', 'P&L', 'Targets', 'T1', 'Position', 'Trail & Hold', 'Exit Now', 'Signal',
-    'Order Placed', 'Entry Filled', 'SL Protected', 'Trailing Active', 'AI Trade Engine', 'Auto Exit Rules',
+    'Order Placed', 'Entry Filled', 'SL Protected', 'Trailing Active', 'Rule-Based Trade Engine', 'Auto Exit Rules',
     'Broker SL order', 'Session exit', '15:25 IST', 'Stale quote', 'Not a win probability']) {
     assert.ok(value.includes(title), title);
   }
@@ -255,6 +257,49 @@ test('mockup terminal shows waiting hero, explainable engine and real exit rules
   const buttons = nodes(tree).filter(n => n.type === 'button');
   assert.equal(buttons.length, 5);
   assert.ok(buttons.every(button => button.props.disabled), 'No trade action without confirmed live status');
+});
+
+test('entry readiness exposes the real WAIT reason and optional warm-up progress without claiming ML inference', () => {
+  const h = harness('AQTETerminal.tsx');
+  const signal = { ...fixture().data.BANKNIFTY,
+    reasons: ['Warming up: need 201 contiguous completed one-minute futures candles'],
+    warmup: { completed: 86, required: 201 } };
+  const liveStatus = { ...liveFixture(), enabled: true, paper_validated: true, armed: true, automation_on: true };
+  const props = { symbol: 'NIFTY', signal, liveStatus, unavailable: false, active: true, tick: null };
+  let tree = h.render(props);
+  const readiness = () => text(nodes(tree).find(n => n.props?.['aria-label'] === 'Entry readiness'));
+  assert.match(readiness(), /Warming up: need 201 contiguous/);
+  assert.match(readiness(), /Warm-up:\s+86\s*\/\s*201\s+consecutive completed futures candles/);
+  assert.match(text(tree), /Rule-Based Trade Engine/);
+  assert.match(text(tree), /No ML order decisions/);
+  assert.doesNotMatch(text(tree), /AI Trade Engine/);
+  assert.doesNotMatch(text(nodes(tree).find(n => n.props?.['aria-label'] === 'Trade prices')), /₹/);
+  tree = h.render({ ...props, signal: { ...signal, warmup: undefined } });
+  assert.match(readiness(), /Warming up: need 201 contiguous/);
+  assert.doesNotMatch(readiness(), /Warm-up:/, 'Older backends do not get an invented progress count');
+  tree = h.render({ ...props, unavailable: true });
+  assert.match(readiness(), /Current signal data unavailable/);
+  assert.doesNotMatch(readiness(), /86|Warming up/);
+  tree = h.render({ ...props, liveStatus: { ...liveStatus, automation_on: false } });
+  assert.match(readiness(), /Auto Trade OFF/);
+  tree = h.render({ ...props, liveStatus: { ...liveStatus, active: livePositionFixture() } });
+  assert.equal(readiness(), '', 'An open trade keeps its position/protection display, not a pre-entry notice');
+});
+
+test('malformed warm-up evidence is rejected while legacy snapshots without it remain supported', async () => {
+  for (const warmup of [null, { completed: -1, required: 201 }, { completed: 202, required: 201 },
+    { completed: '86', required: 201 }, { completed: 0, required: 0 }, { completed: 86.5, required: 201 }]) {
+    const h = harness();
+    h.render();
+    const invalid = fixture();
+    invalid.data.NIFTY.warmup = warmup;
+    const cleanup = h.mount(invalid);
+    await settle();
+    assert.match(text(h.render()), /Invalid AQTE response/);
+    await h.poll(fixture());
+    assert.doesNotMatch(text(h.render()), /Invalid AQTE response/);
+    cleanup();
+  }
 });
 
 test('terminal hero uses only the matching live trade and fresh metrics, never paper-plan prices', () => {
@@ -608,7 +653,7 @@ test('terminal presentation has per-index hero cards, engine and exit-rule panel
     assert.match(heroes[index].props.className, /\baqx-hero\b/);
     assert.equal(heroes[index].props.id, `aqte-terminal-${symbol}-overview`);
     const aside = nodes(tree).find(n => n.props?.id === `aqte-terminal-${symbol}-risk`);
-    assert.match(text(aside), /AI Trade Engine/);
+    assert.match(text(aside), /Rule-Based Trade Engine/);
     assert.match(text(aside), /Auto Exit Rules\s+UNKNOWN/, 'Unknown protection must not be shown as OFF');
   }
   for (const symbol of ['NIFTY', 'BANKNIFTY', 'SENSEX']) {
@@ -915,6 +960,16 @@ test('real controller remains read-only until a selected exit is explicitly conf
   cleanup();
 });
 
+test('shared production is visibly identified without sending any order commands', async () => {
+  const h = harness('AQTEAutomationSwitch.tsx', undefined, true);
+  h.render();
+  const cleanup = h.mount(liveFixture());
+  await settle();
+  assert.match(text(h.render()), /Shared production · REAL ORDERS/);
+  assert.ok(h.requests.every(request => request.options.method === 'GET'));
+  cleanup();
+});
+
 test('header switch defaults OFF and only confirmed ON sends automation command', async () => {
   const h = harness('AQTEAutomationSwitch.tsx');
   h.render();
@@ -1024,14 +1079,14 @@ test('manual broker readout shows a market-hours pause rather than claiming no p
   cleanup();
 });
 
-test('hero metrics and AI engine remain visible; manual broker positions stay in the Positions tab', () => {
+test('hero metrics and rule engine remain visible; manual broker positions stay in the Positions tab', () => {
   const terminal = harness('AQTETerminal.tsx').render({
     symbol: 'NIFTY', signal: fixture().data.NIFTY, unavailable: false, active: true, tick: null,
   });
   const disclosures = nodes(terminal).filter(n => n.type === 'details');
   assert.equal(disclosures.length, 1);
   assert.match(text(disclosures[0]), /Additional image rules/);
-  assert.ok(nodes(terminal).find(n => n.props?.['aria-label'] === 'AI Trade Engine'));
+  assert.ok(nodes(terminal).find(n => n.props?.['aria-label'] === 'Rule-Based Trade Engine'));
   assert.ok(nodes(terminal).find(n => n.props?.['aria-label'] === 'Trade lifecycle'));
   const h = harness();
   nodes(h.render()).find(n => n.props?.id === 'aqte-book-tab-positions').props.onClick();
@@ -1184,6 +1239,58 @@ test('risk card separates missing approval, unarmed OFF and armed pause', () => 
   assert.match(risk(), /Paused\s+Protection continues/);
   publish({ ...liveFixture(), enabled: true, paper_validated: true, armed: true, automation_on: true });
   assert.match(risk(), /Within limits/);
+  publish({ ...liveFixture(), enabled: true, paper_validated: true, automation_wanted: true, entry_window: false });
+  assert.match(risk(), /Waiting\s+ON · arms 09:15 IST/);
+  publish({ ...liveFixture(), enabled: true, paper_validated: true, automation_wanted: true, entry_window: true });
+  assert.match(risk(), /Waiting\s+ON · arming \/ preflight/);
+});
+test('standing ON is accepted while the market is closed and shows the waiting reason until OFF', async () => {
+  const h = harness('AQTEAutomationSwitch.tsx');
+  h.render();
+  const off = { ...liveFixture(), enabled: true, paper_validated: true, automation_wanted: false, entry_window: false };
+  const waiting = { ...off, automation_wanted: true,
+    automation_waiting: 'Waiting for market: auto trade arms on weekdays 09:15 to 15:15 IST' };
+  const cleanup = h.mount(off);
+  await settle();
+  autoSwitch(h.render()).props.onClick();
+  assert.match(text(h.render()), /stays saved until you switch OFF, even when the market is closed/);
+  h.respond(waiting);
+  nodes(h.render()).find(n => n.type === 'button' && /Confirm ON/.test(text(n))).props.onClick();
+  await settle();
+  assert.equal(autoSwitch(h.render()).props['aria-checked'], true);
+  assert.match(text(autoSwitch(h.render())), /Auto Trade\s+ON/);
+  assert.match(text(h.render()), /ON ·\s+Waiting for market.*09:15 to 15:15 IST/);
+  assert.equal(nodes(h.render()).filter(n => n.props?.role === 'alert').length, 0);
+  await h.poll({ ...waiting, automation_waiting: null, automation_on: true, armed: true, entry_window: true });
+  assert.doesNotMatch(text(h.render()), /ON ·\s+Waiting/);
+  h.respond(off);
+  autoSwitch(h.render()).props.onClick();
+  await settle();
+  assert.deepEqual(JSON.parse(h.requests.filter(r => r.options.method === 'POST').at(-1).options.body),
+    { enabled: false, confirmation: 'STOP NEW ENTRIES' });
+  assert.equal(autoSwitch(h.render()).props['aria-checked'], false);
+  cleanup();
+});
+test('standing ON acknowledgements must match the requested state', async () => {
+  const base = { ...liveFixture(), enabled: true, paper_validated: true };
+  for (const [initial, response] of [
+    [base, { ...base, automation_wanted: false }],
+    [{ ...base, automation_wanted: true }, { ...base, automation_wanted: true }],
+    [{ ...base, automation_wanted: true }, { ...base, automation_wanted: false, automation_on: true, armed: true }],
+  ]) {
+    const h = harness('AQTEAutomationSwitch.tsx');
+    h.render();
+    const cleanup = h.mount(initial);
+    await settle();
+    h.respond(response);
+    autoSwitch(h.render()).props.onClick();
+    const confirm = nodes(h.render()).find(n => n.type === 'button' && /Confirm ON/.test(text(n)));
+    if (confirm) confirm.props.onClick();
+    await settle();
+    assert.match(text(autoSwitch(h.render())), /UNKNOWN/);
+    assert.match(text(h.render()), /Backend did not confirm the requested automation state/);
+    cleanup();
+  }
 });
 test('reset failures and inconsistent acknowledgements never present a confirmed OFF', async () => {
   const stopped = { ...liveFixture(), enabled: true, paper_validated: true, killed: true };
@@ -1344,8 +1451,10 @@ test('unauthorized, stale and rejected switch responses never masquerade as conf
   const cleanup = h.mount(status);
   await settle();
   h.respondHTTP(401, { detail: 'Sign in with the configured owner app-access session' });
+  assert.equal(h.accessExpired, 0);
   autoSwitch(h.render()).props.onClick();
   await settle();
+  assert.equal(h.accessExpired, 1, 'a 401 asks the access gate to re-verify and show sign-in');
   assert.match(text(h.render()), /Sign in with the configured owner/);
   assert.match(text(autoSwitch(h.render())), /UNKNOWN/);
   assert.equal(autoSwitch(h.render()).props['aria-checked'], undefined);

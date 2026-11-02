@@ -109,6 +109,8 @@ class Settings(BaseSettings):
     aqte_live_daily_loss: float = Field(default=2000, gt=0, le=2000)
     aqte_live_max_trades: int = Field(default=5, ge=1, le=5)
     aqte_live_max_losses: int = Field(default=3, ge=1, le=3)
+    # Optional research artifact. Never enables or filters broker orders.
+    aqte_ml_shadow_model_path: str = ""
     
     # ==================== NEWS API (DISABLED) ====================
     # news_api_key: Optional[str] = None

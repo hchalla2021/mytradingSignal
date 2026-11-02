@@ -1,4 +1,4 @@
-"""Deterministic, paper-only AQTE core. No broker or network dependencies."""
+"""Deterministic AQTE signals and paper simulation; no trained ML or broker calls."""
 
 import math
 from collections import defaultdict, deque
@@ -10,6 +10,7 @@ from uuid import uuid4
 SYMBOLS = ("NIFTY", "BANKNIFTY", "SENSEX")
 INTERVALS = (1, 5, 15, 60, 180, 300)
 IST = timezone(timedelta(hours=5, minutes=30))
+WARMUP_CANDLES = 201
 
 
 def session(at: float) -> bool:
@@ -113,16 +114,26 @@ def ema(values, length):
     return value
 
 
+def warmup_count(bars, at):
+    expected = int(at // 60) * 60 - 60
+    today = day(at)
+    completed = 0
+    for bar in reversed(bars):
+        if completed == WARMUP_CANDLES or bar["at"] != expected or day(bar["at"]) != today:
+            break
+        completed += 1
+        expected -= 60
+    return completed
+
+
 def intelligence(bars, tick: Tick, previous_day=None):
     """Use completed, contiguous one-minute futures bars only."""
     bars = [b for b in bars if day(b["at"]) == day(tick.at)]
-    if len(bars) < 201:
+    if warmup_count(bars, tick.at) < WARMUP_CANDLES:
         return None
     session_volume = sum(b["volume"] for b in bars)
     vwap = sum((b["high"] + b["low"] + b["close"]) / 3 * b["volume"] for b in bars) / session_volume if session_volume else None
-    bars = bars[-201:]
-    if any(b["at"] - a["at"] != 60 for a, b in zip(bars, bars[1:])):
-        return None
+    bars = bars[-WARMUP_CANDLES:]
     closes = [b["close"] for b in bars]
     averages = {str(n): ema(closes, n) for n in (9, 20, 50, 100, 200)}
     differences = [b - a for a, b in zip(closes, closes[1:])]
@@ -232,6 +243,12 @@ class AQTEEngine:
         return tick is not None and 0 <= now - tick.at <= self.policy.stale_seconds and (
             0 <= now - tick.received <= self.policy.stale_seconds)
 
+    def feed_reason(self, symbol, now):
+        stale = [f"{name} " + ("no ticks yet" if tick is None else f"last tick {max(0, now - tick.received):.0f}s ago")
+                 for name, tick in (("futures", self.future.get(symbol)), ("spot", self.spot.get(symbol)))
+                 if not self.fresh(tick, now)]
+        return "Market data stale: " + "; ".join(stale) if stale else None
+
     def costs(self, price, quantity):
         return self.policy.brokerage_per_order + price * quantity * self.policy.turnover_cost_fraction
 
@@ -330,13 +347,15 @@ class AQTEEngine:
         future, spot = self.future.get(symbol), self.spot.get(symbol)
         if not self.fresh(future, now) or not self.fresh(spot, now):
             reason = reason or "Waiting for fresh spot and futures ticks"
-        info = intelligence(list(self.book.closed[("future", future.token, 60)]), future,
-                            self.previous_day.get(symbol)) if future else None
+        bars = list(self.book.closed[("future", future.token, 60)]) if future else []
+        completed = warmup_count(bars, future.at) if future else 0
+        info = intelligence(bars, future, self.previous_day.get(symbol)) if future else None
         if info is None:
             reason = reason or "Warming up: need 201 contiguous completed one-minute futures candles"
         signal = dict(symbol=symbol, decision="WAIT", reasons=[reason] if reason else [],
                       confidence=None, intelligence=info, contract=None, entry=None, at=now,
-                      model="explainable-rules-v1", model_validated=False)
+                      model="explainable-rules-v1", model_validated=False,
+                      warmup=dict(completed=completed, required=WARMUP_CANDLES))
         self.signals[symbol] = signal
         if reason:
             return
@@ -376,9 +395,10 @@ class AQTEEngine:
         reserved = sum(o["limit"] * o["quantity"] + self.costs(o["limit"], o["quantity"]) for o in self.orders.values())
         remaining_loss = max(0, self.policy.daily_loss + daily["realized_pnl"])
         reserved_risk = sum(o["risk"] for o in self.orders.values())
-        if risk > min(capital * self.policy.risk_fraction, remaining_loss - reserved_risk) or (
+        # The paper account budget only governs simulated orders; live sizing is re-checked by the live controller.
+        if self.paper_enabled and (risk > min(capital * self.policy.risk_fraction, remaining_loss - reserved_risk) or (
             limit * quantity + self.costs(limit, quantity) + reserved > capital
-        ):
+        )):
             signal["reasons"] = ["One lot exceeds remaining risk budget or available paper capital"]
             return
         net_reward = (target - limit) * quantity - self.costs(limit, quantity) - self.costs(target, quantity)
@@ -480,9 +500,11 @@ class AQTEEngine:
         for symbol in SYMBOLS:
             signal = dict(self.signals.get(symbol, dict(
                 symbol=symbol, decision="WAIT", reasons=["Waiting for live market data"],
-                confidence=None, at=None, contract=None, entry=None, intelligence=None)))
+                confidence=None, at=None, contract=None, entry=None, intelligence=None,
+                model="explainable-rules-v1", model_validated=False,
+                warmup=dict(completed=0, required=WARMUP_CANDLES))))
             if risk or not self.fresh(self.spot.get(symbol), now) or not self.fresh(self.future.get(symbol), now):
-                signal.update(decision="WAIT", entry=None, reasons=[risk or "Market data stale"])
+                signal.update(decision="WAIT", entry=None, reasons=[risk or self.feed_reason(symbol, now)])
             elif signal.get("decision") != "WAIT" and (
                 not self.fresh(self.options.get(signal["contract"]["token"]), now) or
                 signal["at"] is None or now - signal["at"] > self.policy.stale_seconds

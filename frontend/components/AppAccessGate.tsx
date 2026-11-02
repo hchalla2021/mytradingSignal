@@ -3,6 +3,7 @@
 import { ReactNode, useCallback, useEffect, useMemo, useState } from 'react';
 import type { FormEvent } from 'react';
 import { API_CONFIG } from '@/lib/api-config';
+import { APP_ACCESS_EXPIRED_EVENT } from '@/lib/app-access-events';
 import { getOrCreateVisitorId } from '@/lib/visitor-id';
 
 type SessionResponse = {
@@ -53,22 +54,25 @@ export function AppAccessGate({ children }: { children: ReactNode }) {
     return getOrCreateVisitorId();
   }, []);
 
+  const fetchSession = useCallback(async (): Promise<SessionResponse | null> => {
+    const res = await fetch(API_CONFIG.endpoint('/api/app-access/session'), {
+      method: 'GET',
+      credentials: 'include',
+      mode: 'cors',
+      headers: { 'X-Device-Id': visitorId },
+      cache: 'no-store',
+    });
+    return res.ok ? ((await res.json()) as SessionResponse) : null;
+  }, [visitorId]);
+
   const checkSession = useCallback(async () => {
     try {
-      const res = await fetch(API_CONFIG.endpoint('/api/app-access/session'), {
-        method: 'GET',
-        credentials: 'include',
-        mode: 'cors',
-        headers: { 'X-Device-Id': visitorId },
-        cache: 'no-store',
-      });
-      if (!res.ok) { setAuthenticated(false); return; }
-      const payload = (await res.json()) as SessionResponse;
-      setAuthenticated(Boolean(payload.authenticated));
+      const payload = await fetchSession();
+      setAuthenticated(Boolean(payload?.authenticated));
     } catch {
       setAuthenticated(false);
     }
-  }, [visitorId]);
+  }, [fetchSession]);
 
   useEffect(() => {
     let mounted = true;
@@ -79,6 +83,27 @@ export function AppAccessGate({ children }: { children: ReactNode }) {
     run();
     return () => { mounted = false; };
   }, [checkSession]);
+
+  // A backend restart clears sessions; show sign-in only when the server confirms it, never on a network blip.
+  useEffect(() => {
+    if (!authenticated) return;
+    let lastCheck = 0;
+    const recheck = async () => {
+      if (Date.now() - lastCheck < 10_000) return;
+      lastCheck = Date.now();
+      try {
+        const payload = await fetchSession();
+        if (payload && !payload.authenticated) {
+          setError('Your session ended (server restarted or expired). Sign in again to continue.');
+          setAuthenticated(false);
+        }
+      } catch {
+        // Keep the dashboard; the next owner request will retry.
+      }
+    };
+    window.addEventListener(APP_ACCESS_EXPIRED_EVENT, recheck);
+    return () => window.removeEventListener(APP_ACCESS_EXPIRED_EVENT, recheck);
+  }, [authenticated, fetchSession]);
 
   const onSubmit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();

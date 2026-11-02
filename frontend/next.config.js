@@ -17,6 +17,32 @@ const nextConfig = {
   // _app.js.nft.json even in pure App Router projects, breaking `next build`.
   outputFileTracing: false,
 
+  async rewrites() {
+    if (process.env.NODE_ENV !== 'development' || process.env.NEXT_PUBLIC_SHARED_PRODUCTION !== 'true') {
+      return []
+    }
+    const value = process.env.DEV_PRODUCTION_ORIGIN
+    let target
+    try {
+      target = new URL(value)
+    } catch {
+      throw new Error('Shared production requires DEV_PRODUCTION_ORIGIN to be an HTTPS origin')
+    }
+    if (target.protocol !== 'https:' || target.username || target.password ||
+        target.pathname !== '/' || target.search || target.hash) {
+      throw new Error('DEV_PRODUCTION_ORIGIN must be an HTTPS origin without credentials, path, query or fragment')
+    }
+    // Preserve Origin and cookies: production must explicitly trust the local UI origin.
+    return {
+      beforeFiles: [
+        { source: '/api/:path*', destination: `${target.origin}/api/:path*` },
+        { source: '/ws/:path*', destination: `${target.origin}/ws/:path*` },
+      ],
+      afterFiles: [],
+      fallback: [],
+    }
+  },
+
   // Next's dev webpack pack cache can become stale on Windows and emit ENOENT
   // warnings for missing .pack.gz files after file moves/reloads.
   webpack(config, { dev }) {

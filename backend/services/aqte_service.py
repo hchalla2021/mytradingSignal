@@ -16,6 +16,7 @@ from datetime import datetime
 from pathlib import Path
 
 from services.aqte_engine import AQTEEngine, Contract, IST, SYMBOLS, Tick, day
+from services.aqte_ml import FEATURE_NAMES, SCHEMA, MLUnavailable, ShadowModel, feature_vector
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +48,7 @@ def normalize(symbol, kind, raw, received):
 
 
 class AQTEService:
-    def __init__(self, path=None, *, paper_enabled=False):
+    def __init__(self, path=None, *, paper_enabled=False, ml_model_path=""):
         self.path = Path(path or os.getenv("AQTE_DB_PATH") or
                          Path(__file__).resolve().parent.parent / "data" / "aqte" / "aqte.sqlite3")
         self.engine = AQTEEngine(paper_enabled=paper_enabled)
@@ -64,6 +65,13 @@ class AQTEService:
         self.subscription_error = None
         self.started = False
         self.failed = threading.Event()
+        self.ml_model_path = Path(ml_model_path) if ml_model_path else None
+        self.ml_model = None
+        self.ml_task = None
+        self.ml_seen = {}
+        self.ml_candidates = {}
+        self.ml_state = dict(status="DISABLED", mode="SHADOW_ONLY", affects_orders=False,
+                             validated=False, error=None, observations={})
 
     @contextmanager
     def connect(self):
@@ -87,6 +95,9 @@ class AQTEService:
                     id TEXT PRIMARY KEY, exit_at REAL NOT NULL, payload TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS aqte_contracts (
                     token INTEGER PRIMARY KEY, payload TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS aqte_contract_history (
+                    session_day TEXT NOT NULL, token INTEGER NOT NULL, payload TEXT NOT NULL,
+                    PRIMARY KEY(session_day,token));
                 CREATE TABLE IF NOT EXISTS aqte_ticks (
                     id INTEGER PRIMARY KEY, at REAL NOT NULL, received REAL NOT NULL,
                     symbol TEXT NOT NULL, kind TEXT NOT NULL, token INTEGER NOT NULL, payload TEXT NOT NULL);
@@ -123,6 +134,12 @@ class AQTEService:
                        [(t.at, t.received, t.symbol, t.kind, t.token, json.dumps(asdict(t))) for t in ticks])
         db.executemany("INSERT INTO aqte_contracts VALUES(?,?) ON CONFLICT(token) DO UPDATE SET payload=excluded.payload",
                        [(token, json.dumps(asdict(contract))) for token, contract in self.engine.contracts.items()])
+        contract_days = {(day(t.received), t.token) for t in ticks
+                         if t.kind == "option" and t.token in self.engine.contracts}
+        db.executemany("INSERT INTO aqte_contract_history VALUES(?,?,?) "
+                       "ON CONFLICT(session_day,token) DO NOTHING",
+                       [(date, token, json.dumps(asdict(self.engine.contracts[token])))
+                        for date, token in contract_days])
         for event in self.engine.events:
             db.execute("INSERT INTO aqte_events VALUES(?,?,?,?)",
                        (event["id"], event["at"], event["kind"], json.dumps(event)))
@@ -155,6 +172,7 @@ class AQTEService:
                         for tick in batch:
                             if self.engine.fresh(tick, time.time()):
                                 self.engine.ingest(tick)
+                                self.capture_ml(tick)
                             else:
                                 self.engine.event("PROCESSING_STALE_TICK", time.time(),
                                                   token=tick.token, reason="Queued quote too old for execution")
@@ -172,13 +190,23 @@ class AQTEService:
         if self.started:
             return
         await asyncio.to_thread(self.initialize)
+        if self.ml_model_path is not None:
+            await asyncio.to_thread(self.load_ml)
         self.stop_event.clear()
         self.started = True
         self.worker = threading.Thread(target=self.run, name="aqte-analysis", daemon=True)
         self.worker.start()
         self.refresh_task = asyncio.create_task(self.refresh(), name="aqte-subscriptions")
+        if self.ml_model is not None:
+            self.ml_task = asyncio.create_task(self.refresh_ml(), name="aqte-ml-shadow")
 
     async def stop(self):
+        if self.ml_task:
+            self.ml_task.cancel()
+            try:
+                await self.ml_task
+            except asyncio.CancelledError:
+                pass
         if self.refresh_task:
             self.refresh_task.cancel()
             try:
@@ -282,6 +310,69 @@ class AQTEService:
     def attach(self, kite, socket, prices, previous_day):
         self.connection = (kite, socket, copy.deepcopy(prices), copy.deepcopy(previous_day))
 
+    def load_ml(self):
+        self.ml_model = None
+        self.ml_state["observations"] = {}
+        self.ml_state.pop("model_id", None)
+        try:
+            model = ShadowModel.load(self.ml_model_path)
+        except (ValueError, OSError, ImportError, KeyError, TypeError) as exc:
+            logger.exception("AQTE shadow model unavailable; rules and orders are unchanged")
+            self.ml_state.update(status="UNAVAILABLE", error=f"Shadow model load failed ({type(exc).__name__})")
+            return
+        self.ml_model = model
+        self.ml_seen.clear()
+        self.ml_candidates.clear()
+        self.ml_state.update(status="READY", error=None, model_id=model.model_id)
+
+    def capture_ml(self, tick):
+        if self.ml_model is None or tick.kind != "future":
+            return
+        signal = self.engine.signals.get(tick.symbol)
+        if not signal or signal["decision"] == "WAIT" or not signal["entry"]:
+            return
+        candle_at = signal["intelligence"]["at"]
+        if self.ml_seen.get(tick.symbol) == candle_at:
+            return
+        self.ml_seen[tick.symbol] = candle_at
+        candidate = copy.deepcopy(signal)
+        candidate["spot"] = self.engine.spot[tick.symbol].price
+        self.ml_candidates[tick.symbol] = (candidate, self.engine.options[signal["contract"]["token"]])
+
+    def score_ml(self):
+        with self.lock:
+            candidates = self.ml_candidates
+            self.ml_candidates = {}
+            model = self.ml_model
+        if model is None:
+            return
+        for symbol, (signal, quote) in candidates.items():
+            try:
+                if not 0 <= time.time() - signal["at"] <= self.engine.policy.stale_seconds:
+                    raise MLUnavailable("Shadow candidate expired before background scoring")
+                result = model.predict(signal, quote)
+                record = dict(schema=SCHEMA, symbol=symbol, **result,
+                              features=dict(zip(FEATURE_NAMES, feature_vector(signal, quote))))
+                with self.path.with_name("aqte-ml-shadow.jsonl").open("a", encoding="utf-8") as stream:
+                    stream.write(json.dumps(record, allow_nan=False) + "\n")
+            except MLUnavailable as exc:
+                logger.warning("AQTE shadow prediction unavailable for %s: %s", symbol, exc)
+                result = dict(status="UNAVAILABLE", observed_at=signal["at"], error=str(exc))
+            except (OSError, ImportError, ValueError, TypeError) as exc:
+                logger.exception("AQTE shadow inference/recording failed; rules and orders are unchanged")
+                with self.lock:
+                    self.ml_model = None
+                    self.ml_state["observations"] = {}
+                    self.ml_state.update(status="UNAVAILABLE", error=f"Shadow scoring failed ({type(exc).__name__})")
+                return
+            with self.lock:
+                self.ml_state["observations"][symbol] = result
+
+    async def refresh_ml(self):
+        while self.ml_model is not None:
+            await asyncio.sleep(1)
+            await asyncio.to_thread(self.score_ml)
+
     async def refresh(self):
         active = None
         refreshed = 0
@@ -299,6 +390,7 @@ class AQTEService:
             result = copy.deepcopy(self.engine.snapshot(time.time()))
             result["subscription_error"] = self.subscription_error
             result["recording"] = self.started and not self.failed.is_set()
+            result["ml"] = copy.deepcopy(self.ml_state)
             if self.failed.is_set() or not self.started:
                 for signal in result["data"].values():
                     signal.update(decision="WAIT", entry=None, reasons=["AQTE recorder unavailable"])
@@ -335,5 +427,7 @@ _service = None
 def get_aqte_service():
     global _service
     if _service is None:
-        _service = AQTEService()
+        from config import get_settings
+
+        _service = AQTEService(ml_model_path=get_settings().aqte_ml_shadow_model_path)
     return _service

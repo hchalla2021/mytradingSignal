@@ -6,6 +6,7 @@ import tempfile
 import threading
 import unittest
 from contextlib import closing
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -14,7 +15,7 @@ from unittest.mock import AsyncMock, Mock, patch
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from services.aqte_live import AQTELiveService, LiveBlocked
+from services.aqte_live import MARKET_WAIT, AQTELiveService, LiveBlocked
 from test_aqte import CONTRACT, IST, NOW, ready_engine, tick
 
 
@@ -124,6 +125,18 @@ class LiveTests(unittest.TestCase):
         self.cfg.aqte_live_paper_validated = False
         with self.assertRaisesRegex(LiveBlocked, "Paper validation"):
             self.live.preflight()
+
+    def test_analysis_signal_with_real_lot_still_obeys_live_risk_cap(self):
+        self.market.engine = ready_engine(contract=replace(CONTRACT, lot_size=65), paper_enabled=False)
+        self.assertEqual(self.market.engine.signals["NIFTY"]["decision"], "BUY CE")
+        self.armed()
+        with self.assertRaisesRegex(LiveBlocked, "per-trade risk limit"):
+            self.live.proposal("NIFTY")
+        self.broker.place_order.assert_not_called()
+        self.live.state["daily_controls"]["NIFTY"]["stop_percent"] = 5
+        proposal = self.live.proposal("NIFTY")
+        self.assertLessEqual(proposal["risk"], self.cfg.aqte_live_risk_per_trade)
+        self.assertEqual(proposal["entry"]["quantity"], 65)
 
     def test_daily_controls_save_only_while_off_persist_and_never_arm(self):
         config = {**self.live.state["daily_controls"]["NIFTY"], "max_trades": 3, "min_confidence": 95}
@@ -296,6 +309,7 @@ class LiveTests(unittest.TestCase):
         result = self.live.request_exit(trade_id)
         self.assertEqual(result["active"]["exit_requested"], "MANUAL_EXIT")
         self.assertFalse(result["automation_on"])
+        self.assertFalse(result["automation_wanted"], "Manual exit switches standing ON off")
         self.assertFalse(result["killed"])
         self.assertFalse(result["flatten_pending"])
         self.assertTrue(result["armed"])
@@ -598,7 +612,7 @@ class LiveTests(unittest.TestCase):
         self.ip.assert_not_called()
         self.broker.place_order.assert_not_called()
 
-    def test_owner_reset_keeps_off_then_header_start_respects_weekday_entry_hours(self):
+    def test_owner_reset_keeps_off_then_header_start_waits_for_weekday_entry_hours(self):
         self.live.state.update(killed=True, flatten_pending=False, automation_on=False, armed_day=None)
         sunday = datetime(2026, 11, 1, 23, 28, tzinfo=IST).timestamp()
         with patch("services.aqte_live.time.time", return_value=sunday):
@@ -606,21 +620,27 @@ class LiveTests(unittest.TestCase):
             self.assertFalse(reset["killed"])
             self.assertFalse(reset["armed"])
             self.assertFalse(reset["automation_on"])
-            with self.assertRaisesRegex(LiveBlocked, "weekdays"):
-                self.live.start_automation()
+            self.assertFalse(reset["automation_wanted"])
+            waiting = self.live.start_automation()
+            self.assertTrue(waiting["automation_wanted"])
+            self.assertFalse(waiting["automation_on"])
+            self.assertFalse(waiting["armed"])
+            self.assertEqual(waiting["automation_waiting"], MARKET_WAIT)
+            self.assertFalse(self.live.set_automation(False)["automation_wanted"])
         self.ip.assert_not_called()
         for hour, minute, allowed in [(9, 14, False), (9, 15, True), (15, 14, True), (15, 15, False)]:
             with self.subTest(hour=hour, minute=minute):
                 at = datetime(2026, 11, 2, hour, minute, tzinfo=IST).timestamp()
                 with patch("services.aqte_live.time.time", return_value=at):
+                    result = self.live.start_automation()
+                    self.assertTrue(result["automation_wanted"])
+                    self.assertEqual(result["automation_on"], allowed)
+                    self.assertEqual(result["automation_waiting"], None if allowed else MARKET_WAIT)
                     if allowed:
-                        result = self.live.start_automation()
-                        self.assertTrue(result["automation_on"])
                         self.assertTrue(result["armed"])
-                    else:
-                        with self.assertRaisesRegex(LiveBlocked, "15:15"):
-                            self.live.start_automation()
-                    self.assertFalse(self.live.set_automation(False)["automation_on"])
+                    off = self.live.set_automation(False)
+                    self.assertFalse(off["automation_on"])
+                    self.assertFalse(off["automation_wanted"])
         self.ip.assert_called_once()
         self.broker.place_order.assert_not_called()
         self.broker.cancel_order.assert_not_called()
@@ -821,17 +841,121 @@ class LiveTests(unittest.TestCase):
         self.ip.assert_not_called()
         self.broker.place_order.assert_not_called()
 
-    def test_confirmed_start_failed_preflight_or_closed_session_stays_off(self):
+    def test_confirmed_start_with_failed_preflight_or_closed_market_stays_on_and_waits(self):
         self.ip.return_value = "1.2.3.4"
-        with self.assertRaises(LiveBlocked):
-            self.live.start_automation()
-        self.assertFalse(self.live.status()["automation_on"])
-        self.assertFalse(self.live.status()["armed"])
+        result = self.live.start_automation()
+        self.assertTrue(result["automation_wanted"])
+        self.assertFalse(result["automation_on"])
+        self.assertFalse(result["armed"])
+        self.assertIn("1.2.3.4", result["automation_waiting"])
         closed = datetime(2026, 10, 31, 10, 0, tzinfo=IST).timestamp()
         with patch("services.aqte_live.time.time", return_value=closed):
-            with self.assertRaisesRegex(LiveBlocked, "09:15"):
-                self.live.start_automation()
+            result = self.live.start_automation()
+            self.assertFalse(result["automation_on"])
+            self.assertFalse(result["entry_window"])
+            self.assertEqual(result["automation_waiting"], MARKET_WAIT)
+        self.assertEqual(self.ip.call_count, 1, "No preflight outside the entry window")
         self.broker.place_order.assert_not_called()
+
+    def test_standing_on_survives_restart_and_arms_itself_at_market_open(self):
+        saturday = datetime(2026, 10, 31, 10, 0, tzinfo=IST).timestamp()
+        with patch("services.aqte_live.time.time", return_value=saturday):
+            self.live.start_automation()
+            self.live.auto_activate()
+            self.assertFalse(self.live.status()["armed"])
+        self.ip.assert_not_called()
+        self.live.disarm_shutdown()
+        self.live.release_owner()
+        restored = self.new_service()
+        restored.initialize()
+        self.addCleanup(restored.release_owner)
+        with patch("services.aqte_live.time.time", return_value=datetime(2026, 11, 2, 9, 0, tzinfo=IST).timestamp()):
+            restored.auto_activate()
+            status = restored.status()
+            self.assertTrue(status["automation_wanted"])
+            self.assertFalse(status["automation_on"])
+            self.assertEqual(status["automation_waiting"], MARKET_WAIT)
+        self.ip.assert_not_called()
+        with patch("services.aqte_live.time.time", return_value=datetime(2026, 11, 2, 9, 15, tzinfo=IST).timestamp()):
+            restored.auto_activate()
+            status = restored.status()
+            self.assertTrue(status["armed"])
+            self.assertTrue(status["automation_on"])
+            self.assertIsNone(status["automation_waiting"])
+            restored.auto_activate()
+        self.ip.assert_called_once()
+        self.broker.place_order.assert_not_called()
+
+    def test_standing_on_retries_failed_preflight_once_per_minute_and_journals_reason_once(self):
+        self.ip.return_value = "1.2.3.4"
+        self.live.start_automation()
+        self.live.auto_activate()
+        self.assertEqual(self.ip.call_count, 1)
+        with patch("services.aqte_live.time.time", return_value=NOW + 61):
+            self.live.auto_activate()
+        self.assertEqual(self.ip.call_count, 2)
+        self.ip.return_value = "122.177.245.101"
+        with patch("services.aqte_live.time.time", return_value=NOW + 122):
+            self.live.auto_activate()
+            status = self.live.status()
+            self.assertTrue(status["automation_on"])
+            self.assertIsNone(status["automation_waiting"])
+        with closing(sqlite3.connect(str(self.path))) as db:
+            waits = db.execute("SELECT COUNT(*) FROM live_audit WHERE kind='AUTOMATION_WAITING'").fetchone()[0]
+        self.assertEqual(waits, 1)
+        self.broker.place_order.assert_not_called()
+
+    def test_standing_on_survives_entry_cutoff_and_rearms_next_trading_day(self):
+        self.live.start_automation()
+        with patch("services.aqte_live.time.time", return_value=datetime(2026, 10, 30, 15, 15, tzinfo=IST).timestamp()):
+            self.live.automated_entry()
+            self.live.auto_activate()
+            status = self.live.status()
+            self.assertFalse(status["automation_on"])
+            self.assertTrue(status["automation_wanted"])
+            self.assertEqual(status["automation_waiting"], MARKET_WAIT)
+        with patch("services.aqte_live.time.time", return_value=datetime(2026, 11, 2, 9, 20, tzinfo=IST).timestamp()):
+            self.live.auto_activate()
+            self.assertTrue(self.live.status()["automation_on"])
+        self.assertEqual(self.ip.call_count, 2)
+        self.broker.place_order.assert_not_called()
+
+    def test_fault_keeps_standing_on_but_never_rearms_over_an_open_trade(self):
+        self.live.start_automation()
+        self.live.fault_stop("ConnectionError: Kite down")
+        self.assertFalse(self.live.status()["automation_on"])
+        self.assertTrue(self.live.status()["automation_wanted"])
+        self.live.auto_activate()
+        self.assertEqual(self.ip.call_count, 1, "Fault waits for the retry delay")
+        with patch("services.aqte_live.time.time", return_value=NOW + 61):
+            self.live.auto_activate()
+            self.assertTrue(self.live.status()["automation_on"])
+        self.live.set_automation(False)
+        self.protect()
+        calls = self.ip.call_count
+        self.live.fault_stop("ConnectionError: Kite down")
+        with patch("services.aqte_live.time.time", return_value=NOW + 61):
+            self.live.auto_activate()
+            status = self.live.status()
+            self.assertFalse(status["automation_on"])
+            self.assertIn("open AQTE trade", status["automation_waiting"])
+        self.assertEqual(self.ip.call_count, calls)
+
+    def test_off_and_emergency_stop_clear_standing_on(self):
+        self.live.start_automation()
+        self.assertFalse(self.live.set_automation(False)["automation_wanted"])
+        with patch("services.aqte_live.time.time", return_value=NOW + 61):
+            self.live.auto_activate()
+            self.assertFalse(self.live.status()["automation_on"])
+        self.assertTrue(self.live.start_automation()["automation_wanted"])
+        stopped = self.live.stop_entries()
+        self.assertFalse(stopped["automation_wanted"])
+        self.assertIsNone(stopped["automation_waiting"])
+        self.live.release_owner()
+        restored = self.new_service()
+        restored.initialize()
+        self.addCleanup(restored.release_owner)
+        self.assertFalse(restored.status()["automation_wanted"])
 
     def test_on_automatically_enters_one_signal_and_off_blocks_further_entries(self):
         with self.assertRaisesRegex(LiveBlocked, "explicitly arm"):

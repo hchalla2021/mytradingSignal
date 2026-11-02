@@ -309,7 +309,8 @@ function getLocalApiUrl(): string {
 async function fetchWithFallback(): Promise<{ success?: boolean; data?: Record<string, SymbolChartData> } | null> {
   const primary = getApiUrl();
   const fallback = getLocalApiUrl();
-  const isLocal = typeof window !== 'undefined' && window.location.hostname === 'localhost';
+  const isLocal = !getEnvironmentConfig().sharedProduction &&
+    typeof window !== 'undefined' && window.location.hostname === 'localhost';
 
   const urlSet = new Set<string>();
   if (isLocal) {
@@ -679,7 +680,7 @@ export function useChartIntelligence() {
       const primary = getWsUrl();
       const local = getLocalWsUrl();
       const port8000 = 'ws://localhost:8000/ws/chart-intelligence';
-      const isLocal = window.location.hostname === 'localhost';
+      const isLocal = !getEnvironmentConfig().sharedProduction && window.location.hostname === 'localhost';
       const urlSet = new Set<string>();
       if (isLocal) { urlSet.add(local); urlSet.add(port8000); urlSet.add(primary); }
       else { urlSet.add(primary); }

@@ -62,8 +62,12 @@ function isSnapshot(value: unknown): value is Snapshot {
     !!data.risk && typeof data.risk.realized_pnl === 'number' && !!data.data &&
     SYMBOLS.every(symbol => {
       const signal = data.data?.[symbol];
+      const warmup = signal?.warmup;
       return !!signal && ['WAIT', 'BUY CE', 'BUY PE'].includes(signal.decision) &&
-        Array.isArray(signal.reasons);
+        Array.isArray(signal.reasons) && signal.reasons.every(reason => typeof reason === 'string') &&
+        (warmup === undefined || (warmup != null && Number.isInteger(warmup.completed) &&
+          Number.isInteger(warmup.required) && warmup.required > 0 &&
+          warmup.completed >= 0 && warmup.completed <= warmup.required));
     });
 }
 
@@ -150,6 +154,8 @@ function AQTESection({ marketData, isConnected = false }: { marketData?: MarketD
           ? { label: 'Limit hit', note: 'Entries blocked', tone: 'aqx-down' } :
           !liveStatus.enabled || !liveStatus.paper_validated
             ? { label: 'Locked', note: 'Live approval required', tone: 'aqx-flat' } :
+            liveStatus.automation_wanted && !liveStatus.automation_on
+              ? { label: 'Waiting', note: liveStatus.entry_window === false ? 'ON · arms 09:15 IST' : 'ON · arming / preflight', tone: 'aqx-flat' } :
             !liveStatus.armed ? { label: 'Not armed', note: 'Arms when Auto Trade turns ON', tone: 'aqx-flat' } :
             !liveStatus.automation_on ? { label: 'Paused', note: 'Protection continues', tone: 'aqx-flat' } :
               { label: 'Within limits', note: `Loss left ₹${number(lossLeft ?? 0)}`, tone: 'aqx-up' };

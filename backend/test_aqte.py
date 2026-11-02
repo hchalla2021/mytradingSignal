@@ -14,7 +14,7 @@ from fastapi.testclient import TestClient
 
 from services.aqte_engine import (
     AQTEEngine, CandleBook, Contract, IST, Policy, Tick,
-    intelligence, strategy,
+    intelligence, strategy, warmup_count,
 )
 from services.aqte_replay import replay, replay_database
 from services.aqte_service import AQTEService, normalize
@@ -36,9 +36,9 @@ def tick(kind="future", at=NOW, **values):
     return Tick(**defaults)
 
 
-def ready_engine(**policy):
-    engine = AQTEEngine(Policy(**policy))
-    engine.contracts[30] = CONTRACT
+def ready_engine(contract=CONTRACT, paper_enabled=True, **policy):
+    engine = AQTEEngine(Policy(**policy), paper_enabled=paper_enabled)
+    engine.contracts[30] = contract
     for i in range(202):
         at = START + i * 60
         engine.ingest(tick("spot", at=at, price=22000 + i * 0.2))
@@ -87,6 +87,56 @@ class CandleTests(unittest.TestCase):
         self.assertIsNone(intelligence(bars[:200], tick()))
         bars[-1] = {**bars[-1], "at": bars[-1]["at"] + 60}
         self.assertIsNone(intelligence(bars, tick()))
+
+    def test_contiguous_but_old_candles_cannot_drive_a_fresh_tick_after_a_gap(self):
+        engine = ready_engine()
+        bars = list(engine.book.closed[("future", 20, 60)])
+        self.assertIsNotNone(intelligence(bars, tick()))
+        self.assertIsNone(intelligence(bars, tick(at=NOW + 10 * 60)))
+
+    def test_first_resumed_minute_after_feed_gap_cannot_reuse_old_strategy(self):
+        engine = ready_engine()
+        engine.paper_enabled = False
+        engine.orders.clear()
+        resumed = NOW + 10 * 60
+        engine.ingest(tick("spot", at=resumed))
+        engine.ingest(tick("option", at=resumed))
+        engine.ingest(tick(at=resumed))
+        signal = engine.snapshot(resumed)["data"]["NIFTY"]
+        self.assertEqual(signal["decision"], "WAIT")
+        self.assertIsNone(signal["intelligence"])
+        self.assertIn("201 contiguous", signal["reasons"][0])
+
+    def test_warmup_counts_only_completed_current_session_candles_and_caps_at_201(self):
+        book = CandleBook()
+        for index in range(205):
+            at = START + index * 60
+            book.add(tick(at=at))
+            self.assertEqual(warmup_count(book.closed[("future", 20, 60)], at), min(index, 201))
+        resumed = at + 10 * 60
+        book.add(tick(at=resumed))
+        self.assertEqual(warmup_count(book.closed[("future", 20, 60)], resumed), 0)
+        book.add(tick(at=resumed + 60))
+        self.assertEqual(warmup_count(book.closed[("future", 20, 60)], resumed + 60), 1)
+        self.assertEqual(warmup_count(book.closed[("future", 20, 60)], START + 86400), 0)
+        self.assertEqual(warmup_count(book.closed[("future", 21, 60)], resumed + 60), 0)
+
+    def test_signal_reports_actual_warmup_without_claiming_ml_validation(self):
+        engine = AQTEEngine(paper_enabled=False)
+        initial = engine.snapshot(START)["data"]["NIFTY"]
+        self.assertEqual(initial["warmup"], {"completed": 0, "required": 201})
+        for index in range(87):
+            engine.ingest(tick(at=START + index * 60))
+        signal = engine.signals["NIFTY"]
+        self.assertEqual(signal["warmup"], {"completed": 86, "required": 201})
+        self.assertEqual(signal["model"], "explainable-rules-v1")
+        self.assertFalse(signal["model_validated"])
+        self.assertEqual(signal["decision"], "WAIT")
+        self.assertIsNone(signal["intelligence"])
+        self.assertIsNone(signal["entry"])
+        ready = ready_engine().signals["NIFTY"]
+        self.assertEqual(ready["warmup"], {"completed": 201, "required": 201})
+        self.assertFalse(ready["model_validated"], "Warm indicators are not a validated predictive model")
 
     def test_intelligence_and_all_strategy_families(self):
         engine = ready_engine()
@@ -185,6 +235,19 @@ class ExecutionTests(unittest.TestCase):
         self.assertEqual(engine.signals["NIFTY"]["decision"], "WAIT")
         self.assertEqual(ready_engine(risk_fraction=0.0001).signals["NIFTY"]["decision"], "WAIT")
 
+    def test_paper_budget_gates_only_paper_mode_not_live_analysis(self):
+        real_lot = replace(CONTRACT, lot_size=65)
+        paper = ready_engine(contract=real_lot)
+        self.assertEqual(paper.signals["NIFTY"]["decision"], "WAIT")
+        self.assertIn("paper capital", paper.signals["NIFTY"]["reasons"][0])
+        self.assertNotIn("NIFTY", paper.orders)
+        analysis = ready_engine(contract=real_lot, paper_enabled=False)
+        signal = analysis.signals["NIFTY"]
+        self.assertEqual(signal["decision"], "BUY CE")
+        self.assertEqual(signal["entry"]["quantity"], 65)
+        self.assertGreaterEqual(signal["entry"]["reward_risk"], 1.5)
+        self.assertEqual(analysis.orders, {})
+
     def test_gap_stop_costs_and_trailing(self):
         engine = ready_engine()
         engine.ingest(tick("option", at=NOW + 1, bid=98, ask=99, price=99))
@@ -228,6 +291,14 @@ class ExecutionTests(unittest.TestCase):
         engine.options[30] = replace(engine.options[30], at=NOW - 10)
         self.assertEqual(engine.snapshot(NOW)["data"]["NIFTY"]["decision"], "WAIT")
         self.assertEqual(engine.snapshot(NOW + 10)["data"]["NIFTY"]["decision"], "WAIT")
+
+    def test_stale_snapshot_names_the_starved_feed_and_its_age(self):
+        engine = ready_engine(paper_enabled=False)
+        engine.ingest(tick("spot", at=NOW + 300, price=22041))
+        reasons = engine.snapshot(NOW + 302)["data"]["NIFTY"]["reasons"]
+        self.assertEqual(reasons, ["Market data stale: futures last tick 302s ago"])
+        self.assertEqual(engine.snapshot(NOW + 302)["data"]["SENSEX"]["reasons"],
+                         ["Market data stale: futures no ticks yet; spot no ticks yet"])
 
     def test_daily_loss_uses_portfolio_not_just_one_position(self):
         engine = ready_engine()
@@ -296,6 +367,24 @@ class ServiceTests(unittest.TestCase):
         self.assertIn("KILL_SWITCH", [e["kind"] for e in events])
         with restored.connect() as db:
             self.assertEqual(db.execute("SELECT COUNT(*) FROM aqte_ticks").fetchone()[0], 1)
+
+    def test_restart_recovers_same_day_warmup_without_replaying_trades(self):
+        recorded = [tick(at=START + index * 60, price=22000 + index, volume=index * 1000)
+                    for index in range(203)]
+        with self.service.connect() as db:
+            self.service.persist(db, recorded)
+        restored = AQTEService(self.path)
+        with patch("services.aqte_service.datetime") as clock:
+            clock.now.return_value = datetime.fromtimestamp(NOW, IST)
+            restored.initialize()
+        self.assertEqual(warmup_count(restored.engine.book.closed[("future", 20, 60)], NOW), 201)
+        self.assertFalse(restored.engine.orders)
+        self.assertFalse(restored.engine.trades)
+        self.assertFalse(restored.engine.signals, "Recovery rebuilds candles, not historical entry signals")
+        restored.engine.ingest(tick("spot", at=NOW + 1))
+        restored.engine.ingest(tick(at=NOW + 1, volume=203_000))
+        self.assertEqual(restored.engine.signals["NIFTY"]["warmup"], {"completed": 201, "required": 201})
+        self.assertFalse(restored.engine.orders)
 
     def test_subscriptions_use_active_kite_metadata_and_pin_open_contract(self):
         self.service.started = True

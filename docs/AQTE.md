@@ -119,26 +119,33 @@ stop** action appears beside the switch; it requires fresh controller status,
 completed square-off, no active AQTE trade and explicit owner confirmation.
 Reset calls the existing authenticated reset endpoint and must acknowledge a cleared
 latch with automation OFF and unarmed. It never starts trading; ON requires its own
-confirmation during weekday 09:15–15:15 IST entry hours. Pending, failed or unverified
+confirmation. Pending, failed or unverified
 resets cannot enable ON. The removed safety/setup panel stays removed.
 Successful acknowledgements remain available to screen readers;
 errors, saving and emergency messages stay visible. No optimistic state or local
 storage can enable trading; duplicate clicks and older in-flight polls cannot
 overwrite command results. OFF does not cancel existing protection.
 Confirmed header ON now calls owner-authenticated `POST /api/aqte/live/start`.
-Under the existing controller lock, it validates approval, weekday/entry hours
-and the emergency latch, runs Kite/static-IP preflight and daily arming when
-needed, then enables scanning. It does not itself submit an entry: only qualifying
-signals passing existing daily/quality/risk gates can buy. OFF pauses entries;
-ON can resume an already armed ordinary OFF session. Restart/new day still
-defaults OFF; a latched emergency is not an ordinary pause and cannot be cleared
-by ON — use the confirmed emergency reset once Kite is flat. Invalid token, failed checks or missing validation still prevent starting.
+ON is a **standing request** accepted at any time, market open or closed. Under the
+controller lock it validates approval and the emergency latch, then saves
+`automation_wanted` in the journal. Inside weekday 09:15–15:15 IST entry hours it
+immediately runs Kite/static-IP preflight and daily arming, then enables scanning.
+Outside those hours the switch shows **ON · Waiting for market**, and the monitor
+arms itself at the next 09:15 IST. A failed preflight (IP, Kite token, account not
+flat) keeps ON, shows the reason, and retries at most once per minute; it never
+places orders. It does not itself submit an entry: only qualifying
+signals passing existing daily/quality/risk gates can buy. ON stays saved across
+backend restarts, the 15:15 cutoff and new days until you switch OFF, request a
+manual exit, or trigger the emergency stop; a latched emergency is not an ordinary
+pause and cannot be cleared by ON — use the confirmed emergency reset once Kite is
+flat. Missing approval keeps ON locked.
 The ON confirmation states the server's entry mode (strict scan-only, or unvalidated
 rule entries allowed). **Cancel · stay OFF** and Escape only close the confirmation;
 they send no command because automation is already OFF. The risk card shows
 **Locked · Live approval required** only when `AQTE_LIVE_ENABLED` or
-`AQTE_LIVE_PAPER_VALIDATED` is not true; with approvals present but automation not
-started today it shows **Not armed · Arms when Auto Trade turns ON**.
+`AQTE_LIVE_PAPER_VALIDATED` is not true; with approvals present it shows
+**Waiting · ON · arms 09:15 IST** (or **arming / preflight**) while a standing ON
+waits, and **Not armed · Arms when Auto Trade turns ON** while OFF.
 The compact header badge describes the market feed, not automation. LIVE requires
 a fresh shared index tick and socket connection during weekday 09:15–15:30 IST
 hours; otherwise it shows FEED OFF during those hours or CLOSED outside them.
@@ -288,6 +295,11 @@ This display does not approve or enable real automation.
   change the redirect URL, implement another login or store tokens in its journal.
 - Spot index packets have no exchange timestamp or tradable volume. AQTE explicitly
   uses receipt timestamps for spot freshness; derivative timestamps must come from Kite.
+- AQTE consumes only KiteTicker packets. The dashboard's REST quote fallback keeps
+  prices visible but never feeds AQTE, so signals stay WAIT ("Market data stale:
+  futures last tick Ns ago") while it is active. During market hours the feed retries the WebSocket every 30s
+  (longer during token-check backoff); ordinary `1006` network drops use KiteTicker's
+  own reconnects, and only a rejected `403 Forbidden` handshake forces REST fallback.
 - Current `CacheService` is an in-process TTL cache, **not Redis-backed**, even when
   `REDIS_URL` is configured. Existing paper books use SQLite, not PostgreSQL.
 - Deployment is currently single-worker. AQTE follows that topology and adds an
@@ -337,7 +349,11 @@ incremental volume without treating the first cumulative-volume tick as traded v
 Gaps are not synthesized; instrument tokens and candle intervals remain separate.
 
 Analysis uses **201 contiguous completed one-minute futures candles from the current
-IST session**. It calculates SMA-seeded EMA 9/20/50/100/200, Wilder RSI/ATR,
+IST session**, ending in the minute immediately before the latest futures tick.
+An internally contiguous but old window is not sufficient: the first tick after a
+data gap cannot reuse an old strategy. Each signal reports `warmup.completed` and
+`warmup.required`; only consecutive completed candles ending at that boundary count.
+It calculates SMA-seeded EMA 9/20/50/100/200, Wilder RSI/ATR,
 SuperTrend, observed-session futures VWAP, relative volume, depth imbalance, range
 breakouts, sweep/reclaim and market-structure proxies. CPR is contextual previous-day
 **spot** CPR from the existing feed; it is not misrepresented as futures CPR or used
@@ -347,8 +363,126 @@ Strategies are momentum breakout, liquidity reversal, trend continuation and
 mean reversion. Candidates opposed by book imbalance are discarded before selecting
 the highest-scoring supported candidate. Output is BUY CE, BUY PE or WAIT with reasons.
 There is **no LLM tick processing, synthetic option contract, fabricated quote or ML
-prediction**. The baseline uses a conservative premium-distance stop; a learned
-optimal-entry model is a later milestone.
+order decision**. Optional LightGBM research predictions run separately in shadow
+mode; the baseline still uses a conservative premium-distance stop.
+
+The terminal labels this **Rule-Based Trade Engine**, not an ML model. Its empty-trade
+card displays the current backend WAIT reason and, when provided by the backend, the
+warm-up count. An older backend without counts still displays its WAIT reason.
+No fake entry, LTP, stop or trailing price is filled in before a real AQTE order exists.
+Installed libraries do not imply inference is connected: the separate QuantEdge
+LightGBM/NumPy classifiers predict underlying direction, not a validated AQTE
+option-entry outcome. They are not silently substituted for this strategy. A trained
+AQTE model requires a defined target/features contract, leakage-safe out-of-sample
+evaluation including costs, calibration and explicit approval before live integration.
+
+### Optional Python ML research (shadow only)
+
+`backend/services/aqte_ml.py` defines a dedicated AQTE feature/target contract.
+`backend/services/aqte_ml_training.py` trains a **LightGBM binary classifier**, using
+NumPy for arrays and evaluation. These are already declared dependencies. It does
+not reuse the unrelated QuantEdge underlying-direction models or add TensorFlow,
+PyTorch, an LLM, or default-valued synthetic market inputs.
+
+**Target:** positive estimated net option return **300 seconds after an observed
+hypothetical one-lot no-chase fill**, conditional on such a fill. This is not the
+probability that an order fills, hits its target, or wins under live stop/trailing
+management. Predictions are explicitly **uncalibrated and unvalidated**.
+
+- Replay uses the existing rule engine in analysis-only mode. No broker client,
+  network requests, real orders or training on the live event loop.
+- Sample at most the first qualifying candidate per index/completed candle.
+  The same feature extractor is used offline and in runtime shadow inference.
+- Features include index/option side, EMA differences, RSI/ATR, futures VWAP
+  distance, SuperTrend, relative volume, imbalance, breakout/sweep, actual
+  premium/spread/depth, moneyness, expiry and time of session.
+  Missing, non-finite, stale or future-dated evidence is rejected, not imputed.
+- Label only a **later** quote offering at least a lot, with ask plus one adverse
+  tick at or below the original midpoint limit and strictly before the existing
+  30-second expiry. Spot/futures and the entry session must still be valid.
+  A gap below the original stop cancels the hypothetical entry.
+- Require valid continuous option quotes with no gap over five seconds from
+  candidate through the five-minute exit; require one-lot bid depth too.
+  Deduct one tick of exit slippage and existing Policy cost estimates.
+  An unfilled candidate, missing exit, stale quote or data gap is **censored**,
+  never relabelled as a loss, a win, or a forced fill.
+- New journals preserve contract metadata by IST session/token in
+  `aqte_contract_history`. Old journals without dated metadata are rejected:
+  today's catalog cannot reliably describe historical reused option tokens.
+  Historical CPR/OI/Greeks are not reconstructed or fabricated.
+- Training needs **six labelled sessions, at least 200 training and 50 holdout
+  samples, and both outcome classes in each partition**. The newest two sessions
+  are held out in full; training labels must end at least five minutes before
+  holdout starts. Model settings are fixed; no holdout tuning, early stopping,
+  random row split, or refit on test labels.
+- Evaluation reports log loss, Brier score, threshold accuracy, per-index metrics
+  and a constant training-base-rate benchmark. Overlapping labels within sessions
+  remain correlated. Minimum sample counts and beating this baseline are plumbing
+  gates, **not statistical proof or permission to trade**.
+
+#### Collect and train offline
+
+Raw ticks expire after seven days. Six labelled trading sessions generally require
+multiple **complete, consistent SQLite backups** taken before retention expires.
+Use SQLite's online backup facility (including its WAL state), not a plain copy of
+an active database. Keep backups locally/privately; do not upload account journals.
+The trainer accepts multiple backups, deduplicates identical observations and
+rejects conflicting overlaps. Missing older metadata is not backfilled from today.
+
+Windows example, from `backend` (replace paths/dates with your actual backups):
+
+```powershell
+& ..\.venv\Scripts\python.exe -m services.aqte_ml_training `
+  --db .\archive\week-1.sqlite3 .\archive\week-2.sqlite3 `
+  --from-day 2026-10-19 --to-day 2026-10-30 `
+  --max-ticks 2000000 --output-dir .\data\aqte-ml\research-001
+```
+
+The tick cap applies per input backup. Databases are opened **read-only**.
+Insufficient data exits nonzero without producing a model. The output directory
+must be new; existing research results are never overwritten. `model.json` holds
+LightGBM text (not pickle), feature/target schema, checksum, covered indices and
+the chronological evaluation report. Archive it with its source dataset and code
+revision. Synthetic unit-test fixtures verify mechanics only; they are not an
+approved model and are never installed as a runtime artifact.
+
+#### Observe without changing orders
+
+ML is **disabled by default**. After reviewing a real-data research artifact, set
+only this backend setting to its readable local/container path, then restart the
+backend:
+
+```dotenv
+AQTE_ML_SHADOW_MODEL_PATH=/app/data/aqte-ml/research-001/model.json
+```
+
+For Windows, use an absolute Windows path instead. In shared-production mode the
+setting belongs on the single production backend, **not** a second local live
+controller. Training does not change this setting, deploy code, approve a model,
+arm automation, enable indices or switch Auto Trade ON.
+
+The existing analysis snapshot exposes a separate `ml` object:
+`DISABLED`, `READY` (artifact loaded, waiting for candidates), or `UNAVAILABLE`,
+plus timestamped last `observations` per index. Each probability is a **historical
+shadow observation** with its candidate time/token, not a fresh order signal or
+win-rate display. Index/option-side combinations absent from training have no prediction. A missing,
+corrupt or incompatible artifact produces an explicit unavailable status, never
+a fabricated 50% probability. Observations at or before the artifact's holdout
+end are rejected to prevent applying a future-trained model to earlier evidence.
+Training/holdout end timestamps accompany each prediction so model age is visible.
+
+Inference uses one LightGBM thread in a background task. The feed worker only
+captures a bounded copy of the first candidate per index/candle; prediction and
+audit writes run outside its lock. Results append to `aqte-ml-shadow.jsonl` beside
+the AQTE journal (retain/rotate it as an audit file). Scoring or audit-write failure
+is logged and surfaced separately, without faulting the live recorder.
+
+**There is no live ML filter or automatic promotion in this version.**
+`decision`, rule `confidence`, `model_validated`, daily controls, the 201-candle
+warm-up, price limits, stop/target logic and all broker gates are unchanged.
+No prediction can authorize or veto an order. Any future live filter requires a
+separate implementation, independent forward validation/calibration including
+realistic costs and exits, and explicit risk approval. No model guarantees profits.
 
 ### Entry and paper execution (isolated historical replay only)
 
@@ -383,7 +517,7 @@ Defaults in the backend `Policy` dataclass:
 | Policy | Default |
 |---|---|
 | Starting paper capital | INR 100,000 |
-| Per-trade maximum planned risk including estimated costs | 0.5% of paper equity |
+| Per-trade maximum planned risk including estimated costs | 0.5% of paper equity (paper mode only; live uses `AQTE_LIVE_RISK_PER_TRADE`) |
 | Daily loss budget | INR 2,000 |
 | Maximum filled trades/day | 5, with pending trade-slot reservations |
 | Consecutive losing trades/day | 3 |
@@ -530,7 +664,9 @@ ON/OFF actions are automatically journalled by the existing backend.
 Page refresh restores the authoritative state using GET only, never by replaying
 an ON request or trusting local storage. A saved/confirmed acknowledgement is
 shown only after a successful response; unknown outcomes remain explicit.
-Backend restarts, session rollover and safety stops still reset automation OFF.
+Backend restarts and session rollover disarm the session but keep a standing ON,
+which re-arms through a fresh preflight in the next entry window; safety stops
+re-arm only after a one-minute delay and never over an open AQTE trade.
 The badge consumes the existing switch status poll and acknowledged actions, adding
 no polling. Selecting the Real Trade view alone never makes the badge green.
 
@@ -543,15 +679,18 @@ no polling. Selecting the Real Trade view alone never makes the badge green.
   trading, market data or manually opened Kite positions.
 - OFF is the reversible pause for new entries and remains available outside
   market hours. Emergency Stop is not a pause: see **Emergency Stop · close all** below.
-- New installations, every backend restart and daily arming start **OFF**.
-- Complete IP/Kite preflight and explicitly arm the current session first.
+- New installations start **OFF**. Once switched ON, Auto Trade stays ON (restarts
+  and new days included) until OFF, a manual exit or an emergency stop.
+- Preflight (IP/Kite/flat account) and daily arming run automatically inside each
+  weekday entry window; outside it ON simply waits.
 - Click the header switch, then **Confirm ON · real money**. This authorizes automatic
   qualifying real entries without per-order approval, using all existing entry checks.
 - **OFF blocks new entry orders**, invalidates prepared proposals, and retains broker
   protection, trailing stops, target/stop exits and reconciliation for existing trades.
 - Already submitted or in-flight broker orders cannot be undone by changing a switch.
   ON/OFF and submissions are serialized; wait for acknowledged OFF, not a local click.
-- A new day, shutdown/restart, emergency stop or monitoring fault clears automation.
+- A new day, shutdown/restart or monitoring fault disarms the session; a standing ON
+  re-arms with a fresh preflight. Emergency stop and manual exit clear ON.
   Existing open positions continue to be reconciled regardless of the switch.
 - ON never means "buy immediately": no valid fresh signal means no entry. Only one
   pending/open live trade is allowed across the three indices, and used strategy candles
@@ -622,14 +761,17 @@ A non-numeric score always blocks. The ON confirmation and `GET /api/aqte/live/s
 Even with the opt-in, entries are rare by design:
 
 - Analysis needs 201 contiguous completed one-minute futures candles from the current
-  session, so the earliest signal is about **12:36 IST**; gaps or a restart reset warm-up.
-- The engine only emits BUY when one lot of the nearest-strike option fits about INR 500
-  of risk (0.5% of its INR 100,000 paper capital) with a stop of at least 20% of premium
-  (or 3 spreads / 4 ticks), i.e. roughly premium x lot size x 20% + costs <= INR 500.
-  The live proposal then applies the saved SL percentage and the INR 500 cap. A lower
-  saved SL percentage reduces live risk but does not widen engine eligibility, so
-  entries are mostly limited to low-premium contracts; the cap is never raised
-  automatically.
+  session, so the earliest signal is about **12:36 IST** with uninterrupted data from
+  09:15. Same-day recorded futures ticks can preserve warm-up across a restart;
+  missing minutes or a contract/session change require a fresh contiguous window.
+- In paper mode the engine only emits BUY when one lot of the nearest-strike option fits
+  about INR 500 of risk (0.5% of its INR 100,000 paper capital). In production
+  ANALYSIS_ONLY mode that paper budget does not apply: the signal is emitted and the
+  live proposal alone sizes it with the saved SL percentage and the INR 500
+  `AQTE_LIVE_RISK_PER_TRADE` cap, i.e. premium x lot size x SL% + costs <= INR 500.
+  At the default 20% SL that means premium about INR 35 or less for a 65-unit NIFTY lot;
+  at 5% SL about INR 130 or less. Blocked setups are logged as
+  "One lot exceeds live per-trade risk limit"; the cap is never raised automatically.
 
 A rule score is not a calibrated win probability; none of these checks guarantee
 profitable trades or execution.
@@ -661,11 +803,12 @@ block the pilot. Matching this public-IP check cannot prove the broker's own all
 Kite's actual permission checks remain authoritative. Do not edit machine routing to
 impersonate an allowlisted address.
 
-The signed-in configured app owner, on each weekday between 09:15 and 15:15 IST:
+The signed-in configured app owner, at any time (market open or closed):
 
 1. Clicks the header **Auto Trade** switch and **Confirm ON · real money**.
-2. The backend runs the static-IP, Kite profile and flat-account preflight and arms the
-   current session; any failure keeps automation OFF with the reason shown.
+2. Inside weekday 09:15–15:15 IST the backend runs the static-IP, Kite profile and
+   flat-account preflight and arms the current session; outside those hours, or if a
+   check fails, ON stays saved with the reason shown and retries automatically.
 3. The monitor consumes qualifying signals automatically through the same short-lived,
    server-generated proposal and broker revalidation path; no individual BUY click is needed.
 
@@ -694,10 +837,67 @@ production is live.
    After editing `backend/.env`, recreate the backend:
    `docker compose -f docker-compose.prod.yml up -d backend` (a plain restart keeps
    the old environment).
-5. **Each trading day:** complete the Kite login on the production site, keep the
-   desired indices enabled in the Real tab controls (they default to disabled and are
-   stored in the production journal), then turn Auto Trade ON after 09:15 IST.
+5. **Each trading day:** complete the Kite login on the production site (the Kite token
+   expires daily; until then ON waits with a token error), keep the desired indices
+   enabled in the Real tab controls (they default to disabled and are stored in the
+   production journal). Auto Trade can be switched ON any time; it stays ON and arms
+   itself from 09:15 IST.
    Production has its own journal; reset an emergency latch there only once Kite is flat.
+
+### Local UI and production sharing real execution
+
+Use this mode to test local frontend changes against the **same production account,
+orders, Auto Trade switch, controls and risk limits**. It does not test local backend
+changes and is not an isolated test account: ON, OFF, exits and Emergency Stop from
+either dashboard affect the same real production account.
+
+1. Keep Kite's production whitelist IP and callback unchanged. The local public IP
+   is irrelevant because only the production backend sends broker orders.
+2. In local `backend/.env`, keep `AQTE_LIVE_ENABLED=false`. Do not run a second live
+   controller. If the local journal has an open trade, reconcile it before stopping
+   the local backend; otherwise the local backend is not needed for this mode.
+3. Set these values in local `frontend/.env.local`, then restart `npm run dev`:
+
+   ```dotenv
+   NEXT_PUBLIC_SHARED_PRODUCTION=true
+   DEV_PRODUCTION_ORIGIN=https://mydailytradesignals.com
+   ```
+
+   This development-only mode overrides the ordinary API/WS URLs. The Next.js server
+   proxies `/api/*` and `/ws/*` over HTTPS to production, before local API routes
+   can run. This includes feeds that use fixed same-origin paths.
+   Chart, strike and regime feeds cannot fall back to a local backend in this mode.
+   Production builds ignore the flag. The switch shows **Shared production · REAL ORDERS**.
+4. On the **production server**, append the exact local browser origins to the existing
+   `CORS_ORIGINS` list (retain any other trusted origins):
+
+   ```dotenv
+   CORS_ORIGINS=https://mydailytradesignals.com,http://localhost:3000,http://127.0.0.1:3000
+   ```
+
+   Keep `FRONTEND_URL` and `REDIRECT_URL` pointing at production and keep `DEBUG=false`.
+   Recreate the backend from the deployment directory:
+   `docker compose -f docker-compose.prod.yml up -d --force-recreate backend`.
+   The proxy preserves Origin; it does not bypass the owner/origin guard. Until the
+   server explicitly allows localhost, live controls return `403 Untrusted live-control origin`.
+   Only trust local origins while using trusted local software, and remove them when
+   shared testing is finished. Never use a wildcard origin.
+5. Open `http://localhost:3000` and sign in using the **production app-access credentials**.
+   Sign in separately on the production dashboard. Sessions remain device-bound;
+   no cookies, credentials or Kite tokens are copied between installations.
+   The same-origin proxy avoids cross-site cookie blocking and retains Secure/HttpOnly
+   cookie attributes; use a current browser with localhost secure-cookie support.
+   If production has `APP_ACCESS_SINGLE_DEVICE=true`, a second origin has a different
+   device ID and may be locked out. Deliberately set it to `false` on the server only
+   if concurrent dashboard sessions are intended, then recreate the backend.
+6. Perform daily Kite login on the production site, using its existing callback.
+   The local dashboard reads the resulting production auth/feed state. An expired
+   production Kite token still blocks trades; local login cannot override broker checks.
+
+Verify the production status in both dashboards before enabling any real orders.
+Do not turn ON merely to test connectivity. To return to independent local development,
+set `NEXT_PUBLIC_SHARED_PRODUCTION=false` and restart the frontend, leaving local live
+execution disabled until an intentional, separately reviewed host handover.
 
 Automatic entries are permitted **only while ON and armed**. The controller does not trust browser prices or quantity.
 It rechecks settings, IP, account identity, flat account, current signal, timestamp,
@@ -732,6 +932,7 @@ pilot. Pre-entry broker reads cannot prevent an external concurrent order.
 Lost entry/stop acknowledgements are reconciled by tag/ID from the broker order book,
 not retried. Unresolved order modifications block further changes until observed in the
 broker book. Broker position quantity must match AQTE fills. Restart disarms entries
+(a standing ON re-arms through a fresh preflight)
 but preserves active order identities and reconciles protection. Previous-session
 unresolved trades, rejected/cancelled stops and manual position changes block automation
 and require broker-terminal reconciliation.

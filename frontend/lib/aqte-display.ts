@@ -7,6 +7,7 @@ export type AQTELiveState = {
   daily_counts: { executed: number; reserved: number };
   enabled: boolean; paper_validated: boolean; unvalidated_rules?: boolean; expected_ip: string;
   ready: boolean; armed: boolean; automation_on: boolean; killed: boolean;
+  automation_wanted?: boolean; automation_waiting?: string | null; entry_window?: boolean;
   flatten_pending?: boolean; error: string | null; connection_error?: string;
   preflight: { ip: string; at: number; account: string } | null;
   limits: { risk_per_trade: number; daily_loss: number; max_trades: number; max_losses: number; max_lots: number };
@@ -44,6 +45,9 @@ export function isAqteLiveState(value: unknown): value is AQTELiveState {
       !nullableText(value.error) || typeof value.expected_ip !== 'string' ||
       (value.flatten_pending !== undefined && typeof value.flatten_pending !== 'boolean') ||
       (value.unvalidated_rules !== undefined && typeof value.unvalidated_rules !== 'boolean') ||
+      (value.automation_wanted !== undefined && typeof value.automation_wanted !== 'boolean') ||
+      (value.entry_window !== undefined && typeof value.entry_window !== 'boolean') ||
+      (value.automation_waiting !== undefined && !nullableText(value.automation_waiting)) ||
       !record(value.limits) || !record(value.daily_counts) || !Array.isArray(value.trades)) return false;
   const limits = value.limits;
   if (!['risk_per_trade', 'daily_loss', 'max_trades', 'max_losses', 'max_lots'].every(key => finite(limits[key]) && limits[key] > 0) ||
@@ -119,6 +123,7 @@ export type AQTESignal = {
   spot: number | null;
   at: number | null;
   strategy?: string;
+  warmup?: { completed: number; required: number };
   intelligence?: {
     ema: Record<string, number>; close: number; at: number; vwap: number | null;
     rsi: number; atr: number; supertrend: string; supertrend_price: number;
