@@ -7,14 +7,15 @@ import { getOrCreateVisitorId } from '@/lib/visitor-id';
 const SYMBOLS = ['NIFTY', 'BANKNIFTY', 'SENSEX'] as const;
 type SymbolName = typeof SYMBOLS[number];
 type Config = {
-  enabled: boolean; max_trades: number; min_confidence: number; stop_percent: number;
+  enabled: boolean; style?: 'scalp' | 'swing'; max_trades: number; min_confidence: number; stop_percent: number;
   target_rr: number; trail_start_r: number; daily_loss: number;
 };
 type Row = {
   config: Config; executed: number; reserved: number; remaining: number;
   status: string; reason: string; direction: string;
-  opportunity: { decision: string; confidence: number | null; contract: { trading_symbol: string } | null;
-    entry: { maximum: number; stop: number; target: number } | null; reasons: string[] };
+  opportunity: { decision: string; confidence: number | null; strategy?: string | null;
+    contract: { trading_symbol: string } | null;
+    entry: { maximum: number; stop: number; target: number; points?: number } | null; reasons: string[] };
 };
 type Snapshot = {
   data: Record<SymbolName, Row>; editable: boolean; limits_editable: boolean; long_only: true;
@@ -37,6 +38,7 @@ function parse(value: unknown): Snapshot {
     const config = row?.config;
     const opportunity = row?.opportunity;
     return config && typeof config.enabled === 'boolean' &&
+      (config.style === undefined || config.style === 'scalp' || config.style === 'swing') &&
       Number.isInteger(config.max_trades) && config.max_trades >= 1 && config.max_trades <= 10 &&
       (['min_confidence', 'stop_percent', 'target_rr', 'trail_start_r', 'daily_loss'] as const)
         .every(key => typeof config[key] === 'number' && Number.isFinite(config[key])) &&
@@ -189,12 +191,20 @@ export default function AQTEDailyControl() {
             ))}
           </div>
           <p className="text-amber-200">{error ? 'STATUS UNAVAILABLE' : row.status} · {row.reason}</p>
-          <p className="text-slate-300">Direction {row.direction} · Best candidate {row.opportunity.decision} · Rule score {row.opportunity.confidence ?? '--'}/100</p>
+          <p className="text-slate-300">Direction {row.direction} · Best candidate {row.opportunity.decision}{row.opportunity.strategy ? ` · ${row.opportunity.strategy.replaceAll('_', ' ')}` : ''} · Rule score {row.opportunity.confidence ?? '--'}/100</p>
           <p className="text-slate-400">Account remaining {snapshot?.account.remaining} · Reserved entries {row.reserved}. Index limits cannot bypass the account cap.</p>
           <label className="flex min-h-[44px] items-center gap-2 text-slate-200">
             <input type="checkbox" checked={config.enabled} disabled={disabled} onChange={e => change({ enabled: e.target.checked })} />
             Enable {label(symbol)} entries after arming and ON
           </label>
+          {config.style !== undefined && <label className="block text-slate-300">Entry style
+            <select aria-label="Entry style" value={config.style} disabled={disabled} className={input}
+              onChange={e => change({ style: e.target.value === 'swing' ? 'swing' : 'scalp' })}>
+              <option value="scalp">Quick scalp · fixed premium-point targets (e.g. NIFTY 10/20/30)</option>
+              <option value="swing">Swing · rule signal with SL % and target multiple</option>
+            </select>
+          </label>}
+          {config.style === 'scalp' && <p className="text-slate-400">Quick scalp: the rules engine picks the largest point tier the signal strength and futures ATR support, then shrinks it to fit the per-trade risk cap. Stop = target × stop ratio. SL % and target multiple below apply to Swing only; trailing applies to both.</p>}
           <div className="grid grid-cols-2 gap-3">
             {([
               ['Minimum rule score', 'min_confidence', 90, 100, 1],
@@ -214,11 +224,11 @@ export default function AQTEDailyControl() {
           {row.opportunity.contract && <details className="text-slate-400">
             <summary className="cursor-pointer py-2">Candidate entry &amp; justification</summary>
             <p className="break-all">{row.opportunity.contract.trading_symbol}</p>
-            <p>Signal entry {row.opportunity.entry?.maximum} · Signal SL {row.opportunity.entry?.stop} · Signal target {row.opportunity.entry?.target}</p>
+            <p>Signal entry {row.opportunity.entry?.maximum} · Signal SL {row.opportunity.entry?.stop} · Signal target {row.opportunity.entry?.target}{row.opportunity.entry?.points ? ` · +${row.opportunity.entry.points} pts` : ''}</p>
             <p>{row.opportunity.reasons.join(' · ')}</p>
           </details>}
         </>}
-        <p className="text-[11px] text-slate-400">Rule score is not a win probability. Unvalidated or incomplete evidence means WAIT. Defaults cannot meet 90 with the current rule baseline; no guaranteed profits.</p>
+        <p className="text-[11px] text-slate-400">Rule score is not a win probability. Unvalidated or incomplete evidence means WAIT. Strict mode blocks unvalidated rules; with AQTE_LIVE_ALLOW_UNVALIDATED_RULES=true, Quick scalp uses its own rule gate and Swing needs every check aligned. No guaranteed profits.</p>
       </div>
       </details>
     </section>

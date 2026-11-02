@@ -348,13 +348,20 @@ proxy, **not identified aggressor flow or institutional activity**. Candles calc
 incremental volume without treating the first cumulative-volume tick as traded volume.
 Gaps are not synthesized; instrument tokens and candle intervals remain separate.
 
-Analysis uses **201 contiguous completed one-minute futures candles from the current
-IST session**, ending in the minute immediately before the latest futures tick.
-An internally contiguous but old window is not sufficient: the first tick after a
-data gap cannot reuse an old strategy. Each signal reports `warmup.completed` and
-`warmup.required`; only consecutive completed candles ending at that boundary count.
+Analysis uses **201 contiguous completed one-minute futures candles**, ending in the
+minute immediately before the latest futures tick. The window continues across the
+overnight close (previous session 15:29 → today 09:15 is not a gap), but any missing
+intraday minute resets it. Signals also wait for an **opening range of 15 completed
+one-minute candles from 09:15 IST**, so the first evaluation is at **09:30 IST**, and
+VWAP uses today's candles only. Each signal reports `warmup` and `opening`
+(`completed`/`required`). On restart the backend replays the previous session's last
+~4.4 hours of recorded futures ticks; on weekdays from 09:00 it also fills missing
+completed minutes from Kite `historical_data` (one-minute futures, last five days).
+History never overwrites the forming minute or the latest two live minutes; if the
+historical API is unavailable, warm-up continues from live ticks and retries every
+five minutes.
 It calculates SMA-seeded EMA 9/20/50/100/200, Wilder RSI/ATR,
-SuperTrend, observed-session futures VWAP, relative volume, depth imbalance, range
+SuperTrend, today's futures VWAP, relative volume, depth imbalance, range
 breakouts, sweep/reclaim and market-structure proxies. CPR is contextual previous-day
 **spot** CPR from the existing feed; it is not misrepresented as futures CPR or used
 to place futures-derived stops. Missing contextual CPR stays null.
@@ -367,8 +374,9 @@ order decision**. Optional LightGBM research predictions run separately in shado
 mode; the baseline still uses a conservative premium-distance stop.
 
 The terminal labels this **Rule-Based Trade Engine**, not an ML model. Its empty-trade
-card displays the current backend WAIT reason and, when provided by the backend, the
-warm-up count. An older backend without counts still displays its WAIT reason.
+card displays the current backend WAIT reason for the index's selected style
+(Quick scalp or Swing), the warm-up and opening-range counts, and the last skipped
+automatic-entry check. An older backend without counts still displays its WAIT reason.
 No fake entry, LTP, stop or trailing price is filled in before a real AQTE order exists.
 Installed libraries do not imply inference is connected: the separate QuantEdge
 LightGBM/NumPy classifiers predict underlying direction, not a validated AQTE
@@ -550,9 +558,10 @@ The additive, idempotent schema is created on startup:
 Each worker batch writes ticks, events and state in one WAL transaction. The engine
 stops on a transaction failure; uncommitted in-memory progress is not presented as
 healthy execution. On restart, committed orders and all completed trades are restored.
-Current-day recorded futures ticks rebuild candles **without replaying trades or
-filling orders against past quotes**. A new installation must warm up for 201 completed
-minutes (earliest approximately 12:36 IST with uninterrupted data from 09:15). Missing
+Recorded futures ticks (today plus the previous session's tail) rebuild candles **without
+replaying trades or filling orders against past quotes**, and Kite one-minute history
+fills missing completed minutes when available. A new installation with no history
+access must warm up for 201 completed live minutes. Missing
 historical data must never be treated as an already warmed/validated model.
 
 No DigitalOcean/PM2/Nginx credentials or existing environment files are changed.
@@ -738,11 +747,44 @@ journal. Paper trading and read-only manual Kite positions are unaffected.
   cooldown and near-identical premium re-entries (less than 1% apart) are blocked.
 - Saved SL percentage (5–30%), target (2–5R), trailing activation (1–3R) and daily
   index loss budget (up to INR 2,000) apply to future entries only. Existing trades
-  retain their captured protection settings. The INR 500 one-lot per-trade ceiling,
+  retain their captured protection settings. The `AQTE_LIVE_RISK_PER_TRADE` one-lot
+  ceiling (default INR 1,000, maximum 2,000),
   account loss ceiling, cash, broker, stale-data and one-position guards still apply.
   Planned reward/risk is recomputed after estimated fees and must be at least 1.5.
+- **Entry style** per index: **Quick scalp** (default) or **Swing**. SL % and target
+  multiple apply to Swing; trailing applies to both. Style can only change while OFF.
 - Eligible indices are considered in descending score order; weak, sideways,
   incomplete or unvalidated evidence never becomes a forced trade.
+
+#### Quick scalp (10 / 20 / 30 points)
+
+A separate rules engine produces a quick-scalp sub-signal on every completed candle
+(`signal.scalp`). It targets fixed **option-premium points** per index from
+`AQTE_SCALP_POINTS` (default NIFTY 10/20/30, BANKNIFTY 20/40/60, SENSEX 30/60/90);
+the stop is `points x AQTE_SCALP_STOP_RATIO` (default 0.4, i.e. 4/8/12 for NIFTY).
+
+Rules (all required, futures 1-minute):
+
+- Bias: price above VWAP **and** EMA 9 above EMA 20 for CE (both below for PE).
+- SuperTrend aligned; RSI 55-80 (CE) or 20-45 (PE).
+- Fresh 20-candle breakout in the same direction with volume at least 1.5x.
+- Order-book imbalance at least 0.10 in the trade direction.
+- No chasing: price within 2 ATR of EMA 20.
+
+Tier selection: strength 1 allows only the first tier. Strength 2 (EMA 20/50 aligned,
+volume 2x, imbalance 0.2) allows two tiers. Strength 3 (full EMA stack, volume 2.5x,
+close beyond CPR, HH/LL structure) allows all three. A tier must also be reachable:
+points <= 0.5 delta x 4 x futures ATR. The live controller then picks the
+**largest allowed tier whose one-lot risk fits `AQTE_LIVE_RISK_PER_TRADE`** with net
+reward/risk >= 1.5 after costs. Example with a INR 101 NIFTY premium and a 65 lot:
+30 points (SL 89 / target 131) costs about INR 839 of risk; at a INR 500 cap it shrinks
+to 10 points (SL 97 / target 111, about INR 319). Rule score is 70/75/80 by tier
+count; it is not a win probability.
+
+With `AQTE_LIVE_ALLOW_UNVALIDATED_RULES=true`, a quick-scalp entry passes the quality
+gate when the scalp rules still hold at submission; strict mode blocks it like every
+unvalidated rule. Scalp entries use the same IOC, broker stop, target-modify,
+trailing (from +1R), 15:25 session exit and daily limits as Swing.
 
 **Important current limitation:** these controls do not train or validate a predictive
 model. The existing rule baseline tops out at 80, is unvalidated and cannot pass the
@@ -758,20 +800,20 @@ VWAP, SuperTrend, RSI band, CPR, volume (at least 1.5x), order-flow imbalance (a
 A non-numeric score always blocks. The ON confirmation and `GET /api/aqte/live/status`
 (`unvalidated_rules`) report the active mode.
 
-Even with the opt-in, entries are rare by design:
+Even with the opt-in, entries are selective by design:
 
-- Analysis needs 201 contiguous completed one-minute futures candles from the current
-  session, so the earliest signal is about **12:36 IST** with uninterrupted data from
-  09:15. Same-day recorded futures ticks can preserve warm-up across a restart;
-  missing minutes or a contract/session change require a fresh contiguous window.
+- Analysis needs 201 contiguous completed one-minute futures candles (carried over from
+  the previous session) plus 15 opening candles, so the earliest signal is
+  **09:30 IST**. Restart replay and Kite history backfill restore the window; a
+  brand-new install without history access needs about 3.4 hours of live data.
 - In paper mode the engine only emits BUY when one lot of the nearest-strike option fits
   about INR 500 of risk (0.5% of its INR 100,000 paper capital). In production
   ANALYSIS_ONLY mode that paper budget does not apply: the signal is emitted and the
-  live proposal alone sizes it with the saved SL percentage and the INR 500
-  `AQTE_LIVE_RISK_PER_TRADE` cap, i.e. premium x lot size x SL% + costs <= INR 500.
-  At the default 20% SL that means premium about INR 35 or less for a 65-unit NIFTY lot;
-  at 5% SL about INR 130 or less. Blocked setups are logged as
-  "One lot exceeds live per-trade risk limit"; the cap is never raised automatically.
+  live proposal alone sizes it against `AQTE_LIVE_RISK_PER_TRADE` (default INR 1,000).
+  Swing risk is premium x lot size x SL% + costs; at a 20% SL and a 65-unit NIFTY lot
+  that allows a premium of about INR 73. Quick scalp shrinks its tier instead.
+  Blocked setups are logged as "One lot exceeds live per-trade risk limit" or
+  "No quick-scalp tier fits..."; the cap is never raised automatically.
 
 A rule score is not a calibrated win probability; none of these checks guarantee
 profitable trades or execution.
@@ -786,10 +828,12 @@ AQTE_LIVE_ENABLED=false
 AQTE_LIVE_PAPER_VALIDATED=false
 AQTE_LIVE_STATIC_IP=159.65.147.167
 AQTE_LIVE_ALLOW_UNVALIDATED_RULES=false
-AQTE_LIVE_RISK_PER_TRADE=500
+AQTE_LIVE_RISK_PER_TRADE=1000
 AQTE_LIVE_DAILY_LOSS=2000
 AQTE_LIVE_MAX_TRADES=5
 AQTE_LIVE_MAX_LOSSES=3
+AQTE_SCALP_POINTS=NIFTY:10/20/30,BANKNIFTY:20/40/60,SENSEX:30/60/90
+AQTE_SCALP_STOP_RATIO=0.4
 FORCE_OUTBOUND_IPV4=true
 ```
 
@@ -903,10 +947,15 @@ Automatic entries are permitted **only while ON and armed**. The controller does
 It rechecks settings, IP, account identity, flat account, current signal, timestamp,
 spread/depth, cash, one-lot quantity, risk budget and cutoff before submission.
 One pending/open live trade is allowed across all indices; planned risk is capped at
-INR 500 including estimated costs, with daily limits of INR 2,000, five filled trades
+`AQTE_LIVE_RISK_PER_TRADE` (default INR 1,000) including estimated costs, with daily limits of INR 2,000, five filled trades
 and three consecutive losses. Those are planned limits, not guarantees against gaps.
 
-The entry is a no-chase **IOC LIMIT**, not a market order. The broker-reported actual
+The entry is a no-chase **IOC LIMIT** priced at the signal's **ask** (marketable now),
+never above it; a fresh broker ask above that limit skips the entry. Paper replay alone
+rests at the midpoint. Transient skips (quote moved, stale for a moment, approval
+expired, levels changed) keep Auto Trade ON and armed, are shown as the last entry check,
+and retry that index after 5 seconds; they never consume the strategy candle.
+The broker-reported actual
 fill quantity and average price are authoritative. After the entry is terminal,
 the controller places a broker **SELL SL (stop-limit)** for the actual filled quantity.
 Partial IOC fills are protected at their actual quantity. There is necessarily a

@@ -105,10 +105,14 @@ class Settings(BaseSettings):
     aqte_live_static_ip: str = "122.177.245.101"
     # Real-money opt-in: lets fully aligned, unvalidated rule setups enter one lot.
     aqte_live_allow_unvalidated_rules: bool = False
-    aqte_live_risk_per_trade: float = Field(default=500, gt=0, le=500)
+    # Max one-lot loss (premium to stop + estimated costs); half the daily loss lets two losers fit a day.
+    aqte_live_risk_per_trade: float = Field(default=1000, gt=0, le=2000)
     aqte_live_daily_loss: float = Field(default=2000, gt=0, le=2000)
     aqte_live_max_trades: int = Field(default=5, ge=1, le=5)
     aqte_live_max_losses: int = Field(default=3, ge=1, le=3)
+    # Quick-scalp targets in option premium points per index; stop = target x ratio.
+    aqte_scalp_points: str = "NIFTY:10/20/30,BANKNIFTY:20/40/60,SENSEX:30/60/90"
+    aqte_scalp_stop_ratio: float = Field(default=0.4, ge=0.25, le=1.0)
     # Optional research artifact. Never enables or filters broker orders.
     aqte_ml_shadow_model_path: str = ""
     

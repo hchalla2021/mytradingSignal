@@ -1,15 +1,18 @@
 """Persisted live entry preferences and deterministic fail-closed quality gates."""
 
 import math
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from services.aqte_engine import SYMBOLS, day
+from services.aqte_engine import SYMBOLS, day, scalp
 
 
 class IndexControl(BaseModel):
     model_config = ConfigDict(extra="forbid")
     enabled: bool = Field(default=False, strict=True)
+    # scalp: quick premium-point targets (10/20/30 NIFTY); swing: stop_percent / target_rr levels.
+    style: Literal["scalp", "swing"] = "scalp"
     max_trades: int = Field(default=5, ge=1, le=10, strict=True)
     min_confidence: int = Field(default=90, ge=90, le=100, strict=True)
     stop_percent: float = Field(default=20, ge=5, le=30, allow_inf_nan=False)
@@ -53,6 +56,16 @@ def quality_reason(signal, control, allow_unvalidated_rules=False):
             return "Signal model has not passed paper validation"
     info = signal.get("intelligence") or {}
     side = 1 if signal["decision"] == "BUY CE" else -1
+    if str(signal.get("strategy") or "").startswith("quick_scalp"):
+        # Re-derive the scalp rules from the live intelligence; never trust the cached decision alone.
+        setup, reason = scalp(info, signal["entry"].get("points_allowed") or ())
+        if setup is None:
+            return f"Quick-scalp rules no longer hold: {reason}"
+        if setup["side"] != signal["decision"][-2:]:
+            return "Quick-scalp direction changed; WAIT"
+        if allow_unvalidated_rules:
+            return None
+        return "Validated option-chain OI/PCR/Greeks and liquidity-sweep confirmation are unavailable"
     try:
         ema = [float(info["ema"][str(period)]) for period in (9, 20, 50, 100, 200)]
         if not all(math.isfinite(v) for v in ema) or not all(

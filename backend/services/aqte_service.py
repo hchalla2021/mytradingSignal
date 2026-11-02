@@ -15,7 +15,10 @@ from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 
-from services.aqte_engine import AQTEEngine, Contract, IST, SYMBOLS, Tick, day
+from services.aqte_engine import (
+    AQTEEngine, CLOSE_MINUTE, Contract, IST, OPEN_MINUTE, SYMBOLS, WARMUP_CANDLES, Policy, Tick, day,
+    minute_of_day, parse_scalp_points, warmup_count,
+)
 from services.aqte_ml import FEATURE_NAMES, SCHEMA, MLUnavailable, ShadowModel, feature_vector
 
 logger = logging.getLogger(__name__)
@@ -48,10 +51,11 @@ def normalize(symbol, kind, raw, received):
 
 
 class AQTEService:
-    def __init__(self, path=None, *, paper_enabled=False, ml_model_path=""):
+    def __init__(self, path=None, *, paper_enabled=False, ml_model_path="", policy=None):
         self.path = Path(path or os.getenv("AQTE_DB_PATH") or
                          Path(__file__).resolve().parent.parent / "data" / "aqte" / "aqte.sqlite3")
-        self.engine = AQTEEngine(paper_enabled=paper_enabled)
+        self.engine = AQTEEngine(policy, paper_enabled=paper_enabled)
+        self.backfill_after = 0.0
         self.lock = threading.RLock()
         self.queue = queue.Queue(maxsize=20_000)
         self.stop_event = threading.Event()
@@ -121,8 +125,12 @@ class AQTEService:
                 self.engine.trades = [json.loads(r["payload"]) for r in db.execute(
                     "SELECT payload FROM aqte_trades ORDER BY exit_at, rowid")]
             midnight = datetime.now(IST).replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
+            # Indicators continue from the previous session: replay only its last ~4 hours of futures ticks.
+            last = db.execute("SELECT MAX(received) FROM aqte_ticks WHERE kind='future' AND received<?",
+                              (midnight,)).fetchone()[0]
+            start = min(midnight, last - (WARMUP_CANDLES + 60) * 60) if last else midnight
             for row in db.execute("SELECT payload FROM aqte_ticks WHERE kind='future' AND received>=? "
-                                  "ORDER BY received,id", (midnight,)):
+                                  "ORDER BY received,id", (start,)):
                 tick = Tick(**json.loads(row["payload"]))
                 if self.engine.fresh(tick, tick.received):
                     self.engine.book.add(tick)
@@ -306,6 +314,54 @@ class AQTEService:
             logger.exception("AQTE option subscriptions unavailable")
             with self.lock:
                 self.subscription_error = f"Option subscription failed ({type(exc).__name__})"
+        self.backfill(kite)
+
+    def backfill(self, kite, futures=None, now=None):
+        """Heal the futures one-minute warm-up from Kite exchange history after restarts or feed gaps.
+
+        Only completed regular-session minutes are merged; the forming minute and the latest live bars stay
+        authoritative. Failures leave live-only warm-up unchanged and retry after five minutes.
+        """
+        now = time.time() if now is None else now
+        dt = datetime.fromtimestamp(now, IST)
+        if now < self.backfill_after or dt.weekday() >= 5 or not OPEN_MINUTE - 15 <= minute_of_day(now) < CLOSE_MINUTE:
+            return 0
+        if futures is None:
+            from services.market_feed import FUT_TOKEN_MAP
+            futures = dict(FUT_TOKEN_MAP)
+        with self.lock:
+            futures = {**futures, **{t.token: s for s, t in self.engine.future.items()}}
+            wanted = {int(token): symbol for token, symbol in futures.items() if symbol in SYMBOLS and warmup_count(
+                self.engine.book.closed[("future", int(token), 60)], now) < WARMUP_CANDLES}
+        if not wanted:
+            return 0
+        added = 0
+        try:
+            for token, symbol in wanted.items():
+                rows = kite.historical_data(token, datetime.fromtimestamp(now - 5 * 86400, IST).replace(tzinfo=None),
+                                            dt.replace(tzinfo=None), "minute")
+                bars = []
+                for row in rows:
+                    at = row["date"]
+                    at = datetime.fromisoformat(at) if isinstance(at, str) else at
+                    at = (at if at.tzinfo else at.replace(tzinfo=IST)).timestamp()
+                    values = [float(row[k]) for k in ("open", "high", "low", "close")]
+                    if all(math.isfinite(v) and v > 0 for v in values) and values[2] <= min(values) and values[1] >= max(values):
+                        bars.append(dict(at=at, open=values[0], high=values[1], low=values[2], close=values[3],
+                                         volume=max(0, int(row.get("volume") or 0))))
+                with self.lock:
+                    merged = self.engine.seed_bars(token, bars, now)
+                added += merged
+                if merged:
+                    logger.info("AQTE warm-up backfilled %d one-minute %s futures candles from Kite history",
+                                merged, symbol)
+        except Exception as exc:
+            # Broker boundary: historical API may be unavailable; live ticks keep warming up.
+            logger.warning("AQTE warm-up backfill unavailable (%s); live candles only", type(exc).__name__)
+            self.backfill_after = now + 300
+            return added
+        self.backfill_after = now + (60 if added else 300)
+        return added
 
     def attach(self, kite, socket, prices, previous_day):
         self.connection = (kite, socket, copy.deepcopy(prices), copy.deepcopy(previous_day))
@@ -394,6 +450,7 @@ class AQTEService:
             if self.failed.is_set() or not self.started:
                 for signal in result["data"].values():
                     signal.update(decision="WAIT", entry=None, reasons=["AQTE recorder unavailable"])
+                    signal["scalp"] = self.engine.idle_scalp("AQTE recorder unavailable")
             return result
 
     def history(self, limit):
@@ -424,10 +481,18 @@ class AQTEService:
 _service = None
 
 
+def scalp_policy(settings):
+    points, errors = parse_scalp_points(settings.aqte_scalp_points)
+    if errors:
+        logger.error("AQTE_SCALP_POINTS entries ignored (scalping disabled for them): %s", errors)
+    return Policy(scalp_points=points, scalp_stop_ratio=settings.aqte_scalp_stop_ratio)
+
+
 def get_aqte_service():
     global _service
     if _service is None:
         from config import get_settings
 
-        _service = AQTEService(ml_model_path=get_settings().aqte_ml_shadow_model_path)
+        settings = get_settings()
+        _service = AQTEService(ml_model_path=settings.aqte_ml_shadow_model_path, policy=scalp_policy(settings))
     return _service

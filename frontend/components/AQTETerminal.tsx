@@ -103,15 +103,19 @@ function AQTETerminal({ symbol, signal, unavailable, active, tick, liveStatus, o
   const ring = 2 * Math.PI * 52;
   const automation = currentStatus && liveStatus?.automation_on && !liveStatus.killed;
   const automationWaiting = currentStatus && !automation && liveStatus?.automation_wanted && !liveStatus.killed;
+  const style = liveStatus?.styles?.[symbol];
+  const plan = style === 'scalp' && signal?.scalp ? signal.scalp : signal;
+  const note = liveStatus?.entry_note?.startsWith(`${symbol}:`) ? liveStatus.entry_note.slice(symbol.length + 1).trim() : null;
   const waitingReason = !currentStatus ? 'Live controller status unavailable; entry state unverified' :
     liveStatus?.error ? liveStatus.error :
     liveStatus?.killed ? 'Emergency stop latched; new entries blocked' :
     !automation && !automationWaiting ? 'Auto Trade OFF; new entries blocked' :
     automationWaiting ? liveStatus?.automation_waiting || 'Waiting for daily preflight and arming' :
     unavailable ? 'Current signal data unavailable; do not assume an entry is ready' :
-    signal?.reasons.length ? signal.reasons.join(' · ') :
+    plan?.reasons.length ? `${style === 'scalp' ? 'Quick scalp · ' : style === 'swing' ? 'Swing · ' : ''}${plan.reasons.join(' · ')}` :
       'Waiting for a qualifying CE/PE setup and live quality, risk and broker checks';
   const warmup = !unavailable ? signal?.warmup : undefined;
+  const opening = !unavailable ? signal?.opening : undefined;
   const managing = currentStatus && filled && !!metrics && !liveStatus?.error;
   const prefix = `aqte-terminal-${symbol}`;
   return (
@@ -144,6 +148,10 @@ function AQTETerminal({ symbol, signal, unavailable, active, tick, liveStatus, o
             {warmup && warmup.completed < warmup.required && (
               <span> · Warm-up: {warmup.completed}/{warmup.required} consecutive completed futures candles</span>
             )}
+            {warmup && warmup.completed >= warmup.required && opening && opening.completed < opening.required && (
+              <span> · Opening range: {opening.completed}/{opening.required} one-minute candles since 09:15 IST</span>
+            )}
+            {automation && note && <span> · Last entry check: {note}</span>}
           </p>
         )}
         <div className="aqx-hero-grid">

@@ -62,12 +62,17 @@ function isSnapshot(value: unknown): value is Snapshot {
     !!data.risk && typeof data.risk.realized_pnl === 'number' && !!data.data &&
     SYMBOLS.every(symbol => {
       const signal = data.data?.[symbol];
-      const warmup = signal?.warmup;
+      const progress = (value: { completed: number; required: number } | undefined) => value === undefined ||
+        (value != null && Number.isInteger(value.completed) && Number.isInteger(value.required) &&
+          value.required > 0 && value.completed >= 0 && value.completed <= value.required);
+      const scalp = signal?.scalp;
       return !!signal && ['WAIT', 'BUY CE', 'BUY PE'].includes(signal.decision) &&
         Array.isArray(signal.reasons) && signal.reasons.every(reason => typeof reason === 'string') &&
-        (warmup === undefined || (warmup != null && Number.isInteger(warmup.completed) &&
-          Number.isInteger(warmup.required) && warmup.required > 0 &&
-          warmup.completed >= 0 && warmup.completed <= warmup.required));
+        progress(signal.warmup) && progress(signal.opening) &&
+        (scalp === undefined || (scalp != null && ['WAIT', 'BUY CE', 'BUY PE'].includes(scalp.decision) &&
+          Array.isArray(scalp.reasons) && scalp.reasons.every(reason => typeof reason === 'string') &&
+          (scalp.entry === null || (['maximum', 'stop', 'target', 'points'] as const)
+            .every(key => Number.isFinite(scalp.entry?.[key])))));
     });
 }
 

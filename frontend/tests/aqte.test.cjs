@@ -286,6 +286,83 @@ test('entry readiness exposes the real WAIT reason and optional warm-up progress
   assert.equal(readiness(), '', 'An open trade keeps its position/protection display, not a pre-entry notice');
 });
 
+test('scalp-style readiness shows scalp reasons, opening range and the last skipped entry check', () => {
+  const h = harness('AQTETerminal.tsx');
+  const signal = { ...fixture().data.BANKNIFTY, reasons: ['Opening range: need 15 completed one-minute candles from 09:15 IST'],
+    warmup: { completed: 201, required: 201 }, opening: { completed: 7, required: 15 },
+    scalp: { decision: 'WAIT', strategy: null, confidence: null, contract: null, entry: null,
+      reasons: ['Breakout volume below 1.5x'] } };
+  const liveStatus = { ...liveFixture(), enabled: true, paper_validated: true, armed: true, automation_on: true,
+    styles: { NIFTY: 'scalp', BANKNIFTY: 'swing', SENSEX: 'scalp' },
+    entry_note: 'NIFTY: Fresh broker ask/depth does not fit the approved no-chase limit' };
+  const props = { symbol: 'NIFTY', signal, liveStatus, unavailable: false, active: true, tick: null };
+  let tree = h.render(props);
+  const readiness = () => text(nodes(tree).find(n => n.props?.['aria-label'] === 'Entry readiness'));
+  assert.match(readiness(), /Quick scalp · Breakout volume below 1\.5x/);
+  assert.match(readiness(), /Opening range:\s+7\s*\/\s*15\s+one-minute candles since 09:15 IST/);
+  assert.match(readiness(), /Last entry check:\s+Fresh broker ask/);
+  assert.doesNotMatch(readiness(), /Warm-up:/);
+  tree = h.render({ ...props, liveStatus: { ...liveStatus, styles: { NIFTY: 'swing' } } });
+  assert.match(readiness(), /Swing · Opening range: need 15/);
+  tree = h.render({ ...props, symbol: 'SENSEX' });
+  assert.doesNotMatch(readiness(), /Last entry check/, 'Another index note is not shown');
+  tree = h.render({ ...props, liveStatus: { ...liveStatus, styles: undefined } });
+  assert.match(readiness(), /^Opening range: need 15/, 'Older backends keep the main signal reasons');
+});
+
+test('daily control exposes scalp/swing style, saves it while OFF and hides it for legacy backends', async () => {
+  const h = harness('AQTEDailyControl.tsx');
+  h.render();
+  const initial = dailyFixture();
+  for (const row of Object.values(initial.data)) row.config.style = 'scalp';
+  initial.data.NIFTY.opportunity = { decision: 'BUY CE', confidence: 75, strategy: 'quick_scalp_20',
+    contract: { trading_symbol: 'NIFTY_TEST_CE' }, entry: { maximum: 101, stop: 93, target: 121, points: 20 },
+    reasons: ['Quick scalp: target +20 / stop -8 premium points'] };
+  const cleanup = h.mount(initial);
+  await settle();
+  let tree = h.render();
+  const select = () => nodes(tree).find(n => n.props?.['aria-label'] === 'Entry style');
+  assert.equal(select().props.value, 'scalp');
+  assert.match(text(tree), /quick scalp 20/);
+  assert.match(text(tree), /\+20 pts/);
+  assert.match(text(tree), /SL % and target multiple below apply to Swing only/);
+  select().props.onChange({ target: { value: 'swing' } });
+  tree = h.render();
+  assert.equal(select().props.value, 'swing');
+  h.respond(initial);
+  nodes(tree).find(n => n.type === 'button' && /Save NIFTY controls/.test(text(n))).props.onClick();
+  await settle();
+  const post = h.requests.find(r => r.options.method === 'POST');
+  assert.equal(post.url, '/api/aqte/live/daily-controls');
+  assert.equal(JSON.parse(post.options.body).config.style, 'swing');
+  await h.poll({ ...initial, editable: false });
+  tree = h.render();
+  assert.equal(select().props.disabled, true, 'Style is locked while Auto Trade is ON');
+  await h.poll(dailyFixture());
+  tree = h.render();
+  assert.equal(select(), undefined, 'A backend without style support never receives the field');
+  const invalid = dailyFixture();
+  invalid.data.NIFTY.config.style = 'martingale';
+  await h.poll(invalid);
+  assert.match(text(h.render()), /Incomplete daily-control response/);
+  cleanup();
+});
+
+test('malformed scalp or opening-range evidence is rejected', async () => {
+  for (const patch of [{ opening: { completed: 16, required: 15 } }, { scalp: null },
+    { scalp: { decision: 'SELL', reasons: [], entry: null } },
+    { scalp: { decision: 'BUY CE', reasons: ['x'], entry: { maximum: 101, stop: 93, target: 121 } } }]) {
+    const h = harness();
+    h.render();
+    const invalid = fixture();
+    Object.assign(invalid.data.NIFTY, patch);
+    const cleanup = h.mount(invalid);
+    await settle();
+    assert.match(text(h.render()), /Invalid AQTE response/, JSON.stringify(patch));
+    cleanup();
+  }
+});
+
 test('malformed warm-up evidence is rejected while legacy snapshots without it remain supported', async () => {
   for (const warmup of [null, { completed: -1, required: 201 }, { completed: 202, required: 201 },
     { completed: '86', required: 201 }, { completed: 0, required: 0 }, { completed: 86.5, required: 201 }]) {

@@ -59,6 +59,29 @@ class QualityTests(unittest.TestCase):
         self.assertIn("EMA", quality_reason(unaligned, config, True))
         self.assertIn("Incomplete", quality_reason({**signal, "intelligence": {}}, config, True))
 
+    def test_scalp_style_is_default_and_scalp_gate_rechecks_scalp_rules(self):
+        self.assertEqual(IndexControl().style, "scalp")
+        self.assertEqual(IndexControl(style="swing").style, "swing")
+        with self.assertRaises(ValidationError):
+            IndexControl(style="martingale")
+        config = IndexControl().model_dump()
+        intelligence = dict(
+            ema={"9": 105, "20": 104, "50": 106, "100": 107, "200": 108},
+            close=106, vwap=100, rsi=65, cpr=None, atr=10,
+            supertrend="BULLISH", volume_ratio=1.6, imbalance=0.15,
+            breakout=1, structure="RANGE",
+        )
+        signal = dict(decision="BUY CE", strategy="quick_scalp_10", confidence=70, model_validated=False,
+                      entry={"maximum": 100, "points_allowed": [10]}, intelligence=intelligence)
+        self.assertIn("90", quality_reason(signal, config))
+        # The swing gate would reject unaligned EMA 50/100/200 and missing CPR; scalping needs only its rules.
+        self.assertIsNone(quality_reason(signal, config, allow_unvalidated_rules=True))
+        for key, value, reason in (("rsi", 85, "RSI"), ("breakout", 0, "breakout"),
+                                   ("volume_ratio", 1.2, "volume"), ("imbalance", 0.0, "imbalance")):
+            weak = {**signal, "intelligence": {**intelligence, key: value}}
+            self.assertIn(reason, quality_reason(weak, config, True))
+        self.assertIn("direction", quality_reason({**signal, "decision": "BUY PE"}, config, True))
+
 
 if __name__ == "__main__":
     unittest.main()

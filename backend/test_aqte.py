@@ -14,7 +14,7 @@ from fastapi.testclient import TestClient
 
 from services.aqte_engine import (
     AQTEEngine, CandleBook, Contract, IST, Policy, Tick,
-    intelligence, strategy, warmup_count,
+    intelligence, parse_scalp_points, scalp, strategy, warmup_count,
 )
 from services.aqte_replay import replay, replay_database
 from services.aqte_service import AQTEService, normalize
@@ -52,6 +52,134 @@ def ready_engine(contract=CONTRACT, paper_enabled=True, **policy):
     engine.ingest(tick("option", at=NOW))
     engine.ingest(tick(at=NOW, price=22040.4, volume=202_000))
     return engine
+
+
+def scalp_info(**values):
+    info = dict(ema={"9": 105, "20": 104, "50": 103, "100": 102, "200": 101}, close=106, vwap=100,
+                atr=10, supertrend="BULLISH", rsi=65, breakout=1, volume_ratio=1.6, imbalance=0.15,
+                cpr={"pivot": 99, "bottom": 98, "top": 100}, structure="HIGHER_HIGH", at=NOW - 60)
+    info.update(values)
+    return info
+
+
+THURSDAY = datetime(2026, 10, 29, 9, 15, tzinfo=IST).timestamp()
+
+
+class ScalpTests(unittest.TestCase):
+    def test_tier_follows_rule_strength_and_what_futures_atr_can_reach(self):
+        points = (10, 20, 30)
+        self.assertEqual(scalp(scalp_info(), points)[0], dict(side="CE", points=[10.0], score=70))
+        strong = scalp_info(volume_ratio=2, imbalance=0.2)
+        self.assertEqual(scalp(strong, points)[0]["points"], [10.0, 20.0])
+        strongest = scalp_info(volume_ratio=2.5, imbalance=0.3)
+        self.assertEqual(scalp(strongest, points)[0]["points"], [10.0, 20.0], "ATR 10 reaches only 20 points")
+        self.assertEqual(scalp({**strongest, "atr": 20}, points)[0], dict(side="CE", points=[10.0, 20.0, 30.0], score=80))
+        bearish = scalp_info(ema={"9": 95, "20": 96, "50": 97, "100": 98, "200": 99}, close=94, vwap=100,
+                             supertrend="BEARISH", rsi=35, breakout=-1, imbalance=-0.15)
+        self.assertEqual(scalp(bearish, points)[0]["side"], "PE")
+
+    def test_scalp_waits_with_an_explainable_reason(self):
+        for change, reason in (
+            (dict(rsi=85), "RSI"), (dict(breakout=0), "breakout"), (dict(volume_ratio=1.4), "volume"),
+            (dict(imbalance=0.05), "imbalance"), (dict(close=130), "no chasing"),
+            (dict(supertrend="BEARISH"), "SuperTrend"), (dict(vwap=110), "bias"),
+            (dict(atr=1), "too quiet"), (dict(vwap=None), "VWAP"), (dict(ema={}), "Incomplete"),
+        ):
+            with self.subTest(change=change):
+                setup, why = scalp(scalp_info(**change), (10, 20, 30))
+                self.assertIsNone(setup)
+                self.assertIn(reason, why)
+        self.assertIsNone(scalp(scalp_info(), ())[0], "Unconfigured index never scalps")
+
+    def test_scalp_levels_pay_the_ask_use_stop_ratio_and_net_costs(self):
+        engine = ready_engine(contract=replace(CONTRACT, lot_size=65), paper_enabled=False)
+        spot = engine.spot["NIFTY"]
+        result = engine.scalp_signal("NIFTY", scalp_info(volume_ratio=2, imbalance=0.2), NOW, spot)
+        self.assertEqual((result["decision"], result["strategy"], result["confidence"]), ("BUY CE", "quick_scalp_20", 75))
+        entry = result["entry"]
+        self.assertEqual((entry["maximum"], entry["stop"], entry["target"]), (101, 93, 121))
+        self.assertEqual((entry["points"], entry["points_allowed"], entry["stop_ratio"]), (20, [10.0, 20.0], 0.4))
+        self.assertEqual((entry["quantity"], entry["reward_risk"]), (65, 2.14))
+        self.assertEqual(result["contract"]["token"], CONTRACT.token)
+        small = ready_engine(paper_enabled=False)
+        weak = small.scalp_signal("NIFTY", scalp_info(), NOW, small.spot["NIFTY"])
+        self.assertEqual(weak["decision"], "WAIT")
+        self.assertIn("reward/risk", weak["reasons"][0], "15-lot 10-point scalp cannot cover ~Rs 45 costs")
+        engine.options[30] = replace(tick("option"), ask_quantity=1)
+        illiquid = engine.scalp_signal("NIFTY", scalp_info(volume_ratio=2, imbalance=0.2), NOW, spot)
+        self.assertIn("liquid", illiquid["reasons"][0])
+
+    def test_snapshot_keeps_fresh_scalp_and_drops_stale_one(self):
+        engine = ready_engine(contract=replace(CONTRACT, lot_size=65), paper_enabled=False)
+        signal = engine.signals["NIFTY"]
+        self.assertEqual(signal["scalp"]["decision"], "WAIT")
+        self.assertTrue(signal["scalp"]["reasons"])
+        signal["scalp"] = engine.scalp_signal("NIFTY", scalp_info(volume_ratio=2, imbalance=0.2), NOW, engine.spot["NIFTY"])
+        self.assertEqual(engine.snapshot(NOW)["data"]["NIFTY"]["scalp"]["decision"], "BUY CE")
+        engine.spot["NIFTY"] = tick("spot", at=NOW + 6)
+        engine.future["NIFTY"] = tick(at=NOW + 6)
+        stale = engine.snapshot(NOW + 6)["data"]["NIFTY"]["scalp"]
+        self.assertEqual((stale["decision"], stale["entry"], stale["reasons"]), ("WAIT", None, ["Option quote or signal stale"]))
+        feed = engine.snapshot(NOW + 30)["data"]["NIFTY"]["scalp"]
+        self.assertIn("Market data stale", feed["reasons"][0])
+        self.assertEqual(engine.snapshot(NOW)["data"]["SENSEX"]["scalp"]["decision"], "WAIT")
+
+    def test_live_analysis_prices_the_marketable_ask_while_paper_keeps_the_midpoint(self):
+        paper = ready_engine().signals["NIFTY"]["entry"]
+        live = ready_engine(contract=replace(CONTRACT, lot_size=65), paper_enabled=False).signals["NIFTY"]["entry"]
+        self.assertEqual((paper["maximum"], live["maximum"]), (100, 101))
+        self.assertLess(live["stop"], live["maximum"])
+
+    def test_scalp_points_env_parser_fails_closed_per_index(self):
+        points, errors = parse_scalp_points("NIFTY:10/20/30, banknifty:60/20/40,SENSEX:abc,FOO:5,NIFTY50:1")
+        self.assertEqual(points, {"NIFTY": (10.0, 20.0, 30.0), "BANKNIFTY": (20.0, 40.0, 60.0)})
+        self.assertEqual(errors, ["SENSEX:abc", "FOO:5", "NIFTY50:1"])
+        self.assertEqual(parse_scalp_points("NIFTY:0/-5")[0], {})
+        self.assertEqual(parse_scalp_points("")[0], {})
+
+
+class SessionWarmupTests(unittest.TestCase):
+    def test_warmup_spans_previous_session_and_needs_fifteen_opening_candles(self):
+        engine = AQTEEngine(paper_enabled=False)
+        for i in range(375):
+            at = THURSDAY + i * 60
+            engine.ingest(tick("spot", at=at))
+            engine.ingest(tick(at=at, price=22000 + i * 0.1, volume=i * 1000))
+        preopen = START - 7 * 60
+        engine.ingest(tick("spot", at=preopen))
+        engine.ingest(tick(at=preopen, volume=500))
+        for i in range(16):
+            at = START + i * 60
+            engine.ingest(tick("spot", at=at))
+            engine.ingest(tick(at=at, price=22040 + i * 0.1, volume=1000 + i * 1000))
+            signal = engine.signals["NIFTY"]
+            self.assertEqual(signal["warmup"], {"completed": 201, "required": 201}, "Overnight gap is not missing data")
+            self.assertEqual(signal["opening"], {"completed": i, "required": 15})
+            if i < 15:
+                self.assertIsNone(signal["intelligence"])
+                self.assertIn("Opening range", signal["reasons"][0])
+        self.assertIsNotNone(signal["intelligence"], "First signal evaluation at 09:30 IST")
+        self.assertGreater(signal["intelligence"]["vwap"], 22039, "VWAP uses today's session only")
+
+    def test_intraday_gap_still_resets_and_history_seed_heals_it(self):
+        engine = AQTEEngine(paper_enabled=False)
+        for minute in (0, 1, 4, 5, 6):
+            engine.ingest(tick(at=START + minute * 60, price=22000 + minute))
+        key = ("future", 20, 60)
+        self.assertEqual(warmup_count(engine.book.closed[key], START + 6 * 60 + 10), 2)
+        history = [dict(at=START + m * 60, open=1, high=2, low=0.5, close=1.5, volume=10) for m in range(-30, 8)]
+        history += [dict(at=THURSDAY + m * 60, open=1, high=2, low=0.5, close=1.5, volume=10) for m in range(375)]
+        self.assertEqual(engine.seed_bars(20, history, START + 6 * 60 + 10), 375 + 4)
+        bars = {b["at"]: b for b in engine.book.closed[key]}
+        self.assertEqual(bars[START + 4 * 60]["close"], 22004, "Latest live minutes stay authoritative")
+        self.assertEqual(bars[START]["close"], 1.5, "Exchange history replaces older live-built bars")
+        self.assertNotIn(START - 60, bars, "Pre-open history is ignored")
+        self.assertNotIn(START + 6 * 60, bars, "Forming minute is never seeded")
+        self.assertEqual(warmup_count(engine.book.closed[key], START + 6 * 60 + 10), 201)
+        self.assertEqual(engine.seed_bars(20, history, START + 6 * 60 + 10), 0)
+        engine.ingest(tick(at=START + 7 * 60, price=22007))
+        self.assertEqual(engine.book.closed[key][-1]["at"], START + 6 * 60)
+        self.assertEqual(warmup_count(engine.book.closed[key], START + 7 * 60 + 10), 201)
 
 
 class CandleTests(unittest.TestCase):
@@ -385,6 +513,50 @@ class ServiceTests(unittest.TestCase):
         restored.engine.ingest(tick(at=NOW + 1, volume=203_000))
         self.assertEqual(restored.engine.signals["NIFTY"]["warmup"], {"completed": 201, "required": 201})
         self.assertFalse(restored.engine.orders)
+
+    def test_restart_replays_only_previous_session_tail_for_cross_session_warmup(self):
+        recorded = [tick(at=THURSDAY + i * 60, price=22000 + i * 0.1, volume=i * 1000) for i in range(375)]
+        recorded += [tick(at=START + i * 60, price=22040 + i, volume=i * 1000) for i in range(6)]
+        with self.service.connect() as db:
+            self.service.persist(db, recorded)
+        restored = AQTEService(self.path)
+        with patch("services.aqte_service.datetime") as clock:
+            clock.now.return_value = datetime.fromtimestamp(START + 6 * 60, IST)
+            restored.initialize()
+        bars = restored.engine.book.closed[("future", 20, 60)]
+        self.assertGreaterEqual(bars[0]["at"], datetime(2026, 10, 29, 11, 0, tzinfo=IST).timestamp(),
+                                "Restart replays a bounded tail, not the whole previous session")
+        self.assertEqual(warmup_count(bars, START + 5 * 60 + 30), 201)
+
+    def test_kite_history_backfill_heals_warmup_and_backs_off_when_unavailable(self):
+        for minute in (0, 1, 4, 5, 6):
+            self.service.engine.ingest(tick(at=START + minute * 60, price=22000 + minute))
+        now = START + 6 * 60 + 10
+        rows = [dict(date=datetime.fromtimestamp(at, IST), open=22000, high=22002, low=21998, close=22001, volume=50)
+                for at in [THURSDAY + i * 60 for i in range(375)] + [START + i * 60 for i in range(7)]]
+        rows.append(dict(date=datetime.fromtimestamp(THURSDAY + 60, IST), open=1, high=0.5, low=2, close=1, volume=1))
+        kite = Mock()
+        kite.historical_data.return_value = rows
+        self.assertEqual(self.service.backfill(kite, {20: "NIFTY"}, now), 375 + 4)
+        token, start, end, interval = kite.historical_data.call_args.args
+        self.assertEqual((token, interval), (20, "minute"))
+        self.assertLess(start, end)
+        self.assertEqual(warmup_count(self.service.engine.book.closed[("future", 20, 60)], now), 201)
+        self.assertEqual(self.service.backfill_after, now + 60)
+        self.service.backfill_after = 0
+        self.assertEqual(self.service.backfill(kite, {20: "NIFTY"}, now), 0)
+        self.assertEqual(kite.historical_data.call_count, 1, "Complete warm-up needs no history calls")
+        kite.place_order.assert_not_called()
+
+        cold = AQTEService(Path(self.directory.name) / "cold.sqlite3")
+        failing = Mock()
+        failing.historical_data.side_effect = RuntimeError("Historical API not subscribed")
+        self.assertEqual(cold.backfill(failing, {20: "NIFTY"}, now), 0)
+        self.assertEqual(cold.backfill(failing, {20: "NIFTY"}, now + 60), 0)
+        self.assertEqual(failing.historical_data.call_count, 1, "Failures back off for five minutes")
+        saturday = datetime(2026, 10, 31, 10, 0, tzinfo=IST).timestamp()
+        self.assertEqual(AQTEService(self.path).backfill(failing, {20: "NIFTY"}, saturday), 0)
+        self.assertEqual(failing.historical_data.call_count, 1)
 
     def test_subscriptions_use_active_kite_metadata_and_pin_open_contract(self):
         self.service.started = True

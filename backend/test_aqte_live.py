@@ -15,8 +15,8 @@ from unittest.mock import AsyncMock, Mock, patch
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from services.aqte_live import MARKET_WAIT, AQTELiveService, LiveBlocked
-from test_aqte import CONTRACT, IST, NOW, ready_engine, tick
+from services.aqte_live import ENTRY_RETRY_SECONDS, MARKET_WAIT, AQTELiveService, LiveBlocked
+from test_aqte import CONTRACT, IST, NOW, ready_engine, scalp_info, tick
 
 
 def settings(**overrides):
@@ -67,6 +67,7 @@ class LiveTests(unittest.TestCase):
         # Execution tests isolate broker mechanics from the new quality policy.
         for control in self.live.state["daily_controls"].values():
             control["enabled"] = True
+            control["style"] = "swing"
         self.quality = patch("services.aqte_live.quality_reason", return_value=None)
         self.quality.start()
         self.addCleanup(self.quality.stop)
@@ -137,6 +138,64 @@ class LiveTests(unittest.TestCase):
         proposal = self.live.proposal("NIFTY")
         self.assertLessEqual(proposal["risk"], self.cfg.aqte_live_risk_per_trade)
         self.assertEqual(proposal["entry"]["quantity"], 65)
+
+    def scalping(self):
+        engine = ready_engine(contract=replace(CONTRACT, lot_size=65), paper_enabled=False)
+        info = scalp_info(volume_ratio=2.5, imbalance=0.3, atr=20)
+        engine.signals["NIFTY"]["scalp"] = engine.scalp_signal("NIFTY", info, NOW, engine.spot["NIFTY"])
+        self.assertEqual(engine.signals["NIFTY"]["scalp"]["strategy"], "quick_scalp_30")
+        self.market.engine = engine
+        self.live.state["daily_controls"]["NIFTY"]["style"] = "scalp"
+
+    def test_scalp_style_downsizes_target_tier_to_risk_cap_and_buys_ioc_at_the_ask(self):
+        self.scalping()
+        self.armed()
+        small = self.live.proposal("NIFTY")
+        self.assertEqual((small["strategy"], small["entry"]["stop"], small["entry"]["target"]), ("quick_scalp_10", 97, 111))
+        self.assertLessEqual(small["risk"], 500)
+        self.cfg.aqte_live_risk_per_trade = 1000
+        self.live.automated_entry()
+        params = self.broker.place_order.call_args.kwargs
+        self.assertEqual((params["order_type"], params["validity"], params["price"], params["quantity"]),
+                         ("LIMIT", "IOC", 101, 65))
+        active = self.live.state["active"]
+        self.assertEqual((active["strategy"], active["stop"], active["target"]), ("quick_scalp_30", 89, 131))
+        self.assertTrue(self.live.state["used"][-1].startswith("NIFTY:quick_scalp:"))
+        self.assertIsNone(self.live.status()["entry_note"])
+        self.assertEqual(self.live.status()["styles"], {"NIFTY": "scalp", "BANKNIFTY": "swing", "SENSEX": "swing"})
+
+    def test_scalp_waits_when_no_tier_fits_the_risk_cap(self):
+        self.scalping()
+        self.cfg.aqte_live_risk_per_trade = 300
+        self.armed()
+        self.live.automated_entry()
+        self.broker.place_order.assert_not_called()
+        self.assertTrue(self.live.status()["automation_on"])
+        self.assertIn("No quick-scalp tier", self.live.status()["entry_note"])
+
+    def test_transient_no_chase_skip_keeps_automation_on_and_retries_after_backoff(self):
+        self.scalping()
+        self.cfg.aqte_live_risk_per_trade = 1000
+        self.armed()
+        normal = self.broker.quote.side_effect
+        raw = normal(["test"])["test"]
+        raw["depth"]["sell"][0]["price"] = 110
+        self.broker.quote.side_effect = lambda keys: {keys[0]: raw}
+        self.live.automated_entry()
+        self.broker.place_order.assert_not_called()
+        status = self.live.status()
+        self.assertTrue(status["automation_on"])
+        self.assertTrue(status["armed"])
+        self.assertIn("NIFTY: Fresh broker ask", status["entry_note"])
+        self.assertFalse(self.live.state["used"], "A skipped entry never consumes the setup")
+        self.broker.quote.side_effect = normal
+        calls = self.broker.quote.call_count
+        self.live.automated_entry()
+        self.assertEqual(self.broker.quote.call_count, calls, "Backoff avoids hammering the broker")
+        with patch("services.aqte_live.time.time", return_value=NOW + ENTRY_RETRY_SECONDS):
+            self.live.automated_entry()
+        self.assertEqual(self.broker.place_order.call_args.kwargs["price"], 101)
+        self.assertIsNone(self.live.status()["entry_note"])
 
     def test_daily_controls_save_only_while_off_persist_and_never_arm(self):
         config = {**self.live.state["daily_controls"]["NIFTY"], "max_trades": 3, "min_confidence": 95}

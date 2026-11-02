@@ -2,7 +2,7 @@
 
 import math
 from collections import defaultdict, deque
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Literal
 from uuid import uuid4
@@ -11,11 +11,39 @@ SYMBOLS = ("NIFTY", "BANKNIFTY", "SENSEX")
 INTERVALS = (1, 5, 15, 60, 180, 300)
 IST = timezone(timedelta(hours=5, minutes=30))
 WARMUP_CANDLES = 201
+# Opening range: VWAP/structure need 15 completed candles of today's session (first signal 09:30 IST).
+SESSION_CANDLES = 15
+OPEN_MINUTE, CLOSE_MINUTE = 555, 930
+DEFAULT_SCALP_POINTS = {"NIFTY": (10, 20, 30), "BANKNIFTY": (20, 40, 60), "SENSEX": (30, 60, 90)}
+
+
+def parse_scalp_points(text):
+    """Parse 'NIFTY:10/20/30,BANKNIFTY:20/40/60'. Returns (points, errors); bad entries disable that index."""
+    points, errors = {}, []
+    for item in (text or "").split(","):
+        if not item.strip():
+            continue
+        symbol, _, raw = item.partition(":")
+        symbol = symbol.strip().upper()
+        try:
+            tiers = tuple(sorted({float(p) for p in raw.split("/") if p.strip()}))
+            if symbol not in SYMBOLS or not tiers or not all(math.isfinite(p) and 0 < p <= 500 for p in tiers):
+                raise ValueError
+        except ValueError:
+            errors.append(item.strip())
+            continue
+        points[symbol] = tiers
+    return points, errors
 
 
 def session(at: float) -> bool:
     dt = datetime.fromtimestamp(at, IST)
-    return dt.weekday() < 5 and 555 <= dt.hour * 60 + dt.minute < 930
+    return dt.weekday() < 5 and OPEN_MINUTE <= dt.hour * 60 + dt.minute < CLOSE_MINUTE
+
+
+def minute_of_day(at: float) -> int:
+    dt = datetime.fromtimestamp(at, IST)
+    return dt.hour * 60 + dt.minute
 
 
 def day(at: float) -> str:
@@ -75,6 +103,12 @@ class Policy:
     brokerage_per_order: float = 20
     turnover_cost_fraction: float = 0.0015
     slippage_ticks: int = 1
+    # Quick-scalp targets in option premium points; stop = target x ratio.
+    scalp_points: dict = field(default_factory=lambda: dict(DEFAULT_SCALP_POINTS))
+    scalp_stop_ratio: float = 0.4
+    # ATM option delta and the futures one-minute ATR multiple a target must be reachable within.
+    scalp_delta: float = 0.5
+    scalp_atr_reach: float = 4
 
 
 class CandleBook:
@@ -96,7 +130,9 @@ class CandleBook:
             bar = self.current.get(k)
             if bar and bar["at"] != bucket:
                 # Gaps are retained explicitly; never fabricate empty candles.
-                self.closed[k].append(bar)
+                # A minute already filled from exchange history is not appended twice.
+                if not self.closed[k] or self.closed[k][-1]["at"] < bar["at"]:
+                    self.closed[k].append(bar)
                 bar = None
             if bar is None:
                 bar = dict(at=bucket, open=tick.price, high=tick.price,
@@ -115,25 +151,40 @@ def ema(values, length):
 
 
 def warmup_count(bars, at):
+    """Contiguous completed regular-session candles ending one minute before `at`.
+
+    The close-to-open gap between sessions is not missing data; an intraday missing minute is.
+    """
     expected = int(at // 60) * 60 - 60
-    today = day(at)
     completed = 0
     for bar in reversed(bars):
-        if completed == WARMUP_CANDLES or bar["at"] != expected or day(bar["at"]) != today:
+        if completed == WARMUP_CANDLES:
+            break
+        if not OPEN_MINUTE <= minute_of_day(bar["at"]) < CLOSE_MINUTE:
+            continue
+        if bar["at"] != expected and not (
+            minute_of_day(expected) < OPEN_MINUTE and minute_of_day(bar["at"]) == CLOSE_MINUTE - 1
+            and bar["at"] < expected and day(bar["at"]) < day(expected)
+        ):
             break
         completed += 1
-        expected -= 60
+        expected = bar["at"] - 60
     return completed
 
 
+def session_bars(bars, at):
+    today = day(at)
+    return [b for b in bars if day(b["at"]) == today and session(b["at"])]
+
+
 def intelligence(bars, tick: Tick, previous_day=None):
-    """Use completed, contiguous one-minute futures bars only."""
-    bars = [b for b in bars if day(b["at"]) == day(tick.at)]
-    if warmup_count(bars, tick.at) < WARMUP_CANDLES:
+    """Use completed one-minute futures bars; indicators span sessions, VWAP is today's only."""
+    today = session_bars(bars, tick.at)
+    if warmup_count(bars, tick.at) < WARMUP_CANDLES or warmup_count(today, tick.at) < SESSION_CANDLES:
         return None
-    session_volume = sum(b["volume"] for b in bars)
-    vwap = sum((b["high"] + b["low"] + b["close"]) / 3 * b["volume"] for b in bars) / session_volume if session_volume else None
-    bars = bars[-WARMUP_CANDLES:]
+    session_volume = sum(b["volume"] for b in today)
+    vwap = sum((b["high"] + b["low"] + b["close"]) / 3 * b["volume"] for b in today) / session_volume if session_volume else None
+    bars = [b for b in bars if session(b["at"])][-WARMUP_CANDLES:]
     closes = [b["close"] for b in bars]
     averages = {str(n): ema(closes, n) for n in (9, 20, 50, 100, 200)}
     differences = [b - a for a, b in zip(closes, closes[1:])]
@@ -213,6 +264,47 @@ def strategy(info):
     return name, "CE" if side > 0 else "PE", score
 
 
+def scalp(info, points, delta=0.5, reach=4):
+    """Quick-scalp rules: VWAP/EMA bias, fresh breakout with volume and order flow, not extended.
+
+    Returns ({side, points, score}, None) where `points` are the eligible premium-point targets
+    (ascending, capped by signal strength and by what the futures ATR can reach), or (None, reason).
+    """
+    try:
+        e, price, atr, vwap = info["ema"], info["close"], info["atr"], info["vwap"]
+        if vwap is None or info["imbalance"] is None or not atr or atr <= 0 or not points:
+            return None, "Scalp needs VWAP, order-book depth and ATR"
+        side = 1 if price > vwap and e["9"] > e["20"] else (-1 if price < vwap and e["9"] < e["20"] else 0)
+        if not side:
+            return None, "No scalp bias: price vs VWAP and EMA 9/20 disagree"
+        checks = (
+            (info["supertrend"] == ("BULLISH" if side > 0 else "BEARISH"), "SuperTrend not aligned"),
+            (55 <= info["rsi"] <= 80 if side > 0 else 20 <= info["rsi"] <= 45, "RSI outside scalp momentum band"),
+            (info["breakout"] == side, "No fresh 20-candle breakout"),
+            (info["volume_ratio"] >= 1.5, "Breakout volume below 1.5x"),
+            (side * info["imbalance"] >= 0.10, "Order-book imbalance does not confirm"),
+            (abs(price - e["20"]) <= 2 * atr, "Price extended more than 2 ATR from EMA 20; no chasing"),
+        )
+        for passed, reason in checks:
+            if not passed:
+                return None, reason
+        strength = 1
+        if side * (e["20"] - e["50"]) > 0 and info["volume_ratio"] >= 2 and side * info["imbalance"] >= 0.2:
+            strength = 2
+            cpr = info["cpr"]
+            if (side * (e["50"] - e["100"]) > 0 and side * (e["100"] - e["200"]) > 0 and info["volume_ratio"] >= 2.5
+                    and cpr is not None and side * (price - cpr["top" if side > 0 else "bottom"]) > 0
+                    and info["structure"] == ("HIGHER_HIGH" if side > 0 else "LOWER_LOW")):
+                strength = 3
+        ordered = sorted(float(p) for p in points)
+        reachable = [p for p in ordered if p <= delta * atr * reach][:strength]
+        if not reachable:
+            return None, f"Market too quiet for a {ordered[0]:g}-point scalp (ATR {atr:.1f})"
+    except (KeyError, TypeError, ValueError):
+        return None, "Incomplete market intelligence"
+    return dict(side="CE" if side > 0 else "PE", points=reachable, score=70 + 5 * (len(reachable) - 1)), None
+
+
 def round_tick(price, tick_size, up=False):
     units = price / tick_size
     return round((math.ceil(units - 1e-8) if up else math.floor(units + 1e-8)) * tick_size, 8)
@@ -248,6 +340,68 @@ class AQTEEngine:
                  for name, tick in (("futures", self.future.get(symbol)), ("spot", self.spot.get(symbol)))
                  if not self.fresh(tick, now)]
         return "Market data stale: " + "; ".join(stale) if stale else None
+
+    def pick(self, symbol, side, now, spot):
+        """Nearest-strike fresh, liquid, tight-spread option of the requested side."""
+        candidates = []
+        for contract in self.contracts.values():
+            if contract.symbol != symbol or contract.side != side or contract.expiry < day(now):
+                continue
+            quote = self.options.get(contract.token)
+            if not self.fresh(quote, now) or not 0 < quote.bid <= quote.ask or quote.ask_quantity < contract.lot_size:
+                continue
+            spread = quote.ask - quote.bid
+            if spread / quote.ask > self.policy.spread_fraction or quote.volume <= 0:
+                continue
+            candidates.append((abs(contract.strike - spot.price), spread, contract, quote))
+        if not candidates:
+            return None
+        _, spread, contract, quote = min(candidates, key=lambda x: x[:2])
+        return spread, contract, quote
+
+    @staticmethod
+    def idle_scalp(reason):
+        return dict(decision="WAIT", strategy=None, confidence=None, contract=None, entry=None,
+                    reasons=[reason] if reason else [])
+
+    def scalp_signal(self, symbol, info, now, spot):
+        """Quick-scalp sub-signal with premium-point target/stop; never creates paper orders."""
+        setup, reason = scalp(info, self.policy.scalp_points.get(symbol, ()),
+                              self.policy.scalp_delta, self.policy.scalp_atr_reach)
+        result = self.idle_scalp(reason)
+        if setup is None:
+            return result
+        picked = self.pick(symbol, setup["side"], now, spot)
+        if picked is None:
+            result["reasons"] = ["No fresh liquid option contract with valid lot size and bid/ask depth"]
+            return result
+        _, contract, quote = picked
+        ratio = self.policy.scalp_stop_ratio
+        # A scalp must fill now: IOC limit at the current ask, never above it.
+        limit = round_tick(quote.ask, contract.tick_size, up=True)
+        points = setup["points"][-1]
+        stop = round_tick(limit - points * ratio, contract.tick_size)
+        target = round_tick(limit + points, contract.tick_size, up=True)
+        if not 0 < stop < limit < target:
+            result["reasons"] = [f"Premium too small for a {points:g}-point scalp stop"]
+            return result
+        quantity = contract.lot_size
+        risk = (limit - stop) * quantity + self.costs(limit, quantity) + self.costs(stop, quantity)
+        reward = (target - limit) * quantity - self.costs(limit, quantity) - self.costs(target, quantity)
+        if reward / risk < 1.5:
+            result["reasons"] = [f"{points:g}-point scalp reward/risk after estimated costs is below 1.5"]
+            return result
+        result.update(
+            decision=f'BUY {setup["side"]}', strategy=f"quick_scalp_{points:g}", confidence=setup["score"],
+            contract=asdict(contract),
+            entry=dict(low=round_tick(quote.bid, contract.tick_size), high=limit, maximum=limit, stop=stop,
+                       target=target, quantity=quantity, reward_risk=round(reward / risk, 2), points=points,
+                       points_allowed=setup["points"], stop_ratio=ratio),
+            reasons=[f"Quick scalp: target +{points:g} / stop -{points * ratio:g} premium points",
+                     f"RSI {info['rsi']:.1f}; volume {info['volume_ratio']:.2f}x; ATR {info['atr']:.1f}",
+                     "IOC limit capped at the signal's ask; never chases a higher ask",
+                     "Rule score is not a calibrated probability"])
+        return result
 
     def costs(self, price, quantity):
         return self.policy.brokerage_per_order + price * quantity * self.policy.turnover_cost_fraction
@@ -349,38 +503,38 @@ class AQTEEngine:
             reason = reason or "Waiting for fresh spot and futures ticks"
         bars = list(self.book.closed[("future", future.token, 60)]) if future else []
         completed = warmup_count(bars, future.at) if future else 0
+        opening = warmup_count(session_bars(bars, future.at), future.at) if future else 0
         info = intelligence(bars, future, self.previous_day.get(symbol)) if future else None
         if info is None:
-            reason = reason or "Warming up: need 201 contiguous completed one-minute futures candles"
+            reason = reason or (
+                f"Warming up: need {WARMUP_CANDLES} contiguous completed one-minute futures candles"
+                if completed < WARMUP_CANDLES else
+                f"Opening range: need {SESSION_CANDLES} completed one-minute candles from 09:15 IST")
         signal = dict(symbol=symbol, decision="WAIT", reasons=[reason] if reason else [],
                       confidence=None, intelligence=info, contract=None, entry=None, at=now,
                       model="explainable-rules-v1", model_validated=False,
-                      warmup=dict(completed=completed, required=WARMUP_CANDLES))
+                      warmup=dict(completed=completed, required=WARMUP_CANDLES),
+                      opening=dict(completed=min(opening, SESSION_CANDLES), required=SESSION_CANDLES),
+                      scalp=self.idle_scalp(reason))
         self.signals[symbol] = signal
         if reason:
             return
+        signal["scalp"] = self.scalp_signal(symbol, info, now, spot)
         setup = strategy(info)
         if not setup:
             signal["reasons"] = ["No confirmed strategy with volume and order-book support"]
             return
         name, side, confidence = setup
         signal.update(strategy=name, confidence=confidence)
-        candidates = []
-        for contract in self.contracts.values():
-            if contract.symbol != symbol or contract.side != side or contract.expiry < day(now):
-                continue
-            quote = self.options.get(contract.token)
-            if not self.fresh(quote, now) or not 0 < quote.bid <= quote.ask or quote.ask_quantity < contract.lot_size:
-                continue
-            spread = quote.ask - quote.bid
-            if spread / quote.ask > self.policy.spread_fraction or quote.volume <= 0:
-                continue
-            candidates.append((abs(contract.strike - spot.price), spread, contract, quote))
-        if not candidates:
+        picked = self.pick(symbol, side, now, spot)
+        if picked is None:
             signal["reasons"] = ["No fresh liquid option contract with valid lot size and bid/ask depth"]
             return
-        _, spread, contract, quote = min(candidates, key=lambda x: x[:2])
-        limit = round_tick((quote.bid + quote.ask) / 2, contract.tick_size)
+        spread, contract, quote = picked
+        # Paper simulates a resting midpoint limit; live sends an IOC limit that must be marketable,
+        # so its price cap is the current ask (spread already <= 3%) and is never raised afterwards.
+        limit = round_tick((quote.bid + quote.ask) / 2, contract.tick_size) if self.paper_enabled else (
+            round_tick(quote.ask, contract.tick_size, up=True))
         distance = max(limit * 0.2, spread * 3, contract.tick_size * 4)
         stop = round_tick(max(contract.tick_size, limit - distance), contract.tick_size)
         target = round_tick(limit + 2 * (limit - stop), contract.tick_size, up=True)
@@ -410,7 +564,8 @@ class AQTEEngine:
                                  maximum=limit, stop=stop, target=target, quantity=quantity,
                                  reward_risk=round(net_reward / risk, 2)),
                       reasons=[name.replace("_", " "), f"RSI {info['rsi']:.1f}; volume {info['volume_ratio']:.2f}x",
-                               "Limit at or below midpoint; never chase the ask",
+                               "Limit at or below midpoint; never chase the ask" if self.paper_enabled else
+                               "IOC limit capped at the signal's ask; never chases a higher ask",
                                "Rule score is not a calibrated probability"])
         key = (name, side, info["at"], contract.token)
         if not self.paper_enabled:
@@ -494,6 +649,28 @@ class AQTEEngine:
                         order["stop"] = stop
                         self.event("TRAIL_UPDATED", now, order_id=order["id"], stop=stop)
 
+    def seed_bars(self, token, bars, now):
+        """Merge completed exchange 1-minute futures candles; returns minutes added or replaced.
+
+        History fills gaps and replaces live-built bars older than two minutes (exchange data is
+        authoritative); the in-progress minute and the latest live bars are never touched.
+        """
+        key = ("future", token, 60)
+        live = {b["at"]: b for b in self.book.closed[key]}
+        current = self.book.current.get(key)
+        cutoff = min(int(now // 60) * 60, current["at"] if current else math.inf)
+        changed = 0
+        for bar in bars:
+            at = bar["at"]
+            if at >= cutoff or not session(at) or (at in live and at >= cutoff - 120) or live.get(at) == bar:
+                continue
+            live[at] = dict(at=at, open=bar["open"], high=bar["high"], low=bar["low"],
+                            close=bar["close"], volume=bar["volume"])
+            changed += 1
+        if changed:
+            self.book.closed[key] = deque(sorted(live.values(), key=lambda b: b["at"])[-600:], maxlen=600)
+        return changed
+
     def snapshot(self, now):
         risk = self.risk_reason(now)
         data = {}
@@ -502,14 +679,26 @@ class AQTEEngine:
                 symbol=symbol, decision="WAIT", reasons=["Waiting for live market data"],
                 confidence=None, at=None, contract=None, entry=None, intelligence=None,
                 model="explainable-rules-v1", model_validated=False,
-                warmup=dict(completed=0, required=WARMUP_CANDLES))))
+                warmup=dict(completed=0, required=WARMUP_CANDLES),
+                opening=dict(completed=0, required=SESSION_CANDLES),
+                scalp=self.idle_scalp("Waiting for live market data"))))
+            scalp_signal = dict(signal.get("scalp") or self.idle_scalp(None))
             if risk or not self.fresh(self.spot.get(symbol), now) or not self.fresh(self.future.get(symbol), now):
-                signal.update(decision="WAIT", entry=None, reasons=[risk or self.feed_reason(symbol, now)])
-            elif signal.get("decision") != "WAIT" and (
-                not self.fresh(self.options.get(signal["contract"]["token"]), now) or
-                signal["at"] is None or now - signal["at"] > self.policy.stale_seconds
-            ):
-                signal.update(decision="WAIT", entry=None, reasons=["Option quote or signal stale"])
+                reason = risk or self.feed_reason(symbol, now)
+                signal.update(decision="WAIT", entry=None, reasons=[reason])
+                scalp_signal = self.idle_scalp(reason)
+            else:
+                if signal.get("decision") != "WAIT" and (
+                    not self.fresh(self.options.get(signal["contract"]["token"]), now) or
+                    signal["at"] is None or now - signal["at"] > self.policy.stale_seconds
+                ):
+                    signal.update(decision="WAIT", entry=None, reasons=["Option quote or signal stale"])
+                if scalp_signal["decision"] != "WAIT" and (
+                    not self.fresh(self.options.get(scalp_signal["contract"]["token"]), now) or
+                    signal["at"] is None or now - signal["at"] > self.policy.stale_seconds
+                ):
+                    scalp_signal = self.idle_scalp("Option quote or signal stale")
+            signal["scalp"] = scalp_signal
             order = self.orders.get(symbol)
             signal["position"] = {
                 **order, "metrics": self.position_metrics(order, now, healthy=not self.fault),
