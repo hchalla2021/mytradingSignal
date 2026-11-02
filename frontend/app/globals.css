@@ -1969,6 +1969,10 @@ h1, h2, h3, h4, h5, h6 {
 .aqte-theme .aqx-health { border-color: rgb(34 197 94 / 0.5); }
 .aqte-theme .aqx-live-dot { background: var(--aqx-green); }
 .aqte-theme .aqx-risk-bar i { background: linear-gradient(90deg, var(--aqx-green), var(--aqx-amber), var(--aqx-red)); opacity: 1; }
+/* light green section borders */
+.aqte-theme.aqx-shell { --aqx-line: rgb(134 239 172 / 0.42); border-color: rgb(134 239 172 / 0.45); }
+.aqte-theme .aqx-eng-card { border-color: rgb(134 239 172 / 0.3); }
+.aqte-theme .aqx-health { border-color: rgb(134 239 172 / 0.42); }
 /* responsive: laptop → tablet → phone */
 @container aqte (max-width: 1180px) {
   .aqte-theme .aqx-dash-main {
