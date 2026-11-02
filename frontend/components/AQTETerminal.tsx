@@ -342,7 +342,7 @@ function AQTETerminal({ symbol, signal, unavailable, liveStatus, onExit, now = D
         </section>
         <section className="aqx-card aqx-exit-rules" aria-label="Auto exit rules">
           <h4 className="aqx-panel-title"><span aria-hidden="true" className="aqx-target-icon">◎</span>Auto Exit Rules
-            <span className={`aqx-toggle ${managing ? 'aqx-toggle-on' : ''}`}>{!currentStatus ? 'UNKNOWN' : managing ? 'ACTIVE' : live ? 'VERIFY' : 'WAITING'}</span></h4>
+            <span className={`aqx-exit-state ${managing ? 'aqx-exit-state-on' : ''}`}>{!currentStatus ? 'UNKNOWN' : managing ? 'ACTIVE' : live ? 'VERIFY' : 'WAITING'}</span></h4>
           <ul className="aqx-rule-list">
             <li><Check tone={confirmed ? 'up' : 'flat'} /><span>Broker SL order</span><b>{confirmed ? `₹${aqtePrice(live?.stop)}` : 'Unverified'}</b></li>
             <li><Check tone={trailing ? 'up' : 'flat'} /><span>Trailing SL</span><b>+{trailR}R</b></li>
