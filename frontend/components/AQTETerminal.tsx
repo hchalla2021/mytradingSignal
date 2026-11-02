@@ -1,15 +1,9 @@
 'use client';
 
-import { memo, useState, type ReactNode } from 'react';
-import dynamic from 'next/dynamic';
+import { memo, type ReactNode } from 'react';
 import { aqteCanExit, aqteControllerCurrent, aqteLabel, aqteLiveMetrics, aqteOverview, aqtePrice, aqteSigned, isAqteRuleChecks,
   type AQTELiveState, type AQTEExitRequest, type AQTESignal, type AQTESymbol, type AQTEStyle,
   type AQTERuleEvidence } from '@/lib/aqte-display';
-import type { MarketTick } from '@/hooks/useMarketSocket';
-
-const Chart = dynamic(() => import('@/components/AQTEChart'), {
-  ssr: false, loading: () => <div className="aqte-terminal-card aqte-chart-loading">Loading price chart…</div>,
-});
 
 const timeFormatter = new Intl.DateTimeFormat('en-IN', {
   timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
@@ -128,14 +122,10 @@ function Row({ label, children, tone = '', extra }: { label: string; children: R
   );
 }
 
-function AQTETerminal({ symbol, signal, unavailable, active, tick, liveStatus, onExit, now = Date.now() / 1000 }: {
-  symbol: AQTESymbol; signal?: AQTESignal; unavailable: boolean;
-  active: boolean; tick: MarketTick | null; liveStatus?: AQTELiveState | null;
+function AQTETerminal({ symbol, signal, unavailable, liveStatus, onExit, now = Date.now() / 1000 }: {
+  symbol: AQTESymbol; signal?: AQTESignal; unavailable: boolean; liveStatus?: AQTELiveState | null;
   onExit?: (request: AQTEExitRequest) => void; now?: number;
 }) {
-  // Once opened, the chart stays mounted so returning to this tab is instant.
-  const [chartOpened, setChartOpened] = useState(active);
-  if (active && !chartOpened) setChartOpened(true);
   const { info } = aqteOverview(signal, 'real', unavailable, now);
   const currentStatus = aqteControllerCurrent(liveStatus, now);
   const style = currentStatus ? liveStatus?.styles?.[symbol] : undefined;
@@ -282,11 +272,8 @@ function AQTETerminal({ symbol, signal, unavailable, active, tick, liveStatus, o
               <p className="aqx-footnote">Peak bid: {live && live.peak > 0 ? `₹${aqtePrice(live.peak)}` : '--'}</p>
             </section>
           </div>
-          <div className="aqx-chart" id={`${prefix}-market`}>
-            {chartOpened ? <Chart symbol={symbol} tick={tick} /> : <div className="aqte-terminal-card aqte-chart-loading">Chart opens with this index tab.</div>}
-          </div>
         </div>
-        <p className="aqx-footnote">P&amp;L uses executable sell bid and estimated fees; return % is before fees. Chart shows the underlying index, not this option.</p>
+        <p className="aqx-footnote">P&amp;L uses executable sell bid and estimated fees; return % is before fees.</p>
         {live?.modify?.order_type === 'SL' && <p role="status" className="aqx-warning">Trailing request ₹{aqtePrice(live.modify.trigger_price)} awaits broker confirmation. Last confirmed SL: ₹{aqtePrice(live.stop)}.</p>}
         {live && !confirmed && <p role="status" className="aqx-warning">{exitReason ? 'Exit requested, not yet filled. Verify execution in Kite.' : 'Broker protection is unverified. Inspect Kite; do not assume the planned stop is active.'}</p>}
         {filled && !metrics && <p role="status" className="aqx-warning">Current quote/P&amp;L unavailable. Last-known trade levels are retained; verify in Kite.</p>}

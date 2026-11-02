@@ -132,6 +132,7 @@ export type AQTERuleEvidence = {
   checks: Array<{ id: AQTERuleId; label: string; passed: boolean | null; requirement: string; reason: string }>;
 };
 
+export type AQTEContract = { trading_symbol: string; expiry: string; lot_size?: number; strike?: number; side?: 'CE' | 'PE' };
 export type AQTESignal = {
   feed_ready?: boolean;
   decision: 'WAIT' | 'BUY CE' | 'BUY PE';
@@ -145,7 +146,7 @@ export type AQTESignal = {
   rule_checks?: Record<AQTEStyle, AQTERuleEvidence> | null;
   scalp?: {
     decision: 'WAIT' | 'BUY CE' | 'BUY PE'; strategy: string | null; confidence: number | null;
-    reasons: string[]; contract: { trading_symbol: string; expiry: string } | null;
+    reasons: string[]; contract: AQTEContract | null;
     entry: { maximum: number; stop: number; target: number; points: number; reward_risk: number } | null;
   };
   intelligence?: {
@@ -160,7 +161,7 @@ export type AQTESignal = {
       oi_change: number | null; oi_change_pct: number | null;
     };
   } | null;
-  contract: { trading_symbol: string; expiry: string; lot_size?: number } | null;
+  contract: AQTEContract | null;
   entry: { low: number; high: number; maximum: number; stop: number; target: number; reward_risk: number; quantity?: number } | null;
   engines?: AQTEEngine[] | null;
   orchestration?: AQTEOrchestration | null;

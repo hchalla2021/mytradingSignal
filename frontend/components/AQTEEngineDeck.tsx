@@ -1,23 +1,56 @@
 'use client';
 
-import { memo, useState } from 'react';
-import { aqteEffectiveSignal, aqteEngineView, aqteLabel, aqtePrice, aqteRanking,
+import { memo, useState, type ReactNode } from 'react';
+import { aqteControllerCurrent, aqteDaySummary, aqteEffectiveSignal, aqteEngineView, aqteLabel, aqteLiveMetrics, aqteOverview,
+  aqtePrice, aqteRanking, aqteSigned,
   type AQTEEngine, type AQTEEngineEvent, type AQTEEnginePolicy, type AQTEEngineStatus,
   type AQTELiveState, type AQTESignal, type AQTESymbol } from '@/lib/aqte-display';
 
 // Stable placeholders keep all 12 cards in place before the first evaluation arrives.
 const ENGINE_NAMES = ['Momentum', 'Breakout', 'Trend Following', 'Liquidity Sweep', 'Order Flow', 'Scalping',
   'Mean Reversion', 'Volatility Breakout', 'Options Intelligence', 'Multi-Timeframe', 'Statistical Arbitrage', 'ML Prediction'];
+const SHORT_NAMES = ['Momentum', 'Breakout', 'Trend', 'Liquidity', 'Order Flow', 'Scalping',
+  'Mean Rev', 'Volatility', 'Options', 'MTF', 'Stat Arb', 'ML'];
+const ENGINE_ICONS = [
+  'M5 15c-1.5 1.5-2 5-2 5s3.5-.5 5-2m-1-4 9-9c2-2 5-2 5-2s0 3-2 5l-9 9-3-3zm6-3h.01',
+  'M4 20v-5M9 20v-9M14 20V7M19 20V3',
+  'M3 17l6-6 4 4 8-8M15 7h6v6',
+  'M12 3l9 5-9 5-9-5 9-5zM3 13l9 5 9-5',
+  'M5 20V9M10 20V4M15 20v-8M20 20v-5',
+  'M13 2 4 14h7l-1 8 9-12h-7l1-8z',
+  'M9 14 4 9l5-5M4 9h10a6 6 0 0 1 0 12h-3',
+  'M2 12h4l3-8 4 16 3-8h6',
+  'M4 6c0-1.7 3.6-3 8-3s8 1.3 8 3-3.6 3-8 3-8-1.3-8-3zm0 0v6c0 1.7 3.6 3 8 3s8-1.3 8-3V6M4 12v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6',
+  'M12 2 2 7l10 5 10-5-10-5zM2 12l10 5 10-5M2 17l10 5 10-5',
+  'M12 3v18M5 7h14M5 7l-3 6a3 3 0 0 0 6 0L5 7zm14 0-3 6a3 3 0 0 0 6 0l-3-6zM8 21h8',
+  'M7 7h10v10H7zM10 2v5M14 2v5M10 17v5M14 17v5M2 10h5M2 14h5M17 10h5M17 14h5',
+];
 const STATUS_LABEL: Record<AQTEEngineStatus, string> = {
   SATISFIED: 'Satisfied', PARTIAL: 'Partial', MONITORING: 'Monitoring', NOT_SATISFIED: 'Not satisfied',
 };
+const STATUS_ICON: Record<AQTEEngineStatus, string> = { SATISFIED: '✓', PARTIAL: '◐', MONITORING: '◎', NOT_SATISFIED: '✕' };
 const FILTERS = ['ALL', 'SATISFIED', 'PARTIAL', 'MONITORING', 'NOT_SATISFIED'] as const;
 type Filter = typeof FILTERS[number];
+const CHART_TABS = [['chart', 'Price Chart'], ['signals', 'Engine Signals'], ['levels', 'Levels'],
+  ['flow', 'Order Flow'], ['options', 'Options'], ['mtf', 'Multi-TF']] as const;
+type ChartTab = typeof CHART_TABS[number][0];
 const clock = new Intl.DateTimeFormat('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
 const fixed = (value: number | null | undefined, digits = 2) =>
   value == null || !Number.isFinite(value) ? '--' : value.toFixed(digits);
+const percent = (value: number | null | undefined) =>
+  value == null || !Number.isFinite(value) ? '--' : `${value > 0 ? '+' : ''}${value.toFixed(2)}%`;
+const move = (from: number | null | undefined, to: number | null | undefined) =>
+  from != null && to != null && from > 0 && Number.isFinite(to) ? (to - from) / from * 100 : null;
+const rupees = (value: number | null | undefined) => value == null || !Number.isFinite(value) ? '--' : `₹${aqtePrice(value)}`;
+const signedRupees = (value: number | null | undefined) =>
+  value == null || !Number.isFinite(value) ? '--' : `${value > 0 ? '+' : value < 0 ? '−' : ''}₹${aqtePrice(Math.abs(value))}`;
+const quantity = (value: number | null | undefined) =>
+  value == null || !Number.isFinite(value) ? '--' : value.toLocaleString('en-IN', { maximumFractionDigits: 0 });
 const sideTone = (side: 'CE' | 'PE' | null | undefined) => side === 'CE' ? 'aqx-buy' : side === 'PE' ? 'aqx-sell' : 'aqx-wait';
+const valueTone = (value: number | null | undefined) =>
+  value == null || !Number.isFinite(value) || value === 0 ? '' : value > 0 ? 'aqx-buy' : 'aqx-sell';
 type Check = { label: string; state: 'pass' | 'fail' | 'wait'; value: string };
+type Fact = [string, string, string?];
 
 type Props = {
   symbol: AQTESymbol;
@@ -26,18 +59,51 @@ type Props = {
   events: AQTEEngineEvent[];
   policy: AQTEEnginePolicy | null;
   unavailable: boolean;
+  now?: number;
+  chart?: ReactNode;
+  onViewAll?: () => void;
 };
 
-function AQTEEngineDeck({ symbol, data, liveStatus, events, policy, unavailable }: Props) {
+function Icon({ path }: { path: string }) {
+  return <svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8"
+    strokeLinecap="round" strokeLinejoin="round"><path d={path} /></svg>;
+}
+
+function RuleList({ rules }: { rules: AQTEEngine['rules'] }) {
+  return (
+    <ul className="aqx-rule-list">
+      {rules.map(rule => (
+        <li key={rule.id} className={rule.passed === true ? 'aqx-pass' : rule.passed === false ? 'aqx-fail' : 'aqx-pending'}>
+          <span aria-hidden="true">{rule.passed === true ? '✓' : rule.passed === false ? '✕' : '…'}</span>
+          <span>{rule.label}<small>{rule.requirement}</small></span>
+          <b>{rule.value ?? (rule.passed == null ? 'No data' : '--')}</b>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function Facts({ rows, label }: { rows: Fact[]; label: string }) {
+  return (
+    <dl className="aqx-facts" aria-label={label}>
+      {rows.map(([name, value, color]) => <div key={name}><dt>{name}</dt><dd className={color ?? ''}>{value}</dd></div>)}
+    </dl>
+  );
+}
+
+function AQTEEngineDeck({ symbol, data, liveStatus, events, policy, unavailable, now = Date.now() / 1000, chart, onViewAll }: Props) {
   const [filter, setFilter] = useState<Filter>('ALL');
   const [open, setOpen] = useState<number | null>(null);
-  const view = unavailable ? null : aqteEngineView(data?.[symbol]);
+  const [tab, setTab] = useState<ChartTab>('chart');
+  const signal = data?.[symbol];
+  const view = unavailable ? null : aqteEngineView(signal);
   const engines: Array<AQTEEngine | null> = view?.engines ?? ENGINE_NAMES.map(() => null);
   const orchestration = view?.orchestration ?? null;
   const market = view?.market ?? null;
   const counts = Object.fromEntries(FILTERS.map(key => [key, orchestration == null ? null : key === 'ALL' ? 12 :
     orchestration[key.toLowerCase() as 'satisfied' | 'partial' | 'monitoring' | 'not_satisfied']])) as Record<Filter, number | null>;
   const detail = open == null ? null : engines[open - 1];
+  const running = view ? view.engines.filter(engine => engine.total > 0).length : 0;
 
   // Top opportunity follows the live controller's ranking; until it reports, rank locally the same way.
   const top = unavailable ? null : (liveStatus?.ranking ?? aqteRanking(data, liveStatus?.styles))[0] ?? null;
@@ -49,61 +115,138 @@ function AQTEEngineDeck({ symbol, data, liveStatus, events, policy, unavailable 
   const topView = aqteEngineView(topSignal);
   const aligned = side && topView ? side === 'CE' ? topView.orchestration.ce : topView.orchestration.pe : null;
   const opposed = side && topView ? side === 'CE' ? topView.orchestration.pe : topView.orchestration.ce : null;
+  const alignedNames = side && topView ? topView.engines.filter(engine => engine.status === 'SATISFIED' && engine.side === side)
+    .sort((a, b) => (b.score ?? 0) - (a.score ?? 0)).slice(0, 3).map(engine => SHORT_NAMES[engine.id - 1] ?? engine.name) : [];
   const entry = actionable ? effective.entry : null;
+  const contract = actionable ? effective.contract : null;
+  const strike = typeof contract?.strike === 'number' && Number.isFinite(contract.strike) ? contract.strike : null;
   const block = top ? liveStatus?.entry_blocks?.[top] : undefined;
   const active = liveStatus?.active ?? null;
   const vetoMin = policy?.veto_min ?? 2;
   const vetoed = policy?.veto !== false && opposed != null && aligned != null && opposed >= vetoMin && opposed > aligned;
-  const lot = effective?.contract && 'lot_size' in effective.contract ? effective.contract.lot_size : undefined;
-  const executing = actionable && !!liveStatus && liveStatus.automation_on && liveStatus.armed && !liveStatus.killed && !active && block === null;
+  const lot = contract?.lot_size;
+  const executing = actionable && !vetoed && !!liveStatus && liveStatus.automation_on && liveStatus.armed && !liveStatus.killed && !active && block === null;
   const execution = !liveStatus ? 'Controller status unavailable' :
     liveStatus.killed ? 'Emergency stop latched' :
       !actionable ? effective?.reasons[0] ?? 'Waiting for live rule evaluation' :
         block ? block :
+          vetoed ? `Engine veto · WAIT (${opposed} oppose ${side}, ${aligned} aligned)` :
           !liveStatus.automation_on || !liveStatus.armed ? 'Auto Trade is not ON and armed' :
             active ? 'One managed position already open' : 'Eligible · central controller places the IOC entry';
-  const checks: Check[] = [
-    { label: 'Rule setup', state: actionable ? 'pass' : 'wait',
-      value: actionable ? `${effective.decision} · ${style === 'scalp' ? 'Scalp' : 'Swing'}` : 'WAIT' },
-    { label: 'Engine consensus', state: aligned == null ? 'wait' : vetoed ? 'fail' : 'pass',
-      value: aligned == null ? '--' : `${aligned} aligned · ${opposed} opposed` },
-    { label: 'Conflict resolution', state: !topView ? 'wait' : topView.orchestration.conflict ? vetoed ? 'fail' : 'wait' : 'pass',
-      value: !topView ? '--' : topView.orchestration.conflict ? vetoed ? 'Veto · WAIT' : 'Majority holds' : 'No conflict' },
-    { label: 'Risk validation', state: block === undefined ? 'wait' : block ? 'fail' : 'pass',
-      value: block === undefined ? '--' : block ? 'Blocked' : 'All gates clear' },
-    { label: 'Position limit', state: !liveStatus ? 'wait' : active ? 'fail' : 'pass',
-      value: !liveStatus ? '--' : `${active ? 1 : 0} / 1 open` },
-    { label: 'Quantity', state: liveStatus ? 'pass' : 'wait',
-      value: liveStatus ? `${liveStatus.limits.max_lots} lot max${lot ? ` · ${lot} qty` : ''}` : '--' },
-    { label: 'Stop-loss', state: !active ? liveStatus ? 'pass' : 'wait' : active.protection_confirmed ? 'pass' : 'fail',
-      value: !active ? liveStatus ? 'Broker SL after fill' : '--' : active.protection_confirmed ? `Confirmed ${aqtePrice(active.stop)}` : 'Unconfirmed' },
-    { label: 'Trailing stop', state: active?.trailing_active ? 'pass' : 'wait',
-      value: !liveStatus ? '--' : !active ? 'Arms after fill' : active.trailing_active ? `Trailing ${aqtePrice(active.stop)}` : `Arms at ${fixed(active.trail_start_r, 1)}R` },
+  const autoState = !liveStatus ? ['UNKNOWN', 'aqx-exec-wait'] : liveStatus.killed ? ['STOPPED', 'aqx-exec-stop'] :
+    active ? ['IN TRADE', 'aqx-exec-live'] : executing ? ['READY', 'aqx-exec-ready'] :
+      !liveStatus.automation_on ? ['OFF', 'aqx-exec-off'] : ['WAITING', 'aqx-exec-wait'];
+  const score = actionable && effective.confidence != null && Number.isFinite(effective.confidence)
+    ? Math.max(0, Math.min(100, effective.confidence)) : null;
+  const ring = 2 * Math.PI * 30;
+
+  // Trade management and P&L come only from the broker-reconciled controller position.
+  const current = aqteControllerCurrent(liveStatus, now);
+  const metrics = aqteLiveMetrics(liveStatus, now);
+  const filled = !!active && active.filled > 0;
+  const confirmed = !!active?.protection_confirmed && !active.error && !liveStatus?.error && current;
+  const trailing = !!active?.trailing_active && confirmed;
+  const plan = !active ? entry : null;
+  const base = active ? filled ? active.entry_price : active.limit : plan?.maximum ?? null;
+  const risk = active ? active.entry_price - active.initial_stop : plan ? plan.maximum - plan.stop : null;
+  const management: Array<[string, ReactNode, string?]> = [
+    ['Initial Stop Loss', active || plan ? <>{rupees(active?.initial_stop ?? plan?.stop)} <small>({percent(move(base, active?.initial_stop ?? plan?.stop))})</small></> : '--', 'aqx-sell'],
+    ['Trailing Stop Loss', active ? <>{rupees(active.stop)} <small>{trailing ? '(Active)' : confirmed ? '(Confirmed SL)' : '(Unverified)'}</small>
+      <span role="img" aria-label={trailing ? 'Trailing active' : 'Trailing not active'} className={`aqx-toggle ${trailing ? 'aqx-toggle-on' : ''}`} /></> :
+      plan ? `Arms after fill` : '--', trailing ? 'aqx-buy' : ''],
+    ['SL Trail Mode', 'Peak bid − 1R (broker SL modify)'],
+    ['Trail Step', risk != null && risk > 0 ? `₹${aqtePrice(risk)} · from +${fixed(active?.trail_start_r ?? 1, 1)}R` : '--'],
+    ['Profit Booking', active || plan ? 'Full exit at target · 1 lot' : '--'],
+    ['Target', active || plan ? <>{rupees(active?.target ?? plan?.target)} <small>({percent(move(base, active?.target ?? plan?.target))})</small></> : '--', 'aqx-buy'],
   ];
-  const shown = events.slice(0, 5);
+
+  const day = aqteDaySummary(liveStatus, now);
+  const executions = current ? [
+    ...(active ? [{ key: active.id, at: active.fill_at ?? active.entry_at, instrument: active.contract.trading_symbol,
+      qty: Math.max(0, active.filled - (active.exited ?? 0)), pnl: metrics?.net_pnl ?? null, pct: metrics?.return_pct ?? null,
+      status: filled ? 'Open' : 'Pending' }] : []),
+    ...[...day.trades].reverse().map((trade, index) => ({ key: `${trade.exit_at}:${index}`, at: trade.entry_at ?? trade.exit_at,
+      instrument: trade.contract?.trading_symbol ?? aqteLabel(trade.symbol), qty: trade.filled ?? null, pnl: trade.net_pnl,
+      pct: move(trade.entry_price, trade.exit_price), status: 'Exited' })),
+  ].slice(0, 4) : [];
+
+  const checks: Check[] = [
+    { label: 'Rule Setup', state: actionable ? 'pass' : 'wait',
+      value: actionable ? `${effective.decision} · ${style === 'scalp' ? 'Scalp' : 'Swing'}` : 'WAIT' },
+    { label: 'Signal Aggregation', state: aligned == null ? 'wait' : vetoed ? 'fail' : 'pass',
+      value: aligned == null ? '--' : `${aligned} aligned · ${opposed} opposed` },
+    { label: 'Conflict Check', state: !topView ? 'wait' : topView.orchestration.conflict ? vetoed ? 'fail' : 'wait' : 'pass',
+      value: !topView ? '--' : topView.orchestration.conflict ? vetoed ? 'Veto · WAIT' : 'Majority holds' : 'No conflict' },
+    { label: 'Risk Validation', state: block === undefined ? 'wait' : block ? 'fail' : 'pass',
+      value: block === undefined ? '--' : block ? 'Blocked' : 'Passed' },
+    { label: 'Position & Exposure', state: !liveStatus ? 'wait' : active ? 'fail' : 'pass',
+      value: !liveStatus ? '--' : active ? '1 / 1 open' : 'Within limits' },
+    { label: 'Quantity Control', state: liveStatus ? 'pass' : 'wait',
+      value: liveStatus ? `${liveStatus.limits.max_lots} lot (enforced)${lot ? ` · ${lot} qty` : ''}` : '--' },
+    { label: 'Trailing Stop', state: trailing ? 'pass' : active && !confirmed ? 'fail' : 'wait',
+      value: !liveStatus ? '--' : !active ? 'Arms after fill' : trailing ? `Active (₹${aqtePrice(active.stop)})` :
+        confirmed ? `Arms at +${fixed(active.trail_start_r, 1)}R` : 'SL unconfirmed' },
+    { label: 'Profit Booking', state: liveStatus ? 'pass' : 'wait', value: liveStatus ? 'Target exit (1 lot)' : '--' },
+  ];
+  const sent = active?.entry_id ? ['Sent to Live Execution (Zerodha)', 'aqx-exec-ready'] :
+    executing ? ['Next entry routes to Zerodha (IOC)', 'aqx-exec-ready'] : ['Not sent · awaiting a risk-cleared setup', 'aqx-exec-off'];
+
+  const { info } = aqteOverview(signal, 'real', unavailable, now);
+  const live = info?.live && [info.live.at, info.live.received].every(at => now - at >= -1 && now - at <= 5) ? info.live : null;
+  const depth = live ? live.buy_depth + live.sell_depth : 0;
+  const levels: Fact[] = [
+    ['Spot', aqtePrice(info ? signal?.spot : null)],
+    ['VWAP', aqtePrice(info?.vwap)],
+    ['SuperTrend', info ? `${info.supertrend === 'BULLISH' ? 'Bull' : 'Bear'} ${aqtePrice(info.supertrend_price)}` : '--',
+      info?.supertrend === 'BULLISH' ? 'aqx-buy' : info ? 'aqx-sell' : ''],
+    ['EMA 9 / 20', info ? `${aqtePrice(info.ema['9'])} / ${aqtePrice(info.ema['20'])}` : '--'],
+    ['EMA 50', aqtePrice(info?.ema['50'])],
+    ['20-candle high', aqtePrice(info?.breakout_high)],
+    ['20-candle low', aqtePrice(info?.breakout_low)],
+    ['CPR', info?.cpr ? `${aqtePrice(info.cpr.bottom)} – ${aqtePrice(info.cpr.top)}` : '--'],
+    ['ATR (14)', aqtePrice(info?.atr)],
+    ['Option entry ≤', aqtePrice(entry?.maximum)],
+    ['Option target', aqtePrice(entry?.target), 'aqx-buy'],
+    ['Option stop', aqtePrice(entry?.stop), 'aqx-sell'],
+  ];
+  const flow: Fact[] = [
+    ['Book imbalance', live && info?.imbalance != null ? `${aqteSigned(info.imbalance * 100)}%` : '--', valueTone(live ? info?.imbalance : null)],
+    ['Buy depth', live ? `${quantity(live.buy_depth)} (${depth ? fixed(live.buy_depth / depth * 100, 1) : '--'}%)` : '--', 'aqx-buy'],
+    ['Sell depth', live ? `${quantity(live.sell_depth)} (${depth ? fixed(live.sell_depth / depth * 100, 1) : '--'}%)` : '--', 'aqx-sell'],
+    ['Futures OI', live?.oi != null ? quantity(live.oi) : '--'],
+    ['OI change (1m)', live?.oi_change != null ? `${live.oi_change > 0 ? '+' : ''}${quantity(live.oi_change)}${live.oi_change_pct != null ? ` (${percent(live.oi_change_pct)})` : ''}` : '--',
+      valueTone(live?.oi_change)],
+    ['Relative volume', info?.volume_ratio != null ? `${fixed(info.volume_ratio)}×` : '--'],
+    ['RSI (14)', aqtePrice(info?.rsi)],
+    ['Structure', info ? info.structure.replaceAll('_', ' ').toLowerCase() : '--'],
+  ];
+  const evidenceNote = unavailable ? 'AQTE data unavailable' : !info ? 'Live evidence appears with a fresh market feed' :
+    !live ? 'Live depth/OI unavailable' : null;
+  const engineRules = (id: number) => {
+    const engine = engines[id - 1];
+    return engine?.rules.length ? <RuleList rules={engine.rules} /> :
+      <p className="aqx-tab-note">{engine?.reason ?? (unavailable ? 'Engine data unavailable' : 'Waiting for live evaluation')}</p>;
+  };
+  const shown = events.slice(0, 4);
 
   return (
-    <section className="aqx-card aqx-deck" aria-label="AQTE strategy engines">
-      <div className="aqx-deck-main">
+    <section className="aqx-deck" aria-label="AQTE strategy engines">
+      <div className="aqx-card aqx-deck-main" id="aqte-dash-engines">
         <header className="aqx-deck-head">
-          <h3 className="aqx-deck-title">Strategy Engines <span>· {aqteLabel(symbol)}</span></h3>
+          <h3 className="aqx-deck-title">AQTE Strategy Engines (12)
+            <span> · {aqteLabel(symbol)} · {view ? running ? `${running}/12 engines evaluating in parallel` : 'All engines monitoring' : 'Engines offline'}</span>
+            <span className={sideTone(orchestration?.consensus)}>{orchestration?.consensus
+              ? ` · Consensus ${orchestration.consensus} ${orchestration.consensus_pct ?? '--'}%` : ''}</span>
+          </h3>
           <div role="group" aria-label="Filter engines" className="aqx-deck-filters">
             {FILTERS.map(key => (
               <button key={key} type="button" aria-pressed={filter === key} onClick={() => setFilter(key)}
                 className={`aqx-deck-filter aqx-st-${key.toLowerCase()}`}>
-                {key === 'ALL' ? 'All' : STATUS_LABEL[key]} <b>{counts[key] ?? '--'}</b>
+                {`${key === 'ALL' ? 'All' : STATUS_LABEL[key]} (${counts[key] ?? '--'})`}
               </button>
             ))}
           </div>
         </header>
-        <dl className="aqx-deck-context" aria-label="Market context">
-          <div><dt>Regime</dt><dd className={market?.regime?.includes('Bullish') ? 'aqx-buy' : market?.regime?.includes('Bearish') ? 'aqx-sell' : ''}>{market?.regime ?? '--'}</dd></div>
-          <div><dt>Volatility</dt><dd>{market?.volatility ?? '--'}<small>{market?.vix != null ? ` VIX ${fixed(market.vix)}${market.vix_change_pct != null ? ` (${market.vix_change_pct > 0 ? '+' : ''}${fixed(market.vix_change_pct)}%)` : ''}` : ''}</small></dd></div>
-          <div><dt>Liquidity</dt><dd>{market?.liquidity ?? '--'}</dd></div>
-          <div><dt>PCR</dt><dd>{fixed(market?.pcr)}</dd></div>
-          <div><dt>Consensus</dt><dd className={sideTone(orchestration?.consensus)}>{orchestration?.consensus
-            ? `${orchestration.consensus} ${orchestration.consensus_pct ?? '--'}%` : orchestration?.evaluated ? 'None' : '--'}</dd></div>
-        </dl>
         <div className="aqx-deck-grid">
           {engines.map((engine, index) => {
             const id = index + 1;
@@ -114,12 +257,14 @@ function AQTEEngineDeck({ symbol, data, liveStatus, events, policy, unavailable 
                 aria-label={`${ENGINE_NAMES[index]}: ${engine ? STATUS_LABEL[status] : 'unavailable'}`}
                 disabled={!engine} onClick={() => setOpen(open === id ? null : id)}
                 className={`aqx-eng-card aqx-st-${status.toLowerCase()}${dim ? ' aqx-eng-dim' : ''}`}>
-                <span className="aqx-eng-top"><span className="aqx-eng-num">{String(id).padStart(2, '0')}</span>
-                  <span className="aqx-eng-name">{engine?.name ?? ENGINE_NAMES[index]}</span></span>
-                <span className="aqx-eng-badge">{engine ? STATUS_LABEL[status] : '--'}</span>
+                <span className="aqx-eng-num">{String(id).padStart(2, '0')}</span>
+                <span className="aqx-eng-icon"><Icon path={ENGINE_ICONS[index]} /></span>
+                <span className="aqx-eng-name">{engine?.name ?? ENGINE_NAMES[index]}</span>
+                <span className="aqx-eng-badge"><span aria-hidden="true">{engine ? STATUS_ICON[status] : ''}</span> {engine ? STATUS_LABEL[status] : '--'}</span>
                 <span className="aqx-eng-meta">
-                  <span className={sideTone(engine?.side)}>{engine?.side ?? (engine?.authority === 'SHADOW' ? 'Shadow' : '—')}</span>
-                  <span>{engine ? `${engine.passed}/${engine.total}` : '--'}</span>
+                  <span>{engine ? `${engine.passed} / ${engine.total} Rules` : '-- Rules'}
+                    {engine?.side ? <b className={sideTone(engine.side)}> · {engine.side}</b> : engine?.authority === 'SHADOW' ? ' · Shadow' : ''}</span>
+                  <span>{engine?.score != null ? `${Math.round(engine.score)}%` : '--'}</span>
                 </span>
                 <span aria-hidden="true" className="aqx-eng-bar"><i style={{ transform: `scaleX(${(engine?.score ?? 0) / 100})` }} /></span>
               </button>
@@ -131,58 +276,168 @@ function AQTEEngineDeck({ symbol, data, liveStatus, events, policy, unavailable 
             <p className="aqx-eng-rules-head"><b>{String(detail.id).padStart(2, '0')} {detail.name}</b>
               <span>{detail.authority === 'SHADOW' ? 'Shadow only · no order authority' : detail.authority === 'ENTRY' ? 'Shared with live entry rules' : 'Advisory · ranks and vetoes'}</span></p>
             {detail.reason && <p className="aqx-eng-reason">{detail.reason}</p>}
-            <ul>
-              {detail.rules.map(rule => (
-                <li key={rule.id} className={rule.passed === true ? 'aqx-pass' : rule.passed === false ? 'aqx-fail' : 'aqx-pending'}>
-                  <span aria-hidden="true">{rule.passed === true ? '✓' : rule.passed === false ? '✕' : '…'}</span>
-                  <span>{rule.label}<small>{rule.requirement}</small></span>
-                  <b>{rule.value ?? (rule.passed == null ? 'No data' : '--')}</b>
-                </li>
-              ))}
-            </ul>
+            <RuleList rules={detail.rules} />
           </>}
         </div>
+      </div>
+
+      <aside className="aqx-card aqx-opp" aria-label="Top opportunity" id="aqte-dash-opportunity">
+        <h3 className="aqx-panel-head"><span aria-hidden="true" className="aqx-crown">♛</span>Current Opportunity <span>(Top Ranked)</span></h3>
+        <div className="aqx-opp-hero">
+          <div className="min-w-0">
+            <p className="aqx-opp-name">{top ? `${aqteLabel(top)}${strike != null ? ` ${strike.toLocaleString('en-IN')}` : ''}${side ? ` ${side}` : ''}` : '--'}</p>
+            <p className="aqx-opp-tags">
+              <b className={`aqx-side-chip ${side ? side === 'CE' ? 'aqx-chip-ce' : 'aqx-chip-pe' : 'aqx-chip-wait'}`}>{actionable ? 'BUY' : 'WAIT'}</b>
+              <span>{alignedNames.length ? alignedNames.join(' + ') : actionable ? 'Rule engine' : 'No actionable setup'}</span>
+            </p>
+            {aligned != null && opposed != null && (
+              <p className={`aqx-opp-consensus ${vetoed ? 'aqx-sell' : 'aqx-buy'}`}>
+                {`${aligned} aligned · ${opposed} opposed${vetoed ? ' · Veto · WAIT' : ''}`}
+              </p>
+            )}
+            <p className="aqx-opp-contract">{contract?.trading_symbol ?? (top ? `${aqteLabel(top)} · ${style === 'scalp' ? 'Scalp' : 'Swing'}` : '--')}</p>
+          </div>
+          <div className="aqx-opp-ring" aria-label={`Rule score ${score != null ? `${Math.round(score)}%` : 'unavailable'}`}>
+            <svg viewBox="0 0 72 72" aria-hidden="true">
+              <circle cx="36" cy="36" r="30" className="aqx-ring-track" />
+              <circle cx="36" cy="36" r="30" className="aqx-ring-value" strokeDasharray={ring} strokeDashoffset={ring * (1 - (score ?? 0) / 100)} />
+            </svg>
+            <span><small>Score</small><b>{score != null ? `${Math.round(score)}%` : '--'}</b></span>
+          </div>
+        </div>
+        <dl className="aqx-opp-grid">
+          <div><dt>Entry ≤</dt><dd>{rupees(entry?.maximum)}</dd></div>
+          <div><dt>Target</dt><dd className="aqx-buy">{rupees(entry?.target)}<small>{entry ? percent(move(entry.maximum, entry.target)) : ''}</small></dd></div>
+          <div><dt>Stop Loss</dt><dd className="aqx-sell">{rupees(entry?.stop)}<small>{entry ? percent(move(entry.maximum, entry.stop)) : ''}</small></dd></div>
+          <div><dt>Lot</dt><dd>{liveStatus ? liveStatus.limits.max_lots : '--'}</dd></div>
+          <div><dt>R:R</dt><dd>{entry ? `1 : ${fixed(entry.reward_risk, 1)}` : '--'}</dd></div>
+        </dl>
+        <div className={`aqx-exec ${autoState[1]}`} role="status">
+          <p><span aria-hidden="true">⚡</span>Auto Execution: <b>{autoState[0]}</b><span aria-hidden="true" className="aqx-exec-mark">{executing ? '✓' : ''}</span></p>
+          <small>{execution}</small>
+        </div>
+      </aside>
+
+      <div className="aqx-card aqx-cc-chart" id="aqte-dash-analytics">
+        <div role="tablist" aria-label="Analytics view" className="aqx-ctabs">
+          {CHART_TABS.map(([key, label], index) => (
+            <button key={key} type="button" role="tab" id={`aqte-ctab-${key}`} aria-selected={tab === key}
+              aria-controls={`aqte-cpanel-${key}`} tabIndex={tab === key ? 0 : -1} onClick={() => setTab(key)}
+              onKeyDown={event => {
+                let next: number;
+                if (event.key === 'ArrowRight') next = (index + 1) % CHART_TABS.length;
+                else if (event.key === 'ArrowLeft') next = (index + CHART_TABS.length - 1) % CHART_TABS.length;
+                else if (event.key === 'Home') next = 0;
+                else if (event.key === 'End') next = CHART_TABS.length - 1;
+                else return;
+                event.preventDefault();
+                setTab(CHART_TABS[next][0]);
+                event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>('[role="tab"]')[next]?.focus();
+              }}
+              className="aqx-ctab aqx-viewonly min-h-[44px] min-w-0">{label}</button>
+          ))}
+        </div>
+        <div id="aqte-cpanel-chart" role="tabpanel" aria-labelledby="aqte-ctab-chart" hidden={tab !== 'chart'} className="aqx-cpanel aqx-chart">
+          {chart}
+        </div>
+        {tab !== 'chart' && (
+          <div id={`aqte-cpanel-${tab}`} role="tabpanel" aria-labelledby={`aqte-ctab-${tab}`} className="aqx-cpanel aqx-cpanel-scroll">
+            {tab === 'signals' && (
+              <table className="aqx-mini-table">
+                <thead><tr><th>#</th><th>Engine</th><th>Status</th><th>Side</th><th>Rules</th><th>Score</th></tr></thead>
+                <tbody>{engines.map((engine, index) => (
+                  <tr key={index}>
+                    <td>{String(index + 1).padStart(2, '0')}</td><td>{engine?.name ?? ENGINE_NAMES[index]}</td>
+                    <td className={`aqx-st-${(engine?.status ?? 'monitoring').toLowerCase()} aqx-st-text`}>{engine ? STATUS_LABEL[engine.status] : '--'}</td>
+                    <td className={sideTone(engine?.side)}>{engine?.side ?? '—'}</td>
+                    <td>{engine ? `${engine.passed}/${engine.total}` : '--'}</td>
+                    <td>{engine?.score != null ? `${Math.round(engine.score)}%` : '--'}</td>
+                  </tr>
+                ))}</tbody>
+              </table>
+            )}
+            {tab === 'levels' && <Facts rows={levels} label="Levels" />}
+            {tab === 'flow' && <Facts rows={flow} label="Order flow" />}
+            {tab === 'options' && <>
+              <Facts label="Options context" rows={[['PCR (subscribed strikes)', fixed(market?.pcr)], ['India VIX', market?.vix != null ? `${fixed(market.vix)} (${percent(market.vix_change_pct)})` : '--'],
+                ['Contract', contract?.trading_symbol ?? '--'], ['Lot size', lot ? String(lot) : '--']]} />
+              {engineRules(9)}
+            </>}
+            {tab === 'mtf' && engineRules(10)}
+            {(tab === 'levels' || tab === 'flow') && evidenceNote && <p className="aqx-tab-note">{evidenceNote}</p>}
+          </div>
+        )}
+      </div>
+
+      <div className="aqx-cc-trade">
+        <section className="aqx-card aqx-panel" aria-label="Enterprise trade management">
+          <h3 className="aqx-panel-head"><span aria-hidden="true" className="aqx-shield">⛨</span>Enterprise Trade Management
+            {plan && <small className="aqx-plan-tag">Plan</small>}</h3>
+          <dl className="aqx-mgmt">
+            {management.map(([label, value, color]) => <div key={label}><dt>{label}</dt><dd className={color ?? ''}>{value}</dd></div>)}
+          </dl>
+        </section>
+        <section className="aqx-card aqx-panel" aria-label="Live P&L current trade">
+          <h3 className="aqx-panel-head"><span aria-hidden="true" className="aqx-bars">▮</span>Live P&amp;L <span>(Current Trade)</span></h3>
+          <div className={`aqx-pnl-hero ${metrics?.net_pnl != null && metrics.net_pnl < 0 ? 'aqx-pnl-loss' : ''}`}>
+            <div><small>Unrealized P&amp;L (est. net)</small><b className={valueTone(metrics?.net_pnl)}>{signedRupees(metrics?.net_pnl)}</b></div>
+            <div className="aqx-pnl-side"><b className={valueTone(metrics?.return_pct)}>{percent(metrics?.return_pct)}</b>
+              <small className={valueTone(metrics?.points)}>{metrics?.points != null ? `${aqteSigned(metrics.points)} Points` : active ? 'Quote unverified' : 'No open trade'}</small></div>
+          </div>
+          <dl className="aqx-pnl-grid">
+            <div><dt>Entry</dt><dd>{active ? rupees(filled ? active.entry_price : active.limit) : '--'}</dd></div>
+            <div><dt>LTP</dt><dd>{rupees(metrics?.ltp)}</dd></div>
+            <div><dt>Points</dt><dd className={valueTone(metrics?.points)}>{aqteSigned(metrics?.points)}</dd></div>
+            <div><dt>P&amp;L %</dt><dd className={valueTone(metrics?.return_pct)}>{percent(metrics?.return_pct)}</dd></div>
+          </dl>
+        </section>
+      </div>
+
+      <div className="aqx-cc-risk">
+        <section className="aqx-card aqx-panel" aria-label="Orchestration and risk" id="aqte-dash-risk">
+          <h3 className="aqx-panel-head"><span aria-hidden="true" className="aqx-net">⌬</span>Orchestration &amp; Risk</h3>
+          <ul className="aqx-orch">
+            {checks.map(check => (
+              <li key={check.label} className={`aqx-${check.state === 'pass' ? 'pass' : check.state === 'fail' ? 'fail' : 'pending'}`}>
+                <span aria-hidden="true">{check.state === 'pass' ? '✓' : check.state === 'fail' ? '✕' : '…'}</span>
+                <span>{check.label}</span><b>{check.value}</b>
+              </li>
+            ))}
+          </ul>
+          <p className={`aqx-sent ${sent[1]}`}><span aria-hidden="true">→</span>{sent[0]}</p>
+        </section>
+        <section className="aqx-card aqx-panel" aria-label="Recent executions">
+          <h3 className="aqx-panel-head"><span aria-hidden="true" className="aqx-net">↻</span>Recent Executions <span>(Live)</span>
+            {onViewAll && <button type="button" className="aqx-link aqx-viewonly" onClick={onViewAll}>View All</button>}</h3>
+          <table className="aqx-mini-table aqx-exec-table">
+            <thead><tr><th>Time</th><th>Instrument</th><th>Side</th><th>Qty</th><th>P&amp;L (₹)</th><th>P&amp;L %</th><th>Status</th></tr></thead>
+            <tbody>
+              {executions.length ? executions.map(row => (
+                <tr key={row.key}>
+                  <td>{clock.format(new Date(row.at * 1000))}</td><td className="aqx-ellipsis">{row.instrument}</td>
+                  <td><span className="aqx-side-chip aqx-chip-ce">BUY</span></td><td>{quantity(row.qty)}</td>
+                  <td className={valueTone(row.pnl)}>{aqteSigned(row.pnl)}</td><td className={valueTone(row.pct)}>{percent(row.pct)}</td>
+                  <td><span className={`aqx-status-chip ${row.status === 'Open' ? 'aqx-status-open' : ''}`}>{row.status}</span></td>
+                </tr>
+              )) : <tr><td colSpan={7} className="aqx-empty-row">{current ? 'No AQTE executions today' : 'Execution history unavailable'}</td></tr>}
+            </tbody>
+          </table>
+        </section>
+      </div>
+
+      <section className="aqx-card aqx-events" aria-label="Live engine events" id="aqte-dash-events">
+        <h3 className="aqx-panel-head"><span aria-hidden="true" className="aqx-live-dot" />Live Engine Events <span>(Real-time)</span></h3>
         <ol className="aqx-ticker" aria-label="Engine events">
           {shown.length ? shown.map(event => (
             <li key={`${event.at}:${event.symbol}:${event.engine}`}>
               <time>{clock.format(new Date(event.at * 1000))}</time>
-              <span>{aqteLabel(event.symbol)}</span>
-              <span>{`#${String(event.engine).padStart(2, '0')} ${event.name}`}</span>
-              <b className={`aqx-st-${event.status.toLowerCase()}`}>{STATUS_LABEL[event.status]}</b>
-              {event.side && <span className={sideTone(event.side)}>{event.side}</span>}
+              <span>{`${aqteLabel(event.symbol)} · Engine ${String(event.engine).padStart(2, '0')} (${event.name})`}</span>
+              <b className={`aqx-st-${event.status.toLowerCase()}`}>{STATUS_ICON[event.status]} {STATUS_LABEL[event.status]}</b>
+              {event.side && <span className={sideTone(event.side)}>– {event.side}</span>}
             </li>
           )) : <li className="aqx-ticker-empty">{unavailable ? 'Engine events unavailable' : 'No engine status changes yet today'}</li>}
         </ol>
-      </div>
-      <aside className="aqx-opp" aria-label="Top opportunity">
-        <h3 className="aqx-deck-title">Top Opportunity</h3>
-        <p className="aqx-opp-head">
-          <span>{top ? aqteLabel(top) : '--'}</span>
-          <b className={sideTone(side)}>{actionable ? effective.decision : 'WAIT'}</b>
-        </p>
-        <p className="aqx-opp-contract">{actionable ? effective.contract?.trading_symbol ?? '--' : 'No actionable setup'}</p>
-        <dl className="aqx-opp-grid">
-          <div><dt>Entry ≤</dt><dd>{aqtePrice(entry?.maximum)}</dd></div>
-          <div><dt>Target</dt><dd className="aqx-buy">{aqtePrice(entry?.target)}</dd></div>
-          <div><dt>Stop</dt><dd className="aqx-sell">{aqtePrice(entry?.stop)}</dd></div>
-          <div><dt>R:R</dt><dd>{entry ? `1:${fixed(entry.reward_risk, 1)}` : '--'}</dd></div>
-          <div><dt>Score</dt><dd>{actionable && effective.confidence != null ? `${Math.round(effective.confidence)}%` : '--'}</dd></div>
-          <div><dt>Engines</dt><dd className={vetoed ? 'aqx-sell' : aligned ? 'aqx-buy' : ''}>{aligned != null ? `${aligned} / ${topView?.orchestration.evaluated ?? '--'}` : '--'}</dd></div>
-        </dl>
-        <p className={`aqx-opp-exec ${executing ? 'aqx-pass' : 'aqx-pending'}`} role="status">
-          <span aria-hidden="true">{executing ? '●' : '○'}</span>{execution}
-        </p>
-        <h4 className="aqx-opp-sub">Orchestration &amp; Risk</h4>
-        <ul className="aqx-orch">
-          {checks.map(check => (
-            <li key={check.label} className={`aqx-${check.state === 'pass' ? 'pass' : check.state === 'fail' ? 'fail' : 'pending'}`}>
-              <span aria-hidden="true">{check.state === 'pass' ? '✓' : check.state === 'fail' ? '✕' : '…'}</span>
-              <span>{check.label}</span><b>{check.value}</b>
-            </li>
-          ))}
-        </ul>
-        <p className="aqx-footnote">Engines rank and can veto; only validated Scalp/Swing rules place orders via the single live controller. ML is shadow-only.</p>
-      </aside>
+      </section>
     </section>
   );
 }

@@ -790,15 +790,17 @@ test('manual broker readout never fabricates initial SL, target, trailing or net
 test('AQTE tabs have scoped accent styling without changing keyboard or selection semantics', () => {
   const tree = harness().render();
   const tabs = nodes(tree).filter(n => n.props?.role === 'tab');
-  assert.equal(tabs.length, 8);
+  assert.equal(tabs.length, 14);
   for (const tab of tabs) {
-    assert.match(tab.props.className, tab.props.id.startsWith('aqte-index-tab-') ? /\baqte-rich-tab\b/ : /\baqx-book-tab\b/);
+    const id = tab.props.id;
+    assert.match(tab.props.className, id.startsWith('aqte-index-tab-') ? /\baqte-rich-tab\b/ : id.startsWith('aqte-ctab-') ? /\baqx-ctab\b/ : /\baqx-book-tab\b/);
     assert.ok(typeof tab.props['aria-selected'] === 'boolean');
     assert.ok(tab.props.onKeyDown);
   }
   const lists = nodes(tree).filter(n => n.props?.role === 'tablist');
   assert.match(lists.find(n => n.props['aria-label'] === 'AQTE index').props.className, /\baqte-rich-tabs\b/);
   assert.match(lists.find(n => n.props['aria-label'] === 'AQTE trade book').props.className, /\baqx-book-tabs\b/);
+  assert.match(lists.find(n => n.props['aria-label'] === 'Analytics view').props.className, /\baqx-ctabs\b/);
 });
 
 test('trade book tabs support arrow, Home and End keys and show one panel', () => {
@@ -910,11 +912,13 @@ test('AQTE has three index cards and disables trade actions while live status is
   assert.deepEqual(nodes(tree).filter(n => n.props?.id?.startsWith('aqte-book-tab-')).map(text),
     ['Active Trades (--)', "Today's Trades (--)", 'Positions', 'Performance', 'Controls']);
   assert.equal(nodes(tree).filter(n => ['input', 'select'].includes(n.type)).length, 0);
-  // Engine deck filters and rule-detail toggles are view-only, not trade actions.
+  // Engine deck filters, rule-detail toggles and dashboard navigation are view-only, not trade actions.
   const deckControl = n => n.type === 'button' && /aqx-deck-filter|aqx-eng-card/.test(String(n.props?.className));
-  const actions = nodes(tree).filter(n => n.type === 'button' && n.props.role !== 'tab' && !deckControl(n));
+  const viewOnly = n => n.type === 'button' && /\baqx-viewonly\b/.test(String(n.props?.className));
+  const actions = nodes(tree).filter(n => n.type === 'button' && n.props.role !== 'tab' && !deckControl(n) && !viewOnly(n));
   assert.equal(actions.length, 15);
   assert.equal(nodes(tree).filter(deckControl).length, 17);
+  assert.ok(nodes(tree).filter(viewOnly).every(n => !/Exit|Flatten|Kill|Buy|Sell|Confirm/i.test(text(n))), 'Navigation never trades');
   assert.ok(actions.every(n => n.props.disabled), 'Trade actions need a confirmed matching live position');
   const summary = nodes(tree).find(n => n.props?.['aria-label'] === 'Today summary');
   for (const label of ['Today P&L', 'Win Rate', 'Trades', 'Risk']) assert.ok(text(summary).includes(label), label);
@@ -1041,7 +1045,7 @@ test('terminal presentation has per-index hero cards, engine and exit-rule panel
   for (const symbol of ['NIFTY', 'BANKNIFTY', 'SENSEX']) {
     assert.match(nodes(tree).find(n => n.props?.id === `aqte-index-tab-${symbol}`).props.className, new RegExp(`aqte-tab-${symbol}`));
   }
-  assert.equal(nodes(tree).filter(n => n.type === 'button' && !/aqx-deck-filter|aqx-eng-card/.test(String(n.props?.className))).length,
+  assert.equal(nodes(tree).filter(n => n.type === 'button' && !/aqx-deck-filter|aqx-eng-card|aqx-viewonly/.test(String(n.props?.className))).length,
     23, '3 index tabs, 5 book tabs, 15 gated trade actions');
   cleanup();
 });
@@ -1617,18 +1621,18 @@ test('risk card separates missing approval, unarmed OFF and armed pause', () => 
   const publish = status => nodes(h.render()).find(n => n.props?.onStatus && 'exitRequest' in n.props).props.onStatus(status);
   const risk = () => text(nodes(h.render()).find(n => n.props?.['aria-label'] === 'Today summary'));
   publish(liveFixture());
-  assert.match(risk(), /Locked\s+Live approval required/);
+  assert.match(risk(), /Locked\s+₹[\d.,\s]+\/\s+₹[\d.,\s]+Live approval required/);
   publish({ ...liveFixture(), enabled: true, paper_validated: true });
-  assert.match(risk(), /Not armed\s+Arms when Auto Trade turns ON/);
+  assert.match(risk(), /Not armed\s+₹[\d.,\s]+\/\s+₹[\d.,\s]+Arms when Auto Trade turns ON/);
   assert.doesNotMatch(risk(), /Live approval required/);
   publish({ ...liveFixture(), enabled: true, paper_validated: true, armed: true });
-  assert.match(risk(), /Paused\s+Protection continues/);
+  assert.match(risk(), /Paused\s+₹[\d.,\s]+\/\s+₹[\d.,\s]+Protection continues/);
   publish({ ...liveFixture(), enabled: true, paper_validated: true, armed: true, automation_on: true });
   assert.match(risk(), /Within limits/);
   publish({ ...liveFixture(), enabled: true, paper_validated: true, automation_wanted: true, entry_window: false });
-  assert.match(risk(), /Waiting\s+ON · arms 09:15 IST/);
+  assert.match(risk(), /Waiting\s+₹[\d.,\s]+\/\s+₹[\d.,\s]+ON · arms 09:15 IST/);
   publish({ ...liveFixture(), enabled: true, paper_validated: true, automation_wanted: true, entry_window: true });
-  assert.match(risk(), /Waiting\s+ON · arming \/ preflight/);
+  assert.match(risk(), /Waiting\s+₹[\d.,\s]+\/\s+₹[\d.,\s]+ON · arming \/ preflight/);
 });
 test('standing ON is accepted while the market is closed and shows the waiting reason until OFF', async () => {
   const h = harness('AQTEAutomationSwitch.tsx');
@@ -1787,9 +1791,11 @@ test('mobile title keeps the market badge in the same row beside the wrapping ti
 test('index tabs switch instantly: charts prefetch, stay mounted and controls reuse last data', () => {
   const read = name => readFileSync(path.join(__dirname, '..', 'components', name), 'utf8');
   assert.match(read('AQTESection.tsx'), /SYMBOLS\.forEach\(symbol => void prefetchChartHistory\(symbol, 5\)\)/);
-  const terminal = read('AQTETerminal.tsx');
-  assert.match(terminal, /if \(active && !chartOpened\) setChartOpened\(true\)/);
-  assert.match(terminal, /\{chartOpened \? <Chart /);
+  // The dashboard chart for an index mounts on first view and stays mounted (hidden) after switching away.
+  const section = read('AQTESection.tsx');
+  assert.match(section, /if \(!chartsOpened\[selectedSymbol\]\) setChartsOpened\(/);
+  assert.match(section, /\{chartsOpened\[symbol\] \? <Chart /);
+  assert.doesNotMatch(read('AQTETerminal.tsx'), /<Chart /);
   assert.match(read('AQTEDailyControl.tsx'), /useState<Snapshot \| null>\(lastSnapshot\)/);
 });
 
@@ -2013,16 +2019,29 @@ test('engine deck shows 12 live engines, rule details on demand and an honest ex
   const cards = nodes(tree).filter(n => String(n.props?.className).includes('aqx-eng-card'));
   assert.equal(cards.length, 12);
   assert.ok(cards.every(card => !card.props.disabled && card.props['aria-expanded'] === false));
-  assert.match(text(tree), /Satisfied\s+5/);
-  assert.match(text(tree), /Trending Bullish/);
-  assert.match(text(tree), /VIX 14\.20 \(\+1\.50%\)/);
-  assert.match(text(tree), /PCR\s+1\.18/);
-  assert.match(text(tree), /CE 36%/);
+  assert.match(text(tree), /Satisfied \(5\)/);
+  assert.match(text(tree), /Consensus\s+CE 36%/);
   const opportunity = nodes(tree).find(n => n.props?.['aria-label'] === 'Top opportunity');
   assert.match(text(opportunity), /NIFTY_SCALP_CE/);
   assert.match(text(opportunity), /4 aligned · 1 opposed/);
+  assert.match(text(opportunity), /Score\s+82%/);
+  assert.match(text(opportunity), /Auto Execution:\s+READY/);
   assert.match(text(opportunity), /Eligible · central controller places the IOC entry/);
-  assert.match(text(tree), /#01 Momentum/);
+  const orchestration = text(nodes(tree).find(n => n.props?.['aria-label'] === 'Orchestration and risk'));
+  assert.match(orchestration, /Signal Aggregation\s+4 aligned · 1 opposed/);
+  assert.match(orchestration, /Quantity Control\s+1 lot \(enforced\)/);
+  const management = text(nodes(tree).find(n => n.props?.['aria-label'] === 'Enterprise trade management'));
+  assert.match(management, /Initial Stop Loss\s+₹90\.00/);
+  assert.match(management, /Arms after fill/, 'No trailing before a broker-confirmed fill');
+  assert.match(text(nodes(tree).find(n => n.props?.['aria-label'] === 'Live P&L current trade')), /No open trade/);
+  assert.match(text(nodes(tree).find(n => n.props?.['aria-label'] === 'Recent executions')), /No AQTE executions today/);
+  assert.match(text(nodes(tree).find(n => n.props?.['aria-label'] === 'Live engine events')), /NIFTY · Engine 01 \(Momentum\)/);
+  // Analytics tabs: the Engine Signals view lists all 12 engines; arrow keys move between views.
+  nodes(tree).find(n => n.props?.id === 'aqte-ctab-chart').props.onKeyDown({ key: 'ArrowRight', preventDefault() {},
+    currentTarget: { parentElement: { querySelectorAll: () => [] } } });
+  tree = h.render(props);
+  assert.equal(nodes(tree).find(n => n.props?.id === 'aqte-ctab-signals').props['aria-selected'], true);
+  assert.equal(nodes(nodes(tree).find(n => n.props?.id === 'aqte-cpanel-signals')).filter(n => n.type === 'tr').length, 13);
   assert.equal(nodes(tree).find(n => n.props?.id === 'aqte-engine-rules').props.hidden, true);
   cards[0].props.onClick();
   tree = h.render(props);
@@ -2041,7 +2060,13 @@ test('engine deck shows 12 live engines, rule details on demand and an honest ex
   const blocked = text(nodes(tree).find(n => n.props?.['aria-label'] === 'Top opportunity'));
   assert.match(blocked, /Engine conflict/);
   assert.match(blocked, /Veto · WAIT/);
-  assert.doesNotMatch(blocked, /Eligible/);
+  assert.doesNotMatch(blocked, /Eligible|READY/);
+  // Even before the controller reports the block, a veto is never shown as eligible.
+  tree = h.render({ ...props, data });
+  const vetoed = text(nodes(tree).find(n => n.props?.['aria-label'] === 'Top opportunity'));
+  assert.match(vetoed, /Engine veto · WAIT \(3 oppose CE, 1 aligned\)/);
+  assert.doesNotMatch(vetoed, /Eligible|READY/);
+  assert.match(text(nodes(tree).find(n => n.props?.['aria-label'] === 'Orchestration and risk')), /Conflict Check\s+Veto · WAIT/);
 });
 
 test('engine deck keeps stable placeholders when engines are unavailable or AQTE is offline', () => {
@@ -2075,7 +2100,16 @@ test('AQTE section renders the engine deck from the snapshot and drops malformed
   await settle();
   const deck = nodes(h.render()).find(n => n.props?.['aria-label'] === 'AQTE strategy engines');
   assert.ok(deck);
-  assert.match(text(deck), /#03 Trend Following/);
+  assert.match(text(deck), /NIFTY · Engine 03 \(Trend Following\)/);
   assert.doesNotMatch(text(deck), /Injected/);
+  // Market context tiles come from the same validated engine snapshot.
+  const context = text(nodes(h.render()).find(n => n.props?.['aria-label'] === 'Market context'));
+  assert.match(context, /Trending Bullish/);
+  assert.match(context, /PCR\s+1\.18/);
+  assert.match(context, /India VIX\s+14\.20\s+\(\s*\+1\.50%\s*\)/);
+  const nav = nodes(h.render()).filter(n => String(n.props?.className).includes('aqx-nav-item'));
+  assert.equal(nav.length, 10);
+  assert.ok(nav.every(n => /\baqx-viewonly\b/.test(n.props.className)));
+  assert.match(text(nodes(h.render()).find(n => n.props?.['aria-label'] === 'System health')), /System\s+(Healthy|Degraded|Offline)/);
   cleanup();
 });
