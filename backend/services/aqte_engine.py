@@ -2,9 +2,10 @@
 
 import math
 from collections import defaultdict, deque
+from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Literal
+from typing import Literal, NotRequired, TypedDict, TypeGuard
 from uuid import uuid4
 
 SYMBOLS = ("NIFTY", "BANKNIFTY", "SENSEX")
@@ -65,6 +66,11 @@ class Tick:
     ask_quantity: int = 0
     buy_depth: int = 0
     sell_depth: int = 0
+    oi: int | None = None
+
+    def __post_init__(self):
+        if self.oi is not None and (type(self.oi) is not int or self.oi < 0):
+            raise ValueError("Invalid reported open interest")
 
 
 @dataclass(frozen=True)
@@ -111,11 +117,29 @@ class Policy:
     scalp_atr_reach: float = 4
 
 
+class Candle(TypedDict):
+    at: float
+    open: float
+    high: float
+    low: float
+    close: float
+    volume: int
+    oi: NotRequired[int | None]
+
+
+class RuleCheck(TypedDict):
+    id: str
+    label: str
+    passed: bool | None
+    requirement: str
+    reason: str
+
+
 class CandleBook:
     def __init__(self):
-        self.closed = defaultdict(lambda: deque(maxlen=600))
-        self.current = {}
-        self.previous = {}
+        self.closed: defaultdict[tuple[str, int, int], deque[Candle]] = defaultdict(lambda: deque(maxlen=600))
+        self.current: dict[tuple[str, int, int], Candle] = {}
+        self.previous: dict[tuple[str, int], Tick] = {}
 
     def add(self, tick: Tick):
         key = (tick.kind, tick.token)
@@ -135,11 +159,11 @@ class CandleBook:
                     self.closed[k].append(bar)
                 bar = None
             if bar is None:
-                bar = dict(at=bucket, open=tick.price, high=tick.price,
-                           low=tick.price, close=tick.price, volume=0)
+                bar = Candle(at=bucket, open=tick.price, high=tick.price,
+                             low=tick.price, close=tick.price, volume=0)
                 self.current[k] = bar
             bar.update(high=max(bar["high"], tick.price), low=min(bar["low"], tick.price),
-                       close=tick.price, volume=bar["volume"] + volume)
+                       close=tick.price, volume=bar["volume"] + volume, oi=tick.oi)
         return True
 
 
@@ -177,7 +201,7 @@ def session_bars(bars, at):
     return [b for b in bars if day(b["at"]) == today and session(b["at"])]
 
 
-def intelligence(bars, tick: Tick, previous_day=None):
+def intelligence(bars: Sequence[Candle], tick: Tick, previous_day=None):
     """Use completed one-minute futures bars; indicators span sessions, VWAP is today's only."""
     today = session_bars(bars, tick.at)
     if warmup_count(bars, tick.at) < WARMUP_CANDLES or warmup_count(today, tick.at) < SESSION_CANDLES:
@@ -219,6 +243,8 @@ def intelligence(bars, tick: Tick, previous_day=None):
     high, low = max(b["high"] for b in prior), min(b["low"] for b in prior)
     last = bars[-1]
     avg_volume = sum(b["volume"] for b in prior) / len(prior)
+    oi_reference = last.get("oi") if day(last["at"]) == day(tick.at) else None
+    oi_change = tick.oi - oi_reference if tick.oi is not None and oi_reference is not None else None
     cpr = None
     if previous_day:
         pivot = sum(previous_day[k] for k in ("high", "low", "close")) / 3
@@ -228,17 +254,114 @@ def intelligence(bars, tick: Tick, previous_day=None):
         "ema": averages, "rsi": 100 - 100 / (1 + gain / loss) if loss else (100 if gain else 50),
         "atr": atr, "vwap": vwap, "supertrend": "BULLISH" if trend == 1 else "BEARISH",
         "supertrend_price": lower if trend == 1 else upper, "cpr": cpr,
-        "imbalance": imbalance, "volume_ratio": last["volume"] / avg_volume if avg_volume else 0,
+        "imbalance": imbalance, "volume_ratio": last["volume"] / avg_volume if avg_volume else None,
+        "volume": last["volume"], "average_volume": avg_volume,
+        "breakout_high": high, "breakout_low": low,
         "breakout": 1 if last["close"] > high else (-1 if last["close"] < low else 0),
         "sweep": 1 if last["low"] < low < last["close"] else (
             -1 if last["high"] > high > last["close"] else 0),
         "structure": "HIGHER_HIGH" if last["close"] > high else (
             "LOWER_LOW" if last["close"] < low else "RANGE"),
         "close": last["close"], "at": last["at"],
+        "live": {
+            "token": tick.token, "at": tick.at, "received": tick.received, "price": tick.price,
+            "buy_depth": tick.buy_depth, "sell_depth": tick.sell_depth, "oi": tick.oi,
+            "oi_reference": oi_reference,
+            "oi_reference_at": last["at"] + 60 if oi_reference is not None else None,
+            "oi_change": oi_change,
+            "oi_change_pct": oi_change / oi_reference * 100 if oi_change is not None and oi_reference else None,
+        },
     }
 
 
+def finite_number(value: object) -> TypeGuard[int | float]:
+    return isinstance(value, (float, int)) and not isinstance(value, bool) and math.isfinite(value)
+
+
+def scalp_bias(info: Mapping[str, object]) -> Literal["CE", "PE"] | None:
+    raw_ema = info.get("ema")
+    e = raw_ema if isinstance(raw_ema, Mapping) else {}
+    price, vwap, fast, slow = info.get("close"), info.get("vwap"), e.get("9"), e.get("20")
+    if not (finite_number(price) and finite_number(vwap) and finite_number(fast) and finite_number(slow)):
+        return None
+    if min(price, vwap, fast, slow) <= 0:
+        return None
+    return "CE" if price > vwap and fast > slow else "PE" if price < vwap and fast < slow else None
+
+
+def directional_checks(info: Mapping[str, object] | None, side: Literal["CE", "PE"] | None,
+                       style: Literal["scalp", "swing"]) -> list[RuleCheck]:
+    """One source for live entry gates and their display; null means evidence/direction unavailable."""
+    if style not in ("scalp", "swing") or side not in ("CE", "PE", None):
+        raise ValueError("Unknown rule style or direction")
+    info = info or {}
+    sign = 1 if side == "CE" else -1 if side == "PE" else 0
+    scalping = style == "scalp"
+    periods = (9, 20) if scalping else (9, 20, 50, 100, 200)
+    raw_ema = info.get("ema")
+    e = raw_ema if isinstance(raw_ema, Mapping) else {}
+    raw_averages = [e.get(str(n)) for n in periods]
+    averages = [value for value in raw_averages if finite_number(value) and value > 0]
+    price, vwap, atr = (info.get(key) for key in ("close", "vwap", "atr"))
+    rsi, volume, imbalance = (info.get(key) for key in ("rsi", "volume_ratio", "imbalance"))
+    trend, breakout = info.get("supertrend"), info.get("breakout")
+    checks: list[RuleCheck] = []
+
+    def add(key: str, label: str, passed: bool | None, requirement: str, reason: str) -> None:
+        checks.append(RuleCheck(id=key, label=label, passed=passed, requirement=requirement, reason=reason))
+
+    ema_valid = len(averages) == len(periods)
+    add("ema", "EMA " + "/".join(map(str, periods)),
+        all(sign * (a - b) > 0 for a, b in zip(averages, averages[1:])) if sign and ema_valid else None,
+        "Ascending for CE; descending for PE", "EMA " + "/".join(map(str, periods)) + " are not directionally aligned")
+    add("vwap", "Session VWAP",
+        sign * (price - vwap) > 0 if sign and finite_number(price) and price > 0 and finite_number(vwap) and vwap > 0 else None,
+        "Closed candle above VWAP for CE; below for PE", "Price vs VWAP does not confirm")
+    add("supertrend", "SuperTrend (14, 3)",
+        trend == ("BULLISH" if sign > 0 else "BEARISH") if sign and trend in ("BULLISH", "BEARISH") else None,
+        "Bullish for CE; bearish for PE", "SuperTrend not aligned")
+    lower, upper = ((55, 80) if sign > 0 else (20, 45)) if scalping else ((55, 70) if sign > 0 else (30, 45))
+    add("rsi", "RSI (14)", lower <= rsi <= upper if sign and finite_number(rsi) and 0 <= rsi <= 100 else None,
+        "CE 55-80; PE 20-45" if scalping else "CE 55-70; PE 30-45",
+        "RSI outside scalp momentum band" if scalping else "RSI outside swing momentum band")
+    if not scalping:
+        raw_cpr = info.get("cpr")
+        cpr = raw_cpr if isinstance(raw_cpr, Mapping) else {}
+        level = cpr.get("top" if sign > 0 else "bottom")
+        add("cpr", "Previous-day spot CPR",
+            sign * (price - level) > 0 if sign and finite_number(price) and price > 0 and finite_number(level) and level > 0 else None,
+            "Above spot CPR top for CE; below bottom for PE", "Contextual CPR does not confirm")
+    if scalping:
+        add("breakout", "20-candle breakout",
+            breakout == sign if sign and finite_number(breakout) and breakout in (-1, 0, 1) else None,
+            "Close above prior high for CE; below prior low for PE", "No fresh 20-candle breakout")
+    add("volume", "Relative volume (20)", volume >= 1.5 if finite_number(volume) and volume >= 0 else None,
+        "Completed minute / prior 20-minute average >= 1.5x", "Breakout volume below 1.5x")
+    threshold = 0.10 if scalping else 0.15
+    add("imbalance", "Book imbalance (top 5)",
+        sign * imbalance >= threshold if sign and finite_number(imbalance) and -1 <= imbalance <= 1 else None,
+        f">= +{threshold:.0%} for CE; <= -{threshold:.0%} for PE", "Order-book imbalance does not confirm")
+    if scalping:
+        ema20 = e.get("20")
+        add("extension", "EMA20 extension",
+            abs(price - ema20) <= 2 * atr if finite_number(price) and price > 0 and finite_number(ema20) and ema20 > 0
+            and finite_number(atr) and atr > 0 else None,
+            "Within 2 ATR of EMA20; never chase", "Price extended more than 2 ATR from EMA 20; no chasing")
+    else:
+        add("breakout", "20-candle breakout",
+            breakout == sign if sign and finite_number(breakout) and breakout in (-1, 0, 1) else None,
+            "Close above prior high for CE; below prior low for PE", "No fresh 20-candle breakout")
+        structure = info.get("structure")
+        add("structure", "20-candle structure",
+            structure == ("HIGHER_HIGH" if sign > 0 else "LOWER_LOW") if sign
+            and structure in ("HIGHER_HIGH", "LOWER_LOW", "RANGE") else None,
+            "Higher high for CE; lower low for PE", "Market structure does not confirm")
+    return checks
+
+
 def strategy(info):
+    if not finite_number(info.get("volume_ratio")):
+        return None
     e, price = info["ema"], info["close"]
     direction = 1 if e["9"] > e["20"] > e["50"] > e["200"] else (
         -1 if e["9"] < e["20"] < e["50"] < e["200"] else 0)
@@ -272,22 +395,17 @@ def scalp(info, points, delta=0.5, reach=4):
     """
     try:
         e, price, atr, vwap = info["ema"], info["close"], info["atr"], info["vwap"]
-        if vwap is None or info["imbalance"] is None or not atr or atr <= 0 or not points:
+        if not finite_number(vwap) or not finite_number(info["imbalance"]) or not finite_number(atr) or atr <= 0 or not points:
             return None, "Scalp needs VWAP, order-book depth and ATR"
-        side = 1 if price > vwap and e["9"] > e["20"] else (-1 if price < vwap and e["9"] < e["20"] else 0)
-        if not side:
+        if not all(finite_number(v) and v > 0 for v in (price, e["9"], e["20"])):
+            return None, "Incomplete market intelligence"
+        direction = scalp_bias(info)
+        if not direction:
             return None, "No scalp bias: price vs VWAP and EMA 9/20 disagree"
-        checks = (
-            (info["supertrend"] == ("BULLISH" if side > 0 else "BEARISH"), "SuperTrend not aligned"),
-            (55 <= info["rsi"] <= 80 if side > 0 else 20 <= info["rsi"] <= 45, "RSI outside scalp momentum band"),
-            (info["breakout"] == side, "No fresh 20-candle breakout"),
-            (info["volume_ratio"] >= 1.5, "Breakout volume below 1.5x"),
-            (side * info["imbalance"] >= 0.10, "Order-book imbalance does not confirm"),
-            (abs(price - e["20"]) <= 2 * atr, "Price extended more than 2 ATR from EMA 20; no chasing"),
-        )
-        for passed, reason in checks:
-            if not passed:
-                return None, reason
+        side = 1 if direction == "CE" else -1
+        for check in directional_checks(info, direction, "scalp"):
+            if check["passed"] is not True:
+                return None, check["reason"] if check["passed"] is False else "Incomplete market intelligence"
         strength = 1
         if side * (e["20"] - e["50"]) > 0 and info["volume_ratio"] >= 2 and side * info["imbalance"] >= 0.2:
             strength = 2
@@ -476,6 +594,9 @@ class AQTEEngine:
         numeric = (tick.price, tick.at, tick.received, tick.bid, tick.ask)
         if tick.symbol not in SYMBOLS or not all(math.isfinite(n) for n in numeric) or tick.price <= 0:
             raise ValueError("Invalid AQTE tick")
+        if any(type(n) is not int or n < 0 for n in
+               (tick.volume, tick.bid_quantity, tick.ask_quantity, tick.buy_depth, tick.sell_depth)):
+            raise ValueError("Invalid AQTE volume or order-book quantity")
         if not self.fresh(tick, tick.received):
             self.event("REJECTED_TICK", tick.received, token=tick.token, reason="Stale/future exchange timestamp")
             return
@@ -517,12 +638,19 @@ class AQTEEngine:
                       model="explainable-rules-v1", model_validated=False,
                       warmup=dict(completed=completed, required=WARMUP_CANDLES),
                       opening=dict(completed=min(opening, SESSION_CANDLES), required=SESSION_CANDLES),
-                      scalp=self.idle_scalp(reason))
+                      scalp=self.idle_scalp(reason), rule_checks=None)
         self.signals[symbol] = signal
+        setup = strategy(info) if info else None
+        if info:
+            scalp_side = scalp_bias(info)
+            swing_side = ("CE" if setup[1] == "CE" else "PE") if setup else None
+            signal["rule_checks"] = {
+                "scalp": dict(side=scalp_side, checks=directional_checks(info, scalp_side, "scalp")),
+                "swing": dict(side=swing_side, checks=directional_checks(info, swing_side, "swing")),
+            }
         if reason:
             return
         signal["scalp"] = self.scalp_signal(symbol, info, now, spot)
-        setup = strategy(info)
         if not setup:
             signal["reasons"] = ["No confirmed strategy with volume and order-book support"]
             return
@@ -683,7 +811,7 @@ class AQTEEngine:
                 model="explainable-rules-v1", model_validated=False,
                 warmup=dict(completed=0, required=WARMUP_CANDLES),
                 opening=dict(completed=0, required=SESSION_CANDLES),
-                scalp=self.idle_scalp("Waiting for live market data"))))
+                scalp=self.idle_scalp("Waiting for live market data"), rule_checks=None)))
             scalp_signal = dict(signal.get("scalp") or self.idle_scalp(None))
             if risk or not self.fresh(self.spot.get(symbol), now) or not self.fresh(self.future.get(symbol), now):
                 reason = risk or self.feed_reason(symbol, now)
@@ -702,6 +830,8 @@ class AQTEEngine:
                     scalp_signal = self.idle_scalp("Option quote or signal stale")
             signal["scalp"] = scalp_signal
             signal["feed_ready"] = self.fresh(self.spot.get(symbol), now) and self.fresh(self.future.get(symbol), now)
+            if not signal["feed_ready"] or signal["at"] is None or not -1 <= now - signal["at"] <= self.policy.stale_seconds:
+                signal["rule_checks"] = None
             order = self.orders.get(symbol)
             signal["position"] = {
                 **order, "metrics": self.position_metrics(order, now, healthy=not self.fault),

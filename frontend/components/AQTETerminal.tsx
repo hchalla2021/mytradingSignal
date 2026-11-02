@@ -2,8 +2,9 @@
 
 import { memo, useState, type ReactNode } from 'react';
 import dynamic from 'next/dynamic';
-import { aqteCanExit, aqteControllerCurrent, aqteLabel, aqteLiveMetrics, aqteOverview, aqtePrice, aqteSigned,
-  type AQTELiveState, type AQTEExitRequest, type AQTESignal, type AQTESymbol } from '@/lib/aqte-display';
+import { aqteCanExit, aqteControllerCurrent, aqteLabel, aqteLiveMetrics, aqteOverview, aqtePrice, aqteSigned, isAqteRuleChecks,
+  type AQTELiveState, type AQTEExitRequest, type AQTESignal, type AQTESymbol, type AQTEStyle,
+  type AQTERuleEvidence } from '@/lib/aqte-display';
 import type { MarketTick } from '@/hooks/useMarketSocket';
 
 const Chart = dynamic(() => import('@/components/AQTEChart'), {
@@ -19,35 +20,103 @@ const toneOf = (value: number | null | undefined) =>
   value == null || !Number.isFinite(value) ? 'aqx-flat' : value > 0 ? 'aqx-up' : value < 0 ? 'aqx-down' : 'aqx-flat';
 const titleCase = (value: string) => value.charAt(0) + value.slice(1).toLowerCase();
 
-type Tone = 'up' | 'down' | 'flat';
+type Tone = 'up' | 'down' | 'wait' | 'flat';
 type Intelligence = NonNullable<AQTESignal['intelligence']>;
+type Observation = Intelligence['live'];
+type EngineRow = {
+  id: string; label: string; value: string; note?: string;
+  tone?: Tone; unavailable?: boolean;
+  summary?: { label: string; value: string };
+  gate?: AQTERuleEvidence['checks'][number];
+};
+const quantity = (value: number | null | undefined) =>
+  value == null || !Number.isFinite(value) ? '--' : value.toLocaleString('en-IN', { maximumFractionDigits: 0 });
+const signedQuantity = (value: number) => `${value > 0 ? '+' : ''}${quantity(value)}`;
+const oiPercent = (value: number) => `${value > 0 ? '+' : ''}${value.toLocaleString('en-IN', {
+  minimumFractionDigits: 2, maximumFractionDigits: 6,
+})}%`;
 
-function engineChecks(info: Intelligence | null | undefined): Array<{ label: string; value: string; tone: Tone }> {
-  if (!info) return [];
-  const ema9 = info.ema['9'];
-  const ema20 = info.ema['20'];
-  const imbalance = info.imbalance;
-  const depthShare = imbalance != null && Number.isFinite(imbalance) && Math.abs(imbalance) <= 1
-    ? (imbalance + 1) * 50 : null;
-  return [
-    { label: 'Trend', value: `${titleCase(info.supertrend)} · ${titleCase(info.structure.replaceAll('_', ' '))}`,
-      tone: info.supertrend === 'BULLISH' ? 'up' : info.supertrend === 'BEARISH' ? 'down' : 'flat' },
-    { label: 'EMA 9 / 20', value: ema9 == null || ema20 == null ? '--' : ema9 > ema20 ? 'Bullish (9 > 20)' : ema9 < ema20 ? 'Bearish (9 < 20)' : 'Flat',
-      tone: ema9 == null || ema20 == null || ema9 === ema20 ? 'flat' : ema9 > ema20 ? 'up' : 'down' },
-    { label: 'VWAP', value: info.vwap == null ? '--' : info.close >= info.vwap ? 'Above' : 'Below',
-      tone: info.vwap == null ? 'flat' : info.close >= info.vwap ? 'up' : 'down' },
-    { label: 'RSI', value: aqtePrice(info.rsi), tone: info.rsi >= 55 ? 'up' : info.rsi <= 45 ? 'down' : 'flat' },
-    { label: 'Order flow', value: imbalance == null ? '--' : imbalance > 0.1 ? `Buyers ${aqteSigned(imbalance * 100)}%` : imbalance < -0.1 ? `Sellers ${aqteSigned(imbalance * 100)}%` : 'Balanced',
-      tone: imbalance == null ? 'flat' : imbalance > 0.1 ? 'up' : imbalance < -0.1 ? 'down' : 'flat' },
-    { label: 'Buyer depth share', value: depthShare == null ? '--' : `${aqtePrice(depthShare)}%`, tone: depthShare != null && depthShare > 55 ? 'up' : 'flat' },
-    { label: 'Seller depth share', value: depthShare == null ? '--' : `${aqtePrice(100 - depthShare)}%`, tone: depthShare != null && depthShare < 45 ? 'down' : 'flat' },
-    { label: 'OI change', value: '-- (not provided)', tone: 'flat' },
-    { label: 'Volume', value: `${aqtePrice(info.volume_ratio)}×`, tone: info.volume_ratio >= 1.5 ? 'up' : 'flat' },
+function engineChecks(info: Intelligence | null | undefined, market: Observation | null, style: AQTEStyle | undefined,
+  evidence: AQTERuleEvidence | null): EngineRow[] {
+  const compactLabels = {
+    supertrend: 'SuperTrend', ema: style === 'swing' ? 'EMA stack' : 'EMA 9/20',
+    vwap: 'VWAP', rsi: 'RSI', imbalance: 'Book imbalance', oi_change: 'OI change (1m)', volume: 'Volume',
+  };
+  if (!info) return Object.entries(compactLabels).map(([id, label]) => ({
+    id, label, value: 'Current evidence unavailable', unavailable: true, summary: { label, value: '--' },
+  }));
+  const imbalance = market ? info.imbalance : null;
+  const totalDepth = market ? market.buy_depth + market.sell_depth : 0;
+  const share = market && totalDepth > 0 ? market.buy_depth / totalDepth * 100 : null;
+  const periods = style === 'swing' ? ['9', '20', '50', '100', '200'] : ['9', '20'];
+  const vwapSide = info.vwap == null ? 'Unavailable' : info.close > info.vwap ? 'Above' : info.close < info.vwap ? 'Below' : 'At';
+  const oiChange = !market ? 'Live depth/OI unavailable' : market.oi == null ? 'Not supplied by Kite' :
+    market.oi_change == null ? 'Waiting for a completed-minute OI reference' :
+      `${signedQuantity(market.oi_change)} (${market.oi_change_pct == null ? 'zero reference; no percentage' : oiPercent(market.oi_change_pct)})`;
+  const compactOi = market?.oi == null ? 'Unavailable' : market.oi_change == null ? 'Baseline pending' :
+    market.oi_change_pct == null ? signedQuantity(market.oi_change) : oiPercent(market.oi_change_pct);
+  const rows: EngineRow[] = [
+    { id: 'supertrend', label: 'SuperTrend (14, 3)', value: `${titleCase(info.supertrend)} · ${aqtePrice(info.supertrend_price)}`,
+      tone: info.supertrend === 'BULLISH' ? 'up' : info.supertrend === 'BEARISH' ? 'down' : 'wait',
+      summary: { label: compactLabels.supertrend, value: titleCase(info.supertrend) } },
+    { id: 'structure', label: 'Structure (20 candles)', value: titleCase(info.structure.replaceAll('_', ' ')) },
+    { id: 'ema', label: `EMA ${periods.join(' / ')}`, value: periods.map(n => `${n}: ${aqtePrice(info.ema[n])}`).join(' · '),
+      summary: { label: compactLabels.ema, value: 'Unverified' } },
+    { id: 'vwap', label: 'VWAP (session)', value: info.vwap == null ? 'Unavailable (no session volume)' :
+      `${vwapSide} ${aqtePrice(info.vwap)}`,
+      tone: vwapSide === 'Above' ? 'up' : vwapSide === 'Below' ? 'down' : vwapSide === 'At' ? 'wait' : 'flat',
+      summary: { label: compactLabels.vwap, value: vwapSide } },
+    { id: 'rsi', label: 'RSI (14)', value: aqtePrice(info.rsi), summary: { label: compactLabels.rsi, value: aqtePrice(info.rsi) } },
+    { id: 'imbalance', label: 'Book imbalance (top 5)', value: imbalance == null ? 'Live depth unavailable' :
+      `${imbalance > 0 ? 'Buy-side' : imbalance < 0 ? 'Sell-side' : 'Balanced'} ${aqteSigned(imbalance * 100)}%`,
+      tone: imbalance == null ? 'flat' : imbalance > 0 ? 'up' : imbalance < 0 ? 'down' : 'wait',
+      summary: { label: compactLabels.imbalance, value: imbalance == null ? 'Unavailable' :
+        `${imbalance > 0 ? 'Buy' : imbalance < 0 ? 'Sell' : 'Balanced'} ${aqteSigned(imbalance * 100)}%` } },
+    { id: 'buy_depth', label: 'Buyer depth share', value: share == null ? '--' : `${aqtePrice(share)}% · ${quantity(market?.buy_depth)}` },
+    { id: 'sell_depth', label: 'Seller depth share', value: share == null ? '--' : `${aqtePrice(100 - share)}% · ${quantity(market?.sell_depth)}` },
+    { id: 'oi', label: 'Futures OI (Kite)', value: !market ? 'Live depth/OI unavailable' :
+      market.oi == null ? 'Not supplied by Kite' : quantity(market.oi) },
+    { id: 'oi_change', label: 'OI change', value: oiChange,
+      summary: { label: compactLabels.oi_change, value: compactOi },
+      note: market?.oi_reference_at != null ? `vs completed-minute OI ${quantity(market.oi_reference)} at ${clock(market.oi_reference_at)} IST` : undefined },
+    { id: 'volume', label: 'Relative volume (20)', value: info.volume_ratio == null ? 'Unavailable (no volume baseline)' : `${aqtePrice(info.volume_ratio)}×`,
+      summary: { label: compactLabels.volume, value: info.volume_ratio == null ? 'Unavailable' : `${aqtePrice(info.volume_ratio)}×` },
+      note: info.volume != null && info.average_volume != null ? `Closed minute ${quantity(info.volume)} / prior average ${aqtePrice(info.average_volume)}` : undefined },
+    { id: 'breakout', label: '20-candle breakout', value: info.breakout === 1 ? 'Above prior high' : info.breakout === -1 ? 'Below prior low' : 'No breakout',
+      note: info.breakout_high != null && info.breakout_low != null ? `Prior high ${aqtePrice(info.breakout_high)} · low ${aqtePrice(info.breakout_low)}` : undefined },
+    { id: 'extension', label: 'ATR (14) / EMA20 gap', value: `${aqtePrice(info.atr)} / ${info.atr > 0 ?
+      `${aqtePrice(Math.abs(info.close - info.ema['20']) / info.atr)} ATR` : 'Unavailable'}` },
   ];
+  if (style === 'swing') rows.push({ id: 'cpr', label: 'Previous-day spot CPR', value: info.cpr ?
+    `${aqtePrice(info.cpr.bottom)} - ${aqtePrice(info.cpr.top)} (spot context)` : 'Unavailable' });
+  return rows.map(row => {
+    const gate = evidence?.checks.find(check => check.id === row.id);
+    return { ...row, gate, summary: row.id === 'ema' && row.summary ? {
+      ...row.summary, value: !gate ? 'Unverified' : gate.passed === true ? 'Aligned' : gate.passed === false ? 'Not aligned' : 'No bias',
+    } : row.summary };
+  });
 }
 
 function Check({ tone }: { tone: Tone }) {
-  return <span aria-hidden="true" className={`aqx-check aqx-check-${tone}`}>{tone === 'up' ? '✓' : tone === 'down' ? '!' : '•'}</span>;
+  return <span aria-hidden="true" className={`aqx-check aqx-check-${tone}`}>{tone === 'up' ? '✓' : tone === 'down' || tone === 'wait' ? '!' : '•'}</span>;
+}
+
+function EngineCheck({ check, compact = false }: { check: EngineRow; compact?: boolean }) {
+  const display = compact ? check.summary : check;
+  if (!display) return null;
+  const status = check.unavailable ? 'UNAVAILABLE' : !check.gate ? 'CONTEXT' :
+    check.gate.passed === true ? 'PASS' : check.gate.passed === false ? 'FAIL' : 'UNAVAILABLE';
+  const tone: Tone = status === 'PASS' ? 'up' : status === 'FAIL' ? 'wait' : 'flat';
+  const valueTone = check.unavailable ? 'flat' : check.tone ?? tone;
+  return <li data-rule={check.id} data-status={status}
+    title={[check.value, check.gate?.requirement, check.note].filter(Boolean).join(' · ')}>
+    <Check tone={tone} /><span className="aqx-check-label">{display.label}:</span>
+    {compact ? <span className="sr-only">{status === 'FAIL' ? 'Not aligned' : status === 'CONTEXT' ? 'Context' :
+      status === 'PASS' ? 'Aligned' : 'Unverified'}.</span> :
+      <span className={`aqx-evidence-state aqx-${tone}`}>{status === 'FAIL' ? 'WAIT' : status === 'CONTEXT' ? 'INFO' : status === 'UNAVAILABLE' ? 'N/A' : status}</span>}
+    <strong className={`${compact ? 'aqx-compact-value' : 'aqx-evidence-value'} aqx-${valueTone}`}>{display.value}</strong>
+    {!compact && check.note && <small className="aqx-evidence-note">{check.note}</small>}
+  </li>;
 }
 
 function Row({ label, children, tone = '', extra }: { label: string; children: ReactNode; tone?: string; extra?: ReactNode }) {
@@ -59,20 +128,25 @@ function Row({ label, children, tone = '', extra }: { label: string; children: R
   );
 }
 
-function AQTETerminal({ symbol, signal, unavailable, active, tick, liveStatus, onExit }: {
+function AQTETerminal({ symbol, signal, unavailable, active, tick, liveStatus, onExit, now = Date.now() / 1000 }: {
   symbol: AQTESymbol; signal?: AQTESignal; unavailable: boolean;
   active: boolean; tick: MarketTick | null; liveStatus?: AQTELiveState | null;
-  onExit?: (request: AQTEExitRequest) => void;
+  onExit?: (request: AQTEExitRequest) => void; now?: number;
 }) {
   // Once opened, the chart stays mounted so returning to this tab is instant.
   const [chartOpened, setChartOpened] = useState(active);
   if (active && !chartOpened) setChartOpened(true);
-  const { info, direction } = aqteOverview(signal, 'real', unavailable || signal?.feed_ready === false);
-  const style = liveStatus?.styles?.[symbol];
-  const plan = style === 'scalp' && signal?.scalp ? signal.scalp : signal;
+  const { info } = aqteOverview(signal, 'real', unavailable, now);
+  const currentStatus = aqteControllerCurrent(liveStatus, now);
+  const style = currentStatus ? liveStatus?.styles?.[symbol] : undefined;
+  const plan = style === 'scalp' ? signal?.scalp : style === 'swing' ? signal : undefined;
+  const observation = info?.live;
+  const market = observation && [observation.at, observation.received].every(at => now - at >= -1 && now - at <= 5)
+    ? observation : null;
+  const evidence = info && market && style && isAqteRuleChecks(signal?.rule_checks) ? signal.rule_checks[style] : null;
+  const direction = evidence?.side === 'CE' ? 'BULLISH' : evidence?.side === 'PE' ? 'BEARISH' : 'WAITING';
   const live = liveStatus?.active?.symbol === symbol ? liveStatus.active : null;
-  const currentStatus = aqteControllerCurrent(liveStatus);
-  const metrics = live ? aqteLiveMetrics(liveStatus) : null;
+  const metrics = live ? aqteLiveMetrics(liveStatus, now) : null;
   const filled = !!live && live.filled > 0;
   const confirmed = currentStatus && !liveStatus?.error && !live?.error && !!live?.protection_confirmed;
   const trailing = !!live?.trailing_active && confirmed;
@@ -81,9 +155,20 @@ function AQTETerminal({ symbol, signal, unavailable, active, tick, liveStatus, o
   const span = live ? points != null && points < 0 ? live.entry_price - live.initial_stop : live.target - live.entry_price : 0;
   const progress = points != null && span > 0 ? Math.min(1, Math.abs(points) / span) : 0;
   const targetHit = metrics?.bid != null && !!live && metrics.bid >= live.target;
-  const checks = engineChecks(info);
-  const score = info && plan?.confidence != null && Number.isFinite(plan.confidence) &&
+  const checks = engineChecks(info, market, style, evidence);
+  const score = evidence && plan?.decision !== 'WAIT' && plan?.confidence != null && Number.isFinite(plan.confidence) &&
     plan.confidence >= 0 && plan.confidence <= 100 ? plan.confidence : null;
+  const evidenceUnavailable = !info ? signal && signal.feed_ready === undefined ?
+    'Backend freshness unavailable; update the backend before trusting these values.' :
+    'Waiting for current backend evidence: fresh spot/futures and completed candles.' :
+    !market ? 'Live depth/OI unavailable; current tick evidence is required for entry checks.' : null;
+  const alignment = !info ? signal && signal.feed_ready === undefined ? 'Backend freshness unavailable' : 'Current evidence unavailable' :
+    !style ? 'Entry style unavailable' : !market ? 'Live depth/OI unavailable' :
+    `${style === 'scalp' ? 'Quick scalp' : 'Swing'}${evidence ? evidence.side ?
+      ` · ${evidence.side} · ${evidence.checks.filter(check => check.passed === true).length}/${evidence.checks.length} aligned` :
+      ' · WAIT' : ' · Unverified'}`;
+  const alignmentTone: Tone = !info || !market || !style || !evidence ? 'flat' :
+    !evidence.side || plan?.decision === 'WAIT' ? 'wait' : evidence.side === 'CE' ? 'up' : 'down';
   const exitReason = live?.exit_requested;
   const remaining = live ? Math.max(0, live.filled - (live.exited ?? 0)) : 0;
   const canExit = !!live && !!onExit && aqteCanExit(liveStatus) && !exitReason;
@@ -106,6 +191,7 @@ function AQTETerminal({ symbol, signal, unavailable, active, tick, liveStatus, o
   const automation = currentStatus && liveStatus?.automation_on && !liveStatus.killed;
   const automationWaiting = currentStatus && !automation && liveStatus?.automation_wanted && !liveStatus.killed;
   const note = liveStatus?.entry_note?.startsWith(`${symbol}:`) ? liveStatus.entry_note.slice(symbol.length + 1).trim() : null;
+  const readinessReasons = plan?.reasons ?? (signal?.decision === 'WAIT' ? signal.reasons : undefined);
   const waitingReason = !currentStatus ? 'Live controller status unavailable; entry state unverified' :
     liveStatus?.error ? liveStatus.error :
     liveStatus?.killed ? 'Emergency stop latched; new entries blocked' :
@@ -113,7 +199,7 @@ function AQTETerminal({ symbol, signal, unavailable, active, tick, liveStatus, o
     automationWaiting ? liveStatus?.automation_waiting || 'Waiting for daily preflight and arming' :
     unavailable ? 'Current signal data unavailable; do not assume an entry is ready' :
     liveStatus?.entry_blocks?.[symbol] ? liveStatus.entry_blocks[symbol] :
-    plan?.reasons.length ? `${style === 'scalp' ? 'Quick scalp · ' : style === 'swing' ? 'Swing · ' : ''}${plan.reasons.join(' · ')}` :
+    readinessReasons?.length ? `${plan && style === 'scalp' ? 'Quick scalp · ' : plan && style === 'swing' ? 'Swing · ' : ''}${readinessReasons.join(' · ')}` :
       'Waiting for a qualifying CE/PE setup and live quality, risk and broker checks';
   const warmup = !unavailable ? signal?.warmup : undefined;
   const opening = !unavailable ? signal?.opening : undefined;
@@ -135,7 +221,7 @@ function AQTETerminal({ symbol, signal, unavailable, active, tick, liveStatus, o
               <span className={`aqx-chip ${automation ? 'aqx-chip-auto' : ''}`}>{!currentStatus ? 'AUTO UNKNOWN' : automation ? 'AUTO ON' : automationWaiting ? 'AUTO WAITING' : 'ENTRIES OFF'}</span>
             </> : (
               <span className={`aqx-chip ${direction === 'BULLISH' ? 'aqx-chip-buy' : direction === 'BEARISH' ? 'aqx-chip-sell' : ''}`}>
-                {direction === 'WAITING' ? 'NO BIAS' : direction}
+                {direction === 'WAITING' ? 'NO CONFIRMED BIAS' : `${evidence?.side} BIAS`}
               </span>
             )}
           </div>
@@ -237,14 +323,35 @@ function AQTETerminal({ symbol, signal, unavailable, active, tick, liveStatus, o
       <aside className="aqx-aside" id={`${prefix}-risk`}>
         <section className="aqx-card aqx-engine" aria-label="Rule-Based Trade Engine">
           <h4 className="aqx-panel-title"><span className="aqx-badge-ai" aria-hidden="true">R</span>Rule-Based Trade Engine</h4>
-          {checks.length ? <ul className="aqx-check-list">
-            {checks.map(check => (
-              <li key={check.label}><Check tone={check.tone} /><span>{check.label}:</span><strong className={`aqx-${check.tone}`}>{check.value}</strong></li>
-            ))}
-            <li><Check tone={score != null ? 'up' : 'flat'} /><span>Rule score:</span>
+          <p className={`aqx-evidence-summary aqx-${alignmentTone}`} aria-label="Rule alignment" title={evidenceUnavailable ?? alignment}>
+            {alignment}
+          </p>
+          <ul className="aqx-check-list aqx-check-compact" aria-label="Key trading indicators">
+            {checks.filter(check => check.summary).map(check => <EngineCheck key={check.id} check={check} compact />)}
+            <li data-rule="score" data-status="CONTEXT"><Check tone="flat" /><span className="aqx-check-label">Rule score:</span>
               <strong className="aqx-pill">{score != null ? `${aqtePrice(score)} / 100` : '--'}</strong></li>
-          </ul> : <p className="aqx-empty">{unavailable ? 'Waiting for current backend evidence' : 'No live intelligence yet'}</p>}
-          <p className="aqx-footnote">Unvalidated futures rules · No ML order decisions · Not a win probability. Depth shares are not traded buyer/seller volume.</p>
+          </ul>
+          <details className="aqx-evidence-details" aria-label="Advanced rule details">
+            <summary>Advanced details</summary>
+            <div className="aqx-evidence-body" role="region" aria-label="Advanced rule evidence" tabIndex={0}>
+              {evidenceUnavailable && <p className="aqx-empty">{evidenceUnavailable}</p>}
+              {info && <p className="aqx-evidence-source">
+                Closed 1m candle {clock(info.at + 60)} IST · close {aqtePrice(info.close)}
+                <br />{market ? `Live futures tick ${clock(market.at)} IST · LTP ${aqtePrice(market.price)}` : 'Live depth/OI unavailable'}
+              </p>}
+              {info && <ul className="aqx-check-list" aria-label="Detailed trading indicators">
+                {checks.map(check => <EngineCheck key={check.id} check={check} />)}
+              </ul>}
+              {evidence && <>
+                <h5 className="aqx-evidence-title">Automatic-entry requirements</h5>
+                <ul className="aqx-evidence-rules">{evidence.checks.map(check =>
+                  <li key={check.id}><strong>{check.label}:</strong> {check.requirement}</li>)}</ul>
+              </>}
+              <p className="aqx-footnote">Green buy/bullish · Rose sell/bearish · Amber wait · Muted unavailable/context. Icons show entry-check alignment, not a buy or sell instruction.</p>
+              <p className="aqx-footnote">Unvalidated futures rules · No ML order decisions · Not a win probability. Alignment and score are not order approval; liquidity, risk and broker gates still apply. Depth shares are queued quantities, not traded buyer/seller volume. Futures OI is context, not validated option-chain OI.</p>
+            </div>
+          </details>
+          <p className="aqx-footnote">Unvalidated rules · Not a win probability.</p>
         </section>
         <section className="aqx-card aqx-exit-rules" aria-label="Auto exit rules">
           <h4 className="aqx-panel-title"><span aria-hidden="true" className="aqx-target-icon">◎</span>Auto Exit Rules

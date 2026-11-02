@@ -11,6 +11,7 @@ export type AQTELiveState = {
   automation_wanted?: boolean; automation_waiting?: string | null; entry_window?: boolean;
   entry_note?: string | null; styles?: Partial<Record<AQTESymbol, AQTEStyle>>;
   entry_blocks?: Partial<Record<AQTESymbol, string | null>>;
+  ranking?: AQTESymbol[];
   flatten_pending?: boolean; error: string | null; connection_error?: string;
   preflight: { ip: string; at: number; account: string } | null;
   limits: { risk_per_trade: number; daily_loss: number; max_trades: number; max_losses: number; max_lots: number };
@@ -56,6 +57,7 @@ export function isAqteLiveState(value: unknown): value is AQTELiveState {
         !Object.entries(value.styles).every(([key, style]) => symbolName(key) && (style === 'scalp' || style === 'swing')))) ||
       (value.entry_blocks !== undefined && (!record(value.entry_blocks) ||
         !Object.entries(value.entry_blocks).every(([key, reason]) => symbolName(key) && nullableText(reason)))) ||
+      (value.ranking !== undefined && (!Array.isArray(value.ranking) || !value.ranking.every(symbolName))) ||
       !record(value.limits) || !record(value.daily_counts) || !Array.isArray(value.trades)) return false;
   const limits = value.limits;
   if (!['risk_per_trade', 'daily_loss', 'max_trades', 'max_losses', 'max_lots'].every(key => finite(limits[key]) && limits[key] > 0) ||
@@ -124,6 +126,12 @@ export function aqteDaySummary(status: AQTELiveState | null | undefined, now = D
   };
 }
 
+export type AQTERuleId = 'ema' | 'vwap' | 'supertrend' | 'rsi' | 'breakout' | 'volume' | 'imbalance' | 'extension' | 'cpr' | 'structure';
+export type AQTERuleEvidence = {
+  side: 'CE' | 'PE' | null;
+  checks: Array<{ id: AQTERuleId; label: string; passed: boolean | null; requirement: string; reason: string }>;
+};
+
 export type AQTESignal = {
   feed_ready?: boolean;
   decision: 'WAIT' | 'BUY CE' | 'BUY PE';
@@ -134,6 +142,7 @@ export type AQTESignal = {
   strategy?: string;
   warmup?: { completed: number; required: number };
   opening?: { completed: number; required: number };
+  rule_checks?: Record<AQTEStyle, AQTERuleEvidence> | null;
   scalp?: {
     decision: 'WAIT' | 'BUY CE' | 'BUY PE'; strategy: string | null; confidence: number | null;
     reasons: string[]; contract: { trading_symbol: string; expiry: string } | null;
@@ -142,17 +151,74 @@ export type AQTESignal = {
   intelligence?: {
     ema: Record<string, number>; close: number; at: number; vwap: number | null;
     rsi: number; atr: number; supertrend: string; supertrend_price: number;
-    volume_ratio: number; imbalance: number | null; breakout: number; sweep: number;
+    volume_ratio: number | null; imbalance: number | null; breakout: number; sweep: number;
+    volume?: number; average_volume?: number; breakout_high?: number; breakout_low?: number;
     structure: string; cpr: { top: number; bottom: number; pivot: number } | null;
+    live?: {
+      token: number; at: number; received: number; price: number; buy_depth: number; sell_depth: number;
+      oi: number | null; oi_reference: number | null; oi_reference_at: number | null;
+      oi_change: number | null; oi_change_pct: number | null;
+    };
   } | null;
-  contract: { trading_symbol: string; expiry: string } | null;
+  contract: { trading_symbol: string; expiry: string; lot_size?: number } | null;
   entry: { low: number; high: number; maximum: number; stop: number; target: number; reward_risk: number; quantity?: number } | null;
+  engines?: AQTEEngine[] | null;
+  orchestration?: AQTEOrchestration | null;
+  market?: AQTEMarketContext | null;
   position: {
     entry_at: number | null; entry_price: number | null; limit: number; stop: number;
     initial_stop: number; target: number; peak: number;
     contract: { trading_symbol: string }; metrics: PositionMetrics;
   } | null;
 };
+
+export function isAqteIntelligence(value: unknown): value is NonNullable<AQTESignal['intelligence']> {
+  if (!record(value) || !record(value.ema)) return false;
+  const ema = value.ema;
+  if (!['9', '20', '50', '100', '200'].every(key => finite(ema[key]) && ema[key] > 0) ||
+      !['close', 'at', 'supertrend_price'].every(key => finite(value[key]) && value[key] > 0) ||
+      !finite(value.atr) || value.atr < 0 || !finite(value.rsi) || value.rsi < 0 || value.rsi > 100 ||
+      !(value.vwap === null || (finite(value.vwap) && value.vwap > 0)) ||
+      !(value.volume_ratio === null || (finite(value.volume_ratio) && value.volume_ratio >= 0)) ||
+      !(value.imbalance === null || (finite(value.imbalance) && Math.abs(value.imbalance) <= 1)) ||
+      !['breakout', 'sweep'].every(key => finite(value[key]) && [-1, 0, 1].includes(value[key])) ||
+      typeof value.supertrend !== 'string' || !['BULLISH', 'BEARISH'].includes(value.supertrend) ||
+      typeof value.structure !== 'string' || !['HIGHER_HIGH', 'LOWER_LOW', 'RANGE'].includes(value.structure) ||
+      !['volume', 'average_volume', 'breakout_high', 'breakout_low'].every(key =>
+        value[key] === undefined || (finite(value[key]) && value[key] >= 0))) return false;
+  const cpr = value.cpr;
+  if (cpr !== null && (!record(cpr) ||
+      !['top', 'bottom', 'pivot'].every(key => finite(cpr[key]) && cpr[key] > 0))) return false;
+  if (value.live === undefined) return true;
+  const live = value.live;
+  return record(live) && count(live.token) && finite(live.token) && live.token > 0 &&
+    ['at', 'received', 'price'].every(key => finite(live[key]) && live[key] > 0) &&
+    count(live.buy_depth) && count(live.sell_depth) &&
+    ['oi', 'oi_reference'].every(key => live[key] === null || count(live[key])) &&
+    ['oi_reference_at', 'oi_change', 'oi_change_pct'].every(key => nullableNumber(live[key]));
+}
+
+export function isAqteRuleChecks(value: unknown): value is Record<AQTEStyle, AQTERuleEvidence> {
+  if (!record(value)) return false;
+  const ids = {
+    scalp: ['ema', 'vwap', 'supertrend', 'rsi', 'breakout', 'volume', 'imbalance', 'extension'],
+    swing: ['ema', 'vwap', 'supertrend', 'rsi', 'cpr', 'volume', 'imbalance', 'breakout', 'structure'],
+  };
+  return (['scalp', 'swing'] as const).every(style => {
+    const evidence = value[style];
+    return record(evidence) && (evidence.side === null || evidence.side === 'CE' || evidence.side === 'PE') &&
+      Array.isArray(evidence.checks) && evidence.checks.length === ids[style].length &&
+      new Set(evidence.checks.map(check => record(check) ? check.id : null)).size === ids[style].length &&
+      evidence.checks.every(check => record(check) && typeof check.id === 'string' && ids[style].includes(check.id) &&
+        (check.passed === null || typeof check.passed === 'boolean') &&
+        ['label', 'requirement', 'reason'].every(key => typeof check[key] === 'string'));
+  });
+}
+
+export function aqteFeedCurrent(signal: AQTESignal | undefined, now = Date.now() / 1000) {
+  const age = signal?.at == null ? NaN : now - signal.at;
+  return signal?.feed_ready === true && Number.isFinite(age) && age >= -1 && age <= 5;
+}
 
 const formatter = new Intl.NumberFormat('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 export const aqtePrice = (value: number | null | undefined) =>
@@ -161,10 +227,11 @@ export const aqteSigned = (value: number | null | undefined) =>
   value == null || !Number.isFinite(value) ? '--' : `${value > 0 ? '+' : ''}${formatter.format(value)}`;
 export const aqteLabel = (symbol: AQTESymbol) => symbol === 'BANKNIFTY' ? 'BANK NIFTY' : symbol;
 
-export function aqteOverview(signal: AQTESignal | undefined, mode: AQTEMode, unavailable: boolean) {
+export function aqteOverview(signal: AQTESignal | undefined, mode: AQTEMode, unavailable: boolean, now = Date.now() / 1000) {
   const intelligence = signal?.intelligence;
-  const age = intelligence ? Date.now() / 1000 - intelligence.at : NaN;
-  const info = !unavailable && Number.isFinite(age) && age >= -1 && age <= 180 ? intelligence : null;
+  const age = intelligence ? now - intelligence.at : NaN;
+  const info = !unavailable && isAqteIntelligence(intelligence) && (mode !== 'real' || aqteFeedCurrent(signal, now)) &&
+    Number.isFinite(age) && age >= -1 && age <= 180 ? intelligence : null;
   const decision = mode === 'real' || unavailable ? 'WAIT' : signal?.decision ?? 'WAIT';
   const entry = decision === 'WAIT' ? null : signal?.entry;
   const position = mode === 'real' ? null : signal?.position;
@@ -180,4 +247,97 @@ export function aqteOverview(signal: AQTESignal | undefined, mode: AQTEMode, una
     trailing: !!position && position.stop > position.initial_stop,
     expected: entry?.quantity ? (entry.target - entry.maximum) * entry.quantity : null,
   };
+}
+
+export type AQTEEngineStatus = 'SATISFIED' | 'PARTIAL' | 'MONITORING' | 'NOT_SATISFIED';
+export type AQTEEngineRule = { id: string; label: string; passed: boolean | null; requirement: string; value: string | null };
+export type AQTEEngine = {
+  id: number; key: string; name: string; status: AQTEEngineStatus; side: 'CE' | 'PE' | null;
+  passed: number; total: number; score: number | null; authority: 'ENTRY' | 'ADVISORY' | 'SHADOW';
+  rules: AQTEEngineRule[]; reason: string | null;
+};
+export type AQTEOrchestration = {
+  satisfied: number; partial: number; monitoring: number; not_satisfied: number;
+  ce: number; pe: number; consensus: 'CE' | 'PE' | null; conflict: boolean; evaluated: number; consensus_pct: number | null;
+};
+export type AQTEMarketContext = {
+  regime: string | null; volatility: string | null; liquidity: string | null;
+  pcr: number | null; vix: number | null; vix_change_pct: number | null;
+};
+export type AQTEEngineEvent = {
+  at: number; symbol: AQTESymbol; engine: number; name: string;
+  status: AQTEEngineStatus; previous: AQTEEngineStatus | null; side: 'CE' | 'PE' | null;
+};
+export type AQTEEnginePolicy = { authority: string; veto: boolean; veto_min: number; engines: number };
+
+const ENGINE_STATUSES = ['SATISFIED', 'PARTIAL', 'MONITORING', 'NOT_SATISFIED'];
+const sideName = (value: unknown) => value === null || value === 'CE' || value === 'PE';
+const nullableLabel = (value: unknown) => value === null || typeof value === 'string';
+
+function isAqteEngine(value: unknown): value is AQTEEngine {
+  return record(value) && count(value.id) && typeof value.key === 'string' && typeof value.name === 'string' &&
+    ENGINE_STATUSES.includes(value.status as string) && sideName(value.side) &&
+    count(value.passed) && count(value.total) && (value.passed as number) <= (value.total as number) &&
+    (value.score === null || (finite(value.score) && value.score >= 0 && value.score <= 100)) &&
+    ['ENTRY', 'ADVISORY', 'SHADOW'].includes(value.authority as string) && nullableText(value.reason) &&
+    Array.isArray(value.rules) && value.rules.length === value.total &&
+    value.rules.every(rule => record(rule) && typeof rule.id === 'string' && typeof rule.label === 'string' &&
+      (rule.passed === null || typeof rule.passed === 'boolean') && typeof rule.requirement === 'string' &&
+      nullableText(rule.value));
+}
+
+function isAqteOrchestration(value: unknown): value is AQTEOrchestration {
+  return record(value) && ['satisfied', 'partial', 'monitoring', 'not_satisfied', 'ce', 'pe', 'evaluated'].every(key => count(value[key])) &&
+    sideName(value.consensus) && typeof value.conflict === 'boolean' &&
+    (value.consensus_pct === null || (finite(value.consensus_pct) && value.consensus_pct >= 0 && value.consensus_pct <= 100));
+}
+
+function isAqteMarketContext(value: unknown): value is AQTEMarketContext {
+  return record(value) && ['regime', 'volatility', 'liquidity'].every(key => nullableLabel(value[key])) &&
+    ['pcr', 'vix', 'vix_change_pct'].every(key => nullableNumber(value[key]));
+}
+
+export function isAqteEngineEvent(value: unknown): value is AQTEEngineEvent {
+  return record(value) && finite(value.at) && symbolName(value.symbol) && count(value.engine) &&
+    typeof value.name === 'string' && ENGINE_STATUSES.includes(value.status as string) &&
+    (value.previous === null || ENGINE_STATUSES.includes(value.previous as string)) && sideName(value.side);
+}
+
+/** Engine deck data for one index, or null when the backend has not supplied a well-formed evaluation. */
+export function aqteEngineView(signal: AQTESignal | undefined) {
+  const engines = signal?.engines;
+  if (!Array.isArray(engines) || engines.length !== 12 || !engines.every(isAqteEngine) ||
+      !isAqteOrchestration(signal?.orchestration)) return null;
+  return { engines, orchestration: signal.orchestration, market: isAqteMarketContext(signal.market) ? signal.market : null };
+}
+
+/** Mirrors the live controller: scalp style trades the quick-scalp sub-signal, swing trades the main signal. */
+export function aqteEffectiveSignal(signal: AQTESignal | undefined, style: AQTEStyle = 'scalp') {
+  if (!signal) return null;
+  if (style !== 'scalp') return { decision: signal.decision, confidence: signal.confidence, contract: signal.contract,
+    entry: signal.entry, reasons: signal.reasons, strategy: signal.strategy ?? null };
+  const scalp = signal.scalp;
+  return { decision: scalp?.decision ?? 'WAIT', confidence: scalp?.confidence ?? null, contract: scalp?.contract ?? null,
+    entry: scalp?.entry ?? null, reasons: scalp?.reasons?.length ? scalp.reasons : ['Waiting for a quick-scalp setup'],
+    strategy: scalp?.strategy ?? null };
+}
+
+/** Same ordering as the backend rank_key: actionable entry, aligned satisfied engines, then rule score. */
+export function aqteRankKey(signal: AQTESignal | undefined, style: AQTEStyle = 'scalp'): [number, number, number] {
+  const effective = aqteEffectiveSignal(signal, style);
+  const side = effective && effective.decision !== 'WAIT' && effective.entry ? effective.decision.slice(-2) as 'CE' | 'PE' : null;
+  const orchestration = isAqteOrchestration(signal?.orchestration) ? signal.orchestration : null;
+  const aligned = side && orchestration ? side === 'CE' ? orchestration.ce : orchestration.pe : 0;
+  const confidence = effective?.confidence;
+  return [side ? 1 : 0, aligned, typeof confidence === 'number' && Number.isFinite(confidence) ? confidence : 0];
+}
+
+export function aqteRanking(data: Partial<Record<AQTESymbol, AQTESignal>> | undefined,
+  styles: Partial<Record<AQTESymbol, AQTEStyle>> = {}): AQTESymbol[] {
+  const symbols: AQTESymbol[] = ['NIFTY', 'BANKNIFTY', 'SENSEX'];
+  const keys = new Map(symbols.map(symbol => [symbol, aqteRankKey(data?.[symbol], styles[symbol] ?? 'scalp')]));
+  return [...symbols].sort((a, b) => {
+    const [x, y] = [keys.get(a)!, keys.get(b)!];
+    return y[0] - x[0] || y[1] - x[1] || y[2] - x[2];
+  });
 }

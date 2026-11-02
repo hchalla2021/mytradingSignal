@@ -6,6 +6,26 @@ from services.aqte_daily_control import IndexControl, quality_reason
 
 
 class QualityTests(unittest.TestCase):
+    def test_shared_swing_evidence_is_the_live_entry_gate(self):
+        from services.aqte_engine import directional_checks
+
+        config = IndexControl(style="swing").model_dump()
+        for side, sign in (("CE", 1), ("PE", -1)):
+            info = dict(ema={str(n): 100 + sign * (5 - i) for i, n in enumerate((9, 20, 50, 100, 200))},
+                        close=100 + sign * 6, vwap=100, rsi=60 if sign > 0 else 40,
+                        cpr={"top": 102, "bottom": 98}, supertrend="BULLISH" if sign > 0 else "BEARISH",
+                        volume_ratio=1.5, imbalance=sign * 0.15, breakout=sign,
+                        structure="HIGHER_HIGH" if sign > 0 else "LOWER_LOW")
+            signal = dict(decision=f"BUY {side}", entry={"maximum": 100}, confidence=73, intelligence=info)
+            checks = directional_checks(info, side, "swing")
+            self.assertEqual(len(checks), 9)
+            self.assertTrue(all(c["passed"] for c in checks))
+            self.assertIsNone(quality_reason(signal, config, True))
+            for key, value in (("rsi", 50), ("volume_ratio", 1.49), ("breakout", 0), ("imbalance", 0)):
+                weak = {**info, key: value}
+                self.assertFalse(all(c["passed"] for c in directional_checks(weak, side, "swing")))
+                self.assertIsNotNone(quality_reason({**signal, "intelligence": weak}, config, True))
+
     def test_defaults_are_disabled_90_and_five_maximum(self):
         config = IndexControl()
         self.assertFalse(config.enabled)

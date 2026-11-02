@@ -30,7 +30,7 @@ function harness(filename = 'AQTESection.tsx', now, sharedProduction = false) {
   }).outputText;
   const context = {
     exports: {}, AbortController,
-    Date: now === undefined ? Date : class extends Date { static now() { return now; } },
+    Date: now === undefined ? Date : class extends Date { static now() { return typeof now === 'function' ? now() : now; } },
     setTimeout: (fn, delay) => { timers.set(++timer, { fn, delay }); return timer; },
     clearTimeout: id => timers.delete(id),
     fetch: async (url, options) => {
@@ -62,6 +62,10 @@ function harness(filename = 'AQTESection.tsx', now, sharedProduction = false) {
       }
       if (id === '@/components/AQTEBrokerPositions') {
         const component = harness('AQTEBrokerPositions.tsx');
+        return { default: props => component.render(props) };
+      }
+      if (id === '@/components/AQTEEngineDeck') {
+        const component = harness('AQTEEngineDeck.tsx');
         return { default: props => component.render(props) };
       }
       if (id === '@/components/AQTEPosition') {
@@ -236,6 +240,274 @@ test('all three compact counters have independent saves and enforce stepper boun
     assert.equal(button(`Save ${index} daily limit`).props.disabled, true);
   }
   assert.match(text(tree), /Each trade is still one lot/);
+  cleanup();
+});
+
+function ruleSignal() {
+  const now = Date.now() / 1000;
+  const ids = ['ema', 'vwap', 'supertrend', 'rsi', 'breakout', 'volume', 'imbalance', 'extension'];
+  const checks = ids.map(id => ({
+    id, label: id, passed: !['supertrend', 'rsi', 'breakout'].includes(id),
+    requirement: `${id} threshold from backend`, reason: `${id} does not confirm`,
+  }));
+  return {
+    ...fixture().data.NIFTY, feed_ready: true, decision: 'WAIT', confidence: 73,
+    scalp: { decision: 'WAIT', strategy: null, confidence: null, contract: null, entry: null,
+      reasons: ['SuperTrend not aligned'] },
+    intelligence: {
+      ema: { '9': 95, '20': 96, '50': 97, '100': 98, '200': 99 }, close: 94,
+      at: Math.floor(now / 60) * 60 - 60, vwap: 100, rsi: 49.03, atr: 10,
+      supertrend: 'BULLISH', supertrend_price: 92, structure: 'RANGE',
+      volume_ratio: 1.84, volume: 1840, average_volume: 1000,
+      imbalance: -0.4584, breakout: 0, sweep: 0, breakout_high: 110, breakout_low: 90,
+      cpr: { top: 103, bottom: 97, pivot: 100 },
+      live: { token: 20, at: now, received: now, price: 94.5, buy_depth: 2708, sell_depth: 7292,
+        oi: 101000, oi_reference: 100000, oi_reference_at: Math.floor(now / 60) * 60,
+        oi_change: 1000, oi_change_pct: 1 },
+    },
+    rule_checks: {
+      scalp: { side: 'PE', checks },
+      swing: { side: 'PE', checks: [...checks.filter(c => c.id !== 'extension'),
+        ...['cpr', 'structure'].map(id => ({ id, label: id, passed: false, requirement: id, reason: id }))] },
+    },
+  };
+}
+const rulePanel = tree => nodes(tree).find(n => n.props?.['aria-label'] === 'Rule-Based Trade Engine');
+const ruleProps = signal => ({
+  symbol: 'NIFTY', signal, unavailable: false, active: true, tick: null,
+  liveStatus: { ...liveFixture(), styles: { NIFTY: 'scalp' } },
+});
+
+test('rule card keeps eight compact essentials visible and collapses all technical evidence by default', () => {
+  const signal = ruleSignal();
+  const before = JSON.stringify(signal);
+  const panel = rulePanel(harness('AQTETerminal.tsx').render(ruleProps(signal)));
+  const compact = nodes(panel).find(n => n.props?.['aria-label'] === 'Key trading indicators');
+  const details = nodes(panel).find(n => n.type === 'details' && n.props?.['aria-label'] === 'Advanced rule details');
+  assert.ok(compact, 'The primary card must stay visible');
+  assert.ok(details, 'Technical data remains available on demand');
+  assert.notEqual(details.props.open, true, 'Start collapsed, not an expanded technical table');
+  assert.equal(nodes(panel).filter(n => n.type === 'details').length, 1, 'One simple disclosure, no nested accordions');
+  assert.equal(text(nodes(details).find(n => n.type === 'summary')).trim(), 'Advanced details');
+  assert.deepEqual(nodes(compact).filter(n => n.type === 'li').map(n => n.props['data-rule']),
+    ['supertrend', 'ema', 'vwap', 'rsi', 'imbalance', 'oi_change', 'volume', 'score']);
+  const primary = text(compact);
+  assert.match(primary, /49\.03/);
+  assert.match(primary, /-45\.84%/);
+  assert.match(primary, /\+1\.00%/);
+  assert.match(primary, /1\.84×/);
+  assert.doesNotMatch(primary, /N\/A|INFO|Closed 1m|IST|CPR|ATR|2,708|7,292|1,01,000|threshold|14, 3/);
+  const technical = text(details);
+  for (const value of ['1,01,000', '2,708', '7,292', 'Closed 1m candle', 'Live futures tick', 'EMA20 gap',
+    '20-candle breakout', 'rsi threshold from backend', 'No ML order decisions']) {
+    assert.ok(technical.includes(value), value);
+  }
+  assert.equal(JSON.stringify(signal), before, 'Collapsing presentation cannot change trading inputs');
+});
+
+test('collapsed technical evidence still updates for every index without losing hidden entry checks', () => {
+  for (const symbol of ['NIFTY', 'BANKNIFTY', 'SENSEX']) {
+    const h = harness('AQTETerminal.tsx');
+    const props = ruleProps(ruleSignal());
+    props.symbol = symbol;
+    props.liveStatus.styles = { [symbol]: 'swing' };
+    const first = rulePanel(h.render(props));
+    const technical = panel => nodes(panel).find(n => n.type === 'details' && n.props?.['aria-label'] === 'Advanced rule details');
+    assert.notEqual(technical(first).props.open, true);
+    assert.match(text(technical(first)), /Previous-day spot CPR/);
+    assert.equal(nodes(technical(first)).find(n => n.props?.['data-rule'] === 'breakout').props['data-status'], 'FAIL');
+    Object.assign(props.signal.intelligence.live, { oi: 102000, oi_change: 2000, oi_change_pct: 2 });
+    const next = rulePanel(h.render(props));
+    assert.notEqual(technical(next).props.open, true);
+    assert.match(text(technical(next)), /1,02,000/);
+    assert.match(text(nodes(next).find(n => n.props?.['aria-label'] === 'Key trading indicators')), /\+2\.00%/);
+  }
+});
+
+test('rule card keeps the same keyed rows through loading, stale data, errors and recovery', () => {
+  const h = harness('AQTETerminal.tsx');
+  const props = ruleProps(ruleSignal());
+  const primary = panel => nodes(panel).find(n => n.props?.['aria-label'] === 'Key trading indicators');
+  const rows = panel => nodes(primary(panel)).filter(n => n.type === 'li');
+  const first = rulePanel(h.render(props));
+  const ids = rows(first).map(row => row.props['data-rule']);
+  const keys = panel => nodes(primary(panel)).filter(n => n.props?.check).map(n => n.key);
+  const rowKeys = keys(first);
+  assert.equal(rowKeys.length, 7);
+  for (const change of [
+    { signal: undefined },
+    { signal: { ...props.signal, intelligence: undefined } },
+    { signal: { ...props.signal, feed_ready: false } },
+    { signal: { ...props.signal, feed_ready: undefined } },
+    { now: props.signal.at + 6 },
+    { unavailable: true },
+  ]) {
+    const panel = rulePanel(h.render({ ...props, ...change }));
+    assert.ok(primary(panel), 'Never replace the primary list with an empty-state paragraph');
+    assert.deepEqual(rows(panel).map(row => row.props['data-rule']), ids);
+    assert.deepEqual(keys(panel), rowKeys, 'Fresh and unavailable rows must have the same React keys');
+    for (const row of rows(panel).filter(row => row.props['data-rule'] !== 'score')) {
+      assert.equal(row.props['data-status'], 'UNAVAILABLE');
+      assert.equal(text(nodes(row).find(n => n.type === 'strong')), '--');
+    }
+    assert.doesNotMatch(text(panel), /49\.03|1,01,000|5\s*\/\s*8/);
+    assert.match(text(nodes(panel).find(n => n.props?.['aria-label'] === 'Rule alignment')), /unavailable/i);
+    const details = nodes(panel).find(n => n.type === 'details');
+    assert.equal(details.props.open, undefined, 'Polling must never control disclosure state');
+  }
+  const recovered = rulePanel(h.render(props));
+  assert.deepEqual(keys(recovered), rowKeys);
+  assert.match(text(primary(recovered)), /49\.03|\+1\.00%/);
+  assert.equal(nodes(recovered).find(n => n.type === 'details').props.open, undefined);
+});
+
+test('rule colors distinguish buy, sell and waiting without confusing direction with entry approval', () => {
+  const h = harness('AQTETerminal.tsx');
+  const props = ruleProps(ruleSignal());
+  const row = (panel, id) => nodes(panel).find(n => n.props?.['data-rule'] === id);
+  const value = node => nodes(node).find(n => n.type === 'strong');
+  let panel = rulePanel(h.render(props));
+  const imbalance = row(panel, 'imbalance');
+  assert.match(text(value(imbalance)), /Sell/);
+  assert.match(value(imbalance).props.className, /\baqx-down\b/);
+  assert.equal(imbalance.props['data-status'], 'PASS', 'Sell pressure can pass a PE entry check');
+  assert.ok(nodes(imbalance).some(n => n.props?.className === 'aqx-check aqx-check-up'));
+  assert.match(value(row(panel, 'supertrend')).props.className, /\baqx-up\b/);
+  assert.equal(row(panel, 'supertrend').props['data-status'], 'FAIL');
+  assert.ok(nodes(row(panel, 'supertrend')).some(n => n.props?.className === 'aqx-check aqx-check-wait'),
+    'A failed entry check means wait, not a sell instruction');
+  assert.match(value(row(panel, 'rsi')).props.className, /\baqx-wait\b/);
+  props.signal.intelligence.imbalance = 0.25;
+  panel = rulePanel(h.render(props));
+  assert.match(text(value(row(panel, 'imbalance'))), /Buy/);
+  assert.match(value(row(panel, 'imbalance')).props.className, /\baqx-up\b/);
+  props.signal.intelligence.imbalance = 0;
+  panel = rulePanel(h.render(props));
+  assert.match(text(value(row(panel, 'imbalance'))), /Balanced/);
+  assert.match(value(row(panel, 'imbalance')).props.className, /\baqx-wait\b/);
+  panel = rulePanel(h.render({ ...props, unavailable: true }));
+  assert.match(value(row(panel, 'imbalance')).props.className, /\baqx-flat\b/);
+});
+
+test('rule card reserves responsive value slots and a keyboard-accessible advanced scroll area', () => {
+  const panel = rulePanel(harness('AQTETerminal.tsx').render(ruleProps(ruleSignal())));
+  const details = nodes(panel).find(n => n.type === 'details');
+  const body = nodes(details).find(n => n.props?.['aria-label'] === 'Advanced rule evidence');
+  assert.ok(body);
+  assert.equal(body.props.tabIndex, 0, 'The bounded advanced area must scroll with a keyboard');
+  const css = readFileSync(path.join(__dirname, '..', 'app', 'globals.css'), 'utf8');
+  assert.match(css, /\.aqte-theme \.aqx-engine \{[^}]*align-self: start;[^}]*container: aqxengine \/ inline-size/s);
+  assert.match(css, /\.aqte-theme \.aqx-check-compact \{[^}]*grid-auto-rows: [\d.]+em/s);
+  assert.match(css, /\.aqte-theme \.aqx-check-compact strong \{[^}]*white-space: nowrap;[^}]*text-overflow: ellipsis/s);
+  assert.match(css, /\.aqte-theme \.aqx-engine \{[^}]*font-variant-numeric: tabular-nums/s);
+  assert.match(css, /\.aqte-theme \.aqx-evidence-body \{[^}]*block-size: [\d.]+rem;[^}]*overflow: auto;[^}]*scrollbar-gutter: stable/s);
+  assert.match(css, /@container aqxengine \(max-width: 17em\)/);
+});
+
+test('live rule panel shows measured OI and exact PE checks instead of a misleading bullish all-clear', () => {
+  const tree = harness('AQTETerminal.tsx').render(ruleProps(ruleSignal()));
+  const panel = rulePanel(tree);
+  const value = text(panel);
+  assert.match(value, /Quick scalp.*PE.*5\s*\/\s*8/);
+  assert.match(value, /1,01,000/);
+  assert.match(value, /\+1,000.*\+1\.00%/);
+  assert.match(value, /27\.08%.*2,708/);
+  assert.match(value, /72\.92%.*7,292/);
+  assert.match(value, /Closed 1m candle.*IST/);
+  assert.match(value, /Live futures tick.*IST/);
+  assert.doesNotMatch(value, /not provided|73\.00\s*\/\s*100/);
+  const row = id => nodes(panel).find(n => n.props?.['data-rule'] === id);
+  assert.equal(row('imbalance').props['data-status'], 'PASS', 'Seller pressure supports a PE setup');
+  assert.equal(row('supertrend').props['data-status'], 'FAIL', 'Bullish SuperTrend opposes this PE setup');
+  assert.equal(row('rsi').props['data-status'], 'FAIL', 'Neutral RSI does not qualify for PE');
+  assert.equal(row('oi_change').props['data-status'], 'CONTEXT', 'Futures OI is not an invented option-chain gate');
+  assert.match(row('rsi').props.title, /rsi threshold from backend/, 'The row explains its actual backend requirement');
+  assert.match(value, /rsi threshold from backend/, 'Requirements are also available without hovering');
+});
+
+test('live rule panel distinguishes missing OI, missing baseline and a measured zero change', () => {
+  const h = harness('AQTETerminal.tsx');
+  const signal = ruleSignal();
+  signal.intelligence.live.oi = null;
+  signal.intelligence.live.oi_change = null;
+  signal.intelligence.live.oi_change_pct = null;
+  assert.match(text(rulePanel(h.render(ruleProps(signal)))), /Not supplied by Kite/);
+  signal.intelligence.live.oi = 100000;
+  signal.intelligence.live.oi_reference = null;
+  signal.intelligence.live.oi_reference_at = null;
+  assert.match(text(rulePanel(h.render(ruleProps(signal)))), /Waiting for a completed-minute OI reference/);
+  Object.assign(signal.intelligence.live, { oi_reference: 100000, oi_reference_at: Math.floor(Date.now() / 60000) * 60,
+    oi_change: 0, oi_change_pct: 0 });
+  assert.match(text(rulePanel(h.render(ruleProps(signal)))), /0\s*\(0\.00%\)/);
+  Object.assign(signal.intelligence.live, { oi: 15374515, oi_reference: 15374190, oi_change: 325,
+    oi_change_pct: 325 / 15374190 * 100 });
+  assert.match(text(rulePanel(h.render(ruleProps(signal)))), /\+325\s*\(\+0\.002114%\)/);
+});
+
+test('live rule panel hides stale values and never borrows a swing score when scalp or controller data is unavailable', () => {
+  const h = harness('AQTETerminal.tsx');
+  for (const patch of [{ feed_ready: false }, { feed_ready: undefined }, { at: Date.now() / 1000 - 6 }]) {
+    const value = text(rulePanel(h.render(ruleProps({ ...ruleSignal(), ...patch }))));
+    assert.doesNotMatch(value, /49\.03|1,01,000|73\.00|5\s*\/\s*8/);
+    assert.match(value, /current|freshness|unavailable/i);
+  }
+  const signal = ruleSignal();
+  signal.intelligence.live.at -= 6;
+  let value = text(rulePanel(h.render(ruleProps(signal))));
+  assert.doesNotMatch(value, /1,01,000|27\.08|5\s*\/\s*8/);
+  assert.match(value, /Live depth\/OI unavailable/);
+  const props = ruleProps(ruleSignal());
+  props.liveStatus.generated_at -= 11;
+  value = text(rulePanel(h.render(props)));
+  assert.match(value, /Entry style unavailable/);
+  assert.doesNotMatch(value, /73\.00|5\s*\/\s*8/);
+});
+
+test('rule values age out while no new snapshot response arrives', async () => {
+  let now = Date.now();
+  const h = harness('AQTESection.tsx', () => now);
+  h.render();
+  const snapshot = fixture();
+  snapshot.data.NIFTY = ruleSignal();
+  const cleanup = h.mount(snapshot);
+  await settle();
+  assert.match(text(rulePanel(h.render())), /1,01,000/);
+  now += 6001;
+  const timer = [...h.timers.entries()].find(([, value]) => value.delay === 1000);
+  assert.ok(timer, 'A freshness clock must run independently of network polling');
+  h.timers.delete(timer[0]);
+  timer[1].fn();
+  assert.doesNotMatch(text(rulePanel(h.render())), /1,01,000|49\.03/);
+  assert.equal(h.requests.length, 1, 'No replacement snapshot was needed to expire the display');
+  cleanup();
+  assert.equal(h.timers.size, 0);
+});
+
+test('rule snapshot rejects malformed indicator evidence and accepts an unavailable volume ratio', async () => {
+  const h = harness();
+  h.render();
+  const snapshot = fixture();
+  snapshot.data.NIFTY = ruleSignal();
+  const cleanup = h.mount(snapshot);
+  await settle();
+  assert.doesNotMatch(text(h.render()), /Invalid AQTE response/);
+  for (const mutate of [
+    s => { s.intelligence.ema = null; },
+    s => { s.intelligence.live.oi = -1; },
+    s => { s.intelligence.imbalance = 2; },
+    s => { s.intelligence.rsi = 101; },
+    s => { s.rule_checks.scalp.checks.pop(); },
+    s => { s.rule_checks.scalp.checks[0].passed = 'yes'; },
+  ]) {
+    snapshot.data.NIFTY = ruleSignal();
+    mutate(snapshot.data.NIFTY);
+    await h.poll(snapshot);
+    assert.match(text(h.render()), /Invalid AQTE response/);
+  }
+  snapshot.data.NIFTY = ruleSignal();
+  snapshot.data.NIFTY.intelligence.volume_ratio = null;
+  await h.poll(snapshot);
+  assert.doesNotMatch(text(h.render()), /Invalid AQTE response/);
   cleanup();
 });
 
@@ -441,7 +713,10 @@ test('overview keeps concise readable values without placeholder explanations', 
   const values = nodes(prices).filter(n => n.type === 'dd').map(n => text(n).trim());
   assert.deepEqual(values, ['--', '--', '--', '--']);
   assert.match(text(tree), /Waiting for current backend evidence/);
-  assert.doesNotMatch(text(tree), /See real execution below|SEE BELOW|Rule score|Real · gated|Broker ✓/);
+  assert.doesNotMatch(text(tree), /See real execution below|SEE BELOW|Real · gated|Broker ✓/);
+  assert.doesNotMatch(text(hero), /Rule score/);
+  const score = nodes(rulePanel(tree)).find(n => n.props?.['data-rule'] === 'score');
+  assert.equal(text(nodes(score).find(n => n.type === 'strong')), '--');
   const styles = readFileSync(path.join(__dirname, '..', 'app', 'globals.css'), 'utf8');
   assert.match(styles, /AQTE ∞ terminal \(aqx\)/);
   assert.match(styles, /\.aqte-theme \.aqx-price-row \{/);
@@ -635,8 +910,11 @@ test('AQTE has three index cards and disables trade actions while live status is
   assert.deepEqual(nodes(tree).filter(n => n.props?.id?.startsWith('aqte-book-tab-')).map(text),
     ['Active Trades (--)', "Today's Trades (--)", 'Positions', 'Performance', 'Controls']);
   assert.equal(nodes(tree).filter(n => ['input', 'select'].includes(n.type)).length, 0);
-  const actions = nodes(tree).filter(n => n.type === 'button' && n.props.role !== 'tab');
+  // Engine deck filters and rule-detail toggles are view-only, not trade actions.
+  const deckControl = n => n.type === 'button' && /aqx-deck-filter|aqx-eng-card/.test(String(n.props?.className));
+  const actions = nodes(tree).filter(n => n.type === 'button' && n.props.role !== 'tab' && !deckControl(n));
   assert.equal(actions.length, 15);
+  assert.equal(nodes(tree).filter(deckControl).length, 17);
   assert.ok(actions.every(n => n.props.disabled), 'Trade actions need a confirmed matching live position');
   const summary = nodes(tree).find(n => n.props?.['aria-label'] === 'Today summary');
   for (const label of ['Today P&L', 'Win Rate', 'Trades', 'Risk']) assert.ok(text(summary).includes(label), label);
@@ -763,7 +1041,8 @@ test('terminal presentation has per-index hero cards, engine and exit-rule panel
   for (const symbol of ['NIFTY', 'BANKNIFTY', 'SENSEX']) {
     assert.match(nodes(tree).find(n => n.props?.id === `aqte-index-tab-${symbol}`).props.className, new RegExp(`aqte-tab-${symbol}`));
   }
-  assert.equal(nodes(tree).filter(n => n.type === 'button').length, 23, '3 index tabs, 5 book tabs, 15 gated trade actions');
+  assert.equal(nodes(tree).filter(n => n.type === 'button' && !/aqx-deck-filter|aqx-eng-card/.test(String(n.props?.className))).length,
+    23, '3 index tabs, 5 book tabs, 15 gated trade actions');
   cleanup();
 });
 
@@ -1188,9 +1467,12 @@ test('hero metrics and rule engine remain visible; manual broker positions stay 
     symbol: 'NIFTY', signal: fixture().data.NIFTY, unavailable: false, active: true, tick: null,
   });
   const disclosures = nodes(terminal).filter(n => n.type === 'details');
-  assert.equal(disclosures.length, 1);
-  assert.match(text(disclosures[0]), /Additional image rules/);
-  assert.ok(nodes(terminal).find(n => n.props?.['aria-label'] === 'Rule-Based Trade Engine'));
+  assert.equal(disclosures.length, 2);
+  assert.deepEqual(disclosures.map(detail => text(nodes(detail).find(n => n.type === 'summary')).trim()),
+    ['Advanced details', 'Additional image rules · Not enabled']);
+  const engine = nodes(terminal).find(n => n.props?.['aria-label'] === 'Rule-Based Trade Engine');
+  assert.equal(engine.type, 'section', 'Keep the primary engine card visible, not inside a disclosure');
+  assert.ok(disclosures.every(detail => !nodes(detail).some(n => n.props?.['aria-label'] === 'Trade prices')));
   assert.ok(nodes(terminal).find(n => n.props?.['aria-label'] === 'Trade lifecycle'));
   const h = harness();
   nodes(h.render()).find(n => n.props?.id === 'aqte-book-tab-positions').props.onClick();
@@ -1650,5 +1932,150 @@ test('a replacement trade cannot be closed by an already-open selected-exit conf
   assert.equal(prevented, true);
   assert.equal(stopped, true);
   assert.equal(nodes(h.render({ exitRequest: request })).filter(n => n.props?.role === 'alertdialog').length, 0);
+  cleanup();
+});
+function displayModule() {
+  const code = ts.transpileModule(readFileSync(path.join(__dirname, '..', 'lib', 'aqte-display.ts'), 'utf8'),
+    { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 } }).outputText;
+  const exports = {};
+  vm.runInNewContext(code, { exports, Intl, Date });
+  return exports;
+}
+const ENGINE_KEYS = ['momentum', 'breakout', 'trend', 'liquidity_sweep', 'order_flow', 'scalping', 'mean_reversion',
+  'volatility_breakout', 'options', 'multi_timeframe', 'stat_arb', 'ml'];
+function engineSet({ ce = 0, pe = 0, satisfied = ce + pe } = {}) {
+  const engines = ENGINE_KEYS.map((key, index) => {
+    const status = index < ce ? 'SATISFIED' : index < ce + pe ? 'SATISFIED' : index === 11 ? 'MONITORING' : index % 2 ? 'PARTIAL' : 'NOT_SATISFIED';
+    const side = index < ce ? 'CE' : index < ce + pe ? 'PE' : null;
+    const rules = [
+      { id: 'a', label: `Rule A ${key}`, passed: status === 'SATISFIED' ? true : status === 'MONITORING' ? null : false, requirement: 'Needs A', value: index === 0 ? '1.60x' : null },
+      { id: 'b', label: 'Rule B', passed: status !== 'NOT_SATISFIED' && status !== 'MONITORING', requirement: 'Needs B', value: null },
+    ];
+    const passed = rules.filter(rule => rule.passed === true).length;
+    return { id: index + 1, key, name: `Engine ${index + 1}`, status, side, passed, total: 2, score: passed * 50,
+      authority: key === 'ml' ? 'SHADOW' : key === 'scalping' ? 'ENTRY' : 'ADVISORY', rules,
+      reason: key === 'ml' ? 'Shadow model not configured' : null };
+  });
+  const count = state => engines.filter(engine => engine.status === state).length;
+  return {
+    engines,
+    orchestration: { satisfied: count('SATISFIED'), partial: count('PARTIAL'), monitoring: count('MONITORING'),
+      not_satisfied: count('NOT_SATISFIED'), ce, pe, consensus: ce > pe ? 'CE' : pe > ce ? 'PE' : null,
+      conflict: !!(ce && pe), evaluated: 11, consensus_pct: Math.max(ce, pe) ? Math.round(Math.max(ce, pe) / 11 * 100) : null },
+    market: { regime: 'Trending Bullish', volatility: 'Moderate', liquidity: 'High', pcr: 1.18, vix: 14.2, vix_change_pct: 1.5 },
+  };
+}
+function scalpSignal(decision = 'BUY CE', confidence = 80) {
+  return { decision, strategy: decision === 'WAIT' ? null : 'quick_scalp_20', confidence: decision === 'WAIT' ? null : confidence,
+    reasons: decision === 'WAIT' ? ['Waiting for a quick-scalp setup'] : ['Quick scalp'],
+    contract: decision === 'WAIT' ? null : { trading_symbol: `NIFTY_SCALP_${decision.slice(-2)}`, expiry: '2026-11-03' },
+    entry: decision === 'WAIT' ? null : { maximum: 100, stop: 90, target: 120, points: 20, reward_risk: 2 } };
+}
+
+test('engine ranking mirrors the live controller: actionable, aligned engines, then score', () => {
+  const display = displayModule();
+  const base = fixture().data;
+  const data = {
+    NIFTY: { ...base.NIFTY, ...engineSet({ ce: 2 }), scalp: scalpSignal('BUY CE', 95) },
+    BANKNIFTY: { ...base.BANKNIFTY, ...engineSet({ pe: 5 }), scalp: scalpSignal('BUY PE', 70) },
+    SENSEX: { ...base.SENSEX, ...engineSet({ ce: 9 }), scalp: scalpSignal('WAIT') },
+  };
+  assert.deepEqual([...display.aqteRanking(data)], ['BANKNIFTY', 'NIFTY', 'SENSEX']);
+  // Swing style ranks the main signal, which is the only actionable one in this fixture.
+  assert.deepEqual([...display.aqteRanking(data, { SENSEX: 'swing', NIFTY: 'swing', BANKNIFTY: 'swing' })], ['NIFTY', 'BANKNIFTY', 'SENSEX']);
+  assert.deepEqual([...display.aqteRankKey(data.NIFTY)], [1, 2, 95]);
+  assert.equal(display.aqteEffectiveSignal(data.SENSEX).decision, 'WAIT');
+});
+
+test('engine view rejects malformed or partial engine evaluations instead of displaying them', () => {
+  const display = displayModule();
+  const good = engineSet({ ce: 3 });
+  assert.equal(display.aqteEngineView(good).engines.length, 12);
+  assert.equal(display.aqteEngineView({ ...good, engines: good.engines.slice(1) }), null);
+  assert.equal(display.aqteEngineView({ ...good, engines: good.engines.map((e, i) => i ? e : { ...e, status: 'GREAT' }) }), null);
+  assert.equal(display.aqteEngineView({ ...good, engines: good.engines.map((e, i) => i ? e : { ...e, passed: 3 }) }), null);
+  assert.equal(display.aqteEngineView({ ...good, orchestration: { ...good.orchestration, ce: -1 } }), null);
+  assert.equal(display.aqteEngineView({ ...good, market: { regime: 5 } }).market, null);
+  assert.equal(display.aqteEngineView({}), null);
+  assert.equal(display.isAqteEngineEvent({ at: 1, symbol: 'NIFTY', engine: 3, name: 'Trend', status: 'SATISFIED', previous: null, side: 'CE' }), true);
+  assert.equal(display.isAqteEngineEvent({ at: 1, symbol: 'FINNIFTY', engine: 3, name: 'Trend', status: 'SATISFIED', previous: null, side: 'CE' }), false);
+});
+
+test('engine deck shows 12 live engines, rule details on demand and an honest execution state', () => {
+  const h = harness('AQTEEngineDeck.tsx');
+  const data = fixture().data;
+  data.NIFTY = { ...data.NIFTY, ...engineSet({ ce: 4, pe: 1 }), scalp: scalpSignal('BUY CE', 82) };
+  const live = { ...liveFixture(), enabled: true, paper_validated: true, armed: true, automation_on: true,
+    ranking: ['NIFTY', 'BANKNIFTY', 'SENSEX'], entry_blocks: { NIFTY: null, BANKNIFTY: 'No setup', SENSEX: 'No setup' } };
+  const props = { symbol: 'NIFTY', data, liveStatus: live, unavailable: false, policy: { authority: 'ADVISORY_VETO', veto: true, veto_min: 2, engines: 12 },
+    events: [{ at: Date.now() / 1000, symbol: 'NIFTY', engine: 1, name: 'Momentum', status: 'SATISFIED', previous: null, side: 'CE' }] };
+  let tree = h.render(props);
+  const cards = nodes(tree).filter(n => String(n.props?.className).includes('aqx-eng-card'));
+  assert.equal(cards.length, 12);
+  assert.ok(cards.every(card => !card.props.disabled && card.props['aria-expanded'] === false));
+  assert.match(text(tree), /Satisfied\s+5/);
+  assert.match(text(tree), /Trending Bullish/);
+  assert.match(text(tree), /VIX 14\.20 \(\+1\.50%\)/);
+  assert.match(text(tree), /PCR\s+1\.18/);
+  assert.match(text(tree), /CE 36%/);
+  const opportunity = nodes(tree).find(n => n.props?.['aria-label'] === 'Top opportunity');
+  assert.match(text(opportunity), /NIFTY_SCALP_CE/);
+  assert.match(text(opportunity), /4 aligned · 1 opposed/);
+  assert.match(text(opportunity), /Eligible · central controller places the IOC entry/);
+  assert.match(text(tree), /#01 Momentum/);
+  assert.equal(nodes(tree).find(n => n.props?.id === 'aqte-engine-rules').props.hidden, true);
+  cards[0].props.onClick();
+  tree = h.render(props);
+  const rules = nodes(tree).find(n => n.props?.id === 'aqte-engine-rules');
+  assert.equal(rules.props.hidden, false);
+  assert.match(text(rules), /Rule A momentum/);
+  assert.match(text(rules), /1\.60x/);
+  nodes(tree).find(n => n.type === 'button' && /^Partial/.test(text(n).trim())).props.onClick();
+  tree = h.render(props);
+  const dimmed = nodes(tree).filter(n => String(n.props?.className).includes('aqx-eng-dim'));
+  assert.equal(dimmed.length, 12 - engineSet({ ce: 4, pe: 1 }).orchestration.partial);
+
+  // Opposition beyond the veto threshold is shown as a conflict, never as eligible execution.
+  data.NIFTY = { ...data.NIFTY, ...engineSet({ ce: 1, pe: 3 }) };
+  tree = h.render({ ...props, data, liveStatus: { ...live, entry_blocks: { NIFTY: 'Engine conflict: 3 satisfied engines oppose CE (1 aligned); WAIT' } } });
+  const blocked = text(nodes(tree).find(n => n.props?.['aria-label'] === 'Top opportunity'));
+  assert.match(blocked, /Engine conflict/);
+  assert.match(blocked, /Veto · WAIT/);
+  assert.doesNotMatch(blocked, /Eligible/);
+});
+
+test('engine deck keeps stable placeholders when engines are unavailable or AQTE is offline', () => {
+  const h = harness('AQTEEngineDeck.tsx');
+  const data = fixture().data;
+  data.NIFTY = { ...data.NIFTY, ...engineSet({ ce: 6 }), scalp: scalpSignal('BUY CE') };
+  const tree = h.render({ symbol: 'NIFTY', data, liveStatus: null, unavailable: true, policy: null, events: [] });
+  const cards = nodes(tree).filter(n => String(n.props?.className).includes('aqx-eng-card'));
+  assert.equal(cards.length, 12);
+  assert.ok(cards.every(card => card.props.disabled));
+  assert.match(text(tree), /Momentum/);
+  assert.match(text(tree), /ML Prediction/);
+  assert.doesNotMatch(text(tree), /Trending Bullish|NIFTY_SCALP_CE|Eligible/);
+  assert.match(text(tree), /Engine events unavailable/);
+  const missing = h.render({ symbol: 'BANKNIFTY', data, liveStatus: null, unavailable: false, policy: null, events: [] });
+  assert.ok(nodes(missing).filter(n => String(n.props?.className).includes('aqx-eng-card')).every(card => card.props.disabled));
+  assert.match(text(nodes(missing).find(n => n.props?.['aria-label'] === 'Top opportunity')), /Controller status unavailable/);
+});
+
+test('AQTE section renders the engine deck from the snapshot and drops malformed engine events', async () => {
+  const h = harness();
+  h.render();
+  const snapshot = fixture();
+  snapshot.data.NIFTY = { ...snapshot.data.NIFTY, ...engineSet({ ce: 3 }) };
+  snapshot.engine_events = [
+    { at: Date.now() / 1000, symbol: 'NIFTY', engine: 3, name: 'Trend Following', status: 'SATISFIED', previous: 'PARTIAL', side: 'CE' },
+    { at: 'bad', symbol: 'NIFTY', engine: 1, name: 'Injected', status: 'SATISFIED', previous: null, side: 'CE' },
+  ];
+  snapshot.engine_policy = { authority: 'ADVISORY_VETO', veto: true, veto_min: 2, engines: 12 };
+  const cleanup = h.mount(snapshot);
+  await settle();
+  const deck = nodes(h.render()).find(n => n.props?.['aria-label'] === 'AQTE strategy engines');
+  assert.ok(deck);
+  assert.match(text(deck), /#03 Trend Following/);
+  assert.doesNotMatch(text(deck), /Injected/);
   cleanup();
 });

@@ -65,6 +65,122 @@ def scalp_info(**values):
 THURSDAY = datetime(2026, 10, 29, 9, 15, tzinfo=IST).timestamp()
 
 
+class EvidenceTests(unittest.TestCase):
+    def test_kite_oi_is_preserved_and_missing_is_not_zero(self):
+        raw = dict(instrument_token=20, last_price=22000,
+                   exchange_timestamp=datetime.fromtimestamp(NOW, IST), oi=100_500)
+        self.assertEqual(normalize("NIFTY", "future", raw, NOW).oi, 100_500)
+        raw.pop("oi")
+        self.assertIsNone(normalize("NIFTY", "future", raw, NOW).oi)
+        for invalid in (-1, True, 1.5, float("nan"), "100"):
+            with self.subTest(oi=invalid), self.assertRaises(ValueError):
+                normalize("NIFTY", "future", {**raw, "oi": invalid}, NOW)
+
+    def test_oi_change_uses_same_contract_previous_completed_minute_not_first_tick(self):
+        engine = ready_engine(paper_enabled=False)
+        bars = engine.book.closed[("future", 20, 60)]
+        bars[-1]["oi"] = 100_000
+        engine.ingest(tick(at=NOW + 1, oi=101_000, buy_depth=2708, sell_depth=7292))
+        info = engine.snapshot(NOW + 1)["data"]["NIFTY"]["intelligence"]
+        self.assertEqual(info["at"], NOW - 60)
+        market = info["live"]
+        self.assertEqual((market["at"], market["received"], market["token"]), (NOW + 1, NOW + 1, 20))
+        self.assertEqual((market["oi"], market["oi_reference"], market["oi_reference_at"]),
+                         (101_000, 100_000, NOW))
+        self.assertEqual((market["oi_change"], market["oi_change_pct"]), (1000, 1.0))
+        self.assertAlmostEqual(info["imbalance"], -0.4584)
+        self.assertEqual((market["buy_depth"], market["sell_depth"]), (2708, 7292))
+        engine.ingest(tick(at=NOW + 2, oi=102_000))
+        self.assertEqual(engine.signals["NIFTY"]["intelligence"]["live"]["oi_change"], 2000)
+        engine.ingest(tick(at=NOW + 3, token=21, oi=500))
+        self.assertIsNone(engine.signals["NIFTY"]["intelligence"], "Never compare OI across a rollover")
+
+    def test_oi_unknown_and_zero_reference_do_not_invent_percentage(self):
+        engine = ready_engine(paper_enabled=False)
+        bars = list(engine.book.closed[("future", 20, 60)])
+        missing = intelligence(bars, tick(oi=100))["live"]
+        self.assertIsNone(missing["oi_change"])
+        self.assertIsNone(missing["oi_reference_at"])
+        bars[-1]["oi"] = 0
+        zero = intelligence(bars, tick(oi=100))["live"]
+        self.assertEqual(zero["oi_change"], 100)
+        self.assertIsNone(zero["oi_change_pct"])
+        bars[-1]["oi"] = 100
+        unchanged = intelligence(bars, tick(oi=100))["live"]
+        self.assertEqual((unchanged["oi_change"], unchanged["oi_change_pct"]), (0, 0))
+        missing = intelligence(bars, tick())["live"]
+        self.assertIsNone(missing["oi"])
+        self.assertIsNone(missing["oi_change"])
+
+    def test_candles_keep_last_reported_oi_and_legacy_ticks_still_load(self):
+        book = CandleBook()
+        book.add(tick(at=START, oi=100))
+        book.add(tick(at=START + 59, oi=120))
+        book.add(tick(at=START + 60, oi=130))
+        self.assertEqual(book.closed[("future", 20, 60)][0]["oi"], 120)
+        self.assertEqual(book.current[("future", 20, 60)]["oi"], 130)
+        legacy = dict(symbol="NIFTY", kind="future", token=20, price=100, at=NOW, received=NOW)
+        self.assertIsNone(Tick(**legacy).oi)
+
+    def test_zero_volume_baseline_is_unavailable_not_a_measured_zero_ratio(self):
+        engine = ready_engine(paper_enabled=False)
+        bars = list(engine.book.closed[("future", 20, 60)])
+        for bar in bars[-21:]:
+            bar["volume"] = 0
+        info = intelligence(bars, tick())
+        self.assertIsNone(info["volume_ratio"])
+        self.assertIsNone(strategy(info))
+        bars[-2]["volume"] = 100
+        self.assertEqual(intelligence(bars, tick())["volume_ratio"], 0)
+
+    def test_screenshot_mixed_indicators_are_not_a_bullish_all_clear(self):
+        from services.aqte_engine import directional_checks, scalp_bias
+
+        info = scalp_info(ema={"9": 95, "20": 96, "50": 97, "100": 98, "200": 99},
+                          close=94, vwap=100, supertrend="BULLISH", rsi=49.03,
+                          breakout=0, structure="RANGE", volume_ratio=1.84, imbalance=-0.4583)
+        self.assertEqual(scalp_bias(info), "PE")
+        checks = {c["id"]: c for c in directional_checks(info, "PE", "scalp")}
+        for name in ("ema", "vwap", "volume", "imbalance", "extension"):
+            self.assertIs(checks[name]["passed"], True, name)
+        for name in ("supertrend", "rsi", "breakout"):
+            self.assertIs(checks[name]["passed"], False, name)
+        self.assertEqual(scalp(info, (10, 20, 30))[1], checks["supertrend"]["reason"])
+        self.assertEqual(len(checks), 8)
+
+    def test_shared_scalp_checks_match_execution_at_thresholds_for_both_sides(self):
+        from services.aqte_engine import directional_checks
+
+        for side in ("CE", "PE"):
+            info = scalp_info(volume_ratio=1.5, imbalance=0.10, rsi=55)
+            if side == "PE":
+                info.update(ema={"9": 95, "20": 96, "50": 97, "100": 98, "200": 99},
+                            close=94, supertrend="BEARISH", breakout=-1, imbalance=-0.10, rsi=45)
+            self.assertTrue(all(c["passed"] for c in directional_checks(info, side, "scalp")))
+            self.assertEqual(scalp(info, (10,))[0]["side"], side)
+            for field, value in (("volume_ratio", 1.499), ("rsi", 50), ("breakout", 0), ("imbalance", 0)):
+                weak = {**info, field: value}
+                self.assertFalse(all(c["passed"] for c in directional_checks(weak, side, "scalp")))
+                self.assertIsNone(scalp(weak, (10,))[0])
+        for invalid in (None, float("nan"), float("inf")):
+            checks = directional_checks(scalp_info(volume_ratio=invalid), "CE", "scalp")
+            self.assertIsNone(next(c["passed"] for c in checks if c["id"] == "volume"))
+            self.assertIsNone(scalp(scalp_info(volume_ratio=invalid), (10,))[0])
+
+    def test_snapshot_publishes_exact_checks_and_clears_them_when_stale(self):
+        from services.aqte_engine import directional_checks, scalp_bias
+
+        engine = ready_engine(paper_enabled=False)
+        signal = engine.snapshot(NOW)["data"]["NIFTY"]
+        info = signal["intelligence"]
+        evidence = signal["rule_checks"]
+        self.assertEqual(evidence["scalp"], dict(side=scalp_bias(info),
+                                                checks=directional_checks(info, scalp_bias(info), "scalp")))
+        self.assertEqual(evidence["swing"]["checks"], directional_checks(info, "CE", "swing"))
+        self.assertIsNone(engine.snapshot(NOW + 6)["data"]["NIFTY"]["rule_checks"])
+        self.assertIsNotNone(engine.signals["NIFTY"]["rule_checks"], "Snapshots must not mutate the engine")
+
+
 class ScalpTests(unittest.TestCase):
     def test_tier_follows_rule_strength_and_what_futures_atr_can_reach(self):
         points = (10, 20, 30)

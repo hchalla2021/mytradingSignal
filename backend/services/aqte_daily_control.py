@@ -5,7 +5,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from services.aqte_engine import SYMBOLS, day, scalp
+from services.aqte_engine import SYMBOLS, day, directional_checks, scalp
 
 
 class IndexControl(BaseModel):
@@ -55,7 +55,6 @@ def quality_reason(signal, control, allow_unvalidated_rules=False):
         if signal.get("model_validated") is not True:
             return "Signal model has not passed paper validation"
     info = signal.get("intelligence") or {}
-    side = 1 if signal["decision"] == "BUY CE" else -1
     if str(signal.get("strategy") or "").startswith("quick_scalp"):
         # Re-derive the scalp rules from the live intelligence; never trust the cached decision alone.
         setup, reason = scalp(info, signal["entry"].get("points_allowed") or ())
@@ -66,26 +65,11 @@ def quality_reason(signal, control, allow_unvalidated_rules=False):
         if allow_unvalidated_rules:
             return None
         return "Validated option-chain OI/PCR/Greeks and liquidity-sweep confirmation are unavailable"
-    try:
-        ema = [float(info["ema"][str(period)]) for period in (9, 20, 50, 100, 200)]
-        if not all(math.isfinite(v) for v in ema) or not all(
-            side * (a - b) > 0 for a, b in zip(ema, ema[1:])
-        ):
-            return "EMA 9/20/50/100/200 are not directionally aligned"
-        checks = (
-            info["vwap"] is not None and side * (info["close"] - info["vwap"]) > 0,
-            info["supertrend"] == ("BULLISH" if side > 0 else "BEARISH"),
-            55 <= info["rsi"] <= 70 if side > 0 else 30 <= info["rsi"] <= 45,
-            info["cpr"] is not None and side * (info["close"] - info["cpr"]["top" if side > 0 else "bottom"]) > 0,
-            info["volume_ratio"] >= 1.5,
-            info["imbalance"] is not None and side * info["imbalance"] >= 0.15,
-            info["breakout"] == side,
-            info["structure"] == ("HIGHER_HIGH" if side > 0 else "LOWER_LOW"),
-        )
-        if not all(checks):
-            return "Directional breakout, volume, CPR, RSI or order-flow confirmation missing"
-    except (KeyError, TypeError, ValueError):
-        return "Incomplete market intelligence; WAIT"
+    for check in directional_checks(info, "CE" if signal["decision"] == "BUY CE" else "PE", "swing"):
+        if check["passed"] is not True:
+            if check["id"] == "ema":
+                return check["reason"] if check["passed"] is False else "Incomplete market intelligence; WAIT"
+            return f'{check["reason"]}; directional confirmation missing'
     if allow_unvalidated_rules:
         return None
     # These are intentionally not inferred from unrelated metrics or model scores.

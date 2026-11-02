@@ -21,6 +21,7 @@ from kiteconnect import KiteConnect
 from config import get_settings
 from services.aqte_engine import Contract, IST, Policy, SYMBOLS, day, round_tick, session
 from services.aqte_daily_control import IndexControl, counts, defaults, quality_reason
+from services.aqte_engines import EngineConfig, rank_key, veto_reason
 
 logger = logging.getLogger(__name__)
 TERMINAL = {"COMPLETE", "CANCELLED", "REJECTED"}
@@ -203,6 +204,8 @@ class AQTELiveService:
                            for symbol, control in self.state["daily_controls"].items()},
                 "entry_blocks": {symbol: self.entry_reason(symbol, self.effective(symbol, signal))
                                  for symbol, signal in snapshot["data"].items()},
+                "ranking": sorted(snapshot["data"], key=lambda symbol: rank_key(
+                    self.effective(symbol, snapshot["data"][symbol])), reverse=True),
                 "ready": self.ready, "trades": copy.deepcopy(visible_trades),
                 "limits": {"risk_per_trade": cfg.aqte_live_risk_per_trade,
                            "daily_loss": cfg.aqte_live_daily_loss, "max_trades": cfg.aqte_live_max_trades,
@@ -253,7 +256,12 @@ class AQTELiveService:
                     return "Duplicate/near-identical contract entry blocked"
         if signal.get("decision") not in ("BUY CE", "BUY PE") or not signal.get("entry"):
             return "; ".join(signal.get("reasons") or ["No confirmed LONG CE/PE opportunity"])
-        return quality_reason(signal, control, self.settings().aqte_live_allow_unvalidated_rules)
+        reason = quality_reason(signal, control, self.settings().aqte_live_allow_unvalidated_rules)
+        if reason:
+            return reason
+        # The 12 engines never approve an entry; they can only block one they clearly oppose.
+        config = getattr(self.service(), "engine_config", None)
+        return veto_reason(signal, config if isinstance(config, EngineConfig) else EngineConfig())
 
     def entry_reason(self, symbol, signal):
         """Read-only rule/risk checks shared by status and Controls; never calls the broker."""
@@ -526,7 +534,7 @@ class AQTELiveService:
             if not snapshot["recording"] or snapshot.get("fault") or snapshot["risk"].get("killed"):
                 raise LiveBlocked("Market recorder/risk state unavailable; automation stopped")
             signals = {symbol: self.effective(symbol, signal) for symbol, signal in snapshot["data"].items()}
-            for symbol in sorted(signals, key=lambda s: signals[s].get("confidence") or 0, reverse=True):
+            for symbol in sorted(signals, key=lambda s: rank_key(signals[s]), reverse=True):
                 signal = signals[symbol]
                 if self.control_reason(symbol, signal):
                     continue

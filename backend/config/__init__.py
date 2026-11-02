@@ -115,6 +115,11 @@ class Settings(BaseSettings):
     aqte_scalp_stop_ratio: float = Field(default=0.4, ge=0.25, le=1.0)
     # Optional research artifact. Never enables or filters broker orders.
     aqte_ml_shadow_model_path: str = ""
+    # 12 read-only strategy engines: rank entries and veto one that satisfied engines clearly oppose.
+    aqte_engine_veto: bool = True
+    aqte_engine_veto_min: int = Field(default=2, ge=1, le=11)
+    # Annual risk-free rate for live option IV/Greeks (Black-Scholes).
+    aqte_risk_free_rate: float = Field(default=0.065, ge=0, le=0.2)
     
     # ==================== NEWS API (DISABLED) ====================
     # news_api_key: Optional[str] = None

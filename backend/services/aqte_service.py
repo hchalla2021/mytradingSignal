@@ -10,6 +10,7 @@ import queue
 import sqlite3
 import threading
 import time
+from collections import deque
 from dataclasses import asdict
 from contextlib import contextmanager
 from datetime import datetime
@@ -19,9 +20,12 @@ from services.aqte_engine import (
     AQTEEngine, CLOSE_MINUTE, Contract, IST, OPEN_MINUTE, SYMBOLS, WARMUP_CANDLES, Policy, Tick, day,
     minute_of_day, parse_scalp_points, warmup_count,
 )
+from services.aqte_engines import ENGINES, ML_MAX_AGE_SECONDS, EngineConfig, evaluate, session_change
 from services.aqte_ml import FEATURE_NAMES, SCHEMA, MLUnavailable, ShadowModel, feature_vector
 
 logger = logging.getLogger(__name__)
+VIX_INSTRUMENT = "NSE:INDIA VIX"
+VIX_STALE_SECONDS = 15
 
 
 def exchange_time(raw, received, kind):
@@ -47,14 +51,21 @@ def normalize(symbol, kind, raw, received):
                 bid=float(bid.get("price") or 0), ask=float(ask.get("price") or 0),
                 bid_quantity=int(bid.get("quantity") or 0), ask_quantity=int(ask.get("quantity") or 0),
                 buy_depth=sum(int(level.get("quantity") or 0) for level in buys),
-                sell_depth=sum(int(level.get("quantity") or 0) for level in sells))
+                sell_depth=sum(int(level.get("quantity") or 0) for level in sells), oi=raw.get("oi"))
 
 
 class AQTEService:
-    def __init__(self, path=None, *, paper_enabled=False, ml_model_path="", policy=None):
+    def __init__(self, path=None, *, paper_enabled=False, ml_model_path="", policy=None, engine_config=None):
         self.path = Path(path or os.getenv("AQTE_DB_PATH") or
                          Path(__file__).resolve().parent.parent / "data" / "aqte" / "aqte.sqlite3")
         self.engine = AQTEEngine(policy, paper_enabled=paper_enabled)
+        self.engine_config = engine_config or EngineConfig()
+        self.engine_states = {}
+        self.engine_events = deque(maxlen=40)
+        self.engine_error = None
+        self.vix = None
+        self.vix_token = None
+        self.vix_day = None
         self.backfill_after = 0.0
         self.lock = threading.RLock()
         self.queue = queue.Queue(maxsize=20_000)
@@ -227,7 +238,8 @@ class AQTEService:
         self.started = False
 
     def enqueue(self, symbol, kind, raw):
-        if not self.started:
+        # The shared feed also routes non-AQTE indices (e.g. INDIAVIX) here; the engine rejects them.
+        if not self.started or symbol not in SYMBOLS:
             return
         try:
             tick = normalize(symbol, kind, raw, time.time())
@@ -243,11 +255,42 @@ class AQTEService:
     def option_tick(self, raw):
         # Contract maps are replaced atomically, never mutated by the worker.
         # Do not let journal I/O block the shared KiteTicker callback.
+        if self.vix_token is not None and raw.get("instrument_token") == self.vix_token:
+            self.record_vix(raw)
+            return True
         contract = self.engine.contracts.get(raw.get("instrument_token"))
         if contract:
             self.enqueue(contract.symbol, "option", raw)
             return True
         return False
+
+    def record_vix(self, raw, received=None):
+        received = time.time() if received is None else received
+        try:
+            price = float(raw["last_price"])
+            close = float((raw.get("ohlc") or {}).get("close") or 0)
+            at = exchange_time(raw, received, "spot")
+        except (KeyError, TypeError, ValueError):
+            logger.warning("AQTE ignored malformed India VIX tick")
+            return
+        if not math.isfinite(price) or price <= 0:
+            return
+        change = (price - close) / close * 100 if math.isfinite(close) and close > 0 else None
+        with self.lock:
+            self.vix = dict(token=int(raw["instrument_token"]), price=price, close=close or None,
+                            change_pct=round(change, 2) if change is not None else None, at=at, received=received)
+
+    def resolve_vix(self, kite):
+        """Resolve the verified India VIX token once per day; failures leave VIX unavailable."""
+        today = day(time.time())
+        if self.vix_day == today and self.vix_token:
+            return
+        try:
+            self.vix_token = int(kite.ltp([VIX_INSTRUMENT])[VIX_INSTRUMENT]["instrument_token"])
+            self.vix_day = today
+        except Exception as exc:
+            # Broker boundary: VIX is display/engine context only, never an entry requirement.
+            logger.warning("AQTE India VIX token unavailable (%s)", type(exc).__name__)
 
     def configure(self, kite, socket, prices=None, previous_day=None):
         """Called on the existing Kite connection and each minute for ATM rotation."""
@@ -297,6 +340,9 @@ class AQTEService:
                 # Register before subscribe: initial option packets can arrive immediately.
                 self.engine.contracts = selected
             tokens = set(selected)
+            self.resolve_vix(kite)
+            if self.vix_token:
+                tokens.add(self.vix_token)
             if tokens:
                 # Re-subscribe all on reconnect, not just newly selected tokens.
                 socket.subscribe(sorted(tokens))
@@ -451,7 +497,65 @@ class AQTEService:
                 for signal in result["data"].values():
                     signal.update(decision="WAIT", entry=None, reasons=["AQTE recorder unavailable"])
                     signal["scalp"] = self.engine.idle_scalp("AQTE recorder unavailable")
+                    signal["rule_checks"] = None
+            self.attach_engines_safely(result)
             return result
+
+    def attach_engines_safely(self, result):
+        try:
+            self.attach_engines(result)
+            self.engine_error = None
+        except Exception as exc:
+            # Advisory layer only: the authoritative scalp/swing rules and broker gates stay unchanged.
+            if self.engine_error != type(exc).__name__:
+                logger.exception("AQTE strategy-engine evaluation failed; entry rules are unaffected")
+            self.engine_error = type(exc).__name__
+            for signal in result["data"].values():
+                signal.update(engines=None, orchestration=None, market=None, options=None)
+            result.update(vix=None, engine_events=[], engine_policy=None)
+
+    def attach_engines(self, result):
+        """Evaluate the 12 read-only engines on the same locked state as the snapshot."""
+        now = result["generated_at"]
+        engine = self.engine
+        bars, peers = {}, {}
+        for symbol in SYMBOLS:
+            future = engine.future.get(symbol)
+            bars[symbol] = list(engine.book.closed.get(("future", future.token, 60), ())) if future else []
+            peers[symbol] = session_change(bars[symbol], now) if bars[symbol] else None
+        vix = None
+        if self.vix and 0 <= now - self.vix["received"] <= VIX_STALE_SECONDS:
+            vix = {key: self.vix[key] for key in ("price", "close", "change_pct", "at")}
+        ml_state = result["ml"]
+        ml_reason = {"DISABLED": "Shadow model not configured (AQTE_ML_SHADOW_MODEL_PATH)",
+                     "UNAVAILABLE": ml_state.get("error") or "Shadow model unavailable"}.get(
+            ml_state.get("status"), "Waiting for a shadow observation of a rule setup")
+        for symbol, signal in result["data"].items():
+            options = [(contract, engine.options[token]) for token, contract in engine.contracts.items()
+                       if contract.symbol == symbol and engine.fresh(engine.options.get(token), now)]
+            observation = (ml_state.get("observations") or {}).get(symbol)
+            ml = None
+            if observation and observation.get("probability_positive_net_return") is not None and \
+                    0 <= now - observation.get("observed_at", 0) <= ML_MAX_AGE_SECONDS:
+                contract = engine.contracts.get(observation.get("token"))
+                ml = {**observation, "side": contract.side if contract else None}
+            evaluated = evaluate(signal, live=engine.future.get(symbol), spot=engine.spot.get(symbol),
+                                 bars=bars[symbol], options=options, peers=peers, ml=ml, ml_reason=ml_reason,
+                                 vix=vix, policy=engine.policy, now=now, config=self.engine_config)
+            signal.update(evaluated)
+            if not signal.get("feed_ready"):
+                continue
+            for card in evaluated["engines"]:
+                key = (symbol, card["key"])
+                previous = self.engine_states.get(key)
+                if previous != card["status"] and (previous is not None or card["status"] == "SATISFIED"):
+                    self.engine_events.append(dict(at=now, symbol=symbol, engine=card["id"], name=card["name"],
+                                                   status=card["status"], previous=previous, side=card["side"]))
+                self.engine_states[key] = card["status"]
+        result["vix"] = vix
+        result["engine_events"] = list(reversed(self.engine_events))[:20]
+        result["engine_policy"] = dict(authority="ADVISORY_VETO", veto=self.engine_config.veto,
+                                       veto_min=self.engine_config.veto_min, engines=len(ENGINES))
 
     def history(self, limit):
         with self.connect() as db:
@@ -488,11 +592,17 @@ def scalp_policy(settings):
     return Policy(scalp_points=points, scalp_stop_ratio=settings.aqte_scalp_stop_ratio)
 
 
+def engine_config(settings):
+    return EngineConfig(risk_free_rate=settings.aqte_risk_free_rate, veto=settings.aqte_engine_veto,
+                        veto_min=settings.aqte_engine_veto_min)
+
+
 def get_aqte_service():
     global _service
     if _service is None:
         from config import get_settings
 
         settings = get_settings()
-        _service = AQTEService(ml_model_path=settings.aqte_ml_shadow_model_path, policy=scalp_policy(settings))
+        _service = AQTEService(ml_model_path=settings.aqte_ml_shadow_model_path, policy=scalp_policy(settings),
+                               engine_config=engine_config(settings))
     return _service

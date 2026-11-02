@@ -8,7 +8,9 @@ import type { MarketData, MarketTick } from '@/hooks/useMarketSocket';
 import AQTEDailyControl from '@/components/AQTEDailyControl';
 import AQTETerminal from '@/components/AQTETerminal';
 import AQTEBrokerPositions from '@/components/AQTEBrokerPositions';
-import { aqteCanExit, aqteDaySummary, aqteLiveMetrics, type AQTELiveState, type AQTEExitRequest, type AQTESignal } from '@/lib/aqte-display';
+import AQTEEngineDeck from '@/components/AQTEEngineDeck';
+import { aqteCanExit, aqteDaySummary, aqteFeedCurrent, aqteLiveMetrics, isAqteEngineEvent, isAqteIntelligence, isAqteRuleChecks,
+  type AQTEEngineEvent, type AQTEEnginePolicy, type AQTELiveState, type AQTEExitRequest, type AQTESignal } from '@/lib/aqte-display';
 import { prefetchChartHistory } from '@/hooks/useChartHistory';
 
 const SYMBOLS = ['NIFTY', 'BANKNIFTY', 'SENSEX'] as const;
@@ -27,6 +29,8 @@ type Snapshot = {
   subscription_error: string | null;
   fault: string | null;
   recording: boolean;
+  engine_events?: unknown;
+  engine_policy?: AQTEEnginePolicy | null;
 };
 
 const number = (value: number) => value.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -68,6 +72,8 @@ function isSnapshot(value: unknown): value is Snapshot {
       const scalp = signal?.scalp;
       return !!signal && ['WAIT', 'BUY CE', 'BUY PE'].includes(signal.decision) &&
         (signal.feed_ready === undefined || typeof signal.feed_ready === 'boolean') &&
+        (signal.intelligence == null || isAqteIntelligence(signal.intelligence)) &&
+        (signal.rule_checks == null || isAqteRuleChecks(signal.rule_checks)) &&
         Array.isArray(signal.reasons) && signal.reasons.every(reason => typeof reason === 'string') &&
         progress(signal.warmup) && progress(signal.opening) &&
         (scalp === undefined || (scalp != null && ['WAIT', 'BUY CE', 'BUY PE'].includes(scalp.decision) &&
@@ -79,6 +85,7 @@ function isSnapshot(value: unknown): value is Snapshot {
 
 function AQTESection({ marketData, isConnected = false }: { marketData?: MarketData; isConnected?: boolean }) {
   const [selectedSymbol, setSelectedSymbol] = useState<SymbolName>('NIFTY');
+  const [now, setNow] = useState(Date.now());
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [liveStatus, setLiveStatus] = useState<AQTELiveState | null>(null);
@@ -94,7 +101,14 @@ function AQTESection({ marketData, isConnected = false }: { marketData?: MarketD
   useEffect(() => {
     let active = true;
     let timer: ReturnType<typeof setTimeout>;
+    let freshnessTimer: ReturnType<typeof setTimeout>;
     let controller: AbortController | null = null;
+    const advanceClock = () => {
+      if (!active) return;
+      setNow(Date.now());
+      freshnessTimer = setTimeout(advanceClock, 1000);
+    };
+    advanceClock();
     const poll = async () => {
       controller = new AbortController();
       const timeout = setTimeout(() => controller?.abort(), 8000);
@@ -121,19 +135,17 @@ function AQTESection({ marketData, isConnected = false }: { marketData?: MarketD
     return () => {
       active = false;
       clearTimeout(timer);
+      clearTimeout(freshnessTimer);
       controller?.abort();
     };
   }, []);
 
   const unavailable = !!error || !snapshot || !snapshot.recording || !!snapshot.fault;
-  const now = Date.now();
   const ist = new Date(now + 330 * 60_000);
   const minute = ist.getUTCHours() * 60 + ist.getUTCMinutes();
   const marketHours = ist.getUTCDay() >= 1 && ist.getUTCDay() <= 5 && minute >= 555 && minute < 930;
-  const signalAt = snapshot?.data[selectedSymbol].at;
-  const signalAge = signalAt == null ? Infinity : now / 1000 - signalAt;
-  const liveFeed = !unavailable && signalAge >= -1 && signalAge <= 5 &&
-    snapshot?.data[selectedSymbol].feed_ready !== false && marketHours && isConnected && (() => {
+  const liveFeed = !unavailable && aqteFeedCurrent(snapshot?.data[selectedSymbol], now / 1000) &&
+    marketHours && isConnected && (() => {
     const tick = marketData?.[selectedSymbol];
     const age = tick ? (now - Date.parse(tick.timestamp)) / 1000 : Infinity;
     return tick?.status === 'LIVE' && Number.isFinite(tick.price) && tick.price > 0 && age >= -1 && age <= 5;
@@ -260,11 +272,15 @@ function AQTESection({ marketData, isConnected = false }: { marketData?: MarketD
             tabIndex={selectedSymbol === symbol ? 0 : -1}
             className="rounded-xl focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-300">
             <AQTETerminal symbol={symbol} signal={quotes[symbol].signal} unavailable={unavailable}
-              liveStatus={liveStatus} active={selectedSymbol === symbol} tick={quotes[symbol].tick}
+              liveStatus={liveStatus} active={selectedSymbol === symbol} tick={quotes[symbol].tick} now={now / 1000}
               onExit={setExitRequest} />
           </div>
         ))}
       </div>
+      <AQTEEngineDeck symbol={selectedSymbol} data={snapshot?.data} liveStatus={liveStatus} unavailable={unavailable}
+        events={Array.isArray(snapshot?.engine_events) ? (snapshot.engine_events as unknown[]).filter(isAqteEngineEvent) as AQTEEngineEvent[] : []}
+        policy={snapshot?.engine_policy && typeof snapshot.engine_policy.veto === 'boolean' &&
+          Number.isInteger(snapshot.engine_policy.veto_min) ? snapshot.engine_policy : null} />
       <section className="aqx-card aqx-book" aria-label="Trades, positions and controls">
         <div className="aqx-book-head">
           <div role="tablist" aria-label="AQTE trade book" className="aqx-book-tabs">

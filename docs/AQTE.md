@@ -216,8 +216,9 @@ entry/stop levels survive disconnects. Breakeven trades are not counted as losse
 The one-lot/single-position execution limit is unchanged. Book 25%/50%/75% are
 explicitly unavailable; T2/T3 have no invented prices. There is one full-position
 target. Reaching it uses the executable sell bid, not LTP, and is not labelled an
-exit fill. Buyer/seller figures are labelled futures depth shares, OI change remains
-unavailable, and rule scores are not calibrated win probabilities. Seller-spike,
+exit fill. Buyer/seller figures are labelled futures depth shares. Live futures OI
+and its change from the previous completed minute are reported only when supplied by Kite;
+rule scores are not calibrated win probabilities. Seller-spike,
 OI-drop, EMA/VWAP/RSI exit rules from the picture are not enabled or simulated.
 Protective-management status is independent of the new-entry switch: OFF continues
 existing stops/trailing/exit reconciliation. Cancelled stops and repriced LIMIT exits
@@ -384,6 +385,45 @@ The terminal labels this **Rule-Based Trade Engine**, not an ML model. Its empty
 card displays the current backend WAIT reason for the index's selected style
 (Quick scalp or Swing), the warm-up and opening-range counts, and the last skipped
 automatic-entry check. An older backend without counts still displays its WAIT reason.
+The rule card uses the same `directional_checks` as automatic Scalp/Swing entry, not
+frontend copies of thresholds. PASS means aligned with the selected **CE or PE** bias:
+bearish EMA, below-VWAP price and sell-side depth can PASS a PE check. SuperTrend and
+20-candle structure are labelled separately; neither alone is called the overall trend.
+The indicator count is not a probability, nor approval to bypass contract, cost, risk,
+validation or broker gates. Candidate scores are neutral, style-specific and hidden for WAIT.
+The default card stays compact: SuperTrend, the selected style's EMA alignment,
+VWAP, RSI, book imbalance, one-minute OI change, relative volume and the rule score.
+One keyboard-accessible **Advanced details** disclosure is closed initially. It holds
+full EMA values, raw OI/depth quantities and shares, candle/tick timestamps, structure,
+breakout/ATR/CPR evidence and every entry requirement. All calculations and hidden
+values keep updating while collapsed; expanding it changes presentation only.
+The eight primary rows stay mounted during loading, stale evidence and reconnects;
+unavailable readings become muted `--` placeholders rather than collapsing the card
+or retaining stale numbers. Fixed row/value slots, tabular digits and 14px indicator
+text prevent tick-driven reflow. Narrow cards stack each label and value, and expanded
+details have a keyboard-scrollable fixed-height area. Only manual disclosure changes
+expand or collapse the card. Green buy/bullish and rose sell/bearish text describe
+direction; amber means waiting. Check icons separately show backend entry alignment:
+sell pressure can have rose text and a green PASS icon for a PE setup.
+
+`intelligence.live` preserves Kite's futures token, exchange/receipt times, LTP,
+top-five queued buy/sell quantities and optional `oi`. Candle-derived EMA, RSI, ATR,
+SuperTrend, VWAP and relative volume use **completed one-minute futures bars** and
+show their close time separately from the live tick. Volume displays the completed
+minute and prior-20-minute mean; a zero baseline is unavailable, not a fabricated 0x.
+The reference for OI change is the same contract's immediately preceding completed
+minute (`oi_reference_at` is that minute's close boundary), never the first tick or a
+different expiry/session. A missing current OI, missing reference, zero reference and
+measured zero change remain distinct. Older journals without OI still load; live
+ticks establish a reference after a minute closes. OI is informational futures data,
+not a substitute for validated option-chain OI/PCR/Greeks and not a new entry/exit trigger.
+
+Snapshots include `rule_checks` for both styles and clear them on stale spot/futures
+data. The UI checks the per-index `feed_ready` flag and signal/tick ages (five seconds),
+validates all indicator fields and check IDs, and ages the display every second even
+while a poll is pending. Missing freshness metadata from an older backend is explicitly
+unverified, not LIVE. Missing/stale controller style never falls back to the other
+strategy's score. Expand **Advanced details** to see every execution threshold.
 No fake entry, LTP, stop or trailing price is filled in before a real AQTE order exists.
 Installed libraries do not imply inference is connected: the separate QuantEdge
 LightGBM/NumPy classifiers predict underlying direction, not a validated AQTE
@@ -498,6 +538,44 @@ warm-up, price limits, stop/target logic and all broker gates are unchanged.
 No prediction can authorize or veto an order. Any future live filter requires a
 separate implementation, independent forward validation/calibration including
 realistic costs and exits, and explicit risk approval. No model guarantees profits.
+
+### 12 strategy engines (advisory ranking and veto)
+
+`backend/services/aqte_engines.py` evaluates 12 read-only engines on every snapshot,
+from the same locked state the rules use: Momentum, Breakout, Trend Following,
+Liquidity Sweep, Order Flow, Scalping (reuses the live scalp rule checks), Mean
+Reversion, Volatility Breakout, Options Intelligence, Multi-Timeframe, Statistical
+Arbitrage and ML Prediction. Inputs are only live Kite data already subscribed by
+AQTE: futures 1-minute candles and ticks (depth, best bid/ask queues, OI change), spot,
+the nearest-expiry ATM±1 CE/PE quotes and India VIX (`NSE:INDIA VIX`, token resolved
+daily with `kite.ltp`, stale after 15 s).
+
+- Each rule is PASS, FAIL, or null (no evidence). An engine is **Satisfied** when every
+  rule passes, **Partial** at ≥ 50%, **Monitoring** while any input is missing, otherwise
+  **Not satisfied**. A stale feed or closed market shows all 12 as Monitoring with the reason.
+- Options Intelligence computes Black-Scholes IV (bisection on the live premium) and
+  delta, gamma, theta/day and vega/1% with `AQTE_RISK_FREE_RATE`; PCR is put OI ÷ call
+  OI over the **subscribed strikes only** and is unavailable unless both sides report OI.
+- Context: regime from EMA stack + SuperTrend; volatility from VIX (< 13 Low, < 20
+  Moderate, else High); liquidity from the worse ATM spread (≤ 1% High, ≤ 3% Moderate).
+- ML Prediction is the existing shadow model; it is displayed but never votes.
+
+**Authority.** Order authority is unchanged: only the validated Scalp/Swing rules,
+daily controls and risk gates can produce an entry, and only the single live
+controller (`aqte_live.py`) places orders. The engines can (1) rank which index's
+qualifying entry is taken first (actionable, then aligned satisfied engines, then rule
+score) and (2) veto an entry when at least `AQTE_ENGINE_VETO_MIN` satisfied engines
+oppose it and outnumber those aligned (`AQTE_ENGINE_VETO=false` disables the veto).
+They never approve or create an order. An engine failure is logged once and leaves the
+rule snapshot and entries unaffected.
+
+The dashboard's engine deck (inside the existing AQTE section) shows the 12 cards with
+filters and per-rule evidence on demand, the market context strip, the controller's top
+ranked opportunity with its exact block reason, an orchestration and risk checklist
+from live controller state, and engine status-change events.
+
+Note: `market_feed.py` still maps INDIAVIX to token 256170, which publishes no ticks;
+AQTE subscribes the verified token separately and ignores non-AQTE index ticks.
 
 ### Entry and paper execution (isolated historical replay only)
 
@@ -853,6 +931,9 @@ AQTE_LIVE_MAX_TRADES=5
 AQTE_LIVE_MAX_LOSSES=3
 AQTE_SCALP_POINTS=NIFTY:10/20/30,BANKNIFTY:20/40/60,SENSEX:30/60/90
 AQTE_SCALP_STOP_RATIO=0.4
+AQTE_ENGINE_VETO=true
+AQTE_ENGINE_VETO_MIN=2
+AQTE_RISK_FREE_RATE=0.065
 FORCE_OUTBOUND_IPV4=true
 ```
 
