@@ -547,7 +547,7 @@ test('trade book tabs support arrow, Home and End keys and show one panel', () =
   }
 });
 
-test('market badge requires fresh weekday feed and hides when market is closed', () => {
+test('market badge requires the selected AQTE feed, not just a fresh dashboard spot price', async () => {
   for (const [at, connected, age, expected] of [
     ['2026-10-30T09:15:00+05:30', true, 0, 'LIVE (Zerodha)'],
     ['2026-10-30T10:00:00+05:30', false, 0, 'FEED OFF'],
@@ -557,23 +557,50 @@ test('market badge requires fresh weekday feed and hides when market is closed',
   ]) {
     const now = Date.parse(at);
     const h = harness('AQTESection.tsx', now);
-    const tree = h.render({ isConnected: connected, marketData: {
+    const props = { isConnected: connected, marketData: {
       NIFTY: { price: 23000, status: 'LIVE', timestamp: new Date(now - age * 1000).toISOString() },
-    } });
+    } };
+    h.render(props);
+    const snapshot = fixture();
+    snapshot.generated_at = now / 1000;
+    snapshot.data.NIFTY.at = now / 1000;
+    snapshot.data.NIFTY.feed_ready = true;
+    const cleanup = h.mount(snapshot);
+    await settle();
+    let tree = h.render(props);
     const badge = nodes(tree).find(n => n.props?.['aria-label'] === 'AQTE view status');
     const title = nodes(tree).find(n => n.props?.id === 'aqte-title');
     if (expected === 'CLOSED') {
       assert.equal(badge, undefined);
       assert.doesNotMatch(text(title), /CLOSED/);
       assert.match(text(title), /Trading Engine\s*$/);
+      cleanup();
       continue;
     }
     assert.equal(text(badge).trim(), expected);
     assert.equal(nodes(title).find(n => n.props?.['aria-label'] === 'AQTE view status'), badge);
     assert.match(text(title), /Trading Engine\s+(LIVE \(Zerodha\)|FEED OFF)$/);
     assert.match(badge.props.className, expected === 'FEED OFF' ? /text-amber/ : /text-emerald/);
-    assert.equal(h.requests.length, 0);
+    snapshot.data.NIFTY.at -= 100;
+    await h.poll(snapshot);
+    tree = h.render(props);
+    assert.equal(text(nodes(tree).find(n => n.props?.['aria-label'] === 'AQTE view status')).trim(), 'FEED OFF');
+    snapshot.data.NIFTY.at = now / 1000;
+    snapshot.data.NIFTY.feed_ready = false;
+    await h.poll(snapshot);
+    tree = h.render(props);
+    assert.equal(text(nodes(tree).find(n => n.props?.['aria-label'] === 'AQTE view status')).trim(), 'FEED OFF');
+    cleanup();
   }
+});
+
+test('terminal reports backend rule/risk blockers rather than implying a buy setup is ready', () => {
+  const h = harness('AQTETerminal.tsx');
+  const props = { symbol: 'NIFTY', signal: fixture().data.NIFTY, unavailable: false, active: true, tick: null,
+    liveStatus: { ...liveFixture(), armed: true, automation_on: true,
+      entry_blocks: { NIFTY: 'One lot exceeds live per-trade risk limit' } } };
+  const tree = h.render(props);
+  assert.match(text(nodes(tree).find(n => n.props?.['aria-label'] === 'Entry readiness')), /per-trade risk limit/);
 });
 
 test('AQTE title wraps within a shrinkable column and keeps the status badge together', () => {

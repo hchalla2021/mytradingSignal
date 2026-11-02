@@ -379,17 +379,19 @@ class AQTEEngine:
         ratio = self.policy.scalp_stop_ratio
         # A scalp must fill now: IOC limit at the current ask, never above it.
         limit = round_tick(quote.ask, contract.tick_size, up=True)
-        points = setup["points"][-1]
-        stop = round_tick(limit - points * ratio, contract.tick_size)
-        target = round_tick(limit + points, contract.tick_size, up=True)
-        if not 0 < stop < limit < target:
-            result["reasons"] = [f"Premium too small for a {points:g}-point scalp stop"]
-            return result
         quantity = contract.lot_size
-        risk = (limit - stop) * quantity + self.costs(limit, quantity) + self.costs(stop, quantity)
-        reward = (target - limit) * quantity - self.costs(limit, quantity) - self.costs(target, quantity)
-        if reward / risk < 1.5:
+        for points in reversed(setup["points"]):
+            stop = round_tick(limit - points * ratio, contract.tick_size)
+            target = round_tick(limit + points, contract.tick_size, up=True)
+            if not 0 < stop < limit < target:
+                result["reasons"] = [f"Premium too small for a {points:g}-point scalp stop"]
+                continue
+            risk = (limit - stop) * quantity + self.costs(limit, quantity) + self.costs(stop, quantity)
+            reward = (target - limit) * quantity - self.costs(limit, quantity) - self.costs(target, quantity)
+            if reward / risk >= 1.5:
+                break
             result["reasons"] = [f"{points:g}-point scalp reward/risk after estimated costs is below 1.5"]
+        else:
             return result
         result.update(
             decision=f'BUY {setup["side"]}', strategy=f"quick_scalp_{points:g}", confidence=setup["score"],
@@ -699,6 +701,7 @@ class AQTEEngine:
                 ):
                     scalp_signal = self.idle_scalp("Option quote or signal stale")
             signal["scalp"] = scalp_signal
+            signal["feed_ready"] = self.fresh(self.spot.get(symbol), now) and self.fresh(self.future.get(symbol), now)
             order = self.orders.get(symbol)
             signal["position"] = {
                 **order, "metrics": self.position_metrics(order, now, healthy=not self.fault),

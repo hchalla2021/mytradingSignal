@@ -59,7 +59,8 @@ cd "$HOME/MyDailyTradingSignals"
 sed -i 's/\r$//' scripts/ensure-docker-compose.sh scripts/check-production-env.sh
 
 # Production settings live only on the server; stop before any container changes.
-bash scripts/check-production-env.sh backend/.env < /dev/null
+export BACKEND_ENV_FILE="${BACKEND_ENV_FILE:-backend/.env}"
+bash scripts/check-production-env.sh "$BACKEND_ENV_FILE" < /dev/null
 # Docker would create a directory for a missing bind-mounted token file.
 touch backend/access_token.txt
 

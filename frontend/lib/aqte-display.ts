@@ -10,6 +10,7 @@ export type AQTELiveState = {
   ready: boolean; armed: boolean; automation_on: boolean; killed: boolean;
   automation_wanted?: boolean; automation_waiting?: string | null; entry_window?: boolean;
   entry_note?: string | null; styles?: Partial<Record<AQTESymbol, AQTEStyle>>;
+  entry_blocks?: Partial<Record<AQTESymbol, string | null>>;
   flatten_pending?: boolean; error: string | null; connection_error?: string;
   preflight: { ip: string; at: number; account: string } | null;
   limits: { risk_per_trade: number; daily_loss: number; max_trades: number; max_losses: number; max_lots: number };
@@ -53,6 +54,8 @@ export function isAqteLiveState(value: unknown): value is AQTELiveState {
       (value.entry_note !== undefined && !nullableText(value.entry_note)) ||
       (value.styles !== undefined && (!record(value.styles) ||
         !Object.entries(value.styles).every(([key, style]) => symbolName(key) && (style === 'scalp' || style === 'swing')))) ||
+      (value.entry_blocks !== undefined && (!record(value.entry_blocks) ||
+        !Object.entries(value.entry_blocks).every(([key, reason]) => symbolName(key) && nullableText(reason)))) ||
       !record(value.limits) || !record(value.daily_counts) || !Array.isArray(value.trades)) return false;
   const limits = value.limits;
   if (!['risk_per_trade', 'daily_loss', 'max_trades', 'max_losses', 'max_lots'].every(key => finite(limits[key]) && limits[key] > 0) ||
@@ -122,6 +125,7 @@ export function aqteDaySummary(status: AQTELiveState | null | undefined, now = D
 }
 
 export type AQTESignal = {
+  feed_ready?: boolean;
   decision: 'WAIT' | 'BUY CE' | 'BUY PE';
   reasons: string[];
   confidence: number | null;

@@ -67,7 +67,9 @@ function AQTETerminal({ symbol, signal, unavailable, active, tick, liveStatus, o
   // Once opened, the chart stays mounted so returning to this tab is instant.
   const [chartOpened, setChartOpened] = useState(active);
   if (active && !chartOpened) setChartOpened(true);
-  const { info, direction } = aqteOverview(signal, 'real', unavailable);
+  const { info, direction } = aqteOverview(signal, 'real', unavailable || signal?.feed_ready === false);
+  const style = liveStatus?.styles?.[symbol];
+  const plan = style === 'scalp' && signal?.scalp ? signal.scalp : signal;
   const live = liveStatus?.active?.symbol === symbol ? liveStatus.active : null;
   const currentStatus = aqteControllerCurrent(liveStatus);
   const metrics = live ? aqteLiveMetrics(liveStatus) : null;
@@ -80,8 +82,8 @@ function AQTETerminal({ symbol, signal, unavailable, active, tick, liveStatus, o
   const progress = points != null && span > 0 ? Math.min(1, Math.abs(points) / span) : 0;
   const targetHit = metrics?.bid != null && !!live && metrics.bid >= live.target;
   const checks = engineChecks(info);
-  const score = info && signal?.confidence != null && Number.isFinite(signal.confidence) &&
-    signal.confidence >= 0 && signal.confidence <= 100 ? signal.confidence : null;
+  const score = info && plan?.confidence != null && Number.isFinite(plan.confidence) &&
+    plan.confidence >= 0 && plan.confidence <= 100 ? plan.confidence : null;
   const exitReason = live?.exit_requested;
   const remaining = live ? Math.max(0, live.filled - (live.exited ?? 0)) : 0;
   const canExit = !!live && !!onExit && aqteCanExit(liveStatus) && !exitReason;
@@ -103,8 +105,6 @@ function AQTETerminal({ symbol, signal, unavailable, active, tick, liveStatus, o
   const ring = 2 * Math.PI * 52;
   const automation = currentStatus && liveStatus?.automation_on && !liveStatus.killed;
   const automationWaiting = currentStatus && !automation && liveStatus?.automation_wanted && !liveStatus.killed;
-  const style = liveStatus?.styles?.[symbol];
-  const plan = style === 'scalp' && signal?.scalp ? signal.scalp : signal;
   const note = liveStatus?.entry_note?.startsWith(`${symbol}:`) ? liveStatus.entry_note.slice(symbol.length + 1).trim() : null;
   const waitingReason = !currentStatus ? 'Live controller status unavailable; entry state unverified' :
     liveStatus?.error ? liveStatus.error :
@@ -112,6 +112,7 @@ function AQTETerminal({ symbol, signal, unavailable, active, tick, liveStatus, o
     !automation && !automationWaiting ? 'Auto Trade OFF; new entries blocked' :
     automationWaiting ? liveStatus?.automation_waiting || 'Waiting for daily preflight and arming' :
     unavailable ? 'Current signal data unavailable; do not assume an entry is ready' :
+    liveStatus?.entry_blocks?.[symbol] ? liveStatus.entry_blocks[symbol] :
     plan?.reasons.length ? `${style === 'scalp' ? 'Quick scalp · ' : style === 'swing' ? 'Swing · ' : ''}${plan.reasons.join(' · ')}` :
       'Waiting for a qualifying CE/PE setup and live quality, risk and broker checks';
   const warmup = !unavailable ? signal?.warmup : undefined;

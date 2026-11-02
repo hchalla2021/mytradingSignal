@@ -1,5 +1,6 @@
 import copy
 import json
+import math
 import os
 import sqlite3
 import tempfile
@@ -16,7 +17,8 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from services.aqte_live import ENTRY_RETRY_SECONDS, MARKET_WAIT, AQTELiveService, LiveBlocked
-from test_aqte import CONTRACT, IST, NOW, ready_engine, scalp_info, tick
+from services.aqte_engine import AQTEEngine, Policy
+from test_aqte import CONTRACT, IST, NOW, START, ready_engine, scalp_info, tick
 
 
 def settings(**overrides):
@@ -172,6 +174,116 @@ class LiveTests(unittest.TestCase):
         self.broker.place_order.assert_not_called()
         self.assertTrue(self.live.status()["automation_on"])
         self.assertIn("No quick-scalp tier", self.live.status()["entry_note"])
+
+    def test_confirm_uses_rechecked_tier_when_risk_cap_falls(self):
+        self.scalping()
+        self.cfg.aqte_live_risk_per_trade = 1000
+        self.armed()
+        proposal = self.live.proposal("NIFTY")
+        self.assertEqual(proposal["entry"]["points"], 30)
+        self.cfg.aqte_live_risk_per_trade = 500
+        self.live.confirm(proposal["id"])
+        active = self.live.state["active"]
+        self.assertEqual((active["strategy"], active["stop"], active["target"]),
+                         ("quick_scalp_10", 97, 111))
+        risk = (active["limit"] - active["stop"]) * active["quantity"] + self.live.costs(
+            active["limit"], active["quantity"]) + self.live.costs(active["stop"], active["quantity"])
+        self.assertLessEqual(risk, 500)
+
+    def test_confirm_never_increases_previously_approved_risk(self):
+        self.scalping()
+        self.armed()
+        proposal = self.live.proposal("NIFTY")
+        self.cfg.aqte_live_risk_per_trade = 1000
+        with self.assertRaisesRegex(LiveBlocked, "risk"):
+            self.live.confirm(proposal["id"])
+        self.broker.place_order.assert_not_called()
+
+    def test_legacy_controls_keep_swing_instead_of_silently_changing_live_strategy(self):
+        for control in self.live.state["daily_controls"].values():
+            control.pop("style")
+        self.live.save("LEGACY_TEST_STATE")
+        self.live.release_owner()
+        restored = self.new_service()
+        restored.initialize()
+        self.addCleanup(restored.release_owner)
+        self.assertEqual(restored.status()["styles"], dict.fromkeys(("NIFTY", "BANKNIFTY", "SENSEX"), "swing"))
+
+    def test_status_reports_entry_blockers_without_broker_requests(self):
+        self.scalping()
+        self.armed()
+        self.cfg.aqte_live_risk_per_trade = 300
+        self.broker.reset_mock()
+        self.assertIn("No quick-scalp tier", self.live.status()["entry_blocks"]["NIFTY"])
+        self.assertIn("No quick-scalp tier", self.live.daily_controls()["data"]["NIFTY"]["reason"])
+        self.assertEqual(self.broker.mock_calls, [])
+        self.cfg.aqte_live_risk_per_trade = 1000
+        self.live.state["daily_controls"]["NIFTY"]["enabled"] = False
+        self.assertEqual(self.live.status()["entry_blocks"]["NIFTY"], "Index auto trading disabled")
+        self.live.state["daily_controls"]["NIFTY"]["enabled"] = True
+        self.cfg.aqte_live_static_ip = "invalid"
+        self.assertIn("AQTE_LIVE_STATIC_IP", self.live.status()["entry_blocks"]["NIFTY"])
+        self.assertEqual(self.broker.mock_calls, [])
+
+    def test_real_indicators_through_live_entry_protection_and_target_for_each_scalp_tier(self):
+        self.quality.stop()
+        self.cfg.aqte_live_allow_unvalidated_rules = True
+        self.cfg.aqte_live_risk_per_trade = 1000
+        for points in (10, 20, 30):
+            for side, direction in (("CE", 1), ("PE", -1)):
+                with self.subTest(points=points, side=side):
+                    self.live.release_owner()
+                    self.path = Path(self.directory.name) / f"flow-{points}-{side}.sqlite3"
+                    self.live = self.new_service()
+                    self.live.initialize()
+                    self.addCleanup(self.live.release_owner)
+                    self.live.state["daily_controls"]["NIFTY"]["enabled"] = True
+                    self.orders.clear()
+                    self.positions.clear()
+                    engine = AQTEEngine(Policy(scalp_points={"NIFTY": (points,)}), paper_enabled=False)
+                    engine.contracts[30] = replace(CONTRACT, lot_size=65, side=side,
+                                                   trading_symbol=f"NIFTY_TEST_{side}")
+                    bars = []
+                    for i in range(202):
+                        close = 22000 + i * 0.2 + 30 * math.sin(i * 0.7)
+                        bars.append(dict(at=START + i * 60, open=close - 1, high=close + 4,
+                                         low=close - 4, close=close, volume=1000))
+                    bars[-1].update(close=max(b["high"] for b in bars[-21:-1]) + 1, volume=3000)
+                    bars[-1]["high"] = bars[-1]["close"] + 1
+                    if direction < 0:
+                        bars = [{**b, "open": 44000 - b["open"], "close": 44000 - b["close"],
+                                 "high": 44000 - b["low"], "low": 44000 - b["high"]} for b in bars]
+                    engine.seed_bars(20, bars, NOW)
+                    engine.ingest(tick("spot", price=bars[-1]["close"]))
+                    engine.ingest(tick("option"))
+                    engine.ingest(tick(price=bars[-1]["close"],
+                                       buy_depth=700 if direction > 0 else 300,
+                                       sell_depth=300 if direction > 0 else 700))
+                    self.market.engine = engine
+                    signal = engine.signals["NIFTY"]["scalp"]
+                    self.assertEqual(signal["decision"], f"BUY {side}", signal["reasons"])
+                    self.assertEqual(signal["entry"]["points"], points)
+                    self.assertFalse(engine.orders, "No paper execution participates in the live path")
+                    self.armed()
+                    self.live.automated_entry()
+                    self.assertEqual(len(self.orders), 1)
+                    self.assertEqual((self.orders[0]["price"], self.orders[0]["validity"]), (101, "IOC"))
+                    self.orders[0].update(status="COMPLETE", filled_quantity=65, average_price=101)
+                    self.positions = [{"instrument_token": 30, "product": "MIS", "quantity": 65}]
+                    self.live.reconcile()
+                    self.assertEqual(self.orders[1]["order_type"], "SL")
+                    self.orders[1].update(status="TRIGGER PENDING")
+                    self.live.reconcile()
+                    target = 101 + points
+                    engine.options[30] = tick("option", price=target, bid=target, ask=target + 0.05)
+                    self.live.reconcile()
+                    self.assertEqual(self.live.state["active"]["exit_requested"], "TARGET")
+                    self.orders[1].update(status="COMPLETE", filled_quantity=65, average_price=target)
+                    self.positions[0]["quantity"] = 0
+                    self.live.reconcile()
+                    self.assertIsNone(self.live.state["active"])
+                    self.assertEqual(len(self.orders), 2, "Exit modifies the existing stop, not a second SELL")
+                    self.assertGreater(self.live.state["trades"][0]["net_pnl"], 0)
 
     def test_transient_no_chase_skip_keeps_automation_on_and_retries_after_backoff(self):
         self.scalping()

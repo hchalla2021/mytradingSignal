@@ -3,7 +3,7 @@
 # Prints key names, public IPs and pass/fail only; secret values are never echoed.
 set -eu
 
-env_file="${1:-backend/.env}"
+env_file="${1:-${BACKEND_ENV_FILE:-backend/.env}}"
 failures=0
 
 fail() { echo "ERROR: $*" >&2; failures=$((failures + 1)); }

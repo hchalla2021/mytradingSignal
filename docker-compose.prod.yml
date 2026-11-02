@@ -27,7 +27,7 @@ services:
     ports:
       - "8000:8000"
     env_file:
-      - ./backend/.env
+      - ${BACKEND_ENV_FILE:-./backend/.env}
     environment:
       # Override with container-specific settings
       - PORT=8000
@@ -39,7 +39,7 @@ services:
       - ORDER_FLOW_DB_PATH=/app/data/order_flow/order_flow.sqlite3
     volumes:
       # Mount .env for token hot-reload (token watcher)
-      - ./backend/.env:/app/.env
+      - ${BACKEND_ENV_FILE:-./backend/.env}:/app/.env
       # Persist access token across restarts
       - ./backend/access_token.txt:/app/access_token.txt
       # Mount logs directory (optional)

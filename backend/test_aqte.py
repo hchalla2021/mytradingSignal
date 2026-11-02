@@ -137,6 +137,15 @@ class ScalpTests(unittest.TestCase):
         self.assertEqual(parse_scalp_points("NIFTY:0/-5")[0], {})
         self.assertEqual(parse_scalp_points("")[0], {})
 
+    def test_small_premium_uses_a_valid_lower_scalp_tier(self):
+        engine = ready_engine(contract=replace(CONTRACT, lot_size=65), paper_enabled=False)
+        engine.options[30] = tick("option", price=9, bid=8.95, ask=9)
+        result = engine.scalp_signal("NIFTY", scalp_info(volume_ratio=2.5, imbalance=0.3, atr=20),
+                                     NOW, engine.spot["NIFTY"])
+        self.assertEqual(result["decision"], "BUY CE")
+        self.assertEqual(result["entry"]["points"], 20)
+        self.assertGreater(result["entry"]["stop"], 0)
+
 
 class SessionWarmupTests(unittest.TestCase):
     def test_warmup_spans_previous_session_and_needs_fifteen_opening_candles(self):

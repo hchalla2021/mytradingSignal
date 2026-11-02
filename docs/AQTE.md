@@ -189,6 +189,13 @@ opening another connection. Connected LIVE quotes within five seconds show a
 LIVE FEED badge plus daily points/percentage change. Otherwise the labelled AQTE
 snapshot remains visible; backend signal and position-risk freshness rules are
 unchanged. Feed, broker and network latency still apply.
+The section header's green LIVE badge additionally requires a fresh selected-index
+AQTE signal and fresh AQTE spot/futures feeds (`feed_ready`). A healthy dashboard
+spot feed cannot hide a stopped AQTE futures feed. The controller's `entry_blocks`
+reports each index's rule and estimated one-lot risk blocker without making broker
+requests; the terminal and Controls show these before any order attempt. A null
+blocker is not a fill or an execution approval: broker, cash, session and daily
+budget checks still run at submission.
 Existing charts, trading books, authentication and signals retain their own behavior.
 AQTE does not disable or change any other module's independently configured execution.
 
@@ -753,6 +760,9 @@ journal. Paper trading and read-only manual Kite positions are unaffected.
   Planned reward/risk is recomputed after estimated fees and must be at least 1.5.
 - **Entry style** per index: **Quick scalp** (default) or **Swing**. SL % and target
   multiple apply to Swing; trailing applies to both. Style can only change while OFF.
+  Saved preferences from before the style field keep **Swing** on upgrade; they
+  never silently switch a standing live ON request to a different strategy.
+  Select Quick scalp explicitly while OFF to change an existing index.
 - Eligible indices are considered in descending score order; weak, sideways,
   incomplete or unvalidated evidence never becomes a forced trade.
 
@@ -773,13 +783,18 @@ Rules (all required, futures 1-minute):
 
 Tier selection: strength 1 allows only the first tier. Strength 2 (EMA 20/50 aligned,
 volume 2x, imbalance 0.2) allows two tiers. Strength 3 (full EMA stack, volume 2.5x,
-close beyond CPR, HH/LL structure) allows all three. A tier must also be reachable:
-points <= 0.5 delta x 4 x futures ATR. The live controller then picks the
+close beyond CPR, HH/LL structure) allows all three. A heuristic reach filter requires
+points <= 0.5 assumed ATM delta x 4 x futures ATR. This is not a measured option
+Greek or a prediction that the target will be reached. Invalid premium/stop tiers
+fall through to smaller eligible tiers. The live controller then picks the
 **largest allowed tier whose one-lot risk fits `AQTE_LIVE_RISK_PER_TRADE`** with net
 reward/risk >= 1.5 after costs. Example with a INR 101 NIFTY premium and a 65 lot:
 30 points (SL 89 / target 131) costs about INR 839 of risk; at a INR 500 cap it shrinks
 to 10 points (SL 97 / target 111, about INR 319). Rule score is 70/75/80 by tier
 count; it is not a win probability.
+Confirmation uses the freshly rechecked tier, stop and target and cannot increase
+the original approved price cap or planned risk. A weaker setup or reduced risk
+limit cannot submit an obsolete larger tier.
 
 With `AQTE_LIVE_ALLOW_UNVALIDATED_RULES=true`, a quick-scalp entry passes the quality
 gate when the scalp rules still hold at submission; strict mode blocks it like every
@@ -794,11 +809,15 @@ blocker, so Auto Trade ON scans but never places an entry.
 
 `AQTE_LIVE_ALLOW_UNVALIDATED_RULES=true` is a separate, default-off owner opt-in for
 real money. It skips only the minimum rule score, model-validation and missing
-option-chain blockers. Every entry must still pass directional EMA 9/20/50/100/200,
+option-chain blockers. Every Swing entry must still pass directional EMA 9/20/50/100/200,
 VWAP, SuperTrend, RSI band, CPR, volume (at least 1.5x), order-flow imbalance (at least
 0.15), breakout and structure checks, plus all risk, broker and one-position guards.
 A non-numeric score always blocks. The ON confirmation and `GET /api/aqte/live/status`
 (`unvalidated_rules`) report the active mode.
+Quick scalp instead requires all of the scalp checks listed above. LightGBM is
+installed for the separate, optional shadow research pipeline; it neither approves
+these entries nor has a validated quick-scalp model. Installing more ML libraries
+does not provide a trained model, reliable execution or profitable signals.
 
 Even with the opt-in, entries are selective by design:
 
@@ -862,11 +881,32 @@ Live automation runs only where the backend's outbound IPv4 is in the Kite allow
 Use one trading host: disable live trading locally (`AQTE_LIVE_ENABLED=false`) once
 production is live.
 
+**Keep production configuration outside the Git checkout.** Compose accepts
+`BACKEND_ENV_FILE` for both its startup environment and the writable token-watcher
+mount. For example, copy the existing server settings once to a host-only file,
+restrict its permissions, and use it for deployment:
+
+```bash
+cd /root/mytradingSignal
+test -f /root/mytradingSignal.runtime.env || cp backend/.env /root/mytradingSignal.runtime.env
+chmod 600 /root/mytradingSignal.runtime.env
+export BACKEND_ENV_FILE=/root/mytradingSignal.runtime.env
+git pull --ff-only origin main
+bash deploy_digitalocean.sh
+```
+
+Never copy the local development settings over this file. Export the same
+`BACKEND_ENV_FILE` for every subsequent Compose/deploy command. Without it,
+`backend/.env` remains the backward-compatible default. Both deployment wrappers
+validate the selected file before rebuilding. A Git push alone does **not** deploy
+or restart production; a successful deployment still needs fresh AQTE futures,
+spot and option data, owner/broker authentication, and all execution gates.
+
 1. **Kite Connect app:** add the droplet IPv4 (for example `159.65.147.167`) to the
    developer profile IP whitelist and set the redirect URL to
    `https://mydailytradesignals.com/api/auth/callback`. Kite accepts one redirect URL
    per app, so production login and local login conflict.
-2. **Server `backend/.env`** (never uploaded by the deploy scripts): production
+2. **Server runtime env file** (never uploaded by the deploy scripts): production
    `FRONTEND_URL`, `REDIRECT_URL` and `CORS_ORIGINS`; `APP_ACCESS_USERNAME` and
    `APP_ACCESS_PASSWORD_HASH`; `AQTE_LIVE_ENABLED=true`, `AQTE_LIVE_PAPER_VALIDATED=true`,
    `AQTE_LIVE_STATIC_IP=<droplet IPv4>`, `FORCE_OUTBOUND_IPV4=true`; Smart AI Algo not

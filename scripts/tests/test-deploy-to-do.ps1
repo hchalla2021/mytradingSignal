@@ -78,7 +78,7 @@ try {
         }
         if ($case.Calls) {
             $remote = $test.RemoteScript
-            $check = $remote.IndexOf("bash scripts/check-production-env.sh backend/.env")
+            $check = $remote.IndexOf('bash scripts/check-production-env.sh "$BACKEND_ENV_FILE"')
             $start = $remote.IndexOf("up -d --build")
             if ($test.RemoteArgs[1] -ne "tr -d '\r' | bash -se" -or
                 $remote -notmatch 'set -eu' -or $remote -notmatch '\$HOME/MyDailyTradingSignals' -or

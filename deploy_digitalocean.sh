@@ -14,15 +14,16 @@ echo ""
 
 # Navigate to project
 cd /root/mytradingSignal
+export BACKEND_ENV_FILE="${BACKEND_ENV_FILE:-backend/.env}"
 
 # Pull latest code
 echo "📥 Pulling latest code..."
-git pull origin main
+git pull --ff-only origin main
 source scripts/ensure-docker-compose.sh
 
 # Backend secrets must be provisioned on the host, not committed.
 echo "⚙️  Checking server-only configuration..."
-bash scripts/check-production-env.sh backend/.env
+bash scripts/check-production-env.sh "$BACKEND_ENV_FILE"
 # Docker would create a directory for a missing bind-mounted token file.
 touch backend/access_token.txt
 "${COMPOSE[@]}" -f docker-compose.prod.yml config --quiet

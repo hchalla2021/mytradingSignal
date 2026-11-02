@@ -67,6 +67,7 @@ function isSnapshot(value: unknown): value is Snapshot {
           value.required > 0 && value.completed >= 0 && value.completed <= value.required);
       const scalp = signal?.scalp;
       return !!signal && ['WAIT', 'BUY CE', 'BUY PE'].includes(signal.decision) &&
+        (signal.feed_ready === undefined || typeof signal.feed_ready === 'boolean') &&
         Array.isArray(signal.reasons) && signal.reasons.every(reason => typeof reason === 'string') &&
         progress(signal.warmup) && progress(signal.opening) &&
         (scalp === undefined || (scalp != null && ['WAIT', 'BUY CE', 'BUY PE'].includes(scalp.decision) &&
@@ -129,11 +130,14 @@ function AQTESection({ marketData, isConnected = false }: { marketData?: MarketD
   const ist = new Date(now + 330 * 60_000);
   const minute = ist.getUTCHours() * 60 + ist.getUTCMinutes();
   const marketHours = ist.getUTCDay() >= 1 && ist.getUTCDay() <= 5 && minute >= 555 && minute < 930;
-  const liveFeed = marketHours && isConnected && SYMBOLS.some(symbol => {
-    const tick = marketData?.[symbol];
+  const signalAt = snapshot?.data[selectedSymbol].at;
+  const signalAge = signalAt == null ? Infinity : now / 1000 - signalAt;
+  const liveFeed = !unavailable && signalAge >= -1 && signalAge <= 5 &&
+    snapshot?.data[selectedSymbol].feed_ready !== false && marketHours && isConnected && (() => {
+    const tick = marketData?.[selectedSymbol];
     const age = tick ? (now - Date.parse(tick.timestamp)) / 1000 : Infinity;
     return tick?.status === 'LIVE' && Number.isFinite(tick.price) && tick.price > 0 && age >= -1 && age <= 5;
-  });
+  })();
   const quotes = Object.fromEntries(SYMBOLS.map(symbol => {
     const signal = snapshot?.data[symbol];
     const tick = marketData?.[symbol];

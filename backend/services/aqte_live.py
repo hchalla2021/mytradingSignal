@@ -145,7 +145,7 @@ class AQTELiveService:
         if set(self.state["daily_controls"]) != set(SYMBOLS):
             raise LiveBlocked("Invalid saved daily-control index set; journal requires repair before trading")
         self.state["daily_controls"] = {
-            symbol: IndexControl(**control).model_dump()
+            symbol: IndexControl(**{"style": "swing", **control}).model_dump()
             for symbol, control in self.state["daily_controls"].items()
         }
         self.save("RESTART_DISARMED", automation_wanted=self.state["automation_wanted"])
@@ -187,6 +187,7 @@ class AQTELiveService:
             automation_on = bool(self.state.get("automation_on")) and \
                 self.state["armed_day"] == day(now) and not self.state["killed"]
             wanted = bool(self.state.get("automation_wanted")) and not self.state["killed"]
+            snapshot = self.service().snapshot()
             return {
                 "generated_at": now, "daily_counts": counts(self.state, now),
                 "enabled": cfg.aqte_live_enabled, "paper_validated": cfg.aqte_live_paper_validated,
@@ -200,6 +201,8 @@ class AQTELiveService:
                 "active": active, "error": self.error, "entry_note": self.entry_note,
                 "styles": {symbol: control.get("style", "scalp")
                            for symbol, control in self.state["daily_controls"].items()},
+                "entry_blocks": {symbol: self.entry_reason(symbol, self.effective(symbol, signal))
+                                 for symbol, signal in snapshot["data"].items()},
                 "ready": self.ready, "trades": copy.deepcopy(visible_trades),
                 "limits": {"risk_per_trade": cfg.aqte_live_risk_per_trade,
                            "daily_loss": cfg.aqte_live_daily_loss, "max_trades": cfg.aqte_live_max_trades,
@@ -248,7 +251,21 @@ class AQTELiveService:
                 price = (signal.get("entry") or {}).get("maximum")
                 if price and (time.time() - entry["at"] < 300 or abs(price - entry["price"]) / entry["price"] < 0.01):
                     return "Duplicate/near-identical contract entry blocked"
+        if signal.get("decision") not in ("BUY CE", "BUY PE") or not signal.get("entry"):
+            return "; ".join(signal.get("reasons") or ["No confirmed LONG CE/PE opportunity"])
         return quality_reason(signal, control, self.settings().aqte_live_allow_unvalidated_rules)
+
+    def entry_reason(self, symbol, signal):
+        """Read-only rule/risk checks shared by status and Controls; never calls the broker."""
+        reason = self.control_reason(symbol, signal)
+        if reason:
+            return reason
+        try:
+            self.config_guard()
+            self.entry_levels(symbol, signal)
+        except LiveBlocked as exc:
+            return str(exc)
+        return None
 
     def daily_controls(self):
         with self.lock:
@@ -258,7 +275,7 @@ class AQTELiveService:
             for symbol, control in self.state["daily_controls"].items():
                 signal = self.effective(symbol, snapshot["data"][symbol])
                 count = counts(self.state, time.time(), symbol)
-                reason = self.control_reason(symbol, signal)
+                reason = self.entry_reason(symbol, signal)
                 if not snapshot["recording"] or snapshot.get("fault"):
                     reason = "Market recorder unavailable"
                 reached = "limit reached" in (reason or "").lower() or "cap reached" in (reason or "").lower()
@@ -326,7 +343,10 @@ class AQTELiveService:
         if any(os.getenv(name) for name in ("HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY",
                                             "https_proxy", "http_proxy", "all_proxy")):
             raise LiveBlocked("Proxy routing must be removed before verifying direct broker egress")
-        expected = ipaddress.IPv4Address(cfg.aqte_live_static_ip)
+        try:
+            expected = ipaddress.IPv4Address(cfg.aqte_live_static_ip)
+        except ipaddress.AddressValueError as exc:
+            raise LiveBlocked("AQTE_LIVE_STATIC_IP must be a valid public IPv4 address") from exc
         if not expected.is_global:
             raise LiveBlocked("Configured static IP must be a public IPv4 address")
         return cfg
@@ -548,30 +568,7 @@ class AQTELiveService:
                 if not market.engine.fresh(quote, time.time()):
                     raise EntrySkipped("Option quote stale")
             now = time.time()
-            contract = Contract(**signal["contract"])
-            control = self.state["daily_controls"][symbol]
-            entry = copy.deepcopy(signal["entry"])
-            cap = self.settings().aqte_live_risk_per_trade
-            if str(signal.get("strategy")).startswith("quick_scalp"):
-                entry = self.scalp_levels(contract, entry, cap)
-            else:
-                distance = entry["maximum"] * control["stop_percent"] / 100
-                entry["stop"] = round_tick(max(contract.tick_size, entry["maximum"] - distance), contract.tick_size)
-                entry["target"] = round_tick(entry["maximum"] + (entry["maximum"] - entry["stop"]) * control["target_rr"],
-                                             contract.tick_size, up=True)
-            if entry["quantity"] != contract.lot_size:
-                raise LiveBlocked("Live pilot permits exactly one lot")
-            if not 0 < entry["stop"] < entry["maximum"] < entry["target"]:
-                raise LiveBlocked("Invalid live entry levels")
-            risk = (entry["maximum"] - entry["stop"]) * contract.lot_size + self.costs(
-                entry["maximum"], contract.lot_size) + self.costs(entry["stop"], contract.lot_size)
-            reward = (entry["target"] - entry["maximum"]) * contract.lot_size - self.costs(
-                entry["maximum"], contract.lot_size) - self.costs(entry["target"], contract.lot_size)
-            if reward / risk < 1.5:
-                raise EntrySkipped("Configured reward/risk after estimated costs is below 1.5")
-            entry["reward_risk"] = round(reward / risk, 2)
-            if risk > cap:
-                raise EntrySkipped("One lot exceeds live per-trade risk limit")
+            entry, risk = self.entry_levels(symbol, signal)
             self.proposals = {key: value for key, value in self.proposals.items() if value["expires_at"] > now}
             key = uuid4().hex
             result = {"id": key, "symbol": symbol, "contract": signal["contract"],
@@ -580,6 +577,33 @@ class AQTELiveService:
                       "expires_at": now + 15, "setup_key": self.setup_key(symbol, signal)}
             self.proposals[key] = copy.deepcopy(result)
             return result
+
+    def entry_levels(self, symbol, signal):
+        contract = Contract(**signal["contract"])
+        control = self.state["daily_controls"][symbol]
+        entry = copy.deepcopy(signal["entry"])
+        cap = self.settings().aqte_live_risk_per_trade
+        if str(signal.get("strategy")).startswith("quick_scalp"):
+            entry = self.scalp_levels(contract, entry, cap)
+        else:
+            distance = entry["maximum"] * control["stop_percent"] / 100
+            entry["stop"] = round_tick(max(contract.tick_size, entry["maximum"] - distance), contract.tick_size)
+            entry["target"] = round_tick(entry["maximum"] + (entry["maximum"] - entry["stop"]) * control["target_rr"],
+                                         contract.tick_size, up=True)
+        if entry["quantity"] != contract.lot_size:
+            raise LiveBlocked("Live pilot permits exactly one lot")
+        if not 0 < entry["stop"] < entry["maximum"] < entry["target"]:
+            raise LiveBlocked("Invalid live entry levels")
+        risk = (entry["maximum"] - entry["stop"]) * contract.lot_size + self.costs(
+            entry["maximum"], contract.lot_size) + self.costs(entry["stop"], contract.lot_size)
+        reward = (entry["target"] - entry["maximum"]) * contract.lot_size - self.costs(
+            entry["maximum"], contract.lot_size) - self.costs(entry["target"], contract.lot_size)
+        if reward / risk < 1.5:
+            raise EntrySkipped("Configured reward/risk after estimated costs is below 1.5")
+        entry["reward_risk"] = round(reward / risk, 2)
+        if risk > cap:
+            raise EntrySkipped("One lot exceeds live per-trade risk limit")
+        return entry, risk
 
     def scalp_levels(self, contract, entry, cap):
         """Largest allowed scalp tier whose one-lot risk fits the cap with net reward/risk >= 1.5."""
@@ -616,6 +640,10 @@ class AQTELiveService:
                 current["entry"]["maximum"] > proposal["entry"]["maximum"]
             ):
                 raise EntrySkipped("Signal or entry levels changed; review a new proposal")
+            if current["risk"] > proposal["risk"]:
+                raise EntrySkipped("Rechecked risk exceeds the approved risk; review a new proposal")
+            # Use the rechecked tier/stop/target, not an obsolete higher-risk plan.
+            proposal = {**current, "expires_at": proposal["expires_at"]}
             if proposal["risk"] > cfg.aqte_live_daily_loss + pnl:
                 raise LiveBlocked("Trade exceeds remaining daily live loss budget")
             control = self.state["daily_controls"][proposal["symbol"]]
