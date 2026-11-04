@@ -105,7 +105,7 @@ const EngineBoard = memo(function EngineBoard({ symbol, engines, orchestration, 
   const counts = Object.fromEntries(FILTERS.map(key => [key, orchestration == null ? null : key === 'ALL' ? engines.length :
     orchestration[key.toLowerCase() as 'satisfied' | 'partial' | 'monitoring' | 'not_satisfied']])) as Record<Filter, number | null>;
   const detail = open == null ? null : engines[open - 1];
-  const running = engines.filter(engine => engine && engine.total > 0).length;
+  const running = engines.filter(engine => engine && engine.total > 0 && engine.status !== 'MONITORING').length;
   const idle = online && !running ? engines[0]?.reason ?? null : null;
   return (
     <div className="aqx-card aqx-deck-main" id="aqte-dash-engines">
@@ -166,7 +166,8 @@ type Opportunity = ReturnType<typeof opportunityOf>;
 /** Top opportunity and execution state; recomputed only when the snapshot, controller status or policy changes. */
 function opportunityOf(data: Props['data'], liveStatus: AQTELiveState | null, policy: AQTEEnginePolicy | null, unavailable: boolean) {
   // Mirrors automated_entry: controller ranking (or the same local ranking before it reports), first unblocked index.
-  const top = unavailable ? null : aqteOpportunitySymbol(liveStatus?.ranking ?? aqteRanking(data, liveStatus?.styles), liveStatus?.entry_blocks);
+  const ranked = unavailable ? [] : liveStatus?.ranking ?? aqteRanking(data, liveStatus?.styles);
+  const top = unavailable ? null : aqteOpportunitySymbol(ranked, liveStatus?.entry_blocks);
   const topSignal = top ? data?.[top] : undefined;
   const style = top ? liveStatus?.styles?.[top] ?? 'scalp' : 'scalp';
   const effective = aqteEffectiveSignal(topSignal, style);
@@ -186,29 +187,43 @@ function opportunityOf(data: Props['data'], liveStatus: AQTELiveState | null, po
   const vetoed = policy?.veto !== false && opposed != null && aligned != null && opposed >= vetoMin && opposed > aligned;
   const lot = contract?.lot_size;
   const executing = actionable && !vetoed && !!liveStatus && liveStatus.automation_on && liveStatus.armed && !liveStatus.killed && !active && block === null;
+  // Standing ON that has not armed yet (outside the window, IP or preflight failure) is waiting, not OFF.
+  const arming = !!liveStatus && !liveStatus.killed && !liveStatus.automation_on && liveStatus.automation_wanted === true;
   const execution = !liveStatus ? 'Controller status unavailable' :
     liveStatus.killed ? 'Emergency stop latched' :
-      !actionable ? effective?.reasons[0] ?? 'Waiting for live rule evaluation' :
+      arming && !active ? liveStatus.automation_waiting || 'Auto Trade ON · waiting to arm for the market session' :
+      !actionable ? block || effective?.reasons[0] || 'Waiting for live rule evaluation' :
         block ? block :
           vetoed ? `Engine veto · WAIT (${opposed} oppose ${side}, ${aligned} aligned)` :
           !liveStatus.automation_on || !liveStatus.armed ? 'Auto Trade is not ON and armed' :
             active ? 'One managed position already open' : 'Eligible · central controller places the IOC entry';
   const autoState = !liveStatus ? ['UNKNOWN', 'aqx-exec-wait'] : liveStatus.killed ? ['STOPPED', 'aqx-exec-stop'] :
     active ? ['IN TRADE', 'aqx-exec-live'] : executing ? ['READY', 'aqx-exec-ready'] :
-      !liveStatus.automation_on ? ['OFF', 'aqx-exec-off'] : ['WAITING', 'aqx-exec-wait'];
+      !liveStatus.automation_on && !arming ? ['OFF', 'aqx-exec-off'] : ['WAITING', 'aqx-exec-wait'];
   const score = actionable && effective.confidence != null && Number.isFinite(effective.confidence)
     ? Math.max(0, Math.min(100, effective.confidence)) : null;
+  // Same order the controller scans; block reasons stay in the execution line, rows only flag them.
+  const ladder = (ranked.length ? ranked : (['NIFTY', 'BANKNIFTY', 'SENSEX'] as AQTESymbol[])).map(symbol => {
+    const signal = unavailable ? null : aqteEffectiveSignal(data?.[symbol], liveStatus?.styles?.[symbol] ?? 'scalp');
+    const ready = !!signal && signal.decision !== 'WAIT' && !!signal.entry;
+    const confidence = ready && signal.confidence != null && Number.isFinite(signal.confidence)
+      ? Math.max(0, Math.min(100, signal.confidence)) : null;
+    const gate = liveStatus?.entry_blocks?.[symbol];
+    const state = unavailable || !signal ? 'No data' : symbol === top ? gate ? 'Top · blocked' : 'Top pick'
+      : gate === null ? 'Clear' : gate ? 'Blocked' : 'Unverified';
+    return { symbol, side: ready ? signal.decision.slice(-2) as 'CE' | 'PE' : null, confidence, state, top: symbol === top };
+  });
   return { top, style, effective, actionable, side, topView, aligned, opposed, alignedNames, entry, contract, strike,
-    block, active, vetoed, lot, executing, execution, autoState, score };
+    block, active, vetoed, lot, executing, execution, autoState, score, ladder };
 }
 
 const RING = 2 * Math.PI * 30;
 const OpportunityPanel = memo(function OpportunityPanel({ opp, maxLots }: { opp: Opportunity; maxLots: number | null }) {
-  const { top, side, actionable, alignedNames, aligned, opposed, vetoed, contract, strike, style, score, entry, autoState, executing, execution } = opp;
+  const { top, side, actionable, alignedNames, aligned, opposed, vetoed, contract, strike, style, score, entry, autoState, executing, execution, ladder } = opp;
   return (
     <aside className="aqx-card aqx-opp" aria-label="Top opportunity" id="aqte-dash-opportunity">
       <h3 className="aqx-panel-head"><span aria-hidden="true" className="aqx-crown">♛</span>Current Opportunity <span>(Top Ranked)</span></h3>
-      <div className="aqx-opp-hero">
+      <div className="aqx-opp-hero" data-side={side ?? 'WAIT'}>
         <div className="min-w-0">
           <p className="aqx-opp-name">{top ? `${aqteLabel(top)}${strike != null ? ` ${strike.toLocaleString('en-IN')}` : ''}${side ? ` ${side}` : ''}` : '--'}</p>
           <p className="aqx-opp-tags">
@@ -230,6 +245,25 @@ const OpportunityPanel = memo(function OpportunityPanel({ opp, maxLots }: { opp:
           <span><small>Score</small><b>{score != null ? `${Math.round(score)}%` : '--'}</b></span>
         </div>
       </div>
+      <section className="aqx-opp-rank" aria-label="Index ranking">
+        <p className="aqx-opp-rank-head"><span>Index Ranking</span><small>Controller scan order</small></p>
+        <ol>
+          {ladder.map(({ symbol: name, side: rowSide, confidence, state, top: first }, index) => (
+            <li key={name} className={first ? 'aqx-rank-top' : ''} data-side={rowSide ?? 'WAIT'}>
+              <span className="aqx-rank-no" aria-hidden="true">{first ? '♛' : index + 1}</span>
+              <span className="aqx-rank-body">
+                <span className="aqx-rank-line">
+                  <b>{aqteLabel(name)}</b>
+                  <small>{state}</small>
+                </span>
+                <span className="aqx-rank-bar" aria-hidden="true"><i style={{ width: `${confidence ?? 0}%` }} /></span>
+              </span>
+              <span className={`aqx-side-chip ${rowSide ? rowSide === 'CE' ? 'aqx-chip-ce' : 'aqx-chip-pe' : 'aqx-chip-wait'}`}>{rowSide ?? 'WAIT'}</span>
+              <span className="aqx-rank-pct">{confidence != null ? `${Math.round(confidence)}%` : '--'}</span>
+            </li>
+          ))}
+        </ol>
+      </section>
       <dl className="aqx-opp-grid">
         <div><dt>Entry ≤</dt><dd>{rupees(entry?.maximum)}</dd></div>
         <div><dt>Target</dt><dd className={entry ? 'aqx-buy' : ''}>{rupees(entry?.target)}<small>{entry ? percent(move(entry.maximum, entry.target)) : ''}</small></dd></div>
@@ -353,62 +387,7 @@ function AQTEEngineDeck({ symbol, data, liveStatus, events, policy, unavailable,
 
   return (
     <section className="aqx-deck" aria-label="AQTE strategy engines">
-      <EngineBoard symbol={symbol} engines={engines} orchestration={view?.orchestration ?? null} online={!!view}
-        filter={filter} setFilter={setFilter} open={open} setOpen={setOpen} />
       <OpportunityPanel opp={opp} maxLots={liveStatus?.limits.max_lots ?? null} />
-
-
-      <div className="aqx-card aqx-cc-chart" id="aqte-dash-analytics">
-        <div role="tablist" aria-label="Analytics view" className="aqx-ctabs">
-          {CHART_TABS.map(([key, label], index) => (
-            <button key={key} type="button" role="tab" id={`aqte-ctab-${key}`} aria-selected={tab === key}
-              aria-controls={`aqte-cpanel-${key}`} tabIndex={tab === key ? 0 : -1} onClick={() => setTab(key)}
-              onKeyDown={event => {
-                let next: number;
-                if (event.key === 'ArrowRight') next = (index + 1) % CHART_TABS.length;
-                else if (event.key === 'ArrowLeft') next = (index + CHART_TABS.length - 1) % CHART_TABS.length;
-                else if (event.key === 'Home') next = 0;
-                else if (event.key === 'End') next = CHART_TABS.length - 1;
-                else return;
-                event.preventDefault();
-                setTab(CHART_TABS[next][0]);
-                event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>('[role="tab"]')[next]?.focus();
-              }}
-              className="aqx-ctab aqx-viewonly min-h-[44px] min-w-0">{label}</button>
-          ))}
-        </div>
-        <div id="aqte-cpanel-chart" role="tabpanel" aria-labelledby="aqte-ctab-chart" hidden={tab !== 'chart'} className="aqx-cpanel aqx-chart">
-          {chart}
-        </div>
-        {tab !== 'chart' && (
-          <div id={`aqte-cpanel-${tab}`} role="tabpanel" aria-labelledby={`aqte-ctab-${tab}`} className="aqx-cpanel aqx-cpanel-scroll">
-            {tab === 'signals' && (
-              <table className="aqx-mini-table">
-                <thead><tr><th>#</th><th>Engine</th><th>Status</th><th>Side</th><th>Rules</th><th>Score</th></tr></thead>
-                <tbody>{engines.map((engine, index) => (
-                  <tr key={index}>
-                    <td>{String(index + 1).padStart(2, '0')}</td><td>{engine?.name ?? ENGINE_NAMES[index]}</td>
-                    <td className={`aqx-st-${(engine?.status ?? 'monitoring').toLowerCase()} aqx-st-text`}>{engine ? STATUS_LABEL[engine.status] : '--'}</td>
-                    <td className={sideTone(engine?.side)}>{engine?.side ?? '—'}</td>
-                    <td>{engine ? `${engine.passed}/${engine.total}` : '--'}</td>
-                    <td>{engine?.score != null ? `${Math.round(engine.score)}%` : '--'}</td>
-                  </tr>
-                ))}</tbody>
-              </table>
-            )}
-            {tab === 'levels' && <Facts rows={levels} label="Levels" />}
-            {tab === 'flow' && <Facts rows={flow} label="Order flow" />}
-            {tab === 'options' && <>
-              <Facts label="Options context" rows={[['PCR (subscribed strikes)', fixed(market?.pcr)], ['India VIX', market?.vix != null ? `${fixed(market.vix)} (${percent(market.vix_change_pct)})` : '--'],
-                ['Contract', contract?.trading_symbol ?? '--'], ['Lot size', lot ? String(lot) : '--']]} />
-              {engineRules(9)}
-            </>}
-            {tab === 'mtf' && engineRules(10)}
-            {(tab === 'levels' || tab === 'flow') && evidenceNote && <p className="aqx-tab-note">{evidenceNote}</p>}
-          </div>
-        )}
-      </div>
-
       <div className="aqx-cc-trade">
         <section className="aqx-card aqx-panel" aria-label="Enterprise trade management">
           <h3 className="aqx-panel-head"><span aria-hidden="true" className="aqx-shield">⛨</span>Enterprise Trade Management
@@ -463,6 +442,60 @@ function AQTEEngineDeck({ symbol, data, liveStatus, events, policy, unavailable,
             </tbody>
           </table>
         </section>
+      </div>
+
+      <EngineBoard symbol={symbol} engines={engines} orchestration={view?.orchestration ?? null} online={!!view}
+        filter={filter} setFilter={setFilter} open={open} setOpen={setOpen} />
+
+      <div className="aqx-card aqx-cc-chart" id="aqte-dash-analytics">
+        <div role="tablist" aria-label="Analytics view" className="aqx-ctabs">
+          {CHART_TABS.map(([key, label], index) => (
+            <button key={key} type="button" role="tab" id={`aqte-ctab-${key}`} aria-selected={tab === key}
+              aria-controls={`aqte-cpanel-${key}`} tabIndex={tab === key ? 0 : -1} onClick={() => setTab(key)}
+              onKeyDown={event => {
+                let next: number;
+                if (event.key === 'ArrowRight') next = (index + 1) % CHART_TABS.length;
+                else if (event.key === 'ArrowLeft') next = (index + CHART_TABS.length - 1) % CHART_TABS.length;
+                else if (event.key === 'Home') next = 0;
+                else if (event.key === 'End') next = CHART_TABS.length - 1;
+                else return;
+                event.preventDefault();
+                setTab(CHART_TABS[next][0]);
+                event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>('[role="tab"]')[next]?.focus();
+              }}
+              className="aqx-ctab aqx-viewonly min-h-[44px] min-w-0">{label}</button>
+          ))}
+        </div>
+        <div id="aqte-cpanel-chart" role="tabpanel" aria-labelledby="aqte-ctab-chart" hidden={tab !== 'chart'} className="aqx-cpanel aqx-chart">
+          {chart}
+        </div>
+        {tab !== 'chart' && (
+          <div id={`aqte-cpanel-${tab}`} role="tabpanel" aria-labelledby={`aqte-ctab-${tab}`} className="aqx-cpanel aqx-cpanel-scroll">
+            {tab === 'signals' && (
+              <table className="aqx-mini-table">
+                <thead><tr><th>#</th><th>Engine</th><th>Status</th><th>Side</th><th>Rules</th><th>Score</th></tr></thead>
+                <tbody>{engines.map((engine, index) => (
+                  <tr key={index}>
+                    <td>{String(index + 1).padStart(2, '0')}</td><td>{engine?.name ?? ENGINE_NAMES[index]}</td>
+                    <td className={`aqx-st-${(engine?.status ?? 'monitoring').toLowerCase()} aqx-st-text`}>{engine ? STATUS_LABEL[engine.status] : '--'}</td>
+                    <td className={sideTone(engine?.side)}>{engine?.side ?? '—'}</td>
+                    <td>{engine ? `${engine.passed}/${engine.total}` : '--'}</td>
+                    <td>{engine?.score != null ? `${Math.round(engine.score)}%` : '--'}</td>
+                  </tr>
+                ))}</tbody>
+              </table>
+            )}
+            {tab === 'levels' && <Facts rows={levels} label="Levels" />}
+            {tab === 'flow' && <Facts rows={flow} label="Order flow" />}
+            {tab === 'options' && <>
+              <Facts label="Options context" rows={[['PCR (subscribed strikes)', fixed(market?.pcr)], ['India VIX', market?.vix != null ? `${fixed(market.vix)} (${percent(market.vix_change_pct)})` : '--'],
+                ['Contract', contract?.trading_symbol ?? '--'], ['Lot size', lot ? String(lot) : '--']]} />
+              {engineRules(9)}
+            </>}
+            {tab === 'mtf' && engineRules(10)}
+            {(tab === 'levels' || tab === 'flow') && evidenceNote && <p className="aqx-tab-note">{evidenceNote}</p>}
+          </div>
+        )}
       </div>
 
       <section className="aqx-card aqx-events" aria-label="Live engine events" id="aqte-dash-events">

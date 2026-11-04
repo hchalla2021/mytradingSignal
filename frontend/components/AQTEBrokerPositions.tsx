@@ -13,9 +13,15 @@ type Position = {
   stops: Array<{ order_id: string; quantity: number; trigger: number; status: string }>;
   exit_orders: Array<{ order_id: string; quantity: number; price: number; status: string }>;
 };
-type Snapshot = { generated_at: number; positions: Position[]; read_only: true; paused?: boolean; reason?: string };
+type ClosedPosition = {
+  symbol: string; trading_symbol: string; exchange: string; product: string; quantity: number;
+  buy_price: number | null; sell_price: number | null; gross_pnl: number | null; aqte: boolean;
+};
+type Snapshot = { generated_at: number; positions: Position[]; closed?: ClosedPosition[]; read_only: true; paused?: boolean; reason?: string };
 const formatter = new Intl.NumberFormat('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const value = (n: number | null) => n == null ? '--' : formatter.format(n);
+const signed = (n: number | null) => n == null ? '--' : `${n > 0 ? '+' : n < 0 ? '−' : ''}₹${formatter.format(Math.abs(n))}`;
+const tone = (n: number | null) => n == null || n === 0 ? 'text-slate-300' : n > 0 ? 'text-emerald-300' : 'text-rose-300';
 
 export default function AQTEBrokerPositions({ selectedSymbol }: { selectedSymbol: string }) {
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
@@ -35,6 +41,7 @@ export default function AQTEBrokerPositions({ selectedSymbol }: { selectedSymbol
         const payload = await response.json();
         if (!response.ok) throw new Error(typeof payload.detail === 'string' ? payload.detail : 'Zerodha positions unavailable');
         if (payload.read_only !== true || !Array.isArray(payload.positions) ||
+            (payload.closed !== undefined && !Array.isArray(payload.closed)) ||
             typeof payload.generated_at !== 'number' || Date.now() / 1000 - payload.generated_at > 10) {
           throw new Error('Zerodha position response is invalid or stale');
         }
@@ -54,6 +61,8 @@ export default function AQTEBrokerPositions({ selectedSymbol }: { selectedSymbol
     return () => { active = false; controller?.abort(); stopPolling(); };
   }, []);
   const positions = snapshot?.positions.filter(p => p.symbol === selectedSymbol) ?? [];
+  const closed = snapshot && !snapshot.paused ? (snapshot.closed ?? []).filter(p => p.symbol === selectedSymbol) : [];
+  const closedTotal = closed.every(p => p.gross_pnl != null) ? closed.reduce((sum, p) => sum + (p.gross_pnl as number), 0) : null;
   const indexLabel = selectedSymbol === 'BANKNIFTY' ? 'BANK NIFTY' : selectedSymbol;
   return (
     <div className="aqte-broker-panel my-3 min-w-0 space-y-3 rounded-xl border border-slate-600/60 bg-slate-950/60 p-3">
@@ -64,7 +73,24 @@ export default function AQTEBrokerPositions({ selectedSymbol }: { selectedSymbol
       {error && <p role="alert" className="text-xs text-rose-300">{error}</p>}
       {snapshot?.paused && !error && <p role="status" className="text-xs text-slate-300" title={snapshot.reason}>Broker readout paused · Positions unverified</p>}
       {!snapshot && !error && <p className="text-xs text-slate-400">Loading actual broker positions…</p>}
-      {snapshot && !snapshot.paused && !positions.length && !error && <p className="text-xs text-slate-400">No open Zerodha derivative position for this index. Check other index tabs.</p>}
+      {snapshot && !snapshot.paused && !positions.length && !error && <p className="text-xs text-slate-400">No open Zerodha derivative position for this index.{closed.length ? ` ${closed.length} closed today below.` : ' Check other index tabs.'}</p>}
+      {!!closed.length && (
+        <section aria-label="Closed today" className="min-w-0 rounded-lg border border-slate-700 p-3 text-xs">
+          <div className="flex flex-wrap items-baseline justify-between gap-2">
+            <p className="font-semibold text-slate-100">Closed today · {closed.length}{error ? ' · Last known, unverified' : ''}</p>
+            <p>Realised gross <b className={`tabular-nums ${tone(closedTotal)}`}>{signed(closedTotal)}</b></p>
+          </div>
+          <ul className="mt-2 space-y-1.5">
+            {closed.map(p => (
+              <li key={`${p.exchange}:${p.trading_symbol}:${p.product}`} className="flex min-w-0 flex-wrap items-baseline justify-between gap-x-3 gap-y-1 border-t border-slate-800 pt-1.5">
+                <span className="min-w-0 break-all text-cyan-100">{p.trading_symbol} · {p.product} · <span className="text-slate-400">{p.aqte ? 'AQTE' : 'Manual'}</span></span>
+                <span className="tabular-nums text-slate-300">Qty {p.quantity} · Buy {value(p.buy_price)} → Sell {value(p.sell_price)} · <b className={tone(p.gross_pnl)}>{signed(p.gross_pnl)}</b></span>
+              </li>
+            ))}
+          </ul>
+          <p className="mt-2 text-[10px] text-slate-400">Kite realised P&amp;L before brokerage, taxes and fees.</p>
+        </section>
+      )}
       {positions.map(p => {
         const current = !error && p.ltp != null;
         const stop = !error && p.stops.length === 1 ? p.stops[0].trigger : null;

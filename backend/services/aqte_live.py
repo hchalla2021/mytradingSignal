@@ -37,6 +37,9 @@ ACTIVATION_RETRY_SECONDS = 60
 ENTRY_RETRY_SECONDS = 5
 ENTRY_CUTOFF_MINUTE = 15 * 60 + 15
 MARKET_WAIT = "Waiting for market: auto trade arms on weekdays 09:15 to 15:15 IST"
+# Kite rejects more than 25 modifications per order; trailing must leave headroom for the exit.
+KITE_MAX_MODIFICATIONS = 25
+EXIT_MODIFY_RESERVE = 5
 
 
 class LiveBlocked(ValueError):
@@ -761,6 +764,9 @@ class AQTELiveService:
         return order
 
     def mutation(self, kind, broker, active, method, **kwargs):
+        if method == "modify_order":
+            # Count attempts: a timed-out modify may still have been applied by Kite.
+            active["modifications"] = active.get("modifications", 0) + 1
         self.save(kind + "_INTENT", trade_id=active["id"], **kwargs)
         try:
             return getattr(broker, method)(**kwargs)
@@ -915,8 +921,11 @@ class AQTELiveService:
             if reason or protection["status"] == "OPEN":
                 price = round_tick(max(c["tick_size"], quote.bid - c["tick_size"] * 2), c["tick_size"])
                 expected = {"order_type": "LIMIT", "price": price, "trigger_price": 0}
-                if protection["order_type"] == "LIMIT" and abs(float(protection["price"]) - price) < 1e-6:
+                # A resting SELL limit at or below the new price is still marketable; re-modifying burns Kite's budget.
+                if protection["order_type"] == "LIMIT" and float(protection["price"]) <= price + 1e-6:
                     return
+                if active.get("modifications", 0) >= KITE_MAX_MODIFICATIONS:
+                    raise LiveBlocked("Kite 25-modification limit reached on the exit order; exit manually in Kite")
                 active.update(exit_requested=reason or "STOP_TRIGGERED", modify=expected)
                 active.setdefault("exit_request_at", now)
                 self.mutation("EXIT_REPRICE", broker, active, "modify_order", variety="regular",
@@ -925,9 +934,12 @@ class AQTELiveService:
             else:
                 active["peak"] = max(active["peak"], quote.bid)
                 distance = active["entry_price"] - active["initial_stop"]
-                if distance > 0 and active["peak"] >= active["entry_price"] + distance * active.get("trail_start_r", 1):
+                remaining = KITE_MAX_MODIFICATIONS - EXIT_MODIFY_RESERVE - active.get("modifications", 0)
+                if distance > 0 and remaining > 0 and active["peak"] >= active["entry_price"] + distance * active.get("trail_start_r", 1):
                     stop = round_tick(active["peak"] - distance, c["tick_size"])
-                    if stop > active["stop"] + c["tick_size"] / 2:
+                    # The stop can rise at most to target − 1R; spread the remaining modify budget over that room.
+                    step = max(c["tick_size"], (active["target"] - distance - active["stop"]) / remaining)
+                    if stop > active["stop"] + c["tick_size"] / 2 and stop - active["stop"] >= step - 1e-6:
                         price = round_tick(max(c["tick_size"], stop - max(2 * c["tick_size"], stop * 0.01)), c["tick_size"])
                         expected = {"order_type": "SL", "price": price, "trigger_price": stop}
                         # The UI must report the broker-confirmed stop, not an unacknowledged request.

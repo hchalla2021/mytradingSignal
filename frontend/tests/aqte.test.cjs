@@ -1928,6 +1928,92 @@ test('trade actions remain connected to the controller when index tabs change', 
   assert.equal(controller().props.exitRequest.tradeId, status.active.id);
   assert.equal(controller().props.exitRequest.action, 'book');
 });
+test('trade controls explain locked exits and unlock only for a filled, selected AQTE trade', () => {
+  const render = liveStatus => harness('AQTETerminal.tsx').render({ symbol: 'NIFTY', unavailable: false, tick: null, onExit() {}, liveStatus });
+  const controls = tree => nodes(tree).find(n => n.props?.['aria-label'] === 'Trade controls');
+  const exits = tree => nodes(tree).filter(n => n.type === 'button' && /Exit Now|Exit Requested|Book All/.test(text(n)));
+  const partial = tree => nodes(tree).filter(n => n.type === 'button' && /^Book \d+%/.test(n.props['aria-label'] ?? ''));
+  let tree = render(liveFixture());
+  assert.equal(controls(tree).props['data-state'], 'idle');
+  assert.match(text(controls(tree)), /Standby · no open trade/);
+  assert.equal(exits(tree).length, 2);
+  assert.ok(exits(tree).every(b => b.props.disabled && /No open trade/.test(text(b))));
+  assert.equal(partial(tree).length, 3);
+  tree = render({ ...liveFixture(), active: livePositionFixture() });
+  assert.equal(controls(tree).props['data-state'], 'ready');
+  assert.ok(exits(tree).every(b => !b.props.disabled));
+  assert.match(text(controls(tree)), /Exit ready.*Selected AQTE trade.*Selected trade only/);
+  assert.ok(partial(tree).every(b => b.props.disabled), 'one-lot pilot never offers partial booking');
+  tree = render({ ...liveFixture(), active: livePositionFixture({ exit_requested: 'MANUAL_EXIT' }) });
+  assert.equal(controls(tree).props['data-state'], 'pending');
+  assert.ok(exits(tree).every(b => b.props.disabled && /Exit requested/.test(text(b))));
+});
+test('trade lifecycle tracks live, completed and idle trades with explicit per-stage states', () => {
+  const render = liveStatus => harness('AQTETerminal.tsx').render({ symbol: 'NIFTY', unavailable: false, tick: null, onExit() {}, liveStatus });
+  const life = tree => nodes(tree).find(n => n.props?.className === 'aqx-lifecycle');
+  const stages = tree => nodes(nodes(tree).find(n => n.props?.['aria-label'] === 'Trade lifecycle')).filter(n => n.type === 'li')
+    .map(n => [n.props.className.replace('aqx-step-', ''), text(n).replace(/\s+/g, ' ').trim()]);
+  const states = tree => stages(tree).map(([state]) => state).join(',');
+  const now = Date.now() / 1000;
+
+  let tree = render(liveFixture());
+  assert.equal(life(tree).props['data-mode'], 'idle');
+  assert.equal(states(tree), 'plan,plan,plan,plan,plan,plan');
+  assert.match(stages(tree)[0][1], /Auto OFF/);
+  assert.doesNotMatch(text(life(tree)), /--/, 'idle lifecycle explains the plan instead of blank dashes');
+  tree = render({ ...liveFixture(), automation_on: true, armed: true });
+  assert.equal(stages(tree)[0][0], 'scan');
+  assert.equal(life(tree).props['data-tone'], 'scan');
+  assert.match(text(life(tree)), /Scanning/);
+  tree = render({ ...liveFixture(), killed: true });
+  assert.equal(stages(tree)[0][0], 'fail');
+  assert.equal(life(tree).props['data-tone'], 'fail');
+
+  tree = render({ ...liveFixture(), active: livePositionFixture() });
+  assert.equal(life(tree).props['data-mode'], 'live');
+  assert.equal(states(tree), 'done,done,done,done,done,plan');
+  assert.match(stages(tree)[2][1], /₹100\.00 · 15 qty/);
+  assert.match(stages(tree)[3][1], /SL Protected ₹80\.00/, 'SL stage keeps the initial broker stop');
+  assert.match(stages(tree)[4][1], /Trailing Active ₹105\.00 \+₹75\.00 locked/);
+  assert.match(stages(tree)[5][1], /Target ₹140\.00/);
+  assert.match(text(life(tree)), /5\s*\/\s*6/);
+  assert.match(text(life(tree)), /in trade/);
+
+  tree = render({ ...liveFixture(), active: livePositionFixture({ trailing_active: false, stop: 80, peak: 104 }) });
+  assert.equal(states(tree), 'done,done,done,done,current,plan');
+  assert.match(stages(tree)[4][1], /Arms ₹120\.00 Peak ₹104\.00/, 'trail arms at entry + 1R');
+  tree = render({ ...liveFixture(), active: livePositionFixture({ filled: 0, entry_price: 0, fill_at: undefined,
+    protection_confirmed: false, trailing_active: false, protect_id: null, state: 'ENTRY_PENDING' }) });
+  assert.equal(states(tree), 'done,done,current,plan,plan,plan');
+  assert.match(stages(tree)[2][1], /Awaiting fill Limit ₹100\.00/);
+  tree = render({ ...liveFixture(), active: livePositionFixture({ protection_confirmed: false, trailing_active: false, error: 'Kite down' }) });
+  assert.equal(stages(tree)[3][0], 'fail');
+  assert.equal(life(tree).props['data-tone'], 'fail');
+  tree = render({ ...liveFixture(), active: livePositionFixture({ exit_requested: 'TARGET', exit_request_at: now - 2 }) });
+  assert.equal(stages(tree)[5][0], 'warn');
+  assert.match(stages(tree)[5][1], /Exit Target hit Sent/);
+  assert.equal(stages(tree).filter(([state]) => state === 'current').length, 0, 'an exit supersedes earlier pending stages');
+
+  const closed = { symbol: 'NIFTY', net_pnl: 412.5, exit_at: now - 30, entry_at: now - 400, signal_at: now - 405,
+    entry_ack_at: now - 399, fill_at: now - 398, protect_at: now - 396, trail_at: now - 120, filled: 15, entry_price: 100,
+    exit_price: 128, initial_stop: 80, stop: 110, target: 140, trailing_active: true, protection_confirmed: true,
+    exit_requested: null, contract: { trading_symbol: 'NIFTY_CLOSED_CE' } };
+  tree = render({ ...liveFixture(), trades: [closed] });
+  assert.equal(life(tree).props['data-mode'], 'closed');
+  assert.equal(states(tree), 'done,done,done,done,done,done');
+  assert.match(text(life(tree)), /Completed.*NIFTY_CLOSED_CE.*\+₹412\.50.*Held 6m 15s.*6\s*\/\s*6/);
+  assert.match(stages(tree)[5][1], /Trailing SL hit .*₹128\.00/, 'a broker SL fill after trailing reads as a trailing-stop exit');
+  tree = render({ ...liveFixture(), trades: [{ ...closed, trailing_active: false, exit_requested: 'SESSION_EXIT' }] });
+  assert.equal(stages(tree)[4][0], 'skip');
+  assert.match(stages(tree)[5][1], /Session exit 15:25/);
+  tree = render({ ...liveFixture(), trades: [{ ...closed, exit_reason: 'EMERGENCY_STOP', exit_price: null, exit_unverified: true }] });
+  assert.equal(stages(tree)[5][0], 'fail');
+  assert.match(text(life(tree)), /Check Kite/);
+  tree = render({ ...liveFixture(), trades: [{ ...closed, symbol: 'SENSEX' }] });
+  assert.equal(life(tree).props['data-mode'], 'idle', 'another index never fills this tab lifecycle');
+  tree = render({ ...liveFixture(), trades: [{ ...closed, exit_at: now - 2 * 86400 }] });
+  assert.equal(life(tree).props['data-mode'], 'idle', 'only today\'s trade is replayed');
+});
 test('mobile title keeps the market badge in the same row beside the wrapping title', () => {
   const styles = readFileSync(path.join(__dirname, '..', 'app', 'globals.css'), 'utf8');
   const mobile = styles.match(/@container \(max-width: 620px\) \{\s*\.aqte-theme #aqte-title \{[^}]*\}[\s\S]*?\n\}/)?.[0];
@@ -2255,6 +2341,10 @@ test('top opportunity follows the controller: first unblocked ranked index, else
   assert.match(panel, /3 aligned · 0 opposed/);
   assert.match(panel, /Auto Execution:\s+READY/);
   assert.doesNotMatch(panel, /Daily index trade limit/);
+  const ladder = nodes(nodes(h.render(props)).find(n => n.props?.['aria-label'] === 'Index ranking')).filter(n => n.type === 'li');
+  assert.deepEqual(ladder.map(row => text(row).replace(/\s+/g, ' ').trim()),
+    ['1 NIFTY Blocked CE 90%', '♛ BANK NIFTY Top pick PE 75%', '3 SENSEX Blocked WAIT --']);
+  assert.deepEqual(ladder.map(row => row.props.className), ['', 'aqx-rank-top', '']);
   // When every index is blocked the top-ranked index explains why nothing will trade.
   const blocked = text(nodes(h.render({ ...props, liveStatus: { ...live, entry_blocks: { ...live.entry_blocks, BANKNIFTY: 'No setup' } } }))
     .find(n => n.props?.['aria-label'] === 'Top opportunity'));
@@ -2575,4 +2665,73 @@ test('section polls live status once and feeds the header switch with the newest
   const source = readFileSync(path.join(__dirname, '..', 'components', 'AQTESection.tsx'), 'utf8');
   assert.match(source, /hourCycle: 'h23'/, 'midnight renders 00, never 24');
   assert.doesNotMatch(source, /className="aqx-clock" aria-label/);
+});
+
+test('opportunity card shows Auto Trade waiting to arm with its reason, never OFF, while the switch is ON', () => {
+  const h = harness('AQTEEngineDeck.tsx');
+  const data = fixture().data;
+  data.NIFTY = { ...data.NIFTY, ...engineSet({ ce: 4 }), scalp: scalpSignal('BUY CE', 82) };
+  const base = { ...liveFixture(), enabled: true, paper_validated: true, ranking: ['NIFTY', 'BANKNIFTY', 'SENSEX'],
+    entry_blocks: { NIFTY: null, BANKNIFTY: 'No setup', SENSEX: 'No setup' } };
+  const props = { symbol: 'NIFTY', data, unavailable: false, policy: { veto: true, veto_min: 2 }, events: [] };
+  const card = live => text(nodes(h.render({ ...props, liveStatus: live })).find(n => n.props?.['aria-label'] === 'Top opportunity'));
+  const ip = 'Outbound IP 122.177.240.29 does not match allowlisted IP 159.65.147.167';
+  let panel = card({ ...base, automation_on: false, armed: false, automation_wanted: true, automation_waiting: ip });
+  assert.match(panel, /Auto Execution:\s+WAITING/);
+  assert.match(panel, /does not match allowlisted IP/);
+  assert.doesNotMatch(panel, /OFF|Eligible/);
+  panel = card({ ...base, automation_on: false, armed: false, automation_wanted: true, automation_waiting: null });
+  assert.match(panel, /waiting to arm for the market session/);
+  panel = card({ ...base, automation_on: false, armed: false, automation_wanted: false });
+  assert.match(panel, /Auto Execution:\s+OFF/);
+  assert.match(panel, /Auto Trade is not ON and armed/);
+  panel = card({ ...base, automation_on: false, armed: false, automation_wanted: true, killed: true });
+  assert.match(panel, /Auto Execution:\s+STOPPED/);
+  // With no setup, the controller's own block (e.g. a disabled index) explains the wait.
+  data.NIFTY = { ...data.NIFTY, scalp: scalpSignal('WAIT') };
+  panel = card({ ...base, armed: true, automation_on: true, automation_wanted: true,
+    entry_blocks: { NIFTY: 'Index auto trading disabled', BANKNIFTY: 'No setup', SENSEX: 'No setup' } });
+  assert.match(panel, /Index auto trading disabled/);
+  assert.match(panel, /Auto Execution:\s+WAITING/);
+});
+test('engine deck counts only engines actively evaluating; an unconfigured ML shadow engine is not counted', () => {
+  const h = harness('AQTEEngineDeck.tsx');
+  const data = fixture().data;
+  data.NIFTY = { ...data.NIFTY, ...engineSet({ ce: 1 }) };
+  const head = props => text(nodes(h.render(props)).find(n => n.props?.className === 'aqx-deck-title'));
+  const props = { symbol: 'NIFTY', data, liveStatus: liveFixture(), unavailable: false, policy: null, events: [] };
+  assert.match(head(props), /11\/12 engines evaluating in parallel/);
+  assert.doesNotMatch(head(props), /12\/12/);
+  data.NIFTY = { ...data.NIFTY, engines: data.NIFTY.engines.map(engine => ({ ...engine, status: 'MONITORING' })) };
+  assert.match(head(props), /All engines monitoring/);
+});
+
+test('Positions tab lists positions squared off today with realised P&L instead of only "no open position"', async () => {
+  const h = harness('AQTEBrokerPositions.tsx');
+  h.render({ selectedSymbol: 'NIFTY' });
+  const cleanup = h.mount({ generated_at: Date.now() / 1000, read_only: true, paused: false, positions: [], closed: [
+    { symbol: 'NIFTY', trading_symbol: 'NIFTY26N0323650CE', exchange: 'NFO', product: 'MIS', quantity: 65,
+      buy_price: 120.3, sell_price: 128, gross_pnl: 500.5, aqte: true },
+    { symbol: 'NIFTY', trading_symbol: 'NIFTY26N0323700CE', exchange: 'NFO', product: 'MIS', quantity: 65,
+      buy_price: 110, sell_price: 112.5, gross_pnl: 162.5, aqte: false },
+    { symbol: 'SENSEX', trading_symbol: 'SENSEX_CLOSED_PE', exchange: 'BFO', product: 'MIS', quantity: 20,
+      buy_price: 100, sell_price: 90, gross_pnl: -200, aqte: true },
+  ] });
+  await settle();
+  const flat = symbol => text(h.render({ selectedSymbol: symbol })).replace(/\s+/g, ' ');
+  let value = flat('NIFTY');
+  assert.match(value, /No open Zerodha derivative position for this index\. 2 closed today below\./);
+  assert.match(value, /Closed today · 2/);
+  assert.match(value, /NIFTY26N0323650CE · MIS · AQTE/);
+  assert.match(value, /NIFTY26N0323700CE · MIS · Manual/);
+  assert.match(value, /Buy 120\.30 → Sell 128\.00 · \+₹500\.50/);
+  assert.match(value, /Realised gross \+₹663\.00/);
+  assert.doesNotMatch(value, /SENSEX_CLOSED_PE/);
+  value = flat('SENSEX');
+  assert.match(value, /−₹200\.00/);
+  value = flat('BANKNIFTY');
+  assert.match(value, /Check other index tabs/);
+  assert.doesNotMatch(value, /Closed today/);
+  assert.ok(h.requests.every(r => !r.options.method || r.options.method === 'GET'));
+  cleanup();
 });

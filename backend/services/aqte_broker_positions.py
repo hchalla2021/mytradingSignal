@@ -35,7 +35,7 @@ class BrokerPositions:
             if reason:
                 self.cached = None
                 self.cached_at = 0
-                return dict(generated_at=now, positions=[], read_only=True, paused=True, reason=reason)
+                return dict(generated_at=now, positions=[], closed=[], read_only=True, paused=True, reason=reason)
             client = self.broker()
             # Credentials are never returned or stored in the display payload.
             identity = (client.api_key, client.access_token)
@@ -43,12 +43,17 @@ class BrokerPositions:
                 return copy.deepcopy(self.cached)
             positions = client.positions()["net"]
             orders = client.orders()
-            selected = []
+            selected, closed = [], []
             for position in positions:
                 name = position["tradingsymbol"]
                 match = re.match(r"^(BANKNIFTY|NIFTY|SENSEX)\d", name)
-                if position["quantity"] and position["exchange"] in ("NFO", "BFO") and match:
+                if position["exchange"] not in ("NFO", "BFO") or not match:
+                    continue
+                if position["quantity"]:
                     selected.append((match[1], position))
+                elif int(position.get("buy_quantity") or 0) and int(position.get("sell_quantity") or 0):
+                    # Squared off today: Kite keeps the row with quantity 0 and realised gross P&L.
+                    closed.append(self.closed_row(match[1], position, orders))
             keys = list({f'{p["exchange"]}:{p["tradingsymbol"]}' for _, p in selected})
             quotes = client.quote(keys) if keys else {}
             result = []
@@ -97,9 +102,25 @@ class BrokerPositions:
                     points=points, return_pct=percent, gross_pnl=gross,
                     stops=stops, exit_orders=exits,
                 ))
-            payload = dict(generated_at=time.time(), positions=result, read_only=True, paused=False)
+            payload = dict(generated_at=time.time(), positions=result, closed=closed, read_only=True, paused=False)
             self.cached, self.cached_at, self.identity = payload, time.time(), identity
             return copy.deepcopy(payload)
+
+    @staticmethod
+    def closed_row(symbol, position, orders):
+        name, exchange, product = (position[k] for k in ("tradingsymbol", "exchange", "product"))
+        pnl = float(position.get("pnl") or 0)
+        prices = [float(position.get(k) or 0) for k in ("buy_price", "sell_price")]
+        own = [o for o in orders if (o["tradingsymbol"], o["exchange"], o["product"]) == (name, exchange, product)
+               and o["status"] == "COMPLETE"]
+        return dict(
+            symbol=symbol, trading_symbol=name, exchange=exchange, product=product,
+            quantity=int(position["buy_quantity"]),
+            buy_price=prices[0] if math.isfinite(prices[0]) and prices[0] > 0 else None,
+            sell_price=prices[1] if math.isfinite(prices[1]) and prices[1] > 0 else None,
+            gross_pnl=round(pnl, 2) if math.isfinite(pnl) else None,
+            aqte=any(re.fullmatch(r"[0-9a-f]{16}[ES]", str(o.get("tag") or "")) for o in own),
+        )
 
 
 broker_positions = BrokerPositions()

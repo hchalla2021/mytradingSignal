@@ -31,6 +31,9 @@ export type AQTELiveState = {
     entry_at?: number; entry_price?: number; exit_price?: number | null; filled?: number;
     initial_stop?: number; stop?: number; target?: number; exit_requested?: string | null;
     exit_unverified?: boolean;
+    // Lifecycle fields copied from the active record at close; read defensively (older journals may lack them).
+    signal_at?: number | null; entry_ack_at?: number | null; fill_at?: number | null; protect_at?: number | null;
+    trail_at?: number | null; trailing_active?: boolean; protection_confirmed?: boolean; exit_reason?: string | null;
     contract?: { trading_symbol: string };
   }>;
 };

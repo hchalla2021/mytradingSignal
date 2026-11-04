@@ -340,7 +340,7 @@ function AQTESection({ marketData, isConnected = false }: { marketData?: MarketD
   ] as const;
   const selectedView = unavailable ? null : aqteEngineView(snapshot?.data[selectedSymbol]);
   const market = selectedView?.market ?? null;
-  const evaluating = selectedView ? selectedView.engines.filter(engine => engine.total > 0).length : null;
+  const evaluating = selectedView ? selectedView.engines.filter(engine => engine.total > 0 && engine.status !== 'MONITORING').length : null;
   const events = Array.isArray(snapshot?.engine_events)
     ? (snapshot.engine_events as unknown[]).filter(isAqteEngineEvent) as AQTEEngineEvent[] : [];
   const policy = snapshot?.engine_policy && typeof snapshot.engine_policy.veto === 'boolean' &&
@@ -455,20 +455,17 @@ function AQTESection({ marketData, isConnected = false }: { marketData?: MarketD
         </p>
       )}
       </div>
-      <AQTEEngineDeck symbol={selectedSymbol} data={snapshot?.data} liveStatus={liveStatus} unavailable={unavailable}
-        events={events} policy={policy} now={now / 1000} onViewAll={() => go('aqte-dash-book', 'today')}
-        chart={SYMBOLS.map(symbol => (
-          <div key={symbol} className="aqx-chart-slot" hidden={selectedSymbol !== symbol}>
-            {chartsOpened[symbol] ? <Chart symbol={symbol} tick={quotes[symbol].tick} /> : null}
-          </div>
-        ))} />
       <PerformanceStrip tradeCount={tradeCount} maxTrades={liveStatus?.limits.max_trades ?? null}
         winRate={winRate} dayPnl={dayPnl} dayReturn={dayReturn}
         totalPoints={totalPoints} drawdown={known ? drawdown : null} openPositions={known ? openFilled > 0 ? 1 : 0 : null}
         riskLabel={risk.label} riskNote={risk.note} riskTone={risk.tone} riskUsed={riskUsed}
         dailyLoss={liveStatus?.limits.daily_loss ?? null} riskShare={riskShare} />
       <section className="aqx-dash-term" id="aqte-dash-trades" aria-labelledby="aqte-term-title">
-        <h3 id="aqte-term-title" className="aqx-perf-title"><NavIcon path={ICONS.trades} />Live Trade Terminal <span>· {LABELS[selectedSymbol]}</span></h3>
+        <h3 id="aqte-term-title" className="aqx-term-title">
+          <span className="aqx-term-icon" aria-hidden="true"><NavIcon path={ICONS.trades} /></span>
+          <span className="aqx-term-name">Live Trade Terminal</span><span className="sr-only"> · </span>
+          <span className="aqx-term-symbol">{LABELS[selectedSymbol]}</span>
+        </h3>
         {SYMBOLS.map(symbol => (
           <div key={symbol} id={`aqte-index-panel-${symbol}`} role="tabpanel"
             aria-labelledby={`aqte-index-tab-${symbol}`} hidden={selectedSymbol !== symbol}
@@ -479,6 +476,13 @@ function AQTESection({ marketData, isConnected = false }: { marketData?: MarketD
           </div>
         ))}
       </section>
+      <AQTEEngineDeck symbol={selectedSymbol} data={snapshot?.data} liveStatus={liveStatus} unavailable={unavailable}
+        events={events} policy={policy} now={now / 1000} onViewAll={() => go('aqte-dash-book', 'today')}
+        chart={SYMBOLS.map(symbol => (
+          <div key={symbol} className="aqx-chart-slot" hidden={selectedSymbol !== symbol}>
+            {chartsOpened[symbol] ? <Chart symbol={symbol} tick={quotes[symbol].tick} /> : null}
+          </div>
+        ))} />
       <section className="aqx-card aqx-book" aria-label="Trades, positions and controls" id="aqte-dash-book">
         <div className="aqx-book-head">
           <div role="tablist" aria-label="AQTE trade book" className="aqx-book-tabs">

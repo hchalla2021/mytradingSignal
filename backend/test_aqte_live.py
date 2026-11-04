@@ -697,6 +697,51 @@ class LiveTests(unittest.TestCase):
         self.assertEqual(self.broker.modify_order.call_count, 1)
         self.assertEqual(self.broker.place_order.call_count, 2)
 
+    def test_trend_to_target_stays_within_kite_modification_cap_and_still_exits(self):
+        # Kite rejects the 26th modification of an order; the exit must never be stranded.
+        self.protect()
+        active = self.live.state["active"]
+        entry, risk, target = active["entry_price"], active["entry_price"] - active["initial_stop"], active["target"]
+        kite_modify = self.modify
+        def capped(**params):
+            if self.broker.modify_order.call_count > 25:
+                raise RuntimeError("Maximum allowed order modifications exceeded")
+            return kite_modify(**params)
+        self.broker.modify_order.side_effect = capped
+        bid, stops = entry + risk, []
+        while bid < target:
+            self.market.engine.options[CONTRACT.token] = tick("option", bid=bid, ask=bid + 0.05, price=bid)
+            self.live.reconcile()
+            stops.append(self.live.state["active"]["stop"])
+            bid = round(bid + 0.05, 2)
+        self.assertEqual(stops, sorted(stops), "The stop must only ever tighten")
+        self.assertGreaterEqual(stops[-1], target - risk * 1.2, "Trail must keep following the trend")
+        trail_modifications = self.broker.modify_order.call_count
+        self.assertLessEqual(trail_modifications, 20, "Trailing must reserve modifications for the exit")
+        self.market.engine.options[CONTRACT.token] = tick("option", bid=target, ask=target + 0.05, price=target)
+        self.live.reconcile()
+        params = self.broker.modify_order.call_args.kwargs
+        self.assertEqual((params["order_type"], self.live.state["active"]["exit_requested"]), ("LIMIT", "TARGET"))
+        self.assertEqual(self.broker.modify_order.call_count, trail_modifications + 1)
+        self.assertEqual(self.broker.place_order.call_count, 2)
+
+    def test_marketable_exit_limit_is_not_re_modified_and_cap_fails_closed(self):
+        self.protect()
+        target = self.live.state["active"]["target"]
+        self.market.engine.options[CONTRACT.token] = tick("option", bid=target + 1, ask=target + 2, price=target + 1)
+        self.live.reconcile()
+        self.live.reconcile()
+        resting = self.broker.modify_order.call_args.kwargs["price"]
+        # A higher bid leaves the resting SELL limit marketable; re-modifying only burns Kite's 25-modify budget.
+        self.market.engine.options[CONTRACT.token] = tick("option", bid=target + 3, ask=target + 4, price=target + 3)
+        self.live.reconcile()
+        self.assertEqual(self.broker.modify_order.call_count, 1)
+        self.live.state["active"]["modifications"] = 25
+        self.market.engine.options[CONTRACT.token] = tick("option", bid=resting - 1, ask=resting, price=resting - 1)
+        with self.assertRaisesRegex(LiveBlocked, "25-modification"):
+            self.live.reconcile()
+        self.assertEqual(self.broker.modify_order.call_count, 1)
+
     def test_uncertain_trail_keeps_last_confirmed_stop_until_broker_ack(self):
         self.protect()
         old_stop = self.live.state["active"]["stop"]

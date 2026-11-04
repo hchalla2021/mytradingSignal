@@ -1,7 +1,7 @@
 'use client';
 
 import { memo, type ReactNode } from 'react';
-import { aqteCanExit, aqteControllerCurrent, aqteLabel, aqteLiveMetrics, aqteOverview, aqtePrice, aqteSigned, isAqteRuleChecks,
+import { aqteCanExit, aqteControllerCurrent, aqteIstDay, aqteLabel, aqteLiveMetrics, aqteOverview, aqtePrice, aqteSigned, isAqteRuleChecks,
   type AQTELiveState, type AQTEExitRequest, type AQTESignal, type AQTESymbol, type AQTEStyle,
   type AQTERuleEvidence } from '@/lib/aqte-display';
 
@@ -20,6 +20,26 @@ const lots = (units: number, lotSize: number | undefined) => {
   const count = units / lotSize;
   return `${Number.isInteger(count) ? count : aqtePrice(count)} ${count === 1 ? 'lot' : 'lots'}`;
 };
+
+const stamp = (value: unknown) => typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : null;
+const elapsed = (seconds: number | null) => {
+  if (seconds == null || !Number.isFinite(seconds) || seconds < 0) return '--';
+  const total = Math.floor(seconds);
+  const h = Math.floor(total / 3600), m = Math.floor(total / 60) % 60, s = total % 60;
+  return h ? `${h}h ${String(m).padStart(2, '0')}m` : m ? `${m}m ${String(s).padStart(2, '0')}s` : `${s}s`;
+};
+const EXIT_REASONS: Record<string, string> = {
+  TARGET: 'Target hit', STOP_CROSSED: 'Stop hit', STOP_TRIGGERED: 'Stop hit', SESSION_EXIT: 'Session exit 15:25',
+  DAILY_LOSS: 'Daily loss cap', EMERGENCY_STOP: 'Emergency stop', MANUAL_EXIT: 'Manual exit', FILL_BELOW_STOP: 'Fill below stop',
+};
+// A broker SL that fills on its own leaves no exit reason; the trailing flag tells which stop it was.
+const exitLabel = (reason: string | null | undefined, trailed: boolean) => {
+  const label = reason ? EXIT_REASONS[reason] ?? titleCase(reason.replaceAll('_', ' ')) : 'Stop hit';
+  return trailed && label === 'Stop hit' ? 'Trailing SL hit' : label;
+};
+type StepState = 'done' | 'current' | 'scan' | 'warn' | 'fail' | 'skip' | 'plan';
+type LifeStep = { label: string; detail: string; note: string; state: StepState };
+const step = (label: string, state: StepState, detail: string, note = ''): LifeStep => ({ label, detail, note, state });
 
 type Tone = 'up' | 'down' | 'wait' | 'flat';
 type Intelligence = NonNullable<AQTESignal['intelligence']>;
@@ -173,24 +193,102 @@ function AQTETerminal({ symbol, signal, unavailable, liveStatus, onExit, now = D
   const exitReason = live?.exit_requested;
   const remaining = live ? Math.max(0, live.filled - (live.exited ?? 0)) : 0;
   const canExit = !!live && !!onExit && aqteCanExit(liveStatus) && !exitReason;
+  const automation = currentStatus && liveStatus?.automation_on && !liveStatus.killed;
   const requestExit = (action: AQTEExitRequest['action']) => {
     if (canExit && live) onExit?.({ tradeId: live.id, contract: live.contract.trading_symbol, quantity: remaining, action });
   };
-  const steps: Array<[string, string, boolean]> = [
-    ['Signal', clock(live?.signal_at), !!live?.signal_at],
-    ['Order Placed', live?.entry_id ? live.entry_ack_at ? clock(live.entry_ack_at) : 'Acknowledged' : '--', !!live?.entry_id],
-    ['Entry Filled', filled ? clock(live.fill_at) : '--', filled],
-    ['SL Protected', confirmed ? `₹${aqtePrice(live.stop)}` : '--', confirmed],
-    ['Trailing Active', trailing ? `₹${aqtePrice(live.stop)}` : '--', trailing],
-    ['Exit', exitReason ? `Requested · ${exitReason.replaceAll('_', ' ')}` : '(Waiting)', false],
-  ];
-  const current = exitReason ? steps.length - 1 : steps.findIndex(step => !step[2]);
+  // Mirrors the canExit gate so a disabled exit always says why.
+  const exitBlock = canExit ? null : !live ? 'No open trade' : exitReason ? 'Exit requested' :
+    liveStatus?.killed || liveStatus?.flatten_pending ? 'Emergency stop active' :
+    !currentStatus ? 'Status unverified' : live.filled <= (live.exited ?? 0) ? 'Awaiting fill' : 'Unavailable';
+  const controlTone = canExit ? 'ready' : exitReason ? 'pending' : live ? 'locked' : 'idle';
+  const controlLabel = canExit ? 'Exit ready' : exitReason ? 'Exit pending' : live ? exitBlock : 'Standby · no open trade';
+  const automationWaiting = currentStatus && !automation && liveStatus?.automation_wanted && !liveStatus.killed;
+  const lastTrade = !live && currentStatus ? [...(liveStatus?.trades ?? [])].reverse()
+    .find(trade => trade.symbol === symbol && aqteIstDay(trade.exit_at) === aqteIstDay(now)) : undefined;
+  let steps: LifeStep[];
+  let lifeMode: 'live' | 'closed' | 'idle';
+  let lifeLabel: string;
+  let lifeClock = '';
+  if (live) {
+    lifeMode = 'live';
+    const started = stamp(live.signal_at) ?? stamp(live.entry_at);
+    const broken = !currentStatus || !!(live.error || liveStatus?.error);
+    const risk = live.entry_price - live.initial_stop;
+    const armAt = filled && risk > 0 ? live.entry_price + risk * trailR : null;
+    const trailPending = live.modify?.order_type === 'SL';
+    const locked = (live.stop - live.entry_price) * live.filled;
+    steps = [
+      step('Signal', 'done', started ? clock(started) : 'Received', 'Setup locked'),
+      live.entry_id ? step('Order Placed', 'done', clock(stamp(live.entry_ack_at) ?? stamp(live.entry_at)), 'Broker ack')
+        : step('Order Placed', broken ? 'fail' : 'current', broken ? 'Unconfirmed' : 'Sending…', broken ? 'Check Kite' : `Limit ₹${aqtePrice(live.limit)}`),
+      filled ? step('Entry Filled', 'done', clock(stamp(live.fill_at)), `₹${aqtePrice(live.entry_price)} · ${live.filled} qty`)
+        : step('Entry Filled', live.entry_id && !exitReason ? 'current' : 'plan', live.entry_id ? 'Awaiting fill' : 'Pending',
+          `Limit ₹${aqtePrice(live.limit)}`),
+      confirmed ? step('SL Protected', 'done', `₹${aqtePrice(live.initial_stop)}`, stamp(live.protect_at) ? clock(stamp(live.protect_at)) : 'Broker-confirmed')
+        : !filled ? step('SL Protected', 'plan', `₹${aqtePrice(live.initial_stop)}`, 'Placed on fill')
+          : broken ? step('SL Protected', 'fail', 'Unverified', 'Check Kite')
+            : step('SL Protected', exitReason ? 'warn' : 'current', live.protect_id ? 'Confirming' : 'Placing SL', `₹${aqtePrice(live.stop)}`),
+      trailing ? step('Trailing Active', 'done', `₹${aqtePrice(live.stop)}`, locked > 0 ? `${rupees(locked)} locked` : clock(stamp(live.trail_at)))
+        : trailPending && !exitReason ? step('Trailing Active', 'current', `→ ₹${aqtePrice(live.modify?.trigger_price)}`, 'Awaiting broker')
+          : exitReason ? step('Trailing Active', 'skip', 'Not reached', `+${trailR}R arm`)
+            : confirmed && armAt ? step('Trailing Active', 'current', `Arms ₹${aqtePrice(armAt)}`,
+              live.peak > 0 ? `Peak ₹${aqtePrice(live.peak)}` : `+${trailR}R`)
+              : step('Trailing Active', 'plan', `+${trailR}R`, 'After SL'),
+      exitReason ? step('Exit', 'warn', exitLabel(exitReason, trailing),
+        stamp(live.exit_request_at) ? `Sent ${clock(stamp(live.exit_request_at))}` : 'Awaiting fill')
+        : step('Exit', 'plan', `Target ₹${aqtePrice(live.target)}`, 'SL · 15:25 auto'),
+    ];
+    lifeLabel = exitReason ? 'Exiting' : broken ? 'Check Kite' : filled ? 'Live' : 'Entering';
+    lifeClock = started ? `${elapsed(now - started)} in trade` : '';
+  } else if (lastTrade) {
+    lifeMode = 'closed';
+    const trailed = lastTrade.trailing_active === true;
+    const started = stamp(lastTrade.signal_at) ?? stamp(lastTrade.entry_at);
+    const reason = typeof lastTrade.exit_reason === 'string' ? lastTrade.exit_reason : lastTrade.exit_requested;
+    const tradeFilled = (lastTrade.filled ?? 0) > 0;
+    steps = [
+      step('Signal', 'done', started ? clock(started) : 'Received', 'Setup locked'),
+      step('Order Placed', 'done', clock(stamp(lastTrade.entry_ack_at) ?? stamp(lastTrade.entry_at)), 'Broker ack'),
+      tradeFilled ? step('Entry Filled', 'done', clock(stamp(lastTrade.fill_at)), `₹${aqtePrice(lastTrade.entry_price)}`)
+        : step('Entry Filled', 'skip', 'Not filled'),
+      lastTrade.protection_confirmed === true ? step('SL Protected', 'done', `₹${aqtePrice(lastTrade.initial_stop)}`, stamp(lastTrade.protect_at) ? clock(stamp(lastTrade.protect_at)) : 'Broker-confirmed')
+        : step('SL Protected', 'skip', 'Not confirmed'),
+      trailed ? step('Trailing Active', 'done', `₹${aqtePrice(lastTrade.stop)}`, clock(stamp(lastTrade.trail_at)))
+        : step('Trailing Active', 'skip', 'Not reached'),
+      lastTrade.exit_unverified ? step('Exit', 'fail', 'Unverified', 'Check Kite')
+        : step('Exit', 'done', exitLabel(reason, trailed),
+          `${clock(lastTrade.exit_at)}${lastTrade.exit_price != null ? ` · ₹${aqtePrice(lastTrade.exit_price)}` : ''}`),
+    ];
+    lifeLabel = lastTrade.exit_unverified ? 'Check Kite' : 'Completed';
+    lifeClock = started ? `Held ${elapsed(lastTrade.exit_at - started)}` : '';
+  } else {
+    lifeMode = 'idle';
+    const passed = evidence ? evidence.checks.filter(check => check.passed === true).length : 0;
+    const setup = !!evidence?.side && !!plan?.decision && plan.decision !== 'WAIT';
+    steps = [
+      !currentStatus ? step('Signal', 'warn', 'Unverified', 'Status stale')
+        : liveStatus?.killed ? step('Signal', 'fail', 'Blocked', 'Emergency stop')
+          : automation ? step('Signal', 'scan', setup ? `${evidence?.side} setup` : 'Scanning',
+            evidence ? `${passed}/${evidence.checks.length} aligned` : 'Live feed')
+            : automationWaiting ? step('Signal', 'warn', 'Arming', 'Preflight')
+              : step('Signal', 'plan', 'Auto OFF', 'Entries blocked'),
+      step('Order Placed', 'plan', 'Auto BUY', '1 lot'),
+      step('Entry Filled', 'plan', 'On fill', 'Broker ack'),
+      step('SL Protected', 'plan', 'Broker SL', 'Placed on fill'),
+      step('Trailing Active', 'plan', 'R-trail', 'Ratchets up'),
+      step('Exit', 'plan', 'Target · SL', '15:25 auto'),
+    ];
+    lifeLabel = !currentStatus ? 'Unverified' : liveStatus?.killed ? 'Blocked' : automation ? 'Scanning'
+      : automationWaiting ? 'Arming' : 'Standby';
+  }
+  const lifeDone = steps.filter(item => item.state === 'done').length;
+  const lifeTone = steps.some(item => item.state === 'fail') ? 'fail' : steps.some(item => item.state === 'warn') ? 'warn'
+    : steps[0].state === 'scan' ? 'scan' : lifeMode;
   const status = !currentStatus ? live ? 'POSITION UNVERIFIED' : 'STATUS UNAVAILABLE' :
     !live ? 'WAITING FOR SIGNAL' : exitReason ? 'EXIT REQUESTED' :
       live.error || liveStatus?.error ? 'CHECK KITE' : filled ? 'LIVE TRADE' : 'ORDER PENDING';
   const ring = 2 * Math.PI * 52;
-  const automation = currentStatus && liveStatus?.automation_on && !liveStatus.killed;
-  const automationWaiting = currentStatus && !automation && liveStatus?.automation_wanted && !liveStatus.killed;
   const note = liveStatus?.entry_note?.startsWith(`${symbol}:`) ? liveStatus.entry_note.slice(symbol.length + 1).trim() : null;
   const readinessReasons = plan?.reasons ?? (signal?.decision === 'WAIT' ? signal.reasons : undefined);
   const waitingReason = !currentStatus ? 'Live controller status unavailable; entry state unverified' :
@@ -256,17 +354,19 @@ function AQTETerminal({ symbol, signal, unavailable, liveStatus, onExit, now = D
                 live?.trailing_active ? `Last ₹${aqtePrice(live.stop)}` : live ? `From +${trailR}R` : '--'}
             </Row>
           </dl>
-          <div className="aqx-ring" aria-label="Open profit and loss">
-            <svg viewBox="0 0 120 120" aria-hidden="true">
-              <circle cx="60" cy="60" r="52" className="aqx-ring-track" />
-              <circle cx="60" cy="60" r="52" className={`aqx-ring-value ${points != null && points < 0 ? 'aqx-ring-loss' : ''}`}
-                strokeDasharray={ring} strokeDashoffset={ring * (1 - progress)} />
-            </svg>
-            <div className="aqx-ring-text">
-              <span>Open P&amp;L</span>
-              <strong className={toneOf(points)}>{points != null ? `${aqteSigned(points)} pts` : '--'}</strong>
-              <em className={toneOf(metrics?.net_pnl)}>{rupees(metrics?.net_pnl)}</em>
-              <b className={toneOf(metrics?.return_pct)}>{metrics?.return_pct != null ? `${aqteSigned(metrics.return_pct)}%` : '--'}</b>
+          <div className="aqx-ring-box">
+            <div className="aqx-ring" aria-label="Open profit and loss">
+              <svg viewBox="0 0 120 120" aria-hidden="true">
+                <circle cx="60" cy="60" r="52" className="aqx-ring-track" />
+                <circle cx="60" cy="60" r="52" className={`aqx-ring-value ${points != null && points < 0 ? 'aqx-ring-loss' : ''}`}
+                  strokeDasharray={ring} strokeDashoffset={ring * (1 - progress)} />
+              </svg>
+              <div className="aqx-ring-text">
+                <span>Open P&amp;L</span>
+                <strong className={toneOf(points)}>{points != null ? `${aqteSigned(points)} pts` : '--'}</strong>
+                <em className={toneOf(metrics?.net_pnl)}>{rupees(metrics?.net_pnl)}</em>
+                <b className={toneOf(metrics?.return_pct)}>{metrics?.return_pct != null ? `${aqteSigned(metrics.return_pct)}%` : '--'}</b>
+              </div>
             </div>
           </div>
           <div className="aqx-side-boxes">
@@ -289,34 +389,69 @@ function AQTETerminal({ symbol, signal, unavailable, liveStatus, onExit, now = D
         {live && !confirmed && <p role="status" className="aqx-warning">{exitReason ? 'Exit requested, not yet filled. Verify execution in Kite.' : 'Broker protection is unverified. Inspect Kite; do not assume the planned stop is active.'}</p>}
         {filled && !metrics && <p role="status" className="aqx-warning">Current quote/P&amp;L unavailable. Last-known trade levels are retained; verify in Kite.</p>}
         {!live && liveStatus?.active && <p role="status" className="aqx-warning">AQTE is managing {aqteLabel(liveStatus.active.symbol)} in its own index tab.</p>}
-        <div className="aqx-actions">
-          {[25, 50, 75].map(percent => (
-            <button key={percent} type="button" className="aqx-action aqx-action-book" disabled aria-describedby={`${prefix}-booking-note`}>
-              <span><strong>Book {percent}%</strong><small>Unavailable · 1 lot</small></span>
+        <section className="aqx-controls" aria-label="Trade controls" data-state={controlTone}>
+          <header className="aqx-controls-head">
+            <h5>Trade Controls</h5>
+            <span className="aqx-controls-state"><span aria-hidden="true" />{controlLabel}</span>
+          </header>
+          <div className="aqx-actions">
+            <div className="aqx-action aqx-action-partial" role="group" aria-label="Partial booking" aria-describedby={`${prefix}-booking-note`}>
+              <span aria-hidden="true">◔</span>
+              <span>
+                <strong>Partial Book</strong>
+                <span className="aqx-partial-chips">
+                  {[25, 50, 75].map(percent => (
+                    <button key={percent} type="button" disabled aria-label={`Book ${percent}% (unavailable for one lot)`}>{percent}%</button>
+                  ))}
+                </span>
+                <small>Not in 1-lot pilot</small>
+              </span>
+            </div>
+            <button type="button" className="aqx-action aqx-action-book-all" disabled={!canExit} onClick={() => requestExit('book')}
+              title={exitBlock ?? 'Book the full remaining quantity of the selected AQTE trade'}>
+              <span aria-hidden="true">₹</span>
+              <span><strong>Book All</strong><small>{exitBlock ?? 'Selected AQTE trade'}</small></span>
             </button>
-          ))}
-          <button type="button" className="aqx-action aqx-action-book-all" disabled={!canExit} onClick={() => requestExit('book')}>
-            <span><strong>Book All</strong><small>Selected AQTE trade</small></span>
-          </button>
-          <div className={`aqx-action aqx-action-trail ${trailing ? 'aqx-action-on' : ''}`} aria-label="Trailing stop status">
-            <span aria-hidden="true">🔒</span>
-            <span><strong>Trail &amp; Hold</strong><small>{trailing ? 'Broker-confirmed' : live ? `Auto at +${trailR}R` : 'Auto after entry'}</small></span>
+            <div className={`aqx-action aqx-action-trail ${trailing ? 'aqx-action-on' : live ? 'aqx-action-armed' : ''}`} aria-label="Trailing stop status">
+              <span aria-hidden="true">🔒</span>
+              <span><strong>Trail &amp; Hold</strong><small>{trailing ? 'Broker-confirmed' : live ? `Auto at +${trailR}R` : 'Auto after entry'}</small></span>
+            </div>
+            <button type="button" className="aqx-action aqx-action-exit" disabled={!canExit} onClick={() => requestExit('exit')}
+              title={exitBlock ?? 'Exit the selected AQTE trade (confirmation required)'}>
+              <span aria-hidden="true">⏻</span>
+              <span><strong>{exitReason ? 'Exit Requested' : 'Exit Now'}</strong><small>{exitBlock ?? 'Selected trade only'}</small></span>
+            </button>
           </div>
-          <button type="button" className="aqx-action aqx-action-exit" disabled={!canExit} onClick={() => requestExit('exit')}>
-            <span aria-hidden="true">⏻</span>
-            <span><strong>{exitReason ? 'Exit Requested' : 'Exit Now'}</strong><small>Selected trade only</small></span>
-          </button>
-        </div>
-        <p id={`${prefix}-booking-note`} className="aqx-footnote">25%/50%/75% booking needs multiple whole lots and is unavailable in this one-lot pilot. Trail &amp; Hold shows automatic status, not a manual order.</p>
-        <ol className="aqx-timeline" aria-label="Trade lifecycle">
-          {steps.map(([label, detail, done], index) => (
-            <li key={label} className={done ? 'aqx-step-done' : index === current && !!live ? 'aqx-step-current' : ''}>
-              <span aria-hidden="true" className="aqx-step-dot">{done ? '✓' : index === steps.length - 1 ? '⚑' : ''}</span>
-              <strong>{label}</strong>
-              <small>{detail}</small>
-            </li>
-          ))}
-        </ol>
+          <p id={`${prefix}-booking-note`} className="aqx-footnote">25%/50%/75% booking needs multiple whole lots and is unavailable in this one-lot pilot. Book All and Exit Now unlock once an AQTE trade is filled. Trail &amp; Hold shows automatic status, not a manual order.</p>
+          <div className="aqx-lifecycle" data-mode={lifeMode} data-tone={lifeTone}>
+            <div className="aqx-life-head">
+              <span className="aqx-life-title"><span aria-hidden="true">⟳</span>Trade Lifecycle</span>
+              <span className="aqx-life-pill"><span aria-hidden="true" />{lifeLabel}</span>
+              <span className="aqx-life-stats">
+                {lifeMode === 'closed' && lastTrade && <>
+                  <span className="aqx-life-contract">{lastTrade.contract?.trading_symbol ?? `${aqteLabel(symbol)} last trade`}</span>
+                  <b className={toneOf(lastTrade.net_pnl)}>{rupees(lastTrade.net_pnl)}</b>
+                </>}
+                {lifeMode === 'live' && metrics?.net_pnl != null && <b className={toneOf(metrics.net_pnl)}>{rupees(metrics.net_pnl)}</b>}
+                {lifeClock && <span>{lifeClock}</span>}
+                <span aria-label={`${lifeDone} of ${steps.length} stages complete`}>{lifeDone}/{steps.length}</span>
+              </span>
+              <span className="aqx-life-meter" aria-hidden="true"><span style={{ width: `${(lifeDone / steps.length) * 100}%` }} /></span>
+            </div>
+            <ol className="aqx-timeline" aria-label="Trade lifecycle">
+              {steps.map(({ label, detail, note, state }, index) => (
+                <li key={label} className={`aqx-step-${state}`} aria-current={state === 'current' ? 'step' : undefined}>
+                  <span aria-hidden="true" className="aqx-step-dot">
+                    {state === 'done' ? '✓' : state === 'fail' ? '!' : state === 'skip' ? '–' : index === steps.length - 1 ? '⚑' : index + 1}
+                  </span>
+                  <strong>{label}</strong>
+                  <small>{detail}</small>
+                  {note && <em>{note}</em>}
+                </li>
+              ))}
+            </ol>
+          </div>
+        </section>
       </article>
       <aside className="aqx-aside" id={`${prefix}-risk`}>
         <section className="aqx-card aqx-engine" aria-label="Rule-Based Trade Engine">

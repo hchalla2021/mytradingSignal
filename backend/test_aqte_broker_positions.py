@@ -20,6 +20,12 @@ class BrokerPositionTests(unittest.TestCase):
             dict(tradingsymbol="BANKNIFTY26NOV55000PE", exchange="NFO", product="NRML",
                  quantity=-30, average_price=200),
             dict(tradingsymbol="RELIANCE", exchange="NSE", product="CNC", quantity=1, average_price=100),
+            dict(tradingsymbol="NIFTY26N0323650CE", exchange="NFO", product="MIS", quantity=0, average_price=0,
+                 buy_quantity=65, sell_quantity=65, buy_price=120.3, sell_price=128, pnl=500.5),
+            dict(tradingsymbol="NIFTY26N0323700CE", exchange="NFO", product="MIS", quantity=0, average_price=0,
+                 buy_quantity=0, sell_quantity=0, buy_price=0, sell_price=0, pnl=0),
+            dict(tradingsymbol="TCS", exchange="NSE", product="MIS", quantity=0, average_price=0,
+                 buy_quantity=1, sell_quantity=1, buy_price=1, sell_price=2, pnl=1),
         ]}
         self.client.quote.return_value = {
             "NFO:NIFTY26NOV22000CE": self.quote(120),
@@ -58,6 +64,21 @@ class BrokerPositionTests(unittest.TestCase):
         self.client.place_order.assert_not_called()
         self.client.modify_order.assert_not_called()
         self.client.cancel_order.assert_not_called()
+
+    def test_positions_squared_off_today_are_reported_as_closed_with_realised_pnl(self):
+        self.client.orders.return_value = [
+            self.order(tradingsymbol="NIFTY26N0323650CE", status="COMPLETE", tag="7bc6ee7c7e404573S"),
+        ]
+        snapshot = self.service.snapshot()
+        self.assertEqual([p["trading_symbol"] for p in snapshot["positions"]],
+                         ["NIFTY26NOV22000CE", "BANKNIFTY26NOV55000PE"], "Closed rows never appear as open")
+        self.assertEqual(snapshot["closed"], [dict(
+            symbol="NIFTY", trading_symbol="NIFTY26N0323650CE", exchange="NFO", product="MIS",
+            quantity=65, buy_price=120.3, sell_price=128, gross_pnl=500.5, aqte=True)])
+        self.client.orders.return_value = []
+        self.service.cached = None
+        self.assertFalse(self.service.snapshot()["closed"][0]["aqte"], "Untagged trades are manual")
+        self.assertNotIn("NFO:NIFTY26N0323650CE", self.client.quote.call_args.args[0], "No quote for closed rows")
 
     def test_cache_is_bounded_and_credentials_rotation_cannot_return_previous_account(self):
         self.service.snapshot()
