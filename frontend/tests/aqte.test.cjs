@@ -505,13 +505,20 @@ test('rule card keeps the same keyed rows through loading, stale data, errors an
   const keys = panel => nodes(primary(panel)).filter(n => n.props?.check).map(n => n.key);
   const rowKeys = keys(first);
   assert.equal(rowKeys.length, 7);
-  for (const change of [
-    { signal: undefined },
-    { signal: { ...props.signal, intelligence: undefined } },
-    { signal: { ...props.signal, feed_ready: false } },
-    { signal: { ...props.signal, feed_ready: undefined } },
-    { now: props.signal.at + 6 },
-    { unavailable: true },
+  for (const [change, expected] of [
+    [{ signal: undefined }, /^Current evidence unavailable$/],
+    [{ signal: { ...props.signal, intelligence: undefined, reasons: ['Warming up: need 201 contiguous completed one-minute futures candles'],
+      warmup: { completed: 87, required: 201 } } }, /^Warming up · 87\/201 candles$/],
+    [{ signal: { ...props.signal, intelligence: null, reasons: ['Opening range: need 15 completed one-minute candles from 09:15 IST'],
+      opening: { completed: 4, required: 15 } } }, /^Opening range · 4\/15 candles$/],
+    [{ signal: { ...props.signal, feed_ready: false, intelligence: null, reasons: ['Outside regular market session'] } },
+      /^Market closed · rules run 09:15–15:30 IST$/],
+    [{ signal: { ...props.signal, feed_ready: false, reasons: ['Market data stale: futures last tick 9s ago'] } },
+      /^Market data stale: futures last tick 9s ago$/],
+    [{ signal: { ...props.signal, feed_ready: false, decision: 'BUY CE' } }, /^Current evidence unavailable$/],
+    [{ signal: { ...props.signal, feed_ready: undefined } }, /^Backend freshness unavailable$/],
+    [{ now: props.signal.at + 6 }, /^Current evidence unavailable$/],
+    [{ unavailable: true }, /^Current evidence unavailable$/],
   ]) {
     const panel = rulePanel(h.render({ ...props, ...change }));
     assert.ok(primary(panel), 'Never replace the primary list with an empty-state paragraph');
@@ -522,7 +529,8 @@ test('rule card keeps the same keyed rows through loading, stale data, errors an
       assert.equal(text(nodes(row).find(n => n.type === 'strong')), '--');
     }
     assert.doesNotMatch(text(panel), /49\.03|1,01,000|5\s*\/\s*8/);
-    assert.match(text(nodes(panel).find(n => n.props?.['aria-label'] === 'Rule alignment')), /unavailable/i);
+    assert.match(text(nodes(panel).find(n => n.props?.['aria-label'] === 'Rule alignment')).trim(), expected,
+      'Say why evidence is blank using the backend governing WAIT reason');
     const details = nodes(panel).find(n => n.type === 'details');
     assert.equal(details.props.open, undefined, 'Polling must never control disclosure state');
   }

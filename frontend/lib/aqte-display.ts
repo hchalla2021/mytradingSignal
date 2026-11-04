@@ -317,6 +317,37 @@ export function aqteFeedCurrent(signal: AQTESignal | undefined, now = Date.now()
   return signal?.feed_ready === true && Number.isFinite(age) && age >= -1 && age <= 5;
 }
 
+function progress(value: unknown) {
+  if (!record(value) || !count(value.completed) || !count(value.required) || value.required === 0) return null;
+  const { completed, required } = value as { completed: number; required: number };
+  return { completed: Math.min(completed, required), required };
+}
+
+/**
+ * Why rule evidence is absent, quoting the backend's governing WAIT reason (market closed, warm-up, stale feed).
+ * Only trusted while no current intelligence exists; the snapshot itself is rejected once older than 10 s.
+ */
+export function aqteEvidenceWait(signal: AQTESignal | undefined, unavailable: boolean): { label: string; detail: string | null } {
+  if (unavailable || !signal) return { label: 'Current evidence unavailable', detail: null };
+  if (signal.feed_ready === undefined) return { label: 'Backend freshness unavailable', detail: null };
+  const reason = signal.decision === 'WAIT' && (signal.feed_ready === false || !signal.intelligence) &&
+    Array.isArray(signal.reasons) && typeof signal.reasons[0] === 'string' ? signal.reasons[0].trim() : '';
+  if (!reason) return { label: 'Current evidence unavailable', detail: null };
+  const warmup = progress(signal.warmup);
+  const opening = progress(signal.opening);
+  if (reason === 'Outside regular market session') {
+    return { label: 'Market closed · rules run 09:15–15:30 IST', detail: 'Outside regular market session (Mon–Fri 09:15–15:30 IST).' };
+  }
+  if (reason.startsWith('Warming up') && warmup) {
+    return { label: `Warming up · ${warmup.completed}/${warmup.required} candles`, detail: `${reason}; ${warmup.completed} so far. ` +
+      'A missing minute (backend restart or feed gap) restarts the count unless exchange history backfills it.' };
+  }
+  if (reason.startsWith('Opening range') && opening) {
+    return { label: `Opening range · ${opening.completed}/${opening.required} candles`, detail: `${reason}; ${opening.completed} so far.` };
+  }
+  return { label: reason, detail: reason };
+}
+
 const formatter = new Intl.NumberFormat('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 export const aqtePrice = (value: number | null | undefined) =>
   value == null || !Number.isFinite(value) ? '--' : formatter.format(value);

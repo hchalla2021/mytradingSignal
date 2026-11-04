@@ -1,8 +1,8 @@
 'use client';
 
 import { memo, type ReactNode } from 'react';
-import { AQTE_SETUP_LABELS, aqteCanExit, aqteControllerCurrent, aqteEffectiveSignal, aqteIndexHold, aqteIstDay, aqteLabel, aqteLiveMetrics,
-  aqteOverview, aqtePrice, aqteRuleEvidence, aqteSigned, aqteTrailStart,
+import { AQTE_SETUP_LABELS, aqteCanExit, aqteControllerCurrent, aqteEffectiveSignal, aqteEvidenceWait, aqteIndexHold, aqteIstDay, aqteLabel,
+  aqteLiveMetrics, aqteOverview, aqtePrice, aqteRuleEvidence, aqteSigned, aqteTrailStart,
   type AQTELiveState, type AQTEExitRequest, type AQTESignal, type AQTESymbol, type AQTEStyle,
   type AQTERuleEvidence } from '@/lib/aqte-display';
 
@@ -211,11 +211,12 @@ function AQTETerminal({ symbol, signal, unavailable, liveStatus, onExit, now = D
   const checks = engineChecks(info, market, style ?? undefined, evidence);
   const score = evidence && plan?.decision !== 'WAIT' && plan?.confidence != null && Number.isFinite(plan.confidence) &&
     plan.confidence >= 0 && plan.confidence <= 100 ? plan.confidence : null;
+  const waiting = info ? null : aqteEvidenceWait(signal, unavailable);
   const evidenceUnavailable = !info ? signal && signal.feed_ready === undefined ?
     'Backend freshness unavailable; update the backend before trusting these values.' :
-    'Waiting for current backend evidence: fresh spot/futures and completed candles.' :
+    waiting?.detail ?? 'Waiting for current backend evidence: fresh spot/futures and completed candles.' :
     !market ? 'Live depth/OI unavailable; current tick evidence is required for entry checks.' : null;
-  const alignment = !info ? signal && signal.feed_ready === undefined ? 'Backend freshness unavailable' : 'Current evidence unavailable' :
+  const alignment = waiting ? waiting.label :
     style === null ? 'No entry style selected in Controls' : !style ? 'Entry style unavailable' : !market ? 'Live depth/OI unavailable' :
     `${style === 'scalp' ? 'Quick scalp' : 'Swing'}${evidence?.setup ? ` · ${AQTE_SETUP_LABELS[evidence.setup]}` : ''}${evidence ? evidence.side ?
       ` · ${evidence.side} · ${evidence.checks.filter(check => check.passed === true).length}/${evidence.checks.length} aligned` :
