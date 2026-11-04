@@ -42,7 +42,7 @@
           "nearest_fvg": {
             "type": "BULLISH",
             "zone": "23675-23774",
-            "dist": 0.4
+            "dist": 0.39
           }
         }
       },
@@ -74,10 +74,10 @@
         "signal": "BULL",
         "label": "Bullish displacement \u00d7 1 \u2014 Institutional buying",
         "weight": 0.1,
-        "value": 0.859,
+        "value": 0.856,
         "extra": {
           "displacement_count": 2,
-          "avg_body_ratio": 0.859,
+          "avg_body_ratio": 0.856,
           "bull_count": 1,
           "bear_count": 1
         }
@@ -94,7 +94,7 @@
       }
     },
     "metrics": {
-      "price": 23818.75,
+      "price": 23818.6,
       "changePct": 0.03,
       "oi": 0,
       "candleCount": 21,
@@ -167,7 +167,7 @@
       }
     },
     "dataSource": "LIVE",
-    "timestamp": "2026-11-04T12:28:47.719437+05:30"
+    "timestamp": "2026-11-04T12:28:55.949291+05:30"
   },
   "BANKNIFTY": {
     "symbol": "BANKNIFTY",
@@ -242,10 +242,10 @@
         "signal": "BULL",
         "label": "Bullish displacement \u00d7 1 \u2014 Institutional buying",
         "weight": 0.1,
-        "value": 0.88,
+        "value": 0.868,
         "extra": {
           "displacement_count": 2,
-          "avg_body_ratio": 0.88,
+          "avg_body_ratio": 0.868,
           "bull_count": 1,
           "bear_count": 1
         }
@@ -262,8 +262,8 @@
       }
     },
     "metrics": {
-      "price": 55639.45,
-      "changePct": 0.18,
+      "price": 55637.0,
+      "changePct": 0.17,
       "oi": 0,
       "candleCount": 21,
       "swingHighs": 2,
@@ -291,7 +291,7 @@
       "microstructure": {
         "liquidityDensity": 0.0,
         "structureDensity": 38.3,
-        "fakeBreakoutRisk": 22.42,
+        "fakeBreakoutRisk": 22.4,
         "stopHuntRisk": 24.0
       },
       "smc": {
@@ -335,7 +335,7 @@
       }
     },
     "dataSource": "LIVE",
-    "timestamp": "2026-11-04T12:28:47.720430+05:30"
+    "timestamp": "2026-11-04T12:28:55.950450+05:30"
   },
   "SENSEX": {
     "symbol": "SENSEX",
@@ -412,10 +412,10 @@
         "signal": "BEAR",
         "label": "Bearish displacement \u00d7 2 \u2014 Institutional selling",
         "weight": 0.1,
-        "value": 0.849,
+        "value": 0.848,
         "extra": {
           "displacement_count": 3,
-          "avg_body_ratio": 0.849,
+          "avg_body_ratio": 0.848,
           "bull_count": 1,
           "bear_count": 2
         }
@@ -432,7 +432,7 @@
       }
     },
     "metrics": {
-      "price": 76931.7,
+      "price": 76931.14,
       "changePct": 0.02,
       "oi": 0,
       "candleCount": 21,
@@ -505,6 +505,6 @@
       }
     },
     "dataSource": "LIVE",
-    "timestamp": "2026-11-04T12:28:47.721528+05:30"
+    "timestamp": "2026-11-04T12:28:55.951582+05:30"
   }
 }
