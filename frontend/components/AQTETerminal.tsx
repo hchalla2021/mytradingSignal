@@ -1,7 +1,8 @@
 'use client';
 
 import { memo, type ReactNode } from 'react';
-import { aqteCanExit, aqteControllerCurrent, aqteIstDay, aqteLabel, aqteLiveMetrics, aqteOverview, aqtePrice, aqteSigned, isAqteRuleChecks,
+import { AQTE_SETUP_LABELS, aqteCanExit, aqteControllerCurrent, aqteEffectiveSignal, aqteIndexHold, aqteIstDay, aqteLabel, aqteLiveMetrics,
+  aqteOverview, aqtePrice, aqteRuleEvidence, aqteSigned, aqteTrailStart,
   type AQTELiveState, type AQTEExitRequest, type AQTESignal, type AQTESymbol, type AQTEStyle,
   type AQTERuleEvidence } from '@/lib/aqte-display';
 
@@ -110,12 +111,41 @@ function engineChecks(info: Intelligence | null | undefined, market: Observation
   ];
   if (style === 'swing') rows.push({ id: 'cpr', label: 'Previous-day spot CPR', value: info.cpr ?
     `${aqtePrice(info.cpr.bottom)} - ${aqtePrice(info.cpr.top)} (spot context)` : 'Unavailable' });
-  return rows.map(row => {
+  const shown = new Set(rows.map(row => row.id));
+  // Setup-specific gates (pullback, sweep, stretch, ...) have no generic indicator row; show each with its measured value.
+  const setupRows: EngineRow[] = (evidence?.checks ?? []).filter(check => !shown.has(check.id))
+    .map(check => ({ id: check.id, label: check.label, value: setupValue(check.id, info) }));
+  return [...rows, ...setupRows].map(row => {
     const gate = evidence?.checks.find(check => check.id === row.id);
     return { ...row, gate, summary: row.id === 'ema' && row.summary ? {
       ...row.summary, value: !gate ? 'Unverified' : gate.passed === true ? 'Aligned' : gate.passed === false ? 'Not aligned' : 'No bias',
     } : row.summary };
   });
+}
+
+const stack = (ema: Record<string, number>, periods: readonly string[]) => {
+  const values = periods.map(n => ema[n]);
+  const rising = values.every((value, i) => i === 0 || values[i - 1] > value);
+  const falling = values.every((value, i) => i === 0 || values[i - 1] < value);
+  return rising ? 'Bullish stack' : falling ? 'Bearish stack' : 'Mixed (no stack)';
+};
+
+function setupValue(id: string, info: Intelligence): string {
+  const atrs = (distance: number) => info.atr > 0 ? `${aqtePrice(Math.abs(distance) / info.atr)} ATR` : 'ATR unavailable';
+  const live = info.live?.price;
+  switch (id) {
+    case 'pullback': return `${atrs(info.close - info.ema['20'])} from EMA20 ${aqtePrice(info.ema['20'])}`;
+    case 'resume': return `Close ${aqtePrice(info.close)} vs EMA9 ${aqtePrice(info.ema['9'])}`;
+    case 'sweep': return info.sweep === 1 ? 'Swept prior low, closed back inside' :
+      info.sweep === -1 ? 'Swept prior high, closed back inside' : 'No sweep this candle';
+    case 'trend_filter': return `EMA 9-200: ${stack(info.ema, ['9', '20', '50', '100', '200'])}`;
+    case 'range': return `EMA 9/20/50/200: ${stack(info.ema, ['9', '20', '50', '200'])}`;
+    case 'stretch': return info.vwap == null ? 'VWAP unavailable' :
+      `${atrs(info.close - info.vwap)} ${info.close < info.vwap ? 'below' : 'above'} VWAP ${aqtePrice(info.vwap)}`;
+    case 'confirm': case 'turn': return live == null ? 'Live price unavailable' :
+      `Live ${aqtePrice(live)} vs close ${aqtePrice(info.close)} (${aqteSigned(live - info.close)})`;
+    default: return 'See requirement';
+  }
 }
 
 function Check({ tone }: { tone: Tone }) {
@@ -160,23 +190,25 @@ function AQTETerminal({ symbol, signal, unavailable, liveStatus, onExit, now = D
   const { info } = aqteOverview(signal, 'real', unavailable, now);
   const currentStatus = aqteControllerCurrent(liveStatus, now);
   const style = currentStatus ? liveStatus?.styles?.[symbol] : undefined;
-  const plan = style === 'scalp' ? signal?.scalp : style === 'swing' ? signal : undefined;
+  const switches = currentStatus ? liveStatus?.swing_setups?.[symbol] : undefined;
+  const plan = style === 'scalp' ? signal?.scalp : style === 'swing' ? aqteEffectiveSignal(signal, 'swing', switches) ?? undefined : undefined;
   const observation = info?.live;
   const market = observation && [observation.at, observation.received].every(at => now - at >= -1 && now - at <= 5)
     ? observation : null;
-  const evidence = info && market && style && isAqteRuleChecks(signal?.rule_checks) ? signal.rule_checks[style] : null;
+  // Swing follows the controller's enabled-setup swap so the card shows the setup that would actually trade.
+  const evidence = info && market && style ? aqteRuleEvidence(signal, style, switches) : null;
   const direction = evidence?.side === 'CE' ? 'BULLISH' : evidence?.side === 'PE' ? 'BEARISH' : 'WAITING';
   const live = liveStatus?.active?.symbol === symbol ? liveStatus.active : null;
   const metrics = live ? aqteLiveMetrics(liveStatus, now) : null;
   const filled = !!live && live.filled > 0;
   const confirmed = currentStatus && !liveStatus?.error && !live?.error && !!live?.protection_confirmed;
   const trailing = !!live?.trailing_active && confirmed;
-  const trailR = live?.trail_start_r ?? 1;
+  const trailR = aqteTrailStart(liveStatus, symbol);
   const points = metrics?.points ?? null;
   const span = live ? points != null && points < 0 ? live.entry_price - live.initial_stop : live.target - live.entry_price : 0;
   const progress = points != null && span > 0 ? Math.min(1, Math.abs(points) / span) : 0;
   const targetHit = metrics?.bid != null && !!live && metrics.bid >= live.target;
-  const checks = engineChecks(info, market, style, evidence);
+  const checks = engineChecks(info, market, style ?? undefined, evidence);
   const score = evidence && plan?.decision !== 'WAIT' && plan?.confidence != null && Number.isFinite(plan.confidence) &&
     plan.confidence >= 0 && plan.confidence <= 100 ? plan.confidence : null;
   const evidenceUnavailable = !info ? signal && signal.feed_ready === undefined ?
@@ -184,8 +216,8 @@ function AQTETerminal({ symbol, signal, unavailable, liveStatus, onExit, now = D
     'Waiting for current backend evidence: fresh spot/futures and completed candles.' :
     !market ? 'Live depth/OI unavailable; current tick evidence is required for entry checks.' : null;
   const alignment = !info ? signal && signal.feed_ready === undefined ? 'Backend freshness unavailable' : 'Current evidence unavailable' :
-    !style ? 'Entry style unavailable' : !market ? 'Live depth/OI unavailable' :
-    `${style === 'scalp' ? 'Quick scalp' : 'Swing'}${evidence ? evidence.side ?
+    style === null ? 'No entry style selected in Controls' : !style ? 'Entry style unavailable' : !market ? 'Live depth/OI unavailable' :
+    `${style === 'scalp' ? 'Quick scalp' : 'Swing'}${evidence?.setup ? ` · ${AQTE_SETUP_LABELS[evidence.setup]}` : ''}${evidence ? evidence.side ?
       ` · ${evidence.side} · ${evidence.checks.filter(check => check.passed === true).length}/${evidence.checks.length} aligned` :
       ' · WAIT' : ' · Unverified'}`;
   const alignmentTone: Tone = !info || !market || !style || !evidence ? 'flat' :
@@ -204,6 +236,10 @@ function AQTETerminal({ symbol, signal, unavailable, liveStatus, onExit, now = D
   const controlTone = canExit ? 'ready' : exitReason ? 'pending' : live ? 'locked' : 'idle';
   const controlLabel = canExit ? 'Exit ready' : exitReason ? 'Exit pending' : live ? exitBlock : 'Standby · no open trade';
   const automationWaiting = currentStatus && !automation && liveStatus?.automation_wanted && !liveStatus.killed;
+  // A disabled or capped index never enters today even once Auto Trade arms, so it outranks the arming wait.
+  const indexBlock = currentStatus && (automation || automationWaiting) ? liveStatus?.entry_blocks?.[symbol] : null;
+  const indexHold = aqteIndexHold(indexBlock);
+  const sessionClosed = !!(automation || automationWaiting) && liveStatus?.entry_window === false;
   const lastTrade = !live && currentStatus ? [...(liveStatus?.trades ?? [])].reverse()
     .find(trade => trade.symbol === symbol && aqteIstDay(trade.exit_at) === aqteIstDay(now)) : undefined;
   let steps: LifeStep[];
@@ -269,6 +305,9 @@ function AQTETerminal({ symbol, signal, unavailable, liveStatus, onExit, now = D
     steps = [
       !currentStatus ? step('Signal', 'warn', 'Unverified', 'Status stale')
         : liveStatus?.killed ? step('Signal', 'fail', 'Blocked', 'Emergency stop')
+          : indexHold ? step('Signal', 'warn', indexHold === 'Limit reached' ? 'Limit hit' : 'Index off',
+            indexHold === 'Limit reached' ? 'Resets next day' : 'Enable in Controls')
+          : sessionClosed ? step('Signal', 'plan', 'Entries closed', '09:15 to 15:15 IST')
           : automation ? step('Signal', 'scan', setup ? `${evidence?.side} setup` : 'Scanning',
             evidence ? `${passed}/${evidence.checks.length} aligned` : 'Live feed')
             : automationWaiting ? step('Signal', 'warn', 'Arming', 'Preflight')
@@ -279,8 +318,9 @@ function AQTETerminal({ symbol, signal, unavailable, liveStatus, onExit, now = D
       step('Trailing Active', 'plan', 'R-trail', 'Ratchets up'),
       step('Exit', 'plan', 'Target · SL', '15:25 auto'),
     ];
-    lifeLabel = !currentStatus ? 'Unverified' : liveStatus?.killed ? 'Blocked' : automation ? 'Scanning'
-      : automationWaiting ? 'Arming' : 'Standby';
+    lifeLabel = !currentStatus ? 'Unverified' : liveStatus?.killed ? 'Blocked'
+      : indexHold ? indexHold === 'Limit reached' ? 'Limit hit' : 'Index off' : sessionClosed ? 'Entries closed'
+        : automation ? 'Scanning' : automationWaiting ? 'Arming' : 'Standby';
   }
   const lifeDone = steps.filter(item => item.state === 'done').length;
   const lifeTone = steps.some(item => item.state === 'fail') ? 'fail' : steps.some(item => item.state === 'warn') ? 'warn'
@@ -295,13 +335,17 @@ function AQTETerminal({ symbol, signal, unavailable, liveStatus, onExit, now = D
     liveStatus?.error ? liveStatus.error :
     liveStatus?.killed ? 'Emergency stop latched; new entries blocked' :
     !automation && !automationWaiting ? 'Auto Trade OFF; new entries blocked' :
+    indexHold ? [indexBlock, indexHold === 'Disabled in Controls' ? `tick "Enable ${aqteLabel(symbol)} entries" in Daily Trade Control` : null,
+      automationWaiting ? liveStatus?.automation_waiting : null].filter(Boolean).join(' · ') :
+    sessionClosed ? liveStatus?.automation_waiting || 'New entries permitted only from 09:15 to 15:15 IST' :
     automationWaiting ? liveStatus?.automation_waiting || 'Waiting for daily preflight and arming' :
     unavailable ? 'Current signal data unavailable; do not assume an entry is ready' :
     liveStatus?.entry_blocks?.[symbol] ? liveStatus.entry_blocks[symbol] :
     readinessReasons?.length ? `${plan && style === 'scalp' ? 'Quick scalp · ' : plan && style === 'swing' ? 'Swing · ' : ''}${readinessReasons.join(' · ')}` :
       'Waiting for a qualifying CE/PE setup and live quality, risk and broker checks';
-  const warmup = !unavailable ? signal?.warmup : undefined;
-  const opening = !unavailable ? signal?.opening : undefined;
+  // Candle warm-up only means something while the feed is live; after the close it would read as a stuck 0/N.
+  const warmup = !unavailable && signal?.feed_ready !== false ? signal?.warmup : undefined;
+  const opening = !unavailable && signal?.feed_ready !== false ? signal?.opening : undefined;
   const managing = currentStatus && filled && !!metrics && !liveStatus?.error;
   const prefix = `aqte-terminal-${symbol}`;
   return (
@@ -338,6 +382,14 @@ function AQTETerminal({ symbol, signal, unavailable, liveStatus, onExit, now = D
               <span> · Opening range: {opening.completed}/{opening.required} one-minute candles since 09:15 IST</span>
             )}
             {automation && note && <span> · Last entry check: {note}</span>}
+          </p>
+        )}
+        {!live && currentStatus && liveStatus?.entry_scan?.blocks[symbol] && (
+          <p className="aqx-footnote" aria-label="Last entry scan">
+            Last scan {clock(liveStatus.entry_scan.at)} IST
+            {' · '}{liveStatus.entry_scan.styles[symbol] === 'scalp' ? 'Scalp' : liveStatus.entry_scan.styles[symbol] === 'swing' ? 'Swing' :
+              liveStatus.entry_scan.styles[symbol] === null ? 'No entry style selected' : 'Style unavailable'}
+            {' · '}{liveStatus.entry_scan.blocks[symbol]}
           </p>
         )}
         <div className="aqx-hero-grid">

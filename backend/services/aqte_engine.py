@@ -359,9 +359,97 @@ def directional_checks(info: Mapping[str, object] | None, side: Literal["CE", "P
     return checks
 
 
-def strategy(info):
+SWING_SETUPS = ("momentum_breakout", "trend_continuation", "liquidity_reversal", "mean_reversion")
+SETUP_LABELS = {"momentum_breakout": "Momentum breakout", "trend_continuation": "Trend continuation",
+                "liquidity_reversal": "Liquidity-sweep reversal", "mean_reversion": "Mean reversion"}
+
+
+def setup_checks(info: Mapping[str, object] | None, side: Literal["CE", "PE"] | None,
+                 setup: str | None) -> list[RuleCheck]:
+    """Live entry gate of one swing setup; every check must pass.
+
+    A breakout keeps the full nine-check swing gate. The other setups need their own evidence because a
+    pullback, a sweep-and-reclaim or a VWAP reversion can never also be a fresh trend-aligned breakout.
+    """
+    swing = directional_checks(info, side, "swing")
+    if setup in (None, "momentum_breakout"):
+        return swing
+    if setup not in SWING_SETUPS:
+        raise ValueError("Unknown swing setup")
+    info = info or {}
+    shared = {check["id"]: check for check in swing}
+    sign = 1 if side == "CE" else -1 if side == "PE" else 0
+    raw_ema = info.get("ema")
+    e = raw_ema if isinstance(raw_ema, Mapping) else {}
+    price, vwap, atr = (info.get(key) for key in ("close", "vwap", "atr"))
+    rsi, volume, structure = info.get("rsi"), info.get("volume_ratio"), info.get("structure")
+    raw_live = info.get("live")
+    live = raw_live.get("price") if isinstance(raw_live, Mapping) else None
+    rsi_ok = finite_number(rsi) and 0 <= rsi <= 100
+    checks: list[RuleCheck] = []
+
+    def positive(*values: object) -> bool:
+        return all(finite_number(value) and value > 0 for value in values)
+
+    def add(key: str, label: str, passed: bool | None, requirement: str, reason: str) -> None:
+        checks.append(RuleCheck(id=key, label=label, passed=passed, requirement=requirement, reason=reason))
+
+    def add_volume(minimum: float, label: str) -> None:
+        add("volume", label, volume >= minimum if finite_number(volume) and volume >= 0 else None,
+            f"Completed minute / prior 20-minute average >= {minimum:g}x", f"Volume below {minimum:g}x average")
+
+    if setup == "trend_continuation":
+        ema9, ema20 = e.get("9"), e.get("20")
+        checks += [shared["ema"], shared["vwap"], shared["supertrend"]]
+        add("rsi", "RSI (14)", (50 <= rsi <= 70 if sign > 0 else 30 <= rsi <= 50) if sign and rsi_ok else None,
+            "CE 50-70; PE 30-50 (trend pullback band)", "RSI outside trend-pullback band")
+        checks.append(shared["cpr"])
+        add("pullback", "Pullback to EMA20", abs(price - ema20) <= atr if positive(price, ema20, atr) else None,
+            "Closed within 1 ATR of EMA20", "Not a pullback: more than 1 ATR from EMA20")
+        add("resume", "Pullback resuming", sign * (price - ema9) > 0 if sign and positive(price, ema9) else None,
+            "Closed back above EMA9 for CE; below for PE", "Pullback not resuming past EMA9")
+        add("structure", "20-candle structure",
+            structure != ("LOWER_LOW" if sign > 0 else "HIGHER_HIGH")
+            if sign and structure in ("HIGHER_HIGH", "LOWER_LOW", "RANGE") else None,
+            "No opposite 20-candle extreme", "Opposite 20-candle extreme; trend broken")
+        add_volume(1.0, "Resumption volume (20)")
+        checks.append(shared["imbalance"])
+    elif setup == "liquidity_reversal":
+        sweep = info.get("sweep")
+        stack = [e.get(str(n)) for n in (9, 20, 50, 100, 200)]
+        add("sweep", "Liquidity sweep and reclaim",
+            sweep == sign if sign and finite_number(sweep) and sweep in (-1, 0, 1) else None,
+            "Wick through prior 20-candle low for CE (high for PE), close back inside",
+            "No liquidity sweep in this direction")
+        add("trend_filter", "No opposing EMA 9-200 stack",
+            not all(-sign * (a - b) > 0 for a, b in zip(stack, stack[1:])) if sign and positive(*stack) else None,
+            "Never fade a fully stacked opposite trend", "Fully stacked opposite trend; no reversal")
+        add("rsi", "RSI (14)", (rsi < 70 if sign > 0 else rsi > 30) if sign and rsi_ok else None,
+            "CE below 70; PE above 30 (not exhausted)", "RSI exhausted in the reversal direction")
+        add_volume(1.5, "Sweep volume (20)")
+        checks.append(shared["imbalance"])
+        add("confirm", "Live reclaim holding", sign * (live - price) >= 0 if sign and positive(live, price) else None,
+            "Live futures not giving back the reclaim", "Live futures gave back the reclaim")
+    else:
+        four = [e.get(str(n)) for n in (9, 20, 50, 200)]
+        add("stretch", "Stretch from VWAP", sign * (vwap - price) > 2 * atr if sign and positive(price, vwap, atr) else None,
+            "More than 2 ATR below VWAP for CE; above for PE", "Not stretched 2 ATR from VWAP")
+        add("rsi", "RSI (14)", (rsi < 30 if sign > 0 else rsi > 70) if sign and rsi_ok else None,
+            "CE below 30; PE above 70 (extreme)", "RSI not at an extreme")
+        add("range", "Non-trending market",
+            not any(all(d * (a - b) > 0 for a, b in zip(four, four[1:])) for d in (1, -1)) if positive(*four) else None,
+            "No EMA 9/20/50/200 stack either way", "Trending market; no mean reversion")
+        add_volume(1.5, "Climax volume (20)")
+        checks.append(shared["imbalance"])
+        add("turn", "Live turn toward VWAP", sign * (live - price) > 0 if sign and positive(live, price) else None,
+            "Live futures moving back toward VWAP", "No live turn toward VWAP yet")
+    return checks
+
+
+def strategy_candidates(info):
+    """Swing setups present on this closed candle as (name, side, score), highest base rule score first."""
     if not finite_number(info.get("volume_ratio")):
-        return None
+        return []
     e, price = info["ema"], info["close"]
     direction = 1 if e["9"] > e["20"] > e["50"] > e["200"] else (
         -1 if e["9"] < e["20"] < e["50"] < e["200"] else 0)
@@ -378,13 +466,31 @@ def strategy(info):
         elif info["rsi"] > 70:
             candidates.append(("mean_reversion", -1, 65))
     if not candidates or info["imbalance"] is None or info["vwap"] is None or info["atr"] <= 0:
-        return None
+        return []
     candidates = [candidate for candidate in candidates if candidate[1] * info["imbalance"] >= -0.15]
-    if not candidates:
-        return None
-    name, side, score = max(candidates, key=lambda x: x[2])
-    score += 5 if side * info["imbalance"] > 0.15 else 0
-    return name, "CE" if side > 0 else "PE", score
+    candidates.sort(key=lambda candidate: candidate[2], reverse=True)
+    return [(name, "CE" if side > 0 else "PE", score + (5 if side * info["imbalance"] > 0.15 else 0))
+            for name, side, score in candidates]
+
+
+def swing_setups(info):
+    """Every swing setup on this candle, best rule score first, with its own entry-gate checks and verdict."""
+    setups = []
+    for name, side, score in strategy_candidates(info):
+        checks = setup_checks(info, side, name)
+        setups.append(dict(name=name, side=side, score=score, checks=checks,
+                           passed=all(check["passed"] is True for check in checks)))
+    return setups
+
+
+def best_setup(setups):
+    """Highest-scored setup whose own gate passes; otherwise the highest-scored (blocked) one."""
+    return next((setup for setup in setups if setup["passed"]), setups[0] if setups else None)
+
+
+def strategy(info):
+    best = best_setup(swing_setups(info))
+    return (best["name"], best["side"], best["score"]) if best else None
 
 
 def scalp(info, points, delta=0.5, reach=4):
@@ -638,16 +744,23 @@ class AQTEEngine:
                       model="explainable-rules-v1", model_validated=False,
                       warmup=dict(completed=completed, required=WARMUP_CANDLES),
                       opening=dict(completed=min(opening, SESSION_CANDLES), required=SESSION_CANDLES),
-                      scalp=self.idle_scalp(reason), rule_checks=None)
+                      scalp=self.idle_scalp(reason), rule_checks=None, setups=[])
         self.signals[symbol] = signal
-        setup = strategy(info) if info else None
+        setups = swing_setups(info) if info else []
+        best = best_setup(setups)
+        setup = (best["name"], best["side"], best["score"]) if best else None
         if info:
             scalp_side = scalp_bias(info)
             swing_side = ("CE" if setup[1] == "CE" else "PE") if setup else None
+            swing_name = setup[0] if setup else None
             signal["rule_checks"] = {
                 "scalp": dict(side=scalp_side, checks=directional_checks(info, scalp_side, "scalp")),
-                "swing": dict(side=swing_side, checks=directional_checks(info, swing_side, "swing")),
+                "swing": dict(side=swing_side, setup=swing_name,
+                              checks=best["checks"] if best else setup_checks(info, None, None)),
             }
+            # Every setup on this candle with its own checks; the live controller (and the UI, mirroring it)
+            # may trade an enabled same-side alternative.
+            signal["setups"] = setups
         if reason:
             return
         signal["scalp"] = self.scalp_signal(symbol, info, now, spot)
@@ -811,7 +924,7 @@ class AQTEEngine:
                 model="explainable-rules-v1", model_validated=False,
                 warmup=dict(completed=0, required=WARMUP_CANDLES),
                 opening=dict(completed=0, required=SESSION_CANDLES),
-                scalp=self.idle_scalp("Waiting for live market data"), rule_checks=None)))
+                scalp=self.idle_scalp("Waiting for live market data"), rule_checks=None, setups=[])))
             scalp_signal = dict(signal.get("scalp") or self.idle_scalp(None))
             if risk or not self.fresh(self.spot.get(symbol), now) or not self.fresh(self.future.get(symbol), now):
                 reason = risk or self.feed_reason(symbol, now)
@@ -831,7 +944,7 @@ class AQTEEngine:
             signal["scalp"] = scalp_signal
             signal["feed_ready"] = self.fresh(self.spot.get(symbol), now) and self.fresh(self.future.get(symbol), now)
             if not signal["feed_ready"] or signal["at"] is None or not -1 <= now - signal["at"] <= self.policy.stale_seconds:
-                signal["rule_checks"] = None
+                signal.update(rule_checks=None, setups=[])
             order = self.orders.get(symbol)
             signal["position"] = {
                 **order, "metrics": self.position_metrics(order, now, healthy=not self.fault),

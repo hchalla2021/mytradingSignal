@@ -35,6 +35,7 @@ KILL_SLIPPAGE = 0.05
 ACTIVATION_RETRY_SECONDS = 60
 # A skipped automated entry (price moved, quote stale) is re-evaluated after this many seconds.
 ENTRY_RETRY_SECONDS = 5
+ENTRY_SCAN_AUDIT_SECONDS = 60
 ENTRY_CUTOFF_MINUTE = 15 * 60 + 15
 MARKET_WAIT = "Waiting for market: auto trade arms on weekdays 09:15 to 15:15 IST"
 # Kite rejects more than 25 modifications per order; trailing must leave headroom for the exit.
@@ -96,6 +97,8 @@ class AQTELiveService:
         self.waiting = None
         self.entry_note = None
         self.skip_until = {}
+        self.entry_scan = None
+        self.next_scan_audit = 0.0
         self.next_activation = 0.0
         self.ready = False
         self.task = None
@@ -149,7 +152,9 @@ class AQTELiveService:
         if set(self.state["daily_controls"]) != set(SYMBOLS):
             raise LiveBlocked("Invalid saved daily-control index set; journal requires repair before trading")
         self.state["daily_controls"] = {
-            symbol: IndexControl(**{"style": "swing", **control}).model_dump()
+            symbol: IndexControl(**{"style": "swing", "setups": {
+                "momentum_breakout": True, "trend_continuation": False,
+                "liquidity_reversal": False, "mean_reversion": False}, **control}).model_dump()
             for symbol, control in self.state["daily_controls"].items()
         }
         self.save("RESTART_DISARMED", automation_wanted=self.state["automation_wanted"])
@@ -192,6 +197,8 @@ class AQTELiveService:
                 self.state["armed_day"] == day(now) and not self.state["killed"]
             wanted = bool(self.state.get("automation_wanted")) and not self.state["killed"]
             snapshot = self.service().snapshot()
+            selections = {symbol: self.select_entry(symbol, signal)
+                          for symbol, signal in snapshot["data"].items()}
             return {
                 "generated_at": now, "daily_counts": counts(self.state, now),
                 "enabled": cfg.aqte_live_enabled, "paper_validated": cfg.aqte_live_paper_validated,
@@ -203,12 +210,19 @@ class AQTELiveService:
                 "entry_window": entry_window(now),
                 "killed": self.state["killed"], "flatten_pending": bool(self.state.get("flatten_pending")),
                 "active": active, "error": self.error, "entry_note": self.entry_note,
-                "styles": {symbol: control.get("style", "scalp")
-                           for symbol, control in self.state["daily_controls"].items()},
-                "entry_blocks": {symbol: self.entry_reason(symbol, self.effective(symbol, signal))
-                                 for symbol, signal in snapshot["data"].items()},
+                "entry_scan": copy.deepcopy(self.entry_scan),
+                "styles": {symbol: selected["style"] for symbol, selected in selections.items()},
+                "style_checks": {symbol: selected["style_checks"] for symbol, selected in selections.items()},
+                "trail_starts": {symbol: control["trail_start_r"]
+                                 for symbol, control in self.state["daily_controls"].items()},
+                # Lets the UI mirror enabled_setup() and show the setup the controller would actually trade.
+                "swing_setups": {symbol: dict(control["setups"])
+                                 for symbol, control in self.state["daily_controls"].items()
+                                 if isinstance(control.get("setups"), dict)},
+                "entry_blocks": {symbol: selected["check"][0] for symbol, selected in selections.items()},
+                "entry_plans": {symbol: selected["check"][1] for symbol, selected in selections.items()},
                 "ranking": sorted(snapshot["data"], key=lambda symbol: rank_key(
-                    self.effective(symbol, snapshot["data"][symbol])), reverse=True),
+                    selections[symbol]["signal"]), reverse=True),
                 "ready": self.ready, "trades": copy.deepcopy(visible_trades),
                 "limits": {"risk_per_trade": cfg.aqte_live_risk_per_trade,
                            "daily_loss": cfg.aqte_live_daily_loss, "max_trades": cfg.aqte_live_max_trades,
@@ -221,13 +235,46 @@ class AQTELiveService:
             return {active["contract"]["token"]: Contract(**active["contract"])} if active else {}
 
     def effective(self, symbol, signal):
-        """Scalp style trades the engine's quick-scalp sub-signal; swing trades the main rule signal."""
-        if self.state["daily_controls"][symbol].get("style", "scalp") != "scalp":
-            return signal
+        return self.select_entry(symbol, signal)["signal"]
+
+    def select_entry(self, symbol, signal):
+        """Pick one allowed, risk-cleared style before ranking; this never calls the broker."""
+        control = self.state["daily_controls"][symbol]
+        allowed = control.get("style", "swing")
         scalp = signal.get("scalp") or {}
-        return {**signal, "decision": scalp.get("decision") or "WAIT", "strategy": scalp.get("strategy"),
+        candidates = []
+        if allowed in ("scalp", "both"):
+            candidates.append(("scalp", {
+                **signal, "decision": scalp.get("decision") or "WAIT", "strategy": scalp.get("strategy"),
                 "confidence": scalp.get("confidence"), "contract": scalp.get("contract"),
-                "entry": scalp.get("entry"), "reasons": scalp.get("reasons") or ["Waiting for a quick-scalp setup"]}
+                "entry": scalp.get("entry"), "reasons": scalp.get("reasons") or ["Waiting for a quick-scalp setup"]}))
+        if allowed in ("swing", "both"):
+            candidates.append(("swing", self.enabled_setup(control, signal)))
+        if not candidates:
+            waiting = {**signal, "decision": "WAIT", "strategy": None, "confidence": None,
+                       "contract": None, "entry": None, "reasons": ["No entry style selected in Controls"]}
+            return dict(style=None, signal=waiting, check=self.entry_check(symbol, waiting), style_checks={})
+        evaluated = [dict(style=style, signal=candidate, check=self.entry_check(symbol, candidate))
+                     for style, candidate in candidates]
+        selected = max(evaluated, key=lambda candidate: (
+            candidate["check"][0] is None, *rank_key(candidate["signal"])))
+        return {**selected, "style_checks": {item["style"]: item["check"][0] for item in evaluated}}
+
+    @staticmethod
+    def enabled_setup(control, signal):
+        """When the engine's best swing setup is OFF, use the best ON same-side setup that passed its own gate.
+
+        Same side means the same option contract and entry price; quality_reason still re-derives the gate.
+        """
+        enabled = control.get("setups") or {}
+        if signal.get("decision") not in ("BUY CE", "BUY PE") or enabled.get(signal.get("strategy")):
+            return signal
+        side = signal["decision"][-2:]
+        for setup in signal.get("setups") or ():
+            if setup.get("passed") is True and setup.get("side") == side and enabled.get(setup.get("name")):
+                return {**signal, "strategy": setup["name"], "confidence": setup["score"],
+                        "reasons": [setup["name"].replace("_", " "), *(signal.get("reasons") or [])[1:]]}
+        return signal
 
     @staticmethod
     def setup_key(symbol, signal):
@@ -268,15 +315,44 @@ class AQTELiveService:
 
     def entry_reason(self, symbol, signal):
         """Read-only rule/risk checks shared by status and Controls; never calls the broker."""
+        return self.entry_check(symbol, signal)[0]
+
+    def entry_check(self, symbol, signal):
+        """(block reason, planned levels): the exact limit/stop/target the controller would send for this signal."""
         reason = self.control_reason(symbol, signal)
         if reason:
-            return reason
+            return reason, None
         try:
             self.config_guard()
-            self.entry_levels(symbol, signal)
+            entry, risk = self.entry_levels(symbol, signal)
         except LiveBlocked as exc:
-            return str(exc)
+            return str(exc), None
+        plan = {key: entry[key] for key in ("maximum", "stop", "target", "reward_risk", "quantity")}
+        plan.update(risk=round(risk, 2), points=entry.get("points"))
+        if self.setup_key(symbol, signal) in self.state["used"]:
+            return "This strategy candle was already submitted", plan
+        if time.time() < self.skip_until.get(symbol, 0):
+            return "Entry retry cooldown after a transient price/quote check", plan
+        return None, plan
+
+    def loss_budget_reason(self, symbol: str, risk: float) -> str | None:
+        today = day(time.time())
+        trades = [trade for trade in self.state["trades"] if day(trade["entry_at"]) == today]
+        cfg = self.settings()
+        if risk > cfg.aqte_live_daily_loss + sum(trade["net_pnl"] for trade in trades):
+            return "Trade exceeds remaining daily live loss budget"
+        index_pnl = sum(trade["net_pnl"] for trade in trades if trade["symbol"] == symbol)
+        budget = min(self.state["daily_controls"][symbol]["daily_loss"], cfg.aqte_live_daily_loss)
+        if risk > budget + index_pnl:
+            return "Trade exceeds remaining daily index loss budget"
         return None
+
+    def record_entry_scan(self, blocks: dict[str, str], styles: dict[str, str | None]) -> None:
+        now = time.time()
+        self.entry_scan = dict(at=now, blocks=blocks, styles=styles)
+        if now >= self.next_scan_audit:
+            self.save("ENTRY_SCAN", **self.entry_scan)
+            self.next_scan_audit = now + ENTRY_SCAN_AUDIT_SECONDS
 
     def daily_controls(self):
         with self.lock:
@@ -284,9 +360,11 @@ class AQTELiveService:
             total = counts(self.state, time.time())
             result = {}
             for symbol, control in self.state["daily_controls"].items():
-                signal = self.effective(symbol, snapshot["data"][symbol])
+                selected = self.select_entry(symbol, snapshot["data"][symbol])
+                signal = selected["signal"]
+                entry = selected["check"][1] or signal.get("entry")
                 count = counts(self.state, time.time(), symbol)
-                reason = self.entry_reason(symbol, signal)
+                reason = selected["check"][0]
                 if not snapshot["recording"] or snapshot.get("fault"):
                     reason = "Market recorder unavailable"
                 reached = "limit reached" in (reason or "").lower() or "cap reached" in (reason or "").lower()
@@ -298,8 +376,10 @@ class AQTELiveService:
                     reason=reason or ("Ready; automation OFF or not armed" if not live else "Risk/broker checks required before entry"),
                     direction=(signal.get("intelligence") or {}).get("supertrend") or "UNKNOWN",
                     opportunity=dict(decision=signal["decision"], confidence=signal.get("confidence"),
-                                     strategy=signal.get("strategy"),
-                                     entry=signal.get("entry"), contract=signal.get("contract"),
+                                     strategy=f'quick_scalp_{entry["points"]:g}' if entry and entry.get("points") else signal.get("strategy"),
+                                     style=selected["style"],
+                                     style_checks=selected["style_checks"],
+                                     entry=entry, contract=signal.get("contract"),
                                      reasons=signal.get("reasons", [])),
                 )
             cap = self.settings().aqte_live_max_trades
@@ -536,14 +616,23 @@ class AQTELiveService:
             snapshot = self.service().snapshot()
             if not snapshot["recording"] or snapshot.get("fault") or snapshot["risk"].get("killed"):
                 raise LiveBlocked("Market recorder/risk state unavailable; automation stopped")
-            signals = {symbol: self.effective(symbol, signal) for symbol, signal in snapshot["data"].items()}
+            selections = {symbol: self.select_entry(symbol, signal) for symbol, signal in snapshot["data"].items()}
+            signals = {symbol: selected["signal"] for symbol, selected in selections.items()}
+            blocks: dict[str, str] = {}
             for symbol in sorted(signals, key=lambda s: rank_key(signals[s]), reverse=True):
                 signal = signals[symbol]
-                if self.control_reason(symbol, signal):
+                reason = self.control_reason(symbol, signal)
+                if reason:
+                    blocks[symbol] = reason
                     continue
                 if signal["decision"] not in ("BUY CE", "BUY PE") or not signal.get("entry"):
+                    blocks[symbol] = "No confirmed LONG CE/PE opportunity"
                     continue
-                if self.setup_key(symbol, signal) in self.state["used"] or time.time() < self.skip_until.get(symbol, 0):
+                if self.setup_key(symbol, signal) in self.state["used"]:
+                    blocks[symbol] = "This strategy candle was already submitted"
+                    continue
+                if time.time() < self.skip_until.get(symbol, 0):
+                    blocks[symbol] = "Entry retry cooldown after a transient price/quote check"
                     continue
                 try:
                     proposal = self.proposal(symbol)
@@ -555,9 +644,14 @@ class AQTELiveService:
                     if note != self.entry_note:
                         logger.info("AQTE automated entry skipped: %s", note)
                     self.entry_note = note
+                    blocks[symbol] = str(exc)
                     continue
                 self.entry_note = None
-                return
+                blocks[symbol] = "Entry submitted"
+                for other in signals.keys() - blocks.keys():
+                    blocks[other] = "Not attempted: one entry already submitted"
+                break
+            self.record_entry_scan(blocks, {symbol: selected["style"] for symbol, selected in selections.items()})
 
     def proposal(self, symbol):
         with self.lock:
@@ -604,7 +698,8 @@ class AQTELiveService:
         if entry["quantity"] != contract.lot_size:
             raise LiveBlocked("Live pilot permits exactly one lot")
         if not 0 < entry["stop"] < entry["maximum"] < entry["target"]:
-            raise LiveBlocked("Invalid live entry levels")
+            # Signal-specific (e.g. a one-tick premium): skip this index without fault-stopping automation.
+            raise EntrySkipped("Premium too small for valid live entry, stop and target levels")
         risk = (entry["maximum"] - entry["stop"]) * contract.lot_size + self.costs(
             entry["maximum"], contract.lot_size) + self.costs(entry["stop"], contract.lot_size)
         reward = (entry["target"] - entry["maximum"]) * contract.lot_size - self.costs(
@@ -614,6 +709,9 @@ class AQTELiveService:
         entry["reward_risk"] = round(reward / risk, 2)
         if risk > cap:
             raise EntrySkipped("One lot exceeds live per-trade risk limit")
+        reason = self.loss_budget_reason(symbol, risk)
+        if reason:
+            raise EntrySkipped(reason)
         return entry, risk
 
     def scalp_levels(self, contract, entry, cap):
@@ -640,7 +738,7 @@ class AQTELiveService:
             if proposal is None or time.time() >= proposal["expires_at"]:
                 raise LiveBlocked("Order approval expired or already used; review a new proposal")
             broker = self.broker()
-            cfg, pnl = self.entry_guard(broker)
+            self.entry_guard(broker)
             if proposal["setup_key"] in self.state["used"]:
                 raise LiveBlocked("This strategy candle was already submitted")
             # Re-evaluate the backend setup; never trust browser prices or quantity.
@@ -655,13 +753,10 @@ class AQTELiveService:
                 raise EntrySkipped("Rechecked risk exceeds the approved risk; review a new proposal")
             # Use the rechecked tier/stop/target, not an obsolete higher-risk plan.
             proposal = {**current, "expires_at": proposal["expires_at"]}
-            if proposal["risk"] > cfg.aqte_live_daily_loss + pnl:
-                raise LiveBlocked("Trade exceeds remaining daily live loss budget")
+            reason = self.loss_budget_reason(proposal["symbol"], proposal["risk"])
+            if reason:
+                raise EntrySkipped(reason)
             control = self.state["daily_controls"][proposal["symbol"]]
-            index_pnl = sum(t["net_pnl"] for t in self.state["trades"]
-                            if t["symbol"] == proposal["symbol"] and day(t["entry_at"]) == day(time.time()))
-            if proposal["risk"] > min(control["daily_loss"], cfg.aqte_live_daily_loss) + index_pnl:
-                raise LiveBlocked("Trade exceeds remaining daily index loss budget")
             c, entry = proposal["contract"], proposal["entry"]
             key = f'{c["exchange"]}:{c["trading_symbol"]}'
             raw = broker.quote([key])[key]

@@ -168,7 +168,7 @@ class EvidenceTests(unittest.TestCase):
             self.assertIsNone(scalp(scalp_info(volume_ratio=invalid), (10,))[0])
 
     def test_snapshot_publishes_exact_checks_and_clears_them_when_stale(self):
-        from services.aqte_engine import directional_checks, scalp_bias
+        from services.aqte_engine import directional_checks, scalp_bias, setup_checks, swing_setups
 
         engine = ready_engine(paper_enabled=False)
         signal = engine.snapshot(NOW)["data"]["NIFTY"]
@@ -176,8 +176,12 @@ class EvidenceTests(unittest.TestCase):
         evidence = signal["rule_checks"]
         self.assertEqual(evidence["scalp"], dict(side=scalp_bias(info),
                                                 checks=directional_checks(info, scalp_bias(info), "scalp")))
-        self.assertEqual(evidence["swing"]["checks"], directional_checks(info, "CE", "swing"))
-        self.assertIsNone(engine.snapshot(NOW + 6)["data"]["NIFTY"]["rule_checks"])
+        swing = evidence["swing"]
+        self.assertEqual((swing["side"], swing["setup"]), ("CE", signal["strategy"]))
+        self.assertEqual(swing["checks"], setup_checks(info, "CE", signal["strategy"]))
+        self.assertEqual(signal["setups"], swing_setups(info))
+        stale = engine.snapshot(NOW + 6)["data"]["NIFTY"]
+        self.assertEqual((stale["rule_checks"], stale["setups"]), (None, []))
         self.assertIsNotNone(engine.signals["NIFTY"]["rule_checks"], "Snapshots must not mutate the engine")
 
 
@@ -406,6 +410,35 @@ class CandleTests(unittest.TestCase):
                 "close": 60, "vwap": 100, "atr": 10, "rsi": 20, "imbalance": 0}
         self.assertEqual(strategy(mean)[:2], ("mean_reversion", "CE"))
         self.assertIsNone(strategy({**mean, "imbalance": -0.5}))
+
+    def test_each_setup_has_its_own_gate_and_a_passing_setup_beats_a_blocked_higher_score(self):
+        from services.aqte_engine import SWING_SETUPS, best_setup, setup_checks, swing_setups
+
+        with self.assertRaises(ValueError):
+            setup_checks({}, "CE", "martingale")
+        for name in SWING_SETUPS:
+            self.assertTrue(all(c["passed"] is None for c in setup_checks({}, "CE", name)), "Missing data never passes")
+            self.assertFalse(all(c["passed"] is True for c in setup_checks(scalp_info(), None, name)),
+                             "Without a direction no setup gate can pass")
+        reversal = dict(ema={"9": 100, "20": 101, "50": 99, "100": 102, "200": 98}, close=100, vwap=99, atr=2,
+                        rsi=45, volume_ratio=2, imbalance=0.3, supertrend="BEARISH", sweep=1, breakout=0,
+                        structure="RANGE", cpr={"top": 101, "bottom": 99}, live={"price": 100.5})
+        reversal_setups = swing_setups(reversal)
+        self.assertEqual([{k: v for k, v in s.items() if k != "checks"} for s in reversal_setups],
+                         [dict(name="liquidity_reversal", side="CE", score=75, passed=True)])
+        self.assertEqual(reversal_setups[0]["checks"], setup_checks(reversal, "CE", "liquidity_reversal"),
+                         "Each setup carries its own gate so the UI can show the setup the controller trades")
+        # A wide candle can also break out; the breakout gate fails (no EMA stack) but must not hide the reversal.
+        both = {**reversal, "breakout": 1}
+        self.assertEqual([(s["name"], s["passed"]) for s in swing_setups(both)],
+                         [("momentum_breakout", False), ("liquidity_reversal", True)])
+        self.assertEqual(strategy(both), ("liquidity_reversal", "CE", 75))
+        self.assertEqual(strategy({**both, "live": {"price": 99.5}})[0], "momentum_breakout",
+                         "With no passing setup the top (blocked) one is reported")
+        blocked, ready = dict(name="a", passed=False), dict(name="b", passed=True)
+        self.assertIs(best_setup([blocked, ready]), ready)
+        self.assertIs(best_setup([blocked]), blocked)
+        self.assertIsNone(best_setup([]))
 
 
 class ExecutionTests(unittest.TestCase):

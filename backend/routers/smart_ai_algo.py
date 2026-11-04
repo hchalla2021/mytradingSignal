@@ -67,7 +67,7 @@ async def get_status() -> Dict[str, Any]:
         "status": "ok",
         "ai_enabled": svc.get_ai_enabled(),
         "auto_trade_enabled": settings.algo_auto_trade_enabled,
-        "auto_trade_mode": (settings.algo_auto_trade_mode or "paper").lower().strip(),
+        "auto_trade_mode": (settings.algo_auto_trade_mode or "off").lower().strip(),
         "min_trade_confidence": int(settings.algo_min_trade_confidence),
         "min_trade_strength": int(settings.algo_min_trade_strength),
         "trade_cooldown_sec": int(settings.algo_trade_cooldown_sec),
@@ -78,7 +78,7 @@ async def get_status() -> Dict[str, Any]:
 
 @http_router.get("/trades")
 async def get_trades(limit: int = 100) -> Dict[str, Any]:
-    """Recent auto-trade events for Smart AI Algo (paper/live)."""
+    """Recent real Zerodha auto-trade events for Smart AI Algo."""
     svc = get_algo_service()
     trades = svc.get_trade_history(limit=limit)
     return {

@@ -18,7 +18,7 @@ from services.feed_watchdog import feed_watchdog
 from services.auth_state_machine import auth_state_manager
 from services.market_session_controller import market_session, MarketPhase
 from config.market_session import get_market_session
-from config.nse_holidays import is_holiday, get_holiday_name
+from config.nse_holidays import is_holiday
 
 settings = get_settings()
 
@@ -473,8 +473,6 @@ class MarketFeedService:
         try:
             from services.order_flow_engine import order_flow_engine
             order_flow_engine.ingest_futures(symbol, int(tick.get("instrument_token") or 0), tick)
-            from services.paper_trading import get_paper_trading_service
-            get_paper_trading_service().enqueue_futures_tick(symbol, tick)
         except Exception as error:
             print(f"?? Order flow ingest error: {error}")
 
@@ -505,8 +503,6 @@ class MarketFeedService:
                 get_aqte_service().enqueue(symbol, "spot", tick)
                 from services.order_flow_engine import order_flow_engine
                 order_flow_engine.ingest_spot(symbol, float(data.get("price") or 0))
-                from services.paper_trading import get_paper_trading_service
-                get_paper_trading_service().enqueue_tick(symbol, tick)
                 
                 # 🔥 CRITICAL: Notify watchdog of tick received
                 feed_watchdog.on_tick(symbol)
@@ -523,8 +519,6 @@ class MarketFeedService:
                 # 🔥 CRITICAL FIX: Process ALL ticks during market hours
                 market_status = get_market_status()
                 data["status"] = market_status  # Ensure tick carries correct status
-                
-                is_market_phase = market_status in ("PRE_OPEN", "FREEZE", "LIVE")
                 
                 # ⚡ INTELLIGENT RATE LIMITING: Allow bursts during critical transitions
                 current_time = time_module.time()
@@ -857,7 +851,7 @@ class MarketFeedService:
                     
                     # Log if no futures contract matched
                     if volume == 0 and symbol_name == "SENSEX":
-                        print(f"⚠️ SENSEX futures volume not found - check if BFO:SENSEX26JANFUT is in quotes")
+                        print("⚠️ SENSEX futures volume not found - check if BFO:SENSEX26JANFUT is in quotes")
                         print(f"   Configured token: {futures_tokens.get('sensex_fut_token', 'NOT SET')}")
                     
                     if volume == 0 and not matched_key and symbol_name != "SENSEX":
@@ -924,7 +918,7 @@ class MarketFeedService:
                     
                     print(f"✅ {symbol_name}: ₹{ltp:,.2f} ({change_percent:+.2f}%) - Last traded data cached")
             
-            print(f"✅ All last traded data cached and ready for display")
+            print("✅ All last traded data cached and ready for display")
             return True
             
         except TokenException as e:
@@ -1645,7 +1639,6 @@ class MarketFeedService:
         
         # Reload settings from .env file (clear cache)
         print("📂 Reloading settings from .env file...")
-        from functools import lru_cache
         from config import get_settings
         
         # Clear the cache to force reload

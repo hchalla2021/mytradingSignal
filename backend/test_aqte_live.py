@@ -149,6 +149,148 @@ class LiveTests(unittest.TestCase):
         self.market.engine = engine
         self.live.state["daily_controls"]["NIFTY"]["style"] = "scalp"
 
+    def both_styles(self):
+        self.quality.stop()
+        self.scalping()
+        self.cfg.aqte_live_allow_unvalidated_rules = True
+        self.cfg.aqte_live_risk_per_trade = 1000
+        control = self.live.state["daily_controls"]["NIFTY"]
+        control.update(style="both", stop_percent=5)
+        signal = self.market.engine.signals["NIFTY"]
+        signal.update(strategy="momentum_breakout", confidence=85,
+                      intelligence=scalp_info(volume_ratio=2.5, imbalance=0.3, atr=20, sweep=0, live={"price": 106}))
+        return signal
+
+    def test_both_styles_select_the_best_qualified_entry_for_every_index_and_side_without_broker_calls(self):
+        from test_aqte_daily_control import mirror
+
+        base = self.both_styles()
+        before = copy.deepcopy(base)
+        for symbol in ("NIFTY", "BANKNIFTY", "SENSEX"):
+            self.live.state["daily_controls"][symbol].update(style="both", stop_percent=5)
+            for side in ("CE", "PE"):
+                signal = copy.deepcopy(base)
+                signal["symbol"] = symbol
+                signal["decision"] = signal["scalp"]["decision"] = f"BUY {side}"
+                signal["contract"].update(symbol=symbol, side=side)
+                signal["scalp"]["contract"].update(symbol=symbol, side=side)
+                if side == "PE":
+                    signal["intelligence"] = mirror(signal["intelligence"])
+                with self.subTest(symbol=symbol, side=side):
+                    selected = self.live.select_entry(symbol, signal)
+                    self.assertEqual(selected["style_checks"], {"scalp": None, "swing": None})
+                    self.assertEqual(selected["style"], "swing", "Higher-scored qualified swing wins")
+                    signal["scalp"]["confidence"] = 90
+                    selected = self.live.select_entry(symbol, signal)
+                    self.assertEqual(selected["style"], "scalp")
+                    self.assertEqual(selected["signal"]["contract"]["side"], side)
+                    self.assertLessEqual(selected["check"][1]["risk"], 1000)
+                    self.assertGreaterEqual(selected["check"][1]["reward_risk"], 1.5)
+        self.assertEqual(base, before, "Selection never mutates the engine's signals")
+        self.assertFalse(self.broker.mock_calls)
+
+    def test_both_styles_fall_back_when_the_higher_score_fails_rules_risk_or_setup_switch(self):
+        signal = self.both_styles()
+        control = self.live.state["daily_controls"]["NIFTY"]
+        for patch_control, patch_signal, expected in (
+            ({"stop_percent": 20}, {}, "per-trade risk"),
+            ({}, {"intelligence": {**signal["intelligence"], "cpr": None}}, "CPR"),
+            ({"setups": {**control["setups"], "momentum_breakout": False}}, {}, "OFF in Controls"),
+        ):
+            saved = copy.deepcopy(control)
+            control.update(patch_control)
+            selected = self.live.select_entry("NIFTY", {**signal, **patch_signal})
+            self.assertEqual(selected["style"], "scalp")
+            self.assertIsNone(selected["style_checks"]["scalp"])
+            self.assertIn(expected, selected["style_checks"]["swing"])
+            control.update(saved)
+        weak_scalp = {**signal, "scalp": {**signal["scalp"], "confidence": 95,
+                      "entry": {**signal["scalp"]["entry"], "points_allowed": [1000]}}}
+        selected = self.live.select_entry("NIFTY", weak_scalp)
+        self.assertEqual(selected["style"], "swing", "A failing higher-scored scalp must not hide a valid swing")
+        self.assertIsNotNone(selected["style_checks"]["scalp"])
+        self.assertIsNone(selected["style_checks"]["swing"])
+        self.assertFalse(self.broker.mock_calls)
+
+    def test_both_style_status_controls_proposal_and_order_agree_and_never_enter_twice(self):
+        self.both_styles()
+        self.armed()
+        for style, score in (("swing", 85), ("scalp", 65)):
+            self.market.engine.signals["NIFTY"]["confidence"] = score
+            status = self.live.status()
+            controls = self.live.daily_controls()["data"]["NIFTY"]
+            proposal = self.live.proposal("NIFTY")
+            self.assertEqual(status["styles"]["NIFTY"], style)
+            self.assertEqual(controls["opportunity"]["style"], style)
+            self.assertEqual(status["style_checks"]["NIFTY"], {"scalp": None, "swing": None})
+            plan = status["entry_plans"]["NIFTY"]
+            self.assertEqual(controls["opportunity"]["entry"], plan)
+            self.assertEqual((plan["maximum"], plan["stop"], plan["target"]),
+                             tuple(proposal["entry"][key] for key in ("maximum", "stop", "target")))
+            self.assertEqual(proposal["strategy"].startswith("quick_scalp"), style == "scalp")
+        self.live.automated_entry()
+        self.live.automated_entry()
+        self.assertEqual(self.broker.place_order.call_count, 1)
+        self.assertEqual(self.live.state["active"]["strategy"], "quick_scalp_30")
+        self.assertEqual(self.live.status()["entry_scan"]["styles"]["NIFTY"], "scalp")
+
+    def test_confirmation_does_not_send_an_obsolete_style_when_the_best_candidate_changes(self):
+        self.both_styles()
+        self.armed()
+        proposal = self.live.proposal("NIFTY")
+        self.market.engine.signals["NIFTY"]["confidence"] = 65
+        with self.assertRaisesRegex(LiveBlocked, "Signal or entry levels changed"):
+            self.live.confirm(proposal["id"])
+        self.broker.place_order.assert_not_called()
+
+    def test_both_styles_never_bypass_shared_limits_switches_or_engine_veto(self):
+        signal = self.both_styles()
+        control = self.live.state["daily_controls"]["NIFTY"]
+        for enabled, maximum, veto, expected in (
+            (False, 5, False, "disabled"), (True, 1, False, "trade limit"),
+            (True, 5, True, "Engine conflict"),
+        ):
+            control.update(enabled=enabled, max_trades=maximum)
+            self.live.state["daily_entries"] = [dict(id="prior", symbol="NIFTY", at=NOW - 600, filled=True)]
+            value = {**signal, "orchestration": {"ce": 1, "pe": 5} if veto else None}
+            selected = self.live.select_entry("NIFTY", value)
+            self.assertTrue(all(expected in reason for reason in selected["style_checks"].values()))
+            self.assertIsNotNone(selected["check"][0])
+        self.assertFalse(self.broker.mock_calls)
+
+    def test_unchecked_styles_block_entries_and_saved_choices_survive_restart(self):
+        self.both_styles()
+        control = copy.deepcopy(self.live.state["daily_controls"]["NIFTY"])
+        self.live.update_control("NIFTY", {**control, "style": "none"})
+        status = self.live.status()
+        self.assertIsNone(status["styles"]["NIFTY"])
+        self.assertIsNone(status["entry_plans"]["NIFTY"])
+        self.assertIn("No entry style", status["entry_blocks"]["NIFTY"])
+        self.assertEqual(status["style_checks"]["NIFTY"], {})
+        self.assertEqual(self.live.effective("NIFTY", self.market.engine.signals["NIFTY"])["decision"], "WAIT")
+        self.live.update_control("BANKNIFTY", {**control, "style": "both"})
+        self.live.release_owner()
+        restored = self.new_service()
+        restored.initialize()
+        self.addCleanup(restored.release_owner)
+        self.assertEqual(restored.state["daily_controls"]["NIFTY"]["style"], "none")
+        self.assertEqual(restored.state["daily_controls"]["BANKNIFTY"]["style"], "both")
+        self.assertTrue(all(restored.state["daily_controls"]["BANKNIFTY"]["setups"].values()))
+        self.broker.place_order.assert_not_called()
+
+    def test_status_entry_plan_matches_the_levels_the_controller_sends(self):
+        self.scalping()
+        self.armed()
+        signal = self.market.engine.signals["NIFTY"]["scalp"]
+        self.assertEqual(signal["entry"]["points"], 30, "raw engine signal shows the uncapped 30-point tier")
+        plan = self.live.status()["entry_plans"]["NIFTY"]
+        sent = self.live.proposal("NIFTY")
+        self.assertEqual((plan["maximum"], plan["stop"], plan["target"], plan["points"]), (
+            sent["entry"]["maximum"], sent["entry"]["stop"], sent["entry"]["target"], 10))
+        self.assertEqual(plan["risk"], sent["risk"])
+        self.live.state["daily_controls"]["NIFTY"]["enabled"] = False
+        self.assertIsNone(self.live.status()["entry_plans"]["NIFTY"])
+
     def test_scalp_style_downsizes_target_tier_to_risk_cap_and_buys_ioc_at_the_ask(self):
         self.scalping()
         self.armed()
@@ -208,6 +350,54 @@ class LiveTests(unittest.TestCase):
         restored.initialize()
         self.addCleanup(restored.release_owner)
         self.assertEqual(restored.status()["styles"], dict.fromkeys(("NIFTY", "BANKNIFTY", "SENSEX"), "swing"))
+
+    def test_legacy_controls_gain_breakout_only_setup_switches(self):
+        for control in self.live.state["daily_controls"].values():
+            control.pop("setups")
+        self.live.save("LEGACY_TEST_STATE")
+        self.live.release_owner()
+        restored = self.new_service()
+        restored.initialize()
+        self.addCleanup(restored.release_owner)
+        for control in restored.state["daily_controls"].values():
+            self.assertEqual(control["setups"], dict(momentum_breakout=True, trend_continuation=False,
+                                                     liquidity_reversal=False, mean_reversion=False))
+
+    def test_swing_trades_the_best_enabled_same_side_setup_when_the_engine_pick_is_off(self):
+        setups = [dict(name="trend_continuation", side="CE", score=73, passed=True),
+                  dict(name="liquidity_reversal", side="PE", score=75, passed=True),
+                  dict(name="mean_reversion", side="CE", score=72, passed=False),
+                  dict(name="momentum_breakout", side="CE", score=70, passed=True)]
+        signal = dict(decision="BUY CE", strategy="trend_continuation", confidence=73,
+                      reasons=["trend continuation", "EMA aligned"], setups=setups, scalp={})
+        control = self.live.state["daily_controls"]["NIFTY"]
+        control["setups"] = dict(momentum_breakout=True, trend_continuation=False,
+                                 liquidity_reversal=True, mean_reversion=True)
+        swapped = self.live.effective("NIFTY", signal)
+        self.assertEqual((swapped["strategy"], swapped["confidence"], swapped["reasons"]),
+                         ("momentum_breakout", 70, ["momentum breakout", "EMA aligned"]))
+        self.assertEqual(signal["strategy"], "trend_continuation", "The engine signal is never mutated")
+        control["setups"]["momentum_breakout"] = False
+        self.assertIs(self.live.effective("NIFTY", signal), signal, "Opposite-side or failing setups never swap in")
+        control["setups"]["trend_continuation"] = True
+        self.assertIs(self.live.effective("NIFTY", signal), signal)
+        self.assertEqual(self.live.effective("NIFTY", {**signal, "decision": "WAIT"})["decision"], "WAIT")
+        control["style"] = "scalp"
+        self.assertEqual(self.live.effective("NIFTY", signal)["decision"], "WAIT", "Scalp ignores swing setups")
+
+    def test_status_reports_configured_trail_start_per_index(self):
+        self.live.state["daily_controls"]["BANKNIFTY"]["trail_start_r"] = 1.5
+        self.assertEqual(self.live.status()["trail_starts"], {"NIFTY": 1, "BANKNIFTY": 1.5, "SENSEX": 1})
+
+    def test_status_publishes_swing_setup_switches_for_the_ui_mirror(self):
+        self.live.state["daily_controls"]["SENSEX"]["setups"]["mean_reversion"] = True
+        published = self.live.status()["swing_setups"]
+        self.assertEqual(published["NIFTY"], dict(momentum_breakout=True, trend_continuation=True,
+                                                  liquidity_reversal=True, mean_reversion=True))
+        self.assertTrue(published["SENSEX"]["mean_reversion"])
+        published["NIFTY"]["trend_continuation"] = False
+        self.assertTrue(self.live.state["daily_controls"]["NIFTY"]["setups"]["trend_continuation"],
+                         "Status is a copy; it never changes the controls")
 
     def test_status_reports_entry_blockers_without_broker_requests(self):
         self.scalping()
@@ -398,6 +588,106 @@ class LiveTests(unittest.TestCase):
         self.assertIsNone(self.live.control_reason("NIFTY", signal))
         self.live.state["daily_entries"][0]["at"] = NOW - 299
         self.assertIn("Duplicate", self.live.control_reason("NIFTY", signal))
+
+    def test_remaining_index_budget_skips_candidate_and_checks_next_index(self):
+        self.armed()
+        snapshot = self.market.snapshot()
+        base = snapshot["data"]["NIFTY"]
+        snapshot["data"] = {
+            symbol: {**base, "symbol": symbol, "confidence": score}
+            for symbol, score in (("NIFTY", 98), ("BANKNIFTY", 95))}
+        self.market.snapshot.side_effect = lambda: snapshot
+        self.live.state["daily_controls"]["NIFTY"]["daily_loss"] = 100
+        self.broker.reset_mock()
+        with patch.object(self.live, "confirm") as confirm:
+            self.live.automated_entry()
+        confirm.assert_called_once()
+        proposal = self.live.proposals[confirm.call_args.args[0]]
+        self.assertEqual(proposal["symbol"], "BANKNIFTY")
+        status = self.live.status()
+        self.assertIn("remaining daily index loss budget", status["entry_blocks"]["NIFTY"])
+        self.assertTrue(status["armed"])
+        self.assertTrue(status["automation_on"])
+        self.broker.place_order.assert_not_called()
+
+    def test_invalid_one_tick_levels_skip_index_without_fault_stopping_automation(self):
+        self.armed()
+        snapshot = self.market.snapshot()
+        base = snapshot["data"]["NIFTY"]
+        tiny = copy.deepcopy(base)
+        tiny["entry"].update(maximum=0.05, high=0.05, low=0.05)
+        snapshot["data"] = {"NIFTY": {**tiny, "confidence": 98},
+                            "BANKNIFTY": {**copy.deepcopy(base), "symbol": "BANKNIFTY", "confidence": 95}}
+        self.market.snapshot.side_effect = lambda: snapshot
+        for symbol in ("NIFTY", "BANKNIFTY"):
+            self.live.state["daily_controls"][symbol]["style"] = "swing"
+        with patch.object(self.live, "confirm") as confirm:
+            self.live.automated_entry()
+        self.assertEqual(self.live.proposals[confirm.call_args.args[0]]["symbol"], "BANKNIFTY")
+        status = self.live.status()
+        self.assertIn("Premium too small", status["entry_blocks"]["NIFTY"])
+        self.assertTrue(status["automation_on"])
+
+    def test_remaining_account_budget_is_visible_before_broker_checks(self):
+        self.armed()
+        self.live.state["trades"] = [
+            dict(id="loss", symbol="SENSEX", entry_at=NOW - 600, exit_at=NOW - 300, net_pnl=-1900)]
+        self.broker.reset_mock()
+        self.live.automated_entry()
+        status = self.live.status()
+        self.assertIn("remaining daily live loss budget", status["entry_blocks"]["NIFTY"])
+        self.assertTrue(status["automation_on"])
+        self.assertFalse(self.broker.mock_calls, "Known budget failures must not spend broker requests")
+
+    def test_status_explains_consumed_setups_and_transient_retry_without_broker_calls(self):
+        self.armed()
+        signal = self.market.snapshot()["data"]["NIFTY"]
+        self.live.state["used"].append(self.live.setup_key("NIFTY", signal))
+        self.broker.reset_mock()
+        self.assertIn("already submitted", self.live.status()["entry_blocks"]["NIFTY"])
+        self.live.state["used"].clear()
+        self.live.skip_until["NIFTY"] = NOW + ENTRY_RETRY_SECONDS
+        self.assertIn("retry cooldown", self.live.status()["entry_blocks"]["NIFTY"])
+        with patch("services.aqte_live.time.time", return_value=NOW + ENTRY_RETRY_SECONDS):
+            self.assertIsNone(self.live.status()["entry_blocks"]["NIFTY"])
+        self.assertFalse(self.broker.mock_calls)
+
+    def test_entry_scans_audit_index_blockers_at_most_once_per_minute(self):
+        self.armed()
+        for control in self.live.state["daily_controls"].values():
+            control["enabled"] = False
+        self.broker.reset_mock()
+        self.live.automated_entry()
+        scan = self.live.status()["entry_scan"]
+        self.assertEqual(scan["at"], NOW)
+        self.assertEqual(scan["blocks"]["NIFTY"], "Index auto trading disabled")
+        self.assertEqual(scan["styles"]["NIFTY"], "swing")
+        with patch("services.aqte_live.time.time", return_value=NOW + 59):
+            self.live.automated_entry()
+        self.assertEqual(self.live.status()["entry_scan"]["at"], NOW + 59)
+        with closing(sqlite3.connect(str(self.path))) as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM live_audit WHERE kind='ENTRY_SCAN'").fetchone()[0], 1)
+        with patch("services.aqte_live.time.time", return_value=NOW + 60):
+            self.live.automated_entry()
+        with closing(sqlite3.connect(str(self.path))) as db:
+            rows = db.execute("SELECT payload FROM live_audit WHERE kind='ENTRY_SCAN' ORDER BY id").fetchall()
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(json.loads(rows[0][0])["blocks"], scan["blocks"])
+        self.assertFalse(self.broker.mock_calls)
+
+    def test_entry_scan_journal_reports_transient_skip_without_consuming_setup(self):
+        self.scalping()
+        self.cfg.aqte_live_risk_per_trade = 300
+        self.armed()
+        self.live.automated_entry()
+        scan = self.live.status()["entry_scan"]
+        self.assertIn("No quick-scalp tier", scan["blocks"]["NIFTY"])
+        with closing(sqlite3.connect(str(self.path))) as db:
+            row = db.execute("SELECT payload FROM live_audit WHERE kind='ENTRY_SCAN'").fetchone()
+        self.assertEqual(json.loads(row[0])["blocks"], scan["blocks"])
+        self.assertTrue(self.live.state["automation_on"])
+        self.assertFalse(self.live.state["used"])
+        self.broker.place_order.assert_not_called()
 
     def test_custom_stop_target_and_trail_are_copied_into_new_trade_only(self):
         config = {**self.live.state["daily_controls"]["NIFTY"],
@@ -697,6 +987,22 @@ class LiveTests(unittest.TestCase):
         self.assertEqual(self.broker.modify_order.call_count, 1)
         self.assertEqual(self.broker.place_order.call_count, 2)
 
+    def test_legacy_trade_trails_at_one_r_not_the_current_controls_setting(self):
+        self.protect()
+        active = self.live.state["active"]
+        active.pop("trail_start_r", None)
+        self.live.state["daily_controls"]["NIFTY"]["trail_start_r"] = 3
+        entry, risk = active["entry_price"], active["entry_price"] - active["initial_stop"]
+        for bid in (entry + risk - CONTRACT.tick_size, entry + risk):
+            self.market.engine.options[CONTRACT.token] = tick("option", bid=bid, ask=bid + 1, price=bid)
+            self.live.reconcile()
+            if bid < entry + risk:
+                self.broker.modify_order.assert_not_called()
+        self.broker.modify_order.assert_called_once()
+        self.assertEqual(self.broker.modify_order.call_args.kwargs["order_type"], "SL")
+        self.assertEqual(self.live.status()["trail_starts"]["NIFTY"], 3)
+        self.assertNotIn("trail_start_r", self.live.status()["active"])
+
     def test_trend_to_target_stays_within_kite_modification_cap_and_still_exits(self):
         # Kite rejects the 26th modification of an order; the exit must never be stranded.
         self.protect()
@@ -980,7 +1286,8 @@ class LiveTests(unittest.TestCase):
         snapshot = self.market.engine.snapshot(NOW) | {"recording": True}
         signal = snapshot["data"]["NIFTY"]
         side = 1 if signal["decision"] == "BUY CE" else -1
-        signal.update(confidence=80, model_validated=False, intelligence={
+        # Breakout-aligned evidence, so the signal is labelled as the breakout setup it represents.
+        signal.update(strategy="momentum_breakout", confidence=80, model_validated=False, intelligence={
             **signal["intelligence"],
             "ema": {str(n): 100 + side * (10 - i * 2) for i, n in enumerate((9, 20, 50, 100, 200))},
             "close": 100 + side * 11, "vwap": 100 + side * 5, "rsi": 60 if side > 0 else 40,

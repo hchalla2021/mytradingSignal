@@ -86,7 +86,6 @@ from routers.chart_intelligence import http_router as chart_intel_http, ws_route
 from routers.order_flow import http_router as order_flow_http, ws_router as order_flow_ws
 from routers.global_news import http_router as global_news_http, ws_router as global_news_ws
 from routers.observatory import http_router as observatory_http
-from routers.paper_trading import router as paper_trading_http
 from routers.aqte import router as aqte_http
 from routers import smart_money
 from routers.trend_base import router as trend_base_http, ws_router as trend_base_ws
@@ -159,8 +158,6 @@ async def lifespan(app: FastAPI):
 
     market_feed = MarketFeedService(cache, manager)
     diagnostics_module.set_market_feed_instance(market_feed)
-    from services.paper_trading import get_paper_trading_service
-    await get_paper_trading_service().start()
     from services.aqte_service import get_aqte_service
     try:
         await get_aqte_service().start()
@@ -525,7 +522,6 @@ async def lifespan(app: FastAPI):
     await get_live_service().stop()
     if market_feed:
         await market_feed.stop()
-    await get_paper_trading_service().stop()
     await get_aqte_service().stop()
     if feed_task:
         feed_task.cancel()
@@ -739,7 +735,6 @@ app.include_router(fii_dii_router, prefix="/api", tags=["FII / DII"])# 🤖 Smar
 app.include_router(algo_http, tags=["Smart AI Algo"])
 app.include_router(algo_ws, tags=["Smart AI Algo"])# �🔭 Market Intelligence Observatory
 app.include_router(observatory_http, tags=["Observatory"])
-app.include_router(paper_trading_http, tags=["Paper Trading"])
 app.include_router(aqte_http)
 
 

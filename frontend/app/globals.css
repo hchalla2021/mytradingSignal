@@ -1907,7 +1907,7 @@ h1, h2, h3, h4, h5, h6 {
 .aqte-theme .aqx-status-open { background: rgb(14 116 144 / 0.45); color: #7dd3fc; }
 
 /* today's performance */
-.aqte-theme .aqx-perfbar-wrap { display: grid; grid-template-columns: 170px minmax(0, 1fr); align-items: center; gap: 4px 12px; padding: 10px 12px; }
+.aqte-theme .aqx-perfbar-wrap { display: grid; grid-template-columns: max-content minmax(0, 1fr); align-items: center; gap: 4px 12px; padding: 10px 12px; }
 .aqte-theme .aqx-perf-title { display: flex; align-items: center; gap: 8px; font-size: 0.9375rem; font-weight: 800; color: #f1f5f9; white-space: nowrap; }
 .aqte-theme .aqx-perf-title svg { flex: 0 0 auto; width: 18px; height: 18px; color: #5cc8ff; }
 .aqte-theme .aqx-perf-title span { font-weight: 600; color: #8fb3d9; }
@@ -2238,10 +2238,11 @@ h1, h2, h3, h4, h5, h6 {
 }
 .aqte-theme .aqx-rank-top .aqx-rank-no { border-color: #facc15; color: #facc15; box-shadow: 0 0 10px rgb(250 204 21 / 0.3); }
 .aqte-theme .aqx-rank-body { display: grid; gap: 5px; min-width: 0; }
-.aqte-theme .aqx-rank-line { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.aqte-theme .aqx-rank-line { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; min-width: 0; }
 .aqte-theme .aqx-rank-line b { flex: none; font-size: 0.9375rem; font-weight: 900; color: #f8fafc; }
-.aqte-theme .aqx-rank-line small { overflow: hidden; font-size: 0.6875rem; font-weight: 700; color: #8fa6c1; white-space: nowrap; text-overflow: ellipsis; }
+.aqte-theme .aqx-rank-line small { font-size: 0.6875rem; font-weight: 700; color: #8fa6c1; overflow-wrap: anywhere; }
 .aqte-theme .aqx-rank-top .aqx-rank-line small { color: #fde68a; }
+.aqte-theme .aqx-rank-line small[data-hold] { color: #fca5a5; }
 .aqte-theme .aqx-rank-bar { display: block; height: 4px; border-radius: 999px; background: rgb(36 50 78 / 0.85); overflow: hidden; }
 .aqte-theme .aqx-rank-bar i {
   display: block; height: 100%; border-radius: inherit; background: var(--rank-accent); box-shadow: 0 0 6px var(--rank-accent); transition: width 0.4s ease;
@@ -2301,6 +2302,16 @@ h1, h2, h3, h4, h5, h6 {
 .aqte-theme .aqx-exec > p { font-size: 1.1875rem; font-weight: 900; color: #f8fafc; }
 .aqte-theme .aqx-exec > p > span:first-child { color: #facc15; }
 .aqte-theme .aqx-exec > p > b { padding: 1px 10px; border: 1px solid currentColor; border-radius: 999px; font-size: 0.8125rem; letter-spacing: 0.06em; }
+.aqte-theme .aqx-exec:is(.aqx-exec-ready, .aqx-exec-live) {
+  border-color: rgb(74 222 128 / 0.6); background: transparent; box-shadow: none;
+}
+.aqte-theme .aqx-exec:is(.aqx-exec-ready, .aqx-exec-live) :is(p, b, small, .aqx-exec-mark) {
+  color: var(--aqx-green-text);
+}
+.aqte-theme .aqx-exec.aqx-exec-live {
+  border-color: var(--aqx-green-text);
+  box-shadow: 0 0 0 1px rgb(74 222 128 / 0.22), 0 0 16px rgb(34 197 94 / 0.18);
+}
 @container aqte (max-width: 620px) {
   .aqte-theme :is(.aqx-panel-head, .aqx-panel-title, .aqx-deck-head, .aqx-controls-head) { padding: 7px 10px 7px 12px; }
   .aqte-theme :is(.aqx-panel-head, .aqx-panel-title, .aqx-deck-title, .aqx-controls-head h5, .aqx-exec > p),
@@ -2310,4 +2321,10 @@ h1, h2, h3, h4, h5, h6 {
 }
 @media (prefers-reduced-motion: reduce) {
   .aqte-theme .aqx-panel-head > .aqx-live-dot::after { animation: none; }
+}
+/* light green borders on every neutral inner box; status-coloured borders (actions, lifecycle, P&L, rank, titles) keep their meaning */
+.aqte-theme.aqx-shell :is(.aqx-controls, .aqx-mini, .aqx-ring-box, .aqx-opp-rank, .aqx-perfbar > div, .aqx-price-row,
+  .aqx-evidence-details, .aqx-ticker-empty, .aqx-chart .aqte-terminal-card, .aqte-terminal-card, .aqte-auto-switch,
+  .aqx-opp-rank li:not(.aqx-rank-top), .aqx-pnl-grid > div, .aqx-opp-grid > div, .aqx-facts > div) {
+  border-color: rgb(134 239 172 / 0.32);
 }

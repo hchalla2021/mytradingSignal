@@ -3,18 +3,29 @@
 import { useEffect, useRef, useState } from 'react';
 import { API_CONFIG } from '@/lib/api-config';
 import { getOrCreateVisitorId } from '@/lib/visitor-id';
-import { AQTE_RECONNECT_GRACE_MS, aqteConnectionDrop, aqteErrorText, aqtePollLoop } from '@/lib/aqte-display';
+import { AQTE_RECONNECT_GRACE_MS, AQTE_SETUP_LABELS, AQTE_SWING_SETUPS, aqteConnectionDrop, aqteErrorText, aqtePollLoop,
+  isAqteStyleChecks, type AQTEStyle, type AQTEStyleChecks, type AQTEStyleSelection, type AQTESwingSetup } from '@/lib/aqte-display';
 
 const SYMBOLS = ['NIFTY', 'BANKNIFTY', 'SENSEX'] as const;
 type SymbolName = typeof SYMBOLS[number];
 type Config = {
-  enabled: boolean; style?: 'scalp' | 'swing'; max_trades: number; min_confidence: number; stop_percent: number;
-  target_rr: number; trail_start_r: number; daily_loss: number;
+  enabled: boolean; style?: AQTEStyleSelection; max_trades: number; min_confidence: number; stop_percent: number;
+  target_rr: number; trail_start_r: number; daily_loss: number; setups?: Record<AQTESwingSetup, boolean>;
 };
+const SETUP_HINTS: Record<AQTESwingSetup, string> = {
+  momentum_breakout: 'Fresh 20-candle breakout with stacked EMAs and volume ≥ 1.5× · 9 checks',
+  trend_continuation: 'Pullback within 1 ATR of EMA20 in a stacked trend, resuming past EMA9 · 10 checks',
+  liquidity_reversal: 'Wick through the 20-candle extreme, closed back inside and holding · 6 checks',
+  mean_reversion: 'Over 2 ATR from VWAP at an RSI extreme in a range, turning back · 6 checks',
+};
+const validSetups = (value: unknown) => value === undefined || (!!value && typeof value === 'object' && !Array.isArray(value) &&
+  Object.keys(value).length === AQTE_SWING_SETUPS.length &&
+  AQTE_SWING_SETUPS.every(setup => typeof (value as Record<string, unknown>)[setup] === 'boolean'));
 type Row = {
   config: Config; executed: number; reserved: number; remaining: number;
   status: string; reason: string; direction: string;
   opportunity: { decision: string; confidence: number | null; strategy?: string | null;
+    style?: AQTEStyle | null; style_checks?: AQTEStyleChecks;
     contract: { trading_symbol: string } | null;
     entry: { maximum: number; stop: number; target: number; points?: number } | null; reasons: string[] };
 };
@@ -23,6 +34,7 @@ type Snapshot = {
   account: { max_trades: number; executed: number; reserved: number; remaining: number };
 };
 const label = (symbol: string) => symbol === 'BANKNIFTY' ? 'BANK NIFTY' : symbol;
+const allowsStyle = (selection: AQTEStyleSelection | undefined, style: AQTEStyle) => selection === 'both' || selection === style;
 const headers = () => ({
   'Content-Type': 'application/json', 'X-Device-Id': getOrCreateVisitorId(),
   'X-AQTE-Intent': 'manual-live-control',
@@ -39,13 +51,15 @@ function parse(value: unknown): Snapshot {
     const config = row?.config;
     const opportunity = row?.opportunity;
     return config && typeof config.enabled === 'boolean' &&
-      (config.style === undefined || config.style === 'scalp' || config.style === 'swing') &&
+      (config.style === undefined || ['scalp', 'swing', 'both', 'none'].includes(config.style)) && validSetups(config.setups) &&
       Number.isInteger(config.max_trades) && config.max_trades >= 1 && config.max_trades <= 10 &&
       (['min_confidence', 'stop_percent', 'target_rr', 'trail_start_r', 'daily_loss'] as const)
         .every(key => typeof config[key] === 'number' && Number.isFinite(config[key])) &&
       count(row.executed) && count(row.reserved) && count(row.remaining) &&
       typeof row.status === 'string' && typeof row.reason === 'string' && typeof row.direction === 'string' &&
       opportunity && typeof opportunity.decision === 'string' &&
+      (opportunity.style === undefined || opportunity.style === null || opportunity.style === 'scalp' || opportunity.style === 'swing') &&
+      (opportunity.style_checks === undefined || isAqteStyleChecks(opportunity.style_checks)) &&
       (opportunity.confidence === null || Number.isFinite(opportunity.confidence)) &&
       Array.isArray(opportunity.reasons) && opportunity.reasons.every(reason => typeof reason === 'string') &&
       (opportunity.contract === null || typeof opportunity.contract?.trading_symbol === 'string') &&
@@ -194,19 +208,49 @@ export default function AQTEDailyControl() {
           </div>
           <p className="text-amber-200">{error ? 'STATUS UNAVAILABLE' : row.status} · {row.reason}</p>
           <p className="text-slate-300">Direction {row.direction} · Best candidate {row.opportunity.decision}{row.opportunity.strategy ? ` · ${row.opportunity.strategy.replaceAll('_', ' ')}` : ''} · Rule score {row.opportunity.confidence ?? '--'}/100</p>
+          {row.opportunity.style_checks && <div className="space-y-1 text-slate-400" aria-label="Entry style evaluation">
+            {Object.entries(row.opportunity.style_checks).map(([style, reason]) => <p key={style}>
+              {style === 'scalp' ? 'Quick scalp' : 'Swing'}: {reason ?? 'Rules and risk checks passed'}
+              {row.opportunity.style === style && !reason ? ' · Selected for broker recheck' : ''}
+            </p>)}
+          </div>}
           <p className="text-slate-400">Account remaining {snapshot?.account.remaining} · Reserved entries {row.reserved}. Index limits cannot bypass the account cap.</p>
           <label className="flex min-h-[44px] items-center gap-2 text-slate-200">
             <input type="checkbox" checked={config.enabled} disabled={disabled} onChange={e => change({ enabled: e.target.checked })} />
             Enable {label(symbol)} entries after arming and ON
           </label>
-          {config.style !== undefined && <label className="block text-slate-300">Entry style
-            <select aria-label="Entry style" value={config.style} disabled={disabled} className={input}
-              onChange={e => change({ style: e.target.value === 'swing' ? 'swing' : 'scalp' })}>
-              <option value="scalp">Quick scalp · fixed premium-point targets (e.g. NIFTY 10/20/30)</option>
-              <option value="swing">Swing · rule signal with SL % and target multiple</option>
-            </select>
-          </label>}
-          {config.style === 'scalp' && <p className="text-slate-400">Quick scalp: the rules engine picks the largest point tier the signal strength and futures ATR support, then shrinks it to fit the per-trade risk cap. Stop = target × stop ratio. SL % and target multiple below apply to Swing only; trailing applies to both.</p>}
+          {config.style !== undefined && <fieldset className="aqte-metric min-w-0 rounded-lg border p-2" aria-label="Entry styles">
+            <legend className="px-1 text-slate-300">Entry styles allowed to trade</legend>
+            <div className="grid grid-cols-1 gap-1 sm:grid-cols-2">
+              {([['scalp', 'Quick scalp', 'Fixed premium-point targets (e.g. NIFTY 10/20/30)'],
+                ['swing', 'Swing', 'Rule signal with SL % and target multiple']] as const).map(([style, name, hint]) =>
+                <label key={style} className="flex min-h-[44px] min-w-0 items-start gap-2 py-1 text-slate-200">
+                  <input type="checkbox" className="mt-0.5 shrink-0" aria-label={`Allow ${name} entries`}
+                    checked={allowsStyle(config.style, style)} disabled={disabled}
+                    onChange={e => {
+                      const other = style === 'scalp' ? 'swing' : 'scalp';
+                      change({ style: e.target.checked ? allowsStyle(config.style, other) ? 'both' : style :
+                        allowsStyle(config.style, other) ? other : 'none' });
+                    }} />
+                  <span className="min-w-0">{name}<small className="block break-words text-[10px] leading-snug text-slate-400">{hint}</small></span>
+                </label>)}
+            </div>
+            <p className="mt-1 text-[10px] text-slate-400">Both checked: evaluate each style&apos;s rules and risk, then choose the best qualified entry by aligned engines and rule score. Only one managed trade at a time. Neither checked: no new entries.</p>
+          </fieldset>}
+          {allowsStyle(config.style, 'scalp') && <p className="text-slate-400">Quick scalp: the rules engine picks the largest point tier the signal strength and futures ATR support, then shrinks it to fit the per-trade risk cap. Stop = target × stop ratio. SL % and target multiple below apply to Swing only; trailing applies to both.</p>}
+          {allowsStyle(config.style, 'swing') && config.setups && <fieldset className="aqte-metric min-w-0 rounded-lg border p-2">
+            <legend className="px-1 text-slate-300">Swing setups allowed to trade</legend>
+            <div className="grid grid-cols-1 gap-1 sm:grid-cols-2">
+              {AQTE_SWING_SETUPS.map(setup => <label key={setup} className="flex min-h-[44px] min-w-0 items-start gap-2 py-1 text-slate-200">
+                <input type="checkbox" className="mt-0.5 shrink-0" aria-label={`Allow ${AQTE_SETUP_LABELS[setup]} entries`}
+                  checked={config.setups?.[setup] ?? false} disabled={disabled}
+                  onChange={e => { if (config.setups) change({ setups: { ...config.setups, [setup]: e.target.checked } }); }} />
+                <span className="min-w-0">{AQTE_SETUP_LABELS[setup]}
+                  <small className="block break-words text-[10px] leading-snug text-slate-400">{SETUP_HINTS[setup]}</small></span>
+              </label>)}
+            </div>
+            <p className="mt-1 text-[10px] text-slate-400">Each setup must pass every one of its own checks. If the top setup is OFF, an ON setup on the same side that passed is traded instead. Price cap, R:R ≥ 1.5, risk and broker gates are identical for all.</p>
+          </fieldset>}
           <div className="grid grid-cols-2 gap-3">
             {([
               ['Minimum rule score', 'min_confidence', 90, 100, 1],
@@ -230,7 +274,7 @@ export default function AQTEDailyControl() {
             <p>{row.opportunity.reasons.join(' · ')}</p>
           </details>}
         </>}
-        <p className="text-[11px] text-slate-400">Rule score is not a win probability. Unvalidated or incomplete evidence means WAIT. Strict mode blocks unvalidated rules; with AQTE_LIVE_ALLOW_UNVALIDATED_RULES=true, Quick scalp uses its own rule gate and Swing needs every check aligned. No guaranteed profits.</p>
+        <p className="text-[11px] text-slate-400">Rule score is not a win probability. Unvalidated or incomplete evidence means WAIT. Strict mode blocks unvalidated rules; with AQTE_LIVE_ALLOW_UNVALIDATED_RULES=true, Quick scalp uses its own rule gate and each Swing setup needs every one of its own checks aligned and must be ON. No guaranteed profits.</p>
       </div>
       </details>
     </section>

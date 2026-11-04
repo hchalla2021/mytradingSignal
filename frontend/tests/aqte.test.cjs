@@ -246,6 +246,54 @@ test('all three compact counters have independent saves and enforce stepper boun
   cleanup();
 });
 
+test('swing controls show per-setup switches, save them with the draft and reject malformed setups', async () => {
+  const setups = { momentum_breakout: true, trend_continuation: false, liquidity_reversal: false, mean_reversion: false };
+  const swing = style => {
+    const value = dailyFixture();
+    for (const index of ['NIFTY', 'BANKNIFTY', 'SENSEX']) Object.assign(value.data[index].config, { style, setups: { ...setups } });
+    return value;
+  };
+  const box = (tree, name) => nodes(tree).find(n => n.props?.['aria-label'] === `Allow ${name} entries`);
+  const h = harness('AQTEDailyControl.tsx');
+  h.render();
+  const initial = swing('swing');
+  const cleanup = h.mount(initial);
+  await settle();
+  let tree = h.render();
+  for (const name of ['Momentum breakout', 'Trend continuation', 'Liquidity-sweep reversal', 'Mean reversion']) {
+    assert.equal(box(tree, name).props.checked, name === 'Momentum breakout', name);
+  }
+  assert.match(text(tree), /Each setup must pass every one of its own checks/);
+  box(tree, 'Trend continuation').props.onChange({ target: { checked: true } });
+  tree = h.render();
+  assert.equal(box(tree, 'Trend continuation').props.checked, true);
+  h.respond(initial);
+  nodes(tree).find(n => n.type === 'button' && /Save NIFTY controls/.test(text(n))).props.onClick();
+  await settle();
+  const post = h.requests.find(r => r.options.method === 'POST');
+  assert.equal(post.url, '/api/aqte/live/daily-controls');
+  assert.deepEqual(JSON.parse(post.options.body).config.setups, { ...setups, trend_continuation: true });
+  cleanup();
+
+  const scalp = harness('AQTEDailyControl.tsx');
+  scalp.render();
+  const stopScalp = scalp.mount(swing('scalp'));
+  await settle();
+  assert.equal(box(scalp.render(), 'Trend continuation'), undefined, 'Setups apply to Swing only');
+  stopScalp();
+  for (const bad of [{ momentum_breakout: true }, { ...setups, mean_reversion: 'yes' }, [true, false, false, false],
+    { ...setups, martingale: true }]) {
+    const broken = harness('AQTEDailyControl.tsx');
+    broken.render();
+    const value = swing('swing');
+    value.data.NIFTY.config.setups = bad;
+    const stop = broken.mount(value);
+    await settle();
+    assert.ok(nodes(broken.render()).some(n => n.props?.role === 'alert'), JSON.stringify(bad));
+    stop();
+  }
+});
+
 function ruleSignal() {
   const now = Date.now() / 1000;
   const ids = ['ema', 'vwap', 'supertrend', 'rsi', 'breakout', 'volume', 'imbalance', 'extension'];
@@ -324,6 +372,126 @@ test('collapsed technical evidence still updates for every index without losing 
     assert.notEqual(technical(next).props.open, true);
     assert.match(text(technical(next)), /1,02,000/);
     assert.match(text(nodes(next).find(n => n.props?.['aria-label'] === 'Key trading indicators')), /\+2\.00%/);
+  }
+});
+
+test('rule-check validator accepts each swing setup only with its exact backend check ids', () => {
+  const code = ts.transpileModule(readFileSync(path.join(__dirname, '..', 'lib', 'aqte-display.ts'), 'utf8'),
+    { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 } }).outputText;
+  const lib = {};
+  vm.runInNewContext(code, { exports: lib, Intl, Date, setTimeout, clearTimeout });
+  const gate = id => ({ id, label: id, passed: null, requirement: id, reason: id });
+  const scalp = { side: null, checks: ['ema', 'vwap', 'supertrend', 'rsi', 'breakout', 'volume', 'imbalance', 'extension'].map(gate) };
+  // Mirrors backend setup_checks ids exactly.
+  const ids = {
+    momentum_breakout: ['ema', 'vwap', 'supertrend', 'rsi', 'cpr', 'volume', 'imbalance', 'breakout', 'structure'],
+    trend_continuation: ['ema', 'vwap', 'supertrend', 'rsi', 'cpr', 'pullback', 'resume', 'structure', 'volume', 'imbalance'],
+    liquidity_reversal: ['sweep', 'trend_filter', 'rsi', 'volume', 'imbalance', 'confirm'],
+    mean_reversion: ['stretch', 'rsi', 'range', 'volume', 'imbalance', 'turn'],
+  };
+  assert.deepEqual([...lib.AQTE_SWING_SETUPS], Object.keys(ids));
+  const valid = swing => lib.isAqteRuleChecks({ scalp, swing });
+  for (const [setup, list] of Object.entries(ids)) {
+    assert.equal(valid({ side: 'CE', setup, checks: list.map(gate) }), true, setup);
+    assert.equal(valid({ side: 'PE', setup, checks: list.slice(1).map(gate) }), false, `${setup} missing a check`);
+    assert.equal(valid({ side: 'PE', setup, checks: [...list.slice(1), 'extension'].map(gate) }), false, `${setup} foreign check`);
+  }
+  const breakout = ids.momentum_breakout.map(gate);
+  assert.equal(valid({ side: null, setup: null, checks: breakout }), true, 'No setup on the candle reports the breakout gate');
+  assert.equal(valid({ side: null, checks: breakout }), true, 'Older backend without the setup field');
+  assert.equal(valid({ side: 'CE', setup: 'trend_continuation', checks: breakout }), false);
+  assert.equal(valid({ side: 'CE', setup: 'martingale', checks: breakout }), false);
+  assert.equal(lib.isAqteRuleChecks({ scalp: { ...scalp, setup: 'momentum_breakout' }, swing: { side: null, checks: breakout } }), false);
+});
+
+test('swing evidence names its setup and shows every setup-specific check with its measured value', () => {
+  const signal = ruleSignal();
+  const gate = (id, passed) => ({ id, label: `${id} gate`, passed, requirement: `${id} requirement`, reason: `${id} reason` });
+  signal.rule_checks.swing = { side: 'CE', setup: 'liquidity_reversal', checks: [
+    gate('sweep', true), gate('trend_filter', true), gate('rsi', true), gate('volume', true), gate('imbalance', false), gate('confirm', true)] };
+  signal.intelligence.sweep = 1;
+  const props = ruleProps(signal);
+  props.liveStatus.styles = { NIFTY: 'swing' };
+  const panel = rulePanel(harness('AQTETerminal.tsx').render(props));
+  assert.match(text(nodes(panel).find(n => n.props?.['aria-label'] === 'Rule alignment')),
+    /Swing · Liquidity-sweep reversal · CE · 5\/6 aligned/);
+  const details = nodes(panel).find(n => n.type === 'details' && n.props?.['aria-label'] === 'Advanced rule details');
+  const row = id => nodes(details).find(n => n.props?.['data-rule'] === id);
+  for (const id of ['sweep', 'trend_filter', 'rsi', 'confirm']) assert.equal(row(id).props['data-status'], 'PASS', id);
+  assert.equal(row('imbalance').props['data-status'], 'FAIL');
+  assert.equal(row('breakout').props['data-status'], 'CONTEXT', 'Not part of this setup gate');
+  const technical = text(details);
+  for (const value of [/Swept prior low, closed back inside/, /EMA 9-200: Bearish stack/, /Live 94\.50 vs close 94\.00/,
+    /sweep requirement/, /confirm gate/]) assert.match(technical, value);
+});
+
+test('swing card shows the setup the controller trades when the engine pick is OFF in Controls', () => {
+  const ids = {
+    momentum_breakout: ['ema', 'vwap', 'supertrend', 'rsi', 'cpr', 'volume', 'imbalance', 'breakout', 'structure'],
+    trend_continuation: ['ema', 'vwap', 'supertrend', 'rsi', 'cpr', 'pullback', 'resume', 'structure', 'volume', 'imbalance'],
+    liquidity_reversal: ['sweep', 'trend_filter', 'rsi', 'volume', 'imbalance', 'confirm'],
+  };
+  const gates = name => ids[name].map(id => ({ id, label: `${id} gate`, passed: true, requirement: `${name} ${id}`, reason: id }));
+  const signal = { ...ruleSignal(), decision: 'BUY CE', strategy: 'momentum_breakout', confidence: 75,
+    reasons: ['momentum breakout', 'EMA aligned'] };
+  signal.rule_checks.swing = { side: 'CE', setup: 'momentum_breakout', checks: gates('momentum_breakout') };
+  signal.setups = [
+    { name: 'momentum_breakout', side: 'CE', score: 75, passed: true, checks: gates('momentum_breakout') },
+    { name: 'liquidity_reversal', side: 'PE', score: 74, passed: true, checks: gates('liquidity_reversal') },
+    { name: 'trend_continuation', side: 'CE', score: 68, passed: true, checks: gates('trend_continuation') },
+  ];
+  const before = JSON.stringify(signal);
+  const switches = { momentum_breakout: false, trend_continuation: true, liquidity_reversal: true, mean_reversion: false };
+  const render = setups => {
+    const props = ruleProps(signal);
+    Object.assign(props.liveStatus, { styles: { NIFTY: 'swing' }, swing_setups: { NIFTY: setups } });
+    const panel = rulePanel(harness('AQTETerminal.tsx').render(props));
+    return {
+      alignment: text(nodes(panel).find(n => n.props?.['aria-label'] === 'Rule alignment')),
+      score: text(nodes(panel).find(n => n.props?.['data-rule'] === 'score')),
+      technical: text(nodes(panel).find(n => n.type === 'details' && n.props?.['aria-label'] === 'Advanced rule details')),
+    };
+  };
+  const swapped = render(switches);
+  assert.match(swapped.alignment, /Swing · Trend continuation · CE · 10\/10 aligned/, 'Same-side ON setup, not the OFF pick or the PE one');
+  assert.match(swapped.score, /68\.00 \/ 100/);
+  assert.match(swapped.technical, /trend_continuation pullback/);
+  assert.doesNotMatch(swapped.technical, /momentum_breakout breakout/);
+  const own = render({ ...switches, momentum_breakout: true });
+  assert.match(own.alignment, /Swing · Momentum breakout · CE · 9\/9 aligned/, 'An ON engine pick is never swapped');
+  assert.match(own.score, /75\.00 \/ 100/);
+  assert.match(render({ ...switches, trend_continuation: false }).alignment, /Momentum breakout/,
+    'No ON same-side setup: the (blocked) engine pick stays visible, exactly like the controller');
+  signal.setups[2].checks = signal.setups[2].checks.slice(1);
+  assert.match(render(switches).alignment, /Swing · Unverified/, 'A malformed swapped gate never shows the OFF setup instead');
+  signal.setups[2].checks = gates('trend_continuation');
+  assert.equal(JSON.stringify(signal), before, 'Mirroring the swap never mutates the engine signal');
+});
+
+test('effective signal and ranking mirror the controller enabled-setup swap; status switches are validated', () => {
+  const display = displayModule();
+  const candidate = (name, side, score, passed = true) => ({ name, side, score, passed, checks: [] });
+  const signal = { ...fixture().data.NIFTY, decision: 'BUY PE', strategy: 'momentum_breakout', confidence: 75,
+    reasons: ['momentum breakout', 'Book pressure'], entry: { maximum: 100, stop: 90, target: 120, reward_risk: 2 },
+    setups: [candidate('momentum_breakout', 'PE', 75), candidate('mean_reversion', 'PE', 70, false),
+      candidate('liquidity_reversal', 'CE', 69), candidate('trend_continuation', 'PE', 68)] };
+  const off = { momentum_breakout: false, trend_continuation: true, liquidity_reversal: true, mean_reversion: true };
+  const swapped = display.aqteEffectiveSignal(signal, 'swing', off);
+  assert.deepEqual([swapped.strategy, swapped.confidence, [...swapped.reasons]],
+    ['trend_continuation', 68, ['trend continuation', 'Book pressure']], 'Skips failing and opposite-side setups');
+  assert.equal(display.aqteEffectiveSignal(signal, 'swing').strategy, 'momentum_breakout', 'No switches known: no swap');
+  assert.equal(display.aqteEffectiveSignal(signal, 'swing', { ...off, momentum_breakout: true }).confidence, 75);
+  assert.equal(display.aqteEffectiveSignal({ ...signal, decision: 'WAIT' }, 'swing', off).strategy, 'momentum_breakout');
+  assert.equal(display.aqteEffectiveSignal(signal, 'swing', off).decision, 'BUY PE', 'The side and contract never change');
+  assert.equal(display.aqteTradedSetup({ ...signal, setups: [{ ...signal.setups[3], score: 'x' }] }, off).name, 'trend_continuation');
+  assert.equal(display.aqteEffectiveSignal({ ...signal, setups: [{ ...signal.setups[3], score: 'x' }] }, 'swing', off).confidence, null,
+    'A malformed swapped score is unknown, not the OFF pick score');
+  assert.deepEqual([...display.aqteRankKey(signal, 'swing', off)], [1, 0, 68]);
+  const status = liveFixture();
+  assert.equal(display.isAqteLiveState({ ...status, swing_setups: { NIFTY: off, SENSEX: { mean_reversion: false } } }), true);
+  for (const swing_setups of [{ NIFTY: { martingale: true } }, { NIFTY: { mean_reversion: 'yes' } }, { OTHER: off }, { NIFTY: null },
+    { NIFTY: [true] }, []]) {
+    assert.equal(display.isAqteLiveState({ ...status, swing_setups }), false, JSON.stringify(swing_setups));
   }
 });
 
@@ -585,7 +753,7 @@ test('scalp-style readiness shows scalp reasons, opening range and the last skip
   assert.match(readiness(), /^Opening range: need 15/, 'Older backends keep the main signal reasons');
 });
 
-test('daily control exposes scalp/swing style, saves it while OFF and hides it for legacy backends', async () => {
+test('daily control uses independent style checkboxes, saves both or neither and locks them while ON', async () => {
   const h = harness('AQTEDailyControl.tsx');
   h.render();
   const initial = dailyFixture();
@@ -596,31 +764,109 @@ test('daily control exposes scalp/swing style, saves it while OFF and hides it f
   const cleanup = h.mount(initial);
   await settle();
   let tree = h.render();
-  const select = () => nodes(tree).find(n => n.props?.['aria-label'] === 'Entry style');
-  assert.equal(select().props.value, 'scalp');
+  const box = name => nodes(tree).find(n => n.props?.['aria-label'] === `Allow ${name} entries`);
+  assert.equal(box('Quick scalp').props.checked, true);
+  assert.equal(box('Swing').props.checked, false);
+  assert.equal(nodes(tree).find(n => n.type === 'select' && n.props?.['aria-label'] === 'Entry style'), undefined);
   assert.match(text(tree), /quick scalp 20/);
   assert.match(text(tree), /\+20 pts/);
   assert.match(text(tree), /SL % and target multiple below apply to Swing only/);
-  select().props.onChange({ target: { value: 'swing' } });
+  box('Swing').props.onChange({ target: { checked: true } });
   tree = h.render();
-  assert.equal(select().props.value, 'swing');
-  h.respond(initial);
+  assert.equal(box('Quick scalp').props.checked, true);
+  assert.equal(box('Swing').props.checked, true);
+  const saved = structuredClone(initial);
+  saved.data.NIFTY.config.style = 'both';
+  h.respond(saved);
   nodes(tree).find(n => n.type === 'button' && /Save NIFTY controls/.test(text(n))).props.onClick();
   await settle();
   const post = h.requests.find(r => r.options.method === 'POST');
   assert.equal(post.url, '/api/aqte/live/daily-controls');
-  assert.equal(JSON.parse(post.options.body).config.style, 'swing');
-  await h.poll({ ...initial, editable: false });
+  assert.equal(JSON.parse(post.options.body).config.style, 'both');
   tree = h.render();
-  assert.equal(select().props.disabled, true, 'Style is locked while Auto Trade is ON');
+  box('Quick scalp').props.onChange({ target: { checked: false } });
+  tree = h.render();
+  assert.equal(box('Swing').props.checked, true);
+  box('Swing').props.onChange({ target: { checked: false } });
+  tree = h.render();
+  assert.equal(box('Quick scalp').props.checked, false);
+  assert.equal(box('Swing').props.checked, false);
+  saved.data.NIFTY.config.style = 'none';
+  h.respond(saved);
+  nodes(tree).find(n => n.type === 'button' && /Save NIFTY controls/.test(text(n))).props.onClick();
+  await settle();
+  assert.equal(JSON.parse(h.requests.filter(r => r.options.method === 'POST').at(-1).options.body).config.style, 'none');
+  await h.poll({ ...saved, editable: false });
+  tree = h.render();
+  assert.equal(box('Quick scalp').props.disabled, true, 'Styles are locked while Auto Trade is ON');
+  assert.equal(box('Swing').props.disabled, true);
   await h.poll(dailyFixture());
   tree = h.render();
-  assert.equal(select(), undefined, 'A backend without style support never receives the field');
+  assert.equal(box('Quick scalp'), undefined, 'A backend without style support never receives the field');
   const invalid = dailyFixture();
   invalid.data.NIFTY.config.style = 'martingale';
   await h.poll(invalid);
   assert.match(text(h.render()), /Incomplete daily-control response/);
   cleanup();
+});
+
+test('all styles and setups display checked and save independently for NIFTY, BANKNIFTY and SENSEX', async () => {
+  const initial = dailyFixture();
+  for (const row of Object.values(initial.data)) {
+    row.config.style = 'both';
+    row.config.setups = { momentum_breakout: true, trend_continuation: true, liquidity_reversal: true, mean_reversion: true };
+    row.opportunity.style = 'swing';
+    row.opportunity.style_checks = { scalp: 'Quick-scalp rules no longer hold', swing: null };
+  }
+  const h = harness('AQTEDailyControl.tsx');
+  h.render();
+  const cleanup = h.mount(initial);
+  await settle();
+  let tree = h.render();
+  for (const symbol of ['NIFTY', 'BANKNIFTY', 'SENSEX']) {
+    nodes(tree).find(n => n.props?.['aria-label'] === 'Daily control index').props.onChange({ target: { value: symbol } });
+    tree = h.render();
+    for (const name of ['Quick scalp', 'Swing', 'Momentum breakout', 'Trend continuation', 'Liquidity-sweep reversal', 'Mean reversion']) {
+      const box = nodes(tree).find(n => n.props?.['aria-label'] === `Allow ${name} entries`);
+      assert.equal(box.type, 'input');
+      assert.equal(box.props.type, 'checkbox');
+      assert.equal(box.props.checked, true, `${symbol}: ${name}`);
+    }
+    assert.match(text(tree), /Swing\s*:\s*Rules and risk checks passed\s*· Selected for broker recheck/);
+    h.respond(initial);
+    nodes(tree).find(n => n.type === 'button' && /controls$/.test(text(n))).props.onClick();
+    await settle();
+    const body = JSON.parse(h.requests.filter(r => r.options.method === 'POST').at(-1).options.body);
+    assert.equal(body.symbol, symbol);
+    assert.equal(body.config.style, 'both');
+    assert.deepEqual(body.config.setups, initial.data[symbol].config.setups);
+    assert.equal(body.config.enabled, initial.data[symbol].config.enabled, 'Saving styles never enables an index');
+    tree = h.render();
+  }
+  cleanup();
+});
+
+test('controller-selected styles drive the opportunity and none never falls back to scalp', () => {
+  const display = displayModule();
+  const signal = { ...ruleSignal(), decision: 'BUY CE', confidence: 85, strategy: 'momentum_breakout',
+    contract: { trading_symbol: 'SWING_CONTRACT', expiry: '2026-11-05' },
+    entry: { maximum: 100, stop: 90, target: 120, reward_risk: 2 },
+    scalp: scalpSignal('BUY CE', 90) };
+  const status = { ...liveFixture(), styles: { NIFTY: 'swing', BANKNIFTY: 'scalp', SENSEX: null },
+    style_checks: { NIFTY: { scalp: 'No tier fits risk', swing: null }, SENSEX: {} } };
+  assert.equal(display.isAqteLiveState(status), true);
+  for (const style_checks of [{ NIFTY: { both: null } }, { NIFTY: { scalp: true } }, { OTHER: {} }, []]) {
+    assert.equal(display.isAqteLiveState({ ...status, style_checks }), false);
+  }
+  assert.equal(display.aqteEffectiveSignal(signal, status.styles.NIFTY).contract.trading_symbol, 'SWING_CONTRACT');
+  assert.equal(display.aqteEffectiveSignal(signal, status.styles.BANKNIFTY).contract.trading_symbol, 'NIFTY_SCALP_CE');
+  assert.equal(display.aqteEffectiveSignal(signal, status.styles.SENSEX).decision, 'WAIT');
+  assert.equal(display.aqteEffectiveSignal(signal, status.styles.SENSEX).entry, null);
+  assert.deepEqual([...display.aqteRankKey(signal, null)], [0, 0, 0]);
+  const panel = rulePanel(harness('AQTETerminal.tsx').render({
+    ...ruleProps(signal), liveStatus: { ...status, styles: { NIFTY: null } },
+  }));
+  assert.match(text(panel), /No entry style selected in Controls/);
 });
 
 test('malformed scalp or opening-range evidence is rejected', async () => {
@@ -2014,6 +2260,86 @@ test('trade lifecycle tracks live, completed and idle trades with explicit per-s
   tree = render({ ...liveFixture(), trades: [{ ...closed, exit_at: now - 2 * 86400 }] });
   assert.equal(life(tree).props['data-mode'], 'idle', 'only today\'s trade is replayed');
 });
+
+test('idle lifecycle and readiness name a disabled/capped index and a closed session instead of a generic arming state', () => {
+  const display = displayModule();
+  assert.equal(display.aqteIndexHold('Index auto trading disabled'), 'Disabled in Controls');
+  assert.equal(display.aqteIndexHold('Daily index trade limit reached'), 'Limit reached');
+  assert.equal(display.aqteIndexHold('Account-wide daily trade cap reached'), 'Limit reached');
+  assert.equal(display.aqteIndexHold('Daily index loss limit reached'), null, 'a loss limit is a risk block, not a Controls switch');
+  assert.equal(display.aqteIndexHold(null), null);
+  assert.deepEqual(['Outside regular market session', 'Daily index loss limit reached', 'Trade exceeds remaining daily index loss budget',
+    'This strategy candle was already submitted', 'Entry retry cooldown after a transient price/quote check', 'No setup']
+    .map(display.aqteBlockLabel), ['Market closed', 'Loss budget', 'Loss budget', 'Setup used', 'Retry cooldown', 'Blocked']);
+  assert.equal(display.aqteOpportunitySymbol(['NIFTY', 'BANKNIFTY', 'SENSEX'],
+    { NIFTY: 'Index auto trading disabled', BANKNIFTY: 'Daily index trade limit reached', SENSEX: 'Outside regular market session' }), 'SENSEX');
+
+  const render = (liveStatus, signal) => harness('AQTETerminal.tsx').render({ symbol: 'NIFTY', unavailable: false, tick: null, onExit() {}, liveStatus, signal });
+  const life = tree => nodes(tree).find(n => n.props?.className === 'aqx-lifecycle');
+  const first = tree => text(nodes(nodes(tree).find(n => n.props?.['aria-label'] === 'Trade lifecycle')).find(n => n.type === 'li')).replace(/\s+/g, ' ').trim();
+  const readiness = tree => text(nodes(tree).find(n => n.props?.['aria-label'] === 'Entry readiness'));
+  const waiting = { ...liveFixture(), enabled: true, paper_validated: true, automation_wanted: true, entry_window: false,
+    automation_waiting: 'Waiting for market: auto trade arms on weekdays 09:15 to 15:15 IST',
+    entry_blocks: { NIFTY: 'Outside regular market session' } };
+  let tree = render(waiting);
+  assert.match(first(tree), /Entries closed 09:15 to 15:15 IST/);
+  assert.match(text(life(tree)), /Entries closed/);
+  assert.doesNotMatch(text(life(tree)), /Arming/);
+  tree = render({ ...waiting, automation_on: true, armed: true, automation_waiting: null });
+  assert.match(first(tree), /Entries closed/);
+  assert.doesNotMatch(first(tree), /Scanning/);
+  assert.match(readiness(tree), /09:15 to 15:15 IST/);
+  tree = render({ ...waiting, entry_window: true, automation_waiting: 'Outbound IP mismatch' });
+  assert.match(first(tree), /Arming Preflight/, 'inside the window an unarmed switch is a preflight problem');
+
+  const disabled = { ...waiting, entry_blocks: { NIFTY: 'Index auto trading disabled' } };
+  tree = render(disabled);
+  assert.match(first(tree), /Index off Enable in Controls/);
+  assert.match(text(life(tree)), /Index off/);
+  assert.match(readiness(tree), /Index auto trading disabled · tick "Enable NIFTY entries" in Daily Trade Control · Waiting for market/);
+  tree = render({ ...disabled, automation_on: true, armed: true, automation_waiting: null, entry_window: true,
+    entry_blocks: { NIFTY: 'Daily index trade limit reached' } });
+  assert.match(first(tree), /Limit hit Resets next day/);
+  assert.equal(readiness(tree).trim(), 'Daily index trade limit reached');
+  tree = render({ ...disabled, automation_wanted: false, automation_waiting: null });
+  assert.match(first(tree), /Auto OFF/, 'with the master switch off, Auto OFF is the first cause');
+
+  // Warm-up/opening progress only shows while the feed is live; after the close it is not a stuck 0/201.
+  const armed = { ...liveFixture(), enabled: true, paper_validated: true, armed: true, automation_on: true };
+  const signal = { ...fixture().data.NIFTY, warmup: { completed: 0, required: 201 }, opening: { completed: 0, required: 15 } };
+  assert.match(readiness(render(armed, signal)), /Warm-up:\s+0\s*\/\s*201/);
+  assert.doesNotMatch(readiness(render(armed, { ...signal, feed_ready: false })), /Warm-up|Opening range/);
+});
+
+test('trail start follows the per-index Controls value until a trade stores its own', () => {
+  const display = displayModule();
+  const status = { ...liveFixture(), trail_starts: { NIFTY: 1.5, BANKNIFTY: 2 } };
+  assert.equal(display.isAqteLiveState(status), true);
+  for (const trail_starts of [{ NIFTY: 0 }, { NIFTY: 0.5 }, { NIFTY: 3.5 }, { NIFTY: '1' }, { OTHER: 1 }, [1]]) {
+    assert.equal(display.isAqteLiveState({ ...status, trail_starts }), false, JSON.stringify(trail_starts));
+  }
+  assert.equal(display.aqteTrailStart(status, 'NIFTY'), 1.5);
+  assert.equal(display.aqteTrailStart(status, 'SENSEX'), 1, 'older backends and unset indices default to 1R');
+  assert.equal(display.aqteTrailStart({ ...status, active: livePositionFixture({ trail_start_r: 2.5 }) }, 'NIFTY'), 2.5);
+  assert.equal(display.aqteTrailStart({ ...status, active: livePositionFixture({ trail_start_r: undefined }) }, 'NIFTY'), 1,
+    'legacy open trades use the backend 1R fallback, never mutable Controls values');
+  assert.equal(display.aqteTrailStart({ ...status, active: livePositionFixture() }, 'BANKNIFTY'), 2, 'another index trade does not leak');
+  assert.equal(display.aqteTrailStart(null, 'NIFTY'), 1);
+
+  const terminal = harness('AQTETerminal.tsx').render({ symbol: 'NIFTY', unavailable: false, tick: null, onExit() {},
+    liveStatus: { ...status, armed: true, automation_on: true } });
+  assert.match(text(terminal), /Trailing SL\s+\+\s*1\.5\s*R/);
+  assert.doesNotMatch(text(terminal), /Trailing SL\s+\+\s*1\s*R/);
+
+  const deck = harness('AQTEEngineDeck.tsx');
+  const data = fixture().data;
+  data.NIFTY = { ...data.NIFTY, ...engineSet({ ce: 3 }), scalp: scalpSignal('BUY CE', 90) };
+  const tree = deck.render({ symbol: 'NIFTY', data, unavailable: false, policy: null, events: [],
+    liveStatus: { ...status, ranking: ['NIFTY'], entry_blocks: { NIFTY: null } } });
+  assert.match(text(nodes(tree).find(n => n.props?.['aria-label'] === 'Enterprise trade management')), /from \+1\.5R/);
+  assert.match(text(tree), /No engine status changes since AQTE started/);
+  assert.doesNotMatch(text(tree), /yet today/);
+});
 test('mobile title keeps the market badge in the same row beside the wrapping title', () => {
   const styles = readFileSync(path.join(__dirname, '..', 'app', 'globals.css'), 'utf8');
   const mobile = styles.match(/@container \(max-width: 620px\) \{\s*\.aqte-theme #aqte-title \{[^}]*\}[\s\S]*?\n\}/)?.[0];
@@ -2321,6 +2647,94 @@ test('engine deck keeps stable placeholders when engines are unavailable or AQTE
   assert.match(text(nodes(missing).find(n => n.props?.['aria-label'] === 'Top opportunity')), /Controller status unavailable/);
 });
 
+test('opportunity readiness expires with controller status and respects errors and the entry window', () => {
+  const now = Date.now() / 1000;
+  const h = harness('AQTEEngineDeck.tsx');
+  const data = fixture().data;
+  data.NIFTY = { ...data.NIFTY, ...engineSet({ ce: 4 }), scalp: scalpSignal('BUY CE', 90) };
+  const live = { ...liveFixture(), generated_at: now, enabled: true, paper_validated: true, armed: true,
+    automation_on: true, entry_window: true, ranking: ['NIFTY'], entry_blocks: { NIFTY: null } };
+  const props = { symbol: 'NIFTY', data, liveStatus: live, unavailable: false, policy: null, events: [], now };
+  const panel = tree => text(nodes(tree).find(n => n.props?.['aria-label'] === 'Top opportunity'));
+  assert.match(panel(h.render(props)), /Auto Execution:\s+READY/);
+  assert.match(panel(h.render({ ...props, now: now + 10 })), /Auto Execution:\s+READY/);
+  for (const change of [{ now: now + 10.01 }, { liveStatus: { ...live, generated_at: now + 2 } },
+    { liveStatus: { ...live, connection_error: 'Disconnected' } }, { liveStatus: { ...live, ready: false } }]) {
+    const tree = h.render({ ...props, ...change });
+    assert.match(panel(tree), /Auto Execution:\s+UNKNOWN/);
+    assert.doesNotMatch(panel(tree), /READY|Eligible|Top pick/);
+    assert.doesNotMatch(text(nodes(tree).find(n => n.props?.['aria-label'] === 'Orchestration and risk')),
+      /Risk Validation\s+Passed|Position & Exposure\s+Within limits|Next entry routes to Zerodha/);
+  }
+  for (const [change, reason] of [
+    [{ error: 'Broker account identity changed' }, /Broker account identity changed/],
+    [{ entry_window: false }, /09:15.*15:15/],
+    [{ flatten_pending: true }, /Emergency square-off pending/],
+  ]) {
+    const output = panel(h.render({ ...props, liveStatus: { ...live, ...change } }));
+    assert.match(output, reason);
+    assert.doesNotMatch(output, /READY|Eligible/);
+  }
+  const unknownTrade = h.render({ ...props, now: now + 11,
+    liveStatus: { ...live, active: livePositionFixture() } });
+  assert.match(panel(unknownTrade), /UNKNOWN/);
+  assert.match(text(nodes(unknownTrade).find(n => n.props?.['aria-label'] === 'Enterprise trade management')),
+    /Initial Stop Loss\s+₹80\.00/, 'retain recorded trade levels, but do not confirm current protection');
+  assert.doesNotMatch(text(unknownTrade), /Sent to Live Execution \(Zerodha\)/);
+});
+
+test('auto execution highlights ready entries and current trades, with a stronger border only in trade', () => {
+  const now = Date.now() / 1000;
+  const h = harness('AQTEEngineDeck.tsx');
+  const data = fixture().data;
+  data.NIFTY = { ...data.NIFTY, ...engineSet({ ce: 4 }), scalp: scalpSignal('BUY CE', 90) };
+  const live = { ...liveFixture(), generated_at: now, armed: true, automation_on: true, entry_window: true,
+    ranking: ['NIFTY'], entry_blocks: { NIFTY: null } };
+  const render = changes => nodes(h.render({ symbol: 'NIFTY', data, liveStatus: { ...live, ...changes },
+    unavailable: false, policy: null, events: [], now }))
+    .find(n => n.props?.role === 'status' && String(n.props.className).split(' ').includes('aqx-exec'));
+  for (const [changes, label, state] of [
+    [{}, 'READY', 'ready'],
+    [{ active: livePositionFixture() }, 'IN TRADE', 'live'],
+    [{ entry_window: false }, 'WAITING', 'wait'],
+    [{ automation_on: false, armed: false }, 'OFF', 'off'],
+    [{ killed: true }, 'STOPPED', 'stop'],
+    [{ error: 'Broker unavailable' }, 'BLOCKED', 'off'],
+    [{ generated_at: now - 11, active: livePositionFixture() }, 'UNKNOWN', 'wait'],
+  ]) {
+    const panel = render(changes);
+    assert.match(text(panel), new RegExp(`Auto Execution:\\s+${label}`));
+    assert.equal(panel.props.className, `aqx-exec aqx-exec-${state}`);
+  }
+  const styles = readFileSync(path.join(__dirname, '..', 'app', 'globals.css'), 'utf8');
+  assert.match(styles, /\.aqx-exec:is\(\.aqx-exec-ready, \.aqx-exec-live\) \{\s*border-color: rgb\(74 222 128 \/ 0\.6\); background: transparent; box-shadow: none;/);
+  assert.match(styles, /\.aqx-exec:is\(\.aqx-exec-ready, \.aqx-exec-live\) :is\(p, b, small, \.aqx-exec-mark\) \{\s*color: var\(--aqx-green-text\);/);
+  assert.match(styles, /\.aqx-exec\.aqx-exec-live \{\s*border-color: var\(--aqx-green-text\);\s*box-shadow: 0 0 0 1px rgb\(74 222 128 \/ 0\.22\), 0 0 16px rgb\(34 197 94 \/ 0\.18\);/);
+});
+
+test('opportunity levels show the controller entry plan, not the uncapped raw rule levels', () => {
+  const now = Date.now() / 1000;
+  const h = harness('AQTEEngineDeck.tsx');
+  const data = fixture().data;
+  data.NIFTY = { ...data.NIFTY, ...engineSet({ ce: 4 }), scalp: scalpSignal('BUY CE', 90) };
+  const live = { ...liveFixture(), generated_at: now, enabled: true, paper_validated: true, armed: true,
+    automation_on: true, entry_window: true, ranking: ['NIFTY'], entry_blocks: { NIFTY: null },
+    entry_plans: { NIFTY: { maximum: 101, stop: 97.25, target: 111.5, reward_risk: 2.4, quantity: 65, risk: 290, points: 10 } } };
+  const display = displayModule();
+  assert.equal(display.isAqteLiveState(live), true);
+  assert.equal(display.isAqteLiveState({ ...live, entry_plans: { NIFTY: { ...live.entry_plans.NIFTY, stop: 120 } } }), false,
+    'reject inverted levels');
+  const props = { symbol: 'NIFTY', data, liveStatus: live, unavailable: false, policy: null, events: [], now };
+  const panel = tree => text(nodes(tree).find(n => n.props?.['aria-label'] === 'Top opportunity'));
+  const shown = panel(h.render(props));
+  assert.match(shown, /Target\s*₹111\.50/);
+  assert.match(shown, /Stop Loss\s*₹97\.25/);
+  assert.match(shown, /1 : 2\.4/);
+  // The controller reports plans but has none for this index: never fall back to levels it would not send.
+  const none = panel(h.render({ ...props, liveStatus: { ...live, entry_plans: { NIFTY: null } } }));
+  assert.doesNotMatch(none, /₹111\.50|₹97\.25/);
+});
+
 test('top opportunity follows the controller: first unblocked ranked index, else the top-ranked block reason', () => {
   const display = displayModule();
   assert.equal(display.aqteOpportunitySymbol(['NIFTY', 'BANKNIFTY', 'SENSEX'], { NIFTY: 'Daily index trade limit reached', BANKNIFTY: null }), 'BANKNIFTY');
@@ -2343,14 +2757,24 @@ test('top opportunity follows the controller: first unblocked ranked index, else
   assert.doesNotMatch(panel, /Daily index trade limit/);
   const ladder = nodes(nodes(h.render(props)).find(n => n.props?.['aria-label'] === 'Index ranking')).filter(n => n.type === 'li');
   assert.deepEqual(ladder.map(row => text(row).replace(/\s+/g, ' ').trim()),
-    ['1 NIFTY Blocked CE 90%', '♛ BANK NIFTY Top pick PE 75%', '3 SENSEX Blocked WAIT --']);
+    ['1 NIFTY Limit reached CE 90%', '♛ BANK NIFTY Top pick PE 75%', '3 SENSEX Blocked WAIT --']);
   assert.deepEqual(ladder.map(row => row.props.className), ['', 'aqx-rank-top', '']);
-  // When every index is blocked the top-ranked index explains why nothing will trade.
+  assert.deepEqual(ladder.map(row => row.props.title), ['Daily index trade limit reached', undefined, 'No setup'],
+    'every short row label carries the controller reason as a tooltip');
+  // A capped index cannot enter today, so the next ranked index that still can explains the wait.
   const blocked = text(nodes(h.render({ ...props, liveStatus: { ...live, entry_blocks: { ...live.entry_blocks, BANKNIFTY: 'No setup' } } }))
     .find(n => n.props?.['aria-label'] === 'Top opportunity'));
-  assert.match(blocked, /NIFTY_SCALP_CE/);
-  assert.match(blocked, /Daily index trade limit reached/);
+  assert.match(blocked, /NIFTY_SCALP_PE/);
+  assert.match(blocked, /No setup/);
+  assert.match(blocked, /Top · Blocked/);
   assert.doesNotMatch(blocked, /READY|Eligible/);
+  // Every index capped: the top-ranked one is shown and the card says nothing can trade today.
+  const capped = 'Daily index trade limit reached';
+  const held = text(nodes(h.render({ ...props, liveStatus: { ...live, entry_blocks: { NIFTY: capped, BANKNIFTY: capped, SENSEX: capped } } }))
+    .find(n => n.props?.['aria-label'] === 'Top opportunity'));
+  assert.match(held, /NIFTY_SCALP_CE/);
+  assert.match(held, /Auto Execution:\s+BLOCKED/);
+  assert.match(held, /No index can trade today/);
 });
 
 test('un-evaluated engines read as awaiting data with the backend reason, and empty levels stay neutral', () => {
@@ -2371,7 +2795,14 @@ test('un-evaluated engines read as awaiting data with the backend reason, and em
   const cards = nodes(tree).filter(n => String(n.props?.className).includes('aqx-eng-card'));
   assert.equal(cards.length, 12);
   assert.ok(cards.every(card => !card.props.disabled && card.props.title === reason));
-  assert.ok(cards.every(card => /Awaiting live data/.test(text(card)) && !/0 \/ 0/.test(text(card))));
+  assert.ok(cards.every(card => /Market closed/.test(text(card)) && !/0 \/ 0/.test(text(card))));
+  for (const [why, label] of [['Warming up: need 20 contiguous completed one-minute futures candles', 'Warming up'],
+    ['Market data stale: futures last tick 9s ago', 'Feed stale'], [null, 'Awaiting live data']]) {
+    const warm = { ...data, NIFTY: { ...data.NIFTY, engines: data.NIFTY.engines.map(engine => ({ ...engine, reason: why })) } };
+    const card = nodes(h.render({ symbol: 'NIFTY', data: warm, liveStatus: null, unavailable: false, policy: null, events: [] }))
+      .find(n => String(n.props?.className).includes('aqx-eng-card'));
+    assert.match(text(card), new RegExp(label));
+  }
   const head = text(nodes(tree).find(n => n.props?.className === 'aqx-deck-title'));
   assert.match(head, /All engines monitoring/);
   assert.match(head, /Outside regular market session/);
@@ -2397,7 +2828,7 @@ test('trade management and risk checks for a pending and a protected controller 
   const props = { symbol: 'NIFTY', data, liveStatus: live, unavailable: false, policy: null, events: [] };
   let tree = h.render(props);
   const management = text(nodes(tree).find(n => n.props?.['aria-label'] === 'Enterprise trade management'));
-  assert.match(management, /Trail Step\s+₹20\.00 · from \+1\.0R/, 'Pending entry measures 1R from its limit, not entry_price 0');
+  assert.match(management, /Trail Distance\s+₹20\.00 · from \+1\.0R/, 'Pending entry measures 1R from its limit, not entry_price 0');
   assert.match(management, /Initial Stop Loss\s+₹80\.00\s+\(\s*-20\.00%\s*\)/);
   const checks = nodes(nodes(tree).find(n => n.props?.['aria-label'] === 'Orchestration and risk')).filter(n => n.type === 'li');
   const check = label => checks.find(li => text(li).includes(label));
@@ -2410,7 +2841,7 @@ test('trade management and risk checks for a pending and a protected controller 
   tree = h.render({ ...props, liveStatus: { ...live, active: livePositionFixture({ trailing_active: false, trail_start_r: undefined }) } });
   const protectedChecks = text(nodes(tree).find(n => n.props?.['aria-label'] === 'Orchestration and risk'));
   assert.match(protectedChecks, /Trailing Stop\s+Arms at \+1\.0R/);
-  assert.match(text(nodes(tree).find(n => n.props?.['aria-label'] === 'Enterprise trade management')), /Trail Step\s+₹20\.00 · from \+1\.0R/);
+  assert.match(text(nodes(tree).find(n => n.props?.['aria-label'] === 'Enterprise trade management')), /Trail Distance\s+₹20\.00 · from \+1\.0R/);
 });
 
 test('AQTE section renders the engine deck from the snapshot and drops malformed engine events', async () => {
@@ -2687,12 +3118,21 @@ test('opportunity card shows Auto Trade waiting to arm with its reason, never OF
   assert.match(panel, /Auto Trade is not ON and armed/);
   panel = card({ ...base, automation_on: false, armed: false, automation_wanted: true, killed: true });
   assert.match(panel, /Auto Execution:\s+STOPPED/);
-  // With no setup, the controller's own block (e.g. a disabled index) explains the wait.
+  // With no setup, a disabled index is skipped (as automated_entry does) and the next index explains the wait.
   data.NIFTY = { ...data.NIFTY, scalp: scalpSignal('WAIT') };
-  panel = card({ ...base, armed: true, automation_on: true, automation_wanted: true,
-    entry_blocks: { NIFTY: 'Index auto trading disabled', BANKNIFTY: 'No setup', SENSEX: 'No setup' } });
-  assert.match(panel, /Index auto trading disabled/);
+  const disabled = { ...base, armed: true, automation_on: true, automation_wanted: true,
+    entry_blocks: { NIFTY: 'Index auto trading disabled', BANKNIFTY: 'No setup', SENSEX: 'No setup' } };
+  panel = card(disabled);
+  assert.match(panel, /No setup/);
+  assert.match(panel, /Disabled in Controls/);
   assert.match(panel, /Auto Execution:\s+WAITING/);
+  // Waiting for the session never hides that every index is switched off in Controls.
+  const off = 'Index auto trading disabled';
+  panel = card({ ...disabled, automation_on: false, armed: false, automation_waiting: 'Waiting for market',
+    entry_blocks: { NIFTY: off, BANKNIFTY: off, SENSEX: off } });
+  assert.match(panel, /Auto Execution:\s+BLOCKED/);
+  assert.match(panel, /every index is disabled or at its trade limit in Controls/);
+  assert.doesNotMatch(panel, /Waiting for market/);
 });
 test('engine deck counts only engines actively evaluating; an unconfigured ML shadow engine is not counted', () => {
   const h = harness('AQTEEngineDeck.tsx');
@@ -2700,10 +3140,34 @@ test('engine deck counts only engines actively evaluating; an unconfigured ML sh
   data.NIFTY = { ...data.NIFTY, ...engineSet({ ce: 1 }) };
   const head = props => text(nodes(h.render(props)).find(n => n.props?.className === 'aqx-deck-title'));
   const props = { symbol: 'NIFTY', data, liveStatus: liveFixture(), unavailable: false, policy: null, events: [] };
-  assert.match(head(props), /11\/12 engines evaluating in parallel/);
+  assert.match(head(props), /11\/12 engines evaluated from shared data/);
+  assert.doesNotMatch(head(props), /parallel/);
+  assert.match(text(h.render(props)), /Scalp\/swing rules control entry\. Engines rank or veto; ML is shadow-only/);
   assert.doesNotMatch(head(props), /12\/12/);
   data.NIFTY = { ...data.NIFTY, engines: data.NIFTY.engines.map(engine => ({ ...engine, status: 'MONITORING' })) };
   assert.match(head(props), /All engines monitoring/);
+});
+
+test('last entry scan is validated and shown as historical evidence only for the selected idle index', () => {
+  const display = displayModule();
+  const at = Date.now() / 1000;
+  const scan = { at: at - 60, blocks: { NIFTY: 'Trade exceeds remaining daily index loss budget' },
+    styles: { NIFTY: 'swing' } };
+  const status = { ...liveFixture(), entry_scan: scan };
+  assert.equal(display.isAqteLiveState(status), true);
+  assert.equal(display.isAqteLiveState({ ...status, entry_scan: null }), true);
+  for (const invalid of [{ ...scan, at: 'now' }, { ...scan, blocks: { NIFTY: 3 } },
+    { ...scan, styles: { NIFTY: 'auto' } }, { ...scan, blocks: { OTHER: 'No setup' } }]) {
+    assert.equal(display.isAqteLiveState({ ...status, entry_scan: invalid }), false);
+  }
+  const h = harness('AQTETerminal.tsx');
+  const props = { symbol: 'NIFTY', unavailable: false, tick: null, liveStatus: status, now: at };
+  const scanText = tree => text(nodes(tree).find(n => n.props?.['aria-label'] === 'Last entry scan'));
+  assert.match(scanText(h.render(props)), /Last scan .* IST.*Swing.*remaining daily index loss budget/);
+  assert.equal(scanText(h.render({ ...props, symbol: 'BANKNIFTY' })), '');
+  assert.equal(scanText(h.render({ ...props, liveStatus: { ...status, generated_at: at - 11 } })), '');
+  assert.equal(scanText(h.render({ ...props, liveStatus: { ...status, active: livePositionFixture() } })), '');
+  assert.equal(scanText(h.render({ ...props, liveStatus: liveFixture() })), '');
 });
 
 test('Positions tab lists positions squared off today with realised P&L instead of only "no open position"', async () => {

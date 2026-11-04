@@ -86,10 +86,10 @@ class Settings(BaseSettings):
     openai_timeout: int = Field(default=25, env="OPENAI_TIMEOUT")
 
     # ==================== SMART AI ALGO AUTO-TRADE ====================
-    # Default mode is PAPER for safety. Set ALGO_AUTO_TRADE_MODE=live and
-    # configure live symbols to place real broker orders.
+    # Real orders only: Smart AI Algo places Zerodha orders solely when
+    # ALGO_AUTO_TRADE_MODE=live; any other mode places and records nothing.
     algo_auto_trade_enabled: bool = Field(default=True, env="ALGO_AUTO_TRADE_ENABLED")
-    algo_auto_trade_mode: str = Field(default="paper", env="ALGO_AUTO_TRADE_MODE")  # paper|live
+    algo_auto_trade_mode: str = Field(default="off", env="ALGO_AUTO_TRADE_MODE")  # off|live
     algo_trade_quantity: int = Field(default=1, env="ALGO_TRADE_QUANTITY")
     algo_min_trade_confidence: int = Field(default=55, env="ALGO_MIN_TRADE_CONFIDENCE")
     algo_min_trade_strength: int = Field(default=35, env="ALGO_MIN_TRADE_STRENGTH")

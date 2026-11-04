@@ -677,13 +677,13 @@ class SmartAIAlgoService:
         self._results[symbol] = merged_result
 
         # Position exit manager: enforces SL / target / trailing SL / EOD square-off
-        # automatically on any open CE/PE position (paper AND live), every tick.
+        # automatically on any open CE/PE position, every tick.
         try:
             await self._manage_open_position(symbol, tick, self._results[symbol])
         except Exception as pos_exc:
             logger.debug("Position manager failed for %s: %s", symbol, pos_exc)
 
-        # Auto-trade execution (paper/live). Isolated so a broker error can't blank the UI.
+        # Real auto-trade execution. Isolated so a broker error can't blank the UI.
         try:
             await self._maybe_execute_trade(symbol, tick, self._results[symbol])
         except Exception as trade_exc:
@@ -1057,8 +1057,9 @@ class SmartAIAlgoService:
         def add(name: str, ok: bool, detail: str) -> None:
             checks.append({"name": name, "ok": bool(ok), "detail": str(detail)[:90]})
 
-        mode = (cfg.algo_auto_trade_mode or "paper").lower().strip()
+        mode = (cfg.algo_auto_trade_mode or "off").lower().strip()
         add("Auto-trade enabled", bool(cfg.algo_auto_trade_enabled), f"mode: {mode.upper()}")
+        add("Live mode", mode == "live", "real Zerodha orders" if mode == "live" else "not LIVE · no orders placed")
 
         market_status = str(result.get("market_status", "CLOSED") or "CLOSED").upper()
         add("Market LIVE", market_status == "LIVE", market_status)
@@ -1101,7 +1102,7 @@ class SmartAIAlgoService:
         last = self._last_exec_outcome.get(symbol) or {}
         last_status = str(last.get("status", "") or "")
         if last_status:
-            order_ok = last_status in ("LIVE_EXECUTED", "PAPER_EXECUTED")
+            order_ok = last_status == "LIVE_EXECUTED"
             detail = last_status
             err = str(last.get("error", "") or "")
             if err:
@@ -1756,6 +1757,10 @@ class SmartAIAlgoService:
         if not cfg.algo_auto_trade_enabled:
             logger.debug("Smart AI trade skipped for %s: auto trade disabled", symbol)
             return
+        # Real money only: without LIVE mode nothing is placed or recorded (no paper trades).
+        if (cfg.algo_auto_trade_mode or "off").lower().strip() != "live":
+            logger.debug("Smart AI trade skipped for %s: auto trade mode is not LIVE", symbol)
+            return
 
         side = str(signal.get("signal", "WAIT") or "WAIT").upper()
         if side not in ("BUY", "SELL"):
@@ -1827,35 +1832,10 @@ class SmartAIAlgoService:
             "confidence": confidence,
             "strength": strength,
             "timestamp": datetime.now(IST).isoformat(),
-            "mode": cfg.algo_auto_trade_mode,
+            "mode": "live",
             "status": "PENDING",
             "reason": signal.get("reasoning", ""),
         }
-
-        mode = (cfg.algo_auto_trade_mode or "paper").lower().strip()
-        if mode not in ("paper", "live"):
-            mode = "paper"
-
-        if mode == "paper":
-            # Paper entry now opens a TRACKED position so the exit manager runs
-            # the full SL/target/TSL lifecycle exactly like live mode.
-            opt_symbol = str(signal.get("option_tradingsymbol", "") or "")
-            opt_entry = float(signal.get("option_best_buy_price", 0) or signal.get("option_ltp", 0) or 0)
-            qty = max(1, int(cfg.algo_trade_quantity))
-            trade_event["status"] = "PAPER_EXECUTED"
-            trade_event["broker_order_id"] = None
-            trade_event["tradingsymbol"] = opt_symbol
-            trade_event["option_entry_price"] = opt_entry
-            trade_event["quantity"] = qty
-            self._record_trade(symbol, side, now, trade_event, executed=True)
-            self._open_position(
-                symbol, side, signal, mode="paper",
-                tradingsymbol=opt_symbol or f"{symbol}-PAPER-{'CE' if side == 'BUY' else 'PE'}",
-                exchange="", quantity=qty, option_entry=opt_entry,
-                lot_size=qty, tick_size=0.05,
-            )
-            logger.info("Smart AI PAPER trade recorded: %s %s (exit manager armed)", symbol, side)
-            return
 
         if now < self._live_block_until_ts:
             trade_event["status"] = "LIVE_BLOCKED"
@@ -2189,9 +2169,9 @@ class SmartAIAlgoService:
     ) -> None:
         """Software OCO: auto SL / target / trailing-SL / reversal / EOD square-off.
 
-        Runs every rule tick on the open position (paper AND live). Exits sell
-        the option back (live) or mark the paper exit, then release the symbol
-        so the algo can re-enter on the next fresh setup.
+        Runs every rule tick on the open live position. Exits sell the option
+        back to Zerodha, then release the symbol so the algo can re-enter on
+        the next fresh setup.
         """
         pos = self._open_option_position.get(symbol) or {}
         if not pos.get("tradingsymbol"):
@@ -2268,18 +2248,17 @@ class SmartAIAlgoService:
     async def _exit_position(
         self, symbol: str, pos: Dict[str, Any], exit_reason: str, signal: Dict[str, Any]
     ) -> None:
-        """Sell the open option back (live) or record the paper exit, then unlock the symbol."""
-        mode = str(pos.get("mode", "paper") or "paper").lower()
+        """Sell the open option back to Zerodha, then unlock the symbol."""
         tradingsymbol = str(pos.get("tradingsymbol", "") or "")
         exchange = str(pos.get("exchange", "") or "")
         qty = int(pos.get("quantity", 0) or 0)
         entry_opt = float(pos.get("entry_buy_price", 0) or 0)
         exit_opt = 0.0
         order_id = None
-        status = "PAPER_EXIT"
-        error = ""
+        status = "LIVE_EXIT_FAILED"
+        error = "Position has no broker contract to sell"
 
-        if mode == "live" and exchange and tradingsymbol and qty > 0:
+        if exchange and tradingsymbol and qty > 0:
             cfg = _settings()
             try:
                 kite = KiteConnect(api_key=cfg.zerodha_api_key)
@@ -2315,21 +2294,11 @@ class SmartAIAlgoService:
                 )
                 exit_opt = limit_price
                 status = "LIVE_EXIT"
+                error = ""
             except Exception as exc:
                 status = "LIVE_EXIT_FAILED"
                 error = str(exc)
                 logger.error("Smart AI exit order failed for %s (%s): %s", symbol, exit_reason, exc)
-        else:
-            # Paper exit — use the live option quote when the preview contract
-            # matches; else a conservative 0.5-delta spot-move estimate.
-            if str(signal.get("option_tradingsymbol", "") or "") == tradingsymbol:
-                exit_opt = float(signal.get("option_ltp", 0) or 0)
-            if exit_opt <= 0 and entry_opt > 0:
-                spot = float(signal.get("entry_price", 0) or 0)
-                spot_entry = float(pos.get("spot_entry", 0) or 0)
-                if spot > 0 and spot_entry > 0:
-                    move = (spot - spot_entry) if pos.get("side") == "BUY" else (spot_entry - spot)
-                    exit_opt = max(0.05, entry_opt + move * 0.5)
 
         pnl_pts = round(exit_opt - entry_opt, 2) if entry_opt > 0 and exit_opt > 0 else 0.0
         pnl_amt = round(pnl_pts * qty, 2)
@@ -2346,7 +2315,7 @@ class SmartAIAlgoService:
             "pnl_amount": pnl_amt,
             "broker_order_id": order_id,
             "timestamp": datetime.now(IST).isoformat(),
-            "mode": mode,
+            "mode": "live",
             "status": status,
         }
         if error:

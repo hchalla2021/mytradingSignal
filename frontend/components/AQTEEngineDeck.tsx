@@ -1,8 +1,8 @@
 'use client';
 
 import { memo, useMemo, useState, type ReactNode } from 'react';
-import { aqteControllerCurrent, aqteDaySummary, aqteEffectiveSignal, aqteEngineView, aqteLabel, aqteLiveMetrics, aqteOpportunitySymbol, aqteOverview,
-  aqtePrice, aqteRanking, aqteSameJson, aqteSigned,
+import { aqteBlockLabel, aqteControllerCurrent, aqteDaySummary, aqteEffectiveSignal, aqteEngineView, aqteIndexHold, aqteLabel, aqteLiveMetrics,
+  aqteOpportunitySymbol, aqteOverview, aqtePrice, aqteRanking, aqteSameJson, aqteSigned, aqteTrailStart,
   type AQTEEngine, type AQTEEngineEvent, type AQTEEnginePolicy, type AQTEEngineStatus,
   type AQTELiveState, type AQTEOrchestration, type AQTESignal, type AQTESymbol } from '@/lib/aqte-display';
 
@@ -101,6 +101,14 @@ const sameBoard = (a: BoardProps, b: BoardProps) => a.symbol === b.symbol && a.o
   a.filter === b.filter && a.open === b.open && a.setFilter === b.setFilter && a.setOpen === b.setOpen &&
   aqteSameJson(a.engines, b.engines) && aqteSameJson(a.orchestration, b.orchestration);
 
+/** Short card text for an engine with no evaluated rules; the full backend reason stays in the tooltip. */
+function idleLabel(reason: string | null | undefined) {
+  return !reason ? 'Awaiting live data' : /outside regular market session/i.test(reason) ? 'Market closed'
+    : /warming up|opening range/i.test(reason) ? 'Warming up'
+      : /stale|no ticks|waiting for fresh/i.test(reason) ? 'Feed stale'
+        : /shadow model/i.test(reason) ? 'Shadow model off' : 'Awaiting live data';
+}
+
 const EngineBoard = memo(function EngineBoard({ symbol, engines, orchestration, online, filter, setFilter, open, setOpen }: BoardProps) {
   const counts = Object.fromEntries(FILTERS.map(key => [key, orchestration == null ? null : key === 'ALL' ? engines.length :
     orchestration[key.toLowerCase() as 'satisfied' | 'partial' | 'monitoring' | 'not_satisfied']])) as Record<Filter, number | null>;
@@ -111,7 +119,7 @@ const EngineBoard = memo(function EngineBoard({ symbol, engines, orchestration, 
     <div className="aqx-card aqx-deck-main" id="aqte-dash-engines">
       <header className="aqx-deck-head">
         <h3 className="aqx-deck-title">AQTE Strategy Engines (12)
-          <span> · {aqteLabel(symbol)} · {online ? running ? `${running}/12 engines evaluating in parallel` : 'All engines monitoring' : 'Engines offline'}</span>
+          <span> · {aqteLabel(symbol)} · {online ? running ? `${running}/12 engines evaluated from shared data` : 'All engines monitoring' : 'Engines offline'}</span>
           {idle && <span className="aqx-deck-idle"> · {idle}</span>}
           <span className={sideTone(orchestration?.consensus)}>{orchestration?.consensus
             ? ` · Consensus ${orchestration.consensus} ${orchestration.consensus_pct ?? '--'}%` : ''}</span>
@@ -125,6 +133,7 @@ const EngineBoard = memo(function EngineBoard({ symbol, engines, orchestration, 
           ))}
         </div>
       </header>
+      <p className="aqx-footnote">Scalp/swing rules control entry. Engines rank or veto; ML is shadow-only.</p>
       <div className="aqx-deck-grid">
         {engines.map((engine, index) => {
           const id = index + 1;
@@ -141,7 +150,7 @@ const EngineBoard = memo(function EngineBoard({ symbol, engines, orchestration, 
               <span className="aqx-eng-name">{engine?.name ?? ENGINE_NAMES[index]}</span>
               <span className="aqx-eng-badge"><span aria-hidden="true">{engine ? STATUS_ICON[status] : ''}</span> {engine ? STATUS_LABEL[status] : '--'}</span>
               <span className="aqx-eng-meta">
-                <span>{!engine ? '-- Rules' : engine.total ? <>{`${engine.passed} / ${engine.total}`}<span className="aqx-eng-rules-word"> Rules</span></> : 'Awaiting live data'}
+                <span>{!engine ? '-- Rules' : engine.total ? <>{`${engine.passed} / ${engine.total}`}<span className="aqx-eng-rules-word"> Rules</span></> : idleLabel(engine.reason)}
                   {engine?.side ? <b className={sideTone(engine.side)}> · {engine.side}</b> : engine?.authority === 'SHADOW' && engine.total ? ' · Shadow' : ''}</span>
                 <span>{engine?.score != null ? `${Math.round(engine.score)}%` : '--'}</span>
               </span>
@@ -164,13 +173,15 @@ const EngineBoard = memo(function EngineBoard({ symbol, engines, orchestration, 
 
 type Opportunity = ReturnType<typeof opportunityOf>;
 /** Top opportunity and execution state; recomputed only when the snapshot, controller status or policy changes. */
-function opportunityOf(data: Props['data'], liveStatus: AQTELiveState | null, policy: AQTEEnginePolicy | null, unavailable: boolean) {
+function opportunityOf(data: Props['data'], reportedStatus: AQTELiveState | null, policy: AQTEEnginePolicy | null,
+  unavailable: boolean, now: number) {
+  const liveStatus = aqteControllerCurrent(reportedStatus, now) ? reportedStatus : null;
   // Mirrors automated_entry: controller ranking (or the same local ranking before it reports), first unblocked index.
-  const ranked = unavailable ? [] : liveStatus?.ranking ?? aqteRanking(data, liveStatus?.styles);
+  const ranked = unavailable ? [] : liveStatus?.ranking ?? aqteRanking(data, liveStatus?.styles, liveStatus?.swing_setups);
   const top = unavailable ? null : aqteOpportunitySymbol(ranked, liveStatus?.entry_blocks);
   const topSignal = top ? data?.[top] : undefined;
-  const style = top ? liveStatus?.styles?.[top] ?? 'scalp' : 'scalp';
-  const effective = aqteEffectiveSignal(topSignal, style);
+  const style = top && liveStatus?.styles?.[top] !== undefined ? liveStatus.styles[top] : 'scalp';
+  const effective = aqteEffectiveSignal(topSignal, style, top ? liveStatus?.swing_setups?.[top] : undefined);
   const actionable = !!effective && effective.decision !== 'WAIT' && !!effective.entry;
   const side = actionable ? effective.decision.slice(-2) as 'CE' | 'PE' : null;
   const topView = aqteEngineView(topSignal);
@@ -178,40 +189,58 @@ function opportunityOf(data: Props['data'], liveStatus: AQTELiveState | null, po
   const opposed = side && topView ? side === 'CE' ? topView.orchestration.pe : topView.orchestration.ce : null;
   const alignedNames = side && topView ? topView.engines.filter(engine => engine.status === 'SATISFIED' && engine.side === side)
     .sort((a, b) => (b.score ?? 0) - (a.score ?? 0)).slice(0, 3).map(engine => SHORT_NAMES[engine.id - 1] ?? engine.name) : [];
-  const entry = actionable ? effective.entry : null;
+  const plan = top ? liveStatus?.entry_plans?.[top] ?? null : null;
+  // Show the levels the controller would actually send; the raw rule levels only before the controller reports.
+  const entry = !actionable ? null : plan ? { ...effective.entry!, ...plan } :
+    liveStatus?.entry_plans ? null : effective.entry;
   const contract = actionable ? effective.contract : null;
   const strike = typeof contract?.strike === 'number' && Number.isFinite(contract.strike) ? contract.strike : null;
-  const block = top ? liveStatus?.entry_blocks?.[top] : undefined;
-  const active = liveStatus?.active ?? null;
+  const active = reportedStatus?.active ?? null;
+  const controllerBlock = liveStatus?.error || (liveStatus?.flatten_pending ? 'Emergency square-off pending' : null);
+  const sessionClosed = liveStatus?.entry_window === false;
+  const block = controllerBlock || (sessionClosed ? 'New entries permitted only from 09:15 to 15:15 IST'
+    : top ? liveStatus?.entry_blocks?.[top] : undefined);
   const vetoMin = policy?.veto_min ?? 2;
   const vetoed = policy?.veto !== false && opposed != null && aligned != null && opposed >= vetoMin && opposed > aligned;
   const lot = contract?.lot_size;
-  const executing = actionable && !vetoed && !!liveStatus && liveStatus.automation_on && liveStatus.armed && !liveStatus.killed && !active && block === null;
+  const executing = actionable && !vetoed && !!liveStatus && liveStatus.automation_on && liveStatus.armed &&
+    !liveStatus.killed && !controllerBlock && !sessionClosed && !active && block === null;
   // Standing ON that has not armed yet (outside the window, IP or preflight failure) is waiting, not OFF.
   const arming = !!liveStatus && !liveStatus.killed && !liveStatus.automation_on && liveStatus.automation_wanted === true;
+  // Every index disabled or at its trade cap in Controls: nothing can enter today, whatever the market does.
+  const held = !!liveStatus && ranked.length > 0 && ranked.every(symbol => aqteIndexHold(liveStatus.entry_blocks?.[symbol]));
   const execution = !liveStatus ? 'Controller status unavailable' :
     liveStatus.killed ? 'Emergency stop latched' :
-      arming && !active ? liveStatus.automation_waiting || 'Auto Trade ON · waiting to arm for the market session' :
+      controllerBlock ? controllerBlock :
+      active ? 'One managed position already open' :
+      held ? 'No index can trade today · every index is disabled or at its trade limit in Controls' :
+      arming ? liveStatus.automation_waiting || 'Auto Trade ON · waiting to arm for the market session' :
+      sessionClosed ? 'New entries permitted only from 09:15 to 15:15 IST' :
       !actionable ? block || effective?.reasons[0] || 'Waiting for live rule evaluation' :
         block ? block :
           vetoed ? `Engine veto · WAIT (${opposed} oppose ${side}, ${aligned} aligned)` :
           !liveStatus.automation_on || !liveStatus.armed ? 'Auto Trade is not ON and armed' :
-            active ? 'One managed position already open' : 'Eligible · central controller places the IOC entry';
+            'Eligible · central controller places the IOC entry';
   const autoState = !liveStatus ? ['UNKNOWN', 'aqx-exec-wait'] : liveStatus.killed ? ['STOPPED', 'aqx-exec-stop'] :
-    active ? ['IN TRADE', 'aqx-exec-live'] : executing ? ['READY', 'aqx-exec-ready'] :
-      !liveStatus.automation_on && !arming ? ['OFF', 'aqx-exec-off'] : ['WAITING', 'aqx-exec-wait'];
+    controllerBlock ? ['BLOCKED', 'aqx-exec-off'] : active ? ['IN TRADE', 'aqx-exec-live'] : executing ? ['READY', 'aqx-exec-ready'] :
+      !liveStatus.automation_on && !arming ? ['OFF', 'aqx-exec-off'] : held ? ['BLOCKED', 'aqx-exec-off'] : ['WAITING', 'aqx-exec-wait'];
   const score = actionable && effective.confidence != null && Number.isFinite(effective.confidence)
     ? Math.max(0, Math.min(100, effective.confidence)) : null;
-  // Same order the controller scans; block reasons stay in the execution line, rows only flag them.
+  // Same order the controller scans; rows carry a short block label and the full reason as a tooltip.
   const ladder = (ranked.length ? ranked : (['NIFTY', 'BANKNIFTY', 'SENSEX'] as AQTESymbol[])).map(symbol => {
-    const signal = unavailable ? null : aqteEffectiveSignal(data?.[symbol], liveStatus?.styles?.[symbol] ?? 'scalp');
+    const signal = unavailable ? null : aqteEffectiveSignal(data?.[symbol], liveStatus?.styles?.[symbol],
+      liveStatus?.swing_setups?.[symbol]);
     const ready = !!signal && signal.decision !== 'WAIT' && !!signal.entry;
     const confidence = ready && signal.confidence != null && Number.isFinite(signal.confidence)
       ? Math.max(0, Math.min(100, signal.confidence)) : null;
     const gate = liveStatus?.entry_blocks?.[symbol];
-    const state = unavailable || !signal ? 'No data' : symbol === top ? gate ? 'Top · blocked' : 'Top pick'
-      : gate === null ? 'Clear' : gate ? 'Blocked' : 'Unverified';
-    return { symbol, side: ready ? signal.decision.slice(-2) as 'CE' | 'PE' : null, confidence, state, top: symbol === top };
+    const hold = aqteIndexHold(gate);
+    const first = symbol === top;
+    // Controls holds apply with or without market data; every other state needs a live evaluation first.
+    const state = hold ?? (unavailable || !signal ? 'No data' : gate ? aqteBlockLabel(gate)
+      : gate === null ? first ? 'Top pick' : 'Clear' : 'Unverified');
+    return { symbol, side: ready ? signal.decision.slice(-2) as 'CE' | 'PE' : null, confidence,
+      state: first && gate ? `Top · ${state}` : state, reason: gate || undefined, top: first };
   });
   return { top, style, effective, actionable, side, topView, aligned, opposed, alignedNames, entry, contract, strike,
     block, active, vetoed, lot, executing, execution, autoState, score, ladder };
@@ -248,13 +277,13 @@ const OpportunityPanel = memo(function OpportunityPanel({ opp, maxLots }: { opp:
       <section className="aqx-opp-rank" aria-label="Index ranking">
         <p className="aqx-opp-rank-head"><span>Index Ranking</span><small>Controller scan order</small></p>
         <ol>
-          {ladder.map(({ symbol: name, side: rowSide, confidence, state, top: first }, index) => (
-            <li key={name} className={first ? 'aqx-rank-top' : ''} data-side={rowSide ?? 'WAIT'}>
+          {ladder.map(({ symbol: name, side: rowSide, confidence, state, reason, top: first }, index) => (
+            <li key={name} className={first ? 'aqx-rank-top' : ''} data-side={rowSide ?? 'WAIT'} title={reason}>
               <span className="aqx-rank-no" aria-hidden="true">{first ? '♛' : index + 1}</span>
               <span className="aqx-rank-body">
                 <span className="aqx-rank-line">
                   <b>{aqteLabel(name)}</b>
-                  <small>{state}</small>
+                  <small data-hold={reason && aqteIndexHold(reason) ? 'true' : undefined}>{state}</small>
                 </span>
                 <span className="aqx-rank-bar" aria-hidden="true"><i style={{ width: `${confidence ?? 0}%` }} /></span>
               </span>
@@ -288,7 +317,7 @@ function AQTEEngineDeck({ symbol, data, liveStatus, events, policy, unavailable,
   const view = useMemo(() => unavailable ? null : aqteEngineView(signal), [signal, unavailable]);
   const engines = view?.engines ?? PLACEHOLDER_ENGINES;
   const market = view?.market ?? null;
-  const opp = useMemo(() => opportunityOf(data, liveStatus, policy, unavailable), [data, liveStatus, policy, unavailable]);
+  const opp = useMemo(() => opportunityOf(data, liveStatus, policy, unavailable, now), [data, liveStatus, policy, unavailable, now]);
   const { style, effective, actionable, topView, aligned, opposed, entry, contract, block, active, vetoed, lot, executing } = opp;
 
   // Trade management and P&L come only from the broker-reconciled controller position.
@@ -303,13 +332,14 @@ function AQTEEngineDeck({ symbol, data, liveStatus, events, policy, unavailable,
   const initialStop = active?.initial_stop ?? plan?.stop ?? null;
   const risk = base != null && initialStop != null ? base - initialStop : null;
   const hasLevels = !!(active || plan);
+  const trailStart = aqteTrailStart(liveStatus, active?.symbol ?? opp.top);
   const management: Array<[string, ReactNode, string?]> = [
     ['Initial Stop Loss', hasLevels ? <>{rupees(initialStop)} <small>({percent(move(base, initialStop))})</small></> : '--', hasLevels ? 'aqx-sell' : ''],
     ['Trailing Stop Loss', active ? <>{rupees(active.stop)} <small>{trailing ? '(Active)' : confirmed ? '(Confirmed SL)' : '(Unverified)'}</small>
       <span role="img" aria-label={trailing ? 'Trailing active' : 'Trailing not active'} className={`aqx-toggle ${trailing ? 'aqx-toggle-on' : ''}`} /></> :
       plan ? `Arms after fill` : '--', trailing ? 'aqx-buy' : ''],
     ['SL Trail Mode', 'Peak bid − 1R (broker SL modify)'],
-    ['Trail Step', risk != null && risk > 0 ? `₹${aqtePrice(risk)} · from +${fixed(active?.trail_start_r ?? 1, 1)}R` : '--'],
+    ['Trail Distance', risk != null && risk > 0 ? `₹${aqtePrice(risk)} · from +${fixed(trailStart, 1)}R` : '--'],
     ['Profit Booking', hasLevels ? 'Full exit at target · 1 lot' : '--'],
     ['Target', hasLevels ? <>{rupees(active?.target ?? plan?.target)} <small>({percent(move(base, active?.target ?? plan?.target))})</small></> : '--', hasLevels ? 'aqx-buy' : ''],
   ];
@@ -335,16 +365,16 @@ function AQTEEngineDeck({ symbol, data, liveStatus, events, policy, unavailable,
     { label: 'Risk Validation', state: block === undefined ? 'wait' : block ? 'fail' : 'pass',
       value: block === undefined ? '--' : block ? 'Blocked' : 'Passed', detail: block || undefined },
     // An open managed trade is the normal capacity-used state, not a failure.
-    { label: 'Position & Exposure', state: !liveStatus ? 'wait' : active ? 'wait' : 'pass',
-      value: !liveStatus ? '--' : active ? '1 / 1 open' : 'Within limits' },
-    { label: 'Quantity Control', state: liveStatus ? 'pass' : 'wait',
-      value: liveStatus ? `${liveStatus.limits.max_lots} lot${liveStatus.limits.max_lots === 1 ? '' : 's'} (enforced)${lot ? ` · ${lot} qty` : ''}` : '--' },
+    { label: 'Position & Exposure', state: !current ? 'wait' : active ? 'wait' : 'pass',
+      value: !current ? '--' : active ? '1 / 1 open' : 'Within limits' },
+    { label: 'Quantity Control', state: current ? 'pass' : 'wait',
+      value: current && liveStatus ? `${liveStatus.limits.max_lots} lot${liveStatus.limits.max_lots === 1 ? '' : 's'} (enforced)${lot ? ` · ${lot} qty` : ''}` : '--' },
     { label: 'Trailing Stop', state: trailing ? 'pass' : active && !confirmed ? 'fail' : 'wait',
-      value: !liveStatus ? '--' : !active ? 'Arms after fill' : trailing ? `Active (₹${aqtePrice(active.stop)})` :
-        confirmed ? `Arms at +${fixed(active.trail_start_r ?? 1, 1)}R` : 'SL unconfirmed' },
-    { label: 'Profit Booking', state: liveStatus ? 'pass' : 'wait', value: liveStatus ? 'Target exit (1 lot)' : '--' },
+      value: !current ? '--' : !active ? 'Arms after fill' : trailing ? `Active (₹${aqtePrice(active.stop)})` :
+        confirmed ? `Arms at +${fixed(trailStart, 1)}R` : 'SL unconfirmed' },
+    { label: 'Profit Booking', state: current ? 'pass' : 'wait', value: current ? 'Target exit (1 lot)' : '--' },
   ];
-  const sent = active?.entry_id ? ['Sent to Live Execution (Zerodha)', 'aqx-exec-ready'] :
+  const sent = !current ? ['Controller status unverified', 'aqx-exec-off'] : active?.entry_id ? ['Sent to Live Execution (Zerodha)', 'aqx-exec-ready'] :
     executing ? ['Next entry routes to Zerodha (IOC)', 'aqx-exec-ready'] : ['Not sent · awaiting a risk-cleared setup', 'aqx-exec-off'];
 
   const { info } = aqteOverview(signal, 'real', unavailable, now);
@@ -508,7 +538,8 @@ function AQTEEngineDeck({ symbol, data, liveStatus, events, policy, unavailable,
               <b className={`aqx-st-${event.status.toLowerCase()}`}>{STATUS_ICON[event.status]} {STATUS_LABEL[event.status]}</b>
               {event.side && <span className={sideTone(event.side)}>– {event.side}</span>}
             </li>
-          )) : <li className="aqx-ticker-empty">{unavailable ? 'Engine events unavailable' : 'No engine status changes yet today'}</li>}
+          )) : <li className="aqx-ticker-empty">{unavailable ? 'Engine events unavailable'
+            : 'No engine status changes since AQTE started · changes appear while the market feed is live'}</li>}
         </ol>
       </section>
     </section>

@@ -196,6 +196,10 @@ reports each index's rule and estimated one-lot risk blocker without making brok
 requests; the terminal and Controls show these before any order attempt. A null
 blocker is not a fill or an execution approval: broker, cash, session and daily
 budget checks still run at submission.
+`entry_plans` reports the exact one-lot plan the controller would send per index
+(maximum premium, stop, target, reward:risk, quantity, risk). The Current Opportunity
+panel shows this plan instead of the raw signal levels, and `--` when the controller
+has no plan for that index.
 Existing charts, trading books, authentication and signals retain their own behavior.
 AQTE does not disable or change any other module's independently configured execution.
 
@@ -385,8 +389,11 @@ The terminal labels this **Rule-Based Trade Engine**, not an ML model. Its empty
 card displays the current backend WAIT reason for the index's selected style
 (Quick scalp or Swing), the warm-up and opening-range counts, and the last skipped
 automatic-entry check. An older backend without counts still displays its WAIT reason.
-The rule card uses the same `directional_checks` as automatic Scalp/Swing entry, not
-frontend copies of thresholds. PASS means aligned with the selected **CE or PE** bias:
+The rule card uses the same `directional_checks` (Scalp) and `setup_checks` (Swing) as
+automatic entry, not frontend copies of thresholds. Swing evidence names its setup
+(for example `Swing · Trend continuation · CE · 9/10 aligned`); Advanced details adds
+that setup's own checks (pullback, resume, sweep, opposing-stack filter, stretch, range,
+live confirmation) with their measured values. PASS means aligned with the selected **CE or PE** bias:
 bearish EMA, below-VWAP price and sell-side depth can PASS a PE check. SuperTrend and
 20-candle structure are labelled separately; neither alone is called the overall trend.
 The indicator count is not a probability, nor approval to bypass contract, cost, risk,
@@ -405,6 +412,12 @@ details have a keyboard-scrollable fixed-height area. Only manual disclosure cha
 expand or collapse the card. Green buy/bullish and rose sell/bearish text describe
 direction; amber means waiting. Check icons separately show backend entry alignment:
 sell pressure can have rose text and a green PASS icon for a PE setup.
+
+The **Auto Execution** panel uses green text and a subtle green border for **READY**
+(a risk-cleared entry) and **IN TRADE**, without a green background. **IN TRADE** also
+highlights the whole box with a brighter green border and a soft outer glow. Waiting, blocked,
+off, stopped and unverified states keep their existing colours. Green indicates
+execution status, not profit or a guaranteed fill.
 
 `intelligence.live` preserves Kite's futures token, exchange/receipt times, LTP,
 top-five queued buy/sell quantities and optional `oi`. Candle-derived EMA, RSI, ATR,
@@ -552,7 +565,14 @@ daily with `kite.ltp`, stale after 15 s).
 
 - Each rule is PASS, FAIL, or null (no evidence). An engine is **Satisfied** when every
   rule passes, **Partial** at ≥ 50%, **Monitoring** while any input is missing, otherwise
-  **Not satisfied**. A stale feed or closed market shows all 12 as Monitoring with the reason.
+  **Not satisfied**. A stale feed or closed market shows all 12 as Monitoring with the reason;
+  idle cards label it as Market closed, Warming up, Feed stale or Shadow model off.
+- Trade-type mapping: momentum/breakout, trend continuation, liquidity-sweep reversal and
+  mean reversion are Swing rule setups, each with its own entry gate and Controls switch
+  (see Swing setups); scalping is the Scalp rule. A Satisfied engine card never places an
+  order by itself. Volatility expansion,
+  options momentum, multi-timeframe and statistical arbitrage are rank/veto evidence only;
+  stat arb is a relative-strength check, not a hedged spread (AQTE is buy-only, CE/PE).
 - Options Intelligence computes Black-Scholes IV (bisection on the live premium) and
   delta, gamma, theta/day and vega/1% with `AQTE_RISK_FREE_RATE`; PCR is put OI ÷ call
   OI over the **subscribed strikes only** and is unavailable unless both sides report OI.
@@ -708,9 +728,9 @@ Validation commands:
 
 ```powershell
 Set-Location backend
-..\.venv\Scripts\python.exe -m unittest test_aqte test_paper_trading test_order_flow_paper -q
+..\.venv\Scripts\python.exe -m unittest test_aqte test_aqte_live test_aqte_engines test_aqte_broker_positions -q
 Set-Location ..\frontend
-node --test tests\aqte.test.cjs tests\institutional-workspace.test.cjs tests\chart-workspace.test.cjs tests\chart-paper-trading.test.cjs
+node --test tests\aqte.test.cjs tests\institutional-workspace.test.cjs tests\chart-workspace.test.cjs
 .\node_modules\.bin\next.cmd lint --file components\AQTESection.tsx --file app\page.tsx
 .\node_modules\.bin\tsc.cmd --noEmit --incremental false
 ```
@@ -836,13 +856,49 @@ journal. Paper trading and read-only manual Kite positions are unaffected.
   ceiling (default INR 1,000, maximum 2,000),
   account loss ceiling, cash, broker, stale-data and one-position guards still apply.
   Planned reward/risk is recomputed after estimated fees and must be at least 1.5.
-- **Entry style** per index: **Quick scalp** (default) or **Swing**. SL % and target
-  multiple apply to Swing; trailing applies to both. Style can only change while OFF.
-  Saved preferences from before the style field keep **Swing** on upgrade; they
-  never silently switch a standing live ON request to a different strategy.
-  Select Quick scalp explicitly while OFF to change an existing index.
+- **Entry styles** per index are independent **Quick scalp** and **Swing** checkboxes,
+  both checked for new configurations. With both checked, the controller evaluates each
+  style's rules, setup switches, engine veto, fees, risk/budget and duplicate-entry checks,
+  then chooses the best qualified candidate by aligned engines and rule score (Scalp wins
+  an exact tie). A higher-scored blocked candidate cannot hide a valid alternative.
+  Neither checked means no new entries. SL % and target multiple apply to Swing; trailing
+  applies to both. Changes require automation OFF and Save; saving does not arm trading.
+  The API persists `style` as `both`, `scalp`, `swing` or `none`. Live status `styles`
+  reports the actually selected style, or null when neither is enabled; `style_checks`
+  reports each checked style's blocking reason, or null when its local checks passed.
+- **Swing setups** per index (shown whenever Swing is checked): Momentum breakout,
+  Trend continuation, Liquidity-sweep reversal and Mean reversion are all checked for new
+  configurations. All individual gates still apply. Existing saved choices are preserved;
+  legacy records missing style retain Swing, and records missing setup switches retain
+  breakout only. To change existing indices, check the desired styles/setups and Save
+  each index while automation is OFF. Unchecking a style/setup stays saved across restarts.
 - Eligible indices are considered in descending score order; weak, sideways,
   incomplete or unvalidated evidence never becomes a forced trade.
+
+#### Swing setups
+
+Every completed candle lists all swing setups present (`signal.setups`: name, side, base
+score, its own gate `checks` and whether they all pass). The engine picks the highest-scored setup whose gate
+passes, otherwise the highest-scored blocked one, and publishes that setup's checks as
+`rule_checks.swing` (`setup` names it). Each setup needs **every one of its own checks**
+(futures 1-minute, closed candle unless stated):
+
+| Setup | Checks |
+|---|---|
+| Momentum breakout | EMA 9/20/50/100/200 stack, VWAP side, SuperTrend, RSI CE 55-70 / PE 30-45, beyond spot CPR, volume ≥ 1.5x, imbalance ≥ 15%, fresh 20-candle breakout, HH/LL structure |
+| Trend continuation | EMA stack, VWAP side, SuperTrend, RSI CE 50-70 / PE 30-50, beyond spot CPR, within 1 ATR of EMA20, closed back past EMA9, no opposite 20-candle extreme, volume ≥ 1.0x, imbalance ≥ 15% |
+| Liquidity-sweep reversal | wick through the prior 20-candle low (CE) / high (PE) and close back inside, no fully stacked opposite EMA 9-200 trend, RSI CE < 70 / PE > 30, volume ≥ 1.5x, imbalance ≥ 15%, live futures not below (CE) / above (PE) the close |
+| Mean reversion | more than 2 ATR below (CE) / above (PE) VWAP, RSI CE < 30 / PE > 70, no EMA 9/20/50/200 stack either way, volume ≥ 1.5x, imbalance ≥ 15%, live futures turning back toward VWAP |
+
+At submission `quality_reason` re-derives the named setup's gate from the live
+intelligence; a setup that passes but is OFF blocks with
+`<setup> passed all its checks but is OFF in Controls`. If the engine's pick is OFF, the
+live controller trades the highest-scored ON setup on the **same side** whose gate passed
+(same contract and price cap). Live status publishes each index's switches as
+`swing_setups`, so the rule card, score, ranking and Current Opportunity apply the same
+swap and always show the setup that would actually trade (a malformed swapped gate shows
+as Unverified, never as the OFF setup). Pricing, R:R ≥ 1.5, risk, cash and broker gates are
+identical for every setup.
 
 #### Quick scalp (10 / 20 / 30 points)
 
@@ -887,9 +943,8 @@ blocker, so Auto Trade ON scans but never places an entry.
 
 `AQTE_LIVE_ALLOW_UNVALIDATED_RULES=true` is a separate, default-off owner opt-in for
 real money. It skips only the minimum rule score, model-validation and missing
-option-chain blockers. Every Swing entry must still pass directional EMA 9/20/50/100/200,
-VWAP, SuperTrend, RSI band, CPR, volume (at least 1.5x), order-flow imbalance (at least
-0.15), breakout and structure checks, plus all risk, broker and one-position guards.
+option-chain blockers. Every Swing entry must still pass all checks of its setup (see
+Swing setups) and that setup must be ON, plus all risk, broker and one-position guards.
 A non-numeric score always blocks. The ON confirmation and `GET /api/aqte/live/status`
 (`unvalidated_rules`) report the active mode.
 Quick scalp instead requires all of the scalp checks listed above. LightGBM is
@@ -1098,6 +1153,53 @@ two local processes from owning the same live journal. Use one backend worker an
 host; this is not a distributed execution-leader implementation. Do not share the broker
 account with manual trading, another execution app or a second deployment during this
 pilot. Pre-entry broker reads cannot prevent an external concurrent order.
+
+### Entry selection and no-trade diagnostics
+
+The 12 strategy cards are evaluators, not 12 independent execution workers. They
+are evaluated sequentially from the same locked market snapshot. Scalp and swing
+signals use completed one-minute futures candles plus fresh spot/futures and option
+quotes. Other cards rank or veto entries; ML remains shadow-only. A satisfied card
+does not authorize an order. Each index retains its explicitly configured style;
+there is no automatic style switching or newly enabled reversal strategy.
+
+The live monitor scans ranked indices after reconciliation, then waits two seconds.
+This is not a two-second end-to-end latency guarantee: broker reads, analysis, locks
+and journal writes add time. Entry requires a fresh, liquid one-lot quote, no-chase
+IOC price, net reward/risk and both remaining account/index loss budgets.
+An unaffordable candidate is skipped so another qualifying index can be considered;
+its rejection never increases the configured risk budget. Broker/account/IP faults
+still stop entries. Only one AQTE position may be pending/open.
+
+Live status and daily controls report remaining-budget failures, already-submitted
+strategy candles and transient retry cooldowns. The terminal also shows the last
+actual entry scan time, style and result for its index, distinct from current entry
+readiness. `entry_scan` is null until this process scans; it is not replayed after a
+restart. While automation is actively scanning, `ENTRY_SCAN` audit events sample the
+per-index scan results at most once per minute. They are diagnostic samples, not a
+complete tick-by-tick history or proof that a skipped trade would have made money.
+Arming failures remain in `AUTOMATION_WAITING`; active-position reconciliations do
+not generate entry-scan samples. Investigate the production journal for production
+decisions; a developer machine's IP/market state cannot explain server executions.
+
+Per-index Controls holds (index disabled, index/account trade cap) apply all day,
+so the dashboard shows them ahead of the arming/session wait: the ranking rows label
+each controller block (wrapping on narrow screens, with the full reason on hover), the opportunity card skips a disabled or
+capped index exactly as the controller does, and reports `BLOCKED` when no index can
+trade today. Live status also reports each index's configured `trail_starts` (R), which
+the trail labels use until an open trade stores its own `trail_start_r`. Legacy trades
+without that field use the controller's 1R fallback, not later Controls edits. The
+management panel labels 1R as the trail distance; the modification step is separately
+budgeted by the controller. Engine events are kept in memory while the feed is live
+and reset on backend restart.
+
+Opportunity readiness and risk checks expire with controller freshness (10 seconds,
+or immediately on a reported connection failure). Recorded trade levels remain visible
+as unverified, but cannot show an eligible entry. Controller errors, emergency square-off
+and the 15:15 entry cutoff also prevent a `READY` label. These are display guards;
+broker-side entry and protection checks remain authoritative.
+The lifecycle shows "Entries closed" outside the entry window, including the period
+between the 15:15 entry cutoff and the regular market close.
 
 Lost entry/stop acknowledgements are reconciled by tag/ID from the broker order book,
 not retried. Unresolved order modifications block further changes until observed in the

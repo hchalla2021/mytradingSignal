@@ -3,11 +3,11 @@
 Real-time trading dashboard for NIFTY, BANKNIFTY, and SENSEX with Zerodha Kite API integration.
 
 **AQTE - Adaptive Quantitative Trading Engine** adds compact NIFTY / BANK NIFTY /
-SENSEX section above the charts. Its backend-only, explainable rule baseline uses an isolated
-paper book, fresh option quotes, conservative limit entries, risk checks and a durable journal.
-Paper mode never places real orders. The opt-in Real Trade controller supports explicitly armed,
-one-lot broker orders with static-IP preflight, fill reconciliation and protective stops;
-live enablement and paper-acceptance flags default to false. Its header automation switch defaults
+SENSEX section above the charts. Its backend-only, explainable rule baseline uses fresh option
+quotes, conservative limit entries, risk checks and a durable journal. There is no paper or
+simulated trading: every order is a real Zerodha order placed by the Real Trade controller, which
+supports explicitly armed, one-lot broker orders with static-IP preflight, fill reconciliation and
+protective stops; live enablement and validation flags default to false. Its header automation switch defaults
 OFF; ON authorizes automatic qualifying entries after daily arming, without per-order approval.
 OFF blocks new entries while existing broker protection, trailing stops and exits continue.
 The compact Auto Trade pill shows backend-confirmed state; unavailable status never
@@ -69,8 +69,8 @@ indicator tail updates start at the engine's first changed bar to avoid repeated
 
 Chart views adapt to phones and tablets (including touch-screen iPad landscape).
 Manual drawing controls and their sidebar tab are removed from Advanced Chart, preserving
-the full plot width. Chart panning, zooming, crosshair, indicators, CPR and paper-level overlays remain available.
-Indicator/setup controls overlay the plot instead of pushing it down. History, paper overlays,
+the full plot width. Chart panning, zooming, crosshair, indicators and CPR remain available.
+Indicator/setup controls overlay the plot instead of pushing it down. History,
 futures contract settings and detailed readouts use expandable menus without remounting charts.
 Timeframes scroll horizontally; controls retain 44px touch targets, and mobile selects use 16px
 text to avoid iOS input zoom. **Full chart** expands either view to the browser viewport without
@@ -85,11 +85,11 @@ centring only while the view is still centred; manual panning and live ticks do 
 reset the view. Explicit Advanced Chart history/range controls keep their selected range.
 
 AQTE is the first dashboard section below the shared header and system/connection banners.
-The Advanced Chart / Futures Chart / Automated Paper Trading workspace follows it.
+The Advanced Chart / Futures Chart workspace follows it.
 **Live Market Indices** remains immediately below the chart workspace. Its institutional snapshot
 continues to come from the institutional-flow workspace, regardless of visual section order.
 
-The Advanced Chart, Futures Chart, Futures Advanced Chart, and Automated Paper Trading view
+The Advanced Chart, Futures Chart and Futures Advanced Chart view
 selectors use matching section-title typography, emerald active styling, and at least 52px
 touch targets. Phones show a two-column grid; tablets and desktops show four aligned,
 equal-width tabs. All working tabs remain available.
@@ -301,119 +301,6 @@ Zerodha WebSocket → Python Backend → Redis Cache → FastAPI WebSocket → N
 **Frontend:** Next.js 14 + TypeScript + TailwindCSS  
 **Deployment:** Docker Compose on Digital Ocean
 
-## Automated Paper Trading (Chart strategies + confirmed recorded order flow)
-
-Open **Market Intelligence Observatory - Entry / exit chart - Automated Paper Trading**.
-The Advanced Chart tab and its existing overlays/settings remain unchanged.
-The existing cash-index indicator books use only that chart's selected index, selected intraday
-timeframe and completed candles. Other dashboard sections, external predictions and historical
-browsing never generate paper entries. Keep the live chart mounted for new signals;
-the backend continues monitoring accepted trades when the browser is closed.
-
-### Recorded order flow: confirm, then trade
-
-A separate durable futures paper book observes the **same recorded OF BUY/SELL signals** displayed
-on Advanced and Futures charts. It does not read chart pixels or count the same signal twice.
-Candle-inferred big-player labels are excluded. The backend monitors NIFTY, BANKNIFTY and SENSEX
-near-month futures at five-minute resolution, even when no chart/paper tab or browser is open.
-The backend/feed must remain running and connected. Existing indicator strategies are unchanged.
-
-- Newly observed signals enter `WATCHING`, not a trade. Old historical replay fills are never imported;
-  a signal must be first seen within 30 seconds of its candle closing, on a fresh recorded feed.
-- Confidence must be at least 60. Wait for the **next full five-minute candle** to close with complete
-  recording, directional price movement beyond the signal close, and same-direction recorded delta.
-  Stop/T1 touches (including recovered touches), opposing OF signals, and contract changes reject the setup.
-- A successful confirmation becomes `ARMED`. Entry requires a subsequent fresh **same-token exchange
-  tick**, within 15 seconds; no historical close or confirmation-time tick is used as a fill.
-  Price must still hold the signal level, risk must remain within 1.25x the original structural risk,
-  and at least 1.5R must remain to the original T2. No chasing/rebasing of targets to make a trade fit.
-- One active OF setup/trade per index. No new entry at/after 15:10 IST. Original structural stop/T2
-  are monitored from received futures ticks; first observed quote from 15:25 squares off.
-  An unquoted old contract remains open/awaiting exit quotes, never closed using a new expiry or cash price.
-- Market fills include adverse max(0.5, tick size) points; targets use the resting target price.
-  Gaps over 30 seconds are recorded; unobserved intra-gap stop/target paths are unknown.
-  Results are **futures points per unit, excluding fees**, not rupee or cash-index P&L.
-
-The paper tab has a separate OF ledger and counts for `WATCHING`, `ARMED`, `OPEN`, `CLOSED`,
-`REJECTED` and `EXPIRED`, with independently paginated history, per-setup decisions/events,
-immutable original signal and confirmation evidence, and day-report JSON export. Futures totals
-are deliberately not combined with the cash-index strategy rankings. This is a conservative,
-deterministic paper experiment, not a profitability guarantee or live broker execution.
-
-Independent strategy books compare price/EMA crosses and bounces (9/20/50/100/200),
-all EMA-pair crosses, daily CPR/traditional/Camarilla level reactions, previous-day
-high/low, 20-bar structure breakouts, candle patterns with EMA trend, and the
-chart's confirmed setup. Indicator calculations and level-reaction rules reuse the
-existing chart helpers. Hidden chart indicators are still evaluated; indicator
-warm-up and missing previous-day data limit which strategies are available.
-The full closed-candle setup, EMA values, level reactions, volume availability,
-Candles, patterns and market structure are saved with each entry.
-VWAP is removed from the cash-index Advanced Chart: no control, overlay, rejection level,
-level-confirmation filter, inferred-flow confluence, or new cash-paper VWAP strategy/tag is evaluated.
-Saved templates cannot re-enable it. Historical paper records remain unchanged.
-Futures VWAP and futures-only guidance remain available.
-Cash-index volume is explicitly unavailable when absent; futures prices
-and volume are **not** substituted into the Observatory's cash-index chart.
-
-### Paper execution assumptions
-
-- No broker/order API is called. Prices represent **one synthetic index unit**,
-  not an executable futures/options contract; P&L excludes fees/taxes.
-- Each index/timeframe/strategy has one independent open book. Books can overlap;
-  their summed points are not a deployable portfolio return.
-- Entries fill on the first fresh index tick **after** the chart signal reaches
-  the server, never retrospectively at the signal candle's close. The signal
-  close, observed trigger tick and simulated fill are recorded separately.
-- Market entries/exits have 0.5-point adverse slippage. The default stop is
-  exactly **10 points from the entry fill**, and the comparison target is
-  **20 points (2R)**, independently of the chart's suggested structural stop.
-  Targets fill at their resting limit, with no favourable gap improvement;
-  stop-market fills use the observed crossing quote plus slippage, so losses
-  can exceed 10 points. Unobserved intratick paths are never invented.
-- Opposite signals in the same strategy book close and reverse on the next
-  quote. Duplicate candle/strategy/direction messages are idempotent across
-  refreshes and backend restarts; same-direction signals cannot stack positions.
-- Signals expire after the next chart interval. Freshness checks reject stale,
-  future, out-of-order and invalid quotes. Exchange timestamps are preferred,
-  with receipt timestamps explicitly identified when exchange time is absent.
-- Weekday cash session: 09:15-15:30 IST. Square-off requires an observed quote;
-  with no quote after the cutoff, trades stay open and reports explicitly await
-  exit quotes. A later-day quote records `SESSION_CLOSE_DELAYED`, never a
-  fabricated prior-day fill or target hit.
-
-The ledger records winners **and losers**, entry/exit timestamps, prices, points,
-P&L, target achievement, exit reasons, maximum favourable/adverse excursion with
-timestamps, one-time near-target/near-stop events (within 2 points), reversals,
-and targets reached after an earlier exit in the same session. A non-target exit
-within 2 points of target is also marked as a missed target.
-
-Day reports include totals, wins/losses, stops, targets, reversals, net points and
-best/worst strategies. Reports are automatically persisted after market close
-and revised when delayed exits arrive. Historical rankings group by strategy
-or observed indicator combination **and index/timeframe**, showing sample size,
-win rate, expectancy and realized average-win/average-loss risk/reward.
-Rankings are descriptive/in-sample, sorted by expectancy then win rate; the UI
-defaults to at least five closed trades. Small/correlated samples are not proof
-of future performance.
-
-SQLite storage: `backend/data/paper_trading/paper_trading.sqlite3` (WAL, no automatic record
-deletion). Back up this database using SQLite's backup API and retain the backend
-data volume across deployments. Production Compose mounts the dedicated
-`paper-trading-data` named volume; do not remove it when recreating containers.
-A crash can lose ticks still in the in-memory
-ingest queue; already committed signals/trades/events survive restarts.
-Processing failures are logged and exposed in paper-engine health; do not trust
-results while feed/engine errors are shown.
-
-API: `POST /api/paper-trading/signals` (chart-only frame),
-`GET /api/paper-trading/history?day=YYYY-MM-DD&limit=100&offset=0&flow_offset=0`
-(`order_flow` contains the separate confirmed-futures ledger),
-`GET /api/paper-trading/events?trade_id=...`, `GET /api/paper-trading/report?day=YYYY-MM-DD`.
-The tab exports a consistent complete day JSON ledger/report including all trade
-events, and paginates without deleting older trades.
-
----
-
 ## Order Flow (Futures Chart + Advanced Chart)
 
 Drawn directly on the candles (no panels): only **big-player Buy Order Flow / Sell
@@ -563,7 +450,6 @@ Container startup is not a readiness guarantee: check every service's health and
 same-origin reverse proxy before allowing live traffic. Docker builds do not require
 `frontend/.env.local` (it is deliberately excluded from the image).
 The frontend build creates an empty `public` directory when no static assets exist.
-Keep the `paper-trading-data` volume when rebuilding so both paper ledgers survive deployments.
 Keep `order-flow-data` too: `ORDER_FLOW_DB_PATH` points the live footprint/delta recording
 database into that volume so recordings survive container recreation. Existing deployments
 must back up and migrate any old `/app/data/order_flow.sqlite3` recording before switching

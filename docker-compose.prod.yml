@@ -44,7 +44,6 @@ services:
       - ./backend/access_token.txt:/app/access_token.txt
       # Mount logs directory (optional)
       - ./backend/logs:/app/logs
-      - paper-trading-data:/app/data/paper_trading
       - order-flow-data:/app/data/order_flow
       - aqte-data:/app/data/aqte
     depends_on:
@@ -90,6 +89,5 @@ networks:
 # Persistent Volumes
 volumes:
   redis-data:
-  paper-trading-data:
   order-flow-data:
   aqte-data:

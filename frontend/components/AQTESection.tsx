@@ -406,7 +406,7 @@ function AQTESection({ marketData, isConnected = false }: { marketData?: MarketD
               {liveFeed ? 'LIVE (Zerodha)' : 'FEED OFF'}
             </span></>}
           </h2>
-          <p className="aqx-subtitle">12 Independent Engines • Live Orchestration • Enterprise Risk • Auto Execution</p>
+          <p className="aqx-subtitle">12 Strategy Evaluators • Scalp/Swing Entry Rules • Risk-Gated Auto Execution</p>
           </div>
         </div>
         <div className="aqx-head-tools">
