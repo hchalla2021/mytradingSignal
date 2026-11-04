@@ -42,7 +42,7 @@
           "nearest_fvg": {
             "type": "BULLISH",
             "zone": "23675-23774",
-            "dist": 0.39
+            "dist": 0.37
           }
         }
       },
@@ -74,10 +74,10 @@
         "signal": "BULL",
         "label": "Bullish displacement \u00d7 1 \u2014 Institutional buying",
         "weight": 0.1,
-        "value": 0.856,
+        "value": 0.791,
         "extra": {
           "displacement_count": 2,
-          "avg_body_ratio": 0.856,
+          "avg_body_ratio": 0.791,
           "bull_count": 1,
           "bear_count": 1
         }
@@ -94,8 +94,8 @@
       }
     },
     "metrics": {
-      "price": 23818.6,
-      "changePct": 0.03,
+      "price": 23812.65,
+      "changePct": 0.01,
       "oi": 0,
       "candleCount": 21,
       "swingHighs": 1,
@@ -117,13 +117,13 @@
         "nextMove": "SIDEWAYS",
         "nextMovePts": 0.0,
         "trendContinuationProb": 59.48,
-        "reversalProb": 46.31,
+        "reversalProb": 46.3,
         "horizonSec": 300
       },
       "microstructure": {
         "liquidityDensity": 0.0,
         "structureDensity": 12.8,
-        "fakeBreakoutRisk": 26.32,
+        "fakeBreakoutRisk": 26.27,
         "stopHuntRisk": 24.0
       },
       "smc": {
@@ -167,7 +167,7 @@
       }
     },
     "dataSource": "LIVE",
-    "timestamp": "2026-11-04T12:28:55.949291+05:30"
+    "timestamp": "2026-11-04T12:29:23.305412+05:30"
   },
   "BANKNIFTY": {
     "symbol": "BANKNIFTY",
@@ -242,10 +242,10 @@
         "signal": "BULL",
         "label": "Bullish displacement \u00d7 1 \u2014 Institutional buying",
         "weight": 0.1,
-        "value": 0.868,
+        "value": 0.779,
         "extra": {
           "displacement_count": 2,
-          "avg_body_ratio": 0.868,
+          "avg_body_ratio": 0.779,
           "bull_count": 1,
           "bear_count": 1
         }
@@ -262,8 +262,8 @@
       }
     },
     "metrics": {
-      "price": 55637.0,
-      "changePct": 0.17,
+      "price": 55619.3,
+      "changePct": 0.14,
       "oi": 0,
       "candleCount": 21,
       "swingHighs": 2,
@@ -283,7 +283,7 @@
       },
       "sequencePrediction": {
         "nextMove": "SIDEWAYS",
-        "nextMovePts": 0.03,
+        "nextMovePts": 0.02,
         "trendContinuationProb": 51.63,
         "reversalProb": 53.65,
         "horizonSec": 300
@@ -291,7 +291,7 @@
       "microstructure": {
         "liquidityDensity": 0.0,
         "structureDensity": 38.3,
-        "fakeBreakoutRisk": 22.4,
+        "fakeBreakoutRisk": 22.31,
         "stopHuntRisk": 24.0
       },
       "smc": {
@@ -335,7 +335,7 @@
       }
     },
     "dataSource": "LIVE",
-    "timestamp": "2026-11-04T12:28:55.950450+05:30"
+    "timestamp": "2026-11-04T12:29:23.305955+05:30"
   },
   "SENSEX": {
     "symbol": "SENSEX",
@@ -355,7 +355,7 @@
       "order_blocks": {
         "score": 0.1003,
         "signal": "NEUTRAL",
-        "label": "Bullish OB @ 76414-76444 (0.67% away)",
+        "label": "Bullish OB @ 76414-76444 (0.65% away)",
         "weight": 0.25,
         "value": 0.1,
         "extra": {
@@ -364,7 +364,7 @@
           "nearest_ob": {
             "type": "BULLISH",
             "zone": "76414-76444",
-            "dist": 0.67
+            "dist": 0.65
           }
         }
       },
@@ -380,7 +380,7 @@
           "nearest_fvg": {
             "type": "BULLISH",
             "zone": "76549-76793",
-            "dist": 0.34
+            "dist": 0.32
           }
         }
       },
@@ -412,10 +412,10 @@
         "signal": "BEAR",
         "label": "Bearish displacement \u00d7 2 \u2014 Institutional selling",
         "weight": 0.1,
-        "value": 0.848,
+        "value": 0.801,
         "extra": {
           "displacement_count": 3,
-          "avg_body_ratio": 0.848,
+          "avg_body_ratio": 0.801,
           "bull_count": 1,
           "bear_count": 2
         }
@@ -432,8 +432,8 @@
       }
     },
     "metrics": {
-      "price": 76931.14,
-      "changePct": 0.02,
+      "price": 76914.52,
+      "changePct": 0.0,
       "oi": 0,
       "candleCount": 21,
       "swingHighs": 2,
@@ -461,7 +461,7 @@
       "microstructure": {
         "liquidityDensity": 0.0,
         "structureDensity": 12.44,
-        "fakeBreakoutRisk": 26.3,
+        "fakeBreakoutRisk": 26.24,
         "stopHuntRisk": 27.0
       },
       "smc": {
@@ -505,6 +505,6 @@
       }
     },
     "dataSource": "LIVE",
-    "timestamp": "2026-11-04T12:28:55.951582+05:30"
+    "timestamp": "2026-11-04T12:29:23.306546+05:30"
   }
 }
