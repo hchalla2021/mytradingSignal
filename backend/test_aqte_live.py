@@ -698,10 +698,12 @@ class LiveTests(unittest.TestCase):
         self.live.automated_entry()
         self.broker.place_order.assert_not_called()
         self.live.state["daily_controls"]["NIFTY"]["enabled"] = True
+        self.live.state["daily_controls"]["NIFTY"]["min_confidence"] = 80
         self.quality.stop()
         self.live.automated_entry()
         self.broker.place_order.assert_not_called()
-        self.assertIn("below 75/100", self.live.control_reason("NIFTY", self.market.snapshot()["data"]["NIFTY"]))
+        self.assertIn("below 80/100", self.live.control_reason("NIFTY", self.market.snapshot()["data"]["NIFTY"]),
+                      "A passing 76-point trend pullback still respects a stricter per-index floor")
         self.live.state["daily_entries"] = [
             dict(id=str(i), symbol="BANKNIFTY", at=NOW, filled=True, pending=False) for i in range(5)]
         self.assertIn("Account-wide", self.live.control_reason("NIFTY", {}))
@@ -1592,6 +1594,64 @@ class LiveTests(unittest.TestCase):
         self.assertEqual((params["transaction_type"], params["quantity"]), ("BUY", CONTRACT.lot_size))
         self.live.automated_entry()
         self.assertEqual(self.broker.place_order.call_count, 1, "Only one live position at a time")
+
+    def test_engine_generated_setups_reach_automated_entry_without_bypassing_quality_or_score_floor(self):
+        from test_aqte_daily_control import SETUP_CASES, mirror
+
+        self.quality.stop()
+        breakout = scalp_info(rsi=75, volume_ratio=1.5, imbalance=0.15, sweep=0, live={"price": 106})
+        basic_scalp = scalp_info(volume_ratio=1.5, imbalance=0.10, sweep=0, live={"price": 106})
+        scores = {"trend_continuation": 76, "liquidity_reversal": 77, "mean_reversion": 75}
+        cases = [("momentum_breakout", breakout, 80),
+                 *((name, info, scores[name]) for name, info, _ in SETUP_CASES),
+                 ("quick_scalp_10", basic_scalp, 75)]
+        for name, facts, score in cases:
+            style = "scalp" if name.startswith("quick_scalp") else "swing"
+            for side, info in (("CE", facts), ("PE", mirror(facts))):
+                with self.subTest(setup=name, side=side):
+                    self.orders.clear()
+                    self.positions.clear()
+                    self.broker.reset_mock()
+                    contract = replace(CONTRACT, side=side, lot_size=65 if style == "scalp" else 15,
+                                       trading_symbol=CONTRACT.trading_symbol[:-2] + side)
+                    self.market.engine = ready_engine(contract=contract, paper_enabled=False)
+                    with patch("services.aqte_engine.intelligence", return_value={**info, "at": NOW - 60}):
+                        self.market.engine.analyze("NIFTY", NOW)
+                    live = AQTELiveService(Path(self.directory.name) / f"{name}-{side}.sqlite3",
+                                           self.market, lambda: self.cfg, lambda: self.broker, self.ip)
+                    self.addCleanup(live.release_owner)
+                    live.initialize()
+                    control = live.state["daily_controls"]["NIFTY"]
+                    control["style"] = style
+                    signal = live.effective("NIFTY", self.market.snapshot()["data"]["NIFTY"])
+                    self.assertEqual((signal["decision"], signal["strategy"], signal["confidence"]),
+                                     (f"BUY {side}", name, score))
+                    self.cfg.aqte_live_allow_unvalidated_rules = False
+                    self.assertIn("validation", live.entry_reason("NIFTY", signal))
+                    self.broker.place_order.assert_not_called()
+
+                    self.cfg.aqte_live_allow_unvalidated_rules = True
+                    live.preflight()
+                    live.arm()
+                    live.set_automation(True)
+                    if score < 80:
+                        control["min_confidence"] = 80
+                        live.automated_entry()
+                        self.assertIn("below 80/100", live.status()["entry_blocks"]["NIFTY"])
+                        self.broker.place_order.assert_not_called()
+                        control["min_confidence"] = 75
+                    status = live.status()
+                    self.assertIsNone(status["entry_blocks"]["NIFTY"])
+                    self.assertLessEqual(status["entry_plans"]["NIFTY"]["risk"], self.cfg.aqte_live_risk_per_trade)
+                    self.assertGreaterEqual(status["entry_plans"]["NIFTY"]["reward_risk"], 1.5)
+                    live.automated_entry()
+                    live.automated_entry()
+                    self.assertEqual(self.broker.place_order.call_count, 1)
+                    self.assertEqual((live.state["active"]["strategy"], live.state["active"]["contract"]["side"]),
+                                     (name, side))
+                    params = self.broker.place_order.call_args.kwargs
+                    self.assertEqual((params["transaction_type"], params["quantity"]), ("BUY", contract.lot_size))
+                    live.release_owner()
 
     def test_repeated_monitor_fault_is_journaled_once_with_reason(self):
         self.armed()

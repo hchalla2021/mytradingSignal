@@ -35,7 +35,7 @@ class Pending:
 
 
 def build_samples(ticks: Iterable[Tick], contracts: Iterable[Contract]) -> tuple[list[Sample], dict[str, int]]:
-    engine = AQTEEngine(paper_enabled=False)
+    engine = AQTEEngine(paper_enabled=False, research_only=True)
     engine.contracts = {c.token: c for c in contracts}
     pending: list[Pending] = []
     samples: list[Sample] = []

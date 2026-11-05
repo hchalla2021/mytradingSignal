@@ -108,6 +108,31 @@ class FeatureTests(unittest.TestCase):
 
 
 class LabelTests(unittest.TestCase):
+    def test_historical_signal_mode_is_isolated_from_live_rules_and_paper_orders(self):
+        with self.assertRaisesRegex(ValueError, "paper_enabled=False"):
+            AQTEEngine(research_only=True)
+        at = START + 201 * 60 + .5
+        snapshots = {}
+        for research in (False, True):
+            engine = AQTEEngine(paper_enabled=False, research_only=research)
+            engine.contracts[CONTRACT.token] = CONTRACT
+            for raw in recorded_ticks():
+                if raw.received > at:
+                    break
+                engine.ingest(raw)
+            snapshots[research] = engine.snapshot(at)
+            self.assertFalse(engine.orders)
+            self.assertFalse(engine.trades)
+            signal = snapshots[research]["data"]["NIFTY"]
+            self.assertIsNone(signal["intelligence"]["cpr"], "Historical CPR must not be fabricated")
+            self.assertFalse(signal["model_validated"])
+        self.assertEqual(snapshots[False]["mode"], "ANALYSIS_ONLY")
+        self.assertEqual(snapshots[False]["data"]["NIFTY"]["decision"], "WAIT")
+        self.assertEqual(snapshots[True]["mode"], "RESEARCH_ONLY")
+        historical = snapshots[True]["data"]["NIFTY"]
+        self.assertEqual(historical["decision"], "BUY CE")
+        self.assertEqual(historical["entry"]["maximum"], 100, "Research preserves the original midpoint cap")
+
     def test_observed_no_chase_fill_and_costed_horizon_labels(self):
         winners, counts = build_samples(recorded_ticks(), [CONTRACT])
         losers, _ = build_samples(recorded_ticks(gain=False), [CONTRACT])
@@ -126,6 +151,15 @@ class LabelTests(unittest.TestCase):
 
     def test_midpoint_never_filled_on_signal_or_assumed_filled_at_ask(self):
         samples, counts = build_samples(recorded_ticks(fill=False), [CONTRACT])
+        self.assertEqual(samples, [])
+        self.assertEqual(counts["expired_or_incomplete"], 1)
+
+    def test_research_rejects_a_quote_above_midpoint_even_when_below_the_live_ask_cap(self):
+        at = START + 201 * 60
+        ticks = [replace(raw, bid=100, ask=100.5) if raw.kind == "option" and raw.received > at else raw
+                 for raw in recorded_ticks(fill=False)]
+        samples, counts = build_samples(ticks, [CONTRACT])
+        self.assertEqual(counts["candidates"], 1)
         self.assertEqual(samples, [])
         self.assertEqual(counts["expired_or_incomplete"], 1)
 

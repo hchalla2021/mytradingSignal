@@ -474,8 +474,14 @@ hypothetical one-lot no-chase fill**, conditional on such a fill. This is not th
 probability that an order fills, hits its target, or wins under live stop/trailing
 management. Predictions are explicitly **uncalibrated and unvalidated**.
 
-- Replay uses the existing rule engine in analysis-only mode. No broker client,
-  network requests, real orders or training on the live event loop.
+- Offline sample extraction uses the existing rule engine with `paper_enabled=False`
+  and explicit `research_only=True` (`RESEARCH_ONLY` snapshots). It preserves
+  historical rule candidates and midpoint pricing without simulating paper orders.
+  This is separate from the live `ANALYSIS_ONLY` mode, whose setup gates and ask caps
+  remain enforced. Historical journals lack CPR context; treating the extractor as
+  a live engine incorrectly filters those research candidates before labelling.
+  The live service does not expose this research option. No broker client, network
+  requests, real orders or training on the live event loop.
 - Sample at most the first qualifying candidate per index/completed candle.
   The same feature extractor is used offline and in runtime shadow inference.
 - Features include index/option side, EMA differences, RSI/ATR, futures VWAP
@@ -912,7 +918,7 @@ passes, otherwise the highest-scored blocked one, and publishes that setup's che
 
 | Setup | Checks |
 |---|---|
-| Momentum breakout | EMA 9/20/50/100/200 stack, VWAP side, SuperTrend, RSI CE 55-70 / PE 30-45, beyond spot CPR, volume ≥ 1.5x, imbalance ≥ 15%, fresh 20-candle breakout, HH/LL structure |
+| Momentum breakout | EMA 9/20/50/100/200 stack, VWAP side, SuperTrend, RSI CE 55-80 / PE 20-45, beyond spot CPR, volume ≥ 1.5x, imbalance ≥ 15%, fresh 20-candle breakout, HH/LL structure |
 | Trend continuation | EMA stack, VWAP side, SuperTrend, RSI CE 50-70 / PE 30-50, beyond spot CPR, within 1 ATR of EMA20, closed back past EMA9, no opposite 20-candle extreme, volume ≥ 1.0x, imbalance ≥ 15% |
 | Liquidity-sweep reversal | wick through the prior 20-candle low (CE) / high (PE) and close back inside, no fully stacked opposite EMA 9-200 trend, RSI CE < 70 / PE > 30, volume ≥ 1.5x, imbalance ≥ 15%, live futures not below (CE) / above (PE) the close |
 | Mean reversion | more than 2 ATR below (CE) / above (PE) VWAP, RSI CE < 30 / PE > 70, no EMA 9/20/50/200 stack either way, volume ≥ 1.5x, imbalance ≥ 15%, live futures turning back toward VWAP |
@@ -931,6 +937,15 @@ checks before publishing BUY or option-entry levels. A failed candidate remains 
 with all unmet checks listed; a passing alternative can still be selected. This
 prevents a failed candidate looking tradeable in ranking while the controller
 correctly rejects it. Historical paper/replay behavior remains unchanged.
+
+Fully passing swing setups score **80** (momentum breakout), **77** (liquidity
+reversal), **76** (trend continuation), and **75** (mean reversion). The five-point
+book bonus applies at the same inclusive 15% threshold as the entry gate, for either
+direction. Thus each family can clear the default 75 floor; a saved floor of 80
+deliberately excludes the lower-scored families. Scores are rule-ranking values,
+not probabilities. Missing confirmation still blocks entry regardless of score.
+The breakout RSI band now matches the momentum evaluator and scalp gate; RSI above
+80 for CE or below 20 for PE still waits. Pullback/reversal RSI bands are unchanged.
 
 #### Quick scalp (10 / 20 / 30 points)
 
@@ -956,7 +971,7 @@ fall through to smaller eligible tiers. The live controller then picks the
 **largest allowed tier whose one-lot risk fits `AQTE_LIVE_RISK_PER_TRADE`** with net
 reward/risk >= 1.5 after costs. Example with a INR 101 NIFTY premium and a 65 lot:
 30 points (SL 89 / target 131) costs about INR 839 of risk; at a INR 500 cap it shrinks
-to 10 points (SL 97 / target 111, about INR 319). Rule score is 70/75/80 by tier
+to 10 points (SL 97 / target 111, about INR 319). Rule score is 75/78/80 by tier
 count; it is not a win probability.
 Confirmation uses the freshly rechecked tier, stop and target and cannot increase
 the original approved price cap or planned risk. A weaker setup or reduced risk
@@ -1213,6 +1228,27 @@ account with manual trading, another execution app or a second deployment during
 pilot. Pre-entry broker reads cannot prevent an external concurrent order.
 
 ### Entry selection and no-trade diagnostics
+
+**A rising index is not an entry trigger by itself.** Check the same backend that
+the dashboard actually uses, in this order:
+
+1. Live status: `automation_wanted` means ON was requested; execution also needs
+   `automation_on` and `armed`. If these are false, inspect `automation_waiting`
+   and the `AUTOMATION_WAITING` audit, before investigating signal thresholds.
+   A valid Kite login/live feed does not establish outbound-IP approval for orders.
+   A local process cannot pass preflight using a production server's configured IP;
+   do not bypass the check or run a second executor to make it pass.
+2. Feed: `recording`, `fault`, per-index `feed_ready`, warm-up and opening candles.
+3. Signal: `rule_checks`, setup-specific failures and `style_checks`. Breakouts need
+   completed-minute relative volume and directional depth, not just a positive
+   day change. Scalp also rejects an EMA20 extension above 2 ATR.
+4. Execution: `entry_blocks`, saved score floor, model-validation mode, remaining
+   risk budget, and the last actual `entry_scan`. A clear signal is still subject
+   to fresh broker quotes, cash, no-chase pricing and one-position limits.
+
+The separate Smart AI Algo executor has its own enablement/live-mode settings.
+The AQTE switch does not start it; enabling two live executors is not an AQTE fix.
+Neither engine-card agreement nor an ML-library installation overrides these gates.
 
 The 12 strategy cards are evaluators, not 12 independent execution workers. They
 are evaluated sequentially from the same locked market snapshot. Scalp and swing

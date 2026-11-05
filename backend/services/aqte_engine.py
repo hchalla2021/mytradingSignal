@@ -320,9 +320,10 @@ def directional_checks(info: Mapping[str, object] | None, side: Literal["CE", "P
     add("supertrend", "SuperTrend (14, 3)",
         trend == ("BULLISH" if sign > 0 else "BEARISH") if sign and trend in ("BULLISH", "BEARISH") else None,
         "Bullish for CE; bearish for PE", "SuperTrend not aligned")
-    lower, upper = ((55, 80) if sign > 0 else (20, 45)) if scalping else ((55, 70) if sign > 0 else (30, 45))
+    # Breakout and scalp use the momentum evaluator's band; exhaustion still blocks.
+    lower, upper = (55, 80) if sign > 0 else (20, 45)
     add("rsi", "RSI (14)", lower <= rsi <= upper if sign and finite_number(rsi) and 0 <= rsi <= 100 else None,
-        "CE 55-80; PE 20-45" if scalping else "CE 55-70; PE 30-45",
+        "CE 55-80; PE 20-45",
         "RSI outside scalp momentum band" if scalping else "RSI outside swing momentum band")
     if not scalping:
         raw_cpr = info.get("cpr")
@@ -337,7 +338,7 @@ def directional_checks(info: Mapping[str, object] | None, side: Literal["CE", "P
             "Close above prior high for CE; below prior low for PE", "No fresh 20-candle breakout")
     add("volume", "Relative volume (20)", volume >= 1.5 if finite_number(volume) and volume >= 0 else None,
         "Completed minute / prior 20-minute average >= 1.5x", "Breakout volume below 1.5x")
-    threshold = 0.10 if scalping else 0.15
+    threshold = 0.10 if scalping else BOOK_CONFIRM
     add("imbalance", "Book imbalance (top 5)",
         sign * imbalance >= threshold if sign and finite_number(imbalance) and -1 <= imbalance <= 1 else None,
         f">= +{threshold:.0%} for CE; <= -{threshold:.0%} for PE", "Order-book imbalance does not confirm")
@@ -360,6 +361,12 @@ def directional_checks(info: Mapping[str, object] | None, side: Literal["CE", "P
 
 
 SWING_SETUPS = ("momentum_breakout", "trend_continuation", "liquidity_reversal", "mean_reversion")
+# Every passing swing gate earns the book bonus and can clear the default 75 floor.
+SETUP_BASE_SCORES = {"momentum_breakout": 75, "liquidity_reversal": 72, "trend_continuation": 71,
+                     "mean_reversion": 70}
+BOOK_BONUS, BOOK_CONFIRM = 5, 0.15
+# The basic passing scalp clears 75; only three reachable tiers score 80.
+SCALP_TIER_SCORES = (75, 78, 80)
 SETUP_LABELS = {"momentum_breakout": "Momentum breakout", "trend_continuation": "Trend continuation",
                 "liquidity_reversal": "Liquidity-sweep reversal", "mean_reversion": "Mean reversion"}
 
@@ -455,22 +462,23 @@ def strategy_candidates(info):
         -1 if e["9"] < e["20"] < e["50"] < e["200"] else 0)
     candidates = []
     if info["sweep"]:
-        candidates.append(("liquidity_reversal", info["sweep"], 70))
+        candidates.append(("liquidity_reversal", info["sweep"]))
     if info["breakout"] and info["volume_ratio"] >= 1.2:
-        candidates.append(("momentum_breakout", info["breakout"], 75))
+        candidates.append(("momentum_breakout", info["breakout"]))
     if direction and abs(price - e["20"]) <= info["atr"]:
-        candidates.append(("trend_continuation", direction, 68))
+        candidates.append(("trend_continuation", direction))
     if not direction and info["vwap"] and abs(price - info["vwap"]) > 2 * info["atr"]:
         if info["rsi"] < 30:
-            candidates.append(("mean_reversion", 1, 65))
+            candidates.append(("mean_reversion", 1))
         elif info["rsi"] > 70:
-            candidates.append(("mean_reversion", -1, 65))
+            candidates.append(("mean_reversion", -1))
     if not candidates or info["imbalance"] is None or info["vwap"] is None or info["atr"] <= 0:
         return []
-    candidates = [candidate for candidate in candidates if candidate[1] * info["imbalance"] >= -0.15]
-    candidates.sort(key=lambda candidate: candidate[2], reverse=True)
-    return [(name, "CE" if side > 0 else "PE", score + (5 if side * info["imbalance"] > 0.15 else 0))
-            for name, side, score in candidates]
+    candidates = [(name, side) for name, side in candidates if side * info["imbalance"] >= -BOOK_CONFIRM]
+    candidates.sort(key=lambda candidate: SETUP_BASE_SCORES[candidate[0]], reverse=True)
+    return [(name, "CE" if side > 0 else "PE",
+             SETUP_BASE_SCORES[name] + (BOOK_BONUS if side * info["imbalance"] >= BOOK_CONFIRM else 0))
+            for name, side in candidates]
 
 
 def swing_setups(info):
@@ -526,7 +534,7 @@ def scalp(info, points, delta=0.5, reach=4):
             return None, f"Market too quiet for a {ordered[0]:g}-point scalp (ATR {atr:.1f})"
     except (KeyError, TypeError, ValueError):
         return None, "Incomplete market intelligence"
-    return dict(side="CE" if side > 0 else "PE", points=reachable, score=70 + 5 * (len(reachable) - 1)), None
+    return dict(side="CE" if side > 0 else "PE", points=reachable, score=SCALP_TIER_SCORES[len(reachable) - 1]), None
 
 
 def round_tick(price, tick_size, up=False):
@@ -535,9 +543,12 @@ def round_tick(price, tick_size, up=False):
 
 
 class AQTEEngine:
-    def __init__(self, policy=None, *, paper_enabled=True):
+    def __init__(self, policy=None, *, paper_enabled=True, research_only=False):
+        if research_only and paper_enabled:
+            raise ValueError("Research signal-only mode requires paper_enabled=False")
         self.policy = policy or Policy()
         self.paper_enabled = paper_enabled
+        self.research_only = research_only
         self.book = CandleBook()
         self.contracts: dict[int, Contract] = {}
         self.spot: dict[str, Tick] = {}
@@ -728,6 +739,7 @@ class AQTEEngine:
             self.analyze(tick.symbol, tick.received)
 
     def analyze(self, symbol, now):
+        live_rules = not self.paper_enabled and not self.research_only
         reason = self.risk_reason(now)
         future, spot = self.future.get(symbol), self.spot.get(symbol)
         if not self.fresh(future, now) or not self.fresh(spot, now):
@@ -771,7 +783,7 @@ class AQTEEngine:
             return
         name, side, confidence = setup
         signal.update(strategy=name, confidence=confidence)
-        if not self.paper_enabled and best["passed"] is not True:
+        if live_rules and best["passed"] is not True:
             signal["reasons"] = [
                 f'{SETUP_LABELS[name]}: {check["reason"]}'
                 for check in best["checks"] if check["passed"] is not True
@@ -782,10 +794,9 @@ class AQTEEngine:
             signal["reasons"] = ["No fresh liquid option contract with valid lot size and bid/ask depth"]
             return
         spread, contract, quote = picked
-        # Paper simulates a resting midpoint limit; live sends an IOC limit that must be marketable,
-        # so its price cap is the current ask (spread already <= 3%) and is never raised afterwards.
-        limit = round_tick((quote.bid + quote.ask) / 2, contract.tick_size) if self.paper_enabled else (
-            round_tick(quote.ask, contract.tick_size, up=True))
+        # Offline research/paper use a midpoint cap; live uses a marketable, no-chase ask cap.
+        limit = round_tick(quote.ask, contract.tick_size, up=True) if live_rules else (
+            round_tick((quote.bid + quote.ask) / 2, contract.tick_size))
         distance = max(limit * 0.2, spread * 3, contract.tick_size * 4)
         stop = round_tick(max(contract.tick_size, limit - distance), contract.tick_size)
         target = round_tick(limit + 2 * (limit - stop), contract.tick_size, up=True)
@@ -815,8 +826,8 @@ class AQTEEngine:
                                  maximum=limit, stop=stop, target=target, quantity=quantity,
                                  reward_risk=round(net_reward / risk, 2)),
                       reasons=[name.replace("_", " "), f"RSI {info['rsi']:.1f}; volume {info['volume_ratio']:.2f}x",
-                               "Limit at or below midpoint; never chase the ask" if self.paper_enabled else
-                               "IOC limit capped at the signal's ask; never chases a higher ask",
+                               "IOC limit capped at the signal's ask; never chases a higher ask" if live_rules else
+                               "Limit at or below midpoint; never chase the ask",
                                "Rule score is not a calibrated probability"])
         key = (name, side, info["at"], contract.token)
         if not self.paper_enabled:
@@ -959,7 +970,7 @@ class AQTEEngine:
             } if order else None
             signal["spot"] = self.spot[symbol].price if symbol in self.spot else None
             data[symbol] = signal
-        return dict(mode="PAPER_ONLY" if self.paper_enabled else "ANALYSIS_ONLY",
+        return dict(mode="RESEARCH_ONLY" if self.research_only else "PAPER_ONLY" if self.paper_enabled else "ANALYSIS_ONLY",
                     live_enabled=False, model_status="UNVALIDATED_RULE_BASELINE",
                     generated_at=now, data=data, risk={**asdict(self.policy), **self.daily(now),
                     "killed": self.killed, "blocked_reason": risk,

@@ -234,9 +234,11 @@ class EvidenceTests(unittest.TestCase):
 class ScalpTests(unittest.TestCase):
     def test_tier_follows_rule_strength_and_what_futures_atr_can_reach(self):
         points = (10, 20, 30)
-        self.assertEqual(scalp(scalp_info(), points)[0], dict(side="CE", points=[10.0], score=70))
+        self.assertEqual(scalp(scalp_info(), points)[0], dict(side="CE", points=[10.0], score=75),
+                         "A scalp that passes every check clears the default 75 floor")
         strong = scalp_info(volume_ratio=2, imbalance=0.2)
         self.assertEqual(scalp(strong, points)[0]["points"], [10.0, 20.0])
+        self.assertEqual(scalp(strong, points)[0]["score"], 78)
         strongest = scalp_info(volume_ratio=2.5, imbalance=0.3)
         self.assertEqual(scalp(strongest, points)[0]["points"], [10.0, 20.0], "ATR 10 reaches only 20 points")
         self.assertEqual(scalp({**strongest, "atr": 20}, points)[0], dict(side="CE", points=[10.0, 20.0, 30.0], score=80))
@@ -261,7 +263,7 @@ class ScalpTests(unittest.TestCase):
         engine = ready_engine(contract=replace(CONTRACT, lot_size=65), paper_enabled=False)
         spot = engine.spot["NIFTY"]
         result = engine.scalp_signal("NIFTY", scalp_info(volume_ratio=2, imbalance=0.2), NOW, spot)
-        self.assertEqual((result["decision"], result["strategy"], result["confidence"]), ("BUY CE", "quick_scalp_20", 75))
+        self.assertEqual((result["decision"], result["strategy"], result["confidence"]), ("BUY CE", "quick_scalp_20", 78))
         entry = result["entry"]
         self.assertEqual((entry["maximum"], entry["stop"], entry["target"]), (101, 93, 121))
         self.assertEqual((entry["points"], entry["points_allowed"], entry["stop_ratio"]), (20, [10.0, 20.0], 0.4))
@@ -471,20 +473,54 @@ class CandleTests(unittest.TestCase):
                         structure="RANGE", cpr={"top": 101, "bottom": 99}, live={"price": 100.5})
         reversal_setups = swing_setups(reversal)
         self.assertEqual([{k: v for k, v in s.items() if k != "checks"} for s in reversal_setups],
-                         [dict(name="liquidity_reversal", side="CE", score=75, passed=True)])
+                         [dict(name="liquidity_reversal", side="CE", score=77, passed=True)])
         self.assertEqual(reversal_setups[0]["checks"], setup_checks(reversal, "CE", "liquidity_reversal"),
                          "Each setup carries its own gate so the UI can show the setup the controller trades")
         # A wide candle can also break out; the breakout gate fails (no EMA stack) but must not hide the reversal.
         both = {**reversal, "breakout": 1}
         self.assertEqual([(s["name"], s["passed"]) for s in swing_setups(both)],
                          [("momentum_breakout", False), ("liquidity_reversal", True)])
-        self.assertEqual(strategy(both), ("liquidity_reversal", "CE", 75))
+        self.assertEqual(strategy(both), ("liquidity_reversal", "CE", 77))
         self.assertEqual(strategy({**both, "live": {"price": 99.5}})[0], "momentum_breakout",
                          "With no passing setup the top (blocked) one is reported")
         blocked, ready = dict(name="a", passed=False), dict(name="b", passed=True)
         self.assertIs(best_setup([blocked, ready]), ready)
         self.assertIs(best_setup([blocked]), blocked)
         self.assertIsNone(best_setup([]))
+
+    def test_every_setup_that_can_pass_its_gate_clears_the_default_score_floor(self):
+        from services.aqte_daily_control import IndexControl
+        from services.aqte_engine import strategy_candidates
+
+        floor = IndexControl().min_confidence
+        # Book imbalance exactly at the gate's minimum: every swing gate requires it, so the bonus must apply.
+        trend_day = scalp_info(imbalance=0.15, sweep=1, breakout=1, volume_ratio=2)
+        stretched = {**trend_day, "ema": {str(n): 100 for n in (9, 20, 50, 100, 200)},
+                     "close": 60, "atr": 10, "rsi": 20, "sweep": 0, "breakout": 0}
+        scores = {name: score for info in (trend_day, stretched) for name, _, score in strategy_candidates(info)}
+        self.assertEqual(scores, {"momentum_breakout": 80, "liquidity_reversal": 77,
+                                  "trend_continuation": 76, "mean_reversion": 75})
+        self.assertTrue(all(score >= floor for score in scores.values()), "No enabled setup may be unreachable")
+        self.assertEqual([name for name, *_ in strategy_candidates(trend_day)],
+                         ["momentum_breakout", "liquidity_reversal", "trend_continuation"], "Priority order is kept")
+        self.assertEqual([score for _, _, score in strategy_candidates({**trend_day, "imbalance": 0.1})],
+                         [75, 72, 71], "Without book confirmation no swing gate can pass")
+        self.assertTrue(all(scalp(scalp_info(**v), (10, 20, 30))[0]["score"] >= floor
+                            for v in ({}, dict(volume_ratio=2, imbalance=0.2))))
+
+    def test_trend_day_breakout_rsi_band_allows_strong_momentum_but_not_exhaustion(self):
+        from test_aqte_daily_control import mirror
+
+        from services.aqte_engine import directional_checks
+
+        def rsi_check(info, side):
+            return next(c for c in directional_checks(info, side, "swing") if c["id"] == "rsi")["passed"]
+
+        for rsi, passed in ((54, False), (55, True), (75, True), (80, True), (81, False)):
+            with self.subTest(rsi=rsi):
+                info = scalp_info(rsi=rsi, sweep=0, live={"price": 106})
+                self.assertIs(rsi_check(info, "CE"), passed)
+                self.assertIs(rsi_check(mirror(info), "PE"), passed, "PE mirrors CE")
 
 
 class ExecutionTests(unittest.TestCase):
