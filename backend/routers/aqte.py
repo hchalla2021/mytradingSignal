@@ -118,6 +118,20 @@ class EmergencyStop(BaseModel):
     confirmation: Literal["CLOSE AQTE POSITIONS"]
 
 
+class MorningApproval(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    enabled: bool = Field(strict=True)
+    confirmation: Literal["ENABLE MORNING REAL TRADING", "STOP MORNING ENTRIES"]
+
+
+@router.post("/live/morning", dependencies=[Depends(live_operator)])
+async def morning_approval(body: MorningApproval):
+    expected = "ENABLE MORNING REAL TRADING" if body.enabled else "STOP MORNING ENTRIES"
+    if body.confirmation != expected:
+        raise HTTPException(status_code=422, detail="Morning confirmation does not match the requested action")
+    return await live_call(get_live_service().set_morning, body.enabled)
+
+
 class EmergencyReset(BaseModel):
     confirmation: Literal["RESET EMERGENCY STOP"]
 
@@ -160,6 +174,31 @@ async def save_daily_controls(body: DailyControlUpdate):
 async def live_status(response: Response):
     response.headers["Cache-Control"] = "no-store"
     return await live_call(get_live_service().status)
+
+
+@router.get("/live/diagnostics", dependencies=[Depends(live_operator)])
+async def live_diagnostics(response: Response):
+    response.headers["Cache-Control"] = "no-store"
+    market = await live_call(get_aqte_service().diagnostics)
+    execution = await live_call(get_live_service().diagnostics)
+    return dict(market=market, execution=execution)
+
+
+@router.get("/live/executions", dependencies=[Depends(live_operator)])
+async def live_executions(response: Response, month: str | None = Query(default=None, pattern=r"^[1-9][0-9]{3}-(0[1-9]|1[0-2])$"),
+                          limit: int = Query(default=4, ge=1, le=100), offset: int = Query(default=0, ge=0)):
+    from services.aqte_execution_history import read_executions
+    response.headers["Cache-Control"] = "no-store"
+    return await live_call(read_executions, get_live_service().path, month, limit, offset)
+
+
+@router.get("/live/executions/export", dependencies=[Depends(live_operator)])
+async def live_executions_export(month: str = Query(pattern=r"^[1-9][0-9]{3}-(0[1-9]|1[0-2])$")):
+    from services.aqte_execution_history import XLSX_TYPE, export_executions
+    content = await live_call(export_executions, get_live_service().path, month)
+    return Response(content, media_type=XLSX_TYPE, headers={
+        "Cache-Control": "no-store", "Content-Disposition": f'attachment; filename="AQTE-Executions-{month}.xlsx"',
+    })
 
 
 @router.get("/live/broker-positions", dependencies=[Depends(live_operator)])

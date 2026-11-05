@@ -61,7 +61,7 @@ class FuturesChartTests(unittest.IsolatedAsyncioTestCase):
             later = IST.localize(datetime(2026, 10, 28, 12))
             result = await self.service.contracts("NIFTY", later)
             self.assertNotIn(101, [row["token"] for row in result])
-            self.assertEqual(request.call_count, 1)
+            self.assertEqual(request.call_count, 2, "A new session refreshes metadata even within the hourly cache window")
 
     async def test_arbitrary_cross_symbol_expired_and_unlisted_tokens_are_rejected(self):
         with patch.object(self.service, "_fetch_instruments", return_value=self.rows):

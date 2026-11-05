@@ -1688,7 +1688,7 @@ h1, h2, h3, h4, h5, h6 {
 .aqte-theme .aqx-dash-main {
   display: grid; gap: 10px; min-width: 0; align-items: stretch;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  grid-template-areas: "top top top" "perf perf perf" "term term term" "opp trade risk" "eng eng eng" "chart chart chart" "events events events" "book book book";
+  grid-template-areas: "top top top" "perf perf perf" "morning morning morning" "term term term" "opp trade risk" "eng eng eng" "chart chart chart" "events events events" "book book book";
 }
 .aqte-theme .aqx-dash-main > * { min-width: 0; }
 .aqte-theme .aqx-dash-main > .aqx-top { grid-area: top; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); margin: 0; }
@@ -1701,6 +1701,7 @@ h1, h2, h3, h4, h5, h6 {
 .aqte-theme .aqx-cc-trade { grid-area: trade; }
 .aqte-theme .aqx-cc-risk { grid-area: risk; }
 .aqte-theme .aqx-perfbar-wrap { grid-area: perf; }
+.aqte-theme .aqx-morning-board { grid-area: morning; }
 .aqte-theme .aqx-events { grid-area: events; }
 .aqte-theme .aqx-dash-term { grid-area: term; }
 .aqte-theme .aqx-dash-main > .aqx-book { grid-area: book; margin: 0; }
@@ -1901,7 +1902,16 @@ h1, h2, h3, h4, h5, h6 {
 .aqte-theme .aqx-pnl-grid dd { overflow: hidden; font-size: 0.8125rem; font-weight: 800; color: #f1f5f9; white-space: nowrap; text-overflow: ellipsis; font-variant-numeric: tabular-nums; }
 
 /* orchestration, executions */
-.aqte-theme .aqx-exec-table { min-width: 0; }
+.aqte-theme .aqx-exec-table { min-width: 850px; }
+.aqte-theme .aqx-history-scroll { max-height: 420px; overflow: auto; }
+.aqte-theme .aqx-history-expanded { grid-column: 1 / -1; }
+.aqte-theme .aqx-exec-table small { display: block; color: #8fa6c1; }
+.aqte-theme .aqx-exec-table .aqx-execution-reason { min-width: 220px; max-width: 340px; white-space: normal; }
+.aqte-theme .aqx-execution-reason summary { cursor: pointer; color: #7dd3fc; }
+.aqte-theme .aqx-execution-reason p { margin-top: 6px; overflow-wrap: anywhere; }
+.aqte-theme .aqx-history-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-top: 12px; font-size: 0.75rem; }
+.aqte-theme .aqx-history-tools input { padding: 5px 8px; border: 1px solid #475569; border-radius: 6px; background: #0f172a; color: #e2e8f0; color-scheme: dark; }
+.aqte-theme .aqx-history-tools button:disabled { opacity: 0.5; cursor: not-allowed; }
 .aqte-theme .aqx-cc-risk .aqx-panel { min-width: 0; overflow-x: auto; }
 .aqte-theme .aqx-status-chip { padding: 1px 8px; border-radius: 999px; background: rgb(51 65 85 / 0.7); font-size: 0.625rem; font-weight: 800; color: #cbd5e1; }
 .aqte-theme .aqx-status-open { background: rgb(14 116 144 / 0.45); color: #7dd3fc; }
@@ -1988,12 +1998,98 @@ h1, h2, h3, h4, h5, h6 {
   display: inline-flex; align-items: center; padding: 3px 12px; border: 1px solid rgb(92 200 255 / 0.55); border-radius: 999px;
   background: rgb(92 200 255 / 0.12); color: #7dd3fc; font-size: 0.9375rem; font-weight: 800; letter-spacing: 0.06em;
 }
+.aqte-theme .aqx-morning-board {
+  position: relative; display: grid; gap: 12px; margin-bottom: 14px; padding: 16px 18px 14px 22px; overflow: hidden;
+  font-family: var(--font-inter), 'Segoe UI Variable', 'Segoe UI', sans-serif;
+  border: 1px solid rgb(45 212 191 / 0.42); border-radius: 16px;
+  background: radial-gradient(800px 180px at 85% -40%, rgb(34 211 238 / 0.16), transparent 70%),
+    linear-gradient(120deg, rgb(8 47 58 / 0.7), rgb(8 15 30 / 0.97) 65%);
+  box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.06), 0 8px 26px rgb(0 0 0 / 0.24);
+}
+.aqte-theme .aqx-morning-board::before {
+  content: ""; position: absolute; inset: 0 auto 0 0; width: 3px;
+  background: linear-gradient(180deg, #5eead4, #38bdf8 55%, #818cf8);
+  box-shadow: 0 0 14px rgb(45 212 191 / 0.48);
+}
+.aqte-theme .aqx-morning-heading { display: grid; gap: 3px; }
+.aqte-theme .aqx-morning-kicker { color: #7dd3fc; font-size: 0.72rem; font-weight: 800; letter-spacing: 0.14em; }
+.aqte-theme .aqx-morning-heading h3 {
+  margin: 0; color: #f0fdfa; font-size: clamp(1.3rem, 1.15rem + 0.35vw, 1.55rem);
+  font-weight: 850; letter-spacing: 0.005em; line-height: 1.2;
+}
+.aqte-theme .aqx-morning-toggle, .aqte-theme .aqx-morning-confirm, .aqte-theme .aqx-morning-cancel {
+  display: inline-flex; min-height: 44px; align-items: center; justify-content: center; gap: 8px; padding: 8px 15px;
+  border: 1px solid rgb(45 212 191 / 0.42); border-radius: 10px; background: rgb(13 148 136 / 0.16);
+  color: #ccfbf1; font-size: 0.9rem; font-weight: 750; letter-spacing: 0.005em;
+}
+.aqte-theme .aqx-morning-toggle::before {
+  content: ""; width: 7px; height: 7px; border-radius: 50%; background: #94a3b8;
+}
+.aqte-theme .aqx-morning-toggle.is-enabled::before { background: #34d399; box-shadow: 0 0 10px rgb(52 211 153 / 0.8); }
+.aqte-theme .aqx-morning-toggle:disabled, .aqte-theme .aqx-morning-confirm:disabled { cursor: not-allowed; opacity: 0.45; }
+.aqte-theme .aqx-morning-timeline {
+  display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin: 2px 0 0; padding: 0;
+  list-style: none; counter-reset: morning-phase;
+}
+.aqte-theme .aqx-morning-timeline li {
+  display: grid; grid-template-columns: 32px minmax(0, 1fr); grid-template-areas: "step time" "step title";
+  align-content: center; align-items: center; column-gap: 10px; row-gap: 4px; min-width: 0; min-height: 72px; padding: 10px 12px;
+  border: 1px solid rgb(71 85 105 / 0.56); border-radius: 12px;
+  background: linear-gradient(150deg, rgb(15 30 52 / 0.8), rgb(8 15 30 / 0.68));
+  counter-increment: morning-phase;
+}
+.aqte-theme .aqx-morning-timeline li::before {
+  grid-area: step; display: grid; place-items: center; width: 30px; height: 30px; content: counter(morning-phase);
+  border: 1px solid rgb(92 200 255 / 0.35); border-radius: 10px; background: rgb(14 116 144 / 0.16);
+  color: #bae6fd; font-size: 0.82rem; font-weight: 850; font-variant-numeric: tabular-nums;
+}
+.aqte-theme .aqx-morning-timeline li.is-active {
+  border-color: rgb(45 212 191 / 0.78); background: linear-gradient(120deg, rgb(13 148 136 / 0.24), rgb(8 15 30 / 0.78));
+  box-shadow: inset 0 0 18px rgb(45 212 191 / 0.08), 0 0 16px rgb(45 212 191 / 0.1);
+}
+.aqte-theme .aqx-morning-timeline li.is-active::before {
+  border-color: rgb(45 212 191 / 0.64); background: rgb(13 148 136 / 0.25); color: #99f6e4;
+}
+.aqte-theme .aqx-morning-timeline li.is-complete { border-color: rgb(45 212 191 / 0.25); }
+.aqte-theme .aqx-morning-time { grid-area: time; color: #7dd3fc; font-size: 0.75rem; font-weight: 800; letter-spacing: 0.055em; line-height: 1.35; }
+.aqte-theme .aqx-morning-timeline strong { grid-area: title; min-width: 0; color: #f1f5f9; font-size: 0.94rem; font-weight: 720; line-height: 1.35; }
+.aqte-theme .aqx-morning-summary { margin: 0; color: #b6c8de; font-size: 0.86rem; line-height: 1.55; }
+.aqte-theme .aqx-morning-state {
+  width: fit-content; max-width: 100%; margin: 0; padding: 7px 10px; overflow-wrap: anywhere;
+  border: 1px solid rgb(251 191 36 / 0.28); border-radius: 9px; background: rgb(120 53 15 / 0.12);
+  color: #fde68a; font-size: 0.86rem; font-weight: 650; line-height: 1.45;
+}
+.aqte-theme .aqx-morning-diagnostics, .aqte-theme .aqx-auto-confirm-details {
+  color: #b6c8de; font-size: 0.82rem; line-height: 1.55;
+}
+.aqte-theme .aqx-morning-diagnostics summary, .aqte-theme .aqx-auto-confirm-details summary {
+  width: fit-content; cursor: pointer; color: #7dd3fc; font-size: 0.84rem; font-weight: 700;
+}
+.aqte-theme .aqx-morning-diagnostics p, .aqte-theme .aqx-auto-confirm-details p { margin: 7px 0 0; }
+.aqte-theme .aqx-auto-confirm {
+  display: grid; gap: 10px; padding: 12px; border: 1px solid rgb(251 191 36 / 0.34); border-radius: 12px;
+  background: linear-gradient(130deg, rgb(120 53 15 / 0.18), rgb(8 15 30 / 0.95));
+}
+.aqte-theme .aqx-auto-confirm-lead { margin: 0; color: #fef3c7; font-size: 0.9rem; line-height: 1.55; }
+.aqte-theme .aqx-auto-confirm-on, .aqte-theme .aqx-auto-confirm-cancel {
+  min-height: 44px; padding: 8px 14px; border: 1px solid rgb(251 191 36 / 0.4); border-radius: 9px;
+  color: #fde68a; font-size: 0.86rem; font-weight: 750;
+}
+.aqte-theme .aqx-auto-confirm-on { background: rgb(180 83 9 / 0.2); }
+.aqte-theme .aqx-auto-confirm-on:disabled { cursor: not-allowed; opacity: 0.45; }
+.aqte-theme .aqx-auto-confirm-cancel { border-color: rgb(100 116 139 / 0.5); background: rgb(15 23 42 / 0.55); color: #cbd5e1; }
 @container aqte (max-width: 620px) {
   .aqte-theme .aqx-term-title { gap: 6px 10px; padding: 8px 10px; }
   .aqte-theme .aqx-term-icon { width: 30px; height: 30px; border-radius: 8px; }
   .aqte-theme .aqx-term-icon svg { width: 17px; height: 17px; }
   .aqte-theme .aqx-term-name { font-size: 1.25rem; }
   .aqte-theme .aqx-term-symbol { padding: 2px 10px; font-size: 0.8125rem; }
+  .aqte-theme .aqx-morning-board { gap: 10px; padding: 14px 12px 13px 16px; }
+  .aqte-theme .aqx-morning-timeline { grid-template-columns: 1fr; gap: 7px; }
+  .aqte-theme .aqx-morning-timeline li { min-height: 64px; padding: 9px 10px; }
+  .aqte-theme .aqx-morning-timeline strong { font-size: 0.9rem; }
+  .aqte-theme .aqx-morning-summary, .aqte-theme .aqx-morning-state { font-size: 0.84rem; }
+  .aqte-theme .aqx-morning-toggle { min-height: 44px; padding-inline: 12px; font-size: 0.84rem; }
 }
 .aqte-theme .aqx-panel-head > span:not([aria-hidden]), .aqte-theme .aqx-deck-title span { font-size: 0.875rem; color: #8ea3c0; }
 .aqte-theme .aqx-deck-filter { min-height: 32px; padding: 3px 12px; border-color: rgb(72 94 138 / 0.45); background: rgb(17 26 46 / 0.85); font-size: 0.8125rem; color: #cbd5e1; }
@@ -2140,13 +2236,13 @@ h1, h2, h3, h4, h5, h6 {
 @container aqte (max-width: 1180px) {
   .aqte-theme .aqx-dash-main {
     grid-template-columns: repeat(2, minmax(0, 1fr));
-    grid-template-areas: "top top" "perf perf" "term term" "opp opp" "trade risk" "eng eng" "chart chart" "events events" "book book";
+    grid-template-areas: "top top" "perf perf" "morning morning" "term term" "opp opp" "trade risk" "eng eng" "chart chart" "events events" "book book";
   }
   .aqte-theme .aqx-dash-main > .aqx-top { grid-template-columns: minmax(0, 1fr); }
   .aqte-theme .aqx-perfbar { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 }
 @container aqte (max-width: 900px) {
-  .aqte-theme .aqx-dash-main { grid-template-columns: minmax(0, 1fr); grid-template-areas: "top" "perf" "term" "opp" "trade" "risk" "eng" "chart" "events" "book"; }
+  .aqte-theme .aqx-dash-main { grid-template-columns: minmax(0, 1fr); grid-template-areas: "top" "perf" "morning" "term" "opp" "trade" "risk" "eng" "chart" "events" "book"; }
   .aqte-theme .aqx-context { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .aqte-theme .aqx-perfbar { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
   .aqte-theme .aqx-perfbar > div { padding: 6px 8px; border: 1px solid rgb(56 116 190 / 0.25); border-radius: 8px; }

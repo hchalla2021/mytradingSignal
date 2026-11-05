@@ -665,8 +665,10 @@ Defaults in the backend `Policy` dataclass:
 Pending and open trades reserve capital and planned risk across all three indices.
 Daily realized results, observed unrealized P&L and stale open-position quotes block
 new entries when appropriate. Planned risk is not a guaranteed maximum loss.
-Worker, queue or journal failures fail closed for new entries and require restart;
-the interface suppresses BUY during recorder failure.
+Recorder failures suppress new entries. The live analysis journal retries an
+uncommitted batch after transient SQLite failures. Queue overflow/malformed packets
+block only the affected instrument: fresh quotes recover spot/options; futures
+require authoritative candle repair. Unexpected worker faults remain fail-closed.
 
 ### Persistence and deployment
 
@@ -683,9 +685,11 @@ The additive, idempotent schema is created on startup:
 - `aqte_trades`: completed trades with costs and net paper P&L.
 - `aqte_events`: limit, fill, trail, cancellation, exit, data-gap and stop audit events.
 
-Each worker batch writes ticks, events and state in one WAL transaction. The engine
-stops on a transaction failure; uncommitted in-memory progress is not presented as
-healthy execution. On restart, committed orders and all completed trades are restored.
+Each worker batch writes ticks and events in one WAL transaction. Live journal I/O
+runs outside the market-state lock; unchanged contracts are not rewritten per batch.
+Transaction failures mark recording unhealthy while the same batch retries.
+Paper state/kill writes retain their original ordering under the market lock.
+On restart, committed orders and all completed trades are restored.
 Recorded futures ticks (today plus the previous session's tail) rebuild candles **without
 replaying trades or filling orders against past quotes**, and Kite one-minute history
 fills missing completed minutes when available. A new installation with no history
@@ -751,7 +755,7 @@ Validation commands:
 
 ```powershell
 Set-Location backend
-..\.venv\Scripts\python.exe -m unittest test_aqte test_aqte_live test_aqte_engines test_aqte_broker_positions -q
+..\.venv\Scripts\python.exe -X utf8 -m unittest test_aqte test_aqte_live test_aqte_engines test_aqte_daily_control test_aqte_broker_positions test_aqte_ml test_aqte_runtime
 Set-Location ..\frontend
 node --test tests\aqte.test.cjs tests\institutional-workspace.test.cjs tests\chart-workspace.test.cjs
 .\node_modules\.bin\next.cmd lint --file components\AQTESection.tsx --file app\page.tsx
@@ -1066,9 +1070,12 @@ the local machine must itself use the broker-approved outbound static IPv4. Copy
 the production server's IP into local settings does not route orders through that
 server. Use the approved execution host, or complete the broker's approval process
 for the local static egress before configuring it; never bypass the comparison.
-Signal analysis refreshes on futures ticks using completed one-minute candles.
-The execution monitor checks roughly every two seconds plus processing time, but
-a failed preflight retries at most once per minute and never submits an order.
+Signal analysis refreshes on futures ticks and on newly available live spot/option
+quotes using completed one-minute candles. Signals and advisory result updates wake
+the existing execution monitor; owned Kite order updates wake reconciliation.
+A two-second reconciliation watchdog remains, but there is no mandatory two-second
+wait before scanning a new signal. Failed activation preflight retries at most once
+per minute and never submits an order.
 The other dashboard panels are not order-authorizing inputs: AQTE's evaluators
 consume the shared Kite spot/futures/options feed directly. A fresh feed or advisory
 engine agreement alone cannot approve a live entry.
@@ -1250,16 +1257,19 @@ The separate Smart AI Algo executor has its own enablement/live-mode settings.
 The AQTE switch does not start it; enabling two live executors is not an AQTE fix.
 Neither engine-card agreement nor an ML-library installation overrides these gates.
 
-The 12 strategy cards are evaluators, not 12 independent execution workers. They
-are evaluated sequentially from the same locked market snapshot. Scalp and swing
+The 12 strategy cards are independent advisory evaluators, not 12 execution managers.
+They run on bounded workers using immutable shared feature inputs; each publishes
+without waiting for the others. Production HTTP snapshots read those results, not
+recalculate the strategies. Scalp and swing
 signals use completed one-minute futures candles plus fresh spot/futures and option
 quotes. Other cards rank or veto entries; ML remains shadow-only. A satisfied card
 does not authorize an order. Each index retains its explicitly configured style;
 there is no automatic style switching or newly enabled reversal strategy.
 
-The live monitor scans ranked indices after reconciliation, then waits two seconds.
-This is not a two-second end-to-end latency guarantee: broker reads, analysis, locks
-and journal writes add time. Entry requires a fresh, liquid one-lot quote, no-chase
+The live monitor scans ranked indices on signal events. Broker order events bypass
+the reconciliation watchdog delay; market ticks alone do not trigger repeated
+broker order/position REST reads. This is not an end-to-end latency guarantee:
+broker reads, analysis, locks and journal writes add time. Entry requires a fresh, liquid one-lot quote, no-chase
 IOC price, net reward/risk and both remaining account/index loss budgets.
 An unaffordable candidate is skipped so another qualifying index can be considered;
 its rejection never increases the configured risk budget. Broker/account/IP faults
@@ -1417,3 +1427,347 @@ profitability claim, IP-compliance certification or live fill verification is im
 Validate the controller using `python -m unittest test_aqte_live`; all broker and IP
 operations in that suite are mocked. Actual activation and one-lot live acceptance
 remain operator tasks, not actions performed by the implementation or test suite.
+
+## Independent Morning Trade Engine
+
+The morning engine is an additional signal source, **not a thirteenth order
+executor**. It uses the existing KiteTicker subscriptions, instrument/history
+preparation, shared completed-candle feature cache, live orchestrator and
+`AQTELiveService`. Existing scalp/swing entry rules still require 201 completed
+minutes and 15 current-session bars (earliest 09:30). Morning eligibility starts
+at **09:15**, after real tick confirmation; an order at the opening bell is not
+guaranteed. New morning entries stop at **10:30 IST**. This cutoff does not stop
+management of an existing position.
+
+### Preparation and data integrity
+
+- The existing scheduler opens the shared feed before 09:00. No additional Kite
+  connection or continuous REST quote loop is created.
+- From 09:00-09:15 the bounded collector records timestamped spot, subscribed
+  futures and option packets. It separately preserves the 09:00-09:07 summary
+  and subsequent pre-open observations.
+- Shared RAM holds the latest context; `CacheService` also publishes
+  `aqte:morning`. The current application's cache implementation is **in-memory**,
+  not an independently verified Redis deployment.
+- Index packets without exchange time are explicitly `receipt_only`. A fresh
+  derivative quote timestamp alone does not make yesterday's last traded price
+  a current pre-open price: price-derived pre-open levels additionally require
+  a same-day pre-open `last_trade_time`. Indicative auction prices remain
+  unavailable because this feed does not supply a verified auction-price field.
+  Missing depth, OI, Greeks and auction observations are not manufactured.
+- The existing global-index cache is recorded with its provider, source time,
+  quality and availability. Only a genuine source timestamp, known quote age
+  and REALTIME/LIVE quality can qualify as real-time context. Global cues are
+  contextual records, not independent entry authority or invented confirmations.
+- The default local SQLite WAL store (or optional PostgreSQL) receives append-only `TICK`, `CHART_CANDLES`, `OPTION_CHAIN`,
+  `ORDER_FLOW`, `PREOPEN_CONTEXT`, `GLOBAL_CONTEXT`, `DECISION`, `OPPORTUNITY`
+  and `EXECUTION_*` events in
+  `aqte_morning_events`. Raw packet acceptance/rejection is recorded. Original
+  live SQLite journals remain authoritative for orders and executions.
+- Each TICK payload preserves the complete Zerodha packet supplied to the shared
+  callback, including every available bid/ask depth level, quantity/order count,
+  LTP, cumulative volume, OI/day extremes, OHLC and exchange/last-trade timestamps.
+  Option packets from the already-subscribed option chain are recorded too; no
+  new connection or polling loop was added. 1/5/15-minute futures and index
+  OHLCV chart candles come only from the existing candle book; higher intervals
+  require every constituent completed minute. OI is included only when present.
+- `OPTION_CHAIN` records current fresh subscribed strikes, call/put quotes,
+  two-sided depth, volume and OI, plus PCR only when the observed chain has both
+  sides and OI for every included strike. This covers subscribed/fresh contracts,
+  not an assertion that the entire exchange chain was received.
+- `ORDER_FLOW` reuses the existing five-level futures DOM, total bid/ask,
+  best bid/ask and spread, five-level depth imbalance, cumulative and minute
+  volume, per-price classified volume profile, current-minute OI change,
+  large resting bid/ask liquidity zones, and estimated aggressor volume.
+  Buy/sell aggressor labels use the existing quote/mid/tick classifier; they
+  are estimates from snapshots, not exchange aggressor flags. Volume during
+  feed gaps is kept unclassified. Large displayed depth is not proof of executed
+  orders and can be cancelled or spoofed; it is not treated as guaranteed support.
+- Index packets are recorded with whatever depth Zerodha actually supplies;
+  indexes may have no executable depth/volume. No index bid/ask or volume is
+  inferred from futures or option quotes.
+- The writer uses bounded batches, transactions and UUID idempotency, retries
+  database outages without blocking the original engines, and publishes a new
+  signal only after its batch commits to the configured durable store. There is
+  no RAM-only executable fallback.
+  Same-day pre-open summaries and recorded
+  queue-loss latches are restored on reconnect/restart. Opening tick confirmation
+  starts fresh after restart; it is not reconstructed from invented ticks.
+- A 5,000-event queue bounds memory. Overflow blocks new morning entries for that
+  session and records a loss marker when storage recovers. Uncommitted in-memory
+  packets can be lost on process termination or prolonged outages; the system
+  reports this rather than claiming gap-free historical recording. Existing
+  broker protection and durable SQLite execution history continue independently.
+- After 10:30, tick recording continues only while a morning position remains
+  active, with option capture limited to its contract. It does not record every
+  subscribed option for the entire afternoon unnecessarily.
+
+### Entry and exit rules
+
+Every eligible morning signal requires verified shared preparation, 201 historical
+completed candles and ATR, healthy recording/feed, spot and futures ages no more
+than three seconds, at least three distinct futures timestamps spanning two
+seconds, and spot direction confirmation. It does **not** require a first
+completed opening candle for every setup.
+
+Common directional checks require a move of at least 0.2 ATR and 0.01% of futures
+price, at least 70% price-path efficiency, two confirming price changes, two
+observed cumulative-volume increases, aligned observed tick VWAP, two-sided
+futures quotes with at most 0.05% spread, and at least 10% aligned depth imbalance.
+The tick VWAP is explicitly an observed-sample calculation, not a claim to have
+every exchange trade.
+
+Separate rules recognise gap-and-go, gap reversal, momentum/volatility expansion,
+completed one-minute ORB, verified pre-open liquidity sweeps, trend continuation
+and short-range scalping. ORB alone waits for its completed opening minute.
+Gap/ORB references require observation of the opening within five seconds;
+a late start cannot label an arbitrary later price as the session open.
+Sideways or incomplete evidence remains WAIT.
+
+Options must have fresh bid/ask, at least one lot on both sides, traded volume,
+valid expiry and at most 3% spread. Selection prioritises strike distance,
+relative spread, reported OI where available and volume. Shared Black-Scholes
+IV/Greeks are estimates from actual quotes, not broker-reported Greeks.
+The initial stop distance is the greater of 12% of premium, two ticks, and
+half ATR times absolute estimated delta when available. Target is three gross
+risk units. The **existing** cost-adjusted reward/risk floor, risk budget and
+one-lot checks can still reject that plan.
+
+The score is deterministic rule evidence, **not a win probability or validated
+ML forecast**. No morning-specific trained model exists; no model training runs
+in the session. Existing shadow-only ML remains unchanged.
+
+Separate owner approval, existing Auto Trade ON, unvalidated-rule opt-in,
+preflight/IP/account checks, index/account limits, one-active-position policy
+and broker reconciliation are all required. Morning families share one
+same-index/minute/direction opportunity key to prevent duplicate orders when a
+setup changes name. An owner's busy contract is skipped, never modified.
+Broker acknowledgment is still not a fill; partial fills receive protection for
+the actual quantity.
+
+Morning protection uses the existing sell SL order and trailing implementation.
+Confirmed underlying reversals, failed opening references and profit exhaustion
+can request an exit through that same order, not a competing sell pathway.
+Switching morning approval OFF or reaching 10:30 does not abandon a position.
+Existing position views show broker-observed rupee, point and percentage P&L.
+Saved executions and Excel reports retain **AQTE Independent Morning Engine**,
+the original setup explanation, rules and market evidence.
+
+### Deployment and verification
+
+1. The default local store is `backend/data/aqte/morning.sqlite3` using SQLite
+   WAL; it requires no separate database server or URL. Keep this file and its
+   WAL/SHM companions on persistent local storage, include it in the application's
+   backup plan, and do not copy it while writes are active.
+2. PostgreSQL remains optional for centralized or multi-instance deployments.
+   Set `AQTE_MORNING_POSTGRES_URL` privately to select it; do not paste
+   credentials into chat or commit them. Its database role needs permission to
+   create the morning table/index and insert/select records.
+3. Restart the existing backend using the project's normal deployment process.
+   Inspect the morning panel and owner live status/diagnostics for actual
+   recording, preparation and queue health.
+4. Review the unvalidated rules before opting in. The separate, explicitly
+   confirmed morning approval is OFF by default and persists in the existing
+   live journal. `POST /api/aqte/live/morning` uses the existing owner cookie,
+   device ID and manual-intent authentication. Approval never bypasses Auto
+   Trade ON or the existing `AQTE_LIVE_ALLOW_UNVALIDATED_RULES` policy.
+
+Live database-server connectivity, broker fills, production opening load and
+profitability have **not** been verified. The local SQLite store is the default and is enabled
+only after its schema is created and a durable write heartbeat is observed.
+No real order or morning activation was performed during validation.
+
+The focused regression suite includes genuine rule evaluation at 09:15:02,
+preservation of the original 09:30 gate, all setup families, malformed/stale data,
+reconnect confirmation, database failure, owner approval, manual contract
+isolation, partial fills, opportunity rejection/expiry and historical provenance.
+Database/broker unit tests use explicit offline fixtures; they are not claims
+of live integration certification. Runtime measurements expose
+`morning.queue_age`, `morning.evaluate` and `morning.storage_commit`; never infer
+end-to-end production latency from a CPU-only fixture benchmark.
+
+A local run of 1,000 repeated opening-rule fixture evaluations measured
+**0.0393 ms median, 0.0890 ms p95, 0.6889 ms maximum**. This measures only rule
+CPU work on repeated synthetic inputs (including reusable Greeks caching);
+it excludes queueing, durable storage, actual feed arrival and broker execution.
+It is not evidence that production market-open latency targets have been met.
+
+Targeted local validation (Windows, repository virtual environment):
+
+```powershell
+cd backend
+..\.venv\Scripts\python.exe -X utf8 -m unittest test_aqte_morning test_aqte_live test_aqte_execution_history
+cd ..\frontend
+node --test tests\aqte.test.cjs
+node node_modules\typescript\bin\tsc --noEmit --incremental false
+```
+
+## Saved executions and monthly Excel downloads
+
+The **Recent Executions** panel reads the continuous, owner-only execution journal,
+not the current-day/last-20-trades status preview. **View All** expands the table and
+pages through older records. History remains visible after market close and across
+months; there is **no monthly deletion**. The month selector controls the download,
+not the all-date history list.
+
+The **Strategy / Entry Reason** column follows **Status**. Before submission AQTE
+saves the actual strategy/tier, scalp, swing or morning rule engine, original explanation,
+rule score and aligned supporting engine names. Supporting engines remain advisory,
+not separate order executors. Older entries explicitly show when detailed evidence
+was not recorded; current signals are never used to invent a historical explanation.
+
+**Download Excel** produces `AQTE-Executions-YYYY-MM.xlsx` for the selected entry month
+in IST, including cancelled/rejected/unfilled attempts with honest statuses and filled
+quantities. It includes entry/exit prices, broker IDs, stops, targets, estimated net P&L,
+gross return percentage and original entry reasons. Unknown fills and unverified exits
+do not become successful trades or zero-profit results. IDs are Excel text and external
+strings cannot become spreadsheet formulas.
+
+`GET /api/aqte/live/executions` accepts optional `month=YYYY-MM`, `limit` (1-100)
+and `offset`. `GET /api/aqte/live/executions/export?month=YYYY-MM` returns an actual
+`.xlsx` workbook. Both reuse owner authentication and return `Cache-Control: no-store`;
+neither calls Kite or places orders. Exporting never clears the database. The report
+is generated on demand, so the same link remains usable after the session and in
+later months; no daily file-writing job or second execution path is added.
+
+The indexed `live_executions` read model lives in the existing `live.sqlite3` and is
+updated atomically with the live state/audit. A one-time startup migration backfills existing intents,
+unfilled outcomes and closed trades without deleting the original records. Keep
+the AQTE data directory on durable storage with consistent SQLite backups; an Excel
+download is not a substitute for backing up the journal. Deploy the updated backend
+requirements (`openpyxl==3.1.5`) and restart the backend to initialize this read model.
+
+Regression checks:
+```powershell
+# From backend
+..\.venv\Scripts\python.exe -X utf8 -m unittest test_aqte_execution_history test_aqte_live
+# From frontend
+node --test tests\aqte.test.cjs
+node node_modules\typescript\bin\tsc --noEmit --incremental false
+```
+
+## Internal market-open preparation and performance monitoring
+
+These changes do not add UI controls, another KiteTicker connection or another
+execution path. The existing market-hours scheduler still starts the shared feed
+at 08:55 IST. Its connection callback subscribes immediately and moves blocking
+broker preparation to a coalesced background task. Failed preparation retries;
+obsolete connection generations cannot attach subscriptions after disconnect.
+
+### Preparation and data readiness
+
+- The feed's contract manager, AQTE option selection and futures chart service
+  share a daily NFO/BFO instrument master. Atomic JSON caches live in
+  `backend/data/instrument_catalog/` (ignored by Git). Yesterday's master is
+  never substituted after a failed daily refresh. Expiry, strike, token,
+  lot size and tick size come from that master, including pinned AQTE positions.
+  Downloads are serialized per exchange, outside the diagnostic state lock;
+  inspecting readiness cannot hold the market lock behind broker network I/O.
+- Previous-session spot OHLC is refreshed and dated for CPR/pivots. Futures
+  history can preload from 08:45 IST, with a 14-calendar-day lookback covering
+  intervening holidays. Completed history repairs do not overwrite recent live
+  candles or today's forming candle.
+- Startup loads existing strategy/risk configuration and the configured shadow
+  model. Before open, the existing live controller performs read-only IP/account/
+  broker preflight when live execution is configured. Preparation neither arms
+  the session nor switches trading ON; failed preflight is reported explicitly.
+- Preparation and **fresh live readiness are different**. A subscription request
+  does not prove a tick arrived. Diagnostics list requested/missing tokens,
+  per-index history and contract readiness, indicator availability, completed
+  higher-timeframe counts and opening-bar progress.
+- The mandatory **201 contiguous completed minutes and 15 current-session opening
+  minutes remain unchanged**. Preparing the previous session cannot fabricate
+  today's opening range; earliest live scalp/swing entry remains **09:30 IST**.
+  Advisory evaluators can use their available partial features independently.
+
+### Hot-path behavior and recovery
+
+- OHLCV updates incrementally. Completed-candle EMA, VWAP, RSI, ATR, ADX,
+  SuperTrend, CPR, pivots, volume and higher-timeframe features are cached by
+  history revision, minute, token and previous-day context. Depth and OI changes
+  remain tick-live. IV/Greeks use current option premiums and bounded memoization.
+- The existing finite rolling **201-bar seeding mathematics is preserved**:
+  affected indicators are recalculated on a new completed candle/history
+  correction, not on every tick. This deliberately does not substitute an
+  indefinitely accumulated EMA/Wilder/SuperTrend with different trade decisions.
+- Repeated derivative packets and out-of-order receipts/exchange times do not
+  update candles. Identical exchange seconds with changed depth/price remain valid.
+  Malformed packets cannot enter restart history.
+- Both queues are bounded at 20,000. Dashboard delivery may drop its oldest
+  update; AQTE receives raw ticks first and tracks its own losses. A futures loss
+  blocks that index until the affected completed minutes actually match broker
+  history. Recorder outages fail closed and retry the same uncommitted batch.
+  Disconnects also require candle repair. The first resumed minute is included:
+  its cumulative volume delta can contain trades from earlier missing minutes.
+  Restarted futures candles are reverified against exchange history, rather than
+  forgetting pre-restart losses. Markers outside retained inputs or for retired
+  contracts cannot block an index indefinitely.
+- Twelve advisory workers hold at most one running and one latest pending job
+  per index/engine (36 identities). A slow/failed job cannot hold an all-engine
+  barrier. Expired results and results from a different token/candle revision
+  cannot vote. Python threads provide scheduling isolation, not a CPU-throughput
+  or parallel-speedup guarantee.
+  Option-chain/IV/Greeks preparation runs inside the options job, not before
+  scheduling its peers. Its failure or delay cannot stop unrelated evaluators;
+  option metadata is published only with a fresh, matching result.
+- Signal events and all three existing KiteTicker initialization/reconnect paths
+  are wired to the same live controller. Only AQTE-owned order events wake its
+  reconciliation. REST remains authoritative for fills; a successful submission
+  is still `ENTRY_PENDING`, never a completed trade.
+- Ranking retains actionable status, aligned evidence and confidence first,
+  then uses net R:R, freshness, spread and depth as tie-breakers. Portfolio risk
+  still vetoes entries. Expected value remains **unavailable** without a validated,
+  calibrated probability model.
+- `live_opportunities` stores current decisions; `live_audit` records transitions.
+  Keys reuse strategy/candle/contract deduplication (scalp tiers share a key).
+  Accepted, rejected, missed, expired and uncertain submissions retain exact
+  reasons. Repeated unchanged decisions do not create per-tick audit rows.
+  Upstream `aqte_events` also records rule-qualification generation/expiry
+  transitions, including opportunities that vanish within a worker batch before
+  the controller scans. Both journals use the same opportunity keys.
+  Immediately before persisting a submission intent, the controller rechecks
+  the latest rules/veto and approved price/risk against the existing broker quote.
+
+### Owner-only diagnostics
+
+`GET /api/aqte/live/diagnostics` uses the existing owner app-access cookie, device
+header and `X-AQTE-Intent: manual-live-control`; responses are `no-store`.
+No frontend integration is required and no broker request is made by this endpoint.
+
+It reports connection/tick ages, subscribed/missing tokens, queue/recovery state,
+preparation/catalog/model/feature readiness, individual engine rules and rankings,
+bounded execution backlog, broker update acknowledgments,
+actual reconciled quantities and opportunity decisions. Stage measurements contain
+total counts and p50/p95/max/last milliseconds over the last 256 observations:
+feed dispatch, tick/engine queue age, tick processing, feature calculation, each evaluator,
+snapshot, journal commit, preflight/risk, broker quote/margin/submission,
+signal-to-intent and intent-to-confirmed-fill. No observation means no latency
+claim; broker write permissions are not inferred from a successful login.
+
+Latest paired local Windows fixture measurements (not production or live order latency):
+
+| Workload | Median ms | p95 ms |
+|---|---:|---:|
+| Same-version uncached analysis, 1,000 calls | 1.4528 | 4.4246 |
+| Cached same-candle analysis, 1,000 calls | 0.0778 | 0.2103 |
+| Same-version synchronous snapshot/evaluation, 200 calls | 1.1473 | 2.1052 |
+| Cached-evaluator snapshot, 200 calls | 0.7563 | 2.3334 |
+| Earlier read-only replay: 1,000 recorded futures ticks across 3 tokens | 0.0016 | 0.0073 |
+
+The analytical microbenchmark uses an explicit unit-test fixture with one warmed
+index; the final row replays real local journal ticks read-only. Neither measures
+network delays, production open-hour load, profitability or actual broker fills.
+Snapshot p95 did not improve in this paired run; the measurements do not establish
+an across-the-board latency target or production SLA.
+Reproduce the fixture comparison from `backend`:
+
+```powershell
+..\.venv\Scripts\python.exe -X utf8 test_aqte_runtime.py --benchmark
+..\.venv\Scripts\python.exe -X utf8 -m unittest test_aqte_runtime test_market_feed_recovery test_futures_chart test_futures_terminal_data
+```
+
+Production PM2 logs and host access were unavailable during this local audit.
+Validate the authenticated diagnostics on the approved execution host before the
+next open, including its actual token, static egress and broker permissions.
+No live order, risk-limit increase, manual-position mutation or production
+performance certification is part of these offline tests.

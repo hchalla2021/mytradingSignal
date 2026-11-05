@@ -9,6 +9,7 @@ function harness(filename = 'AQTESection.tsx', now, sharedProduction = false) {
   const states = [];
   const timers = new Map();
   const requests = [];
+  const downloads = [], revoked = [];
   let effect, cursor, timer = 0, response, accessExpired = 0;
   const react = {
     memo: component => component,
@@ -40,7 +41,9 @@ function harness(filename = 'AQTESection.tsx', now, sharedProduction = false) {
       if (response instanceof Error) throw response;
       const value = response;
       return { ok: !value?.__httpStatus || value.__httpStatus < 400, status: value?.__httpStatus ?? 200,
-        json: async () => value?.__httpStatus ? value.__body : value };
+        json: async () => value?.__httpStatus ? value.__body : value,
+        headers: { get: key => key === 'content-type' ? value?.__contentType ?? 'application/json' : null },
+        blob: async () => value?.__blob };
     },
     require: id => {
       if (id === 'react') return react;
@@ -70,6 +73,14 @@ function harness(filename = 'AQTESection.tsx', now, sharedProduction = false) {
         const component = harness('AQTEEngineDeck.tsx');
         return { default: props => component.render(props) };
       }
+      if (id === '@/components/AQTEExecutionHistory') {
+        const component = harness('AQTEExecutionHistory.tsx');
+        return { default: props => component.render(props) };
+      }
+      if (id === '@/components/AQTEMorningEngine') {
+        const component = harness('AQTEMorningEngine.tsx');
+        return { default: props => component.render(props) };
+      }
       if (id === '@/components/AQTEPosition') {
         const component = harness('AQTEPosition.tsx');
         return { default: props => component.render(props) };
@@ -79,6 +90,14 @@ function harness(filename = 'AQTESection.tsx', now, sharedProduction = false) {
       throw new Error(`Unexpected dependency ${id}`);
     },
   };
+  if (filename === 'AQTEExecutionHistory.tsx') {
+    context.URL = { createObjectURL: () => 'blob:test-executions', revokeObjectURL: url => revoked.push(url) };
+    context.document = {
+      body: { appendChild() {} },
+      createElement: () => ({ href: '', download: '', remove() {},
+        click() { downloads.push({ href: this.href, filename: this.download }); } }),
+    };
+  }
   vm.runInNewContext(compiled, context);
   return {
     render(props = {}) { cursor = 0; return context.exports.default(props); },
@@ -92,7 +111,7 @@ function harness(filename = 'AQTESection.tsx', now, sharedProduction = false) {
       timers.delete(pending[0]);
       await pending[1].fn();
     },
-    timers, requests,
+    timers, requests, downloads, revoked,
     exports: context.exports,
     get accessExpired() { return accessExpired; },
   };
@@ -124,6 +143,116 @@ function fixture() {
   };
 }
 const settle = () => new Promise(resolve => setImmediate(resolve));
+
+function executionHistoryFixture(overrides = {}) {
+  return {
+    generated_at: Date.now() / 1000, total: 1, offset: 0, limit: 4,
+    rows: [{ id: '0000000000000001', at: Date.UTC(2026, 9, 1, 5) / 1000,
+      trading_symbol: 'NIFTY_TEST_CE', side: 'BUY', quantity: 15, filled: 15,
+      net_pnl: 105, return_pct: 10, exit_at: Date.UTC(2026, 9, 1, 6) / 1000,
+      status_name: 'Exited', status_reason: null, entry_id: '00123456789012345678',
+      strategy_name: 'Trend Continuation', entry_engine: 'AQTE Swing Rules',
+      reason: 'RSI 65; volume 2.0x; IOC capped at signal ask', supporting_engines: ['Momentum'] }],
+    ...overrides,
+  };
+}
+
+test('execution history retains older dates without a live controller and adds the reason after Status', async () => {
+  const h = harness('AQTEExecutionHistory.tsx');
+  const props = { liveStatus: null, now: Date.UTC(2026, 10, 5) / 1000 };
+  h.render(props);
+  const cleanup = h.mount(executionHistoryFixture());
+  await settle();
+  const tree = h.render(props);
+  assert.deepEqual(nodes(tree).filter(n => n.type === 'th').slice(-2).map(text), ['Status', 'Strategy / Entry Reason']);
+  assert.match(text(tree), /Trend Continuation/);
+  assert.match(text(tree), /AQTE Swing Rules/);
+  assert.match(text(tree), /RSI 65; volume 2.0x/);
+  assert.match(text(tree), /Oct 2026/);
+  assert.match(text(tree), /No monthly deletion/);
+  assert.equal(h.requests[0].options.credentials, 'include');
+  assert.equal(h.requests[0].options.headers['X-AQTE-Intent'], 'manual-live-control');
+  await h.poll(new TypeError('Failed to fetch'));
+  const offline = h.render(props);
+  assert.ok(nodes(offline).find(n => n.props?.role === 'alert'));
+  assert.match(text(offline), /NIFTY_TEST_CE/, 'A network error must not erase the saved view');
+  cleanup();
+});
+
+test('View All pages through the continuous journal rather than only today or the status preview', async () => {
+  const h = harness('AQTEExecutionHistory.tsx');
+  h.render({ liveStatus: null });
+  let cleanup = h.mount(executionHistoryFixture({ total: 26 }));
+  await settle();
+  let tree = h.render({ liveStatus: null });
+  nodes(tree).find(n => n.type === 'button' && text(n) === 'View All').props.onClick();
+  cleanup();
+  h.render({ liveStatus: null });
+  cleanup = h.mount(executionHistoryFixture({ limit: 25, total: 26,
+    rows: Array.from({ length: 25 }, (_, index) => ({ ...executionHistoryFixture().rows[0], id: String(index) })) }));
+  await settle();
+  tree = h.render({ liveStatus: null });
+  assert.match(h.requests.at(-1).url, /limit=25&offset=0/);
+  nodes(tree).find(n => n.type === 'button' && text(n) === 'Next').props.onClick();
+  cleanup();
+  h.render({ liveStatus: null });
+  cleanup = h.mount(executionHistoryFixture({ limit: 25, offset: 25, total: 26 }));
+  await settle();
+  tree = h.render({ liveStatus: null });
+  assert.match(h.requests.at(-1).url, /limit=25&offset=25/);
+  assert.equal(nodes(tree).find(n => n.type === 'button' && text(n) === 'Next').props.disabled, true);
+  cleanup();
+});
+
+test('monthly Excel download is authenticated, uses the selected month and preserves displayed history', async () => {
+  const h = harness('AQTEExecutionHistory.tsx');
+  h.render({ liveStatus: null });
+  const cleanup = h.mount(executionHistoryFixture());
+  await settle();
+  let tree = h.render({ liveStatus: null });
+  nodes(tree).find(n => n.type === 'input').props.onChange({ target: { value: '2026-10' } });
+  tree = h.render({ liveStatus: null });
+  h.respond({ __contentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', __blob: {} });
+  await nodes(tree).find(n => n.type === 'button' && text(n) === 'Download Excel').props.onClick();
+  assert.match(h.requests.at(-1).url, /\/executions\/export\?month=2026-10$/);
+  assert.equal(h.requests.at(-1).options.headers['X-Device-Id'], 'test-device');
+  assert.equal(h.downloads[0].filename, 'AQTE-Executions-2026-10.xlsx');
+  assert.match(text(h.render({ liveStatus: null })), /NIFTY_TEST_CE/);
+  const revoke = [...h.timers.values()].find(timer => timer.delay === 1000);
+  revoke.fn();
+  assert.deepEqual(h.revoked, ['blob:test-executions']);
+  cleanup();
+});
+
+test('Excel auth and content errors are explicit and never downloaded as successful workbooks', async () => {
+  const h = harness('AQTEExecutionHistory.tsx');
+  h.render({ liveStatus: null });
+  const cleanup = h.mount(executionHistoryFixture());
+  await settle();
+  let tree = h.render({ liveStatus: null });
+  h.respondHTTP(401, { detail: 'Owner session expired' });
+  await nodes(tree).find(n => n.type === 'button' && text(n) === 'Download Excel').props.onClick();
+  tree = h.render({ liveStatus: null });
+  assert.equal(h.accessExpired, 1);
+  assert.match(text(tree), /Owner session expired/);
+  assert.equal(h.downloads.length, 0);
+  h.respond({ __contentType: 'application/json' });
+  await nodes(tree).find(n => n.type === 'button' && text(n) === 'Download Excel').props.onClick();
+  assert.match(text(h.render({ liveStatus: null })), /did not return an Excel workbook/);
+  assert.equal(h.downloads.length, 0);
+  cleanup();
+});
+
+test('saved execution responses reject missing evidence fields and invalid financial numbers', () => {
+  const { isExecutionHistory } = harness('AQTEExecutionHistory.tsx').exports;
+  assert.equal(isExecutionHistory(executionHistoryFixture()), true);
+  assert.equal(isExecutionHistory(executionHistoryFixture({ rows: [
+    { ...executionHistoryFixture().rows[0], net_pnl: Infinity },
+  ] })), false);
+  assert.equal(isExecutionHistory(executionHistoryFixture({ rows: [
+    { ...executionHistoryFixture().rows[0], reason: undefined },
+  ] })), false);
+});
 
 function dailyFixture() {
   const config = { enabled: true, style: 'both', max_trades: 5, min_confidence: 75, stop_percent: 20,
@@ -1212,12 +1341,14 @@ test('AQTE has three index cards and disables trade actions while live status is
   assert.equal(nodes(tree).filter(n => n.props?.id?.startsWith('aqte-index-tab-')).length, 3);
   assert.deepEqual(nodes(tree).filter(n => n.props?.id?.startsWith('aqte-book-tab-')).map(text),
     ['Active Trades (--)', "Today's Trades (--)", 'Positions', 'Performance', 'Controls']);
-  assert.equal(nodes(tree).filter(n => ['input', 'select'].includes(n.type)).length, 0);
+  const inputs = nodes(tree).filter(n => ['input', 'select'].includes(n.type));
+  assert.equal(inputs.length, 1, 'Only the read-only Excel month selector is available');
+  assert.equal(inputs[0].props['aria-label'], 'Excel month (IST)');
   // Engine deck filters, rule-detail toggles and dashboard navigation are view-only, not trade actions.
   const deckControl = n => n.type === 'button' && /aqx-deck-filter|aqx-eng-card/.test(String(n.props?.className));
   const viewOnly = n => n.type === 'button' && /\baqx-viewonly\b/.test(String(n.props?.className));
   const actions = nodes(tree).filter(n => n.type === 'button' && n.props.role !== 'tab' && !deckControl(n) && !viewOnly(n));
-  assert.equal(actions.length, 15);
+  assert.equal(actions.length, 16, '15 existing trade actions plus separately gated morning approval');
   assert.equal(nodes(tree).filter(deckControl).length, 17);
   assert.ok(nodes(tree).filter(viewOnly).every(n => !/Exit|Flatten|Kill|Buy|Sell|Confirm/i.test(text(n))), 'Navigation never trades');
   assert.ok(actions.every(n => n.props.disabled), 'Trade actions need a confirmed matching live position');
@@ -1493,7 +1624,7 @@ test('terminal presentation has per-index hero cards, engine and exit-rule panel
     assert.match(nodes(tree).find(n => n.props?.id === `aqte-index-tab-${symbol}`).props.className, new RegExp(`aqte-tab-${symbol}`));
   }
   assert.equal(nodes(tree).filter(n => n.type === 'button' && !/aqx-deck-filter|aqx-eng-card|aqx-viewonly/.test(String(n.props?.className))).length,
-    23, '3 index tabs, 5 book tabs, 15 gated trade actions');
+    24, '3 index tabs, 5 book tabs, 15 gated trade actions and separate morning approval');
   cleanup();
 });
 
@@ -1506,6 +1637,107 @@ function liveFixture() {
     active: null, trades: [],
   };
 }
+
+function morningFixture(enabled = false) {
+  const now = Date.now() / 1000;
+  return {
+    ...liveFixture(), enabled: true, unvalidated_rules: true,
+    styles: { NIFTY: 'morning' }, style_checks: { NIFTY: { morning: null } },
+    morning: { generated_at: now, enabled, storage_backend: 'sqlite-wal', storage_configured: true, error: null, block: null,
+      last_commit: now, queue_size: 0, queue_capacity: 5000,
+      signals: { NIFTY: {
+        source: 'morning', decision: 'BUY CE', strategy: 'morning_gap_and_go', confidence: 90, at: now,
+        contract: { trading_symbol: 'MORNING_TEST_CE', expiry: '2026-11-10', lot_size: 15 },
+        entry: { maximum: 100, stop: 88, target: 136, quantity: 15, reward_risk: 2 },
+        reasons: ['Real opening-tick confirmation'],
+        rules: ['window', 'preparation', 'fresh', 'confirmation', 'direction', 'spot', 'depth', 'volume', 'setup', 'option', 'levels']
+          .map(id => ({ id, label: id, passed: true, reason: 'Confirmed test evidence' })),
+      } } },
+  };
+}
+
+test('morning source is validated independently without weakening original scalp/swing evidence', () => {
+  const display = displayModule();
+  const status = morningFixture();
+  assert.equal(display.isAqteLiveState(status), true);
+  const signal = { ...fixture().data.NIFTY, morning: status.morning.signals.NIFTY, intelligence: null, rule_checks: null };
+  assert.equal(display.aqteEffectiveSignal(signal, 'morning').strategy, 'morning_gap_and_go');
+  assert.equal(display.aqteRuleEvidence(signal, 'morning').checks.length, 11);
+  assert.equal(display.aqteRuleEvidence(signal, 'swing'), null);
+  const broken = structuredClone(status);
+  broken.morning.signals.NIFTY.rules[0].passed = false;
+  assert.equal(display.isAqteLiveState(broken), false);
+});
+
+test('morning approval requires a separate explicit confirmation and preserves owner headers', async () => {
+  const h = harness('AQTEMorningEngine.tsx');
+  const status = morningFixture();
+  let published;
+  const props = { status, symbol: 'NIFTY', onStatus: value => { published = value; } };
+  let tree = h.render(props);
+  const timeline = nodes(tree).find(n => n.props?.['aria-label'] === 'Morning session timeline');
+  assert.match(text(timeline), /09:00–09:07\s+IST.*Capture the open setup/);
+  assert.match(text(timeline), /09:07–09:15\s+IST.*Lock snapshot/);
+  assert.match(text(timeline), /09:15\+\s+IST.*risk-gated entries/);
+  assert.equal(nodes(tree).find(n => n.props?.className === 'aqx-morning-diagnostics').props.open, undefined);
+  const sectionSource = readFileSync(path.join(__dirname, '..', 'components', 'AQTESection.tsx'), 'utf8');
+  assert.ok(sectionSource.indexOf('<AQTEMorningEngine') < sectionSource.indexOf('<section className="aqx-dash-term"'));
+  assert.ok(sectionSource.indexOf('<AQTEMorningEngine') < sectionSource.indexOf('<AQTEEngineDeck'));
+  const styles = readFileSync(path.join(__dirname, '..', 'app', 'globals.css'), 'utf8');
+  assert.match(styles, /\.aqx-morning-board \{ grid-area: morning; \}/);
+  assert.match(styles, /grid-template-areas: "top top top" "perf perf perf" "morning morning morning" "term term term"/);
+  assert.match(styles, /grid-template-areas: "top top" "perf perf" "morning morning" "term term"/);
+  assert.match(styles, /"top" "perf" "morning" "term" "opp"/);
+  nodes(tree).find(n => n.type === 'button' && text(n) === 'Enable morning').props.onClick();
+  assert.equal(h.requests.length, 0);
+  tree = h.render(props);
+  assert.match(text(tree), /Approve Morning Edge real one-lot entries/);
+  h.respond(morningFixture(true));
+  nodes(tree).find(n => n.type === 'button' && text(n) === 'Confirm morning approval').props.onClick();
+  await settle();
+  assert.equal(h.requests.length, 1);
+  const { url, options } = h.requests[0];
+  assert.equal(url, '/api/aqte/live/morning');
+  assert.equal(options.credentials, 'include');
+  assert.equal(options.headers['X-Device-Id'], 'test-device');
+  assert.equal(options.headers['X-AQTE-Intent'], 'manual-live-control');
+  assert.equal(JSON.parse(options.body).confirmation, 'ENABLE MORNING REAL TRADING');
+  assert.equal(published.morning.enabled, true);
+});
+
+test('morning approval requires confirmed controller status and durable storage state', () => {
+  const h = harness('AQTEMorningEngine.tsx');
+  const status = morningFixture();
+  status.morning.storage_configured = false;
+  for (const value of [status, null, { ...status, generated_at: 1 }]) {
+    const tree = h.render({ status: value, symbol: 'NIFTY', onStatus() {} });
+    assert.ok(nodes(tree).filter(n => n.type === 'button').every(n => n.props.disabled));
+  }
+  assert.equal(h.requests.length, 0);
+});
+
+test('morning stop disables only new entries and reports authentication errors explicitly', async () => {
+  const h = harness('AQTEMorningEngine.tsx');
+  const props = { status: morningFixture(true), symbol: 'NIFTY', onStatus() {} };
+  h.respondHTTP(401, { detail: 'Owner session expired' });
+  const tree = h.render(props);
+  nodes(tree).find(n => n.type === 'button' && text(n) === 'Stop morning entries').props.onClick();
+  await settle();
+  assert.equal(JSON.parse(h.requests[0].options.body).confirmation, 'STOP MORNING ENTRIES');
+  assert.equal(h.accessExpired, 1);
+  assert.match(text(h.render(props)), /Owner session expired/);
+  assert.match(text(h.render(props)), /Protection continues after 10:30/);
+  assert.equal(h.requests.length, 1);
+});
+
+test('morning monitor shows actual shared-risk veto instead of implying a qualified signal was submitted', () => {
+  const h = harness('AQTEMorningEngine.tsx');
+  const status = morningFixture(true);
+  status.automation_on = true;
+  status.style_checks.NIFTY.morning = 'Daily index trade limit reached';
+  const tree = h.render({ status, symbol: 'NIFTY', onStatus() {} });
+  assert.match(text(tree), /Daily index trade limit reached/);
+});
 
 function livePositionFixture(overrides = {}) {
   return {
@@ -2694,7 +2926,7 @@ test('engine deck shows 12 live engines, rule details on demand and an honest ex
   assert.match(management, /Initial Stop Loss\s+₹90\.00/);
   assert.match(management, /Arms after fill/, 'No trailing before a broker-confirmed fill');
   assert.match(text(nodes(tree).find(n => n.props?.['aria-label'] === 'Live P&L current trade')), /No open trade/);
-  assert.match(text(nodes(tree).find(n => n.props?.['aria-label'] === 'Recent executions')), /No AQTE executions today/);
+  assert.match(text(nodes(tree).find(n => n.props?.['aria-label'] === 'Recent executions')), /Loading saved executions/);
   assert.match(text(nodes(tree).find(n => n.props?.['aria-label'] === 'Live engine events')), /NIFTY · Engine 01 \(Momentum\)/);
   // Analytics tabs: the Engine Signals view lists all 12 engines; arrow keys move between views.
   nodes(tree).find(n => n.props?.id === 'aqte-ctab-chart').props.onKeyDown({ key: 'ArrowRight', preventDefault() {},

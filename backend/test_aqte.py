@@ -806,24 +806,28 @@ class ServiceTests(unittest.TestCase):
                  tradingsymbol=f"NIFTY{strike}{side}", exchange="NFO", expiry="2026-11-03",
                  strike=strike, lot_size=65, tick_size=0.05)
             for side, token, strike in (("CE", 30, 22000), ("PE", 31, 22000), ("CE", 32, 22100))
-        ] if exchange == "NFO" else []
+        ] if exchange == "NFO" else [dict(name="OTHER", instrument_type="FUT", instrument_token=99)]
         with patch("services.aqte_service.time.time", return_value=NOW):
             self.service.configure(kite, socket, {"NIFTY": 22000})
             self.assertEqual(self.service.engine.contracts[30].lot_size, 65)
             self.assertEqual(socket.set_mode.call_args[0][1], [30, 31, 32])
             self.service.configure(kite, socket, {"NIFTY": 22000})
+            self.assertEqual(socket.subscribe.call_count, 1, "Unchanged subscriptions must not be sent every refresh")
+            self.service.configure(kite, socket, {"NIFTY": 22000}, force=True)
+            self.assertEqual(socket.subscribe.call_count, 2, "Reconnect must restore all selected subscriptions")
         self.assertEqual(kite.instruments.call_count, 2, "Daily catalog must be reused")
         kite.place_order.assert_not_called()
 
-    def test_recording_overflow_latches_fault_and_ui_waits(self):
+    def test_recording_overflow_blocks_affected_index_without_permanent_journal_fault(self):
         self.service.started = True
         self.service.queue = queue.Queue(maxsize=1)
         raw = dict(instrument_token=10, last_price=22000)
         self.service.enqueue("NIFTY", "spot", raw)
         self.service.enqueue("NIFTY", "spot", raw)
-        self.assertTrue(self.service.failed.is_set())
-        self.assertFalse(self.service.snapshot()["recording"])
-        self.assertTrue(all(s["decision"] == "WAIT" for s in self.service.snapshot()["data"].values()))
+        self.assertFalse(self.service.failed.is_set())
+        self.assertTrue(self.service.snapshot()["recording"])
+        self.assertIn("Feed recovery", self.service.snapshot()["data"]["NIFTY"]["reasons"][0])
+        self.assertEqual(self.service.gaps[10]["kind"], "spot")
 
     def test_authenticated_kill_and_bounded_journal(self):
         self.service.engine.paper_enabled = True

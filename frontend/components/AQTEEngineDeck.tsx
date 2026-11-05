@@ -1,7 +1,8 @@
 'use client';
 
 import { memo, useMemo, useState, type ReactNode } from 'react';
-import { aqteBlockLabel, aqteControllerCurrent, aqteDaySummary, aqteEffectiveSignal, aqteEngineView, aqteIndexHold, aqteLabel, aqteLiveMetrics,
+import AQTEExecutionHistory from '@/components/AQTEExecutionHistory';
+import { aqteBlockLabel, aqteControllerCurrent, aqteEffectiveSignal, aqteEngineView, aqteIndexHold, aqteLabel, aqteLiveMetrics,
   aqteOpportunitySymbol, aqteOverview, aqtePrice, aqteRanking, aqteSameJson, aqteSigned, aqteTrailStart,
   type AQTEEngine, type AQTEEngineEvent, type AQTEEnginePolicy, type AQTEEngineStatus,
   type AQTELiveState, type AQTEOrchestration, type AQTESignal, type AQTESymbol } from '@/lib/aqte-display';
@@ -62,7 +63,6 @@ type Props = {
   unavailable: boolean;
   now?: number;
   chart?: ReactNode;
-  onViewAll?: () => void;
 };
 
 function Icon({ path }: { path: string }) {
@@ -267,7 +267,7 @@ const OpportunityPanel = memo(function OpportunityPanel({ opp, maxLots }: { opp:
               {`${aligned} aligned · ${opposed} opposed${vetoed ? ' · Veto · WAIT' : ''}`}
             </p>
           )}
-          <p className="aqx-opp-contract">{contract?.trading_symbol ?? (top ? `${aqteLabel(top)} · ${style === 'scalp' ? 'Scalp' : 'Swing'}` : '--')}</p>
+          <p className="aqx-opp-contract">{contract?.trading_symbol ?? (top ? `${aqteLabel(top)} · ${style === 'morning' ? 'Morning' : style === 'scalp' ? 'Scalp' : 'Swing'}` : '--')}</p>
         </div>
         <div className="aqx-opp-ring" aria-label={`Rule score ${score != null ? `${Math.round(score)}%` : 'unavailable'}`}>
           <svg viewBox="0 0 72 72" aria-hidden="true">
@@ -312,7 +312,7 @@ const OpportunityPanel = memo(function OpportunityPanel({ opp, maxLots }: { opp:
   );
 });
 
-function AQTEEngineDeck({ symbol, data, liveStatus, events, policy, unavailable, now = Date.now() / 1000, chart, onViewAll }: Props) {
+function AQTEEngineDeck({ symbol, data, liveStatus, events, policy, unavailable, now = Date.now() / 1000, chart }: Props) {
   const [filter, setFilter] = useState<Filter>('ALL');
   const [open, setOpen] = useState<number | null>(null);
   const [tab, setTab] = useState<ChartTab>('chart');
@@ -348,20 +348,9 @@ function AQTEEngineDeck({ symbol, data, liveStatus, events, policy, unavailable,
     ['Target', hasLevels ? <>{rupees(active?.target ?? plan?.target)} <small>({percent(move(base, active?.target ?? plan?.target))})</small></> : '--', hasLevels ? 'aqx-buy' : ''],
   ];
 
-  const day = aqteDaySummary(liveStatus, now);
-  const executions = current ? [
-    ...(active ? [{ key: active.id, at: active.fill_at ?? active.entry_at, instrument: active.contract.trading_symbol,
-      qty: Math.max(0, active.filled - (active.exited ?? 0)), pnl: metrics?.net_pnl ?? null, pct: metrics?.return_pct ?? null,
-      status: filled ? 'Open' : 'Pending' }] : []),
-    ...[...day.trades].reverse().map((trade, index) => ({ key: `${trade.exit_at}:${index}`, at: trade.entry_at ?? trade.exit_at,
-      instrument: trade.contract?.trading_symbol ?? aqteLabel(trade.symbol), qty: trade.filled ?? null,
-      pnl: trade.exit_unverified ? null : trade.net_pnl,
-      pct: move(trade.entry_price, trade.exit_price), status: 'Exited' })),
-  ].slice(0, 4) : [];
-
   const checks: Check[] = [
     { label: 'Rule Setup', state: actionable ? 'pass' : 'wait',
-      value: actionable ? `${effective?.decision} · ${style === 'scalp' ? 'Scalp' : 'Swing'}` : 'WAIT' },
+      value: actionable ? `${effective?.decision} · ${style === 'morning' ? 'Morning' : style === 'scalp' ? 'Scalp' : 'Swing'}` : 'WAIT' },
     { label: 'Signal Aggregation', state: aligned == null ? 'wait' : vetoed ? 'fail' : 'pass',
       value: aligned == null ? '--' : `${aligned} aligned · ${opposed} opposed` },
     { label: 'Conflict Check', state: !topView ? 'wait' : topView.orchestration.conflict ? vetoed ? 'fail' : 'wait' : 'pass',
@@ -459,23 +448,7 @@ function AQTEEngineDeck({ symbol, data, liveStatus, events, policy, unavailable,
           </ul>
           <p className={`aqx-sent ${sent[1]}`}><span aria-hidden="true">→</span>{sent[0]}</p>
         </section>
-        <section className="aqx-card aqx-panel" aria-label="Recent executions">
-          <h3 className="aqx-panel-head"><span aria-hidden="true" className="aqx-net">↻</span>Recent Executions <span>(Live)</span>
-            {onViewAll && <button type="button" className="aqx-link aqx-viewonly" onClick={onViewAll}>View All</button>}</h3>
-          <table className="aqx-mini-table aqx-exec-table">
-            <thead><tr><th>Time</th><th>Instrument</th><th>Side</th><th>Qty</th><th>P&amp;L (₹)</th><th>P&amp;L %</th><th>Status</th></tr></thead>
-            <tbody>
-              {executions.length ? executions.map(row => (
-                <tr key={row.key}>
-                  <td>{clock.format(new Date(row.at * 1000))}</td><td className="aqx-ellipsis">{row.instrument}</td>
-                  <td><span className="aqx-side-chip aqx-chip-ce">BUY</span></td><td>{quantity(row.qty)}</td>
-                  <td className={valueTone(row.pnl)}>{aqteSigned(row.pnl)}</td><td className={valueTone(row.pct)}>{percent(row.pct)}</td>
-                  <td><span className={`aqx-status-chip ${row.status === 'Open' ? 'aqx-status-open' : ''}`}>{row.status}</span></td>
-                </tr>
-              )) : <tr><td colSpan={7} className="aqx-empty-row">{current ? 'No AQTE executions today' : 'Execution history unavailable'}</td></tr>}
-            </tbody>
-          </table>
-        </section>
+        <AQTEExecutionHistory liveStatus={liveStatus} now={now} />
       </div>
 
       <EngineBoard symbol={symbol} engines={engines} orchestration={view?.orchestration ?? null} online={!!view}

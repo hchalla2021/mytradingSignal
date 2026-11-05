@@ -104,6 +104,8 @@ class Settings(BaseSettings):
     aqte_live_static_ip: str = "122.177.245.101"
     # Real-money opt-in: lets fully aligned, unvalidated rule setups enter one lot.
     aqte_live_allow_unvalidated_rules: bool = False
+    # Existing PostgreSQL server; never expose this URL in API diagnostics.
+    aqte_morning_postgres_url: str = Field(default="", repr=False, exclude=True)
     # Max one-lot loss (premium to stop + estimated costs); half the daily loss lets two losers fit a day.
     aqte_live_risk_per_trade: float = Field(default=1000, gt=0, le=2000)
     aqte_live_daily_loss: float = Field(default=2000, gt=0, le=2000)

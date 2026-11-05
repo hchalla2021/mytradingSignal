@@ -3,15 +3,17 @@ import type { PositionMetrics } from '@/components/AQTEPosition';
 export type AQTESymbol = 'NIFTY' | 'BANKNIFTY' | 'SENSEX';
 export type AQTEMode = 'paper' | 'real';
 export type AQTEStyle = 'scalp' | 'swing';
+export type AQTEEntrySource = AQTEStyle | 'morning';
 export type AQTEStyleSelection = AQTEStyle | 'both' | 'none';
-export type AQTEStyleChecks = Partial<Record<AQTEStyle, string | null>>;
+export type AQTEStyleChecks = Partial<Record<AQTEEntrySource, string | null>>;
 export type AQTELiveState = {
   generated_at: number;
   daily_counts: { executed: number; reserved: number };
   enabled: boolean; unvalidated_rules?: boolean; expected_ip: string;
   ready: boolean; armed: boolean; automation_on: boolean; killed: boolean;
   automation_wanted?: boolean; automation_waiting?: string | null; entry_window?: boolean;
-  entry_note?: string | null; styles?: Partial<Record<AQTESymbol, AQTEStyle | null>>;
+  entry_note?: string | null; styles?: Partial<Record<AQTESymbol, AQTEEntrySource | null>>;
+  morning?: AQTEMorningStatus | null;
   style_checks?: Partial<Record<AQTESymbol, AQTEStyleChecks>>;
   trail_starts?: Partial<Record<AQTESymbol, number>>;
   /** Controls' swing setup switches per index; lets the UI mirror the controller's enabled-setup swap. */
@@ -21,7 +23,7 @@ export type AQTELiveState = {
   entry_plans?: Partial<Record<AQTESymbol, AQTEEntryPlan | null>>;
   entry_scan?: {
     at: number; blocks: Partial<Record<AQTESymbol, string>>;
-    styles: Partial<Record<AQTESymbol, AQTEStyle | null>>;
+    styles: Partial<Record<AQTESymbol, AQTEEntrySource | null>>;
   } | null;
   ranking?: AQTESymbol[];
   flatten_pending?: boolean; error: string | null; connection_error?: string;
@@ -65,10 +67,10 @@ const optionalNumber = (value: unknown) => value === undefined || finite(value);
 const nullableNumber = (value: unknown) => value === null || finite(value);
 const nullableText = (value: unknown) => value === null || typeof value === 'string';
 const symbolName = (value: unknown) => value === 'NIFTY' || value === 'BANKNIFTY' || value === 'SENSEX';
-const selectedStyle = (value: unknown) => value === null || value === 'scalp' || value === 'swing';
+const selectedStyle = (value: unknown) => value === null || value === 'scalp' || value === 'swing' || value === 'morning';
 export const isAqteStyleChecks = (value: unknown): value is AQTEStyleChecks =>
   record(value) && !Array.isArray(value) && Object.entries(value).every(([style, reason]) =>
-    (style === 'scalp' || style === 'swing') && nullableText(reason));
+    (style === 'scalp' || style === 'swing' || style === 'morning') && nullableText(reason));
 
 export function isAqteLiveState(value: unknown): value is AQTELiveState {
   if (!record(value) || !finite(value.generated_at) ||
@@ -80,6 +82,7 @@ export function isAqteLiveState(value: unknown): value is AQTELiveState {
       (value.entry_window !== undefined && typeof value.entry_window !== 'boolean') ||
       (value.automation_waiting !== undefined && !nullableText(value.automation_waiting)) ||
       (value.entry_note !== undefined && !nullableText(value.entry_note)) ||
+      (value.morning !== undefined && value.morning !== null && !isAqteMorningStatus(value.morning)) ||
       (value.styles !== undefined && (!record(value.styles) ||
         !Object.entries(value.styles).every(([key, style]) => symbolName(key) && selectedStyle(style)))) ||
       (value.style_checks !== undefined && (!record(value.style_checks) || Array.isArray(value.style_checks) ||
@@ -190,7 +193,9 @@ const SWING_SETUP_RULES: Record<AQTESwingSetup, readonly string[]> = {
 };
 const SCALP_RULES = ['ema', 'vwap', 'supertrend', 'rsi', 'breakout', 'volume', 'imbalance', 'extension'] as const;
 
-export type AQTERuleId = 'ema' | 'vwap' | 'supertrend' | 'rsi' | 'breakout' | 'volume' | 'imbalance' | 'extension' | 'cpr' |
+const MORNING_RULE_IDS = ['window', 'preparation', 'fresh', 'confirmation', 'direction', 'spot', 'depth', 'volume', 'setup', 'option', 'levels'] as const;
+type AQTEMorningRuleId = typeof MORNING_RULE_IDS[number];
+export type AQTERuleId = AQTEMorningRuleId | 'ema' | 'vwap' | 'supertrend' | 'rsi' | 'breakout' | 'volume' | 'imbalance' | 'extension' | 'cpr' |
   'structure' | 'pullback' | 'resume' | 'sweep' | 'trend_filter' | 'confirm' | 'stretch' | 'range' | 'turn';
 export type AQTERuleEvidence = {
   side: 'CE' | 'PE' | null;
@@ -204,6 +209,46 @@ export type AQTESetupCandidate = {
 };
 
 export type AQTEContract = { trading_symbol: string; expiry: string; lot_size?: number; strike?: number; side?: 'CE' | 'PE' };
+export type AQTEMorningSignal = {
+  source: 'morning'; decision: 'WAIT' | 'BUY CE' | 'BUY PE'; strategy: string | null; confidence: number | null;
+  reasons: string[]; at: number; contract: AQTEContract | null;
+  entry: { maximum: number; stop: number; target: number; reward_risk: number; quantity: number; points?: number } | null;
+  rules: Array<{ id: AQTEMorningRuleId; label: string; passed: boolean; reason: string }>;
+  evidence?: Record<string, unknown>;
+};
+export type AQTEMorningStatus = {
+  generated_at: number; enabled: boolean; storage_backend: 'sqlite-wal' | 'postgresql'; storage_configured: boolean;
+  error: string | null; block: string | null; last_commit: number | null; queue_size: number; queue_capacity: number;
+  signals: Partial<Record<AQTESymbol, AQTEMorningSignal>>; captured_ticks?: Partial<Record<'spot' | 'future' | 'option', number>>;
+};
+export function isAqteMorningSignal(value: unknown): value is AQTEMorningSignal {
+  if (!record(value) || value.source !== 'morning' || !['WAIT', 'BUY CE', 'BUY PE'].includes(String(value.decision)) ||
+      !nullableText(value.strategy) || !nullableNumber(value.confidence) || !finite(value.at) ||
+      !Array.isArray(value.reasons) || !value.reasons.every(reason => typeof reason === 'string') ||
+      !Array.isArray(value.rules) || !value.rules.every(rule => record(rule) &&
+        MORNING_RULE_IDS.some(id => id === rule.id) &&
+        ['label', 'reason'].every(key => typeof rule[key] === 'string') && typeof rule.passed === 'boolean')) return false;
+  if (value.decision === 'WAIT') return value.entry === null && value.contract === null;
+  const entry = value.entry;
+  return finite(value.confidence) && value.confidence >= 0 && value.confidence <= 100 &&
+    value.rules.length === MORNING_RULE_IDS.length && new Set(value.rules.map(rule => rule.id)).size === MORNING_RULE_IDS.length &&
+    value.rules.every(rule => rule.passed === true) &&
+    record(value.contract) && typeof value.contract.trading_symbol === 'string' &&
+    typeof value.contract.expiry === 'string' && record(entry) &&
+    ['maximum', 'stop', 'target', 'reward_risk', 'quantity'].every(key => finite(entry[key])) &&
+    0 < Number(entry.stop) && Number(entry.stop) < Number(entry.maximum) &&
+    Number(entry.maximum) < Number(entry.target);
+}
+export function isAqteMorningStatus(value: unknown): value is AQTEMorningStatus {
+  return record(value) && finite(value.generated_at) && typeof value.enabled === 'boolean' &&
+    (value.storage_backend === 'sqlite-wal' || value.storage_backend === 'postgresql') &&
+    typeof value.storage_configured === 'boolean' && nullableText(value.error) && nullableText(value.block) &&
+    nullableNumber(value.last_commit) && count(value.queue_size) && count(value.queue_capacity) &&
+    (value.captured_ticks === undefined || record(value.captured_ticks) &&
+      Object.entries(value.captured_ticks).every(([key, amount]) =>
+        ['spot', 'future', 'option'].includes(key) && count(amount))) &&
+    record(value.signals) && Object.entries(value.signals).every(([key, signal]) => symbolName(key) && isAqteMorningSignal(signal));
+}
 export type AQTESignal = {
   feed_ready?: boolean;
   decision: 'WAIT' | 'BUY CE' | 'BUY PE';
@@ -212,6 +257,7 @@ export type AQTESignal = {
   spot: number | null;
   at: number | null;
   strategy?: string;
+  morning?: AQTEMorningSignal | null;
   warmup?: { completed: number; required: number };
   opening?: { completed: number; required: number };
   rule_checks?: Record<AQTEStyle, AQTERuleEvidence> | null;
@@ -303,7 +349,13 @@ export function aqteTradedSetup(signal: AQTESignal | undefined | null, enabled: 
 }
 
 /** Rule evidence for what the controller would trade in this style (swing follows the enabled-setup swap). */
-export function aqteRuleEvidence(signal: AQTESignal | undefined, style: AQTEStyle, enabled?: AQTESetupSwitches) {
+export function aqteRuleEvidence(signal: AQTESignal | undefined, style: AQTEEntrySource, enabled?: AQTESetupSwitches): AQTERuleEvidence | null {
+  if (style === 'morning') {
+    const morning = signal?.morning;
+    if (!isAqteMorningSignal(morning)) return null;
+    return { side: morning.decision === 'BUY CE' ? 'CE' : morning.decision === 'BUY PE' ? 'PE' : null,
+      checks: morning.rules.map(rule => ({ ...rule, requirement: rule.reason })) };
+  }
   if (!isAqteRuleChecks(signal?.rule_checks)) return null;
   const traded = style === 'swing' ? aqteTradedSetup(signal, enabled) : null;
   if (!traded) return signal.rule_checks[style];
@@ -440,10 +492,13 @@ export function aqteEngineView(signal: AQTESignal | undefined) {
 }
 
 /** Mirrors the live controller: scalp style trades the quick-scalp sub-signal, swing the main signal (or its enabled-setup swap). */
-export function aqteEffectiveSignal(signal: AQTESignal | undefined, style: AQTEStyle | null = 'scalp', enabled?: AQTESetupSwitches) {
+export function aqteEffectiveSignal(signal: AQTESignal | undefined, style: AQTEEntrySource | null = 'scalp', enabled?: AQTESetupSwitches) {
   if (!signal) return null;
   if (style === null) return { decision: 'WAIT' as const, confidence: null, contract: null, entry: null,
     strategy: null, reasons: ['No entry style selected in Controls'] };
+  if (style === 'morning') return isAqteMorningSignal(signal.morning) ? signal.morning : {
+    decision: 'WAIT' as const, confidence: null, contract: null, entry: null,
+    strategy: null, reasons: ['Morning evidence unavailable'] };
   if (style !== 'scalp') {
     const traded = aqteTradedSetup(signal, enabled);
     return { decision: signal.decision, confidence: traded ? finite(traded.score) ? traded.score : null : signal.confidence,
@@ -457,7 +512,7 @@ export function aqteEffectiveSignal(signal: AQTESignal | undefined, style: AQTES
 }
 
 /** Same ordering as the backend rank_key: actionable entry, aligned satisfied engines, then rule score. */
-export function aqteRankKey(signal: AQTESignal | undefined, style: AQTEStyle | null = 'scalp',
+export function aqteRankKey(signal: AQTESignal | undefined, style: AQTEEntrySource | null = 'scalp',
   enabled?: AQTESetupSwitches): [number, number, number] {
   const effective = aqteEffectiveSignal(signal, style, enabled);
   const side = effective && effective.decision !== 'WAIT' && effective.entry ? effective.decision.slice(-2) as 'CE' | 'PE' : null;

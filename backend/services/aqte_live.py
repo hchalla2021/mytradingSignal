@@ -11,6 +11,7 @@ import re
 import sqlite3
 import threading
 import time
+from collections import deque
 from contextlib import closing
 from dataclasses import asdict
 from datetime import datetime
@@ -21,9 +22,11 @@ import requests
 from kiteconnect import KiteConnect
 
 from config import get_settings
-from services.aqte_engine import Contract, IST, Policy, SYMBOLS, day, round_tick, session
+from services.aqte_engine import Contract, IST, Policy, SYMBOLS, day, opportunity_key, round_tick, session
 from services.aqte_daily_control import IndexControl, SwingSetups, counts, defaults, quality_reason
 from services.aqte_engines import EngineConfig, rank_key, veto_reason
+from services.aqte_runtime import Latencies
+from services.aqte_execution_history import bootstrap_executions, capture_context, save_execution
 
 logger = logging.getLogger(__name__)
 TERMINAL = {"COMPLETE", "CANCELLED", "REJECTED"}
@@ -109,6 +112,7 @@ class AQTELiveService:
         self.waiting = None
         self.entry_note = None
         self.skip_until = {}
+        self.skip_reasons = {}
         self.entry_scan = None
         self.next_scan_audit = 0.0
         self.next_activation = 0.0
@@ -118,6 +122,16 @@ class AQTELiveService:
         self.owner_file = None
         self.kill_sent = {}
         self.kill_seen = set()
+        self.metrics = Latencies()
+        self.loop = None
+        self.wake_event = asyncio.Event()
+        self.order_dirty = threading.Event()
+        self.update_lock = threading.Lock()
+        self.broker_updates = deque(maxlen=50)
+        self.opportunities = {}
+        self.prepared_day = None
+        self.prepare_after = 0.0
+        self.prepare_error = None
 
     def acquire_owner(self):
         self.owner_file = open(str(self.path) + ".lock", "a+b")
@@ -146,14 +160,25 @@ class AQTELiveService:
         self.acquire_owner()
         with closing(sqlite3.connect(str(self.path), timeout=10)) as db, db:
             db.execute("PRAGMA journal_mode=WAL")
+            history_exists = db.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='live_executions'").fetchone() is not None
             db.executescript("""
                 CREATE TABLE IF NOT EXISTS live_state (id INTEGER PRIMARY KEY CHECK(id=1), payload TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS live_audit (
                     id INTEGER PRIMARY KEY, at REAL NOT NULL, kind TEXT NOT NULL, payload TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS live_opportunities (
+                    opportunity_key TEXT PRIMARY KEY, at REAL NOT NULL, payload TEXT NOT NULL);
+                CREATE INDEX IF NOT EXISTS live_opportunity_time ON live_opportunities(at);
+                CREATE TABLE IF NOT EXISTS live_executions (
+                    id TEXT PRIMARY KEY, at REAL NOT NULL, payload TEXT NOT NULL);
+                CREATE INDEX IF NOT EXISTS live_execution_time ON live_executions(at,id);
             """)
             row = db.execute("SELECT payload FROM live_state WHERE id=1").fetchone()
             if row:
                 self.state = json.loads(row[0])
+            bootstrap_executions(db, self.state, force=not history_exists)
+            self.opportunities = {key: json.loads(payload) for key, payload in reversed(db.execute(
+                "SELECT opportunity_key,payload FROM live_opportunities ORDER BY at DESC LIMIT 512").fetchall())}
         self.state["armed_day"] = None
         self.state["automation_on"] = False
         self.state.setdefault("daily_controls", defaults())
@@ -205,6 +230,14 @@ class AQTELiveService:
                            (json.dumps(self.state, allow_nan=False),))
                 db.execute("INSERT INTO live_audit(at,kind,payload) VALUES(?,?,?)",
                            (time.time(), kind, json.dumps(payload, allow_nan=False)))
+                execution = payload.get("execution") or payload.get("trade") or self.state.get("active")
+                if execution:
+                    save_execution(db, execution, time.time())
+                if kind == "OPPORTUNITY":
+                    record = payload["record"]
+                    db.execute("INSERT INTO live_opportunities VALUES(?,?,?) ON CONFLICT(opportunity_key) "
+                               "DO UPDATE SET at=excluded.at,payload=excluded.payload",
+                               (record["key"], record["at"], json.dumps(record, allow_nan=False)))
         except (sqlite3.Error, OSError, ValueError):
             self.ready = False
             self.state["armed_day"] = None
@@ -212,6 +245,16 @@ class AQTELiveService:
             self.state["automation_wanted"] = False
             logger.exception("AQTE live journal failed; broker mutations blocked")
             raise
+        morning = self.morning_service()
+        if morning is not None:
+            active = self.state.get("active")
+            morning.active_token = active["contract"]["token"] if active and str(
+                active.get("strategy", "")).startswith("morning_") else None
+        if morning is not None and kind == "OPPORTUNITY" and payload["record"].get("style") == "morning":
+            morning.audit("OPPORTUNITY", payload["record"], payload["record"]["symbol"])
+        if morning is not None and execution and str(execution.get("strategy", "")).startswith("morning_"):
+            from services.aqte_execution_history import execution_record
+            morning.audit("EXECUTION_" + kind, execution_record(execution, time.time()), execution.get("symbol"))
 
     def status(self):
         with self.lock:
@@ -262,6 +305,9 @@ class AQTELiveService:
                 "ranking": sorted(snapshot["data"], key=lambda symbol: rank_key(
                     selections[symbol]["signal"]), reverse=True),
                 "ready": self.ready, "trades": copy.deepcopy(visible_trades),
+                "morning": {**self.morning_service().snapshot(),
+                            "enabled": self.state.get("morning_enabled") is True}
+                           if self.morning_service() is not None else None,
                 "limits": {"risk_per_trade": cfg.aqte_live_risk_per_trade,
                            "daily_loss": cfg.aqte_live_daily_loss, "max_trades": cfg.aqte_live_max_trades,
                            "max_losses": cfg.aqte_live_max_losses, "max_lots": 1},
@@ -288,6 +334,10 @@ class AQTELiveService:
                 "entry": scalp.get("entry"), "reasons": scalp.get("reasons") or ["Waiting for a quick-scalp setup"]}))
         if allowed in ("swing", "both"):
             candidates.append(("swing", self.enabled_setup(control, signal)))
+        if self.state.get("morning_enabled") is True and isinstance(signal.get("morning"), dict):
+            morning = signal["morning"]
+            candidates.append(("morning", {**morning, "engines": signal.get("engines") or [],
+                                           "orchestration": signal.get("orchestration")}))
         if not candidates:
             waiting = {**signal, "decision": "WAIT", "strategy": None, "confidence": None,
                        "contract": None, "entry": None, "reasons": ["No entry style selected in Controls"]}
@@ -317,9 +367,9 @@ class AQTELiveService:
     @staticmethod
     def setup_key(symbol, signal):
         # One entry per strategy candle; scalp tier changes inside the candle are the same setup.
-        strategy = str(signal.get("strategy"))
-        strategy = "quick_scalp" if strategy.startswith("quick_scalp") else strategy
-        return f'{symbol}:{strategy}:{signal["intelligence"]["at"]}:{signal["contract"]["token"]}'
+        if signal.get("source") == "morning":
+            return f'{symbol}:morning:{signal["intelligence"]["at"]}:{signal["decision"][-2:]}'
+        return opportunity_key(symbol, signal)
 
     def control_reason(self, symbol, signal):
         control = self.state["daily_controls"][symbol]
@@ -344,12 +394,43 @@ class AQTELiveService:
                     return "Duplicate/near-identical contract entry blocked"
         if signal.get("decision") not in ("BUY CE", "BUY PE") or not signal.get("entry"):
             return "; ".join(signal.get("reasons") or ["No confirmed LONG CE/PE opportunity"])
-        reason = quality_reason(signal, control, self.settings().aqte_live_allow_unvalidated_rules)
+        if signal.get("source") == "morning":
+            morning = self.morning_service()
+            if self.state.get("morning_enabled") is not True or morning is None:
+                return "Separate owner approval for Morning Trade Engine is OFF"
+            reason = morning.quality_reason(symbol, signal, control["min_confidence"],
+                                            self.settings().aqte_live_allow_unvalidated_rules)
+        else:
+            reason = quality_reason(signal, control, self.settings().aqte_live_allow_unvalidated_rules)
         if reason:
             return reason
         # The 12 engines never approve an entry; they can only block one they clearly oppose.
         config = getattr(self.service(), "engine_config", None)
         return veto_reason(signal, config if isinstance(config, EngineConfig) else EngineConfig())
+
+    def morning_service(self):
+        from services.aqte_morning import MorningService
+        service = getattr(self.service(), "morning", None)
+        return service if isinstance(service, MorningService) else None
+
+    def set_morning(self, enabled):
+        with self.lock:
+            if not self.ready:
+                raise LiveBlocked("Live journal unavailable; morning approval was not saved")
+            morning = self.morning_service()
+            if enabled:
+                self.config_guard()
+                if self.state["killed"]:
+                    raise LiveBlocked("Emergency stop is latched; morning approval was not changed")
+                if morning is None or not morning.store.configured:
+                    raise LiveBlocked("Morning durable market-data storage is unavailable")
+                if not self.settings().aqte_live_allow_unvalidated_rules:
+                    raise LiveBlocked("Morning rules are not validated; existing unvalidated-rule opt-in is required")
+            self.state["morning_enabled"] = bool(enabled)
+            self.proposals.clear()
+            self.save("MORNING_APPROVAL", enabled=bool(enabled))
+            self.wake()
+            return self.status()
 
     def entry_reason(self, symbol, signal):
         """Read-only rule/risk checks shared by status and Controls; never calls the broker."""
@@ -612,6 +693,14 @@ class AQTELiveService:
             candidate = {**signal, "contract": asdict(contract), "avoided": held["trading_symbol"], "entry": {
                 **signal["entry"], "low": round_tick(quote.bid, contract.tick_size), "high": limit,
                 "maximum": limit, "quantity": contract.lot_size}}
+            if signal.get("source") == "morning":
+                from services.aqte_morning import option_levels
+                if quote.bid_quantity < contract.lot_size:
+                    continue
+                candidate["entry"], model = option_levels(
+                    contract, quote, spot.price, signal["evidence"]["atr"], time.time(),
+                    market.engine_config.risk_free_rate)
+                candidate["evidence"] = {**signal["evidence"], "option": asdict(quote), "greeks": model}
             if self.control_reason(symbol, candidate):
                 continue
             try:
@@ -742,7 +831,7 @@ class AQTELiveService:
                     blocks[symbol] = "This strategy candle was already submitted"
                     continue
                 if time.time() < self.skip_until.get(symbol, 0):
-                    blocks[symbol] = "Entry retry cooldown after a transient price/quote check"
+                    blocks[symbol] = "Entry retry cooldown: " + self.skip_reasons.get(symbol, "Transient price/quote check")
                     continue
                 try:
                     proposal = self.proposal(symbol, busy)
@@ -750,6 +839,7 @@ class AQTELiveService:
                 except EntrySkipped as exc:
                     # Price/quote moved between signal and broker checks: retry shortly, stay armed.
                     self.skip_until[symbol] = time.time() + ENTRY_RETRY_SECONDS
+                    self.skip_reasons[symbol] = str(exc)
                     note = f"{symbol}: {exc}"
                     if note != self.entry_note:
                         logger.info("AQTE automated entry skipped: %s", note)
@@ -799,6 +889,7 @@ class AQTELiveService:
                       "strategy": f'quick_scalp_{entry["points"]:g}' if "points" in entry else signal.get("strategy"),
                       "entry": entry, "risk": round(risk, 2), "signal_at": signal["at"],
                       "expires_at": now + 15, "setup_key": setup_key}
+            result["execution_context"] = capture_context(signal, result["strategy"], entry)
             if signal.get("avoided"):
                 result["avoided"] = signal["avoided"]
             self.proposals[key] = copy.deepcopy(result)
@@ -809,7 +900,13 @@ class AQTELiveService:
         control = self.state["daily_controls"][symbol]
         entry = copy.deepcopy(signal["entry"])
         cap = self.settings().aqte_live_risk_per_trade
-        if str(signal.get("strategy")).startswith("quick_scalp"):
+        if signal.get("source") == "morning":
+            distance = entry.get("risk_distance")
+            if not isinstance(distance, (int, float)) or not math.isfinite(distance) or distance <= 0:
+                raise EntrySkipped("Morning ATR/premium-based risk distance is unavailable")
+            entry["stop"] = round_tick(entry["maximum"] - distance, contract.tick_size)
+            entry["target"] = round_tick(entry["maximum"] + distance * 3, contract.tick_size, up=True)
+        elif str(signal.get("strategy")).startswith("quick_scalp"):
             entry = self.scalp_levels(contract, entry, cap)
         else:
             distance = entry["maximum"] * control["stop_percent"] / 100
@@ -859,7 +956,8 @@ class AQTELiveService:
             if proposal is None or time.time() >= proposal["expires_at"]:
                 raise LiveBlocked("Order approval expired or already used; review a new proposal")
             broker = self.broker()
-            book = self.entry_guard(broker)
+            with self.metrics.measure("execution.risk_guard"):
+                book = self.entry_guard(broker)
             if proposal["setup_key"] in self.state["used"]:
                 raise LiveBlocked("This strategy candle was already submitted")
             # Re-evaluate the backend setup; never trust browser prices or quantity.
@@ -879,36 +977,63 @@ class AQTELiveService:
                 raise EntrySkipped(reason)
             control = self.state["daily_controls"][proposal["symbol"]]
             c, entry = proposal["contract"], proposal["entry"]
+            verified = Contract(**c)
+            if verified.symbol != proposal["symbol"] or verified.exchange != (
+                "BFO" if verified.symbol == "SENSEX" else "NFO"
+            ) or datetime.fromisoformat(verified.expiry).date() < datetime.fromtimestamp(time.time(), IST).date():
+                raise LiveBlocked("Contract exchange, underlying or expiry does not match the approved option")
             key = f'{c["exchange"]}:{c["trading_symbol"]}'
-            raw = broker.quote([key])[key]
+            with self.metrics.measure("broker.quote"):
+                raw = broker.quote([key])[key]
             from services.aqte_service import normalize
             quote = normalize(proposal["symbol"], "option", {
                 **raw, "exchange_timestamp": raw.get("timestamp"), "volume_traded": raw.get("volume"),
             }, time.time())
             now = time.time()
+            if quote.token != c["token"]:
+                raise LiveBlocked("Broker quote token does not match the approved option contract")
             if not 0 <= now - quote.at <= 5 or not 0 < quote.bid <= quote.ask or (
                 quote.ask_quantity < c["lot_size"] or quote.ask > entry["maximum"] or
                 quote.ask <= entry["stop"] or (quote.ask - quote.bid) / quote.ask > 0.03
             ):
                 raise EntrySkipped("Fresh broker ask/depth does not fit the approved no-chase limit")
-            available = float(broker.margins("equity")["available"]["cash"])
+            with self.metrics.measure("broker.margins"):
+                available = float(broker.margins("equity")["available"]["cash"])
             if not math.isfinite(available) or available < entry["maximum"] * c["lot_size"] + self.costs(entry["maximum"], c["lot_size"]):
                 # Owner trades can tie up margin for a while; retry instead of disarming automation.
                 raise EntrySkipped("Insufficient broker cash for the one-lot premium; retrying")
             if time.time() >= proposal["expires_at"]:
                 raise EntrySkipped("Approval expired during broker checks; review again")
             market = self.service()
-            with market.lock:
+            with market.lock, market.health_lock:
+                if market.engine.contracts.get(c["token"]) != verified:
+                    raise EntrySkipped("Contract metadata changed during broker checks; review a fresh proposal")
                 if not market.started or market.failed.is_set() or market.engine.killed or (
+                    market.feed_connected is False or
+                    any(gap["symbol"] == proposal["symbol"] for gap in market.gaps.values()) or
+                    (market.evaluators is not None and (
+                        market.configured_days.get(c["exchange"]) != day(time.time()) or market.subscription_error)) or
                     not market.engine.fresh(market.engine.options.get(c["token"]), time.time()) or
                     not market.engine.fresh(market.engine.spot.get(proposal["symbol"]), time.time()) or
                     not market.engine.fresh(market.engine.future.get(proposal["symbol"]), time.time())
                 ):
                     raise EntrySkipped("Streaming quote became stale during broker checks")
+                latest = self.proposal(proposal["symbol"], book["busy"])
+                self.proposals.pop(latest["id"], None)
+                if latest["contract"] != c or latest["setup_key"] != proposal["setup_key"] or (
+                    latest["risk"] > proposal["risk"] or latest["entry"]["maximum"] > entry["maximum"] or
+                    quote.ask > latest["entry"]["maximum"] or quote.ask <= latest["entry"]["stop"]
+                ):
+                    raise EntrySkipped("Latest signal/risk no longer fits the approved broker quote")
+                if time.time() >= proposal["expires_at"]:
+                    raise EntrySkipped("Approval expired during final signal checks")
+                proposal = {**latest, "expires_at": proposal["expires_at"]}
+                entry, now = proposal["entry"], time.time()
             # Persist the unique intent BEFORE sending. A timeout is not a rejection.
             active = {
                 "id": uuid4().hex[:16], "symbol": proposal["symbol"], "contract": c,
                 "strategy": proposal.get("strategy"),
+                "execution_context": copy.deepcopy(proposal["execution_context"]),
                 "quantity": c["lot_size"], "limit": entry["maximum"], "stop": entry["stop"],
                 "initial_stop": entry["stop"], "target": entry["target"], "peak": 0,
                 "trailing_active": False,
@@ -916,6 +1041,7 @@ class AQTELiveService:
                 "state": "ENTRY_UNKNOWN", "entry_id": None, "protect_id": None,
                 "filled": 0, "entry_price": 0, "entry_at": now, "account": self.state["account"],
                 "signal_at": proposal["signal_at"],
+                "setup_key": proposal["setup_key"],
                 "entry_day": day(now), "exit_requested": None, "error": None,
             }
             self.state["active"] = active
@@ -923,20 +1049,25 @@ class AQTELiveService:
                                                    filled=False, pending=True, token=c["token"], price=entry["maximum"]))
             self.state["used"].append(proposal["setup_key"])
             self.save("ENTRY_INTENT", proposal=proposal, tag=active["id"] + "E")
+            self.metrics.observe("execution.signal_to_intent", max(0, now - proposal["signal_at"]) * 1000)
+            self.metrics.increment("orders_submitted")
             try:
-                order_id = broker.place_order(
-                    variety="regular", exchange=c["exchange"], tradingsymbol=c["trading_symbol"],
-                    transaction_type="BUY", quantity=c["lot_size"], product="MIS",
-                    order_type="LIMIT", price=entry["maximum"], validity="IOC", tag=active["id"] + "E")
+                with self.metrics.measure("broker.entry_submission"):
+                    order_id = broker.place_order(
+                        variety="regular", exchange=c["exchange"], tradingsymbol=c["trading_symbol"],
+                        transaction_type="BUY", quantity=c["lot_size"], product="MIS",
+                        order_type="LIMIT", price=entry["maximum"], validity="IOC", tag=active["id"] + "E")
                 if not order_id:
                     raise ValueError("Broker did not return an order ID")
                 active.update(entry_id=str(order_id), entry_ack_at=time.time(), state="ENTRY_PENDING")
                 self.save("ENTRY_ACK", order_id=str(order_id))
+                self.metrics.increment("orders_acknowledged")
             except Exception:
                 logger.exception("AQTE live entry outcome uncertain; automatic resubmission prohibited")
                 active["error"] = "Entry outcome uncertain; reconcile broker order book. Do not retry."
                 self.state["armed_day"] = None
                 self.save("ENTRY_UNCERTAIN")
+                self.metrics.increment("orders_unknown")
             return self.status()
 
     def request_exit(self, trade_id):
@@ -1011,6 +1142,20 @@ class AQTELiveService:
             filled = int(entry["filled_quantity"])
             if not 0 <= filled <= active["quantity"]:
                 raise LiveBlocked("Unexpected broker filled quantity")
+            active["broker_status"] = ("PARTIALLY_FILLED" if 0 < filled < active["quantity"]
+                                       and entry["status"] not in TERMINAL else entry["status"])
+            active["broker_filled_quantity"] = filled
+            active["status_message"] = entry.get("status_message")
+            previous = self.opportunities.get(active.get("setup_key"))
+            if previous and (previous.get("broker_status"), previous.get("broker_filled_quantity")) != (
+                active["broker_status"], filled
+            ):
+                record = {**previous, "state": "ACCEPTED", "at": time.time(),
+                          "reason": "Broker submission reconciled; fills and protection remain authoritative",
+                          "broker_order_id": active["entry_id"], "broker_status": active["broker_status"],
+                          "broker_filled_quantity": filled}
+                self.save("OPPORTUNITY", record=record)
+                self.opportunities[record["key"]] = record
             for intent in self.state["daily_entries"]:
                 if intent["id"] == active["id"]:
                     observed = dict(filled=filled > 0, pending=entry["status"] not in TERMINAL)
@@ -1035,6 +1180,8 @@ class AQTELiveService:
                 raise LiveBlocked("Broker fill price unavailable")
             if not active.get("fill_at"):
                 active["fill_at"] = time.time()
+                self.metrics.observe("execution.intent_to_confirmed_fill", max(0, active["fill_at"] - active["entry_at"]) * 1000)
+                self.metrics.increment("orders_filled")
             positions = broker.positions()["net"]
             matches = [p for p in positions if int(p["instrument_token"]) == active["contract"]["token"] and p["product"] == "MIS"]
             quantity = sum(int(p["quantity"]) for p in matches)
@@ -1134,6 +1281,10 @@ class AQTELiveService:
                 reason = reason or "FILL_BELOW_STOP"
             if quote.bid <= active["stop"]:
                 reason = reason or "STOP_CROSSED"
+            if str(active.get("strategy", "")).startswith("morning_"):
+                morning = self.morning_service()
+                if morning is not None:
+                    reason = reason or morning.exit_reason(active, now)
             # Modify the SAME sell order, never create a competing target/exit order.
             c = active["contract"]
             if reason or protection["status"] == "OPEN":
@@ -1277,8 +1428,11 @@ class AQTELiveService:
 
     def finish_emergency(self, orders):
         active = self.state["active"]
+        execution = None
         if active:
             entry = next((o for o in orders if o.get("tag") == active["id"] + "E"), None)
+            if entry and entry.get("order_id") is not None:
+                active["entry_id"] = str(entry["order_id"])
             filled = int(entry["filled_quantity"]) if entry else int(active.get("filled") or 0)
             if filled:
                 entry_price = float(entry["average_price"]) if entry and float(entry.get("average_price") or 0) > 0 \
@@ -1295,11 +1449,17 @@ class AQTELiveService:
                                              "exit_at": time.time(), "exit_price": exit_price,
                                              "exit_reason": "EMERGENCY_STOP", "net_pnl": net,
                                              "exit_unverified": exit_price is None})
+                execution = self.state["trades"][-1]
+            else:
+                execution = {**active, "state": "UNVERIFIED",
+                             "broker_status": entry["status"] if entry else None,
+                             "status_message": entry.get("status_message") if entry else "Broker outcome not recorded"}
             self.state["active"] = None
         self.state["flatten_pending"] = False
         self.kill_sent.clear()
         self.error = None
-        self.audit("EMERGENCY_FLAT", note="Kite reports no open AQTE positions or AQTE orders; owner trades untouched")
+        self.audit("EMERGENCY_FLAT", note="Kite reports no open AQTE positions or AQTE orders; owner trades untouched",
+                   execution=execution)
 
     def reset_emergency(self):
         with self.lock:
@@ -1331,27 +1491,171 @@ class AQTELiveService:
                 except (sqlite3.Error, OSError, ValueError):
                     logger.exception("Could not persist automation fault stop")
 
+    def wake(self):
+        loop = self.loop
+        if loop is not None and not loop.is_closed():
+            loop.call_soon_threadsafe(self.wake_event.set)
+
+    def broker_update(self, update):
+        active = self.state.get("active") or {}
+        order_id = str(update.get("order_id") or "")
+        if not aqte_order(update) and order_id not in (active.get("entry_id"), active.get("protect_id")):
+            return
+        if not order_id:
+            logger.warning("AQTE ignored broker order update without an order ID")
+            self.metrics.increment("broker_updates_invalid")
+            return
+        record = {key: update.get(key) for key in ("status", "filled_quantity", "pending_quantity", "average_price")}
+        record.update(order_id=order_id, received_at=time.time())
+        with self.update_lock:
+            self.broker_updates.append(record)
+        self.metrics.increment("broker_order_updates")
+        self.order_dirty.set()
+        self.wake()
+
+    def prepare_session(self):
+        now = time.time()
+        dt = datetime.fromtimestamp(now, IST)
+        from config.nse_holidays import is_holiday
+        if not self.ready or self.state["active"] or self.state["killed"] or not self.settings().aqte_live_enabled or (
+            self.prepared_day == day(now) or now < self.prepare_after or dt.weekday() >= 5 or
+            is_holiday(day(now)) or not 8 * 60 + 45 <= dt.hour * 60 + dt.minute < 9 * 60 + 15
+        ):
+            return
+        self.prepare_after = now + 300
+        try:
+            with self.metrics.measure("preparation.broker_preflight"):
+                self.preflight()
+            self.prepared_day, self.prepare_error = day(now), None
+        except LiveBlocked as exc:
+            self.prepare_error = str(exc)
+            logger.warning("AQTE pre-market broker preparation blocked: %s", exc)
+            self.save("PREPARATION_BLOCKED", reason=str(exc))
+
+    def record_opportunities(self, snapshot, failure=None):
+        now = time.time()
+        present = set()
+        blocks = (self.entry_scan or {}).get("blocks", {})
+        for symbol, original in snapshot["data"].items():
+            candidates = [("swing", self.enabled_setup(self.state["daily_controls"][symbol], original))]
+            scalp = original.get("scalp")
+            if scalp:
+                candidates.append(("scalp", {**original, **scalp}))
+            if isinstance(original.get("morning"), dict):
+                candidates.append(("morning", {**original["morning"], "engines": original.get("engines") or [],
+                                               "orchestration": original.get("orchestration")}))
+            for style, signal in candidates:
+                if signal.get("decision") not in ("BUY CE", "BUY PE") or not signal.get("entry"):
+                    continue
+                key = self.setup_key(symbol, signal)
+                present.add(key)
+                active = self.state.get("active") or {}
+                if key in self.state["used"]:
+                    state = "SUBMISSION_UNKNOWN" if active.get("setup_key") == key and (
+                        active.get("state") == "ENTRY_UNKNOWN") else "ACCEPTED"
+                    reason = "Persisted submission intent; broker fills are reconciled separately"
+                else:
+                    control = self.state["daily_controls"][symbol]
+                    reason = failure or self.waiting or self.error
+                    if not reason and not self.state.get("automation_on"):
+                        reason = "Owner automation OFF or session not armed"
+                    if not reason and self.state.get("active"):
+                        reason = "One AQTE order/position already active"
+                    if not reason and style != "morning" and control["style"] not in (style, "both"):
+                        reason = f"{style} style is not enabled"
+                    if not reason:
+                        reason = self.entry_check(symbol, signal)[0]
+                    if not reason:
+                        reason = blocks.get(symbol) or "Another opportunity ranked higher"
+                    state = "MISSED" if reason.startswith(("Not attempted:", "Another opportunity")) else "REJECTED"
+                previous = self.opportunities.get(key)
+                if previous and (previous["state"], previous["reason"]) == (state, reason):
+                    continue
+                if previous and previous["state"] == "ACCEPTED" and state == "ACCEPTED":
+                    continue
+                record = dict(key=key, symbol=symbol, style=style, strategy=signal.get("strategy"),
+                              state=state, reason=reason, at=now, first_at=previous["first_at"] if previous else now,
+                              signal_at=signal.get("at"), score=signal.get("confidence"),
+                              reward_risk=signal["entry"].get("reward_risk"), expected_value=None,
+                              expected_value_reason="No validated/calibrated probability model",
+                              broker_order_id=active.get("entry_id") if active.get("setup_key") == key else None)
+                self.save("OPPORTUNITY", record=record)
+                self.opportunities[key] = record
+                self.metrics.increment(f"opportunities.{state.lower()}")
+        for key, previous in list(self.opportunities.items()):
+            if key not in present and previous["state"] in ("REJECTED", "MISSED"):
+                record = {**previous, "state": "EXPIRED", "at": now,
+                          "reason": f"Signal expired or no longer qualified; last decision: {previous['reason']}"}
+                self.save("OPPORTUNITY", record=record)
+                self.opportunities[key] = record
+                self.metrics.increment("opportunities.expired")
+        while len(self.opportunities) > 512:
+            self.opportunities.pop(next(iter(self.opportunities)))
+
+    def scan_entries(self):
+        with self.lock:
+            snapshot = self.service().snapshot()
+            try:
+                self.automated_entry()
+            except LiveBlocked as exc:
+                self.record_opportunities(snapshot, str(exc))
+                raise
+            self.record_opportunities(snapshot)
+
+    def diagnostics(self):
+        with self.lock, self.update_lock:
+            status = self.status()
+            active = self.state.get("active")
+            fields = ("id", "symbol", "state", "entry_id", "protect_id", "quantity", "filled", "entry_price",
+                      "entry_at", "entry_ack_at", "signal_at", "stop", "target", "error",
+                      "broker_status", "broker_filled_quantity")
+            return dict(
+                ready=self.ready, armed_day=self.state["armed_day"], automation_on=self.state["automation_on"],
+                automation_wanted=self.state["automation_wanted"], waiting=self.waiting, error=self.error,
+                prepared_day=self.prepared_day, preparation_error=self.prepare_error,
+                ranking=status["ranking"], entry_blocks=status["entry_blocks"],
+                entry_plans=status["entry_plans"], limits=status["limits"],
+                daily_counts=status["daily_counts"], daily_controls=copy.deepcopy(self.state["daily_controls"]),
+                preflight_at=self.check["at"] if self.check else None,
+                broker_write_permissions="Broker validates permissions at submission; not inferred from login",
+                active={key: active.get(key) for key in fields} if active else None,
+                broker_updates=list(self.broker_updates),
+                opportunities=sorted(self.opportunities.values(), key=lambda row: row["at"], reverse=True)[:100],
+                measurements=self.metrics.snapshot())
+
+    def measured(self, stage, method):
+        with self.metrics.measure(stage):
+            return method()
+
     async def monitor(self):
-        while True:
+        next_reconcile = 0.0
+        while not self.stop_event.is_set():
+            self.wake_event.clear()
             try:
                 if self.state.get("flatten_pending"):
                     await asyncio.to_thread(self.emergency_flatten)
+                    next_reconcile = time.monotonic() + 2
                 else:
-                    await asyncio.to_thread(self.reconcile)
+                    if self.order_dirty.is_set() or time.monotonic() >= next_reconcile:
+                        self.order_dirty.clear()
+                        await asyncio.to_thread(self.measured, "execution.reconcile", self.reconcile)
+                        next_reconcile = time.monotonic() + 2
+                    await asyncio.to_thread(self.prepare_session)
                     await asyncio.to_thread(self.auto_activate)
-                    await asyncio.to_thread(self.automated_entry)
+                    await asyncio.to_thread(self.measured, "execution.scan", self.scan_entries)
             except Exception as exc:
                 logger.exception("AQTE live reconciliation requires attention; inspect broker terminal")
                 await asyncio.to_thread(self.fault_stop, f"{type(exc).__name__}: {exc}")
             try:
-                await asyncio.wait_for(self.stop_event.wait(), timeout=2)
-                return
+                await asyncio.wait_for(self.wake_event.wait(), timeout=max(.01, next_reconcile - time.monotonic()))
             except asyncio.TimeoutError:
                 pass
 
     async def start(self):
         await asyncio.to_thread(self.initialize)
         self.stop_event.clear()
+        self.loop = asyncio.get_running_loop()
+        self.service().listener = self.wake
         self.task = asyncio.create_task(self.monitor(), name="aqte-live-reconciliation")
 
     def disarm_shutdown(self):
@@ -1363,6 +1667,8 @@ class AQTELiveService:
 
     async def stop(self):
         self.stop_event.set()
+        self.wake_event.set()
+        self.service().listener = None
         if self.task:
             await self.task
         try:

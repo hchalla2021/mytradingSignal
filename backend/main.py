@@ -163,6 +163,10 @@ async def lifespan(app: FastAPI):
         await get_aqte_service().start()
     except (OSError, ValueError, TypeError, KeyError, sqlite3.Error):
         logger.exception("AQTE unavailable; existing dashboard services will continue")
+    from services.aqte_morning import MorningService
+    morning = MorningService(get_aqte_service(), cache, get_settings().aqte_morning_postgres_url)
+    get_aqte_service().morning = morning
+    await morning.start()
     from services.aqte_live import get_live_service
     try:
         await get_live_service().start()
@@ -523,6 +527,7 @@ async def lifespan(app: FastAPI):
     if market_feed:
         await market_feed.stop()
     await get_aqte_service().stop()
+    await morning.stop()
     if feed_task:
         feed_task.cancel()
 

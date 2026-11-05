@@ -17,11 +17,16 @@ from datetime import datetime
 from pathlib import Path
 
 from services.aqte_engine import (
-    AQTEEngine, CLOSE_MINUTE, Contract, IST, OPEN_MINUTE, SYMBOLS, WARMUP_CANDLES, Policy, Tick, day,
-    minute_of_day, parse_scalp_points, warmup_count,
+    AQTEEngine, CLOSE_MINUTE, Contract, IST, OPEN_MINUTE, SESSION_CANDLES, SYMBOLS, WARMUP_CANDLES, Policy, Tick, day,
+    live_intelligence, minute_of_day, opportunity_key, parse_scalp_points, session, session_bars, validate_tick, warmup_count,
 )
-from services.aqte_engines import ENGINES, ML_MAX_AGE_SECONDS, EngineConfig, evaluate, session_change
+from services.aqte_engines import (
+    ENGINES, ML_MAX_AGE_SECONDS, EngineConfig, engine_card, evaluate, orchestrate, prepare_evaluation, session_change,
+)
+from services.aqte_features import FeatureCache
 from services.aqte_ml import FEATURE_NAMES, SCHEMA, MLUnavailable, ShadowModel, feature_vector
+from services.aqte_runtime import EngineWorkers, Latencies
+from services.instrument_catalog import InstrumentCatalog, instrument_catalog
 
 logger = logging.getLogger(__name__)
 VIX_INSTRUMENT = "NSE:INDIA VIX"
@@ -45,20 +50,41 @@ def normalize(symbol, kind, raw, received):
     buys, sells = depth.get("buy", []), depth.get("sell", [])
     bid = buys[0] if buys else {}
     ask = sells[0] if sells else {}
-    return Tick(symbol=symbol, kind=kind, token=int(raw["instrument_token"]),
+    tick = Tick(symbol=symbol, kind=kind, token=int(raw["instrument_token"]),
                 price=float(raw["last_price"]), at=exchange_time(raw, received, kind),
                 received=received, volume=int(raw.get("volume_traded") or 0),
                 bid=float(bid.get("price") or 0), ask=float(ask.get("price") or 0),
                 bid_quantity=int(bid.get("quantity") or 0), ask_quantity=int(ask.get("quantity") or 0),
                 buy_depth=sum(int(level.get("quantity") or 0) for level in buys),
                 sell_depth=sum(int(level.get("quantity") or 0) for level in sells), oi=raw.get("oi"))
+    validate_tick(tick)
+    return tick
 
 
 class AQTEService:
     def __init__(self, path=None, *, paper_enabled=False, ml_model_path="", policy=None, engine_config=None):
         self.path = Path(path or os.getenv("AQTE_DB_PATH") or
                          Path(__file__).resolve().parent.parent / "data" / "aqte" / "aqte.sqlite3")
-        self.engine = AQTEEngine(policy, paper_enabled=paper_enabled)
+        self.metrics = Latencies()
+        self.features = FeatureCache(self.metrics)
+        self.engine = AQTEEngine(policy, paper_enabled=paper_enabled, feature_cache=self.features)
+        self.evaluators = None
+        self.contexts = {}
+        self.signal_states = {}
+        self.signal_events = deque(maxlen=100)
+        self.listener = None
+        self.morning = None
+        self.instrument_catalog = InstrumentCatalog() if path is not None else instrument_catalog
+        self.persisted_contracts = {}
+        self.health_lock = threading.RLock()
+        self.gaps = {}
+        self.last_tick_at = None
+        self.last_received_at = None
+        self.history_errors = {}
+        self.history_retry = {}
+        self.prepared_at = None
+        self.feed_connected = None
+        self.connection_at = None
         self.engine_config = engine_config or EngineConfig()
         self.engine_states = {}
         self.engine_events = deque(maxlen=40)
@@ -76,6 +102,8 @@ class AQTEService:
         self.connection = None
         self.catalog = []
         self.catalog_day = None
+        self.catalog_errors = {}
+        self.configured_days = {}
         self.subscribed = set()
         self.subscription_error = None
         self.started = False
@@ -145,31 +173,54 @@ class AQTEService:
                 tick = Tick(**json.loads(row["payload"]))
                 if self.engine.fresh(tick, tick.received):
                     self.engine.book.add(tick)
+            if not self.engine.paper_enabled:
+                for (kind, token), tick in self.engine.book.previous.items():
+                    if kind != "future":
+                        continue
+                    key = (kind, token, 60)
+                    minutes = {bar["at"] for bar in self.engine.book.closed[key] if session(bar["at"])}
+                    current = self.engine.book.current.get(key)
+                    if current and session(current["at"]):
+                        minutes.add(current["at"])
+                    if minutes:
+                        self.gaps[token] = dict(symbol=tick.symbol, kind=kind, minutes=minutes,
+                                                reason="Restored futures candles await exchange verification",
+                                                resume_after=tick.received, last_lost_at=tick.at)
+                        self.metrics.increment("restored_candles_unverified", len(minutes))
             # Only raw ticks expire. Audit and completed paper trades are retained.
             db.execute("DELETE FROM aqte_ticks WHERE received < ?", (time.time() - 7 * 86400,))
 
-    def persist(self, db, ticks=()):
+    def journal_record(self):
+        state = dict(orders=self.engine.orders, killed=self.engine.killed, last_setup=self.engine.last_setup)
+        return dict(contracts={token: asdict(c) for token, c in self.engine.contracts.items()},
+                    events=copy.deepcopy(self.engine.events),
+                    state=copy.deepcopy(state) if self.engine.paper_enabled else None)
+
+    def persist(self, db, ticks=(), record=None):
+        record = record if record is not None else self.journal_record()
         db.executemany("INSERT INTO aqte_ticks(at,received,symbol,kind,token,payload) VALUES(?,?,?,?,?,?)",
                        [(t.at, t.received, t.symbol, t.kind, t.token, json.dumps(asdict(t))) for t in ticks])
+        contracts = {token: json.dumps(contract) for token, contract in record["contracts"].items()}
         db.executemany("INSERT INTO aqte_contracts VALUES(?,?) ON CONFLICT(token) DO UPDATE SET payload=excluded.payload",
-                       [(token, json.dumps(asdict(contract))) for token, contract in self.engine.contracts.items()])
+                       [(token, payload) for token, payload in contracts.items()
+                        if self.persisted_contracts.get(token) != payload])
         contract_days = {(day(t.received), t.token) for t in ticks
-                         if t.kind == "option" and t.token in self.engine.contracts}
+                         if t.kind == "option" and t.token in contracts}
         db.executemany("INSERT INTO aqte_contract_history VALUES(?,?,?) "
                        "ON CONFLICT(session_day,token) DO NOTHING",
-                       [(date, token, json.dumps(asdict(self.engine.contracts[token])))
+                       [(date, token, contracts[token])
                         for date, token in contract_days])
-        for event in self.engine.events:
+        for event in record["events"]:
             db.execute("INSERT INTO aqte_events VALUES(?,?,?,?)",
                        (event["id"], event["at"], event["kind"], json.dumps(event)))
             if event["kind"] == "CLOSED":
                 trade = event["trade"]
                 db.execute("INSERT INTO aqte_trades VALUES(?,?,?)",
                            (trade["id"], trade["exit_at"], json.dumps(trade)))
-        if self.engine.paper_enabled:
-            state = dict(orders=self.engine.orders, killed=self.engine.killed, last_setup=self.engine.last_setup)
+        if record["state"] is not None:
             db.execute("INSERT INTO aqte_state VALUES(1,?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload",
-                       (json.dumps(state),))
+                       (json.dumps(record["state"]),))
+        self.persisted_contracts = contracts
 
     def run(self):
         try:
@@ -186,19 +237,80 @@ class AQTEService:
                         except queue.Empty:
                             break
                     with self.lock:
-                        if self.failed.is_set():
-                            self.engine.fault = "AQTE recording/queue fault; restart required"
+                        recorded = []
                         for tick in batch:
+                            try:
+                                validate_tick(tick)
+                            except (ValueError, TypeError, OverflowError):
+                                logger.exception("AQTE rejected invalid queued packet; it will not enter recovery history")
+                                self.mark_gap(tick.symbol, tick.kind, tick.token, time.time(), "Invalid queued packet",
+                                              received=time.time())
+                                continue
+                            recorded.append(tick)
                             if self.engine.fresh(tick, time.time()):
-                                self.engine.ingest(tick)
-                                self.capture_ml(tick)
+                                try:
+                                    with self.metrics.measure("tick.processing"):
+                                        accepted = self.engine.ingest(tick)
+                                    if accepted:
+                                        with self.health_lock:
+                                            gap = self.gaps.get(tick.token)
+                                            if gap and tick.kind == "future" and gap.get("resume_after") is not None and (
+                                                tick.received >= gap["resume_after"] and tick.at >= gap["last_lost_at"]
+                                            ):
+                                                # The first resumed volume delta can include trades from lost minutes.
+                                                gap["minutes"].add(int(tick.at // 60) * 60)
+                                                gap["resume_after"] = None
+                                        self.capture_ml(tick)
+                                        with self.metrics.measure("signals.capture"):
+                                            self.capture_signals(time.time())
+                                        self.last_tick_at, self.last_received_at = tick.at, tick.received
+                                        with self.health_lock:
+                                            if tick.kind != "future" and self.gaps.pop(tick.token, None):
+                                                self.metrics.increment("feed_recoveries")
+                                    self.metrics.increment("ticks_accepted" if accepted else "ticks_rejected")
+                                except (ValueError, TypeError, OverflowError):
+                                    logger.exception("AQTE rejected invalid %s packet for %s", tick.kind, tick.symbol)
+                                    self.mark_gap(tick.symbol, tick.kind, tick.token, tick.at, "Invalid market packet",
+                                                  received=tick.received)
+                                self.metrics.observe("tick.queue_age", max(0, time.time() - tick.received) * 1000)
                             else:
+                                self.mark_gap(tick.symbol, tick.kind, tick.token, tick.at, "Queue exceeded quote freshness",
+                                              received=tick.received)
                                 self.engine.event("PROCESSING_STALE_TICK", time.time(),
                                                   token=tick.token, reason="Queued quote too old for execution")
+                        self.retire_gaps()
                         self.engine.manage(time.time())
-                        with db:
-                            self.persist(db, batch)
+                        if not batch:
+                            self.capture_signals(time.time())
+                        record = self.journal_record()
+                        if self.engine.paper_enabled:
+                            # Paper kill/state writes retain their original ordering under the market lock.
+                            with self.metrics.measure("journal.commit"), db:
+                                self.persist(db, recorded, record)
+                            record = None
                         self.engine.events.clear()
+                    while record is not None:
+                        try:
+                            with self.metrics.measure("journal.commit"), db:
+                                self.persist(db, recorded, record)
+                            if self.failed.is_set():
+                                with self.lock:
+                                    self.failed.clear()
+                                    self.engine.fault = None
+                                self.metrics.increment("journal_recoveries")
+                            break
+                        except sqlite3.Error:
+                            self.persisted_contracts.clear()
+                            if not self.failed.is_set():
+                                logger.exception("AQTE journal unavailable; entries blocked while the same batch retries")
+                            self.failed.set()
+                            with self.lock:
+                                self.engine.fault = "AQTE journal unavailable; recovery in progress"
+                            if self.stop_event.wait(1):
+                                return
+                    if batch:
+                        self.schedule_engines()
+                        self.notify()
         except Exception:
             self.failed.set()
             logger.exception("AQTE worker stopped; paper execution is blocked")
@@ -213,6 +325,7 @@ class AQTEService:
             await asyncio.to_thread(self.load_ml)
         self.stop_event.clear()
         self.started = True
+        self.evaluators = EngineWorkers(self.metrics, self.notify)
         self.worker = threading.Thread(target=self.run, name="aqte-analysis", daemon=True)
         self.worker.start()
         self.refresh_task = asyncio.create_task(self.refresh(), name="aqte-subscriptions")
@@ -235,22 +348,100 @@ class AQTEService:
         self.stop_event.set()
         if self.worker:
             await asyncio.to_thread(self.worker.join)
+        if self.evaluators:
+            await asyncio.to_thread(self.evaluators.close)
+            self.evaluators = None
         self.started = False
+
+    def notify(self):
+        listener = self.listener
+        if listener is not None:
+            listener()
+
+    def capture_signals(self, now):
+        snapshot = self.engine.snapshot(now)
+        with self.health_lock:
+            recovering = {gap["symbol"] for gap in self.gaps.values()}
+        for symbol, signal in snapshot["data"].items():
+            candidates = (("swing", signal), ("scalp", {**signal, **(signal.get("scalp") or {})}))
+            for style, candidate in candidates:
+                identity = (symbol, style)
+                qualified = symbol not in recovering and self.feed_connected is not False and (
+                    candidate.get("decision") in ("BUY CE", "BUY PE") and candidate.get("entry"))
+                key = opportunity_key(symbol, candidate) if qualified else None
+                previous = self.signal_states.get(identity)
+                if previous and previous["key"] != key:
+                    reasons = (["Feed recovery in progress"] if symbol in recovering else
+                               ["Shared Kite feed disconnected"] if self.feed_connected is False else
+                               candidate.get("reasons", []))
+                    self.engine.event("OPPORTUNITY_EXPIRED", now, key=previous["key"], symbol=symbol, style=style,
+                                      reason="Rule qualification ended; correlate the key with the live submission audit",
+                                      rule_reasons=reasons, last_qualified_at=previous["at"])
+                    self.signal_events.append(copy.deepcopy(self.engine.events[-1]))
+                    self.metrics.increment("signals.expired")
+                if key:
+                    if previous is None or previous["key"] != key:
+                        self.engine.event("OPPORTUNITY_GENERATED", now, key=key, symbol=symbol, style=style,
+                                          strategy=candidate.get("strategy"), score=candidate.get("confidence"),
+                                          token=candidate["contract"]["token"], entry=copy.deepcopy(candidate["entry"]))
+                        self.signal_events.append(copy.deepcopy(self.engine.events[-1]))
+                        self.metrics.increment("signals.generated")
+                    self.signal_states[identity] = dict(key=key, at=now)
+                else:
+                    self.signal_states.pop(identity, None)
+
+    def mark_gap(self, symbol, kind, token, at, reason, *, received=None):
+        with self.health_lock:
+            if token not in self.gaps:
+                logger.warning("AQTE %s %s recovering: %s", symbol, kind, reason)
+                self.gaps[token] = dict(symbol=symbol, kind=kind, minutes=set(), reason=reason)
+            self.gaps[token]["minutes"].add(int(at // 60) * 60)
+            if kind == "future" and received is not None:
+                gap = self.gaps[token]
+                gap["resume_after"] = max(gap.get("resume_after") or received, received)
+                gap["last_lost_at"] = max(gap.get("last_lost_at", at), at)
+        self.metrics.increment("feed_packets_lost")
+
+    def retire_gaps(self):
+        with self.lock, self.health_lock:
+            for token, gap in list(self.gaps.items()):
+                retired = False
+                if gap["kind"] == "future":
+                    future = self.engine.future.get(gap["symbol"])
+                    retired = future is not None and future.token != token
+                    bars = self.engine.book.closed.get(("future", token, 60), ())
+                    gap["minutes"] = {at for at in gap["minutes"] if session(at) and (not bars or at >= bars[0]["at"])}
+                    retired = retired or (not gap["minutes"] and gap.get("resume_after") is None)
+                elif gap["kind"] == "option":
+                    retired = token not in self.engine.contracts and token not in self.subscribed
+                if retired:
+                    self.gaps.pop(token)
+                    logger.info("AQTE retired %s recovery marker for %s; it no longer affects retained inputs",
+                                gap["kind"], gap["symbol"])
+                    self.metrics.increment("feed_gaps_retired")
 
     def enqueue(self, symbol, kind, raw):
         # The shared feed also routes non-AQTE indices (e.g. INDIAVIX) here; the engine rejects them.
         if not self.started or symbol not in SYMBOLS:
             return
+        if self.morning is not None:
+            self.morning.enqueue(symbol, kind, raw)
         try:
             tick = normalize(symbol, kind, raw, time.time())
+            if not self.engine.fresh(tick, tick.received):
+                logger.warning("AQTE rejected stale/future exchange timestamp for %s %s", symbol, kind)
+                self.metrics.increment("exchange_timestamps_rejected")
+                return
             self.queue.put_nowait(tick)
         except queue.Full:
-            if not self.failed.is_set():
-                logger.error("AQTE tick queue full; new entries blocked until restart")
-            self.failed.set()
+            self.mark_gap(symbol, kind, tick.token, tick.at, "Bounded tick queue overflow", received=tick.received)
+            self.metrics.increment("queue_overflow")
         except (ValueError, TypeError, KeyError, OverflowError):
             logger.exception("AQTE rejected malformed %s tick for %s", kind, symbol)
-            self.failed.set()
+            token = raw.get("instrument_token")
+            if type(token) is int and token > 0:
+                self.mark_gap(symbol, kind, token, time.time(), "Malformed market packet", received=time.time())
+            self.metrics.increment("malformed_ticks")
 
     def option_tick(self, raw):
         # Contract maps are replaced atomically, never mutated by the worker.
@@ -260,6 +451,8 @@ class AQTEService:
             return True
         contract = self.engine.contracts.get(raw.get("instrument_token"))
         if contract:
+            if self.morning is not None:
+                self.morning.enqueue(contract.symbol, "option", raw)
             self.enqueue(contract.symbol, "option", raw)
             return True
         return False
@@ -292,18 +485,26 @@ class AQTEService:
             # Broker boundary: VIX is display/engine context only, never an entry requirement.
             logger.warning("AQTE India VIX token unavailable (%s)", type(exc).__name__)
 
-    def configure(self, kite, socket, prices=None, previous_day=None):
+    def configure(self, kite, socket, prices=None, previous_day=None, force=False):
         """Called on the existing Kite connection and each minute for ATM rotation."""
         if not self.started:
             return
+        force = force or self.socket is not socket
         self.kite, self.socket = kite, socket
         try:
             today = day(time.time())
             if self.catalog_day != today:
-                catalog = kite.instruments("NFO") + kite.instruments("BFO")
+                now = datetime.fromtimestamp(time.time(), IST)
+                catalog = []
+                for exchange in ("NFO", "BFO"):
+                    try:
+                        catalog.extend(self.instrument_catalog.get(kite, exchange, now))
+                        self.catalog_errors.pop(exchange, None)
+                    except Exception as exc:
+                        self.catalog_errors[exchange] = f"Instrument master unavailable ({type(exc).__name__})"
                 self.catalog = [i for i in catalog if i.get("name") in SYMBOLS and
                                 i.get("instrument_type") in ("CE", "PE")]
-                self.catalog_day = today
+                self.catalog_day = today if not self.catalog_errors else None
             with self.lock:
                 spots = {s: t.price for s, t in self.engine.spot.items()}
                 pinned = {o["token"] for o in self.engine.orders.values()}
@@ -343,24 +544,35 @@ class AQTEService:
             self.resolve_vix(kite)
             if self.vix_token:
                 tokens.add(self.vix_token)
-            if tokens:
-                # Re-subscribe all on reconnect, not just newly selected tokens.
-                socket.subscribe(sorted(tokens))
-                socket.set_mode(socket.MODE_FULL, sorted(tokens))
+            added = tokens if force else tokens - self.subscribed
+            if added:
+                socket.subscribe(sorted(added))
+                socket.set_mode(socket.MODE_FULL, sorted(added))
+                self.metrics.increment("subscription_requests")
             removed = self.subscribed - tokens
             if removed:
                 socket.unsubscribe(sorted(removed))
             with self.lock:
-                if previous_day:
-                    self.engine.previous_day = copy.deepcopy(previous_day)
+                if previous_day is not None:
+                    self.engine.previous_day = {symbol: copy.deepcopy(values) for symbol, values in previous_day.items()
+                                                if values.get("prepared_for") in (None, today)}
                 self.subscribed = tokens
                 self.subscription_error = None
+                self.configured_days = {exchange: value for exchange, value in self.instrument_catalog.days.items()
+                                        if value == today}
         except Exception as exc:
             # Broker boundary: retain old subscriptions and never invent contracts.
             logger.exception("AQTE option subscriptions unavailable")
             with self.lock:
                 self.subscription_error = f"Option subscription failed ({type(exc).__name__})"
         self.backfill(kite)
+        with self.lock:
+            tokens = self.future_tokens()
+            for token, symbol in tokens.items():
+                if symbol in SYMBOLS:
+                    self.features.get(self.engine.book, token, time.time(), self.engine.previous_day.get(symbol))
+            self.features.retain(set(tokens))
+            self.prepared_at = time.time()
 
     def backfill(self, kite, futures=None, now=None):
         """Heal the futures one-minute warm-up from Kite exchange history after restarts or feed gaps.
@@ -370,21 +582,23 @@ class AQTEService:
         """
         now = time.time() if now is None else now
         dt = datetime.fromtimestamp(now, IST)
-        if now < self.backfill_after or dt.weekday() >= 5 or not OPEN_MINUTE - 15 <= minute_of_day(now) < CLOSE_MINUTE:
+        from config.nse_holidays import is_holiday
+        if dt.weekday() >= 5 or is_holiday(day(now)) or not OPEN_MINUTE - 30 <= minute_of_day(now) < CLOSE_MINUTE:
             return 0
         if futures is None:
-            from services.market_feed import FUT_TOKEN_MAP
-            futures = dict(FUT_TOKEN_MAP)
-        with self.lock:
-            futures = {**futures, **{t.token: s for s, t in self.engine.future.items()}}
-            wanted = {int(token): symbol for token, symbol in futures.items() if symbol in SYMBOLS and warmup_count(
-                self.engine.book.closed[("future", int(token), 60)], now) < WARMUP_CANDLES}
+            futures = self.future_tokens()
+        with self.lock, self.health_lock:
+            self.retire_gaps()
+            wanted = {int(token): symbol for token, symbol in futures.items() if symbol in SYMBOLS and
+                      now >= self.history_retry.get(int(token), 0) and (token in self.gaps or warmup_count(
+                          self.engine.book.closed[("future", int(token), 60)], now) < WARMUP_CANDLES)}
         if not wanted:
             return 0
         added = 0
-        try:
-            for token, symbol in wanted.items():
-                rows = kite.historical_data(token, datetime.fromtimestamp(now - 5 * 86400, IST).replace(tzinfo=None),
+        failures = False
+        for token, symbol in wanted.items():
+            try:
+                rows = kite.historical_data(token, datetime.fromtimestamp(now - 14 * 86400, IST).replace(tzinfo=None),
                                             dt.replace(tzinfo=None), "minute")
                 bars = []
                 for row in rows:
@@ -395,22 +609,57 @@ class AQTEService:
                     if all(math.isfinite(v) and v > 0 for v in values) and values[2] <= min(values) and values[1] >= max(values):
                         bars.append(dict(at=at, open=values[0], high=values[1], low=values[2], close=values[3],
                                          volume=max(0, int(row.get("volume") or 0))))
-                with self.lock:
+                with self.lock, self.health_lock:
                     merged = self.engine.seed_bars(token, bars, now)
+                    gap = self.gaps.get(token)
+                    if gap:
+                        closed = {b["at"]: b for b in self.engine.book.closed[("future", token, 60)]}
+                        repaired = {b["at"] for b in bars if b["at"] < int(now // 60) * 60 - 120
+                                    and b["at"] in closed and all(closed[b["at"]].get(k) == b[k]
+                                                                 for k in ("open", "high", "low", "close", "volume"))}
+                        gap["minutes"].difference_update(repaired)
+                        if not gap["minutes"] and gap.get("resume_after") is None:
+                            self.gaps.pop(token)
+                            self.metrics.increment("feed_recoveries")
+                    self.retire_gaps()
+                    self.history_errors.pop(symbol, None)
+                    self.history_retry[token] = now + 60
                 added += merged
                 if merged:
                     logger.info("AQTE warm-up backfilled %d one-minute %s futures candles from Kite history",
                                 merged, symbol)
-        except Exception as exc:
-            # Broker boundary: historical API may be unavailable; live ticks keep warming up.
-            logger.warning("AQTE warm-up backfill unavailable (%s); live candles only", type(exc).__name__)
-            self.backfill_after = now + 300
-            return added
-        self.backfill_after = now + (60 if added else 300)
+            except Exception as exc:
+                logger.warning("AQTE %s warm-up backfill unavailable (%s); other indices continue", symbol, type(exc).__name__)
+                self.history_errors[symbol] = f"Historical API unavailable ({type(exc).__name__})"
+                self.history_retry[token] = now + 300
+                failures = True
+        self.backfill_after = now + (300 if failures or not added else 60)
         return added
 
+    def future_tokens(self):
+        from services.market_feed import FUT_TOKEN_MAP
+        tokens = dict(FUT_TOKEN_MAP)
+        for symbol, tick in self.engine.future.items():
+            if symbol not in tokens.values():
+                tokens[tick.token] = symbol
+        return tokens
+
     def attach(self, kite, socket, prices, previous_day):
+        self.configured_days.clear()
         self.connection = (kite, socket, copy.deepcopy(prices), copy.deepcopy(previous_day))
+        self.set_feed_connection(True)
+
+    def set_feed_connection(self, connected):
+        self.feed_connected = connected
+        if connected:
+            self.connection_at = time.time()
+            self.metrics.increment("feed_connections")
+        else:
+            self.metrics.increment("feed_disconnects")
+            for tick in list(self.engine.future.values()):
+                self.mark_gap(tick.symbol, "future", tick.token, tick.at,
+                              "Shared Kite feed disconnected", received=time.time())
+        self.notify()
 
     def load_ml(self):
         self.ml_model = None
@@ -428,7 +677,7 @@ class AQTEService:
         self.ml_state.update(status="READY", error=None, model_id=model.model_id)
 
     def capture_ml(self, tick):
-        if self.ml_model is None or tick.kind != "future":
+        if self.ml_model is None:
             return
         signal = self.engine.signals.get(tick.symbol)
         if not signal or signal["decision"] == "WAIT" or not signal["entry"]:
@@ -484,22 +733,205 @@ class AQTEService:
             if connection is not None and (connection is not active or time.monotonic() - refreshed >= 60):
                 kite, socket, prices, previous_day = connection
                 if socket.is_connected():
-                    await asyncio.to_thread(self.configure, kite, socket, prices, previous_day)
+                    await asyncio.to_thread(self.configure, kite, socket, prices, previous_day, connection is not active)
                     active, refreshed = connection, time.monotonic()
 
     def snapshot(self):
-        with self.lock:
+        with self.metrics.measure("snapshot"), self.lock:
             result = copy.deepcopy(self.engine.snapshot(time.time()))
             result["subscription_error"] = self.subscription_error
             result["recording"] = self.started and not self.failed.is_set()
             result["ml"] = copy.deepcopy(self.ml_state)
-            if self.failed.is_set() or not self.started:
+            if self.failed.is_set() or not self.started or self.feed_connected is False:
                 for signal in result["data"].values():
-                    signal.update(decision="WAIT", entry=None, reasons=["AQTE recorder unavailable"])
-                    signal["scalp"] = self.engine.idle_scalp("AQTE recorder unavailable")
+                    reason = "Shared Kite feed disconnected" if self.feed_connected is False else "AQTE recorder unavailable"
+                    signal.update(decision="WAIT", entry=None, reasons=[reason], feed_ready=False)
+                    signal["scalp"] = self.engine.idle_scalp(reason)
                     signal["rule_checks"] = None
-            self.attach_engines_safely(result)
+            with self.health_lock:
+                blocked = {gap["symbol"]: gap["reason"] for gap in self.gaps.values()}
+            for symbol, reason in blocked.items():
+                signal = result["data"][symbol]
+                signal.update(decision="WAIT", entry=None, reasons=[f"Feed recovery: {reason}"], feed_ready=False)
+                signal["scalp"] = self.engine.idle_scalp(f"Feed recovery: {reason}")
+                signal["rule_checks"] = None
+            if self.evaluators is not None:
+                for symbol, signal in result["data"].items():
+                    exchange = "BFO" if symbol == "SENSEX" else "NFO"
+                    if self.configured_days.get(exchange) != day(time.time()) or self.subscription_error:
+                        reason = self.subscription_error or self.catalog_errors.get(
+                            exchange, "Today's instrument master is not prepared")
+                        signal.update(decision="WAIT", entry=None, reasons=[reason], feed_ready=False, rule_checks=None)
+                        signal["scalp"] = self.engine.idle_scalp(reason)
+            if self.evaluators is None:
+                self.attach_engines_safely(result)
+            else:
+                self.attach_cached_engines(result)
+            if self.morning is not None:
+                morning = self.morning.snapshot()
+                for symbol, signal in result["data"].items():
+                    signal["morning"] = morning["signals"].get(symbol)
             return result
+
+    def schedule_engines(self):
+        if self.evaluators is None:
+            return
+        now = time.time()
+        with self.lock:
+            snapshot = copy.deepcopy(self.engine.snapshot(now))
+            inputs = []
+            bars, peers = {}, {}
+            for symbol in SYMBOLS:
+                future = self.engine.future.get(symbol)
+                bars[symbol] = list(self.engine.book.closed.get(("future", future.token, 60), ())) if future else []
+                peers[symbol] = session_change(bars[symbol], now) if (
+                    future and self.engine.fresh(future, now)) else None
+            vix = copy.deepcopy(self.vix) if self.vix and 0 <= now - self.vix["received"] <= VIX_STALE_SECONDS else None
+            for symbol, signal in snapshot["data"].items():
+                future, spot = self.engine.future.get(symbol), self.engine.spot.get(symbol)
+                if future is None:
+                    continue
+                partial = self.features.get(self.engine.book, future.token, future.at, self.engine.previous_day.get(symbol))
+                options = [(c, self.engine.options[token]) for token, c in self.engine.contracts.items()
+                           if c.symbol == symbol and self.engine.fresh(self.engine.options.get(token), now)]
+                observation = self.ml_state["observations"].get(symbol)
+                ml = None
+                if observation and observation.get("probability_positive_net_return") is not None and (
+                    0 <= now - observation.get("observed_at", 0) <= ML_MAX_AGE_SECONDS
+                ):
+                    contract = self.engine.contracts.get(observation.get("token"))
+                    ml = {**observation, "side": contract.side if contract else None}
+                inputs.append((symbol, signal, future.token, self.engine.book.revisions[("future", future.token, 60)],
+                               dict(live=future, spot=spot, bars=bars[symbol], options=options, peers=peers,
+                                    ml=ml, ml_reason=self.ml_state.get("error") or "No fresh shadow-model observation",
+                                    vix=vix, policy=self.engine.policy, now=now, config=self.engine_config,
+                                    partial_info=live_intelligence(partial["values"], future),
+                                    timeframes=partial["timeframes"])))
+        for symbol, signal, token, revision, arguments in inputs:
+            try:
+                with self.metrics.measure("features.advisory_inputs"):
+                    jobs, metadata = prepare_evaluation(signal, **arguments)
+                source_at = min(arguments["live"].at, arguments["live"].received,
+                                arguments["spot"].received if arguments["spot"] else now)
+                with self.lock:
+                    self.contexts[symbol] = dict(at=source_at, **metadata)
+                for key, job in jobs.items():
+                    deadline = source_at + self.engine.policy.stale_seconds
+                    if key == "options" and arguments["options"]:
+                        deadline = min(deadline, min(t.at for _, t in arguments["options"]) + self.engine.policy.stale_seconds)
+                    if key == "volatility_breakout" and vix:
+                        deadline = min(deadline, vix["received"] + VIX_STALE_SECONDS)
+                    def run(job=job, token=token, revision=revision, source_at=source_at, deadline=deadline,
+                            key=key, metadata=metadata):
+                        card = job()
+                        if key == "options":
+                            card["_metadata"] = copy.deepcopy(metadata)
+                        card.update(input_at=source_at, valid_until=deadline,
+                                    source_token=token, source_revision=revision)
+                        return card
+                    self.evaluators.submit(symbol, key, source_at, run)
+            except Exception as exc:
+                logger.exception("AQTE advisory input preparation failed for %s; other indices continue", symbol)
+                self.metrics.increment("engine_input_errors")
+                with self.lock:
+                    self.contexts[symbol] = dict(at=0, error=type(exc).__name__)
+
+    def attach_cached_engines(self, result):
+        now = result["generated_at"]
+        published = self.evaluators.snapshot()
+        for symbol, signal in result["data"].items():
+            cards = []
+            option_metadata = None
+            future = self.engine.future.get(symbol)
+            for engine in ENGINES:
+                state = published.get((symbol, engine[1]))
+                card = state.get("card") if state else None
+                reason = "Waiting for this engine's inputs/evaluation"
+                if state and state["error"]:
+                    reason = state["error"]
+                elif card:
+                    valid = signal["feed_ready"] and not self.contexts.get(symbol, {}).get("error") and (
+                        now <= card["valid_until"]) and future and (
+                        future.token == card["source_token"] and
+                        self.engine.book.revisions[("future", future.token, 60)] == card["source_revision"])
+                    if not valid:
+                        reason, card = "Engine inputs expired or changed; awaiting fresh evaluation", None
+                if card and engine[1] == "options":
+                    option_metadata = card.pop("_metadata", None)
+                cards.append(card if card else engine_card(engine, reason=reason))
+            metadata = self.contexts.get(symbol, {})
+            fresh = signal["feed_ready"] and 0 <= now - metadata.get("at", 0) <= self.engine.policy.stale_seconds
+            features = option_metadata or metadata
+            signal.update(engines=cards, orchestration=orchestrate(cards),
+                          market=copy.deepcopy(features.get("market")) if fresh else None,
+                          options=copy.deepcopy(features.get("options")) if fresh else None)
+            for card in cards:
+                key = (symbol, card["key"])
+                previous = self.engine_states.get(key)
+                if previous != card["status"] and (previous is not None or card["status"] == "SATISFIED"):
+                    self.engine_events.append(dict(at=now, symbol=symbol, engine=card["id"], name=card["name"],
+                                                   status=card["status"], previous=previous, side=card["side"]))
+                self.engine_states[key] = card["status"]
+        result["vix"] = copy.deepcopy(self.vix) if (
+            self.vix and 0 <= now - self.vix["received"] <= VIX_STALE_SECONDS) else None
+        result["engine_events"] = list(reversed(self.engine_events))[:20]
+        result["engine_policy"] = dict(authority="ADVISORY_VETO", veto=self.engine_config.veto,
+                                       veto_min=self.engine_config.veto_min, engines=len(ENGINES))
+
+    def diagnostics(self):
+        now = time.time()
+        catalog = self.instrument_catalog.diagnostics()
+        with self.lock, self.health_lock:
+            futures = self.future_tokens()
+            all_ticks = {**{t.token: t for t in self.engine.spot.values()},
+                         **{t.token: t for t in self.engine.future.values()}, **self.engine.options}
+            subscribed = sorted(self.subscribed | set(futures))
+            missing = [token for token in subscribed if not self.engine.fresh(all_ticks.get(token), now)
+                       and not (self.vix and self.vix["token"] == token and now - self.vix["received"] <= VIX_STALE_SECONDS)]
+            readiness = {}
+            for symbol in SYMBOLS:
+                tokens = [token for token, name in futures.items() if name == symbol]
+                completed = max((warmup_count(self.engine.book.closed[("future", token, 60)], now)
+                                 for token in tokens), default=0)
+                opening = max((warmup_count(session_bars(self.engine.book.closed[("future", token, 60)], now), now)
+                               for token in tokens), default=0)
+                contracts = [c.token for c in self.engine.contracts.values() if c.symbol == symbol]
+                exchange = "BFO" if symbol == "SENSEX" else "NFO"
+                history_verified = completed >= WARMUP_CANDLES and not any(
+                    self.gaps.get(token, {}).get("minutes") for token in tokens)
+                prepared = (self.configured_days.get(exchange) == day(now) and not self.subscription_error
+                            and history_verified and bool(contracts)
+                            and symbol in self.engine.previous_day and set(contracts).issubset(self.subscribed))
+                readiness[symbol] = dict(prepared=prepared, history_completed=completed,
+                                         history_verified=history_verified,
+                                         history_required=WARMUP_CANDLES, futures=tokens, contracts=contracts,
+                                         history_error=self.history_errors.get(symbol),
+                                         live_ready=prepared and opening >= SESSION_CANDLES
+                                         and self.feed_connected is True and not self.failed.is_set()
+                                         and self.engine.fresh(self.engine.spot.get(symbol), now)
+                                         and not any(g["symbol"] == symbol for g in self.gaps.values())
+                                         and not (set(tokens + contracts) & set(missing)),
+                                         opening_candles_completed=min(opening, SESSION_CANDLES),
+                                         opening_candles_required=SESSION_CANDLES)
+            snapshot = self.snapshot()
+            return dict(
+                morning=self.morning.snapshot() if self.morning is not None else None,
+                generated_at=now, feed=dict(connected=self.feed_connected, connected_at=self.connection_at,
+                                           last_exchange_at=self.last_tick_at, last_received_at=self.last_received_at,
+                                           requested_tokens=subscribed, missing_or_stale_tokens=missing),
+                queue=dict(size=self.queue.qsize(), capacity=self.queue.maxsize,
+                           recovering=[{**gap, "token": token, "minutes": sorted(gap["minutes"])}
+                                       for token, gap in self.gaps.items()],
+                           journal_fault=self.failed.is_set()),
+                preparation=dict(last_attempt_at=self.prepared_at, instruments=readiness,
+                                 catalog=catalog, ml=self.ml_state["status"],
+                                 strategy_count=len(ENGINES)),
+                features=self.features.diagnostics(), rejected_ticks=dict(self.engine.book.rejected),
+                signal_events=list(self.signal_events),
+                engines=self.evaluators.diagnostics() if self.evaluators else dict(running=0, pending=0, workers=0),
+                evaluations={symbol: dict(engines=signal.get("engines"), orchestration=signal.get("orchestration"))
+                             for symbol, signal in snapshot["data"].items()},
+                measurements=self.metrics.snapshot())
 
     def attach_engines_safely(self, result):
         try:

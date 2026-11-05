@@ -1,0 +1,1107 @@
+{
+  "date": "2026-11-05",
+  "generated_at": "2026-11-05T15:31:27.849197+05:30",
+  "symbols": {
+    "NIFTY": {
+      "open_price": 24516.55,
+      "close_price": 24542.2,
+      "change_pct": 0.1,
+      "direction": "UP",
+      "day_classification": "SIDEWAYS",
+      "snapshot_count": 4,
+      "strategy_performance": {
+        "ict_smart_money": {
+          "strategy_name": "ICT Smart Money",
+          "morning_signal": "BEARISH",
+          "morning_confidence": 43,
+          "morning_detail": "ICT OB/FVG/MSS | setup={'name': '\u25bc ICT LEAN SHORT', 'description': 'Mild bearish bias from ICT framework', 'grade': 'C', 'confluences': 1}",
+          "morning_drivers": [
+            "order blocks",
+            "fair value gap",
+            "market structure shift"
+          ],
+          "morning_parameters": {
+            "direction": "BEARISH",
+            "confidence": 43,
+            "ict_setup": {
+              "name": "\u25bc ICT LEAN SHORT",
+              "description": "Mild bearish bias from ICT framework",
+              "grade": "C",
+              "confluences": 1
+            }
+          },
+          "closing_signal": "BULLISH",
+          "closing_confidence": 61,
+          "closing_detail": "ICT OB/FVG/MSS | setup={'name': '\u26a1 FVG ENTRY LONG', 'description': 'Displacement creating FVG \u2014 Price likely to retrace and hold', 'grade': 'B+', 'confluences': 2}",
+          "closing_drivers": [
+            "order blocks",
+            "fair value gap",
+            "market structure shift"
+          ],
+          "closing_parameters": {
+            "direction": "BULLISH",
+            "confidence": 61,
+            "ict_setup": {
+              "name": "\u26a1 FVG ENTRY LONG",
+              "description": "Displacement creating FVG \u2014 Price likely to retrace and hold",
+              "grade": "B+",
+              "confluences": 2
+            }
+          },
+          "priority_weight": 92,
+          "priority_band": "HIGH",
+          "actual_direction": "UP",
+          "was_correct": false
+        },
+        "ict_bias": {
+          "strategy_name": "ICT Bias",
+          "morning_signal": "BEARISH",
+          "morning_confidence": 43,
+          "morning_detail": "ICT OB/FVG/MSS | setup={'name': '\u25bc ICT LEAN SHORT', 'description': 'Mild bearish bias from ICT framework', 'grade': 'C', 'confluences': 1}",
+          "morning_drivers": [
+            "order blocks",
+            "fair value gap",
+            "market structure shift"
+          ],
+          "morning_parameters": {
+            "direction": "BEARISH",
+            "confidence": 43,
+            "ict_setup": {
+              "name": "\u25bc ICT LEAN SHORT",
+              "description": "Mild bearish bias from ICT framework",
+              "grade": "C",
+              "confluences": 1
+            }
+          },
+          "closing_signal": "BULLISH",
+          "closing_confidence": 61,
+          "closing_detail": "ICT OB/FVG/MSS | setup={'name': '\u26a1 FVG ENTRY LONG', 'description': 'Displacement creating FVG \u2014 Price likely to retrace and hold', 'grade': 'B+', 'confluences': 2}",
+          "closing_drivers": [
+            "order blocks",
+            "fair value gap",
+            "market structure shift"
+          ],
+          "closing_parameters": {
+            "direction": "BULLISH",
+            "confidence": 61,
+            "ict_setup": {
+              "name": "\u26a1 FVG ENTRY LONG",
+              "description": "Displacement creating FVG \u2014 Price likely to retrace and hold",
+              "grade": "B+",
+              "confluences": 2
+            }
+          },
+          "priority_weight": 90,
+          "priority_band": "HIGH",
+          "actual_direction": "UP",
+          "was_correct": false
+        },
+        "candle_intelligence": {
+          "strategy_name": "Candle Intelligence",
+          "morning_signal": "NEUTRAL",
+          "morning_confidence": 15,
+          "morning_detail": "Pattern | DOJI",
+          "morning_drivers": [
+            "candlestick pattern",
+            "candle quality"
+          ],
+          "morning_parameters": {
+            "signal": "NEUTRAL",
+            "confidence": 15,
+            "pattern": "DOJI"
+          },
+          "closing_signal": "BULLISH",
+          "closing_confidence": 48,
+          "closing_detail": "Pattern | HAMMER",
+          "closing_drivers": [
+            "candlestick pattern",
+            "candle quality"
+          ],
+          "closing_parameters": {
+            "signal": "BUY",
+            "confidence": 48,
+            "pattern": "HAMMER"
+          },
+          "priority_weight": 80,
+          "priority_band": "MEDIUM",
+          "actual_direction": "UP",
+          "was_correct": null
+        },
+        "chart_intelligence": {
+          "strategy_name": "Chart Intelligence",
+          "morning_signal": "NEUTRAL",
+          "morning_confidence": 60,
+          "morning_detail": "Pattern | N/A",
+          "morning_drivers": [
+            "price action pattern",
+            "chart structure"
+          ],
+          "morning_parameters": {
+            "signal": null,
+            "confidence": null,
+            "pattern": null
+          },
+          "closing_signal": "NEUTRAL",
+          "closing_confidence": 60,
+          "closing_detail": "Pattern | N/A",
+          "closing_drivers": [
+            "price action pattern",
+            "chart structure"
+          ],
+          "closing_parameters": {
+            "signal": null,
+            "confidence": null,
+            "pattern": null
+          },
+          "priority_weight": 83,
+          "priority_band": "MEDIUM",
+          "actual_direction": "UP",
+          "was_correct": null
+        },
+        "global_news": {
+          "strategy_name": "Global News & Events",
+          "morning_signal": "NEUTRAL",
+          "morning_confidence": 50,
+          "morning_detail": "News sentiment | events=0",
+          "morning_drivers": [
+            "macro news",
+            "breaking events"
+          ],
+          "morning_parameters": {
+            "market_impact": null,
+            "confidence": null,
+            "event_count": null
+          },
+          "closing_signal": "NEUTRAL",
+          "closing_confidence": 50,
+          "closing_detail": "News sentiment | events=0",
+          "closing_drivers": [
+            "macro news",
+            "breaking events"
+          ],
+          "closing_parameters": {
+            "market_impact": null,
+            "confidence": null,
+            "event_count": null
+          },
+          "priority_weight": 75,
+          "priority_band": "MEDIUM",
+          "actual_direction": "UP",
+          "was_correct": null
+        },
+        "global_impact_radar": {
+          "strategy_name": "Global Impact Radar",
+          "morning_signal": "NEUTRAL",
+          "morning_confidence": 50,
+          "morning_detail": "Global impact fusion | indices=NEUTRAL news=NEUTRAL",
+          "morning_drivers": [
+            "global indices",
+            "global news"
+          ],
+          "morning_parameters": {
+            "indices_signal": "NEUTRAL",
+            "news_signal": "NEUTRAL",
+            "indices_confidence": 50,
+            "news_confidence": 50
+          },
+          "closing_signal": "NEUTRAL",
+          "closing_confidence": 55,
+          "closing_detail": "Global impact fusion | indices=NEUTRAL news=NEUTRAL",
+          "closing_drivers": [
+            "global indices",
+            "global news"
+          ],
+          "closing_parameters": {
+            "indices_signal": "NEUTRAL",
+            "news_signal": "NEUTRAL",
+            "indices_confidence": 60,
+            "news_confidence": 50
+          },
+          "priority_weight": 84,
+          "priority_band": "MEDIUM",
+          "actual_direction": "UP",
+          "was_correct": null
+        },
+        "live_market_indices": {
+          "strategy_name": "Live Market Indices",
+          "morning_signal": "NEUTRAL",
+          "morning_confidence": 45,
+          "morning_detail": "Live index momentum | change=+0.00%",
+          "morning_drivers": [
+            "live price vs open",
+            "intraday momentum"
+          ],
+          "morning_parameters": {
+            "price": 0.0,
+            "open": 0.0,
+            "change_pct": 0.0
+          },
+          "closing_signal": "BULLISH",
+          "closing_confidence": 75,
+          "closing_detail": "Live index momentum | change=+0.75%",
+          "closing_drivers": [
+            "live price vs open",
+            "intraday momentum"
+          ],
+          "closing_parameters": {
+            "price": 24561.75,
+            "open": 24378.05,
+            "change_pct": 0.75
+          },
+          "priority_weight": 80,
+          "priority_band": "MEDIUM",
+          "actual_direction": "UP",
+          "was_correct": null
+        },
+        "global_risk": {
+          "strategy_name": "Global Risk",
+          "morning_signal": "NEUTRAL",
+          "morning_confidence": 50,
+          "morning_detail": "Risk regime proxy | vix=0.00",
+          "morning_drivers": [
+            "volatility regime",
+            "risk appetite"
+          ],
+          "morning_parameters": {
+            "vix": 0.0,
+            "risk_mode": "MIXED"
+          },
+          "closing_signal": "NEUTRAL",
+          "closing_confidence": 50,
+          "closing_detail": "Risk regime proxy | vix=0.00",
+          "closing_drivers": [
+            "volatility regime",
+            "risk appetite"
+          ],
+          "closing_parameters": {
+            "vix": 0.0,
+            "risk_mode": "MIXED"
+          },
+          "priority_weight": 88,
+          "priority_band": "MEDIUM",
+          "actual_direction": "UP",
+          "was_correct": null
+        },
+        "feed_health": {
+          "strategy_name": "Feed Health & Latency",
+          "morning_signal": "BEARISH",
+          "morning_confidence": 30,
+          "morning_detail": "Feed status=STALE | latency=0ms | age=999s",
+          "morning_drivers": [],
+          "morning_parameters": {},
+          "closing_signal": "BULLISH",
+          "closing_confidence": 100,
+          "closing_detail": "Feed status=HEALTHY | latency=0ms | age=0s",
+          "closing_drivers": [],
+          "closing_parameters": {},
+          "priority_weight": 90,
+          "priority_band": "HIGH",
+          "actual_direction": "UP",
+          "was_correct": false
+        },
+        "api_performance": {
+          "strategy_name": "API Response Times",
+          "morning_signal": "BULLISH",
+          "morning_confidence": 10,
+          "morning_detail": "API latency | avg=50ms",
+          "morning_drivers": [],
+          "morning_parameters": {},
+          "closing_signal": "BULLISH",
+          "closing_confidence": 10,
+          "closing_detail": "API latency | avg=50ms",
+          "closing_drivers": [],
+          "closing_parameters": {},
+          "priority_weight": 88,
+          "priority_band": "MEDIUM",
+          "actual_direction": "UP",
+          "was_correct": true
+        },
+        "cache_status": {
+          "strategy_name": "Cache & Memory",
+          "morning_signal": "BULLISH",
+          "morning_confidence": 85,
+          "morning_detail": "Cache type=in-memory | status=ACTIVE",
+          "morning_drivers": [],
+          "morning_parameters": {},
+          "closing_signal": "BULLISH",
+          "closing_confidence": 85,
+          "closing_detail": "Cache type=in-memory | status=ACTIVE",
+          "closing_drivers": [],
+          "closing_parameters": {},
+          "priority_weight": 80,
+          "priority_band": "MEDIUM",
+          "actual_direction": "UP",
+          "was_correct": true
+        },
+        "error_rate": {
+          "strategy_name": "Error Rate & Stability",
+          "morning_signal": "BULLISH",
+          "morning_confidence": 100,
+          "morning_detail": "Error count=0 | stability=HIGH",
+          "morning_drivers": [],
+          "morning_parameters": {},
+          "closing_signal": "BULLISH",
+          "closing_confidence": 100,
+          "closing_detail": "Error count=0 | stability=HIGH",
+          "closing_drivers": [],
+          "closing_parameters": {},
+          "priority_weight": 95,
+          "priority_band": "HIGH",
+          "actual_direction": "UP",
+          "was_correct": true
+        },
+        "data_freshness": {
+          "strategy_name": "Data Freshness",
+          "morning_signal": "BEARISH",
+          "morning_confidence": 50,
+          "morning_detail": "Data age=999s | freshness=DELAYED",
+          "morning_drivers": [],
+          "morning_parameters": {},
+          "closing_signal": "BEARISH",
+          "closing_confidence": 50,
+          "closing_detail": "Data age=999s | freshness=DELAYED",
+          "closing_drivers": [],
+          "closing_parameters": {},
+          "priority_weight": 85,
+          "priority_band": "MEDIUM",
+          "actual_direction": "UP",
+          "was_correct": false
+        }
+      }
+    },
+    "BANKNIFTY": {
+      "open_price": 57716.65,
+      "close_price": 57769.35,
+      "change_pct": 0.09,
+      "direction": "FLAT",
+      "day_classification": "SIDEWAYS",
+      "snapshot_count": 4,
+      "strategy_performance": {
+        "ict_smart_money": {
+          "strategy_name": "ICT Smart Money",
+          "morning_signal": "NEUTRAL",
+          "morning_confidence": 11,
+          "morning_detail": "ICT OB/FVG/MSS | setup={'name': '\u2696\ufe0f NO TRADE ZONE', 'description': 'ICT signals mixed \u2014 Wait for alignment', 'grade': '\u2014', 'confluences': 0}",
+          "morning_drivers": [
+            "order blocks",
+            "fair value gap",
+            "market structure shift"
+          ],
+          "morning_parameters": {
+            "direction": "NEUTRAL",
+            "confidence": 11,
+            "ict_setup": {
+              "name": "\u2696\ufe0f NO TRADE ZONE",
+              "description": "ICT signals mixed \u2014 Wait for alignment",
+              "grade": "\u2014",
+              "confluences": 0
+            }
+          },
+          "closing_signal": "BULLISH",
+          "closing_confidence": 67,
+          "closing_detail": "ICT OB/FVG/MSS | setup={'name': '\u25b2 ICT LEAN LONG', 'description': 'Mild bullish bias from ICT framework', 'grade': 'C', 'confluences': 1}",
+          "closing_drivers": [
+            "order blocks",
+            "fair value gap",
+            "market structure shift"
+          ],
+          "closing_parameters": {
+            "direction": "BULLISH",
+            "confidence": 67,
+            "ict_setup": {
+              "name": "\u25b2 ICT LEAN LONG",
+              "description": "Mild bullish bias from ICT framework",
+              "grade": "C",
+              "confluences": 1
+            }
+          },
+          "priority_weight": 92,
+          "priority_band": "HIGH",
+          "actual_direction": "FLAT",
+          "was_correct": null
+        },
+        "ict_bias": {
+          "strategy_name": "ICT Bias",
+          "morning_signal": "NEUTRAL",
+          "morning_confidence": 11,
+          "morning_detail": "ICT OB/FVG/MSS | setup={'name': '\u2696\ufe0f NO TRADE ZONE', 'description': 'ICT signals mixed \u2014 Wait for alignment', 'grade': '\u2014', 'confluences': 0}",
+          "morning_drivers": [
+            "order blocks",
+            "fair value gap",
+            "market structure shift"
+          ],
+          "morning_parameters": {
+            "direction": "NEUTRAL",
+            "confidence": 11,
+            "ict_setup": {
+              "name": "\u2696\ufe0f NO TRADE ZONE",
+              "description": "ICT signals mixed \u2014 Wait for alignment",
+              "grade": "\u2014",
+              "confluences": 0
+            }
+          },
+          "closing_signal": "BULLISH",
+          "closing_confidence": 67,
+          "closing_detail": "ICT OB/FVG/MSS | setup={'name': '\u25b2 ICT LEAN LONG', 'description': 'Mild bullish bias from ICT framework', 'grade': 'C', 'confluences': 1}",
+          "closing_drivers": [
+            "order blocks",
+            "fair value gap",
+            "market structure shift"
+          ],
+          "closing_parameters": {
+            "direction": "BULLISH",
+            "confidence": 67,
+            "ict_setup": {
+              "name": "\u25b2 ICT LEAN LONG",
+              "description": "Mild bullish bias from ICT framework",
+              "grade": "C",
+              "confluences": 1
+            }
+          },
+          "priority_weight": 90,
+          "priority_band": "HIGH",
+          "actual_direction": "FLAT",
+          "was_correct": null
+        },
+        "candle_intelligence": {
+          "strategy_name": "Candle Intelligence",
+          "morning_signal": "BEARISH",
+          "morning_confidence": 30,
+          "morning_detail": "Pattern | BEARISH_CANDLE",
+          "morning_drivers": [
+            "candlestick pattern",
+            "candle quality"
+          ],
+          "morning_parameters": {
+            "signal": "SELL",
+            "confidence": 30,
+            "pattern": "BEARISH_CANDLE"
+          },
+          "closing_signal": "BEARISH",
+          "closing_confidence": 30,
+          "closing_detail": "Pattern | BEARISH_CANDLE",
+          "closing_drivers": [
+            "candlestick pattern",
+            "candle quality"
+          ],
+          "closing_parameters": {
+            "signal": "SELL",
+            "confidence": 30,
+            "pattern": "BEARISH_CANDLE"
+          },
+          "priority_weight": 80,
+          "priority_band": "MEDIUM",
+          "actual_direction": "FLAT",
+          "was_correct": null
+        },
+        "chart_intelligence": {
+          "strategy_name": "Chart Intelligence",
+          "morning_signal": "NEUTRAL",
+          "morning_confidence": 60,
+          "morning_detail": "Pattern | N/A",
+          "morning_drivers": [
+            "price action pattern",
+            "chart structure"
+          ],
+          "morning_parameters": {
+            "signal": null,
+            "confidence": null,
+            "pattern": null
+          },
+          "closing_signal": "NEUTRAL",
+          "closing_confidence": 60,
+          "closing_detail": "Pattern | N/A",
+          "closing_drivers": [
+            "price action pattern",
+            "chart structure"
+          ],
+          "closing_parameters": {
+            "signal": null,
+            "confidence": null,
+            "pattern": null
+          },
+          "priority_weight": 83,
+          "priority_band": "MEDIUM",
+          "actual_direction": "FLAT",
+          "was_correct": null
+        },
+        "global_news": {
+          "strategy_name": "Global News & Events",
+          "morning_signal": "NEUTRAL",
+          "morning_confidence": 50,
+          "morning_detail": "News sentiment | events=0",
+          "morning_drivers": [
+            "macro news",
+            "breaking events"
+          ],
+          "morning_parameters": {
+            "market_impact": null,
+            "confidence": null,
+            "event_count": null
+          },
+          "closing_signal": "NEUTRAL",
+          "closing_confidence": 50,
+          "closing_detail": "News sentiment | events=0",
+          "closing_drivers": [
+            "macro news",
+            "breaking events"
+          ],
+          "closing_parameters": {
+            "market_impact": null,
+            "confidence": null,
+            "event_count": null
+          },
+          "priority_weight": 75,
+          "priority_band": "MEDIUM",
+          "actual_direction": "FLAT",
+          "was_correct": null
+        },
+        "global_impact_radar": {
+          "strategy_name": "Global Impact Radar",
+          "morning_signal": "NEUTRAL",
+          "morning_confidence": 50,
+          "morning_detail": "Global impact fusion | indices=NEUTRAL news=NEUTRAL",
+          "morning_drivers": [
+            "global indices",
+            "global news"
+          ],
+          "morning_parameters": {
+            "indices_signal": "NEUTRAL",
+            "news_signal": "NEUTRAL",
+            "indices_confidence": 50,
+            "news_confidence": 50
+          },
+          "closing_signal": "NEUTRAL",
+          "closing_confidence": 55,
+          "closing_detail": "Global impact fusion | indices=NEUTRAL news=NEUTRAL",
+          "closing_drivers": [
+            "global indices",
+            "global news"
+          ],
+          "closing_parameters": {
+            "indices_signal": "NEUTRAL",
+            "news_signal": "NEUTRAL",
+            "indices_confidence": 60,
+            "news_confidence": 50
+          },
+          "priority_weight": 84,
+          "priority_band": "MEDIUM",
+          "actual_direction": "FLAT",
+          "was_correct": null
+        },
+        "live_market_indices": {
+          "strategy_name": "Live Market Indices",
+          "morning_signal": "NEUTRAL",
+          "morning_confidence": 45,
+          "morning_detail": "Live index momentum | change=+0.00%",
+          "morning_drivers": [
+            "live price vs open",
+            "intraday momentum"
+          ],
+          "morning_parameters": {
+            "price": 0.0,
+            "open": 0.0,
+            "change_pct": 0.0
+          },
+          "closing_signal": "BULLISH",
+          "closing_confidence": 94,
+          "closing_detail": "Live index momentum | change=+1.23%",
+          "closing_drivers": [
+            "live price vs open",
+            "intraday momentum"
+          ],
+          "closing_parameters": {
+            "price": 57803.1,
+            "open": 57102.8,
+            "change_pct": 1.23
+          },
+          "priority_weight": 80,
+          "priority_band": "MEDIUM",
+          "actual_direction": "FLAT",
+          "was_correct": null
+        },
+        "global_risk": {
+          "strategy_name": "Global Risk",
+          "morning_signal": "NEUTRAL",
+          "morning_confidence": 50,
+          "morning_detail": "Risk regime proxy | vix=0.00",
+          "morning_drivers": [
+            "volatility regime",
+            "risk appetite"
+          ],
+          "morning_parameters": {
+            "vix": 0.0,
+            "risk_mode": "MIXED"
+          },
+          "closing_signal": "NEUTRAL",
+          "closing_confidence": 50,
+          "closing_detail": "Risk regime proxy | vix=0.00",
+          "closing_drivers": [
+            "volatility regime",
+            "risk appetite"
+          ],
+          "closing_parameters": {
+            "vix": 0.0,
+            "risk_mode": "MIXED"
+          },
+          "priority_weight": 88,
+          "priority_band": "MEDIUM",
+          "actual_direction": "FLAT",
+          "was_correct": null
+        },
+        "feed_health": {
+          "strategy_name": "Feed Health & Latency",
+          "morning_signal": "BEARISH",
+          "morning_confidence": 30,
+          "morning_detail": "Feed status=STALE | latency=0ms | age=999s",
+          "morning_drivers": [],
+          "morning_parameters": {},
+          "closing_signal": "BULLISH",
+          "closing_confidence": 100,
+          "closing_detail": "Feed status=HEALTHY | latency=0ms | age=0s",
+          "closing_drivers": [],
+          "closing_parameters": {},
+          "priority_weight": 90,
+          "priority_band": "HIGH",
+          "actual_direction": "FLAT",
+          "was_correct": null
+        },
+        "api_performance": {
+          "strategy_name": "API Response Times",
+          "morning_signal": "BULLISH",
+          "morning_confidence": 10,
+          "morning_detail": "API latency | avg=50ms",
+          "morning_drivers": [],
+          "morning_parameters": {},
+          "closing_signal": "BULLISH",
+          "closing_confidence": 10,
+          "closing_detail": "API latency | avg=50ms",
+          "closing_drivers": [],
+          "closing_parameters": {},
+          "priority_weight": 88,
+          "priority_band": "MEDIUM",
+          "actual_direction": "FLAT",
+          "was_correct": null
+        },
+        "cache_status": {
+          "strategy_name": "Cache & Memory",
+          "morning_signal": "BULLISH",
+          "morning_confidence": 85,
+          "morning_detail": "Cache type=in-memory | status=ACTIVE",
+          "morning_drivers": [],
+          "morning_parameters": {},
+          "closing_signal": "BULLISH",
+          "closing_confidence": 85,
+          "closing_detail": "Cache type=in-memory | status=ACTIVE",
+          "closing_drivers": [],
+          "closing_parameters": {},
+          "priority_weight": 80,
+          "priority_band": "MEDIUM",
+          "actual_direction": "FLAT",
+          "was_correct": null
+        },
+        "error_rate": {
+          "strategy_name": "Error Rate & Stability",
+          "morning_signal": "BULLISH",
+          "morning_confidence": 100,
+          "morning_detail": "Error count=0 | stability=HIGH",
+          "morning_drivers": [],
+          "morning_parameters": {},
+          "closing_signal": "BULLISH",
+          "closing_confidence": 100,
+          "closing_detail": "Error count=0 | stability=HIGH",
+          "closing_drivers": [],
+          "closing_parameters": {},
+          "priority_weight": 95,
+          "priority_band": "HIGH",
+          "actual_direction": "FLAT",
+          "was_correct": null
+        },
+        "data_freshness": {
+          "strategy_name": "Data Freshness",
+          "morning_signal": "BEARISH",
+          "morning_confidence": 50,
+          "morning_detail": "Data age=999s | freshness=DELAYED",
+          "morning_drivers": [],
+          "morning_parameters": {},
+          "closing_signal": "BEARISH",
+          "closing_confidence": 50,
+          "closing_detail": "Data age=999s | freshness=DELAYED",
+          "closing_drivers": [],
+          "closing_parameters": {},
+          "priority_weight": 85,
+          "priority_band": "MEDIUM",
+          "actual_direction": "FLAT",
+          "was_correct": null
+        }
+      }
+    },
+    "SENSEX": {
+      "open_price": 79262.54,
+      "close_price": 79373.18,
+      "change_pct": 0.14,
+      "direction": "UP",
+      "day_classification": "SIDEWAYS",
+      "snapshot_count": 4,
+      "strategy_performance": {
+        "ict_smart_money": {
+          "strategy_name": "ICT Smart Money",
+          "morning_signal": "NEUTRAL",
+          "morning_confidence": 10,
+          "morning_detail": "ICT OB/FVG/MSS | setup={'name': '\u2696\ufe0f NO TRADE ZONE', 'description': 'ICT signals mixed \u2014 Wait for alignment', 'grade': '\u2014', 'confluences': 0}",
+          "morning_drivers": [
+            "order blocks",
+            "fair value gap",
+            "market structure shift"
+          ],
+          "morning_parameters": {
+            "direction": "NEUTRAL",
+            "confidence": 10,
+            "ict_setup": {
+              "name": "\u2696\ufe0f NO TRADE ZONE",
+              "description": "ICT signals mixed \u2014 Wait for alignment",
+              "grade": "\u2014",
+              "confluences": 0
+            }
+          },
+          "closing_signal": "BULLISH",
+          "closing_confidence": 61,
+          "closing_detail": "ICT OB/FVG/MSS | setup={'name': '\u26a1 FVG ENTRY LONG', 'description': 'Displacement creating FVG \u2014 Price likely to retrace and hold', 'grade': 'B+', 'confluences': 2}",
+          "closing_drivers": [
+            "order blocks",
+            "fair value gap",
+            "market structure shift"
+          ],
+          "closing_parameters": {
+            "direction": "BULLISH",
+            "confidence": 61,
+            "ict_setup": {
+              "name": "\u26a1 FVG ENTRY LONG",
+              "description": "Displacement creating FVG \u2014 Price likely to retrace and hold",
+              "grade": "B+",
+              "confluences": 2
+            }
+          },
+          "priority_weight": 92,
+          "priority_band": "HIGH",
+          "actual_direction": "UP",
+          "was_correct": null
+        },
+        "ict_bias": {
+          "strategy_name": "ICT Bias",
+          "morning_signal": "NEUTRAL",
+          "morning_confidence": 10,
+          "morning_detail": "ICT OB/FVG/MSS | setup={'name': '\u2696\ufe0f NO TRADE ZONE', 'description': 'ICT signals mixed \u2014 Wait for alignment', 'grade': '\u2014', 'confluences': 0}",
+          "morning_drivers": [
+            "order blocks",
+            "fair value gap",
+            "market structure shift"
+          ],
+          "morning_parameters": {
+            "direction": "NEUTRAL",
+            "confidence": 10,
+            "ict_setup": {
+              "name": "\u2696\ufe0f NO TRADE ZONE",
+              "description": "ICT signals mixed \u2014 Wait for alignment",
+              "grade": "\u2014",
+              "confluences": 0
+            }
+          },
+          "closing_signal": "BULLISH",
+          "closing_confidence": 61,
+          "closing_detail": "ICT OB/FVG/MSS | setup={'name': '\u26a1 FVG ENTRY LONG', 'description': 'Displacement creating FVG \u2014 Price likely to retrace and hold', 'grade': 'B+', 'confluences': 2}",
+          "closing_drivers": [
+            "order blocks",
+            "fair value gap",
+            "market structure shift"
+          ],
+          "closing_parameters": {
+            "direction": "BULLISH",
+            "confidence": 61,
+            "ict_setup": {
+              "name": "\u26a1 FVG ENTRY LONG",
+              "description": "Displacement creating FVG \u2014 Price likely to retrace and hold",
+              "grade": "B+",
+              "confluences": 2
+            }
+          },
+          "priority_weight": 90,
+          "priority_band": "HIGH",
+          "actual_direction": "UP",
+          "was_correct": null
+        },
+        "candle_intelligence": {
+          "strategy_name": "Candle Intelligence",
+          "morning_signal": "NEUTRAL",
+          "morning_confidence": 15,
+          "morning_detail": "Pattern | None",
+          "morning_drivers": [
+            "candlestick pattern",
+            "candle quality"
+          ],
+          "morning_parameters": {
+            "signal": "NEUTRAL",
+            "confidence": 15,
+            "pattern": null
+          },
+          "closing_signal": "BULLISH",
+          "closing_confidence": 85,
+          "closing_detail": "Pattern | BULLISH_MARUBOZU",
+          "closing_drivers": [
+            "candlestick pattern",
+            "candle quality"
+          ],
+          "closing_parameters": {
+            "signal": "STRONG_BUY",
+            "confidence": 85,
+            "pattern": "BULLISH_MARUBOZU"
+          },
+          "priority_weight": 80,
+          "priority_band": "MEDIUM",
+          "actual_direction": "UP",
+          "was_correct": null
+        },
+        "chart_intelligence": {
+          "strategy_name": "Chart Intelligence",
+          "morning_signal": "NEUTRAL",
+          "morning_confidence": 60,
+          "morning_detail": "Pattern | N/A",
+          "morning_drivers": [
+            "price action pattern",
+            "chart structure"
+          ],
+          "morning_parameters": {
+            "signal": null,
+            "confidence": null,
+            "pattern": null
+          },
+          "closing_signal": "NEUTRAL",
+          "closing_confidence": 60,
+          "closing_detail": "Pattern | N/A",
+          "closing_drivers": [
+            "price action pattern",
+            "chart structure"
+          ],
+          "closing_parameters": {
+            "signal": null,
+            "confidence": null,
+            "pattern": null
+          },
+          "priority_weight": 83,
+          "priority_band": "MEDIUM",
+          "actual_direction": "UP",
+          "was_correct": null
+        },
+        "global_news": {
+          "strategy_name": "Global News & Events",
+          "morning_signal": "NEUTRAL",
+          "morning_confidence": 50,
+          "morning_detail": "News sentiment | events=0",
+          "morning_drivers": [
+            "macro news",
+            "breaking events"
+          ],
+          "morning_parameters": {
+            "market_impact": null,
+            "confidence": null,
+            "event_count": null
+          },
+          "closing_signal": "NEUTRAL",
+          "closing_confidence": 50,
+          "closing_detail": "News sentiment | events=0",
+          "closing_drivers": [
+            "macro news",
+            "breaking events"
+          ],
+          "closing_parameters": {
+            "market_impact": null,
+            "confidence": null,
+            "event_count": null
+          },
+          "priority_weight": 75,
+          "priority_band": "MEDIUM",
+          "actual_direction": "UP",
+          "was_correct": null
+        },
+        "global_impact_radar": {
+          "strategy_name": "Global Impact Radar",
+          "morning_signal": "NEUTRAL",
+          "morning_confidence": 50,
+          "morning_detail": "Global impact fusion | indices=NEUTRAL news=NEUTRAL",
+          "morning_drivers": [
+            "global indices",
+            "global news"
+          ],
+          "morning_parameters": {
+            "indices_signal": "NEUTRAL",
+            "news_signal": "NEUTRAL",
+            "indices_confidence": 50,
+            "news_confidence": 50
+          },
+          "closing_signal": "NEUTRAL",
+          "closing_confidence": 55,
+          "closing_detail": "Global impact fusion | indices=NEUTRAL news=NEUTRAL",
+          "closing_drivers": [
+            "global indices",
+            "global news"
+          ],
+          "closing_parameters": {
+            "indices_signal": "NEUTRAL",
+            "news_signal": "NEUTRAL",
+            "indices_confidence": 60,
+            "news_confidence": 50
+          },
+          "priority_weight": 84,
+          "priority_band": "MEDIUM",
+          "actual_direction": "UP",
+          "was_correct": null
+        },
+        "live_market_indices": {
+          "strategy_name": "Live Market Indices",
+          "morning_signal": "NEUTRAL",
+          "morning_confidence": 45,
+          "morning_detail": "Live index momentum | change=+0.00%",
+          "morning_drivers": [
+            "live price vs open",
+            "intraday momentum"
+          ],
+          "morning_parameters": {
+            "price": 0.0,
+            "open": 0.0,
+            "change_pct": 0.0
+          },
+          "closing_signal": "BULLISH",
+          "closing_confidence": 71,
+          "closing_detail": "Live index momentum | change=+0.66%",
+          "closing_drivers": [
+            "live price vs open",
+            "intraday momentum"
+          ],
+          "closing_parameters": {
+            "price": 79429.77,
+            "open": 78910.94,
+            "change_pct": 0.66
+          },
+          "priority_weight": 80,
+          "priority_band": "MEDIUM",
+          "actual_direction": "UP",
+          "was_correct": null
+        },
+        "global_risk": {
+          "strategy_name": "Global Risk",
+          "morning_signal": "NEUTRAL",
+          "morning_confidence": 50,
+          "morning_detail": "Risk regime proxy | vix=0.00",
+          "morning_drivers": [
+            "volatility regime",
+            "risk appetite"
+          ],
+          "morning_parameters": {
+            "vix": 0.0,
+            "risk_mode": "MIXED"
+          },
+          "closing_signal": "NEUTRAL",
+          "closing_confidence": 50,
+          "closing_detail": "Risk regime proxy | vix=0.00",
+          "closing_drivers": [
+            "volatility regime",
+            "risk appetite"
+          ],
+          "closing_parameters": {
+            "vix": 0.0,
+            "risk_mode": "MIXED"
+          },
+          "priority_weight": 88,
+          "priority_band": "MEDIUM",
+          "actual_direction": "UP",
+          "was_correct": null
+        },
+        "feed_health": {
+          "strategy_name": "Feed Health & Latency",
+          "morning_signal": "BEARISH",
+          "morning_confidence": 30,
+          "morning_detail": "Feed status=STALE | latency=0ms | age=999s",
+          "morning_drivers": [],
+          "morning_parameters": {},
+          "closing_signal": "BULLISH",
+          "closing_confidence": 100,
+          "closing_detail": "Feed status=HEALTHY | latency=0ms | age=0s",
+          "closing_drivers": [],
+          "closing_parameters": {},
+          "priority_weight": 90,
+          "priority_band": "HIGH",
+          "actual_direction": "UP",
+          "was_correct": false
+        },
+        "api_performance": {
+          "strategy_name": "API Response Times",
+          "morning_signal": "BULLISH",
+          "morning_confidence": 10,
+          "morning_detail": "API latency | avg=50ms",
+          "morning_drivers": [],
+          "morning_parameters": {},
+          "closing_signal": "BULLISH",
+          "closing_confidence": 10,
+          "closing_detail": "API latency | avg=50ms",
+          "closing_drivers": [],
+          "closing_parameters": {},
+          "priority_weight": 88,
+          "priority_band": "MEDIUM",
+          "actual_direction": "UP",
+          "was_correct": true
+        },
+        "cache_status": {
+          "strategy_name": "Cache & Memory",
+          "morning_signal": "BULLISH",
+          "morning_confidence": 85,
+          "morning_detail": "Cache type=in-memory | status=ACTIVE",
+          "morning_drivers": [],
+          "morning_parameters": {},
+          "closing_signal": "BULLISH",
+          "closing_confidence": 85,
+          "closing_detail": "Cache type=in-memory | status=ACTIVE",
+          "closing_drivers": [],
+          "closing_parameters": {},
+          "priority_weight": 80,
+          "priority_band": "MEDIUM",
+          "actual_direction": "UP",
+          "was_correct": true
+        },
+        "error_rate": {
+          "strategy_name": "Error Rate & Stability",
+          "morning_signal": "BULLISH",
+          "morning_confidence": 100,
+          "morning_detail": "Error count=0 | stability=HIGH",
+          "morning_drivers": [],
+          "morning_parameters": {},
+          "closing_signal": "BULLISH",
+          "closing_confidence": 100,
+          "closing_detail": "Error count=0 | stability=HIGH",
+          "closing_drivers": [],
+          "closing_parameters": {},
+          "priority_weight": 95,
+          "priority_band": "HIGH",
+          "actual_direction": "UP",
+          "was_correct": true
+        },
+        "data_freshness": {
+          "strategy_name": "Data Freshness",
+          "morning_signal": "BEARISH",
+          "morning_confidence": 50,
+          "morning_detail": "Data age=999s | freshness=DELAYED",
+          "morning_drivers": [],
+          "morning_parameters": {},
+          "closing_signal": "BEARISH",
+          "closing_confidence": 50,
+          "closing_detail": "Data age=999s | freshness=DELAYED",
+          "closing_drivers": [],
+          "closing_parameters": {},
+          "priority_weight": 85,
+          "priority_band": "MEDIUM",
+          "actual_direction": "UP",
+          "was_correct": false
+        }
+      }
+    }
+  }
+}

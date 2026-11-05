@@ -6,6 +6,7 @@ import time
 from datetime import date, datetime
 
 from config import get_settings
+from services.instrument_catalog import instrument_catalog
 from services.chart_history_service import (
     ChartHistoryService, ChartHistoryUnavailable, INTERVALS, IST, TOKENS, kite_client,
 )
@@ -20,6 +21,7 @@ class FuturesChartService(ChartHistoryService):
         super().__init__(db_path)
         self._instruments = {}
         self._instrument_locks = {}
+        self._instrument_days = {}
 
     def _instrument_token(self, symbol):
         return int(symbol.removeprefix("FUT:"))
@@ -28,7 +30,7 @@ class FuturesChartService(ChartHistoryService):
         settings = get_settings()
         if not settings.zerodha_api_key or not settings.zerodha_access_token:
             raise ChartHistoryUnavailable("Connect Zerodha to load futures contracts.")
-        return kite_client(settings).instruments(exchange)
+        return instrument_catalog.get(kite_client(settings), exchange)
 
     async def contracts(self, symbol, now=None):
         if symbol not in TOKENS:
@@ -38,7 +40,7 @@ class FuturesChartService(ChartHistoryService):
         lock = self._instrument_locks.setdefault(exchange, asyncio.Lock())
         async with lock:
             cached = self._instruments.get(exchange)
-            if cached is None or time.monotonic() - cached[0] >= 3600:
+            if cached is None or self._instrument_days.get(exchange) != today or time.monotonic() - cached[0] >= 3600:
                 try:
                     rows = await asyncio.to_thread(self._fetch_instruments, exchange)
                     if not rows:
@@ -56,6 +58,7 @@ class FuturesChartService(ChartHistoryService):
                 ]
                 cached = (time.monotonic(), rows)
                 self._instruments[exchange] = cached
+                self._instrument_days[exchange] = today
         contracts = []
         for row in cached[1]:
             if row.get("instrument_type") != "FUT" or row.get("name") != symbol or row.get("exchange") != exchange:

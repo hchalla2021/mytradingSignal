@@ -212,17 +212,20 @@ function AQTEAutomationSwitch({ onStatus, feed, feedError = null }: {
       )}
       {confirming === 'on' && (
         <div role="group" aria-label="Confirm automated real trading" onKeyDown={cancelOnEscape}
-          className="space-y-2 rounded-lg border border-amber-400/40 bg-slate-950 p-3 text-xs">
-          <p className="leading-relaxed text-amber-100">Start automated real-money orders? ON stays saved until you switch OFF, even when the market is closed. Every weekday from 9:15 AM IST it checks Kite and static IP, arms itself and scans for qualifying one-lot BUY CE/BUY PE entries using your saved settings. New entries stop at 3:15 PM IST. No qualifying signal means no trade.</p>
-          <p className="leading-relaxed text-slate-300">AQTE manages only its own tagged orders. It never closes, cancels or modifies your manual Kite trades; if you already hold its chosen contract, it uses a different strike or waits.</p>
-          <p className={`leading-relaxed ${status?.unvalidated_rules ? 'text-rose-200' : 'text-slate-300'}`}>
-            {status?.unvalidated_rules
-              ? 'Server allows unvalidated rule entries: fully aligned setups can place real one-lot orders.'
-              : 'Strict validation mode: the quality gate blocks every entry, so ON scans without placing orders.'}
-          </p>
+          className="aqx-auto-confirm">
+          <p className="aqx-auto-confirm-lead">Start automated real-money orders? ON stays saved until you switch OFF, even when the market is closed. Weekday one-lot BUY CE/BUY PE entries run 09:15–15:15 IST after safety checks. No qualifying signal means no trade.</p>
+          <details className="aqx-auto-confirm-details">
+            <summary>Review execution safeguards</summary>
+            <p>AQTE manages only its own tagged orders. It never closes, cancels or modifies your manual Kite trades; if you already hold its chosen contract, it uses a different strike or waits.</p>
+            <p className={status?.unvalidated_rules ? 'text-rose-200' : 'text-slate-300'}>
+              {status?.unvalidated_rules
+                ? 'Server allows unvalidated rule entries: fully aligned setups can place real one-lot orders.'
+                  : 'Strict validation mode: the quality gate blocks every entry, so ON scans without placing orders.'}
+            </p>
+          </details>
           <div className="flex flex-wrap gap-2">
-            <button type="button" disabled={busy || !canStart} onClick={() => void act('on')} className="min-h-[44px] rounded-lg border border-amber-400/40 px-3 text-amber-200 disabled:opacity-40">Confirm ON · real money</button>
-            <button type="button" onClick={() => setConfirming(null)} className="min-h-[44px] rounded-lg border border-slate-600 px-3 text-slate-300">Cancel · stay OFF</button>
+            <button type="button" disabled={busy || !canStart} onClick={() => void act('on')} className="aqx-auto-confirm-on">Confirm ON · real money</button>
+            <button type="button" onClick={() => setConfirming(null)} className="aqx-auto-confirm-cancel">Cancel · stay OFF</button>
           </div>
         </div>
       )}

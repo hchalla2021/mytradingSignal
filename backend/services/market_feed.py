@@ -1,10 +1,11 @@
 """Zerodha KiteTicker market feed service."""
 import asyncio
+import logging
 import threading
 import time as time_module
 from datetime import datetime, time
 from typing import Dict, Any, Optional, TYPE_CHECKING
-from queue import Queue
+from queue import Empty, Full, Queue
 import pytz
 
 if TYPE_CHECKING:  # annotation-only import; runtime imports stay lazy
@@ -21,6 +22,7 @@ from config.market_session import get_market_session
 from config.nse_holidays import is_holiday
 
 settings = get_settings()
+logger = logging.getLogger(__name__)
 
 
 def reload_settings():
@@ -161,7 +163,7 @@ class MarketFeedService:
         self.last_oi: Dict[str, int] = {}  # Track last OI for change calculation
         self.last_update_time: Dict[str, float] = {}  # Track last update time per symbol
         self._tick_lock = threading.Lock()  # Protects last_prices/last_update_time across threads
-        self._tick_queue: Queue = Queue()
+        self._tick_queue: Queue = Queue(maxsize=20_000)
         # ── Multi-timeframe candle builders ─────────────────────────────────
         # Accumulates live ticks into proper OHLCV candles at 3m, 5m, 15m.
         # 5m → analysis_candles:{symbol}   (existing, used by many services)
@@ -179,6 +181,9 @@ class MarketFeedService:
         self._using_rest_fallback: bool = False  # Flag for REST API fallback mode
         self._ws_recovery_after: Optional[float] = None  # Monotonic deadline for leaving REST fallback
         self._feed_loop_active: bool = False  # Guards against duplicate start() loops
+        self._prepare_task = None
+        self._prepare_request = None
+        self._connection_generation = 0
     
     @property
     def is_connected(self) -> bool:
@@ -476,7 +481,16 @@ class MarketFeedService:
         except Exception as error:
             print(f"?? Order flow ingest error: {error}")
 
+    def _on_order_update(self, ws, update):
+        from services.aqte_live import get_live_service
+        get_live_service().broker_update(update)
+
     def _on_ticks(self, ws, ticks):
+        from services.aqte_service import get_aqte_service
+        with get_aqte_service().metrics.measure("feed.dispatch"):
+            self._dispatch_ticks(ws, ticks)
+
+    def _dispatch_ticks(self, ws, ticks):
         """Callback when ticks are received (runs in KiteTicker thread)."""
         global _zerodha_ticks_active, _zerodha_last_tick_time
         # Mark that Zerodha is actively sending data
@@ -543,7 +557,19 @@ class MarketFeedService:
                         self.last_prices[symbol] = data["price"]
                         self.last_update_time[symbol] = current_time
                     
-                    self._tick_queue.put(data)
+                    try:
+                        self._tick_queue.put_nowait(data)
+                    except Full:
+                        # This queue is dashboard delivery only; AQTE's loss-aware queue received the raw tick above.
+                        try:
+                            self._tick_queue.get_nowait()
+                        except Empty:
+                            pass
+                        try:
+                            self._tick_queue.put_nowait(data)
+                        except Full:
+                            logger.warning("Market dashboard queue still full after dropping its oldest update")
+                        get_aqte_service().metrics.increment("dashboard_updates_coalesced")
                     
             except Exception as e:
                 print(f"❌ Error processing tick: {e}")
@@ -773,8 +799,9 @@ class MarketFeedService:
             try:
                 # Fetch all NFO instruments to get trading symbols
                 print("📥 Fetching instruments to find futures trading symbols...")
-                nfo_instruments = kite.instruments("NFO")
-                bfo_instruments = kite.instruments("BFO") if "SENSEX" in futures_tokens else []
+                from services.instrument_catalog import instrument_catalog
+                nfo_instruments = instrument_catalog.get(kite, "NFO")
+                bfo_instruments = instrument_catalog.get(kite, "BFO") if "SENSEX" in futures_tokens else []
                 
                 # Map tokens to trading symbols
                 token_to_symbol = {}
@@ -976,7 +1003,37 @@ class MarketFeedService:
         
         # 🟢 Mark auth as successful
         auth_state_manager.mark_api_success()
-        
+
+        self._connection_generation += 1
+        tokens = list(TOKEN_SYMBOL_MAP) + list(FUT_TOKEN_MAP)
+        ws.subscribe(tokens)
+        ws.set_mode(ws.MODE_FULL, tokens)
+        self._prepare_request = (ws, self._connection_generation)
+        if self._loop is None or self._loop.is_closed():
+            logger.error("Market connection preparation unavailable: application event loop is not running")
+            return
+        self._loop.call_soon_threadsafe(self._schedule_connection_preparation)
+
+    def _schedule_connection_preparation(self):
+        if self._prepare_task is None or self._prepare_task.done():
+            self._prepare_task = asyncio.create_task(self._prepare_connection(), name="kite-market-preparation")
+
+    async def _prepare_connection(self):
+        while self._prepare_request is not None:
+            ws, generation = self._prepare_request
+            self._prepare_request = None
+            try:
+                from services.aqte_service import get_aqte_service
+                with get_aqte_service().metrics.measure("preparation.connection_context"):
+                    ready = await asyncio.to_thread(self._load_connection_context, ws, generation)
+                if not ready and generation == self._connection_generation and self._is_connected:
+                    await asyncio.sleep(60)
+                    if generation == self._connection_generation and self._is_connected and self._prepare_request is None:
+                        self._prepare_request = (ws, generation)
+            except Exception:
+                logger.exception("Shared Kite connection preparation failed; readiness remains incomplete")
+
+    def _load_connection_context(self, ws, generation):
         # Fetch real previous close prices using KiteConnect
         kite = None
         try:
@@ -992,7 +1049,7 @@ class MarketFeedService:
             # Zerodha quote API expects tradingsymbols with exchange, but for indices, use index names
             index_symbols = {
                 settings.nifty_token: "NSE:NIFTY 50",
-                settings.banknifty_token: "NSE:BANKNIFTY",
+                settings.banknifty_token: "NSE:NIFTY BANK",
                 settings.sensex_token: "BSE:SENSEX"
             }
             print(f"📊 Fetching quotes for: {list(index_symbols.values())}")
@@ -1021,6 +1078,8 @@ class MarketFeedService:
             print(f"⚠️ Futures token resolution error: {e}")
 
         # Subscribe to instrument tokens (indices + current-month futures)
+        if generation != self._connection_generation or not self._is_connected:
+            return
         tokens = list(TOKEN_SYMBOL_MAP.keys()) + list(FUT_TOKEN_MAP.keys())
         print(f"📊 Subscribing to tokens: {tokens}")
         ws.subscribe(tokens)
@@ -1029,6 +1088,8 @@ class MarketFeedService:
         get_aqte_service().attach(kite, ws, PREV_CLOSE, PREV_DAY_OHLC)
         print(f"📊 Subscribed to: {list(TOKEN_SYMBOL_MAP.values()) + [f'{s} FUT' for s in FUT_TOKEN_MAP.values()]}")
         print("✅ Market feed is now LIVE - Waiting for ticks...")
+        return all(PREV_DAY_OHLC.get(symbol, {}).get("prepared_for") == datetime.now(IST).date().isoformat()
+                   and symbol in FUT_TOKEN_MAP.values() for symbol in ("NIFTY", "BANKNIFTY", "SENSEX"))
     
     def _fetch_prev_day_ohlc(self, kite=None):
         """Fetch previous trading day OHLC via historical_data API for CRT analysis."""
@@ -1056,6 +1117,8 @@ class MarketFeedService:
 
             print(f"📅 Fetching previous day OHLC (from {from_date} to {to_date})...")
             for token, symbol in index_tokens.items():
+                if PREV_DAY_OHLC.get(symbol, {}).get("prepared_for") != today.isoformat():
+                    PREV_DAY_OHLC.pop(symbol, None)
                 try:
                     data = kite.historical_data(
                         instrument_token=token,
@@ -1071,6 +1134,8 @@ class MarketFeedService:
                             "high": prev["high"],
                             "low": prev["low"],
                             "close": prev["close"],
+                            "session_day": str(prev["date"])[:10],
+                            "prepared_for": today.isoformat(),
                         }
                         print(f"  📊 {symbol} prev day: H={prev['high']}, L={prev['low']}, C={prev['close']}")
                     else:
@@ -1090,6 +1155,10 @@ class MarketFeedService:
         
         # 🔥 Clear connection flag
         self._is_connected = False
+        self._connection_generation += 1
+        self._prepare_request = None
+        from services.aqte_service import get_aqte_service
+        get_aqte_service().set_feed_connection(False)
         
         # 🔥 Notify watchdog of disconnection
         feed_watchdog.on_disconnect()
@@ -1313,6 +1382,7 @@ class MarketFeedService:
             
             # Assign callbacks
             self.kws.on_ticks = self._on_ticks
+            self.kws.on_order_update = self._on_order_update
             self.kws.on_connect = self._on_connect
             self.kws.on_close = self._on_close
             self.kws.on_error = self._on_error
@@ -1407,6 +1477,7 @@ class MarketFeedService:
             
             # Assign callbacks
             self.kws.on_ticks = self._on_ticks
+            self.kws.on_order_update = self._on_order_update
             self.kws.on_connect = self._on_connect
             self.kws.on_close = self._on_close
             self.kws.on_error = self._on_error
@@ -1583,6 +1654,7 @@ class MarketFeedService:
                 
                 # Assign callbacks
                 self.kws.on_ticks = self._on_ticks
+                self.kws.on_order_update = self._on_order_update
                 self.kws.on_connect = self._on_connect
                 self.kws.on_close = self._on_close
                 self.kws.on_error = self._on_error
@@ -1617,6 +1689,15 @@ class MarketFeedService:
         self._feed_loop_active = False
         if self.kws:
             self.kws.close()
+        self._is_connected = False
+        self._connection_generation += 1
+        self._prepare_request = None
+        if self._prepare_task:
+            self._prepare_task.cancel()
+            try:
+                await self._prepare_task
+            except asyncio.CancelledError:
+                pass
         print("🛑 Market feed stopped")
     
     async def reconnect_with_new_token(self, new_access_token: str):

@@ -10,6 +10,7 @@ import AQTEDailyControl from '@/components/AQTEDailyControl';
 import AQTETerminal from '@/components/AQTETerminal';
 import AQTEBrokerPositions from '@/components/AQTEBrokerPositions';
 import AQTEEngineDeck from '@/components/AQTEEngineDeck';
+import AQTEMorningEngine from '@/components/AQTEMorningEngine';
 import { AQTE_RECONNECT_GRACE_MS, aqteCanExit, aqteConnectionDrop, aqteDaySummary, aqteEngineView, aqteErrorText, aqteFeedCurrent, aqteLiveMetrics,
   aqtePollLoop, isAqteEngineEvent, isAqteIntelligence, isAqteRuleChecks,
   type AQTEEngineEvent, type AQTEEnginePolicy, type AQTELiveState, type AQTEExitRequest, type AQTESignal } from '@/lib/aqte-display';
@@ -460,6 +461,7 @@ function AQTESection({ marketData, isConnected = false }: { marketData?: MarketD
         totalPoints={totalPoints} drawdown={known ? drawdown : null} openPositions={known ? openFilled > 0 ? 1 : 0 : null}
         riskLabel={risk.label} riskNote={risk.note} riskTone={risk.tone} riskUsed={riskUsed}
         dailyLoss={liveStatus?.limits.daily_loss ?? null} riskShare={riskShare} />
+      <AQTEMorningEngine status={liveStatus} symbol={selectedSymbol} onStatus={publishLive} now={now / 1000} />
       <section className="aqx-dash-term" id="aqte-dash-trades" aria-labelledby="aqte-term-title">
         <h3 id="aqte-term-title" className="aqx-term-title">
           <span className="aqx-term-icon" aria-hidden="true"><NavIcon path={ICONS.trades} /></span>
@@ -477,7 +479,7 @@ function AQTESection({ marketData, isConnected = false }: { marketData?: MarketD
         ))}
       </section>
       <AQTEEngineDeck symbol={selectedSymbol} data={snapshot?.data} liveStatus={liveStatus} unavailable={unavailable}
-        events={events} policy={policy} now={now / 1000} onViewAll={() => go('aqte-dash-book', 'today')}
+        events={events} policy={policy} now={now / 1000}
         chart={SYMBOLS.map(symbol => (
           <div key={symbol} className="aqx-chart-slot" hidden={selectedSymbol !== symbol}>
             {chartsOpened[symbol] ? <Chart symbol={symbol} tick={quotes[symbol].tick} /> : null}

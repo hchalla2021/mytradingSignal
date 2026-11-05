@@ -59,6 +59,10 @@ class LiveTests(unittest.TestCase):
                                 "sell": [{"price": 99, "quantity": 100}]}}}
         self.market = Mock()
         self.market.lock = threading.RLock()
+        self.market.health_lock = threading.RLock()
+        self.market.gaps = {}
+        self.market.feed_connected = None
+        self.market.evaluators = None
         self.market.engine = ready_engine()
         self.market.snapshot.side_effect = lambda: self.market.engine.snapshot(NOW) | {"recording": True}
         self.market.started = True
@@ -124,6 +128,49 @@ class LiveTests(unittest.TestCase):
             self.live.preflight()
         self.ip.assert_not_called()
         self.broker.place_order.assert_not_called()
+
+    def test_execution_history_preserves_original_reason_through_close(self):
+        from services.aqte_execution_history import read_executions
+        self.enter()
+        original = copy.deepcopy(self.live.state["active"]["execution_context"])
+        self.market.engine.signals["NIFTY"]["reasons"] = ["A different signal arrived later"]
+        self.live.reconcile()
+        self.orders[1].update(status="COMPLETE", filled_quantity=CONTRACT.lot_size, average_price=110)
+        self.positions[0]["quantity"] = 0
+        self.live.reconcile()
+        row = read_executions(self.path)["rows"][0]
+        self.assertEqual(row["reason"], original["reason"])
+        self.assertNotIn("different signal", row["reason"])
+        self.assertEqual(row["status"], "CLOSED")
+        self.assertEqual(row["entry_id"], "1")
+        self.assertEqual(row["protect_id"], "2")
+        self.assertEqual(self.live.state["trades"][-1]["execution_context"], original)
+
+    def test_rejected_unfilled_execution_is_kept_after_active_is_cleared(self):
+        from services.aqte_execution_history import read_executions
+        self.armed()
+        proposal = self.live.proposal("NIFTY")
+        self.live.confirm(proposal["id"])
+        self.orders[0].update(status="REJECTED", status_message="Broker rejection")
+        self.live.reconcile()
+        self.assertIsNone(self.live.state["active"])
+        row = read_executions(self.path)["rows"][0]
+        self.assertEqual(row["status"], "REJECTED")
+        self.assertEqual(row["filled"], 0)
+        self.assertEqual(row["status_reason"], "Broker rejection")
+        self.assertIsNone(row["entry_price"])
+
+    def test_partial_fill_is_recorded_without_treating_ack_as_complete(self):
+        from services.aqte_execution_history import read_executions
+        self.armed()
+        proposal = self.live.proposal("NIFTY")
+        self.live.confirm(proposal["id"])
+        pending = read_executions(self.path)["rows"][0]
+        self.assertEqual((pending["status"], pending["filled"]), ("ENTRY_PENDING", 0))
+        self.orders[0].update(status="OPEN", filled_quantity=5, average_price=99)
+        self.live.reconcile()
+        partial = read_executions(self.path)["rows"][0]
+        self.assertEqual((partial["status"], partial["filled"]), ("PARTIALLY_FILLED", 5))
 
     def test_confirmed_start_needs_no_paper_approval_setting(self):
         self.assertFalse(hasattr(self.cfg, "aqte_live_paper_validated"))
@@ -1305,6 +1352,10 @@ class LiveTests(unittest.TestCase):
         alternate = replace(CONTRACT, token=31, trading_symbol="NIFTY26NOV22050CE", strike=22050)
         self.market.engine.contracts[31] = alternate
         self.market.engine.options[31] = tick("option", token=31)
+        original_quote = self.broker.quote.side_effect
+        self.broker.quote.side_effect = lambda keys: {
+            key: {**value, "instrument_token": 31 if key.endswith(alternate.trading_symbol) else CONTRACT.token}
+            for key, value in original_quote(keys).items()}
         self.positions = [self.manual_position(token=CONTRACT.token, symbol=CONTRACT.trading_symbol, quantity=15)]
         self.armed()
         self.live.automated_entry()
@@ -1314,6 +1365,60 @@ class LiveTests(unittest.TestCase):
         self.broker.place_order.assert_called_once()
         self.broker.cancel_order.assert_not_called()
         self.broker.modify_order.assert_not_called()
+
+    def test_broker_quote_for_another_token_is_never_submitted(self):
+        self.armed()
+        proposal = self.live.proposal("NIFTY")
+        original_quote = self.broker.quote.side_effect
+        self.broker.quote.side_effect = lambda keys: {
+            key: {**value, "instrument_token": CONTRACT.token + 1} for key, value in original_quote(keys).items()}
+        with self.assertRaisesRegex(LiveBlocked, "quote token"):
+            self.live.confirm(proposal["id"])
+        self.broker.place_order.assert_not_called()
+        self.assertFalse(self.live.state["used"])
+
+    def test_opposing_engine_result_arriving_during_margin_check_is_rechecked_before_submission(self):
+        self.armed()
+        proposal = self.live.proposal("NIFTY")
+        original_snapshot = self.market.snapshot.side_effect
+        def late_margin(_segment):
+            def updated_snapshot():
+                snapshot = original_snapshot()
+                snapshot["data"]["NIFTY"]["orchestration"] = dict(ce=0, pe=3)
+                return snapshot
+            self.market.snapshot.side_effect = updated_snapshot
+            return {"available": {"cash": 100_000}}
+        self.broker.margins.side_effect = late_margin
+        with self.assertRaisesRegex(LiveBlocked, "Engine conflict"):
+            self.live.confirm(proposal["id"])
+        self.broker.place_order.assert_not_called()
+        self.assertFalse(self.live.state["used"])
+
+    def test_pre_market_broker_readiness_does_not_arm_or_place_orders(self):
+        with patch("services.aqte_live.time.time", return_value=START - 20 * 60):
+            self.live.prepare_session()
+            self.live.prepare_session()
+        self.assertIsNotNone(self.live.check)
+        self.assertIsNone(self.live.state["armed_day"])
+        self.assertFalse(self.live.state["automation_on"])
+        self.broker.profile.assert_called_once()
+        self.broker.place_order.assert_not_called()
+
+    def test_opportunity_rejections_are_deduplicated_persisted_and_expired(self):
+        snapshot = self.market.snapshot()
+        self.assertEqual(snapshot["data"]["NIFTY"]["decision"], "BUY CE")
+        self.live.record_opportunities(snapshot)
+        self.live.record_opportunities(snapshot)
+        with closing(sqlite3.connect(self.path)) as db:
+            count = db.execute("SELECT COUNT(*) FROM live_audit WHERE kind='OPPORTUNITY'").fetchone()[0]
+        self.assertEqual(count, len(self.live.opportunities))
+        self.assertTrue(all(record["state"] == "REJECTED" for record in self.live.opportunities.values()))
+        snapshot["data"]["NIFTY"].update(decision="WAIT", entry=None, scalp=None)
+        self.live.record_opportunities(snapshot)
+        self.assertTrue(all(record["state"] == "EXPIRED" for record in self.live.opportunities.values()))
+        with closing(sqlite3.connect(self.path)) as db:
+            rows = db.execute("SELECT payload FROM live_opportunities").fetchall()
+        self.assertTrue(all(json.loads(row[0])["state"] == "EXPIRED" for row in rows))
 
     def test_owner_held_contract_or_working_order_without_free_strike_skips_and_retries(self):
         for book in ("position", "order"):

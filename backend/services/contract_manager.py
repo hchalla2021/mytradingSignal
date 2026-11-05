@@ -21,6 +21,7 @@ from dateutil.relativedelta import relativedelta
 import pytz
 import logging
 from typing import Dict, List, Optional, Tuple
+from services.instrument_catalog import instrument_catalog
 
 logger = logging.getLogger(__name__)
 
@@ -71,7 +72,7 @@ class ContractManager:
         if self._cache_timestamp is None:
             return False
         age = (datetime.now(IST) - self._cache_timestamp).total_seconds()
-        return age < self._cache_expiry
+        return age < self._cache_expiry and self._cache_timestamp.date() == datetime.now(IST).date()
     
     def _refresh_instruments(self) -> bool:
         """
@@ -89,8 +90,8 @@ class ContractManager:
             
             # Fetch both NFO (for NIFTY/BANKNIFTY) and BFO (for SENSEX futures)
             # SENSEX futures trade on BFO (BSE Futures & Options), NOT BSE spot exchange
-            nfo_instruments = self.kite.instruments("NFO")
-            bse_instruments = self.kite.instruments("BFO")
+            nfo_instruments = instrument_catalog.get(self.kite, "NFO")
+            bse_instruments = instrument_catalog.get(self.kite, "BFO")
             
             if not nfo_instruments:
                 logger.error("❌ No NFO instruments received from Zerodha")

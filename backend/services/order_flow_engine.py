@@ -358,6 +358,64 @@ class OrderFlowEngine:
             dom["token"] = state.token
             return dom
 
+    def live_summary(self, symbol: str) -> Optional[Dict[str, Any]]:
+        """Current in-memory order-flow summary; aggressor classifications are estimates, not exchange flags."""
+        with self._lock:
+            state = self._states.get(symbol)
+            if not state or not state.dom:
+                return None
+            minute = dict(state.minute or {})
+            dom = state.dom
+            zones = []
+            now = state.last_ts or time.time()
+            for zone in state.zones.values():
+                if zone["seen"] < ZONE_MIN_SNAPSHOTS or now - zone["last"] > 90:
+                    continue
+                zones.append({"side": zone["side"], "price": zone["price"], "quantity": int(zone["qty"]),
+                              "max_quantity": int(zone["max"]), "observations": zone["seen"],
+                              "status": "broken" if zone.get("broken") is not None else "active"})
+            bids, asks = dom["bids"], dom["asks"]
+            bid_depth = sum(row[1] for row in bids)
+            ask_depth = sum(row[1] for row in asks)
+            profile = [
+                {"price": price, "estimated_buy_volume": values[0], "estimated_sell_volume": values[1],
+                 "classified_volume": sum(values)}
+                for price, values in sorted(minute.get("lv", {}).items(), key=lambda item: float(item[0]))
+            ]
+            return {
+                "source": "shared_KiteTicker_futures_order_flow",
+                "token": state.token, "at": state.last_ts, "minute_at": minute.get("t"),
+                "ltp": dom["ltp"], "spot": minute.get("spot"),
+                "bids": [list(row) for row in dom["bids"]], "asks": [list(row) for row in dom["asks"]],
+                "best_bid": bids[0][0] if bids else None, "best_ask": asks[0][0] if asks else None,
+                "five_level_bid_depth": bid_depth, "five_level_ask_depth": ask_depth,
+                "five_level_depth_imbalance": ((bid_depth - ask_depth) / (bid_depth + ask_depth)
+                                               if bid_depth + ask_depth else None),
+                "spread": asks[0][0] - bids[0][0] if bids and asks else None,
+                "spread_fraction": (asks[0][0] - bids[0][0]) / dom["ltp"]
+                if bids and asks and dom["ltp"] > 0 else None,
+                "total_bid_quantity": dom["totalBid"], "total_ask_quantity": dom["totalAsk"],
+                "oi": dom["oi"], "oi_day_high": dom["oiHigh"], "oi_day_low": dom["oiLow"],
+                "oi_minute_open": minute.get("oio"),
+                "oi_change_this_minute": dom["oi"] - minute["oio"]
+                if dom["oi"] is not None and minute.get("oio") is not None else None,
+                "cumulative_volume": dom["volume"], "minute_volume": minute.get("v"),
+                "volume_profile": profile[-30:],
+                "estimated_buy_aggressor_volume": minute.get("b"),
+                "estimated_sell_aggressor_volume": minute.get("s"),
+                "unclassified_volume": minute.get("n"),
+                "classification_method_counts": list(minute.get("q") or ()),
+                "volume_data_gap": minute.get("gap"),
+                "mean_depth": {
+                    "bid": minute["dp"][0] / minute["dp"][2] if minute.get("dp", [0, 0, 0])[2] else None,
+                    "ask": minute["dp"][1] / minute["dp"][2] if minute.get("dp", [0, 0, 0])[2] else None,
+                    "snapshots": minute.get("dp", [0, 0, 0])[2],
+                },
+                "mean_spread": minute["sp"][0] / minute["sp"][1] if minute.get("sp", [0, 0])[1] else None,
+                "depth_zones": zones[:8],
+                "aggressor_side_is_estimated": True,
+            }
+
     def session_minutes(self, symbol: str, day: str) -> List[Dict[str, Any]]:
         start = int(datetime.strptime(day, "%Y-%m-%d").replace(tzinfo=timezone.utc).timestamp()) - IST_OFFSET
         end = start + 86_400

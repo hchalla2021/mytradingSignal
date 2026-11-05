@@ -1,10 +1,17 @@
 # 🔭 Weekly Strategy Performance Summary
-*Auto-generated — covers last 3 trading day(s)*
+*Auto-generated — covers last 2 trading day(s)*
 
 ## Strategy Rankings (Confidence-Weighted Accuracy)
 
 | Rank | Strategy | W.Accuracy | Simple | Obs | Streak |
 |------|----------|------------|--------|-----|--------|
+| #1 | Error Rate & Stability | ██████████ 100% | 100% | 2 | +2 |
+| #2 | ICT Smart Money | ░░░░░░░░░░ 0% | 0% | 1 | 0 |
+| #3 | Feed Health & Latency | ░░░░░░░░░░ 0% | 0% | 2 | 0 |
+| #4 | ICT Bias | ░░░░░░░░░░ 0% | 0% | 1 | 0 |
+| #5 | API Response Times | ██████████ 100% | 100% | 2 | +2 |
+| #6 | Data Freshness | ░░░░░░░░░░ 0% | 0% | 2 | 0 |
+| #7 | Cache & Memory | ██████████ 100% | 100% | 2 | +2 |
 
 ## 🎯 Recommendation
 
@@ -14,6 +21,5 @@ Insufficient data. Observe for at least 5 trading days to identify reliable patt
 
 | Date | NIFTY | BANKNIFTY | SENSEX |
 |------|-------|-----------|--------|
+| 2026-11-05 | 📈 +0.10% (SIDEWAYS) | ➡️ +0.09% (SIDEWAYS) | 📈 +0.14% (SIDEWAYS) |
 | 2026-10-30 | ➡️ +0.00% (SIDEWAYS) | ➡️ +0.00% (SIDEWAYS) | ➡️ +0.00% (SIDEWAYS) |
-| 2026-10-27 | ➡️ +0.00% (SIDEWAYS) | ➡️ +0.00% (SIDEWAYS) | ➡️ +0.00% (SIDEWAYS) |
-| 2026-10-24 | ➡️ +0.00% (SIDEWAYS) | ➡️ +0.00% (SIDEWAYS) | ➡️ +0.00% (SIDEWAYS) |

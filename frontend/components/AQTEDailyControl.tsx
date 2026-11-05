@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { API_CONFIG } from '@/lib/api-config';
 import { getOrCreateVisitorId } from '@/lib/visitor-id';
 import { AQTE_RECONNECT_GRACE_MS, AQTE_SETUP_LABELS, AQTE_SWING_SETUPS, aqteConnectionDrop, aqteErrorText, aqtePollLoop,
-  isAqteStyleChecks, type AQTEStyle, type AQTEStyleChecks, type AQTEStyleSelection, type AQTESwingSetup } from '@/lib/aqte-display';
+  isAqteStyleChecks, type AQTEStyle, type AQTEEntrySource, type AQTEStyleChecks, type AQTEStyleSelection, type AQTESwingSetup } from '@/lib/aqte-display';
 
 const SYMBOLS = ['NIFTY', 'BANKNIFTY', 'SENSEX'] as const;
 type SymbolName = typeof SYMBOLS[number];
@@ -25,7 +25,7 @@ type Row = {
   config: Config; executed: number; reserved: number; remaining: number;
   status: string; reason: string; direction: string;
   opportunity: { decision: string; confidence: number | null; strategy?: string | null;
-    style?: AQTEStyle | null; style_checks?: AQTEStyleChecks;
+    style?: AQTEEntrySource | null; style_checks?: AQTEStyleChecks;
     contract: { trading_symbol: string } | null;
     entry: { maximum: number; stop: number; target: number; points?: number } | null; reasons: string[] };
 };
@@ -59,7 +59,7 @@ function parse(value: unknown): Snapshot {
       count(row.executed) && count(row.reserved) && count(row.remaining) &&
       typeof row.status === 'string' && typeof row.reason === 'string' && typeof row.direction === 'string' &&
       opportunity && typeof opportunity.decision === 'string' &&
-      (opportunity.style === undefined || opportunity.style === null || opportunity.style === 'scalp' || opportunity.style === 'swing') &&
+      (opportunity.style === undefined || opportunity.style === null || opportunity.style === 'scalp' || opportunity.style === 'swing' || opportunity.style === 'morning') &&
       (opportunity.style_checks === undefined || isAqteStyleChecks(opportunity.style_checks)) &&
       (opportunity.confidence === null || Number.isFinite(opportunity.confidence)) &&
       Array.isArray(opportunity.reasons) && opportunity.reasons.every(reason => typeof reason === 'string') &&
@@ -212,7 +212,7 @@ export default function AQTEDailyControl() {
           <p className="text-slate-300">Direction {row.direction} · Best candidate {row.opportunity.decision}{row.opportunity.strategy ? ` · ${row.opportunity.strategy.replaceAll('_', ' ')}` : ''} · Rule score {row.opportunity.confidence ?? '--'}/100</p>
           {row.opportunity.style_checks && <div className="space-y-1 text-slate-400" aria-label="Entry style evaluation">
             {Object.entries(row.opportunity.style_checks).map(([style, reason]) => <p key={style}>
-              {style === 'scalp' ? 'Quick scalp' : 'Swing'}: {reason ?? 'Rules and risk checks passed'}
+              {style === 'morning' ? 'Independent morning' : style === 'scalp' ? 'Quick scalp' : 'Swing'}: {reason ?? 'Rules and risk checks passed'}
               {row.opportunity.style === style && !reason ? ' · Selected for broker recheck' : ''}
             </p>)}
           </div>}

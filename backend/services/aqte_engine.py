@@ -51,6 +51,12 @@ def day(at: float) -> str:
     return datetime.fromtimestamp(at, IST).date().isoformat()
 
 
+def opportunity_key(symbol, signal):
+    strategy = str(signal.get("strategy"))
+    strategy = "quick_scalp" if strategy.startswith("quick_scalp") else strategy
+    return f'{symbol}:{strategy}:{signal["intelligence"]["at"]}:{signal["contract"]["token"]}'
+
+
 @dataclass(frozen=True)
 class Tick:
     symbol: str
@@ -140,11 +146,20 @@ class CandleBook:
         self.closed: defaultdict[tuple[str, int, int], deque[Candle]] = defaultdict(lambda: deque(maxlen=600))
         self.current: dict[tuple[str, int, int], Candle] = {}
         self.previous: dict[tuple[str, int], Tick] = {}
+        self.revisions = defaultdict(int)
+        self.rejected = defaultdict(int)
 
     def add(self, tick: Tick):
         key = (tick.kind, tick.token)
         previous = self.previous.get(key)
         if previous and (tick.at < previous.at or tick.received <= previous.received):
+            self.rejected["out_of_order"] += 1
+            return False
+        if previous and tick.kind != "spot" and tick.at == previous.at and all(
+            getattr(tick, field) == getattr(previous, field) for field in
+            ("price", "volume", "bid", "ask", "bid_quantity", "ask_quantity", "buy_depth", "sell_depth", "oi")
+        ):
+            self.rejected["duplicate"] += 1
             return False
         volume = max(0, tick.volume - previous.volume) if previous and day(previous.at) == day(tick.at) else 0
         self.previous[key] = tick
@@ -157,6 +172,7 @@ class CandleBook:
                 # A minute already filled from exchange history is not appended twice.
                 if not self.closed[k] or self.closed[k][-1]["at"] < bar["at"]:
                     self.closed[k].append(bar)
+                    self.revisions[k] += 1
                 bar = None
             if bar is None:
                 bar = Candle(at=bucket, open=tick.price, high=tick.price,
@@ -201,30 +217,47 @@ def session_bars(bars, at):
     return [b for b in bars if day(b["at"]) == today and session(b["at"])]
 
 
-def intelligence(bars: Sequence[Candle], tick: Tick, previous_day=None):
-    """Use completed one-minute futures bars; indicators span sessions, VWAP is today's only."""
-    today = session_bars(bars, tick.at)
-    if warmup_count(bars, tick.at) < WARMUP_CANDLES or warmup_count(today, tick.at) < SESSION_CANDLES:
+def closed_intelligence(bars: Sequence[Candle], at, previous_day=None, *, partial=False):
+    """Completed-candle features. Partial features have explicit unavailable values, never invented warm-up."""
+    today = session_bars(bars, at)
+    if not partial and (warmup_count(bars, at) < WARMUP_CANDLES or
+                        warmup_count(today, at) < SESSION_CANDLES):
         return None
     session_volume = sum(b["volume"] for b in today)
     vwap = sum((b["high"] + b["low"] + b["close"]) / 3 * b["volume"] for b in today) / session_volume if session_volume else None
     bars = [b for b in bars if session(b["at"])][-WARMUP_CANDLES:]
+    if not bars:
+        return None
     closes = [b["close"] for b in bars]
-    averages = {str(n): ema(closes, n) for n in (9, 20, 50, 100, 200)}
+    averages = {str(n): ema(closes, n) if len(closes) >= n else None for n in (9, 20, 50, 100, 200)}
     differences = [b - a for a, b in zip(closes, closes[1:])]
-    gain = sum(max(0, d) for d in differences[:14]) / 14
-    loss = sum(max(0, -d) for d in differences[:14]) / 14
+    gain = sum(max(0, d) for d in differences[:14]) / 14 if len(differences) >= 14 else None
+    loss = sum(max(0, -d) for d in differences[:14]) / 14 if len(differences) >= 14 else None
     ranges = [max(b["high"] - b["low"], abs(b["high"] - a["close"]),
                   abs(b["low"] - a["close"])) for a, b in zip(bars, bars[1:])]
-    atr = sum(ranges[:14]) / 14
+    up = [b["high"] - a["high"] for a, b in zip(bars, bars[1:])]
+    down = [a["low"] - b["low"] for a, b in zip(bars, bars[1:])]
+    positive = [max(0, u) if u > d else 0 for u, d in zip(up, down)]
+    negative = [max(0, d) if d > u else 0 for u, d in zip(up, down)]
+    plus, minus = sum(positive[:14]) / 14, sum(negative[:14]) / 14
+    dxs, adx = [], None
+    atr = sum(ranges[:14]) / 14 if len(ranges) >= 14 else None
     upper = lower = trend = None
     for i, (delta, tr) in enumerate(zip(differences, ranges)):
-        if i >= 14:
+        if i >= 14 and gain is not None and loss is not None and atr is not None:
             gain = (gain * 13 + max(0, delta)) / 14
             loss = (loss * 13 + max(0, -delta)) / 14
             atr = (atr * 13 + tr) / 14
-        if i < 13:
+            plus = (plus * 13 + positive[i]) / 14
+            minus = (minus * 13 + negative[i]) / 14
+        if i < 13 or atr is None:
             continue
+        dx = 100 * abs(plus - minus) / (plus + minus) if plus + minus else 0
+        dxs.append(dx)
+        if len(dxs) == 14:
+            adx = sum(dxs) / 14
+        elif adx is not None:
+            adx = (adx * 13 + dx) / 14
         b, prior = bars[i + 1], bars[i]
         midpoint = (b["high"] + b["low"]) / 2
         raw_upper, raw_lower = midpoint + 3 * atr, midpoint - 3 * atr
@@ -237,45 +270,76 @@ def intelligence(bars: Sequence[Candle], tick: Tick, previous_day=None):
         elif trend == 1 and b["close"] < next_lower:
             trend = -1
         upper, lower = next_upper, next_lower
-    depth = tick.buy_depth + tick.sell_depth
-    imbalance = (tick.buy_depth - tick.sell_depth) / depth if depth else None
     prior = bars[-21:-1]
-    high, low = max(b["high"] for b in prior), min(b["low"] for b in prior)
+    high = max(b["high"] for b in prior) if len(prior) == 20 else None
+    low = min(b["low"] for b in prior) if len(prior) == 20 else None
     last = bars[-1]
-    avg_volume = sum(b["volume"] for b in prior) / len(prior)
-    oi_reference = last.get("oi") if day(last["at"]) == day(tick.at) else None
-    oi_change = tick.oi - oi_reference if tick.oi is not None and oi_reference is not None else None
-    cpr = None
+    avg_volume = sum(b["volume"] for b in prior) / len(prior) if len(prior) == 20 else None
+    oi_reference = last.get("oi") if day(last["at"]) == day(at) else None
+    cpr = pivots = None
     if previous_day:
         pivot = sum(previous_day[k] for k in ("high", "low", "close")) / 3
         base = (previous_day["high"] + previous_day["low"]) / 2
         cpr = {"pivot": pivot, "bottom": min(base, 2 * pivot - base), "top": max(base, 2 * pivot - base)}
+        span = previous_day["high"] - previous_day["low"]
+        pivots = dict(pivot=pivot, r1=2 * pivot - previous_day["low"], s1=2 * pivot - previous_day["high"],
+                      r2=pivot + span, s2=pivot - span)
     return {
-        "ema": averages, "rsi": 100 - 100 / (1 + gain / loss) if loss else (100 if gain else 50),
-        "atr": atr, "vwap": vwap, "supertrend": "BULLISH" if trend == 1 else "BEARISH",
-        "supertrend_price": lower if trend == 1 else upper, "cpr": cpr,
-        "imbalance": imbalance, "volume_ratio": last["volume"] / avg_volume if avg_volume else None,
+        "ema": averages, "rsi": (100 - 100 / (1 + gain / loss) if loss else (100 if gain else 50))
+        if gain is not None else None,
+        "atr": atr, "vwap": vwap, "supertrend": ("BULLISH" if trend == 1 else "BEARISH") if trend else None,
+        "supertrend_price": lower if trend == 1 else upper, "cpr": cpr, "pivots": pivots, "adx": adx,
+        "volume_ratio": last["volume"] / avg_volume if avg_volume else None,
         "volume": last["volume"], "average_volume": avg_volume,
         "breakout_high": high, "breakout_low": low,
-        "breakout": 1 if last["close"] > high else (-1 if last["close"] < low else 0),
-        "sweep": 1 if last["low"] < low < last["close"] else (
-            -1 if last["high"] > high > last["close"] else 0),
-        "structure": "HIGHER_HIGH" if last["close"] > high else (
-            "LOWER_LOW" if last["close"] < low else "RANGE"),
+        "breakout": (1 if last["close"] > high else (-1 if last["close"] < low else 0)) if high is not None else None,
+        "sweep": (1 if last["low"] < low < last["close"] else (
+            -1 if last["high"] > high > last["close"] else 0)) if high is not None else None,
+        "structure": ("HIGHER_HIGH" if last["close"] > high else (
+            "LOWER_LOW" if last["close"] < low else "RANGE")) if high is not None else None,
         "close": last["close"], "at": last["at"],
-        "live": {
+        "oi_reference": oi_reference,
+        "oi_reference_at": last["at"] + 60 if oi_reference is not None else None,
+    }
+
+
+def live_intelligence(closed, tick):
+    if closed is None:
+        return None
+    result = {key: value for key, value in closed.items() if not key.startswith("oi_reference")}
+    reference = closed["oi_reference"]
+    change = tick.oi - reference if tick.oi is not None and reference is not None else None
+    depth = tick.buy_depth + tick.sell_depth
+    result.update(
+        imbalance=(tick.buy_depth - tick.sell_depth) / depth if depth else None,
+        live={
             "token": tick.token, "at": tick.at, "received": tick.received, "price": tick.price,
             "buy_depth": tick.buy_depth, "sell_depth": tick.sell_depth, "oi": tick.oi,
-            "oi_reference": oi_reference,
-            "oi_reference_at": last["at"] + 60 if oi_reference is not None else None,
-            "oi_change": oi_change,
-            "oi_change_pct": oi_change / oi_reference * 100 if oi_change is not None and oi_reference else None,
+            "oi_reference": reference, "oi_reference_at": closed["oi_reference_at"],
+            "oi_change": change, "oi_change_pct": change / reference * 100 if change is not None and reference else None,
         },
-    }
+    )
+    return result
+
+
+def intelligence(bars: Sequence[Candle], tick: Tick, previous_day=None):
+    """Legacy full-readiness entry contract; live depth and OI are never cached with candles."""
+    return live_intelligence(closed_intelligence(bars, tick.at, previous_day), tick)
 
 
 def finite_number(value: object) -> TypeGuard[int | float]:
     return isinstance(value, (float, int)) and not isinstance(value, bool) and math.isfinite(value)
+
+
+def validate_tick(tick: Tick):
+    numeric = (tick.price, tick.at, tick.received, tick.bid, tick.ask)
+    if tick.symbol not in SYMBOLS or not all(finite_number(n) for n in numeric) or tick.price <= 0:
+        raise ValueError("Invalid AQTE tick")
+    if tick.kind not in ("spot", "future", "option") or type(tick.token) is not int or tick.token <= 0:
+        raise ValueError("Invalid AQTE instrument token or kind")
+    if any(type(n) is not int or n < 0 for n in
+           (tick.volume, tick.bid_quantity, tick.ask_quantity, tick.buy_depth, tick.sell_depth)):
+        raise ValueError("Invalid AQTE volume or order-book quantity")
 
 
 def scalp_bias(info: Mapping[str, object]) -> Literal["CE", "PE"] | None:
@@ -543,12 +607,13 @@ def round_tick(price, tick_size, up=False):
 
 
 class AQTEEngine:
-    def __init__(self, policy=None, *, paper_enabled=True, research_only=False):
+    def __init__(self, policy=None, *, paper_enabled=True, research_only=False, feature_cache=None):
         if research_only and paper_enabled:
             raise ValueError("Research signal-only mode requires paper_enabled=False")
         self.policy = policy or Policy()
         self.paper_enabled = paper_enabled
         self.research_only = research_only
+        self.feature_cache = feature_cache
         self.book = CandleBook()
         self.contracts: dict[int, Contract] = {}
         self.spot: dict[str, Tick] = {}
@@ -710,17 +775,12 @@ class AQTEEngine:
         return equity
 
     def ingest(self, tick: Tick):
-        numeric = (tick.price, tick.at, tick.received, tick.bid, tick.ask)
-        if tick.symbol not in SYMBOLS or not all(math.isfinite(n) for n in numeric) or tick.price <= 0:
-            raise ValueError("Invalid AQTE tick")
-        if any(type(n) is not int or n < 0 for n in
-               (tick.volume, tick.bid_quantity, tick.ask_quantity, tick.buy_depth, tick.sell_depth)):
-            raise ValueError("Invalid AQTE volume or order-book quantity")
+        validate_tick(tick)
         if not self.fresh(tick, tick.received):
             self.event("REJECTED_TICK", tick.received, token=tick.token, reason="Stale/future exchange timestamp")
-            return
+            return False
         if not self.book.add(tick):
-            return
+            return False
         if tick.kind == "spot":
             self.spot[tick.symbol] = tick
         elif tick.kind == "future":
@@ -735,8 +795,11 @@ class AQTEEngine:
                            seconds=tick.at - previous.at, reason="No simulated fills during the gap")
             self.options[tick.token] = tick
         self.manage(tick.received, tick if tick.kind == "option" else None)
-        if tick.kind == "future":
+        if tick.kind == "future" or (not self.paper_enabled and not self.research_only and
+                                    self.fresh(self.future.get(tick.symbol), tick.received) and
+                                    self.fresh(self.spot.get(tick.symbol), tick.received)):
             self.analyze(tick.symbol, tick.received)
+        return True
 
     def analyze(self, symbol, now):
         live_rules = not self.paper_enabled and not self.research_only
@@ -744,10 +807,16 @@ class AQTEEngine:
         future, spot = self.future.get(symbol), self.spot.get(symbol)
         if not self.fresh(future, now) or not self.fresh(spot, now):
             reason = reason or "Waiting for fresh spot and futures ticks"
-        bars = list(self.book.closed[("future", future.token, 60)]) if future else []
-        completed = warmup_count(bars, future.at) if future else 0
-        opening = warmup_count(session_bars(bars, future.at), future.at) if future else 0
-        info = intelligence(bars, future, self.previous_day.get(symbol)) if future else None
+        if self.feature_cache is not None and future:
+            features = self.feature_cache.get(self.book, future.token, future.at, self.previous_day.get(symbol))
+            completed, opening = features["completed"], features["opening"]
+            info = live_intelligence(features["values"], future) if (
+                completed >= WARMUP_CANDLES and opening >= SESSION_CANDLES) else None
+        else:
+            bars = list(self.book.closed[("future", future.token, 60)]) if future else []
+            completed = warmup_count(bars, future.at) if future else 0
+            opening = warmup_count(session_bars(bars, future.at), future.at) if future else 0
+            info = intelligence(bars, future, self.previous_day.get(symbol)) if future else None
         if info is None:
             reason = reason or (
                 f"Warming up: need {WARMUP_CANDLES} contiguous completed one-minute futures candles"
@@ -920,6 +989,9 @@ class AQTEEngine:
         key = ("future", token, 60)
         live = {b["at"]: b for b in self.book.closed[key]}
         current = self.book.current.get(key)
+        if current and day(current["at"]) < day(now):
+            self.book.current.pop(key)
+            current = None
         cutoff = min(int(now // 60) * 60, current["at"] if current else math.inf)
         changed = 0
         for bar in bars:
@@ -931,6 +1003,7 @@ class AQTEEngine:
             changed += 1
         if changed:
             self.book.closed[key] = deque(sorted(live.values(), key=lambda b: b["at"])[-600:], maxlen=600)
+            self.book.revisions[key] += 1
         return changed
 
     def snapshot(self, now):

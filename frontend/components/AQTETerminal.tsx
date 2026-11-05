@@ -3,7 +3,7 @@
 import { memo, type ReactNode } from 'react';
 import { AQTE_SETUP_LABELS, aqteCanExit, aqteControllerCurrent, aqteEffectiveSignal, aqteEvidenceWait, aqteIndexHold, aqteIstDay, aqteLabel,
   aqteLiveMetrics, aqteOverview, aqtePrice, aqteRuleEvidence, aqteSigned, aqteTrailStart,
-  type AQTELiveState, type AQTEExitRequest, type AQTESignal, type AQTESymbol, type AQTEStyle,
+  type AQTELiveState, type AQTEExitRequest, type AQTESignal, type AQTESymbol, type AQTEEntrySource,
   type AQTERuleEvidence } from '@/lib/aqte-display';
 
 const timeFormatter = new Intl.DateTimeFormat('en-IN', {
@@ -58,8 +58,12 @@ const oiPercent = (value: number) => `${value > 0 ? '+' : ''}${value.toLocaleStr
   minimumFractionDigits: 2, maximumFractionDigits: 6,
 })}%`;
 
-function engineChecks(info: Intelligence | null | undefined, market: Observation | null, style: AQTEStyle | undefined,
+function engineChecks(info: Intelligence | null | undefined, market: Observation | null, style: AQTEEntrySource | undefined,
   evidence: AQTERuleEvidence | null): EngineRow[] {
+  if (style === 'morning') return (evidence?.checks ?? []).map(check => ({
+    id: check.id, label: check.label, value: check.reason, unavailable: check.passed === null,
+    summary: { label: check.label, value: check.passed ? 'Confirmed' : 'Waiting' }, gate: check,
+  }));
   const compactLabels = {
     supertrend: 'SuperTrend', ema: style === 'swing' ? 'EMA stack' : 'EMA 9/20',
     vwap: 'VWAP', rsi: 'RSI', imbalance: 'Book imbalance', oi_change: 'OI change (1m)', volume: 'Volume',
@@ -191,12 +195,14 @@ function AQTETerminal({ symbol, signal, unavailable, liveStatus, onExit, now = D
   const currentStatus = aqteControllerCurrent(liveStatus, now);
   const style = currentStatus ? liveStatus?.styles?.[symbol] : undefined;
   const switches = currentStatus ? liveStatus?.swing_setups?.[symbol] : undefined;
-  const plan = style === 'scalp' ? signal?.scalp : style === 'swing' ? aqteEffectiveSignal(signal, 'swing', switches) ?? undefined : undefined;
+  const plan = style ? aqteEffectiveSignal(signal, style, switches) ?? undefined : undefined;
   const observation = info?.live;
   const market = observation && [observation.at, observation.received].every(at => now - at >= -1 && now - at <= 5)
     ? observation : null;
   // Swing follows the controller's enabled-setup swap so the card shows the setup that would actually trade.
-  const evidence = info && market && style ? aqteRuleEvidence(signal, style, switches) : null;
+  const morningCurrent = style === 'morning' && signal?.morning &&
+    now - signal.morning.at >= 0 && now - signal.morning.at <= 3 && !unavailable;
+  const evidence = style && (morningCurrent || (info && market)) ? aqteRuleEvidence(signal, style, switches) : null;
   const direction = evidence?.side === 'CE' ? 'BULLISH' : evidence?.side === 'PE' ? 'BEARISH' : 'WAITING';
   const live = liveStatus?.active?.symbol === symbol ? liveStatus.active : null;
   const metrics = live ? aqteLiveMetrics(liveStatus, now) : null;
@@ -211,17 +217,18 @@ function AQTETerminal({ symbol, signal, unavailable, liveStatus, onExit, now = D
   const checks = engineChecks(info, market, style ?? undefined, evidence);
   const score = evidence && plan?.decision !== 'WAIT' && plan?.confidence != null && Number.isFinite(plan.confidence) &&
     plan.confidence >= 0 && plan.confidence <= 100 ? plan.confidence : null;
-  const waiting = info ? null : aqteEvidenceWait(signal, unavailable);
-  const evidenceUnavailable = !info ? signal && signal.feed_ready === undefined ?
+  const waiting = style === 'morning' || info ? null : aqteEvidenceWait(signal, unavailable);
+  const evidenceUnavailable = style === 'morning' ? morningCurrent ? null : 'Fresh morning evidence is unavailable.' : !info ? signal && signal.feed_ready === undefined ?
     'Backend freshness unavailable; update the backend before trusting these values.' :
     waiting?.detail ?? 'Waiting for current backend evidence: fresh spot/futures and completed candles.' :
     !market ? 'Live depth/OI unavailable; current tick evidence is required for entry checks.' : null;
-  const alignment = waiting ? waiting.label :
+  const alignment = style === 'morning' ? `Independent morning · ${morningCurrent ? direction : 'Evidence unavailable'}` : waiting ? waiting.label :
     style === null ? 'No entry style selected in Controls' : !style ? 'Entry style unavailable' : !market ? 'Live depth/OI unavailable' :
     `${style === 'scalp' ? 'Quick scalp' : 'Swing'}${evidence?.setup ? ` · ${AQTE_SETUP_LABELS[evidence.setup]}` : ''}${evidence ? evidence.side ?
       ` · ${evidence.side} · ${evidence.checks.filter(check => check.passed === true).length}/${evidence.checks.length} aligned` :
       ' · WAIT' : ' · Unverified'}`;
-  const alignmentTone: Tone = !info || !market || !style || !evidence ? 'flat' :
+  const alignmentTone: Tone = style === 'morning' ? !morningCurrent || !evidence ? 'flat' :
+    !evidence.side ? 'wait' : evidence.side === 'CE' ? 'up' : 'down' : !info || !market || !style || !evidence ? 'flat' :
     !evidence.side || plan?.decision === 'WAIT' ? 'wait' : evidence.side === 'CE' ? 'up' : 'down';
   const exitReason = live?.exit_requested;
   const remaining = live ? Math.max(0, live.filled - (live.exited ?? 0)) : 0;

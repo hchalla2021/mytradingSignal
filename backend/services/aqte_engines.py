@@ -8,11 +8,15 @@ stale evidence is reported as MONITORING (rule result null), never inferred.
 """
 
 import math
+import logging
 from dataclasses import dataclass
 from datetime import datetime
+from functools import lru_cache
 from statistics import fmean, pstdev
 
 from services.aqte_engine import IST, Policy, ema, finite_number, scalp_bias, session, session_bars
+
+logger = logging.getLogger(__name__)
 
 ENGINES = (
     (1, "momentum", "Momentum"), (2, "breakout", "Breakout"), (3, "trend", "Trend Following"),
@@ -75,6 +79,7 @@ def _bs(spot, strike, years, rate, sigma, call):
     return price, d1, d2
 
 
+@lru_cache(maxsize=2048)
 def greeks(spot, strike, years, rate, price, call):
     """Black-Scholes implied volatility (bisection) and Greeks from a live premium; None when not solvable."""
     if not all(finite_number(v) and v > 0 for v in (spot, strike, years, price)) or not finite_number(rate):
@@ -90,6 +95,8 @@ def greeks(spot, strike, years, rate, price, call):
             high = mid
         else:
             low = mid
+        if high - low <= 1e-10:
+            break
     sigma = (low + high) / 2
     _, d1, d2 = _bs(spot, strike, years, rate, sigma, call)
     density = math.exp(-d1 * d1 / 2) / math.sqrt(2 * math.pi)
@@ -143,9 +150,8 @@ def resample(bars, seconds):
     for bar in bars:
         if session(bar["at"]):
             buckets.setdefault(int(bar["at"] // seconds) * seconds, []).append(bar)
-    keys = sorted(buckets)
-    if keys and keys[-1] + seconds > bars[-1]["at"] + 60:
-        keys.pop()
+    keys = [key for key in sorted(buckets) if [bar["at"] for bar in buckets[key]] ==
+            [key + offset * 60 for offset in range(seconds // 60)]]
     return [buckets[k][-1]["close"] for k in keys]
 
 
@@ -160,7 +166,7 @@ def _sign(side):
     return 1 if side == "CE" else -1 if side == "PE" else 0
 
 
-def _engines(info, live, spot, bars, chain, peers, symbol, ml, vix, rule_checks, policy):
+def engine_jobs(info, live, spot, bars, get_chain, peers, symbol, ml, vix, rule_checks, policy, timeframes=None):
     e = info.get("ema") or {}
     price, vwap, atr, rsi = (info.get(k) for k in ("close", "vwap", "atr", "rsi"))
     volume, breakout, sweep = info.get("volume_ratio"), info.get("breakout"), info.get("sweep")
@@ -175,7 +181,7 @@ def _engines(info, live, spot, bars, chain, peers, symbol, ml, vix, rule_checks,
     out = {}
 
     s = bias
-    out["momentum"] = (s, [
+    out["momentum"] = lambda s=s: (s, [
         side_rule("rsi", "RSI (14) momentum band", s, has(rsi), lambda s: 55 <= rsi <= 80 if s > 0 else 20 <= rsi <= 45,
                   "CE 55-80; PE 20-45", fmt(rsi, 1)),
         side_rule("ema", "EMA 9 vs 20", s, has(e.get("9"), e.get("20")), lambda s: s * (e["9"] - e["20"]) > 0,
@@ -189,7 +195,7 @@ def _engines(info, live, spot, bars, chain, peers, symbol, ml, vix, rule_checks,
 
     s = int(breakout) if has(breakout) else 0
     level = info.get("breakout_high") if s > 0 else info.get("breakout_low")
-    out["breakout"] = (s, [
+    out["breakout"] = lambda s=s: (s, [
         rule("break", "20-candle breakout", breakout != 0 if has(breakout) else None, "Close beyond prior 20-candle range",
              "High" if s > 0 else "Low" if s < 0 else "Inside range"),
         rule("volume", "Breakout volume", volume >= 1.5 if has(volume) else None, ">= 1.5x average", vol_value),
@@ -204,7 +210,7 @@ def _engines(info, live, spot, bars, chain, peers, symbol, ml, vix, rule_checks,
     trend = info.get("supertrend")
     s = 1 if trend == "BULLISH" else -1 if trend == "BEARISH" else 0
     st_price, structure = info.get("supertrend_price"), info.get("structure")
-    out["trend"] = (s, [
+    out["trend"] = lambda s=s: (s, [
         side_rule("stack", "EMA 9/20/50/100/200 stack", s, ema_ok, stack, "Fully stacked in SuperTrend direction"),
         side_rule("vwap", "Price vs VWAP", s, has(price, vwap), lambda s: s * (price - vwap) > 0, "Trend side of VWAP"),
         rule("pullback", "Pullback entry zone", abs(price - e["20"]) <= atr if has(price, e.get("20"), atr) else None,
@@ -216,7 +222,7 @@ def _engines(info, live, spot, bars, chain, peers, symbol, ml, vix, rule_checks,
     ])
 
     s = int(sweep) if has(sweep) else 0
-    out["liquidity_sweep"] = (s, [
+    out["liquidity_sweep"] = lambda s=s: (s, [
         rule("sweep", "Liquidity sweep and reclaim", sweep != 0 if has(sweep) else None,
              "Wick through 20-candle extreme, close back inside", "Bullish" if s > 0 else "Bearish" if s < 0 else "None"),
         side_rule("imbalance", "Order book not opposing", s, has(imbalance), lambda s: s * imbalance >= 0, ">= 0 in reversal direction",
@@ -229,7 +235,7 @@ def _engines(info, live, spot, bars, chain, peers, symbol, ml, vix, rule_checks,
 
     s = (1 if imbalance >= 0.10 else -1 if imbalance <= -0.10 else 0) if has(imbalance) else 0
     oi_change = (info.get("live") or {}).get("oi_change")
-    out["order_flow"] = (s, [
+    out["order_flow"] = lambda s=s: (s, [
         rule("depth", "Top-5 depth imbalance", abs(imbalance) >= 0.15 if has(imbalance) else None, ">= 15% buy or sell pressure",
              fmt(imbalance * 100, 0, "%") if has(imbalance) else None),
         side_rule("queue", "Best bid/ask queue", s, bool(live), lambda s: s * (live.bid_quantity - live.ask_quantity) > 0,
@@ -245,11 +251,11 @@ def _engines(info, live, spot, bars, chain, peers, symbol, ml, vix, rule_checks,
     s = _sign(scalp.get("side"))
     rules = [rule(c["id"], c["label"], (c["passed"] if s or c["passed"] is not None else
              (False if has(price, vwap, e.get("9"), e.get("20")) else None)), c["requirement"]) for c in scalp.get("checks") or ()]
-    out["scalping"] = (s, rules or [rule("bias", "Scalp bias", None, "VWAP and EMA 9/20 agree")])
+    out["scalping"] = lambda s=s: (s, rules or [rule("bias", "Scalp bias", None, "VWAP and EMA 9/20 agree")])
 
     stretch = (price - vwap) / atr if has(price, vwap, atr) and atr > 0 else None
     s = (1 if stretch <= -2 else -1 if stretch >= 2 else 0) if stretch is not None else 0
-    out["mean_reversion"] = (s, [
+    out["mean_reversion"] = lambda s=s: (s, [
         rule("stretch", "Stretch from VWAP", abs(stretch) >= 2 if stretch is not None else None, ">= 2 ATR from VWAP",
              fmt(stretch, 2, " ATR")),
         side_rule("rsi", "RSI extreme", s, has(rsi), lambda s: rsi <= 30 if s > 0 else rsi >= 70, "CE <= 30; PE >= 70", fmt(rsi, 1)),
@@ -263,7 +269,7 @@ def _engines(info, live, spot, bars, chain, peers, symbol, ml, vix, rule_checks,
     s = int(breakout) if has(breakout) and breakout else (_sign("CE" if last["close"] > last["open"] else "PE")
                                                          if last and last["close"] != last["open"] else 0)
     vix_change = (vix or {}).get("change_pct")
-    out["volatility_breakout"] = (s, [
+    out["volatility_breakout"] = lambda s=s: (s, [
         rule("expansion", "Range expansion", span >= 1.5 * atr if has(span, atr) and atr > 0 else None,
              "Last candle range >= 1.5 ATR", fmt(span / atr if has(span, atr) and atr else None, 2, " ATR")),
         side_rule("break", "Directional breakout", s, has(breakout), lambda s: breakout == s, "Breakout in expansion direction"),
@@ -272,32 +278,35 @@ def _engines(info, live, spot, bars, chain, peers, symbol, ml, vix, rule_checks,
              fmt(vix_change, 2, "%")),
     ])
 
-    s = bias
-    side = "CE" if s > 0 else "PE" if s < 0 else None
-    option = chain["atm"].get(side) if side else None
-    pcr = chain["pcr"]
-    out["options"] = (s, [
-        side_rule("quote", "ATM option two-sided quote", s, bool(chain["atm"]), lambda s: bool(option and option["bid"]),
-                  "Fresh bid and ask on the ATM strike", option["trading_symbol"] if option else None),
-        side_rule("spread", "Option spread", s, bool(chain["atm"]),
-                  lambda s: bool(option and option["spread"] is not None and option["spread"] <= policy.spread_fraction),
-                  f"<= {policy.spread_fraction:.0%} of ask", fmt(option["spread"] * 100, 2, "%") if option and option["spread"] is not None else None),
-        side_rule("depth", "Ask depth for one lot", s, bool(chain["atm"]),
-                  lambda s: bool(option and option["ask_quantity"] >= option["lot_size"]), ">= one lot at best ask",
-                  str(option["ask_quantity"]) if option else None),
-        side_rule("pcr", "PCR (OI, subscribed strikes)", s, pcr is not None, lambda s: pcr > 1 if s > 0 else pcr < 1,
-                  "PCR > 1 for CE; < 1 for PE", fmt(pcr, 2)),
-        side_rule("iv", "Implied volatility solvable", s, bool(chain["atm"]),
-                  lambda s: bool(option and option["iv"] is not None and 5 <= option["iv"] <= 100), "IV 5-100% from live premium",
-                  fmt(option["iv"], 1, "%") if option else None),
-        side_rule("delta", "Near-ATM delta", s, bool(chain["atm"]),
-                  lambda s: bool(option and option["delta"] is not None and 0.3 <= abs(option["delta"]) <= 0.7), "|delta| 0.30-0.70",
-                  fmt(option["delta"], 2) if option else None),
-    ])
+    def options_job(s=bias):
+        chain = get_chain()
+        side = "CE" if s > 0 else "PE" if s < 0 else None
+        option = chain["atm"].get(side) if side else None
+        pcr = chain["pcr"]
+        return s, [
+            side_rule("quote", "ATM option two-sided quote", s, bool(chain["atm"]), lambda s: bool(option and option["bid"]),
+                      "Fresh bid and ask on the ATM strike", option["trading_symbol"] if option else None),
+            side_rule("spread", "Option spread", s, bool(chain["atm"]),
+                      lambda s: bool(option and option["spread"] is not None and option["spread"] <= policy.spread_fraction),
+                      f"<= {policy.spread_fraction:.0%} of ask", fmt(option["spread"] * 100, 2, "%") if option and option["spread"] is not None else None),
+            side_rule("depth", "Ask depth for one lot", s, bool(chain["atm"]),
+                      lambda s: bool(option and option["ask_quantity"] >= option["lot_size"]), ">= one lot at best ask",
+                      str(option["ask_quantity"]) if option else None),
+            side_rule("pcr", "PCR (OI, subscribed strikes)", s, pcr is not None, lambda s: pcr > 1 if s > 0 else pcr < 1,
+                      "PCR > 1 for CE; < 1 for PE", fmt(pcr, 2)),
+            side_rule("iv", "Implied volatility solvable", s, bool(chain["atm"]),
+                      lambda s: bool(option and option["iv"] is not None and 5 <= option["iv"] <= 100), "IV 5-100% from live premium",
+                      fmt(option["iv"], 1, "%") if option else None),
+            side_rule("delta", "Near-ATM delta", s, bool(chain["atm"]),
+                      lambda s: bool(option and option["delta"] is not None and 0.3 <= abs(option["delta"]) <= 0.7), "|delta| 0.30-0.70",
+                      fmt(option["delta"], 2) if option else None),
+        ]
+    out["options"] = options_job
 
     s = bias
-    five, fifteen = resample(bars, 300), resample(bars, 900)
-    out["multi_timeframe"] = (s, [
+    five = timeframes["5m"] if timeframes is not None else resample(bars, 300)
+    fifteen = timeframes["15m"] if timeframes is not None else resample(bars, 900)
+    out["multi_timeframe"] = lambda s=s: (s, [
         side_rule("m1", "1m EMA 9/20", s, has(e.get("9"), e.get("20")), lambda s: s * (e["9"] - e["20"]) > 0, "Aligned on 1-minute"),
         side_rule("m5", "5m close vs EMA9 and EMA9 vs EMA21", s, len(five) >= 21,
                   lambda s: s * (five[-1] - ema(five, 9)) > 0 and s * (ema(five, 9) - ema(five, 21)) > 0,
@@ -315,7 +324,7 @@ def _engines(info, live, spot, bars, chain, peers, symbol, ml, vix, rule_checks,
     own, others = peers.get(symbol), [v for k, v in peers.items() if k != symbol]
     relative = own - fmean(others) if has(own) and others and all(has(v) for v in others) else None
     basis = (live.price - spot.price) / spot.price * 100 if live and spot and spot.price > 0 else None
-    out["stat_arb"] = (s, [
+    out["stat_arb"] = lambda s=s: (s, [
         rule("zscore", "20-candle z-score", abs(z) >= 2 if z is not None else None, "|z| >= 2", fmt(z, 2)),
         side_rule("relative", "Relative value vs peer indices", s, relative is not None,
                   lambda s: s * relative <= 0, "Laggard for CE; leader for PE", fmt(relative, 2, "%")),
@@ -327,7 +336,7 @@ def _engines(info, live, spot, bars, chain, peers, symbol, ml, vix, rule_checks,
     probability = (ml or {}).get("probability_positive_net_return")
     fresh = has(probability, (ml or {}).get("observed_at"))
     ml_side = (ml or {}).get("side")
-    out["ml"] = (_sign(ml_side), [
+    out["ml"] = lambda: (_sign(ml_side), [
         rule("model", "Shadow model loaded", True if fresh else None, "LightGBM shadow model scoring", (ml or {}).get("model_id")),
         rule("probability", "Positive net-return probability", probability >= ML_THRESHOLD if fresh else None,
              f">= {ML_THRESHOLD:.0%} (uncalibrated, shadow only)", fmt(probability * 100 if fresh else None, 1, "%")),
@@ -336,28 +345,51 @@ def _engines(info, live, spot, bars, chain, peers, symbol, ml, vix, rule_checks,
     return out
 
 
+def engine_card(engine, sign=0, rules=(), reason=None):
+    number, key, name = engine
+    state = status_of(rules)
+    passed = sum(r["passed"] is True for r in rules)
+    return dict(id=number, key=key, name=name, status=state,
+                side="CE" if sign > 0 else "PE" if sign < 0 else None,
+                passed=passed, total=len(rules), score=round(passed / len(rules) * 100) if rules else None,
+                authority="SHADOW" if key == "ml" else "ENTRY" if key == "scalping" else "ADVISORY",
+                rules=list(rules), reason=reason)
+
+
+def prepare_evaluation(signal, *, live=None, spot=None, bars=(), options=(), peers=None, ml=None,
+                       ml_reason=None, vix=None, policy=None, now=0.0, config=EngineConfig(), partial_info=None,
+                       timeframes=None):
+    info = signal.get("intelligence") or partial_info
+    ready = bool(signal.get("feed_ready")) and info is not None
+    metadata = dict(market=context(info if ready else None, None, vix), options=None)
+    def get_chain():
+        chain = option_chain(options, spot.price if spot else None, now, config.risk_free_rate)
+        metadata.update(market=context(info if ready else None, chain, vix), options=chain if ready else None)
+        return chain
+    reason = None if ready else (signal.get("reasons") or ["Waiting for live market data"])[0]
+    jobs = engine_jobs(info, live, spot, list(bars), get_chain, peers or {}, signal.get("symbol"), ml, vix,
+                       signal.get("rule_checks"), policy or Policy(), timeframes) if ready else {}
+    def run(engine):
+        key = engine[1]
+        sign, rules = jobs[key]() if key in jobs else (0, [])
+        return engine_card(engine, sign, rules, reason or (
+            ml_reason if key == "ml" and status_of(rules) == "MONITORING" else None))
+    return {engine[1]: (lambda engine=engine: run(engine)) for engine in ENGINES}, metadata
+
+
 def evaluate(signal, *, live=None, spot=None, bars=(), options=(), peers=None, ml=None, ml_reason=None, vix=None,
              policy=None, now=0.0, config=EngineConfig()):
-    """Engine cards, market context and orchestration for one index snapshot signal."""
-    policy = policy or Policy()
-    info = signal.get("intelligence")
-    ready = bool(signal.get("feed_ready")) and info is not None and signal.get("rule_checks") is not None
-    chain = option_chain(options, spot.price if spot else None, now, config.risk_free_rate)
-    reason = None if ready else (signal.get("reasons") or ["Waiting for live market data"])[0]
-    evaluated = _engines(info, live, spot, list(bars), chain, peers or {}, signal.get("symbol"), ml, vix,
-                         signal.get("rule_checks"), policy) if ready else {}
+    """Synchronous replay API; the running service schedules each returned job independently."""
+    jobs, metadata = prepare_evaluation(signal, live=live, spot=spot, bars=bars, options=options, peers=peers,
+                                       ml=ml, ml_reason=ml_reason, vix=vix, policy=policy, now=now, config=config)
     engines = []
-    for number, key, name in ENGINES:
-        sign, rules = evaluated.get(key, (0, []))
-        state = status_of(rules)
-        passed = sum(r["passed"] is True for r in rules)
-        engines.append(dict(
-            id=number, key=key, name=name, status=state, side="CE" if sign > 0 else "PE" if sign < 0 else None,
-            passed=passed, total=len(rules), score=round(passed / len(rules) * 100) if rules else None,
-            authority="SHADOW" if key == "ml" else "ENTRY" if key == "scalping" else "ADVISORY",
-            rules=rules, reason=reason or (ml_reason if key == "ml" and state == "MONITORING" else None)))
-    return dict(engines=engines, orchestration=orchestrate(engines),
-                market=context(info if ready else None, chain, vix), options=chain if ready else None)
+    for engine in ENGINES:
+        try:
+            engines.append(jobs[engine[1]]())
+        except Exception as exc:
+            logger.exception("AQTE %s evaluator unavailable", engine[1])
+            engines.append(engine_card(engine, reason=f"Evaluator unavailable ({type(exc).__name__})"))
+    return dict(engines=engines, orchestration=orchestrate(engines), **metadata)
 
 
 def orchestrate(engines):
@@ -392,7 +424,7 @@ def context(info, chain, vix):
     if spreads:
         worst = max(spreads)
         liquidity = "High" if worst <= TIGHT_SPREAD else "Moderate" if worst <= 0.03 else "Low"
-    return dict(regime=regime, volatility=volatility, liquidity=liquidity, pcr=chain["pcr"] if info else None,
+    return dict(regime=regime, volatility=volatility, liquidity=liquidity, pcr=chain["pcr"] if info and chain else None,
                 vix=level if finite_number(level) else None,
                 vix_change_pct=(vix or {}).get("change_pct") if finite_number(level) else None)
 
@@ -411,10 +443,17 @@ def veto_reason(signal, config=EngineConfig()):
 
 
 def rank_key(signal):
-    """Order actionable entries by aligned satisfied engines, then rule score."""
+    """Keep strategy evidence first; break ties by net R:R, freshness, spread and available lot depth."""
     decision = signal.get("decision")
     side = decision[-2:] if decision in ("BUY CE", "BUY PE") and signal.get("entry") else None
     aligned = (signal.get("orchestration") or {}).get(side.lower(), 0) if side else 0
     confidence = signal.get("confidence")
-    return (1 if side else 0, aligned, confidence if finite_number(confidence) else 0)
-
+    entry = signal.get("entry") or {}
+    contract = signal.get("contract") or {}
+    rows = (signal.get("options") or {}).get("rows") or ()
+    quote = next((row for row in rows if row.get("token") == contract.get("token")), {})
+    spread, depth = quote.get("spread"), quote.get("ask_quantity")
+    reward_risk, observed = entry.get("reward_risk"), signal.get("at")
+    return (1 if side else 0, aligned, confidence if finite_number(confidence) else 0,
+            reward_risk if finite_number(reward_risk) else 0, observed if finite_number(observed) else 0,
+            -spread if finite_number(spread) else -1, depth if finite_number(depth) else 0)
