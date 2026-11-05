@@ -153,7 +153,7 @@ function AQTEAutomationSwitch({ onStatus, feed, feedError = null }: {
   const known = !unknown && !!status;
   const on = known && (status.automation_wanted ?? status.automation_on) === true && !status.killed;
   const waiting = on && !status.automation_on;
-  const canStart = !unknown && !!status?.ready && status.enabled && status.paper_validated && !status.killed;
+  const canStart = !unknown && !!status?.ready && status.enabled && !status.killed;
   const canReset = known && aqteControllerCurrent(status) && status.killed &&
     status.flatten_pending === false && status.active === null;
   const label = busy ? 'Saving…' : !known ? unknown ? 'UNKNOWN' : 'Checking…' : status.killed ? 'STOPPED' : on ? 'ON' : 'OFF';
@@ -188,7 +188,7 @@ function AQTEAutomationSwitch({ onStatus, feed, feedError = null }: {
       )}
       <p role="status" className={`${!busy && !(known && status.killed) ? 'sr-only' : 'text-right text-sm'} ${unknown || !status ? 'text-amber-200' : status.killed ? 'text-rose-200' : on ? 'text-emerald-200' : 'text-amber-200'}`}>
         {busy ? 'Saving to backend…' : unknown || !status ? 'UNKNOWN · Verifying backend state · Do not assume OFF' :
-          status.killed ? (status.flatten_pending ? 'Emergency stop latched · Closing all Kite positions' :
+          status.killed ? (status.flatten_pending ? 'Emergency stop latched · Closing AQTE positions only · manual trades untouched' :
             !status.ready ? 'Emergency stop latched · Controller unavailable; reset blocked' :
               status.active ? 'Emergency stop latched · Trade reconciliation pending; inspect Kite' :
                 status.flatten_pending !== false ? 'Emergency stop latched · Square-off status unverified; inspect Kite' :
@@ -198,22 +198,23 @@ function AQTEAutomationSwitch({ onStatus, feed, feedError = null }: {
       <p id="aqte-automation-help" className="sr-only">
         {unknown ? 'Status unknown. Use this control to request OFF; verify acknowledgement.' :
           on ? 'Auto trade stays ON until you switch it OFF. OFF blocks new entries; protective exits continue.' :
-            'Default OFF. Confirm ON any time; it arms itself during weekday entry hours. Backend approval is required.'}
+            'Default OFF. Confirm ON any time; it arms itself during weekday entry hours. Backend live enablement is required.'}
       </p>
       {waiting && (
         <p role="status" className="text-right text-xs text-amber-200">
           ON · {status.automation_waiting || 'Waiting to arm for the market session'}
         </p>
       )}
-      {known && !status.killed && !on && (!status.ready || !status.enabled || !status.paper_validated) && (
+      {known && !status.killed && !on && (!status.ready || !status.enabled) && (
         <p role="status" className="text-right text-xs text-amber-200">
-          {!status.ready ? 'ON locked · Live controller is not ready' : 'ON locked · Backend live-trading approval is required'}
+          {!status.ready ? 'ON locked · Live controller is not ready' : 'ON locked · AQTE_LIVE_ENABLED is false'}
         </p>
       )}
       {confirming === 'on' && (
         <div role="group" aria-label="Confirm automated real trading" onKeyDown={cancelOnEscape}
           className="space-y-2 rounded-lg border border-amber-400/40 bg-slate-950 p-3 text-xs">
           <p className="leading-relaxed text-amber-100">Start automated real-money orders? ON stays saved until you switch OFF, even when the market is closed. Every weekday from 9:15 AM IST it checks Kite and static IP, arms itself and scans for qualifying one-lot BUY CE/BUY PE entries using your saved settings. New entries stop at 3:15 PM IST. No qualifying signal means no trade.</p>
+          <p className="leading-relaxed text-slate-300">AQTE manages only its own tagged orders. It never closes, cancels or modifies your manual Kite trades; if you already hold its chosen contract, it uses a different strike or waits.</p>
           <p className={`leading-relaxed ${status?.unvalidated_rules ? 'text-rose-200' : 'text-slate-300'}`}>
             {status?.unvalidated_rules
               ? 'Server allows unvalidated rule entries: fully aligned setups can place real one-lot orders.'
@@ -228,7 +229,7 @@ function AQTEAutomationSwitch({ onStatus, feed, feedError = null }: {
       {confirming === 'reset' && (
         <div role="group" aria-label="Confirm emergency reset" onKeyDown={cancelOnEscape}
           className="space-y-2 rounded-lg border border-amber-400/40 bg-slate-950 p-3 text-xs">
-          <p className="leading-relaxed text-amber-100">Verify in Kite that positions and working orders are clear before resetting. Reset only clears the emergency latch and keeps automation OFF. ON requires separate confirmation, backend approval and weekday entry hours: 09:15–15:15 IST.</p>
+          <p className="leading-relaxed text-amber-100">Verify in Kite that AQTE positions and AQTE orders are clear before resetting; your manual trades are never touched. Reset only clears the emergency latch and keeps automation OFF. ON requires separate confirmation and backend live enablement; entries require weekday entry hours: 09:15–15:15 IST.</p>
           <div className="flex flex-wrap gap-2">
             <button type="button" onClick={() => setConfirming(null)} className="min-h-[44px] rounded-lg border border-slate-600 px-3 text-slate-300">Cancel reset</button>
             <button type="button" disabled={busy || !canReset} onClick={() => { if (canReset) void act('reset'); }}

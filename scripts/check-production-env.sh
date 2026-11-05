@@ -38,7 +38,6 @@ for key in FRONTEND_URL REDIRECT_URL; do
 done
 
 if enabled AQTE_LIVE_ENABLED; then
-    enabled AQTE_LIVE_PAPER_VALIDATED || warn "AQTE_LIVE_PAPER_VALIDATED is not true; Auto Trade ON stays locked"
     if [ -n "$(setting FORCE_OUTBOUND_IPV4)" ] && ! enabled FORCE_OUTBOUND_IPV4; then
         warn "FORCE_OUTBOUND_IPV4 is not true; Auto Trade ON preflight will be refused"
     fi

@@ -7,10 +7,12 @@ import json
 import logging
 import math
 import os
+import re
 import sqlite3
 import threading
 import time
 from contextlib import closing
+from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
@@ -26,6 +28,8 @@ from services.aqte_engines import EngineConfig, rank_key, veto_reason
 logger = logging.getLogger(__name__)
 TERMINAL = {"COMPLETE", "CANCELLED", "REJECTED"}
 KILL_TAG = "AQTEKILL"
+# Every AQTE order carries its 16-hex trade id + E (entry) / S (stop); manual Kite orders never do.
+AQTE_TAG = re.compile(r"[0-9a-f]{16}[ES]")
 KILL_EXCHANGES = {"NFO", "BFO", "NSE", "BSE"}
 KILL_MAX_REJECTS = 5
 KILL_SETTLE_SECONDS = 4
@@ -37,6 +41,7 @@ ACTIVATION_RETRY_SECONDS = 60
 ENTRY_RETRY_SECONDS = 5
 ENTRY_SCAN_AUDIT_SECONDS = 60
 DAILY_CONTROL_DEFAULTS_VERSION = 1
+AUTOMATION_APPROVAL_VERSION = 1
 ENTRY_CUTOFF_MINUTE = 15 * 60 + 15
 MARKET_WAIT = "Waiting for market: auto trade arms on weekdays 09:15 to 15:15 IST"
 # Kite rejects more than 25 modifications per order; trailing must leave headroom for the exit.
@@ -55,6 +60,11 @@ class EntrySkipped(LiveBlocked):
 def entry_window(at):
     dt = datetime.fromtimestamp(at, IST)
     return session(at) and dt.hour * 60 + dt.minute < ENTRY_CUTOFF_MINUTE
+
+
+def aqte_order(order):
+    tag = str(order.get("tag") or "")
+    return tag == KILL_TAG or AQTE_TAG.fullmatch(tag) is not None
 
 
 def kill_price(ltp, side):
@@ -91,7 +101,8 @@ class AQTELiveService:
         self.lock = threading.RLock()
         self.state = {"armed_day": None, "automation_on": False, "automation_wanted": False, "killed": False,
                       "account": None, "active": None, "trades": [], "used": [], "daily_controls": defaults(),
-                      "daily_entries": [], "daily_controls_version": DAILY_CONTROL_DEFAULTS_VERSION}
+                      "daily_entries": [], "daily_controls_version": DAILY_CONTROL_DEFAULTS_VERSION,
+                      "automation_approval_version": AUTOMATION_APPROVAL_VERSION}
         self.proposals = {}
         self.check = None
         self.error = None
@@ -174,8 +185,17 @@ class AQTELiveService:
             self.state["automation_wanted"] = False
             logger.warning("AQTE controls migrated: all indices/styles/setups selected, score floor 75-80; "
                            "Auto Trade is OFF pending fresh approval")
+        approval_version = self.state.get("automation_approval_version", 0)
+        if type(approval_version) is not int or approval_version not in (0, AUTOMATION_APPROVAL_VERSION):
+            raise LiveBlocked("Unsupported automation approval version; journal requires repair before trading")
+        approval_migrated = approval_version == 0
+        self.state["automation_approval_version"] = AUTOMATION_APPROVAL_VERSION
+        if approval_migrated:
+            # Removing an entry gate must not activate a previously saved ON request.
+            self.state["automation_wanted"] = False
+            logger.warning("AQTE paper-approval gate removed; Auto Trade is OFF pending fresh approval")
         self.save("RESTART_DISARMED", automation_wanted=self.state["automation_wanted"],
-                  daily_controls_migrated=migrated)
+                  daily_controls_migrated=migrated, automation_approval_migrated=approval_migrated)
         self.ready = True
 
     def save(self, kind, **payload):
@@ -219,7 +239,7 @@ class AQTELiveService:
                           for symbol, signal in snapshot["data"].items()}
             return {
                 "generated_at": now, "daily_counts": counts(self.state, now),
-                "enabled": cfg.aqte_live_enabled, "paper_validated": cfg.aqte_live_paper_validated,
+                "enabled": cfg.aqte_live_enabled,
                 "unvalidated_rules": cfg.aqte_live_allow_unvalidated_rules,
                 "expected_ip": cfg.aqte_live_static_ip, "preflight": copy.deepcopy(self.check),
                 "armed": self.state["armed_day"] == day(now) and not self.state["killed"],
@@ -443,8 +463,6 @@ class AQTELiveService:
             raise LiveBlocked("Live journal is unavailable")
         if not cfg.aqte_live_enabled:
             raise LiveBlocked("AQTE_LIVE_ENABLED is false in centralized backend settings")
-        if not cfg.aqte_live_paper_validated:
-            raise LiveBlocked("Paper validation not approved: AQTE_LIVE_PAPER_VALIDATED is false")
         if not cfg.force_outbound_ipv4:
             raise LiveBlocked("FORCE_OUTBOUND_IPV4 must be enabled")
         if cfg.algo_auto_trade_enabled and cfg.algo_auto_trade_mode.strip().lower() == "live":
@@ -460,16 +478,53 @@ class AQTELiveService:
             raise LiveBlocked("Configured static IP must be a public IPv4 address")
         return cfg
 
-    def account_clear(self, broker, token=None):
-        positions = broker.positions()
-        for position in positions["net"]:
-            if position["quantity"] and (token is None or int(position["instrument_token"]) == token):
-                raise LiveBlocked("Broker account/instrument already has exposure; reconcile it in Kite first")
-        for order in broker.orders():
-            if order["status"] not in TERMINAL and (
-                token is None or int(order["instrument_token"]) == token
-            ):
-                raise LiveBlocked("Broker account/instrument already has a working order")
+    def book(self, broker):
+        """Split Kite's account into AQTE-owned exposure/orders and the owner's own trades.
+
+        AQTE only buys with its E tag, so its share of a position is its tagged net fills, capped by
+        what Kite still holds. Everything else (manual or other-app trades) is the owner's and only
+        marks that contract busy: AQTE never cancels, modifies, exits or adds to it.
+        """
+        orders = broker.orders()
+        positions = [p for p in broker.positions()["net"] if int(p["quantity"])]
+        held = {}
+        for order in orders:
+            filled = int(order.get("filled_quantity") or 0)
+            if not filled or not aqte_order(order):
+                continue
+            key = (order["exchange"], order["tradingsymbol"], order["product"])
+            if order["transaction_type"] == "SELL":
+                held[key] = held.get(key, 0) - filled
+            elif str(order.get("tag")).endswith("E"):
+                held[key] = held.get(key, 0) + filled
+        owned, busy = [], set()
+        for position in positions:
+            quantity = int(position["quantity"])
+            mine = max(0, min(quantity, held.get(
+                (position.get("exchange"), position.get("tradingsymbol"), position.get("product")), 0)))
+            if mine:
+                owned.append({**position, "quantity": mine})
+            if quantity != mine:
+                busy.add(int(position["instrument_token"]))
+        working = []
+        for order in orders:
+            if order["status"] in TERMINAL:
+                continue
+            if aqte_order(order):
+                working.append(order)
+            elif order.get("instrument_token") is not None:
+                busy.add(int(order["instrument_token"]))
+        return dict(orders=orders, owned=owned, working=working, busy=busy)
+
+    @staticmethod
+    def own_clear(book):
+        """Without an active trade, only AQTE's own untracked exposure/orders block; owner trades never do."""
+        if book["owned"]:
+            names = ", ".join(sorted({p["tradingsymbol"] for p in book["owned"]}))
+            raise LiveBlocked(f"Untracked AQTE position in {names}; close it in Kite before new AQTE entries")
+        if book["working"]:
+            names = ", ".join(sorted({str(o.get("tradingsymbol")) for o in book["working"]}))
+            raise LiveBlocked(f"AQTE order still working for {names}; wait for Kite to settle it")
 
     def preflight(self):
         with self.lock:
@@ -484,7 +539,7 @@ class AQTELiveService:
             account = broker.profile()["user_id"]
             if not account:
                 raise LiveBlocked("Broker account identity unavailable")
-            self.account_clear(broker)
+            self.own_clear(self.book(broker))
             self.check = {"ip": ip, "at": time.time(), "account": account,
                           "note": "Public IPv4 matched; Kite remains authoritative for broker IP permissions"}
             self.error = None
@@ -522,7 +577,8 @@ class AQTELiveService:
             raise LiveBlocked("Backend outbound IP changed; live session disarmed")
         if broker.profile()["user_id"] != self.state["account"]:
             raise LiveBlocked("Broker account identity changed")
-        self.account_clear(broker)
+        book = self.book(broker)
+        self.own_clear(book)
         trades = [t for t in self.state["trades"] if day(t["entry_at"]) == day(now)]
         if len(trades) >= cfg.aqte_live_max_trades:
             raise LiveBlocked("Maximum daily live trades reached")
@@ -536,7 +592,35 @@ class AQTELiveService:
         pnl = sum(t["net_pnl"] for t in trades)
         if pnl <= -cfg.aqte_live_daily_loss:
             raise LiveBlocked("Daily live loss limit reached")
-        return cfg, pnl
+        return book
+
+    def free_contract(self, symbol, signal, busy):
+        """Never add AQTE to a contract the owner holds or has an order in: use the next liquid strike."""
+        held = signal["contract"]
+        if held["token"] not in busy:
+            return signal
+        market, side, tried = self.service(), signal["decision"][-2:], set(busy)
+        while True:
+            with market.lock:
+                spot = market.engine.spot.get(symbol)
+                picked = market.engine.pick(symbol, side, time.time(), spot, exclude=tried) if spot else None
+            if picked is None:
+                break
+            _, contract, quote = picked
+            tried.add(contract.token)
+            limit = round_tick(quote.ask, contract.tick_size, up=True)
+            candidate = {**signal, "contract": asdict(contract), "avoided": held["trading_symbol"], "entry": {
+                **signal["entry"], "low": round_tick(quote.bid, contract.tick_size), "high": limit,
+                "maximum": limit, "quantity": contract.lot_size}}
+            if self.control_reason(symbol, candidate):
+                continue
+            try:
+                self.entry_levels(symbol, candidate)
+            except EntrySkipped:
+                continue
+            return candidate
+        raise EntrySkipped(f"You already hold {held['trading_symbol']} in Kite; no other liquid {side} strike fits. "
+                           "Leaving your trade untouched and waiting for the next opportunity")
 
     def start_automation(self):
         """Standing ON: accepted any time; arms itself inside each weekday 09:15-15:15 IST window."""
@@ -637,6 +721,14 @@ class AQTELiveService:
             selections = {symbol: self.select_entry(symbol, signal) for symbol, signal in snapshot["data"].items()}
             signals = {symbol: selected["signal"] for symbol, selected in selections.items()}
             blocks: dict[str, str] = {}
+            scan: dict[str, set] = {}
+
+            def busy():
+                # One Kite book read per scan, and only once a candidate passes every local check.
+                if "busy" not in scan:
+                    scan["busy"] = self.book(self.broker())["busy"]
+                return scan["busy"]
+
             for symbol in sorted(signals, key=lambda s: rank_key(signals[s]), reverse=True):
                 signal = signals[symbol]
                 reason = self.control_reason(symbol, signal)
@@ -653,7 +745,7 @@ class AQTELiveService:
                     blocks[symbol] = "Entry retry cooldown after a transient price/quote check"
                     continue
                 try:
-                    proposal = self.proposal(symbol)
+                    proposal = self.proposal(symbol, busy)
                     self.confirm(proposal["id"])
                 except EntrySkipped as exc:
                     # Price/quote moved between signal and broker checks: retry shortly, stay armed.
@@ -671,7 +763,7 @@ class AQTELiveService:
                 break
             self.record_entry_scan(blocks, {symbol: selected["style"] for symbol, selected in selections.items()})
 
-    def proposal(self, symbol):
+    def proposal(self, symbol, busy=None):
         with self.lock:
             self.config_guard()
             if not self.state.get("automation_on"):
@@ -686,6 +778,15 @@ class AQTELiveService:
             reason = self.control_reason(symbol, signal)
             if reason:
                 raise EntrySkipped(reason)
+            # The strategy candle stays the engine's setup even if the owner's trade moves AQTE to another strike.
+            setup_key = self.setup_key(symbol, signal)
+            # Known premium/risk/budget skips must not spend a broker request.
+            self.entry_levels(symbol, signal)
+            if busy is None:
+                busy = self.book(self.broker())["busy"]
+            elif callable(busy):
+                busy = busy()
+            signal = self.free_contract(symbol, signal, busy)
             with market.lock:
                 quote = market.engine.options.get(signal["contract"]["token"])
                 if not market.engine.fresh(quote, time.time()):
@@ -697,7 +798,9 @@ class AQTELiveService:
             result = {"id": key, "symbol": symbol, "contract": signal["contract"],
                       "strategy": f'quick_scalp_{entry["points"]:g}' if "points" in entry else signal.get("strategy"),
                       "entry": entry, "risk": round(risk, 2), "signal_at": signal["at"],
-                      "expires_at": now + 15, "setup_key": self.setup_key(symbol, signal)}
+                      "expires_at": now + 15, "setup_key": setup_key}
+            if signal.get("avoided"):
+                result["avoided"] = signal["avoided"]
             self.proposals[key] = copy.deepcopy(result)
             return result
 
@@ -756,11 +859,11 @@ class AQTELiveService:
             if proposal is None or time.time() >= proposal["expires_at"]:
                 raise LiveBlocked("Order approval expired or already used; review a new proposal")
             broker = self.broker()
-            self.entry_guard(broker)
+            book = self.entry_guard(broker)
             if proposal["setup_key"] in self.state["used"]:
                 raise LiveBlocked("This strategy candle was already submitted")
             # Re-evaluate the backend setup; never trust browser prices or quantity.
-            current = self.proposal(proposal["symbol"])
+            current = self.proposal(proposal["symbol"], book["busy"])
             self.proposals.pop(current["id"], None)
             # Same contract and strategy candle, and the price cap may only fall: never chase a higher ask.
             if current["contract"] != proposal["contract"] or current["setup_key"] != proposal["setup_key"] or (
@@ -790,7 +893,8 @@ class AQTELiveService:
                 raise EntrySkipped("Fresh broker ask/depth does not fit the approved no-chase limit")
             available = float(broker.margins("equity")["available"]["cash"])
             if not math.isfinite(available) or available < entry["maximum"] * c["lot_size"] + self.costs(entry["maximum"], c["lot_size"]):
-                raise LiveBlocked("Insufficient broker cash for the one-lot premium")
+                # Owner trades can tie up margin for a while; retry instead of disarming automation.
+                raise EntrySkipped("Insufficient broker cash for the one-lot premium; retrying")
             if time.time() >= proposal["expires_at"]:
                 raise EntrySkipped("Approval expired during broker checks; review again")
             market = self.service()
@@ -840,7 +944,7 @@ class AQTELiveService:
             if not self.ready:
                 raise LiveBlocked("Live journal is unavailable; manage the position in Kite")
             if self.state["killed"] or self.state.get("flatten_pending"):
-                raise LiveBlocked("Account-wide emergency stop is active; monitor square-off in Kite")
+                raise LiveBlocked("AQTE emergency stop is active; monitor AQTE square-off in Kite")
             active = self.state["active"]
             if not active or active["id"] != trade_id:
                 raise LiveBlocked("The selected AQTE trade is no longer active; refresh before acting")
@@ -938,7 +1042,8 @@ class AQTELiveService:
             active["protection_confirmed"] = bool(
                 protection and protection["status"] == "TRIGGER PENDING" and protection["order_type"] == "SL")
             exited = int(protection["filled_quantity"]) if protection else 0
-            if quantity != filled - exited:
+            # Owner trades in the same contract may add quantity; less than AQTE's remainder means its lots were sold.
+            if quantity < filled - exited:
                 raise LiveBlocked("Live quantity differs from AQTE fills; possible manual intervention. Manage in Kite.")
             active["exited"] = exited
             if protection is None:
@@ -1080,7 +1185,7 @@ class AQTELiveService:
             self.kill_sent.clear()
             if self.state["active"]:
                 self.state["active"]["exit_requested"] = "EMERGENCY_STOP"
-            self.audit("EMERGENCY_STOP", scope="ALL_KITE_POSITIONS_AND_ORDERS")
+            self.audit("EMERGENCY_STOP", scope="AQTE_TAGGED_POSITIONS_AND_ORDERS")
             try:
                 self.emergency_flatten()
             except Exception as exc:
@@ -1089,14 +1194,17 @@ class AQTELiveService:
             return self.status()
 
     def emergency_flatten(self):
-        """Cancel every working order and close every open Kite position. Repeats until flat."""
+        """Cancel AQTE's working orders and close only AQTE-owned quantity. Repeats until AQTE is flat.
+
+        The owner's manual or other-app positions and orders are never cancelled, modified or exited.
+        """
         with self.lock:
             if not self.state.get("flatten_pending"):
                 return
             broker = self.broker()
-            orders = broker.orders()
-            positions = [p for p in broker.positions()["net"] if int(p["quantity"])]
-            working = [o for o in orders if o["status"] not in TERMINAL]
+            book = self.book(broker)
+            orders = [o for o in book["orders"] if aqte_order(o)]
+            positions, working = book["owned"], book["working"]
             now = time.time()
             keep, problems = set(), []
             complete = {str(o["order_id"]) for o in orders if o["status"] == "COMPLETE"}
@@ -1191,7 +1299,7 @@ class AQTELiveService:
         self.state["flatten_pending"] = False
         self.kill_sent.clear()
         self.error = None
-        self.audit("EMERGENCY_FLAT", note="Kite reports no open positions or working orders")
+        self.audit("EMERGENCY_FLAT", note="Kite reports no open AQTE positions or AQTE orders; owner trades untouched")
 
     def reset_emergency(self):
         with self.lock:
@@ -1200,7 +1308,7 @@ class AQTELiveService:
             if not self.state["killed"]:
                 raise LiveBlocked("Emergency stop is not latched")
             if self.state.get("flatten_pending") or self.state["active"]:
-                raise LiveBlocked("Emergency square-off still in progress; wait until Kite shows no open positions or orders")
+                raise LiveBlocked("Emergency square-off still in progress; wait until Kite shows no open AQTE positions or AQTE orders")
             self.state.update(killed=False, armed_day=None, automation_on=False, automation_wanted=False)
             self.error = None
             self.waiting = None

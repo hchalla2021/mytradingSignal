@@ -324,8 +324,8 @@ function AQTESection({ marketData, isConnected = false }: { marketData?: MarketD
       lossLeft === 0 ? { label: 'Limit hit', note: 'Daily loss reached', tone: 'aqx-down' } :
         (tradeCount ?? 0) >= liveStatus.limits.max_trades || consecutiveLosses >= liveStatus.limits.max_losses
           ? { label: 'Limit hit', note: 'Entries blocked', tone: 'aqx-down' } :
-          !liveStatus.enabled || !liveStatus.paper_validated
-            ? { label: 'Locked', note: 'Live approval required', tone: 'aqx-flat' } :
+          !liveStatus.enabled
+            ? { label: 'Locked', note: 'Live trading disabled', tone: 'aqx-flat' } :
             liveStatus.automation_wanted && !liveStatus.automation_on
               ? { label: 'Waiting', note: liveStatus.entry_window === false ? 'ON · arms 09:15 IST' : 'ON · arming / preflight', tone: 'aqx-flat' } :
             !liveStatus.armed ? { label: 'Not armed', note: 'Arms when Auto Trade turns ON', tone: 'aqx-flat' } :

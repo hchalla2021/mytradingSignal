@@ -99,9 +99,8 @@ class Settings(BaseSettings):
     algo_live_symbol_banknifty: str = Field(default="", env="ALGO_LIVE_SYMBOL_BANKNIFTY")
     algo_live_symbol_sensex: str = Field(default="", env="ALGO_LIVE_SYMBOL_SENSEX")
 
-    # AQTE live requires daily arming and its default-OFF automation switch.
+    # AQTE live requires explicit enablement, manual ON and daily preflight/arming.
     aqte_live_enabled: bool = False
-    aqte_live_paper_validated: bool = False
     aqte_live_static_ip: str = "122.177.245.101"
     # Real-money opt-in: lets fully aligned, unvalidated rule setups enter one lot.
     aqte_live_allow_unvalidated_rules: bool = False

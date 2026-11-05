@@ -565,11 +565,13 @@ class AQTEEngine:
                  if not self.fresh(tick, now)]
         return "Market data stale: " + "; ".join(stale) if stale else None
 
-    def pick(self, symbol, side, now, spot):
+    def pick(self, symbol, side, now, spot, exclude=()):
         """Nearest-strike fresh, liquid, tight-spread option of the requested side."""
         candidates = []
         for contract in self.contracts.values():
-            if contract.symbol != symbol or contract.side != side or contract.expiry < day(now):
+            if contract.symbol != symbol or contract.side != side or contract.expiry < day(now) or (
+                contract.token in exclude
+            ):
                 continue
             quote = self.options.get(contract.token)
             if not self.fresh(quote, now) or not 0 < quote.bid <= quote.ask or quote.ask_quantity < contract.lot_size:

@@ -8,7 +8,7 @@ export type AQTEStyleChecks = Partial<Record<AQTEStyle, string | null>>;
 export type AQTELiveState = {
   generated_at: number;
   daily_counts: { executed: number; reserved: number };
-  enabled: boolean; paper_validated: boolean; unvalidated_rules?: boolean; expected_ip: string;
+  enabled: boolean; unvalidated_rules?: boolean; expected_ip: string;
   ready: boolean; armed: boolean; automation_on: boolean; killed: boolean;
   automation_wanted?: boolean; automation_waiting?: string | null; entry_window?: boolean;
   entry_note?: string | null; styles?: Partial<Record<AQTESymbol, AQTEStyle | null>>;
@@ -72,7 +72,7 @@ export const isAqteStyleChecks = (value: unknown): value is AQTEStyleChecks =>
 
 export function isAqteLiveState(value: unknown): value is AQTELiveState {
   if (!record(value) || !finite(value.generated_at) ||
-      !['enabled', 'paper_validated', 'ready', 'armed', 'automation_on', 'killed'].every(key => typeof value[key] === 'boolean') ||
+      !['enabled', 'ready', 'armed', 'automation_on', 'killed'].every(key => typeof value[key] === 'boolean') ||
       !nullableText(value.error) || typeof value.expected_ip !== 'string' ||
       (value.flatten_pending !== undefined && typeof value.flatten_pending !== 'boolean') ||
       (value.unvalidated_rules !== undefined && typeof value.unvalidated_rules !== 'boolean') ||

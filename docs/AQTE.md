@@ -37,7 +37,7 @@ Index selection changes do not add polling or order actions.
 Hidden index panels remain mounted; the embedded chart mounts only for the selected index.
 Real positions only appear under their own
 index; other tabs retain an explicit warning when another index holds a position.
-Controller alerts and account-wide emergency protection stay visible.
+Controller alerts and AQTE-only emergency protection stay visible.
 The red emergency-stop/exit-request control sits at the top-right of the Real
 Trade box (full-width on phones). Static-IP preflight and daily arming controls
 are inside the collapsed setup disclosure, not in the primary action row.
@@ -127,7 +127,7 @@ storage can enable trading; duplicate clicks and older in-flight polls cannot
 overwrite command results. OFF does not cancel existing protection.
 Confirmed header ON now calls owner-authenticated `POST /api/aqte/live/start`.
 ON is a **standing request** accepted at any time, market open or closed. Under the
-controller lock it validates approval and the emergency latch, then saves
+controller lock it validates live enablement and the emergency latch, then saves
 `automation_wanted` in the journal. Inside weekday 09:15–15:15 IST entry hours it
 immediately runs Kite/static-IP preflight and daily arming, then enables scanning.
 Outside those hours the switch shows **ON · Waiting for market**, and the monitor
@@ -138,12 +138,14 @@ signals passing existing daily/quality/risk gates can buy. ON stays saved across
 backend restarts, the 15:15 cutoff and new days until you switch OFF, request a
 manual exit, or trigger the emergency stop; a latched emergency is not an ordinary
 pause and cannot be cleared by ON — use the confirmed emergency reset once Kite is
-flat. Missing approval keeps ON locked.
+flat. Disabled backend live trading keeps ON locked. Upgrading from the removed
+paper-approval gate clears a saved ON request once and requires fresh owner
+confirmation; later restarts preserve that newly confirmed request.
 The ON confirmation states the server's entry mode (strict scan-only, or unvalidated
 rule entries allowed). **Cancel · stay OFF** and Escape only close the confirmation;
 they send no command because automation is already OFF. The risk card shows
-**Locked · Live approval required** only when `AQTE_LIVE_ENABLED` or
-`AQTE_LIVE_PAPER_VALIDATED` is not true; with approvals present it shows
+**Locked · Live trading disabled** only when `AQTE_LIVE_ENABLED` is not true;
+with live trading enabled it shows
 **Waiting · ON · arms 09:15 IST** (or **arming / preflight**) while a standing ON
 waits, and **Not armed · Arms when Auto Trade turns ON** while OFF.
 The compact header badge describes the market feed, not automation. LIVE requires
@@ -223,7 +225,7 @@ The current reference-style trade hero includes initial SL separately from the
 broker-confirmed current/trailing stop, an open-P&L ring, targets, position quantity,
 index chart, lifecycle, futures evidence, protection rules and a tabbed trade book.
 **Book All** and **Exit Now** request an exit of the selected AQTE trade only, after
-confirmation. Account-wide emergency liquidation remains a separate owner-authenticated
+confirmation. AQTE-only emergency liquidation remains a separate owner-authenticated
 backend operation. The header's confirmed emergency reset only restores OFF.
 The status payload includes generation time, executed/reserved counts, all today's
 closed trades (not a truncated 20-trade day), and recent earlier exits. Unknown or
@@ -310,9 +312,10 @@ Broker failures are explicit; the dashboard must not imply a flat account.
 Only same-contract/exchange/product opposite-side working SL/SL-M orders are
 listed, including remaining quantities and status. Coverage may be partial;
 GTT/external stops are not verified. Current triggers do not establish initial SL
-or trailing history, which remain explicitly unavailable. Manual positions must
-be managed in Kite during normal operation. The selected-trade exit never touches
-them; the separately confirmed account-wide emergency stop does close them.
+or trailing history, which remain explicitly unavailable. Manual positions are
+managed only by the owner in Kite. AQTE never closes, cancels, modifies or adds to
+them — neither the selected-trade exit nor the emergency stop touches them (see
+**Manual Kite trades** below).
 This display does not approve or enable real automation.
 
 - FastAPI lifespan owns a shared `MarketFeedService` and KiteTicker connection.
@@ -806,11 +809,11 @@ no polling. Selecting the Real Trade view alone never makes the badge green.
   trade counts and risk settings. It does not force a trade or control paper
   trading, market data or manually opened Kite positions.
 - OFF is the reversible pause for new entries and remains available outside
-  market hours. Emergency Stop is not a pause: see **Emergency Stop · close all** below.
+  market hours. Emergency Stop is not a pause: see **Emergency Stop · close AQTE positions** below.
 - New installations start **OFF**. Once switched ON, Auto Trade stays ON (restarts
   and new days included) until OFF, a manual exit or an emergency stop.
-- Preflight (IP/Kite/flat account) and daily arming run automatically inside each
-  weekday entry window; outside it ON simply waits.
+- Preflight (IP/Kite/no untracked AQTE exposure) and daily arming run automatically inside each
+  weekday entry window; outside it ON simply waits. Manual Kite trades never block it.
 - Click the header switch, then **Confirm ON · real money**. This authorizes automatic
   qualifying real entries without per-order approval, using all existing entry checks.
 - **OFF blocks new entry orders**, invalidates prepared proposals, and retains broker
@@ -1003,11 +1006,11 @@ profitable trades or execution.
 The centralized settings are in `backend/config/__init__.py`; environment overrides
 are documented in `backend/.env.production.example`. The built-in static IP default is
 `122.177.245.101` (a local workstation); production must set the droplet's outbound
-IPv4. Development did not change your private environment or submit orders.
+IPv4. Removing the obsolete paper-approval entry does not enable automation or
+submit orders.
 
 ```dotenv
 AQTE_LIVE_ENABLED=false
-AQTE_LIVE_PAPER_VALIDATED=false
 AQTE_LIVE_STATIC_IP=159.65.147.167
 AQTE_LIVE_ALLOW_UNVALIDATED_RULES=false
 AQTE_LIVE_RISK_PER_TRADE=1000
@@ -1022,8 +1025,19 @@ AQTE_RISK_FREE_RATE=0.065
 FORCE_OUTBOUND_IPV4=true
 ```
 
-Only an operator who has completed paper acceptance should approve the two enablement
-flags. Restart the backend after changes. First verify the saved Kite allowlist and the
+`AQTE_LIVE_PAPER_VALIDATED` is retired and ignored, even if an old environment file
+still contains it. The status API no longer emits `paper_validated`; deploy the
+backend and frontend together. Paper testing remains recommended, but it is not
+a separate configuration gate. `AQTE_LIVE_ENABLED=true` and explicit owner
+confirmation of Auto Trade ON are still required. The first restart of an existing
+journal after this change clears its saved ON request and records the migration;
+open positions, protection, history, risk limits and saved index/style/setup
+choices are preserved. Later restarts preserve a newly confirmed ON request.
+This does not bypass the separate model/rule-quality policy controlled by
+`AQTE_LIVE_ALLOW_UNVALIDATED_RULES`.
+
+Reload the backend after configuration changes (recreate it if Docker injects
+the environment). First verify the saved Kite allowlist and the
 backend host's outbound IPv4; a browser's IP is insufficient. The preflight contacts
 `https://api.ipify.org` over direct HTTPS with no credentials or account/order payloads;
 it then validates the existing Kite profile and requires a flat broker account without
@@ -1048,7 +1062,7 @@ The signed-in configured app owner, at any time (market open or closed):
 
 1. Clicks the header **Auto Trade** switch and **Confirm ON · real money**.
 2. Inside weekday 09:15–15:15 IST the backend runs the static-IP, Kite profile and
-   flat-account preflight and arms the current session; outside those hours, or if a
+   AQTE-exposure preflight (manual Kite trades are ignored) and arms the current session; outside those hours, or if a
    check fails, ON stays saved with the reason shown and retries automatically.
 3. The monitor consumes qualifying signals automatically through the same short-lived,
    server-generated proposal and broker revalidation path; no individual BUY click is needed.
@@ -1086,13 +1100,13 @@ spot and option data, owner/broker authentication, and all execution gates.
    per app, so production login and local login conflict.
 2. **Server runtime env file** (never uploaded by the deploy scripts): production
    `FRONTEND_URL`, `REDIRECT_URL` and `CORS_ORIGINS`; `APP_ACCESS_USERNAME` and
-   `APP_ACCESS_PASSWORD_HASH`; `AQTE_LIVE_ENABLED=true`, `AQTE_LIVE_PAPER_VALIDATED=true`,
+   `APP_ACCESS_PASSWORD_HASH`; `AQTE_LIVE_ENABLED=true`,
    `AQTE_LIVE_STATIC_IP=<droplet IPv4>`, `FORCE_OUTBOUND_IPV4=true`; Smart AI Algo not
    in live mode; no proxy variables. Set `AQTE_LIVE_ALLOW_UNVALIDATED_RULES=true` only
    if you accept unvalidated real-money entries; otherwise ON only scans.
 3. **Verify egress** on the server: `curl -4 https://api.ipify.org` must print the
    same IPv4 as `AQTE_LIVE_STATIC_IP`. `bash scripts/check-production-env.sh` reports
-   localhost URLs, missing approvals and IP mismatches without printing secrets.
+   localhost URLs, live enablement and IP mismatches without printing secrets.
 4. **Deploy:** `scripts/deploy-to-do.ps1 <droplet-ip>` uploads a checked source archive
    that excludes `.env*`, the Kite token and runtime data, and `deploy_digitalocean.sh`
    uses `git pull`. Both run the settings check and stop before rebuilding on errors.
@@ -1162,8 +1176,10 @@ set `NEXT_PUBLIC_SHARED_PRODUCTION=false` and restart the frontend, leaving loca
 execution disabled until an intentional, separately reviewed host handover.
 
 Automatic entries are permitted **only while ON and armed**. The controller does not trust browser prices or quantity.
-It rechecks settings, IP, account identity, flat account, current signal, timestamp,
+It rechecks settings, IP, account identity, untracked AQTE exposure, current signal, timestamp,
 spread/depth, cash, one-lot quantity, risk budget and cutoff before submission.
+Insufficient broker cash (for example, because manual trades use the margin) skips that
+entry and retries; automation stays ON.
 One pending/open live trade is allowed across all indices; planned risk is capped at
 `AQTE_LIVE_RISK_PER_TRADE` (default INR 1,000) including estimated costs, with daily limits of INR 2,000, five filled trades
 and three consecutive losses. Those are planned limits, not guarantees against gaps.
@@ -1245,11 +1261,29 @@ between the 15:15 entry cutoff and the regular market close.
 
 Lost entry/stop acknowledgements are reconciled by tag/ID from the broker order book,
 not retried. Unresolved order modifications block further changes until observed in the
-broker book. Broker position quantity must match AQTE fills. Restart disarms entries
+broker book. Broker position quantity must cover AQTE's remaining fills (extra manual
+quantity in the same contract is tolerated and never exited). Restart disarms entries
 (a standing ON re-arms through a fresh preflight)
 but preserves active order identities and reconciles protection. Previous-session
-unresolved trades, rejected/cancelled stops and manual position changes block automation
+unresolved trades, rejected/cancelled stops and manual reductions of AQTE's position block automation
 and require broker-terminal reconciliation.
+
+### Manual Kite trades
+
+AQTE owns only the orders it tags: entries `<trade id>E`, protective stops `<trade id>S`
+and emergency exits `AQTEKILL`. Its share of a position is today's E-tagged BUY fills
+minus AQTE-tagged SELL fills, capped by the Kite net position. Everything else is the
+owner's manual trading.
+
+- Manual positions and orders in other contracts never block ON, arming or entries.
+- If the contract AQTE selects is already held by the owner, or has a manual working
+  order, AQTE tries the next liquid strike on the same side (same signal gates, fresh
+  bid/ask entry, risk and budget rechecked). If none fits, it skips with
+  "You already hold … Leaving your trade untouched" and retries on the next scan.
+- AQTE never cancels, modifies, exits or adds to manual trades — including during an
+  emergency stop.
+- Untracked AQTE-tagged exposure (for example, after journal loss) or a still-working
+  AQTE order blocks new AQTE entries until it is settled in Kite.
 
 ### Selected trade exit / Book All
 
@@ -1265,17 +1299,18 @@ modifications must reconcile before another mutation. Requests survive restart;
 an acknowledgement is not a fill guarantee. The confirmation keeps the original
 trade identity even when tabs/polls change, traps keyboard focus and supports Escape.
 
-### Emergency Stop · close all
+### Emergency Stop · close AQTE positions
 
 For market crashes or broker problems. After a confirmation step
-(`POST /api/aqte/live/stop` with `{"confirmation": "CLOSE ALL KITE POSITIONS"}`) the
+(`POST /api/aqte/live/stop` with `{"confirmation": "CLOSE AQTE POSITIONS"}`) the
 backend immediately latches `killed`, turns automation OFF, disarms, and sets
-`flatten_pending`. It then, on the call and every 2 seconds until Kite is flat:
+`flatten_pending`. It then, on the call and every 2 seconds until AQTE exposure is flat:
 
-- cancels **every** open Kite order (AQTE and manual);
-- closes **every** non-zero Kite net position (NFO/BFO/NSE/BSE, AQTE and manual) with a
+- cancels only open **AQTE-tagged** Kite orders; manual orders are never touched;
+- closes only **AQTE's own share** of each Kite net position with a
   marketable LIMIT DAY order 5% through the broker LTP, tagged `AQTEKILL`, using the
-  position's product. An existing matching AQTE stop order is repriced instead of duplicated;
+  position's product. Manual quantity (even in the same contract) is left open.
+  An existing matching AQTE stop order is repriced instead of duplicated;
 - does not depend on the AQTE tick feed, so stale market data cannot block the exit;
 - waits 4 seconds after each send (and after newly completed fills) so lagging position
   data cannot create a reverse position; broker errors are logged and retried;
@@ -1283,9 +1318,9 @@ backend immediately latches `killed`, turns automation OFF, disarms, and sets
   and shows "square off in Kite".
 
 `flatten_pending` persists, so square-off resumes after a backend restart. When Kite
-reports no open positions or orders, the AQTE trade is journaled with its emergency exit
+reports no open AQTE positions or AQTE orders, the AQTE trade is journaled with its emergency exit
 fills. **Reset emergency stop** (`POST /api/aqte/live/reset` with
-`{"confirmation": "RESET EMERGENCY STOP"}`) is only accepted when flat; automation stays OFF
+`{"confirmation": "RESET EMERGENCY STOP"}`) is only accepted once AQTE exposure is flat; automation stays OFF
 until confirmed ON again. Fills are not guaranteed: price bands, freeze quantity (no
 auto-slicing), holdings and other brokers are not covered — always verify in Kite.
 
@@ -1306,7 +1341,7 @@ They do not accept Kite access tokens from the browser.
 | POST | `/api/aqte/live/proposal` | Compatibility/internal proposal path; blocked while OFF |
 | POST | `/api/aqte/live/confirm` | Compatibility confirmation path; blocked while OFF and still subject to all risk checks |
 | POST | `/api/aqte/live/exit` | Pause new entries and request only the confirmed, identified AQTE trade's exit |
-| POST | `/api/aqte/live/stop` | Latch account-wide emergency, cancel open Kite orders and square off all Kite positions |
+| POST | `/api/aqte/live/stop` | Latch emergency, cancel AQTE-tagged orders and square off only AQTE-owned quantity (manual trades untouched) |
 
 These controls are independent of the older paper-only `/api/aqte/kill`, which is
 disabled in production and cannot stop Real AQTE analysis.

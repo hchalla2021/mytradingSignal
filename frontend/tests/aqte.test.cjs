@@ -757,7 +757,7 @@ test('entry readiness exposes the real WAIT reason and optional warm-up progress
   const signal = { ...fixture().data.BANKNIFTY,
     reasons: ['Warming up: need 201 contiguous completed one-minute futures candles'],
     warmup: { completed: 86, required: 201 } };
-  const liveStatus = { ...liveFixture(), enabled: true, paper_validated: true, armed: true, automation_on: true };
+  const liveStatus = { ...liveFixture(), enabled: true, armed: true, automation_on: true };
   const props = { symbol: 'NIFTY', signal, liveStatus, unavailable: false, active: true, tick: null };
   let tree = h.render(props);
   const readiness = () => text(nodes(tree).find(n => n.props?.['aria-label'] === 'Entry readiness'));
@@ -785,7 +785,7 @@ test('scalp-style readiness shows scalp reasons, opening range and the last skip
     warmup: { completed: 201, required: 201 }, opening: { completed: 7, required: 15 },
     scalp: { decision: 'WAIT', strategy: null, confidence: null, contract: null, entry: null,
       reasons: ['Breakout volume below 1.5x'] } };
-  const liveStatus = { ...liveFixture(), enabled: true, paper_validated: true, armed: true, automation_on: true,
+  const liveStatus = { ...liveFixture(), enabled: true, armed: true, automation_on: true,
     styles: { NIFTY: 'scalp', BANKNIFTY: 'swing', SENSEX: 'scalp' },
     entry_note: 'NIFTY: Fresh broker ask/depth does not fit the approved no-chase limit' };
   const props = { symbol: 'NIFTY', signal, liveStatus, unavailable: false, active: true, tick: null };
@@ -1500,7 +1500,7 @@ test('terminal presentation has per-index hero cards, engine and exit-rule panel
 function liveFixture() {
   return {
     generated_at: Date.now() / 1000, daily_counts: { executed: 0, reserved: 0 },
-    enabled: false, paper_validated: false, expected_ip: '122.177.245.101',
+    enabled: false, expected_ip: '122.177.245.101',
     ready: true, armed: false, automation_on: false, killed: false, flatten_pending: false, error: null, preflight: null,
     limits: { risk_per_trade: 500, daily_loss: 2000, max_trades: 5, max_losses: 3, max_lots: 1 },
     active: null, trades: [],
@@ -1807,7 +1807,7 @@ test('shared production is visibly identified without sending any order commands
 test('header switch defaults OFF and only confirmed ON sends automation command', async () => {
   const h = harness('AQTEAutomationSwitch.tsx');
   h.render();
-  const status = { ...liveFixture(), enabled: true, paper_validated: true, armed: false };
+  const status = { ...liveFixture(), enabled: true, armed: false };
   const cleanup = h.mount(status);
   await settle();
   assert.equal(nodes(h.render()).filter(n => n.props?.['aria-label'] === 'AQTE auto trading schedule').length, 0);
@@ -1818,6 +1818,7 @@ test('header switch defaults OFF and only confirmed ON sends automation command'
   nodes(h.render()).find(n => n.props?.role === 'switch').props.onClick();
   assert.match(text(h.render()), /Start automated real-money orders/);
   assert.match(text(h.render()), /one-lot BUY CE\/BUY PE.*No qualifying signal means no trade/);
+  assert.match(text(h.render()), /AQTE manages only its own tagged orders.*never closes, cancels or modifies your manual Kite trades.*different strike/);
   assert.equal(h.requests.filter(r => r.options.method === 'POST').length, 0);
   nodes(h.render()).find(n => n.type === 'button' && /Confirm ON/.test(text(n))).props.onClick();
   await settle();
@@ -1831,6 +1832,48 @@ test('header switch defaults OFF and only confirmed ON sends automation command'
   const off = h.requests.filter(r => r.options.method === 'POST').at(-1);
   assert.deepEqual(JSON.parse(off.options.body), { enabled: false, confirmation: 'STOP NEW ENTRIES' });
   cleanup();
+});
+
+test('paper approval is not required by status parsing or the ON switch', async () => {
+  const display = displayModule();
+  for (const legacy of [{}, { paper_validated: false }, { paper_validated: true }]) {
+    const status = { ...liveFixture(), enabled: true, ...legacy };
+    assert.equal(display.isAqteLiveState(status), true);
+    for (const key of ['enabled', 'ready', 'armed', 'automation_on', 'killed']) {
+      const missing = { ...status };
+      delete missing[key];
+      assert.equal(display.isAqteLiveState(missing), false, key);
+      assert.equal(display.isAqteLiveState({ ...status, [key]: 'true' }), false, key);
+    }
+    const h = harness('AQTEAutomationSwitch.tsx');
+    h.render();
+    const cleanup = h.mount(status);
+    await settle();
+    assert.equal(autoSwitch(h.render()).props.disabled, false);
+    assert.equal(autoSwitch(h.render()).props['aria-checked'], false);
+    assert.doesNotMatch(text(h.render()), /ON locked/);
+    autoSwitch(h.render()).props.onClick();
+    assert.match(text(h.render()), /Start automated real-money orders/);
+    assert.ok(h.requests.every(r => r.options.method === 'GET'));
+    cleanup();
+  }
+});
+
+test('ON remains locked for a disabled or unavailable controller without paper approval', async () => {
+  for (const [patch, message] of [
+    [{ enabled: false }, /ON locked · AQTE_LIVE_ENABLED is false/],
+    [{ ready: false }, /ON locked · Live controller is not ready/],
+    [{ killed: true }, /Emergency stop latched/],
+  ]) {
+    const h = harness('AQTEAutomationSwitch.tsx');
+    h.render();
+    const cleanup = h.mount({ ...liveFixture(), enabled: true, ...patch });
+    await settle();
+    assert.equal(autoSwitch(h.render()).props.disabled, true);
+    assert.match(text(h.render()), message);
+    assert.ok(h.requests.every(r => r.options.method === 'GET'));
+    cleanup();
+  }
 });
 
 test('header switch blocks ON before arming and never shows failed request as successful OFF', async () => {
@@ -1879,7 +1922,7 @@ test('AQTE refresh restores highlighted backend ON, OFF and emergency states usi
 
 test('AQTE acknowledges automatic save only after command response and removes it when status is unknown', async () => {
   const h = harness('AQTEAutomationSwitch.tsx');
-  const on = { ...liveFixture(), enabled: true, paper_validated: true, armed: true, automation_on: true };
+  const on = { ...liveFixture(), enabled: true, armed: true, automation_on: true };
   h.render();
   const cleanup = h.mount(on);
   await settle();
@@ -1937,11 +1980,12 @@ test('emergency latch still blocks header ON without directing users to removed 
   for (const flatten_pending of [true, false]) {
     const h = harness('AQTEAutomationSwitch.tsx');
     h.render();
-    const cleanup = h.mount({ ...liveFixture(), enabled: true, paper_validated: true, killed: true, flatten_pending });
+    const cleanup = h.mount({ ...liveFixture(), enabled: true, killed: true, flatten_pending });
     await settle();
     const tree = h.render();
     assert.equal(autoSwitch(tree).props.disabled, true);
-    assert.match(text(tree), flatten_pending ? /Closing all Kite positions/ : /Owner reset required before ON/);
+    assert.match(text(tree), flatten_pending ? /Closing AQTE positions only · manual trades untouched/ : /Owner reset required before ON/);
+    assert.doesNotMatch(text(tree), /Closing all Kite positions/);
     const reset = nodes(tree).find(n => n.type === 'button' && text(n) === 'Reset emergency stop');
     assert.equal(reset.props.disabled, flatten_pending);
     assert.doesNotMatch(text(tree), /Reset below/);
@@ -1952,7 +1996,7 @@ test('emergency latch still blocks header ON without directing users to removed 
 test('owner emergency reset is confirmed separately and restores OFF without starting trading', async () => {
   const h = harness('AQTEAutomationSwitch.tsx');
   h.render();
-  const stopped = { ...liveFixture(), enabled: true, paper_validated: true, killed: true };
+  const stopped = { ...liveFixture(), enabled: true, killed: true };
   const cleanup = h.mount(stopped);
   await settle();
   const reset = () => nodes(h.render()).find(n => n.type === 'button' && text(n) === 'Reset emergency stop');
@@ -1983,7 +2027,7 @@ test('owner emergency reset is confirmed separately and restores OFF without sta
   assert.equal(h.requests.filter(r => r.options.method === 'POST').length, 1, 'ON requires a separate confirmation');
   cleanup();
 });
-test('reset recovery does not bypass backend live-trading approval', async () => {
+test('reset recovery does not bypass backend live enablement', async () => {
   const h = harness('AQTEAutomationSwitch.tsx');
   h.render();
   const stopped = { ...liveFixture(), killed: true };
@@ -1995,7 +2039,7 @@ test('reset recovery does not bypass backend live-trading approval', async () =>
   await settle();
   assert.match(text(autoSwitch(h.render())), /Auto Trade\s+OFF/);
   assert.equal(autoSwitch(h.render()).props.disabled, true);
-  assert.match(text(h.render()), /Backend live-trading approval is required/);
+  assert.match(text(h.render()), /ON locked · AQTE_LIVE_ENABLED is false/);
   assert.ok(h.requests.every(r => r.url.endsWith('/status') || r.url.endsWith('/reset')));
   cleanup();
 });
@@ -2040,7 +2084,7 @@ test('reset confirmation rechecks status and supports Escape without a mutation'
 test('ON confirmation states the entry mode; Cancel and Escape keep OFF without any command', async () => {
   const h = harness('AQTEAutomationSwitch.tsx');
   h.render();
-  const status = { ...liveFixture(), enabled: true, paper_validated: true };
+  const status = { ...liveFixture(), enabled: true };
   const cleanup = h.mount(status);
   await settle();
   const open = () => nodes(h.render()).find(n => n.props?.role === 'switch').props.onClick();
@@ -2063,28 +2107,30 @@ test('ON confirmation states the entry mode; Cancel and Escape keep OFF without 
   assert.match(text(h.render()), /UNKNOWN/);
   cleanup();
 });
-test('risk card separates missing approval, unarmed OFF and armed pause', () => {
+test('risk card separates disabled live trading, unarmed OFF and armed pause without paper approval', () => {
   const h = harness();
   const publish = status => nodes(h.render()).find(n => n.props?.onStatus && 'exitRequest' in n.props).props.onStatus(status);
   const risk = () => text(nodes(h.render()).find(n => n.props?.['aria-label'] === 'Today summary'));
   publish(liveFixture());
-  assert.match(risk(), /Locked\s+₹[\d.,\s]+\/\s+₹[\d.,\s]+Live approval required/);
-  publish({ ...liveFixture(), enabled: true, paper_validated: true });
-  assert.match(risk(), /Not armed\s+₹[\d.,\s]+\/\s+₹[\d.,\s]+Arms when Auto Trade turns ON/);
-  assert.doesNotMatch(risk(), /Live approval required/);
-  publish({ ...liveFixture(), enabled: true, paper_validated: true, armed: true });
+  assert.match(risk(), /Locked\s+₹[\d.,\s]+\/\s+₹[\d.,\s]+Live trading disabled/);
+  for (const legacy of [{}, { paper_validated: false }]) {
+    publish({ ...liveFixture(), enabled: true, ...legacy });
+    assert.match(risk(), /Not armed\s+₹[\d.,\s]+\/\s+₹[\d.,\s]+Arms when Auto Trade turns ON/);
+    assert.doesNotMatch(risk(), /Locked|Live approval required/);
+  }
+  publish({ ...liveFixture(), enabled: true, armed: true });
   assert.match(risk(), /Paused\s+₹[\d.,\s]+\/\s+₹[\d.,\s]+Protection continues/);
-  publish({ ...liveFixture(), enabled: true, paper_validated: true, armed: true, automation_on: true });
+  publish({ ...liveFixture(), enabled: true, armed: true, automation_on: true });
   assert.match(risk(), /Within limits/);
-  publish({ ...liveFixture(), enabled: true, paper_validated: true, automation_wanted: true, entry_window: false });
+  publish({ ...liveFixture(), enabled: true, automation_wanted: true, entry_window: false });
   assert.match(risk(), /Waiting\s+₹[\d.,\s]+\/\s+₹[\d.,\s]+ON · arms 09:15 IST/);
-  publish({ ...liveFixture(), enabled: true, paper_validated: true, automation_wanted: true, entry_window: true });
+  publish({ ...liveFixture(), enabled: true, automation_wanted: true, entry_window: true });
   assert.match(risk(), /Waiting\s+₹[\d.,\s]+\/\s+₹[\d.,\s]+ON · arming \/ preflight/);
 });
 test('standing ON is accepted while the market is closed and shows the waiting reason until OFF', async () => {
   const h = harness('AQTEAutomationSwitch.tsx');
   h.render();
-  const off = { ...liveFixture(), enabled: true, paper_validated: true, automation_wanted: false, entry_window: false };
+  const off = { ...liveFixture(), enabled: true, automation_wanted: false, entry_window: false };
   const waiting = { ...off, automation_wanted: true,
     automation_waiting: 'Waiting for market: auto trade arms on weekdays 09:15 to 15:15 IST' };
   const cleanup = h.mount(off);
@@ -2109,7 +2155,7 @@ test('standing ON is accepted while the market is closed and shows the waiting r
   cleanup();
 });
 test('standing ON acknowledgements must match the requested state', async () => {
-  const base = { ...liveFixture(), enabled: true, paper_validated: true };
+  const base = { ...liveFixture(), enabled: true };
   for (const [initial, response] of [
     [base, { ...base, automation_wanted: false }],
     [{ ...base, automation_wanted: true }, { ...base, automation_wanted: true }],
@@ -2130,7 +2176,7 @@ test('standing ON acknowledgements must match the requested state', async () => 
   }
 });
 test('reset failures and inconsistent acknowledgements never present a confirmed OFF', async () => {
-  const stopped = { ...liveFixture(), enabled: true, paper_validated: true, killed: true };
+  const stopped = { ...liveFixture(), enabled: true, killed: true };
   for (const response of [
     { __httpStatus: 401, __body: { detail: 'Owner sign-in required' } },
     { __httpStatus: 409, __body: { detail: 'Emergency square-off still in progress' } },
@@ -2331,7 +2377,7 @@ test('idle lifecycle and readiness name a disabled/capped index and a closed ses
   const life = tree => nodes(tree).find(n => n.props?.className === 'aqx-lifecycle');
   const first = tree => text(nodes(nodes(tree).find(n => n.props?.['aria-label'] === 'Trade lifecycle')).find(n => n.type === 'li')).replace(/\s+/g, ' ').trim();
   const readiness = tree => text(nodes(tree).find(n => n.props?.['aria-label'] === 'Entry readiness'));
-  const waiting = { ...liveFixture(), enabled: true, paper_validated: true, automation_wanted: true, entry_window: false,
+  const waiting = { ...liveFixture(), enabled: true, automation_wanted: true, entry_window: false,
     automation_waiting: 'Waiting for market: auto trade arms on weekdays 09:15 to 15:15 IST',
     entry_blocks: { NIFTY: 'Outside regular market session' } };
   let tree = render(waiting);
@@ -2358,7 +2404,7 @@ test('idle lifecycle and readiness name a disabled/capped index and a closed ses
   assert.match(first(tree), /Auto OFF/, 'with the master switch off, Auto OFF is the first cause');
 
   // Warm-up/opening progress only shows while the feed is live; after the close it is not a stuck 0/201.
-  const armed = { ...liveFixture(), enabled: true, paper_validated: true, armed: true, automation_on: true };
+  const armed = { ...liveFixture(), enabled: true, armed: true, automation_on: true };
   const signal = { ...fixture().data.NIFTY, warmup: { completed: 0, required: 201 }, opening: { completed: 0, required: 15 } };
   assert.match(readiness(render(armed, signal)), /Warm-up:\s+0\s*\/\s*201/);
   assert.doesNotMatch(readiness(render(armed, { ...signal, feed_ready: false })), /Warm-up|Opening range/);
@@ -2419,7 +2465,7 @@ test('compact switch has no optimistic ON, ignores repeated clicks and sends OFF
   assert.match(text(autoSwitch(initial)), /Checking/);
   assert.equal(autoSwitch(initial).props['aria-checked'], undefined);
   assert.equal(autoSwitch(initial).props.disabled, true);
-  const off = { ...liveFixture(), enabled: true, paper_validated: true };
+  const off = { ...liveFixture(), enabled: true };
   const cleanup = h.mount(off);
   await settle();
   const pill = autoSwitch(h.render());
@@ -2453,7 +2499,7 @@ test('compact switch has no optimistic ON, ignores repeated clicks and sends OFF
 test('unauthorized, stale and rejected switch responses never masquerade as confirmed OFF or ON', async () => {
   const h = harness('AQTEAutomationSwitch.tsx');
   h.render();
-  const status = { ...liveFixture(), enabled: true, paper_validated: true, armed: true, automation_on: true };
+  const status = { ...liveFixture(), enabled: true, armed: true, automation_on: true };
   const cleanup = h.mount(status);
   await settle();
   h.respondHTTP(401, { detail: 'Sign in with the configured owner app-access session' });
@@ -2625,7 +2671,7 @@ test('engine deck shows 12 live engines, rule details on demand and an honest ex
   const h = harness('AQTEEngineDeck.tsx');
   const data = fixture().data;
   data.NIFTY = { ...data.NIFTY, ...engineSet({ ce: 4, pe: 1 }), scalp: scalpSignal('BUY CE', 82) };
-  const live = { ...liveFixture(), enabled: true, paper_validated: true, armed: true, automation_on: true,
+  const live = { ...liveFixture(), enabled: true, armed: true, automation_on: true,
     ranking: ['NIFTY', 'BANKNIFTY', 'SENSEX'], entry_blocks: { NIFTY: null, BANKNIFTY: 'No setup', SENSEX: 'No setup' } };
   const props = { symbol: 'NIFTY', data, liveStatus: live, unavailable: false, policy: { authority: 'ADVISORY_VETO', veto: true, veto_min: 2, engines: 12 },
     events: [{ at: Date.now() / 1000, symbol: 'NIFTY', engine: 1, name: 'Momentum', status: 'SATISFIED', previous: null, side: 'CE' }] };
@@ -2729,7 +2775,7 @@ test('opportunity readiness expires with controller status and respects errors a
   const h = harness('AQTEEngineDeck.tsx');
   const data = fixture().data;
   data.NIFTY = { ...data.NIFTY, ...engineSet({ ce: 4 }), scalp: scalpSignal('BUY CE', 90) };
-  const live = { ...liveFixture(), generated_at: now, enabled: true, paper_validated: true, armed: true,
+  const live = { ...liveFixture(), generated_at: now, enabled: true, armed: true,
     automation_on: true, entry_window: true, ranking: ['NIFTY'], entry_blocks: { NIFTY: null } };
   const props = { symbol: 'NIFTY', data, liveStatus: live, unavailable: false, policy: null, events: [], now };
   const panel = tree => text(nodes(tree).find(n => n.props?.['aria-label'] === 'Top opportunity'));
@@ -2794,7 +2840,7 @@ test('opportunity levels show the controller entry plan, not the uncapped raw ru
   const h = harness('AQTEEngineDeck.tsx');
   const data = fixture().data;
   data.NIFTY = { ...data.NIFTY, ...engineSet({ ce: 4 }), scalp: scalpSignal('BUY CE', 90) };
-  const live = { ...liveFixture(), generated_at: now, enabled: true, paper_validated: true, armed: true,
+  const live = { ...liveFixture(), generated_at: now, enabled: true, armed: true,
     automation_on: true, entry_window: true, ranking: ['NIFTY'], entry_blocks: { NIFTY: null },
     entry_plans: { NIFTY: { maximum: 101, stop: 97.25, target: 111.5, reward_risk: 2.4, quantity: 65, risk: 290, points: 10 } } };
   const display = displayModule();
@@ -2823,7 +2869,7 @@ test('top opportunity follows the controller: first unblocked ranked index, else
   const data = fixture().data;
   data.NIFTY = { ...data.NIFTY, ...engineSet({ ce: 4 }), scalp: scalpSignal('BUY CE', 90) };
   data.BANKNIFTY = { ...data.BANKNIFTY, ...engineSet({ pe: 3 }), scalp: scalpSignal('BUY PE', 75) };
-  const live = { ...liveFixture(), enabled: true, paper_validated: true, armed: true, automation_on: true,
+  const live = { ...liveFixture(), enabled: true, armed: true, automation_on: true,
     ranking: ['NIFTY', 'BANKNIFTY', 'SENSEX'], entry_blocks: { NIFTY: 'Daily index trade limit reached', BANKNIFTY: null, SENSEX: 'No setup' } };
   const props = { symbol: 'NIFTY', data, liveStatus: live, unavailable: false, policy: { veto: true, veto_min: 2 }, events: [] };
   // automated_entry would skip the blocked NIFTY and enter BANKNIFTY, so the panel must show BANKNIFTY.
@@ -2863,7 +2909,7 @@ test('index ranking waits independently with stable text and changing reasons on
   };
   const data = Object.fromEntries(Object.entries(reasons).map(([symbol, reason]) =>
     [symbol, { ...fixture().data[symbol], scalp: { ...scalpSignal('WAIT'), reasons: [reason] } }]));
-  const live = { ...liveFixture(), generated_at: now, enabled: true, paper_validated: true, armed: true,
+  const live = { ...liveFixture(), generated_at: now, enabled: true, armed: true,
     automation_on: true, entry_window: true, ranking: Object.keys(reasons), entry_blocks: { ...reasons } };
   const props = { symbol: 'NIFTY', data, liveStatus: live, unavailable: false, policy: null, events: [], now };
   const panel = tree => nodes(tree).find(n => n.props?.['aria-label'] === 'Top opportunity');
@@ -3157,7 +3203,7 @@ test('header switch reads the shared live feed without its own status poll', asy
   await settle();
   assert.equal(h.requests.length, 0);
   assert.equal(h.timers.size, 0);
-  const on = { ...liveFixture(), enabled: true, paper_validated: true, armed: true, automation_on: true };
+  const on = { ...liveFixture(), enabled: true, armed: true, automation_on: true };
   let tree = h.render({ feed: on });
   assert.equal(autoSwitch(tree).props['aria-checked'], true);
   assert.match(text(tree), /Backend confirmed · ON/);
@@ -3177,7 +3223,7 @@ test('shared switch publishes command results and ignores a poll that started be
   const published = [];
   const onStatus = value => published.push(value);
   const t = Date.now() / 1000;
-  const on = { ...liveFixture(), generated_at: t - 1, enabled: true, paper_validated: true, armed: true, automation_on: true };
+  const on = { ...liveFixture(), generated_at: t - 1, enabled: true, armed: true, automation_on: true };
   h.render({ feed: on, onStatus });
   h.respond({ ...on, generated_at: t, automation_on: false });
   autoSwitch(h.render({ feed: on, onStatus })).props.onClick();
@@ -3239,7 +3285,7 @@ test('opportunity card shows Auto Trade waiting to arm with its reason, never OF
   const h = harness('AQTEEngineDeck.tsx');
   const data = fixture().data;
   data.NIFTY = { ...data.NIFTY, ...engineSet({ ce: 4 }), scalp: scalpSignal('BUY CE', 82) };
-  const base = { ...liveFixture(), enabled: true, paper_validated: true, ranking: ['NIFTY', 'BANKNIFTY', 'SENSEX'],
+  const base = { ...liveFixture(), enabled: true, ranking: ['NIFTY', 'BANKNIFTY', 'SENSEX'],
     entry_blocks: { NIFTY: null, BANKNIFTY: 'No setup', SENSEX: 'No setup' } };
   const props = { symbol: 'NIFTY', data, unavailable: false, policy: { veto: true, veto_min: 2 }, events: [] };
   const card = live => text(nodes(h.render({ ...props, liveStatus: live })).find(n => n.props?.['aria-label'] === 'Top opportunity'));

@@ -115,7 +115,7 @@ class AutomationLive(BaseModel):
 
 
 class EmergencyStop(BaseModel):
-    confirmation: Literal["CLOSE ALL KITE POSITIONS"]
+    confirmation: Literal["CLOSE AQTE POSITIONS"]
 
 
 class EmergencyReset(BaseModel):
