@@ -223,10 +223,11 @@ function opportunityOf(data: Props['data'], reportedStatus: AQTELiveState | null
             'Eligible · central controller places the IOC entry';
   const autoState = !liveStatus ? ['UNKNOWN', 'aqx-exec-wait'] : liveStatus.killed ? ['STOPPED', 'aqx-exec-stop'] :
     controllerBlock ? ['BLOCKED', 'aqx-exec-off'] : active ? ['IN TRADE', 'aqx-exec-live'] : executing ? ['READY', 'aqx-exec-ready'] :
-      !liveStatus.automation_on && !arming ? ['OFF', 'aqx-exec-off'] : held ? ['BLOCKED', 'aqx-exec-off'] : ['WAITING', 'aqx-exec-wait'];
+      !liveStatus.automation_on && !arming ? ['OFF', 'aqx-exec-off'] : held ? ['BLOCKED', 'aqx-exec-off'] :
+        arming ? ['NOT ARMED', 'aqx-exec-wait'] : ['WAITING', 'aqx-exec-wait'];
   const score = actionable && effective.confidence != null && Number.isFinite(effective.confidence)
     ? Math.max(0, Math.min(100, effective.confidence)) : null;
-  // Same order the controller scans; rows carry a short block label and the full reason as a tooltip.
+  // Same order the controller scans; each row explains only that index's wait.
   const ladder = (ranked.length ? ranked : (['NIFTY', 'BANKNIFTY', 'SENSEX'] as AQTESymbol[])).map(symbol => {
     const signal = unavailable ? null : aqteEffectiveSignal(data?.[symbol], liveStatus?.styles?.[symbol],
       liveStatus?.swing_setups?.[symbol]);
@@ -237,10 +238,12 @@ function opportunityOf(data: Props['data'], reportedStatus: AQTELiveState | null
     const hold = aqteIndexHold(gate);
     const first = symbol === top;
     // Controls holds apply with or without market data; every other state needs a live evaluation first.
-    const state = hold ?? (unavailable || !signal ? 'No data' : gate ? aqteBlockLabel(gate)
-      : gate === null ? first ? 'Top pick' : 'Clear' : 'Unverified');
+    const state = hold ?? (unavailable || !signal ? 'No data' : gate ? aqteBlockLabel(gate, ready)
+      : !ready ? 'Waiting for signal' : gate === null ? first ? 'Top pick' : 'Clear' : 'Unverified');
+    const reason = !hold && (unavailable || !signal) ? undefined
+      : gate || (!ready ? signal?.reasons[0] : undefined);
     return { symbol, side: ready ? signal.decision.slice(-2) as 'CE' | 'PE' : null, confidence,
-      state: first && gate ? `Top · ${state}` : state, reason: gate || undefined, top: first };
+      state: first && gate ? `Top · ${state}` : state, reason, top: first };
   });
   return { top, style, effective, actionable, side, topView, aligned, opposed, alignedNames, entry, contract, strike,
     block, active, vetoed, lot, executing, execution, autoState, score, ladder };
@@ -257,7 +260,7 @@ const OpportunityPanel = memo(function OpportunityPanel({ opp, maxLots }: { opp:
           <p className="aqx-opp-name">{top ? `${aqteLabel(top)}${strike != null ? ` ${strike.toLocaleString('en-IN')}` : ''}${side ? ` ${side}` : ''}` : '--'}</p>
           <p className="aqx-opp-tags">
             <b className={`aqx-side-chip ${side ? side === 'CE' ? 'aqx-chip-ce' : 'aqx-chip-pe' : 'aqx-chip-wait'}`}>{actionable ? 'BUY' : 'WAIT'}</b>
-            <span>{alignedNames.length ? alignedNames.join(' + ') : actionable ? 'Rule engine' : 'No actionable setup'}</span>
+            <span>{alignedNames.length ? alignedNames.join(' + ') : actionable ? 'Rule engine' : 'Waiting for signal'}</span>
           </p>
           {aligned != null && opposed != null && (
             <p className={`aqx-opp-consensus ${vetoed ? 'aqx-sell' : 'aqx-buy'}`}>
@@ -278,7 +281,8 @@ const OpportunityPanel = memo(function OpportunityPanel({ opp, maxLots }: { opp:
         <p className="aqx-opp-rank-head"><span>Index Ranking</span><small>Controller scan order</small></p>
         <ol>
           {ladder.map(({ symbol: name, side: rowSide, confidence, state, reason, top: first }, index) => (
-            <li key={name} className={first ? 'aqx-rank-top' : ''} data-side={rowSide ?? 'WAIT'} title={reason}>
+            <li key={name} className={first ? 'aqx-rank-top' : ''} data-side={rowSide ?? 'WAIT'}
+              title={reason} aria-description={reason}>
               <span className="aqx-rank-no" aria-hidden="true">{first ? '♛' : index + 1}</span>
               <span className="aqx-rank-body">
                 <span className="aqx-rank-line">

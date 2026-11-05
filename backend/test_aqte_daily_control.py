@@ -47,32 +47,32 @@ class QualityTests(unittest.TestCase):
             off = IndexControl(style="swing", setups={name: False}).model_dump()
             on = IndexControl(style="swing", setups={name: True}).model_dump()
             for side, facts in (("CE", info), ("PE", mirror(info))):
-                signal = dict(decision=f"BUY {side}", strategy=name, entry={"maximum": 100}, confidence=68,
+                signal = dict(decision=f"BUY {side}", strategy=name, entry={"maximum": 100}, confidence=75,
                               model_validated=False, intelligence=facts)
                 with self.subTest(setup=name, side=side):
                     self.assertTrue(all(c["passed"] is True for c in setup_checks(facts, side, name)))
                     self.assertEqual(quality_reason(signal, off, True), f"{label} passed all its checks but is OFF in Controls")
                     self.assertIsNone(quality_reason(signal, on, True))
-                    self.assertIn("90", quality_reason(signal, on), "Strict mode still blocks")
+                    self.assertIn("validation", quality_reason(signal, on), "Strict mode still blocks")
                     self.assertIsNotNone(quality_reason({**signal, "strategy": None}, on, True),
                                          "The breakout gate alone can never pass this setup")
                     self.assertEqual(quality_reason({**signal, "strategy": "martingale"}, on, True),
                                      "Unknown swing setup; WAIT")
-            signal = dict(decision="BUY CE", strategy=name, entry={"maximum": 100}, confidence=68,
+            signal = dict(decision="BUY CE", strategy=name, entry={"maximum": 100}, confidence=75,
                           model_validated=False, intelligence=info)
             for key, value in weak_cases:
                 with self.subTest(setup=name, weak=key, value=value):
                     reason = quality_reason({**signal, "intelligence": {**info, key: value}}, on, True)
                     self.assertTrue(reason and reason.startswith(f"{label}: "), reason)
 
-    def test_setup_switches_default_to_all_on_and_legacy_missing_switches_stay_breakout_only(self):
+    def test_setup_switches_default_to_all_on_and_missing_unmigrated_switches_fail_closed(self):
         self.assertEqual(IndexControl().setups.model_dump(), dict(
             momentum_breakout=True, trend_continuation=True, liquidity_reversal=True, mean_reversion=True))
         for bad in ({"martingale": True}, {"trend_continuation": "yes"}, {"mean_reversion": 1}, ["trend"]):
             with self.assertRaises(ValidationError):
                 IndexControl(setups=bad)
         legacy = {k: v for k, v in IndexControl(style="swing").model_dump().items() if k != "setups"}
-        signal = dict(decision="BUY CE", strategy="trend_continuation", entry={"maximum": 100}, confidence=68,
+        signal = dict(decision="BUY CE", strategy="trend_continuation", entry={"maximum": 100}, confidence=75,
                       model_validated=False, intelligence=TREND)
         self.assertIn("OFF in Controls", quality_reason(signal, legacy, True))
 
@@ -86,7 +86,7 @@ class QualityTests(unittest.TestCase):
                         cpr={"top": 102, "bottom": 98}, supertrend="BULLISH" if sign > 0 else "BEARISH",
                         volume_ratio=1.5, imbalance=sign * 0.15, breakout=sign,
                         structure="HIGHER_HIGH" if sign > 0 else "LOWER_LOW")
-            signal = dict(decision=f"BUY {side}", entry={"maximum": 100}, confidence=73, intelligence=info)
+            signal = dict(decision=f"BUY {side}", entry={"maximum": 100}, confidence=75, intelligence=info)
             checks = directional_checks(info, side, "swing")
             self.assertEqual(len(checks), 9)
             self.assertTrue(all(c["passed"] for c in checks))
@@ -99,22 +99,52 @@ class QualityTests(unittest.TestCase):
                 self.assertFalse(all(c["passed"] for c in directional_checks(weak, side, "swing")))
                 self.assertIsNotNone(quality_reason({**signal, "intelligence": weak}, config, True))
 
-    def test_defaults_are_disabled_90_and_five_maximum(self):
+    def test_defaults_select_all_indices_styles_and_setups_with_a_75_to_80_score_floor(self):
+        from services.aqte_daily_control import defaults
+
         config = IndexControl()
-        self.assertFalse(config.enabled)
-        self.assertEqual((config.max_trades, config.min_confidence), (5, 90))
-        for patch in (dict(max_trades=0), dict(max_trades=11), dict(min_confidence=89),
+        self.assertEqual((config.max_trades, config.min_confidence), (5, 75))
+        for control in defaults().values():
+            self.assertTrue(control["enabled"])
+            self.assertEqual(control["style"], "both")
+            self.assertTrue(all(control["setups"].values()))
+        for minimum in range(75, 81):
+            self.assertEqual(IndexControl(min_confidence=minimum).min_confidence, minimum)
+        for patch in (dict(max_trades=0), dict(max_trades=11), dict(min_confidence=74),
+                      dict(min_confidence=81), dict(min_confidence=90), dict(min_confidence=75.5),
+                      dict(min_confidence=True), dict(min_confidence="75"),
                       dict(enabled="yes"), dict(daily_loss=2001), dict(stop_percent=float("nan"))):
             with self.assertRaises(ValidationError):
                 IndexControl(**patch)
+
+    def test_score_floor_is_enforced_for_each_style_even_when_unvalidated_rules_are_allowed(self):
+        from test_aqte import scalp_info
+
+        for strategy, facts in (("quick_scalp_20", scalp_info(volume_ratio=2, imbalance=0.2, sweep=0, live={"price": 106})),
+                                ("trend_continuation", TREND)):
+            for side, info in (("CE", facts), ("PE", mirror(facts))):
+                signal = dict(decision=f"BUY {side}", strategy=strategy, confidence=75,
+                              entry={"maximum": 100, "points_allowed": [10, 20]}, intelligence=info,
+                              model_validated=False)
+                for minimum in range(75, 81):
+                    config = IndexControl(min_confidence=minimum).model_dump()
+                    for score in (70, 74, 75, 77, 80, 85):
+                        with self.subTest(strategy=strategy, side=side, minimum=minimum, score=score):
+                            candidate = {**signal, "confidence": score}
+                            reason = quality_reason(candidate, config, True)
+                            if score < minimum:
+                                self.assertIn(f"below {minimum}/100", reason)
+                            else:
+                                self.assertIsNone(reason)
+                                self.assertIn("validation", quality_reason(candidate, config))
 
     def test_short_entries_weak_scores_unvalidated_and_missing_evidence_block(self):
         config = IndexControl().model_dump()
         for decision in ("SELL CE", "SELL PE", "WAIT"):
             self.assertIn("LONG", quality_reason(dict(decision=decision, entry={}), config))
-        signal = dict(decision="BUY CE", entry={"maximum": 100}, confidence=80)
-        self.assertIn("90", quality_reason(signal, config))
-        signal["confidence"] = 95
+        signal = dict(decision="BUY CE", entry={"maximum": 100}, confidence=74)
+        self.assertIn("75", quality_reason(signal, config))
+        signal["confidence"] = 80
         self.assertIn("validation", quality_reason(signal, config))
         signal["model_validated"] = True
         self.assertIn("Incomplete", quality_reason(signal, config))
@@ -138,11 +168,11 @@ class QualityTests(unittest.TestCase):
         )
         signal = dict(decision="BUY PE", entry={"maximum": 100}, confidence=80,
                       model_validated=False, intelligence=intelligence)
-        self.assertIn("90", quality_reason(signal, config))
+        self.assertIn("validation", quality_reason(signal, config))
         self.assertIsNone(quality_reason(signal, config, allow_unvalidated_rules=True))
         for decision in ("SELL PE", "WAIT"):
             self.assertIn("LONG", quality_reason({**signal, "decision": decision}, config, True))
-        for score in (None, float("nan"), "80"):
+        for score in (None, float("nan"), float("inf"), "80", True, 74):
             self.assertIn("score", quality_reason({**signal, "confidence": score}, config, True))
         for key, value in (("rsi", 50), ("volume_ratio", 1.4), ("imbalance", -0.1), ("breakout", 0),
                            ("structure", "RANGE"), ("supertrend", "BULLISH"), ("vwap", None)):
@@ -164,9 +194,9 @@ class QualityTests(unittest.TestCase):
             supertrend="BULLISH", volume_ratio=1.6, imbalance=0.15,
             breakout=1, structure="RANGE",
         )
-        signal = dict(decision="BUY CE", strategy="quick_scalp_10", confidence=70, model_validated=False,
+        signal = dict(decision="BUY CE", strategy="quick_scalp_10", confidence=75, model_validated=False,
                       entry={"maximum": 100, "points_allowed": [10]}, intelligence=intelligence)
-        self.assertIn("90", quality_reason(signal, config))
+        self.assertIn("validation", quality_reason(signal, config))
         # The swing gate would reject unaligned EMA 50/100/200 and missing CPR; scalping needs only its rules.
         self.assertIsNone(quality_reason(signal, config, allow_unvalidated_rules=True))
         self.assertIn("OFF in Controls", quality_reason(signal, {**config, "style": "swing"}, True))

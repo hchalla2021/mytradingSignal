@@ -19,11 +19,11 @@ class SwingSetups(BaseModel):
 
 class IndexControl(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    enabled: bool = Field(default=False, strict=True)
+    enabled: bool = Field(default=True, strict=True)
     # scalp: quick premium-point targets (10/20/30 NIFTY); swing: stop_percent / target_rr levels.
     style: Literal["scalp", "swing", "both", "none"] = "both"
     max_trades: int = Field(default=5, ge=1, le=10, strict=True)
-    min_confidence: int = Field(default=90, ge=90, le=100, strict=True)
+    min_confidence: int = Field(default=75, ge=75, le=80, strict=True)
     stop_percent: float = Field(default=20, ge=5, le=30, allow_inf_nan=False)
     target_rr: float = Field(default=2, ge=2, le=5, allow_inf_nan=False)
     trail_start_r: float = Field(default=1, ge=1, le=3, allow_inf_nan=False)
@@ -61,11 +61,9 @@ def quality_reason(signal, control, allow_unvalidated_rules=False):
     if allowed not in ("both", style):
         return "No entry style selected in Controls" if allowed == "none" else f"{style.title()} entries are OFF in Controls"
     score = signal.get("confidence")
-    if not isinstance(score, (float, int)) or not math.isfinite(score):
+    if not isinstance(score, (float, int)) or not math.isfinite(score) or score < control["min_confidence"]:
         return f'Rule score below {control["min_confidence"]}/100; do not trade'
     if not allow_unvalidated_rules:
-        if score < control["min_confidence"]:
-            return f'Rule score below {control["min_confidence"]}/100; do not trade'
         if signal.get("model_validated") is not True:
             return "Signal model has not passed paper validation"
     info = signal.get("intelligence") or {}

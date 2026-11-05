@@ -769,6 +769,12 @@ class AQTEEngine:
             return
         name, side, confidence = setup
         signal.update(strategy=name, confidence=confidence)
+        if not self.paper_enabled and best["passed"] is not True:
+            signal["reasons"] = [
+                f'{SETUP_LABELS[name]}: {check["reason"]}'
+                for check in best["checks"] if check["passed"] is not True
+            ]
+            return
         picked = self.pick(symbol, side, now, spot)
         if picked is None:
             signal["reasons"] = ["No fresh liquid option contract with valid lot size and bid/ask depth"]

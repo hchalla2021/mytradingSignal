@@ -53,6 +53,7 @@ function parse(value: unknown): Snapshot {
     return config && typeof config.enabled === 'boolean' &&
       (config.style === undefined || ['scalp', 'swing', 'both', 'none'].includes(config.style)) && validSetups(config.setups) &&
       Number.isInteger(config.max_trades) && config.max_trades >= 1 && config.max_trades <= 10 &&
+      Number.isInteger(config.min_confidence) && config.min_confidence >= 75 && config.min_confidence <= 80 &&
       (['min_confidence', 'stop_percent', 'target_rr', 'trail_start_r', 'daily_loss'] as const)
         .every(key => typeof config[key] === 'number' && Number.isFinite(config[key])) &&
       count(row.executed) && count(row.reserved) && count(row.remaining) &&
@@ -193,6 +194,7 @@ export default function AQTEDailyControl() {
       <summary className="cursor-pointer py-1 text-[10px] text-slate-400 focus-visible:outline focus-visible:outline-2 focus-visible:outline-cyan-300">Status, enable index &amp; risk settings</summary>
       <div className="mt-3 space-y-3">
         <p className="text-slate-400">Maximum, not a target. Zero trades is valid. Only BUY CE / BUY PE entries; SELL is reserved for closing owned positions.</p>
+        <p className="text-slate-400">All indices, Quick scalp, Swing and all swing setups are selected automatically by default; no manual checking is required. Optional opt-outs stay saved. Entries still require Auto Trade ON and approval.</p>
         <p className="text-slate-400">Amber counts are unsaved. Limits can be changed while ON; saved values persist until changed. An already-submitted order cannot be undone. Each trade is still one lot.</p>
         <label className="block text-slate-300">Index
           <select aria-label="Daily control index" value={symbol} disabled={busy} className={input}
@@ -253,7 +255,7 @@ export default function AQTEDailyControl() {
           </fieldset>}
           <div className="grid grid-cols-2 gap-3">
             {([
-              ['Minimum rule score', 'min_confidence', 90, 100, 1],
+              ['Minimum rule score', 'min_confidence', 75, 80, 1],
               ['Initial SL · premium %', 'stop_percent', 5, 30, 1],
               ['Target · risk multiple', 'target_rr', 2, 5, 0.1],
               ['Trail starts · R', 'trail_start_r', 1, 3, 0.1],
@@ -264,6 +266,7 @@ export default function AQTEDailyControl() {
               </label>
             ))}
           </div>
+          <p className="text-slate-400">Minimum rule score: 75 by default, adjustable from 75 to 80. The selected minimum applies to both styles, including unvalidated-rule mode; it is not a win probability.</p>
           <button type="button" disabled={disabled || !!error} onClick={() => void save(symbol, false)} className="min-h-[44px] w-full rounded-lg border border-cyan-400/40 bg-cyan-400/10 px-3 font-semibold text-cyan-100 disabled:opacity-40">{busy ? 'Saving…' : `Save ${label(symbol)} controls`}</button>
           {drafts[symbol] && <p className="text-amber-200">Unsaved draft. Counts and limits above reflect saved settings.</p>}
           {!snapshot?.editable && <p className="text-amber-200">Turn automation OFF to edit enable/risk settings. Trade limits above remain editable. Existing position protection is unchanged.</p>}

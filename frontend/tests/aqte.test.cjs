@@ -126,8 +126,9 @@ function fixture() {
 const settle = () => new Promise(resolve => setImmediate(resolve));
 
 function dailyFixture() {
-  const config = { enabled: false, max_trades: 5, min_confidence: 90, stop_percent: 20,
-    target_rr: 2, trail_start_r: 1, daily_loss: 2000 };
+  const config = { enabled: true, style: 'both', max_trades: 5, min_confidence: 75, stop_percent: 20,
+    target_rr: 2, trail_start_r: 1, daily_loss: 2000,
+    setups: { momentum_breakout: true, trend_continuation: true, liquidity_reversal: true, mean_reversion: true } };
   const row = { config, executed: 1, reserved: 1, remaining: 3, status: 'WAITING',
     reason: 'Unvalidated evidence; WAIT', direction: 'BULLISH',
     opportunity: { decision: 'WAIT', confidence: 80, entry: null, contract: null, reasons: [] } };
@@ -244,6 +245,47 @@ test('all three compact counters have independent saves and enforce stepper boun
   }
   assert.match(text(tree), /Each trade is still one lot/);
   cleanup();
+});
+
+test('daily control defaults select all seven checkboxes per index without saving and use a 75-80 score range', async () => {
+  const h = harness('AQTEDailyControl.tsx');
+  h.render();
+  const initial = dailyFixture();
+  const cleanup = h.mount(initial);
+  await settle();
+  for (const symbol of ['NIFTY', 'BANKNIFTY', 'SENSEX']) {
+    nodes(h.render()).find(n => n.props?.['aria-label'] === 'Daily control index').props.onChange({ target: { value: symbol } });
+    const tree = h.render();
+    const boxes = nodes(tree).filter(n => n.type === 'input' && n.props.type === 'checkbox');
+    assert.equal(boxes.length, 7);
+    assert.ok(boxes.every(box => box.props.checked), symbol);
+    const score = nodes(tree).find(n => n.props?.['aria-label'] === 'Minimum rule score');
+    assert.equal(score.props.value, 75);
+    assert.deepEqual([score.props.min, score.props.max, score.props.step], [75, 80, 1]);
+    assert.match(text(tree), /no manual checking is required/);
+    assert.match(text(tree), /including unvalidated-rule mode/);
+  }
+  assert.ok(h.requests.every(request => request.options.method !== 'POST'), 'defaults never submit or arm trading');
+  const tree = h.render();
+  nodes(tree).find(n => n.props?.['aria-label'] === 'Minimum rule score').props.onChange({ target: { value: '78' } });
+  h.respond(initial);
+  nodes(h.render()).find(n => n.type === 'button' && /Save SENSEX controls/.test(text(n))).props.onClick();
+  await settle();
+  const post = h.requests.find(request => request.options.method === 'POST');
+  assert.equal(post.url, '/api/aqte/live/daily-controls');
+  assert.equal(JSON.parse(post.options.body).config.min_confidence, 78);
+  cleanup();
+
+  for (const invalid of [74, 81, 90, 75.5, '75']) {
+    const broken = harness('AQTEDailyControl.tsx');
+    broken.render();
+    const value = dailyFixture();
+    value.data.NIFTY.config.min_confidence = invalid;
+    const stop = broken.mount(value);
+    await settle();
+    assert.ok(nodes(broken.render()).some(n => n.props?.role === 'alert'), String(invalid));
+    stop();
+  }
 });
 
 test('swing controls show per-setup switches, save them with the draft and reject malformed setups', async () => {
@@ -808,7 +850,9 @@ test('daily control uses independent style checkboxes, saves both or neither and
   tree = h.render();
   assert.equal(box('Quick scalp').props.disabled, true, 'Styles are locked while Auto Trade is ON');
   assert.equal(box('Swing').props.disabled, true);
-  await h.poll(dailyFixture());
+  const legacy = dailyFixture();
+  for (const row of Object.values(legacy.data)) delete row.config.style;
+  await h.poll(legacy);
   tree = h.render();
   assert.equal(box('Quick scalp'), undefined, 'A backend without style support never receives the field');
   const invalid = dailyFixture();
@@ -2278,7 +2322,8 @@ test('idle lifecycle and readiness name a disabled/capped index and a closed ses
   assert.equal(display.aqteIndexHold(null), null);
   assert.deepEqual(['Outside regular market session', 'Daily index loss limit reached', 'Trade exceeds remaining daily index loss budget',
     'This strategy candle was already submitted', 'Entry retry cooldown after a transient price/quote check', 'No setup']
-    .map(display.aqteBlockLabel), ['Market closed', 'Loss budget', 'Loss budget', 'Setup used', 'Retry cooldown', 'Blocked']);
+    .map(reason => display.aqteBlockLabel(reason)), ['Market closed', 'Loss budget', 'Loss budget', 'Setup used', 'Retry cooldown', 'Waiting for signal']);
+  assert.equal(display.aqteBlockLabel('One lot exceeds live per-trade risk limit', true), 'Waiting for entry');
   assert.equal(display.aqteOpportunitySymbol(['NIFTY', 'BANKNIFTY', 'SENSEX'],
     { NIFTY: 'Index auto trading disabled', BANKNIFTY: 'Daily index trade limit reached', SENSEX: 'Outside regular market session' }), 'SENSEX');
 
@@ -2655,6 +2700,30 @@ test('engine deck keeps stable placeholders when engines are unavailable or AQTE
   assert.match(text(nodes(missing).find(n => n.props?.['aria-label'] === 'Top opportunity')), /Controller status unavailable/);
 });
 
+test('execution preflight failure is NOT ARMED rather than an ordinary technical signal wait', () => {
+  const now = Date.now() / 1000;
+  const h = harness('AQTEEngineDeck.tsx');
+  const reason = 'Outbound IP does not match allowlisted IP';
+  const signalWait = 'RSI outside scalp momentum band';
+  const data = { ...fixture().data, NIFTY: { ...fixture().data.NIFTY,
+    scalp: { ...scalpSignal('WAIT'), reasons: [signalWait] } } };
+  const live = { ...liveFixture(), generated_at: now, enabled: true, entry_window: true,
+    armed: false, automation_on: false, automation_wanted: true, automation_waiting: reason,
+    ranking: ['NIFTY'], entry_blocks: { NIFTY: signalWait } };
+  const props = { symbol: 'NIFTY', data, liveStatus: live, unavailable: false, policy: null, events: [], now };
+  const execution = tree => nodes(tree).find(n => n.props?.role === 'status' && String(n.props.className).split(' ').includes('aqx-exec'));
+  const waiting = h.render(props);
+  assert.match(text(execution(waiting)), /Auto Execution:\s+NOT ARMED/);
+  assert.match(text(execution(waiting)), /Outbound IP does not match allowlisted IP/);
+  assert.doesNotMatch(text(execution(waiting)), /RSI|READY|Eligible/);
+  const row = nodes(nodes(waiting).find(n => n.props?.['aria-label'] === 'Index ranking')).find(n => n.type === 'li');
+  assert.equal(row.props.title, signalWait);
+  const armed = h.render({ ...props, liveStatus: { ...live, armed: true, automation_on: true, automation_waiting: null } });
+  assert.match(text(execution(armed)), /Auto Execution:\s+WAITING/);
+  assert.match(text(execution(armed)), /RSI outside scalp momentum band/);
+  assert.doesNotMatch(text(execution(armed)), /NOT ARMED|READY|Eligible/);
+});
+
 test('opportunity readiness expires with controller status and respects errors and the entry window', () => {
   const now = Date.now() / 1000;
   const h = harness('AQTEEngineDeck.tsx');
@@ -2762,10 +2831,9 @@ test('top opportunity follows the controller: first unblocked ranked index, else
   assert.match(panel, /NIFTY_SCALP_PE/);
   assert.match(panel, /3 aligned · 0 opposed/);
   assert.match(panel, /Auto Execution:\s+READY/);
-  assert.doesNotMatch(panel, /Daily index trade limit/);
   const ladder = nodes(nodes(h.render(props)).find(n => n.props?.['aria-label'] === 'Index ranking')).filter(n => n.type === 'li');
   assert.deepEqual(ladder.map(row => text(row).replace(/\s+/g, ' ').trim()),
-    ['1 NIFTY Limit reached CE 90%', '♛ BANK NIFTY Top pick PE 75%', '3 SENSEX Blocked WAIT --']);
+    ['1 NIFTY Limit reached CE 90%', '♛ BANK NIFTY Top pick PE 75%', '3 SENSEX Waiting for signal WAIT --']);
   assert.deepEqual(ladder.map(row => row.props.className), ['', 'aqx-rank-top', '']);
   assert.deepEqual(ladder.map(row => row.props.title), ['Daily index trade limit reached', undefined, 'No setup'],
     'every short row label carries the controller reason as a tooltip');
@@ -2774,7 +2842,7 @@ test('top opportunity follows the controller: first unblocked ranked index, else
     .find(n => n.props?.['aria-label'] === 'Top opportunity'));
   assert.match(blocked, /NIFTY_SCALP_PE/);
   assert.match(blocked, /No setup/);
-  assert.match(blocked, /Top · Blocked/);
+  assert.match(blocked, /Top · Waiting for entry/);
   assert.doesNotMatch(blocked, /READY|Eligible/);
   // Every index capped: the top-ranked one is shown and the card says nothing can trade today.
   const capped = 'Daily index trade limit reached';
@@ -2783,6 +2851,67 @@ test('top opportunity follows the controller: first unblocked ranked index, else
   assert.match(held, /NIFTY_SCALP_CE/);
   assert.match(held, /Auto Execution:\s+BLOCKED/);
   assert.match(held, /No index can trade today/);
+});
+
+test('index ranking waits independently with stable text and changing reasons only in descriptions', () => {
+  const now = Date.now() / 1000;
+  const h = harness('AQTEEngineDeck.tsx');
+  const reasons = {
+    NIFTY: 'No fresh 20-candle breakout',
+    BANKNIFTY: 'RSI outside scalp momentum band',
+    SENSEX: 'Order-book imbalance does not confirm',
+  };
+  const data = Object.fromEntries(Object.entries(reasons).map(([symbol, reason]) =>
+    [symbol, { ...fixture().data[symbol], scalp: { ...scalpSignal('WAIT'), reasons: [reason] } }]));
+  const live = { ...liveFixture(), generated_at: now, enabled: true, paper_validated: true, armed: true,
+    automation_on: true, entry_window: true, ranking: Object.keys(reasons), entry_blocks: { ...reasons } };
+  const props = { symbol: 'NIFTY', data, liveStatus: live, unavailable: false, policy: null, events: [], now };
+  const panel = tree => nodes(tree).find(n => n.props?.['aria-label'] === 'Top opportunity');
+  const rows = tree => nodes(nodes(tree).find(n => n.props?.['aria-label'] === 'Index ranking')).filter(n => n.type === 'li');
+  const reasonOf = row => row.props['aria-description'] ?? '';
+
+  const waiting = h.render(props);
+  assert.doesNotMatch(text(panel(waiting)), /Blocked|BLOCKED|READY|Eligible/);
+  assert.match(text(panel(waiting)), /Auto Execution:\s+WAITING/);
+  assert.deepEqual(rows(waiting).map(reasonOf), Object.values(reasons));
+  assert.ok(rows(waiting).every(row => /Waiting for signal/.test(text(row)) && row.props['data-side'] === 'WAIT'));
+  const visibleRows = rows(waiting).map(text);
+  for (const reason of ['Breakout volume below 1.5x', 'No scalp bias: price vs VWAP and EMA 9/20 disagree',
+    'Liquidity-sweep reversal: Fully stacked opposite trend; no reversal; Volume below 1.5x average; Live futures gave back the reclaim']) {
+    const updated = h.render({ ...props, liveStatus: { ...live,
+      entry_blocks: { NIFTY: reason, BANKNIFTY: reason, SENSEX: reason } } });
+    assert.deepEqual(rows(updated).map(text), visibleRows, 'technical reason changes must not change visible row content');
+    assert.ok(rows(updated).every(row => row.props.title === reason && reasonOf(row) === reason));
+    assert.ok(rows(updated).every(row => !nodes(row).some(node => node.props?.className === 'aqx-rank-reason')));
+  }
+
+  for (const [symbol, side] of [['NIFTY', 'CE'], ['BANKNIFTY', 'PE'], ['SENSEX', 'CE']]) {
+    const tree = h.render({ ...props, data: { ...data, [symbol]: { ...data[symbol], scalp: scalpSignal(`BUY ${side}`) } },
+      liveStatus: { ...live, entry_blocks: { ...reasons, [symbol]: null } } });
+    const ladder = rows(tree);
+    const selected = ladder.find(row => row.props.className === 'aqx-rank-top');
+    assert.match(text(selected), /Top pick/);
+    assert.match(text(selected), new RegExp(symbol === 'BANKNIFTY' ? 'BANK NIFTY' : symbol));
+    assert.equal(selected.props['data-side'], side);
+    assert.equal(reasonOf(selected), '', 'a ready index never inherits another index wait reason');
+    assert.match(text(panel(tree)), /Auto Execution:\s+READY/);
+    assert.deepEqual(ladder.filter(row => row !== selected).map(reasonOf),
+      Object.entries(reasons).filter(([name]) => name !== symbol).map(([, reason]) => reason));
+    assert.ok(ladder.filter(row => row !== selected).every(row => /Waiting for signal/.test(text(row))));
+  }
+
+  const noApproval = h.render({ ...props, liveStatus: { ...live, automation_on: false, armed: false } });
+  assert.match(text(panel(noApproval)), /Auto Execution:\s+OFF/);
+  assert.ok(rows(noApproval).every(row => /Waiting for signal/.test(text(row))));
+  const beforeStatus = h.render({ ...props, liveStatus: null });
+  assert.deepEqual(rows(beforeStatus).map(reasonOf), Object.values(reasons));
+  assert.ok(rows(beforeStatus).every(row => /Waiting for signal/.test(text(row))));
+  assert.match(text(panel(beforeStatus)), /Auto Execution:\s+UNKNOWN/);
+  const offline = h.render({ ...props, unavailable: true });
+  assert.ok(rows(offline).every(row => /No data/.test(text(row)) && reasonOf(row) === ''));
+  const inconsistent = h.render({ ...props, liveStatus: { ...live, entry_blocks: { NIFTY: null, BANKNIFTY: null, SENSEX: null } } });
+  assert.ok(rows(inconsistent).every(row => /Waiting for signal/.test(text(row))));
+  assert.doesNotMatch(text(panel(inconsistent)), /READY|Eligible|Top pick|Clear/);
 });
 
 test('un-evaluated engines read as awaiting data with the backend reason, and empty levels stay neutral', () => {
@@ -3116,7 +3245,7 @@ test('opportunity card shows Auto Trade waiting to arm with its reason, never OF
   const card = live => text(nodes(h.render({ ...props, liveStatus: live })).find(n => n.props?.['aria-label'] === 'Top opportunity'));
   const ip = 'Outbound IP 122.177.240.29 does not match allowlisted IP 159.65.147.167';
   let panel = card({ ...base, automation_on: false, armed: false, automation_wanted: true, automation_waiting: ip });
-  assert.match(panel, /Auto Execution:\s+WAITING/);
+  assert.match(panel, /Auto Execution:\s+NOT ARMED/);
   assert.match(panel, /does not match allowlisted IP/);
   assert.doesNotMatch(panel, /OFF|Eligible/);
   panel = card({ ...base, automation_on: false, armed: false, automation_wanted: true, automation_waiting: null });

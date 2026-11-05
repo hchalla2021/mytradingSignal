@@ -195,7 +195,7 @@ class LiveTests(unittest.TestCase):
         for patch_control, patch_signal, expected in (
             ({"stop_percent": 20}, {}, "per-trade risk"),
             ({}, {"intelligence": {**signal["intelligence"], "cpr": None}}, "CPR"),
-            ({"setups": {**control["setups"], "momentum_breakout": False}}, {}, "OFF in Controls"),
+            ({"setups": dict.fromkeys(control["setups"], False)}, {}, "OFF in Controls"),
         ):
             saved = copy.deepcopy(control)
             control.update(patch_control)
@@ -222,7 +222,8 @@ class LiveTests(unittest.TestCase):
             proposal = self.live.proposal("NIFTY")
             self.assertEqual(status["styles"]["NIFTY"], style)
             self.assertEqual(controls["opportunity"]["style"], style)
-            self.assertEqual(status["style_checks"]["NIFTY"], {"scalp": None, "swing": None})
+            self.assertEqual(status["style_checks"]["NIFTY"], {
+                "scalp": None, "swing": None if style == "swing" else "Rule score below 75/100; do not trade"})
             plan = status["entry_plans"]["NIFTY"]
             self.assertEqual(controls["opportunity"]["entry"], plan)
             self.assertEqual((plan["maximum"], plan["stop"], plan["target"]),
@@ -341,27 +342,55 @@ class LiveTests(unittest.TestCase):
             self.live.confirm(proposal["id"])
         self.broker.place_order.assert_not_called()
 
-    def test_legacy_controls_keep_swing_instead_of_silently_changing_live_strategy(self):
-        for control in self.live.state["daily_controls"].values():
-            control.pop("style")
+    def test_legacy_controls_select_everything_once_preserving_risk_and_positions_but_requiring_new_approval(self):
+        self.enter()
+        active = copy.deepcopy(self.live.state["active"])
+        entries = copy.deepcopy(self.live.state["daily_entries"])
+        self.live.state.pop("daily_controls_version")
+        for i, control in enumerate(self.live.state["daily_controls"].values()):
+            control.update(enabled=False, style="scalp", min_confidence=90 + i * 5, max_trades=3 + i,
+                           stop_percent=10, target_rr=3, daily_loss=1500)
+            control["setups"] = dict.fromkeys(control["setups"], False)
         self.live.save("LEGACY_TEST_STATE")
         self.live.release_owner()
+        self.broker.reset_mock()
         restored = self.new_service()
         restored.initialize()
         self.addCleanup(restored.release_owner)
-        self.assertEqual(restored.status()["styles"], dict.fromkeys(("NIFTY", "BANKNIFTY", "SENSEX"), "swing"))
+        for i, control in enumerate(restored.state["daily_controls"].values()):
+            self.assertTrue(control["enabled"])
+            self.assertEqual(control["style"], "both")
+            self.assertTrue(all(control["setups"].values()))
+            self.assertEqual(control["min_confidence"], 75)
+            self.assertEqual((control["max_trades"], control["stop_percent"], control["target_rr"],
+                              control["daily_loss"]), (3 + i, 10, 3, 1500))
+        self.assertIsNone(restored.state["armed_day"])
+        self.assertFalse(restored.state["automation_on"])
+        self.assertFalse(restored.state["automation_wanted"])
+        self.assertEqual(restored.state["active"], active)
+        self.assertEqual(restored.state["daily_entries"], entries)
+        self.assertEqual(restored.state["daily_controls_version"], 1)
+        with closing(sqlite3.connect(str(self.path))) as db:
+            row = db.execute("SELECT payload FROM live_audit WHERE kind='RESTART_DISARMED' ORDER BY id DESC").fetchone()
+            self.assertTrue(json.loads(row[0])["daily_controls_migrated"])
+        self.assertFalse(self.broker.mock_calls)
 
-    def test_legacy_controls_gain_breakout_only_setup_switches(self):
-        for control in self.live.state["daily_controls"].values():
+    def test_legacy_controls_missing_style_or_setups_gain_all_choices_and_keep_75_to_80_scores(self):
+        self.live.state.pop("daily_controls_version")
+        for i, control in enumerate(self.live.state["daily_controls"].values()):
+            control["min_confidence"] = 75 + i * 2
+            control.pop("style")
             control.pop("setups")
         self.live.save("LEGACY_TEST_STATE")
         self.live.release_owner()
         restored = self.new_service()
         restored.initialize()
         self.addCleanup(restored.release_owner)
-        for control in restored.state["daily_controls"].values():
-            self.assertEqual(control["setups"], dict(momentum_breakout=True, trend_continuation=False,
-                                                     liquidity_reversal=False, mean_reversion=False))
+        for i, control in enumerate(restored.state["daily_controls"].values()):
+            self.assertTrue(control["enabled"])
+            self.assertEqual(control["style"], "both")
+            self.assertTrue(all(control["setups"].values()))
+            self.assertEqual(control["min_confidence"], 75 + i * 2)
 
     def test_swing_trades_the_best_enabled_same_side_setup_when_the_engine_pick_is_off(self):
         setups = [dict(name="trend_continuation", side="CE", score=73, passed=True),
@@ -430,7 +459,7 @@ class LiveTests(unittest.TestCase):
                     self.live.state["daily_controls"]["NIFTY"]["enabled"] = True
                     self.orders.clear()
                     self.positions.clear()
-                    engine = AQTEEngine(Policy(scalp_points={"NIFTY": (points,)}), paper_enabled=False)
+                    engine = AQTEEngine(Policy(scalp_points={"NIFTY": (points / 2, points)}), paper_enabled=False)
                     engine.contracts[30] = replace(CONTRACT, lot_size=65, side=side,
                                                    trading_symbol=f"NIFTY_TEST_{side}")
                     bars = []
@@ -452,6 +481,7 @@ class LiveTests(unittest.TestCase):
                     self.market.engine = engine
                     signal = engine.signals["NIFTY"]["scalp"]
                     self.assertEqual(signal["decision"], f"BUY {side}", signal["reasons"])
+                    self.assertGreaterEqual(signal["confidence"], 75)
                     self.assertEqual(signal["entry"]["points"], points)
                     self.assertFalse(engine.orders, "No paper execution participates in the live path")
                     self.armed()
@@ -500,7 +530,7 @@ class LiveTests(unittest.TestCase):
         self.assertIsNone(self.live.status()["entry_note"])
 
     def test_daily_controls_save_only_while_off_persist_and_never_arm(self):
-        config = {**self.live.state["daily_controls"]["NIFTY"], "max_trades": 3, "min_confidence": 95}
+        config = {**self.live.state["daily_controls"]["NIFTY"], "max_trades": 3, "min_confidence": 78}
         result = self.live.update_control("NIFTY", config)
         self.assertEqual(result["data"]["NIFTY"]["config"]["max_trades"], 3)
         self.assertFalse(self.live.status()["automation_on"])
@@ -513,7 +543,7 @@ class LiveTests(unittest.TestCase):
         restored = self.new_service()
         restored.initialize()
         self.addCleanup(restored.release_owner)
-        self.assertEqual(restored.state["daily_controls"]["NIFTY"]["min_confidence"], 95)
+        self.assertEqual(restored.state["daily_controls"]["NIFTY"]["min_confidence"], 78)
         self.assertFalse(restored.status()["automation_on"])
 
     def test_limits_reserve_uncertain_entries_count_partial_once_and_reset_by_ist_day(self):
@@ -556,7 +586,7 @@ class LiveTests(unittest.TestCase):
         self.quality.stop()
         self.live.automated_entry()
         self.broker.place_order.assert_not_called()
-        self.assertIn("90", self.live.control_reason("NIFTY", self.market.snapshot()["data"]["NIFTY"]))
+        self.assertIn("below 75/100", self.live.control_reason("NIFTY", self.market.snapshot()["data"]["NIFTY"]))
         self.live.state["daily_entries"] = [
             dict(id=str(i), symbol="BANKNIFTY", at=NOW, filled=True, pending=False) for i in range(5)]
         self.assertIn("Account-wide", self.live.control_reason("NIFTY", {}))
@@ -1315,7 +1345,7 @@ class LiveTests(unittest.TestCase):
         self.market.snapshot.side_effect = self.aligned_snapshot
         self.armed()
         self.live.automated_entry()
-        self.assertIn("90", self.live.control_reason("NIFTY", self.aligned_snapshot()["data"]["NIFTY"]))
+        self.assertIn("validation", self.live.control_reason("NIFTY", self.aligned_snapshot()["data"]["NIFTY"]))
         self.broker.place_order.assert_not_called()
         self.cfg.aqte_live_allow_unvalidated_rules = True
         self.live.automated_entry()
@@ -1683,13 +1713,22 @@ class LiveAPITests(unittest.TestCase):
             response = self.client.get("/api/aqte/live/daily-controls", headers=self.headers)
             self.assertEqual(response.status_code, 200)
             self.assertEqual(response.headers["cache-control"], "no-store")
-            for config in ({"max_trades": 11}, {"enabled": "true"}, {"min_confidence": 80}, {"unknown": 1}):
+            for config in ({"max_trades": 11}, {"enabled": "true"}, {"min_confidence": 74},
+                           {"min_confidence": 81}, {"min_confidence": 90}, {"unknown": 1}):
                 self.assertEqual(self.client.post("/api/aqte/live/daily-controls", headers=self.headers,
                                                  json={**body, "config": config}).status_code, 422)
             controller.update_control.assert_not_called()
             self.assertEqual(self.client.post("/api/aqte/live/daily-controls", headers=self.headers,
                                              json=body).status_code, 200)
             self.assertEqual(controller.update_control.call_args.args[1]["max_trades"], 3)
+            saved = controller.update_control.call_args.args[1]
+            self.assertTrue(saved["enabled"])
+            self.assertEqual((saved["style"], saved["min_confidence"]), ("both", 75))
+            self.assertTrue(all(saved["setups"].values()))
+            for minimum in (75, 78, 80):
+                self.assertEqual(self.client.post("/api/aqte/live/daily-controls", headers=self.headers,
+                                                 json={**body, "config": {"min_confidence": minimum}}).status_code, 200)
+                self.assertEqual(controller.update_control.call_args.args[1]["min_confidence"], minimum)
             for value in (0, 11, True, 2.5, "3"):
                 self.assertEqual(self.client.post("/api/aqte/live/daily-limit", headers=self.headers,
                                                  json={"symbol": "NIFTY", "max_trades": value}).status_code, 422)

@@ -487,12 +487,12 @@ export function aqteIndexHold(reason: string | null | undefined): 'Disabled in C
   return /trade limit reached|trade cap reached/i.test(reason) ? 'Limit reached' : null;
 }
 
-/** Short ranking-row label for a controller entry block; the full reason goes in the row tooltip. */
-export function aqteBlockLabel(reason: string): string {
+/** Distinguish an ordinary signal wait from an actionable setup awaiting entry checks. */
+export function aqteBlockLabel(reason: string, actionable = false): string {
   return aqteIndexHold(reason) ?? (/outside regular market session/i.test(reason) ? 'Market closed'
     : /loss limit reached|loss budget/i.test(reason) ? 'Loss budget'
       : /already submitted/i.test(reason) ? 'Setup used'
-        : /cooldown/i.test(reason) ? 'Retry cooldown' : 'Blocked');
+        : /cooldown/i.test(reason) ? 'Retry cooldown' : actionable ? 'Waiting for entry' : 'Waiting for signal');
 }
 
 /**

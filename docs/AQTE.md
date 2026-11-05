@@ -200,6 +200,20 @@ budget checks still run at submission.
 (maximum premium, stop, target, reward:risk, quantity, risk). The Current Opportunity
 panel shows this plan instead of the raw signal levels, and `--` when the controller
 has no plan for that index.
+The Index Ranking evaluates NIFTY, BANK NIFTY and SENSEX independently. An index
+without a qualifying setup reads **Waiting for signal**, not **Blocked**, with its
+own reason available as a row tooltip and accessible description. Rapidly changing
+technical reasons do not appear inline, keeping row text and height stable between
+signal-state changes. Full reasons remain visible in Controls. A qualifying signal
+awaiting entry checks reads **Waiting for entry**. Disabled indices, trade/loss
+limits, market closure and cooldowns keep their specific labels. One index waiting
+does not stop another eligible index becoming the top opportunity. Missing/stale
+data never implies readiness, and Auto Trade approval, execution rules, account
+safety limits and the one-managed-position limit are unchanged.
+Auto Execution distinguishes **NOT ARMED** (standing ON is awaiting session,
+preflight or approval) from **WAITING** for an eligible signal after arming. Its
+explanation gives the controller's actual preflight failure ahead of indicator
+waits; the ranking rows retain each index's technical reasons.
 Existing charts, trading books, authentication and signals retain their own behavior.
 AQTE does not disable or change any other module's independently configured execution.
 
@@ -826,8 +840,11 @@ The compact **Daily trade limit** box at the top-right of the Real tab
 stores independent NIFTY, BANKNIFTY and SENSEX preferences in the existing live SQLite
 journal. Paper trading and read-only manual Kite positions are unaffected.
 
-- Each index defaults to **disabled**, a maximum of **5** entries/day and minimum
-  rule score **90/100**. Three always-visible rows have **− / count / + / Save**.
+- Each index defaults to **selected**, a maximum of **5** entries/day and minimum
+  rule score **75/100**, adjustable from **75 to 80** (inclusive, integer values).
+  The selected minimum is enforced for both entry styles, even with unvalidated
+  rules enabled; a score is not a win probability. The master Auto Trade switch
+  still requires explicit approval. Three always-visible rows have **− / count / + / Save**.
   Adjust each index from 1–10, then press its own Save button. Amber counts are drafts;
   polling does not overwrite them. Saved limits persist until manually changed,
   while executed/reserved counts reset on the IST day.
@@ -868,10 +885,17 @@ journal. Paper trading and read-only manual Kite positions are unaffected.
   reports each checked style's blocking reason, or null when its local checks passed.
 - **Swing setups** per index (shown whenever Swing is checked): Momentum breakout,
   Trend continuation, Liquidity-sweep reversal and Mean reversion are all checked for new
-  configurations. All individual gates still apply. Existing saved choices are preserved;
-  legacy records missing style retain Swing, and records missing setup switches retain
-  breakout only. To change existing indices, check the desired styles/setups and Save
-  each index while automation is OFF. Unchecking a style/setup stays saved across restarts.
+  configurations. All individual gates still apply. A one-time journal migration selects
+  every index, both styles and all setups for existing configurations too, replacing old
+  90-100 minimum settings with 75 (existing 75-80 settings are preserved). No manual
+  checking or per-index Save is needed for these defaults. The migration is logged,
+  clears standing Auto Trade ON and requires fresh owner approval before any new entry.
+  Existing positions, protection, trade history, counts and risk limits are preserved.
+  After migration, optional opt-outs and score changes remain saved across restarts;
+  changing them still requires automation OFF and Save.
+  Deploy/restart the backend before the frontend so the saved controls migrate before
+  the UI validates the new 75-80 range. Reconfirm Auto Trade ON only after reviewing
+  the migrated settings.
 - Eligible indices are considered in descending score order; weak, sideways,
   incomplete or unvalidated evidence never becomes a forced trade.
 
@@ -899,6 +923,11 @@ live controller trades the highest-scored ON setup on the **same side** whose ga
 swap and always show the setup that would actually trade (a malformed swapped gate shows
 as Unverified, never as the OFF setup). Pricing, R:R ≥ 1.5, risk, cash and broker gates are
 identical for every setup.
+In live `ANALYSIS_ONLY` mode the signal producer also enforces the selected setup's
+checks before publishing BUY or option-entry levels. A failed candidate remains WAIT
+with all unmet checks listed; a passing alternative can still be selected. This
+prevents a failed candidate looking tradeable in ranking while the controller
+correctly rejects it. Historical paper/replay behavior remains unchanged.
 
 #### Quick scalp (10 / 20 / 30 points)
 
@@ -936,16 +965,17 @@ unvalidated rule. Scalp entries use the same IOC, broker stop, target-modify,
 trailing (from +1R), 15:25 session exit and daily limits as Swing.
 
 **Important current limitation:** these controls do not train or validate a predictive
-model. The existing rule baseline tops out at 80, is unvalidated and cannot pass the
-minimum 90. Validated option-chain OI/PCR/Greeks and liquidity-sweep confirmation are
+model. The existing rule baseline tops out at 80 and is unvalidated; a 75-80 minimum
+does not validate it. Validated option-chain OI/PCR/Greeks and liquidity-sweep confirmation are
 **not implemented**. In the default **strict** mode their absence is an explicit final
 blocker, so Auto Trade ON scans but never places an entry.
 
 `AQTE_LIVE_ALLOW_UNVALIDATED_RULES=true` is a separate, default-off owner opt-in for
-real money. It skips only the minimum rule score, model-validation and missing
-option-chain blockers. Every Swing entry must still pass all checks of its setup (see
+real money. It skips only model-validation and missing option-chain blockers, **not**
+the saved minimum rule score. Every Swing entry must still pass all checks of its setup (see
 Swing setups) and that setup must be ON, plus all risk, broker and one-position guards.
-A non-numeric score always blocks. The ON confirmation and `GET /api/aqte/live/status`
+A non-numeric/non-finite score or a score below the saved minimum always waits.
+The ON confirmation and `GET /api/aqte/live/status`
 (`unvalidated_rules`) report the active mode.
 Quick scalp instead requires all of the scalp checks listed above. LightGBM is
 installed for the separate, optional shadow research pipeline; it neither approves
@@ -1001,6 +1031,18 @@ working orders. Proxy environment variables and a separately enabled live Smart 
 block the pilot. Matching this public-IP check cannot prove the broker's own allowlist;
 Kite's actual permission checks remain authoritative. Do not edit machine routing to
 impersonate an allowlisted address.
+
+With an independent local backend, quotes can be LIVE while execution is NOT ARMED:
+the local machine must itself use the broker-approved outbound static IPv4. Copying
+the production server's IP into local settings does not route orders through that
+server. Use the approved execution host, or complete the broker's approval process
+for the local static egress before configuring it; never bypass the comparison.
+Signal analysis refreshes on futures ticks using completed one-minute candles.
+The execution monitor checks roughly every two seconds plus processing time, but
+a failed preflight retries at most once per minute and never submits an order.
+The other dashboard panels are not order-authorizing inputs: AQTE's evaluators
+consume the shared Kite spot/futures/options feed directly. A fresh feed or advisory
+engine agreement alone cannot approve a live entry.
 
 The signed-in configured app owner, at any time (market open or closed):
 

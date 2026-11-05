@@ -51,6 +51,13 @@ def ready_engine(contract=CONTRACT, paper_enabled=True, **policy):
     engine.ingest(tick("spot", at=NOW, price=22040))
     engine.ingest(tick("option", at=NOW))
     engine.ingest(tick(at=NOW, price=22040.4, volume=202_000))
+    if not paper_enabled:
+        # Live fixtures must pass the actual swing gate, not just form a candidate.
+        engine.previous_day["NIFTY"] = dict(high=22005, low=21995, close=22000)
+        for i, bar in enumerate(engine.book.closed[("future", 20, 60)]):
+            close = 22000 + i * 0.2 + 2 * math.sin(i * 0.7)
+            bar.update(open=close - 0.1, high=close + 5, low=close - 5, close=close)
+        engine.analyze("NIFTY", NOW)
     return engine
 
 
@@ -66,6 +73,45 @@ THURSDAY = datetime(2026, 10, 29, 9, 15, tzinfo=IST).timestamp()
 
 
 class EvidenceTests(unittest.TestCase):
+    def test_live_swing_cannot_report_buy_when_its_own_setup_checks_fail(self):
+        from test_aqte_daily_control import mirror
+
+        mixed = scalp_info(ema={"9": 95, "20": 96, "50": 90, "100": 85, "200": 80},
+                           close=94, vwap=93, rsi=41, supertrend="BEARISH", volume_ratio=1.77,
+                           imbalance=-0.06, breakout=-1, sweep=0, structure="LOWER_LOW",
+                           cpr={"top": 92, "bottom": 90}, live={"price": 94})
+        for side, info in (("PE", mixed), ("CE", mirror(mixed))):
+            with self.subTest(side=side):
+                engine = ready_engine(contract=replace(CONTRACT, side=side), paper_enabled=False)
+                with patch("services.aqte_engine.intelligence", return_value=info):
+                    engine.analyze("NIFTY", NOW)
+                signal = engine.snapshot(NOW)["data"]["NIFTY"]
+                setup = signal["setups"][0]
+                self.assertFalse(setup["passed"])
+                self.assertEqual(signal["decision"], "WAIT")
+                self.assertIsNone(signal["entry"])
+                self.assertIsNone(signal["contract"])
+                self.assertEqual(signal["strategy"], "momentum_breakout")
+                failures = [check for check in setup["checks"] if check["passed"] is not True]
+                self.assertEqual(len(signal["reasons"]), len(failures))
+                for check, reason in zip(failures, signal["reasons"]):
+                    self.assertIn(check["reason"], reason)
+                self.assertFalse(engine.orders)
+
+    def test_live_swing_still_uses_a_passing_alternative_to_a_failed_breakout(self):
+        from test_aqte_daily_control import REVERSAL
+
+        engine = ready_engine(paper_enabled=False)
+        info = {**REVERSAL, "breakout": 1, "volume_ratio": 2, "imbalance": 0.3, "at": NOW - 60}
+        with patch("services.aqte_engine.intelligence", return_value=info):
+            engine.analyze("NIFTY", NOW)
+        signal = engine.snapshot(NOW)["data"]["NIFTY"]
+        self.assertEqual([(setup["name"], setup["passed"]) for setup in signal["setups"]],
+                         [("momentum_breakout", False), ("liquidity_reversal", True)])
+        self.assertEqual((signal["decision"], signal["strategy"]), ("BUY CE", "liquidity_reversal"))
+        self.assertIsNotNone(signal["entry"])
+        self.assertTrue(all(check["passed"] for check in signal["rule_checks"]["swing"]["checks"]))
+
     def test_kite_oi_is_preserved_and_missing_is_not_zero(self):
         raw = dict(instrument_token=20, last_price=22000,
                    exchange_timestamp=datetime.fromtimestamp(NOW, IST), oi=100_500)
@@ -782,7 +828,9 @@ class ServiceTests(unittest.TestCase):
         analysis.engine.events.clear()
         analysis.engine.ingest(tick(at=NOW + 1, volume=203_000))
         analysis.engine.manage(NOW + 2, tick("option", at=NOW + 2, ask=99, bid=98))
-        self.assertEqual(analysis.engine.signals["NIFTY"]["decision"], "BUY CE")
+        self.assertEqual(analysis.engine.signals["NIFTY"]["decision"], "WAIT",
+                         "A legacy paper candidate cannot bypass the live setup gate")
+        self.assertTrue(analysis.engine.signals["NIFTY"]["reasons"])
         self.assertEqual(analysis.engine.orders, {})
         self.assertFalse(any(event["kind"] in ("LIMIT_CREATED", "FILLED", "CLOSED")
                              for event in analysis.engine.events))

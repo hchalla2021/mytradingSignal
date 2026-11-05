@@ -20,7 +20,7 @@ from kiteconnect import KiteConnect
 
 from config import get_settings
 from services.aqte_engine import Contract, IST, Policy, SYMBOLS, day, round_tick, session
-from services.aqte_daily_control import IndexControl, counts, defaults, quality_reason
+from services.aqte_daily_control import IndexControl, SwingSetups, counts, defaults, quality_reason
 from services.aqte_engines import EngineConfig, rank_key, veto_reason
 
 logger = logging.getLogger(__name__)
@@ -36,6 +36,7 @@ ACTIVATION_RETRY_SECONDS = 60
 # A skipped automated entry (price moved, quote stale) is re-evaluated after this many seconds.
 ENTRY_RETRY_SECONDS = 5
 ENTRY_SCAN_AUDIT_SECONDS = 60
+DAILY_CONTROL_DEFAULTS_VERSION = 1
 ENTRY_CUTOFF_MINUTE = 15 * 60 + 15
 MARKET_WAIT = "Waiting for market: auto trade arms on weekdays 09:15 to 15:15 IST"
 # Kite rejects more than 25 modifications per order; trailing must leave headroom for the exit.
@@ -90,7 +91,7 @@ class AQTELiveService:
         self.lock = threading.RLock()
         self.state = {"armed_day": None, "automation_on": False, "automation_wanted": False, "killed": False,
                       "account": None, "active": None, "trades": [], "used": [], "daily_controls": defaults(),
-                      "daily_entries": []}
+                      "daily_entries": [], "daily_controls_version": DAILY_CONTROL_DEFAULTS_VERSION}
         self.proposals = {}
         self.check = None
         self.error = None
@@ -151,13 +152,30 @@ class AQTELiveService:
         self.state["automation_wanted"] = bool(self.state.get("automation_wanted")) and not self.state["killed"]
         if set(self.state["daily_controls"]) != set(SYMBOLS):
             raise LiveBlocked("Invalid saved daily-control index set; journal requires repair before trading")
-        self.state["daily_controls"] = {
-            symbol: IndexControl(**{"style": "swing", "setups": {
-                "momentum_breakout": True, "trend_continuation": False,
-                "liquidity_reversal": False, "mean_reversion": False}, **control}).model_dump()
-            for symbol, control in self.state["daily_controls"].items()
-        }
-        self.save("RESTART_DISARMED", automation_wanted=self.state["automation_wanted"])
+        version = self.state.get("daily_controls_version", 0)
+        if version not in (0, DAILY_CONTROL_DEFAULTS_VERSION):
+            raise LiveBlocked("Unsupported daily-control defaults version; journal requires repair before trading")
+        migrated = version == 0
+        controls = {}
+        for symbol, control in self.state["daily_controls"].items():
+            score = control.get("min_confidence", 75)
+            if migrated and type(score) is int and 90 <= score <= 100:
+                score = 75
+            restored = IndexControl(**{**control, "min_confidence": score})
+            if migrated:
+                restored.enabled = True
+                restored.style = "both"
+                restored.setups = SwingSetups()
+            controls[symbol] = restored.model_dump()
+        self.state["daily_controls"] = controls
+        self.state["daily_controls_version"] = DAILY_CONTROL_DEFAULTS_VERSION
+        if migrated:
+            # Broader entry permissions require a fresh owner approval, never a standing ON request.
+            self.state["automation_wanted"] = False
+            logger.warning("AQTE controls migrated: all indices/styles/setups selected, score floor 75-80; "
+                           "Auto Trade is OFF pending fresh approval")
+        self.save("RESTART_DISARMED", automation_wanted=self.state["automation_wanted"],
+                  daily_controls_migrated=migrated)
         self.ready = True
 
     def save(self, kind, **payload):
