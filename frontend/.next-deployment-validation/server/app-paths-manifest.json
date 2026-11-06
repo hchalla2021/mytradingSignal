@@ -1,0 +1,10 @@
+{
+  "/_not-found": "app/_not-found.js",
+  "/api/admin/restart/route": "app/api/admin/restart/route.js",
+  "/chart/[symbol]/page": "app/chart/[symbol]/page.js",
+  "/dashboard/page": "app/dashboard/page.js",
+  "/page": "app/page.js",
+  "/login/page": "app/login/page.js",
+  "/chart-intel/page": "app/chart-intel/page.js",
+  "/chart-intel/[symbol]/page": "app/chart-intel/[symbol]/page.js"
+}

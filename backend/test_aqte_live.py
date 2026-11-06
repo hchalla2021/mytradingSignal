@@ -16,7 +16,10 @@ from unittest.mock import AsyncMock, Mock, patch
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from services.aqte_live import ENTRY_RETRY_SECONDS, MARKET_WAIT, AQTELiveService, LiveBlocked
+from services.aqte_live import (
+    ENTRY_RETRY_SECONDS, MARKET_WAIT, AQTELiveService, LiveBlocked,
+    strategy_lab_confirmation_reason,
+)
 from services.aqte_engine import AQTEEngine, Policy
 from test_aqte import CONTRACT, IST, NOW, START, ready_engine, scalp_info, tick
 
@@ -77,6 +80,9 @@ class LiveTests(unittest.TestCase):
         self.quality = patch("services.aqte_live.quality_reason", return_value=None)
         self.quality.start()
         self.addCleanup(self.quality.stop)
+        self.confirmation = patch("services.aqte_live.smart_ai_confirmation_reason", return_value=None)
+        self.confirmation.start()
+        self.addCleanup(self.confirmation.stop)
         self.addCleanup(self.live.release_owner)
         self.broker.place_order.side_effect = self.place
         self.broker.modify_order.side_effect = self.modify
@@ -1699,6 +1705,45 @@ class LiveTests(unittest.TestCase):
         self.assertEqual((params["transaction_type"], params["quantity"]), ("BUY", CONTRACT.lot_size))
         self.live.automated_entry()
         self.assertEqual(self.broker.place_order.call_count, 1, "Only one live position at a time")
+
+    def test_smart_ai_confirmation_requires_live_fresh_fired_same_side_consensus(self):
+        result = {
+            "data_status": "LIVE",
+            "tick_age_seconds": 1.0,
+            "strategy_lab": {
+                "updated": int(NOW * 1000),
+                "consensus": {"fired": True, "signal": "BUY_CE"},
+            },
+        }
+        self.assertIsNone(strategy_lab_confirmation_reason(result, "BUY CE", now=NOW))
+
+        cases = [
+            (None, "unavailable"),
+            ({**result, "data_status": "NO_DATA"}, "not live"),
+            ({**result, "tick_age_seconds": 11.0}, "stale"),
+            ({**result, "strategy_lab": {
+                **result["strategy_lab"], "updated": int((NOW - 31) * 1000),
+            }}, "stale"),
+            ({**result, "strategy_lab": {
+                **result["strategy_lab"], "consensus": {"fired": False, "signal": "BUY_CE"},
+            }}, "not fired"),
+            ({**result, "strategy_lab": {
+                **result["strategy_lab"], "consensus": {"fired": True, "signal": "BUY_PE"},
+            }}, "does not confirm"),
+        ]
+        for candidate, expected in cases:
+            with self.subTest(expected=expected):
+                self.assertIn(expected, strategy_lab_confirmation_reason(candidate, "BUY CE", now=NOW))
+
+    def test_smart_ai_confirmation_blocks_candidate_without_submitting_order(self):
+        self.market.snapshot.side_effect = self.aligned_snapshot
+        self.armed()
+        reason = "Smart AI 5-minute consensus is not fired"
+        with patch("services.aqte_live.smart_ai_confirmation_reason", return_value=reason):
+            self.live.automated_entry()
+            self.assertIn(reason, self.live.control_reason(
+                "NIFTY", self.aligned_snapshot()["data"]["NIFTY"]))
+        self.broker.place_order.assert_not_called()
 
     def test_engine_generated_setups_reach_automated_entry_without_bypassing_quality_or_score_floor(self):
         from test_aqte_daily_control import SETUP_CASES, mirror

@@ -282,7 +282,7 @@ const OpportunityPanel = memo(function OpportunityPanel({ opp, maxLots }: { opp:
         <ol>
           {ladder.map(({ symbol: name, side: rowSide, confidence, state, reason, top: first }, index) => (
             <li key={name} className={first ? 'aqx-rank-top' : ''} data-side={rowSide ?? 'WAIT'}
-              title={reason} aria-description={reason}>
+              title={reason}>
               <span className="aqx-rank-no" aria-hidden="true">{first ? '♛' : index + 1}</span>
               <span className="aqx-rank-body">
                 <span className="aqx-rank-line">

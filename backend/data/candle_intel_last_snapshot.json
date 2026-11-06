@@ -1,143 +1,190 @@
 {
   "NIFTY": {
-    "pattern": "TWEEZER_BOTTOM",
-    "all_patterns": [
-      {
-        "name": "TWEEZER_BOTTOM",
-        "structure": "BULLISH_REVERSAL",
-        "weight": 0.7
-      }
-    ],
-    "structure": "BULLISH_REVERSAL",
-    "strength": "STRONG",
-    "signal": "STRONG_BUY",
-    "confidence": 70,
-    "confluence": 1,
+    "pattern": null,
+    "all_patterns": [],
+    "structure": "NEUTRAL",
+    "strength": "WEAK",
+    "signal": "NEUTRAL",
+    "confidence": 15,
+    "confluence": 0,
     "candle": {
-      "open": 24676.0,
-      "high": 24695.8,
-      "low": 24672.85,
-      "close": 24695.15,
-      "body_ratio": 0.834,
-      "upper_wick_ratio": 0.028,
-      "lower_wick_ratio": 0.137,
+      "open": 24744.8,
+      "high": 24752.05,
+      "low": 24736.75,
+      "close": 24749.7,
+      "body_ratio": 0.32,
+      "upper_wick_ratio": 0.154,
+      "lower_wick_ratio": 0.526,
       "is_bullish": true
     },
     "trend_context": {
       "direction": "BULLISH",
-      "bullish_count": 7,
-      "bearish_count": 1,
-      "avg_body_ratio": 0.582,
+      "bullish_count": 6,
+      "bearish_count": 2,
+      "avg_body_ratio": 0.459,
       "candles_analyzed": 8
     },
     "symbol": "NIFTY",
     "timeframe": "5m",
     "dataSource": "LIVE",
-    "timestamp": "2026-11-06T12:40:54.008250+05:30",
-    "price": 24695.15,
-    "changePct": 0.65,
+    "timestamp": "2026-11-06T13:38:24.009273+05:30",
+    "price": 24749.7,
+    "changePct": 0.87,
     "three_factor": {
       "location": {
         "zone": "ABOVE_PDH",
         "pdh": 24579.9,
         "pdl": 24296.3,
-        "vwap": 24652.48,
-        "distance_to_pdh": 0.469,
-        "distance_to_pdl": 1.642,
-        "vwap_position": "AT",
+        "vwap": 24630.85,
+        "distance_to_pdh": 0.691,
+        "distance_to_pdl": 1.866,
+        "vwap_position": "ABOVE",
         "tradeable": true
       },
       "behavior": {
-        "type": "BREAKOUT",
-        "description": "Strong bullish close above PDH (24580)",
-        "strength": 100
+        "type": "MOMENTUM",
+        "description": "Bullish momentum above PDH (24580)",
+        "strength": 77
       },
       "confirmation": {
-        "volume_ratio": 103.28,
+        "volume_ratio": 63.96,
         "volume_confirmed": true,
-        "body_strong": true,
+        "body_strong": false,
         "close_near_extreme": true,
-        "candle_confirmed": true,
-        "confirmed": true
+        "candle_confirmed": false,
+        "confirmed": false
       },
-      "alignment_score": 3,
+      "alignment_score": 2,
       "factors_pass": [
         "LOCATION",
-        "BEHAVIOR",
+        "BEHAVIOR"
+      ],
+      "factors_fail": [
         "CONFIRMATION"
       ],
-      "factors_fail": [],
-      "aligned": true,
+      "aligned": false,
       "verdict": "BUY",
-      "reason": "All aligned \u2014 bullish breakout above PDH",
+      "reason": "2/3 aligned \u2014 bullish bias near PDH (missing: CONFIRMATION)",
       "market_active": true
     },
     "timeframes": {
       "3m": {
-        "pattern": "BULLISH_ENGULFING",
-        "all_patterns": [
-          {
-            "name": "BULLISH_ENGULFING",
-            "structure": "BULLISH_REVERSAL",
-            "weight": 0.9
-          },
-          {
-            "name": "HAMMER",
-            "structure": "BULLISH_REVERSAL",
-            "weight": 0.8
-          },
-          {
-            "name": "TWEEZER_BOTTOM",
-            "structure": "BULLISH_REVERSAL",
-            "weight": 0.7
-          }
-        ],
-        "structure": "BULLISH_REVERSAL",
-        "strength": "WEAK",
+        "pattern": "BULLISH_CANDLE",
+        "all_patterns": [],
+        "structure": "BULLISH_CONTINUATION",
+        "strength": "MODERATE",
         "signal": "BUY",
-        "confidence": 61,
-        "confluence": 3,
+        "confidence": 30,
+        "confluence": 0,
         "candle": {
-          "open": 24689.1,
-          "high": 24695.8,
-          "low": 24672.85,
-          "close": 24695.15,
-          "body_ratio": 0.264,
-          "upper_wick_ratio": 0.028,
-          "lower_wick_ratio": 0.708,
+          "open": 24745.25,
+          "high": 24752.05,
+          "low": 24744.2,
+          "close": 24749.7,
+          "body_ratio": 0.567,
+          "upper_wick_ratio": 0.299,
+          "lower_wick_ratio": 0.134,
           "is_bullish": true
         },
         "trend_context": {
-          "direction": "BULLISH",
-          "bullish_count": 7,
-          "bearish_count": 1,
-          "avg_body_ratio": 0.309,
+          "direction": "STRONG_BULLISH",
+          "bullish_count": 6,
+          "bearish_count": 2,
+          "avg_body_ratio": 0.512,
           "candles_analyzed": 8
         },
         "symbol": "NIFTY",
         "timeframe": "3m",
         "dataSource": "LIVE",
-        "timestamp": "2026-11-06T12:40:54.007144+05:30",
-        "price": 24695.15,
-        "changePct": 0.65,
+        "timestamp": "2026-11-06T13:38:24.008694+05:30",
+        "price": 24749.7,
+        "changePct": 0.87,
         "three_factor": {
           "location": {
             "zone": "ABOVE_PDH",
             "pdh": 24579.9,
             "pdl": 24296.3,
-            "vwap": 24663.87,
-            "distance_to_pdh": 0.469,
-            "distance_to_pdl": 1.642,
-            "vwap_position": "AT",
+            "vwap": 24630.85,
+            "distance_to_pdh": 0.691,
+            "distance_to_pdl": 1.866,
+            "vwap_position": "ABOVE",
             "tradeable": true
           },
           "behavior": {
-            "type": "ABSORPTION",
-            "description": "Price absorbing near PDH (24580) \u2014 breakout building",
-            "strength": 80
+            "type": "BREAKOUT",
+            "description": "Strong bullish close above PDH (24580)",
+            "strength": 76
           },
           "confirmation": {
-            "volume_ratio": 126.26,
+            "volume_ratio": 100.6,
+            "volume_confirmed": true,
+            "body_strong": true,
+            "close_near_extreme": false,
+            "candle_confirmed": false,
+            "confirmed": false
+          },
+          "alignment_score": 3,
+          "factors_pass": [
+            "LOCATION",
+            "BEHAVIOR",
+            "CONFIRMATION"
+          ],
+          "factors_fail": [],
+          "aligned": true,
+          "verdict": "BUY",
+          "reason": "All aligned \u2014 bullish breakout above PDH",
+          "market_active": true
+        }
+      },
+      "5m": {
+        "pattern": null,
+        "all_patterns": [],
+        "structure": "NEUTRAL",
+        "strength": "WEAK",
+        "signal": "NEUTRAL",
+        "confidence": 15,
+        "confluence": 0,
+        "candle": {
+          "open": 24744.8,
+          "high": 24752.05,
+          "low": 24736.75,
+          "close": 24749.7,
+          "body_ratio": 0.32,
+          "upper_wick_ratio": 0.154,
+          "lower_wick_ratio": 0.526,
+          "is_bullish": true
+        },
+        "trend_context": {
+          "direction": "BULLISH",
+          "bullish_count": 6,
+          "bearish_count": 2,
+          "avg_body_ratio": 0.459,
+          "candles_analyzed": 8
+        },
+        "symbol": "NIFTY",
+        "timeframe": "5m",
+        "dataSource": "LIVE",
+        "timestamp": "2026-11-06T13:38:24.009273+05:30",
+        "price": 24749.7,
+        "changePct": 0.87,
+        "three_factor": {
+          "location": {
+            "zone": "ABOVE_PDH",
+            "pdh": 24579.9,
+            "pdl": 24296.3,
+            "vwap": 24630.85,
+            "distance_to_pdh": 0.691,
+            "distance_to_pdl": 1.866,
+            "vwap_position": "ABOVE",
+            "tradeable": true
+          },
+          "behavior": {
+            "type": "MOMENTUM",
+            "description": "Bullish momentum above PDH (24580)",
+            "strength": 77
+          },
+          "confirmation": {
+            "volume_ratio": 63.96,
             "volume_confirmed": true,
             "body_strong": false,
             "close_near_extreme": true,
@@ -154,81 +201,7 @@
           ],
           "aligned": false,
           "verdict": "BUY",
-          "reason": "2/3 aligned \u2014 absorption at PDH, breakout likely (missing: CONFIRMATION)",
-          "market_active": true
-        }
-      },
-      "5m": {
-        "pattern": "TWEEZER_BOTTOM",
-        "all_patterns": [
-          {
-            "name": "TWEEZER_BOTTOM",
-            "structure": "BULLISH_REVERSAL",
-            "weight": 0.7
-          }
-        ],
-        "structure": "BULLISH_REVERSAL",
-        "strength": "STRONG",
-        "signal": "STRONG_BUY",
-        "confidence": 70,
-        "confluence": 1,
-        "candle": {
-          "open": 24676.0,
-          "high": 24695.8,
-          "low": 24672.85,
-          "close": 24695.15,
-          "body_ratio": 0.834,
-          "upper_wick_ratio": 0.028,
-          "lower_wick_ratio": 0.137,
-          "is_bullish": true
-        },
-        "trend_context": {
-          "direction": "BULLISH",
-          "bullish_count": 7,
-          "bearish_count": 1,
-          "avg_body_ratio": 0.582,
-          "candles_analyzed": 8
-        },
-        "symbol": "NIFTY",
-        "timeframe": "5m",
-        "dataSource": "LIVE",
-        "timestamp": "2026-11-06T12:40:54.008250+05:30",
-        "price": 24695.15,
-        "changePct": 0.65,
-        "three_factor": {
-          "location": {
-            "zone": "ABOVE_PDH",
-            "pdh": 24579.9,
-            "pdl": 24296.3,
-            "vwap": 24652.48,
-            "distance_to_pdh": 0.469,
-            "distance_to_pdl": 1.642,
-            "vwap_position": "AT",
-            "tradeable": true
-          },
-          "behavior": {
-            "type": "BREAKOUT",
-            "description": "Strong bullish close above PDH (24580)",
-            "strength": 100
-          },
-          "confirmation": {
-            "volume_ratio": 103.28,
-            "volume_confirmed": true,
-            "body_strong": true,
-            "close_near_extreme": true,
-            "candle_confirmed": true,
-            "confirmed": true
-          },
-          "alignment_score": 3,
-          "factors_pass": [
-            "LOCATION",
-            "BEHAVIOR",
-            "CONFIRMATION"
-          ],
-          "factors_fail": [],
-          "aligned": true,
-          "verdict": "BUY",
-          "reason": "All aligned \u2014 bullish breakout above PDH",
+          "reason": "2/3 aligned \u2014 bullish bias near PDH (missing: CONFIRMATION)",
           "market_active": true
         }
       },
@@ -241,46 +214,46 @@
         "confidence": 40,
         "confluence": 0,
         "candle": {
-          "open": 24669.5,
-          "high": 24700.15,
-          "low": 24665.65,
-          "close": 24695.15,
-          "body_ratio": 0.743,
-          "upper_wick_ratio": 0.145,
-          "lower_wick_ratio": 0.112,
+          "open": 24726.9,
+          "high": 24752.05,
+          "low": 24725.4,
+          "close": 24749.7,
+          "body_ratio": 0.856,
+          "upper_wick_ratio": 0.088,
+          "lower_wick_ratio": 0.056,
           "is_bullish": true
         },
         "trend_context": {
           "direction": "STRONG_BULLISH",
-          "bullish_count": 6,
-          "bearish_count": 2,
-          "avg_body_ratio": 0.359,
-          "candles_analyzed": 8
+          "bullish_count": 3,
+          "bearish_count": 0,
+          "avg_body_ratio": 0.504,
+          "candles_analyzed": 3
         },
         "symbol": "NIFTY",
         "timeframe": "15m",
         "dataSource": "LIVE",
-        "timestamp": "2026-11-06T12:40:54.008700+05:30",
-        "price": 24695.15,
-        "changePct": 0.65,
+        "timestamp": "2026-11-06T13:38:24.009571+05:30",
+        "price": 24749.7,
+        "changePct": 0.87,
         "three_factor": {
           "location": {
             "zone": "ABOVE_PDH",
             "pdh": 24579.9,
             "pdl": 24296.3,
-            "vwap": 24616.2,
-            "distance_to_pdh": 0.469,
-            "distance_to_pdl": 1.642,
+            "vwap": 24630.85,
+            "distance_to_pdh": 0.691,
+            "distance_to_pdl": 1.866,
             "vwap_position": "ABOVE",
             "tradeable": true
           },
           "behavior": {
             "type": "BREAKOUT",
             "description": "Strong bullish close above PDH (24580)",
-            "strength": 94
+            "strength": 100
           },
           "confirmation": {
-            "volume_ratio": 20.19,
+            "volume_ratio": 33.51,
             "volume_confirmed": true,
             "body_strong": true,
             "close_near_extreme": true,
@@ -302,77 +275,76 @@
       }
     },
     "mtfConsensus": {
-      "bullCount": 3,
+      "bullCount": 2,
       "bearCount": 0,
-      "neutralCount": 0,
+      "neutralCount": 1,
       "dominant": "BULLISH",
-      "aligned": true,
-      "alignmentPct": 100,
-      "probabilityBull": 95,
-      "probabilityBear": 5
+      "aligned": false,
+      "alignmentPct": 67,
+      "probabilityBull": 87,
+      "probabilityBear": 13
     },
     "ai": {
       "provider": "numpy_fallback",
       "featureVersion": "candle_ai_v1",
       "classProbabilities": {
-        "STRONG_BUY": 96.35,
-        "BUY": 3.64,
-        "NEUTRAL": 0.0,
-        "SELL": 0.0,
-        "STRONG_SELL": 0.01
+        "STRONG_BUY": 46.45,
+        "BUY": 20.38,
+        "NEUTRAL": 19.81,
+        "SELL": 5.87,
+        "STRONG_SELL": 7.48
       },
       "sequencePrediction": {
-        "nextMove": "UP",
-        "nextMovePts": 2.93,
-        "trendContinuationProb": 99.0,
-        "reversalProb": 5.82,
+        "nextMove": "DOWN",
+        "nextMovePts": -2.81,
+        "trendContinuationProb": 58.69,
+        "reversalProb": 44.97,
         "horizonSec": 300
       },
       "microstructure": {
-        "liquidityDensity": 100.0,
-        "structureDensity": 81.0,
-        "fakeBreakoutRisk": 20.06,
-        "stopHuntRisk": 12.01
+        "liquidityDensity": 67.0,
+        "structureDensity": 24.0,
+        "fakeBreakoutRisk": 15.25,
+        "stopHuntRisk": 40.01
       },
       "smc": {
         "state": "BULLISH_IMBALANCE",
-        "score": 100.0
+        "score": 60.85
       },
       "multiTimeframe": {
         "micro": {
           "trend": "BULL",
-          "momentum": 61.0
+          "momentum": 30.0
         },
         "medium": {
-          "trend": "BULL",
-          "momentum": 70.0
+          "trend": "NEUTRAL",
+          "momentum": 15.0
         },
         "macro": {
           "trend": "BULL",
           "momentum": 40.0
         },
-        "alignmentPct": 100.0
+        "alignmentPct": 67.0
       },
       "commandDeck": {
         "streamState": "LIVE",
         "modelProvider": "numpy_fallback",
-        "analysisLatencyMs": 27,
+        "analysisLatencyMs": 12,
         "pipelineCadenceMs": 1000,
-        "eventRatePerSec": 6.4,
-        "queueDepth": 2,
+        "eventRatePerSec": 4.94,
+        "queueDepth": 0,
         "cacheState": "HOT",
         "alerts": [
-          "High-probability continuation alignment across 3m/5m/15m",
           "3FA execution bias active: BUY"
         ]
       },
       "institutionalConfluence": {
-        "executionProbability": 93,
-        "smartMoneyAlignment": 100,
-        "institutionalFlow": 100,
-        "riskScore": 16,
-        "rewardScore": 90,
-        "riskRewardRatio": 5.62
+        "executionProbability": 53,
+        "smartMoneyAlignment": 63,
+        "institutionalFlow": 43,
+        "riskScore": 41,
+        "rewardScore": 46,
+        "riskRewardRatio": 1.12
       }
     }
   },
@@ -380,416 +352,51 @@
     "pattern": "BULLISH_CANDLE",
     "all_patterns": [],
     "structure": "BULLISH_CONTINUATION",
-    "strength": "STRONG",
-    "signal": "STRONG_BUY",
-    "confidence": 40,
+    "strength": "MODERATE",
+    "signal": "BUY",
+    "confidence": 30,
     "confluence": 0,
     "candle": {
-      "open": 58153.05,
-      "high": 58221.3,
-      "low": 58143.4,
-      "close": 58217.7,
-      "body_ratio": 0.83,
-      "upper_wick_ratio": 0.046,
-      "lower_wick_ratio": 0.124,
+      "open": 58351.35,
+      "high": 58382.25,
+      "low": 58340.2,
+      "close": 58375.0,
+      "body_ratio": 0.562,
+      "upper_wick_ratio": 0.172,
+      "lower_wick_ratio": 0.265,
       "is_bullish": true
     },
     "trend_context": {
-      "direction": "STRONG_BULLISH",
-      "bullish_count": 8,
-      "bearish_count": 0,
-      "avg_body_ratio": 0.551,
+      "direction": "BULLISH",
+      "bullish_count": 4,
+      "bearish_count": 4,
+      "avg_body_ratio": 0.419,
       "candles_analyzed": 8
     },
     "symbol": "BANKNIFTY",
     "timeframe": "5m",
     "dataSource": "LIVE",
-    "timestamp": "2026-11-06T12:40:54.010331+05:30",
-    "price": 58217.7,
-    "changePct": 0.77,
+    "timestamp": "2026-11-06T13:38:24.010205+05:30",
+    "price": 58375.0,
+    "changePct": 1.04,
     "three_factor": {
       "location": {
-        "zone": "ABOVE_PDH",
+        "zone": "NEAR_PDH",
         "pdh": 57847.65,
         "pdl": 56718.2,
-        "vwap": 57919.72,
-        "distance_to_pdh": 0.64,
-        "distance_to_pdl": 2.644,
+        "vwap": 58135.42,
+        "distance_to_pdh": 0.912,
+        "distance_to_pdl": 2.921,
         "vwap_position": "ABOVE",
         "tradeable": true
       },
       "behavior": {
         "type": "BREAKOUT",
         "description": "Strong bullish close above PDH (57848)",
-        "strength": 100
+        "strength": 76
       },
       "confirmation": {
-        "volume_ratio": 64.45,
-        "volume_confirmed": true,
-        "body_strong": true,
-        "close_near_extreme": true,
-        "candle_confirmed": true,
-        "confirmed": true
-      },
-      "alignment_score": 3,
-      "factors_pass": [
-        "LOCATION",
-        "BEHAVIOR",
-        "CONFIRMATION"
-      ],
-      "factors_fail": [],
-      "aligned": true,
-      "verdict": "BUY",
-      "reason": "All aligned \u2014 bullish breakout above PDH",
-      "market_active": true
-    },
-    "timeframes": {
-      "3m": {
-        "pattern": "BULLISH_CANDLE",
-        "all_patterns": [],
-        "structure": "BULLISH_CONTINUATION",
-        "strength": "STRONG",
-        "signal": "STRONG_BUY",
-        "confidence": 40,
-        "confluence": 0,
-        "candle": {
-          "open": 58152.15,
-          "high": 58221.3,
-          "low": 58139.35,
-          "close": 58217.7,
-          "body_ratio": 0.8,
-          "upper_wick_ratio": 0.044,
-          "lower_wick_ratio": 0.156,
-          "is_bullish": true
-        },
-        "trend_context": {
-          "direction": "STRONG_BULLISH",
-          "bullish_count": 8,
-          "bearish_count": 0,
-          "avg_body_ratio": 0.453,
-          "candles_analyzed": 8
-        },
-        "symbol": "BANKNIFTY",
-        "timeframe": "3m",
-        "dataSource": "LIVE",
-        "timestamp": "2026-11-06T12:40:54.009364+05:30",
-        "price": 58217.7,
-        "changePct": 0.77,
-        "three_factor": {
-          "location": {
-            "zone": "ABOVE_PDH",
-            "pdh": 57847.65,
-            "pdl": 56718.2,
-            "vwap": 57919.72,
-            "distance_to_pdh": 0.64,
-            "distance_to_pdl": 2.644,
-            "vwap_position": "ABOVE",
-            "tradeable": true
-          },
-          "behavior": {
-            "type": "BREAKOUT",
-            "description": "Strong bullish close above PDH (57848)",
-            "strength": 99
-          },
-          "confirmation": {
-            "volume_ratio": 79.45,
-            "volume_confirmed": true,
-            "body_strong": true,
-            "close_near_extreme": true,
-            "candle_confirmed": true,
-            "confirmed": true
-          },
-          "alignment_score": 3,
-          "factors_pass": [
-            "LOCATION",
-            "BEHAVIOR",
-            "CONFIRMATION"
-          ],
-          "factors_fail": [],
-          "aligned": true,
-          "verdict": "BUY",
-          "reason": "All aligned \u2014 bullish breakout above PDH",
-          "market_active": true
-        }
-      },
-      "5m": {
-        "pattern": "BULLISH_CANDLE",
-        "all_patterns": [],
-        "structure": "BULLISH_CONTINUATION",
-        "strength": "STRONG",
-        "signal": "STRONG_BUY",
-        "confidence": 40,
-        "confluence": 0,
-        "candle": {
-          "open": 58153.05,
-          "high": 58221.3,
-          "low": 58143.4,
-          "close": 58217.7,
-          "body_ratio": 0.83,
-          "upper_wick_ratio": 0.046,
-          "lower_wick_ratio": 0.124,
-          "is_bullish": true
-        },
-        "trend_context": {
-          "direction": "STRONG_BULLISH",
-          "bullish_count": 8,
-          "bearish_count": 0,
-          "avg_body_ratio": 0.551,
-          "candles_analyzed": 8
-        },
-        "symbol": "BANKNIFTY",
-        "timeframe": "5m",
-        "dataSource": "LIVE",
-        "timestamp": "2026-11-06T12:40:54.010331+05:30",
-        "price": 58217.7,
-        "changePct": 0.77,
-        "three_factor": {
-          "location": {
-            "zone": "ABOVE_PDH",
-            "pdh": 57847.65,
-            "pdl": 56718.2,
-            "vwap": 57919.72,
-            "distance_to_pdh": 0.64,
-            "distance_to_pdl": 2.644,
-            "vwap_position": "ABOVE",
-            "tradeable": true
-          },
-          "behavior": {
-            "type": "BREAKOUT",
-            "description": "Strong bullish close above PDH (57848)",
-            "strength": 100
-          },
-          "confirmation": {
-            "volume_ratio": 64.45,
-            "volume_confirmed": true,
-            "body_strong": true,
-            "close_near_extreme": true,
-            "candle_confirmed": true,
-            "confirmed": true
-          },
-          "alignment_score": 3,
-          "factors_pass": [
-            "LOCATION",
-            "BEHAVIOR",
-            "CONFIRMATION"
-          ],
-          "factors_fail": [],
-          "aligned": true,
-          "verdict": "BUY",
-          "reason": "All aligned \u2014 bullish breakout above PDH",
-          "market_active": true
-        }
-      },
-      "15m": {
-        "pattern": "BULLISH_MARUBOZU",
-        "all_patterns": [
-          {
-            "name": "BULLISH_MARUBOZU",
-            "structure": "BULLISH_CONTINUATION",
-            "weight": 0.85
-          }
-        ],
-        "structure": "BULLISH_CONTINUATION",
-        "strength": "STRONG",
-        "signal": "STRONG_BUY",
-        "confidence": 85,
-        "confluence": 1,
-        "candle": {
-          "open": 58065.65,
-          "high": 58221.3,
-          "low": 58054.05,
-          "close": 58217.7,
-          "body_ratio": 0.909,
-          "upper_wick_ratio": 0.022,
-          "lower_wick_ratio": 0.069,
-          "is_bullish": true
-        },
-        "trend_context": {
-          "direction": "STRONG_BULLISH",
-          "bullish_count": 6,
-          "bearish_count": 2,
-          "avg_body_ratio": 0.413,
-          "candles_analyzed": 8
-        },
-        "symbol": "BANKNIFTY",
-        "timeframe": "15m",
-        "dataSource": "LIVE",
-        "timestamp": "2026-11-06T12:40:54.010828+05:30",
-        "price": 58217.7,
-        "changePct": 0.77,
-        "three_factor": {
-          "location": {
-            "zone": "ABOVE_PDH",
-            "pdh": 57847.65,
-            "pdl": 56718.2,
-            "vwap": 57919.72,
-            "distance_to_pdh": 0.64,
-            "distance_to_pdl": 2.644,
-            "vwap_position": "ABOVE",
-            "tradeable": true
-          },
-          "behavior": {
-            "type": "BREAKOUT",
-            "description": "Strong bullish close above PDH (57848)",
-            "strength": 100
-          },
-          "confirmation": {
-            "volume_ratio": 17.03,
-            "volume_confirmed": true,
-            "body_strong": true,
-            "close_near_extreme": true,
-            "candle_confirmed": true,
-            "confirmed": true
-          },
-          "alignment_score": 3,
-          "factors_pass": [
-            "LOCATION",
-            "BEHAVIOR",
-            "CONFIRMATION"
-          ],
-          "factors_fail": [],
-          "aligned": true,
-          "verdict": "BUY",
-          "reason": "All aligned \u2014 bullish breakout above PDH",
-          "market_active": true
-        }
-      }
-    },
-    "mtfConsensus": {
-      "bullCount": 3,
-      "bearCount": 0,
-      "neutralCount": 0,
-      "dominant": "BULLISH",
-      "aligned": true,
-      "alignmentPct": 100,
-      "probabilityBull": 95,
-      "probabilityBear": 5
-    },
-    "ai": {
-      "provider": "numpy_fallback",
-      "featureVersion": "candle_ai_v1",
-      "classProbabilities": {
-        "STRONG_BUY": 96.89,
-        "BUY": 3.1,
-        "NEUTRAL": 0.0,
-        "SELL": 0.0,
-        "STRONG_SELL": 0.01
-      },
-      "sequencePrediction": {
-        "nextMove": "UP",
-        "nextMovePts": 1.24,
-        "trendContinuationProb": 99.0,
-        "reversalProb": 5.39,
-        "horizonSec": 300
-      },
-      "microstructure": {
-        "liquidityDensity": 100.0,
-        "structureDensity": 81.0,
-        "fakeBreakoutRisk": 18.31,
-        "stopHuntRisk": 12.0
-      },
-      "smc": {
-        "state": "BULLISH_IMBALANCE",
-        "score": 100.0
-      },
-      "multiTimeframe": {
-        "micro": {
-          "trend": "BULL",
-          "momentum": 40.0
-        },
-        "medium": {
-          "trend": "BULL",
-          "momentum": 40.0
-        },
-        "macro": {
-          "trend": "BULL",
-          "momentum": 85.0
-        },
-        "alignmentPct": 100.0
-      },
-      "commandDeck": {
-        "streamState": "LIVE",
-        "modelProvider": "numpy_fallback",
-        "analysisLatencyMs": 23,
-        "pipelineCadenceMs": 1000,
-        "eventRatePerSec": 6.4,
-        "queueDepth": 1,
-        "cacheState": "HOT",
-        "alerts": [
-          "High-probability continuation alignment across 3m/5m/15m",
-          "3FA execution bias active: BUY"
-        ]
-      },
-      "institutionalConfluence": {
-        "executionProbability": 88,
-        "smartMoneyAlignment": 100,
-        "institutionalFlow": 100,
-        "riskScore": 15,
-        "rewardScore": 81,
-        "riskRewardRatio": 5.4
-      }
-    }
-  },
-  "SENSEX": {
-    "pattern": "BULLISH_ENGULFING",
-    "all_patterns": [
-      {
-        "name": "BULLISH_ENGULFING",
-        "structure": "BULLISH_REVERSAL",
-        "weight": 0.9
-      },
-      {
-        "name": "BULLISH_MARUBOZU",
-        "structure": "BULLISH_CONTINUATION",
-        "weight": 0.85
-      }
-    ],
-    "structure": "BULLISH_REVERSAL",
-    "strength": "STRONG",
-    "signal": "STRONG_BUY",
-    "confidence": 98,
-    "confluence": 2,
-    "candle": {
-      "open": 79990.29,
-      "high": 80060.02,
-      "low": 79987.44,
-      "close": 80060.02,
-      "body_ratio": 0.961,
-      "upper_wick_ratio": 0.0,
-      "lower_wick_ratio": 0.039,
-      "is_bullish": true
-    },
-    "trend_context": {
-      "direction": "BULLISH",
-      "bullish_count": 7,
-      "bearish_count": 1,
-      "avg_body_ratio": 0.59,
-      "candles_analyzed": 8
-    },
-    "symbol": "SENSEX",
-    "timeframe": "5m",
-    "dataSource": "LIVE",
-    "timestamp": "2026-11-06T12:40:54.012014+05:30",
-    "price": 80060.02,
-    "changePct": 0.95,
-    "three_factor": {
-      "location": {
-        "zone": "ABOVE_PDH",
-        "pdh": 79470.03,
-        "pdl": 78520.56,
-        "vwap": 79909.02,
-        "distance_to_pdh": 0.742,
-        "distance_to_pdl": 1.961,
-        "vwap_position": "AT",
-        "tradeable": true
-      },
-      "behavior": {
-        "type": "BREAKOUT",
-        "description": "Strong bullish close above PDH (79470)",
-        "strength": 100
-      },
-      "confirmation": {
-        "volume_ratio": 71.89,
+        "volume_ratio": 55.04,
         "volume_confirmed": true,
         "body_strong": true,
         "close_near_extreme": true,
@@ -818,46 +425,46 @@
         "confidence": 15,
         "confluence": 0,
         "candle": {
-          "open": 80024.72,
-          "high": 80060.02,
-          "low": 79987.44,
-          "close": 80060.02,
-          "body_ratio": 0.486,
-          "upper_wick_ratio": 0.0,
-          "lower_wick_ratio": 0.514,
+          "open": 58360.85,
+          "high": 58382.25,
+          "low": 58350.1,
+          "close": 58375.0,
+          "body_ratio": 0.44,
+          "upper_wick_ratio": 0.226,
+          "lower_wick_ratio": 0.334,
           "is_bullish": true
         },
         "trend_context": {
           "direction": "BULLISH",
-          "bullish_count": 7,
-          "bearish_count": 1,
-          "avg_body_ratio": 0.331,
+          "bullish_count": 4,
+          "bearish_count": 4,
+          "avg_body_ratio": 0.379,
           "candles_analyzed": 8
         },
-        "symbol": "SENSEX",
+        "symbol": "BANKNIFTY",
         "timeframe": "3m",
         "dataSource": "LIVE",
-        "timestamp": "2026-11-06T12:40:54.011268+05:30",
-        "price": 80060.02,
-        "changePct": 0.95,
+        "timestamp": "2026-11-06T13:38:24.009796+05:30",
+        "price": 58375.0,
+        "changePct": 1.04,
         "three_factor": {
           "location": {
-            "zone": "ABOVE_PDH",
-            "pdh": 79470.03,
-            "pdl": 78520.56,
-            "vwap": 79952.18,
-            "distance_to_pdh": 0.742,
-            "distance_to_pdl": 1.961,
+            "zone": "NEAR_PDH",
+            "pdh": 57847.65,
+            "pdl": 56718.2,
+            "vwap": 58342.86,
+            "distance_to_pdh": 0.912,
+            "distance_to_pdl": 2.921,
             "vwap_position": "AT",
             "tradeable": true
           },
           "behavior": {
             "type": "MOMENTUM",
-            "description": "Bullish momentum above PDH (79470)",
-            "strength": 48
+            "description": "Bullish momentum above PDH (57848)",
+            "strength": 55
           },
           "confirmation": {
-            "volume_ratio": 81.13,
+            "volume_ratio": 102.11,
             "volume_confirmed": true,
             "body_strong": false,
             "close_near_extreme": true,
@@ -878,65 +485,54 @@
         }
       },
       "5m": {
-        "pattern": "BULLISH_ENGULFING",
-        "all_patterns": [
-          {
-            "name": "BULLISH_ENGULFING",
-            "structure": "BULLISH_REVERSAL",
-            "weight": 0.9
-          },
-          {
-            "name": "BULLISH_MARUBOZU",
-            "structure": "BULLISH_CONTINUATION",
-            "weight": 0.85
-          }
-        ],
-        "structure": "BULLISH_REVERSAL",
-        "strength": "STRONG",
-        "signal": "STRONG_BUY",
-        "confidence": 98,
-        "confluence": 2,
+        "pattern": "BULLISH_CANDLE",
+        "all_patterns": [],
+        "structure": "BULLISH_CONTINUATION",
+        "strength": "MODERATE",
+        "signal": "BUY",
+        "confidence": 30,
+        "confluence": 0,
         "candle": {
-          "open": 79990.29,
-          "high": 80060.02,
-          "low": 79987.44,
-          "close": 80060.02,
-          "body_ratio": 0.961,
-          "upper_wick_ratio": 0.0,
-          "lower_wick_ratio": 0.039,
+          "open": 58351.35,
+          "high": 58382.25,
+          "low": 58340.2,
+          "close": 58375.0,
+          "body_ratio": 0.562,
+          "upper_wick_ratio": 0.172,
+          "lower_wick_ratio": 0.265,
           "is_bullish": true
         },
         "trend_context": {
           "direction": "BULLISH",
-          "bullish_count": 7,
-          "bearish_count": 1,
-          "avg_body_ratio": 0.59,
+          "bullish_count": 4,
+          "bearish_count": 4,
+          "avg_body_ratio": 0.419,
           "candles_analyzed": 8
         },
-        "symbol": "SENSEX",
+        "symbol": "BANKNIFTY",
         "timeframe": "5m",
         "dataSource": "LIVE",
-        "timestamp": "2026-11-06T12:40:54.012014+05:30",
-        "price": 80060.02,
-        "changePct": 0.95,
+        "timestamp": "2026-11-06T13:38:24.010205+05:30",
+        "price": 58375.0,
+        "changePct": 1.04,
         "three_factor": {
           "location": {
-            "zone": "ABOVE_PDH",
-            "pdh": 79470.03,
-            "pdl": 78520.56,
-            "vwap": 79909.02,
-            "distance_to_pdh": 0.742,
-            "distance_to_pdl": 1.961,
-            "vwap_position": "AT",
+            "zone": "NEAR_PDH",
+            "pdh": 57847.65,
+            "pdl": 56718.2,
+            "vwap": 58135.42,
+            "distance_to_pdh": 0.912,
+            "distance_to_pdl": 2.921,
+            "vwap_position": "ABOVE",
             "tradeable": true
           },
           "behavior": {
             "type": "BREAKOUT",
-            "description": "Strong bullish close above PDH (79470)",
-            "strength": 100
+            "description": "Strong bullish close above PDH (57848)",
+            "strength": 76
           },
           "confirmation": {
-            "volume_ratio": 71.89,
+            "volume_ratio": 55.04,
             "volume_confirmed": true,
             "body_strong": true,
             "close_near_extreme": true,
@@ -957,6 +553,360 @@
         }
       },
       "15m": {
+        "pattern": "TWEEZER_BOTTOM",
+        "all_patterns": [
+          {
+            "name": "TWEEZER_BOTTOM",
+            "structure": "BULLISH_REVERSAL",
+            "weight": 0.7
+          }
+        ],
+        "structure": "BULLISH_REVERSAL",
+        "strength": "STRONG",
+        "signal": "STRONG_BUY",
+        "confidence": 70,
+        "confluence": 1,
+        "candle": {
+          "open": 58303.05,
+          "high": 58382.25,
+          "low": 58296.75,
+          "close": 58375.0,
+          "body_ratio": 0.842,
+          "upper_wick_ratio": 0.085,
+          "lower_wick_ratio": 0.074,
+          "is_bullish": true
+        },
+        "trend_context": {
+          "direction": "STRONG_BEARISH",
+          "bullish_count": 1,
+          "bearish_count": 2,
+          "avg_body_ratio": 0.33,
+          "candles_analyzed": 3
+        },
+        "symbol": "BANKNIFTY",
+        "timeframe": "15m",
+        "dataSource": "LIVE",
+        "timestamp": "2026-11-06T13:38:24.010439+05:30",
+        "price": 58375.0,
+        "changePct": 1.04,
+        "three_factor": {
+          "location": {
+            "zone": "NEAR_PDH",
+            "pdh": 57847.65,
+            "pdl": 56718.2,
+            "vwap": 58335.57,
+            "distance_to_pdh": 0.912,
+            "distance_to_pdl": 2.921,
+            "vwap_position": "AT",
+            "tradeable": true
+          },
+          "behavior": {
+            "type": "BREAKOUT",
+            "description": "Strong bullish close above PDH (57848)",
+            "strength": 100
+          },
+          "confirmation": {
+            "volume_ratio": 34.04,
+            "volume_confirmed": true,
+            "body_strong": true,
+            "close_near_extreme": true,
+            "candle_confirmed": true,
+            "confirmed": true
+          },
+          "alignment_score": 3,
+          "factors_pass": [
+            "LOCATION",
+            "BEHAVIOR",
+            "CONFIRMATION"
+          ],
+          "factors_fail": [],
+          "aligned": true,
+          "verdict": "BUY",
+          "reason": "All aligned \u2014 bullish breakout above PDH",
+          "market_active": true
+        }
+      }
+    },
+    "mtfConsensus": {
+      "bullCount": 2,
+      "bearCount": 0,
+      "neutralCount": 1,
+      "dominant": "BULLISH",
+      "aligned": false,
+      "alignmentPct": 67,
+      "probabilityBull": 87,
+      "probabilityBear": 13
+    },
+    "ai": {
+      "provider": "numpy_fallback",
+      "featureVersion": "candle_ai_v1",
+      "classProbabilities": {
+        "STRONG_BUY": 92.33,
+        "BUY": 7.43,
+        "NEUTRAL": 0.09,
+        "SELL": 0.06,
+        "STRONG_SELL": 0.08
+      },
+      "sequencePrediction": {
+        "nextMove": "UP",
+        "nextMovePts": 1.55,
+        "trendContinuationProb": 82.05,
+        "reversalProb": 22.7,
+        "horizonSec": 300
+      },
+      "microstructure": {
+        "liquidityDensity": 67.0,
+        "structureDensity": 60.75,
+        "fakeBreakoutRisk": 19.78,
+        "stopHuntRisk": 12.0
+      },
+      "smc": {
+        "state": "BULLISH_IMBALANCE",
+        "score": 84.95
+      },
+      "multiTimeframe": {
+        "micro": {
+          "trend": "NEUTRAL",
+          "momentum": 15.0
+        },
+        "medium": {
+          "trend": "BULL",
+          "momentum": 30.0
+        },
+        "macro": {
+          "trend": "BULL",
+          "momentum": 70.0
+        },
+        "alignmentPct": 67.0
+      },
+      "commandDeck": {
+        "streamState": "LIVE",
+        "modelProvider": "numpy_fallback",
+        "analysisLatencyMs": 24,
+        "pipelineCadenceMs": 1000,
+        "eventRatePerSec": 4.94,
+        "queueDepth": 1,
+        "cacheState": "HOT",
+        "alerts": [
+          "High-probability continuation alignment across 3m/5m/15m",
+          "3FA execution bias active: BUY"
+        ]
+      },
+      "institutionalConfluence": {
+        "executionProbability": 70,
+        "smartMoneyAlignment": 79,
+        "institutionalFlow": 76,
+        "riskScore": 21,
+        "rewardScore": 66,
+        "riskRewardRatio": 3.14
+      }
+    }
+  },
+  "SENSEX": {
+    "pattern": null,
+    "all_patterns": [],
+    "structure": "NEUTRAL",
+    "strength": "MODERATE",
+    "signal": "NEUTRAL",
+    "confidence": 15,
+    "confluence": 0,
+    "candle": {
+      "open": 80188.11,
+      "high": 80213.67,
+      "low": 80165.75,
+      "close": 80208.45,
+      "body_ratio": 0.424,
+      "upper_wick_ratio": 0.109,
+      "lower_wick_ratio": 0.467,
+      "is_bullish": true
+    },
+    "trend_context": {
+      "direction": "BULLISH",
+      "bullish_count": 6,
+      "bearish_count": 2,
+      "avg_body_ratio": 0.509,
+      "candles_analyzed": 8
+    },
+    "symbol": "SENSEX",
+    "timeframe": "5m",
+    "dataSource": "LIVE",
+    "timestamp": "2026-11-06T13:38:24.011206+05:30",
+    "price": 80208.45,
+    "changePct": 1.13,
+    "three_factor": {
+      "location": {
+        "zone": "NEAR_PDH",
+        "pdh": 79470.03,
+        "pdl": 78520.56,
+        "vwap": 79610.44,
+        "distance_to_pdh": 0.929,
+        "distance_to_pdl": 2.15,
+        "vwap_position": "ABOVE",
+        "tradeable": true
+      },
+      "behavior": {
+        "type": "MOMENTUM",
+        "description": "Bullish momentum above PDH (79470)",
+        "strength": 83
+      },
+      "confirmation": {
+        "volume_ratio": 26.28,
+        "volume_confirmed": true,
+        "body_strong": false,
+        "close_near_extreme": true,
+        "candle_confirmed": false,
+        "confirmed": false
+      },
+      "alignment_score": 3,
+      "factors_pass": [
+        "LOCATION",
+        "BEHAVIOR",
+        "CONFIRMATION"
+      ],
+      "factors_fail": [],
+      "aligned": true,
+      "verdict": "BUY",
+      "reason": "All aligned \u2014 bullish momentum above PDH",
+      "market_active": true
+    },
+    "timeframes": {
+      "3m": {
+        "pattern": "BULLISH_CANDLE",
+        "all_patterns": [],
+        "structure": "BULLISH_CONTINUATION",
+        "strength": "STRONG",
+        "signal": "STRONG_BUY",
+        "confidence": 40,
+        "confluence": 0,
+        "candle": {
+          "open": 80185.58,
+          "high": 80213.67,
+          "low": 80185.23,
+          "close": 80208.45,
+          "body_ratio": 0.804,
+          "upper_wick_ratio": 0.184,
+          "lower_wick_ratio": 0.012,
+          "is_bullish": true
+        },
+        "trend_context": {
+          "direction": "BULLISH",
+          "bullish_count": 6,
+          "bearish_count": 2,
+          "avg_body_ratio": 0.569,
+          "candles_analyzed": 8
+        },
+        "symbol": "SENSEX",
+        "timeframe": "3m",
+        "dataSource": "LIVE",
+        "timestamp": "2026-11-06T13:38:24.010662+05:30",
+        "price": 80208.45,
+        "changePct": 1.13,
+        "three_factor": {
+          "location": {
+            "zone": "NEAR_PDH",
+            "pdh": 79470.03,
+            "pdl": 78520.56,
+            "vwap": 80170.23,
+            "distance_to_pdh": 0.929,
+            "distance_to_pdl": 2.15,
+            "vwap_position": "AT",
+            "tradeable": true
+          },
+          "behavior": {
+            "type": "BREAKOUT",
+            "description": "Strong bullish close above PDH (79470)",
+            "strength": 100
+          },
+          "confirmation": {
+            "volume_ratio": 88.72,
+            "volume_confirmed": true,
+            "body_strong": true,
+            "close_near_extreme": true,
+            "candle_confirmed": true,
+            "confirmed": true
+          },
+          "alignment_score": 3,
+          "factors_pass": [
+            "LOCATION",
+            "BEHAVIOR",
+            "CONFIRMATION"
+          ],
+          "factors_fail": [],
+          "aligned": true,
+          "verdict": "BUY",
+          "reason": "All aligned \u2014 bullish breakout above PDH",
+          "market_active": true
+        }
+      },
+      "5m": {
+        "pattern": null,
+        "all_patterns": [],
+        "structure": "NEUTRAL",
+        "strength": "MODERATE",
+        "signal": "NEUTRAL",
+        "confidence": 15,
+        "confluence": 0,
+        "candle": {
+          "open": 80188.11,
+          "high": 80213.67,
+          "low": 80165.75,
+          "close": 80208.45,
+          "body_ratio": 0.424,
+          "upper_wick_ratio": 0.109,
+          "lower_wick_ratio": 0.467,
+          "is_bullish": true
+        },
+        "trend_context": {
+          "direction": "BULLISH",
+          "bullish_count": 6,
+          "bearish_count": 2,
+          "avg_body_ratio": 0.509,
+          "candles_analyzed": 8
+        },
+        "symbol": "SENSEX",
+        "timeframe": "5m",
+        "dataSource": "LIVE",
+        "timestamp": "2026-11-06T13:38:24.011206+05:30",
+        "price": 80208.45,
+        "changePct": 1.13,
+        "three_factor": {
+          "location": {
+            "zone": "NEAR_PDH",
+            "pdh": 79470.03,
+            "pdl": 78520.56,
+            "vwap": 79610.44,
+            "distance_to_pdh": 0.929,
+            "distance_to_pdl": 2.15,
+            "vwap_position": "ABOVE",
+            "tradeable": true
+          },
+          "behavior": {
+            "type": "MOMENTUM",
+            "description": "Bullish momentum above PDH (79470)",
+            "strength": 83
+          },
+          "confirmation": {
+            "volume_ratio": 26.28,
+            "volume_confirmed": true,
+            "body_strong": false,
+            "close_near_extreme": true,
+            "candle_confirmed": false,
+            "confirmed": false
+          },
+          "alignment_score": 3,
+          "factors_pass": [
+            "LOCATION",
+            "BEHAVIOR",
+            "CONFIRMATION"
+          ],
+          "factors_fail": [],
+          "aligned": true,
+          "verdict": "BUY",
+          "reason": "All aligned \u2014 bullish momentum above PDH",
+          "market_active": true
+        }
+      },
+      "15m": {
         "pattern": "BULLISH_MARUBOZU",
         "all_patterns": [
           {
@@ -971,37 +921,37 @@
         "confidence": 85,
         "confluence": 1,
         "candle": {
-          "open": 79950.13,
-          "high": 80060.02,
-          "low": 79944.92,
-          "close": 80060.02,
-          "body_ratio": 0.955,
-          "upper_wick_ratio": 0.0,
-          "lower_wick_ratio": 0.045,
+          "open": 80132.97,
+          "high": 80213.67,
+          "low": 80132.4,
+          "close": 80208.45,
+          "body_ratio": 0.929,
+          "upper_wick_ratio": 0.064,
+          "lower_wick_ratio": 0.007,
           "is_bullish": true
         },
         "trend_context": {
           "direction": "STRONG_BULLISH",
-          "bullish_count": 6,
-          "bearish_count": 2,
-          "avg_body_ratio": 0.368,
-          "candles_analyzed": 8
+          "bullish_count": 3,
+          "bearish_count": 0,
+          "avg_body_ratio": 0.554,
+          "candles_analyzed": 3
         },
         "symbol": "SENSEX",
         "timeframe": "15m",
         "dataSource": "LIVE",
-        "timestamp": "2026-11-06T12:40:54.012396+05:30",
-        "price": 80060.02,
-        "changePct": 0.95,
+        "timestamp": "2026-11-06T13:38:24.011483+05:30",
+        "price": 80208.45,
+        "changePct": 1.13,
         "three_factor": {
           "location": {
-            "zone": "ABOVE_PDH",
+            "zone": "NEAR_PDH",
             "pdh": 79470.03,
             "pdl": 78520.56,
-            "vwap": 79798.43,
-            "distance_to_pdh": 0.742,
-            "distance_to_pdl": 1.961,
-            "vwap_position": "ABOVE",
+            "vwap": 80153.65,
+            "distance_to_pdh": 0.929,
+            "distance_to_pdl": 2.15,
+            "vwap_position": "AT",
             "tradeable": true
           },
           "behavior": {
@@ -1010,7 +960,7 @@
             "strength": 100
           },
           "confirmation": {
-            "volume_ratio": 16.59,
+            "volume_ratio": 27.85,
             "volume_confirmed": true,
             "body_strong": true,
             "close_near_extreme": true,
@@ -1045,37 +995,37 @@
       "provider": "numpy_fallback",
       "featureVersion": "candle_ai_v1",
       "classProbabilities": {
-        "STRONG_BUY": 95.52,
-        "BUY": 4.46,
-        "NEUTRAL": 0.0,
-        "SELL": 0.01,
-        "STRONG_SELL": 0.01
+        "STRONG_BUY": 56.67,
+        "BUY": 20.14,
+        "NEUTRAL": 13.71,
+        "SELL": 4.06,
+        "STRONG_SELL": 5.41
       },
       "sequencePrediction": {
-        "nextMove": "UP",
-        "nextMovePts": 27.88,
-        "trendContinuationProb": 99.0,
-        "reversalProb": 8.36,
+        "nextMove": "DOWN",
+        "nextMovePts": -3.58,
+        "trendContinuationProb": 66.71,
+        "reversalProb": 37.79,
         "horizonSec": 300
       },
       "microstructure": {
         "liquidityDensity": 67.0,
-        "structureDensity": 81.0,
-        "fakeBreakoutRisk": 30.65,
-        "stopHuntRisk": 12.03
+        "structureDensity": 36.0,
+        "fakeBreakoutRisk": 18.77,
+        "stopHuntRisk": 24.0
       },
       "smc": {
         "state": "BULLISH_IMBALANCE",
-        "score": 94.85
+        "score": 72.85
       },
       "multiTimeframe": {
         "micro": {
-          "trend": "NEUTRAL",
-          "momentum": 15.0
+          "trend": "BULL",
+          "momentum": 40.0
         },
         "medium": {
-          "trend": "BULL",
-          "momentum": 98.0
+          "trend": "NEUTRAL",
+          "momentum": 15.0
         },
         "macro": {
           "trend": "BULL",
@@ -1086,23 +1036,22 @@
       "commandDeck": {
         "streamState": "LIVE",
         "modelProvider": "numpy_fallback",
-        "analysisLatencyMs": 51,
+        "analysisLatencyMs": 21,
         "pipelineCadenceMs": 1000,
         "eventRatePerSec": 4.94,
-        "queueDepth": 4,
+        "queueDepth": 1,
         "cacheState": "HOT",
         "alerts": [
-          "High-probability continuation alignment across 3m/5m/15m",
           "3FA execution bias active: BUY"
         ]
       },
       "institutionalConfluence": {
-        "executionProbability": 91,
-        "smartMoneyAlignment": 85,
-        "institutionalFlow": 96,
-        "riskScore": 24,
-        "rewardScore": 99,
-        "riskRewardRatio": 4.12
+        "executionProbability": 60,
+        "smartMoneyAlignment": 71,
+        "institutionalFlow": 51,
+        "riskScore": 28,
+        "rewardScore": 51,
+        "riskRewardRatio": 1.82
       }
     }
   }

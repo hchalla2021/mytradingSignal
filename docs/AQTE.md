@@ -612,6 +612,13 @@ oppose it and outnumber those aligned (`AQTE_ENGINE_VETO=false` disables the vet
 They never approve or create an order. An engine failure is logged once and leaves the
 rule snapshot and entries unaffected.
 
+For Scalp/Swing entries, AQTE additionally requires the existing Smart AI Strategy
+Lab's fresh, live 5-minute consensus to be fired in the same direction. Missing, stale,
+neutral, or opposite consensus blocks the candidate with a specific reason. This is
+confirmation only: it cannot create an AQTE candidate, place an order, or bypass AQTE
+quality, risk, feed, arming, or broker checks. Morning entries remain on their separate
+authorization path, and the Smart AI executor is not invoked.
+
 The dashboard's engine deck (inside the existing AQTE section) shows the 12 cards with
 filters and per-rule evidence on demand, the market context strip, the controller's top
 ranked opportunity with its exact block reason, an orchestration and risk checklist

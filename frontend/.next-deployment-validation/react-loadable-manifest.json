@@ -1,0 +1,175 @@
+{
+  "..\\app\\chart\\[symbol]\\ChartContent.tsx -> @/components/ChartIntelligence": {
+    "id": 9816,
+    "files": [
+      "static/chunks/9816.cc0e618946bf9338.js"
+    ]
+  },
+  "..\\app\\chart\\[symbol]\\page.tsx -> ./ChartContent": {
+    "id": 7662,
+    "files": [
+      "static/chunks/9019-4dabe40ef7703fb7.js",
+      "static/chunks/3792.941890ac855badc4.js",
+      "static/chunks/7662.94ec549808b1a428.js"
+    ]
+  },
+  "..\\app\\page.tsx -> @/components/AQTESection": {
+    "id": 9533,
+    "files": [
+      "static/chunks/426.5001f6e8ca03b98f.js",
+      "static/chunks/9533.be8dc4cba6ffa933.js"
+    ]
+  },
+  "..\\app\\page.tsx -> @/components/CRTBTSTCard": {
+    "id": 2943,
+    "files": [
+      "static/chunks/2943.0e0f3b780f5da08b.js"
+    ]
+  },
+  "..\\app\\page.tsx -> @/components/ChartWorkspace": {
+    "id": 6519,
+    "files": [
+      "static/chunks/8989-e6b1394d0e2995fa.js",
+      "static/chunks/3792.941890ac855badc4.js",
+      "static/chunks/426.5001f6e8ca03b98f.js",
+      "static/css/3bb2570afeb00396.css",
+      "static/chunks/6519.c54d7d1ff5bb239f.js"
+    ]
+  },
+  "..\\app\\page.tsx -> @/components/ExpiryExplosionZone": {
+    "id": 6412,
+    "files": [
+      "static/chunks/6412.366ba14f8cf3b0cc.js"
+    ]
+  },
+  "..\\app\\page.tsx -> @/components/ICTIntelligence": {
+    "id": 2370,
+    "files": [
+      "static/chunks/2370.1dab4770bd934b1f.js"
+    ]
+  },
+  "..\\app\\page.tsx -> @/components/InstitutionalCompass": {
+    "id": 9724,
+    "files": [
+      "static/chunks/9724.2e857b61c3d2e4c8.js"
+    ]
+  },
+  "..\\app\\page.tsx -> @/components/MarketEdgeIntelligence": {
+    "id": 5712,
+    "files": [
+      "static/chunks/5712.11cde2171f399662.js"
+    ]
+  },
+  "..\\app\\page.tsx -> @/components/MarketRegimeIntelligence": {
+    "id": 6034,
+    "files": [
+      "static/chunks/6034.1863c368ebe33a81.js"
+    ]
+  },
+  "..\\app\\page.tsx -> @/components/SMCStructureSection": {
+    "id": 7818,
+    "files": [
+      "static/chunks/7818.8714a3cf6228215a.js"
+    ]
+  },
+  "..\\app\\page.tsx -> @/components/SectionTitle": {
+    "id": 3266,
+    "files": [
+      "static/chunks/3266.e7fe1a883b391dc4.js"
+    ]
+  },
+  "..\\app\\page.tsx -> @/components/TopAISignalBar": {
+    "id": 9548,
+    "files": [
+      "static/chunks/9548.2719d18c7764c31b.js"
+    ]
+  },
+  "..\\app\\page.tsx -> @/components/TradingIntelligenceEngine": {
+    "id": 4662,
+    "files": [
+      "static/chunks/4662.f41e6606ed57cdd6.js"
+    ]
+  },
+  "..\\app\\page.tsx -> @/components/TrendBaseCard": {
+    "id": 1348,
+    "files": [
+      "static/chunks/1348.e76577df745fea9e.js"
+    ]
+  },
+  "..\\app\\page.tsx -> @/components/VolumePulseCard": {
+    "id": 9845,
+    "files": [
+      "static/chunks/9845.ca3b7691f8da730b.js"
+    ]
+  },
+  "..\\components\\AQTESection.tsx -> @/components/AQTEChart": {
+    "id": 6927,
+    "files": [
+      "static/chunks/8989-e6b1394d0e2995fa.js",
+      "static/chunks/6927.a4ca33ceb489fd57.js"
+    ]
+  },
+  "..\\components\\ChartWorkspace.tsx -> ./FuturesChart": {
+    "id": 2156,
+    "files": []
+  },
+  "..\\components\\ChartWorkspace.tsx -> ./FuturesTerminal": {
+    "id": 9252,
+    "files": [
+      "static/chunks/6234.5be2727343713f74.js",
+      "static/css/7fd11b5fb4a3cebe.css",
+      "static/chunks/9252.e4f38f5e5e12ed13.js"
+    ]
+  },
+  "..\\components\\ChartWorkspace.tsx -> ./MultiTimeframeChart": {
+    "id": 8517,
+    "files": [
+      "static/chunks/6234.5be2727343713f74.js",
+      "static/css/63f4ed61cca2f40f.css",
+      "static/chunks/8517.05dd25826f9defb9.js"
+    ]
+  },
+  "..\\components\\InstitutionalWorkspace.tsx -> @/components/FIIDIIFlowStrip": {
+    "id": 6228,
+    "files": [
+      "static/chunks/6228.e4bd82f2d76cad8d.js"
+    ]
+  },
+  "..\\components\\InstitutionalWorkspace.tsx -> @/components/SmartAIAlgoSection": {
+    "id": 1534,
+    "files": [
+      "static/chunks/1534.771f5087a8f9c3eb.js"
+    ]
+  },
+  "..\\components\\LiveMarketIndexTabs.tsx -> @/components/IndexCard": {
+    "id": 3299,
+    "files": [
+      "static/chunks/3299.ff42f35b39194d0b.js"
+    ]
+  },
+  "..\\lib\\trade-status\\plugins.tsx -> @/components/CandleIntelligenceEngine": {
+    "id": 7225,
+    "files": [
+      "static/chunks/7225.31fc76e0ef5ec3f6.js"
+    ]
+  },
+  "..\\lib\\trade-status\\plugins.tsx -> @/components/MarketCompassDashboard": {
+    "id": 9740,
+    "files": [
+      "static/chunks/3322.d947891a1ed1f291.js"
+    ]
+  },
+  "..\\lib\\trade-status\\plugins.tsx -> @/components/MarketLiquidityIntelligence": {
+    "id": 8954,
+    "files": [
+      "static/chunks/3792.941890ac855badc4.js",
+      "static/chunks/8954.d385297387f4fc88.js"
+    ]
+  },
+  "..\\lib\\trade-status\\plugins.tsx -> @/components/TradingSignalPanel": {
+    "id": 1646,
+    "files": [
+      "static/chunks/1646.883e7caba2abc260.js"
+    ]
+  }
+}

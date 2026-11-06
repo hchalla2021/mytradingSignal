@@ -45,6 +45,7 @@ ENTRY_RETRY_SECONDS = 5
 ENTRY_SCAN_AUDIT_SECONDS = 60
 DAILY_CONTROL_DEFAULTS_VERSION = 1
 AUTOMATION_APPROVAL_VERSION = 1
+SMART_AI_CONFIRMATION_MAX_AGE_SECONDS = 30
 ENTRY_CUTOFF_MINUTE = 15 * 60 + 15
 MARKET_WAIT = "Waiting for market: auto trade arms on weekdays 09:15 to 15:15 IST"
 # Kite rejects more than 25 modifications per order; trailing must leave headroom for the exit.
@@ -92,6 +93,49 @@ def broker_client():
     client = KiteConnect(api_key=settings.zerodha_api_key, timeout=5)
     client.set_access_token(settings.zerodha_access_token)
     return client
+
+
+def strategy_lab_confirmation_reason(result, decision, now=None):
+    if not isinstance(result, dict):
+        return "Smart AI 5-minute confirmation is unavailable"
+    if result.get("data_status") != "LIVE":
+        return "Smart AI market data is not live"
+    tick_age = result.get("tick_age_seconds")
+    if (type(tick_age) not in (int, float) or not math.isfinite(tick_age)
+            or tick_age < 0 or tick_age > 10):
+        return "Smart AI market data is stale"
+
+    lab = result.get("strategy_lab")
+    if not isinstance(lab, dict):
+        return "Smart AI 5-minute Strategy Lab data is unavailable"
+    updated = lab.get("updated")
+    if type(updated) not in (int, float) or not math.isfinite(updated):
+        return "Smart AI 5-minute Strategy Lab timestamp is unavailable"
+    age = (time.time() if now is None else now) - updated / 1000
+    if age < 0 or age > SMART_AI_CONFIRMATION_MAX_AGE_SECONDS:
+        return "Smart AI 5-minute Strategy Lab data is stale"
+
+    consensus = lab.get("consensus")
+    if not isinstance(consensus, dict) or consensus.get("fired") is not True:
+        return "Smart AI 5-minute consensus is not fired"
+    expected = {"BUY CE": "BUY_CE", "BUY PE": "BUY_PE"}.get(decision)
+    if expected is None:
+        return "AQTE entry direction is unavailable for Smart AI confirmation"
+    actual = consensus.get("signal")
+    if actual != expected:
+        return f"Smart AI 5-minute consensus {actual or 'NEUTRAL'} does not confirm {decision}"
+    return None
+
+
+def smart_ai_confirmation_reason(symbol, decision):
+    try:
+        from services.smart_ai_algo_service import get_algo_service
+
+        result = get_algo_service().get_result(symbol)
+    except ImportError:
+        logger.exception("AQTE could not import Smart AI confirmation service for %s", symbol)
+        return "Smart AI 5-minute confirmation is unavailable"
+    return strategy_lab_confirmation_reason(result, decision)
 
 
 class AQTELiveService:
@@ -406,7 +450,12 @@ class AQTELiveService:
             return reason
         # The 12 engines never approve an entry; they can only block one they clearly oppose.
         config = getattr(self.service(), "engine_config", None)
-        return veto_reason(signal, config if isinstance(config, EngineConfig) else EngineConfig())
+        reason = veto_reason(signal, config if isinstance(config, EngineConfig) else EngineConfig())
+        if reason:
+            return reason
+        if signal.get("source") != "morning":
+            return smart_ai_confirmation_reason(symbol, signal["decision"])
+        return None
 
     def morning_service(self):
         from services.aqte_morning import MorningService
