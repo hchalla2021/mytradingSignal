@@ -561,6 +561,9 @@ test('rule card keeps eight compact essentials visible and collapses all technic
   assert.match(primary, /-45\.84%/);
   assert.match(primary, /\+1\.00%/);
   assert.match(primary, /1\.84×/);
+  const tally = nodes(compact).find(n => n.props?.['data-rule'] === 'score');
+  assert.match(text(tally), /Checks passing: 5\/8/);
+  assert.match(tally.props.title, /5 of 8 entry checks confirmed/);
   assert.doesNotMatch(primary, /N\/A|INFO|Closed 1m|IST|CPR|ATR|2,708|7,292|1,01,000|threshold|14, 3/);
   const technical = text(details);
   for (const value of ['1,01,000', '2,708', '7,292', 'Closed 1m candle', 'Live futures tick', 'EMA20 gap',
@@ -568,6 +571,16 @@ test('rule card keeps eight compact essentials visible and collapses all technic
     assert.ok(technical.includes(value), value);
   }
   assert.equal(JSON.stringify(signal), before, 'Collapsing presentation cannot change trading inputs');
+});
+
+test('waiting rule tally reports unavailable checks separately and never claims probability', () => {
+  const signal = ruleSignal();
+  signal.rule_checks.scalp.checks[0].passed = null;
+  const panel = rulePanel(harness('AQTETerminal.tsx').render(ruleProps(signal)));
+  const tally = nodes(panel).find(n => n.props?.['data-rule'] === 'score');
+  assert.match(text(tally), /Checks passing: 4\/8 · 1 N\/A/);
+  assert.match(tally.props.title, /4 of 8 entry checks confirmed; 1 check unavailable/);
+  assert.match(tally.props.title, /not a probability or trade approval/);
 });
 
 test('collapsed technical evidence still updates for every index without losing hidden entry checks', () => {

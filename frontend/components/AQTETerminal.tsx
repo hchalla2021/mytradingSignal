@@ -217,6 +217,11 @@ function AQTETerminal({ symbol, signal, unavailable, liveStatus, onExit, now = D
   const checks = engineChecks(info, market, style ?? undefined, evidence);
   const score = evidence && plan?.decision !== 'WAIT' && plan?.confidence != null && Number.isFinite(plan.confidence) &&
     plan.confidence >= 0 && plan.confidence <= 100 ? plan.confidence : null;
+  const ruleTally = evidence ? {
+    passed: evidence.checks.filter(check => check.passed === true).length,
+    total: evidence.checks.length,
+    unavailable: evidence.checks.filter(check => check.passed === null).length,
+  } : null;
   const waiting = style === 'morning' || info ? null : aqteEvidenceWait(signal, unavailable);
   const evidenceUnavailable = style === 'morning' ? morningCurrent ? null : 'Fresh morning evidence is unavailable.' : !info ? signal && signal.feed_ready === undefined ?
     'Backend freshness unavailable; update the backend before trusting these values.' :
@@ -524,7 +529,9 @@ function AQTETerminal({ symbol, signal, unavailable, liveStatus, onExit, now = D
           <h4 className="aqx-panel-title"><span className="aqx-badge-ai" aria-hidden="true">R</span>Rule-Based Trade Engine</h4>
           <p className={`aqx-evidence-summary aqx-${alignmentTone} ${style === 'morning' ? 'aqx-evidence-summary-morning' :
             unavailableLabel ? 'aqx-evidence-summary-wait' : ''}`}
-            aria-label="Rule alignment" title={evidenceUnavailable ?? `${alignment} · ${morningCurrent ? direction : style === 'morning' ? 'WAITING' : alignment}`}>
+            aria-label="Rule alignment"
+            title={evidenceUnavailable ?? (plan?.decision === 'WAIT' && plan.reasons?.length
+              ? `${alignment} · ${plan.reasons.join('; ')}` : `${alignment} · ${morningCurrent ? direction : style === 'morning' ? 'WAITING' : alignment}`)}>
             {unavailableLabel && style !== 'morning' ? <>
               <span>Evidence status</span><strong className="aqx-evidence-wait">{unavailableLabel}</strong>
             </> : <span>{alignment}</span>}
@@ -532,8 +539,18 @@ function AQTETerminal({ symbol, signal, unavailable, liveStatus, onExit, now = D
           </p>
           <ul className="aqx-check-list aqx-check-compact" aria-label="Key trading indicators">
             {checks.filter(check => check.summary).map(check => <EngineCheck key={check.id} check={check} compact />)}
-            <li data-rule="score" data-status="CONTEXT"><Check tone="flat" /><span className="aqx-check-label">Rule score:</span>
-              <strong className="aqx-pill">{score != null ? `${aqtePrice(score)} / 100` : evidenceUnavailable ? 'WAITING' : '--'}</strong></li>
+            <li data-rule="score" data-status={evidence ? 'CONTEXT' : 'UNAVAILABLE'}
+              title={score != null ? 'Strategy rule score; not a win probability.' :
+                ruleTally ? `${ruleTally.passed} of ${ruleTally.total} entry checks confirmed` +
+                  (ruleTally.unavailable ? `; ${ruleTally.unavailable} check${ruleTally.unavailable === 1 ? '' : 's'} unavailable` : '') +
+                  '. This is a gate tally, not a probability or trade approval.' :
+                  'Current rule-check evidence is unavailable.'}>
+              <Check tone="flat" />
+              <span className="aqx-check-label">{score != null ? 'Rule score:' : 'Checks passing:'}</span>
+              <strong className="aqx-pill">{score != null ? `${aqtePrice(score)} / 100` :
+                ruleTally ? `${ruleTally.passed}/${ruleTally.total}` +
+                  (ruleTally.unavailable ? ` · ${ruleTally.unavailable} N/A` : '') :
+                  evidenceUnavailable ? 'WAITING' : '--'}</strong></li>
           </ul>
           <details className="aqx-evidence-details" aria-label="Advanced rule details">
             <summary>Advanced details</summary>
