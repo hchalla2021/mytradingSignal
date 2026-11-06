@@ -299,6 +299,8 @@ function AQTETerminal({ symbol, signal, unavailable, liveStatus, onExit, now = D
   } else if (lastTrade) {
     lifeMode = 'closed';
     const trailed = lastTrade.trailing_active === true;
+    const protectionWasConfirmed = lastTrade.protection_confirmed === true ||
+      stamp(lastTrade.protect_at) !== null || trailed;
     const started = stamp(lastTrade.signal_at) ?? stamp(lastTrade.entry_at);
     const reason = typeof lastTrade.exit_reason === 'string' ? lastTrade.exit_reason : lastTrade.exit_requested;
     const tradeFilled = (lastTrade.filled ?? 0) > 0;
@@ -307,7 +309,7 @@ function AQTETerminal({ symbol, signal, unavailable, liveStatus, onExit, now = D
       step('Order Placed', 'done', clock(stamp(lastTrade.entry_ack_at) ?? stamp(lastTrade.entry_at)), 'Broker ack'),
       tradeFilled ? step('Entry Filled', 'done', clock(stamp(lastTrade.fill_at)), `₹${aqtePrice(lastTrade.entry_price)}`)
         : step('Entry Filled', 'skip', 'Not filled'),
-      lastTrade.protection_confirmed === true ? step('SL Protected', 'done', `₹${aqtePrice(lastTrade.initial_stop)}`, stamp(lastTrade.protect_at) ? clock(stamp(lastTrade.protect_at)) : 'Broker-confirmed')
+      protectionWasConfirmed ? step('SL Protected', 'done', `₹${aqtePrice(lastTrade.initial_stop)}`, stamp(lastTrade.protect_at) ? clock(stamp(lastTrade.protect_at)) : 'Broker-confirmed')
         : step('SL Protected', 'skip', 'Not confirmed'),
       trailed ? step('Trailing Active', 'done', `₹${aqtePrice(lastTrade.stop)}`, clock(stamp(lastTrade.trail_at)))
         : step('Trailing Active', 'skip', 'Not reached'),

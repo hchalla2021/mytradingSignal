@@ -2690,6 +2690,14 @@ test('trade lifecycle tracks live, completed and idle trades with explicit per-s
   assert.equal(states(tree), 'done,done,done,done,done,done');
   assert.match(text(life(tree)), /Completed.*NIFTY_CLOSED_CE.*\+₹412\.50.*Held 6m 15s.*6\s*\/\s*6/);
   assert.match(stages(tree)[5][1], /Trailing SL hit .*₹128\.00/, 'a broker SL fill after trailing reads as a trailing-stop exit');
+  tree = render({ ...liveFixture(), trades: [{ ...closed, protection_confirmed: false }] });
+  assert.equal(states(tree), 'done,done,done,done,done,done',
+    'a completed stop order is no longer currently pending, but its confirmed protection remains in trade history');
+  assert.match(stages(tree)[3][1], /SL Protected ₹80\.00/);
+  tree = render({ ...liveFixture(), trades: [{
+    ...closed, protection_confirmed: false, protect_at: undefined, trailing_active: false,
+  }] });
+  assert.equal(stages(tree)[3][0], 'skip', 'unknown legacy protection remains explicitly unconfirmed');
   tree = render({ ...liveFixture(), trades: [{ ...closed, trailing_active: false, exit_requested: 'SESSION_EXIT' }] });
   assert.equal(stages(tree)[4][0], 'skip');
   assert.match(stages(tree)[5][1], /Session exit 15:25/);

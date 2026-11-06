@@ -159,22 +159,6 @@ async def lifespan(app: FastAPI):
 
     market_feed = MarketFeedService(cache, manager)
     diagnostics_module.set_market_feed_instance(market_feed)
-    from services.aqte_service import get_aqte_service
-    try:
-        await get_aqte_service().start()
-    except (OSError, ValueError, TypeError, KeyError, sqlite3.Error):
-        logger.exception("AQTE unavailable; existing dashboard services will continue")
-    from services.aqte_morning import MorningService, MorningSuperCandleConfig
-    morning = MorningService(get_aqte_service(), cache, settings.aqte_morning_postgres_url,
-                             strategy_config=MorningSuperCandleConfig.from_settings(settings))
-    get_aqte_service().morning = morning
-    await morning.start()
-    from services.aqte_live import get_live_service
-    try:
-        await get_live_service().start()
-    except (OSError, ValueError, TypeError, KeyError, sqlite3.Error):
-        logger.exception("AQTE live controller unavailable; real trading remains blocked")
-        get_live_service().release_owner()
 
     # Token watcher (file system monitor — instant)
     token_observer = start_token_watcher(market_feed, unified_auth)
@@ -188,12 +172,32 @@ async def lifespan(app: FastAPI):
         """Boot all heavy services in background AFTER server is accepting requests."""
         nonlocal scheduler, feed_task
 
+        async def start_aqte_core():
+            from services.aqte_service import get_aqte_service
+
+            try:
+                await get_aqte_service().start()
+            except (OSError, ValueError, TypeError, KeyError, sqlite3.Error):
+                logger.exception("AQTE unavailable; existing dashboard services will continue")
+            from services.aqte_morning import MorningService, MorningSuperCandleConfig
+            morning = MorningService(get_aqte_service(), cache, settings.aqte_morning_postgres_url,
+                                     strategy_config=MorningSuperCandleConfig.from_settings(settings))
+            get_aqte_service().morning = morning
+            await morning.start()
+            from services.aqte_live import get_live_service
+            try:
+                await get_live_service().start()
+            except (OSError, ValueError, TypeError, KeyError, sqlite3.Error):
+                logger.exception("AQTE live controller unavailable; real trading remains blocked")
+                get_live_service().release_owner()
+
         # Auth monitor
         await unified_auth.start_auto_refresh_monitor()
 
         # All services in parallel
         async def start_scheduler():
             nonlocal scheduler, feed_task
+            await start_aqte_core()
             if settings.enable_scheduler:
                 from services.market_hours_scheduler import get_scheduler
                 scheduler = get_scheduler(market_feed)

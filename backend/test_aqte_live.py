@@ -128,6 +128,20 @@ class LiveTests(unittest.TestCase):
         self.orders[1].update(status="TRIGGER PENDING")
         self.live.reconcile()
 
+    def test_completed_protective_order_retains_confirmation_timestamp(self):
+        self.protect()
+        active = self.live.state["active"]
+        self.assertTrue(active["protection_confirmed"])
+        self.assertGreater(active["protect_at"], 0)
+        self.orders[1].update(status="COMPLETE", filled_quantity=CONTRACT.lot_size, average_price=95)
+        self.positions[0]["quantity"] = 0
+
+        self.live.reconcile()
+
+        trade = self.live.state["trades"][-1]
+        self.assertFalse(trade["protection_confirmed"], "the broker stop is no longer pending after it fills")
+        self.assertGreater(trade["protect_at"], 0, "the historical protection confirmation remains recorded")
+
     def test_default_configuration_blocks_live_before_network(self):
         self.cfg.aqte_live_enabled = False
         with self.assertRaisesRegex(LiveBlocked, "AQTE_LIVE_ENABLED"):
