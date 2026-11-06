@@ -186,10 +186,13 @@ async def live_diagnostics(response: Response):
 
 @router.get("/live/executions", dependencies=[Depends(live_operator)])
 async def live_executions(response: Response, month: str | None = Query(default=None, pattern=r"^[1-9][0-9]{3}-(0[1-9]|1[0-2])$"),
+                          day: str | None = Query(default=None, pattern=r"^\d{4}-\d{2}-\d{2}$"),
                           limit: int = Query(default=4, ge=1, le=100), offset: int = Query(default=0, ge=0)):
     from services.aqte_execution_history import read_executions
+    if month is not None and day is not None:
+        raise HTTPException(status_code=422, detail="Choose either a month or a day filter")
     response.headers["Cache-Control"] = "no-store"
-    return await live_call(read_executions, get_live_service().path, month, limit, offset)
+    return await live_call(read_executions, get_live_service().path, month, limit, offset, day)
 
 
 @router.get("/live/executions/export", dependencies=[Depends(live_operator)])

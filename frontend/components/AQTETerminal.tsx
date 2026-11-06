@@ -69,7 +69,7 @@ function engineChecks(info: Intelligence | null | undefined, market: Observation
     vwap: 'VWAP', rsi: 'RSI', imbalance: 'Book imbalance', oi_change: 'OI change (1m)', volume: 'Volume',
   };
   if (!info) return Object.entries(compactLabels).map(([id, label]) => ({
-    id, label, value: 'Current evidence unavailable', unavailable: true, summary: { label, value: '--' },
+    id, label, value: 'Current evidence unavailable', unavailable: true, summary: { label, value: 'WAITING' },
   }));
   const imbalance = market ? info.imbalance : null;
   const totalDepth = market ? market.buy_depth + market.sell_depth : 0;
@@ -222,7 +222,13 @@ function AQTETerminal({ symbol, signal, unavailable, liveStatus, onExit, now = D
     'Backend freshness unavailable; update the backend before trusting these values.' :
     waiting?.detail ?? 'Waiting for current backend evidence: fresh spot/futures and completed candles.' :
     !market ? 'Live depth/OI unavailable; current tick evidence is required for entry checks.' : null;
-  const alignment = style === 'morning' ? `Independent morning · ${morningCurrent ? direction : 'Evidence unavailable'}` : waiting ? waiting.label :
+  const unavailableLabel = !evidenceUnavailable ? null :
+    evidenceUnavailable.startsWith('Feed recovery') ? 'FEED RECOVERY' :
+      evidenceUnavailable.startsWith('Warming up') ? 'WARMING UP' :
+        evidenceUnavailable.startsWith('Opening range') ? 'OPENING RANGE' :
+          evidenceUnavailable.startsWith('Market closed') || evidenceUnavailable.startsWith('Outside regular market session') ?
+          'MARKET CLOSED' : 'WAITING FOR DATA';
+  const alignment = style === 'morning' ? 'Independent morning' : waiting ? waiting.label :
     style === null ? 'No entry style selected in Controls' : !style ? 'Entry style unavailable' : !market ? 'Live depth/OI unavailable' :
     `${style === 'scalp' ? 'Quick scalp' : 'Swing'}${evidence?.setup ? ` · ${AQTE_SETUP_LABELS[evidence.setup]}` : ''}${evidence ? evidence.side ?
       ` · ${evidence.side} · ${evidence.checks.filter(check => check.passed === true).length}/${evidence.checks.length} aligned` :
@@ -516,13 +522,18 @@ function AQTETerminal({ symbol, signal, unavailable, liveStatus, onExit, now = D
       <aside className="aqx-aside" id={`${prefix}-risk`}>
         <section className="aqx-card aqx-engine" aria-label="Rule-Based Trade Engine">
           <h4 className="aqx-panel-title"><span className="aqx-badge-ai" aria-hidden="true">R</span>Rule-Based Trade Engine</h4>
-          <p className={`aqx-evidence-summary aqx-${alignmentTone}`} aria-label="Rule alignment" title={evidenceUnavailable ?? alignment}>
-            {alignment}
+          <p className={`aqx-evidence-summary aqx-${alignmentTone} ${style === 'morning' ? 'aqx-evidence-summary-morning' :
+            unavailableLabel ? 'aqx-evidence-summary-wait' : ''}`}
+            aria-label="Rule alignment" title={evidenceUnavailable ?? `${alignment} · ${morningCurrent ? direction : style === 'morning' ? 'WAITING' : alignment}`}>
+            {unavailableLabel && style !== 'morning' ? <>
+              <span>Evidence status</span><strong className="aqx-evidence-wait">{unavailableLabel}</strong>
+            </> : <span>{alignment}</span>}
+            {style === 'morning' && <strong className="aqx-morning-direction">{morningCurrent ? direction : 'WAITING'}</strong>}
           </p>
           <ul className="aqx-check-list aqx-check-compact" aria-label="Key trading indicators">
             {checks.filter(check => check.summary).map(check => <EngineCheck key={check.id} check={check} compact />)}
             <li data-rule="score" data-status="CONTEXT"><Check tone="flat" /><span className="aqx-check-label">Rule score:</span>
-              <strong className="aqx-pill">{score != null ? `${aqtePrice(score)} / 100` : '--'}</strong></li>
+              <strong className="aqx-pill">{score != null ? `${aqtePrice(score)} / 100` : evidenceUnavailable ? 'WAITING' : '--'}</strong></li>
           </ul>
           <details className="aqx-evidence-details" aria-label="Advanced rule details">
             <summary>Advanced details</summary>

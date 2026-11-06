@@ -274,7 +274,9 @@ test('daily control saves a per-index draft without arming; polling preserves un
   assert.match(text(tree), /Maximum, not a target/);
   assert.match(text(tree), /Executed\s*1/);
   assert.match(text(tree), /Remaining\s*3/);
-  assert.match(text(tree), /Unvalidated evidence; WAIT/);
+  const statusLine = nodes(tree).find(n => n.props?.className?.includes('aqte-daily-statusline'));
+  assert.equal(text(statusLine).replace(/\s+/g, ' '), 'WAITING · Unvalidated evidence; WAIT');
+  assert.equal(statusLine.props.title, 'Unvalidated evidence; WAIT');
   nodes(tree).find(n => n.props?.['aria-label'] === 'Decrease NIFTY daily trades').props.onClick();
   tree = h.render();
   nodes(tree).find(n => n.props?.['aria-label'] === 'Decrease NIFTY daily trades').props.onClick();
@@ -296,6 +298,47 @@ test('daily control saves a per-index draft without arming; polling preserves un
   assert.equal(body.config, undefined);
   assert.match(text(h.render()), /daily limit saved. This does not arm or start trading/);
   assert.ok(h.requests.every(r => ['/api/aqte/live/daily-controls', '/api/aqte/live/daily-limit'].includes(r.url)));
+  cleanup();
+  assert.equal(h.timers.size, 0);
+});
+
+test('daily control keeps fixed status rows when live reasons and strategy checks change', async () => {
+  const h = harness('AQTEDailyControl.tsx');
+  h.render();
+  const initial = dailyFixture();
+  const cleanup = h.mount(initial);
+  await settle();
+  const readRows = () => {
+    const tree = h.render();
+    return {
+      status: nodes(tree).find(n => n.props?.className?.includes('aqte-daily-statusline')),
+      styleRows: nodes(tree).filter(n => n.props?.className?.includes('aqte-daily-style-state')),
+      opportunity: nodes(tree).find(n => n.props?.className?.includes('aqte-daily-opportunity')),
+      account: nodes(tree).find(n => n.props?.className?.includes('aqte-daily-account')),
+    };
+  };
+  const before = readRows();
+  assert.equal(before.styleRows.length, 3);
+  assert.deepEqual(before.styleRows.map(text), ['Quick scalp NOT EVALUATED', 'Swing NOT EVALUATED', 'Independent morning NOT EVALUATED']);
+  const changed = dailyFixture();
+  changed.data.NIFTY.reason = 'Movement threshold, path efficiency, two-sided quotes, volume and price/VWAP checks pending';
+  changed.data.NIFTY.opportunity.style = 'morning';
+  changed.data.NIFTY.opportunity.strategy = 'gap_and_go';
+  changed.data.NIFTY.opportunity.style_checks = {
+    scalp: 'RSI outside range and stale quote', swing: null,
+    morning: 'Missing aligned book depth and cumulative-volume confirmation',
+  };
+  await h.poll(changed);
+  const after = readRows();
+  assert.notEqual(text(after.status), text(before.status), 'The current reason may update without changing row layout');
+  assert.equal(after.status.props.title, changed.data.NIFTY.reason);
+  assert.deepEqual(after.styleRows.map(text), ['Quick scalp WAITING', 'Swing QUALIFIED', 'Independent morning WAITING']);
+  assert.equal(after.styleRows.length, before.styleRows.length);
+  assert.equal(after.opportunity.props.className, before.opportunity.props.className);
+  assert.equal(after.account.props.className, before.account.props.className);
+  const styles = readFileSync(path.join(__dirname, '..', 'app', 'globals.css'), 'utf8');
+  assert.match(styles, /\.aqte-daily-statusline,[\s\S]*block-size: 1\.5rem/);
+  assert.match(styles, /\.aqte-daily-style-state \{[\s\S]*block-size: 1\.25rem/);
   cleanup();
   assert.equal(h.timers.size, 0);
 });
@@ -677,19 +720,21 @@ test('rule card keeps the same keyed rows through loading, stale data, errors an
   const rowKeys = keys(first);
   assert.equal(rowKeys.length, 7);
   for (const [change, expected] of [
-    [{ signal: undefined }, /^Current evidence unavailable$/],
+    [{ signal: undefined }, /^EvidencestatusWAITINGFORDATA$/],
     [{ signal: { ...props.signal, intelligence: undefined, reasons: ['Warming up: need 201 contiguous completed one-minute futures candles'],
-      warmup: { completed: 87, required: 201 } } }, /^Warming up · 87\/201 candles$/],
+      warmup: { completed: 87, required: 201 } } }, /^EvidencestatusWARMINGUP$/],
     [{ signal: { ...props.signal, intelligence: null, reasons: ['Opening range: need 15 completed one-minute candles from 09:15 IST'],
-      opening: { completed: 4, required: 15 } } }, /^Opening range · 4\/15 candles$/],
+      opening: { completed: 4, required: 15 } } }, /^EvidencestatusOPENINGRANGE$/],
     [{ signal: { ...props.signal, feed_ready: false, intelligence: null, reasons: ['Outside regular market session'] } },
-      /^Market closed · rules run 09:15–15:30 IST$/],
+      /^EvidencestatusMARKETCLOSED$/],
     [{ signal: { ...props.signal, feed_ready: false, reasons: ['Market data stale: futures last tick 9s ago'] } },
-      /^Market data stale: futures last tick 9s ago$/],
-    [{ signal: { ...props.signal, feed_ready: false, decision: 'BUY CE' } }, /^Current evidence unavailable$/],
-    [{ signal: { ...props.signal, feed_ready: undefined } }, /^Backend freshness unavailable$/],
-    [{ now: props.signal.at + 6 }, /^Current evidence unavailable$/],
-    [{ unavailable: true }, /^Current evidence unavailable$/],
+      /^EvidencestatusWAITINGFORDATA$/],
+    [{ signal: { ...props.signal, feed_ready: false, intelligence: null,
+      reasons: ['Feed recovery: Restored futures candles await exchange verification'] } }, /^EvidencestatusFEEDRECOVERY$/],
+    [{ signal: { ...props.signal, feed_ready: false, decision: 'BUY CE' } }, /^EvidencestatusWAITINGFORDATA$/],
+    [{ signal: { ...props.signal, feed_ready: undefined } }, /^EvidencestatusWAITINGFORDATA$/],
+    [{ now: props.signal.at + 6 }, /^EvidencestatusWAITINGFORDATA$/],
+    [{ unavailable: true }, /^EvidencestatusWAITINGFORDATA$/],
   ]) {
     const panel = rulePanel(h.render({ ...props, ...change }));
     assert.ok(primary(panel), 'Never replace the primary list with an empty-state paragraph');
@@ -697,11 +742,13 @@ test('rule card keeps the same keyed rows through loading, stale data, errors an
     assert.deepEqual(keys(panel), rowKeys, 'Fresh and unavailable rows must have the same React keys');
     for (const row of rows(panel).filter(row => row.props['data-rule'] !== 'score')) {
       assert.equal(row.props['data-status'], 'UNAVAILABLE');
-      assert.equal(text(nodes(row).find(n => n.type === 'strong')), '--');
+      assert.equal(text(nodes(row).find(n => n.type === 'strong')), 'WAITING');
     }
     assert.doesNotMatch(text(panel), /49\.03|1,01,000|5\s*\/\s*8/);
-    assert.match(text(nodes(panel).find(n => n.props?.['aria-label'] === 'Rule alignment')).trim(), expected,
-      'Say why evidence is blank using the backend governing WAIT reason');
+    const alignment = nodes(panel).find(n => n.props?.['aria-label'] === 'Rule alignment');
+    assert.match(text(alignment).replace(/\s+/g, ''), expected,
+      'Use a stable concise state while evidence is unavailable');
+    assert.ok(alignment.props.title, 'Keep the precise backend reason available as a tooltip');
     const details = nodes(panel).find(n => n.type === 'details');
     assert.equal(details.props.open, undefined, 'Polling must never control disclosure state');
   }
@@ -819,6 +866,10 @@ test('rule values age out while no new snapshot response arrives', async () => {
   h.render();
   const snapshot = fixture();
   snapshot.data.NIFTY = ruleSignal();
+  snapshot.data.NIFTY.at = now / 1000;
+  snapshot.data.NIFTY.intelligence.at = now / 1000;
+  snapshot.data.NIFTY.intelligence.live.at = now / 1000;
+  snapshot.data.NIFTY.intelligence.live.received = now / 1000;
   const cleanup = h.mount(snapshot);
   await settle();
   assert.match(text(rulePanel(h.render())), /1,01,000/);
@@ -1013,7 +1064,9 @@ test('all styles and setups display checked and save independently for NIFTY, BA
       assert.equal(box.props.type, 'checkbox');
       assert.equal(box.props.checked, true, `${symbol}: ${name}`);
     }
-    assert.match(text(tree), /Swing\s*:\s*Rules and risk checks passed\s*· Selected for broker recheck/);
+    const swingStatus = nodes(tree).find(n => n.props?.className?.includes('aqte-daily-style-state') && text(n).startsWith('Swing'));
+    assert.equal(text(swingStatus), 'Swing BROKER RECHECK');
+    assert.match(swingStatus.props.title, /Rules and risk checks passed; selected for broker recheck/);
     h.respond(initial);
     nodes(tree).find(n => n.type === 'button' && /controls$/.test(text(n))).props.onClick();
     await settle();
@@ -1146,7 +1199,7 @@ test('overview keeps concise readable values without placeholder explanations', 
   assert.doesNotMatch(text(tree), /See real execution below|SEE BELOW|Real · gated|Broker ✓/);
   assert.doesNotMatch(text(hero), /Rule score/);
   const score = nodes(rulePanel(tree)).find(n => n.props?.['data-rule'] === 'score');
-  assert.equal(text(nodes(score).find(n => n.type === 'strong')), '--');
+  assert.equal(text(nodes(score).find(n => n.type === 'strong')), 'WAITING');
   const styles = readFileSync(path.join(__dirname, '..', 'app', 'globals.css'), 'utf8');
   assert.match(styles, /AQTE ∞ terminal \(aqx\)/);
   assert.match(styles, /\.aqte-theme \.aqx-price-row \{/);
@@ -1716,6 +1769,30 @@ test('morning approval requires confirmed controller status and durable storage 
   assert.equal(h.requests.length, 0);
 });
 
+test('morning status stays compact while the full changing gate reason remains collapsed', () => {
+  const h = harness('AQTEMorningEngine.tsx');
+  const status = morningFixture();
+  const render = value => nodes(h.render({ status: value, symbol: 'NIFTY', onStatus() {} }));
+  const first = render(status);
+  const firstState = nodes(first.find(node => node.props?.className === 'aqx-morning-state'));
+  const firstReason = first.find(node => node.props?.className === 'aqx-morning-reason');
+  assert.equal(firstReason.props.open, undefined);
+  assert.equal(text(firstState.find(node => node.type === 'span')), 'Entry status');
+  const displayedState = text(firstState.find(node => node.type === 'strong'));
+  status.morning.block = 'Movement must exceed 0.2 ATR / 0.01% with >=70% path efficiency and two confirming changes';
+  const second = render(status);
+  const secondState = nodes(second.find(node => node.props?.className === 'aqx-morning-state'));
+  const secondReason = second.find(node => node.props?.className === 'aqx-morning-reason');
+  assert.equal(text(secondState.find(node => node.type === 'span')), 'Entry status');
+  assert.notEqual(text(secondState.find(node => node.type === 'strong')), displayedState);
+  assert.match(text(secondState.find(node => node.type === 'strong')), /WAITING/);
+  assert.equal(secondReason.props.open, undefined);
+  assert.match(text(secondReason), /Movement must exceed 0\.2 ATR/);
+  const styles = readFileSync(path.join(__dirname, '..', 'app', 'globals.css'), 'utf8');
+  assert.match(styles, /\.aqx-morning-state\s*\{[\s\S]*min-height: 42px/);
+  assert.match(styles, /\.aqx-morning-state > strong\s*\{[\s\S]*min-width: 160px/);
+});
+
 test('morning stop disables only new entries and reports authentication errors explicitly', async () => {
   const h = harness('AQTEMorningEngine.tsx');
   const props = { status: morningFixture(true), symbol: 'NIFTY', onStatus() {} };
@@ -2186,6 +2263,22 @@ test('manual broker readout shows a market-hours pause rather than claiming no p
   assert.doesNotMatch(text(tree), /No open Zerodha derivative position|FRESH QUOTE/);
   assert.ok(h.requests.every(r => !r.options.method || r.options.method === 'GET'));
   cleanup();
+});
+
+test('morning alignment keeps a fixed label and direction slot when evidence becomes stale', () => {
+  const h = harness('AQTETerminal.tsx');
+  const signal = { ...fixture().data.NIFTY, morning: morningFixture().morning.signals.NIFTY };
+  const props = { ...ruleProps(signal), now: Date.now() / 1000, liveStatus: {
+    ...liveFixture(), styles: { NIFTY: 'morning' },
+  } };
+  const summary = rendered => nodes(rulePanel(rendered)).find(n => n.props?.['aria-label'] === 'Rule alignment');
+  const current = summary(h.render(props));
+  assert.equal(text(nodes(current).find(n => n.type === 'span')), 'Independent morning');
+  assert.ok(['BULLISH', 'BEARISH', 'WAITING'].includes(text(nodes(current).find(n => n.type === 'strong'))));
+  const stale = summary(h.render({ ...props, now: props.now + 4 }));
+  assert.equal(text(nodes(stale).find(n => n.type === 'span')), 'Independent morning');
+  assert.equal(text(nodes(stale).find(n => n.type === 'strong')), 'WAITING');
+  assert.equal(stale.props.className.includes('aqx-evidence-summary-morning'), true);
 });
 
 test('hero metrics and rule engine remain visible; manual broker positions stay in the Positions tab', () => {

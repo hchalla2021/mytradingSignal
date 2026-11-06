@@ -179,13 +179,27 @@ def month_filter(month):
     start = datetime(year, number, 1, tzinfo=IST).timestamp()
     return "WHERE at>=? AND at<?", (start, start + calendar.monthrange(year, number)[1] * 86400)
 
+def day_filter(ist_day):
+    if ist_day is None:
+        return "", ()
+    try:
+        parsed = datetime.strptime(ist_day, "%Y-%m-%d")
+    except ValueError as exc:
+        raise ValueError("Day must be a valid YYYY-MM-DD date") from exc
+    if parsed.strftime("%Y-%m-%d") != ist_day:
+        raise ValueError("Day must be a valid YYYY-MM-DD date")
+    start = datetime(parsed.year, parsed.month, parsed.day, tzinfo=IST).timestamp()
+    return "WHERE at>=? AND at<?", (start, start + 86400)
+
 
 def read_connection(path):
     return sqlite3.connect(Path(path).resolve().as_uri() + "?mode=ro", uri=True, timeout=10)
 
 
-def read_executions(path, month=None, limit=4, offset=0):
-    clause, values = month_filter(month)
+def read_executions(path, month=None, limit=4, offset=0, ist_day=None):
+    if month is not None and ist_day is not None:
+        raise ValueError("Choose either a month or a day filter")
+    clause, values = month_filter(month) if month is not None else day_filter(ist_day)
     with closing(read_connection(path)) as db:
         db.execute("BEGIN")
         total = db.execute(f"SELECT COUNT(*) FROM live_executions {clause}", values).fetchone()[0]

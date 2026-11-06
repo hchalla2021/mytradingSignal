@@ -208,15 +208,31 @@ export default function AQTEDailyControl() {
               <p key={name} className="aqte-metric rounded-lg border p-2">{name}<strong className="mt-1 block text-base text-slate-100">{count}</strong></p>
             ))}
           </div>
-          <p className="text-amber-200">{error ? 'STATUS UNAVAILABLE' : row.status} · {row.reason}</p>
-          <p className="text-slate-300">Direction {row.direction} · Best candidate {row.opportunity.decision}{row.opportunity.strategy ? ` · ${row.opportunity.strategy.replaceAll('_', ' ')}` : ''} · Rule score {row.opportunity.confidence ?? '--'}/100</p>
-          {row.opportunity.style_checks && <div className="space-y-1 text-slate-400" aria-label="Entry style evaluation">
-            {Object.entries(row.opportunity.style_checks).map(([style, reason]) => <p key={style}>
-              {style === 'morning' ? 'Independent morning' : style === 'scalp' ? 'Quick scalp' : 'Swing'}: {reason ?? 'Rules and risk checks passed'}
-              {row.opportunity.style === style && !reason ? ' · Selected for broker recheck' : ''}
-            </p>)}
-          </div>}
-          <p className="text-slate-400">Account remaining {snapshot?.account.remaining} · Reserved entries {row.reserved}. Index limits cannot bypass the account cap.</p>
+          <p className="aqte-daily-statusline text-amber-200" title={row.reason}
+            aria-label={`Trade status ${row.status}; ${row.reason}`}>
+            {error ? 'STATUS UNAVAILABLE' : row.status} · {row.reason || 'No blocking reason reported'}
+          </p>
+          <p className="aqte-daily-opportunity text-slate-300"
+            title={`Direction ${row.direction}; best candidate ${row.opportunity.decision}; strategy ${row.opportunity.strategy ?? 'not selected'}; score ${row.opportunity.confidence ?? 'unavailable'}`}>
+            Direction {row.direction} · Best candidate {row.opportunity.decision} · Strategy {row.opportunity.strategy?.replaceAll('_', ' ') ?? 'not selected'} · Rule score {row.opportunity.confidence ?? '--'}/100
+          </p>
+          <div className="aqte-daily-style-evaluation space-y-1 text-slate-400" aria-label="Entry style evaluation">
+            {(['scalp', 'swing', 'morning'] as const).map(style => {
+              const label = style === 'morning' ? 'Independent morning' : style === 'scalp' ? 'Quick scalp' : 'Swing';
+              const checks = row.opportunity.style_checks;
+              const evaluated = !!checks && Object.prototype.hasOwnProperty.call(checks, style);
+              const reason = checks?.[style];
+              const recheck = !reason && row.opportunity.style === style;
+              const state = !evaluated ? 'NOT EVALUATED' : reason ? 'WAITING' : recheck ? 'BROKER RECHECK' : 'QUALIFIED';
+              const detail = reason ?? (recheck ? `${label}: Rules and risk checks passed; selected for broker recheck` : `${label}: ${state}`);
+              return <p key={style} className="aqte-daily-style-state" title={detail}
+                aria-label={`${label}: ${detail}`}>
+                <span>{label}</span><strong>{state}</strong>
+              </p>;
+            })}
+          </div>
+          <p className="aqte-daily-account text-slate-400"
+            title="Index limits cannot bypass the account cap.">Account remaining {snapshot?.account.remaining} · Reserved entries {row.reserved}. Index limits cannot bypass the account cap.</p>
           <label className="flex min-h-[44px] items-center gap-2 text-slate-200">
             <input type="checkbox" checked={config.enabled} disabled={disabled} onChange={e => change({ enabled: e.target.checked })} />
             Enable {label(symbol)} entries after arming and ON

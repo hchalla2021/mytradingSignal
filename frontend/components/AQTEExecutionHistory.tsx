@@ -55,6 +55,7 @@ export default function AQTEExecutionHistory({ liveStatus, now = Date.now() / 10
   const [downloadError, setDownloadError] = useState<string | null>(null);
   const downloadRequest = useRef<AbortController | null>(null);
   const limit = expanded ? 25 : 4;
+  const istDay = aqteIstDay(now);
 
   useEffect(() => {
     let active = true;
@@ -63,7 +64,8 @@ export default function AQTEExecutionHistory({ liveStatus, now = Date.now() / 10
       controller = new AbortController();
       const timeout = setTimeout(() => controller?.abort(), 15000);
       try {
-        const response = await fetch(API_CONFIG.endpoint(`/api/aqte/live/executions?limit=${limit}&offset=${offset}`), {
+        const dayFilter = expanded ? '' : `&day=${encodeURIComponent(istDay)}`;
+        const response = await fetch(API_CONFIG.endpoint(`/api/aqte/live/executions?limit=${limit}&offset=${offset}${dayFilter}`), {
           cache: 'no-store', credentials: 'include', headers: headers(), signal: controller.signal,
         });
         if (!response.ok) await responseError(response, 'Saved execution history unavailable');
@@ -80,7 +82,7 @@ export default function AQTEExecutionHistory({ liveStatus, now = Date.now() / 10
     };
     const stop = aqtePollLoop(poll);
     return () => { active = false; controller?.abort(); downloadRequest.current?.abort(); stop(); };
-  }, [limit, offset]);
+  }, [expanded, istDay, limit, offset]);
 
   const download = async () => {
     if (downloading) return;
@@ -124,9 +126,9 @@ export default function AQTEExecutionHistory({ liveStatus, now = Date.now() / 10
   return (
     <section className={`aqx-card aqx-panel${expanded ? ' aqx-history-expanded' : ''}`} aria-label="Recent executions">
       <h3 className="aqx-panel-head"><span aria-hidden="true" className="aqx-net">&#8635;</span>
-        Recent Executions <span>(Saved)</span>
+        {expanded ? 'Execution History' : "Today's Executions"} <span>(Saved)</span>
         <button type="button" className="aqx-link aqx-viewonly" disabled={downloading} aria-expanded={expanded}
-          onClick={() => { setExpanded(!expanded); page(0); }}>{expanded ? 'Show Recent' : 'View All'}</button>
+          onClick={() => { setExpanded(!expanded); page(0); }}>{expanded ? 'Show Today' : 'View All'}</button>
       </h3>
       {error && <p role="alert" className="aqx-warning">{error}{shown ? ' - Showing last downloaded history.' : ''}</p>}
       <div className="aqx-history-scroll" role="region" aria-label="Saved execution orders" tabIndex={0}>
@@ -174,7 +176,7 @@ export default function AQTEExecutionHistory({ liveStatus, now = Date.now() / 10
         </button>
       </div>
       {downloadError && <p role="alert" className="aqx-warning">{downloadError}</p>}
-      <p className="aqx-footnote">All dates retained, including after market close. Excel uses the selected entry month (IST).
+      <p className="aqx-footnote">Recent view shows today&apos;s executions only; View All retains the full journal. Excel uses the selected entry month (IST).
         No monthly deletion. Net P&amp;L uses estimated charges; P&amp;L % excludes fees.
         Open/unverified values may be unavailable.</p>
     </section>

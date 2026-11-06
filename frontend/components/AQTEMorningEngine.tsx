@@ -37,6 +37,13 @@ function AQTEMorningEngine({ status, symbol, onStatus, now = Date.now() / 1000 }
   const signal = morning?.signals[symbol];
   const fresh = !!signal && now - signal.at >= 0 && now - signal.at <= 3;
   const minute = istMinute(now);
+  const gateReason = !morning ? 'Morning status unavailable; no approval state is assumed.' :
+    morning.block ?? (status?.style_checks?.[symbol]?.morning ?? signal?.reasons?.[0] ?? 'Waiting for fresh opening evidence.');
+  const entryState = !morning ? 'STATUS CHECK' : morning.error ? 'RECORDING CHECK' :
+    morning.block ? 'WAITING · LIVE CHECKS' :
+      !morning.enabled ? 'APPROVAL REQUIRED' : !status?.automation_on ? 'AUTOMATION REQUIRED' :
+        status.style_checks?.[symbol]?.morning ? 'RISK CHECK' :
+          fresh && signal?.decision !== 'WAIT' ? 'SETUP QUALIFIED' : 'WAITING FOR SETUP';
   const act = async (enabled: boolean) => {
     if (changing.current) return;
     changing.current = true;
@@ -98,9 +105,9 @@ function AQTEMorningEngine({ status, symbol, onStatus, now = Date.now() / 1000 }
       <button type="button" className="aqx-morning-cancel" disabled={busy} onClick={() => setConfirming(false)}>Cancel</button>
     </div>}
     {error && <p role="alert" className="text-red-300">{error}</p>}
-    <p className="aqx-morning-state">{!morning ? 'Morning status unavailable; no approval state is assumed.' : morning.block ??
-      (!morning.enabled ? 'Separate morning approval is OFF.' : !status?.automation_on ? 'Waiting for existing Auto Trade ON and session preflight.' :
-        status.style_checks?.[symbol]?.morning ?? `${symbol}: ${fresh ? signal?.decision : 'Waiting for fresh evidence'}`)}</p>
+    <div className="aqx-morning-state" role="status" aria-live="polite">
+      <span>Entry status</span><strong>{entryState}</strong>
+    </div>
     {morning && <details className="aqx-morning-diagnostics">
       <summary>Feed &amp; data diagnostics</summary>
       <p>{morning.storage_backend === 'sqlite-wal' ? 'SQLite WAL' : 'PostgreSQL'} · {morning.error || (morning.last_commit ? 'Recording active' : 'Awaiting first commit')}
@@ -109,7 +116,13 @@ function AQTEMorningEngine({ status, symbol, onStatus, now = Date.now() / 1000 }
       <p>Opening rules are deterministic and not paper-validated; no profit is guaranteed.</p>
       <p>Existing position cards show broker-observed P&amp;L, stop and target. Protection continues after 10:30 and after morning approval is switched OFF.</p>
     </details>}
-    {fresh && signal && <details><summary>{symbol} · {signal.strategy?.replaceAll('_', ' ') ?? 'Waiting'} · Rule evidence</summary>
+    <details className="aqx-morning-reason">
+      <summary>Why this status?</summary>
+      <p>{gateReason}</p>
+    </details>
+    <details className="aqx-morning-signal">
+      <summary>{symbol} · Signal details</summary>
+      {fresh && signal ? <>
       <p>{signal.reasons.join(' · ')}</p>
       <ul>{signal.rules.map(rule => <li key={rule.id}>{rule.passed ? 'Confirmed' : 'Waiting'}: {rule.label} — {rule.reason}</li>)}</ul>
       {signal.evidence && <dl className="grid grid-cols-2 gap-2 text-xs">
@@ -132,7 +145,8 @@ function AQTEMorningEngine({ status, symbol, onStatus, now = Date.now() / 1000 }
               {flow.aggressor_side_is_estimated ? ' · aggressor side estimated' : ''}</dd></>;
         })()}
       </dl>}
-    </details>}
+      </> : <p>{signal?.reasons?.join(' · ') || 'Waiting for fresh opening evidence.'}</p>}
+    </details>
   </section>;
 }
 
