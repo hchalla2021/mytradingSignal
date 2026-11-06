@@ -643,7 +643,15 @@ AQTE subscribes the verified token separately and ignores non-AQTE index ticks.
 - Initial stop is 20% of premium or three spreads (whichever is larger), with tick
   constraints. Target is twice the planned price distance; these are **rule levels,
   not learned optimal prices**.
-- Trail only after an observed 1R advance. Check the prior stop before changing it.
+- In paper/replay only, extend a reached target when completed 1m, 3m and 5m futures
+  candles agree on EMA 9/20, VWAP, SuperTrend, momentum and volume. A target without
+  that confirmation still fills at its planned level.
+- The paper runner locks at least 0.5R at extension. It then uses completed 1m option
+  ATR to trail the peak, tightens on weakening multi-timeframe evidence, and exits on
+  a completed-candle reversal confirmed across all three timeframes. Stop updates are
+  candle-gated, not tick-by-tick. Insufficient candle history cannot authorize a runner.
+- The live controller is unchanged by this experimental paper/replay policy: its
+  configured target and broker-confirmed protective stop remain authoritative.
 - Stop/forced exits use the next executable bid minus adverse slippage; gaps may
   exceed the stop budget. Target fills never improve beyond the resting target.
 - Exits require sufficient visible bid quantity. Missing quotes/depth do not become

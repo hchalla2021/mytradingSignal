@@ -16,6 +16,12 @@ WARMUP_CANDLES = 201
 SESSION_CANDLES = 15
 OPEN_MINUTE, CLOSE_MINUTE = 555, 930
 DEFAULT_SCALP_POINTS = {"NIFTY": (10, 20, 30), "BANKNIFTY": (20, 40, 60), "SENSEX": (30, 60, 90)}
+EXIT_INTERVALS = (60, 180, 300)
+RUNNER_START_R = 2.0
+RUNNER_START_ATR = 3.0
+RUNNER_TRAIL_ATR = 2.0
+RUNNER_WEAK_TRAIL_ATR = 1.0
+RUNNER_MIN_LOCK_R = 0.5
 
 
 def parse_scalp_points(text):
@@ -625,11 +631,83 @@ class AQTEEngine:
         self.trades = []
         self.events = []
         self.last_setup = {}
+        self.exit_feature_cache = {}
         self.killed = False
         self.fault = None
 
     def event(self, kind, at, **payload):
         self.events.append(dict(id=uuid4().hex, kind=kind, at=at, **payload))
+
+    def completed_exit_features(self, kind, token, seconds, now):
+        key = (kind, token, seconds)
+        version = (self.book.revisions[key], day(now))
+        cached = self.exit_feature_cache.get(key)
+        if cached is None or cached["version"] != version:
+            bars = [
+                bar for bar in self.book.closed.get(key, ())
+                if day(bar["at"]) == day(now) and session(bar["at"]) and bar["at"] + seconds <= now
+            ]
+            features = None
+            if len(bars) >= 21 and 0 <= now - (bars[-1]["at"] + seconds) <= seconds * 1.25:
+                features = closed_intelligence(bars, now, partial=True)
+            cached = {"version": version, "bars": bars, "features": features}
+            self.exit_feature_cache[key] = cached
+        if not cached["bars"] or not 0 <= now - (cached["bars"][-1]["at"] + seconds) <= seconds * 1.25:
+            return None
+        return cached["features"]
+
+    def exit_trend_context(self, order, now):
+        future = self.future.get(order["symbol"])
+        if future is None:
+            return None
+        side = 1 if order["contract"]["side"] == "CE" else -1
+        frames = {}
+        for seconds in EXIT_INTERVALS:
+            features = self.completed_exit_features("future", future.token, seconds, now)
+            if features is None:
+                return None
+            ema_values = features.get("ema") or {}
+            ema_fast, ema_slow = ema_values.get("9"), ema_values.get("20")
+            close, vwap = features.get("close"), features.get("vwap")
+            bars = self.exit_feature_cache[("future", future.token, seconds)]["bars"]
+            momentum = close - bars[-4]["close"] if len(bars) >= 4 and close is not None else None
+            supertrend = features.get("supertrend")
+
+            def direction(value):
+                if not isinstance(value, (int, float)) or not math.isfinite(value) or value == 0:
+                    return 0
+                return 1 if value > 0 else -1
+
+            checks = (
+                direction(ema_fast - ema_slow) if ema_fast is not None and ema_slow is not None else 0,
+                direction(close - vwap) if close is not None and vwap is not None else 0,
+                1 if supertrend == "BULLISH" else -1 if supertrend == "BEARISH" else 0,
+                direction(momentum),
+            )
+            volume_ratio = features.get("volume_ratio")
+            volume_ok = isinstance(volume_ratio, (int, float)) and math.isfinite(volume_ratio)
+            aligned = sum(check == side for check in checks) >= 3 and volume_ok and volume_ratio >= 0.8
+            opposing = sum(check == -side for check in checks) >= 3 and volume_ok and volume_ratio >= 1.0
+            frames[seconds] = {
+                "aligned": aligned,
+                "opposing": opposing,
+                "volume_ratio": volume_ratio,
+                "at": bars[-1]["at"],
+            }
+
+        one_minute, three_minute, five_minute = (frames[seconds] for seconds in EXIT_INTERVALS)
+        weakening = (not one_minute["aligned"] and
+                     (not three_minute["aligned"] or not five_minute["aligned"]))
+        option_features = self.completed_exit_features("option", order["token"], 60, now)
+        option_atr = option_features.get("atr") if option_features else None
+        return {
+            "continuation": all(frame["aligned"] for frame in frames.values()),
+            "reversal": all(frame["opposing"] for frame in frames.values()),
+            "weakening": weakening,
+            "bar_key": tuple(frames[seconds]["at"] for seconds in EXIT_INTERVALS),
+            "atr": option_atr if isinstance(option_atr, (int, float)) and math.isfinite(option_atr) else None,
+            "frames": frames,
+        }
 
     def fresh(self, tick, now):
         return tick is not None and 0 <= now - tick.at <= self.policy.stale_seconds and (
@@ -911,7 +989,8 @@ class AQTEEngine:
         order = dict(id=uuid4().hex, symbol=symbol, token=contract.token, contract=asdict(contract),
                      strategy=name, created_at=now, expires_at=now + self.policy.order_lifetime,
                      limit=limit, stop=stop, initial_stop=stop, target=target, quantity=quantity,
-                     risk=risk, entry_at=None, entry_price=None, entry_cost=0, peak=0)
+                     risk=risk, entry_at=None, entry_price=None, entry_cost=0, peak=0,
+                     runner_active=False, trail_context_key=None)
         self.orders[symbol] = order
         self.last_setup[symbol] = {"key": key, "at": now}
         self.event("LIMIT_CREATED", now, order=dict(order))
@@ -951,7 +1030,23 @@ class AQTEEngine:
                 continue
             # Evaluate the previously resting stop before updating the trail.
             reason = "STOP_LOSS" if tick.bid <= order["stop"] else (
-                "TARGET" if tick.bid >= order["target"] else None)
+                None)
+            trend = None
+            if reason is None:
+                order["peak"] = max(order["peak"], tick.bid)
+                trend = self.exit_trend_context(order, now)
+                if trend and trend["reversal"]:
+                    reason = "CONFIRMED_REVERSAL"
+                elif tick.bid >= order["target"] and not order["runner_active"]:
+                    if trend and trend["continuation"]:
+                        order["runner_active"] = True
+                        risk_distance = order["entry_price"] - order["initial_stop"]
+                        lock = max(size * 2, risk_distance * RUNNER_MIN_LOCK_R)
+                        order["stop"] = max(order["stop"], round_tick(order["entry_price"] + lock, size))
+                        self.event("TARGET_EXTENDED", now, order_id=order["id"], target=order["target"],
+                                   stop=order["stop"], confirmation=trend["frames"])
+                    else:
+                        reason = "TARGET"
             dt = datetime.fromtimestamp(now, IST)
             if day(now) != day(order["entry_at"]) or dt.hour * 60 + dt.minute >= 925:
                 reason = reason or "SESSION_EXIT"
@@ -972,13 +1067,23 @@ class AQTEEngine:
                 del self.orders[symbol]
                 self.event("CLOSED", now, trade=trade)
             else:
-                order["peak"] = max(order["peak"], tick.bid)
-                distance = order["entry_price"] - order["initial_stop"]
-                if order["peak"] >= order["entry_price"] + distance:
-                    stop = max(order["stop"], round_tick(order["peak"] - distance, size))
-                    if stop > order["stop"]:
-                        order["stop"] = stop
-                        self.event("TRAIL_UPDATED", now, order_id=order["id"], stop=stop)
+                if order["runner_active"] and trend and trend["bar_key"] != order["trail_context_key"]:
+                    order["trail_context_key"] = trend["bar_key"]
+                    risk_distance = order["entry_price"] - order["initial_stop"]
+                    atr = trend["atr"] or risk_distance * 0.5
+                    activation = max(RUNNER_START_R * risk_distance, RUNNER_START_ATR * atr)
+                    if order["peak"] >= order["entry_price"] + activation:
+                        trail_distance = max(RUNNER_TRAIL_ATR * atr,
+                                             risk_distance * RUNNER_MIN_LOCK_R, size * 2)
+                        if trend["weakening"]:
+                            trail_distance = max(RUNNER_WEAK_TRAIL_ATR * atr,
+                                                 risk_distance * 0.25, size * 2)
+                        desired = round_tick(order["peak"] - trail_distance, size)
+                        stop = max(order["stop"], min(desired, tick.bid))
+                        if stop > order["stop"]:
+                            order["stop"] = stop
+                            self.event("TRAIL_UPDATED", now, order_id=order["id"], stop=stop,
+                                       atr=atr, mode="tight" if trend["weakening"] else "normal")
 
     def seed_bars(self, token, bars, now):
         """Merge completed exchange 1-minute futures candles; returns minutes added or replaced.

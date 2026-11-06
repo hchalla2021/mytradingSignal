@@ -294,12 +294,12 @@ function AQTESection({ marketData, isConnected = false }: { marketData?: MarketD
   const ist = new Date(now + 330 * 60_000);
   const minute = ist.getUTCHours() * 60 + ist.getUTCMinutes();
   const marketHours = ist.getUTCDay() >= 1 && ist.getUTCDay() <= 5 && minute >= 555 && minute < 930;
-  const liveFeed = !unavailable && aqteFeedCurrent(snapshot?.data[selectedSymbol], now / 1000) &&
-    marketHours && isConnected && (() => {
-    const tick = marketData?.[selectedSymbol];
-    const age = tick ? (now - Date.parse(tick.timestamp)) / 1000 : Infinity;
-    return tick?.status === 'LIVE' && Number.isFinite(tick.price) && tick.price > 0 && age >= -1 && age <= 5;
-  })();
+  const snapshotAge = snapshot ? now / 1000 - snapshot.generated_at : Infinity;
+  const backendStatusCurrent = !error && snapshotAge >= -1 && snapshotAge <= 10;
+  const backendFeedReady = backendStatusCurrent && !!snapshot?.recording && !snapshot.fault &&
+    aqteFeedCurrent(snapshot?.data[selectedSymbol], snapshot.generated_at);
+  const liveFeed = marketHours && backendFeedReady;
+  const feedLabel = !backendStatusCurrent ? 'STATUS UNKNOWN' : liveFeed ? 'LIVE (Zerodha)' : 'FEED OFF';
   const quotes = Object.fromEntries(SYMBOLS.map(symbol => {
     const signal = snapshot?.data[symbol];
     const tick = marketData?.[symbol];
@@ -346,9 +346,8 @@ function AQTESection({ marketData, isConnected = false }: { marketData?: MarketD
     ? (snapshot.engine_events as unknown[]).filter(isAqteEngineEvent) as AQTEEngineEvent[] : [];
   const policy = snapshot?.engine_policy && typeof snapshot.engine_policy.veto === 'boolean' &&
     Number.isInteger(snapshot.engine_policy.veto_min) ? snapshot.engine_policy : null;
-  const selectedTick = quotes[selectedSymbol].tick;
-  // Measured against the wall clock at render (each tick re-renders), not the 1 s UI clock, so it is not quantised.
-  const tickAge = liveFeed && selectedTick ? Math.max(0, Date.now() - Date.parse(selectedTick.timestamp)) : null;
+  const signalAt = snapshot?.data[selectedSymbol]?.at;
+  const tickAge = liveFeed && typeof signalAt === 'number' ? Math.max(0, now - signalAt * 1000) : null;
   const health = unavailable ? ['Offline', 'aqx-down'] : marketHours && !liveFeed ? ['Degraded', 'aqx-wait'] : ['Healthy', 'aqx-up'];
   const dataState = unavailable ? 'Off' : liveFeed ? 'Live' : marketHours ? 'Stale' : 'Market closed';
 
@@ -401,10 +400,13 @@ function AQTESection({ marketData, isConnected = false }: { marketData?: MarketD
             {marketHours && <>{' '}
             <span role="status" aria-label="AQTE view status" className={`aqte-view-status inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-[11px] font-bold tracking-wider ${
               liveFeed ? 'border-emerald-400/40 bg-emerald-400/10 text-emerald-200' :
-                'border-amber-400/40 bg-amber-400/10 text-amber-200'
+                backendStatusCurrent ? 'border-amber-400/40 bg-amber-400/10 text-amber-200' :
+                  'border-slate-400/40 bg-slate-400/10 text-slate-300'
             }`}>
-              <span aria-hidden="true" className={`h-1.5 w-1.5 rounded-full ${liveFeed ? 'bg-emerald-300' : 'bg-amber-300'}`} />
-              {liveFeed ? 'LIVE (Zerodha)' : 'FEED OFF'}
+              <span aria-hidden="true" className={`h-1.5 w-1.5 rounded-full ${
+                liveFeed ? 'bg-emerald-300' : backendStatusCurrent ? 'bg-amber-300' : 'bg-slate-300'
+              }`} />
+              {feedLabel}
             </span></>}
           </h2>
           <p className="aqx-subtitle">12 Strategy Evaluators • Scalp/Swing Entry Rules • Risk-Gated Auto Execution</p>

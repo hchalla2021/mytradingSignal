@@ -1320,11 +1320,11 @@ test('trade book tabs support arrow, Home and End keys and show one panel', () =
   }
 });
 
-test('market badge requires the selected AQTE feed, not just a fresh dashboard spot price', async () => {
+test('market badge reflects the AQTE backend feed, not the browser market-data socket', async () => {
   for (const [at, connected, age, expected] of [
     ['2026-10-30T09:15:00+05:30', true, 0, 'LIVE (Zerodha)'],
-    ['2026-10-30T10:00:00+05:30', false, 0, 'FEED OFF'],
-    ['2026-10-30T10:00:00+05:30', true, 10, 'FEED OFF'],
+    ['2026-10-30T10:00:00+05:30', false, 0, 'LIVE (Zerodha)'],
+    ['2026-10-30T10:00:00+05:30', true, 10, 'LIVE (Zerodha)'],
     ['2026-10-30T15:30:00+05:30', true, 0, 'CLOSED'],
     ['2026-10-31T10:00:00+05:30', true, 0, 'CLOSED'],
   ]) {
@@ -1363,6 +1363,11 @@ test('market badge requires the selected AQTE feed, not just a fresh dashboard s
     await h.poll(snapshot);
     tree = h.render(props);
     assert.equal(text(nodes(tree).find(n => n.props?.['aria-label'] === 'AQTE view status')).trim(), 'FEED OFF');
+    snapshot.data.NIFTY.feed_ready = true;
+    snapshot.generated_at -= 20;
+    await h.poll(snapshot);
+    tree = h.render(props);
+    assert.equal(text(nodes(tree).find(n => n.props?.['aria-label'] === 'AQTE view status')).trim(), 'STATUS UNKNOWN');
     cleanup();
   }
 });

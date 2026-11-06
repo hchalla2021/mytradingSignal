@@ -539,7 +539,7 @@ class ExecutionTests(unittest.TestCase):
         self.assertEqual(metrics["net_pnl"], round(
             points * CONTRACT.lot_size - order["entry_cost"] - engine.costs(122, CONTRACT.lot_size), 2))
         self.assertGreater(metrics["peak_points"], 0)
-        self.assertGreater(metrics["stop_points"], 0)
+        self.assertEqual(metrics["stop_points"], round(order["initial_stop"] - order["entry_price"], 2))
         self.assertNotIn("metrics", order)
         self.assertIsNone(engine.snapshot(NOW + 20)["data"]["NIFTY"]["position"]["metrics"]["net_pnl"])
         self.assertIsNone(engine.position_metrics(order, NOW + 2, healthy=False)["ltp"])
@@ -620,8 +620,12 @@ class ExecutionTests(unittest.TestCase):
         engine = ready_engine()
         engine.ingest(tick("option", at=NOW + 1, bid=98, ask=99, price=99))
         opened = dict(engine.orders["NIFTY"])
-        engine.ingest(tick("option", at=NOW + 2, bid=122, ask=123, price=122))
-        self.assertGreater(engine.orders["NIFTY"]["stop"], opened["stop"])
+        below_target = opened["target"] - CONTRACT.tick_size
+        moved = min(below_target, opened["entry_price"] + 0.9 * (
+            opened["entry_price"] - opened["initial_stop"]))
+        engine.ingest(tick("option", at=NOW + 2, bid=moved, ask=moved + 1, price=moved))
+        self.assertFalse(engine.orders["NIFTY"]["runner_active"])
+        self.assertEqual(engine.orders["NIFTY"]["stop"], opened["stop"])
         engine.ingest(tick("option", at=NOW + 3, bid=70, ask=71, price=70))
         trade = engine.trades[0]
         self.assertEqual(trade["exit_reason"], "STOP_LOSS")
@@ -632,8 +636,54 @@ class ExecutionTests(unittest.TestCase):
         engine = ready_engine()
         engine.ingest(tick("option", at=NOW + 1, bid=98, ask=99, price=99))
         target = engine.orders["NIFTY"]["target"]
-        engine.ingest(tick("option", at=NOW + 2, bid=target + 10, ask=target + 11, price=target + 10))
+        with patch.object(engine, "exit_trend_context", return_value=None):
+            engine.ingest(tick("option", at=NOW + 2, bid=target + 10, ask=target + 11, price=target + 10))
         self.assertEqual(engine.trades[0]["exit_price"], target)
+
+    def test_completed_one_three_five_minute_trend_extends_target_in_paper(self):
+        engine = ready_engine()
+        engine.ingest(tick("option", at=NOW + 1, bid=98, ask=99, price=99))
+        order = engine.orders["NIFTY"]
+        context = engine.exit_trend_context(order, NOW + 2)
+        self.assertIsNotNone(context)
+        self.assertTrue(context["continuation"])
+        self.assertEqual(set(context["frames"]), {60, 180, 300})
+
+        target = order["target"]
+        engine.ingest(tick("option", at=NOW + 2, bid=target + 5, ask=target + 6, price=target + 5))
+        self.assertTrue(order["runner_active"])
+        self.assertGreater(order["stop"], order["entry_price"])
+        self.assertIn("NIFTY", engine.orders)
+        self.assertTrue(any(event["kind"] == "TARGET_EXTENDED" for event in engine.events))
+
+    def test_runner_waits_through_mixed_candles_then_exits_on_confirmed_reversal(self):
+        engine = ready_engine()
+        engine.ingest(tick("option", at=NOW + 1, bid=98, ask=99, price=99))
+        order = engine.orders["NIFTY"]
+        target = order["target"]
+        confirmation = dict(
+            continuation=True, reversal=False, weakening=False, bar_key=(1, 2, 3), atr=1.0,
+            frames={60: {"aligned": True}, 180: {"aligned": True}, 300: {"aligned": True}},
+        )
+        with patch.object(engine, "exit_trend_context", return_value=confirmation):
+            engine.ingest(tick("option", at=NOW + 2, bid=target + 5, ask=target + 6, price=target + 5))
+        self.assertIn("NIFTY", engine.orders)
+        stop_after_runner = order["stop"]
+
+        with patch.object(engine, "exit_trend_context", return_value=confirmation):
+            engine.ingest(tick("option", at=NOW + 3, bid=target + 10, ask=target + 11, price=target + 10))
+        self.assertEqual(order["stop"], stop_after_runner, "A fresh tick cannot move the stop without a closed candle")
+
+        mixed = {**confirmation, "continuation": False, "weakening": True, "bar_key": (2, 3, 4)}
+        with patch.object(engine, "exit_trend_context", return_value=mixed):
+            engine.ingest(tick("option", at=NOW + 4, bid=target + 9, ask=target + 10, price=target + 9))
+        self.assertIn("NIFTY", engine.orders, "A mixed/weak reading is not itself an exit")
+        self.assertGreater(order["stop"], stop_after_runner, "Confirmed weakening tightens the runner stop")
+
+        reversal = {**mixed, "reversal": True, "bar_key": (3, 4, 5)}
+        with patch.object(engine, "exit_trend_context", return_value=reversal):
+            engine.ingest(tick("option", at=NOW + 5, bid=target + 8, ask=target + 9, price=target + 8))
+        self.assertEqual(engine.trades[0]["exit_reason"], "CONFIRMED_REVERSAL")
 
     def test_risk_limits_and_kill_wait_for_fresh_exit_quote(self):
         engine = ready_engine()
@@ -908,9 +958,10 @@ class ReplayTests(unittest.TestCase):
                       tick("option", at=at + 1, bid=98, ask=99, price=99),
                       tick("option", at=at + 2, bid=145, ask=146, price=145)])
         report = replay(ticks, [CONTRACT])
-        self.assertEqual(report["closed"], 1)
-        self.assertGreater(report["trades"][0]["entry_at"], at)
-        self.assertEqual(report["trades"][0]["exit_reason"], "TARGET")
+        self.assertEqual(report["closed"], 0)
+        self.assertGreater(report["open_or_pending"][0]["entry_at"], at)
+        self.assertTrue(report["open_or_pending"][0]["runner_active"])
+        self.assertGreater(report["open_or_pending"][0]["stop"], report["open_or_pending"][0]["entry_price"])
         stressed = replay(ticks, [CONTRACT], Policy(slippage_ticks=30))
         self.assertEqual(stressed["closed"], 0, "Higher slippage must not violate entry-price ceiling")
 
