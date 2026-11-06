@@ -17,7 +17,7 @@
       "order_blocks": {
         "score": 0.3833,
         "signal": "BULL",
-        "label": "Bullish OB @ 24604-24656 (0.19% away)",
+        "label": "Bullish OB @ 24604-24656 (0.17% away)",
         "weight": 0.25,
         "value": 0.383,
         "extra": {
@@ -26,7 +26,7 @@
           "nearest_ob": {
             "type": "BULLISH",
             "zone": "24604-24656",
-            "dist": 0.19
+            "dist": 0.17
           }
         }
       },
@@ -42,7 +42,7 @@
           "nearest_fvg": {
             "type": "BULLISH",
             "zone": "24608-24624",
-            "dist": 0.14
+            "dist": 0.12
           }
         }
       },
@@ -96,8 +96,8 @@
       }
     },
     "metrics": {
-      "price": 24651.15,
-      "changePct": 0.47,
+      "price": 24645.95,
+      "changePct": 0.45,
       "oi": 0,
       "candleCount": 21,
       "swingHighs": 2,
@@ -117,15 +117,15 @@
       },
       "sequencePrediction": {
         "nextMove": "SIDEWAYS",
-        "nextMovePts": 0.08,
+        "nextMovePts": 0.07,
         "trendContinuationProb": 68.93,
-        "reversalProb": 37.13,
+        "reversalProb": 37.12,
         "horizonSec": 300
       },
       "microstructure": {
         "liquidityDensity": 0.0,
         "structureDensity": 28.63,
-        "fakeBreakoutRisk": 27.56,
+        "fakeBreakoutRisk": 27.5,
         "stopHuntRisk": 21.0
       },
       "smc": {
@@ -169,7 +169,7 @@
       }
     },
     "dataSource": "LIVE",
-    "timestamp": "2026-11-06T10:18:51.738067+05:30"
+    "timestamp": "2026-11-06T10:19:27.585563+05:30"
   },
   "BANKNIFTY": {
     "symbol": "BANKNIFTY",
@@ -189,7 +189,7 @@
       "order_blocks": {
         "score": 0.115,
         "signal": "NEUTRAL",
-        "label": "Bullish OB @ 57788-57921 (0.22% away)",
+        "label": "Bullish OB @ 57788-57921 (0.19% away)",
         "weight": 0.25,
         "value": 0.115,
         "extra": {
@@ -198,7 +198,7 @@
           "nearest_ob": {
             "type": "BULLISH",
             "zone": "57788-57921",
-            "dist": 0.22
+            "dist": 0.19
           }
         }
       },
@@ -214,7 +214,7 @@
           "nearest_fvg": {
             "type": "BULLISH",
             "zone": "57829-57871",
-            "dist": 0.11
+            "dist": 0.08
           }
         }
       },
@@ -273,8 +273,8 @@
       }
     },
     "metrics": {
-      "price": 57913.95,
-      "changePct": 0.24,
+      "price": 57895.25,
+      "changePct": 0.21,
       "oi": 0,
       "candleCount": 21,
       "swingHighs": 2,
@@ -294,15 +294,15 @@
       },
       "sequencePrediction": {
         "nextMove": "SIDEWAYS",
-        "nextMovePts": 0.04,
+        "nextMovePts": 0.03,
         "trendContinuationProb": 73.49,
-        "reversalProb": 32.43,
+        "reversalProb": 32.41,
         "horizonSec": 300
       },
       "microstructure": {
         "liquidityDensity": 6.6,
         "structureDensity": 44.58,
-        "fakeBreakoutRisk": 26.91,
+        "fakeBreakoutRisk": 26.83,
         "stopHuntRisk": 26.28
       },
       "smc": {
@@ -346,7 +346,7 @@
       }
     },
     "dataSource": "LIVE",
-    "timestamp": "2026-11-06T10:18:51.739257+05:30"
+    "timestamp": "2026-11-06T10:19:27.587169+05:30"
   },
   "SENSEX": {
     "symbol": "SENSEX",
@@ -366,7 +366,7 @@
       "order_blocks": {
         "score": 0.2238,
         "signal": "BULL",
-        "label": "Bullish OB @ 79730-79900 (0.21% away)",
+        "label": "Bullish OB @ 79730-79900 (0.19% away)",
         "weight": 0.25,
         "value": 0.224,
         "extra": {
@@ -375,7 +375,7 @@
           "nearest_ob": {
             "type": "BULLISH",
             "zone": "79730-79900",
-            "dist": 0.21
+            "dist": 0.19
           }
         }
       },
@@ -391,7 +391,7 @@
           "nearest_fvg": {
             "type": "BULLISH",
             "zone": "79744-79801",
-            "dist": 0.16
+            "dist": 0.13
           }
         }
       },
@@ -445,8 +445,8 @@
       }
     },
     "metrics": {
-      "price": 79899.68,
-      "changePct": 0.74,
+      "price": 79879.77,
+      "changePct": 0.72,
       "oi": 0,
       "candleCount": 21,
       "swingHighs": 2,
@@ -468,13 +468,13 @@
         "nextMove": "SIDEWAYS",
         "nextMovePts": 0.12,
         "trendContinuationProb": 68.73,
-        "reversalProb": 37.5,
+        "reversalProb": 37.49,
         "horizonSec": 300
       },
       "microstructure": {
         "liquidityDensity": 0.0,
         "structureDensity": 28.63,
-        "fakeBreakoutRisk": 28.31,
+        "fakeBreakoutRisk": 28.26,
         "stopHuntRisk": 21.0
       },
       "smc": {
@@ -518,6 +518,6 @@
       }
     },
     "dataSource": "LIVE",
-    "timestamp": "2026-11-06T10:18:51.740426+05:30"
+    "timestamp": "2026-11-06T10:19:27.588400+05:30"
   }
 }
