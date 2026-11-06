@@ -347,7 +347,7 @@ function AQTESection({ marketData, isConnected = false }: { marketData?: MarketD
   const policy = snapshot?.engine_policy && typeof snapshot.engine_policy.veto === 'boolean' &&
     Number.isInteger(snapshot.engine_policy.veto_min) ? snapshot.engine_policy : null;
   const signalAt = snapshot?.data[selectedSymbol]?.at;
-  const tickAge = liveFeed && typeof signalAt === 'number' ? Math.max(0, now - signalAt * 1000) : null;
+  const tickAge = liveFeed && typeof signalAt === 'number' ? Math.max(0, Date.now() - signalAt * 1000) : null;
   const health = unavailable ? ['Offline', 'aqx-down'] : marketHours && !liveFeed ? ['Degraded', 'aqx-wait'] : ['Healthy', 'aqx-up'];
   const dataState = unavailable ? 'Off' : liveFeed ? 'Live' : marketHours ? 'Stale' : 'Market closed';
 

@@ -1584,7 +1584,7 @@ test('index cards explain a missing quote instead of claiming a snapshot', async
   assert.match(value, /No live quote\s*AQTE OFFLINE/);
 });
 
-test('tick age uses the wall clock at render instead of the one-second UI clock', async () => {
+test('tick age uses the backend signal timestamp instead of the one-second UI clock', async () => {
   let clock = Date.now();
   const h = harness('AQTESection.tsx', () => clock);
   h.render();
@@ -1592,7 +1592,7 @@ test('tick age uses the wall clock at render instead of the one-second UI clock'
   const at = Date.parse('2026-10-30T10:00:00+05:30');
   clock = at;
   snapshot.generated_at = at / 1000;
-  snapshot.data.NIFTY.at = at / 1000;
+  snapshot.data.NIFTY.at = (at + 400) / 1000;
   snapshot.data.NIFTY.feed_ready = true;
   const cleanup = h.mount(snapshot);
   await settle();
