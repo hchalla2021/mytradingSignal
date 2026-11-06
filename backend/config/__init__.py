@@ -104,6 +104,22 @@ class Settings(BaseSettings):
     aqte_live_static_ip: str = "122.177.245.101"
     # Real-money opt-in: lets fully aligned, unvalidated rule setups enter one lot.
     aqte_live_allow_unvalidated_rules: bool = False
+    aqte_morning_super_candle_enabled: bool = True
+    aqte_morning_bollinger_period: int = Field(default=20, ge=10, le=50)
+    aqte_morning_bollinger_stddev: float = Field(default=2.0, ge=1.0, le=3.0)
+    aqte_morning_rsi_period: int = Field(default=14, ge=5, le=30)
+    aqte_morning_rsi_bullish: float = Field(default=70, ge=50, le=90)
+    aqte_morning_rsi_bearish: float = Field(default=30, ge=10, le=50)
+    aqte_morning_super_candle_body_ratio: float = Field(default=0.7, ge=0.5, le=0.95)
+    aqte_morning_super_candle_close_position: float = Field(default=0.8, ge=0.55, le=0.99)
+    aqte_morning_super_candle_range_atr: float = Field(default=1.3, ge=1.0, le=5.0)
+    aqte_morning_super_candle_volume_ratio: float = Field(default=1.5, ge=1.0, le=5.0)
+    aqte_morning_super_candle_structure_period: int = Field(default=5, ge=2, le=20)
+    aqte_morning_supertrend_confirmation: bool = False
+    aqte_morning_intrabar_enabled: bool = False
+    aqte_morning_intrabar_body_ratio: float = Field(default=0.85, ge=0.7, le=0.99)
+    aqte_morning_intrabar_range_atr: float = Field(default=1.75, ge=1.25, le=5.0)
+    aqte_morning_intrabar_volume_ratio: float = Field(default=2.0, ge=1.5, le=8.0)
     # Existing PostgreSQL server; never expose this URL in API diagnostics.
     aqte_morning_postgres_url: str = Field(default="", repr=False, exclude=True)
     # Max one-lot loss (premium to stop + estimated costs); half the daily loss lets two losers fit a day.

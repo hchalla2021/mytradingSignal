@@ -10,13 +10,13 @@ import queue
 import threading
 import time
 from collections import defaultdict, deque
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from datetime import datetime
 from uuid import uuid4
-from typing import Any, Literal, NotRequired, TypedDict
+from typing import Any, Iterable, Literal, NotRequired, TypedDict, TYPE_CHECKING
 
 from services.aqte_engine import (
-    IST, SYMBOLS, WARMUP_CANDLES, Tick, day, minute_of_day, round_tick, session,
+    IST, SYMBOLS, WARMUP_CANDLES, Contract, Tick, day, minute_of_day, round_tick, session,
 )
 from services.aqte_engines import expiry_years, greeks
 from services.aqte_morning_store import MorningStore, STORE_ERRORS
@@ -25,6 +25,11 @@ from services.aqte_runtime import Latencies
 logger = logging.getLogger(__name__)
 FRESH_SECONDS = 3
 ENTRY_CUTOFF = 630
+SUPERCANDLE_VOLUME_PERIOD = 20
+SUPERCANDLE_ATR_PERIOD = 14
+
+if TYPE_CHECKING:
+    from config import Settings
 
 
 class MorningRule(TypedDict):
@@ -66,13 +71,193 @@ def fresh(tick, now):
         0 <= now - tick.received <= FRESH_SECONDS)
 
 
-def option_levels(contract, quote, spot_price, atr, now, rate=0.065):
+@dataclass(frozen=True)
+class MorningSuperCandleConfig:
+    enabled: bool = True
+    bollinger_period: int = 20
+    bollinger_stddev: float = 2.0
+    rsi_period: int = 14
+    rsi_bullish: float = 70
+    rsi_bearish: float = 30
+    body_ratio: float = 0.7
+    close_position: float = 0.8
+    range_atr: float = 1.3
+    volume_ratio: float = 1.5
+    structure_period: int = 5
+    supertrend_confirmation: bool = False
+    intrabar_enabled: bool = False
+    intrabar_body_ratio: float = 0.85
+    intrabar_range_atr: float = 1.75
+    intrabar_volume_ratio: float = 2.0
+
+    @classmethod
+    def from_settings(cls, settings: "Settings") -> "MorningSuperCandleConfig":
+        return cls(
+            enabled=settings.aqte_morning_super_candle_enabled,
+            bollinger_period=settings.aqte_morning_bollinger_period,
+            bollinger_stddev=settings.aqte_morning_bollinger_stddev,
+            rsi_period=settings.aqte_morning_rsi_period,
+            rsi_bullish=settings.aqte_morning_rsi_bullish,
+            rsi_bearish=settings.aqte_morning_rsi_bearish,
+            body_ratio=settings.aqte_morning_super_candle_body_ratio,
+            close_position=settings.aqte_morning_super_candle_close_position,
+            range_atr=settings.aqte_morning_super_candle_range_atr,
+            volume_ratio=settings.aqte_morning_super_candle_volume_ratio,
+            structure_period=settings.aqte_morning_super_candle_structure_period,
+            supertrend_confirmation=settings.aqte_morning_supertrend_confirmation,
+            intrabar_enabled=settings.aqte_morning_intrabar_enabled,
+            intrabar_body_ratio=settings.aqte_morning_intrabar_body_ratio,
+            intrabar_range_atr=settings.aqte_morning_intrabar_range_atr,
+            intrabar_volume_ratio=settings.aqte_morning_intrabar_volume_ratio,
+        )
+
+
+def _super_candle_metrics(
+    candidate: dict[str, Any], prior: list[dict[str, Any]],
+    config: MorningSuperCandleConfig, supertrend: str | None,
+) -> dict[str, Any] | None:
+    required = max(config.bollinger_period - 1, config.rsi_period,
+                   config.structure_period, SUPERCANDLE_VOLUME_PERIOD, SUPERCANDLE_ATR_PERIOD + 1)
+    if len(prior) < required:
+        return None
+    try:
+        values = [candidate[name] for name in ("open", "high", "low", "close", "volume")]
+        if not all(math.isfinite(value) for value in values) or candidate["high"] <= candidate["low"]:
+            return None
+        prior = prior[-required - 1:]
+        close = candidate["close"]
+        span = candidate["high"] - candidate["low"]
+        body_ratio = abs(close - candidate["open"]) / span
+        close_position = (close - candidate["low"]) / span
+        sign = 1 if close > candidate["open"] else -1 if close < candidate["open"] else 0
+        band_closes = [bar["close"] for bar in prior[-(config.bollinger_period - 1):]] + [close]
+        mean = sum(band_closes) / len(band_closes)
+        deviation = math.sqrt(sum((value - mean) ** 2 for value in band_closes) / len(band_closes))
+        upper = mean + config.bollinger_stddev * deviation
+        lower = mean - config.bollinger_stddev * deviation
+        rsi_closes = [bar["close"] for bar in prior[-config.rsi_period:]] + [close]
+        changes = [right - left for left, right in zip(rsi_closes, rsi_closes[1:])]
+        gain = sum(max(0, change) for change in changes) / config.rsi_period
+        loss = sum(max(0, -change) for change in changes) / config.rsi_period
+        rsi = 100 - 100 / (1 + gain / loss) if loss else 100 if gain else 50
+        atr_bars = prior[-(SUPERCANDLE_ATR_PERIOD + 1):]
+        true_ranges = [max(bar["high"] - bar["low"],
+                            abs(bar["high"] - atr_bars[index - 1]["close"]),
+                            abs(bar["low"] - atr_bars[index - 1]["close"]))
+                       for index, bar in enumerate(atr_bars) if index]
+        atr = sum(true_ranges) / len(true_ranges)
+        avg_volume = sum(bar["volume"] for bar in prior[-SUPERCANDLE_VOLUME_PERIOD:]) / SUPERCANDLE_VOLUME_PERIOD
+        volume_ratio = candidate["volume"] / avg_volume if avg_volume > 0 else None
+        structure = prior[-config.structure_period:]
+        structure_high = max(bar["high"] for bar in structure)
+        structure_low = min(bar["low"] for bar in structure)
+        aligned_rsi = (rsi >= config.rsi_bullish if sign > 0 else
+                       rsi <= config.rsi_bearish if sign < 0 else False)
+        band_break = close > upper if sign > 0 else close < lower if sign < 0 else False
+        structure_break = close > structure_high if sign > 0 else close < structure_low if sign < 0 else False
+        aligned_supertrend = supertrend == ("BULLISH" if sign > 0 else "BEARISH")
+        checks = dict(
+            direction=sign != 0, close_outside_band=band_break, structure_break=structure_break,
+            rsi=aligned_rsi, body=body_ratio >= config.body_ratio,
+            close_position=(close_position if sign > 0 else 1 - close_position) >= config.close_position,
+            range_expansion=atr > 0 and (candidate["high"] - candidate["low"]) / atr >= config.range_atr,
+            volume_expansion=volume_ratio is not None and volume_ratio >= config.volume_ratio,
+            supertrend=not config.supertrend_confirmation or aligned_supertrend)
+        return dict(
+            at=candidate["at"], side="CE" if sign > 0 else "PE" if sign < 0 else None,
+            open=candidate["open"], high=candidate["high"], low=candidate["low"], close=close,
+            body_ratio=body_ratio, close_position=close_position if sign > 0 else 1 - close_position,
+            range=candidate["high"] - candidate["low"], atr=atr,
+            range_atr=(candidate["high"] - candidate["low"]) / atr if atr > 0 else None,
+            volume_ratio=volume_ratio, rsi=rsi, upper_band=upper, lower_band=lower,
+            band_break=band_break, structure_break=structure_break,
+            upper_wick_outside=candidate["high"] > upper,
+            lower_wick_outside=candidate["low"] < lower,
+            wick_only=(candidate["high"] > upper or candidate["low"] < lower) and not band_break,
+            structure_high=structure_high, structure_low=structure_low,
+            supertrend=supertrend, supertrend_aligned=aligned_supertrend,
+            checks=checks, strong=all(checks.values()),
+        )
+    except (KeyError, TypeError, ValueError, ZeroDivisionError, OverflowError):
+        return None
+
+
+def super_candle_state(
+    bars: list[dict[str, Any]], forming: dict[str, Any] | None, now: float,
+    config: MorningSuperCandleConfig, supertrend: str | None = None,
+) -> dict[str, Any]:
+    if not config.enabled:
+        return dict(status="DISABLED", reason="Super Candle strategy is disabled")
+    forming_metrics = _super_candle_metrics(forming, bars, config, supertrend) if forming else None
+    if config.intrabar_enabled and forming_metrics:
+        metrics = forming_metrics
+        if metrics and metrics["strong"] and metrics["body_ratio"] >= config.intrabar_body_ratio and (
+            metrics["range_atr"] >= config.intrabar_range_atr and
+            metrics["volume_ratio"] >= config.intrabar_volume_ratio
+        ):
+            return {**metrics, "status": "CONFIRMED", "mode": "intrabar",
+                    "reason": "High-confidence intrabar Bollinger breakout"}
+    completed = dict(status="UNAVAILABLE",
+                     reason="Completed candles are insufficient for Super Candle features")
+    if len(bars) >= max(config.bollinger_period, config.rsi_period + 1,
+                        config.structure_period + 1, SUPERCANDLE_VOLUME_PERIOD + 1,
+                        SUPERCANDLE_ATR_PERIOD + 2):
+        candidate, prior = bars[-1], bars[:-1]
+        close_at = candidate["at"] + 60
+        if now >= close_at and now - close_at <= 60 and (
+            forming is None or forming["at"] == close_at
+        ):
+            metrics = _super_candle_metrics(candidate, prior, config, supertrend)
+            if not metrics:
+                completed = dict(status="UNAVAILABLE", reason="Completed candle features are unavailable")
+            elif not metrics["strong"]:
+                failed = [name.replace("_", " ") for name, passed in metrics["checks"].items() if not passed]
+                completed = {**metrics, "status": "WEAK",
+                             "reason": "Super Candle quality failed: " + ", ".join(failed)}
+            elif not forming:
+                return {**metrics, "status": "AWAITING_FOLLOW_THROUGH",
+                        "reason": "Strong candle awaits the next candle's continuation or rejection"}
+            else:
+                sign = 1 if metrics["side"] == "CE" else -1
+                breakout = metrics["high"] + metrics["atr"] * 0.05 if sign > 0 else (
+                    metrics["low"] - metrics["atr"] * 0.05)
+                continued = forming["high"] >= breakout if sign > 0 else forming["low"] <= breakout
+                continued = continued and (forming["close"] - metrics["high" if sign > 0 else "low"]) * sign > 0
+                midpoint = (metrics["open"] + metrics["close"]) / 2
+                rejected = (forming["close"] < midpoint if sign > 0 else forming["close"] > midpoint)
+                if continued:
+                    return {**metrics, "status": "CONFIRMED", "mode": "next_candle",
+                            "breakout_price": breakout,
+                            "reason": "Strong candle confirmed by next-candle follow-through"}
+                if rejected:
+                    return {**metrics, "status": "REJECTED",
+                            "reason": "Next candle rejected the Super Candle midpoint"}
+                return {**metrics, "status": "AWAITING_FOLLOW_THROUGH",
+                        "reason": "Strong candle awaits next-candle continuation beyond its extreme"}
+        else:
+            completed = dict(status="NONE",
+                             reason="No recent completed candle with a consecutive follow-through candle")
+    if forming_metrics and forming_metrics["strong"]:
+        return {**forming_metrics, "status": "DEVELOPING", "mode": "intrabar_observation",
+                "reason": "Developing Super Candle is monitored until close"}
+    if forming_metrics and forming_metrics["wick_only"]:
+        return {**forming_metrics, "status": "WICK_ONLY", "mode": "intrabar_observation",
+                "reason": "Band excursion is only a wick; candle close has not confirmed breakout"}
+    return completed
+
+
+def option_levels(
+    contract: Contract, quote: Tick, spot_price: float, atr: float, now: float, rate: float = 0.065,
+    underlying_stop_distance: float | None = None,
+) -> tuple[dict[str, Any], dict[str, float] | None]:
     years = expiry_years(contract.expiry, now)
     model = greeks(spot_price, contract.strike, years, rate,
                    (quote.bid + quote.ask) / 2, contract.side == "CE") if years else None
     maximum = round_tick(quote.ask, contract.tick_size, up=True)
     distance = max(maximum * 0.12, 2 * contract.tick_size,
                    atr * abs(model["delta"]) * 0.5 if model else 0)
+    if underlying_stop_distance and model:
+        distance = max(distance, underlying_stop_distance * abs(model["delta"]))
     stop = round_tick(maximum - distance, contract.tick_size)
     target = round_tick(maximum + 3 * (maximum - stop), contract.tick_size, up=True)
     return dict(low=quote.bid, high=maximum, maximum=maximum, quantity=contract.lot_size,
@@ -100,10 +285,12 @@ def complete_ohlcv(bars, seconds):
 
 
 class MorningRules:
-    def __init__(self):
+    def __init__(self, super_candle_config: MorningSuperCandleConfig | None = None):
+        self.super_candle_config: MorningSuperCandleConfig = super_candle_config or MorningSuperCandleConfig()
         self.today = None
         self.latest = {}
         self.tapes = defaultdict(lambda: deque(maxlen=240))
+        self.option_tapes: defaultdict[int, deque[Tick]] = defaultdict(lambda: deque(maxlen=32))
         self.preopen = {}
         self.opening = {}
         self.vwap = {}
@@ -112,7 +299,8 @@ class MorningRules:
 
     def accept(self, tick: Tick, raw):
         if self.today != day(tick.received):
-            self.__init__()
+            config = self.super_candle_config
+            self.__init__(config)
             self.today = day(tick.received)
         previous = self.latest.get((tick.kind, tick.token))
         if not fresh(tick, tick.received):
@@ -153,7 +341,15 @@ class MorningRules:
                         observation[prefix + "high"] = max(observation[prefix + "high"] or tick.price, tick.price)
                         observation[prefix + "low"] = min(observation[prefix + "low"] or tick.price, tick.price)
             return None
-        if not session(tick.at) or tick.kind == "option":
+        if not session(tick.at):
+            return None
+        if tick.kind == "option":
+            tape = self.option_tapes[tick.token]
+            if tape and (tick.at - tape[-1].at > FRESH_SECONDS or tick.token != tape[-1].token):
+                tape.clear()
+            tape.append(tick)
+            while tape and tick.at - tape[0].at > 30:
+                tape.popleft()
             return None
         key = (tick.symbol, tick.kind)
         tape = self.tapes[key]
@@ -173,7 +369,7 @@ class MorningRules:
             weighted["turnover"] += tick.price * delta
         return None
 
-    def evaluate(self, symbol, context, now) -> MorningSignal:
+    def evaluate(self, symbol: str, context: dict[str, Any], now: float) -> MorningSignal:
         signal: MorningSignal = dict(source="morning", decision="WAIT", strategy=None, confidence=None, contract=None,
                       entry=None, reasons=[], at=now, intelligence={"at": int(now // 60) * 60},
                       model_validated=False, rules=[], evidence={}, engines=[], orchestration=None)
@@ -240,6 +436,15 @@ class MorningRules:
         ema = features.get("ema") or {}
         preopen = self.preopen.get(f"{symbol}:future") or {}
         sweep_low, sweep_high = preopen.get("low"), preopen.get("high")
+        super_candle = super_candle_state(
+            context.get("futures_bars") or [], context.get("forming_future_bar"), now,
+            self.super_candle_config, features.get("supertrend"))
+        adx = features.get("adx")
+        super_candle["market_regime"] = (
+            "TRENDING" if isinstance(adx, (int, float)) and math.isfinite(adx) and adx >= 20 else
+            "BREAKOUT_FROM_RANGE" if super_candle.get("status") == "CONFIRMED" else
+            "SIDEWAYS_OR_UNCONFIRMED" if isinstance(adx, (int, float)) and math.isfinite(adx) else
+            "UNAVAILABLE")
         setups = [
             ("liquidity_sweep", bool(sweep_low and sweep_high and (
                 (sign > 0 and low < sweep_low - atr * 0.1 and future.price > sweep_low + atr * 0.1) or
@@ -256,14 +461,17 @@ class MorningRules:
                 and abs(move) >= atr * 0.3)),
             ("scalp", high - low < atr * 0.5 and imbalance is not None
              and imbalance * sign >= 0.2 and efficiency >= 0.85),
+            ("super_candle_bollinger", super_candle.get("status") == "CONFIRMED"),
         ]
         setup = next((name for name, passed in setups if passed), None)
         check("setup", "Confirmed morning setup", setup is not None,
-              "No gap, sweep, ORB, momentum, trend-continuation or scalp setup confirmed")
+              super_candle.get("reason") if self.super_candle_config.enabled and setup is None else
+              "No gap, sweep, ORB, momentum, trend-continuation, Super Candle or scalp setup confirmed")
         signal["evidence"] = dict(atr=atr, move=move, efficiency=efficiency, imbalance=imbalance,
                                   observed_tick_vwap=vwap, gap_pct=gap * 100 if gap is not None else None,
                                   preopen=copy.deepcopy(preopen), opening_price=opening_price,
-                                  setup_checks=dict(setups), oi=future.oi,
+                                  setup_checks=dict(setups), selected_setup=setup,
+                                  super_candle=super_candle, oi=future.oi,
                                   source_at=future.at, spot_at=spot.at,
                                   history_at=features.get("at"), completed_candles=context.get("completed"),
                                   ml="No validated morning model; deterministic rules only")
@@ -272,6 +480,7 @@ class MorningRules:
         assert setup is not None and imbalance is not None
         side = "CE" if sign > 0 else "PE"
         candidates = []
+        liquid_count = 0
         for contract, quote in context.get("options", []):
             if contract.side != side or contract.expiry < day(now) or not fresh(quote, now):
                 continue
@@ -279,20 +488,42 @@ class MorningRules:
                 continue
             if (quote.ask - quote.bid) / quote.ask > 0.03 or quote.volume <= 0:
                 continue
+            liquid_count += 1
+            option_tape = self.option_tapes.get(contract.token) or ()
+            response = self.option_response(option_tape, contract, now)
+            if setup == "super_candle_bollinger" and response is None:
+                continue
             candidates.append((abs(contract.strike - spot.price), (quote.ask - quote.bid) / quote.ask,
-                               -quote.oi if quote.oi is not None else float("inf"), -quote.volume, contract, quote))
-        check("option", "Fresh one-lot option liquidity", bool(candidates),
+                               -quote.oi if quote.oi is not None else float("inf"), -quote.volume,
+                               contract, quote, response))
+        check("option", "Fresh one-lot option liquidity", liquid_count > 0,
               "No fresh option with both-side lot depth, traded volume and <=3% spread")
+        check("option_response", "Option premium follows the breakout",
+              setup != "super_candle_bollinger" or bool(candidates),
+              "Not required for existing setups" if setup != "super_candle_bollinger" else
+              "No liquid selected-side option has rising, fresh two-tick premium confirmation")
         if not candidates:
             return signal
-        *_, contract, quote = min(candidates, key=lambda value: value[:4])
-        entry, model = option_levels(contract, quote, spot.price, atr, now, context.get("risk_free_rate", 0.065))
+        selected = min(candidates, key=lambda value: value[:4])
+        contract, quote, premium_response = selected[-3:]
+        underlying_stop_distance: float | None = None
+        if setup == "super_candle_bollinger":
+            candle_atr = super_candle["atr"]
+            stop_reference = (super_candle["low"] - candle_atr * 0.1 if side == "CE" else
+                              super_candle["high"] + candle_atr * 0.1)
+            underlying_stop_distance = abs(future.price - stop_reference)
+            signal["evidence"]["super_candle"].update(
+                stop_reference=stop_reference, underlying_stop_distance=underlying_stop_distance)
+        entry, model = option_levels(contract, quote, spot.price, atr, now,
+                                     context.get("risk_free_rate", 0.065),
+                                     underlying_stop_distance=underlying_stop_distance)
         check("levels", "Positive stop and target", 0 < entry["stop"] < entry["maximum"] < entry["target"],
               "Option premium cannot support the ATR/premium-based stop")
         if signal["reasons"]:
             return signal
         score = min(95, 75 + 10 * (efficiency - 0.7) / 0.3 + 5 * min(abs(imbalance) / 0.6, 1)
                     + 5 * min(abs(move) / atr, 1))
+        response_reason = ("Rising option premium confirmed; " if premium_response else "")
         signal.update(decision="BUY CE" if side == "CE" else "BUY PE",
                       strategy=f"morning_{setup}", confidence=round(score, 2),
                       contract=asdict(contract), at=min(future.at, spot.at, quote.at),
@@ -300,11 +531,24 @@ class MorningRules:
                       reasons=[f"Morning {setup.replace('_', ' ')}: {side}",
                                f"{abs(move):.2f}-point futures move; {efficiency:.0%} path efficiency",
                                f"{imbalance:.0%} depth imbalance; spot and observed-volume VWAP confirm",
-                               "ATR/premium-based initial stop; existing one-lot net-risk gate still required"])
-        signal["evidence"].update(option=asdict(quote), greeks=model, reference=opening_price)
+                               f"{response_reason}existing one-lot net-risk gate still required"])
+        signal["evidence"].update(option=asdict(quote), option_response=premium_response,
+                                  greeks=model, reference=opening_price)
         signal["options"] = {"rows": [dict(token=contract.token, spread=(quote.ask - quote.bid) / quote.ask,
                                           ask_quantity=quote.ask_quantity, oi=quote.oi, volume=quote.volume)]}
         return signal
+
+    @staticmethod
+    def option_response(tape: Iterable[Tick], contract: Contract, now: float) -> dict[str, float] | None:
+        samples = [tick for tick in tape if fresh(tick, now) and 0 < tick.bid <= tick.ask]
+        if len(samples) < 2 or samples[-1].at - samples[0].at < 1:
+            return None
+        first = (samples[0].bid + samples[0].ask) / 2
+        last = (samples[-1].bid + samples[-1].ask) / 2
+        if last - first < contract.tick_size:
+            return None
+        return dict(first_mid=first, last_mid=last, change=last - first,
+                    start_at=samples[0].at, at=samples[-1].at)
 
     def exit_reason(self, active, now):
         tape = [t for t in self.tapes[active["symbol"], "future"] if t.at >= active["entry_at"]]
@@ -327,10 +571,12 @@ class MorningRules:
 
 
 class MorningService:
-    def __init__(self, market, cache, dsn="", *, store=None):
+    def __init__(self, market, cache, dsn="", *, store=None,
+                 strategy_config: MorningSuperCandleConfig | None = None):
         self.market, self.cache = market, cache
         self.store = store if store is not None else MorningStore(dsn)
-        self.rules = MorningRules()
+        self.strategy_config: MorningSuperCandleConfig = strategy_config or MorningSuperCandleConfig()
+        self.rules = MorningRules(self.strategy_config)
         self.metrics = Latencies()
         self.queue = queue.Queue(maxsize=5000)
         self.lock = threading.RLock()
@@ -343,6 +589,10 @@ class MorningService:
         self.restored_day = None
         self.active_token = None
         self.candle_hashes = {}
+        self.super_candle_events: set[
+            tuple[str, int, str] | tuple[str, int, str, tuple[str, ...]]
+        ] = set()
+        self.super_candle_day = None
         self.order_flow_at = {}
         self.task = None
         self.stopping = False
@@ -369,7 +619,7 @@ class MorningService:
     def audit(self, kind, payload, symbol=None):
         self.put(event(kind, time.time(), copy.deepcopy(payload), symbol))
 
-    def collect_contexts(self, now):
+    def collect_contexts(self, now: float) -> dict[str, dict[str, Any]]:
         contexts = {}
         from services.order_flow_engine import order_flow_engine
         with self.market.lock, self.market.health_lock:
@@ -395,6 +645,8 @@ class MorningService:
                 contexts[symbol] = dict(
                     blocked=blocked, features=copy.deepcopy(features.get("values") or {}),
                     future_token=future.token if future else None,
+                    forming_future_bar=copy.deepcopy(engine.book.current.get(
+                        ("future", future.token, 60))) if future else None,
                     futures_bars=futures_bars, spot_bars=spot_bars, order_flow=order_flow,
                     completed=features.get("completed", 0),
                     previous_close=(engine.previous_day.get(symbol) or {}).get("close"),
@@ -507,6 +759,9 @@ class MorningService:
                 records.append(event("OPTION_CHAIN", now, chain, symbol))
                 self.candle_hashes[f"{symbol}:options"] = chain_hash
         with self.lock, self.metrics.measure("morning.evaluate"):
+            if self.super_candle_day != day(now):
+                self.super_candle_events.clear()
+                self.super_candle_day = day(now)
             signals = {symbol: self.rules.evaluate(symbol, contexts[symbol], now) for symbol in SYMBOLS}
             for symbol, signal in signals.items():
                 order_flow = contexts[symbol].get("order_flow")
@@ -520,6 +775,32 @@ class MorningService:
                     records.append(event("DECISION", now, {**signal, "global_context": cues}, symbol))
                     self.transitions[symbol] = identity
                     self.metrics.increment("decisions")
+                candle = signal["evidence"].get("super_candle") or {}
+                status, candle_at = candle.get("status"), candle.get("at")
+                if isinstance(candle_at, (int, float)) and math.isfinite(candle_at) and status in (
+                    "DEVELOPING", "WICK_ONLY", "AWAITING_FOLLOW_THROUGH", "CONFIRMED", "REJECTED",
+                ):
+                    marker = (symbol, int(candle_at), status)
+                    if marker not in self.super_candle_events:
+                        kind = {
+                            "DEVELOPING": "SUPER_CANDLE_DEVELOPING",
+                            "WICK_ONLY": "BREAKOUT_WICK_ONLY",
+                            "AWAITING_FOLLOW_THROUGH": "SUPER_CANDLE",
+                            "CONFIRMED": "BREAKOUT_CONFIRMATION",
+                            "REJECTED": "BREAKOUT_REJECTION",
+                        }[status]
+                        records.append(event(kind, now, copy.deepcopy(candle), symbol))
+                        self.super_candle_events.add(marker)
+                if (status == "CONFIRMED" and signal["evidence"].get("selected_setup") ==
+                    "super_candle_bollinger" and signal["decision"] == "WAIT" and
+                    isinstance(candle_at, (int, float)) and math.isfinite(candle_at)):
+                    marker = (symbol, int(candle_at), "MISSED", tuple(signal["reasons"]))
+                    if marker not in self.super_candle_events:
+                        records.append(event("MISSED_OPPORTUNITY", now, dict(
+                            strategy="morning_super_candle_bollinger",
+                            reasons=copy.deepcopy(signal["reasons"]),
+                            evidence=copy.deepcopy(signal["evidence"])), symbol))
+                        self.super_candle_events.add(marker)
             if self.lost_day == day(now):
                 records.append(dict(id=f"DATA_LOSS:{self.lost_day}", at=now, symbol=None, kind="DATA_LOSS",
                                     payload={"reason": "Bounded queue overflow; session ineligible"}))
@@ -538,7 +819,7 @@ class MorningService:
                             restored = await self.store.restore(time.time())
                             with self.lock:
                                 if self.rules.today != day(time.time()):
-                                    self.rules = MorningRules()
+                                    self.rules = MorningRules(self.strategy_config)
                                 self.rules.today = day(time.time())
                                 self.rules.preopen = restored["preopen"]
                                 if restored["lost"]:
@@ -608,7 +889,8 @@ class MorningService:
             logger.info("Morning recorder uses %s", self.store.backend)
             self.stopping = False
             self.task = asyncio.create_task(self.run(), name="aqte-morning")
-            self.audit("STARTUP", dict(mode="DETERMINISTIC_RULES", morning_model_validated=False))
+            self.audit("STARTUP", dict(mode="DETERMINISTIC_RULES", morning_model_validated=False,
+                                       super_candle=asdict(self.strategy_config)))
 
     async def stop(self):
         self.stopping = True
@@ -677,6 +959,7 @@ class MorningService:
                         last_commit=self.last_commit,
                         queue_size=self.queue.qsize(), queue_capacity=self.queue.maxsize,
                         lost_day=self.lost_day, preopen=copy.deepcopy(self.rules.preopen),
+                        super_candle_config=asdict(self.strategy_config),
                         global_context=copy.deepcopy(self.global_context),
                         captured_ticks=dict(self.rules.accepted),
                         signals=copy.deepcopy(self.signals), measurements=self.metrics.snapshot(),

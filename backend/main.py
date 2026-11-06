@@ -122,6 +122,7 @@ async def lifespan(app: FastAPI):
     Heavy services boot in a background task after yield.
     """
     global market_feed
+    settings = get_settings()
 
     print("⚡ FastAPI starting...")
 
@@ -163,8 +164,9 @@ async def lifespan(app: FastAPI):
         await get_aqte_service().start()
     except (OSError, ValueError, TypeError, KeyError, sqlite3.Error):
         logger.exception("AQTE unavailable; existing dashboard services will continue")
-    from services.aqte_morning import MorningService
-    morning = MorningService(get_aqte_service(), cache, get_settings().aqte_morning_postgres_url)
+    from services.aqte_morning import MorningService, MorningSuperCandleConfig
+    morning = MorningService(get_aqte_service(), cache, settings.aqte_morning_postgres_url,
+                             strategy_config=MorningSuperCandleConfig.from_settings(settings))
     get_aqte_service().morning = morning
     await morning.start()
     from services.aqte_live import get_live_service

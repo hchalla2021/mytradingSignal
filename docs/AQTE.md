@@ -1476,7 +1476,9 @@ management of an existing position.
   contextual records, not independent entry authority or invented confirmations.
 - The default local SQLite WAL store (or optional PostgreSQL) receives append-only `TICK`, `CHART_CANDLES`, `OPTION_CHAIN`,
   `ORDER_FLOW`, `PREOPEN_CONTEXT`, `GLOBAL_CONTEXT`, `DECISION`, `OPPORTUNITY`
-  and `EXECUTION_*` events in
+  `SUPER_CANDLE_DEVELOPING`, `BREAKOUT_WICK_ONLY`, `SUPER_CANDLE`,
+  `BREAKOUT_CONFIRMATION`, `BREAKOUT_REJECTION`, `MISSED_OPPORTUNITY` and
+  `EXECUTION_*` events in
   `aqte_morning_events`. Raw packet acceptance/rejection is recorded. Original
   live SQLite journals remain authoritative for orders and executions.
 - Each TICK payload preserves the complete Zerodha packet supplied to the shared
@@ -1534,7 +1536,20 @@ every exchange trade.
 
 Separate rules recognise gap-and-go, gap reversal, momentum/volatility expansion,
 completed one-minute ORB, verified pre-open liquidity sweeps, trend continuation
-and short-range scalping. ORB alone waits for its completed opening minute.
+and short-range scalping. The additional Super Candle/Bollinger strategy evaluates
+developing and completed one-minute futures candles and requires a close outside
+the configured band, a close beyond recent market structure, aligned RSI, a large candle body
+closing near its directional extreme, ATR-relative range expansion, and relative
+volume expansion. A temporary wick outside the band is not a breakout; RSI above
+70 confirms bullish momentum and never independently signals a short. SuperTrend
+confirmation is optional. A qualifying closed candle waits for the next candle
+to trade beyond its extreme, or is rejected if the next candle reverses through
+its midpoint. Intrabar entry is **off by default**; when enabled, it requires
+stricter body, range and volume thresholds plus the same band, structure and RSI
+evidence. Every qualifying candle, follow-through, rejection and confirmed
+breakout blocked later in the rules is recorded with its measurements/reason.
+Existing Morning setups retain their prior entry behavior.
+ORB alone waits for its completed opening minute.
 Gap/ORB references require observation of the opening within five seconds;
 a late start cannot label an arbitrary later price as the session open.
 Sideways or incomplete evidence remains WAIT.
@@ -1543,14 +1558,42 @@ Options must have fresh bid/ask, at least one lot on both sides, traded volume,
 valid expiry and at most 3% spread. Selection prioritises strike distance,
 relative spread, reported OI where available and volume. Shared Black-Scholes
 IV/Greeks are estimates from actual quotes, not broker-reported Greeks.
+For the new Super Candle strategy, the chosen option must also show a rising
+mid-price across at least two fresh quotes; missing or flat premium response
+blocks that setup. Other existing Morning setups do not inherit this new gate.
 The initial stop distance is the greater of 12% of premium, two ticks, and
-half ATR times absolute estimated delta when available. Target is three gross
-risk units. The **existing** cost-adjusted reward/risk floor, risk budget and
-one-lot checks can still reject that plan.
+half ATR times absolute estimated delta when available. For Super Candle entries,
+the stop also accounts for the invalidation distance beyond the candle extreme,
+scaled by estimated option delta when available. Target is three gross risk units.
+The existing broker stop, R-based trailing, confirmed-exit logic and central
+execution manager remain responsible for live position protection. The
+**existing** cost-adjusted reward/risk floor, risk budget and one-lot checks can
+still reject that plan.
+
+The strategy is configurable through the existing backend environment:
+`AQTE_MORNING_SUPER_CANDLE_ENABLED` (true), `AQTE_MORNING_BOLLINGER_PERIOD`
+(20), `AQTE_MORNING_BOLLINGER_STDDEV` (2.0), `AQTE_MORNING_RSI_PERIOD` (14),
+`AQTE_MORNING_RSI_BULLISH` (70), `AQTE_MORNING_RSI_BEARISH` (30),
+`AQTE_MORNING_SUPER_CANDLE_BODY_RATIO` (0.7),
+`AQTE_MORNING_SUPER_CANDLE_CLOSE_POSITION` (0.8),
+`AQTE_MORNING_SUPER_CANDLE_RANGE_ATR` (1.3),
+`AQTE_MORNING_SUPER_CANDLE_VOLUME_RATIO` (1.5),
+`AQTE_MORNING_SUPER_CANDLE_STRUCTURE_PERIOD` (5),
+`AQTE_MORNING_SUPERTREND_CONFIRMATION` (false), and
+`AQTE_MORNING_INTRABAR_ENABLED` (false). When intrabar entry is explicitly
+enabled, `AQTE_MORNING_INTRABAR_BODY_RATIO` (0.85),
+`AQTE_MORNING_INTRABAR_RANGE_ATR` (1.75) and
+`AQTE_MORNING_INTRABAR_VOLUME_RATIO` (2.0) set its stricter thresholds.
+Validated ranges are enforced by application settings; changing them does not
+train a model or change existing broker/risk controls.
 
 The score is deterministic rule evidence, **not a win probability or validated
 ML forecast**. No morning-specific trained model exists; no model training runs
-in the session. Existing shadow-only ML remains unchanged.
+in the session. Existing shadow-only ML remains unchanged. The durable recorder
+retains actual candle/tick/option evidence and the active configuration for
+research; this change has not run a historical parameter sweep or a post-cost
+profitability backtest. The strategy remains unvalidated, and existing live
+opt-in policy is unchanged.
 
 Separate owner approval, existing Auto Trade ON, unvalidated-rule opt-in,
 preflight/IP/account checks, index/account limits, one-active-position policy

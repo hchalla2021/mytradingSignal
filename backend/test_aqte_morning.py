@@ -14,7 +14,10 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from services.aqte_engine import IST, day, intelligence
-from services.aqte_morning import MorningRules, MorningService, complete_ohlcv, content_hash, event
+from services.aqte_morning import (
+    MorningRules, MorningService, MorningSuperCandleConfig, complete_ohlcv, content_hash, event,
+    super_candle_state,
+)
 from services.aqte_morning_store import MorningStore
 from services.aqte_service import AQTEService
 from services.cache import CacheService
@@ -31,6 +34,8 @@ def opening_rules(direction=1, **overrides):
                           buy_depth=200 if direction > 0 else 100,
                           sell_depth=100 if direction > 0 else 200), {})
         rules.accept(tick("spot", at=START + second, price=22100 + second * 3 * direction), {})
+    rules.accept(tick("option", at=START + 1, price=99, bid=98, ask=100), {})
+    rules.accept(tick("option", at=START + 2, price=100, bid=99, ask=101), {})
     context = dict(completed=201, future_token=20, features={"atr": 20, "ema": {"9": 22010, "20": 22000},
                                           "at": THURSDAY + 374 * 60},
                    previous_close=22000, options=[(CONTRACT, tick("option", at=START + 2))])
@@ -68,7 +73,43 @@ def market_fixture(path):
     return market, morning
 
 
+def super_candle_context(direction=1, *, breakout=True, base_price=22000):
+    bars = []
+    for index in range(40):
+        close = base_price + index * direction
+        bars.append(dict(at=START - (41 - index) * 60, open=close - direction * 0.5,
+                         high=close + 1, low=close - 1, close=close, volume=100))
+    previous_close = bars[-1]["close"]
+    candle_close = previous_close + direction * (30 if breakout else 1)
+    candidate = dict(at=START - 60, open=previous_close,
+                     high=max(previous_close, candle_close) + 1,
+                     low=min(previous_close, candle_close) - 1,
+                     close=candle_close, volume=300)
+    forming_close = candidate["high"] + 2 if direction > 0 else candidate["low"] - 2
+    forming = dict(at=START, open=candidate["close"], high=max(candidate["close"], forming_close),
+                   low=min(candidate["close"], forming_close), close=forming_close, volume=100)
+    return bars + [candidate], forming
+
+
+def isolate_super_candle_setup(context):
+    context["previous_close"] = None
+    context["features"]["atr"] = 24
+    context["features"]["ema"] = {"9": 22000, "20": 22100}
+
+
 class MorningRulesTests(unittest.TestCase):
+    def test_strategy_settings_are_configurable_and_intrabar_defaults_off(self):
+        from config import Settings
+        settings = Settings(_env_file=None, aqte_morning_bollinger_period=25,
+                           aqte_morning_rsi_bullish=72, aqte_morning_intrabar_enabled=True)
+        config = MorningSuperCandleConfig.from_settings(settings)
+        self.assertEqual(config.bollinger_period, 25)
+        self.assertEqual(config.rsi_bullish, 72)
+        self.assertTrue(config.intrabar_enabled)
+        self.assertFalse(MorningSuperCandleConfig().intrabar_enabled)
+        with self.assertRaises(ValueError):
+            Settings(_env_file=None, aqte_morning_bollinger_period=5)
+
     def test_postgres_url_is_excluded_from_settings_exports_and_repr(self):
         from config import Settings
         field = Settings.model_fields["aqte_morning_postgres_url"]
@@ -162,6 +203,8 @@ class MorningRulesTests(unittest.TestCase):
     def test_equal_distance_and_spread_use_reported_oi_and_keep_ranking_liquidity(self):
         rules, context = opening_rules()
         alternative = replace(CONTRACT, token=31, trading_symbol="NIFTY_TEST_OI")
+        rules.accept(tick("option", token=31, at=START + 1, price=99, bid=98, ask=100), {})
+        rules.accept(tick("option", token=31, at=START + 2, price=100, bid=99, ask=101), {})
         context["options"].append((alternative, tick("option", token=31, at=START + 2, oi=5000)))
         signal = rules.evaluate("NIFTY", context, START + 2)
         self.assertEqual(signal["contract"]["token"], 31)
@@ -221,6 +264,109 @@ class MorningRulesTests(unittest.TestCase):
                 signal = rules.evaluate("NIFTY", context, now)
                 self.assertEqual(signal["strategy"], "morning_" + setup)
 
+    def test_super_candle_requires_band_close_structure_rsi_expansion_and_follow_through(self):
+        for direction, side in ((1, "CE"), (-1, "PE")):
+            with self.subTest(side=side):
+                bars, forming = super_candle_context(direction)
+                state = super_candle_state(bars, forming, START + 2, MorningSuperCandleConfig())
+                self.assertEqual(state["status"], "CONFIRMED")
+                self.assertEqual(state["side"], side)
+                self.assertTrue(state["band_break"])
+                self.assertTrue(state["structure_break"])
+                self.assertTrue(state["strong"])
+                self.assertEqual(state["mode"], "next_candle")
+
+    def test_bollinger_wick_and_extreme_rsi_without_candle_quality_do_not_create_super_candle(self):
+        bars, forming = super_candle_context()
+        candidate = bars[-1]
+        candidate.update(high=candidate["close"] + 30, close=candidate["open"] + 1,
+                         low=candidate["open"])
+        state = super_candle_state(bars, forming, START + 2, MorningSuperCandleConfig())
+        self.assertNotEqual(state["status"], "CONFIRMED")
+        self.assertFalse(state.get("band_break", False))
+        self.assertEqual(state.get("side"), "CE")
+        self.assertGreater(state.get("rsi", 0), 70)
+
+    def test_intrabar_entry_is_opt_in_and_requires_stricter_range_and_volume(self):
+        bars, forming = super_candle_context()
+        completed = bars[:-1]
+        forming = {**bars[-1], "at": START}
+        observed = super_candle_state(completed, forming, START + 2, MorningSuperCandleConfig())
+        self.assertEqual(observed["status"], "DEVELOPING")
+        state = super_candle_state(
+            completed, forming, START + 2,
+            MorningSuperCandleConfig(intrabar_enabled=True))
+        self.assertEqual(state["status"], "CONFIRMED")
+        self.assertEqual(state["mode"], "intrabar")
+
+    def test_developing_band_wick_is_recorded_but_not_qualified(self):
+        bars, _ = super_candle_context()
+        completed = bars[:-1]
+        previous_close = completed[-1]["close"]
+        forming = dict(at=START, open=previous_close, high=previous_close + 100,
+                       low=previous_close - 1, close=previous_close + 1, volume=100)
+        state = super_candle_state(completed, forming, START + 2, MorningSuperCandleConfig())
+        self.assertEqual(state["status"], "WICK_ONLY")
+        self.assertFalse(state.get("strong", False))
+
+    def test_super_candle_signal_uses_existing_morning_option_and_stop_rules(self):
+        rules, context = opening_rules()
+        bars, forming = super_candle_context(base_price=22041)
+        forming.update(high=22112, close=22112)
+        isolate_super_candle_setup(context)
+        context.update(futures_bars=bars, forming_future_bar=forming)
+        signal = rules.evaluate("NIFTY", context, START + 2)
+        self.assertEqual(signal["strategy"], "morning_super_candle_bollinger")
+        self.assertEqual(signal["decision"], "BUY CE")
+        self.assertEqual(signal["evidence"]["option_response"]["change"], 1)
+        self.assertGreater(signal["evidence"]["super_candle"]["underlying_stop_distance"], 0)
+        self.assertEqual(signal["evidence"]["super_candle"]["market_regime"], "BREAKOUT_FROM_RANGE")
+        self.assertEqual(signal["entry"]["quantity"], CONTRACT.lot_size)
+
+    def test_confirmed_breakout_and_exact_later_blocker_are_recorded(self):
+        with tempfile.TemporaryDirectory() as directory:
+            market = AQTEService(Path(directory) / "market.sqlite3")
+            morning = MorningService(market, CacheService(),
+                                     store=MorningStore(path=Path(directory) / "morning.sqlite3"))
+            rules, context = opening_rules()
+            bars, forming = super_candle_context(base_price=22041)
+            forming.update(high=22112, close=22112)
+            isolate_super_candle_setup(context)
+            context.update(blocked=None, futures_bars=bars, forming_future_bar=forming,
+                           spot_bars=[], options=[], risk_free_rate=0.065, order_flow=None)
+            morning.rules = rules
+            empty = dict(blocked=None, features={}, futures_bars=[], spot_bars=[], order_flow=None,
+                         completed=0, previous_close=None, opening_bar=None, options=[])
+            contexts = {symbol: (context if symbol == "NIFTY" else empty)
+                        for symbol in ("NIFTY", "BANKNIFTY", "SENSEX")}
+            morning.collect_contexts = Mock(return_value=contexts)
+            records = []
+            with patch("time.time", return_value=START + 2), patch(
+                "services.global_indices_service.get_global_indices_service"
+            ) as get_global:
+                get_global.return_value.get_snapshot.return_value = {}
+                signals = morning.process(records)
+            self.assertEqual(signals["NIFTY"]["decision"], "WAIT")
+            self.assertEqual(signals["NIFTY"]["evidence"]["super_candle"]["status"], "CONFIRMED")
+            kinds = [record["kind"] for record in records]
+            self.assertIn("BREAKOUT_CONFIRMATION", kinds)
+            self.assertIn("MISSED_OPPORTUNITY", kinds)
+            missed = next(record for record in records if record["kind"] == "MISSED_OPPORTUNITY")
+            self.assertIn("option", " ".join(missed["payload"]["reasons"]).lower())
+
+    def test_stagnant_option_premium_blocks_an_underlying_breakout(self):
+        rules, context = opening_rules()
+        bars, forming = super_candle_context(base_price=22041)
+        forming.update(high=22112, close=22112)
+        isolate_super_candle_setup(context)
+        context.update(futures_bars=bars, forming_future_bar=forming)
+        tape = list(rules.option_tapes[CONTRACT.token])
+        tape[-1] = replace(tape[-1], bid=tape[0].bid, ask=tape[0].ask)
+        rules.option_tapes[CONTRACT.token] = tape
+        signal = rules.evaluate("NIFTY", context, START + 2)
+        self.assertEqual(signal["decision"], "WAIT")
+        self.assertIn("option_response", [rule["id"] for rule in signal["rules"]])
+
     def test_forming_opening_bar_is_never_an_orb_reference(self):
         rules, context = opening_rules(previous_close=22100)
         context["opening_bar"] = dict(at=START, high=22105, low=22095)
@@ -273,6 +419,27 @@ class MorningLiveTests(unittest.TestCase):
                       "timestamp": datetime.fromtimestamp(START + 2, IST), "volume": 100_000,
                       "depth": {"buy": [{"price": 99, "quantity": 100}],
                                 "sell": [{"price": 101, "quantity": 100}]}}}
+
+    def test_super_candle_uses_the_existing_central_live_order_path(self):
+        self.prepare()
+        rules, context = opening_rules()
+        bars, forming = super_candle_context(base_price=22041)
+        forming.update(high=22112, close=22112)
+        isolate_super_candle_setup(context)
+        context.update(futures_bars=bars, forming_future_bar=forming)
+        signal = rules.evaluate("NIFTY", context, START + 2)
+        self.assertEqual(signal["strategy"], "morning_super_candle_bollinger")
+        self.morning.rules = rules
+        self.morning.signals["NIFTY"] = signal
+        with patch("time.time", return_value=START + 2):
+            self.live.set_morning(True)
+            self.armed()
+            proposal = self.live.proposal("NIFTY")
+            self.assertEqual(proposal["strategy"], "morning_super_candle_bollinger")
+            self.live.confirm(proposal["id"])
+        self.assertEqual(self.broker.place_order.call_count, 1)
+        self.assertEqual(self.live.state["active"]["execution_context"]["entry_engine"],
+                                   "AQTE Independent Morning Engine")
 
     def test_both_approvals_then_existing_order_path_records_real_pending_not_fill(self):
         self.prepare()
