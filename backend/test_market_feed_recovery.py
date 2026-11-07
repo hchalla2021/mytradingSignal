@@ -20,6 +20,19 @@ def feed():
 
 
 class MarketFeedRecoveryTests(unittest.TestCase):
+    def test_dashboard_queue_drain_processes_more_than_three_ticks(self):
+        service = feed()
+        service._tick_queue = market_feed.Queue()
+        for value in range(8):
+            service._tick_queue.put_nowait({"symbol": "NIFTY", "price": value})
+        service._update_and_broadcast = AsyncMock()
+
+        processed = asyncio.run(service._drain_tick_queue(budget_ms=1000))
+
+        self.assertEqual(processed, 8)
+        self.assertEqual(service._tick_queue.qsize(), 0)
+        self.assertEqual(service._update_and_broadcast.await_count, 8)
+
     def test_network_drops_do_not_disable_kiteticker_retries(self):
         service = feed()
         with patch.object(market_feed, "feed_watchdog"), patch.object(market_feed, "auth_state_manager") as auth:

@@ -78,27 +78,6 @@ class Settings(BaseSettings):
     # at process startup in main.py; set false on IPv6-only infrastructure.
     force_outbound_ipv4: bool = Field(default=True, env="FORCE_OUTBOUND_IPV4")
     
-    # ==================== AI / LLM (Smart AI Algo) ====================
-    openai_api_key: Optional[str] = Field(default=None, env="OPENAI_API_KEY")
-    openai_model: str = Field(default="gpt-4o-mini", env="OPENAI_MODEL")
-    openai_temperature: float = Field(default=0.0, env="OPENAI_TEMPERATURE")  # deterministic
-    openai_max_tokens: int = Field(default=150, env="OPENAI_MAX_TOKENS")      # tight cap
-    openai_timeout: int = Field(default=25, env="OPENAI_TIMEOUT")
-
-    # ==================== SMART AI ALGO AUTO-TRADE ====================
-    # Real orders only: Smart AI Algo places Zerodha orders solely when
-    # ALGO_AUTO_TRADE_MODE=live; any other mode places and records nothing.
-    algo_auto_trade_enabled: bool = Field(default=True, env="ALGO_AUTO_TRADE_ENABLED")
-    algo_auto_trade_mode: str = Field(default="off", env="ALGO_AUTO_TRADE_MODE")  # off|live
-    algo_trade_quantity: int = Field(default=1, env="ALGO_TRADE_QUANTITY")
-    algo_min_trade_confidence: int = Field(default=55, env="ALGO_MIN_TRADE_CONFIDENCE")
-    algo_min_trade_strength: int = Field(default=35, env="ALGO_MIN_TRADE_STRENGTH")
-    algo_trade_cooldown_sec: int = Field(default=90, env="ALGO_TRADE_COOLDOWN_SEC")
-    algo_live_exchange: str = Field(default="NFO", env="ALGO_LIVE_EXCHANGE")
-    algo_live_symbol_nifty: str = Field(default="", env="ALGO_LIVE_SYMBOL_NIFTY")
-    algo_live_symbol_banknifty: str = Field(default="", env="ALGO_LIVE_SYMBOL_BANKNIFTY")
-    algo_live_symbol_sensex: str = Field(default="", env="ALGO_LIVE_SYMBOL_SENSEX")
-
     # AQTE live requires explicit enablement, manual ON and daily preflight/arming.
     aqte_live_enabled: bool = False
     aqte_live_static_ip: str = "122.177.245.101"
@@ -199,7 +178,7 @@ class Settings(BaseSettings):
     pcr_cache_ttl: int = 30  # seconds
     market_data_cache_ttl: int = 5  # seconds
     instruments_cache_days: int = 1  # days
-    advanced_analysis_cache_ttl: int = 5  # seconds for Volume Pulse, Trend Base, News
+    advanced_analysis_cache_ttl: int = 5  # seconds for advanced-analysis polling
     
     # PCR fetch delays (stagger to avoid rate limits)
     pcr_delay_nifty: int = 0  # seconds

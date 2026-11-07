@@ -32,7 +32,7 @@ class ZerodhaWebSocketManager:
         self.max_retries = 5
         
         # Market timing
-        self.market_start_time = "09:14:50"  # Start WS 10 seconds before market open
+        self.market_start_time = "09:00:00"  # Connect at pre-open for analysis data
         self.market_open_time = "09:15:00"
         self.market_close_time = "15:30:00"
         
@@ -73,7 +73,7 @@ class ZerodhaWebSocketManager:
         return self.market_start_time <= current_time <= self.market_close_time
 
     def _should_start_websocket(self) -> bool:
-        """Check if it's time to start WebSocket (9:14:50 AM)"""
+        """Check if it's time to start WebSocket for pre-open data (9:00 AM)."""
         current_time = datetime.now().strftime("%H:%M:%S")
         return current_time >= self.market_start_time
 

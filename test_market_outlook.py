@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Integration Test: All 14 Signals in Market Outlook
+Integration Test: Market Outlook signal extraction
 Tests the comprehensive market outlook API with all signals
 """
 
@@ -36,25 +36,21 @@ def test_market_outlook(symbol):
         print(f"✓ Overall Signal: {data.get('overall_signal')}")
         print(f"✓ Overall Confidence: {data.get('overall_confidence')}%")
         print(f"\n📈 Signal Distribution:")
-        print(f"   🟢 Bullish Signals: {data.get('bullish_signals')}/14")
-        print(f"   🟡 Neutral Signals: {data.get('neutral_signals')}/14")
-        print(f"   🔴 Bearish Signals: {data.get('bearish_signals')}/14")
+        print(f"   🟢 Bullish Signals: {data.get('bullish_signals')}/11")
+        print(f"   🟡 Neutral Signals: {data.get('neutral_signals')}/11")
+        print(f"   🔴 Bearish Signals: {data.get('bearish_signals')}/11")
         print(f"   📊 Trend Percentage: {data.get('trend_percentage')}%")
         
-        print(f"\n🎯 All 14 Signals Status:")
+        print(f"\n🎯 Signal Status:")
         print(f"{'-'*80}")
         print(f"{'Signal Name':<35} {'Signal':<10} {'Confidence':<10} {'Status'}")
         print(f"{'-'*80}")
         
         signals = data.get('signals', {})
         signal_order = [
-            'trend_base',
             'volume_pulse',
-            'candle_intent',
             'pivot_points',
-            'orb',
             'supertrend',
-            'parabolic_sar',
             'rsi_60_40',
             'camarilla',
             'vwma_20',
@@ -62,6 +58,7 @@ def test_market_outlook(symbol):
             'smart_money_flow',
             'trade_zones',
             'oi_momentum',
+            'order_flow_5m',
         ]
         
         for key in signal_order:
@@ -170,13 +167,9 @@ def test_specific_signal_extraction():
         signals = data.get('signals', {})
         
         expected_signals = {
-            'trend_base': 'Trend Base (Higher-Low Structure)',
             'volume_pulse': 'Volume Pulse - Candle Volume',
-            'candle_intent': 'Candle Intent - Structure',
             'pivot_points': 'Pivot Points Support/Resistance',
-            'orb': 'Opening Range Breakout',
             'supertrend': 'SuperTrend (10,2)',
-            'parabolic_sar': 'Parabolic SAR',
             'rsi_60_40': 'RSI 60/40 Momentum',
             'camarilla': 'Camarilla R3/S3 CPR Zones',
             'vwma_20': 'VWMA 20 Entry Filter',
@@ -184,9 +177,10 @@ def test_specific_signal_extraction():
             'smart_money_flow': 'Smart Money Flow',
             'trade_zones': 'Trade Zones',
             'oi_momentum': 'OI Momentum Signals',
+            'order_flow_5m': 'Order Flow 5-Min',
         }
         
-        print("Checking all 14 signals are present and valid...\n")
+        print("Checking all 11 signals are present and valid...\n")
         
         found_signals = 0
         for key, description in expected_signals.items():
@@ -213,10 +207,10 @@ def test_specific_signal_extraction():
             else:
                 print(f"✗ {key:<25} - MISSING")
         
-        print(f"\n✓ Found valid signals: {found_signals}/14")
+        print(f"\n✓ Found valid signals: {found_signals}/11")
         
-        if found_signals == 14:
-            print("✅ All 14 signals correctly extracted and validated")
+        if found_signals == 11:
+            print("✅ All 11 signals correctly extracted and validated")
             return True
         else:
             print("⚠️  Not all signals extracted correctly")
@@ -241,7 +235,7 @@ def main():
         print(f"⏰ Test Finished: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         
         if extraction_success:
-            print("✅ Integration test PASSED - All 14 signals working")
+            print("✅ Integration test PASSED - All 11 signals working")
         else:
             print("⚠️  Integration test needs attention")
             

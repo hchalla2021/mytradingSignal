@@ -1,19 +1,18 @@
 """
 Advanced Technical Analysis Router
 ═══════════════════════════════════════════════════════════════
-Ultra-fast endpoints for Volume Pulse and Trend Base analysis
+Ultra-fast endpoints for Volume Pulse and other advanced analysis
 Performance: <10ms response time with caching
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect, Header
+from fastapi import APIRouter, HTTPException, Header
 from pydantic import BaseModel
 from typing import Dict, Any
 import asyncio
 from datetime import datetime, timezone
 import logging
 import math
-import re
 
 # Lazy pandas import - loaded on first use, not at module load (~1.7s savings)
 class _LazyPandas:
@@ -25,11 +24,7 @@ class _LazyPandas:
         return getattr(_LazyPandas._pd, name)
 pd = _LazyPandas()
 
-# Heavy services lazy-imported inside endpoint functions to avoid ~2s startup delay:
-# - analyze_volume_pulse (from services.volume_pulse_service)
-# - analyze_trend_base (from services.trend_base_service) — pandas+numpy+scipy
-# - analyze_news (from services.news_detection_service)
-# - analyze_zone_control (from services.zone_control_service)
+# Heavy services are lazy-imported inside endpoint functions to avoid startup delay.
 
 from config import get_settings
 from services.cache import CacheService
@@ -46,7 +41,6 @@ CACHE_TTL = settings.advanced_analysis_cache_ttl
 
 # Global cache instance
 _cache_instance: CacheService | None = None
-_SYMBOL_RE = re.compile(r"^[A-Z0-9_-]{1,20}$")
 
 
 class CRTBTSTAIRequest(BaseModel):
@@ -79,13 +73,6 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
         return default
 
 
-def _validate_symbol(symbol: str) -> str:
-    norm = (symbol or "").strip().upper()
-    if not _SYMBOL_RE.match(norm):
-        raise HTTPException(status_code=400, detail="Invalid symbol format")
-    return norm
-
-
 def get_cache() -> CacheService:
     """Get or create cache instance"""
     global _cache_instance
@@ -104,11 +91,10 @@ async def get_all_analysis_ultra_fast(symbol: str) -> Dict[str, Any]:
     🚀 ULTRA FAST: Fetch ALL analysis sections in ONE request
     ═══════════════════════════════════════════════════════════
     Fetches historical data ONCE and runs all analysis in PARALLEL
-    Target: <500ms for all 5 sections (vs 2-3 seconds sequentially)
+    Analysis runs in parallel and returns each section's result independently.
     
-    Returns ALL sections:
+    Returns the supported analysis sections:
     - Volume Pulse
-    - Trend Base  
     - Zone Control
     """
     try:
@@ -140,7 +126,6 @@ async def get_all_analysis_ultra_fast(symbol: str) -> Dict[str, Any]:
                     "status": "CACHED_DATA",
                     "message": "📊 Showing last session data (Market closed)",
                     "volume_pulse": {"signal": "NEUTRAL", "confidence": 0, "status": "CACHED"},
-                    "trend_base": {"signal": "NEUTRAL", "confidence": 0, "status": "CACHED"},
                     "zone_control": {"signal": "NEUTRAL", "confidence": 0, "status": "CACHED"},
                     "token_valid": token_status["valid"],
                     "last_price": cached_market.get("last_price"),
@@ -152,31 +137,27 @@ async def get_all_analysis_ultra_fast(symbol: str) -> Dict[str, Any]:
                 "symbol": symbol,
                 "status": "NO_DATA",
                 "volume_pulse": {"signal": "NEUTRAL", "confidence": 0},
-                "trend_base": {"signal": "NEUTRAL", "confidence": 0},
                 "zone_control": {"signal": "NEUTRAL", "confidence": 0},
                 "token_valid": token_status["valid"]
             }
         
         # 🔥 OPTIMIZATION 2: Run all analysis in PARALLEL (asyncio.gather)
         from services.volume_pulse_service import analyze_volume_pulse
-        from services.trend_base_service import analyze_trend_base
         from services.zone_control_service import analyze_zone_control
         results = await asyncio.gather(
             analyze_volume_pulse(symbol, df),
-            analyze_trend_base(symbol, df),
             analyze_zone_control(symbol, df),
             return_exceptions=True
         )
         
         # Unpack results
-        volume_pulse, trend_base, zone_control = results
+        volume_pulse, zone_control = results
         
         # Build response
         response = {
             "symbol": symbol,
             "status": "SUCCESS",
             "volume_pulse": volume_pulse if not isinstance(volume_pulse, Exception) else {"signal": "ERROR"},
-            "trend_base": trend_base if not isinstance(trend_base, Exception) else {"signal": "ERROR"},
             "zone_control": zone_control if not isinstance(zone_control, Exception) else {"signal": "ERROR"},
             "candles_analyzed": len(df),
             "token_valid": token_status["valid"],
@@ -416,442 +397,6 @@ async def get_all_volume_pulse() -> Dict[str, Any]:
 
 
 # ═══════════════════════════════════════════════════════════
-# TREND BASE ENDPOINTS
-# ═══════════════════════════════════════════════════════════
-
-@router.get("/trend-base/{symbol}")
-async def get_trend_base(symbol: str) -> Dict[str, Any]:
-    """
-    🎯 Trend Base – Multi-Factor Higher-Low Structure Analysis
-    ──────────────────────────────────────────────────────────
-    7-factor weighted scoring (total ±93 pts):
-      1. Swing Structure   ±20  (core: higher-high/higher-low pattern)
-      2. SuperTrend 10,2   ±18  (ATR-based intraday trend filter)
-      3. EMA Stack         ±15  (alignment of 20/50/100/200 EMAs)
-      4. RSI Momentum      ±14  (candle RSI + momentum RSI dual)
-      5. VWAP Position     ±12  (intraday institutional reference)
-      6. Day Change %      ±10  (price-reality check)
-      7. Momentum Score    ±4   (composite 0-100 score)
-
-    Signal thresholds: STRONG_BUY≥40 · BUY≥15 · NEUTRAL±15 · SELL≤-15 · STRONG_SELL≤-40
-    """
-    try:
-        symbol = _validate_symbol(symbol)
-        cache_service = get_cache()
-
-        from services.instant_analysis import get_instant_analysis
-        analysis = await asyncio.wait_for(get_instant_analysis(cache_service, symbol), timeout=2.5)
-
-        # ── NO DATA fallback ──────────────────────────────────────────────
-        if not analysis or 'indicators' not in analysis:
-            return {
-                "symbol": symbol, "price": 0, "changePercent": 0,
-                "structure": {"type": "SIDEWAYS", "integrity_score": 0,
-                              "swing_points": {"last_high": 0, "last_low": 0,
-                                               "prev_high": 0, "prev_low": 0}},
-                "signal": "NEUTRAL", "signal_5m": "NEUTRAL", "trend_15m": "NEUTRAL",
-                "trend": "SIDEWAYS", "confidence": 35, "total_score": 0,
-                "factors": {}, "status": "OFFLINE", "data_status": "NO_DATA",
-                "timestamp": datetime.now().isoformat(), "candles_analyzed": 0,
-                "rsi_5m": 50, "rsi_15m": 50,
-                "ema_alignment": "NEUTRAL", "supertrend": "NEUTRAL", "vwap_position": "AT_VWAP",
-            }
-
-        ind = analysis['indicators']
-
-        # ── Raw indicator values ──────────────────────────────────────────
-        price       = _safe_float(ind.get('price'), 0.0)
-        change_pct  = _safe_float(ind.get('changePercent'), 0.0)
-        high        = _safe_float(ind.get('high'), price)
-        low         = _safe_float(ind.get('low'), price)
-
-        ts          = (ind.get('trend_structure')      or 'SIDEWAYS').upper()
-        st_trend    = (ind.get('supertrend_10_2_trend') or 'NEUTRAL').upper()
-        ema_align   = (ind.get('ema_alignment')         or 'NEUTRAL').upper()
-        vwap_pos    = (ind.get('vwap_position')         or 'AT_VWAP').upper()
-        rsi_status  = (ind.get('rsi_momentum_status')   or 'NEUTRAL').upper()
-        candle_dir  = (ind.get('candle_direction')      or 'DOJI').upper()
-
-        rsi_mom  = _safe_float(ind.get('rsi'), 50.0)          # momentum RSI – always live
-        rsi_5m   = _safe_float(ind.get('rsi_5m'), rsi_mom)    # candle-based
-        rsi_15m  = _safe_float(ind.get('rsi_15m'), rsi_mom)
-        momentum = _safe_float(ind.get('momentum'), 50.0)
-
-        # ── FACTOR 1: Swing Structure (±20 pts) ──────────────────────────
-        ts_score = (20  if ts == 'HIGHER_HIGHS_LOWS'
-                    else -20 if ts == 'LOWER_HIGHS_LOWS'
-                    else 0)
-        factors = {}
-        total   = 0
-        factors['trend_structure'] = {
-            'score': ts_score, 'max': 20,
-            'label': ts.replace('_', ' ').title()
-        }
-        total += ts_score
-
-        # ── FACTOR 2: SuperTrend 10,2 (±18 pts) ──────────────────────────
-        st_score = 18 if st_trend == 'BULLISH' else -18 if st_trend == 'BEARISH' else 0
-        factors['supertrend'] = {'score': st_score, 'max': 18, 'label': st_trend}
-        total += st_score
-
-        # ── FACTOR 3: EMA Stack (±15 pts) ────────────────────────────────
-        ema_map   = {'ALL_BULLISH': 15, 'PARTIAL_BULLISH': 8, 'NEUTRAL': 0,
-                     'PARTIAL_BEARISH': -8, 'ALL_BEARISH': -15}
-        ema_score = ema_map.get(ema_align, 0)
-        factors['ema_alignment'] = {
-            'score': ema_score, 'max': 15,
-            'label': ema_align.replace('ALL_', '').replace('PARTIAL_', 'PARTIAL ')
-        }
-        total += ema_score
-
-        # ── FACTOR 4: RSI Momentum (±14 pts) ─────────────────────────────
-        rsi_map   = {'STRONG': 14, 'OVERBOUGHT': 5, 'NEUTRAL': 0,
-                     'WEAK': -14, 'OVERSOLD': -6, 'DIVERGENCE': 0}
-        rsi_score = rsi_map.get(rsi_status, 0)
-        if rsi_score == 0:
-            live_rsi  = rsi_5m if rsi_5m != 50 else rsi_mom
-            rsi_score = round((live_rsi - 50) * 0.28)
-        rsi_score = max(-14, min(14, rsi_score))
-        factors['rsi'] = {
-            'score': rsi_score, 'max': 14,
-            'label': f"{rsi_status} (5m:{round(rsi_5m)} 15m:{round(rsi_15m)})"
-        }
-        total += rsi_score
-
-        # ── FACTOR 5: VWAP Position (±12 pts) ────────────────────────────
-        vwap_score = 12 if vwap_pos == 'ABOVE_VWAP' else -12 if vwap_pos == 'BELOW_VWAP' else 0
-        factors['vwap'] = {
-            'score': vwap_score, 'max': 12,
-            'label': vwap_pos.replace('_VWAP', '')
-        }
-        total += vwap_score
-
-        # ── FACTOR 6: Day Change % (±10 pts) ─────────────────────────────
-        if   change_pct >=  1.0: chg_score =  10
-        elif change_pct >=  0.5: chg_score =   7
-        elif change_pct >=  0.2: chg_score =   4
-        elif change_pct <= -1.0: chg_score = -10
-        elif change_pct <= -0.5: chg_score =  -7
-        elif change_pct <= -0.2: chg_score =  -4
-        else:                    chg_score =  round(change_pct * 10)
-        factors['day_change'] = {
-            'score': chg_score, 'max': 10,
-            'label': f"{'+' if change_pct >= 0 else ''}{change_pct:.2f}%"
-        }
-        total += chg_score
-
-
-        # ── FACTOR 7: Momentum Score (±4 pts) ────────────────────────────
-        mom_score = (4  if momentum > 65
-                     else 2  if momentum > 55
-                     else -4 if momentum < 35
-                     else -2 if momentum < 45
-                     else 0)
-        factors['momentum'] = {'score': mom_score, 'max': 4, 'label': f"{round(momentum)}/100"}
-        total += mom_score
-
-        # ── FACTOR 8: Recent Candle Momentum (±15 pts) ───────────────────
-        # Reads the live in-progress 5-min candle + last 3 completed candles.
-        # This is the FASTEST-RESPONDING factor: detects reversals in 15–25 min,
-        # overriding lagging EMA/SuperTrend signals during intraday trend changes.
-        rcm_score  = 0
-        rcm_bull   = 0
-        rcm_bear   = 0
-        try:
-            import json as _json
-            # A) Live candle direction (current 5-min bar in progress)
-            live_cd = await cache_service.get(f"analysis_candles_live:{symbol}")
-            if live_cd:
-                lc_o = float(live_cd.get('open', 0))
-                lc_c = float(live_cd.get('close', price))
-                if lc_o > 0:
-                    lc_pct = (lc_c - lc_o) / lc_o * 100
-                    if   lc_pct >  0.2: rcm_bull += 1
-                    elif lc_pct < -0.2: rcm_bear += 1
-
-            # B) Last 3 completed 5-min candles (newest-first from lpush cache)
-            rc_raw = await cache_service.lrange(f"analysis_candles:{symbol}", 0, 2)
-            for cj in (rc_raw or []):
-                try:
-                    c = _json.loads(cj)
-                    co = float(c.get('open',  0))
-                    cc = float(c.get('close', 0))
-                    if co > 0:
-                        if   cc > co * 1.001: rcm_bull += 1
-                        elif cc < co * 0.999: rcm_bear += 1
-                except Exception:
-                    pass
-
-            # Score based on consensus of 4 candles (live + 3 completed)
-            if   rcm_bull >= 3: rcm_score =  15
-            elif rcm_bull == 2: rcm_score =   8
-            elif rcm_bear >= 3: rcm_score = -15
-            elif rcm_bear == 2: rcm_score =  -8
-        except Exception:
-            rcm_score = 0
-
-        factors['recent_candles'] = {
-            'score': rcm_score, 'max': 15,
-            'label': f"Bull:{rcm_bull} Bear:{rcm_bear} of 4"
-        }
-        total += rcm_score
-        total  = round(total)
-
-        # ── SIGNAL (calibrated: max ±108, STRONG at ~37% alignment) ─────
-        if   total >=  40: signal = 'STRONG_BUY';  trend = 'UPTREND'
-        elif total >=  15: signal = 'BUY';          trend = 'UPTREND'
-        elif total <= -40: signal = 'STRONG_SELL'; trend = 'DOWNTREND'
-        elif total <= -15: signal = 'SELL';         trend = 'DOWNTREND'
-        else:              signal = 'NEUTRAL';      trend = 'SIDEWAYS'
-
-        # ── MARKET STATUS (from instant analysis, not hardcoded) ────────
-        market_status = analysis.get('status', 'CLOSED')  # LIVE / CLOSED / PRE_OPEN / FREEZE
-
-        # ── CONFIDENCE (25–92%, market-status aware) ─────────────────────
-        # LIVE: fresh ticks → full confidence range
-        # CLOSED/stale: last-known data may not reflect current reality → penalise
-        integrity     = min(100, abs(total))
-        n_f           = len(factors)
-        bull_cnt      = sum(1 for f in factors.values() if f['score'] > 0)
-        bear_cnt      = sum(1 for f in factors.values() if f['score'] < 0)
-        agreement     = max(bull_cnt, bear_cnt) / n_f   # 0.5 → 1.0
-        live_bonus    = 6 if market_status == 'LIVE' else -8
-        confidence    = round(min(92, max(25, 30 + integrity * 0.45 + agreement * 22 + live_bonus)))
-
-        # ── 5-MIN SIGNAL (ST dominates short-term, RSI + candle support) ──
-        s5 = st_score * 0.55 + rsi_score * 0.30 + (
-             7 if candle_dir == 'BULLISH' else -7 if candle_dir == 'BEARISH' else 0) * 0.15
-        signal_5m = ('STRONG_BUY' if s5 >= 14 else 'BUY' if s5 >= 6
-                     else 'STRONG_SELL' if s5 <= -14 else 'SELL' if s5 <= -6
-                     else 'NEUTRAL')
-
-        # ── 5-MIN CONFIDENCE (independent of main; uses short-term factors) ─
-        # Anchored to raw 8-factor score but weighted toward ST + RSI (intraday)
-        rsi_5m_adj   = round((rsi_5m - 50) * 0.24) if signal_5m == 'BUY' else round((50 - rsi_5m) * 0.24)
-        st_5m_adj    = ( 7 if (signal_5m == 'BUY'  and st_trend == 'BULLISH')
-                        else 7 if (signal_5m == 'SELL' and st_trend == 'BEARISH')
-                        else -6 if (signal_5m == 'BUY'  and st_trend == 'BEARISH')
-                        else -6 if (signal_5m == 'SELL' and st_trend == 'BULLISH')
-                        else 0)
-        sig_align_adj = ( 4 if (signal_5m == 'BUY'  and signal in ('BUY', 'STRONG_BUY'))
-                         else 4 if (signal_5m == 'SELL' and signal in ('SELL', 'STRONG_SELL'))
-                         else -5 if (signal_5m != 'NEUTRAL' and signal not in ('NEUTRAL',) and
-                                     not ((signal_5m == 'BUY' and 'BUY' in signal) or
-                                          (signal_5m == 'SELL' and 'SELL' in signal)))
-                         else 0)
-        confidence_5m = round(min(92, max(25,
-            30 + integrity * 0.38 + agreement * 18 + live_bonus + rsi_5m_adj + st_5m_adj + sig_align_adj
-        )))
-
-        # ── 15-MIN TREND (structure + EMA stack + VWAP) ──────────────────
-        s15 = ts_score * 0.50 + ema_score * 0.30 + vwap_score * 0.20
-        trend_15m = 'BULLISH' if s15 >= 7 else 'BEARISH' if s15 <= -7 else 'NEUTRAL'
-
-        from services.trend_base_ai import trend_base_ai_engine
-
-        ai = trend_base_ai_engine.infer(
-            symbol=symbol,
-            price=price,
-            change_pct=change_pct,
-            signal=signal,
-            signal_5m=signal_5m,
-            trend=trend,
-            trend_15m=trend_15m,
-            total_score=total,
-            confidence=confidence,
-            confidence_5m=confidence_5m,
-            integrity=integrity,
-            market_status=market_status,
-            momentum=momentum,
-            rsi_5m=rsi_5m,
-            rsi_15m=rsi_15m,
-            ts_score=ts_score,
-            st_score=st_score,
-            ema_score=ema_score,
-            rsi_score=rsi_score,
-            vwap_score=vwap_score,
-            day_change_score=chg_score,
-            mom_score=mom_score,
-            recent_candles_score=rcm_score,
-        )
-
-        return {
-            "symbol":          symbol,
-            "price":           price,
-            "changePercent":   change_pct,
-            "structure": {
-                "type":            ts,
-                "integrity_score": integrity,
-                "swing_points": {
-                    "last_high": round(high, 2),
-                    "last_low":  round(low,  2),
-                    "prev_high": round(high * 0.9985, 2),
-                    "prev_low":  round(low  * 1.0015, 2),
-                },
-            },
-            "signal":          signal,
-            "signal_5m":       signal_5m,
-            "trend_15m":       trend_15m,
-            "trend":           trend,
-            "confidence":      confidence,
-            "confidence_5m":   confidence_5m,
-            "total_score":     total,
-            "factors":         factors,
-            "status":          market_status,
-            "data_status":     market_status,
-            "timestamp":       datetime.now().isoformat(),
-            "candles_analyzed": int(ind.get('candles_count') or 120),
-            "rsi_5m":          round(rsi_5m,  1),
-            "rsi_15m":         round(rsi_15m, 1),
-            "ema_alignment":   ema_align,
-            "supertrend":      st_trend,
-            "vwap_position":   vwap_pos,
-            "ai":             ai,
-        }
-
-    except asyncio.TimeoutError:
-        logger.warning("[TREND-BASE] Timeout while building analysis", extra={"symbol": symbol})
-        raise HTTPException(status_code=504, detail="Trend base analysis timeout")
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.exception("[TREND-BASE] Unhandled error", extra={"symbol": symbol})
-        raise HTTPException(status_code=500, detail="Trend base analysis error") from e
-
-
-@router.get("/trend-base/all")
-async def get_all_trend_base() -> Dict[str, Any]:
-    """
-    Get Trend Base for all major indices
-    Ultra-fast parallel execution
-    """
-    try:
-        symbols = ["NIFTY", "BANKNIFTY", "SENSEX"]
-        
-        # Parallel execution for speed
-        tasks = [get_trend_base(symbol) for symbol in symbols]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-        
-        response = {}
-        for symbol, result in zip(symbols, results):
-            if isinstance(result, Exception):
-                logger.warning("[TREND-BASE-ALL] Symbol failure", extra={"symbol": symbol, "error": str(result)})
-                response[symbol] = {
-                    "symbol": symbol,
-                    "signal": "NEUTRAL",
-                    "trend": "SIDEWAYS",
-                    "confidence": 0,
-                    "status": "ERROR",
-                    "timestamp": datetime.now().isoformat(),
-                    "message": "Symbol analysis unavailable"
-                }
-            else:
-                response[symbol] = result
-        
-        return {
-            "data": response,
-            "timestamp": datetime.now().isoformat()
-        }
-        
-    except Exception as e:
-        logger.exception("[TREND-BASE-ALL] Batch failure")
-        raise HTTPException(status_code=500, detail="Trend base batch analysis error") from e
-
-
-# ═══════════════════════════════════════════════════════════
-# COMBINED ENDPOINT (Volume Pulse + Trend Base)
-# ═══════════════════════════════════════════════════════════
-
-@router.get("/combined/{symbol}")
-async def get_combined_analysis(symbol: str) -> Dict[str, Any]:
-    """
-    Get both Volume Pulse AND Trend Base in one call
-    Ultra-optimized for dashboard rendering
-    """
-    try:
-        symbol = symbol.upper()
-        
-        # Parallel execution
-        volume_task = get_volume_pulse(symbol)
-        trend_task = get_trend_base(symbol)
-        
-        volume_result, trend_result = await asyncio.gather(volume_task, trend_task)
-        
-        return {
-            "symbol": symbol,
-            "volume_pulse": volume_result,
-            "trend_base": trend_result,
-            "timestamp": datetime.now().isoformat()
-        }
-        
-    except Exception as e:
-        print(f"[COMBINED-API] Error for {symbol}: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@router.get("/combined/all")
-async def get_all_combined() -> Dict[str, Any]:
-    """
-    Get Volume Pulse + Trend Base for all indices
-    Maximum performance optimization
-    """
-    try:
-        symbols = ["NIFTY", "BANKNIFTY", "SENSEX"]
-        
-        # Parallel execution for all symbols
-        tasks = [get_combined_analysis(symbol) for symbol in symbols]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-        
-        response = {}
-        for symbol, result in zip(symbols, results):
-            if isinstance(result, Exception):
-                print(f"[COMBINED-ALL] Error for {symbol}: {result}")
-                response[symbol] = {"error": str(result)}
-            else:
-                response[symbol] = result
-        
-        return {
-            "data": response,
-            "timestamp": datetime.now().isoformat()
-        }
-        
-    except Exception as e:
-        print(f"[COMBINED-ALL] Error: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-# ═══════════════════════════════════════════════════════════
-# WEBSOCKET ENDPOINT (Real-time updates)
-# ═══════════════════════════════════════════════════════════
-
-@router.websocket("/ws/advanced")
-async def websocket_advanced_analysis(websocket: WebSocket):
-    """
-    WebSocket for real-time Volume Pulse + Trend Base updates
-    Updates every 5 seconds
-    """
-    await websocket.accept()
-    print("[ADVANCED-WS] Client connected")
-    
-    try:
-        while True:
-            # Get all data
-            data = await get_all_combined()
-            
-            # Send to client
-            await websocket.send_json(data)
-            
-            # Wait before next update
-            await asyncio.sleep(settings.advanced_analysis_cache_ttl)
-            
-    except WebSocketDisconnect:
-        print("[ADVANCED-WS] Client disconnected")
-    except Exception as e:
-        print(f"[ADVANCED-WS] Error: {e}")
-        await websocket.close()
-
-
-# ═══════════════════════════════════════════════════════════
 # HELPER FUNCTIONS
 # ═══════════════════════════════════════════════════════════
 
@@ -1042,9 +587,7 @@ async def _get_historical_data_extended(symbol: str, lookback: int = 100, days_b
         kite.set_access_token(settings.zerodha_access_token)
         
         # Get instrument token for symbol
-        # 🔥 FIXED: Use SPOT indices for Trend Base (Higher-Low structure)
-        # SPOT prices reflect actual index movements accurately
-        # FUTURES have premium/discount which distorts Higher-Low detection
+        # Use spot index tokens for underlying-index analysis.
         instrument_tokens = {
             "NIFTY": settings.nifty_token,          # NSE SPOT Index
             "BANKNIFTY": settings.banknifty_token,  # NSE SPOT Index  
@@ -4736,4 +4279,3 @@ async def get_all_zone_control() -> Dict[str, Any]:
     except Exception as e:
         print(f"[ZONE-CONTROL-ALL] Error: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import dynamic from 'next/dynamic';
 import LiveStatus from '@/components/LiveStatus';
 import Header from '@/components/Header';
@@ -15,37 +15,8 @@ import { API_CONFIG } from '@/lib/api-config';
 import { getOrCreateVisitorId } from '@/lib/visitor-id';
 
 // Dynamic imports for components that use live data - prevents SSR issues
-const TopAISignalBar = dynamic(() => import('@/components/TopAISignalBar'), { ssr: false });
 const AQTESection = dynamic(() => import('@/components/AQTESection'), { ssr: false });
-const SMCStructureSection = dynamic(() => import('@/components/SMCStructureSection'), {
-  ssr: false,
-  loading: () => (
-    <div className="mb-3 rounded-xl border border-indigo-400/20 bg-slate-900/50 p-4 animate-pulse">
-      <div className="h-4 w-72 bg-slate-700 rounded mb-3" />
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-2.5">
-        {[0, 1, 2].map(i => (
-          <div key={i} className="h-56 bg-slate-800/60 rounded-xl" />
-        ))}
-      </div>
-    </div>
-  )
-});
-const VolumePulseCard = dynamic(() => import('@/components/VolumePulseCard'), { ssr: false });
-const TrendBaseCard = dynamic(() => import('@/components/TrendBaseCard'), { ssr: false });
 const SectionTitle = dynamic(() => import('@/components/SectionTitle'), { ssr: false });
-const InstitutionalCompass = dynamic(() => import('@/components/InstitutionalCompass'), {
-  ssr: false,
-  loading: () => (
-    <div className="rounded-3xl border border-slate-700/50 bg-slate-800/50 p-5 animate-pulse">
-      <div className="h-5 w-64 bg-slate-700 rounded mb-4" />
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        {[0, 1, 2].map(i => (
-          <div key={i} className="rounded-2xl bg-slate-700/30 h-64" />
-        ))}
-      </div>
-    </div>
-  )
-});
 
 const CRTBTSTCard = dynamic<{ symbol: string; name: string; data?: unknown }>(() => import('@/components/CRTBTSTCard'), {
   ssr: false,
@@ -76,68 +47,12 @@ const MarketRegimeIntelligence = dynamic(() => import('@/components/MarketRegime
   )
 });
 
-const TradingIntelligenceEngine = dynamic(() => import('@/components/TradingIntelligenceEngine'), {
-  ssr: false,
-  loading: () => (
-    <div className="rounded-2xl border border-slate-800/60 bg-[#0b1220]/40 p-5 animate-pulse">
-      <div className="h-6 w-56 bg-slate-700 rounded mb-4" />
-      <div className="flex flex-col gap-3">
-        {[0, 1, 2].map(i => (
-          <div key={i} className="rounded-xl bg-slate-700/30 h-32" />
-        ))}
-      </div>
-    </div>
-  )
-});
-
 const ChartWorkspace = dynamic(() => import('@/components/ChartWorkspace'), {
   ssr: false,
   loading: () => (
     <div className="rounded-2xl border border-emerald-500/25 bg-slate-800/30 p-5 animate-pulse">
       <div className="h-5 w-72 bg-slate-700 rounded mb-4" />
       <div className="h-80 bg-slate-700/30 rounded-2xl" />
-    </div>
-  )
-});
-
-const ExpiryExplosionZone = dynamic(() => import('@/components/ExpiryExplosionZone'), {
-  ssr: false,
-  loading: () => (
-    <div className="rounded-2xl border border-purple-500/30 bg-slate-800/30 p-5 animate-pulse">
-      <div className="h-5 w-64 bg-slate-700 rounded mb-4" />
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        {[0, 1, 2].map(i => (
-          <div key={i} className="rounded-2xl bg-slate-700/30 h-80" />
-        ))}
-      </div>
-    </div>
-  )
-});
-
-const MarketEdgeIntelligence = dynamic(() => import('@/components/MarketEdgeIntelligence'), {
-  ssr: false,
-  loading: () => (
-    <div className="rounded-2xl border border-teal-500/30 bg-slate-800/30 p-5 animate-pulse">
-      <div className="h-5 w-64 bg-slate-700 rounded mb-4" />
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        {[0, 1, 2].map(i => (
-          <div key={i} className="rounded-2xl bg-slate-700/30 h-80" />
-        ))}
-      </div>
-    </div>
-  )
-});
-
-const ICTIntelligence = dynamic(() => import('@/components/ICTIntelligence'), {
-  ssr: false,
-  loading: () => (
-    <div className="rounded-2xl border border-amber-500/30 bg-slate-800/30 p-5 animate-pulse">
-      <div className="h-4 w-56 bg-slate-700 rounded mb-3" />
-      <div className="flex flex-col lg:flex-row gap-4">
-        {[0, 1, 2].map(i => (
-          <div key={i} className="flex-1 rounded-xl bg-slate-700/25 h-80" />
-        ))}
-      </div>
     </div>
   )
 });
@@ -182,7 +97,6 @@ export default function Home() {
     isConnected
   } = useMarketSocket();
   const { alertData } = useAIAnalysis();
-  const [serverOutlook, setServerOutlook] = useState<Record<string, any> | null>(null);
   const [institutionalData, setInstitutionalData] = useState<FIIDIISnapshot | null>(null);
 
 
@@ -217,34 +131,6 @@ export default function Home() {
       window.history.replaceState({}, '', '/');
     }
   }, []);
-
-  const fetchServerOutlook = useCallback(async () => {
-    try {
-      const res = await fetch(API_CONFIG.endpoint('/api/analysis/market-outlook-all'), { cache: 'no-store' });
-      if (!res.ok) return;
-      const next = await res.json();
-      if (next?.NIFTY && next?.BANKNIFTY && next?.SENSEX) {
-        setServerOutlook(next);
-      }
-    } catch {
-      // Keep last good snapshot for UI stability.
-    }
-  }, []);
-
-  useEffect(() => {
-    fetchServerOutlook();
-    const interval = setInterval(fetchServerOutlook, 3000);
-
-    const onVisibility = () => {
-      if (document.visibilityState === 'visible') fetchServerOutlook();
-    };
-
-    document.addEventListener('visibilitychange', onVisibility);
-    return () => {
-      clearInterval(interval);
-      document.removeEventListener('visibilitychange', onVisibility);
-    };
-  }, [fetchServerOutlook]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -285,87 +171,6 @@ export default function Home() {
   }, []);
 
   // Server-driven outlook with live tick micro-adjustment for immediacy.
-  const aggregatedMarketSignal = useMemo(() => {
-    const clamp = (value: number, min: number, max: number) => Math.min(Math.max(value, min), max);
-    const normalizeSignal = (value: unknown) => {
-      const s = String(value || 'NEUTRAL').toUpperCase();
-      if (s === 'STRONG_BUY' || s === 'BUY' || s === 'NEUTRAL' || s === 'SELL' || s === 'STRONG_SELL') return s;
-      return 'NEUTRAL';
-    };
-
-    const one = (symbol: 'NIFTY' | 'BANKNIFTY' | 'SENSEX') => {
-      const outlook = serverOutlook?.[symbol] || {};
-      const tick = marketData[symbol];
-
-      let buyPercent = clamp(Number(outlook.buy_signals ?? 50), 0, 100);
-      let sellPercent = clamp(Number(outlook.sell_signals ?? 50), 0, 100);
-      const sum = buyPercent + sellPercent;
-      if (sum > 0) {
-        buyPercent = Math.round((buyPercent / sum) * 100);
-        sellPercent = 100 - buyPercent;
-      } else {
-        buyPercent = 50;
-        sellPercent = 50;
-      }
-
-      const tickChangePct = Number(tick?.changePercent || 0);
-      const impulse = clamp(Math.round(Math.abs(tickChangePct) * 22), 0, 18);
-      if (tickChangePct >= 0.25) {
-        buyPercent = clamp(buyPercent + impulse, 0, 100);
-        sellPercent = 100 - buyPercent;
-      } else if (tickChangePct <= -0.25) {
-        sellPercent = clamp(sellPercent + impulse, 0, 100);
-        buyPercent = 100 - sellPercent;
-      }
-
-      let signal = normalizeSignal(outlook.signal);
-      if (tickChangePct <= -0.35 && (signal === 'STRONG_BUY' || signal === 'BUY')) signal = 'NEUTRAL';
-      if (tickChangePct >= 0.35 && (signal === 'STRONG_SELL' || signal === 'SELL')) signal = 'NEUTRAL';
-
-      const predSignal = normalizeSignal(outlook.prediction_5m_signal);
-      const pred5mConf = clamp(Math.round(Number(outlook.prediction_5m_confidence ?? 50)), 1, 99);
-      const predFromOF = Number(outlook.order_flow_buy_pct);
-      let pred5mBuyPct = Number.isFinite(predFromOF)
-        ? clamp(Math.round(predFromOF), 0, 100)
-        : predSignal === 'STRONG_BUY'
-        ? 78
-        : predSignal === 'BUY'
-        ? 64
-        : predSignal === 'STRONG_SELL'
-        ? 22
-        : predSignal === 'SELL'
-        ? 36
-        : 50;
-
-      if (tickChangePct >= 0.2) pred5mBuyPct = clamp(pred5mBuyPct + Math.round(impulse * 0.5), 0, 100);
-      if (tickChangePct <= -0.2) pred5mBuyPct = clamp(pred5mBuyPct - Math.round(impulse * 0.5), 0, 100);
-
-      const pred5mDir =
-        pred5mBuyPct >= 58
-          ? 'UP'
-          : pred5mBuyPct <= 42
-          ? 'DOWN'
-          : String(outlook.prediction_5m_direction || 'FLAT').toUpperCase() === 'UP' || String(outlook.prediction_5m_direction || 'FLAT').toUpperCase() === 'DOWN'
-          ? String(outlook.prediction_5m_direction || 'FLAT').toUpperCase()
-          : 'FLAT';
-
-      const sectionCount = Number(outlook.section_count || outlook.total_signals || 12) || 12;
-      const totalConfidence = clamp(
-        Math.round(Number(outlook.confidence ?? 50) * 0.65 + pred5mConf * 0.35),
-        1,
-        99
-      );
-
-      return { buyPercent, sellPercent, totalConfidence, signal, sectionCount, pred5mConf, pred5mBuyPct, pred5mDir };
-    };
-
-    return {
-      NIFTY: one('NIFTY'),
-      BANKNIFTY: one('BANKNIFTY'),
-      SENSEX: one('SENSEX'),
-    };
-  }, [serverOutlook, marketData]);
-
   // Determine market status from actual data, with client-side IST fallback
   // so the UI never shows "MARKET CLOSED" when the Indian market is actually open
   const marketStatus = useMemo(() => {
@@ -543,59 +348,12 @@ export default function Home() {
           <InstitutionalWorkspace marketData={marketData} isConnected={isConnected} onSnapshot={setInstitutionalData} />
         </div>
 
-        {/* 🧠 AI SIGNAL DECK — institutional-grade per-index status cards */}
-        <div style={{ order: -1 }}>
-          <TopAISignalBar marketData={marketData} isConnected={isConnected} />
-        </div>
-
         <div style={{ order: -8 }} className="min-w-0">
-          <MarketAnalysisTabs sections={{
-            smc: <SMCStructureSection />,
-            greeks: <TradingIntelligenceEngine marketData={marketData} />,
-            regime: <MarketRegimeIntelligence marketData={marketData} />,
-            ict: <ICTIntelligence />,
-            compass: <InstitutionalCompass />,
-            volume: (() => {
-              const niftySig = aggregatedMarketSignal.NIFTY.signal;
-              const vpSectionClass =
-                niftySig === 'STRONG_BUY'  ? 'vp-section-strong-buy' :
-                niftySig === 'BUY'         ? 'vp-section-buy' :
-                niftySig === 'STRONG_SELL' ? 'vp-section-strong-sell' :
-                niftySig === 'SELL'        ? 'vp-section-sell' : '';
-              return (
-                <div className={`border-2 border-emerald-500/30 rounded-2xl p-3 sm:p-4 bg-gradient-to-br from-emerald-950/20 via-dark-card/50 to-dark-elevated/40 backdrop-blur-sm shadow-xl shadow-emerald-500/10 ${vpSectionClass}`}>
-                  <div className="flex flex-col gap-3 mb-3 sm:mb-4">
-                    <SectionTitle
-                      title="Volume Pulse (Candle Volume)"
-                      accentColor="emerald"
-                    />
-                  </div>
-
-                  <IndexTabs idPrefix="volume-pulse" label="Volume pulse index">
-                    {(symbol, name) => <VolumePulseCard symbol={symbol} name={name} />}
-                  </IndexTabs>
-                </div>
-              );
-            })(),
-          }} />
+          <MarketAnalysisTabs section={<MarketRegimeIntelligence marketData={marketData} />} />
         </div>
 
 
-        <MarketAnalysisTabs variant="strategy" sections={{
-          edge: <MarketEdgeIntelligence />,
-          trend: (
-            <div className="min-w-0">
-              <div className="mb-4">
-                <SectionTitle title="Trend Base (Higher-Low Structure)"
-                  subtitle="Live swing structure · 8-factor analysis · 5-min prediction" accentColor="green" />
-              </div>
-              <IndexTabs idPrefix="strategy-trend" label="Trend base index">
-                {(symbol, name) => <TrendBaseCard symbol={symbol} name={name} />}
-              </IndexTabs>
-            </div>
-          ),
-          expiry: <ExpiryExplosionZone />,
-          btst: (
+        <div className="min-w-0" data-testid="btst-strategy">
             <div className="border-2 border-orange-500/35 rounded-2xl p-3 sm:p-4 bg-gradient-to-br from-orange-950/20 via-dark-card/50 to-dark-elevated/40 backdrop-blur-sm shadow-xl shadow-orange-500/10">
               <div className="flex flex-col gap-1 mb-3 sm:mb-4">
                 <SectionTitle
@@ -617,8 +375,7 @@ export default function Home() {
                 {(symbol, name) => <CRTBTSTCard symbol={symbol} name={name} data={marketData[symbol]} />}
               </IndexTabs>
             </div>
-          ),
-        }} />
+        </div>
 
         </div>
       </div>

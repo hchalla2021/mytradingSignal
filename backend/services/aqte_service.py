@@ -88,6 +88,8 @@ class AQTEService:
         self.engine_config = engine_config or EngineConfig()
         self.engine_states = {}
         self.engine_events = deque(maxlen=40)
+        self.market_regimes = {}
+        self.options_event_minute = {}
         self.engine_error = None
         self.vix = None
         self.vix_token = None
@@ -395,6 +397,12 @@ class AQTEService:
             if token not in self.gaps:
                 logger.warning("AQTE %s %s recovering: %s", symbol, kind, reason)
                 self.gaps[token] = dict(symbol=symbol, kind=kind, minutes=set(), reason=reason)
+                from services.engine_events import get_engine_event_service
+                get_engine_event_service().publish_threadsafe(
+                    "DATA_FEED_GAP", f"{symbol} {kind} data gap detected: {reason}",
+                    instrument=symbol, severity="warning", source="aqte_feed",
+                    idempotency_key=f"feed-gap:{token}:{int(at // 60)}",
+                )
             self.gaps[token]["minutes"].add(int(at // 60) * 60)
             if kind == "future" and received is not None:
                 gap = self.gaps[token]
@@ -418,6 +426,12 @@ class AQTEService:
                     self.gaps.pop(token)
                     logger.info("AQTE retired %s recovery marker for %s; it no longer affects retained inputs",
                                 gap["kind"], gap["symbol"])
+                    from services.engine_events import get_engine_event_service
+                    get_engine_event_service().publish_threadsafe(
+                        "DATA_FEED_GAP_CLEARED", f"{gap['symbol']} {gap['kind']} recovery marker cleared",
+                        instrument=gap["symbol"], severity="success", source="aqte_feed",
+                        idempotency_key=f"feed-gap-cleared:{token}:{int(time.time() // 60)}",
+                    )
                     self.metrics.increment("feed_gaps_retired")
 
     def enqueue(self, symbol, kind, raw):
@@ -836,6 +850,36 @@ class AQTEService:
                 with self.lock:
                     self.contexts[symbol] = dict(at=0, error=type(exc).__name__)
 
+    def _publish_engine_status(self, event):
+        from services.engine_events import get_engine_event_service
+
+        status = event["status"]
+        severity = "success" if status == "SATISFIED" else "warning" if status == "NOT_SATISFIED" else "info"
+        get_engine_event_service().publish_threadsafe(
+            "STRATEGY_ENGINE_STATUS",
+            f"{event['name']}: {status.replace('_', ' ').lower()}",
+            instrument=event["symbol"], severity=severity, source="aqte_engines",
+            idempotency_key=f"engine-status:{event['symbol']}:{event['engine']}:{int(event['at'] * 1000)}",
+        )
+
+    def _publish_market_regime(self, symbol, market, at):
+        if not isinstance(market, dict) or not isinstance(market.get("regime"), str):
+            return
+        regime = market["regime"]
+        previous = self.market_regimes.get(symbol)
+        if previous == regime:
+            return
+        self.market_regimes[symbol] = regime
+        from services.engine_events import get_engine_event_service
+
+        message = f"{symbol} market regime detected: {regime}"
+        if previous:
+            message = f"{symbol} market regime changed from {previous} to {regime}"
+        get_engine_event_service().publish_threadsafe(
+            "MARKET_REGIME_DETECTED", message, instrument=symbol, severity="info", source="aqte_engines",
+            idempotency_key=f"market-regime:{symbol}:{int(at * 1000)}:{regime}",
+        )
+
     def attach_cached_engines(self, result):
         now = result["generated_at"]
         published = self.evaluators.snapshot()
@@ -865,12 +909,23 @@ class AQTEService:
             signal.update(engines=cards, orchestration=orchestrate(cards),
                           market=copy.deepcopy(features.get("market")) if fresh else None,
                           options=copy.deepcopy(features.get("options")) if fresh else None)
+            self._publish_market_regime(symbol, signal.get("market"), now)
+            if isinstance(signal.get("options"), dict) and now // 60 > self.options_event_minute.get(symbol, 0):
+                self.options_event_minute[symbol] = int(now // 60)
+                from services.engine_events import get_engine_event_service
+                get_engine_event_service().publish_threadsafe(
+                    "OPTIONS_CHAIN_UPDATED", f"{symbol} live option-chain analysis updated",
+                    instrument=symbol, severity="info", source="aqte_engines",
+                    idempotency_key=f"option-chain:{symbol}:{int(now // 60)}",
+                )
             for card in cards:
                 key = (symbol, card["key"])
                 previous = self.engine_states.get(key)
                 if previous != card["status"] and (previous is not None or card["status"] == "SATISFIED"):
-                    self.engine_events.append(dict(at=now, symbol=symbol, engine=card["id"], name=card["name"],
-                                                   status=card["status"], previous=previous, side=card["side"]))
+                    event = dict(at=now, symbol=symbol, engine=card["id"], name=card["name"],
+                                 status=card["status"], previous=previous, side=card["side"])
+                    self.engine_events.append(event)
+                    self._publish_engine_status(event)
                 self.engine_states[key] = card["status"]
         result["vix"] = copy.deepcopy(self.vix) if (
             self.vix and 0 <= now - self.vix["received"] <= VIX_STALE_SECONDS) else None
@@ -934,13 +989,27 @@ class AQTEService:
                 measurements=self.metrics.snapshot())
 
     def attach_engines_safely(self, result):
+        previous_error = self.engine_error
         try:
             self.attach_engines(result)
             self.engine_error = None
+            if previous_error is not None:
+                from services.engine_events import get_engine_event_service
+                get_engine_event_service().publish_threadsafe(
+                    "ENGINE_RECOVERED", "AQTE strategy evaluation recovered",
+                    severity="success", source="aqte_engines",
+                    idempotency_key=f"engine-recovered:{int(result['generated_at'] * 1000)}",
+                )
         except Exception as exc:
             # Advisory layer only: the authoritative scalp/swing rules and broker gates stay unchanged.
             if self.engine_error != type(exc).__name__:
                 logger.exception("AQTE strategy-engine evaluation failed; entry rules are unaffected")
+                from services.engine_events import get_engine_event_service
+                get_engine_event_service().publish_threadsafe(
+                    "ENGINE_ERROR", f"AQTE strategy evaluation failed ({type(exc).__name__})",
+                    severity="error", source="aqte_engines",
+                    idempotency_key=f"engine-error:{type(exc).__name__}:{int(result['generated_at'] * 1000)}",
+                )
             self.engine_error = type(exc).__name__
             for signal in result["data"].values():
                 signal.update(engines=None, orchestration=None, market=None, options=None)
@@ -981,8 +1050,10 @@ class AQTEService:
                 key = (symbol, card["key"])
                 previous = self.engine_states.get(key)
                 if previous != card["status"] and (previous is not None or card["status"] == "SATISFIED"):
-                    self.engine_events.append(dict(at=now, symbol=symbol, engine=card["id"], name=card["name"],
-                                                   status=card["status"], previous=previous, side=card["side"]))
+                    event = dict(at=now, symbol=symbol, engine=card["id"], name=card["name"],
+                                 status=card["status"], previous=previous, side=card["side"])
+                    self.engine_events.append(event)
+                    self._publish_engine_status(event)
                 self.engine_states[key] = card["status"]
         result["vix"] = vix
         result["engine_events"] = list(reversed(self.engine_events))[:20]

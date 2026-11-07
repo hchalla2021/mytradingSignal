@@ -312,7 +312,8 @@ const OpportunityPanel = memo(function OpportunityPanel({ opp, maxLots }: { opp:
   );
 });
 
-function AQTEEngineDeck({ symbol, data, liveStatus, events, policy, unavailable, now = Date.now() / 1000, chart }: Props) {
+function AQTEEngineDeck({ symbol, data, liveStatus, events, policy, unavailable,
+  now = Date.now() / 1000, chart }: Props) {
   const [filter, setFilter] = useState<Filter>('ALL');
   const [open, setOpen] = useState<number | null>(null);
   const [tab, setTab] = useState<ChartTab>('chart');

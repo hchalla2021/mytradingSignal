@@ -1,0 +1,55 @@
+services:
+  morningedge-postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: morningedge
+      POSTGRES_USER: morningedge
+      POSTGRES_PASSWORD: ${MORNINGEDGE_POSTGRES_PASSWORD:?Set MORNINGEDGE_POSTGRES_PASSWORD in morningedge/.env}
+    volumes:
+      - morningedge-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U morningedge -d morningedge"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  morningedge-redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - morningedge-redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  morningedge-api:
+    build:
+      context: ./morningedge
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    env_file:
+      - ./morningedge/.env
+    environment:
+      MORNINGEDGE_DATABASE_URL: postgresql://${MORNINGEDGE_POSTGRES_USER:-morningedge}:${MORNINGEDGE_POSTGRES_PASSWORD}@morningedge-postgres:5432/morningedge
+      MORNINGEDGE_REDIS_URL: redis://morningedge-redis:6379/0
+    ports:
+      - "8010:8010"
+    depends_on:
+      morningedge-postgres:
+        condition: service_healthy
+      morningedge-redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8010/health', timeout=5).close()"]
+      interval: 20s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+volumes:
+  morningedge-postgres-data:
+  morningedge-redis-data:

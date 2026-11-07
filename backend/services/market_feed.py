@@ -515,6 +515,19 @@ class MarketFeedService:
                 data = self._normalize_tick(tick)
                 symbol = data["symbol"]
                 get_aqte_service().enqueue(symbol, "spot", tick)
+                with self._tick_lock:
+                    live_symbols = getattr(self, "_event_live_symbols", None)
+                    if live_symbols is None:
+                        live_symbols = self._event_live_symbols = set()
+                    first_live_tick = symbol not in live_symbols
+                    live_symbols.add(symbol)
+                if first_live_tick:
+                    from services.engine_events import get_engine_event_service
+                    get_engine_event_service().publish_threadsafe(
+                        "INDEX_LIVE_DATA", f"{symbol} live market data received",
+                        instrument=symbol, severity="success", source="market_feed",
+                        idempotency_key=f"feed-tick:{self._connection_generation}:{symbol}",
+                    )
                 from services.order_flow_engine import order_flow_engine
                 order_flow_engine.ingest_spot(symbol, float(data.get("price") or 0))
                 
@@ -576,6 +589,25 @@ class MarketFeedService:
                 import traceback
                 traceback.print_exc()
     
+    async def _drain_tick_queue(self, max_ticks: int = 64, budget_ms: float = 8.0) -> int:
+        """Publish a bounded burst of dashboard updates without a fixed tick-rate ceiling."""
+        started = time_module.perf_counter()
+        processed = 0
+        while processed < max_ticks:
+            if processed and (time_module.perf_counter() - started) * 1000 >= budget_ms:
+                break
+            try:
+                data = self._tick_queue.get_nowait()
+            except Empty:
+                break
+            try:
+                await self._update_and_broadcast(data)
+            except Exception:
+                logger.exception("Market dashboard tick broadcast failed")
+            processed += 1
+            await asyncio.sleep(0)
+        return processed
+
     async def _update_and_broadcast(self, data: Dict[str, Any]):
         """Update cache and broadcast to WebSocket clients.
         
@@ -1005,6 +1037,14 @@ class MarketFeedService:
         auth_state_manager.mark_api_success()
 
         self._connection_generation += 1
+        with self._tick_lock:
+            self._event_live_symbols = set()
+        from services.engine_events import get_engine_event_service
+        get_engine_event_service().publish_threadsafe(
+            "MARKET_DATA_CONNECTED", "Zerodha market-data WebSocket connected",
+            severity="success", source="market_feed",
+            idempotency_key=f"feed-connected:{self._connection_generation}",
+        )
         tokens = list(TOKEN_SYMBOL_MAP) + list(FUT_TOKEN_MAP)
         ws.subscribe(tokens)
         ws.set_mode(ws.MODE_FULL, tokens)
@@ -1159,6 +1199,12 @@ class MarketFeedService:
         self._prepare_request = None
         from services.aqte_service import get_aqte_service
         get_aqte_service().set_feed_connection(False)
+        from services.engine_events import get_engine_event_service
+        get_engine_event_service().publish_threadsafe(
+            "MARKET_DATA_DISCONNECTED", f"Market-data WebSocket disconnected (code {code})",
+            severity="warning", source="market_feed",
+            idempotency_key=f"feed-disconnected:{self._connection_generation}:{code}",
+        )
         
         # 🔥 Notify watchdog of disconnection
         feed_watchdog.on_disconnect()
@@ -1221,6 +1267,12 @@ class MarketFeedService:
         reconnects but never receives ticks.
         """
         print(f"🔄 Reconnecting... Attempt {attempts_count}")
+        from services.engine_events import get_engine_event_service
+        get_engine_event_service().publish_threadsafe(
+            "MARKET_DATA_RECONNECTING", f"Market-data reconnect attempt {attempts_count}",
+            severity="warning", source="market_feed",
+            idempotency_key=f"feed-reconnect:{self._connection_generation}:{attempts_count}",
+        )
         
         # 🔥 CRITICAL: Re-subscribe to all instruments after reconnect
         # The KiteTicker library handles the TCP reconnection automatically,
@@ -1558,17 +1610,9 @@ class MarketFeedService:
                         await self._fetch_and_cache_last_data()
                     last_refresh_time = current_time
                 
-                # Process any pending ticks from the queue (only when WebSocket is active)
-                # 🔥 FIX: Limit ticks per cycle to prevent event loop starvation
-                ticks_processed = 0
-                while not self._tick_queue.empty() and ticks_processed < 3:
-                    try:
-                        data = self._tick_queue.get_nowait()
-                        await self._update_and_broadcast(data)
-                        ticks_processed += 1
-                        await asyncio.sleep(0)  # Yield to event loop between ticks
-                    except Exception as e:
-                        print(f"❌ Error broadcasting tick: {e}")
+                # Drain a short bounded burst; the former three-tick cap throttled
+                # the feed to 30 updates/sec while the loop slept for 100 ms.
+                ticks_processed = await self._drain_tick_queue()
                 
                 # 🔥 HEARTBEAT CHECK: Detect stale connections (no ticks for 30+ seconds during market hours)
                 market_status = get_market_status()
@@ -1587,7 +1631,8 @@ class MarketFeedService:
                             # Trigger reconnect via watchdog
                             await feed_watchdog.trigger_reconnect()
                 
-                await asyncio.sleep(0.1)  # Small sleep to prevent busy loop
+                if not ticks_processed:
+                    await asyncio.sleep(0.01)
                 
         except TokenException as e:
             print("\n" + "="*80)
@@ -1665,18 +1710,11 @@ class MarketFeedService:
                 print("🔗 Attempting reconnection to Zerodha KiteTicker...")
                 self.kws.connect(threaded=True)
                 
-                # Process tick queue
+                # Process tick queue using the same bounded fast path as normal operation.
                 while self.running:
-                    ticks_processed = 0
-                    while not self._tick_queue.empty() and ticks_processed < 3:
-                        try:
-                            data = self._tick_queue.get_nowait()
-                            await self._update_and_broadcast(data)
-                            ticks_processed += 1
-                            await asyncio.sleep(0)  # Yield to event loop
-                        except Exception as e:
-                            print(f"❌ Error broadcasting tick: {e}")
-                    await asyncio.sleep(0.1)
+                    ticks_processed = await self._drain_tick_queue()
+                    if not ticks_processed:
+                        await asyncio.sleep(0.01)
                     
             except Exception as e:
                 print(f"❌ Reconnection failed: {e}")

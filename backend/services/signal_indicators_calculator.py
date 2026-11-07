@@ -1,42 +1,12 @@
 """
 🔥 ENHANCED INDICATOR CALCULATOR
-Provides all 14-signal required indicators for Market Outlook integration
-Maps existing data to 14-signal structure
+Provides reusable indicators for Market Outlook integration.
+Maps existing analysis data to the supported signal structure.
 """
 
 from typing import Dict, Any
 from datetime import datetime
 import math
-
-
-def calculate_trend_structure(analysis_data: Dict[str, Any]) -> Dict[str, Any]:
-    """Calculate Trend Base indicators: higher_low, lower_high, trend_strength"""
-    price = analysis_data.get('price', 0)
-    ema_20 = analysis_data.get('ema_20', 0)
-    ema_50 = analysis_data.get('ema_50', 0)
-    ema_200 = analysis_data.get('ema_200', 0)
-    support = analysis_data.get('support', 0)
-    resistance = analysis_data.get('resistance', 0)
-    
-    # Higher Low structure: Price > Support AND EMA20 > EMA200
-    higher_low = price > support and ema_20 > ema_200
-    
-    # Lower High structure: Price < Resistance AND EMA20 < EMA200
-    lower_high = price < resistance and ema_20 < ema_200
-    
-    # Trend strength (0-100): How well EMAs are aligned (20 > 50 > 200 = uptrend)
-    if ema_20 > ema_50 > ema_200:
-        trend_strength = min(int(((ema_20 - ema_200) / ema_200 * 100) * 5), 100)
-    elif ema_20 < ema_50 < ema_200:
-        trend_strength = min(int(((ema_200 - ema_20) / ema_200 * 100) * 5), 100)
-    else:
-        trend_strength = 50
-    
-    return {
-        'higher_low': higher_low,
-        'lower_high': lower_high,
-        'trend_strength': trend_strength
-    }
 
 
 def calculate_volume_profile(analysis_data: Dict[str, Any]) -> Dict[str, Any]:
@@ -322,9 +292,9 @@ def calculate_oi_momentum(analysis_data: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-def enhance_analysis_with_12_signals(analysis_data: Dict[str, Any]) -> Dict[str, Any]:
+def enhance_analysis_with_signals(analysis_data: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Enhance analysis data with all 12-signal required indicators
+    Enhance analysis data with reusable signal indicators.
     Takes output from instant_analysis and adds missing indicators
     """
     
@@ -335,14 +305,7 @@ def enhance_analysis_with_12_signals(analysis_data: Dict[str, Any]) -> Dict[str,
         enhanced = dict(analysis_data)
     
     try:
-        # 1. Trend Base
-        trend_base = calculate_trend_structure(enhanced)
-        enhanced['trend_base'] = trend_base
-        enhanced['higher_low'] = trend_base['higher_low']
-        enhanced['lower_high'] = trend_base['lower_high']
-        enhanced['trend_strength'] = trend_base['trend_strength']
-        
-        # 2. Volume Pulse
+        # 1. Volume Pulse
         enhanced['volume_profile'] = calculate_volume_profile(enhanced)
         
         # 3. Candle Intent

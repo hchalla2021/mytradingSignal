@@ -30,7 +30,7 @@ Consensus contract ("aligned → BUY CE / BUY PE")
                      AND weighted bull strength >= FIRE_STRENGTH
                      AND opposing strategies <= MAX_OPPOSITION
   BUY PE is the exact mirror.
-The Smart AI Algo service fuses this consensus with its QuantEdge gates:
+The AQTE confirmation provider consumes this consensus:
 agreement boosts confidence; a fired consensus can promote WAIT → BUY/SELL.
 """
 

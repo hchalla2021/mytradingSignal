@@ -27,12 +27,14 @@ from services.aqte_daily_control import IndexControl, SwingSetups, counts, defau
 from services.aqte_engines import EngineConfig, rank_key, veto_reason
 from services.aqte_runtime import Latencies
 from services.aqte_execution_history import bootstrap_executions, capture_context, save_execution
+from services.quantedge_pro import build_candidate
 
 logger = logging.getLogger(__name__)
 TERMINAL = {"COMPLETE", "CANCELLED", "REJECTED"}
 KILL_TAG = "AQTEKILL"
 # Every AQTE order carries its 16-hex trade id + E (entry) / S (stop); manual Kite orders never do.
 AQTE_TAG = re.compile(r"[0-9a-f]{16}[ES]")
+QUANTEDGE_TAG = re.compile(r"QEP[0-9a-f]{13}[ES]")
 KILL_EXCHANGES = {"NFO", "BFO", "NSE", "BSE"}
 KILL_MAX_REJECTS = 5
 KILL_SETTLE_SECONDS = 4
@@ -47,7 +49,7 @@ DAILY_CONTROL_DEFAULTS_VERSION = 1
 AUTOMATION_APPROVAL_VERSION = 1
 SMART_AI_CONFIRMATION_MAX_AGE_SECONDS = 30
 ENTRY_CUTOFF_MINUTE = 15 * 60 + 15
-MARKET_WAIT = "Waiting for market: auto trade arms on weekdays 09:15 to 15:15 IST"
+MARKET_WAIT = "Market data and pre-open analysis start at 09:00 IST; live auto-trading arms on weekdays from 09:15 to 15:15 IST"
 # Kite rejects more than 25 modifications per order; trailing must leave headroom for the exit.
 KITE_MAX_MODIFICATIONS = 25
 EXIT_MODIFY_RESERVE = 5
@@ -69,6 +71,11 @@ def entry_window(at):
 def aqte_order(order):
     tag = str(order.get("tag") or "")
     return tag == KILL_TAG or AQTE_TAG.fullmatch(tag) is not None
+
+
+def algo_order(order):
+    tag = str(order.get("tag") or "")
+    return aqte_order(order) or QUANTEDGE_TAG.fullmatch(tag) is not None
 
 
 def kill_price(ltp, side):
@@ -97,44 +104,44 @@ def broker_client():
 
 def strategy_lab_confirmation_reason(result, decision, now=None):
     if not isinstance(result, dict):
-        return "Smart AI 5-minute confirmation is unavailable"
+        return "AQTE 5-minute strategy confirmation is unavailable"
     if result.get("data_status") != "LIVE":
-        return "Smart AI market data is not live"
+        return "AQTE confirmation market data is not live"
     tick_age = result.get("tick_age_seconds")
     if (type(tick_age) not in (int, float) or not math.isfinite(tick_age)
             or tick_age < 0 or tick_age > 10):
-        return "Smart AI market data is stale"
+        return "AQTE confirmation market data is stale"
 
     lab = result.get("strategy_lab")
     if not isinstance(lab, dict):
-        return "Smart AI 5-minute Strategy Lab data is unavailable"
+        return "AQTE 5-minute Strategy Lab data is unavailable"
     updated = lab.get("updated")
     if type(updated) not in (int, float) or not math.isfinite(updated):
-        return "Smart AI 5-minute Strategy Lab timestamp is unavailable"
+        return "AQTE 5-minute Strategy Lab timestamp is unavailable"
     age = (time.time() if now is None else now) - updated / 1000
     if age < 0 or age > SMART_AI_CONFIRMATION_MAX_AGE_SECONDS:
-        return "Smart AI 5-minute Strategy Lab data is stale"
+        return "AQTE 5-minute Strategy Lab data is stale"
 
     consensus = lab.get("consensus")
     if not isinstance(consensus, dict) or consensus.get("fired") is not True:
-        return "Smart AI 5-minute consensus is not fired"
+        return "AQTE 5-minute consensus is not fired"
     expected = {"BUY CE": "BUY_CE", "BUY PE": "BUY_PE"}.get(decision)
     if expected is None:
         return "AQTE entry direction is unavailable for Smart AI confirmation"
     actual = consensus.get("signal")
     if actual != expected:
-        return f"Smart AI 5-minute consensus {actual or 'NEUTRAL'} does not confirm {decision}"
+        return f"AQTE 5-minute consensus {actual or 'NEUTRAL'} does not confirm {decision}"
     return None
 
 
-def smart_ai_confirmation_reason(symbol, decision):
+def aqte_confirmation_reason(symbol, decision):
     try:
-        from services.smart_ai_algo_service import get_algo_service
+        from services.aqte_confirmation_service import get_aqte_confirmation_service
 
-        result = get_algo_service().get_result(symbol)
+        result = get_aqte_confirmation_service().get_result(symbol)
     except ImportError:
-        logger.exception("AQTE could not import Smart AI confirmation service for %s", symbol)
-        return "Smart AI 5-minute confirmation is unavailable"
+        logger.exception("AQTE could not import its 5-minute confirmation service for %s", symbol)
+        return "AQTE 5-minute strategy confirmation is unavailable"
     return strategy_lab_confirmation_reason(result, decision)
 
 
@@ -149,7 +156,8 @@ class AQTELiveService:
         self.state = {"armed_day": None, "automation_on": False, "automation_wanted": False, "killed": False,
                       "account": None, "active": None, "trades": [], "used": [], "daily_controls": defaults(),
                       "daily_entries": [], "daily_controls_version": DAILY_CONTROL_DEFAULTS_VERSION,
-                      "automation_approval_version": AUTOMATION_APPROVAL_VERSION}
+                      "automation_approval_version": AUTOMATION_APPROVAL_VERSION,
+                      "quantedge": {"enabled": False, "lots": 1}}
         self.proposals = {}
         self.check = None
         self.error = None
@@ -227,6 +235,13 @@ class AQTELiveService:
         self.state["automation_on"] = False
         self.state.setdefault("daily_controls", defaults())
         self.state.setdefault("daily_entries", [])
+        self.state.setdefault("quantedge", {"enabled": False, "lots": 1})
+        if (not isinstance(self.state["quantedge"], dict) or
+                type(self.state["quantedge"].get("enabled")) is not bool or
+                type(self.state["quantedge"].get("lots")) is not int or
+                not 1 <= self.state["quantedge"]["lots"] <= 5):
+            raise LiveBlocked("Invalid QuantEdge Pro configuration; journal requires repair before trading")
+        self.state["quantedge"]["enabled"] = False
         self.state.setdefault("flatten_pending", False)
         # Standing ON survives restarts; the monitor re-runs preflight before any new entry.
         self.state["automation_wanted"] = bool(self.state.get("automation_wanted")) and not self.state["killed"]
@@ -267,6 +282,85 @@ class AQTELiveService:
                   daily_controls_migrated=migrated, automation_approval_migrated=approval_migrated)
         self.ready = True
 
+    def _publish_live_event(self, kind, payload, execution):
+        from services.engine_events import get_engine_event_service
+
+        execution = execution or payload.get("execution") or payload.get("trade") or self.state.get("active") or {}
+        opportunity = payload.get("record") or {}
+        owner = (execution.get("owner") or (payload.get("proposal") or {}).get("owner") or
+                 opportunity.get("owner") or "AQTE")
+        label = "QuantEdge Pro" if owner == "QUANTEDGE" else "AQTE"
+        trade_key = ((execution or {}).get("id") or payload.get("order_id") or
+                     (payload.get("record") or {}).get("key") or "controller")
+        instrument = ((execution or {}).get("contract") or {}).get("trading_symbol")
+
+        def publish(event_type, message, severity="info", suffix="", instrument_override=None):
+            get_engine_event_service().publish_threadsafe(
+                event_type, message, instrument=instrument_override or instrument or (execution or {}).get("symbol"),
+                severity=severity, source="quantedge_live" if owner == "QUANTEDGE" else "aqte_live",
+                idempotency_key=f"{owner.lower()}-live:{trade_key}:{kind}:{suffix or kind}",
+            )
+
+        if kind == "OPPORTUNITY":
+            record = payload.get("record") or {}
+            state = record.get("state")
+            event_type = {
+                "REJECTED": "SIGNAL_REJECTED",
+                "MISSED": "OPPORTUNITY_MISSED",
+                "EXPIRED": "OPPORTUNITY_EXPIRED",
+                "ACCEPTED": "OPPORTUNITY_ACCEPTED",
+            }.get(state)
+            if event_type:
+                reason = record.get("reason")
+                label = "QuantEdge Pro" if record.get("owner") == "QUANTEDGE" else record.get("symbol", "AQTE")
+                message = f"{label} {record.get('style', 'trade')} opportunity {str(state).lower()}"
+                if reason:
+                    message += f": {reason}"
+                publish(event_type, message, "warning" if state in ("REJECTED", "MISSED") else "info",
+                        f"{state}:{int(record.get('at', time.time()) * 1000)}", record.get("symbol"))
+                if state == "REJECTED" and isinstance(reason, str) and (
+                    "daily" in reason.lower() or "loss limit" in reason.lower()
+                ):
+                    publish("DAILY_RISK_LIMIT_TRIGGERED", f"{label} risk gate: {reason}", "warning",
+                            f"risk:{int(record.get('at', time.time()) * 1000)}", record.get("symbol"))
+        elif kind == "ENTRY_INTENT":
+            publish("RISK_VALIDATION_PASSED", f"{label} entry passed controller risk validation", "success", "risk")
+            publish("TRADE_EXECUTION_INITIATED", f"{label} initiated the broker order-submission workflow", "info", "intent")
+        elif kind == "ENTRY_ACK":
+            publish("ZERODHA_ORDER_SUBMITTED", f"{label} entry order submitted to Zerodha", "info")
+        elif kind == "ENTRY_UNCERTAIN":
+            publish("ORDER_STATUS_UNCERTAIN", "Entry submission outcome is uncertain; broker reconciliation is required",
+                    "warning")
+        elif kind == "ENTRY_UNFILLED":
+            publish("ORDER_UNFILLED", f"{label} entry order was not filled", "warning")
+        elif kind == "ENTRY_CANCEL_ACK":
+            publish("ORDER_CANCEL_REQUESTED", f"{label} requested entry-order cancellation", "warning")
+        elif kind == "PROTECTION_ACK":
+            publish("STOP_LOSS_SUBMITTED", f"{label} protective stop order submitted to Zerodha", "info")
+        elif kind == "TRAIL_ACK":
+            publish("TRAILING_STOP_ADJUSTMENT_SUBMITTED", f"{label} submitted a trailing stop adjustment", "info",
+                    f"stop:{execution.get('stop')}:{execution.get('trail_at')}")
+        elif kind == "TRAIL_CONFIRMED":
+            stop = payload.get("stop")
+            message = f"{label} trailing stop-loss confirmed"
+            if isinstance(stop, (int, float)) and math.isfinite(stop):
+                message += f" at {stop:.2f}"
+            publish("TRAILING_STOP_UPDATED", message, "success", f"stop:{stop}")
+        elif kind == "EXIT_REPRICE_ACK":
+            publish("POSITION_EXIT_INITIATED", f"{label} submitted a protective exit-order update", "warning")
+        elif kind == "LIVE_CLOSED":
+            trade = payload.get("trade") or {}
+            reason = trade.get("exit_reason") or "broker-reconciled exit"
+            if reason == "TARGET":
+                publish("TARGET_REACHED", f"{label} target exit was broker-reconciled", "success", "target")
+            publish("POSITION_EXITED", f"{label} position exited: {reason}", "success", f"exit:{reason}")
+        elif kind == "PREPARATION_BLOCKED":
+            publish("PREMARKET_PREPARATION_BLOCKED", "AQTE broker preparation was blocked", "warning")
+        elif kind in ("AUTOMATION_FAULT_STOPPED", "KILL_SWITCH"):
+            publish("AUTOMATION_STOPPED", f"{label} automation stopped by a safety control", "error")
+        elif kind == "QUANTEDGE_SCAN_BLOCKED":
+            publish("ENGINE_ERROR", "QuantEdge Pro scan was disarmed; inspect its status for the exact reason", "error")
+
     def save(self, kind, **payload):
         try:
             with closing(sqlite3.connect(str(self.path), timeout=10)) as db, db:
@@ -287,8 +381,10 @@ class AQTELiveService:
             self.state["armed_day"] = None
             self.state["automation_on"] = False
             self.state["automation_wanted"] = False
+            self.state["quantedge"]["enabled"] = False
             logger.exception("AQTE live journal failed; broker mutations blocked")
             raise
+        self._publish_live_event(kind, payload, execution)
         morning = self.morning_service()
         if morning is not None:
             active = self.state.get("active")
@@ -304,7 +400,8 @@ class AQTELiveService:
         with self.lock:
             cfg = self.settings()
             now = time.time()
-            active = copy.deepcopy(self.state["active"])
+            active_record = self.state["active"]
+            active = copy.deepcopy(active_record) if not active_record or active_record.get("owner") != "QUANTEDGE" else None
             if active:
                 market = self.service()
                 with market.lock:
@@ -316,8 +413,14 @@ class AQTELiveService:
                     }
                     active["metrics"] = market.engine.position_metrics(
                         order, now, healthy=market.started and not market.failed.is_set())
-            trades = self.state["trades"]
+            trades = [trade for trade in self.state["trades"] if trade.get("owner") != "QUANTEDGE"]
             visible_trades = [trade for trade in trades[:-20] if day(trade["exit_at"]) == day(now)] + trades[-20:]
+            aqte_state = {
+                **self.state,
+                "trades": trades,
+                "daily_entries": [entry for entry in self.state["daily_entries"]
+                                  if entry.get("owner") != "QUANTEDGE"],
+            }
             automation_on = bool(self.state.get("automation_on")) and \
                 self.state["armed_day"] == day(now) and not self.state["killed"]
             wanted = bool(self.state.get("automation_wanted")) and not self.state["killed"]
@@ -454,7 +557,7 @@ class AQTELiveService:
         if reason:
             return reason
         if signal.get("source") != "morning":
-            return smart_ai_confirmation_reason(symbol, signal["decision"])
+            return aqte_confirmation_reason(symbol, signal["decision"])
         return None
 
     def morning_service(self):
@@ -525,13 +628,19 @@ class AQTELiveService:
     def daily_controls(self):
         with self.lock:
             snapshot = self.service().snapshot()
+            aqte_state = {
+                **self.state,
+                "trades": [trade for trade in self.state["trades"] if trade.get("owner") != "QUANTEDGE"],
+                "daily_entries": [entry for entry in self.state["daily_entries"]
+                                  if entry.get("owner") != "QUANTEDGE"],
+            }
             total = counts(self.state, time.time())
             result = {}
             for symbol, control in self.state["daily_controls"].items():
                 selected = self.select_entry(symbol, snapshot["data"][symbol])
                 signal = selected["signal"]
                 entry = selected["check"][1] or signal.get("entry")
-                count = counts(self.state, time.time(), symbol)
+                count = counts(aqte_state, time.time(), symbol)
                 reason = selected["check"][0]
                 if not snapshot["recording"] or snapshot.get("fault"):
                     reason = "Market recorder unavailable"
@@ -595,8 +704,6 @@ class AQTELiveService:
             raise LiveBlocked("AQTE_LIVE_ENABLED is false in centralized backend settings")
         if not cfg.force_outbound_ipv4:
             raise LiveBlocked("FORCE_OUTBOUND_IPV4 must be enabled")
-        if cfg.algo_auto_trade_enabled and cfg.algo_auto_trade_mode.strip().lower() == "live":
-            raise LiveBlocked("Disable other live algo execution before using the one-lot AQTE pilot")
         if any(os.getenv(name) for name in ("HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY",
                                             "https_proxy", "http_proxy", "all_proxy")):
             raise LiveBlocked("Proxy routing must be removed before verifying direct broker egress")
@@ -620,7 +727,7 @@ class AQTELiveService:
         held = {}
         for order in orders:
             filled = int(order.get("filled_quantity") or 0)
-            if not filled or not aqte_order(order):
+            if not filled or not algo_order(order):
                 continue
             key = (order["exchange"], order["tradingsymbol"], order["product"])
             if order["transaction_type"] == "SELL":
@@ -640,7 +747,7 @@ class AQTELiveService:
         for order in orders:
             if order["status"] in TERMINAL:
                 continue
-            if aqte_order(order):
+            if algo_order(order):
                 working.append(order)
             elif order.get("instrument_token") is not None:
                 busy.add(int(order["instrument_token"]))
@@ -689,10 +796,13 @@ class AQTELiveService:
             self.save("ARMED", account=self.state["account"])
             return self.status()
 
-    def entry_guard(self, broker):
+    def entry_guard(self, broker, owner="AQTE"):
         cfg = self.config_guard()
         now = time.time()
-        if not self.state.get("automation_on"):
+        if owner == "QUANTEDGE":
+            if not self.state.get("quantedge", {}).get("enabled"):
+                raise LiveBlocked("QuantEdge Pro live approval is OFF; no new entry orders permitted")
+        elif not self.state.get("automation_on"):
             raise LiveBlocked("Automated real trading is OFF; no new entry orders permitted")
         if self.state["killed"] or self.state["armed_day"] != day(now):
             raise LiveBlocked("Live trading is not armed for this session")
@@ -763,6 +873,8 @@ class AQTELiveService:
     def start_automation(self):
         """Standing ON: accepted any time; arms itself inside each weekday 09:15-15:15 IST window."""
         with self.lock:
+            if self.state.get("quantedge", {}).get("enabled"):
+                raise LiveBlocked("Turn QuantEdge Pro approval OFF before starting AQTE on the shared execution lane")
             self.config_guard()
             if self.state["killed"]:
                 raise LiveBlocked("Emergency stop is latched; operator review is required before restarting")
@@ -824,6 +936,8 @@ class AQTELiveService:
                 self.proposals.clear()
                 self.save("AUTOMATION_OFF", note="New entries blocked; existing protection and exits continue")
                 return self.status()
+            if self.state.get("quantedge", {}).get("enabled"):
+                raise LiveBlocked("Turn QuantEdge Pro approval OFF before enabling AQTE on the shared execution lane")
             self.config_guard()
             if self.state["killed"] or self.state["armed_day"] != day(time.time()):
                 raise LiveBlocked("Complete IP preflight and explicitly arm today's live session before switching ON")
@@ -936,13 +1050,259 @@ class AQTELiveService:
             key = uuid4().hex
             result = {"id": key, "symbol": symbol, "contract": signal["contract"],
                       "strategy": f'quick_scalp_{entry["points"]:g}' if "points" in entry else signal.get("strategy"),
-                      "entry": entry, "risk": round(risk, 2), "signal_at": signal["at"],
+                      "entry": entry, "risk": round(risk, 2), "signal_at": signal["at"], "owner": "AQTE",
                       "expires_at": now + 15, "setup_key": setup_key}
             result["execution_context"] = capture_context(signal, result["strategy"], entry)
             if signal.get("avoided"):
                 result["avoided"] = signal["avoided"]
             self.proposals[key] = copy.deepcopy(result)
             return result
+
+    def quantedge_candidate(self, symbol, busy=None):
+        if busy is None:
+            busy = self.book(self.broker())["busy"]
+        elif callable(busy):
+            busy = busy()
+        return build_candidate(self.service(), symbol, time.time(), self.state["quantedge"]["lots"],
+                              busy, self.costs, max_risk=500)
+
+    def quantedge_proposal(self, symbol, busy=None):
+        with self.lock:
+            self.config_guard()
+            qep = self.state["quantedge"]
+            if not qep["enabled"]:
+                raise LiveBlocked("QuantEdge Pro separate live approval is OFF")
+            if self.state["armed_day"] != day(time.time()) or self.state["killed"]:
+                raise LiveBlocked("Complete existing broker preflight and arm the live session first")
+            if self.state["active"]:
+                raise EntrySkipped("The shared execution manager already has an active trade")
+            entries = [entry for entry in self.state["daily_entries"]
+                       if entry.get("owner") == "QUANTEDGE" and day(entry["at"]) == day(time.time())]
+            trades = [trade for trade in self.state["trades"]
+                      if trade.get("owner") == "QUANTEDGE" and day(trade["entry_at"]) == day(time.time())]
+            if len(entries) >= 5:
+                raise EntrySkipped("QuantEdge Pro daily trade limit reached (5)")
+            if sum(trade["net_pnl"] for trade in trades) <= -1500:
+                raise EntrySkipped("QuantEdge Pro daily loss limit reached (INR 1500)")
+            signal = self.quantedge_candidate(symbol, busy)
+            if signal.get("decision") not in ("BUY CE", "BUY PE") or not signal.get("entry"):
+                raise EntrySkipped(signal.get("reason") or "No qualified QuantEdge Pro breakout")
+            if signal["setup_key"] in self.state["used"]:
+                raise EntrySkipped("This QuantEdge Pro candle was already submitted")
+            now = time.time()
+            self.proposals = {key: value for key, value in self.proposals.items() if value["expires_at"] > now}
+            result = {
+                "id": uuid4().hex,
+                "owner": "QUANTEDGE",
+                "symbol": symbol,
+                "contract": signal["contract"],
+                "strategy": signal["strategy"],
+                "entry": signal["entry"],
+                "risk": signal["risk"],
+                "signal_at": signal["signal_at"],
+                "expires_at": now + 15,
+                "setup_key": signal["setup_key"],
+                "execution_context": {
+                    "strategy_name": "Super Candle + Bollinger Breakout",
+                    "entry_engine": "QuantEdge Pro Independent Rules",
+                    "reason": signal["reason"],
+                    "supporting_engines": [],
+                    "confidence": None,
+                    "captured_at": now,
+                },
+            }
+            self.proposals[result["id"]] = copy.deepcopy(result)
+            return result
+
+    def quantedge_loss_budget_reason(self, risk):
+        trades = [trade for trade in self.state["trades"]
+                  if trade.get("owner") == "QUANTEDGE" and day(trade["entry_at"]) == day(time.time())]
+        pnl = sum(trade["net_pnl"] for trade in trades)
+        if pnl <= -1500:
+            return "QuantEdge Pro daily loss limit reached (INR 1500)"
+        if pnl - risk <= -1500:
+            return "QuantEdge Pro planned stop risk would breach its INR 1500 daily loss limit"
+        return None
+
+    def quantedge_status(self):
+        with self.lock:
+            qep = self.state["quantedge"]
+            now = time.time()
+            entries = [entry for entry in self.state["daily_entries"]
+                       if entry.get("owner") == "QUANTEDGE" and day(entry["at"]) == day(now)]
+            trades = [trade for trade in self.state["trades"]
+                      if trade.get("owner") == "QUANTEDGE" and day(trade["entry_at"]) == day(now)]
+            signals = {}
+            for symbol in SYMBOLS:
+                try:
+                    signals[symbol] = self.quantedge_candidate(symbol, set())
+                except (KeyError, TypeError, ValueError) as exc:
+                    signals[symbol] = {"decision": "WAIT", "reason": f"Signal unavailable ({type(exc).__name__})"}
+            active = self.state.get("active")
+            return {
+                "generated_at": now,
+                "ready": self.ready,
+                "enabled": qep["enabled"],
+                "armed": self.state["armed_day"] == day(now) and not self.state["killed"],
+                "lots": qep["lots"],
+                "risk_per_trade": 500,
+                "daily_loss_limit": 1500,
+                "max_trades": 5,
+                "daily_trades": len(entries),
+                "daily_pnl": round(sum(trade["net_pnl"] for trade in trades), 2),
+                "active": copy.deepcopy(active) if active and active.get("owner") == "QUANTEDGE" else None,
+                "error": qep.get("error"),
+                "signals": signals,
+            }
+
+    def set_quantedge_config(self, lots):
+        with self.lock:
+            if not self.ready:
+                raise LiveBlocked("Live journal unavailable; QuantEdge Pro settings were not saved")
+            if type(lots) is not int or not 1 <= lots <= 5:
+                raise LiveBlocked("QuantEdge Pro lots must be an integer from 1 through 5")
+            if self.state["quantedge"]["enabled"] or self.state.get("automation_on") or self.state["active"]:
+                raise LiveBlocked("Stop automated entries and wait for the active trade to finish before changing lots")
+            self.state["quantedge"]["lots"] = lots
+            self.proposals = {key: value for key, value in self.proposals.items()
+                              if value.get("owner") != "QUANTEDGE"}
+            self.save("QUANTEDGE_CONFIG_SAVED", lots=lots)
+            return self.quantedge_status()
+
+    def set_quantedge_approval(self, enabled):
+        with self.lock:
+            if type(enabled) is not bool:
+                raise LiveBlocked("QuantEdge Pro approval must be an explicit boolean")
+            if not self.ready:
+                raise LiveBlocked("Live journal unavailable; QuantEdge Pro approval was not changed")
+            if enabled:
+                self.config_guard()
+                if self.state.get("automation_on") or self.state.get("automation_wanted"):
+                    raise LiveBlocked("Turn AQTE automation OFF before enabling QuantEdge Pro on the shared execution lane")
+                if self.state["active"] or self.state["killed"] or self.state.get("flatten_pending"):
+                    raise LiveBlocked("Resolve the existing trade or emergency stop before enabling QuantEdge Pro")
+                if self.state["armed_day"] != day(time.time()):
+                    raise LiveBlocked("Run existing broker preflight and arm today's session before enabling QuantEdge Pro")
+                if not entry_window(time.time()):
+                    raise LiveBlocked("QuantEdge Pro approval can only be enabled during the regular entry window")
+            self.state["quantedge"]["enabled"] = enabled
+            if enabled:
+                self.state["quantedge"].pop("error", None)
+            self.proposals = {key: value for key, value in self.proposals.items()
+                              if value.get("owner") != "QUANTEDGE"}
+            self.save("QUANTEDGE_APPROVAL_ON" if enabled else "QUANTEDGE_APPROVAL_OFF",
+                      lots=self.state["quantedge"]["lots"])
+            return self.quantedge_status()
+
+    def request_quantedge_exit(self, trade_id):
+        with self.lock:
+            active = self.state.get("active")
+            if not active or active.get("owner") != "QUANTEDGE" or active["id"] != trade_id:
+                raise LiveBlocked("The selected QuantEdge Pro trade is no longer active")
+            self.request_exit(trade_id)
+            return self.quantedge_status()
+
+    def automated_quantedge_entry(self):
+        with self.lock:
+            if not self.state["quantedge"]["enabled"] or self.state["active"] or not entry_window(time.time()):
+                return
+            busy = self.book(self.broker())["busy"]
+            qualified = []
+            present = set()
+            for symbol in SYMBOLS:
+                candidate = self.quantedge_candidate(symbol, busy)
+                setup_key = candidate.get("setup_key")
+                if candidate.get("side") in ("CE", "PE") and setup_key:
+                    present.add(setup_key)
+                    if setup_key in self.state["used"]:
+                        continue
+                    if candidate.get("decision") == "WAIT":
+                        self.record_quantedge_opportunity(candidate, "REJECTED", candidate.get("reason") or
+                                                          "Live option or risk checks did not pass")
+                        continue
+                if candidate.get("decision") not in ("BUY CE", "BUY PE"):
+                    continue
+                metrics = candidate["metrics"]
+                rank = (candidate["signal_at"], metrics["volume_ratio"], metrics["body_ratio"],
+                        -candidate["spread_fraction"], -candidate["risk"])
+                qualified.append((rank, symbol, candidate))
+            for key, previous in list(self.opportunities.items()):
+                if previous.get("owner") == "QUANTEDGE" and key not in present and previous.get("state") in (
+                    "REJECTED", "MISSED"
+                ):
+                    record = {**previous, "state": "EXPIRED", "at": time.time(),
+                              "reason": f"QuantEdge Pro candle is no longer eligible; last decision: {previous['reason']}"}
+                    self.save("OPPORTUNITY", record=record)
+                    self.opportunities[key] = record
+            for _, symbol, candidate in sorted(qualified, reverse=True):
+                setup_key = candidate["setup_key"]
+                self.publish_quantedge_event(
+                    "SIGNAL_GENERATED",
+                    f'{symbol} {candidate["decision"]} breakout qualified; checking live execution gates',
+                    "success", setup_key, symbol,
+                )
+                try:
+                    proposal = self.quantedge_proposal(symbol, busy)
+                    self.confirm(proposal["id"])
+                    self.record_quantedge_opportunity(
+                        candidate, "ACCEPTED", "Entry intent persisted; broker fills are reconciled separately"
+                    )
+                    return
+                except EntrySkipped as exc:
+                    self.record_quantedge_opportunity(candidate, "REJECTED", str(exc))
+                    continue
+                except LiveBlocked as exc:
+                    self.record_quantedge_opportunity(candidate, "REJECTED", str(exc))
+                    raise
+
+    def record_quantedge_opportunity(self, candidate, state, reason):
+        key = candidate["setup_key"]
+        previous = self.opportunities.get(key)
+        if previous and (previous.get("state"), previous.get("reason")) == (state, reason):
+            return
+        active = self.state.get("active") or {}
+        record = {
+            "key": key,
+            "owner": "QUANTEDGE",
+            "symbol": candidate["symbol"],
+            "style": "quantedge",
+            "strategy": candidate.get("strategy") or "super_candle_bollinger_breakout_v1",
+            "state": state,
+            "reason": reason,
+            "at": time.time(),
+            "first_at": previous["first_at"] if previous else time.time(),
+            "signal_at": candidate.get("signal_at"),
+            "score": (candidate.get("metrics") or {}).get("volume_ratio"),
+            "reward_risk": (candidate.get("entry") or {}).get("reward_risk"),
+            "expected_value": None,
+            "expected_value_reason": "No validated/calibrated probability model",
+            "broker_order_id": active.get("entry_id") if active.get("setup_key") == key else None,
+        }
+        self.save("OPPORTUNITY", record=record)
+        self.opportunities[key] = record
+        self.metrics.increment(f"quantedge.opportunities.{state.lower()}")
+
+    @staticmethod
+    def publish_quantedge_event(event_type, message, severity, key, instrument):
+        from services.engine_events import get_engine_event_service
+
+        get_engine_event_service().publish_threadsafe(
+            event_type, message, instrument=instrument, severity=severity, source="quantedge_pro",
+            idempotency_key=f"quantedge-pro:{event_type}:{key}",
+        )
+
+    def scan_quantedge(self):
+        try:
+            self.automated_quantedge_entry()
+        except Exception as exc:
+            reason = f"{type(exc).__name__}: {exc}"
+            with self.lock:
+                self.state["quantedge"]["enabled"] = False
+                self.state["quantedge"]["error"] = reason
+                self.proposals = {key: value for key, value in self.proposals.items()
+                                  if value.get("owner") != "QUANTEDGE"}
+                self.save("QUANTEDGE_SCAN_BLOCKED", reason=reason[:500])
+            logger.exception("QuantEdge Pro entry scan disarmed; AQTE execution remains separate")
 
     def entry_levels(self, symbol, signal):
         contract = Contract(**signal["contract"])
@@ -1005,12 +1365,14 @@ class AQTELiveService:
             if proposal is None or time.time() >= proposal["expires_at"]:
                 raise LiveBlocked("Order approval expired or already used; review a new proposal")
             broker = self.broker()
+            owner = proposal.get("owner", "AQTE")
             with self.metrics.measure("execution.risk_guard"):
-                book = self.entry_guard(broker)
+                book = self.entry_guard(broker, owner)
             if proposal["setup_key"] in self.state["used"]:
                 raise LiveBlocked("This strategy candle was already submitted")
             # Re-evaluate the backend setup; never trust browser prices or quantity.
-            current = self.proposal(proposal["symbol"], book["busy"])
+            current = (self.quantedge_proposal(proposal["symbol"], book["busy"]) if owner == "QUANTEDGE"
+                       else self.proposal(proposal["symbol"], book["busy"]))
             self.proposals.pop(current["id"], None)
             # Same contract and strategy candle, and the price cap may only fall: never chase a higher ask.
             if current["contract"] != proposal["contract"] or current["setup_key"] != proposal["setup_key"] or (
@@ -1021,10 +1383,12 @@ class AQTELiveService:
                 raise EntrySkipped("Rechecked risk exceeds the approved risk; review a new proposal")
             # Use the rechecked tier/stop/target, not an obsolete higher-risk plan.
             proposal = {**current, "expires_at": proposal["expires_at"]}
-            reason = self.loss_budget_reason(proposal["symbol"], proposal["risk"])
+            reason = (self.quantedge_loss_budget_reason(proposal["risk"]) if owner == "QUANTEDGE"
+                      else self.loss_budget_reason(proposal["symbol"], proposal["risk"]))
             if reason:
                 raise EntrySkipped(reason)
-            control = self.state["daily_controls"][proposal["symbol"]]
+            control = ({"trail_start_r": 1.0, "daily_loss": 1500}
+                       if owner == "QUANTEDGE" else self.state["daily_controls"][proposal["symbol"]])
             c, entry = proposal["contract"], proposal["entry"]
             verified = Contract(**c)
             if verified.symbol != proposal["symbol"] or verified.exchange != (
@@ -1042,15 +1406,17 @@ class AQTELiveService:
             if quote.token != c["token"]:
                 raise LiveBlocked("Broker quote token does not match the approved option contract")
             if not 0 <= now - quote.at <= 5 or not 0 < quote.bid <= quote.ask or (
-                quote.ask_quantity < c["lot_size"] or quote.ask > entry["maximum"] or
+                quote.ask_quantity < entry["quantity"] or quote.ask > entry["maximum"] or
                 quote.ask <= entry["stop"] or (quote.ask - quote.bid) / quote.ask > 0.03
             ):
                 raise EntrySkipped("Fresh broker ask/depth does not fit the approved no-chase limit")
             with self.metrics.measure("broker.margins"):
                 available = float(broker.margins("equity")["available"]["cash"])
-            if not math.isfinite(available) or available < entry["maximum"] * c["lot_size"] + self.costs(entry["maximum"], c["lot_size"]):
+            if not math.isfinite(available) or available < entry["maximum"] * entry["quantity"] + self.costs(
+                entry["maximum"], entry["quantity"]
+            ):
                 # Owner trades can tie up margin for a while; retry instead of disarming automation.
-                raise EntrySkipped("Insufficient broker cash for the one-lot premium; retrying")
+                raise EntrySkipped("Insufficient broker cash for the approved quantity; retrying")
             if time.time() >= proposal["expires_at"]:
                 raise EntrySkipped("Approval expired during broker checks; review again")
             market = self.service()
@@ -1067,7 +1433,8 @@ class AQTELiveService:
                     not market.engine.fresh(market.engine.future.get(proposal["symbol"]), time.time())
                 ):
                     raise EntrySkipped("Streaming quote became stale during broker checks")
-                latest = self.proposal(proposal["symbol"], book["busy"])
+                latest = (self.quantedge_proposal(proposal["symbol"], book["busy"]) if owner == "QUANTEDGE"
+                          else self.proposal(proposal["symbol"], book["busy"]))
                 self.proposals.pop(latest["id"], None)
                 if latest["contract"] != c or latest["setup_key"] != proposal["setup_key"] or (
                     latest["risk"] > proposal["risk"] or latest["entry"]["maximum"] > entry["maximum"] or
@@ -1080,10 +1447,11 @@ class AQTELiveService:
                 entry, now = proposal["entry"], time.time()
             # Persist the unique intent BEFORE sending. A timeout is not a rejection.
             active = {
-                "id": uuid4().hex[:16], "symbol": proposal["symbol"], "contract": c,
+                "id": ("QEP" + uuid4().hex[:13]) if owner == "QUANTEDGE" else uuid4().hex[:16],
+                "owner": owner, "symbol": proposal["symbol"], "contract": c,
                 "strategy": proposal.get("strategy"),
                 "execution_context": copy.deepcopy(proposal["execution_context"]),
-                "quantity": c["lot_size"], "limit": entry["maximum"], "stop": entry["stop"],
+                "quantity": entry["quantity"], "limit": entry["maximum"], "stop": entry["stop"],
                 "initial_stop": entry["stop"], "target": entry["target"], "peak": 0,
                 "trailing_active": False,
                 "trail_start_r": control["trail_start_r"], "daily_loss_limit": control["daily_loss"],
@@ -1094,7 +1462,7 @@ class AQTELiveService:
                 "entry_day": day(now), "exit_requested": None, "error": None,
             }
             self.state["active"] = active
-            self.state["daily_entries"].append(dict(id=active["id"], symbol=active["symbol"], at=now,
+            self.state["daily_entries"].append(dict(id=active["id"], owner=owner, symbol=active["symbol"], at=now,
                                                    filled=False, pending=True, token=c["token"], price=entry["maximum"]))
             self.state["used"].append(proposal["setup_key"])
             self.save("ENTRY_INTENT", proposal=proposal, tag=active["id"] + "E")
@@ -1104,7 +1472,7 @@ class AQTELiveService:
                 with self.metrics.measure("broker.entry_submission"):
                     order_id = broker.place_order(
                         variety="regular", exchange=c["exchange"], tradingsymbol=c["trading_symbol"],
-                        transaction_type="BUY", quantity=c["lot_size"], product="MIS",
+                        transaction_type="BUY", quantity=entry["quantity"], product="MIS",
                         order_type="LIMIT", price=entry["maximum"], validity="IOC", tag=active["id"] + "E")
                 if not order_id:
                     raise ValueError("Broker did not return an order ID")
@@ -1123,23 +1491,32 @@ class AQTELiveService:
         with self.lock:
             if not self.ready:
                 raise LiveBlocked("Live journal is unavailable; manage the position in Kite")
-            if self.state["killed"] or self.state.get("flatten_pending"):
-                raise LiveBlocked("AQTE emergency stop is active; monitor AQTE square-off in Kite")
             active = self.state["active"]
+            label = "QuantEdge Pro" if active and active.get("owner") == "QUANTEDGE" else "AQTE"
+            if self.state["killed"] or self.state.get("flatten_pending"):
+                raise LiveBlocked(f"{label} emergency stop is active; monitor the algorithm square-off in Kite")
             if not active or active["id"] != trade_id:
-                raise LiveBlocked("The selected AQTE trade is no longer active; refresh before acting")
+                raise LiveBlocked("The selected algorithm trade is no longer active; refresh before acting")
             if active["entry_day"] != day(time.time()):
                 raise LiveBlocked("Previous-session trade requires reconciliation in Kite")
             if active["filled"] <= active.get("exited", 0):
                 raise LiveBlocked("No confirmed remaining fill to close; inspect the pending order in Kite")
-            self.state["automation_on"] = False
-            self.state["automation_wanted"] = False
-            self.waiting = None
-            self.proposals.clear()
+            if active.get("owner") == "QUANTEDGE":
+                self.state["quantedge"]["enabled"] = False
+                self.proposals = {key: value for key, value in self.proposals.items()
+                                  if value.get("owner") != "QUANTEDGE"}
+            else:
+                self.state["automation_on"] = False
+                self.state["automation_wanted"] = False
+                self.waiting = None
+                self.proposals = {key: value for key, value in self.proposals.items()
+                                  if value.get("owner", "AQTE") != "AQTE"}
             if not active["exit_requested"]:
                 active.update(exit_requested="MANUAL_EXIT", exit_request_at=time.time())
             # The monitor reconciles identity/quantity, then modifies only this trade's existing sell order.
-            self.save("MANUAL_EXIT_REQUESTED", trade_id=trade_id, scope="SELECTED_AQTE_TRADE")
+            self.save("MANUAL_EXIT_REQUESTED", trade_id=trade_id,
+                      scope="SELECTED_QUANTEDGE_TRADE" if active.get("owner") == "QUANTEDGE"
+                      else "SELECTED_AQTE_TRADE")
             return self.status()
 
     def find_order(self, orders, active, leg):
@@ -1318,7 +1695,9 @@ class AQTELiveService:
             marked_pnl = daily_pnl + (quote.bid - active["entry_price"]) * filled - self.costs(
                 active["entry_price"], filled) - self.costs(quote.bid, filled)
             index_pnl = sum(t["net_pnl"] for t in self.state["trades"]
-                            if t["symbol"] == active["symbol"] and day(t["entry_at"]) == day(now))
+                            if t["symbol"] == active["symbol"] and day(t["entry_at"]) == day(now) and (
+                                active.get("owner") != "QUANTEDGE" or t.get("owner") == "QUANTEDGE"
+                            ))
             open_pnl = marked_pnl - daily_pnl
             if marked_pnl <= -self.settings().aqte_live_daily_loss or (
                 index_pnl + open_pnl <= -active.get("daily_loss_limit", self.settings().aqte_live_daily_loss)
@@ -1380,21 +1759,22 @@ class AQTELiveService:
         with self.lock:
             self.state.update(armed_day=None, automation_on=False, automation_wanted=False,
                               killed=True, flatten_pending=True)
+            self.state["quantedge"]["enabled"] = False
             self.waiting = None
             self.proposals.clear()
             self.kill_sent.clear()
             if self.state["active"]:
                 self.state["active"]["exit_requested"] = "EMERGENCY_STOP"
-            self.audit("EMERGENCY_STOP", scope="AQTE_TAGGED_POSITIONS_AND_ORDERS")
+            self.audit("EMERGENCY_STOP", scope="TAGGED_ALGORITHM_POSITIONS_AND_ORDERS")
             try:
                 self.emergency_flatten()
             except Exception as exc:
                 self.error = f"Emergency square-off retrying: {type(exc).__name__}: {exc}"
-                logger.exception("AQTE emergency square-off attempt failed; monitor will retry")
+                logger.exception("Tagged algorithm emergency square-off attempt failed; monitor will retry")
             return self.status()
 
     def emergency_flatten(self):
-        """Cancel AQTE's working orders and close only AQTE-owned quantity. Repeats until AQTE is flat.
+        """Cancel tagged algorithm orders and close only algorithm-owned quantity until flat.
 
         The owner's manual or other-app positions and orders are never cancelled, modified or exited.
         """
@@ -1403,7 +1783,7 @@ class AQTELiveService:
                 return
             broker = self.broker()
             book = self.book(broker)
-            orders = [o for o in book["orders"] if aqte_order(o)]
+            orders = [o for o in book["orders"] if algo_order(o)]
             positions, working = book["owned"], book["working"]
             now = time.time()
             keep, problems = set(), []
@@ -1519,6 +1899,7 @@ class AQTELiveService:
             if self.state.get("flatten_pending") or self.state["active"]:
                 raise LiveBlocked("Emergency square-off still in progress; wait until Kite shows no open AQTE positions or AQTE orders")
             self.state.update(killed=False, armed_day=None, automation_on=False, automation_wanted=False)
+            self.state["quantedge"]["enabled"] = False
             self.error = None
             self.waiting = None
             self.save("EMERGENCY_RESET", note="Operator reviewed; automation remains OFF")
@@ -1532,6 +1913,7 @@ class AQTELiveService:
             self.error = message
             self.state["armed_day"] = None
             self.state["automation_on"] = False
+            self.state["quantedge"]["enabled"] = False
             # A standing ON request re-arms through a fresh preflight after the retry delay.
             self.next_activation = time.time() + ACTIVATION_RETRY_SECONDS
             if self.ready and changed:
@@ -1548,12 +1930,26 @@ class AQTELiveService:
     def broker_update(self, update):
         active = self.state.get("active") or {}
         order_id = str(update.get("order_id") or "")
-        if not aqte_order(update) and order_id not in (active.get("entry_id"), active.get("protect_id")):
+        if not algo_order(update) and order_id not in (active.get("entry_id"), active.get("protect_id")):
             return
         if not order_id:
             logger.warning("AQTE ignored broker order update without an order ID")
             self.metrics.increment("broker_updates_invalid")
             return
+        status = str(update.get("status") or "UNKNOWN").strip().upper()
+        active_contract = active.get("contract") or {}
+        from services.engine_events import get_engine_event_service
+        get_engine_event_service().publish_threadsafe(
+            "ZERODHA_ORDER_STATUS",
+            f"AQTE Zerodha order status: {status.replace('_', ' ').lower()}",
+            instrument=update.get("tradingsymbol") or active_contract.get("trading_symbol") or active.get("symbol"),
+            severity="success" if status == "COMPLETE" else "warning" if status in ("CANCELLED", "REJECTED") else "info",
+            source="aqte_live",
+            idempotency_key=(
+                f"aqte-order:{order_id}:{status}:{update.get('filled_quantity')}:"
+                f"{update.get('pending_quantity')}:{update.get('average_price')}"
+            ),
+        )
         record = {key: update.get(key) for key in ("status", "filled_quantity", "pending_quantity", "average_price")}
         record.update(order_id=order_id, received_at=time.time())
         with self.update_lock:
@@ -1691,6 +2087,7 @@ class AQTELiveService:
                         next_reconcile = time.monotonic() + 2
                     await asyncio.to_thread(self.prepare_session)
                     await asyncio.to_thread(self.auto_activate)
+                    await asyncio.to_thread(self.measured, "quantedge.scan", self.scan_quantedge)
                     await asyncio.to_thread(self.measured, "execution.scan", self.scan_entries)
             except Exception as exc:
                 logger.exception("AQTE live reconciliation requires attention; inspect broker terminal")
@@ -1711,6 +2108,7 @@ class AQTELiveService:
         with self.lock:
             self.state["armed_day"] = None
             self.state["automation_on"] = False
+            self.state["quantedge"]["enabled"] = False
             if self.ready:
                 self.save("SHUTDOWN_DISARMED")
 

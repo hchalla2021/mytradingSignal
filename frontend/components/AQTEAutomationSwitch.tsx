@@ -188,7 +188,7 @@ function AQTEAutomationSwitch({ onStatus, feed, feedError = null }: {
       )}
       <p role="status" className={`${!busy && !(known && status.killed) ? 'sr-only' : 'text-right text-sm'} ${unknown || !status ? 'text-amber-200' : status.killed ? 'text-rose-200' : on ? 'text-emerald-200' : 'text-amber-200'}`}>
         {busy ? 'Saving to backend…' : unknown || !status ? 'UNKNOWN · Verifying backend state · Do not assume OFF' :
-          status.killed ? (status.flatten_pending ? 'Emergency stop latched · Closing AQTE positions only · manual trades untouched' :
+          status.killed ? (status.flatten_pending ? 'Emergency stop latched · Closing tagged AQTE/QuantEdge Pro trades · manual trades untouched' :
             !status.ready ? 'Emergency stop latched · Controller unavailable; reset blocked' :
               status.active ? 'Emergency stop latched · Trade reconciliation pending; inspect Kite' :
                 status.flatten_pending !== false ? 'Emergency stop latched · Square-off status unverified; inspect Kite' :

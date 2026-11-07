@@ -768,394 +768,6 @@ h1, h2, h3, h4, h5, h6 {
   box-shadow: inset 0 0 12px rgba(239, 68, 68, 0.3);
 }
 
-/* ═══════════════════════════════════════════════════════════════════════════
-   VOLUME PULSE — Ultra-fast GPU-accelerated animations
-   ═══════════════════════════════════════════════════════════════════════════ */
-
-/* Card-level brightness flash on every data tick */
-@keyframes vp-tick-flash {
-  0%   { filter: brightness(1.35); }
-  100% { filter: brightness(1); }
-}
-.vp-tick {
-  animation: vp-tick-flash 0.15s ease-out;
-  will-change: filter;
-}
-
-/* All VP numeric values — zero-layout-shift, instant paint */
-.vp-val {
-  transition: color 0.08s ease-out, background-color 0.08s ease-out;
-  will-change: contents;
-  contain: layout style;
-}
-
-/* VP confidence/pressure bars — instant width transition */
-.vp-bar {
-  transition: width 0.12s cubic-bezier(0.25, 0.46, 0.45, 0.94) !important;
-  will-change: width;
-}
-
-/* STRONG BUY card glow — STEADY, no infinite loop */
-.vp-strong-buy {
-  box-shadow: 0 0 14px rgba(16, 185, 129, 0.55), 0 0 35px rgba(16, 185, 129, 0.2);
-  border-color: rgba(16, 185, 129, 0.9) !important;
-  border-width: 3px !important;
-  transform: translateZ(0);
-}
-
-/* BUY card glow — STEADY */
-.vp-buy {
-  box-shadow: 0 0 10px rgba(34, 197, 94, 0.4), 0 0 22px rgba(34, 197, 94, 0.15);
-  border-color: rgba(34, 197, 94, 0.75) !important;
-  border-width: 2px !important;
-  transform: translateZ(0);
-}
-
-/* STRONG SELL card glow — STEADY */
-.vp-strong-sell {
-  box-shadow: 0 0 14px rgba(239, 68, 68, 0.55), 0 0 35px rgba(239, 68, 68, 0.2);
-  border-color: rgba(239, 68, 68, 0.9) !important;
-  border-width: 3px !important;
-  transform: translateZ(0);
-}
-
-/* SELL card glow — STEADY */
-.vp-sell {
-  box-shadow: 0 0 10px rgba(239, 68, 68, 0.4), 0 0 22px rgba(239, 68, 68, 0.15);
-  border-color: rgba(239, 68, 68, 0.75) !important;
-  border-width: 2px !important;
-  transform: translateZ(0);
-}
-
-/* Signal badge — STEADY styling for STRONG signals */
-.vp-badge-strong {
-  transform: translateZ(0);
-}
-
-/* Volume bar dominance — STEADY brightness for winning side */
-.vp-vol-winner {
-  filter: brightness(1.15);
-  transform: translateZ(0);
-}
-
-/* Trend badge — STEADY text-shadow, no blink */
-.vp-trend-up {
-  text-shadow: 0 0 8px rgba(16, 185, 129, 0.7);
-  font-weight: 900 !important;
-}
-.vp-trend-down {
-  text-shadow: 0 0 8px rgba(239, 68, 68, 0.7);
-  font-weight: 900 !important;
-}
-
-/* Prediction direction — STEADY glow, no infinite loop */
-.vp-pred-up {
-  box-shadow: inset 0 0 10px rgba(20, 184, 166, 0.25), 0 0 8px rgba(20, 184, 166, 0.15);
-  border-width: 2px !important;
-}
-.vp-pred-down {
-  box-shadow: inset 0 0 10px rgba(239, 68, 68, 0.25), 0 0 8px rgba(239, 68, 68, 0.15);
-  border-width: 2px !important;
-}
-
-/* Early signal — STEADY bold, no blink */
-.vp-early-signal {
-  font-weight: 900 !important;
-  text-shadow: 0 0 6px currentColor;
-}
-
-/* Section wrapper glow — STEADY, no infinite loop */
-.vp-section-strong-buy {
-  border-color: rgba(16, 185, 129, 0.6) !important;
-  box-shadow: 0 0 20px rgba(16, 185, 129, 0.12);
-  border-width: 3px !important;
-}
-.vp-section-buy {
-  border-color: rgba(16, 185, 129, 0.45) !important;
-  box-shadow: 0 0 12px rgba(16, 185, 129, 0.08);
-}
-.vp-section-strong-sell {
-  border-color: rgba(239, 68, 68, 0.6) !important;
-  box-shadow: 0 0 20px rgba(239, 68, 68, 0.12);
-  border-width: 3px !important;
-}
-.vp-section-sell {
-  border-color: rgba(239, 68, 68, 0.45) !important;
-  box-shadow: 0 0 12px rgba(239, 68, 68, 0.08);
-}
-
-/* ═══════════════════════════════════════════════════════════════════════════
-   ICT BIAS — ULTRA-FAST RENDERING CLASSES (ict-*)
-   GPU-accelerated, status-change-only highlights, zero layout shift
-   ═══════════════════════════════════════════════════════════════════════════ */
-
-/* Instant value updates — zero layout shift */
-.ict-val {
-  contain: layout style;
-  transition: color 80ms linear;
-  will-change: color;
-  transform: translateZ(0);
-}
-
-/* Ultra-fast bar transitions — 100ms instead of 500-700ms */
-.ict-bar {
-  transition: width 100ms cubic-bezier(0.22, 1, 0.36, 1);
-  will-change: width;
-  transform: translateZ(0);
-}
-
-/* One-shot status changed flash — plays once (0.5s) then stops */
-@keyframes ict-status-flash {
-  0%   { filter: brightness(1.6); }
-  100% { filter: brightness(1); }
-}
-.ict-status-changed {
-  animation: ict-status-flash 0.5s ease-out 1;
-  transform: translateZ(0);
-}
-
-/* One-shot direction changed flash — plays once (0.5s) */
-@keyframes ict-dir-flash {
-  0%   { filter: brightness(1.5); text-shadow: 0 0 12px currentColor; }
-  100% { filter: brightness(1); text-shadow: none; }
-}
-.ict-dir-changed {
-  animation: ict-dir-flash 0.5s ease-out 1;
-  transform: translateZ(0);
-}
-
-/* One-shot prediction changed flash — plays once (0.5s) */
-@keyframes ict-pred-flash {
-  0%   { transform: scale(1.06); filter: brightness(1.4); }
-  100% { transform: scale(1); filter: brightness(1); }
-}
-.ict-pred-changed {
-  animation: ict-pred-flash 0.5s ease-out 1;
-  transform: translateZ(0);
-}
-
-/* Static glow for BULLISH card — steady, no animation loop */
-.ict-bullish {
-  box-shadow: 0 0 12px rgba(16, 185, 129, 0.25), 0 0 24px rgba(16, 185, 129, 0.1);
-  border-color: rgba(16, 185, 129, 0.6) !important;
-  border-width: 2px !important;
-}
-
-/* Static glow for BEARISH card — steady, no animation loop */
-.ict-bearish {
-  box-shadow: 0 0 12px rgba(239, 68, 68, 0.25), 0 0 24px rgba(239, 68, 68, 0.1);
-  border-color: rgba(239, 68, 68, 0.6) !important;
-  border-width: 2px !important;
-}
-
-/* High confidence ring highlight (>=75%) */
-.ict-high-conf {
-  ring-width: 1px;
-  --tw-ring-color: currentColor;
-  box-shadow: 0 0 8px currentColor;
-}
-
-/* Grade A+ / A highlight — steady amber border */
-.ict-grade-top {
-  border-color: rgba(245, 158, 11, 0.6) !important;
-  box-shadow: 0 0 6px rgba(245, 158, 11, 0.2);
-}
-
-/* Strong signal factor bar highlight */
-.ict-factor-strong {
-  font-weight: 800 !important;
-  text-shadow: 0 0 4px currentColor;
-}
-
-/* Static section wrapper glow based on bias */
-.ict-section-bullish {
-  border-color: rgba(16, 185, 129, 0.5) !important;
-  box-shadow: 0 0 20px rgba(16, 185, 129, 0.1);
-}
-.ict-section-bearish {
-  border-color: rgba(239, 68, 68, 0.5) !important;
-  box-shadow: 0 0 20px rgba(239, 68, 68, 0.1);
-}
-
-/* ── Institutional Market Compass  — ultra-fast rendering ─────────────── */
-
-/* Instant value updates — zero layout shift, 80ms color transition */
-.imc-val {
-  contain: layout style;
-  will-change: color;
-  transition: color 80ms ease-out;
-}
-
-/* Fast bar width — 100ms cubic-bezier for all progress bars */
-.imc-bar {
-  transition: width 100ms cubic-bezier(0.22, 1, 0.36, 1);
-  will-change: width;
-}
-
-/* One-shot card flash when direction changes (BULLISH↔BEARISH) — plays once */
-@keyframes imc-direction-flash {
-  0%   { filter: brightness(1.4); }
-  100% { filter: brightness(1); }
-}
-.imc-direction-changed {
-  animation: imc-direction-flash 0.5s ease-out 1 forwards;
-}
-
-/* One-shot direction badge flash */
-@keyframes imc-badge-flash {
-  0%   { transform: scale(1.15); filter: brightness(1.3); }
-  100% { transform: scale(1); filter: brightness(1); }
-}
-.imc-badge-changed {
-  animation: imc-badge-flash 0.5s ease-out 1 forwards;
-}
-
-/* One-shot prediction badge pop */
-@keyframes imc-pred-flash {
-  0%   { transform: scale(1.12); filter: brightness(1.25); }
-  100% { transform: scale(1); filter: brightness(1); }
-}
-.imc-pred-changed {
-  animation: imc-pred-flash 0.45s ease-out 1 forwards;
-}
-
-/* Steady glow for BULLISH card — NO infinite loop */
-.imc-bullish {
-  border-color: rgba(16, 185, 129, 0.5);
-  box-shadow: 0 0 12px rgba(16, 185, 129, 0.12);
-}
-
-/* Steady glow for BEARISH card — NO infinite loop */
-.imc-bearish {
-  border-color: rgba(239, 68, 68, 0.5);
-  box-shadow: 0 0 12px rgba(239, 68, 68, 0.12);
-}
-
-/* High confidence ring (>=75%) */
-.imc-high-conf {
-  box-shadow: 0 0 8px rgba(16, 185, 129, 0.2);
-}
-
-/* Score bar fast transitions */
-.imc-score-bar {
-  transition: width 100ms cubic-bezier(0.22, 1, 0.36, 1);
-  will-change: width;
-}
-
-/* Factor row with strong signal (score > 0.5) */
-.imc-factor-strong {
-  font-weight: 700;
-  text-shadow: 0 0 6px currentColor;
-}
-
-/* Futures leading badge steady glow */
-.imc-fut-leading {
-  box-shadow: 0 0 8px rgba(6, 182, 212, 0.2);
-}
-
-/* Premium near zone highlight */
-.imc-prem-extreme {
-  box-shadow: inset 0 0 6px rgba(245, 158, 11, 0.15);
-}
-
-/* Section-level steady glow based on dominant signal */
-.imc-section-bullish {
-  border-color: rgba(16, 185, 129, 0.5) !important;
-  box-shadow: 0 0 20px rgba(16, 185, 129, 0.1);
-}
-.imc-section-bearish {
-  border-color: rgba(239, 68, 68, 0.5) !important;
-  box-shadow: 0 0 20px rgba(239, 68, 68, 0.1);
-}
-
-/* ── COMPASS: Per-section sharp conditional highlights ──────────
-   Applied ONLY when specific criteria are met, NOT always.
-   Green sharp border = bullish criteria met.
-   Red sharp border = bearish criteria met.
-   ─────────────────────────────────────────────────────────────── */
-.imc-section-hl-bull {
-  border-width: 2px !important;
-  border-style: solid !important;
-  border-color: rgb(16, 185, 129) !important;
-  box-shadow:
-    0 0 10px rgba(16, 185, 129, 0.35),
-    0 0 20px rgba(16, 185, 129, 0.12) !important;
-}
-.imc-section-hl-bear {
-  border-width: 2px !important;
-  border-style: solid !important;
-  border-color: rgb(239, 68, 68) !important;
-  box-shadow:
-    0 0 10px rgba(239, 68, 68, 0.35),
-    0 0 20px rgba(239, 68, 68, 0.12) !important;
-}
-
-/* ───────────────────────────────────────────────────────────────
-   ICT Smart Money – Per-section conviction highlights
-   Green sharp border = bullish criteria met.
-   Red sharp border = bearish criteria met.
-   ─────────────────────────────────────────────────────────────── */
-.ict-section-hl-bull {
-  border-width: 2px !important;
-  border-style: solid !important;
-  border-color: rgb(16, 185, 129) !important;
-  box-shadow:
-    0 0 10px rgba(16, 185, 129, 0.35),
-    0 0 20px rgba(16, 185, 129, 0.12) !important;
-}
-.ict-section-hl-bear {
-  border-width: 2px !important;
-  border-style: solid !important;
-  border-color: rgb(239, 68, 68) !important;
-  box-shadow:
-    0 0 10px rgba(239, 68, 68, 0.35),
-    0 0 20px rgba(239, 68, 68, 0.12) !important;
-}
-
-/* ───────────────────────────────────────────────────────────────
-   Volume Pulse – Per-section conviction highlights
-   Green sharp border = bullish criteria met (market up).
-   Red sharp border = bearish criteria met (market down).
-   ─────────────────────────────────────────────────────────────── */
-.vp-section-hl-bull {
-  border-width: 2px !important;
-  border-style: solid !important;
-  border-color: rgb(16, 185, 129) !important;
-  box-shadow:
-    0 0 10px rgba(16, 185, 129, 0.35),
-    0 0 20px rgba(16, 185, 129, 0.12) !important;
-}
-.vp-section-hl-bear {
-  border-width: 2px !important;
-  border-style: solid !important;
-  border-color: rgb(239, 68, 68) !important;
-  box-shadow:
-    0 0 10px rgba(239, 68, 68, 0.35),
-    0 0 20px rgba(239, 68, 68, 0.12) !important;
-}
-
-/* ───────────────────────────────────────────────────────────────
-   Trend Base – Per-section conviction highlights
-   Green sharp border = bullish criteria met (market up).
-   Red sharp border = bearish criteria met (market down).
-   ─────────────────────────────────────────────────────────────── */
-.tb-section-hl-bull {
-  border-width: 2px !important;
-  border-style: solid !important;
-  border-color: rgb(16, 185, 129) !important;
-  box-shadow:
-    0 0 10px rgba(16, 185, 129, 0.35),
-    0 0 20px rgba(16, 185, 129, 0.12) !important;
-}
-.tb-section-hl-bear {
-  border-width: 2px !important;
-  border-style: solid !important;
-  border-color: rgb(239, 68, 68) !important;
-  box-shadow:
-    0 0 10px rgba(239, 68, 68, 0.35),
-    0 0 20px rgba(239, 68, 68, 0.12) !important;
-}
-
 /* ───────────────────────────────────────────────────────────────
    Smart Money • Order Logic — per-section highlights
    Green sharp border = bullish criteria met (market up).
@@ -1724,11 +1336,12 @@ h1, h2, h3, h4, h5, h6 {
 .aqte-theme .aqx-dash-main {
   display: grid; gap: 10px; min-width: 0; align-items: stretch;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  grid-template-areas: "top top top" "perf perf perf" "morning morning morning" "term term term" "opp trade risk" "eng eng eng" "chart chart chart" "events events events" "book book book";
+  grid-template-areas: "top top top" "perf perf perf" "morning morning morning" "term term term" "opp trade risk" "eng eng eng" "chart chart chart" "events events events" "quantedge quantedge quantedge" "book book book";
 }
 .aqte-theme .aqx-dash-main > * { min-width: 0; }
 .aqte-theme .aqx-dash-main > .aqx-top { grid-area: top; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); margin: 0; }
 .aqte-theme .aqx-dash-main > :not(.aqx-top, .aqx-deck, .aqx-perfbar-wrap, .aqx-dash-term, .aqx-book) { grid-column: 1 / -1; }
+.aqte-theme .aqx-dash-main > .qep-standalone-shell { grid-area: quantedge; }
 .aqte-theme .aqx-top > .aqx-alert { grid-column: 1 / -1; }
 .aqte-theme .aqx-deck { display: contents; }
 .aqte-theme .aqx-deck-main { grid-area: eng; }
@@ -1981,6 +1594,25 @@ h1, h2, h3, h4, h5, h6 {
 .aqte-theme .aqx-ticker li > span:first-of-type { overflow: hidden; text-overflow: ellipsis; }
 .aqte-theme .aqx-ticker time { color: #5cc8ff; }
 .aqte-theme .aqx-ticker li.aqx-ticker-empty { grid-column: 1 / -1; color: #7c93b0; }
+.aqte-theme .aqx-activity-feed { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; list-style: none; }
+.aqte-theme .aqx-activity-row {
+  display: flex; align-items: center; gap: 8px; min-width: 0; min-height: 38px; padding: 5px 10px;
+  border: 1px solid rgb(56 116 190 / 0.3); border-radius: 9px; background: rgb(15 30 52 / 0.7);
+  font-size: 0.6875rem; color: #aabbd0; font-variant-numeric: tabular-nums;
+}
+.aqte-theme .aqx-activity-row time { flex: 0 0 auto; color: #5cc8ff; }
+.aqte-theme .aqx-activity-instrument { flex: 0 0 auto; color: #d3e2f5; font-weight: 700; }
+.aqte-theme .aqx-activity-type { flex: 0 0 auto; max-width: 120px; overflow: hidden; color: #8fa6c1; text-overflow: ellipsis; white-space: nowrap; }
+.aqte-theme .aqx-activity-message { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.aqte-theme .aqx-severity { flex: 0 0 auto; padding: 2px 6px; border-radius: 999px; font-size: 0.5625rem; text-transform: uppercase; }
+.aqte-theme .aqx-severity-info { color: #5cc8ff; background: rgb(92 200 255 / 0.1); }
+.aqte-theme .aqx-severity-success { color: #22e58b; background: rgb(34 229 139 / 0.1); }
+.aqte-theme .aqx-severity-warning { color: #fbbf24; background: rgb(251 191 36 / 0.1); }
+.aqte-theme .aqx-severity-error { color: #ff5a6e; background: rgb(255 90 110 / 0.1); }
+.aqte-theme .aqx-activity-feed .aqx-ticker-empty { grid-column: 1 / -1; color: #7c93b0; }
+@media (max-width: 760px) {
+  .aqte-theme .aqx-activity-feed { grid-template-columns: minmax(0, 1fr); }
+}
 
 /* cool skin: calm slate-blue panels, larger type, muted status chips (style only, geometry stays fixed) */
 .aqte-theme.aqx-shell {
@@ -2317,13 +1949,13 @@ h1, h2, h3, h4, h5, h6 {
 @container aqte (max-width: 1180px) {
   .aqte-theme .aqx-dash-main {
     grid-template-columns: repeat(2, minmax(0, 1fr));
-    grid-template-areas: "top top" "perf perf" "morning morning" "term term" "opp opp" "trade risk" "eng eng" "chart chart" "events events" "book book";
+    grid-template-areas: "top top" "perf perf" "morning morning" "term term" "opp opp" "trade risk" "eng eng" "chart chart" "events events" "quantedge quantedge" "book book";
   }
   .aqte-theme .aqx-dash-main > .aqx-top { grid-template-columns: minmax(0, 1fr); }
   .aqte-theme .aqx-perfbar { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 }
 @container aqte (max-width: 900px) {
-  .aqte-theme .aqx-dash-main { grid-template-columns: minmax(0, 1fr); grid-template-areas: "top" "perf" "morning" "term" "opp" "trade" "risk" "eng" "chart" "events" "book"; }
+  .aqte-theme .aqx-dash-main { grid-template-columns: minmax(0, 1fr); grid-template-areas: "top" "perf" "morning" "term" "opp" "trade" "risk" "eng" "chart" "events" "quantedge" "book"; }
   .aqte-theme .aqx-context { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .aqte-theme .aqx-perfbar { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
   .aqte-theme .aqx-perfbar > div { padding: 6px 8px; border: 1px solid rgb(56 116 190 / 0.25); border-radius: 8px; }
@@ -2504,4 +2136,157 @@ h1, h2, h3, h4, h5, h6 {
   .aqx-evidence-details, .aqx-ticker-empty, .aqx-chart .aqte-terminal-card, .aqte-terminal-card, .aqte-auto-switch,
   .aqx-opp-rank li:not(.aqx-rank-top), .aqx-pnl-grid > div, .aqx-opp-grid > div, .aqx-facts > div) {
   border-color: rgb(134 239 172 / 0.32);
+}
+.aqte-theme.aqx-shell.qep-standalone-shell {
+  border-color: rgb(47 82 101 / 0.85);
+  background: linear-gradient(180deg, #091522 0%, #07101a 100%);
+  box-shadow: 0 18px 48px rgb(0 0 0 / 0.38), inset 0 1px rgb(148 190 210 / 0.05);
+}
+.aqte-theme.qep-standalone-shell .text-xs { font-size: 0.6875rem; }
+.aqte-theme.qep-standalone-shell .text-sm { font-size: 0.8125rem; }
+.aqte-theme.qep-standalone-shell .text-base { font-size: 0.9375rem; }
+.aqte-theme.qep-standalone-shell .text-lg { font-size: 1.0625rem; }
+.aqte-theme.qep-standalone-shell .text-xl { font-size: 1.1875rem; }
+.aqte-theme.qep-standalone-shell .text-2xl { font-size: 1.4375rem; }
+.aqte-theme.qep-standalone-shell .text-3xl { font-size: 1.8125rem; }
+.aqte-theme.qep-standalone-shell .qep-header {
+  border-color: rgb(48 69 85 / 0.8);
+  background: linear-gradient(90deg, rgb(9 20 31 / 0.94), rgb(12 25 37 / 0.72));
+}
+.aqte-theme.qep-standalone-shell .qep-market-card {
+  border-color: rgb(39 62 77 / 0.95);
+  background: linear-gradient(145deg, #13212c 0%, #0c1721 100%);
+  box-shadow: inset 0 1px rgb(160 190 210 / 0.04), 0 8px 20px rgb(0 0 0 / 0.18);
+}
+.aqte-theme.qep-standalone-shell .qep-market-card:hover {
+  border-color: rgb(16 185 129 / 0.55);
+}
+.aqte-theme.qep-standalone-shell .qep-trade-panel {
+  border-color: rgb(0 190 125 / 0.9);
+  background: linear-gradient(145deg, #08261f 0%, #0a1c22 58%, #08141c 100%);
+  box-shadow: inset 0 1px rgb(76 255 185 / 0.08), 0 12px 30px rgb(0 0 0 / 0.25);
+}
+.aqte-theme.qep-standalone-shell .qep-level {
+  box-shadow: inset 0 1px rgb(255 255 255 / 0.035);
+}
+.aqte-theme.qep-standalone-shell .qep-status-panel {
+  border-color: rgb(38 61 78 / 0.95);
+  background: linear-gradient(160deg, #12212d 0%, #0b1520 100%);
+  box-shadow: inset 0 1px rgb(160 190 210 / 0.035), 0 10px 24px rgb(0 0 0 / 0.2);
+}
+.morningedge-shell {
+  display: grid; gap: 14px; padding: 18px; border: 1px solid #153a4d; border-radius: 18px;
+  color: #e6f0fb; background: linear-gradient(150deg, #061421 0%, #07101a 65%, #06131b 100%);
+  box-shadow: 0 18px 48px rgb(0 0 0 / 0.34), inset 0 1px rgb(148 190 210 / 0.05);
+}
+.morningedge-header, .morningedge-brand, .morningedge-header-status, .me-panel-heading, .me-card-label {
+  display: flex; align-items: center;
+}
+.morningedge-header { min-width: 0; justify-content: space-between; gap: 18px; padding: 2px 2px 14px; border-bottom: 1px solid #183244; }
+.morningedge-brand { min-width: 0; gap: 12px; }
+.morningedge-logo { display: grid; width: 44px; height: 44px; flex: 0 0 auto; place-items: center; border: 1px solid #087949; border-radius: 13px; color: #20e887; background: #062619; }
+.morningedge-brand h2 { margin: 0; color: #f4f8fc; font-size: 1.45rem; line-height: 1.2; font-weight: 850; letter-spacing: -.025em; }
+.morningedge-brand p { margin: 3px 0 0; color: #9eb4c9; font-size: .82rem; }
+.morningedge-brand p b { margin-left: 7px; padding: 2px 7px; border-radius: 999px; color: #052112; background: #00d975; font-size: .68rem; }
+.morningedge-header-status { flex-wrap: wrap; justify-content: flex-end; gap: 8px; color: #c1d3e2; font-size: .8rem; }
+.me-pill { display: inline-flex; align-items: center; gap: 7px; padding: 7px 11px; border: 1px solid #253b4c; border-radius: 999px; background: #0a1926; }
+.me-pill i, .me-card-label > span, .morningedge-worker-list li > span { width: 8px; height: 8px; flex: 0 0 auto; border-radius: 50%; background: #657587; }
+.me-pill.is-live i, .me-card-label > span.fresh { background: #15e781; box-shadow: 0 0 9px #0f9f56; }
+.morningedge-phase { color: #75c4e7; font-weight: 700; }
+.morningedge-market-cards { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+.morningedge-market-card, .morningedge-panel {
+  min-width: 0; border: 1px solid #1c3446; border-radius: 14px;
+  background: linear-gradient(145deg, #111f2a, #0b1722); box-shadow: inset 0 1px rgb(160 190 210 / 0.035);
+}
+.morningedge-market-card { display: grid; gap: 6px; padding: 13px 15px; }
+.me-card-label { justify-content: space-between; gap: 7px; color: #d7e5f2; font-size: .85rem; font-weight: 750; }
+.morningedge-market-card strong { color: white; font-size: 1.55rem; line-height: 1.1; font-variant-numeric: tabular-nums; }
+.morningedge-market-card small { color: #16d985; font-size: .78rem; font-weight: 700; }
+.morningedge-signal-card { border-color: #087343; background: linear-gradient(145deg, #06281d, #0b1c22); }
+.morningedge-signal-card .me-card-label { justify-content: flex-start; }
+.morningedge-signal-card .me-card-label svg { color: #25d9f3; }
+.morningedge-signal-card strong { color: #23eb80; }
+.morningedge-signal-card small { color: #9eb8ca; }
+.morningedge-main-grid { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(290px, .9fr); gap: 12px; }
+.morningedge-panel { padding: 15px; }
+.morningedge-setup { border-color: #097344; background: linear-gradient(145deg, #08251d, #0a1a22 75%, #08141c); }
+.me-panel-heading { justify-content: space-between; gap: 10px; }
+.me-panel-heading h3 { display: flex; align-items: center; gap: 8px; margin: 0; color: #f4f8fc; font-size: 1.05rem; font-weight: 800; }
+.me-panel-heading h3 svg { color: #18d6ef; }
+.me-panel-heading > span { color: #8da6ba; font-size: .7rem; font-weight: 750; }
+.me-panel-heading > .me-ready { color: #21e486; }
+.me-panel-heading > .me-blocked { color: #f5ca62; }
+.morningedge-reason { min-height: 1.3em; margin: 9px 0 13px; color: #b7c8d8; font-size: .84rem; }
+.morningedge-levels { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 9px; }
+.morningedge-level { display: grid; gap: 8px; padding: 12px; border: 1px solid #305849; border-radius: 10px; background: rgb(4 30 25 / 0.7); }
+.morningedge-level small, .morningedge-intel small, .morningedge-stats small { color: #9ab0c4; font-size: .7rem; }
+.morningedge-level b { color: #f3f8fc; font-size: 1.13rem; font-variant-numeric: tabular-nums; }
+.morningedge-level:nth-child(2) { border-color: #66414b; background: rgb(43 20 28 / .7); }
+.morningedge-level:nth-child(2) b { color: #ff8293; }
+.morningedge-active-trade { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; margin-top: 10px; padding: 10px; border: 1px solid #17693e; border-radius: 10px; color: #c9e8d6; background: #09271b; font-size: .8rem; }
+.morningedge-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+.morningedge-actions button, .morningedge-config-grid button, .morningedge-token button {
+  display: inline-flex; min-height: 38px; align-items: center; justify-content: center; gap: 7px; padding: 8px 12px;
+  border: 1px solid #2c5262; border-radius: 9px; color: #ddecf8; background: #102331; font-size: .8rem; font-weight: 750;
+}
+.morningedge-actions button.me-live-button, .morningedge-token button { border-color: #05964b; color: #04180d; background: #18d86f; }
+.morningedge-actions button:disabled, .morningedge-config-grid button:disabled { cursor: not-allowed; opacity: .48; }
+.morningedge-gate-note { margin: 10px 0 0; color: #9cb4c9; font-size: .73rem; line-height: 1.5; }
+.morningedge-intel { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); margin: 13px 0 14px; border: 1px solid #1b3444; border-radius: 10px; background: #081724; }
+.morningedge-intel > div { display: grid; gap: 5px; padding: 10px; border-right: 1px solid #162e3e; border-bottom: 1px solid #162e3e; }
+.morningedge-intel b { color: #25dc79; font-size: .88rem; }
+.morningedge-rules h4 { margin: 9px 0 5px; color: #a9bed1; font-size: .73rem; letter-spacing: .06em; text-transform: uppercase; }
+.morningedge-worker-list { display: grid; gap: 0; margin: 0; padding: 0; list-style: none; }
+.morningedge-worker-list li { display: flex; align-items: center; gap: 8px; padding: 8px 2px; border-bottom: 1px solid #1a2e3c; color: #deebf7; font-size: .8rem; }
+.morningedge-worker-list li > span { background: #657587; }
+.morningedge-worker-list li small { margin-left: auto; color: #8199ae; font-size: .67rem; text-align: right; }
+.morningedge-bottom-grid { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(260px, .8fr); gap: 12px; }
+.morningedge-config-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 9px; margin-top: 12px; }
+.morningedge-config-grid label { display: grid; gap: 5px; color: #b2c4d6; font-size: .72rem; }
+.morningedge-config-grid input, .morningedge-config-grid select, .morningedge-token input {
+  width: 100%; min-width: 0; min-height: 36px; padding: 7px 9px; border: 1px solid #294254; border-radius: 8px;
+  outline: none; color: #eff7ff; background: #07131d; font-size: .82rem;
+}
+.morningedge-config-grid input:focus, .morningedge-config-grid select:focus, .morningedge-token input:focus { border-color: #14d675; }
+.morningedge-config-grid button { align-self: end; }
+.morningedge-stats { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; margin-top: 13px; }
+.morningedge-stats > div { display: grid; gap: 6px; min-width: 0; padding: 11px; border: 1px solid #1b3547; border-radius: 9px; background: #091722; }
+.morningedge-stats b { overflow: hidden; color: #f2f7fc; font-size: .95rem; text-overflow: ellipsis; white-space: nowrap; }
+.morningedge-pipeline-stats { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; margin-top: 11px; }
+.morningedge-pipeline-stats > div { display: grid; gap: 5px; min-width: 0; padding: 9px; border: 1px solid #1b3547; border-radius: 8px; background: #091722; }
+.morningedge-pipeline-stats small { overflow: hidden; color: #91a9bd; font-size: .68rem; text-overflow: ellipsis; white-space: nowrap; }
+.morningedge-pipeline-stats b { overflow: hidden; color: #39e18c; font-size: .88rem; font-variant-numeric: tabular-nums; text-overflow: ellipsis; white-space: nowrap; }
+.morningedge-events { padding: 13px 15px; }
+.morningedge-event-list { display: grid; max-height: 230px; overflow: auto; margin-top: 8px; }
+.morningedge-event { display: grid; grid-template-columns: 72px 8px minmax(90px, .45fr) minmax(0, 1fr); align-items: center; gap: 9px; min-height: 34px; border-bottom: 1px solid #1a2c39; color: #bed0df; font-size: .76rem; }
+.morningedge-event time { color: #8aa3b8; font-variant-numeric: tabular-nums; }
+.morningedge-event b { overflow: hidden; color: #dceaf6; text-overflow: ellipsis; white-space: nowrap; }
+.me-event-dot { width: 7px; height: 7px; border-radius: 50%; background: #1cdb80; }
+.me-event-dot.warning { background: #f7c95c; }
+.me-event-dot.error { background: #fa6478; }
+.morningedge-empty { display: flex; align-items: center; gap: 8px; padding: 12px 0; color: #8fa7bc; font-size: .8rem; }
+.morningedge-warning, .morningedge-blockers p { display: flex; align-items: center; gap: 8px; color: #ffcc69; font-size: .78rem; }
+.morningedge-token { display: flex; flex-wrap: wrap; align-items: center; gap: 9px; padding: 10px; border: 1px solid #254255; border-radius: 10px; color: #b9cddd; background: #0a1a27; font-size: .78rem; }
+.morningedge-token input { width: min(320px, 100%); }
+.morningedge-token button { min-height: 34px; }
+.morningedge-blockers { padding: 8px 12px; border: 1px solid #69494a; border-radius: 10px; background: #291719; }
+.morningedge-blockers p { margin: 3px 0; color: #ffb6a8; }
+.me-spin { animation: me-spin 1s linear infinite; }
+@keyframes me-spin { to { transform: rotate(360deg); } }
+@media (max-width: 850px) {
+  .morningedge-header { align-items: flex-start; flex-direction: column; }
+  .morningedge-header-status { justify-content: flex-start; }
+  .morningedge-market-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .morningedge-main-grid, .morningedge-bottom-grid { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 560px) {
+  .morningedge-shell { gap: 10px; padding: 10px; border-radius: 14px; }
+  .morningedge-brand h2 { font-size: 1.2rem; }
+  .morningedge-market-card { padding: 10px; }
+  .morningedge-market-card strong { font-size: 1.25rem; }
+  .morningedge-levels { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .morningedge-config-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .morningedge-pipeline-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .morningedge-event { grid-template-columns: 62px 7px minmax(0, 1fr); }
+  .morningedge-event > span:last-child { grid-column: 3; }
 }

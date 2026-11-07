@@ -37,7 +37,7 @@ class TradingDecision(Enum):
 
 class LiveMarketIndicesAnalyzer:
     """
-    Analyzes live market indices and combines with 14-signal outlook
+    Analyzes live market indices and combines with the market outlook
     Creates actionable trading decisions based on multiple factors
     """
 
@@ -254,8 +254,8 @@ class LiveMarketIndicesAnalyzer:
         MASTER FUNCTION: Combines all market data for trading decision
         
         Parameters:
-        - outlook_signal: From 14-signal analysis (STRONG_BUY, BUY, NEUTRAL, SELL, STRONG_SELL)
-        - outlook_confidence: 0-100% confidence from 14 signals
+        - outlook_signal: Market outlook direction (STRONG_BUY, BUY, NEUTRAL, SELL, STRONG_SELL)
+        - outlook_confidence: 0-100% market outlook confidence
         - bullish_count: Number of bullish signals
         - bearish_count: Number of bearish signals
         - pcr: Put-Call ratio (< 1.0 bullish, > 1.4 bearish)
@@ -280,7 +280,7 @@ class LiveMarketIndicesAnalyzer:
         if volatility_index is None:
             volatility_index = 50
 
-        # Calculate base trading decision from 14-signals
+        # Calculate base trading decision from the market outlook.
         if 'STRONG_BUY' in outlook_signal:
             base_decision = TradingDecision.STRONG_BUY
             base_score = min(outlook_confidence + 20, 100)

@@ -6,7 +6,6 @@
  * O(1) updates per tick, bounded ring buffers. Consumed by:
  *   - MarketPulseStrip.tsx     (aggregate)
  *   - FIIDIIFlowStrip.tsx      (signed flow proxy)
- *   - TopAISignalBar.tsx       (per-index AI deck)
  *
  * Inputs: only the MarketTick payload already streamed by the FastAPI WS.
  * Outputs: a single `BuyerIntel` object per symbol, refreshed every tick.

@@ -32,22 +32,17 @@ is visible; all stay mounted to preserve live updates and nested index selection
 uses two columns on phones, three on tablets, and six on wide desktops, with keyboard navigation
 and 48px minimum touch targets. Volume Pulse now also has NIFTY / BANKNIFTY / SENSEX index tabs.
 
-**Smart AI & Institutional Flow** combines Smart AI Algo, Big Player Radar, FII/DII Flow,
-and Official Cash Flow into one workspace. A shared NIFTY / BANKNIFTY / SENSEX selector
-controls the three index-specific views. Official Cash Flow is market-wide with its reporting
-date, so the index selector is hidden there. Feature tabs use a two-by-two phone layout and
-a single row on tablets/desktops, with 44px touch targets and consistent sans-serif typography.
-Algo cards remain mounted, preserving unsaved lots and parameters; a single flow provider
-keeps chart snapshots updating even when the Algo view is selected. Per-index flow figures
-are estimates, not official transactions; allocated fallback values are labeled accordingly.
+**Institutional Flow** contains FII/DII Flow and Official Cash Flow. The NIFTY / BANKNIFTY /
+SENSEX selector controls the index-specific view; Official Cash Flow is market-wide, so its
+reporting date is shown without an index selector. Per-index flow figures are estimates, not
+official transactions; allocated fallback values are labeled accordingly. AQTE retains its
+internal 5-minute strategy confirmation provider independently of this workspace.
 
 **Live Market Indices** uses compact NIFTY, BANKNIFTY, and SENSEX tabs, with NIFTY selected
 by default and one full-width card visible at a time on mobile and desktop. All three cards
 continue receiving live updates while hidden. Use Left/Right arrows or Home/End to switch
 tabs with the keyboard. Equal-width, touch-friendly tabs use an emerald selected state and
 underline; exchange badges appear on tablet/desktop and collapse on phones to keep labels aligned.
-**AI Signal Deck** uses the same tabs with its own independent selection, defaulting to NIFTY.
-Hidden signal cards stay mounted and continue receiving ticks, preserving analysis and animation state.
 **Advanced SMC & Market Structure** and **Greeks Overview** share the same responsive index tabs.
 Each defaults independently to NIFTY; hidden cards keep their state and live updates. Missing SMC
 data shows a building-structure message for the selected index instead of hiding its tab.

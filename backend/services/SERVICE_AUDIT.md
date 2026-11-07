@@ -43,12 +43,7 @@
    - Used by: advanced_analysis.py
    - Status: **WORKING**
 
-8. **trend_base_service.py** ✅ ACTIVE
-   - Trend structure analysis
-   - Used by: advanced_analysis.py
-   - Status: **WORKING**
-
-9. **candle_intent_service.py** ✅ ACTIVE
+8. **candle_intent_service.py** ✅ ACTIVE
    - Candle pattern analysis
    - Used by: advanced_analysis.py
    - Status: **WORKING**
@@ -175,7 +170,6 @@ market_feed.py
 
 advanced_analysis.py
 ├── volume_pulse_service ✅
-├── trend_base_service ✅
 ├── news_detection_service ✅
 ├── candle_intent_service ✅
 ├── zone_control_service ✅
@@ -209,4 +203,3 @@ routers/auth.py
 2. ✅ New unified_auth_service is integrated
 3. ⏳ Future: Gradually migrate legacy auth imports
 4. ⏳ Future: Archive legacy auth files after migration complete
-

@@ -243,6 +243,10 @@ export function useMarketSocket() {
                 const newStatus = (message as any).marketStatus;
                 // Update all symbols with current market status
                 setMarketData((prev) => {
+                  const hasStatusChange = Object.values(prev).some(
+                    (tick) => tick !== null && tick.status !== newStatus
+                  );
+                  if (!hasStatusChange) return prev;
                   const updated = { ...prev };
                   Object.keys(updated).forEach(symbol => {
                     const key = symbol as keyof typeof updated;

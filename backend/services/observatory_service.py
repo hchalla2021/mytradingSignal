@@ -63,13 +63,11 @@ _VOLATILE_T     = 2.0   # day-range / open ≥ 2% → VOLATILE
 
 # Strategy metadata: key → (display_name, category, icon, priority_weight)
 STRATEGY_META: Dict[str, Tuple[str, str, str, int]] = {
-    # Core Trading Strategies (14)
+    # Core trading strategies
     "overall_signal":        ("Overall Consensus",          "aggregate",  "⚡", 100),
     "market_regime":         ("Market Regime",              "regime",     "🌊", 90),
     "liquidity_score":       ("Liquidity Intelligence",     "liquidity",  "💧", 85),
-    "market_edge":           ("MarketEdge Intelligence",    "edge",       "🔮", 95),
     "candle_intelligence":   ("Candle Intelligence",        "candle",     "🕯", 80),
-    "trend_base":            ("Trend Base Structure",       "structure",  "📐", 85),
     "volume_pulse":          ("Volume Pulse",               "volume",     "📊", 75),
     "ict_smart_money":       ("ICT Smart Money",            "ict",        "🏦", 92),
     "institutional_compass": ("Institutional Compass",      "compass",    "🧭", 88),
@@ -85,13 +83,12 @@ STRATEGY_META: Dict[str, Tuple[str, str, str, int]] = {
     "market_liquidity":      ("Market Liquidity",           "liquidity",  "💦", 86),
     "crt_bts":               ("CRT BTS Signal",             "structure",  "🔄", 79),
     
-    # Market Intelligence & Context (3)
+    # Market intelligence and context
     "global_indices":        ("Global Indices",             "context",    "🌍", 82),
     "global_news":           ("Global News & Events",       "context",    "📰", 75),
     "global_impact_radar":   ("Global Impact Radar",        "context",    "🛰", 84),
     "live_market_indices":   ("Live Market Indices",        "context",    "📉", 80),
     "global_risk":           ("Global Risk",                "risk",       "⚠", 88),
-    "expiry_explosion":      ("Expiry Explosion",           "options",    "💥", 84),
     
     # System Health & Infrastructure (5)
     "feed_health":           ("Feed Health & Latency",      "system",     "📡", 90),
@@ -419,48 +416,6 @@ class ObservatoryService:
         except Exception:
             pass
 
-        # 2. Trend Base (higher-low / lower-high structure) ────────────────────
-        try:
-            if analysis:
-                ts = _safe_confidence(analysis.get("trend_strength", 50))
-                if analysis.get("higher_low") is True:
-                    strategies["trend_base"] = entry(
-                        "BULLISH",
-                        ts,
-                        "Higher-low structure confirmed",
-                        drivers=["higher-low", "trend strength"],
-                        parameters={
-                            "higher_low": analysis.get("higher_low"),
-                            "lower_high": analysis.get("lower_high"),
-                            "trend_strength": analysis.get("trend_strength"),
-                        },
-                    )
-                elif analysis.get("lower_high") is True:
-                    strategies["trend_base"] = entry(
-                        "BEARISH",
-                        ts,
-                        "Lower-high structure confirmed",
-                        drivers=["lower-high", "trend strength"],
-                        parameters={
-                            "higher_low": analysis.get("higher_low"),
-                            "lower_high": analysis.get("lower_high"),
-                            "trend_strength": analysis.get("trend_strength"),
-                        },
-                    )
-                else:
-                    strategies["trend_base"] = entry(
-                        "NEUTRAL",
-                        50,
-                        "No clear higher-low/lower-high",
-                        drivers=["structure unresolved"],
-                        parameters={
-                            "higher_low": analysis.get("higher_low"),
-                            "lower_high": analysis.get("lower_high"),
-                        },
-                    )
-        except Exception:
-            pass
-
         # 3. Volume Pulse ──────────────────────────────────────────────────────
         try:
             if analysis:
@@ -546,27 +501,6 @@ class ObservatoryService:
                     },
                 )
                 strategies["ict_bias"] = strategies["ict_smart_money"]
-        except Exception:
-            pass
-
-        # 7. MarketEdge Intelligence ───────────────────────────────────────────
-        try:
-            from services.market_edge_service import get_market_edge_service  # type: ignore
-            edge = get_market_edge_service()
-            snap = edge.get_snapshot() if edge else {}
-            sym_data = (snap or {}).get(symbol, {})
-            if sym_data:
-                strategies["market_edge"] = entry(
-                    sym_data.get("direction", "NEUTRAL"),
-                    sym_data.get("confidence", 55),
-                    f"Multi-factor edge | action={sym_data.get('action', 'N/A')}",
-                    drivers=["multi-factor edge", "action model"],
-                    parameters={
-                        "direction": sym_data.get("direction"),
-                        "confidence": sym_data.get("confidence"),
-                        "action": sym_data.get("action"),
-                    },
-                )
         except Exception:
             pass
 
@@ -847,32 +781,6 @@ class ObservatoryService:
                     "risk_mode": "RISK_OFF" if risk_sig == "BEARISH" else ("RISK_ON" if risk_sig == "BULLISH" else "MIXED"),
                 },
             )
-        except Exception:
-            pass
-
-        # 17. Expiry Explosion ────────────────────────────────────────────────────
-        try:
-            from services.expiry_explosion_service import get_expiry_explosion_service  # type: ignore
-            exp_svc = get_expiry_explosion_service()
-            if exp_svc:
-                if hasattr(exp_svc, 'get_snapshot') and asyncio.iscoroutinefunction(exp_svc.get_snapshot):
-                    snap = await asyncio.wait_for(exp_svc.get_snapshot(), timeout=3.0)
-                else:
-                    snap = exp_svc.get_snapshot() if hasattr(exp_svc, 'get_snapshot') else {}
-                if snap and isinstance(snap, dict):
-                    sym_data = snap.get(symbol, {})
-                    if sym_data:
-                        strategies["expiry_explosion"] = entry(
-                            sym_data.get("signal", "NEUTRAL"),
-                            sym_data.get("confidence", 70),
-                            f"Expiry impact | dfo={sym_data.get('dfo_status', 'N/A')}",
-                            drivers=["expiry build-up", "dealer flow"],
-                            parameters={
-                                "signal": sym_data.get("signal"),
-                                "confidence": sym_data.get("confidence"),
-                                "dfo_status": sym_data.get("dfo_status"),
-                            },
-                        )
         except Exception:
             pass
 

@@ -448,6 +448,10 @@ export type AQTEEngineEvent = {
   at: number; symbol: AQTESymbol; engine: number; name: string;
   status: AQTEEngineStatus; previous: AQTEEngineStatus | null; side: 'CE' | 'PE' | null;
 };
+export type AQTEActivityEvent = {
+  id: number; at: number; instrument: string | null; event_type: string;
+  severity: 'info' | 'success' | 'warning' | 'error'; message: string; source: string;
+};
 export type AQTEEnginePolicy = { authority: string; veto: boolean; veto_min: number; engines: number };
 
 const ENGINE_STATUSES = ['SATISFIED', 'PARTIAL', 'MONITORING', 'NOT_SATISFIED'];
@@ -481,6 +485,13 @@ export function isAqteEngineEvent(value: unknown): value is AQTEEngineEvent {
   return record(value) && finite(value.at) && symbolName(value.symbol) && count(value.engine) &&
     typeof value.name === 'string' && ENGINE_STATUSES.includes(value.status as string) &&
     (value.previous === null || ENGINE_STATUSES.includes(value.previous as string)) && sideName(value.side);
+}
+
+export function isAqteActivityEvent(value: unknown): value is AQTEActivityEvent {
+  return record(value) && finite(value.id) && Number.isSafeInteger(value.id) && value.id > 0 && finite(value.at) &&
+    (value.instrument === null || typeof value.instrument === 'string') &&
+    typeof value.event_type === 'string' && ['info', 'success', 'warning', 'error'].includes(value.severity as string) &&
+    typeof value.message === 'string' && typeof value.source === 'string';
 }
 
 /** Engine deck data for one index, or null when the backend has not supplied a well-formed evaluation. */

@@ -62,6 +62,8 @@ services:
     build:
       context: ./frontend
       dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_MORNINGEDGE_API_URL: ${MORNINGEDGE_PUBLIC_API_URL:-}
     container_name: trading-frontend
     restart: unless-stopped
     ports:

@@ -4,7 +4,7 @@ import asyncio
 from datetime import datetime
 from services.instant_analysis import get_instant_analysis
 from services.cache import get_cache, get_redis
-from services.signal_indicators_calculator import enhance_analysis_with_12_signals
+from services.signal_indicators_calculator import enhance_analysis_with_signals
 from services.live_market_indices_integration import (
     LiveMarketIndicesAnalyzer,
     MarketStatus
@@ -21,11 +21,11 @@ async def _parallel_by_symbol(symbols, coro_factory):
     return {symbol: outcome for symbol, outcome in zip(symbols, outcomes)}
 
 class MarketOutlookCalculator:
-    """Calculate unified market outlook from 12 integrated signals"""
+    """Calculate unified market outlook from integrated signals."""
 
     @staticmethod
     async def calculate_outlet(symbol: str, indicators: Dict[str, Any]) -> Dict[str, Any]:
-        """Calculate comprehensive market outlook with all 12 signals"""
+        """Calculate comprehensive market outlook from available signals."""
 
         signals = {}
         bullish_count = 0
@@ -33,29 +33,7 @@ class MarketOutlookCalculator:
         neutral_count = 0
         total_confidence = 0
 
-        # 1. TREND BASE (Higher-Low Structure)
-        trend_base_signal = 'NEUTRAL'
-        trend_base_conf = 50
-        if indicators.get('higher_low') == True:
-            trend_base_signal = 'BUY'
-            trend_base_conf = min(indicators.get('trend_strength', 50) + 20, 95)
-            bullish_count += 1
-        elif indicators.get('lower_high') == True:
-            trend_base_signal = 'SELL'
-            trend_base_conf = min(indicators.get('trend_strength', 50) + 20, 95)
-            bearish_count += 1
-        else:
-            neutral_count += 1
-
-        signals['trend_base'] = {
-            'name': 'Trend Base (Structure)',
-            'confidence': trend_base_conf,
-            'signal': trend_base_signal,
-            'status': f"Trend Strength: {indicators.get('trend_strength', 50)}%"
-        }
-        total_confidence += trend_base_conf
-
-        # 2. VOLUME PULSE (Candle Volume)
+        # 1. VOLUME PULSE (Candle Volume)
         volume_pulse_signal = 'NEUTRAL'
         volume_pulse_conf = 50
         volume_profile = indicators.get('volume_profile', {})
@@ -380,7 +358,6 @@ class MarketOutlookCalculator:
             'order_flow_buy_pct': round(of_pred_buy_pct, 1),
             'order_flow_sell_pct': round(of_pred_sell_pct, 1),
             'signals': {
-                'trend_base': signals['trend_base'],
                 'volume_pulse': signals['volume_pulse'],
                 'pivot_points': signals['pivot_points'],
                 'supertrend': signals['supertrend'],
@@ -399,12 +376,12 @@ class MarketOutlookCalculator:
 @router.get("/market-outlook/{symbol}")
 async def get_market_outlook(symbol: str):
     """
-    Get comprehensive market outlook with all 12 integrated signals
+    Get comprehensive market outlook from integrated signals
     
     Returns:
     - Overall signal (STRONG_BUY, BUY, NEUTRAL, SELL, STRONG_SELL)
     - Overall confidence percentage
-    - Individual signal confidence and status for all 12 signals
+    - Individual confidence and status for each signal
     - Signal distribution (bullish, bearish, neutral count)
     - Trend percentage
     """
@@ -418,8 +395,8 @@ async def get_market_outlook(symbol: str):
         if not analysis or 'indicators' not in analysis:
             raise HTTPException(status_code=404, detail=f"No analysis data for {symbol}")
 
-        # 🔥 ENHANCE indicators with 12-signal calculations
-        indicators = enhance_analysis_with_12_signals(analysis)
+        # Enhance indicators with shared signal calculations.
+        indicators = enhance_analysis_with_signals(analysis)
 
         # 🔥 Inject LIVE order flow data from WebSocket tick stream
         try:
@@ -554,7 +531,7 @@ async def get_trading_decision_with_indices(symbol: str):
     try:
         symbol = symbol.upper()
         
-        # Get 14-signal market outlook
+        # Get integrated market outlook
         outlook = await get_market_outlook(symbol)
         
         if not outlook or 'error' in outlook:

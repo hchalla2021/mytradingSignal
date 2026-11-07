@@ -5,7 +5,8 @@ import logging
 import sqlite3
 from typing import Literal
 
-from fastapi import APIRouter, Cookie, Depends, Header, HTTPException, Query, Request, Response
+import asyncpg
+from fastapi import APIRouter, Cookie, Depends, Header, HTTPException, Query, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from kiteconnect.exceptions import TokenException
@@ -17,6 +18,7 @@ from services.app_access import app_access_service
 from config import get_settings
 from services.aqte_broker_positions import broker_positions
 from services.aqte_daily_control import IndexControl
+from services.engine_events import get_engine_event_service
 
 router = APIRouter(prefix="/api/aqte", tags=["AQTE"])
 logger = logging.getLogger(__name__)
@@ -38,6 +40,69 @@ def operator(credentials: HTTPAuthorizationCredentials = Depends(bearer)):
 async def snapshot(response: Response):
     response.headers["Cache-Control"] = "no-store"
     return await asyncio.to_thread(get_aqte_service().snapshot)
+
+
+@router.websocket("/events")
+async def live_events(
+    websocket: WebSocket,
+    device_id: str = Query(default=""),
+    after: int = Query(default=0, ge=0),
+):
+    cfg = get_settings()
+    allowed = {cfg.frontend_url.rstrip("/"), *(url.strip().rstrip("/") for url in cfg.cors_origins.split(","))}
+    origin = websocket.headers.get("origin")
+    if origin and origin.rstrip("/") not in allowed:
+        await websocket.close(code=4403)
+        return
+    session = await app_access_service.validate_session(websocket.cookies.get("app_access_token"), device_id)
+    if not session.get("authenticated") or session.get("username") != cfg.app_access_username:
+        await websocket.close(code=4401)
+        return
+    stream = get_engine_event_service()
+    if not stream.ready:
+        await websocket.close(code=1013)
+        return
+
+    queue = stream.subscribe()
+    await websocket.accept()
+    cursor = after
+    try:
+        if cursor == 0:
+            history = await stream.history(0, 100)
+            await websocket.send_json({"type": "history", "events": history})
+            if history:
+                cursor = history[-1]["id"]
+        else:
+            while True:
+                history = await stream.history(cursor, 200)
+                if not history:
+                    break
+                for event in history:
+                    await websocket.send_json({"type": "event", "event": event})
+                    cursor = event["id"]
+                if len(history) < 200:
+                    break
+
+        while True:
+            try:
+                event = await asyncio.wait_for(queue.get(), timeout=25)
+            except asyncio.TimeoutError:
+                await websocket.send_json({"type": "heartbeat"})
+                continue
+            if event is None:
+                await websocket.close(code=1013)
+                break
+            if event["id"] <= cursor:
+                continue
+            await websocket.send_json({"type": "event", "event": event})
+            cursor = event["id"]
+    except WebSocketDisconnect:
+        pass
+    except (asyncpg.PostgresError, asyncpg.InterfaceError, sqlite3.Error, OSError, TimeoutError):
+        logger.exception("AQTE live event stream failed")
+        await websocket.close(code=1011)
+    finally:
+        stream.unsubscribe(queue)
 
 
 @router.get("/journal")

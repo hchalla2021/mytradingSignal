@@ -42,16 +42,6 @@ function harness(filename = 'LiveMarketIndexTabs.tsx') {
           strikeData: props.marketData, isConnected: props.isConnected, lastUpdate: null,
         }) };
       }
-      if (name === '@/hooks/useSMCStructure') {
-        return { useSMCStructure: () => ({
-          data: props.marketData, isConnected: props.isConnected, lastUpdate: null,
-        }) };
-      }
-      if (name === '@/hooks/useTradingIntelligence') {
-        return { useTradingIntelligence: () => ({
-          data: props.marketData, isConnected: props.isConnected, lastUpdate: null,
-        }) };
-      }
       if (name === 'react/jsx-runtime') return require(name);
       throw new Error(`Unexpected import: ${name}`);
     },
@@ -149,36 +139,8 @@ test('keyboard navigation wraps, supports Home/End, and moves focus to the selec
   assert.equal(render().tabs[1].props['aria-selected'], true);
 });
 
-test('AI Signal Deck uses independent accessible tabs and retains all live signal cards', () => {
-  const live = harness();
-  const ai = harness('TopAISignalBar.tsx');
-  const initial = ai.render();
-  assert.equal(initial.tabs[0].props['aria-selected'], true);
-  assert.equal(initial.panels.filter(panel => !panel.props.hidden).length, 1);
-  initial.tabs.forEach((tab, index) => {
-    assert.equal(tab.props.id, `ai-signal-tab-${tab.props['aria-label']}`);
-    assert.equal(tab.props['aria-controls'], initial.panels[index].props.id);
-    assert.notEqual(tab.props.id, live.render().tabs[index].props.id);
-  });
-  initial.tabs[2].props.onClick();
-  assert.equal(ai.render().panels[2].props.hidden, false);
-  assert.equal(live.render().panels[0].props.hidden, false);
-  ai.props.marketData.NIFTY = { price: 25100 };
-  ai.render().panels.forEach(panel => {
-    const card = panel.props.children;
-    assert.equal(card.props.tick, ai.props.marketData[card.props.indexKey]);
-    assert.equal(panel.key, card.props.indexKey);
-  });
-  let prevented = false;
-  ai.render().tabs[2].props.onKeyDown({ key: 'ArrowRight', preventDefault: () => { prevented = true; } });
-  assert.equal(prevented, true);
-  assert.equal(ai.focused(), 'ai-signal-tab-NIFTY');
-  assert.equal(ai.render().panels[0].props.hidden, false);
-});
-
 test('Strike Intelligence tabs preserve per-index cards, live data, and independent selection', () => {
   const strike = harness('StrikeIntelligence.tsx');
-  const ai = harness('TopAISignalBar.tsx');
   const initial = strike.render();
   assert.equal(initial.panels.filter(panel => !panel.props.hidden).length, 1);
   assert.equal(initial.panels[0].props.hidden, false);
@@ -196,7 +158,6 @@ test('Strike Intelligence tabs preserve per-index cards, live data, and independ
       assert.equal(panels[i].key, symbol);
     });
   }
-  assert.equal(ai.render().panels[0].props.hidden, false);
   strike.props.marketData.NIFTY = { price: 25200 };
   const hiddenPanel = strike.render().panels[0];
   assert.equal(hiddenPanel.props.hidden, true);
@@ -205,46 +166,3 @@ test('Strike Intelligence tabs preserve per-index cards, live data, and independ
   assert.equal(strike.focused(), 'strike-intelligence-tab-NIFTY');
   assert.equal(strike.render().panels[0].props.hidden, false);
 });
-
-for (const [filename, prefix, prop] of [
-      ['SMCStructureSection.tsx', 'smc-structure', 'row'],
-      ['TradingIntelligenceEngine.tsx', 'greeks-overview', 'ai'],
-    ]) {
-      test(`${prefix} shows one index, preserves keyed panels and updates hidden cards`, () => {
-        const h = harness(filename);
-        const other = harness();
-        for (let index = 0; index < 3; index++) {
-          h.render().tabs[index].props.onClick();
-          const { tabs, panels } = h.render();
-          assert.equal(panels.filter(panel => !panel.props.hidden).length, 1);
-          assert.equal(panels[index].props.hidden, false);
-          tabs.forEach((tab, i) => {
-            const symbol = tab.props['aria-label'];
-            assert.equal(tab.props.id, `${prefix}-tab-${symbol}`);
-            assert.equal(tab.props['aria-controls'], panels[i].props.id);
-            assert.equal(panels[i].props['aria-labelledby'], tab.props.id);
-            assert.equal(panels[i].key, symbol);
-            if (h.props.marketData[symbol]) {
-              assert.equal(panels[i].props.children.props[prop], h.props.marketData[symbol]);
-            }
-          });
-        }
-        assert.equal(other.render().panels[0].props.hidden, false);
-        h.props.marketData.NIFTY = { price: 25300 };
-        assert.equal(h.render().panels[0].props.children.props[prop].price, 25300);
-        h.render().tabs[2].props.onKeyDown({ key: 'ArrowRight', preventDefault: () => {} });
-        assert.equal(h.focused(), `${prefix}-tab-NIFTY`);
-        assert.equal(h.render().panels[0].props.hidden, false);
-      });
-    }
-
-    test('SMC keeps missing indices selectable and shows their own building-data status', () => {
-      const h = harness('SMCStructureSection.tsx');
-      h.render().tabs[2].props.onClick();
-      const panel = h.render().panels[2];
-      assert.equal(panel.props.hidden, false);
-      assert.equal(panel.props.children.props.role, 'status');
-      assert.ok(panel.props.children.props.children.includes('SENSEX'));
-      h.props.marketData.SENSEX = { price: 82000 };
-      assert.equal(h.render().panels[2].props.children.props.row.price, 82000);
-    });

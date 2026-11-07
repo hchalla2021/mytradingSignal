@@ -10,7 +10,7 @@ function harness(filename = 'AQTESection.tsx', now, sharedProduction = false) {
   const timers = new Map();
   const requests = [];
   const downloads = [], revoked = [];
-  let effect, cursor, timer = 0, response, accessExpired = 0;
+  let effect, cursor, timer = 0, response, accessExpired = 0, activityEvents = [], activityStatus = 'connecting';
   const react = {
     memo: component => component,
     useState: initial => {
@@ -48,12 +48,18 @@ function harness(filename = 'AQTESection.tsx', now, sharedProduction = false) {
     require: id => {
       if (id === 'react') return react;
       if (id === 'react/jsx-runtime') return require(id);
+      if (id === 'lucide-react') return Object.fromEntries(
+        ['Activity', 'ArrowDown', 'ArrowUp', 'BarChart3', 'Briefcase', 'Check', 'Clock3', 'Home',
+          'Settings', 'ShieldCheck', 'TrendingUp', 'Zap'].map(name => [name, () => null]));
       if (id === '@/lib/api-config') return { API_CONFIG: { endpoint: p => p, sharedProduction } };
       if (id === '@/components/AQTELiveController') return { default: () => null };
       if (id === '@/components/AQTEAutomationSwitch') return { default: () => null };
       if (id === '@/components/AQTEDailyControl') return { default: () => null };
       if (id === 'next/dynamic') return { default: () => () => null };
       if (id === '@/hooks/useChartHistory') return { prefetchChartHistory: async () => {} };
+      if (id === '@/hooks/useAqteEventStream') {
+        return { useAqteEventStream: () => ({ events: activityEvents, status: activityStatus }) };
+      }
       if (id === '@/lib/aqte-display') {
         const code = ts.transpileModule(readFileSync(path.join(__dirname, '..', 'lib', 'aqte-display.ts'), 'utf8'),
           { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 } }).outputText;
@@ -103,6 +109,7 @@ function harness(filename = 'AQTESection.tsx', now, sharedProduction = false) {
     render(props = {}) { cursor = 0; return context.exports.default(props); },
     mount(value) { response = value; return effect(); },
     respond(value) { response = value; },
+    setActivity(events, status) { activityEvents = events; activityStatus = status; },
     respondHTTP(status, value) { response = { __httpStatus: status, __body: value }; },
     async poll(value) {
       response = value;
@@ -2327,7 +2334,7 @@ test('emergency latch still blocks header ON without directing users to removed 
     await settle();
     const tree = h.render();
     assert.equal(autoSwitch(tree).props.disabled, true);
-    assert.match(text(tree), flatten_pending ? /Closing AQTE positions only · manual trades untouched/ : /Owner reset required before ON/);
+    assert.match(text(tree), flatten_pending ? /Closing tagged AQTE\/QuantEdge Pro trades · manual trades untouched/ : /Owner reset required before ON/);
     assert.doesNotMatch(text(tree), /Closing all Kite positions/);
     const reset = nodes(tree).find(n => n.type === 'button' && text(n) === 'Reset emergency stop');
     assert.equal(reset.props.disabled, flatten_pending);
@@ -3474,6 +3481,29 @@ test('live engine events show an offline dot and label when AQTE data is unavail
   const styles = readFileSync(path.join(__dirname, '..', 'app', 'globals.css'), 'utf8');
   assert.match(styles, /\.aqx-live-dot\.aqx-live-dot-off \{[^}]*animation: none/);
   assert.match(styles, /\.aqx-perfbar \.aqx-perf-risk dd \{ white-space: normal; \}/, 'Daily Risk figure wraps on narrow cells');
+});
+test('QuantEdge Pro event feed is standalone from AQTE strategy state', () => {
+  const section = harness('QuantEdgeProSection.tsx');
+  section.setActivity([{ id: 7, at: Date.now() / 1000, instrument: 'NIFTY', event_type: 'MARKET_DATA_CONNECTED',
+    severity: 'success', message: 'QuantEdge Pro market-data analysis started', source: 'quantedge_pro' }], 'connected');
+  const tree = nodes(section.render({ marketData: {
+    NIFTY: { price: 24857.5, change: 320.25, changePercent: 1.31, status: 'LIVE' },
+    BANKNIFTY: { price: 58727.65, change: 955.2, changePercent: 1.65, status: 'LIVE' },
+    SENSEX: { price: 80565.99, change: 1255.4, changePercent: 1.58, status: 'LIVE' },
+  } }));
+  const standalone = tree.find(n => n.props?.['aria-label'] === 'QuantEdge Pro standalone trading engine');
+  const activityFeed = tree.find(n => n.props?.id === 'quantedge-pro-events');
+  assert.ok(standalone);
+  assert.match(text(standalone), /\+\s*320\.25\s*pts/);
+  assert.match(text(standalone), /\+\s*1\.31\s*%/);
+  assert.match(text(standalone).split('Strategy & Live Controls')[0], /QuantEdge Pro/);
+  assert.ok(activityFeed);
+  assert.match(text(activityFeed).split('NIFTY')[0], /Live Engine Events/);
+  assert.doesNotMatch(text(activityFeed), /AQTE strategy|engine state/i);
+  assert.match(text(activityFeed), /MARKET DATA CONNECTED/);
+  assert.match(text(activityFeed), /NIFTY/);
+  assert.match(text(activityFeed), /QuantEdge Pro market-data analysis started/);
+  assert.match(text(activityFeed), /success/);
 });
 test('emergency trades with an unverified exit keep the live status valid and never count as flat P&L', () => {
   const { isAqteLiveState, aqteDaySummary } = displayModule();

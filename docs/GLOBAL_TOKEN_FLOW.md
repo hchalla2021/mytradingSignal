@@ -147,16 +147,15 @@ All these services now automatically use the latest token from .env:
 1. **market_feed.py** - WebSocket live data
 2. **pcr_service.py** - PCR analysis
 3. **volume_pulse_service.py** - Volume analysis
-4. **trend_base_service.py** - Trend detection
 
 ### ✅ Analysis Services
-5. **candle_intent_service.py** - Candle patterns
-6. **instant_analysis.py** - Instant signals
-7. **zone_control_service.py** - Zone analysis
+4. **candle_intent_service.py** - Candle patterns
+5. **instant_analysis.py** - Instant signals
+6. **zone_control_service.py** - Zone analysis
 
 ### ✅ Utility Services
-8. **auto_futures_updater.py** - Monthly futures update
-9. **zerodha_direct_analysis.py** - Direct API analysis
+7. **auto_futures_updater.py** - Monthly futures update
+8. **zerodha_direct_analysis.py** - Direct API analysis
 10. **global_token_manager.py** - Token validation
 
 ---

@@ -19,6 +19,8 @@ import { prefetchChartHistory } from '@/hooks/useChartHistory';
 const Chart = dynamic(() => import('@/components/AQTEChart'), {
   ssr: false, loading: () => <div className="aqte-terminal-card aqte-chart-loading">Loading price chart…</div>,
 });
+const QuantEdgeProSection = dynamic(() => import('@/components/QuantEdgeProSection'), { ssr: false });
+const MorningEdgeSection = dynamic(() => import('@/components/MorningEdgeSection'), { ssr: false });
 const SYMBOLS = ['NIFTY', 'BANKNIFTY', 'SENSEX'] as const;
 const LABELS = { NIFTY: 'NIFTY', BANKNIFTY: 'BANK NIFTY', SENSEX: 'SENSEX' };
 const INDEX_STYLES = {
@@ -481,12 +483,16 @@ function AQTESection({ marketData, isConnected = false }: { marketData?: MarketD
         ))}
       </section>
       <AQTEEngineDeck symbol={selectedSymbol} data={snapshot?.data} liveStatus={liveStatus} unavailable={unavailable}
-        events={events} policy={policy} now={now / 1000}
+        events={events}
+        policy={policy} now={now / 1000}
         chart={SYMBOLS.map(symbol => (
           <div key={symbol} className="aqx-chart-slot" hidden={selectedSymbol !== symbol}>
             {chartsOpened[symbol] ? <Chart symbol={symbol} tick={quotes[symbol].tick} /> : null}
           </div>
         ))} />
+      <QuantEdgeProSection marketData={marketData} isConnected={isConnected}
+        vix={{ value: finiteOrNull(market?.vix), changePercent: finiteOrNull(market?.vix_change_pct) }} />
+      <MorningEdgeSection />
       <section className="aqx-card aqx-book" aria-label="Trades, positions and controls" id="aqte-dash-book">
         <div className="aqx-book-head">
           <div role="tablist" aria-label="AQTE trade book" className="aqx-book-tabs">

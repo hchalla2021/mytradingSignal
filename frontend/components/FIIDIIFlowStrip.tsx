@@ -13,7 +13,7 @@ import { aggregateParticipantFlowRealtime, updateParticipantFlowRealtime } from 
 import { updateIndexMoneyFlow, type IndexMoneyFlow } from '@/lib/indexMoneyFlowRealtime';
 import type { IndexSymbol } from '@/components/IndexTabs';
 
-export type InstitutionalFlowView = 'official' | 'radar' | 'flow';
+export type InstitutionalFlowView = 'official' | 'flow';
 
 type IndexKey = 'NIFTY' | 'BANKNIFTY' | 'SENSEX';
 
@@ -401,13 +401,7 @@ const FIIDIIFlowStrip = ({ isConnected, marketData, onSnapshot, selectedSymbol, 
   const viewSafe = view;
   const fmv = data?.fundManagerView;
   const hasSplit = Boolean(data?.hasBuySellSplit);
-  const bigPlayers = data?.realtime?.bigPlayers;
-  const radarSymbol = selectedSymbol ? bigPlayers?.perSymbol?.[selectedSymbol] : undefined;
-  const radarEvents = bigPlayers?.events.filter(event => !selectedSymbol || event.symbol === selectedSymbol) ?? [];
   const visibleCalls = indexQuickCalls.filter(call => !selectedSymbol || call.symbol === selectedSymbol);
-  const radarBuyCr = selectedSymbol ? radarSymbol?.buyCr : bigPlayers?.sessionBuyCr;
-  const radarSellCr = selectedSymbol ? radarSymbol?.sellCr : bigPlayers?.sessionSellCr;
-  const radarNetCr = radarBuyCr !== undefined && radarSellCr !== undefined ? radarBuyCr - radarSellCr : undefined;
 
   const entryChip = (style?: string): { label: string; cls: string } => {
     switch (style) {
@@ -529,91 +523,6 @@ const FIIDIIFlowStrip = ({ isConnected, marketData, onSnapshot, selectedSymbol, 
       )}
       </div>
 
-      {/* BIG PLAYER RADAR — live large-lot prints (non-retail scale) */}
-      <div hidden={Boolean(activeView && activeView !== 'radar')}>
-      {!bigPlayers && <p className="p-3 text-sm text-slate-400">Big Player Radar · waiting for radar data.</p>}
-      {bigPlayers && (
-        <div className="mt-2 rounded-xl border border-amber-400/25 bg-gradient-to-br from-amber-500/10 via-slate-950/85 to-rose-500/5 px-3 py-3">
-          <div className="mb-2 flex items-center justify-between gap-2 flex-wrap">
-            <span className="flex flex-wrap items-center gap-2 text-base sm:text-lg font-bold tracking-tight text-amber-100">
-              🐘 BIG PLAYER RADAR
-              <span className="rounded-full border border-emerald-300/40 bg-emerald-500/10 px-1.5 py-0.5 text-[8px] font-black text-emerald-200">LIVE</span>
-            </span>
-            <span className="rounded-full border border-slate-600/70 bg-slate-900/75 px-2 py-0.5 text-[9px] font-bold text-slate-300">
-              {selectedSymbol ? `${selectedSymbol} · ${radarEvents.length} RECENT PRINTS` : `${bigPlayers.eventsToday} LARGE PRINTS TODAY`} · {bigPlayers.sessionDate}
-            </span>
-          </div>
-
-          <div className="grid grid-cols-3 gap-1.5 text-[10px] font-mono lg:text-[11px]">
-            <div className="rounded border border-emerald-400/25 bg-emerald-500/10 px-2 py-1.5">
-              <div className="text-slate-300">BIG BUYING</div>
-              <div className="text-emerald-300 font-black text-sm lg:text-base">{radarBuyCr === undefined ? '—' : `+₹${fmtCr(radarBuyCr)}`}</div>
-            </div>
-            <div className="rounded border border-rose-400/25 bg-rose-500/10 px-2 py-1.5">
-              <div className="text-slate-300">BIG SELLING</div>
-              <div className="text-rose-300 font-black text-sm lg:text-base">{radarSellCr === undefined ? '—' : `-₹${fmtCr(radarSellCr)}`}</div>
-            </div>
-            <div className="rounded border border-slate-700/70 bg-slate-900/80 px-2 py-1.5">
-              <div className="text-slate-300">NET BIG FLOW</div>
-              <div className={`font-black text-sm lg:text-base ${(radarNetCr ?? 0) > 0 ? 'text-emerald-300' : (radarNetCr ?? 0) < 0 ? 'text-rose-300' : 'text-amber-300'}`}>
-                {radarNetCr === undefined ? '—' : signed(radarNetCr)}
-              </div>
-            </div>
-          </div>
-
-          <div className={`mt-2 grid ${selectedSymbol ? 'grid-cols-1' : 'grid-cols-3'} gap-1.5 text-[9px] font-mono`}>
-            {(['NIFTY', 'BANKNIFTY', 'SENSEX'] as const).filter(sym => !selectedSymbol || sym === selectedSymbol).map((sym) => {
-              const ps = bigPlayers.perSymbol?.[sym];
-              if (!ps) return null;
-              return (
-                <div key={sym} className="rounded border border-slate-700/60 bg-slate-950/70 px-2 py-1">
-                  <div className="font-black text-slate-200">{sym}</div>
-                  <div className="flex items-center justify-between gap-1">
-                    <span className="text-emerald-300">+₹{fmtCr(ps.buyCr)}</span>
-                    <span className="text-rose-300">-₹{fmtCr(ps.sellCr)}</span>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-
-          {radarEvents.length > 0 ? (
-            <div className="mt-2 space-y-1 max-h-40 overflow-y-auto pr-1">
-              {radarEvents.map((ev, i) => (
-                <div
-                  key={`${ev.ts}-${ev.symbol}-${i}`}
-                  className={`flex items-center justify-between gap-2 rounded border px-2 py-1 text-[9px] lg:text-[10px] font-mono ${
-                    ev.side === 'BUY'
-                      ? 'border-emerald-400/25 bg-emerald-500/5'
-                      : 'border-rose-400/25 bg-rose-500/5'
-                  }`}
-                >
-                  <span className="flex items-center gap-1.5 min-w-0">
-                    <span className="text-slate-500 shrink-0">{ev.ts}</span>
-                    <span className={`font-black shrink-0 ${ev.side === 'BUY' ? 'text-emerald-300' : 'text-rose-300'}`}>
-                      {ev.kind === 'MEGA' ? '🔥' : '▪'} {ev.symbol} {ev.side}
-                    </span>
-                    <span className="text-slate-400 truncate hidden sm:inline">{ev.read}</span>
-                  </span>
-                  <span className="flex items-center gap-1.5 shrink-0">
-                    <span className={`font-black ${ev.side === 'BUY' ? 'text-emerald-200' : 'text-rose-200'}`}>₹{fmtCr(ev.notionalCr)}</span>
-                    <span className="text-slate-500">z{ev.zScore}</span>
-                  </span>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <p className="mt-2 text-[9px] text-slate-500 font-medium">
-              No institutional-scale prints detected yet this session — radar arms after ~20 live ticks of baseline.
-            </p>
-          )}
-
-          {bigPlayers.note && (
-            <p className="mt-1.5 text-[8px] leading-relaxed text-slate-600">{bigPlayers.note}</p>
-          )}
-        </div>
-      )}
-      </div>
       <div hidden={Boolean(activeView && activeView !== 'flow')}>
       {segregated && (
         <div className="mt-2 rounded-xl border border-emerald-400/25 bg-gradient-to-br from-emerald-500/10 via-slate-950/80 to-cyan-500/10 px-3 py-3 shadow-[0_0_0_1px_rgba(16,185,129,0.08),0_16px_34px_-22px_rgba(16,185,129,0.5)]">

@@ -77,8 +77,6 @@ from routers.compass import http_router as compass_http, ws_router as compass_ws
 from routers.global_indices import http_router as global_indices_http, ws_router as global_indices_ws
 from routers.liquidity import http_router as liq_http, ws_router as liq_ws
 from routers.ict import http_router as ict_http, ws_router as ict_ws
-from routers.expiry_explosion import http_router as expiry_http, ws_router as expiry_ws
-from routers.market_edge import http_router as edge_http, ws_router as edge_ws
 from routers.candle_intelligence import http_router as candle_intel_http, ws_router as candle_intel_ws
 from routers.market_regime import http_router as regime_http, ws_router as regime_ws
 from routers.strike_intelligence import http_router as strike_intel_http, ws_router as strike_intel_ws
@@ -87,14 +85,13 @@ from routers.order_flow import http_router as order_flow_http, ws_router as orde
 from routers.global_news import http_router as global_news_http, ws_router as global_news_ws
 from routers.observatory import http_router as observatory_http
 from routers.aqte import router as aqte_http
+from routers.quantedge import router as quantedge_http
 from routers import smart_money
-from routers.trend_base import router as trend_base_http, ws_router as trend_base_ws
 from routers.volume_pulse import router as volume_pulse_http, ws_router as volume_pulse_ws
 from routers.ict_bias import router as ict_bias_http, ws_router as ict_bias_ws
 from routers.market_compass import router as market_compass_http, ws_router as market_compass_ws
 from routers.trading_intelligence import http_router as tie_http, ws_router as tie_ws
 from routers.fii_dii import router as fii_dii_router, ws_router as fii_dii_ws
-from routers.smart_ai_algo import http_router as algo_http, ws_router as algo_ws
 from routers.smc import http_router as smc_http, ws_router as smc_ws
 
 # Windows console fix already applied in config/__init__.py
@@ -171,6 +168,12 @@ async def lifespan(app: FastAPI):
     async def _boot_services():
         """Boot all heavy services in background AFTER server is accepting requests."""
         nonlocal scheduler, feed_task
+
+        from services.engine_events import get_engine_event_service
+        try:
+            await get_engine_event_service().start()
+        except (OSError, sqlite3.Error, ValueError, TimeoutError):
+            logger.exception("AQTE live event stream unavailable")
 
         async def start_aqte_core():
             from services.aqte_service import get_aqte_service
@@ -255,22 +258,6 @@ async def lifespan(app: FastAPI):
             except Exception as exc:
                 logger.error("ICT engine failed to start: %s", exc, exc_info=True)
 
-        async def start_expiry_explosion():
-            try:
-                from services.expiry_explosion_service import get_expiry_explosion_service
-                await get_expiry_explosion_service().start()
-                print("💥 Expiry Explosion: ON")
-            except Exception as exc:
-                logger.error("Expiry Explosion service failed to start: %s", exc, exc_info=True)
-
-        async def start_market_edge():
-            try:
-                from services.market_edge_service import get_market_edge_service
-                await get_market_edge_service().start()
-                print("📈 MarketEdge: ON")
-            except Exception as exc:
-                logger.error("MarketEdge service failed to start: %s", exc, exc_info=True)
-
         async def start_candle_intelligence():
             try:
                 from services.candle_intelligence_engine import get_candle_intelligence_service
@@ -327,13 +314,13 @@ async def lifespan(app: FastAPI):
             except Exception as exc:
                 logger.error("Observatory service failed to start: %s", exc, exc_info=True)
 
-        async def start_smart_ai_algo():
+        async def start_aqte_confirmation():
             try:
-                from services.smart_ai_algo_service import get_algo_service
-                asyncio.create_task(get_algo_service().start())
-                print("🤖 Smart AI Algo: ON")
+                from services.aqte_confirmation_service import get_aqte_confirmation_service
+                asyncio.create_task(get_aqte_confirmation_service().start())
+                print("AQTE strategy confirmation: ON")
             except Exception as exc:
-                logger.error("Smart AI Algo failed to start: %s", exc, exc_info=True)
+                logger.error("AQTE strategy confirmation failed to start: %s", exc, exc_info=True)
 
         async def refresh_futures_tokens():
             # Self-heal monthly futures token rotation in .env (fallback source
@@ -366,8 +353,6 @@ async def lifespan(app: FastAPI):
                 start_liquidity(),
                 start_smc(),
                 start_ict(),
-                start_expiry_explosion(),
-                start_market_edge(),
                 start_candle_intelligence(),
                 start_market_regime(),
                 start_strike_intelligence(),
@@ -375,7 +360,7 @@ async def lifespan(app: FastAPI):
                 start_global_indices(),
                 start_global_news(),
                 start_observatory(),
-                start_smart_ai_algo(),
+                start_aqte_confirmation(),
                 refresh_futures_tokens(),
             )
         else:
@@ -387,8 +372,6 @@ async def lifespan(app: FastAPI):
                 start_liquidity(),
                 start_smc(),
                 start_ict(),
-                start_expiry_explosion(),
-                start_market_edge(),
                 start_candle_intelligence(),
                 start_market_regime(),
                 start_strike_intelligence(),
@@ -396,7 +379,7 @@ async def lifespan(app: FastAPI):
                 start_global_indices(),
                 start_global_news(),
                 start_observatory(),
-                start_smart_ai_algo(),
+                start_aqte_confirmation(),
                 refresh_futures_tokens(),
             )
         print("🚀 All services READY")
@@ -460,20 +443,6 @@ async def lifespan(app: FastAPI):
     except Exception:
         pass
 
-    # Stop Expiry Explosion Service
-    try:
-        from services.expiry_explosion_service import get_expiry_explosion_service
-        await get_expiry_explosion_service().stop()
-    except Exception:
-        pass
-
-    # Stop MarketEdge Intelligence Service
-    try:
-        from services.market_edge_service import get_market_edge_service
-        await get_market_edge_service().stop()
-    except Exception:
-        pass
-
     # Stop Candle Intelligence Engine
     try:
         from services.candle_intelligence_engine import get_candle_intelligence_service
@@ -534,6 +503,8 @@ async def lifespan(app: FastAPI):
         await market_feed.stop()
     await get_aqte_service().stop()
     await morning.stop()
+    from services.engine_events import get_engine_event_service
+    await get_engine_event_service().stop()
     if feed_task:
         feed_task.cancel()
 
@@ -695,14 +666,6 @@ app.include_router(smc_http, prefix="/api", tags=["SMC Structure"])
 app.include_router(ict_ws,   prefix="/ws",  tags=["ICT"])
 app.include_router(ict_http, prefix="/api", tags=["ICT"])
 
-# 💥 Expiry Explosion Zone
-app.include_router(expiry_ws,   prefix="/ws",  tags=["Expiry Explosion"])
-app.include_router(expiry_http, prefix="/api", tags=["Expiry Explosion"])
-
-# 📈 MarketEdge Intelligence
-app.include_router(edge_ws,   prefix="/ws",  tags=["MarketEdge"])
-app.include_router(edge_http, prefix="/api", tags=["MarketEdge"])
-
 # 🕯️ Candle Intelligence Engine
 app.include_router(candle_intel_ws,   prefix="/ws",  tags=["Candle Intelligence"])
 app.include_router(candle_intel_http, prefix="/api", tags=["Candle Intelligence"])
@@ -725,9 +688,6 @@ app.include_router(order_flow_http, prefix="/api", tags=["Order Flow"])
 app.include_router(global_news_ws,   prefix="/ws",  tags=["Global Impact Radar"])
 app.include_router(global_news_http, prefix="/api", tags=["Global Impact Radar"])
 
-# � Trend Base - Higher Low Structure Analysis (NEW)
-app.include_router(trend_base_ws,   prefix="/ws",  tags=["Trend Base"])
-app.include_router(trend_base_http, prefix="/api", tags=["Trend Base"])
 # 📊 Volume Pulse - Candle Volume Analysis (NEW)
 app.include_router(volume_pulse_ws,   prefix="/ws",  tags=["Volume Pulse"])
 app.include_router(volume_pulse_http, prefix="/api", tags=["Volume Pulse"])
@@ -742,11 +702,11 @@ app.include_router(tie_ws,   prefix="/ws",  tags=["Trading Intelligence"])
 app.include_router(tie_http, prefix="/api", tags=["Trading Intelligence"])
 # 💸 FII / DII real flow (NSE-sourced)
 app.include_router(fii_dii_ws, prefix="/ws", tags=["FII / DII"])
-app.include_router(fii_dii_router, prefix="/api", tags=["FII / DII"])# 🤖 Smart AI Algo — entry/SL/target/TSL with OpenAI enrichment
-app.include_router(algo_http, tags=["Smart AI Algo"])
-app.include_router(algo_ws, tags=["Smart AI Algo"])# �🔭 Market Intelligence Observatory
+app.include_router(fii_dii_router, prefix="/api", tags=["FII / DII"])
+# 🔭 Market Intelligence Observatory
 app.include_router(observatory_http, tags=["Observatory"])
 app.include_router(aqte_http)
+app.include_router(quantedge_http)
 
 
 @app.get("/")

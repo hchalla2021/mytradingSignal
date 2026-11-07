@@ -29,7 +29,7 @@ def settings(**overrides):
                   aqte_live_static_ip="122.177.245.101", aqte_live_allow_unvalidated_rules=False,
                   aqte_live_risk_per_trade=500,
                   aqte_live_daily_loss=2000, aqte_live_max_trades=5, aqte_live_max_losses=3,
-                  force_outbound_ipv4=True, algo_auto_trade_enabled=False, algo_auto_trade_mode="paper",
+                  force_outbound_ipv4=True,
                   frontend_url="http://localhost:3000", cors_origins="http://localhost:3000",
                   app_access_username="admin")
     values.update(overrides)
@@ -80,7 +80,7 @@ class LiveTests(unittest.TestCase):
         self.quality = patch("services.aqte_live.quality_reason", return_value=None)
         self.quality.start()
         self.addCleanup(self.quality.stop)
-        self.confirmation = patch("services.aqte_live.smart_ai_confirmation_reason", return_value=None)
+        self.confirmation = patch("services.aqte_live.aqte_confirmation_reason", return_value=None)
         self.confirmation.start()
         self.addCleanup(self.confirmation.stop)
         self.addCleanup(self.live.release_owner)
@@ -972,8 +972,7 @@ class LiveTests(unittest.TestCase):
             with self.assertRaisesRegex(LiveBlocked, "Proxy"):
                 self.live.preflight()
         self.cfg.algo_auto_trade_enabled, self.cfg.algo_auto_trade_mode = True, "live"
-        with self.assertRaisesRegex(LiveBlocked, "other live algo"):
-            self.live.preflight()
+        self.assertIs(self.live.config_guard(), self.cfg)
         self.broker.place_order.assert_not_called()
 
     def test_selected_exit_pauses_entries_and_only_reprices_its_existing_stop(self):
@@ -1083,6 +1082,40 @@ class LiveTests(unittest.TestCase):
             self.live.confirm(proposal["id"])
         self.assertEqual(self.broker.place_order.call_count, 1)
         self.assertEqual(self.live.pins()[CONTRACT.token], CONTRACT)
+
+    def test_quantedge_confirm_uses_approved_lots_and_qep_order_tag(self):
+        from dataclasses import asdict
+
+        self.market.engine = ready_engine(paper_enabled=False)
+        self.live.preflight()
+        self.live.arm()
+        self.live.set_quantedge_config(2)
+        self.live.set_quantedge_approval(True)
+        proposal = {
+            "id": "approved",
+            "owner": "QUANTEDGE",
+            "symbol": "NIFTY",
+            "contract": asdict(CONTRACT),
+            "strategy": "super_candle_bollinger_breakout_v1",
+            "entry": {"maximum": 100, "stop": 80, "target": 140, "quantity": CONTRACT.lot_size * 2},
+            "risk": 500,
+            "signal_at": NOW - 1,
+            "expires_at": NOW + 15,
+            "setup_key": "qep-test-candle",
+            "execution_context": {"reason": "test breakout"},
+        }
+        self.live.proposals[proposal["id"]] = copy.deepcopy(proposal)
+        rechecks = [
+            {**proposal, "id": "recheck-1"},
+            {**proposal, "id": "recheck-2"},
+        ]
+        with patch.object(self.live, "quantedge_proposal", side_effect=rechecks):
+            self.live.confirm(proposal["id"])
+
+        params = self.broker.place_order.call_args.kwargs
+        self.assertEqual(params["quantity"], CONTRACT.lot_size * 2)
+        self.assertRegex(params["tag"], r"^QEP[0-9a-f]{13}E$")
+        self.assertEqual(self.live.state["active"]["owner"], "QUANTEDGE")
 
     def test_entry_timeout_reconciles_tag_without_ever_resubmitting(self):
         self.armed()
@@ -1720,7 +1753,7 @@ class LiveTests(unittest.TestCase):
         self.live.automated_entry()
         self.assertEqual(self.broker.place_order.call_count, 1, "Only one live position at a time")
 
-    def test_smart_ai_confirmation_requires_live_fresh_fired_same_side_consensus(self):
+    def test_aqte_confirmation_requires_live_fresh_fired_same_side_consensus(self):
         result = {
             "data_status": "LIVE",
             "tick_age_seconds": 1.0,
@@ -1749,11 +1782,11 @@ class LiveTests(unittest.TestCase):
             with self.subTest(expected=expected):
                 self.assertIn(expected, strategy_lab_confirmation_reason(candidate, "BUY CE", now=NOW))
 
-    def test_smart_ai_confirmation_blocks_candidate_without_submitting_order(self):
+    def test_aqte_confirmation_blocks_candidate_without_submitting_order(self):
         self.market.snapshot.side_effect = self.aligned_snapshot
         self.armed()
-        reason = "Smart AI 5-minute consensus is not fired"
-        with patch("services.aqte_live.smart_ai_confirmation_reason", return_value=reason):
+        reason = "AQTE 5-minute consensus is not fired"
+        with patch("services.aqte_live.aqte_confirmation_reason", return_value=reason):
             self.live.automated_entry()
             self.assertIn(reason, self.live.control_reason(
                 "NIFTY", self.aligned_snapshot()["data"]["NIFTY"]))

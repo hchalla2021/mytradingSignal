@@ -1,8 +1,6 @@
 # 🎯 Service Files Analysis - Quick Summary
 
-## Result: ✅ ALL FILES ARE NEEDED - NO ARCHIVING REQUIRED
-
-After comprehensive audit of all 23 service files in `backend/services/`, **every file is actively used** and essential for the system.
+## Result: Core runtime services are retained; retired feature services have been removed.
 
 ---
 
@@ -34,14 +32,12 @@ After comprehensive audit of all 23 service files in `backend/services/`, **ever
 
 ---
 
-### 📈 Analysis Services (9 files)
+### 📈 Analysis Services
 | File | Status | Feature |
 |------|--------|---------|
 | instant_analysis.py | ✅ Active | Real-time technical analysis |
 | volume_pulse_service.py | ✅ Active | Candle volume analysis |
-| trend_base_service.py | ✅ Active | Higher-low structure |
 | candle_intent_service.py | ✅ Active | Candle pattern detection |
-
 | zone_control_service.py | ✅ Active | Support/resistance zones |
 | news_detection_service.py | ✅ Active | News sentiment analysis |
 | pcr_service.py | ✅ Active | Put-Call Ratio calculation |

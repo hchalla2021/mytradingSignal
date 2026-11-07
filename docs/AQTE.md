@@ -1075,8 +1075,8 @@ the environment). First verify the saved Kite allowlist and the
 backend host's outbound IPv4; a browser's IP is insufficient. The preflight contacts
 `https://api.ipify.org` over direct HTTPS with no credentials or account/order payloads;
 it then validates the existing Kite profile and requires a flat broker account without
-working orders. Proxy environment variables and a separately enabled live Smart AI Algo
-block the pilot. Matching this public-IP check cannot prove the broker's own allowlist;
+working orders. Proxy environment variables block the pilot. Matching this public-IP check
+cannot prove the broker's own allowlist;
 Kite's actual permission checks remain authoritative. Do not edit machine routing to
 impersonate an allowlisted address.
 
@@ -1138,8 +1138,8 @@ spot and option data, owner/broker authentication, and all execution gates.
 2. **Server runtime env file** (never uploaded by the deploy scripts): production
    `FRONTEND_URL`, `REDIRECT_URL` and `CORS_ORIGINS`; `APP_ACCESS_USERNAME` and
    `APP_ACCESS_PASSWORD_HASH`; `AQTE_LIVE_ENABLED=true`,
-   `AQTE_LIVE_STATIC_IP=<droplet IPv4>`, `FORCE_OUTBOUND_IPV4=true`; Smart AI Algo not
-   in live mode; no proxy variables. Set `AQTE_LIVE_ALLOW_UNVALIDATED_RULES=true` only
+   `AQTE_LIVE_STATIC_IP=<droplet IPv4>`, `FORCE_OUTBOUND_IPV4=true`; no proxy variables.
+   Set `AQTE_LIVE_ALLOW_UNVALIDATED_RULES=true` only
    if you accept unvalidated real-money entries; otherwise ON only scans.
 3. **Verify egress** on the server: `curl -4 https://api.ipify.org` must print the
    same IPv4 as `AQTE_LIVE_STATIC_IP`. `bash scripts/check-production-env.sh` reports
@@ -1268,8 +1268,9 @@ the dashboard actually uses, in this order:
    risk budget, and the last actual `entry_scan`. A clear signal is still subject
    to fresh broker quotes, cash, no-chase pricing and one-position limits.
 
-The separate Smart AI Algo executor has its own enablement/live-mode settings.
-The AQTE switch does not start it; enabling two live executors is not an AQTE fix.
+The standalone Smart AI executor has been removed. AQTE retains an internal 5-minute
+strategy confirmation provider; it does not place orders. The AQTE switch controls only
+the existing AQTE execution manager.
 Neither engine-card agreement nor an ML-library installation overrides these gates.
 
 The 12 strategy cards are independent advisory evaluators, not 12 execution managers.
@@ -1402,7 +1403,7 @@ They do not accept Kite access tokens from the browser.
 | POST | `/api/aqte/live/proposal` | Compatibility/internal proposal path; blocked while OFF |
 | POST | `/api/aqte/live/confirm` | Compatibility confirmation path; blocked while OFF and still subject to all risk checks |
 | POST | `/api/aqte/live/exit` | Pause new entries and request only the confirmed, identified AQTE trade's exit |
-| POST | `/api/aqte/live/stop` | Latch emergency, cancel AQTE-tagged orders and square off only AQTE-owned quantity (manual trades untouched) |
+| POST | `/api/aqte/live/stop` | Latch emergency, cancel tagged AQTE/QuantEdge Pro orders and square off only algorithm-owned quantity (manual trades untouched) |
 
 These controls are independent of the older paper-only `/api/aqte/kill`, which is
 disabled in production and cannot stop Real AQTE analysis.
@@ -1829,3 +1830,38 @@ Validate the authenticated diagnostics on the approved execution host before the
 next open, including its actual token, static egress and broker permissions.
 No live order, risk-limit increase, manual-position mutation or production
 performance certification is part of these offline tests.
+
+## QuantEdge Pro live engine activity
+
+The existing **Live Engine Events** panel remains the AQTE strategy-status
+transition list. A separate **QuantEdge Pro — Live Engine Events** panel below
+it receives persisted backend activity over `WS /api/aqte/events`. The browser
+connects with the app-access cookie and `device_id` from `mdts_visitor_id`;
+`after` is the last event ID stored for that tab. The socket checks the same
+device-bound owner session and trusted-origin policy. The session token is never
+placed in the WebSocket URL or event payload.
+
+Events have a durable monotonically increasing ID, epoch timestamp, instrument,
+event type, severity, message and source. A unique idempotency key prevents
+duplicate inserts. The database insert happens before broadcast. On reconnect,
+the server replays events after the saved cursor; a slow subscriber is closed
+and replays from storage rather than silently skipping persisted activity.
+Initial connections receive the latest 100 events.
+
+The current producers publish actual AQTE activity: shared Kite connection,
+reconnect and first index ticks; fresh option-chain analysis and regime changes;
+12 AQTE engine status transitions; opportunity acceptance/rejection/missed
+reasons and risk gates; entry submission, broker order status, protective-stop
+and trailing-stop changes, target exits and closed positions; feed-gap and
+engine-error/recovery transitions. This feed does not fabricate completion
+events for analysis stages that have no corresponding backend completion
+producer.
+
+When `AQTE_MORNING_POSTGRES_URL` is configured, events use the existing
+PostgreSQL server in `aqte_live_engine_events`. Without it, or if PostgreSQL
+cannot be reached during startup, the journal uses
+`backend/data/aqte/live_events.sqlite3` with SQLite WAL and logs the fallback.
+The WebSocket broadcaster uses bounded per-client asyncio queues backed by this
+durable journal; it does not depend on the current in-memory `CacheService` or
+claim to use Redis Streams. Preserve the journal file in local deployments and
+include it in the PostgreSQL backup policy when PostgreSQL is configured.
