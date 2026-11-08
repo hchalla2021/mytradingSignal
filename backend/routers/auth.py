@@ -8,6 +8,8 @@ import asyncio
 import secrets
 import hashlib
 import logging
+import json
+from pathlib import Path
 
 from services.auth import auth_service
 from services.user_analytics import user_analytics
@@ -68,6 +70,12 @@ async def _persist_access_token(access_token: str) -> None:
     """Save token to .env and reset every cached-settings consumer."""
     env_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env")
     update_env_file(env_path, "ZERODHA_ACCESS_TOKEN", access_token)
+    shared_auth_path = os.getenv("ZERODHA_SHARED_AUTH_FILE")
+    if shared_auth_path:
+        current_settings = get_settings()
+        _persist_shared_zerodha_auth(
+            Path(shared_auth_path), current_settings.zerodha_api_key, access_token
+        )
 
     from config import get_settings as _gs
     _gs.cache_clear()
@@ -81,6 +89,25 @@ async def _persist_access_token(access_token: str) -> None:
     from services.unified_auth_service import unified_auth
     await unified_auth.update_token(access_token)
     logger.info("Access token saved and authentication services updated")
+
+
+def _persist_shared_zerodha_auth(path: Path, api_key: str, access_token: str) -> None:
+    """Publish only the main Kite API key/token to the isolated MorningEdge container."""
+    if not api_key or not access_token:
+        raise ValueError("Both Zerodha API key and access token are required for shared authentication")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.{secrets.token_hex(8)}.tmp")
+    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o640)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as shared_file:
+            json.dump({"api_key": api_key, "access_token": access_token}, shared_file)
+            shared_file.flush()
+            os.fsync(shared_file.fileno())
+        os.replace(temporary, path)
+        os.chmod(path, 0o640)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
 
 
 @router.post("/auto-login")

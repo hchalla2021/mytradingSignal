@@ -4,7 +4,7 @@ import { memo, useMemo, useState, type ReactNode } from 'react';
 import AQTEExecutionHistory from '@/components/AQTEExecutionHistory';
 import { aqteBlockLabel, aqteControllerCurrent, aqteEffectiveSignal, aqteEngineView, aqteIndexHold, aqteLabel, aqteLiveMetrics,
   aqteOpportunitySymbol, aqteOverview, aqtePrice, aqteRanking, aqteSameJson, aqteSigned, aqteTrailStart,
-  type AQTEEngine, type AQTEEngineEvent, type AQTEEnginePolicy, type AQTEEngineStatus,
+  type AQTEEngine, type AQTEEnginePolicy, type AQTEEngineStatus,
   type AQTELiveState, type AQTEOrchestration, type AQTESignal, type AQTESymbol } from '@/lib/aqte-display';
 
 // Stable placeholders keep all 12 cards in place before the first evaluation arrives.
@@ -36,7 +36,6 @@ type Filter = typeof FILTERS[number];
 const CHART_TABS = [['chart', 'Price Chart'], ['signals', 'Engine Signals'], ['levels', 'Levels'],
   ['flow', 'Order Flow'], ['options', 'Options'], ['mtf', 'Multi-TF']] as const;
 type ChartTab = typeof CHART_TABS[number][0];
-const clock = new Intl.DateTimeFormat('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
 const fixed = (value: number | null | undefined, digits = 2) =>
   value == null || !Number.isFinite(value) ? '--' : value.toFixed(digits);
 const percent = (value: number | null | undefined) =>
@@ -58,7 +57,6 @@ type Props = {
   symbol: AQTESymbol;
   data?: Partial<Record<AQTESymbol, AQTESignal>>;
   liveStatus: AQTELiveState | null;
-  events: AQTEEngineEvent[];
   policy: AQTEEnginePolicy | null;
   unavailable: boolean;
   now?: number;
@@ -312,7 +310,7 @@ const OpportunityPanel = memo(function OpportunityPanel({ opp, maxLots }: { opp:
   );
 });
 
-function AQTEEngineDeck({ symbol, data, liveStatus, events, policy, unavailable,
+function AQTEEngineDeck({ symbol, data, liveStatus, policy, unavailable,
   now = Date.now() / 1000, chart }: Props) {
   const [filter, setFilter] = useState<Filter>('ALL');
   const [open, setOpen] = useState<number | null>(null);
@@ -407,8 +405,6 @@ function AQTEEngineDeck({ symbol, data, liveStatus, events, policy, unavailable,
     return engine?.rules.length ? <RuleList rules={engine.rules} /> :
       <p className="aqx-tab-note">{engine?.reason ?? (unavailable ? 'Engine data unavailable' : 'Waiting for live evaluation')}</p>;
   };
-  const shown = events.slice(0, 4);
-
   return (
     <section className="aqx-deck" aria-label="AQTE strategy engines">
       <OpportunityPanel opp={opp} maxLots={liveStatus?.limits.max_lots ?? null} />
@@ -506,20 +502,6 @@ function AQTEEngineDeck({ symbol, data, liveStatus, events, policy, unavailable,
         )}
       </div>
 
-      <section className="aqx-card aqx-events" aria-label="Live engine events" id="aqte-dash-events">
-        <h3 className="aqx-panel-head"><span aria-hidden="true" className={`aqx-live-dot${unavailable ? ' aqx-live-dot-off' : ''}`} />Live Engine Events <span>{unavailable ? '(Offline)' : '(Real-time)'}</span></h3>
-        <ol className="aqx-ticker" aria-label="Engine events">
-          {shown.length ? shown.map(event => (
-            <li key={`${event.at}:${event.symbol}:${event.engine}`}>
-              <time>{clock.format(new Date(event.at * 1000))}</time>
-              <span>{`${aqteLabel(event.symbol)} · Engine ${String(event.engine).padStart(2, '0')} (${event.name})`}</span>
-              <b className={`aqx-st-${event.status.toLowerCase()}`}>{STATUS_ICON[event.status]} {STATUS_LABEL[event.status]}</b>
-              {event.side && <span className={sideTone(event.side)}>– {event.side}</span>}
-            </li>
-          )) : <li className="aqx-ticker-empty">{unavailable ? 'Engine events unavailable'
-            : 'No engine status changes since AQTE started · changes appear while the market feed is live'}</li>}
-        </ol>
-      </section>
     </section>
   );
 }

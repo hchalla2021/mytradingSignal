@@ -16,9 +16,10 @@ COPY . .
 
 # Create non-root user
 RUN addgroup --system appuser && adduser --system --ingroup appuser appuser
+RUN addgroup --gid 2000 zerodha-share && adduser appuser zerodha-share
 # Named volumes copy these image directories' ownership when first created.
-RUN mkdir -p /app/data/aqte /app/data/order_flow
-RUN chown -R appuser:appuser /app
+RUN mkdir -p /app/data/aqte /app/data/order_flow /app/data/expiryedge /run/zerodha
+RUN chown -R appuser:appuser /app && chown appuser:zerodha-share /run/zerodha && chmod 2770 /run/zerodha
 USER appuser
 
 # Expose port

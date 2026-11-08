@@ -18,18 +18,17 @@ class EventPublisher(Protocol):
 
 
 @dataclass(frozen=True)
-class KiteOAuthConfig:
+class KiteAuthConfig:
     api_key: str
-    api_secret: str
     access_token: str
 
     @classmethod
-    def from_settings(cls, settings: Settings) -> "KiteOAuthConfig":
-        return cls(settings.api_key, settings.api_secret, settings.access_token)
+    def from_settings(cls, settings: Settings) -> "KiteAuthConfig":
+        return cls(settings.api_key, settings.access_token)
 
 
 class KiteTickerIngestion:
-    """Callback adapter for independently authenticated KiteTicker; intentionally no order API."""
+    """Callback adapter for the shared main-app Kite auth; intentionally no order API."""
     def __init__(self, pipeline: MarketPipeline, token_to_symbol: dict[int, str]) -> None:
         self.pipeline = pipeline
         self.token_to_symbol = dict(token_to_symbol)

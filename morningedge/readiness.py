@@ -5,8 +5,8 @@ from config import Settings
 
 def evaluate_readiness(settings: Settings, risk: dict[str, Any]) -> tuple[str, tuple[str, ...]]:
     reasons = []
-    for key, label in (("operator_token", "Operator credential"), ("api_key", "Zerodha API key"),
-                       ("api_secret", "Zerodha API secret"), ("access_token", "Zerodha account auth"),
+    for key, label in (("api_key", "Zerodha API key"),
+                       ("access_token", "Zerodha account auth"),
                        ("database_url", "PostgreSQL URL"), ("redis_url", "Redis URL"),
                        ("model_artifact", "Model artifact")):
         if not getattr(settings, key):

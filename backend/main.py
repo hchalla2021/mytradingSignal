@@ -86,6 +86,7 @@ from routers.global_news import http_router as global_news_http, ws_router as gl
 from routers.observatory import http_router as observatory_http
 from routers.aqte import router as aqte_http
 from routers.quantedge import router as quantedge_http
+from routers.expiryedge import router as expiryedge_http
 from routers import smart_money
 from routers.volume_pulse import router as volume_pulse_http, ws_router as volume_pulse_ws
 from routers.ict_bias import router as ict_bias_http, ws_router as ict_bias_ws
@@ -122,6 +123,14 @@ async def lifespan(app: FastAPI):
     settings = get_settings()
 
     print("⚡ FastAPI starting...")
+    shared_auth_path = _os.getenv("ZERODHA_SHARED_AUTH_FILE")
+    if shared_auth_path and settings.zerodha_access_token:
+        try:
+            auth._persist_shared_zerodha_auth(
+                Path(shared_auth_path), settings.zerodha_api_key, settings.zerodha_access_token
+            )
+        except (OSError, ValueError):
+            logger.exception("Could not publish the Zerodha token to the MorningEdge shared volume")
 
     # ── Quick env validation (sync, instant) ──────────────────────────
     validation_errors = []
@@ -707,6 +716,7 @@ app.include_router(fii_dii_router, prefix="/api", tags=["FII / DII"])
 app.include_router(observatory_http, tags=["Observatory"])
 app.include_router(aqte_http)
 app.include_router(quantedge_http)
+app.include_router(expiryedge_http)
 
 
 @app.get("/")

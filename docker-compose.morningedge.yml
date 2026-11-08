@@ -36,6 +36,9 @@ services:
     environment:
       MORNINGEDGE_DATABASE_URL: postgresql://${MORNINGEDGE_POSTGRES_USER:-morningedge}:${MORNINGEDGE_POSTGRES_PASSWORD}@morningedge-postgres:5432/morningedge
       MORNINGEDGE_REDIS_URL: redis://morningedge-redis:6379/0
+      MORNINGEDGE_SHARED_ZERODHA_AUTH_FILE: /run/shared/credentials.json
+    volumes:
+      - zerodha-auth-data:/run/shared:ro
     ports:
       - "8010:8010"
     depends_on:
@@ -53,3 +56,5 @@ services:
 volumes:
   morningedge-postgres-data:
   morningedge-redis-data:
+  zerodha-auth-data:
+    name: mytrading-zerodha-auth

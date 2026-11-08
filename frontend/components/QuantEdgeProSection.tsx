@@ -4,7 +4,6 @@ import { useEffect, useRef, useState } from 'react';
 import { API_CONFIG } from '@/lib/api-config';
 import { notifyAppAccessExpired } from '@/lib/app-access-events';
 import { getOrCreateVisitorId } from '@/lib/visitor-id';
-import { useAqteEventStream } from '@/hooks/useAqteEventStream';
 import type { MarketData } from '@/hooks/useMarketSocket';
 import { Activity, ArrowDown, ArrowUp, BarChart3, Check, ShieldCheck, TrendingUp, Zap } from 'lucide-react';
 
@@ -90,14 +89,6 @@ const number = (value: number | null | undefined) => value != null && Number.isF
   ? value.toLocaleString('en-IN', { maximumFractionDigits: 2 }) : '—';
 const label = (symbol: string) => symbol === 'BANKNIFTY' ? 'BANK NIFTY' : symbol === 'NIFTY' ? 'NIFTY 50' : symbol;
 
-const clock = new Intl.DateTimeFormat('en-IN', {
-  timeZone: 'Asia/Kolkata',
-  hour: '2-digit',
-  minute: '2-digit',
-  second: '2-digit',
-  hour12: false,
-});
-
 const symbols = ['NIFTY', 'BANKNIFTY', 'SENSEX'] as const;
 const ruleLabels: Record<string, string> = {
   band_breakout: 'Bollinger breakout',
@@ -162,18 +153,13 @@ export default function QuantEdgeProSection({ marketData, isConnected = false, v
   isConnected?: boolean;
   vix?: { value: number | null; changePercent: number | null };
 }) {
-  const { events, status } = useAqteEventStream();
-  const quantEdgeEvents = events.filter(event => event.source === 'quantedge_pro' || event.source === 'quantedge_live');
   const [live, setLive] = useState<QepStatus | null>(null);
+  const [statusStale, setStatusStale] = useState(true);
   const [lots, setLots] = useState(1);
   const [selectedSymbol, setSelectedSymbol] = useState('NIFTY');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const initialized = useRef(false);
-  const connection = status === 'connected' ? 'Connected'
-    : status === 'connecting' ? 'Connecting'
-      : status === 'offline' ? 'Offline' : 'Reconnecting';
-
   useEffect(() => {
     let active = true;
     let timer: ReturnType<typeof setTimeout> | null = null;
@@ -186,6 +172,7 @@ export default function QuantEdgeProSection({ marketData, isConnected = false, v
         if (age < -1 || age > 10) throw new Error('QuantEdge Pro status is stale');
         if (active) {
           setLive(value);
+          setStatusStale(false);
           setError(null);
           if (!initialized.current) {
             initialized.current = true;
@@ -194,7 +181,7 @@ export default function QuantEdgeProSection({ marketData, isConnected = false, v
         }
       } catch (reason) {
         if (active && !controller.signal.aborted) {
-          setLive(null);
+          setStatusStale(true);
           setError(reason instanceof Error ? reason.message : 'QuantEdge Pro status unavailable');
         }
       } finally {
@@ -214,11 +201,11 @@ export default function QuantEdgeProSection({ marketData, isConnected = false, v
     setError(null);
     try {
       const value = await request(path, body);
-      if (isQepStatus(value)) {
-        setLive(value);
-        setLots(value.lots);
-        initialized.current = true;
-      }
+      if (!isQepStatus(value)) throw new Error('Invalid QuantEdge Pro operation response');
+      setLive(value);
+      setStatusStale(false);
+      setLots(value.lots);
+      initialized.current = true;
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'QuantEdge Pro operation failed');
     } finally {
@@ -227,7 +214,7 @@ export default function QuantEdgeProSection({ marketData, isConnected = false, v
   };
 
   const toggleApproval = () => {
-    if (!live) return;
+    if (!live || statusStale) return;
     const enabled = !live.enabled;
     if (enabled && !window.confirm(
       'Enable QuantEdge Pro live trading? This permits real Zerodha orders after the existing broker preflight and session-arm gates pass.'
@@ -239,7 +226,7 @@ export default function QuantEdgeProSection({ marketData, isConnected = false, v
   };
 
   const requestExit = () => {
-    if (!live?.active) return;
+    if (!live?.active || statusStale) return;
     if (!window.confirm(`Close only the QuantEdge Pro trade in ${live.active.contract.trading_symbol}?`)) return;
     void act('exit', { trade_id: live.active.id, confirmation: 'CLOSE QUANTEDGE PRO TRADE' });
   };
@@ -265,9 +252,11 @@ export default function QuantEdgeProSection({ marketData, isConnected = false, v
   const ruleEntries = Object.entries(rules);
   const passedRules = ruleEntries.filter(([, passed]) => passed).length;
   const rulePercent = ruleEntries.length ? Math.round(passedRules / ruleEntries.length * 100) : null;
-  const statusLabel = live?.enabled ? 'LIVE' : live?.ready && live.armed ? 'READY' : 'OFF';
+  const statusLabel = statusStale || !live ? 'OFFLINE'
+    : live.enabled ? 'LIVE' : live.ready && live.armed ? 'READY' : 'OFF';
   const startDisabledReason = busy ? 'A QuantEdge Pro request is still in progress.'
-    : !live ? error ?? 'Waiting for authenticated QuantEdge Pro status.'
+    : statusStale ? 'QuantEdge Pro status is stale; waiting for a fresh backend update.'
+      : !live ? error ?? 'Waiting for authenticated QuantEdge Pro status.'
       : !live.ready ? 'The live execution controller is not ready; check backend status.'
         : !live.enabled && activeTrade ? 'An existing QuantEdge Pro position must be resolved before starting new entries.'
           : !live.enabled && !live.armed
@@ -383,7 +372,7 @@ export default function QuantEdgeProSection({ marketData, isConnected = false, v
             <div><p className="text-sm text-slate-400">Max Loss</p><b className="text-xl text-rose-300">{money(maxLoss)}</b></div>
             <div><p className="text-sm text-slate-400">Gross Reward at Target</p><b className="text-xl text-emerald-300">{money(grossReward)}</b></div>
           </div>
-          <button type="button" disabled={!live?.ready || busy || (!live.enabled && (!live.armed || !!activeTrade))}
+          <button type="button" disabled={!live?.ready || statusStale || busy || (!live.enabled && (!live.armed || !!activeTrade))}
             onClick={toggleApproval}
             className={`mt-4 flex min-h-16 w-full items-center justify-center gap-3 rounded-xl border px-4 py-3 text-xl font-extrabold text-white transition-colors disabled:cursor-not-allowed disabled:opacity-50 sm:text-2xl ${
               live?.enabled ? 'border-rose-500/70 bg-rose-700/80 hover:bg-rose-600' : 'border-emerald-400/70 bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-400 hover:to-emerald-500'
@@ -400,7 +389,7 @@ export default function QuantEdgeProSection({ marketData, isConnected = false, v
               <b className="text-sm text-amber-200">Active QEP position · {activeTrade.contract.trading_symbol}</b>
               <p className="text-xs text-slate-300">{activeTrade.filled}/{activeTrade.quantity} filled · Entry {money(activeTrade.entry_price)}</p>
             </div>
-            <button type="button" disabled={busy} onClick={requestExit}
+            <button type="button" disabled={busy || statusStale} onClick={requestExit}
               className="rounded-lg border border-rose-500/50 px-4 py-2 text-sm font-bold text-rose-200 disabled:opacity-50">
               Exit QEP trade
             </button>
@@ -408,13 +397,13 @@ export default function QuantEdgeProSection({ marketData, isConnected = false, v
           <div id="qep-settings" className="mt-4 flex flex-wrap items-center gap-3 rounded-lg border border-slate-700/70 bg-slate-950/40 p-3">
             <label className="flex items-center gap-2 text-sm text-slate-300">
               Lots
-              <select aria-label="QuantEdge Pro lots" value={lots} disabled={!live?.ready || live.enabled || !!activeTrade || busy}
+              <select aria-label="QuantEdge Pro lots" value={lots} disabled={!live?.ready || statusStale || live.enabled || !!activeTrade || busy}
                 onChange={event => setLots(Number(event.target.value))}
                 className="rounded-md border border-slate-600 bg-slate-900 px-3 py-2 text-sm text-white">
                 {[1, 2, 3, 4, 5].map(value => <option key={value} value={value}>{value}</option>)}
               </select>
             </label>
-            <button type="button" disabled={!live?.ready || live.enabled || !!activeTrade || busy || lots === live?.lots}
+            <button type="button" disabled={!live?.ready || statusStale || live.enabled || !!activeTrade || busy || lots === live?.lots}
               onClick={() => void act('config', { lots })}
               className="rounded-md border border-cyan-500/50 px-3 py-2 text-xs font-semibold text-cyan-200 disabled:opacity-50">
               Save lots
@@ -461,31 +450,6 @@ export default function QuantEdgeProSection({ marketData, isConnected = false, v
           </ul>
         </aside>
       </div>
-      <section className="aqx-card rounded-xl p-4" aria-label="QuantEdge Pro live engine events"
-        id="quantedge-pro-events">
-        <h3 className="aqx-panel-head">
-          <span aria-hidden="true" className={`aqx-live-dot${status === 'connected' ? '' : ' aqx-live-dot-off'}`} />
-          Live Engine Events
-          <span>({connection})</span>
-        </h3>
-        <ol className="aqx-activity-feed" aria-label="QuantEdge Pro backend activity">
-          {quantEdgeEvents.length ? quantEdgeEvents.slice(0, 12).map(event => (
-            <li key={event.id} className="aqx-activity-row">
-              <time dateTime={new Date(event.at * 1000).toISOString()}>{clock.format(new Date(event.at * 1000))}</time>
-              {event.instrument && <span className="aqx-activity-instrument">{event.instrument}</span>}
-              <span className="aqx-activity-type">{event.event_type.replaceAll('_', ' ')}</span>
-              <span className="aqx-activity-message" title={event.event_type.replaceAll('_', ' ')}>
-                {event.message}
-              </span>
-              <b className={`aqx-severity aqx-severity-${event.severity}`}>{event.severity}</b>
-            </li>
-          )) : <li className="aqx-ticker-empty">
-            {status === 'connected' ? 'No backend activity events have been recorded yet'
-              : status === 'offline' ? 'Sign in to view the authenticated backend event stream'
-                : 'Waiting for the authenticated backend event stream'}
-          </li>}
-        </ol>
-      </section>
     </section>
   );
 }

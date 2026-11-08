@@ -82,3 +82,4 @@ htmlcov/
 *.seed
 *.pid.lock
 .env.example
+!morningedge/.env.example

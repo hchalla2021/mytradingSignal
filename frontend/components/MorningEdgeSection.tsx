@@ -1,7 +1,8 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Activity, AlertCircle, Bell, Bot, CheckCircle2, Loader2, LockKeyhole, Play, Save, ShieldCheck, TrendingUp, Zap } from 'lucide-react';
+import { Activity, AlertCircle, Bell, Bot, CheckCircle2, Loader2, Play, Save, ShieldCheck, TrendingUp, Zap } from 'lucide-react';
+import { useAuth } from '@/hooks/useAuth';
 
 type Quote = {
   price?: number | null;
@@ -79,6 +80,18 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
+function adaptEvent(value: unknown): EngineEvent | null {
+  if (!isObject(value) || typeof value.at !== 'number' || !Number.isFinite(value.at) ||
+      typeof value.type !== 'string' || typeof value.message !== 'string') return null;
+  return {
+    at: value.at,
+    type: value.type,
+    message: value.message,
+    severity: typeof value.severity === 'string' ? value.severity : 'info',
+    instrument: typeof value.instrument === 'string' ? value.instrument : null,
+  };
+}
+
 function adaptStatus(value: Record<string, unknown>): EngineStatus {
   const session = isObject(value.session) ? value.session : {};
   const source = isObject(value.instruments) ? value.instruments : {};
@@ -152,32 +165,64 @@ function formatTime(value?: number | null) {
   }).format(new Date(value * 1000));
 }
 
-function getToken() {
-  return typeof window === 'undefined' ? '' : sessionStorage.getItem('morningedge_operator_token') || '';
-}
-
 export default function MorningEdgeSection() {
+  const { isAuthenticated } = useAuth();
   const [token, setToken] = useState('');
-  const [tokenInput, setTokenInput] = useState('');
   const [status, setStatus] = useState<EngineStatus | null>(null);
   const [config, setConfig] = useState<RiskConfig>({
     per_trade_loss_cap_inr: null, daily_loss_limit_inr: null,
     max_trades_per_day: null, max_lots: 1, min_model_confidence: 20,
   });
   const [events, setEvents] = useState<EngineEvent[]>([]);
+  const [streamConnected, setStreamConnected] = useState(false);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [saved, setSaved] = useState(false);
   const socketRef = useRef<WebSocket | null>(null);
+  const wasAuthenticatedRef = useRef(false);
+  const configLoadedRef = useRef(false);
 
-  useEffect(() => setToken(getToken()), []);
+  useEffect(() => {
+    if (!API_ROOT) return;
+    if (!isAuthenticated) {
+      setToken('');
+      setStatus(null);
+      setEvents([]);
+      setStreamConnected(false);
+      setConfig({
+        per_trade_loss_cap_inr: null, daily_loss_limit_inr: null,
+        max_trades_per_day: null, max_lots: 1, min_model_confidence: 20,
+      });
+      configLoadedRef.current = false;
+      if (wasAuthenticatedRef.current) {
+        void fetch(`${API_ROOT}/auth/logout`, {
+          method: 'POST', credentials: 'include', cache: 'no-store',
+        }).catch(() => setError('Could not close the MorningEdge session.'));
+      }
+      wasAuthenticatedRef.current = false;
+      return;
+    }
+    wasAuthenticatedRef.current = true;
+    setToken('');
+    let active = true;
+    void fetch(`${API_ROOT}/auth/session`, { credentials: 'include', cache: 'no-store' })
+      .then(response => response.ok ? response.json() as Promise<{ authenticated?: boolean }> : null)
+      .then(session => {
+        if (!active) return;
+        if (session?.authenticated) setToken('connected');
+        else setError('Use the main application Zerodha login to connect MorningEdge.');
+      })
+      .catch(() => { if (active) setError('Could not verify the main Zerodha connection for MorningEdge.'); });
+    return () => { active = false; };
+  }, [isAuthenticated]);
 
   const request = useCallback(async (path: string, method = 'GET', body?: unknown) => {
     if (!API_ROOT || !token) throw new Error('Set the independent MorningEdge API URL and operator token.');
     const response = await fetch(`${API_ROOT}${path}`, {
       method,
-      headers: { Authorization: `Bearer ${token}`, ...(body ? { 'Content-Type': 'application/json' } : {}) },
+      headers: body ? { 'Content-Type': 'application/json' } : {},
       cache: 'no-store',
+      credentials: 'include',
       body: body ? JSON.stringify(body) : undefined,
     });
     const payload: unknown = await response.json().catch(() => null);
@@ -191,10 +236,15 @@ export default function MorningEdgeSection() {
   const refresh = useCallback(async () => {
     if (!token || !API_ROOT) return;
     try {
-      const [rawStatus, rawConfig] = await Promise.all([request('/status'), request('/config')]);
-      if (!isObject(rawStatus) || !isObject(rawConfig)) throw new Error('Invalid MorningEdge status response.');
+      const rawStatus = await request('/status');
+      if (!isObject(rawStatus)) throw new Error('Invalid MorningEdge status response.');
       setStatus(adaptStatus(rawStatus));
-      setConfig(adaptConfig(rawConfig));
+      if (!configLoadedRef.current) {
+        const rawConfig = await request('/config');
+        if (!isObject(rawConfig)) throw new Error('Invalid MorningEdge configuration response.');
+        setConfig(adaptConfig(rawConfig));
+        configLoadedRef.current = true;
+      }
       setError('');
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'MorningEdge status unavailable.');
@@ -218,23 +268,74 @@ export default function MorningEdgeSection() {
     if (!token || !WS_ROOT) return;
     let active = true;
     let socket: WebSocket | null = null;
-    void request('/events/token', 'POST').then(payload => {
-      if (!active || !isObject(payload) || typeof payload.token !== 'string') return;
-      socket = new WebSocket(`${WS_ROOT}/api/v1/events?token=${encodeURIComponent(payload.token)}`);
-      socketRef.current = socket;
-      socket.onmessage = message => {
-        try {
-          const event: unknown = JSON.parse(message.data);
-          if (!isObject(event) || typeof event.message !== 'string') return;
-          setEvents(previous => [event as EngineEvent, ...previous].slice(0, 40));
-        } catch {
-          setError('Received an invalid MorningEdge event.');
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    let stableTimer: ReturnType<typeof setTimeout> | null = null;
+    let reconnectAttempt = 0;
+    const reconnect = () => {
+      if (!active || reconnectTimer) return;
+      const delay = Math.min(30000, 1000 * (2 ** Math.min(reconnectAttempt, 5)));
+      reconnectAttempt += 1;
+      reconnectTimer = setTimeout(() => {
+        reconnectTimer = null;
+        void connect();
+      }, delay);
+    };
+    const connect = async () => {
+      try {
+        const payload: unknown = await request('/events/token', 'POST');
+        if (!active) return;
+        if (!isObject(payload) || typeof payload.token !== 'string') {
+          throw new Error('Invalid MorningEdge event token response.');
         }
-      };
-      socket.onerror = () => setError('MorningEdge event stream disconnected.');
-    }).catch(reason => setError(reason instanceof Error ? reason.message : 'MorningEdge event stream unavailable.'));
+        const nextSocket = new WebSocket(`${WS_ROOT}/api/v1/events?token=${encodeURIComponent(payload.token)}`);
+        socket = nextSocket;
+        socketRef.current = nextSocket;
+        nextSocket.onopen = () => {
+          if (!active) return;
+          stableTimer = setTimeout(() => {
+            stableTimer = null;
+            reconnectAttempt = 0;
+          }, 30000);
+          setStreamConnected(true);
+        };
+        nextSocket.onmessage = message => {
+          if (!active) return;
+          try {
+            const value: unknown = JSON.parse(message.data);
+            const event = adaptEvent(value);
+            if (!event) {
+              setError('Received an invalid MorningEdge event.');
+              return;
+            }
+            setEvents(previous => [event, ...previous].slice(0, 40));
+          } catch {
+            setError('Received an invalid MorningEdge event.');
+          }
+        };
+        nextSocket.onerror = () => {
+          if (!active) return;
+          setError('MorningEdge event stream disconnected; reconnecting.');
+          nextSocket.close();
+        };
+        nextSocket.onclose = () => {
+          if (stableTimer) clearTimeout(stableTimer);
+          stableTimer = null;
+          if (socketRef.current === nextSocket) socketRef.current = null;
+          if (!active) return;
+          setStreamConnected(false);
+          reconnect();
+        };
+      } catch (reason) {
+        if (!active) return;
+        setError(reason instanceof Error ? reason.message : 'MorningEdge event stream unavailable.');
+        reconnect();
+      }
+    };
+    void connect();
     return () => {
       active = false;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      if (stableTimer) clearTimeout(stableTimer);
       socket?.close();
       if (socketRef.current === socket) socketRef.current = null;
     };
@@ -253,6 +354,7 @@ export default function MorningEdgeSection() {
       });
       if (!isObject(result)) throw new Error('Invalid risk configuration response.');
       setConfig(adaptConfig(result));
+      configLoadedRef.current = true;
       setSaved(true);
       setError('');
       await refresh();
@@ -297,22 +399,6 @@ export default function MorningEdgeSection() {
         </div>
       </header>
 
-      {!token ? (
-        <form className="morningedge-token" onSubmit={event => {
-          event.preventDefault();
-          const value = tokenInput.trim();
-          if (!value) return;
-          sessionStorage.setItem('morningedge_operator_token', value);
-          setToken(value);
-          setTokenInput('');
-        }}>
-          <LockKeyhole size={17} />
-          <span>Connect with the independent MorningEdge operator token.</span>
-          <input type="password" autoComplete="off" value={tokenInput} onChange={event => setTokenInput(event.target.value)}
-            placeholder="MorningEdge operator token" aria-label="MorningEdge operator token" />
-          <button type="submit">Connect</button>
-        </form>
-      ) : null}
       {!API_ROOT && <p className="morningedge-warning">MorningEdge API URL is not configured. Set NEXT_PUBLIC_MORNINGEDGE_API_URL to the separate service endpoint.</p>}
 
       <div className="morningedge-market-cards">
@@ -450,7 +536,7 @@ export default function MorningEdgeSection() {
       </article>
 
       <article className="morningedge-panel morningedge-events">
-        <div className="me-panel-heading"><h3><Activity size={18} /> Live Engine Events</h3><span>{socketRef.current?.readyState === WebSocket.OPEN ? 'STREAM CONNECTED' : 'STREAM OFFLINE'}</span></div>
+        <div className="me-panel-heading"><h3><Activity size={18} /> Live Engine Events</h3><span>{streamConnected ? 'STREAM CONNECTED' : 'STREAM OFFLINE'}</span></div>
         {error && <p className="morningedge-warning"><AlertCircle size={16} />{error}</p>}
         <div className="morningedge-event-list">
           {events.length ? events.map((event, index) => <div className="morningedge-event" key={`${event.at}-${event.type}-${index}`}>

@@ -1,11 +1,16 @@
 from __future__ import annotations
 
-from datetime import datetime
+import asyncio
+from datetime import datetime, timedelta
+import json
+import logging
 import secrets
 from typing import Any
+from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
 
-from fastapi import Depends, FastAPI, Header, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import Depends, FastAPI, HTTPException, Request, Response, WebSocket, WebSocketDisconnect
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from config import Settings, get_settings
@@ -13,8 +18,17 @@ from pipeline import EventBus, MarketPipeline
 from readiness import evaluate_readiness
 
 TZ = ZoneInfo("Asia/Kolkata")
+logger = logging.getLogger("morningedge")
 app = FastAPI(title="MorningEdge", version="0.1.0")
 settings = get_settings()
+parsed_frontend_url = urlparse(settings.frontend_url)
+frontend_origin = (f"{parsed_frontend_url.scheme}://{parsed_frontend_url.netloc}"
+                  if parsed_frontend_url.scheme and parsed_frontend_url.netloc else "")
+if frontend_origin:
+    app.add_middleware(
+        CORSMiddleware, allow_origins=[frontend_origin], allow_credentials=True,
+        allow_methods=["GET", "POST", "PUT", "OPTIONS"], allow_headers=["Content-Type"],
+    )
 pipeline = MarketPipeline()
 events = EventBus(capacity=settings.event_queue_capacity)
 config_state: dict[str, Any] = {
@@ -24,6 +38,26 @@ config_state: dict[str, Any] = {
 armed = False
 approved = False
 ws_tokens: dict[str, datetime] = {}
+browser_sessions: dict[str, datetime] = {}
+SESSION_LIFETIME = timedelta(hours=12)
+
+
+def refresh_shared_zerodha_auth() -> bool:
+    try:
+        credentials = json.loads(settings.shared_zerodha_auth_file.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        settings.api_key = ""
+        settings.access_token = ""
+        return False
+    except (OSError, json.JSONDecodeError) as error:
+        raise HTTPException(503, detail="Shared Zerodha credentials are unavailable or invalid") from error
+    api_key = credentials.get("api_key") if isinstance(credentials, dict) else None
+    access_token = credentials.get("access_token") if isinstance(credentials, dict) else None
+    if not isinstance(api_key, str) or not api_key or not isinstance(access_token, str) or not access_token:
+        raise HTTPException(503, detail="Shared Zerodha credentials are incomplete")
+    settings.api_key = api_key
+    settings.access_token = access_token
+    return True
 
 
 @app.get("/health")
@@ -31,11 +65,65 @@ def health() -> dict[str, str]:
     return {"service": "MorningEdge", "process": "alive"}
 
 
-def operator_auth(authorization: str | None = Header(default=None)) -> None:
-    if not settings.operator_token:
-        raise HTTPException(503, detail={"readiness": "NOT_READY", "block_reason": "MORNINGEDGE_OPERATOR_TOKEN is not configured"})
-    if not authorization or not secrets.compare_digest(authorization, f"Bearer {settings.operator_token}"):
-        raise HTTPException(401, detail="Invalid operator credentials")
+def browser_auth(request: Request) -> str:
+    if not refresh_shared_zerodha_auth():
+        raise HTTPException(401, detail="Connect Zerodha using the main application login")
+    if request.method in {"POST", "PUT"} and frontend_origin:
+        if request.headers.get("origin") != frontend_origin:
+            raise HTTPException(403, detail="Invalid browser request origin")
+    session_id = request.cookies.get("morningedge_session", "")
+    expires_at = browser_sessions.get(session_id)
+    if not expires_at or expires_at <= datetime.now(TZ):
+        browser_sessions.pop(session_id, None)
+        raise HTTPException(401, detail="Zerodha connection required")
+    return session_id
+
+
+
+
+@app.get("/api/v1/auth/session")
+async def auth_session(request: Request, response: Response) -> dict[str, bool]:
+    try:
+        browser_auth(request)
+        return {"authenticated": True, "zerodha_connected": True}
+    except HTTPException as error:
+        if error.status_code != 401:
+            raise
+    if not refresh_shared_zerodha_auth():
+        return {"authenticated": False, "zerodha_connected": False}
+    from kiteconnect import KiteConnect
+
+    try:
+        kite = KiteConnect(api_key=settings.api_key)
+        kite.set_access_token(settings.access_token)
+        await asyncio.to_thread(kite.profile)
+    except Exception as error:
+        logger.warning("Main Zerodha token validation failed (%s)", type(error).__name__)
+        return {"authenticated": False, "zerodha_connected": False}
+    now = datetime.now(TZ)
+    for session_id, expires in list(browser_sessions.items()):
+        if expires <= now:
+            browser_sessions.pop(session_id, None)
+    session_id = secrets.token_urlsafe(32)
+    browser_sessions[session_id] = now + SESSION_LIFETIME
+    secure_cookie = settings.frontend_url.startswith("https://")
+    response.set_cookie(
+        "morningedge_session", session_id, max_age=int(SESSION_LIFETIME.total_seconds()),
+        httponly=True, secure=secure_cookie,
+        samesite="none" if secure_cookie else "lax", path="/",
+    )
+    return {"authenticated": True, "zerodha_connected": True}
+
+
+@app.post("/api/v1/auth/logout")
+def logout(request: Request, response: Response, _: str = Depends(browser_auth)) -> dict[str, bool]:
+    browser_sessions.pop(request.cookies.get("morningedge_session", ""), None)
+    secure_cookie = settings.frontend_url.startswith("https://")
+    response.delete_cookie(
+        "morningedge_session", path="/", secure=secure_cookie, httponly=True,
+        samesite="none" if secure_cookie else "lax",
+    )
+    return {"authenticated": False}
 
 
 class RiskConfig(BaseModel):
@@ -75,17 +163,17 @@ def status_json() -> dict[str, Any]:
 
 
 @app.get("/api/v1/status")
-def get_status(_: None = Depends(operator_auth)) -> dict[str, Any]:
+def get_status(_: str = Depends(browser_auth)) -> dict[str, Any]:
     return status_json()
 
 
 @app.get("/api/v1/config")
-def get_config(_: None = Depends(operator_auth)) -> dict[str, Any]:
+def get_config(_: str = Depends(browser_auth)) -> dict[str, Any]:
     return config_json()
 
 
 @app.put("/api/v1/config")
-def put_config(payload: RiskConfig, _: None = Depends(operator_auth)) -> dict[str, Any]:
+def put_config(payload: RiskConfig, _: str = Depends(browser_auth)) -> dict[str, Any]:
     now = datetime.now(TZ)
     if now.weekday() < 5 and "09:00" <= now.strftime("%H:%M") < "15:30":
         raise HTTPException(409, detail="Risk configuration can only be changed outside the market session")
@@ -94,7 +182,7 @@ def put_config(payload: RiskConfig, _: None = Depends(operator_auth)) -> dict[st
 
 
 @app.post("/api/v1/preflight")
-def preflight(_: None = Depends(operator_auth)) -> dict[str, Any]:
+def preflight(_: str = Depends(browser_auth)) -> dict[str, Any]:
     status = status_json()
     return {"readiness": status["readiness"], "passed": status["readiness"] == "READY",
             "block_reasons": status["block_reasons"],
@@ -102,7 +190,7 @@ def preflight(_: None = Depends(operator_auth)) -> dict[str, Any]:
 
 
 @app.post("/api/v1/arm")
-def arm(_: None = Depends(operator_auth)) -> dict[str, Any]:
+def arm(_: str = Depends(browser_auth)) -> dict[str, Any]:
     global armed
     status = status_json()
     ready, reasons = status["readiness"], status["block_reasons"]
@@ -114,7 +202,7 @@ def arm(_: None = Depends(operator_auth)) -> dict[str, Any]:
 
 
 @app.post("/api/v1/approval")
-def approve(_: None = Depends(operator_auth)) -> dict[str, Any]:
+def approve(_: str = Depends(browser_auth)) -> dict[str, Any]:
     global approved
     approved = False
     return {"live_approved": False, "readiness": "NOT_READY",
@@ -122,7 +210,7 @@ def approve(_: None = Depends(operator_auth)) -> dict[str, Any]:
 
 
 @app.post("/api/v1/events/token")
-def issue_event_token(_: None = Depends(operator_auth)) -> dict[str, Any]:
+def issue_event_token(_: str = Depends(browser_auth)) -> dict[str, Any]:
     now = datetime.now(TZ)
     for existing, issued in list(ws_tokens.items()):
         if (now - issued).total_seconds() > 60:
@@ -136,7 +224,11 @@ def issue_event_token(_: None = Depends(operator_auth)) -> dict[str, Any]:
 async def event_stream(websocket: WebSocket) -> None:
     token = websocket.query_params.get("token", "")
     issued = ws_tokens.pop(token, None)
-    if issued is None or (datetime.now(TZ) - issued).total_seconds() > 60:
+    session_id = websocket.cookies.get("morningedge_session", "")
+    session_expires = browser_sessions.get(session_id)
+    if (frontend_origin and websocket.headers.get("origin") != frontend_origin
+            or issued is None or (datetime.now(TZ) - issued).total_seconds() > 60
+            or not session_expires or session_expires <= datetime.now(TZ)):
         await websocket.close(code=1008)
         return
     await websocket.accept()

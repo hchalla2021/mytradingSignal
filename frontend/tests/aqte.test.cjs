@@ -10,7 +10,7 @@ function harness(filename = 'AQTESection.tsx', now, sharedProduction = false) {
   const timers = new Map();
   const requests = [];
   const downloads = [], revoked = [];
-  let effect, cursor, timer = 0, response, accessExpired = 0, activityEvents = [], activityStatus = 'connecting';
+  let effect, cursor, timer = 0, response, accessExpired = 0;
   const react = {
     memo: component => component,
     useState: initial => {
@@ -57,9 +57,6 @@ function harness(filename = 'AQTESection.tsx', now, sharedProduction = false) {
       if (id === '@/components/AQTEDailyControl') return { default: () => null };
       if (id === 'next/dynamic') return { default: () => () => null };
       if (id === '@/hooks/useChartHistory') return { prefetchChartHistory: async () => {} };
-      if (id === '@/hooks/useAqteEventStream') {
-        return { useAqteEventStream: () => ({ events: activityEvents, status: activityStatus }) };
-      }
       if (id === '@/lib/aqte-display') {
         const code = ts.transpileModule(readFileSync(path.join(__dirname, '..', 'lib', 'aqte-display.ts'), 'utf8'),
           { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2020 } }).outputText;
@@ -109,7 +106,6 @@ function harness(filename = 'AQTESection.tsx', now, sharedProduction = false) {
     render(props = {}) { cursor = 0; return context.exports.default(props); },
     mount(value) { response = value; return effect(); },
     respond(value) { response = value; },
-    setActivity(events, status) { activityEvents = events; activityStatus = status; },
     respondHTTP(status, value) { response = { __httpStatus: status, __body: value }; },
     async poll(value) {
       response = value;
@@ -1426,7 +1422,7 @@ test('AQTE has three index cards and disables trade actions while live status is
   const deckControl = n => n.type === 'button' && /aqx-deck-filter|aqx-eng-card/.test(String(n.props?.className));
   const viewOnly = n => n.type === 'button' && /\baqx-viewonly\b/.test(String(n.props?.className));
   const actions = nodes(tree).filter(n => n.type === 'button' && n.props.role !== 'tab' && !deckControl(n) && !viewOnly(n));
-  assert.equal(actions.length, 16, '15 existing trade actions plus separately gated morning approval');
+  assert.equal(actions.length, 15, 'Only existing guarded trade actions are available');
   assert.equal(nodes(tree).filter(deckControl).length, 17);
   assert.ok(nodes(tree).filter(viewOnly).every(n => !/Exit|Flatten|Kill|Buy|Sell|Confirm/i.test(text(n))), 'Navigation never trades');
   assert.ok(actions.every(n => n.props.disabled), 'Trade actions need a confirmed matching live position');
@@ -1702,7 +1698,7 @@ test('terminal presentation has per-index hero cards, engine and exit-rule panel
     assert.match(nodes(tree).find(n => n.props?.id === `aqte-index-tab-${symbol}`).props.className, new RegExp(`aqte-tab-${symbol}`));
   }
   assert.equal(nodes(tree).filter(n => n.type === 'button' && !/aqx-deck-filter|aqx-eng-card|aqx-viewonly/.test(String(n.props?.className))).length,
-    24, '3 index tabs, 5 book tabs, 15 gated trade actions and separate morning approval');
+    23, '3 index tabs, 5 book tabs and 15 gated trade actions');
   cleanup();
 });
 
@@ -1759,13 +1755,13 @@ test('morning approval requires a separate explicit confirmation and preserves o
   assert.match(text(timeline), /09:15\+\s+IST.*risk-gated entries/);
   assert.equal(nodes(tree).find(n => n.props?.className === 'aqx-morning-diagnostics').props.open, undefined);
   const sectionSource = readFileSync(path.join(__dirname, '..', 'components', 'AQTESection.tsx'), 'utf8');
-  assert.ok(sectionSource.indexOf('<AQTEMorningEngine') < sectionSource.indexOf('<section className="aqx-dash-term"'));
-  assert.ok(sectionSource.indexOf('<AQTEMorningEngine') < sectionSource.indexOf('<AQTEEngineDeck'));
+  assert.doesNotMatch(sectionSource, /AQTEMorningEngine/);
   const styles = readFileSync(path.join(__dirname, '..', 'app', 'globals.css'), 'utf8');
-  assert.match(styles, /\.aqx-morning-board \{ grid-area: morning; \}/);
-  assert.match(styles, /grid-template-areas: "top top top" "perf perf perf" "morning morning morning" "term term term"/);
-  assert.match(styles, /grid-template-areas: "top top" "perf perf" "morning morning" "term term"/);
-  assert.match(styles, /"top" "perf" "morning" "term" "opp"/);
+  assert.doesNotMatch(styles, /aqx-morning-board/);
+  assert.doesNotMatch(styles, /grid-area:\s*morning|"\s*morning(?:\s+morning)?"/);
+  assert.match(styles, /grid-template-areas: "top top top" "perf perf perf" "term term term"/);
+  assert.match(styles, /grid-template-areas: "top top" "perf perf" "term term"/);
+  assert.match(styles, /"top" "perf" "term" "opp"/);
   nodes(tree).find(n => n.type === 'button' && text(n) === 'Enable morning').props.onClick();
   assert.equal(h.requests.length, 0);
   tree = h.render(props);
@@ -1813,9 +1809,6 @@ test('morning status stays compact while the full changing gate reason remains c
   assert.match(text(secondState.find(node => node.type === 'strong')), /WAITING/);
   assert.equal(secondReason.props.open, undefined);
   assert.match(text(secondReason), /Movement must exceed 0\.2 ATR/);
-  const styles = readFileSync(path.join(__dirname, '..', 'app', 'globals.css'), 'utf8');
-  assert.match(styles, /\.aqx-morning-state\s*\{[\s\S]*min-height: 42px/);
-  assert.match(styles, /\.aqx-morning-state > strong\s*\{[\s\S]*min-width: 160px/);
 });
 
 test('morning stop disables only new entries and reports authentication errors explicitly', async () => {
@@ -3091,15 +3084,15 @@ test('engine deck keeps stable placeholders when engines are unavailable or AQTE
   const h = harness('AQTEEngineDeck.tsx');
   const data = fixture().data;
   data.NIFTY = { ...data.NIFTY, ...engineSet({ ce: 6 }), scalp: scalpSignal('BUY CE') };
-  const tree = h.render({ symbol: 'NIFTY', data, liveStatus: null, unavailable: true, policy: null, events: [] });
+  const tree = h.render({ symbol: 'NIFTY', data, liveStatus: null, unavailable: true, policy: null });
   const cards = nodes(tree).filter(n => String(n.props?.className).includes('aqx-eng-card'));
   assert.equal(cards.length, 12);
   assert.ok(cards.every(card => card.props.disabled));
   assert.match(text(tree), /Momentum/);
   assert.match(text(tree), /ML Prediction/);
   assert.doesNotMatch(text(tree), /Trending Bullish|NIFTY_SCALP_CE|Eligible/);
-  assert.match(text(tree), /Engine events unavailable/);
-  const missing = h.render({ symbol: 'BANKNIFTY', data, liveStatus: null, unavailable: false, policy: null, events: [] });
+  assert.doesNotMatch(text(tree), /Live Engine Events|Engine events unavailable/);
+  const missing = h.render({ symbol: 'BANKNIFTY', data, liveStatus: null, unavailable: false, policy: null });
   assert.ok(nodes(missing).filter(n => String(n.props?.className).includes('aqx-eng-card')).every(card => card.props.disabled));
   assert.match(text(nodes(missing).find(n => n.props?.['aria-label'] === 'Top opportunity')), /Controller status unavailable/);
 });
@@ -3468,42 +3461,18 @@ test('today performance keeps the win-rate placeholder neutral and colours real 
   assert.equal(winRate().props.className, 'aqx-up');
 });
 
-test('live engine events show an offline dot and label when AQTE data is unavailable', () => {
-  const deck = harness('AQTEEngineDeck.tsx');
-  const head = props => nodes(nodes(deck.render(props)).find(n => n.props?.['aria-label'] === 'Live engine events')).find(n => n.type === 'h3');
-  const base = { symbol: 'NIFTY', data: fixture().data, liveStatus: null, events: [], policy: null, now: Date.now() / 1000 };
-  let h3 = head({ ...base, unavailable: true });
-  assert.match(text(h3), /\(Offline\)/);
-  assert.match(nodes(h3).find(n => n.type === 'span').props.className, /aqx-live-dot-off/);
-  h3 = head({ ...base, unavailable: false });
-  assert.match(text(h3), /\(Real-time\)/);
-  assert.doesNotMatch(nodes(h3).find(n => n.type === 'span').props.className, /off/);
-  const styles = readFileSync(path.join(__dirname, '..', 'app', 'globals.css'), 'utf8');
-  assert.match(styles, /\.aqx-live-dot\.aqx-live-dot-off \{[^}]*animation: none/);
-  assert.match(styles, /\.aqx-perfbar \.aqx-perf-risk dd \{ white-space: normal; \}/, 'Daily Risk figure wraps on narrow cells');
+test('Live Engine Events panel is absent from AQTE and QuantEdge Pro UI', () => {
+  const engineDeck = readFileSync(path.join(__dirname, '..', 'components', 'AQTEEngineDeck.tsx'), 'utf8');
+  const quantEdgePro = readFileSync(path.join(__dirname, '..', 'components', 'QuantEdgeProSection.tsx'), 'utf8');
+  assert.doesNotMatch(engineDeck, /useAqteEventStream|Live Engine Events|quantedge-pro-events/);
+  assert.doesNotMatch(quantEdgePro, /useAqteEventStream|Live Engine Events|quantedge-pro-events/);
 });
-test('QuantEdge Pro event feed is standalone from AQTE strategy state', () => {
-  const section = harness('QuantEdgeProSection.tsx');
-  section.setActivity([{ id: 7, at: Date.now() / 1000, instrument: 'NIFTY', event_type: 'MARKET_DATA_CONNECTED',
-    severity: 'success', message: 'QuantEdge Pro market-data analysis started', source: 'quantedge_pro' }], 'connected');
-  const tree = nodes(section.render({ marketData: {
-    NIFTY: { price: 24857.5, change: 320.25, changePercent: 1.31, status: 'LIVE' },
-    BANKNIFTY: { price: 58727.65, change: 955.2, changePercent: 1.65, status: 'LIVE' },
-    SENSEX: { price: 80565.99, change: 1255.4, changePercent: 1.58, status: 'LIVE' },
-  } }));
-  const standalone = tree.find(n => n.props?.['aria-label'] === 'QuantEdge Pro standalone trading engine');
-  const activityFeed = tree.find(n => n.props?.id === 'quantedge-pro-events');
-  assert.ok(standalone);
-  assert.match(text(standalone), /\+\s*320\.25\s*pts/);
-  assert.match(text(standalone), /\+\s*1\.31\s*%/);
-  assert.match(text(standalone).split('Strategy & Live Controls')[0], /QuantEdge Pro/);
-  assert.ok(activityFeed);
-  assert.match(text(activityFeed).split('NIFTY')[0], /Live Engine Events/);
-  assert.doesNotMatch(text(activityFeed), /AQTE strategy|engine state/i);
-  assert.match(text(activityFeed), /MARKET DATA CONNECTED/);
-  assert.match(text(activityFeed), /NIFTY/);
-  assert.match(text(activityFeed), /QuantEdge Pro market-data analysis started/);
-  assert.match(text(activityFeed), /success/);
+test('AQTE trade book follows the Auto Execution row at desktop, tablet and phone widths', () => {
+  const styles = readFileSync(path.join(__dirname, '..', 'app', 'globals.css'), 'utf8');
+  assert.match(styles, /"opp trade risk" "book book book" "eng eng eng"/);
+  assert.match(styles, /"opp opp" "trade risk" "book book" "eng eng"/);
+  assert.match(styles, /"opp" "trade" "risk" "book" "eng"/);
+  assert.match(styles, /\.aqx-dash-main > \.aqx-book \{ grid-area: book;/);
 });
 test('emergency trades with an unverified exit keep the live status valid and never count as flat P&L', () => {
   const { isAqteLiveState, aqteDaySummary } = displayModule();

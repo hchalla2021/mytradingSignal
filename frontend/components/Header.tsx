@@ -73,6 +73,9 @@ const Header: React.FC<HeaderProps> = memo(({ isConnected, marketStatus }) => {
                 <span className="text-white/20"> • </span>
                 <span className="text-indigo-400/60">Intelligence</span>
               </p>
+              <a href="/expiry-edge-ai" className="mt-1 inline-block text-[9px] font-bold tracking-wider text-emerald-300 hover:text-emerald-200">
+                EXPIRY EDGE AI
+              </a>
             </div>
           </div>
 
