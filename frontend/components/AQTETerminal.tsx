@@ -2,7 +2,7 @@
 
 import { memo, type ReactNode } from 'react';
 import { AQTE_SETUP_LABELS, aqteCanExit, aqteControllerCurrent, aqteEffectiveSignal, aqteEvidenceWait, aqteIndexHold, aqteIstDay, aqteLabel,
-  aqteLiveMetrics, aqteOverview, aqtePrice, aqteRuleEvidence, aqteSigned, aqteTrailStart,
+  aqteLiveMetrics, aqteOverview, aqtePrice, aqteRuleEvidence, aqteServerNow, aqteSigned, aqteTrailStart,
   type AQTELiveState, type AQTEExitRequest, type AQTESignal, type AQTESymbol, type AQTEEntrySource,
   type AQTERuleEvidence } from '@/lib/aqte-display';
 
@@ -190,7 +190,7 @@ type TerminalProps = {
   paused?: boolean;
 };
 
-function AQTETerminal({ symbol, signal, unavailable, liveStatus, onExit, now = Date.now() / 1000 }: TerminalProps) {
+function AQTETerminal({ symbol, signal, unavailable, liveStatus, onExit, now = aqteServerNow() }: TerminalProps) {
   const { info } = aqteOverview(signal, 'real', unavailable, now);
   const currentStatus = aqteControllerCurrent(liveStatus, now);
   const style = currentStatus ? liveStatus?.styles?.[symbol] : undefined;
@@ -350,23 +350,6 @@ function AQTETerminal({ symbol, signal, unavailable, liveStatus, onExit, now = D
     !live ? 'WAITING FOR SIGNAL' : exitReason ? 'EXIT REQUESTED' :
       live.error || liveStatus?.error ? 'CHECK KITE' : filled ? 'LIVE TRADE' : 'ORDER PENDING';
   const ring = 2 * Math.PI * 52;
-  const note = liveStatus?.entry_note?.startsWith(`${symbol}:`) ? liveStatus.entry_note.slice(symbol.length + 1).trim() : null;
-  const readinessReasons = plan?.reasons ?? (signal?.decision === 'WAIT' ? signal.reasons : undefined);
-  const waitingReason = !currentStatus ? 'Live controller status unavailable; entry state unverified' :
-    liveStatus?.error ? liveStatus.error :
-    liveStatus?.killed ? 'Emergency stop latched; new entries blocked' :
-    !automation && !automationWaiting ? 'Auto Trade OFF; new entries blocked' :
-    indexHold ? [indexBlock, indexHold === 'Disabled in Controls' ? `tick "Enable ${aqteLabel(symbol)} entries" in Daily Trade Control` : null,
-      automationWaiting ? liveStatus?.automation_waiting : null].filter(Boolean).join(' · ') :
-    sessionClosed ? liveStatus?.automation_waiting || 'New entries permitted only from 09:15 to 15:15 IST' :
-    automationWaiting ? liveStatus?.automation_waiting || 'Waiting for daily preflight and arming' :
-    unavailable ? 'Current signal data unavailable; do not assume an entry is ready' :
-    liveStatus?.entry_blocks?.[symbol] ? liveStatus.entry_blocks[symbol] :
-    readinessReasons?.length ? `${plan && style === 'scalp' ? 'Quick scalp · ' : plan && style === 'swing' ? 'Swing · ' : ''}${readinessReasons.join(' · ')}` :
-      'Waiting for a qualifying CE/PE setup and live quality, risk and broker checks';
-  // Candle warm-up only means something while the feed is live; after the close it would read as a stuck 0/N.
-  const warmup = !unavailable && signal?.feed_ready !== false ? signal?.warmup : undefined;
-  const opening = !unavailable && signal?.feed_ready !== false ? signal?.opening : undefined;
   const managing = currentStatus && filled && !!metrics && !liveStatus?.error;
   const prefix = `aqte-terminal-${symbol}`;
   return (
@@ -392,26 +375,6 @@ function AQTETerminal({ symbol, signal, unavailable, liveStatus, onExit, now = D
         </div>
         {(live?.error || liveStatus?.error) && (
           <p role="alert" className="aqx-footnote aqx-down">{live?.error || liveStatus?.error}</p>
-        )}
-        {!live && (
-          <p role="status" aria-label="Entry readiness" className="aqx-footnote">
-            {waitingReason}
-            {warmup && warmup.completed < warmup.required && (
-              <span> · Warm-up: {warmup.completed}/{warmup.required} consecutive completed futures candles</span>
-            )}
-            {warmup && warmup.completed >= warmup.required && opening && opening.completed < opening.required && (
-              <span> · Opening range: {opening.completed}/{opening.required} one-minute candles since 09:15 IST</span>
-            )}
-            {automation && note && <span> · Last entry check: {note}</span>}
-          </p>
-        )}
-        {!live && currentStatus && liveStatus?.entry_scan?.blocks[symbol] && (
-          <p className="aqx-footnote" aria-label="Last entry scan">
-            Last scan {clock(liveStatus.entry_scan.at)} IST
-            {' · '}{liveStatus.entry_scan.styles[symbol] === 'scalp' ? 'Scalp' : liveStatus.entry_scan.styles[symbol] === 'swing' ? 'Swing' :
-              liveStatus.entry_scan.styles[symbol] === null ? 'No entry style selected' : 'Style unavailable'}
-            {' · '}{liveStatus.entry_scan.blocks[symbol]}
-          </p>
         )}
         <div className="aqx-hero-grid">
           <dl className="aqx-price-list" aria-label="Trade prices">
@@ -496,6 +459,8 @@ function AQTETerminal({ symbol, signal, unavailable, liveStatus, onExit, now = D
             </button>
           </div>
           <p id={`${prefix}-booking-note`} className="aqx-footnote">25%/50%/75% booking needs multiple whole lots and is unavailable in this one-lot pilot. Book All and Exit Now unlock once an AQTE trade is filled. Trail &amp; Hold shows automatic status, not a manual order.</p>
+          <details className="aqx-lifecycle-details">
+            <summary>Trade lifecycle · {lifeLabel}{lifeClock ? ` · ${lifeClock}` : ''}</summary>
           <div className="aqx-lifecycle" data-mode={lifeMode} data-tone={lifeTone}>
             <div className="aqx-life-head">
               <span className="aqx-life-title"><span aria-hidden="true">⟳</span>Trade Lifecycle</span>
@@ -524,9 +489,13 @@ function AQTETerminal({ symbol, signal, unavailable, liveStatus, onExit, now = D
               ))}
             </ol>
           </div>
+          </details>
         </section>
       </article>
       <aside className="aqx-aside" id={`${prefix}-risk`}>
+        <details className="aqx-terminal-details">
+          <summary>Strategy &amp; exit details</summary>
+          <div className="aqx-terminal-details-body">
         <section className="aqx-card aqx-engine" aria-label="Rule-Based Trade Engine">
           <h4 className="aqx-panel-title"><span className="aqx-badge-ai" aria-hidden="true">R</span>Rule-Based Trade Engine</h4>
           <p className={`aqx-evidence-summary aqx-${alignmentTone} ${style === 'morning' ? 'aqx-evidence-summary-morning' :
@@ -593,6 +562,8 @@ function AQTETerminal({ symbol, signal, unavailable, liveStatus, onExit, now = D
             <p>Seller spikes, OI drops, EMA reversals, VWAP breaks and RSI exits are not execution rules in this pilot.</p>
           </details>
         </section>
+          </div>
+        </details>
       </aside>
     </div>
   );

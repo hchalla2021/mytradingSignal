@@ -98,43 +98,13 @@ test('AQTE precedes charts and live indices without duplicating dashboard provid
   assert.match(page, /onSnapshot=\{setInstitutionalData\}/);
 });
 
-test('market analysis retains the single selected regime panel', () => {
-  const h = harness('MarketAnalysisTabs.tsx');
-  const section = { type: 'div', props: { children: 'Regime details' } };
-  const tree = h.render({ section });
-  const tabs = elements(tree).filter(node => node.props?.role === 'tab');
-  const panels = elements(tree, true).filter(node => node.props?.role === 'tabpanel');
-  assert.equal(tabs.length, 1);
-  assert.equal(tabs[0].props.id, 'market-analysis-tab-regime');
-  assert.equal(tabs[0].props['aria-selected'], 'true');
-  assert.equal(tabs[0].props['aria-controls'], 'market-analysis-panel-regime');
-  assert.equal(panels.length, 1);
-  assert.equal(panels[0].props['aria-labelledby'], tabs[0].props.id);
-  assert.equal(panels[0].props.children, section);
-});
-
-test('market regime retains strike intelligence and removes the quantum sections', () => {
-  const source = readFileSync(path.join(components, 'MarketRegimeIntelligence.tsx'), 'utf8');
-  assert.match(source, /<StrikeIntelligence\s*\/>/);
-  assert.doesNotMatch(source, /QuantumFractalSection|Quantum Fractal Intelligence Engine|Institutional Confluence Engine/);
-});
-
-test('dashboard keeps only Market Regime in the analysis workspace', () => {
-  const page = readFileSync(path.join(components, '..', 'app', 'page.tsx'), 'utf8');
-  assert.match(page, /<MarketAnalysisTabs section=\{<MarketRegimeIntelligence marketData=\{marketData\} \/>}/);
-  assert.doesNotMatch(page, /SMCStructureSection|TradingIntelligenceEngine|VolumePulseCard|ICTIntelligence|InstitutionalCompass/);
-  assert.doesNotMatch(page, /serverOutlook|market-outlook-all|aggregatedMarketSignal/);
-});
-
 test('dashboard keeps BTST and removes the retired strategy workspace', () => {
   const page = readFileSync(path.join(components, '..', 'app', 'page.tsx'), 'utf8');
   assert.equal((page.match(/<CRTBTSTCard\b/g) ?? []).length, 1);
   assert.match(page, /data-testid="btst-strategy"/);
   assert.match(page, /idPrefix="strategy-btst"/);
   assert.doesNotMatch(page, /MarketEdgeIntelligence|ExpiryExplosionZone|TrendBaseCard/);
-  assert.doesNotMatch(page, /MarketAnalysisTabs variant="strategy"/);
-  const tabs = readFileSync(path.join(components, 'MarketAnalysisTabs.tsx'), 'utf8');
-  assert.doesNotMatch(tabs, /STRATEGIES|market-strategy|variant: 'strategy'/);
+  assert.doesNotMatch(page, /MarketAnalysisTabs|MarketRegimeIntelligence|StrikeIntelligence/);
 });
 
 function workspace() {

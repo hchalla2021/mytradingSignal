@@ -4,7 +4,8 @@ import { useEffect, useState } from 'react';
 import { API_CONFIG } from '@/lib/api-config';
 import { getOrCreateVisitorId } from '@/lib/visitor-id';
 import AQTEPosition from '@/components/AQTEPosition';
-import { AQTE_RECONNECT_GRACE_MS, aqteConnectionDrop, aqteErrorText, aqtePollLoop } from '@/lib/aqte-display';
+import { AQTE_RECONNECT_GRACE_MS, aqteConnectionDrop, aqteErrorText, aqteObserveServerClock, aqtePollLoop,
+  aqteServerNow } from '@/lib/aqte-display';
 
 type Position = {
   symbol: string; trading_symbol: string; exchange: string; product: string;
@@ -34,15 +35,19 @@ export default function AQTEBrokerPositions({ selectedSymbol }: { selectedSymbol
       controller = new AbortController();
       const timeout = setTimeout(() => controller?.abort(), 15000);
       try {
+        const sent = Date.now();
         const response = await fetch(API_CONFIG.endpoint('/api/aqte/live/broker-positions'), {
           cache: 'no-store', credentials: 'include', signal: controller.signal,
           headers: { 'X-Device-Id': getOrCreateVisitorId(), 'X-AQTE-Intent': 'manual-live-control' },
         });
+        const received = Date.now();
         const payload = await response.json();
+        // Readouts are cached for up to 3 s, so only the Date header (not generated_at) is a clock sample.
+        aqteObserveServerClock(response, null, sent, received);
         if (!response.ok) throw new Error(typeof payload.detail === 'string' ? payload.detail : 'Zerodha positions unavailable');
         if (payload.read_only !== true || !Array.isArray(payload.positions) ||
             (payload.closed !== undefined && !Array.isArray(payload.closed)) ||
-            typeof payload.generated_at !== 'number' || Date.now() / 1000 - payload.generated_at > 10) {
+            typeof payload.generated_at !== 'number' || aqteServerNow() - payload.generated_at > 10) {
           throw new Error('Zerodha position response is invalid or stale');
         }
         if (payload.paused === true && (typeof payload.reason !== 'string' || !payload.reason)) {

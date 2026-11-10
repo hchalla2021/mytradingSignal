@@ -3,6 +3,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Activity, AlertCircle, Bell, Bot, CheckCircle2, Loader2, Play, Save, ShieldCheck, TrendingUp, Zap } from 'lucide-react';
 import { useAuth } from '@/hooks/useAuth';
+import type { MarketData, MarketTick } from '@/hooks/useMarketSocket';
+import { aqteServerNow } from '@/lib/aqte-display';
 
 type Quote = {
   price?: number | null;
@@ -36,6 +38,7 @@ type EngineStatus = {
   active_trade?: Trade | null;
   model?: { status?: string; validated?: boolean; name?: string };
   strategy_states?: Record<string, { status?: string; reason?: string }>;
+  feed_readiness?: Record<string, { ready?: boolean; provenance?: string; reason?: string }>;
   intelligence?: { gap_percent?: number | null; opening_bias?: string; prediction?: string; regime?: string };
   performance?: { trades?: number; win_rate?: number | null; pnl?: number | null; status?: string };
   pipeline_metrics?: {
@@ -114,7 +117,16 @@ function adaptStatus(value: Record<string, unknown>): EngineStatus {
     const at = indices[symbol]?.at;
     return typeof at === 'number' && now - at >= -1 && now - at <= 5;
   });
-  const modelBlocked = blocking.some(reason => reason.toLowerCase().includes('model'));
+  const modelValidated = value.model_validated === true;
+  const rawStrategies = isObject(value.strategy_states) ? value.strategy_states : {};
+  const strategyStates: EngineStatus['strategy_states'] = {};
+  for (const [worker, rawState] of Object.entries(rawStrategies)) {
+    if (!isObject(rawState)) continue;
+    strategyStates[worker] = {
+      status: typeof rawState.status === 'string' ? rawState.status : 'NOT IMPLEMENTED',
+      reason: typeof rawState.reason === 'string' ? rawState.reason : undefined,
+    };
+  }
   const rawMetrics = isObject(value.metrics) ? value.metrics : {};
   const metric = (key: string) => typeof rawMetrics[key] === 'number' ? rawMetrics[key] as number : null;
   const sessionTime = typeof session.local_time === 'string' ? session.local_time : null;
@@ -132,7 +144,9 @@ function adaptStatus(value: Record<string, unknown>): EngineStatus {
       instruments: Object.keys(indices),
     },
     indices,
-    model: { status: modelBlocked ? 'NOT VALIDATED' : 'NOT REPORTED', validated: !modelBlocked },
+    model: { status: modelValidated ? 'VALIDATED' : 'NOT VALIDATED', validated: modelValidated },
+    strategy_states: strategyStates,
+    feed_readiness: isObject(value.feed_readiness) ? value.feed_readiness as EngineStatus['feed_readiness'] : {},
     pipeline_metrics: {
       queue_depth: metric('queue_depth'),
       dropped_events: metric('rejected_ticks'),
@@ -165,7 +179,47 @@ function formatTime(value?: number | null) {
   }).format(new Date(value * 1000));
 }
 
-export default function MorningEdgeSection() {
+const points = (value: number) => value.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+// Display-only freshness for the index cards; trading gates keep their own stricter checks.
+const INDEX_LIVE_SECONDS = 10;
+
+type IndexView = { price: number | null; change: number | null; percent: number | null; live: boolean; note: string };
+
+/** Index card values from the main dashboard's Zerodha feed, falling back to the MorningEdge engine's own quote. */
+function indexView(engine: Quote | undefined, tick: MarketTick | null | undefined, connected: boolean, now: number): IndexView {
+  const usable = !!tick && tick.status !== 'DEMO' && Number.isFinite(tick.price) && tick.price > 0;
+  if (usable) {
+    const at = Date.parse(tick.timestamp) / 1000;
+    const age = now - at;
+    const live = connected && tick.status === 'LIVE' && Number.isFinite(age) && age >= -1 && age <= INDEX_LIVE_SECONDS;
+    const note = live ? 'LIVE · Zerodha'
+      : tick.status === 'CLOSED' ? 'Market closed · last price'
+        : tick.status === 'PRE_OPEN' ? 'Pre-open'
+          : tick.status === 'FREEZE' ? 'Pre-open freeze'
+            : `Delayed · last tick ${Number.isFinite(at) ? formatTime(at) : '—'}`;
+    return {
+      price: tick.price,
+      change: Number.isFinite(tick.change) ? tick.change : null,
+      percent: Number.isFinite(tick.changePercent) ? tick.changePercent : null,
+      live, note,
+    };
+  }
+  const price = typeof engine?.price === 'number' && Number.isFinite(engine.price) && engine.price > 0 ? engine.price : null;
+  const age = engine?.at != null ? now - engine.at : NaN;
+  const live = price != null && age >= -1 && age <= INDEX_LIVE_SECONDS;
+  return {
+    price, live,
+    change: typeof engine?.change === 'number' && Number.isFinite(engine.change) ? engine.change : null,
+    percent: typeof engine?.change_percent === 'number' && Number.isFinite(engine.change_percent) ? engine.change_percent : null,
+    note: price == null ? 'Waiting for real ticks' : live ? 'LIVE · MorningEdge' : 'Delayed · MorningEdge',
+  };
+}
+
+export default function MorningEdgeSection({ marketData, isConnected = false }: {
+  /** Live index ticks from the main dashboard's Zerodha WebSocket. */
+  marketData?: MarketData;
+  isConnected?: boolean;
+} = {}) {
   const { isAuthenticated } = useAuth();
   const [token, setToken] = useState('');
   const [status, setStatus] = useState<EngineStatus | null>(null);
@@ -374,7 +428,12 @@ export default function MorningEdgeSection() {
     } finally { setBusy(false); }
   };
 
-  const indices = useMemo(() => ['NIFTY', 'BANKNIFTY', 'SENSEX'], []);
+  const indices = useMemo(() => ['NIFTY', 'BANKNIFTY', 'SENSEX'] as const, []);
+  const serverNow = aqteServerNow();
+  const views = Object.fromEntries(indices.map(symbol =>
+    [symbol, indexView(status?.indices?.[symbol], marketData?.[symbol], isConnected, serverNow)])) as Record<typeof indices[number], IndexView>;
+  const feedLive = !!status?.feed?.connected || indices.some(symbol => views[symbol].live);
+  const marketClosed = !feedLive && indices.some(symbol => marketData?.[symbol]?.status === 'CLOSED');
   const activeTrade = status?.active_trade;
   const signals = status?.signal;
   const readyReasons = status?.blocking_reasons ?? [];
@@ -388,8 +447,8 @@ export default function MorningEdgeSection() {
           <div><h2>MorningEdge AI Algo</h2><p>Autonomous Morning Trading System <b>MEAI</b></p></div>
         </div>
         <div className="morningedge-header-status">
-          <span className={`me-pill ${status?.feed?.connected ? 'is-live' : ''}`}>
-            <i />{status?.feed?.connected ? 'Zerodha Connected' : 'Zerodha Offline'}
+          <span className={`me-pill ${feedLive ? 'is-live' : ''}`}>
+            <i />{feedLive ? 'Zerodha Connected' : marketClosed ? 'Market Closed' : 'Zerodha Offline'}
           </span>
           <span className={`me-pill ${status?.live_enabled ? 'is-live' : ''}`}>
             <i />Algo {status?.live_enabled ? 'Running' : 'OFF'}
@@ -403,15 +462,18 @@ export default function MorningEdgeSection() {
 
       <div className="morningedge-market-cards">
         {indices.map((symbol) => {
-          const quote = status?.indices?.[symbol];
-          return <article className="morningedge-market-card" key={symbol}>
+          const view = views[symbol];
+          const down = view.change != null && view.change < 0;
+          return <article className="morningedge-market-card" key={symbol} aria-label={`${symbol} index`}>
             <div className="me-card-label">{symbol === 'BANKNIFTY' ? 'BANK NIFTY' : symbol === 'NIFTY' ? 'NIFTY 50' : 'SENSEX'}
-              <span className={quote?.at && Date.now() / 1000 - quote.at < 5 ? 'fresh' : ''} />
+              <span className={view.live ? 'fresh' : ''} />
             </div>
-            <strong>{money(quote?.price)}</strong>
-            <small>{quote?.change != null ? `${quote.change >= 0 ? '▲ +' : '▼ '}${money(quote.change)} pts` : 'Waiting for real ticks'}
-              {quote?.change_percent != null ? ` · ${quote.change_percent >= 0 ? '+' : ''}${quote.change_percent.toFixed(2)}%` : ''}
+            <strong>{view.price != null ? points(view.price) : '—'}</strong>
+            <small className={down ? 'is-down' : ''}>
+              {view.change != null ? `${down ? '▼ ' : '▲ +'}${points(view.change)} pts` : view.price != null ? 'Change unavailable' : 'Waiting for real ticks'}
+              {view.percent != null ? ` · ${view.percent >= 0 ? '+' : ''}${view.percent.toFixed(2)}%` : ''}
             </small>
+            <span className="me-card-note">{view.price != null ? view.note : 'Zerodha feed not received'}</span>
           </article>;
         })}
         <article className="morningedge-market-card morningedge-signal-card">
@@ -475,7 +537,7 @@ export default function MorningEdgeSection() {
               .map(worker => {
                 const state = status?.strategy_states?.[worker];
                 return <li key={worker}><span />{worker}
-                  <small>{state?.status ?? 'Not reported'}{state?.reason ? ` · ${state.reason}` : ''}</small>
+                  <small>{state?.status ?? 'NOT IMPLEMENTED'}{state?.reason ? ` · ${state.reason}` : ' · Strategy evaluation is unavailable'}</small>
                 </li>;
               })}
           </ul>

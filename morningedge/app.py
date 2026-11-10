@@ -151,6 +151,26 @@ def status_json() -> dict[str, Any]:
     reasons.append("Independent live order execution has not been implemented")
     if now.weekday() >= 5 or now.strftime("%H:%M") < "09:00" or now.strftime("%H:%M") >= "15:30":
         reasons.append("Outside the Asia/Kolkata market session")
+    snapshots = pipeline.snapshots()
+    feed_readiness = {}
+    for symbol, snapshot in snapshots.items():
+        fresh = False
+        if snapshot and snapshot.get("timestamp"):
+            try:
+                tick_time = datetime.fromisoformat(snapshot["timestamp"])
+                fresh = abs((now - tick_time).total_seconds()) <= pipeline.freshness_seconds
+            except (TypeError, ValueError):
+                pass
+        feed_readiness[symbol] = {
+            "ready": fresh,
+            "provenance": "validated Kite real tick" if snapshot else "unavailable",
+            "reason": None if fresh else "No fresh timestamp-validated real tick",
+        }
+    worker_names = (
+        "Gap and Go", "Gap Reversal", "Opening Range Breakout", "VWAP Breakout",
+        "VWAP Reversal", "EMA Momentum", "Futures Momentum", "Options Momentum",
+        "False Breakout Detection",
+    )
     return {
         "service": "MorningEdge", "readiness": "READY" if not reasons else "NOT_READY",
         "block_reasons": reasons, "armed": armed, "live_approved": approved,
@@ -158,7 +178,14 @@ def status_json() -> dict[str, Any]:
         "session": {"timezone": "Asia/Kolkata", "local_time": now.isoformat(),
                     "preopen_data_from": "09:00", "orders_not_before": "09:15",
                     "new_entries_end": "10:30"},
-        "instruments": pipeline.snapshots(), "metrics": pipeline.metrics(),
+        "instruments": snapshots, "feed_readiness": feed_readiness,
+        "model_validated": settings.model_validated,
+        "strategy_states": {
+            name: {"status": "NOT IMPLEMENTED", "available": False,
+                   "reason": "Strategy evaluation is not implemented; no live feed was evaluated"}
+            for name in worker_names
+        },
+        "metrics": pipeline.metrics(),
     }
 
 

@@ -4,11 +4,17 @@ from pathlib import Path
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
+DEFAULT_SHARED_AUTH_FILE = (
+    Path(__file__).resolve().parents[1] / "backend" / "data" /
+    "morningedge_auth" / "credentials.json"
+)
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="MORNINGEDGE_", env_file=".env", extra="ignore",
                                       protected_namespaces=("settings_",))
     api_key: str = ""
-    shared_zerodha_auth_file: Path = Path("/run/shared/credentials.json")
+    shared_zerodha_auth_file: Path = DEFAULT_SHARED_AUTH_FILE
     access_token: str = ""
     public_api_url: str = ""
     frontend_url: str = ""

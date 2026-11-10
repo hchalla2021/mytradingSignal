@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { API_CONFIG } from '@/lib/api-config';
 import { notifyAppAccessExpired } from '@/lib/app-access-events';
 import { getOrCreateVisitorId } from '@/lib/visitor-id';
+import { aqteObserveServerClock, aqteServerNow } from '@/lib/aqte-display';
 import type { MarketData } from '@/hooks/useMarketSocket';
 import { Activity, ArrowDown, ArrowUp, BarChart3, Check, ShieldCheck, TrendingUp, Zap } from 'lucide-react';
 
@@ -34,6 +35,7 @@ type QepStatus = {
   ready: boolean;
   enabled: boolean;
   armed: boolean;
+  entry_window: boolean;
   lots: number;
   risk_per_trade: number;
   daily_loss_limit: number;
@@ -83,6 +85,14 @@ function ruleResults(signal: QepSignal | undefined) {
   return { side, rules: options[side ?? 'CE'] ?? {} };
 }
 
+function quantEdgeErrorText(message: string | null | undefined) {
+  if (!message) return null;
+  if (/too many requests/i.test(message)) {
+    return 'Zerodha temporarily rate-limited broker requests. Calls are now paced. Check Kite Orders and Positions before retrying; order submissions are never retried automatically.';
+  }
+  return message;
+}
+
 const money = (value: number | null | undefined) => value != null && Number.isFinite(value)
   ? `₹${value.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '—';
 const number = (value: number | null | undefined) => value != null && Number.isFinite(value)
@@ -120,6 +130,7 @@ function isQepStatus(value: unknown): value is QepStatus {
   return typeof status.generated_at === 'number' && Number.isFinite(status.generated_at) &&
     typeof status.ready === 'boolean' &&
     typeof status.enabled === 'boolean' && typeof status.armed === 'boolean' &&
+    typeof status.entry_window === 'boolean' &&
     typeof status.lots === 'number' && Number.isInteger(status.lots) &&
     typeof status.risk_per_trade === 'number' && Number.isFinite(status.risk_per_trade) &&
     typeof status.daily_loss_limit === 'number' && Number.isFinite(status.daily_loss_limit) &&
@@ -131,6 +142,7 @@ function isQepStatus(value: unknown): value is QepStatus {
 }
 
 async function request(path: 'status' | 'config' | 'approval' | 'exit', body?: object, signal?: AbortSignal) {
+  const sent = Date.now();
   const response = await fetch(API_CONFIG.endpoint(`/api/quantedge/${path}`), {
     method: body === undefined ? 'GET' : 'POST',
     headers: headers(),
@@ -139,7 +151,9 @@ async function request(path: 'status' | 'config' | 'approval' | 'exit', body?: o
     signal,
     body: body === undefined ? undefined : JSON.stringify(body),
   });
+  const received = Date.now();
   const payload: unknown = await response.json();
+  aqteObserveServerClock(response, payload, sent, received);
   if (!response.ok) {
     if (response.status === 401) notifyAppAccessExpired();
     const detail = payload && typeof payload === 'object' && 'detail' in payload ? payload.detail : null;
@@ -158,7 +172,8 @@ export default function QuantEdgeProSection({ marketData, isConnected = false, v
   const [lots, setLots] = useState(1);
   const [selectedSymbol, setSelectedSymbol] = useState('NIFTY');
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [statusError, setStatusError] = useState<string | null>(null);
+  const [operationError, setOperationError] = useState<string | null>(null);
   const initialized = useRef(false);
   useEffect(() => {
     let active = true;
@@ -168,12 +183,12 @@ export default function QuantEdgeProSection({ marketData, isConnected = false, v
       try {
         const value = await request('status', undefined, controller.signal);
         if (!isQepStatus(value)) throw new Error('Invalid QuantEdge Pro status response');
-        const age = Date.now() / 1000 - value.generated_at;
+        const age = aqteServerNow() - value.generated_at;
         if (age < -1 || age > 10) throw new Error('QuantEdge Pro status is stale');
         if (active) {
           setLive(value);
           setStatusStale(false);
-          setError(null);
+          setStatusError(null);
           if (!initialized.current) {
             initialized.current = true;
             setLots(value.lots);
@@ -182,10 +197,10 @@ export default function QuantEdgeProSection({ marketData, isConnected = false, v
       } catch (reason) {
         if (active && !controller.signal.aborted) {
           setStatusStale(true);
-          setError(reason instanceof Error ? reason.message : 'QuantEdge Pro status unavailable');
+          setStatusError(reason instanceof Error ? reason.message : 'QuantEdge Pro status unavailable');
         }
       } finally {
-        if (active) timer = setTimeout(poll, 2000);
+        if (active) timer = setTimeout(poll, 5000);
       }
     };
     void poll();
@@ -198,7 +213,7 @@ export default function QuantEdgeProSection({ marketData, isConnected = false, v
 
   const act = async (path: 'config' | 'approval' | 'exit', body: object) => {
     setBusy(true);
-    setError(null);
+    setOperationError(null);
     try {
       const value = await request(path, body);
       if (!isQepStatus(value)) throw new Error('Invalid QuantEdge Pro operation response');
@@ -207,22 +222,23 @@ export default function QuantEdgeProSection({ marketData, isConnected = false, v
       setLots(value.lots);
       initialized.current = true;
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'QuantEdge Pro operation failed');
+      setOperationError(reason instanceof Error ? reason.message : 'QuantEdge Pro operation failed');
     } finally {
       setBusy(false);
     }
   };
 
-  const toggleApproval = () => {
-    if (!live || statusStale) return;
-    const enabled = !live.enabled;
-    if (enabled && !window.confirm(
-      'Enable QuantEdge Pro live trading? This permits real Zerodha orders after the existing broker preflight and session-arm gates pass.'
-    )) return;
+  const setApproval = (enabled: boolean) => {
+    if (!live || busy || (enabled && (statusStale || live.enabled || !!activeTrade)) ||
+        (!enabled && !live.enabled)) return;
     void act('approval', {
       enabled,
       confirmation: enabled ? 'ENABLE QUANTEDGE PRO LIVE TRADING' : 'STOP QUANTEDGE PRO ENTRIES',
     });
+  };
+
+  const toggleApproval = () => {
+    if (live) setApproval(!live.enabled);
   };
 
   const requestExit = () => {
@@ -239,7 +255,8 @@ export default function QuantEdgeProSection({ marketData, isConnected = false, v
   const tradeSide = activeTrade?.contract.option_type ?? signal?.side ??
     (signal?.decision.startsWith('BUY ') ? signal.decision.slice(4) : null);
   const tradeStatus = !live ? 'OFFLINE' : activeTrade ? activeTrade.state.replaceAll('_', ' ')
-    : live.enabled ? 'LIVE ENTRIES ON' : live.armed ? 'READY' : 'PREPARATION REQUIRED';
+    : live.enabled ? live.armed && live.entry_window ? 'LIVE ENTRIES ON' : 'APPROVED · WAITING FOR SESSION'
+      : live.ready && live.armed ? 'ARMED · WAITING' : 'PREPARATION REQUIRED';
   const entryPrice = activeTrade ? activeTrade.entry_price : candidate?.maximum;
   const stopPrice = activeTrade ? activeTrade.stop : candidate?.stop;
   const targetPrice = activeTrade ? activeTrade.target : candidate?.target;
@@ -253,15 +270,8 @@ export default function QuantEdgeProSection({ marketData, isConnected = false, v
   const passedRules = ruleEntries.filter(([, passed]) => passed).length;
   const rulePercent = ruleEntries.length ? Math.round(passedRules / ruleEntries.length * 100) : null;
   const statusLabel = statusStale || !live ? 'OFFLINE'
-    : live.enabled ? 'LIVE' : live.ready && live.armed ? 'READY' : 'OFF';
-  const startDisabledReason = busy ? 'A QuantEdge Pro request is still in progress.'
-    : statusStale ? 'QuantEdge Pro status is stale; waiting for a fresh backend update.'
-      : !live ? error ?? 'Waiting for authenticated QuantEdge Pro status.'
-      : !live.ready ? 'The live execution controller is not ready; check backend status.'
-        : !live.enabled && activeTrade ? 'An existing QuantEdge Pro position must be resolved before starting new entries.'
-          : !live.enabled && !live.armed
-            ? 'Pre-open data and analysis start at 09:00 IST. To trade live, run broker preflight and arm today’s session during market hours; live approval is available weekdays from 09:15 to 15:15 IST.'
-            : null;
+    : live.enabled ? live.armed && live.entry_window ? 'LIVE' : 'ON · WAITING'
+      : live.ready && live.armed ? 'ARMED' : 'OFF';
   return (
     <section className="aqte-theme aqx-shell qep-standalone-shell grid gap-4 rounded-2xl border p-4 sm:p-5"
       aria-label="QuantEdge Pro standalone trading engine">
@@ -275,17 +285,51 @@ export default function QuantEdgeProSection({ marketData, isConnected = false, v
             <p className="text-sm text-slate-300">AI Quant Trading</p>
           </div>
         </div>
-        <div className="ml-auto flex items-center gap-3">
-          <span className="hidden items-center gap-1.5 text-xs text-slate-400 sm:inline-flex">
-            <span className={`h-2 w-2 rounded-full ${isConnected ? 'bg-emerald-400' : 'bg-slate-600'}`} />
-            {isConnected ? 'Market feed live' : 'Market feed offline'}
-          </span>
-          <span className={`rounded-full border px-3 py-1.5 text-sm font-bold ${
-            statusLabel === 'LIVE' ? 'border-emerald-500/50 bg-emerald-500/10 text-emerald-300'
-              : statusLabel === 'READY' ? 'border-cyan-500/40 bg-cyan-500/10 text-cyan-200'
-                : 'border-slate-600 bg-slate-800/70 text-slate-300'
-          }`}><span className="mr-1.5 text-emerald-400">●</span>{statusLabel}</span>
-          <Zap aria-hidden="true" size={21} className="text-slate-300" />
+        <div className="ml-auto flex min-w-0 flex-col items-end gap-2">
+          <div className="flex flex-wrap items-center justify-end gap-1">
+            <div className="flex flex-nowrap items-center gap-1">
+              <button type="button" role="switch" aria-label="QuantEdge Pro trade approval"
+                aria-checked={live?.enabled ?? false}
+                disabled={!live || busy || (statusStale && !live.enabled) || (!live.enabled && !!activeTrade)}
+                onClick={toggleApproval}
+                className={`inline-flex min-h-11 w-28 shrink-0 items-center justify-center gap-2 rounded-full border px-2 text-sm font-extrabold disabled:cursor-not-allowed disabled:opacity-60 ${
+                  live?.enabled ? 'border-emerald-500 bg-emerald-950 text-emerald-200' : 'border-slate-600 bg-slate-900 text-slate-300'
+                }`}>
+                TRADE <span className={`rounded-full px-2 py-0.5 text-xs font-black text-white ${
+                  live?.enabled ? 'bg-emerald-700' : 'bg-slate-600'
+                }`}>{live?.enabled ? 'ON' : 'OFF'}</span>
+              </button>
+              <div role="group" aria-label="QuantEdge Pro execution mode"
+                className="flex shrink-0 rounded-lg border border-slate-700 bg-[#050d15] p-1">
+                <button type="button" aria-pressed={live?.enabled ?? false}
+                  disabled={!live || statusStale || busy || live.enabled || !!activeTrade}
+                  onClick={() => setApproval(true)}
+                  className={`min-h-9 w-20 rounded-md px-1 text-xs font-extrabold disabled:cursor-not-allowed disabled:opacity-50 ${
+                    live?.enabled ? 'border border-emerald-500 bg-emerald-700/40 text-white' : 'text-cyan-100'
+                  }`}>
+                  Live (Auto)
+                </button>
+                <button type="button" aria-pressed={!live?.enabled}
+                  disabled={!live || busy || !live.enabled}
+                  onClick={() => setApproval(false)}
+                  className={`min-h-9 w-16 rounded-md px-1 text-xs font-extrabold text-white disabled:cursor-not-allowed disabled:opacity-50 ${
+                    !live?.enabled ? 'border border-slate-500 bg-slate-700/60' : ''
+                  }`}>
+                  Manual
+                </button>
+              </div>
+              </div>
+              <span className="hidden items-center gap-1.5 text-xs text-slate-400 sm:inline-flex">
+              <span className={`h-2 w-2 rounded-full ${isConnected ? 'bg-emerald-400' : 'bg-slate-600'}`} />
+              {isConnected ? 'Market feed live' : 'Market feed offline'}
+            </span>
+            <span className={`flex h-9 w-32 shrink-0 items-center justify-center whitespace-nowrap rounded-full border px-2 text-sm font-bold ${
+              statusLabel === 'LIVE' ? 'border-emerald-500/50 bg-emerald-500/10 text-emerald-300'
+                : statusLabel === 'ARMED' ? 'border-cyan-500/40 bg-cyan-500/10 text-cyan-200'
+                  : 'border-slate-600 bg-slate-800/70 text-slate-300'
+            }`}><span className="mr-1.5 text-emerald-400">●</span>{statusLabel}</span>
+            <Zap aria-hidden="true" size={21} className="shrink-0 text-slate-300" />
+          </div>
         </div>
       </header>
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4" aria-label="Live index prices">
@@ -339,7 +383,7 @@ export default function QuantEdgeProSection({ marketData, isConnected = false, v
               </h3>
             </div>
             <span className="rounded-lg border border-emerald-500/40 bg-emerald-950/50 px-3 py-2 text-base font-semibold text-emerald-200">
-              {rulePercent == null ? 'Rule checks unavailable' : `${passedRules}/${ruleEntries.length} Rules Passed`}
+              {rulePercent == null ? 'Rule checks unavailable' : `${passedRules}/${Object.keys(ruleLabels).length} Rules Passed`}
             </span>
           </div>
           <p className="mt-2 text-base text-slate-300">
@@ -372,18 +416,6 @@ export default function QuantEdgeProSection({ marketData, isConnected = false, v
             <div><p className="text-sm text-slate-400">Max Loss</p><b className="text-xl text-rose-300">{money(maxLoss)}</b></div>
             <div><p className="text-sm text-slate-400">Gross Reward at Target</p><b className="text-xl text-emerald-300">{money(grossReward)}</b></div>
           </div>
-          <button type="button" disabled={!live?.ready || statusStale || busy || (!live.enabled && (!live.armed || !!activeTrade))}
-            onClick={toggleApproval}
-            className={`mt-4 flex min-h-16 w-full items-center justify-center gap-3 rounded-xl border px-4 py-3 text-xl font-extrabold text-white transition-colors disabled:cursor-not-allowed disabled:opacity-50 sm:text-2xl ${
-              live?.enabled ? 'border-rose-500/70 bg-rose-700/80 hover:bg-rose-600' : 'border-emerald-400/70 bg-gradient-to-r from-emerald-500 to-emerald-600 hover:from-emerald-400 hover:to-emerald-500'
-            }`}>
-            <span aria-hidden="true">{live?.enabled ? '■' : '▷'}</span>
-            {live?.enabled ? 'Stop New Entries' : 'Start Live Trade'}
-          </button>
-          <p className="mt-2 text-center text-sm text-slate-400">
-            {live?.enabled ? 'New automatic entries are enabled; existing risk controls remain active.' :
-              startDisabledReason ?? 'Enables automatic entries after broker preflight and session approval; does not place an immediate order.'}
-          </p>
           {activeTrade && <div id="qep-active-position" className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-amber-500/40 bg-amber-950/20 p-3">
             <div>
               <b className="text-sm text-amber-200">Active QEP position · {activeTrade.contract.trading_symbol}</b>
@@ -413,10 +445,9 @@ export default function QuantEdgeProSection({ marketData, isConnected = false, v
               {` ${live?.daily_trades ?? 0}/${live?.max_trades ?? 0} trades`}
             </span>
           </div>
-          {live && !live.armed && !live.enabled && <p className="mt-2 text-xs text-amber-200/80">
-            Complete the existing broker preflight and session arm before starting live entries.
+          {(operationError || statusError || live?.error) && <p role="alert" className="mt-3 text-sm text-rose-300">
+            {quantEdgeErrorText(operationError ?? statusError ?? live?.error)}
           </p>}
-          {(error || live?.error) && <p role="alert" className="mt-3 text-sm text-rose-300">{error ?? live?.error}</p>}
         </section>
         <aside id="qep-position" className="qep-status-panel rounded-2xl border p-5 sm:p-6" aria-label="QuantEdge Pro trade status">
           <div className="flex items-center justify-between gap-2">

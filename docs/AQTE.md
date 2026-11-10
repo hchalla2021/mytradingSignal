@@ -113,7 +113,21 @@ The same 44px-minimum button requests OFF when ON; from OFF it opens the real-mo
 ON confirmation. It supports native keyboard activation, visible focus and reduced
 motion. Initial loading says Checking; failed, unauthorized, malformed or stale
 responses say UNKNOWN, never a confirmed OFF. UNKNOWN disables starting and retains
-a separate OFF-request recovery action. A latched emergency is red and cannot be
+a separate OFF-request recovery action.
+Freshness (`generated_at` at most 1 s ahead or 10 s old) is judged on a server-aligned
+clock, not the raw PC clock: the backend stamps a millisecond `X-Server-Time` header on
+every response, which bounds the browser-to-server offset to the round trip regardless
+of payload caching. A drifting PC clock (one ran 1.4 s behind production and saw every
+fresh status as stale) therefore cannot cause a false UNKNOWN, and stale or future-dated
+status is still rejected, first response included. Without `X-Server-Time` the HTTP
+`Date` header is a coarse fallback allowed to trail by up to 3 s (uvicorn caches it about
+once a second; it was measured 1.7 s behind and made status flicker), narrowed by a
+consistent `generated_at`. Valid bounds never contradict, so the estimate cannot jump a
+fresh status across the limit. The backend CORS middleware exposes `Date` and
+`X-Server-Time` to allowed cross-origin callers; with neither readable the browser clock
+is used unchanged. Broker readouts are cached for up to 3 s, so they never refine the
+clock through `generated_at`.
+A latched emergency is red and cannot be
 cleared by ON or by market reopening. Only while latched, a compact **Reset emergency
 stop** action appears beside the switch; it requires fresh controller status,
 completed square-off, no active AQTE trade and explicit owner confirmation.
@@ -1347,6 +1361,17 @@ owner's manual trading.
 - Untracked AQTE-tagged exposure (for example, after journal loss) or a still-working
   AQTE order blocks new AQTE entries until it is settled in Kite.
 
+### Other algorithm owners on the live lane
+
+QuantEdge Pro (`QEP<13 hex>E/S`, see `docs/QUANTEDGE_PRO.md`) and the twelve algos of the 12 Algo
+Desk (`XEA<13 hex>E/S`, see `docs/ALGO_DESK.md`) reuse this execution lane, broker
+preflight, arming, risk limits and protective-stop monitor. Their entry approvals are
+independent; enabling one owner does not switch another off. The serialized execution
+manager permits only one pending/open automated trade at a time across all owners. Other
+enabled scans wait for that slot to clear and then evaluate fresh signals. The monitor
+scans QuantEdge Pro, 12 Algo Desk, then AQTE. Each owner manages only its own tags, and
+manual trades stay excluded.
+
 ### Selected trade exit / Book All
 
 `POST /api/aqte/live/exit` requires the captured 16-character AQTE `trade_id` and
@@ -1403,7 +1428,7 @@ They do not accept Kite access tokens from the browser.
 | POST | `/api/aqte/live/proposal` | Compatibility/internal proposal path; blocked while OFF |
 | POST | `/api/aqte/live/confirm` | Compatibility confirmation path; blocked while OFF and still subject to all risk checks |
 | POST | `/api/aqte/live/exit` | Pause new entries and request only the confirmed, identified AQTE trade's exit |
-| POST | `/api/aqte/live/stop` | Latch emergency, cancel tagged AQTE/QuantEdge Pro orders and square off only algorithm-owned quantity (manual trades untouched) |
+| POST | `/api/aqte/live/stop` | Latch emergency, cancel tagged AQTE/QuantEdge Pro/12 Algo Desk orders, turn every algo OFF and square off only algorithm-owned quantity (manual trades untouched) |
 
 These controls are independent of the older paper-only `/api/aqte/kill`, which is
 disabled in production and cannot stop Real AQTE analysis.

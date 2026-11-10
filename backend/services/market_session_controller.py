@@ -46,7 +46,6 @@ NSE_HOLIDAYS = {
     "2026-05-01",  # Maharashtra Day
     "2026-08-15",  # Independence Day
     "2026-10-02",  # Mahatma Gandhi Jayanti
-    "2026-11-09",  # Diwali Laxmi Pujan
     "2026-12-25",  # Christmas
 }
 
@@ -206,6 +205,5 @@ class MarketSessionController:
 
 # Singleton instance
 market_session = MarketSessionController()
-
 
 

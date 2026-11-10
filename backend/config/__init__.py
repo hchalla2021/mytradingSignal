@@ -80,6 +80,8 @@ class Settings(BaseSettings):
     
     # AQTE live requires explicit enablement, manual ON and daily preflight/arming.
     aqte_live_enabled: bool = False
+    # ExpiryEdge AI has its own explicit local/production live-order opt-in.
+    expiryedge_ai_live_enabled: bool = Field(default=False, env="EXPIRYEDGE_AI_LIVE_ENABLED")
     aqte_live_static_ip: str = "122.177.245.101"
     # Real-money opt-in: lets fully aligned, unvalidated rule setups enter one lot.
     aqte_live_allow_unvalidated_rules: bool = False

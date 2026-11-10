@@ -26,6 +26,7 @@ from test_aqte import CONTRACT, IST, NOW, START, ready_engine, scalp_info, tick
 
 def settings(**overrides):
     values = dict(aqte_live_enabled=True,
+                  expiryedge_ai_live_enabled=False,
                   aqte_live_static_ip="122.177.245.101", aqte_live_allow_unvalidated_rules=False,
                   aqte_live_risk_per_trade=500,
                   aqte_live_daily_loss=2000, aqte_live_max_trades=5, aqte_live_max_losses=3,
@@ -600,6 +601,12 @@ class LiveTests(unittest.TestCase):
         self.live.state["daily_controls"]["BANKNIFTY"]["trail_start_r"] = 1.5
         self.assertEqual(self.live.status()["trail_starts"], {"NIFTY": 1, "BANKNIFTY": 1.5, "SENSEX": 1})
 
+    def test_expiryedge_ai_stays_off_without_its_independent_live_flag(self):
+        self.assertFalse(self.live.expiryedge_ai_enabled())
+        with self.assertRaisesRegex(LiveBlocked, "EXPIRYEDGE_AI_LIVE_ENABLED"):
+            self.live.set_expiryedge_ai_enabled(True)
+        self.assertFalse(self.live.expiryedge_ai_enabled())
+
     def test_status_publishes_swing_setup_switches_for_the_ui_mirror(self):
         self.live.state["daily_controls"]["SENSEX"]["setups"]["mean_reversion"] = True
         published = self.live.status()["swing_setups"]
@@ -1068,6 +1075,18 @@ class LiveTests(unittest.TestCase):
                 self.live.confirm(proposal["id"])
         self.broker.place_order.assert_not_called()
 
+    def test_quantedge_waiting_scan_does_not_poll_broker_or_switch_entries_off(self):
+        self.live.state["quantedge"]["enabled"] = True
+        with patch.object(self.live, "quantedge_candidate", return_value={
+            "decision": "WAIT", "reason": "Strategy rules incomplete",
+        }):
+            self.live.quantedge_status()
+            self.live.scan_quantedge()
+        self.broker.orders.assert_not_called()
+        self.broker.positions.assert_not_called()
+        self.assertTrue(self.live.state["quantedge"]["enabled"])
+        self.assertNotIn("error", self.live.state["quantedge"])
+
     def test_confirm_places_exactly_one_lot_ioc_limit_with_persisted_tag_and_no_duplicate(self):
         self.armed()
         proposal = self.live.proposal("NIFTY")
@@ -1082,6 +1101,56 @@ class LiveTests(unittest.TestCase):
             self.live.confirm(proposal["id"])
         self.assertEqual(self.broker.place_order.call_count, 1)
         self.assertEqual(self.live.pins()[CONTRACT.token], CONTRACT)
+
+    def test_quantedge_approval_toggle_does_not_preflight_without_qualified_signal(self):
+        status = self.live.set_quantedge_approval(True)
+
+        self.assertTrue(status["enabled"])
+        self.assertFalse(status["armed"])
+        self.ip.assert_not_called()
+        self.broker.profile.assert_not_called()
+        self.broker.place_order.assert_not_called()
+
+    def test_quantedge_approval_can_be_enabled_and_disabled_outside_entry_window(self):
+        closed = datetime(2026, 11, 10, 0, 57, tzinfo=IST).timestamp()
+        with patch("services.aqte_live.time.time", return_value=closed):
+            enabled = self.live.set_quantedge_approval(True)
+            self.assertTrue(enabled["enabled"])
+            self.assertFalse(enabled["armed"])
+            self.assertFalse(enabled["entry_window"])
+            disabled = self.live.set_quantedge_approval(False)
+            self.assertFalse(disabled["enabled"])
+
+        self.ip.assert_not_called()
+        self.broker.profile.assert_not_called()
+        self.broker.place_order.assert_not_called()
+
+    def test_quantedge_preflight_failure_keeps_standing_approval_on_but_unarmed(self):
+        self.live.set_quantedge_approval(True)
+        self.ip.return_value = "192.0.2.1"
+        activated = self.live.quantedge_activate(NOW)
+
+        self.assertFalse(activated)
+        self.assertTrue(self.live.state["quantedge"]["enabled"])
+        self.assertIsNone(self.live.state["armed_day"])
+        self.assertIn("does not match allowlisted IP", self.live.state["quantedge"]["error"])
+        self.broker.place_order.assert_not_called()
+
+    def test_standing_quantedge_approval_preflights_and_arms_when_entry_window_opens(self):
+        closed = datetime(2026, 11, 10, 0, 57, tzinfo=IST).timestamp()
+        opened = datetime(2026, 11, 10, 9, 15, tzinfo=IST).timestamp()
+        with patch("services.aqte_live.time.time", return_value=closed):
+            self.live.set_quantedge_approval(True)
+        with patch("services.aqte_live.time.time", return_value=opened):
+            activated = self.live.quantedge_activate(opened)
+            status = self.live.quantedge_status()
+
+        self.assertTrue(activated)
+        self.assertTrue(self.live.state["quantedge"]["enabled"])
+        self.assertTrue(status["armed"])
+        self.ip.assert_called_once()
+        self.broker.profile.assert_called_once()
+        self.broker.place_order.assert_not_called()
 
     def test_quantedge_confirm_uses_approved_lots_and_qep_order_tag(self):
         from dataclasses import asdict
@@ -1233,6 +1302,31 @@ class LiveTests(unittest.TestCase):
         self.live.reconcile()
         self.assertEqual(self.live.state["active"]["stop"], raised)
         self.assertEqual(self.broker.modify_order.call_count, 1)
+        self.assertEqual(self.broker.place_order.call_count, 2)
+
+    def test_expiryedge_ai_targetless_trail_moves_to_breakeven_then_tracks_half_r(self):
+        self.protect()
+        active = self.live.state["active"]
+        active.update(owner="EXPIRYEDGE_AI", target=None, trail_start_r=1,
+                      trail_gap_r=0.5, breakeven_on_start=True)
+        entry = active["entry_price"]
+        risk = entry - active["initial_stop"]
+
+        self.market.engine.options[CONTRACT.token] = tick(
+            "option", bid=entry + risk, ask=entry + risk + 1, price=entry + risk
+        )
+        self.live.reconcile()
+        self.assertEqual(self.broker.modify_order.call_args.kwargs["trigger_price"], entry)
+        self.assertIsNone(self.live.state["active"]["target"])
+        self.live.reconcile()
+        self.assertEqual(self.live.state["active"]["stop"], entry)
+
+        peak = entry + risk * 1.5
+        self.market.engine.options[CONTRACT.token] = tick(
+            "option", bid=peak, ask=peak + 1, price=peak
+        )
+        self.live.reconcile()
+        self.assertAlmostEqual(self.broker.modify_order.call_args.kwargs["trigger_price"], entry + risk)
         self.assertEqual(self.broker.place_order.call_count, 2)
 
     def test_legacy_trade_trails_at_one_r_not_the_current_controls_setting(self):

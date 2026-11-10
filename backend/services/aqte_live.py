@@ -16,6 +16,7 @@ from contextlib import closing
 from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
+from statistics import fmean
 from uuid import uuid4
 
 import requests
@@ -28,6 +29,15 @@ from services.aqte_engines import EngineConfig, rank_key, veto_reason
 from services.aqte_runtime import Latencies
 from services.aqte_execution_history import bootstrap_executions, capture_context, save_execution
 from services.quantedge_pro import build_candidate
+from services.expiryedge_algos import (
+    ALGO_KEYS as EXPIRYEDGE_ALGOS, RETIRED_ALGO_KEYS as RETIRED_EXPIRYEDGE_ALGOS,
+    ALGO_NAMES as EXPIRYEDGE_NAMES, ALGOS as EXPIRYEDGE_CATALOG,
+    PER_ALGO_MAX_TRADES as EXPIRYEDGE_PER_ALGO_TRADES, TARGET_R as EXPIRYEDGE_TARGET_R,
+    TRAIL_START_R as EXPIRYEDGE_TRAIL_START_R, ExpiryEdgeDesk, idle_result as expiryedge_idle,
+    setup_key as expiryedge_setup_key,
+)
+from services.expiryedge import get_config as get_expiryedge_config
+from services.expiryedge_ai import evaluate_opening_range
 
 logger = logging.getLogger(__name__)
 TERMINAL = {"COMPLETE", "CANCELLED", "REJECTED"}
@@ -35,6 +45,8 @@ KILL_TAG = "AQTEKILL"
 # Every AQTE order carries its 16-hex trade id + E (entry) / S (stop); manual Kite orders never do.
 AQTE_TAG = re.compile(r"[0-9a-f]{16}[ES]")
 QUANTEDGE_TAG = re.compile(r"QEP[0-9a-f]{13}[ES]")
+EXPIRYEDGE_TAG = re.compile(r"XEA[0-9a-f]{13}[ES]")
+EXPIRYEDGE_AI_TAG = re.compile(r"EAI[0-9a-f]{13}[ES]")
 KILL_EXCHANGES = {"NFO", "BFO", "NSE", "BSE"}
 KILL_MAX_REJECTS = 5
 KILL_SETTLE_SECONDS = 4
@@ -53,6 +65,24 @@ MARKET_WAIT = "Market data and pre-open analysis start at 09:00 IST; live auto-t
 # Kite rejects more than 25 modifications per order; trailing must leave headroom for the exit.
 KITE_MAX_MODIFICATIONS = 25
 EXIT_MODIFY_RESERVE = 5
+OWNER_LABELS = {
+    "QUANTEDGE": "QuantEdge Pro", "EXPIRYEDGE": "6 Algo Desk",
+    "EXPIRYEDGE_AI": "ExpiryEdge AI Algo",
+}
+OWNER_SOURCES = {
+    "QUANTEDGE": "quantedge_live", "EXPIRYEDGE": "expiryedge_live",
+    "EXPIRYEDGE_AI": "expiryedge_ai_live",
+}
+# Owners with their own desks; AQTE's controller views exclude their trades and proposals.
+SEPARATE_OWNERS = ("QUANTEDGE", "EXPIRYEDGE", "EXPIRYEDGE_AI")
+EXPIRYEDGE_SCAN_SECONDS = 1.0
+EXPIRYEDGE_AI_RISK_CAP = 3000.0
+EXPIRYEDGE_AI_DAILY_LOSS_CAP = 3000.0
+EXPIRYEDGE_AI_MAX_TRADES = 1
+EXPIRYEDGE_AI_STOP_FRACTION = 0.20
+EXPIRYEDGE_AI_TRAIL_GAP_R = 0.5
+# Unexpected (non-guard) scan failures in a row before every 6 Algo Desk algo fails safe to OFF.
+EXPIRYEDGE_MAX_FAILURES = 3
 
 
 class LiveBlocked(ValueError):
@@ -75,7 +105,34 @@ def aqte_order(order):
 
 def algo_order(order):
     tag = str(order.get("tag") or "")
-    return aqte_order(order) or QUANTEDGE_TAG.fullmatch(tag) is not None
+    return (
+        aqte_order(order) or QUANTEDGE_TAG.fullmatch(tag) is not None
+        or EXPIRYEDGE_TAG.fullmatch(tag) is not None
+        or EXPIRYEDGE_AI_TAG.fullmatch(tag) is not None
+    )
+
+
+def performance(trades):
+    """Broker-reconciled net P&L statistics; empty history reports None instead of invented ratios."""
+    pnls = [trade["net_pnl"] for trade in sorted(trades, key=lambda trade: trade.get("exit_at") or trade["entry_at"])]
+    wins = [pnl for pnl in pnls if pnl > 0]
+    losses = [pnl for pnl in pnls if pnl < 0]
+    equity = peak = drawdown = 0.0
+    for pnl in pnls:
+        equity += pnl
+        peak = max(peak, equity)
+        drawdown = max(drawdown, peak - equity)
+    gross_loss = -sum(losses)
+    return dict(
+        trades=len(pnls), wins=len(wins), losses=len(losses),
+        win_rate=round(100 * len(wins) / len(pnls), 1) if pnls else None,
+        net_pnl=round(sum(pnls), 2),
+        profit_factor=round(sum(wins) / gross_loss, 2) if gross_loss > 0 else None,
+        max_drawdown=round(drawdown, 2),
+        avg_win=round(fmean(wins), 2) if wins else None,
+        avg_loss=round(fmean(losses), 2) if losses else None,
+        expectancy=round(fmean(pnls), 2) if pnls else None,
+    )
 
 
 def kill_price(ltp, side):
@@ -157,7 +214,20 @@ class AQTELiveService:
                       "account": None, "active": None, "trades": [], "used": [], "daily_controls": defaults(),
                       "daily_entries": [], "daily_controls_version": DAILY_CONTROL_DEFAULTS_VERSION,
                       "automation_approval_version": AUTOMATION_APPROVAL_VERSION,
-                      "quantedge": {"enabled": False, "lots": 1}}
+                      "quantedge": {"enabled": False, "lots": 1},
+                      "expiryedge": {"algos": {key: False for key in EXPIRYEDGE_ALGOS}},
+                      "expiryedge_ai": {"enabled": False, "error": None}}
+        self.expiryedge = ExpiryEdgeDesk()
+        self.expiryedge_waiting = None
+        self.expiryedge_error = None
+        self.expiryedge_failures = 0
+        self.expiryedge_hold_until = 0.0
+        self.expiryedge_skip_until = {}
+        self.expiryedge_scanned_at = 0.0
+        self.expiryedge_ai_scanned_at = 0.0
+        self.expiryedge_ai_failures = 0
+        self.expiryedge_ai_next_activation = 0.0
+        self.quantedge_next_activation = 0.0
         self.proposals = {}
         self.check = None
         self.error = None
@@ -242,6 +312,24 @@ class AQTELiveService:
                 not 1 <= self.state["quantedge"]["lots"] <= 5):
             raise LiveBlocked("Invalid QuantEdge Pro configuration; journal requires repair before trading")
         self.state["quantedge"]["enabled"] = False
+        expiryedge = self.state.setdefault("expiryedge", {"algos": {key: False for key in EXPIRYEDGE_ALGOS}})
+        algos = expiryedge.get("algos") if isinstance(expiryedge, dict) else None
+        if (not isinstance(algos, dict) or
+                not set(algos) <= set(EXPIRYEDGE_ALGOS) | RETIRED_EXPIRYEDGE_ALGOS or
+                any(type(value) is not bool for value in algos.values())):
+            raise LiveBlocked("Invalid 6 Algo Desk configuration; journal requires repair before trading")
+        blocked = bool(self.state.get("killed")) or bool(self.state.get("automation_wanted"))
+        # Standing per-algo ON survives restarts like AQTE automation; preflight re-runs before any entry.
+        # Retired algos are dropped without inheriting their approvals; their historical trades remain intact.
+        expiryedge["algos"] = {key: bool(algos.get(key)) and not blocked for key in EXPIRYEDGE_ALGOS}
+        expiryedge_ai = self.state.setdefault("expiryedge_ai", {"enabled": False, "error": None})
+        if (not isinstance(expiryedge_ai, dict) or type(expiryedge_ai.get("enabled")) is not bool or
+                (expiryedge_ai.get("error") is not None and not isinstance(expiryedge_ai["error"], str))):
+            raise LiveBlocked("Invalid standalone ExpiryEdge AI configuration; journal requires repair before trading")
+        if not getattr(self.settings(), "expiryedge_ai_live_enabled", False):
+            expiryedge_ai["enabled"] = False
+        if self.state.get("killed") or self.state.get("flatten_pending"):
+            expiryedge_ai["enabled"] = False
         self.state.setdefault("flatten_pending", False)
         # Standing ON survives restarts; the monitor re-runs preflight before any new entry.
         self.state["automation_wanted"] = bool(self.state.get("automation_wanted")) and not self.state["killed"]
@@ -289,7 +377,7 @@ class AQTELiveService:
         opportunity = payload.get("record") or {}
         owner = (execution.get("owner") or (payload.get("proposal") or {}).get("owner") or
                  opportunity.get("owner") or "AQTE")
-        label = "QuantEdge Pro" if owner == "QUANTEDGE" else "AQTE"
+        label = OWNER_LABELS.get(owner, "AQTE")
         trade_key = ((execution or {}).get("id") or payload.get("order_id") or
                      (payload.get("record") or {}).get("key") or "controller")
         instrument = ((execution or {}).get("contract") or {}).get("trading_symbol")
@@ -297,7 +385,7 @@ class AQTELiveService:
         def publish(event_type, message, severity="info", suffix="", instrument_override=None):
             get_engine_event_service().publish_threadsafe(
                 event_type, message, instrument=instrument_override or instrument or (execution or {}).get("symbol"),
-                severity=severity, source="quantedge_live" if owner == "QUANTEDGE" else "aqte_live",
+                severity=severity, source=OWNER_SOURCES.get(owner, "aqte_live"),
                 idempotency_key=f"{owner.lower()}-live:{trade_key}:{kind}:{suffix or kind}",
             )
 
@@ -312,7 +400,7 @@ class AQTELiveService:
             }.get(state)
             if event_type:
                 reason = record.get("reason")
-                label = "QuantEdge Pro" if record.get("owner") == "QUANTEDGE" else record.get("symbol", "AQTE")
+                label = OWNER_LABELS.get(record.get("owner")) or record.get("symbol", "AQTE")
                 message = f"{label} {record.get('style', 'trade')} opportunity {str(state).lower()}"
                 if reason:
                     message += f": {reason}"
@@ -360,6 +448,9 @@ class AQTELiveService:
             publish("AUTOMATION_STOPPED", f"{label} automation stopped by a safety control", "error")
         elif kind == "QUANTEDGE_SCAN_BLOCKED":
             publish("ENGINE_ERROR", "QuantEdge Pro scan was disarmed; inspect its status for the exact reason", "error")
+        elif kind == "EXPIRYEDGE_SCAN_BLOCKED":
+            publish("ENGINE_ERROR", "6 Algo Desk algos were switched OFF; inspect the desk for the exact reason",
+                    "error")
 
     def save(self, kind, **payload):
         try:
@@ -382,6 +473,8 @@ class AQTELiveService:
             self.state["automation_on"] = False
             self.state["automation_wanted"] = False
             self.state["quantedge"]["enabled"] = False
+            self.state["expiryedge_ai"]["enabled"] = False
+            self.expiryedge_off()
             logger.exception("AQTE live journal failed; broker mutations blocked")
             raise
         self._publish_live_event(kind, payload, execution)
@@ -401,7 +494,8 @@ class AQTELiveService:
             cfg = self.settings()
             now = time.time()
             active_record = self.state["active"]
-            active = copy.deepcopy(active_record) if not active_record or active_record.get("owner") != "QUANTEDGE" else None
+            active = (copy.deepcopy(active_record) if not active_record or
+                      active_record.get("owner") not in SEPARATE_OWNERS else None)
             if active:
                 market = self.service()
                 with market.lock:
@@ -413,13 +507,13 @@ class AQTELiveService:
                     }
                     active["metrics"] = market.engine.position_metrics(
                         order, now, healthy=market.started and not market.failed.is_set())
-            trades = [trade for trade in self.state["trades"] if trade.get("owner") != "QUANTEDGE"]
+            trades = [trade for trade in self.state["trades"] if trade.get("owner") not in SEPARATE_OWNERS]
             visible_trades = [trade for trade in trades[:-20] if day(trade["exit_at"]) == day(now)] + trades[-20:]
             aqte_state = {
                 **self.state,
                 "trades": trades,
                 "daily_entries": [entry for entry in self.state["daily_entries"]
-                                  if entry.get("owner") != "QUANTEDGE"],
+                                  if entry.get("owner") not in SEPARATE_OWNERS],
             }
             automation_on = bool(self.state.get("automation_on")) and \
                 self.state["armed_day"] == day(now) and not self.state["killed"]
@@ -630,9 +724,9 @@ class AQTELiveService:
             snapshot = self.service().snapshot()
             aqte_state = {
                 **self.state,
-                "trades": [trade for trade in self.state["trades"] if trade.get("owner") != "QUANTEDGE"],
+                "trades": [trade for trade in self.state["trades"] if trade.get("owner") not in SEPARATE_OWNERS],
                 "daily_entries": [entry for entry in self.state["daily_entries"]
-                                  if entry.get("owner") != "QUANTEDGE"],
+                                  if entry.get("owner") not in SEPARATE_OWNERS],
             }
             total = counts(self.state, time.time())
             result = {}
@@ -802,6 +896,14 @@ class AQTELiveService:
         if owner == "QUANTEDGE":
             if not self.state.get("quantedge", {}).get("enabled"):
                 raise LiveBlocked("QuantEdge Pro live approval is OFF; no new entry orders permitted")
+        elif owner == "EXPIRYEDGE":
+            if not self.expiryedge_enabled():
+                raise LiveBlocked("Every 6 Algo Desk algo is OFF; no new entry orders permitted")
+        elif owner == "EXPIRYEDGE_AI":
+            if not getattr(cfg, "expiryedge_ai_live_enabled", False):
+                raise LiveBlocked("ExpiryEdge AI live execution is disabled by EXPIRYEDGE_AI_LIVE_ENABLED")
+            if not self.expiryedge_ai_enabled():
+                raise LiveBlocked("ExpiryEdge AI live approval is OFF; no new entry orders permitted")
         elif not self.state.get("automation_on"):
             raise LiveBlocked("Automated real trading is OFF; no new entry orders permitted")
         if self.state["killed"] or self.state["armed_day"] != day(now):
@@ -873,8 +975,6 @@ class AQTELiveService:
     def start_automation(self):
         """Standing ON: accepted any time; arms itself inside each weekday 09:15-15:15 IST window."""
         with self.lock:
-            if self.state.get("quantedge", {}).get("enabled"):
-                raise LiveBlocked("Turn QuantEdge Pro approval OFF before starting AQTE on the shared execution lane")
             self.config_guard()
             if self.state["killed"]:
                 raise LiveBlocked("Emergency stop is latched; operator review is required before restarting")
@@ -936,8 +1036,6 @@ class AQTELiveService:
                 self.proposals.clear()
                 self.save("AUTOMATION_OFF", note="New entries blocked; existing protection and exits continue")
                 return self.status()
-            if self.state.get("quantedge", {}).get("enabled"):
-                raise LiveBlocked("Turn QuantEdge Pro approval OFF before enabling AQTE on the shared execution lane")
             self.config_guard()
             if self.state["killed"] or self.state["armed_day"] != day(time.time()):
                 raise LiveBlocked("Complete IP preflight and explicitly arm today's live session before switching ON")
@@ -1144,6 +1242,7 @@ class AQTELiveService:
                 "ready": self.ready,
                 "enabled": qep["enabled"],
                 "armed": self.state["armed_day"] == day(now) and not self.state["killed"],
+                "entry_window": entry_window(now),
                 "lots": qep["lots"],
                 "risk_per_trade": 500,
                 "daily_loss_limit": 1500,
@@ -1177,22 +1276,41 @@ class AQTELiveService:
                 raise LiveBlocked("Live journal unavailable; QuantEdge Pro approval was not changed")
             if enabled:
                 self.config_guard()
-                if self.state.get("automation_on") or self.state.get("automation_wanted"):
-                    raise LiveBlocked("Turn AQTE automation OFF before enabling QuantEdge Pro on the shared execution lane")
-                if self.state["active"] or self.state["killed"] or self.state.get("flatten_pending"):
-                    raise LiveBlocked("Resolve the existing trade or emergency stop before enabling QuantEdge Pro")
-                if self.state["armed_day"] != day(time.time()):
-                    raise LiveBlocked("Run existing broker preflight and arm today's session before enabling QuantEdge Pro")
-                if not entry_window(time.time()):
-                    raise LiveBlocked("QuantEdge Pro approval can only be enabled during the regular entry window")
+                if self.state["killed"] or self.state.get("flatten_pending"):
+                    raise LiveBlocked("Resolve the emergency stop before enabling QuantEdge Pro")
             self.state["quantedge"]["enabled"] = enabled
             if enabled:
                 self.state["quantedge"].pop("error", None)
+                self.quantedge_next_activation = 0.0
+            else:
+                self.state["quantedge"]["error"] = None
+                self.quantedge_next_activation = 0.0
             self.proposals = {key: value for key, value in self.proposals.items()
                               if value.get("owner") != "QUANTEDGE"}
             self.save("QUANTEDGE_APPROVAL_ON" if enabled else "QUANTEDGE_APPROVAL_OFF",
                       lots=self.state["quantedge"]["lots"])
             return self.quantedge_status()
+
+    def quantedge_activate(self, now):
+        if self.state["armed_day"] == day(now) and not self.state["killed"]:
+            return True
+        if (self.state["killed"] or self.state.get("flatten_pending") or self.state["active"] or
+                not entry_window(now) or now < self.quantedge_next_activation):
+            return False
+        try:
+            self.preflight()
+            self.arm()
+        except LiveBlocked as exc:
+            reason = str(exc)
+            self.quantedge_next_activation = now + ACTIVATION_RETRY_SECONDS
+            if reason != self.state["quantedge"].get("error"):
+                self.state["quantedge"]["error"] = reason
+                self.save("QUANTEDGE_WAITING", reason=reason[:500])
+            return False
+        self.quantedge_next_activation = 0.0
+        if self.state["quantedge"].pop("error", None) is not None:
+            self.save("QUANTEDGE_READY")
+        return True
 
     def request_quantedge_exit(self, trade_id):
         with self.lock:
@@ -1204,13 +1322,13 @@ class AQTELiveService:
 
     def automated_quantedge_entry(self):
         with self.lock:
-            if not self.state["quantedge"]["enabled"] or self.state["active"] or not entry_window(time.time()):
+            now = time.time()
+            if not self.state["quantedge"]["enabled"] or self.state["active"] or not entry_window(now):
                 return
-            busy = self.book(self.broker())["busy"]
             qualified = []
             present = set()
             for symbol in SYMBOLS:
-                candidate = self.quantedge_candidate(symbol, busy)
+                candidate = self.quantedge_candidate(symbol, set())
                 setup_key = candidate.get("setup_key")
                 if candidate.get("side") in ("CE", "PE") and setup_key:
                     present.add(setup_key)
@@ -1234,6 +1352,11 @@ class AQTELiveService:
                               "reason": f"QuantEdge Pro candle is no longer eligible; last decision: {previous['reason']}"}
                     self.save("OPPORTUNITY", record=record)
                     self.opportunities[key] = record
+            if not qualified:
+                return
+            if not self.quantedge_activate(now):
+                return
+            busy = self.book(self.broker())["busy"]
             for _, symbol, candidate in sorted(qualified, reverse=True):
                 setup_key = candidate["setup_key"]
                 self.publish_quantedge_event(
@@ -1304,12 +1427,779 @@ class AQTELiveService:
                 self.save("QUANTEDGE_SCAN_BLOCKED", reason=reason[:500])
             logger.exception("QuantEdge Pro entry scan disarmed; AQTE execution remains separate")
 
+    def expiryedge_ai_enabled(self):
+        return bool(self.state.get("expiryedge_ai", {}).get("enabled"))
+
+    def set_expiryedge_ai_enabled(self, enabled, symbol=None):
+        with self.lock:
+            if type(enabled) is not bool:
+                raise LiveBlocked("ExpiryEdge AI approval must be an explicit boolean")
+            if not self.ready:
+                raise LiveBlocked("Live journal unavailable; ExpiryEdge AI approval was not changed")
+            if enabled:
+                self.config_guard()
+                if not getattr(self.settings(), "expiryedge_ai_live_enabled", False):
+                    raise LiveBlocked("ExpiryEdge AI live execution is disabled by EXPIRYEDGE_AI_LIVE_ENABLED")
+                if self.state["killed"] or self.state.get("flatten_pending"):
+                    raise LiveBlocked("Emergency stop is active; operator review is required before enabling ExpiryEdge AI")
+                schedules = get_expiryedge_config()["schedules"]
+                if any(not schedules[index]["weekday"] for index in SYMBOLS):
+                    raise LiveBlocked("Save an expiry weekday for NIFTY, BANKNIFTY, and SENSEX before enabling")
+            self.state["expiryedge_ai"]["enabled"] = enabled
+            self.state["expiryedge_ai"]["error"] = None
+            self.state["expiryedge_ai"]["waiting"] = None
+            self.proposals = {key: value for key, value in self.proposals.items()
+                              if value.get("owner") != "EXPIRYEDGE_AI"}
+            self.save("EXPIRYEDGE_AI_ON" if enabled else "EXPIRYEDGE_AI_OFF")
+            if enabled:
+                self.expiryedge_ai_failures = 0
+                self.expiryedge_ai_next_activation = 0.0
+                now = time.time()
+                if entry_window(now) and not self.state["active"]:
+                    self.expiryedge_ai_activate(now)
+            self.wake()
+            return self.expiryedge_ai_status(symbol)
+
+    def expiryedge_ai_note(self, reason):
+        owner_state = self.state["expiryedge_ai"]
+        if reason == owner_state.get("waiting"):
+            return
+        owner_state["waiting"] = reason
+        if self.ready:
+            self.save("EXPIRYEDGE_AI_WAITING", reason=reason[:500] if reason else None)
+
+    def expiryedge_ai_activate(self, now):
+        if self.state["armed_day"] == day(now) and not self.state["killed"]:
+            return True
+        if (self.state["killed"] or self.state.get("flatten_pending") or self.state["active"] or
+                not entry_window(now) or now < self.expiryedge_ai_next_activation):
+            return False
+        try:
+            self.preflight()
+            self.arm()
+            self.expiryedge_ai_note(None)
+            return True
+        except LiveBlocked as exc:
+            reason = str(exc)
+        except Exception as exc:
+            logger.exception("ExpiryEdge AI broker preflight failed; retrying in %ss", ACTIVATION_RETRY_SECONDS)
+            reason = f"Broker preflight failed ({type(exc).__name__}: {exc})"
+        self.expiryedge_ai_next_activation = now + ACTIVATION_RETRY_SECONDS
+        self.expiryedge_ai_note(f"Arming retry in {ACTIVATION_RETRY_SECONDS}s: {reason}")
+        return False
+
+    def expiryedge_ai_evaluate(self, symbol, now):
+        schedules = get_expiryedge_config()["schedules"]
+        weekday = schedules[symbol]["weekday"]
+        if not weekday:
+            raise EntrySkipped(f"Save the {symbol} expiry weekday before live evaluation")
+        now_dt = datetime.fromtimestamp(now, IST)
+        if weekday != now_dt.strftime("%A"):
+            raise EntrySkipped(f"Waiting for the configured {weekday} expiry weekday")
+
+        market = self.service()
+        with market.lock, market.health_lock:
+            engine = market.engine
+            future = engine.future.get(symbol)
+            spot = engine.spot.get(symbol)
+            if (not market.started or market.failed.is_set() or market.feed_connected is not True or
+                    engine.killed or future is None or spot is None or
+                    not engine.fresh(future, now) or not engine.fresh(spot, now) or
+                    any(gap["symbol"] == symbol for gap in market.gaps.values())):
+                raise EntrySkipped(f"{symbol} futures/spot feed is not fresh and healthy")
+            contracts = [
+                contract for contract in engine.contracts.values()
+                if contract.symbol == symbol and contract.side in ("CE", "PE") and contract.expiry >= day(now)
+            ]
+            if not contracts:
+                raise EntrySkipped(f"No current Zerodha option contracts are subscribed for {symbol}")
+            nearest_expiry = min(contract.expiry for contract in contracts)
+            if nearest_expiry != day(now):
+                raise EntrySkipped(f"Today is not the nearest listed {symbol} option expiry")
+            bars = list(engine.book.closed.get(("future", future.token, 60), ()))
+        signal = evaluate_opening_range(symbol, bars, now)
+        if not signal["ready"]:
+            raise EntrySkipped(signal["reason"])
+        return {**signal, "option_expiry": nearest_expiry}
+
+    def expiryedge_ai_loss_budget_reason(self, risk):
+        today = day(time.time())
+        trades = [trade for trade in self.state["trades"]
+                  if trade.get("owner") == "EXPIRYEDGE_AI" and day(trade["entry_at"]) == today]
+        pnl = sum(trade["net_pnl"] for trade in trades)
+        if pnl <= -EXPIRYEDGE_AI_DAILY_LOSS_CAP:
+            return f"ExpiryEdge AI daily loss limit reached (INR {EXPIRYEDGE_AI_DAILY_LOSS_CAP:,.0f})"
+        if pnl - risk < -EXPIRYEDGE_AI_DAILY_LOSS_CAP:
+            return "Planned stop risk would breach the ExpiryEdge AI INR 3,000 daily loss limit"
+        return None
+
+    def expiryedge_ai_entries(self, now):
+        return sum(1 for entry in self.state["daily_entries"]
+                   if entry.get("owner") == "EXPIRYEDGE_AI" and day(entry["at"]) == day(now))
+
+    def expiryedge_ai_proposal(self, symbol, busy=None):
+        with self.lock:
+            if not self.expiryedge_ai_enabled():
+                raise LiveBlocked("ExpiryEdge AI live approval is OFF")
+            if not getattr(self.settings(), "expiryedge_ai_live_enabled", False):
+                raise LiveBlocked("ExpiryEdge AI live execution is disabled by EXPIRYEDGE_AI_LIVE_ENABLED")
+            now = time.time()
+            if self.state["killed"] or self.state.get("flatten_pending"):
+                raise LiveBlocked("Emergency stop is active")
+            if self.state["armed_day"] != day(now):
+                raise LiveBlocked("ExpiryEdge AI live session is not armed")
+            if self.state["active"]:
+                raise EntrySkipped("The account-wide automated trade slot is occupied")
+            if not entry_window(now):
+                raise EntrySkipped("ExpiryEdge AI entries are allowed only from 09:20 until 15:15 IST")
+            if self.expiryedge_ai_entries(now) >= EXPIRYEDGE_AI_MAX_TRADES:
+                raise EntrySkipped("ExpiryEdge AI daily trade limit reached (1)")
+
+            signal = self.expiryedge_ai_evaluate(symbol, now)
+            if signal["setup_key"] in self.state["used"]:
+                raise EntrySkipped("This ExpiryEdge AI candle was already submitted")
+            if busy is None:
+                busy = self.book(self.broker())["busy"]
+
+            market = self.service()
+            with market.lock:
+                engine = market.engine
+                spot = engine.spot.get(symbol)
+                if not engine.fresh(spot, now):
+                    raise EntrySkipped("Underlying spot price became stale during option selection")
+                candidates = []
+                for contract in engine.contracts.values():
+                    if (contract.symbol != symbol or contract.side != signal["side"] or
+                            contract.expiry != signal["option_expiry"] or contract.token in busy):
+                        continue
+                    quote = engine.options.get(contract.token)
+                    if (not engine.fresh(quote, now) or not 0 < quote.bid <= quote.ask or
+                            quote.ask_quantity < contract.lot_size or quote.volume <= 0):
+                        continue
+                    spread = quote.ask - quote.bid
+                    if spread / quote.ask > engine.policy.spread_fraction:
+                        continue
+                    candidates.append((abs(contract.strike - spot.price), spread, contract, quote))
+                if not candidates:
+                    raise EntrySkipped("No fresh, liquid Zerodha ATM option is available for this expiry")
+                _, _, contract, quote = min(candidates, key=lambda item: item[:2])
+            limit = round_tick(quote.ask, contract.tick_size, up=True)
+            proposal_signal = {
+                **signal,
+                "source": "expiryedge_ai",
+                "decision": f"BUY {signal['side']}",
+                "strategy": "expiryedge_ai_orb_vwap",
+                "contract": asdict(contract),
+                "entry": {
+                    "low": round_tick(quote.bid, contract.tick_size),
+                    "high": limit,
+                    "maximum": limit,
+                    "quantity": contract.lot_size,
+                },
+            }
+            entry, risk = self.entry_levels(symbol, proposal_signal)
+            self.proposals = {key: value for key, value in self.proposals.items() if value["expires_at"] > now}
+            result = {
+                "id": uuid4().hex,
+                "owner": "EXPIRYEDGE_AI",
+                "symbol": symbol,
+                "contract": proposal_signal["contract"],
+                "strategy": proposal_signal["strategy"],
+                "entry": entry,
+                "risk": round(risk, 2),
+                "signal_at": signal["signal_at"],
+                "expires_at": now + 15,
+                "setup_key": signal["setup_key"],
+                "execution_context": {
+                    "strategy_name": "ExpiryEdge AI ORB/VWAP",
+                    "entry_engine": "ExpiryEdge AI standalone opening-range breakout",
+                    "reason": signal["reason"],
+                    "supporting_engines": [],
+                    "confidence": None,
+                    "underlying_stop": signal["underlying_stop"],
+                    "captured_at": now,
+                },
+            }
+            self.proposals[result["id"]] = copy.deepcopy(result)
+            return result
+
+    def automated_expiryedge_ai_entry(self):
+        with self.lock:
+            now = time.time()
+            if (not self.ready or not self.expiryedge_ai_enabled() or
+                    now - self.expiryedge_ai_scanned_at < EXPIRYEDGE_SCAN_SECONDS):
+                return
+            self.expiryedge_ai_scanned_at = now
+            if (self.state["killed"] or self.state.get("flatten_pending") or self.state["active"] or
+                    not entry_window(now)):
+                return
+            if not self.expiryedge_ai_activate(now):
+                return
+            reason = self.expiryedge_account_reason(now)
+            if reason:
+                self.expiryedge_ai_note(reason)
+                return
+            if self.expiryedge_ai_entries(now) >= EXPIRYEDGE_AI_MAX_TRADES:
+                self.expiryedge_ai_note("ExpiryEdge AI daily trade limit reached (1)")
+                return
+
+            candidates = []
+            skipped = []
+            for symbol in SYMBOLS:
+                try:
+                    signal = self.expiryedge_ai_evaluate(symbol, now)
+                    distance = (
+                        signal["last_close"] - signal["opening_range_high"]
+                        if signal["side"] == "CE"
+                        else signal["opening_range_low"] - signal["last_close"]
+                    )
+                    candidates.append((distance / signal["atr"], symbol, signal["setup_key"]))
+                except EntrySkipped as exc:
+                    skipped.append(f"{symbol}: {exc}")
+            if not candidates:
+                self.expiryedge_ai_note("; ".join(skipped) or "Waiting for a qualified expiry-day setup")
+                return
+
+            busy = self.book(self.broker())["busy"]
+            for _, symbol, setup_key in sorted(candidates, reverse=True):
+                try:
+                    proposal = self.expiryedge_ai_proposal(symbol, busy)
+                    if proposal["setup_key"] != setup_key:
+                        self.proposals.pop(proposal["id"], None)
+                        raise EntrySkipped("Signal changed during live Zerodha option checks")
+                    self.confirm(proposal["id"])
+                    self.expiryedge_ai_note("Order intent submitted; waiting for Zerodha fill confirmation")
+                    return
+                except EntrySkipped as exc:
+                    skipped.append(f"{symbol}: {exc}")
+            self.expiryedge_ai_note("; ".join(skipped) or "No live order qualified after final broker checks")
+
+    def scan_expiryedge_ai(self):
+        try:
+            self.automated_expiryedge_ai_entry()
+            self.expiryedge_ai_failures = 0
+        except LiveBlocked as exc:
+            with self.lock:
+                self.expiryedge_ai_note(f"Entries paused: {exc}")
+        except Exception as exc:
+            reason = f"{type(exc).__name__}: {exc}"
+            logger.exception("ExpiryEdge AI entry scan failed")
+            with self.lock:
+                self.expiryedge_ai_failures += 1
+                if self.expiryedge_ai_failures < EXPIRYEDGE_MAX_FAILURES:
+                    self.expiryedge_ai_note(f"Scan retry after error: {reason}")
+                    return
+                self.state["expiryedge_ai"]["enabled"] = False
+                self.state["expiryedge_ai"]["error"] = reason
+                self.proposals = {key: value for key, value in self.proposals.items()
+                                  if value.get("owner") != "EXPIRYEDGE_AI"}
+                if self.ready:
+                    self.save("EXPIRYEDGE_AI_SCAN_BLOCKED", reason=reason[:500])
+
+    def expiryedge_ai_active(self):
+        active = self.state.get("active")
+        if not active or active.get("owner") != "EXPIRYEDGE_AI":
+            return None
+        result = copy.deepcopy(active)
+        market = self.service()
+        with market.lock:
+            tick = market.engine.options.get(active["contract"]["token"])
+            fresh = market.engine.fresh(tick, time.time())
+            ltp = tick.price if tick is not None and fresh else None
+        open_quantity = max(0, active.get("filled", 0) - active.get("exited", 0))
+        result["ltp"] = ltp
+        result["unrealized"] = (round((ltp - active["entry_price"]) * open_quantity, 2)
+                                if ltp is not None and open_quantity and active.get("entry_price") else None)
+        return result
+
+    def expiryedge_ai_status(self, symbol=None):
+        with self.lock:
+            now = time.time()
+            state = self.state["expiryedge_ai"]
+            cfg = self.settings()
+            today = day(now)
+            trades = [trade for trade in self.state["trades"]
+                      if trade.get("owner") == "EXPIRYEDGE_AI" and day(trade["entry_at"]) == today]
+            entries = self.expiryedge_ai_entries(now)
+            blocks = []
+            try:
+                self.config_guard()
+            except LiveBlocked as exc:
+                blocks.append(str(exc))
+            schedules = get_expiryedge_config()["schedules"]
+            if any(not schedules[index]["weekday"] for index in SYMBOLS):
+                blocks.append("Save an expiry weekday for NIFTY, BANKNIFTY, and SENSEX")
+            if self.state["killed"] or self.state.get("flatten_pending"):
+                blocks.append("Emergency stop is active")
+            if not getattr(cfg, "expiryedge_ai_live_enabled", False):
+                blocks.append("ExpiryEdge AI live execution is disabled by EXPIRYEDGE_AI_LIVE_ENABLED")
+            active = self.state.get("active")
+            if active and active.get("owner") != "EXPIRYEDGE_AI":
+                blocks.append(f"Shared automated trade slot is occupied by {OWNER_LABELS.get(active.get('owner'), 'another strategy')}")
+            reason = (state.get("error") or state.get("waiting") or
+                      ("Manual mode: signals only; no orders" if not state["enabled"] else
+                       "Standing ON; waiting for a qualified expiry-day setup"))
+            return {
+                "enabled": bool(state["enabled"] and
+                                getattr(cfg, "expiryedge_ai_live_enabled", False)),
+                "live_enabled": bool(cfg.aqte_live_enabled and
+                                     getattr(cfg, "expiryedge_ai_live_enabled", False)),
+                "can_enable": not blocks,
+                "block_reasons": blocks,
+                "armed": self.state["armed_day"] == today and not self.state["killed"],
+                "entry_window": entry_window(now),
+                "killed": bool(self.state["killed"]),
+                "reason": reason,
+                "error": state.get("error"),
+                "active": self.expiryedge_ai_active(),
+                "trades_today": len(trades),
+                "entries_today": entries,
+                "daily_pnl": round(sum(trade["net_pnl"] for trade in trades), 2),
+                "daily_loss_limit": EXPIRYEDGE_AI_DAILY_LOSS_CAP,
+                "max_trades": EXPIRYEDGE_AI_MAX_TRADES,
+                "risk_per_trade": EXPIRYEDGE_AI_RISK_CAP,
+                "symbol": symbol if symbol in SYMBOLS else SYMBOLS[0],
+            }
+
+    # ---- 6 Algo Desk: six independent algos on this audited execution lane (tags XEA…E/S) ----
+
+    def expiryedge_enabled(self):
+        return any(self.state.get("expiryedge", {}).get("algos", {}).values())
+
+    def expiryedge_off(self, reason=None):
+        """Every algo OFF; an open 6 Algo Desk trade stays protected and is still exited by the monitor."""
+        self.state.setdefault("expiryedge", {})["algos"] = {key: False for key in EXPIRYEDGE_ALGOS}
+        if reason:
+            self.expiryedge_error = reason
+        self.expiryedge_waiting = None
+        self.proposals = {key: value for key, value in self.proposals.items() if value.get("owner") != "EXPIRYEDGE"}
+
+    def owner_proposal(self, owner, proposal, busy):
+        if owner == "QUANTEDGE":
+            return self.quantedge_proposal(proposal["symbol"], busy)
+        if owner == "EXPIRYEDGE":
+            return self.expiryedge_proposal(proposal["symbol"], proposal["algo"], busy)
+        if owner == "EXPIRYEDGE_AI":
+            return self.expiryedge_ai_proposal(proposal["symbol"], busy)
+        return self.proposal(proposal["symbol"], busy)
+
+    def expiryedge_entries(self, algo, now):
+        return sum(1 for entry in self.state["daily_entries"] if entry.get("owner") == "EXPIRYEDGE" and
+                   entry.get("algo") == algo and day(entry["at"]) == day(now))
+
+    def expiryedge_account_reason(self, now):
+        """Account-wide limits shared with AQTE; checked before any broker call so a full day just idles."""
+        cfg = self.settings()
+        trades = [trade for trade in self.state["trades"] if day(trade["entry_at"]) == day(now)]
+        if len(trades) >= cfg.aqte_live_max_trades:
+            return f"Account daily live trade limit reached ({cfg.aqte_live_max_trades})"
+        losses = 0
+        for trade in reversed(trades):
+            if trade["net_pnl"] >= 0:
+                break
+            losses += 1
+        if losses >= cfg.aqte_live_max_losses:
+            return f"Consecutive live loss limit reached ({cfg.aqte_live_max_losses})"
+        if sum(trade["net_pnl"] for trade in trades) <= -cfg.aqte_live_daily_loss:
+            return f"Account daily live loss limit reached (INR {cfg.aqte_live_daily_loss:,.0f})"
+        return None
+
+    def expiryedge_loss_budget_reason(self, risk):
+        today = day(time.time())
+        pnl = sum(trade["net_pnl"] for trade in self.state["trades"] if day(trade["entry_at"]) == today)
+        if risk > self.settings().aqte_live_daily_loss + pnl:
+            return "Planned stop risk exceeds the remaining account daily live loss budget"
+        return None
+
+    def expiryedge_note(self, reason):
+        """Waiting reasons are journaled only when they change, so a quiet retry loop stays quiet."""
+        if reason == self.expiryedge_waiting:
+            return
+        self.expiryedge_waiting = reason
+        if reason and self.ready:
+            try:
+                self.save("EXPIRYEDGE_WAITING", reason=reason[:500])
+            except (sqlite3.Error, OSError, ValueError):
+                logger.exception("Could not persist 6 Algo Desk waiting reason")
+
+    def expiryedge_activate(self, now):
+        """Standing ON shares AQTE's broker/IP preflight and session arm, retried each minute."""
+        if self.state["armed_day"] == day(now) and not self.state["killed"]:
+            return True
+        if (self.state["killed"] or self.state.get("flatten_pending") or self.state["active"] or
+                not entry_window(now) or now < self.next_activation):
+            return False
+        try:
+            self.preflight()
+            self.arm()
+            self.expiryedge_note(None)
+            return True
+        except LiveBlocked as exc:
+            reason = str(exc)
+        except Exception as exc:
+            logger.exception("6 Algo Desk broker preflight failed; retrying in %ss", ACTIVATION_RETRY_SECONDS)
+            reason = f"Broker preflight failed ({type(exc).__name__}: {exc})"
+        self.next_activation = now + ACTIVATION_RETRY_SECONDS
+        self.expiryedge_note(f"Arming retry in {ACTIVATION_RETRY_SECONDS}s: {reason}")
+        return False
+
+    def set_expiryedge_algo(self, algo, enabled, symbol=None):
+        with self.lock:
+            if algo not in EXPIRYEDGE_ALGOS:
+                raise LiveBlocked("Unknown 6 Algo Desk algo")
+            if type(enabled) is not bool:
+                raise LiveBlocked("6 Algo Desk approval must be an explicit boolean")
+            if not self.ready:
+                raise LiveBlocked("Live journal unavailable; 6 Algo Desk approval was not changed")
+            if enabled:
+                self.config_guard()
+                if self.state["killed"] or self.state.get("flatten_pending"):
+                    raise LiveBlocked("Emergency stop is latched; operator review is required before enabling 6 Algo Desk")
+            self.state["expiryedge"]["algos"][algo] = enabled
+            self.proposals = {key: value for key, value in self.proposals.items()
+                              if not (value.get("owner") == "EXPIRYEDGE" and value.get("algo") == algo)}
+            if enabled:
+                self.expiryedge_error = None
+                self.expiryedge_failures = 0
+                self.expiryedge_hold_until = 0.0
+            elif not self.expiryedge_enabled():
+                self.expiryedge_waiting = None
+            self.save("EXPIRYEDGE_ALGO_ON" if enabled else "EXPIRYEDGE_ALGO_OFF",
+                      algo=algo, name=EXPIRYEDGE_NAMES[algo])
+            now = time.time()
+            if enabled and entry_window(now) and not self.state["active"]:
+                self.next_activation = 0.0
+                self.expiryedge_activate(now)
+            self.wake()
+            return self.expiryedge_status(symbol)
+
+    def expiryedge_proposal(self, symbol, algo, busy=None):
+        with self.lock:
+            self.config_guard()
+            name = EXPIRYEDGE_NAMES.get(algo, algo)
+            if algo not in EXPIRYEDGE_ALGOS or not self.state["expiryedge"]["algos"].get(algo):
+                raise LiveBlocked(f"6 Algo Desk {name} is OFF")
+            now = time.time()
+            if self.state["armed_day"] != day(now) or self.state["killed"]:
+                raise LiveBlocked("The shared live session is not armed; broker preflight is required first")
+            if self.state["active"]:
+                raise EntrySkipped("The shared execution manager already has an active trade")
+            if self.expiryedge_entries(algo, now) >= EXPIRYEDGE_PER_ALGO_TRADES:
+                raise EntrySkipped(f"{name} daily trade limit reached ({EXPIRYEDGE_PER_ALGO_TRADES})")
+            if busy is None:
+                busy = self.book(self.broker())["busy"]
+            signal = self.expiryedge.candidate(self.service(), symbol, algo, now, busy, self.costs,
+                                               self.settings().aqte_live_risk_per_trade)
+            if signal.get("decision") not in ("BUY CE", "BUY PE") or not signal.get("entry"):
+                raise EntrySkipped(signal.get("reason") or f"No qualified {name} signal")
+            if signal["setup_key"] in self.state["used"]:
+                raise EntrySkipped(f"This {name} candle was already submitted")
+            self.proposals = {key: value for key, value in self.proposals.items() if value["expires_at"] > now}
+            result = {
+                "id": uuid4().hex,
+                "owner": "EXPIRYEDGE",
+                "algo": algo,
+                "symbol": symbol,
+                "contract": signal["contract"],
+                "strategy": f"expiryedge_{algo}",
+                "entry": signal["entry"],
+                "risk": signal["risk"],
+                "signal_at": signal["signal_at"],
+                "expires_at": now + 15,
+                "setup_key": signal["setup_key"],
+                "execution_context": {
+                    "strategy_name": name,
+                    "entry_engine": f"6 Algo Desk · {name}",
+                    "reason": signal["reason"],
+                    "supporting_engines": [],
+                    "confidence": None,
+                    "rules": [{"label": item["label"], "passed": item["passed"], "value": item.get("value")}
+                              for item in signal.get("rules", [])],
+                    "delta": signal.get("delta"),
+                    "delta_source": signal.get("delta_source"),
+                    "captured_at": now,
+                },
+            }
+            self.proposals[result["id"]] = copy.deepcopy(result)
+            return result
+
+    def record_expiryedge_opportunity(self, candidate, state, reason):
+        key = candidate["setup_key"]
+        previous = self.opportunities.get(key)
+        now = time.time()
+        if previous and previous.get("state") == state and (
+            previous.get("reason") == reason or now - previous.get("at", 0) < 30
+        ):
+            return
+        active = self.state.get("active") or {}
+        record = {
+            "key": key,
+            "owner": "EXPIRYEDGE",
+            "algo": candidate["algo"],
+            "symbol": candidate["symbol"],
+            "style": "expiryedge",
+            "strategy": f"expiryedge_{candidate['algo']}",
+            "decision": candidate.get("decision"),
+            "state": state,
+            "reason": reason,
+            "at": now,
+            "first_at": previous["first_at"] if previous else now,
+            "signal_at": candidate.get("signal_at"),
+            "score": None,
+            "reward_risk": (candidate.get("entry") or {}).get("reward_risk"),
+            "expected_value": None,
+            "expected_value_reason": "No validated/calibrated probability model",
+            "broker_order_id": active.get("entry_id") if active.get("setup_key") == key else None,
+        }
+        self.save("OPPORTUNITY", record=record)
+        self.opportunities[key] = record
+        self.metrics.increment(f"expiryedge.opportunities.{state.lower()}")
+
+    def automated_expiryedge_entry(self):
+        with self.lock:
+            now = time.time()
+            if (not self.ready or not self.expiryedge_enabled() or now < self.expiryedge_hold_until or
+                    now - self.expiryedge_scanned_at < EXPIRYEDGE_SCAN_SECONDS):
+                return
+            self.expiryedge_scanned_at = now
+            self.expiryedge_skip_until = {key: until for key, until in self.expiryedge_skip_until.items() if until > now}
+            if self.state["killed"] or self.state.get("flatten_pending") or self.state["active"] or not entry_window(now):
+                return
+            if not self.expiryedge_activate(now):
+                return
+            reason = self.expiryedge_account_reason(now)
+            if reason:
+                self.expiryedge_note(reason)
+                return
+            self.expiryedge_note(None)
+            market = self.service()
+            enabled = [key for key in EXPIRYEDGE_ALGOS if self.state["expiryedge"]["algos"].get(key)]
+            qualified, present = [], set()
+            for symbol in SYMBOLS:
+                evaluation = self.expiryedge.evaluate(market, symbol, now)
+                for algo in enabled:
+                    result = evaluation["algos"][algo]
+                    if result["decision"] not in ("BUY CE", "BUY PE"):
+                        continue
+                    key = expiryedge_setup_key(algo, symbol, result)
+                    present.add(key)
+                    candidate = {**result, "algo": algo, "symbol": symbol, "setup_key": key,
+                                 "signal_at": result["trigger_at"] + result["trigger_seconds"]}
+                    if key in self.state["used"] or now < self.expiryedge_skip_until.get(key, 0):
+                        continue
+                    if self.expiryedge_entries(algo, now) >= EXPIRYEDGE_PER_ALGO_TRADES:
+                        self.record_expiryedge_opportunity(
+                            candidate, "MISSED",
+                            f"{EXPIRYEDGE_NAMES[algo]} daily trade limit reached ({EXPIRYEDGE_PER_ALGO_TRADES})")
+                        continue
+                    qualified.append(((candidate["signal_at"], result["passed"]), symbol, algo, candidate))
+            for key, previous in list(self.opportunities.items()):
+                if previous.get("owner") == "EXPIRYEDGE" and key not in present and previous.get("state") in (
+                    "REJECTED", "MISSED"
+                ):
+                    record = {**previous, "state": "EXPIRED", "at": now,
+                              "reason": f"Signal is no longer fresh; last decision: {previous['reason']}"}
+                    self.save("OPPORTUNITY", record=record)
+                    self.opportunities[key] = record
+            if not qualified:
+                return
+            # One broker read per qualified scan; confirm() re-reads Kite before any order.
+            busy = self.book(self.broker())["busy"]
+            for _, symbol, algo, candidate in sorted(qualified, key=lambda item: item[0], reverse=True):
+                key = candidate["setup_key"]
+                try:
+                    proposal = self.expiryedge_proposal(symbol, algo, busy)
+                    if proposal["setup_key"] != key:
+                        self.proposals.pop(proposal["id"], None)
+                        raise EntrySkipped("Signal changed during live option checks")
+                    self.confirm(proposal["id"])
+                except EntrySkipped as exc:
+                    self.expiryedge_skip_until[key] = time.time() + ENTRY_RETRY_SECONDS
+                    self.record_expiryedge_opportunity(candidate, "REJECTED", str(exc))
+                    continue
+                except LiveBlocked as exc:
+                    self.record_expiryedge_opportunity(candidate, "REJECTED", str(exc))
+                    raise
+                self.record_expiryedge_opportunity(
+                    candidate, "ACCEPTED", "Entry intent persisted; broker fills are reconciled separately")
+                return
+
+    def scan_expiryedge(self):
+        try:
+            self.automated_expiryedge_entry()
+            self.expiryedge_failures = 0
+        except LiveBlocked as exc:
+            # Guard refusals (IP, account, untracked exposure) hold entries and retry; they never place orders.
+            with self.lock:
+                self.expiryedge_hold_until = time.time() + ACTIVATION_RETRY_SECONDS
+                self.expiryedge_note(f"Entries paused {ACTIVATION_RETRY_SECONDS}s: {exc}")
+        except Exception as exc:
+            reason = f"{type(exc).__name__}: {exc}"
+            logger.exception("6 Algo Desk entry scan failed")
+            with self.lock:
+                self.expiryedge_failures += 1
+                if self.expiryedge_failures < EXPIRYEDGE_MAX_FAILURES:
+                    self.expiryedge_hold_until = time.time() + ENTRY_RETRY_SECONDS
+                    self.expiryedge_note(f"Scan retry after error: {reason}")
+                    return
+                self.expiryedge_off(reason)
+                if self.ready:
+                    try:
+                        self.save("EXPIRYEDGE_SCAN_BLOCKED", reason=reason[:500])
+                    except (sqlite3.Error, OSError, ValueError):
+                        logger.exception("Could not persist 6 Algo Desk scan block")
+
+    def expiryedge_reason(self, now):
+        """Single operator-facing line explaining why entries are or are not being placed right now."""
+        active = self.state.get("active")
+        if not self.ready:
+            return "Live journal unavailable; entries blocked"
+        if self.state["killed"] or self.state.get("flatten_pending"):
+            return "Emergency stop latched; every 6 Algo Desk algo is OFF"
+        if self.expiryedge_error and not self.expiryedge_enabled():
+            return f"Switched OFF after repeated scan errors: {self.expiryedge_error}"
+        if active:
+            owner = OWNER_LABELS.get(active.get("owner"), "AQTE")
+            return f"Shared live trade slot is managing {owner}; enabled strategies wait for it to clear"
+        if not self.expiryedge_enabled():
+            return "Every algo is in Manual (TRADE OFF): live signals only, no orders"
+        if not entry_window(now):
+            return "Entries run 09:15-15:15 IST on trading days; standing ON re-arms automatically"
+        if active:
+            return "Managing the open 6 Algo Desk trade; one live trade at a time"
+        return self.expiryedge_waiting or self.expiryedge_account_reason(now)
+
+    def expiryedge_active(self):
+        active = self.state.get("active")
+        if not active or active.get("owner") != "EXPIRYEDGE":
+            return None
+        result = copy.deepcopy(active)
+        market = self.service()
+        try:
+            with market.lock:
+                tick = market.engine.options.get(active["contract"]["token"])
+                fresh = market.engine.fresh(tick, time.time())
+                ltp = tick.price if tick is not None and fresh else None
+        except (AttributeError, KeyError, TypeError):
+            ltp = None
+        open_quantity = max(0, active.get("filled", 0) - active.get("exited", 0))
+        result["ltp"] = ltp
+        result["unrealized"] = (round((ltp - active["entry_price"]) * open_quantity, 2)
+                                if ltp is not None and open_quantity and active.get("entry_price") else None)
+        result["name"] = EXPIRYEDGE_NAMES.get(active.get("algo"), active.get("algo"))
+        return result
+
+    def expiryedge_status(self, symbol=None):
+        with self.lock:
+            now = time.time()
+            symbol = symbol if symbol in SYMBOLS else SYMBOLS[0]
+            cfg = self.settings()
+            switches = self.state["expiryedge"]["algos"]
+            market = self.service()
+            evaluations = {}
+            for name in SYMBOLS:
+                try:
+                    evaluations[name] = self.expiryedge.evaluate(market, name, now)
+                except (ArithmeticError, AttributeError, KeyError, TypeError, ValueError) as exc:
+                    reason = f"Signals unavailable ({type(exc).__name__})"
+                    evaluations[name] = dict(symbol=name, ready=False, reason=reason, context={},
+                                             algos={key: expiryedge_idle(key, reason) for key in EXPIRYEDGE_ALGOS})
+            history = [trade for trade in self.state["trades"] if trade.get("owner") == "EXPIRYEDGE"]
+            today = day(now)
+            week = datetime.fromtimestamp(now, IST).isocalendar()[:2]
+            algos = []
+            for key, name, subtitle in EXPIRYEDGE_CATALOG:
+                mine = [trade for trade in history if trade.get("algo") == key]
+                entries = self.expiryedge_entries(key, now)
+                algos.append(dict(
+                    key=key, name=name, subtitle=subtitle, enabled=switches.get(key, False),
+                    entries_today=entries, remaining_today=max(0, EXPIRYEDGE_PER_ALGO_TRADES - entries),
+                    today=performance([trade for trade in mine if day(trade["entry_at"]) == today]),
+                    week=performance([trade for trade in mine if datetime.fromtimestamp(
+                        trade["entry_at"], IST).isocalendar()[:2] == week]),
+                    summary={index: {field: evaluations[index]["algos"][key].get(field)
+                                     for field in ("status", "decision", "side", "passed", "total", "fresh")}
+                             for index in SYMBOLS},
+                ))
+            account_trades = [trade for trade in self.state["trades"] if day(trade["entry_at"]) == today]
+            trades = sorted(history, key=lambda trade: trade.get("exit_at") or trade["entry_at"], reverse=True)[:25]
+            fields = ("id", "algo", "symbol", "entry_price", "exit_price", "filled", "net_pnl", "entry_at",
+                      "exit_at", "exit_reason", "exit_requested", "stop", "target", "initial_stop")
+            selected = evaluations[symbol]
+            return {
+                "generated_at": now,
+                "ready": self.ready,
+                "live_enabled": bool(cfg.aqte_live_enabled),
+                "armed": self.state["armed_day"] == today and not self.state["killed"],
+                "entry_window": entry_window(now),
+                "killed": bool(self.state["killed"]),
+                "flatten_pending": bool(self.state.get("flatten_pending")),
+                "any_enabled": self.expiryedge_enabled(),
+                "lane_owner": self.state["active"].get("owner") if self.state.get("active") else None,
+                "reason": self.expiryedge_reason(now),
+                "error": self.expiryedge_error,
+                "symbol": symbol,
+                "market": {name: {"ready": evaluations[name]["ready"], "reason": evaluations[name]["reason"],
+                                  "context": evaluations[name]["context"]} for name in SYMBOLS},
+                "signals": selected["algos"],
+                "signals_by_symbol": {name: evaluations[name]["algos"] for name in SYMBOLS},
+                "algos": algos,
+                "active": self.expiryedge_active(),
+                "trades": [{key: trade.get(key) for key in fields} | {
+                    "trading_symbol": (trade.get("contract") or {}).get("trading_symbol"),
+                    "side": (trade.get("contract") or {}).get("side")} for trade in trades],
+                "opportunities": sorted((record for record in self.opportunities.values()
+                                         if record.get("owner") == "EXPIRYEDGE"),
+                                        key=lambda record: record["at"], reverse=True)[:25],
+                "account": {
+                    "trades_today": len(account_trades),
+                    "net_pnl_today": round(sum(trade["net_pnl"] for trade in account_trades), 2),
+                    "expiryedge_pnl_today": round(sum(trade["net_pnl"] for trade in history
+                                                      if day(trade["entry_at"]) == today), 2),
+                },
+                "limits": {
+                    "per_algo_max_trades": EXPIRYEDGE_PER_ALGO_TRADES,
+                    "max_trades": cfg.aqte_live_max_trades,
+                    "max_losses": cfg.aqte_live_max_losses,
+                    "daily_loss": cfg.aqte_live_daily_loss,
+                    "risk_per_trade": cfg.aqte_live_risk_per_trade,
+                    "max_lots": 1,
+                    "trail_start_r": EXPIRYEDGE_TRAIL_START_R,
+                    "target_r": EXPIRYEDGE_TARGET_R,
+                    "entry_window": "09:15-15:15 IST",
+                },
+            }
+
+    def request_expiryedge_exit(self, trade_id, symbol=None):
+        with self.lock:
+            active = self.state.get("active")
+            if not active or active.get("owner") != "EXPIRYEDGE" or active["id"] != trade_id:
+                raise LiveBlocked("The selected 6 Algo Desk trade is no longer active")
+            self.request_exit(trade_id)
+            return self.expiryedge_status(symbol or active["symbol"])
+
+    def request_expiryedge_ai_exit(self, trade_id, symbol=None):
+        with self.lock:
+            active = self.state.get("active")
+            if not active or active.get("owner") != "EXPIRYEDGE_AI" or active["id"] != trade_id:
+                raise LiveBlocked("The selected ExpiryEdge AI trade is no longer active")
+            self.request_exit(trade_id)
+            return self.expiryedge_ai_status(symbol or active["symbol"])
+
     def entry_levels(self, symbol, signal):
         contract = Contract(**signal["contract"])
         control = self.state["daily_controls"][symbol]
         entry = copy.deepcopy(signal["entry"])
         cap = self.settings().aqte_live_risk_per_trade
-        if signal.get("source") == "morning":
+        if signal.get("source") == "expiryedge_ai":
+            cap = EXPIRYEDGE_AI_RISK_CAP
+            entry["stop"] = round_tick(
+                entry["maximum"] * (1 - EXPIRYEDGE_AI_STOP_FRACTION),
+                contract.tick_size,
+                up=True,
+            )
+            entry["target"] = None
+        elif signal.get("source") == "morning":
             distance = entry.get("risk_distance")
             if not isinstance(distance, (int, float)) or not math.isfinite(distance) or distance <= 0:
                 raise EntrySkipped("Morning ATR/premium-based risk distance is unavailable")
@@ -1324,11 +2214,20 @@ class AQTELiveService:
                                          contract.tick_size, up=True)
         if entry["quantity"] != contract.lot_size:
             raise LiveBlocked("Live pilot permits exactly one lot")
-        if not 0 < entry["stop"] < entry["maximum"] < entry["target"]:
+        valid_levels = (0 < entry["stop"] < entry["maximum"] if signal.get("source") == "expiryedge_ai"
+                        else 0 < entry["stop"] < entry["maximum"] < entry["target"])
+        if not valid_levels:
             # Signal-specific (e.g. a one-tick premium): skip this index without fault-stopping automation.
             raise EntrySkipped("Premium too small for valid live entry, stop and target levels")
         risk = (entry["maximum"] - entry["stop"]) * contract.lot_size + self.costs(
             entry["maximum"], contract.lot_size) + self.costs(entry["stop"], contract.lot_size)
+        if signal.get("source") == "expiryedge_ai":
+            if risk > cap:
+                raise EntrySkipped("One Zerodha lot exceeds the INR 3,000 ExpiryEdge AI per-trade risk limit")
+            reason = self.expiryedge_ai_loss_budget_reason(risk)
+            if reason:
+                raise EntrySkipped(reason)
+            return entry, risk
         reward = (entry["target"] - entry["maximum"]) * contract.lot_size - self.costs(
             entry["maximum"], contract.lot_size) - self.costs(entry["target"], contract.lot_size)
         if reward / risk < 1.5:
@@ -1371,8 +2270,7 @@ class AQTELiveService:
             if proposal["setup_key"] in self.state["used"]:
                 raise LiveBlocked("This strategy candle was already submitted")
             # Re-evaluate the backend setup; never trust browser prices or quantity.
-            current = (self.quantedge_proposal(proposal["symbol"], book["busy"]) if owner == "QUANTEDGE"
-                       else self.proposal(proposal["symbol"], book["busy"]))
+            current = self.owner_proposal(owner, proposal, book["busy"])
             self.proposals.pop(current["id"], None)
             # Same contract and strategy candle, and the price cap may only fall: never chase a higher ask.
             if current["contract"] != proposal["contract"] or current["setup_key"] != proposal["setup_key"] or (
@@ -1384,11 +2282,17 @@ class AQTELiveService:
             # Use the rechecked tier/stop/target, not an obsolete higher-risk plan.
             proposal = {**current, "expires_at": proposal["expires_at"]}
             reason = (self.quantedge_loss_budget_reason(proposal["risk"]) if owner == "QUANTEDGE"
+                      else self.expiryedge_loss_budget_reason(proposal["risk"]) if owner == "EXPIRYEDGE"
+                      else self.expiryedge_ai_loss_budget_reason(proposal["risk"]) if owner == "EXPIRYEDGE_AI"
                       else self.loss_budget_reason(proposal["symbol"], proposal["risk"]))
             if reason:
                 raise EntrySkipped(reason)
-            control = ({"trail_start_r": 1.0, "daily_loss": 1500}
-                       if owner == "QUANTEDGE" else self.state["daily_controls"][proposal["symbol"]])
+            control = ({"trail_start_r": 1.0, "daily_loss": 1500} if owner == "QUANTEDGE"
+                       else {"trail_start_r": EXPIRYEDGE_TRAIL_START_R, "daily_loss": self.settings().aqte_live_daily_loss}
+                       if owner == "EXPIRYEDGE"                        else {
+                           "trail_start_r": 1.0, "trail_gap_r": EXPIRYEDGE_AI_TRAIL_GAP_R,
+                           "breakeven_on_start": True, "daily_loss": EXPIRYEDGE_AI_DAILY_LOSS_CAP,
+                       } if owner == "EXPIRYEDGE_AI" else self.state["daily_controls"][proposal["symbol"]])
             c, entry = proposal["contract"], proposal["entry"]
             verified = Contract(**c)
             if verified.symbol != proposal["symbol"] or verified.exchange != (
@@ -1433,8 +2337,7 @@ class AQTELiveService:
                     not market.engine.fresh(market.engine.future.get(proposal["symbol"]), time.time())
                 ):
                     raise EntrySkipped("Streaming quote became stale during broker checks")
-                latest = (self.quantedge_proposal(proposal["symbol"], book["busy"]) if owner == "QUANTEDGE"
-                          else self.proposal(proposal["symbol"], book["busy"]))
+                latest = self.owner_proposal(owner, proposal, book["busy"])
                 self.proposals.pop(latest["id"], None)
                 if latest["contract"] != c or latest["setup_key"] != proposal["setup_key"] or (
                     latest["risk"] > proposal["risk"] or latest["entry"]["maximum"] > entry["maximum"] or
@@ -1447,7 +2350,9 @@ class AQTELiveService:
                 entry, now = proposal["entry"], time.time()
             # Persist the unique intent BEFORE sending. A timeout is not a rejection.
             active = {
-                "id": ("QEP" + uuid4().hex[:13]) if owner == "QUANTEDGE" else uuid4().hex[:16],
+                "id": ("QEP" + uuid4().hex[:13]) if owner == "QUANTEDGE" else (
+                    "XEA" + uuid4().hex[:13]) if owner == "EXPIRYEDGE" else (
+                    "EAI" + uuid4().hex[:13]) if owner == "EXPIRYEDGE_AI" else uuid4().hex[:16],
                 "owner": owner, "symbol": proposal["symbol"], "contract": c,
                 "strategy": proposal.get("strategy"),
                 "execution_context": copy.deepcopy(proposal["execution_context"]),
@@ -1455,15 +2360,21 @@ class AQTELiveService:
                 "initial_stop": entry["stop"], "target": entry["target"], "peak": 0,
                 "trailing_active": False,
                 "trail_start_r": control["trail_start_r"], "daily_loss_limit": control["daily_loss"],
+                "trail_gap_r": control.get("trail_gap_r", 1.0),
+                "breakeven_on_start": control.get("breakeven_on_start", False),
                 "state": "ENTRY_UNKNOWN", "entry_id": None, "protect_id": None,
                 "filled": 0, "entry_price": 0, "entry_at": now, "account": self.state["account"],
                 "signal_at": proposal["signal_at"],
                 "setup_key": proposal["setup_key"],
                 "entry_day": day(now), "exit_requested": None, "error": None,
             }
+            if owner == "EXPIRYEDGE":
+                active["algo"] = proposal["algo"]
             self.state["active"] = active
             self.state["daily_entries"].append(dict(id=active["id"], owner=owner, symbol=active["symbol"], at=now,
                                                    filled=False, pending=True, token=c["token"], price=entry["maximum"]))
+            if owner == "EXPIRYEDGE":
+                self.state["daily_entries"][-1]["algo"] = proposal["algo"]
             self.state["used"].append(proposal["setup_key"])
             self.save("ENTRY_INTENT", proposal=proposal, tag=active["id"] + "E")
             self.metrics.observe("execution.signal_to_intent", max(0, now - proposal["signal_at"]) * 1000)
@@ -1492,7 +2403,8 @@ class AQTELiveService:
             if not self.ready:
                 raise LiveBlocked("Live journal is unavailable; manage the position in Kite")
             active = self.state["active"]
-            label = "QuantEdge Pro" if active and active.get("owner") == "QUANTEDGE" else "AQTE"
+            owner = (active or {}).get("owner", "AQTE")
+            label = OWNER_LABELS.get(owner, "AQTE")
             if self.state["killed"] or self.state.get("flatten_pending"):
                 raise LiveBlocked(f"{label} emergency stop is active; monitor the algorithm square-off in Kite")
             if not active or active["id"] != trade_id:
@@ -1501,10 +2413,20 @@ class AQTELiveService:
                 raise LiveBlocked("Previous-session trade requires reconciliation in Kite")
             if active["filled"] <= active.get("exited", 0):
                 raise LiveBlocked("No confirmed remaining fill to close; inspect the pending order in Kite")
-            if active.get("owner") == "QUANTEDGE":
+            if owner == "QUANTEDGE":
                 self.state["quantedge"]["enabled"] = False
                 self.proposals = {key: value for key, value in self.proposals.items()
                                   if value.get("owner") != "QUANTEDGE"}
+            elif owner == "EXPIRYEDGE":
+                algos = self.state["expiryedge"]["algos"]
+                if active.get("algo") in algos:
+                    algos[active["algo"]] = False
+                self.proposals = {key: value for key, value in self.proposals.items()
+                                  if value.get("owner") != "EXPIRYEDGE"}
+            elif owner == "EXPIRYEDGE_AI":
+                self.state["expiryedge_ai"]["enabled"] = False
+                self.proposals = {key: value for key, value in self.proposals.items()
+                                  if value.get("owner") != "EXPIRYEDGE_AI"}
             else:
                 self.state["automation_on"] = False
                 self.state["automation_wanted"] = False
@@ -1514,9 +2436,8 @@ class AQTELiveService:
             if not active["exit_requested"]:
                 active.update(exit_requested="MANUAL_EXIT", exit_request_at=time.time())
             # The monitor reconciles identity/quantity, then modifies only this trade's existing sell order.
-            self.save("MANUAL_EXIT_REQUESTED", trade_id=trade_id,
-                      scope="SELECTED_QUANTEDGE_TRADE" if active.get("owner") == "QUANTEDGE"
-                      else "SELECTED_AQTE_TRADE")
+            self.save("MANUAL_EXIT_REQUESTED", trade_id=trade_id, scope=f"SELECTED_{owner}_TRADE",
+                      **({"algo": active["algo"]} if active.get("algo") else {}))
             return self.status()
 
     def find_order(self, orders, active, leg):
@@ -1696,14 +2617,15 @@ class AQTELiveService:
                 active["entry_price"], filled) - self.costs(quote.bid, filled)
             index_pnl = sum(t["net_pnl"] for t in self.state["trades"]
                             if t["symbol"] == active["symbol"] and day(t["entry_at"]) == day(now) and (
-                                active.get("owner") != "QUANTEDGE" or t.get("owner") == "QUANTEDGE"
+                                active.get("owner") not in ("QUANTEDGE", "EXPIRYEDGE_AI") or
+                                t.get("owner") == active.get("owner")
                             ))
             open_pnl = marked_pnl - daily_pnl
             if marked_pnl <= -self.settings().aqte_live_daily_loss or (
                 index_pnl + open_pnl <= -active.get("daily_loss_limit", self.settings().aqte_live_daily_loss)
             ):
                 reason = reason or "DAILY_LOSS"
-            if quote.bid >= active["target"]:
+            if active.get("target") is not None and quote.bid >= active["target"]:
                 reason = reason or "TARGET"
             if active["entry_price"] <= active["initial_stop"]:
                 reason = reason or "FILL_BELOW_STOP"
@@ -1732,10 +2654,19 @@ class AQTELiveService:
                 active["peak"] = max(active["peak"], quote.bid)
                 distance = active["entry_price"] - active["initial_stop"]
                 remaining = KITE_MAX_MODIFICATIONS - EXIT_MODIFY_RESERVE - active.get("modifications", 0)
-                if distance > 0 and remaining > 0 and active["peak"] >= active["entry_price"] + distance * active.get("trail_start_r", 1):
-                    stop = round_tick(active["peak"] - distance, c["tick_size"])
-                    # The stop can rise at most to target − 1R; spread the remaining modify budget over that room.
-                    step = max(c["tick_size"], (active["target"] - distance - active["stop"]) / remaining)
+                trail_gap = distance * active.get("trail_gap_r", 1.0)
+                trail_start = distance * active.get("trail_start_r", 1.0)
+                if distance > 0 and remaining > 0 and active["peak"] >= active["entry_price"] + trail_start:
+                    if active.get("breakeven_on_start"):
+                        trail_gap_threshold = active["entry_price"] + trail_start + trail_gap
+                        stop_candidate = (active["entry_price"] if active["peak"] < trail_gap_threshold
+                                          else active["peak"] - trail_gap)
+                    else:
+                        stop_candidate = active["peak"] - trail_gap
+                    stop = round_tick(stop_candidate, c["tick_size"], up=True)
+                    step = (max(c["tick_size"], (active["target"] - distance - active["stop"]) / remaining)
+                            if active.get("target") is not None else
+                            max(c["tick_size"], trail_gap / 2))
                     if stop > active["stop"] + c["tick_size"] / 2 and stop - active["stop"] >= step - 1e-6:
                         price = round_tick(max(c["tick_size"], stop - max(2 * c["tick_size"], stop * 0.01)), c["tick_size"])
                         expected = {"order_type": "SL", "price": price, "trigger_price": stop}
@@ -1760,6 +2691,8 @@ class AQTELiveService:
             self.state.update(armed_day=None, automation_on=False, automation_wanted=False,
                               killed=True, flatten_pending=True)
             self.state["quantedge"]["enabled"] = False
+            self.state["expiryedge_ai"]["enabled"] = False
+            self.expiryedge_off()
             self.waiting = None
             self.proposals.clear()
             self.kill_sent.clear()
@@ -1900,6 +2833,8 @@ class AQTELiveService:
                 raise LiveBlocked("Emergency square-off still in progress; wait until Kite shows no open AQTE positions or AQTE orders")
             self.state.update(killed=False, armed_day=None, automation_on=False, automation_wanted=False)
             self.state["quantedge"]["enabled"] = False
+            self.expiryedge_off()
+            self.expiryedge_error = None
             self.error = None
             self.waiting = None
             self.save("EMERGENCY_RESET", note="Operator reviewed; automation remains OFF")
@@ -1914,6 +2849,7 @@ class AQTELiveService:
             self.state["armed_day"] = None
             self.state["automation_on"] = False
             self.state["quantedge"]["enabled"] = False
+            self.state["expiryedge_ai"]["enabled"] = False
             # A standing ON request re-arms through a fresh preflight after the retry delay.
             self.next_activation = time.time() + ACTIVATION_RETRY_SECONDS
             if self.ready and changed:
@@ -2088,6 +3024,8 @@ class AQTELiveService:
                     await asyncio.to_thread(self.prepare_session)
                     await asyncio.to_thread(self.auto_activate)
                     await asyncio.to_thread(self.measured, "quantedge.scan", self.scan_quantedge)
+                    await asyncio.to_thread(self.measured, "expiryedge.scan", self.scan_expiryedge)
+                    await asyncio.to_thread(self.measured, "expiryedge_ai.scan", self.scan_expiryedge_ai)
                     await asyncio.to_thread(self.measured, "execution.scan", self.scan_entries)
             except Exception as exc:
                 logger.exception("AQTE live reconciliation requires attention; inspect broker terminal")

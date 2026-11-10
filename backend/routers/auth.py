@@ -25,6 +25,13 @@ _CSRF_EXPIRY_SECONDS = 300  # 5 minutes
 _CSRF_MAX_STATES = 500      # Cap size to prevent DoS memory exhaustion
 
 
+def _shared_zerodha_auth_path() -> Path:
+    configured_path = os.getenv("ZERODHA_SHARED_AUTH_FILE")
+    if configured_path:
+        return Path(configured_path)
+    return Path(__file__).resolve().parents[1] / "data" / "morningedge_auth" / "credentials.json"
+
+
 class LoginRequest(BaseModel):
     """Login request model."""
     request_token: str
@@ -70,12 +77,10 @@ async def _persist_access_token(access_token: str) -> None:
     """Save token to .env and reset every cached-settings consumer."""
     env_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), ".env")
     update_env_file(env_path, "ZERODHA_ACCESS_TOKEN", access_token)
-    shared_auth_path = os.getenv("ZERODHA_SHARED_AUTH_FILE")
-    if shared_auth_path:
-        current_settings = get_settings()
-        _persist_shared_zerodha_auth(
-            Path(shared_auth_path), current_settings.zerodha_api_key, access_token
-        )
+    current_settings = get_settings()
+    _persist_shared_zerodha_auth(
+        _shared_zerodha_auth_path(), current_settings.zerodha_api_key, access_token
+    )
 
     from config import get_settings as _gs
     _gs.cache_clear()

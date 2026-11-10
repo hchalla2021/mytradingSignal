@@ -5,11 +5,12 @@ const path = require('node:path');
 const vm = require('node:vm');
 const ts = require('typescript');
 
-function harness(filename = 'AQTESection.tsx', now, sharedProduction = false) {
+function harness(filename = 'AQTESection.tsx', now, sharedProduction = false, serverOffsetMs, serverClock = {}) {
   const states = [];
   const timers = new Map();
   const requests = [];
   const downloads = [], revoked = [];
+  const confirms = [];
   let effect, cursor, timer = 0, response, accessExpired = 0;
   const react = {
     memo: component => component,
@@ -40,17 +41,24 @@ function harness(filename = 'AQTESection.tsx', now, sharedProduction = false) {
       requests.push({ url, options });
       if (response instanceof Error) throw response;
       const value = response;
+      // Like nginx, stamp a whole-second Date header from the server's own clock while the request is in flight.
+      // dateLagMs models uvicorn's cached Date; precise adds the backend's millisecond X-Server-Time.
+      const server = serverOffsetMs === undefined ? null : context.Date.now() + serverOffsetMs;
+      const date = server === null ? null : new Date(server - (serverClock.dateLagMs ?? 0)).toUTCString();
+      const precise = server !== null && serverClock.precise ? (server / 1000).toFixed(3) : null;
       return { ok: !value?.__httpStatus || value.__httpStatus < 400, status: value?.__httpStatus ?? 200,
         json: async () => value?.__httpStatus ? value.__body : value,
-        headers: { get: key => key === 'content-type' ? value?.__contentType ?? 'application/json' : null },
+        headers: { get: key => key === 'content-type' ? value?.__contentType ?? 'application/json' :
+          key === 'date' ? date : key === 'x-server-time' ? precise : null },
         blob: async () => value?.__blob };
     },
     require: id => {
       if (id === 'react') return react;
       if (id === 'react/jsx-runtime') return require(id);
       if (id === 'lucide-react') return Object.fromEntries(
-        ['Activity', 'ArrowDown', 'ArrowUp', 'BarChart3', 'Briefcase', 'Check', 'Clock3', 'Home',
-          'Settings', 'ShieldCheck', 'TrendingUp', 'Zap'].map(name => [name, () => null]));
+        ['Activity', 'AlertCircle', 'ArrowDown', 'ArrowUp', 'BarChart3', 'Bell', 'Bot', 'Briefcase', 'Check', 'CheckCircle2',
+          'ChevronDown', 'Clock3', 'Home', 'Loader2', 'Play', 'Save', 'Settings', 'ShieldCheck', 'TrendingUp', 'Zap'].map(name => [name, () => null]));
+      if (id === '@/hooks/useAuth') return { useAuth: () => ({ isAuthenticated: false }) };
       if (id === '@/lib/api-config') return { API_CONFIG: { endpoint: p => p, sharedProduction } };
       if (id === '@/components/AQTELiveController') return { default: () => null };
       if (id === '@/components/AQTEAutomationSwitch') return { default: () => null };
@@ -93,6 +101,10 @@ function harness(filename = 'AQTESection.tsx', now, sharedProduction = false) {
       throw new Error(`Unexpected dependency ${id}`);
     },
   };
+  if (filename === 'MorningEdgeSection.tsx') context.process = { env: {} };
+  if (filename === 'AlgoDeskSection.tsx') {
+    context.window = { confirm: message => { confirms.push(message); return confirms.answer ?? true; } };
+  }
   if (filename === 'AQTEExecutionHistory.tsx') {
     context.URL = { createObjectURL: () => 'blob:test-executions', revokeObjectURL: url => revoked.push(url) };
     context.document = {
@@ -114,7 +126,7 @@ function harness(filename = 'AQTESection.tsx', now, sharedProduction = false) {
       timers.delete(pending[0]);
       await pending[1].fn();
     },
-    timers, requests, downloads, revoked,
+    timers, requests, downloads, revoked, confirms,
     exports: context.exports,
     get accessExpired() { return accessExpired; },
   };
@@ -1418,12 +1430,11 @@ test('AQTE has three index cards and disables trade actions while live status is
   const inputs = nodes(tree).filter(n => ['input', 'select'].includes(n.type));
   assert.equal(inputs.length, 1, 'Only the read-only Excel month selector is available');
   assert.equal(inputs[0].props['aria-label'], 'Excel month (IST)');
-  // Engine deck filters, rule-detail toggles and dashboard navigation are view-only, not trade actions.
-  const deckControl = n => n.type === 'button' && /aqx-deck-filter|aqx-eng-card/.test(String(n.props?.className));
+  // Dashboard navigation is view-only, not a trade action; the 12-engine board is hidden from the UI.
   const viewOnly = n => n.type === 'button' && /\baqx-viewonly\b/.test(String(n.props?.className));
-  const actions = nodes(tree).filter(n => n.type === 'button' && n.props.role !== 'tab' && !deckControl(n) && !viewOnly(n));
+  const actions = nodes(tree).filter(n => n.type === 'button' && n.props.role !== 'tab' && !viewOnly(n));
   assert.equal(actions.length, 15, 'Only existing guarded trade actions are available');
-  assert.equal(nodes(tree).filter(deckControl).length, 17);
+  assert.equal(nodes(tree).filter(n => /aqx-deck-filter|aqx-eng-card/.test(String(n.props?.className))).length, 0);
   assert.ok(nodes(tree).filter(viewOnly).every(n => !/Exit|Flatten|Kill|Buy|Sell|Confirm/i.test(text(n))), 'Navigation never trades');
   assert.ok(actions.every(n => n.props.disabled), 'Trade actions need a confirmed matching live position');
   const summary = nodes(tree).find(n => n.props?.['aria-label'] === 'Today summary');
@@ -1697,7 +1708,7 @@ test('terminal presentation has per-index hero cards, engine and exit-rule panel
   for (const symbol of ['NIFTY', 'BANKNIFTY', 'SENSEX']) {
     assert.match(nodes(tree).find(n => n.props?.id === `aqte-index-tab-${symbol}`).props.className, new RegExp(`aqte-tab-${symbol}`));
   }
-  assert.equal(nodes(tree).filter(n => n.type === 'button' && !/aqx-deck-filter|aqx-eng-card|aqx-viewonly/.test(String(n.props?.className))).length,
+  assert.equal(nodes(tree).filter(n => n.type === 'button' && !/aqx-viewonly/.test(String(n.props?.className))).length,
     23, '3 index tabs, 5 book tabs and 15 gated trade actions');
   cleanup();
 });
@@ -2032,8 +2043,9 @@ test('responsive AQTE avoids clipped containers and keeps tabs and live actions 
   const automation = harness('AQTEAutomationSwitch.tsx').render();
   const control = autoSwitch(automation);
   assert.equal(control.props.disabled, true);
-  assert.match(styles, /\.aqte-theme \.aqte-auto-switch \{[^}]*min-height: 44px; max-width: 100%/s);
-  assert.match(styles, /\.aqte-theme \.aqte-auto-switch-label \{[^}]*font-size: 14px/s);
+  assert.match(styles, /\.aqte-theme \.aqte-auto-switch \{[^}]*width: 134px; height: 46px; flex: 0 0 134px/s);
+  assert.match(styles, /\.aqte-theme \.aqte-auto-switch \{[^}]*border-radius: 10px/s);
+  assert.doesNotMatch(readFileSync(path.join(__dirname, '..', 'components', 'AQTEAutomationSwitch.tsx'), 'utf8'), /aqte-auto-switch-track|aqte-auto-switch-thumb|aqx-auto-confirm/);
   const live = harness('AQTELiveController.tsx');
   live.render();
   const status = { ...liveFixture(), active: livePositionFixture() };
@@ -2131,7 +2143,7 @@ test('shared production is visibly identified without sending any order commands
   cleanup();
 });
 
-test('header switch defaults OFF and only confirmed ON sends automation command', async () => {
+test('header switch toggles ON and OFF directly without extra confirmation text', async () => {
   const h = harness('AQTEAutomationSwitch.tsx');
   h.render();
   const status = { ...liveFixture(), enabled: true, armed: false };
@@ -2142,16 +2154,13 @@ test('header switch defaults OFF and only confirmed ON sends automation command'
   assert.match(nodes(h.render()).find(n => n.props?.id === 'aqte-automation-help').props.className, /sr-only/);
   assert.equal(nodes(h.render()).find(n => n.props?.role === 'switch').props['aria-checked'], false);
   assert.ok(h.requests.every(r => r.options.method === 'GET'));
+  h.respond({ ...status, automation_wanted: true });
   nodes(h.render()).find(n => n.props?.role === 'switch').props.onClick();
-  assert.match(text(h.render()), /Start automated real-money orders/);
-  assert.match(text(h.render()), /one-lot BUY CE\/BUY PE.*No qualifying signal means no trade/);
-  assert.match(text(h.render()), /AQTE manages only its own tagged orders.*never closes, cancels or modifies your manual Kite trades.*different strike/);
-  assert.equal(h.requests.filter(r => r.options.method === 'POST').length, 0);
-  nodes(h.render()).find(n => n.type === 'button' && /Confirm ON/.test(text(n))).props.onClick();
   await settle();
+  assert.equal(nodes(h.render()).find(n => n.props?.role === 'switch').props['aria-checked'], true);
+  assert.equal(nodes(h.render()).filter(n => n.props?.role === 'dialog').length, 0);
   const sent = h.requests.find(r => r.url.endsWith('/start'));
   assert.deepEqual(JSON.parse(sent.options.body), { enabled: true, confirmation: 'START AUTOMATED REAL TRADING' });
-  assert.doesNotMatch(text(h.render()), /Start automated real-money orders/);
   await h.poll({ ...status, automation_on: true });
   assert.equal(nodes(h.render()).find(n => n.props?.role === 'switch').props['aria-checked'], true);
   autoSwitch(h.render()).props.onClick();
@@ -2180,8 +2189,8 @@ test('paper approval is not required by status parsing or the ON switch', async 
     assert.equal(autoSwitch(h.render()).props['aria-checked'], false);
     assert.doesNotMatch(text(h.render()), /ON locked/);
     autoSwitch(h.render()).props.onClick();
-    assert.match(text(h.render()), /Start automated real-money orders/);
-    assert.ok(h.requests.every(r => r.options.method === 'GET'));
+    await settle();
+    assert.ok(h.requests.some(r => r.options.method === 'POST'));
     cleanup();
   }
 });
@@ -2362,12 +2371,13 @@ test('owner emergency reset is confirmed separately and restores OFF without sta
   assert.equal(posts[0].options.credentials, 'include');
   assert.equal(posts[0].options.headers['X-AQTE-Intent'], 'manual-live-control');
   assert.equal(posts[0].options.headers['X-Device-Id'], 'test-device');
-  assert.match(text(autoSwitch(h.render())), /Auto Trade\s+OFF/);
+  assert.equal(text(autoSwitch(h.render())), 'TRADE OFF');
   assert.equal(autoSwitch(h.render()).props.disabled, false);
   assert.ok(!reset());
   autoSwitch(h.render()).props.onClick();
-  assert.match(text(h.render()), /Start automated real-money orders/);
-  assert.equal(h.requests.filter(r => r.options.method === 'POST').length, 1, 'ON requires a separate confirmation');
+  await settle();
+  assert.equal(h.requests.filter(r => r.options.method === 'POST').length, 2);
+  assert.ok(h.requests.at(-1).url.endsWith('/live/start'));
   cleanup();
 });
 test('reset recovery does not bypass backend live enablement', async () => {
@@ -2380,7 +2390,7 @@ test('reset recovery does not bypass backend live enablement', async () => {
   h.respond({ ...stopped, killed: false });
   nodes(h.render()).find(n => n.type === 'button' && text(n) === 'Confirm reset · keep OFF').props.onClick();
   await settle();
-  assert.match(text(autoSwitch(h.render())), /Auto Trade\s+OFF/);
+  assert.equal(text(autoSwitch(h.render())), 'TRADE OFF');
   assert.equal(autoSwitch(h.render()).props.disabled, true);
   assert.match(text(h.render()), /ON locked · AQTE_LIVE_ENABLED is false/);
   assert.ok(h.requests.every(r => r.url.endsWith('/status') || r.url.endsWith('/reset')));
@@ -2424,30 +2434,18 @@ test('reset confirmation rechecks status and supports Escape without a mutation'
   assert.ok(h.requests.every(r => r.options.method === 'GET'));
   cleanup();
 });
-test('ON confirmation states the entry mode; Cancel and Escape keep OFF without any command', async () => {
+test('minimal ON/OFF click sends one command without a confirmation overlay', async () => {
   const h = harness('AQTEAutomationSwitch.tsx');
   h.render();
   const status = { ...liveFixture(), enabled: true };
   const cleanup = h.mount(status);
   await settle();
-  const open = () => nodes(h.render()).find(n => n.props?.role === 'switch').props.onClick();
-  const group = () => nodes(h.render()).find(n => n.props?.['aria-label'] === 'Confirm automated real trading');
-  open();
-  assert.match(text(group()), /Strict validation mode.*without placing orders/);
-  assert.ok(!nodes(h.render()).some(n => n.type === 'button' && text(n) === 'Keep OFF'));
-  nodes(h.render()).find(n => n.type === 'button' && text(n) === 'Cancel · stay OFF').props.onClick();
-  assert.equal(group(), undefined);
-  assert.match(text(h.render()), /Auto Trade\s+OFF/);
-  await h.poll({ ...status, unvalidated_rules: true });
-  open();
-  assert.match(text(group()), /unvalidated rule entries.*real one-lot orders/);
-  group().props.onKeyDown({ key: 'Enter', preventDefault() {}, stopPropagation() {} });
-  assert.ok(group());
-  group().props.onKeyDown({ key: 'Escape', preventDefault() {}, stopPropagation() {} });
-  assert.equal(group(), undefined);
-  assert.ok(h.requests.every(r => r.options.method === 'GET'));
-  await h.poll({ ...status, unvalidated_rules: 'yes' });
-  assert.match(text(h.render()), /UNKNOWN/);
+  h.respond({ ...status, automation_wanted: true });
+  autoSwitch(h.render()).props.onClick();
+  await settle();
+  assert.equal(text(autoSwitch(h.render())), 'TRADE ON');
+  assert.equal(nodes(h.render()).filter(n => n.props?.role === 'dialog').length, 0);
+  assert.equal(h.requests.filter(r => r.options.method === 'POST').length, 1);
   cleanup();
 });
 test('risk card separates disabled live trading, unarmed OFF and armed pause without paper approval', () => {
@@ -2470,7 +2468,7 @@ test('risk card separates disabled live trading, unarmed OFF and armed pause wit
   publish({ ...liveFixture(), enabled: true, automation_wanted: true, entry_window: true });
   assert.match(risk(), /Waiting\s+₹[\d.,\s]+\/\s+₹[\d.,\s]+ON · arming \/ preflight/);
 });
-test('standing ON is accepted while the market is closed and shows the waiting reason until OFF', async () => {
+test('standing ON remains silent while the market is closed and can be switched OFF', async () => {
   const h = harness('AQTEAutomationSwitch.tsx');
   h.render();
   const off = { ...liveFixture(), enabled: true, automation_wanted: false, entry_window: false };
@@ -2478,14 +2476,13 @@ test('standing ON is accepted while the market is closed and shows the waiting r
     automation_waiting: 'Waiting for market: auto trade arms on weekdays 09:15 to 15:15 IST' };
   const cleanup = h.mount(off);
   await settle();
-  autoSwitch(h.render()).props.onClick();
-  assert.match(text(h.render()), /stays saved until you switch OFF, even when the market is closed/);
   h.respond(waiting);
-  nodes(h.render()).find(n => n.type === 'button' && /Confirm ON/.test(text(n))).props.onClick();
+  autoSwitch(h.render()).props.onClick();
   await settle();
   assert.equal(autoSwitch(h.render()).props['aria-checked'], true);
-  assert.match(text(autoSwitch(h.render())), /Auto Trade\s+ON/);
-  assert.match(text(h.render()), /ON ·\s+Waiting for market.*09:15 to 15:15 IST/);
+  assert.equal(text(autoSwitch(h.render())), 'TRADE ON');
+  assert.doesNotMatch(text(h.render()), /ON ·\s+Waiting for market/);
+  assert.doesNotMatch(text(h.render()), /ON ·\s+Waiting for market/);
   assert.equal(nodes(h.render()).filter(n => n.props?.role === 'alert').length, 0);
   await h.poll({ ...waiting, automation_waiting: null, automation_on: true, armed: true, entry_window: true });
   assert.doesNotMatch(text(h.render()), /ON ·\s+Waiting/);
@@ -2510,10 +2507,8 @@ test('standing ON acknowledgements must match the requested state', async () => 
     await settle();
     h.respond(response);
     autoSwitch(h.render()).props.onClick();
-    const confirm = nodes(h.render()).find(n => n.type === 'button' && /Confirm ON/.test(text(n)));
-    if (confirm) confirm.props.onClick();
     await settle();
-    assert.match(text(autoSwitch(h.render())), /UNKNOWN/);
+    assert.equal(text(autoSwitch(h.render())), 'TRADE —');
     assert.match(text(h.render()), /Backend did not confirm the requested automation state/);
     cleanup();
   }
@@ -2536,7 +2531,7 @@ test('reset failures and inconsistent acknowledgements never present a confirmed
     h.respond(response);
     nodes(h.render()).find(n => n.type === 'button' && text(n) === 'Confirm reset · keep OFF').props.onClick();
     await settle();
-    assert.match(text(autoSwitch(h.render())), /UNKNOWN/);
+    assert.equal(text(autoSwitch(h.render())), 'TRADE —');
     assert.equal(autoSwitch(h.render()).props.disabled, true);
     assert.ok(nodes(h.render()).find(n => n.props?.role === 'alert'));
     assert.ok(!nodes(h.render()).some(n => n.type === 'button' && text(n) === 'Reset emergency stop'));
@@ -2810,24 +2805,22 @@ test('index tabs switch instantly: charts prefetch, stay mounted and controls re
   assert.match(read('AQTEDailyControl.tsx'), /useState<Snapshot \| null>\(lastSnapshot\)/);
 });
 
-test('compact switch has no optimistic ON, ignores repeated clicks and sends OFF from the same pill', async () => {
+test('compact LIVE TRADE ON/OFF button is silent and updates after backend confirmation', async () => {
   const h = harness('AQTEAutomationSwitch.tsx');
   const initial = h.render();
-  assert.match(text(autoSwitch(initial)), /Checking/);
+  assert.equal(text(autoSwitch(initial)), 'TRADE —');
   assert.equal(autoSwitch(initial).props['aria-checked'], undefined);
   assert.equal(autoSwitch(initial).props.disabled, true);
   const off = { ...liveFixture(), enabled: true };
   const cleanup = h.mount(off);
   await settle();
   const pill = autoSwitch(h.render());
-  assert.match(text(pill), /Auto Trade\s+OFF/);
+  assert.equal(text(pill), 'TRADE OFF');
   assert.equal(nodes(h.render()).filter(n => n.type === 'button').length, 1);
-  pill.props.onClick();
-  const confirm = nodes(h.render()).find(n => n.type === 'button' && /Confirm ON/.test(text(n)));
   let finish;
   h.respond(new Promise(resolve => { finish = resolve; }));
-  confirm.props.onClick();
-  confirm.props.onClick();
+  pill.props.onClick();
+  pill.props.onClick();
   await settle();
   assert.equal(h.requests.filter(r => r.options.method === 'POST').length, 1);
   assert.equal(autoSwitch(h.render()).props['aria-checked'], false);
@@ -2859,20 +2852,221 @@ test('unauthorized, stale and rejected switch responses never masquerade as conf
   await settle();
   assert.equal(h.accessExpired, 1, 'a 401 asks the access gate to re-verify and show sign-in');
   assert.match(text(h.render()), /Sign in with the configured owner/);
-  assert.match(text(autoSwitch(h.render())), /UNKNOWN/);
+  assert.equal(text(autoSwitch(h.render())), 'TRADE —');
   assert.equal(autoSwitch(h.render()).props['aria-checked'], undefined);
   assert.doesNotMatch(autoSwitch(h.render()).props.className, /switch-on|switch-off/);
   assert.ok(nodes(h.render()).find(n => n.props?.['aria-label'] === 'Stop AQTE new entries'));
   await h.poll({ ...status, generated_at: Date.now() / 1000 - 11 });
   assert.match(text(h.render()), /stale/);
-  assert.match(text(autoSwitch(h.render())), /UNKNOWN/);
+  assert.equal(text(autoSwitch(h.render())), 'TRADE —');
   await h.poll(status);
   h.respond(status);
   autoSwitch(h.render()).props.onClick();
   await settle();
   assert.match(text(h.render()), /did not confirm/);
-  assert.match(text(autoSwitch(h.render())), /UNKNOWN/);
+  assert.equal(text(autoSwitch(h.render())), 'TRADE —');
   cleanup();
+});
+
+const serverSeconds = offsetMs => (Date.now() + offsetMs) / 1000;
+
+test('browser clock skew against production never turns a fresh Auto Trade status UNKNOWN', async () => {
+  // Production incident: the PC clock ran 1.4 s behind the server, so every fresh status read as future-dated.
+  for (const offset of [1400, -1400, 2500, 45_000, -45_000]) {
+    const h = harness('AQTEAutomationSwitch.tsx', undefined, false, offset);
+    h.render();
+    const on = { ...liveFixture(), enabled: true, armed: true, automation_on: true, generated_at: serverSeconds(offset) };
+    const cleanup = h.mount(on);
+    await settle();
+    assert.equal(text(autoSwitch(h.render())), 'TRADE ON', `server ${offset} ms from browser`);
+    assert.equal(autoSwitch(h.render()).props['aria-checked'], true);
+    assert.doesNotMatch(text(h.render()), /stale|verify acknowledgement/);
+    await h.poll({ ...on, generated_at: serverSeconds(offset) });
+    assert.equal(text(autoSwitch(h.render())), 'TRADE ON');
+    h.respond({ ...on, automation_on: false, generated_at: serverSeconds(offset) });
+    autoSwitch(h.render()).props.onClick();
+    await settle();
+    assert.equal(text(autoSwitch(h.render())), 'TRADE OFF');
+    assert.match(text(h.render()), /Saved automatically.*OFF/);
+    assert.doesNotMatch(text(h.render()), /stale|verify acknowledgement/);
+    cleanup();
+  }
+  // Without a readable Date header the browser clock still decides; that is the failure the header removes.
+  const blind = harness('AQTEAutomationSwitch.tsx');
+  blind.render();
+  const cleanup = blind.mount({ ...liveFixture(), enabled: true, generated_at: serverSeconds(1400) });
+  await settle();
+  assert.equal(text(autoSwitch(blind.render())), 'TRADE —');
+  cleanup();
+});
+
+test('server-aligned clock still rejects stale and future-dated status, first response included', async () => {
+  for (const shift of [-20, -11, 20]) {
+    const h = harness('AQTEAutomationSwitch.tsx', undefined, false, 1400);
+    h.render();
+    const cleanup = h.mount({ ...liveFixture(), enabled: true, armed: true, automation_on: true,
+      generated_at: serverSeconds(1400) + shift });
+    await settle();
+    assert.equal(text(autoSwitch(h.render())), 'TRADE —', `generated_at ${shift} s from server time`);
+    assert.match(text(h.render()), /stale/);
+    cleanup();
+  }
+  const h = harness('AQTEAutomationSwitch.tsx', undefined, false, -45_000);
+  h.render();
+  const on = { ...liveFixture(), enabled: true, armed: true, automation_on: true };
+  const cleanup = h.mount({ ...on, generated_at: serverSeconds(-45_000) });
+  await settle();
+  assert.equal(text(autoSwitch(h.render())), 'TRADE ON');
+  await h.poll({ ...on, generated_at: serverSeconds(-45_000) - 11 });
+  assert.equal(text(autoSwitch(h.render())), 'TRADE —', 'a learned offset never launders an old status');
+  await h.poll({ ...on, generated_at: serverSeconds(-45_000) });
+  assert.equal(text(autoSwitch(h.render())), 'TRADE ON');
+  cleanup();
+});
+
+test('live controller and AQTE snapshot stay current when the browser clock is skewed', async () => {
+  for (const offset of [1400, -45_000]) {
+    const live = harness('AQTELiveController.tsx', undefined, false, offset);
+    let status, failure;
+    live.render({ onStatus: (next, message) => { status = next; failure = message; } });
+    let cleanup = live.mount({ ...liveFixture(), generated_at: serverSeconds(offset) });
+    await settle();
+    assert.ok(status && !status.connection_error, `live status accepted at ${offset} ms: ${failure}`);
+    await live.poll({ ...liveFixture(), generated_at: serverSeconds(offset) - 20 });
+    assert.match(failure ?? status?.connection_error ?? '', /stale/);
+    cleanup();
+
+    const clock = Date.parse('2026-10-30T11:00:00+05:30');
+    const section = harness('AQTESection.tsx', () => clock, false, offset);
+    const badge = () => text(nodes(section.render()).find(n => n.props?.['aria-label'] === 'AQTE view status'));
+    section.render();
+    cleanup = section.mount({ ...fixture(), generated_at: (clock + offset) / 1000 });
+    await settle();
+    assert.match(badge(), /FEED OFF|LIVE \(Zerodha\)/, `snapshot current at ${offset} ms`);
+    await section.poll({ ...fixture(), generated_at: (clock + offset) / 1000 - 20 });
+    assert.match(badge(), /STATUS UNKNOWN/);
+    assert.match(text(section.render()), /stale/i);
+    cleanup();
+  }
+  const clock = Date.parse('2026-10-30T11:00:00+05:30');
+  const blind = harness('AQTESection.tsx', () => clock);
+  blind.render();
+  const cleanup = blind.mount({ ...fixture(), generated_at: (clock + 1400) / 1000 });
+  await settle();
+  assert.match(text(nodes(blind.render()).find(n => n.props?.['aria-label'] === 'AQTE view status')), /STATUS UNKNOWN/);
+  cleanup();
+});
+
+test('server clock offset is bounded by the Date header and refined only by consistent generated_at', () => {
+  const display = displayModule();
+  const header = ms => ({ headers: { get: key => key === 'date' ? new Date(ms).toUTCString() : null } });
+  const sent = 1_700_000_000_000, received = sent + 200, offset = 1.4;
+  assert.equal(display.aqteServerNow(sent), sent / 1000, 'no samples: browser clock unchanged');
+  display.aqteObserveServerClock({ headers: { get: () => null } }, { generated_at: 1 }, sent, received);
+  display.aqteObserveServerClock(header(NaN), { generated_at: 1 }, sent, received);
+  assert.equal(display.aqteServerNow(sent), sent / 1000, 'missing or invalid Date header is ignored');
+  // Server stamped Date 100 ms into the request; generated_at 50 ms in.
+  display.aqteObserveServerClock(header(sent + 100 + offset * 1000), { generated_at: (sent + 50) / 1000 + offset },
+    sent, received);
+  const estimate = local => display.aqteServerNow(local) - local / 1000;
+  assert.ok(Math.abs(estimate(received) - offset) <= 0.1, `offset ${estimate(received)}`);
+  // An old payload is outside the Date bound, so it cannot drag the clock toward itself.
+  const later = sent + 2000;
+  display.aqteObserveServerClock(header(later + 100 + offset * 1000), { generated_at: later / 1000 + offset - 20 },
+    later, later + 200);
+  assert.ok(Math.abs(estimate(later) - offset) <= 0.1, `offset after stale payload ${estimate(later)}`);
+  // A stepped browser clock contradicts the window and restarts it from the new sample.
+  const stepped = later - 60_000;
+  display.aqteObserveServerClock(header(stepped + 100 + 61_400), { generated_at: (stepped + 50) / 1000 + 61.4 },
+    stepped, stepped + 200);
+  assert.ok(Math.abs(estimate(stepped) - 61.4) <= 0.1, `offset after clock step ${estimate(stepped)}`);
+
+  const live = displayModule();
+  const now = Date.now();
+  live.aqteObserveServerClock(header(now + 1400), { generated_at: (now + 1400) / 1000 }, now, now);
+  const status = { ...liveFixture(), generated_at: (now + 1400) / 1000 };
+  assert.equal(live.aqteControllerCurrent(status), true, 'freshness defaults to the server-aligned clock');
+  assert.equal(live.aqteControllerCurrent(status, now / 1000), false, 'the raw browser clock would call it future-dated');
+});
+
+test('a cached Date header that trails by up to 2 s never flickers fresh Auto Trade status', async () => {
+  // Local uvicorn caches Date about once a second; it was measured up to 1.7 s behind and flipped status every few polls.
+  for (const serverClock of [{ dateLagMs: 1700 }, { dateLagMs: 1999 }, { dateLagMs: 1700, precise: true }]) {
+    for (const offset of [0, 1400, -45_000]) {
+      const h = harness('AQTEAutomationSwitch.tsx', undefined, false, offset, serverClock);
+      h.render();
+      const on = { ...liveFixture(), enabled: true, armed: true, automation_on: true };
+      const cleanup = h.mount({ ...on, generated_at: serverSeconds(offset) });
+      await settle();
+      for (let poll = 0; poll < 6; poll++) {
+        assert.equal(text(autoSwitch(h.render())), 'TRADE ON', `${JSON.stringify(serverClock)} offset ${offset} poll ${poll}`);
+        assert.doesNotMatch(text(h.render()), /stale|UNKNOWN/);
+        await h.poll({ ...on, generated_at: serverSeconds(offset) });
+      }
+      await h.poll({ ...on, generated_at: serverSeconds(offset) - 11 });
+      assert.equal(text(autoSwitch(h.render())), 'TRADE —', 'stale status is still rejected');
+      cleanup();
+    }
+  }
+});
+
+test('precise X-Server-Time bounds the clock independently of cached payloads and a lagging Date', () => {
+  const display = displayModule();
+  const sent = 1_700_000_000_000, received = sent + 40, offset = 1.4;
+  const headers = (precise, date) => ({ headers: { get: key =>
+    key === 'x-server-time' ? (precise / 1000).toFixed(3) : key === 'date' ? new Date(date).toUTCString() : null } });
+  // Server time stamped 20 ms into the request; payload cached 3 s earlier; Date cached 1.9 s behind.
+  const server = sent + 20 + offset * 1000;
+  display.aqteObserveServerClock(headers(server, server - 1900), { generated_at: server / 1000 - 3 }, sent, received);
+  const estimate = local => display.aqteServerNow(local) - local / 1000;
+  assert.ok(Math.abs(estimate(received) - offset) <= 0.03, `offset ${estimate(received)}`);
+  for (let i = 1; i <= 30; i++) {
+    const at = sent + i * 2000, srv = at + 15 + offset * 1000;
+    display.aqteObserveServerClock(headers(srv, srv - (i % 4) * 600), { generated_at: srv / 1000 }, at, at + 30);
+    const age = display.aqteServerNow(at + 30) - srv / 1000;
+    assert.ok(age > -0.05 && age < 0.05, `poll ${i} age ${age}`);
+  }
+});
+
+test('MorningEdge index cards show value, points and % from the main Zerodha feed', () => {
+  const now = Date.parse('2026-11-09T10:00:00+05:30');
+  const tick = (symbol, price, change, changePercent, status = 'LIVE', at = now - 1000) => ({ symbol, price, change, changePercent,
+    status, timestamp: new Date(at).toISOString(), high: price, low: price, open: price, close: price - change,
+    volume: 0, oi: 0, pcr: 0, callOI: 0, putOI: 0, trend: 'neutral' });
+  const h = harness('MorningEdgeSection.tsx', now);
+  const card = (tree, symbol) => text(nodes(tree).find(n => n.props?.['aria-label'] === `${symbol} index`)).replace(/\s+/g, ' ');
+  const dot = (tree, symbol) => nodes(nodes(tree).find(n => n.props?.['aria-label'] === `${symbol} index`))
+    .find(n => n.type === 'span' && n.props.className !== 'me-card-note').props.className;
+
+  let tree = h.render();
+  assert.match(card(tree, 'NIFTY'), /— Waiting for real ticks Zerodha feed not received/);
+  assert.match(text(tree), /Zerodha Offline/);
+
+  const live = { NIFTY: tick('NIFTY', 24857.5, 320.9, 1.31), BANKNIFTY: tick('BANKNIFTY', 58727.65, -954, -1.65),
+    SENSEX: tick('SENSEX', 80565.99, 1255.98, 1.58) };
+  tree = h.render({ marketData: live, isConnected: true });
+  assert.match(card(tree, 'NIFTY'), /24,857\.50 ▲ \+320\.90 pts · \+1\.31% LIVE · Zerodha/);
+  assert.match(card(tree, 'BANKNIFTY'), /58,727\.65 ▼ -954\.00 pts · -1\.65% LIVE · Zerodha/);
+  assert.ok(nodes(tree).find(n => n.props?.className === 'is-down'), 'falling index is styled red');
+  assert.match(card(tree, 'SENSEX'), /80,565\.99 ▲ \+1,255\.98 pts · \+1\.58%/);
+  assert.equal(dot(tree, 'NIFTY'), 'fresh');
+  assert.match(text(tree), /Zerodha Connected/);
+  assert.doesNotMatch(text(tree), /₹24|₹58|₹80/, 'index levels are points, not rupees');
+
+  tree = h.render({ marketData: live, isConnected: false });
+  assert.match(card(tree, 'NIFTY'), /24,857\.50 .*Delayed · last tick/, 'a dropped socket keeps values but stops claiming LIVE');
+  assert.equal(dot(tree, 'NIFTY'), '');
+  const old = { ...live, NIFTY: tick('NIFTY', 24857.5, 320.9, 1.31, 'LIVE', now - 60_000) };
+  assert.match(card(h.render({ marketData: old, isConnected: true }), 'NIFTY'), /Delayed · last tick/);
+
+  const closed = Object.fromEntries(Object.entries(live).map(([key, value]) => [key, { ...value, status: 'CLOSED' }]));
+  tree = h.render({ marketData: closed, isConnected: true });
+  assert.match(card(tree, 'NIFTY'), /24,857\.50 ▲ \+320\.90 pts · \+1\.31% Market closed · last price/);
+  assert.match(text(tree), /Market Closed/);
+  assert.doesNotMatch(text(tree), /Zerodha Connected/);
+
+  const demo = { ...live, NIFTY: tick('NIFTY', 99999, 1, 1, 'DEMO') };
+  assert.match(card(h.render({ marketData: demo, isConnected: true }), 'NIFTY'), /— Waiting for real ticks/, 'demo values are never shown');
 });
 
 test('active protection stays visible with entries OFF; initial SL, trailing and bid target are distinct', () => {
@@ -3018,7 +3212,7 @@ test('engine view rejects malformed or partial engine evaluations instead of dis
   assert.equal(display.isAqteEngineEvent({ at: 1, symbol: 'FINNIFTY', engine: 3, name: 'Trend', status: 'SATISFIED', previous: null, side: 'CE' }), false);
 });
 
-test('engine deck shows 12 live engines, rule details on demand and an honest execution state', () => {
+test('engine deck hides the 12-engine board but keeps engine signals and an honest execution state', () => {
   const h = harness('AQTEEngineDeck.tsx');
   const data = fixture().data;
   data.NIFTY = { ...data.NIFTY, ...engineSet({ ce: 4, pe: 1 }), scalp: scalpSignal('BUY CE', 82) };
@@ -3027,11 +3221,21 @@ test('engine deck shows 12 live engines, rule details on demand and an honest ex
   const props = { symbol: 'NIFTY', data, liveStatus: live, unavailable: false, policy: { authority: 'ADVISORY_VETO', veto: true, veto_min: 2, engines: 12 },
     events: [{ at: Date.now() / 1000, symbol: 'NIFTY', engine: 1, name: 'Momentum', status: 'SATISFIED', previous: null, side: 'CE' }] };
   let tree = h.render(props);
-  const cards = nodes(tree).filter(n => String(n.props?.className).includes('aqx-eng-card'));
-  assert.equal(cards.length, 12);
-  assert.ok(cards.every(card => !card.props.disabled && card.props['aria-expanded'] === false));
-  assert.match(text(tree), /Satisfied \(5\)/);
-  assert.match(text(tree), /Consensus\s+CE 36%/);
+  assert.equal(nodes(tree).filter(n => String(n.props?.className).includes('aqx-eng-card')).length, 0);
+  assert.equal(nodes(tree).find(n => n.props?.id === 'aqte-engine-rules'), undefined);
+  const analyticsToggle = nodes(tree).find(n => n.props?.['aria-controls'] === 'aqte-analytics-content');
+  assert.equal(analyticsToggle.props['aria-expanded'], false);
+  assert.equal(nodes(tree).find(n => n.props?.id === 'aqte-ctab-chart'), undefined);
+  analyticsToggle.props.onClick();
+  tree = h.render(props);
+  const expandedToggle = nodes(tree).find(n => n.props?.['aria-controls'] === 'aqte-analytics-content');
+  assert.equal(expandedToggle.props['aria-expanded'], true);
+  expandedToggle.props.onClick();
+  tree = h.render(props);
+  assert.equal(nodes(tree).find(n => n.props?.['aria-controls'] === 'aqte-analytics-content').props['aria-expanded'], false);
+  nodes(tree).find(n => n.props?.['aria-controls'] === 'aqte-analytics-content').props.onClick();
+  tree = h.render(props);
+  assert.doesNotMatch(text(tree), /AQTE Strategy Engines|Satisfied \(5\)/);
   const opportunity = nodes(tree).find(n => n.props?.['aria-label'] === 'Top opportunity');
   assert.match(text(opportunity), /NIFTY_SCALP_CE/);
   assert.match(text(opportunity), /4 aligned · 1 opposed/);
@@ -3053,17 +3257,6 @@ test('engine deck shows 12 live engines, rule details on demand and an honest ex
   tree = h.render(props);
   assert.equal(nodes(tree).find(n => n.props?.id === 'aqte-ctab-signals').props['aria-selected'], true);
   assert.equal(nodes(nodes(tree).find(n => n.props?.id === 'aqte-cpanel-signals')).filter(n => n.type === 'tr').length, 13);
-  assert.equal(nodes(tree).find(n => n.props?.id === 'aqte-engine-rules').props.hidden, true);
-  cards[0].props.onClick();
-  tree = h.render(props);
-  const rules = nodes(tree).find(n => n.props?.id === 'aqte-engine-rules');
-  assert.equal(rules.props.hidden, false);
-  assert.match(text(rules), /Rule A momentum/);
-  assert.match(text(rules), /1\.60x/);
-  nodes(tree).find(n => n.type === 'button' && /^Partial/.test(text(n).trim())).props.onClick();
-  tree = h.render(props);
-  const dimmed = nodes(tree).filter(n => String(n.props?.className).includes('aqx-eng-dim'));
-  assert.equal(dimmed.length, 12 - engineSet({ ce: 4, pe: 1 }).orchestration.partial);
 
   // Opposition beyond the veto threshold is shown as a conflict, never as eligible execution.
   data.NIFTY = { ...data.NIFTY, ...engineSet({ ce: 1, pe: 3 }) };
@@ -3080,20 +3273,23 @@ test('engine deck shows 12 live engines, rule details on demand and an honest ex
   assert.match(text(nodes(tree).find(n => n.props?.['aria-label'] === 'Orchestration and risk')), /Conflict Check\s+Veto · WAIT/);
 });
 
-test('engine deck keeps stable placeholders when engines are unavailable or AQTE is offline', () => {
+test('engine deck keeps stable Engine Signals placeholders when engines are unavailable or AQTE is offline', () => {
   const h = harness('AQTEEngineDeck.tsx');
   const data = fixture().data;
   data.NIFTY = { ...data.NIFTY, ...engineSet({ ce: 6 }), scalp: scalpSignal('BUY CE') };
-  const tree = h.render({ symbol: 'NIFTY', data, liveStatus: null, unavailable: true, policy: null });
-  const cards = nodes(tree).filter(n => String(n.props?.className).includes('aqx-eng-card'));
-  assert.equal(cards.length, 12);
-  assert.ok(cards.every(card => card.props.disabled));
-  assert.match(text(tree), /Momentum/);
-  assert.match(text(tree), /ML Prediction/);
+  const props = { symbol: 'NIFTY', data, liveStatus: null, unavailable: true, policy: null };
+  const collapsed = h.render(props);
+  nodes(collapsed).find(n => n.props?.['aria-controls'] === 'aqte-analytics-content').props.onClick();
+  nodes(h.render(props)).find(n => n.props?.id === 'aqte-ctab-signals').props.onClick();
+  const tree = h.render(props);
+  const rows = nodes(nodes(tree).find(n => n.props?.id === 'aqte-cpanel-signals')).filter(n => n.type === 'tr').slice(1);
+  assert.equal(rows.length, 12);
+  assert.match(text(rows[0]), /Momentum\s+--/);
+  assert.match(text(rows[11]), /ML Prediction\s+--/);
+  assert.equal(nodes(tree).filter(n => String(n.props?.className).includes('aqx-eng-card')).length, 0);
   assert.doesNotMatch(text(tree), /Trending Bullish|NIFTY_SCALP_CE|Eligible/);
   assert.doesNotMatch(text(tree), /Live Engine Events|Engine events unavailable/);
   const missing = h.render({ symbol: 'BANKNIFTY', data, liveStatus: null, unavailable: false, policy: null });
-  assert.ok(nodes(missing).filter(n => String(n.props?.className).includes('aqx-eng-card')).every(card => card.props.disabled));
   assert.match(text(nodes(missing).find(n => n.props?.['aria-label'] === 'Top opportunity')), /Controller status unavailable/);
 });
 
@@ -3311,7 +3507,7 @@ test('index ranking waits independently with stable text and changing reasons on
   assert.doesNotMatch(text(panel(inconsistent)), /READY|Eligible|Top pick|Clear/);
 });
 
-test('un-evaluated engines read as awaiting data with the backend reason, and empty levels stay neutral', () => {
+test('idle engines leave trade levels neutral and the risk check explains the backend reason', () => {
   const display = displayModule();
   assert.equal(display.aqteSameJson({ a: [1, { b: null }] }, { a: [1, { b: null }] }), true);
   assert.equal(display.aqteSameJson({ a: [1] }, { a: [2] }), false);
@@ -3326,20 +3522,6 @@ test('un-evaluated engines read as awaiting data with the backend reason, and em
     orchestration: { satisfied: 0, partial: 0, monitoring: 12, not_satisfied: 0, ce: 0, pe: 0, consensus: null, conflict: false, evaluated: 0, consensus_pct: null } };
   const tree = h.render({ symbol: 'NIFTY', data, liveStatus: { ...liveFixture(), ranking: ['NIFTY'], entry_blocks: { NIFTY: reason } },
     unavailable: false, policy: null, events: [] });
-  const cards = nodes(tree).filter(n => String(n.props?.className).includes('aqx-eng-card'));
-  assert.equal(cards.length, 12);
-  assert.ok(cards.every(card => !card.props.disabled && card.props.title === reason));
-  assert.ok(cards.every(card => /Market closed/.test(text(card)) && !/0 \/ 0/.test(text(card))));
-  for (const [why, label] of [['Warming up: need 20 contiguous completed one-minute futures candles', 'Warming up'],
-    ['Market data stale: futures last tick 9s ago', 'Feed stale'], [null, 'Awaiting live data']]) {
-    const warm = { ...data, NIFTY: { ...data.NIFTY, engines: data.NIFTY.engines.map(engine => ({ ...engine, reason: why })) } };
-    const card = nodes(h.render({ symbol: 'NIFTY', data: warm, liveStatus: null, unavailable: false, policy: null, events: [] }))
-      .find(n => String(n.props?.className).includes('aqx-eng-card'));
-    assert.match(text(card), new RegExp(label));
-  }
-  const head = text(nodes(tree).find(n => n.props?.className === 'aqx-deck-title'));
-  assert.match(head, /All engines monitoring/);
-  assert.match(head, /Outside regular market session/);
   const levels = nodes(nodes(tree).find(n => n.props?.['aria-label'] === 'Top opportunity')).filter(n => n.type === 'dd');
   assert.equal(levels.length, 5);
   assert.ok(levels.every(dd => !dd.props.className), 'No buy/sell colour without an entry plan');
@@ -3448,8 +3630,8 @@ test('hidden index terminals skip re-renders until their tab is selected again',
 test('today performance keeps the win-rate placeholder neutral and colours real win rates', () => {
   const h = harness();
   const publish = status => nodes(h.render()).find(n => n.props?.onStatus && 'exitRequest' in n.props).props.onStatus(status);
-  const winRate = () => nodes(nodes(h.render()).find(n => n.props?.['aria-label'] === 'Today summary'))
-    .filter(n => n.type === 'div').find(n => /^Win Rate/.test(text(n).trim())).props.children[1];
+  const winRate = () => nodes(h.render())
+    .find(n => n.type === 'div' && /^Win Rate/.test(text(n).trim())).props.children[1];
   assert.equal(winRate().props.className, '');
   assert.equal(text(winRate()).trim(), '--');
   const at = Date.now() / 1000;
@@ -3467,11 +3649,12 @@ test('Live Engine Events panel is absent from AQTE and QuantEdge Pro UI', () => 
   assert.doesNotMatch(engineDeck, /useAqteEventStream|Live Engine Events|quantedge-pro-events/);
   assert.doesNotMatch(quantEdgePro, /useAqteEventStream|Live Engine Events|quantedge-pro-events/);
 });
-test('AQTE trade book follows the Auto Execution row at desktop, tablet and phone widths', () => {
+test('AQTE trade book follows the Auto Execution row at desktop, tablet and phone widths, with no engine-board row', () => {
   const styles = readFileSync(path.join(__dirname, '..', 'app', 'globals.css'), 'utf8');
-  assert.match(styles, /"opp trade risk" "book book book" "eng eng eng"/);
-  assert.match(styles, /"opp opp" "trade risk" "book book" "eng eng"/);
-  assert.match(styles, /"opp" "trade" "risk" "book" "eng"/);
+  assert.match(styles, /"opp trade risk" "book book book" "chart chart chart"/);
+  assert.match(styles, /"opp opp" "trade risk" "book book" "chart chart"/);
+  assert.match(styles, /"opp" "trade" "risk" "book" "chart"/);
+  assert.doesNotMatch(styles, /"eng|aqx-eng-|aqx-deck-|aqxdeck/);
   assert.match(styles, /\.aqx-dash-main > \.aqx-book \{ grid-area: book;/);
 });
 test('emergency trades with an unverified exit keep the live status valid and never count as flat P&L', () => {
@@ -3548,7 +3731,7 @@ test('phone timeline wraps all six lifecycle steps instead of hiding Exit in a s
 });
 test('header switch reads the shared live feed without its own status poll', async () => {
   const h = harness('AQTEAutomationSwitch.tsx');
-  assert.match(text(autoSwitch(h.render({ feed: 'pending' }))), /Checking/);
+  assert.equal(text(autoSwitch(h.render({ feed: 'pending' }))), 'TRADE —');
   assert.equal(h.mount(), undefined, 'shared mode starts no poll loop');
   await settle();
   assert.equal(h.requests.length, 0);
@@ -3558,14 +3741,26 @@ test('header switch reads the shared live feed without its own status poll', asy
   assert.equal(autoSwitch(tree).props['aria-checked'], true);
   assert.match(text(tree), /Backend confirmed · ON/);
   tree = h.render({ feed: null, feedError: 'Sign in again' });
-  assert.match(text(autoSwitch(tree)), /UNKNOWN/);
+  assert.equal(text(autoSwitch(tree)), 'TRADE —');
   assert.equal(autoSwitch(tree).props['aria-checked'], undefined);
   assert.match(text(tree), /Sign in again/);
   assert.ok(nodes(tree).find(n => n.props?.['aria-label'] === 'Stop AQTE new entries'), 'unknown state keeps Request OFF');
   tree = h.render({ feed: { ...on, connection_error: 'Live status unavailable; inspect Kite' } });
-  assert.match(text(autoSwitch(tree)), /UNKNOWN/);
+  assert.equal(text(autoSwitch(tree)), 'TRADE —');
   assert.match(text(tree), /Live status unavailable; inspect Kite/);
   assert.equal(h.requests.length, 0);
+});
+
+test('header switch hides only the waiting helper text while retaining its ON state', async () => {
+  const h = harness('AQTEAutomationSwitch.tsx');
+  h.render();
+  const cleanup = h.mount({ ...liveFixture(), enabled: true, automation_wanted: true, automation_on: false,
+    automation_waiting: 'Market data and pre-open analysis start at 09:00 IST' });
+  await settle();
+  const tree = h.render();
+  assert.equal(nodes(tree).find(n => n.props?.role === 'switch').props['aria-checked'], true);
+  assert.doesNotMatch(text(tree), /Market data and pre-open analysis start at 09:00 IST/);
+  cleanup();
 });
 
 test('shared switch publishes command results and ignores a poll that started before the command', async () => {
@@ -3587,11 +3782,10 @@ test('shared switch publishes command results and ignores a poll that started be
   assert.match(text(tree), /Saved automatically · OFF/);
   h.respondHTTP(500, { detail: 'Broker timeout' });
   autoSwitch(tree).props.onClick();
-  nodes(h.render({ feed: on, onStatus })).find(n => n.type === 'button' && /Confirm ON/.test(text(n))).props.onClick();
   await settle();
   assert.equal(published.length, 1, 'a failed command does not blank the shared live status');
   tree = h.render({ feed: { ...on, generated_at: Date.now() / 1000 + 0.5 } });
-  assert.match(text(autoSwitch(tree)), /UNKNOWN/, 'a status within clock skew of the failed command cannot resolve it');
+  assert.equal(text(autoSwitch(tree)), 'TRADE —', 'a status within clock skew of the failed command cannot resolve it');
   assert.match(text(tree), /Broker timeout/);
   tree = h.render({ feed: { ...on, generated_at: Date.now() / 1000 + 2 } });
   assert.equal(autoSwitch(tree).props['aria-checked'], true);
@@ -3667,18 +3861,20 @@ test('opportunity card shows Auto Trade waiting to arm with its reason, never OF
   assert.match(panel, /every index is disabled or at its trade limit in Controls/);
   assert.doesNotMatch(panel, /Waiting for market/);
 });
-test('engine deck counts only engines actively evaluating; an unconfigured ML shadow engine is not counted', () => {
+test('AQTE Strategy Engines board is hidden; the engines still feed the Engine Signals tab', () => {
   const h = harness('AQTEEngineDeck.tsx');
   const data = fixture().data;
   data.NIFTY = { ...data.NIFTY, ...engineSet({ ce: 1 }) };
-  const head = props => text(nodes(h.render(props)).find(n => n.props?.className === 'aqx-deck-title'));
   const props = { symbol: 'NIFTY', data, liveStatus: liveFixture(), unavailable: false, policy: null, events: [] };
-  assert.match(head(props), /11\/12 engines evaluated from shared data/);
-  assert.doesNotMatch(head(props), /parallel/);
-  assert.match(text(h.render(props)), /Scalp\/swing rules control entry\. Engines rank or veto; ML is shadow-only/);
-  assert.doesNotMatch(head(props), /12\/12/);
-  data.NIFTY = { ...data.NIFTY, engines: data.NIFTY.engines.map(engine => ({ ...engine, status: 'MONITORING' })) };
-  assert.match(head(props), /All engines monitoring/);
+  let tree = h.render(props);
+  assert.doesNotMatch(text(tree), /AQTE Strategy Engines|engines evaluated from shared data|All engines monitoring|ML is shadow-only/);
+  assert.equal(nodes(tree).find(n => n.props?.['aria-label'] === 'Filter engines'), undefined);
+  assert.equal(nodes(tree).find(n => n.props?.id === 'aqte-dash-engines'), undefined);
+  nodes(tree).find(n => n.props?.['aria-controls'] === 'aqte-analytics-content').props.onClick();
+  tree = h.render(props);
+  nodes(tree).find(n => n.props?.id === 'aqte-ctab-signals').props.onClick();
+  tree = h.render(props);
+  assert.equal(nodes(nodes(tree).find(n => n.props?.id === 'aqte-cpanel-signals')).filter(n => n.type === 'tr').length, 13);
 });
 
 test('last entry scan is validated and shown as historical evidence only for the selected idle index', () => {
@@ -3731,4 +3927,396 @@ test('Positions tab lists positions squared off today with realised P&L instead 
   assert.doesNotMatch(value, /Closed today/);
   assert.ok(h.requests.every(r => !r.options.method || r.options.method === 'GET'));
   cleanup();
+});
+
+const DESK_ALGOS = [
+  ['adaptive_vwap_pro', 'Adaptive VWAP Pro'], ['order_flow_momentum', 'Order Flow Momentum'],
+  ['liquidity_sweep_bos', 'Liquidity Sweep + BOS'], ['orb_retest', 'ORB Retest Pro'],
+  ['failed_breakout_reversal', 'Failed Breakout Reversal'], ['volatility_expansion', 'Volatility Expansion Pro'],
+];
+function deskFixture(overrides = {}, enabled = []) {
+  const performance = { trades: 0, wins: 0, losses: 0, win_rate: null, net_pnl: 0, profit_factor: null,
+    max_drawdown: null, avg_win: null, avg_loss: null, expectancy: null };
+  const summary = { status: 'WAITING', decision: 'WAIT', side: null, passed: 3, total: 6, fresh: true };
+  const signal = key => ({
+    key, status: 'READY', decision: 'BUY CE', side: 'CE', passed: 5, total: 6, reason: 'Waiting for RSI to cool below 70',
+    rules: [
+      { id: 'vwap', label: 'Price above VWAP', passed: true, requirement: 'close > VWAP', value: 22010.5 },
+      { id: 'rsi', label: 'RSI 55-70', passed: false, requirement: '55 <= RSI <= 70', value: 72.4 },
+    ],
+    context: { regime: 'TRENDING', volatile: false, htf_30m: 'BULLISH', structure_15m: 'BULLISH',
+      price_vs_vwap: 'ABOVE', setup: 'VWAP pullback' },
+    levels: { underlying_risk: 42.5, underlying_stop: 21968 },
+  });
+  const signals = Object.fromEntries(DESK_ALGOS.map(([key]) => [key, signal(key)]));
+  return {
+    generated_at: Date.now() / 1000, ready: true, live_enabled: true, armed: enabled.length > 0, entry_window: true,
+    killed: false, flatten_pending: false, any_enabled: enabled.length > 0,
+    lane_owner: enabled.length ? 'EXPIRYEDGE' : null, reason: 'All 6 Algo Desk algos are Manual (TRADE OFF)',
+    error: null, symbol: 'NIFTY', market: { NIFTY: { ltp: 22050 } },
+    signals,
+    signals_by_symbol: { NIFTY: signals, BANKNIFTY: signals, SENSEX: signals },
+    algos: DESK_ALGOS.map(([key, name]) => ({
+      key, name, subtitle: `${name} subtitle`, enabled: enabled.includes(key), entries_today: 0, remaining_today: 2,
+      today: performance, week: performance, summary: { NIFTY: summary, BANKNIFTY: summary, SENSEX: summary },
+    })),
+    active: null, trades: [], opportunities: [],
+    account: { trades_today: 0, net_pnl_today: 0, expiryedge_pnl_today: 0 },
+    limits: { per_algo_max_trades: 2, max_trades: 5, max_losses: 2, daily_loss: 3000, risk_per_trade: 1000,
+      max_lots: 1, trail_start_r: 1, target_r: 2, entry_window: '09:15-15:15 IST' },
+    ...overrides,
+  };
+}
+const deskSwitch = (tree, key = 'adaptive_vwap_pro') => {
+  const name = DESK_ALGOS.find(([algoKey]) => algoKey === key)?.[1];
+  return nodes(tree).find(n => n.props?.role === 'switch' && n.props['aria-label'] === `${name} trade approval`);
+};
+const deskButton = (tree, label) => nodes(tree).find(n => n.type === 'button' && text(n).trim() === label);
+const deskTab = (tree, label, strategy = 'Adaptive VWAP Pro') => {
+  const group = nodes(tree).find(n => n.props?.role === 'tablist' && n.props['aria-label'] === `${strategy} index`);
+  return nodes(group).find(n => n.props?.role === 'tab' && text(n).trim() === label);
+};
+const deskStrategy = (tree, label) => nodes(tree).find(n =>
+  n.type === 'button' && n.props['aria-pressed'] !== undefined && text(n).includes(label));
+const DESK_PROPS = { marketData: {}, isConnected: true };
+
+test('6 Algo Desk is its own section that polls owner-only status and shows six Live (Auto)/Manual algos without Paper', async () => {
+  const h = harness('AlgoDeskSection.tsx');
+  const props = {
+    isConnected: true,
+    marketData: { NIFTY: { symbol: 'NIFTY', price: 24512.6, change: 128.45, changePercent: 0.53, status: 'LIVE' } },
+  };
+  h.render(props);
+  const cleanup = h.mount(deskFixture());
+  await settle();
+  const tree = h.render(props);
+  const [request] = h.requests;
+  assert.equal(request.url, '/api/algo-desk/status?symbol=NIFTY');
+  assert.equal(request.options.method, 'GET');
+  assert.equal(request.options.credentials, 'include');
+  assert.equal(request.options.headers['X-AQTE-Intent'], 'manual-live-control');
+  assert.equal(request.options.headers['X-Device-Id'], 'test-device');
+  assert.equal(tree.type, 'section');
+  assert.equal(tree.props['aria-label'], '6 Algo Desk');
+  assert.ok(nodes(tree).some(node => node.props?.className?.includes('grid min-w-0 grid-cols-1 gap-2 p-3 sm:p-4')),
+    'Six individual strategy panels stack vertically');
+  const value = text(tree);
+  assert.equal(nodes(tree).find(n => n.type === 'h2'), undefined, 'The Algo Desk title text is hidden from the UI');
+  const analyticsToggle = nodes(tree).find(n => n.type === 'summary' && n.props['aria-label']?.includes('detailed analytics'));
+  assert.ok(nodes(tree).some(n => n.type === 'details' && n.props.hidden), 'The duplicate analytics section is hidden from the UI');
+  assert.ok(analyticsToggle, 'Detailed analytics remain in the hidden legacy panel');
+  assert.ok(nodes(analyticsToggle).some(n => n.props?.className === 'sr-only'),
+    'The detailed analytics label is screen-reader-only');
+  assert.doesNotMatch(value, /ExpiryEdge|Expiry Edge/);
+  assert.doesNotMatch(value, /Market feed: Connected|6 \/ 6 Trade ON/);
+  assert.deepEqual(nodes(tree).filter(n => n.props?.role === 'tab').slice(0, 3).map(n => text(n).trim()), ['NIFTY', 'BANK NIFTY', 'SENSEX']);
+  assert.equal(deskTab(tree, 'NIFTY').props['aria-selected'], true);
+  assert.match(value, /24,512\.60/);
+  assert.match(value, /\+128\.45 \(\+0\.53%\)/);
+  assert.equal(nodes(tree).filter(n => n.type === 'select').length, 0, 'Strategy selection uses visible individual panels');
+  assert.equal(nodes(tree).filter(n => n.props?.role === 'switch' && n.props['aria-label']?.endsWith(' trade approval')).length, 6);
+  for (const [, name] of DESK_ALGOS) assert.match(value, new RegExp(name.replace(/[+]/g, '\\+')));
+  assert.match(value, /Live \(Auto\)/);
+  assert.match(value, /Manual/);
+  assert.doesNotMatch(value, /Paper/i);
+  assert.match(value, /Price above VWAP/);
+  assert.match(value, /Trending/);
+  assert.match(value, /5 \/ 6/);
+  assert.match(value, /Waiting for RSI to cool below 70/);
+  assert.match(value, /1 lot · risk ≤ ₹1,000/);
+  const toggle = deskSwitch(tree);
+  assert.equal(toggle.props['aria-checked'], false);
+  assert.equal(toggle.props.disabled, false);
+  assert.match(text(toggle), /TRADE\s+OFF/i);
+  assert.ok(h.requests.every(r => r.options.method === 'GET'), 'Viewing never sends a command');
+  cleanup();
+});
+
+test('6 Algo Desk keeps the last good view on an invalid or stale status and blocks TRADE ON', async () => {
+  const h = harness('AlgoDeskSection.tsx');
+  const props = DESK_PROPS;
+  h.render(props);
+  const cleanup = h.mount(deskFixture());
+  await settle();
+  for (const [bad, message] of [[{ ...deskFixture(), algos: [] }, /Invalid 6 Algo Desk status response/],
+    [deskFixture({ generated_at: Date.now() / 1000 - 60 }), /6 Algo Desk status is stale/]]) {
+    await h.poll(bad);
+    await settle();
+    const tree = h.render(props);
+    assert.equal(nodes(tree).filter(n => n.props?.role === 'switch' && n.props['aria-label']?.endsWith(' trade approval')).length, 6);
+    assert.match(text(tree), /Price above VWAP/);
+    assert.match(text(nodes(tree).find(n => n.props?.role === 'alert')), message);
+    assert.equal(deskSwitch(tree).props.disabled, true);
+  }
+  await h.poll(deskFixture());
+  await settle();
+  const tree = h.render(props);
+  assert.equal(nodes(tree).find(n => n.props?.role === 'alert'), undefined);
+  assert.equal(deskSwitch(tree).props.disabled, false);
+  cleanup();
+});
+
+test('6 Algo Desk shows each strategy rules and requirements while the feed is idle', async () => {
+  const h = harness('AlgoDeskSection.tsx');
+  const props = DESK_PROPS;
+  const idle = (key, setup, rules) => ({
+    key, status: 'MONITORING', decision: 'WAIT', side: null, passed: 0, total: rules.length,
+    reason: 'Waiting for the live futures feed', context: { setup, signal: 'WAIT' }, levels: {},
+    rules: rules.map(([id, label, requirement]) => ({ id, label, passed: null, requirement, value: null })),
+  });
+  const fixture = deskFixture({ ready: false });
+  fixture.signals.adaptive_vwap_pro = idle('adaptive_vwap_pro', 'Trend pullback to VWAP / EMA20 with a 5m continuation', [
+    ['htf_30m', '30m trend', '30m close beyond a rising (CE) / falling (PE) EMA9'],
+    ['pullback', 'Pullback to value', 'A recent 5m candle tested VWAP/EMA20 within 0.25 ATR and held'],
+    ['regime', 'Trend efficiency', '30-candle efficiency ratio >= 0.30']]);
+  fixture.signals.orb_retest = idle('orb_retest', 'Opening-range breakout, retest and resumption', [
+    ['opening_range', 'Opening range', 'All 15 opening candles (09:15-09:29) with width 0.15%-1.0%'],
+    ['retest', 'Retest held', 'Price returned within 0.25 ATR of the broken level and closed beyond it']]);
+  h.render(props);
+  const cleanup = h.mount(fixture);
+  await settle();
+  let value = text(h.render(props));
+  assert.match(value, /Trend pullback to VWAP \/ EMA20 with a 5m continuation/);
+  assert.match(value, /Pullback to value/);
+  assert.match(value, /tested VWAP\/EMA20 within 0\.25 ATR and held/, 'Requirements are visible, not tooltip-only');
+  assert.match(value, /0 \/ 3/);
+  assert.match(value, /Waiting for the live futures feed/);
+  assert.match(value, /Opening range/);
+  assert.match(value, /Pullback to value/);
+
+  deskStrategy(h.render(props), 'ORB Retest Pro').props.onClick();
+  const tree = h.render(props);
+  value = text(tree);
+  assert.equal(deskStrategy(tree, 'ORB Retest Pro').props['aria-pressed'], true);
+  assert.match(value, /Opening-range breakout, retest and resumption/);
+  assert.match(value, /Opening range/);
+  assert.match(value, /Retest held/);
+  assert.match(value, /All 15 opening candles \(09:15-09:29\)/);
+  assert.match(value, /0 \/ 2/);
+  assert.match(value, /Pullback to value|Trend pullback to VWAP/);
+  assert.match(value, /Waiting for the live futures feed/);
+  cleanup();
+});
+
+test('6 Algo Desk TRADE ON and Manual switch silently post approval for the selected algo', async () => {
+  const h = harness('AlgoDeskSection.tsx');
+  const props = DESK_PROPS;
+  h.render(props);
+  const cleanup = h.mount(deskFixture());
+  await settle();
+  assert.equal(h.requests[0].url, '/api/algo-desk/status?symbol=NIFTY');
+  deskStrategy(h.render(props), 'Order Flow Momentum').props.onClick();
+  let tree = h.render(props);
+  assert.equal(deskStrategy(tree, 'Order Flow Momentum').props['aria-pressed'], true);
+  assert.match(text(tree), /Order Flow Momentum subtitle/);
+  deskTab(tree, 'SENSEX', 'Order Flow Momentum').props.onClick();
+  tree = h.render(props);
+  assert.equal(deskTab(tree, 'SENSEX', 'Order Flow Momentum').props['aria-selected'], true);
+  h.respond(deskFixture({}, ['order_flow_momentum']));
+  tree = h.render(props);
+  deskSwitch(tree, 'order_flow_momentum').props.onClick();
+  await settle();
+  assert.equal(h.confirms.length, 0, 'Turning TRADE ON does not open a browser confirmation');
+  let post = h.requests.at(-1);
+  assert.equal(post.url, '/api/algo-desk/approval');
+  assert.equal(post.options.method, 'POST');
+  assert.equal(post.options.headers['X-AQTE-Intent'], 'manual-live-control');
+  assert.deepEqual(JSON.parse(post.options.body), {
+    algo: 'order_flow_momentum', enabled: true, confirmation: 'ENABLE ALGO DESK LIVE TRADING', symbol: 'SENSEX' });
+  tree = h.render(props);
+  assert.equal(deskSwitch(tree, 'order_flow_momentum').props['aria-checked'], true);
+  assert.match(text(tree), /Active/);
+  assert.equal(deskSwitch(tree, 'adaptive_vwap_pro').props['aria-checked'], false,
+    'Enabling one strategy does not change another strategy control');
+
+  h.respond(deskFixture());
+  await settle();
+  tree = h.render(props);
+  deskSwitch(tree, 'order_flow_momentum').props.onClick();
+  await settle();
+  assert.equal(h.confirms.length, 0, 'Switching OFF does not open a browser confirmation');
+  post = h.requests.at(-1);
+  assert.deepEqual(JSON.parse(post.options.body), {
+    algo: 'order_flow_momentum', enabled: false, confirmation: 'STOP ALGO DESK ENTRIES', symbol: 'SENSEX' });
+  assert.equal(deskSwitch(h.render(props), 'order_flow_momentum').props['aria-checked'], false);
+
+  cleanup();
+});
+
+test('6 Algo Desk approvals stay independent while another section is enabled', async () => {
+  for (const lane_owner of ['AQTE', 'QUANTEDGE']) {
+    const h = harness('AlgoDeskSection.tsx');
+    const props = DESK_PROPS;
+    h.render(props);
+    const cleanup = h.mount(deskFixture({ lane_owner }));
+    await settle();
+    const toggle = deskSwitch(h.render(props));
+    assert.equal(toggle.props.disabled, false);
+    toggle.props.onClick();
+    await settle();
+    assert.equal(h.confirms.length, 0);
+    assert.equal(JSON.parse(h.requests.at(-1).options.body).enabled, true);
+    cleanup();
+  }
+});
+
+test('6 Algo Desk TRADE ON stays blocked when live trading is unsafe', async () => {
+  for (const [overrides, reason] of [
+    [{ live_enabled: false }, /AQTE_LIVE_ENABLED/],
+    [{ killed: true }, /Emergency stop is latched/],
+    [{ ready: false }, /Live journal unavailable/],
+  ]) {
+    const h = harness('AlgoDeskSection.tsx');
+    const props = DESK_PROPS;
+    h.render(props);
+    const cleanup = h.mount(deskFixture(overrides));
+    await settle();
+    const toggle = deskSwitch(h.render(props));
+    assert.equal(toggle.props.disabled, true);
+    assert.match(toggle.props.title, reason);
+    toggle.props.onClick();
+    await settle();
+    assert.equal(h.confirms.length, 0);
+    assert.ok(h.requests.every(r => r.options.method === 'GET'), 'Blocked TRADE ON sends nothing');
+    cleanup();
+  }
+});
+
+test('6 Algo Desk shows the real open trade and journal, and Exit closes only that XEA trade', async () => {
+  const id = `XEA${'a'.repeat(13)}`;
+  const now = Date.now() / 1000;
+  const status = deskFixture({
+    active: { id, algo: 'adaptive_vwap_pro', name: 'Adaptive VWAP Pro', symbol: 'NIFTY', state: 'OPEN',
+      contract: { trading_symbol: 'NIFTY26N1022000CE', side: 'CE' }, entry_price: 100, limit: 101, stop: 80, target: 140,
+      filled: 75, quantity: 75, trailing_active: false, exit_requested: null, ltp: 112.5, unrealized: 1000, entry_at: now },
+    trades: [{ id: `XEA${'b'.repeat(13)}`, algo: 'adaptive_vwap_pro', symbol: 'BANKNIFTY', entry_price: 200, exit_price: 240,
+      filled: 30, net_pnl: 1150, entry_at: now - 600, exit_at: now - 300, exit_reason: null, exit_requested: 'TARGET',
+      stop: 180, target: 240, initial_stop: 180, trading_symbol: 'BANKNIFTY26N1048000PE', side: 'PE' }],
+    opportunities: [{ key: 'opp-1', algo: 'adaptive_vwap_pro', symbol: 'SENSEX', decision: 'BUY CE', state: 'REJECTED',
+      reason: 'Spread too wide', at: now - 900 }],
+  }, ['adaptive_vwap_pro']);
+  const h = harness('AlgoDeskSection.tsx');
+  const props = DESK_PROPS;
+  h.render(props);
+  const cleanup = h.mount(status);
+  await settle();
+  const tree = h.render(props);
+  const value = text(tree);
+  assert.match(value, /NIFTY26N1022000CE/);
+  assert.match(value, /112\.50/);
+  assert.match(value, /\+₹1,000/);
+  const rows = nodes(tree).filter(n => n.type === 'tr').slice(1).map(text);
+  assert.equal(rows.length, 3);
+  assert.match(rows[0], /NIFTY.*BUY CE.*100\.00.*80\.00.*140\.00.*Open/);
+  assert.match(rows[1], /BANK NIFTY.*BUY PE.*200\.00.*180\.00.*240\.00.*Target.*\+₹1,150/);
+  assert.match(rows[2], /SENSEX.*BUY CE.*Rejected/);
+  h.respond({ ...status, active: { ...status.active, exit_requested: 'MANUAL_EXIT' } });
+  deskButton(tree, 'Exit trade').props.onClick();
+  await settle();
+  assert.match(h.confirms[0], /Close only the Adaptive VWAP Pro trade in NIFTY26N1022000CE/);
+  const post = h.requests.at(-1);
+  assert.equal(post.url, '/api/algo-desk/exit');
+  assert.deepEqual(JSON.parse(post.options.body), { trade_id: id, confirmation: 'CLOSE ALGO DESK TRADE', symbol: 'NIFTY' });
+  const after = h.render(props);
+  assert.equal(deskButton(after, 'Exit requested').props.disabled, true);
+  assert.match(text(after), /Exiting/);
+  cleanup();
+});
+
+test('6 Algo Desk keeps each strategy index tab independent and displays its own signal', async () => {
+  const h = harness('AlgoDeskSection.tsx');
+  const props = {
+    ...DESK_PROPS,
+    marketData: { BANKNIFTY: { symbol: 'BANKNIFTY', price: 50000, change: 100, changePercent: 0.2, status: 'LIVE' } },
+  };
+  h.render(props);
+  const fixture = deskFixture();
+  fixture.signals_by_symbol.BANKNIFTY = { ...fixture.signals };
+  fixture.signals_by_symbol.BANKNIFTY.adaptive_vwap_pro = {
+    ...fixture.signals.adaptive_vwap_pro,
+    reason: 'BANKNIFTY-specific signal',
+    rules: [{ id: 'bank-vwap', label: 'BANK NIFTY VWAP rule', passed: true,
+      requirement: 'BANK NIFTY close > VWAP', value: 50000 }],
+  };
+  const cleanup = h.mount(fixture);
+  await settle();
+  let tree = h.render(props);
+  deskTab(tree, 'BANK NIFTY').props.onClick();
+  tree = h.render(props);
+  assert.equal(deskTab(tree, 'BANK NIFTY').props['aria-selected'], true);
+  assert.equal(deskTab(tree, 'NIFTY', 'Order Flow Momentum').props['aria-selected'], true,
+    'Changing one strategy does not change another strategy index');
+  const adaptive = nodes(tree).find(n => n.type === 'article' && text(n).includes('Adaptive VWAP Pro'));
+  assert.match(text(adaptive), /BANKNIFTY-specific signal/);
+  assert.match(text(adaptive), /BANK NIFTY VWAP rule/);
+  assert.match(text(adaptive), /50,000\.00/);
+  assert.ok(h.requests.every(r => r.options.method === 'GET'), 'Changing a signal tab sends no trade command');
+  cleanup();
+});
+
+test('ExpiryEdge AI Algo stays its own section and the 6 Algo Desk renders separately directly below it', () => {
+  const read = name => readFileSync(path.join(__dirname, '..', 'components', name), 'utf8');
+  const panel = read('ExpiryEdgeAIPanel.tsx');
+  assert.match(panel, /aria-label="Expiry Edge AI Algo"/);
+  assert.doesNotMatch(panel, /AlgoDesk|Algo Desk|\/api\/algo-desk/);
+  assert.match(panel, /setTimeout\(\(\) => void poll\(\), 5000\)/);
+  assert.match(panel, /strategyFeedConnected && strategySignal\?\.ready === true/);
+  assert.match(panel, /Waiting for a connected, fresh \$\{selectedSymbol\} futures feed/);
+  assert.match(panel, /Futures Signal Close/);
+  assert.match(panel, /Underlying Invalidation/);
+  assert.match(panel, /ATR Trail Distance/);
+  assert.match(panel, /aria-label="ExpiryEdge trade controls"/);
+  assert.match(panel, /role="switch" aria-checked=\{liveStatus\?\.enabled \?\? false\}/);
+  assert.match(panel, /: 'border-slate-600 bg-slate-900 text-slate-300'/);
+  assert.match(panel, /: 'bg-slate-600'/);
+  assert.match(panel, /setLiveApproval\(!liveStatus\?\.enabled\)/);
+  assert.match(panel, /aria-label="Execution mode"/);
+  assert.match(panel, /ENABLE EXPIRYEDGE AI LIVE TRADING/);
+  assert.match(panel, />\s*Live \(Auto\)\s*</);
+  assert.match(panel, /aria-pressed=\{liveStatus\?\.enabled \?\? false\}/);
+  assert.match(panel, /live\/exit/);
+  assert.match(panel, /Open Positions \(\{liveStatus\?\.active \? 1 : 0\}\)/);
+  const desk = read('AlgoDeskSection.tsx');
+  assert.doesNotMatch(desk, /ExpiryEdgeAIPanel|ExpiryEdge AI|\/api\/expiryedge/);
+  const section = read('AQTESection.tsx');
+  assert.match(section, /import\('@\/components\/AlgoDeskSection'\)/);
+  assert.match(section,
+    /<ExpiryEdgeAIPanel marketData=\{marketData\} isConnected=\{isConnected\} \/>\s*<AlgoDeskSection marketData=\{marketData\} isConnected=\{isConnected\} \/>/);
+});
+
+test('QuantEdge Pro distinguishes arming auto entries from placing an immediate order', () => {
+  const panel = readFileSync(path.join(__dirname, '..', 'components', 'QuantEdgeProSection.tsx'), 'utf8');
+  assert.match(panel, /role="switch" aria-label="QuantEdge Pro trade approval"/);
+  const headerStart = panel.indexOf('<header className="qep-header');
+  const headerEnd = panel.indexOf('</header>', headerStart);
+  const approvalControl = panel.indexOf('aria-label="QuantEdge Pro trade approval"');
+  assert.ok(headerStart >= 0 && approvalControl > headerStart && approvalControl < headerEnd,
+    'QuantEdge Pro controls stay beside the section title in the header');
+  assert.doesNotMatch(panel.slice(headerStart, headerEnd), /<p role="status"|<p role="alert"/);
+  assert.match(panel, /aria-checked=\{live\?\.enabled \?\? false\}/);
+  assert.match(panel, /w-28 shrink-0 items-center justify-center/);
+  assert.match(panel, /w-20 rounded-md/);
+  assert.match(panel, /w-16 rounded-md/);
+  assert.match(panel, /h-9 w-32 shrink-0 items-center justify-center whitespace-nowrap/);
+  assert.match(panel, /whitespace-nowrap rounded-full/);
+  assert.match(panel, /: 'border-slate-600 bg-slate-900 text-slate-300'/);
+  assert.match(panel, /: 'bg-slate-600'/);
+  assert.match(panel, />\s*Live \(Auto\)\s*</);
+  assert.match(panel, />\s*Manual\s*</);
+  assert.match(panel, /onClick=\{\(\) => setApproval\(true\)\}/);
+  assert.match(panel, /onClick=\{\(\) => setApproval\(false\)\}/);
+  assert.doesNotMatch(panel, /!live\.ready \|\| !live\.armed/);
+  assert.doesNotMatch(panel, /turn QuantEdge Pro ON or OFF at any time/);
+  assert.doesNotMatch(panel, /startDisabledReason/);
+  assert.match(panel, /APPROVED · WAITING FOR SESSION/);
+  assert.match(panel, /setOperationError\(reason instanceof Error \? reason\.message/);
+  assert.match(panel, /operationError \?\? statusError \?\? live\?\.error/);
+  assert.match(panel, /void act\('approval',\s*\{/);
+  assert.match(panel, /setTimeout\(poll, 5000\)/);
+  assert.match(panel, /Zerodha temporarily rate-limited broker requests/);
+  assert.match(panel, /order submissions are never retried automatically/);
+  assert.doesNotMatch(panel, /if \(enabled && !window\.confirm/);
+  assert.match(panel, /Current setup: \{signal\?\.decision \?\? 'WAIT'\}/);
+  assert.match(panel, /An entry requires all 7 rules plus a qualified option, fresh quotes, and risk\/broker checks/);
+  assert.match(panel, /ARMED · WAITING/);
 });

@@ -37,11 +37,6 @@ function harness(filename = 'LiveMarketIndexTabs.tsx') {
       if (name === 'next/dynamic') return () => function IndexCard() {};
       if (name === '@/components/IndexTabs') return IndexTabs;
       if (name === '@/lib/buyerIntelligence') return {};
-      if (name === '@/hooks/useStrikeIntelligence') {
-        return { useStrikeIntelligence: () => ({
-          strikeData: props.marketData, isConnected: props.isConnected, lastUpdate: null,
-        }) };
-      }
       if (name === 'react/jsx-runtime') return require(name);
       throw new Error(`Unexpected import: ${name}`);
     },
@@ -137,32 +132,4 @@ test('keyboard navigation wraps, supports Home/End, and moves focus to the selec
     preventDefault: () => assert.fail('Tab must retain its normal browser behavior'),
   });
   assert.equal(render().tabs[1].props['aria-selected'], true);
-});
-
-test('Strike Intelligence tabs preserve per-index cards, live data, and independent selection', () => {
-  const strike = harness('StrikeIntelligence.tsx');
-  const initial = strike.render();
-  assert.equal(initial.panels.filter(panel => !panel.props.hidden).length, 1);
-  assert.equal(initial.panels[0].props.hidden, false);
-  for (let index = 0; index < 3; index++) {
-    strike.render().tabs[index].props.onClick();
-    const { tabs, panels } = strike.render();
-    assert.equal(panels.filter(panel => !panel.props.hidden).length, 1);
-    assert.equal(panels[index].props.hidden, false);
-    tabs.forEach((tab, i) => {
-      const symbol = tab.props['aria-label'];
-      assert.equal(tab.props.id, `strike-intelligence-tab-${symbol}`);
-      assert.equal(tab.props['aria-controls'], panels[i].props.id);
-      assert.equal(panels[i].props['aria-labelledby'], tab.props.id);
-      assert.equal(panels[i].props.children.props.data, strike.props.marketData[symbol]);
-      assert.equal(panels[i].key, symbol);
-    });
-  }
-  strike.props.marketData.NIFTY = { price: 25200 };
-  const hiddenPanel = strike.render().panels[0];
-  assert.equal(hiddenPanel.props.hidden, true);
-  assert.equal(hiddenPanel.props.children.props.data.price, 25200);
-  strike.render().tabs[2].props.onKeyDown({ key: 'Home', preventDefault: () => {} });
-  assert.equal(strike.focused(), 'strike-intelligence-tab-NIFTY');
-  assert.equal(strike.render().panels[0].props.hidden, false);
 });

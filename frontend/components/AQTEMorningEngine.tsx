@@ -4,7 +4,8 @@ import { memo, useRef, useState } from 'react';
 import { API_CONFIG } from '@/lib/api-config';
 import { getOrCreateVisitorId } from '@/lib/visitor-id';
 import { notifyAppAccessExpired } from '@/lib/app-access-events';
-import { aqteControllerCurrent, aqteErrorText, isAqteLiveState, type AQTELiveState, type AQTESymbol } from '@/lib/aqte-display';
+import { aqteControllerCurrent, aqteErrorText, aqteObserveServerClock, aqteServerNow, isAqteLiveState,
+  type AQTELiveState, type AQTESymbol } from '@/lib/aqte-display';
 
 const metric = (value: unknown) => typeof value === 'number' && Number.isFinite(value) ? value.toFixed(2) : '--';
 const shown = (value: unknown) => typeof value === 'number' && Number.isFinite(value) ? String(value) :
@@ -25,7 +26,7 @@ function istMinute(now: number) {
   return Number.isFinite(hour) && Number.isFinite(minute) ? hour * 60 + minute : -1;
 }
 
-function AQTEMorningEngine({ status, symbol, onStatus, now = Date.now() / 1000 }: {
+function AQTEMorningEngine({ status, symbol, onStatus, now = aqteServerNow() }: {
   status: AQTELiveState | null; symbol: AQTESymbol; onStatus: (value: AQTELiveState) => void; now?: number;
 }) {
   const [confirming, setConfirming] = useState(false);
@@ -52,13 +53,16 @@ function AQTEMorningEngine({ status, symbol, onStatus, now = Date.now() / 1000 }
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 15000);
     try {
+      const sent = Date.now();
       const response = await fetch(API_CONFIG.endpoint('/api/aqte/live/morning'), {
         method: 'POST', credentials: 'include', cache: 'no-store', signal: controller.signal,
         headers: { 'Content-Type': 'application/json', 'X-Device-Id': getOrCreateVisitorId(),
           'X-AQTE-Intent': 'manual-live-control' },
         body: JSON.stringify({ enabled, confirmation: enabled ? 'ENABLE MORNING REAL TRADING' : 'STOP MORNING ENTRIES' }),
       });
+      const received = Date.now();
       const value: unknown = await response.json();
+      aqteObserveServerClock(response, value, sent, received);
       if (!response.ok) {
         if (response.status === 401) notifyAppAccessExpired();
         const detail = value && typeof value === 'object' && 'detail' in value ? value.detail : null;

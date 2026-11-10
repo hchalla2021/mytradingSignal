@@ -4,8 +4,8 @@ import { memo, useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { API_CONFIG } from '@/lib/api-config';
 import { notifyAppAccessExpired } from '@/lib/app-access-events';
 import { getOrCreateVisitorId } from '@/lib/visitor-id';
-import { AQTE_RECONNECT_GRACE_MS, aqteConnectionDrop, aqteControllerCurrent, aqteErrorText, aqtePollLoop, isAqteLiveState,
-  type AQTELiveState } from '@/lib/aqte-display';
+import { AQTE_RECONNECT_GRACE_MS, aqteConnectionDrop, aqteControllerCurrent, aqteErrorText, aqteObserveServerClock, aqtePollLoop,
+  aqteServerNow, isAqteLiveState, type AQTELiveState } from '@/lib/aqte-display';
 
 export type AutomationState = AQTELiveState;
 type Command = 'on' | 'off' | 'reset';
@@ -21,7 +21,7 @@ function automationState(value: unknown): AutomationState {
   if (!isAqteLiveState(value)) {
     throw new Error('Automation status unavailable; check the Real Trade controller and Kite.');
   }
-  const age = Date.now() / 1000 - value.generated_at;
+  const age = aqteServerNow() - value.generated_at;
   if (age < -1 || age > 10) throw new Error('Automation status is stale. Do not assume ON or OFF; verify in Kite.');
   return value;
 }
@@ -31,6 +31,7 @@ async function request(command?: Command): Promise<AutomationState> {
   const timeout = setTimeout(() => controller.abort(), command === undefined ? 8000 : 15000);
   const path = command === undefined ? 'status' : command === 'on' ? 'start' : command === 'off' ? 'automation' : 'reset';
   try {
+    const sent = Date.now();
     const response = await fetch(API_CONFIG.endpoint(`/api/aqte/live/${path}`), {
       method: command === undefined ? 'GET' : 'POST',
       credentials: 'include', cache: 'no-store', signal: controller.signal,
@@ -42,7 +43,9 @@ async function request(command?: Command): Promise<AutomationState> {
         ? { confirmation: 'RESET EMERGENCY STOP' }
         : { enabled: command === 'on', confirmation: command === 'on' ? 'START AUTOMATED REAL TRADING' : 'STOP NEW ENTRIES' }),
     });
+    const received = Date.now();
     const value: unknown = await response.json();
+    aqteObserveServerClock(response, value, sent, received);
     if (!response.ok) {
       if (response.status === 401) notifyAppAccessExpired();
       const detail = value && typeof value === 'object' && 'detail' in value ? value.detail : null;
@@ -75,7 +78,7 @@ function AQTEAutomationSwitch({ onStatus, feed, feedError = null }: {
   const [ownStatus, setStatus] = useState<AutomationState | null>(null);
   const [commandError, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [confirming, setConfirming] = useState<'on' | 'reset' | null>(null);
+  const [confirming, setConfirming] = useState<'reset' | null>(null);
   const [ownUnknown, setUnknown] = useState(false);
   const [savedOk, setSaved] = useState(false);
   const [failedAt, setFailedAt] = useState<number | null>(null);
@@ -131,7 +134,7 @@ function AQTEAutomationSwitch({ onStatus, feed, feedError = null }: {
       setSaved(true);
     } catch (cause) {
       setUnknown(true);
-      setFailedAt(Date.now() / 1000);
+      setFailedAt(aqteServerNow());
       // In shared mode the page's poll owns the live status; only this switch's outcome is unknown.
       if (!shared) onStatus?.(null);
       setError(cause instanceof Error ? cause.message : 'Switch outcome unknown. Check Kite and server status.');
@@ -144,7 +147,7 @@ function AQTEAutomationSwitch({ onStatus, feed, feedError = null }: {
   const feedStatus = feed && feed !== 'pending' ? feed : null;
   const status = !shared ? ownStatus :
     feedStatus && (!ownStatus || feedStatus.generated_at >= ownStatus.generated_at) ? feedStatus : ownStatus;
-  // A failed command stays unknown until a status generated after it (with 1 s clock-skew margin) arrives.
+  // A failed command stays unknown until a status generated after it (server clock, 1 s margin) arrives.
   const commandUnknown = failedAt != null && (!feedStatus || feedStatus.generated_at <= failedAt + 1);
   const unknown = !shared ? ownUnknown : feed === null || !!feedStatus?.connection_error || commandUnknown;
   const feedFault = feedStatus?.connection_error ?? (feed === null ? feedError ?? 'Automation status unavailable; verify in Kite before assuming ON or OFF.' : null);
@@ -152,11 +155,11 @@ function AQTEAutomationSwitch({ onStatus, feed, feedError = null }: {
   const saved = savedOk && !unknown;
   const known = !unknown && !!status;
   const on = known && (status.automation_wanted ?? status.automation_on) === true && !status.killed;
-  const waiting = on && !status.automation_on;
   const canStart = !unknown && !!status?.ready && status.enabled && !status.killed;
   const canReset = known && aqteControllerCurrent(status) && status.killed &&
     status.flatten_pending === false && status.active === null;
-  const label = busy ? 'Saving…' : !known ? unknown ? 'UNKNOWN' : 'Checking…' : status.killed ? 'STOPPED' : on ? 'ON' : 'OFF';
+  const label = !known ? '—' : on ? 'ON' : 'OFF';
+  const buttonLabel = busy ? 'WAIT' : label;
   const cancelOnEscape = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.key !== 'Escape') return;
     event.preventDefault();
@@ -170,15 +173,17 @@ function AQTEAutomationSwitch({ onStatus, feed, feedError = null }: {
       )}
       <button
         type="button" role={known ? 'switch' : undefined} aria-checked={known ? on : undefined}
-        aria-label={`AQTE automated real trading${known ? '' : ' · status unavailable'}`}
+        aria-label={known ? `LIVE TRADE ${label}` : 'LIVE TRADE · status unavailable'}
         aria-describedby="aqte-automation-help"
         aria-busy={busy}
         disabled={busy || (!on && !canStart) || (known && status.killed)}
-        onClick={() => { if (on) void act('off'); else if (canStart) setConfirming('on'); }}
+        onClick={() => { if (on) void act('off'); else if (canStart) void act('on'); }}
         className={`aqte-auto-switch ${known && status.killed ? 'aqte-auto-switch-stopped' : !known ? 'aqte-auto-switch-unknown' : on ? 'aqte-auto-switch-on' : 'aqte-auto-switch-off'}`}
       >
-        <span className="aqte-auto-switch-label">Auto Trade {label}</span>
-        <span className="aqte-auto-switch-track" aria-hidden="true"><span className="aqte-auto-switch-thumb" /></span>
+        <span className="aqte-auto-switch-copy">
+          <span className="aqte-auto-switch-label">AUTO TRADE</span>
+        </span>
+        <span className="aqte-auto-switch-state"><span aria-hidden="true" />{buttonLabel}</span>
       </button>
       {unknown && <button type="button" className="aqte-auto-request-off" aria-label="Stop AQTE new entries"
         disabled={busy} onClick={() => void act('off')}>Request OFF · verify acknowledgement</button>}
@@ -186,7 +191,7 @@ function AQTEAutomationSwitch({ onStatus, feed, feedError = null }: {
         <button type="button" className="aqte-auto-reset" disabled={busy || !canReset}
           onClick={() => { if (canReset) setConfirming('reset'); }}>Reset emergency stop</button>
       )}
-      <p role="status" className={`${!busy && !(known && status.killed) ? 'sr-only' : 'text-right text-sm'} ${unknown || !status ? 'text-amber-200' : status.killed ? 'text-rose-200' : on ? 'text-emerald-200' : 'text-amber-200'}`}>
+      <p role="status" className={`${known && status.killed ? 'text-right text-sm' : 'sr-only'} ${unknown || !status ? 'text-amber-200' : status.killed ? 'text-rose-200' : on ? 'text-emerald-200' : 'text-amber-200'}`}>
         {busy ? 'Saving to backend…' : unknown || !status ? 'UNKNOWN · Verifying backend state · Do not assume OFF' :
           status.killed ? (status.flatten_pending ? 'Emergency stop latched · Closing tagged AQTE/QuantEdge Pro trades · manual trades untouched' :
             !status.ready ? 'Emergency stop latched · Controller unavailable; reset blocked' :
@@ -198,41 +203,17 @@ function AQTEAutomationSwitch({ onStatus, feed, feedError = null }: {
       <p id="aqte-automation-help" className="sr-only">
         {unknown ? 'Status unknown. Use this control to request OFF; verify acknowledgement.' :
           on ? 'Auto trade stays ON until you switch it OFF. OFF blocks new entries; protective exits continue.' :
-            'Default OFF. Confirm ON any time; it arms itself during weekday entry hours. Backend live enablement is required.'}
+            'Default OFF. Switch ON to approve automated entries; backend live enablement and entry safety checks are required.'}
       </p>
-      {waiting && (
-        <p role="status" className="text-right text-xs text-amber-200">
-          ON · {status.automation_waiting || 'Waiting to arm for the market session'}
-        </p>
-      )}
       {known && !status.killed && !on && (!status.ready || !status.enabled) && (
-        <p role="status" className="text-right text-xs text-amber-200">
+        <p role="status" className="sr-only">
           {!status.ready ? 'ON locked · Live controller is not ready' : 'ON locked · AQTE_LIVE_ENABLED is false'}
         </p>
-      )}
-      {confirming === 'on' && (
-        <div role="group" aria-label="Confirm automated real trading" onKeyDown={cancelOnEscape}
-          className="aqx-auto-confirm">
-          <p className="aqx-auto-confirm-lead">Start automated real-money orders? ON stays saved until you switch OFF, even when the market is closed. Weekday one-lot BUY CE/BUY PE entries run 09:15–15:15 IST after safety checks. No qualifying signal means no trade.</p>
-          <details className="aqx-auto-confirm-details">
-            <summary>Review execution safeguards</summary>
-            <p>AQTE manages only its own tagged orders. It never closes, cancels or modifies your manual Kite trades; if you already hold its chosen contract, it uses a different strike or waits.</p>
-            <p className={status?.unvalidated_rules ? 'text-rose-200' : 'text-slate-300'}>
-              {status?.unvalidated_rules
-                ? 'Server allows unvalidated rule entries: fully aligned setups can place real one-lot orders.'
-                  : 'Strict validation mode: the quality gate blocks every entry, so ON scans without placing orders.'}
-            </p>
-          </details>
-          <div className="flex flex-wrap gap-2">
-            <button type="button" disabled={busy || !canStart} onClick={() => void act('on')} className="aqx-auto-confirm-on">Confirm ON · real money</button>
-            <button type="button" onClick={() => setConfirming(null)} className="aqx-auto-confirm-cancel">Cancel · stay OFF</button>
-          </div>
-        </div>
       )}
       {confirming === 'reset' && (
         <div role="group" aria-label="Confirm emergency reset" onKeyDown={cancelOnEscape}
           className="space-y-2 rounded-lg border border-amber-400/40 bg-slate-950 p-3 text-xs">
-          <p className="leading-relaxed text-amber-100">Verify in Kite that AQTE positions and AQTE orders are clear before resetting; your manual trades are never touched. Reset only clears the emergency latch and keeps automation OFF. ON requires separate confirmation and backend live enablement; entries require weekday entry hours: 09:15–15:15 IST.</p>
+          <p className="leading-relaxed text-amber-100">Verify in Kite that AQTE positions and AQTE orders are clear before resetting; your manual trades are never touched. Reset only clears the emergency latch and keeps automation OFF. ON requires backend live enablement; entries require weekday entry hours: 09:15–15:15 IST.</p>
           <div className="flex flex-wrap gap-2">
             <button type="button" onClick={() => setConfirming(null)} className="min-h-[44px] rounded-lg border border-slate-600 px-3 text-slate-300">Cancel reset</button>
             <button type="button" disabled={busy || !canReset} onClick={() => { if (canReset) void act('reset'); }}

@@ -98,8 +98,6 @@ test('proxy rewrites cannot be activated in production builds or ordinary develo
 
 const fallbackHooks = [
   ['useChartIntelligence.ts', 'useChartIntelligence', 'fetchWithFallback', 'chart-intelligence'],
-  ['useStrikeIntelligence.ts', 'useStrikeIntelligence', 'fetchWithFallback', 'strike-intelligence'],
-  ['useMarketRegime.ts', 'useMarketRegime', 'fetchRegimeWithFallback', 'market-regime'],
 ];
 
 function feedHook(file, extra = {}) {

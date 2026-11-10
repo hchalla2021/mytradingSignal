@@ -26,7 +26,15 @@ def client(monkeypatch):
 
 def test_frontend_contract_and_not_ready(monkeypatch):
     c = client(monkeypatch)
-    assert c.get("/api/v1/status").json()["readiness"] == "NOT_READY"
+    status = c.get("/api/v1/status").json()
+    assert status["readiness"] == "NOT_READY"
+    assert status["model_validated"] is False
+    assert set(status["feed_readiness"]) == {"NIFTY", "BANKNIFTY", "SENSEX"}
+    assert all(not feed["ready"] and feed["provenance"] == "unavailable"
+               for feed in status["feed_readiness"].values())
+    assert status["strategy_states"]
+    assert all(state["status"] == "NOT IMPLEMENTED" and not state["available"]
+               for state in status["strategy_states"].values())
     assert c.get("/api/v1/config").json()["risk"]["max_lots"] == 1
     assert c.put("/api/v1/config", json={"per_trade_loss_cap_inr": 500, "daily_loss_cap_inr": 1000,
           "max_trades_per_day": 2, "max_lots": 5, "min_model_confidence_pct": 20}).status_code == 200

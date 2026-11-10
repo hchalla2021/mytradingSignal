@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from 'react';
 import { API_CONFIG } from '@/lib/api-config';
 import { getOrCreateVisitorId } from '@/lib/visitor-id';
 import { notifyAppAccessExpired } from '@/lib/app-access-events';
-import { aqteErrorText, aqteIstDay, aqteLiveMetrics, aqtePollLoop, aqteSigned,
+import { aqteErrorText, aqteIstDay, aqteLiveMetrics, aqtePollLoop, aqteServerNow, aqteSigned,
   type AQTELiveState } from '@/lib/aqte-display';
 
 type Execution = {
@@ -43,7 +43,7 @@ async function responseError(response: Response, fallback: string): Promise<neve
   throw new Error(object(body) && typeof body.detail === 'string' ? body.detail : fallback);
 }
 
-export default function AQTEExecutionHistory({ liveStatus, now = Date.now() / 1000 }: {
+export default function AQTEExecutionHistory({ liveStatus, now = aqteServerNow() }: {
   liveStatus: AQTELiveState | null; now?: number;
 }) {
   const [history, setHistory] = useState<History | null>(null);
@@ -176,9 +176,6 @@ export default function AQTEExecutionHistory({ liveStatus, now = Date.now() / 10
         </button>
       </div>
       {downloadError && <p role="alert" className="aqx-warning">{downloadError}</p>}
-      <p className="aqx-footnote">Recent view shows today&apos;s executions only; View All retains the full journal. Excel uses the selected entry month (IST).
-        No monthly deletion. Net P&amp;L uses estimated charges; P&amp;L % excludes fees.
-        Open/unverified values may be unavailable.</p>
     </section>
   );
 }

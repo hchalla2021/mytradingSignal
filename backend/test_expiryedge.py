@@ -83,7 +83,7 @@ class ExpiryEdgeConfigTests(unittest.TestCase):
             "symbol": "NIFTY", "expiry_weekday": "Sunday",
         }).status_code, 422)
 
-    def test_status_uses_current_listed_instruments_and_keeps_live_disabled(self):
+    def test_status_uses_current_listed_instruments_and_reports_live_readiness(self):
         app = FastAPI()
         app.include_router(expiryedge.router)
         app.dependency_overrides[expiryedge.expiryedge_operator] = lambda: "owner"
@@ -99,10 +99,22 @@ class ExpiryEdgeConfigTests(unittest.TestCase):
             def set_access_token(self, _token):
                 pass
 
-        settings = SimpleNamespace(zerodha_api_key="configured", zerodha_access_token="configured")
+        settings = SimpleNamespace(
+            zerodha_api_key="configured", zerodha_access_token="configured",
+            aqte_live_enabled=False, expiryedge_ai_live_enabled=False,
+        )
+        snapshots = {
+            symbol: {
+                "market_data": {"state": "NOT_CONNECTED", "last_tick_at": None},
+                "signal": {"ready": False, "decision": "WAIT", "side": None,
+                           "reason": "feed unavailable", "setup_key": None},
+            }
+            for symbol in SYMBOLS
+        }
         with patch("routers.expiryedge.get_settings", return_value=settings), \
                 patch("routers.expiryedge.KiteConnect", BrokerClient), \
                 patch("routers.expiryedge.instrument_catalog.get", return_value=rows), \
+                patch("routers.expiryedge.live_market_snapshots", return_value=snapshots), \
                 patch("routers.expiryedge.get_config", return_value={
                     "schedules": {symbol: {"weekday": "Tuesday", "updated_at": "2026-11-08T00:00:00+05:30"}
                                   for symbol in SYMBOLS},
@@ -115,8 +127,10 @@ class ExpiryEdgeConfigTests(unittest.TestCase):
         self.assertEqual(payload["expiry_calendar"]["state"], "UNVERIFIED")
         self.assertEqual(payload["instruments"]["NIFTY"]["next_listed_expiry"]["expiry"], "2026-11-10")
         self.assertTrue(payload["instruments"]["NIFTY"]["configured_weekday_matches"])
-        self.assertIn("no approved ExpiryEdge order owner", " ".join(payload["block_reasons"]))
-        self.assertFalse(any("order" in getattr(route, "path", "").lower() for route in app.routes))
+        self.assertNotIn("No dedicated standalone ExpiryEdge AI order owner", " ".join(payload["block_reasons"]))
+        self.assertEqual(set(payload["markets"]), set(SYMBOLS))
+        self.assertEqual(set(payload["expiry_gates"]), set(SYMBOLS))
+        self.assertIn("/api/expiryedge/live/approval", [route.path for route in app.routes])
 
 
 if __name__ == "__main__":

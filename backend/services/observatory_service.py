@@ -65,7 +65,6 @@ _VOLATILE_T     = 2.0   # day-range / open ≥ 2% → VOLATILE
 STRATEGY_META: Dict[str, Tuple[str, str, str, int]] = {
     # Core trading strategies
     "overall_signal":        ("Overall Consensus",          "aggregate",  "⚡", 100),
-    "market_regime":         ("Market Regime",              "regime",     "🌊", 90),
     "liquidity_score":       ("Liquidity Intelligence",     "liquidity",  "💧", 85),
     "candle_intelligence":   ("Candle Intelligence",        "candle",     "🕯", 80),
     "volume_pulse":          ("Volume Pulse",               "volume",     "📊", 75),
@@ -73,7 +72,6 @@ STRATEGY_META: Dict[str, Tuple[str, str, str, int]] = {
     "institutional_compass": ("Institutional Compass",      "compass",    "🧭", 88),
     "pred_5m":               ("5-Min Prediction",           "prediction", "⏱", 70),
     "chart_intelligence":    ("Chart Intelligence",         "chart",      "📈", 83),
-    "strike_intelligence":   ("Strike Intelligence",        "options",    "⚔️", 87),
     "order_flow":            ("Order Flow Analysis",        "flow",       "🌊", 86),
     "trade_zones":           ("Trade Zones Buy/Sell",       "execution",  "🎯", 94),
     "ict_bias":              ("ICT Bias",                   "ict",        "🏛", 90),
@@ -433,32 +431,6 @@ class ObservatoryService:
         except Exception:
             pass
 
-        # 4. Market Regime ─────────────────────────────────────────────────────
-        try:
-            from services.market_regime_service import get_market_regime_service  # type: ignore
-            svc = get_market_regime_service()
-            snap = svc.get_snapshot() if svc else {}
-            sym_data = (snap or {}).get(symbol, {})
-            if sym_data:
-                # Use directionStrength (0-100) as confidence proxy; fall back to trendStrength
-                conf = _safe_confidence(
-                    sym_data.get("directionStrength") or sym_data.get("trendStrength", 50)
-                )
-                strategies["market_regime"] = entry(
-                    sym_data.get("direction", "NEUTRAL"),
-                    conf,
-                    sym_data.get("regime", ""),
-                    drivers=["direction strength", "trend strength", "volatility regime"],
-                    parameters={
-                        "direction": sym_data.get("direction"),
-                        "regime": sym_data.get("regime"),
-                        "directionStrength": sym_data.get("directionStrength"),
-                        "trendStrength": sym_data.get("trendStrength"),
-                    },
-                )
-        except Exception:
-            pass
-
         # 5. Liquidity Intelligence ────────────────────────────────────────────
         try:
             from services.liquidity_service import get_liquidity_service  # type: ignore
@@ -575,37 +547,6 @@ class ObservatoryService:
                         "signal": sym_data.get("signal"),
                         "confidence": sym_data.get("confidence"),
                         "pattern": sym_data.get("pattern"),
-                    },
-                )
-        except Exception:
-            pass
-
-        # 12. Strike Intelligence ────────────────────────────────────────────────
-        try:
-            from services.strike_intelligence_service import get_strike_intelligence_service  # type: ignore
-            strike = get_strike_intelligence_service()
-            snap = await asyncio.wait_for(strike.get_snapshot(), timeout=3.0) if strike else {}
-            sym_data = (snap or {}).get(symbol, {})
-            if sym_data:
-                strategies["strike_intelligence"] = entry(
-                    sym_data.get("signal", "NEUTRAL"),
-                    sym_data.get("confidence", 65),
-                    f"Options confluence | dominance={sym_data.get('dominantSide', 'N/A')}",
-                    drivers=["ATM+/-5", "CE/PE", "OI", "PCR", "max pain", "BSL/SSL", "BOS"],
-                    parameters={
-                        "signal": sym_data.get("signal"),
-                        "confidence": sym_data.get("confidence"),
-                        "dominantSide": sym_data.get("dominantSide"),
-                        "atm_window": sym_data.get("atmWindow") or "ATM +/-5",
-                        "ce_pe": sym_data.get("cePeRatio") or sym_data.get("ce_pe"),
-                        "volume": sym_data.get("volume"),
-                        "oi": sym_data.get("oi"),
-                        "pcr": sym_data.get("pcr"),
-                        "max_pain": sym_data.get("maxPain"),
-                        "bsl_ssl": sym_data.get("bslSsl"),
-                        "bos": sym_data.get("bos"),
-                        "advanced_pa": sym_data.get("advancedPA"),
-                        "trap": sym_data.get("trap"),
                     },
                 )
         except Exception:

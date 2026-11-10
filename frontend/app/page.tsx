@@ -7,7 +7,6 @@ import Header from '@/components/Header';
 import InstitutionalWorkspace from '@/components/InstitutionalWorkspace';
 import LiveMarketIndexTabs from '@/components/LiveMarketIndexTabs';
 import IndexTabs from '@/components/IndexTabs';
-import MarketAnalysisTabs from '@/components/MarketAnalysisTabs';
 import { useMarketSocket } from '@/hooks/useMarketSocket';
 import { useAIAnalysis } from '@/hooks/useAIAnalysis';
 import type { FIIDIISnapshot } from '@/hooks/useFIIDIIFlow';
@@ -27,20 +26,6 @@ const CRTBTSTCard = dynamic<{ symbol: string; name: string; data?: unknown }>(()
       <div className="grid grid-cols-2 gap-1.5">
         {[0, 1, 2, 3].map(i => (
           <div key={i} className="h-14 bg-slate-700/25 rounded-lg" />
-        ))}
-      </div>
-    </div>
-  )
-});
-
-const MarketRegimeIntelligence = dynamic(() => import('@/components/MarketRegimeIntelligence'), {
-  ssr: false,
-  loading: () => (
-    <div className="rounded-2xl border border-blue-500/30 bg-slate-800/30 p-5 animate-pulse">
-      <div className="h-5 w-64 bg-slate-700 rounded mb-4" />
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        {[0, 1, 2].map(i => (
-          <div key={i} className="rounded-2xl bg-slate-700/30 h-80" />
         ))}
       </div>
     </div>
@@ -347,11 +332,6 @@ export default function Home() {
         <div style={{ order: -9 }}>
           <InstitutionalWorkspace marketData={marketData} isConnected={isConnected} onSnapshot={setInstitutionalData} />
         </div>
-
-        <div style={{ order: -8 }} className="min-w-0">
-          <MarketAnalysisTabs section={<MarketRegimeIntelligence marketData={marketData} />} />
-        </div>
-
 
         <div className="min-w-0" data-testid="btst-strategy">
             <div className="border-2 border-orange-500/35 rounded-2xl p-3 sm:p-4 bg-gradient-to-br from-orange-950/20 via-dark-card/50 to-dark-elevated/40 backdrop-blur-sm shadow-xl shadow-orange-500/10">

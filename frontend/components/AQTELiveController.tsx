@@ -4,8 +4,8 @@ import { memo, useEffect, useRef, useState } from 'react';
 import { API_CONFIG } from '@/lib/api-config';
 import { notifyAppAccessExpired } from '@/lib/app-access-events';
 import { getOrCreateVisitorId } from '@/lib/visitor-id';
-import { AQTE_RECONNECT_GRACE_MS, aqteCanExit, aqteConnectionDrop, aqteErrorText, aqtePollLoop, isAqteLiveState,
-  type AQTELiveState, type AQTEExitRequest } from '@/lib/aqte-display';
+import { AQTE_RECONNECT_GRACE_MS, aqteCanExit, aqteConnectionDrop, aqteErrorText, aqteObserveServerClock, aqtePollLoop,
+  aqteServerNow, isAqteLiveState, type AQTELiveState, type AQTEExitRequest } from '@/lib/aqte-display';
 
 const headers = () => ({
   'Content-Type': 'application/json',
@@ -14,12 +14,15 @@ const headers = () => ({
 });
 
 async function request(path: 'status' | 'exit', body?: object, signal?: AbortSignal): Promise<unknown> {
+  const sent = Date.now();
   const response = await fetch(API_CONFIG.endpoint(`/api/aqte/live/${path}`), {
     method: body === undefined ? 'GET' : 'POST',
     headers: headers(), credentials: 'include', cache: 'no-store', signal,
     body: body === undefined ? undefined : JSON.stringify(body),
   });
+  const received = Date.now();
   const payload: unknown = await response.json();
+  aqteObserveServerClock(response, payload, sent, received);
   if (!response.ok) {
     // This is the page's only live-status poll, so it owns the sign-in prompt for an expired session.
     if (response.status === 401) notifyAppAccessExpired();
@@ -31,7 +34,7 @@ async function request(path: 'status' | 'exit', body?: object, signal?: AbortSig
 
 function liveState(value: unknown): AQTELiveState {
   if (!isAqteLiveState(value)) throw new Error('Invalid live-controller response; inspect Kite');
-  const age = Date.now() / 1000 - value.generated_at;
+  const age = aqteServerNow() - value.generated_at;
   if (age < -1 || age > 10) throw new Error('Live-controller response is stale; inspect Kite');
   return value;
 }

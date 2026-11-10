@@ -32,7 +32,11 @@ the shared token volume.
 ## Readiness limitations
 
 Status/config responses include readiness, block reasons, session gates, snapshots, and
-reported metrics. Configure PostgreSQL and Redis URLs, host allowlist IP (defaults to
+reported metrics. Status reports per-instrument feed readiness only for fresh,
+timestamp-validated ticks received by the pipeline; it does not claim that strategies
+consumed or evaluated those ticks. The strategy worker list is explicitly
+`NOT IMPLEMENTED` until evaluation is actually implemented. Model validation is true
+only when explicitly configured as validated. Configure PostgreSQL and Redis URLs, host allowlist IP (defaults to
 `159.65.147.167`), and a validated model artifact before readiness can change.
 
 This release does not connect/persist through PostgreSQL or Redis in a running worker;

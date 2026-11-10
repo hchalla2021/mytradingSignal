@@ -134,12 +134,69 @@ export function isAqteLiveState(value: unknown): value is AQTELiveState {
     ['quote_at', 'ltp', 'bid', 'points', 'gross_pnl', 'net_pnl', 'return_pct', 'peak_points', 'stop_points'].every(key => nullableNumber(metrics[key]));
 }
 
+/**
+ * Server-aligned clock for every AQTE freshness gate. A drifting PC clock must never decide whether
+ * backend status is current (a browser 1.4 s behind production saw every fresh status as stale, so
+ * Auto Trade read UNKNOWN). The backend stamps X-Server-Time (ms) on each response between request
+ * and receipt, bounding the server-minus-browser offset to the round trip regardless of payload
+ * caching. Without it, the HTTP Date header is a coarse fallback: whole seconds and possibly cached
+ * (uvicorn refreshes it about once a second), so it may trail by up to AQTE_DATE_LAG_S; a
+ * `generated_at` consistent with that bound narrows it. An old or future-dated `generated_at` stays
+ * outside the bound and is still judged stale, first response included. Valid bounds never
+ * contradict, so the estimate only narrows and cannot jump a fresh status across the -1 s limit.
+ * Without either header the browser clock is used unchanged.
+ */
+type AQTEClockSample = { low: number; high: number };
+const AQTE_CLOCK_SAMPLES = 12;
+const AQTE_DATE_LAG_S = 3;
+let aqteClockSamples: AQTEClockSample[] = [];
+
+function aqteClockBounds(samples: AQTEClockSample[]): AQTEClockSample | null {
+  if (!samples.length) return null;
+  const bounds = samples.reduce((a, b) => ({ low: Math.max(a.low, b.low), high: Math.min(a.high, b.high) }));
+  return bounds.low <= bounds.high ? bounds : null;
+}
+
+function aqteClockSample(response: Pick<Response, 'headers'>, payload: unknown, sentMs: number, receivedMs: number) {
+  const precise = Number(response.headers?.get?.('x-server-time') ?? NaN);
+  if (Number.isFinite(precise) && precise > 0) return { low: precise - receivedMs / 1000, high: precise - sentMs / 1000 };
+  const header = response.headers?.get?.('date');
+  const server = header ? Date.parse(header) : NaN;
+  if (!Number.isFinite(server)) return null;
+  const sample = { low: (server - receivedMs) / 1000, high: (server - sentMs) / 1000 + AQTE_DATE_LAG_S };
+  const generatedAt = record(payload) ? payload.generated_at : undefined;
+  if (finite(generatedAt)) {
+    const low = generatedAt - receivedMs / 1000;
+    const high = generatedAt - sentMs / 1000;
+    if (low <= sample.high && high >= sample.low) {
+      sample.low = Math.max(sample.low, low);
+      sample.high = Math.min(sample.high, high);
+    }
+  }
+  return sample;
+}
+
+export function aqteObserveServerClock(response: Pick<Response, 'headers'>, payload: unknown, sentMs: number, receivedMs: number) {
+  if (!Number.isFinite(sentMs) || !(receivedMs >= sentMs)) return;
+  const sample = aqteClockSample(response, payload, sentMs, receivedMs);
+  if (!sample) return;
+  // A sample inconsistent with the recent ones means a clock was stepped; start again from it.
+  const kept = aqteClockBounds([...aqteClockSamples, sample]) ? aqteClockSamples.slice(1 - AQTE_CLOCK_SAMPLES) : [];
+  aqteClockSamples = [...kept, sample];
+}
+
+/** Current server time in epoch seconds. */
+export function aqteServerNow(localMs = Date.now()) {
+  const bounds = aqteClockBounds(aqteClockSamples);
+  return localMs / 1000 + (bounds ? (bounds.low + bounds.high) / 2 : 0);
+}
+
 export const aqteIstDay = (seconds: number) => new Date((seconds + 19_800) * 1000).toISOString().slice(0, 10);
-export function aqteControllerCurrent(status: AQTELiveState | null | undefined, now = Date.now() / 1000) {
+export function aqteControllerCurrent(status: AQTELiveState | null | undefined, now = aqteServerNow()) {
   const age = status ? now - status.generated_at : NaN;
   return !!status && !status.connection_error && status.ready && Number.isFinite(age) && age >= -1 && age <= 10;
 }
-export function aqteLiveMetrics(status: AQTELiveState | null | undefined, now = Date.now() / 1000) {
+export function aqteLiveMetrics(status: AQTELiveState | null | undefined, now = aqteServerNow()) {
   const active = status?.active;
   const metrics = active?.metrics;
   const age = metrics?.quote_at != null ? now - metrics.quote_at : NaN;
@@ -150,7 +207,7 @@ export function aqteCanExit(status: AQTELiveState | null | undefined) {
   return aqteControllerCurrent(status) && !status?.killed && !status?.flatten_pending &&
     !!status?.active?.id && status.active.filled > (status.active.exited ?? 0);
 }
-export function aqteDaySummary(status: AQTELiveState | null | undefined, now = Date.now() / 1000) {
+export function aqteDaySummary(status: AQTELiveState | null | undefined, now = aqteServerNow()) {
   const known = aqteControllerCurrent(status, now);
   const trades = known ? status?.trades.filter(trade => aqteIstDay(trade.exit_at) === aqteIstDay(now)) ?? [] : [];
   // An unverified exit carries a placeholder net_pnl of 0, so realised P&L is unknown rather than flat.
@@ -364,7 +421,7 @@ export function aqteRuleEvidence(signal: AQTESignal | undefined, style: AQTEEntr
   return validEvidence('swing', evidence) ? evidence : null;
 }
 
-export function aqteFeedCurrent(signal: AQTESignal | undefined, now = Date.now() / 1000) {
+export function aqteFeedCurrent(signal: AQTESignal | undefined, now = aqteServerNow()) {
   const age = signal?.at == null ? NaN : now - signal.at;
   return signal?.feed_ready === true && Number.isFinite(age) && age >= -1 && age <= 5;
 }
@@ -407,7 +464,7 @@ export const aqteSigned = (value: number | null | undefined) =>
   value == null || !Number.isFinite(value) ? '--' : `${value > 0 ? '+' : ''}${formatter.format(value)}`;
 export const aqteLabel = (symbol: AQTESymbol) => symbol === 'BANKNIFTY' ? 'BANK NIFTY' : symbol;
 
-export function aqteOverview(signal: AQTESignal | undefined, mode: AQTEMode, unavailable: boolean, now = Date.now() / 1000) {
+export function aqteOverview(signal: AQTESignal | undefined, mode: AQTEMode, unavailable: boolean, now = aqteServerNow()) {
   const intelligence = signal?.intelligence;
   const age = intelligence ? now - intelligence.at : NaN;
   const info = !unavailable && isAqteIntelligence(intelligence) && (mode !== 'real' || aqteFeedCurrent(signal, now)) &&

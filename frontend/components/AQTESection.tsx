@@ -11,7 +11,7 @@ import AQTETerminal from '@/components/AQTETerminal';
 import AQTEBrokerPositions from '@/components/AQTEBrokerPositions';
 import AQTEEngineDeck from '@/components/AQTEEngineDeck';
 import { AQTE_RECONNECT_GRACE_MS, aqteCanExit, aqteConnectionDrop, aqteDaySummary, aqteEngineView, aqteErrorText, aqteFeedCurrent, aqteLiveMetrics,
-  aqtePollLoop, isAqteIntelligence, isAqteRuleChecks,
+  aqteObserveServerClock, aqtePollLoop, aqteServerNow, isAqteIntelligence, isAqteRuleChecks,
   type AQTEEnginePolicy, type AQTELiveState, type AQTEExitRequest, type AQTESignal } from '@/lib/aqte-display';
 import { prefetchChartHistory } from '@/hooks/useChartHistory';
 
@@ -22,6 +22,9 @@ const QuantEdgeProSection = dynamic(() => import('@/components/QuantEdgeProSecti
 const MorningEdgeSection = dynamic(() => import('@/components/MorningEdgeSection'), { ssr: false });
 const ExpiryEdgeAIPanel = dynamic<{ marketData?: MarketData; isConnected?: boolean }>(
   () => import('@/components/ExpiryEdgeAIPanel'), { ssr: false },
+);
+const AlgoDeskSection = dynamic<{ marketData?: MarketData; isConnected?: boolean }>(
+  () => import('@/components/AlgoDeskSection'), { ssr: false },
 );
 const SYMBOLS = ['NIFTY', 'BANKNIFTY', 'SENSEX'] as const;
 const LABELS = { NIFTY: 'NIFTY', BANKNIFTY: 'BANK NIFTY', SENSEX: 'SENSEX' };
@@ -164,18 +167,24 @@ const PerformanceStrip = memo(function PerformanceStrip(view: PerformanceView) {
       <h3 id="aqte-perf-title" className="aqx-perf-title"><NavIcon path={ICONS.performance} />Today&apos;s Performance</h3>
       <dl className="aqx-perfbar" aria-label="Today summary">
         <div><dt>Trades</dt><dd>{tradeCount != null && maxTrades != null ? `${tradeCount} / ${maxTrades}` : '--'}</dd></div>
-        <div><dt>Win Rate</dt><dd className={winRate == null ? '' : winRate >= 50 ? 'aqx-up' : 'aqx-down'}>{winRate != null ? `${winRate}%` : '--'}</dd></div>
         <div><dt>Today P&amp;L</dt><dd className={tone(dayPnl)}>{money(dayPnl)}</dd></div>
         <div><dt>Return</dt><dd className={tone(dayReturn)}>{dayReturn != null ? `${signed(dayReturn)}%` : '--'}</dd></div>
-        <div><dt>Total Points</dt><dd className={tone(totalPoints)}>{signed(totalPoints)}</dd></div>
-        <div><dt>Max Drawdown</dt><dd className={drawdown ? 'aqx-down' : ''}>{drawdown != null ? `${drawdown > 0 ? '−' : ''}₹${number(drawdown)}` : '--'}</dd></div>
         <div className="aqx-perf-risk"><dt>Daily Risk</dt>
-          <dd className={view.riskTone}>{view.riskLabel}{view.riskUsed != null && view.dailyLoss != null && <small>₹{number(view.riskUsed)} / ₹{number(view.dailyLoss)}</small>}</dd>
+          <dd className={view.riskTone}><span className="aqx-risk-label">{view.riskLabel}</span>
+            {view.riskUsed != null && view.dailyLoss != null && <small>₹{number(view.riskUsed)} / ₹{number(view.dailyLoss)}</small>}</dd>
           <span aria-hidden="true" className="aqx-risk-bar"><i style={{ transform: `scaleX(${view.riskShare ?? 0})` }} /></span>
           <p title={view.riskNote}>{view.riskNote}</p>
         </div>
-        <div><dt>Open Positions</dt><dd>{openPositions ?? '--'}</dd></div>
       </dl>
+      <details className="aqx-perf-more">
+        <summary>More performance</summary>
+        <dl className="aqx-perfbar aqx-perf-extra">
+          <div><dt>Win Rate</dt><dd className={winRate == null ? '' : winRate >= 50 ? 'aqx-up' : 'aqx-down'}>{winRate != null ? `${winRate}%` : '--'}</dd></div>
+          <div><dt>Total Points</dt><dd className={tone(totalPoints)}>{signed(totalPoints)}</dd></div>
+          <div><dt>Max Drawdown</dt><dd className={drawdown ? 'aqx-down' : ''}>{drawdown != null ? `${drawdown > 0 ? '−' : ''}₹${number(drawdown)}` : '--'}</dd></div>
+          <div><dt>Open Positions</dt><dd>{openPositions ?? '--'}</dd></div>
+        </dl>
+      </details>
       <p className="aqx-footnote">AQTE only · Net uses estimated charges · Return on deployed premium · One managed position maximum</p>
     </section>
   );
@@ -225,7 +234,8 @@ function isSnapshot(value: unknown): value is Snapshot {
 
 function AQTESection({ marketData, isConnected = false }: { marketData?: MarketData; isConnected?: boolean }) {
   const [selectedSymbol, setSelectedSymbol] = useState<SymbolName>('NIFTY');
-  const [now, setNow] = useState(Date.now());
+  // Server-aligned milliseconds: drives the IST clock, market hours and every freshness check below.
+  const [now, setNow] = useState(aqteServerNow() * 1000);
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [liveStatus, setLiveStatus] = useState<AQTELiveState | null>(null);
@@ -233,12 +243,14 @@ function AQTESection({ marketData, isConnected = false }: { marketData?: MarketD
   const [liveError, setLiveError] = useState<string | null>(null);
   // One live-status poll (AQTELiveController) feeds the whole section, including the header switch.
   const publishLive = useCallback((next: AQTELiveState | null, failure?: string) => {
+    setNow(aqteServerNow() * 1000);
     setLiveChecked(true);
     setLiveError(next ? null : failure ?? null);
     // A poll that started before a switch command can resolve after it; never roll back to the older state.
     setLiveStatus(prev => next && prev && !next.connection_error && next.generated_at < prev.generated_at ? prev : next);
   }, []);
   const [panel, setPanel] = useState<Panel>('active');
+  const [bookExpanded, setBookExpanded] = useState(false);
   const [exitRequest, setExitRequest] = useState<AQTEExitRequest | null>(null);
   // Each index chart mounts on first view and then stays mounted so switching back is instant.
   const [chartsOpened, setChartsOpened] = useState<Record<SymbolName, boolean>>({ NIFTY: false, BANKNIFTY: false, SENSEX: false });
@@ -257,7 +269,7 @@ function AQTESection({ marketData, isConnected = false }: { marketData?: MarketD
     let lastOk = 0;
     const advanceClock = () => {
       if (!active) return;
-      setNow(Date.now());
+      setNow(aqteServerNow() * 1000);
       freshnessTimer = setTimeout(advanceClock, 1000);
     };
     advanceClock();
@@ -265,15 +277,20 @@ function AQTESection({ marketData, isConnected = false }: { marketData?: MarketD
       controller = new AbortController();
       const timeout = setTimeout(() => controller?.abort(), 8000);
       try {
+        const sent = Date.now();
         const response = await fetch(API_CONFIG.endpoint('/api/aqte/snapshot'), {
           cache: 'no-store', signal: controller.signal,
         });
+        const received = Date.now();
         if (!response.ok) throw new Error(`AQTE unavailable (${response.status})`);
         const payload: unknown = await response.json();
+        aqteObserveServerClock(response, payload, sent, received);
         if (!isSnapshot(payload)) throw new Error('Invalid AQTE response');
-        if (Date.now() / 1000 - payload.generated_at > 10) throw new Error('AQTE response is stale');
+        if (aqteServerNow() - payload.generated_at > 10) throw new Error('AQTE response is stale');
         lastOk = Date.now();
         if (active) {
+          // Re-align with the offset this response taught, so the first snapshot is never judged on the raw PC clock.
+          setNow(aqteServerNow() * 1000);
           setSnapshot(payload);
           setError(null);
         }
@@ -348,7 +365,7 @@ function AQTESection({ marketData, isConnected = false }: { marketData?: MarketD
   const policy = snapshot?.engine_policy && typeof snapshot.engine_policy.veto === 'boolean' &&
     Number.isInteger(snapshot.engine_policy.veto_min) ? snapshot.engine_policy : null;
   const signalAt = snapshot?.data[selectedSymbol]?.at;
-  const tickAge = liveFeed && typeof signalAt === 'number' ? Math.max(0, Date.now() - signalAt * 1000) : null;
+  const tickAge = liveFeed && typeof signalAt === 'number' ? Math.max(0, aqteServerNow() * 1000 - signalAt * 1000) : null;
   const health = unavailable ? ['Offline', 'aqx-down'] : marketHours && !liveFeed ? ['Degraded', 'aqx-wait'] : ['Healthy', 'aqx-up'];
   const dataState = unavailable ? 'Off' : liveFeed ? 'Live' : marketHours ? 'Stale' : 'Market closed';
 
@@ -380,7 +397,10 @@ function AQTESection({ marketData, isConnected = false }: { marketData?: MarketD
   const riskShare = riskUsed != null && liveStatus && liveStatus.limits.daily_loss > 0
     ? Math.min(1, riskUsed / liveStatus.limits.daily_loss) : null;
   const go = (target: string, book?: Panel) => {
-    if (book) setPanel(book);
+    if (book) {
+      setPanel(book);
+      setBookExpanded(true);
+    }
     if (typeof document !== 'undefined') document.getElementById(target)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
 
@@ -397,7 +417,11 @@ function AQTESection({ marketData, isConnected = false }: { marketData?: MarketD
           <div className="min-w-0">
           <h2 id="aqte-title" className="text-sm font-semibold leading-relaxed text-slate-100 sm:text-base">
             <span className="aqx-brand font-bold tracking-widest">AQTE<span aria-hidden="true" className="aqx-infinity"> ∞</span></span>
-            <span className="text-slate-400"> — Adaptive Quantitative Trading Engine</span>
+            <span className="text-slate-400">
+              <span className="aqte-title-full"> — Adaptive Quantitative Trading Engine</span>
+              <span className="aqte-title-compact"> — Adaptive Quant Trading Engine</span>
+              <span className="aqte-title-narrow"> — Adaptive Quant Engine</span>
+            </span>
             {marketHours && <>{' '}
             <span role="status" aria-label="AQTE view status" className={`aqte-view-status inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-[11px] font-bold tracking-wider ${
               liveFeed ? 'border-emerald-400/40 bg-emerald-400/10 text-emerald-200' :
@@ -410,7 +434,6 @@ function AQTESection({ marketData, isConnected = false }: { marketData?: MarketD
               {feedLabel}
             </span></>}
           </h2>
-          <p className="aqx-subtitle">12 Strategy Evaluators • Scalp/Swing Entry Rules • Risk-Gated Auto Execution</p>
           </div>
         </div>
         <div className="aqx-head-tools">
@@ -445,9 +468,12 @@ function AQTESection({ marketData, isConnected = false }: { marketData?: MarketD
             {...indexCardView(quotes[symbol], marketData?.[symbol], unavailable, marketHours)} />
         ))}
       </div>
-      <MarketContext regime={market?.regime ?? null} volatility={market?.volatility ?? null} liquidity={market?.liquidity ?? null}
-        pcr={finiteOrNull(market?.pcr)} vix={finiteOrNull(market?.vix)} vixChange={finiteOrNull(market?.vix_change_pct)}
-        live={liveFeed} />
+      <details className="aqx-market-details">
+        <summary>Market context</summary>
+        <MarketContext regime={market?.regime ?? null} volatility={market?.volatility ?? null} liquidity={market?.liquidity ?? null}
+          pcr={finiteOrNull(market?.pcr)} vix={finiteOrNull(market?.vix)} vixChange={finiteOrNull(market?.vix_change_pct)}
+          live={liveFeed} />
+      </details>
       {(error || snapshot?.fault || snapshot?.subscription_error) && (
         <p role="status" className="aqx-alert break-words rounded-lg border border-amber-400/20 bg-amber-400/5 px-3 py-2 text-xs text-amber-200">
           {error || snapshot?.fault || snapshot?.subscription_error}
@@ -484,10 +510,15 @@ function AQTESection({ marketData, isConnected = false }: { marketData?: MarketD
         ))} />
       <QuantEdgeProSection marketData={marketData} isConnected={isConnected}
         vix={{ value: finiteOrNull(market?.vix), changePercent: finiteOrNull(market?.vix_change_pct) }} />
-      <MorningEdgeSection />
+      <MorningEdgeSection marketData={marketData} isConnected={isConnected} />
       <ExpiryEdgeAIPanel marketData={marketData} isConnected={isConnected} />
-      <section className="aqx-card aqx-book" aria-label="Trades, positions and controls" id="aqte-dash-book">
+      <AlgoDeskSection marketData={marketData} isConnected={isConnected} />
+      <section className={`aqx-card aqx-book ${bookExpanded ? 'aqx-book-expanded' : ''}`} aria-label="Trades, positions and controls" id="aqte-dash-book">
         <div className="aqx-book-head">
+          <button type="button" className="aqx-book-toggle" aria-expanded={bookExpanded}
+            onClick={() => setBookExpanded(expanded => !expanded)}>
+            {bookExpanded ? 'Hide trade book' : 'Open trade book'}
+          </button>
           <div role="tablist" aria-label="AQTE trade book" className="aqx-book-tabs">
             {panels.map(([key, title], index) => (
               <button key={key} type="button" role="tab" id={`aqte-book-tab-${key}`} aria-selected={panel === key}

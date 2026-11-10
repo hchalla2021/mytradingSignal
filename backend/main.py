@@ -38,9 +38,14 @@ if _os.getenv("FORCE_OUTBOUND_IPV4", "true").strip().lower() in ("1", "true", "y
 
     _socket.getaddrinfo = _ipv4_preferred_getaddrinfo
 
+from services.kite_request_pacing import install_kite_request_pacing
+
+install_kite_request_pacing()
+
 import asyncio
 import logging
 import sqlite3
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import urlparse
@@ -78,8 +83,6 @@ from routers.global_indices import http_router as global_indices_http, ws_router
 from routers.liquidity import http_router as liq_http, ws_router as liq_ws
 from routers.ict import http_router as ict_http, ws_router as ict_ws
 from routers.candle_intelligence import http_router as candle_intel_http, ws_router as candle_intel_ws
-from routers.market_regime import http_router as regime_http, ws_router as regime_ws
-from routers.strike_intelligence import http_router as strike_intel_http, ws_router as strike_intel_ws
 from routers.chart_intelligence import http_router as chart_intel_http, ws_router as chart_intel_ws
 from routers.order_flow import http_router as order_flow_http, ws_router as order_flow_ws
 from routers.global_news import http_router as global_news_http, ws_router as global_news_ws
@@ -87,6 +90,7 @@ from routers.observatory import http_router as observatory_http
 from routers.aqte import router as aqte_http
 from routers.quantedge import router as quantedge_http
 from routers.expiryedge import router as expiryedge_http
+from routers.algo_desk import router as algo_desk_http
 from routers import smart_money
 from routers.volume_pulse import router as volume_pulse_http, ws_router as volume_pulse_ws
 from routers.ict_bias import router as ict_bias_http, ws_router as ict_bias_ws
@@ -123,11 +127,11 @@ async def lifespan(app: FastAPI):
     settings = get_settings()
 
     print("⚡ FastAPI starting...")
-    shared_auth_path = _os.getenv("ZERODHA_SHARED_AUTH_FILE")
-    if shared_auth_path and settings.zerodha_access_token:
+    shared_auth_path = auth._shared_zerodha_auth_path()
+    if settings.zerodha_access_token:
         try:
             auth._persist_shared_zerodha_auth(
-                Path(shared_auth_path), settings.zerodha_api_key, settings.zerodha_access_token
+                shared_auth_path, settings.zerodha_api_key, settings.zerodha_access_token
             )
         except (OSError, ValueError):
             logger.exception("Could not publish the Zerodha token to the MorningEdge shared volume")
@@ -283,14 +287,6 @@ async def lifespan(app: FastAPI):
             except Exception as exc:
                 logger.error("Market Regime service failed to start: %s", exc, exc_info=True)
 
-        async def start_strike_intelligence():
-            try:
-                from services.strike_intelligence_service import get_strike_intelligence_service
-                await get_strike_intelligence_service().start()
-                print("🎯 Strike Intelligence: ON")
-            except Exception as exc:
-                logger.error("Strike Intelligence service failed to start: %s", exc, exc_info=True)
-
         async def start_chart_intelligence():
             try:
                 from services.chart_intelligence_service import get_chart_intelligence_service
@@ -364,7 +360,6 @@ async def lifespan(app: FastAPI):
                 start_ict(),
                 start_candle_intelligence(),
                 start_market_regime(),
-                start_strike_intelligence(),
                 start_chart_intelligence(),
                 start_global_indices(),
                 start_global_news(),
@@ -383,7 +378,6 @@ async def lifespan(app: FastAPI):
                 start_ict(),
                 start_candle_intelligence(),
                 start_market_regime(),
-                start_strike_intelligence(),
                 start_chart_intelligence(),
                 start_global_indices(),
                 start_global_news(),
@@ -467,12 +461,6 @@ async def lifespan(app: FastAPI):
         pass
 
     # Stop Strike Intelligence Service
-    try:
-        from services.strike_intelligence_service import get_strike_intelligence_service
-        await get_strike_intelligence_service().stop()
-    except Exception:
-        pass
-
     # Stop Chart Intelligence Service
     try:
         from services.chart_intelligence_service import get_chart_intelligence_service
@@ -617,9 +605,13 @@ async def cors_middleware(request: Request, call_next):
     
     # Handle simple/actual requests
     response = await call_next(request)
+    # Precise server clock for live-trading freshness gates. Uvicorn caches Date for ~1 s
+    # (observed up to 1.7 s behind), which made fresh AQTE status flicker as stale.
+    response.headers["X-Server-Time"] = f"{time.time():.3f}"
     if origin and origin_allowed:
         response.headers["Access-Control-Allow-Origin"] = origin
         response.headers["Access-Control-Allow-Credentials"] = "true"
+        response.headers["Access-Control-Expose-Headers"] = "Date, X-Server-Time"
         response.headers["Vary"] = "Origin"
     return response
 
@@ -679,14 +671,6 @@ app.include_router(ict_http, prefix="/api", tags=["ICT"])
 app.include_router(candle_intel_ws,   prefix="/ws",  tags=["Candle Intelligence"])
 app.include_router(candle_intel_http, prefix="/api", tags=["Candle Intelligence"])
 
-# 📊 Market Regime Intelligence
-app.include_router(regime_ws,   prefix="/ws",  tags=["Market Regime"])
-app.include_router(regime_http, prefix="/api", tags=["Market Regime"])
-
-# 🎯 Strike Intelligence
-app.include_router(strike_intel_ws,   prefix="/ws",  tags=["Strike Intelligence"])
-app.include_router(strike_intel_http, prefix="/api", tags=["Strike Intelligence"])
-
 # 📈 Chart Intelligence
 app.include_router(chart_intel_ws,   prefix="/ws",  tags=["Chart Intelligence"])
 app.include_router(chart_intel_http, prefix="/api", tags=["Chart Intelligence"])
@@ -717,6 +701,7 @@ app.include_router(observatory_http, tags=["Observatory"])
 app.include_router(aqte_http)
 app.include_router(quantedge_http)
 app.include_router(expiryedge_http)
+app.include_router(algo_desk_http)
 
 
 @app.get("/")

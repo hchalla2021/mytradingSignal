@@ -68,6 +68,14 @@ class TokenReloadTests(unittest.IsolatedAsyncioTestCase):
             {"api_key": "kite-api-key", "access_token": "fresh-login-token"},
         )
 
+    def test_shared_auth_path_has_a_local_default(self):
+        with patch.dict(os.environ, {"ZERODHA_SHARED_AUTH_FILE": ""}):
+            self.assertEqual(
+                auth._shared_zerodha_auth_path(),
+                Path(auth.__file__).resolve().parents[1]
+                / "data" / "morningedge_auth" / "credentials.json",
+            )
+
     async def test_login_persists_and_updates_both_auth_services_without_file_event(self):
         legacy = Mock()
         unified = Mock(update_token=AsyncMock())

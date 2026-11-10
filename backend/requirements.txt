@@ -38,10 +38,8 @@ kiteconnect==5.0.1
 # Rate Limiting
 slowapi==0.1.9
 
-# ── Optional ML stack for Strike Intelligence AI engine ──────────────────
-# All three are OPTIONAL — strike_intelligence_ai.py degrades gracefully
-# (NumPy-only fallback) when any are missing. Install on production hosts
-# that have at least ~2GB free RAM headroom for the warm-start models.
+# ── Optional ML stack ────────────────────────────────────────────────────
+# These dependencies are optional for their respective inference features.
 #
 # LightGBM is small (~5 MB wheel) and CPU-only — safe everywhere.
 # PyTorch CPU is ~200 MB — needed for the LSTM next-move predictor.
