@@ -41,7 +41,9 @@ underneath. Pass/fail values fill in from completed Kite futures candles while t
 - **Live (Auto)** (`TRADE ON`): the algo places real Zerodha orders when every rule passes.
 - **Manual** (`TRADE OFF`): live signals and rules only; no orders.
 - There is no paper-trade mode. Every algo defaults to Manual. TRADE ON asks for a browser confirmation;
-  switching to Manual never does. A standing ON choice is journaled and re-arms on the next session.
+  switching to Manual never does. Approval applies only to the current backend run; after every backend
+  restart, all six algos return to Manual and require a fresh manual TRADE ON. A dashboard page refresh
+  re-reads the saved approvals and does not switch them off. Existing trades remain managed.
 
 ## Execution and risk
 

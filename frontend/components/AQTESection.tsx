@@ -510,7 +510,7 @@ function AQTESection({ marketData, isConnected = false }: { marketData?: MarketD
         ))} />
       <QuantEdgeProSection marketData={marketData} isConnected={isConnected}
         vix={{ value: finiteOrNull(market?.vix), changePercent: finiteOrNull(market?.vix_change_pct) }} />
-      <MorningEdgeSection marketData={marketData} isConnected={isConnected} />
+      <MorningEdgeSection />
       <ExpiryEdgeAIPanel marketData={marketData} isConnected={isConnected} />
       <AlgoDeskSection marketData={marketData} isConnected={isConnected} />
       <section className={`aqx-card aqx-book ${bookExpanded ? 'aqx-book-expanded' : ''}`} aria-label="Trades, positions and controls" id="aqte-dash-book">

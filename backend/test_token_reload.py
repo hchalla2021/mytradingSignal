@@ -1,5 +1,4 @@
 import asyncio
-import json
 import os
 import tempfile
 import unittest
@@ -30,7 +29,6 @@ class TokenReloadTests(unittest.IsolatedAsyncioTestCase):
         env_patch = patch.dict(os.environ, {
             "ZERODHA_ACCESS_TOKEN": "container-startup-token",
             "ZERODHA_API_KEY": "container-api-key",
-            "ZERODHA_SHARED_AUTH_FILE": str(Path(self.directory.name) / "shared.json"),
         })
         env_patch.start()
         self.addCleanup(env_patch.stop)
@@ -58,24 +56,6 @@ class TokenReloadTests(unittest.IsolatedAsyncioTestCase):
         self.env_file.write_text("ZERODHA_ACCESS_TOKEN=\n", encoding="utf-8")
         self.assertEqual(get_settings().zerodha_access_token, "")
 
-    def test_shared_auth_file_contains_only_api_key_and_current_access_token(self):
-        from routers.auth import _persist_shared_zerodha_auth
-
-        shared_file = Path(self.directory.name) / "shared" / "credentials.json"
-        _persist_shared_zerodha_auth(shared_file, "kite-api-key", "fresh-login-token")
-        self.assertEqual(
-            json.loads(shared_file.read_text(encoding="utf-8")),
-            {"api_key": "kite-api-key", "access_token": "fresh-login-token"},
-        )
-
-    def test_shared_auth_path_has_a_local_default(self):
-        with patch.dict(os.environ, {"ZERODHA_SHARED_AUTH_FILE": ""}):
-            self.assertEqual(
-                auth._shared_zerodha_auth_path(),
-                Path(auth.__file__).resolve().parents[1]
-                / "data" / "morningedge_auth" / "credentials.json",
-            )
-
     async def test_login_persists_and_updates_both_auth_services_without_file_event(self):
         legacy = Mock()
         unified = Mock(update_token=AsyncMock())
@@ -88,10 +68,6 @@ class TokenReloadTests(unittest.IsolatedAsyncioTestCase):
              patch("services.global_token_manager.get_token_manager", return_value=manager):
             await auth._persist_access_token("fresh-login-token")
         self.assertEqual(get_settings().zerodha_access_token, "fresh-login-token")
-        self.assertEqual(
-            json.loads((Path(self.directory.name) / "shared.json").read_text(encoding="utf-8")),
-            {"api_key": "container-api-key", "access_token": "fresh-login-token"},
-        )
         legacy.update_token.assert_called_once_with("fresh-login-token")
         unified.update_token.assert_awaited_once_with("fresh-login-token")
         manager.force_recheck.assert_called_once()

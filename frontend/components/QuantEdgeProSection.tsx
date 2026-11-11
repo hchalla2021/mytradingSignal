@@ -53,6 +53,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function isQepSignal(value: unknown): value is QepSignal {
   if (!isRecord(value) || typeof value.decision !== 'string') return false;
+  if (value.side !== undefined && value.side !== null && value.side !== 'CE' && value.side !== 'PE') return false;
   if (value.reason !== undefined && typeof value.reason !== 'string') return false;
   if (value.contract !== undefined && value.contract !== null &&
       (!isRecord(value.contract) || (value.contract.trading_symbol !== undefined &&
@@ -98,6 +99,8 @@ const money = (value: number | null | undefined) => value != null && Number.isFi
 const number = (value: number | null | undefined) => value != null && Number.isFinite(value)
   ? value.toLocaleString('en-IN', { maximumFractionDigits: 2 }) : '—';
 const label = (symbol: string) => symbol === 'BANKNIFTY' ? 'BANK NIFTY' : symbol === 'NIFTY' ? 'NIFTY 50' : symbol;
+const optionSide = (value: string | undefined): 'CE' | 'PE' | null =>
+  value === 'CE' || value?.endsWith('CE') ? 'CE' : value === 'PE' || value?.endsWith('PE') ? 'PE' : null;
 
 const symbols = ['NIFTY', 'BANKNIFTY', 'SENSEX'] as const;
 const ruleLabels: Record<string, string> = {
@@ -250,10 +253,22 @@ export default function QuantEdgeProSection({ marketData, isConnected = false, v
   const activeTrade = live?.active ?? null;
   const symbol = activeTrade?.symbol ?? selectedSymbol;
   const signal = live?.signals[symbol];
-  const candidate = signal?.entry;
-  const contract = activeTrade?.contract ?? signal?.contract;
-  const tradeSide = activeTrade?.contract.option_type ?? signal?.side ??
-    (signal?.decision.startsWith('BUY ') ? signal.decision.slice(4) : null);
+  const signalSide = signal?.decision === 'BUY CE' ? 'CE' : signal?.decision === 'BUY PE' ? 'PE' : null;
+  const activeSide = activeTrade
+    ? optionSide(activeTrade.contract.option_type) ?? optionSide(activeTrade.contract.trading_symbol)
+    : null;
+  const biasSide = signalSide ?? (signal?.side === 'CE' || signal?.side === 'PE' ? signal.side : null);
+  const candidate = signalSide ? signal?.entry : undefined;
+  const contract = activeTrade?.contract ?? (signalSide ? signal?.contract : undefined);
+  const directionText = activeTrade
+    ? activeSide ? `OPEN POSITION · BUY ${activeSide === 'CE' ? 'CALL (CE)' : 'PUT (PE)'}` : 'OPEN POSITION · OPTION SIDE UNAVAILABLE'
+    : signalSide ? `QUALIFIED SIGNAL · BUY ${signalSide === 'CE' ? 'CALL (CE)' : 'PUT (PE)'}`
+      : biasSide ? `DIRECTIONAL BIAS · ${biasSide} · NOT A BUY SIGNAL` : 'WAIT · NO CE/PE SIGNAL';
+  const toneSide = activeTrade ? activeSide : signalSide;
+  const directionTone = toneSide
+    ? toneSide === 'PE' ? 'border-cyan-400 bg-cyan-950 text-cyan-100'
+      : 'border-emerald-400 bg-emerald-950 text-emerald-100'
+    : 'border-amber-400 bg-amber-950 text-amber-100';
   const tradeStatus = !live ? 'OFFLINE' : activeTrade ? activeTrade.state.replaceAll('_', ' ')
     : live.enabled ? live.armed && live.entry_window ? 'LIVE ENTRIES ON' : 'APPROVED · WAITING FOR SESSION'
       : live.ready && live.armed ? 'ARMED · WAITING' : 'PREPARATION REQUIRED';
@@ -332,7 +347,7 @@ export default function QuantEdgeProSection({ marketData, isConnected = false, v
           </div>
         </div>
       </header>
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4" aria-label="Live index prices">
+      <div className="grid grid-cols-2 gap-3 xl:grid-cols-4" aria-label="Live index prices">
         {symbols.map(item => {
           const tick = marketData?.[item];
           const hasPoints = tick != null && Number.isFinite(tick.change);
@@ -340,15 +355,15 @@ export default function QuantEdgeProSection({ marketData, isConnected = false, v
           const up = tick != null && tick.change >= 0;
           return (
             <button key={item} type="button" onClick={() => setSelectedSymbol(item)}
-              className={`qep-market-card relative min-w-0 overflow-hidden rounded-xl border p-4 text-left transition-colors sm:p-5 ${
+              className={`qep-market-card relative min-w-0 overflow-hidden rounded-xl border p-3 text-left transition-colors sm:p-4 ${
                 selectedSymbol === item ? 'border-emerald-500/50' : 'border-slate-700/70 hover:border-slate-500'
               }`}>
               <div className="flex items-center justify-between gap-2">
-                <b className="text-base font-bold text-slate-200">{label(item)}</b>
+                <b className="text-sm font-bold text-slate-200">{label(item)}</b>
                 <span className={`h-2 w-2 rounded-full ${tick?.status === 'LIVE' ? 'bg-emerald-400' : 'bg-slate-600'}`} />
               </div>
-              <div className="mt-1 text-3xl font-extrabold tabular-nums text-white">{number(tick?.price)}</div>
-              <div className={`mt-1 inline-flex flex-wrap items-center gap-x-1.5 text-base font-bold ${
+              <div className="mt-1 text-xl font-extrabold tabular-nums text-white sm:text-2xl">{number(tick?.price)}</div>
+              <div className={`mt-1 inline-flex flex-wrap items-center gap-x-1.5 text-xs font-bold sm:text-sm ${
                 !hasPoints && !hasPercent ? 'text-slate-400' : up ? 'text-emerald-400' : 'text-rose-400'
               }`}>
                 {!hasPoints && !hasPercent ? 'No live change data' : up ? <ArrowUp size={15} /> : <ArrowDown size={15} />}
@@ -359,13 +374,13 @@ export default function QuantEdgeProSection({ marketData, isConnected = false, v
             </button>
           );
         })}
-        <div className="qep-market-card min-w-0 rounded-xl border p-4 sm:p-5">
+        <div className="qep-market-card min-w-0 rounded-xl border p-3 sm:p-4">
           <div className="flex items-center justify-between gap-2">
-            <b className="text-base font-bold text-slate-200">INDIA VIX</b>
+            <b className="text-sm font-bold text-slate-200">INDIA VIX</b>
             <Activity size={19} className="text-cyan-300" />
           </div>
-          <div className="mt-1 text-3xl font-extrabold tabular-nums text-white">{number(vix?.value)}</div>
-          <div className={`mt-1 text-base font-bold ${vix?.changePercent == null ? 'text-slate-400' : vix.changePercent >= 0 ? 'text-rose-400' : 'text-emerald-400'}`}>
+          <div className="mt-1 text-xl font-extrabold tabular-nums text-white sm:text-2xl">{number(vix?.value)}</div>
+          <div className={`mt-1 text-xs font-bold sm:text-sm ${vix?.changePercent == null ? 'text-slate-400' : vix.changePercent >= 0 ? 'text-rose-400' : 'text-emerald-400'}`}>
             {vix?.changePercent == null ? 'No VIX data available' : `${vix.changePercent >= 0 ? '+' : ''}${vix.changePercent.toFixed(2)}%`}
           </div>
         </div>
@@ -374,12 +389,13 @@ export default function QuantEdgeProSection({ marketData, isConnected = false, v
         <section className="qep-trade-panel min-w-0 rounded-2xl border p-5 sm:p-6"
           aria-label="QuantEdge Pro trade setup">
           <div className="flex flex-wrap items-center justify-between gap-3">
-            <div className="flex min-w-0 items-center gap-3">
-              <span className={`rounded-xl px-5 py-2.5 text-xl font-extrabold ${
-                tradeSide ? 'bg-emerald-500 text-emerald-950' : 'bg-slate-700 text-slate-200'
-              }`}>{tradeSide ? `BUY ${tradeSide}` : 'WAIT'}</span>
+            <div className="flex min-w-0 flex-wrap items-center gap-3">
+              <span role="status" aria-live="polite"
+                className={`rounded-xl border px-4 py-2.5 text-base font-black leading-tight sm:text-lg ${directionTone}`}>
+                {directionText}
+              </span>
               <h3 className="truncate text-2xl font-extrabold text-white sm:text-3xl">
-                {contract?.trading_symbol ?? `${label(symbol)} · No qualified contract`}
+                {contract?.trading_symbol ?? `${label(symbol)} · No qualified CE/PE entry`}
               </h3>
             </div>
             <span className="rounded-lg border border-emerald-500/40 bg-emerald-950/50 px-3 py-2 text-base font-semibold text-emerald-200">

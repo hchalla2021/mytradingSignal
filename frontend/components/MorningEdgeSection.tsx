@@ -1,617 +1,388 @@
 'use client';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Activity, AlertCircle, Bell, Bot, CheckCircle2, Loader2, Play, Save, ShieldCheck, TrendingUp, Zap } from 'lucide-react';
-import { useAuth } from '@/hooks/useAuth';
-import type { MarketData, MarketTick } from '@/hooks/useMarketSocket';
-import { aqteServerNow } from '@/lib/aqte-display';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { Activity, BarChart3, CalendarDays, CheckCircle2, Clock3, Radio, ShieldCheck, TrendingUp, Zap } from 'lucide-react';
+import { getOrCreateVisitorId } from '@/lib/visitor-id';
 
-type Quote = {
-  price?: number | null;
-  change?: number | null;
-  change_percent?: number | null;
-  at?: number | null;
+const SYMBOLS = ['NIFTY', 'BANKNIFTY', 'SENSEX'] as const;
+type SymbolName = typeof SYMBOLS[number];
+type IndexQuote = {
+  price: number;
+  change: number | null;
+  change_percent: number | null;
+  status: string;
+  timestamp: string | null;
+  history?: number[];
 };
-
-type Trade = {
-  symbol?: string;
-  trading_symbol?: string;
-  side?: string;
-  state?: string;
-  entry_price?: number;
-  last_price?: number;
-  stop_loss?: number;
-  trailing_stop?: number;
-  targets?: number[];
-  pnl?: number;
-};
-
-type EngineStatus = {
-  ready?: boolean;
-  live_enabled?: boolean;
-  armed?: boolean;
-  phase?: string;
-  block_reasons?: string[];
-  feed?: { connected?: boolean; last_tick_at?: number | null; instruments?: string[] };
-  indices?: Record<string, Quote>;
-  signal?: { decision?: string; confidence?: number | null; reason?: string };
-  active_trade?: Trade | null;
-  model?: { status?: string; validated?: boolean; name?: string };
-  strategy_states?: Record<string, { status?: string; reason?: string }>;
-  feed_readiness?: Record<string, { ready?: boolean; provenance?: string; reason?: string }>;
-  intelligence?: { gap_percent?: number | null; opening_bias?: string; prediction?: string; regime?: string };
-  performance?: { trades?: number; win_rate?: number | null; pnl?: number | null; status?: string };
-  pipeline_metrics?: {
-    events_received_per_sec?: number | null;
-    events_processed_per_sec?: number | null;
-    queue_depth?: number | null;
-    dropped_events?: number | null;
-    p95_processing_ms?: number | null;
-    ml_inference_ms?: number | null;
-    signal_latency_ms?: number | null;
-    order_ack_latency_ms?: number | null;
-    slippage?: number | null;
+type MorningStatus = {
+  feed_enabled: boolean;
+  feed_status: string;
+  block_reasons: string[];
+  session_stage: string;
+  indices: Partial<Record<SymbolName, IndexQuote | null>>;
+  preopen: { started_at: string | null; ended_at: string | null; complete: boolean; ticks: number };
+  opening_range: Partial<Record<SymbolName, { high: number | null; low: number | null; complete: boolean }>>;
+  signal: {
+    decision: string;
+    reason: string;
+    symbol: SymbolName | null;
+    contract: string | null;
+    entry: number | null;
+    stop: number | null;
+    trailing_stop: number | null;
   };
-  blocking_reasons?: string[];
-  error?: string | null;
+  reason: string;
+  error: string | null;
 };
 
-type RiskConfig = {
-  per_trade_loss_cap_inr: number | null;
-  daily_loss_limit_inr: number | null;
-  max_trades_per_day: number | null;
-  max_lots: number;
-  min_model_confidence: number;
-};
+const price = new Intl.NumberFormat('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const displayPrice = (value: number | null | undefined) =>
+  typeof value === 'number' && Number.isFinite(value) ? price.format(value) : '—';
 
-type EngineEvent = {
-  at: number;
-  type: string;
-  severity: string;
-  instrument?: string | null;
-  message: string;
-};
-
-const API_BASE = (process.env.NEXT_PUBLIC_MORNINGEDGE_API_URL ||
-  (process.env.NODE_ENV === 'development' ? 'http://localhost:8010' : '')).replace(/\/+$/, '');
-const API_ROOT = API_BASE ? `${API_BASE}/api/v1` : '';
-const WS_ROOT = API_BASE
-  ? API_BASE.replace(/^http:/, 'ws:').replace(/^https:/, 'wss:')
-  : '';
-
-function isObject(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === 'object' && !Array.isArray(value);
+function sparkline(values: number[] = []): string {
+  if (values.length < 2) return '';
+  const min = Math.min(...values);
+  const spread = Math.max(...values) - min || 1;
+  return values.map((value, index) => {
+    const x = (index / (values.length - 1)) * 120;
+    const y = 35 - ((value - min) / spread) * 28;
+    return `${index === 0 ? 'M' : 'L'}${x.toFixed(1)},${y.toFixed(1)}`;
+  }).join(' ');
 }
 
-function adaptEvent(value: unknown): EngineEvent | null {
-  if (!isObject(value) || typeof value.at !== 'number' || !Number.isFinite(value.at) ||
-      typeof value.type !== 'string' || typeof value.message !== 'string') return null;
-  return {
-    at: value.at,
-    type: value.type,
-    message: value.message,
-    severity: typeof value.severity === 'string' ? value.severity : 'info',
-    instrument: typeof value.instrument === 'string' ? value.instrument : null,
-  };
-}
-
-function adaptStatus(value: Record<string, unknown>): EngineStatus {
-  const session = isObject(value.session) ? value.session : {};
-  const source = isObject(value.instruments) ? value.instruments : {};
-  const indices: Record<string, Quote> = {};
-  const now = Date.now() / 1000;
-  for (const symbol of ['NIFTY', 'BANKNIFTY', 'SENSEX']) {
-    const snapshot = source[symbol];
-    if (!isObject(snapshot)) continue;
-    const rawAt = snapshot.timestamp;
-    const at = typeof rawAt === 'string' ? Date.parse(rawAt) / 1000
-      : typeof rawAt === 'number' ? rawAt : null;
-    indices[symbol] = {
-      price: typeof snapshot.price === 'number' ? snapshot.price : null,
-      at: at != null && Number.isFinite(at) ? at : null,
-    };
-  }
-  const blocking = Array.isArray(value.block_reasons)
-    ? value.block_reasons.filter((reason): reason is string => typeof reason === 'string') : [];
-  const feedLive = ['NIFTY', 'BANKNIFTY', 'SENSEX'].every(symbol => {
-    const at = indices[symbol]?.at;
-    return typeof at === 'number' && now - at >= -1 && now - at <= 5;
-  });
-  const modelValidated = value.model_validated === true;
-  const rawStrategies = isObject(value.strategy_states) ? value.strategy_states : {};
-  const strategyStates: EngineStatus['strategy_states'] = {};
-  for (const [worker, rawState] of Object.entries(rawStrategies)) {
-    if (!isObject(rawState)) continue;
-    strategyStates[worker] = {
-      status: typeof rawState.status === 'string' ? rawState.status : 'NOT IMPLEMENTED',
-      reason: typeof rawState.reason === 'string' ? rawState.reason : undefined,
-    };
-  }
-  const rawMetrics = isObject(value.metrics) ? value.metrics : {};
-  const metric = (key: string) => typeof rawMetrics[key] === 'number' ? rawMetrics[key] as number : null;
-  const sessionTime = typeof session.local_time === 'string' ? session.local_time : null;
-  const phase = blocking.some(reason => reason.includes('market session'))
-    ? 'OUTSIDE SESSION' : sessionTime ? 'SESSION' : 'NOT READY';
-  return {
-    ready: value.readiness === 'READY',
-    live_enabled: value.live_approved === true,
-    armed: value.armed === true,
-    phase,
-    block_reasons: blocking,
-    feed: {
-      connected: feedLive,
-      last_tick_at: Math.max(...Object.values(indices).map(quote => quote.at ?? 0)) || null,
-      instruments: Object.keys(indices),
+async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const response = await fetch(`/api/morningedge/${path}`, {
+    ...init,
+    credentials: 'same-origin',
+    cache: 'no-store',
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Device-Id': getOrCreateVisitorId(),
+      ...init?.headers,
     },
-    indices,
-    model: { status: modelValidated ? 'VALIDATED' : 'NOT VALIDATED', validated: modelValidated },
-    strategy_states: strategyStates,
-    feed_readiness: isObject(value.feed_readiness) ? value.feed_readiness as EngineStatus['feed_readiness'] : {},
-    pipeline_metrics: {
-      queue_depth: metric('queue_depth'),
-      dropped_events: metric('rejected_ticks'),
-      p95_processing_ms: metric('stage_latency_ms_p95'),
-    },
-    blocking_reasons: blocking,
-  };
-}
-
-function adaptConfig(value: Record<string, unknown>): RiskConfig {
-  const risk = isObject(value.risk) ? value.risk : {};
-  return {
-    per_trade_loss_cap_inr: typeof risk.per_trade_loss_cap_inr === 'number' ? risk.per_trade_loss_cap_inr : null,
-    daily_loss_limit_inr: typeof risk.daily_loss_cap_inr === 'number' ? risk.daily_loss_cap_inr : null,
-    max_trades_per_day: typeof risk.max_trades_per_day === 'number' ? risk.max_trades_per_day : null,
-    max_lots: typeof risk.max_lots === 'number' ? risk.max_lots : 1,
-    min_model_confidence: typeof risk.min_model_confidence_pct === 'number' ? risk.min_model_confidence_pct : 20,
-  };
-}
-
-function money(value: unknown) {
-  return typeof value === 'number' && Number.isFinite(value)
-    ? `₹${value.toLocaleString('en-IN', { maximumFractionDigits: 2 })}` : '—';
-}
-
-function formatTime(value?: number | null) {
-  if (!value || !Number.isFinite(value)) return 'No tick received';
-  return new Intl.DateTimeFormat('en-IN', {
-    timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
-  }).format(new Date(value * 1000));
-}
-
-const points = (value: number) => value.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-// Display-only freshness for the index cards; trading gates keep their own stricter checks.
-const INDEX_LIVE_SECONDS = 10;
-
-type IndexView = { price: number | null; change: number | null; percent: number | null; live: boolean; note: string };
-
-/** Index card values from the main dashboard's Zerodha feed, falling back to the MorningEdge engine's own quote. */
-function indexView(engine: Quote | undefined, tick: MarketTick | null | undefined, connected: boolean, now: number): IndexView {
-  const usable = !!tick && tick.status !== 'DEMO' && Number.isFinite(tick.price) && tick.price > 0;
-  if (usable) {
-    const at = Date.parse(tick.timestamp) / 1000;
-    const age = now - at;
-    const live = connected && tick.status === 'LIVE' && Number.isFinite(age) && age >= -1 && age <= INDEX_LIVE_SECONDS;
-    const note = live ? 'LIVE · Zerodha'
-      : tick.status === 'CLOSED' ? 'Market closed · last price'
-        : tick.status === 'PRE_OPEN' ? 'Pre-open'
-          : tick.status === 'FREEZE' ? 'Pre-open freeze'
-            : `Delayed · last tick ${Number.isFinite(at) ? formatTime(at) : '—'}`;
-    return {
-      price: tick.price,
-      change: Number.isFinite(tick.change) ? tick.change : null,
-      percent: Number.isFinite(tick.changePercent) ? tick.changePercent : null,
-      live, note,
-    };
-  }
-  const price = typeof engine?.price === 'number' && Number.isFinite(engine.price) && engine.price > 0 ? engine.price : null;
-  const age = engine?.at != null ? now - engine.at : NaN;
-  const live = price != null && age >= -1 && age <= INDEX_LIVE_SECONDS;
-  return {
-    price, live,
-    change: typeof engine?.change === 'number' && Number.isFinite(engine.change) ? engine.change : null,
-    percent: typeof engine?.change_percent === 'number' && Number.isFinite(engine.change_percent) ? engine.change_percent : null,
-    note: price == null ? 'Waiting for real ticks' : live ? 'LIVE · MorningEdge' : 'Delayed · MorningEdge',
-  };
-}
-
-export default function MorningEdgeSection({ marketData, isConnected = false }: {
-  /** Live index ticks from the main dashboard's Zerodha WebSocket. */
-  marketData?: MarketData;
-  isConnected?: boolean;
-} = {}) {
-  const { isAuthenticated } = useAuth();
-  const [token, setToken] = useState('');
-  const [status, setStatus] = useState<EngineStatus | null>(null);
-  const [config, setConfig] = useState<RiskConfig>({
-    per_trade_loss_cap_inr: null, daily_loss_limit_inr: null,
-    max_trades_per_day: null, max_lots: 1, min_model_confidence: 20,
   });
-  const [events, setEvents] = useState<EngineEvent[]>([]);
-  const [streamConnected, setStreamConnected] = useState(false);
+  if (!response.ok) {
+    const body = await response.json().catch(() => null) as { detail?: string } | null;
+    throw new Error(body?.detail || `MorningEdge request failed (${response.status})`);
+  }
+  return response.json() as Promise<T>;
+}
+
+function formatSymbol(symbol: string): string {
+  return symbol === 'BANKNIFTY' ? 'BANK NIFTY' : symbol;
+}
+
+export default function MorningEdgeSection() {
+  const [status, setStatus] = useState<MorningStatus | null>(null);
   const [error, setError] = useState('');
-  const [busy, setBusy] = useState(false);
-  const [saved, setSaved] = useState(false);
-  const socketRef = useRef<WebSocket | null>(null);
-  const wasAuthenticatedRef = useRef(false);
-  const configLoadedRef = useRef(false);
-
-  useEffect(() => {
-    if (!API_ROOT) return;
-    if (!isAuthenticated) {
-      setToken('');
-      setStatus(null);
-      setEvents([]);
-      setStreamConnected(false);
-      setConfig({
-        per_trade_loss_cap_inr: null, daily_loss_limit_inr: null,
-        max_trades_per_day: null, max_lots: 1, min_model_confidence: 20,
-      });
-      configLoadedRef.current = false;
-      if (wasAuthenticatedRef.current) {
-        void fetch(`${API_ROOT}/auth/logout`, {
-          method: 'POST', credentials: 'include', cache: 'no-store',
-        }).catch(() => setError('Could not close the MorningEdge session.'));
-      }
-      wasAuthenticatedRef.current = false;
-      return;
-    }
-    wasAuthenticatedRef.current = true;
-    setToken('');
-    let active = true;
-    void fetch(`${API_ROOT}/auth/session`, { credentials: 'include', cache: 'no-store' })
-      .then(response => response.ok ? response.json() as Promise<{ authenticated?: boolean }> : null)
-      .then(session => {
-        if (!active) return;
-        if (session?.authenticated) setToken('connected');
-        else setError('Use the main application Zerodha login to connect MorningEdge.');
-      })
-      .catch(() => { if (active) setError('Could not verify the main Zerodha connection for MorningEdge.'); });
-    return () => { active = false; };
-  }, [isAuthenticated]);
-
-  const request = useCallback(async (path: string, method = 'GET', body?: unknown) => {
-    if (!API_ROOT || !token) throw new Error('Set the independent MorningEdge API URL and operator token.');
-    const response = await fetch(`${API_ROOT}${path}`, {
-      method,
-      headers: body ? { 'Content-Type': 'application/json' } : {},
-      cache: 'no-store',
-      credentials: 'include',
-      body: body ? JSON.stringify(body) : undefined,
-    });
-    const payload: unknown = await response.json().catch(() => null);
-    if (!response.ok) {
-      const detail = isObject(payload) && typeof payload.detail === 'string' ? payload.detail : `MorningEdge API failed (${response.status})`;
-      throw new Error(detail);
-    }
-    return payload;
-  }, [token]);
+  const [controlError, setControlError] = useState('');
+  const [clock, setClock] = useState('');
+  const [marketEnabled, setMarketEnabled] = useState(true);
+  const [marketPending, setMarketPending] = useState(false);
+  const refreshLock = useRef(false);
+  const marketDesired = useRef(true);
+  const marketActionId = useRef(0);
+  const marketActionPending = useRef(false);
+  const marketRequestQueue = useRef<Promise<void>>(Promise.resolve());
 
   const refresh = useCallback(async () => {
-    if (!token || !API_ROOT) return;
+    if (refreshLock.current) return;
+    refreshLock.current = true;
     try {
-      const rawStatus = await request('/status');
-      if (!isObject(rawStatus)) throw new Error('Invalid MorningEdge status response.');
-      setStatus(adaptStatus(rawStatus));
-      if (!configLoadedRef.current) {
-        const rawConfig = await request('/config');
-        if (!isObject(rawConfig)) throw new Error('Invalid MorningEdge configuration response.');
-        setConfig(adaptConfig(rawConfig));
-        configLoadedRef.current = true;
+      const next = await request<MorningStatus>('api/status');
+      setStatus(next);
+      if (!marketActionPending.current) {
+        marketDesired.current = next.feed_enabled;
+        setMarketEnabled(next.feed_enabled);
       }
       setError('');
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'MorningEdge status unavailable.');
-      setStatus(null);
+      setError(reason instanceof Error ? reason.message : 'Waiting for MorningEdge status');
+    } finally {
+      refreshLock.current = false;
     }
-  }, [request, token]);
+  }, []);
+
+  const toggleMarket = async () => {
+    const previous = marketDesired.current;
+    const enabled = !previous;
+    const actionId = ++marketActionId.current;
+    marketDesired.current = enabled;
+    marketActionPending.current = true;
+    setMarketEnabled(enabled);
+    setMarketPending(true);
+    const action = marketRequestQueue.current.catch(() => undefined).then(async () => {
+      const next = await request<{ feed_enabled: boolean; feed_status: string }>('api/feed/control', {
+        method: 'POST',
+        body: JSON.stringify({ enabled }),
+      });
+      if (actionId === marketActionId.current) {
+        marketDesired.current = next.feed_enabled;
+        setMarketEnabled(next.feed_enabled);
+        setControlError('');
+        setStatus(current => current ? {
+          ...current,
+          feed_enabled: next.feed_enabled,
+          feed_status: next.feed_status,
+        } : current);
+      }
+    });
+    marketRequestQueue.current = action;
+    try {
+      await action;
+    } catch (reason) {
+      if (actionId === marketActionId.current) {
+        marketDesired.current = previous;
+        setMarketEnabled(previous);
+        setControlError(reason instanceof Error ? reason.message : 'Unable to change the MorningEdge market feed');
+        void refresh();
+      }
+    } finally {
+      if (actionId === marketActionId.current) {
+        marketActionPending.current = false;
+        setMarketPending(false);
+      }
+    }
+  };
 
   useEffect(() => {
-    if (!token || !API_ROOT) return;
     let active = true;
     let timer: ReturnType<typeof setTimeout>;
     const poll = async () => {
       await refresh();
-      if (active) timer = setTimeout(poll, 2000);
+      if (active) timer = setTimeout(() => void poll(), 5000);
     };
     void poll();
-    return () => { active = false; clearTimeout(timer); };
-  }, [refresh, token]);
-
-  useEffect(() => {
-    if (!token || !WS_ROOT) return;
-    let active = true;
-    let socket: WebSocket | null = null;
-    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-    let stableTimer: ReturnType<typeof setTimeout> | null = null;
-    let reconnectAttempt = 0;
-    const reconnect = () => {
-      if (!active || reconnectTimer) return;
-      const delay = Math.min(30000, 1000 * (2 ** Math.min(reconnectAttempt, 5)));
-      reconnectAttempt += 1;
-      reconnectTimer = setTimeout(() => {
-        reconnectTimer = null;
-        void connect();
-      }, delay);
-    };
-    const connect = async () => {
-      try {
-        const payload: unknown = await request('/events/token', 'POST');
-        if (!active) return;
-        if (!isObject(payload) || typeof payload.token !== 'string') {
-          throw new Error('Invalid MorningEdge event token response.');
-        }
-        const nextSocket = new WebSocket(`${WS_ROOT}/api/v1/events?token=${encodeURIComponent(payload.token)}`);
-        socket = nextSocket;
-        socketRef.current = nextSocket;
-        nextSocket.onopen = () => {
-          if (!active) return;
-          stableTimer = setTimeout(() => {
-            stableTimer = null;
-            reconnectAttempt = 0;
-          }, 30000);
-          setStreamConnected(true);
-        };
-        nextSocket.onmessage = message => {
-          if (!active) return;
-          try {
-            const value: unknown = JSON.parse(message.data);
-            const event = adaptEvent(value);
-            if (!event) {
-              setError('Received an invalid MorningEdge event.');
-              return;
-            }
-            setEvents(previous => [event, ...previous].slice(0, 40));
-          } catch {
-            setError('Received an invalid MorningEdge event.');
-          }
-        };
-        nextSocket.onerror = () => {
-          if (!active) return;
-          setError('MorningEdge event stream disconnected; reconnecting.');
-          nextSocket.close();
-        };
-        nextSocket.onclose = () => {
-          if (stableTimer) clearTimeout(stableTimer);
-          stableTimer = null;
-          if (socketRef.current === nextSocket) socketRef.current = null;
-          if (!active) return;
-          setStreamConnected(false);
-          reconnect();
-        };
-      } catch (reason) {
-        if (!active) return;
-        setError(reason instanceof Error ? reason.message : 'MorningEdge event stream unavailable.');
-        reconnect();
-      }
-    };
-    void connect();
     return () => {
       active = false;
-      if (reconnectTimer) clearTimeout(reconnectTimer);
-      if (stableTimer) clearTimeout(stableTimer);
-      socket?.close();
-      if (socketRef.current === socket) socketRef.current = null;
+      clearTimeout(timer);
     };
-  }, [request, token]);
+  }, [refresh]);
 
-  const saveConfig = async () => {
-    setBusy(true);
-    setSaved(false);
-    try {
-      const result = await request('/config', 'PUT', {
-        per_trade_loss_cap_inr: config.per_trade_loss_cap_inr,
-        daily_loss_cap_inr: config.daily_loss_limit_inr,
-        max_trades_per_day: config.max_trades_per_day,
-        max_lots: config.max_lots,
-        min_model_confidence_pct: config.min_model_confidence,
-      });
-      if (!isObject(result)) throw new Error('Invalid risk configuration response.');
-      setConfig(adaptConfig(result));
-      configLoadedRef.current = true;
-      setSaved(true);
-      setError('');
-      await refresh();
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'Could not save MorningEdge risk settings.');
-    } finally { setBusy(false); }
-  };
+  useEffect(() => {
+    const updateClock = () => setClock(new Intl.DateTimeFormat('en-IN', {
+      timeZone: 'Asia/Kolkata',
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false,
+    }).format(new Date()));
+    updateClock();
+    const timer = setInterval(updateClock, 1000);
+    return () => clearInterval(timer);
+  }, []);
 
-  const action = async (path: string, body?: unknown) => {
-    setBusy(true);
-    try {
-      await request(path, 'POST', body);
-      await refresh();
-      setError('');
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : 'MorningEdge action failed.');
-    } finally { setBusy(false); }
-  };
-
-  const indices = useMemo(() => ['NIFTY', 'BANKNIFTY', 'SENSEX'] as const, []);
-  const serverNow = aqteServerNow();
-  const views = Object.fromEntries(indices.map(symbol =>
-    [symbol, indexView(status?.indices?.[symbol], marketData?.[symbol], isConnected, serverNow)])) as Record<typeof indices[number], IndexView>;
-  const feedLive = !!status?.feed?.connected || indices.some(symbol => views[symbol].live);
-  const marketClosed = !feedLive && indices.some(symbol => marketData?.[symbol]?.status === 'CLOSED');
-  const activeTrade = status?.active_trade;
-  const signals = status?.signal;
-  const readyReasons = status?.blocking_reasons ?? [];
-  const configLocked = !!status?.armed || !!status?.live_enabled || status?.phase === 'LIVE';
+  const online = status?.indices && SYMBOLS.every(symbol => status.indices[symbol]?.status === 'LIVE');
+  const stage = status?.session_stage?.replaceAll('_', ' ').toUpperCase() || 'Waiting for market data';
+  const rangeSymbol = status?.signal.symbol || 'NIFTY';
+  const openingRange = status?.opening_range[rangeSymbol];
+  const engineReady = Boolean(
+    online && status?.preopen.complete && openingRange?.complete &&
+    status?.signal.decision?.toLowerCase() !== 'wait',
+  );
+  const steps = [
+    { label: '09:00 – 09:08', title: 'PRE-OPEN DATA', done: status?.preopen.complete === true },
+    { label: '09:15 – 09:20', title: 'VALIDATE RANGE', done: openingRange?.complete === true },
+  ];
 
   return (
-    <section className="morningedge-shell" aria-label="MorningEdge AI Algo">
-      <header className="morningedge-header">
-        <div className="morningedge-brand">
-          <span className="morningedge-logo"><TrendingUp size={25} /></span>
-          <div><h2>MorningEdge AI Algo</h2><p>Autonomous Morning Trading System <b>MEAI</b></p></div>
+    <section aria-label="MorningEdge AI Algo" className="overflow-hidden rounded-xl border border-[#184052] bg-[#020a12] text-slate-100 shadow-[0_14px_36px_rgba(0,0,0,.48)]">
+      <header className="flex flex-wrap items-center justify-between gap-4 border-b border-[#203847] bg-[#030b12] px-4 py-3 sm:px-5">
+        <div className="flex min-w-0 items-center gap-3">
+          <div className="grid h-12 w-12 shrink-0 place-items-center rounded-xl border border-emerald-400/50 bg-emerald-400/10">
+            <TrendingUp aria-hidden="true" className="h-8 w-8 text-[#28f20b]" />
+          </div>
+          <div className="min-w-0">
+            <h2 className="text-xl font-black tracking-tight sm:text-2xl">MORNINGEDGE <span className="text-[#28f20b]">AI</span></h2>
+            <p className="text-xs text-slate-300 sm:text-sm">Autonomous Morning Market Monitor</p>
+          </div>
         </div>
-        <div className="morningedge-header-status">
-          <span className={`me-pill ${feedLive ? 'is-live' : ''}`}>
-            <i />{feedLive ? 'Zerodha Connected' : marketClosed ? 'Market Closed' : 'Zerodha Offline'}
-          </span>
-          <span className={`me-pill ${status?.live_enabled ? 'is-live' : ''}`}>
-            <i />Algo {status?.live_enabled ? 'Running' : 'OFF'}
-          </span>
-          <span className="morningedge-phase">{status?.phase ?? 'NOT READY'}</span>
-          <Bell size={18} /><Activity size={18} />
+        <div className="flex flex-wrap items-center justify-end gap-2 text-xs font-bold text-slate-200 sm:text-sm">
+          <CalendarDays aria-hidden="true" className="h-4 w-4 text-slate-400" />
+          <span>{clock || 'IST'}</span>
+          <button type="button" role="switch" aria-label="MorningEdge market feed"
+            aria-checked={marketEnabled} aria-busy={marketPending} onClick={() => void toggleMarket()}
+            className={`min-h-10 rounded-full border px-4 py-2 text-sm font-black transition ${
+              marketEnabled
+                ? 'border-emerald-500 bg-emerald-950/60 text-emerald-200 hover:bg-emerald-900/70'
+                : 'border-slate-600 bg-slate-900 text-slate-200 hover:bg-slate-800'
+            }`}>
+            TRADE <span className={`ml-1 rounded-full px-2 py-0.5 text-xs text-white ${
+              marketEnabled ? 'bg-emerald-700' : 'bg-slate-600'
+            }`}>{marketEnabled ? 'ON' : 'OFF'}</span>
+          </button>
         </div>
       </header>
 
-      {!API_ROOT && <p className="morningedge-warning">MorningEdge API URL is not configured. Set NEXT_PUBLIC_MORNINGEDGE_API_URL to the separate service endpoint.</p>}
+      <div className="grid gap-2 border-b border-[#203847] bg-[#05101a] p-3 md:grid-cols-[minmax(230px,1.15fr)_repeat(2,minmax(0,1fr))] md:items-center">
+        <div className="flex min-h-[68px] items-center gap-3 rounded-xl border border-[#3b667b] bg-[#091722] px-4 py-2">
+          <div className="grid h-11 w-11 shrink-0 place-items-center rounded-lg border border-lime-500/50 bg-lime-500/10">
+            <Clock3 aria-hidden="true" className="h-7 w-7 text-lime-300" />
+          </div>
+          <div>
+            <p className="text-base font-black">Morning Session</p>
+            <p className={`text-sm font-semibold ${status ? 'text-slate-400' : 'text-amber-300'}`}>{stage}</p>
+          </div>
+        </div>
+        {steps.map((step, index) => (
+          <div key={step.label} className={`relative flex min-h-[68px] flex-col items-center justify-center rounded-xl border px-3 py-2 text-center ${
+            step.done ? 'border-[#28f20b] bg-[#0b1c1c]' : 'border-[#35546a] bg-[#08141e]'
+          }`}>
+            <span className={`absolute -top-2 left-1/2 grid h-5 w-5 -translate-x-1/2 place-items-center rounded-full border bg-[#061018] ${
+              step.done ? 'border-[#28f20b] text-[#28f20b]' : 'border-slate-500 text-slate-500'
+            }`}><CheckCircle2 aria-hidden="true" className="h-4 w-4" /></span>
+            <span className="text-xs text-slate-300">{step.label}</span>
+            <span className={`mt-0.5 text-xs font-black sm:text-sm ${step.done ? 'text-[#28f20b]' : 'text-slate-100'}`}>{step.title}</span>
+            {index < steps.length - 1 && <span aria-hidden="true" className={`absolute -right-2 top-1/2 z-10 hidden h-0.5 w-2 md:block ${step.done ? 'bg-[#28f20b]' : 'bg-slate-600'}`} />}
+          </div>
+        ))}
+      </div>
 
-      <div className="morningedge-market-cards">
-        {indices.map((symbol) => {
-          const view = views[symbol];
-          const down = view.change != null && view.change < 0;
-          return <article className="morningedge-market-card" key={symbol} aria-label={`${symbol} index`}>
-            <div className="me-card-label">{symbol === 'BANKNIFTY' ? 'BANK NIFTY' : symbol === 'NIFTY' ? 'NIFTY 50' : 'SENSEX'}
-              <span className={view.live ? 'fresh' : ''} />
+      <div className="space-y-3 p-3 sm:p-4">
+        {error && <p role="alert" className="rounded-lg border border-rose-500/50 bg-rose-950/60 p-3 text-sm text-rose-200">MorningEdge error: {error}</p>}
+        {controlError && <p role="alert" className="rounded-lg border border-rose-500/50 bg-rose-950/60 p-3 text-sm text-rose-200">Market control error: {controlError}</p>}
+        {status?.error && <p role="alert" className="rounded-lg border border-amber-700/60 bg-amber-950/30 p-3 text-sm text-amber-100">Feed error: {status.error}</p>}
+        <div className="grid gap-2 md:grid-cols-3">
+          {SYMBOLS.map(symbol => {
+            const quote = status?.indices[symbol];
+            const change = quote?.change;
+            const changePercent = quote?.change_percent;
+            const hasChange = typeof change === 'number' && typeof changePercent === 'number';
+            const positive = (change ?? 0) >= 0;
+            const chart = sparkline(quote?.history);
+            return (
+              <article key={symbol} className="relative min-h-[98px] overflow-hidden rounded-xl border border-[#3a6176] bg-[radial-gradient(ellipse_at_75%_35%,rgba(0,92,79,.24),transparent_58%),linear-gradient(115deg,#091722,#061018)] px-4 py-3">
+                <div className="relative z-10 flex items-center justify-between gap-2">
+                  <h3 className="text-base font-black sm:text-lg">{symbol === 'NIFTY' ? 'NIFTY 50' : formatSymbol(symbol)}</h3>
+                  <span className={`rounded-full border px-2 py-0.5 text-[10px] font-black ${
+                    quote?.status === 'LIVE' ? 'border-[#28f20b] text-[#28f20b]' : 'border-slate-600 text-slate-400'
+                  }`}>{quote?.status === 'LIVE' ? 'LIVE' : <span className="text-amber-300">WAIT</span>}</span>
+                </div>
+                <p className={`relative z-10 mt-0.5 text-2xl font-black tabular-nums sm:text-[27px] ${quote?.price == null ? 'text-slate-400' : ''}`}>{displayPrice(quote?.price)}</p>
+                <p className={`relative z-10 text-sm font-extrabold tabular-nums ${!hasChange ? 'text-slate-400' : positive ? 'text-[#28f20b]' : 'text-rose-400'}`}>
+                  {hasChange
+                    ? `${change >= 0 ? '▲ +' : '▼ '}${displayPrice(change)} (${changePercent > 0 ? '+' : ''}${changePercent.toFixed(2)}%)`
+                    : '—'}
+                </p>
+                {chart && <svg aria-label={`${formatSymbol(symbol)} actual market price history`} role="img" viewBox="0 0 120 40" preserveAspectRatio="none"
+                  className="absolute bottom-3 right-3 h-10 w-[34%] opacity-90">
+                  <defs><linearGradient id={`morning-${symbol}`} x1="0" x2="0" y1="0" y2="1">
+                    <stop offset="0%" stopColor="#28f20b" stopOpacity=".42" /><stop offset="100%" stopColor="#28f20b" stopOpacity="0" />
+                  </linearGradient></defs>
+                  <path d={`${chart} L120,40 L0,40 Z`} fill={`url(#morning-${symbol})`} />
+                  <path d={chart} fill="none" stroke="#28f20b" strokeWidth="2.5" vectorEffect="non-scaling-stroke" />
+                </svg>}
+              </article>
+            );
+          })}
+        </div>
+
+        <div className="grid gap-3 xl:grid-cols-[minmax(0,2.1fr)_minmax(285px,.82fr)]">
+          <section aria-label="MorningEdge AI outlook" className="overflow-hidden rounded-xl border border-[#28b64c] bg-[radial-gradient(ellipse_at_20%_0%,rgba(0,142,73,.17),transparent_48%),linear-gradient(135deg,#06150f,#07151b)] p-3 shadow-[0_0_18px_rgba(40,242,11,.12)] sm:p-4">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-emerald-800/80 pb-2">
+              <h3 className="flex items-center gap-2 text-lg font-black sm:text-xl"><Zap aria-hidden="true" className="h-6 w-6 text-[#28f20b]" /> AI MORNING OUTLOOK</h3>
+              <span className="rounded-full border border-emerald-700/70 bg-emerald-950/30 px-3 py-1 text-[11px] font-black text-emerald-200">LIVE MARKET SIGNAL</span>
             </div>
-            <strong>{view.price != null ? points(view.price) : '—'}</strong>
-            <small className={down ? 'is-down' : ''}>
-              {view.change != null ? `${down ? '▼ ' : '▲ +'}${points(view.change)} pts` : view.price != null ? 'Change unavailable' : 'Waiting for real ticks'}
-              {view.percent != null ? ` · ${view.percent >= 0 ? '+' : ''}${view.percent.toFixed(2)}%` : ''}
-            </small>
-            <span className="me-card-note">{view.price != null ? view.note : 'Zerodha feed not received'}</span>
-          </article>;
-        })}
-        <article className="morningedge-market-card morningedge-signal-card">
-          <div className="me-card-label"><Bot size={17} /> Morning AI Signal</div>
-          <strong>{signals?.decision ?? 'WAIT'}</strong>
-          <small>{signals?.confidence != null ? `Model confidence ${signals.confidence.toFixed(1)}%` : status?.model?.status ?? 'Validated model unavailable'}</small>
-        </article>
-      </div>
+            <div className="grid gap-3 pt-3 md:grid-cols-[112px_minmax(0,1fr)_165px]">
+              <div className="flex min-h-[170px] flex-col items-center justify-center rounded-xl border border-emerald-900/80 bg-[#06140f] p-3 text-center">
+                <BarChart3 aria-hidden="true" className="h-12 w-12 text-[#28f20b] drop-shadow-[0_0_12px_rgba(40,242,11,.5)]" />
+                <span className="mt-2 text-base font-black leading-tight">Morning<br />AI Scan</span>
+                <span className={`mt-2 text-[10px] font-bold uppercase tracking-wider ${status ? 'text-slate-500' : 'text-amber-300'}`}>{status ? `${status.preopen.ticks} real ticks` : 'WAIT'}</span>
+              </div>
+              <div className="space-y-1.5">
+                {[
+                  ['Strategy Signal', status?.signal.decision?.toUpperCase() || 'WAIT', status?.signal.reason || 'Waiting for live market data.'],
+                  ['Pre-open Capture', status?.preopen.complete ? 'COMPLETE' : 'WAIT', '09:00–09:08 IST · real ticks only'],
+                  ['Opening Range', openingRange?.complete ? 'VALIDATED' : 'WAIT', `${formatSymbol(rangeSymbol)} · 09:15–09:20 IST`],
+                  ['Range High / Low', openingRange ? `${displayPrice(openingRange.high)} / ${displayPrice(openingRange.low)}` : 'PENDING', 'Index points · selected signal index'],
+                ].map(([label, value, note], index) => (
+                  <div key={label} className="grid min-h-[42px] grid-cols-[minmax(0,1fr)_auto] items-center gap-x-2 gap-y-0.5 rounded-lg border border-[#132a35] bg-[#091923] px-2.5 py-2 text-xs sm:text-sm md:grid-cols-[minmax(95px,.75fr)_minmax(90px,.8fr)_minmax(0,1.5fr)]">
+                    <span className="flex min-w-0 items-center gap-1.5 font-semibold text-slate-200">
+                      {index === 0 ? <TrendingUp className="h-3.5 w-3.5 text-slate-400" /> : index === 1 ? <Activity className="h-3.5 w-3.5 text-slate-400" /> : index === 2 ? <Radio className="h-3.5 w-3.5 text-slate-400" /> : <CheckCircle2 className="h-3.5 w-3.5 text-slate-400" />}
+                      <span className="truncate">{label}</span>
+                    </span>
+                    <strong className={`text-right ${value === 'WAIT' || value === 'PENDING' || index === 0 && status?.signal.decision?.toLowerCase() === 'wait'
+                      ? 'text-amber-300'
+                      : index < 3 ? 'text-[#28f20b]' : 'text-amber-200'}`}>{value}</strong>
+                    <span className="col-span-2 leading-snug text-slate-400 md:col-span-1 md:truncate">{note}</span>
+                  </div>
+                ))}
+              </div>
+              <div className="flex flex-col items-center justify-center rounded-xl border border-[#163b2b] bg-[#06140f] p-3 text-center">
+                <p className="text-sm font-black uppercase tracking-wide text-slate-300">Signal Status</p>
+                <div className="relative mt-2 h-[82px] w-[148px] overflow-hidden">
+                  <svg viewBox="0 0 160 90" className="h-full w-full" aria-hidden="true">
+                    <path d="M12 82 A68 68 0 0 1 148 82" fill="none" stroke="#263846" strokeWidth="15" strokeLinecap="round" />
+                    {engineReady && <path d="M12 82 A68 68 0 0 1 148 82" fill="none" stroke="#28f20b" strokeWidth="15" strokeLinecap="round" />}
+                  </svg>
+                  <div className={`absolute inset-x-0 bottom-0 text-2xl font-black ${engineReady ? 'text-[#28f20b]' : 'text-amber-300'}`}>{engineReady ? 'READY' : 'WAIT'}</div>
+                </div>
+                {engineReady && <span className="mt-2 rounded-full border border-[#28f20b] px-3 py-1 text-[10px] font-black text-[#28f20b]">DATA CHECKS PASSED</span>}
+                <p className="mt-2 text-[11px] leading-relaxed text-slate-400">Market data and signals only. Order execution is not configured.</p>
+              </div>
+            </div>
+          </section>
 
-      <div className="morningedge-main-grid">
-        <article className="morningedge-panel morningedge-setup">
-          <div className="me-panel-heading"><h3><Zap size={18} /> Morning Trade Setup</h3>
-            <span className={status?.ready ? 'me-ready' : 'me-blocked'}>{status?.ready ? 'READY' : 'PREPARATION REQUIRED'}</span>
-          </div>
-          <p className="morningedge-reason">{signals?.reason ?? readyReasons[0] ?? 'Waiting for fresh pre-open and regular-session data.'}</p>
-          <div className="morningedge-levels">
-            {[
-              ['Entry', activeTrade?.entry_price],
-              ['Stop Loss', activeTrade?.stop_loss],
-              ['Trailing SL', activeTrade?.trailing_stop],
-              ['Last Price', activeTrade?.last_price],
-            ].map(([label, value]) => <div className="morningedge-level" key={label as string}>
-              <small>{label}</small><b>{money(value)}</b>
-            </div>)}
-          </div>
-          {activeTrade && <div className="morningedge-active-trade">
-            <b>{activeTrade.trading_symbol ?? activeTrade.symbol} · {activeTrade.state ?? 'ORDER UPDATE'}</b>
-            <span>Actual P&amp;L {money(activeTrade.pnl)} · Targets {activeTrade.targets?.map(money).join(' / ') ?? '—'}</span>
-          </div>}
-          <div className="morningedge-actions">
-            <button type="button" disabled={busy || !token} onClick={() => void action('/preflight')}>
-              {busy ? <Loader2 className="me-spin" size={16} /> : <ShieldCheck size={16} />} Readiness Check
-            </button>
-            <button type="button" disabled={busy || !status?.ready || status.armed} onClick={() => void action('/arm')}>
-              <Play size={16} /> Arm Session
-            </button>
-            <button type="button" className="me-live-button" disabled>
-              <Zap size={16} /> Live Execution Unavailable
-            </button>
-          </div>
-          <p className="morningedge-gate-note">
-            Analysis begins at 09:00 IST. New live entries are blocked before 09:15 and after 10:30 IST.
-            No order is placed until all independent feed, model, preflight, session and risk gates pass.
-          </p>
-        </article>
+          <section aria-label="MorningEdge safety status" className="rounded-xl border border-[#35586b] bg-[linear-gradient(145deg,#091722,#061018)] p-3 sm:p-4">
+            <h3 className="flex items-center gap-2 border-b border-slate-700 pb-2 text-lg font-black"><ShieldCheck aria-hidden="true" className="h-6 w-6 text-[#28f20b]" /> EXECUTION &amp; RISK</h3>
+            <div className="mt-2 space-y-2 text-xs sm:text-sm">
+              <p className="flex justify-between gap-2"><span className="flex items-center gap-2 text-slate-300"><BarChart3 className="h-4 w-4 text-slate-400" /> Order placement</span><strong className="text-amber-300">Not configured</strong></p>
+              <p className="rounded-lg border border-slate-700 bg-[#081620] p-2 text-xs text-slate-300">Live order execution is not configured. The signal is informational and cannot place or manage orders.</p>
+              {status?.block_reasons.map((reason, index) => <p key={`${index}-${reason}`} className="rounded-lg border border-slate-700/70 bg-[#081620] px-2 py-1.5 text-xs text-slate-400">{reason}</p>)}
+            </div>
+          </section>
+        </div>
 
-        <article className="morningedge-panel morningedge-rules">
-          <div className="me-panel-heading"><h3>Morning Intelligence</h3><span>{status?.model?.validated ? 'MODEL VALIDATED' : 'MODEL NOT VALIDATED'}</span></div>
-          <div className="morningedge-intel">
-            {[
-              ['Opening Bias', status?.intelligence?.opening_bias],
-              ['Model Prediction', status?.intelligence?.prediction],
-              ['Market Regime', status?.intelligence?.regime],
-              ['Gap', status?.intelligence?.gap_percent != null ? `${status.intelligence.gap_percent.toFixed(2)}%` : null],
-            ].map(([name, value]) => <div key={name as string}><small>{name}</small><b>{value ?? 'Unavailable'}</b></div>)}
-          </div>
-          <h4>Strategy Workers</h4>
-          <ul className="morningedge-worker-list">
-            {['Gap and Go', 'Gap Reversal', 'Opening Range Breakout', 'VWAP Breakout', 'VWAP Reversal',
-              'EMA Momentum', 'Futures Momentum', 'Options Momentum', 'False Breakout Detection']
-              .map(worker => {
-                const state = status?.strategy_states?.[worker];
-                return <li key={worker}><span />{worker}
-                  <small>{state?.status ?? 'NOT IMPLEMENTED'}{state?.reason ? ` · ${state.reason}` : ' · Strategy evaluation is unavailable'}</small>
-                </li>;
+        <div className="grid gap-3 lg:grid-cols-2">
+          <section aria-label="MorningEdge feed events" className="overflow-hidden rounded-xl border border-[#35586b] bg-[#06131d]">
+            <h3 className="flex items-center gap-2 border-b border-slate-700 bg-[#0a1a25] px-3 py-3 text-base font-black"><Radio aria-hidden="true" className="h-5 w-5 text-[#28f20b]" /> MARKET ENGINE EVENTS</h3>
+            <div className="space-y-2 p-3">
+              {SYMBOLS.map(symbol => {
+                const quote = status?.indices[symbol];
+                const time = quote?.timestamp ? new Intl.DateTimeFormat('en-IN', {
+                  timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+                }).format(new Date(quote.timestamp)) : 'WAIT';
+                return <div key={symbol} className="flex items-start gap-2 text-xs">
+                  <span className={`mt-1 h-2.5 w-2.5 shrink-0 rounded-full ${quote?.status === 'LIVE' ? 'bg-[#28f20b] shadow-[0_0_8px_#28f20b]' : 'border border-slate-500'}`} />
+                  <span className={`w-[58px] shrink-0 font-mono ${time === 'WAIT' ? 'text-amber-300' : 'text-slate-400'}`}>{time}</span>
+                  <span className={quote?.status === 'LIVE' ? 'text-slate-200' : 'text-amber-300'}>{quote?.status === 'LIVE' ? `${formatSymbol(symbol)} tick received` : `Waiting for ${formatSymbol(symbol)} tick`}</span>
+                </div>;
               })}
-          </ul>
-        </article>
-      </div>
+              <div className="flex items-start gap-2 border-t border-slate-800 pt-2 text-xs">
+                <span className={`mt-1 h-2.5 w-2.5 shrink-0 rounded-full ${status?.preopen.complete ? 'bg-[#28f20b]' : 'border border-slate-500'}`} />
+                <span className="w-[58px] shrink-0 font-mono text-slate-400">09:00–09:08</span>
+                <span className="text-slate-200">Pre-open capture · {status?.preopen.ticks ?? 0} real ticks</span>
+              </div>
+              <div className="flex items-start gap-2 border-t border-slate-800 pt-2 text-xs">
+                <span className={`mt-1 h-2.5 w-2.5 shrink-0 rounded-full ${openingRange?.complete ? 'bg-[#28f20b]' : 'border border-slate-500'}`} />
+                <span className="w-[58px] shrink-0 font-mono text-slate-400">09:15–09:20</span>
+                <span className={openingRange?.complete ? 'text-slate-200' : 'text-amber-300'}>Opening range · {openingRange?.complete ? 'validated' : 'Waiting for range data'}</span>
+              </div>
+            </div>
+          </section>
 
-      <div className="morningedge-bottom-grid">
-        <article className="morningedge-panel">
-          <div className="me-panel-heading"><h3>Live Risk Controls</h3><span>Saved before session</span></div>
-          <div className="morningedge-config-grid">
-            <label>Per-trade loss cap (INR)<input type="number" min="1" disabled={configLocked} value={config.per_trade_loss_cap_inr ?? ''}
-              onChange={event => setConfig({ ...config, per_trade_loss_cap_inr: event.target.value ? Number(event.target.value) : null })} /></label>
-            <label>Daily loss limit (INR)<input type="number" min="1" disabled={configLocked} value={config.daily_loss_limit_inr ?? ''}
-              onChange={event => setConfig({ ...config, daily_loss_limit_inr: event.target.value ? Number(event.target.value) : null })} /></label>
-            <label>Maximum trades/day<input type="number" min="1" disabled={configLocked} value={config.max_trades_per_day ?? ''}
-              onChange={event => setConfig({ ...config, max_trades_per_day: event.target.value ? Number(event.target.value) : null })} /></label>
-            <label>Maximum lots<select disabled={configLocked} value={config.max_lots} onChange={event => setConfig({ ...config, max_lots: Number(event.target.value) })}>
-              {[1, 2, 3, 4, 5].map(lots => <option value={lots} key={lots}>{lots} lot{lots > 1 ? 's' : ''}</option>)}
-            </select></label>
-            <label>Minimum model confidence<select disabled={configLocked} value={config.min_model_confidence}
-              onChange={event => setConfig({ ...config, min_model_confidence: Number(event.target.value) })}>
-              {[20, 25, 30, 40, 50, 60, 70].map(value => <option value={value} key={value}>{value}%</option>)}
-            </select></label>
-            <button type="button" disabled={busy || !token || configLocked} onClick={() => void saveConfig()}>
-              <Save size={16} /> {saved ? 'Saved' : 'Save Risk Settings'}
-            </button>
-          </div>
-          <p className="morningedge-gate-note">Initial lot cap is 1. Increasing it requires saving a new cap before the next session. Loss limits are mandatory before arming.</p>
-        </article>
-        <article className="morningedge-panel morningedge-performance">
-          <div className="me-panel-heading"><h3>Session Performance</h3><span>{status?.performance?.status ?? 'NO SESSION DATA'}</span></div>
-          <div className="morningedge-stats">
-            <div><small>Trades</small><b>{status?.performance?.trades ?? '—'}</b></div>
-            <div><small>Win Rate</small><b>{status?.performance?.win_rate != null ? `${status.performance.win_rate.toFixed(1)}%` : '—'}</b></div>
-            <div><small>Realized P&amp;L</small><b>{money(status?.performance?.pnl)}</b></div>
-            <div><small>Last Tick</small><b>{formatTime(status?.feed?.last_tick_at)}</b></div>
-          </div>
-        </article>
-      </div>
+          <section aria-label="MorningEdge signal candidate" className="overflow-hidden rounded-xl border border-[#35586b] bg-[#06131d]">
+            <h3 className="flex items-center gap-2 border-b border-slate-700 bg-[#0a1a25] px-3 py-3 text-base font-black"><BarChart3 aria-hidden="true" className="h-5 w-5 text-[#28f20b]" /> MARKET SIGNAL</h3>
+            <div className="flex min-h-[145px] flex-col justify-center gap-2 p-4">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="rounded-full border border-amber-600/70 bg-amber-950/30 px-3 py-1 text-sm font-black text-amber-200">
+                  {status?.signal.decision?.toLowerCase() === 'wait'
+                    ? 'WAIT'
+                    : status?.signal.decision?.toUpperCase() || 'WAIT'}
+                </span>
+                {status?.signal.symbol && <span className="text-xs font-bold text-slate-300">{formatSymbol(status.signal.symbol)}</span>}
+              </div>
+              <p className="text-sm leading-relaxed text-slate-300">{status?.signal.reason || 'Waiting for authenticated market status.'}</p>
+              {status?.signal.contract && <p className="text-xs text-slate-300">Candidate: {status.signal.contract} · indicative entry {displayPrice(status.signal.entry)} · reference stop {displayPrice(status.signal.stop)}</p>}
+              <p className="text-xs text-slate-500">Signal information only · order execution is not configured.</p>
+            </div>
+          </section>
 
-      <article className="morningedge-panel">
-        <div className="me-panel-heading"><h3>Pipeline Performance</h3><span>Measured runtime values only</span></div>
-        <div className="morningedge-pipeline-stats">
-          {[
-            ['Events received/s', status?.pipeline_metrics?.events_received_per_sec],
-            ['Events processed/s', status?.pipeline_metrics?.events_processed_per_sec],
-            ['Queue depth', status?.pipeline_metrics?.queue_depth],
-            ['Dropped events', status?.pipeline_metrics?.dropped_events],
-            ['P95 processing', status?.pipeline_metrics?.p95_processing_ms, ' ms'],
-            ['ML inference', status?.pipeline_metrics?.ml_inference_ms, ' ms'],
-            ['Signal latency', status?.pipeline_metrics?.signal_latency_ms, ' ms'],
-            ['Order acknowledgement', status?.pipeline_metrics?.order_ack_latency_ms, ' ms'],
-            ['Slippage', status?.pipeline_metrics?.slippage],
-          ].map(([label, value, suffix]) => <div key={label as string}><small>{label}</small>
-            <b>{typeof value === 'number' && Number.isFinite(value) ? `${value.toFixed(2)}${suffix ?? ''}` : '—'}</b>
-          </div>)}
         </div>
-      </article>
-
-      <article className="morningedge-panel morningedge-events">
-        <div className="me-panel-heading"><h3><Activity size={18} /> Live Engine Events</h3><span>{streamConnected ? 'STREAM CONNECTED' : 'STREAM OFFLINE'}</span></div>
-        {error && <p className="morningedge-warning"><AlertCircle size={16} />{error}</p>}
-        <div className="morningedge-event-list">
-          {events.length ? events.map((event, index) => <div className="morningedge-event" key={`${event.at}-${event.type}-${index}`}>
-            <time>{formatTime(event.at)}</time>
-            <span className={`me-event-dot ${event.severity === 'error' ? 'error' : event.severity === 'warning' ? 'warning' : 'success'}`} />
-            <b>{event.instrument ?? event.type}</b><span>{event.message}</span>
-          </div>) : <div className="morningedge-empty"><CheckCircle2 size={16} /> No engine events received from MorningEdge yet.</div>}
-        </div>
-      </article>
-
-      {status?.blocking_reasons?.length ? <div className="morningedge-blockers">
-        {status.blocking_reasons.map((reason, index) => <p key={`${index}-${reason}`}><AlertCircle size={15} />{reason}</p>)}
-      </div> : null}
+      </div>
     </section>
   );
 }

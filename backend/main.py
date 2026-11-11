@@ -127,15 +127,6 @@ async def lifespan(app: FastAPI):
     settings = get_settings()
 
     print("⚡ FastAPI starting...")
-    shared_auth_path = auth._shared_zerodha_auth_path()
-    if settings.zerodha_access_token:
-        try:
-            auth._persist_shared_zerodha_auth(
-                shared_auth_path, settings.zerodha_api_key, settings.zerodha_access_token
-            )
-        except (OSError, ValueError):
-            logger.exception("Could not publish the Zerodha token to the MorningEdge shared volume")
-
     # ── Quick env validation (sync, instant) ──────────────────────────
     validation_errors = []
     if not settings.zerodha_api_key:

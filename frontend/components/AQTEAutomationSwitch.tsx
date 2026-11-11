@@ -159,7 +159,6 @@ function AQTEAutomationSwitch({ onStatus, feed, feedError = null }: {
   const canReset = known && aqteControllerCurrent(status) && status.killed &&
     status.flatten_pending === false && status.active === null;
   const label = !known ? '—' : on ? 'ON' : 'OFF';
-  const buttonLabel = busy ? 'WAIT' : label;
   const cancelOnEscape = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.key !== 'Escape') return;
     event.preventDefault();
@@ -183,7 +182,12 @@ function AQTEAutomationSwitch({ onStatus, feed, feedError = null }: {
         <span className="aqte-auto-switch-copy">
           <span className="aqte-auto-switch-label">AUTO TRADE</span>
         </span>
-        <span className="aqte-auto-switch-state"><span aria-hidden="true" />{buttonLabel}</span>
+        <span className="aqte-auto-switch-state" aria-hidden="true">
+          {busy ? <span className="aqte-auto-switch-wait">WAIT</span> : <>
+            <span className={on ? 'aqte-auto-choice-active' : ''}>ON</span>
+            <span className={!on ? 'aqte-auto-choice-active' : ''}>OFF</span>
+          </>}
+        </span>
       </button>
       {unknown && <button type="button" className="aqte-auto-request-off" aria-label="Stop AQTE new entries"
         disabled={busy} onClick={() => void act('off')}>Request OFF · verify acknowledgement</button>}

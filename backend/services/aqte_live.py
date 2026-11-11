@@ -318,21 +318,15 @@ class AQTELiveService:
                 not set(algos) <= set(EXPIRYEDGE_ALGOS) | RETIRED_EXPIRYEDGE_ALGOS or
                 any(type(value) is not bool for value in algos.values())):
             raise LiveBlocked("Invalid 6 Algo Desk configuration; journal requires repair before trading")
-        blocked = bool(self.state.get("killed")) or bool(self.state.get("automation_wanted"))
-        # Standing per-algo ON survives restarts like AQTE automation; preflight re-runs before any entry.
-        # Retired algos are dropped without inheriting their approvals; their historical trades remain intact.
-        expiryedge["algos"] = {key: bool(algos.get(key)) and not blocked for key in EXPIRYEDGE_ALGOS}
+        # Every live-entry approval requires a fresh manual ON after backend startup.
+        expiryedge["algos"] = {key: False for key in EXPIRYEDGE_ALGOS}
         expiryedge_ai = self.state.setdefault("expiryedge_ai", {"enabled": False, "error": None})
         if (not isinstance(expiryedge_ai, dict) or type(expiryedge_ai.get("enabled")) is not bool or
                 (expiryedge_ai.get("error") is not None and not isinstance(expiryedge_ai["error"], str))):
             raise LiveBlocked("Invalid standalone ExpiryEdge AI configuration; journal requires repair before trading")
-        if not getattr(self.settings(), "expiryedge_ai_live_enabled", False):
-            expiryedge_ai["enabled"] = False
-        if self.state.get("killed") or self.state.get("flatten_pending"):
-            expiryedge_ai["enabled"] = False
+        expiryedge_ai["enabled"] = False
         self.state.setdefault("flatten_pending", False)
-        # Standing ON survives restarts; the monitor re-runs preflight before any new entry.
-        self.state["automation_wanted"] = bool(self.state.get("automation_wanted")) and not self.state["killed"]
+        self.state["automation_wanted"] = False
         if set(self.state["daily_controls"]) != set(SYMBOLS):
             raise LiveBlocked("Invalid saved daily-control index set; journal requires repair before trading")
         version = self.state.get("daily_controls_version", 0)
@@ -2125,6 +2119,26 @@ class AQTELiveService:
             trades = sorted(history, key=lambda trade: trade.get("exit_at") or trade["entry_at"], reverse=True)[:25]
             fields = ("id", "algo", "symbol", "entry_price", "exit_price", "filled", "net_pnl", "entry_at",
                       "exit_at", "exit_reason", "exit_requested", "stop", "target", "initial_stop")
+            trade_rows = []
+            for trade in trades:
+                context = trade.get("execution_context")
+                entry_context = None
+                if isinstance(context, dict):
+                    rules = context.get("rules")
+                    entry_context = {
+                        "strategy_name": context.get("strategy_name"),
+                        "reason": context.get("reason"),
+                        "rules": [
+                            {key: item.get(key) for key in ("label", "passed", "value")}
+                            for item in rules if isinstance(item, dict)
+                        ] if isinstance(rules, list) else [],
+                    }
+                trade_rows.append({
+                    **{key: trade.get(key) for key in fields},
+                    "trading_symbol": (trade.get("contract") or {}).get("trading_symbol"),
+                    "side": (trade.get("contract") or {}).get("side"),
+                    "entry_context": entry_context,
+                })
             selected = evaluations[symbol]
             return {
                 "generated_at": now,
@@ -2145,9 +2159,7 @@ class AQTELiveService:
                 "signals_by_symbol": {name: evaluations[name]["algos"] for name in SYMBOLS},
                 "algos": algos,
                 "active": self.expiryedge_active(),
-                "trades": [{key: trade.get(key) for key in fields} | {
-                    "trading_symbol": (trade.get("contract") or {}).get("trading_symbol"),
-                    "side": (trade.get("contract") or {}).get("side")} for trade in trades],
+                "trades": trade_rows,
                 "opportunities": sorted((record for record in self.opportunities.values()
                                          if record.get("owner") == "EXPIRYEDGE"),
                                         key=lambda record: record["at"], reverse=True)[:25],

@@ -44,18 +44,22 @@
 .aqte-theme .aqte-auto-switch-label { font-size: 0.72rem; font-weight: 850; line-height: 1.2; letter-spacing: 0.09em; white-space: nowrap; }
 .aqte-theme .aqte-auto-switch-state {
   display: inline-flex; align-items: center; justify-content: center; gap: 6px;
-  width: 68px; min-width: 68px; min-height: 34px; flex: 0 0 68px; padding: 5px 10px;
+  width: 92px; min-width: 92px; min-height: 34px; flex: 0 0 92px; padding: 4px;
   border: 1px solid rgb(255 255 255 / 0.1); border-radius: 10px; white-space: nowrap;
   background: #27664f; color: #f0fff8; font-size: 0.72rem; font-weight: 900; line-height: 1;
   letter-spacing: 0.055em; box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.12);
   transition: background 160ms ease, box-shadow 160ms ease, color 160ms ease;
 }
-.aqte-theme .aqte-auto-switch-state > span { width: 7px; height: 7px; flex: 0 0 7px; border-radius: 50%; background: #a7f3d0; box-shadow: 0 0 9px rgb(110 231 183 / 0.8); transition: background 160ms ease, box-shadow 160ms ease; }
+.aqte-theme .aqte-auto-switch-state > span { display: grid; place-items: center; width: 39px; min-height: 24px; flex: 1 1 0; border-radius: 7px; color: #cbd5e1; font-size: 0.68rem; }
+.aqte-theme .aqte-auto-switch-state > .aqte-auto-choice-active { background: #184c39; color: #f0fff8; box-shadow: inset 0 0 0 1px rgb(167 243 208 / 0.55); }
+.aqte-theme .aqte-auto-switch-wait { width: 100% !important; color: #fde68a !important; }
 .aqte-theme .aqte-auto-switch-on { border-color: rgb(69 185 130 / 0.68); background: radial-gradient(180px 100px at 100% 0%, rgb(52 211 153 / 0.16), transparent 75%), linear-gradient(145deg, #12251f, #0b1517 78%); color: #a7f3d0; }
 .aqte-theme .aqte-auto-switch-on .aqte-auto-switch-state { background: linear-gradient(180deg, #298364, #1d644d); box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.2), 0 0 14px rgb(52 211 153 / 0.14); }
+.aqte-theme .aqte-auto-switch-on .aqte-auto-switch-state > .aqte-auto-choice-active { background: #184c39; }
 .aqte-theme .aqte-auto-switch-off { border-color: rgb(100 116 139 / 0.62); background: radial-gradient(180px 100px at 100% 0%, rgb(100 116 139 / 0.13), transparent 75%), linear-gradient(145deg, #172235, #101827 78%); color: #d3deec; }
 .aqte-theme .aqte-auto-switch-off .aqte-auto-switch-state { background: linear-gradient(180deg, #475569, #334155); }
-.aqte-theme .aqte-auto-switch-off .aqte-auto-switch-state > span { background: #cbd5e1; box-shadow: 0 0 8px rgb(203 213 225 / 0.55); }
+.aqte-theme .aqte-auto-switch-off .aqte-auto-switch-state > span:not(.aqte-auto-choice-active) { background: transparent; box-shadow: none; }
+.aqte-theme .aqte-auto-switch-off .aqte-auto-switch-state > .aqte-auto-choice-active { background: #64748b; color: #fff; box-shadow: inset 0 0 0 1px rgb(226 232 240 / 0.65); }
 .aqte-theme .aqte-auto-switch-stopped { border-color: #fb7185; color: #fecdd3; }
 .aqte-theme .aqte-auto-switch-stopped .aqte-auto-switch-state { background: linear-gradient(180deg, #9f354b, #7f1d34); }
 .aqte-theme .aqte-auto-switch-stopped .aqte-auto-switch-state > span { background: #fecdd3; box-shadow: 0 0 8px rgb(251 113 133 / 0.65); }
@@ -76,8 +80,7 @@
 .aqte-theme .aqte-auto-reset:disabled { cursor: not-allowed; opacity: 0.45; }
 @media (prefers-reduced-motion: reduce) {
   .aqte-theme .aqte-auto-switch,
-  .aqte-theme .aqte-auto-switch-state,
-  .aqte-theme .aqte-auto-switch-state > span { transition: none; animation: none; }
+  .aqte-theme .aqte-auto-switch-state { transition: none; animation: none; }
 }
 .aqte-theme :is(p, h2, h3, h4, dt, dd, summary, label, output) { overflow-wrap: anywhere; }
 .aqte-theme .aqte-daily-control { container-type: inline-size; }
@@ -1365,16 +1368,15 @@ h1, h2, h3, h4, h5, h6 {
 .aqte-theme .aqx-dash-main {
   display: grid; gap: 10px; min-width: 0; align-items: stretch;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  grid-template-areas: "top top top" "perf perf perf" "term term term" "more more more" "opp trade risk" "book book book" "chart chart chart" "quantedge quantedge quantedge" "morningedge morningedge morningedge";
+  grid-template-areas: "top top top" "perf perf perf" "term term term" "more more more" "opp trade risk" "book book book" "chart chart chart" "quantedge quantedge quantedge";
 }
 .aqte-theme .aqx-dash-main:has(.aqx-details-toggle[aria-expanded="false"]) {
-  grid-template-areas: "top top top" "perf perf perf" "term term term" "more more more" "opp opp opp" "book book book" "chart chart chart" "quantedge quantedge quantedge" "morningedge morningedge morningedge";
+  grid-template-areas: "top top top" "perf perf perf" "term term term" "more more more" "opp opp opp" "book book book" "chart chart chart" "quantedge quantedge quantedge";
 }
 .aqte-theme .aqx-dash-main > * { min-width: 0; }
 .aqte-theme .aqx-dash-main > .aqx-top { grid-area: top; grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr); margin: 0; }
 .aqte-theme .aqx-dash-main > :not(.aqx-top, .aqx-deck, .aqx-perfbar-wrap, .aqx-dash-term, .aqx-book) { grid-column: 1 / -1; }
 .aqte-theme .aqx-dash-main > .qep-standalone-shell { grid-area: quantedge; }
-.aqte-theme .aqx-dash-main > .morningedge-shell { grid-area: morningedge; }
 .aqte-theme .aqx-top > .aqx-alert { grid-column: 1 / -1; }
 .aqte-theme .aqx-deck { display: contents; }
 .aqte-theme .aqx-opp { grid-area: opp; }
@@ -1791,16 +1793,16 @@ h1, h2, h3, h4, h5, h6 {
 @container aqte (max-width: 1180px) {
   .aqte-theme .aqx-dash-main {
     grid-template-columns: repeat(2, minmax(0, 1fr));
-    grid-template-areas: "top top" "perf perf" "term term" "opp opp" "trade risk" "book book" "chart chart" "quantedge quantedge" "morningedge morningedge";
+    grid-template-areas: "top top" "perf perf" "term term" "opp opp" "trade risk" "book book" "chart chart" "quantedge quantedge";
   }
   .aqte-theme .aqx-dash-main:has(.aqx-details-toggle[aria-expanded="false"]) {
-    grid-template-areas: "top top" "perf perf" "term term" "more more" "opp opp" "book book" "chart chart" "quantedge quantedge" "morningedge morningedge";
+    grid-template-areas: "top top" "perf perf" "term term" "more more" "opp opp" "book book" "chart chart" "quantedge quantedge";
   }
   .aqte-theme .aqx-dash-main > .aqx-top { grid-template-columns: minmax(0, 1fr); }
   .aqte-theme .aqx-perfbar { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 }
 @container aqte (max-width: 900px) {
-  .aqte-theme .aqx-dash-main { grid-template-columns: minmax(0, 1fr); grid-template-areas: "top" "perf" "term" "more" "opp" "trade" "risk" "book" "chart" "quantedge" "morningedge"; }
+  .aqte-theme .aqx-dash-main { grid-template-columns: minmax(0, 1fr); grid-template-areas: "top" "perf" "term" "more" "opp" "trade" "risk" "book" "chart" "quantedge"; }
   .aqte-theme .aqx-context { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .aqte-theme .aqx-terminal-details-body { grid-template-columns: minmax(0, 1fr); }
   .aqte-theme .aqx-perfbar { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
@@ -1837,7 +1839,8 @@ h1, h2, h3, h4, h5, h6 {
   .aqte-theme .aqte-automation-control { order: 0; flex: 0 1 122px; width: 122px; min-width: 0; max-width: 122px; margin: 0; align-items: stretch; }
   .aqte-theme .aqte-auto-switch { width: 100%; height: 52px; min-height: 52px; flex: 0 0 52px; gap: 4px; padding: 6px; }
   .aqte-theme .aqte-auto-switch-label { font-size: 0.58rem; letter-spacing: 0.03em; }
-  .aqte-theme .aqte-auto-switch-state { width: 48px; min-width: 48px; min-height: 30px; flex-basis: 48px; gap: 3px; padding: 4px 3px; font-size: 0.62rem; }
+  .aqte-theme .aqte-auto-switch-state { width: 70px; min-width: 70px; min-height: 30px; flex-basis: 70px; gap: 2px; padding: 3px; }
+  .aqte-theme .aqte-auto-switch-state > span { width: 30px; min-height: 22px; font-size: 0.62rem; }
   .aqte-theme .aqx-icon-btn { width: 40px; height: 40px; flex: 0 0 40px; }
   .aqte-theme .aqx-head-tools .aqte-automation-control > :is(p, [role="alert"]) { text-align: left; }
 }
@@ -2012,119 +2015,4 @@ h1, h2, h3, h4, h5, h6 {
   border-color: rgb(38 61 78 / 0.95);
   background: linear-gradient(160deg, #12212d 0%, #0b1520 100%);
   box-shadow: inset 0 1px rgb(160 190 210 / 0.035), 0 10px 24px rgb(0 0 0 / 0.2);
-}
-.morningedge-shell {
-  display: grid; gap: 14px; padding: 18px; border: 1px solid #153a4d; border-radius: 18px;
-  color: #e6f0fb; background: linear-gradient(150deg, #061421 0%, #07101a 65%, #06131b 100%);
-  box-shadow: 0 18px 48px rgb(0 0 0 / 0.34), inset 0 1px rgb(148 190 210 / 0.05);
-}
-.morningedge-header, .morningedge-brand, .morningedge-header-status, .me-panel-heading, .me-card-label {
-  display: flex; align-items: center;
-}
-.morningedge-header { min-width: 0; justify-content: space-between; gap: 18px; padding: 2px 2px 14px; border-bottom: 1px solid #183244; }
-.morningedge-brand { min-width: 0; gap: 12px; }
-.morningedge-logo { display: grid; width: 44px; height: 44px; flex: 0 0 auto; place-items: center; border: 1px solid #087949; border-radius: 13px; color: #20e887; background: #062619; }
-.morningedge-brand h2 { margin: 0; color: #f4f8fc; font-size: 1.45rem; line-height: 1.2; font-weight: 850; letter-spacing: -.025em; }
-.morningedge-brand p { margin: 3px 0 0; color: #9eb4c9; font-size: .82rem; }
-.morningedge-brand p b { margin-left: 7px; padding: 2px 7px; border-radius: 999px; color: #052112; background: #00d975; font-size: .68rem; }
-.morningedge-header-status { flex-wrap: wrap; justify-content: flex-end; gap: 8px; color: #c1d3e2; font-size: .8rem; }
-.me-pill { display: inline-flex; align-items: center; gap: 7px; padding: 7px 11px; border: 1px solid #253b4c; border-radius: 999px; background: #0a1926; }
-.me-pill i, .me-card-label > span, .morningedge-worker-list li > span { width: 8px; height: 8px; flex: 0 0 auto; border-radius: 50%; background: #657587; }
-.me-pill.is-live i, .me-card-label > span.fresh { background: #15e781; box-shadow: 0 0 9px #0f9f56; }
-.morningedge-phase { color: #75c4e7; font-weight: 700; }
-.morningedge-market-cards { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
-.morningedge-market-card, .morningedge-panel {
-  min-width: 0; border: 1px solid #1c3446; border-radius: 14px;
-  background: linear-gradient(145deg, #111f2a, #0b1722); box-shadow: inset 0 1px rgb(160 190 210 / 0.035);
-}
-.morningedge-market-card { display: grid; gap: 6px; padding: 13px 15px; }
-.me-card-label { justify-content: space-between; gap: 7px; color: #d7e5f2; font-size: .85rem; font-weight: 750; }
-.morningedge-market-card strong { color: white; font-size: 1.55rem; line-height: 1.1; font-variant-numeric: tabular-nums; }
-.morningedge-market-card small { color: #16d985; font-size: .78rem; font-weight: 700; font-variant-numeric: tabular-nums; }
-.morningedge-market-card small.is-down { color: #ff6b81; }
-.morningedge-market-card .me-card-note { color: #8ea3b8; font-size: .7rem; font-weight: 600; }
-.morningedge-signal-card { border-color: #087343; background: linear-gradient(145deg, #06281d, #0b1c22); }
-.morningedge-signal-card .me-card-label { justify-content: flex-start; }
-.morningedge-signal-card .me-card-label svg { color: #25d9f3; }
-.morningedge-signal-card strong { color: #23eb80; }
-.morningedge-signal-card small { color: #9eb8ca; }
-.morningedge-main-grid { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(290px, .9fr); align-items: start; gap: 12px; }
-.morningedge-panel { padding: 15px; }
-.morningedge-setup { border-color: #097344; background: linear-gradient(145deg, #08251d, #0a1a22 75%, #08141c); }
-.me-panel-heading { justify-content: space-between; gap: 10px; }
-.me-panel-heading h3 { display: flex; align-items: center; gap: 8px; margin: 0; color: #f4f8fc; font-size: 1.05rem; font-weight: 800; }
-.me-panel-heading h3 svg { color: #18d6ef; }
-.me-panel-heading > span { color: #8da6ba; font-size: .7rem; font-weight: 750; }
-.me-panel-heading > .me-ready { color: #21e486; }
-.me-panel-heading > .me-blocked { color: #f5ca62; }
-.morningedge-reason { min-height: 1.3em; margin: 9px 0 13px; color: #b7c8d8; font-size: .84rem; }
-.morningedge-levels { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 9px; }
-.morningedge-level { display: grid; gap: 8px; padding: 12px; border: 1px solid #305849; border-radius: 10px; background: rgb(4 30 25 / 0.7); }
-.morningedge-level small, .morningedge-intel small, .morningedge-stats small { color: #9ab0c4; font-size: .7rem; }
-.morningedge-level b { color: #f3f8fc; font-size: 1.13rem; font-variant-numeric: tabular-nums; }
-.morningedge-level:nth-child(2) { border-color: #66414b; background: rgb(43 20 28 / .7); }
-.morningedge-level:nth-child(2) b { color: #ff8293; }
-.morningedge-active-trade { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; margin-top: 10px; padding: 10px; border: 1px solid #17693e; border-radius: 10px; color: #c9e8d6; background: #09271b; font-size: .8rem; }
-.morningedge-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
-.morningedge-actions button, .morningedge-config-grid button {
-  display: inline-flex; min-height: 38px; align-items: center; justify-content: center; gap: 7px; padding: 8px 12px;
-  border: 1px solid #2c5262; border-radius: 9px; color: #ddecf8; background: #102331; font-size: .8rem; font-weight: 750;
-}
-.morningedge-actions button.me-live-button { border-color: #05964b; color: #04180d; background: #18d86f; }
-.morningedge-actions button:disabled, .morningedge-config-grid button:disabled { cursor: not-allowed; opacity: .48; }
-.morningedge-gate-note { margin: 10px 0 0; color: #9cb4c9; font-size: .73rem; line-height: 1.5; }
-.morningedge-intel { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); margin: 13px 0 14px; border: 1px solid #1b3444; border-radius: 10px; background: #081724; }
-.morningedge-intel > div { display: grid; gap: 5px; padding: 10px; border-right: 1px solid #162e3e; border-bottom: 1px solid #162e3e; }
-.morningedge-intel b { color: #25dc79; font-size: .88rem; }
-.morningedge-rules h4 { margin: 9px 0 5px; color: #a9bed1; font-size: .73rem; letter-spacing: .06em; text-transform: uppercase; }
-.morningedge-worker-list { display: grid; gap: 0; margin: 0; padding: 0; list-style: none; }
-.morningedge-worker-list li { display: flex; align-items: center; gap: 8px; padding: 8px 2px; border-bottom: 1px solid #1a2e3c; color: #deebf7; font-size: .8rem; }
-.morningedge-worker-list li > span { background: #657587; }
-.morningedge-worker-list li small { margin-left: auto; color: #8199ae; font-size: .67rem; text-align: right; }
-.morningedge-bottom-grid { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(260px, .8fr); align-items: start; gap: 12px; }
-.morningedge-config-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 9px; margin-top: 12px; }
-.morningedge-config-grid label { display: grid; gap: 5px; color: #b2c4d6; font-size: .72rem; }
-.morningedge-config-grid input, .morningedge-config-grid select {
-  width: 100%; min-width: 0; min-height: 36px; padding: 7px 9px; border: 1px solid #294254; border-radius: 8px;
-  outline: none; color: #eff7ff; background: #07131d; font-size: .82rem;
-}
-.morningedge-config-grid input:focus, .morningedge-config-grid select:focus { border-color: #14d675; }
-.morningedge-config-grid button { align-self: end; }
-.morningedge-stats { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; margin-top: 13px; }
-.morningedge-stats > div { display: grid; gap: 6px; min-width: 0; padding: 11px; border: 1px solid #1b3547; border-radius: 9px; background: #091722; }
-.morningedge-stats b { overflow: hidden; color: #f2f7fc; font-size: .95rem; text-overflow: ellipsis; white-space: nowrap; }
-.morningedge-pipeline-stats { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; margin-top: 11px; }
-.morningedge-pipeline-stats > div { display: grid; gap: 5px; min-width: 0; padding: 9px; border: 1px solid #1b3547; border-radius: 8px; background: #091722; }
-.morningedge-pipeline-stats small { overflow: hidden; color: #91a9bd; font-size: .68rem; text-overflow: ellipsis; white-space: nowrap; }
-.morningedge-pipeline-stats b { overflow: hidden; color: #39e18c; font-size: .88rem; font-variant-numeric: tabular-nums; text-overflow: ellipsis; white-space: nowrap; }
-.morningedge-events { padding: 13px 15px; }
-.morningedge-event-list { display: grid; max-height: 230px; overflow: auto; margin-top: 8px; }
-.morningedge-event { display: grid; grid-template-columns: 72px 8px minmax(90px, .45fr) minmax(0, 1fr); align-items: center; gap: 9px; min-height: 34px; border-bottom: 1px solid #1a2c39; color: #bed0df; font-size: .76rem; }
-.morningedge-event time { color: #8aa3b8; font-variant-numeric: tabular-nums; }
-.morningedge-event b { overflow: hidden; color: #dceaf6; text-overflow: ellipsis; white-space: nowrap; }
-.me-event-dot { width: 7px; height: 7px; border-radius: 50%; background: #1cdb80; }
-.me-event-dot.warning { background: #f7c95c; }
-.me-event-dot.error { background: #fa6478; }
-.morningedge-empty { display: flex; align-items: center; gap: 8px; padding: 12px 0; color: #8fa7bc; font-size: .8rem; }
-.morningedge-warning, .morningedge-blockers p { display: flex; align-items: center; gap: 8px; color: #ffcc69; font-size: .78rem; }
-.morningedge-blockers { padding: 8px 12px; border: 1px solid #69494a; border-radius: 10px; background: #291719; }
-.morningedge-blockers p { margin: 3px 0; color: #ffb6a8; }
-.me-spin { animation: me-spin 1s linear infinite; }
-@keyframes me-spin { to { transform: rotate(360deg); } }
-@media (max-width: 850px) {
-  .morningedge-header { align-items: flex-start; flex-direction: column; }
-  .morningedge-header-status { justify-content: flex-start; }
-  .morningedge-market-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .morningedge-main-grid, .morningedge-bottom-grid { grid-template-columns: minmax(0, 1fr); }
-}
-@media (max-width: 560px) {
-  .morningedge-shell { gap: 10px; padding: 10px; border-radius: 14px; }
-  .morningedge-brand h2 { font-size: 1.2rem; }
-  .morningedge-market-card { padding: 10px; }
-  .morningedge-market-card strong { font-size: 1.25rem; }
-  .morningedge-levels { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .morningedge-config-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .morningedge-pipeline-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .morningedge-event { grid-template-columns: 62px 7px minmax(0, 1fr); }
-  .morningedge-event > span:last-child { grid-column: 3; }
 }

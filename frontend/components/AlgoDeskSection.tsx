@@ -35,6 +35,7 @@ type Performance = {
   trades: number; wins: number; losses: number; win_rate: number | null; net_pnl: number;
   profit_factor: number | null; max_drawdown: number | null; avg_win: number | null; avg_loss: number | null;
 };
+type EntryRule = { label: string; passed: boolean | null; value?: string | number | null };
 type Summary = { status: string; decision: string; side: Side | null; passed: number; total: number; fresh: boolean };
 type Algo = {
   key: string; name: string; subtitle: string; enabled: boolean; entries_today: number; remaining_today: number;
@@ -45,6 +46,7 @@ type Trade = {
   net_pnl: number | null; entry_at: number; exit_at: number | null; exit_reason: string | null;
   exit_requested: string | null; stop: number | null; target: number | null; initial_stop: number | null;
   trading_symbol: string | null; side: Side | null;
+  entry_context?: { strategy_name?: string | null; reason?: string | null; rules?: EntryRule[] } | null;
 };
 type Active = {
   id: string; algo: string; name: string; symbol: string; state: string; contract: { trading_symbol: string; side?: Side };
@@ -183,6 +185,27 @@ function SignalBadge({ decision }: { decision: string | null | undefined }) {
     : decision === 'BUY PE' ? 'border-rose-500/70 bg-rose-600/20 text-rose-300'
       : 'border-slate-600 bg-slate-800/60 text-slate-300';
   return <span className={`inline-flex min-w-[64px] justify-center rounded-md border px-2 py-0.5 text-xs font-extrabold ${style}`}>{decision || 'WAIT'}</span>;
+}
+
+function TradeDirection({ decision, side, active, activeSide }: {
+  decision: string | null | undefined; side: Side | null | undefined; active: boolean; activeSide: Side | null;
+}) {
+  const signalSide = decision === 'BUY CE' ? 'CE' : decision === 'BUY PE' ? 'PE' : null;
+  const toneSide = active ? activeSide : signalSide;
+  const text = active
+    ? activeSide ? `OPEN POSITION · BUY ${activeSide === 'CE' ? 'CALL (CE)' : 'PUT (PE)'}` : 'OPEN POSITION · OPTION SIDE UNAVAILABLE'
+    : signalSide ? `QUALIFIED SIGNAL · BUY ${signalSide === 'CE' ? 'CALL (CE)' : 'PUT (PE)'}`
+      : side ? `DIRECTIONAL BIAS · ${side === 'CE' ? 'CALL (CE)' : 'PUT (PE)'} · NOT A BUY SIGNAL`
+        : 'WAIT · NO CE/PE SIGNAL';
+  const tone = toneSide === 'CE' ? 'border-emerald-500 bg-emerald-950 text-emerald-100'
+    : toneSide === 'PE' ? 'border-cyan-500 bg-cyan-950 text-cyan-100'
+      : 'border-amber-500 bg-amber-950 text-amber-100';
+  return (
+    <span role="status" aria-live="polite"
+      className={`inline-flex max-w-full items-center rounded-lg border px-3 py-1.5 text-xs font-black leading-tight sm:text-sm ${tone}`}>
+      {text}
+    </span>
+  );
 }
 
 function Card({ title, icon, aside, children, className = '' }: {
@@ -408,15 +431,21 @@ export default function AlgoDeskSection({ marketData = EMPTY_MARKET_DATA }: {
             ? `${cardChange.change > 0 ? '+' : ''}${PRICE.format(cardChange.change)} (${cardChange.changePercent > 0 ? '+' : ''}${cardChange.changePercent.toFixed(2)}%)`
             : 'Change —';
           const entry = cardActive ? (cardActive.entry_price || cardActive.limit) : cardTrade?.entry_price;
-          const stop = cardActive?.stop ?? cardTrade?.initial_stop ?? cardTrade?.stop;
-          const target = cardActive?.target ?? cardTrade?.target;
+          const stop = cardActive ? cardActive.stop : cardTrade?.initial_stop ?? cardTrade?.stop;
+          const target = cardActive ? cardActive.target : cardTrade?.target;
           const tradePnl = cardActive?.unrealized ?? cardTrade?.net_pnl;
+          const cardDecision = cardSignal?.decision ?? live?.decision;
+          const actionable = cardDecision === 'BUY CE' || cardDecision === 'BUY PE';
+          const activeSide = cardActive?.contract.side ??
+            (cardActive?.contract.trading_symbol.endsWith('CE') ? 'CE'
+              : cardActive?.contract.trading_symbol.endsWith('PE') ? 'PE' : null);
           const rulePercent = cardSignal && cardSignal.total > 0
             ? Math.round(cardSignal.passed / cardSignal.total * 100) : null;
           const cardMode = !item ? 'LOADING'
-            : cardEnabled ? status?.armed && status.entry_window ? 'ACTIVE' : 'ON · WAITING' : 'MANUAL';
+            : cardEnabled ? status?.armed && status.entry_window ? 'AUTO · SCANNING' : 'ON · WAITING' : 'MANUAL';
           const trailingLabel = cardActive?.trailing_active ? 'Active'
-            : limits ? `Arms at ${limits.trail_start_r}R` : '—';
+            : cardActive && limits ? `Arms at ${limits.trail_start_r}R`
+              : cardTrade ? 'Closed · not active' : '—';
           return (
             <article key={key} className={`min-w-0 overflow-hidden rounded-2xl border bg-[#09151f] transition-colors ${
               selected === key ? 'border-emerald-500/70 shadow-[0_0_24px_rgba(16,185,129,.08)]' : 'border-slate-700/80 hover:border-slate-500'}`}>
@@ -467,7 +496,7 @@ export default function AlgoDeskSection({ marketData = EMPTY_MARKET_DATA }: {
                     </button>
                   </div>
                   <span className={`flex h-9 min-w-28 items-center justify-center whitespace-nowrap rounded-full border px-3 text-xs font-bold ${
-                    cardMode === 'ACTIVE' ? 'border-emerald-500/50 bg-emerald-500/10 text-emerald-300'
+                    cardMode === 'AUTO · SCANNING' ? 'border-emerald-500/50 bg-emerald-500/10 text-emerald-300'
                       : cardMode === 'ON · WAITING' ? 'border-cyan-500/40 bg-cyan-500/10 text-cyan-200'
                         : 'border-slate-600 bg-slate-800/70 text-slate-300'}`}>
                     <span className="mr-1.5 text-emerald-400">●</span>{cardMode}
@@ -479,13 +508,18 @@ export default function AlgoDeskSection({ marketData = EMPTY_MARKET_DATA }: {
                 <section className="qep-trade-panel min-w-0 rounded-2xl border border-emerald-700/60 bg-[linear-gradient(145deg,#08251d,#0a1a22_75%,#08141c)] p-4 sm:p-5"
                   aria-label={`${label} trade setup`}>
                   <div className="flex flex-wrap items-center justify-between gap-3">
-                    <div className="flex min-w-0 items-center gap-3">
-                      <SignalBadge decision={cardSignal?.side ? `BUY ${cardSignal.side}` : live?.decision ?? cardSignal?.decision} />
-                      <h3 className="truncate text-lg font-extrabold text-white sm:text-xl">
-                        {cardActive?.contract.trading_symbol ?? cardTrade?.trading_symbol ?? `${INDEX_LABEL[cardSymbol]} · No qualified contract`}
+                    <div className="flex min-w-0 flex-wrap items-center gap-2 sm:gap-3">
+                      <TradeDirection decision={cardDecision} side={cardSignal?.side ?? live?.side}
+                        active={cardActive !== null} activeSide={activeSide} />
+                      <h3 className="min-w-0 truncate text-base font-extrabold text-white sm:text-lg">
+                        {cardActive?.contract.trading_symbol
+                          ?? (actionable ? `${INDEX_LABEL[cardSymbol]} · Candidate signal, no active position`
+                            : cardTrade?.trading_symbol ? `Last trade · ${cardTrade.trading_symbol}`
+                              : `${INDEX_LABEL[cardSymbol]} · No qualified CE/PE entry`)}
                       </h3>
                     </div>
-                    <span className="rounded-lg border border-emerald-500/40 bg-emerald-950/50 px-3 py-1.5 text-xs font-bold text-emerald-200">
+                    <span aria-label="Current setup rule results" className="rounded-lg border border-emerald-500/40 bg-emerald-950/50 px-3 py-1.5 text-xs font-bold text-emerald-200">
+                      CURRENT SETUP ·{' '}
                       {cardSignal ? `${cardSignal.passed} / ${cardSignal.total} RULES PASSED` : 'RULE CHECKS UNAVAILABLE'}
                     </span>
                   </div>
@@ -496,8 +530,8 @@ export default function AlgoDeskSection({ marketData = EMPTY_MARKET_DATA }: {
                   </p>
                   <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
                     {([
-                      { title: 'BUY PRICE', value: price(entry), color: 'emerald', icon: <TrendingUp size={16} /> },
-                      { title: 'STOP LOSS', value: price(stop), color: 'rose', icon: <ShieldCheck size={16} /> },
+                      { title: cardActive ? 'BUY PRICE' : cardTrade ? 'LAST BUY PRICE' : 'BUY PRICE', value: price(entry), color: 'emerald', icon: <TrendingUp size={16} /> },
+                      { title: cardActive ? 'STOP LOSS' : cardTrade ? 'LAST STOP LOSS' : 'STOP LOSS', value: price(stop), color: 'rose', icon: <ShieldCheck size={16} /> },
                       { title: 'TRAILING SL', value: trailingLabel, color: 'amber', icon: <Activity size={16} /> },
                       { title: 'TARGET', value: price(target), color: 'emerald', icon: <BarChart3 size={16} /> },
                     ] as const).map(level => (
@@ -517,10 +551,13 @@ export default function AlgoDeskSection({ marketData = EMPTY_MARKET_DATA }: {
                   </div>
                   <div className="mt-4 grid grid-cols-2 gap-3 border-b border-slate-700/70 pb-4 text-center sm:grid-cols-4">
                     <div><p className="text-xs text-slate-400">Target Plan</p><b className="text-base text-white">{limits ? `${limits.target_r}R` : '—'}</b></div>
-                    <div><p className="text-xs text-slate-400">Quantity</p><b className="text-base text-white">{cardActive ? cardActive.filled || cardActive.quantity : '—'}</b></div>
-                    <div><p className="text-xs text-slate-400">Max Loss</p><b className="text-base text-rose-300">{limits ? rupees(limits.risk_per_trade) : '—'}</b></div>
-                    <div><p className="text-xs text-slate-400">P&amp;L</p><b className={`text-base ${tone(tradePnl)}`}>{signedRupees(tradePnl)}</b></div>
+                    <div><p className="text-xs text-slate-400">Quantity</p><b className="text-base text-white">{cardActive ? cardActive.filled || cardActive.quantity : cardTrade?.filled || '—'}</b></div>
+                    <div><p className="text-xs text-slate-400">Risk cap / trade</p><b className="text-base text-rose-300">{limits ? rupees(limits.risk_per_trade) : '—'}</b></div>
+                    <div><p className="text-xs text-slate-400">{cardActive ? 'Unrealized P&L' : cardTrade ? 'Last trade P&L' : 'Trade P&L'}</p><b className={`text-base ${tone(tradePnl)}`}>{signedRupees(tradePnl)}</b></div>
                   </div>
+                  <p className="mt-2 text-xs text-amber-200/90">
+                    Risk cap is a plan, not a guaranteed maximum; gaps and slippage can increase losses.
+                  </p>
                   <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
                     {([
                       ['Trades today', item ? `${item.today.trades} / ${limits?.per_algo_max_trades ?? '—'}` : '—'],
@@ -542,6 +579,11 @@ export default function AlgoDeskSection({ marketData = EMPTY_MARKET_DATA }: {
                             : 'No trade recorded for this strategy'}
                       </b>
                       {cardActive && <span className="text-xs text-slate-400">{cardActive.filled}/{cardActive.quantity} filled · Entry {price(cardActive.entry_price)}</span>}
+                      {!cardActive && cardTrade && (
+                        <span className="text-xs text-slate-400">
+                          Filled {cardTrade.filled} · Entry {price(cardTrade.entry_price)} · Exit {price(cardTrade.exit_price)}
+                        </span>
+                      )}
                     </div>
                     {cardActive && (
                       <button type="button" onClick={() => exitAlgoTrade(cardActive)} disabled={busy || Boolean(cardActive.exit_requested)}
@@ -550,6 +592,36 @@ export default function AlgoDeskSection({ marketData = EMPTY_MARKET_DATA }: {
                       </button>
                     )}
                   </div>
+                  {!cardActive && cardTrade && (
+                    <details className="mt-3 rounded-lg border border-slate-700/70 bg-slate-950/35 p-3">
+                      <summary className="cursor-pointer text-xs font-bold text-cyan-200">Entry-time signal checks</summary>
+                      {cardTrade.entry_context?.rules?.length ? (
+                        <div className="mt-2">
+                          <p className="text-xs text-slate-300">
+                            {cardTrade.entry_context.strategy_name ?? 'Last trade'} ·{' '}
+                            {cardTrade.entry_context.rules.filter(rule => rule.passed === true).length}/
+                            {cardTrade.entry_context.rules.length} rules passed at entry
+                          </p>
+                          <ul className="mt-2 space-y-1">
+                            {cardTrade.entry_context.rules.map((rule, ruleIndex) => (
+                              <li key={`${rule.label}-${ruleIndex}`} className="flex flex-wrap justify-between gap-x-3 text-xs">
+                                <span className="text-slate-300">{rule.label}</span>
+                                <span className={rule.passed === true ? 'text-emerald-300' : rule.passed === false ? 'text-rose-300' : 'text-amber-300'}>
+                                  {rule.passed === true ? 'PASS' : rule.passed === false ? 'FAIL' : 'WAIT'}
+                                  {rule.value == null ? '' : ` · ${rule.value}`}
+                                </span>
+                              </li>
+                            ))}
+                          </ul>
+                          {cardTrade.entry_context.reason && (
+                            <p className="mt-2 text-xs text-slate-400">{cardTrade.entry_context.reason}</p>
+                          )}
+                        </div>
+                      ) : (
+                        <p className="mt-2 text-xs text-slate-400">Entry-time rule details were not saved for this trade.</p>
+                      )}
+                    </details>
+                  )}
                 </section>
 
                 <aside className="min-w-0 rounded-2xl border border-slate-700/80 bg-[#101b29] p-4 sm:p-5" aria-label={`${label} trade status`}>

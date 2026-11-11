@@ -16,7 +16,7 @@ Candidates use fresh shared option quotes, available ask depth for the configure
 
 ## Live controls and risk
 
-- Live approval is OFF by default and is reset OFF when the backend restarts.
+- Live approval is OFF by default and is reset OFF when the backend restarts; refreshing the dashboard page does not reset a manually enabled approval.
 - Configure 1–5 lots. The owner can set the strategy approval ON or OFF at any time. ON is a standing approval: outside the weekday 09:15–15:15 IST entry window, no broker preflight or orders run. Before an eligible signal can reach the broker, QuantEdge Pro performs preflight and session arming; failed checks leave orders blocked and expose the reason. Backend restart resets approval to OFF.
 - Daily limits are five entries and INR 1,500 realized/open loss. Existing account-wide limits, static-IP checks, market-session gates, broker quote checks, margin checks, and reconciliation remain in force.
 - AQTE, QuantEdge Pro, and 12 Algo Desk entry approvals are independent. They share one serialized execution manager, which allows only one pending/open automated trade at a time; other enabled scans wait and then evaluate fresh signals. The monitor scans QuantEdge Pro, 12 Algo Desk, then AQTE.

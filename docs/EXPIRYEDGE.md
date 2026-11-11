@@ -1,9 +1,9 @@
 # ExpiryEdge AI Algo
 
 ExpiryEdge AI is an isolated expiry configuration and contract-readiness module.
-Its frontend appears as an individual section immediately below MorningEdge in
-the AQTE dashboard and is also available at `/expiry-edge-ai`, with a navigation
-link in the main dashboard header. API routes, durable weekday configuration,
+Its frontend appears as an individual section in the AQTE dashboard and is also
+available at `/expiry-edge-ai`, with a navigation link in the main dashboard header.
+API routes, durable weekday configuration,
 and contract inspection live in `backend/routers/expiryedge.py` and
 `backend/services/expiryedge.py`. NIFTY, BANK NIFTY, and SENSEX each have an
 independently saved weekday schedule.
@@ -25,7 +25,9 @@ position state, and risk controls; it never manages manual trades or the 12 Algo
 Live execution is OFF by default and requires both `AQTE_LIVE_ENABLED=true` and
 `EXPIRYEDGE_AI_LIVE_ENABLED=true`, owner approval in the panel, and the normal daily
 Kite preflight/arming checks. The independent feature flag is deliberately false by
-default and should only be enabled after mock validation and operator checks.
+default and should only be enabled after mock validation and operator checks. Its
+owner approval resets to OFF after every backend restart and must be manually enabled
+again; any existing position remains managed.
 Dashboard quote connectivity is displayed separately from each ExpiryEdge evaluator
 feed; a connected dashboard socket alone does not mean the backend has fresh futures
 bars.

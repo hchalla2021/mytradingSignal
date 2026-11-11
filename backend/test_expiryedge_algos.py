@@ -268,7 +268,7 @@ class ExpiryEdgeLaneTests(unittest.TestCase):
     def enable(self, algo=ALGO):
         return self.live.set_expiryedge_algo(algo, True)
 
-    def test_defaults_off_and_standing_on_survives_restart(self):
+    def test_defaults_off_and_manual_on_resets_off_after_restart(self):
         self.assertFalse(any(self.live.state["expiryedge"]["algos"].values()))
         self.assertEqual(set(self.live.state["expiryedge"]["algos"]), set(ALGO_KEYS))
         self.enable()
@@ -276,7 +276,7 @@ class ExpiryEdgeLaneTests(unittest.TestCase):
         restored = self.new_service()
         restored.initialize()
         self.addCleanup(restored.release_owner)
-        self.assertTrue(restored.state["expiryedge"]["algos"][ALGO])
+        self.assertFalse(restored.state["expiryedge"]["algos"][ALGO])
         self.assertFalse(restored.state["expiryedge"]["algos"][OTHER])
 
     def test_invalid_saved_configuration_blocks_startup(self):
@@ -387,7 +387,9 @@ class ExpiryEdgeLaneTests(unittest.TestCase):
         self.live.state["trades"].append(dict(
             id="XEA" + "c" * 13, owner="EXPIRYEDGE", algo=ALGO, symbol="NIFTY", contract=asdict(CONTRACT),
             entry_at=NOW - 600, exit_at=NOW - 300, entry_price=100.0, exit_price=140.0, filled=CONTRACT.lot_size,
-            net_pnl=1150.0, exit_requested=None, stop=90.0, target=140.0, initial_stop=80.0))
+            net_pnl=1150.0, exit_requested=None, stop=90.0, target=140.0, initial_stop=80.0,
+            execution_context={"strategy_name": "Test Algo", "reason": "All rules passed",
+                               "rules": [{"label": "Confirmation", "passed": True, "value": "close held"}]}))
         status = self.live.expiryedge_status("NIFTY")
         self.assertEqual(set(status["signals_by_symbol"]), {"NIFTY", "BANKNIFTY", "SENSEX"})
         self.assertEqual(status["signals"], status["signals_by_symbol"]["NIFTY"])
@@ -396,6 +398,10 @@ class ExpiryEdgeLaneTests(unittest.TestCase):
         row = status["trades"][0]
         self.assertEqual((row["side"], row["trading_symbol"], row["algo"]),
                          (CONTRACT.side, CONTRACT.trading_symbol, ALGO))
+        self.assertEqual(row["entry_context"], {
+            "strategy_name": "Test Algo", "reason": "All rules passed",
+            "rules": [{"label": "Confirmation", "passed": True, "value": "close held"}],
+        })
         algo = next(item for item in status["algos"] if item["key"] == ALGO)
         self.assertEqual((algo["today"]["trades"], algo["today"]["net_pnl"]), (1, 1150.0))
         self.assertEqual(next(item for item in status["algos"] if item["key"] == OTHER)["today"]["trades"], 0)

@@ -67,7 +67,6 @@ desktop.ini
 dump.rdb
 *.rdb
 backend/data/chart_history.sqlite3*
-backend/data/morningedge_auth/
 backend/data/paper_trading/
 backend/data/aqte/
 backend/data/instrument_catalog/
@@ -83,4 +82,3 @@ htmlcov/
 *.seed
 *.pid.lock
 .env.example
-!morningedge/.env.example

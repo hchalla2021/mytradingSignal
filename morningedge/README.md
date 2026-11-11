@@ -1,54 +1,25 @@
-# MorningEdge
+# MorningEdge (standalone live market monitor)
 
-MorningEdge has a separate API, database, Redis instance, strategies, and deployment.
-Per the selected shared-login behavior, it now reuses the main application's Zerodha
-login and broker token rather than maintaining a second Zerodha login.
+Independent FastAPI service; no backend, AQTE, or ExpiryEdge imports. Run with
+`uvicorn main:app --app-dir morningedge --port 8010 --env-file morningedge/.env`.
+Copy `.env.example` to `.env` for service-local settings. The service reads only
+`ZERODHA_API_KEY` and `ZERODHA_ACCESS_TOKEN` from `backend/.env`; neither value
+is returned by an endpoint or sent to the browser. The service does not read the
+Zerodha API secret or unrelated backend variables.
 
-## Zerodha connection
+The browser does not ask for a separate MorningEdge token. The frontend server
+proxy validates the existing app-access session cookie and device ID before it
+requests status or relays the feed control. Keep the service reachable only over
+localhost or a private container network.
 
-Use the existing Zerodha login in the main application header. The main backend writes
-only the Kite API key and current access token to the shared
-`mytrading-zerodha-auth` Docker volume after login and at startup. The Kite API secret
-and other backend environment values are not shared. MorningEdge reads this file
-read-only, validates the token with Zerodha before issuing its short-lived HttpOnly
-browser session, and then uses the shared token. There is no separate MorningEdge
-**Connect Zerodha** button or token prompt.
+The operator can turn the independent KiteTicker feed ON or OFF in the section.
+It provides real NIFTY, BANKNIFTY, and SENSEX ticks, pre-open observations from
+09:00–09:08 IST, opening-range observations from 09:15–09:20 IST, and a
+market-derived candidate signal. Feed OFF disconnects the socket and clears
+live ticks. Missing credentials, ticks, contracts, freshness, or quote quality
+are surfaced as errors or WAIT states instead of synthetic values.
 
-Start the main backend stack first so it creates and populates the shared token volume.
-Then copy `.env.example` to `.env`, configure `MORNINGEDGE_FRONTEND_URL`,
-`MORNINGEDGE_PUBLIC_API_URL`, PostgreSQL password, and other service settings, and run
-from the repository root:
-
-```powershell
-docker compose --env-file morningedge/.env -f docker-compose.morningedge.yml up --build
-```
-
-The public API origin must use HTTPS and route HTTP and WSS to port 8010. Build the
-frontend with `NEXT_PUBLIC_MORNINGEDGE_API_URL` set to that API origin. Keep the frontend
-and API on the same site (for example, `app.example.com` and `api.example.com`) so
-browser cookie policies allow the authenticated session. Never commit credentials or
-the shared token volume.
-
-## Readiness limitations
-
-Status/config responses include readiness, block reasons, session gates, snapshots, and
-reported metrics. Status reports per-instrument feed readiness only for fresh,
-timestamp-validated ticks received by the pipeline; it does not claim that strategies
-consumed or evaluated those ticks. The strategy worker list is explicitly
-`NOT IMPLEMENTED` until evaluation is actually implemented. Model validation is true
-only when explicitly configured as validated. Configure PostgreSQL and Redis URLs, host allowlist IP (defaults to
-`159.65.147.167`), and a validated model artifact before readiness can change.
-
-This release does not connect/persist through PostgreSQL or Redis in a running worker;
-does not provide a KiteTicker worker, instrument mapping, validated model, live order
-placement, paper trading, broker execution, or trade management. The adapter and API
-scaffold are not production trading functionality. Live orders remain disabled and
-arming/approval cannot enable them. Do not treat this service as production-validated or
-assume latency targets. Pre-open analysis is scheduled from 09:00 Asia/Kolkata, orders
-cannot be enabled before 09:15, and new entries end at 10:30.
-
-Run focused tests:
-
-```powershell
-python -m pytest -q
-```
+**Broker order execution is not implemented.** The current service only monitors
+market data and reports candidate signals; it creates no positions. Trade
+execution remains OFF. Install dependencies with
+`pip install -r morningedge/requirements.txt`.

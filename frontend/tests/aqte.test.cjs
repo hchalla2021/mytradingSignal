@@ -56,8 +56,9 @@ function harness(filename = 'AQTESection.tsx', now, sharedProduction = false, se
       if (id === 'react') return react;
       if (id === 'react/jsx-runtime') return require(id);
       if (id === 'lucide-react') return Object.fromEntries(
-        ['Activity', 'AlertCircle', 'ArrowDown', 'ArrowUp', 'BarChart3', 'Bell', 'Bot', 'Briefcase', 'Check', 'CheckCircle2',
-          'ChevronDown', 'Clock3', 'Home', 'Loader2', 'Play', 'Save', 'Settings', 'ShieldCheck', 'TrendingUp', 'Zap'].map(name => [name, () => null]));
+        ['Activity', 'AlertCircle', 'ArrowDown', 'ArrowUp', 'BarChart3', 'Bell', 'Bot', 'Briefcase', 'Check',
+          'CheckCircle2', 'ChevronDown', 'Clock3', 'Home', 'Loader2', 'Play', 'Save', 'Settings', 'ShieldCheck',
+          'TrendingUp', 'Zap'].map(name => [name, () => null]));
       if (id === '@/hooks/useAuth') return { useAuth: () => ({ isAuthenticated: false }) };
       if (id === '@/lib/api-config') return { API_CONFIG: { endpoint: p => p, sharedProduction } };
       if (id === '@/components/AQTELiveController') return { default: () => null };
@@ -101,7 +102,6 @@ function harness(filename = 'AQTESection.tsx', now, sharedProduction = false, se
       throw new Error(`Unexpected dependency ${id}`);
     },
   };
-  if (filename === 'MorningEdgeSection.tsx') context.process = { env: {} };
   if (filename === 'AlgoDeskSection.tsx') {
     context.window = { confirm: message => { confirms.push(message); return confirms.answer ?? true; } };
   }
@@ -1857,6 +1857,8 @@ function livePositionFixture(overrides = {}) {
   };
 }
 const autoSwitch = tree => nodes(tree).find(n => n.type === 'button' && n.props.className?.startsWith('aqte-auto-switch '));
+const autoSwitchLabel = tree => autoSwitch(tree)?.props['aria-checked'] === true ? 'TRADE ON' :
+  autoSwitch(tree)?.props['aria-checked'] === false ? 'TRADE OFF' : 'TRADE —';
 
 function positionFixture() {
   return {
@@ -2243,7 +2245,8 @@ test('AQTE refresh restores highlighted backend ON, OFF and emergency states usi
     const tree = h.render();
     const control = nodes(tree).find(n => n.props?.role === 'switch');
     assert.match(control.props.className, new RegExp(`aqte-auto-switch-${variant}`));
-    assert.match(text(control), new RegExp(`Auto Trade\\s+${label === 'EMERGENCY STOP' ? 'STOPPED' : label}`));
+    assert.match(text(control), /AUTO TRADE ON OFF/);
+    assert.equal(nodes(control).some(n => n.props?.className === 'aqte-auto-choice-active'), true);
     assert.equal(nodes(tree).filter(n => n.props?.role === 'switch').length, 1, 'One compact switch replaces separate ON/OFF buttons');
     assert.equal(nodes(tree).filter(n => n.type === 'button').length, label === 'EMERGENCY STOP' ? 2 : 1);
     if (label === 'EMERGENCY STOP') assert.equal(control.props.disabled, true);
@@ -2371,7 +2374,7 @@ test('owner emergency reset is confirmed separately and restores OFF without sta
   assert.equal(posts[0].options.credentials, 'include');
   assert.equal(posts[0].options.headers['X-AQTE-Intent'], 'manual-live-control');
   assert.equal(posts[0].options.headers['X-Device-Id'], 'test-device');
-  assert.equal(text(autoSwitch(h.render())), 'TRADE OFF');
+  assert.equal(autoSwitchLabel(h.render()), 'TRADE OFF');
   assert.equal(autoSwitch(h.render()).props.disabled, false);
   assert.ok(!reset());
   autoSwitch(h.render()).props.onClick();
@@ -2390,7 +2393,7 @@ test('reset recovery does not bypass backend live enablement', async () => {
   h.respond({ ...stopped, killed: false });
   nodes(h.render()).find(n => n.type === 'button' && text(n) === 'Confirm reset · keep OFF').props.onClick();
   await settle();
-  assert.equal(text(autoSwitch(h.render())), 'TRADE OFF');
+  assert.equal(autoSwitchLabel(h.render()), 'TRADE OFF');
   assert.equal(autoSwitch(h.render()).props.disabled, true);
   assert.match(text(h.render()), /ON locked · AQTE_LIVE_ENABLED is false/);
   assert.ok(h.requests.every(r => r.url.endsWith('/status') || r.url.endsWith('/reset')));
@@ -2443,7 +2446,7 @@ test('minimal ON/OFF click sends one command without a confirmation overlay', as
   h.respond({ ...status, automation_wanted: true });
   autoSwitch(h.render()).props.onClick();
   await settle();
-  assert.equal(text(autoSwitch(h.render())), 'TRADE ON');
+  assert.equal(autoSwitchLabel(h.render()), 'TRADE ON');
   assert.equal(nodes(h.render()).filter(n => n.props?.role === 'dialog').length, 0);
   assert.equal(h.requests.filter(r => r.options.method === 'POST').length, 1);
   cleanup();
@@ -2480,7 +2483,7 @@ test('standing ON remains silent while the market is closed and can be switched 
   autoSwitch(h.render()).props.onClick();
   await settle();
   assert.equal(autoSwitch(h.render()).props['aria-checked'], true);
-  assert.equal(text(autoSwitch(h.render())), 'TRADE ON');
+  assert.equal(autoSwitchLabel(h.render()), 'TRADE ON');
   assert.doesNotMatch(text(h.render()), /ON ·\s+Waiting for market/);
   assert.doesNotMatch(text(h.render()), /ON ·\s+Waiting for market/);
   assert.equal(nodes(h.render()).filter(n => n.props?.role === 'alert').length, 0);
@@ -2508,7 +2511,7 @@ test('standing ON acknowledgements must match the requested state', async () => 
     h.respond(response);
     autoSwitch(h.render()).props.onClick();
     await settle();
-    assert.equal(text(autoSwitch(h.render())), 'TRADE —');
+    assert.equal(autoSwitchLabel(h.render()), 'TRADE —');
     assert.match(text(h.render()), /Backend did not confirm the requested automation state/);
     cleanup();
   }
@@ -2531,7 +2534,7 @@ test('reset failures and inconsistent acknowledgements never present a confirmed
     h.respond(response);
     nodes(h.render()).find(n => n.type === 'button' && text(n) === 'Confirm reset · keep OFF').props.onClick();
     await settle();
-    assert.equal(text(autoSwitch(h.render())), 'TRADE —');
+    assert.equal(autoSwitchLabel(h.render()), 'TRADE —');
     assert.equal(autoSwitch(h.render()).props.disabled, true);
     assert.ok(nodes(h.render()).find(n => n.props?.role === 'alert'));
     assert.ok(!nodes(h.render()).some(n => n.type === 'button' && text(n) === 'Reset emergency stop'));
@@ -2807,15 +2810,20 @@ test('index tabs switch instantly: charts prefetch, stay mounted and controls re
 
 test('compact LIVE TRADE ON/OFF button is silent and updates after backend confirmation', async () => {
   const h = harness('AQTEAutomationSwitch.tsx');
+  const styles = readFileSync(path.join(__dirname, '..', 'app', 'globals.css'), 'utf8');
+  assert.match(styles, /\.aqte-auto-switch-off \.aqte-auto-switch-state > span:not\(\.aqte-auto-choice-active\) \{ background: transparent; box-shadow: none; \}/);
+  assert.match(styles, /\.aqte-auto-switch-off \.aqte-auto-switch-state > \.aqte-auto-choice-active \{ background: #64748b; color: #fff;/);
   const initial = h.render();
-  assert.equal(text(autoSwitch(initial)), 'TRADE —');
+  assert.equal(autoSwitchLabel(initial), 'TRADE —');
   assert.equal(autoSwitch(initial).props['aria-checked'], undefined);
   assert.equal(autoSwitch(initial).props.disabled, true);
   const off = { ...liveFixture(), enabled: true };
   const cleanup = h.mount(off);
   await settle();
   const pill = autoSwitch(h.render());
-  assert.equal(text(pill), 'TRADE OFF');
+  assert.equal(autoSwitchLabel(h.render()), 'TRADE OFF');
+  assert.doesNotMatch(text(h.render()), /Entries are OFF\. Turn Auto Trade ON/);
+  assert.equal(nodes(pill).filter(n => n.props?.className === 'aqte-auto-choice-active').length, 1);
   assert.equal(nodes(h.render()).filter(n => n.type === 'button').length, 1);
   let finish;
   h.respond(new Promise(resolve => { finish = resolve; }));
@@ -2828,6 +2836,7 @@ test('compact LIVE TRADE ON/OFF button is silent and updates after backend confi
   finish({ ...off, armed: true, automation_on: true });
   await settle();
   assert.equal(autoSwitch(h.render()).props['aria-checked'], true);
+  assert.equal(nodes(autoSwitch(h.render())).find(n => n.props?.className === 'aqte-auto-choice-active')?.props.children, 'ON');
   assert.equal(autoSwitch(h.render()).props.disabled, false, 'Confirmed ON can always request OFF');
   h.respond(off);
   autoSwitch(h.render()).props.onClick();
@@ -2852,19 +2861,19 @@ test('unauthorized, stale and rejected switch responses never masquerade as conf
   await settle();
   assert.equal(h.accessExpired, 1, 'a 401 asks the access gate to re-verify and show sign-in');
   assert.match(text(h.render()), /Sign in with the configured owner/);
-  assert.equal(text(autoSwitch(h.render())), 'TRADE —');
+  assert.equal(autoSwitchLabel(h.render()), 'TRADE —');
   assert.equal(autoSwitch(h.render()).props['aria-checked'], undefined);
   assert.doesNotMatch(autoSwitch(h.render()).props.className, /switch-on|switch-off/);
   assert.ok(nodes(h.render()).find(n => n.props?.['aria-label'] === 'Stop AQTE new entries'));
   await h.poll({ ...status, generated_at: Date.now() / 1000 - 11 });
   assert.match(text(h.render()), /stale/);
-  assert.equal(text(autoSwitch(h.render())), 'TRADE —');
+  assert.equal(autoSwitchLabel(h.render()), 'TRADE —');
   await h.poll(status);
   h.respond(status);
   autoSwitch(h.render()).props.onClick();
   await settle();
   assert.match(text(h.render()), /did not confirm/);
-  assert.equal(text(autoSwitch(h.render())), 'TRADE —');
+  assert.equal(autoSwitchLabel(h.render()), 'TRADE —');
   cleanup();
 });
 
@@ -2878,15 +2887,15 @@ test('browser clock skew against production never turns a fresh Auto Trade statu
     const on = { ...liveFixture(), enabled: true, armed: true, automation_on: true, generated_at: serverSeconds(offset) };
     const cleanup = h.mount(on);
     await settle();
-    assert.equal(text(autoSwitch(h.render())), 'TRADE ON', `server ${offset} ms from browser`);
+    assert.equal(autoSwitchLabel(h.render()), 'TRADE ON', `server ${offset} ms from browser`);
     assert.equal(autoSwitch(h.render()).props['aria-checked'], true);
     assert.doesNotMatch(text(h.render()), /stale|verify acknowledgement/);
     await h.poll({ ...on, generated_at: serverSeconds(offset) });
-    assert.equal(text(autoSwitch(h.render())), 'TRADE ON');
+    assert.equal(autoSwitchLabel(h.render()), 'TRADE ON');
     h.respond({ ...on, automation_on: false, generated_at: serverSeconds(offset) });
     autoSwitch(h.render()).props.onClick();
     await settle();
-    assert.equal(text(autoSwitch(h.render())), 'TRADE OFF');
+    assert.equal(autoSwitchLabel(h.render()), 'TRADE OFF');
     assert.match(text(h.render()), /Saved automatically.*OFF/);
     assert.doesNotMatch(text(h.render()), /stale|verify acknowledgement/);
     cleanup();
@@ -2896,7 +2905,7 @@ test('browser clock skew against production never turns a fresh Auto Trade statu
   blind.render();
   const cleanup = blind.mount({ ...liveFixture(), enabled: true, generated_at: serverSeconds(1400) });
   await settle();
-  assert.equal(text(autoSwitch(blind.render())), 'TRADE —');
+  assert.equal(autoSwitchLabel(blind.render()), 'TRADE —');
   cleanup();
 });
 
@@ -2907,7 +2916,7 @@ test('server-aligned clock still rejects stale and future-dated status, first re
     const cleanup = h.mount({ ...liveFixture(), enabled: true, armed: true, automation_on: true,
       generated_at: serverSeconds(1400) + shift });
     await settle();
-    assert.equal(text(autoSwitch(h.render())), 'TRADE —', `generated_at ${shift} s from server time`);
+    assert.equal(autoSwitchLabel(h.render()), 'TRADE —', `generated_at ${shift} s from server time`);
     assert.match(text(h.render()), /stale/);
     cleanup();
   }
@@ -2916,11 +2925,11 @@ test('server-aligned clock still rejects stale and future-dated status, first re
   const on = { ...liveFixture(), enabled: true, armed: true, automation_on: true };
   const cleanup = h.mount({ ...on, generated_at: serverSeconds(-45_000) });
   await settle();
-  assert.equal(text(autoSwitch(h.render())), 'TRADE ON');
+  assert.equal(autoSwitchLabel(h.render()), 'TRADE ON');
   await h.poll({ ...on, generated_at: serverSeconds(-45_000) - 11 });
-  assert.equal(text(autoSwitch(h.render())), 'TRADE —', 'a learned offset never launders an old status');
+  assert.equal(autoSwitchLabel(h.render()), 'TRADE —', 'a learned offset never launders an old status');
   await h.poll({ ...on, generated_at: serverSeconds(-45_000) });
-  assert.equal(text(autoSwitch(h.render())), 'TRADE ON');
+  assert.equal(autoSwitchLabel(h.render()), 'TRADE ON');
   cleanup();
 });
 
@@ -2999,12 +3008,12 @@ test('a cached Date header that trails by up to 2 s never flickers fresh Auto Tr
       const cleanup = h.mount({ ...on, generated_at: serverSeconds(offset) });
       await settle();
       for (let poll = 0; poll < 6; poll++) {
-        assert.equal(text(autoSwitch(h.render())), 'TRADE ON', `${JSON.stringify(serverClock)} offset ${offset} poll ${poll}`);
+        assert.equal(autoSwitchLabel(h.render()), 'TRADE ON', `${JSON.stringify(serverClock)} offset ${offset} poll ${poll}`);
         assert.doesNotMatch(text(h.render()), /stale|UNKNOWN/);
         await h.poll({ ...on, generated_at: serverSeconds(offset) });
       }
       await h.poll({ ...on, generated_at: serverSeconds(offset) - 11 });
-      assert.equal(text(autoSwitch(h.render())), 'TRADE —', 'stale status is still rejected');
+      assert.equal(autoSwitchLabel(h.render()), 'TRADE —', 'stale status is still rejected');
       cleanup();
     }
   }
@@ -3026,47 +3035,6 @@ test('precise X-Server-Time bounds the clock independently of cached payloads an
     const age = display.aqteServerNow(at + 30) - srv / 1000;
     assert.ok(age > -0.05 && age < 0.05, `poll ${i} age ${age}`);
   }
-});
-
-test('MorningEdge index cards show value, points and % from the main Zerodha feed', () => {
-  const now = Date.parse('2026-11-09T10:00:00+05:30');
-  const tick = (symbol, price, change, changePercent, status = 'LIVE', at = now - 1000) => ({ symbol, price, change, changePercent,
-    status, timestamp: new Date(at).toISOString(), high: price, low: price, open: price, close: price - change,
-    volume: 0, oi: 0, pcr: 0, callOI: 0, putOI: 0, trend: 'neutral' });
-  const h = harness('MorningEdgeSection.tsx', now);
-  const card = (tree, symbol) => text(nodes(tree).find(n => n.props?.['aria-label'] === `${symbol} index`)).replace(/\s+/g, ' ');
-  const dot = (tree, symbol) => nodes(nodes(tree).find(n => n.props?.['aria-label'] === `${symbol} index`))
-    .find(n => n.type === 'span' && n.props.className !== 'me-card-note').props.className;
-
-  let tree = h.render();
-  assert.match(card(tree, 'NIFTY'), /— Waiting for real ticks Zerodha feed not received/);
-  assert.match(text(tree), /Zerodha Offline/);
-
-  const live = { NIFTY: tick('NIFTY', 24857.5, 320.9, 1.31), BANKNIFTY: tick('BANKNIFTY', 58727.65, -954, -1.65),
-    SENSEX: tick('SENSEX', 80565.99, 1255.98, 1.58) };
-  tree = h.render({ marketData: live, isConnected: true });
-  assert.match(card(tree, 'NIFTY'), /24,857\.50 ▲ \+320\.90 pts · \+1\.31% LIVE · Zerodha/);
-  assert.match(card(tree, 'BANKNIFTY'), /58,727\.65 ▼ -954\.00 pts · -1\.65% LIVE · Zerodha/);
-  assert.ok(nodes(tree).find(n => n.props?.className === 'is-down'), 'falling index is styled red');
-  assert.match(card(tree, 'SENSEX'), /80,565\.99 ▲ \+1,255\.98 pts · \+1\.58%/);
-  assert.equal(dot(tree, 'NIFTY'), 'fresh');
-  assert.match(text(tree), /Zerodha Connected/);
-  assert.doesNotMatch(text(tree), /₹24|₹58|₹80/, 'index levels are points, not rupees');
-
-  tree = h.render({ marketData: live, isConnected: false });
-  assert.match(card(tree, 'NIFTY'), /24,857\.50 .*Delayed · last tick/, 'a dropped socket keeps values but stops claiming LIVE');
-  assert.equal(dot(tree, 'NIFTY'), '');
-  const old = { ...live, NIFTY: tick('NIFTY', 24857.5, 320.9, 1.31, 'LIVE', now - 60_000) };
-  assert.match(card(h.render({ marketData: old, isConnected: true }), 'NIFTY'), /Delayed · last tick/);
-
-  const closed = Object.fromEntries(Object.entries(live).map(([key, value]) => [key, { ...value, status: 'CLOSED' }]));
-  tree = h.render({ marketData: closed, isConnected: true });
-  assert.match(card(tree, 'NIFTY'), /24,857\.50 ▲ \+320\.90 pts · \+1\.31% Market closed · last price/);
-  assert.match(text(tree), /Market Closed/);
-  assert.doesNotMatch(text(tree), /Zerodha Connected/);
-
-  const demo = { ...live, NIFTY: tick('NIFTY', 99999, 1, 1, 'DEMO') };
-  assert.match(card(h.render({ marketData: demo, isConnected: true }), 'NIFTY'), /— Waiting for real ticks/, 'demo values are never shown');
 });
 
 test('active protection stays visible with entries OFF; initial SL, trailing and bid target are distinct', () => {
@@ -3731,7 +3699,7 @@ test('phone timeline wraps all six lifecycle steps instead of hiding Exit in a s
 });
 test('header switch reads the shared live feed without its own status poll', async () => {
   const h = harness('AQTEAutomationSwitch.tsx');
-  assert.equal(text(autoSwitch(h.render({ feed: 'pending' }))), 'TRADE —');
+  assert.equal(autoSwitchLabel(h.render({ feed: 'pending' })), 'TRADE —');
   assert.equal(h.mount(), undefined, 'shared mode starts no poll loop');
   await settle();
   assert.equal(h.requests.length, 0);
@@ -3741,23 +3709,25 @@ test('header switch reads the shared live feed without its own status poll', asy
   assert.equal(autoSwitch(tree).props['aria-checked'], true);
   assert.match(text(tree), /Backend confirmed · ON/);
   tree = h.render({ feed: null, feedError: 'Sign in again' });
-  assert.equal(text(autoSwitch(tree)), 'TRADE —');
+  assert.equal(autoSwitchLabel(tree), 'TRADE —');
   assert.equal(autoSwitch(tree).props['aria-checked'], undefined);
   assert.match(text(tree), /Sign in again/);
   assert.ok(nodes(tree).find(n => n.props?.['aria-label'] === 'Stop AQTE new entries'), 'unknown state keeps Request OFF');
   tree = h.render({ feed: { ...on, connection_error: 'Live status unavailable; inspect Kite' } });
-  assert.equal(text(autoSwitch(tree)), 'TRADE —');
+  assert.equal(autoSwitchLabel(tree), 'TRADE —');
   assert.match(text(tree), /Live status unavailable; inspect Kite/);
   assert.equal(h.requests.length, 0);
 });
 
-test('header switch hides only the waiting helper text while retaining its ON state', async () => {
+test('page refresh restores the backend-confirmed ON state', async () => {
   const h = harness('AQTEAutomationSwitch.tsx');
   h.render();
   const cleanup = h.mount({ ...liveFixture(), enabled: true, automation_wanted: true, automation_on: false,
     automation_waiting: 'Market data and pre-open analysis start at 09:00 IST' });
   await settle();
   const tree = h.render();
+  assert.equal(h.requests[0].url, '/api/aqte/live/status');
+  assert.equal(h.requests[0].options.method, 'GET');
   assert.equal(nodes(tree).find(n => n.props?.role === 'switch').props['aria-checked'], true);
   assert.doesNotMatch(text(tree), /Market data and pre-open analysis start at 09:00 IST/);
   cleanup();
@@ -3785,7 +3755,7 @@ test('shared switch publishes command results and ignores a poll that started be
   await settle();
   assert.equal(published.length, 1, 'a failed command does not blank the shared live status');
   tree = h.render({ feed: { ...on, generated_at: Date.now() / 1000 + 0.5 } });
-  assert.equal(text(autoSwitch(tree)), 'TRADE —', 'a status within clock skew of the failed command cannot resolve it');
+  assert.equal(autoSwitchLabel(tree), 'TRADE —', 'a status within clock skew of the failed command cannot resolve it');
   assert.match(text(tree), /Broker timeout/);
   tree = h.render({ feed: { ...on, generated_at: Date.now() / 1000 + 2 } });
   assert.equal(autoSwitch(tree).props['aria-checked'], true);
@@ -3939,7 +3909,7 @@ function deskFixture(overrides = {}, enabled = []) {
     max_drawdown: null, avg_win: null, avg_loss: null, expectancy: null };
   const summary = { status: 'WAITING', decision: 'WAIT', side: null, passed: 3, total: 6, fresh: true };
   const signal = key => ({
-    key, status: 'READY', decision: 'BUY CE', side: 'CE', passed: 5, total: 6, reason: 'Waiting for RSI to cool below 70',
+    key, status: 'READY', decision: 'WAIT', side: 'CE', passed: 5, total: 6, reason: 'Waiting for RSI to cool below 70',
     rules: [
       { id: 'vwap', label: 'Price above VWAP', passed: true, requirement: 'close > VWAP', value: 22010.5 },
       { id: 'rsi', label: 'RSI 55-70', passed: false, requirement: '55 <= RSI <= 70', value: 72.4 },
@@ -4023,12 +3993,60 @@ test('6 Algo Desk is its own section that polls owner-only status and shows six 
   assert.match(value, /Trending/);
   assert.match(value, /5 \/ 6/);
   assert.match(value, /Waiting for RSI to cool below 70/);
+  assert.equal((value.match(/DIRECTIONAL BIAS · CALL \(CE\) · NOT A BUY SIGNAL/g) || []).length, 6);
   assert.match(value, /1 lot · risk ≤ ₹1,000/);
   const toggle = deskSwitch(tree);
   assert.equal(toggle.props['aria-checked'], false);
   assert.equal(toggle.props.disabled, false);
   assert.match(text(toggle), /TRADE\s+OFF/i);
   assert.ok(h.requests.every(r => r.options.method === 'GET'), 'Viewing never sends a command');
+  cleanup();
+});
+
+test('all six Algo Desk setup headings use medium, wrapping responsive text', () => {
+  const desk = readFileSync(path.join(__dirname, '..', 'components', 'AlgoDeskSection.tsx'), 'utf8');
+  assert.match(desk, /flex min-w-0 flex-wrap items-center gap-2 sm:gap-3/);
+  assert.match(desk, /h3 className="min-w-0 truncate text-base font-extrabold text-white sm:text-lg"/);
+});
+
+test('6 Algo Desk shows WAIT and labels closed-trade prices as historical, not live', async () => {
+  const h = harness('AlgoDeskSection.tsx');
+  const props = DESK_PROPS;
+  h.render(props);
+  const fixture = deskFixture({
+    trades: [{
+      id: `XEA${'c'.repeat(13)}`, algo: 'adaptive_vwap_pro', symbol: 'NIFTY',
+      entry_price: 497.8, exit_price: 454.3, filled: 25, net_pnl: -984,
+      entry_at: Date.now() / 1000 - 600, exit_at: Date.now() / 1000 - 300,
+      exit_reason: 'STOP', exit_requested: null, stop: 454.3, initial_stop: 454.3,
+      target: 593.95, trading_symbol: 'NIFTY26N1022000CE', side: 'CE',
+      entry_context: {
+        strategy_name: 'Adaptive VWAP Pro', reason: 'All rules passed',
+        rules: [{ label: 'VWAP pullback', passed: true, value: 'held' }],
+      },
+    }],
+  }, ['adaptive_vwap_pro']);
+  fixture.signals.adaptive_vwap_pro.side = null;
+  const cleanup = h.mount(fixture);
+  await settle();
+  const tree = h.render(props);
+  const value = text(tree);
+  const setup = text(nodes(tree).find(node => node.type === 'section' &&
+    node.props?.['aria-label'] === 'Adaptive VWAP Pro trade setup'));
+  assert.match(setup, /WAIT/);
+  assert.doesNotMatch(setup, /BUY CE/);
+  assert.match(value, /AUTO · SCANNING/);
+  assert.match(value, /Last trade · NIFTY26N1022000CE/);
+  assert.match(value, /LAST BUY PRICE/);
+  assert.match(value, /LAST STOP LOSS/);
+  assert.match(value, /CURRENT SETUP/);
+  assert.match(value, /Quantity\s+25/);
+  assert.match(value, /Filled\s+25\s+·\s+Entry\s+497\.80\s+·\s+Exit\s+454\.30/);
+  assert.match(value, /Entry-time signal checks/);
+  assert.match(value, /1\s*\/\s*1\s+rules passed at entry/);
+  assert.match(value, /Closed · not active/);
+  assert.match(value, /Last trade P&L/);
+  assert.match(value, /Risk cap is a plan, not a guaranteed maximum/);
   cleanup();
 });
 
@@ -4080,6 +4098,7 @@ test('6 Algo Desk shows each strategy rules and requirements while the feed is i
   assert.match(value, /Pullback to value/);
   assert.match(value, /tested VWAP\/EMA20 within 0\.25 ATR and held/, 'Requirements are visible, not tooltip-only');
   assert.match(value, /0 \/ 3/);
+  assert.match(value, /WAIT · NO CE\/PE SIGNAL/);
   assert.match(value, /Waiting for the live futures feed/);
   assert.match(value, /Opening range/);
   assert.match(value, /Pullback to value/);
@@ -4093,6 +4112,7 @@ test('6 Algo Desk shows each strategy rules and requirements while the feed is i
   assert.match(value, /Retest held/);
   assert.match(value, /All 15 opening candles \(09:15-09:29\)/);
   assert.match(value, /0 \/ 2/);
+  assert.match(value, /WAIT · NO CE\/PE SIGNAL/);
   assert.match(value, /Pullback to value|Trend pullback to VWAP/);
   assert.match(value, /Waiting for the live futures feed/);
   cleanup();
@@ -4205,6 +4225,7 @@ test('6 Algo Desk shows the real open trade and journal, and Exit closes only th
   assert.match(value, /NIFTY26N1022000CE/);
   assert.match(value, /112\.50/);
   assert.match(value, /\+₹1,000/);
+  assert.match(value, /OPEN POSITION · BUY CALL \(CE\)/);
   const rows = nodes(tree).filter(n => n.type === 'tr').slice(1).map(text);
   assert.equal(rows.length, 3);
   assert.match(rows[0], /NIFTY.*BUY CE.*100\.00.*80\.00.*140\.00.*Open/);
@@ -4234,6 +4255,8 @@ test('6 Algo Desk keeps each strategy index tab independent and displays its own
   fixture.signals_by_symbol.BANKNIFTY = { ...fixture.signals };
   fixture.signals_by_symbol.BANKNIFTY.adaptive_vwap_pro = {
     ...fixture.signals.adaptive_vwap_pro,
+    decision: 'BUY PE',
+    side: 'PE',
     reason: 'BANKNIFTY-specific signal',
     rules: [{ id: 'bank-vwap', label: 'BANK NIFTY VWAP rule', passed: true,
       requirement: 'BANK NIFTY close > VWAP', value: 50000 }],
@@ -4249,6 +4272,7 @@ test('6 Algo Desk keeps each strategy index tab independent and displays its own
   const adaptive = nodes(tree).find(n => n.type === 'article' && text(n).includes('Adaptive VWAP Pro'));
   assert.match(text(adaptive), /BANKNIFTY-specific signal/);
   assert.match(text(adaptive), /BANK NIFTY VWAP rule/);
+  assert.match(text(adaptive), /QUALIFIED SIGNAL · BUY PUT \(PE\)/);
   assert.match(text(adaptive), /50,000\.00/);
   assert.ok(h.requests.every(r => r.options.method === 'GET'), 'Changing a signal tab sends no trade command');
   cleanup();
@@ -4267,6 +4291,7 @@ test('ExpiryEdge AI Algo stays its own section and the 6 Algo Desk renders separ
   assert.match(panel, /ATR Trail Distance/);
   assert.match(panel, /aria-label="ExpiryEdge trade controls"/);
   assert.match(panel, /role="switch" aria-checked=\{liveStatus\?\.enabled \?\? false\}/);
+  assert.match(panel, /ON blocked: \{liveStatus\.block_reasons\.join\('; '\)/);
   assert.match(panel, /: 'border-slate-600 bg-slate-900 text-slate-300'/);
   assert.match(panel, /: 'bg-slate-600'/);
   assert.match(panel, /setLiveApproval\(!liveStatus\?\.enabled\)/);
@@ -4282,6 +4307,39 @@ test('ExpiryEdge AI Algo stays its own section and the 6 Algo Desk renders separ
   assert.match(section, /import\('@\/components\/AlgoDeskSection'\)/);
   assert.match(section,
     /<ExpiryEdgeAIPanel marketData=\{marketData\} isConnected=\{isConnected\} \/>\s*<AlgoDeskSection marketData=\{marketData\} isConnected=\{isConnected\} \/>/);
+});
+
+test('MorningEdge is an independent section mounted immediately above ExpiryEdge', () => {
+  const read = name => readFileSync(path.join(__dirname, '..', name), 'utf8');
+  const panel = read(path.join('components', 'MorningEdgeSection.tsx'));
+  assert.match(panel, /aria-label="MorningEdge AI Algo"/);
+  assert.doesNotMatch(panel, /ExpiryEdgeAIPanel|AlgoDeskSection|AQTE|marketData/);
+  assert.match(panel, /\/api\/morningedge\//);
+  assert.match(panel, /getOrCreateVisitorId/);
+  assert.doesNotMatch(panel, /owner-secret|Unlock MorningEdge|sessionStorage/);
+  assert.match(panel, /LIVE MARKET SIGNAL/);
+  assert.match(panel, /TRADE <span[\s\S]+marketEnabled \? 'ON' : 'OFF'/);
+  assert.match(panel, /role="switch" aria-label="MorningEdge market feed"/);
+  assert.match(panel, /aria-busy=\{marketPending\}/);
+  assert.doesNotMatch(panel, /disabled=\{marketPending\}|marketPending \? '…'/);
+  assert.doesNotMatch(panel, /MorningEdge live trading|TRADE OFF/);
+  assert.equal((panel.match(/<button\b/g) ?? []).length, 1);
+  assert.doesNotMatch(panel, /PAPER|paper|LIVE FEED (ON|OFF)/);
+  assert.doesNotMatch(panel, /Live feed is OFF\./);
+  assert.match(panel, /: 'WAIT'/);
+  assert.match(panel, /: '—'/);
+  assert.doesNotMatch(panel, /NO LIVE TICK|Change unavailable|Ticks unavailable|Incomplete|DATA \/ SIGNAL BLOCKED|Unavailable/);
+  assert.match(panel, /text-amber-300/);
+  assert.match(panel, /09:00–09:08 IST/);
+  assert.match(panel, /09:15–09:20 IST/);
+  const section = read(path.join('components', 'AQTESection.tsx'));
+  assert.match(section,
+    /<MorningEdgeSection \/>\s*<ExpiryEdgeAIPanel marketData=\{marketData\} isConnected=\{isConnected\} \/>/);
+  const proxy = read(path.join('app', 'api', 'morningedge', '[...path]', 'route.ts'));
+  assert.match(proxy, /api\/app-access\/session/);
+  assert.match(proxy, /X-Device-Id/);
+  assert.doesNotMatch(proxy, /MORNINGEDGE_SERVICE_TOKEN|X-MorningEdge-Owner-Secret/);
+  assert.match(proxy, /request\.method === 'POST' && path === 'api\/feed\/control'/);
 });
 
 test('QuantEdge Pro distinguishes arming auto entries from placing an immediate order', () => {
@@ -4309,6 +4367,11 @@ test('QuantEdge Pro distinguishes arming auto entries from placing an immediate 
   assert.doesNotMatch(panel, /turn QuantEdge Pro ON or OFF at any time/);
   assert.doesNotMatch(panel, /startDisabledReason/);
   assert.match(panel, /APPROVED · WAITING FOR SESSION/);
+  assert.match(panel, /QUALIFIED SIGNAL · BUY \$\{signalSide === 'CE' \? 'CALL \(CE\)' : 'PUT \(PE\)'\}/);
+  assert.match(panel, /DIRECTIONAL BIAS · \$\{biasSide\} · NOT A BUY SIGNAL/);
+  assert.match(panel, /WAIT · NO CE\/PE SIGNAL/);
+  assert.match(panel, /aria-live="polite"/);
+  assert.match(panel, /const candidate = signalSide \? signal\?\.entry : undefined/);
   assert.match(panel, /setOperationError\(reason instanceof Error \? reason\.message/);
   assert.match(panel, /operationError \?\? statusError \?\? live\?\.error/);
   assert.match(panel, /void act\('approval',\s*\{/);
@@ -4316,7 +4379,13 @@ test('QuantEdge Pro distinguishes arming auto entries from placing an immediate 
   assert.match(panel, /Zerodha temporarily rate-limited broker requests/);
   assert.match(panel, /order submissions are never retried automatically/);
   assert.doesNotMatch(panel, /if \(enabled && !window\.confirm/);
-  assert.match(panel, /Current setup: \{signal\?\.decision \?\? 'WAIT'\}/);
-  assert.match(panel, /An entry requires all 7 rules plus a qualified option, fresh quotes, and risk\/broker checks/);
   assert.match(panel, /ARMED · WAITING/);
+});
+
+test('QuantEdge Pro index cards stay medium-sized across mobile and desktop', () => {
+  const panel = readFileSync(path.join(__dirname, '..', 'components', 'QuantEdgeProSection.tsx'), 'utf8');
+  assert.match(panel, /grid-cols-2 gap-3 xl:grid-cols-4/);
+  assert.match(panel, /rounded-xl border p-3 text-left transition-colors sm:p-4/);
+  assert.equal((panel.match(/text-xl font-extrabold tabular-nums text-white sm:text-2xl/g) || []).length, 2);
+  assert.match(panel, /inline-flex flex-wrap items-center gap-x-1\.5 text-xs font-bold sm:text-sm/);
 });

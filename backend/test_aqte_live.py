@@ -214,7 +214,7 @@ class LiveTests(unittest.TestCase):
                 self.assertNotIn("paper_validated", status)
         self.broker.place_order.assert_not_called()
 
-    def test_paper_gate_removal_requires_fresh_on_once_and_persists_it_after_confirmation(self):
+    def test_paper_gate_removal_requires_fresh_on_after_restart(self):
         self.live.start_automation()
         self.live.state.pop("automation_approval_version", None)
         self.live.save("LEGACY_APPROVAL_TEST_STATE")
@@ -256,8 +256,8 @@ class LiveTests(unittest.TestCase):
         self.addCleanup(restarted.release_owner)
         restarted.initialize()
         restarted.auto_activate()
-        self.assertTrue(restarted.status()["automation_on"])
-        self.assertTrue(restarted.status()["automation_wanted"])
+        self.assertFalse(restarted.status()["automation_on"])
+        self.assertFalse(restarted.status()["automation_wanted"])
         self.broker.place_order.assert_not_called()
 
     def test_paper_gate_removal_preserves_open_protection_and_saved_controls(self):
@@ -1999,7 +1999,7 @@ class LiveTests(unittest.TestCase):
         self.assertEqual(self.ip.call_count, 1, "No preflight outside the entry window")
         self.broker.place_order.assert_not_called()
 
-    def test_standing_on_survives_restart_and_arms_itself_at_market_open(self):
+    def test_manual_on_resets_off_after_restart_and_does_not_arm_at_market_open(self):
         saturday = datetime(2026, 10, 31, 10, 0, tzinfo=IST).timestamp()
         with patch("services.aqte_live.time.time", return_value=saturday):
             self.live.start_automation()
@@ -2014,18 +2014,37 @@ class LiveTests(unittest.TestCase):
         with patch("services.aqte_live.time.time", return_value=datetime(2026, 11, 2, 9, 0, tzinfo=IST).timestamp()):
             restored.auto_activate()
             status = restored.status()
-            self.assertTrue(status["automation_wanted"])
+            self.assertFalse(status["automation_wanted"])
             self.assertFalse(status["automation_on"])
-            self.assertEqual(status["automation_waiting"], MARKET_WAIT)
+            self.assertIsNone(status["automation_waiting"])
         self.ip.assert_not_called()
         with patch("services.aqte_live.time.time", return_value=datetime(2026, 11, 2, 9, 15, tzinfo=IST).timestamp()):
             restored.auto_activate()
             status = restored.status()
-            self.assertTrue(status["armed"])
-            self.assertTrue(status["automation_on"])
-            self.assertIsNone(status["automation_waiting"])
-            restored.auto_activate()
-        self.ip.assert_called_once()
+            self.assertFalse(status["armed"])
+            self.assertFalse(status["automation_on"])
+            self.assertFalse(status["automation_wanted"])
+        self.ip.assert_not_called()
+        self.broker.place_order.assert_not_called()
+
+    def test_all_live_entry_approvals_reset_off_after_restart(self):
+        self.live.start_automation()
+        self.live.state["quantedge"]["enabled"] = True
+        self.live.state["expiryedge"]["algos"] = {
+            key: True for key in self.live.state["expiryedge"]["algos"]}
+        self.live.state["expiryedge_ai"]["enabled"] = True
+        self.live.save("ALL_APPROVALS_ON_TEST")
+        self.live.release_owner()
+
+        restored = self.new_service()
+        self.addCleanup(restored.release_owner)
+        restored.initialize()
+
+        self.assertFalse(restored.state["automation_wanted"])
+        self.assertFalse(restored.state["automation_on"])
+        self.assertFalse(restored.state["quantedge"]["enabled"])
+        self.assertFalse(any(restored.state["expiryedge"]["algos"].values()))
+        self.assertFalse(restored.state["expiryedge_ai"]["enabled"])
         self.broker.place_order.assert_not_called()
 
     def test_standing_on_retries_failed_preflight_once_per_minute_and_journals_reason_once(self):

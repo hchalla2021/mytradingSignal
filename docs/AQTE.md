@@ -148,13 +148,14 @@ Outside those hours the switch shows **ON · Waiting for market**, and the monit
 arms itself at the next 09:15 IST. A failed preflight (IP, Kite token, account not
 flat) keeps ON, shows the reason, and retries at most once per minute; it never
 places orders. It does not itself submit an entry: only qualifying
-signals passing existing daily/quality/risk gates can buy. ON stays saved across
-backend restarts, the 15:15 cutoff and new days until you switch OFF, request a
-manual exit, or trigger the emergency stop; a latched emergency is not an ordinary
-pause and cannot be cleared by ON — use the confirmed emergency reset once Kite is
-flat. Disabled backend live trading keeps ON locked. Upgrading from the removed
-paper-approval gate clears a saved ON request once and requires fresh owner
-confirmation; later restarts preserve that newly confirmed request.
+signals passing existing daily/quality/risk gates can buy. ON remains active during
+the current backend run across the 15:15 cutoff and new days until you switch OFF,
+request a manual exit, or trigger the emergency stop. Every backend restart resets
+Auto Trade to OFF and requires a fresh manual ON; refreshing the dashboard page
+does not reset it. This does not close an existing trade or remove its protection.
+A latched emergency is not an ordinary pause and
+cannot be cleared by ON — use the confirmed emergency reset once Kite is flat.
+Disabled backend live trading keeps ON locked.
 The ON confirmation states the server's entry mode (strict scan-only, or unvalidated
 rule entries allowed). **Cancel · stay OFF** and Escape only close the confirmation;
 they send no command because automation is already OFF. The risk card shows
@@ -1078,9 +1079,9 @@ still contains it. The status API no longer emits `paper_validated`; deploy the
 backend and frontend together. Paper testing remains recommended, but it is not
 a separate configuration gate. `AQTE_LIVE_ENABLED=true` and explicit owner
 confirmation of Auto Trade ON are still required. The first restart of an existing
-journal after this change clears its saved ON request and records the migration;
-open positions, protection, history, risk limits and saved index/style/setup
-choices are preserved. Later restarts preserve a newly confirmed ON request.
+journal after this change clears its saved ON request and records the migration.
+Every backend restart clears Auto Trade to OFF; open positions, protection, history,
+risk limits and saved index/style/setup choices are preserved.
 This does not bypass the separate model/rule-quality policy controlled by
 `AQTE_LIVE_ALLOW_UNVALIDATED_RULES`.
 
