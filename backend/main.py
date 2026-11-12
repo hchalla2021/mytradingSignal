@@ -486,11 +486,16 @@ async def lifespan(app: FastAPI):
     
     if scheduler:
         await scheduler.stop()
+    from services.aqte_live import get_live_service
+    from services.aqte_service import get_aqte_service
+
     await get_live_service().stop()
     if market_feed:
         await market_feed.stop()
-    await get_aqte_service().stop()
-    await morning.stop()
+    aqte_service = get_aqte_service()
+    await aqte_service.stop()
+    if aqte_service.morning is not None:
+        await aqte_service.morning.stop()
     from services.engine_events import get_engine_event_service
     await get_engine_event_service().stop()
     if feed_task:

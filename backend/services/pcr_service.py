@@ -1,10 +1,13 @@
 """PCR (Put-Call Ratio) calculation service using Zerodha API."""
 import asyncio
 from datetime import datetime, timedelta, date
-from typing import Dict, Any, Optional, List
+from typing import TYPE_CHECKING, Dict, Any, Optional, List
 import pytz
 
 from config import get_settings
+
+if TYPE_CHECKING:
+    from kiteconnect import KiteConnect
 
 settings = get_settings()
 IST = pytz.timezone('Asia/Kolkata')

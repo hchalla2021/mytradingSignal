@@ -5,13 +5,16 @@ Architecture: Highly configurable, performance-optimized, AI-ready
 """
 from __future__ import annotations
 
-from typing import Dict, List, Optional, Tuple, Any
+from typing import TYPE_CHECKING, Dict, List, Optional, Tuple, Any
 from dataclasses import dataclass, field
 from enum import Enum
 from datetime import datetime, time
 import numpy as np
 from functools import lru_cache
 import asyncio
+
+if TYPE_CHECKING:
+    import pandas as pd
 
 
 class SignalType(Enum):

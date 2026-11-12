@@ -268,7 +268,7 @@ def vwap_rule(features, sign):
 
 
 def oi_buildup(features, count=5):
-    bars = features["bars"]
+    bars = features["today"]
     if len(bars) <= count:
         return None, None
     start, end = bars[-count - 1], bars[-1]
@@ -332,16 +332,17 @@ def adaptive_vwap_pro(features, live, context):
 
 
 def order_flow_momentum(features, live, context):
-    bars = features["bars"]
+    bars = features["today"]
     last5 = bars[-5:]
     total = sum(bar["volume"] for bar in last5)
     delta = (sum(bar["volume"] * direction(bar["close"] - bar["open"]) for bar in last5) / total
-             if total > 0 else None)
+             if len(last5) == 5 and total > 0 else None)
     sign = direction(delta)
     depth = (live.buy_depth + live.sell_depth) if live else 0
     imbalance = (live.buy_depth - live.sell_depth) / depth if depth > 0 else None
     book = (live.bid_quantity + live.ask_quantity) if live else 0
     prior = bars[-6:-1]
+    rvol = relative_volume(bars)
     rules = [
         rule("volume_delta", "Candle-volume pressure", None if delta is None else abs(delta) >= 0.3,
              "5-candle volume signed by candle direction >= 30% of total (a volume-pressure proxy)",
@@ -356,8 +357,8 @@ def order_flow_momentum(features, live, context):
                   lambda s: (features["close"] > max(bar["high"] for bar in prior) if s > 0
                              else features["close"] < min(bar["low"] for bar in prior)),
                   "Close beyond the prior 5-candle high (CE) / low (PE)"),
-        rule("relative_volume", "Relative volume", None if features["rvol"] is None else features["rvol"] >= 1.3,
-             "Trigger candle volume >= 1.3x the 20-candle average", fmt(features["rvol"], 2, "x")),
+        rule("relative_volume", "Relative volume", None if rvol is None else rvol >= 1.3,
+             "Trigger candle volume >= 1.3x the 20-candle average", fmt(rvol, 2, "x")),
         oi_rule(features, sign),
     ]
     return dict(sign=sign, rules=rules, trigger=features["last"], seconds=60,
@@ -366,7 +367,8 @@ def order_flow_momentum(features, live, context):
 
 
 def liquidity_sweep_bos(features, live, context):
-    bars, atr = features["bars"], features["atr1"]
+    bars, atr = features["today"], features["atr1"]
+    rvol = relative_volume(bars)
     found = None
     if len(bars) >= 32:
         for offset in range(2, 12):
@@ -390,15 +392,15 @@ def liquidity_sweep_bos(features, live, context):
 
     rules = [
         rule("sweep", "Liquidity sweep", None if len(bars) < 32 else found is not None,
-             "Within 10 candles, a wick through the 20-candle extreme that closed back inside"),
+             "Within 10 same-session candles, a wick through the prior 20 same-session candle extreme that closed back inside"),
         side_rule("bos", "Break of structure", sign, bool(internal) or not found,
                   lambda s: (last["close"] > max(b["high"] for b in internal) if s > 0
                              else last["close"] < min(b["low"] for b in internal)),
                   "Close beyond the internal high (CE) / low (PE) formed since the sweep"),
         side_rule("displacement", "Displacement", sign, atr is not None, displacement,
                   "Trigger body >= 60% of range and range >= 1 ATR"),
-        rule("volume", "Volume", None if features["rvol"] is None else features["rvol"] >= 1.2,
-             "Trigger volume >= 1.2x the 20-candle average", fmt(features["rvol"], 2, "x")),
+        rule("volume", "Volume", None if rvol is None else rvol >= 1.2,
+             "Trigger volume >= 1.2x the prior 20 same-session candles", fmt(rvol, 2, "x")),
         side_rule("live_hold", "Live hold", sign, live is not None,
                   lambda s: (live.price - (last["high"] + last["low"]) / 2) * s > 0,
                   "Live futures price holds beyond the trigger candle midpoint",
@@ -454,7 +456,8 @@ def orb_retest(features, live, context):
 
 
 def failed_breakout_reversal(features, live, context):
-    bars, rsi = features["bars"], features["rsi1"]
+    bars = features["today"]
+    rsi = rsi_series([bar["close"] for bar in bars])
     last = features["last"]
     found = None
     if len(bars) >= 40:
@@ -481,12 +484,12 @@ def failed_breakout_reversal(features, live, context):
 
     rules = [
         rule("failed_break", "Failed breakout", None if len(bars) < 40 else found is not None,
-             "Break of the 30-candle extreme within 3 candles, then a close back inside"),
+             "Break of the 30-candle same-session extreme within 3 same-session candles, then a close back inside"),
         side_rule("weak_volume", "Weak breakout volume", sign, volume_ratio is not None or not found,
-                  lambda s: volume_ratio <= 1.2, "Breakout candle volume <= 1.2x its 20-candle average",
+                  lambda s: volume_ratio <= 1.2, "Breakout candle volume <= 1.2x its prior 20 same-session candle average",
                   fmt(volume_ratio, 2, "x")),
         side_rule("rsi_turn", "RSI exhaustion", sign, (bool(window) and rsi[-1] is not None) or not found, rsi_turn,
-                  "RSI >= 60 then falling 5+ (PE); RSI <= 40 then rising 5+ (CE)", fmt(rsi[-1], 1)),
+                  "Same-session RSI >= 60 then falling 5+ (PE); <= 40 then rising 5+ (CE)", fmt(rsi[-1], 1)),
         side_rule("confirmation", "Confirmation close", sign, True,
                   lambda s: last["close"] < breakout["low"] if s < 0 else last["close"] > breakout["high"],
                   "Close beyond the breakout candle's opposite extreme"),
@@ -505,12 +508,12 @@ def failed_breakout_reversal(features, live, context):
 def volatility_expansion(features, live, context):
     m5, atr5 = features["m5"], features["atr5"]
     closes = [bar["close"] for bar in m5]
-    ready = len(m5) >= 81
+    ready = len(m5) >= 80
     sign, squeeze, mid, upper, lower = 0, None, None, None, None
     if ready:
         widths = []
         for index in range(len(m5) - 61, len(m5) - 1):
-            window = closes[index - 20:index]
+            window = closes[index - 19:index + 1]
             mean = fmean(window)
             widths.append(4 * math.sqrt(pvariance(window)) / mean if mean > 0 else 0.0)
         squeeze = sum(width <= widths[-1] for width in widths) / len(widths)
@@ -589,10 +592,10 @@ RULEBOOK = {
         _OI_BUILDUP,
     )),
     "liquidity_sweep_bos": ("Stop-run sweep reclaimed, then structure broken", (
-        ("sweep", "Liquidity sweep", "Within 10 candles, a wick through the 20-candle extreme that closed back inside"),
+        ("sweep", "Liquidity sweep", "Within 10 same-session candles, a wick through the prior 20 same-session candle extreme that closed back inside"),
         ("bos", "Break of structure", "Close beyond the internal high (CE) / low (PE) formed since the sweep"),
         ("displacement", "Displacement", "Trigger body >= 60% of range and range >= 1 ATR"),
-        ("volume", "Volume", "Trigger volume >= 1.2x the 20-candle average"),
+        ("volume", "Volume", "Trigger volume >= 1.2x the prior 20 same-session candles"),
         ("live_hold", "Live hold", "Live futures price holds beyond the trigger candle midpoint"),
     )),
     "orb_retest": ("Opening-range breakout, retest and resumption", (
@@ -604,9 +607,9 @@ RULEBOOK = {
         ("time", "Time window", "Signal completes before 12:30 IST"),
     )),
     "failed_breakout_reversal": ("Trapped breakout reversed back into range", (
-        ("failed_break", "Failed breakout", "Break of the 30-candle extreme within 3 candles, then a close back inside"),
-        ("weak_volume", "Weak breakout volume", "Breakout candle volume <= 1.2x its 20-candle average"),
-        ("rsi_turn", "RSI exhaustion", "RSI >= 60 then falling 5+ (PE); RSI <= 40 then rising 5+ (CE)"),
+        ("failed_break", "Failed breakout", "Break of the 30-candle same-session extreme within 3 same-session candles, then a close back inside"),
+        ("weak_volume", "Weak breakout volume", "Breakout candle volume <= 1.2x its prior 20 same-session candle average"),
+        ("rsi_turn", "RSI exhaustion", "Same-session RSI >= 60 then falling 5+ (PE); <= 40 then rising 5+ (CE)"),
         ("confirmation", "Confirmation close", "Close beyond the breakout candle's opposite extreme"),
         ("live_hold", "Level rejected live", "Live futures price stays back inside the failed level"),
     )),

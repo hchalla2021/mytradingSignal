@@ -50,7 +50,7 @@ type Trade = {
 };
 type Active = {
   id: string; algo: string; name: string; symbol: string; state: string; contract: { trading_symbol: string; side?: Side };
-  entry_price: number; limit: number; stop: number; target: number; filled: number; quantity: number;
+  entry_price: number; initial_stop?: number; limit: number; stop: number; target: number; filled: number; quantity: number;
   trailing_active?: boolean; exit_requested: string | null; ltp: number | null; unrealized: number | null; entry_at: number;
 };
 type Opportunity = { key: string; algo: string; symbol: string; decision: string | null; state: string; reason: string; at: number };
@@ -112,7 +112,8 @@ function isActive(value: unknown): value is Active {
   return isRecord(value) && typeof value.id === 'string' && typeof value.symbol === 'string' &&
     typeof value.state === 'string' && isRecord(value.contract) && typeof value.contract.trading_symbol === 'string' &&
     finite(value.stop) && finite(value.target) && finite(value.limit) && finite(value.entry_price) &&
-    Number.isInteger(value.filled) && optionalNumber(value.ltp) && optionalNumber(value.unrealized);
+    Number.isInteger(value.filled) && optionalNumber(value.initial_stop) &&
+    optionalNumber(value.ltp) && optionalNumber(value.unrealized);
 }
 
 function isSignalsBySymbol(value: unknown): value is Record<SymbolName, Record<string, Signal>> {
@@ -174,6 +175,10 @@ const price = (value: number | null | undefined) => finite(value) && value > 0 ?
 const rupees = (value: number | null | undefined) => finite(value) ? `₹${RUPEE.format(Math.abs(value))}` : '—';
 const signedRupees = (value: number | null | undefined) =>
   finite(value) ? `${value > 0 ? '+' : value < 0 ? '-' : ''}₹${RUPEE.format(Math.abs(value))}` : '—';
+const signedPoints = (value: number | null) =>
+  finite(value) ? `${value > 0 ? '+' : ''}${PRICE.format(value)}` : '—';
+const signedPercent = (value: number | null) =>
+  finite(value) ? `${value > 0 ? '+' : ''}${value.toFixed(2)}%` : '—';
 const tone = (value: number | null | undefined) =>
   !finite(value) || value === 0 ? 'text-slate-200' : value > 0 ? 'text-emerald-400' : 'text-rose-400';
 const clock = (seconds: number | null | undefined) => finite(seconds) ? CLOCK.format(new Date(seconds * 1000)) : '—';
@@ -193,10 +198,10 @@ function TradeDirection({ decision, side, active, activeSide }: {
   const signalSide = decision === 'BUY CE' ? 'CE' : decision === 'BUY PE' ? 'PE' : null;
   const toneSide = active ? activeSide : signalSide;
   const text = active
-    ? activeSide ? `OPEN POSITION · BUY ${activeSide === 'CE' ? 'CALL (CE)' : 'PUT (PE)'}` : 'OPEN POSITION · OPTION SIDE UNAVAILABLE'
-    : signalSide ? `QUALIFIED SIGNAL · BUY ${signalSide === 'CE' ? 'CALL (CE)' : 'PUT (PE)'}`
-      : side ? `DIRECTIONAL BIAS · ${side === 'CE' ? 'CALL (CE)' : 'PUT (PE)'} · NOT A BUY SIGNAL`
-        : 'WAIT · NO CE/PE SIGNAL';
+    ? activeSide ? `POSITION OPEN · BUY ${activeSide === 'CE' ? 'CALL (CE)' : 'PUT (PE)'}` : 'POSITION OPEN · OPTION SIDE UNAVAILABLE'
+    : signalSide ? `ENTRY QUALIFIED · BUY ${signalSide === 'CE' ? 'CALL (CE)' : 'PUT (PE)'}`
+      : side ? `WAIT · ${side === 'CE' ? 'CALL (CE)' : 'PUT (PE)'} SETUP · NOT QUALIFIED`
+        : 'WAIT · NO QUALIFIED ENTRY';
   const tone = toneSide === 'CE' ? 'border-emerald-500 bg-emerald-950 text-emerald-100'
     : toneSide === 'PE' ? 'border-cyan-500 bg-cyan-950 text-cyan-100'
       : 'border-amber-500 bg-amber-950 text-amber-100';
@@ -430,10 +435,17 @@ export default function AlgoDeskSection({ marketData = EMPTY_MARKET_DATA }: {
           const cardChangeText = cardChange
             ? `${cardChange.change > 0 ? '+' : ''}${PRICE.format(cardChange.change)} (${cardChange.changePercent > 0 ? '+' : ''}${cardChange.changePercent.toFixed(2)}%)`
             : 'Change —';
-          const entry = cardActive ? (cardActive.entry_price || cardActive.limit) : cardTrade?.entry_price;
-          const stop = cardActive ? cardActive.stop : cardTrade?.initial_stop ?? cardTrade?.stop;
+          const activeFilled = Boolean(cardActive && cardActive.filled > 0 && cardActive.entry_price > 0);
+          const entry = cardActive ? activeFilled ? cardActive.entry_price : cardActive.limit : cardTrade?.entry_price;
+          const initialStop = cardActive ? cardActive.initial_stop ?? cardActive.stop
+            : cardTrade?.initial_stop ?? cardTrade?.stop;
           const target = cardActive ? cardActive.target : cardTrade?.target;
-          const tradePnl = cardActive?.unrealized ?? cardTrade?.net_pnl;
+          const tradePnl = cardActive ? cardActive.unrealized : cardTrade?.net_pnl ?? null;
+          const pnlMark = cardActive ? cardActive.ltp : cardTrade?.exit_price ?? null;
+          const pnlEntry = cardActive?.entry_price ?? cardTrade?.entry_price ?? null;
+          const premiumPoints = finite(pnlMark) && finite(pnlEntry) ? pnlMark - pnlEntry : null;
+          const premiumPercent = premiumPoints !== null && finite(pnlEntry) && pnlEntry > 0
+            ? premiumPoints / pnlEntry * 100 : null;
           const cardDecision = cardSignal?.decision ?? live?.decision;
           const actionable = cardDecision === 'BUY CE' || cardDecision === 'BUY PE';
           const activeSide = cardActive?.contract.side ??
@@ -441,11 +453,23 @@ export default function AlgoDeskSection({ marketData = EMPTY_MARKET_DATA }: {
               : cardActive?.contract.trading_symbol.endsWith('PE') ? 'PE' : null);
           const rulePercent = cardSignal && cardSignal.total > 0
             ? Math.round(cardSignal.passed / cardSignal.total * 100) : null;
+          const waitingRules = cardSignal?.rules.filter(rule => rule.passed !== true).map(rule => rule.label) ?? [];
+          const autoScanning = cardEnabled && status?.armed && status.entry_window;
+          const entryExplanation = cardDecision === 'WAIT' && cardSignal?.side
+            ? `Waiting: ${cardSignal.side === 'CE' ? 'CALL (CE)' : 'PUT (PE)'} setup is not qualified` +
+              `${waitingRules.length ? `; still needs ${waitingRules.join(', ')} (${cardSignal.reason})` : `; ${cardSignal.reason}`}. ` +
+              `${autoScanning ? `Auto-scanning will buy ${cardSignal.side === 'CE' ? 'CALL (CE)' : 'PUT (PE)'} only after all ${cardSignal.total} checks and live execution gates pass`
+                : cardEnabled ? 'Auto approval is ON but waiting for the session or broker preflight'
+                  : 'Auto trade is OFF; no order will be sent'}. No order has been placed.`
+            : cardSignal?.reason ?? status?.reason ?? 'Waiting for fresh market data.';
           const cardMode = !item ? 'LOADING'
             : cardEnabled ? status?.armed && status.entry_window ? 'AUTO · SCANNING' : 'ON · WAITING' : 'MANUAL';
-          const trailingLabel = cardActive?.trailing_active ? 'Active'
-            : cardActive && limits ? `Arms at ${limits.trail_start_r}R`
-              : cardTrade ? 'Closed · not active' : '—';
+          const trailingLabel = cardActive
+            ? cardActive.trailing_active ? price(cardActive.stop)
+              : `Waiting · +${limits?.trail_start_r ?? 1}R`
+            : cardTrade ? 'Closed' : `Starts at +${limits?.trail_start_r ?? 1}R`;
+          const trailingDetail = cardActive?.trailing_active ? 'Current trailing stop'
+            : cardActive ? 'Initial stop remains active' : cardTrade ? 'No open trailing stop' : 'After entry moves in profit';
           return (
             <article key={key} className={`min-w-0 overflow-hidden rounded-2xl border bg-[#09151f] transition-colors ${
               selected === key ? 'border-emerald-500/70 shadow-[0_0_24px_rgba(16,185,129,.08)]' : 'border-slate-700/80 hover:border-slate-500'}`}>
@@ -511,59 +535,91 @@ export default function AlgoDeskSection({ marketData = EMPTY_MARKET_DATA }: {
                     <div className="flex min-w-0 flex-wrap items-center gap-2 sm:gap-3">
                       <TradeDirection decision={cardDecision} side={cardSignal?.side ?? live?.side}
                         active={cardActive !== null} activeSide={activeSide} />
-                      <h3 className="min-w-0 truncate text-base font-extrabold text-white sm:text-lg">
-                        {cardActive?.contract.trading_symbol
-                          ?? (actionable ? `${INDEX_LABEL[cardSymbol]} · Candidate signal, no active position`
-                            : cardTrade?.trading_symbol ? `Last trade · ${cardTrade.trading_symbol}`
-                              : `${INDEX_LABEL[cardSymbol]} · No qualified CE/PE entry`)}
-                      </h3>
+                      {(cardActive || actionable || cardTrade?.trading_symbol) && (
+                        <h3 className="min-w-0 truncate text-base font-extrabold text-white sm:text-lg">
+                          {cardActive?.contract.trading_symbol
+                            ?? (actionable ? `${INDEX_LABEL[cardSymbol]} · Entry qualified`
+                              : `Last trade · ${cardTrade?.trading_symbol}`)}
+                        </h3>
+                      )}
                     </div>
                     <span aria-label="Current setup rule results" className="rounded-lg border border-emerald-500/40 bg-emerald-950/50 px-3 py-1.5 text-xs font-bold text-emerald-200">
-                      CURRENT SETUP ·{' '}
-                      {cardSignal ? `${cardSignal.passed} / ${cardSignal.total} RULES PASSED` : 'RULE CHECKS UNAVAILABLE'}
+                      ENTRY CHECKS ·{' '}
+                      {cardSignal ? `${cardSignal.passed} / ${cardSignal.total} PASSED` : 'UNAVAILABLE'}
                     </span>
                   </div>
                   <p className="mt-2 flex flex-wrap items-baseline gap-x-3 gap-y-1 text-sm text-slate-300">
-                    <span>{cardSignal?.reason ?? status?.reason ?? 'Waiting for fresh market data.'}</span>
+                    <span>{entryExplanation}</span>
                     <span className="font-bold tabular-nums text-slate-100">{INDEX_LABEL[cardSymbol]} {price(cardTick?.price)}</span>
                     <span className={`text-xs font-bold ${tone(cardChange?.change)}`}>{cardChangeText}</span>
                   </p>
-                  <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
+                  <div className="mt-4 grid min-w-0 grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-5"
+                    aria-label="Trade prices and profit">
                     {([
-                      { title: cardActive ? 'BUY PRICE' : cardTrade ? 'LAST BUY PRICE' : 'BUY PRICE', value: price(entry), color: 'emerald', icon: <TrendingUp size={16} /> },
-                      { title: cardActive ? 'STOP LOSS' : cardTrade ? 'LAST STOP LOSS' : 'STOP LOSS', value: price(stop), color: 'rose', icon: <ShieldCheck size={16} /> },
-                      { title: 'TRAILING SL', value: trailingLabel, color: 'amber', icon: <Activity size={16} /> },
-                      { title: 'TARGET', value: price(target), color: 'emerald', icon: <BarChart3 size={16} /> },
+                      {
+                        title: cardActive ? activeFilled ? 'ENTRY PRICE' : 'ENTRY LIMIT' : cardTrade ? 'LAST ENTRY PRICE' : 'ENTRY PRICE',
+                        value: price(entry), detail: activeFilled ? `${cardActive?.filled} units filled`
+                          : cardActive ? 'Awaiting fill' : cardTrade ? 'Closed trade' : 'Awaiting entry',
+                        color: 'emerald', icon: <TrendingUp size={16} />,
+                      },
+                      {
+                        title: cardTrade && !cardActive ? 'LAST STOP LOSS' : 'STOP LOSS', value: price(initialStop),
+                        detail: cardActive?.trailing_active ? 'Initial risk level' : 'Initial protective stop',
+                        color: 'rose', icon: <ShieldCheck size={16} />,
+                      },
+                      {
+                        title: 'TRAILING STOP', value: trailingLabel, detail: trailingDetail,
+                        color: 'amber', icon: <Activity size={16} />,
+                      },
+                      {
+                        title: 'TARGET PRICE', value: price(target), detail: 'Planned exit level',
+                        color: 'emerald', icon: <BarChart3 size={16} />,
+                      },
+                      {
+                        title: cardActive ? 'OPEN P&L' : cardTrade ? 'LAST CLOSED P&L' : 'TRADE P&L',
+                        value: signedRupees(tradePnl),
+                        detail: `${signedPoints(premiumPoints)} premium pts · ${signedPercent(premiumPercent)} from entry`,
+                        caption: cardActive ? `LTP ${price(cardActive.ltp)}` : cardTrade ? `Exit ${price(cardTrade.exit_price)}` : 'No filled trade',
+                        color: finite(tradePnl) && tradePnl > 0 ? 'emerald'
+                          : finite(tradePnl) && tradePnl < 0 ? 'rose' : 'slate',
+                        icon: <BarChart3 size={16} />,
+                      },
                     ] as const).map(level => (
                       <div key={level.title} className={`min-w-0 rounded-xl border p-3 sm:p-4 ${
                         level.color === 'rose' ? 'border-rose-500/50 bg-rose-950/35'
                           : level.color === 'amber' ? 'border-amber-500/40 bg-amber-950/25'
-                            : 'border-emerald-500/50 bg-emerald-950/30'}`}>
-                        <div className="flex items-center gap-2 text-xs font-semibold text-slate-300 sm:text-sm">
+                            : level.color === 'slate' ? 'border-slate-600/70 bg-slate-900/60'
+                              : 'border-emerald-500/50 bg-emerald-950/30'}`}>
+                        <div className="flex items-center gap-2 text-[11px] font-semibold text-slate-300 sm:text-xs">
                           <span className="shrink-0">{level.icon}</span>{level.title}
                         </div>
-                        <div className={`mt-2 truncate text-lg font-extrabold tabular-nums sm:text-xl ${
-                          level.color === 'rose' ? 'text-rose-400' : level.color === 'amber' ? 'text-amber-300' : 'text-white'}`}>
+                        <div className={`mt-2 break-words text-base font-extrabold tabular-nums sm:text-lg ${
+                          level.color === 'rose' ? 'text-rose-400' : level.color === 'amber' ? 'text-amber-300'
+                            : level.color === 'slate' ? 'text-slate-200' : 'text-white'}`}>
                           {level.value}
                         </div>
+                        <p className="mt-1 break-words text-[10px] leading-snug text-slate-400">{level.detail}</p>
+                        {'caption' in level && <p className="mt-1 break-words text-[10px] leading-snug text-slate-400">{level.caption}</p>}
                       </div>
                     ))}
                   </div>
-                  <div className="mt-4 grid grid-cols-2 gap-3 border-b border-slate-700/70 pb-4 text-center sm:grid-cols-4">
+                  <div className="mt-4 grid grid-cols-2 gap-3 border-b border-slate-700/70 pb-4 text-center sm:grid-cols-3">
                     <div><p className="text-xs text-slate-400">Target Plan</p><b className="text-base text-white">{limits ? `${limits.target_r}R` : '—'}</b></div>
                     <div><p className="text-xs text-slate-400">Quantity</p><b className="text-base text-white">{cardActive ? cardActive.filled || cardActive.quantity : cardTrade?.filled || '—'}</b></div>
                     <div><p className="text-xs text-slate-400">Risk cap / trade</p><b className="text-base text-rose-300">{limits ? rupees(limits.risk_per_trade) : '—'}</b></div>
-                    <div><p className="text-xs text-slate-400">{cardActive ? 'Unrealized P&L' : cardTrade ? 'Last trade P&L' : 'Trade P&L'}</p><b className={`text-base ${tone(tradePnl)}`}>{signedRupees(tradePnl)}</b></div>
                   </div>
                   <p className="mt-2 text-xs text-amber-200/90">
                     Risk cap is a plan, not a guaranteed maximum; gaps and slippage can increase losses.
+                  </p>
+                  <p className="mt-2 text-xs text-slate-400">
+                    Today&apos;s realized P&amp;L resets by IST date. Week P&amp;L and last closed trade retain earlier results as history.
                   </p>
                   <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
                     {([
                       ['Trades today', item ? `${item.today.trades} / ${limits?.per_algo_max_trades ?? '—'}` : '—'],
                       ['Win rate', finite(item?.today.win_rate) ? `${item.today.win_rate.toFixed(1)}%` : '—'],
-                      ['Today P&L', item ? signedRupees(item.today.net_pnl) : '—'],
-                      ['Week P&L', item ? signedRupees(item.week.net_pnl) : '—'],
+                    ['Today P&L (IST)', item ? signedRupees(item.today.net_pnl) : '—'],
+                    ['This week P&L', item ? signedRupees(item.week.net_pnl) : '—'],
                     ] as const).map(([title, value]) => (
                       <div key={title} className="min-w-0 rounded-lg border border-slate-700/60 bg-slate-950/35 px-2.5 py-2">
                         <span className="block truncate text-[11px] text-slate-400">{title}</span>
@@ -636,13 +692,15 @@ export default function AlgoDeskSection({ marketData = EMPTY_MARKET_DATA }: {
                     style={{ background: rulePercent == null ? '#1e293b' : `conic-gradient(#10b981 ${rulePercent * 3.6}deg, #1e293b 0deg)` }}>
                     <div className="grid h-full w-full place-items-center rounded-full bg-slate-900 text-center">
                       <div>
-                        <b className="text-2xl text-white">{rulePercent == null ? '—' : `${rulePercent}%`}</b>
-                        <p className="text-[11px] text-slate-300">Rule Checks</p>
+                        <b className="text-2xl text-white">{cardSignal ? `${cardSignal.passed}/${cardSignal.total}` : '—'}</b>
+                        <p className="text-[11px] text-slate-300">Checks passed · not probability</p>
                       </div>
                     </div>
                   </div>
                   <p className="mb-2 text-xs font-bold uppercase tracking-wider text-slate-400">
-                    {cardSignal?.side ? `BUY ${cardSignal.side} Strategy Rules` : 'Strategy Rules'}
+                    {cardSignal?.decision === 'BUY CE' || cardSignal?.decision === 'BUY PE'
+                      ? `${cardSignal.side === 'CE' ? 'CALL (CE)' : 'PUT (PE)'} entry checks` : cardSignal?.side
+                        ? `${cardSignal.side === 'CE' ? 'CALL (CE)' : 'PUT (PE)'} setup checks` : 'Strategy Rules'}
                   </p>
                   <ul className="space-y-0.5">
                     {(cardSignal?.rules ?? []).map(rule => (

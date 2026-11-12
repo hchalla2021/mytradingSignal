@@ -141,6 +141,17 @@ class EvidenceTests(unittest.TestCase):
         engine.ingest(tick(at=NOW + 3, token=21, oi=500))
         self.assertIsNone(engine.signals["NIFTY"]["intelligence"], "Never compare OI across a rollover")
 
+    def test_feed_age_uses_oldest_spot_and_future_receipt_not_latest_analysis_tick(self):
+        engine = ready_engine(paper_enabled=False)
+        expected = min(engine.spot["NIFTY"].received, engine.future["NIFTY"].received)
+
+        engine.ingest(tick("option", at=NOW + 1))
+        signal = engine.snapshot(NOW + 1)["data"]["NIFTY"]
+
+        self.assertEqual(signal["at"], NOW + 1)
+        self.assertEqual(signal["feed_received_at"], expected)
+        self.assertTrue(signal["feed_ready"])
+
     def test_oi_unknown_and_zero_reference_do_not_invent_percentage(self):
         engine = ready_engine(paper_enabled=False)
         bars = list(engine.book.closed[("future", 20, 60)])
@@ -772,8 +783,9 @@ class ServiceTests(unittest.TestCase):
     def test_restart_restores_orders_costs_kill_and_audit(self):
         self.service.engine = ready_engine()
         self.service.engine.ingest(tick("option", at=NOW + 1, bid=98, ask=99, price=99))
+        recorded_tick = tick("option", at=time.time())
         with self.service.connect() as db:
-            self.service.persist(db, [tick("option")])
+            self.service.persist(db, [recorded_tick])
         self.service.engine.events.clear()
         self.service.kill()
         restored = AQTEService(self.path, paper_enabled=True)

@@ -221,6 +221,8 @@ function isSnapshot(value: unknown): value is Snapshot {
       const scalp = signal?.scalp;
       return !!signal && ['WAIT', 'BUY CE', 'BUY PE'].includes(signal.decision) &&
         (signal.feed_ready === undefined || typeof signal.feed_ready === 'boolean') &&
+        (signal.feed_received_at === undefined || signal.feed_received_at === null ||
+          Number.isFinite(signal.feed_received_at)) &&
         (signal.intelligence == null || isAqteIntelligence(signal.intelligence)) &&
         (signal.rule_checks == null || isAqteRuleChecks(signal.rule_checks)) &&
         Array.isArray(signal.reasons) && signal.reasons.every(reason => typeof reason === 'string') &&
@@ -364,8 +366,9 @@ function AQTESection({ marketData, isConnected = false }: { marketData?: MarketD
   const evaluating = selectedView ? selectedView.engines.filter(engine => engine.total > 0 && engine.status !== 'MONITORING').length : null;
   const policy = snapshot?.engine_policy && typeof snapshot.engine_policy.veto === 'boolean' &&
     Number.isInteger(snapshot.engine_policy.veto_min) ? snapshot.engine_policy : null;
-  const signalAt = snapshot?.data[selectedSymbol]?.at;
-  const tickAge = liveFeed && typeof signalAt === 'number' ? Math.max(0, aqteServerNow() * 1000 - signalAt * 1000) : null;
+  const feedReceivedAt = snapshot?.data[selectedSymbol]?.feed_received_at;
+  const tickAge = liveFeed && typeof feedReceivedAt === 'number'
+    ? Math.max(0, aqteServerNow() * 1000 - feedReceivedAt * 1000) : null;
   const health = unavailable ? ['Offline', 'aqx-down'] : marketHours && !liveFeed ? ['Degraded', 'aqx-wait'] : ['Healthy', 'aqx-up'];
   const dataState = unavailable ? 'Off' : liveFeed ? 'Live' : marketHours ? 'Stale' : 'Market closed';
 

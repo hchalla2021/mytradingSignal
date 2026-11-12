@@ -15,11 +15,14 @@ Production-ready for intraday trading
 from __future__ import annotations
 
 import numpy as np
-from typing import Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
 from datetime import datetime
 from dataclasses import dataclass
 
 from config.ema_config import get_trend_filter, get_ema_config
+
+if TYPE_CHECKING:
+    import pandas as pd
 
 
 @dataclass

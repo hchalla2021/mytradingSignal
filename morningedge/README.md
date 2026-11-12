@@ -18,6 +18,9 @@ It provides real NIFTY, BANKNIFTY, and SENSEX ticks, pre-open observations from
 market-derived candidate signal. Feed OFF disconnects the socket and clears
 live ticks. Missing credentials, ticks, contracts, freshness, or quote quality
 are surfaced as errors or WAIT states instead of synthetic values.
+Zerodha access tokens are time-limited. If the Kite WebSocket reports
+`403 Forbidden`, generate a fresh daily access token, update
+`ZERODHA_ACCESS_TOKEN` in `backend/.env`, and restart the MorningEdge service.
 
 **Broker order execution is not implemented.** The current service only monitors
 market data and reports candidate signals; it creates no positions. Trade

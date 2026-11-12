@@ -14,10 +14,13 @@ Key Features:
 from __future__ import annotations
 
 import numpy as np
-from typing import Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
 from dataclasses import dataclass
 from datetime import datetime
 import asyncio
+
+if TYPE_CHECKING:
+    import pandas as pd
 
 
 @dataclass

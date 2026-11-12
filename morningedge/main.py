@@ -1,6 +1,6 @@
 import os
 import threading
-from datetime import date, datetime, time, timedelta
+from datetime import datetime, time, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -258,11 +258,16 @@ class MorningMarketEngine:
     @staticmethod
     def _stage(now):
         t = now.time()
-        if t < time(9, 0): return "pre_session"
-        if t < time(9, 8): return "pre_open"
-        if t < time(9, 15): return "opening"
-        if t < time(9, 20): return "opening_range"
-        if t < time(15, 30): return "live"
+        if t < time(9, 0):
+            return "pre_session"
+        if t < time(9, 8):
+            return "pre_open"
+        if t < time(9, 15):
+            return "opening"
+        if t < time(9, 20):
+            return "opening_range"
+        if t < time(15, 30):
+            return "live"
         return "closed"
 
 
@@ -272,6 +277,17 @@ FEED_ENABLED = True
 FEED_STATE = "connecting"
 FEED_LOCK = threading.RLock()
 FEED_GENERATION = 0
+
+
+def _feed_error_message(reason):
+    detail = str(reason)
+    if "403" in detail or "Forbidden" in detail:
+        return (
+            "Kite rejected the market-data WebSocket (403 Forbidden). "
+            "The Zerodha access token may have expired; generate today's access token, "
+            "update ZERODHA_ACCESS_TOKEN in backend/.env, then restart MorningEdge."
+        )
+    return f"Kite feed error: {detail}"
 
 
 def start_feed(generation=None):
@@ -321,12 +337,12 @@ def start_feed(generation=None):
             if generation is None or generation == FEED_GENERATION:
                 FEED_STATE = "off" if not FEED_ENABLED else "disconnected"
                 if FEED_ENABLED:
-                    ENGINE.error = f"Kite feed closed: {reason}"
+                    ENGINE.error = _feed_error_message(reason)
         def on_error(ws, code, reason):
             global FEED_STATE
             if generation is None or generation == FEED_GENERATION:
                 FEED_STATE = "error"
-                ENGINE.error = f"Kite feed error: {reason}"
+                ENGINE.error = _feed_error_message(reason)
         KITE_SOCKET.on_close = on_close
         KITE_SOCKET.on_error = on_error
         KITE_SOCKET.connect(threaded=True)

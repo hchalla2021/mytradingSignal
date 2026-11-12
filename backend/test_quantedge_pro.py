@@ -62,6 +62,24 @@ class QuantEdgeProStrategyTests(unittest.TestCase):
         self.assertTrue(result["metrics"]["rsi"] >= 55)
         self.assertFalse(result["rules"]["CE"]["strong_body"])
 
+    def test_ce_requires_and_accepts_all_seven_breakout_rules(self):
+        bars = [candle(at, 100) for at in range(20)]
+        bars.append(candle(20, 103, open_price=100, high=103.2, low=99.9, volume=200))
+
+        result = evaluate_breakout(bars)
+
+        self.assertEqual(result["decision"], "BUY CE")
+        self.assertTrue(all(result["rules"].values()))
+
+    def test_pe_requires_and_accepts_all_seven_breakout_rules(self):
+        bars = [candle(at, 100) for at in range(20)]
+        bars.append(candle(20, 97, open_price=100, high=100.1, low=96.8, volume=200))
+
+        result = evaluate_breakout(bars)
+
+        self.assertEqual(result["decision"], "BUY PE")
+        self.assertTrue(all(result["rules"].values()))
+
     def test_rejects_nonfinite_completed_candle(self):
         bars = [candle(at, 100) for at in range(21)]
         bars[-1]["close"] = float("nan")

@@ -86,6 +86,19 @@ function ruleResults(signal: QepSignal | undefined) {
   return { side, rules: options[side ?? 'CE'] ?? {} };
 }
 
+function sideRuleResults(signal: QepSignal | undefined) {
+  if (!signal?.rules || Object.values(signal.rules).every(rule => typeof rule === 'boolean')) return [];
+  return (['CE', 'PE'] as const).flatMap(side => {
+    const candidate = signal.rules?.[side];
+    if (!isRecord(candidate)) return [];
+    const entries = Object.entries(candidate);
+    if (!entries.length || entries.some(([, passed]) => typeof passed !== 'boolean')) return [];
+    const rules = candidate as Record<string, boolean>;
+    const failed = entries.filter(([, passed]) => !passed).map(([name]) => ruleLabels[name] ?? name);
+    return [{ side, rules, passed: entries.length - failed.length, total: entries.length, failed }];
+  });
+}
+
 function quantEdgeErrorText(message: string | null | undefined) {
   if (!message) return null;
   if (/too many requests/i.test(message)) {
@@ -99,6 +112,7 @@ const money = (value: number | null | undefined) => value != null && Number.isFi
 const number = (value: number | null | undefined) => value != null && Number.isFinite(value)
   ? value.toLocaleString('en-IN', { maximumFractionDigits: 2 }) : '—';
 const label = (symbol: string) => symbol === 'BANKNIFTY' ? 'BANK NIFTY' : symbol === 'NIFTY' ? 'NIFTY 50' : symbol;
+const optionSideLabel = (side: 'CE' | 'PE') => side === 'CE' ? 'CALL (CE)' : 'PUT (PE)';
 const optionSide = (value: string | undefined): 'CE' | 'PE' | null =>
   value === 'CE' || value?.endsWith('CE') ? 'CE' : value === 'PE' || value?.endsWith('PE') ? 'PE' : null;
 
@@ -257,13 +271,11 @@ export default function QuantEdgeProSection({ marketData, isConnected = false, v
   const activeSide = activeTrade
     ? optionSide(activeTrade.contract.option_type) ?? optionSide(activeTrade.contract.trading_symbol)
     : null;
-  const biasSide = signalSide ?? (signal?.side === 'CE' || signal?.side === 'PE' ? signal.side : null);
   const candidate = signalSide ? signal?.entry : undefined;
   const contract = activeTrade?.contract ?? (signalSide ? signal?.contract : undefined);
   const directionText = activeTrade
-    ? activeSide ? `OPEN POSITION · BUY ${activeSide === 'CE' ? 'CALL (CE)' : 'PUT (PE)'}` : 'OPEN POSITION · OPTION SIDE UNAVAILABLE'
-    : signalSide ? `QUALIFIED SIGNAL · BUY ${signalSide === 'CE' ? 'CALL (CE)' : 'PUT (PE)'}`
-      : biasSide ? `DIRECTIONAL BIAS · ${biasSide} · NOT A BUY SIGNAL` : 'WAIT · NO CE/PE SIGNAL';
+    ? activeSide ? `POSITION OPEN · BUY ${optionSideLabel(activeSide)}` : 'POSITION OPEN · OPTION SIDE UNAVAILABLE'
+    : signalSide ? `ENTRY QUALIFIED · BUY ${optionSideLabel(signalSide)}` : 'WAIT · NO QUALIFIED ENTRY';
   const toneSide = activeTrade ? activeSide : signalSide;
   const directionTone = toneSide
     ? toneSide === 'PE' ? 'border-cyan-400 bg-cyan-950 text-cyan-100'
@@ -283,7 +295,16 @@ export default function QuantEdgeProSection({ marketData, isConnected = false, v
   const { side: ruleSide, rules } = ruleResults(signal);
   const ruleEntries = Object.entries(rules);
   const passedRules = ruleEntries.filter(([, passed]) => passed).length;
-  const rulePercent = ruleEntries.length ? Math.round(passedRules / ruleEntries.length * 100) : null;
+  const sideRules = sideRuleResults(signal);
+  const waitingOnBothSides = signal?.decision === 'WAIT' && sideRules.length === 2;
+  const executionChecksPending = sideRules.some(sideResult => sideResult.passed === sideResult.total);
+  const displayedRuleCount = waitingOnBothSides
+    ? sideRules.map(({ side, passed, total }) => `${side === 'CE' ? 'CALL (CE)' : 'PUT (PE)'} checks ${passed}/${total}`).join(' · ')
+    : ruleEntries.length ? `${passedRules}/${ruleEntries.length} checks passed` : 'Rule checks unavailable';
+  const qualificationDetail = activeTrade ? 'Broker position is open'
+    : signalSide ? 'Entry rules and execution checks passed'
+      : executionChecksPending ? 'Rules passed; execution checks are still pending'
+        : 'No side has passed all 7 entry rules';
   const statusLabel = statusStale || !live ? 'OFFLINE'
     : live.enabled ? live.armed && live.entry_window ? 'LIVE' : 'ON · WAITING'
       : live.ready && live.armed ? 'ARMED' : 'OFF';
@@ -395,17 +416,28 @@ export default function QuantEdgeProSection({ marketData, isConnected = false, v
                 {directionText}
               </span>
               <h3 className="truncate text-2xl font-extrabold text-white sm:text-3xl">
-                {contract?.trading_symbol ?? `${label(symbol)} · No qualified CE/PE entry`}
+                {contract?.trading_symbol ?? `${label(symbol)} · ${signalSide ? 'Entry qualified' : 'Waiting for an entry'}`}
               </h3>
             </div>
-            <span className="rounded-lg border border-emerald-500/40 bg-emerald-950/50 px-3 py-2 text-base font-semibold text-emerald-200">
-              {rulePercent == null ? 'Rule checks unavailable' : `${passedRules}/${Object.keys(ruleLabels).length} Rules Passed`}
-            </span>
+            {waitingOnBothSides
+              ? <div role="group" aria-label="Entry rule progress by option side" className="flex flex-wrap gap-2">
+                {sideRules.map(({ side, passed, total }) => (
+                  <span key={side} className="rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm font-semibold text-slate-200">
+                    {optionSideLabel(side)} <b className="ml-1 tabular-nums">{passed}/{total}</b>
+                  </span>
+                ))}
+              </div>
+              : <span className="rounded-lg border border-slate-600 bg-slate-900 px-3 py-2 text-sm font-semibold text-slate-200">
+                {displayedRuleCount}
+              </span>}
           </div>
-          <p className="mt-2 text-base text-slate-300">
-            {activeTrade ? `Broker position · ${activeTrade.state.replaceAll('_', ' ')}` :
-              signal?.reason ?? 'Waiting for completed candles and live option data.'}
-          </p>
+          {activeTrade
+            ? <p className="mt-2 text-base text-slate-300">Broker position · {activeTrade.state.replaceAll('_', ' ')}</p>
+            : !waitingOnBothSides && (
+              <p className="mt-2 text-base text-slate-300">
+                {signal?.reason ?? 'Waiting for completed candles and live option data.'}
+              </p>
+            )}
           <div className="mt-6 grid grid-cols-2 gap-4 lg:grid-cols-4">
             {[
               { title: 'BUY PRICE', value: money(entryPrice), icon: <TrendingUp size={19} />, color: 'emerald' },
@@ -472,28 +504,43 @@ export default function QuantEdgeProSection({ marketData, isConnected = false, v
               live?.enabled ? 'border-emerald-500/50 text-emerald-300' : live?.ready && live.armed ? 'border-cyan-500/40 text-cyan-200' : 'border-slate-600 text-slate-300'
             }`}>{tradeStatus}</span>
           </div>
-          <div className="mx-auto my-5 grid h-44 w-44 place-items-center rounded-full p-3"
-            style={{ background: rulePercent == null ? '#1e293b' : `conic-gradient(#10b981 ${rulePercent * 3.6}deg, #1e293b 0deg)` }}>
-            <div className="grid h-full w-full place-items-center rounded-full bg-slate-900 text-center">
-              <div>
-                <b className="text-3xl text-white">{rulePercent == null ? '—' : `${rulePercent}%`}</b>
-                <p className="text-xs text-slate-300">Rule Checks</p>
-              </div>
-            </div>
+          <div role="status" aria-label="Entry qualification" className="my-4 rounded-xl border border-slate-700 bg-slate-950/50 p-4 text-center">
+            <b className={`text-xl font-black ${signalSide ? 'text-emerald-300' : 'text-amber-200'}`}>
+              {activeTrade ? 'POSITION OPEN' : signalSide ? `BUY ${optionSideLabel(signalSide)}` : 'WAIT · NO ENTRY'}
+            </b>
+            <p className="mt-1 text-sm text-slate-300">{qualificationDetail}</p>
           </div>
           <p id="qep-analytics" className="mb-2 text-sm font-bold uppercase tracking-wider text-slate-400">
-            {ruleSide ? `${ruleSide} Setup Rules` : 'Strategy Rules'}
+            {waitingOnBothSides ? 'CALL (CE) and PUT (PE) entry checks' :
+              ruleSide ? `${optionSideLabel(ruleSide)} entry checks` : 'Strategy Rules'}
           </p>
           <ul className="space-y-1">
-            {Object.entries(ruleLabels).map(([key, title]) => {
-              const passed = rules[key];
-              return <li key={key} className="flex items-center gap-2 border-b border-slate-700/50 py-2.5 text-base">
-                <span className={`grid h-6 w-6 place-items-center rounded-full ${
-                  passed === true ? 'bg-emerald-600 text-white' : passed === false ? 'bg-rose-950 text-rose-300' : 'bg-slate-700 text-slate-300'
-                }`}>{passed === true ? <Check size={13} /> : '·'}</span>
-                <span className={passed === false ? 'text-slate-400' : 'text-slate-200'}>{title}</span>
-              </li>;
-            })}
+            {waitingOnBothSides
+              ? sideRules.map(({ side, rules: sideResults, passed, total }) => (
+                <li key={side} className="list-none rounded-lg border border-slate-700/70 bg-slate-950/30 p-3">
+                  <p className="mb-1 text-sm font-bold text-slate-200">{optionSideLabel(side)} · {passed}/{total} checks</p>
+                  <ul>
+                    {Object.entries(ruleLabels).map(([key, title]) => {
+                      const passedRule = sideResults[key];
+                      return <li key={key} className="flex items-center gap-2 border-b border-slate-700/50 py-1.5 text-sm last:border-0">
+                        <span className={`grid h-5 w-5 shrink-0 place-items-center rounded-full ${
+                          passedRule ? 'bg-emerald-600 text-white' : 'bg-rose-950 text-rose-300'
+                        }`}>{passedRule ? <Check size={11} /> : '×'}</span>
+                        <span className={passedRule ? 'text-slate-200' : 'text-slate-400'}>{title}</span>
+                      </li>;
+                    })}
+                  </ul>
+                </li>
+              ))
+              : Object.entries(ruleLabels).map(([key, title]) => {
+                const passed = rules[key];
+                return <li key={key} className="flex items-center gap-2 border-b border-slate-700/50 py-2.5 text-base">
+                  <span className={`grid h-6 w-6 place-items-center rounded-full ${
+                    passed === true ? 'bg-emerald-600 text-white' : passed === false ? 'bg-rose-950 text-rose-300' : 'bg-slate-700 text-slate-300'
+                  }`}>{passed === true ? <Check size={13} /> : '·'}</span>
+                  <span className={passed === false ? 'text-slate-400' : 'text-slate-200'}>{title}</span>
+                </li>;
+              })}
           </ul>
         </aside>
       </div>

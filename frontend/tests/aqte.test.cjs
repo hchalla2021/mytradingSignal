@@ -144,7 +144,8 @@ function text(tree) {
 }
 function fixture() {
   const waiting = { decision: 'WAIT', reasons: ['No setup'], spot: 22000,
-    at: Date.now() / 1000, confidence: null, entry: null, contract: null, position: null };
+    at: Date.now() / 1000, feed_received_at: Date.now() / 1000,
+    confidence: null, entry: null, contract: null, position: null };
   return {
     mode: 'ANALYSIS_ONLY', generated_at: Date.now() / 1000, recording: true,
     fault: null, subscription_error: null,
@@ -171,6 +172,43 @@ function executionHistoryFixture(overrides = {}) {
     ...overrides,
   };
 }
+
+test('QuantEdge Pro keeps CE/PE progress visible without the long background auto-entry explanation', async () => {
+  const h = harness('QuantEdgeProSection.tsx');
+  const signal = {
+    decision: 'WAIT',
+    side: null,
+    reason: 'CE: band_breakout, strong_body, range_expansion, volume_expansion; PE: band_breakout, directional_candle, strong_body, close_position, range_expansion, volume_expansion, rsi_confirmation',
+    rules: {
+      CE: { band_breakout: false, directional_candle: false, strong_body: false, close_position: false,
+        range_expansion: false, volume_expansion: false, rsi_confirmation: false },
+      PE: { band_breakout: true, directional_candle: true, strong_body: true, close_position: false,
+        range_expansion: false, volume_expansion: false, rsi_confirmation: false },
+    },
+  };
+  h.render();
+  const cleanup = h.mount({
+    generated_at: Date.now() / 1000, ready: true, enabled: true, armed: false, entry_window: true,
+    lots: 1, risk_per_trade: 500, daily_loss_limit: 1500, max_trades: 5, daily_trades: 0,
+    daily_pnl: 0, active: null, error: null,
+    signals: { NIFTY: signal, BANKNIFTY: { decision: 'WAIT', reason: 'Waiting for candles' },
+      SENSEX: { decision: 'WAIT', reason: 'Waiting for candles' } },
+  });
+  await settle();
+  const rendered = text(h.render());
+
+  assert.match(rendered, /WAIT · NO QUALIFIED ENTRY/);
+  assert.match(rendered, /CALL \(CE\)\s+0\s*\/\s*7/);
+  assert.match(rendered, /PUT \(PE\)\s+3\s*\/\s*7/);
+  assert.match(rendered, /APPROVED · WAITING FOR SESSION/);
+  assert.match(rendered, /CALL \(CE\) and PUT \(PE\) entry checks/);
+  assert.match(rendered, /No side has passed all 7 entry rules/);
+  assert.doesNotMatch(rendered, /No entry yet|still needs .*ATR range expansion|Auto-entry approval is ON|system will buy only a side/);
+  assert.doesNotMatch(rendered, /\d+%/);
+  assert.doesNotMatch(rendered, /Best side|Best-scoring side|DIRECTIONAL BIAS/);
+  assert.doesNotMatch(rendered, /band_breakout/);
+  cleanup();
+});
 
 test('execution history retains older dates without a live controller and adds the reason after Status', async () => {
   const h = harness('AQTEExecutionHistory.tsx');
@@ -1352,6 +1390,7 @@ test('market badge reflects the AQTE backend feed, not the browser market-data s
     const snapshot = fixture();
     snapshot.generated_at = now / 1000;
     snapshot.data.NIFTY.at = now / 1000;
+    snapshot.data.NIFTY.feed_received_at = now / 1000;
     snapshot.data.NIFTY.feed_ready = true;
     const cleanup = h.mount(snapshot);
     await settle();
@@ -1361,15 +1400,15 @@ test('market badge reflects the AQTE backend feed, not the browser market-data s
     if (expected === 'CLOSED') {
       assert.equal(badge, undefined);
       assert.doesNotMatch(text(title), /CLOSED/);
-      assert.match(text(title), /Trading Engine\s*$/);
+      assert.match(text(title), /Adaptive Quant/);
       cleanup();
       continue;
     }
     assert.equal(text(badge).trim(), expected);
     assert.equal(nodes(title).find(n => n.props?.['aria-label'] === 'AQTE view status'), badge);
-    assert.match(text(title), /Trading Engine\s+(LIVE \(Zerodha\)|FEED OFF)$/);
+    assert.match(text(title), /\s+(LIVE \(Zerodha\)|FEED OFF)$/);
     assert.match(badge.props.className, expected === 'FEED OFF' ? /text-amber/ : /text-emerald/);
-    snapshot.data.NIFTY.at -= 100;
+    snapshot.data.NIFTY.feed_received_at -= 100;
     await h.poll(snapshot);
     tree = h.render(props);
     assert.equal(text(nodes(tree).find(n => n.props?.['aria-label'] === 'AQTE view status')).trim(), 'FEED OFF');
@@ -1598,7 +1637,7 @@ test('index cards explain a missing quote instead of claiming a snapshot', async
   assert.match(value, /No live quote\s*AQTE OFFLINE/);
 });
 
-test('tick age uses the backend signal timestamp instead of the one-second UI clock', async () => {
+test('tick age uses the oldest backend spot/futures receipt instead of the analysis timestamp', async () => {
   let clock = Date.now();
   const h = harness('AQTESection.tsx', () => clock);
   h.render();
@@ -1607,6 +1646,7 @@ test('tick age uses the backend signal timestamp instead of the one-second UI cl
   clock = at;
   snapshot.generated_at = at / 1000;
   snapshot.data.NIFTY.at = (at + 400) / 1000;
+  snapshot.data.NIFTY.feed_received_at = (at + 200) / 1000;
   snapshot.data.NIFTY.feed_ready = true;
   const cleanup = h.mount(snapshot);
   await settle();
@@ -1615,7 +1655,7 @@ test('tick age uses the backend signal timestamp instead of the one-second UI cl
   const tick = { price: 23000, status: 'LIVE', timestamp: new Date(at + 400).toISOString() };
   const health = nodes(h.render({ isConnected: true, marketData: { NIFTY: tick } }))
     .find(n => n.props?.['aria-label'] === 'System health');
-  assert.match(text(health), /Tick age\s*240 ms/);
+  assert.match(text(health), /Tick age\s*440 ms/);
   cleanup();
 });
 
@@ -3993,7 +4033,9 @@ test('6 Algo Desk is its own section that polls owner-only status and shows six 
   assert.match(value, /Trending/);
   assert.match(value, /5 \/ 6/);
   assert.match(value, /Waiting for RSI to cool below 70/);
-  assert.equal((value.match(/DIRECTIONAL BIAS · CALL \(CE\) · NOT A BUY SIGNAL/g) || []).length, 6);
+  assert.equal((value.match(/WAIT · CALL \(CE\) SETUP · NOT QUALIFIED/g) || []).length, 6);
+  assert.doesNotMatch(value, /Waiting for a qualified entry/,
+    'The WAIT badge is the only waiting-state headline');
   assert.match(value, /1 lot · risk ≤ ₹1,000/);
   const toggle = deskSwitch(tree);
   assert.equal(toggle.props['aria-checked'], false);
@@ -4037,15 +4079,19 @@ test('6 Algo Desk shows WAIT and labels closed-trade prices as historical, not l
   assert.doesNotMatch(setup, /BUY CE/);
   assert.match(value, /AUTO · SCANNING/);
   assert.match(value, /Last trade · NIFTY26N1022000CE/);
-  assert.match(value, /LAST BUY PRICE/);
+  assert.match(value, /LAST ENTRY PRICE/);
   assert.match(value, /LAST STOP LOSS/);
-  assert.match(value, /CURRENT SETUP/);
+  assert.match(value, /ENTRY CHECKS/);
   assert.match(value, /Quantity\s+25/);
   assert.match(value, /Filled\s+25\s+·\s+Entry\s+497\.80\s+·\s+Exit\s+454\.30/);
   assert.match(value, /Entry-time signal checks/);
   assert.match(value, /1\s*\/\s*1\s+rules passed at entry/);
-  assert.match(value, /Closed · not active/);
-  assert.match(value, /Last trade P&L/);
+  assert.match(value, /TRAILING STOP/);
+  assert.match(value, /Closed.*No open trailing stop/);
+  assert.match(value, /LAST CLOSED P&L/);
+  assert.match(value, /-₹984/);
+  assert.match(value, /-43\.50 premium pts · -8\.74% from entry/);
+  assert.match(value, /Exit 454\.30/);
   assert.match(value, /Risk cap is a plan, not a guaranteed maximum/);
   cleanup();
 });
@@ -4098,7 +4144,7 @@ test('6 Algo Desk shows each strategy rules and requirements while the feed is i
   assert.match(value, /Pullback to value/);
   assert.match(value, /tested VWAP\/EMA20 within 0\.25 ATR and held/, 'Requirements are visible, not tooltip-only');
   assert.match(value, /0 \/ 3/);
-  assert.match(value, /WAIT · NO CE\/PE SIGNAL/);
+  assert.match(value, /WAIT · NO QUALIFIED ENTRY/);
   assert.match(value, /Waiting for the live futures feed/);
   assert.match(value, /Opening range/);
   assert.match(value, /Pullback to value/);
@@ -4112,7 +4158,7 @@ test('6 Algo Desk shows each strategy rules and requirements while the feed is i
   assert.match(value, /Retest held/);
   assert.match(value, /All 15 opening candles \(09:15-09:29\)/);
   assert.match(value, /0 \/ 2/);
-  assert.match(value, /WAIT · NO CE\/PE SIGNAL/);
+  assert.match(value, /WAIT · NO QUALIFIED ENTRY/);
   assert.match(value, /Pullback to value|Trend pullback to VWAP/);
   assert.match(value, /Waiting for the live futures feed/);
   cleanup();
@@ -4163,6 +4209,46 @@ test('6 Algo Desk TRADE ON and Manual switch silently post approval for the sele
   cleanup();
 });
 
+test('Algo Desk distinguishes the daily P&L reset from retained weekly and last-trade history', async () => {
+  const h = harness('AlgoDeskSection.tsx');
+  const props = DESK_PROPS;
+  h.render(props);
+  const now = Date.now() / 1000;
+  const yesterdayLoss = {
+    id: 'yesterday-loss', entry_at: now - 86400, exit_at: now - 86300,
+    net_pnl: -984, algo: 'adaptive_vwap_pro', symbol: 'NIFTY',
+  };
+  const fixture = deskFixture({
+    trades: [yesterdayLoss],
+    algos: deskFixture().algos.map(algo => algo.key === 'adaptive_vwap_pro'
+      ? { ...algo, week: { ...algo.week, trades: 1, net_pnl: -984 } } : algo),
+  });
+  const cleanup = h.mount(fixture);
+  await settle();
+  const value = text(h.render(props));
+  assert.match(value, /Today P&L \(IST\)/);
+  assert.match(value, /This week P&L/);
+  assert.match(value, /LAST CLOSED P&L/);
+  assert.match(value, /Today.s realized P&L resets by IST date/);
+  assert.match(value, /Week P&L and last closed trade retain earlier results as history/);
+  assert.match(value, /-₹984/);
+  cleanup();
+});
+
+test('partial CE bias remains WAIT while auto-entry requires all checks and execution gates', async () => {
+  const h = harness('AlgoDeskSection.tsx');
+  const props = DESK_PROPS;
+  h.render(props);
+  const cleanup = h.mount(deskFixture({}, ['adaptive_vwap_pro']));
+  await settle();
+  const value = text(h.render(props));
+  assert.match(value, /WAIT · CALL \(CE\) SETUP · NOT QUALIFIED/);
+  assert.match(value, /Auto-scanning will buy CALL \(CE\) only after all 6 checks and live execution gates pass/);
+  assert.match(value, /No order has been placed/);
+  assert.doesNotMatch(value, /ENTRY QUALIFIED · BUY CALL \(CE\)/);
+  cleanup();
+});
+
 test('6 Algo Desk approvals stay independent while another section is enabled', async () => {
   for (const lane_owner of ['AQTE', 'QUANTEDGE']) {
     const h = harness('AlgoDeskSection.tsx');
@@ -4207,8 +4293,9 @@ test('6 Algo Desk shows the real open trade and journal, and Exit closes only th
   const now = Date.now() / 1000;
   const status = deskFixture({
     active: { id, algo: 'adaptive_vwap_pro', name: 'Adaptive VWAP Pro', symbol: 'NIFTY', state: 'OPEN',
-      contract: { trading_symbol: 'NIFTY26N1022000CE', side: 'CE' }, entry_price: 100, limit: 101, stop: 80, target: 140,
-      filled: 75, quantity: 75, trailing_active: false, exit_requested: null, ltp: 112.5, unrealized: 1000, entry_at: now },
+      contract: { trading_symbol: 'NIFTY26N1022000CE', side: 'CE' }, entry_price: 100, limit: 101, stop: 105, target: 140,
+      initial_stop: 80, filled: 75, quantity: 75, trailing_active: true, exit_requested: null,
+      ltp: 112.5, unrealized: 1000, entry_at: now },
     trades: [{ id: `XEA${'b'.repeat(13)}`, algo: 'adaptive_vwap_pro', symbol: 'BANKNIFTY', entry_price: 200, exit_price: 240,
       filled: 30, net_pnl: 1150, entry_at: now - 600, exit_at: now - 300, exit_reason: null, exit_requested: 'TARGET',
       stop: 180, target: 240, initial_stop: 180, trading_symbol: 'BANKNIFTY26N1048000PE', side: 'PE' }],
@@ -4225,10 +4312,18 @@ test('6 Algo Desk shows the real open trade and journal, and Exit closes only th
   assert.match(value, /NIFTY26N1022000CE/);
   assert.match(value, /112\.50/);
   assert.match(value, /\+₹1,000/);
-  assert.match(value, /OPEN POSITION · BUY CALL \(CE\)/);
+  assert.match(value, /ENTRY PRICE\s+100\.00/);
+  assert.match(value, /STOP LOSS\s+80\.00/);
+  assert.match(value, /TRAILING STOP\s+105\.00\s+Current trailing stop/);
+  assert.match(value, /Initial risk level/);
+  assert.match(value, /TARGET PRICE\s+140\.00/);
+  assert.match(value, /OPEN P&L\s+\+₹1,000/);
+  assert.match(value, /\+12\.50 premium pts · \+12\.50% from entry/);
+  assert.match(value, /LTP 112\.50/);
+  assert.match(value, /POSITION OPEN · BUY CALL \(CE\)/);
   const rows = nodes(tree).filter(n => n.type === 'tr').slice(1).map(text);
   assert.equal(rows.length, 3);
-  assert.match(rows[0], /NIFTY.*BUY CE.*100\.00.*80\.00.*140\.00.*Open/);
+  assert.match(rows[0], /NIFTY.*BUY CE.*100\.00.*105\.00.*140\.00.*Open/);
   assert.match(rows[1], /BANK NIFTY.*BUY PE.*200\.00.*180\.00.*240\.00.*Target.*\+₹1,150/);
   assert.match(rows[2], /SENSEX.*BUY CE.*Rejected/);
   h.respond({ ...status, active: { ...status.active, exit_requested: 'MANUAL_EXIT' } });
@@ -4272,7 +4367,7 @@ test('6 Algo Desk keeps each strategy index tab independent and displays its own
   const adaptive = nodes(tree).find(n => n.type === 'article' && text(n).includes('Adaptive VWAP Pro'));
   assert.match(text(adaptive), /BANKNIFTY-specific signal/);
   assert.match(text(adaptive), /BANK NIFTY VWAP rule/);
-  assert.match(text(adaptive), /QUALIFIED SIGNAL · BUY PUT \(PE\)/);
+  assert.match(text(adaptive), /ENTRY QUALIFIED · BUY PUT \(PE\)/);
   assert.match(text(adaptive), /50,000\.00/);
   assert.ok(h.requests.every(r => r.options.method === 'GET'), 'Changing a signal tab sends no trade command');
   cleanup();
@@ -4289,6 +4384,18 @@ test('ExpiryEdge AI Algo stays its own section and the 6 Algo Desk renders separ
   assert.match(panel, /Futures Signal Close/);
   assert.match(panel, /Underlying Invalidation/);
   assert.match(panel, /ATR Trail Distance/);
+  assert.doesNotMatch(panel, /Why no trade\?|Points and percentage show option-premium movement/);
+  for (const level of ['ENTRY PRICE', 'STOP LOSS', 'TRAILING STOP', 'TARGET PRICE', 'OPEN P&L']) {
+    assert.match(panel, new RegExp(level));
+  }
+  assert.match(panel, /premiumMovePercent/);
+  assert.match(panel, /premium pts · \$\{signedPercent\(premiumMovePercent\)\} from entry/);
+  assert.match(panel, /grid-cols-\[repeat\(auto-fit,minmax\(140px,1fr\)\)\]/);
+  assert.doesNotMatch(panel, /setStatus\(null\)|setLiveStatus\(null\)/,
+    'Transient polling/action errors keep the last good dashboard visible');
+  assert.match(panel, /const selectedScheduleWeekday = config\?\.schedules\[selectedSymbol\]\?\.weekday/);
+  assert.match(panel, /\[selectedScheduleWeekday, selectedSymbol\]/,
+    'Periodic status refresh does not overwrite an unsaved weekday choice');
   assert.match(panel, /aria-label="ExpiryEdge trade controls"/);
   assert.match(panel, /role="switch" aria-checked=\{liveStatus\?\.enabled \?\? false\}/);
   assert.match(panel, /ON blocked: \{liveStatus\.block_reasons\.join\('; '\)/);
@@ -4318,7 +4425,7 @@ test('MorningEdge is an independent section mounted immediately above ExpiryEdge
   assert.match(panel, /getOrCreateVisitorId/);
   assert.doesNotMatch(panel, /owner-secret|Unlock MorningEdge|sessionStorage/);
   assert.match(panel, /LIVE MARKET SIGNAL/);
-  assert.match(panel, /TRADE <span[\s\S]+marketEnabled \? 'ON' : 'OFF'/);
+  assert.match(panel, /FEED <span[\s\S]+marketEnabled \? 'ON' : 'OFF'/);
   assert.match(panel, /role="switch" aria-label="MorningEdge market feed"/);
   assert.match(panel, /aria-busy=\{marketPending\}/);
   assert.doesNotMatch(panel, /disabled=\{marketPending\}|marketPending \? '…'/);
@@ -4367,9 +4474,8 @@ test('QuantEdge Pro distinguishes arming auto entries from placing an immediate 
   assert.doesNotMatch(panel, /turn QuantEdge Pro ON or OFF at any time/);
   assert.doesNotMatch(panel, /startDisabledReason/);
   assert.match(panel, /APPROVED · WAITING FOR SESSION/);
-  assert.match(panel, /QUALIFIED SIGNAL · BUY \$\{signalSide === 'CE' \? 'CALL \(CE\)' : 'PUT \(PE\)'\}/);
-  assert.match(panel, /DIRECTIONAL BIAS · \$\{biasSide\} · NOT A BUY SIGNAL/);
-  assert.match(panel, /WAIT · NO CE\/PE SIGNAL/);
+  assert.match(panel, /ENTRY QUALIFIED · BUY \$\{optionSideLabel\(signalSide\)\}/);
+  assert.match(panel, /WAIT · NO QUALIFIED ENTRY/);
   assert.match(panel, /aria-live="polite"/);
   assert.match(panel, /const candidate = signalSide \? signal\?\.entry : undefined/);
   assert.match(panel, /setOperationError\(reason instanceof Error \? reason\.message/);

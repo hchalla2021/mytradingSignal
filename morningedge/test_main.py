@@ -81,6 +81,16 @@ def test_kite_credentials_read_only_from_backend_env_keys(tmp_path):
     assert main.load_kite_credentials(env_file) == ("api-key-value", "access-token-value")
 
 
+def test_kite_websocket_403_explains_access_token_recovery():
+    message = main._feed_error_message(
+        "connection was closed uncleanly (WebSocket connection upgrade failed (403 - Forbidden))",
+    )
+
+    assert "access token may have expired" in message
+    assert "backend/.env" in message
+    assert "restart MorningEdge" in message
+
+
 def test_breakout_returns_candidate_without_creating_position(monkeypatch):
     clock = Clock(datetime(2026, 11, 11, 9, 21, tzinfo=main.TZ))
     engine = main.MorningMarketEngine(clock)

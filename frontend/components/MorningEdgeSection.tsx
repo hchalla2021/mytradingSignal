@@ -210,7 +210,7 @@ export default function MorningEdgeSection() {
                 ? 'border-emerald-500 bg-emerald-950/60 text-emerald-200 hover:bg-emerald-900/70'
                 : 'border-slate-600 bg-slate-900 text-slate-200 hover:bg-slate-800'
             }`}>
-            TRADE <span className={`ml-1 rounded-full px-2 py-0.5 text-xs text-white ${
+            FEED <span className={`ml-1 rounded-full px-2 py-0.5 text-xs text-white ${
               marketEnabled ? 'bg-emerald-700' : 'bg-slate-600'
             }`}>{marketEnabled ? 'ON' : 'OFF'}</span>
           </button>

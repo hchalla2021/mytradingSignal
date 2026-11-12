@@ -1140,6 +1140,8 @@ class AQTEEngine:
                     scalp_signal = self.idle_scalp("Option quote or signal stale")
             signal["scalp"] = scalp_signal
             signal["feed_ready"] = self.fresh(self.spot.get(symbol), now) and self.fresh(self.future.get(symbol), now)
+            feed_ticks = (self.spot.get(symbol), self.future.get(symbol))
+            signal["feed_received_at"] = min(tick.received for tick in feed_ticks) if all(feed_ticks) else None
             if not signal["feed_ready"] or signal["at"] is None or not -1 <= now - signal["at"] <= self.policy.stale_seconds:
                 signal.update(rule_checks=None, setups=[])
             order = self.orders.get(symbol)

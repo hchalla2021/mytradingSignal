@@ -13,6 +13,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock, patch
 
+import requests
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -1087,6 +1088,28 @@ class LiveTests(unittest.TestCase):
         self.assertTrue(self.live.state["quantedge"]["enabled"])
         self.assertNotIn("error", self.live.state["quantedge"])
 
+    def test_quantedge_auto_scan_selects_one_top_candidate_with_stable_index_tie_break(self):
+        self.live.state["quantedge"]["enabled"] = True
+        candidates = {}
+        for symbol in ("NIFTY", "BANKNIFTY", "SENSEX"):
+            candidates[symbol] = {
+                "decision": "BUY CE", "side": "CE", "symbol": symbol,
+                "setup_key": f"qep-{symbol}", "signal_at": NOW,
+                "metrics": {"volume_ratio": 2.0 if symbol != "BANKNIFTY" else 1.8, "body_ratio": 0.8},
+                "spread_fraction": 0.01, "risk": 100,
+            }
+        with (patch.object(self.live, "quantedge_candidate", side_effect=lambda symbol, busy: candidates[symbol]),
+              patch.object(self.live, "quantedge_activate", return_value=True),
+              patch.object(self.live, "quantedge_proposal", return_value={"id": "qep-proposal"}) as proposal,
+              patch.object(self.live, "confirm") as confirm,
+              patch.object(self.live, "publish_quantedge_event"),
+              patch.object(self.live, "record_quantedge_opportunity")):
+            self.live.automated_quantedge_entry()
+
+        self.assertEqual(proposal.call_args.args[0], "NIFTY")
+        confirm.assert_called_once_with("qep-proposal")
+        self.broker.place_order.assert_not_called()
+
     def test_confirm_places_exactly_one_lot_ioc_limit_with_persisted_tag_and_no_duplicate(self):
         self.armed()
         proposal = self.live.proposal("NIFTY")
@@ -1997,6 +2020,32 @@ class LiveTests(unittest.TestCase):
             self.assertFalse(result["entry_window"])
             self.assertEqual(result["automation_waiting"], MARKET_WAIT)
         self.assertEqual(self.ip.call_count, 1, "No preflight outside the entry window")
+        self.broker.place_order.assert_not_called()
+
+    def test_preflight_retry_clears_stale_error_and_reports_current_ip_block(self):
+        self.live.state["automation_wanted"] = True
+        self.live.error = "ConnectTimeoutError: stale api.ipify.org timeout"
+        self.ip.return_value = "8.8.8.8"
+
+        self.assertFalse(self.live.try_activate())
+
+        status = self.live.status()
+        self.assertIsNone(status["error"])
+        self.assertIn("does not match allowlisted IP", status["automation_waiting"])
+        self.assertFalse(status["armed"])
+        self.assertFalse(status["automation_on"])
+        self.broker.place_order.assert_not_called()
+
+    def test_premarket_ip_timeout_is_recorded_as_a_preparation_block_not_controller_fault(self):
+        self.ip.side_effect = requests.ConnectTimeout("ip service timeout")
+        premarket = datetime(2026, 11, 12, 8, 50, tzinfo=IST).timestamp()
+
+        with patch("services.aqte_live.time.time", return_value=premarket):
+            self.live.prepare_session()
+
+        self.assertIn("outbound IP verification unavailable", self.live.prepare_error)
+        self.assertIsNone(self.live.error)
+        self.assertFalse(self.live.status()["armed"])
         self.broker.place_order.assert_not_called()
 
     def test_manual_on_resets_off_after_restart_and_does_not_arm_at_market_open(self):

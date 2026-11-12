@@ -308,6 +308,7 @@ export function isAqteMorningStatus(value: unknown): value is AQTEMorningStatus 
 }
 export type AQTESignal = {
   feed_ready?: boolean;
+  feed_received_at?: number | null;
   decision: 'WAIT' | 'BUY CE' | 'BUY PE';
   reasons: string[];
   confidence: number | null;
@@ -422,7 +423,7 @@ export function aqteRuleEvidence(signal: AQTESignal | undefined, style: AQTEEntr
 }
 
 export function aqteFeedCurrent(signal: AQTESignal | undefined, now = aqteServerNow()) {
-  const age = signal?.at == null ? NaN : now - signal.at;
+  const age = signal?.feed_received_at == null ? NaN : now - signal.feed_received_at;
   return signal?.feed_ready === true && Number.isFinite(age) && age >= -1 && age <= 5;
 }
 

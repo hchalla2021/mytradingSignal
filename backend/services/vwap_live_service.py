@@ -19,8 +19,11 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 import pytz
-from typing import Tuple, Optional, Dict, Any
+from typing import TYPE_CHECKING, Tuple, Optional, Dict, Any
 import logging
+
+if TYPE_CHECKING:
+    import pandas as pd
 
 logger = logging.getLogger(__name__)
 

@@ -503,12 +503,6 @@ class AQTELiveService:
                         order, now, healthy=market.started and not market.failed.is_set())
             trades = [trade for trade in self.state["trades"] if trade.get("owner") not in SEPARATE_OWNERS]
             visible_trades = [trade for trade in trades[:-20] if day(trade["exit_at"]) == day(now)] + trades[-20:]
-            aqte_state = {
-                **self.state,
-                "trades": trades,
-                "daily_entries": [entry for entry in self.state["daily_entries"]
-                                  if entry.get("owner") not in SEPARATE_OWNERS],
-            }
             automation_on = bool(self.state.get("automation_on")) and \
                 self.state["armed_day"] == day(now) and not self.state["killed"]
             wanted = bool(self.state.get("automation_wanted")) and not self.state["killed"]
@@ -803,6 +797,14 @@ class AQTELiveService:
             raise LiveBlocked("Configured static IP must be a public IPv4 address")
         return cfg
 
+    def checked_outbound_ip(self):
+        try:
+            return self.ip_check()
+        except requests.RequestException as exc:
+            raise LiveBlocked(
+                f"Backend outbound IP verification unavailable ({type(exc).__name__}); live entries remain blocked"
+            ) from exc
+
     def book(self, broker):
         """Split Kite's account into AQTE-owned exposure/orders and the owner's own trades.
 
@@ -857,7 +859,7 @@ class AQTELiveService:
             cfg = self.config_guard()
             if self.state["active"]:
                 raise LiveBlocked("Reconcile active live trade before running entry preflight")
-            ip = self.ip_check()
+            ip = self.checked_outbound_ip()
             if ip != cfg.aqte_live_static_ip:
                 raise LiveBlocked(f"Outbound IP {ip} does not match allowlisted IP {cfg.aqte_live_static_ip}")
             broker = self.broker()
@@ -906,7 +908,7 @@ class AQTELiveService:
             raise LiveBlocked("Live entries permitted only from 09:15 until 15:15 IST")
         if self.state["active"]:
             raise LiveBlocked("Only one live trade may be pending/open across all indices")
-        if self.ip_check() != cfg.aqte_live_static_ip:
+        if self.checked_outbound_ip() != cfg.aqte_live_static_ip:
             self.state["armed_day"] = None
             self.state["automation_on"] = False
             self.save("IP_MISMATCH_DISARMED")
@@ -1000,6 +1002,9 @@ class AQTELiveService:
         except Exception as exc:
             reason = str(exc) if isinstance(exc, LiveBlocked) else f"{type(exc).__name__}: {exc}"
             self.next_activation = now + ACTIVATION_RETRY_SECONDS
+            if (self.state.get("automation_wanted") and not self.state["active"]
+                    and not self.state.get("flatten_pending") and not self.state["killed"]):
+                self.error = None
             if reason != self.waiting:
                 self.waiting = reason
                 logger.warning("AQTE auto trade ON is waiting: %s", reason)
@@ -1351,7 +1356,7 @@ class AQTELiveService:
             if not self.quantedge_activate(now):
                 return
             busy = self.book(self.broker())["busy"]
-            for _, symbol, candidate in sorted(qualified, reverse=True):
+            for _, symbol, candidate in sorted(qualified, key=lambda item: item[0], reverse=True):
                 setup_key = candidate["setup_key"]
                 self.publish_quantedge_event(
                     "SIGNAL_GENERATED",

@@ -64,7 +64,12 @@ type LiveStatus = {
     filled: number;
     exited: number;
     entry_price?: number;
+    limit?: number;
+    initial_stop?: number;
     stop?: number;
+    target?: number;
+    trailing_active?: boolean;
+    trail_start_r?: number;
     ltp?: number | null;
     unrealized?: number | null;
     state?: string;
@@ -103,6 +108,16 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 const PRICE_FORMAT = new Intl.NumberFormat('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const hasPrice = (value: number | null | undefined): value is number =>
+  typeof value === 'number' && Number.isFinite(value) && value > 0;
+const price = (value: number | null | undefined) => hasPrice(value) ? `₹${PRICE_FORMAT.format(value)}` : '—';
+const signedRupees = (value: number | null | undefined) =>
+  typeof value === 'number' && Number.isFinite(value)
+    ? `${value > 0 ? '+' : value < 0 ? '-' : ''}₹${PRICE_FORMAT.format(Math.abs(value))}` : '—';
+const signedPoints = (value: number | null) =>
+  value !== null && Number.isFinite(value) ? `${value > 0 ? '+' : ''}${PRICE_FORMAT.format(value)}` : '—';
+const signedPercent = (value: number | null) =>
+  value !== null && Number.isFinite(value) ? `${value > 0 ? '+' : ''}${value.toFixed(2)}%` : '—';
 const EMPTY_MARKET_DATA: MarketData = { NIFTY: null, BANKNIFTY: null, SENSEX: null };
 
 export default function ExpiryEdgeAIPanel({
@@ -132,6 +147,58 @@ export default function ExpiryEdgeAIPanel({
     ['Underlying Invalidation', 'text-rose-400', liveSignal?.underlying_stop],
     ['ATR Trail Distance', 'text-amber-300', liveSignal?.trail_distance],
   ];
+  const activePosition = liveStatus?.active ?? null;
+  const activeQuantity = activePosition ? Math.max(0, activePosition.filled - activePosition.exited) : 0;
+  const hasFill = Boolean(activePosition && activePosition.filled > 0 && hasPrice(activePosition.entry_price));
+  const positionEntry = activePosition
+    ? hasFill ? activePosition.entry_price : activePosition.limit
+    : undefined;
+  const initialStop = activePosition?.initial_stop ?? activePosition?.stop;
+  const premiumMove = activePosition && hasPrice(activePosition.ltp) && hasPrice(activePosition.entry_price)
+    ? activePosition.ltp - activePosition.entry_price : null;
+  const premiumMovePercent = premiumMove !== null && activePosition && hasPrice(activePosition.entry_price)
+    ? premiumMove / activePosition.entry_price * 100 : null;
+  const trailStart = activePosition?.trail_start_r ?? 1;
+  const positionMetrics = [
+    {
+      label: activePosition ? hasFill ? 'ENTRY PRICE' : 'ENTRY LIMIT' : 'ENTRY PRICE',
+      value: activePosition ? price(positionEntry) : '—',
+      detail: activePosition ? hasFill ? `${activeQuantity} units filled` : 'Awaiting fill' : 'After validated fill',
+      color: 'emerald',
+    },
+    {
+      label: 'STOP LOSS',
+      value: activePosition ? price(initialStop) : '—',
+      detail: activePosition ? activePosition.trailing_active ? 'Initial risk level' : 'Initial protective stop'
+        : 'After validated plan',
+      color: 'rose',
+    },
+    {
+      label: 'TRAILING STOP',
+      value: activePosition
+        ? activePosition.trailing_active ? price(activePosition.stop) : `Waiting · +${trailStart}R`
+        : '—',
+      detail: activePosition?.trailing_active ? 'Current protective stop'
+        : activePosition ? 'Initial stop remains active' : 'Starts after +1R in profit',
+      color: 'amber',
+    },
+    {
+      label: 'TARGET PRICE',
+      value: activePosition ? price(activePosition.target) : '—',
+      detail: activePosition ? 'Planned exit level' : 'After validated plan',
+      color: 'emerald',
+    },
+    {
+      label: 'OPEN P&L',
+      value: activePosition ? signedRupees(activePosition.unrealized) : '—',
+      detail: activePosition
+        ? `${signedPoints(premiumMove)} premium pts · ${signedPercent(premiumMovePercent)} from entry`
+        : 'premium pts · % from entry',
+      caption: activePosition ? `LTP ${price(activePosition.ltp)}` : 'No open position',
+      color: typeof activePosition?.unrealized === 'number' && activePosition.unrealized > 0 ? 'emerald'
+        : typeof activePosition?.unrealized === 'number' && activePosition.unrealized < 0 ? 'rose' : 'slate',
+    },
+  ] as const;
   const signalReason = strategyFeedConnected
     ? strategySignal?.reason ?? 'ExpiryEdge signal status unavailable'
     : `Waiting for a connected, fresh ${selectedSymbol} futures feed`;
@@ -158,7 +225,6 @@ export default function ExpiryEdgeAIPanel({
   const refresh = useCallback(async () => {
     if (refreshInProgress.current) return;
     refreshInProgress.current = true;
-    setError('');
     try {
       const [nextConfig, nextStatus, nextLiveStatus] = await Promise.all([
         request<Config>('config'),
@@ -168,9 +234,8 @@ export default function ExpiryEdgeAIPanel({
       setConfig(nextConfig);
       setStatus(nextStatus);
       setLiveStatus(nextLiveStatus);
+      setError('');
     } catch (reason) {
-      setStatus(null);
-      setLiveStatus(null);
       setError(reason instanceof Error ? reason.message : 'Unable to load Expiry Edge status');
     } finally {
       refreshInProgress.current = false;
@@ -190,9 +255,10 @@ export default function ExpiryEdgeAIPanel({
       clearTimeout(timer);
     };
   }, [refresh]);
+  const selectedScheduleWeekday = config?.schedules[selectedSymbol]?.weekday;
   useEffect(() => {
-    setSelectedWeekday(config?.schedules[selectedSymbol]?.weekday ?? '');
-  }, [config, selectedSymbol]);
+    setSelectedWeekday(selectedScheduleWeekday ?? '');
+  }, [selectedScheduleWeekday, selectedSymbol]);
 
   async function save() {
     if (!selectedWeekday) return;
@@ -229,7 +295,6 @@ export default function ExpiryEdgeAIPanel({
       setLiveStatus(next);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Unable to update ExpiryEdge AI live approval');
-      setLiveStatus(null);
     } finally {
       setApprovalPending(false);
     }
@@ -250,7 +315,6 @@ export default function ExpiryEdgeAIPanel({
       }));
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : 'Unable to request ExpiryEdge AI exit');
-      setLiveStatus(null);
     } finally {
       setExitPending(false);
     }
@@ -428,11 +492,6 @@ export default function ExpiryEdgeAIPanel({
             <p className="mt-2 border-b border-emerald-900 pb-2 text-xs text-slate-300">
               Expiry gate: {expiryGate ? (expiryGate.eligible ? 'Eligible' : 'Blocked') : 'Unavailable'}
             </p>
-            <ul className="mt-2 space-y-1 text-xs text-slate-300">
-              {(status?.block_reasons.length ? status.block_reasons.slice(0, 4) : ['Market intelligence is not connected']).map(reason => (
-                <li key={reason} className="flex gap-2"><span className="text-amber-400">●</span><span>{reason}</span></li>
-              ))}
-            </ul>
           </article>
 
           <div aria-hidden="true" className="hidden items-center justify-center text-3xl font-black text-emerald-400 lg:flex">»</div>
@@ -496,23 +555,41 @@ export default function ExpiryEdgeAIPanel({
         <div className="grid gap-2 lg:grid-cols-[1.45fr_1fr_.9fr]">
           <article className="overflow-hidden rounded-xl border border-slate-600 bg-[#06131d]">
             <h3 className="border-b border-slate-700 bg-[#0b202b] px-3 py-2.5 text-sm font-extrabold">Open Positions ({liveStatus?.active ? 1 : 0})</h3>
-            {liveStatus?.active ? <div className="space-y-2 p-2.5">
-              <div className="grid grid-cols-2 gap-2 text-xs sm:grid-cols-3 sm:text-sm">
-                <p><span className="text-slate-400">Contract</span><br />{liveStatus.active.contract.trading_symbol}</p>
-                <p><span className="text-slate-400">Quantity</span><br />{Math.max(0, liveStatus.active.filled - liveStatus.active.exited)}</p>
-                <p><span className="text-slate-400">Entry / Stop</span><br />
-                  {liveStatus.active.entry_price ? PRICE_FORMAT.format(liveStatus.active.entry_price) : '—'} / {liveStatus.active.stop ? PRICE_FORMAT.format(liveStatus.active.stop) : '—'}
-                </p>
-                <p><span className="text-slate-400">LTP</span><br />{liveStatus.active.ltp ? PRICE_FORMAT.format(liveStatus.active.ltp) : '—'}</p>
-                <p><span className="text-slate-400">Unrealized P&amp;L</span><br />
-                  {liveStatus.active.unrealized == null ? '—' : `₹${PRICE_FORMAT.format(liveStatus.active.unrealized)}`}
-                </p>
+            <div className="space-y-2.5 p-2.5">
+              {activePosition && <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                <div>
+                  <p className="font-bold text-slate-100">{activePosition.contract.trading_symbol}</p>
+                  <p className="mt-0.5 text-slate-400">
+                    {activePosition.state ?? 'OPEN'} · {activeQuantity} units open
+                  </p>
+                </div>
                 <button type="button" onClick={() => void exitLivePosition()} disabled={exitPending}
                   className="min-h-10 rounded-md border border-rose-500 bg-rose-950 px-3 font-bold text-rose-200 disabled:opacity-50">
                   {exitPending ? 'Requesting exit…' : 'Exit ExpiryEdge AI position'}
                 </button>
+              </div>}
+              <div role="group" aria-label="Trade entry, stop, target, and P&L"
+                className="grid grid-cols-[repeat(auto-fit,minmax(140px,1fr))] gap-2">
+                {positionMetrics.map(metric => (
+                  <div key={metric.label} className={`min-w-0 rounded-lg border p-2.5 ${
+                    metric.color === 'rose' ? 'border-rose-500/40 bg-rose-950/25'
+                      : metric.color === 'amber' ? 'border-amber-500/40 bg-amber-950/20'
+                        : metric.color === 'slate' ? 'border-slate-700 bg-slate-900/60'
+                          : 'border-emerald-500/40 bg-emerald-950/20'}`}>
+                    <p className="text-[10px] font-bold tracking-wide text-slate-400">{metric.label}</p>
+                    <p className={`mt-1 break-words text-sm font-extrabold tabular-nums sm:text-base ${
+                      metric.color === 'rose' ? 'text-rose-300'
+                        : metric.color === 'amber' ? 'text-amber-200'
+                          : metric.color === 'slate' ? 'text-slate-200' : 'text-emerald-200'}`}>
+                      {metric.value}
+                    </p>
+                    <p className="mt-1 break-words text-[10px] leading-snug text-slate-400">{metric.detail}</p>
+                    {'caption' in metric && <p className="mt-1 break-words text-[10px] leading-snug text-slate-400">{metric.caption}</p>}
+                  </div>
+                ))}
               </div>
-            </div> : <p className="px-3 py-4 text-sm text-slate-400">No open ExpiryEdge AI position.</p>}
+              {!activePosition && <p className="text-xs text-slate-400">No open ExpiryEdge AI position.</p>}
+            </div>
           </article>
           <article className="overflow-hidden rounded-xl border border-slate-600 bg-[#06131d]">
             <h3 className="border-b border-slate-700 bg-[#0b202b] px-3 py-2.5 text-sm font-extrabold">ExpiryEdge AI Status</h3>

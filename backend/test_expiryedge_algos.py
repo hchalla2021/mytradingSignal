@@ -168,6 +168,83 @@ class ExpiryEdgeDeskTests(unittest.TestCase):
                 self.assertTrue(algo["fresh"])
         json.dumps(result, allow_nan=False)
 
+    def test_order_flow_waits_for_current_session_candles(self):
+        previous_day = [
+            dict(at=NOW - 86400 + index * 60, open=100, close=110, high=111, low=99,
+                 volume=100_000, oi=100_000 + index)
+            for index in range(25)
+        ]
+        today = [
+            dict(at=NOW - 60, open=100, close=110, high=111, low=99, volume=10, oi=200_000),
+            dict(at=NOW, open=110, close=120, high=121, low=109, volume=100_000, oi=200_100),
+        ]
+        features = dict(bars=previous_day + today, today=today, last=today[-1], close=today[-1]["close"],
+                        rvol=1000)
+        live = Mock(buy_depth=1_000, sell_depth=100, bid_quantity=100, ask_quantity=10)
+
+        result = EVALUATORS["order_flow_momentum"](features, live, {})
+        rules = {item["id"]: item for item in result["rules"]}
+
+        self.assertIsNone(rules["volume_delta"]["passed"])
+        self.assertIsNot(rules["breakout"]["passed"], True)
+        self.assertIsNone(rules["relative_volume"]["passed"])
+        self.assertIsNone(rules["oi_buildup"]["passed"])
+
+    def test_liquidity_sweep_uses_current_session_for_sweep_and_volume(self):
+        previous_day = [
+            dict(at=NOW - 86400 + index * 60, open=100, close=100, high=101, low=99,
+                 volume=100_000)
+            for index in range(40)
+        ]
+        today = [
+            dict(at=NOW - 25 * 60 + index * 60, open=100, close=100, high=101, low=99, volume=10)
+            for index in range(25)
+        ]
+        today[-1].update(close=102, high=103, volume=100)
+        features = dict(bars=previous_day + today, today=today, last=today[-1], close=today[-1]["close"],
+                        atr1=1, rvol=0.001)
+        live = Mock(price=104)
+
+        result = EVALUATORS["liquidity_sweep_bos"](features, live, {})
+        rules = {item["id"]: item for item in result["rules"]}
+
+        self.assertIsNone(rules["sweep"]["passed"])
+        self.assertTrue(rules["volume"]["passed"])
+
+    def test_failed_breakout_cannot_confirm_from_previous_session(self):
+        previous_day = [
+            dict(at=NOW - 86400 + index * 60, open=95, close=95, high=100, low=90, volume=100)
+            for index in range(40)
+        ]
+        previous_day[-1].update(high=110, low=100, close=105)
+        today = [dict(at=NOW, open=99, close=98, high=100, low=97, volume=100)]
+        features = dict(bars=previous_day + today, today=today, last=today[-1], close=today[-1]["close"],
+                        rsi1=[65] * 40 + [58])
+        live = Mock(price=99)
+
+        result = EVALUATORS["failed_breakout_reversal"](features, live, {})
+        rules = {item["id"]: item for item in result["rules"]}
+
+        self.assertIsNone(rules["failed_break"]["passed"])
+        self.assertTrue(all(item["passed"] is not True for item in rules.values()))
+
+    def test_volatility_squeeze_uses_latest_pretrigger_five_minute_bar(self):
+        closes = [90 if index % 2 == 0 else 110 for index in range(60)]
+        closes.extend([100] * 19)
+        closes.extend([150, 160])
+        m5 = [
+            dict(at=index * 300, open=close, high=close + 1, low=close - 1, close=close,
+                 volume=100 if index == 80 else 10)
+            for index, close in enumerate(closes)
+        ]
+        features = dict(m5=m5, atr5=1, ema20_5=100, close=160, atr1=1)
+
+        result = EVALUATORS["volatility_expansion"](features, None, {})
+        rules = {item["id"]: item for item in result["rules"]}
+
+        self.assertFalse(rules["squeeze"]["passed"])
+        self.assertTrue(rules["band_break"]["passed"])
+
     def test_each_index_uses_its_own_live_ticks_and_candles(self):
         engine = ready_engine()
         base_future = engine.future["NIFTY"]
@@ -407,6 +484,24 @@ class ExpiryEdgeLaneTests(unittest.TestCase):
         self.assertEqual(next(item for item in status["algos"] if item["key"] == OTHER)["today"]["trades"], 0)
         self.assertEqual(status["account"]["expiryedge_pnl_today"], 1150.0)
         json.dumps(status, allow_nan=False)
+
+    def test_prior_day_loss_remains_in_week_history_but_not_today_pnl(self):
+        yesterday = datetime(2026, 10, 29, 10, 0, tzinfo=IST).timestamp()
+        today = datetime(2026, 10, 30, 10, 0, tzinfo=IST).timestamp()
+        for trade_id, entry_at, pnl in (("yesterday", yesterday, -984.0), ("today", today, 200.0)):
+            self.live.state["trades"].append(dict(
+                id=trade_id, owner="EXPIRYEDGE", algo=ALGO, symbol="NIFTY", contract=asdict(CONTRACT),
+                entry_at=entry_at, exit_at=entry_at + 60, entry_price=100.0, exit_price=100.0,
+                filled=CONTRACT.lot_size, net_pnl=pnl, exit_requested=None, stop=90.0, target=120.0,
+                initial_stop=90.0, execution_context={},
+            ))
+
+        status = self.live.expiryedge_status("NIFTY")
+        algo = next(item for item in status["algos"] if item["key"] == ALGO)
+        self.assertEqual((algo["today"]["trades"], algo["today"]["net_pnl"]), (1, 200.0))
+        self.assertEqual((algo["week"]["trades"], algo["week"]["net_pnl"]), (2, -784.0))
+        self.assertEqual(status["account"]["expiryedge_pnl_today"], 200.0)
+        self.assertEqual(len(status["trades"]), 2)
 
     def test_emergency_stop_turns_every_algo_off(self):
         self.enable()
