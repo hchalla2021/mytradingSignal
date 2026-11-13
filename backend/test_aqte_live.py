@@ -1550,8 +1550,10 @@ class LiveTests(unittest.TestCase):
     def test_broker_quote_stamped_slightly_ahead_of_a_slow_clock_is_fresh_but_not_far_ahead(self):
         self.armed()
         normal = self.broker.quote.side_effect
-        stamped = lambda ahead: lambda keys: {
-            key: {**value, "timestamp": datetime.fromtimestamp(NOW + ahead, IST)} for key, value in normal(keys).items()}
+        def stamped(ahead):
+            return lambda keys: {
+                key: {**value, "timestamp": datetime.fromtimestamp(NOW + ahead, IST)} for key, value in normal(keys).items()}
+
         self.broker.quote.side_effect = stamped(4)
         with self.assertRaisesRegex(LiveBlocked, "Fresh broker ask"):
             self.live.confirm(self.live.proposal("NIFTY")["id"])

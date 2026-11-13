@@ -104,8 +104,10 @@ class BrokerPositionTests(unittest.TestCase):
             self.service.snapshot()
 
     def test_quote_stamped_slightly_ahead_of_a_slow_clock_still_shows_ltp(self):
-        stamped = lambda ahead: {"NFO:NIFTY26NOV22000CE": {
-            **self.quote(120), "timestamp": datetime.fromtimestamp(self.now + ahead, IST)}}
+        def stamped(ahead):
+            return {"NFO:NIFTY26NOV22000CE": {
+                **self.quote(120), "timestamp": datetime.fromtimestamp(self.now + ahead, IST)}}
+
         self.client.quote.return_value = stamped(1.5)
         self.assertEqual(self.service.snapshot()["positions"][0]["ltp"], 120)
         self.service.cached = None

@@ -839,7 +839,9 @@ class ServiceTests(unittest.TestCase):
         self.service.started = True
         raw = dict(instrument_token=20, last_price=22000)
         base = "Market data stale: futures no ticks yet; spot no ticks yet"
-        reason = lambda: self.service.snapshot()["data"]["NIFTY"]["reasons"][0]
+        def reason():
+            return self.service.snapshot()["data"]["NIFTY"]["reasons"][0]
+
         with patch("services.aqte_service.time.time", return_value=NOW), self.assertLogs("services.aqte_service", "WARNING"):
             self.service.enqueue("NIFTY", "future", dict(raw, exchange_timestamp=datetime.fromtimestamp(NOW - 8, IST)))
             self.assertEqual(reason(), base, "Ordinary feed lag is not a clock fault")
