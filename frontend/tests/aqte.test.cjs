@@ -1,6 +1,6 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { readFileSync } = require('node:fs');
+const { existsSync, readFileSync } = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 const ts = require('typescript');
@@ -4426,7 +4426,8 @@ test('MorningEdge is an independent section mounted immediately above ExpiryEdge
   const panel = read(path.join('components', 'MorningEdgeSection.tsx'));
   assert.match(panel, /aria-label="MorningEdge AI Algo"/);
   assert.doesNotMatch(panel, /ExpiryEdgeAIPanel|AlgoDeskSection|AQTE|marketData/);
-  assert.match(panel, /\/api\/morningedge\//);
+  assert.match(panel, /fetch\(`\/morningedge-api\//);
+  assert.doesNotMatch(panel, /\/api\/morningedge\//);
   assert.match(panel, /getOrCreateVisitorId/);
   assert.doesNotMatch(panel, /owner-secret|Unlock MorningEdge|sessionStorage/);
   assert.match(panel, /LIVE MARKET SIGNAL/);
@@ -4447,7 +4448,9 @@ test('MorningEdge is an independent section mounted immediately above ExpiryEdge
   const section = read(path.join('components', 'AQTESection.tsx'));
   assert.match(section,
     /<MorningEdgeSection \/>\s*<ExpiryEdgeAIPanel marketData=\{marketData\} isConnected=\{isConnected\} \/>/);
-  const proxy = read(path.join('app', 'api', 'morningedge', '[...path]', 'route.ts'));
+  // Production Nginx routes /api/* to FastAPI, so a Next.js route there is unreachable (404) in production.
+  assert.equal(existsSync(path.join(__dirname, '..', 'app', 'api', 'morningedge')), false);
+  const proxy = read(path.join('app', 'morningedge-api', '[...path]', 'route.ts'));
   assert.match(proxy, /api\/app-access\/session/);
   assert.match(proxy, /X-Device-Id/);
   assert.doesNotMatch(proxy, /MORNINGEDGE_SERVICE_TOKEN|X-MorningEdge-Owner-Secret/);

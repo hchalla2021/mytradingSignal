@@ -28,6 +28,7 @@ LOG="/var/log/mytradingSignal/market-9am-start.log"
 PROJECT_PATH="/var/www/mytradingSignal"
 BACKEND_NAME="backend"
 BACKEND_PORT=8000
+MORNINGEDGE_NAME="morningedge"
 export PATH="/usr/local/bin:/usr/bin:/bin:$PATH"
 
 log() { echo "[$(TZ=Asia/Kolkata date '+%Y-%m-%d %H:%M:%S IST')] $1" >> "$LOG"; }
@@ -67,14 +68,28 @@ if ! pm2 pid >/dev/null 2>&1 || [ -z "$(pm2 pid 2>/dev/null)" ]; then
     pm2 resurrect >> "$LOG" 2>&1 || true
 fi
 
+# MorningEdge first, without restarting a healthy instance: it keeps today's pre-open
+# ticks (09:00-09:08) in memory and reloads the Zerodha token from backend/.env itself.
+bash "$PROJECT_PATH/scripts/ensure-morningedge.sh" >> "$LOG" 2>&1 \
+    || log "WARNING: MorningEdge is not healthy - see messages above"
+
 # Stop backend cleanly, then clear any orphan holding port 8000
 # (known pitfall: stale uvicorn on port 8000 causes instant crash loop)
 pm2 stop "$BACKEND_NAME" >> "$LOG" 2>&1 || true
 sleep 2
 free_backend_port
 
-# Restart everything
-pm2 restart all --update-env >> "$LOG" 2>&1 || pm2 resurrect >> "$LOG" 2>&1 || true
+# Restart everything except MorningEdge
+OTHER_APPS=$(pm2 jlist 2>/dev/null | python3 -c "
+import sys, json
+try:
+    print(' '.join(p['name'] for p in json.load(sys.stdin) if p.get('name') != '$MORNINGEDGE_NAME'))
+except Exception:
+    pass
+" 2>/dev/null)
+if [ -n "$OTHER_APPS" ]; then
+    pm2 restart $OTHER_APPS --update-env >> "$LOG" 2>&1 || pm2 resurrect >> "$LOG" 2>&1 || true
+fi
 
 # Verify backend actually stays online; retry up to 3 times
 for attempt in 1 2 3; do
@@ -110,7 +125,7 @@ chmod +x "$START_SCRIPT"
 echo "[3/5] Installing systemd service + timer..."
 cat > /etc/systemd/system/market-9am-start.service <<EOF
 [Unit]
-Description=Start trading backend (pm2 restart all) at 9AM IST
+Description=Start trading backend (pm2 restart, MorningEdge kept running) at 9AM IST
 After=network-online.target
 Wants=network-online.target
 

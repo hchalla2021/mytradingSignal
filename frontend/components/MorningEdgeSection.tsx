@@ -51,7 +51,8 @@ function sparkline(values: number[] = []): string {
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`/api/morningedge/${path}`, {
+  // Kept outside /api/: production reverse proxies send every /api/* request to FastAPI, not Next.js.
+  const response = await fetch(`/morningedge-api/${path}`, {
     ...init,
     credentials: 'same-origin',
     cache: 'no-store',

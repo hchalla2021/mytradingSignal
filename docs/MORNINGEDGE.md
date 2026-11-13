@@ -42,6 +42,66 @@ Production Compose keeps the API on the private Docker network and mounts the
 configured backend environment file read-only. The frontend proxy validates
 the existing app-access cookie and device ID before returning status.
 
+## Production with PM2
+
+On a PM2 host (frontend and backend are PM2 processes, no Docker daemon),
+MorningEdge needs its own PM2 process. Without it nothing listens on port 8010
+and the section reports that the standalone service is unreachable. The service
+uses the backend virtualenv and reads the token from `backend/.env`; do not copy
+it into a second environment file.
+
+`scripts/ensure-morningedge.sh` is idempotent and safe to run after every deploy.
+It checks the dependencies, starts MorningEdge on `127.0.0.1:8010` when it is
+missing, and restarts it only when it is not online. It runs `pm2 save` only
+after `/health` answers.
+
+```bash
+cd /var/www/mytradingSignal
+bash scripts/ensure-morningedge.sh
+curl -sS http://127.0.0.1:8010/api/status
+systemctl is-enabled pm2-root
+```
+
+Allow time for the instrument catalog and feed connection. Health should
+eventually report `feed: connected`, and `/api/status` should show `LIVE` index
+status, fresh timestamps, and `trade_enabled: false`. An HTTP 200 health response
+alone does not prove a working feed.
+
+A healthy instance does not need a restart for a new Zerodha token. Every 15
+seconds MorningEdge rereads `backend/.env` and reconnects in-process when the
+token changes, for example after the daily login. That keeps today's in-memory
+pre-open ticks. If the feed stays down with an unchanged token, it retries after
+60 seconds, doubling the wait up to 15 minutes.
+
+After deploying changes to `morningedge/`, load the new code with
+`pm2 restart morningedge` before 09:00 or after 15:30 IST. A restart discards the
+day's collected ticks.
+
+The 9 AM timer from `scripts/setup-9am-autostart.sh` runs the ensure script
+first and then restarts the other PM2 processes, leaving a healthy MorningEdge
+running. After changing that setup script, rerun it once on the droplet to
+reinstall `/usr/local/bin/market-9am-start.sh`.
+
+The frontend proxy defaults to `http://127.0.0.1:8010`. If production overrides
+`MORNINGEDGE_API_URL`, ensure it points there rather than the Docker hostname;
+changing a frontend runtime environment variable requires restarting that process.
+
+### Routing
+
+The dashboard calls `/morningedge-api/api/status`. This Next.js route is
+deliberately outside `/api/`: production Nginx sends every `/api/*` request to
+the FastAPI backend, which would return 404. The site's existing `location /`
+already proxies this path to Next.js, so no Nginx change is needed. Do not
+expose port 8010 publicly; the Next.js route enforces the dashboard session and
+device-ID checks.
+
+Without credentials, both `http://127.0.0.1:3000/morningedge-api/api/status` and
+`https://mydailytradesignals.com/morningedge-api/api/status` must return 401 with
+`Sign in to view MorningEdge.` Then verify live prices in the signed-in
+dashboard. Starting after the morning collection windows cannot recover missed
+pre-open or opening-range ticks, so WAIT for incomplete coverage is expected
+even with a healthy feed.
+
 ## Strategy and safety
 
 The experimental baseline observes NIFTY, BANKNIFTY, and SENSEX during

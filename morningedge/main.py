@@ -2,6 +2,7 @@ import os
 import threading
 from datetime import datetime, time, timedelta
 from pathlib import Path
+from time import monotonic, sleep
 from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI
@@ -280,6 +281,13 @@ FEED_ENABLED = True
 FEED_STATE = "connecting"
 FEED_LOCK = threading.RLock()
 FEED_GENERATION = 0
+# Credentials the current feed generation connected with; None until start_feed has read them.
+FEED_CREDENTIALS = None
+FEED_DOWN_SINCE = None
+FEED_SUPERVISOR_SECONDS = 15
+FEED_RETRY_MIN_SECONDS = 60
+FEED_RETRY_MAX_SECONDS = 900
+FEED_RETRY_SECONDS = FEED_RETRY_MIN_SECONDS
 
 
 def _feed_error_message(reason):
@@ -287,23 +295,34 @@ def _feed_error_message(reason):
     if "403" in detail or "Forbidden" in detail:
         return (
             "Kite rejected the market-data WebSocket (403 Forbidden). "
-            "MorningEdge reads ZERODHA_ACCESS_TOKEN from the shared backend/.env file. "
-            "If you have updated it, turn the feed OFF and ON to reconnect with that token; "
-            "otherwise generate today's token and update the same file first."
+            "MorningEdge reads ZERODHA_ACCESS_TOKEN from the shared backend/.env file and "
+            "reconnects automatically when that token changes. Log in to Zerodha to save "
+            "today's token there, or turn the feed OFF and ON to retry immediately."
         )
     return f"Kite feed error: {detail}"
 
 
+def _fail_feed(generation, message):
+    global FEED_STATE
+    with FEED_LOCK:
+        if generation is None or generation == FEED_GENERATION:
+            ENGINE.error = message
+            FEED_STATE = "error"
+
+
 def start_feed(generation=None):
-    global KITE_SOCKET, FEED_STATE
+    global KITE_SOCKET, FEED_STATE, FEED_CREDENTIALS
     with FEED_LOCK:
         if not FEED_ENABLED or (generation is not None and generation != FEED_GENERATION):
             return
         FEED_STATE = "connecting"
     api_key, access_token = load_kite_credentials()
+    with FEED_LOCK:
+        if generation is not None and generation != FEED_GENERATION:
+            return
+        FEED_CREDENTIALS = (api_key, access_token)
     if not api_key or not access_token or KiteConnect is None or KiteTicker is None:
-        ENGINE.error = "Kite API key or access token missing from the backend environment file, or kiteconnect unavailable."
-        FEED_STATE = "error"
+        _fail_feed(generation, "Kite API key or access token missing from the backend environment file, or kiteconnect unavailable.")
         return
     try:
         kite = KiteConnect(api_key=api_key)
@@ -315,18 +334,18 @@ def start_feed(generation=None):
         tokens = [ENGINE.instruments[k]["instrument_token"] for k in INDICES.values()
                   if k in ENGINE.instruments]
         if not tokens:
-            ENGINE.error = "No index instrument tokens resolved from Kite catalog."
-            FEED_STATE = "error"
+            _fail_feed(generation, "No index instrument tokens resolved from Kite catalog.")
             return
         with FEED_LOCK:
             if not FEED_ENABLED or (generation is not None and generation != FEED_GENERATION):
                 return
-        KITE_SOCKET = KiteTicker(api_key, access_token)
+            socket = KiteTicker(api_key, access_token)
+            KITE_SOCKET = socket
         def subscribe_option(token):
-            KITE_SOCKET.subscribe([token])
-            KITE_SOCKET.set_mode(KiteTicker.MODE_FULL, [token])
+            socket.subscribe([token])
+            socket.set_mode(KiteTicker.MODE_FULL, [token])
         ENGINE.subscribe = subscribe_option
-        KITE_SOCKET.on_ticks = lambda ws, ticks: ENGINE.on_ticks(ticks)
+        socket.on_ticks = lambda ws, ticks: ENGINE.on_ticks(ticks)
         def on_connect(ws, response):
             global FEED_STATE
             if generation is not None and generation != FEED_GENERATION:
@@ -335,7 +354,7 @@ def start_feed(generation=None):
             ws.subscribe(tokens)
             ws.set_mode(KiteTicker.MODE_FULL, tokens)
             FEED_STATE = "connected"
-        KITE_SOCKET.on_connect = on_connect
+        socket.on_connect = on_connect
         def on_close(ws, code, reason):
             global FEED_STATE
             if generation is None or generation == FEED_GENERATION:
@@ -347,18 +366,67 @@ def start_feed(generation=None):
             if generation is None or generation == FEED_GENERATION:
                 FEED_STATE = "error"
                 ENGINE.error = _feed_error_message(reason)
-        KITE_SOCKET.on_close = on_close
-        KITE_SOCKET.on_error = on_error
-        KITE_SOCKET.connect(threaded=True)
+        socket.on_close = on_close
+        socket.on_error = on_error
+        socket.connect(threaded=True)
     except Exception as exc:
-        ENGINE.error = f"Kite feed initialization failed: {type(exc).__name__}"
-        FEED_STATE = "error"
+        _fail_feed(generation, f"Kite feed initialization failed: {type(exc).__name__}")
+
+
+def supervise_feed(now=None):
+    """Reconnect once today's token lands in backend/.env, or when a failed feed stays down.
+
+    Restarting the process instead would discard the in-memory pre-open ticks for the day.
+    """
+    global KITE_SOCKET, FEED_STATE, FEED_GENERATION, FEED_CREDENTIALS, FEED_DOWN_SINCE, FEED_RETRY_SECONDS
+    now = monotonic() if now is None else now
+    credentials = load_kite_credentials()
+    with FEED_LOCK:
+        if not FEED_ENABLED:
+            FEED_DOWN_SINCE = None
+            return False
+        if FEED_STATE == "connected":
+            FEED_DOWN_SINCE = None
+            FEED_RETRY_SECONDS = FEED_RETRY_MIN_SECONDS
+        elif FEED_DOWN_SINCE is None:
+            FEED_DOWN_SINCE = now
+        token_changed = (all(credentials) and FEED_CREDENTIALS is not None
+                         and credentials != FEED_CREDENTIALS)
+        stalled = FEED_DOWN_SINCE is not None and now - FEED_DOWN_SINCE >= FEED_RETRY_SECONDS
+        if not token_changed and not stalled:
+            return False
+        # Back off retries with unchanged credentials so an expired token is not hammered all night.
+        FEED_RETRY_SECONDS = (FEED_RETRY_MIN_SECONDS if token_changed
+                              else min(FEED_RETRY_SECONDS * 2, FEED_RETRY_MAX_SECONDS))
+        FEED_GENERATION += 1
+        generation = FEED_GENERATION
+        socket, KITE_SOCKET = KITE_SOCKET, None
+        FEED_STATE = "connecting"
+        FEED_CREDENTIALS = None
+        FEED_DOWN_SINCE = now
+        ENGINE.error = None
+        ENGINE.subscribe = None
+    if socket:
+        socket.close()
+    threading.Thread(target=start_feed, daemon=True, name="morningedge-kite",
+                     args=(generation,)).start()
+    return True
+
+
+def _supervise_forever():
+    while True:
+        sleep(FEED_SUPERVISOR_SECONDS)
+        try:
+            supervise_feed()
+        except Exception as exc:
+            ENGINE.error = f"Feed supervisor error: {type(exc).__name__}"
 
 
 @app.on_event("startup")
 def startup():
     threading.Thread(target=start_feed, daemon=True, name="morningedge-kite",
                      args=(FEED_GENERATION,)).start()
+    threading.Thread(target=_supervise_forever, daemon=True, name="morningedge-supervisor").start()
 
 
 @app.get("/health")
@@ -381,6 +449,7 @@ class FeedControl(BaseModel):
 @app.post("/api/feed/control")
 def feed_control(request: FeedControl):
     global FEED_ENABLED, FEED_STATE, FEED_GENERATION, KITE_SOCKET
+    global FEED_CREDENTIALS, FEED_DOWN_SINCE, FEED_RETRY_SECONDS
     with FEED_LOCK:
         if request.enabled == FEED_ENABLED:
             return {"feed_enabled": FEED_ENABLED, "feed_status": FEED_STATE, "trade_enabled": False}
@@ -390,6 +459,9 @@ def feed_control(request: FeedControl):
         socket = KITE_SOCKET
         KITE_SOCKET = None
         FEED_STATE = "connecting" if request.enabled else "off"
+        FEED_CREDENTIALS = None
+        FEED_DOWN_SINCE = None
+        FEED_RETRY_SECONDS = FEED_RETRY_MIN_SECONDS
         ENGINE.error = None
         if not request.enabled:
             with ENGINE.lock:

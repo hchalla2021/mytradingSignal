@@ -87,8 +87,94 @@ def test_kite_websocket_403_explains_access_token_recovery():
     )
 
     assert "shared backend/.env file" in message
-    assert "If you have updated it" in message
+    assert "reconnects automatically when that token changes" in message
     assert "turn the feed OFF and ON" in message
+
+
+class FakeSocket:
+    closed = False
+
+    def close(self):
+        self.closed = True
+
+
+def _capture_feed_threads(monkeypatch):
+    started = []
+
+    class Thread:
+        def __init__(self, target, args=(), **kwargs):
+            self.target, self.args = target, args
+
+        def start(self):
+            started.append((self.target, self.args))
+
+    monkeypatch.setattr(main.threading, "Thread", Thread)
+    return started
+
+
+def _feed_globals(monkeypatch, tmp_path, token, state, credentials):
+    env_file = tmp_path / "backend.env"
+    env_file.write_text(f"ZERODHA_API_KEY=key\nZERODHA_ACCESS_TOKEN={token}\n", encoding="utf-8")
+    monkeypatch.setattr(main, "CREDENTIALS_FILE", env_file)
+    monkeypatch.setattr(main, "ENGINE", main.MorningMarketEngine())
+    monkeypatch.setattr(main, "FEED_ENABLED", True)
+    monkeypatch.setattr(main, "FEED_STATE", state)
+    monkeypatch.setattr(main, "FEED_GENERATION", 3)
+    monkeypatch.setattr(main, "FEED_CREDENTIALS", credentials)
+    monkeypatch.setattr(main, "FEED_DOWN_SINCE", None)
+    monkeypatch.setattr(main, "FEED_RETRY_SECONDS", main.FEED_RETRY_MIN_SECONDS)
+    socket = FakeSocket()
+    monkeypatch.setattr(main, "KITE_SOCKET", socket)
+    return socket
+
+
+def test_new_backend_env_token_reconnects_in_process_and_keeps_preopen_ticks(monkeypatch, tmp_path):
+    socket = _feed_globals(monkeypatch, tmp_path, "today", "connected", ("key", "today"))
+    started = _capture_feed_threads(monkeypatch)
+    assert main.supervise_feed(now=0) is False
+    assert started == [] and not socket.closed
+
+    preopen_tick = (datetime(2026, 11, 13, 9, 0, 5, tzinfo=main.TZ), 26000.0)
+    main.ENGINE.preopen["NIFTY"].append(preopen_tick)
+    main.CREDENTIALS_FILE.write_text("ZERODHA_API_KEY=key\nZERODHA_ACCESS_TOKEN=next-day\n", encoding="utf-8")
+
+    assert main.supervise_feed(now=15) is True
+    assert socket.closed
+    assert started == [(main.start_feed, (4,))]
+    assert main.FEED_STATE == "connecting"
+    assert main.ENGINE.preopen["NIFTY"] == [preopen_tick]
+
+
+def test_failed_feed_retries_with_backoff_only_while_feed_is_on(monkeypatch, tmp_path):
+    _feed_globals(monkeypatch, tmp_path, "same", "error", ("key", "same"))
+    started = _capture_feed_threads(monkeypatch)
+
+    assert main.supervise_feed(now=0) is False
+    assert main.supervise_feed(now=59) is False
+    assert main.supervise_feed(now=60) is True
+    assert main.FEED_RETRY_SECONDS == 120
+
+    main.FEED_STATE = "error"
+    main.FEED_CREDENTIALS = ("key", "same")
+    assert main.supervise_feed(now=179) is False
+    assert main.supervise_feed(now=180) is True
+    assert [args for _, args in started] == [(4,), (5,)]
+
+    main.FEED_STATE = "error"
+    main.FEED_ENABLED = False
+    assert main.supervise_feed(now=10_000) is False
+    assert len(started) == 2
+
+
+def test_stale_feed_generation_failure_does_not_mark_current_feed_as_error(monkeypatch):
+    monkeypatch.setattr(main, "ENGINE", main.MorningMarketEngine())
+    monkeypatch.setattr(main, "FEED_GENERATION", 7)
+    monkeypatch.setattr(main, "FEED_STATE", "connected")
+
+    main._fail_feed(6, "Kite feed initialization failed: ReadTimeout")
+
+    assert main.FEED_STATE == "connected"
+    assert main.ENGINE.error is None
 
 
 def test_kiteticker_naive_timestamps_are_process_local_time_not_ist():
