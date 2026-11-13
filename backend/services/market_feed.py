@@ -499,6 +499,8 @@ class MarketFeedService:
         
         for tick in ticks:
             try:
+                from services.aqte_service import localize_wire_times
+                localize_wire_times(tick)
                 # 🐘 Futures ticks: live volume/OI feed for radar — not broadcast
                 fut_symbol = FUT_TOKEN_MAP.get(tick.get("instrument_token"))
                 if fut_symbol:
@@ -1191,6 +1193,10 @@ class MarketFeedService:
 
     def _on_close(self, ws, code, reason):
         """Callback when connection is closed."""
+        if self.kws is not None and ws is not self.kws:
+            # A replaced ticker closing late must not mark the new, healthy connection as down.
+            print(f"ℹ️ Ignoring close of a replaced Zerodha connection: {code} - {reason}")
+            return
         print(f"🔌 Zerodha connection closed: {code} - {reason}")
         
         # 🔥 Clear connection flag

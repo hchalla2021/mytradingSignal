@@ -23,7 +23,9 @@ import requests
 from kiteconnect import KiteConnect
 
 from config import get_settings
-from services.aqte_engine import Contract, IST, Policy, SYMBOLS, day, opportunity_key, round_tick, session
+from services.aqte_engine import (
+    CLOCK_SKEW_SECONDS, Contract, IST, Policy, SYMBOLS, day, opportunity_key, round_tick, session,
+)
 from services.aqte_daily_control import IndexControl, SwingSetups, counts, defaults, quality_reason
 from services.aqte_engines import EngineConfig, rank_key, veto_reason
 from services.aqte_runtime import Latencies
@@ -2326,7 +2328,7 @@ class AQTELiveService:
             now = time.time()
             if quote.token != c["token"]:
                 raise LiveBlocked("Broker quote token does not match the approved option contract")
-            if not 0 <= now - quote.at <= 5 or not 0 < quote.bid <= quote.ask or (
+            if not -CLOCK_SKEW_SECONDS <= now - quote.at <= 5 or not 0 < quote.bid <= quote.ask or (
                 quote.ask_quantity < entry["quantity"] or quote.ask > entry["maximum"] or
                 quote.ask <= entry["stop"] or (quote.ask - quote.bid) / quote.ask > 0.03
             ):

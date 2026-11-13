@@ -19,6 +19,8 @@ CREDENTIALS_FILE = Path(os.getenv(
 ))
 MAX_SPREAD_PCT = float(os.getenv("MORNINGEDGE_MAX_SPREAD_PCT", "1.0"))
 FRESH_SECONDS = 10
+# Exchange stamps come from another machine's clock; a few seconds of lead is skew, not a future-dated tick.
+CLOCK_SKEW_SECONDS = 3
 MAX_CANDIDATE_RISK = 3000
 INDICES = {"NIFTY": ("NSE", "NIFTY 50"), "BANKNIFTY": ("NSE", "NIFTY BANK"),
            "SENSEX": ("BSE", "SENSEX")}
@@ -77,7 +79,8 @@ class MorningMarketEngine:
     @staticmethod
     def _stamp(value):
         if isinstance(value, datetime):
-            return value.replace(tzinfo=TZ) if value.tzinfo is None else value.astimezone(TZ)
+            # KiteTicker builds naive timestamps with fromtimestamp(), i.e. in this process's timezone, not IST.
+            return value.astimezone(TZ)
         return datetime.now(TZ)
 
     def on_ticks(self, ticks):
@@ -90,7 +93,7 @@ class MorningMarketEngine:
                 if token is None or raw_ts is None or tick.get("last_price") is None:
                     continue
                 ts = self._stamp(raw_ts)
-                if (now - ts).total_seconds() > FRESH_SECONDS or ts > now + timedelta(seconds=2):
+                if (now - ts).total_seconds() > FRESH_SECONDS or ts > now + timedelta(seconds=CLOCK_SKEW_SECONDS):
                     continue
                 self.ticks[token] = {"price": tick.get("last_price"), "timestamp": ts,
                                      "depth": tick.get("depth") or {}}

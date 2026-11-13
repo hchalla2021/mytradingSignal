@@ -1,4 +1,4 @@
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 from fastapi.testclient import TestClient
 
@@ -89,6 +89,26 @@ def test_kite_websocket_403_explains_access_token_recovery():
     assert "shared backend/.env file" in message
     assert "If you have updated it" in message
     assert "turn the feed OFF and ON" in message
+
+
+def test_kiteticker_naive_timestamps_are_process_local_time_not_ist():
+    epoch = datetime(2026, 11, 13, 9, 15, tzinfo=main.TZ).timestamp()
+
+    stamped = main.MorningMarketEngine._stamp(datetime.fromtimestamp(epoch))
+
+    assert stamped.timestamp() == epoch
+    assert stamped.utcoffset() == timedelta(hours=5, minutes=30)
+
+
+def test_tick_stamped_a_little_ahead_of_this_clock_is_skew_not_rejected():
+    clock = Clock(datetime(2026, 11, 11, 9, 21, tzinfo=main.TZ))
+    engine = main.MorningMarketEngine(clock)
+
+    for token, ahead in ((1, 2.5), (2, 4.0)):
+        engine.on_ticks([{"instrument_token": token, "last_price": 100,
+                          "exchange_timestamp": clock.value + timedelta(seconds=ahead)}])
+
+    assert set(engine.ticks) == {1}
 
 
 def test_breakout_returns_candidate_without_creating_position(monkeypatch):

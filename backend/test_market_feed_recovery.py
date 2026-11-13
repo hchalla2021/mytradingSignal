@@ -53,6 +53,32 @@ class MarketFeedRecoveryTests(unittest.TestCase):
         self.assertTrue(service._using_rest_fallback)
         service.kws.close.assert_called_once_with()
 
+    def test_late_close_of_a_replaced_ticker_does_not_mark_the_new_connection_down(self):
+        service = feed()
+        replaced, service.kws = service.kws, Mock()
+        service._is_connected = True
+        generation = service._connection_generation
+        with patch.object(market_feed, "feed_watchdog") as watchdog, \
+                patch("services.aqte_service.get_aqte_service") as aqte:
+            service._on_close(replaced, 1006, NETWORK_DROP)
+
+        self.assertTrue(service._is_connected)
+        self.assertEqual(service._connection_generation, generation)
+        aqte.return_value.set_feed_connection.assert_not_called()
+        watchdog.on_disconnect.assert_not_called()
+
+    def test_close_of_the_current_ticker_marks_the_feed_down(self):
+        service = feed()
+        service._is_connected = True
+        with patch.object(market_feed, "feed_watchdog") as watchdog, \
+                patch("services.aqte_service.get_aqte_service") as aqte, \
+                patch("services.engine_events.get_engine_event_service"):
+            service._on_close(service.kws, 1006, NETWORK_DROP)
+
+        self.assertFalse(service._is_connected)
+        aqte.return_value.set_feed_connection.assert_called_once_with(False)
+        watchdog.on_disconnect.assert_called_once_with()
+
     def test_rest_fallback_schedules_websocket_recovery_only_while_market_is_open(self):
         service = feed()
         service.running = True

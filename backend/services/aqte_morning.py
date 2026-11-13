@@ -16,7 +16,7 @@ from uuid import uuid4
 from typing import Any, Iterable, Literal, NotRequired, TypedDict, TYPE_CHECKING
 
 from services.aqte_engine import (
-    IST, SYMBOLS, WARMUP_CANDLES, Contract, Tick, day, minute_of_day, round_tick, session,
+    CLOCK_SKEW_SECONDS, IST, SYMBOLS, WARMUP_CANDLES, Contract, Tick, day, minute_of_day, round_tick, session,
 )
 from services.aqte_engines import expiry_years, greeks
 from services.aqte_morning_store import MorningStore, STORE_ERRORS
@@ -67,8 +67,12 @@ def content_hash(payload):
 
 
 def fresh(tick, now):
-    return tick is not None and 0 <= now - tick.at <= FRESH_SECONDS and (
+    return tick is not None and -CLOCK_SKEW_SECONDS <= now - tick.at <= FRESH_SECONDS and (
         0 <= now - tick.received <= FRESH_SECONDS)
+
+
+def exchange_fresh(at, now):
+    return -CLOCK_SKEW_SECONDS <= now - at <= FRESH_SECONDS
 
 
 @dataclass(frozen=True)
@@ -730,7 +734,7 @@ class MorningService:
             order_flow = context.get("order_flow")
             if order_flow:
                 order_flow = {**order_flow, "age_seconds": round(max(0, now - order_flow["at"]), 3),
-                              "fresh": 0 <= now - order_flow["at"] <= FRESH_SECONDS}
+                              "fresh": exchange_fresh(order_flow["at"], now)}
             if order_flow and now - self.order_flow_at.get(symbol, 0) >= 1:
                 records.append(event("ORDER_FLOW", now, copy.deepcopy(order_flow), symbol))
                 self.order_flow_at[symbol] = now
@@ -768,7 +772,7 @@ class MorningService:
                 if order_flow:
                     signal["evidence"]["order_flow"] = {**order_flow, "age_seconds":
                         round(max(0, now - order_flow["at"]), 3),
-                        "fresh": 0 <= now - order_flow["at"] <= FRESH_SECONDS}
+                        "fresh": exchange_fresh(order_flow["at"], now)}
                 identity = (signal["decision"], signal["strategy"], signal["intelligence"]["at"],
                             (signal["contract"] or {}).get("token"), tuple(signal["reasons"]))
                 if self.transitions.get(symbol) != identity:

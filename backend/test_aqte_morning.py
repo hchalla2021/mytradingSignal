@@ -382,6 +382,12 @@ class MorningRulesTests(unittest.TestCase):
                          "Out-of-order source timestamp")
         self.assertEqual(rules.accept(replace(original, at=START - 86400), {}), "Stale/future source timestamp")
 
+    def test_exchange_stamp_a_little_ahead_of_a_slow_server_clock_is_accepted(self):
+        rules = MorningRules()
+        self.assertIsNone(rules.accept(tick(at=START + 2, received=START), {}))
+        self.assertEqual(rules.accept(tick(at=START + 9, received=START + 1, price=22001), {}),
+                         "Stale/future source timestamp")
+
     def test_reconnect_discards_incomplete_confirmation_and_observed_vwap(self):
         rules, context = opening_rules()
         rules.accept(tick(at=START + 10, price=22200), {})

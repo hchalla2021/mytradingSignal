@@ -210,7 +210,7 @@ function AQTEAutomationSwitch({ onStatus, feed, feedError = null }: {
             'Default OFF. Switch ON to approve automated entries; backend live enablement and entry safety checks are required.'}
       </p>
       {known && !status.killed && !on && (!status.ready || !status.enabled) && (
-        <p role="status" className="sr-only">
+        <p role="status" className="text-right text-xs text-amber-200">
           {!status.ready ? 'ON locked · Live controller is not ready' : 'ON locked · AQTE_LIVE_ENABLED is false'}
         </p>
       )}

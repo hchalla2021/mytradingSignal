@@ -1,11 +1,14 @@
 import asyncio
 import math
+import os
 import queue
+import subprocess
+import sys
 import tempfile
 import time
 import unittest
 from dataclasses import replace
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from unittest.mock import Mock, patch
 
@@ -17,7 +20,7 @@ from services.aqte_engine import (
     intelligence, parse_scalp_points, scalp, strategy, warmup_count,
 )
 from services.aqte_replay import replay, replay_database
-from services.aqte_service import AQTEService, normalize
+from services.aqte_service import AQTEService, localize_wire_times, normalize
 
 START = datetime(2026, 10, 30, 9, 15, tzinfo=IST).timestamp()
 NOW = START + 202 * 60
@@ -751,9 +754,18 @@ class ExecutionTests(unittest.TestCase):
         for price in (math.nan, math.inf, 0):
             with self.assertRaises(ValueError):
                 engine.ingest(tick(price=price))
-        engine.ingest(tick(at=NOW + 1, received=NOW))
+        engine.ingest(tick(at=NOW + 4, received=NOW))
         engine.ingest(tick(at=NOW - 10, received=NOW))
         self.assertFalse(engine.future)
+
+    def test_exchange_stamp_ahead_of_a_slow_server_clock_is_skew_not_a_future_tick(self):
+        engine = AQTEEngine()
+        self.assertTrue(engine.ingest(tick(at=NOW + 1.4, received=NOW)))
+        self.assertIn("NIFTY", engine.future)
+        self.assertTrue(engine.fresh(tick(at=NOW + 3, received=NOW), NOW))
+        self.assertFalse(engine.fresh(tick(at=NOW + 3.5, received=NOW), NOW))
+        self.assertFalse(engine.fresh(tick(at=NOW, received=NOW - 6), NOW), "Receipt age on this clock stays strict")
+        self.assertFalse(engine.fresh(tick(at=NOW, received=NOW + 1), NOW), "A receipt cannot be in the future")
 
     def test_no_new_entries_after_cutoff_and_session_exit(self):
         engine = ready_engine()
@@ -779,6 +791,63 @@ class ServiceTests(unittest.TestCase):
             normalize("NIFTY", "future", raw, NOW)
         raw["exchange_timestamp"] = datetime(2026, 10, 30, 12, 37)
         self.assertEqual(normalize("NIFTY", "future", raw, NOW).at, NOW)
+
+    def test_kiteticker_naive_timestamps_are_process_local_time_not_ist(self):
+        local = datetime.fromtimestamp(NOW)
+        raw = localize_wire_times(dict(instrument_token=20, last_price=22000,
+                                       exchange_timestamp=local, last_trade_time=local))
+        for name in ("exchange_timestamp", "last_trade_time"):
+            self.assertEqual(raw[name].utcoffset(), timedelta(hours=5, minutes=30))
+            self.assertEqual(raw[name].timestamp(), NOW)
+        self.assertEqual(normalize("NIFTY", "future", raw, NOW).at, NOW)
+        aware = datetime.fromtimestamp(NOW, IST)
+        untouched = localize_wire_times(dict(exchange_timestamp=aware, last_trade_time=None))
+        self.assertIs(untouched["exchange_timestamp"], aware)
+        self.assertIsNone(untouched["last_trade_time"])
+
+    def test_utc_container_ticks_are_not_rejected_as_five_and_a_half_hours_old(self):
+        code = "\n".join([
+            "import sys",
+            "from datetime import datetime, timezone",
+            "from services.aqte_service import localize_wire_times, normalize",
+            "now = float(sys.argv[1])",
+            "local = datetime.fromtimestamp(now)",
+            "assert local == datetime.fromtimestamp(now, timezone.utc).replace(tzinfo=None), 'TZ not honoured'",
+            "raw = dict(instrument_token=20, last_price=22000, exchange_timestamp=local)",
+            "print(normalize('NIFTY', 'future', localize_wire_times(raw), now).at - now)",
+        ])
+        result = subprocess.run([sys.executable, "-c", code, repr(NOW)], cwd=Path(__file__).parent,
+                                env={**os.environ, "TZ": "UTC0"}, capture_output=True, text=True, timeout=120)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(float(result.stdout), 0.0)
+
+    def test_rejected_exchange_stamps_are_counted_and_logged_once_a_minute(self):
+        self.service.started = True
+        raw = dict(instrument_token=20, last_price=22000, exchange_timestamp=datetime.fromtimestamp(NOW - 19800, IST))
+        with patch("services.aqte_service.time.time", return_value=NOW), \
+                self.assertLogs("services.aqte_service", "WARNING") as logs:
+            for _ in range(3):
+                self.service.enqueue("NIFTY", "future", raw)
+        self.assertEqual(len(logs.records), 1)
+        self.assertIn("check the server timezone and time sync", logs.output[0])
+        self.assertEqual(self.service.metrics.counters["exchange_timestamps_rejected"], 3)
+        self.assertEqual(self.service.queue.qsize(), 0)
+        self.assertEqual(self.service.diagnostics()["feed"]["timestamp_rejection"],
+                         dict(symbol="NIFTY", kind="future", offset=19800, at=NOW))
+
+    def test_stale_reason_names_the_clock_only_for_a_large_recent_gap(self):
+        self.service.started = True
+        raw = dict(instrument_token=20, last_price=22000)
+        base = "Market data stale: futures no ticks yet; spot no ticks yet"
+        reason = lambda: self.service.snapshot()["data"]["NIFTY"]["reasons"][0]
+        with patch("services.aqte_service.time.time", return_value=NOW), self.assertLogs("services.aqte_service", "WARNING"):
+            self.service.enqueue("NIFTY", "future", dict(raw, exchange_timestamp=datetime.fromtimestamp(NOW - 8, IST)))
+            self.assertEqual(reason(), base, "Ordinary feed lag is not a clock fault")
+            self.service.enqueue("NIFTY", "future", dict(raw, exchange_timestamp=datetime.fromtimestamp(NOW - 19800, IST)))
+            self.assertEqual(reason(), base + " — exchange timestamps are 19800s behind this server's clock; "
+                                              "check its timezone and time sync")
+        with patch("services.aqte_service.time.time", return_value=NOW + 31):
+            self.assertEqual(reason(), base, "The hint expires once the rejections stop")
 
     def test_restart_restores_orders_costs_kill_and_audit(self):
         self.service.engine = ready_engine()

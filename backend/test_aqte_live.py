@@ -1547,6 +1547,19 @@ class LiveTests(unittest.TestCase):
         self.broker.place_order.assert_not_called()
         self.assertFalse(self.live.state["used"])
 
+    def test_broker_quote_stamped_slightly_ahead_of_a_slow_clock_is_fresh_but_not_far_ahead(self):
+        self.armed()
+        normal = self.broker.quote.side_effect
+        stamped = lambda ahead: lambda keys: {
+            key: {**value, "timestamp": datetime.fromtimestamp(NOW + ahead, IST)} for key, value in normal(keys).items()}
+        self.broker.quote.side_effect = stamped(4)
+        with self.assertRaisesRegex(LiveBlocked, "Fresh broker ask"):
+            self.live.confirm(self.live.proposal("NIFTY")["id"])
+        self.broker.place_order.assert_not_called()
+        self.broker.quote.side_effect = stamped(1.5)
+        self.live.confirm(self.live.proposal("NIFTY")["id"])
+        self.broker.place_order.assert_called_once()
+
     def test_opposing_engine_result_arriving_during_margin_check_is_rechecked_before_submission(self):
         self.armed()
         proposal = self.live.proposal("NIFTY")

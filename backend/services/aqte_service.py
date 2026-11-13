@@ -12,7 +12,7 @@ import threading
 import time
 from collections import deque
 from dataclasses import asdict
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from datetime import datetime
 from pathlib import Path
 
@@ -31,12 +31,28 @@ from services.instrument_catalog import InstrumentCatalog, instrument_catalog
 logger = logging.getLogger(__name__)
 VIX_INSTRUMENT = "NSE:INDIA VIX"
 VIX_STALE_SECONDS = 15
+# A gap this large is a timezone or clock fault, not feed lag.
+CLOCK_HINT_SECONDS = 60
+
+
+def localize_wire_times(raw):
+    """Make KiteTicker's naive timestamps timezone-aware.
+
+    The library builds them with datetime.fromtimestamp(), i.e. in this process's timezone (UTC in most
+    containers), not IST. REST timestamps are different: naive IST, read as such by exchange_time().
+    """
+    for key in ("exchange_timestamp", "last_trade_time"):
+        value = raw.get(key)
+        if isinstance(value, datetime) and value.tzinfo is None:
+            with suppress(OverflowError, OSError, ValueError):
+                raw[key] = value.astimezone(IST)
+    return raw
 
 
 def exchange_time(raw, received, kind):
     value = raw.get("exchange_timestamp")
     if value is None:
-        # Kite index packets do not contain exchange timestamps.
+        # Quote-mode index packets carry no exchange timestamp; full-mode ones do.
         if kind == "spot":
             return received
         raise ValueError("Derivative tick missing exchange timestamp")
@@ -82,6 +98,8 @@ class AQTEService:
         self.last_received_at = None
         self.history_errors = {}
         self.history_retry = {}
+        self.timestamp_rejection = None
+        self.timestamp_logged_at = 0.0
         self.prepared_at = None
         self.feed_connected = None
         self.connection_at = None
@@ -434,6 +452,29 @@ class AQTEService:
                     )
                     self.metrics.increment("feed_gaps_retired")
 
+    def reject_timestamp(self, tick):
+        """Count a rejected exchange stamp and, once a minute, log how far it is from this server's clock."""
+        offset = tick.received - tick.at
+        self.metrics.increment("exchange_timestamps_rejected")
+        self.timestamp_rejection = dict(symbol=tick.symbol, kind=tick.kind, offset=round(offset, 3), at=tick.received)
+        if tick.received - self.timestamp_logged_at >= 60:
+            self.timestamp_logged_at = tick.received
+            policy = self.engine.policy
+            logger.warning(
+                "AQTE rejected %s %s: exchange timestamp is %.1fs %s this server's clock "
+                "(allowed %gs ahead, %gs behind); check the server timezone and time sync",
+                tick.symbol, tick.kind, abs(offset), "behind" if offset >= 0 else "ahead of",
+                policy.clock_skew_seconds, policy.stale_seconds)
+
+    def clock_hint(self, now):
+        """Explain a large, recent exchange-vs-server clock gap; ordinary feed lag stays unexplained."""
+        rejection = self.timestamp_rejection
+        if rejection is None or now - rejection["at"] > 30 or abs(rejection["offset"]) < CLOCK_HINT_SECONDS:
+            return ""
+        direction = "behind" if rejection["offset"] > 0 else "ahead of"
+        return (f" — exchange timestamps are {abs(rejection['offset']):.0f}s {direction} this server's clock; "
+                "check its timezone and time sync")
+
     def enqueue(self, symbol, kind, raw):
         # The shared feed also routes non-AQTE indices (e.g. INDIAVIX) here; the engine rejects them.
         if not self.started or symbol not in SYMBOLS:
@@ -443,8 +484,7 @@ class AQTEService:
         try:
             tick = normalize(symbol, kind, raw, time.time())
             if not self.engine.fresh(tick, tick.received):
-                logger.warning("AQTE rejected stale/future exchange timestamp for %s %s", symbol, kind)
-                self.metrics.increment("exchange_timestamps_rejected")
+                self.reject_timestamp(tick)
                 return
             self.queue.put_nowait(tick)
         except queue.Full:
@@ -756,6 +796,12 @@ class AQTEService:
             result["subscription_error"] = self.subscription_error
             result["recording"] = self.started and not self.failed.is_set()
             result["ml"] = copy.deepcopy(self.ml_state)
+            hint = self.clock_hint(time.time())
+            if hint:
+                for signal in result["data"].values():
+                    reasons = signal.get("reasons") or [""]
+                    if not signal.get("feed_ready") and reasons[0].startswith("Market data stale"):
+                        signal["reasons"] = [reasons[0] + hint, *reasons[1:]]
             if self.failed.is_set() or not self.started or self.feed_connected is False:
                 for signal in result["data"].values():
                     reason = "Shared Kite feed disconnected" if self.feed_connected is False else "AQTE recorder unavailable"
@@ -973,6 +1019,7 @@ class AQTEService:
                 morning=self.morning.snapshot() if self.morning is not None else None,
                 generated_at=now, feed=dict(connected=self.feed_connected, connected_at=self.connection_at,
                                            last_exchange_at=self.last_tick_at, last_received_at=self.last_received_at,
+                                           timestamp_rejection=copy.deepcopy(self.timestamp_rejection),
                                            requested_tokens=subscribed, missing_or_stale_tokens=missing),
                 queue=dict(size=self.queue.qsize(), capacity=self.queue.maxsize,
                            recovering=[{**gap, "token": token, "minutes": sorted(gap["minutes"])}

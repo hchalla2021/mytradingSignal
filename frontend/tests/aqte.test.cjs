@@ -2249,6 +2249,11 @@ test('ON remains locked for a disabled or unavailable controller without paper a
     await settle();
     assert.equal(autoSwitch(h.render()).props.disabled, true);
     assert.match(text(h.render()), message);
+    if (!patch.killed) {
+      // The owner must see why ON is locked; a screen-reader-only reason looks like a dead switch.
+      const lock = nodes(h.render()).find(n => n.type === 'p' && /ON locked/.test(text(n)));
+      assert.doesNotMatch(lock.props.className, /sr-only/);
+    }
     assert.ok(h.requests.every(r => r.options.method === 'GET'));
     cleanup();
   }

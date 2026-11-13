@@ -8,7 +8,7 @@ import time
 
 from services.aqte_live import broker_client
 from services.aqte_service import get_aqte_service, normalize
-from services.aqte_engine import SYMBOLS, session
+from services.aqte_engine import CLOCK_SKEW_SECONDS, SYMBOLS, session
 
 
 class BrokerPositions:
@@ -72,7 +72,7 @@ class BrokerPositions:
                     }, time.time())
                     quote_at = tick.at
                     if all(math.isfinite(v) for v in (tick.price, tick.at)) and (
-                        tick.price > 0 and 0 <= time.time() - tick.at <= 5
+                        tick.price > 0 and -CLOCK_SKEW_SECONDS <= time.time() - tick.at <= 5
                     ):
                         ltp = tick.price
                         points = round((ltp - entry) * (1 if quantity > 0 else -1), 2)

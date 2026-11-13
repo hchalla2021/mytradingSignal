@@ -11,6 +11,8 @@ from uuid import uuid4
 SYMBOLS = ("NIFTY", "BANKNIFTY", "SENSEX")
 INTERVALS = (1, 5, 15, 60, 180, 300)
 IST = timezone(timedelta(hours=5, minutes=30))
+# Exchange stamps come from another machine's clock; a few seconds of lead is skew, not a future-dated packet.
+CLOCK_SKEW_SECONDS = 3
 WARMUP_CANDLES = 201
 # Opening range: VWAP/structure need 15 completed candles of today's session (first signal 09:30 IST).
 SESSION_CANDLES = 15
@@ -114,6 +116,7 @@ class Policy:
     max_trades: int = 5
     max_losses: int = 3
     stale_seconds: float = 5
+    clock_skew_seconds: float = CLOCK_SKEW_SECONDS
     spread_fraction: float = 0.03
     order_lifetime: float = 30
     cooldown: float = 300
@@ -710,7 +713,8 @@ class AQTEEngine:
         }
 
     def fresh(self, tick, now):
-        return tick is not None and 0 <= now - tick.at <= self.policy.stale_seconds and (
+        # The receipt age uses this server's clock and stays strict; only the exchange stamp gets the skew allowance.
+        return tick is not None and -self.policy.clock_skew_seconds <= now - tick.at <= self.policy.stale_seconds and (
             0 <= now - tick.received <= self.policy.stale_seconds)
 
     def feed_reason(self, symbol, now):
