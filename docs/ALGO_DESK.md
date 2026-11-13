@@ -36,6 +36,18 @@ strategy section still shows its own setup and rules, all waiting (`0 / N`), wit
 underneath. Pass/fail values fill in from completed Kite futures candles while the market is live.
 `test_rulebook_matches_each_live_evaluator` keeps `RULEBOOK` identical to the live evaluators.
 
+Each visible strategy card shows the last status update, the latest completed one-minute futures
+candle's close time (IST), and the observed values supplied for its rules. A tick-by-tick index-price
+change does not mean a new futures candle has closed. Failed Breakout Reversal can legitimately stay
+at `0 / 5` when no failed breakout exists; its direction-dependent checks cannot qualify without that
+setup. TRADE ON is approval, not proof of a qualified entry or successful broker preflight. The
+server's execution-blocking reason is shown in the card, including preflight retries and risk limits.
+
+Status polls time out after 8 seconds and retry automatically. On a failed or stale response, the
+cards show RECONNECTING and label retained values as last confirmed readings instead of presenting
+an old BUY as a current entry signal. Control requests time out after 15 seconds and are never
+automatically resubmitted; inspect the next confirmed status before retrying a command.
+
 ## Modes
 
 - **Live (Auto)** (`TRADE ON`): the algo places real Zerodha orders when every rule passes.

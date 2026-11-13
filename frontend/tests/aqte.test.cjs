@@ -40,6 +40,7 @@ function harness(filename = 'AQTESection.tsx', now, sharedProduction = false, se
     fetch: async (url, options) => {
       requests.push({ url, options });
       if (response instanceof Error) throw response;
+      if (typeof response === 'function') return response(url, options);
       const value = response;
       // Like nginx, stamp a whole-second Date header from the server's own clock while the request is in flight.
       // dateLagMs models uvicorn's cached Date; precise adds the backend's millisecond X-Server-Time.
@@ -135,6 +136,12 @@ function nodes(tree) {
   if (!tree || typeof tree !== 'object') return [];
   if (typeof tree.type === 'function') return [tree, ...nodes(tree.type(tree.props))];
   return [tree, ...[tree.props?.children].flat(Infinity).flatMap(nodes)];
+}
+function visibleNodes(tree) {
+  if (!tree || typeof tree !== 'object' || tree.props?.hidden ||
+      tree.props?.className?.split(/\s+/).includes('sr-only')) return [];
+  if (typeof tree.type === 'function') return visibleNodes(tree.type(tree.props));
+  return [tree, ...[tree.props?.children].flat(Infinity).flatMap(visibleNodes)];
 }
 function text(tree) {
   if (typeof tree === 'string' || typeof tree === 'number') return String(tree);
@@ -3967,7 +3974,7 @@ function deskFixture(overrides = {}, enabled = []) {
   return {
     generated_at: Date.now() / 1000, ready: true, live_enabled: true, armed: enabled.length > 0, entry_window: true,
     killed: false, flatten_pending: false, any_enabled: enabled.length > 0,
-    lane_owner: enabled.length ? 'EXPIRYEDGE' : null, reason: 'All 6 Algo Desk algos are Manual (TRADE OFF)',
+    lane_owner: null, reason: enabled.length ? null : 'All 6 Algo Desk algos are Manual (TRADE OFF)',
     error: null, symbol: 'NIFTY', market: { NIFTY: { ltp: 22050 } },
     signals,
     signals_by_symbol: { NIFTY: signals, BANKNIFTY: signals, SENSEX: signals },
@@ -4114,7 +4121,7 @@ test('6 Algo Desk keeps the last good view on an invalid or stale status and blo
     const tree = h.render(props);
     assert.equal(nodes(tree).filter(n => n.props?.role === 'switch' && n.props['aria-label']?.endsWith(' trade approval')).length, 6);
     assert.match(text(tree), /Price above VWAP/);
-    assert.match(text(nodes(tree).find(n => n.props?.role === 'alert')), message);
+    assert.match(text(visibleNodes(tree).find(n => n.props?.role === 'alert')), message);
     assert.equal(deskSwitch(tree).props.disabled, true);
   }
   await h.poll(deskFixture());
@@ -4123,6 +4130,85 @@ test('6 Algo Desk keeps the last good view on an invalid or stale status and blo
   assert.equal(nodes(tree).find(n => n.props?.role === 'alert'), undefined);
   assert.equal(deskSwitch(tree).props.disabled, false);
   cleanup();
+});
+
+test('6 Algo Desk exposes the real preflight blocker and changing rule evidence in visible cards', async () => {
+  let now = Date.UTC(2026, 10, 13, 8, 0, 0);
+  const h = harness('AlgoDeskSection.tsx', () => now);
+  const blocked = deskFixture({
+    generated_at: now / 1000, armed: false,
+    reason: 'Arming retry in 60s: Broker static IP does not match',
+  }, ['failed_breakout_reversal']);
+  blocked.signals.failed_breakout_reversal.context.bar_at = now / 1000 - 60;
+  h.render(DESK_PROPS);
+  const cleanup = h.mount(blocked);
+  await settle();
+  const card = tree => visibleNodes(tree).find(n => n.props?.['aria-label'] === 'Failed Breakout Reversal trade status');
+  let value = text(card(h.render(DESK_PROPS)));
+  assert.match(value, /Broker static IP does not match/);
+  assert.match(value, /Status updated.*13:30:00/);
+  assert.match(value, /Futures candle closed.*13:30:00/);
+  assert.match(value, /72\.4/);
+
+  now += 60_000;
+  const next = structuredClone(blocked);
+  next.generated_at = now / 1000;
+  next.armed = true;
+  next.reason = null;
+  next.signals.failed_breakout_reversal.context.bar_at += 60;
+  next.signals.failed_breakout_reversal.rules[1].value = 61.2;
+  next.signals.failed_breakout_reversal.rules[1].passed = true;
+  await h.poll(next);
+  value = text(card(h.render(DESK_PROPS)));
+  assert.match(value, /Status updated.*13:31:00/);
+  assert.match(value, /Futures candle closed.*13:31:00/);
+  assert.match(value, /61\.2/);
+  assert.doesNotMatch(value, /72\.4|Broker static IP does not match/);
+  cleanup();
+});
+
+test('6 Algo Desk times out a hung status poll and recovers without showing stale BUY signals', async () => {
+  const h = harness('AlgoDeskSection.tsx');
+  const initial = deskFixture({}, ['failed_breakout_reversal']);
+  initial.signals.failed_breakout_reversal.decision = 'BUY CE';
+  h.render(DESK_PROPS);
+  const cleanup = h.mount(initial);
+  await settle();
+
+  const hungRequest = (_url, options) => new Promise((_resolve, reject) => {
+    options.signal.addEventListener('abort', () => {
+      const error = new Error('Request aborted');
+      error.name = 'AbortError';
+      reject(error);
+    }, { once: true });
+  });
+  const pending = h.poll(hungRequest);
+  await settle();
+  const timeout = [...h.timers.entries()].find(([, timer]) => timer.delay === 8000);
+  assert.ok(timeout, 'A stalled poll must have a deadline so the polling loop can continue');
+  h.timers.delete(timeout[0]);
+  timeout[1].fn();
+  await pending;
+  let tree = h.render(DESK_PROPS);
+  assert.match(text(visibleNodes(tree).find(n => n.props?.role === 'alert')), /Server not reachable/);
+  const setup = visibleNodes(tree).find(n => n.props?.['aria-label'] === 'Failed Breakout Reversal trade setup');
+  assert.doesNotMatch(text(setup), /ENTRY QUALIFIED|No order has been placed/);
+  assert.match(text(setup), /verify current orders in Kite/);
+  assert.match(text(visibleNodes(tree).find(n => n.props?.['aria-label'] === 'Failed Breakout Reversal trade status')),
+    /RECONNECTING.*Last confirmed/s);
+  assert.equal(deskSwitch(tree).props.disabled, true);
+
+  await h.poll(deskFixture());
+  tree = h.render(DESK_PROPS);
+  assert.equal(visibleNodes(tree).find(n => n.props?.role === 'alert'), undefined);
+  assert.equal(deskSwitch(tree).props.disabled, false);
+  assert.ok(h.requests.every(request => request.options.method === 'GET'));
+  const cancelled = h.poll(hungRequest);
+  await settle();
+  cleanup();
+  await cancelled;
+  assert.equal(h.requests.at(-1).options.signal.aborted, true);
+  assert.equal(h.timers.size, 0, 'Unmount cancels both the in-flight deadline and further polling');
 });
 
 test('6 Algo Desk shows each strategy rules and requirements while the feed is idle', async () => {

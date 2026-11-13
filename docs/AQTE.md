@@ -877,6 +877,16 @@ stop above entry is not mistaken for an invalid initial entry. Trailing and exit
 run when the entry switch is OFF. Quotes between monitor samples are not reconstructed;
 gaps, partial fills and stop-limit non-execution remain real risks.
 
+A broker-filled SELL SL records `exit_reason=STOP_TRIGGERED`, even when it fills
+between monitor passes and no controller exit was requested. The recorded trailing
+flag distinguishes an already-confirmed trailing stop from the initial stop.
+A broker SL fill takes precedence over a queued exit request that has not converted
+the order to LIMIT. Completed controller LIMIT exits retain their requested cause
+(target, manual exit, session or risk exit); an unrequested non-stop fill is
+`BROKER_EXIT`, not an inferred stop or target. The cause is saved in the closed trade,
+audit event and execution history/export. Older records with no cause are not
+retroactively guessed or rewritten.
+
 ### Real-only daily trade controls
 
 The compact **Daily trade limit** box at the top-right of the Real tab
@@ -987,6 +997,13 @@ A separate rules engine produces a quick-scalp sub-signal on every completed can
 (`signal.scalp`). It targets fixed **option-premium points** per index from
 `AQTE_SCALP_POINTS` (default NIFTY 10/20/30, BANKNIFTY 20/40/60, SENSEX 30/60/90);
 the stop is `points x AQTE_SCALP_STOP_RATIO` (default 0.4, i.e. 4/8/12 for NIFTY).
+
+The initial broker stop acts intrabar; it does not wait for a five-minute chart
+candle to close. Trailing only starts after the saved favorable-move threshold is
+reached, so a quick scalp can stop out within seconds before trailing activates.
+Futures ATR filters eligible target tiers; it does not turn the fixed premium stop
+into an option-chart swing-low stop. A later rebound does not invalidate an earlier
+stop fill, and neither trailing nor a positive planned reward/risk guarantees profit.
 
 Rules (all required, futures 1-minute):
 

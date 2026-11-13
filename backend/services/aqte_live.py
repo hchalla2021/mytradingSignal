@@ -2580,7 +2580,11 @@ class AQTELiveService:
                 exit_price = float(protection["average_price"])
                 if exited != filled or not math.isfinite(exit_price) or exit_price <= 0:
                     raise LiveBlocked("Unexpected protective exit fill")
+                # The broker can fill its SL between monitor passes, before any exit request.
+                exit_reason = ("STOP_TRIGGERED" if protection["order_type"] in ("SL", "SL-M")
+                               else active["exit_requested"] or "BROKER_EXIT")
                 trade = {**active, "exit_at": time.time(), "exit_price": exit_price,
+                         "exit_reason": exit_reason,
                          "net_pnl": round((exit_price - active["entry_price"]) * filled -
                                           self.costs(active["entry_price"], filled) - self.costs(exit_price, filled), 2)}
                 self.state["trades"].append(trade)

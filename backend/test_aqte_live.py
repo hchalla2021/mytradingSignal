@@ -131,6 +131,8 @@ class LiveTests(unittest.TestCase):
         self.live.reconcile()
 
     def test_completed_protective_order_retains_confirmation_timestamp(self):
+        from services.aqte_execution_history import read_executions
+
         self.protect()
         active = self.live.state["active"]
         self.assertTrue(active["protection_confirmed"])
@@ -143,6 +145,37 @@ class LiveTests(unittest.TestCase):
         trade = self.live.state["trades"][-1]
         self.assertFalse(trade["protection_confirmed"], "the broker stop is no longer pending after it fills")
         self.assertGreater(trade["protect_at"], 0, "the historical protection confirmation remains recorded")
+        self.assertEqual(trade.get("exit_reason"), "STOP_TRIGGERED")
+        self.assertIsNone(trade["exit_requested"], "a broker stop needs no controller exit request")
+        self.assertEqual(read_executions(self.path)["rows"][0]["exit_reason"], "STOP_TRIGGERED")
+        self.broker.modify_order.assert_not_called()
+        self.assertEqual(self.broker.place_order.call_count, 2)
+
+    def test_completed_unrequested_limit_exit_does_not_claim_a_stop_trigger(self):
+        self.protect()
+        self.orders[1].update(order_type="LIMIT", trigger_price=0, status="COMPLETE",
+                              filled_quantity=CONTRACT.lot_size, average_price=100)
+        self.positions[0]["quantity"] = 0
+
+        self.live.reconcile()
+
+        trade = self.live.state["trades"][-1]
+        self.assertEqual(trade.get("exit_reason"), "BROKER_EXIT")
+        self.assertIsNone(trade["exit_requested"])
+        self.broker.modify_order.assert_not_called()
+
+    def test_broker_stop_filling_before_queued_manual_exit_records_actual_cause(self):
+        self.protect()
+        self.live.request_exit(self.live.state["active"]["id"])
+        self.orders[1].update(status="COMPLETE", filled_quantity=CONTRACT.lot_size, average_price=95)
+        self.positions[0]["quantity"] = 0
+
+        self.live.reconcile()
+
+        trade = self.live.state["trades"][-1]
+        self.assertEqual(trade["exit_requested"], "MANUAL_EXIT")
+        self.assertEqual(trade.get("exit_reason"), "STOP_TRIGGERED")
+        self.broker.modify_order.assert_not_called()
 
     def test_default_configuration_blocks_live_before_network(self):
         self.cfg.aqte_live_enabled = False
@@ -1008,6 +1041,10 @@ class LiveTests(unittest.TestCase):
         self.live.reconcile()
         self.assertFalse(self.live.status()["active"]["protection_confirmed"])
         self.broker.modify_order.assert_called_once()
+        self.orders[1].update(status="COMPLETE", filled_quantity=CONTRACT.lot_size, average_price=98)
+        self.positions[0]["quantity"] = 0
+        self.live.reconcile()
+        self.assertEqual(self.live.state["trades"][-1].get("exit_reason"), "MANUAL_EXIT")
 
     def test_selected_exit_rejects_wrong_trade_pending_fill_and_emergency(self):
         with self.assertRaisesRegex(LiveBlocked, "no longer active"):
@@ -1294,6 +1331,7 @@ class LiveTests(unittest.TestCase):
         self.assertIsNone(self.live.state["active"])
         self.assertEqual(self.live.state["trades"][0]["exit_price"], target + 0.5)
         self.assertGreater(self.live.state["trades"][0]["net_pnl"], 0)
+        self.assertEqual(self.live.state["trades"][0].get("exit_reason"), "TARGET")
 
     def test_trailing_modifies_existing_protection_not_another_order(self):
         self.protect()
@@ -1309,6 +1347,27 @@ class LiveTests(unittest.TestCase):
         self.assertEqual(self.live.state["active"]["stop"], params["trigger_price"])
         self.assertTrue(self.live.state["active"]["trailing_active"])
         self.assertEqual(self.broker.modify_order.call_count, 1, "A breakeven trail must not cause a premature exit")
+
+    def test_broker_filled_trailing_stop_records_reason_without_requesting_an_exit(self):
+        from services.aqte_execution_history import read_executions
+
+        self.protect()
+        self.market.engine.options[CONTRACT.token] = tick("option", bid=125, ask=126, price=125)
+        self.live.reconcile()
+        self.live.reconcile()
+        stop = self.live.state["active"]["stop"]
+        self.orders[1].update(status="COMPLETE", filled_quantity=CONTRACT.lot_size, average_price=stop)
+        self.positions[0]["quantity"] = 0
+
+        self.live.reconcile()
+
+        trade = self.live.state["trades"][-1]
+        self.assertEqual(trade.get("exit_reason"), "STOP_TRIGGERED")
+        self.assertTrue(trade["trailing_active"])
+        self.assertIsNone(trade["exit_requested"])
+        self.assertEqual(read_executions(self.path)["rows"][0]["exit_reason"], "STOP_TRIGGERED")
+        self.assertEqual(self.broker.modify_order.call_count, 1)
+        self.assertEqual(self.broker.place_order.call_count, 2)
 
     def test_trailing_never_loosens_on_pullback_and_runs_while_off(self):
         self.protect()

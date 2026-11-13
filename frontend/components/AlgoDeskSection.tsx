@@ -26,7 +26,7 @@ type Signal = {
   rules: Rule[];
   context: {
     regime?: string | null; volatile?: boolean; htf_30m?: string | null; structure_15m?: string | null;
-    price_vs_vwap?: string | null; setup?: string | null;
+    price_vs_vwap?: string | null; setup?: string | null; bar_at?: number | null;
   };
   levels: { underlying_risk?: number | null; underlying_stop?: number | null };
   reason: string;
@@ -144,33 +144,46 @@ export function isDeskStatus(value: unknown): value is DeskStatus {
 }
 
 async function request(path: string, body?: object, signal?: AbortSignal): Promise<unknown> {
-  const sent = Date.now();
-  const response = await fetch(API_CONFIG.endpoint(`/api/algo-desk/${path}`), {
-    method: body === undefined ? 'GET' : 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-Device-Id': getOrCreateVisitorId(),
-      'X-AQTE-Intent': 'manual-live-control',
-    },
-    credentials: 'include',
-    cache: 'no-store',
-    signal,
-    body: body === undefined ? undefined : JSON.stringify(body),
-  });
-  const received = Date.now();
-  const payload: unknown = await response.json().catch(() => null);
-  aqteObserveServerClock(response, payload, sent, received);
-  if (!response.ok) {
-    if (response.status === 401) notifyAppAccessExpired();
-    const detail = isRecord(payload) ? payload.detail : null;
-    throw new Error(typeof detail === 'string' ? detail : `6 Algo Desk request failed (${response.status})`);
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  if (signal?.aborted) abort();
+  else signal?.addEventListener('abort', abort, { once: true });
+  const timeout = setTimeout(abort, body === undefined ? 8000 : 15000);
+  try {
+    const sent = Date.now();
+    const response = await fetch(API_CONFIG.endpoint(`/api/algo-desk/${path}`), {
+      method: body === undefined ? 'GET' : 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Device-Id': getOrCreateVisitorId(),
+        'X-AQTE-Intent': 'manual-live-control',
+      },
+      credentials: 'include',
+      cache: 'no-store',
+      signal: controller.signal,
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+    const received = Date.now();
+    const payload: unknown = await response.json();
+    aqteObserveServerClock(response, payload, sent, received);
+    if (!response.ok) {
+      if (response.status === 401) notifyAppAccessExpired();
+      const detail = isRecord(payload) ? payload.detail : null;
+      throw new Error(typeof detail === 'string' ? detail : `6 Algo Desk request failed (${response.status})`);
+    }
+    return payload;
+  } finally {
+    clearTimeout(timeout);
+    signal?.removeEventListener('abort', abort);
   }
-  return payload;
 }
 
 const RUPEE = new Intl.NumberFormat('en-IN', { maximumFractionDigits: 0 });
 const PRICE = new Intl.NumberFormat('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const CLOCK = new Intl.DateTimeFormat('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', hour12: false });
+const UPDATE_CLOCK = new Intl.DateTimeFormat('en-IN', {
+  timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false,
+});
 const price = (value: number | null | undefined) => finite(value) && value > 0 ? PRICE.format(value) : '—';
 const rupees = (value: number | null | undefined) => finite(value) ? `₹${RUPEE.format(Math.abs(value))}` : '—';
 const signedRupees = (value: number | null | undefined) =>
@@ -182,6 +195,8 @@ const signedPercent = (value: number | null) =>
 const tone = (value: number | null | undefined) =>
   !finite(value) || value === 0 ? 'text-slate-200' : value > 0 ? 'text-emerald-400' : 'text-rose-400';
 const clock = (seconds: number | null | undefined) => finite(seconds) ? CLOCK.format(new Date(seconds * 1000)) : '—';
+const updateClock = (seconds: number | null | undefined) =>
+  finite(seconds) ? UPDATE_CLOCK.format(new Date(seconds * 1000)) : '—';
 const words = (value: string | null | undefined) => value
   ? value.toLowerCase().replaceAll('_', ' ').replace(/^\w/, letter => letter.toUpperCase()) : '—';
 
@@ -302,7 +317,7 @@ export default function AlgoDeskSection({ marketData = EMPTY_MARKET_DATA }: {
         setStale(false);
         setError(null);
       } catch (cause) {
-        if (!active || controller.signal.aborted) return;
+        if (!active || controller.signal.aborted || started < commandAt.current) return;
         setStale(true);
         setError(aqteErrorText(cause, '6 Algo Desk status unavailable'));
       }
@@ -396,8 +411,10 @@ export default function AlgoDeskSection({ marketData = EMPTY_MARKET_DATA }: {
 
   const today = algo?.today;
   const week = algo?.week;
+  const scanReady = !stale && status?.ready && status.live_enabled && status.armed && status.entry_window &&
+    !status.killed && !status.flatten_pending && !status.reason;
   const modeLabel = !algo ? 'Loading' : !enabled ? 'Manual'
-    : status?.armed && status.entry_window ? 'Active' : 'ON · waiting';
+    : scanReady ? 'Active' : 'ON · waiting';
   const modeTone = !enabled ? 'text-slate-300' : modeLabel === 'Active' ? 'text-emerald-400' : 'text-amber-300';
   const line = error ?? (status?.error && !status.any_enabled ? `Switched OFF: ${status.error}` : status?.reason) ?? 'Connecting to the 6 Algo Desk…';
   const conditionsTitle = signal?.side ? `Entry Conditions (BUY ${signal.side})` : 'Entry Conditions';
@@ -421,6 +438,11 @@ export default function AlgoDeskSection({ marketData = EMPTY_MARKET_DATA }: {
           <BarChart3 aria-hidden="true" className="h-6 w-6" />
         </span>
       </header>
+      {error && (
+        <p role="alert" className="m-3 rounded-lg border border-rose-500/50 bg-rose-950/50 px-3 py-2 text-sm text-rose-200">
+          {error}
+        </p>
+      )}
       <div className="grid min-w-0 grid-cols-1 gap-2 p-3 sm:p-4">
         {choices.map(([key, label], index) => {
           const item = status?.algos.find(entry => entry.key === key);
@@ -446,7 +468,7 @@ export default function AlgoDeskSection({ marketData = EMPTY_MARKET_DATA }: {
           const premiumPoints = finite(pnlMark) && finite(pnlEntry) ? pnlMark - pnlEntry : null;
           const premiumPercent = premiumPoints !== null && finite(pnlEntry) && pnlEntry > 0
             ? premiumPoints / pnlEntry * 100 : null;
-          const cardDecision = cardSignal?.decision ?? live?.decision;
+          const cardDecision = stale ? 'WAIT' : cardSignal?.decision ?? live?.decision;
           const actionable = cardDecision === 'BUY CE' || cardDecision === 'BUY PE';
           const activeSide = cardActive?.contract.side ??
             (cardActive?.contract.trading_symbol.endsWith('CE') ? 'CE'
@@ -454,8 +476,11 @@ export default function AlgoDeskSection({ marketData = EMPTY_MARKET_DATA }: {
           const rulePercent = cardSignal && cardSignal.total > 0
             ? Math.round(cardSignal.passed / cardSignal.total * 100) : null;
           const waitingRules = cardSignal?.rules.filter(rule => rule.passed !== true).map(rule => rule.label) ?? [];
-          const autoScanning = cardEnabled && status?.armed && status.entry_window;
-          const entryExplanation = cardDecision === 'WAIT' && cardSignal?.side
+          const autoScanning = cardEnabled && scanReady;
+          const entryExplanation = stale
+            ? status ? 'Live status unavailable. Showing last confirmed readings; verify current orders in Kite.'
+              : 'Waiting for the first confirmed strategy status.'
+            : cardDecision === 'WAIT' && cardSignal?.side
             ? `Waiting: ${cardSignal.side === 'CE' ? 'CALL (CE)' : 'PUT (PE)'} setup is not qualified` +
               `${waitingRules.length ? `; still needs ${waitingRules.join(', ')} (${cardSignal.reason})` : `; ${cardSignal.reason}`}. ` +
               `${autoScanning ? `Auto-scanning will buy ${cardSignal.side === 'CE' ? 'CALL (CE)' : 'PUT (PE)'} only after all ${cardSignal.total} checks and live execution gates pass`
@@ -463,7 +488,9 @@ export default function AlgoDeskSection({ marketData = EMPTY_MARKET_DATA }: {
                   : 'Auto trade is OFF; no order will be sent'}. No order has been placed.`
             : cardSignal?.reason ?? status?.reason ?? 'Waiting for fresh market data.';
           const cardMode = !item ? 'LOADING'
-            : cardEnabled ? status?.armed && status.entry_window ? 'AUTO · SCANNING' : 'ON · WAITING' : 'MANUAL';
+            : stale ? 'RECONNECTING' : cardEnabled ? autoScanning ? 'AUTO · SCANNING' : 'ON · WAITING' : 'MANUAL';
+          const executionReason = status?.reason ?? status?.error;
+          const candleClosedAt = finite(cardSignal?.context.bar_at) ? cardSignal.context.bar_at + 60 : null;
           const trailingLabel = cardActive
             ? cardActive.trailing_active ? price(cardActive.stop)
               : `Waiting · +${limits?.trail_start_r ?? 1}R`
@@ -544,7 +571,7 @@ export default function AlgoDeskSection({ marketData = EMPTY_MARKET_DATA }: {
                       )}
                     </div>
                     <span aria-label="Current setup rule results" className="rounded-lg border border-emerald-500/40 bg-emerald-950/50 px-3 py-1.5 text-xs font-bold text-emerald-200">
-                      ENTRY CHECKS ·{' '}
+                      {stale ? 'LAST CHECKS' : 'ENTRY CHECKS'} ·{' '}
                       {cardSignal ? `${cardSignal.passed} / ${cardSignal.total} PASSED` : 'UNAVAILABLE'}
                     </span>
                   </div>
@@ -688,8 +715,17 @@ export default function AlgoDeskSection({ marketData = EMPTY_MARKET_DATA }: {
                       {cardMode}
                     </span>
                   </div>
+                  <div className="mt-3 space-y-1 text-xs text-slate-400" aria-label={`${label} monitoring status`}>
+                    <p>{stale ? 'Last confirmed' : 'Status updated'} · {updateClock(status?.generated_at)} IST</p>
+                    <p>Futures candle closed · {updateClock(candleClosedAt)} IST</p>
+                    <p>Rules use completed futures candles; the index price updates separately.</p>
+                    {stale && <p className="text-amber-300">Status unavailable; reconnecting. These are last confirmed readings, not a current entry signal.</p>}
+                    {executionReason && (cardEnabled || !status?.ready || status?.error) && (
+                      <p className="text-amber-300">Execution: {executionReason}</p>
+                    )}
+                  </div>
                   <div className="mx-auto my-4 grid h-28 w-28 place-items-center rounded-full p-2"
-                    style={{ background: rulePercent == null ? '#1e293b' : `conic-gradient(#10b981 ${rulePercent * 3.6}deg, #1e293b 0deg)` }}>
+                    style={{ background: stale || rulePercent == null ? '#1e293b' : `conic-gradient(#10b981 ${rulePercent * 3.6}deg, #1e293b 0deg)` }}>
                     <div className="grid h-full w-full place-items-center rounded-full bg-slate-900 text-center">
                       <div>
                         <b className="text-2xl text-white">{cardSignal ? `${cardSignal.passed}/${cardSignal.total}` : '—'}</b>
@@ -698,8 +734,8 @@ export default function AlgoDeskSection({ marketData = EMPTY_MARKET_DATA }: {
                     </div>
                   </div>
                   <p className="mb-2 text-xs font-bold uppercase tracking-wider text-slate-400">
-                    {cardSignal?.decision === 'BUY CE' || cardSignal?.decision === 'BUY PE'
-                      ? `${cardSignal.side === 'CE' ? 'CALL (CE)' : 'PUT (PE)'} entry checks` : cardSignal?.side
+                    {actionable
+                      ? `${cardSignal?.side === 'CE' ? 'CALL (CE)' : 'PUT (PE)'} entry checks` : cardSignal?.side
                         ? `${cardSignal.side === 'CE' ? 'CALL (CE)' : 'PUT (PE)'} setup checks` : 'Strategy Rules'}
                   </p>
                   <ul className="space-y-0.5">
@@ -714,6 +750,10 @@ export default function AlgoDeskSection({ marketData = EMPTY_MARKET_DATA }: {
                         <span className="min-w-0">
                           <span className={`block ${rule.passed === false ? 'text-slate-400' : 'text-slate-200'}`}>{rule.label}</span>
                           <span className="block text-[11px] leading-snug text-slate-500">{rule.requirement}</span>
+                          <span className="block text-[11px] tabular-nums text-slate-300">
+                            {rule.passed === true ? 'PASS' : rule.passed === false ? 'NOT MET' : 'WAIT'}
+                            {rule.value == null || rule.value === '' ? '' : ` · Observed: ${rule.value}`}
+                          </span>
                         </span>
                       </li>
                     ))}
