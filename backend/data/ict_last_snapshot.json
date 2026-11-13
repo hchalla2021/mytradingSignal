@@ -98,14 +98,14 @@
         "extra": {
           "divergence": "NONE",
           "price_change": 0.18,
-          "oi_slope": 230990.5
+          "oi_slope": 224945.5
         }
       }
     },
     "metrics": {
-      "price": 25239.15,
+      "price": 25238.75,
       "changePct": -0.24,
-      "oi": 418679560,
+      "oi": 418649335,
       "candleCount": 13,
       "swingHighs": 3,
       "swingLows": 3,
@@ -176,7 +176,7 @@
       }
     },
     "dataSource": "LIVE",
-    "timestamp": "2026-11-13T10:47:55.377810+05:30"
+    "timestamp": "2026-11-13T10:48:01.415549+05:30"
   },
   "BANKNIFTY": {
     "symbol": "BANKNIFTY",
@@ -282,8 +282,8 @@
       }
     },
     "metrics": {
-      "price": 61176.35,
-      "changePct": -0.56,
+      "price": 61177.35,
+      "changePct": -0.55,
       "oi": 23432340,
       "candleCount": 13,
       "swingHighs": 3,
@@ -311,7 +311,7 @@
       "microstructure": {
         "liquidityDensity": 10.07,
         "structureDensity": 44.72,
-        "fakeBreakoutRisk": 31.77,
+        "fakeBreakoutRisk": 31.74,
         "stopHuntRisk": 36.85
       },
       "smc": {
@@ -355,7 +355,7 @@
       }
     },
     "dataSource": "LIVE",
-    "timestamp": "2026-11-13T10:47:55.378216+05:30"
+    "timestamp": "2026-11-13T10:48:01.415951+05:30"
   },
   "SENSEX": {
     "symbol": "SENSEX",
@@ -375,16 +375,16 @@
       "order_blocks": {
         "score": 0.0852,
         "signal": "NEUTRAL",
-        "label": "Bearish OB @ 81753-81816 (0% away)",
+        "label": "Bearish OB @ 81875-81904 (0.05% away)",
         "weight": 0.25,
         "value": 0.085,
         "extra": {
           "bullish_obs": 2,
           "bearish_obs": 2,
           "nearest_ob": {
-            "type": "BEARISH_RETEST",
-            "zone": "81753-81816",
-            "dist": 0
+            "type": "BEARISH",
+            "zone": "81875-81904",
+            "dist": 0.05
           }
         }
       },
@@ -400,7 +400,7 @@
           "nearest_fvg": {
             "type": "BULLISH",
             "zone": "81734-81753",
-            "dist": 0.14
+            "dist": 0.15
           }
         }
       },
@@ -439,10 +439,10 @@
         "signal": "BULL",
         "label": "Bullish displacement \u00d7 3 \u2014 Institutional buying",
         "weight": 0.1,
-        "value": 0.817,
+        "value": 0.836,
         "extra": {
           "displacement_count": 4,
-          "avg_body_ratio": 0.817,
+          "avg_body_ratio": 0.836,
           "bull_count": 3,
           "bear_count": 1
         }
@@ -461,7 +461,7 @@
       }
     },
     "metrics": {
-      "price": 81859.3,
+      "price": 81863.01,
       "changePct": -0.06,
       "oi": 13796880,
       "candleCount": 13,
@@ -483,14 +483,14 @@
       "sequencePrediction": {
         "nextMove": "SIDEWAYS",
         "nextMovePts": 0.05,
-        "trendContinuationProb": 61.22,
-        "reversalProb": 45.94,
+        "trendContinuationProb": 61.17,
+        "reversalProb": 45.99,
         "horizonSec": 300
       },
       "microstructure": {
         "liquidityDensity": 10.73,
         "structureDensity": 44.79,
-        "fakeBreakoutRisk": 30.72,
+        "fakeBreakoutRisk": 30.84,
         "stopHuntRisk": 32.58
       },
       "smc": {
@@ -534,6 +534,6 @@
       }
     },
     "dataSource": "LIVE",
-    "timestamp": "2026-11-13T10:47:55.378517+05:30"
+    "timestamp": "2026-11-13T10:48:01.416243+05:30"
   }
 }
