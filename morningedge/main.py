@@ -284,8 +284,9 @@ def _feed_error_message(reason):
     if "403" in detail or "Forbidden" in detail:
         return (
             "Kite rejected the market-data WebSocket (403 Forbidden). "
-            "The Zerodha access token may have expired; generate today's access token, "
-            "update ZERODHA_ACCESS_TOKEN in backend/.env, then restart MorningEdge."
+            "MorningEdge reads ZERODHA_ACCESS_TOKEN from the shared backend/.env file. "
+            "If you have updated it, turn the feed OFF and ON to reconnect with that token; "
+            "otherwise generate today's token and update the same file first."
         )
     return f"Kite feed error: {detail}"
 

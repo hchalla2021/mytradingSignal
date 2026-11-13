@@ -86,9 +86,9 @@ def test_kite_websocket_403_explains_access_token_recovery():
         "connection was closed uncleanly (WebSocket connection upgrade failed (403 - Forbidden))",
     )
 
-    assert "access token may have expired" in message
-    assert "backend/.env" in message
-    assert "restart MorningEdge" in message
+    assert "shared backend/.env file" in message
+    assert "If you have updated it" in message
+    assert "turn the feed OFF and ON" in message
 
 
 def test_breakout_returns_candidate_without_creating_position(monkeypatch):

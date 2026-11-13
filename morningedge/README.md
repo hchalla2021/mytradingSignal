@@ -19,8 +19,10 @@ market-derived candidate signal. Feed OFF disconnects the socket and clears
 live ticks. Missing credentials, ticks, contracts, freshness, or quote quality
 are surfaced as errors or WAIT states instead of synthetic values.
 Zerodha access tokens are time-limited. If the Kite WebSocket reports
-`403 Forbidden`, generate a fresh daily access token, update
-`ZERODHA_ACCESS_TOKEN` in `backend/.env`, and restart the MorningEdge service.
+`403 Forbidden`, MorningEdge reads the shared `ZERODHA_ACCESS_TOKEN` from
+`backend/.env` on each connection. If you have already updated the token, turn
+the feed OFF and ON to reconnect; otherwise generate today's token, update that
+file, then toggle the feed.
 
 **Broker order execution is not implemented.** The current service only monitors
 market data and reports candidate signals; it creates no positions. Trade
