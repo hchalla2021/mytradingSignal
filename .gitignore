@@ -67,7 +67,6 @@ desktop.ini
 dump.rdb
 *.rdb
 backend/data/chart_history.sqlite3*
-backend/data/Option Data/options_history.sqlite3
 backend/data/paper_trading/
 backend/data/aqte/
 backend/data/instrument_catalog/
@@ -83,3 +82,6 @@ htmlcov/
 *.seed
 *.pid.lock
 .env.example
+
+# AUTONOMIQ PRO runtime database
+backend/data/autonomiq_pro/

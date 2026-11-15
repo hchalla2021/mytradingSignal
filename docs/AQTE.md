@@ -829,17 +829,44 @@ visible from either tab. It controls real entries, not market recording or the s
 paper book. The browser never starts automation merely by mounting or changing tabs.
 Backend state is authoritative. Status failures display UNKNOWN with an OFF-request
 action instead of pretending automation is stopped.
+UNKNOWN is visible on the switch itself, with neither ON nor OFF highlighted.
+HTML gateway errors and malformed JSON retain their HTTP status in an explicit
+unavailable-response message instead of exposing a JSON parser exception.
+An HTTP 401 still requests owner sign-in even when its body is not JSON.
+Status polling resumes after recovery; failed commands are never automatically
+replayed, and a failed OFF request is not an acknowledgement that entries stopped.
+The AQTE feed badge is independent of both Auto Trade approval and the page's
+general market WebSocket. It reports CONNECTING while required ticks are absent,
+RECONNECTING for a disconnected shared feed, PREPARING for instrument/subscription
+preparation, RECOVERING while restored candles await exchange verification, and
+DATA STALE when required ticks have expired. FEED OFF is reserved for an unavailable
+recorder or recorder fault. A current backend blocking reason is visible below the
+header during these states. LIVE requires backend-approved fresh spot and futures
+data, aged against the current synchronized clock, not the snapshot creation time.
+Recovery/history checks are not bypassed to make the badge green. Once ready, the
+next successful status poll updates the badge without an Auto Trade toggle.
 The compact Auto Trade pill uses a green track only for confirmed ON, a neutral
 OFF track, an explicitly UNKNOWN state on failure, and a red emergency state.
 ON/OFF actions are automatically journalled by the existing backend.
 Page refresh restores the authoritative state using GET only, never by replaying
 an ON request or trusting local storage. A saved/confirmed acknowledgement is
 shown only after a successful response; unknown outcomes remain explicit.
-Backend restarts and session rollover disarm the session but keep a standing ON,
+Backend restarts clear every live-entry approval to OFF and require fresh manual
+owner approval. Session rollover disarms the session but keeps a standing ON,
 which re-arms through a fresh preflight in the next entry window; safety stops
 re-arm only after a one-minute delay and never over an open AQTE trade.
 The badge consumes the existing switch status poll and acknowledged actions, adding
 no polling. Selecting the Real Trade view alone never makes the badge green.
+
+The production backend is a single journal-owning process. Restarting it during a
+deployment can temporarily produce Nginx HTTP 502 and disconnect the feed; PM2
+reporting "online" does not establish that FastAPI is ready. Prefer a maintenance
+window, confirm new entries OFF and reconcile open AQTE exposure before a backend
+restart. Deploy only the changed service rather than `pm2 restart all`; a
+frontend-only change does not require restarting the backend or MorningEdge.
+After a backend restart, verify the snapshot endpoint and fresh authenticated live
+status before considering a new ON approval. Existing broker stops remain at the
+broker, but application trailing/target management pauses while the backend is down.
 
 - The backend enforces the regular **09:15–15:30 IST** session, the **15:15**
   new-entry cutoff and the **15:25** square-off start. Entry automation changes to
@@ -850,8 +877,8 @@ no polling. Selecting the Real Trade view alone never makes the badge green.
   trading, market data or manually opened Kite positions.
 - OFF is the reversible pause for new entries and remains available outside
   market hours. Emergency Stop is not a pause: see **Emergency Stop · close AQTE positions** below.
-- New installations start **OFF**. Once switched ON, Auto Trade stays ON (restarts
-  and new days included) until OFF, a manual exit or an emergency stop.
+- New installations and backend restarts start **OFF**. Within the running process,
+  standing ON survives session rollover until OFF, a manual exit or an emergency stop.
 - Preflight (IP/Kite/no untracked AQTE exposure) and daily arming run automatically inside each
   weekday entry window; outside it ON simply waits. Manual Kite trades never block it.
 - Click the header switch, then **Confirm ON · real money**. This authorizes automatic
@@ -860,8 +887,8 @@ no polling. Selecting the Real Trade view alone never makes the badge green.
   protection, trailing stops, target/stop exits and reconciliation for existing trades.
 - Already submitted or in-flight broker orders cannot be undone by changing a switch.
   ON/OFF and submissions are serialized; wait for acknowledged OFF, not a local click.
-- A new day, shutdown/restart or monitoring fault disarms the session; a standing ON
-  re-arms with a fresh preflight. Emergency stop and manual exit clear ON.
+- A new day or monitoring fault disarms the session; a standing ON
+  re-arms with a fresh preflight. Shutdown/restart, emergency stop and manual exit clear ON.
   Existing open positions continue to be reconciled regardless of the switch.
 - ON never means "buy immediately": no valid fresh signal means no entry. Only one
   pending/open live trade is allowed across the three indices, and used strategy candles

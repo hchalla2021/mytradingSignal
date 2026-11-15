@@ -5,7 +5,7 @@ import { API_CONFIG } from '@/lib/api-config';
 import { notifyAppAccessExpired } from '@/lib/app-access-events';
 import { getOrCreateVisitorId } from '@/lib/visitor-id';
 import { AQTE_RECONNECT_GRACE_MS, aqteConnectionDrop, aqteControllerCurrent, aqteErrorText, aqteObserveServerClock, aqtePollLoop,
-  aqteServerNow, isAqteLiveState, type AQTELiveState } from '@/lib/aqte-display';
+  aqteResponseJson, aqteServerNow, isAqteLiveState, type AQTELiveState } from '@/lib/aqte-display';
 
 export type AutomationState = AQTELiveState;
 type Command = 'on' | 'off' | 'reset';
@@ -44,10 +44,10 @@ async function request(command?: Command): Promise<AutomationState> {
         : { enabled: command === 'on', confirmation: command === 'on' ? 'START AUTOMATED REAL TRADING' : 'STOP NEW ENTRIES' }),
     });
     const received = Date.now();
-    const value: unknown = await response.json();
+    if (response.status === 401) notifyAppAccessExpired();
+    const value = await aqteResponseJson(response);
     aqteObserveServerClock(response, value, sent, received);
     if (!response.ok) {
-      if (response.status === 401) notifyAppAccessExpired();
       const detail = value && typeof value === 'object' && 'detail' in value ? value.detail : null;
       if (response.status === 403 && detail === UNTRUSTED_ORIGIN) throw new Error(originRejected());
       throw new Error(typeof detail === 'string' ? detail : 'Switch request failed. Check server status before retrying.');
@@ -137,7 +137,7 @@ function AQTEAutomationSwitch({ onStatus, feed, feedError = null }: {
       setFailedAt(aqteServerNow());
       // In shared mode the page's poll owns the live status; only this switch's outcome is unknown.
       if (!shared) onStatus?.(null);
-      setError(cause instanceof Error ? cause.message : 'Switch outcome unknown. Check Kite and server status.');
+      setError(aqteErrorText(cause, 'Switch outcome unknown. Check Kite and server status.'));
     } finally {
       changing.current = false;
       setBusy(false);
@@ -183,7 +183,8 @@ function AQTEAutomationSwitch({ onStatus, feed, feedError = null }: {
           <span className="aqte-auto-switch-label">AUTO TRADE</span>
         </span>
         <span className="aqte-auto-switch-state" aria-hidden="true">
-          {busy ? <span className="aqte-auto-switch-wait">WAIT</span> : <>
+          {busy ? <span className="aqte-auto-switch-wait">WAIT</span> :
+            !known ? <span className="aqte-auto-switch-wait">UNKNOWN</span> : <>
             <span className={on ? 'aqte-auto-choice-active' : ''}>ON</span>
             <span className={!on ? 'aqte-auto-choice-active' : ''}>OFF</span>
           </>}
@@ -195,7 +196,7 @@ function AQTEAutomationSwitch({ onStatus, feed, feedError = null }: {
         <button type="button" className="aqte-auto-reset" disabled={busy || !canReset}
           onClick={() => { if (canReset) setConfirming('reset'); }}>Reset emergency stop</button>
       )}
-      <p role="status" className={`${known && status.killed ? 'text-right text-sm' : 'sr-only'} ${unknown || !status ? 'text-amber-200' : status.killed ? 'text-rose-200' : on ? 'text-emerald-200' : 'text-amber-200'}`}>
+      <p role="status" className={`${!known ? 'text-right text-xs' : status.killed ? 'text-right text-sm' : 'sr-only'} ${unknown || !status ? 'text-amber-200' : status.killed ? 'text-rose-200' : on ? 'text-emerald-200' : 'text-amber-200'}`}>
         {busy ? 'Saving to backend…' : unknown || !status ? 'UNKNOWN · Verifying backend state · Do not assume OFF' :
           status.killed ? (status.flatten_pending ? 'Emergency stop latched · Closing tagged AQTE/QuantEdge Pro trades · manual trades untouched' :
             !status.ready ? 'Emergency stop latched · Controller unavailable; reset blocked' :

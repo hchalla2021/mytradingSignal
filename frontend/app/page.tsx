@@ -14,6 +14,7 @@ import { API_CONFIG } from '@/lib/api-config';
 import { getOrCreateVisitorId } from '@/lib/visitor-id';
 
 // Dynamic imports for components that use live data - prevents SSR issues
+const AutonomiqProSection = dynamic(() => import('@/components/AutonomiqProSection'), { ssr: false });
 const AQTESection = dynamic(() => import('@/components/AQTESection'), { ssr: false });
 const SectionTitle = dynamic(() => import('@/components/SectionTitle'), { ssr: false });
 
@@ -256,6 +257,9 @@ export default function Home() {
       {/* Main Dashboard - Full Width */}
       <div className="w-full px-3 sm:px-5 lg:px-8 xl:px-10 py-3 lg:py-5">
         <div className="mx-auto flex w-full max-w-[1820px] flex-col">
+        <div style={{ order: -13 }} className="min-w-0">
+          <AutonomiqProSection marketData={marketData} isConnected={isConnected} />
+        </div>
         <div style={{ order: -12 }} className="min-w-0">
           <AQTESection marketData={marketData} isConnected={isConnected} />
         </div>

@@ -65,6 +65,7 @@
 .aqte-theme .aqte-auto-switch-stopped .aqte-auto-switch-state > span { background: #fecdd3; box-shadow: 0 0 8px rgb(251 113 133 / 0.65); }
 .aqte-theme .aqte-auto-switch-unknown { color: #fde68a; }
 .aqte-theme .aqte-auto-switch-unknown { border-style: dashed; background: #263247; }
+.aqte-theme .aqte-auto-switch-unknown .aqte-auto-switch-state { background: #334155; }
 .aqte-theme .aqte-auto-switch:disabled { cursor: not-allowed; }
 .aqte-theme .aqte-auto-switch:hover:not(:disabled) { transform: translateY(-1px); box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.08), 0 11px 26px rgb(0 0 0 / 0.32); }
 .aqte-theme .aqte-auto-switch:active:not(:disabled) { transform: translateY(0) scale(0.985); }

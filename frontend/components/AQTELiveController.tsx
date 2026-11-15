@@ -5,7 +5,7 @@ import { API_CONFIG } from '@/lib/api-config';
 import { notifyAppAccessExpired } from '@/lib/app-access-events';
 import { getOrCreateVisitorId } from '@/lib/visitor-id';
 import { AQTE_RECONNECT_GRACE_MS, aqteCanExit, aqteConnectionDrop, aqteErrorText, aqteObserveServerClock, aqtePollLoop,
-  aqteServerNow, isAqteLiveState, type AQTELiveState, type AQTEExitRequest } from '@/lib/aqte-display';
+  aqteResponseJson, aqteServerNow, isAqteLiveState, type AQTELiveState, type AQTEExitRequest } from '@/lib/aqte-display';
 
 const headers = () => ({
   'Content-Type': 'application/json',
@@ -21,11 +21,11 @@ async function request(path: 'status' | 'exit', body?: object, signal?: AbortSig
     body: body === undefined ? undefined : JSON.stringify(body),
   });
   const received = Date.now();
-  const payload: unknown = await response.json();
+  // This is the page's only live-status poll, so it owns the sign-in prompt for an expired session.
+  if (response.status === 401) notifyAppAccessExpired();
+  const payload = await aqteResponseJson(response);
   aqteObserveServerClock(response, payload, sent, received);
   if (!response.ok) {
-    // This is the page's only live-status poll, so it owns the sign-in prompt for an expired session.
-    if (response.status === 401) notifyAppAccessExpired();
     const detail = payload && typeof payload === 'object' && 'detail' in payload ? payload.detail : null;
     throw new Error(typeof detail === 'string' ? detail : `Live operation failed (${response.status}); inspect Kite before retrying`);
   }
@@ -122,7 +122,7 @@ function AQTELiveController({ onStatus, exitRequest = null }: {
       setConnected(true);
     } catch (cause) {
       const message = controller.signal.aborted ? 'Live action timed out; outcome unknown. Check Kite before retrying.' :
-        cause instanceof Error ? cause.message : 'Live action failed. Check Kite before retrying.';
+        aqteErrorText(cause, 'Live action failed. Check Kite before retrying.');
       setError(message);
       setConnected(false);
       onStatus?.(latest.current ? { ...latest.current, connection_error: message } : null, message);

@@ -319,9 +319,18 @@ function AQTESection({ marketData, isConnected = false }: { marketData?: MarketD
   const snapshotAge = snapshot ? now / 1000 - snapshot.generated_at : Infinity;
   const backendStatusCurrent = !error && snapshotAge >= -1 && snapshotAge <= 10;
   const backendFeedReady = backendStatusCurrent && !!snapshot?.recording && !snapshot.fault &&
-    aqteFeedCurrent(snapshot?.data[selectedSymbol], snapshot.generated_at);
+    aqteFeedCurrent(snapshot?.data[selectedSymbol], now / 1000);
   const liveFeed = marketHours && backendFeedReady;
-  const feedLabel = !backendStatusCurrent ? 'STATUS UNKNOWN' : liveFeed ? 'LIVE (Zerodha)' : 'FEED OFF';
+  const feedReason = snapshot?.subscription_error || snapshot?.fault ||
+    snapshot?.data[selectedSymbol]?.reasons?.[0] || 'AQTE is waiting for fresh spot and futures ticks.';
+  const feedLabel = !backendStatusCurrent ? 'STATUS UNKNOWN' : liveFeed ? 'LIVE (Zerodha)' :
+    !snapshot?.recording || snapshot.fault ? 'FEED OFF' :
+      /disconnected/i.test(feedReason) ? 'RECONNECTING' :
+        /^Feed recovery:/i.test(feedReason) ? 'RECOVERING' :
+          snapshot.subscription_error || /instrument master/i.test(feedReason) ? 'PREPARING' :
+            snapshot.data[selectedSymbol]?.feed_received_at == null ? 'CONNECTING' : 'DATA STALE';
+  const feedDetail = !backendStatusCurrent ? 'AQTE status is unavailable; do not assume trading is stopped.' :
+    liveFeed ? 'AQTE has fresh spot and futures data. AUTO TRADE is a separate entry approval.' : feedReason;
   const quotes = Object.fromEntries(SYMBOLS.map(symbol => {
     const signal = snapshot?.data[symbol];
     const tick = marketData?.[symbol];
@@ -426,7 +435,7 @@ function AQTESection({ marketData, isConnected = false }: { marketData?: MarketD
               <span className="aqte-title-narrow"> — Adaptive Quant Engine</span>
             </span>
             {marketHours && <>{' '}
-            <span role="status" aria-label="AQTE view status" className={`aqte-view-status inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-[11px] font-bold tracking-wider ${
+            <span role="status" aria-label="AQTE view status" title={feedDetail} className={`aqte-view-status inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-[11px] font-bold tracking-wider ${
               liveFeed ? 'border-emerald-400/40 bg-emerald-400/10 text-emerald-200' :
                 backendStatusCurrent ? 'border-amber-400/40 bg-amber-400/10 text-amber-200' :
                   'border-slate-400/40 bg-slate-400/10 text-slate-300'
@@ -450,6 +459,11 @@ function AQTESection({ marketData, isConnected = false }: { marketData?: MarketD
         </div>
       </div>
       <div className="aqx-body p-2 sm:p-3">
+      {marketHours && backendStatusCurrent && !liveFeed && (
+        <p role="status" className="mb-2 rounded-lg border border-amber-400/30 bg-amber-400/5 px-3 py-2 text-xs text-amber-200">
+          {feedLabel}: {feedDetail} AUTO TRADE ON is entry approval, not feed readiness; entries remain subject to data and risk checks.
+        </p>
+      )}
       <h3 id="aqte-real-view" className="sr-only">Real Trade · Auto</h3>
       <div id="aqte-trading-panel" role="region" aria-labelledby="aqte-real-view" tabIndex={0} className="aqx-dash rounded-xl focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-cyan-300">
       <div className="aqx-rail">

@@ -1413,17 +1413,17 @@ test('market badge reflects the AQTE backend feed, not the browser market-data s
     }
     assert.equal(text(badge).trim(), expected);
     assert.equal(nodes(title).find(n => n.props?.['aria-label'] === 'AQTE view status'), badge);
-    assert.match(text(title), /\s+(LIVE \(Zerodha\)|FEED OFF)$/);
-    assert.match(badge.props.className, expected === 'FEED OFF' ? /text-amber/ : /text-emerald/);
+    assert.match(text(title), /\s+LIVE \(Zerodha\)$/);
+    assert.match(badge.props.className, /text-emerald/);
     snapshot.data.NIFTY.feed_received_at -= 100;
     await h.poll(snapshot);
     tree = h.render(props);
-    assert.equal(text(nodes(tree).find(n => n.props?.['aria-label'] === 'AQTE view status')).trim(), 'FEED OFF');
+    assert.equal(text(nodes(tree).find(n => n.props?.['aria-label'] === 'AQTE view status')).trim(), 'DATA STALE');
     snapshot.data.NIFTY.at = now / 1000;
     snapshot.data.NIFTY.feed_ready = false;
     await h.poll(snapshot);
     tree = h.render(props);
-    assert.equal(text(nodes(tree).find(n => n.props?.['aria-label'] === 'AQTE view status')).trim(), 'FEED OFF');
+    assert.equal(text(nodes(tree).find(n => n.props?.['aria-label'] === 'AQTE view status')).trim(), 'DATA STALE');
     snapshot.data.NIFTY.feed_ready = true;
     snapshot.generated_at -= 20;
     await h.poll(snapshot);
@@ -1431,6 +1431,60 @@ test('market badge reflects the AQTE backend feed, not the browser market-data s
     assert.equal(text(nodes(tree).find(n => n.props?.['aria-label'] === 'AQTE view status')).trim(), 'STATUS UNKNOWN');
     cleanup();
   }
+});
+
+test('AQTE feed badge distinguishes recovery, missing ticks and stopped recording without claiming LIVE', async () => {
+  const now = Date.parse('2026-11-13T15:06:08+05:30');
+  for (const [changes, recording, expected] of [
+    [{ feed_ready: false, reasons: ['Feed recovery: Restored futures candles await exchange verification'] }, true, 'RECOVERING'],
+    [{ feed_ready: false, feed_received_at: null, reasons: ['Market data stale: futures no ticks yet'] }, true, 'CONNECTING'],
+    [{ feed_ready: false, reasons: ['Shared Kite feed disconnected'] }, true, 'RECONNECTING'],
+    [{ feed_ready: false, reasons: ["Today's instrument master is not prepared"] }, true, 'PREPARING'],
+    [{ feed_ready: false, reasons: ['AQTE recorder unavailable'] }, false, 'FEED OFF'],
+  ]) {
+    const h = harness('AQTESection.tsx', now);
+    h.render();
+    const snapshot = fixture();
+    snapshot.generated_at = now / 1000;
+    snapshot.recording = recording;
+    Object.assign(snapshot.data.NIFTY, { feed_received_at: now / 1000, ...changes });
+    const cleanup = h.mount(snapshot);
+    await settle();
+    const tree = h.render();
+    const badge = nodes(tree).find(n => n.props?.['aria-label'] === 'AQTE view status');
+    assert.equal(text(badge).trim(), expected);
+    assert.match(badge.props.title, /AQTE|Kite|Market|instrument|Feed/);
+    assert.doesNotMatch(badge.props.className, /text-emerald/);
+    if (expected === 'RECOVERING') {
+      assert.match(text(visibleNodes(tree).find(n => n.props?.role === 'status' &&
+        /AUTO TRADE ON is entry approval/.test(text(n)))), /Restored futures candles await exchange verification/);
+      snapshot.data.NIFTY.feed_ready = true;
+      snapshot.data.NIFTY.reasons = ['No new entries after 15:15 IST'];
+      await h.poll(snapshot);
+      assert.equal(text(nodes(h.render()).find(n => n.props?.['aria-label'] === 'AQTE view status')).trim(), 'LIVE (Zerodha)');
+    }
+    assert.ok(h.requests.every(r => !r.options.method || r.options.method === 'GET'));
+    cleanup();
+  }
+});
+
+test('AQTE LIVE badge expires on the current clock even before the next snapshot arrives', async () => {
+  let now = Date.parse('2026-11-13T15:06:08+05:30');
+  const h = harness('AQTESection.tsx', () => now);
+  h.render();
+  const snapshot = fixture();
+  snapshot.generated_at = now / 1000;
+  Object.assign(snapshot.data.NIFTY, { feed_ready: true, feed_received_at: now / 1000 - 4 });
+  const cleanup = h.mount(snapshot);
+  await settle();
+  const badge = () => nodes(h.render()).find(n => n.props?.['aria-label'] === 'AQTE view status');
+  assert.equal(text(badge()).trim(), 'LIVE (Zerodha)');
+  now += 2000;
+  const clock = [...h.timers.entries()].find(([, timer]) => timer.delay === 1000);
+  h.timers.delete(clock[0]);
+  clock[1].fn();
+  assert.equal(text(badge()).trim(), 'DATA STALE', 'a recent snapshot cannot extend the tick freshness gate');
+  cleanup();
 });
 
 test('terminal reports backend rule/risk blockers rather than implying a buy setup is ready', () => {
@@ -2274,7 +2328,9 @@ test('header switch blocks ON before arming and never shows failed request as su
   assert.equal(autoSwitch(h.render()).props.disabled, true);
   await h.poll(new Error('Network failed'));
   assert.match(text(h.render()), /UNKNOWN/);
-  assert.match(nodes(h.render()).find(n => n.props?.role === 'status').props.className, /sr-only/);
+  assert.doesNotMatch(nodes(h.render()).find(n => n.props?.role === 'status').props.className, /sr-only/);
+  assert.match(text(autoSwitch(h.render())), /UNKNOWN/);
+  assert.equal(nodes(autoSwitch(h.render())).some(n => n.props?.className === 'aqte-auto-choice-active'), false);
   assert.equal(autoSwitch(h.render()).props.disabled, true);
   assert.equal(nodes(h.render()).find(n => n.props?.['aria-label'] === 'Stop AQTE new entries').props.disabled, false);
   nodes(h.render()).find(n => n.props?.['aria-label'] === 'Stop AQTE new entries').props.onClick();
@@ -2282,6 +2338,65 @@ test('header switch blocks ON before arming and never shows failed request as su
   assert.match(text(h.render()), /UNKNOWN/);
   assert.deepEqual(JSON.parse(h.requests.at(-1).options.body), { enabled: false, confirmation: 'STOP NEW ENTRIES' });
   cleanup();
+});
+
+test('header switch reports HTML 502 as unconfirmed, never highlighted OFF or retried POST', async () => {
+  const h = harness('AQTEAutomationSwitch.tsx');
+  const on = { ...liveFixture(), enabled: true, armed: true, automation_wanted: true, automation_on: true };
+  h.render();
+  const cleanup = h.mount(on);
+  await settle();
+  const unavailable = () => new Response('<html><h1>502 Bad Gateway</h1></html>', {
+    status: 502, headers: { 'Content-Type': 'text/html' },
+  });
+  h.respond(unavailable);
+  autoSwitch(h.render()).props.onClick();
+  await settle();
+
+  let tree = h.render();
+  const alert = visibleNodes(tree).find(n => n.props?.role === 'alert');
+  assert.match(text(alert), /HTTP 502/);
+  assert.doesNotMatch(text(alert), /Unexpected token|<html>/);
+  assert.match(text(autoSwitch(tree)), /UNKNOWN/);
+  assert.equal(autoSwitch(tree).props['aria-checked'], undefined);
+  assert.equal(nodes(autoSwitch(tree)).some(n => n.props?.className === 'aqte-auto-choice-active'), false);
+  assert.match(text(visibleNodes(tree).find(n => n.props?.role === 'status')), /Do not assume OFF/);
+  assert.doesNotMatch(text(tree), /Saved automatically|Backend confirmed/);
+  assert.equal(h.requests.filter(r => r.options.method === 'POST').length, 1);
+  await h.poll(unavailable);
+  assert.equal(h.requests.filter(r => r.options.method === 'POST').length, 1);
+
+  await h.poll({ ...on, generated_at: Date.now() / 1000 });
+  tree = h.render();
+  assert.equal(autoSwitch(tree).props['aria-checked'], true);
+  assert.match(text(tree), /Backend confirmed · ON/);
+  assert.equal(h.requests.filter(r => r.options.method === 'POST').length, 1);
+  cleanup();
+  assert.equal(h.timers.size, 0);
+});
+
+test('live controller reports non-JSON responses without losing HTTP status or owner sign-in', async () => {
+  for (const code of [502, 200, 401]) {
+    const h = harness('AQTELiveController.tsx');
+    let published;
+    h.render({ onStatus: value => { published = value; } });
+    const status = { ...liveFixture(), active: livePositionFixture() };
+    const cleanup = h.mount(status);
+    await settle();
+    await h.poll(() => new Response('<html>Server error</html>', {
+      status: code, headers: { 'Content-Type': 'text/html' },
+    }));
+
+    assert.match(published.connection_error, new RegExp(`HTTP ${code}`));
+    assert.doesNotMatch(published.connection_error, /Unexpected token|<html>/);
+    assert.equal(published.active, status.active, 'retain last confirmed position, explicitly marked unavailable');
+    assert.equal(h.accessExpired, code === 401 ? 1 : 0);
+    assert.ok(h.requests.every(r => r.options.method === 'GET'));
+    await h.poll({ ...status, generated_at: Date.now() / 1000 });
+    assert.equal(published.connection_error, undefined);
+    cleanup();
+    assert.equal(h.timers.size, 0);
+  }
 });
 
 test('AQTE refresh restores highlighted backend ON, OFF and emergency states using GET only', async () => {
@@ -3003,7 +3118,7 @@ test('live controller and AQTE snapshot stay current when the browser clock is s
     section.render();
     cleanup = section.mount({ ...fixture(), generated_at: (clock + offset) / 1000 });
     await settle();
-    assert.match(badge(), /FEED OFF|LIVE \(Zerodha\)/, `snapshot current at ${offset} ms`);
+    assert.match(badge(), /DATA STALE|LIVE \(Zerodha\)/, `snapshot current at ${offset} ms`);
     await section.poll({ ...fixture(), generated_at: (clock + offset) / 1000 - 20 });
     assert.match(badge(), /STATUS UNKNOWN/);
     assert.match(text(section.render()), /stale/i);

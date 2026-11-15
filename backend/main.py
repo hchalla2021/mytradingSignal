@@ -91,6 +91,7 @@ from routers.aqte import router as aqte_http
 from routers.quantedge import router as quantedge_http
 from routers.expiryedge import router as expiryedge_http
 from routers.algo_desk import router as algo_desk_http
+from routers.autonomiq_pro import router as autonomiq_pro_http
 from routers import smart_money
 from routers.volume_pulse import router as volume_pulse_http, ws_router as volume_pulse_ws
 from routers.ict_bias import router as ict_bias_http, ws_router as ict_bias_ws
@@ -381,6 +382,18 @@ async def lifespan(app: FastAPI):
     # 🔥 Fire background boot — server starts accepting HTTP immediately
     _bg_boot = asyncio.create_task(_boot_services())
 
+    # AUTONOMIQ PRO is isolated: its own task, and failures never touch other engines.
+    async def _start_autonomiq_pro():
+        try:
+            from services.autonomiq_pro.config import load_config
+            from services.autonomiq_pro.orchestrator import get_orchestrator
+            if load_config().enabled:
+                await get_orchestrator().start()
+        except Exception as exc:  # noqa: BLE001
+            logger.error("AUTONOMIQ PRO failed to start: %s", type(exc).__name__)
+
+    _autonomiq_boot = asyncio.create_task(_start_autonomiq_pro())
+
     print("🚀 Backend accepting requests (services booting in background...)")
     yield
 
@@ -395,6 +408,14 @@ async def lifespan(app: FastAPI):
             _bg_boot.cancel()
 
     # 📦 Backup candle data to disk before shutdown
+    try:
+        if not _autonomiq_boot.done():
+            _autonomiq_boot.cancel()
+        from services.autonomiq_pro.orchestrator import get_orchestrator
+        await asyncio.wait_for(get_orchestrator().stop(), timeout=5)
+    except Exception:
+        pass
+
     try:
         from services.candle_backup_service import CandleBackupService
         await CandleBackupService.backup_all_symbols(cache)
@@ -698,6 +719,7 @@ app.include_router(aqte_http)
 app.include_router(quantedge_http)
 app.include_router(expiryedge_http)
 app.include_router(algo_desk_http)
+app.include_router(autonomiq_pro_http)
 
 
 @app.get("/")

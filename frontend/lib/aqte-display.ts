@@ -661,6 +661,17 @@ export function aqteErrorText(cause: unknown, fallback: string): string {
   return typeof message === 'string' && message ? message : fallback;
 }
 
+export async function aqteResponseJson(response: Response): Promise<unknown> {
+  try {
+    return await response.json();
+  } catch (cause) {
+    if (!cause || typeof cause !== 'object' || !('name' in cause) || cause.name !== 'SyntaxError') throw cause;
+    const message = response.status >= 500 ? 'AQTE backend unavailable' :
+      response.ok ? 'AQTE returned an invalid response' : 'AQTE request failed';
+    throw new Error(`${message} (HTTP ${response.status}). Status unknown; verify in Kite before retrying.`);
+  }
+}
+
 /**
  * Runs `tick` now and `everyMs` after each completion. Browsers throttle hidden tabs, so it also
  * re-runs at once when the tab becomes visible, the window regains focus or the network returns.
