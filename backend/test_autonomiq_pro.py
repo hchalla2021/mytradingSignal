@@ -11,6 +11,7 @@ from services.autonomiq_pro import agents, indicators as ind
 from services.autonomiq_pro.ai_client import AIClient, AIUnavailable
 from services.autonomiq_pro.config import AutonomiqConfig, load_config
 from services.autonomiq_pro.market_data import IST, completed
+from services.autonomiq_pro.live_risk import EntryRisk, Exposure, entry_rejections, trailing_stop
 from services.autonomiq_pro.orchestrator import session_state
 from services.autonomiq_pro.risk import build_plan, manage_position, validate
 from services.autonomiq_pro.store import MIGRATIONS, Store
@@ -46,6 +47,18 @@ def anthropic_reply(payload, usage=None):
 
 
 class ConfigTests(unittest.TestCase):
+    def test_risk_defaults_are_visible_and_used_by_loader(self):
+        with mock.patch("services.autonomiq_pro.config.dotenv_values", return_value={}), \
+                mock.patch.dict(os.environ, {}, clear=True):
+            cfg = load_config()
+        defaults = AutonomiqConfig()
+        fields = ("max_risk_per_trade_rupees", "max_trades_per_day",
+                  "max_open_positions", "daily_loss_limit_rupees")
+        expected = (1000, 5, 3, 3000)
+        self.assertEqual(tuple(getattr(defaults, field) for field in fields), expected)
+        self.assertEqual(tuple(getattr(cfg, field) for field in fields), expected)
+        self.assertEqual(tuple(cfg.public()[field] for field in fields), expected)
+
     def test_reads_owner_keys_and_routes_fable_to_events_only(self):
         env = {"AUTONOMIQ_PRO_LIVE_TRADE_ENABLED": "true", "AUTONOMIQ_PRO_DAILY_BUDGET_USD": "1.25",
                "AUTONOMIQ_PRO_MAX_OUTPUT_TOKENS": "500", "AUTONOMIQ_PRO_FABLE_EVENT_ONLY": "true",
@@ -418,6 +431,89 @@ class SignalValidationTests(unittest.TestCase):
         self.assertEqual(out["indices"]["NIFTY"]["action"], "WAIT")
 
 
+class LiveRiskCalculationTests(unittest.TestCase):
+    zero_pnl = {"NIFTY": 0.0, "BANKNIFTY": 0.0, "SENSEX": 0.0}
+
+    def candidate(self, **overrides):
+        values = dict(symbol="NIFTY", entry=100.0, stop=94.0, quantity=50, lot_size=50,
+                      estimated_round_trip_cost=50.0, estimated_exit_slippage=50.0)
+        return EntryRisk(**{**values, **overrides})
+
+    def rejections(self, candidate, **kwargs):
+        return entry_rejections(candidate, cfg=CFG, **kwargs)
+
+    def test_loss_includes_costs_and_exact_trade_limit(self):
+        candidate = self.candidate(stop=82.0)
+        self.assertEqual(candidate.estimated_loss(), 1000.0)
+        self.assertEqual(self.rejections(candidate, realized_net=self.zero_pnl, exposures=[], pending=[], trades_today=0), [])
+        reasons = self.rejections(self.candidate(stop=81.95), realized_net=self.zero_pnl, exposures=[],
+                                  pending=[], trades_today=0)
+        self.assertIn("Estimated per-trade loss exceeds ₹1,000", reasons)
+        with self.assertRaisesRegex(ValueError, "one lot"):
+            self.candidate(quantity=100).estimated_loss()
+
+    def test_independent_and_global_loss_limits_include_pending_risk(self):
+        candidate = self.candidate()
+        reasons = self.rejections(candidate, realized_net={**self.zero_pnl, "NIFTY": -700},
+                                  exposures=[], pending=[], trades_today=1)
+        self.assertIn("Index daily loss budget exhausted or reserved", reasons)
+        reasons = self.rejections(candidate, realized_net={**self.zero_pnl, "BANKNIFTY": -900, "SENSEX": -900},
+                                  exposures=[Exposure("BANKNIFTY", -200, 300)],
+                                  pending=[Exposure("SENSEX", 0, 400)], trades_today=2)
+        self.assertIn("Global daily loss budget exhausted or reserved", reasons)
+        self.assertNotIn("Index daily loss budget exhausted or reserved", reasons)
+
+    def test_duplicate_position_and_pending_entries_block_limits(self):
+        reasons = self.rejections(self.candidate(), realized_net=self.zero_pnl,
+                                  exposures=[Exposure("NIFTY", 10, 100)],
+                                  pending=[Exposure("BANKNIFTY", 0, 100), Exposure("SENSEX", 0, 100)],
+                                  trades_today=3)
+        self.assertIn("Global position limit reached", reasons)
+        self.assertIn("Index already has an open position or pending entry", reasons)
+        self.assertIn("Daily trade limit reached", reasons)
+
+    def test_invalid_inputs_are_not_accepted(self):
+        with self.assertRaises(ValueError):
+            self.candidate(estimated_round_trip_cost=float("nan")).estimated_loss()
+        with self.assertRaises(ValueError):
+            self.rejections(self.candidate(), realized_net=self.zero_pnl, exposures=[Exposure("NIFTY", 0, -1)],
+                            pending=[], trades_today=0)
+        with self.assertRaisesRegex(ValueError, "every index"):
+            self.rejections(self.candidate(), realized_net={}, exposures=[], pending=[], trades_today=0)
+
+    def test_entry_checks_follow_configured_limits(self):
+        cfg = AutonomiqConfig(max_risk_per_trade_rupees=300, max_open_positions=1,
+                              max_trades_per_day=1, daily_loss_limit_rupees=500)
+        reasons = entry_rejections(self.candidate(), cfg=cfg, realized_net=self.zero_pnl,
+                                   exposures=[Exposure("SENSEX", -200, 0)], pending=[], trades_today=1)
+        self.assertIn("Estimated per-trade loss exceeds ₹300", reasons)
+        self.assertIn("Global daily loss budget exhausted or reserved", reasons)
+        self.assertIn("Global position limit reached", reasons)
+        self.assertIn("Daily trade limit reached", reasons)
+
+    def test_trailing_starts_at_cost_inclusive_one_r_and_never_loosens(self):
+        args = dict(entry=100.0, initial_stop=94.0, current_stop=94.0, highest_bid=107.95,
+                    current_bid=107.95, option_atr=2.0, quantity=50, estimated_round_trip_cost=50.0,
+                    estimated_exit_slippage=50.0, tick_size=0.05)
+        before = trailing_stop(**args)
+        self.assertFalse(before.activated)
+        self.assertEqual(before.stop, 94.0)
+        active = trailing_stop(**{**args, "highest_bid": 108.0, "current_bid": 108.0})
+        self.assertTrue(active.activated)
+        self.assertEqual(active.stop, 104.0)
+        tightened = trailing_stop(**{**args, "highest_bid": 115.0, "current_bid": 114.0,
+                                    "current_stop": 112.0})
+        self.assertEqual(tightened.stop, 112.0)
+        self.assertFalse(tightened.exit_required)
+
+    def test_stop_crossing_requires_exit_instead_of_invalid_trigger(self):
+        decision = trailing_stop(entry=100, initial_stop=94, current_stop=94, highest_bid=110,
+                                 current_bid=101, option_atr=2, quantity=50,
+                                 estimated_round_trip_cost=50, estimated_exit_slippage=50, tick_size=0.05)
+        self.assertEqual(decision.stop, 106)
+        self.assertTrue(decision.exit_required)
+
+
 class RiskTests(unittest.TestCase):
     def evaluate(self, plan, **overrides):
         args = dict(cfg=CFG, now=NOW, session=session_state(CFG, NOW), spot={"fresh": True, "age_s": 1},
@@ -448,6 +544,24 @@ class RiskTests(unittest.TestCase):
         self.assertIn("Daily loss limit", failed(self.evaluate(plan, day_stats={"trades": 1, "realized": -6000})))
         late = IST.localize(datetime(2026, 3, 10, 15, 0))
         self.assertIn("Entry window", failed(self.evaluate(plan, now=late)))
+
+    def test_analysis_enforces_requested_limits_at_boundaries(self):
+        plan = build_plan("NIFTY", "BUY_CE", chain(), atr_5m=20.0, cfg=CFG)
+
+        def passes(result, name):
+            return next(check["passed"] for check in result["checks"] if check["name"] == name)
+
+        self.assertTrue(passes(self.evaluate({**plan, "risk_rupees": 1000}), "Risk per trade"))
+        self.assertFalse(passes(self.evaluate({**plan, "risk_rupees": 1000.01}), "Risk per trade"))
+        self.assertTrue(passes(self.evaluate(plan, day_stats={"trades": 4, "realized": -2999}), "Daily trade limit"))
+        self.assertFalse(passes(self.evaluate(plan, day_stats={"trades": 5, "realized": 0}), "Daily trade limit"))
+        self.assertFalse(passes(self.evaluate(plan, day_stats={"trades": 0, "realized": -3000}), "Daily loss limit"))
+        held = [{"symbol": symbol, "entry": 100, "last_price": 100, "lot_size": 1, "lots": 1}
+                for symbol in ("BANKNIFTY", "SENSEX")]
+        self.assertTrue(passes(self.evaluate(plan, open_trades=held), "Position limit"))
+        self.assertFalse(passes(self.evaluate(plan, open_trades=held + [dict(held[0])]), "Position limit"))
+        self.assertFalse(passes(self.evaluate(plan, open_trades=[{**held[0], "symbol": "NIFTY"}]),
+                                "No duplicate position"))
 
 
 class PaperPositionTests(unittest.TestCase):

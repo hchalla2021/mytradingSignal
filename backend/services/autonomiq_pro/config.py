@@ -81,10 +81,10 @@ class AutonomiqConfig:
     min_signal_score: float = 60
     min_risk_reward: float = 1.5
     max_spread_pct: float = 2.0
-    max_open_positions: int = 2
-    max_trades_per_day: int = 6
-    daily_loss_limit_rupees: float = 5000
-    max_risk_per_trade_rupees: float = 3000
+    max_open_positions: int = 3
+    max_trades_per_day: int = 5
+    daily_loss_limit_rupees: float = 3000
+    max_risk_per_trade_rupees: float = 1000
     paper_lots: int = 1
 
     @property
@@ -163,9 +163,9 @@ def load_config() -> AutonomiqConfig:
         min_signal_score=_num(g("MIN_SIGNAL_SCORE"), 60, 10, 100),
         min_risk_reward=_num(g("MIN_RISK_REWARD"), 1.5, 0.5, 10),
         max_spread_pct=_num(g("MAX_SPREAD_PCT"), 2.0, 0.1, 20),
-        max_open_positions=int(_num(g("MAX_OPEN_POSITIONS"), 2, 1, 3)),
-        max_trades_per_day=int(_num(g("MAX_TRADES_PER_DAY"), 6, 1, 50)),
-        daily_loss_limit_rupees=_num(g("DAILY_LOSS_LIMIT_RUPEES"), 5000, 0, 10_000_000),
-        max_risk_per_trade_rupees=_num(g("MAX_RISK_PER_TRADE_RUPEES"), 3000, 0, 10_000_000),
+        max_open_positions=int(_num(g("MAX_OPEN_POSITIONS"), 3, 1, 3)),
+        max_trades_per_day=int(_num(g("MAX_TRADES_PER_DAY"), 5, 1, 50)),
+        daily_loss_limit_rupees=_num(g("DAILY_LOSS_LIMIT_RUPEES"), 3000, 0, 10_000_000),
+        max_risk_per_trade_rupees=_num(g("MAX_RISK_PER_TRADE_RUPEES"), 1000, 0, 10_000_000),
         paper_lots=int(_num(g("PAPER_LOTS"), 1, 1, 50)),
     )
