@@ -27,7 +27,7 @@
     "symbol": "NIFTY",
     "timeframe": "5m",
     "dataSource": "MARKET_CLOSED",
-    "timestamp": "2026-11-15T11:32:17.395379+05:30",
+    "timestamp": "2026-11-15T11:33:47.417851+05:30",
     "price": 25144.3,
     "changePct": -0.61,
     "three_factor": {
@@ -95,7 +95,7 @@
         "symbol": "NIFTY",
         "timeframe": "3m",
         "dataSource": "MARKET_CLOSED",
-        "timestamp": "2026-11-15T11:32:17.394926+05:30",
+        "timestamp": "2026-11-15T11:33:47.417095+05:30",
         "price": 25144.3,
         "changePct": -0.61,
         "three_factor": {
@@ -164,7 +164,7 @@
         "symbol": "NIFTY",
         "timeframe": "5m",
         "dataSource": "MARKET_CLOSED",
-        "timestamp": "2026-11-15T11:32:17.395379+05:30",
+        "timestamp": "2026-11-15T11:33:47.417851+05:30",
         "price": 25144.3,
         "changePct": -0.61,
         "three_factor": {
@@ -232,7 +232,7 @@
         "symbol": "NIFTY",
         "timeframe": "15m",
         "dataSource": "MARKET_CLOSED",
-        "timestamp": "2026-11-15T11:32:17.395495+05:30",
+        "timestamp": "2026-11-15T11:33:47.418232+05:30",
         "price": 25144.3,
         "changePct": -0.61,
         "three_factor": {
@@ -377,7 +377,7 @@
     "symbol": "BANKNIFTY",
     "timeframe": "5m",
     "dataSource": "MARKET_CLOSED",
-    "timestamp": "2026-11-15T11:32:17.395765+05:30",
+    "timestamp": "2026-11-15T11:33:47.419072+05:30",
     "price": 61034.1,
     "changePct": -0.79,
     "three_factor": {
@@ -444,7 +444,7 @@
         "symbol": "BANKNIFTY",
         "timeframe": "3m",
         "dataSource": "MARKET_CLOSED",
-        "timestamp": "2026-11-15T11:32:17.395549+05:30",
+        "timestamp": "2026-11-15T11:33:47.418466+05:30",
         "price": 61034.1,
         "changePct": -0.79,
         "three_factor": {
@@ -512,7 +512,7 @@
         "symbol": "BANKNIFTY",
         "timeframe": "5m",
         "dataSource": "MARKET_CLOSED",
-        "timestamp": "2026-11-15T11:32:17.395765+05:30",
+        "timestamp": "2026-11-15T11:33:47.419072+05:30",
         "price": 61034.1,
         "changePct": -0.79,
         "three_factor": {
@@ -579,7 +579,7 @@
         "symbol": "BANKNIFTY",
         "timeframe": "15m",
         "dataSource": "MARKET_CLOSED",
-        "timestamp": "2026-11-15T11:32:17.395841+05:30",
+        "timestamp": "2026-11-15T11:33:47.419332+05:30",
         "price": 61034.1,
         "changePct": -0.79,
         "three_factor": {
@@ -729,7 +729,7 @@
     "symbol": "SENSEX",
     "timeframe": "5m",
     "dataSource": "MARKET_CLOSED",
-    "timestamp": "2026-11-15T11:32:17.396102+05:30",
+    "timestamp": "2026-11-15T11:33:47.419908+05:30",
     "price": 81592.45,
     "changePct": -0.39,
     "three_factor": {
@@ -797,7 +797,7 @@
         "symbol": "SENSEX",
         "timeframe": "3m",
         "dataSource": "MARKET_CLOSED",
-        "timestamp": "2026-11-15T11:32:17.395888+05:30",
+        "timestamp": "2026-11-15T11:33:47.419444+05:30",
         "price": 81592.45,
         "changePct": -0.39,
         "three_factor": {
@@ -872,7 +872,7 @@
         "symbol": "SENSEX",
         "timeframe": "5m",
         "dataSource": "MARKET_CLOSED",
-        "timestamp": "2026-11-15T11:32:17.396102+05:30",
+        "timestamp": "2026-11-15T11:33:47.419908+05:30",
         "price": 81592.45,
         "changePct": -0.39,
         "three_factor": {
@@ -940,7 +940,7 @@
         "symbol": "SENSEX",
         "timeframe": "15m",
         "dataSource": "MARKET_CLOSED",
-        "timestamp": "2026-11-15T11:32:17.396185+05:30",
+        "timestamp": "2026-11-15T11:33:47.420394+05:30",
         "price": 81592.45,
         "changePct": -0.39,
         "three_factor": {
